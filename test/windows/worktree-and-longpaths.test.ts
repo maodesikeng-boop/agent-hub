@@ -74,7 +74,7 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：跨盘同�
     initTempGitRepo(repoDir);
 
     // 1. 跨卷自动选同卷 D:\.fusa-wt\<指纹>
-    const selected = selectWorktreeRootForProject({
+    const selected = await selectWorktreeRootForProject({
       projectFolder: repoDir,
       dataDir: cDataDir,
       defaultWorktreesDir: defaultWtDir,
@@ -92,10 +92,10 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：跨盘同�
       repoFolder: repoDir,
       worktreePath: wtPath,
       branch: "hub/524-win-wt",
-      prepareDir: (dir) => {
+      prepareDir: async (dir) => {
         mkdirSync(dir, { recursive: true });
-        ensureWin32ProtectedRootAcl(stateDir, cDataDir);
-        allowWin32WorkerWorktreeAcl(stateDir, "524", dir);
+        await ensureWin32ProtectedRootAcl(stateDir, cDataDir);
+        await allowWin32WorkerWorktreeAcl(stateDir, "524", dir);
       },
     });
     expect(addRes.created).toBe(true);
@@ -172,7 +172,7 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：跨盘同�
 
     // 5. 当同卷受保护根无法设 ACL 时自动回退到 C 盘默认 worktrees 目录
     const fallbackLogs: string[] = [];
-    const fallback = selectWorktreeRootForProject({
+    const fallback = await selectWorktreeRootForProject({
       projectFolder: repoDir,
       dataDir: cDataDir,
       defaultWorktreesDir: defaultWtDir,

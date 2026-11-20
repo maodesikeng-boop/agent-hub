@@ -1419,7 +1419,7 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
     const policies = t.rpcIn().filter((r) => r.method === "turn/start").map((r) => (r.params as { sandboxPolicy: unknown }).sandboxPolicy);
     expect(policies[0]).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
     expect(policies[1]).toMatchObject({ type: "workspaceWrite" });
-    expect(policies[2]).toEqual({ type: "readOnly", networkAccess: true });
+    expect(policies[2]).toBeUndefined();
   });
 
   it("Worker 的 turn/start 沙箱：writableRoots 只留自己的目录和数据目录外的附加目录", async () => {
@@ -1433,7 +1433,7 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
     rmSync(outside, { recursive: true, force: true });
   });
 
-  it("PM 会话修改 AGENTS.md 时审批返回 accept（项目经理没有可写范围）；只读 Worker 一律返回 decline 且用 readOnly 沙箱", async () => {
+  it("PM 会话修改 AGENTS.md 时审批返回 accept（项目经理没有可写范围）；只读 Worker 一律返回 decline，沙箱靠 config 里的权限档", async () => {
     const t = makeCodexHarness({
       script: {
         turns: [
@@ -1494,14 +1494,11 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
 
     // 检查只读 Worker 的 thread/start 与 turn/start 沙箱策略
     const threadStarts = rpcs.filter((r) => r.method === "thread/start");
-    expect(threadStarts[1]?.params).toMatchObject({
-      sandbox: "read-only",
-      approvalPolicy: "on-request",
-    });
+    // 只读靠 config 里的权限档：传了 sandbox / sandboxPolicy，codex 会换成内置 read-only，读边界失效
+    expect(threadStarts[1]?.params).toMatchObject({ approvalPolicy: "on-request", config: { default_permissions: "hub_readonly" } });
+    expect(threadStarts[1]?.params).not.toHaveProperty("sandbox");
     const turnStarts = rpcs.filter((r) => r.method === "turn/start");
-    expect(turnStarts[1]?.params).toMatchObject({
-      sandboxPolicy: { type: "readOnly", networkAccess: true },
-    });
+    expect(turnStarts[1]?.params).not.toHaveProperty("sandboxPolicy");
   });
 });
 
@@ -1976,10 +1973,10 @@ describe("codex-protocol 可写范围纯函数", () => {
     expect(decideFileChangeApproval({ paths: ["a.txt"], grantRoot: "/tmp" }, context)).toBe("accept");
   });
 
-  it("sandboxPolicy：包进了 OS 沙箱用 externalSandbox；只读照用 readOnly；没包用 workspaceWrite", () => {
+  it("sandboxPolicy：包进了 OS 沙箱用 externalSandbox；只读不给（沿用线程的权限档）；没包用 workspaceWrite", () => {
     const session = { cwd: "/Users/u/.agent-hub/worktrees/1/2", addDirs: ["/Users/u/.agent-hub/worktrees/1/3", "/x"] };
     expect(buildSandboxPolicy(session, false, scope, true)).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
-    expect(buildSandboxPolicy(session, true, scope, true)).toEqual({ type: "readOnly", networkAccess: true });
+    expect(buildSandboxPolicy(session, true, scope, true)).toBeNull();
     expect(buildSandboxPolicy(session, false, scope, false)).toEqual({ type: "workspaceWrite", networkAccess: true, writableRoots: [session.cwd, "/x"] });
   });
 });

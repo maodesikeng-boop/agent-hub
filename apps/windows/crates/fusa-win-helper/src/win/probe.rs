@@ -1,5 +1,5 @@
 use crate::cli::SandboxMode;
-use crate::win::acl::{allow_worker_worktree, protect_root};
+use crate::win::acl::{allow_read, allow_worker_worktree, deny_read, protect_root};
 use crate::win::runner::{run_session, RunSessionSpec};
 use std::env;
 use std::fs;
@@ -10,7 +10,23 @@ pub fn run_internal_probe_child(
     denied_file: &Path,
     allowed_file: &Path,
     outside_file: &Path,
+    secret_file: &Path,
+    peer_file: &Path,
 ) -> i32 {
+    if fs::read(secret_file).is_ok() {
+        eprintln!(
+            "sandbox probe failed: read inside the denied data dir unexpectedly succeeded: {}",
+            secret_file.display()
+        );
+        return 14;
+    }
+    if let Err(err) = fs::read(peer_file) {
+        eprintln!(
+            "sandbox probe failed: read under a write-protected root outside the data dir failed ({}): {err}",
+            peer_file.display()
+        );
+        return 15;
+    }
     if fs::write(denied_file, b"should-fail").is_ok() {
         eprintln!(
             "sandbox probe failed: write to protected directory unexpectedly succeeded: {}",
@@ -18,9 +34,9 @@ pub fn run_internal_probe_child(
         );
         return 10;
     }
-    if let Err(err) = fs::write(allowed_file, b"ok") {
+    if let Err(err) = fs::write(allowed_file, b"ok").and_then(|()| fs::read(allowed_file).map(|_| ())) {
         eprintln!(
-            "sandbox probe failed: write to allowed worktree directory failed ({}): {err}",
+            "sandbox probe failed: write or read in allowed worktree directory failed ({}): {err}",
             allowed_file.display()
         );
         return 11;
@@ -76,11 +92,21 @@ pub fn run_sandbox_probe(custom_state_dir: Option<&Path>) -> io::Result<()> {
     let protected_dir = base_tmp.join("protected");
     let allowed_dir = protected_dir.join("worktrees").join("probe");
     let outside_dir = base_tmp.join("outside");
+    // Like a cross-volume `.fusa-wt` root: write-protected, but no read boundary, so other Workers' files stay readable.
+    let peer_dir = base_tmp.join("peer-root").join("other-worker");
     fs::create_dir_all(&protected_dir)?;
     fs::create_dir_all(&outside_dir)?;
+    fs::create_dir_all(&peer_dir)?;
 
+    let secret_file = protected_dir.join("secret.txt");
+    fs::write(&secret_file, b"secret")?;
     protect_root(&probe_state, &protected_dir)?;
+    deny_read(&probe_state, &protected_dir)?;
     allow_worker_worktree(&probe_state, "probe", &allowed_dir)?;
+    allow_read(&probe_state, None, &protected_dir.join("worktrees"))?;
+    let peer_file = peer_dir.join("peer.txt");
+    fs::write(&peer_file, b"peer")?;
+    protect_root(&probe_state, &base_tmp.join("peer-root"))?;
 
     let exe = env::current_exe()?;
     let exe_str = exe.to_string_lossy().into_owned();
@@ -91,6 +117,7 @@ pub fn run_sandbox_probe(custom_state_dir: Option<&Path>) -> io::Result<()> {
     let sandbox = SandboxMode::Worker {
         state_dir: probe_state,
         worker_id: Some("probe".to_string()),
+        reader: None,
         readonly_fallback: false,
     };
     let child_args = vec![
@@ -98,6 +125,8 @@ pub fn run_sandbox_probe(custom_state_dir: Option<&Path>) -> io::Result<()> {
         denied_file.to_string_lossy().into_owned(),
         allowed_file.to_string_lossy().into_owned(),
         outside_file.to_string_lossy().into_owned(),
+        secret_file.to_string_lossy().into_owned(),
+        peer_file.to_string_lossy().into_owned(),
     ];
     let code = run_session(RunSessionSpec {
         sandbox: &sandbox,

@@ -4,14 +4,18 @@
 // - Durable Object 只用 SQLite 存储（免费档只开放这种），只存设备表和中心顺序；
 // - 不在 DO 里开定时器、不持有出站连接，空闲时能休眠；过期检查放在每条消息之后调 room.sweep()；
 // - 没有服务端密钥：wrangler.toml 里只有 GitHub API 地址这类公开配置。
-// 实现时加 wrangler.toml 和 Workers 的类型包，把这个文件从根 tsconfig.json 挪到 src/relay/cloudflare/tsconfig.json；下面的接口只是骨架阶段让根类型检查能过的最小形状。
 import { isDeviceId } from "../../shared/api.ts";
 import {
   RELAY_CONCURRENT_SOCKETS_PER_IP,
+  RELAY_IP_BLOCKED_MAX,
   RELAY_IP_LIMITER_MAX,
+  RELAY_IP_LIMITER_PRUNE_MS,
   RELAY_MAX_CONTROL_FRAME_BYTES,
   RELAY_MAX_DATA_FRAME_BYTES,
+  RELAY_RATE_WINDOW_MS,
   RELAY_REGISTER_PER_IP_PER_MINUTE,
+  RELAY_TOKEN_CACHE_MAX,
+  RELAY_TOKEN_CACHE_TTL_MS,
   RELAY_UPGRADES_PER_IP_PER_MINUTE,
 } from "../../shared/limits.ts";
 import { parseAccountId, type AccountId, type AccountLogin } from "../../shared/mesh.ts";
@@ -26,37 +30,11 @@ import {
   type RelayControlHandle,
   type RelaySocket,
 } from "../core.ts";
+import { clientKeyOf, createIpRateLimiter, createVerifiedTokenCache, tokenDigest } from "../guards.ts";
 import { isRelayToken, parseRelayRegisterRequest, type RelayErrorCode, type RelayRegisterRequest } from "../protocol.ts";
 
-export interface CfWebSocket {
-  send(data: string | ArrayBuffer): void;
-  close(code?: number, reason?: string): void;
-  serializeAttachment(value: unknown): void;
-  deserializeAttachment(): unknown;
-}
-
-export interface CfSqlStorage {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
-}
-
-export interface CfDurableObjectState {
-  storage: {
-    sql: CfSqlStorage;
-  };
-  acceptWebSocket(ws: CfWebSocket, tags?: string[]): void;
-  getWebSockets(tag?: string): CfWebSocket[];
-  setWebSocketAutoResponse?(pair: unknown): void;
-}
-
-interface CfDurableObjectStub {
-  fetch(request: Request): Promise<Response>;
-}
-
 export interface RelayWorkerEnv {
-  ACCOUNTS: {
-    idFromName(name: string): unknown;
-    get(id: unknown): CfDurableObjectStub;
-  };
+  ACCOUNTS: DurableObjectNamespace;
   /** 对外的 origin（https://…），签名消息里要用。 */
   PUBLIC_ORIGIN: string;
   GITHUB_API_ORIGIN?: string;
@@ -78,34 +56,17 @@ const REGISTER_ERROR_STATUS: Record<RelayErrorCode, number> = {
   removed: 410,
 };
 
-const registerHits = new Map<string, { windowStart: number; count: number }>();
-const upgradeHits = new Map<string, { windowStart: number; count: number }>();
+const limiterOptions = { windowMs: RELAY_RATE_WINDOW_MS, max: RELAY_IP_LIMITER_MAX, blockedMax: RELAY_IP_BLOCKED_MAX, pruneIntervalMs: RELAY_IP_LIMITER_PRUNE_MS };
+const registerLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_REGISTER_PER_IP_PER_MINUTE });
+const upgradeLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_UPGRADES_PER_IP_PER_MINUTE });
+const verifiedTokens = createVerifiedTokenCache({ max: RELAY_TOKEN_CACHE_MAX, ttlMs: RELAY_TOKEN_CACHE_TTL_MS });
 
-function allowIpWindow(hits: Map<string, { windowStart: number; count: number }>, ip: string, now: number, limit: number): boolean {
-  const hit = hits.get(ip);
-  if (hit !== undefined && now - hit.windowStart < 60_000) {
-    hits.delete(ip);
-    hit.count++;
-    hits.set(ip, hit);
-    return hit.count <= limit;
-  }
-  hits.delete(ip);
-  if (hits.size >= RELAY_IP_LIMITER_MAX) {
-    const oldest = hits.keys().next().value;
-    if (oldest !== undefined) hits.delete(oldest);
-  }
-  hits.set(ip, { windowStart: now, count: 1 });
-  return true;
-}
-
-const allowRegisterIp = (ip: string, now: number) => allowIpWindow(registerHits, ip, now, RELAY_REGISTER_PER_IP_PER_MINUTE);
-const allowUpgradeIp = (ip: string, now: number) => allowIpWindow(upgradeHits, ip, now, RELAY_UPGRADES_PER_IP_PER_MINUTE);
-
+/**
+ * 客户端的真实 IP：只认 Cloudflare 边缘写入的 CF-Connecting-IP（客户端发来的同名头会被边缘覆盖）。
+ * X-Forwarded-For 的首跳是客户端自己填的，不用；没有 CF-Connecting-IP（本地运行时）的请求共用一个键。
+ */
 function clientIpOf(request: Request): string {
-  const cfIp = request.headers.get("cf-connecting-ip")?.trim();
-  if (cfIp) return cfIp;
-  const xff = request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim();
-  return xff || "local";
+  return request.headers.get("cf-connecting-ip")?.trim() || "unknown";
 }
 
 function publicOriginOf(request: Request, env: Pick<RelayWorkerEnv, "PUBLIC_ORIGIN">): string {
@@ -140,7 +101,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
-function wrapSocket(ws: CfWebSocket): RelaySocket {
+function wrapSocket(ws: WebSocket): RelaySocket {
   return {
     send(data) {
       try {
@@ -159,7 +120,7 @@ function wrapSocket(ws: CfWebSocket): RelaySocket {
   };
 }
 
-function sqlStorage(sql: CfSqlStorage): RelayAccountStorage {
+function sqlStorage(sql: SqlStorage): RelayAccountStorage {
   let tableReady = false;
   const ensureTable = () => {
     if (tableReady) return;
@@ -197,13 +158,14 @@ function parseAccountRoute(pathname: string): { accountId: AccountId; kind: "con
 
 /**
  * Worker 入口。
- * 后置：POST /v1/register 先验 GitHub token、按账号编号交给对应 DO；/v1/accounts/<账号>/… 的 WebSocket 升级交给该账号的 DO；
- * 别的路径 404；同一 IP 每分钟登记超过 RELAY_REGISTER_PER_IP_PER_MINUTE 次回 429。
+ * 后置：POST /v1/register 先过按客户端的限流，再验 GitHub token（验过的按摘要缓存 RELAY_TOKEN_CACHE_TTL_MS）、按账号编号交给对应 DO；
+ * /v1/accounts/<账号>/… 的 WebSocket 升级交给该账号的 DO；别的路径 404；
+ * 同一客户端每分钟登记超过 RELAY_REGISTER_PER_IP_PER_MINUTE 次、升级超过 RELAY_UPGRADES_PER_IP_PER_MINUTE 次回 429。
  */
 export async function handleRelayRequest(request: Request, env: RelayWorkerEnv): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "POST" && url.pathname === "/v1/register") {
-    if (!allowRegisterIp(clientIpOf(request), Date.now())) {
+    if (!registerLimiter.allow(clientKeyOf(clientIpOf(request)), Date.now())) {
       return jsonResponse(429, { error: "rate_limited" });
     }
     let rawText: string;
@@ -222,13 +184,17 @@ export async function handleRelayRequest(request: Request, env: RelayWorkerEnv):
     const parsed = parseRelayRegisterRequest(rawBody);
     if (parsed === null) return jsonResponse(400, { error: "bad_frame" });
 
-    let login: AccountLogin | null;
-    try {
-      login = await verifyGithubToken(parsed.token, env.GITHUB_API_ORIGIN ? { apiOrigin: env.GITHUB_API_ORIGIN } : undefined);
-    } catch {
-      return jsonResponse(502, { error: "github_unreachable" });
+    const digest = await tokenDigest(parsed.token);
+    let login: AccountLogin | null | undefined = verifiedTokens.get(digest, Date.now());
+    if (login === undefined) {
+      try {
+        login = await verifyGithubToken(parsed.token, env.GITHUB_API_ORIGIN ? { apiOrigin: env.GITHUB_API_ORIGIN } : undefined);
+      } catch {
+        return jsonResponse(502, { error: "github_unreachable" });
+      }
+      if (login === null) return jsonResponse(401, { error: "unauthorized" });
+      verifiedTokens.set(digest, login, Date.now());
     }
-    if (login === null) return jsonResponse(401, { error: "unauthorized" });
 
     const accountId = await accountIdOf(login);
     const stub = env.ACCOUNTS.get(env.ACCOUNTS.idFromName(accountId));
@@ -252,7 +218,7 @@ export async function handleRelayRequest(request: Request, env: RelayWorkerEnv):
     if (request.method !== "GET" || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse(426, { error: "upgrade_required" }, { upgrade: "websocket" });
     }
-    if (!allowUpgradeIp(clientIpOf(request), Date.now())) {
+    if (!upgradeLimiter.allow(clientKeyOf(clientIpOf(request)), Date.now())) {
       return jsonResponse(429, { error: "rate_limited" });
     }
     const stub = env.ACCOUNTS.get(env.ACCOUNTS.idFromName(route.accountId));
@@ -264,16 +230,16 @@ export async function handleRelayRequest(request: Request, env: RelayWorkerEnv):
 
 /** 一个账号一个对象。 */
 export class RelayAccountObject {
-  private readonly state: CfDurableObjectState;
+  private readonly state: DurableObjectState;
   private readonly env: RelayWorkerEnv;
   private readonly storage: RelayAccountStorage;
   private room: RelayAccountRoom | null = null;
   private accountId: AccountId | null = null;
   private relayOrigin = "";
-  private readonly controls = new Map<CfWebSocket, RelayControlHandle>();
-  private readonly channels = new Map<CfWebSocket, RelayChannelHandle>();
+  private readonly controls = new Map<WebSocket, RelayControlHandle>();
+  private readonly channels = new Map<WebSocket, RelayChannelHandle>();
 
-  constructor(state: CfDurableObjectState, env: RelayWorkerEnv) {
+  constructor(state: DurableObjectState, env: RelayWorkerEnv) {
     this.state = state;
     this.env = env;
     this.storage = sqlStorage(state.storage.sql);
@@ -343,7 +309,7 @@ export class RelayAccountObject {
     if (route === null || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse(426, { error: "upgrade_required" }, { upgrade: "websocket" });
     }
-    const ipTag = `ip:${clientIpOf(request)}`;
+    const ipTag = `ip:${clientKeyOf(clientIpOf(request))}`;
     if (this.state.getWebSockets(ipTag).length >= RELAY_CONCURRENT_SOCKETS_PER_IP) {
       return jsonResponse(429, { error: "rate_limited" });
     }
@@ -351,7 +317,7 @@ export class RelayAccountObject {
     const room = this.ensureRoom(route.accountId, publicOriginOf(request, this.env));
     const pair = new WebSocketPair();
     const client = pair[0];
-    const server = pair[1] as unknown as CfWebSocket;
+    const server = pair[1];
 
     if (route.kind === "control") {
       let closedOnOpen = false;
@@ -396,7 +362,7 @@ export class RelayAccountObject {
   }
 
   /** 后置：控制连接的文本交给对应的 RelayControlHandle，数据通道的二进制交给 RelayChannelHandle；之后存 attachment、调 sweep。 */
-  async webSocketMessage(ws: CfWebSocket, message: string | ArrayBuffer): Promise<void> {
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const control = this.controls.get(ws);
     if (control !== undefined) {
       if (typeof message !== "string" || message.length > RELAY_MAX_CONTROL_FRAME_BYTES) {
@@ -426,7 +392,7 @@ export class RelayAccountObject {
     wrapSocket(ws).close(WS_CLOSE_POLICY, "unknown_socket");
   }
 
-  async webSocketClose(ws: CfWebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+  async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
     const control = this.controls.get(ws);
     if (control !== undefined) {
       this.controls.delete(ws);

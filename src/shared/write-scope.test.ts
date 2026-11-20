@@ -8,12 +8,12 @@ const scope = { dataDir, protectedRoots: [dataDir], writableDirs: [cwd] };
 
 describe("workerWriteScope", () => {
   it("Worker 在 worktree 里：数据目录里只放行自己的工作目录", () => {
-    expect(workerWriteScope({ role: "worker", dataDir, cwd })).toEqual(scope);
-    expect(workerWriteScope({ role: "worker", dataDir: `${dataDir}/`, cwd: `${cwd}/` })).toEqual(scope);
+    expect(workerWriteScope({ role: "worker", dataDir, cwd })).toMatchObject(scope);
+    expect(workerWriteScope({ role: "worker", dataDir: `${dataDir}/`, cwd: `${cwd}/` })).toMatchObject(scope);
   });
 
   it("Worker 在主文件夹干活（--no-worktree）：数据目录整个不能写，主文件夹本来就在外面", () => {
-    expect(workerWriteScope({ role: "worker", dataDir, cwd: "/Users/u/code/app" })).toEqual({
+    expect(workerWriteScope({ role: "worker", dataDir, cwd: "/Users/u/code/app" })).toMatchObject({
       dataDir,
       protectedRoots: [dataDir],
       writableDirs: [],
@@ -41,7 +41,7 @@ describe("workerWriteScope", () => {
       protectedRoots: [winDataDir, dWtRoot],
       cwd: ownWt,
     })!;
-    expect(winScope).toEqual({
+    expect(winScope).toMatchObject({
       dataDir: winDataDir,
       protectedRoots: [winDataDir, dWtRoot],
       writableDirs: [ownWt],
@@ -60,6 +60,31 @@ describe("workerWriteScope", () => {
     expect(scopeAllowsWrite(winScope, `${ownWt}\\a.txt:zone.identifier`, ownWt, winHome)).toBe(false);
     expect(commandMayWriteOutsideScope("cd /d C:\\Users\\alice\\.agent-hub\\state && echo x > a.txt", winScope, ownWt, winHome)).toBe(true);
     expect(commandMayWriteOutsideScope(`cd /d ${ownWt}\\src && echo x > a.txt`, winScope, ownWt, winHome)).toBe(false);
+  });
+});
+
+describe("workerWriteScope：数据目录读边界（readScope）", () => {
+  const launchDir = `${dataDir}/state/launch/7`;
+
+  it("整个数据目录禁读，只放行 worktrees、uploads、tools、run/bin 与这次会话自己的启动目录；只能连 run/hub.sock", () => {
+    expect(workerWriteScope({ role: "worker", dataDir, cwd, launchDir })?.readScope).toEqual({
+      dataDir,
+      readable: [`${dataDir}/worktrees`, `${dataDir}/uploads`, `${dataDir}/tools`, `${dataDir}/run/bin`, launchDir],
+      connectable: [`${dataDir}/run/hub.sock`],
+    });
+  });
+
+  it("cwd、addDirs 落在禁读区里的（总助的 state/router-home）单独放行；在放行项下面、数据目录外面的不重复列", () => {
+    const routerHome = `${dataDir}/state/router-home`;
+    const scoped = workerWriteScope({ role: "worker", dataDir, cwd: routerHome, launchDir, addDirs: [`${dataDir}/worktrees/1`, "/Users/u/code/app"] });
+    expect(scoped?.readScope.readable).toEqual([`${dataDir}/worktrees`, `${dataDir}/uploads`, `${dataDir}/tools`, `${dataDir}/run/bin`, launchDir, routerHome]);
+  });
+
+  it("Windows 路径照样按反斜杠拼", () => {
+    const winData = "C:\\Users\\a\\.agent-hub";
+    const scoped = workerWriteScope({ role: "worker", dataDir: winData, cwd: `${winData}\\worktrees\\1\\2`, launchDir: `${winData}\\state\\launch\\7` });
+    expect(scoped?.readScope.readable).toContain(`${winData}\\run\\bin`);
+    expect(scoped?.readScope.readable).toContain(`${winData}\\state\\launch\\7`);
   });
 });
 

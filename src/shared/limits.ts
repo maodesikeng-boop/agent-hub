@@ -263,6 +263,11 @@ export const MAX_SENT_FILES_TOTAL_BYTES = 200 * 1024 * 1024;
 export const MAX_SENT_FILES_PER_MESSAGE = 10;
 /** 存发出文件副本时一次从文件句柄读多少字节（daemon/sent-files.ts）。 */
 export const SENT_FILE_COPY_CHUNK_BYTES = 1024 * 1024;
+/**
+ * 存副本时同时在读的原文件最多几个（从发起 open 到句柄关掉，含已经取消、底层还没落定的）：满了不再发起新的 open，这个附件记“读不了”，回复照常落库。
+ * 按守护进程算，不按会话；同一会话还有取消了没落定的读取时，这个会话也不再发起新的（daemon/sent-files.ts 的 createSentFileIoSlots）。
+ */
+export const MAX_SENT_FILE_IO_INFLIGHT = 32;
 
 // ---- 交付物（方案、验收结论、截图、录屏，shared/deliverables.ts，docs/deliverables-design.md）----
 
@@ -403,6 +408,8 @@ export const MAX_CACHED_STATEMENTS = 1_000;
 export const STDERR_TAIL_CHARS = 2_000;
 /** agent 接口：一个请求从连上到收完的上限，半截请求挂着不放，到点就断。 */
 export const HUB_REQUEST_TIMEOUT_MS = 15_000;
+/** agent 接口：close() 取消在途准备（探 git、查 PR、存附件）后最多再等多久让它们落定；卡在 open 上取消不了的读取不会拖住关机。 */
+export const HUB_SHUTDOWN_PREPARE_GRACE_MS = 1_000;
 /** agent 接口：多久查一次有没有超时的请求（Node 的 connectionsCheckingInterval，默认 30 秒，太粗）。 */
 export const HUB_TIMEOUT_CHECK_MS = 1_000;
 /** agent 接口：启动时试连旧 socket 的上限，连得上说明有活实例。 */
@@ -434,6 +441,10 @@ export const FATAL_SHUTDOWN_MS = 15_000;
 export const DAEMON_LOG_MAX_BYTES = 2 * 1024 * 1024;
 /** 关机：关 agent 接口最多等多久（它不等还连着的请求，正常一下就关掉；超了不再等，接着关库）。 */
 export const AGENT_API_CLOSE_MS = 3_000;
+/** 关机时等账本把排着的驱动事件（回复里的文件在存副本）落库最多多久；到点没落完的，ledger.close() 取消在拷的附件，排着的回复不带附件落库。 */
+export const LEDGER_SETTLE_ON_SHUTDOWN_MS = 5_000;
+/** 同一会话排着等落库的驱动事件（前面有回复在存副本）最多几条：到了就不再等附件，排着的按顺序直接落库。 */
+export const MAX_PENDING_DRIVER_EVENTS_PER_SESSION = 1_000;
 
 /**
  * 界面登录后设的 cookie 名的前缀（HttpOnly、SameSite=Strict）。值是随机的会话令牌（每个浏览器一条，库里只存它的 sha256，
@@ -859,10 +870,19 @@ export const WIN_EXEC_RESOLVE_CACHE_MAX = 256;
 export const WIN_CMD_SHIM_CACHE_MAX = 256;
 /** 单个 `.cmd` 垫片文件最多读取字节数（64 KiB），防误读巨大非垫片文件。 */
 export const WIN_CMD_SHIM_MAX_BYTES = 64 * 1024;
+/** 数据目录读边界展开成禁读清单（driver/write-scope.ts 的 dataDirDenyList）最多几项：超了拒绝启动，不截断。 */
+export const DATA_DIR_DENY_LIST_MAX = 4_096;
 /** 已完成受保护根 ACL 校验的目录缓存上限（按进程生命周期去重避免每次派活重查 DACL）。 */
 export const WIN_PROTECTED_ROOTS_CACHE_MAX = 64;
-/** `state/win-sandbox-sids.json` 持久化的单 Worker SID 条目上限。 */
-export const WIN_WORKER_SIDS_MAX = 512;
+/**
+ * 已给过 `ALLOW FusaWorker-<编号>` 的 (Worker, worktree 目录) 缓存上限：建 worktree 时给过，起进程时不再调一次 fusa-run.exe。
+ * 命中还要目录身份和 SID 表里的 SID 都没变（platform/win32/acl.ts），轮换掉的 SID 不会误跳过；上限不超过 WIN_WORKER_SIDS_MAX。
+ */
+export const WIN_WORKER_ACL_CACHE_MAX = 512;
+/** 设 ACL 期间目录被换掉（调用前后目录身份对不上）时最多调几次辅助程序：还对不上就报错，不当成设好了（platform/win32/acl.ts）。 */
+export const WIN_ACL_REVERIFY_ATTEMPTS_MAX = 3;
+/** `state/win-sandbox-sids.json` 持久化的 SID 条目上限（Worker 写 SID 和会话读 SID 共用，同 fusa-win-helper sids.rs 的 MAX_PERSISTED_WORKER_SIDS）。 */
+export const WIN_WORKER_SIDS_MAX = 1024;
 /** `state/worktree-roots.json` 登记的历史与当前跨卷 worktree 根目录上限。 */
 export const MAX_WORKTREE_ROOTS = 32;
 /** Windows 沙箱探针（`fusa-run.exe probe`）与辅助命令单次执行超时（毫秒）。 */
@@ -1204,8 +1224,18 @@ export const RELAY_CHANNEL_PENDING_BYTES = 4 * RELAY_MAX_DATA_FRAME_BYTES;
 export const RELAY_CHANNEL_HIGH_WATER_BYTES = 1024 * 1024;
 /** 自建中继隔多久收拾一次各账号（租约过期、等批准过期、空闲通道）。 */
 export const RELAY_SWEEP_MS = 1_000;
-/** 自建中继按 IP 记登记次数，最多记几个 IP。 */
+/** 中继按客户端（IPv4 地址或 IPv6 /64，relay/guards.ts 的 clientKeyOf）记登记、升级次数：新客表、累加表各最多记几个客户端。 */
 export const RELAY_IP_LIMITER_MAX = 10_000;
+/** 中继限流的固定窗口长度（RELAY_REGISTER_PER_IP_PER_MINUTE、RELAY_UPGRADES_PER_IP_PER_MINUTE 按它算）。 */
+export const RELAY_RATE_WINDOW_MS = 60_000;
+/** 超限客户端单独记在封禁表里直到窗口结束，最多记几个（新客户端挤满计数表也挤不掉它们）。 */
+export const RELAY_IP_BLOCKED_MAX = 10_000;
+/** 累加表满了时最多隔多久清一次窗口已过的计数（清一次要扫整张表）。 */
+export const RELAY_IP_LIMITER_PRUNE_MS = 1_000;
+/** /v1/register 验过的 GitHub token 按 SHA-256 摘要缓存几个（不存明文）。 */
+export const RELAY_TOKEN_CACHE_MAX = 1_024;
+/** 验过的 token 缓存多久：这段时间内同一个 token 再登记不再问 GitHub；被吊销的 token 最多晚这么久失效。 */
+export const RELAY_TOKEN_CACHE_TTL_MS = 60_000;
 /** 中继记住最近被移除的几台设备（它们再登入收到 removed）。 */
 export const RELAY_REMOVED_DEVICES_MAX = 64;
 /** 中继当天流量计数多久落一次盘（Cloudflare 按写入行数计费，不每帧都写）。 */

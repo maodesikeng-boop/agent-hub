@@ -6,7 +6,7 @@ import {
   type AgentSessionRow,
   type LaunchFiles,
   type SessionStartedEvent,
-  type WriteScope,
+  type WriteBounds,
   type TokenUsage,
 } from "../../shared/index.ts";
 import { agyCapabilityDenyRules } from "./capabilities.ts";
@@ -237,7 +237,7 @@ export interface WorkerToolCheckInput {
   toolName: string;
   parameters: unknown;
   /** 没有 OS 沙箱时要兜底检查的可写范围（driver.ts 起进程时 osSandboxed 是 false 才有）；包进了沙箱是 null，不查。 */
-  fallbackScope: WriteScope | null;
+  fallbackScope: WriteBounds | null;
   cwd: string;
 }
 

@@ -2,10 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  closeSync,
   existsSync,
-  fstatSync,
-  openSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,9 +15,11 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import fsPromises, { open } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_SENT_FILE_BYTES,
   MAX_SENT_FILES_PER_MESSAGE,
@@ -28,7 +27,19 @@ import {
   READONLY_SECRET_HOME_PATHS,
   type SentFile,
 } from "../shared/index.ts";
-import { SENSITIVE_HOME_PATHS, copyFromFd, isShareable, prepareSentFilesDir, sentFileId, sensitivePathsOf, shareLinkedFiles, type ShareScope } from "./sent-files.ts";
+import {
+  SENSITIVE_HOME_PATHS,
+  copyFromHandle,
+  createSentFileIoSlots,
+  isShareable,
+  localLinksIn,
+  prepareSentFilesDir,
+  sentFileId,
+  sensitivePathsOf,
+  shareFilePaths,
+  shareLinkedFiles,
+  type ShareScope,
+} from "./sent-files.ts";
 
 let base: string;
 /** 假的用户目录：.ssh/id_rsa、.agent-hub/（数据目录）。 */
@@ -65,16 +76,16 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(base, { recursive: true, force: true }));
 
-const share = (text: string, s: ShareScope = scope) => shareLinkedFiles(text, s);
+const share = (text: string, s: ShareScope = scope) => shareLinkedFiles(localLinksIn(text), s);
 const sha256 = (data: string) => createHash("sha256").update(data).digest("hex");
 const copies = () => (existsSync(sentDir) ? readdirSync(sentDir) : []);
 const copyOf = (file: SentFile) => readFileSync(join(sentDir, file.id!, file.name), "utf8");
 
 describe("正常发文件", () => {
-  it("png：存副本，meta 记原 href、原路径、编号、名字、大小、类型、状态、mtime", () => {
+  it("png：存副本，meta 记原 href、原路径、编号、名字、大小、类型、状态、mtime", async () => {
     const png = write(join(proj, "out", "图.png"), "PNG-DATA");
     utimesSync(png, 1_700_000_000, 1_700_000_000);
-    const [file, ...rest] = share(`做好了：\n\n![截图](${png.replace("图", "%E5%9B%BE")})`);
+    const [file, ...rest] = (await share(`做好了：\n\n![截图](${png.replace("图", "%E5%9B%BE")})`));
     expect(rest).toEqual([]);
     expect(file).toMatchObject({
       path: png,
@@ -89,10 +100,10 @@ describe("正常发文件", () => {
     expect(statSync(join(sentDir, file!.id!, "图.png")).mtimeMs).toBe(1_700_000_000_000);
   });
 
-  it("pdf、md、csv：图片语法、链接语法都存，类型按扩展名", () => {
-    const files = share(
+  it("pdf、md、csv：图片语法、链接语法都存，类型按扩展名", async () => {
+    const files = (await share(
       `[报告](${write(join(proj, "报告.pdf"))}) [说明](${write(join(proj, "说明.md"))}) ![表](${write(join(proj, "数据.csv"))})`,
-    );
+    ));
     expect(files.map((f) => [f.name, f.mime, f.status])).toEqual([
       ["报告.pdf", "application/pdf", "saved"],
       ["说明.md", "text/markdown", "saved"],
@@ -101,11 +112,11 @@ describe("正常发文件", () => {
     expect(new Set(files.map((f) => f.id)).size).toBe(3);
   });
 
-  it("file://、~/、相对路径（按会话的工作目录）、尖括号里带空格的路径都认", () => {
+  it("file://、~/、相对路径（按会话的工作目录）、尖括号里带空格的路径都认", async () => {
     write(join(proj, "a b.md"));
     write(join(proj, "docs", "rel.md"));
     write(join(uploads, "u1", "up.png"));
-    const files = share(
+    const files = (await share(
       [
         `[1](file://${join(proj, "a%20b.md")})`,
         `[2](<${join(proj, "a b.md")}>)`,
@@ -114,7 +125,7 @@ describe("正常发文件", () => {
         `[5](~/.agent-hub/uploads/u1/up.png)`,
         `[6](file://localhost${join(proj, "docs", "rel.md")})`,
       ].join(" "),
-    );
+    ));
     expect(files.map((f) => [f.path, f.status])).toEqual([
       [join(proj, "a b.md"), "saved"],
       [join(proj, "a b.md"), "saved"],
@@ -125,20 +136,20 @@ describe("正常发文件", () => {
     ]);
   });
 
-  it("本项目的 worktree 里的文件（数据目录里的例外）能发", () => {
+  it("本项目的 worktree 里的文件（数据目录里的例外）能发", async () => {
     const file = write(join(worktrees, "3", "shot.png"));
-    expect(share(`![x](${file})`)[0]!.status).toBe("saved");
+    expect((await share(`![x](${file})`))[0]!.status).toBe("saved");
   });
 
-  it("网址、锚点、mailto、//主机 不算本机文件；同一个地址写两次只存一份", () => {
+  it("网址、锚点、mailto、//主机 不算本机文件；同一个地址写两次只存一份", async () => {
     const md = write(join(proj, "a.md"));
-    const files = share(`[网](https://example.com/a.png) ![远](http://x/y.png) [锚](#top) [信](mailto:a@b.c) [协](//host/x) [a](${md}) [again](${md})`);
+    const files = (await share(`[网](https://example.com/a.png) ![远](http://x/y.png) [锚](#top) [信](mailto:a@b.c) [协](//host/x) [a](${md}) [again](${md})`));
     expect(files.map((f) => f.href)).toEqual([md]);
     expect(copies()).toHaveLength(1);
   });
 
-  it("没有本机链接：返回空，不建任何目录", () => {
-    expect(share("普通回复，**没有**链接 https://example.com")).toEqual([]);
+  it("没有本机链接：返回空，不建任何目录", async () => {
+    expect((await share("普通回复，**没有**链接 https://example.com"))).toEqual([]);
     expect(existsSync(sentDir)).toBe(false);
   });
 });
@@ -149,47 +160,55 @@ const SYSTEM_OUTSIDE_FILE =
     : "/etc/hosts";
 
 describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () => {
-  const rejected = (text: string, s: ShareScope = scope) => {
-    const files = share(text, s);
+  const rejected = async (text: string, s: ShareScope = scope) => {
+    const files = (await share(text, s));
     expect(files).toHaveLength(1);
     expect(files[0]).toMatchObject({ status: "not_allowed", id: null, size: null });
     expect(copies()).toEqual([]);
   };
 
-  it("~/.ssh/id_rsa", () => rejected("[key](~/.ssh/id_rsa)"));
-  it("系统目录外文件（/etc/hosts 或 drivers/etc/hosts）", () => rejected(`[hosts](${SYSTEM_OUTSIDE_FILE})`));
+  it("~/.ssh/id_rsa", async () => await rejected("[key](~/.ssh/id_rsa)"));
+  it("系统目录外文件（/etc/hosts 或 drivers/etc/hosts）", async () => await rejected(`[hosts](${SYSTEM_OUTSIDE_FILE})`));
 
-  it("项目里指向 ~/.ssh 的符号链接（文件、目录两种）", () => {
+  it("项目里指向 ~/.ssh 的符号链接（文件、目录两种）", async () => {
     symlinkSync(join(home, ".ssh", "id_rsa"), join(proj, "key.txt"));
-    rejected(`[k](${join(proj, "key.txt")})`);
+    await rejected(`[k](${join(proj, "key.txt")})`);
     symlinkSync(join(home, ".ssh"), join(proj, "ssh"));
-    rejected(`[k](${join(proj, "ssh", "id_rsa")})`);
+    await rejected(`[k](${join(proj, "ssh", "id_rsa")})`);
   });
 
-  it("/项目/../../穿越到外部系统文件", () =>
-    rejected(
+  it("/项目/../../穿越到外部系统文件", async () =>
+    await rejected(
       process.platform === "win32"
         ? `[p](${proj}${"\\..".repeat(20)}\\Windows\\System32\\drivers\\etc\\hosts)`
         : `[p](${proj}${"/..".repeat(20)}/etc/passwd)`,
     ));
 
-  it("项目文件夹是 ~ 时，~/.agent-hub/state/ui-token（数据目录里除了 uploads、worktrees 都不行）", () => {
+  it("项目文件夹是 ~ 时，~/.agent-hub/state/ui-token（数据目录里除了 uploads、worktrees 都不行）", async () => {
     const homeScope = { ...scope, cwd: home, roots: [home, worktrees, uploads] };
-    rejected("[t](~/.agent-hub/state/ui-token)", homeScope);
-    rejected(`[t](${join(dataHome, "state", "ui-token")})`, homeScope);
+    await rejected("[t](~/.agent-hub/state/ui-token)", homeScope);
+    await rejected(`[t](${join(dataHome, "state", "ui-token")})`, homeScope);
     // 同一个 scope 下普通文件照样能发
     write(join(home, "notes.md"));
-    expect(share("[n](~/notes.md)", homeScope)[0]!.status).toBe("saved");
+    expect((await share("[n](~/notes.md)", homeScope))[0]!.status).toBe("saved");
   });
 
-  it("已经存的副本（sent-files/）也不能再当原文件发", () => {
+  it("数据目录里分享不超出 Worker 的读边界：state/ 哪怕被配进例外也不分享，uploads、worktrees 照常", async () => {
+    const leaked = { ...scope, dataExceptions: [...scope.dataExceptions, join(dataHome, "state")] };
+    await rejected(`[t](${join(dataHome, "state", "ui-token")})`, leaked);
+    expect(isShareable(realpathSync.native(join(dataHome, "state", "ui-token")), leaked)).toBe(false);
+    const upload = write(join(uploads, "u.txt"));
+    expect(isShareable(realpathSync.native(upload), leaked)).toBe(true);
+  });
+
+  it("已经存的副本（sent-files/）也不能再当原文件发", async () => {
     const homeScope = { ...scope, roots: [home] };
     write(join(sentDir, "0123456789abcdef", "a.png"));
-    expect(share(`![x](${join(sentDir, "0123456789abcdef", "a.png")})`, homeScope)[0]!.status).toBe("not_allowed");
+    expect((await share(`![x](${join(sentDir, "0123456789abcdef", "a.png")})`, homeScope))[0]!.status).toBe("not_allowed");
     expect(copies()).toEqual(["0123456789abcdef"]);
   });
 
-  it("项目文件夹是 ~ 或 / 时，家目录里的凭据、钥匙串、claude 配置和 /etc 照样拒（敏感路径清单始终生效）", () => {
+  it("项目文件夹是 ~ 或 / 时，家目录里的凭据、钥匙串、claude 配置和 /etc 照样拒（敏感路径清单始终生效）", async () => {
     const homeScope = { ...scope, cwd: home, roots: [home, "/"] };
     const secrets = [
       ".ssh/id_rsa",
@@ -225,24 +244,24 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
     for (const rel of secrets) {
       write(join(home, rel), "SECRET");
       expect(SENSITIVE_HOME_PATHS.some((p) => rel === p || rel.startsWith(`${p}/`)), rel).toBe(true);
-      expect(share(`[s](~/${rel})`, homeScope)[0], rel).toMatchObject({ status: "not_allowed", id: null });
+      expect((await share(`[s](~/${rel})`, homeScope))[0], rel).toMatchObject({ status: "not_allowed", id: null });
     }
-    expect(share(`[h](${SYSTEM_OUTSIDE_FILE})`, homeScope)[0]!.status).toBe("not_allowed");
+    expect((await share(`[h](${SYSTEM_OUTSIDE_FILE})`, homeScope))[0]!.status).toBe("not_allowed");
     // 经符号链接指过去的也拒
     symlinkSync(join(home, ".aws", "credentials"), join(home, "creds.txt"));
-    expect(share("[c](~/creds.txt)", homeScope)[0]!.status).toBe("not_allowed");
+    expect((await share("[c](~/creds.txt)", homeScope))[0]!.status).toBe("not_allowed");
     expect(copies()).toEqual([]);
     // 清单外的照常
     write(join(home, "notes.md"));
-    expect(share("[n](~/notes.md)", homeScope)[0]!.status).toBe("saved");
+    expect((await share("[n](~/notes.md)", homeScope))[0]!.status).toBe("saved");
   });
 
-  it("防漂移：只读禁读的每一项（相对主目录）都被分享禁用名单覆盖", () => {
+  it("防漂移：只读禁读的每一项（相对主目录）都被分享禁用名单覆盖", async () => {
     const covered = (rel: string) => SENSITIVE_HOME_PATHS.some((p) => rel === p || rel.startsWith(`${p}/`));
     for (const rel of READONLY_SECRET_HOME_PATHS) expect(covered(rel), rel).toBe(true);
   });
 
-  it("sensitivePathsOf：整份清单只在这里 realpath（主目录是符号链接时按它指向的地方），isShareable 可以直接吃算好的清单", () => {
+  it("sensitivePathsOf：整份清单只在这里 realpath（主目录是符号链接时按它指向的地方），isShareable 可以直接吃算好的清单", async () => {
     const linkedHome = join(base, "home-link");
     symlinkSync(home, linkedHome, process.platform === "win32" ? "junction" : "dir");
     const sensitive = sensitivePathsOf(linkedHome);
@@ -254,14 +273,14 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
     expect(isShareable(key, { ...scope, roots: [home], userHome: linkedHome }, sensitive)).toBe(false);
   });
 
-  it(".git/config，以及经符号链接进 .git 的", () => {
+  it(".git/config，以及经符号链接进 .git 的", async () => {
     write(join(proj, ".git", "config"), "[remote]");
-    rejected(`[c](${join(proj, ".git", "config")})`);
+    await rejected(`[c](${join(proj, ".git", "config")})`);
     symlinkSync(join(proj, ".git"), join(proj, "g"));
-    rejected(`[c](${join(proj, "g", "config")})`);
+    await rejected(`[c](${join(proj, "g", "config")})`);
   });
 
-  it("isShareable：按“前缀 + 路径分隔符”比，/a/proj-evil 不算在 /a/proj 里", () => {
+  it("isShareable：按“前缀 + 路径分隔符”比，/a/proj-evil 不算在 /a/proj 里", async () => {
     mkdirSync(`${proj}-evil`);
     write(join(`${proj}-evil`, "x.md"));
     expect(isShareable(realpathSync.native(join(`${proj}-evil`, "x.md")), scope)).toBe(false);
@@ -270,70 +289,85 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
 });
 
 describe("边界", () => {
-  it("文件不存在：没找到，不拷", () => {
-    expect(share(`[x](${join(proj, "nope.pdf")})`)[0]).toMatchObject({ status: "missing", name: "nope.pdf", id: null });
+  it("文件不存在：没找到，不拷", async () => {
+    expect((await share(`[x](${join(proj, "nope.pdf")})`))[0]).toMatchObject({ status: "missing", name: "nope.pdf", id: null });
     expect(copies()).toEqual([]);
   });
 
-  it("站内链接、不存在的相对路径不当文件：不进 files，网页照原样显示", () => {
+  it("站内链接、不存在的相对路径不当文件：不进 files，网页照原样显示", async () => {
     write(join(proj, "src", "real.ts"));
-    const files = share("[登录](/login) [首页](/) [api](/api/users?id=1) [x](src/foo.ts) [y](./nope/a.md) [z](~/nope.md) [r](src/real.ts)");
+    const files = (await share("[登录](/login) [首页](/) [api](/api/users?id=1) [x](src/foo.ts) [y](./nope/a.md) [z](~/nope.md) [r](src/real.ts)"));
     expect(files.map((f) => [f.href, f.status])).toEqual([["src/real.ts", "saved"]]);
   });
 
-  it("绝对路径写的、落在可分享的文件夹里但不存在：出“没找到”卡片（也认 file:// 和 /tmp 这类经符号链接的根）", () => {
+  it("绝对路径写的、落在可分享的文件夹里但不存在：出“没找到”卡片（也认 file:// 和 /tmp 这类经符号链接的根）", async () => {
     const sysTmp = process.platform === "win32" ? tmpdir() : "/tmp";
     const missingInTmp = join(sysTmp, "agent-hub-surely-missing", "a.png");
     const tmpScope = { ...scope, roots: [...scope.roots, sysTmp] };
-    const files = share(`[a](${join(proj, "sub", "nope.pdf")}) [b](file://${join(proj, "x.md")}) [c](${missingInTmp})`, tmpScope);
+    const files = (await share(`[a](${join(proj, "sub", "nope.pdf")}) [b](file://${join(proj, "x.md")}) [c](${missingInTmp})`, tmpScope));
     expect(files.map((f) => f.status)).toEqual(["missing", "missing", "missing"]);
   });
 
-  it("可分享的文件夹外面的目录（/、/usr）不出卡片；里面的目录出“不是文件”", () => {
+  it("可分享的文件夹外面的目录（/、/usr）不出卡片；里面的目录出“不是文件”", async () => {
     mkdirSync(join(proj, "dir"));
-    expect(share(`[根](/) [usr](/usr) [d](${join(proj, "dir")})`).map((f) => [f.href, f.status])).toEqual([[join(proj, "dir"), "not_file"]]);
+    expect((await share(`[根](/) [usr](/usr) [d](${join(proj, "dir")})`)).map((f) => [f.href, f.status])).toEqual([[join(proj, "dir"), "not_file"]]);
   });
 
-  it("不当文件的链接不占 10 个的名额", () => {
+  it("不当文件的链接不占 10 个的名额", async () => {
     const links = Array.from({ length: 10 }, (_, i) => `[${i}](${write(join(proj, `f${i}.md`))})`);
-    const files = share(["[登录](/login)", "[x](src/foo.ts)", ...links].join("\n"));
+    const files = (await share(["[登录](/login)", "[x](src/foo.ts)", ...links].join("\n")));
     expect(files).toHaveLength(10);
     expect(files.at(-1)!.name).toBe("f9.md");
   });
 
-  it("文件夹、命名管道：不是文件，不拷（管道不会卡住）", () => {
+  it("文件夹、命名管道：不是文件，不拷（管道不会卡住）", async () => {
     mkdirSync(join(proj, "dir"));
     if (process.platform === "win32") {
-      expect(share(`[d](${join(proj, "dir")}) [p](\\\\.\\pipe\\fusa-sent-test)`).map((f) => f.status)).toEqual([
+      expect((await share(`[d](${join(proj, "dir")}) [p](\\\\.\\pipe\\fusa-sent-test)`)).map((f) => f.status)).toEqual([
         "not_file",
       ]);
     } else {
       execFileSync("mkfifo", [join(proj, "pipe")]);
-      expect(share(`[d](${join(proj, "dir")}) [p](${join(proj, "pipe")})`).map((f) => f.status)).toEqual(["not_file", "not_file"]);
+      expect((await share(`[d](${join(proj, "dir")}) [p](${join(proj, "pipe")})`)).map((f) => f.status)).toEqual(["not_file", "not_file"]);
     }
     expect(copies()).toEqual([]);
   });
 
-  it("发出后原文件被删、被改：副本还是发出时的内容", () => {
+  it("发出后原文件被删、被改：副本还是发出时的内容", async () => {
     const md = write(join(proj, "a.md"), "第一版");
-    const [file] = share(`[a](${md})`);
+    const [file] = (await share(`[a](${md})`));
     writeFileSync(md, "第二版");
     expect(copyOf(file!)).toBe("第一版");
     rmSync(md);
     expect(copyOf(file!)).toBe("第一版");
   });
 
-  it("60 MB：太大，不拷；正好 50 MB 的照存", () => {
+  it("60 MB：太大，不拷；正好 50 MB 的照存", async () => {
     const big = write(join(proj, "big.bin"));
     truncateSync(big, 60 * 1024 * 1024);
-    expect(share(`[b](${big})`)[0]).toMatchObject({ status: "too_large", size: 60 * 1024 * 1024, id: null });
+    expect((await share(`[b](${big})`))[0]).toMatchObject({ status: "too_large", size: 60 * 1024 * 1024, id: null });
     expect(copies()).toEqual([]);
     const edge = write(join(proj, "edge.bin"));
     truncateSync(edge, MAX_SENT_FILE_BYTES);
-    expect(share(`[e](${edge})`)[0]).toMatchObject({ status: "saved", size: MAX_SENT_FILE_BYTES });
+    expect((await share(`[e](${edge})`))[0]).toMatchObject({ status: "saved", size: MAX_SENT_FILE_BYTES });
   });
 
-  it("一条消息合计超过 200 MB：超出的那个不拷，后面小的照拷", () => {
+  it("存大文件副本时事件循环照常转：分块异步读写、边拷边算 sha256，不一次同步拷完", async () => {
+    const big = write(join(proj, "big40.bin"));
+    truncateSync(big, 40 * 1024 * 1024);
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 0);
+    let files: SentFile[];
+    try {
+      files = await (await share(`[b](${big})`));
+    } finally {
+      clearInterval(timer);
+    }
+    expect(files[0]).toMatchObject({ status: "saved", size: 40 * 1024 * 1024 });
+    expect(ticks).toBeGreaterThan(0);
+  });
+
+  it("一条消息合计超过 200 MB：超出的那个不拷，后面小的照拷", async () => {
     const each = 45 * 1024 * 1024; // 4 个 180 MB，第 5 个超
     const names = [1, 2, 3, 4, 5].map((i) => {
       const f = write(join(proj, `f${i}.bin`));
@@ -341,20 +375,20 @@ describe("边界", () => {
       return f;
     });
     const small = write(join(proj, "small.md"));
-    const files = share([...names, small].map((f, i) => `[${i}](${f})`).join(" "));
+    const files = (await share([...names, small].map((f, i) => `[${i}](${f})`).join(" ")));
     expect(MAX_SENT_FILES_TOTAL_BYTES).toBeLessThan(5 * each);
     expect(files.map((f) => f.status)).toEqual(["saved", "saved", "saved", "saved", "too_large", "saved"]);
   });
 
-  it("11 个文件只处理前 10 个", () => {
+  it("11 个文件只处理前 10 个", async () => {
     const links = Array.from({ length: 11 }, (_, i) => `[${i}](${write(join(proj, `f${i}.md`))})`);
-    const files = share(links.join("\n"));
+    const files = (await share(links.join("\n")));
     expect(files).toHaveLength(MAX_SENT_FILES_PER_MESSAGE);
     expect(files.at(-1)!.name).toBe("f9.md");
     expect(copies()).toHaveLength(10);
   });
 
-  it("中文名、括号、#、%、emoji、超长名都能发", () => {
+  it("中文名、括号、#、%、emoji、超长名都能发", async () => {
     const names = ["中文 名字.md", "a(1).png", "第#1.md", "100%.txt", "😀.png", `${"长".repeat(80)}.md`];
     for (const n of names) write(join(proj, n));
     const hrefs = [
@@ -365,7 +399,7 @@ describe("边界", () => {
       join(proj, "😀.png"),
       join(proj, `${"长".repeat(80)}.md`),
     ];
-    const files = share(hrefs.map((h, i) => `[${i}](${h})`).join(" "));
+    const files = (await share(hrefs.map((h, i) => `[${i}](${h})`).join(" ")));
     expect(files.map((f) => f.status)).toEqual(Array(6).fill("saved"));
     expect(files.slice(0, 5).map((f) => f.name)).toEqual(names.slice(0, 5));
     // 超长名截到 120 字节以内，扩展名留着（源文件名 243 字节：Linux 的文件名上限是 255 字节，100 个字就放不下了）
@@ -373,81 +407,119 @@ describe("边界", () => {
     expect(Buffer.byteLength(files[5]!.name)).toBeLessThanOrEqual(120);
     expect(copyOf(files[5]!)).toBe("x");
     // 原样的 % 解不开码就按原样当路径
-    expect(share(`[p](${join(proj, "100%.txt")})`)[0]!.status).toBe("saved");
+    expect((await share(`[p](${join(proj, "100%.txt")})`))[0]!.status).toBe("saved");
   });
 
-  it("有空格但没尖括号：不是链接，当普通文字", () => {
+  it("有空格但没尖括号：不是链接，当普通文字", async () => {
     write(join(proj, "a b.md"));
-    expect(share(`[x](${join(proj, "a b.md")})`)).toEqual([]);
+    expect((await share(`[x](${join(proj, "a b.md")})`))).toEqual([]);
   });
 
-  it("代码块、行内代码里的链接不处理", () => {
+  it("代码块、行内代码里的链接不处理", async () => {
     const md = write(join(proj, "a.md"));
-    expect(share(`\`\`\`\n[x](${md})\n![y](${md})\n\`\`\`\n\n行内 \`[x](${md})\`\n\n    [缩进](${md})`)).toEqual([]);
+    expect((await share(`\`\`\`\n[x](${md})\n![y](${md})\n\`\`\`\n\n行内 \`[x](${md})\`\n\n    [缩进](${md})`))).toEqual([]);
   });
 
-  it("同一条消息处理两次（入库前崩了、重启后重放）：内容没变就命中已有副本，编号不变、不重复拷", () => {
+  it("同一条消息处理两次（入库前崩了、重启后重放）：内容没变就命中已有副本，编号不变、不重复拷", async () => {
     const md = write(join(proj, "a.md"), "v1");
-    const first = share(`[a](${md}) [b](${write(join(proj, "b.md"), "b")})`);
-    const again = share(`[a](${md}) [b](${join(proj, "b.md")})`);
+    const first = (await share(`[a](${md}) [b](${write(join(proj, "b.md"), "b")})`));
+    const again = (await share(`[a](${md}) [b](${join(proj, "b.md")})`));
     expect(again.map((f) => f.id)).toEqual(first.map((f) => f.id));
     expect(copies().sort()).toEqual(first.map((f) => f.id).sort());
   });
 
-  it("按内容去重：两个会话、两条消息发同一个文件只存一份，元数据各记各的；内容变了另存一份", () => {
+  it("按内容去重：两个会话、两条消息发同一个文件只存一份，元数据各记各的；内容变了另存一份", async () => {
     const md = write(join(proj, "a.md"), "v1");
-    const [a] = share(`[a](${md})`);
-    const [b] = share(`[另一种写法](file://${md})`);
+    const [a] = (await share(`[a](${md})`));
+    const [b] = (await share(`[另一种写法](file://${md})`));
     expect(a!.id).toBe(b!.id);
     expect([a!.path, b!.path]).toEqual([md, md]);
     expect(copies()).toHaveLength(1);
     writeFileSync(md, "v2");
-    const [c] = share(`[a](${md})`);
+    const [c] = (await share(`[a](${md})`));
     expect(c!.id).not.toBe(a!.id);
     expect(copies()).toHaveLength(2);
     expect(copyOf(a!)).toBe("v1");
     expect(copyOf(c!)).toBe("v2");
   });
 
-  it("再发已有的副本：副本目录的修改时间刷新到现在，刚发过的不会被定期清理", () => {
+  it("再发已有的副本：副本目录的修改时间刷新到现在，刚发过的不会被定期清理", async () => {
     const md = write(join(proj, "a.md"), "v1");
-    const [a] = share(`[a](${md})`);
+    const [a] = (await share(`[a](${md})`));
     const dir = join(sentDir, a!.id!);
     const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
     utimesSync(dir, old, old);
-    share(`[a](${md})`);
+    (await share(`[a](${md})`));
     expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000);
   });
 
-  it("同样内容、不同文件名：各存一份（副本目录里放的是文件名）", () => {
-    const [a, b] = share(`[a](${write(join(proj, "a.md"), "same")}) [b](${write(join(proj, "b.md"), "same")})`);
+  it("同一个文件并发发 80 次（10 轮、每轮 8 个同时发）：全部存下、编号相同，每轮只留一份副本", async () => {
+    const src = write(join(proj, "ordinary.txt"), Buffer.alloc(256 * 1024, 65));
+    for (let round = 0; round < 10; round++) {
+      const dir = join(base, `sent-${round}`);
+      const results = await Promise.all(Array.from({ length: 8 }, () => shareFilePaths([src], { ...scope, sentFilesDir: dir })));
+      const files = results.map(([file]) => file!);
+      expect(files.map((f) => f.status)).toEqual(Array(8).fill("saved"));
+      expect(new Set(files.map((f) => f.id)).size).toBe(1);
+      expect(readdirSync(dir)).toEqual([files[0]!.id]);
+      expect(readFileSync(join(dir, files[0]!.id!, "ordinary.txt"))).toEqual(Buffer.alloc(256 * 1024, 65));
+    }
+  });
+
+  it("副本的位置被别的东西占着：名字或大小对不上的目录不当成已有副本，照实报读不了，不留半截目录；被普通文件占着时 POSIX 同样报读不了", async () => {
+    const src = write(join(proj, "a.md"), "v1");
+    const id = sentFileId("a.md", sha256("v1"));
+    mkdirSync(sentDir, { recursive: true });
+    writeFileSync(join(sentDir, id), "not a copy");
+    const overFile = (await share(`[a](${src})`)).map((f) => [f.status, f.id]);
+    if (process.platform === "win32") {
+      // Windows 的 rename 把目录换到同名文件的位置上：占位的文件被换成了真副本
+      expect(overFile).toEqual([["saved", id]]);
+      expect(readFileSync(join(sentDir, id, "a.md"), "utf8")).toBe("v1");
+    } else {
+      expect(overFile).toEqual([["unreadable", null]]);
+    }
+    expect(copies()).toEqual([id]);
+
+    rmSync(join(sentDir, id), { recursive: true });
+    write(join(sentDir, id, "other.md"), "v1");
+    expect((await share(`[a](${src})`)).map((f) => [f.status, f.id])).toEqual([["unreadable", null]]);
+    rmSync(join(sentDir, id), { recursive: true });
+    write(join(sentDir, id, "a.md"), "v1-truncated");
+    expect((await share(`[a](${src})`)).map((f) => [f.status, f.id])).toEqual([["unreadable", null]]);
+    expect(copies()).toEqual([id]);
+    expect(readdirSync(join(sentDir, id))).toEqual(["a.md"]);
+  });
+
+  it("同样内容、不同文件名：各存一份（副本目录里放的是文件名）", async () => {
+    const [a, b] = (await share(`[a](${write(join(proj, "a.md"), "same")}) [b](${write(join(proj, "b.md"), "same")})`));
     expect(a!.id).not.toBe(b!.id);
     expect([copyOf(a!), copyOf(b!)]).toEqual(["same", "same"]);
   });
 
-  it("拷的时候源文件被截断：元数据记实际拷到的字节数", () => {
+  it("拷的时候源文件被截断：元数据记实际拷到的字节数", async () => {
     const src = write(join(proj, "t.bin"), "0123456789");
-    const fd = openSync(src, "r");
+    const handle = await open(src, "r");
     try {
       // 开文件时它还有 100 字节（fstat 看到的），拷的时候只剩 10 字节
-      const stat = Object.assign(fstatSync(fd), { size: 100 });
+      const stat = Object.assign(await handle.stat(), { size: 100 });
       mkdirSync(sentDir, { recursive: true });
-      const copied = copyFromFd(fd, stat, join(sentDir, "out"));
+      const copied = await copyFromHandle(handle, stat, join(sentDir, "out"));
       expect(copied.bytes).toBe(10);
       expect(readFileSync(join(sentDir, "out"), "utf8")).toBe("0123456789");
     } finally {
-      closeSync(fd);
+      await handle.close();
     }
   });
 
-  it("启动时清掉没拷完的残留目录，副本留着", () => {
-    const [file] = share(`[a](${write(join(proj, "a.md"))})`);
+  it("启动时清掉没拷完的残留目录，副本留着", async () => {
+    const [file] = (await share(`[a](${write(join(proj, "a.md"))})`));
     mkdirSync(join(sentDir, ".partial-0123456789abcdef-aa"));
     prepareSentFilesDir(sentDir);
     expect(copies()).toEqual([file!.id]);
   });
 
-  it("没有本机文件链接的普通文字或纯外链：不跑敏感路径 realpathSync", () => {
+  it("没有本机文件链接的普通文字或纯外链：不跑敏感路径 realpathSync", async () => {
     const getter = Object.getOwnPropertyDescriptor(scope, "userHome");
     let reads = 0;
     const lazyScope: ShareScope = {
@@ -457,8 +529,8 @@ describe("边界", () => {
         return scope.userHome;
       },
     };
-    expect(share("这是一段普通消息，没有任何链接。", lazyScope)).toEqual([]);
-    expect(share("外链 [GitHub](https://github.com/example/repo) 也不需要查本机路径", lazyScope)).toEqual([]);
+    expect((await share("这是一段普通消息，没有任何链接。", lazyScope))).toEqual([]);
+    expect((await share("外链 [GitHub](https://github.com/example/repo) 也不需要查本机路径", lazyScope))).toEqual([]);
     expect(reads).toBe(0);
     void getter;
   });
@@ -467,39 +539,105 @@ describe("边界", () => {
 describe("链接后面带行号", () => {
   const link = (href: string) => share(`[协议](${href})`);
 
-  it.each(["#L10", "#L10-L20", "#L10-20", "#L10C5", "#L10C5-L12C3", ":10", ":10:5", ":10-20", ":10:5-12:3"])("%s：去掉后找到文件，标题照原样", (suffix) => {
+  it.each(["#L10", "#L10-L20", "#L10-20", "#L10C5", "#L10C5-L12C3", ":10", ":10:5", ":10-20", ":10:5-12:3"])("%s：去掉后找到文件，标题照原样", async (suffix) => {
     const file = write(join(proj, "src", "protocol.ts"), "CODE");
-    const [saved, ...rest] = link(`${file}${suffix}`);
+    const [saved, ...rest] = (await link(`${file}${suffix}`));
     expect(rest).toEqual([]);
     expect(saved).toMatchObject({ status: "saved", name: "protocol.ts", path: file, size: 4, href: `${file}${suffix}` });
     expect(copyOf(saved!)).toBe("CODE");
   });
 
-  it("file:// 链接：# 片段不是路径，什么写法都去掉", () => {
+  it("file:// 链接：# 片段不是路径，什么写法都去掉", async () => {
     const file = write(join(proj, "a b.ts"), "CODE");
-    expect(link(`file://${file.replace(" ", "%20")}#L502-L520`)[0]).toMatchObject({ status: "saved", name: "a b.ts" });
-    expect(link(`file://${file.replace(" ", "%20")}#anchor`)[0]).toMatchObject({ status: "saved", name: "a b.ts" });
+    expect((await link(`file://${file.replace(" ", "%20")}#L502-L520`))[0]).toMatchObject({ status: "saved", name: "a b.ts" });
+    expect((await link(`file://${file.replace(" ", "%20")}#anchor`))[0]).toMatchObject({ status: "saved", name: "a b.ts" });
   });
 
-  it("相对路径也认", () => {
+  it("相对路径也认", async () => {
     write(join(proj, "docs", "a.md"), "A");
-    expect(link("docs/a.md:3")[0]).toMatchObject({ status: "saved", name: "a.md" });
-    expect(link("docs/a.md#L2-L5")[0]).toMatchObject({ status: "saved", name: "a.md" });
+    expect((await link("docs/a.md:3"))[0]).toMatchObject({ status: "saved", name: "a.md" });
+    expect((await link("docs/a.md#L2-L5"))[0]).toMatchObject({ status: "saved", name: "a.md" });
   });
 
-  it("文件名里真带 # 或 : 且原样存在：按原样找，不去掉", () => {
+  it("文件名里真带 # 或 : 且原样存在：按原样找，不去掉", async () => {
     const hashed = write(join(proj, "a#L10"), "H");
     write(join(proj, "a"), "plain");
-    expect(link(hashed)[0]).toMatchObject({ status: "saved", name: "a#L10", size: 1 });
+    expect((await link(hashed))[0]).toMatchObject({ status: "saved", name: "a#L10", size: 1 });
     if (process.platform !== "win32") {
       const colon = write(join(proj, "b:10"), "C");
       write(join(proj, "b"), "plain");
-      expect(link(colon)[0]).toMatchObject({ status: "saved", name: "b:10", size: 1 });
+      expect((await link(colon))[0]).toMatchObject({ status: "saved", name: "b:10", size: 1 });
     }
   });
 
-  it("去掉行号后也不存在：照旧没找到", () => {
-    expect(link(`${join(proj, "nope.ts")}#L1-L2`)[0]).toMatchObject({ status: "missing", name: "nope.ts#L1-L2", id: null });
-    expect(link(`${join(proj, "nope.ts")}:7`)[0]).toMatchObject({ status: "missing", id: null });
+  it("去掉行号后也不存在：照旧没找到", async () => {
+    expect((await link(`${join(proj, "nope.ts")}#L1-L2`))[0]).toMatchObject({ status: "missing", name: "nope.ts#L1-L2", id: null });
+    expect((await link(`${join(proj, "nope.ts")}:7`))[0]).toMatchObject({ status: "missing", id: null });
+  });
+});
+
+describe("createSentFileIoSlots：原文件读取的在途槽位", () => {
+  it("总数到上限不再给；会话有取消了没落定的读取时不再给这个会话，别的会话照给；放回后恢复", () => {
+    const slots = createSentFileIoSlots(3);
+    const cancelled = new AbortController();
+    const held = slots.acquire(1, cancelled.signal)!;
+    expect(slots.acquire(1, undefined)).not.toBeNull();
+    cancelled.abort();
+    expect(slots.acquire(1, undefined)).toBeNull();
+    expect(slots.acquire(2, undefined)).not.toBeNull();
+    expect(slots.acquire(3, undefined)).toBeNull();
+    held();
+    expect(slots.acquire(1, undefined)).not.toBeNull();
+  });
+});
+
+describe("取消信号在每次 await 恢复后都要看：已取消的不占槽、不发起新的 open", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+  });
+
+  it("stat 还没回来时取消：stat 回来后既不占槽，也不再 open 源文件", async () => {
+    const file = write(join(proj, "a.txt"), "ordinary temporary attachment");
+    const originalStat = fsPromises.stat;
+    const originalOpen = fsPromises.open;
+    let statStarted!: () => void;
+    const started = new Promise<void>((resolve) => (statStarted = resolve));
+    let finishStat!: () => void;
+    const finished = new Promise<void>((resolve) => (finishStat = resolve));
+    let sourceOpens = 0;
+    vi.spyOn(fsPromises, "stat").mockImplementation(async (path, ...rest) => {
+      if (path === file) {
+        statStarted();
+        await finished;
+      }
+      return originalStat(path as never, ...(rest as []));
+    });
+    vi.spyOn(fsPromises, "open").mockImplementation(async (path, ...rest) => {
+      if (path === file) sourceOpens++;
+      return originalOpen(path as never, ...(rest as []));
+    });
+    syncBuiltinESMExports();
+    const slots = createSentFileIoSlots();
+    const acquire = vi.spyOn(slots, "acquire");
+    const controller = new AbortController();
+    const job = shareFilePaths([file], { ...scope, io: { slots, owner: 1 } }, controller.signal);
+    await started;
+    controller.abort();
+    const [attachment] = await job;
+    expect(attachment).toMatchObject({ status: "unreadable", id: null });
+    finishStat();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sourceOpens).toBe(0);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(copies()).toEqual([]);
+  });
+
+  it("已取消的信号拿不到槽位，也不影响别的会话", () => {
+    const slots = createSentFileIoSlots(2);
+    const cancelled = new AbortController();
+    cancelled.abort();
+    expect(slots.acquire(1, cancelled.signal)).toBeNull();
+    expect(slots.acquire(2, undefined)).not.toBeNull();
   });
 });

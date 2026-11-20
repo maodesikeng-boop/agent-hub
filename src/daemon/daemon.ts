@@ -12,6 +12,7 @@ import { homedir, hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_API_CLOSE_MS,
+  LEDGER_SETTLE_ON_SHUTDOWN_MS,
   API_PATHS,
   DEFAULT_PM_MODE,
   DEFAULT_UI_PORT,
@@ -99,7 +100,7 @@ import { createLaunchPreparer, createPersonaNoter } from "./launch.ts";
 import { createProjectCatalogRunner, type ProjectCatalogRunner } from "./project-catalog/runner.ts";
 import { resolveRouterModel } from "./router/model-resolver.ts";
 import { createRouterTurnPurposes, createRouterTurnRunner } from "./router/single-turn.ts";
-import { createLedger } from "./ledger/index.ts";
+import { createLedger, type SqliteLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { resolveUpload } from "./uploads.ts";
@@ -111,7 +112,7 @@ import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type Runni
 import type { FolderPicker } from "./pick-folder.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
-import { startAdminSocket, type RunningAdminSocket } from "./admin/socket.ts";
+import { AdminSocketInsecureError, startAdminSocket, type RunningAdminSocket } from "./admin/socket.ts";
 import { createMesh, type CenterLease, type Mesh, type MeshOptions } from "./mesh/index.ts";
 import { createPushService } from "./push/index.ts";
 import {
@@ -135,6 +136,7 @@ import {
 import {
   allowWin32WorkerWorktreeAcl,
   createSleepInhibitor,
+  denyWin32WorkerPipeAccess,
   ensureProjectWorktreeBridge,
   ensureWin32ProtectedRootAcl,
   hardenWin32PrivateDirAcl,
@@ -236,6 +238,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     mesh?: Mesh;
     admin?: RunningAdminSocket;
     agentApi?: RunningAgentApi;
+    ledger?: SqliteLedger;
     db?: Db;
     lock?: DirLock;
     uninstallProcessLedger?: () => void;
@@ -306,7 +309,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     parts.sandboxGuard?.clear();
-    // claude 都退出了、事件都交给账本了，再取消订阅、关库
+    // claude 都退出了、事件都交给账本了：等排着的（回复里的文件在存副本）落库，再取消订阅、关库。到点没落完的，取消订阅时 ledger.close() 取消拷贝、不带附件落库
+    if (parts.ledger) {
+      const ledger = parts.ledger;
+      await step("账本事件", async () => {
+        if (!(await within(ledger.settleDriverEvents(), LEDGER_SETTLE_ON_SHUTDOWN_MS))) {
+          throw new Error(`${LEDGER_SETTLE_ON_SHUTDOWN_MS / 1000} 秒没落完，不再等`);
+        }
+      });
+    }
     for (const off of parts.unsubscribe.splice(0)) off();
     if (db) await step("数据库", () => db.close());
     parts.uninstallProcessLedger?.();
@@ -357,7 +368,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       mkdirSync(paths.syncBackupsDir, { recursive: true, mode: 0o700 });
       // Windows 0600/0700 等价保护 + 数据目录受保护根拒写 ACL（幂等检查，已满足则跳过）
       try {
-        ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
+        await ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
         hardenWin32PrivateDirAcl(stateDir, stateDir, { env });
         hardenWin32PrivateDirAcl(stateDir, paths.runDir, { env });
         hardenWin32PrivateDirAcl(stateDir, dirname(paths.syncBackupsDir), { env });
@@ -432,6 +443,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       onCatalogClaimable: () => parts.catalogRunner?.wake(),
       log,
     });
+    parts.ledger = ledger;
     parts.unsubscribe.push(() => ledger.close());
     const sessions = createSessionStore(db);
     // 有会话在干活时起 caffeinate 防闲置睡眠，全部闲下来过宽限期再结束（daemon/platform/sleep.ts）
@@ -607,10 +619,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         addWorktree,
         setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
-        resolveWorktreePlacement: ({ workerId, sessionId, repo, worktreePath }) => {
+        resolveWorktreePlacement: async ({ workerId, sessionId, repo, worktreePath }) => {
           let targetPath = worktreePath;
           if (isPathInsideOrEqual(worktreesDir, worktreePath)) {
-            const selected = selectWorktreeRootForProject({
+            const selected = await selectWorktreeRootForProject({
               projectFolder: repo,
               dataDir,
               defaultWorktreesDir: worktreesDir,
@@ -635,11 +647,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           }
           return {
             worktreePath: targetPath,
-            prepareDir: (wtDir) => {
+            prepareDir: async (wtDir) => {
               mkdirSync(wtDir, { recursive: true });
               if (process.platform === "win32") {
-                ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
-                allowWin32WorkerWorktreeAcl(stateDir, workerId, wtDir, { env });
+                await ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
+                await allowWin32WorkerWorktreeAcl(stateDir, workerId, wtDir, { env });
               }
             },
           };
@@ -831,16 +843,22 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         feishu: () => parts.feishu?.setup,
         mesh: () => parts.mesh,
         ...(options.onExternalShutdown ? { onShutdown: options.onExternalShutdown } : {}),
+        // Windows 的管理管道不在数据目录里，读边界管不到：设好 DENY FusaWorker 才服务，沙箱里的 Worker 连不上（POSIX 由 OS 沙箱禁连 run/admin.sock）
+        ...(process.platform === "win32" ? { secure: (pipe: string) => denyWin32WorkerPipeAccess(stateDir, pipe, { env }) } : {}),
         log: (line) => log(`${LOG_PREFIX} ${line}`),
       });
     } catch (adminErr) {
-      if (
+      if (adminErr instanceof AdminSocketInsecureError) {
+        // 管理管道已经关掉：守护进程照常跑，终端的飞书、账号组网命令和桌面外壳的优雅关机暂时用不了（外壳超时后结束进程）
+        log(`${LOG_PREFIX} ${adminErr.message}`);
+      } else if (
         (adminErr as NodeJS.ErrnoException | null)?.code === "EADDRINUSE" ||
         (adminErr instanceof Error && adminErr.message.includes("已有守护进程在跑"))
       ) {
         throw new DaemonAlreadyRunningError(0);
+      } else {
+        throw adminErr;
       }
-      throw adminErr;
     }
     const routerLocalPort = createLocalTargetPort({
       deviceId: device.id,

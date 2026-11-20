@@ -2,7 +2,7 @@
 // 铁律：
 // 1. 按需惰性加载 `@microsoft/mxc-sdk/v1`，非 Windows 平台构建/运行零副作用；
 // 2. 低于 Win11 24H2、Windows Server、Node < 24.21 或仅剩需改动宿主 DACL 的 `appcontainer-dacl` 档位时，
-//    `available()` 返回 false 并记录清晰诊断状态，调用方自动平滑回退到第 1 大步的「写受限令牌 + 受保护根拒写 ACL + 工具层禁写规则」，绝不硬拒报错；
+//    `available()` 返回 false 并记录清晰诊断状态，调用方自动平滑回退到第 1 大步的「受限令牌 + 受保护根拒写 ACL + 工具层禁写规则」，绝不硬拒报错；
 // 3. 负缓存遵守短暂 TTL（`WIN_MXC_NEGATIVE_CACHE_TTL_MS`），不用永久 `null` 缓存。
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -307,7 +307,7 @@ export function probeWin32MxcSupport(options?: {
       available: false,
       reason: "dacl_tier_excluded",
       tier: probeOut.tier,
-      detail: `ProcessContainer selected ${probeOut.tier} (requires host DACL mutation); falling back to WRITE_RESTRICTED sandbox`,
+      detail: `ProcessContainer selected ${probeOut.tier} (requires host DACL mutation); falling back to restricted-token sandbox`,
       warnings,
       nodeVersion,
       checkedAt: now,

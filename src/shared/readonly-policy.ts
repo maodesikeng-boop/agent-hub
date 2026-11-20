@@ -1,10 +1,11 @@
 // 只读 Worker 的统一定义（docs/readonly-worker-design.md 第 2.2 节）：只回答“只读是什么”，跟厂商无关。
-// 哪里都能读（密钥除外）、命令能跑、哪里都不能写（会话私有临时目录除外）、连接器只能用只读工具。
+// 哪里都能读（密钥和数据目录除外，数据目录按读边界只放行几处）、命令能跑、哪里都不能写（会话私有临时目录除外）、连接器只能用只读工具。
 // 各家怎么落实（claude 的权限和沙箱、agy 的 --settings 规则和外层沙箱、codex 的 readOnly 沙箱和 MCP 配置）是各自驱动层的翻译，
 // 都从 LaunchFiles.readonly（这里的 ReadonlyPolicy）读，不再去反读 claude 的设置文件。
 // 纯字符串处理、不用 node 模块；路径一律传已经 realpath 过的（macOS 上 /var 是 /private/var，沙箱和 agy 的规则按真实路径比）。
 
 import { CREDENTIAL_HOME_PATHS } from "./secret-paths.ts";
+import type { DataDirReadScope } from "./write-scope.ts";
 import { VENDOR_LIST } from "../vendors/registry.ts";
 
 /** 连接器工具的声明（MCP 规范的 annotations，服务器自报）。没有 annotations 当没标记。 */
@@ -14,7 +15,7 @@ export interface ConnectorToolAnnotations {
 }
 
 export interface ReadonlyPolicy {
-  /** 禁读的敏感路径（绝对路径，目录按子树算）。各家都能表达。 */
+  /** 禁读的敏感路径（绝对路径，目录按子树算）：主目录里的凭据、各家厂商的令牌。各家都能表达。 */
   secretPaths: string[];
   /** 禁读的通配（如 **\/.env、**\/id_rsa*）。只有 claude 沙箱和 seatbelt 正则能表达，agy 的规则表达不了（设计第 5 节）。 */
   secretGlobs: string[];
@@ -27,31 +28,29 @@ export interface ReadonlyPolicy {
   stateDir?: string;
   /** 可选的受保护根目录列表（含数据目录与跨卷同盘 `.fusa-wt`）。 */
   protectedRoots?: string[];
+  /**
+   * 数据目录读边界（shared/write-scope.ts 的 dataDirReadScope）：包整个进程的外层只读沙箱按它禁读整个数据目录，只放行几处
+   * （worktrees、uploads、tools、run/bin、这次会话自己的启动目录），数据目录里只能连 hub.sock；codex 的权限档也照它写。
+   * 启动准备（launch.ts、router/sandbox.ts）一定给。
+   */
+  dataDirScope?: DataDirReadScope;
+  /**
+   * 同一个边界展开成的禁读清单（daemon/driver/write-scope.ts 的 dataDirDenyList，列目录再补上 paths.ts 布局里的已知项）：数据目录顶层除放行项外的每一项（state/ 整个）、
+   * run/ 里除 bin、hub.sock 外的每一项。只管工具调用、表达不了“禁读区里再放行”的那几层用：claude 的 Read 规则和自带沙箱、agy 的规则。
+   */
+  dataDirDenied?: string[];
 }
 
 /**
  * 默认禁读的目录和文件，相对用户主目录（设计第 5 节，用户 11-07 定的：够用，不够再加）：
  * 凭据清单（secret-paths.ts，和分享禁用共用）+ 各家厂商的令牌文件（spec 的 home.readonlySecrets）。
- * 不禁 state/hub.sqlite 和日志：排查要读，这是统一只读的初衷（READONLY_SECRET_STATE_FILES 的注释写了数据库里查过的结果）；
- * 也不禁厂商目录里的会话记录（所以厂商只列令牌文件，不列整个目录）。
+ * 也不禁厂商目录里的会话记录（所以厂商只列令牌文件，不列整个目录）。数据目录（state/ 的令牌、密钥、库、记忆、日志等）不在这里逐个列，
+ * 整个按 dataDirScope / dataDirDenied 禁读。
  */
 export const READONLY_SECRET_HOME_PATHS: readonly string[] = [
   ...CREDENTIAL_HOME_PATHS,
   ...VENDOR_LIST.flatMap((spec) => spec.home.readonlySecrets),
 ];
-
-/**
- * agent-hub 自己的令牌文件，相对数据目录 state/。
- * 2026-11-07 查过真实的 hub.sqlite（15 张表所有文本列）、日志和 launch/：
- * - 会话令牌（HUB_TOKEN）只在内存里和进程环境变量里，库里、文件里都没有；
- * - 界面令牌（ui-token）只在 state/ui-token 这个文件里，库里没有，所以文件在这里单独禁读，库不用；
- * - 库里没有任何一张表存了现行的令牌，所以没有要单独禁读的表（SQLite 是单个文件，也没法按表禁读）。
- *   只有 messages 的工具记录（text、meta）里留着别的守护进程（测试用）打印的登录链接 ?token=…，已经作废，不算。
- * 以后要在库里存令牌：先挪到 state/ 下单独的文件，再把文件名加到这里，别让只读 Worker 读到整库。
- * feishu-secrets.json：飞书应用的 App ID 和 App Secret（daemon/feishu/secrets.ts），不进库。
- * mesh/key.pem：账号组网的设备私钥（daemon/mesh/identity.ts）。
- */
-export const READONLY_SECRET_STATE_FILES: readonly string[] = ["ui-token", "provider-secrets.json", "feishu-secrets.json", "mesh/key.pem"];
 
 /** 默认禁读的通配。 */
 export const READONLY_SECRET_GLOBS: readonly string[] = ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", "**/id_ed25519*"];
@@ -68,6 +67,10 @@ export interface ReadonlyPolicyInput {
   protectedRoots?: readonly string[];
   /** 覆盖默认的补充/排除（设置页以后用）。 */
   connectors?: Partial<ReadonlyPolicy["connectors"]>;
+  /** 这次会话的数据目录读边界（dataDirReadScope）。 */
+  dataDirScope?: DataDirReadScope;
+  /** 同一个边界展开成的禁读清单（dataDirDenyList）。 */
+  dataDirDenied?: readonly string[];
 }
 
 function joinPath(base: string, rel: string): string {
@@ -78,11 +81,9 @@ function joinPath(base: string, rel: string): string {
 /** 按默认清单生成这台机器的只读策略。每次返回新对象（调用方可以放心改）。 */
 export function buildReadonlyPolicy(input: ReadonlyPolicyInput): ReadonlyPolicy {
   return {
-    secretPaths: [
-      ...READONLY_SECRET_HOME_PATHS.map((p) => joinPath(input.homeDir, p)),
-      ...READONLY_SECRET_STATE_FILES.map((p) => joinPath(input.stateDir, p)),
-    ],
+    secretPaths: READONLY_SECRET_HOME_PATHS.map((p) => joinPath(input.homeDir, p)),
     secretGlobs: [...READONLY_SECRET_GLOBS],
+    stateDir: input.stateDir,
     connectors: {
       extraAllow: [...(input.connectors?.extraAllow ?? READONLY_CONNECTORS.extraAllow)],
       deny: [...(input.connectors?.deny ?? READONLY_CONNECTORS.deny)],
@@ -90,6 +91,10 @@ export function buildReadonlyPolicy(input: ReadonlyPolicyInput): ReadonlyPolicy 
     ...(input.protectedRoots && input.protectedRoots.length > 0
       ? { protectedRoots: [...input.protectedRoots] }
       : {}),
+    ...(input.dataDirScope === undefined
+      ? {}
+      : { dataDirScope: { ...input.dataDirScope, readable: [...input.dataDirScope.readable], connectable: [...input.dataDirScope.connectable] } }),
+    ...(input.dataDirDenied === undefined ? {} : { dataDirDenied: [...input.dataDirDenied] }),
   };
 }
 

@@ -120,6 +120,7 @@ const store = () => createFeishuStore(db);
 /** 项目经理现在的形象（账本建项目经理时分的，和网页头像同一只）。 */
 const lookOf = (pmId: number): SlimeLook => resolvePmLook(ledger.snapshot().pms.find((p) => p.id === pmId)!);
 const settle = async () => {
+  await ledger.settleDriverEvents();
   for (let i = 0; i < 3; i++) {
     await svc.idle();
     await new Promise((resolve) => setImmediate(resolve));
@@ -1263,6 +1264,7 @@ describe("createFeishuService：流式、急停与卡片", () => {
     writeFileSync(join(home, "notes.md"), "# 笔记");
     const text = `看图 [截图](${join(home, "shot.png")}) 和 [笔记](${join(home, "notes.md")})`;
     ev(lin.sessionId, { type: "agent.text", uuid: "files1", text, at: Date.now() });
+    await ledger.settleDriverEvents();
     await settle();
     const kinds = fake.callsOf("message.create").filter((c) => c.receive_id === chatOf(lin.pmId)).map((c) => c.msg_type);
     expect(kinds).not.toContain("image");
@@ -1710,6 +1712,7 @@ describe("createFeishuService：本机图片、定稿拒收与停机重启收口
     const chat = chatOf(lin.pmId);
     await svc.close();
     ev(lin.sessionId, { type: "agent.text", uuid: "left-over", text: "上一个进程的完整回复\n\n![截图](/tmp/reverify/01.png)", at: Date.now() });
+    await ledger.settleDriverEvents();
     const messageId = latestAgentText(lin.conversationId);
     const cardId = "card_left" as FeishuCardId;
     store().savePost({ ref: { kind: "message", messageId, part: 0 }, chatId: chat, messageId: "om_left" as FeishuMessageId, cardId, sequence: 17, state: "streaming" }, Date.now());
@@ -1852,7 +1855,9 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     fake.beforeUpload = () => gate;
-    const askId = ledger.hubCall(lin.sessionId, "ask", { text: "看看这张大图", options: ["通过", "打回"], files: [{ label: "大图", path: join(home, "big.png") }] }).data.messageId;
+    const files = [{ label: "大图", path: join(home, "big.png") }];
+    const sharedFiles = await ledger.shareHubFiles(lin.sessionId, files);
+    const askId = ledger.hubCall(lin.sessionId, "ask", { text: "看看这张大图", options: ["通过", "打回"], files }, { sharedFiles }).data.messageId;
     await new Promise((resolve) => setTimeout(resolve, 20));
     ledger.hubCall(lin.sessionId, "ask.close", { itemId: itemOfAsk(askId).id } as never);
     running(lin.sessionId);
@@ -1881,6 +1886,7 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
       if (failures-- > 0) throw new Error("socket hang up");
     };
     ev(lin.sessionId, { type: "agent.text", uuid: "flaky", text: `截图 [图](${join(home, "shot.png")})`, at: Date.now() });
+    await ledger.settleDriverEvents();
     ev(lin.sessionId, { type: "agent.text", uuid: "after-flaky", text: "后面这句不用等", at: Date.now() });
     await settle();
     expect(cardsSentTo(chatOf(lin.pmId)).some((c) => JSON.stringify(c).includes("后面这句不用等"))).toBe(true);
@@ -1940,7 +1946,9 @@ describe("createFeishuService：图文同发、超大图瘦身、重启补传与
     await connect();
     const home = outDir();
     writeFileSync(join(home, "shot.png"), png());
-    const askId = ledger.hubCall(lin.sessionId, "ask", { text: "这样改行吗", options: ["行", "不行"], files: [{ label: "截图", path: join(home, "shot.png") }] }).data.messageId;
+    const files = [{ label: "截图", path: join(home, "shot.png") }];
+    const sharedFiles = await ledger.shareHubFiles(lin.sessionId, files);
+    const askId = ledger.hubCall(lin.sessionId, "ask", { text: "这样改行吗", options: ["行", "不行"], files }, { sharedFiles }).data.messageId;
     await settle();
     const post = postOfAsk(askId);
     const created = fake.cards.get(post.cardId!)!;
@@ -1966,6 +1974,7 @@ describe("createFeishuService：图文同发、超大图瘦身、重启补传与
     const gate = new Promise<void>((resolve) => { release = resolve; });
     fake.beforeUpload = () => gate;
     ev(lin.sessionId, { type: "agent.text", uuid: "slow", text: `传大文件 [图](${join(home, "slow.png")}) [包](${join(home, "big.zip")})`, at: Date.now() });
+    await ledger.settleDriverEvents();
     ev(lin.sessionId, { type: "agent.text", uuid: "next", text: "下一句不等上传", at: Date.now() });
     await vi.waitFor(() => expect(cardsSentTo(chat).some((c) => JSON.stringify(c).includes("下一句不等上传"))).toBe(true));
     const host = store().postOf({ kind: "message", messageId: latestAgentText(lin.conversationId) - 1, part: 0 })!;
@@ -1995,6 +2004,7 @@ describe("createFeishuService：图文同发、超大图瘦身、重启补传与
     writeFileSync(join(home, "huge.mp4"), "x");
     fake.beforeUpload = () => new Promise<void>(() => {});
     ev(lin.sessionId, { type: "agent.text", uuid: "restart", text: `视频 [demo](${join(home, "huge.mp4")})`, at: Date.now() });
+    await ledger.settleDriverEvents();
     const messageId = latestAgentText(lin.conversationId);
     await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("uploading"));
     await svc.close();
@@ -2026,6 +2036,7 @@ describe("createFeishuService：图文同发、超大图瘦身、重启补传与
       seen.push({ path: input.path, width: meta.width ?? 0, height: meta.height ?? 0 });
     };
     ev(lin.sessionId, { type: "agent.text", uuid: "tall", text: `长截图 [图](${tall}) [笔记](${join(home, "notes.md")})`, at: Date.now() });
+    await ledger.settleDriverEvents();
     await settle();
     expect(seen).toHaveLength(1);
     expect(Math.max(seen[0]!.width, seen[0]!.height)).toBeLessThanOrEqual(2400);
@@ -2116,6 +2127,7 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
     writeFileSync(join(outDir(), "slow.png"), png());
     const release = slowUploads();
     ev(lin.sessionId, { type: "agent.text", uuid: "slow-img", text: `截图 [图](${join(root, "out", "slow.png")})`, at: Date.now() });
+    await ledger.settleDriverEvents();
     const messageId = latestAgentText(lin.conversationId);
     await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("uploading"));
     const host = store().postOf({ kind: "message", messageId, part: 0 })!;
@@ -2139,6 +2151,7 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
     writeFileSync(join(outDir(), "big.zip"), "x");
     const release = slowUploads();
     ev(lin.sessionId, { type: "agent.text", uuid: "slow-zip", text: `打包好了 [包](${join(root, "out", "big.zip")})`, at: Date.now() });
+    await ledger.settleDriverEvents();
     const messageId = latestAgentText(lin.conversationId);
     await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("uploading"));
     const host = store().postOf({ kind: "message", messageId, part: 0 })!;
@@ -2230,6 +2243,7 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
       return original(method, args);
     };
     ev(lin.sessionId, { type: "agent.text", uuid: "pdf-only", text: `报告 [r](${join(root, "out", "report.pdf")})`, at: Date.now() });
+    await ledger.settleDriverEvents();
     await settle();
     const messageId = latestAgentText(lin.conversationId);
     const host = store().postOf({ kind: "message", messageId, part: 0 })!;
@@ -2250,6 +2264,7 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
     writeFileSync(join(home, "second.zip"), "2");
     const release = slowUploads();
     ev(lin.sessionId, { type: "agent.text", uuid: "two-files", text: `两个包 [1](${join(home, "first.zip")}) [2](${join(home, "second.zip")})`, at: Date.now() });
+    await ledger.settleDriverEvents();
     const messageId = latestAgentText(lin.conversationId);
     await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 1 })?.state).toBe("uploading"));
     const firstCopy = resolveUpload(join(dataHome, "sent-files"), sentFilesOf(ledger.getMessage(messageId)!)[0]!.id!)!;

@@ -32,11 +32,12 @@ describe("claudeReadonlyPermissions", () => {
   });
 
   it("密钥：每个路径拒绝读（路径本身和子树），通配拒绝读（// 开头的绝对路径）；claude 还会拿它查 Bash 命令行里写明的路径", () => {
-    const { deny } = claudeReadonlyPermissions(policy());
+    const { deny } = claudeReadonlyPermissions({ ...policy(), dataDirDenied: ["/Users/u/.agent-hub/state"] });
     expect(deny).toContain("Read(//Users/u/.ssh)");
     expect(deny).toContain("Read(//Users/u/.ssh/**)");
     expect(deny).toContain("Read(//Users/u/.config/gh/**)");
-    expect(deny).toContain("Read(//Users/u/.agent-hub/state/ui-token)");
+    expect(deny).toContain("Read(//Users/u/.agent-hub/state)");
+    expect(deny).toContain("Read(//Users/u/.agent-hub/state/**)");
     expect(deny).toContain("Read(//**/.env)");
     expect(deny).toContain("Read(//**/id_rsa*)");
   });
@@ -76,9 +77,9 @@ describe("claudeReadonlySandbox", () => {
     expect(sandbox.filesystem.denyWrite).toEqual(["/w/cwd", "/w/main"]);
   });
 
-  it("denyRead：密钥路径、通配（**/ 开头的换成绝对根 /**/，实测 S3 的 <绝对路径>/**/.env 写法有效）", () => {
+  it("denyRead：密钥路径、数据目录禁读清单、通配（**/ 开头的换成绝对根 /**/，实测 S3 的 <绝对路径>/**/.env 写法有效）", () => {
     expect(sandbox.filesystem.denyRead).toContain("/Users/u/.ssh");
-    expect(sandbox.filesystem.denyRead).toContain("/Users/u/.agent-hub/state/ui-token");
+    expect(claudeReadonlySandbox({ ...policy(), dataDirDenied: ["/Users/u/.agent-hub/state"] }, { denyWrite: [] }).filesystem.denyRead).toContain("/Users/u/.agent-hub/state");
     expect(sandbox.filesystem.denyRead).toContain("/**/.env");
     expect(sandbox.filesystem.denyRead).toContain("/**/*.pem");
     expect(sandbox.filesystem.denyRead).toContain("/**/id_rsa*");

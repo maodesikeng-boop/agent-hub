@@ -6,6 +6,9 @@ pub enum SandboxMode {
     Worker {
         state_dir: PathBuf,
         worker_id: Option<String>,
+        /// Per-session reader key: the token also carries `FusaRead-<key>`, which is only ever granted read
+        /// (the session's own `state\launch\<id>`), never write.
+        reader: Option<String>,
         readonly_fallback: bool,
     },
 }
@@ -36,7 +39,20 @@ pub enum FusaRunCommand {
         state_dir: PathBuf,
         path: PathBuf,
     },
+    AclDenyRead {
+        state_dir: PathBuf,
+        path: PathBuf,
+    },
+    AclAllowRead {
+        state_dir: PathBuf,
+        reader: Option<String>,
+        path: PathBuf,
+    },
     AclAllowPipe {
+        path: String,
+    },
+    AclDenyPipe {
+        state_dir: PathBuf,
         path: String,
     },
     Inspect {
@@ -52,6 +68,8 @@ pub enum FusaRunCommand {
         denied_file: PathBuf,
         allowed_file: PathBuf,
         outside_file: PathBuf,
+        secret_file: PathBuf,
+        peer_file: PathBuf,
     },
 }
 
@@ -124,15 +142,19 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             let action = raw_args
                 .get(1)
                 .map(String::as_str)
-                .ok_or_else(|| "acl requires subcommand: protect-root | allow-worker | harden | allow-pipe".to_string())?;
+                .ok_or_else(|| {
+                    "acl requires subcommand: protect-root | allow-worker | harden | deny-read | allow-read | allow-pipe | deny-pipe".to_string()
+                })?;
             let mut state_dir: Option<PathBuf> = None;
             let mut worker_id: Option<String> = None;
+            let mut reader: Option<String> = None;
             let mut path_raw: Option<String> = None;
             let mut it = raw_args[2..].iter().map(String::as_str);
             while let Some(arg) = it.next() {
                 match arg {
                     "--state-dir" => state_dir = Some(PathBuf::from(next_val(&mut it, "--state-dir")?)),
                     "--worker" => worker_id = Some(next_val(&mut it, "--worker")?),
+                    "--reader" => reader = Some(next_val(&mut it, "--reader")?),
                     "--path" => path_raw = Some(next_val(&mut it, "--path")?),
                     other => return Err(format!("unknown acl option: {other}")),
                 }
@@ -142,6 +164,9 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
                 return Ok(FusaRunCommand::AclAllowPipe { path: path_raw });
             }
             let state_dir = state_dir.ok_or_else(|| "acl requires --state-dir <dir>".to_string())?;
+            if action == "deny-pipe" {
+                return Ok(FusaRunCommand::AclDenyPipe { state_dir, path: path_raw });
+            }
             let path = PathBuf::from(path_raw);
             return match action {
                 "protect-root" => Ok(FusaRunCommand::AclProtectRoot { state_dir, path }),
@@ -155,17 +180,25 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
                     })
                 }
                 "harden" => Ok(FusaRunCommand::AclHarden { state_dir, path }),
+                "deny-read" => Ok(FusaRunCommand::AclDenyRead { state_dir, path }),
+                "allow-read" => Ok(FusaRunCommand::AclAllowRead {
+                    state_dir,
+                    reader,
+                    path,
+                }),
                 other => Err(format!("unknown acl action: {other}")),
             };
         }
         "internal-probe-child" => {
-            if raw_args.len() != 4 {
-                return Err("internal-probe-child requires 3 file paths".to_string());
+            if raw_args.len() != 6 {
+                return Err("internal-probe-child requires 5 file paths".to_string());
             }
             return Ok(FusaRunCommand::InternalProbeChild {
                 denied_file: PathBuf::from(&raw_args[1]),
                 allowed_file: PathBuf::from(&raw_args[2]),
                 outside_file: PathBuf::from(&raw_args[3]),
+                secret_file: PathBuf::from(&raw_args[4]),
+                peer_file: PathBuf::from(&raw_args[5]),
             });
         }
         _ => {}
@@ -186,6 +219,7 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
     let mut sandbox_kind = "none".to_string();
     let mut state_dir: Option<PathBuf> = None;
     let mut worker_id: Option<String> = None;
+    let mut reader: Option<String> = None;
     let mut readonly_fallback = false;
     let mut ctrl_pipe: Option<String> = None;
     let mut cwd: Option<PathBuf> = None;
@@ -197,6 +231,7 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             "--sandbox" => sandbox_kind = next_val(&mut it, "--sandbox")?,
             "--state-dir" => state_dir = Some(PathBuf::from(next_val(&mut it, "--state-dir")?)),
             "--worker" => worker_id = Some(next_val(&mut it, "--worker")?),
+            "--reader" => reader = Some(next_val(&mut it, "--reader")?),
             "--readonly-fallback" => readonly_fallback = true,
             "--ctrl-pipe" => ctrl_pipe = Some(next_val(&mut it, "--ctrl-pipe")?),
             "--cwd" => cwd = Some(PathBuf::from(next_val(&mut it, "--cwd")?)),
@@ -218,6 +253,7 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             SandboxMode::Worker {
                 state_dir,
                 worker_id,
+                reader,
                 readonly_fallback,
             }
         }
@@ -251,6 +287,8 @@ mod tests {
             "C:\\Users\\u\\.agent-hub\\state",
             "--worker",
             "524",
+            "--reader",
+            "7",
             "--ctrl-pipe",
             "\\\\.\\pipe\\fusa-ctrl-1",
             "--",
@@ -265,6 +303,7 @@ mod tests {
                 sandbox: SandboxMode::Worker {
                     state_dir: PathBuf::from("C:\\Users\\u\\.agent-hub\\state"),
                     worker_id: Some("524".to_string()),
+                    reader: Some("7".to_string()),
                     readonly_fallback: false,
                 },
                 ctrl_pipe: Some("\\\\.\\pipe\\fusa-ctrl-1".to_string()),
@@ -281,6 +320,8 @@ mod tests {
             "--state-dir",
             "C:\\state",
             "--readonly-fallback",
+            "--reader",
+            "9",
             "--",
             "agy.exe",
         ]))
@@ -291,6 +332,7 @@ mod tests {
                 sandbox: SandboxMode::Worker {
                     readonly_fallback: true,
                     worker_id: None,
+                    reader: Some(_),
                     ..
                 },
                 ..
@@ -313,5 +355,52 @@ mod tests {
                 path: "\\\\.\\pipe\\fusa-test-hub".to_string()
             }
         );
+    }
+
+    #[test]
+    fn parses_read_boundary_subcommands() {
+        assert_eq!(
+            parse_fusa_run_args(&vec_s(&["acl", "deny-read", "--state-dir", "C:\\s", "--path", "C:\\d"])).expect("deny-read"),
+            FusaRunCommand::AclDenyRead {
+                state_dir: PathBuf::from("C:\\s"),
+                path: PathBuf::from("C:\\d"),
+            }
+        );
+        assert_eq!(
+            parse_fusa_run_args(&vec_s(&["acl", "allow-read", "--state-dir", "C:\\s", "--path", "C:\\d\\worktrees"]))
+                .expect("allow-read for every worker"),
+            FusaRunCommand::AclAllowRead {
+                state_dir: PathBuf::from("C:\\s"),
+                reader: None,
+                path: PathBuf::from("C:\\d\\worktrees"),
+            }
+        );
+        assert_eq!(
+            parse_fusa_run_args(&vec_s(&[
+                "acl",
+                "allow-read",
+                "--state-dir",
+                "C:\\s",
+                "--reader",
+                "7",
+                "--path",
+                "C:\\d\\state\\launch\\7"
+            ]))
+            .expect("allow-read for one session"),
+            FusaRunCommand::AclAllowRead {
+                state_dir: PathBuf::from("C:\\s"),
+                reader: Some("7".to_string()),
+                path: PathBuf::from("C:\\d\\state\\launch\\7"),
+            }
+        );
+        assert_eq!(
+            parse_fusa_run_args(&vec_s(&["acl", "deny-pipe", "--state-dir", "C:\\s", "--path", "\\\\.\\pipe\\fusa-x-admin"]))
+                .expect("deny-pipe"),
+            FusaRunCommand::AclDenyPipe {
+                state_dir: PathBuf::from("C:\\s"),
+                path: "\\\\.\\pipe\\fusa-x-admin".to_string(),
+            }
+        );
+        assert!(parse_fusa_run_args(&vec_s(&["acl", "deny-pipe", "--path", "\\\\.\\pipe\\x"])).is_err());
     }
 }

@@ -94,6 +94,44 @@ fn main() {
                     }
                 }
             }
+            FusaRunCommand::AclDenyRead { state_dir, path } => {
+                match acl::deny_read(&state_dir, &path) {
+                    Ok(changed) => {
+                        println!(r#"{{"ok":true,"changed":{changed}}}"#);
+                        0
+                    }
+                    Err(err) => {
+                        eprintln!("fusa-run acl deny-read failed: {err}");
+                        1
+                    }
+                }
+            }
+            FusaRunCommand::AclAllowRead {
+                state_dir,
+                reader,
+                path,
+            } => match acl::allow_read(&state_dir, reader.as_deref(), &path) {
+                Ok(changed) => {
+                    println!(r#"{{"ok":true,"changed":{changed}}}"#);
+                    0
+                }
+                Err(err) => {
+                    eprintln!("fusa-run acl allow-read failed: {err}");
+                    1
+                }
+            },
+            FusaRunCommand::AclDenyPipe { state_dir, path } => {
+                match acl::deny_worker_on_named_pipe(&state_dir, &path) {
+                    Ok(()) => {
+                        println!(r#"{{"ok":true}}"#);
+                        0
+                    }
+                    Err(err) => {
+                        eprintln!("fusa-run acl deny-pipe failed: {err}");
+                        1
+                    }
+                }
+            }
             FusaRunCommand::AclAllowPipe { path } => {
                 match acl::allow_current_user_on_named_pipe(&path) {
                     Ok(()) => {
@@ -141,7 +179,15 @@ fn main() {
                 denied_file,
                 allowed_file,
                 outside_file,
-            } => probe::run_internal_probe_child(&denied_file, &allowed_file, &outside_file),
+                secret_file,
+                peer_file,
+            } => probe::run_internal_probe_child(
+                &denied_file,
+                &allowed_file,
+                &outside_file,
+                &secret_file,
+                &peer_file,
+            ),
         };
         std::process::exit(exit_code);
     }

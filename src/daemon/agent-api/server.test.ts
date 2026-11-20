@@ -5,7 +5,7 @@ import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_VENDORS,
   HUB_COMMANDS,
@@ -498,6 +498,185 @@ describe("agent api over inject", () => {
         { vendor: "claude", vendorSessionId: "v-2", cwd: "/wt/1/5" },
       ]);
       expect(ledger.contexts).toEqual([{ transcript: "/vendor/v-1.jsonl" }, { transcript: null }, { transcript: null }]);
+    });
+  });
+
+  describe("hub ask / router report 的 --file：调 hubCall 之前先在事务外存副本", () => {
+    it("带 --file 时先 shareHubFiles，结果作为 context.sharedFiles 交给 hubCall；不带的不存", async () => {
+      const files = [{ label: "方案", path: "/work/foo/plan.md" }, { label: null, path: "/work/foo/shot.png" }];
+      expect((await call("ask", { text: "看看", files })).statusCode).toBe(200);
+      expect((await call("router.report", { summary: "做完了", files: [files[0]] })).statusCode).toBe(200);
+      expect((await call("ask", { text: "不带文件" })).statusCode).toBe(200);
+      expect(ledger.sharedFileCalls.map((c) => c.paths)).toEqual([["/work/foo/plan.md", "/work/foo/shot.png"], ["/work/foo/plan.md"]]);
+      expect(ledger.contexts[0]?.sharedFiles?.map((f) => f.href)).toEqual(["/work/foo/plan.md", "/work/foo/shot.png"]);
+      expect(ledger.contexts[1]?.sharedFiles?.map((f) => f.href)).toEqual(["/work/foo/plan.md"]);
+      expect(ledger.contexts[2]).toEqual({});
+    });
+
+    it("Worker 调 ask 被拒：不先存副本", async () => {
+      ledger.defaultRole = "worker";
+      expect((await call("ask", { text: "看看", files: [{ label: null, path: "/work/foo/plan.md" }] })).statusCode).toBe(403);
+      expect(ledger.sharedFileCalls).toEqual([]);
+    });
+
+    it("认过人之后、存副本之前令牌作废了（会话结束）：401，不存副本、不调账本", async () => {
+      await app.close();
+      app = createAgentApi({ ledger, tokens });
+      // 排在认人的钩子和请求体校验后面、路由处理前面：模拟收请求体期间会话结束
+      app.addHook("preHandler", async () => {
+        tokens.revoke(11);
+      });
+      await app.ready();
+      const res = await call("ask", { text: "看看", files: [{ label: null, path: "/work/foo/plan.md" }] });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().code).toBe("unauthorized");
+      expect(ledger.sharedFileCalls).toEqual([]);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("close() 时附件还在准备：取消准备，等处理函数退出才返回；这个请求回 503，之后不再调账本、不记健康状态", async () => {
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let signal: AbortSignal | undefined;
+      // 卡住不理 signal 的准备（模拟卡在 open 上的读取）
+      Object.assign(ledger, {
+        shareHubFiles: async (_sessionId: number, _args: unknown, s?: AbortSignal) => {
+          signal = s;
+          entered();
+          await held;
+          return [];
+        },
+      });
+      const res = call("ask", { text: "看看", files: [{ label: null, path: "/work/foo/plan.md" }] });
+      await started;
+      const closed = await Promise.race([
+        app.close().then(() => "closed" as const),
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2_000).unref()),
+      ]);
+      const roleChecks = vi.spyOn(ledger, "sessionRole");
+      release();
+      const reply = await res;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(closed).toBe("closed");
+      expect(signal?.aborted).toBe(true);
+      expect(reply.statusCode).toBe(503);
+      expect(reply.json()).toMatchObject({ ok: false, code: "shutting_down" });
+      expect(ledger.calls).toEqual([]);
+      expect(ledger.healthReports).toEqual([]);
+      expect(roleChecks).not.toHaveBeenCalled();
+    });
+
+    it("close() 等在途的总助调度做完才返回；关闭后它才出错的回 503，不记健康状态", async () => {
+      const { createRouterSandboxGuard } = await import("../router/sandbox.ts");
+      const sandboxGuard = createRouterSandboxGuard();
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      let fail!: (error: Error) => void;
+      const failing = new Promise<never>((_resolve, reject) => (fail = reject));
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        sandboxGuard,
+        onRouterDispatch: () => {
+          entered();
+          return failing;
+        },
+      });
+      await app.ready();
+      const token = tokens.issue(103);
+      ledger.sessionRoles.set(103, "assistant");
+      sandboxGuard.bind(103, 55);
+      const res = app.inject({
+        method: "POST",
+        url: "/v1/router.dispatch",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { op: "pm", device: "self", pmId: 1, verbatim: true },
+      });
+      await started;
+      let closed = false;
+      const closing = app.close().then(() => (closed = true));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(closed).toBe(false);
+      fail(new Error("database is not open"));
+      await closing;
+      const reply = await res;
+      expect(reply.statusCode).toBe(503);
+      expect(reply.json()).toMatchObject({ ok: false, code: "shutting_down" });
+      expect(ledger.healthReports).toEqual([]);
+    });
+  });
+
+  describe("close() 与在途的异步准备（探 git、查 PR、刷新厂商）", () => {
+    const cases: { name: string; command: HubCommand; args: object; arrange: (hold: () => Promise<void>) => Partial<Parameters<typeof createAgentApi>[0]> }[] = [
+      {
+        name: "worker.show：PR 查完后不再查原始记录",
+        command: "worker.show",
+        args: { workerId: 5 },
+        arrange: (hold) => ({ probePr: async () => {
+            await hold();
+            return null;
+          } }),
+      },
+      {
+        name: "worker.start：刷新厂商完成后不再查项目文件夹",
+        command: "worker.start",
+        args: { title: "修 X", task: "修好", vendor: "claude" },
+        arrange: (hold) => ({ refreshVendor: hold }),
+      },
+      {
+        name: "graph.create：探完工作区后不再查自动派发的厂商",
+        command: "graph.create",
+        args: { title: "图", specJson: '{"nodes":[{"key":"n1","title":"第一步"}]}' },
+        arrange: (hold) => ({ probeWorkspace: async () => {
+            await hold();
+            return {} as WorkspaceProbe;
+          },
+          refreshVendor: async () => {} }),
+      },
+    ];
+
+    it.each(cases)("$name；close() 等到准备落定才返回", async ({ command, args, arrange }) => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      ledger.prTarget = { cwd: "/wt/1/5", branch: "hub/5" };
+      ledger.startFolder = "/proj";
+      const touched = vi.fn();
+      ledger.workerTranscriptTarget = (...a) => (touched(...a), null);
+      const startFolder = ledger.workerStartFolder.bind(ledger);
+      let afterRelease = false;
+      ledger.workerStartFolder = (sessionId) => {
+        if (afterRelease) touched("workerStartFolder");
+        return startFolder(sessionId);
+      };
+      Object.assign(ledger, { graphAutoDispatchVendors: (...a: unknown[]) => (touched(...a), []) });
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        ...arrange(async () => {
+          entered();
+          await held;
+          afterRelease = true;
+        }),
+      });
+      await app.ready();
+      const res = call(command, args);
+      await started;
+      let closed = false;
+      const closing = app.close().then(() => (closed = true));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(closed).toBe(false);
+      release();
+      await closing;
+      const reply = await res;
+      expect(reply.statusCode).toBe(503);
+      expect(touched).not.toHaveBeenCalled();
+      expect(ledger.calls).toEqual([]);
     });
   });
 

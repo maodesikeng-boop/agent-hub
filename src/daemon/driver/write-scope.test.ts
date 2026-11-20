@@ -1,9 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { AGENT_VENDORS, DriverError } from "../../shared/index.ts";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { AGENT_VENDORS, DriverError, buildReadonlyPolicy, dataDirReadScope, workerWriteScope } from "../../shared/index.ts";
+import { EXPECTED_PROBE_OUTPUT, makeSandboxDataDir, readProbeScript, writeProbeCli, type SandboxDataDir } from "./data-dir-fixture.ts";
+import { agyReadonlySandboxInput } from "../../vendors/agy/readonly.ts";
+import { piReadonlySandboxInput } from "../../vendors/pi/readonly.ts";
 import { isAlive, signalChild, termGroupAfterExit, waitForExit } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 import {
@@ -21,9 +24,11 @@ import {
   WSL_SANITIZED_ENV_VARS,
   bwrapArgs,
   bwrapProbeArgs,
+  dataDirDenyList,
   expandWritableFileGlobs,
   osSandboxAvailable,
   parseWslDrvfsMounts,
+  prepareOsSandboxForLaunch,
   readonlyBwrapArgs,
   readonlySeatbeltProfile,
   registerWin32MxcReadonlyProvider,
@@ -32,17 +37,23 @@ import {
   secretGlobRegex,
   seatbeltProfile,
   spawnInWriteScope,
+  toolLayerReadScope,
   wrapInOsSandbox,
+  win32WorkerSandboxArgs,
   wrapInReadonlyOsSandbox,
   type ReadonlySandboxInput,
+  type SpawnCommand,
 } from "./write-scope.ts";
 import {
+  ENV_WIN_HELPERS,
   WIN_MXC_NEGATIVE_CACHE_TTL_MS,
   WIN_MXC_POSITIVE_CACHE_TTL_MS,
 } from "../../shared/limits.ts";
 import {
   buildWin32MxcFilesystemPolicy,
+  isPathInsideOrEqual,
   probeWin32MxcSupport,
+  resetVerifiedProtectedRootsForTest,
   resetWin32MxcCacheForTest,
   supportsWin32MxcNodeVersion,
   wrapReadonlyWithWin32Mxc,
@@ -50,7 +61,7 @@ import {
 } from "../platform/index.ts";
 import { parseMxcRunnerCliArgs, startHubPipeLoopbackBridge } from "../platform/win32/mxc-runner.ts";
 
-const scope = { dataDir: "/Users/u/.agent-hub", writableDirs: ["/Users/u/.agent-hub/worktrees/1/2"] };
+const scope = { dataDir: "/Users/u/.agent-hub", writableDirs: ["/Users/u/.agent-hub/worktrees/1/2"], readScope: dataDirReadScope({ dataDir: "/Users/u/.agent-hub" }) };
 const base = { command: "/bin/agent", args: ["--x", "y"] };
 const canRunSandboxExec =
   process.platform === "darwin" &&
@@ -86,7 +97,7 @@ describe("WRITE_SCOPE_ENFORCERS", () => {
   it("macOS 上包 sandbox-exec，Linux 上包 bwrap（codex 换 externalSandbox，不再自己起沙箱）；未支持系统不包", () => {
     const darwinOpts = { available: true };
     const linuxOpts = { available: true, uid: 1000, exists: () => true, realpath: (p: string) => p };
-    const winOpts = { available: true, skipAclSetup: true, winHelperPath: "C:\\bin\\fusa-run.exe", stateDir: "C:\\state" };
+    const winOpts = { available: true, winHelperPath: "C:\\bin\\fusa-run.exe", stateDir: "C:\\state" };
     const wrappedDarwin = { command: SANDBOX_EXEC, args: ["-p", seatbeltProfile(scope), "/bin/agent", "--x", "y"], osSandboxed: true };
     const wrappedLinux = { command: BWRAP, args: bwrapArgs(base, scope, linuxOpts), osSandboxed: true };
     expect(wrapInOsSandbox(base, scope, "darwin", darwinOpts)).toEqual(wrappedDarwin);
@@ -225,23 +236,37 @@ describe("spawnInWriteScope", () => {
 });
 
 describe("seatbeltProfile", () => {
-  it("别的放行，数据目录禁写，之后放行自己的工作目录（后面的规则压过前面的）", () => {
+  it("别的放行，数据目录禁写，之后放行自己的工作目录，再按读边界禁读数据目录（后面的规则压过前面的）", () => {
     expect(seatbeltProfile(scope)).toBe(
       [
         "(version 1)",
         "(allow default)",
         '(deny file-write* (subpath "/Users/u/.agent-hub"))',
         '(allow file-write* (subpath "/Users/u/.agent-hub/worktrees/1/2"))',
+        '(deny file-read* (subpath "/Users/u/.agent-hub"))',
+        '(allow file-read-metadata (subpath "/Users/u/.agent-hub"))',
+        '(allow file-read* (subpath "/Users/u/.agent-hub/worktrees"))',
+        '(allow file-read* (subpath "/Users/u/.agent-hub/uploads"))',
+        '(allow file-read* (subpath "/Users/u/.agent-hub/tools"))',
+        '(allow file-read* (subpath "/Users/u/.agent-hub/run/bin"))',
+        '(allow file-read* (literal "/Users/u/.agent-hub/run/hub.sock"))',
+        '(deny network-outbound (regex #"^/Users/u/\\.agent-hub/"))',
+        '(allow network-outbound (literal "/Users/u/.agent-hub/run/hub.sock"))',
       ].join("\n"),
     );
   });
 
-  it("在主文件夹干活的 Worker：只禁写数据目录", () => {
-    expect(seatbeltProfile({ dataDir: "/d", writableDirs: [] })).toBe('(version 1)\n(allow default)\n(deny file-write* (subpath "/d"))');
+  it("在主文件夹干活的 Worker：只禁写数据目录，读边界照样", () => {
+    expect(seatbeltProfile({ dataDir: "/d", writableDirs: [], readScope: dataDirReadScope({ dataDir: "/d" }) }).split("\n").slice(0, 4)).toEqual([
+      "(version 1)",
+      "(allow default)",
+      '(deny file-write* (subpath "/d"))',
+      '(deny file-read* (subpath "/d"))',
+    ]);
   });
 
   it('路径里的 " 和 \\ 要转义', () => {
-    expect(seatbeltProfile({ dataDir: '/a"b\\c', writableDirs: [] })).toContain('(subpath "/a\\"b\\\\c")');
+    expect(seatbeltProfile({ dataDir: '/a"b\\c', writableDirs: [], readScope: dataDirReadScope({ dataDir: '/a"b\\c' }) })).toContain('(subpath "/a\\"b\\\\c")');
   });
 });
 
@@ -265,7 +290,7 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec", () => {
             'echo ok > "$O/a.txt" && mkdir -p "$O/node_modules/p" && echo ok > "$O/../2/b.txt" && echo ok > "$TMPDIR/ah-scope-probe" && echo done',
         ],
       },
-      { dataDir, writableDirs: [own] },
+      { dataDir, writableDirs: [own], readScope: dataDirReadScope({ dataDir }) },
       "darwin",
     );
     const out = execFileSync(run.command, run.args, {
@@ -282,6 +307,144 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec", () => {
     expect(existsSync(join(own, "b.txt"))).toBe(true);
     expect(existsSync(join(own, "node_modules", "p"))).toBe(true);
   });
+});
+
+describe("数据目录读边界：seatbelt 与 bwrap 规则（纯函数）", () => {
+  const dataDir = "/Users/u/.agent-hub";
+  const launchDir = `${dataDir}/state/launch/7`;
+  const own = `${dataDir}/worktrees/1/2`;
+  const readable = [`${dataDir}/worktrees`, `${dataDir}/uploads`, `${dataDir}/tools`, `${dataDir}/run/bin`, launchDir];
+  const scoped = () => workerWriteScope({ role: "worker", dataDir, cwd: own, launchDir })!;
+  const readScope = { dataDir, readable, connectable: [`${dataDir}/run/hub.sock`] };
+  const boundaryRules = [
+    `(deny file-read* (subpath "${dataDir}"))`,
+    `(allow file-read-metadata (subpath "${dataDir}"))`,
+    ...readable.map((r) => `(allow file-read* (subpath "${r}"))`),
+    `(allow file-read* (literal "${dataDir}/run/hub.sock"))`,
+    `(deny network-outbound (regex #"^/Users/u/\\.agent-hub/"))`,
+    `(allow network-outbound (literal "${dataDir}/run/hub.sock"))`,
+  ];
+
+  it("普通 Worker（seatbelt）：整个数据目录禁读、元数据照常，放行项再放开读；数据目录里只能连 hub.sock", () => {
+    const lines = seatbeltProfile(scoped()).split("\n");
+    const start = lines.indexOf(boundaryRules[0]!);
+    expect(start).toBeGreaterThan(lines.indexOf(`(allow file-write* (subpath "${own}"))`));
+    expect(lines.slice(start, start + boundaryRules.length)).toEqual(boundaryRules);
+  });
+
+  it("只读 Worker（seatbelt）：读边界在密钥禁读之前（放行项里的 .env、密钥照样禁读），自己的凭据文件最后放行", () => {
+    const lines = readonlySeatbeltProfile({ ...roInput, dataDirScope: readScope }).split("\n");
+    const start = lines.indexOf(boundaryRules[0]!);
+    expect(start).toBeGreaterThan(0);
+    expect(lines.slice(start, start + boundaryRules.length)).toEqual(boundaryRules);
+    expect(lines.indexOf('(deny file-read* (subpath "/Users/u/.ssh"))')).toBeGreaterThan(start + boundaryRules.length - 1);
+  });
+
+  it("普通 Worker（bwrap）：数据目录换成空 tmpfs，放行项只读挂回、hub.sock 绑回，自己的 worktree 可写绑回，最后把 tmpfs 改成只读", () => {
+    const args = bwrapArgs(base, scoped(), { uid: 1000, exists: () => true, realpath: (p) => p });
+    const at = (...seq: string[]) => args.findIndex((_, i) => seq.every((x, j) => args[i + j] === x));
+    const tmpfs = at("--perms", "0700", "--tmpfs", dataDir);
+    expect(tmpfs).toBeGreaterThan(0);
+    for (const r of readable) expect(at("--ro-bind", r, r)).toBeGreaterThan(tmpfs);
+    expect(at("--bind", `${dataDir}/run/hub.sock`, `${dataDir}/run/hub.sock`)).toBeGreaterThan(tmpfs);
+    expect(at("--bind", own, own)).toBeGreaterThan(at("--ro-bind", `${dataDir}/worktrees`, `${dataDir}/worktrees`));
+    expect(at("--remount-ro", dataDir)).toBeGreaterThan(at("--bind", own, own));
+    expect(at("--ro-bind", dataDir, dataDir)).toBe(-1);
+  });
+
+  it("只读 Worker（bwrap）：同样换 tmpfs 再挂回放行项，可写目录绑在放行项之后、密钥遮蔽在最后", () => {
+    const args = readonlyBwrapArgs(base, { ...roInput, dataDirScope: readScope }, { uid: 1000, exists: () => true, realpath: (p) => p, isDirectory: () => true, expandGlobs: () => [] });
+    const at = (...seq: string[]) => args.findIndex((_, i) => seq.every((x, j) => args[i + j] === x));
+    const tmpfs = at("--perms", "0700", "--tmpfs", dataDir);
+    expect(tmpfs).toBeGreaterThan(at("--ro-bind", "/", "/"));
+    for (const r of readable) expect(at("--ro-bind", r, r)).toBeGreaterThan(tmpfs);
+    expect(at("--bind", roInput.tmpDir, roInput.tmpDir)).toBeGreaterThan(at("--ro-bind", launchDir, launchDir));
+    expect(at("--tmpfs", "/Users/u/.ssh")).toBeGreaterThan(at("--bind", roInput.tmpDir, roInput.tmpDir));
+    expect(at("--remount-ro", dataDir)).toBeGreaterThan(at("--tmpfs", "/Users/u/.ssh"));
+  });
+});
+
+describe.runIf(canRunSandboxExec)("真 sandbox-exec：数据目录读边界", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-rb-")));
+  let fixture: SandboxDataDir;
+  beforeAll(async () => {
+    fixture = await makeSandboxDataDir(root);
+  });
+  afterAll(async () => {
+    await fixture?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const probe = (command: SpawnCommand) =>
+    execFileSync(command.command, command.args, { cwd: fixture.own, env: { ...process.env, ...fixture.env }, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" });
+
+  it("普通 Worker：令牌、密钥、库、记忆、日志、备份、别的会话启动目录、遗留顶层项都读不到，admin.sock 连不上；自己的启动目录、hub 外壳、放行项照常", () => {
+    const scope = workerWriteScope({ role: "worker", dataDir: fixture.dataDir, cwd: fixture.own, launchDir: fixture.launchDir })!;
+    const run = wrapInOsSandbox({ command: "/bin/sh", args: ["-c", readProbeScript()] }, scope, "darwin");
+    expect(probe(run).trim().split("\n")).toEqual(EXPECTED_PROBE_OUTPUT);
+  });
+
+  it("只读 Worker：同样的读边界", () => {
+    const scope = workerWriteScope({ role: "worker", dataDir: fixture.dataDir, cwd: fixture.own, launchDir: fixture.launchDir })!;
+    const run = wrapInReadonlyOsSandbox(
+      { command: "/bin/sh", args: ["-c", readProbeScript()] },
+      { tmpDir: join(root, "ro-tmp"), writableDirs: [], writableFileRegexes: [], secretPaths: [], secretGlobs: [], dataDirScope: scope.readScope },
+      "darwin",
+    );
+    mkdirSync(join(root, "ro-tmp"), { recursive: true });
+    expect(probe(run).trim().split("\n")).toEqual(EXPECTED_PROBE_OUTPUT);
+  });
+});
+
+// 六家厂商的进程照各自的包法起（普通 Worker 带上关掉自带沙箱的参数，外层只读的厂商用各自的只读参数）：起得来、hub 外壳能跑、hub.sock 连得上，
+// 数据目录的密钥、库、备份连同沙箱命令拼好之后才建的都读不到
+describe.runIf(canRunSandboxExec)("真 sandbox-exec：六家厂商的 Worker 起进程、调 hub、守读边界", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-vb-")));
+  const fakeHome = join(root, "user");
+  let fixture: SandboxDataDir;
+  let cli: string;
+  beforeAll(async () => {
+    fixture = await makeSandboxDataDir(root);
+    cli = writeProbeCli(root);
+    mkdirSync(fakeHome, { recursive: true });
+  });
+  afterAll(async () => {
+    await fixture?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const probe = (command: SpawnCommand) => {
+    fixture.createLate();
+    return execFileSync(command.command, command.args, { cwd: fixture.own, env: { ...process.env, ...fixture.env }, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" })
+      .trim()
+      .split("\n");
+  };
+  const readonlyPolicy = () =>
+    buildReadonlyPolicy({
+      homeDir: fakeHome,
+      stateDir: fixture.stateDir,
+      dataDirScope: dataDirReadScope({ dataDir: fixture.dataDir, launchDir: fixture.launchDir, extraReadable: [fixture.own] }),
+    });
+
+  for (const vendor of AGENT_VENDORS) {
+    it(`${vendor} 普通 Worker`, () => {
+      const scope = workerWriteScope({ role: "worker", dataDir: fixture.dataDir, cwd: fixture.own, launchDir: fixture.launchDir })!;
+      expect(probe(spawnInWriteScope(vendor, { command: cli, args: [] }, scope, undefined, undefined, "darwin"))).toEqual(EXPECTED_PROBE_OUTPUT);
+    });
+  }
+
+  for (const [vendor, input] of [
+    ["agy", (tmpDir: string) => agyReadonlySandboxInput({ homeDir: fakeHome, tmpDir, policy: readonlyPolicy() })],
+    ["pi", (tmpDir: string) => piReadonlySandboxInput({ homeDir: fakeHome, tmpDir, policy: readonlyPolicy() })],
+  ] as const) {
+    it(`${vendor} 只读 Worker（外层只读沙箱）`, () => {
+      const tmpDir = join(root, `${vendor}-ro-tmp`);
+      mkdirSync(tmpDir, { recursive: true });
+      const run = wrapInReadonlyOsSandbox({ command: cli, args: [] }, input(tmpDir), "darwin");
+      expect(run.osSandboxed).toBe(true);
+      expect(probe(run)).toEqual(EXPECTED_PROBE_OUTPUT);
+    });
+  }
 });
 
 // 驱动层真的用上了：claude 驱动起 Worker 时包了沙箱（假 claude 启动时往数据目录里写一个文件，写不成），项目经理不包
@@ -301,7 +464,7 @@ describe.runIf(canRunSandboxExec)("claude 驱动起进程", () => {
       mkdirSync(cwd, { recursive: true });
       const probe = join(dataDir, "probe.txt");
       h.launch.env = { FAKE_CLAUDE_PROBE: probe };
-      if (scoped) h.launch.writeScope = { dataDir, writableDirs: [cwd] };
+      if (scoped) h.launch.writeScope = { dataDir, writableDirs: [cwd], readScope: dataDirReadScope({ dataDir }) };
       const s = h.addSession({ role, cwd });
       await h.driver.send(s.id, user(1, "hi"));
       const ended = await h.waitFor("turn.ended");
@@ -363,11 +526,10 @@ describe("readonlySeatbeltProfile", () => {
     expect(wrapInReadonlyOsSandbox(base, roInput, "freebsd")).toEqual({ ...base, osSandboxed: false });
   });
 
-  it("Windows 只读 Worker 回退与 MXC 切换：无 MXC 时自动回退为 4.4.2 写受限令牌保底并带清晰降级告警；接入 MXC 后自动切到 MXC", () => {
+  it("Windows 只读 Worker 回退与 MXC 切换：无 MXC 时自动回退为 4.4.2 受限令牌保底并带清晰降级告警；接入 MXC 后自动切到 MXC", () => {
     resetOsSandboxCacheForTest();
     const fallback = wrapInReadonlyOsSandbox(base, roInput, "win32", {
       available: true,
-      skipAclSetup: true,
       disableWin32Mxc: true,
       winHelperPath: FUSA_RUN_EXE,
       stateDir: "C:\\Users\\u\\.agent-hub\\state",
@@ -429,7 +591,7 @@ describe("readonlySeatbeltProfile", () => {
 });
 
 describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）", () => {
-  it("bwrapArgs：顺序为 --unshare-user --disable-userns --unshare-pid --proc /proc --bind / / --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid> --ro-bind <dataDir> --bind <writableDir> -- <cli> <args>；做 realpath 且跳过不存在路径", () => {
+  it("bwrapArgs：顺序为 --unshare-user --disable-userns --unshare-pid --proc /proc --bind / / --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid> --tmpfs <dataDir>（读边界，放行项只读挂回）--bind <writableDir> --remount-ro <dataDir> -- <cli> <args>；做 realpath 且跳过不存在路径", () => {
     const existing = new Set(["/real/home/.agent-hub", "/real/home/.agent-hub/worktrees/1/2"]);
     const real = (p: string) => p.replace(/^\/Users\/u/, "/real/home");
     const args = bwrapArgs(
@@ -437,6 +599,7 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
       {
         dataDir: "/Users/u/.agent-hub",
         writableDirs: ["/Users/u/.agent-hub/worktrees/1/2", "/Users/u/.agent-hub/worktrees/1/missing"],
+        readScope: dataDirReadScope({ dataDir: "/Users/u/.agent-hub" }),
       },
       { uid: 1001, exists: (p) => existing.has(p), realpath: real },
     );
@@ -456,12 +619,15 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
       "0700",
       "--tmpfs",
       "/run/user/1001",
-      "--ro-bind",
-      "/real/home/.agent-hub",
+      "--perms",
+      "0700",
+      "--tmpfs",
       "/real/home/.agent-hub",
       "--bind",
       "/real/home/.agent-hub/worktrees/1/2",
       "/real/home/.agent-hub/worktrees/1/2",
+      "--remount-ro",
+      "/real/home/.agent-hub",
       "--",
       "/bin/agent",
       "--x",
@@ -576,6 +742,7 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
       {
         dataDir: "/home/fusa/.agent-hub",
         writableDirs: ["/home/fusa/.agent-hub/worktrees/1/2"],
+        readScope: dataDirReadScope({ dataDir: "/home/fusa/.agent-hub" }),
       },
       {
         uid: 1000,
@@ -625,12 +792,15 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
       "--setenv",
       "PATH",
       "/home/fusa/.local/bin:/usr/bin:/bin",
-      "--ro-bind",
-      "/home/fusa/.agent-hub",
+      "--perms",
+      "0700",
+      "--tmpfs",
       "/home/fusa/.agent-hub",
       "--bind",
       "/home/fusa/.agent-hub/worktrees/1/2",
       "/home/fusa/.agent-hub/worktrees/1/2",
+      "--remount-ro",
+      "/home/fusa/.agent-hub",
       "--",
       "/bin/agent",
       "--x",
@@ -666,7 +836,7 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
     expect(parseWslDrvfsMounts(linuxOnlyMountInfo)).toEqual([]);
     const plainLinuxArgs = bwrapArgs(
       base,
-      { dataDir: "/home/fusa/.agent-hub", writableDirs: [] },
+      { dataDir: "/home/fusa/.agent-hub", writableDirs: [], readScope: dataDirReadScope({ dataDir: "/home/fusa/.agent-hub" }) },
       {
         uid: 1000,
         exists: (p) => p === "/mnt/data" || p === "/home/fusa/.agent-hub",
@@ -699,18 +869,20 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
 
     const args = bwrapArgs(
       base,
-      { dataDir: "/home/fusa/.agent-hub", writableDirs: ["/home/fusa/.agent-hub/worktrees/1/2", "/mnt/c/proj"] },
+      { dataDir: "/home/fusa/.agent-hub", writableDirs: ["/home/fusa/.agent-hub/worktrees/1/2", "/mnt/c/proj"], readScope: dataDirReadScope({ dataDir: "/home/fusa/.agent-hub" }) },
       opts,
     );
     expect(args.slice(args.indexOf("/run/user/1000") + 1, args.indexOf("--"))).toEqual([
       "--perms", "0700", "--tmpfs", "/mnt/c",
       "--perms", "0700", "--tmpfs", "/home/fusa/.agent-hub/worktrees/1/2/win",
       "--perms", "0700", "--tmpfs", "/tmp/ro-1/win",
-      "--ro-bind", "/home/fusa/.agent-hub", "/home/fusa/.agent-hub",
+      // 读边界：数据目录换成空 tmpfs（放行项这里都不存在，不挂回）
+      "--perms", "0700", "--tmpfs", "/home/fusa/.agent-hub",
       "--bind", "/home/fusa/.agent-hub/worktrees/1/2", "/home/fusa/.agent-hub/worktrees/1/2",
       "--bind", "/mnt/c/proj", "/mnt/c/proj",
       // 只补遮嵌套在放行目录里的那个；/mnt/c 是放行目录 /mnt/c/proj 的父目录，不补（否则把放行的项目也盖掉）
       "--perms", "0700", "--tmpfs", "/home/fusa/.agent-hub/worktrees/1/2/win",
+      "--remount-ro", "/home/fusa/.agent-hub",
     ]);
 
     const roArgs = readonlyBwrapArgs(
@@ -729,7 +901,7 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
 });
 
 describe("scanSecretGlobs（只读通配扫描与硬上限 fail-closed）", () => {
-  it("非递归遍历去重后的 roots，匹配 .env / .env.* / *.pem / id_rsa*，跳过 .git、node_modules 与符号链接目录", () => {
+  it("非递归遍历去重后的 roots，匹配 .env / .env.* / *.pem / id_rsa*，跳过 .git、node_modules 与符号链接目录", async () => {
     const parent = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-secret-scan-")));
     try {
       const dir = join(parent, "workspace");
@@ -750,14 +922,14 @@ describe("scanSecretGlobs（只读通配扫描与硬上限 fail-closed）", () =
       symlinkSync(outside, join(sub, "linked-outside"));
       symlinkSync(dir, join(sub, "loop-root"));
 
-      const found = scanSecretGlobs([dir, dir], ["**/.env", "**/.env.*", "**/*.pem", "**/id_rsa*"]);
+      const found = await scanSecretGlobs([dir, dir], ["**/.env", "**/.env.*", "**/*.pem", "**/id_rsa*"]);
       expect(found.sort()).toEqual([join(dir, ".env"), join(sub, ".env.local"), join(sub, "cert.pem"), join(sub, "id_rsa_deploy")].sort());
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
   });
 
-  it("硬上限常量与超限 fail-closed：目录项超 20,000、耗时超 200ms、命中超 500 均立即抛 DriverError(spawn_failed)", () => {
+  it("硬上限常量与超限 fail-closed：目录项超 20,000、耗时超 200ms、命中超 500 均立即抛 DriverError(spawn_failed)", async () => {
     expect(SECRET_SCAN_MAX_ENTRIES).toBe(20_000);
     expect(SECRET_SCAN_MAX_MS).toBe(200);
     expect(SECRET_SCAN_MAX_MATCHES).toBe(500);
@@ -767,16 +939,16 @@ describe("scanSecretGlobs（只读通配扫描与硬上限 fail-closed）", () =
       for (let i = 0; i < 6; i++) writeFileSync(join(dir, `.env.part${i}`), "SECRET=1");
 
       // 1) 目录项超限
-      expect(() => scanSecretGlobs([dir], ["**/.env.*"], { maxEntries: 3 })).toThrowError(DriverError);
-      expect(() => scanSecretGlobs([dir], ["**/.env.*"], { maxEntries: 3 })).toThrow(/超出目录项上限（超过 3 项/);
+      await expect(scanSecretGlobs([dir], ["**/.env.*"], { maxEntries: 3 })).rejects.toThrowError(DriverError);
+      await expect(scanSecretGlobs([dir], ["**/.env.*"], { maxEntries: 3 })).rejects.toThrow(/超出目录项上限（超过 3 项/);
 
       // 2) 敏感文件命中数超限
-      expect(() => scanSecretGlobs([dir], ["**/.env.*"], { maxMatches: 4 })).toThrowError(DriverError);
-      expect(() => scanSecretGlobs([dir], ["**/.env.*"], { maxMatches: 4 })).toThrow(/超出命中数量上限（超过 4 个/);
+      await expect(scanSecretGlobs([dir], ["**/.env.*"], { maxMatches: 4 })).rejects.toThrowError(DriverError);
+      await expect(scanSecretGlobs([dir], ["**/.env.*"], { maxMatches: 4 })).rejects.toThrow(/超出命中数量上限（超过 4 个/);
 
       // 3) 扫描耗时超限
       let clock = 1_000;
-      expect(() =>
+      await expect(
         scanSecretGlobs([dir], ["**/.env.*"], {
           maxMs: 200,
           now: () => {
@@ -784,9 +956,121 @@ describe("scanSecretGlobs（只读通配扫描与硬上限 fail-closed）", () =
             return clock;
           },
         }),
-      ).toThrow(/耗时超限（超过 200 ms/);
+      ).rejects.toThrow(/耗时超限（超过 200 ms/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("scanSecretGlobs：逐项列目录、列不出的目录", () => {
+  const fakeEntry = (name: string) =>
+    ({ name, isDirectory: () => false, isSymbolicLink: () => false, isFile: () => true }) as unknown as Dirent;
+
+  it("单个超大目录：边列边数，超上限立即停，不先把整个目录读进来", async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-secret-huge-")));
+    let listed = 0;
+    async function* endless() {
+      for (;;) yield fakeEntry(`f${++listed}`);
+    }
+    try {
+      await expect(scanSecretGlobs([dir], ["**/.env"], { maxEntries: 50, openDir: async () => endless() })).rejects.toThrow(/超出目录项上限（超过 50 项/);
+      expect(listed).toBeLessThanOrEqual(51);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("列目录出了权限以外的错（句柄用光、读盘出错）：抛 spawn_failed 拒绝启动，不当成没有敏感文件", async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-secret-err-")));
+    try {
+      for (const code of ["EMFILE", "EIO"]) {
+        const openDir = async () => {
+          throw Object.assign(new Error(code), { code });
+        };
+        await expect(scanSecretGlobs([dir], ["**/.env"], { openDir })).rejects.toThrowError(DriverError);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("没有读权限、列不出的目录：整个当敏感目录遮掉", async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-secret-locked-")));
+    const locked = join(dir, "locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, ".env"), "A=1");
+    chmodSync(locked, 0o300);
+    try {
+      expect(await scanSecretGlobs([dir], ["**/.env"])).toEqual([locked]);
+    } finally {
+      chmodSync(locked, 0o700);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("dataDirDenyList：列目录失败拒绝启动，已知敏感项不管存不存在都禁读", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-deny-")));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  const fresh = (name: string) => {
+    const dataDir = join(root, name);
+    mkdirSync(join(dataDir, "worktrees", "1", "2"), { recursive: true });
+    return dataDir;
+  };
+  const workerScope = (dataDir: string) => {
+    const launch = join(dataDir, "state", "launch", "7");
+    return toolLayerReadScope(dataDirReadScope({ dataDir, launchDir: launch }), launch);
+  };
+
+  it("列目录出错（权限不够、句柄用光、读盘出错）：抛 spawn_failed，不当成没东西可禁", () => {
+    const scope = workerScope(fresh("err"));
+    for (const code of ["EACCES", "EPERM", "EMFILE", "EIO"]) {
+      const listDir = () => {
+        throw Object.assign(new Error(code), { code });
+      };
+      expect(() => dataDirDenyList(scope, listDir)).toThrowError(DriverError);
+    }
+  });
+
+  it("启动时还没有的已知敏感项（state/、备份、项目经理目录、副本、admin.sock、遗留的 run/tunnel）也在清单里，运行期才建的照样禁读", () => {
+    const dataDir = fresh("empty");
+    const adminSock = process.platform === "win32" ? [] : [join(dataDir, "run", "admin.sock")];
+    expect(dataDirDenyList(workerScope(dataDir))).toEqual(
+      [join(dataDir, "backups"), join(dataDir, "pm-home"), join(dataDir, "run", "tunnel"), join(dataDir, "sent-files"), join(dataDir, "state"), ...adminSock].sort(),
+    );
+  });
+
+  it("目录在展开时没了（ENOENT）：跳过，已知敏感项照样在清单里", () => {
+    const dataDir = fresh("gone");
+    mkdirSync(join(dataDir, "run", "bin"), { recursive: true });
+    const listDir = (dir: string) => {
+      if (dir === join(dataDir, "run")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return readdirSync(dir);
+    };
+    expect(dataDirDenyList(workerScope(dataDir), listDir)).toContain(join(dataDir, "run", "tunnel"));
+  });
+
+  it("总助（cwd 在 state/router-home）：state/ 展开，已知的令牌、密钥、库（含 -wal、-shm）、记忆、日志、启动目录不管存不存在都禁读，router-home 不禁", () => {
+    const dataDir = fresh("router");
+    const routerHome = join(dataDir, "state", "router-home");
+    mkdirSync(routerHome, { recursive: true });
+    const launch = join(dataDir, "state", "launch", "9");
+    const denied = dataDirDenyList(toolLayerReadScope(dataDirReadScope({ dataDir, launchDir: launch, extraReadable: [routerHome] }), launch));
+    for (const rel of ["ui-token", "provider-secrets.json", "feishu-secrets.json", "push-vapid.json", "push-subscriptions.json", "peers.json", "mesh", "hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm", "pm-memory", "personas", "logs", "launch"]) {
+      expect(denied, rel).toContain(join(dataDir, "state", rel));
+    }
+    expect(denied).not.toContain(join(dataDir, "state"));
+    expect(denied.filter((p) => isPathInsideOrEqual(p, routerHome) || isPathInsideOrEqual(routerHome, p))).toEqual([]);
+  });
+
+  it("放行项（worktrees、uploads、tools、run/bin、hub.sock、自己的启动目录）和它们的上级从不整项禁读", () => {
+    const dataDir = fresh("allowed");
+    const launch = join(dataDir, "state", "launch", "7");
+    const scope = dataDirReadScope({ dataDir, launchDir: launch });
+    const denied = dataDirDenyList(scope);
+    for (const allowed of [...scope.readable, ...scope.connectable]) {
+      expect(denied.filter((p) => isPathInsideOrEqual(p, allowed)), allowed).toEqual([]);
     }
   });
 });
@@ -828,6 +1112,67 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec：只读", () => {
     expect(existsSync(join(root, "outside.txt"))).toBe(false);
     expect(existsSync(join(tmp, "p"))).toBe(true);
     expect(existsSync(join(runtime, "p"))).toBe(true);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("prepareOsSandboxForLaunch（Windows 起进程前异步设 ACL，用假的 fusa-run.exe）", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-prep-")));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => resetVerifiedProtectedRootsForTest());
+
+  const fakeHelper = (logFile: string) => {
+    const dir = join(root, `helpers-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    const helper = join(dir, "fusa-run.exe");
+    writeFileSync(helper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${logFile}'\n`);
+    chmodSync(helper, 0o755);
+    return { [ENV_WIN_HELPERS]: dir };
+  };
+  const calls = (logFile: string) => (existsSync(logFile) ? readFileSync(logFile, "utf8").trim().split("\n") : []);
+
+  it("普通 Worker：受保护根 protect-root、数据目录禁读、放行项放行读（启动目录只给这个会话的 reader）、自己的 worktree allow-worker；同一会话再起不重复调；macOS、Linux 什么也不做", async () => {
+    const dataDir = join(root, "home");
+    const stateDir = join(dataDir, "state");
+    const own = join(dataDir, "worktrees", "1", "42");
+    const launchDir = join(stateDir, "launch", "7");
+    for (const d of [own, launchDir, join(dataDir, "run", "bin")]) mkdirSync(d, { recursive: true });
+    const logFile = join(root, "normal.log");
+    const env = fakeHelper(logFile);
+    const writeScope = workerWriteScope({ role: "worker", dataDir, cwd: own, launchDir })!;
+    const prep = { dataDir, stateDir, writeScope, readonly: undefined };
+    await prepareOsSandboxForLaunch(prep, "darwin", { env });
+    await prepareOsSandboxForLaunch(prep, "linux", { env });
+    expect(calls(logFile)).toEqual([]);
+    await prepareOsSandboxForLaunch(prep, "win32", { env });
+    await prepareOsSandboxForLaunch(prep, "win32", { env });
+    expect(calls(logFile)).toEqual([
+      `acl protect-root --state-dir ${stateDir} --path ${dataDir}`,
+      `acl deny-read --state-dir ${stateDir} --path ${dataDir}`,
+      `acl allow-read --state-dir ${stateDir} --path ${join(dataDir, "worktrees")}`,
+      `acl allow-read --state-dir ${stateDir} --path ${join(dataDir, "run", "bin")}`,
+      `acl allow-read --state-dir ${stateDir} --reader 7 --path ${launchDir}`,
+      `acl allow-worker --state-dir ${stateDir} --worker 42 --path ${own}`,
+    ]);
+    // 起进程的命令行带上同一个 reader 键：令牌里多一个只放行读的 FusaRead-7
+    const wrapped = win32WorkerSandboxArgs(base, writeScope, { winHelperPath: "fusa-run.exe" });
+    expect(wrapped.args.slice(0, 8)).toEqual(["--sandbox", "worker", "--state-dir", stateDir, "--worker", "42", "--reader", "7"]);
+  });
+
+  it("项目经理（没有范围、不是只读）不调；只读 Worker 只设受保护根，不给任何目录放行写", async () => {
+    const dataDir = join(root, "home-ro");
+    const stateDir = join(dataDir, "state");
+    const extra = join(root, "cross-vol");
+    for (const d of [stateDir, extra]) mkdirSync(d, { recursive: true });
+    const logFile = join(root, "ro.log");
+    const env = fakeHelper(logFile);
+    await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: null, readonly: undefined }, "win32", { env });
+    expect(calls(logFile)).toEqual([]);
+    const readonly = buildReadonlyPolicy({ homeDir: root, stateDir, protectedRoots: [dataDir, extra] });
+    await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: null, readonly }, "win32", { env });
+    expect(calls(logFile)).toEqual([
+      `acl protect-root --state-dir ${stateDir} --path ${dataDir}`,
+      `acl protect-root --state-dir ${stateDir} --path ${extra}`,
+    ]);
   });
 });
 

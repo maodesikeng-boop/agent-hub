@@ -73,5 +73,6 @@ export function piReadonlySandboxInput(input: {
     writableFileRegexes: [],
     secretPaths: input.policy.secretPaths.map(real).filter((p) => !selfReadable.has(cmpKey(p))),
     secretGlobs: [...input.policy.secretGlobs],
+    ...(input.policy.dataDirScope ? { dataDirScope: input.policy.dataDirScope } : {}),
   };
 }

@@ -15,7 +15,7 @@ import {
   type ReadonlyPolicy,
   type RateLimitWindow,
   type SessionCapabilities,
-  type WriteScope,
+  type WriteBounds,
   type QuotaWindowKey,
   windowKeyByMinutes,
 } from "../../shared/index.ts";
@@ -72,7 +72,6 @@ export interface CodexLaunchConfig {
 const CODEX_READONLY_PROFILE = "hub_readonly";
 
 export type CodexSandboxPolicy =
-  | { type: "readOnly"; networkAccess: true }
   | { type: "workspaceWrite"; networkAccess: true; writableRoots: string[] }
   | { type: "externalSandbox"; networkAccess: "enabled" };
 
@@ -144,17 +143,30 @@ function configKeySegment(name: string): string {
 }
 
 /**
- * 只读 Worker 追加的 codex 配置（设计 2.3）。sandbox 本身（read-only）由 thread/start 的参数给，这里只补两样：
- * - 密钥禁读：2026-11-07 S5 实测，只有“default_permissions + profile 继承 :read-only + filesystem 路径 none”生效，
- *   permissions.filesystem.deny_read 和 profile 里的 deny_read 都无效。通配（secretGlobs）这种写法表达不了，不写；
+ * 只读 Worker 追加的 codex 配置（设计 2.3）。只读靠这里的权限档，thread/start、thread/resume 不传 sandbox，turn/start 不传 sandboxPolicy：
+ * codex-cli 0.169.0 实测带了这两个参数就换成内置 read-only（activePermissionProfile 为 null），下面的读边界整个失效
+ * （源码 config/src/permission_config.rs 的 resolve_permission_config、core/src/session/session.rs 换 sandbox_policy 时只留 none 项）。
+ * 权限档继承 :read-only 后网络默认关，network.enabled 照原来 readOnly 的 networkAccess 打开（hub 命令要连 hub.sock）。
+ * - 禁读：2026-11-07 S5 实测，只有“default_permissions + profile 继承 :read-only + filesystem 路径 none”生效，
+ *   permissions.filesystem.deny_read 和 profile 里的 deny_read 都无效。通配（secretGlobs）这种写法表达不了，不写。
+ *   数据目录和外层 OS 沙箱用同一套读边界（dataDirScope）：整个数据目录 none，放行项（worktrees、uploads、tools、run/bin、
+ *   这次会话的启动目录）和 hub.sock 再写 read（codex 按更具体的路径为准），启动后才建的文件也落在 none 的子树里。
+ *   codex 只把工具命令放进沙箱，它自己读启动文件、~/.codex/auth.json 不受影响；
  * - 连接器：codex 原生放行 readOnlyHint 的，补充 → approval_mode="approve"，排除 → disabled_tools（整个服务器 → enabled=false）。
  *   codex 配置要确切的服务器名和工具名，通配的写不进去；补充的通配项靠 elicitation 兜底（decideMcpElicitation）。
  */
 export function codexReadonlyConfig(policy: ReadonlyPolicy): Record<string, unknown> {
+  const filesystem: Record<string, "none" | "read"> = Object.fromEntries(policy.secretPaths.map((p) => [p, "none"]));
+  const scope = policy.dataDirScope;
+  if (scope !== undefined) {
+    filesystem[scope.dataDir] = "none";
+    for (const p of [...scope.readable, ...scope.connectable]) filesystem[p] = "read";
+  }
   const config: Record<string, unknown> = {
     default_permissions: CODEX_READONLY_PROFILE,
     [`permissions.${CODEX_READONLY_PROFILE}.extends`]: ":read-only",
-    [`permissions.${CODEX_READONLY_PROFILE}.filesystem`]: Object.fromEntries(policy.secretPaths.map((p) => [p, "none"])),
+    [`permissions.${CODEX_READONLY_PROFILE}.network.enabled`]: true,
+    [`permissions.${CODEX_READONLY_PROFILE}.filesystem`]: filesystem,
   };
   const split = (rule: string): [string, string] => {
     const slash = rule.indexOf("/");
@@ -219,7 +231,7 @@ export function buildThreadStartRequest(
       cwd: session.cwd,
       model: session.model ?? undefined,
       developerInstructions: launch.developerInstructions,
-      sandbox: launch.readonly ? "read-only" : "workspace-write",
+      sandbox: launch.readonly ? undefined : "workspace-write",
       approvalPolicy: "on-request",
       config: launch.config,
     },
@@ -241,7 +253,7 @@ export function buildThreadResumeRequest(
       cwd: session.cwd,
       model: session.model ?? undefined,
       developerInstructions: launch.developerInstructions,
-      sandbox: launch.readonly ? "read-only" : "workspace-write",
+      sandbox: launch.readonly ? undefined : "workspace-write",
       approvalPolicy: "on-request",
       config: launch.config,
     },
@@ -254,17 +266,15 @@ export function buildThreadResumeRequest(
  *   命令和改文件都在外面那层里，数据目录写不了；
  * - 没有 OS 沙箱（兜底）：codex 自己的 workspace-write，writableRoots 去掉数据目录里不能写的（codex 的沙箱只能写 writableRoots 和临时目录）；
  *   越出沙箱的审批按范围判断（decideCommandApproval、decideFileChangeApproval）。
- * 只读：readOnly（codex 自己的沙箱，进程不包）。
+ * 只读：null，不传（沿用线程启动时 config 里的权限档 codexReadonlyConfig；codex 自己的沙箱，进程不包）。
  */
 export function buildSandboxPolicy(
   session: Pick<AgentSessionRow, "cwd" | "addDirs">,
   readonly: boolean,
-  writeScope: WriteScope | null = null,
+  writeScope: WriteBounds | null = null,
   osSandboxed = false,
-): CodexSandboxPolicy {
-  if (readonly) {
-    return { type: "readOnly", networkAccess: true };
-  }
+): CodexSandboxPolicy | null {
+  if (readonly) return null;
   if (osSandboxed) return { type: "externalSandbox", networkAccess: "enabled" };
   const roots = [session.cwd, ...session.addDirs];
   return {
@@ -296,7 +306,7 @@ export function buildTurnStartRequest(
     combinedText: string;
     session: Pick<AgentSessionRow, "cwd" | "addDirs" | "model" | "effort">;
     readonly: boolean;
-    writeScope?: WriteScope | null;
+    writeScope?: WriteBounds | null;
     /** 进程包进了 OS 沙箱（driver/write-scope.ts 的 ScopedSpawn.osSandboxed）。 */
     osSandboxed?: boolean;
   },
@@ -312,7 +322,7 @@ export function buildTurnStartRequest(
       model: params.session.model ?? undefined,
       effort: params.session.effort ?? undefined,
       summary: "detailed",
-      sandboxPolicy: buildSandboxPolicy(params.session, params.readonly, params.writeScope ?? null, params.osSandboxed ?? false),
+      sandboxPolicy: buildSandboxPolicy(params.session, params.readonly, params.writeScope ?? null, params.osSandboxed ?? false) ?? undefined,
     },
   });
 }
@@ -718,7 +728,7 @@ export function exhaustCodexRateLimitOnTurnError(current: RateLimitInfo | null, 
 export interface CodexApprovalContext {
   readonly: boolean;
   /** Worker 的可写范围；项目经理是 null（不拦）。 */
-  writeScope: WriteScope | null;
+  writeScope: WriteBounds | null;
   cwd: string;
 }
 

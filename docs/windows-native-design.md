@@ -15,7 +15,7 @@
 1. **进程树**：每个会话经一个小 Rust 辅助程序 `fusa-run.exe` 启动——先**挂起创建**厂商进程、放进 **kill-on-close 的 Job Object**、再恢复运行。停一轮、收工、后台崩溃，Job 句柄一关整棵树都死，不再靠 `ps`、负 PID、`taskkill /T` 猜后代。（借鉴 orca 给 node-pty 打的 Job 补丁、codex 的挂起后放行；Node 自带的 libuv 全局 Job 带 `SILENT_BREAKAWAY_OK`，管不到孙进程，不能直接依赖。）
 2. **本机 IPC**：`hub.sock` 换成 Node 原生支持的命名管道 `\\.\pipe\fusa-…`；`hub` 命令做成原生 `hub.exe` 小启动器（不用 `.cmd`：cmd.exe 会二次解析 `%*`、截断换行），cmd、PowerShell、Git Bash、各家 Agent 的工具调用都直接认 `.exe`。
 3. **启动厂商 CLI 不用 `shell: true`**：`.exe` 直接起；npm/pnpm 的 `.cmd` 垫片按官方垫片格式精确解析成"`node.exe` + 入口 `.js`"或真正的 `.exe` 直接起；认不出的才经 cmd.exe 严格转义并拒绝换行。（移植 orca `process-host` 的 MIT 代码，t3code 同思路。）
-4. **Worker 写范围沙箱**：普通 Worker 用 Windows 原生**写受限令牌（WRITE_RESTRICTED）+ 文件 ACL 拒写**，语义与 macOS `sandbox-exec`、Linux `bwrap` 完全一致——受保护根（数据目录 + 同卷 `.fusa-wt`）里只能写自己的 worktree，受保护根外原样不管；不要管理员，Win10/11 都能用。（机制照 codex `windows-sandbox-rs` 的 unelevated 实现，把它的"白名单可写"改成"黑名单拒写"以符合 2026-11-06 的硬规则。）只读 Worker：codex 用它自带的 Windows 只读沙箱；其余 5 家在 Windows 11 24H2+ 上用微软官方 MXC（`@microsoft/mxc-sdk`，第 2 步接入），在尚未接 MXC 的第 1 步以及低于 Win11 24H2 / Windows Server 等不支持 MXC `processcontainer` 的环境上**绝不硬性拒绝启动，而是自动回退为「4.4.2 写受限令牌（受保护根全禁写）+ 各家现有工具层只读拦截规则」并输出清晰降级告警**。
+4. **Worker 写范围沙箱**：普通 Worker 用 Windows 原生**受限令牌 + 文件 ACL 拒写、数据目录禁读**，语义与 macOS `sandbox-exec`、Linux `bwrap` 完全一致——受保护根（数据目录 + 同卷 `.fusa-wt`）里只能写自己的 worktree，受保护根外原样不管；不要管理员，Win10/11 都能用。（机制照 codex `windows-sandbox-rs` 的 unelevated 实现，把它的"白名单可写"改成"黑名单拒写"以符合 2026-11-06 的硬规则。）只读 Worker：codex 用它自带的 Windows 只读沙箱；其余 5 家在 Windows 11 24H2+ 上用微软官方 MXC（`@microsoft/mxc-sdk`，第 2 步接入），在尚未接 MXC 的第 1 步以及低于 Win11 24H2 / Windows Server 等不支持 MXC `processcontainer` 的环境上**绝不硬性拒绝启动，而是自动回退为「4.4.2 受限令牌（受保护根全禁写）+ 各家现有工具层只读拦截规则」并输出清晰降级告警**。
 5. **跨盘**：项目在 `D:\`、数据目录在 `C:\` 时，worktree 放到**项目同一卷**的 `D:\.fusa-wt\…`，保住 pnpm 硬链接、Dev Drive 加速和 C 盘空间；该目录与数据目录一起纳入写保护。
 
 改动面：后台约 40 个文件有 POSIX 假设（附录 A 逐项列出），新增实现集中到 `src/daemon/platform/win32/` 一处；新增一个 Rust crate；`fusa-wsl` 退役。拆成 **2 大步**（第 7 节）：①后台原生跑通（含普通 Worker 沙箱与 Windows CI）；②桌面壳原生化 + 打包 + 只读 Worker 的 MXC 后端 + WSL 路线退役。
@@ -37,7 +37,7 @@
 | 项目位置 | 需导入 WSL ext4 | 用户原目录：`C:\`、`D:\`、Dev Drive |
 | 本机工具链 | 不可用（interop 已关） | 直接用 |
 | 首次安装 | 装 WSL（管理员、可能重启）+ 下载 Ubuntu 镜像 | 普通用户装一个 NSIS 包 |
-| Worker 写沙箱 | bwrap（已有） | 写受限令牌 + ACL（新做，4.4） |
+| Worker 写沙箱 | bwrap（已有） | 受限令牌 + ACL（新做，4.4） |
 | 只读 Worker 读保护 | bwrap 遮挡 | codex 自带；其余 5 家 MXC（Win11 24H2+） |
 | 常驻内存 | WSL VM 目标 ≤ 1.5 GiB | 只有 `node.exe`（待测基线） |
 
@@ -66,7 +66,7 @@
 flowchart LR
   shell["Bellwood.exe（Tauri 2 壳）"] -->|"起 / 停 / 探活<br/>admin 管道关机"| node["node.exe（随包）<br/>src/daemon/main.ts"]
   web["WebView2 / 手机浏览器"] -->|"127.0.0.1:4317"| node
-  node -->|"每个会话一个"| run["fusa-run.exe<br/>Job Object（kill-on-close）<br/>Worker 再加写受限令牌"]
+  node -->|"每个会话一个"| run["fusa-run.exe<br/>Job Object（kill-on-close）<br/>Worker 再加受限令牌"]
   run --> cli["厂商 CLI<br/>claude.exe / codex.exe / node + cli.js …"]
   cli --> tools["工具子进程<br/>Git Bash / PowerShell / git / pnpm / MSBuild"]
   tools -->|"hub …"| hub["hub.exe（原生启动器）"]
@@ -182,32 +182,33 @@ Windows 删不掉目录的三类原因：①还有进程的**当前目录**在�
 |---|---|---|---|---|---|---|
 | A 只靠各家 CLI 自带沙箱 | 否：claude 原生 Windows **不支持**沙箱（官方 setup 文档"Native Windows：Sandboxing Not supported"）；pi、dsh、cursor 没有 Windows 沙箱 | — | — | — | 不统一 | 否 |
 | B 工具层拦截（审批回调、字面规则） | 否：只看命令字面，变量、脚本、子进程全漏 | 否 | 任意 | 好 | 低 | 只作补充（codex 审批已有） |
-| C **写受限令牌 + ACL 拒写（黑名单）** | **是**：等价 `(allow default)(deny file-write* 数据目录)(allow file-write* 本 worktree)` | 否 | Win10 1809+ / Win11 | 好：读不受限，数据目录外写不受限 | 防误写与普通越权，与 macOS seatbelt 同级 | **普通 Worker 推荐** |
+| C **受限令牌 + ACL 拒写（黑名单）** | **是**：等价 `(allow default)(deny file-write* 数据目录)(allow file-write* 本 worktree)` | 否 | Win10 1809+ / Win11 | 好：读不受限，数据目录外写不受限 | 防误写与普通越权，与 macOS seatbelt 同级 | **普通 Worker 推荐** |
 | D codex 式白名单令牌（unelevated） | 否：只放行 cwd 与配置的根，pnpm store、`%TEMP%`、`~\.nuget`、VS/Unity 缓存都要逐个列 | 否 | Win10+ | 差 | 中 | 否 |
 | E codex 式 elevated（专用本地用户 + 防火墙） | 可做 | **要**（建用户、改防火墙、授登录权） | Win10+ | 需额外给专用用户授读 | 高 | 否：门槛高，企业机常被策略挡（codex 文档的 1385 错误） |
 | F 微软 MXC ProcessContainer | 白名单模型：默认拒读拒写，`readonlyPaths / readwritePaths / deniedPaths` | 一般不要；部分机器的 AppContainer 降级层要管理员跑一次 `wxc-host-prep.exe` | Win11 24H2 26100.9278+ / 25H2 26200.9278+ | 整个 CLI 要读的路径都得列出 | 高 | **只读 Worker 推荐**（只读本就是白名单）；普通 Worker 不用 |
 
-#### 4.4.2 普通 Worker：写受限令牌 + ACL 拒写（`win32` 后端）
+#### 4.4.2 普通 Worker：受限令牌 + ACL 拒写、禁读（`win32` 后端）
 
-原理（Windows 访问检查，codex 博客有同样说明）：受限令牌做两遍检查，必须"本人身份检查"与"限制 SID 列表检查"都通过；`WRITE_RESTRICTED` 令牌只对**写**做第二遍，读完全不受影响。
+原理（Windows 访问检查，codex 博客有同样说明）：受限令牌做两遍检查，必须"本人身份检查"与"限制 SID 列表检查"都通过。最初用 `WRITE_RESTRICTED`（只对**写**做第二遍、读不受影响）；2026-11-19 起为了数据目录读边界（`docs/write-scope.md`）改成普通受限令牌，读也做第二遍，`DENY FusaWorker` 读才起作用。
 
-1. **两个合成 SID**（随机 `S-1-5-21-…`，持久化在 `state\`，照 codex `cap.rs`）：`FusaWorker`（所有 Worker 共用）和 `FusaWorker-<worker 编号>`（每个 Worker 一个）。
-2. **一次性 ACL**（安装/升级时在后台做，带进度）：在每个受保护根（数据目录 + 各卷 worktree 根，6.2）加可继承的 `DENY FusaWorker` 写类权限（`FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER`）；再加可继承的 `OWNER RIGHTS (S-1-3-4): READ_CONTROL`，压掉"所有者隐含的 WRITE_DAC"——否则 Worker 能以文件所有者身份改 ACL、删掉拒写项再写（codex `token.rs` 的 `set_default_dacl` 用的正是这一手）。先读 DACL，已正确就跳过（orca：目录传播在大树上要几秒到几分钟）。
+1. **两个合成 SID**（随机 `S-1-5-21-…`，持久化在 `state\`，照 codex `cap.rs`）：`FusaWorker`（所有 Worker 共用）和 `FusaWorker-<worker 编号>`（每个 Worker 一个）。几个 `fusa-run` 同时登记新 SID 时先拿 `state\win-sandbox-sids.lock` 的排他文件锁再读改写，第一次建表也在锁里，各进程拿到同一个 `FusaWorker`。
+2. **一次性 ACL**（安装/升级时在后台做，带进度）：在每个受保护根（数据目录 + 各卷 worktree 根，6.2）加可继承的 `DENY FusaWorker` 写类权限（`FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER`）；再加可继承的 `OWNER RIGHTS (S-1-3-4): READ_CONTROL`，压掉"所有者隐含的 WRITE_DAC"——否则 Worker 能以文件所有者身份改 ACL、删掉拒写项再写（codex `token.rs` 的 `set_default_dacl` 用的正是这一手）。拒写项只放具体的写位，不能用 `FILE_GENERIC_WRITE` / `GENERIC_WRITE`：它们带着 `READ_CONTROL | SYNCHRONIZE`，令牌去掉 `WRITE_RESTRICTED` 后会让 Worker 连读都打不开受保护根下的文件（比如各卷 `.fusa-wt` 里的 worktree）；旧版本写下的这种过宽拒写项，`protect-root` 与 `state\` 等私有目录加固时收窄重写。先读 DACL，已正确就跳过（orca：目录传播在大树上要几秒到几分钟）。
 3. **每个 worktree 建时**：先建空目录，加显式、可继承的 `ALLOW FusaWorker-<编号> 修改`，再 `git worktree add <这个已存在的空目录>`（git 允许加到已存在的空目录）。之后 checkout、`pnpm install` 产生的文件自动继承，**没有任何 ACL 传播开销**。Windows 的规范顺序里"近祖先继承的 ACE"排在"远祖先继承的 ACE"之前，所以本 worktree 里 `ALLOW 本 Worker` 先于数据目录继承下来的 `DENY FusaWorker` 生效；别的 Worker 只命中 `DENY`。
-4. **起 Worker**：`fusa-run.exe` 调 `CreateRestrictedToken(当前令牌, DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED, …, 限制 SID 列表)`，列表 = **当前令牌的用户 SID + 全部已启用组 SID**（`GetTokenInformation(TokenGroups)` 照抄：Authenticated Users、Users、INTERACTIVE、登录 SID、Everyone……）+ `FusaWorker` + `FusaWorker-<编号>`；`CreateProcessAsUserW` 挂起创建、入 Job、恢复。照 codex 给新令牌设默认 DACL（登录 SID 全权 + OWNER RIGHTS 只读），防同账户其他进程改它的进程对象。
+4. **起 Worker**：`fusa-run.exe` 调 `CreateRestrictedToken(当前令牌, DISABLE_MAX_PRIVILEGE | LUA_TOKEN, …, 限制 SID 列表)`，列表 = **当前令牌的用户 SID + 全部已启用组 SID**（`GetTokenInformation(TokenGroups)` 照抄：Authenticated Users、Users、INTERACTIVE、登录 SID、Everyone……）+ `FusaWorker` + `FusaWorker-<编号>` + 这次会话的 `FusaRead-<会话>`（`--reader`，只放行读）；`CreateProcessAsUserW` 挂起创建、入 Job、恢复。照 codex 给新令牌设默认 DACL（登录 SID 全权 + OWNER RIGHTS 只读），防同账户其他进程改它的进程对象。
    - 为什么要抄全部组：Windows 新建的数据卷（`D:\`）默认给 **Authenticated Users 修改**，并不直接列本人 SID；若限制列表只有用户 SID（或像 codex unelevated 只有 Everyone + 登录 SID + 能力 SID），Worker 在 `D:\项目` 里就写不了。抄全组后第二遍检查与第一遍等价，唯一差别就是两个合成 SID 的拒写——正好是要的黑名单。
-5. **效果**：写 `state\`、`run\`、`launch\`、别的 Worker 的 worktree，`icacls` 改权限，`takeown`，全部拒绝；写本 worktree、`%TEMP%`、`D:\项目`、pnpm/cargo/NuGet 缓存、厂商自己的配置目录照常；读不受影响；项目经理和后台本身不带合成 SID，完全不受影响；hub 管道（所有者 = 本人 SID，在限制列表里）可连。
-6. **关掉厂商自带沙箱**照现有表：claude `--settings` 写 `sandbox.enabled:false`（原生 Windows 本就不支持）；codex `sandboxPolicy: externalSandbox`；agy `--settings {"enableTerminalSandbox":false}`（经 5.2 解析后直接传给 `agy.exe`，不过 cmd）；cursor `--sandbox disabled`；dsh `--profile acp --patch`。
-7. **已知边界**（写进 `docs/write-scope.md`）：受限令牌拦的是"这棵进程树直接写文件"。Worker 若借**另一个不受限的进程**代写——任务计划程序（`schtasks`）、WMI `Win32_Process.Create`、进程外 COM、资源管理器 `ShellExecute`——就绕过了。这与 macOS `(allow default)` 下经 `launchctl`/AppleEvents 绕过同类（Linux 版用 `--tmpfs /run/user/<uid>` 封了 systemd/D-Bus 这一路，Windows 没有等价的单点）。首发接受这个边界（目标是防误写、防普通越权，不是防恶意逃逸），并在 Job 上加 `JOB_OBJECT_UILIMIT_HANDLES | UILIMIT_DESKTOP | UILIMIT_GLOBALATOMS` 收窄 UI 句柄这一路；更强隔离等 MXC 成熟后再评估。
-8. **探测与拒绝**：`osSandboxAvailable("win32")` = `fusa-run.exe probe`（建令牌，在临时受保护目录试写必须失败、在放行目录试写必须成功），只缓存 true（与 Linux 一致）。失败一律拒绝启动 Worker，并给出原因（例如组策略禁止改 ACL、文件系统不是 NTFS/ReFS——FAT/exFAT U 盘没有 ACL）。
+5. **读边界**（起 Worker 前在启动准备里异步做，`prepareOsSandboxForLaunch`）：数据目录加可继承的 `DENY FusaWorker` 读（`FILE_READ_DATA | FILE_READ_EA | FILE_EXECUTE`，属性照常可读，穿越目录靠 `SeChangeNotifyPrivilege` 不受影响），`state\`、`run\`、`backups\` 的受保护 DACL 里也带这一条；`worktrees\`、`uploads\`、`tools\`、`run\bin\` 显式 `ALLOW FusaWorker` 读，这次会话的启动目录只 `ALLOW FusaRead-<会话>` 读（显式 ACE 排在继承的拒绝前面）；管理命名管道加好 `DENY FusaWorker` 才服务（之前的请求一律 503，加失败就关掉管道）。`fusa-run.exe probe` 也验证禁读目录读不到、只拒写的受保护根（如 `.fusa-wt`）照常可读。
+6. **效果**：写 `state\`、`run\`、`launch\`、别的 Worker 的 worktree，`icacls` 改权限，`takeown`，全部拒绝；读 `state\` 的令牌、密钥、库、日志，`backups\`、`pm-home\` 拒绝，连管理管道拒绝；写本 worktree、`%TEMP%`、`D:\项目`、pnpm/cargo/NuGet 缓存、厂商自己的配置目录照常；读 worktree、自己的启动目录照常；项目经理和后台本身不带合成 SID，完全不受影响；hub 管道（所有者 = 本人 SID，在限制列表里）可连。
+7. **关掉厂商自带沙箱**照现有表：claude `--settings` 写 `sandbox.enabled:false`（原生 Windows 本就不支持）；codex `sandboxPolicy: externalSandbox`；agy `--settings {"enableTerminalSandbox":false}`（经 5.2 解析后直接传给 `agy.exe`，不过 cmd）；cursor `--sandbox disabled`；dsh `--profile acp --patch`。
+8. **已知边界**（写进 `docs/write-scope.md`）：受限令牌拦的是"这棵进程树直接写文件"。Worker 若借**另一个不受限的进程**代写——任务计划程序（`schtasks`）、WMI `Win32_Process.Create`、进程外 COM、资源管理器 `ShellExecute`——就绕过了。这与 macOS `(allow default)` 下经 `launchctl`/AppleEvents 绕过同类（Linux 版用 `--tmpfs /run/user/<uid>` 封了 systemd/D-Bus 这一路，Windows 没有等价的单点）。首发接受这个边界（目标是防误写、防普通越权，不是防恶意逃逸），并在 Job 上加 `JOB_OBJECT_UILIMIT_HANDLES | UILIMIT_DESKTOP | UILIMIT_GLOBALATOMS` 收窄 UI 句柄这一路；更强隔离等 MXC 成熟后再评估。
+9. **探测与拒绝**：`osSandboxAvailable("win32")` = `fusa-run.exe probe`（建令牌，在临时受保护目录试写、试读必须失败，在放行目录试写、试读必须成功），只缓存 true（与 Linux 一致）。失败一律拒绝启动 Worker，并给出原因（例如组策略禁止改 ACL、文件系统不是 NTFS/ReFS——FAT/exFAT U 盘没有 ACL）。
 
 #### 4.4.3 只读 Worker
 
-只读要求"除私有临时目录、运行时与缓存目录外全盘只读，凭据与敏感文件禁读"。写受限令牌只管写、不管读，codex 官方也写明 unelevated 不支持拒读路径，所以只读不能套 4.4.2。
+只读要求"除私有临时目录、运行时与缓存目录外全盘只读，凭据与敏感文件禁读"。4.4.2 的令牌只能按 ACL 管数据目录的读写，管不了全盘只读，codex 官方也写明 unelevated 不支持拒读路径，所以只读不能只靠 4.4.2。
 
 - **codex**：照现有设计"不包外层，用 codex 自己的 readOnly 沙箱"——codex 在 Windows 上自选 MXC / elevated / unelevated。要真机核实"用户从没配过 `[windows] sandbox` 时，app-server 的 readOnly 是否真的生效"，不生效就拒绝。
 - **其余 5 家（claude、agy、pi、dsh、cursor）**：第 2 步新增 `win32` 的 `wrapReadonly`，用微软官方 `@microsoft/mxc-sdk`（V1 API）。`getPlatformSupport()` 报告有 `processcontainer` 才可用；策略：`readonlyPaths` = 各本机固定盘根，`deniedPaths` = `readonly-policy.ts` 的凭据路径 + 启动时 `scanSecretGlobs` 扫出的 `.env` 等，`readwritePaths` = 私有临时目录 + 该厂商运行时目录（沿用 spec 的 `readonlySecrets`、`writableFileGlobs`，不新造名单），网络放行（Agent 要连模型 API）。MXC 文档提醒"重叠规则（只读里套拒读、只读里套可写）要在所选后端实测"——列入验证清单。
-- **不满足 MXC 时（用户拍板定案）**（尚未接入 MXC 的第 1 步、Windows 10、低于 24H2 的 Win11、Windows Server 或组策略禁用 MXC `processcontainer`）：**绝不硬性拒绝启动只读 Worker！** 自动回退为「4.4.2 写受限令牌（`--readonly-fallback`，仅挂 `FusaWorker` SID 使数据目录与各卷 `.fusa-wt` 受保护根连本 worktree 一并禁写）+ 各家现有工具层只读拦截规则（claude `default` 档 + `can_use_tool` 审批、agy `--mode plan` + 工具禁写规则、pi `--exclude-tools edit,write --no-mcp`、dsh/cursor ACP 只读补丁与权限拒绝）」，同时在日志与会话流（`driver.warning`）输出清晰的降级告警说明。接口上预留 `registerWin32MxcReadonlyProvider`，第 2 步检测到 `processcontainer` 可用时自动切到 MXC。
+- **不满足 MXC 时（用户拍板定案）**（尚未接入 MXC 的第 1 步、Windows 10、低于 24H2 的 Win11、Windows Server 或组策略禁用 MXC `processcontainer`）：**绝不硬性拒绝启动只读 Worker！** 自动回退为「4.4.2 受限令牌（`--readonly-fallback`，挂 `FusaWorker` SID 使数据目录与各卷 `.fusa-wt` 受保护根连本 worktree 一并禁写、数据目录按读边界禁读，另挂只放行读的 `FusaRead-<会话>` 读自己的启动目录）+ 各家现有工具层只读拦截规则（claude `default` 档 + `can_use_tool` 审批、agy `--mode plan` + 工具禁写规则、pi `--exclude-tools edit,write --no-mcp`、dsh/cursor ACP 只读补丁与权限拒绝）」，同时在日志与会话流（`driver.warning`）输出清晰的降级告警说明。接口上预留 `registerWin32MxcReadonlyProvider`，第 2 步检测到 `processcontainer` 可用时自动切到 MXC。
 - agy 的凭据存在 Windows 凭据管理器（官方文档），文件级拒读管不到；MXC 容器能否访问凭据管理器要实测，能访问就在文档写明"只读 agy 不隐藏凭据管理器里的令牌"。
 
 #### 4.4.4 `state\` 与其他 PM 的记忆目录
@@ -364,7 +365,7 @@ Windows 删不掉目录的三类原因：①还有进程的**当前目录**在�
 - 6.2 的按卷 worktree 根（三平台同一套 `protectedRoots` 语义）。
 - CI：新增 `windows` 工作流（第 8 节）。
 
-验收：Windows CI 全绿（真 git worktree、管道、进程树强杀、受限令牌拒写与放行、无 MXC 只读回退与降级告警、跨卷、长路径）；Mac 本机 `pnpm typecheck`、受影响测试、`src/shared/write-scope.test.ts` 通过（POSIX 行为不变）；Ubuntu CI 不回退。用户在 Windows 真机用 `pnpm start`（从源码）跑通一整轮："PM 派 Worker → Worker 在 `D:\项目` 的同卷 worktree 改代码、`pnpm install`、提 PR → 收工删 worktree"，6 家能装几家测几家，至少 claude + codex。只读 Worker：codex 走自带 `readOnly`；其余 5 家在无 MXC 环境下自动回退为「4.4.2 写受限令牌保底 + 工具层只读拦截」并输出清晰降级警告（第 2 步接入 `@microsoft/mxc-sdk` 后在 Win11 24H2+ 自动升级为 MXC 容器）。规模约 15–22 人日（设计估算，按一名熟悉项目的工程师）。
+验收：Windows CI 全绿（真 git worktree、管道、进程树强杀、受限令牌拒写与放行、无 MXC 只读回退与降级告警、跨卷、长路径）；Mac 本机 `pnpm typecheck`、受影响测试、`src/shared/write-scope.test.ts` 通过（POSIX 行为不变）；Ubuntu CI 不回退。用户在 Windows 真机用 `pnpm start`（从源码）跑通一整轮："PM 派 Worker → Worker 在 `D:\项目` 的同卷 worktree 改代码、`pnpm install`、提 PR → 收工删 worktree"，6 家能装几家测几家，至少 claude + codex。只读 Worker：codex 走自带 `readOnly`；其余 5 家在无 MXC 环境下自动回退为「4.4.2 受限令牌保底 + 工具层只读拦截」并输出清晰降级警告（第 2 步接入 `@microsoft/mxc-sdk` 后在 Win11 24H2+ 自动升级为 MXC 容器）。规模约 15–22 人日（设计估算，按一名熟悉项目的工程师）。
 
 第 1 步内部高度耦合（启动链、沙箱、路径都穿过同一条 spawn 链），建议一个 Worker 一个 PR 做完，不拆中间态。
 
@@ -408,7 +409,7 @@ CI 覆盖不了、必须真机的：WebView2 窗口与托盘、真实 6 家 CLI 
 > 用户拍板原文：**「按推荐推进，低版本 Win 只读退回工具层拦截不硬拒（推荐）」**
 
 1. **Windows 上 Worker 的沙箱**
-   - **已定**：普通 Worker 采用"写受限令牌（`WRITE_RESTRICTED`）+ 受保护根拒写 ACL + 本 worktree 放行 ACL"（免管理员，Win10 1809+ / Win11 通用）。只读 Worker：`codex` 继续用其自带 `readOnly` 沙箱；其余 5 家在 Win11 24H2+ 走微软官方 MXC（第 2 步接入 `@microsoft/mxc-sdk`），在尚未接 MXC 的第 1 步及低于 Win11 24H2 / Windows Server 等不支持 MXC `processcontainer` 的机器上**不硬性拒绝，自动回退为「4.4.2 写受限令牌 + 受保护根拒写 ACL 保底 + 各家现有工具层只读拦截规则」并输出清晰降级告警**。
+   - **已定**：普通 Worker 采用"受限令牌 + 受保护根拒写 ACL + 本 worktree 放行 ACL（2026-11-19 起去掉 `WRITE_RESTRICTED`，加数据目录读边界）"（免管理员，Win10 1809+ / Win11 通用）。只读 Worker：`codex` 继续用其自带 `readOnly` 沙箱；其余 5 家在 Win11 24H2+ 走微软官方 MXC（第 2 步接入 `@microsoft/mxc-sdk`），在尚未接 MXC 的第 1 步及低于 Win11 24H2 / Windows Server 等不支持 MXC `processcontainer` 的机器上**不硬性拒绝，自动回退为「4.4.2 受限令牌 + 受保护根拒写 ACL 保底 + 各家现有工具层只读拦截规则」并输出清晰降级告警**。
 2. **项目在 D 盘、数据目录在 C 盘时 worktree 放哪**
    - **已定**：默认建在项目同卷受保护根 `D:\.fusa-wt\<数据目录指纹8>\<项目>\<worker>`（先建空目录设 ACL 再 `git worktree add`，保住 `pnpm` 硬链接与 Dev Drive 加速；若该卷无权限建目录或不支持 ACL 则自动安全回退到数据目录下的 `worktrees/`）。`WriteScope` 统一扩展为 `protectedRoots: string[]`，macOS / Linux / Windows 三端一致。
 3. **WSL 路线去留与 Node 运行时**

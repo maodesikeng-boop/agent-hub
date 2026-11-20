@@ -604,18 +604,20 @@ export interface HubResult<C extends HubCommand> {
 }
 
 /**
- * 错误码：账本的四种（LedgerRequestError）加两种只有 agent 接口有的：
+ * 错误码：账本的四种（LedgerRequestError）加三种只有 agent 接口有的：
  * - unauthorized：没带令牌、令牌不对或已作废（401），不调账本；
- * - internal：守护进程自己出错（500），message 是错误原文。
+ * - internal：守护进程自己出错（500），message 是错误原文；
+ * - shutting_down：接口在关闭，在途的请求没调账本就结束了（503）。
  * 请求体不对（未知命令、缺参数、超长）是 invalid（400）。整个请求体超过 HUB_MAX_BODY_BYTES 也是 invalid、400
  * （W2 把 Fastify 的 FST_ERR_CTP_BODY_TOO_LARGE 改写成 { ok: false, code: "invalid" }），不用 413，hub 只认这张表里的状态。
  */
-export type HubErrorCode = LedgerErrorCode | "unauthorized" | "internal";
+export type HubErrorCode = LedgerErrorCode | "unauthorized" | "internal" | "shutting_down";
 
 export const HUB_ERROR_HTTP_STATUS: Readonly<Record<HubErrorCode, number>> = {
   ...LEDGER_ERROR_HTTP_STATUS,
   unauthorized: API_ERRORS.unauthorized.status,
   internal: API_ERRORS.internal.status,
+  shutting_down: API_ERRORS.shutting_down.status,
 };
 
 /** 应答体。message 是给 agent 看的一句中文，hub 原样打印。 */

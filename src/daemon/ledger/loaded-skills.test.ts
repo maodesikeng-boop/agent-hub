@@ -407,11 +407,12 @@ describe("和提问卡交付物、提醒卡交汇（#333、#336）", () => {
     return folder;
   }
 
-  it("上一代挂了带文件的提问卡（hub ask --file）又加载了技能：开场里技能在交接前、卡在实时提问卡一节，卡的交付物不动，技能算新一代的", () => {
+  it("上一代挂了带文件的提问卡（hub ask --file）又加载了技能：开场里技能在交接前、卡在实时提问卡一节，卡的交付物不动，技能算新一代的", async () => {
     const folder = withProject();
     writeFileSync(join(folder, "plan.md"), "方案");
     read(firstSession, skill("with-ask", "提问卡旁边的技能"));
-    ledger.hubCall(firstSession, "ask", { text: "方案好了，请验收", options: ["通过", "打回"], files: [{ label: "方案", path: join(folder, "plan.md") }] });
+    const files = [{ label: "方案", path: join(folder, "plan.md") }];
+    ledger.hubCall(firstSession, "ask", { text: "方案好了，请验收", options: ["通过", "打回"], files }, { sharedFiles: await ledger.shareHubFiles(firstSession, files) });
     const deliverables = db.all("SELECT * FROM router_item_deliverables");
     expect(deliverables).toHaveLength(1);
 

@@ -11,6 +11,7 @@ import {
   ENV_HUB_TOKEN,
   LedgerRequestError,
   buildReadonlyPolicy,
+  dataDirReadScope,
   isAgentVendor,
   vendorSpec,
   workerWriteScope,
@@ -25,7 +26,7 @@ import {
 import { launchFingerprint } from "../../shared/launch.ts";
 import { removeSessionLaunchDir, sessionLaunchDir } from "../../shared/paths.ts";
 import { VENDOR_DAEMONS } from "../../vendors/daemon-registry.ts";
-import { osSandboxAvailable } from "../driver/write-scope.ts";
+import { dataDirDenyList, osSandboxAvailable, toolLayerReadScope } from "../driver/write-scope.ts";
 import { buildCatalogSystemPrompt } from "../project-catalog/prompt.ts";
 import { buildRouterSystemPrompt } from "./prompt.ts";
 import type { RouterTurnPurpose } from "./single-turn.ts";
@@ -98,12 +99,19 @@ export function prepareRouterSandboxLaunch(
 
   const dispatch = (options.purpose ?? "dispatch") === "dispatch";
   const prompt = dispatch ? buildRouterSystemPrompt({ vendorAvailability: options.vendorAvailability }) : buildCatalogSystemPrompt();
+  const dir = sessionLaunchDir(options.launchDir, session.id);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const launchDir = realpathOr(dir);
+  // 读边界：总助只读调度，数据目录里只放行自己的启动目录和 state/router-home（cwd）
+  const dataDirScope = dataDirReadScope({ dataDir, launchDir, extraReadable: [routerHomeDir] });
   const readonlyPolicy = buildReadonlyPolicy({
     homeDir,
     stateDir,
     ...(options.protectedRoots && options.protectedRoots.length > 0
       ? { protectedRoots: [dataDir, ...options.protectedRoots] }
       : {}),
+    dataDirScope,
+    dataDirDenied: dataDirDenyList(toolLayerReadScope(dataDirScope, launchDir)),
   });
   const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
   const nativeReadonly = vendor !== null && vendorSpec(vendor).capabilities.readonly === "settings";
@@ -120,8 +128,6 @@ export function prepareRouterSandboxLaunch(
       : undefined;
 
   const settings = vendorFiles?.settings;
-  const dir = sessionLaunchDir(options.launchDir, session.id);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, prompt, { mode: 0o600 });
 
@@ -138,6 +144,7 @@ export function prepareRouterSandboxLaunch(
         dataDir,
         ...(options.protectedRoots && options.protectedRoots.length > 0 ? { protectedRoots: options.protectedRoots } : {}),
         cwd: routerHomeDir,
+        launchDir,
       });
 
   return {

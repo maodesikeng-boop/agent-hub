@@ -18,6 +18,7 @@ import {
   REVIEW_PRE_PUSH_HOOK,
   WORKER_BACKGROUND_HOLD_MAX_MS,
   buildReadonlyPolicy,
+  dataDirReadScope,
   isAgentVendor,
   resolveSessionCapabilities,
   reviewPushGuardEnv,
@@ -41,7 +42,7 @@ import type {
 } from "../shared/index.ts";
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
 import { launchFingerprint } from "../shared/launch.ts";
-import { osSandboxAvailable } from "./driver/write-scope.ts";
+import { dataDirDenyList, osSandboxAvailable, prepareOsSandboxForLaunch, toolLayerReadScope, type OsSandboxLaunchPrep } from "./driver/write-scope.ts";
 import type { CapabilityInventoryService } from "./pm-capabilities/inventory.ts";
 import { truncatePmMemoryForPrompt } from "./pm-memory.ts";
 import { projectWorktreesDir, sessionLaunchDir } from "../shared/paths.ts";
@@ -82,6 +83,8 @@ export interface LaunchPreparerOptions {
   getPmCapabilityPolicy?: (pmId: PmId) => PmCapabilityPolicy;
   /** 本机能力库存服务（daemon/pm-capabilities/inventory.ts）；只读缓存。 */
   capabilityInventory?: Pick<CapabilityInventoryService, "get">;
+  /** 起进程前备好 OS 沙箱（Windows 设 ACL），默认 driver/write-scope.ts 的 prepareOsSandboxForLaunch；测试可以换。 */
+  prepareOsSandbox?: (input: OsSandboxLaunchPrep) => Promise<void>;
 }
 
 function realpathOr(path: string): string {
@@ -112,10 +115,11 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       ? options.basePath()
       : (options.basePath ?? process.env.PATH ?? process.env.Path ?? "");
   const homeDir = realpathOr(options.homeDir ?? homedir());
+  const prepareOsSandbox = options.prepareOsSandbox ?? ((input: OsSandboxLaunchPrep) => prepareOsSandboxForLaunch(input));
   return async (session) => {
     const basePath = resolveBasePath();
     if (session.role === "assistant") {
-      return prepareRouterSandboxLaunch(session, {
+      const files = prepareRouterSandboxLaunch(session, {
         launchDir,
         dataDir,
         stateDir,
@@ -129,6 +133,8 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         vendorAvailability: options.vendorAvailability?.(),
         purpose: options.routerPurposeOf?.(session.id) ?? "dispatch",
       });
+      await prepareOsSandbox({ dataDir, stateDir, writeScope: files.writeScope ?? null, readonly: files.readonly });
+      return files;
     }
     const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());
     const rawCtx = getLaunchContext(session.id);
@@ -144,14 +150,21 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const prompt = buildLaunchPrompt(ctx, session.cwd, promptOptions);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
     const extraRoots = options.protectedRoots?.();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // 数据目录读边界（Worker 才包沙箱）：放行这次会话自己的启动目录和落在数据目录里的 cwd、addDirs；路径按真实路径比
+    const sessionReadable = { launchDir: realpathOr(dir), extraReadable: [session.cwd, ...session.addDirs].map(realpathOr) };
     // 只读不再让 agy、codex 去反读 claude 设置文件里的权限档：统一定义放 LaunchFiles.readonly（shared/readonly-policy.ts）
-    const readonlyPolicy = readonly
-      ? buildReadonlyPolicy({
-          homeDir,
-          stateDir,
-          ...(extraRoots && extraRoots.length > 0 ? { protectedRoots: [dataDir, ...extraRoots] } : {}),
-        })
-      : undefined;
+    const dataDirScope = readonly ? dataDirReadScope({ dataDir, ...sessionReadable }) : undefined;
+    const readonlyPolicy =
+      dataDirScope === undefined
+        ? undefined
+        : buildReadonlyPolicy({
+            homeDir,
+            stateDir,
+            ...(extraRoots && extraRoots.length > 0 ? { protectedRoots: [dataDir, ...extraRoots] } : {}),
+            dataDirScope,
+            dataDirDenied: dataDirDenyList(toolLayerReadScope(dataDirScope, sessionReadable.launchDir)),
+          });
     // 用设置文件落实只读的厂商（spec 的 capabilities.readonly 是 "settings"，如 claude 的自带沙箱，设计第 2.3 节）：设置文件换成只读翻译，
     // 进程不再包外层沙箱（macOS 沙箱不能嵌套）。别家的只读翻译在各自驱动层。
     const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
@@ -176,7 +189,6 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const settings = vendorFiles?.settings;
     // 只算翻出来的结果：改了这家看不到、用不上的项（比如 claude 用不到的 allow 清单）不重启
     const capabilityLaunch = capabilities !== undefined && vendor !== null ? VENDOR_DAEMONS[vendor].capabilityLaunch?.(capabilities) : undefined;
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
     const promptFile = join(dir, "prompt.md");
     writeFileSync(promptFile, prompt, { mode: 0o600 });
     let settingsFile: string | undefined;
@@ -204,7 +216,10 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
           dataDir,
           ...(extraRoots && extraRoots.length > 0 ? { protectedRoots: extraRoots } : {}),
           cwd: session.cwd,
+          addDirs: sessionReadable.extraReadable,
+          launchDir: sessionReadable.launchDir,
         });
+    await prepareOsSandbox({ dataDir, stateDir, writeScope, readonly: readonlyPolicy });
     return {
       promptFile,
       ...(settingsFile === undefined ? {} : { settingsFile }),

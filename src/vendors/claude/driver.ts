@@ -417,10 +417,11 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         secretPaths: [
           ...new Set([
             ...files.readonly.secretPaths.map(realOrSelf),
-            ...scanSecretGlobs([row.cwd, ...row.addDirs], files.readonly.secretGlobs),
+            ...(await scanSecretGlobs([row.cwd, ...row.addDirs], files.readonly.secretGlobs)),
           ]),
         ],
         secretGlobs: [...files.readonly.secretGlobs],
+        ...(files.readonly.dataDirScope ? { dataDirScope: files.readonly.dataDirScope } : {}),
       };
       const wrap = this.#readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input, this.#platform));
       const exePath = this.#resolveClaudePath();

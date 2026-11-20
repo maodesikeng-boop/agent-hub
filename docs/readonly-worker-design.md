@@ -219,13 +219,8 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 **默认禁读清单**（`READONLY_POLICY`，可调）：
 - 目录：`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker`、`~/.config/gh`、`~/.netrc`、`~/.git-credentials`、`~/.npmrc`、`~/.pypirc`、`~/.codex/auth.json`、`~/.gemini/oauth*`、`~/Library/Keychains`、agent-hub 自己的令牌文件（`state/` 里的 hub 令牌）。
 - 通配：`**/.env`、`**/.env.*`、`**/*.pem`、`**/*.key`、`**/id_rsa*`、`**/id_ed25519*`。
-- **不禁** `~/.agent-hub/state/hub.sqlite` 和日志（排查要读，这是这次改的初衷）。放开前已经查过库里有没有令牌（2026-11-07，Worker #132，见下面“令牌检查”）：**没有现行令牌**，只单独禁读 `state/ui-token` 这个文件。
-
-**令牌检查（hub.sqlite）**：
-- 会话令牌（`HUB_TOKEN`）：`agent-api/tokens.ts` 只放内存，进程环境变量里有，库里、文件里都没有。界面令牌：只在 `state/ui-token`（0600 文件），库里没有。
-- 用只读方式扫了真实库的全部 15 张表（14 张有文本列，共约 2.3 万行），找：界面令牌原文、`HUB_TOKEN=值`、`sk-`、`sk-ant-`、`ghp_`/`github_pat_`、`AKIA`、`xox`、私钥头、`Bearer 值`、`password/secret/token/api_key = 值`。除 `messages` 外 14 张表（含 `hub_calls`、`actions`、`session_steps`、`agent_sessions`）**0 命中**。
-- `messages` 只有工具记录（`kind=tool`，text/meta）命中：47 条是 Worker 起的**别的守护进程（测试用）打印的登录链接** `http://127.0.0.1:<端口>/auth?token=…`，不是现行 `ui-token`（原文 0 命中），那些进程早退出，令牌作废；另有几条是 Worker 写测试时的假密钥（`sk-a…`、`AKIA…`、`xoxb…`）和 `GH_TOKEN=$(gh auth token …)` 这种命令（取值的命令，不是值）。日志目录（108 个建工作区日志）、`launch/`（提示词和设置文件，令牌只在 env）、`personas/` 里没有令牌。
-- 结论：没有“有令牌的表”，不用单独禁读某张表（SQLite 是单个文件，OS 沙箱和各家规则也都没法按表禁读）。`READONLY_SECRET_STATE_FILES` 里放了 `ui-token`；以后要在库里存令牌，**先挪到 `state/` 下单独的文件再加进清单**，不要让只读 Worker 读到整库。`messages` 的工具记录是自由文本，agent 以后 `cat .env`、`env` 的输出会原样进去——这是“能读库”的固有代价，跟“能联网所以读到能外发”同一类，不承诺挡住。
+- 2026-11-19 起（读边界，`docs/write-scope.md`）**整个数据目录禁读**：`state/hub.sqlite`、日志、记忆、性格设定、备份都读不到，只放行 `worktrees/`、`uploads/`、`tools/`、`run/bin/` 和这次会话自己的启动目录。原先“放开读库和日志便于排查”的做法作废：普通 Worker 能读到 `state/ui-token` 就能借界面接口绕穿写隔离，只禁读个别文件挡不住新加的密钥文件。
+- 结论（保留作历史记录）：库里没有现行令牌，但数据目录整个禁读之后已经不靠这条结论；以后在库里存令牌也不会被 Worker 读到。
 - 环境变量：只读 Worker 的子进程不带 `HUB_TOKEN` 以外的敏感变量（claude 有 `credentials.envVars` 和 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`）。
 
 **各层挡什么**：
@@ -311,7 +306,7 @@ S1–S3 任何一条不过：claude 改 `writeGuard: "outer"`，跟 agy 用同�
 1. **只读 Worker 能联网**（WebSearch、curl、连接器读）。读到的东西能被外发，是已知的代价。
 2. **写的例外：允许每个会话一个私有临时目录**（TMPDIR）。
 3. **放开通用缓存目录**（`~/.cache`、`~/Library/Caches` 等）：外层沙箱里 uv、npx 这类 MCP 服务器能起；缓存里可执行的东西理论上能被“投毒”，接受。W3 的只读 profile 里加上，不再只放厂商自己的那几个子目录。
-4. **密钥清单用第 5 节的默认清单；`hub.sqlite` 和日志放开读**——放开前先查库里有没有令牌，有令牌的表单独禁读。已查（第 5 节“令牌检查”）：库里没有现行令牌，所以没有要单独禁读的表，只禁读 `state/ui-token` 文件。
+4. **密钥清单用第 5 节的默认清单；数据目录整个按读边界禁读**（2026-11-19 改，原先放开读 `hub.sqlite` 和日志的决定作废，见第 5 节）。
 5. **没有 OS 沙箱的机器上，派只读 agy 直接报错**（agy 没有原生只读 shell，没有外层沙箱命令行写挡不住），不是警告后照跑。W3 在派活（`hub worker start --vendor agy --readonly`）和驱动启动两处都要拦，报错说清楚原因。
 6. **claude 用自带沙箱还是外层沙箱**：先用自带（符合“优先厂商自带”，MCP 服务器不受影响，`~/.claude.json` 不用开写），前提是 7.3 的 S1–S3 通过；不过就改外层。
 7. **codex 非只读 Worker 用不了没标只读的 MCP 工具**（比如发 Slack）：另开一题，这次不做。

@@ -15,7 +15,7 @@
 **`--readonly` 在三个平台限了什么**（`docs/readonly-worker-design.md`、`docs/write-scope.md`）：哪都不能写，只有会话私有临时目录和几个厂商运行时、缓存目录能写；禁读 `~/.ssh`、`~/.config/gh` 这类凭据；**不限网络**。
 - macOS：claude 用自带沙箱，codex 用自带 readOnly，agy 外层包只读 seatbelt。
 - Linux：claude、codex 用自带沙箱，agy 外层包只读 bwrap（`--ro-bind / /`）。
-- Windows：codex 用自带 readOnly，其余 5 家 Win11 24H2+ 用 MXC 只读容器，低版本退回写受限令牌加工具层规则。
+- Windows：codex 用自带 readOnly，其余 5 家 Win11 24H2+ 用 MXC 只读容器，低版本退回受限令牌加工具层规则。
 
 ## 2. 三种办法比较
 

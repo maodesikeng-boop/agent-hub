@@ -117,7 +117,7 @@ export interface SelectedWorktreeRoot {
  * - If creating or ACL-protecting `<volumeRoot>/.fusa-wt/<fingerprint8>` fails (no permission on volume root, FAT/exFAT without ACLs),
  *   logs a clear warning and safely falls back to `defaultWorktreesDir`!
  */
-export function selectWorktreeRootForProject(input: {
+export async function selectWorktreeRootForProject(input: {
   projectFolder: string;
   dataDir: string;
   defaultWorktreesDir: string;
@@ -127,8 +127,8 @@ export function selectWorktreeRootForProject(input: {
   /** Test seam to simulate volume IDs or candidate root path on single-volume hosts. */
   volumeDevOf?: (realPath: string) => number | bigint;
   candidateVolumeRootOf?: (realProjectFolder: string) => string;
-  protectRoot?: (stateDir: string, candidateRoot: string) => void;
-}): SelectedWorktreeRoot {
+  protectRoot?: (stateDir: string, candidateRoot: string) => Promise<void> | void;
+}): Promise<SelectedWorktreeRoot> {
   const platform = input.platform ?? process.platform;
   if (isUncNetworkPath(input.projectFolder)) {
     throw new NetworkProjectFolderUnsupportedError(input.projectFolder);
@@ -172,9 +172,9 @@ export function selectWorktreeRootForProject(input: {
     rmSync(probeFile, { force: true });
 
     if (input.protectRoot) {
-      input.protectRoot(input.stateDir, candidate);
+      await input.protectRoot(input.stateDir, candidate);
     } else if (platform === "win32") {
-      ensureWin32ProtectedRootAcl(input.stateDir, candidate);
+      await ensureWin32ProtectedRootAcl(input.stateDir, candidate);
     }
 
     const realCandidate = realpathSync.native(candidate);

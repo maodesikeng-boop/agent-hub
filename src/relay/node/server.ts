@@ -9,9 +9,12 @@ import type { RawData, WebSocket } from "ws";
 import {
   RELAY_CHANNEL_HIGH_WATER_BYTES,
   RELAY_CONCURRENT_SOCKETS_PER_IP,
+  RELAY_IP_BLOCKED_MAX,
   RELAY_IP_LIMITER_MAX,
+  RELAY_IP_LIMITER_PRUNE_MS,
   RELAY_MAX_CONTROL_FRAME_BYTES,
   RELAY_MAX_DATA_FRAME_BYTES,
+  RELAY_RATE_WINDOW_MS,
   RELAY_REGISTER_PER_IP_PER_MINUTE,
   RELAY_SWEEP_MS,
   RELAY_UPGRADES_PER_IP_PER_MINUTE,
@@ -20,6 +23,7 @@ import { isDeviceId } from "../../shared/api.ts";
 import { parseAccountId, type AccountId } from "../../shared/mesh.ts";
 import { accountIdOf, verifyGithubToken } from "../auth.ts";
 import { createRelayAccountRoom, type RelayAccountRecord, type RelayAccountRoom, type RelayAccountStorage, type RelaySocket } from "../core.ts";
+import { clientKeyOf, createIpRateLimiter } from "../guards.ts";
 import { isRelayToken, parseRelayRegisterRequest, type RelayErrorCode } from "../protocol.ts";
 
 export interface NodeRelayOptions {
@@ -106,8 +110,9 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
   db.exec("CREATE TABLE IF NOT EXISTS accounts (account_id TEXT PRIMARY KEY, record TEXT NOT NULL)");
   let relayOrigin = options.publicOrigin === undefined ? "" : new URL(options.publicOrigin).origin;
   const rooms = new Map<AccountId, { room: RelayAccountRoom; sockets: Set<WebSocket> }>();
-  const registerHits = new LRUCache<string, { windowStart: number; count: number }>({ max: RELAY_IP_LIMITER_MAX });
-  const upgradeHits = new LRUCache<string, { windowStart: number; count: number }>({ max: RELAY_IP_LIMITER_MAX });
+  const limiterOptions = { windowMs: RELAY_RATE_WINDOW_MS, max: RELAY_IP_LIMITER_MAX, blockedMax: RELAY_IP_BLOCKED_MAX, pruneIntervalMs: RELAY_IP_LIMITER_PRUNE_MS };
+  const registerLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_REGISTER_PER_IP_PER_MINUTE });
+  const upgradeLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_UPGRADES_PER_IP_PER_MINUTE });
   const activeSocketsByIp = new LRUCache<string, number>({ max: RELAY_IP_LIMITER_MAX });
 
   const roomFor = (accountId: AccountId) => {
@@ -125,27 +130,11 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
     return entry.room;
   };
 
-  const allowRegister = (ip: string) => {
-    const t = now();
-    const hit = registerHits.get(ip);
-    if (hit === undefined || t - hit.windowStart >= 60_000) {
-      registerHits.set(ip, { windowStart: t, count: 1 });
-      return true;
-    }
-    hit.count++;
-    return hit.count <= RELAY_REGISTER_PER_IP_PER_MINUTE;
-  };
+  const allowRegister = (ip: string) => registerLimiter.allow(clientKeyOf(ip), now());
 
   const allowUpgrade = (ip: string) => {
     if ((activeSocketsByIp.get(ip) ?? 0) >= RELAY_CONCURRENT_SOCKETS_PER_IP) return false;
-    const t = now();
-    const hit = upgradeHits.get(ip);
-    if (hit === undefined || t - hit.windowStart >= 60_000) {
-      upgradeHits.set(ip, { windowStart: t, count: 1 });
-      return true;
-    }
-    hit.count++;
-    return hit.count <= RELAY_UPGRADES_PER_IP_PER_MINUTE;
+    return upgradeLimiter.allow(clientKeyOf(ip), now());
   };
 
   const trackIpSocket = (ip: string, socket: WebSocket) => {

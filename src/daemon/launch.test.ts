@@ -31,7 +31,8 @@ import { noProjectContext, projectContext, workerContext } from "./test-helpers.
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "agent-hub-prompt-"));
+  // 和守护进程一样传真实路径（macOS 的 /var 是 /private/var）：沙箱规则按真实路径比
+  dir = realpathSync(mkdtempSync(join(tmpdir(), "agent-hub-prompt-")));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -94,7 +95,7 @@ describe("prepareLaunch（M2、M3）", () => {
       [8, noProjectContext()],
     ]);
     issued = [];
-    launchDir = join(dir, "launch");
+    launchDir = join(dir, "state", "launch");
     worktreesDir = join(dir, "worktrees");
   });
 
@@ -273,7 +274,7 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(files.env).toMatchObject({ ...WORKER_ENV, [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: `/agent-hub/run/bin${delimiter}/usr/bin:/bin` });
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
     // 可写范围：数据目录里只有自己的 worktree
-    expect(files.writeScope).toEqual({ dataDir: dir, protectedRoots: [dir], writableDirs: [worktree] });
+    expect(files.writeScope).toMatchObject({ dataDir: dir, protectedRoots: [dir], writableDirs: [worktree] });
     // 有后台命令时最多等多久（到点驱动层关进程、账本照常汇报）
     expect(files.backgroundHoldMaxMs).toBe(WORKER_BACKGROUND_HOLD_MAX_MS);
   });
@@ -281,7 +282,7 @@ describe("prepareLaunch（M2、M3）", () => {
   it("在主文件夹干活的 Worker：数据目录整个不能写，主文件夹在数据目录外不受影响", async () => {
     const main = "/Users/u/code/app";
     contexts.set(9, workerContext());
-    expect((await make()(row(9, main, "worker"))).writeScope).toEqual({
+    expect((await make()(row(9, main, "worker"))).writeScope).toMatchObject({
       dataDir: dir,
       protectedRoots: [dir],
       writableDirs: [],
@@ -334,7 +335,8 @@ describe("prepareLaunch（M2、M3）", () => {
     const normal = await prepare(worker);
     contexts.set(9, workerContext({ readonly: true }));
     const readonly = await prepare(worker);
-    const policy = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: join(dir, "state") });
+    const policy = readonly.readonly!;
+    expect(policy).toMatchObject(buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: join(dir, "state") }));
     const settings = JSON.parse(readFileSync(readonly.settingsFile!, "utf8"));
     expect(settings).toEqual(
       buildSessionSettings({ role: "worker", readonly: { policy, denyWrite: [realpathSync(wt), realpathSync(extra), join(dir, "not-created-yet")] }, hubSock, stateDir: join(dir, "state"), osSandboxed: true }),
@@ -344,9 +346,15 @@ describe("prepareLaunch（M2、M3）", () => {
       expect(settings.sandbox).toMatchObject({ enabled: false });
     } else {
       expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, enableWeakerNetworkIsolation: true });
+      // 数据目录里启动时还没有的已知敏感项（备份、遗留的 run/tunnel）也进了 claude 的禁读：运行期才建的照样读不到
+      for (const known of [join(dir, "backups"), join(dir, "run", "tunnel")]) {
+        expect(existsSync(known)).toBe(false);
+        expect(settings.sandbox.filesystem.denyRead).toContain(known);
+        expect(settings.permissions.deny.filter((rule: string) => rule.startsWith("Read(") && rule.includes(known))).not.toEqual([]);
+      }
     }
     expect(readonly.writeScope).toBeUndefined();
-    expect(normal.writeScope).toEqual({ dataDir: dir, protectedRoots: [dir], writableDirs: [wt] });
+    expect(normal.writeScope).toMatchObject({ dataDir: dir, protectedRoots: [dir], writableDirs: [wt] });
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
   });
 
@@ -355,7 +363,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const files = await make()({ ...row(9, dir, "worker"), vendor: "agy" });
     expect(files.settingsFile).toBeUndefined();
     expect(existsSync(join(launchDir, "9", "settings.json"))).toBe(false);
-    expect(files.writeScope).toEqual({ dataDir: dir, protectedRoots: [dir], writableDirs: [] });
+    expect(files.writeScope).toMatchObject({ dataDir: dir, protectedRoots: [dir], writableDirs: [] });
     expect(files.readonly).toBeDefined();
   });
 
@@ -369,17 +377,42 @@ describe("prepareLaunch（M2、M3）", () => {
     }
   });
 
-  it("只读 Worker：LaunchFiles.readonly 是统一策略（密钥清单按主目录和数据目录展开）；普通 Worker、项目经理没有", async () => {
+  it("只读 Worker：LaunchFiles.readonly 是统一策略（密钥清单按主目录展开，数据目录按读边界禁读）；普通 Worker、项目经理没有", async () => {
     const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
     contexts.set(9, workerContext({ readonly: true }));
     const readonly = await make2()(row(9, dir, "worker"));
-    expect(readonly.readonly).toEqual(buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: join(dir, "state") }));
+    expect(readonly.readonly).toMatchObject(buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: join(dir, "state") }));
     expect(readonly.readonly!.secretPaths).toContain("/Users/u/.ssh");
-    expect(readonly.readonly!.secretPaths).toContain(join(dir, "state", "ui-token"));
+    expect(readonly.readonly!.dataDirScope?.dataDir).toBe(dir);
     contexts.set(9, workerContext());
     expect((await make2()(row(9, dir, "worker"))).readonly).toBeUndefined();
     contexts.set(1, projectContext());
     expect((await make2()(row(1))).readonly).toBeUndefined();
+  });
+
+  it("数据目录读边界：普通 Worker 的 writeScope.readScope、只读 Worker 的 readonly.dataDirScope 都放行这次会话自己的启动目录；工具层禁读清单列出数据目录里别的顶层项、run/admin.sock 和遗留的 run/tunnel", async () => {
+    const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
+    for (const name of ["state", "backups", "pm-home", "pm-notes", "sent-files", "uploads", "tools"]) mkdirSync(join(dir, name), { recursive: true });
+    mkdirSync(join(dir, "run", "bin"), { recursive: true });
+    writeFileSync(join(dir, "run", "admin.sock"), "");
+    writeFileSync(join(dir, "run", "hub.sock"), "");
+    const wt = join(worktreesDir, "1", "9");
+    mkdirSync(wt, { recursive: true });
+    const ownLaunch = join(launchDir, "9");
+    contexts.set(9, workerContext());
+    const normal = await make2()({ ...row(9, wt, "worker"), vendor: "agy" });
+    expect(normal.writeScope?.readScope).toEqual({
+      dataDir: dir,
+      readable: [join(dir, "worktrees"), join(dir, "uploads"), join(dir, "tools"), join(dir, "run", "bin"), ownLaunch],
+      connectable: [join(dir, "run", "hub.sock")],
+    });
+    contexts.set(9, workerContext({ readonly: true }));
+    const readonly = await make2()({ ...row(9, wt, "worker"), vendor: "agy" });
+    expect(readonly.readonly?.dataDirScope?.readable).toContain(ownLaunch);
+    expect([...(readonly.readonly?.dataDirDenied ?? [])].sort()).toEqual(
+      [join(dir, "backups"), join(dir, "pm-home"), join(dir, "pm-notes"), join(dir, "sent-files"), join(dir, "state"), join(dir, "run", "admin.sock"), join(dir, "run", "tunnel")].sort(),
+    );
+    expect(readonly.readonly?.secretPaths.some((p) => p.startsWith(`${dir}/`))).toBe(false);
   });
 
   it("只读 Worker：策略变了 fingerprint 跟着变（驱动层下一条消息前重启）；同样的策略 fingerprint 不变", () => {
