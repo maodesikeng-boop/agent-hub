@@ -61,7 +61,7 @@ describe("parseLatestRelease", () => {
     });
   });
 
-  it("rejects malformed JSON, missing fields, non-https links, too many assets, and oversized bodies", () => {
+  it("rejects malformed JSON, missing fields, non-https links, and too many assets", () => {
     expect(parseLatestRelease("{")).toBeNull();
     expect(parseLatestRelease(JSON.stringify({ tag_name: "v0.3.0" }))).toBeNull();
     expect(parseLatestRelease(JSON.stringify(githubRelease({ html_url: "javascript:alert(1)" })))).toBeNull();
@@ -69,7 +69,6 @@ describe("parseLatestRelease", () => {
     expect(parseLatestRelease(JSON.stringify(evil))).toBeNull();
     const many = githubRelease({ assets: Array.from({ length: 101 }, (_, i) => ({ name: `a${i}`, browser_download_url: `${DOWNLOAD}/a${i}` })) });
     expect(parseLatestRelease(JSON.stringify(many))).toBeNull();
-    expect(parseLatestRelease(JSON.stringify(githubRelease({ body: "x".repeat(UPDATE_RELEASE_MAX_BYTES) })))).toBeNull();
   });
 });
 
@@ -140,6 +139,39 @@ describe("createUpdateChecker", () => {
     expect((await createUpdateChecker(options(hanging, clock, { timeoutMs: 10 })).get()).status).toBe("unavailable");
     const huge = vi.fn<typeof fetch>(async () => new Response("{}", { headers: { "content-length": String(UPDATE_RELEASE_MAX_BYTES + 1) } }));
     expect((await createUpdateChecker(options(huge, clock)).get()).status).toBe("unavailable");
+  });
+
+  it("cancels a chunked response without Content-Length as soon as it passes the byte cap", async () => {
+    const block = new Uint8Array(64 * 1024).fill(0x20);
+    let sent = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= 2 * UPDATE_RELEASE_MAX_BYTES) return controller.close();
+        sent += block.byteLength;
+        controller.enqueue(block);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 });
+    const chunked = vi.fn<typeof fetch>(async () => new Response(body));
+    expect((await createUpdateChecker(options(chunked, { t: 0 })).get()).status).toBe("unavailable");
+    expect(cancelled).toBe(true);
+    expect(sent).toBe(UPDATE_RELEASE_MAX_BYTES + block.byteLength);
+  });
+
+  it("accepts a chunked release body under the byte cap", async () => {
+    const json = new TextEncoder().encode(JSON.stringify(githubRelease()));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(json.subarray(0, 10));
+        controller.enqueue(json.subarray(10));
+        controller.close();
+      },
+    });
+    const chunked = vi.fn<typeof fetch>(async () => new Response(body));
+    expect((await createUpdateChecker(options(chunked, { t: 0 })).get()).status).toBe("update_available");
   });
 
   it("shares one request between concurrent callers and lets a manual check bypass the cache", async () => {

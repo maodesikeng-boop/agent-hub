@@ -78,7 +78,6 @@ export function updateCheckerOptionsFor(input: { packageRoot: string; env: Recor
 }
 
 export function parseLatestRelease(text: string): LatestRelease | null {
-  if (text.length > UPDATE_RELEASE_MAX_BYTES) return null;
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -103,11 +102,30 @@ async function fetchLatestRelease(options: UpdateCheckerOptions, signal: AbortSi
     headers: { accept: "application/vnd.github+json", "user-agent": `${PRODUCT_NAME}/${options.currentVersion}` },
     signal,
   });
-  if (!res.ok || Number(res.headers.get("content-length") ?? 0) > UPDATE_RELEASE_MAX_BYTES) {
+  if (!res.ok || res.body === null || Number(res.headers.get("content-length") ?? 0) > UPDATE_RELEASE_MAX_BYTES) {
     await res.body?.cancel();
     return null;
   }
-  return parseLatestRelease(await res.text());
+  const text = await readCapped(res.body, UPDATE_RELEASE_MAX_BYTES);
+  return text === null ? null : parseLatestRelease(text);
+}
+
+// Content-Length is optional and describes compressed bytes, so count decoded bytes and cancel the stream once over the cap.
+async function readCapped(body: ReadableStream<Uint8Array>, maxBytes: number): Promise<string | null> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function runCheck(options: UpdateCheckerOptions, lifetime: AbortSignal, now: () => number): Promise<UpdateStatus> {
