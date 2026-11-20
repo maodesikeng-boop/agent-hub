@@ -1,85 +1,79 @@
-# 写方案和照方案实现
+# Plan and code-skeleton standard
 
-任务说明让你写方案时，照本文做。任务说明只给本题的用户原话、目标、范围、不做和已知事实，其余由本文规定。实现步骤接手方案时，看「实现」一节。
+Follow this standard whenever a task asks for a design plan. A planning step delivers two artifacts on the same branch: a design document in `docs/<topic>-design.md` and a compiling TypeScript code skeleton in the real target files. Subsequent implementation steps fill in function bodies on that exact skeleton.
 
-方案步骤交两样东西，提交在同一个分支上：方案文档，和写在真实文件里的代码骨架。骨架用代码写出程序结构，函数体留给实现步骤。
+## Design document
 
-## 方案文档
+Write `docs/<topic>-design.md` in plain English following `.agents/skills/technical-writing/SKILL.md` and `.agents/skills/unslop/SKILL.md`. Keep every section below in order; write `None` when a section does not apply.
 
-文件放 `docs/<主题>-design.md`，用大白话写，照 `.agents/skills/technical-writing/SKILL.md` 和 `.agents/skills/unslop/SKILL.md`。文档分两部分：最前面一节给用户看，后面几节给 Worker 和审查看。没内容的节写“无”，不删节。
+### For the user
 
-### 给用户看
+Keep the opening section focused on two items only:
 
-第一节标题写「给用户看」，只放两样。交给用户的只有这一节：
+- **Files to review.** Link each deliverable file with a one-sentence description of what it covers.
+- **Decisions needed.** List each open product or scope trade-off with concrete options and your recommendation, or write `None`.
 
-- **要用户验收的文件。** 每个给链接或路径，加一句这份文件是什么。
-- **要用户拍板的事。** 每件写出选项和你的推荐。没有就写“无”。
+### For Workers and reviewers
 
-### 给 Worker 和审查看
+Include all eight sections below in order for downstream Workers and reviewers:
 
-下面几节照顺序写，都必填。它们给实现步骤的 Worker 和审查用，不推给用户，用户直接问到时再给。
+1. **User goal.** Quote the user's original request first, then state the intended outcome in one or two sentences.
+2. **Current state.** Label each finding `[Measured]` or `[Inferred]` with `path:line` references. For measured claims, state how you ran the check.
+3. **Approach comparison.** Compare at least two candidate designs in a table, starting from libraries already listed in `AGENTS.md` and standard industry approaches, then state your recommendation and why.
+4. **Performance and bounds.** When touching caches, snapshots, or collections that grow over time, address all four rules in `AGENTS.md` ("Caches and state bounds"). List new `src/shared/limits.ts` constants in a table with values and one-month sizing math, or write `None` and explain why.
+5. **Cross-vendor and cross-platform unification.** Show how one shared definition covers every registered vendor in `src/shared/vendors.ts` and all three platforms (`macOS`, `Windows`, and `Linux` via `src/daemon/platform/index.ts`), and name the single file a future vendor must implement.
+6. **Deletions.** List superseded code paths, docs, and prompt text to delete in the same PR so old and new logic never coexist.
+7. **Skeleton files.** List each created or modified file with one sentence on its responsibility. Do not paste function signatures that already live in the code skeleton.
+8. **Verification plan.** Specify how implementation will prove the change works on real artifacts: exact test files, `pnpm verify`, screenshots, or command outputs. "Tests pass" alone is not enough.
 
-1. **用户目标。** 把任务说明最前面的用户原话逐字放在最前，它的优先级最高。下面再用一两句写你理解的目标。
-2. **现状。** 每条结论标“实测”或“推断”，附 `路径:行号`。实测要写怎么测的。
-3. **做法比较。** 至少列 2 种做法，用表格比利弊，最后给推荐和理由。候选做法先从 `AGENTS.md`「我们用的组件」和行业成熟方案里找。
-4. **性能。** 涉及缓存、状态快照或会随时间变多的列表时，逐条回答 `AGENTS.md`「规矩」里那 4 件事。上限写成表：准备加进 `src/shared/limits.ts` 的常量名、值、按什么数据量算出来的。不涉及就写“无”和原因。
-5. **统一。** 说明哪一处定义同时覆盖所有已接入厂商和 macOS、Windows、Linux 三个平台。厂商以 `src/shared/vendors.ts` 为准，不写死家数。平台差异看 `src/daemon/platform/index.ts`。写清以后加一家新厂商只改哪个文件。
-6. **删掉什么。** 列出这次被取代、要在同一个 PR 删掉的旧代码、旧说法和旧提示词，附路径。新旧两套不并存。
-7. **骨架文件。** 列出骨架改动的文件路径，每个一句话说它负责什么。签名不在文档里再贴一遍。
-8. **验收方法。** 写清在真东西上怎么证明做好了，以及证据的形式：测试名、截图路径或实测命令和输出。只写“测试通过”不算。
+## Code skeleton
 
-## 代码骨架
+Write the skeleton directly in the target production and test files rather than a scratch directory:
 
-骨架写在功能最终要放的文件里，不另建草稿目录。只写下面这些，不写函数体。
+- **Data shapes and migrations.** Define TypeScript interfaces and discriminated unions. For schema changes, add the next numbered SQL file in `migrations/`.
+- **Module boundaries.** Create target modules and export their public surface. Skip unexported private helpers.
+- **Function signatures.** Write full parameter and return types without `any`. Use a single-line body: `throw new Error("Not implemented");`.
+- **Contracts.** Document caller-observable preconditions and postconditions on exported functions with concise `/** */` doc comments. State module-wide invariants once at the top of the file. Do not prescribe internal data structures or step-by-step control flow. Public API contract comments remain after implementation per `.agents/skills/no-comments/references/comment-sicko.md`.
+- **Test skeleton.** Add `it.todo("<observable behavior>")` cases in the matching `*.test.ts` file so every contract clause maps to at least one test.
+- **Existing callers.** When changing an existing signature, update call sites so `pnpm typecheck` passes without altering runtime behavior yet.
 
-- **数据形状。** 写类型定义。要建表或改表的，在 `migrations/` 里按编号加一个迁移文件，写好表结构。
-- **模块边界。** 新文件建出来，写好它导出什么。不导出的内部辅助函数不用写。
-- **函数签名。** 参数和返回类型写全，不用 `any`。函数体只有一行：`throw new Error("未实现");`。
-- **契约。** 在导出函数上用简短的 `/** */` 注释写前置条件和后置条件，只写调用方能观察到的行为。跨模块的不变量在模块顶部写一次，不在每个函数上重复。不写实现步骤，不写内部用什么数据结构。契约过细会让实现变差，拿不准的那条就不写。
-- **测试骨架。** 在对应的 `*.test.ts` 里用 `it.todo("<调用方能观察到的行为>")` 列出要测的行为。每条契约至少对应一条 `it.todo`。
-- **改已有签名。** 要改已有函数的签名，就在骨架里改，并把调用方改到能编译。这一步不改运行时行为。
+Run `pnpm typecheck` before committing the skeleton; it must exit 0.
 
-契约注释是规格，不算 `.agents/skills/no-comments/` 要删的注释，实现后保留。
-
-提交前跑 `pnpm typecheck`，必须通过。
-
-下面是一个虚构的小功能的骨架，演示写到什么程度：
+Example skeleton:
 
 ```ts
 // src/shared/coupon.ts
-// 不变量：金额一律用整数“分”，不出现小数。
+// Invariant: all monetary amounts are integer cents.
 
 /**
- * 前置：price 是非负整数。
- * 后置：返回打折后的价格，向下取整到分。percent 为 0 时原样返回 price。
- * percent 不在 0 到 100 之间（含两端）时抛 RangeError。
+ * Precondition: price is a non-negative integer.
+ * Postcondition: returns the discounted price floored to integer cents, or price unchanged when percent is 0.
+ * Throws RangeError when percent is outside 0..100 inclusive.
  */
 export function applyCoupon(price: number, percent: number): number {
-  throw new Error("未实现");
+	throw new Error("Not implemented");
 }
 
 // src/shared/coupon.test.ts
 import { describe, it } from "vitest";
 
 describe("applyCoupon", () => {
-  it.todo("percent 为 0 时返回原价");
-  it.todo("折后价有零头时向下取整到分");
-  it.todo("percent 超出 0 到 100 时抛 RangeError");
+	it.todo("returns the original price when percent is 0");
+	it.todo("floors fractional cent discounts");
+	it.todo("throws RangeError when percent is outside 0..100");
 });
 ```
 
-## 实现
+## Implementation
 
-实现步骤接手方案步骤提交的骨架，填函数体。
+Implementation steps build directly on the committed skeleton:
 
-1. 读方案文档和骨架文件，骨架是这次实现的规格。
-2. 把 `it.todo` 改成真断言，跑一次，确认这些测试是红的。
-3. 填函数体，直到测试变绿。不为了变绿去改测试或绕开契约。
-4. 要改骨架里的签名、类型或契约时，可以改，但在汇报的“偏离”里写明改了什么和原因。
-5. 不另起一套与骨架平行的新结构，比如新建一个同职责的文件或换一组函数名。
+1. Read the design document and skeleton files; treat the skeleton as the specification.
+2. Convert `it.todo` entries into real assertions and confirm they fail before writing production logic.
+3. Fill in function bodies until the tests pass without weakening assertions or bypassing contracts.
+4. If implementation reveals that a signature, type, or contract must change, update it and explain what changed and why in the `偏离` field of your Worker report.
+5. Do not create parallel modules or duplicate function names alongside the skeleton.
 
-骨架留在仓库里。以后在这块加功能，先改骨架和契约，再照本节实现。
+## Verification
 
-## 验收
-
-核对实现与骨架的签名和契约一致，每条契约都有测试覆盖，并按方案文档的「验收方法」拿到证据。
+Confirm that the finished code matches the skeleton's public types and contracts, every contract clause has a passing test, and all evidence listed under "Verification plan" is captured.
