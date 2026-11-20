@@ -18,6 +18,7 @@ import {
   buildOpenCodeConfigOverride,
   classifyOpenCodeTurnError,
   createOpenCodeDriver,
+  matchesOpenCodeAcpCommand,
   openCodeMcpAction,
   resolveOpenCodeModelValue,
 } from "./driver.ts";
@@ -75,6 +76,19 @@ describe("opencode config override", () => {
     expect(buildOpenCodeConfigOverride(base)).toEqual({ permissions: [{ action: "question", resource: "*", effect: "deny" }] });
   });
 
+  it("routes every non-allowlisted tool, including Code Mode MCP calls, through ACP approval and blocks MCP servers for read-only Workers", () => {
+    const override = buildOpenCodeConfigOverride({ ...base, readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } } });
+    const permissions = override.permissions as { action: string; resource: string; effect: string }[];
+    const effectOf = (action: string) => permissions.findLast((r) => r.action === action || r.action === "*")?.effect;
+    expect(effectOf("execute")).toBe("ask");
+    expect(effectOf("team_post_message")).toBe("ask");
+    expect(effectOf("edit")).toBe("deny");
+    expect(effectOf("question")).toBe("deny");
+    for (const action of ["read", "grep", "shell", "webfetch"]) expect(effectOf(action), action).toBe("allow");
+    expect(override.policies).toEqual([{ action: "mcp.use", resource: "*", effect: "deny" }]);
+    expect(buildOpenCodeConfigOverride(base).policies).toBeUndefined();
+  });
+
   it("denies edits for read-only Workers, plus per-PM denied MCP servers and skills", () => {
     const override = buildOpenCodeConfigOverride({
       ...base,
@@ -85,15 +99,14 @@ describe("opencode config override", () => {
         allow: { skills: [], mcp: [] },
       },
     });
-    expect(override).toEqual({
-      permissions: [
-        { action: "question", resource: "*", effect: "deny" },
-        { action: "edit", resource: "*", effect: "deny" },
-        { action: "my_server_v2_*", resource: "*", effect: "deny" },
-        { action: "skill", resource: "deploy", effect: "deny" },
-      ],
-      skills: ["/launch/skills"],
-    });
+    const permissions = override.permissions as unknown[];
+    expect(permissions.slice(-4)).toEqual([
+      { action: "edit", resource: "*", effect: "deny" },
+      { action: "question", resource: "*", effect: "deny" },
+      { action: "my_server_v2_*", resource: "*", effect: "deny" },
+      { action: "skill", resource: "deploy", effect: "deny" },
+    ]);
+    expect(override.skills).toEqual(["/launch/skills"]);
     expect(openCodeMcpAction("ok-name_1")).toBe("ok-name_1_*");
   });
 });
@@ -103,8 +116,22 @@ describe("opencode model and error mapping", () => {
     expect(resolveOpenCodeModelValue("opencode/claude-sonnet-5-5", MODEL_OPTION)).toBe("opencode/claude-sonnet-5-5");
     expect(resolveOpenCodeModelValue("OPENCODE/Gemini-3.8-Flash", MODEL_OPTION)).toBe("opencode/gemini-3.8-flash");
     expect(resolveOpenCodeModelValue("claude-opus-5-5", MODEL_OPTION)).toBe("anthropic/claude-opus-5-5");
-    expect(resolveOpenCodeModelValue("custom/brand-new", MODEL_OPTION)).toBe("custom/brand-new");
     expect(resolveOpenCodeModelValue("", MODEL_OPTION)).toBeNull();
+  });
+
+  it("keeps the session default instead of sending a model OpenCode does not list (-32602 would fail the handshake)", () => {
+    expect(resolveOpenCodeModelValue("custom/brand-new", MODEL_OPTION)).toBeNull();
+    expect(resolveOpenCodeModelValue("brand-new", MODEL_OPTION)).toBeNull();
+    expect(resolveOpenCodeModelValue("custom/brand-new", null)).toBe("custom/brand-new");
+    expect(opencodeSpec.models.routerDefault.model).toBe("opencode/big-pickle");
+  });
+
+  it("matches only opencode acp processes when cleaning up stale PIDs", () => {
+    const exe = "/h/.opencode/bin/opencode";
+    expect(matchesOpenCodeAcpCommand(`${exe} acp`, null, exe)).toBe(true);
+    expect(matchesOpenCodeAcpCommand("/opt/homebrew/bin/opencode acp --log-level warn", null, exe)).toBe(true);
+    expect(matchesOpenCodeAcpCommand(`${exe}`, null, exe)).toBe(false);
+    expect(matchesOpenCodeAcpCommand("/usr/bin/vim notes-about-opencode-acp.md", null, exe)).toBe(false);
   });
 
   it("keeps ACP auth_required and classifies provider rate limits as quota", () => {
@@ -272,6 +299,17 @@ child.on("exit", (code) => process.exit(code ?? 0));
     ]);
   });
 
+  it("keeps the session default model when the requested one is not offered (no Zen key) instead of failing the handshake", async () => {
+    const freeOnly: SessionConfigOption = { ...MODEL_OPTION, currentValue: "opencode/big-pickle", options: [{ value: "opencode/big-pickle", name: "opencode/Big Pickle" }] };
+    const h = harness({
+      model: "opencode/gemini-3.8-flash",
+      script: { omitModes: true, rejectUnlistedConfigValues: true, initialConfigOptions: [freeOnly], turns: [{ textChunks: ["ok"] }] },
+    });
+    await h.driver.send(1, { messageIds: [1], source: "user", text: "hi" });
+    expect((await h.turnEnded()).ok).toBe(true);
+    expect(h.logs().filter((e) => e.event === "session/set_config_option")).toEqual([]);
+  });
+
   it("read-only Workers switch to the plan agent and get OpenCode's data dirs writable inside the sandbox", async () => {
     const prevHome = process.env.HOME;
     process.env.HOME = join(dir, "ro-home");
@@ -283,19 +321,28 @@ child.on("exit", (code) => process.exit(code ?? 0));
           captured = input;
           return { ...base, osSandboxed: true };
         },
+        // OpenCode 2.3.2 session/new: no modes field, the agent is the "mode" config option.
         script: {
-          modes: { currentModeId: "build", availableModes: [{ id: "build", name: "Build" }, { id: "plan", name: "Plan" }] },
+          omitModes: true,
+          rejectUnlistedConfigValues: true,
+          initialConfigOptions: [
+            MODEL_OPTION,
+            { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "build", options: [{ value: "build", name: "build" }, { value: "plan", name: "plan" }] },
+          ],
           turns: [{ textChunks: ["read only"] }],
         },
       });
       await h.driver.send(1, { messageIds: [1], source: "user", text: "look" });
       expect((await h.turnEnded()).ok).toBe(true);
-      expect(h.logs().filter((e) => e.event === "session/set_mode").map((e) => e.modeId)).toEqual(["plan"]);
-      const permissions = (JSON.parse(h.launch().config) as { permissions: Array<{ action: string }> }).permissions.map((p) => p.action);
-      expect(permissions).toEqual(["question", "edit"]);
+      expect(h.logs().filter((e) => e.event === "session/set_mode")).toEqual([]);
+      expect(h.logs().filter((e) => e.event === "session/set_config_option")).toEqual([expect.objectContaining({ configId: "mode", value: "plan" })]);
+      const config = JSON.parse(h.launch().config) as { permissions: Array<{ action: string; effect: string }>; policies: unknown };
+      expect(config.permissions.slice(-2)).toEqual([{ action: "edit", resource: "*", effect: "deny" }, { action: "question", resource: "*", effect: "deny" }]);
+      expect(config.policies).toEqual([{ action: "mcp.use", resource: "*", effect: "deny" }]);
       const home = realpathSync(join(dir, "ro-home"));
       expect(captured!.writableDirs).toEqual(expect.arrayContaining([join(home, ".local", "share", "opencode"), join(home, ".local", "state", "opencode")]));
       expect(captured!.readableFiles).toContain(join(home, ".local", "share", "opencode", "opencode.db"));
+      expect(captured!.readableFiles).not.toContain(join(home, ".local", "share", "opencode", "mcp-auth.json"));
     } finally {
       if (prevHome === undefined) delete process.env.HOME;
       else process.env.HOME = prevHome;

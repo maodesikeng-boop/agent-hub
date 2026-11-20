@@ -53,7 +53,9 @@ export default defineVendor({
     ],
   },
   models: {
+    // big-pickle is OpenCode's own default and is free without an OpenCode Zen key.
     bundled: [
+      { id: "opencode/big-pickle", label: "Big Pickle" },
       { id: "opencode/claude-opus-5-5", label: "Claude Opus 5.5" },
       { id: "opencode/claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
       { id: "opencode/gpt-6.2-sol", label: "GPT-6.2 Sol" },
@@ -63,7 +65,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 anthropic/claude-sonnet-5-5",
     efforts: EFFORTS,
-    routerDefault: { model: "opencode/gemini-3.8-flash", effort: "default" },
+    routerDefault: { model: "opencode/big-pickle", effort: "default" },
     shortName: shortOpenCodeModelName,
   },
   composer: {

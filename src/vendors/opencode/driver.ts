@@ -18,7 +18,23 @@ const LAUNCH_ARGS = ["acp"] as const;
 // The plan agent denies edits natively, on top of the outer OS sandbox.
 const READONLY_MODE_ID = "plan";
 
-const OWN_SECRET_FILES = ["auth.json", "opencode.db", "opencode.db-wal", "mcp-auth.json"] as const;
+// mcp-auth.json stays hidden: read-only Workers never connect MCP servers.
+const OWN_SECRET_FILES = ["auth.json", "opencode.db", "opencode.db-wal"] as const;
+
+// Built-in tools a read-only Worker runs without a round trip; the outer OS sandbox blocks their writes.
+const READONLY_ALLOWED_ACTIONS = [
+  "read",
+  "glob",
+  "grep",
+  "list",
+  "shell",
+  "external_directory",
+  "webfetch",
+  "websearch",
+  "todowrite",
+  "skill",
+  "subagent",
+] as const;
 
 interface OpenCodePermissionRule {
   action: string;
@@ -26,22 +42,27 @@ interface OpenCodePermissionRule {
   effect: "allow" | "deny" | "ask";
 }
 
+const rule = (action: string, effect: OpenCodePermissionRule["effect"], resource = "*"): OpenCodePermissionRule => ({ action, resource, effect });
+
 // OpenCode names MCP permission actions <server>_<tool> with unsupported characters replaced by "_".
 export function openCodeMcpAction(server: string): string {
   return `${server.replace(/[^A-Za-z0-9_-]/gu, "_")}_*`;
 }
 
-// Merged last through OPENCODE_CONFIG_CONTENT, so it overrides user and project config without touching their files.
+// OPENCODE_CONFIG_CONTENT permission rules come last and the last match wins; policies resolve earliest-first, so a user's
+// mcp.use allow can still connect servers, and the read-only "*" ask rule sends those MCP calls to the ACP permission gate.
 export function buildOpenCodeConfigOverride(files: LaunchFiles): Record<string, unknown> {
-  const permissions: OpenCodePermissionRule[] = [{ action: "question", resource: "*", effect: "deny" }];
-  if (files.readonly) permissions.push({ action: "edit", resource: "*", effect: "deny" });
-  for (const server of files.capabilities?.deny.mcp ?? []) {
-    permissions.push({ action: openCodeMcpAction(server), resource: "*", effect: "deny" });
-  }
-  for (const skill of files.capabilities?.deny.skills ?? []) {
-    permissions.push({ action: "skill", resource: skill, effect: "deny" });
-  }
-  return { permissions, ...(files.skillsDir ? { skills: [files.skillsDir] } : {}) };
+  const permissions: OpenCodePermissionRule[] = files.readonly
+    ? [rule("*", "ask"), ...READONLY_ALLOWED_ACTIONS.map((action) => rule(action, "allow")), rule("edit", "deny")]
+    : [];
+  permissions.push(rule("question", "deny"));
+  for (const server of files.capabilities?.deny.mcp ?? []) permissions.push(rule(openCodeMcpAction(server), "deny"));
+  for (const skill of files.capabilities?.deny.skills ?? []) permissions.push(rule("skill", "deny", skill));
+  return {
+    permissions,
+    ...(files.readonly ? { policies: [{ action: "mcp.use", resource: "*", effect: "deny" }] } : {}),
+    ...(files.skillsDir ? { skills: [files.skillsDir] } : {}),
+  };
 }
 
 // launchArgs is the only per-launch ACP hook, and the driver copies files.env after calling it.
@@ -51,6 +72,7 @@ function openCodeLaunchArgs(ctx: AcpLaunchContext): readonly string[] {
 }
 
 // Values are provider/model; a bare model ID picks the first provider that lists it.
+// OpenCode rejects an unlisted model with -32602, which would fail the handshake, so unlisted IDs keep the session default.
 export function resolveOpenCodeModelValue(requested: string, option: SessionConfigOption | null): string | null {
   const trimmed = requested.trim();
   if (trimmed === "") return null;
@@ -61,8 +83,14 @@ export function resolveOpenCodeModelValue(requested: string, option: SessionConf
     choices.find((v) => v === trimmed) ??
     choices.find((v) => v.toLowerCase() === lower) ??
     (trimmed.includes("/") ? null : choices.find((v) => v.toLowerCase().endsWith(`/${lower}`))) ??
-    trimmed
+    null
   );
+}
+
+// launchArgs is a function, so the ACP base cannot match the static "acp" token on its own.
+export function matchesOpenCodeAcpCommand(psArgs: string, _row: unknown, executablePath: string): boolean {
+  const hasBinary = psArgs.includes(executablePath) || /(?:^|[\\/\s])opencode(?:\.exe)?(?:\s|$)/u.test(psArgs);
+  return hasBinary && /(?:^|\s)acp(?:\s|$)/u.test(psArgs);
 }
 
 export function classifyOpenCodeTurnError(error: unknown): { subtype: string; message: string } {
@@ -102,6 +130,7 @@ const opencodeAcpConfig: AcpDriverConfig = {
     interruptGraceMs: OPENCODE_INTERRUPT_GRACE_MS,
   },
   errors: { classifyTurnError: classifyOpenCodeTurnError },
+  staleProcess: { matchesCommand: matchesOpenCodeAcpCommand },
 };
 
 export function createOpenCodeDriver(options: AcpDriverOptions): Driver {
