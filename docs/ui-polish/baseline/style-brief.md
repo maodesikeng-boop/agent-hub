@@ -7,7 +7,7 @@ This brief defines rules `S1` through `S6` for visual evaluation in `pnpm ui:pol
 ## What the baseline governs
 
 - **Visual DNA only.** Keep pale neutral or subtly fruit-tinted backgrounds, small focal areas of solid accent color, 10% translucent jelly fills for selected rows and active gate cards, three main radius tiers, flat surfaces without gradients or frosted glass, a single soft shadow on the chat composer, 1px hairline dividers without nested bordered boxes, concise English shell copy without separator characters, and folded process details by default.
-- **Not a 9-point ceiling.** The baseline screen itself scores around 6 to 7 points and needs the same polish pass as every other screen. Matching its flaws is not the goal. Rubric guard tests in `test/ui-polish/rubric.test.ts` assert the literal tokens 风格基因 and 6, 7 分.
+- **Not a 9-point ceiling.** The baseline screen itself scores around 6 to 7 points and needs the same polish pass as every other screen. Matching its flaws is not the goal. Rubric guard tests in `test/ui-polish/rubric.test.ts` match the literal test strings `风格基因` and `6, 7 分`.
 - **No locked pixel dimensions.** Column widths, padding, row heights, and whitespace ratios do not need to match the baseline image pixel-for-pixel; cleaner proportions and breathing room within the tokens of `docs/ui-standard.md` are improvements.
 
 ## S1 Color

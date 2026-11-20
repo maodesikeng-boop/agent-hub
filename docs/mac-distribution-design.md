@@ -8,7 +8,7 @@ Bellwood's macOS desktop shell (`apps/macos/`) is a native Swift application (`A
    - Produces a lightweight `< 5 MB` `build/Bellwood.app` (and optionally installs `/Applications/Bellwood.app`) whose `Info.plist` embeds `AgentHubRepoDir` and `AgentHubNodePath` pointing at the local checkout and Node binary (`AGENT_HUB_REPO_DIR` and `AGENT_HUB_NODE` override them at runtime).
    - Preserves hot `hub self-reload [--build]` (`exit 75` per `apps/desktop/contract.json`).
 2. **Standalone distribution mode (`bash scripts/build-mac-app.sh --dist`)**:
-   - Stages a self-contained Apple silicon (`arm64`) runtime into `Bellwood.app/Contents/Resources/runtime` via `scripts/stage-mac-runtime.ts` and `scripts/stage-runtime-common.ts` (shared with Windows): official stripped Node 24 LTS, bundled `npm` and `npx` (for one-click CLI installs under **Providers** in **Settings**), `dist/web`, `src/`, `migrations/`, `assets/avatars/`, and production `node_modules`, verified by a SHA-256 runtime manifest.
+   - Stages a self-contained Apple silicon (`arm64`) runtime into `Bellwood.app/Contents/Resources/runtime` via `scripts/stage-mac-runtime.ts` and `scripts/stage-runtime-common.ts` (shared with Windows): official stripped Node 24 LTS, bundled `npm` and `npx` (for one-click CLI installs under **Providers** in **Settings**), `dist/web`, `src/`, `migrations/`, `apps/desktop/contract.json`, and production `node_modules`, verified by a SHA-256 runtime manifest.
    - Emits `build/dist/Bellwood_<version>_arm64-unsigned-preview.dmg` (or signed filename when `MAC_SIGN_IDENTITY` is set) plus a `.sha256` checksum file, without touching `/Applications`.
 
 ## Supervision and `--self-test`

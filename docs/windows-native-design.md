@@ -4,7 +4,7 @@ Bellwood runs natively on Windows x64 (`Windows 10 1809+` and `Windows 11`, with
 
 ## Workspace crates (`apps/windows/`)
 
-1. **`fusa-desktop` (`crates/fusa-desktop/`)**: Tauri 2 native desktop shell (`tauri-plugin-single-instance`, `tauri-plugin-dialog`, `tauri-plugin-opener`, and system tray). Closing the window hides to the tray; choosing **彻底退出 Bellwood** triggers a graceful daemon shutdown and tears down every child process tree.
+1. **`fusa-desktop` (`crates/fusa-desktop/`)**: Tauri 2 native desktop shell (`tauri-plugin-single-instance`, `tauri-plugin-dialog`, `tauri-plugin-opener`, and system tray). Closing the window hides to the tray; choosing `Quit Bellwood` triggers a graceful daemon shutdown and tears down every child process tree.
 2. **`fusa-supervisor` (`crates/fusa-supervisor/`)**: Shares `apps/desktop/contract.json` with macOS (`reloadExitCode = 75`), verifies the SHA-256 manifest of the bundled Node 24 LTS runtime staged by `scripts/stage-win-runtime.ts`, refreshes live `HKLM` and `HKCU` `Path` entries via `winreg` so newly installed CLIs (`winget` or **Providers** in **Settings**) appear without restarting Bellwood, probes loopback HTTP health via `ureq`, inhibits idle sleep via `SetThreadExecutionState` while turns are running, and rotates daemon logs.
 3. **`fusa-win-helper` (`crates/fusa-win-helper/`)**: Compiles two native binaries with zero runtime dependencies:
    - `fusa-run.exe`: Process-tree Job Object wrapper, restricted-token launcher, and NTFS/pipe ACL tool (`acl`, `probe`, `--sandbox worker`, and `--readonly-fallback`).
@@ -28,5 +28,5 @@ Bellwood runs natively on Windows x64 (`Windows 10 1809+` and `Windows 11`, with
 
 ## Packaging and CI
 
-- `scripts/stage-win-runtime.ts` stages Node 24 LTS, `npm.cmd`/`npx.cmd`, `fusa-run.exe`, `hub.exe`, and the daemon bundle into `apps/windows/crates/fusa-desktop/staged-runtime`, which `@tauri-apps/cli` packs into a per-user NSIS installer (`Bellwood_<version>_x64-setup-unsigned-preview.exe`).
+- `scripts/stage-win-runtime.ts` stages Node 24 LTS, `npm.cmd` and `npx.cmd`, `fusa-run.exe`, `hub.exe`, and the daemon bundle into the build-time `apps/windows/crates/fusa-desktop/staged-runtime` directory, which `@tauri-apps/cli` packs into a per-user NSIS installer (`Bellwood_<version>_x64-setup-unsigned-preview.exe`).
 - `.github/workflows/windows.yml` runs unit and real NTFS/Job/ACL integration tests (`test/windows/**`), and `.github/workflows/windows-desktop.yml` builds the NSIS installer and executes `fusa-desktop.exe --self-test`.
