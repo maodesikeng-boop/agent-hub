@@ -499,6 +499,9 @@ export class FakeApi {
   models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** GET /api/quota。默认 404：不显示那一块。 */
   quota: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
+  /** GET /api/update and POST /api/update/check. Defaults to 404, so the sidebar shows no update badge. */
+  update: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
+  updateCheck: () => Reply | Promise<Reply> = () => this.update();
   /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */
   pickFolder: (body: PickFolderRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { path: "/Users/me/picked" } });
   /** GET /api/router/digest。 */
@@ -985,6 +988,8 @@ export class FakeApi {
     if (method === "GET" && url.pathname === "/api/state") return jsonResponse(await this.state());
     if (method === "GET" && url.pathname === "/api/models") return jsonResponse(await this.models());
     if (method === "GET" && url.pathname === "/api/quota") return jsonResponse(await this.quota());
+    if (method === "GET" && url.pathname === API_PATHS.update) return jsonResponse(await this.update());
+    if (method === "POST" && url.pathname === API_PATHS.updateCheck) return jsonResponse(await this.updateCheck());
     if (method === "GET" && url.pathname === "/api/conversations/lookup") return jsonResponse(await this.lookup(url.searchParams));
     const ended = /^\/api\/pms\/(\d+)\/ended-workers$/.exec(url.pathname);
     if (method === "GET" && ended) {

@@ -6,7 +6,8 @@ const LOAD_OLDER_DISTANCE_PX = 40;
 export interface UseStickToBottomOptions {
   lastKey: string | number;
   ownCount: number;
-  headKey: string | number;
+  /** Omit when the list keeps its own scroll anchor across prepends. */
+  headKey?: string | number;
   canLoadOlder: boolean;
   onLoadOlder: () => void;
 }
@@ -15,6 +16,7 @@ export function useStickToBottom({ lastKey, ownCount, headKey, canLoadOlder, onL
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const lastTop = useRef(0);
   const [away, setAway] = useState(false);
   const anchorHeight = useRef<number | null>(null);
   const prevOwnCount = useRef(ownCount);
@@ -53,17 +55,22 @@ export function useStickToBottom({ lastKey, ownCount, headKey, canLoadOlder, onL
     }
   }, [headKey]);
 
+  const anchorsHead = headKey !== undefined;
   const loadOlder = useCallback(() => {
-    anchorHeight.current = ref.current?.scrollHeight ?? null;
+    if (anchorsHead) anchorHeight.current = ref.current?.scrollHeight ?? null;
     onLoadOlder();
-  }, [onLoadOlder]);
+  }, [anchorsHead, onLoadOlder]);
 
   const onScroll = useCallback(() => {
     const el = ref.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_DISTANCE_PX;
-    stick.current = nearBottom;
-    setAway(!nearBottom);
+    // Only an upward move is the reader leaving; a scroll event that reports content growing under a pinned position re-pins instead.
+    const movedUp = el.scrollTop < lastTop.current - 1;
+    lastTop.current = el.scrollTop;
+    if (nearBottom || movedUp) stick.current = nearBottom;
+    else if (stick.current) el.scrollTop = el.scrollHeight;
+    setAway(!stick.current);
     if (canLoadOlder && el.scrollTop < LOAD_OLDER_DISTANCE_PX) loadOlder();
   }, [canLoadOlder, loadOlder]);
 

@@ -1,16 +1,59 @@
 import { ChevronDown } from "../ui/icons.ts";
-import { memo, useEffect, useMemo, useState } from "react";
-import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId } from "../../shared/index.ts";
-import { groupMessages } from "../selectors.ts";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId, type PersonaChangeId } from "../../shared/index.ts";
+import { groupMessages, type RenderItem } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
 import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
+import { useFocusMessage, useVirtualRows } from "../useVirtualRows.ts";
 import { EmptyConversation, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
-const HIGHLIGHT_MS = 2_000;
-
 const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
+
+interface RowContext {
+  items: RenderItem[];
+  pending: PendingMessage[];
+  agentOf: (message: Message) => AgentIdentity;
+  onRetry: (clientId: string) => void;
+  actions: MessageActions;
+  highlightId: MessageId | null;
+  revertedChanges: ReadonlySet<PersonaChangeId>;
+  lastTurnStatus: { status: React.ReactNode; streamingText: string | null | undefined } | null;
+}
+
+function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus }: RowContext): React.ReactNode {
+  const item = items[index];
+  if (item === undefined) return <PendingBubble pending={pending[index - items.length]!} onRetry={onRetry} />;
+  if (item.kind === "turn") {
+    const first = item.work[0] ?? item.parts[0]!;
+    const live = index === items.length - 1 ? lastTurnStatus : null;
+    return (
+      <TurnView
+        turn={item}
+        identity={agentOf(first)}
+        status={live?.status}
+        streamingText={live?.streamingText}
+        actions={actions}
+        highlightId={highlightId}
+        revertedChanges={revertedChanges}
+      />
+    );
+  }
+  const { message } = item;
+  const previous = items[index - 1];
+  const head = !(previous?.kind === "message" && previous.message.sender === message.sender);
+  return (
+    <MessageBubble
+      message={message}
+      identity={agentOf(message)}
+      head={head}
+      actions={actions}
+      highlighted={message.id === highlightId}
+      revertedChanges={revertedChanges}
+    />
+  );
+}
 
 export const MessageList = memo(function MessageList({
   messages,
@@ -41,34 +84,35 @@ export const MessageList = memo(function MessageList({
   statusAgent?: AgentIdentity;
   streamingText?: string | null;
 }) {
-  const [highlightId, setHighlightId] = useState<MessageId | null>(null);
-
   const items = useMemo(() => groupMessages(messages), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null || Boolean(streamingText);
   const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}`;
-  const firstId = messages[0]?.id ?? 0;
 
   const { ref, contentRef, away, scrollToBottom, loadOlder, onScroll } = useStickToBottom({
     lastKey,
     ownCount: pending.length,
-    headKey: firstId,
     canLoadOlder: hasMore,
     onLoadOlder,
   });
 
-  useEffect(() => {
-    if (!focus) return;
-    const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    ref.current?.querySelector(`[data-message-id="${focus.id}"]`)?.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
-    setHighlightId(focus.id);
-    onFocusDone?.();
-  }, [focus, onFocusDone, ref]);
-  useEffect(() => {
-    if (highlightId === null) return;
-    const timer = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
-    return () => clearTimeout(timer);
-  }, [highlightId]);
+  const listRef = useRef<HTMLDivElement>(null);
+  const typingRef = useRef<HTMLDivElement>(null);
+  const count = items.length + pending.length;
+  const getItemKey = useCallback(
+    (index: number) => {
+      const item = items[index];
+      if (item === undefined) return `pending:${pending[index - items.length]!.clientId}`;
+      return item.kind === "turn" ? item.key : `message:${item.message.id}`;
+    },
+    [items, pending],
+  );
+  const { virtualizer, onFocus, onBlur } = useVirtualRows({ scrollRef: ref, listRef, count, getItemKey, headLayoutKey: `${hasMore}:${older}:${items.length === 0}` });
+  const indexOf = useCallback(
+    (id: MessageId) => items.findLastIndex((item) => (item.kind === "turn" ? [...item.work, ...item.parts].some((m) => m.id === id) : item.message.id === id)),
+    [items],
+  );
+  const highlightId = useFocusMessage({ scrollRef: ref, virtualizer, focus, onFocusDone, indexOf });
 
   useEffect(() => {
     if (messages.length === 0 && hasMore && older === undefined) {
@@ -89,12 +133,19 @@ export const MessageList = memo(function MessageList({
     const item = items[index]!;
     return item.kind === "turn" ? { key: item.key, turn: true } : { key: item.message.dedupeKey, turn: false };
   };
-  useMessageEnter(contentRef, Number(hasMore) + Number(empty), items.length + pending.length, enterItemAt, typing, empty);
+  const enterRows = () => ({
+    row: (index: number) => listRef.current?.querySelector(`:scope > [data-index="${index}"]`)?.firstElementChild,
+    typingRow: typingRef.current?.firstElementChild,
+  });
+  useMessageEnter(enterRows, count, enterItemAt, typing, empty);
+
+  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus: rideOnTurn ? { status, streamingText } : null };
+  const scrollMargin = virtualizer.options.scrollMargin;
 
   return (
     <div className="relative flex h-full flex-col">
       <div className="messages messages-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="Messages" onScroll={onScroll}>
-        <div className="flex min-h-full flex-col pt-8 pb-12" ref={contentRef}>
+        <div className="relative flex min-h-full flex-col pt-8 pb-12" ref={contentRef}>
           {hasMore && (
             <button
               type="button"
@@ -106,44 +157,25 @@ export const MessageList = memo(function MessageList({
             </button>
           )}
           {empty && <EmptyConversation identity={statusAgent} />}
-          {items.map((item, index) => {
-            if (item.kind === "turn") {
-              const first = item.work[0] ?? item.parts[0]!;
-              const isLastTurn = rideOnTurn && index === items.length - 1;
-              const turnStatus = isLastTurn ? status : undefined;
-              const turnStreaming = isLastTurn ? streamingText : undefined;
-              return (
-                <TurnView
-                  key={item.key}
-                  turn={item}
-                  identity={agentOf(first)}
-                  status={turnStatus}
-                  streamingText={turnStreaming}
-                  actions={actions}
-                  highlightId={highlightId}
-                  revertedChanges={revertedChanges}
-                />
-              );
-            }
-            const { message } = item;
-            const previous = items[index - 1];
-            const head = !(previous?.kind === "message" && previous.message.sender === message.sender);
-            return (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                identity={agentOf(message)}
-                head={head}
-                actions={actions}
-                highlighted={message.id === highlightId}
-                revertedChanges={revertedChanges}
-              />
-            );
-          })}
-          {pending.map((p) => (
-            <PendingBubble key={p.clientId} pending={p} onRetry={onRetry} />
-          ))}
-          {typing && statusAgent && <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} streamingText={streamingText} actions={actions} />}
+          <div ref={listRef} className="relative w-full shrink-0" style={{ height: virtualizer.getTotalSize() }} onFocus={onFocus} onBlur={onBlur}>
+            {virtualizer.getVirtualItems().map((row) => (
+              <div
+                key={row.key}
+                ref={virtualizer.measureElement}
+                data-index={row.index}
+                data-list-head={row.index === 0 && !hasMore ? "" : undefined}
+                className="absolute top-0 left-0 flex w-full flex-col"
+                style={{ transform: `translateY(${row.start - scrollMargin}px)` }}
+              >
+                {rowContent(row.index, rowContext)}
+              </div>
+            ))}
+          </div>
+          {typing && statusAgent && (
+            <div ref={typingRef} className="flex flex-col" data-list-head={count === 0 && !hasMore ? "" : undefined}>
+              <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} streamingText={streamingText} actions={actions} />
+            </div>
+          )}
         </div>
       </div>
       {away && (

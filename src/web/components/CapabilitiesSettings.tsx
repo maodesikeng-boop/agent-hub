@@ -163,7 +163,7 @@ function KindSection({
 
 function IsolationCell({ cell }: { cell: EnforcementCell }) {
   return (
-    <td className="px-2 py-2.5 align-baseline text-minor">
+    <td className="px-2 py-2.5 align-baseline text-minor whitespace-nowrap">
       <span aria-hidden="true" className={cn("mr-2 inline-block size-2 rounded-full", ISOLATION_DOTS[cell.isolation])} />
       {ISOLATION_LABELS[cell.isolation]}
       {cell.plugin !== null && <span className="block pl-4 text-xs text-muted-foreground">Plugins: {ISOLATION_LABELS[cell.plugin].toLowerCase()}</span>}
@@ -174,32 +174,34 @@ function IsolationCell({ cell }: { cell: EnforcementCell }) {
 function EnforcementGroup({ view }: { view: CapabilitiesView }) {
   return (
     <CollapsibleGroup title="Enforcement by provider">
-      <table aria-label="Enforcement by provider" className="w-full text-left">
-        <thead>
-          <tr className="text-xs text-muted-foreground">
-            <th scope="col" className="px-4 py-2 font-medium">
-              <span className="sr-only">Provider</span>
-            </th>
-            {CAPABILITY_KIND_ORDER.map((kind) => (
-              <th key={kind} scope="col" className="px-2 py-2 font-medium">
-                {COLUMN_LABELS[kind]}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border border-t border-border">
-          {enforcementRows(view).map((row) => (
-            <tr key={row.vendor}>
-              <th scope="row" className="px-4 py-2.5 align-baseline text-body font-normal">
-                {row.label}
+      <div className="overflow-x-auto">
+        <table aria-label="Enforcement by provider" className="w-full text-left">
+          <thead>
+            <tr className="text-xs text-muted-foreground">
+              <th scope="col" className="px-4 py-2 font-medium">
+                <span className="sr-only">Provider</span>
               </th>
               {CAPABILITY_KIND_ORDER.map((kind) => (
-                <IsolationCell key={kind} cell={row.cells[kind]} />
+                <th key={kind} scope="col" className="px-2 py-2 font-medium">
+                  {COLUMN_LABELS[kind]}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-border border-t border-border">
+            {enforcementRows(view).map((row) => (
+              <tr key={row.vendor}>
+                <th scope="row" className="px-4 py-2.5 align-baseline text-body font-normal">
+                  {row.label}
+                </th>
+                {CAPABILITY_KIND_ORDER.map((kind) => (
+                  <IsolationCell key={kind} cell={row.cells[kind]} />
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </CollapsibleGroup>
   );
 }

@@ -35,7 +35,7 @@ Every cache, state snapshot, and growing collection must satisfy all four rules 
 ## Testing and merge policy
 
 - **Targeted local verification.** During development and independent review, run `pnpm typecheck`, the test files covering the changed modules (`src/shared/write-scope.test.ts` is mandatory whenever sandboxes or write scopes change), and `pnpm verify` (`.agents/skills/verify/SKILL.md`). Do not run the full `vitest` suite locally or block on desktop installer builds or cloud CI queues. Never use `gh run rerun` to hide a flaky test.
-- **Two-layer review.** Independent reviews check the general checklist in `src/shared/review.ts` first, then check every rule in `REVIEW.md` on `main` whose `Trigger:` matches a changed path. Tag each finding as `[Important]`, `[Nit]`, or `[Pre-existing]`; only `[Important]` blocks a merge.
+- **Two-layer review.** Independent reviews check the general checklist in `src/shared/review.ts` first, then check every rule in `REVIEW.md` on `main` whose `Trigger:` matches a changed path. Tag each finding as `[Important]`, `[Nit]`, or `[Pre-existing]`; only `[Important]` blocks a merge. When fixing an `[Important]` finding, add a regression test or structural guard in the same PR; if the mistake is only recognizable by reading a diff and has recurred in two or more PRs, also append a `Trigger:`/`Check:`/`Seen in:` entry to `REVIEW.md` in that PR, keeping existing entries.
 - **Layered cloud checks.** Pull requests run 4 parallel Ubuntu shards by default. Touching platform code, drivers, process, pipe, git, or sync layers, `apps/windows/**`, or `test/windows/**` also triggers `.github/workflows/windows.yml`. Touching `apps/**`, packaging scripts, or the lockfile triggers the desktop installer workflows.
 - **When to merge.** Merge routine changes that can be verified locally into `main` once targeted tests and required reviews pass; `main` runs full regression suites and desktop bundle self-tests asynchronously. Changes to the Linux `bwrap` sandbox, Windows native crates, or installer packaging that cannot be verified on the local OS must wait for the matching cloud check to pass before merging.
 
@@ -57,8 +57,8 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 - `@fastify/websocket` and `ws`: WebSocket server and client (`ui-server/server.ts`, `peers/routes.ts`, `peers/proxy.ts`).
 - `@fastify/static`: Serves the built web assets (`ui-server/server.ts`).
 - `@fastify/compress`: Compresses large HTTP responses (`ui-server/server.ts`, `peers/proxy.ts`).
-- `zod`: Input validation (`ledger/hub-commands.ts`, `peers/service.ts`).
-- `lru-cache`: Bounded caches (`commands-catalog.ts`, `driver/model-catalog.ts`, `shared/paths.ts`, `platform/win32/`, `skill-files.ts`, `ledger/loaded-skills.ts`, `daemon/feishu/service.ts`, `src/relay/node/server.ts`).
+- `zod`: Input validation (`ledger/hub-commands.ts`, `peers/service.ts`, `update-checker.ts`).
+- `lru-cache`: Bounded caches (`commands-catalog.ts`, `driver/model-catalog.ts`, `shared/paths.ts`, `platform/win32/`, `skill-files.ts`, `ledger/loaded-skills.ts`, `daemon/feishu/service.ts`, `update-checker.ts`, `src/relay/node/server.ts`).
 - `web-push`: Web Push delivery (`push/sender.ts`, `push/vapid.ts`).
 - `@peculiar/x509` and `reflect-metadata`: Generates self-signed Ed25519 device certificates (`src/daemon/mesh/identity.ts`).
 - `@agentclientprotocol/sdk`: Agent Client Protocol (ACP) client and server transport (`src/vendors/_common/acp/`).
@@ -77,6 +77,7 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 - `react` and `react-dom`: UI runtime. `vite` and `@vitejs/plugin-react`: bundler (`vite.config.ts`).
 - `zustand`: Client state (`components/Composer.tsx`, `device-hub.ts`).
 - `@tanstack/react-query`: On-demand fetching and caching (`App.tsx`, `components/BrowserSessions.tsx`, `components/PmProfile.tsx`).
+- `@tanstack/react-virtual`: Dynamic row-height virtual scrolling for the chat message list (`useVirtualRows.ts`, `components/MessageList.tsx`).
 - `tailwindcss` and `@tailwindcss/vite`: Styling (`styles.css`).
 - `pixelarticons`: 24-grid pixel icons re-exported from `src/web/ui/icons.ts` alongside inline composer stroke icons.
 - `@fontsource-variable/geist`: Bundled Geist Variable font (`src/web/styles.css`).
@@ -103,7 +104,7 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 ### Testing and tooling
 
 - `vitest` (`vitest.config.ts`), `jsdom` (`src/shared/test-helpers.ts`), `@testing-library/react`, `@testing-library/user-event`, and `@testing-library/jest-dom` (`src/web/test-setup.ts`).
-- `playwright`: Library-only headless Chromium driver for real-browser screenshots and smoke checks (`test/ui-polish/capture.ts`, `test/ui-polish/patches.ts`, `scripts/verify-smoke.ts`; install once via `pnpm exec playwright install chromium`).
+- `playwright`: Library-only headless Chromium driver for real-browser screenshots and smoke checks (`test/ui-polish/capture.ts`, `test/ui-polish/patches.ts`, `scripts/verify-smoke.ts`, `scripts/bench-message-list.ts`; install once via `pnpm exec playwright install chromium`).
 - `@axe-core/playwright`: Automated contrast and accessibility checks (`test/ui-polish/checks.ts`).
 - `typescript` (`pnpm typecheck`), `knip` (`pnpm exec knip`), `@types/*` (`node`, `react`, `react-dom`, `ws`, `web-push`, `write-file-atomic`), and `oxc-parser` (AST timer guard in `src/web/web-guard.test.ts`).
 - `wrangler` and `@cloudflare/workers-types`: Deployment and local Durable Object integration tests for the Cloudflare relay (`wrangler.toml`, `src/relay/cloudflare/`).

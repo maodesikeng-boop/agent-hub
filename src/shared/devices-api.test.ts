@@ -55,7 +55,7 @@ describe("联机接口路径", () => {
   });
 
   it("账号、设备管理只给本机浏览器：组网入口来的设备碰不到", () => {
-    for (const path of [API_PATHS.devices, API_PATHS.account, API_PATHS.accountLogin]) {
+    for (const path of [API_PATHS.devices, API_PATHS.account, API_PATHS.accountLogin, API_PATHS.update, API_PATHS.updateCheck]) {
       expect(ENTRY_ONLY_API_PREFIXES.some((prefix) => path.startsWith(prefix)), path).toBe(true);
     }
     expect(ENTRY_ONLY_API_PREFIXES.some((prefix) => API_PATHS.peerTrust.startsWith(prefix))).toBe(false);

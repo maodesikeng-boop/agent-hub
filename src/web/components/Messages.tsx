@@ -453,7 +453,7 @@ export const TurnView = memo(
     const lastText = texts.at(-1);
     const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
     return (
-      <div className="mt-6 flex flex-col first:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
+      <div className="mt-6 flex flex-col [[data-list-head]>&]:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
         <AgentHead identity={identity} working={running} />
         <div className="flex flex-col gap-2.5">
           {!running && turn.work.length > 0 && <WorkLine label={workedFor(turn.endedAt - turn.startedAt)} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
@@ -732,7 +732,7 @@ export const MessageBubble = memo(
     if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
     if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
     return (
-      <div className={cn("flex flex-col", head ? "mt-6 first:mt-2" : "mt-2.5")} data-side="left" data-head={head}>
+      <div className={cn("flex flex-col", head ? "mt-6 [[data-list-head]>&]:mt-2" : "mt-2.5")} data-side="left" data-head={head}>
         {head && <AgentHead identity={identity} />}
         <LongBrief>
           <AgentText message={message} highlighted={highlighted} onAnswerAsk={actions.onAnswerAsk} />
@@ -796,7 +796,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
   const failure = failed && message.failureReason ? describeFailure(message.failureReason, { vendor: actions.vendorOf?.(message.conversationId) }) : null;
   const phase = actions.retry[message.id];
   return (
-    <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={message.status ?? undefined} title={formatTime(message.createdAt)}>
+    <article className="mt-6 flex flex-col items-end [[data-list-head]>&]:mt-2" data-side="right" data-status={message.status ?? undefined} title={formatTime(message.createdAt)}>
       <SentBody
         unsent={
           failed && !delivered ? (
@@ -908,7 +908,7 @@ export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; o
   const reasonText = filesGone ? "Files are gone. Add them again" : reason !== undefined ? errorLine(reason) : undefined;
   const reasonRaw = reason !== undefined ? errorTitle(reason) : undefined;
   return (
-    <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={failed ? "send_failed" : "queued"}>
+    <article className="mt-6 flex flex-col items-end [[data-list-head]>&]:mt-2" data-side="right" data-status={failed ? "send_failed" : "queued"}>
       <SentBody unsent={failed ? <UnsentMark reason={reasonText} raw={reasonRaw} {...(noRetry ? {} : { onRetry: () => onRetry(pending.clientId) })} /> : null}>
         {pending.workerPick && <WorkerPickTag pick={pending.workerPick} className={PICK_TAG} />}
         {(pending.text !== "" || pending.attachments.length === 0) && (
