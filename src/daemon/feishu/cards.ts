@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isDeviceId, type DeviceId } from "../../shared/api.ts";
 import { CONFIRM_CHECKPOINT_OPTIONS } from "../../shared/domain.ts";
 import type { AskMeta, ConversationId, Message, MessageId, PmId, RouterItemId, TaskGraphId, TaskNodeKey } from "../../shared/domain.ts";
 import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
@@ -35,10 +36,11 @@ export type FeishuCardRef =
   | { kind: "blocker"; askMessageId: MessageId; blockerId: UserBlockerId }
   | { kind: "router_item"; itemId: RouterItemId };
 
+// `d` names the device whose ledger owns the card, so the Feishu center can forward clicks from the shared router chat.
 export type FeishuActionValue =
-  | { kind: "choose"; card: FeishuCardRef; optionIndex: number }
-  | { kind: "submit_note"; card: FeishuCardRef }
-  | { kind: "blocker_done"; card: Extract<FeishuCardRef, { kind: "blocker" }> }
+  | { kind: "choose"; card: FeishuCardRef; optionIndex: number; d?: DeviceId }
+  | { kind: "submit_note"; card: FeishuCardRef; d?: DeviceId }
+  | { kind: "blocker_done"; card: Extract<FeishuCardRef, { kind: "blocker" }>; d?: DeviceId }
   | { kind: "stop"; conversationId: ConversationId }
   | { kind: "set_policy"; pmId: PmId; triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }
   | { kind: "set_pm_model"; pmId: PmId; field: FeishuModelField }
@@ -54,10 +56,11 @@ const gateRef = z.object({ kind: z.literal("gate"), askMessageId: id, graphId: i
 const blockerRef = z.object({ kind: z.literal("blocker"), askMessageId: id, blockerId: id }).strict();
 const routerItemRef = z.object({ kind: z.literal("router_item"), itemId: id }).strict();
 const cardRef = z.discriminatedUnion("kind", [askRef, gateRef, blockerRef, routerItemRef]);
+const deviceId = z.custom<DeviceId>((v) => typeof v === "string" && isDeviceId(v)).optional();
 const actionValueSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("choose"), card: cardRef, optionIndex: id }),
-  z.object({ kind: z.literal("submit_note"), card: cardRef }),
-  z.object({ kind: z.literal("blocker_done"), card: blockerRef }),
+  z.object({ kind: z.literal("choose"), card: cardRef, optionIndex: id, d: deviceId }),
+  z.object({ kind: z.literal("submit_note"), card: cardRef, d: deviceId }),
+  z.object({ kind: z.literal("blocker_done"), card: blockerRef, d: deviceId }),
   z.object({ kind: z.literal("stop"), conversationId: id }),
   z
     .object({ kind: z.literal("set_policy"), pmId: id, triggerMode: z.enum(FEISHU_TRIGGER_MODES).optional(), guestTier: z.enum(FEISHU_GUEST_TIERS).optional() })
@@ -75,6 +78,11 @@ export function decodeFeishuActionValue(raw: unknown): FeishuActionValue | null 
   if (typeof raw !== "object" || raw === null || (raw as Record<string, unknown>)[ACTION_MARKER] !== ACTION_VERSION) return null;
   const parsed = actionValueSchema.safeParse(raw);
   return parsed.success ? (parsed.data as FeishuActionValue) : null;
+}
+
+export function feishuActionDevice(raw: unknown): DeviceId | null {
+  const value = decodeFeishuActionValue(raw);
+  return value !== null && "d" in value && value.d !== undefined ? value.d : null;
 }
 
 export type FeishuAttachmentView =
@@ -206,20 +214,34 @@ function settledElements(state: Exclude<FeishuCardState, { kind: "pending" }>): 
   return [markdown(lines.join("\n"))];
 }
 
-function pendingElements(ref: FeishuCardRef, ask: AskMeta | null, options: readonly string[], recommended: string | undefined): Record<string, unknown>[] {
-  if (ref.kind === "blocker") return [button({ text: "已处理", type: "primary", value: { kind: "blocker_done", card: ref } })];
+export interface FeishuRouterCardOrigin {
+  pmName?: string;
+  deviceId?: DeviceId;
+}
+
+const titled = (title: string, pmName: string | undefined) => (pmName !== undefined && pmName.trim() !== "" ? `${title} · ${pmName.trim()}` : title);
+
+function pendingElements(
+  ref: FeishuCardRef,
+  ask: AskMeta | null,
+  options: readonly string[],
+  recommended: string | undefined,
+  device: DeviceId | undefined,
+): Record<string, unknown>[] {
+  const d = device === undefined ? {} : { d: device };
+  if (ref.kind === "blocker") return [button({ text: "已处理", type: "primary", value: { kind: "blocker_done", card: ref, ...d } })];
   const rec = recommended === undefined ? -1 : options.indexOf(recommended);
   const order = rec < 0 ? options.map((_, i) => i) : [rec, ...options.map((_, i) => i).filter((i) => i !== rec)];
   const buttons =
     options.length === 0
-      ? [button({ text: "提交", type: "primary", submit: true, value: { kind: "submit_note", card: ref } })]
+      ? [button({ text: "提交", type: "primary", submit: true, value: { kind: "submit_note", card: ref, ...d } })]
       : order.map((i) =>
           button({
             text: i === rec ? `${options[i]!}（推荐）` : options[i]!,
             type: i === rec ? "primary" : "default",
             submit: true,
             name: `option_${i}`,
-            value: { kind: "choose", card: ref, optionIndex: i },
+            value: { kind: "choose", card: ref, optionIndex: i, ...d },
           }),
         );
   const placeholder = ask?.gateRef?.checkpoint === true ? "打回时写清要改什么（选填）" : "补充说明（选填）";
@@ -233,7 +255,7 @@ function pendingElements(ref: FeishuCardRef, ask: AskMeta | null, options: reado
 }
 
 export function renderAskCard(message: Message, ask: AskMeta, state: FeishuCardState, attachments: readonly FeishuAttachmentView[] = []): FeishuCardJson {
-  return askCard(message, ask, state, attachments, []);
+  return askCard(message, ask, state, attachments, [], {});
 }
 
 function askCard(
@@ -242,15 +264,15 @@ function askCard(
   state: FeishuCardState,
   attachments: readonly FeishuAttachmentView[],
   extra: Record<string, unknown>[],
-  pmName?: string,
+  origin: FeishuRouterCardOrigin,
 ): FeishuCardJson {
   const base = askTitle(ask);
-  const title = pmName !== undefined && pmName.trim() !== "" ? `${base.title} · ${pmName.trim()}` : base.title;
+  const title = titled(base.title, origin.pmName);
   const { template } = base;
   const ref = feishuCardRefOf(message, ask);
   const rest = [
     ...attachmentElements(attachments),
-    ...(state.kind === "pending" ? pendingElements(ref, ask, feishuAskOptions(ask), ask.recommended) : settledElements(state)),
+    ...(state.kind === "pending" ? pendingElements(ref, ask, feishuAskOptions(ask), ask.recommended, origin.deviceId) : settledElements(state)),
     ...extra,
   ];
   return fitBody(message.text, (body) => card({ title, template, summary: message.text, elements: [markdown(body), ...rest] }));
@@ -262,10 +284,10 @@ export function renderRouterAskCard(
   state: FeishuCardState,
   pmChatId: FeishuChatId | null,
   attachments: readonly FeishuAttachmentView[] = [],
-  pmName?: string,
+  origin: FeishuRouterCardOrigin = {},
 ): FeishuCardJson {
   const openChat = pmChatId === null ? [] : [linkButton("打开项目群", feishuChatAppLink(pmChatId))];
-  return askCard(message, ask, state, attachments, openChat, pmName);
+  return askCard(message, ask, state, attachments, openChat, origin);
 }
 
 export function renderRouterItem(
@@ -274,16 +296,19 @@ export function renderRouterItem(
   state: FeishuCardState,
   pmChatId: FeishuChatId | null,
   attachments: readonly FeishuAttachmentView[] = [],
+  origin: FeishuRouterCardOrigin = {},
 ): FeishuCardJson {
   const openChat = pmChatId === null ? [] : [linkButton("打开项目群", feishuChatAppLink(pmChatId))];
   if (item.kind === "report") {
-    return fitBody(item.summary, (body) => card({ title: "简报", template: "turquoise", summary: item.summary, elements: [markdown(body), ...openChat] }));
+    const title = titled("简报", origin.pmName);
+    return fitBody(item.summary, (body) => card({ title, template: "turquoise", summary: item.summary, elements: [markdown(body), ...openChat] }));
   }
-  if (ask !== null) return askCard(ask.message, ask.meta, state, attachments, openChat);
+  if (ask !== null) return askCard(ask.message, ask.meta, state, attachments, openChat, origin);
   const ref: FeishuCardRef = { kind: "router_item", itemId: item.id };
   const text = item.context.trim() === "" ? item.question : `${item.question}\n\n${item.context}`;
-  const rest = [...(state.kind === "pending" ? pendingElements(ref, null, item.options, undefined) : settledElements(state)), ...openChat];
-  return fitBody(text, (body) => card({ title: "等你确定", template: "blue", summary: item.question, elements: [markdown(body), ...rest] }));
+  const pending = state.kind === "pending" ? pendingElements(ref, null, item.options, undefined, origin.deviceId) : settledElements(state);
+  const title = titled("等你确定", origin.pmName);
+  return fitBody(text, (body) => card({ title, template: "blue", summary: item.question, elements: [markdown(body), ...pending, ...openChat] }));
 }
 
 export function renderReplyCard(input: {

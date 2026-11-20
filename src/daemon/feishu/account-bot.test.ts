@@ -24,6 +24,7 @@ import {
   feishuOfflineCardToast,
   feishuOfflineNotice,
   routeAccountInbound,
+  routeCardByIssuer,
   type FeishuAccountBot,
   type FeishuAccountMeshPort,
   type FeishuForwardedEvent,
@@ -483,6 +484,31 @@ describe("createFeishuAccountBot", () => {
     expect(inbox.list(DEV_B)).toHaveLength(0);
   });
 
+  it("总助单聊里的卡片点击按按钮带的发卡设备转发：别的设备在线转给它、离线回离线 toast，本机、未带设备或不认识的设备都本地处理", async () => {
+    const h = makeMeshHarness([DEV_B]);
+    h.setHandler(async () => ({ toast: { type: "success", content: "Mac 已定案" } }));
+    const localA = makeFakeLocal();
+    const bot = createFeishuAccountBot({ mesh: h.mesh, local: localA.local, inbox: null, log: () => {} });
+    cleanups.push(() => bot.close());
+    const issuedBy = (d?: string) => ({ ...rawCardAction("oc_p2p"), value: { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: 1 }, optionIndex: 0, ...(d ? { d } : {}) } });
+
+    expect(await bot.onCardAction(issuedBy(DEV_B))).toEqual({ toast: { type: "success", content: "Mac 已定案" } });
+    expect(h.posts.map((p) => [p.id, (p.body as FeishuForwardedEvent).kind])).toEqual([[DEV_B, "card_action"]]);
+    h.setOnline(DEV_B, false);
+    expect(await bot.onCardAction(issuedBy(DEV_B))).toEqual(feishuOfflineCardToast("Mac"));
+    for (const d of [DEV_A, undefined, "44444444-4444-4444-8444-444444444444"]) {
+      expect(await bot.onCardAction(issuedBy(d))).toEqual({ toast: { type: "success", content: "本机已处理" } });
+    }
+    expect(h.posts).toHaveLength(1);
+  });
+
+  it("routeCardByIssuer 只把认识的别的设备当转发目标", () => {
+    const mesh = { selfId: DEV_A, deviceName: (id: DeviceId) => (id === DEV_B ? "Mac" : null), isOnline: () => true };
+    expect(routeCardByIssuer(DEV_B, mesh)).toEqual({ kind: "forward", deviceId: DEV_B });
+    expect(routeCardByIssuer(DEV_C, mesh)).toEqual({ kind: "local" });
+    expect(routeCardByIssuer(null, mesh)).toEqual({ kind: "local" });
+  });
+
   it("缓存里没有的群调 chatDescription 读标记，读到后缓存", async () => {
     const h = makeMeshHarness([DEV_B]);
     let clock = 1_000;
@@ -640,7 +666,7 @@ describe("createFeishuService：中心租约、凭证同步与新电脑加入卡
     return { db, ledger, service, secretsFile, pmId: created.pm.id, conversationId: created.conversation.id };
   }
 
-  it("非中心不连 WSClient、不把总助对话发到单聊，但照常给本机项目建群并直发出站；接过租约后连上长连接并投影总助", async () => {
+  it("非中心不连 WSClient、不发欢迎语，本机总助对话和项目群都直发出站；接过租约后连上长连接并照常投影总助", async () => {
     const fakeA = createFakeFeishu();
     fakeA.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
     const fakeB = createFakeFeishu();
@@ -668,11 +694,12 @@ describe("createFeishuService：中心租约、凭证同步与新电脑加入卡
     expect(nodeB.service.setup.status().state).toBe("connected");
     expect(nodeB.service.localPmChats()).toHaveLength(1);
 
-    const sentBefore = fakeB.sent.length;
+    const routerChatId = exported.kind === "configured" ? exported.routerChatId : null;
     const cmdB1 = nodeB.ledger.createRouterCommand({ clientId: "web-b-1", inputText: "非中心测试", vendor: "claude", status: "planning" }).command;
-    nodeB.ledger.updateRouterCommand(cmdB1.id, { status: "answered", plan: { intent: "answer", reply: "不该进单聊", actions: [] } });
+    nodeB.ledger.updateRouterCommand(cmdB1.id, { status: "answered", plan: { intent: "answer", reply: "非中心总助回复", actions: [] } });
     await nodeB.service.idle();
-    expect(fakeB.sent).toHaveLength(sentBefore);
+    expect(fakeB.sent.filter((s) => s.content.includes("非中心总助回复")).map((s) => s.chatId)).toEqual([routerChatId]);
+    expect(fakeB.sent.some((s) => s.content.includes("已接上飞书"))).toBe(false);
 
     nodeB.ledger.postUserMessage({ conversationId: nodeB.conversationId, clientId: "web-pm-b", text: "本机项目消息" });
     await nodeB.service.idle();
@@ -692,7 +719,7 @@ describe("createFeishuService：中心租约、凭证同步与新电脑加入卡
     nodeB.ledger.updateRouterCommand(cmdB2.id, { status: "answered", plan: { intent: "answer", reply: "B总助接管回复", actions: [] } });
     await nodeB.service.idle();
     expect(fakeB.sent.some((s) => s.content.includes("B总助接管回复"))).toBe(true);
-    expect(fakeB.sent.some((s) => s.content.includes("不该进单聊"))).toBe(false);
+    expect(fakeB.sent.filter((s) => s.content.includes("非中心总助回复"))).toHaveLength(1);
 
     await nodeA.service.setup.disconnect({ dissolveChats: false });
     await nodeB.service.applyPeerApp(nodeA.service.exportPeerApp()!);

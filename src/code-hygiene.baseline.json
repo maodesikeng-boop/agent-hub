@@ -15,7 +15,6 @@
   "functions": {
     "src/daemon/agent-api/server.ts#createAgentApi": 346,
     "src/daemon/daemon.ts#startDaemon": 864,
-    "src/daemon/feishu/account-bot.ts#createFeishuAccountBot": 252,
     "src/daemon/feishu/store.ts#createFeishuStore": 287,
     "src/daemon/ledger/handover.ts#createLedgerHandover": 897,
     "src/daemon/ledger/hub-commands.ts#createLedgerHubCommands": 301,

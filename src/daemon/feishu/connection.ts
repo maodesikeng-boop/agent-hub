@@ -7,7 +7,7 @@ import { createFeishuFileService } from "./files.ts";
 import { onRawCardAction } from "./card-actions.ts";
 import { onRawEvent } from "./inbound-dispatch.ts";
 import { pumpInboundCatchUp, releaseAllInboundGates } from "./inbound-catchup.ts";
-import { pumpControl, requestControl, settleIdle } from "./lanes.ts";
+import { requestControl, settleIdle } from "./lanes.ts";
 import { activeTarget } from "./projection.ts";
 import { checkFeishuScopes } from "./scopes.ts";
 import { writeFeishuSecrets, type FeishuSecrets } from "./secrets.ts";
@@ -89,6 +89,7 @@ async function teardownTransport(ctx: FeishuContext) {
   link.files = null;
   link.wsStarted = false;
   link.wsUp = false;
+  link.httpServing = false;
   link.downSince = null;
   link.disconnectError = null;
   link.scopesChecked = false;
@@ -185,21 +186,26 @@ async function stopWs(ctx: FeishuContext, transport: FeishuTransport) {
   link.scopesChecked = false;
   ctx.approvalCards.clear();
   stopInboundSession(ctx);
-  ackAllRouterEvents(ctx);
   await transport.stop().catch((error: unknown) => ctx.log(`飞书：断开时出错：${errorText(error)}`));
-  pumpControl(ctx);
 }
 
-async function ensureHttpTransport(ctx: FeishuContext, secrets: FeishuSecrets): Promise<boolean> {
+// Router events raised while this device was an unready center sit in feishu_router_events; entering HTTP mode replays them.
+function serveOverHttp(ctx: FeishuContext) {
+  if (ctx.link.httpServing) return;
+  ctx.link.httpServing = true;
+  ctx.directory.markAllStale();
+  requestControl(ctx, "connection");
+}
+
+async function ensureHttpTransport(ctx: FeishuContext, secrets: FeishuSecrets) {
   const key = `${secrets.brand}\n${secrets.appId}\n${secrets.appSecret}`;
-  if (ctx.link.transport !== null && ctx.link.transportKey === key) return false;
+  if (ctx.link.transport !== null && ctx.link.transportKey === key) return;
   await teardownTransport(ctx);
   const log = (line: string) => ctx.log(`飞书：${line}`);
   const transport = (await ctx.transportFactory())({ brand: secrets.brand, appId: secrets.appId, appSecret: secrets.appSecret, log });
   ctx.link.transport = transport;
   ctx.link.transportKey = key;
   ctx.link.files = createFeishuFileService({ transport, uploadsDir: ctx.options.uploadsDir, log });
-  return true;
 }
 
 async function doSyncTransport(ctx: FeishuContext) {
@@ -211,14 +217,14 @@ async function doSyncTransport(ctx: FeishuContext) {
       await teardownTransport(ctx);
       return;
     }
-    const createdHttp = await ensureHttpTransport(ctx, secrets);
-    const wantWs = isCenter(ctx);
-    if (wantWs && !ctx.link.wsStarted) await startWs(ctx, ctx.link.transport!);
-    else if (!wantWs && ctx.link.wsStarted) await stopWs(ctx, ctx.link.transport!);
-    else if (!wantWs && createdHttp) {
-      ctx.directory.markAllStale();
-      requestControl(ctx, "connection");
+    await ensureHttpTransport(ctx, secrets);
+    if (isCenter(ctx)) {
+      ctx.link.httpServing = false;
+      if (!ctx.link.wsStarted) await startWs(ctx, ctx.link.transport!);
+      return;
     }
+    if (ctx.link.wsStarted) await stopWs(ctx, ctx.link.transport!);
+    serveOverHttp(ctx);
   } finally {
     ctx.life.connectingCount--;
     settleIdle(ctx);

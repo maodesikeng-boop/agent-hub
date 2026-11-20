@@ -66,6 +66,7 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
   let seq = 0;
   const next = (prefix: string) => `${prefix}${++seq}`;
   const uploadedTypes = new Map<string, FeishuFileUpload["fileType"]>();
+  const sentByUuid = new Map<string, { messageId: string; chatId: string }>();
   /** 照飞书的规矩：mp4 上传的只能发 media，opus 上传的只能发 audio，别的只能发 file，不配对回 230055。 */
   const uploadMismatch = (msgType: string, content: string): FeishuApiResult | null => {
     const fileKey = (JSON.parse(content) as { file_key?: unknown }).file_key;
@@ -149,8 +150,13 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
         case "message.create": {
           const mismatch = uploadMismatch(String(a.msg_type), String(a.content));
           if (mismatch !== null) return mismatch;
-          const messageId = next("om_fake");
           const chatId = a.receive_id_type === "chat_id" ? String(a.receive_id) : "oc_p2p";
+          // Feishu keeps one message per uuid across the whole app and answers repeats with the first message.
+          const uuid = typeof a.uuid === "string" ? a.uuid : null;
+          const earlier = uuid === null ? undefined : sentByUuid.get(uuid);
+          if (earlier !== undefined) return { code: 0, data: { message_id: earlier.messageId, chat_id: earlier.chatId } };
+          const messageId = next("om_fake");
+          if (uuid !== null) sentByUuid.set(uuid, { messageId, chatId });
           fake.sent.push({ chatId, messageId, content: String(a.content) });
           appendHistory({
             type: "im.message.receive_v1",

@@ -10,6 +10,7 @@ import { isReady, type AttachmentScope, type AttachmentSlot, type FeishuContext,
 import { refreshHostCard } from "./decision-cards.ts";
 import { planFeishuFile, type FeishuFileService, type FeishuOutboundFile, type FeishuUploaded } from "./files.ts";
 import { enqueue, settleIdle } from "./lanes.ts";
+import { devicePostUuid } from "./projection.ts";
 import type { FeishuChatBinding, FeishuPostRef } from "./store.ts";
 import { FeishuAuthError, isFeishuRejection } from "./transport.ts";
 
@@ -155,11 +156,12 @@ async function sendUploadedFile(
   chatId: FeishuChatId,
   file: FeishuOutboundFile,
   uploaded: Extract<FeishuUploaded, { kind: "file" }>,
+  scope: AttachmentScope,
 ): Promise<FeishuMessageId | null | undefined> {
   const files = ctx.link.files;
   if (files === null) return undefined;
   try {
-    return await files.sendFile(chatId, file, uploaded);
+    return await files.sendFile(chatId, uploaded, devicePostUuid(ctx, scope === "router" ? "rf" : "f", `${file.messageId}-${file.part}`));
   } catch (error) {
     if (!isFeishuRejection(error)) throw error;
     handleError(ctx, error);
@@ -186,7 +188,7 @@ export async function followUpAttachments(ctx: FeishuContext, chatId: FeishuChat
     } else if (result.kind === "image") {
       ctx.store.savePost({ ...onHost, state: "final", mediaKey: result.imageKey }, ctx.now());
     } else if (result.kind === "file") {
-      const sent = await sendUploadedFile(ctx, chatId, file, result);
+      const sent = await sendUploadedFile(ctx, chatId, file, result, scope);
       if (sent === undefined) continue;
       if (sent === null) {
         const job = ctx.uploads.jobs.get(uploadKey(file));
@@ -228,7 +230,7 @@ async function completeUpload(ctx: FeishuContext, chatId: FeishuChatId, messageI
     let mediaKey: string | null = null;
     if (result?.kind === "image") mediaKey = result.imageKey;
     else if (result?.kind === "file") {
-      const sent = await sendUploadedFile(ctx, chatId, file, result);
+      const sent = await sendUploadedFile(ctx, chatId, file, result, scope);
       if (sent === undefined) return;
       if (sent === null && job !== undefined) job.result = null;
       else mediaKey = result.fileKey;

@@ -1,4 +1,4 @@
-import { askOf, type Message, type MessageId } from "../../shared/domain.ts";
+import { askOf, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
 import type { FeishuChatId, FeishuMessageId } from "../../shared/feishu.ts";
 import type { RouterItem } from "../../shared/router.ts";
 import { postCardEntity, unlessRejected, updateCard } from "./api.ts";
@@ -14,10 +14,11 @@ import {
   type FeishuCardJson,
   type FeishuCardRef,
   type FeishuCardState,
+  type FeishuRouterCardOrigin,
 } from "./cards.ts";
 import { displayOwner, type AttachmentScope, type AttachmentSlot, type FeishuContext, type HostCard } from "./context.ts";
 import { splitFeishuMarkdown } from "./outbound.ts";
-import { chatOfConversation, isActivePm, liveChatOfPm, pmNameOf, pmOfConversation, routerChat } from "./projection.ts";
+import { chatOfConversation, isActivePm, liveChatOfPm, pmNameOf, pmOfConversation, routerChat, devicePostUuid, selfDeviceId } from "./projection.ts";
 import type { FeishuChatBinding, FeishuPostRecord, FeishuPostRef } from "./store.ts";
 import { MIRROR_TITLE, mirrorText } from "./text-cards.ts";
 
@@ -41,6 +42,12 @@ function routerItemState(ctx: FeishuContext, item: RouterItem, ask: Message | nu
   };
 }
 
+const originOf = (ctx: FeishuContext, pmId: PmId | null): FeishuRouterCardOrigin => {
+  const pmName = pmNameOf(ctx, pmId);
+  const deviceId = selfDeviceId(ctx);
+  return { ...(pmName !== undefined ? { pmName } : {}), ...(deviceId !== undefined ? { deviceId } : {}) };
+};
+
 function pmChatOfMessage(ctx: FeishuContext, message: Message) {
   const pmId = pmOfConversation(ctx, message.conversationId);
   return { pmId, pmChatId: (pmId === null ? null : liveChatOfPm(ctx, pmId))?.chatId ?? null };
@@ -50,7 +57,7 @@ function routerAskCard(ctx: FeishuContext, message: Message, state: FeishuCardSt
   const ask = askOf(message);
   if (ask === null) return null;
   const { pmId, pmChatId } = pmChatOfMessage(ctx, message);
-  return renderRouterAskCard(message, ask, state, pmChatId, attachmentViews(slots), pmNameOf(ctx, pmId));
+  return renderRouterAskCard(message, ask, state, pmChatId, attachmentViews(slots), originOf(ctx, pmId));
 }
 
 function pmHostCard(ctx: FeishuContext, message: Message): FeishuCardJson {
@@ -70,7 +77,8 @@ function hostCardOf(ctx: FeishuContext, post: FeishuPostRecord, message: Message
   const ask = askOf(message);
   if (item === null || ask === null) return null;
   const views = attachmentViews(attachmentSlots(ctx, message, false, "router"));
-  return renderRouterItem(item, { message, meta: ask }, routerItemState(ctx, item, message), liveChatOfPm(ctx, item.pmId)?.chatId ?? null, views);
+  const pmChatId = liveChatOfPm(ctx, item.pmId)?.chatId ?? null;
+  return renderRouterItem(item, { message, meta: ask }, routerItemState(ctx, item, message), pmChatId, views, originOf(ctx, item.pmId));
 }
 
 export async function refreshHostCard(ctx: FeishuContext, message: Message, hostMessageId: FeishuMessageId) {
@@ -140,12 +148,11 @@ export async function postRouterAskCard(ctx: FeishuContext, message: Message) {
   const ref: FeishuPostRef = { kind: "router_ask", messageId: message.id };
   const existing = ctx.store.postOf(ref);
   const pmChatId = liveChatOfPm(ctx, pmId)?.chatId ?? null;
-  const pmName = pmNameOf(ctx, pmId);
   if (existing === null) {
     if (askStateOf(ctx, message).kind !== "pending") return;
     const slots = await prepareAttachments(ctx, message, "router");
-    const card = renderRouterAskCard(message, ask, askStateOf(ctx, message), pmChatId, attachmentViews(slots), pmName);
-    const posted = await postCardEntity(ctx, chat.chatId, card, `fusa-ra-${message.id}`);
+    const card = renderRouterAskCard(message, ask, askStateOf(ctx, message), pmChatId, attachmentViews(slots), originOf(ctx, pmId));
+    const posted = await postCardEntity(ctx, chat.chatId, card, devicePostUuid(ctx, "ra", message.id));
     if (routerChat(ctx)?.chatId !== chat.chatId) return;
     ctx.store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: "card_pending" }, ctx.now());
     await followUpAttachments(ctx, chat.chatId, slots, posted, "router");
@@ -191,7 +198,7 @@ function routerItemCard(ctx: FeishuContext, item: RouterItem, slots?: readonly A
   const views = withAsk !== null ? attachmentViews(slots ?? attachmentSlots(ctx, withAsk.message, false, "router")) : [];
   return {
     askMessage,
-    card: renderRouterItem(item, withAsk, state, pmChat?.chatId ?? null, views),
+    card: renderRouterItem(item, withAsk, state, pmChat?.chatId ?? null, views, originOf(ctx, item.pmId)),
     settled: state.kind !== "pending" || item.kind === "report",
   };
 }
@@ -206,7 +213,7 @@ export async function postRouterItem(ctx: FeishuContext, item: RouterItem) {
   const { askMessage, card, settled } = routerItemCard(ctx, item, slots);
   if (post === null) {
     if (item.kind === "decision" && settled) return;
-    const posted = await postCardEntity(ctx, chat.chatId, card, `fusa-r-${item.id}`);
+    const posted = await postCardEntity(ctx, chat.chatId, card, devicePostUuid(ctx, "r", item.id));
     if (ctx.store.chatById(chat.chatId) === null) return;
     const state = item.kind === "report" ? "final" : "card_pending";
     ctx.store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state }, ctx.now());

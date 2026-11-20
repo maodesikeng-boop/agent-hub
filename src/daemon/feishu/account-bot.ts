@@ -24,6 +24,7 @@ import {
   FEISHU_OFFLINE_INBOX_TTL_MS,
 } from "../../shared/limits.ts";
 import type { Db } from "../store/index.ts";
+import { feishuActionDevice } from "./cards.ts";
 import type { FeishuCardActionResponse, FeishuRawCardAction, FeishuRawEvent } from "./transport.ts";
 
 export const PEER_FEISHU_INBOUND_PATH = "/api/peer/feishu/inbound";
@@ -352,6 +353,40 @@ type CachedOwner =
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+const deviceLabelOf = (mesh: FeishuAccountMeshPort, id: DeviceId) => mesh.deviceName(id) ?? id.slice(0, 8);
+
+// The shared router chat carries cards from every device, so the issuing device stamped in the button decides; untrusted ids stay local and fail the owner's send-record check.
+export function routeCardByIssuer(issuer: DeviceId | null, mesh: Pick<FeishuAccountMeshPort, "selfId" | "deviceName" | "isOnline">): FeishuInboundRoute {
+  if (issuer === null || issuer === mesh.selfId || mesh.deviceName(issuer) === null) return { kind: "local" };
+  return mesh.isOnline(issuer) ? { kind: "forward", deviceId: issuer } : { kind: "offline", deviceId: issuer };
+}
+
+async function forwardCardAction(mesh: FeishuAccountMeshPort, deviceId: DeviceId, body: FeishuForwardedEvent, log: (line: string) => void): Promise<FeishuCardActionResponse> {
+  const forwardPromise = mesh.post(deviceId, PEER_FEISHU_INBOUND_PATH, body, FEISHU_FORWARD_TIMEOUT_MS);
+  forwardPromise.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      forwardPromise.then(
+        (raw) => ({ status: "ok" as const, raw }),
+        (error: unknown) => ({ status: "err" as const, error }),
+      ),
+      new Promise<{ status: "timeout" }>((resolve) => {
+        timer = setTimeout(() => resolve({ status: "timeout" }), FEISHU_FORWARD_CARD_TIMEOUT_MS);
+      }),
+    ]);
+    if (outcome.status === "timeout") return { toast: { type: "info", content: "已收到，正在处理" } };
+    if (outcome.status === "err") {
+      log(`飞书中心：转卡片点击给「${deviceLabelOf(mesh, deviceId)}」没成：${errorText(outcome.error)}`);
+      return feishuOfflineCardToast(deviceLabelOf(mesh, deviceId));
+    }
+    const parsed = cardActionResponseSchema.safeParse(outcome.raw ?? {});
+    return parsed.success ? parsed.data : {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createFeishuAccountBot(options: FeishuAccountBotOptions): FeishuAccountBot {
   const { mesh, local, inbox, log } = options;
   const now = options.now ?? Date.now;
@@ -364,7 +399,7 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
   let queuedTasks = 0;
   let closed = false;
 
-  const deviceLabel = (id: DeviceId) => mesh.deviceName(id) ?? id.slice(0, 8);
+  const deviceLabel = (id: DeviceId) => deviceLabelOf(mesh, id);
 
   const lookupOwner = (chatId: FeishuChatId): Promise<FeishuChatOwner> => {
     const current = now();
@@ -395,6 +430,14 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
       });
     inFlightOwners.set(chatId, pending);
     return pending;
+  };
+
+  const routeCardAction = async (action: FeishuRawCardAction): Promise<FeishuInboundRoute> => {
+    const chatId = parseFeishuChatId(action.chatId);
+    if (chatId === null) return { kind: "local" };
+    const owner = await lookupOwner(chatId);
+    if (owner.kind === "device") return routeAccountInbound(owner, mesh.selfId, (id) => mesh.isOnline(id));
+    return routeCardByIssuer(feishuActionDevice(action.value), mesh);
   };
 
   const expireInbox = async () => {
@@ -537,36 +580,10 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
       enqueueChatTask(chatId, () => processEvent(chatId, event, receivedAt));
     },
     async onCardAction(action) {
-      const chatId = parseFeishuChatId(action.chatId);
-      if (chatId === null) return local.handleCardAction(action);
-      const owner = await lookupOwner(chatId);
-      const route = routeAccountInbound(owner, mesh.selfId, (id) => mesh.isOnline(id));
+      const route = await routeCardAction(action);
       if (route.kind === "local" || route.kind === "ignore") return local.handleCardAction(action);
       if (route.kind === "offline") return feishuOfflineCardToast(deviceLabel(route.deviceId));
-      const body: FeishuForwardedEvent = { kind: "card_action", action, receivedAt: now() };
-      const forwardPromise = mesh.post(route.deviceId, PEER_FEISHU_INBOUND_PATH, body, FEISHU_FORWARD_TIMEOUT_MS);
-      forwardPromise.catch(() => {});
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const outcome = await Promise.race([
-          forwardPromise.then(
-            (raw) => ({ status: "ok" as const, raw }),
-            (error: unknown) => ({ status: "err" as const, error }),
-          ),
-          new Promise<{ status: "timeout" }>((resolve) => {
-            timer = setTimeout(() => resolve({ status: "timeout" }), FEISHU_FORWARD_CARD_TIMEOUT_MS);
-          }),
-        ]);
-        if (outcome.status === "timeout") return { toast: { type: "info", content: "已收到，正在处理" } };
-        if (outcome.status === "err") {
-          log(`飞书中心：转卡片点击给「${deviceLabel(route.deviceId)}」没成：${errorText(outcome.error)}`);
-          return feishuOfflineCardToast(deviceLabel(route.deviceId));
-        }
-        const parsed = cardActionResponseSchema.safeParse(outcome.raw ?? {});
-        return parsed.success ? parsed.data : {};
-      } finally {
-        clearTimeout(timer);
-      }
+      return forwardCardAction(mesh, route.deviceId, { kind: "card_action", action, receivedAt: now() }, log);
     },
     learnChats(from, chats) {
       if (!isDeviceId(from)) return;

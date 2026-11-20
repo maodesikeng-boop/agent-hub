@@ -1,3 +1,4 @@
+import { isDeviceId, type DeviceId } from "../../shared/api.ts";
 import { isLedgerWakeup } from "../../shared/attachments.ts";
 import type { ConversationId, MessageId, PmId } from "../../shared/domain.ts";
 import type { FeishuChatTarget } from "../../shared/feishu.ts";
@@ -39,8 +40,17 @@ export function chatOfConversation(ctx: FeishuContext, conversationId: Conversat
   return pmId === null ? null : liveChatOfPm(ctx, pmId);
 }
 
+// Every device posts its own ledger's router cards to the shared chat; ledgers are not mirrored to the center.
 export const routerChat = (ctx: FeishuContext): FeishuChatBinding | null =>
-  isCenter(ctx) && ctx.store.app()?.ownerOpenId ? ctx.store.chatOfTarget({ kind: "router" }) : null;
+  ctx.store.app()?.ownerOpenId ? ctx.store.chatOfTarget({ kind: "router" }) : null;
+
+export const centerRouterChat = (ctx: FeishuContext): FeishuChatBinding | null => (isCenter(ctx) ? routerChat(ctx) : null);
+
+export const selfDeviceId = (ctx: FeishuContext): DeviceId | undefined => (isDeviceId(ctx.options.device.id) ? ctx.options.device.id : undefined);
+
+// Feishu dedupes sends by uuid across the app, and every device numbers its ledger rows from 1.
+export const devicePostUuid = (ctx: FeishuContext, kind: string, key: number | string) =>
+  `fusa-${kind}-${ctx.options.device.id.replaceAll("-", "").slice(0, 12)}-${key}`;
 
 function awaitingUser(ctx: FeishuContext, conversationId: ConversationId): boolean {
   // `sender != 'agent'` lets SQLite use the messages_conversation_non_agent partial index.

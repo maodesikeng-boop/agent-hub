@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AskMeta, Message } from "../../shared/domain.ts";
+import type { DeviceId } from "../../shared/api.ts";
 import type { FeishuChatId } from "../../shared/feishu.ts";
 import { ASK_MAX_OPTION_CHARS, ASK_MAX_OPTIONS, FEISHU_CARD_MAX_BYTES, MAX_DECISION_CHOICE_CHARS, MAX_DECISION_NOTE_CHARS } from "../../shared/limits.ts";
 import { defaultRouterSettings, type RouterDecisionItem, type RouterReportItem } from "../../shared/router.ts";
@@ -7,6 +8,7 @@ import { AGENT_VENDORS, bundledModelCatalog } from "../../shared/vendors.ts";
 import {
   decodeFeishuActionValue,
   encodeFeishuActionValue,
+  feishuActionDevice,
   FEISHU_NOTE_FIELD,
   FEISHU_STOP_ELEMENT_ID,
   FEISHU_STREAM_ELEMENT_ID,
@@ -61,12 +63,17 @@ const message = (id: number, text: string, meta: AskMeta): Message => ({
   updatedAt: 1,
 });
 
+const DEVICE = "22222222-bbbb-4222-8222-222222222222" as DeviceId;
+
 const ALL_VALUES: FeishuActionValue[] = [
   { kind: "choose", card: { kind: "ask", askMessageId: 3 }, optionIndex: 1 },
   { kind: "choose", card: { kind: "gate", askMessageId: 3, graphId: 4, nodeKey: "impl" }, optionIndex: 0 },
   { kind: "choose", card: { kind: "router_item", itemId: 9 }, optionIndex: 2 },
   { kind: "submit_note", card: { kind: "ask", askMessageId: 5 } },
   { kind: "blocker_done", card: { kind: "blocker", askMessageId: 6, blockerId: 7 } },
+  { kind: "choose", card: { kind: "ask", askMessageId: 3 }, optionIndex: 1, d: DEVICE },
+  { kind: "submit_note", card: { kind: "router_item", itemId: 9 }, d: DEVICE },
+  { kind: "blocker_done", card: { kind: "blocker", askMessageId: 6, blockerId: 7 }, d: DEVICE },
   { kind: "stop", conversationId: 8 },
   { kind: "set_policy", pmId: 2, triggerMode: "mention_only" },
   { kind: "set_policy", pmId: 2, guestTier: "observer" },
@@ -78,6 +85,17 @@ const ALL_VALUES: FeishuActionValue[] = [
 ];
 
 describe("按钮值编解码", () => {
+  it("feishuActionDevice 只认按钮值里合法的发卡设备，旧卡没有时回 null", () => {
+    expect(feishuActionDevice(encodeFeishuActionValue({ kind: "choose", card: { kind: "ask", askMessageId: 3 }, optionIndex: 0, d: DEVICE }))).toBe(DEVICE);
+    expect(feishuActionDevice(encodeFeishuActionValue(ALL_VALUES[0]!))).toBeNull();
+    expect(feishuActionDevice({ fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: 3 }, optionIndex: 0, d: "oc_x" })).toBeNull();
+  });
+
+  it("带发卡设备的按钮值仍保持紧凑", () => {
+    const value = encodeFeishuActionValue({ kind: "choose", card: { kind: "gate", askMessageId: 99_999_999, graphId: 99_999, nodeKey: "k".repeat(64) }, optionIndex: 9, d: DEVICE });
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(400);
+  });
+
   it("每种 FeishuActionValue 编码后再解码深等于原值", () => {
     for (const value of ALL_VALUES) expect(decodeFeishuActionValue(encodeFeishuActionValue(value))).toEqual(value);
   });
@@ -89,6 +107,7 @@ describe("按钮值编解码", () => {
     expect(decodeFeishuActionValue({ kind: "stop", conversationId: 8 })).toBeNull();
     expect(decodeFeishuActionValue({ ...encodeFeishuActionValue(ALL_VALUES[0]!), card: { kind: "ask" } })).toBeNull();
     expect(decodeFeishuActionValue({ ...encodeFeishuActionValue({ kind: "set_policy", pmId: 2, guestTier: "observer" }), guestTier: undefined })).toBeNull();
+    expect(decodeFeishuActionValue({ ...encodeFeishuActionValue(ALL_VALUES[0]!), d: "not-a-device" })).toBeNull();
     expect(decodeFeishuActionValue(null)).toBeNull();
     expect(decodeFeishuActionValue("stop")).toBeNull();
   });

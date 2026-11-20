@@ -1326,7 +1326,8 @@ describe("createFeishuService：总助单聊", () => {
     const inRouter = postOfRouterItem(itemOfAsk(askId).id);
     expect(inRouter.chatId).toBe(routerChat());
     const routerCard = routerCards.filter((c) => c.data.includes("发版吗")).find((c) => c.data.includes("打开项目群"))!;
-    expect(buttonValues(routerCard.data)).toContainEqual({ kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 });
+    expect(buttonValues(routerCard.data)).toContainEqual({ kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0, d: DEVICE.id });
+    expect(JSON.parse(routerCards.find((c) => c.data.includes("登录页做完了"))!.data).header.title.content).toBe("简报 · 小林");
   });
 
   it("在单聊里点选项后账本记下回答，项目群里那张卡同时改成已定案；反过来在群里点，单聊那条也改", async () => {
