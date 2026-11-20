@@ -226,6 +226,7 @@ function ShellSidebar({ content: c, mobile, quota, quotaInHeader }: { content: S
       defaultProviderDevice={c.defaultProviderDevice}
       onSettingsOpenChange={c.onSettingsOpenChange}
       onOpenSettings={c.openSettings}
+      onOpenSettingsSection={c.openSettingsSection}
       onSelect={c.select}
       onNewPm={c.openNewPm}
     />

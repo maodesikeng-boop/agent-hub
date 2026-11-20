@@ -20,6 +20,7 @@ import type { PresenceBoard } from "../push/presence.ts";
 import type { PushSubscriptionRecord } from "../push/subscriptions.ts";
 import type { RouterDispatcher, RouterTargetPort } from "../router/index.ts";
 import type { Db } from "../store/index.ts";
+import type { UpdateChecker } from "../update-checker.ts";
 import type { VendorSyncService } from "../vendor-sync/index.ts";
 
 export interface UiServerOptions {
@@ -61,6 +62,7 @@ export interface UiServerOptions {
     request(input: { build: boolean; by: string }): SelfReloadResponse;
     status(): SelfReloadStatus;
   };
+  update?: UpdateChecker;
 }
 
 export const DESKTOP_PRODUCT = "fusa" as const;

@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, Settings } from "../ui/icons.ts";
+import { ChevronRight, Plus } from "../ui/icons.ts";
 import { Fragment, memo, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
@@ -10,10 +10,11 @@ import { Button } from "../ui/button.tsx";
 import { NARROW_QUERY, useMediaQuery } from "../useMediaQuery.ts";
 import { Avatar } from "./Avatar.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
+import type { SettingsSection } from "../route.ts";
 import { RouterAvatar } from "./RouterAvatar.tsx";
-import { QuotaPopover } from "./QuotaPopover.tsx";
 import { SearchField } from "./SearchField.tsx";
 import { SettingsDialog, type DeviceSettings, type SettingsDialogSection } from "./SettingsDialog.tsx";
+import { SidebarTools } from "./SidebarTools.tsx";
 
 const ROW = "flex h-18 w-full cursor-pointer items-center gap-3 rounded-2xl px-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
 const ROW_AVATAR = 48;
@@ -286,6 +287,7 @@ export const Sidebar = memo(
     defaultProviderDevice,
     onSettingsOpenChange,
     onOpenSettings,
+    onOpenSettingsSection,
     onSelect,
     onNewPm,
   }: {
@@ -304,6 +306,7 @@ export const Sidebar = memo(
     defaultProviderDevice?: DeviceKey;
     onSettingsOpenChange?: (open: boolean) => void;
     onOpenSettings?: () => void;
+    onOpenSettingsSection?: (section: SettingsSection) => void;
     onSelect: (ref: ConversationRef) => void;
     onNewPm: () => void;
   }) {
@@ -320,6 +323,7 @@ export const Sidebar = memo(
       if (layout === "page" && onOpenSettings) onOpenSettings();
       else setDialogOpen(true);
     };
+    const tools = <SidebarTools narrow={narrow} quota={quota} quotaFetchable={quotaFetchable} onNewPm={onNewPm} onOpenSettings={handleOpenSettings} onOpenUpdates={onOpenSettingsSection ? () => onOpenSettingsSection("updates") : handleOpenSettings} />;
     const [collapsed, setCollapsed] = useState<ReadonlySet<DeviceKey>>(new Set());
     const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<DeviceKey>>(new Set());
     const grouped = groups.length > 1;
@@ -418,15 +422,7 @@ export const Sidebar = memo(
                 );
               })}
             </nav>
-            <div className="flex shrink-0 flex-col items-center gap-2 py-3">
-              <Button variant="slot" size="icon" aria-label="New project manager" onClick={onNewPm}>
-                <Plus aria-hidden="true" />
-              </Button>
-              {quota && <QuotaPopover quota={quota} fetchable={quotaFetchable} />}
-              <Button variant="slot" size="icon" aria-label="Settings" onClick={handleOpenSettings}>
-                <Settings aria-hidden="true" />
-              </Button>
-            </div>
+            {tools}
           </>
         ) : (
           <>
@@ -466,12 +462,7 @@ export const Sidebar = memo(
                   ))
                 : groups.map((group) => <Fragment key={group.key}>{renderGroupEntries(group)}</Fragment>)}
             </nav>
-            <div className="flex items-center gap-1 px-3 py-3">
-              {quota && <QuotaPopover quota={quota} fetchable={quotaFetchable} />}
-              <Button variant="slot" size="icon" className="ml-auto" aria-label="Settings" onClick={handleOpenSettings}>
-                <Settings aria-hidden="true" />
-              </Button>
-            </div>
+            {tools}
           </>
         )}
         {layout !== "page" && (
@@ -503,6 +494,7 @@ export const Sidebar = memo(
     prev.defaultProviderDevice === next.defaultProviderDevice &&
     prev.onSettingsOpenChange === next.onSettingsOpenChange &&
     prev.onOpenSettings === next.onOpenSettings &&
+    prev.onOpenSettingsSection === next.onOpenSettingsSection &&
     prev.onSelect === next.onSelect &&
     prev.onNewPm === next.onNewPm,
 );

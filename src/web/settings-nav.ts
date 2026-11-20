@@ -11,7 +11,7 @@ export interface DesktopSettingsTarget {
 }
 
 export function desktopSectionOf(section: SettingsSection, managed: boolean): SettingsDialogSection {
-  if (section === "scale" || section === "notifications") return "general";
+  if (section === "scale" || section === "notifications" || section === "updates") return "general";
   if (section === "providers" || section === "vendor-sync") return "providers";
   if (section === "capabilities") return "capabilities";
   if (section === "computers") return managed ? "computers" : "general";

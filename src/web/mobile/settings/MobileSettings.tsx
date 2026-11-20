@@ -1,7 +1,8 @@
 import { Activity, memo, type ReactNode } from "react";
-import { ArrowLeftRight, Bell, Blocks, Cable, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
+import { ArrowLeftRight, Bell, Blocks, Cable, Download, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
 import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
+import { UpdateSettings } from "../../components/UpdateSettings.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
 import type { SettingsSection } from "../../route.ts";
@@ -14,6 +15,7 @@ import {
   useVendorSyncSetting,
   type DeviceSettings,
 } from "../../settings-model.ts";
+import { updateReminderOf, useCachedUpdateStatus, useDismissedUpdate } from "../../update-model.ts";
 import { BrowsersPage } from "./BrowsersPage.tsx";
 import { ComputersPage } from "./ComputersPage.tsx";
 import { NotificationsPage } from "./NotificationsPage.tsx";
@@ -60,6 +62,7 @@ const withDevices = (ctx: SubpageContext, render: (devices: DeviceSettings) => R
 const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
   scale: { title: "Interface scale", render: () => <ScalePage /> },
   notifications: { title: "Notifications", render: (ctx) => <NotificationsPage notify={ctx.notify} /> },
+  updates: { title: "Updates", render: () => <UpdateSettings titled={false} /> },
   providers: {
     title: "Providers",
     render: (ctx) => <ProvidersPage devices={ctx.devices} defaultDeviceKey={ctx.defaultProviderDevice} />,
@@ -91,11 +94,21 @@ function SettingsHome({
   const { label: scaleLabel } = useUiScaleSetting();
   const providers = useCachedProvidersSummary();
   const browsers = useCachedBrowserSessionsSummary();
+  const update = useCachedUpdateStatus();
+  const updateReminder = updateReminderOf(update, useDismissedUpdate());
   return (
     <SettingsPage title="Settings" home onBack={onBack}>
       <SettingsGroup title="General">
         <SettingsNavRow icon={<Type aria-hidden="true" />} label="Interface scale" summary={scaleLabel} onClick={() => onOpen("scale")} />
         <SettingsNavRow icon={<Bell aria-hidden="true" />} label="Notifications" summary={describeNotifySummary(notify)} onClick={() => onOpen("notifications")} />
+        <SettingsNavRow
+          icon={<Download aria-hidden="true" />}
+          label="Updates"
+          {...(update ? { summary: `v${update.currentVersion}` } : {})}
+          attention={updateReminder !== null}
+          attentionTestId="update-attention"
+          onClick={() => onOpen("updates")}
+        />
       </SettingsGroup>
       <SettingsGroup title="Providers">
         <SettingsNavRow
