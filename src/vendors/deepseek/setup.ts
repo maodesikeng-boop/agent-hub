@@ -266,6 +266,116 @@ function cleanDotEnvApiKey(dotEnvPath: string, platform: string): void {
   writePrivateFileAtomic(dotEnvPath, next === "" ? "" : `${next}\n`, platform);
 }
 
+function createOAuthCallbackServer(state: string, onCode: (code: string) => void): Server {
+  return createServer((req, res) => {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    } catch {
+      res.writeHead(400, { "cache-control": "no-store" }).end();
+      return;
+    }
+    const code = parsedUrl.searchParams.get("code") ?? "";
+    const givenState = parsedUrl.searchParams.get("state") ?? "";
+    const validState =
+      Buffer.byteLength(givenState) === Buffer.byteLength(state) &&
+      timingSafeEqual(Buffer.from(givenState), Buffer.from(state));
+    if (
+      req.method !== "GET" ||
+      parsedUrl.pathname !== "/oauth/callback" ||
+      !validState ||
+      !code ||
+      parsedUrl.searchParams.getAll("code").length !== 1 ||
+      parsedUrl.searchParams.getAll("state").length !== 1
+    ) {
+      res.writeHead(400, { "cache-control": "no-store" }).end();
+      return;
+    }
+    res
+      .writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+      .end("<!doctype html><meta charset='utf-8'><title>Signed in</title><p>Sign-in completed. You may return to Bellwood.</p>");
+    onCode(code);
+  });
+}
+
+function listenOnLoopback(server: Server): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      if (addr && typeof addr === "object") resolve(addr.port);
+      else reject(new Error("Failed to bind local OAuth callback port"));
+    });
+  });
+}
+
+function trustedAuthorizeUrl(rawAuthorizeUrl: string, origin: string, redirectUri: string, state: string): string {
+  const parsedAuth = new URL(rawAuthorizeUrl);
+  if (parsedAuth.origin !== origin || parsedAuth.username !== "" || parsedAuth.password !== "") {
+    throw new Error("DeepSeek platform returned untrusted authorize_url");
+  }
+  // Add redirect_uri and state when the server keys only on authorize_id, so the loopback guard has a full contract.
+  if (!parsedAuth.searchParams.has("redirect_uri")) {
+    parsedAuth.searchParams.set("redirect_uri", redirectUri);
+  }
+  if (!parsedAuth.searchParams.has("state")) {
+    parsedAuth.searchParams.set("state", state);
+  }
+  return parsedAuth.href;
+}
+
+async function exchangeAndStoreDeepSeekToken(
+  ctx: VendorSetupContext,
+  exchange: { origin: string; authCode: string; verifier: string; redirectUri: string; signal: AbortSignal },
+): Promise<void> {
+  const { origin } = exchange;
+  const credPath = resolveDeepSeekCredentialsPath(ctx);
+  const currentDoc = parseDeepSeekCredentialsYaml(readBoundedTextFile(credPath));
+  const existingDevice = currentDoc.records[DEVICE_RECORD_KEY]?.payload as { id?: unknown } | undefined;
+  const deviceId =
+    typeof existingDevice?.id === "string" && existingDevice.id.trim() !== ""
+      ? existingDevice.id
+      : randomUUID();
+
+  const exchangeData = await postDeepSeekPlatformJson(
+    origin,
+    "auth_exchange",
+    {
+      code: exchange.authCode,
+      code_verifier: exchange.verifier,
+      redirect_uri: exchange.redirectUri,
+      device_id: deviceId,
+      device_model: `${osPlatform()}-${arch()}`,
+      os_version: `${osPlatform()} ${osRelease()}`,
+    },
+    exchange.signal,
+  );
+  const token = typeof exchangeData.token === "string" ? exchangeData.token.trim() : "";
+  if (!token) {
+    throw new Error("DeepSeek auth_exchange returned empty token");
+  }
+
+  const nextDoc: DeepSeekCredentialsDoc = {
+    refs: { ...currentDoc.refs },
+    records: {
+      ...currentDoc.records,
+      [DEVICE_RECORD_KEY]: {
+        kind: "grant",
+        payload: { id: deviceId },
+      },
+      [ACCOUNT_RECORD_KEY]: {
+        kind: "grant",
+        payload: {
+          version: 1,
+          token,
+          issuer: origin,
+        },
+      },
+    },
+  };
+  writePrivateFileAtomic(credPath, serializeDeepSeekCredentialsYaml(nextDoc), ctx.platform);
+}
+
 export const deepseekSetupAdapter: VendorSetupAdapter = {
   installRecipe() {
     return { kind: "npm", packageSpec: DEEPSEEK_PINNED_NPM_SPEC };
@@ -343,44 +453,8 @@ export const deepseekSetupAdapter: VendorSetupAdapter = {
     signal.addEventListener("abort", onAbort, { once: true });
 
     try {
-      server = createServer((req, res) => {
-        let parsedUrl: URL;
-        try {
-          parsedUrl = new URL(req.url ?? "/", "http://127.0.0.1");
-        } catch {
-          res.writeHead(400, { "cache-control": "no-store" }).end();
-          return;
-        }
-        const code = parsedUrl.searchParams.get("code") ?? "";
-        const givenState = parsedUrl.searchParams.get("state") ?? "";
-        const validState =
-          Buffer.byteLength(givenState) === Buffer.byteLength(state) &&
-          timingSafeEqual(Buffer.from(givenState), Buffer.from(state));
-        if (
-          req.method !== "GET" ||
-          parsedUrl.pathname !== "/oauth/callback" ||
-          !validState ||
-          !code ||
-          parsedUrl.searchParams.getAll("code").length !== 1 ||
-          parsedUrl.searchParams.getAll("state").length !== 1
-        ) {
-          res.writeHead(400, { "cache-control": "no-store" }).end();
-          return;
-        }
-        res
-          .writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
-          .end("<!doctype html><meta charset='utf-8'><title>Signed in</title><p>Sign-in completed. You may return to Bellwood.</p>");
-        receivedCodeResolve?.(code);
-      });
-
-      const port = await new Promise<number>((resolve, reject) => {
-        server!.once("error", reject);
-        server!.listen(0, "127.0.0.1", () => {
-          const addr = server!.address();
-          if (addr && typeof addr === "object") resolve(addr.port);
-          else reject(new Error("Failed to bind local OAuth callback port"));
-        });
-      });
+      server = createOAuthCallbackServer(state, (code) => receivedCodeResolve?.(code));
+      const port = await listenOnLoopback(server);
 
       const redirectUri = `http://127.0.0.1:${port}/oauth/callback`;
       const initData = await postDeepSeekPlatformJson(
@@ -398,67 +472,12 @@ export const deepseekSetupAdapter: VendorSetupAdapter = {
       );
       const rawAuthorizeUrl = typeof initData.authorize_url === "string" ? initData.authorize_url : "";
       authorizeId = typeof initData.authorize_id === "string" ? initData.authorize_id : null;
-      const parsedAuth = new URL(rawAuthorizeUrl);
-      if (parsedAuth.origin !== origin || parsedAuth.username !== "" || parsedAuth.password !== "") {
-        throw new Error("DeepSeek platform returned untrusted authorize_url");
-      }
-      // Add redirect_uri and state when the server keys only on authorize_id, so the loopback guard has a full contract.
-      if (!parsedAuth.searchParams.has("redirect_uri")) {
-        parsedAuth.searchParams.set("redirect_uri", redirectUri);
-      }
-      if (!parsedAuth.searchParams.has("state")) {
-        parsedAuth.searchParams.set("state", state);
-      }
-      hooks.onAuthorizeUrl(parsedAuth.href);
+      hooks.onAuthorizeUrl(trustedAuthorizeUrl(rawAuthorizeUrl, origin, redirectUri, state));
 
       const authCode = await codePromise;
       signal.throwIfAborted();
 
-      const credPath = resolveDeepSeekCredentialsPath(ctx);
-      const currentDoc = parseDeepSeekCredentialsYaml(readBoundedTextFile(credPath));
-      const existingDevice = currentDoc.records[DEVICE_RECORD_KEY]?.payload as { id?: unknown } | undefined;
-      const deviceId =
-        typeof existingDevice?.id === "string" && existingDevice.id.trim() !== ""
-          ? existingDevice.id
-          : randomUUID();
-
-      const exchangeData = await postDeepSeekPlatformJson(
-        origin,
-        "auth_exchange",
-        {
-          code: authCode,
-          code_verifier: verifier,
-          redirect_uri: redirectUri,
-          device_id: deviceId,
-          device_model: `${osPlatform()}-${arch()}`,
-          os_version: `${osPlatform()} ${osRelease()}`,
-        },
-        signal,
-      );
-      const token = typeof exchangeData.token === "string" ? exchangeData.token.trim() : "";
-      if (!token) {
-        throw new Error("DeepSeek auth_exchange returned empty token");
-      }
-
-      const nextDoc: DeepSeekCredentialsDoc = {
-        refs: { ...currentDoc.refs },
-        records: {
-          ...currentDoc.records,
-          [DEVICE_RECORD_KEY]: {
-            kind: "grant",
-            payload: { id: deviceId },
-          },
-          [ACCOUNT_RECORD_KEY]: {
-            kind: "grant",
-            payload: {
-              version: 1,
-              token,
-              issuer: origin,
-            },
-          },
-        },
-      };
-      writePrivateFileAtomic(credPath, serializeDeepSeekCredentialsYaml(nextDoc), ctx.platform);
+      await exchangeAndStoreDeepSeekToken(ctx, { origin, authCode, verifier, redirectUri, signal });
     } catch (err) {
       if (signal.aborted && authorizeId) {
         void postDeepSeekPlatformJson(

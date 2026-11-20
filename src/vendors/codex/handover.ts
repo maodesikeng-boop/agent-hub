@@ -170,41 +170,116 @@ function addUsage(total: TokenUsage, last: Json): TokenUsage {
   };
 }
 
-export function createCodexForker(options: CodexForkerOptions = {}): SessionForker {
-  const spawnProcess =
-    options.spawnProcess ??
-    ((command, args, opts) => {
-      const spawned = spawnOwnedProcess(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"] });
-      const { child, detached } = spawned;
-      trackChild(child, "handover:codex", { detached });
-      return child;
-    });
-  const servers = new Map<string, CodexRpc>();
+type SpawnCodexProcess = NonNullable<CodexForkerOptions["spawnProcess"]>;
 
-  async function startServer(src: ForkSource, signal: AbortSignal): Promise<CodexRpc> {
-    const env = buildChildEnv(process.env, withoutHubEnv(src.launch).env);
-    const child = spawnProcess(src.executablePath, buildCodexArgs(), { cwd: src.cwd, env });
-    const rpc = new CodexRpc(child);
-    const onAbort = (): void => void rpc.close();
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      if (signal.aborted) throw new Error("复制被取消");
-      await new Promise<void>((resolve, reject) => {
-        child.once("spawn", resolve);
-        child.once("error", reject);
-        if (child.pid !== undefined) resolve();
-      });
-      await rpc.request("initialize", { clientInfo: { ...CODEX_CLIENT_INFO }, capabilities: { experimentalApi: true } });
-      rpc.notify("initialized");
-    } catch (error) {
-      await rpc.close();
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ForkUnsupportedError(`找不到 codex：${src.executablePath}`);
-      throw error;
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
-    return rpc;
+const defaultSpawnProcess: SpawnCodexProcess = (command, args, opts) => {
+  const spawned = spawnOwnedProcess(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"] });
+  const { child, detached } = spawned;
+  trackChild(child, "handover:codex", { detached });
+  return child;
+};
+
+async function startForkServer(spawnProcess: SpawnCodexProcess, src: ForkSource, signal: AbortSignal): Promise<CodexRpc> {
+  const env = buildChildEnv(process.env, withoutHubEnv(src.launch).env);
+  const child = spawnProcess(src.executablePath, buildCodexArgs(), { cwd: src.cwd, env });
+  const rpc = new CodexRpc(child);
+  const onAbort = (): void => void rpc.close();
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    if (signal.aborted) throw new Error("复制被取消");
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+      if (child.pid !== undefined) resolve();
+    });
+    await rpc.request("initialize", { clientInfo: { ...CODEX_CLIENT_INFO }, capabilities: { experimentalApi: true } });
+    rpc.notify("initialized");
+  } catch (error) {
+    await rpc.close();
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ForkUnsupportedError(`找不到 codex：${src.executablePath}`);
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
   }
+  return rpc;
+}
+
+async function forkThread(rpc: CodexRpc, src: ForkSource, signal: AbortSignal): Promise<string> {
+  const onAbort = (): void => void rpc.close();
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    if (signal.aborted) throw new Error("复制被取消");
+    const launch = readCodexLaunchConfig(withoutHubEnv(src.launch));
+    if (launch.skillRoots.length > 0) await rpc.request("skills/extraRoots/set", { extraRoots: launch.skillRoots }).catch(() => undefined);
+    const result = await rpc.request("thread/fork", {
+      threadId: src.vendorSessionId,
+      cwd: src.cwd,
+      model: src.model ?? undefined,
+      developerInstructions: launch.developerInstructions,
+      sandbox: CODEX_FORK_SANDBOX,
+      approvalPolicy: CODEX_FORK_APPROVAL_POLICY,
+      config: launch.config,
+      ephemeral: true,
+      excludeTurns: true,
+    });
+    const forkId = textOf((result.thread as Json | undefined)?.id);
+    if (forkId === "") throw new Error("thread/fork 没有返回 thread id");
+    return forkId;
+  } catch (error) {
+    await rpc.close();
+    if (error instanceof Error && /thread not found|no rollout found|not found/i.test(error.message)) {
+      throw new ForkUnsupportedError(`codex 找不到要复制的 thread：${error.message}`);
+    }
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+interface ForkTurnCollector {
+  done: Promise<void>;
+  texts: string[];
+  usage(): TokenUsage;
+  turnId(): string | null;
+  unlisten(): void;
+}
+
+function collectForkTurn(rpc: CodexRpc): ForkTurnCollector {
+  const texts: string[] = [];
+  let usage: TokenUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 };
+  let prevTotalKey: string | null = null;
+  let turnId: string | null = null;
+  let unlisten = (): void => {};
+  const done = new Promise<void>((resolve, reject) => {
+    unlisten = rpc.listen((method, params) => {
+      if (method === "turn/started") turnId = textOf((params.turn as Json | undefined)?.id) || turnId;
+      else if (method === "thread/tokenUsage/updated") {
+        const tu = params.tokenUsage as Json | undefined;
+        const rawTotal = typeof tu?.total === "object" && tu.total !== null ? (tu.total as Json) : null;
+        const totalKey = rawTotal
+          ? `${numberOf(rawTotal.inputTokens)}:${numberOf(rawTotal.cachedInputTokens)}:${numberOf(rawTotal.cacheWriteInputTokens)}:${numberOf(rawTotal.outputTokens)}`
+          : null;
+        if (totalKey === null || totalKey !== prevTotalKey) {
+          prevTotalKey = totalKey;
+          const last = tu?.last;
+          if (typeof last === "object" && last !== null) usage = addUsage(usage, last as Json);
+        }
+      } else if (method === "item/completed") {
+        const item = (params.item as Json | undefined) ?? {};
+        if (item.type === "agentMessage") texts.push(textOf(item.text));
+      } else if (method === "turn/completed") {
+        const turn = (params.turn as Json | undefined) ?? {};
+        if (turn.status === "completed") resolve();
+        else reject(new Error(`写交接那一轮没成（${textOf(turn.status)}）：${JSON.stringify(turn.error ?? null)}`));
+      }
+    });
+  });
+  return { done, texts, usage: () => usage, turnId: () => turnId, unlisten: () => unlisten() };
+}
+
+export function createCodexForker(options: CodexForkerOptions = {}): SessionForker {
+  const spawnProcess = options.spawnProcess ?? defaultSpawnProcess;
+  const servers = new Map<string, CodexRpc>();
 
   return {
     id: CODEX_NATIVE_FORKER_ID,
@@ -212,72 +287,18 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
 
     async fork(src, signal): Promise<ForkHandle> {
       if (signal.aborted) throw new Error("复制被取消");
-      const rpc = await startServer(src, signal);
-      const onAbort = (): void => void rpc.close();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        if (signal.aborted) throw new Error("复制被取消");
-        const launch = readCodexLaunchConfig(withoutHubEnv(src.launch));
-        if (launch.skillRoots.length > 0) await rpc.request("skills/extraRoots/set", { extraRoots: launch.skillRoots }).catch(() => undefined);
-        const result = await rpc.request("thread/fork", {
-          threadId: src.vendorSessionId,
-          cwd: src.cwd,
-          model: src.model ?? undefined,
-          developerInstructions: launch.developerInstructions,
-          sandbox: CODEX_FORK_SANDBOX,
-          approvalPolicy: CODEX_FORK_APPROVAL_POLICY,
-          config: launch.config,
-          ephemeral: true,
-          excludeTurns: true,
-        });
-        const forkId = textOf((result.thread as Json | undefined)?.id);
-        if (forkId === "") throw new Error("thread/fork 没有返回 thread id");
-        servers.set(forkId, rpc);
-        return { forkId };
-      } catch (error) {
-        await rpc.close();
-        if (error instanceof Error && /thread not found|no rollout found|not found/i.test(error.message)) {
-          throw new ForkUnsupportedError(`codex 找不到要复制的 thread：${error.message}`);
-        }
-        throw error;
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      const rpc = await startForkServer(spawnProcess, src, signal);
+      const forkId = await forkThread(rpc, src, signal);
+      servers.set(forkId, rpc);
+      return { forkId };
     },
 
     async write(src, fork, prompt, signal): Promise<ForkWriteResult> {
       const rpc = servers.get(fork.forkId);
       if (!rpc || rpc.exited) throw new Error(`复制那份的 codex 进程不在了：${fork.forkId}`);
-      const texts: string[] = [];
-      let usage: TokenUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 };
-      let prevTotalKey: string | null = null;
-      let turnId: string | null = null;
-      let unlisten = (): void => {};
-      const done = new Promise<void>((resolve, reject) => {
-        unlisten = rpc.listen((method, params) => {
-          if (method === "turn/started") turnId = textOf((params.turn as Json | undefined)?.id) || turnId;
-          else if (method === "thread/tokenUsage/updated") {
-            const tu = params.tokenUsage as Json | undefined;
-            const rawTotal = typeof tu?.total === "object" && tu.total !== null ? (tu.total as Json) : null;
-            const totalKey = rawTotal
-              ? `${numberOf(rawTotal.inputTokens)}:${numberOf(rawTotal.cachedInputTokens)}:${numberOf(rawTotal.cacheWriteInputTokens)}:${numberOf(rawTotal.outputTokens)}`
-              : null;
-            if (totalKey === null || totalKey !== prevTotalKey) {
-              prevTotalKey = totalKey;
-              const last = tu?.last;
-              if (typeof last === "object" && last !== null) usage = addUsage(usage, last as Json);
-            }
-          } else if (method === "item/completed") {
-            const item = (params.item as Json | undefined) ?? {};
-            if (item.type === "agentMessage") texts.push(textOf(item.text));
-          } else if (method === "turn/completed") {
-            const turn = (params.turn as Json | undefined) ?? {};
-            if (turn.status === "completed") resolve();
-            else reject(new Error(`写交接那一轮没成（${textOf(turn.status)}）：${JSON.stringify(turn.error ?? null)}`));
-          }
-        });
-      });
+      const turn = collectForkTurn(rpc);
       const onAbort = (): void => {
+        const turnId = turn.turnId();
         if (turnId !== null) void rpc.request("turn/interrupt", { threadId: fork.forkId, turnId }).catch(() => {});
         void rpc.close();
       };
@@ -296,10 +317,10 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
           summary: "detailed",
           sandboxPolicy: CODEX_FORK_SANDBOX_POLICY,
         });
-        await Promise.race([done, rpc.exitedError]);
-        return { text: texts.join("\n\n"), usage };
+        await Promise.race([turn.done, rpc.exitedError]);
+        return { text: turn.texts.join("\n\n"), usage: turn.usage() };
       } finally {
-        unlisten();
+        turn.unlisten();
         signal.removeEventListener("abort", onAbort);
       }
     },

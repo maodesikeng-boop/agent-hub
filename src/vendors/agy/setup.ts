@@ -18,6 +18,7 @@ import {
   createBrowserCaptureSession,
   extractAuthorizeUrlFromOutput,
   stripAnsi,
+  type BrowserCaptureSession,
 } from "../_common/setup/browser-capture.ts";
 import { readBoundedJsonObject, writePrivateFileAtomic } from "../_common/setup/file-helpers.ts";
 import { agyCliDataDir } from "./paths.ts";
@@ -92,7 +93,7 @@ function readAgyOauthEmail(userHome: string): string | null {
   return null;
 }
 
-async function runAgyAcpRpc(options: {
+interface AgyAcpRpcOptions {
   agyPath: string;
   cwd: string;
   baseEnv: Record<string, string | undefined>;
@@ -101,8 +102,149 @@ async function runAgyAcpRpc(options: {
   params: Record<string, unknown>;
   hooks?: AuthFlowHooks;
   signal: AbortSignal;
-}): Promise<void> {
-  const { agyPath, cwd, baseEnv, platform, method, params, hooks, signal } = options;
+}
+
+function onAgyAcpMessage(
+  msg: Record<string, unknown>,
+  child: ChildProcessWithoutNullStreams,
+  options: AgyAcpRpcOptions,
+  finish: (err: Error | null) => void,
+): void {
+  const { method, params } = options;
+  if (msg.id === 1) {
+    if (msg.error) {
+      const errObj = msg.error as { message?: unknown };
+      finish(new Error(typeof errObj.message === "string" ? errObj.message : "ACP initialize failed"));
+      return;
+    }
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: method === "logout" ? "auth/logout" : "authenticate",
+        params,
+      })}\n`,
+    );
+    return;
+  }
+  if (msg.id === 2) {
+    if (msg.error) {
+      const errObj = msg.error as { message?: unknown; data?: unknown };
+      const detail =
+        typeof errObj.data === "string" && errObj.data.trim() !== ""
+          ? errObj.data.trim()
+          : typeof errObj.message === "string"
+            ? errObj.message
+            : `ACP ${method} failed`;
+      finish(new Error(detail));
+      return;
+    }
+    finish(null);
+  }
+}
+
+function driveAgyAcpRpc(
+  options: AgyAcpRpcOptions,
+  childEnv: Record<string, string>,
+  capture: BrowserCaptureSession | null,
+  emitUrl: (url: string) => void,
+): Promise<void> {
+  const { agyPath, cwd, method, hooks, signal } = options;
+  return new Promise<void>((resolve, reject) => {
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(agyPath, ["acp"], {
+        cwd,
+        env: childEnv,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+
+    const { child, detached } = spawned;
+    trackChild(child, `provider:agy-acp:${method}`, { detached });
+    child.once("exit", () => termGroupAfterExit(child));
+    child.stdin.on("error", () => {});
+
+    hooks?.onUserInput((input) => {
+      if (child.exitCode === null && child.signalCode === null && !child.stdin.destroyed) {
+        child.stdin.write(`${input.trim()}\n`);
+      }
+    });
+
+    let stderrTail = "";
+    let settled = false;
+
+    const finish = (err: Error | null) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      rl.close();
+      if (child.exitCode === null && child.signalCode === null) {
+        killThenSettle(child, () => (err ? reject(err) : resolve()));
+      } else if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    };
+
+    const onAbort = () => finish(new Error("cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    child.once("error", (err) => finish(err instanceof Error ? err : new Error(String(err))));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderrTail = (stderrTail + chunk).slice(-8192);
+      capture?.pollOnce();
+      const url = extractAuthorizeUrlFromOutput(stderrTail);
+      if (url) emitUrl(url);
+    });
+
+    const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    rl.on("line", (line) => {
+      capture?.pollOnce();
+      const trimmed = line.trim();
+      if (trimmed === "") return;
+      if (!trimmed.startsWith("{")) {
+        const url = extractAuthorizeUrlFromOutput(trimmed);
+        if (url) emitUrl(url);
+        return;
+      }
+      let msg: Record<string, unknown>;
+      try {
+        msg = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        return;
+      }
+      onAgyAcpMessage(msg, child, options, finish);
+    });
+
+    child.once("close", (code, sig) => {
+      if (settled) return;
+      const cleanErr = stripAnsi(stderrTail).trim();
+      finish(new Error(cleanErr || `Antigravity exited before completing ${method} (${sig ?? `code ${code}`})`));
+    });
+
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: 1,
+          clientCapabilities: {},
+          clientInfo: { name: "fusa", version: "0.1.0" },
+        },
+      })}\n`,
+    );
+  });
+}
+
+async function runAgyAcpRpc(options: AgyAcpRpcOptions): Promise<void> {
+  const { baseEnv, platform, hooks, signal } = options;
   if (signal.aborted) throw new Error("cancelled");
 
   let urlEmitted = false;
@@ -119,127 +261,7 @@ async function runAgyAcpRpc(options: {
   try {
     const cleanBase = buildChildEnv(baseEnv, undefined);
     const childEnv = capture ? capture.applyEnv(cleanBase) : cleanBase;
-
-    await new Promise<void>((resolve, reject) => {
-      let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
-      try {
-        spawned = spawnOwnedProcess(agyPath, ["acp"], {
-          cwd,
-          env: childEnv,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-        return;
-      }
-
-      const { child, detached } = spawned;
-      trackChild(child, `provider:agy-acp:${method}`, { detached });
-      child.once("exit", () => termGroupAfterExit(child));
-      child.stdin.on("error", () => {});
-
-      hooks?.onUserInput((input) => {
-        if (child.exitCode === null && child.signalCode === null && !child.stdin.destroyed) {
-          child.stdin.write(`${input.trim()}\n`);
-        }
-      });
-
-      let stderrTail = "";
-      let settled = false;
-
-      const finish = (err: Error | null) => {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        rl.close();
-        if (child.exitCode === null && child.signalCode === null) {
-          killThenSettle(child, () => (err ? reject(err) : resolve()));
-        } else if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      };
-
-      const onAbort = () => finish(new Error("cancelled"));
-      signal.addEventListener("abort", onAbort, { once: true });
-
-      child.once("error", (err) => finish(err instanceof Error ? err : new Error(String(err))));
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
-        stderrTail = (stderrTail + chunk).slice(-8192);
-        capture?.pollOnce();
-        const url = extractAuthorizeUrlFromOutput(stderrTail);
-        if (url) emitUrl(url);
-      });
-
-      const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
-      rl.on("line", (line) => {
-        capture?.pollOnce();
-        const trimmed = line.trim();
-        if (trimmed === "") return;
-        if (!trimmed.startsWith("{")) {
-          const url = extractAuthorizeUrlFromOutput(trimmed);
-          if (url) emitUrl(url);
-          return;
-        }
-        let msg: Record<string, unknown>;
-        try {
-          msg = JSON.parse(trimmed) as Record<string, unknown>;
-        } catch {
-          return;
-        }
-        if (msg.id === 1) {
-          if (msg.error) {
-            const errObj = msg.error as { message?: unknown };
-            finish(new Error(typeof errObj.message === "string" ? errObj.message : "ACP initialize failed"));
-            return;
-          }
-          child.stdin.write(
-            `${JSON.stringify({
-              jsonrpc: "2.0",
-              id: 2,
-              method: method === "logout" ? "auth/logout" : "authenticate",
-              params,
-            })}\n`,
-          );
-          return;
-        }
-        if (msg.id === 2) {
-          if (msg.error) {
-            const errObj = msg.error as { message?: unknown; data?: unknown };
-            const detail =
-              typeof errObj.data === "string" && errObj.data.trim() !== ""
-                ? errObj.data.trim()
-                : typeof errObj.message === "string"
-                  ? errObj.message
-                  : `ACP ${method} failed`;
-            finish(new Error(detail));
-            return;
-          }
-          finish(null);
-        }
-      });
-
-      child.once("close", (code, sig) => {
-        if (settled) return;
-        const cleanErr = stripAnsi(stderrTail).trim();
-        finish(new Error(cleanErr || `Antigravity exited before completing ${method} (${sig ?? `code ${code}`})`));
-      });
-
-      child.stdin.write(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: {
-            protocolVersion: 1,
-            clientCapabilities: {},
-            clientInfo: { name: "fusa", version: "0.1.0" },
-          },
-        })}\n`,
-      );
-    });
+    await driveAgyAcpRpc(options, childEnv, capture, emitUrl);
   } finally {
     capture?.dispose();
   }
