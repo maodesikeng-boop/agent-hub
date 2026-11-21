@@ -1,6 +1,5 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import {
   DriverError,
   type AgentSessionPatch,
@@ -378,15 +377,17 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     if (readonlyPolicy === undefined) {
       launch = spawnInWriteScope("agy", { command: exePath, args }, files.writeScope ?? null, this.opts.log, `session ${st.id}`);
     } else {
+      if (!files.tmpDir) {
+        throw new DriverError("spawn_failed", "readonly launch missing session tmpDir");
+      }
       const home = realpathSync(this.#homeDir ?? homedir());
       const wrap = this.#readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
-      const privateTmp = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-ro-"));
+      const privateTmp = realpathSync(files.tmpDir);
       launch = wrap(
         { command: exePath, args },
         agyReadonlySandboxInput({ homeDir: home, tmpDir: privateTmp, policy: readonlyPolicy }),
       );
       if (!launch.osSandboxed) {
-        rmSync(privateTmp, { recursive: true, force: true });
         throw new DriverError("spawn_failed", READONLY_AGY_NEEDS_SANDBOX_MESSAGE);
       }
       if (launch.readonlyFallbackWarning) {
@@ -405,16 +406,12 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         ...(process.platform === "win32" ? { TEMP: privateTmp, TMP: privateTmp } : {}),
       };
     }
-    const removeTmp = () => {
-      if (tmpDir !== null) rmSync(tmpDir, { recursive: true, force: true });
-    };
     const child = await this.spawnDetachedChild(
       exePath,
       launch.command,
       launch.args,
       row.cwd,
       childEnv,
-      removeTmp,
     );
     const { baseProc, resolveExited } = this.createBaseProc<AgyStartupOutcome>(child, resume, row, files);
     const proc: Proc = {
@@ -425,7 +422,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     };
     st.reportedTasks.clear();
     st.activeToolSteps.clear();
-    this.attachChildProcess(st, proc, resolveExited, removeTmp);
+    this.attachChildProcess(st, proc, resolveExited);
     return proc;
   }
 

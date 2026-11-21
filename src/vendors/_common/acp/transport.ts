@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   RequestError,
@@ -11,7 +11,7 @@ import {
   type Stream,
 } from "@agentclientprotocol/sdk/unstable";
 import { scanSecretGlobs, type ReadonlySandboxInput } from "../../../daemon/driver/write-scope.ts";
-import { MAX_MESSAGE_BYTES, PRODUCT_NAME, type ReadonlyPolicy } from "../../../shared/index.ts";
+import { DriverError, MAX_MESSAGE_BYTES, PRODUCT_NAME, type ReadonlyPolicy } from "../../../shared/index.ts";
 import { realpathOrSelf, type AcpProc } from "./driver-state.ts";
 import { decideAcpPermission } from "./protocol.ts";
 import type { AcpDriverConfig, AcpLaunchContext } from "./types.ts";
@@ -20,18 +20,11 @@ export async function buildAcpReadonlySandboxInput(
   sandboxCfg: AcpDriverConfig["readonlySandbox"],
   launch: AcpLaunchContext,
   policy: ReadonlyPolicy,
-): Promise<{ input: ReadonlySandboxInput; cleanupTmp: () => void }> {
-  const rawTmp = mkdtempSync(join(tmpdir(), "agent-hub-acp-ro-"));
-  const tmpDir = realpathOrSelf(rawTmp);
-  let cleaned = false;
-  const cleanupTmp = () => {
-    if (cleaned) return;
-    cleaned = true;
-    try {
-      rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-    }
-  };
+): Promise<{ input: ReadonlySandboxInput }> {
+  if (!launch.files.tmpDir) {
+    throw new DriverError("spawn_failed", "readonly launch missing session tmpDir");
+  }
+  const tmpDir = realpathOrSelf(launch.files.tmpDir);
 
   const { row } = launch;
   const homeDir = realpathOrSelf(homedir());
@@ -80,7 +73,6 @@ export async function buildAcpReadonlySandboxInput(
       ...(readableFiles.length > 0 ? { readableFiles } : {}),
       ...(policy.dataDirScope ? { dataDirScope: policy.dataDirScope } : {}),
     },
-    cleanupTmp,
   };
 }
 

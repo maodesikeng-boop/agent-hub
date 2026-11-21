@@ -397,4 +397,32 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
     }
     expect(h.store.get(s2.id)).toMatchObject({ pid: null, status: "idle" });
   });
+
+  it("session tmpDir 绑定到 /tmp：硬编码 /tmp/hardcoded 与 $TMPDIR 都落进会话私有临时目录，不污染宿主机 /tmp", () => {
+    const varRoot = realpathSync.native(mkdtempSync(join("/var/tmp", "ah-bwrap-tmp-")));
+    const sessionTmp = realpathSync.native(mkdtempSync(join("/tmp", "bw-linux-")));
+    try {
+      const dataDir = join(varRoot, "home");
+      const own = join(dataDir, "worktrees", "1", "2");
+      mkdirSync(own, { recursive: true });
+      const scope = workerWriteScope({ role: "worker", dataDir, cwd: own, tmpDir: sessionTmp })!;
+      const run = wrapInOsSandbox(
+        { command: "/bin/sh", args: ["-c", 'echo hard > /tmp/hardcoded.txt && echo env > "$TMPDIR/from-env.txt" && echo "$TMPDIR"'] },
+        scope,
+        "linux",
+      );
+      const out = execFileSync(run.command, run.args, {
+        env: { ...process.env, TMPDIR: sessionTmp },
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
+      }).trim();
+      expect(out).toBe("/tmp");
+      expect(existsSync(join(sessionTmp, "hardcoded.txt"))).toBe(true);
+      expect(existsSync(join(sessionTmp, "from-env.txt"))).toBe(true);
+      expect(existsSync("/tmp/hardcoded.txt")).toBe(false);
+    } finally {
+      rmSync(varRoot, { recursive: true, force: true });
+      rmSync(sessionTmp, { recursive: true, force: true });
+    }
+  });
 });

@@ -5,6 +5,7 @@ export interface WriteScope {
   protectedRoots?: string[];
   writableDirs: string[];
   readScope: DataDirReadScope;
+  tmpDir?: string;
 }
 
 export type WriteBounds = Pick<WriteScope, "dataDir" | "protectedRoots" | "writableDirs">;
@@ -60,6 +61,7 @@ export function workerWriteScope(input: {
   cwd: string;
   addDirs?: readonly string[];
   launchDir?: string;
+  tmpDir?: string;
 }): WriteScope | null {
   if (input.role !== "worker") return null;
   const dataDir = trimSlash(input.dataDir);
@@ -89,6 +91,7 @@ export function workerWriteScope(input: {
       ...(input.launchDir === undefined ? {} : { launchDir: input.launchDir }),
       extraReadable: [cwd, ...(input.addDirs ?? [])],
     }),
+    ...(input.tmpDir === undefined ? {} : { tmpDir: trimSlash(input.tmpDir) }),
   };
 }
 

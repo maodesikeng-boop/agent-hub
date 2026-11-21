@@ -123,16 +123,22 @@ function makeAcpHarness(options: {
     startTimeoutMs: 10_000,
     shutdownGraceMs: 3_000,
     log: () => {},
-    prepareLaunch: async (): Promise<LaunchFiles> => ({
-      promptFile,
-      fingerprint,
-      env: {
-        FAKE_ACP_SCRIPT: scriptFile,
-        FAKE_ACP_LOG: logFile,
-        FAKE_ACP_STATE: stateDir,
-      },
-      ...(readonlyPolicy ? { readonly: readonlyPolicy } : {}),
-    }),
+    prepareLaunch: async (session): Promise<LaunchFiles> => {
+      const sessionTmpDir = join(stateDir, "tmp", String(session.id));
+      mkdirSync(sessionTmpDir, { recursive: true });
+      return {
+        promptFile,
+        tmpDir: sessionTmpDir,
+        fingerprint,
+        env: {
+          FAKE_ACP_SCRIPT: scriptFile,
+          FAKE_ACP_LOG: logFile,
+          FAKE_ACP_STATE: stateDir,
+          TMPDIR: sessionTmpDir,
+        },
+        ...(readonlyPolicy ? { readonly: readonlyPolicy } : {}),
+      };
+    },
     ...options.driverOptions,
   });
 
@@ -1074,9 +1080,9 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
       expect(capturedSandboxInput!.secretPaths.length).toBeGreaterThan(0);
       expect(capturedSandboxInput!.writableDirs).toContain(h.logDir);
       const roTmpDir = capturedSandboxInput!.tmpDir;
+      expect(roTmpDir).toContain(join("tmp", String(row.id)));
       expect(existsSync(roTmpDir)).toBe(true);
       await h.driver.end(row.id);
-      expect(existsSync(roTmpDir)).toBe(false);
     }
   });
 

@@ -358,8 +358,8 @@ describe("数据目录读边界：seatbelt 与 bwrap 规则（纯函数）", () 
     const tmpfs = at("--perms", "0700", "--tmpfs", dataDir);
     expect(tmpfs).toBeGreaterThan(at("--ro-bind", "/", "/"));
     for (const r of readable) expect(at("--ro-bind", r, r)).toBeGreaterThan(tmpfs);
-    expect(at("--bind", roInput.tmpDir, roInput.tmpDir)).toBeGreaterThan(at("--ro-bind", launchDir, launchDir));
-    expect(at("--tmpfs", "/Users/u/.ssh")).toBeGreaterThan(at("--bind", roInput.tmpDir, roInput.tmpDir));
+    expect(at("--bind", roInput.tmpDir, "/tmp")).toBeGreaterThan(at("--ro-bind", launchDir, launchDir));
+    expect(at("--tmpfs", "/Users/u/.ssh")).toBeGreaterThan(at("--bind", roInput.tmpDir, "/tmp"));
     expect(at("--remount-ro", dataDir)).toBeGreaterThan(at("--tmpfs", "/Users/u/.ssh"));
   });
 });
@@ -678,7 +678,16 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
         "/run/user/1002",
         "--bind",
         tmp,
-        tmp,
+        "/tmp",
+        "--setenv",
+        "TMPDIR",
+        "/tmp",
+        "--setenv",
+        "TEMP",
+        "/tmp",
+        "--setenv",
+        "TMP",
+        "/tmp",
         "--bind",
         cache,
         cache,
@@ -1490,5 +1499,52 @@ describe("Windows MXC 只读沙箱封装、策略与负缓存 TTL", () => {
       await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
       rmSync(sockDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Linux bwrap session /tmp bind", () => {
+  it("binds session tmpDir onto /tmp and sets TMPDIR=/tmp when no sandbox mount lives under /tmp", () => {
+    const scope = workerWriteScope({
+      role: "worker",
+      dataDir: "/home/u/.agent-hub",
+      cwd: "/home/u/.agent-hub/worktrees/1/2",
+      tmpDir: "/tmp/bw-abc123",
+    })!;
+    const args = bwrapArgs(
+      { command: "/usr/bin/claude", args: [] },
+      scope,
+      {
+        uid: 1000,
+        exists: () => true,
+        realpath: (p) => p,
+      },
+    );
+    const bindIdx = args.indexOf("/tmp/bw-abc123");
+    expect(bindIdx).toBeGreaterThan(0);
+    expect(args.slice(bindIdx - 1, bindIdx + 2)).toEqual(["--bind", "/tmp/bw-abc123", "/tmp"]);
+    expect(args).toContain("TMPDIR");
+    const tmpdirIdx = args.indexOf("TMPDIR");
+    expect(args.slice(tmpdirIdx - 1, tmpdirIdx + 2)).toEqual(["--setenv", "TMPDIR", "/tmp"]);
+  });
+
+  it("falls back to binding tmpDir onto itself when dataDir or cwd lives under /tmp", () => {
+    const scope = workerWriteScope({
+      role: "worker",
+      dataDir: "/tmp/smoke-home",
+      cwd: "/tmp/smoke-home/worktrees/1/2",
+      tmpDir: "/tmp/bw-abc123",
+    })!;
+    const args = bwrapArgs(
+      { command: "/usr/bin/claude", args: [] },
+      scope,
+      {
+        uid: 1000,
+        exists: () => true,
+        realpath: (p) => p,
+      },
+    );
+    const bindIdx = args.indexOf("/tmp/bw-abc123");
+    expect(bindIdx).toBeGreaterThan(0);
+    expect(args.slice(bindIdx - 1, bindIdx + 2)).toEqual(["--bind", "/tmp/bw-abc123", "/tmp/bw-abc123"]);
   });
 });

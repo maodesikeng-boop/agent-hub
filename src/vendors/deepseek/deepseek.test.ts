@@ -212,7 +212,7 @@ function makeDeepSeekHarness(options: {
           FAKE_ACP_LOG: logFile,
           FAKE_ACP_STATE: stateDir,
         },
-        ...(readonlyPolicy ? { readonly: readonlyPolicy } : {}),
+        ...(readonlyPolicy ? { readonly: readonlyPolicy, tmpDir: sDir } : {}),
         ...(options.skills && row.role === "pm" ? { skillsDir: join(sDir, "skills") } : {}),
       };
     },

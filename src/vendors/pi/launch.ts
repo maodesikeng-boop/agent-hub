@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import {
   scanSecretGlobs,
   spawnInWriteScope,
@@ -87,9 +86,12 @@ export async function preparePiLaunch(
     return { sessionId, effectiveFiles, launch, tmpDir: null, childEnv };
   }
 
+  if (!effectiveFiles.tmpDir) {
+    throw new DriverError("spawn_failed", "readonly launch missing session tmpDir");
+  }
   const home = realpathSync(deps.homeDir ?? homedir());
   const wrap = deps.readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
-  const privateTmp = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-ro-"));
+  const privateTmp = realpathSync(effectiveFiles.tmpDir);
   const launch = wrap(
     { command: deps.exePath, args },
     piReadonlySandboxInput({
@@ -100,7 +102,6 @@ export async function preparePiLaunch(
     }),
   );
   if (!launch.osSandboxed) {
-    rmSync(privateTmp, { recursive: true, force: true });
     throw new DriverError("spawn_failed", READONLY_PI_NEEDS_SANDBOX_MESSAGE);
   }
   return {

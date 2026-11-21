@@ -458,7 +458,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     st: AcpSessionState,
     launchCtx: AcpLaunchContext,
     rawLaunchArgs: string[],
-  ): Promise<{ spawnCmd: string; spawnArgs: string[]; extraEnv: Record<string, string>; cleanupReadonlyTmp?: () => void }> {
+  ): Promise<{ spawnCmd: string; spawnArgs: string[]; extraEnv: Record<string, string> }> {
     const { files, executablePath: exePath } = launchCtx;
     const extraEnv: Record<string, string> = { ...files.env };
     if (!files.readonly) {
@@ -471,14 +471,13 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       );
       return { spawnCmd: scoped.command, spawnArgs: scoped.args, extraEnv };
     }
-    const { input, cleanupTmp } = await buildAcpReadonlySandboxInput(this.#config.readonlySandbox, launchCtx, files.readonly);
+    const { input } = await buildAcpReadonlySandboxInput(this.#config.readonlySandbox, launchCtx, files.readonly);
     const ownOffArgs = vendorSpec(this.vendor).capabilities.ownSandboxOffArgs ?? [];
     const wrapped = this.#readonlySpawn(
       { command: exePath, args: [...ownOffArgs, ...rawLaunchArgs] },
       input,
     );
     if (!wrapped.osSandboxed) {
-      cleanupTmp();
       throw new DriverError("spawn_failed", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
     }
     if (wrapped.readonlyFallbackWarning) {
@@ -495,7 +494,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       extraEnv.TEMP = input.tmpDir;
       extraEnv.TMP = input.tmpDir;
     }
-    return { spawnCmd: wrapped.command, spawnArgs: wrapped.args, extraEnv, cleanupReadonlyTmp: cleanupTmp };
+    return { spawnCmd: wrapped.command, spawnArgs: wrapped.args, extraEnv };
   }
 
   async #spawn(st: AcpSessionState, resume: boolean, prepared: LaunchFiles | null): Promise<AcpProc> {
@@ -511,7 +510,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       typeof this.#config.launchArgs === "function"
         ? [...this.#config.launchArgs(launchCtx)]
         : [...this.#config.launchArgs];
-    const { spawnCmd, spawnArgs, extraEnv, cleanupReadonlyTmp } = await this.#wrapLaunch(st, launchCtx, rawLaunchArgs);
+    const { spawnCmd, spawnArgs, extraEnv } = await this.#wrapLaunch(st, launchCtx, rawLaunchArgs);
 
     const child = await this.spawnDetachedChild(
       exePath,
@@ -519,7 +518,6 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       spawnArgs,
       row.cwd,
       extraEnv,
-      cleanupReadonlyTmp,
     );
 
     const { baseProc, resolveExited } = this.createBaseProc<StartupOutcome>(child, resume, row, files);
@@ -565,7 +563,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       onPromptWritten: null,
     };
 
-    this.attachChildProcess(st, proc, resolveExited, cleanupReadonlyTmp);
+    this.attachChildProcess(st, proc, resolveExited);
     guardAcpFrameSize(child, () => {
       this.reportError(st.id, "bad_output_line", "ACP protocol frame exceeds message limit");
       this.forceKillProc(st, proc);

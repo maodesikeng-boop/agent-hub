@@ -233,7 +233,7 @@ child.on("exit", (code) => process.exit(code ?? 0));
         promptFile,
         fingerprint: "fp",
         env: { ...process.env, FAKE_ACP_SCRIPT: scriptFile, FAKE_ACP_LOG: logFile, FAKE_ACP_STATE: join(dir, "state") } as Record<string, string>,
-        ...(ro ? { readonly: ro.policy } : {}),
+        ...(ro ? { readonly: ro.policy, tmpDir: dir } : {}),
       }),
       ...(ro ? { readonlySpawn: ro.spawn } : {}),
     });

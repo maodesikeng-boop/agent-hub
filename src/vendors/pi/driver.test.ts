@@ -100,16 +100,20 @@ function makePiHarness(
     store,
     prepareLaunch: async (session) => {
       const launchDir = join(stateDir, "launch", String(session.id));
+      const sessionTmpDir = join(stateDir, "tmp", String(session.id));
       mkdirSync(launchDir, { recursive: true });
+      mkdirSync(sessionTmpDir, { recursive: true });
       const promptFile = join(launchDir, "prompt.md");
       writeFileSync(promptFile, `你是 ${session.role}。`);
       const readonly = readonlyMap.get(session.id) ?? false;
       const files: LaunchFiles = {
         promptFile,
+        tmpDir: sessionTmpDir,
         env: {
           HUB_TOKEN: `tok-${session.id}`,
           HUB_SOCK: join(dir, "run", "hub.sock"),
           PI_CODING_AGENT_DIR: agentDir,
+          TMPDIR: sessionTmpDir,
         },
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
@@ -500,11 +504,10 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(capturedInput!.secretPaths).not.toContain(join(h.dir, ".pi", "agent", "auth.json"));
     expect(capturedInput!.secretPaths).toContain(join(h.dir, ".ssh"));
     const privateTmp = argvEntry.envSnapshot?.TMPDIR;
-    expect(privateTmp).toContain("agent-hub-ro-");
+    expect(privateTmp).toContain(join("tmp", String(row.id)));
 
-    // 结束会话后私有 TMPDIR 立即清理，driver 内存不残留会话
+    // 结束会话后 driver 内存不残留会话（私有 TMPDIR 生命周期归 SessionTmpStore 管理）
     await h.driver.end(row.id);
-    expect(privateTmp && existsSync(privateTmp)).toBe(false);
 
     // 平台不支持 OS 沙箱时直接拒绝启动只读 Worker
     const hNoSandbox = makePiHarness({

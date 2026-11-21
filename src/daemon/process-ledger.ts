@@ -5,7 +5,7 @@ import type { ChildProcess } from "node:child_process";
 import { KILL_WAIT_MS, PROCESS_LEDGER_MAX_ENTRIES, PROCESS_LEDGER_PURPOSE_MAX_CHARS } from "../shared/limits.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { forceKillTree, signalPid, waitForExit } from "./driver/process.ts";
-import { queryProcessStartTime } from "./platform/index.ts";
+import { queryProcessStartTime, reapTaggedProcesses } from "./platform/index.ts";
 
 export interface LedgerEntry {
   pid: number;
@@ -26,6 +26,7 @@ export interface ProcessLedgerOptions {
   log?: (line: string) => void;
   startTimeOf?: (pid: number) => Promise<string | null>;
   kill?: (pid: number, ownsGroup: boolean) => Promise<void>;
+  reapTagged?: (tag: string) => Promise<{ readonly reapedPids: readonly number[] }>;
 }
 
 export interface TrackOptions {
@@ -47,7 +48,15 @@ async function defaultStartTimeOf(pid: number): Promise<string | null> {
 function isEntry(value: unknown): value is LedgerEntry {
   if (typeof value !== "object" || value === null) return false;
   const e = value as Record<string, unknown>;
-  return Number.isInteger(e.pid) && (e.pid as number) > 1 && typeof e.startTime === "string" && e.startTime !== "" && typeof e.purpose === "string" && typeof e.ownsGroup === "boolean";
+  return (
+    Number.isInteger(e.pid) &&
+    (e.pid as number) > 1 &&
+    typeof e.startTime === "string" &&
+    e.startTime !== "" &&
+    typeof e.purpose === "string" &&
+    typeof e.ownsGroup === "boolean" &&
+    (e.sessionTag === undefined || typeof e.sessionTag === "string")
+  );
 }
 
 export function readLedgerFile(file: string): LedgerEntry[] {
@@ -83,7 +92,7 @@ async function defaultKill(pid: number, ownsGroup: boolean): Promise<void> {
 type TrackedChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">;
 
 export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedger {
-  const { file, log = () => {}, startTimeOf = defaultStartTimeOf, kill = defaultKill } = options;
+  const { file, log = () => {}, startTimeOf = defaultStartTimeOf, kill = defaultKill, reapTagged = reapTaggedProcesses } = options;
   const entries = new Map<number, { child: TrackedChild; entry: LedgerEntry }>();
   const liveChildren = new Map<number, TrackedChild>();
   const pending = new Set<Promise<void>>();
@@ -124,7 +133,13 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
           entries.delete(pid);
           entries.set(pid, {
             child,
-            entry: { pid, startTime, purpose: purpose.slice(0, PROCESS_LEDGER_PURPOSE_MAX_CHARS), ownsGroup },
+            entry: {
+              pid,
+              startTime,
+              purpose: purpose.slice(0, PROCESS_LEDGER_PURPOSE_MAX_CHARS),
+              ownsGroup,
+              ...(trackOptions.sessionTag ? { sessionTag: trackOptions.sessionTag } : {}),
+            },
           });
           while (entries.size > PROCESS_LEDGER_MAX_ENTRIES) entries.delete(entries.keys().next().value as number);
           persist();
@@ -135,14 +150,25 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
     },
     async reapStale() {
       const reaped: ReapedEntry[] = [];
+      const staleTags = new Set<string>();
       for (const entry of readLedgerFile(file)) {
         if (entry.pid === process.pid || entries.has(entry.pid) || liveChildren.has(entry.pid)) continue;
+        if (entry.sessionTag) staleTags.add(entry.sessionTag);
         const reason = await judge(entry);
         if (reason === null) continue;
         if (reason === "same_process") await kill(entry.pid, entry.ownsGroup);
         else signalPid(-entry.pid, "SIGKILL");
         reaped.push({ ...entry, reason });
         log(`${LOG_PREFIX} 回收上次残留的子进程 ${entry.pid}（${entry.purpose}）`);
+      }
+      for (const tag of staleTags) {
+        try {
+          const result = await reapTagged(tag);
+          if (result.reapedPids.length > 0) {
+            log(`${LOG_PREFIX} 回收上次残留的会话子孙进程（${tag}）：${result.reapedPids.join(", ")}`);
+          }
+        } catch {
+        }
       }
       persist();
       return reaped;
