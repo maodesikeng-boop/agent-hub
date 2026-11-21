@@ -689,7 +689,7 @@ process.exit(res.status ?? 1);
     endWorker(wFresh.id);
     writeFileSync(countFile, "");
     expect(await emptyCleanup.runOnce()).toEqual([]);
-    // for-each-ref + merge-base（祖先与 squash 检查，main 未推进时跳过 commit-tree）、rev-parse HEAD + for-each-ref + merge-base：都只读引用，不跑 git status
+    // for-each-ref + merge-base（祖先与 squash 检查，main 未推进时跳过 patch-id 比对）、rev-parse HEAD + for-each-ref + merge-base：都只读引用，不跑 git status
     expect(countCalls()).toBe(7);
     git(repo, "worktree", "remove", wFresh.worktreePath!);
 

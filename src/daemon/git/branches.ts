@@ -30,11 +30,24 @@ export async function resolveMainTargetCommits(repoFolder: string, options: GitO
   return [...new Set(run.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== ""))].sort();
 }
 
-async function resolveBranchCommit(repoFolder: string, branchRef: string, timeoutMs: number): Promise<string | null> {
-  const run = await runGit(repoFolder, [...GIT_READONLY_ARGS, "rev-parse", "--verify", "--quiet", `${branchRef}^{commit}`], timeoutMs, PROBE_ENV);
-  if (run.code !== 0) return null;
-  const sha = run.stdout.trim();
-  return sha === "" ? null : sha;
+async function resolveBranchAndTargets(repoFolder: string, branchRef: string, timeoutMs: number): Promise<{ branchCommit: string | null; targetCommits: string[] }> {
+  const run = await runGit(
+    repoFolder,
+    [...GIT_READONLY_ARGS, "for-each-ref", "--format=%(refname) %(objectname)", branchRef, ...MAIN_TARGET_REFS],
+    timeoutMs,
+    PROBE_ENV,
+  );
+  if (run.code !== 0) throw failedGit("git for-each-ref", run);
+  let branchCommit: string | null = null;
+  const targets = new Set<string>();
+  for (const line of run.stdout.split("\n")) {
+    const item = line.trim();
+    const space = item.lastIndexOf(" ");
+    if (space <= 0) continue;
+    if (item.slice(0, space) === branchRef) branchCommit = item.slice(space + 1);
+    else targets.add(item.slice(space + 1));
+  }
+  return { branchCommit, targetCommits: [...targets].sort() };
 }
 
 function patchIdsOf(stdout: string): string[] {
@@ -76,8 +89,7 @@ export async function isBranchSquashMergedToMain(
   const trimmed = branch.trim();
   if (trimmed === "" || trimmed.startsWith("-")) return false;
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const branchCommit = await resolveBranchCommit(repoFolder, `refs/heads/${trimmed}`, timeoutMs);
-  const targetCommits = await resolveMainTargetCommits(repoFolder, options);
+  const { branchCommit, targetCommits } = await resolveBranchAndTargets(repoFolder, `refs/heads/${trimmed}`, timeoutMs);
   if (branchCommit === null || targetCommits.length === 0) return false;
   if (baseCommit !== null && branchCommit === baseCommit) return false;
 
