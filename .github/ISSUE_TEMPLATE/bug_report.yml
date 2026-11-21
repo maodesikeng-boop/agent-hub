@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in Bellwood does not work as expected.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Bellwood version
+      description: Shown in Settings, or the version in package.json for a source checkout.
+      placeholder: v0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - macOS DMG
+        - Windows installer
+        - From source (pnpm start)
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent CLI and version
+      placeholder: claude 2.1.0
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The tail of ~/.agent-hub/state/logs/daemon.log. Remove tokens, keys, and chat content first.
+      render: text
