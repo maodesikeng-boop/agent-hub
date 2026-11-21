@@ -1,7 +1,12 @@
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { ConversationId, SessionId, WorkerId } from "../../shared/domain.ts";
-import { WORKER_PURGE_BATCH_ROWS, WORKER_PURGE_CANDIDATES_PER_BATCH, WORKER_RETENTION_MS } from "../../shared/limits.ts";
+import {
+  WORKER_PURGE_BATCH_ROWS,
+  WORKER_PURGE_CANDIDATES_PER_BATCH,
+  WORKER_RETENTION_MAX_ENDED,
+  WORKER_RETENTION_MS,
+} from "../../shared/limits.ts";
 import { removeSessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 
@@ -52,25 +57,49 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
     return [...ids];
   };
 
-  /** Cheap read-only check so the common case never opens a write transaction or scans actions. */
-  const hasExpiredCandidate = (cutoff: number): boolean =>
-    db.get(
-      `SELECT 1 AS x FROM workers w
+  const overflowAnchor = (): { updated_at: number; id: number } | undefined =>
+    db.get<{ updated_at: number; id: number }>(
+      `SELECT w.updated_at, w.id FROM workers w
         JOIN conversations c ON c.id = w.worker_conversation_id AND c.kind = 'worker'
-        WHERE w.status = 'ended' AND w.updated_at <= ?
+        WHERE w.status = 'ended'
           AND w.worker_conversation_id != w.pm_conversation_id
           AND NOT EXISTS (SELECT 1 FROM conversation_purges x WHERE x.conversation_id = w.worker_conversation_id)
-          AND NOT EXISTS (${IN_ACTIVE_GRAPH})
-        LIMIT 1`,
-      cutoff,
-    ) !== undefined;
+        ORDER BY w.updated_at DESC, w.id DESC LIMIT 1 OFFSET ?`,
+      WORKER_RETENTION_MAX_ENDED,
+    );
 
-  const eligible = (cutoff: number, limit: number): Candidate[] => {
+  const ageOrOverflowClause = (cutoff: number, anchor: { updated_at: number; id: number } | undefined): { sql: string; params: number[] } =>
+    anchor === undefined
+      ? { sql: "w.updated_at <= ?", params: [cutoff] }
+      : {
+          sql: "(w.updated_at <= ? OR w.updated_at < ? OR (w.updated_at = ? AND w.id <= ?))",
+          params: [cutoff, anchor.updated_at, anchor.updated_at, anchor.id],
+        };
+
+  /** Cheap read-only check so the common case never opens a write transaction or scans actions. */
+  const hasExpiredCandidate = (cutoff: number, anchor: { updated_at: number; id: number } | undefined): boolean => {
+    const cond = ageOrOverflowClause(cutoff, anchor);
+    return (
+      db.get(
+        `SELECT 1 AS x FROM workers w
+          JOIN conversations c ON c.id = w.worker_conversation_id AND c.kind = 'worker'
+          WHERE w.status = 'ended' AND ${cond.sql}
+            AND w.worker_conversation_id != w.pm_conversation_id
+            AND NOT EXISTS (SELECT 1 FROM conversation_purges x WHERE x.conversation_id = w.worker_conversation_id)
+            AND NOT EXISTS (${IN_ACTIVE_GRAPH})
+          LIMIT 1`,
+        ...cond.params,
+      ) !== undefined
+    );
+  };
+
+  const eligible = (cutoff: number, anchor: { updated_at: number; id: number } | undefined, limit: number): Candidate[] => {
     const busy = busyWorkers();
+    const cond = ageOrOverflowClause(cutoff, anchor);
     return db.all<{ id: number; conv: number }>(
       `SELECT w.id, w.worker_conversation_id AS conv FROM workers w
         JOIN conversations c ON c.id = w.worker_conversation_id AND c.kind = 'worker'
-        WHERE w.status = 'ended' AND w.updated_at <= ?
+        WHERE w.status = 'ended' AND ${cond.sql}
           AND w.worker_conversation_id != w.pm_conversation_id
           AND NOT EXISTS (SELECT 1 FROM conversation_purges x WHERE x.conversation_id = w.worker_conversation_id)
           AND NOT EXISTS (${IN_ACTIVE_GRAPH})
@@ -79,7 +108,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
             SELECT 1 FROM agent_sessions s
              WHERE (s.worker_id = w.id OR s.conversation_id = w.worker_conversation_id) AND (s.status = 'running' OR s.pid IS NOT NULL))
         ORDER BY w.updated_at, w.id LIMIT ?`,
-      cutoff,
+      ...cond.params,
       ...busy,
       limit,
     );
@@ -176,13 +205,14 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
   /** One transaction deletes at most maxRows rows to bound lock time. */
   const purgeBatch = (nowMs: number = now(), maxRows: number = WORKER_PURGE_BATCH_ROWS): WorkerPurgeBatch => {
     const cutoff = nowMs - WORKER_RETENTION_MS;
-    if (!hasExpiredCandidate(cutoff)) {
+    const anchor = overflowAnchor();
+    if (!hasExpiredCandidate(cutoff, anchor)) {
       sweepRetiredLaunchDirs();
       return { rows: 0, purged: [], more: false };
     }
     const budget = Math.max(1, Math.floor(maxRows));
     const { rows, purged, candidatesCount } = write((p) => {
-      const candidates = eligible(cutoff, WORKER_PURGE_CANDIDATES_PER_BATCH);
+      const candidates = eligible(cutoff, overflowAnchor(), WORKER_PURGE_CANDIDATES_PER_BATCH);
       let batchRows = 0;
       const batchPurged: WorkerId[] = [];
       for (const c of candidates) {
@@ -201,7 +231,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
           ? true
           : candidatesCount < WORKER_PURGE_CANDIDATES_PER_BATCH
             ? false
-            : eligible(cutoff, 1).length > 0;
+            : eligible(cutoff, overflowAnchor(), 1).length > 0;
     return { rows, purged, more };
   };
 

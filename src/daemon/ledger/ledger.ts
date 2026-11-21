@@ -43,8 +43,8 @@ import { createLedgerTakeover } from "./takeover.ts";
 import { createSkillFiles, type SkillFiles } from "../skill-files.ts";
 import { createLedgerUserBlockers } from "./user-blockers.ts";
 import { taskGraphManualNote } from "../task-graph-skill.ts";
-import { createLedgerWorkerRetention } from "./worker-retention.ts";
-import type { WorkerPurgeBatch } from "./worker-retention.ts";
+import { createLedgerWorkerRetention, type WorkerPurgeBatch } from "./worker-retention.ts";
+import { createDbTableRetention, type TableRetentionBatch } from "./db-table-retention.ts";
 import { createLedgerWorkerView } from "./worker-view.ts";
 import { assertWorkerOpenForUser, createLedgerWorkers, notStarted } from "./workers.ts";
 import type { EndedWorktreeCandidate } from "./workers.ts";
@@ -55,6 +55,8 @@ export interface SqliteLedger extends Ledger {
   purgeExpiredArchivedPms(nowMs?: number): PmId[];
   purgeExpiredWorkerConversations(nowMs?: number, maxRows?: number): WorkerPurgeBatch;
   purgeExpiredRouterAndGraphRecords(nowMs?: number, maxRows?: number): { rows: number; more: boolean };
+  purgeGrowingTables(nowMs?: number, maxRows?: number): TableRetentionBatch;
+  trimEndedWorkerSteps(sessionId: SessionId): number;
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
   isWorkerCleanable(workerId: WorkerId): boolean;
   getRouterSettings: LedgerRouter["getSettings"];
@@ -195,6 +197,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
   const workerRetention = createLedgerWorkerRetention(ctx, files);
+  const tableRetention = createDbTableRetention(ctx);
   const workerView = createLedgerWorkerView(ctx, steps, {
     ownWorker: workers.ownWorker,
     workerSession: workers.workerSession,
@@ -388,12 +391,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     unarchivePm: persona.unarchivePm,
     purgeExpiredArchivedPms: persona.purgeExpiredArchivedPms,
     purgeExpiredWorkerConversations: workerRetention.purgeBatch,
+    purgeGrowingTables: (nowMs = ctx.now(), maxRows = WORKER_PURGE_BATCH_ROWS) => tableRetention.purgeAllBatch(nowMs, maxRows),
+    trimEndedWorkerSteps: tableRetention.trimEndedWorkerSteps,
     purgeExpiredRouterAndGraphRecords(nowMs = ctx.now(), maxRows = WORKER_PURGE_BATCH_ROWS) {
-      let rows = 0;
-      rows += router.purgeExpiredBatch(nowMs, maxRows - rows);
-      if (rows < maxRows) {
-        rows += taskGraphs.purgeExpiredBatch(nowMs, maxRows - rows);
-      }
+      let rows = router.purgeExpiredBatch(nowMs, maxRows);
+      if (rows < maxRows) rows += taskGraphs.purgeExpiredBatch(nowMs, maxRows - rows);
       return { rows, more: rows >= maxRows };
     },
 

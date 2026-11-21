@@ -30,13 +30,11 @@ import type { WaitingAsk } from "../../shared/waiting-asks.ts";
 import {
   MAX_DECISION_NOTE_CHARS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
-  ROUTER_STREAM_PAGE_SIZE,
   ROUTER_AUDIT_LOG_MAX_ROWS,
+  ROUTER_STREAM_PAGE_SIZE,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
-  ROUTER_COMMANDS_RETENTION_MAX,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
   ROUTER_CONTEXT_MAX_CHARS,
-  ROUTER_ITEM_RETENTION_MS,
   ROUTER_PENDING_DECISIONS_PER_PM_MAX,
   ROUTER_PM_ACTIVE_WORKERS_MAX,
   ROUTER_PM_BRIEF_MAX_CHARS,
@@ -50,6 +48,7 @@ import {
   ROUTER_WORKER_LIST_MAX,
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
+import { purgeRouterExpiredIn } from "./db-table-retention.ts";
 import { fitRouterDigest } from "./router-digest-fit.ts";
 import { parseLocalHref } from "../../shared/sent-files.ts";
 import type { ProjectCatalogCard } from "../../shared/project-catalog.ts";
@@ -885,67 +884,8 @@ export function createLedgerRouter(
     return digest;
   };
 
-  const purgeExpiredBatch = (nowMs: number, maxRows: number): number => {
-    if (maxRows <= 0) return 0;
-    return write(() => {
-      let deleted = 0;
-      const itemCutoff = nowMs - ROUTER_ITEM_RETENTION_MS;
-
-      const itemsRem = maxRows - deleted;
-      if (itemsRem > 0) {
-        deleted += db.run(
-          `DELETE FROM router_items
-            WHERE id IN (
-              SELECT id FROM router_items
-               WHERE status IN ('resolved', 'superseded', 'archived') AND updated_at <= ?
-               LIMIT ?
-            )`,
-          itemCutoff,
-          itemsRem,
-        ).changes;
-      }
-
-      const cmdsRem = maxRows - deleted;
-      if (cmdsRem > 0) {
-        const thresholdRow = db.get<{ id: number }>(
-          "SELECT id FROM router_commands ORDER BY id DESC LIMIT 1 OFFSET ?",
-          ROUTER_COMMANDS_RETENTION_MAX,
-        );
-        const maxKeepId = thresholdRow?.id ?? 0;
-        deleted += db.run(
-          `DELETE FROM router_commands
-            WHERE id IN (
-              SELECT id FROM router_commands
-               WHERE status IN ('dispatched', 'answered', 'failed', 'cancelled')
-                 AND (updated_at <= ? OR id <= ?)
-               LIMIT ?
-            )`,
-          itemCutoff,
-          maxKeepId,
-          cmdsRem,
-        ).changes;
-      }
-
-      const auditRem = maxRows - deleted;
-      if (auditRem > 0) {
-        deleted += db.run(
-          `DELETE FROM router_audit_log
-            WHERE id IN (
-              SELECT id FROM router_audit_log
-               WHERE id <= COALESCE(
-                 (SELECT id FROM router_audit_log ORDER BY id DESC LIMIT 1 OFFSET ?),
-                 0
-               )
-               LIMIT ?
-            )`,
-          ROUTER_AUDIT_LOG_MAX_ROWS,
-          auditRem,
-        ).changes;
-      }
-
-      return deleted;
-    });
-  };
+  const purgeExpiredBatch = (nowMs: number, maxRows: number): number =>
+    maxRows <= 0 ? 0 : write(() => purgeRouterExpiredIn(db, nowMs, maxRows));
 
   const createCommand = (input: {
     clientId: string;

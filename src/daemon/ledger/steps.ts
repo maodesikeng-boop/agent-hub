@@ -97,6 +97,7 @@ export function createLedgerSteps(ctx: LedgerContext) {
   };
 
   const afterDriverEvent = (session: AgentSessionRow, event: DriverEvent) => {
+    if (session.role !== "worker") return;
     const sessionId = session.id;
     switch (event.type) {
       case "session.started":

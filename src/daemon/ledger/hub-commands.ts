@@ -5,7 +5,7 @@ import { feishuGuestTurnBlockReason, feishuOriginOf } from "../../shared/feishu.
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, hubCommandAllowed } from "../../shared/hub.ts";
 import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
+import { HUB_CALL_RESULT_MAX_BYTES, HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
 import type { SentFile } from "../../shared/sent-files.ts";
 import { deliverablesOfFileArgs, fileArgsProblem } from "../deliverables.ts";
@@ -384,7 +384,7 @@ export function createLedgerHubCommands(
       JSON.stringify(summarizeArgs(parsedArgs.success ? parsedArgs.data : {})),
       ok ? 1 : 0,
       errorCode,
-      truncateField(result),
+      truncateField(result, HUB_CALL_RESULT_MAX_BYTES),
       now(),
     );
   };

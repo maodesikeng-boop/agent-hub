@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PmId } from "../../shared/domain.ts";
 import type { FeishuAppId, FeishuCardId, FeishuChatId, FeishuImageKey, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
-import { PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
+import {
+  FEISHU_DECISIONS_MAX_ROWS,
+  FEISHU_POSTS_MAX_ROWS,
+  FEISHU_ROUTER_EVENTS_MAX_ROWS,
+  FEISHU_ROUTER_EVENTS_TTL_MS,
+  PM_ARCHIVE_RETENTION_MS,
+} from "../../shared/limits.ts";
 import { createLedger } from "../ledger/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -193,5 +199,60 @@ describe("createFeishuStore", () => {
     // 0039 之前记的是水果名：读出来当没设过，下一次对齐重设
     db.run("UPDATE feishu_chats SET avatar_fruit = 'lime' WHERE chat_id = ?", chat("b"));
     expect(store.chatById(chat("b"))?.avatarLook).toBeNull();
+  });
+
+  it("prunePosts enforces row caps on feishu_posts, feishu_decisions, feishu_router_events and TTL on feishu_router_events", () => {
+    fill();
+    const now = 1_000_000_000_000;
+    const oldTs = now - FEISHU_ROUTER_EVENTS_TTL_MS - 1_000;
+
+    db.transaction(() => {
+      for (let i = 0; i < FEISHU_POSTS_MAX_ROWS + 5; i++) {
+        db.run(
+          `INSERT INTO feishu_posts (ref_kind, ref_id, part, chat_id, message_id, sequence, state, updated_at)
+           VALUES ('message', ?, 0, ?, ?, 0, 'final', ?)`,
+          100 + i,
+          chat("a"),
+          om(`p${i}`),
+          now - i,
+        );
+      }
+      // Pending card must be spared even when over cap.
+      db.run(
+        `INSERT INTO feishu_posts (ref_kind, ref_id, part, chat_id, message_id, sequence, state, updated_at)
+         VALUES ('message', 999999, 0, ?, ?, 0, 'card_pending', 1)`,
+        chat("a"),
+        om("pending"),
+      );
+      for (let i = 0; i < FEISHU_DECISIONS_MAX_ROWS + 4; i++) {
+        store.saveDecision({ kind: "ask", askMessageId: 100 + i }, `client-${i}`, "ok", now - i);
+      }
+      const pmConv = db.get<{ id: number }>("SELECT id FROM conversations WHERE pm_id = ? LIMIT 1", pmA)!;
+      db.run(
+        "INSERT INTO messages (id, conversation_id, sender, kind, text, dedupe_key, status, created_at, updated_at) VALUES (50001, ?, 'agent', 'text', 'old', 'ask-50001', 'replied', ?, ?)",
+        pmConv.id,
+        oldTs,
+        oldTs,
+      );
+      db.run(
+        "INSERT INTO messages (id, conversation_id, sender, kind, text, dedupe_key, status, created_at, updated_at) VALUES (50002, ?, 'agent', 'text', 'fresh', 'ask-50002', 'replied', ?, ?)",
+        pmConv.id,
+        now,
+        now,
+      );
+      for (let i = 0; i < FEISHU_ROUTER_EVENTS_MAX_ROWS + 3; i++) {
+        db.run("INSERT INTO feishu_router_events (ask_message_id) VALUES (50002)");
+      }
+      // Insert the TTL-expired ask_message_id event last so it sits inside the newest FEISHU_ROUTER_EVENTS_MAX_ROWS window and is deleted by TTL rather than the row cap.
+      db.run("INSERT INTO feishu_router_events (ask_message_id) VALUES (50001)");
+    });
+
+    const deleted = store.prunePosts(0, now);
+    expect(deleted).toBeGreaterThan(0);
+    expect(count("feishu_posts")).toBe(FEISHU_POSTS_MAX_ROWS + 1);
+    expect(store.postOf({ kind: "message", messageId: 999999, part: 0 })?.state).toBe("card_pending");
+    expect(count("feishu_decisions")).toBe(FEISHU_DECISIONS_MAX_ROWS);
+    expect(count("feishu_router_events")).toBe(FEISHU_ROUTER_EVENTS_MAX_ROWS - 1);
+    expect(db.get("SELECT id FROM feishu_router_events WHERE ask_message_id = 50001")).toBeUndefined();
   });
 });

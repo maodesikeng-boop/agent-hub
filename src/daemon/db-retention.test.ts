@@ -4,9 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  COMPLETED_GRAPHS_MAX_ROWS,
   COMPLETED_GRAPH_RETENTION_MS,
   ROUTER_AUDIT_LOG_MAX_ROWS,
+  ROUTER_AUDIT_LOG_RETENTION_MS,
   ROUTER_COMMANDS_RETENTION_MAX,
+  ROUTER_COMMANDS_RETENTION_MS,
+  ROUTER_ITEMS_TERMINAL_MAX_ROWS,
   ROUTER_ITEM_RETENTION_MS,
   WORKER_PURGE_BATCH_ROWS,
   WORKER_PURGE_ROUND_MAX_ROWS,
@@ -213,6 +217,81 @@ describe("Router 与已完成任务图的到期清理", () => {
       expect(realDb.get<{ n: number }>("SELECT count(*) AS n FROM router_audit_log")!.n).toBe(ROUTER_AUDIT_LOG_MAX_ROWS);
       expect(realDb.all<{ id: number }>("SELECT id FROM task_graphs")).toEqual([{ id: activeGid }]);
       expect(realDb.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_steps WHERE graph_id = ?", oldGid)!.n).toBe(0);
+    } finally {
+      realLedger.close();
+      realDb.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces row caps on completed task_graphs and terminal router_items plus TTL on router_commands and router_audit_log", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-hub-retention-caps-"));
+    const realDb = openTestDb();
+    const realLedger = createLedger(realDb, { pmHomeRoot: join(root, "pm-home"), dataHome: root });
+    try {
+      const { pm, conversation } = realLedger.createPm({ name: "小林", mode: "manage_only", persona: "" });
+      const nowMs = 300 * 24 * 60 * 60 * 1000;
+      const fresh = nowMs - 1_000;
+      const projectId = Number(
+        realDb.run(
+          "INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('foo', ?, ?, 100, 100)",
+          pm.id,
+          conversation.id,
+        ).lastInsertRowid,
+      );
+
+      realDb.transaction(() => {
+        for (let i = 0; i < COMPLETED_GRAPHS_MAX_ROWS + 5; i++) {
+          realDb.run(
+            `INSERT INTO task_graphs (project_id, pm_id, conversation_id, title, status, created_at, updated_at, completed_at)
+             VALUES (?, ?, ?, ?, 'completed', ?, ?, ?)`,
+            projectId,
+            pm.id,
+            conversation.id,
+            `g-${i}`,
+            fresh + i,
+            fresh + i,
+            fresh + i,
+          );
+        }
+        for (let i = 0; i < ROUTER_ITEMS_TERMINAL_MAX_ROWS + 6; i++) {
+          realDb.run(
+            `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, summary, created_at, updated_at)
+             VALUES (?, ?, ?, 'report', 'archived', ?, ?, ?)`,
+            pm.id,
+            projectId,
+            conversation.id,
+            `r-${i}`,
+            fresh + i,
+            fresh + i,
+          );
+        }
+        // Expired router_commands and router_audit_log below row cap must still be deleted by TTL.
+        realDb.run(
+          `INSERT INTO router_commands (client_id, input_text, vendor, status, created_at, updated_at)
+           VALUES ('expired-cmd', 'cmd', 'claude', 'dispatched', ?, ?)`,
+          nowMs - ROUTER_COMMANDS_RETENTION_MS - 1_000,
+          nowMs - ROUTER_COMMANDS_RETENTION_MS - 1_000,
+        );
+        realDb.run(
+          `INSERT INTO router_commands (client_id, input_text, vendor, status, created_at, updated_at)
+           VALUES ('fresh-cmd', 'cmd', 'claude', 'dispatched', ?, ?)`,
+          fresh,
+          fresh,
+        );
+        realDb.run(
+          "INSERT INTO router_audit_log (actor, action, created_at) VALUES ('pm', 'old', ?)",
+          nowMs - ROUTER_AUDIT_LOG_RETENTION_MS - 1_000,
+        );
+        realDb.run("INSERT INTO router_audit_log (actor, action, created_at) VALUES ('pm', 'fresh', ?)", fresh);
+      });
+
+      await runRetentionRound({ ledger: realLedger, db: realDb, log: () => {}, now: () => nowMs, yieldToLoop: async () => {} });
+
+      expect(realDb.get<{ n: number }>("SELECT count(*) AS n FROM task_graphs WHERE status != 'active'")!.n).toBe(COMPLETED_GRAPHS_MAX_ROWS);
+      expect(realDb.get<{ n: number }>("SELECT count(*) AS n FROM router_items WHERE status != 'pending'")!.n).toBe(ROUTER_ITEMS_TERMINAL_MAX_ROWS);
+      expect(realDb.all<{ client_id: string }>("SELECT client_id FROM router_commands")).toEqual([{ client_id: "fresh-cmd" }]);
+      expect(realDb.all<{ action: string }>("SELECT action FROM router_audit_log")).toEqual([{ action: "fresh" }]);
     } finally {
       realLedger.close();
       realDb.close();

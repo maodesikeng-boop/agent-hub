@@ -13,7 +13,13 @@ import type {
 } from "../../shared/feishu.ts";
 import { isOneOf } from "../../shared/domain.ts";
 import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
-import { FEISHU_PAGE_SIZE } from "../../shared/limits.ts";
+import {
+  FEISHU_DECISIONS_MAX_ROWS,
+  FEISHU_PAGE_SIZE,
+  FEISHU_POSTS_MAX_ROWS,
+  FEISHU_ROUTER_EVENTS_MAX_ROWS,
+  FEISHU_ROUTER_EVENTS_TTL_MS,
+} from "../../shared/limits.ts";
 import type { FeishuCardRef } from "./cards.ts";
 import type { Db } from "../store/index.ts";
 import { lookKey, parseLookKey, type SlimeLook } from "../../shared/slimes.ts";
@@ -111,10 +117,61 @@ export interface FeishuStore {
   pendingCards(pmId: PmId | null): Iterable<FeishuPostRecord>;
   streamingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
   uploadingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
-  prunePosts(before: number): number;
+  prunePosts(before: number, nowMs?: number): number;
 
   avatarKey(look: SlimeLook, hash: string): FeishuImageKey | null;
   saveAvatarKey(look: SlimeLook, imageKey: FeishuImageKey, hash: string, now: number): void;
+}
+
+function pruneFeishuTables(db: Db, before: number, nowMs?: number): number {
+  return db.transaction(() => {
+    db.run(
+      `DELETE FROM feishu_decisions
+        WHERE decided_at < ?
+           OR rowid NOT IN (SELECT rowid FROM feishu_decisions ORDER BY decided_at DESC, rowid DESC LIMIT ?)`,
+      before,
+      FEISHU_DECISIONS_MAX_ROWS,
+    );
+    db.run(
+      "UPDATE feishu_posts SET card_id = NULL WHERE ref_kind IN ('chat_policy', 'router_settings') AND card_id IS NOT NULL AND updated_at < ?",
+      before,
+    );
+    const removedPosts = db.run(
+      `DELETE FROM feishu_posts
+        WHERE state IN ('final', 'card_settled')
+          AND ref_kind NOT IN ('chat_policy', 'router_settings')
+          AND (
+            updated_at < ?
+            OR rowid NOT IN (
+              SELECT rowid FROM feishu_posts
+               WHERE state IN ('final', 'card_settled')
+                 AND ref_kind NOT IN ('chat_policy', 'router_settings')
+               ORDER BY updated_at DESC, rowid DESC
+               LIMIT ?
+            )
+          )`,
+      before,
+      FEISHU_POSTS_MAX_ROWS,
+    ).changes;
+    db.run(
+      `DELETE FROM feishu_router_events
+        WHERE id <= COALESCE((SELECT id FROM feishu_router_events ORDER BY id DESC LIMIT 1 OFFSET ?), 0)`,
+      FEISHU_ROUTER_EVENTS_MAX_ROWS,
+    );
+    if (nowMs !== undefined) {
+      const eventCutoff = nowMs - FEISHU_ROUTER_EVENTS_TTL_MS;
+      db.run(
+        `DELETE FROM feishu_router_events
+          WHERE (item_id IS NOT NULL AND EXISTS (SELECT 1 FROM router_items r WHERE r.id = feishu_router_events.item_id AND r.created_at <= ?))
+             OR (command_id IS NOT NULL AND EXISTS (SELECT 1 FROM router_commands c WHERE c.id = feishu_router_events.command_id AND c.updated_at <= ?))
+             OR (ask_message_id IS NOT NULL AND EXISTS (SELECT 1 FROM messages m WHERE m.id = feishu_router_events.ask_message_id AND m.created_at <= ?))`,
+        eventCutoff,
+        eventCutoff,
+        eventCutoff,
+      );
+    }
+    return removedPosts;
+  });
 }
 
 export function createFeishuStore(db: Db): FeishuStore {
@@ -374,18 +431,8 @@ export function createFeishuStore(db: Db): FeishuStore {
     uploadingPosts(chatId, limit) {
       return db.all<PostRow>("SELECT * FROM feishu_posts WHERE chat_id = ? AND state = 'uploading' ORDER BY rowid LIMIT ?", chatId, limit).map(toPost);
     },
-    prunePosts(before) {
-      return db.transaction(() => {
-        db.run("DELETE FROM feishu_decisions WHERE decided_at < ?", before);
-        db.run(
-          "UPDATE feishu_posts SET card_id = NULL WHERE ref_kind IN ('chat_policy', 'router_settings') AND card_id IS NOT NULL AND updated_at < ?",
-          before,
-        );
-        return db.run(
-          "DELETE FROM feishu_posts WHERE state IN ('final', 'card_settled') AND ref_kind NOT IN ('chat_policy', 'router_settings') AND updated_at < ?",
-          before,
-        ).changes;
-      });
+    prunePosts(before, nowMs) {
+      return pruneFeishuTables(db, before, nowMs);
     },
 
     avatarKey(look, hash) {

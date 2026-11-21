@@ -232,20 +232,40 @@ describe("ledger 流式文字（agent.text_delta）", () => {
 });
 
 describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪没驻留（MIN_TOOL_STEP_VISIBLE_MS）", () => {
-  it("6 家厂商早期工具预览零 SQLite 写入（Reading file → Reading foo.ts），正式 agent.tool 只入库一次且不重复插行", () => {
+  it("6 家厂商早期工具预览零 SQLite 写入（Reading file → Reading foo.ts），正式 agent.tool 只入库一次且不重复插行；仅 Worker 写 session_steps", () => {
+    const workerConvId = Number(
+      db.run("INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('worker', 1, 'W', ?)", now).lastInsertRowid,
+    );
+    const workerSid = Number(
+      db.run(
+        `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+         VALUES ('worker', ?, NULL, 'claude', 'w-stream', '/tmp', '[]', 1, 'running', ?, ?)`,
+        workerConvId,
+        now,
+        now,
+      ).lastInsertRowid,
+    );
+    // PM sessions never write session_steps.
+    const pmStepsBefore = count("session_steps");
+    ev({ type: "turn.started", at: (now += 1) });
+    ev({ type: "agent.tool", uuid: "pm-tool-1", toolUseId: "pm-tu-1", name: "Read", input: { file_path: "/repo/pm.ts" }, at: (now += 1) });
+    ev({ type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 10, at: (now += 1) });
+    expect(count("session_steps")).toBe(pmStepsBefore);
+
     for (const vendor of AGENT_VENDORS) {
-      db.run("UPDATE agent_sessions SET vendor = ?, status = 'running' WHERE id = ?", vendor, sessionId);
-      ev({ type: "turn.started", at: (now += 1) });
+      db.run("UPDATE agent_sessions SET vendor = ?, status = 'running' WHERE id = ?", vendor, workerSid);
+      const wEv = (event: DriverEvent) => ledger.applyDriverEvent(workerSid, event);
+      wEv({ type: "turn.started", at: (now += 1) });
       const msgBefore = count("messages");
       const stepsBefore = count("session_steps");
       changes.length = 0;
 
       // 1) 流式工具起点（仅有工具名，尚无路径）
-      ev({ type: "agent.tool_preview", toolUseId: `tu-${vendor}`, name: "Read", input: {}, at: (now += 10) });
+      wEv({ type: "agent.tool_preview", toolUseId: `tu-${vendor}`, name: "Read", input: {}, at: (now += 10) });
       expect(statusChanges().at(-1)?.step).toEqual({ type: "tool_use", name: "Read", input: {} });
 
       // 2) 流式参数增量拼出路径字段
-      ev({
+      wEv({
         type: "agent.tool_preview",
         toolUseId: `tu-${vendor}`,
         name: "Read",
@@ -263,7 +283,7 @@ describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪
       expect(count("session_steps"), `${vendor} preview steps`).toBe(stepsBefore);
 
       // 3) 完整工具调用到达：仅入库 1 条 tool message 与 1 条 tool step
-      ev({
+      wEv({
         type: "agent.tool",
         uuid: `uuid-${vendor}`,
         toolUseId: `tu-${vendor}`,
@@ -274,14 +294,14 @@ describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪
       expect(count("messages") - msgBefore, `${vendor} tool message once`).toBe(1);
       const toolSteps = db.all<{ id: number }>(
         "SELECT id FROM session_steps WHERE session_id = ? AND kind = 'tool' AND tool_use_id = ?",
-        sessionId,
+        workerSid,
         `tu-${vendor}`,
       );
       expect(toolSteps, `${vendor} session_steps once`).toHaveLength(1);
 
       now += MIN_TOOL_STEP_VISIBLE_MS + 10;
-      ev({ type: "agent.tool_result", toolUseIds: [`tu-${vendor}`], at: now });
-      ev({ type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 50, at: (now += 10) });
+      wEv({ type: "agent.tool_result", toolUseIds: [`tu-${vendor}`], at: now });
+      wEv({ type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 50, at: (now += 10) });
     }
   });
 

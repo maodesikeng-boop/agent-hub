@@ -2,8 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FILE_CLEANUP_INTERVAL_MS, FILE_RETENTION_DAYS } from "../shared/index.ts";
-import { cleanupExpiredFiles, startFileCleanup } from "./file-cleanup.ts";
+import {
+  FILE_CLEANUP_INTERVAL_MS,
+  FILE_RETENTION_DAYS,
+  SENT_FILES_RETENTION_DAYS,
+  SETUP_LOGS_RETENTION_DAYS,
+} from "../shared/index.ts";
+import { cleanupExpiredFiles, cleanupManagedFiles, cleanupSetupLogs, startFileCleanup } from "./file-cleanup.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
 let root: string;
@@ -91,5 +96,73 @@ describe("startFileCleanup", () => {
     writeFileSync(file, "x");
     const log = vi.fn();
     expect(() => startFileCleanup([file], log)()).not.toThrow();
+  });
+});
+
+describe("cleanupManagedFiles and cleanupSetupLogs", () => {
+  it("enforces SENT_FILES_RETENTION_DAYS and disk byte caps by evicting oldest directories first", () => {
+    const nowMs = Date.now();
+    const makeSized = (dir: string, id: string, ageDays: number, sizeBytes: number) => {
+      const p = join(dir, id);
+      mkdirSync(p);
+      writeFileSync(join(p, "blob.bin"), Buffer.alloc(sizeBytes, 0x41));
+      const t = new Date(nowMs - ageDays * DAY);
+      utimesSync(p, t, t);
+      return p;
+    };
+    const expiredSent = makeSized(sent, "0000000000000001", SENT_FILES_RETENTION_DAYS + 1, 100);
+    const oldSent = makeSized(sent, "0000000000000002", 5, 600);
+    const midSent = makeSized(sent, "0000000000000003", 2, 600);
+    const newSent = makeSized(sent, "0000000000000004", 1, 600);
+    const oldUpload = makeSized(uploads, "1000000000000001", 10, 700);
+    const newUpload = makeSized(uploads, "1000000000000002", 1, 700);
+
+    const stats = cleanupManagedFiles(
+      {
+        uploadsDir: uploads,
+        sentFilesDir: sent,
+        uploadsMaxBytes: 1_000,
+        sentFilesMaxBytes: 1_200,
+        now: () => nowMs,
+      },
+      () => {},
+    );
+    expect(stats.removedFiles).toBe(3);
+    expect(existsSync(expiredSent)).toBe(false);
+    expect(existsSync(oldSent)).toBe(false);
+    expect(existsSync(midSent)).toBe(true);
+    expect(existsSync(newSent)).toBe(true);
+    expect(existsSync(oldUpload)).toBe(false);
+    expect(existsSync(newUpload)).toBe(true);
+  });
+
+  it("caps setup logs by age and file count while sparing currently open Workers", () => {
+    const nowMs = Date.now();
+    const setupDir = join(root, "setup");
+    mkdirSync(setupDir);
+    const writeLog = (workerId: number, ageDays: number) => {
+      const p = join(setupDir, `worker-${workerId}.log`);
+      writeFileSync(p, `log-${workerId}`);
+      const t = new Date(nowMs - ageDays * DAY);
+      utimesSync(p, t, t);
+      return p;
+    };
+    const expiredClosed = writeLog(1, SETUP_LOGS_RETENTION_DAYS + 2);
+    const expiredOpen = writeLog(2, SETUP_LOGS_RETENTION_DAYS + 2);
+    const freshOldest = writeLog(3, 4);
+    const freshMid = writeLog(4, 2);
+    const freshNewest = writeLog(5, 1);
+
+    const stats = cleanupSetupLogs(
+      setupDir,
+      { now: () => nowMs, maxFiles: 2, isWorkerOpen: (id) => id === 2 },
+      () => {},
+    );
+    expect(stats.removedFiles).toBe(2);
+    expect(existsSync(expiredClosed)).toBe(false);
+    expect(existsSync(expiredOpen)).toBe(true);
+    expect(existsSync(freshOldest)).toBe(false);
+    expect(existsSync(freshMid)).toBe(true);
+    expect(existsSync(freshNewest)).toBe(true);
   });
 });

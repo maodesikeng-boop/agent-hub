@@ -332,7 +332,7 @@ export function createLedgerMessages(
         insertAgentMessage(p, session, {
           kind: "tool",
           text: summarizeToolCall(event.name, event.input),
-          meta: { toolUseId: event.toolUseId, name: event.name, input: event.input },
+          meta: { toolUseId: event.toolUseId, name: event.name },
           dedupeKey: agentMessageDedupeKey(sessionId, event.uuid, event.toolUseId),
         });
         updateLive(p, sessionId, (l) => {
@@ -546,7 +546,7 @@ export function createLedgerMessages(
   const messagesAfter = (conversationId: ConversationId, after: MessageId, limit: number): Message[] => {
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     return db
-      .all<MessageDbRow>("SELECT * FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?", conversationId, after, Math.max(0, limit))
+      .all<MessageDbRow>(`SELECT ${WEB_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?`, conversationId, after, Math.max(0, limit))
       .map(toMessage);
   };
 

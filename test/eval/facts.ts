@@ -46,6 +46,19 @@ function openTrialDb(file: string): DatabaseSync {
 const num = (v: unknown) => Number(v);
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 
+function toolInputOf(name: string, text: string, meta: Record<string, unknown>): Record<string, unknown> {
+  if (meta.input !== undefined && meta.input !== null && typeof meta.input === "object") {
+    return meta.input as Record<string, unknown>;
+  }
+  const prefix = `${name}: `;
+  const arg = text.startsWith(prefix) ? text.slice(prefix.length) : "";
+  if (arg === "") return {};
+  if (/^(?:Read|Edit|Write|MultiEdit)$/.test(name)) return { file_path: arg };
+  if (name === "Bash") return { command: arg };
+  if (/^skill$/i.test(name)) return { skill: arg, command: arg };
+  return { value: arg };
+}
+
 export function readFacts(input: FactsInput): Facts {
   const db = openTrialDb(input.dbFile);
   try {
@@ -106,7 +119,10 @@ export function readFacts(input: FactsInput): Facts {
     }));
     const tools = messages
       .filter((m) => m.kind === "tool" && m.sender === "agent" && m.meta !== null)
-      .map((m) => ({ messageId: m.id, at: m.at, name: str(m.meta!.name), input: (m.meta!.input ?? {}) as Record<string, unknown> }));
+      .map((m) => {
+        const name = str(m.meta!.name);
+        return { messageId: m.id, at: m.at, name, input: toolInputOf(name, m.text, m.meta!) };
+      });
     const pmId = num(all("SELECT pm_id FROM conversations WHERE id = ?", input.pmConversationId)[0]?.pm_id ?? -1);
     const personaChanges = all("SELECT id, actor, created_at, text_after FROM persona_changes WHERE pm_id = ? ORDER BY id", pmId).map((r) => ({
       id: num(r.id),
@@ -141,7 +157,17 @@ export function readMetrics(dbFile: string, facts: Facts): TrialMetrics {
   const db = openTrialDb(dbFile);
   try {
     const inList = facts.pmSessionIds.length > 0 ? facts.pmSessionIds.join(",") : "-1";
-    const turns = db.prepare(`SELECT count(*) AS n FROM session_steps WHERE kind = 'turn_started' AND session_id IN (${inList})`).get() as { n: number };
+    const stepTurns = db.prepare(`SELECT count(*) AS n FROM session_steps WHERE kind = 'turn_started' AND session_id IN (${inList})`).get() as { n: number };
+    const turns =
+      Number(stepTurns.n) > 0
+        ? Number(stepTurns.n)
+        : Number(
+            (
+              db
+                .prepare("SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND sender IN ('user', 'system') AND status IN ('processing', 'replied', 'stopped')")
+                .get(facts.pmConversationId) as { n: number }
+            ).n,
+          );
     const usages = db.prepare(`SELECT token_usage FROM agent_sessions WHERE id IN (${inList})`).all() as Array<{ token_usage: string | null }>;
     const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     for (const { token_usage } of usages) {
@@ -152,7 +178,7 @@ export function readMetrics(dbFile: string, facts: Facts): TrialMetrics {
       tokens.cacheWrite += u.cacheWrite ?? 0;
     }
     return {
-      pmTurns: Number(turns.n),
+      pmTurns: turns,
       toolCalls: facts.tools.length,
       hubCalls: facts.hubCalls.length,
       asks: facts.messages.filter((m) => m.sender === "agent" && m.meta?.needsUser === true).length,
@@ -172,7 +198,11 @@ export function countPmTurns(dbFile: string, pmConversationId: number): number {
     const row = db
       .prepare("SELECT count(*) AS n FROM session_steps WHERE kind = 'turn_started' AND session_id IN (SELECT id FROM agent_sessions WHERE role = 'pm' AND conversation_id = ?)")
       .get(pmConversationId) as { n: number };
-    return Number(row.n);
+    if (Number(row.n) > 0) return Number(row.n);
+    const fallback = db
+      .prepare("SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND sender IN ('user', 'system') AND status IN ('processing', 'replied', 'stopped')")
+      .get(pmConversationId) as { n: number };
+    return Number(fallback.n);
   } finally {
     db.close();
   }

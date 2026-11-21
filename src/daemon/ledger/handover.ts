@@ -23,8 +23,8 @@ import { handoverTokenThresholdOf, isAgentVendor, vendorLabel, vendorSpec, type 
 import { workerLineText } from "../../shared/worker.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
-import { pickRecent, recentText } from "./handover-recent.ts";
-import type { RecentMessage } from "./handover-recent.ts";
+import { clearConsumedHandoverBlobsIn } from "./db-table-retention.ts";
+import { pickRecent, recentText, type RecentMessage } from "./handover-recent.ts";
 import type { LedgerLoadedSkills } from "./loaded-skills.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
@@ -917,11 +917,11 @@ export function createLedgerHandover(
     if (event.type === "message.processing") {
       if (event.preamble === true && session.generation > 1) {
         db.run("INSERT OR IGNORE INTO session_preamble_seen (session_id, seen_at) VALUES (?, ?)", session.id, now());
+        clearConsumedHandoverBlobsIn(db, session.id);
         const renewed = renewedOf(session);
         if (renewed !== undefined && metaOf(renewed).seen !== true) setMeta(renewed.id, { ...metaOf(renewed), seen: true });
       }
       if (inSessionOf(conversationId) === undefined) return;
-      // The max message id when H starts marks the cut point; only later text belongs to the handover.
       const request = requestOf(session);
       if (request === undefined) return;
       if (event.messageIds.includes(request.id)) {
