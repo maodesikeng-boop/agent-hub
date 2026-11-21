@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { GIT_MAX_BUFFER_BYTES } from "../src/shared/limits.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 
 /** Guards that scan the whole tree instead of importing what they check, so no import graph reaches them. */
@@ -23,7 +24,7 @@ const TEST_FILE = /\.test\.tsx?$/;
 const SEARCH_ROOTS = ["src", "scripts", "test"];
 
 function gitLines(cwd: string, args: string[]): string[] {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).split("\0").filter(Boolean);
+  return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER_BYTES }).split("\0").filter(Boolean);
 }
 
 /** Files changed since the merge base with `base`, plus staged, unstaged, and untracked files, as repo-relative POSIX paths. */

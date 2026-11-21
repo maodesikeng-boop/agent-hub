@@ -2,6 +2,8 @@
 HANDOVER.md
 .DS_Store
 node_modules/
+# pnpm falls back to a store inside the worktree when a sandbox forbids writing the shared one
+.pnpm-store/
 dist/
 build/
 coverage/
