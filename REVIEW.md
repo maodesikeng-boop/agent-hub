@@ -142,6 +142,14 @@ Check: Each new child process the daemon starts goes through `trackChild`, so a 
 
 Seen in: `6af05c80`, `4b557b03`
 
+### Tests wait for events, not for time
+
+Trigger: `**/*.test.ts`, `**/*.test.tsx`, `test/**`
+
+Check: A test that needs a child process or timer to reach some state awaits the event that proves it (a driver event, a log line, a file) or advances fake timers. It does not sleep a fixed time and hope the state arrives first. A test that formats or compares dates pins the clock with `vi.setSystemTime` instead of reading the wall clock. A per-test timeout leaves at least twice the slowest runtime seen on the CI runner that runs it. A test that needs something a Worker sandbox forbids, such as running the setuid `/bin/ps` or nesting `sandbox-exec` on macOS, probes for it and uses `it.skipIf`, so it never fails only on a Worker machine.
+
+Seen in: `12633961`, `d82bae28`, #397
+
 ### Hub error codes change on both sides
 
 Trigger: `src/shared/errors.ts`, `src/shared/hub.ts`, `src/shared/ledger.ts`, `src/hub/**`
