@@ -261,6 +261,45 @@ describe("T4 换时区：每天的任务按现在所在时区的 HH:MM 跑，同
     ]);
   });
 
+  it.each([
+    { label: "上海 11-04 08:00 建每天 09:00", from: "Asia/Shanghai", day: 4, hour: 8, daily: "09:00", resume: false, next: { day: "11-04", time: "09:00" } },
+    { label: "上海 11-04 08:00 恢复每天 09:00", from: "Asia/Shanghai", day: 4, hour: 8, daily: "09:00", resume: true, next: { day: "11-04", time: "09:00" } },
+    { label: "纽约 11-03 23:00 建每天 01:00", from: "America/New_York", day: 3, hour: 23, daily: "01:00", resume: false, next: { day: "11-04", time: "01:00" } },
+  ])("往西换跨过午夜（$label，1 分钟后切到洛杉矶）：还没到点的任务不当场补跑，下次是洛杉矶 $next.day $next.time", ({ from, day, hour, daily, resume, next }) => {
+    process.env.TZ = from;
+    const anchoredAt = local(day, hour);
+    now = resume ? anchoredAt - 2 * DAY : anchoredAt;
+    const schedule = add({ daily });
+    if (resume) {
+      ledger.setScheduleEnabled(schedule.id, false);
+      now = anchoredAt;
+      ledger.setScheduleEnabled(schedule.id, true);
+    }
+
+    process.env.TZ = "America/Los_Angeles";
+    now += MINUTE;
+    ledger.runDueSchedules(now);
+    expect(runsIn()).toEqual([]);
+    expect(localDayAndTime(row(schedule.id).nextRunAt)).toEqual(next);
+
+    tickThrough(now, now + DAY);
+    expect(runsIn().map((m) => ({ ...localDayAndTime(m.createdAt), catchUp: m.meta?.catchUp }))).toEqual([{ ...next, catchUp: false }]);
+  });
+
+  it("已归档的项目经理：库里即使还开着每天的任务，换时区也不改它、不推变更", () => {
+    process.env.TZ = "America/New_York";
+    now = local(3, 7);
+    const schedule = add();
+    ledger.archivePm(lin.pmId);
+    db.run("UPDATE schedules SET enabled = 1 WHERE id = ?", schedule.id);
+
+    process.env.TZ = "America/Los_Angeles";
+    changes = [];
+    ledger.runDueSchedules(now + MINUTE);
+    expect(changes).toEqual([]);
+    expect(db.get<{ next_run_at: number }>("SELECT next_run_at FROM schedules WHERE id = ?", schedule.id)!.next_run_at).toBe(schedule.nextRunAt);
+  });
+
   it("时区不变时不改下次、不开写事务；春季跳时那天落在 03:30 也保持不动", () => {
     process.env.TZ = "America/Los_Angeles";
     now = new Date(2026, 2, 7, 12).getTime();

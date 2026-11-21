@@ -87,18 +87,24 @@ export function checkEveryMinutes(minutes: unknown): string | null {
   return null;
 }
 
-export function nextDailyRun(after: number, atTime: string): number {
+function dailySlot(ref: number, dayOffset: number, atTime: string): number {
   const [hours, minutes] = atTime.split(":").map(Number) as [number, number];
-  const today = new Date(after);
-  const at = (dayOffset: number) => new Date(today.getFullYear(), today.getMonth(), today.getDate() + dayOffset, hours, minutes).getTime();
-  return at(0) > after ? at(0) : at(1);
+  const day = new Date(ref);
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate() + dayOffset, hours, minutes).getTime();
 }
 
-/** Stored daily runs are instants from the zone in effect when computed; after a zone change this moves one to atTime on its local date, otherwise it returns it unchanged. */
-export function reanchorDailyRun(nextRunAt: number, atTime: string, lastRunAt: number | null): number {
-  const day = new Date(nextRunAt);
-  const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
-  return nextDailyRun(Math.max(dayStart - 1, lastRunAt ?? 0), atTime);
+export function nextDailyRun(after: number, atTime: string): number {
+  const today = dailySlot(after, 0, atTime);
+  return today > after ? today : dailySlot(after, 1, atTime);
+}
+
+/** Stored daily runs are instants from the zone in effect when computed. One that no longer reads as atTime here moves to atTime on its local date, after the last run and, while still pending, after now, so a zone change never fires a run by itself. */
+export function reanchorDailyRun(nextRunAt: number, atTime: string, lastRunAt: number | null, now: number): number {
+  const sameDate = dailySlot(nextRunAt, 0, atTime);
+  // An atTime inside a DST gap just before midnight lands on the next date, so the previous date's slot is also a match.
+  if (sameDate === nextRunAt || dailySlot(nextRunAt, -1, atTime) === nextRunAt) return nextRunAt;
+  const floor = Math.max(lastRunAt ?? -Infinity, nextRunAt > now ? now : -Infinity);
+  return sameDate > floor ? sameDate : nextDailyRun(floor, atTime);
 }
 
 export function nextRunAfter(schedule: Pick<ScheduleRecord, "kind" | "atTime" | "everyMinutes">, now: number): number {

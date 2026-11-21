@@ -21,12 +21,14 @@ const NO_REASON = "没跑成";
 
 export type LedgerSchedules = ReturnType<typeof createLedgerSchedules>;
 
-function reanchorDailyRuns({ db, now, write }: Pick<LedgerContext, "db" | "now" | "write">, pushUpdated: (p: Pending, id: ScheduleId) => void) {
+function reanchorDailyRuns({ db, now, write }: Pick<LedgerContext, "db" | "now" | "write">, nowMs: number, pushUpdated: (p: Pending, id: ScheduleId) => void) {
   const moved = db
     .all<Pick<ScheduleDbRow, "id" | "at_time" | "next_run_at" | "last_run_at">>(
-      "SELECT id, at_time, next_run_at, last_run_at FROM schedules WHERE enabled = 1 AND kind = 'daily'",
+      `SELECT s.id, s.at_time, s.next_run_at, s.last_run_at FROM schedules s
+       LEFT JOIN pm_archives a ON a.pm_id = s.pm_id
+       WHERE s.enabled = 1 AND s.kind = 'daily' AND a.pm_id IS NULL`,
     )
-    .map((r) => ({ id: r.id, from: r.next_run_at, to: reanchorDailyRun(r.next_run_at, r.at_time!, r.last_run_at) }))
+    .map((r) => ({ id: r.id, from: r.next_run_at, to: reanchorDailyRun(r.next_run_at, r.at_time!, r.last_run_at, nowMs) }))
     .filter((r) => r.to !== r.from);
   if (moved.length === 0) return;
   write((p) => {
@@ -211,7 +213,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
 
   /** Ticks with nothing due never open a write transaction, so they do not contend for the SQLite write lock. */
   const runDueSchedules = (nowMs: number) => {
-    reanchorDailyRuns(ctx, pushUpdated);
+    reanchorDailyRuns(ctx, nowMs, pushUpdated);
     if (
       db.get(
         `SELECT 1 AS x FROM schedules s
