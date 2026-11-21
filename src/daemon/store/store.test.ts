@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import { resolveHubPaths } from "../../shared/paths.ts";
 import type { HubPaths } from "../../shared/paths.ts";
 import {
@@ -208,7 +209,7 @@ describe("目录锁", () => {
     lock.release();
   });
 
-  it("进程号被别的进程复用了（启动时间对不上）：当作过期，接管", () => {
+  it.skipIf(!sandboxAllowsPs())("进程号被别的进程复用了（启动时间对不上）：当作过期，接管", () => {
     mkdirSync(paths.stateDir, { recursive: true });
     writeFileSync(paths.lockFile, `${process.pid}\nMon Jan  1 00:00:00 2001\n`);
     const lock = acquireLock(paths.lockFile);

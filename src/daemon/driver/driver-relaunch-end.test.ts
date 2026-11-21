@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import { DriverError, RELAUNCH_NOTE, type AgentSessionPatch } from "../../shared/index.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, type Harness } from "./test-helpers.ts";
 
@@ -840,7 +841,7 @@ describe.skipIf(process.platform === "win32")("进程组", () => {
     expect(await goneWithin(child)).toBe(true);
   });
 
-  it("claude 在自己的进程组里（detached）：进程组号就是它自己的 pid", async () => {
+  it.skipIf(!sandboxAllowsPs())("claude 在自己的进程组里（detached）：进程组号就是它自己的 pid", async () => {
     const t = harness();
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "hi"));
@@ -861,7 +862,7 @@ describe.skipIf(process.platform === "win32")("进程组", () => {
     };
     const line = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n";
 
-    it("核对过命令行、进程组是它自己的：SIGINT 不退就给整个进程组 SIGKILL，子进程也不在了", async () => {
+    it.skipIf(!sandboxAllowsPs())("核对过命令行、进程组是它自己的：SIGINT 不退就给整个进程组 SIGKILL，子进程也不在了", async () => {
       const t = harness({
         driver: { interruptGraceMs: 200 },
         script: { ignoreSigint: true, turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { sleepMs: 30_000 }] }] },
@@ -878,7 +879,7 @@ describe.skipIf(process.platform === "win32")("进程组", () => {
       expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
     });
 
-    it("不是进程组长（不是我们 detached 起的）：只杀它本身，不按进程组（免得杀到同组的别的进程）", async () => {
+    it.skipIf(!sandboxAllowsPs())("不是进程组长（不是我们 detached 起的）：只杀它本身，不按进程组（免得杀到同组的别的进程）", async () => {
       const t = harness({ driver: { interruptGraceMs: 200 }, script: { ignoreSigint: true } });
       const s = t.addSession({ status: "running" });
       const stray = strayClaude(t, s.vendorSessionId, false);
@@ -890,7 +891,7 @@ describe.skipIf(process.platform === "win32")("进程组", () => {
       expect(stray.signalCode).toBe("SIGKILL");
     });
 
-    it("加压：假 claude 一写下 argv 就进 cleanupStale，也只会被 SIGKILL（不会赶在它装好 SIGINT 处理器之前被 SIGINT 带走）", async () => {
+    it.skipIf(!sandboxAllowsPs())("加压：假 claude 一写下 argv 就进 cleanupStale，也只会被 SIGKILL（不会赶在它装好 SIGINT 处理器之前被 SIGINT 带走）", async () => {
       for (let n = 0; n < 15; n++) {
         const t = harness({ driver: { interruptGraceMs: 100 }, script: { ignoreSigint: true } });
         const s = t.addSession({ status: "running" });
