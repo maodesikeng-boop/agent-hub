@@ -1,6 +1,7 @@
 import type { AgentSessionRow, WorkerId } from "../../../shared/domain.ts";
 import type { DriverEvent } from "../../../shared/driver.ts";
 import type { Pending } from "../context.ts";
+import type { TurnCompletionFacts, TurnEndedEvent } from "../turn-completions.ts";
 import { workerRow } from "./ctx.ts";
 import { isWorkerInFlight } from "./lines.ts";
 import {
@@ -13,8 +14,8 @@ import {
   maxMessageId,
   onlyManualCompact,
 } from "./reports.ts";
-import { TURN_STOPPED, notStarted, turnOutcome, type TurnOutcome } from "./text.ts";
-import { clearMaxTime, ensureTurnMaxTime } from "./timers.ts";
+import { TURN_STOPPED, backgroundKilledNote, notStarted, turnOutcome, type TurnOutcome } from "./text.ts";
+import { clearMaxTime, clearMaxTimeIn, ensureTurnMaxTime } from "./timers.ts";
 import type { WorkersCtx } from "./types.ts";
 
 function clearMaxTimeIfIdle(w: WorkersCtx, workerId: WorkerId): void {
@@ -27,21 +28,34 @@ function markTurnStart(w: WorkersCtx, session: AgentSessionRow, workerId: Worker
   ensureTurnMaxTime(w, workerId);
 }
 
-function onTurnOutcome(w: WorkersCtx, p: Pending, session: AgentSessionRow, workerId: WorkerId, event: DriverEvent, outcome: TurnOutcome): void {
+export function turnFactsOf(w: WorkersCtx, session: AgentSessionRow, event: TurnEndedEvent): TurnCompletionFacts["worker"] {
+  if (session.role !== "worker") return null;
+  const turnStart = w.awaitingBackground.get(session.id)?.turnStart ?? w.turnStarts.get(session.id);
+  if (turnStart === undefined && event.messageIds.length === 0) return null;
+  return {
+    turnStart: turnStart ?? Math.max(...event.messageIds),
+    waitingForBackground: (w.sessions.liveOf(session.id).backgroundTasks ?? 0) > 0,
+    endingAfterStop: w.endInterrupted.has(session.id),
+  };
+}
+
+function onTurnOutcome(
+  w: WorkersCtx, p: Pending, session: AgentSessionRow, workerId: WorkerId, event: DriverEvent, outcome: TurnOutcome,
+  facts: TurnCompletionFacts["worker"], note: string | null = null,
+): void {
   const worker = workerRow(w, workerId);
-  if (worker === null) return;
-  if (outcome.turnMessageId === null && !w.turnStarts.has(session.id)) return;
-  // Do not take the max of the two ids; a mid-turn delivery id is larger than earlier text and would drop it from the report.
-  const awaiting = w.awaitingBackground.take(session.id);
-  const turnStart = awaiting?.turnStart ?? w.turnStarts.get(session.id) ?? outcome.turnMessageId ?? 0;
-  w.turnStarts.delete(session.id);
-  if (w.endInterrupted.delete(session.id) && outcome.event === "turn_failed" && outcome.reason === TURN_STOPPED) {
-    clearMaxTime(w, worker.worker_conversation_id);
+  if (worker === null || (outcome.turnMessageId === null && facts === null)) return;
+  w.awaitingBackground.take(session.id);
+  p.after.push(() => {
+    w.turnStarts.delete(session.id);
+    w.endInterrupted.delete(session.id);
+  });
+  if (facts?.endingAfterStop && outcome.event === "turn_failed" && outcome.reason === TURN_STOPPED) {
+    clearMaxTimeIn(w, p, worker.worker_conversation_id);
     return;
   }
-  // Background commands are still running, so wait for claude to wake the session and report then.
-  if (outcome.event === "report" && event.type === "turn.ended" && (w.sessions.liveOf(session.id).backgroundTasks ?? 0) > 0) {
-    w.awaitingBackground.set(session.id, turnStart);
+  if (outcome.event === "report" && facts?.waitingForBackground) {
+    w.awaitingBackground.set(session.id, facts.turnStart);
     w.sessions.updateLive(p, session.id, (l) => {
       l.activity = "background";
     });
@@ -59,22 +73,34 @@ function onTurnOutcome(w: WorkersCtx, p: Pending, session: AgentSessionRow, work
       worker.worker_conversation_id,
       completedUpToId,
     ) !== undefined;
-  if (!hasPendingFollowup) {
-    clearMaxTime(w, worker.worker_conversation_id);
-  }
-  const turnMessageId = outcome.turnMessageId ?? lastAgentMessageId(w, session.id, turnStart);
+  if (!hasPendingFollowup) clearMaxTimeIn(w, p, worker.worker_conversation_id);
+  const turnMessageId = outcome.turnMessageId ?? (facts === null ? null : lastAgentMessageId(w, session.id, facts.turnStart));
   if (turnMessageId === null) return;
   if (outcome.event === "turn_failed") {
     insertTurnFailed(w, p, worker, turnMessageId, outcome.messageIds, outcome.reason);
     return;
   }
-  const reportMessage = lastAgentTextMessage(w, session.id, turnStart);
+  const reportMessage = facts === null ? null : lastAgentTextMessage(w, session.id, facts.turnStart);
   if (outcome.turnMessageId === null && (reportMessage?.text ?? "").trim() === "") return;
-  if (onlyManualCompact(w, session, turnStart)) return;
-  insertReport(w, p, worker, turnMessageId, reportMessage, null, { hasPendingFollowup });
+  if (facts !== null && onlyManualCompact(w, session, facts.turnStart)) return;
+  insertReport(w, p, worker, turnMessageId, reportMessage, note, { hasPendingFollowup });
 }
 
-export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessionRow, event: DriverEvent): void {
+export function settleTurn(
+  w: WorkersCtx, p: Pending, session: AgentSessionRow, event: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean,
+): void {
+  if (session.role !== "worker" || session.workerId === null) return;
+  const outcome = turnOutcome(event);
+  if (outcome === null) return;
+  // No background.changed or session.exited will arrive for a process that died before this daemon started, so waiting would strand the report.
+  if (previousRun && facts?.waitingForBackground === true) {
+    onTurnOutcome(w, p, session, session.workerId, event, outcome, { ...facts, waitingForBackground: false }, backgroundKilledNote("restart"));
+    return;
+  }
+  onTurnOutcome(w, p, session, session.workerId, event, outcome, facts);
+}
+
+export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessionRow, event: Exclude<DriverEvent, TurnEndedEvent>): void {
   if (session.role !== "worker" || session.workerId === null) return;
   const workerId = session.workerId;
   if (event.type === "background.changed") {
@@ -120,5 +146,7 @@ export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessio
     }
     return;
   }
-  onTurnOutcome(w, p, session, workerId, event, outcome);
+  const turnStart = w.awaitingBackground.get(session.id)?.turnStart ?? w.turnStarts.get(session.id) ?? outcome.turnMessageId;
+  const facts = turnStart === null ? null : { turnStart, waitingForBackground: false, endingAfterStop: w.endInterrupted.has(session.id) };
+  onTurnOutcome(w, p, session, workerId, event, outcome, facts);
 }

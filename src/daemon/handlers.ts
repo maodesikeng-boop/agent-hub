@@ -33,6 +33,7 @@ export interface HandlerDeps {
     | "onActionFailed"
     | "refreshSessionState"
     | "stopMessage"
+    | "waitsForTurnCompletion"
     | "waitsForFirstTurn"
     | "waitsForHandover"
     | "graphDeliveryProbeTarget"
@@ -78,11 +79,17 @@ function waitsForRateLimitReset(
   return isLedgerWakeup(message);
 }
 
+function canSendTo(message: Message | null, sessionId: number): message is Message {
+  return message !== null && message.sessionId === sessionId &&
+    (message.status === "queued" || message.status === "delivered" || message.status === "processing");
+}
+
 export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"session.send"> {
   return async (action): Promise<ActionResult> => {
     const { sessionId, messageId, source, resend, recovery } = action.params;
     let message = deps.ledger.getMessage(messageId);
-    if (message === null || message.status === "replied" || message.status === "stopped" || message.status === "cancelled") return { kind: "done" };
+    if (!canSendTo(message, sessionId)) return { kind: "done" };
+    if (deps.ledger.waitsForTurnCompletion(sessionId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "turn_completion" };
     // Hold until the Worker has started and its brief is written, so the session does not start early.
     if (deps.ledger.waitsForFirstTurn(sessionId, messageId)) return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" };
     // Hold while the PM writes a handover or the new session has not received it yet.
@@ -129,9 +136,8 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
         prs,
       });
       const refreshed = deps.ledger.getMessage(messageId);
-      if (refreshed === null || refreshed.status === "replied" || refreshed.status === "stopped" || refreshed.status === "cancelled") {
-        return { kind: "done" };
-      }
+      if (!canSendTo(refreshed, sessionId)) return { kind: "done" };
+      if (deps.ledger.waitsForTurnCompletion(sessionId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "turn_completion" };
       message = refreshed;
     }
     let result;

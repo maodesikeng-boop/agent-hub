@@ -7,7 +7,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { deliveryParts } from "../../shared/worker.ts";
 import { waitingAsksNote } from "../../shared/waiting-asks.ts";
-import { MAX_PENDING_DRIVER_EVENTS_PER_SESSION, WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
+import { WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { AgentTextMeta } from "../../shared/sent-files.ts";
 import type { LocalLink } from "../sent-files.ts";
@@ -24,6 +24,8 @@ import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerLoadedSkills } from "./loaded-skills.ts";
 import { createLedgerMessages } from "./messages.ts";
 import { createLedgerTurnReplies } from "./turn-replies.ts";
+import { createDriverEventDrain } from "./driver-events.ts";
+import { createTurnCompletionLedger, type TurnEndedEvent } from "./turn-completions.ts";
 import { createLedgerPersona } from "./persona.ts";
 import { createLedgerPmCapabilities } from "./pm-capabilities.ts";
 import { createLedgerProjectCatalog } from "./project-catalog.ts";
@@ -216,17 +218,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       return { ...created, project };
     });
 
-  /** Driver events of one session queue behind an agent.text that is still copying attachments, so they enter transactions in arrival order. */
-  interface DriverEventQueue {
-    items: Array<{ event: DriverEvent; links: LocalLink[] }>;
-    abort: AbortController;
-    drained: Promise<void>;
-  }
-  const driverEventQueues = new Map<SessionId, DriverEventQueue>();
-  /** After close(), driver events are dropped and pending --file copies are cancelled. */
   const closing = new AbortController();
-
-  const applyDriverEventNow = (sessionId: SessionId, event: DriverEvent, textMeta: AgentTextMeta | null) => {
+  const applyDriverEventNow = (sessionId: SessionId, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null) => {
     if (event.type === "agent.text_delta") {
       if (event.parentToolUseId !== undefined) return;
       const session = getAgentSession(db, sessionId);
@@ -261,38 +254,62 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     return sentFiles.metaFor(session, links, signal);
   };
 
-  const applyLogged = (sessionId: SessionId, event: DriverEvent, textMeta: AgentTextMeta | null) => {
+  const onOverflow = (sessionId: SessionId) => {
+    const error = `Turn completion queue is full for session ${sessionId}`;
+    console.error(`${LOG_PREFIX} ${error}`);
     try {
-      applyDriverEventNow(sessionId, event, textMeta);
+      write((p) => {
+        reportHealthIn(p, "store", error);
+        const session = getAgentSession(db, sessionId);
+        if (session?.conversationId != null) p.stops.push({ sessionId, conversationId: session.conversationId });
+      });
+    } catch (failure) {
+      console.error(`${LOG_PREFIX} ${error}:`, failure);
+    }
+  };
+  const recordsTurnCompletion = (sessionId: SessionId): boolean => {
+    try {
+      const session = getAgentSession(db, sessionId);
+      return session !== null && session.role !== "assistant" && session.conversationId !== null;
     } catch (error) {
-      console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}):`, error);
+      // Dropping the outcome here would strand its messages; settlement checks the session again once SQLite answers.
+      console.error(`${LOG_PREFIX} turn.ended (session ${sessionId}): session lookup failed, recording the outcome anyway:`, error);
+      return true;
     }
   };
-
-  /** Copy attachments outside the transaction, then commit; stop once flush has drained the queue. */
-  const drainDriverEvents = async (sessionId: SessionId, queue: DriverEventQueue) => {
-    const { signal } = queue.abort;
-    while (queue.items.length > 0) {
-      const { event, links } = queue.items[0]!;
-      let textMeta: AgentTextMeta | null = null;
-      try {
-        textMeta = await textMetaFor(sessionId, event, links, signal);
-      } catch (error) {
-        console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}):`, error);
-      }
-      if (signal.aborted) return;
-      queue.items.shift();
-      applyLogged(sessionId, event, textMeta);
-    }
-    if (driverEventQueues.get(sessionId) === queue) driverEventQueues.delete(sessionId);
-  };
-
-  /** Stop waiting for attachments; the reply text is kept and links render as plain links. */
-  const flushDriverEvents = (sessionId: SessionId, queue: DriverEventQueue) => {
-    queue.abort.abort();
-    driverEventQueues.delete(sessionId);
-    for (const { event } of queue.items.splice(0)) applyLogged(sessionId, event, null);
-  };
+  const completions = createTurnCompletionLedger(ctx, {
+    apply(p, receipt, facts, previousRun) {
+      const session = getAgentSession(db, receipt.sessionId);
+      if (session === null || session.role === "assistant" || session.conversationId === null) return;
+      const event = {
+        ...receipt.event,
+        messageIds: [...new Set(receipt.event.messageIds)].filter((id) => {
+          const msg = messages.getMessage(id);
+          return msg?.sessionId === session.id && (msg.status === "delivered" || msg.status === "processing");
+        }),
+      };
+      messages.settleTurn(p, session, event, facts);
+      turnReplies.settle(p, session, receipt.event.messageIds, facts.reply);
+      steps.afterDriverEvent(session, event);
+      if (receipt.event.messageIds.length === 0 || event.messageIds.length > 0) workers.settleTurn(p, session, event, facts.worker, previousRun);
+      handover.afterDriverEvent(p, session, event);
+      schedules.afterDriverEvent(p, event);
+      projectCatalog.afterDriverEvent(p, session, event);
+    },
+    onSettled: (receipt) => driverEvents.onSettled(receipt),
+    onOverflow,
+  });
+  const driverEvents = createDriverEventDrain({
+    completions,
+    factsFor(sessionId, event) {
+      const session = getAgentSession(db, sessionId)!;
+      return { ...turnReplies.factsOf(session, event.messageIds), worker: workers.turnFactsOf(session, event) };
+    },
+    apply: applyDriverEventNow,
+    localLinks: sentFiles.localLinks,
+    textMetaFor,
+    onOverflow,
+  });
 
   return {
     postUserMessage: messages.postUserMessage,
@@ -346,34 +363,17 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}) after ledger close: dropped`);
         return;
       }
-      let queue = driverEventQueues.get(sessionId);
-      if (queue !== undefined && queue.items.length >= MAX_PENDING_DRIVER_EVENTS_PER_SESSION) {
-        flushDriverEvents(sessionId, queue);
-        queue = undefined;
-      }
-      const links = event.type === "agent.text" ? sentFiles.localLinks(event.text) : [];
-      if (queue === undefined && links.length === 0) {
-        applyDriverEventNow(sessionId, event, null);
-        return;
-      }
-      // Replies with attachments, or with earlier events still pending, wait in the per-session queue.
-      if (queue === undefined) {
-        const created: DriverEventQueue = { items: [{ event, links }], abort: new AbortController(), drained: Promise.resolve() };
-        driverEventQueues.set(sessionId, created);
-        created.drained = drainDriverEvents(sessionId, created);
-        return;
-      }
-      queue.items.push({ event, links });
+      if (event.type === "turn.ended" && !recordsTurnCompletion(sessionId)) return;
+      driverEvents.push(sessionId, event);
     },
-    async settleDriverEvents() {
-      while (driverEventQueues.size > 0) await Promise.all([...driverEventQueues.values()].map((q) => q.drained));
-    },
+    settleDriverEvents: driverEvents.wait,
     async shareHubFiles(sessionId, args, signal) {
       const session = getAgentSession(db, sessionId);
       return session === null ? [] : sentFiles.filesForArgs(session, args, signal === undefined ? closing.signal : AbortSignal.any([closing.signal, signal]));
     },
     refreshSessionState: sessions.refreshSessionState,
     recoverAfterRestart() {
+      completions.recover();
       const recovered = sessions.recoverAfterRestart();
       workers.recoverWorktrees();
       workers.recoverBackgroundWaits();
@@ -476,6 +476,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     personaUpdate: persona.personaUpdate,
     getWorktreeTask: workers.getWorktreeTask,
     onSetupStarted: workers.onSetupStarted,
+    waitsForTurnCompletion: completions.blocksSend,
     waitsForFirstTurn: workers.waitsForFirstTurn,
     onWorktreeCreated: workers.onWorktreeCreated,
     recordReviewSnapshot: workers.recordReviewSnapshot,
@@ -525,7 +526,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     cancelTaskGraph: taskGraphs.cancelGraph,
     close(): void {
       closing.abort();
-      for (const [sessionId, queue] of [...driverEventQueues]) flushDriverEvents(sessionId, queue);
+      driverEvents.close();
+      completions.close();
       workers.clearAllMaxTime();
       sessions.clearAllStreaming();
     },

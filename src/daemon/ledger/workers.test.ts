@@ -687,6 +687,41 @@ describe("汇报回到项目经理", () => {
     ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 1, at: now });
     expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started"]);
   });
+
+  it("这一轮结束时写库失败一次：先不发汇报，库恢复后只补一行汇报、只交给项目经理一次", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const task = taskMessage(worker).id;
+    db.exec(`CREATE TRIGGER fail_task BEFORE UPDATE OF status ON messages WHEN NEW.id = ${task} AND NEW.status = 'replied' BEGIN SELECT RAISE(ABORT, 'boom'); END`);
+    runTurn(worker, [task], report("做完了", "X 修好了"));
+    expect(workerLines().filter((m) => workerEventOf(m)?.event === "report")).toEqual([]);
+    expect(taskMessage(worker).status).toBe("processing");
+    expect(enqueued).toEqual([]);
+
+    db.exec("DROP TRIGGER fail_task");
+    now += 5_000;
+    vi.advanceTimersByTime(5_000);
+    const lines = workerLines().filter((m) => workerEventOf(m)?.event === "report");
+    expect(lines).toHaveLength(1);
+    expect(workerEventOf(lines[0]!)).toMatchObject({ status: "done", summary: "X 修好了" });
+    expect(taskMessage(worker).status).toBe("replied");
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId: lin.sessionId, messageId: lines[0]!.id, source: "system" }]]);
+  });
+
+  it("这一轮结束时删超时记录失败：整次落账回滚重试，库恢复后超时记录删掉、汇报只有一行", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const task = taskMessage(worker).id;
+    db.exec("CREATE TRIGGER fail_timeout BEFORE DELETE ON worker_turn_timeouts BEGIN SELECT RAISE(ABORT, 'boom'); END");
+    runTurn(worker, [task], report("做完了", "X 修好了"));
+    expect(taskMessage(worker).status).toBe("processing");
+    expect(count("worker_turn_timeouts", "worker_id = ?", worker.id)).toBe(1);
+
+    db.exec("DROP TRIGGER fail_timeout");
+    now += 5_000;
+    vi.advanceTimersByTime(5_000);
+    expect(taskMessage(worker).status).toBe("replied");
+    expect(count("worker_turn_timeouts", "worker_id = ?", worker.id)).toBe(0);
+    expect(workerLines().filter((m) => workerEventOf(m)?.event === "report")).toHaveLength(1);
+  });
 });
 
 describe("出错、停止", () => {
@@ -2242,6 +2277,46 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(activity()).toBe("idle");
     restart();
     expect(reports()).toHaveLength(1);
+  });
+
+  /** 任务说明这一轮放了后台命令，结束时把任务说明标成已回复的那次写库失败，账本只留下一张待落账的回执。 */
+  const turnEndsDuringOutage = (text: string) => {
+    const id = taskMessage(worker).id;
+    db.exec(`CREATE TRIGGER fail_task BEFORE UPDATE OF status ON messages WHEN NEW.id = ${id} AND NEW.status = 'replied' BEGIN SELECT RAISE(ABORT, 'boom'); END`);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
+    background(1);
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "first", text, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 10, at: now });
+    expect(reports()).toEqual([]);
+    expect(taskMessage(worker).status).toBe("processing");
+  };
+  const expectRestartReport = () => {
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["等 CI"]);
+    expect(deliveredText()).toContain("重启");
+    expect(taskMessage(worker).status).toBe("replied");
+    expect(activity()).toBe("idle");
+    expect(count("worker_background_waits")).toBe(0);
+  };
+
+  it("这一轮结束写库失败、库在重启前恢复：重启时立刻补一次带重启说明的汇报，不停在等后台命令", () => {
+    turnEndsDuringOutage(report("做完了", "等 CI"));
+    db.exec("DROP TRIGGER fail_task");
+    restart();
+    expectRestartReport();
+    restart();
+    expect(reports()).toHaveLength(1);
+  });
+
+  it("这一轮结束写库失败、重启后库才恢复：落账时立刻补一次带重启说明的汇报，不停在等后台命令", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    turnEndsDuringOutage(report("做完了", "等 CI"));
+    restart();
+    expect(reports()).toEqual([]);
+    db.exec("DROP TRIGGER fail_task");
+    now += 5_000;
+    vi.advanceTimersByTime(5_000);
+    expectRestartReport();
   });
 
   it("后台命令跑完了、叫醒那一轮还没来就被杀：重启后照样补一次", () => {

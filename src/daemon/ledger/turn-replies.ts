@@ -6,15 +6,19 @@ import type { TurnReplyView } from "../../shared/turn-reply.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
+import type { TurnCompletionFacts } from "./turn-completions.ts";
 
 export interface LedgerTurnReplies {
   afterDriverEvent(p: Pending, session: AgentSessionRow, event: DriverEvent): void;
   turnReplyOf(messageId: MessageId): TurnReplyView | null;
   activeTurns(): number;
+  factsOf(session: AgentSessionRow, ids: readonly MessageId[]): Pick<TurnCompletionFacts, "reply" | "finishedWithText">;
+  settle(p: Pending, session: AgentSessionRow, ids: readonly MessageId[], reply: TurnCompletionFacts["reply"]): void;
 }
 
 interface TurnState {
   lastText: MessageId | null;
+  lastOutput: { id: MessageId; kind: "text" | "tool" } | null;
   deliveredAt: Map<MessageId, { mark: number; awaitingProcessing: boolean }>;
 }
 
@@ -25,7 +29,7 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
   const stateOf = (sessionId: SessionId): TurnState => {
     let st = turns.get(sessionId);
     if (st === undefined) {
-      st = { lastText: null, deliveredAt: new Map() };
+      st = { lastText: null, lastOutput: null, deliveredAt: new Map() };
       turns.set(sessionId, st);
     }
     return st;
@@ -35,7 +39,7 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
     const st = turns.get(sessionId);
     if (st === undefined) return;
     for (const id of ids) st.deliveredAt.delete(id);
-    if (st.deliveredAt.size === 0 && st.lastText === null) turns.delete(sessionId);
+    if (st.deliveredAt.size === 0 && st.lastText === null && st.lastOutput === null) turns.delete(sessionId);
   };
 
   const maxMessageId = (): MessageId => db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0;
@@ -69,16 +73,32 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
     if (st.lastText === null || row.id > st.lastText) st.lastText = row.id;
   };
 
-  const finishTurn = (p: Pending, session: AgentSessionRow, ids: readonly MessageId[]) => {
-    const st = turns.get(session.id);
-    if (st === undefined) return;
-    const reply = st.lastText;
-    for (const id of ids) {
-      const mark = st.deliveredAt.get(id)?.mark;
-      st.deliveredAt.delete(id);
-      if (reply === null || mark === undefined || reply <= mark) continue;
+  const factsOf: LedgerTurnReplies["factsOf"] = (session, ids) => {
+    const state = turns.get(session.id);
+    const followsDelivery = (id: MessageId, output: MessageId) => output > (state?.deliveredAt.get(id)?.mark ?? Infinity);
+    const text = state?.lastText ?? null;
+    const output = state?.lastOutput;
+    return {
+      reply: session.role !== "pm" || text === null ? null : { messageId: text, requestIds: ids.filter((id) => followsDelivery(id, text)) },
+      finishedWithText: output?.kind === "text" ? ids.filter((id) => followsDelivery(id, output.id)) : [],
+    };
+  };
+
+  const settle: LedgerTurnReplies["settle"] = (p, session, ids, fact) => {
+    p.after.push(() => {
+      const state = turns.get(session.id);
+      if (state === undefined) return;
+      state.lastText = null;
+      state.lastOutput = null;
+      dropDelivered(session.id, ids);
+    });
+    if (fact === null || session.role !== "pm") return;
+    const reply = fact.messageId;
+    if (!db.get("SELECT 1 FROM messages WHERE id = ? AND session_id = ? AND sender = 'agent' AND kind = 'text'", reply, session.id)) return;
+    for (const id of fact.requestIds) {
+      if (!ids.includes(id)) continue;
       const row = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
-      if (row === undefined || row.sender !== "user" || row.status !== "replied" || row.conversation_id !== session.conversationId) continue;
+      if (row === undefined || row.sender !== "user" || row.status !== "replied" || row.session_id !== session.id || row.conversation_id !== session.conversationId) continue;
       if (replyIdOf(toMessage(row)) !== null) continue;
       db.run("UPDATE messages SET meta = json_set(COALESCE(meta, '{}'), '$.replyId', ?), updated_at = ? WHERE id = ?", reply, now(), id);
       const updated = toMessage(db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id)!);
@@ -87,13 +107,13 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
       if (pushed >= 0) p.changes[pushed] = { type: "message.updated", data: { message: updated } };
       else p.changes.push({ type: "message.updated", data: { message: updated } });
     }
-    st.lastText = null;
-    if (st.deliveredAt.size === 0) turns.delete(session.id);
   };
 
   return {
-    afterDriverEvent(p, session, event) {
-      if (session.role !== "pm") return;
+    factsOf,
+    settle,
+    afterDriverEvent(_p, session, event) {
+      if (session.role === "assistant") return;
       switch (event.type) {
         case "message.delivered":
         case "message.processing":
@@ -107,11 +127,16 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
           dropDelivered(session.id, event.messageIds ?? []);
           return;
         case "agent.text":
-          if (event.parentToolUseId === undefined) recordText(session, event.uuid);
+        case "agent.tool": {
+          const key = agentMessageDedupeKey(session.id, event.uuid, event.type === "agent.tool" ? event.toolUseId : undefined);
+          const row = db.get<{ id: MessageId; kind: "text" | "tool" }>("SELECT id, kind FROM messages WHERE dedupe_key = ?", key);
+          if (row !== undefined) {
+            const state = stateOf(session.id);
+            if (state.lastOutput === null || row.id > state.lastOutput.id) state.lastOutput = row;
+          }
+          if (event.type === "agent.text" && event.parentToolUseId === undefined && session.role === "pm") recordText(session, event.uuid);
           return;
-        case "turn.ended":
-          finishTurn(p, session, event.messageIds);
-          return;
+        }
         case "session.exited":
           turns.delete(session.id);
           return;

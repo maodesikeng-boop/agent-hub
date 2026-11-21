@@ -22,9 +22,21 @@ function stopTimer(w: WorkersCtx, workerConversationId: ConversationId): void {
   }
 }
 
+const deleteStoredMaxTime = (w: WorkersCtx, workerConversationId: ConversationId) =>
+  w.db.run("DELETE FROM worker_turn_timeouts WHERE worker_id = (SELECT id FROM workers WHERE worker_conversation_id = ?)", workerConversationId);
+
 export function clearMaxTime(w: WorkersCtx, workerConversationId: ConversationId): void {
   stopTimer(w, workerConversationId);
-  w.db.run("DELETE FROM worker_turn_timeouts WHERE worker_id = (SELECT id FROM workers WHERE worker_conversation_id = ?)", workerConversationId);
+  deleteStoredMaxTime(w, workerConversationId);
+}
+
+/** Deletes the stored deadline in the transaction and stops the timer after commit, unless the same transaction armed a new one. */
+export function clearMaxTimeIn(w: WorkersCtx, p: Pending, workerConversationId: ConversationId): void {
+  const armed = w.maxTimeTimers.get(workerConversationId);
+  deleteStoredMaxTime(w, workerConversationId);
+  p.after.push(() => {
+    if (armed !== undefined && w.maxTimeTimers.get(workerConversationId) === armed) stopTimer(w, workerConversationId);
+  });
 }
 
 /** On daemon stop keep the stored timers so restart recovery can re-arm them. */
