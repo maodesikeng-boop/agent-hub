@@ -35,7 +35,8 @@ export type TurnCompletionResult =
   | { readonly kind: "pending"; readonly retryAt: number };
 
 export interface TurnCompletionEffects {
-  apply(p: Pending, receipt: TurnCompletionReceipt, facts: TurnCompletionFacts): void;
+  /** `previousRun` marks a receipt recorded before this daemon started, so its agent process and background commands are gone. */
+  apply(p: Pending, receipt: TurnCompletionReceipt, facts: TurnCompletionFacts, previousRun: boolean): void;
   onSettled(receipt: TurnCompletionReceipt): void;
   onOverflow(sessionId: SessionId): void;
 }
@@ -131,7 +132,7 @@ export function createTurnCompletionLedger(ctx: LedgerContext, effects: TurnComp
       const applied = write((p) => {
         if (!db.get("SELECT 1 FROM turn_completions WHERE sequence = ? AND session_id = ?", receipt.sequence, receipt.sessionId)) return false;
         const settled = db.get("SELECT 1 FROM turn_completion_watermarks WHERE session_id = ? AND sequence >= ?", receipt.sessionId, receipt.sequence);
-        if (!settled) effects.apply(p, receipt, facts);
+        if (!settled) effects.apply(p, receipt, facts, receipt.sequence <= startupSequence);
         db.run(
           `INSERT INTO turn_completion_watermarks (session_id, sequence) VALUES (?, ?)
            ON CONFLICT (session_id) DO UPDATE SET sequence = max(sequence, excluded.sequence)`,

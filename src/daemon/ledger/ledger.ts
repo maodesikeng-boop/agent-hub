@@ -268,7 +268,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     }
   };
   const completions = createTurnCompletionLedger(ctx, {
-    apply(p, receipt, facts) {
+    apply(p, receipt, facts, previousRun) {
       const session = getAgentSession(db, receipt.sessionId);
       if (session === null || session.role === "assistant" || session.conversationId === null) return;
       const event = {
@@ -281,7 +281,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       messages.settleTurn(p, session, event, facts);
       turnReplies.settle(p, session, receipt.event.messageIds, facts.reply);
       steps.afterDriverEvent(session, event);
-      if (receipt.event.messageIds.length === 0 || event.messageIds.length > 0) workers.settleTurn(p, session, event, facts.worker);
+      if (receipt.event.messageIds.length === 0 || event.messageIds.length > 0) workers.settleTurn(p, session, event, facts.worker, previousRun);
       handover.afterDriverEvent(p, session, event);
       schedules.afterDriverEvent(p, event);
       projectCatalog.afterDriverEvent(p, session, event);

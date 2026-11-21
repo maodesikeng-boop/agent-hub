@@ -14,7 +14,7 @@ import {
   maxMessageId,
   onlyManualCompact,
 } from "./reports.ts";
-import { TURN_STOPPED, notStarted, turnOutcome, type TurnOutcome } from "./text.ts";
+import { TURN_STOPPED, backgroundKilledNote, notStarted, turnOutcome, type TurnOutcome } from "./text.ts";
 import { clearMaxTime, ensureTurnMaxTime } from "./timers.ts";
 import type { WorkersCtx } from "./types.ts";
 
@@ -41,7 +41,7 @@ export function turnFactsOf(w: WorkersCtx, session: AgentSessionRow, event: Turn
 
 function onTurnOutcome(
   w: WorkersCtx, p: Pending, session: AgentSessionRow, workerId: WorkerId, event: DriverEvent, outcome: TurnOutcome,
-  facts: TurnCompletionFacts["worker"],
+  facts: TurnCompletionFacts["worker"], note: string | null = null,
 ): void {
   const worker = workerRow(w, workerId);
   if (worker === null || (outcome.turnMessageId === null && facts === null)) return;
@@ -85,13 +85,21 @@ function onTurnOutcome(
   const reportMessage = facts === null ? null : lastAgentTextMessage(w, session.id, facts.turnStart);
   if (outcome.turnMessageId === null && (reportMessage?.text ?? "").trim() === "") return;
   if (facts !== null && onlyManualCompact(w, session, facts.turnStart)) return;
-  insertReport(w, p, worker, turnMessageId, reportMessage, null, { hasPendingFollowup });
+  insertReport(w, p, worker, turnMessageId, reportMessage, note, { hasPendingFollowup });
 }
 
-export function settleTurn(w: WorkersCtx, p: Pending, session: AgentSessionRow, event: TurnEndedEvent, facts: TurnCompletionFacts["worker"]): void {
+export function settleTurn(
+  w: WorkersCtx, p: Pending, session: AgentSessionRow, event: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean,
+): void {
   if (session.role !== "worker" || session.workerId === null) return;
   const outcome = turnOutcome(event);
-  if (outcome !== null) onTurnOutcome(w, p, session, session.workerId, event, outcome, facts);
+  if (outcome === null) return;
+  // No background.changed or session.exited will arrive for a process that died before this daemon started, so waiting would strand the report.
+  if (previousRun && facts?.waitingForBackground === true) {
+    onTurnOutcome(w, p, session, session.workerId, event, outcome, { ...facts, waitingForBackground: false }, backgroundKilledNote("restart"));
+    return;
+  }
+  onTurnOutcome(w, p, session, session.workerId, event, outcome, facts);
 }
 
 export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessionRow, event: Exclude<DriverEvent, TurnEndedEvent>): void {
