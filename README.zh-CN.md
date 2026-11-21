@@ -302,6 +302,10 @@ Bellwood 在你的电脑上、用**你自己的账号或 API Key**，以无头�
 - **Google Antigravity (`agy`)**：[Google Antigravity 附加条款](https://antigravity.google/terms/)第 6 条写明：*“Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI accounts.”* 官方未明确说明在本地调用官方 `agy` 无头模式是否属于此条，请将其视为**可能导致账号被暂停或终止的真实风险**自行决定。
 - **Claude Code (`claude`)**：[Anthropic 合规说明](https://code.claude.com/docs/en/legal-and-compliance) · **Codex (`codex`)**：[OpenAI 使用条款](https://openai.com/policies/row-terms-of-use/) · **Pi (`pi`，MIT 开源)**：[pi.dev](https://pi.dev)（请同时遵守所连模型商条款） · **DeepSeek Harness (`dsh`，MIT 预览版)**：[DeepSeek 开放平台条款](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) · **Cursor (`cursor-agent`)**：[Cursor 服务条款](https://cursor.com/terms-of-service) · **OpenCode (`opencode`，MIT 开源)**：[opencode.ai](https://opencode.ai)（请同时遵守所连模型商条款） · **Kimi Code (`kimi`)**：[Kimi Code 文档](https://www.kimi.com/code/docs/)（用 API Key 时请同时遵守 Kimi 开放平台条款）。
 
+## 参与贡献
+
+报告问题、本机检查和 PR 规矩见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 致谢与许可证
 
 - 项目经理像素水果史莱姆、总助嫩芽铃与拍板小铃均由 [`src/shared/slimes.ts`](src/shared/slimes.ts) 中的共享像素稿渲染生成。

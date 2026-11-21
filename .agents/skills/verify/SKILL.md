@@ -1,6 +1,6 @@
 ---
 name: verify
-description: "Run the local end-to-end smoke check for Bellwood: build the web app, start a real daemon in a throwaway data directory, log in, render the workbench in headless Chromium, and shut everything down cleanly. Use before you hand off or review a change, instead of waiting on cloud CI."
+description: "Run the local end-to-end smoke check for Bellwood: build the web app, start a real daemon in a throwaway data directory, log in, render the workbench in headless Chromium, and shut everything down cleanly. Use before you hand off or review a change, together with typecheck and the related tests."
 ---
 
 # Verify
@@ -36,9 +36,9 @@ Look at the screenshot. A passing run with a wrong-looking screen is still a fai
 
 ## When to use it
 
-- Before you report a step as done: run `pnpm typecheck`, the tests for the files you changed, and `pnpm verify`. For a change you can test on this machine, these three are the gate. Do not wait for GitHub Actions.
+- Before you push: run `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`. After you push, wait for every check on the PR to finish green before you report done (`AGENTS.md`, "Cloud checks before done").
 - In an independent review: run it on the commit under review.
-- Changes to the Linux `bwrap` sandbox, Windows native code, or packaging cannot be tested here. For those, also check the matching cloud job on the PR.
+- Changes to the Linux `bwrap` sandbox, Windows native code, or packaging cannot be tested here. The matching cloud job on the PR is their only test.
 
 If a run fails, read the error line in `smoke-runs.txt` first. It names the step and includes the daemon's stderr when the daemon exits early. Never rerun a failed cloud job with `gh run rerun` to hide a flaky test. Report the flake as a finding.
 

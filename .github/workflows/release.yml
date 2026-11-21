@@ -18,6 +18,7 @@ on:
       - "scripts/stage-runtime-common.ts"
       - "src/shared/update.ts"
       - "package.json"
+      - "SECURITY.md"
       - "apps/windows/Cargo.toml"
       - "apps/windows/crates/fusa-desktop/tauri.conf.json"
 

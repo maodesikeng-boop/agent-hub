@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/relay/cloudflare/tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && tsc --noEmit -p test/ui-polish/tsconfig.in-page.json",
     "test": "vitest run",
     "test:quiet": "vitest run --reporter=dot",
+    "test:related": "node scripts/test-related.ts",
     "test:ci": "vitest run --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit.xml",
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/relay/cloudflare/tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && tsc --noEmit -p test/ui-polish/tsconfig.in-page.json && vitest run --reporter=dot",
     "smoke": "node test/smoke/main.ts",
@@ -46,7 +47,8 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5",
-    "wrangler": "^4.165.0"
+    "wrangler": "^4.165.0",
+    "yaml": "^2.9.1"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.5.0",

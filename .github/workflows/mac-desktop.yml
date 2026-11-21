@@ -24,9 +24,14 @@ on:
       - "src/shared/**"
       - "src/vendors/**"
       - "src/hub/**"
-      - "src/tunnel/**"
+      - "src/admin/**"
+      - "src/feishu/**"
+      - "src/mesh/**"
+      - "src/relay/**"
       - "src/web/**"
       - "migrations/**"
+      - "tsconfig.json"
+      - "vite.config.ts"
       - "scripts/build-mac-app.sh"
       - "scripts/stage-mac-runtime.ts"
       - "scripts/stage-runtime-common.ts"
@@ -34,10 +39,11 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/mac-desktop.yml"
 
+# Pull requests cancel superseded runs; every main commit gets its own group so a later merge never cancels or replaces it.
 concurrency:
   # github.workflow 在被复用时是调用方名（release），避免和本工作流自己的 PR 运行互相取消
-  group: mac-desktop-${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  group: mac-desktop-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
