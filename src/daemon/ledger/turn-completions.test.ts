@@ -7,7 +7,7 @@ import type { Change } from "../../shared/api.ts";
 import { systemEventOf } from "../../shared/domain.ts";
 import type { ConversationId, MessageId, SessionId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
-import { TURN_COMPLETION_RETRY_MAX_MS } from "../../shared/limits.ts";
+import { TURN_COMPLETION_RETRY_BATCH_SIZE, TURN_COMPLETION_RETRY_MAX_MS } from "../../shared/limits.ts";
 import { replyIdOf } from "../../shared/turn-reply.ts";
 import { listActions } from "../actions/index.ts";
 import { createSessionSendHandler } from "../handlers.ts";
@@ -15,10 +15,11 @@ import type { LocalLink } from "../sent-files.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
+import { createLedgerContext } from "./context.ts";
 import { createDriverEventDrain } from "./driver-events.ts";
 import { createLedger } from "./index.ts";
 import type { SqliteLedger } from "./index.ts";
-import { NO_TURN_FACTS, type createTurnCompletionLedger } from "./turn-completions.ts";
+import { NO_TURN_FACTS, createTurnCompletionLedger } from "./turn-completions.ts";
 
 type TurnEnded = Extract<DriverEvent, { type: "turn.ended" }>;
 
@@ -50,6 +51,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   ledger.close();
   db.close();
   vi.useRealTimers();
@@ -99,9 +101,18 @@ function restart(): void {
   ledger.recoverAfterRestart();
 }
 
-function secondPm(): { conversationId: ConversationId; sessionId: SessionId } {
-  const created = ledger.createPm({ name: "另一个项目经理", mode: "manage_only", persona: "" });
+function secondPm(name = "另一个项目经理"): { conversationId: ConversationId; sessionId: SessionId } {
+  const created = ledger.createPm({ name, mode: "manage_only", persona: "" });
   return { conversationId: created.conversation.id, sessionId: created.sessionId };
+}
+
+/** Makes db.get throw for matching SQL while `failing()` holds, like a transient SQLITE_BUSY read. */
+function failReadsWhen(failing: (sql: string) => boolean): void {
+  const realGet = db.get.bind(db);
+  vi.spyOn(db, "get").mockImplementation(((sql: string, ...params: never[]) => {
+    if (failing(sql)) throw new Error("SQLITE_BUSY: database is locked");
+    return realGet(sql, ...params);
+  }) as Db["get"]);
 }
 
 describe("turn completion receipts", () => {
@@ -135,6 +146,64 @@ describe("turn completion receipts", () => {
     finishCopy(null);
     await drain.wait();
     expect(calls).toEqual(["receive:deferred", "apply:agent.text", "facts", "settle:7"]);
+  });
+
+  it("hands the receipt to the retry timer when a SQLite read fails as an attachment copy finishes", async () => {
+    let failReads = false;
+    failReadsWhen((sql) => failReads && sql.includes("FROM turn_completions"));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    process.on("unhandledRejection", onUnhandled);
+    const applied: number[] = [];
+    let finishCopy: (meta: null) => void = () => {};
+    const completions = createTurnCompletionLedger(createLedgerContext(db, { now: () => now }), {
+      apply: (_p, receipt) => applied.push(receipt.sequence),
+      onSettled: (receipt) => drain.onSettled(receipt),
+      onOverflow: vi.fn(),
+    });
+    const drain = createDriverEventDrain({
+      completions,
+      factsFor: () => NO_TURN_FACTS,
+      apply: vi.fn(),
+      localLinks: (text) => (text.includes("file") ? [{ href: text } as LocalLink] : []),
+      textMetaFor: () => new Promise((resolve) => (finishCopy = resolve)),
+      onOverflow: vi.fn(),
+    });
+    try {
+      drain.push(sessionId, { type: "agent.text", uuid: "u", text: "file", at: now });
+      drain.push(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 1, at: now });
+      failReads = true;
+      finishCopy(null);
+      await new Promise((resolve) => setImmediate(resolve));
+      failReads = false;
+      expect(unhandled).toEqual([]);
+      expect(applied).toEqual([]);
+      expect(completions.blocksSend(sessionId)).toBe(true);
+
+      tick();
+      await drain.wait();
+      expect(applied).toHaveLength(1);
+      expect(receipts()).toBe(0);
+      expect(completions.blocksSend(sessionId)).toBe(false);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      completions.close();
+    }
+  });
+
+  it("records the outcome when the session lookup at ingress fails once", () => {
+    const id = post("问题");
+    startTurn(id);
+    let failNext = true;
+    failReadsWhen((sql) => {
+      const fail = failNext && sql.includes("FROM agent_sessions");
+      if (fail) failNext = false;
+      return fail;
+    });
+    expect(() => end([id])).not.toThrow();
+    expect(failNext).toBe(false);
+    expect(statusOf(id)).toBe("replied");
+    expect(receipts()).toBe(0);
   });
 
   it("settles after one SQLite abort on the replied transition without sending the request again", () => {
@@ -352,6 +421,25 @@ describe("turn completion receipts", () => {
     expect(sendsFor(id)).toHaveLength(1);
   });
 
+  it("settles receipts from more sessions than one retry batch during a single startup recovery", () => {
+    const turns = [{ sessionId, id: post("问题") }];
+    for (let i = 1; i <= TURN_COMPLETION_RETRY_BATCH_SIZE; i++) {
+      const other = secondPm(`项目经理 ${i}`);
+      turns.push({ sessionId: other.sessionId, id: post(`问题 ${i}`, other.conversationId) });
+    }
+    failOn("fail_all_replied", "BEFORE UPDATE OF status ON messages WHEN NEW.status = 'replied'");
+    for (const turn of turns) {
+      startTurn(turn.id, turn.sessionId);
+      end([turn.id], {}, turn.sessionId);
+    }
+    expect(db.get("SELECT count(*) AS n FROM turn_completions")).toEqual({ n: TURN_COMPLETION_RETRY_BATCH_SIZE + 1 });
+    drop("fail_all_replied");
+    restart();
+    expect(db.get("SELECT count(*) AS n FROM turn_completions")).toEqual({ n: 0 });
+    expect(turns.map((turn) => statusOf(turn.id))).toEqual(turns.map(() => "replied"));
+    expect(turns.flatMap((turn) => sendsFor(turn.id).map((a) => a.params.resend ?? false))).toEqual(turns.map(() => false));
+  });
+
   it("stops retries when the ledger closes and leaves committed receipts for restart", () => {
     const id = post("问题");
     startTurn(id);
@@ -393,6 +481,29 @@ describe("turn completion receipts", () => {
     ledger.runDueSchedules(now);
     expect(runs()).toHaveLength(2);
     expect(sendsFor(runs()[1]!.id)).toHaveLength(1);
+    expect(db.get("SELECT last_status FROM schedules WHERE id = ?", schedule.id)).toEqual({ last_status: "sent" });
+  });
+
+  it("settles every receipt of a session at startup before the scheduler checks the previous occurrence", () => {
+    const schedule = ledger.hubCall(sessionId, "schedule.add", { name: "日报", prompt: "写日报", daily: "09:00" }).data.schedule;
+    const nextRun = () => db.get<{ next_run_at: number }>("SELECT next_run_at FROM schedules WHERE id = ?", schedule.id)!.next_run_at;
+    now = nextRun();
+    ledger.runDueSchedules(now);
+    const run = db.get<{ id: MessageId }>("SELECT id FROM messages WHERE conversation_id = ? AND sender = 'system' ORDER BY id DESC LIMIT 1", conversationId)!.id;
+    const asked = post("问题");
+    startTurn(asked);
+    startTurn(run);
+    failReplied(asked);
+    end([asked]);
+    end([run]);
+    expect(receipts()).toBe(2);
+    drop("fail_replied");
+    restart();
+    expect(receipts()).toBe(0);
+    expect([statusOf(asked), statusOf(run)]).toEqual(["replied", "replied"]);
+
+    now = nextRun();
+    ledger.runDueSchedules(now);
     expect(db.get("SELECT last_status FROM schedules WHERE id = ?", schedule.id)).toEqual({ last_status: "sent" });
   });
 });

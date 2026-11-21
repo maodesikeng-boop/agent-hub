@@ -32,7 +32,8 @@ export const NO_TURN_FACTS: TurnCompletionFacts = { reply: null, finishedWithTex
 export type TurnCompletionResult =
   | { readonly kind: "settled" }
   | { readonly kind: "already_settled" }
-  | { readonly kind: "pending"; readonly retryAt: number };
+  | { readonly kind: "pending"; readonly retryAt: number }
+  | { readonly kind: "dropped" };
 
 export interface TurnCompletionEffects {
   /** `previousRun` marks a receipt recorded before this daemon started, so its agent process and background commands are gone. */
@@ -107,23 +108,27 @@ export function createTurnCompletionLedger(ctx: LedgerContext, effects: TurnComp
     );
   }
 
-  function save(receipt: TurnCompletionReceipt, facts: TurnCompletionFacts | null, attempts = 0): boolean {
+  /** Keeps the receipt in memory and schedules another upsert; returns null when the buffer is full and the receipt is dropped. */
+  function hold(receipt: TurnCompletionReceipt, facts: TurnCompletionFacts | null, attempts: number, error: unknown): number | null {
+    if (!pendingWrites.has(receipt.sequence) && pendingWrites.size >= TURN_COMPLETION_UNPERSISTED_MAX) {
+      overflow = true;
+      report(new Error("Receipt buffer is full"), receipt);
+      effects.onOverflow(receipt.sessionId);
+      return null;
+    }
+    const retryAt = now() + delayOf(attempts);
+    pendingWrites.set(receipt.sequence, { receipt, facts, attempts: attempts + 1, retryAt });
+    report(error, receipt);
+    wakeAt(retryAt);
+    return retryAt;
+  }
+
+  function save(receipt: TurnCompletionReceipt, facts: TurnCompletionFacts | null, attempts = 0): void {
     try {
       writeReceipt(receipt, facts);
       pendingWrites.delete(receipt.sequence);
-      return true;
     } catch (error) {
-      if (!pendingWrites.has(receipt.sequence) && pendingWrites.size >= TURN_COMPLETION_UNPERSISTED_MAX) {
-        overflow = true;
-        report(new Error("Receipt buffer is full"), receipt);
-        effects.onOverflow(receipt.sessionId);
-        return false;
-      }
-      const retryAt = now() + delayOf(attempts);
-      pendingWrites.set(receipt.sequence, { receipt, facts, attempts: attempts + 1, retryAt });
-      report(error, receipt);
-      wakeAt(retryAt);
-      return false;
+      hold(receipt, facts, attempts, error);
     }
   }
 
@@ -165,19 +170,26 @@ export function createTurnCompletionLedger(ctx: LedgerContext, effects: TurnComp
     return receipt;
   }
 
+  /** Never throws: a failed read or write hands the receipt to the retry timer, which wakes the session queue on settlement. */
   function settle(receipt: TurnCompletionReceipt, facts: TurnCompletionFacts): TurnCompletionResult {
     const pending = pendingWrites.get(receipt.sequence);
     if (pending !== undefined) {
       pending.facts ??= facts;
       return { kind: "pending", retryAt: pending.retryAt };
     }
-    const row = rowFor(receipt);
-    if (row === undefined) return { kind: "already_settled" };
-    if (row.facts === null && !save(receipt, facts)) return { kind: "pending", retryAt: now() + TURN_COMPLETION_RETRY_MIN_MS };
-    if (hasEarlierWrite(receipt) || db.get("SELECT 1 FROM turn_completions WHERE session_id = ? AND sequence < ? LIMIT 1", receipt.sessionId, receipt.sequence)) {
-      const retryAt = now() + TURN_COMPLETION_RETRY_MIN_MS;
-      wakeAt(retryAt);
-      return { kind: "pending", retryAt };
+    let row: ReceiptRow | undefined;
+    try {
+      row = rowFor(receipt);
+      if (row === undefined) return { kind: "already_settled" };
+      if (row.facts === null) writeReceipt(receipt, facts);
+      if (hasEarlierWrite(receipt) || db.get("SELECT 1 FROM turn_completions WHERE session_id = ? AND sequence < ? LIMIT 1", receipt.sessionId, receipt.sequence)) {
+        const retryAt = now() + TURN_COMPLETION_RETRY_MIN_MS;
+        wakeAt(retryAt);
+        return { kind: "pending", retryAt };
+      }
+    } catch (error) {
+      const retryAt = hold(receipt, facts, 0, error);
+      return retryAt === null ? { kind: "dropped" } : { kind: "pending", retryAt };
     }
     if (row.attempts > 0) return { kind: "pending", retryAt: row.next_attempt_at };
     return run(receipt, row.facts === null ? facts : JSON.parse(row.facts) as TurnCompletionFacts, row.attempts);
@@ -197,35 +209,61 @@ export function createTurnCompletionLedger(ctx: LedgerContext, effects: TurnComp
     }
   }
 
+  /** Settles one bounded batch of due session heads, skipping receipts already tried by the caller, and returns how many ran. */
+  function settleBatch(at: number, tried: Set<number>): number {
+    const rows = db.all<ReceiptRow>(
+      `SELECT r.* FROM turn_completions r WHERE r.next_attempt_at <= ? AND (r.facts IS NOT NULL OR r.sequence <= ?)
+        AND r.sequence NOT IN (SELECT value FROM json_each(?)) AND ${SESSION_HEAD}
+        ORDER BY r.next_attempt_at, r.sequence LIMIT ?`,
+      at, startupSequence, JSON.stringify([...tried]), TURN_COMPLETION_RETRY_BATCH_SIZE + pendingWrites.size,
+    );
+    let ran = 0;
+    for (const row of rows) {
+      const receipt = { sequence: row.sequence, sessionId: row.session_id, event: JSON.parse(row.event) as TurnEndedEvent };
+      if (hasEarlierWrite(receipt)) continue;
+      if (ran === TURN_COMPLETION_RETRY_BATCH_SIZE) break;
+      ran++;
+      tried.add(row.sequence);
+      const result = run(receipt, row.facts === null ? NO_TURN_FACTS : JSON.parse(row.facts) as TurnCompletionFacts, row.attempts);
+      if (result.kind !== "pending") effects.onSettled(receipt);
+    }
+    return ran;
+  }
+
+  function scheduleNext(): void {
+    for (const entry of pendingWrites.values()) wakeAt(entry.retryAt);
+    const next = db.get<{ next_attempt_at: number }>(
+      `SELECT r.next_attempt_at FROM turn_completions r WHERE (r.facts IS NOT NULL OR r.sequence <= ?) AND ${SESSION_HEAD}
+       ORDER BY r.next_attempt_at, r.sequence LIMIT 1`, startupSequence,
+    );
+    if (next !== undefined) wakeAt(next.next_attempt_at);
+    if (reportedError !== undefined && !overflow && next === undefined && pendingWrites.size === 0) {
+      if (db.get<{ last_error: string }>("SELECT last_error FROM health WHERE module = 'store'")?.last_error === reportedError) {
+        write((p) => reportHealthIn(p, "store", null));
+      }
+      reportedError = undefined;
+    }
+  }
+
   function retryDue(at: number): void {
     if (closed) return;
     try {
       persistDue(at);
-      const rows = db.all<ReceiptRow>(
-        `SELECT r.* FROM turn_completions r WHERE r.next_attempt_at <= ? AND (r.facts IS NOT NULL OR r.sequence <= ?)
-          AND ${SESSION_HEAD} ORDER BY r.next_attempt_at, r.sequence LIMIT ?`,
-        at, startupSequence, TURN_COMPLETION_RETRY_BATCH_SIZE + pendingWrites.size,
-      );
-      let budget = TURN_COMPLETION_RETRY_BATCH_SIZE;
-      for (const row of rows) {
-        const receipt = { sequence: row.sequence, sessionId: row.session_id, event: JSON.parse(row.event) as TurnEndedEvent };
-        if (hasEarlierWrite(receipt)) continue;
-        if (budget-- === 0) break;
-        const result = run(receipt, row.facts === null ? NO_TURN_FACTS : JSON.parse(row.facts) as TurnCompletionFacts, row.attempts);
-        if (result.kind !== "pending") effects.onSettled(receipt);
-      }
-      for (const entry of pendingWrites.values()) wakeAt(entry.retryAt);
-      const next = db.get<{ next_attempt_at: number }>(
-        `SELECT r.next_attempt_at FROM turn_completions r WHERE (r.facts IS NOT NULL OR r.sequence <= ?) AND ${SESSION_HEAD}
-         ORDER BY r.next_attempt_at, r.sequence LIMIT 1`, startupSequence,
-      );
-      if (next !== undefined) wakeAt(next.next_attempt_at);
-      if (reportedError !== undefined && !overflow && next === undefined && pendingWrites.size === 0) {
-        if (db.get<{ last_error: string }>("SELECT last_error FROM health WHERE module = 'store'")?.last_error === reportedError) {
-          write((p) => reportHealthIn(p, "store", null));
-        }
-        reportedError = undefined;
-      }
+      settleBatch(at, new Set());
+      scheduleNext();
+    } catch (error) {
+      report(error);
+      wakeAt(now() + TURN_COMPLETION_RETRY_MAX_MS);
+    }
+  }
+
+  /** Startup tries every committed receipt once, including each session's later receipts, before anything reads message status. */
+  function recover(): void {
+    if (closed) return;
+    const tried = new Set<number>();
+    try {
+      while (settleBatch(Infinity, tried) > 0);
+      scheduleNext();
     } catch (error) {
       report(error);
       wakeAt(now() + TURN_COMPLETION_RETRY_MAX_MS);
@@ -238,8 +276,7 @@ export function createTurnCompletionLedger(ctx: LedgerContext, effects: TurnComp
   }
 
   return {
-    receive, settle, retryDue, blocksSend,
-    recover: () => retryDue(Infinity),
+    receive, settle, retryDue, blocksSend, recover,
     close() {
       closed = true;
       clearTimeout(timer);

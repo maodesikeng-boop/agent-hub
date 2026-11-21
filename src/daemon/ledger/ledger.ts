@@ -267,6 +267,16 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       console.error(`${LOG_PREFIX} ${error}:`, failure);
     }
   };
+  const recordsTurnCompletion = (sessionId: SessionId): boolean => {
+    try {
+      const session = getAgentSession(db, sessionId);
+      return session !== null && session.role !== "assistant" && session.conversationId !== null;
+    } catch (error) {
+      // Dropping the outcome here would strand its messages; settlement checks the session again once SQLite answers.
+      console.error(`${LOG_PREFIX} turn.ended (session ${sessionId}): session lookup failed, recording the outcome anyway:`, error);
+      return true;
+    }
+  };
   const completions = createTurnCompletionLedger(ctx, {
     apply(p, receipt, facts, previousRun) {
       const session = getAgentSession(db, receipt.sessionId);
@@ -353,10 +363,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}) after ledger close: dropped`);
         return;
       }
-      if (event.type === "turn.ended") {
-        const session = getAgentSession(db, sessionId);
-        if (session === null || session.role === "assistant" || session.conversationId === null) return;
-      }
+      if (event.type === "turn.ended" && !recordsTurnCompletion(sessionId)) return;
       driverEvents.push(sessionId, event);
     },
     settleDriverEvents: driverEvents.wait,

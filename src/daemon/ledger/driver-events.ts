@@ -71,7 +71,7 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
       applyLogged(sessionId, item.event, meta);
       queue.copy = null;
       drain(sessionId, queue);
-    });
+    }).catch((error) => log(sessionId, item.event.type, error));
   }
 
   function drain(sessionId: SessionId, queue: Queue): void {
