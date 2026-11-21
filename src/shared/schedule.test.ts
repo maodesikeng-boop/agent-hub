@@ -11,6 +11,7 @@ import {
   parseDurationMs,
   parseEvery,
   parseWorkerMaxTime,
+  reanchorDailyRun,
   scheduleLabel,
   scheduledTimeText,
   scheduleRunTitle,
@@ -100,6 +101,64 @@ describe("下一次", () => {
       expect(new Date(nextDailyRun(at(2, 8, 3, 30), "02:30")).getHours()).toBe(2);
       // 秋季多出一小时那天：每天 09:00 不受影响
       expect(nextDailyRun(at(10, 1, 9), "09:00")).toBe(at(10, 2, 9));
+    } finally {
+      if (oldTz === undefined) delete process.env.TZ;
+      else process.env.TZ = oldTz;
+    }
+  });
+
+  it("换时区重锚：时区不变时一年里每天算好的下次原样不动（含夏令时跳时、重复的那一小时、午夜前后跳时）；换了时区落到新时区同一天的 HH:MM、且晚于上次", () => {
+    const oldTz = process.env.TZ;
+    const day = 24 * 60 * 60_000;
+    try {
+      const moved: string[] = [];
+      const zones = ["America/Los_Angeles", "Europe/London", "Australia/Sydney", "Asia/Shanghai", "America/Nuuk", "America/Scoresbysund", "Australia/Lord_Howe", "America/Havana", "America/Santiago"];
+      for (const tz of zones) {
+        process.env.TZ = tz;
+        for (const atTime of ["00:00", "00:30", "01:30", "02:30", "09:00", "23:00", "23:30", "23:59"]) {
+          let last = new Date(2026, 0, 1, 12).getTime();
+          for (let i = 0; i < 366; i++) {
+            const next = nextDailyRun(last, atTime);
+            for (const now of [last, next - 1, next, next + day]) {
+              for (const lastRunAt of [last, null]) {
+                const got = reanchorDailyRun(next, atTime, lastRunAt, now);
+                if (got !== next) moved.push(`${tz} ${atTime} ${new Date(next).toString()} -> ${new Date(got).toString()}`);
+              }
+            }
+            last = next;
+          }
+        }
+      }
+      expect(moved).toEqual([]);
+
+      process.env.TZ = "America/Los_Angeles";
+      const lastRun = new Date(2026, 10, 4, 9).getTime();
+      const staleNext = nextDailyRun(lastRun, "09:00");
+      process.env.TZ = "Asia/Shanghai";
+      expect(new Date(staleNext).getHours()).toBe(1);
+      expect(reanchorDailyRun(staleNext, "09:00", lastRun, lastRun + 30 * 60_000)).toBe(new Date(2026, 10, 6, 9).getTime());
+    } finally {
+      if (oldTz === undefined) delete process.env.TZ;
+      else process.env.TZ = oldTz;
+    }
+  });
+
+  it("往西换时区跨过午夜：还没到点的下次不会被拨到现在之前；换时区前就已过点的仍然当场补跑", () => {
+    const oldTz = process.env.TZ;
+    try {
+      for (const { from, created, atTime, expected } of [
+        { from: "Asia/Shanghai", created: [4, 8], atTime: "09:00", expected: [4, 9] },
+        { from: "America/New_York", created: [3, 23], atTime: "01:00", expected: [4, 1] },
+      ] as const) {
+        process.env.TZ = from;
+        const createdAt = new Date(2026, 10, created[0], created[1]).getTime();
+        const pending = nextDailyRun(createdAt, atTime);
+        process.env.TZ = "America/Los_Angeles";
+        expect(new Date(pending).getDate()).toBe(3);
+        expect(reanchorDailyRun(pending, atTime, null, createdAt + 60_000)).toBe(new Date(2026, 10, expected[0], expected[1]).getTime());
+        const overdueAt = pending + 60 * 60_000;
+        expect(reanchorDailyRun(pending, atTime, null, overdueAt)).toBeLessThanOrEqual(overdueAt);
+      }
     } finally {
       if (oldTz === undefined) delete process.env.TZ;
       else process.env.TZ = oldTz;
