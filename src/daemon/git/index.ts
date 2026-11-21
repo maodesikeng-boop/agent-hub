@@ -20,12 +20,21 @@ export {
   remoteBranchHead,
   resolveCommit,
 } from "./git.ts";
+export {
+  countCommitsAheadOfMain,
+  deleteLocalBranch,
+  isBranchSquashMergedToMain,
+  listBranchesMergedInto,
+  listLocalBranches,
+  resolveMainTargetCommits,
+} from "./branches.ts";
 export { probePr, probePrByUrl } from "./pr.ts";
 export type {
   AddWorktreeOptions,
   AddWorktreeResult,
   DiffFileStat,
   GitOptions,
+  LocalBranchInfo,
   OrphanContentProbe,
   ProbeOrphanOptions,
   WorktreeLink,

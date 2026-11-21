@@ -13,6 +13,7 @@ import { registerCatalogRoutes } from "./routes-catalog.ts";
 import { registerConversationRoutes } from "./routes-conversations.ts";
 import { registerIntegrationRoutes } from "./routes-integrations.ts";
 import { registerPmRoutes } from "./routes-pms.ts";
+import { registerResourceRoutes } from "./routes-resources.ts";
 import { registerRouterRoutes } from "./routes-router.ts";
 import { registerSessionRoutes } from "./routes-session.ts";
 import { registerUpdateRoutes } from "./routes-update.ts";
@@ -57,6 +58,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     registerCapabilityRoutes(routes, c);
     registerRouterRoutes(routes, c);
     registerIntegrationRoutes(routes, c);
+    registerResourceRoutes(routes, c);
     registerUpdateRoutes(routes, c);
     registerWsRoute(routes, c);
   });

@@ -2,7 +2,7 @@ import type { AgentSessionRow, ConversationId, SessionId, WorkerRecord } from ".
 import { formatCount } from "../../shared/count-format.ts";
 import type { HubArgs, HubResult, WorkerLogStep, WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
-import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_RETENTION_DAYS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_RETENTION_DAYS, WORKER_RETENTION_MAX_ENDED, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { parseReviewTarget } from "../../shared/review.ts";
 import { formatDurationShort } from "../../shared/schedule.ts";
@@ -139,7 +139,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     const d = new Date(purgedAt);
     const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     return (
-      `对话已按保留期清理（收工满 ${WORKER_RETENTION_DAYS} 天，${day} 清的）：消息、步骤日志已删；` +
+      `对话已按保留期清理（已收工 Worker 的对话最多留 ${WORKER_RETENTION_DAYS} 天、只留最近 ${WORKER_RETENTION_MAX_ENDED} 个，${day} 清的）：消息、步骤日志已删；` +
       `任务说明和每轮汇报还在，用 \`${HUB_COMMAND} worker show ${worker.id} --task\` / \`--report\` 看，也能 \`${HUB_COMMAND} worker search\` 搜到`
     );
   };

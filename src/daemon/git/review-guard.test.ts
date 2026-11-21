@@ -40,7 +40,10 @@ describe("审查目录与禁推（真 git）", () => {
     const dataDir = join(root, "data");
     const launchDir = join(dataDir, "state", "launch");
     mkdirSync(launchDir, { recursive: true });
+    const sessionTmpDir = join(dataDir, "session-tmp");
+    mkdirSync(sessionTmpDir, { recursive: true });
     const prepare = createLaunchPreparer({
+      sessionTmp: { allocate: () => sessionTmpDir },
       launchDir,
       dataDir,
       stateDir: join(dataDir, "state"),

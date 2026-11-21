@@ -12,7 +12,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { readLedgerFile } from "../src/daemon/process-ledger.ts";
-import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, VENDOR_LIST } from "../src/shared/index.ts";
+import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST } from "../src/shared/index.ts";
 import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import { resolveHubPaths } from "../src/shared/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
@@ -52,7 +52,7 @@ function withTimeout<T>(what: string, promise: Promise<T>, ms = VERIFY_SMOKE_STE
 function daemonEnv(home: string, scratch: string): Record<string, string> {
   const userHome = join(scratch, "user-home");
   mkdirSync(userHome, { recursive: true });
-  const passthrough = ["PATH", "Path", "SystemRoot", "PATHEXT", "ComSpec", "TEMP", "TMP"].flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]!] as const]));
+  const passthrough = ["PATH", "Path", "SystemRoot", "PATHEXT", "ComSpec", "TMPDIR", "TEMP", "TMP", ENV_SESSION_OWNER_TAG].flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]!] as const]));
   return {
     ...Object.fromEntries(passthrough),
     LANG: "en_US.UTF-8",

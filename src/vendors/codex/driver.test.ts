@@ -621,8 +621,10 @@ function makeCodexHarness(
       // 数据目录默认是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
       const writeScope = workerWriteScope({ role: session.role, dataDir, cwd: session.cwd });
       if (writeScope !== null) files.writeScope = writeScope;
-      if (readonly) files.readonly = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir });
-      return files;
+      if (!readonly) return files;
+      const tmpDir = join(dir, "session-tmp", String(session.id));
+      mkdirSync(tmpDir, { recursive: true });
+      return { ...files, readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir }), tmpDir };
     },
     env: {
       FAKE_CODEX_LOG: logFile,

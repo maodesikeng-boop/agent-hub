@@ -77,7 +77,7 @@ describe("opencode config override", () => {
   });
 
   it("routes every non-allowlisted tool, including Code Mode MCP calls, through ACP approval and blocks MCP servers for read-only Workers", () => {
-    const override = buildOpenCodeConfigOverride({ ...base, readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } } });
+    const override = buildOpenCodeConfigOverride({ ...base, readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } }, tmpDir: "/tmp/session" });
     const permissions = override.permissions as { action: string; resource: string; effect: string }[];
     const effectOf = (action: string) => permissions.findLast((r) => r.action === action || r.action === "*")?.effect;
     expect(effectOf("execute")).toBe("ask");
@@ -91,7 +91,7 @@ describe("opencode config override", () => {
   });
 
   it("pins the read-only rules onto the plan agent so project agents.plan.permissions cannot widen them", () => {
-    const override = buildOpenCodeConfigOverride({ ...base, readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } } });
+    const override = buildOpenCodeConfigOverride({ ...base, readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } }, tmpDir: "/tmp/session" });
     expect(override.default_agent).toBe("plan");
     expect(override.agents).toEqual({ plan: { disabled: false, mode: "primary", permissions: override.permissions } });
     const permissions = override.permissions as { action: string; effect: string }[];
@@ -106,6 +106,7 @@ describe("opencode config override", () => {
       ...base,
       skillsDir: "/launch/skills",
       readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } },
+      tmpDir: "/tmp/session",
       capabilities: {
         deny: { skills: ["deploy"], mcp: ["my server.v2"], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
         allow: { skills: [], mcp: [] },
@@ -276,12 +277,16 @@ child.on("exit", (code) => process.exit(code ?? 0));
       store,
       executablePath: wrapper,
       log: () => {},
-      prepareLaunch: async () => ({
-        promptFile,
-        fingerprint: "fp",
-        env: { ...process.env, FAKE_ACP_SCRIPT: scriptFile, FAKE_ACP_LOG: logFile, FAKE_ACP_STATE: join(dir, "state") } as Record<string, string>,
-        ...(options.readonly ? { readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } } } : {}),
-      }),
+      prepareLaunch: async () => {
+        const base = {
+          promptFile,
+          fingerprint: "fp",
+          env: { ...process.env, FAKE_ACP_SCRIPT: scriptFile, FAKE_ACP_LOG: logFile, FAKE_ACP_STATE: join(dir, "state") } as Record<string, string>,
+        };
+        return options.readonly
+          ? { ...base, readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } }, tmpDir: dir }
+          : base;
+      },
       ...(options.readonlySpawn ? { readonlySpawn: options.readonlySpawn } : {}),
     });
     drivers.push(driver);

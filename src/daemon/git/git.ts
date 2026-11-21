@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { WorkspaceProbe } from "../../shared/ledger.ts";
-import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../../shared/limits.ts";
+import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS, RESOURCES_SAMPLE_PATHS_MAX } from "../../shared/limits.ts";
 import { findExecutable } from "../../shared/paths.ts";
 import { firstEnvKey, normalizePathForComparison, resolveSpawn } from "../platform/index.ts";
 
@@ -83,7 +83,7 @@ function resolveGitInvocation(
 }
 
 /** Non-zero exits are returned for the caller to judge; only a missing git binary or a timeout throws. */
-function runGit(
+export function runGit(
   folder: string,
   args: string[],
   timeoutMs: number,
@@ -125,10 +125,12 @@ function runGit(
   });
 }
 
-function failed(what: string, run: GitRun): GitError {
+export function failedGit(what: string, run: GitRun): GitError {
   const detail = run.stderr.trim() || run.stdout.trim() || `退出码 ${run.code}`;
   return new GitError("git_failed", `${what} 失败：${detail}`);
 }
+
+const failed = failedGit;
 
 export async function isRepoWithCommit(folder: string, options: GitOptions = {}): Promise<boolean> {
   const run = await runGit(folder, ["rev-parse", "--verify", "--quiet", "HEAD"], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
@@ -213,7 +215,7 @@ interface WorktreeEntry {
   locked: string | null;
 }
 
-function parseWorktreeList(output: string): WorktreeEntry[] {
+export function parseWorktreeList(output: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = [];
   for (const block of output.replace(/\r\n/g, "\n").split(/\n\s*\n/)) {
     let path: string | null = null;
@@ -246,7 +248,7 @@ export function realpathLoose(path: string): string {
   }
 }
 
-const MAIN_TARGET_REFS = [
+export const MAIN_TARGET_REFS = [
   "refs/remotes/origin/main",
   "refs/heads/main",
   "refs/remotes/origin/master",
@@ -301,6 +303,9 @@ export type WorktreeRemovalProbe =
       head: string | null;
       /** Mid-operation states leave HEAD and the work tree inconsistent, so the directory is never deleted. */
       inProgress: boolean;
+      uncommittedCount: number;
+      untrackedCount: number;
+      samplePaths: string[];
     }
   | { kind: "failed"; error: string };
 
@@ -316,32 +321,89 @@ const IN_PROGRESS_GIT_PATHS = [
   "BISECT_LOG",
 ] as const;
 
+function parsePorcelainV2Path(line: string): string | null {
+  if (line.startsWith("? ")) return line.slice(2) || null;
+  if (line.startsWith("1 ")) return parsePorcelainV2OrdinaryPath(line);
+  if (line.startsWith("2 ")) {
+    const tab = line.indexOf("\t");
+    const head = tab === -1 ? line : line.slice(0, tab);
+    let pos = 0;
+    for (let i = 0; i < 9; i++) {
+      pos = head.indexOf(" ", pos);
+      if (pos === -1) return null;
+      pos++;
+    }
+    return pos < head.length ? head.slice(pos) : null;
+  }
+  if (line.startsWith("u ")) {
+    let pos = 0;
+    for (let i = 0; i < 10; i++) {
+      pos = line.indexOf(" ", pos);
+      if (pos === -1) return null;
+      pos++;
+    }
+    return pos < line.length ? line.slice(pos) : null;
+  }
+  return null;
+}
+
 export async function probeWorktreeForRemoval(worktreePath: string, options: GitOptions = {}): Promise<WorktreeRemovalProbe> {
   const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
   try {
     const run = await runGit(
       worktreePath,
-      [...GIT_READONLY_ARGS, "status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignore-submodules=none"],
+      [...GIT_READONLY_ARGS, "-c", "core.quotePath=false", "status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignore-submodules=none"],
       timeoutMs,
       { ...GIT_READONLY_ENV, LC_ALL: "C" },
     );
     if (run.code === 128 && /not a git repository/i.test(run.stderr)) {
-      return { kind: "ok", isRepoWithCommit: false, hasContent: true, onBranch: false, head: null, inProgress: false };
+      return {
+        kind: "ok",
+        isRepoWithCommit: false,
+        hasContent: true,
+        onBranch: false,
+        head: null,
+        inProgress: false,
+        uncommittedCount: 0,
+        untrackedCount: 0,
+        samplePaths: [],
+      };
     }
     if (run.code !== 0) throw failed("git status", run);
     let hasCommit = true;
     let onBranch = false;
     let hasContent = false;
     let head: string | null = null;
+    let uncommittedCount = 0;
+    let untrackedCount = 0;
+    const samplePaths: string[] = [];
     for (const line of run.stdout.split("\n")) {
       if (line === "") continue;
       if (line === "# branch.oid (initial)") hasCommit = false;
       else if (line.startsWith("# branch.oid ")) head = line.slice("# branch.oid ".length);
       else if (line.startsWith("# branch.head ")) onBranch = line !== "# branch.head (detached)";
-      else if (!line.startsWith("# ") && !line.startsWith(MISSING_TRACKED_FILE)) hasContent = true;
+      else if (!line.startsWith("# ") && !line.startsWith(MISSING_TRACKED_FILE)) {
+        hasContent = true;
+        if (line.startsWith("? ")) untrackedCount++;
+        else uncommittedCount++;
+        if (samplePaths.length < RESOURCES_SAMPLE_PATHS_MAX) {
+          const p = parsePorcelainV2Path(line);
+          if (p !== null && !samplePaths.includes(p)) samplePaths.push(p);
+        }
+      }
     }
     const inProgress = await hasOperationInProgress(worktreePath, timeoutMs);
-    return { kind: "ok", isRepoWithCommit: hasCommit, hasContent, onBranch, head: hasCommit ? head : null, inProgress };
+    return {
+      kind: "ok",
+      isRepoWithCommit: hasCommit,
+      hasContent,
+      onBranch,
+      head: hasCommit ? head : null,
+      inProgress,
+      uncommittedCount,
+      untrackedCount,
+      samplePaths,
+    };
   } catch (error) {
     return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
   }
@@ -442,11 +504,12 @@ export function inspectWorktreeLink(worktreePath: string): WorktreeLink {
   return existsSync(join(target, "HEAD")) ? "linked" : "orphan";
 }
 
-export type OrphanContentProbe = { kind: "ok"; hasContent: boolean } | { kind: "failed"; error: string };
+export type OrphanContentProbe = { kind: "ok"; hasContent: boolean; samplePaths?: string[]; dirtyCount?: number } | { kind: "failed"; error: string };
 
 export interface ProbeOrphanOptions extends GitOptions {
   /** After the branch is deleted and main moves on, untouched files in an orphan dir still match the base commit, so it is included to avoid false positives. */
   baseCommit?: string | null;
+  includeSamples?: boolean;
 }
 
 const ORPHAN_PATHSPEC_CHUNK = 500;
@@ -624,17 +687,22 @@ export async function probeOrphanContent(
       return { unknownFormat: false, paths: remaining };
     };
 
+    const ok = (hasContent: boolean, paths: string[] = []): OrphanContentProbe =>
+      options.includeSamples
+        ? { kind: "ok", hasContent, samplePaths: paths.slice(0, RESOURCES_SAMPLE_PATHS_MAX), dirtyCount: hasContent ? Math.max(1, paths.length) : 0 }
+        : { kind: "ok", hasContent };
+
     if (commits.length === 0) {
       const res = await checkAgainst(null, null);
-      return { kind: "ok", hasContent: res.unknownFormat || res.paths.length > 0 };
+      return ok(res.unknownFormat || res.paths.length > 0, res.paths);
     }
 
     let suspectPaths: string[] | null = null;
     for (const commit of commits) {
       const res = await checkAgainst(commit, suspectPaths);
-      if (res.unknownFormat) return { kind: "ok", hasContent: true };
+      if (res.unknownFormat) return ok(true);
       suspectPaths = res.paths;
-      if (suspectPaths.length === 0) return { kind: "ok", hasContent: false };
+      if (suspectPaths.length === 0) return ok(false);
     }
 
     if (
@@ -665,14 +733,14 @@ export async function probeOrphanContent(
           if (sha === "" || seenCommits.has(sha)) continue;
           seenCommits.add(sha);
           const res = await checkAgainst(sha, suspectPaths);
-          if (res.unknownFormat) return { kind: "ok", hasContent: true };
+          if (res.unknownFormat) return ok(true);
           suspectPaths = res.paths;
-          if (suspectPaths.length === 0) return { kind: "ok", hasContent: false };
+          if (suspectPaths.length === 0) return ok(false);
         }
       }
     }
 
-    return { kind: "ok", hasContent: true };
+    return ok(true, suspectPaths ?? []);
   } catch (error) {
     return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
   } finally {
@@ -747,3 +815,11 @@ export async function probeDiffNumstat(
   }
   return null;
 }
+
+export interface LocalBranchInfo {
+  readonly name: string;
+  readonly commit: string;
+  readonly checkedOutPath: string | null;
+}
+
+

@@ -283,7 +283,12 @@ function isolationErrors(facts: Facts): string | null {
 function transcript(facts: Facts): string {
   const lines = facts.messages.map((m) => {
     const head = `### messages#${m.id} ${new Date(m.at).toISOString()} ${m.sender}/${m.kind}`;
-    const body = m.kind === "tool" ? `${String(m.meta?.name ?? "")}: ${JSON.stringify(m.meta?.input ?? {})}` : m.text;
+    const body =
+      m.kind === "tool"
+        ? m.meta?.input !== undefined
+          ? `${String(m.meta?.name ?? "")}: ${JSON.stringify(m.meta.input)}`
+          : m.text
+        : m.text;
     return `${head}\n${clip(body, EVAL_TRANSCRIPT_MAX_CHARS)}\n`;
   });
   const gh = facts.gh.map((g) => `- gh#${g.seq} ${new Date(g.at).toISOString()} \`gh ${g.argv.join(" ")}\` → ${g.action}（退出码 ${g.exitCode}）`);

@@ -385,7 +385,7 @@ describe("点开 Worker", () => {
     expect(screen.getByText("No messages yet")).toBeInTheDocument();
   });
 
-  it("对话被保留期清理过（conversation.purgedAt）：写“Conversation cleared after the 30-day retention period”，不显示“No messages yet”和输入框；实时收到 conversation.purged 同样", async () => {
+  it("对话被保留期清理过（conversation.purgedAt）：写清 14 天和 300 个两条保留规则，不显示“No messages yet”和输入框；实时收到 conversation.purged 同样", async () => {
     const user = userEvent.setup();
     const ws = await boot(
       withWorker({
@@ -399,7 +399,7 @@ describe("点开 Worker", () => {
     const region = screen.getByRole("region", { name: "Piece 修 X" });
     expect(within(region).getByText("还在的话")).toBeInTheDocument();
     push(ws, changeOf(11, "conversation.purged", { conversationId: 30, purgedAt: 5 }));
-    await waitFor(() => expect(within(region).getByRole("status")).toHaveTextContent("Conversation cleared after the 30-day retention period"));
+    await waitFor(() => expect(within(region).getByRole("status")).toHaveTextContent("Conversation cleared. Finished Pieces keep their conversations for up to 14 days, and only the latest 300."));
     expect(within(region).queryByText("还在的话")).not.toBeInTheDocument();
     expect(within(region).queryByText("No messages yet")).not.toBeInTheDocument();
   });

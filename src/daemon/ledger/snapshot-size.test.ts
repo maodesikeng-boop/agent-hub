@@ -1,7 +1,7 @@
 // 初始快照（/api/state）的上限守卫：按“跑了一个月”算（300 个已收工的 Worker、3 万条消息，AGENTS.md“缓存和状态快照”那一条），
 // 快照里不带 Worker 对话的消息，项目经理对话只带最近几条，整份不超过 SNAPSHOT_MONTH_MAX_BYTES，算一次也要快。
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -10,7 +10,9 @@ import {
   DELIVERABLE_LABEL_MAX_CHARS,
   DELIVERABLES_PER_CARD_MAX,
   DELIVERABLES_PER_STEP_MAX,
+  HUB_CALLS_MAX_ROWS,
   MAX_PATH_BYTES,
+  PM_TOOL_MESSAGES_MAX_PER_CONV,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES,
   SNAPSHOT_ENDED_WORKERS_PER_PM,
@@ -26,10 +28,11 @@ import {
   ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
   SNAPSHOT_MONTH_MAX_BYTES,
   SNAPSHOT_RECENT_MESSAGES,
+  WORKER_RETENTION_MAX_ENDED,
 } from "../../shared/limits.ts";
 import type { Deliverable } from "../../shared/deliverables.ts";
 import { AGENT_VENDORS } from "../../shared/vendors.ts";
-import type { Db } from "../store/index.ts";
+import { migrate, openDatabase, reclaimFreePages, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createLedger } from "./index.ts";
 import type { SqliteLedger } from "./index.ts";
@@ -410,5 +413,194 @@ describe("初始快照的上限（一个月的量）", () => {
     // 被卡住的步骤等的是用户动手，不是拍板：上一轮的交付物不进全量快照
     for (const node of blocked) expect(node.artifact?.deliverables).toBeUndefined();
     expect(bytes).toBeLessThan(SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES);
+  });
+
+  it("真实分布 900 Worker 基准（77.4% tool 行、meta.input、PM tool、session_steps、handovers、hub_calls）：清理与瘦身前后体积和耗时对比", { timeout: 30_000 }, async () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const NOW = 1_760_000_000_000;
+    const START = NOW - 17 * DAY_MS;
+    const benchFile = join(root, "realistic-900.sqlite");
+    const benchDb = openDatabase(benchFile);
+    benchDb.exec("PRAGMA auto_vacuum = INCREMENTAL");
+    migrate(benchDb);
+    const benchLedger = createLedger(benchDb, { now: () => NOW, pmHomeRoot: join(root, "bench-pm"), dataHome: root });
+    try {
+      const { pm, conversation, sessionId: pmSessionId } = benchLedger.createPm({ name: "基准PM", mode: "manage_only", persona: "" });
+      const projectId = Number(
+        benchDb.run("INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('bench', ?, ?, ?, ?)", pm.id, conversation.id, START, START).lastInsertRowid,
+      );
+
+      // Observed live proportions scaled over 17 days (900 Workers, ~77% tool rows, ~660B meta.input, ~13 MB handovers, ~8 MB hub_calls).
+      const workerToolMeta = JSON.stringify({ toolUseId: "tu", name: "Write", input: { file_path: "src/app.ts", content: "a".repeat(580) } });
+      const pmToolMeta = JSON.stringify({ toolUseId: "pt", name: "Bash", input: { command: "pnpm test", detail: "b".repeat(470) } });
+      const handoverPreamble = "P".repeat(95_000);
+      const handoverSkills = "S".repeat(30_000);
+      const hubResult2k = "R".repeat(2_000);
+      const stepSummary = "Read src/daemon/ledger/messages.ts and inspected retention bounds";
+
+      benchDb.exec("BEGIN");
+      const msgSql =
+        "INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      const stepSql = "INSERT INTO session_steps (session_id, kind, at, name, summary) VALUES (?, 'tool', ?, 'Read', ?)";
+      const hubSql = "INSERT INTO hub_calls (session_id, command, args, ok, result, created_at) VALUES (?, 'worker.show', '{}', 1, ?, ?)";
+
+      // PM messages: 9,900 tool rows + 4,000 agent text + 1,400 user text.
+      for (let i = 0; i < 9_900; i++) {
+        const ts = START + Math.floor((i / 9_900) * 17 * DAY_MS);
+        benchDb.run(msgSql, conversation.id, pmSessionId, null, "agent", "tool", "Bash: pnpm test", pmToolMeta, `pm-t:${i}`, ts, ts);
+      }
+      for (let i = 0; i < 4_000; i++) {
+        const ts = START + Math.floor((i / 4_000) * 17 * DAY_MS);
+        benchDb.run(msgSql, conversation.id, pmSessionId, null, "agent", "text", `PM reply #${i} summary text`, null, `pm-a:${i}`, ts, ts);
+      }
+      for (let i = 0; i < 1_400; i++) {
+        const ts = START + Math.floor((i / 1_400) * 17 * DAY_MS);
+        benchDb.run(msgSql, conversation.id, pmSessionId, null, "user", "text", `User prompt #${i}`, null, `pm-u:${i}`, ts, ts);
+      }
+      for (let i = 0; i < 4_000; i++) {
+        const ts = START + Math.floor((i / 4_000) * 17 * DAY_MS);
+        benchDb.run(stepSql, pmSessionId, ts, stepSummary);
+        benchDb.run(hubSql, pmSessionId, hubResult2k, ts);
+      }
+      // 95 switched handovers with consumed preamble/skills blobs (~12 MB).
+      let prevSid = pmSessionId;
+      for (let h = 1; h <= 95; h++) {
+        const ts = START + Math.floor((h / 95) * 16 * DAY_MS);
+        const nextSid = Number(
+          benchDb.run(
+            `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+             VALUES ('pm', ?, ?, 'claude', ?, '/tmp', '[]', ?, 'ended', ?, ?)`,
+            conversation.id, pm.id, `pm-gen-${h + 1}`, h + 1, ts, ts,
+          ).lastInsertRowid,
+        );
+        benchDb.run("INSERT INTO session_preamble_seen (session_id, seen_at) VALUES (?, ?)", nextSid, ts);
+        benchDb.run(
+          "INSERT INTO handovers (conversation_id, from_session_id, to_session_id, auto, status, text, preamble, skills_section, created_at, updated_at) VALUES (?, ?, ?, 1, 'switched', 'summary', ?, ?, ?, ?)",
+          conversation.id, prevSid, nextSid, handoverPreamble, handoverSkills, ts, ts,
+        );
+        prevSid = nextSid;
+      }
+
+      // 900 ended Workers over 17 days: 70 tool rows + 12 text rows + 120 steps each.
+      for (let w = 1; w <= 900; w++) {
+        const ts = START + Math.floor((w / 900) * 17 * DAY_MS);
+        const conv = Number(
+          benchDb.run("INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('worker', ?, ?, ?)", pm.id, `Worker ${w}`, ts).lastInsertRowid,
+        );
+        const wid = Number(
+          benchDb.run(
+            `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'task brief', 'main', 'ended', ?, ?)`,
+            projectId, pm.id, conversation.id, conv, `Worker ${w}`, ts, ts,
+          ).lastInsertRowid,
+        );
+        const sid = Number(
+          benchDb.run(
+            `INSERT INTO agent_sessions (role, conversation_id, worker_id, vendor_session_id, cwd, status, created_at, updated_at)
+             VALUES ('worker', ?, ?, ?, '/tmp', 'ended', ?, ?)`,
+            conv, wid, `w-v-${w}`, ts, ts,
+          ).lastInsertRowid,
+        );
+        for (let t = 0; t < 70; t++) {
+          benchDb.run(msgSql, conv, sid, wid, "agent", "tool", "Write: src/app.ts", workerToolMeta, `wt:${w}:${t}`, ts, ts);
+        }
+        for (let m = 0; m < 12; m++) {
+          benchDb.run(msgSql, conv, sid, wid, "agent", "text", `Worker ${w} progress ${m}`, null, `wm:${w}:${m}`, ts, ts);
+        }
+        for (let s = 0; s < 120; s++) {
+          benchDb.run(stepSql, sid, ts, stepSummary);
+        }
+        benchDb.run(
+          msgSql,
+          conversation.id,
+          null,
+          wid,
+          "system",
+          "worker",
+          `Worker #${w} done`,
+          JSON.stringify({ workerId: w, workerConversationId: conv, title: `Worker ${w}`, readonly: false, event: "ended", status: "done", summary: "ok" }),
+          `wl:${w}`,
+          ts,
+          ts,
+        );
+      }
+      benchDb.exec("COMMIT");
+      benchDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+
+      const measure = () => {
+        const fileBytes = statSync(benchFile).size;
+        const dbstatRows = benchDb.all<{ name: string; bytes: number }>(
+          "SELECT name, sum(pgsize) AS bytes FROM dbstat WHERE name IN ('messages', 'session_steps', 'handovers', 'hub_calls') GROUP BY name",
+        );
+        const tables = Object.fromEntries(dbstatRows.map((r) => [r.name, r.bytes]));
+        const lastId = benchDb.get<{ id: number }>("SELECT MAX(id) AS id FROM messages WHERE conversation_id = ?", conversation.id)!.id;
+        const afterAnchor = Math.max(0, lastId - 500);
+        const medianMs = (fn: () => void): number => {
+          const samples: number[] = [];
+          for (let i = 0; i < BENCH_ROUNDS; i++) {
+            const t0 = performance.now();
+            fn();
+            samples.push(performance.now() - t0);
+          }
+          samples.sort((a, b) => a - b);
+          return samples[Math.floor(samples.length / 2)]!;
+        };
+        return {
+          fileBytes,
+          tables,
+          snapshotMs: medianMs(() => {
+            benchLedger.snapshot();
+          }),
+          messagesBeforeMs: medianMs(() => {
+            benchLedger.messagesBefore(conversation.id, lastId);
+          }),
+          messagesAfterMs: medianMs(() => {
+            benchLedger.messagesAfter(conversation.id, afterAnchor, 100);
+          }),
+        };
+      };
+
+      const before = measure();
+
+      // Run 0047 cleanup SQL + retention rounds + incremental vacuum.
+      const migrationSql = readFileSync(join(process.cwd(), "migrations", "0047_resource_lifecycle.sql"), "utf8");
+      benchDb.exec(migrationSql);
+      while (benchLedger.purgeExpiredWorkerConversations(NOW, 5_000).more) {}
+      while (benchLedger.purgeGrowingTables(NOW, 5_000).more) {}
+      while (benchLedger.purgeExpiredRouterAndGraphRecords(NOW, 5_000).more) {}
+      while ((await reclaimFreePages(benchDb)).pages > 0) {}
+      benchDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+
+      const after = measure();
+      const mb = (n: number | undefined) => `${((n ?? 0) / (1024 * 1024)).toFixed(2)}MB`;
+      console.log(
+        `[realistic-900-bench] BEFORE file=${mb(before.fileBytes)} (messages=${mb(before.tables.messages)} steps=${mb(before.tables.session_steps)} handovers=${mb(before.tables.handovers)} hub_calls=${mb(before.tables.hub_calls)}) ` +
+          `snapshot=${before.snapshotMs.toFixed(2)}ms before=${before.messagesBeforeMs.toFixed(2)}ms after=${before.messagesAfterMs.toFixed(2)}ms | ` +
+          `AFTER file=${mb(after.fileBytes)} (messages=${mb(after.tables.messages)} steps=${mb(after.tables.session_steps)} handovers=${mb(after.tables.handovers)} hub_calls=${mb(after.tables.hub_calls)}) ` +
+          `snapshot=${after.snapshotMs.toFixed(2)}ms before=${after.messagesBeforeMs.toFixed(2)}ms after=${after.messagesAfterMs.toFixed(2)}ms`,
+      );
+
+      expect(after.fileBytes).toBeLessThan(before.fileBytes * 0.35);
+      expect(after.fileBytes).toBeLessThan(35 * 1024 * 1024);
+      expect(
+        benchDb.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE kind = 'tool' AND json_type(meta, '$.input') IS NOT NULL")!.n,
+      ).toBe(0);
+      expect(
+        benchDb.get<{ n: number }>(
+          "SELECT count(*) AS n FROM workers w WHERE w.status = 'ended' AND NOT EXISTS (SELECT 1 FROM conversation_purges cp WHERE cp.conversation_id = w.worker_conversation_id)",
+        )!.n,
+      ).toBeLessThanOrEqual(WORKER_RETENTION_MAX_ENDED);
+      expect(
+        benchDb.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND kind = 'tool'", conversation.id)!.n,
+      ).toBeLessThanOrEqual(PM_TOOL_MESSAGES_MAX_PER_CONV);
+      // PM text and user history remain completely intact.
+      expect(
+        benchDb.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND kind = 'text'", conversation.id)!.n,
+      ).toBe(5_400);
+      expect(benchDb.get<{ n: number }>("SELECT count(*) AS n FROM hub_calls")!.n).toBeLessThanOrEqual(HUB_CALLS_MAX_ROWS);
+    } finally {
+      benchLedger.close();
+      benchDb.close();
+    }
   });
 });

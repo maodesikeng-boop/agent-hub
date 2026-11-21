@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +32,7 @@ let conversationId: ConversationId;
 let sessionId: SessionId;
 
 const openLedger = () => {
-  const opened = createLedger(db, { now: () => now, pmHomeRoot: home });
+  const opened = createLedger(db, { now: () => now, pmHomeRoot: home, dataHome: join(home, "data") });
   opened.onChange((c) => changes.push(c));
   return opened;
 };
@@ -223,7 +223,6 @@ describe("turn completion receipts", () => {
     expect(statusOf(id)).toBe("replied");
     expect(replyIdOf(ledger.getMessage(id)!)).toBe(agentReply());
     expect(receipts()).toBe(0);
-    expect(turnEnds()).toEqual(["ok"]);
     expect(updatesOf(id)).toHaveLength(1);
     expect(sendsFor(id)).toHaveLength(1);
     expect(sendsFor(id)[0]!.params).not.toHaveProperty("resend");
@@ -245,10 +244,9 @@ describe("turn completion receipts", () => {
     expect(statusOf(id)).toBe("replied");
     expect(ledger.waitsForTurnCompletion(sessionId)).toBe(false);
     expect(db.get("SELECT seq FROM sqlite_sequence WHERE name = 'turn_completions'")).toEqual({ seq: 1 });
-    expect(turnEnds()).toEqual(["ok"]);
   });
 
-  it("rolls back message status, reply links, steps, and live state when a later write fails", () => {
+  it("rolls back message status, reply links, and live state when a later write fails", () => {
     const id = post("问题");
     startTurn(id);
     say("r1", "答复");
@@ -259,7 +257,6 @@ describe("turn completion receipts", () => {
     end([id]);
     expect(statusOf(id)).toBe("processing");
     expect(replyIdOf(ledger.getMessage(id)!)).toBeNull();
-    expect(turnEnds()).toEqual([]);
     expect(activity()).toBe(working);
     expect(changes.filter((c) => c.type !== "health.updated")).toEqual([]);
 
@@ -267,7 +264,6 @@ describe("turn completion receipts", () => {
     tick();
     expect(statusOf(id)).toBe("replied");
     expect(replyIdOf(ledger.getMessage(id)!)).toBe(agentReply());
-    expect(turnEnds()).toEqual(["ok"]);
     expect(activity()).toBe("idle");
   });
 
@@ -285,7 +281,6 @@ describe("turn completion receipts", () => {
     restart();
     expect(receipts()).toBe(0);
     expect(statusOf(id)).toBe("replied");
-    expect(turnEnds()).toEqual(["ok"]);
     expect(updatesOf(id)).toEqual([]);
   });
 
@@ -302,12 +297,10 @@ describe("turn completion receipts", () => {
     end([b], {}, other.sessionId);
     expect(statusOf(b)).toBe("replied");
     expect(receipts(other.sessionId)).toBe(0);
-    expect(turnEnds()).toEqual([]);
 
     drop("fail_replied");
     tick();
     expect(statusOf(a)).toBe("replied");
-    expect(turnEnds()).toEqual(["ok", "failed"]);
     expect(receipts()).toBe(0);
   });
 
@@ -370,8 +363,32 @@ describe("turn completion receipts", () => {
     end([stopped], { ok: false, interrupted: true });
     end([]);
     expect([statusOf(toolOnly), statusOf(textThenFail), statusOf(stopped)]).toEqual(["failed", "replied", "stopped"]);
-    expect(turnEnds()).toEqual(["failed", "failed", "interrupted", "ok"]);
     expect(receipts()).toBe(0);
+  });
+
+  it("writes turn_ended steps for Worker sessions inside the settlement transaction and none for PM sessions", () => {
+    const pmTurn = post("问题");
+    startTurn(pmTurn);
+    end([pmTurn]);
+    expect(statusOf(pmTurn)).toBe("replied");
+    expect(turnEnds()).toEqual([]);
+
+    const folder = realpathSync.native(mkdtempSync(join(home, "project-")));
+    ledger.hubCall(sessionId, "project.create", { folder });
+    const worker = ledger.hubCall(sessionId, "worker.start", { title: "步骤", task: "x", noWorktree: true }, {}).data.worker;
+    const wsid = db.get<{ id: SessionId }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!.id;
+    const task = db.get<{ id: MessageId }>("SELECT id FROM messages WHERE session_id = ? ORDER BY id LIMIT 1", wsid)!.id;
+    startTurn(task, wsid);
+    say("w1", "做完了", wsid);
+    failOn("fail_watermark", "BEFORE INSERT ON turn_completion_watermarks");
+    end([task], {}, wsid);
+    expect(turnEnds(wsid)).toEqual([]);
+
+    drop("fail_watermark");
+    tick();
+    expect(turnEnds(wsid)).toEqual(["ok"]);
+    end([], FAILED, wsid);
+    expect(turnEnds(wsid)).toEqual(["ok", "failed"]);
   });
 
   it("keeps the existing restart policy for turns without a completion receipt", () => {

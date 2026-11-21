@@ -201,7 +201,7 @@ function makeDeepSeekHarness(options: {
       if (built.settings !== undefined) {
         writeFileSync(settingsFile, built.settings, "utf8");
       }
-      return {
+      const base = {
         promptFile,
         ...(built.settings !== undefined ? { settingsFile } : {}),
         fingerprint: "fp-ds-1",
@@ -212,9 +212,9 @@ function makeDeepSeekHarness(options: {
           FAKE_ACP_LOG: logFile,
           FAKE_ACP_STATE: stateDir,
         },
-        ...(readonlyPolicy ? { readonly: readonlyPolicy } : {}),
         ...(options.skills && row.role === "pm" ? { skillsDir: join(sDir, "skills") } : {}),
       };
+      return readonlyPolicy ? { ...base, readonly: readonlyPolicy, tmpDir: sDir } : base;
     },
     ...options.driverOptions,
   });

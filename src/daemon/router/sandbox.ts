@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path";
 import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
+  ENV_SESSION_OWNER_TAG,
   LedgerRequestError,
   buildReadonlyPolicy,
   dataDirReadScope,
@@ -73,6 +74,9 @@ export interface RouterSandboxLaunchOptions {
   vendorAvailability?: VendorAvailabilityMap;
   purpose?: RouterTurnPurpose;
   capabilities?: SessionCapabilities;
+  tmpDir: string;
+  ownerTag?: string;
+  ownerEnv?: string;
 }
 
 export function prepareRouterSandboxLaunch(
@@ -146,6 +150,8 @@ export function prepareRouterSandboxLaunch(
   return {
     promptFile,
     ...(settingsFile === undefined ? {} : { settingsFile }),
+    tmpDir: options.tmpDir,
+    ...(options.ownerTag === undefined ? {} : { ownerTag: options.ownerTag }),
     env: {
       ...(dispatch
         ? {
@@ -154,6 +160,10 @@ export function prepareRouterSandboxLaunch(
             PATH: basePath === "" ? options.hubBinDir : `${options.hubBinDir}${delimiter}${basePath}`,
           }
         : { PATH: basePath }),
+      TMPDIR: options.tmpDir,
+      TEMP: options.tmpDir,
+      TMP: options.tmpDir,
+      ...(options.ownerEnv === undefined ? {} : { [ENV_SESSION_OWNER_TAG]: options.ownerEnv }),
       ...vendorFiles?.env,
     },
     fingerprint: launchFingerprint({

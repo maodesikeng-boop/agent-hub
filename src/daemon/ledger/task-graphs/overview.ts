@@ -7,7 +7,7 @@ import {
 } from "../../../shared/domain.ts";
 import type { AgentSessionRow, PmId, TaskGraph } from "../../../shared/domain.ts";
 import type { HubCommand, PmActiveGraphSummary } from "../../../shared/hub.ts";
-import { COMPLETED_GRAPH_RETENTION_MS, HANDOVER_GRAPHS_MAX_CHARS } from "../../../shared/limits.ts";
+import { COMPLETED_GRAPHS_MAX_ROWS, COMPLETED_GRAPH_RETENTION_MS, HANDOVER_GRAPHS_MAX_CHARS } from "../../../shared/limits.ts";
 import { isAgentVendor, type AgentVendor } from "../../../shared/vendors.ts";
 import type { Db } from "../../store/index.ts";
 import { charLen } from "./spec.ts";
@@ -92,14 +92,41 @@ export function purgeExpiredBatch(g: TaskGraphCtx, nowMs: number, maxRows: numbe
   if (maxRows <= 0) return 0;
   return g.write(() => {
     const cutoff = nowMs - COMPLETED_GRAPH_RETENTION_MS;
+    const threshold = g.db.get<{ ts: number; id: number }>(
+      `SELECT COALESCE(completed_at, updated_at) AS ts, id FROM task_graphs
+        WHERE status != 'active'
+        ORDER BY COALESCE(completed_at, updated_at) DESC, id DESC LIMIT 1 OFFSET ?`,
+      COMPLETED_GRAPHS_MAX_ROWS,
+    );
+    if (threshold === undefined) {
+      return g.db.run(
+        `DELETE FROM task_graphs
+          WHERE id IN (
+            SELECT id FROM task_graphs
+             WHERE status != 'active' AND COALESCE(completed_at, updated_at) <= ?
+             LIMIT ?
+          )`,
+        cutoff,
+        maxRows,
+      ).changes;
+    }
     return g.db.run(
       `DELETE FROM task_graphs
         WHERE id IN (
           SELECT id FROM task_graphs
-           WHERE status != 'active' AND COALESCE(completed_at, updated_at) <= ?
+           WHERE status != 'active'
+             AND (
+               COALESCE(completed_at, updated_at) <= ?
+               OR COALESCE(completed_at, updated_at) < ?
+               OR (COALESCE(completed_at, updated_at) = ? AND id <= ?)
+             )
+           ORDER BY COALESCE(completed_at, updated_at) ASC, id ASC
            LIMIT ?
         )`,
       cutoff,
+      threshold.ts,
+      threshold.ts,
+      threshold.id,
       maxRows,
     ).changes;
   });

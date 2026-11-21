@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rename } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { WorkerId } from "../shared/domain.ts";
+import type { HeldWorktreeResource } from "../shared/resources.ts";
 import {
   LOG_PREFIX,
   WORKTREE_CLEANUP_BATCH_LIMIT,
@@ -11,6 +12,7 @@ import {
 import {
   inspectWorktreeLink,
   isBranchMergedToMain,
+  isBranchSquashMergedToMain,
   isCommitMergedToMain,
   moveWorktree,
   pinDetachedHead,
@@ -29,6 +31,7 @@ import {
   queryWin32WhoLocks,
   removeTreeWithRetry,
 } from "./platform/index.ts";
+import { discardWorktreeFor, inspectHeldWorktreesFor } from "./resources/worktree-hold.ts";
 
 const TRASH_DIR = ".trash";
 const TRASH_REPO_FILE = ".repo";
@@ -53,6 +56,16 @@ export interface WorktreeCleanupOptions {
 
 export interface WorktreeCleanup {
   runOnce(): Promise<WorkerId[]>;
+  /**
+   * Precondition: none.
+   * Postcondition: returns ended worktrees currently held by safety rules with structured reasons, sample paths, and disk bytes without deleting them.
+   */
+  inspectHeldWorktrees(): Promise<HeldWorktreeResource[]>;
+  /**
+   * Precondition: workerId belongs to an ended Worker whose worktree is strictly inside managed worktree roots and not active.
+   * Postcondition: moves the worktree to .trash, removes it, prunes git metadata, optionally deletes its branch, and returns freed bytes.
+   */
+  discardWorktree(workerId: WorkerId, options?: { deleteBranch?: boolean }): Promise<{ removedBytes: number }>;
   stop(): Promise<void>;
 }
 
@@ -73,6 +86,68 @@ export function isUnderWorktreesDir(worktreePath: string, worktreesDir: string |
   return matchingRoots.some((root) => isPathStrictlyInside(realpathLoose(root), realTarget));
 }
 
+function rotateFromCursor(eligible: EndedWorktreeCandidate[], cursor: number): EndedWorktreeCandidate[] {
+  const startIdx = eligible.findIndex((c) => c.workerId > cursor);
+  const offset = startIdx === -1 ? 0 : startIdx;
+  return [...eligible.slice(offset), ...eligible.slice(0, offset)];
+}
+
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** On Windows a failed move usually means a process holds the directory, so report who. */
+function win32LockSuffix(path: string): string {
+  if (process.platform !== "win32") return "";
+  const holders = formatWin32LockHolders(queryWin32WhoLocks(path));
+  return holders === "" ? "" : `（占用进程：${holders}）`;
+}
+
+async function moveCandidateToTrash(
+  candidate: EndedWorktreeCandidate,
+  linked: boolean,
+  roots: readonly string[],
+  git?: GitOptions,
+): Promise<void> {
+  const root = roots.find((r) => isPathStrictlyInside(resolve(r), resolve(candidate.worktreePath)));
+  if (root === undefined) throw new Error("不在任何 worktree 根目录下");
+  const trash = join(root, TRASH_DIR);
+  await mkdir(trash, { recursive: true });
+  if (!isUnderWorktreesDir(trash, [root])) throw new Error(`${trash} 不是根目录下的真目录`);
+  const stage = await mkdtemp(join(trash, `${candidate.workerId}-`));
+  writeFileSync(join(stage, TRASH_REPO_FILE), candidate.repoFolder);
+  if (linked) await moveWorktree(candidate.repoFolder, candidate.worktreePath, stage, git);
+  else await rename(candidate.worktreePath, join(stage, basename(candidate.worktreePath)));
+}
+
+/** Delete the repo path file last so an interrupted run still knows which repo to prune. */
+async function emptyWorktreeTrash(
+  roots: readonly string[],
+  signal: AbortSignal,
+  log: (line: string) => void,
+  git?: GitOptions,
+): Promise<void> {
+  for (const root of new Set(roots)) {
+    const trash = join(root, TRASH_DIR);
+    if (!isUnderWorktreesDir(trash, [root])) continue;
+    for (const name of await readdir(trash).catch(() => [])) {
+      if (signal.aborted) return;
+      const stage = join(trash, name);
+      try {
+        if (lstatSync(stage).isDirectory()) {
+          for (const entry of await readdir(stage)) {
+            if (entry !== TRASH_REPO_FILE) await removeTreeWithRetry(join(stage, entry), { signal });
+          }
+          const repoFile = join(stage, TRASH_REPO_FILE);
+          const repoFolder = existsSync(repoFile) ? readFileSync(repoFile, "utf8") : "";
+          if (repoFolder !== "" && existsSync(repoFolder)) await pruneWorktrees(repoFolder, git);
+        }
+        await removeTreeWithRetry(stage, { signal });
+      } catch (error) {
+        if (!signal.aborted) log(`${LOG_PREFIX} 删除待删的 worktree 目录失败，下轮再删（${stage}）：${errorText(error)}`);
+      }
+    }
+  }
+}
+
 export function createWorktreeCleanup(options: WorktreeCleanupOptions): WorktreeCleanup {
   const {
     ledger,
@@ -91,58 +166,18 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
   let cursor = 0;
   let running: Promise<WorkerId[]> | null = null;
   let stopped = false;
+  const loggedHoldReason = new Map<WorkerId, string>();
 
-  const rotateFromCursor = (eligible: EndedWorktreeCandidate[]): EndedWorktreeCandidate[] => {
-    const startIdx = eligible.findIndex((c) => c.workerId > cursor);
-    const offset = startIdx === -1 ? 0 : startIdx;
-    return [...eligible.slice(offset), ...eligible.slice(0, offset)];
+  const logHoldOnce = (workerId: WorkerId, reason: string, line: string): void => {
+    if (loggedHoldReason.get(workerId) === reason) return;
+    loggedHoldReason.set(workerId, reason);
+    log(line);
   };
 
-  const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+  const moveToTrash = (candidate: EndedWorktreeCandidate, linked: boolean) =>
+    moveCandidateToTrash(candidate, linked, currentRoots(), git);
 
-  /** On Windows a failed move usually means a process holds the directory, so report who. */
-  const win32LockSuffix = (path: string): string => {
-    if (process.platform !== "win32") return "";
-    const holders = formatWin32LockHolders(queryWin32WhoLocks(path));
-    return holders === "" ? "" : `（占用进程：${holders}）`;
-  };
-
-  const moveToTrash = async (candidate: EndedWorktreeCandidate, linked: boolean): Promise<void> => {
-    const root = currentRoots().find((r) => isPathStrictlyInside(resolve(r), resolve(candidate.worktreePath)));
-    if (root === undefined) throw new Error("不在任何 worktree 根目录下");
-    const trash = join(root, TRASH_DIR);
-    await mkdir(trash, { recursive: true });
-    if (!isUnderWorktreesDir(trash, [root])) throw new Error(`${trash} 不是根目录下的真目录`);
-    const stage = await mkdtemp(join(trash, `${candidate.workerId}-`));
-    writeFileSync(join(stage, TRASH_REPO_FILE), candidate.repoFolder);
-    if (linked) await moveWorktree(candidate.repoFolder, candidate.worktreePath, stage, git);
-    else await rename(candidate.worktreePath, join(stage, basename(candidate.worktreePath)));
-  };
-
-  /** Delete the repo path file last so an interrupted run still knows which repo to prune. */
-  const emptyTrash = async (): Promise<void> => {
-    for (const root of new Set(currentRoots())) {
-      const trash = join(root, TRASH_DIR);
-      if (!isUnderWorktreesDir(trash, [root])) continue;
-      for (const name of await readdir(trash).catch(() => [])) {
-        if (stopped) return;
-        const stage = join(trash, name);
-        try {
-          if (lstatSync(stage).isDirectory()) {
-            for (const entry of await readdir(stage)) {
-              if (entry !== TRASH_REPO_FILE) await removeTreeWithRetry(join(stage, entry), { signal: stopController.signal });
-            }
-            const repoFile = join(stage, TRASH_REPO_FILE);
-            const repoFolder = existsSync(repoFile) ? readFileSync(repoFile, "utf8") : "";
-            if (repoFolder !== "" && existsSync(repoFolder)) await pruneWorktrees(repoFolder, git);
-          }
-          await removeTreeWithRetry(stage, { signal: stopController.signal });
-        } catch (error) {
-          if (!stopped) log(`${LOG_PREFIX} 删除待删的 worktree 目录失败，下轮再删（${stage}）：${errorText(error)}`);
-        }
-      }
-    }
-  };
+  const emptyTrash = () => emptyWorktreeTrash(currentRoots(), stopController.signal, log, git);
 
   const cleanOrphan = async (candidate: Extract<EndedWorktreeCandidate, { review: false }>): Promise<boolean> => {
     const tag = `worker #${candidate.workerId}，${candidate.worktreePath}`;
@@ -150,7 +185,11 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     let tip: string | null;
     try {
       tip = await resolveCommit(candidate.repoFolder, `refs/heads/${candidate.branch}`, git);
-      if (!expired && tip !== null && !(await isCommitMergedToMain(candidate.repoFolder, tip, git))) return false;
+      const merged =
+        tip === null ||
+        (await isCommitMergedToMain(candidate.repoFolder, tip, git)) ||
+        (await isBranchSquashMergedToMain(candidate.repoFolder, candidate.branch, candidate.baseCommit, git));
+      if (!expired && !merged) return false;
     } catch (error) {
       log(`${LOG_PREFIX} 清理孤儿 worktree 目录：检查分支合并状态失败（${tag}）：${errorText(error)}`);
       return false;
@@ -160,11 +199,11 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       baseCommit: candidate.baseCommit,
     });
     if (content.kind !== "ok") {
-      log(`${LOG_PREFIX} 清理孤儿 worktree 目录：检查内容失败（${tag}）：${content.error}`);
+      logHoldOnce(candidate.workerId, "orphan_probe_failed", `${LOG_PREFIX} 清理孤儿 worktree 目录：检查内容失败（${tag}）：${content.error}`);
       return false;
     }
     if (content.hasContent) {
-      log(`${LOG_PREFIX} 清理孤儿 worktree 目录：目录里有没被忽略的文件，保留（${tag}）`);
+      logHoldOnce(candidate.workerId, "orphan_has_content", `${LOG_PREFIX} 清理孤儿 worktree 目录：目录里有没被忽略的文件，已交由资源面板处理（${tag}）`);
       return false;
     }
     // Re-check right before acting in case the Worker restarted.
@@ -175,9 +214,8 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       log(`${LOG_PREFIX} 清理孤儿 worktree 目录失败（${tag}）：${errorText(error)}`);
       return false;
     }
-    log(
-      `${LOG_PREFIX} 已清理孤儿 worktree 目录：worker #${candidate.workerId}（${candidate.worktreePath}，${tip === null ? `分支 ${candidate.branch} 已不在` : `分支 ${candidate.branch} 保留`}）`,
-    );
+    loggedHoldReason.delete(candidate.workerId);
+    log(`${LOG_PREFIX} 已清理孤儿 worktree 目录：worker #${candidate.workerId}（${candidate.worktreePath}）`);
     return true;
   };
 
@@ -215,10 +253,15 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     }
 
     const expired = now() - candidate.endedAt >= retentionMs;
+    let branchSquashMerged = false;
     if (!expired) {
       let merged: boolean;
       try {
         merged = await isBranchMergedToMain(candidate.repoFolder, candidate.branch, candidate.baseCommit, git);
+        if (!merged) {
+          branchSquashMerged = await isBranchSquashMergedToMain(candidate.repoFolder, candidate.branch, candidate.baseCommit, git);
+          merged = branchSquashMerged;
+        }
         if (!merged) {
           const head = await resolveCommit(candidate.worktreePath, "HEAD", git);
           merged = head !== null && (await isCommitMergedToMain(candidate.repoFolder, head, git));
@@ -234,16 +277,18 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     // Never delete with uncommitted changes or an unfinished rebase, merge, cherry-pick or bisect, even after the PR merged.
     const probe = await probeWorktreeForRemoval(candidate.worktreePath, git);
     if (probe.kind !== "ok") {
-      log(`${LOG_PREFIX} 清理 worktree：检查状态失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${probe.error}`);
+      logHoldOnce(candidate.workerId, "probe_failed", `${LOG_PREFIX} 清理 worktree：检查状态失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${probe.error}`);
       return null;
     }
     if (!probe.isRepoWithCommit || probe.hasContent || probe.inProgress || probe.head === null) return null;
 
-    // Before the retention period ends, HEAD itself must be on main in case the worktree switched to unmerged work.
+    // Before the retention period ends, HEAD itself must be on main (or the squash-merged branch tip) in case the worktree switched to unmerged work.
     let pinned: string | null = null;
     if (!expired || !probe.onBranch) {
       try {
-        const headMerged = await isCommitMergedToMain(candidate.repoFolder, probe.head, git);
+        const headMerged =
+          (await isCommitMergedToMain(candidate.repoFolder, probe.head, git)) ||
+          (branchSquashMerged && probe.onBranch && probe.head === (await resolveCommit(candidate.repoFolder, `refs/heads/${candidate.branch}`, git)));
         if (!headMerged) {
           if (!expired) return null;
           if (!probe.onBranch) {
@@ -264,8 +309,9 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       log(`${LOG_PREFIX} 清理 worktree 失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${errorText(error)}${win32LockSuffix(candidate.worktreePath)}`);
       return null;
     }
+    loggedHoldReason.delete(candidate.workerId);
     log(
-      `${LOG_PREFIX} 已自动清理 worktree：worker #${candidate.workerId}（${candidate.worktreePath}，分支 ${candidate.branch} 保留${pinned === null ? "" : `，detached HEAD 已保底到分支 ${pinned}`}）`,
+      `${LOG_PREFIX} 已自动清理 worktree：worker #${candidate.workerId}（${candidate.worktreePath}${pinned === null ? "" : `，detached HEAD 已保底到分支 ${pinned}`}）`,
     );
     return candidate.workerId;
   };
@@ -289,7 +335,7 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     let quotaLeft = batchLimit;
     const takeQuota = (): boolean => quotaLeft-- > 0;
 
-    for (const candidate of rotateFromCursor(eligible)) {
+    for (const candidate of rotateFromCursor(eligible, cursor)) {
       if (stopped) return cleaned;
       const outcome = await processCandidate(candidate, takeQuota);
       if (outcome === OUT_OF_QUOTA) return cleaned;
@@ -317,7 +363,23 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     }
   };
 
-  return { runOnce, stop };
+  const holdDeps = {
+    listEndedWorktreeWorkers: () => ledger.listEndedWorktreeWorkers(),
+    isWorkerCleanable: (workerId: WorkerId) => ledger.isWorkerCleanable(workerId),
+    isManagedPath: (worktreePath: string) => isUnderWorktreesDir(worktreePath, currentRoots()),
+    moveToTrash,
+    emptyTrash,
+    now,
+    retentionMs,
+    git,
+  };
+
+  return {
+    runOnce,
+    inspectHeldWorktrees: () => inspectHeldWorktreesFor(holdDeps),
+    discardWorktree: (workerId, opts) => discardWorktreeFor(workerId, holdDeps, opts),
+    stop,
+  };
 }
 
 export function startWorktreeCleanup(options: WorktreeCleanupOptions): WorktreeCleanup {
@@ -330,6 +392,8 @@ export function startWorktreeCleanup(options: WorktreeCleanupOptions): WorktreeC
   timer.unref?.();
   return {
     runOnce: () => cleanup.runOnce(),
+    inspectHeldWorktrees: () => cleanup.inspectHeldWorktrees(),
+    discardWorktree: (workerId, opts) => cleanup.discardWorktree(workerId, opts),
     stop: async () => {
       clearInterval(timer);
       await cleanup.stop();

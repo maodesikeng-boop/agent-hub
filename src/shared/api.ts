@@ -85,6 +85,9 @@ export const API_PATHS = {
   selfReload: "/api/self-reload",
   update: "/api/update",
   updateCheck: "/api/update/check",
+  resources: "/api/resources",
+  resourceDecision: "/api/resources/decision",
+  resourceCleanup: "/api/resources/cleanup",
 
   routerDigest: "/api/router/digest",
   routerItems: "/api/router/items",

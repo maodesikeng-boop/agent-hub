@@ -1190,6 +1190,7 @@ describe("0011_message_cancelled：从 0010 的库升级", () => {
       { name: "messages_conversation" },
       { name: "messages_conversation_non_agent" },
       { name: "messages_in_flight" },
+      { name: "messages_pm_tools" },
       { name: "messages_session" },
       { name: "messages_worker" },
       { name: "messages_worker_lines" },
@@ -2556,6 +2557,68 @@ describe("0045_project_capability_defaults", () => {
     expect(() => migrate(db, migrationsDir)).not.toThrow();
     expect(userVersion(db)).toBe(LATEST_VERSION);
     expect(db.all("SELECT * FROM default_capability_overrides")).toEqual(defaults);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});
+
+describe("0047_resource_lifecycle", () => {
+  it("creates resource_decisions and messages_pm_tools, strips meta.input from tool messages, deletes non-worker session_steps, clears consumed handover blobs, and is idempotent on rerun", () => {
+    const db = open();
+    expect(migrate(db, migrationsUpTo(46))).toMatchObject({ from: 0, to: 46 });
+
+    db.run("INSERT INTO pms (id, name, mode, persona, vendor, created_at) VALUES (1, 'PM', 'manage_only', '', 'claude', 1)");
+    db.run("INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (10, 'pm', 1, 'PM', 1)");
+    db.run("INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (20, 'worker', 1, 'W', 1)");
+    db.run(
+      `INSERT INTO agent_sessions (id, role, conversation_id, pm_id, vendor, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+       VALUES (100, 'pm', 10, 1, 'claude', 'pm-1', '/tmp', '[]', 1, 'ended', 1, 1),
+              (101, 'pm', 10, 1, 'claude', 'pm-2', '/tmp', '[]', 2, 'idle', 2, 2),
+              (102, 'pm', 10, 1, 'claude', 'pm-3', '/tmp', '[]', 3, 'idle', 3, 3),
+              (200, 'worker', 20, NULL, 'claude', 'w-1', '/tmp', '[]', 1, 'ended', 1, 1)`,
+    );
+    db.run(
+      `INSERT INTO messages (id, conversation_id, session_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+       VALUES (1, 10, 100, 'agent', 'tool', 'Write: a.ts', '{"toolUseId":"t1","name":"Write","input":{"content":"huge"}}', 'k1', 1, 1),
+              (2, 10, 100, 'agent', 'text', 'hello', '{"input":"keep-on-text"}', 'k2', 2, 2)`,
+    );
+    db.run(
+      `INSERT INTO session_steps (session_id, kind, at, summary)
+       VALUES (100, 'tool', 1, 'pm step'),
+              (200, 'tool', 2, 'worker step')`,
+    );
+    db.run("INSERT INTO session_preamble_seen (session_id, seen_at) VALUES (101, 10)");
+    db.run(
+      `INSERT INTO handovers (id, conversation_id, from_session_id, to_session_id, auto, status, preamble, skills_section, created_at, updated_at)
+       VALUES (1, 10, 100, 101, 0, 'switched', 'big-seen-preamble', 'big-seen-skills', 1, 1),
+              (2, 10, 101, 102, 0, 'switched', 'unseen-live-preamble', 'unseen-live-skills', 2, 2)`,
+    );
+
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 46, to: LATEST_VERSION });
+    expect(tableNames(db)).toContain("resource_decisions");
+    expect(
+      db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'messages_pm_tools'"),
+    ).toHaveLength(1);
+
+    const toolMeta = JSON.parse(db.get<{ meta: string }>("SELECT meta FROM messages WHERE id = 1")!.meta);
+    expect(toolMeta).toEqual({ toolUseId: "t1", name: "Write" });
+    const textMeta = JSON.parse(db.get<{ meta: string }>("SELECT meta FROM messages WHERE id = 2")!.meta);
+    expect(textMeta).toEqual({ input: "keep-on-text" });
+
+    expect(db.all<{ session_id: number }>("SELECT session_id FROM session_steps")).toEqual([{ session_id: 200 }]);
+
+    const h1 = db.get<{ preamble: string | null; skills_section: string | null }>("SELECT preamble, skills_section FROM handovers WHERE id = 1")!;
+    const h2 = db.get<{ preamble: string | null; skills_section: string | null }>("SELECT preamble, skills_section FROM handovers WHERE id = 2")!;
+    expect(h1).toEqual({ preamble: null, skills_section: null });
+    expect(h2).toEqual({ preamble: "unseen-live-preamble", skills_section: "unseen-live-skills" });
+
+    db.run("INSERT INTO resource_decisions (kind, target_key, decision, reason, decided_at) VALUES ('worktree', '/w/1', 'keep', 'uncommitted_changes', 100)");
+    expect(() =>
+      db.run("INSERT INTO resource_decisions (kind, target_key, decision, reason, decided_at) VALUES ('bogus', '/w/2', 'keep', 'x', 100)"),
+    ).toThrow(/CHECK/);
+
+    db.exec("PRAGMA user_version = 46");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(userVersion(db)).toBe(LATEST_VERSION);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });

@@ -397,4 +397,35 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
     }
     expect(h.store.get(s2.id)).toMatchObject({ pid: null, status: "idle" });
   });
+
+  it("keeps the host /tmp visible in writable and read-only sandboxes while $TMPDIR writes land in the session temp dir", () => {
+    const varRoot = realpathSync.native(mkdtempSync(join("/var/tmp", "ah-bwrap-tmp-")));
+    const sessionTmp = realpathSync.native(mkdtempSync(join("/tmp", "bw-linux-")));
+    const hostShared = realpathSync.native(mkdtempSync(join("/tmp", "ah-host-shared-")));
+    writeFileSync(join(hostShared, "agent.txt"), "host");
+    try {
+      const dataDir = join(varRoot, "home");
+      const own = join(dataDir, "worktrees", "1", "2");
+      mkdirSync(own, { recursive: true });
+      const script = { command: "/bin/sh", args: ["-c", `cat "${hostShared}/agent.txt" && echo env > "$TMPDIR/from-env-$1.txt"`, "sh"] };
+      const runs = [
+        wrapInOsSandbox({ ...script, args: [...script.args, "rw"] }, workerWriteScope({ role: "worker", dataDir, cwd: own })!, "linux"),
+        wrapInReadonlyOsSandbox(
+          { ...script, args: [...script.args, "ro"] },
+          { tmpDir: sessionTmp, writableDirs: [], writableFileRegexes: [], secretPaths: [], secretGlobs: [] },
+          "linux",
+        ),
+      ];
+      for (const run of runs) {
+        const out = execFileSync(run.command, run.args, { env: { ...process.env, TMPDIR: sessionTmp }, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+        expect(out.trim()).toBe("host");
+      }
+      expect(existsSync(join(sessionTmp, "from-env-rw.txt"))).toBe(true);
+      expect(existsSync(join(sessionTmp, "from-env-ro.txt"))).toBe(true);
+    } finally {
+      rmSync(varRoot, { recursive: true, force: true });
+      rmSync(sessionTmp, { recursive: true, force: true });
+      rmSync(hostShared, { recursive: true, force: true });
+    }
+  });
 });

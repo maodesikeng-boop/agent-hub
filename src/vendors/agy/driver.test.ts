@@ -500,7 +500,9 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
     store,
     prepareLaunch: async (session) => {
       const launchDir = join(stateDir, "launch", String(session.id));
+      const sessionTmpDir = join(stateDir, "tmp", String(session.id));
       mkdirSync(launchDir, { recursive: true });
+      mkdirSync(sessionTmpDir, { recursive: true });
       const promptFile = join(launchDir, "prompt.md");
       const settingsFile = join(launchDir, "settings.json");
       writeFileSync(promptFile, launch.prompt);
@@ -516,7 +518,8 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
       return {
         promptFile,
         settingsFile,
-        env: { ...launch.env },
+        tmpDir: sessionTmpDir,
+        env: { ...launch.env, TMPDIR: sessionTmpDir },
         fingerprint: launch.fingerprint,
         ...(launch.personaRevision ? { personaRevision: launch.personaRevision() } : {}),
         ...(launch.writeScope ? { writeScope: launch.writeScope } : {}),
@@ -689,6 +692,7 @@ describe("agy-protocol 纯函数", () => {
         env: {},
         fingerprint: "f2",
         readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state" }),
+        tmpDir: dir,
       };
       const argsResumePlan = buildAgyArgs(session, filesPlan, true);
       expect(argsResumePlan[argsResumePlan.indexOf("--conversation") + 1]).toBe("conv-123");
@@ -1217,7 +1221,7 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
     expect(t.argvs()[0]).not.toContain("--settings");
   });
 
-  it("只读 Worker：TMPDIR 指到会话私有临时目录（进程退出后删掉），进程交给外层只读沙箱", async () => {
+  it("只读 Worker：TMPDIR 复用 launch.ts 分配的会话私有临时目录，进程交给外层只读沙箱", async () => {
     const wrapped: string[][] = [];
     const t = makeAgyHarness({
       script: { turns: [{ steps: [{ type: "text", deltas: ["好"] }] }] },
@@ -1234,10 +1238,9 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
     await t.waitFor("turn.ended");
     expect(wrapped).toHaveLength(1);
     const tmp = wrapped[0]![1]!;
-    expect(tmp).toContain("agent-hub-ro-");
+    expect(tmp).toContain(join("tmp", String(s.id)));
     expect(existsSync(tmp)).toBe(true);
     await t.driver.end(s.id);
-    expect(existsSync(tmp)).toBe(false);
   });
 
   it("没有 OS 沙箱的机器上起只读 agy：直接报错说清原因，不起进程", async () => {

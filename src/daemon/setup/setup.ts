@@ -3,6 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, statSync, writeSync } from 
 import { basename, dirname, win32 } from "node:path";
 import type { SessionId, SetupOutcome, WorkerId } from "../../shared/index.ts";
 import {
+  ENV_SESSION_OWNER_TAG,
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
   KILL_WAIT_MS,
@@ -128,13 +129,19 @@ export function resolveSetupShell(
 
 export function buildSetupEnv(
   base: Record<string, string | undefined>,
-  paths: { rootPath: string; worktreePath: string },
+  paths: { rootPath: string; worktreePath: string; tmpDir?: string; sessionTagEnv?: string },
 ): Record<string, string> {
   const env = buildChildEnv(base, undefined);
   for (const key of Object.keys(env)) {
     if (deniedSetupEnv(key)) delete env[key];
   }
-  return { ...env, [ENV_SETUP_ROOT_PATH]: paths.rootPath, [ENV_SETUP_WORKTREE_PATH]: paths.worktreePath };
+  return {
+    ...env,
+    [ENV_SETUP_ROOT_PATH]: paths.rootPath,
+    [ENV_SETUP_WORKTREE_PATH]: paths.worktreePath,
+    ...(paths.tmpDir === undefined ? {} : { TMPDIR: paths.tmpDir, TEMP: paths.tmpDir, TMP: paths.tmpDir }),
+    ...(paths.sessionTagEnv === undefined ? {} : { [ENV_SESSION_OWNER_TAG]: paths.sessionTagEnv }),
+  };
 }
 
 const ESCAPE_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[@-Z\\-_]/gu;
@@ -174,6 +181,8 @@ export interface RunSetupOptions {
   signal?: AbortSignal;
   logMaxBytes?: number;
   now?: () => number;
+  tmpDir?: string;
+  sessionTagEnv?: string;
 }
 
 function openLog(logPath: string): { fd: number | null; error: string | null } {
@@ -272,7 +281,12 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
   async function runChild(): Promise<SetupOutcome> {
     const spawned = spawnOwnedProcess(resolvedShell.program, resolvedShell.args, {
       cwd: options.cwd,
-      env: buildSetupEnv(baseEnv, { rootPath: options.rootPath, worktreePath: options.cwd }),
+      env: buildSetupEnv(baseEnv, {
+        rootPath: options.rootPath,
+        worktreePath: options.cwd,
+        tmpDir: options.tmpDir,
+        sessionTagEnv: options.sessionTagEnv,
+      }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const child = spawned.child as ChildProcessWithoutNullStreams;
@@ -325,6 +339,8 @@ export interface SetupJob {
   cwd: string;
   rootPath: string;
   logPath: string;
+  tmpDir?: string;
+  sessionTagEnv?: string;
   onDone: (outcome: SetupOutcome) => void;
 }
 
@@ -381,6 +397,8 @@ export function createSetupRunner(options: SetupRunnerOptions = {}): SetupRunner
         logPath: job.logPath,
         signal: controller.signal,
         timeoutMs,
+        ...(job.tmpDir !== undefined ? { tmpDir: job.tmpDir } : {}),
+        ...(job.sessionTagEnv !== undefined ? { sessionTagEnv: job.sessionTagEnv } : {}),
         ...(options.shell !== undefined ? { shell: options.shell } : {}),
         ...(options.baseEnv !== undefined ? { baseEnv: options.baseEnv } : {}),
       })

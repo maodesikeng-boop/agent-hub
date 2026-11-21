@@ -90,6 +90,8 @@ export interface WorkersCtx {
 export type EndedWorktreeCandidate = {
   workerId: WorkerId;
   projectId: number;
+  projectName?: string;
+  title?: string;
   repoFolder: string;
   worktreePath: string;
   baseCommit: string | null;

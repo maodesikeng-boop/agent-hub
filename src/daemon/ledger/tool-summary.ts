@@ -15,6 +15,7 @@ const KEY_ARGS = [
   "query",
   "path",
   "SearchPath",
+  "skill",
   "description",
   "prompt",
 ];

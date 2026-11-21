@@ -229,12 +229,14 @@ child.on("exit", (code) => process.exit(code ?? 0));
       executablePath: wrapper,
       log: () => {},
       env: { KIMI_CODE_HOME: kimiHome },
-      prepareLaunch: async () => ({
-        promptFile,
-        fingerprint: "fp",
-        env: { ...process.env, FAKE_ACP_SCRIPT: scriptFile, FAKE_ACP_LOG: logFile, FAKE_ACP_STATE: join(dir, "state") } as Record<string, string>,
-        ...(ro ? { readonly: ro.policy } : {}),
-      }),
+      prepareLaunch: async () => {
+        const base = {
+          promptFile,
+          fingerprint: "fp",
+          env: { ...process.env, FAKE_ACP_SCRIPT: scriptFile, FAKE_ACP_LOG: logFile, FAKE_ACP_STATE: join(dir, "state") } as Record<string, string>,
+        };
+        return ro ? { ...base, readonly: ro.policy, tmpDir: dir } : base;
+      },
       ...(ro ? { readonlySpawn: ro.spawn } : {}),
     });
     drivers.push(driver);

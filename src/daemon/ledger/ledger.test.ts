@@ -273,8 +273,8 @@ describe("applyDriverEvent", () => {
     );
     expect(rows).toEqual([
       { kind: "text", text: "一", collapsed: 0, meta: null },
-      { kind: "tool", text: "Bash: pnpm test", collapsed: 1, meta: JSON.stringify({ toolUseId: "t1", name: "Bash", input: { command: "pnpm test" } }) },
-      { kind: "tool", text: "Read: src/a.ts", collapsed: 1, meta: JSON.stringify({ toolUseId: "t2", name: "Read", input: { file_path: "src/a.ts" } }) },
+      { kind: "tool", text: "Bash: pnpm test", collapsed: 1, meta: JSON.stringify({ toolUseId: "t1", name: "Bash" }) },
+      { kind: "tool", text: "Read: src/a.ts", collapsed: 1, meta: JSON.stringify({ toolUseId: "t2", name: "Read" }) },
     ]);
     expect(changes.filter((c) => c.type === "message.created")).toHaveLength(3);
   });
@@ -1066,7 +1066,7 @@ describe("snapshot 和翻页", () => {
     expect(() => ledger.messagesBefore(999, 10)).toThrow(ConversationNotFoundError);
   });
 
-  it("工具消息对外裁剪 meta.input（防大文件 Write/Edit 撑爆快照），数据库原样保留", () => {
+  it("工具消息不把 meta.input 写入 SQLite（防大文件 Write/Edit 膨胀），snapshot 与 messagesAfter 均返回瘦身字段", () => {
     ev({
       type: "agent.tool",
       at: 2,
@@ -1076,14 +1076,12 @@ describe("snapshot 和翻页", () => {
       input: { file_path: "src/huge.ts", content: "x".repeat(50_000) },
     });
     const rawMeta = db.get<{ meta: string }>("SELECT meta FROM messages WHERE kind = 'tool'")!.meta;
-    expect(JSON.parse(rawMeta)).toEqual({
-      toolUseId: "t-slim",
-      name: "Write",
-      input: { file_path: "src/huge.ts", content: "x".repeat(50_000) },
-    });
+    expect(JSON.parse(rawMeta)).toEqual({ toolUseId: "t-slim", name: "Write" });
     const exposed = ledger.snapshot().conversations[0]!.messages.find((m) => m.kind === "tool")!;
     expect(exposed.text).toBe("Write: src/huge.ts");
     expect(exposed.meta).toEqual({ toolUseId: "t-slim", name: "Write" });
+    const after = ledger.messagesAfter(conversationId, 0, 50).find((m) => m.kind === "tool")!;
+    expect(after.meta).toEqual({ toolUseId: "t-slim", name: "Write" });
   });
 });
 

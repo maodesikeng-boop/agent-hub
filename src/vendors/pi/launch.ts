@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import {
   scanSecretGlobs,
   spawnInWriteScope,
@@ -62,7 +61,7 @@ export async function preparePiLaunch(
 
   const readonlyPolicy = await withScannedSecrets(row, files);
   const effectiveFiles: LaunchFiles =
-    readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
+    files.readonly === undefined || readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
 
   const resumedTranscript = resume
     ? piTranscriptPath(
@@ -79,7 +78,7 @@ export async function preparePiLaunch(
   });
   const childEnv: Record<string, string> = { ...effectiveFiles.env };
 
-  if (readonlyPolicy === undefined) {
+  if (effectiveFiles.readonly === undefined || readonlyPolicy === undefined) {
     const wrapWriteScope =
       deps.writeScopeSpawn ??
       ((base, scope) => spawnInWriteScope("pi", base, scope, deps.log, deps.sessionLabel));
@@ -89,7 +88,7 @@ export async function preparePiLaunch(
 
   const home = realpathSync(deps.homeDir ?? homedir());
   const wrap = deps.readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
-  const privateTmp = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-ro-"));
+  const privateTmp = realpathSync(effectiveFiles.tmpDir);
   const launch = wrap(
     { command: deps.exePath, args },
     piReadonlySandboxInput({
@@ -100,7 +99,6 @@ export async function preparePiLaunch(
     }),
   );
   if (!launch.osSandboxed) {
-    rmSync(privateTmp, { recursive: true, force: true });
     throw new DriverError("spawn_failed", READONLY_PI_NEEDS_SANDBOX_MESSAGE);
   }
   return {

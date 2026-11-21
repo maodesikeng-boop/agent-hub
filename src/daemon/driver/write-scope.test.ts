@@ -1492,3 +1492,25 @@ describe("Windows MXC 只读沙箱封装、策略与负缓存 TTL", () => {
     }
   });
 });
+
+describe("Linux bwrap keeps the host /tmp visible", () => {
+  // SSH_AUTH_SOCK, X11 sockets, and files a PM leaves in /tmp for a Worker all live under the host /tmp.
+  const mountsOverTmp = (args: readonly string[]) =>
+    args.some((arg, i) => (arg === "/tmp" && (args[i - 2] === "--bind" || args[i - 2] === "--ro-bind")) || (arg === "/tmp" && args[i - 1] === "--tmpfs"));
+
+  it("never mounts anything over /tmp in writable or read-only sandboxes and binds the session temp dir at its own path", () => {
+    const scope = workerWriteScope({ role: "worker", dataDir: "/home/u/.agent-hub", cwd: "/home/u/.agent-hub/worktrees/1/2" })!;
+    const writable = bwrapArgs({ command: "/usr/bin/claude", args: [] }, scope, { uid: 1000, exists: () => true, realpath: (p) => p });
+    expect(mountsOverTmp(writable)).toBe(false);
+    expect(writable).not.toContain("TMPDIR");
+
+    const readonly = readonlyBwrapArgs(
+      { command: "/usr/bin/claude", args: [] },
+      { tmpDir: "/tmp/bw-abc123", writableDirs: [], writableFileRegexes: [], secretPaths: [], secretGlobs: [] },
+      { uid: 1000, exists: () => true, realpath: (p) => p },
+    );
+    expect(mountsOverTmp(readonly)).toBe(false);
+    const bindIdx = readonly.indexOf("/tmp/bw-abc123");
+    expect(readonly.slice(bindIdx - 1, bindIdx + 2)).toEqual(["--bind", "/tmp/bw-abc123", "/tmp/bw-abc123"]);
+  });
+});

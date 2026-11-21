@@ -109,20 +109,24 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       const launchDir = join(dir, "launch", String(session.id));
       mkdirSync(launchDir, { recursive: true });
       writeFileSync(join(launchDir, "prompt.md"), "你是项目经理。");
-      const files: LaunchFiles = {
+      let settingsFile: string | undefined;
+      if (launch.settings) {
+        settingsFile = join(launchDir, "settings.json");
+        writeFileSync(settingsFile, "{}");
+      }
+      const base = {
         promptFile: join(launchDir, "prompt.md"),
         env: { ...launch.env, ...launch.perSession.get(session.id)?.env },
         fingerprint: launch.perSession.get(session.id)?.fingerprint ?? launch.fingerprint,
+        ...(launch.personaRevision ? { personaRevision: launch.personaRevision() } : {}),
+        ...(launch.writeScope ? { writeScope: launch.writeScope } : {}),
+        ...(launch.backgroundHoldMaxMs !== null ? { backgroundHoldMaxMs: launch.backgroundHoldMaxMs } : {}),
+        ...(settingsFile === undefined ? {} : { settingsFile }),
       };
-      if (launch.personaRevision) files.personaRevision = launch.personaRevision();
-      if (launch.writeScope) files.writeScope = launch.writeScope;
-      if (launch.backgroundHoldMaxMs !== null) files.backgroundHoldMaxMs = launch.backgroundHoldMaxMs;
-      if (launch.readonly) files.readonly = launch.readonly;
-      if (launch.settings) {
-        files.settingsFile = join(launchDir, "settings.json");
-        writeFileSync(files.settingsFile, "{}");
-      }
-      return files;
+      if (!launch.readonly) return base;
+      const tmpDir = join(dir, "session-tmp", String(session.id));
+      mkdirSync(tmpDir, { recursive: true });
+      return { ...base, readonly: launch.readonly, tmpDir } satisfies LaunchFiles;
     },
     env: {
       FAKE_CLAUDE_LOG: logFile,

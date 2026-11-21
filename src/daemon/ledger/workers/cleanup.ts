@@ -20,6 +20,8 @@ export function isWorktreeCleaned(w: WorkersCtx, worker: WorkerDbRow): boolean {
 type EndedWorktreeRow = {
   id: number;
   project_id: number;
+  project_name: string;
+  title: string;
   branch: string | null;
   review_json: string | null;
   worktree_path: string;
@@ -31,10 +33,11 @@ type EndedWorktreeRow = {
 export const listEndedWorktreeWorkers = (w: WorkersCtx): EndedWorktreeCandidate[] =>
   w.db
     .all<EndedWorktreeRow>(
-      `SELECT w.id, w.project_id, w.branch, w.review_json, w.worktree_path, w.base_commit,
+      `SELECT w.id, w.project_id, p.name AS project_name, w.title, w.branch, w.review_json, w.worktree_path, w.base_commit,
               (SELECT max(o.updated_at) FROM workers o WHERE o.worktree_path = w.worktree_path) AS ended_at,
               f.path AS repo_folder
        FROM workers w
+       JOIN projects p ON p.id = w.project_id
        JOIN project_folders f ON f.project_id = w.project_id AND f.is_main = 1 AND f.removed_at IS NULL
        WHERE w.status = 'ended' AND w.workspace = 'worktree'
          AND w.worktree_path IS NOT NULL AND w.worktree_path != ''
@@ -44,6 +47,8 @@ export const listEndedWorktreeWorkers = (w: WorkersCtx): EndedWorktreeCandidate[
     .map((r): EndedWorktreeCandidate => ({
       workerId: r.id,
       projectId: r.project_id,
+      projectName: r.project_name,
+      title: r.title,
       repoFolder: r.repo_folder,
       ...(r.review_json !== null || r.branch === null ? { review: true, branch: null } : { review: false, branch: r.branch }),
       worktreePath: r.worktree_path,

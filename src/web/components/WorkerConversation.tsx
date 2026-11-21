@@ -1,6 +1,6 @@
 import { ArrowLeft } from "../ui/icons.ts";
 import { useCallback, useMemo } from "react";
-import { WORKER_RETENTION_DAYS, type ConversationId, type Message, type SessionState, type WorkerPick } from "../../shared/index.ts";
+import { WORKER_RETENTION_DAYS, WORKER_RETENTION_MAX_ENDED, type ConversationId, type Message, type SessionState, type WorkerPick } from "../../shared/index.ts";
 import type { WorkerEntry, WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
@@ -126,7 +126,7 @@ export function WorkerConversation({
         <>
           {view.conversation.purgedAt !== undefined ? (
             <div role="status" className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-muted-foreground">
-              Conversation cleared after the {WORKER_RETENTION_DAYS}-day retention period
+              Conversation cleared. Finished Pieces keep their conversations for up to {WORKER_RETENTION_DAYS} days, and only the latest {WORKER_RETENTION_MAX_ENDED}.
             </div>
           ) : (
             <div className="relative min-h-0 flex-1">

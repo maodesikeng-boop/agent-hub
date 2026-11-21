@@ -1,7 +1,8 @@
-import { Blocks, Cable, Monitor, Settings, Shield, type Icon } from "../ui/icons.ts";
+import { Blocks, Cable, Monitor, Server, Settings, Shield, type Icon } from "../ui/icons.ts";
 import { useRef, useState, type ReactNode } from "react";
 import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import type { NotifySettings } from "../notify.ts";
+import { useCachedResourcesSummary } from "../resources-model.ts";
 import { NOTIFY_BLOCKED, isNotifyBlocked, useUiScaleSetting, type DeviceSettings } from "../settings-model.ts";
 import { Dialog, DialogContent } from "../ui/dialog.tsx";
 import { Segmented } from "../ui/segmented.tsx";
@@ -11,6 +12,7 @@ import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
 import { CapabilitiesSettings } from "./CapabilitiesSettings.tsx";
 import { ComputersSection } from "./DeviceSettings.tsx";
 import { ProvidersSettings } from "./ProvidersSettings.tsx";
+import { ResourcesSettings } from "./ResourcesSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { UpdateSettings } from "./UpdateSettings.tsx";
 
@@ -25,12 +27,13 @@ function UiScaleRow() {
   );
 }
 
-export type SettingsDialogSection = "general" | "providers" | "capabilities" | "computers" | "security";
+export type SettingsDialogSection = "general" | "providers" | "capabilities" | "resources" | "computers" | "security";
 
 const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: Icon }[] = [
   { id: "general", label: "General", icon: Settings },
   { id: "providers", label: "Providers", icon: Blocks },
   { id: "capabilities", label: "Capabilities", icon: Cable },
+  { id: "resources", label: "Resources", icon: Server },
   { id: "computers", label: "Computers", icon: Monitor },
   { id: "security", label: "Security & Access", icon: Shield },
 ];
@@ -74,6 +77,7 @@ export function SettingsDialog({
   }
 
   const effectiveSection = activeSection === "computers" && devices === null ? initialSection : activeSection;
+  const resourcesSummary = useCachedResourcesSummary();
 
   const content: Record<SettingsDialogSection, ReactNode> = {
     general: (
@@ -103,6 +107,13 @@ export function SettingsDialog({
       />
     ),
     capabilities: <CapabilitiesSettings />,
+    resources: (
+      <ResourcesSettings
+        active={open && effectiveSection === "resources"}
+        devices={devices}
+        defaultDeviceKey={defaultProviderDevice}
+      />
+    ),
     computers: devices && <ComputersSection {...devices} />,
     security: <BrowserSessionsSettings />,
   };
@@ -128,6 +139,9 @@ export function SettingsDialog({
               >
                 <Icon className="size-pixel shrink-0 max-[719px]:hidden" aria-hidden="true" />
                 {label}
+                {id === "resources" && resourcesSummary.attention && (
+                  <span data-testid="resources-tab-attention" aria-hidden="true" className="ml-auto size-2 shrink-0 rounded-full bg-caution" />
+                )}
               </TabsTrigger>
             ))}
           </TabsList>

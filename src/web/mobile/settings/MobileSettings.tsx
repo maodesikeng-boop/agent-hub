@@ -1,10 +1,11 @@
 import { Activity, memo, type ReactNode } from "react";
-import { ArrowLeftRight, Bell, Blocks, Cable, Download, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
+import { ArrowLeftRight, Bell, Blocks, Cable, Download, Loader2, Monitor, QrCode, Server, Smartphone, Type } from "../../ui/icons.ts";
 import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { UpdateSettings } from "../../components/UpdateSettings.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
+import { useCachedResourcesSummary } from "../../resources-model.ts";
 import type { SettingsSection } from "../../route.ts";
 import {
   describeComputersSummary,
@@ -20,6 +21,7 @@ import { BrowsersPage } from "./BrowsersPage.tsx";
 import { ComputersPage } from "./ComputersPage.tsx";
 import { NotificationsPage } from "./NotificationsPage.tsx";
 import { ProvidersPage } from "./ProvidersPage.tsx";
+import { ResourcesPage } from "./ResourcesPage.tsx";
 import { ScalePage } from "./ScalePage.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
 import { SettingsPage } from "./SettingsPage.tsx";
@@ -73,6 +75,10 @@ const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
     footer: (ctx) => (ctx.vendor.preview === null ? null : <VendorSyncFooter vendor={ctx.vendor} />),
   },
   capabilities: { title: "Capabilities", render: () => <CapabilitiesSettings /> },
+  resources: {
+    title: "Resources",
+    render: (ctx) => <ResourcesPage devices={ctx.devices} defaultDeviceKey={ctx.defaultProviderDevice} />,
+  },
   computers: { title: "Computers", render: (ctx) => withDevices(ctx, (devices) => <ComputersPage devices={devices} />) },
   "sign-in": { title: "Sign in on another device", render: () => <SignInPage /> },
   browsers: { title: "Signed-in browsers", render: (ctx) => <BrowsersPage {...(ctx.onSignedOut !== undefined ? { onSignedOut: ctx.onSignedOut } : {})} /> },
@@ -93,6 +99,7 @@ function SettingsHome({
 }) {
   const { label: scaleLabel } = useUiScaleSetting();
   const providers = useCachedProvidersSummary();
+  const resources = useCachedResourcesSummary();
   const browsers = useCachedBrowserSessionsSummary();
   const update = useCachedUpdateStatus();
   const updateReminder = updateReminderOf(update, useDismissedUpdate());
@@ -128,6 +135,16 @@ function SettingsHome({
       </SettingsGroup>
       <SettingsGroup title="Capabilities">
         <SettingsNavRow icon={<Cable aria-hidden="true" />} label="Capabilities" onClick={() => onOpen("capabilities")} />
+      </SettingsGroup>
+      <SettingsGroup title="Resources">
+        <SettingsNavRow
+          icon={<Server aria-hidden="true" />}
+          label="Resources"
+          summary={resources.summary}
+          attention={resources.attention}
+          attentionTestId="resources-attention"
+          onClick={() => onOpen("resources")}
+        />
       </SettingsGroup>
       {devices !== null && (
         <SettingsGroup title="Computers">

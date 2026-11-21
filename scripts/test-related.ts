@@ -11,6 +11,7 @@ import { REPO_ROOT } from "./stage-runtime-common.ts";
 export const ALWAYS_RUN_TESTS = [
   "scripts/ci-workflows.test.ts",
   "src/code-hygiene.test.ts",
+  "src/daemon/resources/registry.test.ts",
   "src/shared/errors-guard.test.ts",
   "src/shared/vendor-guard.test.ts",
   "src/vendors/contract.test.ts",

@@ -42,8 +42,10 @@ import { LOG_PREFIX } from "../shared/names.ts";
 import { startWorkerRetention } from "./db-retention.ts";
 import { createBusySessions, createSelfReload, createStagedWebBuild, type SelfReloadController } from "./self-reload.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
+import { createDaemonSessionScope } from "./session-tmp.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
 import { startWorktreeCleanup, type WorktreeCleanup } from "./worktree-cleanup.ts";
+import { createSessionProcessReaper, startDaemonResources, type DaemonResourcesHandle } from "./resources/index.ts";
 import {
   projectWorktreesDir,
   resolveHubPaths,
@@ -195,6 +197,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     autoRenew?: NodeJS.Timeout;
     archiveCleanup?: NodeJS.Timeout;
     worktreeCleanup?: WorktreeCleanup;
+    resources?: DaemonResourcesHandle;
     handoverRunner?: HandoverRunner;
     catalogRunner?: ProjectCatalogRunner;
     setup?: SetupRunner;
@@ -237,6 +240,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (autoRenew) clearInterval(autoRenew);
     if (archiveCleanup) clearInterval(archiveCleanup);
     if (worktreeCleanup) await step("worktree 自动清理", () => worktreeCleanup.stop());
+    if (parts.resources) await step("资源巡检", () => parts.resources!.stop());
     parts.sleepInhibitor?.stop();
     // Handover runners report aborts to the ledger, so they stop before the executor and the database.
     if (handoverRunner) {
@@ -324,7 +328,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const uploadsDir = realpathSync.native(paths.uploadsDir);
     prepareSentFilesDir(paths.sentFilesDir);
     const sentFilesDir = realpathSync.native(paths.sentFilesDir);
-    parts.stopFileCleanup = startFileCleanup([uploadsDir, sentFilesDir], log);
+    parts.stopFileCleanup = startFileCleanup({ uploadsDir, sentFilesDir, setupLogsDir: paths.setupLogsDir, isWorkerOpen: (id) => db.get("SELECT 1 FROM workers WHERE id = ? AND status = 'open'", id) !== undefined }, log);
+    const sessionScope = createDaemonSessionScope({ ledgerFile: paths.sessionTmpFile, env, log });
     const dataDir = realpathSync.native(paths.home);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
@@ -460,6 +465,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       routerPurposeOf: routerTurnPurposes.of,
       capabilityPolicies: ledger,
       capabilityInventory,
+      sessionTmp: sessionScope.tmp, sessionTagNonce: sessionScope.tagNonce, parentSessionTag: sessionScope.parentTag,
     });
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
     const launch = { store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
@@ -518,6 +524,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     );
 
     await driver.cleanupStale();
+    void sessionScope.sweepStartupOrphans(db);
     const recovered = ledger.recoverAfterRestart();
     if (recovered.resentMessageIds.length + recovered.requeuedMessageIds.length > 0) {
       log(`${LOG_PREFIX} 重启恢复：重发 ${recovered.resentMessageIds.length} 条，补发排队中的 ${recovered.requeuedMessageIds.length} 条`);
@@ -538,24 +545,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const executor = createActionExecutor(db, ledger);
     const setup = createSetupRunner({ log });
     parts.setup = setup;
-    const deps = { driver, ledger, sessions, tokens, setup, probeDiffNumstat, probePr };
+    const sessionProcesses = createSessionProcessReaper({ db, tagNonce: sessionScope.tagNonce, ownerTag: sessionScope.ownerTag, sessionTmp: sessionScope.tmp });
+    const deps = { driver, ledger, sessions, tokens, setup, probeDiffNumstat, probePr, sessionTmp: sessionScope.tmp, reapSessionProcesses: sessionProcesses.reapSession };
     executor.register("session.start", createSessionStartHandler(deps));
     executor.register("session.send", createSessionSendHandler(deps));
     executor.register("session.end", createSessionEndHandler(deps));
-    const observeReview = createReviewObserver({
-      resolveCommit: (folder, ref) => resolveCommit(folder, ref),
-      remoteBranchHead: (repo, branch) => remoteBranchHead(repo, branch),
-      probePr: (cwd, branch) => probePr(cwd, branch),
-    });
+    const observeReview = createReviewObserver({ resolveCommit, remoteBranchHead, probePr });
     executor.register("review.verify", createReviewVerifyHandler({ ledger, observeReview }));
-    executor.register(
-      "worktree.create",
-      createWorktreeCreateHandler({
-        ledger,
-        observeReview,
-        addWorktree,
-        setup,
+    executor.register("worktree.create", createWorktreeCreateHandler({
+        ledger, observeReview, addWorktree, setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
+        sessionTmp: sessionScope.tmp,
+        sessionTagEnv: sessionScope.ownerEnv,
         resolveWorktreePlacement: async ({ workerId, sessionId, repo, worktreePath }) => {
           let targetPath = worktreePath;
           if (isPathInsideOrEqual(worktreesDir, worktreePath)) {
@@ -625,19 +626,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     purgeArchivedPms();
     parts.archiveCleanup = setInterval(purgeArchivedPms, PM_ARCHIVE_CLEANUP_INTERVAL_MS);
     const feishuOfflineInbox = createFeishuOfflineInbox(db);
-    parts.stopWorkerRetention = startWorkerRetention({
-      ledger,
-      db,
-      feishuPosts: createFeishuStore(db),
-      feishuOfflineInbox,
-      log,
-    });
-    parts.worktreeCleanup = startWorktreeCleanup({
-      ledger,
-      worktreesDir,
-      extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
-      log,
-    });
+    const feishuPostsStore = createFeishuStore(db);
+    parts.stopWorkerRetention = startWorkerRetention({ ledger, db, feishuPosts: feishuPostsStore, feishuOfflineInbox, log });
+    parts.worktreeCleanup = startWorktreeCleanup({ ledger, worktreesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
+    const resources = startDaemonResources({ db, paths, ledger, worktrees: parts.worktreeCleanup, sessionScope, sessionProcesses, processLedger, feishuPosts: feishuPostsStore, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
+    parts.resources = resources;
     const runAutoRenew = () => {
       try {
         ledger.runAutoRenew();
@@ -1027,6 +1020,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       },
       routerDispatcher,
       routerLocalPort,
+      resources: resources.inspector,
       ...(parts.selfReload ? { selfReload: parts.selfReload } : {}),
       ...(options.folderPicker ? { folderPicker: options.folderPicker } : {}),
     });

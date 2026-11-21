@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { loadavg } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -373,8 +373,8 @@ async function main(): Promise<void> {
       base: { type: "string", default: "origin/main" },
       rounds: { type: "string", default: "5" },
       messages: { type: "string", default: "500" },
-      out: { type: "string", default: "/tmp/bellwood-virtual-list-bench" },
-      report: { type: "string", default: "/tmp/bellwood-virtual-list-bench.md" },
+      out: { type: "string", default: join(tmpdir(), "bellwood-virtual-list-bench") },
+      report: { type: "string", default: join(tmpdir(), "bellwood-virtual-list-bench.md") },
     },
   });
   const out = values.out!;
@@ -383,20 +383,24 @@ async function main(): Promise<void> {
   const shots = join(out, "screens");
   mkdirSync(shots, { recursive: true });
   const load = loadavg().map((n) => n.toFixed(2)).join(" ");
+  const beforeTree = prepareBefore(values.base!, out);
+  const beforeDist = join(out, "before-dist");
+  const afterDist = join(out, "after-dist");
   const sides: Side[] = [
-    { name: "before", root: prepareBefore(values.base!, out), dist: join(out, "before-dist") },
-    { name: "after", root: REPO_ROOT, dist: join(out, "after-dist") },
+    { name: "before", root: beforeTree, dist: beforeDist },
+    { name: "after", root: REPO_ROOT, dist: afterDist },
   ];
-  for (const side of sides) await buildSide(side);
   const servers: Server[] = [];
-  for (const side of sides) {
-    const server = await serve(side.dist);
-    servers.push(server);
-    side.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/bench/index.html`;
-  }
-  const browser = await chromium.launch();
+  let browser: Browser | undefined;
   const results: RunResult[] = [];
   try {
+    for (const side of sides) await buildSide(side);
+    for (const side of sides) {
+      const server = await serve(side.dist);
+      servers.push(server);
+      side.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/bench/index.html`;
+    }
+    browser = await chromium.launch();
     for (let round = 1; round <= rounds; round++) {
       const order = round % 2 === 1 ? sides : [...sides].reverse();
       for (const side of order) {
@@ -406,8 +410,11 @@ async function main(): Promise<void> {
       }
     }
   } finally {
-    await browser.close();
+    await browser?.close();
     for (const server of servers) server.close();
+    rmSync(beforeTree, { recursive: true, force: true });
+    rmSync(beforeDist, { recursive: true, force: true });
+    rmSync(afterDist, { recursive: true, force: true });
   }
   const head = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
   writeFileSync(values.report!, report(results, { base: values.base!, head: `${head}+worktree`, count, rounds, load }));

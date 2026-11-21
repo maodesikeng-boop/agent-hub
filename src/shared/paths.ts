@@ -23,6 +23,7 @@ export interface HubPaths {
   dbFile: string;
   lockFile: string;
   childProcessesFile: string;
+  sessionTmpFile: string;
   uiTokenFile: string;
   providerSecretsFile: string;
   feishuSecretsFile: string;
@@ -99,6 +100,7 @@ export function resolveHubPaths(
     dbFile: joinForBase(stateDir, "hub.sqlite"),
     lockFile: joinForBase(stateDir, "lock"),
     childProcessesFile: joinForBase(stateDir, "child-processes.json"),
+    sessionTmpFile: joinForBase(stateDir, "session-tmp.json"),
     uiTokenFile: joinForBase(stateDir, "ui-token"),
     providerSecretsFile: joinForBase(stateDir, "provider-secrets.json"),
     feishuSecretsFile: joinForBase(stateDir, "feishu-secrets.json"),

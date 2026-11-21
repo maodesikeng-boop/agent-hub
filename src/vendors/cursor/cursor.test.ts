@@ -474,27 +474,32 @@ child.on("exit", (code, sig) => {
     };
     store.add(row);
 
-    const prepareLaunch = async (): Promise<LaunchFiles> => ({
-      promptFile,
-      env: {
-        ...process.env,
-        HOME: homeDir,
-        FAKE_ACP_SCRIPT: scriptFile,
-        FAKE_ACP_LOG: logFile,
-        FAKE_ACP_STATE: stateDir,
-      },
-      fingerprint: "fp-cursor",
-      ...(options.readonlyWorker
-        ? {
-            readonly: {
-              secretPaths: [join(homeDir, ".cursor", "auth.json")],
-              secretGlobs: ["**/.env"],
-              connectors: { extraAllow: [], deny: [] },
-              dataDirScope: dataDirReadScope({ dataDir: join(dir, "data"), launchDir: join(dir, "data", "state", "launch", "1") }),
-            },
-          }
-        : {}),
-    });
+    const prepareLaunch = async (): Promise<LaunchFiles> => {
+      const base = {
+        promptFile,
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          FAKE_ACP_SCRIPT: scriptFile,
+          FAKE_ACP_LOG: logFile,
+          FAKE_ACP_STATE: stateDir,
+        } as Record<string, string>,
+        fingerprint: "fp-cursor",
+      };
+      if (!options.readonlyWorker) return base;
+      const tmpDir = join(dir, "session-tmp");
+      mkdirSync(tmpDir, { recursive: true });
+      return {
+        ...base,
+        readonly: {
+          secretPaths: [join(homeDir, ".cursor", "auth.json")],
+          secretGlobs: ["**/.env"],
+          connectors: { extraAllow: [], deny: [] },
+          dataDirScope: dataDirReadScope({ dataDir: join(dir, "data"), launchDir: join(dir, "data", "state", "launch", "1") }),
+        },
+        tmpDir,
+      };
+    };
 
     const driver = createCursorDriver({
       store,

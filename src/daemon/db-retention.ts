@@ -7,7 +7,7 @@ import type { Db } from "./store/index.ts";
 
 export interface RetentionDeps {
   ledger: Pick<SqliteLedger, "purgeExpiredWorkerConversations"> &
-    Partial<Pick<SqliteLedger, "purgeExpiredRouterAndGraphRecords">>;
+    Partial<Pick<SqliteLedger, "purgeExpiredRouterAndGraphRecords" | "purgeGrowingTables">>;
   db: Db;
   feishuPosts?: Pick<FeishuStore, "prunePosts">;
   feishuOfflineInbox?: Pick<FeishuOfflineInbox, "expire">;
@@ -62,8 +62,25 @@ export async function runRetentionRound(deps: RetentionDeps): Promise<RetentionR
         await yieldToLoop();
       }
     }
+    if (ledger.purgeGrowingTables !== undefined) {
+      while (round.rows < WORKER_PURGE_ROUND_MAX_ROWS && !stopped()) {
+        const started = performance.now();
+        const batch = ledger.purgeGrowingTables(
+          now(),
+          Math.min(WORKER_PURGE_BATCH_ROWS, WORKER_PURGE_ROUND_MAX_ROWS - round.rows),
+        );
+        if (batch.rows > 0) {
+          round.batchMs.push(performance.now() - started);
+          round.batches++;
+          round.rows += batch.rows;
+        }
+        if (!batch.more) break;
+        await yieldToLoop();
+      }
+    }
     if (deps.feishuPosts !== undefined && !stopped()) {
-      const posts = deps.feishuPosts.prunePosts(now() - FEISHU_POST_RETENTION_MS);
+      const nowMs = now();
+      const posts = deps.feishuPosts.prunePosts(nowMs - FEISHU_POST_RETENTION_MS, nowMs);
       if (posts > 0) log(`${LOG_PREFIX} 飞书：清了 ${posts} 条已定稿的投影记录`);
     }
     if (deps.feishuOfflineInbox !== undefined && !stopped()) {

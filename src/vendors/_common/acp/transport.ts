@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   RequestError,
@@ -20,18 +20,9 @@ export async function buildAcpReadonlySandboxInput(
   sandboxCfg: AcpDriverConfig["readonlySandbox"],
   launch: AcpLaunchContext,
   policy: ReadonlyPolicy,
-): Promise<{ input: ReadonlySandboxInput; cleanupTmp: () => void }> {
-  const rawTmp = mkdtempSync(join(tmpdir(), "agent-hub-acp-ro-"));
-  const tmpDir = realpathOrSelf(rawTmp);
-  let cleaned = false;
-  const cleanupTmp = () => {
-    if (cleaned) return;
-    cleaned = true;
-    try {
-      rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-    }
-  };
+  sessionTmpDir: string,
+): Promise<{ input: ReadonlySandboxInput }> {
+  const tmpDir = realpathOrSelf(sessionTmpDir);
 
   const { row } = launch;
   const homeDir = realpathOrSelf(homedir());
@@ -80,7 +71,6 @@ export async function buildAcpReadonlySandboxInput(
       ...(readableFiles.length > 0 ? { readableFiles } : {}),
       ...(policy.dataDirScope ? { dataDirScope: policy.dataDirScope } : {}),
     },
-    cleanupTmp,
   };
 }
 

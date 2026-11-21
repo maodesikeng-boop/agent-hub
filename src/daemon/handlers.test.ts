@@ -334,6 +334,63 @@ describe("session.end 处理函数", () => {
     await expect(createSessionEndHandler(d)(endAction())).rejects.toThrow(/^internal_error/);
     expect(revoke).not.toHaveBeenCalled();
   });
+
+  it("reaps the session's processes, removes session tmpDir, and trims ended Worker steps in order after driver.end", async () => {
+    const { d, end, revoke, refreshSessionState } = deps();
+    const order: string[] = [];
+    const cancel = vi.fn(() => void order.push("cancel"));
+    end.mockImplementationOnce(async () => void order.push("end"));
+    revoke.mockImplementationOnce(() => void order.push("revoke"));
+    const reapSessionProcesses = vi.fn(async (id: number) => {
+      order.push(`reap:${id}`);
+    });
+    const remove = vi.fn(async (id: number) => {
+      order.push(`tmp:${id}`);
+      return true;
+    });
+    const trimEndedWorkerSteps = vi.fn((id: number) => {
+      order.push(`trim:${id}`);
+      return 3;
+    });
+    refreshSessionState.mockImplementationOnce(() => void order.push("refresh"));
+
+    expect(
+      await createSessionEndHandler({
+        ...d,
+        ledger: { ...d.ledger, trimEndedWorkerSteps },
+        setup: { cancel },
+        sessionTmp: { remove },
+        reapSessionProcesses,
+      })(endAction()),
+    ).toEqual({ kind: "done" });
+
+    expect(order).toEqual(["cancel", "end", "revoke", "reap:4", "tmp:4", "trim:4", "refresh"]);
+  });
+
+  it("still removes tmpDir, trims steps, and refreshes state even if reaping or sessionTmp.remove rejects", async () => {
+    const { d, refreshSessionState } = deps();
+    const reapSessionProcesses = vi.fn(async () => {
+      throw new Error("ps unavailable");
+    });
+    const remove = vi.fn(async () => {
+      throw new Error("ebusy");
+    });
+    const trimEndedWorkerSteps = vi.fn(() => 0);
+
+    expect(
+      await createSessionEndHandler({
+        ...d,
+        ledger: { ...d.ledger, trimEndedWorkerSteps },
+        sessionTmp: { remove },
+        reapSessionProcesses,
+      })(endAction()),
+    ).toEqual({ kind: "done" });
+
+    expect(reapSessionProcesses).toHaveBeenCalledWith(4);
+    expect(remove).toHaveBeenCalledWith(4);
+    expect(trimEndedWorkerSteps).toHaveBeenCalledWith(4);
+    expect(refreshSessionState).toHaveBeenCalledWith(4);
+  });
 });
 
 describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () => {
@@ -445,6 +502,18 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
     const t = worktreeDeps({ add: new Error("分支 hub/3-fix-x 已经存在") });
     await expect(createWorktreeCreateHandler(t.deps)(action("worktree.create", { workerId: 3 }))).rejects.toThrow("已经存在");
     expect(t.onWorktreeCreated).not.toHaveBeenCalled();
+  });
+
+  it("allocates session tmpDir and passes session owner tag into setup.start", async () => {
+    const t = worktreeDeps({ task: { ...task, setupCommand: "pnpm install" } });
+    const allocate = vi.fn(() => "/tmp/bh-12345678/s30");
+    const sessionTagEnv = vi.fn(() => "s30:abc");
+    expect(
+      await createWorktreeCreateHandler({ ...t.deps, sessionTmp: { allocate }, sessionTagEnv })(action("worktree.create", { workerId: 3 })),
+    ).toEqual({ kind: "done" });
+    expect(allocate).toHaveBeenCalledWith(30);
+    expect(sessionTagEnv).toHaveBeenCalledWith(30);
+    expect(t.jobs[0]).toMatchObject({ tmpDir: "/tmp/bh-12345678/s30", sessionTagEnv: "s30:abc" });
   });
 });
 

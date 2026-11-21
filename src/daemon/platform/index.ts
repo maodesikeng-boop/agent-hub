@@ -1,5 +1,17 @@
 // OS differences belong here; other modules should not branch on process.platform.
 export {
+  envContainsSessionTag,
+  listTaggedProcesses,
+  makeSessionOwnerTag,
+  reapTaggedProcesses,
+  runsInsideRoots,
+  scanTaggedProcesses,
+  type ListTaggedProcessesOptions,
+  type ReapTaggedProcessesOptions,
+  type ReapTaggedProcessesResult,
+  type TaggedProcessInfo,
+} from "./process-tag.ts";
+export {
   MACOS_CAFFEINATE_BIN,
   WIN32_KEEP_AWAKE_BIN,
   SLEEP_INHIBIT_COMMANDS,

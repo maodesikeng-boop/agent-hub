@@ -1,6 +1,5 @@
 // Lines split on \n only, so U+2028/U+2029 in JSONL never truncate a frame.
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
 import {
   DriverError,
   type AgentSessionPatch,
@@ -422,17 +421,12 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         at: Date.now(),
       });
     }
-    const removeTmp = () => {
-      if (tmpDir !== null) rmSync(tmpDir, { recursive: true, force: true });
-    };
-
     const child = await this.spawnDetachedChild(
       exePath,
       launch.command,
       launch.args,
       row.cwd,
       childEnv,
-      removeTmp,
     );
 
     const { baseProc, resolveExited } = this.createBaseProc<PiStartupOutcome>(child, resume, row, effectiveFiles);
@@ -445,7 +439,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       lastSessionTokens: { ...ZERO_RAW_COUNTS },
     };
 
-    this.attachChildProcess(st, proc, resolveExited, removeTmp);
+    this.attachChildProcess(st, proc, resolveExited);
 
     const initReqId = `rpc-${++this.requestSeq}`;
     const statsReqId = `rpc-${++this.requestSeq}`;

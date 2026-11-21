@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   DriverError,
@@ -342,7 +342,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const claudeArgs = buildClaudeArgs(row, files, resume);
     let launch: ScopedSpawn;
     let childEnv: Record<string, string> = { ...files.env };
-    let cleanupReadonlyTmp: (() => void) | undefined;
 
     if (files.readonly && this.#platform === "win32") {
       const realOrSelf = (p: string) => {
@@ -352,13 +351,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           return p;
         }
       };
-      const privateTmp = mkdtempSync(join(realOrSelf(tmpdir()), "agent-hub-ro-"));
-      let cleaned = false;
-      cleanupReadonlyTmp = () => {
-        if (cleaned) return;
-        cleaned = true;
-        rmSync(privateTmp, { recursive: true, force: true });
-      };
+      const privateTmp = realOrSelf(files.tmpDir);
       const home = realOrSelf(homedir());
       const claudeDirs = [join(home, ".claude"), join(home, ".cache"), join(home, ".npm")].filter((d) => existsSync(d)).map(realOrSelf);
       const roProtectedRoots = files.writeScope?.protectedRoots ?? files.readonly.protectedRoots;
@@ -381,7 +374,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       const exePath = this.#resolveClaudePath();
       launch = wrap({ command: exePath, args: claudeArgs }, roInput);
       if (!launch.osSandboxed) {
-        cleanupReadonlyTmp();
         throw new DriverError("spawn_failed", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
       }
       if (launch.readonlyFallbackWarning) {
@@ -411,7 +403,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       launch.args,
       row.cwd,
       childEnv,
-      cleanupReadonlyTmp,
     );
     const { baseProc, resolveExited } = this.createBaseProc<ClaudeStartupOutcome>(child, resume, row, files);
     const proc: Proc = {
@@ -423,7 +414,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       toolPreviews: new StreamingToolPreviewTracker(),
     };
     this.attachChildProcess(st, proc, resolveExited, () => {
-      cleanupReadonlyTmp?.();
       proc.readonlyGate?.dispose();
       proc.toolPreviews.clear();
     });

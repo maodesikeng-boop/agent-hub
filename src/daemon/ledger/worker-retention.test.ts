@@ -1,4 +1,4 @@
-// 已收工 Worker 的对话保留期（worker-retention.ts）：满 30 天删、未满不删、在跑不删、项目经理不删、分批上限、基本记录仍可查。
+// 已收工 Worker 的对话保留期（worker-retention.ts）：满 14 天或超过 300 个删、未满不删、在跑不删、项目经理不删、分批上限、基本记录仍可查。
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +6,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { ConversationId, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
-import { PM_ARCHIVE_RETENTION_MS, WORKER_PURGE_BATCH_ROWS, WORKER_RETENTION_DAYS, WORKER_RETENTION_MS } from "../../shared/limits.ts";
+import {
+  PM_ARCHIVE_RETENTION_MS,
+  WORKER_PURGE_BATCH_ROWS,
+  WORKER_RETENTION_DAYS,
+  WORKER_RETENTION_MAX_ENDED,
+  WORKER_RETENTION_MS,
+} from "../../shared/limits.ts";
 import { sessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import { enqueueAction, listActions } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -118,9 +124,10 @@ const purgedAt = (w: WorkerId) => db.get<{ p: number }>("SELECT purged_at AS p F
 const reportCount = (w: WorkerId) => count("messages", "worker_id = ? AND kind = 'worker' AND json_extract(meta, '$.event') = 'report'", w);
 
 describe("已收工 Worker 的对话保留期", () => {
-  it("常量：30 天", () => {
-    expect(WORKER_RETENTION_DAYS).toBe(30);
-    expect(WORKER_RETENTION_MS).toBe(30 * 24 * 60 * 60 * 1000);
+  it("常量：14 天与 300 个已收工上限", () => {
+    expect(WORKER_RETENTION_DAYS).toBe(14);
+    expect(WORKER_RETENTION_MS).toBe(14 * 24 * 60 * 60 * 1000);
+    expect(WORKER_RETENTION_MAX_ENDED).toBe(300);
   });
 
   it("满 30 天：对话消息、步骤日志、hub 记录、交接、等待、动作和磁盘文件都删，记 purged_at、推 conversation.purged", () => {
@@ -360,5 +367,44 @@ describe("已收工 Worker 的对话保留期", () => {
     expect(existsSync(stoppingPmDir)).toBe(false);
     expect(existsSync(activePmDir)).toBe(true);
     expect(existsSync(recentWorkerDir)).toBe(true);
+  });
+
+  it("按条数上限清理：未满 14 天但超过 WORKER_RETENTION_MAX_ENDED 个已收工 Worker 时清理最老的", () => {
+    const projectId = db.get<{ id: number }>("SELECT id FROM projects LIMIT 1")!.id;
+    const totalEnded = WORKER_RETENTION_MAX_ENDED + 5;
+    db.exec("BEGIN");
+    for (let i = 1; i <= totalEnded; i++) {
+      const ts = T0 + i * 1_000;
+      const conv = Number(
+        db.run("INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('worker', ?, ?, ?)", lin.pmId, `W${i}`, ts).lastInsertRowid,
+      );
+      const wid = Number(
+        db.run(
+          `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 't', 'main', 'ended', ?, ?)`,
+          projectId, lin.pmId, lin.conversationId, conv, `W${i}`, ts, ts,
+        ).lastInsertRowid,
+      );
+      const sid = Number(
+        db.run(
+          `INSERT INTO agent_sessions (role, conversation_id, worker_id, vendor_session_id, cwd, status, created_at, updated_at)
+           VALUES ('worker', ?, ?, ?, '/tmp', 'ended', ?, ?)`,
+          conv, wid, `v-${i}`, ts, ts,
+        ).lastInsertRowid,
+      );
+      db.run(
+        `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, dedupe_key, created_at, updated_at)
+         VALUES (?, ?, ?, 'agent', 'text', 'hi', ?, ?, ?)`,
+        conv, sid, wid, `ov:${i}`, ts, ts,
+      );
+    }
+    db.exec("COMMIT");
+
+    const checkNow = T0 + totalEnded * 1_000 + 60_000;
+    const result = ledger.purgeExpiredWorkerConversations(checkNow, 500);
+    expect(result.purged).toHaveLength(5);
+    expect(result.more).toBe(false);
+    expect(count("conversation_purges")).toBe(5);
+    expect(ledger.purgeExpiredWorkerConversations(checkNow, 500)).toEqual({ rows: 0, purged: [], more: false });
   });
 });

@@ -14,6 +14,7 @@ export function desktopSectionOf(section: SettingsSection, managed: boolean): Se
   if (section === "scale" || section === "notifications" || section === "updates") return "general";
   if (section === "providers" || section === "vendor-sync") return "providers";
   if (section === "capabilities") return "capabilities";
+  if (section === "resources") return "resources";
   if (section === "computers") return managed ? "computers" : "general";
   return "security";
 }
