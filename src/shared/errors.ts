@@ -35,6 +35,7 @@ export const LOCAL_ERRORS = {
   timeout: { text: "请求超时", hint: "网络可能断了，稍后再试" },
   port_in_use: { text: "端口被占了", hint: "可能已经开了一个；或设 AGENT_HUB_PORT 换端口" },
   bad_port: { text: "AGENT_HUB_PORT 不是端口号", hint: "改成 0–65535 的整数" },
+  ledger_locked: { text: "账本数据库正被别的程序打开着", hint: "关掉打开 hub.sqlite 的程序（比如 sqlite3 或数据库查看器）再启动" },
   sandbox_unavailable: {
     text: "这台机器的 OS 沙箱起不来，不能启动 Worker",
     hint: "Linux 上先跑一次 sudo scripts/linux-sandbox-setup.sh 配置 bubblewrap 与 AppArmor；Windows 上请确认 NTFS/ReFS 权限正常且已构建 fusa-win-helper（cargo build --release --manifest-path apps/windows/Cargo.toml -p fusa-win-helper）",
