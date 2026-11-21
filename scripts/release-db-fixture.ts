@@ -18,28 +18,32 @@ export const RELEASE_SAMPLE = {
   answer: "release sample answer",
 } as const;
 
-interface ReleasedDaemon {
+interface SampleDaemon {
   terminate(): Promise<{ code: number | null; signal: string | null }>;
 }
 
-interface ReleasedClient {
+interface SampleClient {
   state(): Promise<{ conversations: { conversation: { id: number } }[] }>;
   post(conversationId: number, text: string): Promise<number>;
   createPm(input: { name: string; mode: string; persona: string }): Promise<{ conversationId: number }>;
 }
 
-interface ReleasedHarness {
+/** The parts of test/e2e/harness.ts that every released version and the working tree share. */
+interface SampleHarness {
   makeEnv(): {
     dir: string;
     home: string;
     setScript(script: unknown): void;
-    start(): Promise<ReleasedDaemon>;
+    start(): Promise<SampleDaemon>;
     bashRuns(): { exitCode: number; output: string }[];
     cleanup(): Promise<void>;
   };
-  Client: { login(daemon: ReleasedDaemon): Promise<ReleasedClient> };
-  waitForStatus(client: ReleasedClient, id: number, status: string): Promise<unknown>;
+  Client: { login(daemon: SampleDaemon): Promise<SampleClient> };
+  waitForStatus(client: SampleClient, id: number, status: string): Promise<unknown>;
 }
+
+// The SQLite header stores user_version as a big-endian integer at byte 60.
+export const headerUserVersion = (db: Buffer): number => db.readUInt32BE(60);
 
 const bashPathArg = (path: string) => `'${path.replace(/\\/g, "/").replaceAll("'", "'\\''")}'`;
 
@@ -54,7 +58,8 @@ function extractTag(tag: string, tree: string): void {
   symlinkSync(join(REPO_ROOT, "node_modules"), join(tree, "node_modules"), "junction");
 }
 
-async function driveReleasedDaemon(harness: ReleasedHarness): Promise<Buffer> {
+/** Drives a daemon through `harness` and returns the ledger it leaves after a clean shutdown. */
+export async function captureSampleLedger(harness: SampleHarness): Promise<Buffer> {
   const env = harness.makeEnv();
   try {
     const folder = join(env.dir, "code", RELEASE_SAMPLE.projectName);
@@ -74,7 +79,7 @@ async function driveReleasedDaemon(harness: ReleasedHarness): Promise<Buffer> {
     const pm = await client.createPm({ name: RELEASE_SAMPLE.pmName, mode: "manage_only", persona: "" });
     await harness.waitForStatus(client, await client.post(pm.conversationId, RELEASE_SAMPLE.question), "replied");
     const exit = await daemon.terminate();
-    if (exit.code !== 0) throw new Error(`released daemon exited with ${exit.code ?? exit.signal}`);
+    if (exit.code !== 0) throw new Error(`sample daemon exited with ${exit.code ?? exit.signal}`);
     const dbFile = join(env.home, "state", "hub.sqlite");
     if (existsSync(`${dbFile}-wal`)) throw new Error(`${dbFile}-wal is still there after a clean shutdown`);
     return readFileSync(dbFile);
@@ -88,13 +93,12 @@ async function main(tag: string | undefined): Promise<void> {
   const tree = mkdtempSync(join(tmpdir(), "bellwood-release-db-"));
   try {
     extractTag(tag, tree);
-    const harness = (await import(pathToFileURL(join(tree, "test", "e2e", "harness.ts")).href)) as ReleasedHarness;
-    const db = await driveReleasedDaemon(harness);
+    const harness = (await import(pathToFileURL(join(tree, "test", "e2e", "harness.ts")).href)) as SampleHarness;
+    const db = await captureSampleLedger(harness);
     mkdirSync(RELEASE_DB_DIR, { recursive: true });
     const out = join(RELEASE_DB_DIR, `${tag}.sqlite.gz`);
     writeFileSync(out, gzipSync(db, { level: 9 }));
-    // The SQLite header stores user_version as a big-endian integer at byte 60.
-    console.log(`${out}: user_version ${db.readUInt32BE(60)}, ${db.length} bytes, ${readFileSync(out).length} gzipped`);
+    console.log(`${out}: user_version ${headerUserVersion(db)}, ${db.length} bytes, ${readFileSync(out).length} gzipped`);
   } finally {
     rmSync(tree, { recursive: true, force: true });
   }
