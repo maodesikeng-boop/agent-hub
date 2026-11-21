@@ -58,9 +58,9 @@ Seen in: `ab03a38d`/`af3b76c8`, `638516a7`
 
 Trigger: `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/_common/acp/**`, `src/shared/readonly-policy.ts`
 
-Check: Every MCP tool call a read-only Worker makes either passes through `connectorToolAllowed` (directly or via the ACP permission gate) or cannot happen because the vendor never loads an MCP server. A vendor mode that auto-approves tools (Kimi `yolo`, an OpenCode allow-all agent) hides every MCP source it reads, including user, project, plugin, and overridden-home config, and its MCP OAuth tokens. A test or a real-CLI run shows a non-read-only MCP tool is not executed.
+Check: Every MCP tool call a read-only Worker makes either passes through `connectorToolAllowed` (directly or via the ACP permission gate) or cannot happen because the vendor never loads an MCP server. A vendor mode that auto-approves tools (Kimi `yolo`, an OpenCode allow-all agent) hides every MCP source it reads, including user, project, plugin, and overridden-home config, and its MCP OAuth tokens. Read-only rules also win over agent-level permissions in user or project config, and delegation to subagents is denied. A test or a real-CLI run shows a non-read-only MCP tool is not executed.
 
-Seen in: `bdb85632`, `c067de52`/`2a421897`
+Seen in: `bdb85632`, `c067de52`/`2a421897`, `717eeb06`
 
 ### Async work stops touching the ledger after shutdown starts
 
@@ -80,19 +80,19 @@ Seen in: `34152ae7`/`bfa21de2`, `4f7c6898`/`52f256ad`
 
 ### Caches key on identity, have a limit, and retry failures soon
 
-Trigger: `src/daemon/commands-catalog.ts`, `src/daemon/driver/model-catalog.ts`, `src/daemon/skill-files.ts`, `src/daemon/ledger/loaded-skills.ts`, `src/daemon/platform/win32/**`, `src/daemon/quota/**`, `src/shared/paths.ts`, `src/shared/limits.ts`
+Trigger: `src/daemon/commands-catalog.ts`, `src/daemon/driver/model-catalog.ts`, `src/daemon/skill-files.ts`, `src/daemon/ledger/loaded-skills.ts`, `src/daemon/platform/win32/**`, `src/daemon/quota/**`, `src/shared/paths.ts`, `src/shared/limits.ts`, `src/web/*-model.ts`
 
-Check: A cache over files or directories keys on identity from `stat` (device, inode, mtime) or the SID, so a deleted and recreated directory misses. Every `LRUCache` and map has a `max` from `src/shared/limits.ts`. A failed or empty result is kept only for a short backoff such as `FETCHED_QUOTA_RETRY_MS`, never as a normal result. If an in-flight call can see its target replaced, the code checks the target again when the call returns.
+Check: A cache over files or directories keys on identity from `stat` (device, inode, mtime) or the SID, so a deleted and recreated directory misses. Every `LRUCache` and map has a `max` from `src/shared/limits.ts`. A failed or empty result, including a failed React Query fetch, is kept only for a short backoff such as `FETCHED_QUOTA_RETRY_MS`, never as a normal result. If an in-flight call can see its target replaced, the code checks the target again when the call returns.
 
-Seen in: `43d70fad`, `18e2fa2b`/`7df95c32`, `8023745a`/`edcac7bb`
+Seen in: `43d70fad`, `18e2fa2b`/`7df95c32`, `8023745a`/`edcac7bb`, `50ac3399`
 
 ### Growing data has a cap in limits.ts
 
 Trigger: `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/ui-server/**`, `src/daemon/*checker*.ts`, `src/shared/snapshot.ts`, `src/shared/limits.ts`
 
-Check: Queues, in-memory collections, API responses, and command output that grow over time have a cap from `src/shared/limits.ts`. Size the cap for one month of use (300 finished Workers, 30,000 messages, 50,000 step logs). Large responses use compression.
+Check: Queues, in-memory collections, API responses, and command output that grow over time have a cap from `src/shared/limits.ts`. Size the cap for one month of use (300 finished Workers, 30,000 messages, 50,000 step logs). Large responses use compression. An external HTTP body is read as a stream and cancelled once it passes its byte cap, since `Content-Length` can be missing.
 
-Seen in: `2bdf6ff9`, `eb0386bd`, `4ba0f65d`
+Seen in: `2bdf6ff9`, `eb0386bd`, `4ba0f65d`, `50b3d57a`
 
 ### Front-end selectors return stable references
 
@@ -106,9 +106,9 @@ Seen in: `43d70fad`, `473db164`, `0fc0e181`
 
 Trigger: `src/web/**`
 
-Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it.
+Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them, but it cannot tell whether every write path advances the generation.
 
-Seen in: `2c3ff071`, `c58bac01`/`73e911b0`
+Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`
 
 ### Interface changes come with a real-browser render
 
