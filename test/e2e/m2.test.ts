@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, ENV_DEFAULT_MODEL, ENV_HUB_SOCK, HUB_COMMAND, HUB_EXIT, HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { LOCAL_ERRORS } from "../../src/shared/errors.ts";
 import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase } from "../../src/daemon/store/index.ts";
+import { writeMigrationManifest } from "../../src/daemon/store/test-helpers.ts";
 import {
   Client,
   agentTexts,
@@ -153,6 +154,7 @@ function seedM2DevDatabase(foo: string): void {
   for (const name of readdirSync(DEFAULT_MIGRATIONS_DIR)) {
     if (/^000[12]_.*\.sql$/.test(name)) copyFileSync(join(DEFAULT_MIGRATIONS_DIR, name), join(upTo2, name));
   }
+  writeMigrationManifest(upTo2);
   const db = openDatabase(join(stateDir, "hub.sqlite"));
   try {
     migrate(db, upTo2);

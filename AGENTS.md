@@ -11,7 +11,7 @@ Cross-platform multi-agent workbench for macOS, Windows, and Linux. **Router** a
 - `src/mesh/` and `src/relay/`: Account login and device management CLI in `src/mesh/`, device trust, mutual TLS transport, and Feishu hub leases in `src/daemon/mesh/`, and the Node and Cloudflare relays in `src/relay/`.
 - `src/shared/`: Shared types, numeric limits in `limits.ts`, pixel art assets, and pure functions.
 - `apps/`: Desktop supervisor contract in `desktop/`, native macOS Swift shell in `macos/`, and Windows Rust and Tauri shell plus sandbox helpers in `windows/`.
-- `migrations/`: Ordered SQLite schema migrations.
+- `migrations/`: Ordered SQLite schema migrations and the `manifest.sha256` that startup checks them against (`docs/ledger-database.md`).
 
 ## Engineering standards
 

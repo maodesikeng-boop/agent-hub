@@ -14,6 +14,7 @@ import {
   API_PATHS,
   uiCookieName,
   DEFAULT_AGENT_VENDOR,
+  ENV_DB_SHARED_ACCESS,
   ENV_HOME,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
@@ -172,6 +173,8 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
       ? { PATH: `${dirname(process.execPath)};${process.env.PATH ?? process.env.Path ?? ""}` }
       : {}),
     [ENV_HOME]: home,
+    // Tests read the ledger and inject triggers into it while the daemon runs.
+    [ENV_DB_SHARED_ACCESS]: "1",
     ...Object.fromEntries(VENDOR_LIST.map(({ id, cli }) => [cli.envVar, id === DEFAULT_AGENT_VENDOR ? vendorPath : join(fakeDir, `no-${id}`)])),
     [ENV_PORT]: "0",
     FAKE_CLAUDE_LOG: logFile,

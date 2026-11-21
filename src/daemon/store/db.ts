@@ -22,14 +22,27 @@ export interface Db {
   close(): void;
 }
 
-export function openDatabase(file: string, options: { maxStatements?: number } = {}): Db {
+export interface OpenDatabaseOptions {
+  maxStatements?: number;
+  /** Hold SQLite's file lock from open to close so no other process can read or write the file. */
+  exclusive?: boolean;
+}
+
+export function openDatabase(file: string, options: OpenDatabaseOptions = {}): Db {
   const maxStatements = options.maxStatements ?? MAX_CACHED_STATEMENTS;
   const raw = new DatabaseSync(file, { enableForeignKeyConstraints: true, timeout: DB_BUSY_TIMEOUT_MS });
-  // auto_vacuum only takes effect before the first table (and before WAL); older databases are rebuilt by ensureIncrementalVacuum.
-  raw.exec("PRAGMA auto_vacuum = INCREMENTAL");
-  raw.exec("PRAGMA journal_mode = WAL");
-  // With WAL, synchronous=NORMAL cannot corrupt the database but power loss may drop the last commits.
-  raw.exec("PRAGMA synchronous = NORMAL");
+  try {
+    // node:sqlite waits for a lock synchronously on the event loop, so a foreign write lock would freeze every request; with WAL this has to precede the first access to keep the wal-index out of shared memory.
+    if (options.exclusive === true) raw.exec("PRAGMA locking_mode = EXCLUSIVE");
+    // auto_vacuum only takes effect before the first table (and before WAL); older databases are rebuilt by ensureIncrementalVacuum.
+    raw.exec("PRAGMA auto_vacuum = INCREMENTAL");
+    raw.exec("PRAGMA journal_mode = WAL");
+    // With WAL, synchronous=NORMAL cannot corrupt the database but power loss may drop the last commits.
+    raw.exec("PRAGMA synchronous = NORMAL");
+  } catch (error) {
+    raw.close();
+    throw error;
+  }
   const stmtCache = new LRUCache<string, StatementSync>({ max: Math.max(1, maxStatements) });
   let depth = 0;
 

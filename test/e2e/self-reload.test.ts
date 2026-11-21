@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { HUB_COMMAND, REPORT_END, REPORT_START, RESEND_NOTE, RESTART_RECOVERY_NOTE, systemEventOf, workerEventOf } from "../../src/shared/index.ts";
+import { ENV_DB_SHARED_ACCESS, HUB_COMMAND, REPORT_END, REPORT_START, RESEND_NOTE, RESTART_RECOVERY_NOTE, systemEventOf, workerEventOf } from "../../src/shared/index.ts";
 import { DESKTOP_CONTRACT } from "../../src/daemon/entry.ts";
 import { SANDBOX_EXEC, osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
@@ -63,6 +63,36 @@ function query<T>(sql: string, ...params: Array<string | number>): T[] {
 }
 
 const argValue = (argv: string[], flag: string) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined);
+
+describe("hot restart with the exclusive ledger lock", () => {
+  it("after hub self-reload exits with reloadExitCode, the daemon the shell starts next takes the ledger and serves the same conversations", { timeout: 60_000 }, async () => {
+    env = makeEnv();
+    env.setScript({ turns: [{ steps: [{ bash: `${hub} self-reload` }, { text: "registered" }] }], defaultTurn: say("back after the restart") });
+    const installed = { ...SUPERVISED_ENV, [ENV_DB_SHARED_ACCESS]: "0" };
+    const first = await env.start({ main: RELOAD_MAIN, env: installed });
+    const client = await Client.login(first);
+    const { conversationId } = await client.createPm({ name: "Reload PM", mode: "manage_only", persona: "" });
+    await client.post(conversationId, "restart the daemon");
+
+    const exit = await first.exited;
+    expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
+    expect(env.bashRuns().map((run) => run.output)).toEqual([expect.stringContaining("已登记热重启")]);
+    const restartedAt = Date.now();
+    const second = await env.start({ main: RELOAD_MAIN, env: installed });
+    const readyMs = Date.now() - restartedAt;
+    const client2 = client.withPort(second.port);
+    const asked = await client2.post(conversationId, "still there?");
+    const replied = async () => messagesOf(await client2.state(), conversationId).find((m) => m.id === asked)?.status === "replied";
+    await waitUntil("reply after the restart", async () => ((await replied()) ? true : undefined), 20_000);
+    const texts = messagesOf(await client2.state(), conversationId).filter((m) => m.sender === "agent" && m.kind === "text").map((m) => m.text);
+    expect(texts).toEqual(["registered", "back after the restart"]);
+    console.log(
+      `[self-reload e2e, exclusive lock] first daemon exited with ${exit.code}; second daemon ready ${readyMs} ms after that; replies ${JSON.stringify(texts)}; ` +
+        `first daemon log: ${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}`,
+    );
+    expect(await second.terminate()).toEqual({ code: 0, signal: null });
+  });
+});
 
 describe("热重启等全库空闲有上限", () => {
   it.skipIf(!canNestOsSandbox)("Worker 一轮一直在跑：登记后到上限照常重启（退出码 reloadExitCode）；重启后这一轮自动重发、做完、汇报回来", { timeout: 60_000 }, async () => {

@@ -15,7 +15,7 @@ import {
   openStore,
 } from "./index.ts";
 import type { Db } from "./index.ts";
-import { insertTestSession, openTestDb } from "./test-helpers.ts";
+import { insertTestSession, openTestDb, writeMigration } from "./test-helpers.ts";
 
 let home: string;
 let paths: HubPaths;
@@ -77,9 +77,8 @@ describe("打开存储和迁移", () => {
 
   it("迁移按编号执行，只跑新的；中途出错整个迁移回滚，user_version 不变", () => {
     const dir = join(home, "migrations");
-    mkdirSync(dir);
-    writeFileSync(join(dir, "0001_a.sql"), "CREATE TABLE a (x INTEGER) STRICT;");
-    writeFileSync(join(dir, "0002_b.sql"), "CREATE TABLE b (x INTEGER) STRICT; CREATE TABLE a (dup INTEGER);");
+    writeMigration(dir, "0001_a.sql", "CREATE TABLE a (x INTEGER) STRICT;");
+    writeMigration(dir, "0002_b.sql", "CREATE TABLE b (x INTEGER) STRICT; CREATE TABLE a (dup INTEGER);");
     writeFileSync(join(dir, "README.md"), "不是迁移文件");
     const db = openDatabase(":memory:");
     try {
@@ -87,7 +86,7 @@ describe("打开存储和迁移", () => {
       expect(db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(1);
       expect(db.get("SELECT name FROM sqlite_master WHERE name = 'b'")).toBeUndefined();
 
-      writeFileSync(join(dir, "0002_b.sql"), "CREATE TABLE b (x INTEGER) STRICT;");
+      writeMigration(dir, "0002_b.sql", "CREATE TABLE b (x INTEGER) STRICT;");
       expect(migrate(db, dir)).toEqual({ from: 1, to: 2, applied: [2] });
     } finally {
       db.close();
@@ -106,12 +105,11 @@ describe("打开存储和迁移", () => {
 
   it("编号重复的迁移文件报错", () => {
     const dir = join(home, "migrations");
-    mkdirSync(dir);
-    writeFileSync(join(dir, "0001_a.sql"), "SELECT 1;");
-    writeFileSync(join(dir, "0001_b.sql"), "SELECT 1;");
+    writeMigration(dir, "0001_a.sql", "SELECT 1;");
+    writeMigration(dir, "0001_b.sql", "SELECT 1;");
     const db = openDatabase(":memory:");
     try {
-      expect(() => migrate(db, dir)).toThrow(/duplicate/);
+      expect(() => migrate(db, dir)).toThrow(/lists 0001_b\.sql where version 2 belongs/);
     } finally {
       db.close();
     }

@@ -30,7 +30,7 @@ Include all eight sections below in order for downstream Workers and reviewers:
 
 Write the skeleton directly in the target production and test files rather than a scratch directory:
 
-- **Data shapes and migrations.** Define TypeScript interfaces and discriminated unions. For schema changes, add the next numbered SQL file in `migrations/`.
+- **Data shapes and migrations.** Define TypeScript interfaces and discriminated unions. For schema changes, add the next numbered SQL file in `migrations/` and its line in `migrations/manifest.sha256` ([Ledger database](ledger-database.md)).
 - **Module boundaries.** Create target modules and export their public surface. Skip unexported private helpers.
 - **Function signatures.** Write full parameter and return types without `any`. Use a single-line body: `throw new Error("Not implemented");`.
 - **Contracts.** Document caller-observable preconditions and postconditions on exported functions with concise `/** */` doc comments. State module-wide invariants once at the top of the file. Do not prescribe internal data structures or step-by-step control flow. Public API contract comments remain after implementation per `.agents/skills/no-comments/references/comment-sicko.md`.

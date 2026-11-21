@@ -11,6 +11,7 @@ import {
   DEFAULT_PM_MODE,
   DEFAULT_UI_PORT,
   DEFAULT_AGENT_VENDOR,
+  ENV_DB_SHARED_ACCESS,
   ENV_DEFAULT_MODEL,
   ENV_GITHUB_CLIENT_ID,
   ENV_PORT,
@@ -312,7 +313,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log(`${LOG_PREFIX} 回收上次残留的子进程出错：${error instanceof Error ? error.message : String(error)}`);
     }
     parts.uninstallProcessLedger = installProcessLedger(processLedger);
-    const { db, migration, autoVacuum } = openStore(paths);
+    const { db, migration, autoVacuum } = openStore(paths, { sharedAccess: env[ENV_DB_SHARED_ACCESS] === "1" });
     parts.db = db;
     const backupFile = autoVacuum.backupFile ?? migration.backupFile;
     if (autoVacuum.converted) {
