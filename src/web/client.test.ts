@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { API_REQUEST_TIMEOUT_MS, SLOW_API_REQUEST_TIMEOUT_MS, WS_CHECK_SILENCE_MS } from "../shared/index.ts";
 import { ApiError, createClient, fetchState, onUnauthorized, postMessage, postUpload } from "./client.ts";
+import { encodeChangeStreamQuery } from "../shared/change-stream.ts";
 import { openChangeStream } from "./connection.ts";
 import { errorText } from "./format.ts";
-import { FakeApi, FakeWebSocket, installFakeWebSocket, makeSnapshot, stubRequestTimeouts } from "./test-utils.ts";
+import { FakeApi, FakeWebSocket, installFakeWebSocket, makeSnapshot, stubRequestTimeouts, TEST_BOOT_ID } from "./test-utils.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -155,7 +156,7 @@ describe("请求超时（连接静默断了，请求挂在死连接上）", () =
     stubRequestTimeouts();
     hangingApi();
     installFakeWebSocket();
-    const close = openChangeStream({ url: (s) => `ws://x/api/ws?since=${s}`, getSince: () => 0, onMessage: () => {}, onStatus: () => {} });
+    const close = openChangeStream({ url: (cursor) => `ws://x/api/ws${encodeChangeStreamQuery(cursor)}`, getCursor: () => ({ bootId: TEST_BOOT_ID, seq: 0 }), onMessage: () => {}, onStatus: () => {} });
     FakeWebSocket.last.open();
     await vi.advanceTimersByTimeAsync(WS_CHECK_SILENCE_MS - API_REQUEST_TIMEOUT_MS + 1);
     const pending = caught(createClient(null).fetchPersona(1));

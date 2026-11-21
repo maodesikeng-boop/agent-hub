@@ -20,6 +20,7 @@ import {
   waitUntil,
   type E2eEnv,
   type RunningDaemon,
+  cursorOf,
 } from "./harness.ts";
 
 const quick = (text = "好的") => ({ steps: [{ text }] });
@@ -185,7 +186,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     const foo = folder("foo");
     env.setScript({ turns: [{ steps: [{ bash: `${HUB_COMMAND} project create --folder ${bashPathArg(foo)}` }, { text: "建好了" }] }], defaultTurn: quick("foo 里有一个 README") });
     const { daemon, client, state, privateId, pmId } = await boot();
-    const ws = await client.ws(state.seq);
+    const ws = await client.ws(cursorOf(state));
     const id = await client.post(privateId, `在 ${foo} 建项目`);
     await waitForStatus(client, id, "replied");
 
@@ -602,7 +603,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
 
     const daemon = await env.start();
     const client = first.client.withPort(daemon.port);
-    const ws = await client.ws((await client.state()).seq);
+    const ws = await client.ws(cursorOf(await client.state()));
     expect(await client.retry(id)).toBe(202);
     await waitForStatus(client, id, "replied");
     const statuses = ws.messages.flatMap((m) => (m.type === "message.updated" && m.data.message.id === id ? [m.data.message.status] : []));

@@ -31,6 +31,7 @@ import {
   type StateSnapshot,
   type WsServerMessage,
 } from "../../src/shared/index.ts";
+import { changeCursorFromSnapshot, encodeChangeStreamQuery, type ChangeCursor } from "../../src/shared/change-stream.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
 
 const MAIN = fileURLToPath(new URL("../../src/daemon/main.ts", import.meta.url));
@@ -426,8 +427,8 @@ export class Client {
   }
 
   /** 连 WebSocket，收到的推送都放进 messages。 */
-  async ws(since?: number): Promise<{ messages: WsServerMessage[]; close(): void }> {
-    const url = `ws://127.0.0.1:${new URL(this.base).port}${API_PATHS.ws}${since === undefined ? "" : `?since=${since}`}`;
+  async ws(cursor?: ChangeCursor): Promise<{ messages: WsServerMessage[]; close(): void }> {
+    const url = `ws://127.0.0.1:${new URL(this.base).port}${API_PATHS.ws}${cursor === undefined ? "" : encodeChangeStreamQuery(cursor)}`;
     const socket = new WebSocket(url, { headers: this.headers() });
     const messages: WsServerMessage[] = [];
     // 心跳（每 WS_HEARTBEAT_MS 一条）只证明连接还通，不算推送
@@ -440,6 +441,12 @@ export class Client {
     });
     return { messages, close: () => socket.close() };
   }
+}
+
+export function cursorOf(snapshot: StateSnapshot): ChangeCursor {
+  const cursor = changeCursorFromSnapshot(snapshot);
+  if (cursor === null) throw new Error("Expected a valid snapshot cursor");
+  return cursor;
 }
 
 export function messagesOf(state: StateSnapshot, conversationId: number): Message[] {

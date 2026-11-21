@@ -7,7 +7,7 @@ import {
   type WsClientMessage,
   type WsServerMessage,
 } from "../shared/index.ts";
-import type { ChangeCursor } from "../shared/change-stream.ts";
+import { isChangeSequence, type ChangeCursor } from "../shared/change-stream.ts";
 import { startPresence } from "./presence.ts";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting";
@@ -32,14 +32,16 @@ export function planSnapshotRecovery(
   snapshot: ChangeCursor,
   buffered: readonly Change[] | null,
 ): SnapshotRecovery {
-  throw new Error("Not implemented");
+  if (connection.signal.aborted) return { kind: "ignore" };
+  if (snapshot.bootId !== connection.requestedCursor.bootId || buffered === null) return { kind: "reconnect" };
+  return { kind: "apply", changes: buffered.filter((change) => change.seq > snapshot.seq) };
 }
 
 export interface ChangeStreamHandlers {
-  url(since: number): string;
-  getSince(): number;
-  onMessage(message: WsServerMessage): void;
-  onStatus(status: ConnectionStatus): void;
+  url(cursor: ChangeCursor): string;
+  getCursor(): ChangeCursor;
+  onMessage(message: WsServerMessage, connection: ChangeStreamConnection): void;
+  onStatus(status: ConnectionStatus, connection: ChangeStreamConnection | null): void;
   reportPresence?: boolean;
 }
 
@@ -61,7 +63,7 @@ export function parseServerMessage(data: unknown): WsServerMessage | null {
   if (typeof value !== "object" || value === null) return null;
   const { type, seq } = value as { type?: unknown; seq?: unknown };
   if (type === "resync") return { type: "resync" };
-  if (typeof seq !== "number" || !(CHANGE_TYPES as readonly unknown[]).includes(type)) return null;
+  if (!isChangeSequence(seq) || !(CHANGE_TYPES as readonly unknown[]).includes(type)) return null;
   return value as WsServerMessage;
 }
 
@@ -73,6 +75,7 @@ export function checkConnections(): void {
 
 export function openChangeStream(handlers: ChangeStreamHandlers): () => void {
   let socket: WebSocket | null = null;
+  let scope: AbortController | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   let lastSeenAt = 0;
@@ -88,44 +91,56 @@ export function openChangeStream(handlers: ChangeStreamHandlers): () => void {
     }, delay);
   };
 
-  const reconnect = (delay: number) => {
+  const retire = () => {
     clearTimeout(timer);
     clearTimeout(watchdog);
     stopPresence?.();
     stopPresence = undefined;
     const ws = socket;
     socket = null;
+    scope?.abort();
+    scope = null;
     if (ws) {
       ws.onopen = ws.onmessage = ws.onclose = null;
       ws.close();
-      handlers.onStatus("reconnecting");
     }
+    return ws !== null;
+  };
+
+  const reconnect = (delay: number) => {
+    if (retire()) handlers.onStatus("reconnecting", null);
+    if (closed) return;
     if (delay === 0) connect();
     else timer = setTimeout(connect, delay);
   };
 
   const connect = () => {
     timer = undefined;
-    const ws = new WebSocket(handlers.url(handlers.getSince()));
+    const requestedCursor = handlers.getCursor();
+    const ws = new WebSocket(handlers.url(requestedCursor));
+    scope = new AbortController();
+    const connection = { requestedCursor, signal: scope.signal };
     socket = ws;
     lastSeenAt = Date.now();
     armWatchdog(WS_STALE_MS);
     ws.onopen = () => {
+      if (connection.signal.aborted) return;
       attempt = 0;
       lastSeenAt = Date.now();
-      handlers.onStatus("open");
       if (handlers.reportPresence) {
         stopPresence?.();
         stopPresence = startPresence((message) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message satisfies WsClientMessage));
         });
       }
+      handlers.onStatus("open", connection);
     };
     ws.onmessage = (ev) => {
+      if (connection.signal.aborted) return;
       lastSeenAt = Date.now();
       if (ev.data === WS_HEARTBEAT_TEXT) return;
       const message = parseServerMessage(ev.data);
-      if (message) handlers.onMessage(message);
+      if (message) handlers.onMessage(message, connection);
     };
     ws.onclose = () => {
       if (closed || socket !== ws) return;
@@ -147,7 +162,7 @@ export function openChangeStream(handlers: ChangeStreamHandlers): () => void {
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("online", onOnline);
 
-  handlers.onStatus("connecting");
+  handlers.onStatus("connecting", null);
   connect();
 
   return () => {
@@ -155,11 +170,6 @@ export function openChangeStream(handlers: ChangeStreamHandlers): () => void {
     checks.delete(check);
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("online", onOnline);
-    stopPresence?.();
-    clearTimeout(timer);
-    clearTimeout(watchdog);
-    const ws = socket;
-    socket = null;
-    ws?.close();
+    retire();
   };
 }

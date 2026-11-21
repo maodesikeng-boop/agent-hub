@@ -108,7 +108,7 @@ export interface LedgerContextOptions {
 
 export function createLedgerContext(db: Db, options: LedgerContextOptions): LedgerContext {
   const now = options.now ?? Date.now;
-  const log = createChangeLog(options.initialSeq ?? Date.now(), options.changeBufferSize ?? CHANGE_BUFFER_SIZE);
+  const log = createChangeLog(options.initialSeq ?? 0, options.changeBufferSize ?? CHANGE_BUFFER_SIZE);
   const changeListeners = new Set<(change: Change) => void>();
   const actionListeners = new Set<(action: AnyActionRow) => void>();
   const stopListeners = new Set<(event: StopEvent) => void>();

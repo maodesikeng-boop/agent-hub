@@ -82,7 +82,7 @@ export interface LedgerOptions {
   deviceName?: () => string;
   models?: LedgerContextOptions["models"];
   knownCommands?: LedgerContextOptions["knownCommands"];
-  /** Starting seq is the startup timestamp in ms so it is always above any seq used by a previous run. */
+  /** Fixture override for the first seq; production starts each boot at 0 and clients scope seq by the UI server boot ID. */
   initialSeq?: number;
   changeBufferSize?: number;
   osSandboxed?: LedgerContextOptions["osSandboxed"];

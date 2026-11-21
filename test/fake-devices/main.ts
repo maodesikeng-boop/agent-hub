@@ -5,6 +5,7 @@
 //   curl -X POST http://127.0.0.1:4999/__fake/offline            # 让东京掉线（关 WebSocket，之后的请求 502 device_offline）
 //   curl -X POST http://127.0.0.1:4999/__fake/online             # 东京恢复
 // 接口形状照 src/shared/api.ts：本机 /api/...，东京 /d/<设备编号>/api/...，设备清单 GET /api/devices。
+import { randomUUID } from "node:crypto";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import { parseArgs } from "node:util";
@@ -20,6 +21,7 @@ import {
   type Pm,
   type StateSnapshot,
 } from "../../src/shared/index.ts";
+import { resolveChangeStreamRequest } from "../../src/shared/change-stream.ts";
 import { keepAlive } from "../../src/daemon/ws-keepalive.ts";
 
 const MAC_ID = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
@@ -61,6 +63,7 @@ function conversation(id: number, pmId: number, title: string, messages: Message
 function snapshot(platform: string, pms: Pm[], conversations: ConversationSnapshot[]): StateSnapshot {
   return {
     seq: 10,
+    bootId: randomUUID(),
     pms,
     projects: [],
     folders: [],
@@ -134,7 +137,11 @@ function routes(prefix: string, state: StateSnapshot, platform: string, isTokyo:
   app.addHook("onRequest", async (req, reply) => {
     if (req.url.split("?")[0] === ws && offline()) await reply.code(502).send(offlineReply);
   });
-  app.get(ws, { websocket: true }, (socket) => {
+  app.get(ws, { websocket: true }, (socket, req) => {
+    const stream = resolveChangeStreamRequest(new URL(req.url, "http://localhost").searchParams, state.bootId!);
+    if (stream.kind === "resync" || (stream.kind === "replay" && stream.since !== state.seq)) {
+      socket.send(JSON.stringify({ type: "resync" }));
+    }
     // 跟真的一样发心跳：不然网页 WS_STALE_MS 收不到消息就当断了重连
     keepAlive(socket);
     if (isTokyo) {
