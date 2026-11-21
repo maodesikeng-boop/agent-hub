@@ -152,7 +152,7 @@ export function endIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArgs
     ended.workspace === "worktree" && ended.review_json !== null
       ? ` ${worktreeLabel(ended)}会自动删掉。`
       : ended.workspace === "worktree"
-        ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree（分支保留；还有 Worker 接着用这个目录、或它经手的任务图还没结束时不清）。`
+        ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree，已合并的分支会在之后自动清理（还有 Worker 接着用这个目录、或它经手的任务图还没结束时不清）。`
         : "";
   const interruptNote = interrupted ? "已打断正在跑的那一轮。" : "";
   return {

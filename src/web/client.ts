@@ -73,6 +73,10 @@ import {
   type PutProjectSetupCommandResponse,
   type QuotaResponse,
   type RenewSessionResponse,
+  type ResourceCleanupResponse,
+  type ResourceDecisionRequest,
+  type ResourceDecisionResponse,
+  type ResourcesSnapshot,
   type ResolveRouterItemRequest,
   type ResolveRouterItemResponse,
   type RecheckUserBlockerResponse,
@@ -287,6 +291,15 @@ export function createClient(device: DeviceId | null) {
     fetchModels: (options: { refresh?: typeof REFRESH_UNUSABLE } = {}) =>
       request<ModelsResponse>(at(options.refresh ? `${API_PATHS.models}?refresh=${options.refresh}` : API_PATHS.models), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
+    fetchResources: (options: { refresh?: boolean } = {}) =>
+      request<ResourcesSnapshot>(
+        at(options.refresh ? `${API_PATHS.resources}?refresh=1` : API_PATHS.resources),
+        undefined,
+        SLOW_API_REQUEST_TIMEOUT_MS,
+      ),
+    postResourceDecision: (body: ResourceDecisionRequest) =>
+      postJson<ResourceDecisionResponse>(at(API_PATHS.resourceDecision), body, SLOW_API_REQUEST_TIMEOUT_MS),
+    postResourceCleanup: () => postJson<ResourceCleanupResponse>(at(API_PATHS.resourceCleanup), {}, SLOW_API_REQUEST_TIMEOUT_MS),
     fetchVendorSyncPreview: () => request<VendorSyncPreviewResponse>(at(API_PATHS.vendorSyncPreview), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     postVendorSyncApply: (body: VendorSyncApplyRequest) => postJson<VendorSyncApplyResponse>(at(API_PATHS.vendorSyncApply), body, SLOW_API_REQUEST_TIMEOUT_MS),
     ...providerRoutes(at),

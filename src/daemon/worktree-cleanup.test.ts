@@ -127,7 +127,7 @@ describe("worktree 自动清理", () => {
     git(repo, "merge", "--no-ff", "-q", "-m", "Merge PR", w.branch!);
 
     const endText = endWorker(w.id);
-    expect(endText).toContain("PR 合并后或收工满 3 天且没有未提交改动时会自动清理 worktree（分支保留；");
+    expect(endText).toContain("PR 合并后或收工满 3 天且没有未提交改动时会自动清理 worktree，已合并的分支会在之后自动清理（");
 
     // 刚收工 1 分钟（远未满 3 天）
     now += 60_000;
@@ -689,8 +689,8 @@ process.exit(res.status ?? 1);
     endWorker(wFresh.id);
     writeFileSync(countFile, "");
     expect(await emptyCleanup.runOnce()).toEqual([]);
-    // for-each-ref + merge-base（登记分支）、rev-parse HEAD + for-each-ref + merge-base（实际 HEAD）：都只读引用，不跑 git status
-    expect(countCalls()).toBe(5);
+    // for-each-ref + merge-base（祖先与 squash 检查，main 未推进时跳过 commit-tree）、rev-parse HEAD + for-each-ref + merge-base：都只读引用，不跑 git status
+    expect(countCalls()).toBe(7);
     git(repo, "worktree", "remove", wFresh.worktreePath!);
 
     // 建 4 个已收工满 3 天的 worktree：前 2 个有未提交改动（删不掉），后 2 个干净（可删），设 batchLimit = 2
@@ -1091,5 +1091,41 @@ describe("删到一半之后下一轮能接着删完", () => {
     expect(readFileSync(join(wUntracked.worktreePath!, "notes.md"), "utf8")).toBe("mine\n");
     expect(existsSync(wStagedDelete.worktreePath!)).toBe(true);
     expect(git(repo, "log", "-1", "--format=%s", wUnmerged.branch!)).toBe("feature");
+  });
+
+  it("squash-merged worktree cleans up immediately; dirty held worktree surfaces via inspectHeldWorktrees and removes cleanly via discardWorktree", async () => {
+    const wSquash = await spawnWorktreeWorker("squash PR");
+    writeFileSync(join(wSquash.worktreePath!, "sq.ts"), "export const x = 1;\n");
+    git(wSquash.worktreePath!, "add", "-A");
+    git(wSquash.worktreePath!, "commit", "-q", "-m", "squash feat");
+    endWorker(wSquash.id);
+    git(repo, "merge", "--squash", wSquash.branch!);
+    git(repo, "commit", "-q", "-m", "squash merge");
+
+    const wDirty = await spawnWorktreeWorker("dirty work");
+    writeFileSync(join(wDirty.worktreePath!, "draft.md"), "unsaved draft\n");
+    endWorker(wDirty.id);
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([wSquash.id]);
+    expect(existsSync(wSquash.worktreePath!)).toBe(false);
+    expect(existsSync(wDirty.worktreePath!)).toBe(true);
+
+    const held = await cleanup.inspectHeldWorktrees();
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({
+      kind: "worktree",
+      workerId: wDirty.id,
+      reason: "untracked_files",
+      branch: wDirty.branch,
+      samplePaths: ["draft.md"],
+    });
+    expect(held[0]!.bytes).toBeGreaterThan(0);
+
+    const discarded = await cleanup.discardWorktree(wDirty.id, { deleteBranch: true });
+    expect(discarded.removedBytes).toBeGreaterThan(0);
+    expect(existsSync(wDirty.worktreePath!)).toBe(false);
+    expect(branchExists(wDirty.branch!)).toBe(false);
+    expect(await cleanup.inspectHeldWorktrees()).toEqual([]);
   });
 });

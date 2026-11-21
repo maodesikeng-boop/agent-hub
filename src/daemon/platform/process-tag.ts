@@ -47,8 +47,9 @@ function splitTagTokens(raw: string): string[] {
 function findMatchingTagToken(envValue: string, tag: string): string | null {
   if (envValue === "" || tag === "") return null;
   const isPrefix = tag.endsWith(":");
+  const isSuffix = !isPrefix && tag.startsWith(":");
   for (const token of splitTagTokens(envValue)) {
-    if (isPrefix ? token.startsWith(tag) : token === tag) return token;
+    if (isPrefix ? token.startsWith(tag) : isSuffix ? token.endsWith(tag) : token === tag) return token;
   }
   return null;
 }

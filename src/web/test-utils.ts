@@ -60,6 +60,10 @@ import type {
   PutPmMemoryFileRequest,
   PutProjectSetupCommandRequest,
   RecheckUserBlockerResponse,
+  ResourceCleanupResponse,
+  ResourceDecisionRequest,
+  ResourceDecisionResponse,
+  ResourcesSnapshot,
   ResolveRouterItemRequest,
   RouterItemsPage,
   SessionState,
@@ -531,6 +535,10 @@ export class FakeApi {
   /** GET /api/update and POST /api/update/check. Defaults to 404, so the sidebar shows no update badge. */
   update: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   updateCheck: () => Reply | Promise<Reply> = () => this.update();
+  /** GET /api/resources, POST /api/resources/decision, and POST /api/resources/cleanup. Defaults to 404 so existing tests get no attention badge. */
+  resources: (_query: URLSearchParams, _device: string | null) => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
+  resourceDecision: (_body: ResourceDecisionRequest, _device: string | null) => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
+  resourceCleanup: (_device: string | null) => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */
   pickFolder: (body: PickFolderRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { path: "/Users/me/picked" } });
   /** GET /api/router/digest。 */
@@ -1019,6 +1027,14 @@ export class FakeApi {
     if (method === "GET" && url.pathname === "/api/quota") return jsonResponse(await this.quota());
     if (method === "GET" && url.pathname === API_PATHS.update) return jsonResponse(await this.update());
     if (method === "POST" && url.pathname === API_PATHS.updateCheck) return jsonResponse(await this.updateCheck());
+    const resourcesMatch = /^(?:\/d\/([^/]+))?\/api\/resources(?:\/(decision|cleanup))?$/.exec(url.pathname);
+    if (resourcesMatch) {
+      const device = resourcesMatch[1] ?? null;
+      const sub = resourcesMatch[2];
+      if (sub === undefined && method === "GET") return jsonResponse(await this.resources(url.searchParams, device));
+      if (sub === "decision" && method === "POST") return jsonResponse(await this.resourceDecision(body, device));
+      if (sub === "cleanup" && method === "POST") return jsonResponse(await this.resourceCleanup(device));
+    }
     if (method === "GET" && url.pathname === "/api/conversations/lookup") return jsonResponse(await this.lookup(url.searchParams));
     const ended = /^\/api\/pms\/(\d+)\/ended-workers$/.exec(url.pathname);
     if (method === "GET" && ended) {

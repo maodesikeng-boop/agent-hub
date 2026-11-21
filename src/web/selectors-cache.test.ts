@@ -40,6 +40,7 @@ import {
 } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
 import { downloadOfferOf, updateReminderOf } from "./update-model.ts";
+import { describeResourcesSummary, partitionHeldResources } from "./resources-model.ts";
 import { changeOf, makeCapabilitiesView, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
 const WORKERS = 300;
@@ -839,5 +840,67 @@ describe("update reminder", () => {
     expect(updateReminderOf(status, "0.3.0")).toBeNull();
     expect(updateReminderOf({ ...status, installKind: "source" }, null)).toBeNull();
     expect(updateReminderOf(undefined, null)).toBeNull();
+  });
+});
+
+describe("resources selectors", () => {
+  it("caches describeResourcesSummary and partitionHeldResources per input object reference", () => {
+    const held = [
+      {
+        kind: "worktree" as const,
+        targetKey: "1",
+        reason: "uncommitted_changes" as const,
+        label: "#1 Edit",
+        projectId: 1,
+        projectName: "demo",
+        bytes: 1024,
+        detectedAt: 1_000,
+        samplePaths: ["a.ts"],
+        keptAt: null,
+        workerId: 1,
+        branch: "hub/1-edit",
+        worktreePath: "/tmp/wt/1/1",
+        dirtyCount: 1,
+      },
+      {
+        kind: "worktree" as const,
+        targetKey: "2",
+        reason: "untracked_files" as const,
+        label: "#2 Draft",
+        projectId: 1,
+        projectName: "demo",
+        bytes: 2048,
+        detectedAt: 2_000,
+        samplePaths: ["draft.md"],
+        keptAt: 3_000,
+        workerId: 2,
+        branch: "hub/2-draft",
+        worktreePath: "/tmp/wt/1/2",
+        dirtyCount: 1,
+      },
+    ];
+    const snapshot = {
+      scannedAt: 4_000,
+      database: { fileBytes: 4096, walBytes: 0, freelistBytes: 0, dbstatAvailable: true, tables: [] },
+      directories: [],
+      branches: [],
+      processes: { trackedCount: 1, leakedCount: 0 },
+      held,
+      heldTruncated: false,
+      totalDiskBytes: 8192,
+      attentionCount: 1,
+    };
+    const summary = describeResourcesSummary(snapshot);
+    expect(describeResourcesSummary(snapshot)).toBe(summary);
+    expect(summary).toEqual({ summary: "1 held", attention: true, heldCount: 1 });
+    expect(describeResourcesSummary({ ...snapshot, held: [held[1]!], attentionCount: 0 })).toEqual({
+      summary: "8.0 KB",
+      attention: false,
+      heldCount: 0,
+    });
+    const partitioned = partitionHeldResources(held);
+    expect(partitionHeldResources(held)).toBe(partitioned);
+    expect(partitioned.needsDecision).toHaveLength(1);
+    expect(partitioned.kept).toHaveLength(1);
   });
 });

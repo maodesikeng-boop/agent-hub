@@ -149,3 +149,19 @@ Trigger: `src/shared/errors.ts`, `src/shared/hub.ts`, `src/shared/ledger.ts`, `s
 Check: A new error code has an HTTP status in `LEDGER_ERROR_HTTP_STATUS`, user-facing text, and handling in both the daemon and the `hub` command. The status table test covers it.
 
 Seen in: `c69b3b94`, `d91bb4d1`
+
+### Persisted fields have a reader and dual retention bounds
+
+Trigger: `migrations/**`, `src/daemon/ledger/**`, `src/daemon/feishu/store.ts`, `src/daemon/file-cleanup.ts`, `src/shared/resource-registry.ts`
+
+Check: Every newly persisted column, JSON field, or artifact directory has a live production reader (no write-only blobs such as raw tool inputs or consumed handover preambles). Every growing table or directory is registered in `RESOURCE_REGISTRY` with both age and count or byte caps in `src/shared/limits.ts`, and retention tests seed realistic production volumes and message distributions.
+
+Seen in: `01ec18ad`, `9c3254de`
+
+### Detached child processes and temp dirs stay inside the session boundary
+
+Trigger: `src/daemon/launch.ts`, `src/daemon/handlers.ts`, `src/daemon/setup/**`, `src/daemon/driver/**`, `src/daemon/platform/process-tag.ts`, `src/daemon/session-tmp.ts`, `src/daemon/worktree-cleanup.ts`, `src/daemon/resources/**`, `scripts/**`
+
+Check: Every Worker and setup subprocess inherits `ENV_SESSION_OWNER_TAG` and a private `SessionTmpStore` directory (bound onto `/tmp` inside Linux `bwrap`, owned by a kill-on-close Job Object on Windows) so detached grandchildren and nested test daemons are reaped on session exit. Cleanup failures or held dirty worktrees surface to the user instead of logging repeated silent skips.
+
+Seen in: `600067d6`, `60e0ab75`, `ac55c10f`

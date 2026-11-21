@@ -214,6 +214,7 @@ describe("一级设置主页", () => {
     expect(screen.getByRole("region", { name: "General" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Capabilities" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Resources" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Computers" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Security & Access" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent(/On$/);
@@ -649,5 +650,50 @@ describe("Updates page", () => {
     expect(await screen.findByRole("button", { name: /^Updates/ })).toHaveTextContent("v0.2.0");
     expect(screen.queryByTestId("update-attention")).toBeNull();
     expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(1);
+  });
+
+  it("Resources: home row reads cached summary with zero requests and opens #/settings/resources", async () => {
+    const api = new FakeApi(makeSnapshot({}));
+    const resourcesSnap = {
+      scannedAt: 1_000,
+      database: { fileBytes: 5 * 1024 * 1024, walBytes: 0, freelistBytes: 0, dbstatAvailable: true, tables: [] },
+      directories: [],
+      branches: [],
+      processes: { trackedCount: 1, leakedCount: 0 },
+      held: [
+        {
+          kind: "worktree" as const,
+          targetKey: "9",
+          reason: "uncommitted_changes" as const,
+          label: "#9 Fix",
+          projectId: 1,
+          projectName: "bellwood",
+          bytes: 1024,
+          detectedAt: 1_000,
+          samplePaths: ["a.ts"],
+          keptAt: null,
+          workerId: 9,
+          branch: "hub/9-fix",
+          worktreePath: "/tmp/wt/1/9",
+          dirtyCount: 1,
+        },
+      ],
+      heldTruncated: false,
+      totalDiskBytes: 5 * 1024 * 1024,
+      attentionCount: 1,
+    };
+    api.resources = () => ({ status: 200, body: resourcesSnap });
+    api.install();
+    queryClient.setQueryData(["resources", ""], resourcesSnap);
+    renderSettings("#/settings");
+    const row = within(screen.getByRole("region", { name: "Resources" })).getByRole("button", { name: /^Resources/ });
+    expect(row).toHaveTextContent("1 held");
+    expect(screen.getByTestId("resources-attention")).toBeInTheDocument();
+    expect(api.calls).toEqual([]);
+
+    fireEvent.click(row);
+    expect(location.hash).toBe("#/settings/resources");
+    expect(await screen.findByRole("heading", { level: 1, name: "Resources" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Needs attention" })).toBeInTheDocument();
   });
 });

@@ -77,10 +77,10 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     }
   });
 
-  it("切到别的分类（General、Capabilities、Computers）右栏同一套约束", async () => {
+  it("切到别的分类（General、Capabilities、Resources、Computers）右栏同一套约束", async () => {
     const user = userEvent.setup();
     render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} />);
-    for (const name of ["General", "Capabilities", "Computers"]) {
+    for (const name of ["General", "Capabilities", "Resources", "Computers"]) {
       await user.click(screen.getByRole("tab", { name }));
       const panel = screen.getByRole("tabpanel", { name });
       expect(classOf(panel)).toContain("min-w-0");

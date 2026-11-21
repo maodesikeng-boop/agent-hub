@@ -45,6 +45,7 @@ import { startFileCleanup } from "./file-cleanup.ts";
 import { createDaemonSessionScope } from "./session-tmp.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
 import { startWorktreeCleanup, type WorktreeCleanup } from "./worktree-cleanup.ts";
+import { startDaemonResources } from "./resources/index.ts";
 import {
   projectWorktreesDir,
   resolveHubPaths,
@@ -622,19 +623,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     purgeArchivedPms();
     parts.archiveCleanup = setInterval(purgeArchivedPms, PM_ARCHIVE_CLEANUP_INTERVAL_MS);
     const feishuOfflineInbox = createFeishuOfflineInbox(db);
-    parts.stopWorkerRetention = startWorkerRetention({
-      ledger,
-      db,
-      feishuPosts: createFeishuStore(db),
-      feishuOfflineInbox,
-      log,
-    });
-    parts.worktreeCleanup = startWorktreeCleanup({
-      ledger,
-      worktreesDir,
-      extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
-      log,
-    });
+    const feishuPostsStore = createFeishuStore(db);
+    parts.stopWorkerRetention = startWorkerRetention({ ledger, db, feishuPosts: feishuPostsStore, feishuOfflineInbox, log });
+    parts.worktreeCleanup = startWorktreeCleanup({ ledger, worktreesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
+    const resources = startDaemonResources({ db, paths, ledger, worktrees: parts.worktreeCleanup, sessionScope, processLedger, feishuPosts: feishuPostsStore, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
+    parts.unsubscribe.push(() => resources.stop());
     const runAutoRenew = () => {
       try {
         ledger.runAutoRenew();
@@ -1024,6 +1017,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       },
       routerDispatcher,
       routerLocalPort,
+      resources: resources.inspector,
       ...(parts.selfReload ? { selfReload: parts.selfReload } : {}),
       ...(options.folderPicker ? { folderPicker: options.folderPicker } : {}),
     });

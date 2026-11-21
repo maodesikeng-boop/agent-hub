@@ -1,5 +1,6 @@
 export {
   addWorktree,
+  countCommitsAheadOfMain,
   deleteLocalBranch,
   GIT_READONLY_ARGS,
   GIT_READONLY_ENV,

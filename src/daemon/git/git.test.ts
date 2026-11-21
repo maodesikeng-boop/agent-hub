@@ -7,12 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import {
   addWorktree,
+  deleteLocalBranch,
   GitError,
   hasUncommittedChanges,
   inspectWorktreeLink,
   isBranchMergedToMain,
+  isBranchSquashMergedToMain,
   isCommitMergedToMain,
   isRepoWithCommit,
+  listLocalBranches,
   moveWorktree,
   parseDiffNumstatZ,
   pinDetachedHead,
@@ -41,7 +44,10 @@ beforeEach(() => {
   emptyGitConfig = join(root, ".empty-gitconfig");
   writeFileSync(emptyGitConfig, "");
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(root, { recursive: true, force: true });
+});
 
 function makeRepo(name: string, { commit = true } = {}): string {
   const dir = join(root, name);
@@ -626,5 +632,44 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     expect((await probeOrphanContent(repo, emptyShell, "refs/heads/no-such-ref")).kind).toBe("failed");
     expect((await probeOrphanContent(join(root, "not-a-repo"), emptyShell, null)).kind).toBe("failed");
     expect(readdirSync(isolatedTmp)).toEqual([]);
+  });
+
+  it("isBranchSquashMergedToMain detects squash-merged PRs, listLocalBranches annotates checkouts, and deleteLocalBranch guards protected branches", async () => {
+    const repo = makeRepo("squash-test");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-b", "hub/10-squash");
+    writeFileSync(join(repo, "feat.txt"), "line1\n");
+    git(repo, "add", "feat.txt");
+    git(repo, "commit", "-q", "-m", "part 1");
+    writeFileSync(join(repo, "feat.txt"), "line1\nline2\n");
+    git(repo, "add", "feat.txt");
+    git(repo, "commit", "-q", "-m", "part 2");
+
+    git(repo, "checkout", "main");
+    expect(await isBranchSquashMergedToMain(repo, "hub/10-squash", base)).toBe(false);
+
+    git(repo, "merge", "--squash", "hub/10-squash");
+    git(repo, "commit", "-q", "-m", "squash feat");
+    expect(await isBranchMergedToMain(repo, "hub/10-squash", base)).toBe(false);
+    expect(await isBranchSquashMergedToMain(repo, "hub/10-squash", base)).toBe(true);
+
+    git(repo, "checkout", "-b", "hub/11-unmerged");
+    writeFileSync(join(repo, "wip.txt"), "wip\n");
+    git(repo, "add", "wip.txt");
+    git(repo, "commit", "-q", "-m", "wip");
+    git(repo, "checkout", "main");
+    expect(await isBranchSquashMergedToMain(repo, "hub/11-unmerged", base)).toBe(false);
+
+    const wtPath = join(root, "wt-12");
+    await addWorktree({ repoFolder: repo, worktreePath: wtPath, branch: "hub/12-wt" });
+    const listed = await listLocalBranches(repo, "hub/");
+    expect(listed.map((b) => b.name).sort()).toEqual(["hub/10-squash", "hub/11-unmerged", "hub/12-wt"]);
+    expect(listed.find((b) => b.name === "hub/12-wt")?.checkedOutPath).not.toBeNull();
+    expect(listed.find((b) => b.name === "hub/10-squash")?.checkedOutPath).toBeNull();
+
+    await expect(deleteLocalBranch(repo, "main", { force: true })).rejects.toThrow(GitError);
+    await expect(deleteLocalBranch(repo, "hub/12-wt", { force: true })).rejects.toThrow(GitError);
+    await deleteLocalBranch(repo, "hub/10-squash", { force: true });
+    expect((await listLocalBranches(repo, "hub/")).map((b) => b.name)).not.toContain("hub/10-squash");
   });
 });

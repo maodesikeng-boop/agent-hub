@@ -7,6 +7,7 @@ export {
   type ManagedBranchProject,
   type ManagedBranchWorkerRef,
 } from "./branch-cleanup.ts";
+export { startDaemonResources, type DaemonResourcesHandle, type DaemonResourcesOptions } from "./daemon-wiring.ts";
 export {
   createResourceDecisionsStore,
   type ResourceDecisionRow,
