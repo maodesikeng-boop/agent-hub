@@ -71,7 +71,11 @@ describe("ledger file lock", () => {
     const other = spawn(process.execPath, ["-e", HOLD_OPEN, paths.dbFile], { stdio: ["pipe", "pipe", "inherit"] });
     const exited = once(other, "exit");
     try {
-      await once(other.stdout.setEncoding("utf8"), "data");
+      const ready = await Promise.race([
+        once(other.stdout.setEncoding("utf8"), "data").then(([line]) => String(line).trim()),
+        exited.then(([code, signal]) => `exited early with ${code ?? signal}`),
+      ]);
+      expect(ready).toBe("open");
       expect(() => openStore(paths)).toThrow(expect.objectContaining({ name: StartupError.name, code: "ledger_locked", detail: paths.dbFile }));
     } finally {
       other.stdin.end();
