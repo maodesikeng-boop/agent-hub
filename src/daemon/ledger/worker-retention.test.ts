@@ -1,4 +1,4 @@
-// 已收工 Worker 的对话保留期（worker-retention.ts）：满 30 天删、未满不删、在跑不删、项目经理不删、分批上限、基本记录仍可查。
+// 已收工 Worker 的对话保留期（worker-retention.ts）：满 14 天或超过 300 个删、未满不删、在跑不删、项目经理不删、分批上限、基本记录仍可查。
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
