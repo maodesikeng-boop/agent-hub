@@ -16,7 +16,7 @@ import {
   countCommitsAheadOfMain,
   deleteLocalBranch,
   isBranchSquashMergedToMain,
-  isCommitMergedToMain,
+  listBranchesMergedInto,
   listLocalBranches,
   realpathLoose,
   resolveMainTargetCommits,
@@ -151,13 +151,16 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
   // Keyed by (repo, branch commit, main commits): any new commit on either side changes the key, so entries never go stale.
   const verdicts = new LRUCache<string, BranchVerdict>({ max: BRANCH_VERDICT_CACHE_MAX });
 
-  const verdictFor = async (repoFolder: string, branch: { name: string; commit: string }, targetsKey: string): Promise<BranchVerdict> => {
+  const verdictFor = async (
+    repoFolder: string,
+    branch: { name: string; commit: string },
+    targetsKey: string,
+    mergedByAncestry: ReadonlySet<string>,
+  ): Promise<BranchVerdict> => {
     const key = `${normalizeRepo(repoFolder)}\0${branch.commit}\0${targetsKey}`;
     const cached = verdicts.get(key);
     if (cached !== undefined) return cached;
-    const merged =
-      (await isCommitMergedToMain(repoFolder, branch.commit, git)) ||
-      (await isBranchSquashMergedToMain(repoFolder, branch.name, null, git));
+    const merged = mergedByAncestry.has(branch.name) || (await isBranchSquashMergedToMain(repoFolder, branch.name, null, git));
     const verdict = { merged, commitsAhead: merged ? 0 : await countCommitsAheadOfMain(repoFolder, branch.name, git) };
     verdicts.set(key, verdict);
     return verdict;
@@ -167,9 +170,12 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
     if (!existsSync(project.repoFolder)) return null;
     let branches;
     let targetsKey: string;
+    let mergedByAncestry: Set<string>;
     try {
       branches = await listLocalBranches(project.repoFolder, MANAGED_BRANCH_PREFIX, git);
-      targetsKey = (await resolveMainTargetCommits(project.repoFolder, git)).join(",");
+      const targets = await resolveMainTargetCommits(project.repoFolder, git);
+      targetsKey = targets.join(",");
+      mergedByAncestry = await listBranchesMergedInto(project.repoFolder, targets, MANAGED_BRANCH_PREFIX, git);
     } catch (error) {
       log(`${LOG_PREFIX} 扫描受管分支失败（${project.repoFolder}）：${error instanceof Error ? error.message : String(error)}`);
       return null;
@@ -193,7 +199,7 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
       const endedAt = latest?.endedAt ?? 0;
       let verdict: BranchVerdict;
       try {
-        verdict = await verdictFor(project.repoFolder, branch, targetsKey);
+        verdict = await verdictFor(project.repoFolder, branch, targetsKey, mergedByAncestry);
       } catch (error) {
         log(`${LOG_PREFIX} 检查分支合并状态失败（${branch.name}）：${error instanceof Error ? error.message : String(error)}`);
         continue;

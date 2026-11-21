@@ -24,6 +24,7 @@ export {
   countCommitsAheadOfMain,
   deleteLocalBranch,
   isBranchSquashMergedToMain,
+  listBranchesMergedInto,
   listLocalBranches,
   resolveMainTargetCommits,
 } from "./branches.ts";

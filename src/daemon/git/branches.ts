@@ -30,6 +30,30 @@ export async function resolveMainTargetCommits(repoFolder: string, options: GitO
   return [...new Set(run.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== ""))].sort();
 }
 
+/**
+ * Precondition: repoFolder is a git repository and targetCommits came from resolveMainTargetCommits.
+ * Postcondition: returns the names of local branches under prefix whose tip is already contained in one of targetCommits, using one git call per target.
+ */
+export async function listBranchesMergedInto(
+  repoFolder: string,
+  targetCommits: readonly string[],
+  prefix: string,
+  options: GitOptions = {},
+): Promise<Set<string>> {
+  const merged = new Set<string>();
+  for (const target of targetCommits) {
+    const run = await runGit(
+      repoFolder,
+      [...GIT_READONLY_ARGS, "for-each-ref", `--merged=${target}`, "--format=%(refname:short)", `refs/heads/${prefix}`],
+      options.timeoutMs ?? GIT_TIMEOUT_MS,
+      PROBE_ENV,
+    );
+    if (run.code !== 0) throw failedGit("git for-each-ref --merged", run);
+    for (const line of run.stdout.split("\n")) if (line.trim() !== "") merged.add(line.trim());
+  }
+  return merged;
+}
+
 async function resolveBranchAndTargets(repoFolder: string, branchRef: string, timeoutMs: number): Promise<{ branchCommit: string | null; targetCommits: string[] }> {
   const run = await runGit(
     repoFolder,
