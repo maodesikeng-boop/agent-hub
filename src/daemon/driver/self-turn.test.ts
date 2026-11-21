@@ -72,12 +72,12 @@ describe("claude 自己开的一轮", () => {
     expect(h.of("turn.ended")[2]).toMatchObject({ messageIds: [2], ok: true });
   });
   it("排队的消息等 prepareLaunch 的时候 claude 自己开了一轮：写之前重查忙，消息留在队列里，等这一轮结束才写", async () => {
-    let slow = false;
+    let holdUntilSelfTurn = false;
     h = makeHarness({
       script: { turns: [{ steps: [{ text: "在等" }], selfTurn: { steps: [{ sleepMs: 500 }, { text: "后台好了" }], afterMs: 50 } }, { steps: [{ text: "收到" }] }] },
       driver: {
         prepareLaunch: async (row) => {
-          if (slow) await new Promise((r) => setTimeout(r, 300));
+          if (holdUntilSelfTurn) await h!.waitFor("turn.started");
           return { promptFile: join(h!.dir, "prompt.md"), env: {}, fingerprint: String(row.id) };
         },
       },
@@ -86,8 +86,8 @@ describe("claude 自己开的一轮", () => {
     const s = h.addSession();
     await h.driver.send(s.id, user(1, "开始"));
     await h.waitFor("turn.ended");
-    slow = true;
-    // prepareLaunch 的 300 毫秒里，假 claude 的自己开的一轮（50 毫秒后）开始了
+    holdUntilSelfTurn = true;
+    // Holding prepareLaunch until the self-started turn is seen keeps this independent of runner speed.
     await expect(h.driver.send(s.id, user(2, "再来一句"))).resolves.toEqual({ kind: "queued" });
     await h.waitFor("turn.ended", () => true, 3);
     const order = h.events.map((e) => e.event.type + (e.event.type === "turn.ended" ? `:${e.event.messageIds.join()}` : ""));
