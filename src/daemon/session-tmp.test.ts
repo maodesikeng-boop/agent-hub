@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SESSION_TMP_DIR_PREFIX, SESSION_TMP_ORPHAN_RETENTION_MS } from "../shared/limits.ts";
-import { createSessionTmpStore, shortOsTmpRoot } from "./session-tmp.ts";
+import { createDaemonSessionScope, createSessionTmpStore, shortOsTmpRoot } from "./session-tmp.ts";
 
 let root: string;
 let ledgerFile: string;
@@ -38,6 +38,8 @@ describe("SessionTmpStore", () => {
     const allocated = store.allocate(42);
     expect(existsSync(allocated)).toBe(true);
     expect(basename(allocated).startsWith(SESSION_TMP_DIR_PREFIX)).toBe(true);
+    expect(basename(allocated).startsWith(store.ownerPrefix)).toBe(true);
+    expect(store.isSessionTmpPath(join(allocated, "vitest", "cache"))).toBe(true);
     if (process.platform !== "win32") {
       expect(statSync(allocated).mode & 0o777).toBe(0o700);
     }
@@ -80,8 +82,8 @@ describe("SessionTmpStore", () => {
     const deadDir = store.allocate(2);
 
     // Unmanaged stale orphan (older than SESSION_TMP_ORPHAN_RETENTION_MS) and fresh unmanaged dir.
-    const staleOrphan = join(tmpRoot, `${SESSION_TMP_DIR_PREFIX}stale-orphan`);
-    const freshOrphan = join(tmpRoot, `${SESSION_TMP_DIR_PREFIX}fresh-orphan`);
+    const staleOrphan = join(tmpRoot, `${store.ownerPrefix}stale-orphan`);
+    const freshOrphan = join(tmpRoot, `${store.ownerPrefix}fresh-orphan`);
     const unrelatedDir = join(tmpRoot, "other-tool-dir");
     for (const d of [staleOrphan, freshOrphan, unrelatedDir]) mkdirSync(d, { recursive: true });
     const oldTime = new Date(nowMs - SESSION_TMP_ORPHAN_RETENTION_MS - 10_000);
@@ -100,5 +102,37 @@ describe("SessionTmpStore", () => {
     expect(existsSync(freshOrphan)).toBe(true);
     expect(existsSync(unrelatedDir)).toBe(true);
     expect(store.listTracked().map((e) => e.sessionId)).toEqual([1]);
+  });
+
+  it("never deletes another data directory's live temp dir or a user's bw-* directory in a shared temp root", async () => {
+    const nowMs = Date.now();
+    const twoHoursAgo = new Date(nowMs - 2 * 60 * 60 * 1000);
+    const a = createSessionTmpStore({ ledgerFile: join(root, "stateA", "session-tmp.json"), tmpRoot });
+    const b = createSessionTmpStore({ ledgerFile: join(root, "stateB", "session-tmp.json"), tmpRoot });
+    expect(a.ownerPrefix).not.toBe(b.ownerPrefix);
+    const liveOfA = a.allocate(7);
+    mkdirSync(join(liveOfA, "vitest-cache"));
+    utimesSync(liveOfA, twoHoursAgo, twoHoursAgo);
+    const userDir = join(tmpRoot, "bw-user-notes");
+    mkdirSync(userDir);
+    utimesSync(userDir, twoHoursAgo, twoHoursAgo);
+    const strayOfB = join(tmpRoot, `${b.ownerPrefix}crashed`);
+    mkdirSync(strayOfB);
+    utimesSync(strayOfB, twoHoursAgo, twoHoursAgo);
+
+    const res = await b.sweepOrphans(new Set());
+    expect(res.removedPaths).toEqual([strayOfB]);
+    expect(existsSync(liveOfA)).toBe(true);
+    expect(existsSync(userDir)).toBe(true);
+    expect(b.isSessionTmpPath(liveOfA)).toBe(false);
+  });
+
+  it("keeps the same process tag nonce across daemon restarts on one data directory and a different one per data directory", () => {
+    const first = createDaemonSessionScope({ ledgerFile: join(root, "state", "session-tmp.json"), env: {} });
+    const restarted = createDaemonSessionScope({ ledgerFile: join(root, "state", "session-tmp.json"), env: {} });
+    const other = createDaemonSessionScope({ ledgerFile: join(root, "other-state", "session-tmp.json"), env: {} });
+    expect(restarted.tagNonce).toBe(first.tagNonce);
+    expect(restarted.ownerTag(5)).toBe(first.ownerTag(5));
+    expect(other.tagNonce).not.toBe(first.tagNonce);
   });
 });

@@ -212,4 +212,50 @@ describe("createBranchCleanup", () => {
     expect(branchExists("feature/not-hub")).toBe(true);
     expect(branchExists("hub/31-active")).toBe(true);
   });
+
+  it("stops before touching the ledger again once the stop signal aborts mid-scan", async () => {
+    createCommitOnBranch("hub/40-a", "a40.txt", "a\n");
+    const controller = new AbortController();
+    let ledgerCallsAfterAbort = 0;
+    const ledger: BranchCleanupLedger = {
+      listActiveProjectRepos: () => [{ projectId: 1, projectName: "demo", repoFolder: repo }],
+      listManagedBranchWorkers: () => {
+        if (controller.signal.aborted) ledgerCallsAfterAbort++;
+        return [];
+      },
+    };
+    const cleanup = createBranchCleanup({ ledger, log: () => {}, now: () => nowMs, signal: controller.signal });
+    const run = cleanup.runOnce();
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(ledgerCallsAfterAbort).toBe(0);
+    expect(branchExists("hub/40-a")).toBe(true);
+  });
+
+  it("reuses merge verdicts until the branch or main moves, and reports a repository it could not scan as incomplete", async () => {
+    const base = git(repo, "rev-parse", "HEAD");
+    createCommitOnBranch("hub/41-held", "h.txt", "h\n");
+    const workers: ManagedBranchWorkerRef[] = [
+      { workerId: 41, projectId: 1, branch: "hub/41-held", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 9 * DAY_MS },
+    ];
+    const cleanup = createBranchCleanup({ ledger: makeLedger(workers), log: () => {}, now: () => nowMs });
+    const first = await cleanup.inspect();
+    expect(first.complete).toBe(true);
+    expect(first.held.map((h) => [h.branch, h.commitsAhead])).toEqual([["hub/41-held", 1]]);
+
+    git(repo, "checkout", "-q", "hub/41-held");
+    writeFileSync(join(repo, "h2.txt"), "h2\n");
+    git(repo, "add", "h2.txt");
+    git(repo, "commit", "-q", "-m", "more");
+    git(repo, "checkout", "-q", "main");
+    const moved = await cleanup.inspect();
+    expect(moved.held.map((h) => [h.branch, h.commitsAhead])).toEqual([["hub/41-held", 2]]);
+
+    const missing = createBranchCleanup({
+      ledger: makeLedger(workers, [{ projectId: 2, projectName: "gone", repoFolder: join(root, "unmounted") }]),
+      log: () => {},
+      now: () => nowMs,
+    });
+    expect(await missing.inspect()).toEqual({ held: [], repos: [], complete: false });
+  });
 });

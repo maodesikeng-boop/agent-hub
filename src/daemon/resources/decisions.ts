@@ -30,10 +30,10 @@ export interface ResourceDecisionsStore {
   unkeep(kind: HeldResourceKind, targetKey: string): boolean;
 
   /**
-   * Precondition: liveKeys contains composite "<kind>:<targetKey>" keys of all currently present held resources.
-   * Postcondition: deletes stored decisions whose targets are no longer present and returns the number of rows pruned.
+   * Precondition: liveKeys contains composite "<kind>:<targetKey>" keys of every held resource found by a scan that covered scannedKinds completely.
+   * Postcondition: deletes stored decisions of scannedKinds whose targets are no longer present and returns the number of rows pruned; decisions of other kinds are kept.
    */
-  pruneMissing(liveKeys: ReadonlySet<string>): number;
+  pruneMissing(liveKeys: ReadonlySet<string>, scannedKinds: ReadonlySet<HeldResourceKind>): number;
 }
 
 type DbRow = {
@@ -101,9 +101,9 @@ export function createResourceDecisionsStore(db: Db, now: () => number = Date.no
       return Number(res.changes) > 0;
     },
 
-    pruneMissing(liveKeys) {
-      const stored = db.all<{ kind: string; target_key: string }>("SELECT kind, target_key FROM resource_decisions");
-      const stale = stored.filter((row) => !liveKeys.has(`${row.kind}:${row.target_key}`));
+    pruneMissing(liveKeys, scannedKinds) {
+      const stored = db.all<{ kind: HeldResourceKind; target_key: string }>("SELECT kind, target_key FROM resource_decisions");
+      const stale = stored.filter((row) => scannedKinds.has(row.kind) && !liveKeys.has(`${row.kind}:${row.target_key}`));
       if (stale.length === 0) return 0;
       db.transaction(() => {
         for (const row of stale) {

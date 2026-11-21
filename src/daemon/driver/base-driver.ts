@@ -5,7 +5,7 @@ import {
   BACKGROUND_TASKS_HOLD_MAX_MS,
   CRASH_RECOVERY_NOTE,
   DriverError,
-  ENV_SESSION_OWNER_TAG, IDLE_CLOSE_MS,
+  IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
   KILL_WAIT_MS,
   LAST_EVENT_WRITE_MS,
@@ -899,7 +899,7 @@ export abstract class BaseSessionDriver<
       throw new DriverError("spawn_failed", `${binaryPath}: ${errorMessage(error)}`);
     }
     const { child, detached } = spawned;
-    trackChild(child, `agent:${this.vendor}`, { detached, ...(extraEnv[ENV_SESSION_OWNER_TAG] ? { sessionTag: extraEnv[ENV_SESSION_OWNER_TAG].split(",").at(-1) } : {}) });
+    trackChild(child, `agent:${this.vendor}`, { detached });
     try {
       await new Promise<void>((resolve, reject) => {
         child.once("spawn", resolve);

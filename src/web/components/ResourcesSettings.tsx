@@ -34,6 +34,7 @@ const REASON_LABELS: Readonly<Record<HeldResourceReason, string>> = {
   unmerged_ended_branch: "Unmerged branch",
   orphaned_temp_dir: "Orphaned temp directory",
   leaked_process: "Leaked process",
+  shared_process: "Possibly shared",
 };
 
 function discardDialogTitle(item: HeldResourceItem): string {

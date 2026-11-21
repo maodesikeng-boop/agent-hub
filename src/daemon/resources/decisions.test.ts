@@ -66,8 +66,18 @@ describe("createResourceDecisionsStore", () => {
     store.keep("git_branch", "1:hub/a", "unmerged_ended_branch", 2_000);
     store.keep("process", "99:s1:abc", "leaked_process", 3_000);
 
-    const pruned = store.pruneMissing(new Set(["git_branch:1:hub/a"]));
+    const pruned = store.pruneMissing(new Set(["git_branch:1:hub/a"]), new Set(["worktree", "git_branch", "temp_dir", "process"]));
     expect(pruned).toBe(2);
     expect(store.list().map((r) => `${r.kind}:${r.targetKey}`)).toEqual(["git_branch:1:hub/a"]);
+  });
+
+  it("keeps decisions of kinds whose scan failed, because a failed scan does not prove the item is gone", () => {
+    const store = createResourceDecisionsStore(db);
+    store.keep("git_branch", "1:hub/a", "unmerged_ended_branch", 1_000);
+    store.keep("process", "99:s1:abc", "leaked_process", 2_000);
+    store.keep("worktree", "1", "uncommitted_changes", 3_000);
+
+    expect(store.pruneMissing(new Set(), new Set(["worktree"]))).toBe(1);
+    expect(store.list().map((r) => `${r.kind}:${r.targetKey}`).sort()).toEqual(["git_branch:1:hub/a", "process:99:s1:abc"]);
   });
 });

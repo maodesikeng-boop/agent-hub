@@ -69,9 +69,9 @@ export type ResourceKind =
   | "temp_dir"
   | "log_file";
 
-export type ResourceGrowthClass = "growing" | "bounded_config" | "retained_metadata";
+export type ResourceGrowthClass = "growing" | "bounded_config" | "retained_metadata" | "transient";
 
-export type ResourceCleanupMode = "automatic" | "automatic_or_hold" | "on_archive_or_delete" | "overwrite";
+export type ResourceCleanupMode = "automatic" | "automatic_or_hold" | "on_archive_or_delete" | "overwrite" | "removed_by_creator";
 
 export interface ResourceLimitRef {
   readonly constantName: string;
@@ -353,7 +353,7 @@ const RUNTIME_RESOURCE_ENTRIES: readonly ResourceRegistryEntry[] = [
     target: "worker_process_tree",
     growth: "growing",
     owner: "src/daemon/driver/base-driver.ts, src/daemon/setup/setup.ts",
-    cleaner: "src/daemon/platform/process-tag.ts, src/daemon/process-ledger.ts",
+    cleaner: "src/daemon/resources/session-processes.ts, src/daemon/platform/process-tag.ts, src/daemon/process-ledger.ts",
     cleanupMode: "automatic_or_hold",
     limits: [
       limit("PROCESS_LEDGER_MAX_ENTRIES", PROCESS_LEDGER_MAX_ENTRIES, "entries"),
@@ -385,6 +385,17 @@ const RUNTIME_RESOURCE_ENTRIES: readonly ResourceRegistryEntry[] = [
     limits: [
       limit("SESSION_TMP_ORPHAN_RETENTION_MS", SESSION_TMP_ORPHAN_RETENTION_MS, "ms"),
     ],
+  },
+  {
+    id: "temp_dir:scratch_dirs",
+    kind: "temp_dir",
+    target: "scratch_dirs",
+    growth: "transient",
+    owner:
+      "src/daemon/git/git.ts, src/daemon/provider-manager/recipes.ts, src/daemon/worktree-cleanup.ts, src/vendors/agy/connectors.ts, src/vendors/_common/setup/browser-capture.ts",
+    cleaner: "the creating call removes its directory in a finally block before it returns",
+    cleanupMode: "removed_by_creator",
+    limits: [],
   },
 ];
 

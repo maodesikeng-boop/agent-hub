@@ -4,6 +4,8 @@ export {
   listTaggedProcesses,
   makeSessionOwnerTag,
   reapTaggedProcesses,
+  runsInsideRoots,
+  scanTaggedProcesses,
   type ListTaggedProcessesOptions,
   type ReapTaggedProcessesOptions,
   type ReapTaggedProcessesResult,

@@ -1,13 +1,13 @@
 // Invariant: wires daemon-level resource cleanup and inspection outside daemon.ts so startup and shutdown stay bounded and testable.
 import type { ProjectId } from "../../shared/domain.ts";
 import { WORKTREE_CLEANUP_INTERVAL_MS } from "../../shared/limits.ts";
+import { LOG_PREFIX } from "../../shared/names.ts";
 import type { HubPaths } from "../../shared/paths.ts";
 import { runRetentionRound } from "../db-retention.ts";
 import type { FeishuOfflineInbox } from "../feishu/account-bot.ts";
 import type { FeishuStore } from "../feishu/store.ts";
 import { cleanupManagedFiles } from "../file-cleanup.ts";
 import type { SqliteLedger } from "../ledger/index.ts";
-import { listTaggedProcesses, reapTaggedProcesses } from "../platform/index.ts";
 import type { ProcessLedger } from "../process-ledger.ts";
 import type { DaemonSessionScope } from "../session-tmp.ts";
 import type { Db } from "../store/index.ts";
@@ -19,7 +19,8 @@ import {
   type ManagedBranchWorkerRef,
 } from "./branch-cleanup.ts";
 import { createResourceDecisionsStore } from "./decisions.ts";
-import { createResourceInspector, type ProcessResourcePort, type ResourceInspector } from "./inspector.ts";
+import { createResourceInspector, reapEndedSessionProcesses, type ProcessResourcePort, type ResourceInspector } from "./inspector.ts";
+import type { SessionProcessReaper } from "./session-processes.ts";
 
 export interface DaemonResourcesOptions {
   readonly db: Db;
@@ -27,6 +28,7 @@ export interface DaemonResourcesOptions {
   readonly ledger: SqliteLedger;
   readonly worktrees: WorktreeCleanup;
   readonly sessionScope: DaemonSessionScope;
+  readonly sessionProcesses: SessionProcessReaper;
   readonly processLedger: ProcessLedger;
   readonly feishuPosts: Pick<FeishuStore, "prunePosts">;
   readonly feishuOfflineInbox: Pick<FeishuOfflineInbox, "expire">;
@@ -38,7 +40,8 @@ export interface DaemonResourcesOptions {
 
 export interface DaemonResourcesHandle {
   readonly inspector: ResourceInspector;
-  stop(): void;
+  /** Resolves once background runs have stopped touching the ledger, so the caller can close the database afterwards. */
+  stop(): Promise<void>;
 }
 
 function createBranchLedgerAdapter(db: Db): BranchCleanupLedger {
@@ -87,16 +90,21 @@ function createBranchLedgerAdapter(db: Db): BranchCleanupLedger {
   };
 }
 
-function parseSessionIdFromTag(tag: string): number | null {
-  const match = /^s([1-9]\d*):/.exec(tag);
-  if (match === null) return null;
-  const id = Number(match[1]);
-  return Number.isSafeInteger(id) ? id : null;
-}
-
 export function startDaemonResources(options: DaemonResourcesOptions): DaemonResourcesHandle {
-  const { db, paths, ledger, worktrees, sessionScope, processLedger, feishuPosts, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots, log } = options;
+  const { db, paths, ledger, worktrees, sessionScope, sessionProcesses, processLedger, feishuPosts, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots, log } = options;
   let stopped = false;
+  const stopController = new AbortController();
+  const background = new Set<Promise<void>>();
+  const track = (label: string, run: () => Promise<unknown>) => {
+    const task: Promise<void> = run()
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        if (!stopController.signal.aborted) log(`${LOG_PREFIX} ${label}出错：${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => background.delete(task));
+    background.add(task);
+    return task;
+  };
 
   const activeSessionIds = (): ReadonlySet<number> =>
     new Set(
@@ -104,29 +112,14 @@ export function startDaemonResources(options: DaemonResourcesOptions): DaemonRes
     );
 
   const decisions = createResourceDecisionsStore(db);
-  const branches = createBranchCleanup({ ledger: createBranchLedgerAdapter(db), log });
+  const branches = createBranchCleanup({ ledger: createBranchLedgerAdapter(db), log, signal: stopController.signal });
 
   const processes: ProcessResourcePort = {
     get trackedCount() {
       return processLedger.size;
     },
-    async listLeakedTaggedProcesses() {
-      const found = await listTaggedProcesses(`:${sessionScope.tagNonce}`);
-      const active = activeSessionIds();
-      return found
-        .map((proc) => ({
-          pid: proc.pid,
-          sessionId: parseSessionIdFromTag(proc.tag),
-          tag: proc.tag,
-          command: proc.command,
-        }))
-        .filter((proc) => proc.sessionId === null || !active.has(proc.sessionId));
-    },
-    async reapTaggedProcess(pid, tag) {
-      if (tag === "") return false;
-      const res = await reapTaggedProcesses(tag);
-      return res.reapedPids.includes(pid) || res.reapedPids.length > 0;
-    },
+    listLeakedTaggedProcesses: () => sessionProcesses.listEnded(activeSessionIds()),
+    reapTaggedProcess: (pid, tag) => sessionProcesses.reapOne(pid, tag),
   };
 
   const inspector = createResourceInspector({
@@ -164,23 +157,30 @@ export function startDaemonResources(options: DaemonResourcesOptions): DaemonRes
     activeSessionIds,
   });
 
-  let branchRunning = false;
+  let branchRun: Promise<void> | null = null;
   const runBranches = () => {
-    if (stopped || branchRunning) return;
-    branchRunning = true;
-    void branches.runOnce().finally(() => {
-      branchRunning = false;
+    if (stopped || branchRun !== null) return;
+    branchRun = track("自动清理已合并分支", () => branches.runOnce()).finally(() => {
+      branchRun = null;
     });
   };
   const timer = setInterval(runBranches, WORKTREE_CLEANUP_INTERVAL_MS);
   timer.unref?.();
+  // Sessions that ended while the daemon was down never got their session.end reap.
+  void track("回收已收工会话留下的进程", async () => {
+    const kept = new Set(decisions.list().map((row) => `${row.kind}:${row.targetKey}`));
+    const reaped = await reapEndedSessionProcesses(processes, kept, activeSessionIds(), stopController.signal);
+    if (reaped > 0) log(`${LOG_PREFIX} 回收了 ${reaped} 个已收工会话留下的进程`);
+  });
 
   return {
     inspector,
-    stop() {
+    async stop() {
       stopped = true;
       clearInterval(timer);
+      stopController.abort();
       inspector.close();
+      await Promise.all([...background]);
     },
   };
 }

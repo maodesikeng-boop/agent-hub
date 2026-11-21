@@ -664,6 +664,8 @@ export const BRANCH_UNMERGED_HOLD_DAYS = 7;
 export const BRANCH_UNMERGED_HOLD_MS = BRANCH_UNMERGED_HOLD_DAYS * 24 * 60 * 60 * 1000;
 export const MANAGED_BRANCHES_MERGED_MAX = 20;
 export const BRANCH_CLEANUP_BATCH_LIMIT = 20;
+// Merge verdicts are keyed by immutable commit ids; room for every managed branch of a few busy repositories.
+export const BRANCH_VERDICT_CACHE_MAX = 2_000;
 
 export const RESOURCES_INSPECT_TTL_MS = 15_000;
 export const RESOURCES_DIR_SCAN_MAX_ENTRIES = 50_000;

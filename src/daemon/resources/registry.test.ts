@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as limits from "../../shared/limits.ts";
 import { resolveHubPaths } from "../../shared/paths.ts";
@@ -36,7 +38,25 @@ function exportedNumericLimitNames(): Set<string> {
   );
 }
 
+const REPO_ROOT = join(import.meta.dirname, "..", "..", "..");
+
+function productionSourceFiles(): string[] {
+  const srcRoot = join(REPO_ROOT, "src");
+  return (readdirSync(srcRoot, { recursive: true }) as string[])
+    .filter((file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file) && !/(^|[\\/])(test-helpers|test-utils)\.tsx?$/.test(file) && !file.includes("fixture"))
+    .map((file) => relative(REPO_ROOT, join(srcRoot, file)).split(sep).join("/"));
+}
+
 describe("RESOURCE_REGISTRY structural guard", () => {
+  it("registers every module that creates a temp directory, so each one names who removes it", () => {
+    const owners = new Set(
+      RESOURCE_REGISTRY.filter((e) => e.kind === "temp_dir").flatMap((e) => e.owner.split(",").map((part) => part.trim())),
+    );
+    const creators = productionSourceFiles().filter((file) => /\bmkdtemp(Sync)?\(/.test(readFileSync(join(REPO_ROOT, file), "utf8")));
+    expect(creators.length).toBeGreaterThan(0);
+    expect(creators.filter((file) => !owners.has(file))).toEqual([]);
+  });
+
   it("covers every non-internal SQLite table created by migrations/*.sql", () => {
     const tables = migratedTableNames();
     expect(tables.length).toBeGreaterThan(0);

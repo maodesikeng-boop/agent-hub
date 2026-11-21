@@ -14,7 +14,8 @@ export type HeldResourceReason =
   | HeldWorktreeReason
   | "unmerged_ended_branch"
   | "orphaned_temp_dir"
-  | "leaked_process";
+  | "leaked_process"
+  | "shared_process";
 
 export type ResourceDecisionAction = "keep" | "unkeep" | "discard";
 
@@ -58,10 +59,11 @@ export interface HeldTempDirResource extends HeldResourceBase {
 
 export interface HeldProcessResource extends HeldResourceBase {
   readonly kind: "process";
-  readonly reason: "leaked_process";
+  readonly reason: "leaked_process" | "shared_process";
   readonly sessionId: SessionId | null;
   readonly pid: number;
   readonly command: string;
+  readonly cwd: string | null;
 }
 
 export type HeldResourceItem =

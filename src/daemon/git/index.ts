@@ -25,6 +25,7 @@ export {
   deleteLocalBranch,
   isBranchSquashMergedToMain,
   listLocalBranches,
+  resolveMainTargetCommits,
 } from "./branches.ts";
 export { probePr, probePrByUrl } from "./pr.ts";
 export type {

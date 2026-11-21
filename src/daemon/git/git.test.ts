@@ -651,7 +651,22 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     git(repo, "merge", "--squash", "hub/10-squash");
     git(repo, "commit", "-q", "-m", "squash feat");
     expect(await isBranchMergedToMain(repo, "hub/10-squash", base)).toBe(false);
+    const objectsBefore = git(repo, "count-objects", "-v");
     expect(await isBranchSquashMergedToMain(repo, "hub/10-squash", base)).toBe(true);
+    // The squash check runs on every Resources scan, so it must not leave dangling objects in the user's repository.
+    expect(git(repo, "count-objects", "-v")).toBe(objectsBefore);
+
+    // A squash commit that also changed another file is a different patch and does not count as merged.
+    git(repo, "checkout", "-q", "-b", "hub/13-partial", base);
+    writeFileSync(join(repo, "partial.txt"), "a\n");
+    git(repo, "add", "partial.txt");
+    git(repo, "commit", "-q", "-m", "partial");
+    git(repo, "checkout", "-q", "main");
+    writeFileSync(join(repo, "partial.txt"), "a\n");
+    writeFileSync(join(repo, "extra.txt"), "b\n");
+    git(repo, "add", "partial.txt", "extra.txt");
+    git(repo, "commit", "-q", "-m", "partial plus extra");
+    expect(await isBranchSquashMergedToMain(repo, "hub/13-partial", base)).toBe(false);
 
     git(repo, "checkout", "-b", "hub/11-unmerged");
     writeFileSync(join(repo, "wip.txt"), "wip\n");
@@ -663,13 +678,27 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     const wtPath = join(root, "wt-12");
     await addWorktree({ repoFolder: repo, worktreePath: wtPath, branch: "hub/12-wt" });
     const listed = await listLocalBranches(repo, "hub/");
-    expect(listed.map((b) => b.name).sort()).toEqual(["hub/10-squash", "hub/11-unmerged", "hub/12-wt"]);
+    expect(listed.map((b) => b.name).sort()).toEqual(["hub/10-squash", "hub/11-unmerged", "hub/12-wt", "hub/13-partial"]);
     expect(listed.find((b) => b.name === "hub/12-wt")?.checkedOutPath).not.toBeNull();
     expect(listed.find((b) => b.name === "hub/10-squash")?.checkedOutPath).toBeNull();
 
-    await expect(deleteLocalBranch(repo, "main", { force: true })).rejects.toThrow(GitError);
-    await expect(deleteLocalBranch(repo, "hub/12-wt", { force: true })).rejects.toThrow(GitError);
-    await deleteLocalBranch(repo, "hub/10-squash", { force: true });
+    const commitOf = (name: string) => listed.find((b) => b.name === name)!.commit;
+    await expect(deleteLocalBranch(repo, "main", git(repo, "rev-parse", "main"))).rejects.toThrow(GitError);
+    await expect(deleteLocalBranch(repo, "hub/12-wt", commitOf("hub/12-wt"))).rejects.toThrow(GitError);
+
+    // A commit pushed onto the branch after the merge check moves the ref, so the stale delete must fail and keep the new work.
+    const verified = commitOf("hub/11-unmerged");
+    git(repo, "checkout", "-q", "hub/11-unmerged");
+    writeFileSync(join(repo, "later.txt"), "later\n");
+    git(repo, "add", "later.txt");
+    git(repo, "commit", "-q", "-m", "later work");
+    git(repo, "checkout", "-q", "main");
+    await expect(deleteLocalBranch(repo, "hub/11-unmerged", verified)).rejects.toThrow(GitError);
+    expect((await listLocalBranches(repo, "hub/")).map((b) => b.name)).toContain("hub/11-unmerged");
+
+    git(repo, "config", "branch.hub/10-squash.description", "x");
+    await deleteLocalBranch(repo, "hub/10-squash", commitOf("hub/10-squash"));
     expect((await listLocalBranches(repo, "hub/")).map((b) => b.name)).not.toContain("hub/10-squash");
+    expect(() => git(repo, "config", "--get", "branch.hub/10-squash.description")).toThrow();
   });
 });

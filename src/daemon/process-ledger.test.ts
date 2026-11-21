@@ -241,28 +241,4 @@ describe("子进程记账", () => {
     uninstallAgain();
     uninstallOther();
   });
-
-  it("persists sessionTag and reaps tagged detached grandchildren during reapStale", async () => {
-    const child = fakeChild(9001);
-    startTimes.set(9001, "T9001");
-    const first = createProcessLedger({ file, startTimeOf });
-    first.track(child.child, "agent:claude", { detached: true, sessionTag: "s42:abc123" });
-    await first.settled();
-    expect(readLedgerFile(file)).toEqual([
-      { pid: 9001, startTime: "T9001", purpose: "agent:claude", ownsGroup: true, sessionTag: "s42:abc123" },
-    ]);
-
-    const reapedTags: string[] = [];
-    const second = createProcessLedger({
-      file,
-      startTimeOf: async () => null,
-      reapTagged: async (tag) => {
-        reapedTags.push(tag);
-        return { reapedPids: [9999] };
-      },
-    });
-    await second.reapStale();
-    expect(reapedTags).toEqual(["s42:abc123"]);
-    expect(readLedgerFile(file)).toEqual([]);
-  });
 });

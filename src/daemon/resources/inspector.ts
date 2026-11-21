@@ -33,6 +33,7 @@ import type {
   DirectoryResourceUsage,
   HeldProcessResource,
   HeldResourceItem,
+  HeldResourceKind,
   HeldTempDirResource,
   HeldWorktreeResource,
   ResourceCleanupResponse,
@@ -45,6 +46,7 @@ import type { SessionTmpStore } from "../session-tmp.ts";
 import type { Db } from "../store/index.ts";
 import type { BranchCleanup } from "./branch-cleanup.ts";
 import type { ResourceDecisionsStore } from "./decisions.ts";
+import type { SessionProcess } from "./session-processes.ts";
 
 export interface DirectoryScanOptions {
   readonly maxEntries?: number;
@@ -67,7 +69,8 @@ export interface WorktreeResourcePort {
 
 export interface ProcessResourcePort {
   readonly trackedCount: number;
-  listLeakedTaggedProcesses(): Promise<Array<{ pid: number; sessionId: number | null; tag: string; command: string }>>;
+  /** Resolves null when the process table could not be read. */
+  listLeakedTaggedProcesses(): Promise<SessionProcess[] | null>;
   reapTaggedProcess(pid: number, tag: string): Promise<boolean>;
 }
 
@@ -369,6 +372,29 @@ async function scanOrphanTempDirs(
   return held;
 }
 
+const processTargetKey = (proc: Pick<SessionProcess, "pid" | "tag">) => `${proc.pid}:${proc.tag}`;
+
+/**
+ * Precondition: keptKeys holds `kind:targetKey` of every Keep decision and active holds every live session.
+ * Postcondition: stops ended sessions' processes that run inside their own folders unless the user kept them; processes elsewhere stay for the user to decide. Returns the number stopped.
+ */
+export async function reapEndedSessionProcesses(
+  processes: ProcessResourcePort,
+  keptKeys: ReadonlySet<string>,
+  active: ReadonlySet<number>,
+  signal?: AbortSignal,
+): Promise<number> {
+  let reaped = 0;
+  for (const proc of (await processes.listLeakedTaggedProcesses()) ?? []) {
+    if (signal?.aborted) break;
+    if (!proc.sessionPrivate) continue;
+    if (proc.sessionId !== null && active.has(proc.sessionId)) continue;
+    if (keptKeys.has(`process:${processTargetKey(proc)}`)) continue;
+    if (await processes.reapTaggedProcess(proc.pid, proc.tag)) reaped++;
+  }
+  return reaped;
+}
+
 function compareHeldItems(a: HeldResourceItem, b: HeldResourceItem): number {
   const aKept = a.keptAt !== null ? 1 : 0;
   const bKept = b.keptAt !== null ? 1 : 0;
@@ -418,27 +444,32 @@ export function createResourceInspector(deps: ResourceInspectorDeps): ResourceIn
     ]);
     assertOpen();
 
-    const heldProcesses: HeldProcessResource[] = leakedProcs
+    const heldProcesses: HeldProcessResource[] = (leakedProcs ?? [])
       .filter((p) => p.sessionId === null || !activeSessions.has(p.sessionId))
       .map((p) => ({
         kind: "process",
-        targetKey: `${p.pid}:${p.tag}`,
-        reason: "leaked_process",
+        targetKey: processTargetKey(p),
+        reason: p.sessionPrivate ? "leaked_process" : "shared_process",
         label: p.command || `PID ${p.pid}`,
         projectId: null,
         projectName: null,
         bytes: null,
         detectedAt: scannedAt,
-        samplePaths: [],
+        samplePaths: p.cwd === null ? [] : [p.cwd],
         keptAt: null,
         sessionId: p.sessionId,
         pid: p.pid,
         command: p.command,
+        cwd: p.cwd,
       }));
 
     const rawHeld: HeldResourceItem[] = [...heldWorktrees, ...branchInfo.held, ...orphanTempDirs, ...heldProcesses];
     const liveKeys = new Set(rawHeld.map((item) => `${item.kind}:${item.targetKey}`));
-    deps.decisions.pruneMissing(liveKeys);
+    // A failed scan is not proof that a kept item is gone, so only fully scanned kinds drop their missing Keep decisions.
+    const scannedKinds = new Set<HeldResourceKind>(["worktree", "temp_dir"]);
+    if (branchInfo.complete) scannedKinds.add("git_branch");
+    if (leakedProcs !== null) scannedKinds.add("process");
+    deps.decisions.pruneMissing(liveKeys, scannedKinds);
     const keptByKey = new Map(deps.decisions.list().map((row) => [`${row.kind}:${row.targetKey}`, row.decidedAt]));
 
     const mergedHeld = rawHeld
@@ -554,14 +585,7 @@ export function createResourceInspector(deps: ResourceInspectorDeps): ResourceIn
     assertOpen();
 
     const keptKeys = new Set(deps.decisions.list().map((row) => `${row.kind}:${row.targetKey}`));
-    const leaked = await deps.processes.listLeakedTaggedProcesses();
-    assertOpen();
-    let reapedProcesses = 0;
-    for (const proc of leaked) {
-      if (proc.sessionId !== null && active.has(proc.sessionId)) continue;
-      if (keptKeys.has(`process:${proc.pid}:${proc.tag}`)) continue;
-      if (await deps.processes.reapTaggedProcess(proc.pid, proc.tag)) reapedProcesses++;
-    }
+    const reapedProcesses = await reapEndedSessionProcesses(deps.processes, keptKeys, active, closeController.signal);
     assertOpen();
 
     invalidate();

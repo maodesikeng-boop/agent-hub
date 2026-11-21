@@ -112,7 +112,7 @@ describe("createResourceInspector", () => {
       paths: makePaths(),
       decisions: createResourceDecisionsStore(db, () => nowMs),
       worktrees: { inspectHeldWorktrees, discardWorktree: vi.fn(async () => ({ removedBytes: 0 })), runOnce: vi.fn(async () => []) },
-      branches: { inspect: vi.fn(async () => ({ held: [], repos: [] })), runOnce: vi.fn(async () => ({ deleted: [], held: [], repos: [] })), discardBranch: vi.fn(async () => {}) },
+      branches: { inspect: vi.fn(async () => ({ held: [], repos: [], complete: true })), runOnce: vi.fn(async () => ({ deleted: [], held: [], repos: [], complete: true })), discardBranch: vi.fn(async () => {}) },
       sessionTmp: createSessionTmpStore({ ledgerFile: join(root, "state", "session-tmp.json"), tmpRoot: join(root, "tmp") }),
       processes: { trackedCount: 1, listLeakedTaggedProcesses: vi.fn(async () => []), reapTaggedProcess: vi.fn(async () => false) },
       runDbRetention: vi.fn(async () => ({ rows: 0, pages: 0 })),
@@ -195,13 +195,13 @@ describe("createResourceInspector", () => {
       paths: makePaths(),
       decisions,
       worktrees: { inspectHeldWorktrees: async () => [heldWt], discardWorktree: async () => ({ removedBytes: 0 }), runOnce: async () => [] },
-      branches: { inspect: async () => ({ held: [heldBranch], repos: [] }), runOnce: async () => ({ deleted: [], held: [], repos: [] }), discardBranch: async () => {} },
+      branches: { inspect: async () => ({ held: [heldBranch], repos: [], complete: true }), runOnce: async () => ({ deleted: [], held: [], repos: [], complete: true }), discardBranch: async () => {} },
       sessionTmp,
       processes: {
         trackedCount: 2,
         listLeakedTaggedProcesses: async () => [
-          { pid: 4321, sessionId: 88, tag: "s88:abc", command: "node fake-worker.js" },
-          { pid: 4322, sessionId: 99, tag: "s99:abc", command: "node active-worker.js" },
+          { pid: 4321, sessionId: 88, tag: "s88:abc", command: "node fake-worker.js", cwd: null, sessionPrivate: true },
+          { pid: 4322, sessionId: 99, tag: "s99:abc", command: "node active-worker.js", cwd: null, sessionPrivate: true },
         ],
         reapTaggedProcess: async () => true,
       },
@@ -250,7 +250,7 @@ describe("createResourceInspector", () => {
       paths: makePaths(),
       decisions: createResourceDecisionsStore(db),
       worktrees: { inspectHeldWorktrees: async () => (wtPresent ? [heldWt] : []), discardWorktree, runOnce: async () => [] },
-      branches: { inspect: async () => ({ held: [], repos: [] }), runOnce: async () => ({ deleted: [], held: [], repos: [] }), discardBranch: async () => {} },
+      branches: { inspect: async () => ({ held: [], repos: [], complete: true }), runOnce: async () => ({ deleted: [], held: [], repos: [], complete: true }), discardBranch: async () => {} },
       sessionTmp: createSessionTmpStore({ ledgerFile: join(root, "state", "session-tmp.json"), tmpRoot: join(root, "tmp") }),
       processes: { trackedCount: 0, listLeakedTaggedProcesses: async () => [], reapTaggedProcess: async () => false },
       runDbRetention: async () => ({ rows: 0, pages: 0 }),
@@ -285,13 +285,13 @@ describe("createResourceInspector", () => {
       runOnce: vi.fn(async () => [1, 2]),
     };
     const branches: BranchCleanup = {
-      inspect: async () => ({ held: [], repos: [] }),
-      runOnce: vi.fn(async () => ({ deleted: [{ repoFolder: "/r", branch: "hub/1-a" }], held: [], repos: [] })),
+      inspect: async () => ({ held: [], repos: [], complete: true }),
+      runOnce: vi.fn(async () => ({ deleted: [{ repoFolder: "/r", branch: "hub/1-a" }], held: [], repos: [], complete: true })),
       discardBranch: vi.fn(async () => {}),
     };
     const processes: ProcessResourcePort = {
       trackedCount: 1,
-      listLeakedTaggedProcesses: async () => [{ pid: 777, sessionId: 50, tag: "s50:xyz", command: "node leaked.js" }],
+      listLeakedTaggedProcesses: async () => [{ pid: 777, sessionId: 50, tag: "s50:xyz", command: "node leaked.js", cwd: null, sessionPrivate: true }],
       reapTaggedProcess: vi.fn(async () => true),
     };
 
@@ -321,6 +321,57 @@ describe("createResourceInspector", () => {
     });
   });
 
+  it("shows a process started outside its session's folders as possibly shared and leaves it to the user on runCleanup", async () => {
+    const reapTaggedProcess = vi.fn(async () => true);
+    const inspector = createResourceInspector({
+      db,
+      paths: makePaths(),
+      decisions: createResourceDecisionsStore(db),
+      worktrees: { inspectHeldWorktrees: async () => [], discardWorktree: async () => ({ removedBytes: 0 }), runOnce: async () => [] },
+      branches: { inspect: async () => ({ held: [], repos: [], complete: true }), runOnce: async () => ({ deleted: [], held: [], repos: [], complete: true }), discardBranch: async () => {} },
+      sessionTmp: createSessionTmpStore({ ledgerFile: join(root, "state", "session-tmp.json"), tmpRoot: join(root, "tmp") }),
+      processes: {
+        trackedCount: 0,
+        listLeakedTaggedProcesses: async () => [
+          { pid: 801, sessionId: 50, tag: "s50:xyz", command: "java GradleDaemon", cwd: "/Users/u/.gradle/daemon/8.10", sessionPrivate: false },
+        ],
+        reapTaggedProcess,
+      },
+      runDbRetention: async () => ({ rows: 0, pages: 0 }),
+      runFileCleanup: async () => ({ removedFiles: 0 }),
+      activeSessionIds: () => new Set(),
+    });
+
+    const snap = await inspector.inspect();
+    expect(snap.held).toMatchObject([{ kind: "process", reason: "shared_process", samplePaths: ["/Users/u/.gradle/daemon/8.10"] }]);
+    expect((await inspector.runCleanup()).reapedProcesses).toBe(0);
+    expect(reapTaggedProcess).not.toHaveBeenCalled();
+
+    await inspector.decide({ kind: "process", targetKey: "801:s50:xyz", action: "discard" });
+    expect(reapTaggedProcess).toHaveBeenCalledWith(801, "s50:xyz");
+  });
+
+  it("keeps Keep decisions when a branch or process scan fails instead of treating the items as gone", async () => {
+    const decisions = createResourceDecisionsStore(db);
+    decisions.keep("git_branch", "1:hub/6-old", "unmerged_ended_branch", 1_000);
+    decisions.keep("process", "801:s50:xyz", "shared_process", 1_000);
+    const inspector = createResourceInspector({
+      db,
+      paths: makePaths(),
+      decisions,
+      worktrees: { inspectHeldWorktrees: async () => [], discardWorktree: async () => ({ removedBytes: 0 }), runOnce: async () => [] },
+      branches: { inspect: async () => ({ held: [], repos: [], complete: false }), runOnce: async () => ({ deleted: [], held: [], repos: [], complete: false }), discardBranch: async () => {} },
+      sessionTmp: createSessionTmpStore({ ledgerFile: join(root, "state", "session-tmp.json"), tmpRoot: join(root, "tmp") }),
+      processes: { trackedCount: 0, listLeakedTaggedProcesses: async () => null, reapTaggedProcess: async () => false },
+      runDbRetention: async () => ({ rows: 0, pages: 0 }),
+      runFileCleanup: async () => ({ removedFiles: 0 }),
+      activeSessionIds: () => new Set(),
+    });
+
+    await inspector.inspect();
+    expect(decisions.list().map((row) => `${row.kind}:${row.targetKey}`).sort()).toEqual(["git_branch:1:hub/6-old", "process:801:s50:xyz"]);
+  });
+
   it("aborts in-flight scans on close() without touching the database after shutdown starts", async () => {
     let releaseScan!: () => void;
     const decisions = createResourceDecisionsStore(db);
@@ -336,7 +387,7 @@ describe("createResourceInspector", () => {
         discardWorktree: async () => ({ removedBytes: 0 }),
         runOnce: async () => [],
       },
-      branches: { inspect: async () => ({ held: [], repos: [] }), runOnce: async () => ({ deleted: [], held: [], repos: [] }), discardBranch: async () => {} },
+      branches: { inspect: async () => ({ held: [], repos: [], complete: true }), runOnce: async () => ({ deleted: [], held: [], repos: [], complete: true }), discardBranch: async () => {} },
       sessionTmp: createSessionTmpStore({ ledgerFile: join(root, "state", "session-tmp.json"), tmpRoot: join(root, "tmp") }),
       processes: { trackedCount: 0, listLeakedTaggedProcesses: async () => [], reapTaggedProcess: async () => false },
       runDbRetention: async () => ({ rows: 0, pages: 0 }),

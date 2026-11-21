@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,7 +9,10 @@ import {
   envContainsSessionTag,
   listTaggedProcesses,
   makeSessionOwnerTag,
+  parseLsofCwd,
   reapTaggedProcesses,
+  runsInsideRoots,
+  scanTaggedProcesses,
   type ListTaggedProcessesOptions,
 } from "./process-tag.ts";
 
@@ -95,6 +98,7 @@ describe("session owner process tagging and reaping", () => {
     };
     makeProc(1, 0, 1, `${ENV_SESSION_OWNER_TAG}=s42:tok1\0`, "init\0");
     makeProc(500, 1, 500, `PATH=/usr/bin\0${ENV_SESSION_OWNER_TAG}=s42:tok1,s99:tok2\0`, "node\0server.js\0");
+    symlinkSync(fakeProc, join(fakeProc, "500", "cwd"));
     makeProc(501, 1, 501, `PATH=/usr/bin\0${ENV_SESSION_OWNER_TAG}=s42:tok10\0`, "node\0other.js\0");
     makeProc(process.pid, 1, process.pid, `${ENV_SESSION_OWNER_TAG}=s42:tok1\0`, "vitest\0");
 
@@ -104,7 +108,7 @@ describe("session owner process tagging and reaping", () => {
       ownPid: process.pid,
     });
     expect(linuxFound).toEqual([
-      { pid: 500, ppid: 1, pgid: 500, tag: "s42:tok1", command: "node server.js" },
+      { pid: 500, ppid: 1, pgid: 500, tag: "s42:tok1", command: "node server.js", cwd: fakeProc },
     ]);
 
     // macOS ps eww parser (including uid isolation and exact token matching).
@@ -112,6 +116,7 @@ describe("session owner process tagging and reaping", () => {
       platform: "darwin",
       ownPid: 100,
       ownUid: 501,
+      cwdOf: async (pids) => new Map(pids.map((pid) => [pid, `/work/${pid}`])),
       runPs: async () =>
         [
           `    1     0     1   501 /sbin/launchd ${ENV_SESSION_OWNER_TAG}=s42:tok1`,
@@ -122,19 +127,25 @@ describe("session owner process tagging and reaping", () => {
         ].join("\n"),
     });
     expect(darwinFound).toEqual([
-      { pid: 602, ppid: 1, pgid: 602, tag: "s42:tok1", command: "node detached.js HOME=/Users/u" },
+      { pid: 602, ppid: 1, pgid: 602, tag: "s42:tok1", command: "node detached.js HOME=/Users/u", cwd: "/work/602" },
     ]);
+    expect(await scanTaggedProcesses("s42:tok1", { platform: "darwin", runPs: async () => null })).toBeNull();
+    expect(await scanTaggedProcesses("s42:tok1", { platform: "linux", procRoot: join(fakeProc, "missing") })).toBeNull();
+    expect(await listTaggedProcesses("s42:tok1", { platform: "darwin", runPs: async () => null })).toEqual([]);
 
     if (canRunPs && (process.platform === "darwin" || process.platform === "linux")) {
       const tag = makeSessionOwnerTag(777, `list${Date.now()}`);
+      const workDir = realpathSync.native(mkdtempSync(join(tmpdir(), "tagged-cwd-")));
+      tempDirs.push(workDir);
       const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        cwd: workDir,
         detached: true,
         stdio: "ignore",
         env: { ...process.env, [ENV_SESSION_OWNER_TAG]: tag },
       });
       spawnedPids.push(child.pid!);
       const listed = await listTaggedProcesses(tag);
-      expect(listed.map((p) => p.pid)).toContain(child.pid!);
+      expect(listed.find((p) => p.pid === child.pid)?.cwd).toBe(workDir);
       await reapTaggedProcesses(tag);
     }
   });
@@ -229,6 +240,74 @@ describe("session owner process tagging and reaping", () => {
     const result = await reapTaggedProcesses(parentTag, psOptionsForLivePid(nestedDaemon.pid!, nestedEnvTag));
     expect(result.reapedPids).toContain(nestedDaemon.pid!);
     expect(await waitForExit(nestedDaemon.pid!, 2_000)).toBe(true);
+  });
+
+  it("parses lsof cwd output and tells a session's own processes from ones running elsewhere", () => {
+    expect(parseLsofCwd("p101\nfcwd\nn/work/wt\np202\nfcwd\nn/Users/u/.gradle/daemon/8.10\n")).toEqual(
+      new Map([
+        [101, "/work/wt"],
+        [202, "/Users/u/.gradle/daemon/8.10"],
+      ]),
+    );
+    expect(runsInsideRoots({ cwd: "/work/wt/packages/app" }, ["/work/wt"])).toBe(true);
+    expect(runsInsideRoots({ cwd: "/work/wt" }, ["/work/wt"])).toBe(true);
+    expect(runsInsideRoots({ cwd: "/work/wt-other" }, ["/work/wt"])).toBe(false);
+    expect(runsInsideRoots({ cwd: "/Users/u/.gradle/daemon/8.10" }, ["/work/wt", "/tmp/bw-x"])).toBe(false);
+    expect(runsInsideRoots({ cwd: null }, ["/work/wt"])).toBe(false);
+  });
+
+  it.runIf(process.platform === "darwin")("reads a live process's working directory through the real lsof on macOS", async () => {
+    const tag = makeSessionOwnerTag(804, `lsof${Date.now()}`);
+    const workDir = realpathSync.native(mkdtempSync(join(tmpdir(), "lsof-cwd-")));
+    tempDirs.push(workDir);
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: workDir,
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, [ENV_SESSION_OWNER_TAG]: tag },
+    });
+    spawnedPids.push(child.pid!);
+    const { runPs, ownUid } = psOptionsForLivePid(child.pid!, tag);
+    const listed = await listTaggedProcesses(tag, { platform: "darwin", ...(runPs ? { runPs, ownUid } : {}) });
+    expect(listed.find((p) => p.pid === child.pid)?.cwd).toBe(workDir);
+  });
+
+  it.skipIf(process.platform === "win32")("stops only the selected processes and leaves a shared service with the same tag running", async () => {
+    const tag = makeSessionOwnerTag(803, `sel${Date.now()}`);
+    const spawnTagged = () => {
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        stdio: "ignore",
+        env: { ...process.env, [ENV_SESSION_OWNER_TAG]: tag },
+      });
+      child.unref();
+      spawnedPids.push(child.pid!);
+      return child.pid!;
+    };
+    const devServer = spawnTagged();
+    const sharedDaemon = spawnTagged();
+    const uid = process.getuid?.() ?? 501;
+    const cwds = new Map([
+      [devServer, "/work/wt"],
+      [sharedDaemon, "/Users/u/.gradle/daemon/8.10"],
+    ]);
+    const options: ListTaggedProcessesOptions = {
+      platform: "darwin",
+      ownUid: uid,
+      runPs: async (args) => {
+        if (args[0] === "-p") return `${process.pid}\n`;
+        return [devServer, sharedDaemon]
+          .filter((pid) => isAlive(pid))
+          .map((pid) => `  ${pid}     1  ${pid}   ${uid} node -e server ${ENV_SESSION_OWNER_TAG}=${tag} PATH=/usr/bin`)
+          .join("\n");
+      },
+      cwdOf: async (pids) => new Map(pids.map((pid) => [pid, cwds.get(pid)!])),
+    };
+
+    const result = await reapTaggedProcesses(tag, { ...options, select: (proc) => runsInsideRoots(proc, ["/work/wt"]) });
+    expect(result.reapedPids).toEqual([devServer]);
+    expect(await waitForExit(devServer, 2_000)).toBe(true);
+    expect(isAlive(sharedDaemon)).toBe(true);
   });
 
   it("returns empty list on win32 where fusa-run Job Objects own the process tree", async () => {

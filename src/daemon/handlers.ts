@@ -23,7 +23,6 @@ import {
 } from "../shared/index.ts";
 import type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat } from "./git/index.ts";
 import type { SqliteLedger } from "./ledger/index.ts";
-import { reapTaggedProcesses } from "./platform/index.ts";
 import type { SessionTmpStore } from "./session-tmp.ts";
 import type { SetupRunner } from "./setup/index.ts";
 
@@ -174,8 +173,7 @@ export function createSessionEndHandler(
     ledger: Pick<Ledger, "refreshSessionState"> & Partial<Pick<SqliteLedger, "trimEndedWorkerSteps">>;
     setup?: Pick<SetupRunner, "cancel">;
     sessionTmp?: Pick<SessionTmpStore, "remove">;
-    sessionOwnerTag?: (sessionId: number) => string;
-    reapTagged?: (tag: string) => Promise<unknown>;
+    reapSessionProcesses?: (sessionId: number) => Promise<unknown>;
   },
 ): ActionHandler<"session.end"> {
   return async (action) => {
@@ -184,9 +182,7 @@ export function createSessionEndHandler(
     // Wait for the current turn because the agent may still call hub; the token is revoked only after the session ends.
     await deps.driver.end(sessionId);
     deps.tokens.revoke(sessionId);
-    if (deps.sessionOwnerTag !== undefined) {
-      await (deps.reapTagged ?? reapTaggedProcesses)(deps.sessionOwnerTag(sessionId)).catch(() => {});
-    }
+    await deps.reapSessionProcesses?.(sessionId).catch(() => {});
     if (deps.sessionTmp !== undefined) {
       await deps.sessionTmp.remove(sessionId).catch(() => {});
     }
@@ -221,7 +217,7 @@ export interface WorktreeHandlerDeps {
   setup: Pick<SetupRunner, "start">;
   setupLogPath: (workerId: WorkerId) => string;
   sessionTmp?: Pick<SessionTmpStore, "allocate">;
-  sessionTag?: (sessionId: number) => { tag: string; envValue: string };
+  sessionTagEnv?: (sessionId: number) => string;
   resolveWorktreePlacement?: (task: {
     workerId: WorkerId;
     sessionId: number;
@@ -268,7 +264,7 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
     // The Worker may have ended while the worktree was being created; onSetupStarted checks again.
     if (!deps.ledger.onSetupStarted(workerId)) return { kind: "done" };
     const tmpDir = deps.sessionTmp?.allocate(task.sessionId);
-    const tagInfo = deps.sessionTag?.(task.sessionId);
+    const sessionTagEnv = deps.sessionTagEnv?.(task.sessionId);
     deps.setup.start({
       workerId,
       sessionId: task.sessionId,
@@ -277,7 +273,7 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
       rootPath: task.repo,
       logPath: deps.setupLogPath(workerId),
       ...(tmpDir === undefined ? {} : { tmpDir }),
-      ...(tagInfo === undefined ? {} : { sessionTag: tagInfo.tag, sessionTagEnv: tagInfo.envValue }),
+      ...(sessionTagEnv === undefined ? {} : { sessionTagEnv }),
       onDone: (outcome) => deps.ledger.onWorktreeCreated(workerId, baseCommit, outcome),
     });
     return { kind: "done" };

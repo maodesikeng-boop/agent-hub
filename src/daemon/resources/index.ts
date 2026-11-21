@@ -24,3 +24,4 @@ export {
   type ResourceInspectorDeps,
   type WorktreeResourcePort,
 } from "./inspector.ts";
+export { createSessionProcessReaper, type SessionProcess, type SessionProcessReaper } from "./session-processes.ts";

@@ -142,9 +142,8 @@ export async function discardWorktreeFor(
   await deps.emptyTrash();
   if (options?.deleteBranch && !candidate.review && candidate.branch.startsWith("hub/")) {
     const existing = await listLocalBranches(candidate.repoFolder, candidate.branch, deps.git).catch(() => []);
-    if (existing.some((b) => b.name === candidate.branch && b.checkedOutPath === null)) {
-      await deleteLocalBranch(candidate.repoFolder, candidate.branch, { ...deps.git, force: true });
-    }
+    const branch = existing.find((b) => b.name === candidate.branch && b.checkedOutPath === null);
+    if (branch !== undefined) await deleteLocalBranch(candidate.repoFolder, candidate.branch, branch.commit, deps.git);
   }
   return { removedBytes: disk.bytes };
 }

@@ -182,7 +182,6 @@ export interface RunSetupOptions {
   logMaxBytes?: number;
   now?: () => number;
   tmpDir?: string;
-  sessionTag?: string;
   sessionTagEnv?: string;
 }
 
@@ -291,10 +290,7 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
       stdio: ["ignore", "pipe", "pipe"],
     });
     const child = spawned.child as ChildProcessWithoutNullStreams;
-    trackChild(child, "setup:worktree-command", {
-      detached: spawned.detached,
-      ...(options.sessionTag ? { sessionTag: options.sessionTag } : {}),
-    });
+    trackChild(child, "setup:worktree-command", { detached: spawned.detached });
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
 
@@ -344,7 +340,6 @@ export interface SetupJob {
   rootPath: string;
   logPath: string;
   tmpDir?: string;
-  sessionTag?: string;
   sessionTagEnv?: string;
   onDone: (outcome: SetupOutcome) => void;
 }
@@ -403,7 +398,6 @@ export function createSetupRunner(options: SetupRunnerOptions = {}): SetupRunner
         signal: controller.signal,
         timeoutMs,
         ...(job.tmpDir !== undefined ? { tmpDir: job.tmpDir } : {}),
-        ...(job.sessionTag !== undefined ? { sessionTag: job.sessionTag } : {}),
         ...(job.sessionTagEnv !== undefined ? { sessionTagEnv: job.sessionTagEnv } : {}),
         ...(options.shell !== undefined ? { shell: options.shell } : {}),
         ...(options.baseEnv !== undefined ? { baseEnv: options.baseEnv } : {}),

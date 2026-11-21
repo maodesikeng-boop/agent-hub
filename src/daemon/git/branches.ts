@@ -13,18 +13,59 @@ import {
 
 const PROTECTED_BRANCH_NAMES = new Set(["main", "master", "HEAD"]);
 
-const SYNTHETIC_COMMIT_ENV: Readonly<Record<string, string>> = {
-  ...GIT_READONLY_ENV,
-  LC_ALL: "C",
-  GIT_AUTHOR_NAME: "bellwood",
-  GIT_AUTHOR_EMAIL: "bellwood@local",
-  GIT_COMMITTER_NAME: "bellwood",
-  GIT_COMMITTER_EMAIL: "bellwood@local",
-};
+const PROBE_ENV: Readonly<Record<string, string>> = { ...GIT_READONLY_ENV, LC_ALL: "C" };
+
+/**
+ * Precondition: repoFolder is a git repository.
+ * Postcondition: returns the distinct commits that main/master target refs point at, sorted, or an empty array when none exist.
+ */
+export async function resolveMainTargetCommits(repoFolder: string, options: GitOptions = {}): Promise<string[]> {
+  const run = await runGit(
+    repoFolder,
+    [...GIT_READONLY_ARGS, "for-each-ref", "--format=%(objectname)", ...MAIN_TARGET_REFS],
+    options.timeoutMs ?? GIT_TIMEOUT_MS,
+    PROBE_ENV,
+  );
+  if (run.code !== 0) throw failedGit("git for-each-ref", run);
+  return [...new Set(run.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== ""))].sort();
+}
+
+async function resolveBranchCommit(repoFolder: string, branchRef: string, timeoutMs: number): Promise<string | null> {
+  const run = await runGit(repoFolder, [...GIT_READONLY_ARGS, "rev-parse", "--verify", "--quiet", `${branchRef}^{commit}`], timeoutMs, PROBE_ENV);
+  if (run.code !== 0) return null;
+  const sha = run.stdout.trim();
+  return sha === "" ? null : sha;
+}
+
+function patchIdsOf(stdout: string): string[] {
+  return stdout
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/)[0] ?? "")
+    .filter((id) => id !== "");
+}
+
+/** Commits on target past mergeBase that touch exactly the files the squashed branch touches; only those can carry the same patch. */
+async function sameFileCommits(repoFolder: string, mergeBase: string, targetCommit: string, files: ReadonlySet<string>, timeoutMs: number): Promise<string[]> {
+  const run = await runGit(
+    repoFolder,
+    [...GIT_READONLY_ARGS, "-c", "core.quotePath=false", "log", "--no-merges", "--no-renames", "--format=%x00%H", "--name-only", `${mergeBase}..${targetCommit}`],
+    timeoutMs,
+    PROBE_ENV,
+  );
+  if (run.code !== 0) throw failedGit("git log", run);
+  const matches: string[] = [];
+  for (const chunk of run.stdout.split("\0")) {
+    const lines = chunk.split("\n").filter((l) => l !== "");
+    const sha = lines.shift();
+    if (sha === undefined || lines.length !== files.size) continue;
+    if (lines.every((file) => files.has(file))) matches.push(sha);
+  }
+  return matches;
+}
 
 /**
  * Precondition: repoFolder is a git repository and branch names a local branch under refs/heads/.
- * Postcondition: returns true when branch's squashed diff against its merge-base with a main/master target ref is already present in that target ref (via git commit-tree and git cherry), without creating refs or touching the worktree.
+ * Postcondition: returns true when the branch's squashed diff against its merge-base with a main/master target ref equals the patch of a commit already on that target, comparing git patch-ids without writing any object or ref into the repository.
  */
 export async function isBranchSquashMergedToMain(
   repoFolder: string,
@@ -35,40 +76,14 @@ export async function isBranchSquashMergedToMain(
   const trimmed = branch.trim();
   if (trimmed === "" || trimmed.startsWith("-")) return false;
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const branchRef = `refs/heads/${trimmed}`;
-  const refsRun = await runGit(
-    repoFolder,
-    [...GIT_READONLY_ARGS, "for-each-ref", "--format=%(refname) %(objectname)", branchRef, ...MAIN_TARGET_REFS],
-    timeoutMs,
-    { ...GIT_READONLY_ENV, LC_ALL: "C" },
-  );
-  if (refsRun.code !== 0) throw failedGit("git for-each-ref", refsRun);
-
-  let branchCommit: string | null = null;
-  const targetCommits = new Set<string>();
-  for (const line of refsRun.stdout.split("\n")) {
-    const item = line.trim();
-    if (item === "") continue;
-    const space = item.lastIndexOf(" ");
-    if (space <= 0) continue;
-    const ref = item.slice(0, space);
-    const sha = item.slice(space + 1);
-    if (ref === branchRef) branchCommit = sha;
-    else targetCommits.add(sha);
-  }
-  if (branchCommit === null || targetCommits.size === 0) return false;
+  const branchCommit = await resolveBranchCommit(repoFolder, `refs/heads/${trimmed}`, timeoutMs);
+  const targetCommits = await resolveMainTargetCommits(repoFolder, options);
+  if (branchCommit === null || targetCommits.length === 0) return false;
   if (baseCommit !== null && branchCommit === baseCommit) return false;
-
-  let branchTree: string | null = null;
 
   for (const targetCommit of targetCommits) {
     if (branchCommit === targetCommit) return true;
-    const mbRun = await runGit(
-      repoFolder,
-      [...GIT_READONLY_ARGS, "merge-base", targetCommit, branchCommit],
-      timeoutMs,
-      { ...GIT_READONLY_ENV, LC_ALL: "C" },
-    );
+    const mbRun = await runGit(repoFolder, [...GIT_READONLY_ARGS, "merge-base", targetCommit, branchCommit], timeoutMs, PROBE_ENV);
     if (mbRun.code !== 0) continue;
     const mergeBase = mbRun.stdout.trim();
     if (mergeBase === "") continue;
@@ -76,48 +91,37 @@ export async function isBranchSquashMergedToMain(
     // Target has no commits past merge-base, so it cannot contain a squash commit of this branch.
     if (mergeBase === targetCommit) continue;
 
-    if (branchTree === null) {
-      const branchTreeRun = await runGit(
-        repoFolder,
-        [...GIT_READONLY_ARGS, "rev-parse", "--verify", "--quiet", `${branchCommit}^{tree}`],
-        timeoutMs,
-        { ...GIT_READONLY_ENV, LC_ALL: "C" },
-      );
-      if (branchTreeRun.code !== 0) return false;
-      branchTree = branchTreeRun.stdout.trim();
-      if (branchTree === "") return false;
-    }
-
-    const mbTreeRun = await runGit(
+    const filesRun = await runGit(
       repoFolder,
-      [...GIT_READONLY_ARGS, "rev-parse", "--verify", "--quiet", `${mergeBase}^{tree}`],
+      [...GIT_READONLY_ARGS, "-c", "core.quotePath=false", "diff-tree", "-r", "--no-renames", "--name-only", mergeBase, branchCommit],
       timeoutMs,
-      { ...GIT_READONLY_ENV, LC_ALL: "C" },
+      PROBE_ENV,
     );
-    if (mbTreeRun.code === 0 && mbTreeRun.stdout.trim() === branchTree) return true;
+    if (filesRun.code !== 0) throw failedGit("git diff-tree", filesRun);
+    const files = new Set(filesRun.stdout.split("\n").filter((l) => l !== ""));
+    if (files.size === 0) return true;
 
-    const commitTreeRun = await runGit(
-      repoFolder,
-      [...GIT_READONLY_ARGS, "-c", "commit.gpgsign=false", "commit-tree", branchTree, "-p", mergeBase, "-m", "_"],
-      timeoutMs,
-      SYNTHETIC_COMMIT_ENV,
-    );
-    if (commitTreeRun.code !== 0) throw failedGit("git commit-tree", commitTreeRun);
-    const dangling = commitTreeRun.stdout.trim();
-    if (dangling === "") continue;
+    const candidates = await sameFileCommits(repoFolder, mergeBase, targetCommit, files, timeoutMs);
+    if (candidates.length === 0) continue;
 
-    const cherryRun = await runGit(
+    const squashPatch = await runGit(repoFolder, [...GIT_READONLY_ARGS, "diff-tree", "-p", "--no-renames", "--full-index", mergeBase, branchCommit], timeoutMs, PROBE_ENV);
+    if (squashPatch.code !== 0) throw failedGit("git diff-tree", squashPatch);
+    const squashId = await runGit(repoFolder, ["patch-id", "--stable"], timeoutMs, PROBE_ENV, squashPatch.stdout);
+    if (squashId.code !== 0) throw failedGit("git patch-id", squashId);
+    const wanted = patchIdsOf(squashId.stdout)[0];
+    if (wanted === undefined) continue;
+
+    const candidatePatches = await runGit(
       repoFolder,
-      [...GIT_READONLY_ARGS, "cherry", targetCommit, dangling],
+      [...GIT_READONLY_ARGS, "diff-tree", "-p", "--no-renames", "--full-index", "--stdin"],
       timeoutMs,
-      { ...GIT_READONLY_ENV, LC_ALL: "C" },
+      PROBE_ENV,
+      `${candidates.join("\n")}\n`,
     );
-    if (cherryRun.code !== 0) throw failedGit("git cherry", cherryRun);
-    const lines = cherryRun.stdout
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l !== "");
-    if (lines.length === 0 || lines.every((l) => l.startsWith("-"))) return true;
+    if (candidatePatches.code !== 0) throw failedGit("git diff-tree --stdin", candidatePatches);
+    const candidateIds = await runGit(repoFolder, ["patch-id", "--stable"], timeoutMs, PROBE_ENV, candidatePatches.stdout);
+    if (candidateIds.code !== 0) throw failedGit("git patch-id", candidateIds);
+    if (patchIdsOf(candidateIds.stdout).includes(wanted)) return true;
   }
   return false;
 }
@@ -201,12 +205,13 @@ export async function listLocalBranches(
 
 /**
  * Precondition: repoFolder is a git repository and branch is a managed non-protected local branch not checked out in any worktree.
- * Postcondition: deletes refs/heads/<branch> (using -d unless force is true); throws GitError("git_failed") if branch is main, master, HEAD, or checked out by a worktree.
+ * Postcondition: deletes refs/heads/<branch> only while it still points at expectedCommit (an atomic compare-and-delete, so a commit added after the merge check survives) and drops its branch config; throws GitError("git_failed") if branch is main, master, HEAD, checked out by a worktree, or moved.
  */
 export async function deleteLocalBranch(
   repoFolder: string,
   branch: string,
-  options: GitOptions & { force?: boolean } = {},
+  expectedCommit: string,
+  options: GitOptions = {},
 ): Promise<void> {
   const trimmed = branch.trim();
   if (trimmed === "" || trimmed !== branch || trimmed.startsWith("-") || PROTECTED_BRANCH_NAMES.has(trimmed)) {
@@ -235,11 +240,11 @@ export async function deleteLocalBranch(
     throw new GitError("git_failed", `Refusing to delete branch checked out in a worktree: ${trimmed}`);
   }
 
-  const delRun = await runGit(
-    repoFolder,
-    ["branch", options.force ? "-D" : "-d", "--", trimmed],
-    timeoutMs,
-    { LC_ALL: "C" },
-  );
-  if (delRun.code !== 0) throw failedGit("git branch", delRun);
+  if (!/^[0-9a-f]{40,64}$/.test(expectedCommit)) {
+    throw new GitError("git_failed", `Refusing to delete ${trimmed} without the verified commit`);
+  }
+  const delRun = await runGit(repoFolder, ["update-ref", "-d", fullRef, expectedCommit], timeoutMs, { LC_ALL: "C" });
+  if (delRun.code !== 0) throw failedGit("git update-ref -d", delRun);
+  // The ref is gone either way; a branch with no config section makes this exit non-zero, which is fine.
+  await runGit(repoFolder, ["config", "--remove-section", `branch.${trimmed}`], timeoutMs, { LC_ALL: "C" });
 }

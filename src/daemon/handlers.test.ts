@@ -335,14 +335,14 @@ describe("session.end 处理函数", () => {
     expect(revoke).not.toHaveBeenCalled();
   });
 
-  it("reaps tagged descendants, removes session tmpDir, and trims ended Worker steps in order after driver.end", async () => {
+  it("reaps the session's processes, removes session tmpDir, and trims ended Worker steps in order after driver.end", async () => {
     const { d, end, revoke, refreshSessionState } = deps();
     const order: string[] = [];
     const cancel = vi.fn(() => void order.push("cancel"));
     end.mockImplementationOnce(async () => void order.push("end"));
     revoke.mockImplementationOnce(() => void order.push("revoke"));
-    const reapTagged = vi.fn(async (tag: string) => {
-      order.push(`reap:${tag}`);
+    const reapSessionProcesses = vi.fn(async (id: number) => {
+      order.push(`reap:${id}`);
     });
     const remove = vi.fn(async (id: number) => {
       order.push(`tmp:${id}`);
@@ -360,17 +360,16 @@ describe("session.end 处理函数", () => {
         ledger: { ...d.ledger, trimEndedWorkerSteps },
         setup: { cancel },
         sessionTmp: { remove },
-        sessionOwnerTag: (id) => `s${id}-tag`,
-        reapTagged,
+        reapSessionProcesses,
       })(endAction()),
     ).toEqual({ kind: "done" });
 
-    expect(order).toEqual(["cancel", "end", "revoke", "reap:s4-tag", "tmp:4", "trim:4", "refresh"]);
+    expect(order).toEqual(["cancel", "end", "revoke", "reap:4", "tmp:4", "trim:4", "refresh"]);
   });
 
-  it("still removes tmpDir, trims steps, and refreshes state even if reapTagged or sessionTmp.remove rejects", async () => {
+  it("still removes tmpDir, trims steps, and refreshes state even if reaping or sessionTmp.remove rejects", async () => {
     const { d, refreshSessionState } = deps();
-    const reapTagged = vi.fn(async () => {
+    const reapSessionProcesses = vi.fn(async () => {
       throw new Error("ps unavailable");
     });
     const remove = vi.fn(async () => {
@@ -383,12 +382,11 @@ describe("session.end 处理函数", () => {
         ...d,
         ledger: { ...d.ledger, trimEndedWorkerSteps },
         sessionTmp: { remove },
-        sessionOwnerTag: () => "tag-4",
-        reapTagged,
+        reapSessionProcesses,
       })(endAction()),
     ).toEqual({ kind: "done" });
 
-    expect(reapTagged).toHaveBeenCalledWith("tag-4");
+    expect(reapSessionProcesses).toHaveBeenCalledWith(4);
     expect(remove).toHaveBeenCalledWith(4);
     expect(trimEndedWorkerSteps).toHaveBeenCalledWith(4);
     expect(refreshSessionState).toHaveBeenCalledWith(4);
@@ -509,17 +507,13 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
   it("allocates session tmpDir and passes session owner tag into setup.start", async () => {
     const t = worktreeDeps({ task: { ...task, setupCommand: "pnpm install" } });
     const allocate = vi.fn(() => "/tmp/bh-12345678/s30");
-    const sessionTag = vi.fn(() => ({ tag: "bh-s30-abc", envValue: "bh-s30-abc" }));
+    const sessionTagEnv = vi.fn(() => "s30:abc");
     expect(
-      await createWorktreeCreateHandler({ ...t.deps, sessionTmp: { allocate }, sessionTag })(action("worktree.create", { workerId: 3 })),
+      await createWorktreeCreateHandler({ ...t.deps, sessionTmp: { allocate }, sessionTagEnv })(action("worktree.create", { workerId: 3 })),
     ).toEqual({ kind: "done" });
     expect(allocate).toHaveBeenCalledWith(30);
-    expect(sessionTag).toHaveBeenCalledWith(30);
-    expect(t.jobs[0]).toMatchObject({
-      tmpDir: "/tmp/bh-12345678/s30",
-      sessionTag: "bh-s30-abc",
-      sessionTagEnv: "bh-s30-abc",
-    });
+    expect(sessionTagEnv).toHaveBeenCalledWith(30);
+    expect(t.jobs[0]).toMatchObject({ tmpDir: "/tmp/bh-12345678/s30", sessionTagEnv: "s30:abc" });
   });
 });
 

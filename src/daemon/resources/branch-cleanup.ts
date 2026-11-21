@@ -1,11 +1,13 @@
-// Invariant: automatic cleanup never deletes main, master, HEAD, checked-out worktree branches, active Worker branches, or unmerged branches.
+// Invariant: automatic cleanup never deletes main, master, HEAD, checked-out worktree branches, active Worker branches, unmerged branches, or a branch that moved after it was verified; once the signal aborts it never touches the ledger again.
 import { existsSync } from "node:fs";
+import { LRUCache } from "lru-cache";
 import type { ProjectId, WorkerId } from "../../shared/domain.ts";
 import { LedgerRequestError } from "../../shared/index.ts";
 import {
   BRANCH_CLEANUP_BATCH_LIMIT,
   BRANCH_MERGED_RETENTION_MS,
   BRANCH_UNMERGED_HOLD_MS,
+  BRANCH_VERDICT_CACHE_MAX,
   MANAGED_BRANCHES_MERGED_MAX,
 } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
@@ -17,6 +19,7 @@ import {
   isCommitMergedToMain,
   listLocalBranches,
   realpathLoose,
+  resolveMainTargetCommits,
   type GitOptions,
 } from "../git/index.ts";
 import { normalizePathForComparison } from "../platform/index.ts";
@@ -51,12 +54,15 @@ export interface BranchCleanupOptions {
   readonly maxMergedKept?: number;
   readonly batchLimit?: number;
   readonly git?: GitOptions;
+  readonly signal?: AbortSignal;
 }
 
 export interface BranchCleanupResult {
   readonly deleted: readonly { repoFolder: string; branch: string }[];
   readonly held: readonly HeldBranchResource[];
   readonly repos: readonly BranchRepoUsage[];
+  /** False when a repository could not be scanned, so its held branches are unknown rather than gone. */
+  readonly complete: boolean;
 }
 
 export interface BranchCleanup {
@@ -70,7 +76,7 @@ export interface BranchCleanup {
    * Precondition: none.
    * Postcondition: inspects active project repos without mutating git state and returns per-repo counts and held unmerged branches.
    */
-  inspect(): Promise<Pick<BranchCleanupResult, "held" | "repos">>;
+  inspect(): Promise<Pick<BranchCleanupResult, "held" | "repos" | "complete">>;
 
   /**
    * Precondition: repoFolder belongs to a known project and branch is a managed hub/* branch not checked out or active.
@@ -81,10 +87,21 @@ export interface BranchCleanup {
 
 const MANAGED_BRANCH_PREFIX = "hub/";
 
+interface MergedBranch {
+  readonly branch: string;
+  readonly commit: string;
+  readonly endedAt: number;
+}
+
+interface BranchVerdict {
+  readonly merged: boolean;
+  readonly commitsAhead: number | null;
+}
+
 interface RepoScan {
   readonly project: ManagedBranchProject;
   readonly activeCount: number;
-  readonly mergedEligible: Array<{ branch: string; endedAt: number }>;
+  readonly mergedEligible: MergedBranch[];
   readonly mergedTotalCount: number;
   readonly held: HeldBranchResource[];
 }
@@ -129,25 +146,44 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
     maxMergedKept = MANAGED_BRANCHES_MERGED_MAX,
     batchLimit = BRANCH_CLEANUP_BATCH_LIMIT,
     git,
+    signal,
   } = options;
+  // Keyed by (repo, branch commit, main commits): any new commit on either side changes the key, so entries never go stale.
+  const verdicts = new LRUCache<string, BranchVerdict>({ max: BRANCH_VERDICT_CACHE_MAX });
+
+  const verdictFor = async (repoFolder: string, branch: { name: string; commit: string }, targetsKey: string): Promise<BranchVerdict> => {
+    const key = `${normalizeRepo(repoFolder)}\0${branch.commit}\0${targetsKey}`;
+    const cached = verdicts.get(key);
+    if (cached !== undefined) return cached;
+    const merged =
+      (await isCommitMergedToMain(repoFolder, branch.commit, git)) ||
+      (await isBranchSquashMergedToMain(repoFolder, branch.name, null, git));
+    const verdict = { merged, commitsAhead: merged ? 0 : await countCommitsAheadOfMain(repoFolder, branch.name, git) };
+    verdicts.set(key, verdict);
+    return verdict;
+  };
 
   const scanRepo = async (project: ManagedBranchProject): Promise<RepoScan | null> => {
     if (!existsSync(project.repoFolder)) return null;
     let branches;
+    let targetsKey: string;
     try {
       branches = await listLocalBranches(project.repoFolder, MANAGED_BRANCH_PREFIX, git);
+      targetsKey = (await resolveMainTargetCommits(project.repoFolder, git)).join(",");
     } catch (error) {
       log(`${LOG_PREFIX} 扫描受管分支失败（${project.repoFolder}）：${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
+    signal?.throwIfAborted();
     const workersByBranch = groupWorkersByBranch(ledger.listManagedBranchWorkers(project.projectId));
     const nowMs = now();
     let activeCount = 0;
-    const mergedKept: Array<{ branch: string; endedAt: number }> = [];
-    const mergedEligible: Array<{ branch: string; endedAt: number }> = [];
+    const mergedKept: MergedBranch[] = [];
+    const mergedEligible: MergedBranch[] = [];
     const held: HeldBranchResource[] = [];
 
     for (const branch of branches) {
+      signal?.throwIfAborted();
       const refs = workersByBranch.get(branch.name) ?? [];
       if (branch.checkedOutPath !== null || isProtectedWorkerSet(refs)) {
         activeCount++;
@@ -155,25 +191,23 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
       }
       const latest = latestEndedWorker(refs);
       const endedAt = latest?.endedAt ?? 0;
-      let merged = false;
+      let verdict: BranchVerdict;
       try {
-        merged =
-          (await isCommitMergedToMain(project.repoFolder, branch.commit, git)) ||
-          (await isBranchSquashMergedToMain(project.repoFolder, branch.name, null, git));
+        verdict = await verdictFor(project.repoFolder, branch, targetsKey);
       } catch (error) {
         log(`${LOG_PREFIX} 检查分支合并状态失败（${branch.name}）：${error instanceof Error ? error.message : String(error)}`);
         continue;
       }
-      if (merged) {
+      if (verdict.merged) {
         if (nowMs - endedAt >= mergedRetentionMs) {
-          mergedEligible.push({ branch: branch.name, endedAt });
+          mergedEligible.push({ branch: branch.name, commit: branch.commit, endedAt });
         } else {
-          mergedKept.push({ branch: branch.name, endedAt });
+          mergedKept.push({ branch: branch.name, commit: branch.commit, endedAt });
         }
         continue;
       }
       if (nowMs - endedAt >= unmergedHoldMs) {
-        const commitsAhead = await countCommitsAheadOfMain(project.repoFolder, branch.name, git);
+        const commitsAhead = verdict.commitsAhead;
         held.push({
           kind: "git_branch",
           targetKey: `${project.projectId}:${branch.name}`,
@@ -225,9 +259,13 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
     async inspect() {
       const held: HeldBranchResource[] = [];
       const repos: BranchRepoUsage[] = [];
+      let complete = true;
       for (const project of uniqueProjects()) {
         const scan = await scanRepo(project);
-        if (scan === null) continue;
+        if (scan === null) {
+          complete = false;
+          continue;
+        }
         held.push(...scan.held);
         repos.push({
           projectId: project.projectId,
@@ -238,7 +276,7 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
           unmergedHeldCount: scan.held.length,
         });
       }
-      return { held, repos };
+      return { held, repos, complete };
     },
 
     async runOnce() {
@@ -246,18 +284,23 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
       const held: HeldBranchResource[] = [];
       const repos: BranchRepoUsage[] = [];
       let quota = batchLimit;
+      let complete = true;
 
       for (const project of uniqueProjects()) {
         const scan = await scanRepo(project);
-        if (scan === null) continue;
+        if (scan === null) {
+          complete = false;
+          continue;
+        }
         let removedInRepo = 0;
         for (const item of scan.mergedEligible) {
           if (quota <= 0) break;
+          signal?.throwIfAborted();
           // Re-verify worker activity immediately before removing the branch.
           const currentRefs = ledger.listManagedBranchWorkers(project.projectId).filter((w) => w.branch === item.branch);
           if (isProtectedWorkerSet(currentRefs)) continue;
           try {
-            await deleteLocalBranch(project.repoFolder, item.branch, { ...git, force: true });
+            await deleteLocalBranch(project.repoFolder, item.branch, item.commit, git);
             deleted.push({ repoFolder: project.repoFolder, branch: item.branch });
             removedInRepo++;
             quota--;
@@ -279,7 +322,7 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
       if (deleted.length > 0) {
         log(`${LOG_PREFIX} 已自动清理 ${deleted.length} 个已合并受管分支`);
       }
-      return { deleted, held, repos };
+      return { deleted, held, repos, complete };
     },
 
     async discardBranch(repoFolder, branch) {
@@ -303,7 +346,7 @@ export function createBranchCleanup(options: BranchCleanupOptions): BranchCleanu
       if (found.checkedOutPath !== null) {
         throw new LedgerRequestError("conflict", `Branch ${branch} is currently checked out in a worktree`);
       }
-      await deleteLocalBranch(project.repoFolder, branch, { ...git, force: true });
+      await deleteLocalBranch(project.repoFolder, branch, found.commit, git);
     },
   };
 }

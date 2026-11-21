@@ -45,7 +45,7 @@ import { startFileCleanup } from "./file-cleanup.ts";
 import { createDaemonSessionScope } from "./session-tmp.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
 import { startWorktreeCleanup, type WorktreeCleanup } from "./worktree-cleanup.ts";
-import { startDaemonResources } from "./resources/index.ts";
+import { createSessionProcessReaper, startDaemonResources, type DaemonResourcesHandle } from "./resources/index.ts";
 import {
   projectWorktreesDir,
   resolveHubPaths,
@@ -197,6 +197,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     autoRenew?: NodeJS.Timeout;
     archiveCleanup?: NodeJS.Timeout;
     worktreeCleanup?: WorktreeCleanup;
+    resources?: DaemonResourcesHandle;
     handoverRunner?: HandoverRunner;
     catalogRunner?: ProjectCatalogRunner;
     setup?: SetupRunner;
@@ -239,6 +240,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (autoRenew) clearInterval(autoRenew);
     if (archiveCleanup) clearInterval(archiveCleanup);
     if (worktreeCleanup) await step("worktree 自动清理", () => worktreeCleanup.stop());
+    if (parts.resources) await step("资源巡检", () => parts.resources!.stop());
     parts.sleepInhibitor?.stop();
     // Handover runners report aborts to the ledger, so they stop before the executor and the database.
     if (handoverRunner) {
@@ -543,7 +545,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const executor = createActionExecutor(db, ledger);
     const setup = createSetupRunner({ log });
     parts.setup = setup;
-    const deps = { driver, ledger, sessions, tokens, setup, probeDiffNumstat, probePr, sessionTmp: sessionScope.tmp, sessionOwnerTag: sessionScope.ownerTag };
+    const sessionProcesses = createSessionProcessReaper({ db, tagNonce: sessionScope.tagNonce, ownerTag: sessionScope.ownerTag, sessionTmp: sessionScope.tmp });
+    const deps = { driver, ledger, sessions, tokens, setup, probeDiffNumstat, probePr, sessionTmp: sessionScope.tmp, reapSessionProcesses: sessionProcesses.reapSession };
     executor.register("session.start", createSessionStartHandler(deps));
     executor.register("session.send", createSessionSendHandler(deps));
     executor.register("session.end", createSessionEndHandler(deps));
@@ -553,7 +556,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         ledger, observeReview, addWorktree, setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
         sessionTmp: sessionScope.tmp,
-        sessionTag: (sid) => ({ tag: sessionScope.ownerTag(sid), envValue: sessionScope.ownerEnv(sid) }),
+        sessionTagEnv: sessionScope.ownerEnv,
         resolveWorktreePlacement: async ({ workerId, sessionId, repo, worktreePath }) => {
           let targetPath = worktreePath;
           if (isPathInsideOrEqual(worktreesDir, worktreePath)) {
@@ -626,8 +629,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const feishuPostsStore = createFeishuStore(db);
     parts.stopWorkerRetention = startWorkerRetention({ ledger, db, feishuPosts: feishuPostsStore, feishuOfflineInbox, log });
     parts.worktreeCleanup = startWorktreeCleanup({ ledger, worktreesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
-    const resources = startDaemonResources({ db, paths, ledger, worktrees: parts.worktreeCleanup, sessionScope, processLedger, feishuPosts: feishuPostsStore, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
-    parts.unsubscribe.push(() => resources.stop());
+    const resources = startDaemonResources({ db, paths, ledger, worktrees: parts.worktreeCleanup, sessionScope, sessionProcesses, processLedger, feishuPosts: feishuPostsStore, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
+    parts.resources = resources;
     const runAutoRenew = () => {
       try {
         ledger.runAutoRenew();
