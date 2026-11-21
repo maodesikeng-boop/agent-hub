@@ -334,7 +334,8 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
 
       expect(stdout).toContain("ALL_SUPERVISOR_TESTS_PASSED");
     },
-    45_000,
+    // Compiling plus the binary's deliberate 5s graceful stop and crash-loop phases takes 29-40s on macos-15 runners.
+    120_000,
   );
 
   it.skipIf(process.platform !== "darwin")(
