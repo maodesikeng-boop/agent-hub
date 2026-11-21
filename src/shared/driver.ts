@@ -271,6 +271,8 @@ export interface LaunchFiles {
   readonly?: ReadonlyPolicy;
   capabilities?: SessionCapabilities;
   personaRevision?: number;
+  tmpDir?: string;
+  ownerTag?: string;
 }
 
 export interface PersonaNote {

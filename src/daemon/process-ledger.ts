@@ -12,6 +12,7 @@ export interface LedgerEntry {
   startTime: string;
   purpose: string;
   ownsGroup: boolean;
+  sessionTag?: string;
 }
 
 export type ReapReason = "same_process" | "group_survivors";
@@ -29,6 +30,7 @@ export interface ProcessLedgerOptions {
 
 export interface TrackOptions {
   detached?: boolean;
+  sessionTag?: string;
 }
 
 export interface ProcessLedger {

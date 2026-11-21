@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rename } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { WorkerId } from "../shared/domain.ts";
+import type { HeldWorktreeResource } from "../shared/resources.ts";
 import {
   LOG_PREFIX,
   WORKTREE_CLEANUP_BATCH_LIMIT,
@@ -34,6 +35,10 @@ const TRASH_DIR = ".trash";
 const TRASH_REPO_FILE = ".repo";
 const OUT_OF_QUOTA = Symbol("out-of-quota");
 
+function notImplemented(): never {
+  throw new Error("Not implemented");
+}
+
 export interface WorktreeCleanupLedger {
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
   isWorkerCleanable(workerId: WorkerId): boolean;
@@ -53,6 +58,16 @@ export interface WorktreeCleanupOptions {
 
 export interface WorktreeCleanup {
   runOnce(): Promise<WorkerId[]>;
+  /**
+   * Precondition: none.
+   * Postcondition: returns ended worktrees currently held by safety rules with structured reasons, sample paths, and disk bytes without deleting them.
+   */
+  inspectHeldWorktrees(): Promise<HeldWorktreeResource[]>;
+  /**
+   * Precondition: workerId belongs to an ended Worker whose worktree is strictly inside managed worktree roots and not active.
+   * Postcondition: moves the worktree to .trash, removes it, prunes git metadata, optionally deletes its branch, and returns freed bytes.
+   */
+  discardWorktree(workerId: WorkerId, options?: { deleteBranch?: boolean }): Promise<{ removedBytes: number }>;
   stop(): Promise<void>;
 }
 
@@ -317,7 +332,7 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     }
   };
 
-  return { runOnce, stop };
+  return { runOnce, inspectHeldWorktrees: notImplemented, discardWorktree: notImplemented, stop };
 }
 
 export function startWorktreeCleanup(options: WorktreeCleanupOptions): WorktreeCleanup {
@@ -330,6 +345,8 @@ export function startWorktreeCleanup(options: WorktreeCleanupOptions): WorktreeC
   timer.unref?.();
   return {
     runOnce: () => cleanup.runOnce(),
+    inspectHeldWorktrees: () => cleanup.inspectHeldWorktrees(),
+    discardWorktree: (workerId, opts) => cleanup.discardWorktree(workerId, opts),
     stop: async () => {
       clearInterval(timer);
       await cleanup.stop();

@@ -747,3 +747,46 @@ export async function probeDiffNumstat(
   }
   return null;
 }
+
+export interface LocalBranchInfo {
+  readonly name: string;
+  readonly commit: string;
+  readonly checkedOutPath: string | null;
+}
+
+/**
+ * Precondition: repoFolder is a git repository and branch names a local branch under refs/heads/.
+ * Postcondition: returns true when branch's squashed diff against its merge-base with a main/master target ref is already present in that target ref (via git commit-tree and git cherry), without creating refs or touching the worktree.
+ */
+export async function isBranchSquashMergedToMain(
+  repoFolder: string,
+  branch: string,
+  baseCommit: string | null,
+  options: GitOptions = {},
+): Promise<boolean> {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: repoFolder is a git repository.
+ * Postcondition: lists local branches under refs/heads/ matching prefix (or all local branches when prefix is omitted), annotated with any worktree checkout path.
+ */
+export async function listLocalBranches(
+  repoFolder: string,
+  prefix?: string,
+  options: GitOptions = {},
+): Promise<LocalBranchInfo[]> {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: repoFolder is a git repository and branch is a managed non-protected local branch not checked out in any worktree.
+ * Postcondition: deletes refs/heads/<branch> (using -d unless force is true); throws GitError("git_failed") if branch is main, master, HEAD, or checked out by a worktree.
+ */
+export async function deleteLocalBranch(
+  repoFolder: string,
+  branch: string,
+  options: GitOptions & { force?: boolean } = {},
+): Promise<void> {
+  throw new Error("Not implemented");
+}

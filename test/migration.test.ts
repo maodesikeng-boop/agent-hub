@@ -1190,6 +1190,7 @@ describe("0011_message_cancelled：从 0010 的库升级", () => {
       { name: "messages_conversation" },
       { name: "messages_conversation_non_agent" },
       { name: "messages_in_flight" },
+      { name: "messages_pm_tools" },
       { name: "messages_session" },
       { name: "messages_worker" },
       { name: "messages_worker_lines" },
@@ -2558,4 +2559,8 @@ describe("0045_project_capability_defaults", () => {
     expect(db.all("SELECT * FROM default_capability_overrides")).toEqual(defaults);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
+});
+
+describe("0046_resource_lifecycle", () => {
+  it.todo("creates resource_decisions and messages_pm_tools, strips meta.input from tool messages, deletes non-worker session_steps, clears consumed handover blobs, and is idempotent on rerun");
 });

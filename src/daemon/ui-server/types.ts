@@ -18,6 +18,7 @@ import type { CapabilityInventoryService } from "../pm-capabilities/inventory.ts
 import type { ProviderManager } from "../provider-manager/index.ts";
 import type { PresenceBoard } from "../push/presence.ts";
 import type { PushSubscriptionRecord } from "../push/subscriptions.ts";
+import type { ResourceInspector } from "../resources/index.ts";
 import type { RouterDispatcher, RouterTargetPort } from "../router/index.ts";
 import type { Db } from "../store/index.ts";
 import type { UpdateChecker } from "../update-checker.ts";
@@ -63,6 +64,7 @@ export interface UiServerOptions {
     status(): SelfReloadStatus;
   };
   update?: UpdateChecker;
+  resources?: ResourceInspector;
 }
 
 export const DESKTOP_PRODUCT = "fusa" as const;
