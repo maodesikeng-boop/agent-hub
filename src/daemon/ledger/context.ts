@@ -67,6 +67,8 @@ export interface LedgerContext {
   pushed: Map<SessionId, string>;
   subscribe<T>(listeners: Set<T>, listener: T): () => void;
   write<T>(fn: (p: Pending) => T): T;
+  /** The transaction currently inside `write`, so reads can see state staged for commit. */
+  activePending(): Pending | null;
   /** In-memory changes such as streaming text deltas bypass the transaction and are broadcast immediately. */
   emitChange(input: ChangeInput): void;
   enqueue(p: Pending, action: NewAction): void;
@@ -114,6 +116,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
   const stopListeners = new Set<(event: StopEvent) => void>();
   const pushed = new Map<SessionId, string>();
   let generation = 0;
+  let active: Pending | null = null;
 
   const notify = <T>(listeners: Set<(value: T) => void>, value: T) => {
     for (const listener of [...listeners]) {
@@ -136,7 +139,13 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     // Notifying inside an outer transaction would publish changes that the outer rollback could undo.
     if (db.inTransaction) throw new Error("ledger write inside an outer transaction");
     const pending: Pending = { changes: [], actions: [], stops: [], pushed: new Map(), after: [] };
-    const result = db.transaction(() => fn(pending));
+    active = pending;
+    let result: T;
+    try {
+      result = db.transaction(() => fn(pending));
+    } finally {
+      active = null;
+    }
     generation++;
     for (const after of pending.after) {
       try {
@@ -203,6 +212,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     pushed,
     subscribe,
     write,
+    activePending: () => active,
     emitChange,
     enqueue,
     reportHealthIn,
