@@ -16,8 +16,9 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import claudeSpec from "../../src/vendors/claude/spec.ts";
 import { claudeProjectDirName } from "../../src/vendors/claude/transcript.ts";
-import { ENV_DEFAULT_MODEL, ENV_HUB_SOCK, ENV_HUB_TOKEN, type Message, type SessionId, type SessionState, type StateSnapshot } from "../../src/shared/index.ts";
+import { ENV_DB_SHARED_ACCESS, ENV_DEFAULT_MODEL, ENV_HOME, ENV_HUB_SOCK, ENV_HUB_TOKEN, ENV_PORT, type Message, type SessionId, type SessionState, type StateSnapshot } from "../../src/shared/index.ts";
 import { createSessionTokens, installHubShim, startAgentApi } from "../../src/daemon/agent-api/index.ts";
+import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import { vendorSessionFiles } from "../../src/daemon/driver/transcript.ts";
 import { createLedger, type SqliteLedger } from "../../src/daemon/ledger/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
@@ -30,6 +31,17 @@ export const CLAUDE = process.env[claudeSpec.cli.envVar] || claudeSpec.cli.comma
 export const TURN_MS = 180_000;
 
 export { sleep, waitUntil };
+
+/** Env for a script that calls startDaemon() in-process: data in `home`, a free port, and no parent agent session. */
+export function smokeDaemonEnv(home: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(process.env)) if (!PARENT_SESSION_ENV.includes(key)) env[key] = value;
+  env[ENV_HOME] = home;
+  env[ENV_PORT] = "0";
+  // Smoke scripts read the ledger while the daemon runs, which the default exclusive lock refuses.
+  env[ENV_DB_SHARED_ACCESS] = "1";
+  return env;
+}
 
 /** 转发脚本记下的 claude 输出放在 <数据目录>/streams/，文件名是会话 ID 的哈希（不让会话 ID 出现在 tee 的命令行里，查进程时认不错）。 */
 const STREAMS_DIR = "streams";

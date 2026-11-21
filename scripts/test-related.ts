@@ -17,6 +17,7 @@ export const ALWAYS_RUN_TESTS = [
   "src/vendors/contract.test.ts",
   "src/web/query-write-guard.test.ts",
   "src/web/web-guard.test.ts",
+  "test/smoke/ledger-access.test.ts",
 ] as const;
 
 const DEFAULT_BASE = "origin/main";

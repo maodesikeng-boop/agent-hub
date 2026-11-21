@@ -8,19 +8,16 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDaemon } from "../../src/daemon/daemon.ts";
-import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import {
   AGENT_VENDORS,
   API_PATHS,
-  ENV_HOME,
-  ENV_PORT,
   isHandoverTraffic,
   systemEventOf,
   type AgentVendor,
 } from "../../src/shared/index.ts";
 import { Client, messagesOf, waitForStatus, waitUntil } from "../e2e/harness.ts";
-import { MODEL, expect, removeOwnClaudeProjects, removeOwnVendorRecords, scenario, type Outcome } from "./kit.ts";
+import { MODEL, expect, removeOwnClaudeProjects, removeOwnVendorRecords, scenario, smokeDaemonEnv, type Outcome } from "./kit.ts";
 
 const TURN_MS = 240_000;
 /** 记暗号之后再连着聊几句。 */
@@ -42,10 +39,7 @@ const outcomes: Outcome[] = [];
 let keepDir = false;
 console.log(`auto-renew smoke：临时数据目录 ${dir}，厂商 ${vendors.join("、")}`);
 
-const env: Record<string, string | undefined> = {};
-for (const [k, v] of Object.entries(process.env)) if (!PARENT_SESSION_ENV.includes(k)) env[k] = v;
-env[ENV_HOME] = home;
-env[ENV_PORT] = "0";
+const env = smokeDaemonEnv(home);
 env.AGENT_HUB_AGY ??= join(homedir(), ".local/bin/agy");
 env.AGENT_HUB_CODEX ??= "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
