@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { createStore } from "zustand";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serverInfoFor, type ConversationId, type Message, type SentFile } from "../../shared/index.ts";
 import { createClient, localClient } from "../client.ts";
 import { FleetDeviceScopes } from "../device-scope.tsx";
@@ -42,6 +42,9 @@ let queryClient: QueryClient;
 beforeEach(() => {
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function renderReply(lookup: DeviceStoreLookup, d = dest(), onOpen: (deviceKey: string, id: ConversationId) => void = () => {}, extra?: React.ReactNode) {
   const ui = <ForwardReply dest={d} stores={lookup} client={localClient} onOpenConversation={onOpen} />;
@@ -57,9 +60,10 @@ describe("ForwardReply", () => {
   });
 
   it("replied：用项目经理对话里同一个组件画回复正文和交付文件，结尾有复制键和回复的时间", () => {
-    // 今天 12:31 回的：时间只显示时:分（formatTime 对不是今天的显示月/日）
-    const today = new Date();
-    const reply = makeMessage({ id: 11, text: "飞书接入的 PR 还在审查", createdAt: new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12, 31).getTime() });
+    // formatTime shows hh:mm only for today, so the clock is pinned instead of read at test time.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 18, 15, 0));
+    const reply = makeMessage({ id: 11, text: "飞书接入的 PR 还在审查", createdAt: new Date(2026, 10, 18, 12, 31).getTime() });
     const { container } = renderReply(stores([makeUserMessage({ id: 10, meta: { replyId: 11 } }), reply]));
     expect(screen.getByText("飞书接入的 PR 还在审查")).toBeInTheDocument();
     // 和项目经理对话里一轮回复同一个 AgentText，带 data-message-id
