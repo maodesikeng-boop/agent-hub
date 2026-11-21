@@ -29,7 +29,18 @@ interface ImportRef {
 type AstNode = { type: string; [key: string]: unknown };
 const isAstNode = (v: unknown): v is AstNode => typeof v === "object" && v !== null && typeof (v as AstNode).type === "string";
 
-export function importsOf(file: string): ImportRef[] {
+// Source files do not change during a run, and the deep walks below revisit the same files once per starting file.
+const parsedImports = new Map<string, readonly ImportRef[]>();
+
+export function importsOf(file: string): readonly ImportRef[] {
+  const cached = parsedImports.get(file);
+  if (cached) return cached;
+  const parsed = parseImports(file);
+  parsedImports.set(file, parsed);
+  return parsed;
+}
+
+function parseImports(file: string): ImportRef[] {
   const text = readFileSync(join(ROOT, file), "utf8");
   const { program, errors } = parseSync(file, text);
   if (errors.length > 0) throw new Error(`${file} 解析失败：${errors[0]!.message}`);

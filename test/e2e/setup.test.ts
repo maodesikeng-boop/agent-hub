@@ -9,6 +9,7 @@ import { openDatabase } from "../../src/daemon/store/index.ts";
 import { SETUP_RECEIPT_NOTE } from "../../src/daemon/prompt.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
 import { Client, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
+import { sandboxAllowsNestedSandbox } from "../sandbox-probes.ts";
 
 const hub = HUB_COMMAND;
 
@@ -93,7 +94,7 @@ const setupLog = (workerId: number) => join(env.home, "state", "logs", "setup", 
 const waitPid = (path: string) => waitUntil(`pid in ${path}`, () => (existsSync(path) && readFileSync(path, "utf8").trim() !== "" ? Number(readFileSync(path, "utf8").trim()) : undefined), 15_000);
 
 describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
-  it("32 没配准备命令：和以前一样，Worker 收到的就是任务原文，不写日志", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("32 没配准备命令：和以前一样，Worker 收到的就是任务原文，不写日志", async () => {
     env = makeEnv();
     const dir = repo("plain");
     env.setScript(scripts({ turns: [{ steps: [{ bash: startCmd("修 X", "把 X 修好") }, { text: "派了" }] }], defaultTurn: say("收到") }, { defaultTurn: say(report("好了")) }));
@@ -111,7 +112,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await terminate(daemon);
   });
 
-  it("33 配了 touch ready：Worker 起来时 ready 已经在 worktree 里，任务前面一行“已经跑过”，日志里有输出；回执有那一句", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("33 配了 touch ready：Worker 起来时 ready 已经在 worktree 里，任务前面一行“已经跑过”，日志里有输出；回执有那一句", async () => {
     env = makeEnv();
     const dir = repo("ok");
     env.setScript(
@@ -141,7 +142,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await terminate(daemon);
   });
 
-  it("34 准备命令失败（exit 2）：Worker 照常开工，第一条话里有退出码和输出", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("34 准备命令失败（exit 2）：Worker 照常开工，第一条话里有退出码和输出", async () => {
     env = makeEnv();
     const dir = repo("fail");
     env.setScript(
@@ -162,7 +163,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await terminate(daemon);
   });
 
-  it("35 --no-worktree：配了准备命令也不跑", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("35 --no-worktree：配了准备命令也不跑", async () => {
     env = makeEnv();
     const dir = repo("nowt");
     env.setScript(
@@ -219,7 +220,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await terminate(daemon);
   });
 
-  it("R1 准备中项目经理发话（hub worker send）：被拒、Worker 不会被拉起来；放行后第一轮是任务说明", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("R1 准备中项目经理发话（hub worker send）：被拒、Worker 不会被拉起来；放行后第一轮是任务说明", async () => {
     env = makeEnv();
     const dir = repo("early");
     const gate = join(env.dir, "gate");
@@ -254,7 +255,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await terminate(daemon);
   });
 
-  it("37、38 准备中关机：很快关完、准备命令没了；改好命令重启后从头再跑，Worker 开工", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("37、38 准备中关机：很快关完、准备命令没了；改好命令重启后从头再跑，Worker 开工", async () => {
     env = makeEnv();
     const dir = repo("restart");
     const pidFile = join(env.dir, "setup.pid");
@@ -291,7 +292,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await terminate(daemon);
   });
 
-  it("39 同时派 5 个（比执行器的并发数多）：准备命令都在跑时项目经理照常回话；放行后 5 个都开工", { timeout: 90_000 }, async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("39 同时派 5 个（比执行器的并发数多）：准备命令都在跑时项目经理照常回话；放行后 5 个都开工", { timeout: 90_000 }, async () => {
     env = makeEnv();
     const dir = repo("many");
     const gate = join(env.dir, "gate");

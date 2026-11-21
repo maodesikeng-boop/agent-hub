@@ -1,9 +1,9 @@
 // W5 端到端（m1-plan 第 4 节“W5 组装 + 端到端”）：真守护进程 + 假 claude，临时数据目录。
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { sandboxAllowsPs } from "../sandbox-probes.ts";
 import { API_PATHS, CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE, isDeviceId, type Attachment } from "../../src/shared/index.ts";
 import { AGENTS_NOTE, DEFAULT_PM_NAME, HUB_USAGE_PROMPT, buildPmModePrompt } from "../../src/daemon/prompt.ts";
 import { taskGraphSkillMarkdown } from "../../src/shared/task-graph-skill.ts";
@@ -42,18 +42,6 @@ async function terminate(daemon: RunningDaemon) {
 }
 
 const fakePids = () => env.argvs().map((a) => a.pid);
-
-// The restarted daemon recognizes a crashed run's agents with ps, and macOS Worker sandboxes refuse to exec the setuid /bin/ps.
-const psRunnable =
-  process.platform === "win32" ||
-  (() => {
-    try {
-      execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
 
 describe("W5 组装 + 端到端", () => {
   it("首次启动：打印登录链接，自动建一个项目经理和它的私聊；再启动不重复建", async () => {
@@ -284,7 +272,8 @@ describe("W5 组装 + 端到端", () => {
     await terminate(again);
   });
 
-  it.skipIf(!psRunnable)("守护进程崩溃：一轮中 SIGKILL，再启动结束留下的假 claude，带恢复说明重发，消息不重复、不丢", async () => {
+  // The restarted daemon recognizes a crashed run's agents with ps.
+  it.skipIf(!sandboxAllowsPs())("守护进程崩溃：一轮中 SIGKILL，再启动结束留下的假 claude，带恢复说明重发，消息不重复、不丢", async () => {
     env = makeEnv();
     env.setScript({ turns: [slow(30_000)], defaultTurn: quick("接着做完了") });
     const first = await boot();

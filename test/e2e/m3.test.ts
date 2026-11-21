@@ -24,6 +24,7 @@ import {
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
 import { Client, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
+import { sandboxAllowsNestedSandbox } from "../sandbox-probes.ts";
 
 /** 命令名（names.ts）：改名只改那一处，剧本和断言跟着变。 */
 const hub = HUB_COMMAND;
@@ -151,7 +152,7 @@ const tokenOf = (pid: number) => env.envs().find((e) => e.pid === pid)!.env.HUB_
 
 // 每条要起一两次真守护进程、跑好几个假 claude 和真 git
 describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
-  it("整条路（worktree）：派活 → 汇报 → 打回 → 再汇报 → 收工；Worker 越权被拒；收工后令牌 401", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("整条路（worktree）：派活 → 汇报 → 打回 → 再汇报 → 收工；Worker 越权被拒；收工后令牌 401", async () => {
     env = makeEnv();
     const dir = repo("foo");
     const gate = join(env.dir, "gate-end");
@@ -267,7 +268,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await terminate(daemon);
   });
 
-  it("不是 git 仓库：照样能派，Worker 在主文件夹里干；--no-worktree 在仓库里也一样", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("不是 git 仓库：照样能派，Worker 在主文件夹里干；--no-worktree 在仓库里也一样", async () => {
     env = makeEnv();
     const plain = folder("plain");
     const gitDir = repo("withgit");
@@ -307,7 +308,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await terminate(daemon);
   });
 
-  it("连派 10 个：都成功，各在各的 worktree 里，10 行汇报", { timeout: 60_000 }, async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("连派 10 个：都成功，各在各的 worktree 里，10 行汇报", { timeout: 60_000 }, async () => {
     env = makeEnv();
     const dir = repo("many");
     const loop = `for i in 1 2 3 4 5 6 7 8 9 10; do\n${hub} worker start --title "活 $i" --stdin <<EOF || exit 1\n做第 $i 件事\nEOF\ndone`;
@@ -350,7 +351,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await terminate(daemon);
   });
 
-  it("重启：worktree 还没建好就关机，再启动后接着建，Worker 照常开工、汇报", { timeout: 60_000 }, async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("重启：worktree 还没建好就关机，再启动后接着建，Worker 照常开工、汇报", { timeout: 60_000 }, async () => {
     env = makeEnv();
     const dir = repo("later");
     const branch = workerBranchName(1, "修 X");
@@ -377,7 +378,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await terminate(daemon);
   });
 
-  it("重启：Worker 跑到一半关机，不发“这一轮没做完”；再启动后 --resume 接着做完，汇报照样回来（验收第 11 条）", { timeout: 60_000 }, async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("重启：Worker 跑到一半关机，不发“这一轮没做完”；再启动后 --resume 接着做完，汇报照样回来（验收第 11 条）", { timeout: 60_000 }, async () => {
     env = makeEnv();
     const dir = repo("slow");
     const never = join(env.dir, "never");
@@ -431,7 +432,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await terminate(daemon);
   });
 
-  it("重启：项目经理处理 Worker 的汇报时关机，汇报不标已停止；再启动后重发给项目经理的同一个会话", { timeout: 60_000 }, async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("重启：项目经理处理 Worker 的汇报时关机，汇报不标已停止；再启动后重发给项目经理的同一个会话", { timeout: 60_000 }, async () => {
     env = makeEnv();
     const dir = repo("pm-slow");
     const never = join(env.dir, "never");
@@ -472,7 +473,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await terminate(daemon);
   });
 
-  it("Worker 的对话：快照里有、能往前翻页、能点停止，项目经理收到“被停止了”", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("Worker 的对话：快照里有、能往前翻页、能点停止，项目经理收到“被停止了”", async () => {
     env = makeEnv();
     const dir = repo("stop");
     const never = join(env.dir, "never");
@@ -516,7 +517,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     ]);
     await terminate(daemon);
   });
-  it("用户直接对 Worker 说：Worker 收到带【用户直接对你说】的原文，项目经理收到通知和这一轮的汇报；收工后再发 409", { timeout: 30_000 }, async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("用户直接对 Worker 说：Worker 收到带【用户直接对你说】的原文，项目经理收到通知和这一轮的汇报；收工后再发 409", { timeout: 30_000 }, async () => {
     env = makeEnv();
     const dir = repo("direct");
     env.setScript(
@@ -562,7 +563,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await terminate(daemon);
   });
 
-  it("Worker 回一句“在等 CI”后，后台任务完成、claude 自己开一轮：两次汇报都交给项目经理，顺序对；项目经理自己开的一轮的回复也在对话里；关机不出错", { timeout: 40_000 }, async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("Worker 回一句“在等 CI”后，后台任务完成、claude 自己开一轮：两次汇报都交给项目经理，顺序对；项目经理自己开的一轮的回复也在对话里；关机不出错", { timeout: 40_000 }, async () => {
     env = makeEnv();
     const dir = repo("selfturn");
     env.setScript(

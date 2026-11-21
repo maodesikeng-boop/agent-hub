@@ -1,11 +1,12 @@
 // 强制结束杀到 claude 的所有后代（冒烟 S10c）：真 claude 的 Bash 工具把命令放进它自己的新进程组，
 // 只按 claude 的进程组杀会把命令留成孤儿。这里先单测“给一张进程表，算出要杀什么”，再用假 claude 起一个
 // 放在新进程组里的子进程，走一遍驱动层每条 SIGKILL 的路径。
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import { PS_TIMEOUT_MS } from "../../shared/index.ts";
 import { forceKill, forceKillTree, killTargets, parsePs, signalChild, signalTarget, termGroupAfterExit, type PsRow } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
@@ -138,14 +139,7 @@ function pgidOf(pid: number): Promise<number> {
   });
 }
 
-const canRunPs = process.platform !== "win32" && (() => {
-  try {
-    execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const canRunPs = process.platform !== "win32" && sandboxAllowsPs();
 
 describe.runIf(canRunPs)("强制结束：claude 起在新进程组里的子进程也要没了", () => {
   it("关机超过宽限期", async () => {

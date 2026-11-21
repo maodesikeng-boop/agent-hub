@@ -146,7 +146,7 @@ Seen in: `6af05c80`, `4b557b03`
 
 Trigger: `**/*.test.ts`, `**/*.test.tsx`, `test/**`
 
-Check: A test that needs a child process or timer to reach some state awaits the event that proves it (a driver event, a log line, a file) or advances fake timers. It does not sleep a fixed time and hope the state arrives first. A test that formats or compares dates pins the clock with `vi.setSystemTime` instead of reading the wall clock. A per-test timeout leaves at least twice the slowest runtime seen on the CI runner that runs it. A test that needs something a Worker sandbox forbids, such as running the setuid `/bin/ps` or nesting `sandbox-exec` on macOS, probes for it and uses `it.skipIf`, so it never fails only on a Worker machine.
+Check: A test that needs a child process or timer to reach some state awaits the event that proves it (a driver event, a log line, a file) or advances fake timers. It does not sleep a fixed time and hope the state arrives first. A test that formats or compares dates pins the clock with `vi.setSystemTime` instead of reading the wall clock. A per-test timeout leaves at least twice the slowest runtime seen on the CI runner that runs it. A test does not assert wall-clock durations; it asserts the observable cause of slowness, such as zero spawned processes. A test that needs something a Worker sandbox forbids, such as running the setuid `/bin/ps` or nesting `sandbox-exec` on macOS, skips through `test/sandbox-probes.ts`, which skips only on a permission refusal, so a tool missing from a CI image still fails the test instead of skipping it.
 
 Seen in: `12633961`, `d82bae28`, #397
 

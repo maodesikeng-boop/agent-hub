@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import type { SetupOutcome } from "../../shared/index.ts";
 import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH, SETUP_OUTPUT_TAIL_BYTES, SETUP_OUTPUT_TAIL_LINES, SETUP_TIMEOUT_MS } from "../../shared/index.ts";
 import { isAlive, waitForExit } from "../driver/process.ts";
@@ -83,7 +84,7 @@ describe.skipIf(process.platform === "win32")("runSetupCommand", () => {
     expect(await waitForExit(readPid("shell.pid"), 2_000)).toBe(true);
   });
 
-  it("6 超时：后台的子进程、换了进程组的孙进程也一起没了", async () => {
+  it.skipIf(!sandboxAllowsPs())("6 超时：后台的子进程、换了进程组的孙进程也一起没了", async () => {
     const script = "sleep 300 & echo $! > child.pid; (set -m; sleep 300 & echo $! > grandchild.pid; wait) & wait";
     const promise = run(script, { timeoutMs: 1_000 });
     await waitForFile(join(cwd, "grandchild.pid"));

@@ -40,6 +40,23 @@ describe("scripts/test-related.ts", () => {
     expect(listChangedFiles(repo, "main")).toEqual(["edited.ts", "migrations/0001.sql", "new.ts", "staged.ts"]);
   });
 
+  it("lists more untracked paths than the default 1 MB child output buffer holds", () => {
+    const repo = mkdtempSync(join(tmpdir(), "test-related-"));
+    dirs.push(repo);
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "commit", "-q", "--allow-empty", "-m", "base");
+    const bulk = join(repo, "bulk");
+    mkdirSync(bulk);
+    const count = 6_000;
+    for (let i = 0; i < count; i++) writeFileSync(join(bulk, `${String(i).padStart(5, "0")}-${"x".repeat(200)}.ts`), "");
+
+    expect(listChangedFiles(repo, "main")).toHaveLength(count);
+  });
+
+  it("keeps a pnpm store created inside the worktree out of the change list", () => {
+    expect(() => execFileSync("git", ["check-ignore", "-q", ".pnpm-store/v10/index"], { cwd: REPO_ROOT })).not.toThrow();
+  });
+
   it("links runtime-loaded files by path and leaves code to the import graph", () => {
     expect(referenceNeedles("src/daemon/store/migrate.ts")).toEqual([]);
     expect(referenceNeedles("migrations/0046_x.sql")).toEqual(["migrations/0046_x.sql", "migrations/"]);

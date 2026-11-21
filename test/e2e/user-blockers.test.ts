@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, askOf, REPORT_END, REPORT_START, vendorSpec, type Message, type RecheckUserBlockerResponse } from "../../src/shared/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
+import { sandboxAllowsNestedSandbox } from "../sandbox-probes.ts";
 import { Client, firstPidOfConversation, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv } from "./harness.ts";
 
 let env: E2eEnv;
@@ -70,7 +71,7 @@ const report = `做完了。\n\n${REPORT_START}\n状态: 做完了\n摘要: 实�
 const blockerCards = (messages: readonly Message[]) => messages.filter((m) => askOf(m)?.blockerRef !== undefined);
 
 describe("要用户动手的事：真守护进程", { timeout: 90_000 }, () => {
-  it("冷启动第一次建图、上游自动做完交棒：两个项目经理各一张卡；点一次 Done 两边都开工", async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("冷启动第一次建图、上游自动做完交棒：两个项目经理各一张卡；点一次 Done 两边都开工", async () => {
     env = makeEnv();
     const loggedIn = join(env.fakeDir, "agy-logged-in");
     const agyPath = fakeAgy(loggedIn);

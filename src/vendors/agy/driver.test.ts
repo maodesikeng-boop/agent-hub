@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import {
   DriverError,
   EMPTY_TOKEN_USAGE,
@@ -55,14 +56,7 @@ const canRunSandboxExec =
     }
   })();
 
-const canRunPs = process.platform !== "win32" && (() => {
-  try {
-    execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const canRunPs = process.platform !== "win32" && sandboxAllowsPs();
 
 class MemorySessionStore implements SessionStore {
   readonly rows = new Map<SessionId, AgentSessionRow>();
