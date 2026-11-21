@@ -706,6 +706,22 @@ describe("汇报回到项目经理", () => {
     expect(taskMessage(worker).status).toBe("replied");
     expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId: lin.sessionId, messageId: lines[0]!.id, source: "system" }]]);
   });
+
+  it("这一轮结束时删超时记录失败：整次落账回滚重试，库恢复后超时记录删掉、汇报只有一行", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const task = taskMessage(worker).id;
+    db.exec("CREATE TRIGGER fail_timeout BEFORE DELETE ON worker_turn_timeouts BEGIN SELECT RAISE(ABORT, 'boom'); END");
+    runTurn(worker, [task], report("做完了", "X 修好了"));
+    expect(taskMessage(worker).status).toBe("processing");
+    expect(count("worker_turn_timeouts", "worker_id = ?", worker.id)).toBe(1);
+
+    db.exec("DROP TRIGGER fail_timeout");
+    now += 5_000;
+    vi.advanceTimersByTime(5_000);
+    expect(taskMessage(worker).status).toBe("replied");
+    expect(count("worker_turn_timeouts", "worker_id = ?", worker.id)).toBe(0);
+    expect(workerLines().filter((m) => workerEventOf(m)?.event === "report")).toHaveLength(1);
+  });
 });
 
 describe("出错、停止", () => {

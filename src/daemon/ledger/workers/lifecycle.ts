@@ -13,13 +13,13 @@ import type { StepWorkspacePlan, TaskGraphWorkersBridge } from "../task-graphs.t
 import { ownWorker, workerRow, workerSession } from "./ctx.ts";
 import { insertLine, insertPmMessage, isWorkerInFlight, stopQueued } from "./lines.ts";
 import { notStarted, sendDedupeKey, validMaxTimeMs, validTask, worktreeLabel } from "./text.ts";
-import { clearMaxTime, startMaxTime } from "./timers.ts";
+import { clearMaxTime, clearMaxTimeIn, startMaxTime } from "./timers.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
 export type EndedWorker = { ended: WorkerDbRow; interrupted: boolean; nodeNote: string | null };
 
 export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts: { notifyGraph?: boolean } = {}): EndedWorker {
-  p.after.push(() => clearMaxTime(w, worker.worker_conversation_id));
+  clearMaxTimeIn(w, p, worker.worker_conversation_id);
   const session = workerSession(w, worker);
   const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
   if (interrupted) p.after.push(() => w.endInterrupted.add(session.id));

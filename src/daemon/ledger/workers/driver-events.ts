@@ -15,7 +15,7 @@ import {
   onlyManualCompact,
 } from "./reports.ts";
 import { TURN_STOPPED, backgroundKilledNote, notStarted, turnOutcome, type TurnOutcome } from "./text.ts";
-import { clearMaxTime, ensureTurnMaxTime } from "./timers.ts";
+import { clearMaxTime, clearMaxTimeIn, ensureTurnMaxTime } from "./timers.ts";
 import type { WorkersCtx } from "./types.ts";
 
 function clearMaxTimeIfIdle(w: WorkersCtx, workerId: WorkerId): void {
@@ -51,7 +51,7 @@ function onTurnOutcome(
     w.endInterrupted.delete(session.id);
   });
   if (facts?.endingAfterStop && outcome.event === "turn_failed" && outcome.reason === TURN_STOPPED) {
-    p.after.push(() => clearMaxTime(w, worker.worker_conversation_id));
+    clearMaxTimeIn(w, p, worker.worker_conversation_id);
     return;
   }
   if (outcome.event === "report" && facts?.waitingForBackground) {
@@ -73,9 +73,7 @@ function onTurnOutcome(
       worker.worker_conversation_id,
       completedUpToId,
     ) !== undefined;
-  if (!hasPendingFollowup) {
-    p.after.push(() => clearMaxTime(w, worker.worker_conversation_id));
-  }
+  if (!hasPendingFollowup) clearMaxTimeIn(w, p, worker.worker_conversation_id);
   const turnMessageId = outcome.turnMessageId ?? (facts === null ? null : lastAgentMessageId(w, session.id, facts.turnStart));
   if (turnMessageId === null) return;
   if (outcome.event === "turn_failed") {
