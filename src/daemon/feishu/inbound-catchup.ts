@@ -1,17 +1,18 @@
 import pLimit from "p-limit";
-import type { FeishuChatId, FeishuChatTarget, FeishuOpenId } from "../../shared/feishu.ts";
+import type { FeishuChatId, FeishuChatTarget, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
 import {
   FEISHU_INBOUND_CATCHUP_CONCURRENCY,
   FEISHU_INBOUND_CATCHUP_MAX_MESSAGES,
   FEISHU_INBOUND_CATCHUP_MAX_PAGES,
   FEISHU_INBOUND_CATCHUP_OVERLAP_MS,
   FEISHU_INBOUND_CATCHUP_WINDOW_MS,
+  FEISHU_INBOUND_GAP_PROBE_MAX_PAGES,
   FEISHU_MESSAGE_LIST_PAGE_SIZE,
 } from "../../shared/limits.ts";
-import { handleError } from "./api.ts";
+import { handleError, sendText } from "./api.ts";
 import { ensureScopesChecked } from "./connection.ts";
 import { errorText, owner, type FeishuContext } from "./context.ts";
-import { handleInbound } from "./inbound-dispatch.ts";
+import { feishuLocalStamp, handleInbound } from "./inbound-dispatch.ts";
 import { parseFeishuEvent, type FeishuInbound } from "./inbound.ts";
 import { inboundTask, laneOf, settleIdle, startLane } from "./lanes.ts";
 import { activeTarget } from "./projection.ts";
@@ -21,6 +22,11 @@ import { FeishuApiError, FeishuAuthError, type FeishuRawMessageEvent, type Feish
 
 type InboundMessage = Extract<FeishuInbound, { kind: "message" }>;
 
+interface WindowGap {
+  fromMs: number;
+  toMs: number;
+}
+
 interface CatchUpWindow {
   chatId: FeishuChatId;
   chatType: "p2p" | "group";
@@ -28,6 +34,12 @@ interface CatchUpWindow {
   sinceMs: number;
   startSec: number;
   endSec: number;
+  gap: WindowGap | null;
+}
+
+interface MissedMessages {
+  messages: InboundMessage[];
+  unfetchedFrom: number | null;
 }
 
 const inboundTargetLabel = (chat: FeishuChatBinding) =>
@@ -54,19 +66,50 @@ export function noteInboundQueueDrop(ctx: FeishuContext, chatId: FeishuChatId, a
   ctx.catchUp.cursorHold.set(chatId, prev === undefined ? at : Math.min(prev, at));
 }
 
-function catchUpWindow(chat: FeishuChatBinding, target: FeishuChatTarget, botOpenId: FeishuOpenId, chatCreatedAt: number, anchorMs: number, catchUpNow: number): CatchUpWindow {
-  const windowFloorMs = Math.max(chatCreatedAt, catchUpNow - FEISHU_INBOUND_CATCHUP_WINDOW_MS);
-  const sinceMs = Math.max(windowFloorMs, anchorMs);
+function catchUpWindow(
+  chat: FeishuChatBinding,
+  target: FeishuChatTarget,
+  botOpenId: FeishuOpenId,
+  cursor: { chatCreatedAt: number; lastInboundAt: number },
+  includeOverlap: boolean,
+  catchUpNow: number,
+): CatchUpWindow {
+  const windowStartMs = catchUpNow - FEISHU_INBOUND_CATCHUP_WINDOW_MS;
+  const anchorMs = includeOverlap ? cursor.lastInboundAt - FEISHU_INBOUND_CATCHUP_OVERLAP_MS : cursor.lastInboundAt;
+  const sinceMs = Math.max(cursor.chatCreatedAt, windowStartMs, anchorMs);
+  const gapFromMs = Math.max(cursor.chatCreatedAt, cursor.lastInboundAt);
   const startSec = Math.max(0, Math.floor(sinceMs / 1000));
   const endSec = Math.max(startSec + 1, Math.ceil(catchUpNow / 1000) + 60);
-  return { chatId: chat.chatId, chatType: target.kind === "router" ? "p2p" : "group", botOpenId, sinceMs, startSec, endSec };
+  return {
+    chatId: chat.chatId,
+    chatType: target.kind === "router" ? "p2p" : "group",
+    botOpenId,
+    sinceMs,
+    startSec,
+    endSec,
+    gap: gapFromMs < windowStartMs ? { fromMs: gapFromMs, toMs: windowStartMs } : null,
+  };
 }
 
-async function fetchRecentMessages(ctx: FeishuContext, transport: FeishuTransport, win: CatchUpWindow, runEpoch: number): Promise<FeishuRawMessageEvent[] | null> {
-  const fetched: FeishuRawMessageEvent[] = [];
+function unseenMessage(ctx: FeishuContext, raw: FeishuRawMessageEvent, botOpenId: FeishuOpenId, skipId: FeishuMessageId | null): InboundMessage | null {
+  if (raw.messageId === skipId) return null;
+  const parsed = parseFeishuEvent(raw, botOpenId);
+  if (parsed === null || parsed.kind !== "message" || ctx.catchUp.seen.has(parsed.messageId)) return null;
+  return parsed;
+}
+
+// Reads oldest first and caps only unseen messages, so a cap cuts the newest tail and the overlap re-read can never stall progress.
+async function fetchMissedMessages(
+  ctx: FeishuContext,
+  transport: FeishuTransport,
+  win: CatchUpWindow,
+  skipId: FeishuMessageId | null,
+  runEpoch: number,
+): Promise<MissedMessages | null> {
+  const messages: InboundMessage[] = [];
   let pageToken: string | undefined;
-  let pages = 0;
-  while (pages < FEISHU_INBOUND_CATCHUP_MAX_PAGES && fetched.length < FEISHU_INBOUND_CATCHUP_MAX_MESSAGES) {
+  let lastReadAt = win.sinceMs;
+  for (let pages = 0; pages < FEISHU_INBOUND_CATCHUP_MAX_PAGES; pages++) {
     if (isCatchUpStale(ctx, runEpoch)) return null;
     const page = await transport.listMessages({
       chatId: win.chatId,
@@ -74,28 +117,89 @@ async function fetchRecentMessages(ctx: FeishuContext, transport: FeishuTranspor
       botOpenId: win.botOpenId,
       startTimeSec: String(win.startSec),
       endTimeSec: String(win.endSec),
-      sortType: "ByCreateTimeDesc",
-      pageSize: Math.min(FEISHU_MESSAGE_LIST_PAGE_SIZE, FEISHU_INBOUND_CATCHUP_MAX_MESSAGES - fetched.length),
+      sortType: "ByCreateTimeAsc",
+      pageSize: FEISHU_MESSAGE_LIST_PAGE_SIZE,
       ...(pageToken !== undefined ? { pageToken } : {}),
     });
     if (isCatchUpStale(ctx, runEpoch)) return null;
-    pages++;
-    let reachedBeforeFloor = false;
     for (const raw of page.items) {
-      if (raw.createTime < win.sinceMs) {
-        reachedBeforeFloor = true;
-        continue;
-      }
-      fetched.push(raw);
-      if (fetched.length >= FEISHU_INBOUND_CATCHUP_MAX_MESSAGES) break;
+      const missed = raw.createTime >= win.sinceMs ? unseenMessage(ctx, raw, win.botOpenId, skipId) : null;
+      if (missed === null) continue;
+      if (messages.length >= FEISHU_INBOUND_CATCHUP_MAX_MESSAGES) return { messages, unfetchedFrom: missed.at };
+      messages.push(missed);
     }
-    if (!page.hasMore || page.pageToken === null || reachedBeforeFloor) break;
+    if (!page.hasMore || page.pageToken === null) return { messages, unfetchedFrom: null };
+    lastReadAt = page.items.at(-1)?.createTime ?? lastReadAt;
     pageToken = page.pageToken;
   }
-  return fetched.reverse();
+  return { messages, unfetchedFrom: lastReadAt };
 }
 
-function queueMissedMessages(ctx: FeishuContext, chat: FeishuChatBinding, missed: InboundMessage[]) {
+function isUnansweredAsk(ctx: FeishuContext, raw: FeishuRawMessageEvent, gap: WindowGap, botOpenId: FeishuOpenId, skipId: FeishuMessageId | null): boolean {
+  if (raw.createTime < gap.fromMs || raw.createTime >= gap.toMs) return false;
+  const message = unseenMessage(ctx, raw, botOpenId, skipId);
+  return message !== null && (message.chatType === "p2p" || message.mentionedBot || message.senderOpenId === owner(ctx));
+}
+
+async function gapHasUnansweredAsk(
+  ctx: FeishuContext,
+  transport: FeishuTransport,
+  win: CatchUpWindow,
+  gap: WindowGap,
+  skipId: FeishuMessageId | null,
+  runEpoch: number,
+): Promise<boolean | null> {
+  let pageToken: string | undefined;
+  for (let pages = 0; pages < FEISHU_INBOUND_GAP_PROBE_MAX_PAGES; pages++) {
+    if (isCatchUpStale(ctx, runEpoch)) return null;
+    const page = await transport.listMessages({
+      chatId: win.chatId,
+      chatType: win.chatType,
+      botOpenId: win.botOpenId,
+      startTimeSec: String(Math.floor(gap.fromMs / 1000)),
+      endTimeSec: String(Math.floor((gap.toMs - 1) / 1000)),
+      sortType: "ByCreateTimeDesc",
+      pageSize: FEISHU_MESSAGE_LIST_PAGE_SIZE,
+      ...(pageToken !== undefined ? { pageToken } : {}),
+    });
+    if (isCatchUpStale(ctx, runEpoch)) return null;
+    if (page.items.some((raw) => isUnansweredAsk(ctx, raw, gap, win.botOpenId, skipId))) return true;
+    if (!page.hasMore || page.pageToken === null) return false;
+    pageToken = page.pageToken;
+  }
+  return true;
+}
+
+// Messages older than the window are never replayed, so the owner is asked to resend them, and the cursor skips the gap so the reminder fires once.
+async function settleWindowGap(
+  ctx: FeishuContext,
+  transport: FeishuTransport,
+  chat: FeishuChatBinding,
+  win: CatchUpWindow,
+  skipId: FeishuMessageId | null,
+  runEpoch: number,
+): Promise<boolean> {
+  const gap = win.gap;
+  if (gap === null) return true;
+  const missedAsk = await gapHasUnansweredAsk(ctx, transport, win, gap, skipId, runEpoch);
+  if (missedAsk === null) return false;
+  if (missedAsk) {
+    const minutes = FEISHU_INBOUND_CATCHUP_WINDOW_MS / 60_000;
+    try {
+      await sendText(ctx, { chatId: chat.chatId }, `电脑离线超过 ${minutes} 分钟，离线期间 ${feishuLocalStamp(gap.toMs)} 之前发的消息没收到。没得到回复的请重发。`);
+    } catch (error) {
+      if (error instanceof FeishuAuthError) throw error;
+      ctx.log(`飞书：入站补拉超窗提醒没发出去 chatId=${chat.chatId} target=${inboundTargetLabel(chat)} reason=${errorText(error)}`);
+      return !isCatchUpStale(ctx, runEpoch);
+    }
+    ctx.log(`飞书：入站补拉超出回溯窗口已提醒重发 chatId=${chat.chatId} target=${inboundTargetLabel(chat)} gapFrom=${gap.fromMs} windowStart=${gap.toMs}`);
+  }
+  if (isCatchUpStale(ctx, runEpoch)) return false;
+  ctx.store.saveInboundCursor(chat.chatId, { lastInboundAt: gap.toMs, lastMessageId: null }, ctx.now());
+  return true;
+}
+
+function queueMissedMessages(ctx: FeishuContext, chat: FeishuChatBinding, missed: InboundMessage[], unfetchedFrom: number | null) {
   const { inbound } = ctx;
   const available = Math.max(0, inbound.limit - inbound.count);
   const accepted = missed.slice(0, available);
@@ -107,15 +211,16 @@ function queueMissedMessages(ctx: FeishuContext, chat: FeishuChatBinding, missed
     startLane(ctx, inbound, chat.chatId, lane);
   }
   const firstDropped = dropped[0];
-  if (firstDropped === undefined) {
+  const holdAt = firstDropped?.at ?? unfetchedFrom;
+  if (holdAt === null) {
     ctx.catchUp.cursorHold.delete(chat.chatId);
     return;
   }
-  if (firstDropped.at > 0) noteInboundQueueDrop(ctx, chat.chatId, firstDropped.at);
+  if (holdAt > 0) noteInboundQueueDrop(ctx, chat.chatId, holdAt);
   ctx.directory.markAllStale();
   ctx.link.lastError = "飞书入站队列已满，请重发未收到回复的消息";
   ctx.log(
-    `飞书：入站补拉队列已满 chatId=${chat.chatId} target=${inboundTargetLabel(chat)} dropped=${dropped.length} queued=${accepted.length} limit=${inbound.limit} firstDroppedId=${firstDropped.messageId}`,
+    `飞书：入站补拉队列已满 chatId=${chat.chatId} target=${inboundTargetLabel(chat)} dropped=${dropped.length} queued=${accepted.length} limit=${inbound.limit} firstDroppedId=${firstDropped?.messageId ?? "none"} unfetched=${unfetchedFrom !== null}`,
   );
 }
 
@@ -135,24 +240,11 @@ async function catchUpInboundChat(ctx: FeishuContext, chat: FeishuChatBinding, i
     ctx.store.saveInboundCursor(chat.chatId, { lastInboundAt: catchUpNow, lastMessageId: null }, catchUpNow);
     return;
   }
-  const anchorMs = includeOverlap ? cursor.lastInboundAt - FEISHU_INBOUND_CATCHUP_OVERLAP_MS : cursor.lastInboundAt;
-  const win = catchUpWindow(chat, target, app.botOpenId, cursor.chatCreatedAt, anchorMs, catchUpNow);
-  const fetched = await fetchRecentMessages(ctx, transport, win, runEpoch);
+  const win = catchUpWindow(chat, target, app.botOpenId, { chatCreatedAt: cursor.chatCreatedAt, lastInboundAt: cursor.lastInboundAt }, includeOverlap, catchUpNow);
+  if (!(await settleWindowGap(ctx, transport, chat, win, cursor.lastMessageId, runEpoch))) return;
+  const fetched = await fetchMissedMessages(ctx, transport, win, includeOverlap ? null : cursor.lastMessageId, runEpoch);
   if (fetched === null) return;
-  const missed: InboundMessage[] = [];
-  for (const raw of fetched) {
-    if (!includeOverlap && cursor.lastMessageId !== null && raw.messageId === cursor.lastMessageId) continue;
-    const parsed = parseFeishuEvent(raw, app.botOpenId);
-    if (parsed === null || parsed.kind !== "message") continue;
-    if (ctx.catchUp.seen.has(parsed.messageId)) continue;
-    missed.push(parsed);
-  }
-  if (isCatchUpStale(ctx, runEpoch)) return;
-  if (missed.length === 0) {
-    ctx.catchUp.cursorHold.delete(chat.chatId);
-    return;
-  }
-  queueMissedMessages(ctx, chat, missed);
+  queueMissedMessages(ctx, chat, fetched.messages, fetched.unfetchedFrom);
 }
 
 async function catchUpAllChats(ctx: FeishuContext, runEpoch: number, includeOverlap: boolean) {

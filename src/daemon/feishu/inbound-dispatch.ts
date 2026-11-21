@@ -39,11 +39,13 @@ interface Delivery {
 const missedFilesText = (names: readonly string[]) =>
   `没收下：${names.map((n) => `「${n}」`).join("、")}（超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB 或下载失败），压小一点重发试试。`;
 
-function formatOfflineQueuedPrefix(queuedAt: number): string {
-  const d = new Date(queuedAt);
+export function feishuLocalStamp(at: number): string {
+  const d = new Date(at);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `（离线期间 ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} 发的）`;
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+const formatOfflineQueuedPrefix = (queuedAt: number) => `（离线期间 ${feishuLocalStamp(queuedAt)} 发的）`;
 
 export function onRawEvent(ctx: FeishuContext, raw: FeishuRawEvent, queuedAt: number | null) {
   const app = ctx.store.app();
