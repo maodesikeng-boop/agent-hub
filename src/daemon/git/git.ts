@@ -822,4 +822,4 @@ export interface LocalBranchInfo {
   readonly checkedOutPath: string | null;
 }
 
-export { countCommitsAheadOfMain, deleteLocalBranch, isBranchSquashMergedToMain, listLocalBranches } from "./branches.ts";
+

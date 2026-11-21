@@ -1,17 +1,13 @@
 export {
   addWorktree,
-  countCommitsAheadOfMain,
-  deleteLocalBranch,
   GIT_READONLY_ARGS,
   GIT_READONLY_ENV,
   GitError,
   hasUncommittedChanges,
   inspectWorktreeLink,
   isBranchMergedToMain,
-  isBranchSquashMergedToMain,
   isCommitMergedToMain,
   isRepoWithCommit,
-  listLocalBranches,
   moveWorktree,
   parseDiffNumstatZ,
   pinDetachedHead,
@@ -24,6 +20,12 @@ export {
   remoteBranchHead,
   resolveCommit,
 } from "./git.ts";
+export {
+  countCommitsAheadOfMain,
+  deleteLocalBranch,
+  isBranchSquashMergedToMain,
+  listLocalBranches,
+} from "./branches.ts";
 export { probePr, probePrByUrl } from "./pr.ts";
 export type {
   AddWorktreeOptions,

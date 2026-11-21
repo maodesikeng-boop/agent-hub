@@ -138,7 +138,7 @@ export function SettingsDialog({
                 className="flex h-9 shrink-0 cursor-pointer items-center gap-3 rounded-xl px-3 text-body whitespace-nowrap transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=active]:bg-sidebar-active"
               >
                 <Icon className="size-pixel shrink-0 max-[719px]:hidden" aria-hidden="true" />
-                <span className="truncate">{label}</span>
+                {label}
                 {id === "resources" && resourcesSummary.attention && (
                   <span data-testid="resources-tab-attention" aria-hidden="true" className="ml-auto size-2 shrink-0 rounded-full bg-caution" />
                 )}
