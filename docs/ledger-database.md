@@ -11,8 +11,8 @@ The lock exists because `node:sqlite` is synchronous. When another process holds
 The lock has costs:
 
 - A process that has the ledger open when the daemon starts blocks startup. The daemon waits up to 5 seconds, then exits with `ledger_locked` and names the file. Close the other program and start again.
-- To inspect live data, read the newest `hub.sqlite.bak-*` backup, or stop the daemon first.
-- End-to-end tests read the ledger and add triggers to it while the daemon runs, so `test/e2e/harness.ts` sets `AGENT_HUB_DB_SHARED_ACCESS=1`. With that variable the daemon opens the file in normal locking mode, and a foreign write lock stalls it again.
+- To read live data, stop the daemon first. The `hub.sqlite.bak-*` files are not live: the daemon writes one only before it runs migrations or rebuilds the file for `auto_vacuum`, so the newest one shows the ledger as it was before the last upgrade.
+- End-to-end tests read the ledger and add triggers to it while the daemon runs, so `test/e2e/harness.ts` sets `AGENT_HUB_DB_SHARED_ACCESS=1`. Smoke scripts that call `startDaemon()` in-process get the same variable from `smokeDaemonEnv()` in `test/smoke/kit.ts`, and `test/smoke/ledger-access.test.ts` fails if one does not use it. With that variable the daemon opens the file in normal locking mode, and a foreign write lock stalls it again.
 
 ## Migrations and their manifest
 
@@ -32,9 +32,9 @@ Two pull requests that both take the next number append different lines to the e
 
 `test/fixtures/release-db/<tag>.sqlite.gz` holds a ledger that a released version really wrote. `scripts/release-db-fixture.ts` extracts the tag with `git archive` and starts that tag's daemon through that tag's e2e harness and fake vendor CLI. It then creates a project, chats with two PMs through the released API, and gzips the database the daemon leaves after a clean shutdown.
 
-`test/e2e/release-upgrade.test.ts` runs in CI on every pull request. For each sample, it starts the current daemon on a copy and checks these results:
+`test/e2e/release-upgrade.test.ts` runs in CI on every pull request. It runs the same checks on one more sample, which `captureSampleLedger()` from the same script writes with the working tree's daemon. That sample is already at the latest version, as the sample of a release without new migrations will be. For each sample, the test starts the current daemon on a copy and checks these results:
 
-- The daemon backs up the ledger, and the backup opens at the old `user_version`.
+- If the sample is older than the latest migration, the daemon backs it up once, and the backup opens at the old `user_version`. A sample at the latest version gets no backup.
 - The upgraded ledger reaches the latest version, passes `integrity_check` and `foreign_key_check`, and has exactly the schema of a fresh install.
 - The API still serves the sample PMs, project, and replies, can archive and unarchive an old PM, and can create a PM and finish a chat turn.
 
