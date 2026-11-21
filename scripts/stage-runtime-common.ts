@@ -53,6 +53,18 @@ export type StageTargetOs = "win32" | "darwin-arm64" | "host";
 
 const DAEMON_SOURCE_SUBDIRS = ["admin", "daemon", "shared", "vendors", "hub", "feishu", "mesh", "relay"] as const;
 
+/** Repository paths whose contents end up in the staged desktop runtime; the desktop workflows must rebuild on main when any of them changes. */
+export const STAGED_RUNTIME_INPUTS: readonly string[] = [
+  ...DAEMON_SOURCE_SUBDIRS.map((sub) => `src/${sub}`),
+  "src/web",
+  "migrations",
+  "apps/desktop",
+  "tsconfig.json",
+  "vite.config.ts",
+  "package.json",
+  "pnpm-lock.yaml",
+];
+
 const MXC_WIN_X64_KEEP_FILES = new Set([
   "mxc_ffi.dll",
   "wxc-exec.exe",

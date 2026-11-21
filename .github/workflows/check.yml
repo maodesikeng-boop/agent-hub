@@ -1,14 +1,11 @@
 name: check
 
 on:
+  # nightly.yml reuses the full suite.
+  workflow_call:
+  # No path filter on pull requests: branch protection requires these checks, and a skipped workflow never reports.
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "README.md"
-      - "README.zh-CN.md"
-      - "SECURITY.md"
-      - "LICENSE"
-      - "docs/**"
   push:
     branches: [main]
     paths-ignore:
@@ -18,9 +15,10 @@ on:
       - "LICENSE"
       - "docs/**"
 
+# Pull requests cancel superseded runs; every main commit gets its own group so a later merge never cancels or replaces it.
 concurrency:
-  group: check-${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  group: check-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

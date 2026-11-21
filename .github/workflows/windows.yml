@@ -2,6 +2,8 @@ name: windows
 
 on:
   workflow_dispatch:
+  # nightly.yml reuses the Windows integration and core tests.
+  workflow_call:
   pull_request:
     branches: [main]
     paths:
@@ -41,9 +43,10 @@ on:
       - "test/windows/**"
       - ".github/workflows/windows.yml"
 
+# Pull requests cancel superseded runs; every main commit gets its own group so a later merge never cancels or replaces it.
 concurrency:
-  group: windows-${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  group: windows-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

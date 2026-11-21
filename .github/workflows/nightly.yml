@@ -1,0 +1,48 @@
+name: nightly
+
+# Runs the full suite on an unchanged main every night at 23:00 Beijing time (15:00 UTC) so flaky tests show up
+# without a new change to blame. Failed tests print as "FAIL |<project>| <file> > <suite> > <test>" in the job log.
+on:
+  schedule:
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    uses: ./.github/workflows/check.yml
+
+  windows:
+    uses: ./.github/workflows/windows.yml
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/2, 2/2]
+    name: nightly (macos ${{ matrix.shard }})
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - run: pnpm test:ci --shard=${{ matrix.shard }}
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: vitest-junit-macos-${{ strategy.job-index }}
+          path: vitest-junit.xml
+          if-no-files-found: ignore
