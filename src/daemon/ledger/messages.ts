@@ -1,3 +1,4 @@
+import type { TurnCompletionFacts, TurnEndedEvent } from "./turn-completions.ts";
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
@@ -91,10 +92,6 @@ export function createLedgerMessages(
     );
     p.changes.push({ type: "message.updated", data: { message: getMessage(id)! } });
   };
-
-  const endedWithReply = (sessionId: SessionId, id: MessageId) =>
-    getMessage(id)?.sender === "user" &&
-    db.get<{ kind: string }>("SELECT kind FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ? ORDER BY id DESC LIMIT 1", sessionId, id)?.kind === "text";
 
   const insertAgentMessage = (
     p: Pending,
@@ -255,7 +252,7 @@ export function createLedgerMessages(
   };
 
   /** Attachment copies were made before the transaction opened, because the transaction cannot await I/O. */
-  const applyEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent, textMeta: AgentTextMeta | null = null) => {
+  const applyEvent = (p: Pending, session: AgentSessionRow, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null = null) => {
     const sessionId = session.id;
     switch (event.type) {
       case "session.started":
@@ -344,20 +341,6 @@ export function createLedgerMessages(
           }
         });
         return;
-      case "turn.ended": {
-        const reason = event.error === undefined ? "turn_failed" : turnFailureReason(event.error);
-        for (const id of event.messageIds) {
-          if (event.shutdown === true && keptAfterShutdown(session, id)) continue;
-          if (event.interrupted) transition(p, id, "stopped");
-          else if (event.ok || endedWithReply(sessionId, id)) transition(p, id, "replied");
-          else transition(p, id, "failed", reason);
-        }
-        updateLive(p, sessionId, (l) => {
-          idle(l);
-          l.rateLimitReported = false;
-        });
-        return;
-      }
       case "background.changed":
         updateLive(p, sessionId, (l) => {
           l.backgroundTasks = event.count;
@@ -413,6 +396,20 @@ export function createLedgerMessages(
       case "commands.changed":
         return;
     }
+  };
+
+  const settleTurn = (p: Pending, session: AgentSessionRow, event: TurnEndedEvent, facts: TurnCompletionFacts) => {
+    const reason = event.error === undefined ? "turn_failed" : turnFailureReason(event.error);
+    for (const id of event.messageIds) {
+      if (event.shutdown === true && keptAfterShutdown(session, id)) continue;
+      if (event.interrupted) transition(p, id, "stopped");
+      else if (event.ok || facts.finishedWithText.includes(id)) transition(p, id, "replied");
+      else transition(p, id, "failed", reason);
+    }
+    updateLive(p, session.id, (l) => {
+      idle(l);
+      l.rateLimitReported = false;
+    });
   };
 
   const postUserMessage = (input: PostUserMessageInput): PostUserMessageResult => {
@@ -505,7 +502,7 @@ export function createLedgerMessages(
         clearStreaming(l);
       });
     } else {
-      sessions.cancelStreamTimer(session.id);
+      p.after.push(() => sessions.cancelStreamTimer(session.id));
     }
     p.stops.push({ conversationId: session.conversationId, sessionId: session.id });
     return true;
@@ -600,6 +597,7 @@ export function createLedgerMessages(
     page,
     transition,
     applyEvent,
+    settleTurn,
     insertSystemMessage,
     insertAskMessage,
     settleAskIn,

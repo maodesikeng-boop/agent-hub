@@ -5,7 +5,7 @@
 ### Files to review
 
 - [resource-lifecycle-design.md](resource-lifecycle-design.md): Full design for the resource registry, database slimming, detached process and temp-directory reaping, squash-merge branch cleanup, and the **Resources** settings panel, split into two independently verifiable implementation phases.
-- [0046_resource_lifecycle.sql](../migrations/0046_resource_lifecycle.sql): SQLite migration that adds `resource_decisions` and `messages_pm_tools`, strips write-only `meta.input` from existing `tool` messages, removes non-worker `session_steps`, and clears already-consumed `handovers` blobs.
+- [0047_resource_lifecycle.sql](../migrations/0047_resource_lifecycle.sql): SQLite migration that adds `resource_decisions` and `messages_pm_tools`, strips write-only `meta.input` from existing `tool` messages, removes non-worker `session_steps`, and clears already-consumed `handovers` blobs.
 - [resource-registry.ts](../src/shared/resource-registry.ts) and [registry.test.ts](../src/daemon/resources/registry.test.ts): Typed catalog contract and structural guard test skeleton that fails CI when a new table or managed path lacks an owner, cleaner, and cap.
 - [resources.ts](../src/shared/resources.ts), [inspector.ts](../src/daemon/resources/inspector.ts), and [ResourcesSettings.tsx](../src/web/components/ResourcesSettings.tsx): Shared API payloads, daemon inspection service, and desktop plus mobile **Resources** self-check panel contracts.
 - [process-tag.ts](../src/daemon/platform/process-tag.ts), [session-tmp.ts](../src/daemon/session-tmp.ts), [db-table-retention.ts](../src/daemon/ledger/db-table-retention.ts), and [branch-cleanup.ts](../src/daemon/resources/branch-cleanup.ts): Core daemon module contracts for reaping detached Worker grandchildren, per-session temp directories, dual-bounded database retention, and managed `hub/*` branch cleanup.
@@ -19,7 +19,7 @@
 
 2. **Fate of the `hub_calls` audit table (currently 8 MB, read only by automated tests and evals).**
    - **Option A (Recommended):** Keep `hub_calls` so `test/eval/` and smoke checks keep working, add dual caps of 14 days and 2,000 rows, and truncate `result` to 256 bytes instead of 2,048 bytes (under 0.5 MB steady state).
-   - **Option B:** Drop `hub_calls` in migration `0046` and rewrite `test/eval/` and smoke assertions to read `messages` and `session_steps` instead. This avoids keeping a test-only table at the cost of a wider test rewrite.
+   - **Option B:** Drop `hub_calls` in migration `0047` and rewrite `test/eval/` and smoke assertions to read `messages` and `session_steps` instead. This avoids keeping a test-only table at the cost of a wider test rewrite.
 
 3. **Where held worktrees and resource warnings appear in the UI.**
    - **Option A (Recommended):** Add a **Resources** tab inside **Settings** (desktop `SettingsDialog` and mobile `#/settings/resources`) plus an amber attention dot on the Settings button whenever held items await a **Keep** or **Discard** decision. This matches `docs/ui-standard.md` and keeps maintenance out of active project streams.
@@ -184,7 +184,7 @@ Delete these obsolete paths and workarounds in the same implementation PRs so ol
 
 Note for implementation Workers: `src/code-hygiene.baseline.json` pins legacy file lengths on `src/daemon/daemon.ts`, `src/daemon/driver/base-driver.ts`, `src/daemon/driver/write-scope.ts`, `src/daemon/ledger/handover.ts`, `src/daemon/ledger/router.ts`, and `src/web/settings-model.ts`, and `createWorktreeCleanup` in `src/daemon/worktree-cleanup.ts` is already near the 250-line function limit. Keep new logic inside dedicated helper modules rather than growing those functions or files.
 
-- `migrations/0046_resource_lifecycle.sql`: Adds `resource_decisions` and `messages_pm_tools` and strips dead `messages.meta.input`, non-worker `session_steps`, and consumed `handovers` blobs.
+- `migrations/0047_resource_lifecycle.sql`: Adds `resource_decisions` and `messages_pm_tools` and strips dead `messages.meta.input`, non-worker `session_steps`, and consumed `handovers` blobs.
 - `src/shared/limits.ts`: Adds all time, row, byte, file, branch, process-tag, and inspection cap constants.
 - `src/shared/paths.ts`: Adds `sessionTmpFile` (`state/session-tmp.json`) to `HubPaths` so Workers are automatically denied read access to it.
 - `src/shared/driver.ts`: Adds optional `tmpDir` and `ownerTag` fields to `LaunchFiles`.

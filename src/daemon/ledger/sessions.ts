@@ -84,6 +84,26 @@ export const idle = (l: LiveSession) => {
 
 export type LedgerSessions = ReturnType<typeof createLedgerSessions>;
 
+type StagedLive = WeakMap<Pending, Map<SessionId, LiveSession>>;
+
+// Live state becomes visible only after commit, so a rolled-back transaction leaves no in-memory trace.
+function stageLive(staged: StagedLive, p: Pending, sessionId: SessionId, next: LiveSession): void {
+  const pending = staged.get(p) ?? new Map<SessionId, LiveSession>();
+  staged.set(p, pending);
+  pending.set(sessionId, next);
+}
+
+const stagedOf = (staged: StagedLive, p: Pending | null, sessionId: SessionId) => (p === null ? undefined : staged.get(p)?.get(sessionId));
+
+/** Returns whether a pending tool hold timer should keep running. */
+function stampToolStep(prev: LiveSession, next: LiveSession, hadHold: boolean, now: () => number): boolean {
+  const holdsTool = next.activity === "working" && next.step?.type === "tool_use";
+  const hasOpenTools = (next.openTools?.length ?? 0) > 0;
+  if (!holdsTool) next.toolStepAt = undefined;
+  else if (hasOpenTools && (hadHold || !sameToolStep(prev.step, next.step) || next.toolStepAt === undefined)) next.toolStepAt = now();
+  return holdsTool && !hasOpenTools;
+}
+
 export function createLedgerSessions(ctx: LedgerContext) {
   const { db, now, write, emitChange, enqueue, pushed } = ctx;
   const live = new Map<SessionId, LiveSession>();
@@ -144,12 +164,12 @@ export function createLedgerSessions(ctx: LedgerContext) {
     return row === undefined ? null : toAgentSessionRow(row);
   };
 
-  const liveOf = (id: SessionId): LiveSession => live.get(id) ?? { activity: "idle", currentTool: null };
+  const staged: StagedLive = new WeakMap();
+  const liveOf = (id: SessionId): LiveSession => stagedOf(staged, ctx.activePending(), id) ?? live.get(id) ?? { activity: "idle", currentTool: null };
 
   const workingSessionIds = (): SessionId[] => [...live].filter(([, l]) => l.activity !== "idle").map(([id]) => id);
 
-  const sessionState = (row: AgentSessionRow): SessionState => {
-    const l = liveOf(row.id);
+  const sessionState = (row: AgentSessionRow, l = liveOf(row.id)): SessionState => {
     return {
       sessionId: row.id,
       conversationId: row.conversationId,
@@ -174,21 +194,16 @@ export function createLedgerSessions(ctx: LedgerContext) {
     const row = getAgentSession(db, sessionId);
     if (row === null) return;
     const prev = liveOf(sessionId);
-    const hadHold = toolHoldTimers.has(sessionId);
     const next = { ...prev };
     mutate(next);
-    if (next.streamingText === undefined) cancelStreamTimer(sessionId);
-    if (next.activity !== "working" || next.step?.type !== "tool_use") {
-      cancelToolHoldTimer(sessionId);
-      next.toolStepAt = undefined;
-    } else if ((next.openTools?.length ?? 0) > 0) {
-      cancelToolHoldTimer(sessionId);
-      if (hadHold || !sameToolStep(prev.step, next.step) || next.toolStepAt === undefined) {
-        next.toolStepAt = now();
-      }
-    }
-    live.set(sessionId, next);
-    const after = sessionState(row);
+    const keepsHold = stampToolStep(prev, next, toolHoldTimers.has(sessionId), now);
+    stageLive(staged, p, sessionId, next);
+    p.after.push(() => {
+      if (next.streamingText === undefined) cancelStreamTimer(sessionId);
+      if (!keepsHold) cancelToolHoldTimer(sessionId);
+      live.set(sessionId, next);
+    });
+    const after = sessionState(row, next);
     const key = JSON.stringify({ ...after, lastEventAt: null });
     if ((p.pushed.get(sessionId) ?? pushed.get(sessionId)) === key) return;
     p.pushed.set(sessionId, key);
@@ -448,6 +463,11 @@ export function createLedgerSessions(ctx: LedgerContext) {
          LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
          WHERE pa.pm_id IS NULL
            AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
+           AND NOT EXISTS (
+             SELECT 1 FROM turn_completions c, json_each(c.event, '$.messageIds') ids
+             WHERE c.session_id = m.session_id AND ids.value = m.id
+               AND NOT (COALESCE(json_extract(c.event, '$.shutdown'), 0) = 1 AND (s.role = 'worker' OR m.sender = 'system'))
+           )
            AND (
              m.status IN ('delivered', 'processing')
              -- 排队中的已有活动动作就不用管；已送达、处理中的总要再登记一次，把参数改成 resend

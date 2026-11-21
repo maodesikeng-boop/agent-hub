@@ -256,7 +256,7 @@ describe("createLedgerTurnReplies：afterDriverEvent", () => {
     const uuid = say("文字");
     turnReplies.afterDriverEvent(p, session, { type: "agent.text", uuid, text: "文字", at: 2 });
     db.run("UPDATE messages SET status = 'replied' WHERE id = ?", a);
-    turnReplies.afterDriverEvent(p, session, { type: "turn.ended", ok: true, interrupted: false, messageIds: [a], durationMs: 1, at: 3 });
+    turnReplies.settle(p, session, [a], turnReplies.factsOf(session, [a]).reply);
     expect(replyIdOf(get(a))).toBeNull();
     expect(p.changes).toHaveLength(0);
   });

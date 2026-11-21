@@ -10,6 +10,7 @@ import { OFFLINE_AFTER_MS, deviceStatus } from "./devices.ts";
 import {
   FakeApi,
   FakeWebSocket,
+  TEST_BOOT_ID,
   installFakeNotification,
   installFakeWebSocket,
   makeConvSnapshot,
@@ -187,7 +188,7 @@ describe("两台", () => {
     act(() => lastSocket("tokyo").drop());
     act(() => void vi.advanceTimersByTime(1_000));
     expect(sockets("tokyo")).toHaveLength(2);
-    expect(lastSocket("tokyo").since).toBe(77);
+    expect(lastSocket("tokyo").since).toBe(`${TEST_BOOT_ID}:77`);
     expect(sockets("local")).toHaveLength(1);
     expect(sockets("local")[0]!.closedByClient).toBe(false);
   });

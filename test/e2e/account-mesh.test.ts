@@ -17,9 +17,10 @@ import {
   type StateSnapshot,
   type WsServerMessage,
 } from "../../src/shared/index.ts";
+import { encodeChangeStreamQuery, type ChangeCursor } from "../../src/shared/change-stream.ts";
 import { E2E_FEISHU_APP_ID, E2E_FEISHU_APP_SECRET, E2E_FEISHU_OWNER, startFakeFeishuHub, type FakeFeishuHub } from "./fake-feishu-hub.ts";
 import { startFakeGithub, type FakeGithub } from "./fake-github.ts";
-import { Client, MESH_MAIN, agentTexts, makeEnv, shortTmp, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
+import { cursorOf, Client, MESH_MAIN, agentTexts, makeEnv, shortTmp, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
 
 interface NodeHandle {
   env: E2eEnv;
@@ -94,8 +95,8 @@ describe("账号组网", () => {
     await waitUntil("joiner becomes signed_in", async () => ((await accountOf(joiner.client)).state === "signed_in" ? true : undefined));
   }
 
-  async function remoteWs(client: Client, deviceId: string, since: number) {
-    const url = `ws://${new URL(client.base).host}${devicePath(deviceId, API_PATHS.ws)}?since=${since}`;
+  async function remoteWs(client: Client, deviceId: string, cursor: ChangeCursor) {
+    const url = `ws://${new URL(client.base).host}${devicePath(deviceId, API_PATHS.ws)}${encodeChangeStreamQuery(cursor)}`;
     const socket = new WebSocket(url, { headers: client.headers() });
     const messages: WsServerMessage[] = [];
     socket.addEventListener("message", (e) => {
@@ -174,7 +175,7 @@ describe("账号组网", () => {
       expect(stateRes.status).toBe(200);
       const snap = (await stateRes.json()) as StateSnapshot;
       const convId = snap.conversations[0]!.conversation.id;
-      const ws = await remoteWs(nodeA.client, peer.id, snap.seq);
+      const ws = await remoteWs(nodeA.client, peer.id, cursorOf(snap));
       try {
         const postRes = await nodeA.client.postJson(devicePath(peer.id, API_PATHS.messages(convId)), {
           clientId: crypto.randomUUID(),

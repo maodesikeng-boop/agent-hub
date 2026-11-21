@@ -288,8 +288,7 @@ export function createLedgerHandover(
       t,
       t,
     )!;
-    queue.add(row.conversation_id);
-    p.after.push(onClaimable);
+    p.after.push(() => queue.add(row.conversation_id), onClaimable);
     return row;
   };
 
@@ -322,7 +321,7 @@ export function createLedgerHandover(
       const { counted } = attemptsOf(row.from_session_id);
       if (counted >= AUTO_RENEW_MAX_ATTEMPTS) {
         log(`[auto-renew] 项目经理 ${row.from_session_id} 号会话自动换新会话试了 ${counted} 次都没写成交接，这一代不再自动换（资料页的“开新会话”照常能用）：${reason}`);
-        queue.delete(row.conversation_id);
+        p.after.push(() => queue.delete(row.conversation_id));
         return;
       }
       if (stillCurrent(session)) insertRow(p, session, true);
@@ -346,7 +345,7 @@ export function createLedgerHandover(
       p.changes.push({ type: "pm.updated", data: { pm: toPm(pmRow(session.pmId)!) } });
     }
     // Do not retry immediately; the conversation re-enters the queue at the end of the next turn.
-    queue.delete(row.conversation_id);
+    p.after.push(() => queue.delete(row.conversation_id));
   };
 
   function* recentRows(conversationId: ConversationId, upTo = Number.MAX_SAFE_INTEGER - 1): Generator<RecentMessage> {
@@ -562,7 +561,7 @@ export function createLedgerHandover(
       t,
       row.id,
     );
-    queue.delete(conversationId);
+    p.after.push(() => queue.delete(conversationId));
     if (!vendorSwitch) options.onRenewedIn?.(p, conversationId);
     return true;
   };
@@ -838,7 +837,6 @@ export function createLedgerHandover(
       .join("\n\n");
 
   const inSessionOf = (conversationId: ConversationId): HandoverDbRow | undefined => {
-    if (!queue.has(conversationId)) return undefined;
     const row = activeOf(conversationId);
     return row?.method === "in_session" && row.status === "writing" ? row : undefined;
   };
@@ -940,7 +938,8 @@ export function createLedgerHandover(
       return;
     }
     if (event.type !== "turn.ended" && event.type !== "session.exited" && event.type !== "driver.error") return;
-    if (!queue.has(conversationId) && (event.type !== "turn.ended" || session.usage.context < thresholdOf(session.vendor))) return;
+    if (!queue.has(conversationId) && activeOf(conversationId) === undefined &&
+        (event.type !== "turn.ended" || session.usage.context < thresholdOf(session.vendor))) return;
     const request = inSessionOf(conversationId) === undefined ? undefined : requestOf(session);
     if (request !== undefined && event.type !== "driver.error") endWriting(request);
     settleInSession(p, conversationId);

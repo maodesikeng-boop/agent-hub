@@ -17,6 +17,7 @@ import {
   waitUntil,
   type E2eEnv,
   type RunningDaemon,
+  cursorOf,
 } from "./harness.ts";
 
 const slow = (ms: number, text = "慢慢写完了") => ({ steps: [{ sleepMs: ms }, { text }] });
@@ -72,7 +73,7 @@ describe("W5 组装 + 端到端", () => {
     env = makeEnv();
     env.setScript({ defaultTurn: quick("你好，我是项目经理") });
     const { daemon, client, state, conversationId } = await boot();
-    const ws = await client.ws(state.seq);
+    const ws = await client.ws(cursorOf(state));
     const id = await client.post(conversationId, "你好");
     await waitForStatus(client, id, "replied");
     await waitUntil("agent text over ws", () =>
@@ -145,7 +146,7 @@ describe("W5 组装 + 端到端", () => {
       ],
     });
     const { daemon, client, state, conversationId } = await boot();
-    const ws = await client.ws(state.seq);
+    const ws = await client.ws(cursorOf(state));
     const id = await client.post(conversationId, "查一下");
     const sessionStates = () => ws.messages.flatMap((m) => (m.type === "session.status" ? [m.data.session] : []));
     await waitUntil("retry 2 pushed", () => (sessionStates().some((x) => x.apiRetry?.attempt === 2) ? true : undefined));
@@ -315,7 +316,7 @@ describe("W5 组装 + 端到端", () => {
   it("找不到 claude：守护进程不崩，界面实时看到“找不到 claude”，重试用完消息标失败", { timeout: 40_000 }, async () => {
     env = makeEnv();
     const { daemon, client, state, conversationId } = await boot({ vendorPath: join(env.dir, "no-such-claude") });
-    const ws = await client.ws(state.seq);
+    const ws = await client.ws(cursorOf(state));
     const id = await client.post(conversationId, "你好");
     const health = await waitUntil("health.updated over ws", () =>
       ws.messages.flatMap((m) => (m.type === "health.updated" ? [m.data.health] : [])).find((h) => h.module === "driver"),

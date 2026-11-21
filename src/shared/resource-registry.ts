@@ -51,6 +51,7 @@ import {
   SETUP_LOGS_RETENTION_DAYS,
   SETUP_LOG_MAX_BYTES,
   SKILL_CARRYOVER_RECORDS_MAX,
+  TURN_COMPLETION_UNPERSISTED_MAX,
   UPLOADS_DISK_MAX_BYTES,
   USER_BLOCKERS_RESOLVED_KEEP,
   WORKER_RETENTION_DAYS,
@@ -246,6 +247,10 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("worker_turn_timeouts", "growing", "src/daemon/ledger/workers.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_persona_seen", "growing", "src/daemon/ledger/persona.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/router.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_preamble_seen", "growing", "src/daemon/ledger/handover.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
+  table("turn_completions", "growing", "src/daemon/ledger/turn-completions.ts", "src/daemon/ledger/turn-completions.ts", "automatic", [
+    limit("TURN_COMPLETION_UNPERSISTED_MAX", TURN_COMPLETION_UNPERSISTED_MAX, "rows"),
+  ]),
+  table("turn_completion_watermarks", "retained_metadata", "src/daemon/ledger/turn-completions.ts", "src/daemon/ledger/persona.ts, src/daemon/ledger/router.ts", "on_archive_or_delete"),
   table("pms", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("pm_archives", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("pm_looks", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),

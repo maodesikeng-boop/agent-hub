@@ -6,6 +6,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { API_PATHS, DEVICE_OFFLINE_REASON, DEVICE_OFFLINE_WS_CLOSE_CODE, WS_HEARTBEAT_TEXT, type DeviceId, type WsServerMessage } from "../../shared/index.ts";
+import { encodeChangeStreamQuery, type ChangeCursor } from "../../shared/change-stream.ts";
 import { MESH_HTTP_HOST } from "../mesh/agent-fetch.ts";
 import { approveNode, loginNode, startTestMeshNode, startTestRelay, waitFor, type TestMeshNode } from "../mesh/test-helpers.ts";
 import { acceptsGzip, splitProxyUrl } from "./proxy.ts";
@@ -267,6 +268,52 @@ describe("转发到真的设备", () => {
 });
 
 describe("WebSocket 转发", () => {
+  async function snapshotCursor(entry: TestDevice, prefix = ""): Promise<ChangeCursor> {
+    const response = await entry.browser(`${prefix}${API_PATHS.state}`);
+    expect(response.status).toBe(200);
+    const { bootId, seq } = (await response.json()) as ChangeCursor;
+    return { bootId, seq };
+  }
+
+  it("uses the target boot and forwards its resync when the entry boot is used instead", async () => {
+    const [entry, target] = await paired();
+    const prefix = `/d/${target.id}`;
+    const [entryCursor, targetCursor] = await Promise.all([snapshotCursor(entry), snapshotCursor(entry, prefix)]);
+    expect(entryCursor.bootId).not.toBe(targetCursor.bootId);
+    target.ledger.emitHealthChange("retained");
+    const ws = open(entry, `${prefix}${API_PATHS.ws}${encodeChangeStreamQuery({ ...targetCursor, bootId: entryCursor.bootId })}`);
+    try {
+      await ws.opened;
+      await expect.poll(() => ws.messages).toEqual([{ type: "resync" }]);
+      expect(target.ledger.changesSinceCalls).toEqual([]);
+      const live = target.ledger.emitHealthChange("live");
+      await expect.poll(() => ws.messages).toEqual([{ type: "resync" }, live]);
+    } finally {
+      ws.socket.close();
+    }
+  });
+
+  it("forwards the compound query unchanged and relays a legacy target's resync before live changes", async () => {
+    const { a, up } = await entryAndUpstream();
+    const query = encodeChangeStreamQuery({ bootId: randomUUID(), seq: 100 });
+    const live = a.ledger.emitHealthChange("legacy live");
+    const paths: string[] = [];
+    upstreamWebSocket(up).on("connection", (socket, req) => {
+      paths.push(req.url!);
+      const since = new URL(req.url!, "http://localhost").searchParams.get("since");
+      if (since !== null && !/^(0|[1-9]\d*)$/.test(since)) socket.send(JSON.stringify({ type: "resync" }));
+      socket.send(JSON.stringify(live));
+    });
+    const ws = open(a, `/d/${up.id}${API_PATHS.ws}${query}`);
+    try {
+      await ws.opened;
+      await expect.poll(() => ws.messages).toEqual([{ type: "resync" }, live]);
+      expect(paths).toEqual([`${API_PATHS.ws}${query}`]);
+    } finally {
+      ws.socket.close();
+    }
+  });
+
   async function paired(): Promise<[TestDevice, TestDevice]> {
     const { devices } = await startTestAccount(2, { serverOptions: { peerProxy: { pingMs: 200 } } });
     return devices as [TestDevice, TestDevice];
@@ -290,8 +337,9 @@ describe("WebSocket 转发", () => {
 
   it("带 since 转发：先补齐，再收新变化；浏览器关了，对方那条也关", async () => {
     const [a, b] = await paired();
+    const cursor = await snapshotCursor(a, `/d/${b.id}`);
     const first = b.ledger.emitHealthChange("x");
-    const ws = open(a, `/d/${b.id}${API_PATHS.ws}?since=${first.seq - 1}`);
+    const ws = open(a, `/d/${b.id}${API_PATHS.ws}${encodeChangeStreamQuery(cursor)}`);
     await ws.opened;
     await expect.poll(() => ws.messages.map((m) => (m as { seq?: number }).seq)).toEqual([first.seq]);
     const second = b.ledger.emitHealthChange(null);

@@ -1,10 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
+import { resolveChangeStreamRequest } from "../../shared/change-stream.ts";
 import { API_PATHS, type WsServerMessage } from "../../shared/index.ts";
 import { parsePresence } from "../push/presence.ts";
 import { keepAlive } from "../ws-keepalive.ts";
 import { peerOf, sessionOf, trackSocket, type UiCtx } from "./context.ts";
-import { NON_NEGATIVE_INT } from "./http.ts";
 
 const onceClosed = (socket: WebSocket, fn: () => void) => {
   socket.once("close", fn);
@@ -21,10 +21,9 @@ function attachPresence(c: UiCtx, socket: WebSocket, req: FastifyRequest): void 
   onceClosed(socket, () => push.presence.remove(socket));
 }
 
-function catchUp(c: UiCtx, socket: WebSocket, req: FastifyRequest, since: string | null, send: (message: WsServerMessage) => void, unsubscribe: () => void): void {
-  if (typeof since !== "string" || !NON_NEGATIVE_INT.test(since)) return send({ type: "resync" });
+function catchUp(c: UiCtx, socket: WebSocket, req: FastifyRequest, since: number, send: (message: WsServerMessage) => void, unsubscribe: () => void): void {
   try {
-    const result = c.ledger.changesSince(Number(since));
+    const result = c.ledger.changesSince(since);
     if (result.kind === "resync") return send({ type: "resync" });
     for (const change of result.changes) send(change);
   } catch (err) {
@@ -37,8 +36,7 @@ function catchUp(c: UiCtx, socket: WebSocket, req: FastifyRequest, since: string
 export function registerWsRoute(routes: FastifyInstance, c: UiCtx): void {
   routes.get(API_PATHS.ws, { websocket: true }, (socket, req) => {
     // injectWS requests have no req.query, so parse the URL directly.
-    const sinceValues = new URL(req.url, "http://localhost").searchParams.getAll("since");
-    const since = sinceValues.length === 1 ? sinceValues[0] : sinceValues.length === 0 ? undefined : null;
+    const streamRequest = resolveChangeStreamRequest(new URL(req.url, "http://localhost").searchParams, c.instanceId);
     const isPeerSocket = peerOf(c, req) !== undefined;
     const send = (message: WsServerMessage) => {
       if (isPeerSocket && (message.type === "router.command.created" || message.type === "router.command.updated")) return;
@@ -57,7 +55,7 @@ export function registerWsRoute(routes: FastifyInstance, c: UiCtx): void {
     trackSocket(c, req, socket);
     keepAlive(socket, c.opts.wsHeartbeatMs);
 
-    if (since === undefined) return;
-    catchUp(c, socket, req, since ?? null, send, unsubscribe);
+    if (streamRequest.kind === "resync") send({ type: "resync" });
+    if (streamRequest.kind === "replay") catchUp(c, socket, req, streamRequest.since, send, unsubscribe);
   });
 }

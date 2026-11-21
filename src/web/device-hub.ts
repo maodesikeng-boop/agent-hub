@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
   ATTACHMENTS_MISSING_MESSAGE,
+  CHANGE_BUFFER_SIZE,
   CONVERSATION_LOOKUP_MAX_IDS,
   MAX_CONVERSATION_LOOKUP_STATES,
   MAX_MESSAGE_BYTES,
@@ -14,15 +15,18 @@ import {
   type MessageId,
   type PmId,
   type PostMessageRequest,
+  type StateSnapshot,
+  type WsServerMessage,
   type WorkerId,
   type WorkerPick,
   userMessageDedupeKey,
   workerPickOf,
 } from "../shared/index.ts";
+import { changeCursorFromSnapshot, type ChangeCursor } from "../shared/change-stream.ts";
 import { createAutoReloader, installAutoReloadListeners, type AutoReloadEnv, type AutoReloader } from "./auto-reload.ts";
 import { byteLength } from "./format.ts";
 import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type HubClient } from "./client.ts";
-import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
+import { openChangeStream, planSnapshotRecovery, reconnectDelay, type ChangeStreamConnection } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, sameDeviceInfo, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
 import { ErrorNotice, errorText, newClientId } from "./format.ts";
 import { ACCOUNT_QUERY_KEY, queryClient } from "./query-client.ts";
@@ -38,12 +42,38 @@ function messageBody(clientId: string, text: string, attachmentIds: string[], wo
 
 type Action = Parameters<typeof reducer>[1];
 
+interface StreamRecovery {
+  connection: ChangeStreamConnection;
+  buffered: Change[] | null;
+  done: Promise<void>;
+}
+
+function requireCursor(snapshot: StateSnapshot): ChangeCursor {
+  const cursor = changeCursorFromSnapshot(snapshot);
+  if (cursor === null) throw new Error("Invalid state snapshot cursor");
+  return cursor;
+}
+
+function waitForRecoveryRetry(signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, RESYNC_RETRY_MS);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
 export class DeviceHub {
   readonly store: StoreApi<HubState> = createStore<HubState>(() => initialState);
   readonly link: LinkHistory = { lastOnlineAt: null, disconnectedAt: null };
-  private seq = 0;
-  private buffer: Change[] | null = null;
-  private streamStatus: ConnectionStatus = "connecting";
+  private cursor: ChangeCursor | null = null;
+  private connection: ChangeStreamConnection | null = null;
+  private recovery: StreamRecovery | null = null;
+  private loading: AbortController | null = null;
   private readonly olderInFlight = new Set<ConversationId>();
   private readonly requestedWorkers = new Set<WorkerId>();
   private readonly endedWorkersInFlight = new Set<PmId>();
@@ -61,9 +91,9 @@ export class DeviceHub {
   readonly client: HubClient;
   private readonly onChange: () => void;
   private readonly onResync: (() => void) | undefined;
-  private readonly onBoot: ((bootId: string | undefined) => void) | undefined;
+  private readonly onBoot: ((bootId: string) => void) | undefined;
 
-  constructor(key: DeviceKey, client: HubClient, onChange: () => void, onResync?: () => void, onBoot?: (bootId: string | undefined) => void) {
+  constructor(key: DeviceKey, client: HubClient, onChange: () => void, onResync?: () => void, onBoot?: (bootId: string) => void) {
     this.key = key;
     this.client = client;
     this.onChange = onChange;
@@ -89,7 +119,6 @@ export class DeviceHub {
     if (action.type === "loaded") this.requestedWorkers.clear();
     const before = this.state;
     this.state = reducer(this.state, action);
-    if (this.state.phase === "ready" && before.phase !== "ready") this.openStream();
     if (this.state.phase !== "ready" && before.phase === "ready") this.stopStream();
     for (const id of this.rewindBarriers.keys()) {
       if (!this.state.conversations[id] || this.state.conversations[id]?.conversation.purgedAt !== undefined) this.rewindBarriers.delete(id);
@@ -118,7 +147,7 @@ export class DeviceHub {
     if (!this.remote) {
       this.offUnauthorized = onUnauthorized(() => {
         if (!this.alive) return;
-        this.buffer = null;
+        this.loading?.abort();
         this.dispatch({ type: "loadFailed", unauthorized: true });
       });
     }
@@ -127,6 +156,8 @@ export class DeviceHub {
 
   dispose(): void {
     this.alive = false;
+    this.loading?.abort();
+    this.loading = null;
     this.inFlightPosts.clear();
     this.stopRequests.clear();
     this.rewindBarriers.clear();
@@ -138,100 +169,122 @@ export class DeviceHub {
   }
 
   private applyChange(change: Change): void {
-    if (change.seq <= this.seq) return;
-    this.seq = change.seq;
+    if (!this.cursor || change.seq <= this.cursor.seq) return;
+    this.cursor = { bootId: this.cursor.bootId, seq: change.seq };
     this.dispatch({ type: "change", change });
   }
 
+  private installSnapshot(snapshot: StateSnapshot, cursor: ChangeCursor): void {
+    this.cursor = cursor;
+    this.dispatch({ type: "loaded", snapshot });
+    this.onBoot?.(cursor.bootId);
+  }
+
   private async load(): Promise<void> {
+    if (!this.alive) return;
+    clearTimeout(this.timer);
+    this.loading?.abort();
+    const request = new AbortController();
+    this.loading = request;
+    this.stopStream();
     if (!this.remote || this.state.phase === "loading") this.dispatch({ type: "loading" });
     try {
-      const snapshot = await this.client.fetchState();
-      if (!this.alive) return;
+      const snapshot = await this.client.fetchState(request.signal);
+      if (request.signal.aborted) return;
+      const cursor = requireCursor(snapshot);
       this.loadAttempt = 0;
-      this.seq = snapshot.seq;
-      this.dispatch({ type: "loaded", snapshot });
-      this.onBoot?.(snapshot.bootId);
+      this.installSnapshot(snapshot, cursor);
+      this.openStream();
     } catch (err) {
-      if (!this.alive) return;
+      if (request.signal.aborted) return;
       const unauthorized = err instanceof ApiError && err.status === 401;
       if (!this.remote || this.state.phase === "loading") this.dispatch({ type: "loadFailed", unauthorized, error: errorText(err) });
       if (this.remote && !unauthorized) this.timer = setTimeout(() => void this.load(), reconnectDelay(this.loadAttempt++));
+    } finally {
+      if (this.loading === request) this.loading = null;
     }
   }
 
-  reload = (): Promise<void> => this.load();
+  reload = (): Promise<void> => this.connection ? this.resync(this.connection) : this.load();
 
-  private async resync(first: Change[] = []): Promise<void> {
+  private resync(connection: ChangeStreamConnection, first?: Change): Promise<void> {
+    if (this.recovery?.connection === connection) return this.recovery.done;
+    const recovery: StreamRecovery = {
+      connection,
+      buffered: first === undefined ? [] : [first],
+      done: Promise.resolve().then(() => this.recoverSnapshot(recovery)),
+    };
+    this.recovery = recovery;
     this.onResync?.();
-    if (this.buffer) {
-      this.buffer.push(...first);
-      return;
-    }
-    this.buffer = [...first];
-    while (this.alive) {
+    return recovery.done;
+  }
+
+  private async recoverSnapshot(recovery: StreamRecovery): Promise<void> {
+    const { connection } = recovery;
+    while (!connection.signal.aborted) {
       try {
-        const snapshot = await this.client.fetchState();
-        if (!this.alive) return;
-        const queued = this.buffer ?? [];
-        this.buffer = null;
-        this.seq = snapshot.seq;
-        this.dispatch({ type: "loaded", snapshot });
-        for (const change of queued.toSorted((a, b) => a.seq - b.seq)) this.applyChange(change);
-        this.dispatch({ type: "connection", status: this.streamStatus });
-        this.onBoot?.(snapshot.bootId);
+        const snapshot = await this.client.fetchState(connection.signal);
+        if (connection.signal.aborted) return;
+        const cursor = requireCursor(snapshot);
+        const plan = planSnapshotRecovery(connection, cursor, recovery.buffered);
+        if (plan.kind === "ignore") return;
+        if (plan.kind === "reconnect") this.stopStream();
+        this.recovery = null;
+        this.installSnapshot(snapshot, cursor);
+        if (plan.kind === "reconnect") this.openStream();
+        else {
+          for (const change of plan.changes) this.applyChange(change);
+          this.dispatch({ type: "connection", status: "open" });
+        }
         return;
       } catch (err) {
-        if (!this.alive) return;
+        if (connection.signal.aborted) return;
         if (err instanceof ApiError && err.status === 401) {
-          this.buffer = null;
           this.dispatch({ type: "loadFailed", unauthorized: true });
           return;
         }
         this.dispatch({ type: "connection", status: "reconnecting" });
-        await new Promise<void>((resolve) => {
-          this.timer = setTimeout(resolve, RESYNC_RETRY_MS);
-        });
+        await waitForRecoveryRetry(connection.signal);
       }
     }
   }
 
+  private receive(message: WsServerMessage, connection: ChangeStreamConnection): void {
+    if (message.type === "account.updated") {
+      void queryClient.invalidateQueries({ queryKey: ACCOUNT_QUERY_KEY });
+    } else if (message.type === "resync") {
+      void this.resync(connection);
+    } else if (this.recovery?.connection === connection) {
+      const buffered = this.recovery.buffered;
+      if (buffered?.length === CHANGE_BUFFER_SIZE) this.recovery.buffered = null;
+      else buffered?.push(message);
+    } else if (referencesUnknownConversation(this.state, message)) {
+      void this.resync(connection, message);
+    } else {
+      this.applyChange(message);
+    }
+  }
+
   private openStream(): void {
-    if (this.closeStream) return;
+    if (this.closeStream || !this.alive || !this.cursor || this.state.phase !== "ready") return;
     this.closeStream = openChangeStream({
-      url: (since) => this.client.changeStreamUrl(since),
+      url: this.client.changeStreamUrl,
       reportPresence: !this.remote,
-      getSince: () => this.seq,
-      onStatus: (status) => {
-        if (status === "open" && this.streamStatus === "reconnecting" && this.onBoot) {
-          const onBoot = this.onBoot;
-          void this.client.fetchBootId().then(
-            (bootId) => this.alive && onBoot(bootId),
-            () => {},
-          );
-        }
-        this.streamStatus = status;
-        this.dispatch({ type: "connection", status: this.buffer ? "reconnecting" : status });
+      getCursor: () => this.cursor!,
+      onStatus: (status, connection) => {
+        this.connection = connection;
+        this.recovery = null;
+        this.dispatch({ type: "connection", status });
       },
-      onMessage: (message) => {
-        if (message.type === "account.updated") {
-          void queryClient.invalidateQueries({ queryKey: ACCOUNT_QUERY_KEY });
-        } else if (message.type === "resync") {
-          void this.resync();
-        } else if (this.buffer) {
-          this.buffer.push(message);
-        } else if (referencesUnknownConversation(this.state, message)) {
-          void this.resync([message]);
-        } else {
-          this.applyChange(message);
-        }
-      },
+      onMessage: (message, connection) => this.receive(message, connection),
     });
   }
 
   private stopStream(): void {
     const close = this.closeStream;
     this.closeStream = null;
+    this.connection = null;
+    this.recovery = null;
     close?.();
   }
 

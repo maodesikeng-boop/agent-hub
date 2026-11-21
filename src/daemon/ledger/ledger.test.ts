@@ -167,16 +167,16 @@ describe("postUserMessage", () => {
     expect(post("other")).not.toBe(a);
   });
 
-  it("事务回滚：前面已经攒了变化、后一步才失败，一条也不推", () => {
+  it("事务回滚：前面已经攒了变化、后一步才失败，一条也不推，回合结果留在收据里", () => {
     const a = post("a");
     const b = post("b");
     for (const id of [a, b]) setStatus(id, "processing");
     changes = [];
     db.exec(`CREATE TRIGGER fail_b BEFORE UPDATE ON messages WHEN NEW.id = ${b} BEGIN SELECT RAISE(ABORT, 'boom'); END`);
-    expect(() => ev({ type: "turn.ended", at: 1, ok: true, interrupted: false, messageIds: [a, b], durationMs: null })).toThrow(/boom/);
+    expect(() => ev({ type: "turn.ended", at: 1, ok: true, interrupted: false, messageIds: [a, b], durationMs: null })).not.toThrow();
     expect(ledger.getMessage(a)?.status).toBe("processing");
-    expect(changes).toEqual([]);
-    expect(ledger.changesSince(ledger.snapshot().seq)).toEqual({ kind: "ok", changes: [] });
+    expect(changes.filter((c) => c.type !== "health.updated")).toEqual([]);
+    expect(count("turn_completions")).toBe(1);
   });
 
   it("已经在外层事务里时拒绝写，免得提交前就发通知", () => {
@@ -1120,13 +1120,15 @@ describe("changesSince", () => {
     }
   });
 
-  it("默认初始 seq 是启动时刻的毫秒时间戳", () => {
+  it("starts the production seq at zero regardless of the wall clock", () => {
     const db2 = openTestDb();
     try {
-      const t = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(1_760_000_000_000);
       const l = createLedger(db2, { pmHomeRoot: home });
-      expect(l.snapshot().seq).toBeGreaterThanOrEqual(t);
+      expect(l.snapshot().seq).toBe(0);
+      expect(l.changesSince(0)).toEqual({ kind: "ok", changes: [] });
     } finally {
+      vi.restoreAllMocks();
       db2.close();
     }
   });

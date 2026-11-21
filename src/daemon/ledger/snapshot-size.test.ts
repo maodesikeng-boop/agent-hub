@@ -562,8 +562,8 @@ describe("初始快照的上限（一个月的量）", () => {
 
       const before = measure();
 
-      // Run 0046 cleanup SQL + retention rounds + incremental vacuum.
-      const migrationSql = readFileSync(join(process.cwd(), "migrations", "0046_resource_lifecycle.sql"), "utf8");
+      // Run 0047 cleanup SQL + retention rounds + incremental vacuum.
+      const migrationSql = readFileSync(join(process.cwd(), "migrations", "0047_resource_lifecycle.sql"), "utf8");
       benchDb.exec(migrationSql);
       while (benchLedger.purgeExpiredWorkerConversations(NOW, 5_000).more) {}
       while (benchLedger.purgeGrowingTables(NOW, 5_000).more) {}

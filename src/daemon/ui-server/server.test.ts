@@ -40,6 +40,8 @@ import {
   vendorSpec,
   type WsServerMessage,
 } from "../../shared/index.ts";
+import { randomUUID } from "node:crypto";
+import { encodeChangeStreamQuery } from "../../shared/change-stream.ts";
 import { createLedger } from "../ledger/index.ts";
 import { PickFolderError, type FolderPicker } from "../pick-folder.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -1327,8 +1329,27 @@ describe("静态文件", () => {
 });
 
 describe("WebSocket /api/ws", () => {
+  async function queryFor(seq: number, server = app): Promise<string> {
+    const response = await server.inject({ url: API_PATHS.state, headers: { host: HOST, cookie: COOKIE } });
+    expect(response.statusCode).toBe(200);
+    const { bootId } = response.json<{ bootId: string }>();
+    return encodeChangeStreamQuery({ bootId, seq });
+  }
+
+  it("sends resync before live changes for a previous boot even when the sequence is in the replay window", async () => {
+    const seq = ledger.currentSeq;
+    ledger.emitHealthChange("retained");
+    const client = await connect(encodeChangeStreamQuery({ bootId: randomUUID(), seq }));
+    const live = ledger.emitHealthChange("live");
+    await client.waitFor(2);
+    expect(client.received).toEqual([{ type: "resync" }, live]);
+    expect(ledger.changesSinceCalls).toEqual([]);
+    client.ws.terminate();
+  });
+
   async function connect(since?: number | string) {
-    const url = since === undefined ? "/api/ws" : `/api/ws?since=${since}`;
+    const query = typeof since === "number" ? await queryFor(since) : since ?? "";
+    const url = `${API_PATHS.ws}${query}`;
     const received: WsServerMessage[] = [];
     const waiters: Array<() => void> = [];
     const ws = await app.injectWS(
@@ -1363,7 +1384,7 @@ describe("WebSocket /api/ws", () => {
     const other = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, db, wsHeartbeatMs: 30 });
     await other.ready();
     const frames: string[] = [];
-    const ws = await other.injectWS(`/api/ws?since=${ledger.currentSeq}`, { headers: { host: HOST, origin: ORIGIN, cookie: COOKIE } }, {
+    const ws = await other.injectWS(`${API_PATHS.ws}${await queryFor(ledger.currentSeq, other)}`, { headers: { host: HOST, origin: ORIGIN, cookie: COOKIE } }, {
       onInit: (socket) => {
         socket.on("message", (data: unknown) => frames.push(String(data)));
         // injectWS 造的客户端不自动回 pong（浏览器会）
@@ -1400,7 +1421,7 @@ describe("WebSocket /api/ws", () => {
     client.ws.terminate();
   });
 
-  it("补齐之后接着推新的，中间不重复", async () => {
+  it("replays the retained range for the snapshot boot without duplicating live changes", async () => {
     const since = ledger.currentSeq;
     ledger.emitHealthChange("a");
     const client = await connect(since);
@@ -1418,7 +1439,7 @@ describe("WebSocket /api/ws", () => {
     client.ws.terminate();
   });
 
-  it("补不齐：since 比缓冲区最早的还早（被挤出去了）→ resync", async () => {
+  it("requires resync for a same-boot cursor outside the retained range", async () => {
     // 缓冲区只剩最近 1000 条；since 落在被挤出的范围里
     const since = ledger.currentSeq;
     for (let i = 0; i < 1005; i++) ledger.emitHealthChange();
@@ -1428,22 +1449,22 @@ describe("WebSocket /api/ws", () => {
     client.ws.terminate();
   });
 
-  it("补不齐：since 是上次运行留下的（比本次初始 seq 小）→ resync", async () => {
+  it("requires resync for a same-boot cursor below the sequence start", async () => {
     const client = await connect(5);
     await client.waitFor(1);
     expect(client.received).toEqual([{ type: "resync" }]);
     client.ws.terminate();
   });
 
-  it("补不齐：since 比当前 seq 还大 → resync", async () => {
+  it("requires resync for a same-boot cursor ahead of the stream", async () => {
     const client = await connect(ledger.currentSeq + 50);
     await client.waitFor(1);
     expect(client.received).toEqual([{ type: "resync" }]);
     client.ws.terminate();
   });
 
-  it.each(["abc", "-1", "1.5", "", "1e3"])("since 不是非负整数（%j）→ resync，不调 changesSince", async (since) => {
-    const client = await connect(since);
+  it.each(["?since=100", "?since=", "?since=abc", "?since=100&since=100"])("sends resync for %s without consulting the ledger", async (query) => {
+    const client = await connect(query);
     await client.waitFor(1);
     expect(client.received).toEqual([{ type: "resync" }]);
     expect(ledger.changesSinceCalls).toEqual([]);
@@ -1481,9 +1502,10 @@ describe("WebSocket /api/ws", () => {
   });
 
   it("补齐时账本出错：服务端关掉连接（1011）并取消订阅，不崩", async () => {
+    const url = `${API_PATHS.ws}${await queryFor(ledger.currentSeq)}`;
     ledger.failWith = new Error("boom");
     const closed = new Promise<number>((resolve) => {
-      void app.injectWS("/api/ws?since=100", { headers: { host: HOST, origin: ORIGIN, cookie: COOKIE } }, { onInit: (socket) => socket.on("close", resolve) });
+      void app.injectWS(url, { headers: { host: HOST, origin: ORIGIN, cookie: COOKIE } }, { onInit: (socket) => socket.on("close", resolve) });
     });
     expect(await closed).toBe(1011);
     expect(ledger.listenerCount).toBe(0);

@@ -287,6 +287,7 @@ export interface Ledger extends LedgerHandoverWork {
 
   getWorktreeTask(workerId: WorkerId): WorktreeTask | null;
   onSetupStarted(workerId: WorkerId): boolean;
+  waitsForTurnCompletion(sessionId: SessionId): boolean;
   waitsForFirstTurn(sessionId: SessionId, messageId: MessageId): boolean;
   onWorktreeCreated(workerId: WorkerId, baseCommit: string, setup?: SetupOutcome): void;
   recordReviewSnapshot(workerId: WorkerId, snapshot: ReviewSnapshot): void;

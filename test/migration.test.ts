@@ -2561,10 +2561,10 @@ describe("0045_project_capability_defaults", () => {
   });
 });
 
-describe("0046_resource_lifecycle", () => {
+describe("0047_resource_lifecycle", () => {
   it("creates resource_decisions and messages_pm_tools, strips meta.input from tool messages, deletes non-worker session_steps, clears consumed handover blobs, and is idempotent on rerun", () => {
     const db = open();
-    expect(migrate(db, migrationsUpTo(45))).toMatchObject({ from: 0, to: 45 });
+    expect(migrate(db, migrationsUpTo(46))).toMatchObject({ from: 0, to: 46 });
 
     db.run("INSERT INTO pms (id, name, mode, persona, vendor, created_at) VALUES (1, 'PM', 'manage_only', '', 'claude', 1)");
     db.run("INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (10, 'pm', 1, 'PM', 1)");
@@ -2593,7 +2593,7 @@ describe("0046_resource_lifecycle", () => {
               (2, 10, 101, 102, 0, 'switched', 'unseen-live-preamble', 'unseen-live-skills', 2, 2)`,
     );
 
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 45, to: LATEST_VERSION });
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 46, to: LATEST_VERSION });
     expect(tableNames(db)).toContain("resource_decisions");
     expect(
       db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'messages_pm_tools'"),
@@ -2616,7 +2616,7 @@ describe("0046_resource_lifecycle", () => {
       db.run("INSERT INTO resource_decisions (kind, target_key, decision, reason, decided_at) VALUES ('bogus', '/w/2', 'keep', 'x', 100)"),
     ).toThrow(/CHECK/);
 
-    db.exec("PRAGMA user_version = 45");
+    db.exec("PRAGMA user_version = 46");
     expect(() => migrate(db, migrationsDir)).not.toThrow();
     expect(userVersion(db)).toBe(LATEST_VERSION);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);

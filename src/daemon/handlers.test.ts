@@ -68,7 +68,7 @@ function deps(
   const waitsForHandover = vi.fn(() => options.waitsForHandover ?? false);
   const d: HandlerDeps = {
     driver: { start, send, end },
-    ledger: { getMessage, onActionFailed, refreshSessionState, stopMessage, waitsForFirstTurn, waitsForHandover, deliveryOf: deliveryParts },
+    ledger: { waitsForTurnCompletion: () => false, getMessage, onActionFailed, refreshSessionState, stopMessage, waitsForFirstTurn, waitsForHandover, deliveryOf: deliveryParts },
     sessions: { get: () => ({ rateLimit: options.rateLimit ?? null }) as AgentSessionRow },
     tokens: { revoke },
     now: () => NOW,
@@ -260,10 +260,17 @@ describe("session.send 处理函数", () => {
     }
   });
 
-  it("失败过的消息再发（用户重试）照常发", async () => {
+  it("失败过的消息只剩旧动作重试时不再发；用户重试会先把它改回排队中", async () => {
     const { d, send } = deps({ message: message({ status: "failed", failureReason: "crash" }) });
     expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("这个会话还有没落账的回合结果：先等，不往驱动里发", async () => {
+    const { d, send } = deps({ message: message({ status: "queued" }) });
+    d.ledger.waitsForTurnCompletion = () => true;
+    expect(await createSessionSendHandler(d)(sendAction())).toMatchObject({ kind: "later", reason: "turn_completion" });
+    expect(send).not.toHaveBeenCalled();
   });
 });
 

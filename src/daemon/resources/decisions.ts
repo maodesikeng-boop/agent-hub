@@ -44,7 +44,7 @@ type DbRow = {
 };
 
 /**
- * Precondition: db has been migrated through 0046_resource_lifecycle.sql.
+ * Precondition: db has been migrated through 0047_resource_lifecycle.sql.
  * Postcondition: returns a synchronous SQLite-backed ResourceDecisionsStore.
  */
 export function createResourceDecisionsStore(db: Db, now: () => number = Date.now): ResourceDecisionsStore {
