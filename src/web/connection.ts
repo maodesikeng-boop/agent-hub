@@ -3,12 +3,37 @@ import {
   WS_CHECK_SILENCE_MS,
   WS_HEARTBEAT_TEXT,
   WS_STALE_MS,
+  type Change,
   type WsClientMessage,
   type WsServerMessage,
 } from "../shared/index.ts";
+import type { ChangeCursor } from "../shared/change-stream.ts";
 import { startPresence } from "./presence.ts";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting";
+
+/** Identifies a socket attempt. Its signal aborts when the transport retires that socket. */
+export interface ChangeStreamConnection {
+  readonly requestedCursor: ChangeCursor;
+  readonly signal: AbortSignal;
+}
+
+export type SnapshotRecovery =
+  | { kind: "ignore" }
+  | { kind: "reconnect" }
+  | { kind: "apply"; changes: readonly Change[] };
+
+/**
+ * Takes a snapshot cursor and the ordered buffer from the connection that requested it. Null means the buffer overflowed.
+ * Ignores retired connections, requires a new connection for a different boot or a lost buffer, and otherwise returns changes after the snapshot.
+ */
+export function planSnapshotRecovery(
+  connection: ChangeStreamConnection,
+  snapshot: ChangeCursor,
+  buffered: readonly Change[] | null,
+): SnapshotRecovery {
+  throw new Error("Not implemented");
+}
 
 export interface ChangeStreamHandlers {
   url(since: number): string;

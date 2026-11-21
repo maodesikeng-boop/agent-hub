@@ -21,6 +21,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("DeviceHub change stream recovery", () => {
+  it.todo("resumes local and remote streams with the boot and sequence from each device");
+  it.todo("fetches a full remote snapshot after resync and reconnects with its new boot even when its sequence is lower");
+  it.todo("discards old socket frames and a late snapshot when a second restart races a resync");
+  it.todo("replays same-boot live changes once when a same-boot resync succeeds");
+  it.todo("resumes from the fresh snapshot on a new socket after the recovery buffer fills");
+  it.todo("uses the legacy peer resync frame on reconnect and applies only changes proven to follow the snapshot");
+  it.todo("does not open an unscoped browser subscription when the snapshot is missing a valid cursor");
+});
+
 describe("DeviceHub（zustand store 驱动）", () => {
   it("初始化为 loading，start 拉取快照后更新 store 状态并通知订阅者，收到 WebSocket 消息实时演进状态", async () => {
     const snap = makeSnapshot({

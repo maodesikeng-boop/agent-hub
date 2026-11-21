@@ -4,6 +4,14 @@ import { WS_CHECK_SILENCE_MS, WS_HEARTBEAT_MS, WS_HEARTBEAT_TEXT, WS_STALE_MS, t
 import { checkConnections, openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
 import { FakeWebSocket, healthChange, installFakeWebSocket, makeHealth } from "./test-utils.ts";
 
+describe("change stream connection scope", () => {
+  it.todo("captures the current boot and sequence for each socket attempt and retires the previous scope before reconnecting");
+  it.todo("does not dispatch late frames after a socket is retired or the stream is disposed");
+  it.todo("ignores a snapshot response for a retired socket");
+  it.todo("requires a new socket when the snapshot boot differs or the buffer overflowed");
+  it.todo("keeps only buffered changes after a same-boot snapshot in wire order");
+});
+
 let since = 0;
 let received: WsServerMessage[] = [];
 let statuses: ConnectionStatus[] = [];

@@ -1327,6 +1327,11 @@ describe("静态文件", () => {
 });
 
 describe("WebSocket /api/ws", () => {
+  it.todo("sends resync before live changes for a previous boot even when the sequence is in the replay window");
+  it.todo("sends resync without consulting the ledger for a numeric-only legacy cursor");
+  it.todo("replays the retained range for the snapshot boot without duplicating live changes");
+  it.todo("requires resync for a same-boot cursor outside the retained range or ahead of the stream");
+
   async function connect(since?: number | string) {
     const url = since === undefined ? "/api/ws" : `/api/ws?since=${since}`;
     const received: WsServerMessage[] = [];

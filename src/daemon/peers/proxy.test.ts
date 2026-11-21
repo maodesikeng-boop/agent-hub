@@ -267,6 +267,9 @@ describe("转发到真的设备", () => {
 });
 
 describe("WebSocket 转发", () => {
+  it.todo("passes the target boot cursor through the entry unchanged and returns the target's resync for a stale boot");
+  it.todo("forwards the legacy target's resync for a compound since value before any live change");
+
   async function paired(): Promise<[TestDevice, TestDevice]> {
     const { devices } = await startTestAccount(2, { serverOptions: { peerProxy: { pingMs: 200 } } });
     return devices as [TestDevice, TestDevice];
