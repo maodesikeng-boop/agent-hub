@@ -8,6 +8,7 @@ import { openDatabase } from "../src/daemon/store/db.ts";
 import type { Db } from "../src/daemon/store/db.ts";
 import { createSessionStore } from "../src/daemon/store/session-store.ts";
 import { migrate, userVersion } from "../src/daemon/store/migrate.ts";
+import { writeMigration, writeMigrationManifest } from "../src/daemon/store/test-helpers.ts";
 import { createLedger } from "../src/daemon/ledger/index.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../src/shared/ledger.ts";
 import { ACTIVE_HANDOVER_STATUSES, HANDOVER_STATUSES } from "../src/shared/handover.ts";
@@ -217,6 +218,7 @@ function migrationsUpTo(version: number): string {
     const match = /^(\d+)_.*\.sql$/.exec(name);
     if (match !== null && Number(match[1]) <= version) copyFileSync(join(migrationsDir, name), join(old, name));
   }
+  writeMigrationManifest(old);
   extraDirs.push(old);
   return old;
 }
@@ -1059,7 +1061,7 @@ describe("0008_schedules：从 0007 的库升级", () => {
 describe("迁移器：迁移期间关外键，提交前检查", () => {
   it("迁移留下悬空引用就整个回滚，user_version 不变，外键检查恢复", () => {
     const dir = m1MigrationsDir();
-    writeFileSync(join(dir, "0002_bad.sql"), "INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', 42, 'x', 0);");
+    writeMigration(dir, "0002_bad.sql", "INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', 42, 'x', 0);");
     const db = open();
     // 报错里带出是哪些行
     expect(() => migrate(db, dir)).toThrow(/0002_bad\.sql.*foreign key.*conversations rowid 1 → pms/i);

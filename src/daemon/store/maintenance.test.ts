@@ -1,6 +1,6 @@
 // 数据库空间维护（maintenance.ts）：老库重建成增量回收模式（先备份）、新库本来就是、空闲页分批还给文件系统。
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import type { Db } from "./db.ts";
 import { autoVacuumMode, ensureIncrementalVacuum, freePages, reclaimFreePages } from "./maintenance.ts";
 import { migrate } from "./migrate.ts";
 import { openStore } from "./open.ts";
+import { writeMigration } from "./test-helpers.ts";
 
 let dir: string;
 let file: string;
@@ -41,8 +42,7 @@ function legacyDb(): void {
 /** 只有 0001…<n> 的迁移目录（内容是空表），让 legacyDb（版本 3）按需“有 / 没有”迁移要跑。 */
 function migrationsUpTo(version: number): string {
   const migrationsDir = join(dir, "migrations");
-  mkdirSync(migrationsDir, { recursive: true });
-  for (let v = 1; v <= version; v++) writeFileSync(join(migrationsDir, `${String(v).padStart(4, "0")}_t${v}.sql`), v <= 3 ? "SELECT 1;" : `CREATE TABLE extra${v} (id INTEGER PRIMARY KEY);`);
+  for (let v = 1; v <= version; v++) writeMigration(migrationsDir, `${String(v).padStart(4, "0")}_t${v}.sql`, v <= 3 ? "SELECT 1;" : `CREATE TABLE extra${v} (id INTEGER PRIMARY KEY);`);
   return migrationsDir;
 }
 
@@ -216,9 +216,9 @@ describe("reclaimFreePages：空闲页分批还给文件系统", () => {
     // 已有历史空闲页的大库升级：只回收本次迁移新增的空闲页，历史空闲页与超单批上限部分留给后台分批回收
     rmSync(file);
     const migDir = join(dir, "mig-cap");
-    mkdirSync(migDir, { recursive: true });
-    writeFileSync(
-      join(migDir, "0001_init.sql"),
+    writeMigration(
+      migDir,
+      "0001_init.sql",
       "CREATE TABLE history_free (id INTEGER PRIMARY KEY, body TEXT NOT NULL); CREATE TABLE old_big (id INTEGER PRIMARY KEY, body TEXT NOT NULL);",
     );
     db = openDatabase(file);
@@ -232,13 +232,13 @@ describe("reclaimFreePages：空闲页分批还给文件系统", () => {
     expect(historyFree).toBeGreaterThan(40);
 
     // 0002 不删表：原有的 historyFree 页一页不动
-    writeFileSync(join(migDir, "0002_noop.sql"), "SELECT 1;");
+    writeMigration(migDir, "0002_noop.sql", "SELECT 1;");
     migrate(db, migDir);
     expect(freePages(db)).toBe(historyFree);
 
     // 0003 删掉超过 DB_INCREMENTAL_VACUUM_PAGES 页的大旧表：最多顺手回收 1 个 chunk，不无上限阻塞启动
     const pagesBeforeDrop = pagesOf(db);
-    writeFileSync(join(migDir, "0003_drop_big.sql"), "DROP TABLE old_big;");
+    writeMigration(migDir, "0003_drop_big.sql", "DROP TABLE old_big;");
     migrate(db, migDir, { now: () => Date.UTC(2026, 10, 10, 8, 5, 0) });
     const shrunk = pagesBeforeDrop - pagesOf(db);
     // SQLite 跨过 pointer-map 页边界时会顺带截断尾部不再需要的 ptrmap 页（每 ~814 页 1 页）

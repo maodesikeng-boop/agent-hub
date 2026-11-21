@@ -1,6 +1,6 @@
 export { openDatabase } from "./db.ts";
 export type { Db, SqlValue } from "./db.ts";
-export { DEFAULT_MIGRATIONS_DIR, migrate, userVersion } from "./migrate.ts";
+export { DEFAULT_MIGRATIONS_DIR, loadMigrations, migrate, userVersion } from "./migrate.ts";
 export { autoVacuumMode, ensureIncrementalVacuum, freePages, reclaimFreePages, totalPages } from "./maintenance.ts";
 export type { EnsureIncrementalResult, ReclaimResult } from "./maintenance.ts";
 export { DaemonAlreadyRunningError, acquireLock } from "./lock.ts";
