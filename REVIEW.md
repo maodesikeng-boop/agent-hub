@@ -64,11 +64,11 @@ Seen in: `bdb85632`, `c067de52`/`2a421897`, `717eeb06`
 
 ### Async work stops touching the ledger after shutdown starts
 
-Trigger: `src/daemon/agent-api/**`, `src/daemon/sent-files.ts`, `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/daemon.ts`
+Trigger: `src/daemon/agent-api/**`, `src/daemon/sent-files.ts`, `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/resources/**`, `src/daemon/daemon.ts`
 
-Check: After each `await` in a handler or background job, the code checks `signal.aborted` (or the closing flag) before it calls the ledger or the database. `close()` cancels in-flight work and waits for handlers before the database closes. A slot for an open file or upload counts from open until the handle closes.
+Check: After each `await` in a handler or background job, the code checks `signal.aborted` (or the closing flag) before it calls the ledger or the database. `close()` or `stop()` cancels in-flight work and returns a promise that `daemon.ts` awaits before the database closes; a `void` background run has a `.catch` that logs. A slot for an open file or upload counts from open until the handle closes.
 
-Seen in: `c69b3b94`, `d23209c2`/`796273fe`, `e5b55fa6`, `2bdf6ff9`/`3ecff0d4`
+Seen in: `c69b3b94`, `d23209c2`/`796273fe`, `e5b55fa6`, `2bdf6ff9`/`3ecff0d4`, `ba599181`/`12815bc8`
 
 ### Database transactions stay synchronous
 
@@ -162,6 +162,6 @@ Seen in: `01ec18ad`, `9c3254de`
 
 Trigger: `src/daemon/launch.ts`, `src/daemon/handlers.ts`, `src/daemon/setup/**`, `src/daemon/driver/**`, `src/daemon/platform/process-tag.ts`, `src/daemon/session-tmp.ts`, `src/daemon/worktree-cleanup.ts`, `src/daemon/resources/**`, `scripts/**`
 
-Check: Every Worker and setup subprocess inherits `ENV_SESSION_OWNER_TAG` and a private `SessionTmpStore` directory (bound onto `/tmp` inside Linux `bwrap`, owned by a kill-on-close Job Object on Windows) so detached grandchildren and nested test daemons are reaped on session exit. Cleanup failures or held dirty worktrees surface to the user instead of logging repeated silent skips.
+Check: Every Worker and setup subprocess inherits `ENV_SESSION_OWNER_TAG` and a private `SessionTmpStore` directory (owned by a kill-on-close Job Object on Windows) so detached grandchildren and nested test daemons are reaped on session exit. The identity that finds leftovers (tag nonce, temp-dir prefix) survives a daemon restart and differs per data directory. Nothing deletes by a bare name prefix in a shared location such as `/tmp`, and nothing is mounted over `/tmp`. Automatic reaping stops only processes inside the session's own folders; anything else waits for the user. A failed scan never counts as "gone", so it never prunes a Keep decision. A delete re-checks the exact object it verified (branch commit, file age). Cleanup failures or held dirty worktrees surface to the user instead of logging repeated silent skips.
 
-Seen in: `600067d6`, `60e0ab75`, `ac55c10f`
+Seen in: `600067d6`, `60e0ab75`, `ac55c10f`, `ba599181`/`ea9ff72f`, `ba599181`/`12815bc8`

@@ -84,7 +84,7 @@ Field measurements below come from the Project Manager's inspection of the live 
 
 | Candidate | Mechanism | Trade-offs |
 | --- | --- | --- |
-| A. Unified session owner env tag (`BELLWOOD_SESSION_TAG`) plus OS-native containment and one central `SessionTmpStore` in `launch.ts` (Recommended) | `launch.ts` and `setup.ts` inject `BELLWOOD_SESSION_TAG` (preserving up to 4 ancestor tags) and a short private 0700 temp directory (`bw-XXXXXX`) for every Worker across all 8 vendors. Reaping uses `ps eww` on macOS, `bwrap --unshare-pid` plus `/proc/<pid>/environ` on Linux, and `fusa-run.exe` `SessionJob` on Windows. Linux `bwrap` also binds the private dir onto `/tmp`. | Zero new native dependencies, covers detached grandchildren and nested smoke daemons, eliminates duplicated readonly `mkdtempSync` in four vendor drivers, and keeps socket paths under macOS's 103-byte `sun_path` limit. |
+| A. Unified session owner env tag (`BELLWOOD_SESSION_TAG`) plus OS-native containment and one central `SessionTmpStore` in `launch.ts` (Recommended) | `launch.ts` and `setup.ts` inject `BELLWOOD_SESSION_TAG` (preserving up to 4 ancestor tags) and a short private 0700 temp directory (`bw-<owner id>-XXXXXX`) for every Worker across all 8 vendors. Reaping uses `ps eww` plus `lsof` on macOS, `bwrap --unshare-pid` plus `/proc/<pid>/environ` on Linux, and `fusa-run.exe` `SessionJob` on Windows. | Zero new native dependencies, covers detached grandchildren and nested smoke daemons, eliminates duplicated readonly `mkdtempSync` in four vendor drivers, and keeps socket paths under macOS's 103-byte `sun_path` limit. |
 | B. Put Worker temp dirs under `<dataDir>/tmp/` | Allocate `<AGENT_HUB_HOME>/tmp/<sessionId>`. | Breaks the macOS 40-byte `shortTmp()` guard in `verify-smoke.ts` and `test/e2e/harness.ts` (causing tests to fall back to `/tmp`), and forces extra read and write holes inside protected `dataDir` across macOS seatbelt, Linux `bwrap`, and Windows NTFS ACLs. |
 | C. Rely on macOS launchd per-Worker sub-jobs or cgroups everywhere | Spawn each Worker via `launchctl` or `systemd-run`. | Heavy platform-specific lifecycle complexity, breaks inside non-systemd Linux containers and CI runners, and duplicates existing `bwrap` and `fusa-run.exe` isolation. |
 
@@ -138,16 +138,18 @@ New constants added to `src/shared/limits.ts` (note: Phase 1 also updates `WORKE
 | `FEISHU_ROUTER_EVENTS_TTL_MS` | `86_400_000` | Expires stale Feishu Router replay events after 24 hours. |
 | `RESOURCE_DECISIONS_MAX_ROWS` | `500` | Caps stored user Keep overrides in `resource_decisions`. |
 | `SENT_FILES_RETENTION_DAYS` | `14` | Expires unreferenced delivered copies after 2 weeks. |
-| `SENT_FILES_DISK_MAX_BYTES` | `256 MiB` | Hard disk cap for `sent-files/`, evicting oldest mtime directories first. |
-| `UPLOADS_DISK_MAX_BYTES` | `512 MiB` | Hard disk cap for `uploads/`, evicting oldest mtime directories first. |
+| `SENT_FILES_DISK_MAX_BYTES` | `256 MiB` | Disk cap for `sent-files/`, evicting oldest mtime directories first. |
+| `UPLOADS_DISK_MAX_BYTES` | `512 MiB` | Disk cap for `uploads/`, evicting oldest mtime directories first. |
+| `FILE_BYTE_CAP_MIN_AGE_DAYS` | `3` | Byte caps never evict an upload or delivery younger than this; a queued message may still reference it. The **Resources** panel shows the directory over its cap instead. |
 | `SETUP_LOGS_RETENTION_DAYS` | `7` | Expires setup logs for ended Workers after 7 days. |
 | `SETUP_LOGS_MAX_FILES` | `200` | Caps `state/logs/setup/worker-*.log` count while sparing open Workers. |
-| `SESSION_TMP_ORPHAN_RETENTION_MS` | `3_600_000` | Grace window before sweeping unmanaged `bw-*` directories in OS temp root. |
-| `SESSION_TMP_DIR_PREFIX` | `"bw-"` | Short prefix keeping macOS socket paths well under 103 bytes. |
+| `SESSION_TMP_ORPHAN_RETENTION_MS` | `3_600_000` | Grace window before sweeping untracked directories that carry this data directory's owner prefix. |
+| `SESSION_TMP_DIR_PREFIX` | `"bw-"` | Short prefix keeping macOS socket paths well under 103 bytes. Each data directory appends its owner id (a hash of the state directory's real path), and sweeps only touch directories with their own `bw-<owner id>-` prefix, so two instances sharing `/tmp` and user `bw-*` folders are never deleted. |
 | `BRANCH_MERGED_RETENTION_DAYS` | `1` | Keeps merged local `hub/*` branches for 24 hours after worktree cleanup. |
 | `BRANCH_UNMERGED_HOLD_DAYS` | `7` | Surfaces unmerged ended Worker branches in **Resources** after 7 days. |
 | `MANAGED_BRANCHES_MERGED_MAX` | `20` | Caps kept merged `hub/*` branches per repository. |
 | `BRANCH_CLEANUP_BATCH_LIMIT` | `20` | Bounds git subprocess work per hourly branch-cleanup tick. |
+| `BRANCH_VERDICT_CACHE_MAX` | `2_000` | LRU of merge verdicts keyed by (repository, branch commit, main commits). Keys are content addresses, so a new commit on either side misses the cache and nothing goes stale. |
 | `RESOURCES_INSPECT_TTL_MS` | `15_000` | Coalesces repeated **Resources** tab opens without serving stale disk state. |
 | `RESOURCES_DIR_SCAN_MAX_ENTRIES` | `50_000` | Prevents huge worktree `node_modules` trees from stalling inspection. |
 | `RESOURCES_DIR_SCAN_TIMEOUT_MS` | `5_000` | Hard wall-clock budget for each directory walk. |
@@ -164,8 +166,11 @@ New constants added to `src/shared/limits.ts` (note: Phase 1 also updates `WORKE
   - `src/web/components/ResourcesSettings.tsx` and `src/web/resources-model.ts` contain zero vendor names (enforced by `src/web/web-guard.test.ts`).
 
 - **Cross-platform unification (`src/daemon/platform/index.ts`):**
-  - **macOS (`darwin`):** `shortOsTmpRoot` prefers realpath `/tmp` (`/private/tmp/bw-XXXXXX`, 22 chars) so `verify-smoke.ts` and `test/e2e/harness.ts` use the Worker's `TMPDIR` instead of bypassing it. `listTaggedProcesses` and `reapTaggedProcesses` in `src/daemon/platform/process-tag.ts` scan `ps eww -A -o pid=,ppid=,pgid=,command=` and SIGSTOP then SIGKILL matching PIDs and non-daemon groups on `session.end` and daemon startup.
-  - **Linux (`linux`):** `bwrapArgs` and `readonlyBwrapArgs` (`src/daemon/driver/write-scope.ts`) bind `LaunchFiles.tmpDir` onto `/tmp` inside the mount namespace so even hardcoded `/tmp` paths land inside the session temp dir. `bwrap --unshare-pid` destroys all descendants when PID 1 exits; `process-tag.ts` also scans `/proc/<pid>/environ` to catch non-bwrap sessions (such as native-sandbox sessions).
+  - **macOS (`darwin`):** `shortOsTmpRoot` prefers realpath `/tmp` (`/private/tmp/bw-XXXXXX`, 22 chars) so `verify-smoke.ts` and `test/e2e/harness.ts` use the Worker's `TMPDIR` instead of bypassing it. `listTaggedProcesses` and `reapTaggedProcesses` in `src/daemon/platform/process-tag.ts` scan `ps eww -A -o pid=,ppid=,pgid=,uid=,command=`, read each match's working directory with one `lsof -d cwd` call, and SIGSTOP then SIGKILL matching PIDs plus the process groups they lead.
+  - **Linux (`linux`):** `TMPDIR`, `TEMP`, and `TMP` point at the session temp dir, and `readonlyBwrapArgs` binds it writable at its own path. Nothing is mounted over `/tmp`, because `SSH_AUTH_SOCK`, X11 sockets, and files a PM leaves in `/tmp` for a Worker must stay reachable; hardcoded `/tmp` paths behave the same as on macOS. `bwrap --unshare-pid` destroys all descendants when PID 1 exits; `process-tag.ts` also scans `/proc/<pid>/environ` and `/proc/<pid>/cwd` to catch non-bwrap sessions (such as native-sandbox sessions).
+  - **Process tag identity:** the tag nonce is the data directory's owner id, so it survives self-reloads and crashes. `session.end` therefore still finds descendants tagged before a restart, and the daemon sweeps ended sessions' leftovers at startup.
+  - **What automatic reaping stops:** `session.end`, the startup sweep, and **Run cleanup** stop only tagged processes whose working directory is inside the session's own folders (its `cwd` or any temp dir with this data directory's owner prefix). A tagged process elsewhere, such as a Gradle or Kotlin daemon in `~/.gradle`, may be shared with other sessions or the user, so it appears in **Resources** as "Possibly shared" with its working directory and only stops when the user chooses **Stop process**.
+  - **Branch checks and deletes:** `isBranchSquashMergedToMain` compares the `git patch-id` of the branch's squashed diff with commits on main that touch the same files, so a scan writes no objects into the user's repository. `deleteLocalBranch` runs `git update-ref -d <ref> <verified commit>`, so a branch that gained a commit after the check survives. A repository or process table that cannot be read marks that scan incomplete, and Keep decisions of that kind are not pruned.
   - **Windows (`win32`):** `shortOsTmpRoot` uses `%TEMP%` (already per-user). `fusa-run.exe` (`apps/windows/crates/fusa-win-helper/src/win/job.rs:28-30`) already owns child trees inside a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object with breakaway disabled, terminating `detached: true` grandchildren when the session ends or the daemon dies; `removeSessionTmpDir` uses `removeTreeWithRetry` after process exit so Windows file locks clear cleanly. `listLocalBranches`, `isBranchSquashMergedToMain`, and `deleteLocalBranch` run through `runGit` (`src/daemon/git/git.ts`) with existing Windows long-path and `git.exe` resolution.
 
 ### 6. Deletions
@@ -192,7 +197,7 @@ Note for implementation Workers: `src/code-hygiene.baseline.json` pins legacy fi
 - `src/shared/resources.ts`: Declares all discriminated held-resource shapes, `ResourcesSnapshot`, decision request and response types, and cleanup response types.
 - `src/shared/api.ts` and `src/shared/index.ts`: Adds `/api/resources`, `/api/resources/decision`, and `/api/resources/cleanup` inside device scope and re-exports the new shared modules.
 - `src/daemon/platform/process-tag.ts` and `src/daemon/platform/index.ts`: Declares cross-platform session tag generation, matching, listing, and reaping contracts.
-- `src/daemon/process-ledger.ts`: Adds optional `sessionTag` on `LedgerEntry` and `TrackOptions` so startup `reapStale()` can sweep crashed sessions' detached grandchildren.
+- `src/daemon/resources/session-processes.ts`: Declares `createSessionProcessReaper`, the single place that decides which tagged processes belong to an ended session and may be stopped automatically.
 - `src/daemon/session-tmp.ts`: Declares `shortOsTmpRoot` and `SessionTmpStore` for centralized per-session temp directory allocation and orphan sweeping.
 - `src/daemon/ledger/db-table-retention.ts`: Declares batched retention contracts for PM `tool` messages, terminal `actions`, `hub_calls`, `handovers`, `persona_changes`, ended Worker `session_steps`, and consumed handover blobs.
 - `src/daemon/git/git.ts` and `src/daemon/git/index.ts`: Declares `isBranchSquashMergedToMain`, `listLocalBranches`, and `deleteLocalBranch` contracts.
@@ -211,7 +216,7 @@ Implementation splits into two independently verifiable phases. Each phase produ
 
 #### Phase 1: Registry guard, database slimming, and Worker process plus temp reaping
 
-Scope: Fill in `RESOURCE_REGISTRY` and `validateResourceRegistry`, implement database slimming (`messages.ts`, `steps.ts`, `handover.ts`, `hub-commands.ts`, `worker-retention.ts`, `db-table-retention.ts`, `db-retention.ts`, `router.ts`, `task-graphs/overview.ts`, `feishu/store.ts`), implement disk and setup-log caps (`file-cleanup.ts`), implement `process-tag.ts`, `session-tmp.ts`, `launch.ts`, `setup.ts`, `handlers.ts`, `process-ledger.ts`, and Linux `bwrap` `/tmp` bind, and fix `scripts/bench-message-list.ts` and `scripts/verify-smoke.ts`.
+Scope: Fill in `RESOURCE_REGISTRY` and `validateResourceRegistry`, implement database slimming (`messages.ts`, `steps.ts`, `handover.ts`, `hub-commands.ts`, `worker-retention.ts`, `db-table-retention.ts`, `db-retention.ts`, `router.ts`, `task-graphs/overview.ts`, `feishu/store.ts`), implement disk and setup-log caps (`file-cleanup.ts`), implement `process-tag.ts`, `session-tmp.ts`, `launch.ts`, `setup.ts`, and `handlers.ts`, and fix `scripts/bench-message-list.ts` and `scripts/verify-smoke.ts`.
 
 Required evidence to mark Phase 1 done:
 
@@ -223,7 +228,7 @@ Required evidence to mark Phase 1 done:
    - Realistic-distribution benchmark in `src/daemon/ledger/snapshot-size.test.ts` seeds a 900-Worker database matching observed proportions (77.4% `tool` rows, PM `tool` rows, `session_steps`, `handovers`, `hub_calls`) and records before and after numbers in the PR: SQLite file bytes, per-table `dbstat` bytes, and median ms for `snapshot()`, `messagesBefore()`, and `messagesAfter()`.
 3. **Process and temp-dir reaping proofs across OSes:**
    - `pnpm exec vitest run src/daemon/platform/process-tag.test.ts src/daemon/session-tmp.test.ts src/daemon/process-ledger.test.ts` passes on macOS, proving a `detached: true` grandchild whose parent exited and a nested `serve` daemon are both killed on `session.end` and the Worker's `bw-*` temp directory is deleted.
-   - Cloud checks for Linux (`bwrap` `/tmp` bind plus `/proc/<pid>/environ` reap) and Windows (`test/windows/job-process-tree.test.ts` proving a `detached: true` grandchild inside `fusa-run.exe` dies on exit) are green before merge.
+   - Cloud checks for Linux (`bwrap` keeping the host `/tmp` visible plus `/proc/<pid>/environ` reap) and Windows (`test/windows/job-process-tree.test.ts` proving a `detached: true` grandchild inside `fusa-run.exe` dies on exit) are green before merge.
 
 #### Phase 2: Squash-merge branch cleanup, resource inspector API, Resources UI panel, and `REVIEW.md`
 
