@@ -707,6 +707,7 @@ export class FakeLedger {
       personaUpdate: unused("personaUpdate"),
       getWorktreeTask: unused("getWorktreeTask"),
       onSetupStarted: unused("onSetupStarted"),
+      waitsForTurnCompletion: unused("waitsForTurnCompletion"),
       waitsForFirstTurn: unused("waitsForFirstTurn"),
       onWorktreeCreated: unused("onWorktreeCreated"),
       recordReviewSnapshot: unused("recordReviewSnapshot"),

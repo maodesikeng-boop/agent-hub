@@ -6,7 +6,7 @@ import type { LedgerSessions } from "./sessions.ts";
 import { isWorkerCleanable, isWorktreeCleaned, listEndedWorktreeWorkers } from "./workers/cleanup.ts";
 import { createWorkersCtx, ownWorker, workerSession } from "./workers/ctx.ts";
 import { dispatchStepWorkerIn } from "./workers/dispatch.ts";
-import { afterDriverEvent } from "./workers/driver-events.ts";
+import { afterDriverEvent, settleTurn, turnFactsOf } from "./workers/driver-events.ts";
 import {
   deliverToWorkerIn,
   endIn,
@@ -64,6 +64,8 @@ export function createLedgerWorkers(
     list: bind(list),
     status: bind(status),
     afterDriverEvent: bind(afterDriverEvent),
+    settleTurn: bind(settleTurn),
+    turnFactsOf: bind(turnFactsOf),
     getWorktreeTask: bind(getWorktreeTask),
     onSetupStarted: bind(onSetupStarted),
     waitsForFirstTurn: bind(waitsForFirstTurn),

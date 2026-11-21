@@ -19,10 +19,10 @@ import type { PmCaller, WorkersCtx } from "./types.ts";
 export type EndedWorker = { ended: WorkerDbRow; interrupted: boolean; nodeNote: string | null };
 
 export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts: { notifyGraph?: boolean } = {}): EndedWorker {
-  clearMaxTime(w, worker.worker_conversation_id);
+  p.after.push(() => clearMaxTime(w, worker.worker_conversation_id));
   const session = workerSession(w, worker);
   const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
-  if (interrupted) w.endInterrupted.add(session.id);
+  if (interrupted) p.after.push(() => w.endInterrupted.add(session.id));
   w.awaitingBackground.take(session.id);
   w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", w.now(), worker.id);
   const ended = workerRow(w, worker.id)!;

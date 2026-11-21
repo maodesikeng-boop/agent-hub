@@ -687,6 +687,25 @@ describe("汇报回到项目经理", () => {
     ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 1, at: now });
     expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started"]);
   });
+
+  it("这一轮结束时写库失败一次：先不发汇报，库恢复后只补一行汇报、只交给项目经理一次", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const task = taskMessage(worker).id;
+    db.exec(`CREATE TRIGGER fail_task BEFORE UPDATE OF status ON messages WHEN NEW.id = ${task} AND NEW.status = 'replied' BEGIN SELECT RAISE(ABORT, 'boom'); END`);
+    runTurn(worker, [task], report("做完了", "X 修好了"));
+    expect(workerLines().filter((m) => workerEventOf(m)?.event === "report")).toEqual([]);
+    expect(taskMessage(worker).status).toBe("processing");
+    expect(enqueued).toEqual([]);
+
+    db.exec("DROP TRIGGER fail_task");
+    now += 5_000;
+    vi.advanceTimersByTime(5_000);
+    const lines = workerLines().filter((m) => workerEventOf(m)?.event === "report");
+    expect(lines).toHaveLength(1);
+    expect(workerEventOf(lines[0]!)).toMatchObject({ status: "done", summary: "X 修好了" });
+    expect(taskMessage(worker).status).toBe("replied");
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId: lin.sessionId, messageId: lines[0]!.id, source: "system" }]]);
+  });
 });
 
 describe("出错、停止", () => {
