@@ -15,6 +15,7 @@ import {
   FEISHU_POST_RETENTION_DAYS,
   FEISHU_ROUTER_EVENTS_MAX_ROWS,
   FEISHU_ROUTER_EVENTS_TTL_MS,
+  FILE_BYTE_CAP_MIN_AGE_DAYS,
   FILE_RETENTION_DAYS,
   HANDOVERS_MAX_PER_CONV,
   HANDOVERS_RETENTION_DAYS,
@@ -334,10 +335,12 @@ const HUB_PATH_ENTRIES: readonly ResourceRegistryEntry[] = [
   pathEntry("uploadsDir", "data_dir", "growing", "src/daemon/uploads.ts", "src/daemon/file-cleanup.ts", "automatic", [
     limit("FILE_RETENTION_DAYS", FILE_RETENTION_DAYS, "days"),
     limit("UPLOADS_DISK_MAX_BYTES", UPLOADS_DISK_MAX_BYTES, "bytes"),
+    limit("FILE_BYTE_CAP_MIN_AGE_DAYS", FILE_BYTE_CAP_MIN_AGE_DAYS, "days"),
   ]),
   pathEntry("sentFilesDir", "data_dir", "growing", "src/daemon/sent-files.ts", "src/daemon/file-cleanup.ts", "automatic", [
     limit("SENT_FILES_RETENTION_DAYS", SENT_FILES_RETENTION_DAYS, "days"),
     limit("SENT_FILES_DISK_MAX_BYTES", SENT_FILES_DISK_MAX_BYTES, "bytes"),
+    limit("FILE_BYTE_CAP_MIN_AGE_DAYS", FILE_BYTE_CAP_MIN_AGE_DAYS, "days"),
   ]),
   pathEntry("syncBackupsDir", "data_dir", "growing", "src/daemon/vendor-sync/backup.ts", "src/daemon/vendor-sync/backup.ts", "automatic", [
     limit("MAX_VENDOR_SYNC_BACKUPS", MAX_VENDOR_SYNC_BACKUPS, "entries"),

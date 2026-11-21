@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
+  FILE_BYTE_CAP_MIN_AGE_DAYS,
   FILE_CLEANUP_INTERVAL_MS,
   FILE_RETENTION_DAYS,
   LOG_PREFIX,
@@ -78,6 +79,7 @@ function cleanupUploadLikeDir(
     return { removedFiles: 0, removedBytes: 0 };
   }
   const cutoff = nowMs - retentionDays * DAY_MS;
+  const evictableBefore = nowMs - FILE_BYTE_CAP_MIN_AGE_DAYS * DAY_MS;
   const kept: Array<{ path: string; mtimeMs: number; bytes: number }> = [];
   let removedFiles = 0;
   let removedBytes = 0;
@@ -106,7 +108,7 @@ function cleanupUploadLikeDir(
     if (totalBytes > maxBytes) {
       kept.sort((a, b) => a.mtimeMs - b.mtimeMs || a.path.localeCompare(b.path));
       for (const entry of kept) {
-        if (totalBytes <= maxBytes) break;
+        if (totalBytes <= maxBytes || entry.mtimeMs >= evictableBefore) break;
         try {
           rmSync(entry.path, { recursive: true, force: true });
           totalBytes -= entry.bytes;

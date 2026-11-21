@@ -652,6 +652,8 @@ export const FEISHU_ROUTER_EVENTS_TTL_MS = 24 * 60 * 60 * 1000;
 export const RESOURCE_DECISIONS_MAX_ROWS = 500;
 
 export const SENT_FILES_RETENTION_DAYS = 14;
+// Byte caps never evict files this fresh: a queued message may still reference an upload, and the user may not have opened a delivery yet.
+export const FILE_BYTE_CAP_MIN_AGE_DAYS = 3;
 export const SENT_FILES_DISK_MAX_BYTES = 256 * 1024 * 1024;
 export const UPLOADS_DISK_MAX_BYTES = 512 * 1024 * 1024;
 export const SETUP_LOGS_RETENTION_DAYS = 7;

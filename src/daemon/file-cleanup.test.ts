@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FILE_CLEANUP_INTERVAL_MS,
   FILE_RETENTION_DAYS,
+  FILE_BYTE_CAP_MIN_AGE_DAYS,
   SENT_FILES_RETENTION_DAYS,
   SETUP_LOGS_RETENTION_DAYS,
 } from "../shared/index.ts";
@@ -134,6 +135,28 @@ describe("cleanupManagedFiles and cleanupSetupLogs", () => {
     expect(existsSync(newSent)).toBe(true);
     expect(existsSync(oldUpload)).toBe(false);
     expect(existsSync(newUpload)).toBe(true);
+  });
+
+  it("never evicts uploads or deliveries younger than FILE_BYTE_CAP_MIN_AGE_DAYS to meet a byte cap", () => {
+    const nowMs = Date.now();
+    const fresh = Array.from({ length: 6 }, (_, i) => {
+      const p = join(uploads, `200000000000000${i}`);
+      mkdirSync(p);
+      writeFileSync(join(p, "video.bin"), Buffer.alloc(100, 0x41));
+      const t = new Date(nowMs - (FILE_BYTE_CAP_MIN_AGE_DAYS - 1) * DAY - i * 60_000);
+      utimesSync(p, t, t);
+      return p;
+    });
+    const stale = join(uploads, "2000000000000009");
+    mkdirSync(stale);
+    writeFileSync(join(stale, "old.bin"), Buffer.alloc(100, 0x41));
+    const old = new Date(nowMs - (FILE_BYTE_CAP_MIN_AGE_DAYS + 1) * DAY);
+    utimesSync(stale, old, old);
+
+    const stats = cleanupManagedFiles({ uploadsDir: uploads, uploadsMaxBytes: 300, now: () => nowMs }, () => {});
+    expect(stats.removedFiles).toBe(1);
+    expect(existsSync(stale)).toBe(false);
+    for (const p of fresh) expect(existsSync(p)).toBe(true);
   });
 
   it("caps setup logs by age and file count while sparing currently open Workers", () => {
