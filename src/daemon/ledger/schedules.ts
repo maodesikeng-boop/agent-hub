@@ -6,7 +6,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult } from "../../shared/hub.ts";
 import { MAX_SCHEDULE_NAME_CHARS, MAX_SCHEDULES_PER_PM, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
-import { checkEveryMinutes, nextRunAfter, parseDailyTime, scheduleLabel, scheduledTimeText, scheduleRunTitle } from "../../shared/schedule.ts";
+import { checkEveryMinutes, nextRunAfter, parseDailyTime, reanchorDailyRun, scheduleLabel, scheduledTimeText, scheduleRunTitle } from "../../shared/schedule.ts";
 import type { ScheduleId, ScheduleRecord } from "../../shared/schedule.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -20,6 +20,22 @@ const IN_FLIGHT = new Set(["queued", "delivered", "processing"]);
 const NO_REASON = "没跑成";
 
 export type LedgerSchedules = ReturnType<typeof createLedgerSchedules>;
+
+function reanchorDailyRuns({ db, now, write }: Pick<LedgerContext, "db" | "now" | "write">, pushUpdated: (p: Pending, id: ScheduleId) => void) {
+  const moved = db
+    .all<Pick<ScheduleDbRow, "id" | "at_time" | "next_run_at" | "last_run_at">>(
+      "SELECT id, at_time, next_run_at, last_run_at FROM schedules WHERE enabled = 1 AND kind = 'daily'",
+    )
+    .map((r) => ({ id: r.id, from: r.next_run_at, to: reanchorDailyRun(r.next_run_at, r.at_time!, r.last_run_at) }))
+    .filter((r) => r.to !== r.from);
+  if (moved.length === 0) return;
+  write((p) => {
+    for (const { id, to } of moved) {
+      db.run("UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?", to, now(), id);
+      pushUpdated(p, id);
+    }
+  });
+}
 
 export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessions, messages: LedgerMessages, persona: LedgerPersona) {
   const { db, now, write, enqueue } = ctx;
@@ -195,6 +211,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
 
   /** Ticks with nothing due never open a write transaction, so they do not contend for the SQLite write lock. */
   const runDueSchedules = (nowMs: number) => {
+    reanchorDailyRuns(ctx, pushUpdated);
     if (
       db.get(
         `SELECT 1 AS x FROM schedules s

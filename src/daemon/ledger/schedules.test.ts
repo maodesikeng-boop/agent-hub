@@ -186,6 +186,93 @@ describe("T3 错过几个周期只补跑一次", () => {
   });
 });
 
+describe("T4 换时区：每天的任务按现在所在时区的 HH:MM 跑，同一天只跑一次", () => {
+  const DAY = 24 * HOUR;
+  let savedTz: string | undefined;
+  beforeEach(() => {
+    savedTz = process.env.TZ;
+  });
+  afterEach(() => {
+    if (savedTz === undefined) delete process.env.TZ;
+    else process.env.TZ = savedTz;
+  });
+
+  /** 每 30 秒拨一次表，每条发出去的都当作项目经理已处理完。 */
+  const tickThrough = (from: number, to: number) => {
+    for (let t = from; t <= to; t += 30_000) {
+      now = t;
+      ledger.runDueSchedules(t);
+      for (const run of runsIn()) if (run.status === "queued") settleMessage(run.id);
+    }
+  };
+  const localDayAndTime = (ms: number) => {
+    const d = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return { day: `${d.getMonth() + 1}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+  };
+
+  it("首次到点前往西换（纽约 → 洛杉矶）：存好的纽约 09:00 在洛杉矶是 06:00，不能 06:00 跑一次、09:00 再跑一次", () => {
+    process.env.TZ = "America/New_York";
+    now = new Date(2026, 10, 3, 7).getTime();
+    add();
+
+    process.env.TZ = "America/Los_Angeles";
+    tickThrough(now, now + 2 * DAY);
+
+    expect(runsIn().map((m) => localDayAndTime(m.createdAt))).toEqual([
+      { day: "11-03", time: "09:00" },
+      { day: "11-04", time: "09:00" },
+    ]);
+  });
+
+  it("往东换（洛杉矶 → 上海）：旧时区算好的下次落在上海凌晨，不能凌晨跑一次、09:00 再跑一次", () => {
+    process.env.TZ = "America/Los_Angeles";
+    now = new Date(2026, 10, 4, 8).getTime();
+    const schedule = add();
+    tickThrough(now, new Date(2026, 10, 4, 9, 30).getTime());
+    expect(runsIn()).toHaveLength(1);
+
+    process.env.TZ = "Asia/Shanghai";
+    tickThrough(now, now + 3 * DAY);
+
+    expect(runsIn().map((m) => localDayAndTime(m.createdAt))).toEqual([
+      { day: "11-05", time: "01:00" },
+      { day: "11-06", time: "09:00" },
+      { day: "11-07", time: "09:00" },
+    ]);
+    expect(localDayAndTime(row(schedule.id).nextRunAt)).toEqual({ day: "11-08", time: "09:00" });
+  });
+
+  it("往西换（上海 → 洛杉矶）：下次改到洛杉矶当天 09:00，不在 17:00 跑", () => {
+    process.env.TZ = "Asia/Shanghai";
+    now = new Date(2026, 10, 4, 8).getTime();
+    add();
+    tickThrough(now, new Date(2026, 10, 4, 9, 30).getTime());
+    expect(runsIn()).toHaveLength(1);
+
+    process.env.TZ = "America/Los_Angeles";
+    tickThrough(now, now + 3 * DAY);
+
+    expect(runsIn().map((m) => localDayAndTime(m.createdAt))).toEqual([
+      { day: "11-03", time: "17:00" },
+      { day: "11-04", time: "09:00" },
+      { day: "11-05", time: "09:00" },
+      { day: "11-06", time: "09:00" },
+    ]);
+  });
+
+  it("时区不变时不改下次、不开写事务；春季跳时那天落在 03:30 也保持不动", () => {
+    process.env.TZ = "America/Los_Angeles";
+    now = new Date(2026, 2, 7, 12).getTime();
+    const schedule = add({ daily: "02:30" });
+    expect(localDayAndTime(schedule.nextRunAt)).toEqual({ day: "3-08", time: "03:30" });
+    changes = [];
+    ledger.runDueSchedules(now + MINUTE);
+    expect(changes).toEqual([]);
+    expect(row(schedule.id).nextRunAt).toBe(schedule.nextRunAt);
+  });
+});
+
 describe("T5 上一条定时消息还没处理完又到点：记跳过", () => {
   it("不发新消息，last_status 是 skipped，下次照常往后；处理完之后的下一次又正常发", () => {
     const schedule = add({ name: "巡检", daily: undefined, everyMinutes: 60 });

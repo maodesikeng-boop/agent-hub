@@ -94,6 +94,13 @@ export function nextDailyRun(after: number, atTime: string): number {
   return at(0) > after ? at(0) : at(1);
 }
 
+/** Stored daily runs are instants from the zone in effect when computed; after a zone change this moves one to atTime on its local date, otherwise it returns it unchanged. */
+export function reanchorDailyRun(nextRunAt: number, atTime: string, lastRunAt: number | null): number {
+  const day = new Date(nextRunAt);
+  const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
+  return nextDailyRun(Math.max(dayStart - 1, lastRunAt ?? 0), atTime);
+}
+
 export function nextRunAfter(schedule: Pick<ScheduleRecord, "kind" | "atTime" | "everyMinutes">, now: number): number {
   return schedule.kind === "daily" ? nextDailyRun(now, schedule.atTime!) : now + schedule.everyMinutes! * 60_000;
 }

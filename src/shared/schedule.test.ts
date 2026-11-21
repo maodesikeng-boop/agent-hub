@@ -11,6 +11,7 @@ import {
   parseDurationMs,
   parseEvery,
   parseWorkerMaxTime,
+  reanchorDailyRun,
   scheduleLabel,
   scheduledTimeText,
   scheduleRunTitle,
@@ -100,6 +101,33 @@ describe("下一次", () => {
       expect(new Date(nextDailyRun(at(2, 8, 3, 30), "02:30")).getHours()).toBe(2);
       // 秋季多出一小时那天：每天 09:00 不受影响
       expect(nextDailyRun(at(10, 1, 9), "09:00")).toBe(at(10, 2, 9));
+    } finally {
+      if (oldTz === undefined) delete process.env.TZ;
+      else process.env.TZ = oldTz;
+    }
+  });
+
+  it("换时区重锚：时区不变时一年里每天算好的下次原样不动（含夏令时跳时和重复的那一小时）；换了时区落到新时区同一天的 HH:MM、且晚于上次", () => {
+    const oldTz = process.env.TZ;
+    try {
+      for (const tz of ["America/Los_Angeles", "Europe/London", "Australia/Sydney", "Asia/Shanghai"]) {
+        process.env.TZ = tz;
+        for (const atTime of ["00:00", "01:30", "02:30", "09:00", "23:59"]) {
+          let last = new Date(2026, 0, 1, 12).getTime();
+          for (let i = 0; i < 366; i++) {
+            const next = nextDailyRun(last, atTime);
+            expect(reanchorDailyRun(next, atTime, last)).toBe(next);
+            expect(reanchorDailyRun(next, atTime, null)).toBe(next);
+            last = next;
+          }
+        }
+      }
+      process.env.TZ = "America/Los_Angeles";
+      const lastRun = new Date(2026, 10, 4, 9).getTime();
+      const staleNext = nextDailyRun(lastRun, "09:00");
+      process.env.TZ = "Asia/Shanghai";
+      expect(new Date(staleNext).getHours()).toBe(1);
+      expect(reanchorDailyRun(staleNext, "09:00", lastRun)).toBe(new Date(2026, 10, 6, 9).getTime());
     } finally {
       if (oldTz === undefined) delete process.env.TZ;
       else process.env.TZ = oldTz;
