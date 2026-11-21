@@ -119,8 +119,7 @@ function makePiHarness(
       };
       const writeScope = workerWriteScope({ role: session.role, dataDir: dir, cwd: session.cwd });
       if (writeScope !== null) files.writeScope = writeScope;
-      if (readonly) files.readonly = buildReadonlyPolicy({ homeDir: dir, stateDir });
-      return files;
+      return readonly ? { ...files, readonly: buildReadonlyPolicy({ homeDir: dir, stateDir }), tmpDir: sessionTmpDir } : files;
     },
     env: {
       FAKE_PI_LOG: fake.logPath,

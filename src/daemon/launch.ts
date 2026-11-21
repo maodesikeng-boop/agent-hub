@@ -65,7 +65,7 @@ export interface LaunchPreparerOptions {
   capabilityPolicies?: Pick<Ledger, "getPmCapabilityPolicy" | "getRouterCapabilityPolicy">;
   capabilityInventory?: Pick<CapabilityInventoryService, "get">;
   prepareOsSandbox?: (input: OsSandboxLaunchPrep) => Promise<void>;
-  sessionTmp?: Pick<SessionTmpStore, "allocate">;
+  sessionTmp: Pick<SessionTmpStore, "allocate">;
   sessionTagNonce?: string;
   parentSessionTag?: string;
 }
@@ -107,7 +107,7 @@ async function prepareRouterLaunch(
     basePath: string;
     homeDir: string;
     prepareOsSandbox: (input: OsSandboxLaunchPrep) => Promise<void>;
-    tmpDir?: string;
+    tmpDir: string;
     ownerTag: string;
     ownerEnv: string;
   },
@@ -127,7 +127,7 @@ async function prepareRouterLaunch(
     basePath: env.basePath,
     vendorAvailability: options.vendorAvailability?.(),
     purpose: options.routerPurposeOf?.(session.id) ?? "dispatch",
-    ...(env.tmpDir === undefined ? {} : { tmpDir: env.tmpDir }),
+    tmpDir: env.tmpDir,
     ownerTag: env.ownerTag,
     ownerEnv: env.ownerEnv,
     ...(capabilities === undefined ? {} : { capabilities }),
@@ -151,7 +151,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const ownerTag = `s${session.id}:${tagNonce}`;
     const ownerEnv = makeSessionOwnerTag(session.id, tagNonce, options.parentSessionTag ?? process.env[ENV_SESSION_OWNER_TAG]);
     if (session.role === "assistant") {
-      const tmpDir = options.sessionTmp?.allocate(session.id);
+      const tmpDir = options.sessionTmp.allocate(session.id);
       return prepareRouterLaunch(options, session, { basePath, homeDir, prepareOsSandbox, tmpDir, ownerTag, ownerEnv });
     }
     const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());
@@ -216,7 +216,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       chmodSync(hook, 0o755);
       reviewEnv = reviewPushGuardEnv(hooksDir, process.env);
     }
-    const tmpDir = role === "worker" ? options.sessionTmp?.allocate(session.id) : undefined;
+    const tmpDir = role === "worker" ? options.sessionTmp.allocate(session.id) : undefined;
     const writeScope = nativeReadonly
       ? null
       : workerWriteScope({
@@ -226,14 +226,12 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
           cwd: session.cwd,
           addDirs: sessionReadable.extraReadable,
           launchDir: sessionReadable.launchDir,
-          ...(tmpDir === undefined ? {} : { tmpDir }),
         });
     await prepareOsSandbox({ dataDir, stateDir, writeScope, readonly: readonlyPolicy });
     return {
       promptFile,
       ...(settingsFile === undefined ? {} : { settingsFile }),
       ...(skillsDir === undefined ? {} : { skillsDir }),
-      ...(tmpDir === undefined ? {} : { tmpDir }),
       ownerTag,
       env: {
         [ENV_HUB_TOKEN]: tokens.issue(session.id),
@@ -254,7 +252,9 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),
-      ...(readonlyPolicy === undefined ? {} : { readonly: readonlyPolicy }),
+      ...(readonlyPolicy === undefined
+        ? tmpDir === undefined ? {} : { tmpDir }
+        : { readonly: readonlyPolicy, tmpDir: tmpDir ?? options.sessionTmp.allocate(session.id) }),
       ...(capabilities === undefined ? {} : { capabilities }),
       // The Worker background hold is shorter than the PM's wait so the PM is not left waiting.
       ...(role === "worker" ? { backgroundHoldMaxMs: WORKER_BACKGROUND_HOLD_MAX_MS } : {}),

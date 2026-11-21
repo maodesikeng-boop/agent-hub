@@ -361,7 +361,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
               ]),
             ],
           };
-    const effectiveFiles: LaunchFiles = readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
+    const effectiveFiles: LaunchFiles = files.readonly === undefined || readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
     const catalog = readonlyPolicy === undefined ? null : await this.#catalogFor(readonlyPolicy);
     const args = buildAgyArgs(
       row,
@@ -374,12 +374,9 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     let launch: ScopedSpawn;
     let childEnv: Record<string, string> = { ...files.env };
     const exePath = this.#resolveAgyPath();
-    if (readonlyPolicy === undefined) {
+    if (files.readonly === undefined || readonlyPolicy === undefined) {
       launch = spawnInWriteScope("agy", { command: exePath, args }, files.writeScope ?? null, this.opts.log, `session ${st.id}`);
     } else {
-      if (!files.tmpDir) {
-        throw new DriverError("spawn_failed", "readonly launch missing session tmpDir");
-      }
       const home = realpathSync(this.#homeDir ?? homedir());
       const wrap = this.#readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
       const privateTmp = realpathSync(files.tmpDir);

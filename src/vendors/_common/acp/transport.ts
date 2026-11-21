@@ -11,7 +11,7 @@ import {
   type Stream,
 } from "@agentclientprotocol/sdk/unstable";
 import { scanSecretGlobs, type ReadonlySandboxInput } from "../../../daemon/driver/write-scope.ts";
-import { DriverError, MAX_MESSAGE_BYTES, PRODUCT_NAME, type ReadonlyPolicy } from "../../../shared/index.ts";
+import { MAX_MESSAGE_BYTES, PRODUCT_NAME, type ReadonlyPolicy } from "../../../shared/index.ts";
 import { realpathOrSelf, type AcpProc } from "./driver-state.ts";
 import { decideAcpPermission } from "./protocol.ts";
 import type { AcpDriverConfig, AcpLaunchContext } from "./types.ts";
@@ -20,11 +20,9 @@ export async function buildAcpReadonlySandboxInput(
   sandboxCfg: AcpDriverConfig["readonlySandbox"],
   launch: AcpLaunchContext,
   policy: ReadonlyPolicy,
+  sessionTmpDir: string,
 ): Promise<{ input: ReadonlySandboxInput }> {
-  if (!launch.files.tmpDir) {
-    throw new DriverError("spawn_failed", "readonly launch missing session tmpDir");
-  }
-  const tmpDir = realpathOrSelf(launch.files.tmpDir);
+  const tmpDir = realpathOrSelf(sessionTmpDir);
 
   const { row } = launch;
   const homeDir = realpathOrSelf(homedir());

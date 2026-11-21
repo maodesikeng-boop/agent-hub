@@ -471,7 +471,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       );
       return { spawnCmd: scoped.command, spawnArgs: scoped.args, extraEnv };
     }
-    const { input } = await buildAcpReadonlySandboxInput(this.#config.readonlySandbox, launchCtx, files.readonly);
+    const { input } = await buildAcpReadonlySandboxInput(this.#config.readonlySandbox, launchCtx, files.readonly, files.tmpDir);
     const ownOffArgs = vendorSpec(this.vendor).capabilities.ownSandboxOffArgs ?? [];
     const wrapped = this.#readonlySpawn(
       { command: exePath, args: [...ownOffArgs, ...rawLaunchArgs] },

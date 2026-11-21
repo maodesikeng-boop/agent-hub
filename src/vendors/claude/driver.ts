@@ -351,9 +351,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           return p;
         }
       };
-      if (!files.tmpDir) {
-        throw new DriverError("spawn_failed", "readonly launch missing session tmpDir");
-      }
       const privateTmp = realOrSelf(files.tmpDir);
       const home = realOrSelf(homedir());
       const claudeDirs = [join(home, ".claude"), join(home, ".cache"), join(home, ".npm")].filter((d) => existsSync(d)).map(realOrSelf);

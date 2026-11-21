@@ -358,8 +358,8 @@ describe("数据目录读边界：seatbelt 与 bwrap 规则（纯函数）", () 
     const tmpfs = at("--perms", "0700", "--tmpfs", dataDir);
     expect(tmpfs).toBeGreaterThan(at("--ro-bind", "/", "/"));
     for (const r of readable) expect(at("--ro-bind", r, r)).toBeGreaterThan(tmpfs);
-    expect(at("--bind", roInput.tmpDir, "/tmp")).toBeGreaterThan(at("--ro-bind", launchDir, launchDir));
-    expect(at("--tmpfs", "/Users/u/.ssh")).toBeGreaterThan(at("--bind", roInput.tmpDir, "/tmp"));
+    expect(at("--bind", roInput.tmpDir, roInput.tmpDir)).toBeGreaterThan(at("--ro-bind", launchDir, launchDir));
+    expect(at("--tmpfs", "/Users/u/.ssh")).toBeGreaterThan(at("--bind", roInput.tmpDir, roInput.tmpDir));
     expect(at("--remount-ro", dataDir)).toBeGreaterThan(at("--tmpfs", "/Users/u/.ssh"));
   });
 });
@@ -678,16 +678,7 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
         "/run/user/1002",
         "--bind",
         tmp,
-        "/tmp",
-        "--setenv",
-        "TMPDIR",
-        "/tmp",
-        "--setenv",
-        "TEMP",
-        "/tmp",
-        "--setenv",
-        "TMP",
-        "/tmp",
+        tmp,
         "--bind",
         cache,
         cache,
@@ -1502,49 +1493,24 @@ describe("Windows MXC 只读沙箱封装、策略与负缓存 TTL", () => {
   });
 });
 
-describe("Linux bwrap session /tmp bind", () => {
-  it("binds session tmpDir onto /tmp and sets TMPDIR=/tmp when no sandbox mount lives under /tmp", () => {
-    const scope = workerWriteScope({
-      role: "worker",
-      dataDir: "/home/u/.agent-hub",
-      cwd: "/home/u/.agent-hub/worktrees/1/2",
-      tmpDir: "/tmp/bw-abc123",
-    })!;
-    const args = bwrapArgs(
-      { command: "/usr/bin/claude", args: [] },
-      scope,
-      {
-        uid: 1000,
-        exists: () => true,
-        realpath: (p) => p,
-      },
-    );
-    const bindIdx = args.indexOf("/tmp/bw-abc123");
-    expect(bindIdx).toBeGreaterThan(0);
-    expect(args.slice(bindIdx - 1, bindIdx + 2)).toEqual(["--bind", "/tmp/bw-abc123", "/tmp"]);
-    expect(args).toContain("TMPDIR");
-    const tmpdirIdx = args.indexOf("TMPDIR");
-    expect(args.slice(tmpdirIdx - 1, tmpdirIdx + 2)).toEqual(["--setenv", "TMPDIR", "/tmp"]);
-  });
+describe("Linux bwrap keeps the host /tmp visible", () => {
+  // SSH_AUTH_SOCK, X11 sockets, and files a PM leaves in /tmp for a Worker all live under the host /tmp.
+  const mountsOverTmp = (args: readonly string[]) =>
+    args.some((arg, i) => (arg === "/tmp" && (args[i - 2] === "--bind" || args[i - 2] === "--ro-bind")) || (arg === "/tmp" && args[i - 1] === "--tmpfs"));
 
-  it("falls back to binding tmpDir onto itself when dataDir or cwd lives under /tmp", () => {
-    const scope = workerWriteScope({
-      role: "worker",
-      dataDir: "/tmp/smoke-home",
-      cwd: "/tmp/smoke-home/worktrees/1/2",
-      tmpDir: "/tmp/bw-abc123",
-    })!;
-    const args = bwrapArgs(
+  it("never mounts anything over /tmp in writable or read-only sandboxes and binds the session temp dir at its own path", () => {
+    const scope = workerWriteScope({ role: "worker", dataDir: "/home/u/.agent-hub", cwd: "/home/u/.agent-hub/worktrees/1/2" })!;
+    const writable = bwrapArgs({ command: "/usr/bin/claude", args: [] }, scope, { uid: 1000, exists: () => true, realpath: (p) => p });
+    expect(mountsOverTmp(writable)).toBe(false);
+    expect(writable).not.toContain("TMPDIR");
+
+    const readonly = readonlyBwrapArgs(
       { command: "/usr/bin/claude", args: [] },
-      scope,
-      {
-        uid: 1000,
-        exists: () => true,
-        realpath: (p) => p,
-      },
+      { tmpDir: "/tmp/bw-abc123", writableDirs: [], writableFileRegexes: [], secretPaths: [], secretGlobs: [] },
+      { uid: 1000, exists: () => true, realpath: (p) => p },
     );
-    const bindIdx = args.indexOf("/tmp/bw-abc123");
-    expect(bindIdx).toBeGreaterThan(0);
-    expect(args.slice(bindIdx - 1, bindIdx + 2)).toEqual(["--bind", "/tmp/bw-abc123", "/tmp/bw-abc123"]);
+    expect(mountsOverTmp(readonly)).toBe(false);
+    const bindIdx = readonly.indexOf("/tmp/bw-abc123");
+    expect(readonly.slice(bindIdx - 1, bindIdx + 2)).toEqual(["--bind", "/tmp/bw-abc123", "/tmp/bw-abc123"]);
   });
 });

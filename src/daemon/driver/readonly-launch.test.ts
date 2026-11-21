@@ -43,13 +43,8 @@ function files(defaultMode: string, readonly: boolean): LaunchFiles {
   writeFileSync(settingsFile, JSON.stringify({ permissions: { defaultMode } }));
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, "你是 Worker");
-  return {
-    promptFile,
-    settingsFile,
-    env: { HUB_SOCK: "/s" },
-    fingerprint: "f",
-    ...(readonly ? { readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state" }) } : {}),
-  };
+  const base = { promptFile, settingsFile, env: { HUB_SOCK: "/s" }, fingerprint: "f" };
+  return readonly ? { ...base, readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state" }), tmpDir: dir } : base;
 }
 
 const mode = (args: string[]): string => args[args.indexOf("--mode") + 1]!;

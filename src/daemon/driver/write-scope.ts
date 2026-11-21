@@ -6,7 +6,6 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { LOCAL_ERRORS } from "../../shared/errors.ts";
 import { DATA_DIR_DENY_LIST_MAX } from "../../shared/limits.ts";
 import { resolveHubPaths } from "../../shared/paths.ts";
-import { bwrapTmpBindArgs } from "../session-tmp.ts";
 import {
   AGENT_VENDORS,
   DATA_DIR_READABLE_ENTRIES,
@@ -501,9 +500,21 @@ export function bwrapArgs(
   const ownSandboxOffArgs = options?.ownSandboxOffArgs ?? [];
 
   const args: string[] = [
-    "--unshare-user", "--disable-userns", "--unshare-pid",
-    "--bind", "/", "/", "--proc", "/proc", "--dev-bind", "/dev", "/dev",
-    "--perms", "0700", "--tmpfs", `/run/user/${uid}`,
+    "--unshare-user",
+    "--disable-userns",
+    "--unshare-pid",
+    "--bind",
+    "/",
+    "/",
+    "--proc",
+    "/proc",
+    "--dev-bind",
+    "/dev",
+    "/dev",
+    "--perms",
+    "0700",
+    "--tmpfs",
+    `/run/user/${uid}`,
   ];
 
   const masked = appendWslIsolationArgs(args, options);
@@ -528,9 +539,6 @@ export function bwrapArgs(
     seenWritable.add(target);
     args.push("--bind", target, target);
   }
-  const tmpArgs = bwrapTmpBindArgs(scope.tmpDir, [...protectedRootsOf(scope), ...scope.writableDirs, ...masked, base.command], real, exists);
-  args.push(...tmpArgs);
-  if (tmpArgs.length >= 3) seenWritable.add(tmpArgs[2]!);
   remaskNestedWslDirs(args, masked, [...bound, ...seenWritable]);
   if (boundary.dataDir !== null) args.push("--remount-ro", boundary.dataDir);
 
@@ -571,10 +579,7 @@ export function readonlyBwrapArgs(
   const boundary = input.dataDirScope === undefined ? { dataDir: null, bound: [] } : appendReadBoundaryArgs(args, input.dataDirScope, real, exists);
 
   const seenBind = new Set<string>(boundary.bound);
-  const tmpArgs = bwrapTmpBindArgs(input.tmpDir, [input.dataDirScope?.dataDir, ...input.writableDirs, ...input.secretPaths, ...(input.readableFiles ?? []), ...masked, base.command], real, exists);
-  args.push(...tmpArgs);
-  if (tmpArgs.length >= 3) seenBind.add(tmpArgs[2]!);
-  for (const dir of input.writableDirs) {
+  for (const dir of [input.tmpDir, ...input.writableDirs]) {
     const target = real(dir);
     if (seenBind.has(target) || !exists(target)) continue;
     seenBind.add(target);

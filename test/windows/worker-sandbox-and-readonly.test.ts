@@ -467,6 +467,8 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
     const events: DriverEvent[] = [];
     const promptFile = join(root, "prompt.md");
     writeFileSync(promptFile, "只读审查提示词");
+    const piTmpDir = join(root, "pi-session-tmp");
+    mkdirSync(piTmpDir, { recursive: true });
 
     const piDriver = createPiDriver({
       executablePath: fakePi.binPath,
@@ -482,6 +484,7 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
         env: {},
         fingerprint: "ro-fp",
         readonly: policy,
+        tmpDir: piTmpDir,
       }),
     });
     cleanups.push(() => piDriver.shutdown());

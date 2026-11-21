@@ -50,6 +50,7 @@ describe("agyCapabilityDenyRules", () => {
       env: {},
       fingerprint: "fp",
       readonly,
+      tmpDir: "/tmp/session",
       capabilities: caps,
     };
     const args = buildAgyArgs(session, files, false, { allow: ["mcp(other/read)"], deny: ["mcp(other/write)"] });

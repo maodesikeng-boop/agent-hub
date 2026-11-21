@@ -61,7 +61,7 @@ export async function preparePiLaunch(
 
   const readonlyPolicy = await withScannedSecrets(row, files);
   const effectiveFiles: LaunchFiles =
-    readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
+    files.readonly === undefined || readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
 
   const resumedTranscript = resume
     ? piTranscriptPath(
@@ -78,7 +78,7 @@ export async function preparePiLaunch(
   });
   const childEnv: Record<string, string> = { ...effectiveFiles.env };
 
-  if (readonlyPolicy === undefined) {
+  if (effectiveFiles.readonly === undefined || readonlyPolicy === undefined) {
     const wrapWriteScope =
       deps.writeScopeSpawn ??
       ((base, scope) => spawnInWriteScope("pi", base, scope, deps.log, deps.sessionLabel));
@@ -86,9 +86,6 @@ export async function preparePiLaunch(
     return { sessionId, effectiveFiles, launch, tmpDir: null, childEnv };
   }
 
-  if (!effectiveFiles.tmpDir) {
-    throw new DriverError("spawn_failed", "readonly launch missing session tmpDir");
-  }
   const home = realpathSync(deps.homeDir ?? homedir());
   const wrap = deps.readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
   const privateTmp = realpathSync(effectiveFiles.tmpDir);

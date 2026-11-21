@@ -92,6 +92,7 @@ beforeEach(() => {
   tokens = createSessionTokens();
   driver = new FakeDriver((sessionId) =>
     prepareRouterSandboxLaunch(getAgentSession(db, sessionId)!, {
+      tmpDir: root,
       launchDir,
       dataDir: root,
       stateDir,

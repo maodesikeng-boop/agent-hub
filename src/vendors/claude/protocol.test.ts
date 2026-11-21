@@ -351,7 +351,7 @@ describe("启动参数", () => {
   });
   it("只读 Worker（LaunchFiles.readonly）：加 --permission-prompt-tool stdio，要批准的工具发 can_use_tool 给驱动；没有 readonly 不带", () => {
     const readonly = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s" });
-    const args = buildClaudeArgs(row, { ...files, readonly }, false);
+    const args = buildClaudeArgs(row, { ...files, readonly, tmpDir: "/tmp/session" }, false);
     expect(args.slice(args.indexOf("--permission-prompt-tool"), args.indexOf("--permission-prompt-tool") + 2)).toEqual(["--permission-prompt-tool", CLAUDE_PERMISSION_PROMPT_TOOL]);
     expect(CLAUDE_PERMISSION_PROMPT_TOOL).toBe("stdio");
     expect(args.indexOf("--permission-prompt-tool")).toBeGreaterThan(args.indexOf("--settings"));

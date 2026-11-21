@@ -24,6 +24,7 @@ let launchDir: string;
 let homeDir: string;
 let hubBinDir: string;
 let hubSock: string;
+let sessionTmpDir: string;
 
 function makeAssistantSession(overrides: Partial<AgentSessionRow> = {}): AgentSessionRow {
   const routerHome = ensureRouterHomeDir(stateDir);
@@ -65,6 +66,8 @@ beforeEach(() => {
   mkdirSync(homeDir, { recursive: true, mode: 0o700 });
   mkdirSync(hubBinDir, { recursive: true, mode: 0o700 });
   hubSock = join(dataDir, "run", "hub.sock");
+  sessionTmpDir = join(root, "session-tmp");
+  mkdirSync(sessionTmpDir, { recursive: true, mode: 0o700 });
 });
 
 afterEach(() => {
@@ -79,7 +82,7 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
 
     for (const [idx, vendor] of AGENT_VENDORS.entries()) {
       const session = makeAssistantSession({ id: 1000 + idx, vendor, model: null, effort: "low" });
-      const files = prepareRouterSandboxLaunch(session, {
+      const files = prepareRouterSandboxLaunch(session, { tmpDir: sessionTmpDir,
         launchDir,
         dataDir,
         stateDir,
@@ -131,7 +134,7 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
   it("后台写档（purpose = catalog）：全部厂商的环境和设置文件里都没有 hub 的令牌、socket 和放行规则", () => {
     for (const [idx, vendor] of AGENT_VENDORS.entries()) {
       const session = makeAssistantSession({ id: 1100 + idx, vendor, model: null, effort: "low" });
-      const files = prepareRouterSandboxLaunch(session, {
+      const files = prepareRouterSandboxLaunch(session, { tmpDir: sessionTmpDir,
         launchDir,
         dataDir,
         stateDir,
@@ -162,7 +165,7 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
 
   it("严拒非隔离 cwd、挂载了业务目录（addDirs）或绑定了对话的会话进入 Router 沙箱", () => {
     expect(() =>
-      prepareRouterSandboxLaunch(makeAssistantSession({ cwd: homeDir }), {
+      prepareRouterSandboxLaunch(makeAssistantSession({ cwd: homeDir }), { tmpDir: sessionTmpDir,
         launchDir,
         dataDir,
         stateDir,
@@ -174,7 +177,7 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
     ).toThrow(/router-home/);
 
     expect(() =>
-      prepareRouterSandboxLaunch(makeAssistantSession({ addDirs: ["/Users/someone/repo"] }), {
+      prepareRouterSandboxLaunch(makeAssistantSession({ addDirs: ["/Users/someone/repo"] }), { tmpDir: sessionTmpDir,
         launchDir,
         dataDir,
         stateDir,
@@ -186,7 +189,7 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
     ).toThrow(/addDirs/);
 
     expect(() =>
-      prepareRouterSandboxLaunch(makeAssistantSession({ role: "pm" }), {
+      prepareRouterSandboxLaunch(makeAssistantSession({ role: "pm" }), { tmpDir: sessionTmpDir,
         launchDir,
         dataDir,
         stateDir,

@@ -34,7 +34,10 @@ beforeEach(() => {
   // 和守护进程一样传真实路径（macOS 的 /var 是 /private/var）：沙箱规则按真实路径比
   dir = realpathSync(mkdtempSync(join(tmpdir(), "agent-hub-prompt-")));
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(`${dir}-session-tmp`, { recursive: true, force: true });
+});
 
 describe("prepareLaunch（M2、M3）", () => {
   const hubSock = "/private/var/agent-hub/run/hub.sock";
@@ -48,8 +51,15 @@ describe("prepareLaunch（M2、M3）", () => {
       return `token-of-${sessionId}`;
     },
   };
+  const sessionTmp = {
+    allocate: (sessionId: number) => {
+      const tmp = join(`${dir}-session-tmp`, String(sessionId));
+      mkdirSync(tmp, { recursive: true });
+      return tmp;
+    },
+  };
   const make = (basePath = "/usr/bin:/bin", osSandboxed = true) =>
-    createLaunchPreparer({
+    createLaunchPreparer({ sessionTmp,
       launchDir,
       // 数据目录：临时目录本身（Worker 的 worktree 建在它下面）
       dataDir: dir,
@@ -303,7 +313,7 @@ describe("prepareLaunch（M2、M3）", () => {
   it("没有 OS 沙箱的机器（不是 macOS）：不关 claude 自带的沙箱，state/ 的拒绝规则照样有；跑完配置脚本沙箱就绪后无需重建 preparer 立即生效", async () => {
     contexts.set(9, workerContext());
     let sandboxReady = false;
-    const prepare = createLaunchPreparer({
+    const prepare = createLaunchPreparer({ sessionTmp,
       launchDir,
       dataDir: dir,
       stateDir: join(dir, "state"),
@@ -324,7 +334,7 @@ describe("prepareLaunch（M2、M3）", () => {
   });
 
   it("claude 只读 Worker：设置文件是只读翻译（沙箱 denyWrite 盖住工作目录和 add-dir 的真实路径）；进程不包外层沙箱（没有 writeScope）；开关变了 fingerprint 跟着变", async () => {
-    const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
+    const make2 = () => createLaunchPreparer({ sessionTmp, launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
     contexts.set(9, workerContext());
     const prepare = make2();
     const wt = join(dir, "wt");
@@ -378,7 +388,7 @@ describe("prepareLaunch（M2、M3）", () => {
   });
 
   it("只读 Worker：LaunchFiles.readonly 是统一策略（密钥清单按主目录展开，数据目录按读边界禁读）；普通 Worker、项目经理没有", async () => {
-    const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
+    const make2 = () => createLaunchPreparer({ sessionTmp, launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
     contexts.set(9, workerContext({ readonly: true }));
     const readonly = await make2()(row(9, dir, "worker"));
     expect(readonly.readonly).toMatchObject(buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: join(dir, "state") }));
@@ -391,7 +401,7 @@ describe("prepareLaunch（M2、M3）", () => {
   });
 
   it("数据目录读边界：普通 Worker 的 writeScope.readScope、只读 Worker 的 readonly.dataDirScope 都放行这次会话自己的启动目录；工具层禁读清单列出数据目录里别的顶层项、run/admin.sock 和遗留的 run/tunnel", async () => {
-    const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
+    const make2 = () => createLaunchPreparer({ sessionTmp, launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
     for (const name of ["state", "backups", "pm-home", "pm-notes", "sent-files", "uploads", "tools"]) mkdirSync(join(dir, name), { recursive: true });
     mkdirSync(join(dir, "run", "bin"), { recursive: true });
     writeFileSync(join(dir, "run", "admin.sock"), "");
@@ -484,7 +494,7 @@ describe("prepareLaunch（M2、M3）", () => {
 
     it("全开（defaultCapabilityPolicy）时 capabilities 为 undefined，设置文件和 fingerprint 与未接入时逐字一致", async () => {
       const baseline = await make()(row(7));
-      const withAllOpen = createLaunchPreparer({
+      const withAllOpen = createLaunchPreparer({ sessionTmp,
         launchDir,
         dataDir: dir,
         stateDir: join(dir, "state"),
@@ -513,7 +523,7 @@ describe("prepareLaunch（M2、M3）", () => {
         },
       });
       const seenProjectDirs: Array<string | null> = [];
-      const prepare = createLaunchPreparer({
+      const prepare = createLaunchPreparer({ sessionTmp,
         launchDir,
         dataDir: dir,
         stateDir: join(dir, "state"),
@@ -595,7 +605,7 @@ describe("prepareLaunch（M2、M3）", () => {
     });
 
     const preparerWith = (pm: () => CapabilityPolicy, router?: () => CapabilityPolicy, seen?: Array<string | null>) =>
-      createLaunchPreparer({
+      createLaunchPreparer({ sessionTmp,
         launchDir,
         dataDir: dir,
         stateDir: join(dir, "state"),
@@ -670,7 +680,7 @@ describe("prepareLaunch（M2、M3）", () => {
         set: { "skill:aws-auth": false, "mcp:codegraph": false },
       });
       let inventory = sampleInventory;
-      const prepare = createLaunchPreparer({
+      const prepare = createLaunchPreparer({ sessionTmp,
         launchDir,
         dataDir: dir,
         stateDir: join(dir, "state"),

@@ -260,7 +260,7 @@ export interface Driver {
   onEvent(listener: DriverEventListener): Unsubscribe;
 }
 
-export interface LaunchFiles {
+interface LaunchFilesBase {
   promptFile: string;
   settingsFile?: string;
   skillsDir?: string;
@@ -268,12 +268,14 @@ export interface LaunchFiles {
   fingerprint: string;
   backgroundHoldMaxMs?: number;
   writeScope?: WriteScope;
-  readonly?: ReadonlyPolicy;
   capabilities?: SessionCapabilities;
   personaRevision?: number;
-  tmpDir?: string;
   ownerTag?: string;
 }
+
+// Read-only sandboxes deny every write outside the session temp dir, so a read-only launch cannot exist without one.
+export type LaunchFiles = LaunchFilesBase &
+  ({ readonly?: undefined; tmpDir?: string } | { readonly: ReadonlyPolicy; tmpDir: string });
 
 export interface PersonaNote {
   revision: number;

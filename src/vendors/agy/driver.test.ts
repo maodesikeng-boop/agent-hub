@@ -698,6 +698,7 @@ describe("agy-protocol 纯函数", () => {
         env: {},
         fingerprint: "f2",
         readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state" }),
+        tmpDir: dir,
       };
       const argsResumePlan = buildAgyArgs(session, filesPlan, true);
       expect(argsResumePlan[argsResumePlan.indexOf("--conversation") + 1]).toBe("conv-123");

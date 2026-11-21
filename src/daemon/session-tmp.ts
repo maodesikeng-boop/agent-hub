@@ -83,27 +83,6 @@ export function shortOsTmpRoot(options?: { platform?: NodeJS.Platform; osTmpDir?
   return realpathOrSelf(raw);
 }
 
-/** Bind the session temp dir onto /tmp inside Linux bwrap unless a required mount already lives under /tmp. */
-export function bwrapTmpBindArgs(
-  tmpDir: string | undefined,
-  otherPaths: readonly (string | undefined)[],
-  real: (p: string) => string,
-  exists: (p: string) => boolean,
-): string[] {
-  if (!tmpDir) return [];
-  const targetTmp = real(tmpDir);
-  if (!exists(targetTmp)) return [];
-  const tmpRoot = real("/tmp");
-  const underTmp = (p: string) => p === "/tmp" || p.startsWith("/tmp/") || p === tmpRoot || p.startsWith(`${tmpRoot}/`);
-  const conflict = otherPaths.some((raw) => {
-    if (!raw) return false;
-    const resolved = real(raw);
-    return resolved !== targetTmp && underTmp(resolved);
-  });
-  if (conflict) return ["--bind", targetTmp, targetTmp];
-  return ["--bind", targetTmp, "/tmp", "--setenv", "TMPDIR", "/tmp", "--setenv", "TEMP", "/tmp", "--setenv", "TMP", "/tmp"];
-}
-
 function isValidEntry(value: unknown): value is SessionTmpEntry {
   if (typeof value !== "object" || value === null) return false;
   const e = value as Record<string, unknown>;

@@ -74,7 +74,7 @@ export interface RouterSandboxLaunchOptions {
   vendorAvailability?: VendorAvailabilityMap;
   purpose?: RouterTurnPurpose;
   capabilities?: SessionCapabilities;
-  tmpDir?: string;
+  tmpDir: string;
   ownerTag?: string;
   ownerEnv?: string;
 }
@@ -145,13 +145,12 @@ export function prepareRouterSandboxLaunch(
         ...(options.protectedRoots && options.protectedRoots.length > 0 ? { protectedRoots: options.protectedRoots } : {}),
         cwd: routerHomeDir,
         launchDir,
-        ...(options.tmpDir === undefined ? {} : { tmpDir: options.tmpDir }),
       });
 
   return {
     promptFile,
     ...(settingsFile === undefined ? {} : { settingsFile }),
-    ...(options.tmpDir === undefined ? {} : { tmpDir: options.tmpDir }),
+    tmpDir: options.tmpDir,
     ...(options.ownerTag === undefined ? {} : { ownerTag: options.ownerTag }),
     env: {
       ...(dispatch
@@ -161,7 +160,9 @@ export function prepareRouterSandboxLaunch(
             PATH: basePath === "" ? options.hubBinDir : `${options.hubBinDir}${delimiter}${basePath}`,
           }
         : { PATH: basePath }),
-      ...(options.tmpDir === undefined ? {} : { TMPDIR: options.tmpDir, TEMP: options.tmpDir, TMP: options.tmpDir }),
+      TMPDIR: options.tmpDir,
+      TEMP: options.tmpDir,
+      TMP: options.tmpDir,
       ...(options.ownerEnv === undefined ? {} : { [ENV_SESSION_OWNER_TAG]: options.ownerEnv }),
       ...vendorFiles?.env,
     },
