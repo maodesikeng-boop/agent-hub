@@ -1,25 +1,98 @@
 // 实时连接保活：连接不关但一直没消息（手机 VPN、运营商 NAT 静默丢了连接）→ 判死重连；切回前台、网络恢复、请求超时时马上查一次。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WS_CHECK_SILENCE_MS, WS_HEARTBEAT_MS, WS_HEARTBEAT_TEXT, WS_STALE_MS, type WsServerMessage } from "../shared/index.ts";
-import { checkConnections, openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
-import { FakeWebSocket, healthChange, installFakeWebSocket, makeHealth } from "./test-utils.ts";
+import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
+import { checkConnections, openChangeStream, planSnapshotRecovery, reconnectDelay, type ChangeStreamConnection, type ConnectionStatus } from "./connection.ts";
+import { FakeWebSocket, OTHER_BOOT_ID, TEST_BOOT_ID, healthChange, installFakeWebSocket, makeHealth } from "./test-utils.ts";
 
-let since = 0;
+let cursor: ChangeCursor = { bootId: TEST_BOOT_ID, seq: 0 };
 let received: WsServerMessage[] = [];
 let statuses: ConnectionStatus[] = [];
+let connections: ChangeStreamConnection[] = [];
 let close: (() => void) | undefined;
 
 function start(): void {
   close = openChangeStream({
-    url: (s) => `ws://127.0.0.1:1/api/ws?since=${s}`,
-    getSince: () => since,
-    onMessage: (message) => {
+    url: (c) => `ws://127.0.0.1:1/api/ws${encodeChangeStreamQuery(c)}`,
+    getCursor: () => cursor,
+    onMessage: (message, connection) => {
       received.push(message);
-      if ("seq" in message) since = message.seq;
+      connections.push(connection);
+      if ("seq" in message) cursor = { bootId: cursor.bootId, seq: message.seq };
     },
-    onStatus: (status) => statuses.push(status),
+    onStatus: (status, connection) => {
+      statuses.push(status);
+      if (connection) connections.push(connection);
+    },
   });
 }
+
+function connectionFor(requestedCursor: ChangeCursor, aborted = false): ChangeStreamConnection {
+  const controller = new AbortController();
+  if (aborted) controller.abort();
+  return { requestedCursor, signal: controller.signal };
+}
+
+describe("change stream connection scope", () => {
+  it("captures the current boot and sequence for each socket attempt and retires the previous scope before reconnecting", () => {
+    start();
+    const first = FakeWebSocket.last;
+    first.open();
+    expect(first.since).toBe(`${TEST_BOOT_ID}:0`);
+    const firstConnection = connections.at(-1)!;
+    expect(firstConnection.requestedCursor).toEqual({ bootId: TEST_BOOT_ID, seq: 0 });
+    cursor = { bootId: OTHER_BOOT_ID, seq: 3 };
+    first.drop();
+    expect(firstConnection.signal.aborted).toBe(true);
+    vi.advanceTimersByTime(reconnectDelay(0));
+    const second = FakeWebSocket.last;
+    expect(second.since).toBe(`${OTHER_BOOT_ID}:3`);
+    second.open();
+    const secondConnection = connections.at(-1)!;
+    expect(secondConnection).not.toBe(firstConnection);
+    expect(secondConnection.requestedCursor).toEqual({ bootId: OTHER_BOOT_ID, seq: 3 });
+    expect(secondConnection.signal.aborted).toBe(false);
+  });
+
+  it("does not dispatch late frames after a socket is retired or the stream is disposed", () => {
+    start();
+    const first = FakeWebSocket.last;
+    first.open();
+    const onmessage = first.onmessage!;
+    window.dispatchEvent(new Event("online"));
+    onmessage({ data: JSON.stringify(healthChange(4, makeHealth())) });
+    expect(received).toEqual([]);
+    const second = FakeWebSocket.last;
+    second.open();
+    const secondConnection = connections.at(-1)!;
+    const lateMessage = second.onmessage!;
+    close?.();
+    close = undefined;
+    expect(secondConnection.signal.aborted).toBe(true);
+    lateMessage({ data: JSON.stringify(healthChange(5, makeHealth())) });
+    expect(received).toEqual([]);
+  });
+
+  it("ignores a snapshot response for a retired socket", () => {
+    const retired = connectionFor({ bootId: TEST_BOOT_ID, seq: 4 }, true);
+    expect(planSnapshotRecovery(retired, { bootId: TEST_BOOT_ID, seq: 5 }, [])).toEqual({ kind: "ignore" });
+    expect(planSnapshotRecovery(retired, { bootId: OTHER_BOOT_ID, seq: 1 }, null)).toEqual({ kind: "ignore" });
+  });
+
+  it("requires a new socket when the snapshot boot differs or the buffer overflowed", () => {
+    const live = connectionFor({ bootId: TEST_BOOT_ID, seq: 40 });
+    expect(planSnapshotRecovery(live, { bootId: OTHER_BOOT_ID, seq: 2 }, [healthChange(3, makeHealth())])).toEqual({ kind: "reconnect" });
+    expect(planSnapshotRecovery(live, { bootId: OTHER_BOOT_ID, seq: 40 }, [])).toEqual({ kind: "reconnect" });
+    expect(planSnapshotRecovery(live, { bootId: TEST_BOOT_ID, seq: 41 }, null)).toEqual({ kind: "reconnect" });
+  });
+
+  it("keeps only buffered changes after a same-boot snapshot in wire order", () => {
+    const live = connectionFor({ bootId: TEST_BOOT_ID, seq: 4 });
+    const buffered = [5, 6, 9, 7, 10].map((seq) => healthChange(seq, makeHealth()));
+    const plan = planSnapshotRecovery(live, { bootId: TEST_BOOT_ID, seq: 6 }, buffered);
+    expect(plan).toEqual({ kind: "apply", changes: [buffered[2], buffered[3], buffered[4]] });
+  });
+});
 
 function setVisibility(state: DocumentVisibilityState): void {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
@@ -29,9 +102,10 @@ function setVisibility(state: DocumentVisibilityState): void {
 beforeEach(() => {
   vi.useFakeTimers();
   installFakeWebSocket();
-  since = 0;
+  cursor = { bootId: TEST_BOOT_ID, seq: 0 };
   received = [];
   statuses = [];
+  connections = [];
 });
 
 afterEach(() => {
@@ -55,7 +129,7 @@ describe("心跳判死", () => {
     expect(statuses.at(-1)).toBe("reconnecting");
     vi.advanceTimersByTime(reconnectDelay(0));
     expect(FakeWebSocket.instances).toHaveLength(2);
-    expect(FakeWebSocket.last.since).toBe(7);
+    expect(FakeWebSocket.last.since).toBe(`${TEST_BOOT_ID}:7`);
     FakeWebSocket.last.open();
     expect(statuses.at(-1)).toBe("open");
   });

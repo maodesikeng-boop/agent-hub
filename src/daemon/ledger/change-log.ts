@@ -1,4 +1,5 @@
 import type { Change, ChangeDataMap, ChangeType } from "../../shared/api.ts";
+import { isChangeSequence } from "../../shared/change-stream.ts";
 import type { ChangesSince } from "../../shared/ledger.ts";
 
 export type ChangeInput = { [T in ChangeType]: { type: T; data: ChangeDataMap[T] } }[ChangeType];
@@ -24,7 +25,7 @@ export function createChangeLog(initialSeq: number, bufferSize: number): ChangeL
       return change;
     },
     since(since) {
-      if (!Number.isFinite(since) || since < initialSeq || since > seq) return { kind: "resync" };
+      if (!isChangeSequence(since) || since < initialSeq || since > seq) return { kind: "resync" };
       const oldest = buffer[0];
       if (oldest !== undefined && since < oldest.seq - 1) return { kind: "resync" };
       return { kind: "ok", changes: buffer.filter((c) => c.seq > since) };

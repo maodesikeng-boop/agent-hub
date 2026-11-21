@@ -288,9 +288,13 @@ export function makeConvSnapshot(
   return { conversation: makeConversation(over.conversation), messages, hasMore: over.hasMore ?? false };
 }
 
+export const TEST_BOOT_ID = "00000000-0000-4000-8000-000000000001";
+export const OTHER_BOOT_ID = "00000000-0000-4000-8000-000000000002";
+
 export function makeSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
   return {
     seq: 10,
+    bootId: TEST_BOOT_ID,
     pms: [makePm()],
     projects: [],
     folders: [],
@@ -1228,9 +1232,8 @@ export class FakeWebSocket {
     this.readyState = 3;
   }
 
-  get since(): number | null {
-    const v = new URL(this.url).searchParams.get("since");
-    return v === null ? null : Number(v);
+  get since(): string | null {
+    return new URL(this.url).searchParams.get("since");
   }
 
   send(): void {}

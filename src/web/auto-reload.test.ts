@@ -15,7 +15,8 @@ import {
 import type { HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
-import { FakeWebSocket, installFakeWebSocket, makeSession, makeSnapshot } from "./test-utils.ts";
+import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
+import { FakeWebSocket, OTHER_BOOT_ID, TEST_BOOT_ID, installFakeWebSocket, makeSession, makeSnapshot } from "./test-utils.ts";
 import { useDraftStore } from "./upload.ts";
 
 const PICK = { vendor: "claude", model: null, effort: "high" } as const;
@@ -192,14 +193,15 @@ describe("刷新时机（createAutoReloader）", () => {
   });
 });
 
-/** 只实现 DeviceHub 用到的几个接口的假客户端：快照、bootId 按调用依次给。 */
-function fakeClient(path: string, snapshots: () => StateSnapshot, bootIds: () => string) {
+const PEER_BOOT_ID = "00000000-0000-4000-8000-000000000003";
+
+/** 只实现 DeviceHub 用到的几个接口的假客户端：快照按调用依次给。 */
+function fakeClient(path: string, snapshots: () => StateSnapshot, fetchState = vi.fn(async () => snapshots())) {
   return {
     device: null,
     url: (p: string) => p,
-    fetchState: async () => snapshots(),
-    fetchBootId: async () => bootIds(),
-    changeStreamUrl: (since: number) => `ws://localhost${path}/api/ws?since=${since}`,
+    fetchState,
+    changeStreamUrl: (cursor: ChangeCursor) => `ws://localhost${path}/api/ws${encodeChangeStreamQuery(cursor)}`,
   } as unknown as HubClient;
 }
 
@@ -207,10 +209,10 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
   it("入口本机重启（重连后 bootId 变了）：保存草稿后刷新整页", async () => {
     installFakeWebSocket();
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "not_found" }), { status: 404 })));
-    let boot = "boot-1";
+    let boot = TEST_BOOT_ID;
     const reload = vi.fn();
     const store = new DevicesStore(
-      () => fakeClient("", () => makeSnapshot({ seq: 1, bootId: "boot-1" }), () => boot),
+      () => fakeClient("", () => makeSnapshot({ seq: 1, bootId: boot })),
       undefined,
       { reload, recheckMs: 10 },
     );
@@ -218,11 +220,13 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
     store.start();
     await vi.waitFor(() => expect(store.hub(LOCAL_DEVICE).state.phase).toBe("ready"));
     FakeWebSocket.last.open();
-    // 断线重连上：守护进程已经换了一次启动
-    boot = "boot-2";
+    // 断线重连上：守护进程已经换了一次启动，旧代次的游标只换来 resync
+    boot = OTHER_BOOT_ID;
     FakeWebSocket.last.drop();
     window.dispatchEvent(new Event("online"));
+    expect(FakeWebSocket.last.since).toBe(`${TEST_BOOT_ID}:1`);
     FakeWebSocket.last.open();
+    FakeWebSocket.last.push({ type: "resync" });
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     expect(stored()?.drafts.map((d) => d.key)).toEqual(["local:1"]);
     store.dispose();
@@ -232,16 +236,16 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
     installFakeWebSocket();
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "not_found" }), { status: 404 })));
     const reload = vi.fn();
-    const fetchBootId = vi.fn(() => "boot-1");
-    const store = new DevicesStore(() => fakeClient("", () => makeSnapshot({ seq: 1, bootId: "boot-1" }), fetchBootId), undefined, { reload });
+    const fetchState = vi.fn(async () => makeSnapshot({ seq: 1, bootId: TEST_BOOT_ID }));
+    const store = new DevicesStore(() => fakeClient("", () => makeSnapshot(), fetchState), undefined, { reload });
     store.start();
     await vi.waitFor(() => expect(store.hub(LOCAL_DEVICE).state.phase).toBe("ready"));
     FakeWebSocket.last.open();
     FakeWebSocket.last.drop();
     window.dispatchEvent(new Event("online"));
     FakeWebSocket.last.open();
-    await vi.waitFor(() => expect(fetchBootId).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchState).toHaveBeenCalledTimes(1);
     expect(reload).not.toHaveBeenCalled();
     store.dispose();
   });
@@ -249,21 +253,21 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
   it("本机重启时远端仍在流式输出：等待远端输出结束再刷新", async () => {
     installFakeWebSocket();
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
-    let boot = "boot-1";
+    let boot = TEST_BOOT_ID;
     let streaming: string | null = "输出中";
     const reload = vi.fn();
     const store = new DevicesStore(
       (key) => fakeClient("", () => makeSnapshot({
-        seq: 1, bootId: key === LOCAL_DEVICE ? boot : "peer",
+        seq: 1, bootId: key === LOCAL_DEVICE ? boot : PEER_BOOT_ID,
         sessions: key === LOCAL_DEVICE ? [] : [makeSession({ streamingText: streaming })],
-      }), () => boot),
+      })),
       "peer-device", { reload, recheckMs: 10 },
     );
     store.start();
     await vi.waitFor(() => expect(store.hub("peer-device").state.phase).toBe("ready"));
     await vi.waitFor(() => expect(store.hub(LOCAL_DEVICE).state.phase).toBe("ready"));
     // 重新加载快照，相当于本机重连后发现启动标识变化。
-    boot = "boot-2";
+    boot = OTHER_BOOT_ID;
     const localStream = FakeWebSocket.instances[0]!;
     localStream.open();
     localStream.push({ type: "resync" });
@@ -279,13 +283,12 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
 
   it("别的设备（联机）重启：只重连那一台，绝不刷新本机页面", async () => {
     installFakeWebSocket();
-    let snapBoot = "peer-1";
+    let snapBoot = TEST_BOOT_ID;
     const reload = vi.fn();
     const reloader = createAutoReloader({ isStreaming: () => false, reload, saveDrafts: () => {} });
-    const fetchBootId = vi.fn(() => "peer-2");
     const hub = new DeviceHub(
       "peer-device",
-      fakeClient("/d/peer-device", () => makeSnapshot({ seq: 1, bootId: snapBoot }), fetchBootId),
+      fakeClient("/d/peer-device", () => makeSnapshot({ seq: 1, bootId: snapBoot })),
       () => {},
       undefined,
       (bootId) => reloader.observeBoot(bootId),
@@ -293,13 +296,12 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
     hub.start();
     await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
     FakeWebSocket.last.open();
-    snapBoot = "peer-2";
+    snapBoot = OTHER_BOOT_ID;
     FakeWebSocket.last.push({ type: "resync" });
-    FakeWebSocket.last.drop();
-    window.dispatchEvent(new Event("online"));
+    await vi.waitFor(() => expect(FakeWebSocket.last.since).toBe(`${OTHER_BOOT_ID}:1`));
     FakeWebSocket.last.open();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(fetchBootId).not.toHaveBeenCalled();
+    expect(hub.state.phase).toBe("ready");
     expect(reload).not.toHaveBeenCalled();
     hub.dispose();
   });

@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createClient, localClient } from "./client.ts";
+import { createClient, localClient, type HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
-import { CONVERSATION_LOOKUP_MAX_IDS } from "../shared/index.ts";
+import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, type StateSnapshot } from "../shared/index.ts";
+import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
 import {
   FakeApi,
   FakeWebSocket,
+  OTHER_BOOT_ID,
+  TEST_BOOT_ID,
+  healthChange,
   installFakeWebSocket,
   makeConvSnapshot,
+  makeHealth,
   makeMessage,
   makePm,
   makeSnapshot,
@@ -19,6 +24,202 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+const REMOTE = "0f0e0d0c-0b0a-4908-8706-050403020100";
+const BOOT_A = TEST_BOOT_ID;
+const BOOT_B = OTHER_BOOT_ID;
+const BOOT_C = "00000000-0000-4000-8000-000000000003";
+
+interface PendingState {
+  signal: AbortSignal | undefined;
+  resolve(snapshot: StateSnapshot): void;
+}
+
+/** Each fetchState call stays pending until the test resolves it, and it ignores abort so late responses reach the hub. */
+function scriptedClient(device: string | null) {
+  const requests: PendingState[] = [];
+  const prefix = device === null ? "" : `/d/${device}`;
+  const client = {
+    device,
+    url: (path: string) => `${prefix}${path}`,
+    fetchState: (signal?: AbortSignal) => new Promise<StateSnapshot>((resolve) => requests.push({ signal, resolve })),
+    changeStreamUrl: (cursor: ChangeCursor) => `ws://localhost${prefix}/api/ws${encodeChangeStreamQuery(cursor)}`,
+  } as unknown as HubClient;
+  return { client, requests };
+}
+
+const socketsFor = (device: string | null) =>
+  FakeWebSocket.instances.filter((ws) => new URL(ws.url).pathname.startsWith("/d/") === (device !== null));
+
+async function readyHub(device: string | null, snapshot: StateSnapshot) {
+  const scripted = scriptedClient(device);
+  const hub = new DeviceHub(device ?? LOCAL_DEVICE, scripted.client, () => {});
+  hub.start();
+  scripted.requests[0]!.resolve(snapshot);
+  await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+  return { hub, ...scripted };
+}
+
+const pmIds = (hub: DeviceHub) => hub.state.pms.map((pm) => pm.id);
+
+describe("DeviceHub change stream recovery", () => {
+  it("resumes local and remote streams with the boot and sequence from each device", async () => {
+    installFakeWebSocket();
+    const local = await readyHub(null, makeSnapshot({ seq: 7, bootId: BOOT_A }));
+    const remote = await readyHub(REMOTE, makeSnapshot({ seq: 7, bootId: BOOT_B }));
+    expect(socketsFor(null).at(-1)!.since).toBe(`${BOOT_A}:7`);
+    expect(socketsFor(REMOTE).at(-1)!.since).toBe(`${BOOT_B}:7`);
+    socketsFor(null).at(-1)!.open();
+    socketsFor(REMOTE).at(-1)!.open();
+    socketsFor(null).at(-1)!.push(healthChange(8, makeHealth()));
+    socketsFor(REMOTE).at(-1)!.push(healthChange(11, makeHealth()));
+    window.dispatchEvent(new Event("online"));
+    expect(socketsFor(null).at(-1)!.since).toBe(`${BOOT_A}:8`);
+    expect(socketsFor(REMOTE).at(-1)!.since).toBe(`${BOOT_B}:11`);
+    local.hub.dispose();
+    remote.hub.dispose();
+  });
+
+  it("fetches a full remote snapshot after resync and reconnects with its new boot even when its sequence is lower", async () => {
+    installFakeWebSocket();
+    const { hub, requests } = await readyHub(REMOTE, makeSnapshot({ seq: 50, bootId: BOOT_A, pms: [makePm({ id: 1 })] }));
+    socketsFor(REMOTE).at(-1)!.open();
+    window.dispatchEvent(new Event("online"));
+    const resumed = socketsFor(REMOTE).at(-1)!;
+    expect(resumed.since).toBe(`${BOOT_A}:50`);
+    resumed.open();
+    resumed.push({ type: "resync" });
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    requests[1]!.resolve(makeSnapshot({ seq: 3, bootId: BOOT_B, pms: [makePm({ id: 1 }), makePm({ id: 2, name: "missed" })] }));
+    await vi.waitFor(() => expect(pmIds(hub)).toEqual([1, 2]));
+    expect(resumed.closedByClient).toBe(true);
+    const next = socketsFor(REMOTE).at(-1)!;
+    expect(next).not.toBe(resumed);
+    expect(next.since).toBe(`${BOOT_B}:3`);
+    next.open();
+    next.push(healthChange(4, makeHealth()));
+    expect(hub.state.seq).toBe(4);
+    hub.dispose();
+  });
+
+  it("discards old socket frames and a late snapshot when a second restart races a resync", async () => {
+    installFakeWebSocket();
+    const { hub, requests } = await readyHub(REMOTE, makeSnapshot({ seq: 20, bootId: BOOT_A, pms: [makePm({ id: 1 })] }));
+    const first = socketsFor(REMOTE).at(-1)!;
+    first.open();
+    first.push({ type: "resync" });
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    const lateFrame = first.onmessage!;
+    window.dispatchEvent(new Event("online"));
+    expect(requests[1]!.signal?.aborted).toBe(true);
+    lateFrame({ data: JSON.stringify(healthChange(21, makeHealth())) });
+    const second = socketsFor(REMOTE).at(-1)!;
+    expect(second.since).toBe(`${BOOT_A}:20`);
+    second.open();
+    second.push({ type: "resync" });
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    requests[1]!.resolve(makeSnapshot({ seq: 2, bootId: BOOT_B, pms: [makePm({ id: 1 }), makePm({ id: 2 })] }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(pmIds(hub)).toEqual([1]);
+    expect(hub.state.seq).toBe(20);
+    expect(socketsFor(REMOTE)).toHaveLength(2);
+    requests[2]!.resolve(makeSnapshot({ seq: 5, bootId: BOOT_C, pms: [makePm({ id: 1 }), makePm({ id: 2 }), makePm({ id: 3 })] }));
+    await vi.waitFor(() => expect(pmIds(hub)).toEqual([1, 2, 3]));
+    expect(socketsFor(REMOTE).at(-1)!.since).toBe(`${BOOT_C}:5`);
+    hub.dispose();
+  });
+
+  it("replays same-boot live changes once when a same-boot resync succeeds", async () => {
+    installFakeWebSocket();
+    const conversation = (ids: number[]) => [makeConvSnapshot(ids.map((id) => makeMessage({ id, conversationId: 1, text: `m${id}` })))];
+    const { hub, requests } = await readyHub(null, makeSnapshot({ seq: 10, bootId: BOOT_A, conversations: conversation([1]) }));
+    const socket = FakeWebSocket.last;
+    socket.open();
+    socket.push({ type: "resync" });
+    for (const id of [2, 3, 4]) socket.push(messageChange(9 + id, "message.created", makeMessage({ id, conversationId: 1, text: `m${id}` })));
+    expect(hub.state.conversations[1]?.messages.map((m) => m.id)).toEqual([1]);
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    requests[1]!.resolve(makeSnapshot({ seq: 12, bootId: BOOT_A, conversations: conversation([1, 2, 3]) }));
+    await vi.waitFor(() => expect(hub.state.seq).toBe(13));
+    expect(hub.state.conversations[1]?.messages.map((m) => m.id)).toEqual([1, 2, 3, 4]);
+    expect(hub.state.connection).toBe("open");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    socket.push(messageChange(14, "message.created", makeMessage({ id: 5, conversationId: 1, text: "m5" })));
+    expect(hub.state.conversations[1]?.messages.map((m) => m.id)).toEqual([1, 2, 3, 4, 5]);
+    hub.dispose();
+  });
+
+  it("resumes from the fresh snapshot on a new socket after the recovery buffer fills", async () => {
+    installFakeWebSocket();
+    const { hub, requests } = await readyHub(REMOTE, makeSnapshot({ seq: 1, bootId: BOOT_A }));
+    const socket = socketsFor(REMOTE).at(-1)!;
+    socket.open();
+    socket.push({ type: "resync" });
+    for (let seq = 2; seq <= CHANGE_BUFFER_SIZE + 2; seq++) socket.push(healthChange(seq, makeHealth()));
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    requests[1]!.resolve(makeSnapshot({ seq: 600, bootId: BOOT_A }));
+    await vi.waitFor(() => expect(socketsFor(REMOTE)).toHaveLength(2));
+    expect(socket.closedByClient).toBe(true);
+    expect(hub.state.seq).toBe(600);
+    expect(socketsFor(REMOTE).at(-1)!.since).toBe(`${BOOT_A}:600`);
+    hub.dispose();
+  });
+
+  it("uses the legacy peer resync frame on reconnect and applies only changes proven to follow the snapshot", async () => {
+    installFakeWebSocket();
+    const { hub, requests } = await readyHub(REMOTE, makeSnapshot({ seq: 100, bootId: BOOT_A, pms: [makePm({ id: 1 })] }));
+    const legacy = socketsFor(REMOTE).at(-1)!;
+    legacy.open();
+    legacy.push({ type: "resync" });
+    legacy.push(healthChange(101, makeHealth({ lastError: "before snapshot" })));
+    legacy.push(healthChange(103, makeHealth({ lastError: "after snapshot" })));
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    requests[1]!.resolve(makeSnapshot({ seq: 102, bootId: BOOT_A, pms: [makePm({ id: 1 })] }));
+    await vi.waitFor(() => expect(hub.state.seq).toBe(103));
+    expect(socketsFor(REMOTE)).toHaveLength(1);
+
+    window.dispatchEvent(new Event("online"));
+    const restarted = socketsFor(REMOTE).at(-1)!;
+    restarted.open();
+    restarted.push({ type: "resync" });
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    requests[2]!.resolve(makeSnapshot({ seq: 900, bootId: BOOT_B, pms: [makePm({ id: 1 }), makePm({ id: 2 })] }));
+    await vi.waitFor(() => expect(socketsFor(REMOTE)).toHaveLength(3));
+    const rebound = socketsFor(REMOTE).at(-1)!;
+    expect(rebound.since).toBe(`${BOOT_B}:900`);
+    rebound.open();
+    rebound.push({ type: "resync" });
+    rebound.push(healthChange(901, makeHealth()));
+    await vi.waitFor(() => expect(requests).toHaveLength(4));
+    requests[3]!.resolve(makeSnapshot({ seq: 900, bootId: BOOT_B, pms: [makePm({ id: 1 }), makePm({ id: 2 })] }));
+    await vi.waitFor(() => expect(hub.state.seq).toBe(901));
+    expect(pmIds(hub)).toEqual([1, 2]);
+    expect(socketsFor(REMOTE)).toHaveLength(3);
+    hub.dispose();
+  });
+
+  it("does not open an unscoped browser subscription when the snapshot is missing a valid cursor", async () => {
+    installFakeWebSocket();
+    const scripted = scriptedClient(null);
+    const hub = new DeviceHub(LOCAL_DEVICE, scripted.client, () => {});
+    hub.start();
+    const { bootId: _bootId, ...unscoped } = makeSnapshot({ seq: 5 });
+    scripted.requests[0]!.resolve(unscoped);
+    await vi.waitFor(() => expect(hub.state.phase).toBe("error"));
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    hub.dispose();
+
+    const { hub: ready, requests } = await readyHub(null, makeSnapshot({ seq: 5, bootId: BOOT_A, pms: [makePm({ id: 1 })] }));
+    FakeWebSocket.last.open();
+    FakeWebSocket.last.push({ type: "resync" });
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    requests[1]!.resolve(makeSnapshot({ seq: 6, bootId: "not-a-boot", pms: [makePm({ id: 1 }), makePm({ id: 2 })] }));
+    await vi.waitFor(() => expect(ready.state.connection).toBe("reconnecting"));
+    expect(pmIds(ready)).toEqual([1]);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    ready.dispose();
+  });
 });
 
 describe("DeviceHub（zustand store 驱动）", () => {

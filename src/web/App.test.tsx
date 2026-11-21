@@ -7,6 +7,7 @@ import { App } from "./App.tsx";
 import {
   FakeApi,
   FakeWebSocket,
+  TEST_BOOT_ID,
   healthChange,
   installFakeWebSocket,
   makeConvSnapshot,
@@ -799,7 +800,7 @@ describe("等额度", () => {
 describe("断线重连", () => {
   it("WebSocket 断开显示“Reconnecting…”；重连带上最后的 seq；补齐后没有重复消息", async () => {
     const ws = await boot();
-    expect(ws.since).toBe(10);
+    expect(ws.since).toBe(`${TEST_BOOT_ID}:10`);
     push(ws, messageChange(11, "message.created", makeMessage({ id: 3, text: "第三条" })));
     push(ws, messageChange(12, "message.created", makeMessage({ id: 4, text: "第四条" })));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -812,7 +813,7 @@ describe("断线重连", () => {
     vi.useRealTimers();
     expect(FakeWebSocket.instances).toHaveLength(2);
     const next = FakeWebSocket.last;
-    expect(next.since).toBe(12);
+    expect(next.since).toBe(`${TEST_BOOT_ID}:12`);
     expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
     act(() => next.open());
     expect(screen.queryByText("Reconnecting…")).not.toBeInTheDocument();

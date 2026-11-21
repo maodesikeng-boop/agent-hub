@@ -97,6 +97,7 @@ import {
   type VendorSyncApplyResponse,
   type VendorSyncPreviewResponse,
 } from "../shared/index.ts";
+import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
 import { GENERIC_ERROR_TEXT, LOCAL_ERRORS, humanize, type ErrorCode, type HumanError } from "../shared/errors.ts";
 import type { TurnReplyView } from "../shared/turn-reply.ts";
 import { checkConnections } from "./connection.ts";
@@ -150,11 +151,12 @@ async function failure(res: Response): Promise<ApiError> {
 }
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs: number | null = API_REQUEST_TIMEOUT_MS): Promise<T> {
-  const timeout = timeoutMs === null ? {} : { signal: AbortSignal.timeout(timeoutMs) };
+  const timeout = timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs);
+  const signal = init?.signal && timeout ? AbortSignal.any([init.signal, timeout]) : timeout ?? init?.signal;
   let res: Response;
   let text: string;
   try {
-    res = await fetch(path, { credentials: "same-origin", ...init, ...timeout });
+    res = await fetch(path, { credentials: "same-origin", ...init, ...(signal !== undefined && { signal }) });
   } catch (err) {
     throw transportError(err);
   }
@@ -241,8 +243,7 @@ export function createClient(device: DeviceId | null) {
   return {
     device,
     url: at,
-    fetchState: () => request<StateSnapshot>(at(API_PATHS.state), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
-    fetchBootId: () => request<{ instanceId?: string }>(at(API_PATHS.authStatus)).then((r) => r.instanceId),
+    fetchState: (signal?: AbortSignal) => request<StateSnapshot>(at(API_PATHS.state), signal ? { signal } : undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     fetchOlderMessages: (conversationId: ConversationId, before: MessageId) =>
       request<MessagesPage>(`${at(API_PATHS.messages(conversationId))}?before=${before}`),
     fetchConversationsLookup: (query: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
@@ -340,9 +341,9 @@ export function createClient(device: DeviceId | null) {
       postJson<SkipTaskNodeResponse>(at(API_PATHS.taskGraphSkip(graphId, nodeKey)), body),
     postTaskGraphCancel: (graphId: TaskGraphId, body: CancelTaskGraphRequest = {}) =>
       postJson<CancelTaskGraphResponse>(at(API_PATHS.taskGraphCancel(graphId)), body),
-    changeStreamUrl: (since: number) => {
+    changeStreamUrl: (cursor: ChangeCursor) => {
       const scheme = location.protocol === "https:" ? "wss" : "ws";
-      return `${scheme}://${location.host}${at(API_PATHS.ws)}?since=${since}`;
+      return `${scheme}://${location.host}${at(API_PATHS.ws)}${encodeChangeStreamQuery(cursor)}`;
     },
   };
 }

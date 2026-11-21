@@ -1122,13 +1122,15 @@ describe("changesSince", () => {
     }
   });
 
-  it("默认初始 seq 是启动时刻的毫秒时间戳", () => {
+  it("starts the production seq at zero regardless of the wall clock", () => {
     const db2 = openTestDb();
     try {
-      const t = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(1_760_000_000_000);
       const l = createLedger(db2, { pmHomeRoot: home });
-      expect(l.snapshot().seq).toBeGreaterThanOrEqual(t);
+      expect(l.snapshot().seq).toBe(0);
+      expect(l.changesSince(0)).toEqual({ kind: "ok", changes: [] });
     } finally {
+      vi.restoreAllMocks();
       db2.close();
     }
   });
