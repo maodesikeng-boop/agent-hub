@@ -129,4 +129,6 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.todo("writes gitCommit from readBuildCommit into runtime-manifest.json, which fusa-supervisor still parses");
 });

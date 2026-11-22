@@ -93,4 +93,6 @@ describe("scripts/stage-mac-runtime.ts macOS 随包运行时", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.todo("writes gitCommit from readBuildCommit into runtime-manifest.json");
 });

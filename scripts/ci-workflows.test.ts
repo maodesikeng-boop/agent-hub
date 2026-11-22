@@ -71,6 +71,15 @@ describe(".github/workflows", () => {
     expect(workflow("release.yml").on.pull_request?.paths).toContain("SECURITY.md");
   });
 
+  it.todo("publish an rc only after check.yml, windows.yml, macos.yml, the pnpm verify smoke job, and both installer builds pass");
+  it.todo("publish only on tag pushes, so workflow_dispatch on any ref is a dry run");
+  it.todo("never pass --clobber or upload to an existing release in release.yml");
+  it.todo("skip the test gates and builds when a formal tag promotes an rc");
+  it.todo("grant id-token and attestations write only to the job that attests the installers");
+  it.todo("build the Windows installer with the locked @tauri-apps/cli through pnpm exec, never pnpm dlx");
+  it.todo("check in both desktop workflows that runtime-manifest.json gitCommit equals the built commit");
+  it.todo("run the macOS suite from one reusable macos.yml that nightly.yml and release.yml both call");
+
   it("only filter on paths that exist", () => {
     for (const { name, wf } of WORKFLOWS) {
       for (const filter of [wf.on.push, wf.on.pull_request]) {

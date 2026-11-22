@@ -93,6 +93,22 @@ export function readDesktopAppVersion(repoRoot: string = REPO_ROOT): string {
   return version;
 }
 
+/** Fields that both the macOS and the Windows runtime-manifest.json carry. */
+export interface RuntimeManifestBase {
+  version: string;
+  nodeVersion: string;
+  /** Commit the installer was built from, as returned by readBuildCommit. */
+  gitCommit: string;
+}
+
+/**
+ * Postcondition: returns the full HEAD commit of repoRoot, with a "-dirty" suffix when tracked files differ from HEAD.
+ * Throws when repoRoot is not a git checkout, so no installer is built without a commit.
+ */
+export function readBuildCommit(repoRoot: string = REPO_ROOT): string {
+  throw new Error("Not implemented");
+}
+
 /** 扫描后端与共享源码（排除 src/web、测试与测试夹具）实际引用的全部第三方包名，防止打包遗漏或混入巨型前端库。 */
 export function collectDaemonRuntimeDependencyNames(repoRoot: string = REPO_ROOT): string[] {
   const rootPkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
