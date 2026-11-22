@@ -2,8 +2,8 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_WIN_HELPERS, WIN_ACL_REVERIFY_ATTEMPTS_MAX } from "../../../shared/limits.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ENV_WIN_HELPERS, TEST_TIMEOUT_MS, WIN_ACL_REVERIFY_ATTEMPTS_MAX } from "../../../shared/limits.ts";
 import { allowWin32WorkerReadAcl, allowWin32WorkerWorktreeAcl, ensureWin32ProtectedRootAcl, resetVerifiedProtectedRootsForTest } from "./acl.ts";
 
 let root: string;
@@ -11,12 +11,13 @@ let stateDir: string;
 let logFile: string;
 let env: Record<string, string>;
 
-/** 假的 fusa-run.exe：每次调用把参数写一行进日志，再睡 delay 秒；exitCode 非 0 时失败退出。 */
-function fakeHelper(options: { delay?: number; exitCode?: number } = {}) {
+/** 假的 fusa-run.exe：每次调用把参数写一行进日志，再睡 delay 秒（或等到 releaseFile 出现）；exitCode 非 0 时失败退出。 */
+function fakeHelper(options: { delay?: number; exitCode?: number; releaseFile?: string } = {}) {
   const dir = join(root, "helpers");
   mkdirSync(dir, { recursive: true });
   const helper = join(dir, "fusa-run.exe");
-  writeFileSync(helper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${logFile}'\nsleep ${options.delay ?? 0.2}\nexit ${options.exitCode ?? 0}\n`);
+  const wait = options.releaseFile ? `while [ ! -e '${options.releaseFile}' ]; do sleep 0.01; done` : `sleep ${options.delay ?? 0.2}`;
+  writeFileSync(helper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${logFile}'\n${wait}\nexit ${options.exitCode ?? 0}\n`);
   chmodSync(helper, 0o755);
   env = { [ENV_WIN_HELPERS]: dir };
 }
@@ -91,15 +92,16 @@ describe.skipIf(process.platform === "win32")("acl.ts 运行期调 fusa-run.exe"
   });
 
   it("allow-worker：在途期间同一路径的目录被替换，后来的调用等在途的跑完再对新目录调一次", async () => {
-    fakeHelper({ delay: 0.3 });
+    const release = join(root, "release");
+    fakeHelper({ releaseFile: release });
     const wt = join(root, "worktrees", "1", "7");
     mkdirSync(wt, { recursive: true });
     const first = allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
-    for (let i = 0; i < 100 && invocations().length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(invocations()).toHaveLength(1);
+    await vi.waitFor(() => expect(invocations()).toHaveLength(1), { timeout: TEST_TIMEOUT_MS, interval: 10 });
     renameSync(wt, `${wt}-old`);
     mkdirSync(wt);
     const second = allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    writeFileSync(release, "");
     await Promise.all([first, second]);
     expect(invocations()).toHaveLength(2);
     await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
