@@ -31,11 +31,29 @@ import {
   computeDirectoryBytes,
   downloadVerifiedArchive,
   pruneStagedNodeModules,
+  readBuildCommit,
   readDesktopAppVersion,
   stageDaemonTree,
+  type RuntimeManifestBase,
 } from "./stage-runtime-common.ts";
 
 const MAC_NODE = BUNDLED_NODE_ARCHIVES["darwin-arm64"];
+
+export interface MacRuntimeManifest extends RuntimeManifestBase {
+  platform: "darwin-arm64";
+  nodeOfficialSha256: string;
+}
+
+/** Records the official bin/node SHA-256 because signing changes its bytes; codesign seals the bundle itself. */
+export function buildMacRuntimeManifest(repoRoot: string = REPO_ROOT): MacRuntimeManifest {
+  return {
+    version: readDesktopAppVersion(repoRoot),
+    platform: "darwin-arm64",
+    nodeVersion: BUNDLED_NODE_VERSION,
+    nodeOfficialSha256: MAC_NODE.exeSha256,
+    gitCommit: readBuildCommit(repoRoot),
+  };
+}
 
 /** 官方压缩包里 bin/ 下要保留的 npm 入口软链（corepack 不带）。 */
 const NPM_BIN_LINKS = {
@@ -148,13 +166,7 @@ export async function stageMacRuntime(opts: StageMacRuntimeOptions): Promise<{
 
   assertSymlinksStayInside(outDir);
 
-  // 3. 清单：签名后 bin/node 的字节会变，这里记的是官方原件的 SHA-256 供核对来源；包的完整性由 codesign 封签保证
-  const manifest = {
-    version: readDesktopAppVersion(repoRoot),
-    platform: "darwin-arm64",
-    nodeVersion: BUNDLED_NODE_VERSION,
-    nodeOfficialSha256: MAC_NODE.exeSha256,
-  };
+  const manifest = buildMacRuntimeManifest(repoRoot);
   const manifestPath = join(outDir, "runtime-manifest.json");
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 

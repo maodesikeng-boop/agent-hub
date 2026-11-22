@@ -1,20 +1,32 @@
 name: release
 
-# 推 v* 标签：复用 Windows 与 Mac 的构建，建 GitHub Release 并挂上 .exe / .dmg / .sha256（固定文件名）。
-# PR 只校验版本和脚本。手动运行可在分支上试打包，或选已有标签发布。
-# 标签 vX.Y.Z 是正式版（releases/latest 指向它）；vX.Y.Z-rc.1 之类带后缀的是预发布（GitHub 的 latest 不含预发布）。
+# Pushing vX.Y.Z-rc.N runs every test gate on the tagged commit, builds both installers, and publishes them as a prerelease.
+# Pushing vX.Y.Z on the same commit promotes that candidate's installers, byte for byte, as the latest release.
+# workflow_dispatch with input tag rehearses the same pipeline on any ref; publish then only prints the GitHub writes.
+# Pull requests that touch release inputs run the release script tests and the version and changelog check.
+# Runbook: docs/release-flow-design.md#releasing
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to rehearse, such as v0.4.0-rc.1. Nothing is published.
+        required: true
+        type: string
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/release.yml"
-      - ".github/release-notes.md"
+      - ".github/release-downloads.md"
+      - "CHANGELOG.md"
       - "scripts/release-assets.ts"
       - "scripts/release-assets.test.ts"
+      - "scripts/release-github.ts"
+      - "scripts/release-github.test.ts"
+      - "scripts/release-plan.ts"
+      - "scripts/release-plan.test.ts"
       - "scripts/stage-runtime-common.ts"
       - "src/shared/update.ts"
       - "package.json"
@@ -24,17 +36,65 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  # 已经在发布的标签不能被取消
+  # A tag that is already publishing must never be cancelled.
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    name: verify version
+  plan:
+    name: plan release
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      version: ${{ steps.plan.outputs.version }}
+      from-tag: ${{ steps.plan.outputs.from-tag }}
+    steps:
+      # Full history so the plan can check that main contains the tagged commit.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Release script unit tests
+        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts scripts/release-plan.test.ts scripts/release-github.test.ts
+      - name: Version sources and CHANGELOG.md agree
+        run: node scripts/release-assets.ts check
+      - name: Plan the tag
+        id: plan
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        run: node scripts/release-assets.ts plan --tag "$TAG"
+
+  check:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
+    uses: ./.github/workflows/check.yml
+
+  windows:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
+    uses: ./.github/workflows/windows.yml
+
+  macos:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
+    uses: ./.github/workflows/macos.yml
+
+  smoke:
+    name: smoke (pnpm verify)
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -43,33 +103,36 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Release script unit tests
-        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts
-      - name: Tag matches app version (tag runs only; otherwise just check version sources agree)
-        env:
-          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        run: |
-          if [[ -n "$TAG" ]]; then
-            node scripts/release-assets.ts check --tag "$TAG"
-          else
-            node scripts/release-assets.ts check
-          fi
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm verify --out "$RUNNER_TEMP/verify-smoke"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-smoke
+          path: ${{ runner.temp }}/verify-smoke
+          if-no-files-found: ignore
+          retention-days: 14
 
-  windows:
-    if: github.event_name != 'pull_request'
-    needs: verify
+  windows-build:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
     uses: ./.github/workflows/windows-desktop.yml
 
-  mac:
-    if: github.event_name != 'pull_request'
-    needs: verify
+  mac-build:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
     uses: ./.github/workflows/mac-desktop.yml
 
   assemble:
     name: assemble release files
-    needs: [windows, mac]
+    # The attestation below is public and permanent, so it waits for every test gate as well as both builds.
+    needs: [plan, check, windows, macos, smoke, windows-build, mac-build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -97,6 +160,14 @@ jobs:
         run: |
           ls -l
           sha256sum -c ./*.sha256
+      # Attestations go to the public Sigstore log, so rehearsals skip them; promote verifies them before reuse.
+      - name: Attest build provenance
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release-assets/Bellwood-macos-arm64.dmg
+            release-assets/Bellwood-windows-x64-setup.exe
       - uses: actions/upload-artifact@v4
         with:
           name: fusa-release-assets
@@ -105,33 +176,54 @@ jobs:
           retention-days: 14
 
   publish:
-    name: publish GitHub Release
-    if: github.ref_type == 'tag'
-    needs: assemble
+    name: publish candidate
+    needs: [plan, check, windows, macos, smoke, assemble]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
       - uses: actions/download-artifact@v5
         with:
           name: fusa-release-assets
           path: release-assets
-      - name: Create release (or refresh assets if it already exists)
+      # release-assets.ts runs dry unless this run was started by pushing exactly this tag.
+      - name: Publish the prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --clobber
-            exit 0
-          fi
-          args=(--verify-tag --title "Bellwood $TAG (unsigned preview)" --notes-file .github/release-notes.md --generate-notes)
-          if [[ "$TAG" == *-* ]]; then
-            args+=(--prerelease)
-          else
-            args+=(--latest)
-          fi
-          gh release create "$TAG" "${args[@]}" release-assets/*
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        run: node scripts/release-assets.ts publish --tag "$TAG" --expect-mode build --assets-dir release-assets
+
+  promote:
+    name: promote candidate
+    needs: plan
+    if: needs.plan.outputs.mode == 'promote'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Verify and publish the candidate's installers as the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        run: node scripts/release-assets.ts publish --tag "$TAG" --expect-mode promote --assets-dir "$RUNNER_TEMP/release-assets"

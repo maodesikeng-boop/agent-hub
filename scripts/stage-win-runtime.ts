@@ -28,9 +28,11 @@ import {
   computeDirectoryBytes,
   downloadVerifiedArchive,
   pruneStagedNodeModules,
+  readBuildCommit,
   readDesktopAppVersion,
   sha256FileHex,
   stageDaemonTree,
+  type RuntimeManifestBase,
 } from "./stage-runtime-common.ts";
 
 // 两个平台共用的部分在 stage-runtime-common.ts；这里重导出，既有调用方与测试不变。
@@ -143,6 +145,30 @@ async function downloadAndVerifyOfficialWinNode(
   rmSync(extractDir, { recursive: true, force: true });
 }
 
+/** fusa-supervisor (apps/windows/crates/fusa-supervisor/src/manifest.rs) checks these SHA-256 values before every daemon start. */
+export interface WinRuntimeManifest extends RuntimeManifestBase {
+  nodeSha256: string;
+  fusaRunSha256: string;
+  hubSha256: string;
+}
+
+export function buildWinRuntimeManifest(input: {
+  repoRoot: string;
+  nodeVersion: string;
+  nodeExe: string;
+  fusaRunExe: string;
+  hubExe: string;
+}): WinRuntimeManifest {
+  return {
+    version: readDesktopAppVersion(input.repoRoot),
+    nodeVersion: input.nodeVersion,
+    nodeSha256: sha256FileHex(input.nodeExe),
+    fusaRunSha256: sha256FileHex(input.fusaRunExe),
+    hubSha256: sha256FileHex(input.hubExe),
+    gitCommit: readBuildCommit(input.repoRoot),
+  };
+}
+
 export interface StageWinRuntimeOptions {
   repoRoot?: string;
   outDir: string;
@@ -222,14 +248,13 @@ export async function stageWinRuntime(opts: StageWinRuntimeOptions): Promise<{
   assertNoSymlinksInTree(outDir);
 
   // 4. 生成 SHA-256 完整性清单
-  const appVersion = readDesktopAppVersion(repoRoot);
-  const manifest = {
-    version: appVersion,
+  const manifest = buildWinRuntimeManifest({
+    repoRoot,
     nodeVersion,
-    nodeSha256: sha256FileHex(stagedNodeExe),
-    fusaRunSha256: sha256FileHex(stagedFusaRun),
-    hubSha256: sha256FileHex(stagedHub),
-  };
+    nodeExe: stagedNodeExe,
+    fusaRunExe: stagedFusaRun,
+    hubExe: stagedHub,
+  });
   const manifestPath = join(outDir, "runtime-manifest.json");
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 

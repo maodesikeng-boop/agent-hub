@@ -1,7 +1,7 @@
 // node scripts/render-icons.ts [母图输出路径] [--art gate|router] [--plate cream|forest]
 // 网页图标出到 src/web/public/icons/，README 门面图出到 docs/screenshots/icon-256.png。
 // macOS 由 build-mac-app.sh 从 icon-512.png 生成 ICNS。Windows 用 Tauri CLI 从 1024px 母图生成：
-// pnpm dlx @tauri-apps/cli@2 icon <母图> -o <临时目录>，再把 32x32.png、128x128.png、128x128@2x.png、icon.ico、icon.png 拷进 apps/windows/crates/fusa-desktop/icons/。
+// node_modules/.bin/tauri icon <母图> -o <临时目录>，再把 32x32.png、128x128.png、128x128@2x.png、icon.ico、icon.png 拷进 apps/windows/crates/fusa-desktop/icons/。
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";

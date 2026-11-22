@@ -260,7 +260,7 @@ pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启�
   cargo build --release --manifest-path apps/windows/Cargo.toml --workspace --bins --locked
   node scripts/stage-win-runtime.ts --out-dir apps/windows/crates/fusa-desktop/staged-runtime --helpers-dir apps/windows/target/release --target-os win32
   cd apps/windows/crates/fusa-desktop
-  pnpm dlx @tauri-apps/cli@^2 build --bundles nsis --config tauri.bundle.conf.json
+  ..\..\..\..\node_modules\.bin\tauri build --bundles nsis --config tauri.bundle.conf.json
   ```
 
 </details>

@@ -29,6 +29,7 @@
     "@axe-core/playwright": "4.14.0",
     "@cloudflare/workers-types": "^5.20261119.1",
     "@tailwindcss/vite": "^4.3.4",
+    "@tauri-apps/cli": "2.12.6",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.8",
