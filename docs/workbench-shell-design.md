@@ -11,7 +11,7 @@ The web workbench moves to one layout and one visual language. A fixed honey-yel
 - [`src/web/pane-widths.ts`](../src/web/pane-widths.ts): where column widths are remembered.
 - [`src/web/project-list.ts`](../src/web/project-list.ts): how the PM column orders pinned, active, and archived PMs.
 - [`src/web/side-panel.ts`](../src/web/side-panel.ts): which content the side panel shows for each route.
-- [`migrations/0048_pm_pins.sql`](../migrations/0048_pm_pins.sql): the table that stores pins on each computer.
+- [`migrations/0049_pm_pins.sql`](../migrations/0049_pm_pins.sql): the table that stores pins on each computer.
 - The prototype images are review artifacts outside the repository, and the step report links them. The approved v1 set shows the PM conversation, a Worker in the side panel, PM settings in the side panel, and the resize limits. The v2 set adds the Router page, three narrow-window widths, six phone screens, the settings dialog, and the drawn pin icon.
 
 ### Decisions needed
@@ -312,7 +312,7 @@ Step 3, the shell structure:
 
 Shared and daemon:
 
-- `migrations/0048_pm_pins.sql` and its `migrations/manifest.sha256` line create `pm_pins`.
+- `migrations/0049_pm_pins.sql` and its `migrations/manifest.sha256` line create `pm_pins`.
 - `src/shared/resource-registry.ts` registers `pm_pins` as retained metadata written by `src/daemon/ledger/pm-pins.ts` and cleaned with the PM by `src/daemon/ledger/persona.ts`.
 - `src/shared/domain.ts` adds `Pm.pinnedAt`.
 - `src/shared/api.ts` adds `API_PATHS.pmPin`, `PmPinRequest`, and `PmPinResponse`.

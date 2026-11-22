@@ -261,6 +261,11 @@ export interface Ledger extends LedgerHandoverWork {
   customizedCapabilityPms(): PmId[];
   setProjectSetupCommand(projectId: ProjectId, command: string | null): Project;
   setPmLook(pmId: PmId, look: PmLookSetting): Pm;
+  /**
+   * Precondition: pmId names an unarchived PM on this computer; otherwise throws LedgerRequestError not_found or conflict.
+   * Postcondition: pinned=true keeps an existing pinnedAt or records now(); pinned=false clears it; returns the PM and emits pm.updated only when the pin changed.
+   */
+  setPmPinned(pmId: PmId, pinned: boolean): Pm;
   pmProjectMainFolder(pmId: PmId): string | null;
   editPersona(pmId: PmId, input: EditPersonaInput, actor: LedgerActor): EditPersonaResult;
   revertPersonaChange(changeId: PersonaChangeId): EditPersonaResult;

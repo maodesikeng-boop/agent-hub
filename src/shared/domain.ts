@@ -91,6 +91,8 @@ export interface Pm {
   personaFile: string | null;
   createdAt: number;
   archivedAt?: number | null;
+  /** When the PM was pinned on its computer; null or missing means not pinned. Older daemons omit it. */
+  pinnedAt?: number | null;
 }
 
 export interface Conversation {

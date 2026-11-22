@@ -28,6 +28,7 @@ import { createDriverEventDrain } from "./driver-events.ts";
 import { createTurnCompletionLedger, type TurnEndedEvent } from "./turn-completions.ts";
 import { createLedgerPersona } from "./persona.ts";
 import { createLedgerPmCapabilities } from "./pm-capabilities.ts";
+import { createLedgerPmPins } from "./pm-pins.ts";
 import { createLedgerProjectCatalog } from "./project-catalog.ts";
 import type { LedgerProjectCatalog, ProjectCatalogLedgerOptions } from "./project-catalog.ts";
 import { createLedgerProjects } from "./projects.ts";
@@ -428,6 +429,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     ...capabilities,
     setProjectSetupCommand: (projectId, command) => write((p) => projects.setSetupCommandIn(p, projectId, command)),
     setPmLook: persona.setPmLook,
+    ...createLedgerPmPins(ctx, persona),
     pmProjectMainFolder(pmId) {
       persona.requirePm(pmId);
       const proj = projects.activeProjectOf(pmId);

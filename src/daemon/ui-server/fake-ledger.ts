@@ -413,6 +413,10 @@ export class FakeLedger {
     return pm;
   }
 
+  setPmPinned(_pmId: PmId, _pinned: boolean): Pm {
+    throw new Error("Not implemented");
+  }
+
   unarchivePm(pmId: PmId): Pm {
     this.check();
     this.unarchived.push(pmId);
@@ -657,6 +661,7 @@ export class FakeLedger {
       customizedCapabilityPms: () => this.customizedCapabilityPms(),
       setProjectSetupCommand: (id, command) => this.setProjectSetupCommand(id, command),
       setPmLook: (p, look) => this.setPmLook(p, look),
+      setPmPinned: (p, pinned) => this.setPmPinned(p, pinned),
       pmProjectMainFolder: (p) => this.pmProjectMainFolder(p),
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),
