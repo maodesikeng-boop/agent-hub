@@ -44,7 +44,7 @@ export function feishuLocalStamp(at: number): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const formatOfflineQueuedPrefix = (queuedAt: number) => `（离线期间 ${feishuLocalStamp(queuedAt)} 发的）`;
+const formatQueuedPrefix = (queuedAt: number) => `（${feishuLocalStamp(queuedAt)} 发的，暂存后补送）`;
 
 function noteLiveQueueDrop(ctx: FeishuContext, chatId: FeishuChatId, at: number) {
   const prev = ctx.catchUp.cursorHold.get(chatId);
@@ -208,7 +208,7 @@ async function receiveFiles(ctx: FeishuContext, scene: MessageScene, route: Deli
 
 function deliveredText(text: string, queuedAt: number | null): string {
   if (queuedAt === null) return text;
-  return text === "" ? formatOfflineQueuedPrefix(queuedAt) : `${formatOfflineQueuedPrefix(queuedAt)}\n${text}`;
+  return text === "" ? formatQueuedPrefix(queuedAt) : `${formatQueuedPrefix(queuedAt)}\n${text}`;
 }
 
 async function deliverToRouter(ctx: FeishuContext, scene: MessageScene, { clientId, text, attachments }: Delivery) {

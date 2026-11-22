@@ -226,6 +226,10 @@ export function feishuOfflineNotice(deviceName: string, queued: boolean): string
     : `「${deviceName}」现在离线，上线后再发。`;
 }
 
+export function feishuUnreachableNotice(deviceName: string): string {
+  return `「${deviceName}」这会儿没接上，这句先存着，接上后自动交给项目经理。`;
+}
+
 export function feishuOfflineCardToast(deviceName: string): FeishuCardActionResponse {
   return { toast: { type: "warning", content: `「${deviceName}」离线，上线后再点` } };
 }
@@ -245,6 +249,7 @@ export interface FeishuOfflineInboxItem {
 
 export interface FeishuOfflineInbox {
   add(deviceId: DeviceId, chatId: FeishuChatId, event: Extract<FeishuRawEvent, { type: "im.message.receive_v1" }>, receivedAt: number): "queued" | "duplicate" | "full";
+  has(deviceId: DeviceId): boolean;
   list(deviceId: DeviceId): FeishuOfflineInboxItem[];
   remove(id: number): void;
   expire(now: number): { chatId: FeishuChatId; deviceId: DeviceId; count: number }[];
@@ -277,6 +282,9 @@ export function createFeishuOfflineInbox(db: Db): FeishuOfflineInbox {
         );
         return "queued";
       });
+    },
+    has(deviceId) {
+      return db.get("SELECT 1 FROM feishu_offline_inbox WHERE device_id = ? LIMIT 1", deviceId) !== undefined;
     },
     list(deviceId) {
       return db
@@ -352,6 +360,9 @@ type CachedOwner =
   | { kind: "unknown"; retryAfter: number };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const isUserMessage = (event: FeishuRawEvent): event is Extract<FeishuRawEvent, { type: "im.message.receive_v1" }> =>
+  event.type === "im.message.receive_v1" && event.senderType === "user";
 
 const deviceLabelOf = (mesh: FeishuAccountMeshPort, id: DeviceId) => mesh.deviceName(id) ?? id.slice(0, 8);
 
@@ -449,19 +460,37 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     }
   };
 
-  const handleOfflineEvent = async (deviceId: DeviceId, chatId: FeishuChatId, event: FeishuRawEvent, receivedAt: number) => {
-    if (event.type !== "im.message.receive_v1" || event.senderType !== "user") return;
+  const holdEvent = async (deviceId: DeviceId, chatId: FeishuChatId, event: FeishuRawEvent, receivedAt: number) => {
+    if (!isUserMessage(event)) return;
     const name = deviceLabel(deviceId);
+    // The device still counts as online after a failed forward, so no online transition will drain the inbox for it.
+    const online = mesh.isOnline(deviceId);
     if (inbox !== null) {
       await expireInbox();
       const added = inbox.add(deviceId, chatId, event, receivedAt);
       if (added === "duplicate") return;
-      await local.say(chatId, feishuOfflineNotice(name, added === "queued"));
+      if (online) scheduleDrainRetry(deviceId);
+      await local.say(chatId, online && added === "queued" ? feishuUnreachableNotice(name) : feishuOfflineNotice(name, added === "queued"));
       return;
     }
     if (noticedOfflineMessages.has(event.messageId)) return;
     noticedOfflineMessages.set(event.messageId, true);
     await local.say(chatId, feishuOfflineNotice(name, false));
+  };
+
+  const forwardEvent = async (deviceId: DeviceId, chatId: FeishuChatId, event: FeishuRawEvent, receivedAt: number) => {
+    // Held messages go first so a later message cannot overtake them to the project manager.
+    if (inbox !== null && isUserMessage(event) && inbox.has(deviceId)) {
+      await drainInbox(deviceId);
+      if (inbox.has(deviceId)) return holdEvent(deviceId, chatId, event, receivedAt);
+    }
+    const body: FeishuForwardedEvent = { kind: "event", event, receivedAt, queuedAt: null };
+    try {
+      await mesh.post(deviceId, PEER_FEISHU_INBOUND_PATH, body, FEISHU_FORWARD_TIMEOUT_MS);
+    } catch (error) {
+      log(`飞书中心：转给「${deviceLabel(deviceId)}」没成，先存着稍后补送：${errorText(error)}`);
+      await holdEvent(deviceId, chatId, event, receivedAt);
+    }
   };
 
   const processEvent = async (chatId: FeishuChatId, event: FeishuRawEvent, receivedAt: number) => {
@@ -480,17 +509,10 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
         local.handleEvent(event, null);
         return;
       case "offline":
-        await handleOfflineEvent(route.deviceId, chatId, event, receivedAt);
+        await holdEvent(route.deviceId, chatId, event, receivedAt);
         return;
-      case "forward": {
-        const body: FeishuForwardedEvent = { kind: "event", event, receivedAt, queuedAt: null };
-        try {
-          await mesh.post(route.deviceId, PEER_FEISHU_INBOUND_PATH, body, FEISHU_FORWARD_TIMEOUT_MS);
-        } catch (error) {
-          log(`飞书中心：转给「${deviceLabel(route.deviceId)}」没成，改按离线处理：${errorText(error)}`);
-          await handleOfflineEvent(route.deviceId, chatId, event, receivedAt);
-        }
-      }
+      case "forward":
+        await forwardEvent(route.deviceId, chatId, event, receivedAt);
     }
   };
 
@@ -523,6 +545,16 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     });
   };
 
+  const scheduleDrainRetry = (deviceId: DeviceId) => {
+    if (closed || drainRetryTimers.has(deviceId)) return;
+    const retry = setTimeout(() => {
+      drainRetryTimers.delete(deviceId);
+      if (!closed && mesh.isOnline(deviceId)) void drainInbox(deviceId);
+    }, FEISHU_CONTROL_RETRY_MS);
+    retry.unref?.();
+    drainRetryTimers.set(deviceId, retry);
+  };
+
   const drainInbox = (deviceId: DeviceId): Promise<void> => {
     if (inbox === null || closed) return Promise.resolve();
     const existingTimer = drainRetryTimers.get(deviceId);
@@ -542,14 +574,7 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
             inbox.remove(item.id);
           } catch (error) {
             log(`飞书中心：补送「${deviceLabel(deviceId)}」暂存消息没成，稍后再试：${errorText(error)}`);
-            if (!closed && mesh.isOnline(deviceId) && !drainRetryTimers.has(deviceId)) {
-              const retry = setTimeout(() => {
-                drainRetryTimers.delete(deviceId);
-                if (!closed && mesh.isOnline(deviceId)) void drainInbox(deviceId);
-              }, FEISHU_CONTROL_RETRY_MS);
-              retry.unref?.();
-              drainRetryTimers.set(deviceId, retry);
-            }
+            if (mesh.isOnline(deviceId)) scheduleDrainRetry(deviceId);
             break;
           }
         }
