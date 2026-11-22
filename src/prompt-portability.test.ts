@@ -31,8 +31,10 @@ const RULES: readonly PortabilityRule[] = [
   {
     id: "fixed-trunk-or-remote",
     why: "projects name their trunk and remotes freely (trunk, develop, master, a remote other than origin, or none)",
-    pattern: /\b(?:origin|upstream)\/[\w.-]+|`git [^`]*\b(?:origin|upstream|main|master)\b[^`]*`/gu,
-    scope: /\b(?:main|master|origin|upstream)\b/u,
+    pattern:
+      /\b(?:origin|upstream)\/[\w.-]+|`git [^`]*\b(?:origin|upstream|main|master)\b[^`]*`|\bgit (?:fetch|pull|push|rebase|merge|diff|log|show|checkout|switch|reset|branch)\b[^`\n。；，,;]*?\b(?:origin|upstream|main|master)\b/gu,
+    // A path such as src/main.ts names no branch.
+    scope: /(?<![\w/.-])(?:main|master|origin|upstream)(?![\w/.-])/u,
   },
   {
     id: "toolchain-command",
@@ -62,8 +64,15 @@ const RULES: readonly PortabilityRule[] = [
   {
     id: "assumed-rules-file",
     why: "a project may keep its rules in CONTRIBUTING.md, a runbook, a ticket, or nowhere",
-    pattern: /(?:项目|仓库)的?\s*`(?:AGENTS|CLAUDE)\.md`/gu,
+    pattern: /\b(?:AGENTS|CLAUDE)\.md\b/gu,
     scope: /(?:AGENTS|CLAUDE)\.md/u,
+  },
+  {
+    id: "fixed-reply-language",
+    why: "users write in any language, so replies follow the user's language instead of a fixed one",
+    pattern:
+      /(?:用|以)(?:简洁的?)?(?:中文|英文|汉语)(?=\s*(?:简洁|回复|回答|告诉|说明|写|[，。]))|简洁的?(?:中文|英文)|\b(?:reply|respond|answer)(?: \w+)? in (?:Chinese|English)\b/giu,
+    scope: /中文|英文|汉语|Chinese|English/iu,
   },
   {
     id: "bellwood-source-path",
@@ -79,8 +88,11 @@ const CLAUSE_BREAK = /[。；！？，）]|[;!?)](?=\s)|(?<!\be\.g|\bi\.e)\.(?=\
 // "如" marks an example only as "（如 …" or "如 `…`", never inside 如何, 如实, or 如下.
 const EXAMPLE_MARKER = /比如|例如|譬如|诸如|举例|e\.g\.|for example|such as|(?:^|[（(、\s])如(?=[\s`“"'：:])/giu;
 const IMPERATIVE = /一律|必须|务必|都要|只能|只许|要用|就用|改用|请用|应当|应该|总是|\bmust\b|\balways\b/iu;
-const CONDITION_OPEN = /如果|假如|若|要是|仅当|只在|只有|\bif\b|\bwhen\b/giu;
+// "只有……才" states a prerequisite every project must meet, so it does not open a scoping condition.
+const CONDITION_OPEN = /如果|假如|若|要是|仅当|只在|\bif\b|\bwhen\b/giu;
 const CONDITION_CLOSE = /[：:，,]|时|才|就|则|便|那么|的话|\bthen\b/iu;
+// Inside an open condition, the name is the project's trait only when it is what the project uses or is.
+const NAMES_TRAIT = /(?:用|使用|采用|用的是|是|叫|托管在|跑在|运行在|基于|装了|有)\s*`?$/u;
 
 function tailAfterLast(text: string, breaks: RegExp): string {
   const last = [...text.matchAll(breaks)].at(-1);
@@ -101,13 +113,20 @@ function isShownAsExample(before: string): boolean {
 
 /**
  * "如果项目用 pnpm" names the trait inside the condition itself. "项目托管在 GitHub 的话，用 `gh pr checks`" limits the order
- * to GitHub projects. "只有当用户交代了多个目标，才用 <<'EOF'" limits nothing about the project or platform.
+ * to GitHub projects. "如果改了代码必须跑 `pnpm typecheck`" and "只有当用户交代了多个目标，才用 <<'EOF'" limit nothing
+ * about the project or platform.
  */
 function isScopedByCondition(before: string, rule: PortabilityRule): boolean {
   const sentence = tailAfterLast(before, SENTENCE_BREAK);
   const open = [...sentence.matchAll(CONDITION_OPEN)].at(-1);
-  if (open !== undefined && !CONDITION_CLOSE.test(sentence.slice(open.index + open[0].length))) return true;
-  return (open !== undefined || sentence.includes("的话")) && (rule.scope?.test(sentence) ?? false);
+  if (open !== undefined) {
+    const condition = sentence.slice(open.index);
+    const close = condition.slice(open[0].length).search(CONDITION_CLOSE);
+    if (close === -1) return !IMPERATIVE.test(condition) && NAMES_TRAIT.test(condition);
+    return rule.scope?.test(condition.slice(0, open[0].length + close)) ?? false;
+  }
+  const ifSo = sentence.indexOf("的话");
+  return ifSo !== -1 && (rule.scope?.test(sentence.slice(0, ifSo)) ?? false);
 }
 
 function offersAlternative(text: string, at: number, rule: PortabilityRule): boolean {
@@ -260,6 +279,12 @@ describe("product text holds in any project", () => {
       "主干叫 main、远端叫 origin 的话，用 `git diff --name-only origin/main...HEAD` 列出改动。",
       "macOS、Linux 用守护进程的 $SHELL -c 跑，Windows 依次找 Git Bash、PowerShell 7、cmd。",
       "传正文一律用 `--stdin <<'EOF'`。\nWindows 上用 PowerShell 的 here-string 管道传入。",
+      "如果项目用 `pnpm`，依赖用 `pnpm install` 装。",
+      "仅当仓库托管在 GitHub 时，才用 `gh pr checks --watch` 等检查。",
+      "如果工作目录里有 `AGENTS.md`，开始前先读它。",
+      "跟用户用同一种语言回复。",
+      "如果用户说中文，就用中文回复。",
+      "别名收集用户实际用过的叫法：代号、产品名、中文叫法。",
     ];
     for (const text of legitimate) expect(ruleIdsIn(text), text).toEqual([]);
   });
@@ -283,6 +308,20 @@ describe("product text holds in any project", () => {
       ["posix-shell-only", "只有当用户交代了多个目标，才用 `--stdin <<'EOF'` 分别投递。"],
       ["fixed-trunk-or-remote", "仅当项目有 `REVIEW.md` 时：先 `git fetch origin main`，再看 `git show origin/main:REVIEW.md`。"],
       ["posix-shell-only", "传正文一律用 `--stdin <<'EOF'`。\n\n# 安装\n\nWindows 上先装 PowerShell 7。"],
+      ["toolchain-command", "只有跑完 `pnpm test:related` 才能汇报做完了。"],
+      ["toolchain-command", "如果改了代码必须跑 `pnpm typecheck`。"],
+      ["github-cli", "只有通过了 `gh pr checks` 才能合并。"],
+      ["github-cli", "若要提 PR 请运行 `gh pr create`。"],
+      ["fixed-trunk-or-remote", "如果改动了 src/main.ts，请先运行 `git diff origin/main...HEAD`。"],
+      ["fixed-trunk-or-remote", "先 git fetch origin main，再看主干。"],
+      ["fixed-trunk-or-remote", "改完先 git rebase main 再推送。"],
+      ["assumed-rules-file", "写进项目里的 `AGENTS.md`。"],
+      ["assumed-rules-file", "按 `AGENTS.md` 的规矩做。"],
+      ["assumed-rules-file", "先读 `AGENTS.md` 里的审查清单。"],
+      ["fixed-reply-language", "回复用中文，简洁直接。"],
+      ["fixed-reply-language", "直接用一两句简洁中文告诉用户原因。"],
+      ["fixed-reply-language", "开头说清做成了什么，用中文简洁直接回答。"],
+      ["fixed-reply-language", "Always reply in Chinese."],
     ];
     for (const [id, text] of binding) expect(ruleIdsIn(text), text).toContain(id);
   });
@@ -308,5 +347,10 @@ describe("product text holds in any project", () => {
     }
     const hits = [...surfacesByHit].map(([key, names]) => `${names[0]}${names.length > 1 ? ` (+${names.length - 1} more)` : ""} ${key}`);
     expect(hits).toEqual([]);
+  });
+
+  it("only hub help lists the command that restarts this product's own daemon", () => {
+    const mentions = renderedTexts().filter(({ name, text }) => name !== "hub usage" && text.includes("self-reload"));
+    expect(mentions.map(({ name }) => name)).toEqual([]);
   });
 });
