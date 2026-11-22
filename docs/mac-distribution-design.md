@@ -30,15 +30,11 @@ Running `Bellwood.app/Contents/MacOS/AgentHub --self-test` mirrors Windows `fusa
 
 `hdiutil create -srcfolder <staging> -fs HFS+ -format ULMO` packs an LZMA-compressed DMG (~41 MiB, enforced under the `60 MiB` `DMG_BUDGET_MIB` cap in `.github/workflows/mac-desktop.yml`) without `hdiutil makehybrid` (which mutates `FinderInfo` xattrs and breaks `codesign --strict`).
 
-## CI and GitHub Releases (`.github/workflows/release.yml`)
+## CI and GitHub Releases
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml` (`scripts/release-assets.ts`):
+`.github/workflows/release.yml` reuses `mac-desktop.yml` and `windows-desktop.yml`, publishes the installers under the fixed names `Bellwood-macos-arm64.dmg` and `Bellwood-windows-x64-setup.exe` with `.sha256` files so `releases/latest/download/<asset>` links never break, and promotes release candidates. [Release flow](release-flow-design.md#releasing) is the runbook.
 
-1. **`verify`**: Confirms the git tag version matches `package.json`, `apps/windows/Cargo.toml`, and `apps/windows/crates/fusa-desktop/tauri.conf.json`.
-2. **`mac` and `windows`**: Reuses `mac-desktop.yml` and `windows-desktop.yml` via `workflow_call`, including isolated `--self-test` runs.
-3. **`assemble` and `publish`**: Renames artifacts to stable latest-release URLs (`Bellwood-macos-arm64.dmg` and `Bellwood-windows-x64-setup.exe` with `.sha256` files) so `releases/latest/download/<asset>` links in `README.md` never break across versions. Tags with suffixes such as `v0.2.0-rc.1` publish as GitHub prereleases without moving `releases/latest`.
-
-### In-app update check
+## In-app update check
 
 - **Daemon**: `src/daemon/update-checker.ts` reads the running version from `package.json`, asks `https://api.github.com/repos/maodesikeng-boop/agent-hub/releases/latest` at most once per `UPDATE_CHECK_TTL_MS` (failures and rate limits retry after `UPDATE_CHECK_RETRY_MS`), stops reading the response once it passes `UPDATE_RELEASE_MAX_BYTES`, and serves the result at `GET /api/update`; `POST /api/update/check` forces a check. Only non-draft, non-prerelease `vX.Y.Z` releases count, and the installer links use the fixed asset names above (`RELEASE_INSTALLER_FILES` in `src/shared/update.ts`, which `scripts/release-assets.ts` also uses).
 - **Install kind**: A packaged runtime has no `.git` next to its `package.json`, so it is `bundled` and gets the sidebar `Update` reminder plus the download button in **Settings → General**. Source checkouts only see the status there.

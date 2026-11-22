@@ -5,27 +5,22 @@
 ### Files to review
 
 - [Design](release-flow-design.md) checks the audit's release findings against current `main` and describes the locked installer build, the release gates, and the release candidate flow.
+- [Releasing](#releasing) is the runbook for candidates, promotion, rehearsals, yanking, and restoring a pre-upgrade backup.
+- [Changelog](../CHANGELOG.md) holds the release notes of every version, backfilled with v0.1.0 to v0.3.0.
 - [Staged lockfile contract](../scripts/staged-lockfile.ts) defines how the installer build reuses `pnpm-lock.yaml` instead of resolving versions again.
 - [Release plan contract](../scripts/release-plan.ts) defines which tags may publish, when a formal tag reuses a release candidate, and where release notes come from.
 - [GitHub release contract](../scripts/release-github.ts) defines how the workflow reads releases, publishes without overwriting, runs dry, and yanks a bad release.
 - [Build commit contract](../scripts/stage-runtime-common.ts) defines the commit recorded in each installer's `runtime-manifest.json`.
 - Test cases: [staged lockfile](../scripts/staged-lockfile.test.ts), [release plan](../scripts/release-plan.test.ts), [GitHub release](../scripts/release-github.test.ts), [build commit](../scripts/stage-runtime-common.test.ts), and [workflow guards](../scripts/ci-workflows.test.ts).
 
-### Decisions needed
+### Decisions
 
-1. **Release candidates before every formal release.**
-   - A (recommended): A formal tag `vX.Y.Z` publishes only after a published `vX.Y.Z-rc.N` on the same commit, and it reuses that candidate's installers byte for byte. Hotfixes follow the same path: one acceptance pass on real machines, then a promote run of about 2 minutes.
-   - B: Require a candidate, but rebuild on the formal tag. The formal run takes about 9 minutes and ships installers that nobody opened.
-   - C: Keep candidates optional. Releases stay as fast as today, and a formal tag can still ship an installer that no person installed first.
-2. **GitHub immutable releases** (repository setting, currently off).
-   - A (recommended): Turn it on. After a release is published, nobody can change its assets or move or delete its tag, and a deleted release's tag name cannot be reused. Title, notes, and the prerelease and latest flags stay editable, so yanking still works. GitHub also attaches a release attestation with the tag, commit, and asset digests. v0.1.0 to v0.3.0 stay mutable. A broken release can only be fixed by a new version.
-   - B: Protect releases only inside `release.yml`. The workflow refuses to touch an existing release, but a person with write access or a later workflow edit can still replace assets or move a tag.
-3. **Rollback after a bad formal release.**
-   - A (recommended): Roll forward. Yank the bad release so `releases/latest`, the README download links, and the in-app update reminder fall back to the previous version, then ship a patch through a new candidate. A user who already upgraded and must go back restores the pre-upgrade backup `~/.agent-hub/state/hub.sqlite.bak-<schema version>-<time>` by hand and loses changes made since the upgrade.
-   - B: Build an in-app downgrade that restores the backup and offers the older installer. This is product work, so it waits for a feature batch.
-4. **Changelog.**
-   - A (recommended): Replace `.github/release-notes.md` with a cumulative `CHANGELOG.md` in the same bilingual format, backfilled with v0.1.0 to v0.3.0 from the published releases. A candidate tag fails unless its version has a section, and that section becomes the release body.
-   - B: Keep overwriting `.github/release-notes.md`. History stays in GitHub Releases and `git log`.
+The user approved option A for all four decisions on 2026-11-22.
+
+1. **Release candidates before every formal release.** A: a formal `vX.Y.Z` publishes only after a published `vX.Y.Z-rc.N` on the same commit and reuses that candidate's installers byte for byte.
+2. **GitHub immutable releases.** A: turn the repository setting on. It is a repository setting, so the maintainer runs `gh api -X PUT repos/maodesikeng-boop/agent-hub/immutable-releases` once. v0.1.0 to v0.3.0 stay mutable.
+3. **Rollback after a bad formal release.** A: roll forward. `release-assets.ts yank` takes the bad release off `releases/latest`, and users who already upgraded follow [Restore after a bad upgrade](#restore-after-a-bad-upgrade).
+4. **Changelog.** A: `CHANGELOG.md` replaces `.github/release-notes.md`. The downloads and checksum table that every release repeats moved to `.github/release-downloads.md`, which `publish` appends to the version's section.
 
 Code signing, toolchain pins, and Action SHA pins are out of scope (see "Current state").
 
@@ -166,3 +161,57 @@ None. Nothing adds a cache, snapshot, or growing collection. The CI cost is list
 - **Plan, publish, and yank logic.** `scripts/release-plan.test.ts` covers every refusal. `scripts/release-github.test.ts` records the commands sent to a fake `CommandRunner`, never a real repository.
 - **Immutable releases**, if decision 2 is A: after approval, the maintainer runs `gh api -X PUT repos/maodesikeng-boop/agent-hub/immutable-releases`. The PR shows `GET immutable-releases` returning `{"enabled":true}`.
 - Run `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`. Wait until every PR check is green, including the path-triggered `windows`, `mac-desktop`, and `windows-desktop` jobs.
+
+### 9. Implementation notes
+
+These details changed while implementing the skeleton:
+
+- `planRelease` takes `{ dryRun }`. A rehearsal on a branch would otherwise always stop at "not on main", so in a dry run that check only prints a warning. Every other refusal still applies.
+- `publish` decides on its own whether to write. It writes only when `GITHUB_EVENT_NAME` is `push`, `GITHUB_REF_TYPE` is `tag`, and `GITHUB_REF_NAME` equals `--tag` (`isTagPushOf`), and it re-plans with the write token right before publishing, so a draft or release created while the gates ran still stops it. Run anywhere else, including locally, `publish` is a dry run.
+- Rehearsals skip `actions/attest-build-provenance`, because each attestation is a permanent entry in the public Sigstore log.
+- `pnpm exec` does not find the root `node_modules/.bin` from `apps/windows/crates/fusa-desktop`, and the Tauri CLI must run there. The workflow calls the locked `node_modules\.bin\tauri.cmd` directly.
+- `checkTagVersion` and `release-assets.ts check --tag` are deleted. `planRelease` covers tags, and `check` now confirms that the version sources agree and `CHANGELOG.md` has a section for the version.
+
+## Releasing
+
+### Ship a release candidate
+
+1. Open a pull request that sets the new version in `package.json`, `apps/windows/Cargo.toml`, and `apps/windows/crates/fusa-desktop/tauri.conf.json`, updates the supported series in `SECURITY.md` when the minor version changes, and adds a `## vX.Y.Z` section at the top of `CHANGELOG.md` with Chinese bullets and an `### English` subsection. The `plan release` check fails until all of that agrees.
+2. After the pull request merges, tag the merged commit: `git fetch origin main && git tag vX.Y.Z-rc.1 origin/main && git push origin vX.Y.Z-rc.1`.
+3. `release.yml` runs `check`, `windows`, `macos`, `smoke (pnpm verify)`, and both installer builds on the tagged commit. When all of them pass, `assemble` attests the installers and `publish candidate` publishes a prerelease. The prerelease never reaches `releases/latest`, the README download links, or the in-app update reminder.
+4. When a job fails, nothing publishes. Fix the cause on `main` and push `vX.Y.Z-rc.N+1`. Do not rerun a failed job to get past a flaky test.
+
+### Accept the candidate
+
+On a real Apple silicon Mac and a real Windows x64 machine that run the previous formal release with real projects:
+
+1. Download the installer and its `.sha256` from the prerelease page, check the checksum, and run `gh attestation verify <installer> -R maodesikeng-boop/agent-hub`. It must name `release.yml` and the candidate tag.
+2. Install over the previous version and open Bellwood.
+3. The candidate passes when the app starts, existing projects and conversations open, and, for a release that adds migrations, a new `hub.sqlite.bak-<schema version>-<time>` appears in `~/.agent-hub/state/`.
+
+### Promote the candidate
+
+1. Tag the candidate's commit: `git tag vX.Y.Z vX.Y.Z-rc.N && git push origin vX.Y.Z`.
+2. `plan release` returns a promote plan, and `promote candidate` downloads the newest candidate's assets, checks every `.sha256` and the provenance attestation from `release.yml` for `refs/tags/vX.Y.Z-rc.N`, and publishes them as the latest release. Nothing is rebuilt.
+3. Add the released ledger sample: `node scripts/release-db-fixture.ts vX.Y.Z`, then commit it through a pull request.
+
+### Rehearse without publishing
+
+- `gh workflow run release.yml --ref <branch> -f tag=vX.Y.Z-rc.99` runs every gate and build of a candidate. `plan release` warns when the commit is not on `main`, `assemble` skips the attestation, and `publish candidate` prints each `gh` write prefixed with `[dry-run]`.
+- `node scripts/release-assets.ts plan --tag <tag>` prints the plan for any tag from a local checkout, using read-only `gh api` and `git ls-remote` calls.
+
+### Yank a bad formal release
+
+1. Run `node scripts/release-assets.ts yank --tag vX.Y.Z --dry-run` and read the two edits it prints.
+2. Run it again without `--dry-run`, with `gh` logged in as a maintainer. It marks `vX.Y.Z` as a prerelease that is not latest, marks the highest remaining formal release as latest, and checks that `releases/latest` returns it. The README links and the in-app update reminder fall back at once. Assets and tags stay in place.
+3. Ship the fix as a new patch version through a candidate.
+
+### Restore after a bad upgrade
+
+A user who already installed the bad version and must go back loses every change made since the upgrade:
+
+1. Quit Bellwood.
+2. Install the previous version from its release page, such as `https://github.com/maodesikeng-boop/agent-hub/releases/tag/vX.Y.Z`.
+3. In `~/.agent-hub/state/` (`%USERPROFILE%\.agent-hub\state\` on Windows, or `$AGENT_HUB_HOME/state/` when set), move `hub.sqlite`, `hub.sqlite-wal`, and `hub.sqlite-shm` into another folder.
+4. Copy the newest `hub.sqlite.bak-<schema version>-<time>` to `hub.sqlite`. The schema version in the name is the one the previous version used, and the upgrade wrote this backup right before it migrated.
+5. Open Bellwood. Without step 4, the previous version refuses to start because the ledger is newer than its migrations.

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RELEASE_INSTALLER_FILES } from "../src/shared/update.ts";
-import { RELEASE_ASSETS, assertVersionSourcesMatch, checkTagVersion, prepareReleaseAssets } from "./release-assets.ts";
+import { RELEASE_ASSETS, assertVersionSourcesMatch, composeReleaseNotes, isTagPushOf, prepareReleaseAssets } from "./release-assets.ts";
 import { REPO_ROOT, readDesktopAppVersion, sha256FileHex } from "./stage-runtime-common.ts";
 
 function writeArtifact(dir: string, name: string, body: string, hashOverride?: string): void {
@@ -30,12 +30,23 @@ function versionSourcesRepo(versions: { pkg: string; tauri: string; securitySeri
 }
 
 describe("scripts/release-assets.ts", () => {
-  it("requires the tag version to equal the app version and treats suffixed tags as prereleases", () => {
-    expect(checkTagVersion("v0.1.0", "0.1.0")).toEqual({ version: "0.1.0", prerelease: false });
-    expect(checkTagVersion("v0.1.0-rc.1", "0.1.0")).toEqual({ version: "0.1.0", prerelease: true });
-    expect(() => checkTagVersion("v0.2.0", "0.1.0")).toThrow(/does not match app version 0\.1\.0/);
-    expect(() => checkTagVersion("0.1.0", "0.1.0")).toThrow(/is not vX\.Y\.Z/);
-    expect(() => checkTagVersion("v0.1", "0.1.0")).toThrow(/is not vX\.Y\.Z/);
+  it("writes to GitHub only from a run started by pushing that exact tag", () => {
+    const push = { GITHUB_EVENT_NAME: "push", GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.4.0-rc.1" };
+    expect(isTagPushOf("v0.4.0-rc.1", push)).toBe(true);
+    expect(isTagPushOf("v0.4.0", push)).toBe(false);
+    expect(isTagPushOf("v0.4.0-rc.1", { ...push, GITHUB_EVENT_NAME: "workflow_dispatch" })).toBe(false);
+    expect(isTagPushOf("v0.4.0-rc.1", { ...push, GITHUB_REF_TYPE: "branch" })).toBe(false);
+    expect(isTagPushOf("v0.4.0-rc.1", {})).toBe(false);
+  });
+
+  it("builds release notes from the CHANGELOG.md section followed by the shared downloads table", () => {
+    const downloads = readFileSync(join(REPO_ROOT, ".github", "release-downloads.md"), "utf8");
+    const notes = composeReleaseNotes(readFileSync(join(REPO_ROOT, "CHANGELOG.md"), "utf8"), downloads, "0.3.0");
+    expect(notes.startsWith("- ")).toBe(true);
+    expect(notes).toContain("### English");
+    expect(notes.endsWith(`${downloads.trim()}\n`)).toBe(true);
+    for (const name of Object.values(RELEASE_INSTALLER_FILES)) expect(downloads).toContain(`\`${name}.sha256\``);
+    expect(() => composeReleaseNotes("## v0.3.0\n- x\n", downloads, "9.9.9")).toThrow('no "## v9.9.9" section');
   });
 
   it("keeps package.json, Cargo.toml, tauri.conf.json, and SECURITY.md on one version in this repository", () => {
