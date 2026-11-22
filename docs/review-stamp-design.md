@@ -76,17 +76,19 @@ Flow after the change:
 
 1. The review Worker reports. `reviewStampRequestOf(report, target, reviewVerified)` returns `success` for a verified PASS or PASS+NOTES, `failure` for a well-formed FAIL, and null otherwise.
 2. `insertReport` calls `enqueueReviewStampIn` once a review report is final: after the branch check for a PASS, or right away for a FAIL. It skips reports with a pending follow-up or a forced note. The dedupe key is `workerId:reportMessageId`, and an existing row under that key in any status blocks a second enqueue, because the executor re-runs a finished action enqueued again. Keying on the report instead of the SHA lets a FAIL followed by a PASS on the same commit post both.
-3. `createReviewStampHandler` reads `getReviewStampTask`: the main folder, the snapshot PR, and the project account. It then calls `postReviewStatus`.
+3. `createReviewStampHandler` reads `getReviewStampTask`: the main folder, the snapshot PR, and the project account. It then calls `postReviewStatus`. The task is null once the stamp is stale: its Worker is no longer the step's latest Worker, or that Worker has replied after the stamped report. A late retry therefore never posts over a newer verdict or a takeover's verdict. The executor runs `review.stamp` actions one at a time, so two posts cannot land on GitHub out of order.
 4. `postReviewStatus` resolves the repository from the PR URL, or from gh's `{owner}/{repo}` placeholder in the main folder when there is no PR. It gets a token for the account and posts `bellwood/review`.
-5. `onReviewStamped` writes `reviewStamp` (`posted` or `skipped` with a reason) on the step artifact. The delivery note and `hub graph show` print it. Nothing wakes the Project Manager, and nothing changes the step's status.
+5. `onReviewStamped` writes `reviewStamp` (`posted` or `skipped` with a reason) on the step artifact, unless the stamp went stale while it ran. The delivery note and `hub graph show` print it. Nothing wakes the Project Manager, and nothing changes the step's status.
 
 Skips, with no error and one ledger line each: gh is missing or not logged in, the account is not logged in, the folder is not a git repository, no remote is on GitHub, the PR is on another host, the account lacks permission (403 or 404), or the commit was never pushed (422). Timeouts, network errors, and 5xx responses retry up to 3 times, then `actionFailedIn` records a skip.
 
-The gate decides by these rules, in order (`decideGateStatus`):
+The gate posts nothing when the PR head moved past `HEAD_SHA` while it read the file list; the run for the newer push decides. Otherwise it decides by these rules, in order (`decideGateStatus`):
 
 1. A `bellwood/review` status from anyone other than `github-actions[bot]` is a review verdict. Keep it.
 2. If the PR touches no listed path and the file list is complete, post success: "No high-risk paths changed; review stamp not required".
 3. Otherwise post pending: "Needs an independent review PASS on this commit: `<first matched file>`".
+
+The workflow, the gate script, and `REVIEW.md` are themselves on the stamp list, so loosening the gate needs a review PASS. The gate script imports no other repository module, and `scripts/ci-workflows.test.ts` fails when a module it runs falls outside the list.
 
 Trust boundary: anyone with write access can post a commit status through the API. Without a GitHub App this cannot be prevented. The gate stops accidental merges of unreviewed or failed work. It does not stop a collaborator who deliberately bypasses it.
 

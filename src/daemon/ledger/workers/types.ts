@@ -43,6 +43,7 @@ export interface LedgerWorkersTaskGraphHooks {
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
   workerGraphForkBase: (workerId: WorkerId) => string | undefined;
   recordReviewStampIn: (p: Pending, workerId: WorkerId, outcome: ReviewStampOutcome) => void;
+  isLatestStepWorker: (workerId: WorkerId) => boolean;
   workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;
 }
 

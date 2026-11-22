@@ -58,9 +58,12 @@ function parseSend(raw: ActionDbRow): AnyActionRow | null {
   } as AnyActionRow;
 }
 
-function sessionKey(row: AnyActionRow): number | null {
+/** Actions sharing a lane run one at a time: one lane per session, and one for all review stamps. */
+function laneKey(row: AnyActionRow): string | null {
+  // GitHub keeps the last status posted, so two stamps in flight could land out of order and leave a stale verdict.
+  if (row.type === "review.stamp") return "review.stamp";
   const id = (row.params as { sessionId?: unknown }).sessionId;
-  return typeof id === "number" ? id : null;
+  return typeof id === "number" ? `session:${id}` : null;
 }
 
 export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: ActionExecutorOptions = {}): ActionExecutor {
@@ -71,7 +74,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
 
   const handlers = new Map<ActionType, ActionHandler>();
   const inFlight = new Map<ActionId, Promise<void>>();
-  const busySessions = new Set<number>();
+  const busyLanes = new Set<string>();
   let started = false;
   let stopping = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -177,18 +180,18 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
           abandon(raw.id, `bad action row: ${errorMessage(error)}`, parseSend(raw));
           continue;
         }
-        const key = sessionKey(row);
-        if (key !== null && busySessions.has(key)) continue;
+        const key = laneKey(row);
+        if (key !== null && busyLanes.has(key)) continue;
         const handler = handlers.get(row.type);
         if (handler === undefined) {
           abandon(row.id, `no handler registered for ${row.type}`, row.type === "session.send" ? row : null);
           continue;
         }
         setActionStatus(db, row.id, { status: "running" }, t);
-        if (key !== null) busySessions.add(key);
+        if (key !== null) busyLanes.add(key);
         const job = execute({ ...row, status: "running", updatedAt: t }, handler).finally(() => {
           inFlight.delete(row.id);
-          if (key !== null) busySessions.delete(key);
+          if (key !== null) busyLanes.delete(key);
           schedule(0);
         });
         inFlight.set(row.id, job);

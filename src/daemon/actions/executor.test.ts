@@ -259,6 +259,36 @@ describe("执行器", () => {
     await executor.stop();
   });
 
+  it("review.stamp 一次只跑一条，后排的等前一条挂完才开始，GitHub 上最后留下的是后排的结论", async () => {
+    const stamp = (workerId: number, reportMessageId: number, verdict: "PASS" | "FAIL") =>
+      enqueueAction(db, { type: "review.stamp", params: { workerId, reportMessageId, sha: "a".repeat(40), verdict } } as never, Date.now());
+    stamp(1, 10, "PASS");
+    stamp(2, 20, "FAIL");
+    sendAction(30, 1);
+    const log: string[] = [];
+    const gates = new Map<string, () => void>();
+    const run = (label: string) =>
+      new Promise<ActionResult>((resolve) => {
+        log.push(`begin ${label}`);
+        gates.set(label, () => {
+          log.push(`end ${label}`);
+          resolve({ kind: "done" });
+        });
+      });
+    const executor = createActionExecutor(db, deps);
+    executor.register("review.stamp", (a) => run(`stamp ${a.params.verdict}`));
+    executor.register("session.send", (a) => run(`send m${a.params.messageId}`));
+    executor.start();
+    await flush();
+    expect(log).toEqual(["begin stamp PASS", "begin send m30"]);
+    gates.get("stamp PASS")!();
+    await flush();
+    expect(log).toEqual(["begin stamp PASS", "begin send m30", "end stamp PASS", "begin stamp FAIL"]);
+    gates.get("stamp FAIL")!();
+    gates.get("send m30")!();
+    await executor.stop();
+  });
+
   it("到点时间不同也是启动排在发消息前面：先按类型，再按到点时间、编号", async () => {
     enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 10, source: "user" } }, T0 - 3_000);
     enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 11, source: "user" } }, T0 - 2_000);

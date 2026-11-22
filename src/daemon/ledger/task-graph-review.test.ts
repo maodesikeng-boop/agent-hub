@@ -534,6 +534,64 @@ describe("审查步骤只查不修", () => {
       expect(stampRows().map((r) => r.params.verdict)).toEqual(["FAIL", "PASS"]);
     });
 
+    it("先 PASS 后改判 FAIL：旧的 PASS 盖章重试时不调 gh、不覆盖新结论的 reviewStamp，重试用完也不记", async () => {
+      const { graph, wReview, sha } = await startReview({ confirm: true });
+      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
+      await runVerify();
+      expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("waiting:user");
+      const [passStamp] = enqueuedStamps();
+      ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "再看一遍游标" });
+      await reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha, questions: "- [Important] a.ts:1 越界" }));
+      const failStamp = enqueuedStamps().at(-1)!;
+      expect([passStamp!.params.verdict, failStamp.params.verdict]).toEqual(["PASS", "FAIL"]);
+      expect((await runStamp(failStamp, posted)).map((i) => i.request.state)).toEqual(["failure"]);
+      expect(ledger.getReviewStampTask(passStamp!.params)).toBeNull();
+      expect(await runStamp(passStamp!, posted)).toEqual([]);
+      ledger.onReviewStamped(passStamp!.params, posted({ cwd: repoDir, request: { sha, verdict: "PASS", state: "success" }, pr: null, account: null }));
+      ledger.onActionFailed(passStamp!, "gh: Server Error (HTTP 502)");
+      expect(graphNow(graph.id).nodes[1]!.artifact).toMatchObject({ reviewVerdict: "FAIL", reviewStamp: { kind: "posted", state: "failure" } });
+    });
+
+    it("先 FAIL 后改判 PASS：旧的 FAIL 盖章重试时不调 gh、不覆盖新结论的 reviewStamp", async () => {
+      const { graph, wReview, sha } = await startReview();
+      await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha, questions: "- [Important] a.ts:1 越界" }));
+      const [failStamp] = enqueuedStamps();
+      ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "再看一遍" });
+      await reportTurn(wReview, report({ summary: "看错了", verdict: "PASS", sha }));
+      await runVerify();
+      const passStamp = enqueuedStamps().at(-1)!;
+      expect(passStamp.params.verdict).toBe("PASS");
+      expect((await runStamp(passStamp, posted)).map((i) => i.request.state)).toEqual(["success"]);
+      expect(await runStamp(failStamp!, posted)).toEqual([]);
+      ledger.onActionFailed(failStamp!, "gh: Server Error (HTTP 502)");
+      expect(graphNow(graph.id).nodes[1]!.artifact).toMatchObject({ reviewVerdict: "PASS", reviewStamp: { kind: "posted", state: "success" } });
+    });
+
+    it("盖章在退避时 Worker 又开了新一轮：旧盖章作废，不调 gh", async () => {
+      const { wReview, sha } = await startReview({ confirm: true });
+      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
+      await runVerify();
+      const [stamp] = enqueuedStamps();
+      ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "再看一遍" });
+      const s = sessionOf(wReview);
+      ledger.applyDriverEvent(s.id, { type: "agent.text", uuid: `u-${wReview}-mid`, text: "在重看 a.ts", at: ++now });
+      await ledger.settleDriverEvents();
+      expect(await runStamp(stamp!, posted)).toEqual([]);
+    });
+
+    it("换人接手后，旧 Worker 的盖章重试取不到任务、不调 gh，重试用完也不记", async () => {
+      const { graph, wReview, sha } = await startReview();
+      await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha }));
+      const [stamp] = enqueuedStamps();
+      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview });
+      const next = ledger.hubCall(lin.sessionId, "worker.start", { node: "review", graphId: graph.id }).data.worker.id;
+      expect(next).not.toBe(wReview);
+      expect(ledger.getReviewStampTask(stamp!.params)).toBeNull();
+      expect(await runStamp(stamp!, posted)).toEqual([]);
+      ledger.onActionFailed(stamp!, "gh: Server Error (HTTP 502)");
+      expect(graphNow(graph.id).nodes[1]!.artifact?.reviewStamp).toBeUndefined();
+    });
+
     it("review.stamp 重试用完后 actionFailedIn 记一条 skipped，原因是最后的错误，任务图不受影响", async () => {
       const { graph, wReview, sha } = await startReview();
       await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha }));

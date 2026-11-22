@@ -23,12 +23,32 @@ export function enqueueReviewStampIn(w: WorkersCtx, p: Pending, worker: WorkerDb
 }
 
 /**
+ * A stamp is current while its Worker is still its step's latest Worker and its report is that Worker's latest reply.
+ * A takeover, a follow-up turn, or a new verdict makes older stamps stale, so a late retry never overwrites the newer verdict.
+ */
+function isCurrentStamp(w: WorkersCtx, worker: WorkerDbRow, params: ReviewStampParams): boolean {
+  if (w.options.taskGraphs?.isLatestStepWorker(worker.id) !== true) return false;
+  return (
+    w.db.get(
+      "SELECT 1 AS x FROM messages WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? LIMIT 1",
+      worker.worker_conversation_id,
+      params.reportMessageId,
+    ) === undefined
+  );
+}
+
+function currentStampWorker(w: WorkersCtx, params: ReviewStampParams): WorkerDbRow | null {
+  const worker = workerRow(w, params.workerId);
+  return worker !== null && isCurrentStamp(w, worker, params) ? worker : null;
+}
+
+/**
  * Returns the main folder, the PR recorded in the review snapshot, and the project's stamp account.
  * Works after the Worker has ended, because a completed step ends its Worker before the action runs.
- * Returns null when the Worker is gone, is not a review Worker, or its snapshot no longer names `params.sha`.
+ * Returns null when the Worker is gone, is not a review Worker, its snapshot no longer names `params.sha`, or the stamp is stale.
  */
 export function getReviewStampTask(w: WorkersCtx, params: ReviewStampParams): ReviewStampTask | null {
-  const worker = workerRow(w, params.workerId);
+  const worker = currentStampWorker(w, params);
   const review = worker === null ? null : parseReviewTarget(worker.review_json);
   if (review === null || review.snapshot === null || review.snapshot.sha !== params.sha) return null;
   return { repo: mainFolderOf(w, worker!.project_id), pr: review.snapshot.pr, account: reviewStatusAccountOf(w.db, worker!.project_id) };
@@ -36,14 +56,17 @@ export function getReviewStampTask(w: WorkersCtx, params: ReviewStampParams): Re
 
 /**
  * Records the outcome on the review step's artifact so the graph view, `hub graph show`, and the delivery note show it.
- * Postcondition: no write when the Worker is no longer the step's latest Worker, so a takeover's newer review is never overwritten.
+ * Postcondition: no write when the stamp went stale while it ran, so a takeover's or a later turn's verdict is never overwritten.
  */
 export function onReviewStamped(w: WorkersCtx, params: ReviewStampParams, outcome: ReviewStampOutcome): void {
-  w.write((p) => w.options.taskGraphs?.recordReviewStampIn(p, params.workerId, outcome));
+  w.write((p) => {
+    if (currentStampWorker(w, params) !== null) w.options.taskGraphs?.recordReviewStampIn(p, params.workerId, outcome);
+  });
 }
 
-/** Records a `skipped` outcome with the executor's final error after the last retry; never rethrows. */
+/** Records a `skipped` outcome with the executor's final error after the last retry, unless the stamp is stale; never rethrows. */
 export function reviewStampFailedIn(w: WorkersCtx, p: Pending, action: Extract<AnyActionRow, { type: "review.stamp" }>, error: string): void {
+  if (currentStampWorker(w, action.params) === null) return;
   const reason = truncateChars(`重试用完也没挂上：${error}`, MAX_REVIEW_STAMP_REASON_CHARS);
   w.options.taskGraphs?.recordReviewStampIn(p, action.params.workerId, { kind: "skipped", sha: action.params.sha, reason, at: w.now() });
 }
