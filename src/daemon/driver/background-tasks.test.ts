@@ -1,21 +1,38 @@
 // 会话里有后台任务时不算闲着（background-tasks.ts + src/vendors/claude/driver.ts 的 #armIdle、#onBackgroundTasksChanged）：
 // 用假 claude 发 system/background_tasks_changed。事件的真实形状见 docs/m0-report.md“后台任务事件”。
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_TASKS_HOLD_MAX_MS, IDLE_CLOSE_MS, RELAUNCH_NOTE, backgroundTasksKilledNote } from "../../shared/index.ts";
 import type { FakeTurn } from "../../../test/fake-claude/fake-claude.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
 import { makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
 let h: Harness | undefined;
+const gateDirs: string[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   await h?.cleanup();
   h = undefined;
+  for (const dir of gateDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+/** A file the fake claude's `waitFile` step blocks on until `open()` creates it. */
+function gate(): { path: string; open: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "agent-hub-gate-"));
+  gateDirs.push(dir);
+  const path = join(dir, "open");
+  return { path, open: () => writeFileSync(path, "") };
+}
 
 const user = (id: number, text: string) => ({ messageIds: [id], source: "user" as const, text });
 const IDLE = 300;
 const HOLD = 1800;
 const timers = { idleCloseMs: IDLE, backgroundHoldMaxMs: HOLD };
+// Fake only the driver's timers: the fake claude is a separate process on real time, so the idle timer fires only when the test advances it.
+const fakeTimers = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+const hasStdinClosed = (t: Harness) => t.log().some((e) => e.kind === "stdin_closed");
 
 function harness(turns: FakeTurn[], driver: Record<string, number> = timers): Harness {
   h = makeHarness({ script: { turns }, driver });
@@ -190,22 +207,33 @@ describe("任务清零以后再闲够时间才关", () => {
   });
 
   it("任务结束后 claude 自己开的一轮：先清零再开轮（真 claude 的顺序），这一轮跑完才开始算空闲", async () => {
+    const selfTurnGate = gate();
     const t = harness([
       {
         steps: [{ backgroundTasks: ["a"] }, { text: "好" }],
-        backgroundTasksAfter: [{ afterMs: 300, tasks: [] }],
-        selfTurn: { steps: [{ sleepMs: 400 }, { text: "后台好了" }], afterMs: 305 },
+        backgroundTasksAfter: [{ afterMs: 20, tasks: [] }],
+        selfTurn: { steps: [{ waitFile: selfTurnGate.path }, { text: "后台好了" }], afterMs: 25 },
       },
     ]);
     const s = t.addSession();
+    fakeTimers();
     await t.driver.send(s.id, user(1, "x"));
-    await t.waitFor("turn.ended", () => true, 2); // 自己开的那一轮
-    const ended = t.of("turn.ended")[1]!;
-    expect(ended.messageIds).toEqual([]);
+    await t.waitFor("turn.started");
+    expect(t.of("background.changed").map((e) => e.count)).toEqual([1, 0]);
+    vi.advanceTimersByTime(IDLE * 2); // the idle timer armed by the clear was cancelled when the self turn began
+    await realSleep(100);
+    expect(hasStdinClosed(t)).toBe(false);
+    expect(t.of("session.exited")).toEqual([]);
+    selfTurnGate.open();
+    await t.waitFor("turn.ended", () => true, 2);
+    expect(t.of("turn.ended")[1]!.messageIds).toEqual([]);
     expect(t.of("agent.text").map((e) => e.text)).toEqual(["好", "后台好了"]);
+    vi.advanceTimersByTime(IDLE - 1);
+    await realSleep(100);
+    expect(hasStdinClosed(t)).toBe(false);
+    vi.advanceTimersByTime(1);
     const exited = await t.waitFor("session.exited");
     expect(exited.reason).toBe("idle");
-    expect(exited.at - ended.at).toBeGreaterThanOrEqual(IDLE - 60);
   });
 });
 
@@ -358,21 +386,32 @@ describe("关进程会结束后台任务：下一条消息前告诉 agent（只�
 
 describe("边角", () => {
   it("claude 自己开的一轮一直跑过了兜底时长：不在它跑的时候关；它结束后兜底重新算，到点才关并带说明", async () => {
+    const HOLD_MAX = 300;
+    const selfTurnGate = gate();
     const t = harness(
       [
-        { steps: [{ backgroundTasks: [{ task_id: "a", description: "还在等" }] }, { text: "一" }], selfTurn: { steps: [{ sleepMs: 700 }, { text: "自己开的" }], afterMs: 100 } },
+        { steps: [{ backgroundTasks: [{ task_id: "a", description: "还在等" }] }, { text: "一" }], selfTurn: { steps: [{ waitFile: selfTurnGate.path }, { text: "自己开的" }], afterMs: 0 } },
         { steps: [{ text: "二" }] },
       ],
-      { idleCloseMs: 100, backgroundHoldMaxMs: 300, log: (() => {}) as never },
+      { idleCloseMs: 100, backgroundHoldMaxMs: HOLD_MAX, log: (() => {}) as never },
     );
     const s = t.addSession();
+    fakeTimers();
     await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.started"); // the self turn is open and blocked on the gate, so the hold timer from turn 1 is cancelled
+    vi.advanceTimersByTime(HOLD_MAX * 10); // far past the hold while the self turn runs
+    await realSleep(100);
+    expect(hasStdinClosed(t)).toBe(false);
+    expect(t.of("session.exited")).toEqual([]);
+    selfTurnGate.open();
     await t.waitFor("turn.ended", () => true, 2);
-    const selfEnded = t.of("turn.ended")[1]!;
-    expect(t.of("session.exited")).toEqual([]); // 自己开的一轮跑了 700 ms，比兜底 300 ms 长，没被关
+    vi.advanceTimersByTime(HOLD_MAX - 1); // the hold counts again from the end of the self turn
+    await realSleep(100);
+    expect(hasStdinClosed(t)).toBe(false);
+    vi.advanceTimersByTime(1);
     const exited = await t.waitFor("session.exited");
     expect(exited.reason).toBe("idle");
-    expect(exited.at - selfEnded.at).toBeGreaterThanOrEqual(300 - 60);
+    vi.useRealTimers();
     await t.driver.send(s.id, user(2, "二"));
     await t.waitFor("turn.ended", undefined, 3);
     expect(t.stdinTexts()).toEqual(["一", `${backgroundTasksKilledNote("hold_max", ["还在等"])}\n\n二`]);
