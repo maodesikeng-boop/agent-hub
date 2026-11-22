@@ -2,6 +2,32 @@
 
 Each `## vX.Y.Z` section becomes the GitHub release notes of that version and of its `vX.Y.Z-rc.N` candidates, followed by `.github/release-downloads.md`. A release tag fails until its version has a section here. See [Release flow](docs/release-flow-design.md#releasing).
 
+## v0.4.0
+
+- 设置页新增 **Resources**（资源）面板，桌面端和手机端都可使用，并在有待决定的项目时于设置按钮上显示提示点。面板列出数据库与文件占用、遗留的 Worker 进程、临时目录，以及 `hub/*` 分支和 worktree，可逐项选择保留或清理，也可一键清理。已合并（含 squash 合并）的 `hub/*` 分支会自动清理，未合并的分支保留并提醒。
+- Worker 结束后，它留下的后台进程和临时目录会自动回收，不再占用内存与磁盘。可能被其他会话共用的服务进程（如 Gradle 守护进程）不会被自动停止，只在面板里标为“可能共享”，由你决定是否停止。
+- 数据库按表和文件体积双重上限自动瘦身，长期运行不再无限增长。上传文件和已发送文件即使超出体积上限，也不会删除最近 3 天内的文件。Worker 会话被清理时，提示会同时说明 14 天和 300 个两条保留上限。
+- 回合结果先落盘为回执再结算。守护进程在结算途中重启或出错后，Worker 回报和后台等待状态不再丢失，也不会让会话队列卡住。浏览器在守护进程重启后重连，会重新同步最新状态，不再漏掉离线期间发生的变化。
+- 升级前会校验数据库迁移文件是否齐全，缺失或被改动时拒绝启动，避免跳过迁移造成数据损坏。账本数据库改为独占打开，其他进程占着数据库时不再卡住守护进程的请求；启动时若数据库已被占用，会直接报 `ledger_locked`。
+- 飞书：多台电脑各自把待决定事项和简报发到你的 Router 单聊，卡片标明项目名，点击按钮会回传给产生它的那台电脑，对方离线时给出提示。不同电脑、或同一份交付物发到项目群和 Router 单聊时，文件消息不再被飞书去重吞掉。离线补收消息改为从旧到新，不再漏掉最早的消息；离线超过 15 分钟窗口且期间有你的消息时，机器人会请你重发一次。
+- 每日定时任务在设备切换时区后不再提前触发或在同一天重复运行。
+- 项目经理、Worker 和 Router 现在使用你的语言回复。Windows PowerShell 下 `hub` 命令传入中文不再变成问号。
+- 内置给 Agent 的提示词和审查清单不再写死只适用于本仓的做法，例如主分支叫 `main`、用 `pnpm`、托管在 GitHub、只给 macOS 与 Linux 终端的写法。换成其他语言、其他代码托管、没有 CI 或在 Windows 上的项目，同样适用。
+- 安装包按锁文件构建，每个安装包都带 GitHub 溯源证明。下载后可以用 `gh attestation verify` 核对安装包的来源。
+
+### English
+
+- **Settings** has a new **Resources** panel on desktop and mobile, with an amber dot on the Settings button when an item needs your decision. It lists database and file usage, leftover Worker processes, temp folders, and `hub/*` branches and worktrees. Keep or discard each item, or run cleanup in one click. Merged `hub/*` branches, including squash-merged ones, are deleted automatically, and unmerged branches are kept with a reminder.
+- When a Worker ends, the background processes and temp folders it left behind are reclaimed automatically. Services that other sessions may share, such as a Gradle daemon, are never stopped automatically. They show as "Possibly shared" and stop only when you choose.
+- The database slims itself with per-table and file-size caps, so long-running installs stop growing without bound. Upload and delivery folders over their size cap never lose files from the last 3 days. When a Worker conversation is purged, the notice now names both limits, 14 days and 300 Workers.
+- A turn's outcome is now saved as a receipt before it settles. After a daemon restart or an error mid-settlement, Worker reports and background waits are no longer lost, and the session queue no longer stalls. A browser that reconnects after a daemon restart resyncs to the latest state instead of missing changes made while it was offline.
+- Before upgrading the ledger, Bellwood checks that every database migration is present and unchanged, and refuses to start otherwise instead of skipping one. The ledger opens exclusively, so another process holding the database can no longer freeze the daemon's requests, and startup reports `ledger_locked` when the database is already in use.
+- Feishu: each computer posts its own decision cards and briefings to your Router 1-on-1 chat, titled with the project name. Button taps go back to the computer that raised the card, with a notice when it is offline. File messages from two computers, or the same deliverable sent to a project group and the Router chat, are no longer swallowed by Feishu's de-duplication. Catch-up after a disconnect reads oldest first so the earliest missed messages are kept. When a chat was offline longer than the 15-minute window and you wrote in the gap, the bot asks you to resend once.
+- Daily schedules no longer fire early or run twice on one day after the device changes time zone.
+- Project managers, Workers, and the Router now reply in your language. Chinese text passed to `hub` through Windows PowerShell no longer turns into question marks.
+- The built-in prompts and review checklist no longer assume this repository's own setup, such as a trunk named `main`, `pnpm`, GitHub hosting, or macOS and Linux shell syntax. They hold in projects with another language, another code host, no CI, or Windows.
+- Installers are built from the lockfile, and each one carries a GitHub provenance attestation. After you download one, run `gh attestation verify` to check where it came from.
+
 ## v0.3.0
 
 - 内置编码 Agent 扩至 8 家，新增 OpenCode 与 Kimi Code，连同 Claude Code、Antigravity、Codex、Pi、DeepSeek 和 Cursor。全部厂商均支持在设置页安装与登录，并在 macOS、Windows 与 Linux 上执行系统沙箱和只读审查隔离。

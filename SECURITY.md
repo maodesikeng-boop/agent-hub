@@ -4,7 +4,7 @@
 
 ## Supported versions
 
-We support the latest `0.3.x` release and the latest commit on `main`. This policy covers the daemon, web UI, Worker sandboxes, macOS and Windows desktop shells, `fusa-win-helper`, account mesh and relays, and the Feishu integration.
+We support the latest `0.4.x` release and the latest commit on `main`. This policy covers the daemon, web UI, Worker sandboxes, macOS and Windows desktop shells, `fusa-win-helper`, account mesh and relays, and the Feishu integration.
 
 Report vulnerabilities in vendor CLIs or dependencies to their maintainers. Bellwood assumes that you control your OS account and that your devices are physically secure.
 
@@ -60,7 +60,7 @@ Use Chat only and Collaborator with people you trust. Guest messages can instruc
 
 ### 支持版本
 
-我们支持最新的 `0.3.x` 发行版与 `main` 的最新提交。范围包括守护进程、网页界面、Worker 沙箱、macOS 和 Windows 桌面外壳、`fusa-win-helper`、账号组网与中继，以及飞书集成。
+我们支持最新的 `0.4.x` 发行版与 `main` 的最新提交。范围包括守护进程、网页界面、Worker 沙箱、macOS 和 Windows 桌面外壳、`fusa-win-helper`、账号组网与中继，以及飞书集成。
 
 厂商 CLI 或依赖本身的漏洞请报告给上游维护者。Bellwood 假定你的系统账号由你控制，设备也有物理访问保护。
 

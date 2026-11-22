@@ -215,6 +215,143 @@ describe("startApproval", () => {
     expect(approver.outcome()).toBe("aborted");
   });
 
+  it("重复收到已处理过的同一条消息时回放上次的回复，不打断核对", async () => {
+    const a = await makeIdentity(DEVICE_A);
+    const n = await makeIdentity(DEVICE_B);
+    const started = startApproval({ role: "approver", requestId: "r1", self: a, peerDeviceId: DEVICE_B, expiresAt: 10_000 });
+    const approver = started.ceremony;
+    const joiner = startApproval({ role: "joiner", requestId: "r1", self: n, peerDeviceId: DEVICE_A, expiresAt: 10_000 }).ceremony;
+    const commit = await joiner.receive(started.first[0]!);
+    expect(await joiner.receive(started.first[0]!)).toEqual(commit);
+    const reveal = await approver.receive(commit[0]!);
+    expect(await approver.receive(commit[0]!)).toEqual(reveal);
+    const joinerReveal = await joiner.receive(reveal[0]!);
+    expect(await joiner.receive(reveal[0]!)).toEqual(joinerReveal);
+    expect(await approver.receive(joinerReveal[0]!)).toEqual([]);
+    expect(await approver.receive(joinerReveal[0]!)).toEqual([]);
+    expect(approver.sas()).toMatch(/^\d{6}$/);
+    expect(joiner.sas()).toBe(approver.sas());
+    const confirm = approver.confirmLocal();
+    expect(await joiner.receive(confirm[0]!)).toEqual([]);
+    expect(await joiner.receive(confirm[0]!)).toEqual([]);
+    expect(joiner.confirmLocal()).toEqual([{ kind: "confirm", requestId: "r1" }]);
+    expect(joiner.outcome()).toBe("approved");
+    expect(approver.outcome()).toBe("pending");
+  });
+
+  it("同一条消息在上一条还没处理完时又到了，也回放同样的回复", async () => {
+    const a = await makeIdentity(DEVICE_A);
+    const n = await makeIdentity(DEVICE_B);
+    const started = startApproval({ role: "approver", requestId: "r1", self: a, peerDeviceId: DEVICE_B, expiresAt: 10_000 });
+    const joiner = startApproval({ role: "joiner", requestId: "r1", self: n, peerDeviceId: DEVICE_A, expiresAt: 10_000 }).ceremony;
+    const [commit, again] = await Promise.all([joiner.receive(started.first[0]!), joiner.receive(started.first[0]!)]);
+    expect(again).toEqual(commit);
+    const reveal = await started.ceremony.receive(commit[0]!);
+    const [joinerReveal, repeated] = await Promise.all([joiner.receive(reveal[0]!), joiner.receive(reveal[0]!)]);
+    expect(repeated).toEqual(joinerReveal);
+    expect(joiner.outcome()).toBe("pending");
+    expect(joiner.sas()).toMatch(/^\d{6}$/);
+  });
+
+  it("同一步收到内容不同的第二条消息时仍然 aborted", async () => {
+    const fakeA = await makeIdentity(DEVICE_A);
+    const { joiner, approver } = await pair();
+    expect(await joiner.receive({ kind: "offer", requestId: "r1", certPem: fakeA.certPem })).toEqual([{ kind: "abort", requestId: "r1", reason: "bad_signal" }]);
+    expect(joiner.outcome()).toBe("aborted");
+    expect(approver.outcome()).toBe("pending");
+  });
+
+  it("任一条消息因对方不在线丢了，重新上线时两边补发 outstanding 后照样走完，核对码相同", async () => {
+    const losses: Array<{ kind: ApprovalSignal["kind"]; to: "approver" | "joiner" }> = [
+      { kind: "offer", to: "joiner" },
+      { kind: "commit", to: "approver" },
+      { kind: "reveal", to: "joiner" },
+      { kind: "reveal", to: "approver" },
+      { kind: "confirm", to: "joiner" },
+    ];
+    for (const lost of losses) {
+      const a = await makeIdentity(DEVICE_A);
+      const n = await makeIdentity(DEVICE_B);
+      const started = startApproval({ role: "approver", requestId: "r1", self: a, peerDeviceId: DEVICE_B, expiresAt: 10_000 });
+      const approver = started.ceremony;
+      const joiner = startApproval({ role: "joiner", requestId: "r1", self: n, peerDeviceId: DEVICE_A, expiresAt: 10_000 }).ceremony;
+      let dropped = false;
+      const deliver = async (signals: ApprovalSignal[], to: "approver" | "joiner"): Promise<void> => {
+        for (const signal of signals) {
+          if (!dropped && signal.kind === lost.kind && to === lost.to) {
+            dropped = true;
+            continue;
+          }
+          await deliver(await (to === "approver" ? approver : joiner).receive(signal), to === "approver" ? "joiner" : "approver");
+        }
+      };
+      const reconnect = async () => {
+        await deliver(approver.outstanding(), "joiner");
+        await deliver(joiner.outstanding(), "approver");
+      };
+      await deliver(started.first, "joiner");
+      await reconnect();
+      expect({ lost, sas: approver.sas() }).toEqual({ lost, sas: expect.stringMatching(/^\d{6}$/) });
+      expect(joiner.sas()).toBe(approver.sas());
+      await deliver(approver.confirmLocal(), "joiner");
+      await reconnect();
+      await deliver(joiner.confirmLocal(), "approver");
+      expect({ lost, dropped, approver: approver.outcome(), joiner: joiner.outcome() }).toEqual({ lost, dropped: true, approver: "approved", joiner: "approved" });
+    }
+  });
+
+  it("outstanding 只补对方可能还缺的消息：核对码出来且本机没确认时什么都不补", async () => {
+    const { approver, joiner } = await pair();
+    expect(approver.outstanding()).toEqual([]);
+    expect(joiner.outstanding().map((s) => s.kind)).toEqual(["reveal"]);
+    approver.confirmLocal();
+    expect(approver.outstanding()).toEqual([{ kind: "confirm", requestId: "r1" }]);
+  });
+
+  async function untilJoinerReveal() {
+    const a = await makeIdentity(DEVICE_A);
+    const n = await makeIdentity(DEVICE_B);
+    const started = startApproval({ role: "approver", requestId: "r1", self: a, peerDeviceId: DEVICE_B, expiresAt: 10_000 });
+    const approver = started.ceremony;
+    const joiner = startApproval({ role: "joiner", requestId: "r1", self: n, peerDeviceId: DEVICE_A, expiresAt: 10_000 }).ceremony;
+    const commit = await joiner.receive(started.first[0]!);
+    const approverReveal = (await approver.receive(commit[0]!))[0]!;
+    return { approver, joiner, approverReveal };
+  }
+
+  it("新设备补发的 reveal 和 confirm 同时到达时按顺序处理，不打断核对", async () => {
+    const { approver, joiner, approverReveal } = await untilJoinerReveal();
+    await joiner.receive(approverReveal);
+    joiner.confirmLocal();
+    const resent = joiner.outstanding();
+    expect(resent.map((s) => s.kind)).toEqual(["reveal", "confirm"]);
+    expect(await Promise.all(resent.map((s) => approver.receive(s)))).toEqual([[], []]);
+    expect(approver.outcome()).toBe("pending");
+    expect(approver.sas()).toBe(joiner.sas());
+    approver.confirmLocal();
+    expect(approver.outcome()).toBe("approved");
+  });
+
+  it("同一步两条内容不同的 reveal 同时到达时 aborted", async () => {
+    const { joiner, approverReveal } = await untilJoinerReveal();
+    const forged: ApprovalSignal = { kind: "reveal", requestId: "r1", nonce: "A".repeat(43) };
+    const [first, second] = await Promise.all([joiner.receive(approverReveal), joiner.receive(forged)]);
+    expect(first.map((s) => s.kind)).toEqual(["reveal"]);
+    expect(second).toEqual([{ kind: "abort", requestId: "r1", reason: "bad_signal" }]);
+    expect(joiner.outcome()).toBe("aborted");
+    expect(joiner.sas()).toBeNull();
+  });
+
+  it("算核对码期间被取消时保持 aborted，不再回出 reveal", async () => {
+    const { joiner, approverReveal } = await untilJoinerReveal();
+    const pending = joiner.receive(approverReveal);
+    expect(joiner.cancel("cancelled")).toEqual([{ kind: "abort", requestId: "r1", reason: "cancelled" }]);
+    expect(await pending).toEqual([]);
+    expect(joiner.outcome()).toBe("aborted");
+    expect(joiner.sas()).toBeNull();
+    expect(joiner.outstanding()).toEqual([]);
+  });
+
   it("对方证书的 CN 不是预期的设备编号时 aborted", async () => {
     const c = await makeIdentity(DEVICE_C);
     const { joiner } = await pair({ tamper: (s) => (s.kind === "offer" ? { ...s, certPem: c.certPem } : s) });
