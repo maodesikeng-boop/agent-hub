@@ -166,7 +166,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} models [--vendor <vendors>] [--refresh]\`：查看各厂商可用模型与支持的思考程度
 - **其他**（不常用，详细参数跑 \`${HUB} help\` 看）
   - \`${HUB} status\`：看我是谁、我的项目、文件夹和活跃任务图
-  - \`${HUB} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
+  - \`${HUB} project create|attach|detach|setup|review-status\`：建项目、增删附加文件夹、设新 worktree 准备脚本、设审查盖章用的 gh 账号
   - \`${HUB} persona show|edit\`：查看、修改性格设定和干活模式
   - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务（用户要定期做某件事时才建，如日报、周期巡检）
   - \`${HUB} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`;

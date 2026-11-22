@@ -143,7 +143,7 @@ describe("提示词：有项目", () => {
     expect(HUB_USAGE_PROMPT).toContain("--stdin <<'EOF'");
     expect(HUB_USAGE_PROMPT).toContain("`echo $?`");
     // 项目、性格设定这两组在提示词里各缩成一行，完整参数在 hub help（HUB_USAGE）里
-    for (const sub of [`${hub} status`, `${hub} project create|attach|detach|setup`, `${hub} persona show|edit`, `${hub} help`]) {
+    for (const sub of [`${hub} status`, `${hub} project create|attach|detach|setup|review-status`, `${hub} persona show|edit`, `${hub} help`]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);
     }
     for (const sub of [`${hub} project create --folder`, `${hub} project attach <文件夹>`, `${hub} project detach <文件夹>`, `${hub} persona show`, `${hub} persona edit`]) {
@@ -749,7 +749,7 @@ describe("提示词：项目经理（M3）", () => {
     expect(HUB_USAGE_PROMPT).toContain(`- **其他**（不常用，详细参数跑 \`${hub} help\` 看）`);
     for (const line of [
       `\`${hub} status\`：看我是谁、我的项目、文件夹和活跃任务图`,
-      `\`${hub} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本`,
+      `\`${hub} project create|attach|detach|setup|review-status\`：建项目、增删附加文件夹、设新 worktree 准备脚本、设审查盖章用的 gh 账号`,
       `\`${hub} persona show|edit\`：查看、修改性格设定和干活模式`,
       `\`${hub} schedule add|list|pause|resume|remove\`：定时任务（用户要定期做某件事时才建，如日报、周期巡检）`,
       `\`${hub} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`,

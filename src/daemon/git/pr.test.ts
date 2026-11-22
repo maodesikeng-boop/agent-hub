@@ -86,7 +86,7 @@ describe("probePr", () => {
     fakeGh("echo 'To get started with GitHub CLI, please run: gh auth login' >&2; exit 4");
     const pr = await probePr(root, "hub/1-x");
     expect(pr).toEqual({ unavailable: "gh 未登录或无权限" });
-    expect(describeGhError(Object.assign(new Error("net"), { code: "1" }), "dial tcp: lookup api.github.com: no such host (network)")).toBe(
+    expect(describeGhError({ timedOut: false, missing: false, stderr: "dial tcp: lookup api.github.com: no such host (network)" })).toBe(
       "gh 网络错误",
     );
 

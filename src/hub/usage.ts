@@ -75,6 +75,15 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           别把密钥写进命令：原文会出现在日志和失败附注里`,
   },
   {
+    command: "project.review-status",
+    group: "project",
+    action: "review-status",
+    cli: "project review-status",
+    usage: `  ${hub} project review-status --account <登录名> | --clear   设置或清除审查盖章用的 gh 账号：项目在 GitHub 上时，审查判完后
+                                                          守护进程用这个账号给被审提交挂提交状态（没配就用 gh 当前登录的账号）。
+                                                          只存登录名，令牌每次现从 gh 取（gh auth token --user <登录名>），不落盘、不进日志`,
+  },
+  {
     command: "persona.show",
     group: "persona",
     action: "show",
@@ -104,7 +113,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m，超了叫醒项目经理、不打断 Worker；
                                                           --caps 外接能力：inherit 照项目能力设置挂（默认），none 一个不带，custom 只挂 --allow 点名的
                                                           skill:<名>、mcp:<名>、connector:<厂商>:<编号>（项目里关掉的点名了也挂不上）；读写文件、终端和 hub 永远都在；
-                                                          --node 绑到任务图里的节点上，不带就是不绑图的临时 Worker）
+                                                          --node 绑到任务图里的节点上，不带就是不绑图的临时 Worker）；
+                                                          独立审查请建单步审查图（审查步骤，写被审分支），不要派普通 Worker 审
   ${hub} worker start --node <节点> [--graph <图编号>] [--vendor …] [--model …] [--stdin]
                                                           换人接手：节点上已经有经手过的 Worker 时，--title 和正文都可以不给（正文给了是补充说明）；
                                                           节点上还挂着没收工的旧 Worker 会先按“没做完”收工，新 Worker 接着用前任的 worktree 和分支，

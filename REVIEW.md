@@ -36,6 +36,17 @@ A follow-up review (round 2 or later) checks the open `[Important]` findings fro
 - Each rule has a `Trigger:` line, a `Check:` line, and a `Seen in:` line with the commits that fixed the mistake.
 - Delete a rule when the code it guards is gone or a test now catches the mistake. Prune stale rules when you add a new one.
 
+## Paths that require a review stamp
+
+A PR that changes any path below merges into `main` only after an independent review step judges `PASS` or `PASS+NOTES` on its head commit. The Bellwood daemon then posts the `bellwood/review` commit status, and branch protection requires that status. `.github/workflows/review-stamp.yml` reads this list from `main` and posts `bellwood/review` as success itself when a PR touches none of these paths. A new push changes the head commit, so it needs a new review. Patterns match like `Trigger:` patterns.
+
+- Sandboxes and write scopes: `src/daemon/driver/write-scope.ts`, `src/shared/write-scope.ts`, `src/shared/readonly-policy.ts`, `src/daemon/platform/**`, `apps/windows/crates/fusa-win-helper/**`, `scripts/linux-sandbox-setup.sh`
+- Vendor launch arguments: `src/vendors/*/protocol.ts`, `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/*/capabilities.ts`, `src/vendors/_common/acp/**`
+- Ledger storage and schema: `src/daemon/store/**`, `migrations/**`
+- Device trust, relay, and Feishu: `src/daemon/mesh/**`, `src/relay/**`, `src/daemon/feishu/**`
+- Review mechanism and its gate: `src/shared/review.ts`, `REVIEW.md`, `.github/**`, `scripts/review-stamp-gate.ts`, `src/daemon/git/review-status.ts`, `src/daemon/ledger/workers/review-stamp.ts`, `src/daemon/ledger/task-graphs/review-stamp.ts`
+- Release and packaging: `scripts/stage-*.ts`, `scripts/build-*.sh`, `scripts/release*.ts`
+
 ## Rules
 
 ### Worker sandboxes keep the data directory out of reach

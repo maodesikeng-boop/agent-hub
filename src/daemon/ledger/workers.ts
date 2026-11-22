@@ -18,6 +18,7 @@ import {
 } from "./workers/lifecycle.ts";
 import { launchContextFor, list, status, workerPrTarget, workerStartFolder, workerTranscriptTarget } from "./workers/queries.ts";
 import { recoverBackgroundWaits } from "./workers/reports.ts";
+import { getReviewStampTask, onReviewStamped } from "./workers/review-stamp.ts";
 import { startIn } from "./workers/start.ts";
 import { clearAllMaxTime, clearMaxTime, recoverTurnTimeouts, turnMaxTimeOf } from "./workers/timers.ts";
 import type { LedgerWorkersOptions, WorkersCtx } from "./workers/types.ts";
@@ -73,6 +74,8 @@ export function createLedgerWorkers(
     recordReviewSnapshot: bind(recordReviewSnapshot),
     getReviewVerifyTask: bind(getReviewVerifyTask),
     onReviewVerified: bind(onReviewVerified),
+    getReviewStampTask: bind(getReviewStampTask),
+    onReviewStamped: bind(onReviewStamped),
     recoverWorktrees: bind(recoverWorktrees),
     recoverBackgroundWaits: bind(recoverBackgroundWaits),
     actionFailedIn: bind(actionFailedIn),

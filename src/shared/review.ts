@@ -1,5 +1,6 @@
 import type { WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import { REVIEW_MAX_ROUNDS } from "./limits.ts";
+import { PRODUCT_NAME } from "./names.ts";
 
 export const REVIEW_VERDICTS = ["PASS", "PASS+NOTES", "FAIL"] as const;
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
@@ -103,6 +104,51 @@ export function reviewVerifyFailedText(problems: readonly string[]): string {
 
 export function reviewVerifyErrorProblem(error: string): string {
   return `收尾核对没跑成：${error}`;
+}
+
+// A review stamp is a commit status on the reviewed commit; it records a verdict and never blocks the Task Graph.
+export const REVIEW_STATUS_CONTEXT = `${PRODUCT_NAME.toLowerCase()}/review`;
+
+type ReviewStampState = "success" | "failure";
+
+export interface ReviewStampRequest {
+  sha: string;
+  verdict: ReviewVerdict;
+  state: ReviewStampState;
+}
+
+export type ReviewStampOutcome =
+  | { kind: "posted"; sha: string; state: ReviewStampState; account: string | null; at: number }
+  | { kind: "skipped"; sha: string; reason: string; at: number };
+
+/**
+ * Returns the stamp to post once a review report is final, or null when nothing may be posted.
+ * PASS and PASS+NOTES map to success only after the branch check found no change (`verified.problems` is empty).
+ * FAIL maps to failure without waiting for the branch check, because FAIL never runs it.
+ * Returns null when the report fails `reviewReportProblem` (missing verdict, wrong verified commit, PASS with an [Important] line),
+ * when the target has no snapshot, or when a PASS has not been verified yet.
+ */
+export function reviewStampRequestOf(
+  report: { verdict: ReviewVerdict | null; verifiedCommit: string | null; questions: string },
+  target: ReviewTarget,
+  verified: ReviewVerifyResult | undefined,
+): ReviewStampRequest | null {
+  if (report.verdict === null || target.snapshot === null || reviewReportProblem(report, target) !== null) return null;
+  const sha = target.snapshot.sha;
+  if (report.verdict === "FAIL") return { sha, verdict: "FAIL", state: "failure" };
+  if (verified === undefined || verified.problems.length > 0) return null;
+  return { sha, verdict: report.verdict, state: "success" };
+}
+
+/** Postcondition: an English status description of at most 140 characters (the GitHub limit) naming the verdict. */
+export function reviewStatusDescription(verdict: ReviewVerdict): string {
+  return `Independent ${PRODUCT_NAME} review: ${verdict} on this commit`;
+}
+
+export function reviewStampNote(outcome: ReviewStampOutcome): string {
+  return outcome.kind === "posted"
+    ? `提交状态已挂（${REVIEW_STATUS_CONTEXT} ${outcome.state}）`
+    : `提交状态没挂：${outcome.reason}`;
 }
 
 // GIT_CONFIG_COUNT (git 2.31+) outranks repo config; append after any entries already in the daemon's env.

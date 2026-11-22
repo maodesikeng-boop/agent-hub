@@ -60,6 +60,14 @@ export function parseCoreCommand({ group, action, rest, positionals, values, env
     if (values.stdin !== true) throw new UsageError(`${hub} project setup 要 --stdin（准备命令从标准输入读）或 --clear（清除）`);
     return { command: "project.setup", body: {}, textSource: { kind: "stdin" }, textField: "command" };
   }
+  if (group === "project" && action === "review-status") {
+    allowOnly(values, ["account", "clear"], "project review-status");
+    expectPositionals(rest, 0, "project review-status");
+    if (values.account !== undefined && values.clear === true) throw new UsageError("--account 和 --clear 只能用一个");
+    if (values.clear === true) return { command: "project.review-status", body: { account: null }, textSource: null };
+    if (values.account === undefined) throw new UsageError(`${hub} project review-status 要 --account <登录名>（设置）或 --clear（清除）`);
+    return { command: "project.review-status", body: { account: values.account }, textSource: null };
+  }
   if (group === "persona" && action === "show") {
     allowOnly(values, [], "persona show");
     expectPositionals(rest, 0, "persona show");

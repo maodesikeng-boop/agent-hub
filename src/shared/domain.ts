@@ -8,7 +8,7 @@ import {
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
 import { deliverablesOf, type Deliverable } from "./deliverables.ts";
-import type { ReviewTarget, ReviewVerdict } from "./review.ts";
+import type { ReviewStampOutcome, ReviewTarget, ReviewVerdict } from "./review.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
@@ -756,6 +756,7 @@ export interface TaskArtifact {
   deliverables?: Deliverable[];
   reviewVerdict?: ReviewVerdict;
   verifiedCommit?: string;
+  reviewStamp?: ReviewStampOutcome;
 }
 
 export interface TaskDecision {

@@ -61,6 +61,7 @@ export type Options = {
   choice?: string;
   note?: string;
   clear?: boolean;
+  account?: string;
   daily?: string;
   every?: string;
   last?: string;
@@ -124,6 +125,7 @@ export const HUB_ARG_OPTIONS = {
   choice: { type: "string" },
   note: { type: "string" },
   clear: { type: "boolean" },
+  account: { type: "string" },
   daily: { type: "string" },
   every: { type: "string" },
   last: { type: "string" },

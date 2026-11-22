@@ -2,6 +2,7 @@ import { isTaskGraphReadyToFinish, taskNodeStatusText, truncateChars } from "../
 import type { TaskGraph, TaskNode } from "../../../shared/domain.ts";
 import { GRAPH_TEXT_NODE_NOTE_CHARS, GRAPH_TEXT_NODE_WORKERS_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
+import { reviewStampNote } from "../../../shared/review.ts";
 import { parseJsonOr } from "./rows.ts";
 import type { ProgressResult, TurnedStep } from "./types.ts";
 
@@ -22,6 +23,7 @@ function nodeResultLines(node: TaskNode): string[] {
   if (artifact?.prUrl) refs.push(`PR ${clipNote(artifact.prUrl)}`);
   if (artifact?.reviewVerdict) refs.push(`审查 ${artifact.reviewVerdict}`);
   if (artifact?.verifiedCommit) refs.push(`验证提交 ${clipNote(artifact.verifiedCommit)}`);
+  if (artifact?.reviewStamp) refs.push(clipNote(reviewStampNote(artifact.reviewStamp)));
   if (refs.length > 0) lines.push(`      ${refs.join(" · ")}`);
   if (artifact?.summary) lines.push(`      摘要：${clipNote(artifact.summary)}`);
   if (decision !== null) {
