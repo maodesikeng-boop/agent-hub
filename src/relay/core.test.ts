@@ -460,6 +460,24 @@ describe("createRelayAccountRoom：拨号与数据通道", () => {
     expect(devices.a!.socket.last("dial.failed")).toEqual({ type: "dial.failed", to: DEVICE_B, channel, code: "offline" });
     expect(aSocket.closed).not.toBeNull();
   });
+
+  it("tells the dialer at once when the acceptor leaves before the dialer's channel arrives", async () => {
+    const { room, devices, channel } = await dialPair();
+    const acceptor = room.openChannel({ channel, device: DEVICE_B, session: devices.b!.session }, new FakeSocket());
+    if ("error" in acceptor) throw new Error(acceptor.error);
+    acceptor.closed();
+    expect(devices.a!.socket.last("dial.failed")).toEqual({ type: "dial.failed", to: DEVICE_B, channel, code: "offline" });
+    expect(room.openChannel({ channel, device: DEVICE_A, session: devices.a!.session }, new FakeSocket())).toEqual({ error: "unauthorized" });
+  });
+
+  it("does not report a dial that already paired as failed when one end closes", async () => {
+    const { room, devices, channel } = await dialPair();
+    const a = room.openChannel({ channel, device: DEVICE_A, session: devices.a!.session }, new FakeSocket());
+    const b = room.openChannel({ channel, device: DEVICE_B, session: devices.b!.session }, new FakeSocket());
+    if ("error" in a || "error" in b) throw new Error("channel refused");
+    b.closed();
+    expect(devices.a!.socket.all("dial.failed")).toEqual([]);
+  });
 });
 
 describe("createRelayAccountRoom：中心租约", () => {

@@ -24,6 +24,7 @@ Bellwood links a user's macOS, Windows, and Linux computers into a private peer-
 - **Happy-eyeballs dial (`dial(deviceId)`)**:
   1. Attempts direct LAN TCP + TLS 1.3 first with a `250 ms` head start (skipping direct dial for `60 s` after a failure).
   2. In parallel after `250 ms`, opens a relay binary WebSocket channel (`/v1/accounts/<acct>/channels/<128-bit-id>`, max `64 KB` per frame) where the relay blindly pipes raw TLS 1.3 ciphertext between `A` and `N` without terminating TLS. Whichever path finishes the mutual TLS handshake first wins; the other closes.
+  3. The whole dial gets `MESH_DIAL_TIMEOUT_MS` (`10 s`). Each side opens its own relay channel, and on a slow link the dialer's channel can reach the relay seconds after the acceptor's, so the acceptor keeps its side open for the same budget. When an unpaired dial closes, the relay sends `dial.failed` right away so the dialer does not wait out its budget.
 - **HTTP/1.1 and WebSocket multiplexing**: Verified TLS streams feed directly into Fastify's `meshEntry` server via a pooled `http.Agent`. Existing `/d/<deviceId>/api/*` proxying, WebSocket state streams, Router cross-device dispatch, and `/api/peer/*` RPCs run unchanged over the encrypted tunnel, while `meshEntry` blocks multi-hop `/d/` forwarding and local-only admin endpoints (`ENTRY_ONLY_API_PREFIXES`).
 
 ## Relay architecture and rate-limit hardening (`src/relay/`)
