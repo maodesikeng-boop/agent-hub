@@ -68,6 +68,32 @@ describe("createMesh", () => {
     expect(await res.text()).toContain(`pong from ${DEVICE_B} to ${DEVICE_C}`);
   });
 
+  it("待批准设备没连上中继时点的批准，在它连上中继后补发，两边出同一个核对码并走完批准", async () => {
+    const relay = await startTestRelay();
+    const a = await startTestMeshNode(relay, DEVICE_A);
+    await loginNode(a);
+    const first = await startTestMeshNode(relay, DEVICE_B);
+    await loginNode(first);
+    await waitFor(() => signedIn(a).approvals.some((x) => x.requestId === DEVICE_B) && a.mesh.isOnline(DEVICE_B));
+    await first.close();
+    await waitFor(() => !a.mesh.isOnline(DEVICE_B));
+    await a.mesh.beginApproval(DEVICE_B);
+
+    const b = await startTestMeshNode(relay, DEVICE_B, { dir: first.dir });
+    const joinerSas = () => {
+      const s = b.mesh.status();
+      return s.state === "awaiting_approval" ? (s.approval?.sas ?? null) : null;
+    };
+    const sas = await waitFor(() => {
+      const approverSas = signedIn(a).approvals.find((x) => x.requestId === DEVICE_B)?.sas ?? null;
+      return approverSas !== null && joinerSas() !== null ? approverSas : null;
+    });
+    expect(joinerSas()).toBe(sas);
+    await b.mesh.answerApproval(DEVICE_A, true);
+    await a.mesh.answerApproval(DEVICE_B, true);
+    await waitFor(() => b.mesh.status().state === "signed_in" && a.mesh.trust.get(DEVICE_B) !== undefined && b.mesh.trust.get(DEVICE_A) !== undefined);
+  });
+
   it("setCenterPriority 只收账号里的设备并去重", async () => {
     const { nodes } = await account(2);
     const [a, b] = nodes as [TestMeshNode, TestMeshNode];
