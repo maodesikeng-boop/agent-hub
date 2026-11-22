@@ -18,6 +18,7 @@ export type FeishuOutboundIntent =
   | { kind: "working"; conversationId: ConversationId; status: string }
   | { kind: "agent_text"; conversationId: ConversationId; message: Message; files: SentFile[] }
   | { kind: "turn_end"; conversationId: ConversationId }
+  | { kind: "turn_failed"; conversationId: ConversationId; message: Message }
   | { kind: "mirror_user"; conversationId: ConversationId; message: Message }
   | { kind: "ask_card"; conversationId: ConversationId; message: Message; deliverables: Deliverable[] }
   | { kind: "ask_updated"; conversationId: ConversationId; message: Message }
@@ -57,6 +58,7 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
       return createdMessageIntents(change.data.message, ctx);
     case "message.updated": {
       const { message } = change.data;
+      if (isFailedUserTurn(message)) return ctx.chatOfConversation(message.conversationId) === null ? [] : [{ kind: "turn_failed", conversationId: message.conversationId, message }];
       const ask = askOf(message);
       if (ask === null || (ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null)) return [];
       if (ask.answered === true || ask.closed === true) {
@@ -74,6 +76,10 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
     default:
       return [];
   }
+}
+
+function isFailedUserTurn(message: Message): boolean {
+  return message.status === "failed" && message.sender === "user" && message.workerId === null && message.kind === "text" && !isLedgerWakeup(message);
 }
 
 const ROUTER_COMMAND_DONE: ReadonlySet<RouterCommandRecord["status"]> = new Set(["answered", "dispatched", "failed"]);

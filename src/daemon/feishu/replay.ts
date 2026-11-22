@@ -29,11 +29,11 @@ import {
 } from "./projection.ts";
 import { refreshPolicyCard, refreshRouterSettingsCard, schedulePolicyCardRefresh, scheduleRouterSettingsCardRefresh } from "./settings-cards.ts";
 import type { FeishuChatBinding } from "./store.ts";
-import { feedStream, finalizeSegment, segmentDone } from "./stream-cards.ts";
+import { feedStream, finalizeSegment, segmentDone, turnFailed } from "./stream-cards.ts";
 import { mirrorUser, postRouterCommand } from "./text-cards.ts";
 import { FeishuAuthError } from "./transport.ts";
 
-type PmIntent = Extract<FeishuOutboundIntent, { kind: "stream" | "working" | "agent_text" | "turn_end" | "mirror_user" | "ask_card" }>;
+type PmIntent = Extract<FeishuOutboundIntent, { kind: "stream" | "working" | "agent_text" | "turn_end" | "turn_failed" | "mirror_user" | "ask_card" }>;
 
 const replayRouterLater = (ctx: FeishuContext, chat: FeishuChatBinding) =>
   enqueue(ctx, chat.chatId, () => replayRouterEvents(ctx, chat, false), { key: "router-events" });
@@ -60,6 +60,10 @@ function runPmIntent(ctx: FeishuContext, intent: PmIntent) {
     }
     case "turn_end":
       return enqueue(ctx, chatId, () => feedStream(ctx, id, { kind: "turn_end" }, chatId));
+    case "turn_failed": {
+      const event = turnFailed(ctx, intent.message);
+      return enqueue(ctx, chatId, () => feedStream(ctx, id, event, chatId));
+    }
     case "mirror_user":
       startUploadsOf(ctx, intent.message);
       return enqueue(ctx, chatId, () => mirrorUser(ctx, chatId, intent.message), { mark: intent.message.id });
@@ -77,6 +81,7 @@ function runIntent(ctx: FeishuContext, intent: FeishuOutboundIntent) {
     case "working":
     case "agent_text":
     case "turn_end":
+    case "turn_failed":
     case "mirror_user":
     case "ask_card":
       return runPmIntent(ctx, intent);

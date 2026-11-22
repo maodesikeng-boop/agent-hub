@@ -6,12 +6,15 @@ import { feishuMarkdownPrefix } from "./outbound.ts";
 export type FeishuStreamState =
   | { phase: "idle" }
   | { phase: "quiet" }
+  | { phase: "failed" }
   | {
       phase: "opening";
       sentText: string;
       text: string;
       status: string;
       pending: { kind: "finalize"; messageId: MessageId; text: string; turnActive: boolean } | { kind: "abandon" } | null;
+      failure: FeishuTurnFailure | null;
+      turnActive: boolean;
     }
   | {
       phase: "live";
@@ -32,7 +35,13 @@ export type FeishuStreamEvent =
   | { kind: "opened"; cardId: FeishuCardId; messageId: FeishuMessageId; sequence: number }
   | { kind: "segment_done"; messageId: MessageId; text: string; turnActive?: boolean }
   | { kind: "turn_end" }
+  | { kind: "turn_failed"; failure: FeishuTurnFailure; turnActive: boolean }
   | { kind: "tick" };
+
+export interface FeishuTurnFailure {
+  key: string;
+  note: string;
+}
 
 export type FeishuStreamEffect =
   | { kind: "open"; text: string }
@@ -41,6 +50,7 @@ export type FeishuStreamEffect =
   | { kind: "finalize"; cardId: FeishuCardId | null; sequence: number; messageId: MessageId; text: string }
   | { kind: "abandon"; cardId: FeishuCardId; sequence: number; text: string }
   | { kind: "discard"; cardId: FeishuCardId; messageId: FeishuMessageId; sequence: number }
+  | { kind: "notice"; failure: FeishuTurnFailure }
   | { kind: "schedule_tick"; at: number };
 
 export interface FeishuStreamTarget {
@@ -58,14 +68,18 @@ export function stepFeishuStream(
   const idle: FeishuStreamState = { phase: "idle" };
   const afterSegment = (turnActive: boolean | undefined): FeishuStreamState => (turnActive === true ? { phase: "quiet" } : idle);
   switch (state.phase) {
+    case "failed":
+      if (event.kind === "tick" || (event.kind === "turn_failed" && event.turnActive)) return { state, effects: [] };
+      return stepFeishuStream(idle, event, target, now, budget);
     case "idle":
     case "quiet":
+      if (event.kind === "turn_failed") return { state: settled(idle, event.failure, event.turnActive), effects: [{ kind: "notice", failure: event.failure }] };
       if (event.kind === "text" && event.text !== "") {
         const sentText = feishuMarkdownPrefix(event.text);
-        return { state: { phase: "opening", sentText, text: event.text, status: "", pending: null }, effects: [{ kind: "open", text: sentText }] };
+        return { state: { phase: "opening", sentText, text: event.text, status: "", pending: null, failure: null, turnActive: true }, effects: [{ kind: "open", text: sentText }] };
       }
       if (event.kind === "working" && state.phase === "idle" && event.status !== "") {
-        return { state: { phase: "opening", sentText: event.status, text: "", status: event.status, pending: null }, effects: [{ kind: "open", text: event.status }] };
+        return { state: { phase: "opening", sentText: event.status, text: "", status: event.status, pending: null, failure: null, turnActive: true }, effects: [{ kind: "open", text: event.status }] };
       }
       if (event.kind === "segment_done") {
         return { state: afterSegment(event.turnActive), effects: [{ kind: "finalize", cardId: null, sequence: 0, messageId: event.messageId, text: event.text }] };
@@ -84,20 +98,33 @@ export function stepFeishuStream(
             effects: [],
           };
         case "turn_end":
-          return state.pending === null ? { state: { ...state, pending: { kind: "abandon" } }, effects: [] } : { state, effects: [] };
+          return { state: { ...state, pending: state.pending ?? { kind: "abandon" }, turnActive: false }, effects: [] };
+        case "turn_failed":
+          return {
+            state: { ...state, pending: state.pending ?? { kind: "abandon" }, failure: state.failure ?? event.failure, turnActive: state.turnActive && event.turnActive },
+            effects: [],
+          };
         case "tick":
           return { state, effects: [] };
-        case "open_failed":
+        case "open_failed": {
+          const notice = noticeOf(state.failure);
           return state.pending?.kind === "finalize"
-            ? { state: afterSegment(state.pending.turnActive), effects: [{ kind: "finalize", cardId: null, sequence: 0, messageId: state.pending.messageId, text: state.pending.text }] }
-            : { state: idle, effects: [] };
+            ? {
+                state: settled(afterSegment(state.pending.turnActive), state.failure, state.turnActive),
+                effects: [{ kind: "finalize", cardId: null, sequence: 0, messageId: state.pending.messageId, text: state.pending.text }, ...notice],
+              }
+            : { state: settled(idle, state.failure, state.turnActive), effects: notice };
+        }
         case "opened": {
           const sequence = event.sequence + 1;
           if (state.pending?.kind === "finalize") {
             const { messageId, text, turnActive } = state.pending;
-            return { state: afterSegment(turnActive), effects: [{ kind: "finalize", cardId: event.cardId, sequence, messageId, text }] };
+            const finalize: FeishuStreamEffect = { kind: "finalize", cardId: event.cardId, sequence, messageId, text };
+            return { state: settled(afterSegment(turnActive), state.failure, state.turnActive), effects: [finalize, ...noticeOf(state.failure)] };
           }
-          if (state.pending?.kind === "abandon") return { state: idle, effects: [closing(event.cardId, event.messageId, sequence, state.text)] };
+          if (state.pending?.kind === "abandon") {
+            return { state: settled(idle, state.failure, state.turnActive), effects: closing(event.cardId, event.messageId, sequence, state.text, state.failure) };
+          }
           const live: Live = {
             phase: "live",
             cardId: event.cardId,
@@ -132,7 +159,9 @@ export function stepFeishuStream(
             effects: [{ kind: "finalize", cardId: state.cardId, sequence: state.sequence + 1, messageId: event.messageId, text: event.text }],
           };
         case "turn_end":
-          return { state: idle, effects: [closing(state.cardId, state.messageId, state.sequence + 1, state.text)] };
+          return { state: idle, effects: closing(state.cardId, state.messageId, state.sequence + 1, state.text, null) };
+        case "turn_failed":
+          return { state: settled(idle, event.failure, event.turnActive), effects: closing(state.cardId, state.messageId, state.sequence + 1, state.text, event.failure) };
         case "open_failed":
         case "opened":
           return { state, effects: [] };
@@ -140,9 +169,18 @@ export function stepFeishuStream(
   }
 }
 
-function closing(cardId: FeishuCardId, messageId: FeishuMessageId, sequence: number, text: string): FeishuStreamEffect {
-  return text === "" ? { kind: "discard", cardId, messageId, sequence } : { kind: "abandon", cardId, sequence, text: feishuMarkdownPrefix(text) };
+// A card that never got reply text is recalled, unless the turn failed: then the card carries the reason instead.
+function closing(cardId: FeishuCardId, messageId: FeishuMessageId, sequence: number, text: string, failure: FeishuTurnFailure | null): FeishuStreamEffect[] {
+  if (text !== "") return [{ kind: "abandon", cardId, sequence, text: feishuMarkdownPrefix(text) }, ...noticeOf(failure)];
+  if (failure !== null) return [{ kind: "abandon", cardId, sequence, text: feishuMarkdownPrefix(failure.note) }];
+  return [{ kind: "discard", cardId, messageId, sequence }];
 }
+
+const noticeOf = (failure: FeishuTurnFailure | null): FeishuStreamEffect[] => (failure === null ? [] : [{ kind: "notice", failure }]);
+
+// Every message a failed turn carries fails at once, so a reported failure holds while that turn still runs; a failure outside a turn stands alone.
+const settled = (next: FeishuStreamState, failure: FeishuTurnFailure | null, turnActive: boolean): FeishuStreamState =>
+  failure !== null && turnActive ? { phase: "failed" } : next;
 
 type Live = Extract<FeishuStreamState, { phase: "live" }>;
 
