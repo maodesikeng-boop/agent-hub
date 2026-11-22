@@ -492,6 +492,7 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
   };
 
   const forwardEvent = async (deviceId: DeviceId, chatId: FeishuChatId, event: FeishuRawEvent, receivedAt: number) => {
+    if (closed) return;
     // Held messages go first so a later message cannot overtake them to the project manager.
     if (inbox !== null && isUserMessage(event) && inbox.has(deviceId)) {
       await drainInbox(deviceId);
@@ -515,6 +516,7 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
       owner = { kind: "router" };
     } else {
       owner = await lookupOwner(chatId);
+      if (closed) return;
     }
     const route = routeAccountInbound(owner, mesh.selfId, (id) => mesh.isOnline(id));
     switch (route.kind) {

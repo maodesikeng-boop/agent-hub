@@ -558,6 +558,19 @@ describe("createFeishuAccountBot", () => {
       expect(h.posts.map((p) => (p.body as { event: { messageId: string } }).event.messageId)).toEqual(["om_held_1"]);
       expect(logs).toEqual([]);
     });
+
+    it("查群归属在关机后才返回：不再碰暂存箱，也不再转发", async () => {
+      const { h, localA, bot, shutDown, touchedAfterClose } = closingCenter((inbox) => inbox.add(DEV_B, CHAT_B, rawMessage(CHAT_B, "om_held_2", "先存着的一句"), 4000));
+      let release: () => void = () => {};
+      localA.setDescImpl(() => new Promise<string | null>((resolve) => (release = () => resolve(feishuChatMarker(DEV_B, 1)))));
+      bot.onEvent(rawMessage(CHAT_B, "om_close_3", "查群时关机"));
+      await vi.waitFor(() => expect(localA.descCalls()).toBe(1));
+      shutDown();
+      release();
+      await drainMicrotasks();
+      expect(touchedAfterClose).toEqual([]);
+      expect(h.posts).toEqual([]);
+    });
   });
 
   it("卡片点击转给归属设备，拿回它算出的 toast", async () => {
