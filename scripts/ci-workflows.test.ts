@@ -28,6 +28,7 @@ interface Job {
 }
 
 interface Workflow {
+  permissions?: Record<string, string>;
   on: { push?: TriggerFilter; pull_request?: TriggerFilter; schedule?: Array<{ cron: string }> } & Record<string, unknown>;
   concurrency?: { group: string; "cancel-in-progress": string | boolean };
   jobs: Record<string, Job>;
@@ -210,9 +211,35 @@ describe(".github/workflows", () => {
     expect(workflow(name).on.push?.paths).toContain("scripts/staged-lockfile.ts");
   });
 
-  it.todo("run review-stamp.yml on pull_request_target for every PR to main with no path filter, so the required status always reports");
-  it.todo("never check out the PR head or pass PR refs to a step in review-stamp.yml");
-  it.todo("grant review-stamp.yml only contents read, pull-requests read, and statuses write");
+  it("run review-stamp.yml on pull_request_target for every PR to main with no path filter, so the required status always reports", () => {
+    const wf = workflow("review-stamp.yml");
+    expect(Object.keys(wf.on)).toEqual(["pull_request_target"]);
+    const trigger = wf.on.pull_request_target as TriggerFilter & { types?: string[] };
+    expect(trigger.branches).toEqual(["main"]);
+    expect(trigger.types).toEqual(["opened", "synchronize", "reopened"]);
+    expect(trigger.paths).toBeUndefined();
+    expect(trigger["paths-ignore"]).toBeUndefined();
+    expect(Object.values(wf.jobs).every((job) => job.if === undefined)).toBe(true);
+  });
+
+  it("never check out the PR head or pass PR refs to a step in review-stamp.yml", () => {
+    const raw = readFileSync(join(WORKFLOW_DIR, "review-stamp.yml"), "utf8");
+    expect(raw).not.toMatch(/head\.ref|head\.repo|head_ref|merge_commit|refs\/pull/);
+    for (const step of Object.values(workflow("review-stamp.yml").jobs).flatMap((job) => job.steps ?? [])) {
+      if (step.uses?.startsWith("actions/checkout@")) {
+        expect(step.with?.ref).toBeUndefined();
+        expect(step.with?.repository).toBeUndefined();
+        expect(String(step.with?.["persist-credentials"])).toBe("false");
+      }
+      expect(step.run ?? "").not.toContain("${{");
+    }
+  });
+
+  it("grant review-stamp.yml only contents read, pull-requests read, and statuses write", () => {
+    const wf = workflow("review-stamp.yml");
+    expect(wf.permissions).toEqual({ contents: "read", "pull-requests": "read", statuses: "write" });
+    expect(Object.values(wf.jobs).every((job) => job.permissions === undefined)).toBe(true);
+  });
 
   it("only filter on paths that exist", () => {
     for (const { name, wf } of WORKFLOWS) {
