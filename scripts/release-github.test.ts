@@ -111,16 +111,28 @@ describe("readReleaseFacts", () => {
     expect(readReleaseFacts("v0.4.0-rc.1", "0.4.0", offMain.ctx).onMain).toBe(false);
   });
 
-  it("uses HEAD as the commit when the tag does not exist yet", () => {
-    const { ctx } = fakeContext({ handlers: factHandlers(true) });
+  it("uses HEAD as the commit when a dry run rehearses a tag that does not exist yet", () => {
+    const { ctx } = fakeContext({ dryRun: true, handlers: factHandlers(true) });
     expect(readReleaseFacts("v0.3.0-rc.99", "0.3.0", ctx).commit).toBe(HEAD_SHA);
+  });
+
+  it("refuses to read facts for a real publish when the remote no longer has the tag", () => {
+    const { ctx } = fakeContext({ handlers: factHandlers(true) });
+    expect(() => readReleaseFacts("v0.4.0-rc.2", "0.4.0", ctx)).toThrow("Tag v0.4.0-rc.2 does not exist on origin");
   });
 });
 
 const BUILD: ReleasePlan = { mode: "build", tag: "v0.4.0-rc.2", version: "0.4.0", rc: 2 };
-const PROMOTE: ReleasePlan = { mode: "promote", tag: "v0.4.0", version: "0.4.0", fromTag: "v0.4.0-rc.1" };
+const PROMOTE: ReleasePlan = { mode: "promote", tag: "v0.4.0", version: "0.4.0", fromTag: "v0.4.0-rc.1", commit: RC_SHA };
 
-function promoteHandlers(opts: { corrupt?: string; unattested?: string } = {}): Partial<Record<string, Handler>> {
+function flagValue(args: readonly string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  return idx < 0 ? undefined : args[idx + 1];
+}
+
+/** Mirrors gh attestation verify: each optional --source-* flag must match the attested certificate, and an absent flag checks nothing. */
+function promoteHandlers(opts: { corrupt?: string; unattested?: string; attestedCommit?: string } = {}): Partial<Record<string, Handler>> {
+  const attested = { ref: "refs/tags/v0.4.0-rc.1", digest: opts.attestedCommit ?? RC_SHA };
   return {
     "gh release download": (args) => {
       writeAssets(args[args.indexOf("--dir") + 1]!, opts.corrupt);
@@ -128,6 +140,10 @@ function promoteHandlers(opts: { corrupt?: string; unattested?: string } = {}): 
     },
     "gh attestation verify": (args) => {
       if (opts.unattested && args[2]!.endsWith(opts.unattested)) throw new Error("no attestations found");
+      const ref = flagValue(args, "--source-ref");
+      const digest = flagValue(args, "--source-digest");
+      if (ref !== undefined && ref !== attested.ref) throw new Error(`source ref ${attested.ref} does not match ${ref}`);
+      if (digest !== undefined && digest !== attested.digest) throw new Error(`source digest ${attested.digest} does not match ${digest}`);
       return "";
     },
     "gh release create": () => "",
@@ -159,7 +175,8 @@ describe("publishRelease", () => {
     const attested = calls.filter((c) => c.args[0] === "attestation");
     expect(attested.map((c) => c.args[2])).toEqual(INSTALLERS.map((name) => join(assetsDir, name)));
     expect(attested[0]!.args).toContain(`${REPO}/.github/workflows/release.yml`);
-    expect(attested[0]!.args).toContain("refs/tags/v0.4.0-rc.1");
+    expect(flagValue(attested[0]!.args, "--source-ref")).toBe("refs/tags/v0.4.0-rc.1");
+    expect(flagValue(attested[0]!.args, "--source-digest")).toBe(RC_SHA);
     const [create, publish] = writes(calls);
     expect(create).toContain("release create v0.4.0 ");
     expect(create).not.toContain("--prerelease");
@@ -175,6 +192,12 @@ describe("publishRelease", () => {
   it("refuses to publish a promoted asset without a release.yml build provenance attestation", () => {
     const { ctx, calls } = fakeContext({ handlers: promoteHandlers({ unattested: INSTALLERS[1] }) });
     expect(() => publishRelease(PROMOTE, { assetsDir: tempDir(), notesFile: "notes.md" }, ctx)).toThrow("no attestations found");
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it("refuses to promote rc installers attested on a different commit than the formal tag", () => {
+    const { ctx, calls } = fakeContext({ handlers: promoteHandlers({ attestedCommit: "b".repeat(40) }) });
+    expect(() => publishRelease(PROMOTE, { assetsDir: tempDir(), notesFile: "notes.md" }, ctx)).toThrow(`does not match ${RC_SHA}`);
     expect(writes(calls)).toEqual([]);
   });
 

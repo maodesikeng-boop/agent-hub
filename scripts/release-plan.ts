@@ -28,7 +28,7 @@ export interface ReleaseFacts {
 
 export type ReleasePlan =
   | { mode: "build"; tag: string; version: string; rc: number }
-  | { mode: "promote"; tag: string; version: string; fromTag: string };
+  | { mode: "promote"; tag: string; version: string; fromTag: string; commit: string };
 
 const RELEASE_TAG = /^v(\d+\.\d+\.\d+)(?:-rc\.([1-9]\d*))?$/;
 
@@ -39,7 +39,7 @@ function rcNumberOf(tag: string, version: string): number | null {
 
 /**
  * Postcondition: returns a build plan for a vX.Y.Z-rc.N tag and a promote plan for a vX.Y.Z tag, whose fromTag is the
- * highest-numbered published vX.Y.Z-rc.N prerelease.
+ * highest-numbered published vX.Y.Z-rc.N prerelease and whose commit is the commit both tags point at.
  * Throws when the tag is not vX.Y.Z or vX.Y.Z-rc.N, its version differs from appVersion, main does not contain the commit,
  * or any release, draft or published, already uses the tag. A formal tag also throws when no published rc exists for its
  * version, when that rc points at another commit, or when that rc lacks one of REQUIRED_RELEASE_ASSETS.
@@ -70,7 +70,7 @@ export function planRelease(facts: ReleaseFacts, opts: { dryRun?: boolean } = {}
   }
   const missing = REQUIRED_RELEASE_ASSETS.filter((name) => !rc.assets.includes(name));
   if (missing.length > 0) throw new Error(`${rc.tag} lacks ${missing.join(", ")}; push the next rc`);
-  return { mode: "promote", tag, version, fromTag: rc.tag };
+  return { mode: "promote", tag, version, fromTag: rc.tag, commit: facts.commit };
 }
 
 /**

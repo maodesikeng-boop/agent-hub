@@ -74,11 +74,14 @@ function isOnMain(commit: string, ctx: ReleaseContext): boolean {
 
 /**
  * Postcondition: returns the facts planRelease needs for tag. Reads every release of repo, drafts included, and checks
- * whether origin/main contains the tag commit. When the tag does not exist yet, as in a dry run on a branch, uses HEAD.
+ * whether origin/main contains the tag commit. When a dry run rehearses a tag that does not exist yet, uses HEAD.
+ * Throws when a real publish finds no remote tag, such as one deleted while the gates ran.
  */
 export function readReleaseFacts(tag: string, appVersion: string, ctx: ReleaseContext): ReleaseFacts {
   const tagCommits = remoteTagCommits(ctx);
-  const commit = tagCommits.get(tag) ?? ctx.run("git", ["rev-parse", "HEAD"]).trim();
+  const tagged = tagCommits.get(tag);
+  if (tagged === undefined && !ctx.dryRun) throw new Error(`Tag ${tag} does not exist on origin`);
+  const commit = tagged ?? ctx.run("git", ["rev-parse", "HEAD"]).trim();
   const releases: ExistingRelease[] = listReleases(ctx).map((release) => ({
     ...release,
     commit: tagCommits.get(release.tag) ?? "",
@@ -96,7 +99,7 @@ function assertChecksums(assetsDir: string): void {
   }
 }
 
-function downloadAndVerifyCandidate(fromTag: string, assetsDir: string, ctx: ReleaseContext): void {
+function downloadAndVerifyCandidate(fromTag: string, commit: string, assetsDir: string, ctx: ReleaseContext): void {
   mkdirSync(assetsDir, { recursive: true });
   const patterns = REQUIRED_RELEASE_ASSETS.flatMap((name) => ["--pattern", name]);
   ctx.run("gh", ["release", "download", fromTag, "--repo", ctx.repo, "--dir", assetsDir, ...patterns]);
@@ -112,20 +115,23 @@ function downloadAndVerifyCandidate(fromTag: string, assetsDir: string, ctx: Rel
       `${ctx.repo}/.github/workflows/release.yml`,
       "--source-ref",
       `refs/tags/${fromTag}`,
+      // The ref alone would accept installers attested before fromTag was moved to another commit.
+      "--source-digest",
+      commit,
     ]);
-    ctx.log(`verified ${name}: SHA-256 and build provenance from ${fromTag}`);
+    ctx.log(`verified ${name}: SHA-256 and build provenance from ${fromTag} at ${commit}`);
   }
 }
 
 /**
  * Precondition: plan came from planRelease for the same tag. For a build plan, assetsDir holds every REQUIRED_RELEASE_ASSETS file.
  * Postcondition: for a promote plan, first downloads fromTag's assets into assetsDir and checks each .sha256 and the
- * build provenance attestation signed by release.yml. Then creates the release as a draft, uploads every asset, and
- * publishes it, as a prerelease for a build plan and as latest for a promote plan.
+ * build provenance attestation signed by release.yml for fromTag at plan.commit. Then creates the release as a draft,
+ * uploads every asset, and publishes it, as a prerelease for a build plan and as latest for a promote plan.
  * Never uploads to, edits, or deletes an existing release. Throws on the first failed check, before anything is published.
  */
 export function publishRelease(plan: ReleasePlan, opts: { assetsDir: string; notesFile: string }, ctx: ReleaseContext): void {
-  if (plan.mode === "promote") downloadAndVerifyCandidate(plan.fromTag, opts.assetsDir, ctx);
+  if (plan.mode === "promote") downloadAndVerifyCandidate(plan.fromTag, plan.commit, opts.assetsDir, ctx);
   else assertChecksums(opts.assetsDir);
   const files = REQUIRED_RELEASE_ASSETS.map((name) => join(opts.assetsDir, name));
   const kind = plan.mode === "build" ? ["--prerelease"] : [];

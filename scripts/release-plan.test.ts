@@ -22,7 +22,7 @@ describe("planRelease", () => {
 
   it("plans a promote from the highest-numbered published rc of the same version on the same commit", () => {
     const releases = [release("v0.4.0-rc.2", { commit: OTHER_SHA }), release("v0.4.0-rc.10"), release("v0.4.0-rc.9", { commit: OTHER_SHA })];
-    expect(planRelease(facts("v0.4.0", { releases }))).toEqual({ mode: "promote", tag: "v0.4.0", version: "0.4.0", fromTag: "v0.4.0-rc.10" });
+    expect(planRelease(facts("v0.4.0", { releases }))).toEqual({ mode: "promote", tag: "v0.4.0", version: "0.4.0", fromTag: "v0.4.0-rc.10", commit: SHA });
   });
 
   it("refuses a tag whose version differs from the app version", () => {

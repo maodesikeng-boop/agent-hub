@@ -7,7 +7,7 @@
 // Fixed names keep https://github.com/<repo>/releases/latest/download/<name> pointing at the newest formal release
 // and match what the in-app update check looks for, so they never carry a version or an unsigned-preview suffix.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -178,10 +178,15 @@ function runPublish(flags: Map<string, string>): void {
   const plan = planTag(tag, ctx);
   const expected = requireFlag(flags, "expect-mode");
   if (plan.mode !== expected) throw new Error(`${tag} now plans a ${plan.mode}, but this job publishes a ${expected}`);
-  const notesFile = join(mkdtempSync(join(process.env["RUNNER_TEMP"] ?? tmpdir(), "release-notes-")), "notes.md");
-  const downloads = readFileSync(join(REPO_ROOT, ".github", "release-downloads.md"), "utf8");
-  writeFileSync(notesFile, composeReleaseNotes(readChangelog(), downloads, plan.version));
-  publishRelease(plan, { assetsDir: resolve(requireFlag(flags, "assets-dir")), notesFile }, ctx);
+  const notesDir = mkdtempSync(join(process.env["RUNNER_TEMP"] ?? tmpdir(), "release-notes-"));
+  try {
+    const notesFile = join(notesDir, "notes.md");
+    const downloads = readFileSync(join(REPO_ROOT, ".github", "release-downloads.md"), "utf8");
+    writeFileSync(notesFile, composeReleaseNotes(readChangelog(), downloads, plan.version));
+    publishRelease(plan, { assetsDir: resolve(requireFlag(flags, "assets-dir")), notesFile }, ctx);
+  } finally {
+    rmSync(notesDir, { recursive: true, force: true });
+  }
 }
 
 function requireFlag(flags: Map<string, string>, name: string): string {
