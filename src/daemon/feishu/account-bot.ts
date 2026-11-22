@@ -482,6 +482,7 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     // Held messages go first so a later message cannot overtake them to the project manager.
     if (inbox !== null && isUserMessage(event) && inbox.has(deviceId)) {
       await drainInbox(deviceId);
+      if (closed) return;
       if (inbox.has(deviceId)) return holdEvent(deviceId, chatId, event, receivedAt);
     }
     const body: FeishuForwardedEvent = { kind: "event", event, receivedAt, queuedAt: null };
