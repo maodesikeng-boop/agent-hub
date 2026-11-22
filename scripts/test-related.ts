@@ -12,6 +12,7 @@ export const ALWAYS_RUN_TESTS = [
   "scripts/ci-workflows.test.ts",
   "src/code-hygiene.test.ts",
   "src/daemon/resources/registry.test.ts",
+  "src/prompt-portability.test.ts",
   "src/shared/errors-guard.test.ts",
   "src/shared/vendor-guard.test.ts",
   "src/vendors/contract.test.ts",
