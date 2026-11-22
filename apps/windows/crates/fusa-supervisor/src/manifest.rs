@@ -132,3 +132,23 @@ pub fn admin_named_pipe_path(hub_home_dir: &Path) -> String {
     let hash = data_dir_pipe_hash(&hub_home_dir.to_string_lossy());
     format!(r"\\.\pipe\fusa-{hash}-admin")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn load_accepts_the_git_commit_written_by_the_stage_script() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("runtime-manifest.json");
+        let sha = "a".repeat(64);
+        let raw = format!(
+            r#"{{"version":"0.3.0","nodeVersion":"v24.22.3","nodeSha256":"{sha}","fusaRunSha256":"{sha}","hubSha256":"{sha}","gitCommit":"0123456789abcdef0123456789abcdef01234567"}}"#
+        );
+        fs::write(&path, raw).unwrap();
+        let manifest = RuntimeManifest::load_from_path(&path).unwrap();
+        assert_eq!(manifest.version, "0.3.0");
+        assert_eq!(manifest.hub_sha256, sha);
+    }
+}

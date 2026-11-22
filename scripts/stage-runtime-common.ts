@@ -22,6 +22,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveSpawn } from "../src/daemon/platform/win32/spawn-resolution.ts";
 import { findExecutable } from "../src/shared/paths.ts";
+import { STAGED_INSTALL_ARGS, assertInstalledMatchesLockfile, pruneLockfile } from "./staged-lockfile.ts";
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -106,7 +107,15 @@ export interface RuntimeManifestBase {
  * Throws when repoRoot is not a git checkout, so no installer is built without a commit.
  */
 export function readBuildCommit(repoRoot: string = REPO_ROOT): string {
-  throw new Error("Not implemented");
+  const git = (args: readonly string[]): string => {
+    const res = spawnSync("git", ["-C", repoRoot, ...args], { encoding: "utf8" });
+    if (res.error || res.status !== 0) {
+      throw new Error(`git ${args.join(" ")} failed in ${repoRoot}: ${(res.stderr || res.error?.message || "").trim()}`);
+    }
+    return res.stdout.trim();
+  };
+  const commit = git(["rev-parse", "--verify", "HEAD^{commit}"]);
+  return git(["status", "--porcelain", "--untracked-files=no"]) === "" ? commit : `${commit}-dirty`;
 }
 
 /** 扫描后端与共享源码（排除 src/web、测试与测试夹具）实际引用的全部第三方包名，防止打包遗漏或混入巨型前端库。 */
@@ -333,6 +342,31 @@ export function assertFileSha256(filePath: string, expectedSha256: string, label
   }
 }
 
+function runStagedInstall(daemonOutDir: string): void {
+  const pnpmArgs = [...STAGED_INSTALL_ARGS];
+  const pnpmBin =
+    process.platform === "win32"
+      ? (findExecutable("pnpm", process.env.PATH ?? process.env.Path, [], {
+          platform: "win32",
+          pathExt: process.env.PATHEXT ?? process.env.Pathext,
+        }) ?? "pnpm.cmd")
+      : "pnpm";
+  const resolvedPnpm =
+    process.platform === "win32"
+      ? resolveSpawn({ program: pnpmBin, args: pnpmArgs, cwd: daemonOutDir, env: process.env }, "win32")
+      : { file: "pnpm", args: pnpmArgs, options: { cwd: daemonOutDir, env: process.env } };
+  const installRes = spawnSync(resolvedPnpm.file, resolvedPnpm.args, {
+    ...resolvedPnpm.options,
+    cwd: daemonOutDir,
+    stdio: "inherit",
+    shell: false,
+  });
+  if (installRes.error || installRes.status !== 0) {
+    const errDetail = installRes.error ? ` (${installRes.error.message})` : "";
+    throw new Error(`pnpm frozen-lockfile install failed with exit code ${installRes.status}${errDetail}`);
+  }
+}
+
 export interface StageDaemonTreeOptions {
   repoRoot?: string;
   /** <runtime>/daemon */
@@ -342,8 +376,10 @@ export interface StageDaemonTreeOptions {
 }
 
 /**
- * 组装 daemon/：守护进程源码、迁移 SQL、头像资源、桌面契约、打包好的前端静态资源、精简 package.json，
- * 再装平铺（hoisted、无软链、无生命周期脚本）生产期后端依赖并按目标平台裁剪。
+ * Assembles daemon/: daemon sources, migrations, the desktop contract, the built web assets, a trimmed package.json,
+ * and the root lockfile pruned to its dependencies, which stays in daemon/ as the record of shipped versions.
+ * Then installs those dependencies offline from that lockfile as a flat, symlink-free node_modules without lifecycle
+ * scripts and trims it for the target platform.
  */
 export function stageDaemonTree(opts: StageDaemonTreeOptions): void {
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
@@ -369,37 +405,11 @@ export function stageDaemonTree(opts: StageDaemonTreeOptions): void {
   const stagedPkg = buildStagedDaemonPackageJson(repoRoot);
   writeFileSync(join(daemonOutDir, "package.json"), `${JSON.stringify(stagedPkg, null, 2)}\n`, "utf8");
 
+  const lockfile = pruneLockfile(readFileSync(join(repoRoot, "pnpm-lock.yaml"), "utf8"), stagedPkg.dependencies);
+  writeFileSync(join(daemonOutDir, "pnpm-lock.yaml"), lockfile, "utf8");
+
   if (opts.skipNodeModulesInstall) return;
-  const pnpmArgs = [
-    "install",
-    "--prod",
-    "--no-lockfile",
-    "--ignore-scripts",
-    "--prefer-offline",
-    "--config.node-linker=hoisted",
-    "--config.package-import-method=copy",
-  ];
-  const pnpmBin =
-    process.platform === "win32"
-      ? (findExecutable("pnpm", process.env.PATH ?? process.env.Path, [], {
-          platform: "win32",
-          pathExt: process.env.PATHEXT ?? process.env.Pathext,
-        }) ?? "pnpm.cmd")
-      : "pnpm";
-  const resolvedPnpm =
-    process.platform === "win32"
-      ? resolveSpawn({ program: pnpmBin, args: pnpmArgs, cwd: daemonOutDir, env: process.env }, "win32")
-      : { file: "pnpm", args: pnpmArgs, options: { cwd: daemonOutDir, env: process.env } };
-  const installRes = spawnSync(resolvedPnpm.file, resolvedPnpm.args, {
-    ...resolvedPnpm.options,
-    cwd: daemonOutDir,
-    stdio: "inherit",
-    shell: false,
-  });
-  if (installRes.error || installRes.status !== 0) {
-    const errDetail = installRes.error ? ` (${installRes.error.message})` : "";
-    throw new Error(`pnpm hoisted install failed with exit code ${installRes.status}${errDetail}`);
-  }
-  rmSync(join(daemonOutDir, "pnpm-lock.yaml"), { force: true });
+  runStagedInstall(daemonOutDir);
+  assertInstalledMatchesLockfile(join(daemonOutDir, "node_modules"), lockfile);
   pruneStagedNodeModules(join(daemonOutDir, "node_modules"), targetOs);
 }

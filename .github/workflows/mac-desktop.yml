@@ -12,6 +12,7 @@ on:
       - "scripts/build-mac-app.sh"
       - "scripts/stage-mac-runtime.ts"
       - "scripts/stage-runtime-common.ts"
+      - "scripts/staged-lockfile.ts"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/mac-desktop.yml"
@@ -35,6 +36,7 @@ on:
       - "scripts/build-mac-app.sh"
       - "scripts/stage-mac-runtime.ts"
       - "scripts/stage-runtime-common.ts"
+      - "scripts/staged-lockfile.ts"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/mac-desktop.yml"
@@ -112,6 +114,17 @@ jobs:
             "$app_dir/Bellwood.app/Contents/MacOS/AgentHub" --self-test | tee "$RUNNER_TEMP/self-test.txt"
           grep -q "\[fusa-self-test\] PASS mode=bundled" "$RUNNER_TEMP/self-test.txt"
           grep -q "sandbox=verified" "$RUNNER_TEMP/self-test.txt"
+
+      - name: Verify runtime-manifest.json in the DMG records the built commit
+        run: |
+          set -euo pipefail
+          manifest="$RUNNER_TEMP/fusa-app/Bellwood.app/Contents/Resources/runtime/runtime-manifest.json"
+          cat "$manifest"
+          commit="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).gitCommit ?? "")' "$manifest")"
+          if [ "$commit" != "$GITHUB_SHA" ]; then
+            echo "runtime-manifest.json gitCommit $commit differs from GITHUB_SHA $GITHUB_SHA" >&2
+            exit 1
+          fi
 
       - name: Verify DMG size budget and checksum
         run: |

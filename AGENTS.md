@@ -108,7 +108,7 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 - `vitest` (`vitest.config.ts`), `jsdom` (`src/shared/test-helpers.ts`), `@testing-library/react`, `@testing-library/user-event`, and `@testing-library/jest-dom` (`src/web/test-setup.ts`).
 - `playwright`: Library-only headless Chromium driver for real-browser screenshots and smoke checks (`test/ui-polish/capture.ts`, `test/ui-polish/patches.ts`, `scripts/verify-smoke.ts`, `scripts/bench-message-list.ts`; install once via `pnpm exec playwright install chromium`).
 - `@axe-core/playwright`: Automated contrast and accessibility checks (`test/ui-polish/checks.ts`).
-- `yaml`: Parses GitHub workflow files in `scripts/ci-workflows.test.ts`.
+- `yaml`: Parses GitHub workflow files in `scripts/ci-workflows.test.ts` and prunes `pnpm-lock.yaml` for the staged desktop daemon (`scripts/staged-lockfile.ts`).
 - `@tauri-apps/cli`: Exact-pinned Tauri CLI that builds the Windows NSIS installer from `node_modules/.bin` (`.github/workflows/windows-desktop.yml`); its version also pins the NSIS download it fetches.
 - `typescript` (`pnpm typecheck`), `knip` (`pnpm exec knip`), `@types/*` (`node`, `react`, `react-dom`, `ws`, `web-push`, `write-file-atomic`), and `oxc-parser` (AST timer guard in `src/web/web-guard.test.ts`).
 - `wrangler` and `@cloudflare/workers-types`: Deployment and local Durable Object integration tests for the Cloudflare relay (`wrangler.toml`, `src/relay/cloudflare/`).

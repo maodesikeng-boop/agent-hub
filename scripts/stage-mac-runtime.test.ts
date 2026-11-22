@@ -1,8 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertSymlinksStayInside, stageMacNodeFromExtractedDir } from "./stage-mac-runtime.ts";
+import { assertSymlinksStayInside, buildMacRuntimeManifest, stageMacNodeFromExtractedDir } from "./stage-mac-runtime.ts";
 import { BUNDLED_NODE_ARCHIVES, BUNDLED_NODE_VERSION, pruneStagedNodeModules } from "./stage-runtime-common.ts";
 
 describe("scripts/stage-mac-runtime.ts macOS 随包运行时", () => {
@@ -94,5 +95,26 @@ describe("scripts/stage-mac-runtime.ts macOS 随包运行时", () => {
     }
   });
 
-  it.todo("writes gitCommit from readBuildCommit into runtime-manifest.json");
+  it("writes gitCommit from readBuildCommit into runtime-manifest.json", () => {
+    const root = mkdtempSync(join(tmpdir(), "fusa-mac-manifest-"));
+    try {
+      mkdirSync(join(root, "apps", "windows"), { recursive: true });
+      writeFileSync(join(root, "apps", "windows", "Cargo.toml"), '[workspace.package]\nversion = "0.3.0"\n');
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { cwd: root, encoding: "utf8" }).trim();
+      git("init", "-q");
+      git("add", ".");
+      git("commit", "-q", "-m", "init");
+
+      expect(buildMacRuntimeManifest(root)).toEqual({
+        version: "0.3.0",
+        platform: "darwin-arm64",
+        nodeVersion: BUNDLED_NODE_VERSION,
+        nodeOfficialSha256: BUNDLED_NODE_ARCHIVES["darwin-arm64"].exeSha256,
+        gitCommit: git("rev-parse", "HEAD"),
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,13 +1,16 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { REPO_ROOT, sha256FileHex } from "./stage-runtime-common.ts";
 import {
   BUNDLED_NODE_VERSION,
   BUNDLED_NODE_WIN_X64_EXE_SHA256,
   BUNDLED_NODE_WIN_X64_ZIP_SHA256,
   assertNoSymlinksInTree,
   buildStagedDaemonPackageJson,
+  buildWinRuntimeManifest,
   collectDaemonRuntimeDependencyNames,
   pruneStagedNodeModules,
   stageBundledNpmFromExtractedNodeDir,
@@ -130,5 +133,37 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
     }
   });
 
-  it.todo("writes gitCommit from readBuildCommit into runtime-manifest.json, which fusa-supervisor still parses");
+  it("writes gitCommit from readBuildCommit into runtime-manifest.json, which fusa-supervisor still parses", () => {
+    const root = mkdtempSync(join(tmpdir(), "fusa-win-manifest-"));
+    try {
+      mkdirSync(join(root, "apps", "windows"), { recursive: true });
+      writeFileSync(join(root, "apps", "windows", "Cargo.toml"), '[workspace.package]\nversion = "0.3.0"\n');
+      for (const name of ["node.exe", "fusa-run.exe", "hub.exe"]) writeFileSync(join(root, name), name);
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { cwd: root, encoding: "utf8" }).trim();
+      git("init", "-q");
+      git("add", ".");
+      git("commit", "-q", "-m", "init");
+
+      const manifest = buildWinRuntimeManifest({
+        repoRoot: root,
+        nodeVersion: BUNDLED_NODE_VERSION,
+        nodeExe: join(root, "node.exe"),
+        fusaRunExe: join(root, "fusa-run.exe"),
+        hubExe: join(root, "hub.exe"),
+      });
+      expect(manifest.gitCommit).toBe(git("rev-parse", "HEAD"));
+      expect(manifest.nodeSha256).toBe(sha256FileHex(join(root, "node.exe")));
+
+      // fusa-supervisor deserializes these String fields with serde rename_all = "camelCase" and accepts unknown fields.
+      const rust = readFileSync(join(REPO_ROOT, "apps", "windows", "crates", "fusa-supervisor", "src", "manifest.rs"), "utf8");
+      const struct = /pub struct RuntimeManifest \{([^}]*)\}/.exec(rust)?.[1] ?? "";
+      const required = [...struct.matchAll(/pub (\w+): String/g)].map((m) => m[1]!.replace(/_(\w)/g, (_, c: string) => c.toUpperCase()));
+      expect(required.length).toBeGreaterThan(0);
+      for (const field of required) expect(manifest, field).toHaveProperty(field);
+      expect(rust).not.toContain("deny_unknown_fields");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
