@@ -240,7 +240,7 @@ class AccountRoom implements RelayAccountRoom {
     const end: ChannelEnd = { socket, closed: false };
     dial[side] = end;
     const otherOf = () => (side === "dialer" ? dial.acceptor : dial.dialer);
-    if (dial.dialer !== undefined && dial.acceptor !== undefined) {
+    if (isPaired(dial)) {
       dial.lastDataAt = this.now();
       for (const chunk of dial.pending.splice(0)) socket.send(chunk);
       dial.pendingBytes = 0;
@@ -280,13 +280,8 @@ class AccountRoom implements RelayAccountRoom {
       if (t - conn.openedAt > RELAY_HELLO_TIMEOUT_MS) this.fail(conn, "unauthorized");
     }
     for (const [channel, dial] of this.dials) {
-      const paired = dial.dialer !== undefined && dial.acceptor !== undefined;
-      if (!paired && t - dial.createdAt > RELAY_CHANNEL_ACCEPT_TIMEOUT_MS) {
-        this.sendTo(dial.from, { type: "dial.failed", to: dial.to, channel, code: "offline" });
-        this.closeDial(channel);
-      } else if (paired && t - dial.lastDataAt > RELAY_CHANNEL_IDLE_MS) {
-        this.closeDial(channel);
-      }
+      const expired = isPaired(dial) ? t - dial.lastDataAt > RELAY_CHANNEL_IDLE_MS : t - dial.createdAt > RELAY_CHANNEL_ACCEPT_TIMEOUT_MS;
+      if (expired) this.closeDial(channel);
     }
     if (this.record !== null) {
       for (const device of this.record.devices) {
@@ -453,6 +448,8 @@ class AccountRoom implements RelayAccountRoom {
     const dial = this.dials.get(channel);
     if (dial === undefined) return;
     this.dials.delete(channel);
+    // The dialer learns of a pairing only through dial.connected, so without this it waits out its whole dial budget.
+    if (!isPaired(dial)) this.sendTo(dial.from, { type: "dial.failed", to: dial.to, channel, code: "offline" });
     for (const end of [dial.dialer, dial.acceptor]) {
       if (end !== undefined && !end.closed) {
         end.closed = true;
@@ -728,6 +725,8 @@ interface DialRecord {
   pending: Uint8Array[];
   pendingBytes: number;
 }
+
+const isPaired = (dial: DialRecord) => dial.dialer !== undefined && dial.acceptor !== undefined;
 
 const WS_CLOSE_POLICY = 1008;
 const WS_CLOSE_REPLACED = 4000;

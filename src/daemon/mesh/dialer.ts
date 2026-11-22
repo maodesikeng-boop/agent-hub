@@ -290,7 +290,8 @@ export async function startMeshListener(options: MeshListenerOptions): Promise<M
     options.relay.acceptChannel(from, channel).then(
       (stream) => {
         const socket = new TLSSocket(stream, { isServer: true, server, secureContext: context, requestCert: true, rejectUnauthorized: false, ALPNProtocols: [MESH_ALPN] });
-        const timer = setTimeout(() => socket.destroy(), MESH_HANDSHAKE_TIMEOUT_MS);
+        // On a slow link the dialer's own relay channel opens seconds after ours, so wait out its whole dial budget.
+        const timer = setTimeout(() => socket.destroy(), MESH_DIAL_TIMEOUT_MS);
         socket.once("secure", () => {
           clearTimeout(timer);
           accept(socket, "relay", from);
