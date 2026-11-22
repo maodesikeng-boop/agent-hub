@@ -123,11 +123,19 @@ jobs:
           Remove-Item -Recurse -Force $portableDir
           Remove-Item -Force -ErrorAction SilentlyContinue $stdoutFile, $stderrFile
 
-      - name: Build Tauri NSIS installer (currentUser, unsigned-preview)
+      # The CLI version comes from pnpm-lock.yaml and pins the NSIS download URLs and hashes compiled into it.
+      - name: Build Tauri NSIS installer with the locked @tauri-apps/cli (currentUser, unsigned-preview)
         working-directory: apps/windows/crates/fusa-desktop
+        shell: pwsh
         env:
           CI: "true"
-        run: pnpm dlx @tauri-apps/cli@^2 build --bundles nsis --ci --config tauri.bundle.conf.json -- --locked
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tauri = Join-Path $env:GITHUB_WORKSPACE "node_modules\.bin\tauri.cmd"
+          & $tauri --version
+          if ($LASTEXITCODE -ne 0) { throw "tauri --version failed with exit code $LASTEXITCODE" }
+          & $tauri build --bundles nsis --ci --config tauri.bundle.conf.json -- --locked
+          if ($LASTEXITCODE -ne 0) { throw "tauri build failed with exit code $LASTEXITCODE" }
 
       - name: Verify NSIS installer size budget (<= 60 MiB), label unsigned-preview and generate SHA256
         shell: pwsh
