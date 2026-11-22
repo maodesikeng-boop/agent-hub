@@ -1,13 +1,12 @@
 import type { Attachment } from "../../shared/attachments.ts";
 import { userMessageDedupeKey, type PmId } from "../../shared/domain.ts";
-import { feishuDisplayName, type FeishuChatTarget, type FeishuOpenId } from "../../shared/feishu.ts";
+import { feishuDisplayName, type FeishuChatId, type FeishuChatTarget, type FeishuOpenId } from "../../shared/feishu.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../../shared/ledger.ts";
 import { MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
 import { sendText } from "./api.ts";
 import { applyChatGone, bindRouterChat } from "./chat-sync.ts";
 import { broadcastPeerApp } from "./connection.ts";
 import { displayOwner, isReady, owner, type FeishuContext } from "./context.ts";
-import { noteInboundQueueDrop } from "./inbound-catchup.ts";
 import { parseFeishuEvent, type FeishuInbound } from "./inbound.ts";
 import { admitInbound, requestControl } from "./lanes.ts";
 import { activeTarget, conversationOfPm } from "./projection.ts";
@@ -39,10 +38,17 @@ interface Delivery {
 const missedFilesText = (names: readonly string[]) =>
   `没收下：${names.map((n) => `「${n}」`).join("、")}（超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB 或下载失败），压小一点重发试试。`;
 
-function formatOfflineQueuedPrefix(queuedAt: number): string {
-  const d = new Date(queuedAt);
+export function feishuLocalStamp(at: number): string {
+  const d = new Date(at);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `（离线期间 ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} 发的）`;
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const formatOfflineQueuedPrefix = (queuedAt: number) => `（离线期间 ${feishuLocalStamp(queuedAt)} 发的）`;
+
+function noteLiveQueueDrop(ctx: FeishuContext, chatId: FeishuChatId, at: number) {
+  const prev = ctx.catchUp.cursorHold.get(chatId);
+  ctx.catchUp.cursorHold.set(chatId, prev === undefined ? at : Math.min(prev, at));
 }
 
 export function onRawEvent(ctx: FeishuContext, raw: FeishuRawEvent, queuedAt: number | null) {
@@ -57,7 +63,7 @@ export function onRawEvent(ctx: FeishuContext, raw: FeishuRawEvent, queuedAt: nu
   const limit = event.kind === "message" ? ctx.inbound.limit : Math.floor(ctx.inbound.limit / 2);
   if (admitInbound(ctx, event.chatId, () => handleInbound(ctx, event, queuedAt), limit)) return;
   if (isReady(ctx) && !ctx.life.closed && event.kind === "message") {
-    if (event.at > 0) noteInboundQueueDrop(ctx, event.chatId, event.at);
+    if (event.at > 0) noteLiveQueueDrop(ctx, event.chatId, event.at);
     ctx.log(`飞书：实时入站队列已满 chatId=${event.chatId} dropped=1 limit=${limit} firstDroppedId=${event.messageId}`);
   }
   ctx.directory.markAllStale();
