@@ -564,7 +564,9 @@ interface PeerCallInit {
 async function callPeer(target: ProxyTarget, path: string, init: PeerCallInit, closing: AbortSignal): Promise<{ status: number; text: string }> {
   const controller = new AbortController();
   let timer = setTimeout(() => controller.abort(), init.dialTimeoutMs ?? init.timeoutMs);
+  let settled = false;
   const onSocket = () => {
+    if (settled) return;
     clearTimeout(timer);
     timer = setTimeout(() => controller.abort(), init.timeoutMs);
   };
@@ -584,6 +586,7 @@ async function callPeer(target: ProxyTarget, path: string, init: PeerCallInit, c
     }
     throw new RouterTargetError("device_offline", `设备「${target.name}」当前离线，请确认设备在线后再试`);
   } finally {
+    settled = true;
     clearTimeout(timer);
   }
 }

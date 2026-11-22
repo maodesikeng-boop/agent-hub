@@ -1,5 +1,5 @@
 // Mesh connections run HTTP/1.1 inside TLS on an http.Agent, which fetch (undici) cannot use.
-import { request as httpRequest, type Agent } from "node:http";
+import { request as httpRequest, type Agent, type ClientRequest } from "node:http";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 
@@ -17,11 +17,24 @@ export type AgentFetchInit = Omit<RequestInit, "body"> & {
 
 export function agentFetch(agent: Agent, path: string, init: AgentFetchInit = {}): Promise<Response> {
   const method = init.method ?? "GET";
+  const signal = init.signal ?? undefined;
+  // An already-aborted signal never fires "abort" again, so without this check the request would still dial and wait for it.
+  if (signal?.aborted) return Promise.reject(signal.reason);
   return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    let req: ClientRequest | undefined;
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      if (init.onSocket !== undefined) req?.off("socket", init.onSocket);
+      finish();
+    };
     // Node defers a destroyed request's error until the agent supplies a socket, so a slow mesh dial would outlive the caller's timeout.
-    init.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
-    const req = httpRequest(
-      { agent, host: MESH_HTTP_HOST, path, method, headers: headerRecord(init.headers), ...(init.signal ? { signal: init.signal } : {}) },
+    const onAbort = () => settle(() => reject(signal!.reason));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    req = httpRequest(
+      { agent, host: MESH_HTTP_HOST, path, method, headers: headerRecord(init.headers), ...(signal ? { signal } : {}) },
       (res) => {
         const status = res.statusCode ?? 502;
         const headers = new Headers();
@@ -31,13 +44,13 @@ export function agentFetch(agent: Agent, path: string, init: AgentFetchInit = {}
         }
         if (status === 101 || status === 204 || status === 205 || status === 304 || method === "HEAD") {
           res.resume();
-          resolve(new Response(null, { status, headers }));
+          settle(() => resolve(new Response(null, { status, headers })));
         } else {
-          resolve(new Response(Readable.toWeb(res) as ReadableStream<Uint8Array>, { status, headers }));
+          settle(() => resolve(new Response(Readable.toWeb(res) as ReadableStream<Uint8Array>, { status, headers })));
         }
       },
     );
-    req.on("error", reject);
+    req.on("error", (error) => settle(() => reject(error)));
     if (init.onSocket !== undefined) req.once("socket", init.onSocket);
     const body = init.body;
     if (body === undefined || body === null) {
@@ -52,7 +65,7 @@ export function agentFetch(agent: Agent, path: string, init: AgentFetchInit = {}
       stream.on("error", (error) => req.destroy(error));
       stream.pipe(req);
     } else {
-      reject(new TypeError("agentFetch 只收字符串、字节或流作请求体"));
+      req.destroy(new TypeError("agentFetch 只收字符串、字节或流作请求体"));
     }
   });
 }
