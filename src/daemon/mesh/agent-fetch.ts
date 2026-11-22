@@ -10,9 +10,16 @@ function headerRecord(headers: RequestInit["headers"]): Record<string, string> {
   return Object.fromEntries(new Headers(headers ?? {}).entries());
 }
 
-export function agentFetch(agent: Agent, path: string, init: Omit<RequestInit, "body"> & { body?: RequestInit["body"] | Readable } = {}): Promise<Response> {
+export type AgentFetchInit = Omit<RequestInit, "body"> & {
+  body?: RequestInit["body"] | Readable;
+  onSocket?: () => void;
+};
+
+export function agentFetch(agent: Agent, path: string, init: AgentFetchInit = {}): Promise<Response> {
   const method = init.method ?? "GET";
   return new Promise<Response>((resolve, reject) => {
+    // Node defers a destroyed request's error until the agent supplies a socket, so a slow mesh dial would outlive the caller's timeout.
+    init.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
     const req = httpRequest(
       { agent, host: MESH_HTTP_HOST, path, method, headers: headerRecord(init.headers), ...(init.signal ? { signal: init.signal } : {}) },
       (res) => {
@@ -31,6 +38,7 @@ export function agentFetch(agent: Agent, path: string, init: Omit<RequestInit, "
       },
     );
     req.on("error", reject);
+    if (init.onSocket !== undefined) req.once("socket", init.onSocket);
     const body = init.body;
     if (body === undefined || body === null) {
       req.end();

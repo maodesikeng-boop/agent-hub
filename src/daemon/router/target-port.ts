@@ -14,6 +14,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_MODEL_CHARS,
   MAX_PATH_BYTES,
+  MESH_DIAL_TIMEOUT_MS,
   MESH_MAX_DEVICES_PER_ACCOUNT,
   MAX_TASK_BYTES,
   PM_MODES,
@@ -524,6 +525,7 @@ export interface RouterTargetRegistryOptions {
   peerDigestTimeoutMs?: number;
   peerOfflineBackoffMs?: number;
   peerDispatchTimeoutMs?: number;
+  peerDialTimeoutMs?: number;
 }
 
 export interface RouterTargetRegistry {
@@ -550,6 +552,42 @@ function isAbortTimeoutError(err: unknown): boolean {
   return false;
 }
 
+interface PeerCallInit {
+  method: string;
+  headers?: Record<string, string>;
+  body?: string | Uint8Array;
+  timeoutMs: number;
+  /** Separate budget for opening the mesh link; when set, timeoutMs starts once the link is up. */
+  dialTimeoutMs?: number;
+}
+
+async function callPeer(target: ProxyTarget, path: string, init: PeerCallInit, closing: AbortSignal): Promise<{ status: number; text: string }> {
+  const controller = new AbortController();
+  let timer = setTimeout(() => controller.abort(), init.dialTimeoutMs ?? init.timeoutMs);
+  const onSocket = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), init.timeoutMs);
+  };
+  try {
+    const res = await agentFetch(target.agent, path, {
+      method: init.method,
+      headers: init.headers ?? {},
+      signal: AbortSignal.any([controller.signal, closing]),
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      ...(init.dialTimeoutMs !== undefined ? { onSocket } : {}),
+    });
+    const text = await res.text();
+    return { status: res.status, text };
+  } catch (err) {
+    if (controller.signal.aborted || isAbortTimeoutError(err)) {
+      throw new RouterTargetError("device_timeout", `连接设备「${target.name}」超时，请检查网络后重试`);
+    }
+    throw new RouterTargetError("device_offline", `设备「${target.name}」当前离线，请确认设备在线后再试`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createRouterTargetRegistry(options: RouterTargetRegistryOptions): RouterTargetRegistry {
   const { localPort, peers, uploadsDir } = options;
   const now = options.now ?? Date.now;
@@ -557,6 +595,7 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
   const digestTimeoutMs = options.peerDigestTimeoutMs ?? ROUTER_PEER_DIGEST_TIMEOUT_MS;
   const offlineBackoffMs = options.peerOfflineBackoffMs ?? ROUTER_PEER_OFFLINE_BACKOFF_MS;
   const dispatchTimeoutMs = options.peerDispatchTimeoutMs ?? ROUTER_PEER_DISPATCH_TIMEOUT_MS;
+  const dialTimeoutMs = options.peerDialTimeoutMs ?? MESH_DIAL_TIMEOUT_MS;
 
   const closing = new AbortController();
   const digestCache = new LRUCache<DeviceId, CachedPeerDigestEntry>({ max: MESH_MAX_DEVICES_PER_ACCOUNT });
@@ -565,39 +604,6 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
     const activeIds = new Set(devices.filter((d) => !d.self).map((d) => d.id));
     for (const cachedId of digestCache.keys()) {
       if (!activeIds.has(cachedId)) digestCache.delete(cachedId);
-    }
-  };
-
-  const callPeer = async (
-    target: ProxyTarget,
-    path: string,
-    init: { method: string; headers?: Record<string, string>; body?: string | Uint8Array; timeoutMs: number },
-  ): Promise<{ status: number; text: string }> => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), init.timeoutMs);
-    const signal = AbortSignal.any([controller.signal, closing.signal]);
-    try {
-      const res = await agentFetch(target.agent, path, {
-        method: init.method,
-        headers: init.headers ?? {},
-        signal,
-        ...(init.body !== undefined ? { body: init.body } : {}),
-      });
-      const text = await res.text();
-      return { status: res.status, text };
-    } catch (err) {
-      if (controller.signal.aborted || isAbortTimeoutError(err)) {
-        throw new RouterTargetError(
-          "device_timeout",
-          `连接设备「${target.name}」超时，请检查网络后重试`,
-        );
-      }
-      throw new RouterTargetError(
-        "device_offline",
-        `设备「${target.name}」当前离线，请确认设备在线后再试`,
-      );
-    } finally {
-      clearTimeout(timer);
     }
   };
 
@@ -631,10 +637,13 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
       }
 
       try {
-        const { status, text } = await callPeer(target, API_PATHS.routerDigest, {
-          method: "GET",
-          timeoutMs: digestTimeoutMs,
-        });
+        // A cold relay dial alone can exceed the digest timeout, so a device the relay reports present gets the mesh dial budget on top.
+        const { status, text } = await callPeer(
+          target,
+          API_PATHS.routerDigest,
+          { method: "GET", timeoutMs: digestTimeoutMs, ...(info.online ? { dialTimeoutMs } : {}) },
+          closing.signal,
+        );
         if (status < 200 || status >= 300) {
           const errText = `设备「${info.name}」返回异常（HTTP ${status}）`;
           digestCache.set(info.id, {
@@ -687,12 +696,12 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         for (const att of localAttachments) {
           const bytes = await readFile(att.path);
           const uploadPath = `${API_PATHS.uploads}?name=${encodeURIComponent(att.name)}`;
-          const upRes = await callPeer(target, uploadPath, {
-            method: "POST",
-            headers: { "content-type": att.mime || "application/octet-stream" },
-            body: bytes,
-            timeoutMs: dispatchTimeoutMs,
-          });
+          const upRes = await callPeer(
+            target,
+            uploadPath,
+            { method: "POST", headers: { "content-type": att.mime || "application/octet-stream" }, body: bytes, timeoutMs: dispatchTimeoutMs },
+            closing.signal,
+          );
           if (upRes.status < 200 || upRes.status >= 300) {
             let reason = `上传附件「${att.name}」到设备「${info.name}」失败`;
             try {
@@ -719,12 +728,12 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         forwardedOp = rest;
       }
 
-      const res = await callPeer(target, API_PATHS.routerTargetOps, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(forwardedOp),
-        timeoutMs: dispatchTimeoutMs,
-      });
+      const res = await callPeer(
+        target,
+        API_PATHS.routerTargetOps,
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(forwardedOp), timeoutMs: dispatchTimeoutMs },
+        closing.signal,
+      );
 
       if (op.kind === "project.show" && res.status === 400) {
         throw new RouterTargetError("invalid", `设备「${info.name}」的 ${PRODUCT_NAME} 版本旧，不支持查看项目档案，请升级那台设备，或把问题转给它的项目经理`);

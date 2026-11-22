@@ -39,7 +39,7 @@ afterEach(async () => {
 
 /** 一台假的远端设备：本机 HTTP 服务 + 连到它的 http.Agent（和组网的 dialer.agentFor 一样交给 ProxyTarget）；online 关了连接直接失败。 */
 async function fakePeer(handler: (req: FakeRequest, res: ServerResponse) => void) {
-  const state = { online: true };
+  const state = { online: true, dialDelayMs: 0 };
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
@@ -51,6 +51,10 @@ async function fakePeer(handler: (req: FakeRequest, res: ServerResponse) => void
     override createConnection(_options: unknown, callback?: (error: Error | null, socket: Socket) => void): Socket {
       if (!state.online) {
         setImmediate(() => callback?.(new Error("connect ECONNREFUSED"), undefined as unknown as Socket));
+        return undefined as unknown as Socket;
+      }
+      if (state.dialDelayMs > 0) {
+        setTimeout(() => callback?.(null, netConnect(port, "127.0.0.1")), state.dialDelayMs);
         return undefined as unknown as Socket;
       }
       return netConnect(port, "127.0.0.1");
@@ -457,6 +461,56 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
     // 5. 设备移出账号（不在信任表里）时缓存立即失效
     pairedDevices = [{ id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null }];
     expect(registry.portFor(remoteId)).toBeNull();
+  });
+});
+
+describe("PeerTargetPort digest over a cold mesh link", () => {
+  const selfId = "00000000-0000-4000-8000-000000000001";
+  const remoteId = "00000000-0000-4000-8000-000000000002";
+
+  async function coldPeerRegistry(presenceOnline: boolean) {
+    const peer = await fakePeer((req, res) => {
+      if (req.url.endsWith("/api/router/digest")) {
+        res.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({ generatedAt: now, pms: [{ pmId: 7, name: "远端小林", mode: "manage_only", activity: "idle", pendingDecisionCount: 1 }] }),
+        );
+        return;
+      }
+      res.writeHead(404).end("not found");
+    });
+    const registry = createRouterTargetRegistry({
+      localPort: createLocalTargetPort({ deviceId: selfId, deviceName: () => "MacBook", ledger, uploadsDir }),
+      peers: {
+        selfId,
+        list: () => [
+          { id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+          { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, online: presenceOnline, link: presenceOnline ? "relay" : null, fingerprint: null },
+        ],
+        target: () => ({ name: "Linux 工作站", agent: peer.agent }),
+      },
+      uploadsDir,
+      now: () => now,
+      peerDigestTimeoutMs: 100,
+      peerDialTimeoutMs: 2_000,
+    });
+    return { port: registry.portFor(remoteId)!, peer };
+  }
+
+  it("keeps a present device online when its relay dial takes longer than the digest timeout", async () => {
+    const { port, peer } = await coldPeerRegistry(true);
+    peer.state.dialDelayMs = 400;
+    const result = await port.getDigest();
+    expect(result).toMatchObject({ online: true, digest: { pms: [{ pmId: 7, pendingDecisionCount: 1 }] } });
+  });
+
+  it("still gives up on a device the relay reports offline within the digest timeout", async () => {
+    const { port, peer } = await coldPeerRegistry(false);
+    peer.state.dialDelayMs = 400;
+    const started = Date.now();
+    const result = await port.getDigest();
+    expect(result.online).toBe(false);
+    expect(result.error).toContain("超时");
+    expect(Date.now() - started).toBeLessThan(400);
   });
 });
 
