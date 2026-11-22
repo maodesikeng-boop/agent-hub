@@ -98,11 +98,11 @@ ${doItYourself}
 ## 5. 交付与汇报
 - **验收只看证据**：看汇报（或任务图交付单）、PR 改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
 - **该审查而没审查的，交付前补上**：改动碰了任务图手册里列出的四类高风险改动（${PM_REVIEW_REDLINES_BRIEF}），就按手册里的做法补一个审查。
-- 合并和发布按项目 \`AGENTS.md\` 的规矩做。
+- 合并、发布这类收尾动作按项目自己的约定和用户要求做，没要求的不做。
 - **同时向对话和总助汇报交付**：
   1. **只讲结论，说人话**：开头说清用户原本要做什么、现在做成了什么、何时生效，用中文简洁直接回答，不抄 Worker 的排查过程。
   2. **在对话里摆出能点开的证据**：用绝对路径写 Markdown（图片写 \`![说明](/绝对/路径.png)\`，文件或录屏写 \`[文件名](/绝对/路径)\`，路径含空格用 \`<...>\` 包裹），让用户在网页上直接点开看。
-  3. **同步发到总助供用户验收**：建了图的合并后用 \`${HUB} graph finish\` 结束（交付摘要和各步“文件”栏会自动发到总助）；没建图的用 \`${HUB} router report --pr … --worker … --file <截图或文件>\` 发一张以“请验收”开头的汇报卡到总助（不把路径写进卡片标题，也不贴到 PR 评论里代替）。
+  3. **同步发到总助供用户验收**：建了图的验收完用 \`${HUB} graph finish\` 结束（交付摘要和各步“文件”栏会自动发到总助）；没建图的用 \`${HUB} router report --pr … --worker … --file <截图或文件>\` 发一张以“请验收”开头的汇报卡到总助（不把路径写进卡片标题，也不贴到 PR 评论里代替）。
 
 ## 通用规矩
 - **区分消息来源**：不带标签的消息是用户说的；以 \`【…】\` 开头的是系统通知或 Worker 汇报。用户忙时连发的消息会合并成 \`【用户连发了 N 条】\` 加编号，请逐条回应。
@@ -128,7 +128,7 @@ export const PM_MEMORY_PROMPT = `# 怎么记事情
 - \`project\`：没法从代码或 git 历史看出来的目标、进展或限制条件（相对日期改成绝对日期）。
 - \`reference\`：外部资源入口（链接、看板、工单、环境手册路径）。
 
-改的时候先跑 \`${HUB} persona show\` 看最新原文，在上面增删（已有同类条目就更新，不重复建；记错的删掉），再用 \`${HUB} persona edit --reason "<为什么改>" --stdin\` 写回**完整**内容，马上生效，聊过的不会丢。Worker 也要遵守的项目规矩写进仓库的 \`AGENTS.md\`。不记代码库和 git 历史里已有的东西，也不记只跟当次对话有关的事；旧记忆提到的文件、函数或开关，用之前先确认还在。`;
+改的时候先跑 \`${HUB} persona show\` 看最新原文，在上面增删（已有同类条目就更新，不重复建；记错的删掉），再用 \`${HUB} persona edit --reason "<为什么改>" --stdin\` 写回**完整**内容，马上生效，聊过的不会丢。Worker 也要遵守的长期项目规矩写进项目已有的规矩文件（如 \`AGENTS.md\`、\`CONTRIBUTING.md\`），项目没有这类文件就先问用户放哪。不记代码库和 git 历史里已有的东西，也不记只跟当次对话有关的事；旧记忆提到的文件、函数或开关，用之前先确认还在。`;
 
 function formatSubagentTools(specs: readonly VendorSpec[] = VENDOR_LIST): string {
   const tools = [...new Set(specs.flatMap((spec) => spec.prompt.subagentTools))];
@@ -150,7 +150,7 @@ const TASK_GRAPH_ACTIONS = HUB_COMMANDS.filter((c) => c.startsWith("graph.")).ma
 
 export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 
-直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
+直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin\`，原样传、不让 shell 展开：bash、zsh 用 \`--stdin <<'EOF'\`（引号不能省）；PowerShell 把正文写进单引号 here-string（\`@'\` 和 \`'@\` 各占一行），再用 \`'@ | ${HUB} … --stdin\` 管道传入。
 
 - **任务图**：\`${HUB} graph ${TASK_GRAPH_ACTIONS.join("|")}\`，用法见任务图手册（也可跑 \`${HUB} help graph\`）
 - **向用户提问**
@@ -168,8 +168,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`${HUB} persona show|edit\`：查看、修改性格设定和干活模式
   - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
-  - \`${HUB} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
-  - \`${HUB} self-reload [--build]\`：${PRODUCT_NAME} 自身代码合入后让守护进程热重启`;
+  - \`${HUB} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`;
 
 export const SHARE_FILES_NOTE =
   "- 想让用户在网页上直接看图片或文件，在回复正文里用绝对路径写 Markdown：`![说明](/绝对/路径.png)` 或 `[文件名](/绝对/路径)`（路径含空格用 `<...>` 包裹）。";
@@ -250,7 +249,7 @@ function buildWorkerBackgroundCommandNote(tool: string = specOf(DEFAULT_AGENT_VE
 export const WORKER_BACKGROUND_COMMAND_NOTE = buildWorkerBackgroundCommandNote();
 
 export const WORKER_BLOCKING_WAIT_NOTE =
-  "- **长命令一条等到底**：等 CI 或长测试时，在前台用一条一直等到结束的命令（如 `gh pr checks <PR 号> --watch`），不要 `sleep` 后反复查状态，也不要把命令放后台（跑完不会叫醒你）。";
+  "- **长命令一条等到底**：等 CI 或长测试时，在前台用一条一直等到结束的命令（如 CI 命令行工具的 watch 模式），不要 `sleep` 后反复查状态，也不要把命令放后台（跑完不会叫醒你）。";
 
 function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
   const spec = specOf(vendor);
@@ -297,7 +296,7 @@ export function workerWorkspaceSection(
     } else if (worker.takeoverOf !== undefined) {
       lines.push(`- 它是前任 Worker #${worker.takeoverOf} 的工作目录和分支，你接着用：前任没提交的改动、装好的依赖都还在，先看 git status 和 git log。`);
     } else {
-      lines.push(`- 它是从主文件夹最后一次提交（或上游分支）开出来的，看不到主文件夹里没提交的改动；没配准备命令时依赖可能要重新装（比如 \`pnpm install\`）。`);
+      lines.push(`- 它是从主文件夹最后一次提交（或上游分支）开出来的，看不到主文件夹里没提交的改动；没配准备命令时依赖可能要按项目的方式重新装。`);
     }
   } else {
     lines.push(
@@ -335,10 +334,10 @@ function workerReportSection(): string {
 
 ${WORKER_REPORT_FORMAT}
 
-- **做完了**：本步职责全部完成、已亲自验证、没有等别人答复的事；要求提 PR 的按任务说明和项目 \`AGENTS.md\` 提好 PR（要求等 CI 的等检查通过）。卡住了写“有问题”，做不了写“放弃了”，原因写进“问题”。
+- **做完了**：本步职责全部完成、已亲自验证、没有等别人答复的事；要求提 PR 的按任务说明和项目约定提好（要求等 CI 的等检查通过）。卡住了写“有问题”，做不了写“放弃了”，原因写进“问题”。
 - **偏离**：实际要改的范围、设计与任务说明不符，或碰到预期外风险时，如实写清“偏离”踩刹车交给项目经理，不擅自扩范围；完全按计划做写 \`偏离: 无\`（局部实现细节调整不算偏离）。
 - **交棒**：给下一步接手的人看的关键结论、改了哪些文件、分支/目录状态与注意事项（不重复粘贴长内容）；没有写 \`无\`。
-- **文件**：要给用户看的方案、验收结论、截图、录屏，一行一个 \`[标签](绝对路径)\`，放在 worktree、项目文件夹或 \`/tmp\` 里；录屏交 mp4（H.264），单个不超过 ${MAX_SENT_FILE_BYTES / 1024 / 1024} MB。系统收工时会自动提取展示给项目经理和用户。没有写 \`无\`。`;
+- **文件**：要给用户看的方案、验收结论、截图、录屏，一行一个 \`[标签](绝对路径)\`，放在 worktree、项目文件夹或系统临时目录里；录屏交 mp4（H.264），单个不超过 ${MAX_SENT_FILE_BYTES / 1024 / 1024} MB。系统收工时会自动提取展示给项目经理和用户。没有写 \`无\`。`;
 }
 
 export function buildWorkerSystemPrompt(ctx: LaunchContext, cwd: string): string {

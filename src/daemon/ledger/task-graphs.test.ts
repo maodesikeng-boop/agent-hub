@@ -330,7 +330,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const w2 = ledger.hubCall(lin.sessionId, "worker.start", { title: "验收", task: "做 qa", noWorktree: true, node: "qa" }).data.worker;
     finishWorkerTurn(w2.id, "有问题", "缺测试数据");
     expect(ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "qa" }).text).toContain(
-      "全部节点已完成（待交付），验收合并后用 hub graph finish 结束任务图",
+      "全部节点已完成（待交付），验收交付后用 hub graph finish 结束任务图",
     );
   });
 
@@ -1225,7 +1225,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       graphId: graph.id,
       specJson: JSON.stringify({ skipNodes: ["approve"] }),
     });
-    expect(allSettledPatch.text).toContain("全部节点已完成（待交付），验收合并后用 hub graph finish 结束任务图");
+    expect(allSettledPatch.text).toContain("全部节点已完成（待交付），验收交付后用 hub graph finish 结束任务图");
     expect(isTaskGraphReadyToFinish(allSettledPatch.data.graph)).toBe(true);
     expect(askOf(ledger.getMessage(secondMsgId)!)).toMatchObject({ answered: true });
   });

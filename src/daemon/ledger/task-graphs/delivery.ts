@@ -158,7 +158,7 @@ function formatDeliveryNote(db: Db, graph: TaskGraph, extra?: DeliveryExtra): st
     ...lastHandoffLine(db, graph),
     ...changedFileLines(extra?.files),
   ];
-  const footer = `\n\n验收看上面的证据。合并后用 ${HUB_COMMAND} graph finish 结束这张图。`;
+  const footer = `\n\n验收看上面的证据，按项目约定交付后用 ${HUB_COMMAND} graph finish 结束这张图。`;
   const bodyBudget = Math.max(200, DELIVERY_NOTE_MAX_CHARS - [...footer].length);
   return `${truncateChars(lines.join("\n"), bodyBudget)}${footer}`;
 }

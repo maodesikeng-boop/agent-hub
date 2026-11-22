@@ -97,13 +97,15 @@ describe("文案只查不修", () => {
   });
 
   it("审查清单写明两层审查只读主干的 REVIEW.md、三档分级、增量复审与轮次上限、本机优先", () => {
-    expect(REVIEW_CHECKLIST).toContain("git show origin/main:REVIEW.md");
+    expect(REVIEW_CHECKLIST).toContain("git show <主干>:REVIEW.md");
+    expect(REVIEW_CHECKLIST).toContain("git diff --name-only <主干>...HEAD");
+    expect(REVIEW_CHECKLIST).not.toMatch(/origin\/main|git fetch origin/);
     expect(REVIEW_CHECKLIST).toContain("被审分支自己改过的那份不算数");
     for (const tag of ["[Important]", "[Nit]", "[Pre-existing]"]) expect(REVIEW_CHECKLIST).toContain(tag);
     expect(REVIEW_CHECKLIST).toContain("git diff <上一轮被审提交>..HEAD");
     expect(REVIEW_CHECKLIST).toContain(`第 ${REVIEW_MAX_ROUNDS} 轮还有未决的`);
-    expect(REVIEW_CHECKLIST).not.toMatch(/pnpm|bwrap/);
-    expect(REVIEW_CHECKLIST).toContain("不许用 `gh run rerun`");
+    expect(REVIEW_CHECKLIST).not.toMatch(/pnpm|bwrap|\bgh /);
+    expect(REVIEW_CHECKLIST).toContain("不许靠重跑盖住抖动的测试");
     expect(taskGraphSkillBody()).toContain(`第 ${REVIEW_MAX_ROUNDS} 轮审查还有`);
   });
 
