@@ -308,6 +308,50 @@ describe("startApproval", () => {
     expect(approver.outstanding()).toEqual([{ kind: "confirm", requestId: "r1" }]);
   });
 
+  async function untilJoinerReveal() {
+    const a = await makeIdentity(DEVICE_A);
+    const n = await makeIdentity(DEVICE_B);
+    const started = startApproval({ role: "approver", requestId: "r1", self: a, peerDeviceId: DEVICE_B, expiresAt: 10_000 });
+    const approver = started.ceremony;
+    const joiner = startApproval({ role: "joiner", requestId: "r1", self: n, peerDeviceId: DEVICE_A, expiresAt: 10_000 }).ceremony;
+    const commit = await joiner.receive(started.first[0]!);
+    const approverReveal = (await approver.receive(commit[0]!))[0]!;
+    return { approver, joiner, approverReveal };
+  }
+
+  it("新设备补发的 reveal 和 confirm 同时到达时按顺序处理，不打断核对", async () => {
+    const { approver, joiner, approverReveal } = await untilJoinerReveal();
+    await joiner.receive(approverReveal);
+    joiner.confirmLocal();
+    const resent = joiner.outstanding();
+    expect(resent.map((s) => s.kind)).toEqual(["reveal", "confirm"]);
+    expect(await Promise.all(resent.map((s) => approver.receive(s)))).toEqual([[], []]);
+    expect(approver.outcome()).toBe("pending");
+    expect(approver.sas()).toBe(joiner.sas());
+    approver.confirmLocal();
+    expect(approver.outcome()).toBe("approved");
+  });
+
+  it("同一步两条内容不同的 reveal 同时到达时 aborted", async () => {
+    const { joiner, approverReveal } = await untilJoinerReveal();
+    const forged: ApprovalSignal = { kind: "reveal", requestId: "r1", nonce: "A".repeat(43) };
+    const [first, second] = await Promise.all([joiner.receive(approverReveal), joiner.receive(forged)]);
+    expect(first.map((s) => s.kind)).toEqual(["reveal"]);
+    expect(second).toEqual([{ kind: "abort", requestId: "r1", reason: "bad_signal" }]);
+    expect(joiner.outcome()).toBe("aborted");
+    expect(joiner.sas()).toBeNull();
+  });
+
+  it("算核对码期间被取消时保持 aborted，不再回出 reveal", async () => {
+    const { joiner, approverReveal } = await untilJoinerReveal();
+    const pending = joiner.receive(approverReveal);
+    expect(joiner.cancel("cancelled")).toEqual([{ kind: "abort", requestId: "r1", reason: "cancelled" }]);
+    expect(await pending).toEqual([]);
+    expect(joiner.outcome()).toBe("aborted");
+    expect(joiner.sas()).toBeNull();
+    expect(joiner.outstanding()).toEqual([]);
+  });
+
   it("对方证书的 CN 不是预期的设备编号时 aborted", async () => {
     const c = await makeIdentity(DEVICE_C);
     const { joiner } = await pair({ tamper: (s) => (s.kind === "offer" ? { ...s, certPem: c.certPem } : s) });

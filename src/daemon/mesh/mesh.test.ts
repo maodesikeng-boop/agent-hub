@@ -1,9 +1,11 @@
 import { once } from "node:events";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createServer as createNetServer, connect as netConnect, type Socket } from "node:net";
 import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
 import { describe, expect, it, vi } from "vitest";
-import { API_PATHS } from "../../shared/api.ts";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { API_PATHS, type DeviceId } from "../../shared/api.ts";
 import { MESH_LEASE_ORPHAN_MS, MESH_LEASE_RENEW_MS, MESH_LEASE_TTL_MS } from "../../shared/limits.ts";
 import type { MeshCandidate } from "../../shared/mesh.ts";
 import { readAccountFile } from "./account.ts";
@@ -26,6 +28,82 @@ async function account(count: 2 | 3, options: { lan?: boolean } = {}) {
     nodes.push(node);
   }
   return { relay, nodes };
+}
+
+// Forwards HTTP and WebSocket traffic to the relay. Once armed, it cuts a device's relay link as the peer's reveal reaches it and holds its reconnects until release().
+async function startRevealCutProxy(relayPort: () => number) {
+  let cutDevice: DeviceId | null = null;
+  let blocked = false;
+  const held: Array<() => void> = [];
+  const sockets = new Set<WebSocket>();
+  const server = createHttpServer((req, res) => {
+    const upstream = httpRequest({ host: "127.0.0.1", port: relayPort(), path: req.url, method: req.method, headers: req.headers }, (reply) => {
+      res.writeHead(reply.statusCode ?? 502, reply.headers);
+      reply.pipe(res);
+    });
+    req.pipe(upstream);
+  });
+  const wss = new WebSocketServer({ server, perMessageDeflate: false });
+  wss.on("connection", (client, req) => {
+    sockets.add(client);
+    let upstream: WebSocket | null = null;
+    let device: string | null = null;
+    const early: Array<[RawData, boolean]> = [];
+    const close = () => {
+      client.terminate();
+      upstream?.terminate();
+    };
+    client.on("message", (data, isBinary) => {
+      if (!isBinary && device === null) device = (JSON.parse(String(data)) as { device?: string }).device ?? null;
+      if (upstream?.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
+      else early.push([data, isBinary]);
+    });
+    client.on("error", close);
+    client.on("close", close);
+    const attach = () => {
+      if (client.readyState !== WebSocket.OPEN) return;
+      const up = new WebSocket(`ws://127.0.0.1:${relayPort()}${req.url}`, { perMessageDeflate: false });
+      upstream = up;
+      sockets.add(up);
+      up.on("open", () => {
+        for (const [data, isBinary] of early.splice(0)) up.send(data, { binary: isBinary });
+      });
+      up.on("message", (data, isBinary) => {
+        if (!isBinary && device !== null && device === cutDevice) {
+          const frame = JSON.parse(String(data)) as { type: string; payload?: string };
+          if (frame.type === "signal" && (JSON.parse(frame.payload!) as { kind: string }).kind === "reveal") {
+            cutDevice = null;
+            blocked = true;
+            return close();
+          }
+        }
+        client.send(data, { binary: isBinary });
+      });
+      up.on("error", close);
+      up.on("close", close);
+    };
+    if (blocked) held.push(attach);
+    else attach();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    armCut: (device: DeviceId) => {
+      cutDevice = device;
+    },
+    isCut: () => blocked,
+    release() {
+      blocked = false;
+      for (const attach of held.splice(0)) attach();
+    },
+    async close() {
+      for (const ws of sockets) ws.terminate();
+      wss.close();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
 }
 
 describe("createMesh", () => {
@@ -92,6 +170,39 @@ describe("createMesh", () => {
     await b.mesh.answerApproval(DEVICE_A, true);
     await a.mesh.answerApproval(DEVICE_B, true);
     await waitFor(() => b.mesh.status().state === "signed_in" && a.mesh.trust.get(DEVICE_B) !== undefined && b.mesh.trust.get(DEVICE_A) !== undefined);
+  });
+
+  it("批准方收到新设备的 reveal 前断开中继、新设备已点相符时，重连后补发的 reveal 和 confirm 同时到达也能走完批准", async () => {
+    let relayPort = 0;
+    const proxy = await startRevealCutProxy(() => relayPort);
+    try {
+      const relay = await startTestRelay({ publicOrigin: proxy.url });
+      relayPort = Number(new URL(relay.url).port);
+      const a = await startTestMeshNode(relay, DEVICE_A, { relayUrl: proxy.url });
+      await loginNode(a);
+      const b = await startTestMeshNode(relay, DEVICE_B, { relayUrl: proxy.url });
+      await loginNode(b);
+      await waitFor(() => signedIn(a).approvals.some((x) => x.requestId === DEVICE_B) && a.mesh.isOnline(DEVICE_B));
+      proxy.armCut(DEVICE_A);
+      await a.mesh.beginApproval(DEVICE_B);
+
+      const joinerSas = () => {
+        const s = b.mesh.status();
+        return s.state === "awaiting_approval" ? (s.approval?.sas ?? null) : null;
+      };
+      const approverSas = () => signedIn(a).approvals.find((x) => x.requestId === DEVICE_B)?.sas ?? null;
+      await waitFor(() => proxy.isCut() && joinerSas() !== null && !b.mesh.isOnline(DEVICE_A) && signedIn(a).relay !== "connected");
+      expect(approverSas()).toBeNull();
+      await b.mesh.answerApproval(DEVICE_A, true);
+      proxy.release();
+
+      const sas = await waitFor(() => (signedIn(a).relay === "connected" ? approverSas() : null));
+      expect(joinerSas()).toBe(sas);
+      await a.mesh.answerApproval(DEVICE_B, true);
+      await waitFor(() => b.mesh.status().state === "signed_in" && a.mesh.trust.get(DEVICE_B) !== undefined && b.mesh.trust.get(DEVICE_A) !== undefined);
+    } finally {
+      await proxy.close();
+    }
   });
 
   it("连点几次批准时补发的是同一场核对，两边核对码一致并走完批准", async () => {
