@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,36 +46,48 @@ async function startHub(): Promise<{ ledger: FakeHubLedger; env: NodeJS.ProcessE
 }
 
 // powershell.exe is the Windows PowerShell 5.1 every Windows install ships, unlike pwsh.exe (PowerShell 7).
-function windowsPowerShell(script: string, env: NodeJS.ProcessEnv) {
-  return spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { env, encoding: "utf8", windowsHide: true });
+// Async on purpose: the hub server runs in this process, so a sync spawn would block the reply hub.exe waits for.
+function windowsPowerShell(script: string, env: NodeJS.ProcessEnv): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { env, encoding: "utf8", windowsHide: true }, (error, stdout, stderr) => {
+      resolve({ status: error === null ? 0 : typeof error.code === "number" ? error.code : -1, stdout, stderr });
+    });
+  });
+}
+
+function report(line: string): void {
+  writeDiagLog("powershell-stdin", line);
+  console.log(`[powershell-stdin] ${line}`);
+}
+
+const taskOf = (ledger: FakeHubLedger): string | undefined => (ledger.calls.at(-1)?.args as { task?: string } | undefined)?.task;
+
+async function pipeIntoHub(ledger: FakeHubLedger, env: NodeJS.ProcessEnv, label: string, script: string) {
+  ledger.calls.length = 0;
+  const run = await windowsPowerShell(script, env);
+  const task = taskOf(ledger);
+  report(`${label}: exit=${run.status} stderr=${JSON.stringify(run.stderr.trim())} received=${JSON.stringify(task)}`);
+  return { ...run, task };
 }
 
 describe.runIf(process.platform === "win32")("Windows PowerShell 5.1 pipes a here-string body into hub.exe", () => {
   it("the PowerShell example in hub help delivers Chinese text intact, and dropping its encoding line does not", { timeout: 60_000 }, async () => {
     const { ledger, env } = await startHub();
-    const version = windowsPowerShell("\"$($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition) $($OutputEncoding.WebName)\"", env);
-    writeDiagLog("powershell-stdin", `powershell.exe: ${version.stdout.trim()}`);
-    expect(version.stdout.trim()).toMatch(/^5\.1\.\S+ Desktop /u);
-
+    const version = await windowsPowerShell("\"$($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition) $($OutputEncoding.WebName)\"", env);
+    report(`powershell.exe version, edition, default $OutputEncoding: ${version.stdout.trim()}`);
     const { script, body } = documentedPowerShellExample();
-    expect(body).toMatch(/[㐀-鿿]/u);
-    const documented = windowsPowerShell(script, env);
-    const received = (ledger.calls.at(-1)?.args as { task?: string } | undefined)?.task;
-    writeDiagLog("powershell-stdin", `documented: status=${documented.status} stderr=${documented.stderr} received=${JSON.stringify(received)}`);
-    expect(documented.status, documented.stderr).toBe(0);
-    expect(received).toBe(body);
-
-    ledger.calls.length = 0;
     const multiline = "第一行 & | %PATH% \"引号\" 🚀\n第二行末尾";
-    const withEmoji = windowsPowerShell(script.replace(body, multiline), env);
-    expect(withEmoji.status, withEmoji.stderr).toBe(0);
-    expect((ledger.calls.at(-1)?.args as { task?: string }).task).toBe(multiline);
 
-    ledger.calls.length = 0;
-    const withoutEncoding = windowsPowerShell(script.replace(`${POWERSHELL_UTF8_PIPE}; `, ""), env);
-    const lost = (ledger.calls.at(-1)?.args as { task?: string } | undefined)?.task;
-    writeDiagLog("powershell-stdin", `without encoding: status=${withoutEncoding.status} stderr=${withoutEncoding.stderr} received=${JSON.stringify(lost)}`);
-    console.log(`powershell.exe ${version.stdout.trim()}; documented example received ${JSON.stringify(received)}; without encoding line received ${JSON.stringify(lost)}`);
-    expect(lost).not.toBe(body);
+    const documented = await pipeIntoHub(ledger, env, "help example", script);
+    const withEmoji = await pipeIntoHub(ledger, env, "help example, multi-line body with emoji", script.replace(body, multiline));
+    const withoutEncoding = await pipeIntoHub(ledger, env, "help example without the encoding line", script.replace(`${POWERSHELL_UTF8_PIPE}; `, ""));
+
+    expect(version.stdout.trim()).toMatch(/^5\.1\.\S+ Desktop /u);
+    expect(body).toMatch(/[\u3400-\u9fff]/u);
+    expect(documented.status, documented.stderr).toBe(0);
+    expect(documented.task).toBe(body);
+    expect(withEmoji.status, withEmoji.stderr).toBe(0);
+    expect(withEmoji.task).toBe(multiline);
+    expect(withoutEncoding.task).not.toBe(body);
   });
 });
