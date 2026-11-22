@@ -79,7 +79,15 @@ Trigger: `src/daemon/agent-api/**`, `src/daemon/sent-files.ts`, `src/daemon/ledg
 
 Check: After each `await` in a handler or background job, the code checks `signal.aborted` (or the closing flag) before it calls the ledger or the database. `close()` or `stop()` cancels in-flight work and returns a promise that `daemon.ts` awaits before the database closes; a `void` background run has a `.catch` that logs. A slot for an open file or upload counts from open until the handle closes.
 
-Seen in: `c69b3b94`, `d23209c2`/`796273fe`, `e5b55fa6`, `2bdf6ff9`/`3ecff0d4`, `ba599181`/`12815bc8`
+Seen in: `c69b3b94`, `d23209c2`/`796273fe`, `e5b55fa6`, `2bdf6ff9`/`3ecff0d4`, `ba599181`/`12815bc8`, `3d3bac89`
+
+### Restart recovery finishes what the last run left
+
+Trigger: `src/daemon/daemon.ts`, `src/daemon/ledger/ledger.ts`, `src/daemon/ledger/turn-completions.ts`, `src/daemon/ledger/workers/**`, `src/daemon/ledger/schedules.ts`, `src/daemon/session-tmp.ts`, `src/daemon/platform/process-tag.ts`, `src/daemon/process-ledger.ts`
+
+Check: Anything the next daemon run needs to finish or clean up this run's work (a pending receipt, a background wait, a process tag nonce, a temp-dir prefix) is persisted or derived from the data directory, never minted fresh on each start. Startup recovery settles every pending record, not one batch or page, before timers, schedules, or new sessions start. A test restarts the daemon in the middle of the operation and shows the work completes or its leftovers are reaped.
+
+Seen in: `e9b9ec23`, `6883b2f4`, `12815bc8`
 
 ### Database transactions stay synchronous
 
@@ -115,11 +123,11 @@ Seen in: `43d70fad`, `473db164`, `0fc0e181`
 
 ### Stale in-flight queries never overwrite fresh mutations
 
-Trigger: `src/web/**`
+Trigger: `src/web/**`, `src/daemon/actions/**`, `src/daemon/ledger/workers/review-stamp.ts`, `src/daemon/ledger/task-graphs/review-stamp.ts`
 
-Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them, but it cannot tell whether every write path advances the generation.
+Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them, but it cannot tell whether every write path advances the generation. On the daemon, a queued or retried action that publishes a result (a review verdict, a commit status) checks when it runs that its source is still the latest (same Worker, same report, no newer action) and drops itself otherwise, and actions that write the same target run on one lane.
 
-Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`
+Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`, `9f2269fa`
 
 ### Interface changes come with a real-browser render
 
@@ -157,9 +165,9 @@ Seen in: `6af05c80`, `4b557b03`
 
 Trigger: `**/*.test.ts`, `**/*.test.tsx`, `test/**`
 
-Check: A test that needs a child process or timer to reach some state awaits the event that proves it (a driver event, a log line, a file) or advances fake timers. It does not sleep a fixed time and hope the state arrives first. A test that formats or compares dates pins the clock with `vi.setSystemTime` instead of reading the wall clock. A per-test timeout leaves at least twice the slowest runtime seen on the CI runner that runs it. A test does not assert wall-clock durations; it asserts the observable cause of slowness, such as zero spawned processes. A test that needs something a Worker sandbox forbids, such as running the setuid `/bin/ps` or nesting `sandbox-exec` on macOS, skips through `test/sandbox-probes.ts`, which skips only on a permission refusal, so a tool missing from a CI image still fails the test instead of skipping it.
+Check: A test that needs a child process or timer to reach some state awaits the event that proves it (a driver event, a log line, a file) or advances fake timers. It does not sleep a fixed time and hope the state arrives first. A test that formats or compares dates pins the clock with `vi.setSystemTime` instead of reading the wall clock. A per-test timeout leaves at least twice the slowest runtime seen on the CI runner that runs it. A test does not assert wall-clock durations; it asserts the observable cause of slowness, such as zero spawned processes. A test that needs something a Worker sandbox forbids, such as running the setuid `/bin/ps` or nesting `sandbox-exec` on macOS, skips through `test/sandbox-probes.ts`, which skips only on a permission refusal, so a tool missing from a CI image still fails the test instead of skipping it. `src/wall-clock-guard.test.ts` fails when a test asserts `Date.now()` or `performance.now()` minus a start time, directly or through a local, beyond the file's recorded baseline; this check covers the fixed sleeps, timeouts, and timing helpers it cannot see.
 
-Seen in: `12633961`, `d82bae28`, #397
+Seen in: `12633961`, `d82bae28`, #397, `d5b74cfd`, `0164074a`
 
 ### Hub error codes change on both sides
 
