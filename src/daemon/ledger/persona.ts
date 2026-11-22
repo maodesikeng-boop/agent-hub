@@ -781,7 +781,7 @@ export function createLedgerPersona(
           );
         }
         if (projectIds.length > 0) {
-          db.run(`DELETE FROM project_folders WHERE project_id IN ${inList(projectIds)}`);
+          for (const table of ["project_folders", "project_review_status"]) db.run(`DELETE FROM ${table} WHERE project_id IN ${inList(projectIds)}`);
         }
         db.run(`DELETE FROM projects WHERE pm_id = ? OR conversation_id IN ${inList(conversationIds)}`, pmId);
         if (sessionIds.length > 0) {

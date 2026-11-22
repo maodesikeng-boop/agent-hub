@@ -109,7 +109,7 @@ export function reviewVerifyErrorProblem(error: string): string {
 // A review stamp is a commit status on the reviewed commit; it records a verdict and never blocks the Task Graph.
 export const REVIEW_STATUS_CONTEXT = `${PRODUCT_NAME.toLowerCase()}/review`;
 
-export type ReviewStampState = "success" | "failure";
+type ReviewStampState = "success" | "failure";
 
 export interface ReviewStampRequest {
   sha: string;
@@ -133,12 +133,22 @@ export function reviewStampRequestOf(
   target: ReviewTarget,
   verified: ReviewVerifyResult | undefined,
 ): ReviewStampRequest | null {
-  throw new Error("Not implemented");
+  if (report.verdict === null || target.snapshot === null || reviewReportProblem(report, target) !== null) return null;
+  const sha = target.snapshot.sha;
+  if (report.verdict === "FAIL") return { sha, verdict: "FAIL", state: "failure" };
+  if (verified === undefined || verified.problems.length > 0) return null;
+  return { sha, verdict: report.verdict, state: "success" };
 }
 
 /** Postcondition: an English status description of at most 140 characters (the GitHub limit) naming the verdict. */
 export function reviewStatusDescription(verdict: ReviewVerdict): string {
-  throw new Error("Not implemented");
+  return `Independent ${PRODUCT_NAME} review: ${verdict} on this commit`;
+}
+
+export function reviewStampNote(outcome: ReviewStampOutcome): string {
+  return outcome.kind === "posted"
+    ? `提交状态已挂（${REVIEW_STATUS_CONTEXT} ${outcome.state}）`
+    : `提交状态没挂：${outcome.reason}`;
 }
 
 // GIT_CONFIG_COUNT (git 2.31+) outranks repo config; append after any entries already in the daemon's env.

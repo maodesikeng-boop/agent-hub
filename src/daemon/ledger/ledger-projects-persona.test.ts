@@ -9,7 +9,13 @@ import type { ConversationId, Message, PmId, SessionId } from "../../shared/doma
 import type { HubArgs, HubCommand } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode } from "../../shared/ledger.ts";
-import { HUB_CALL_FIELD_MAX_BYTES, MAX_NAME_CHARS, MAX_PERSONA_BYTES } from "../../shared/limits.ts";
+import {
+  HUB_CALL_FIELD_MAX_BYTES,
+  MAX_NAME_CHARS,
+  MAX_PERSONA_BYTES,
+  MAX_REVIEW_STATUS_ACCOUNT_CHARS,
+  PM_ARCHIVE_RETENTION_MS,
+} from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { personaFilePath } from "../../shared/paths.ts";
 import { bundledModelCatalog, type ModelCatalog } from "../../shared/vendors.ts";
@@ -20,7 +26,7 @@ import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { contentHash, createResolveFolder, truncateField, writeFileAtomic } from "./files.ts";
 import { createLedger } from "./index.ts";
-import { DEFAULT_PROJECT_NAME } from "./projects.ts";
+import { DEFAULT_PROJECT_NAME, validReviewStatusAccount } from "./projects.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
 
 const INITIAL_SEQ = 9_000;
@@ -913,6 +919,7 @@ describe("hubCall 其他命令", () => {
       conversationId: lin.conversationId,
       project: { id: foo.project.id, name: "foo", description: null, mainFolder: foo.dir, otherFolders: [extra] },
       setupCommand: null,
+      reviewStatusAccount: null,
     });
     expect(status.text).toContain("小林");
     expect(status.text).toContain(foo.dir);
@@ -1040,8 +1047,50 @@ describe("getLaunchContext", () => {
 });
 
 describe("审查盖章账号", () => {
-  it.todo("validReviewStatusAccount 接受 GitHub 登录名，null 表示清除");
-  it.todo("validReviewStatusAccount 拒绝空串、超长、带空格或斜杠的值，以及 ghp_ 等令牌形状的值");
-  it.todo("设置后 hub status 写明盖章账号；没配时写明用 gh 当前账号");
-  it.todo("老项目升级后没有 project_review_status 行，按 gh 当前账号处理；删项目时连带删掉");
+  it("validReviewStatusAccount 接受 GitHub 登录名，null 表示清除", () => {
+    for (const login of ["octocat", "maodesikeng-boop", "a1", "Octo-Cat-2", "jane_corp"]) expect(validReviewStatusAccount(login)).toBe(login);
+    expect(validReviewStatusAccount(null)).toBeNull();
+  });
+
+  it("validReviewStatusAccount 拒绝空串、超长、带空格或斜杠的值，以及 ghp_ 等令牌形状的值", () => {
+    for (const bad of ["", "  ", "a".repeat(MAX_REVIEW_STATUS_ACCOUNT_CHARS + 1), "octo cat", "octo/cat", "-octo", "octo--cat", "octo-", 7, undefined]) {
+      expectLedgerError(() => validReviewStatusAccount(bad), "invalid");
+    }
+    expectLedgerError(() => validReviewStatusAccount(`ghp_${"x".repeat(36)}`), "invalid", /不要填令牌/);
+    expectLedgerError(() => validReviewStatusAccount(`github_pat_${"x".repeat(40)}`), "invalid", /不要填令牌/);
+  });
+
+  it("设置后 hub status 写明盖章账号；没配时写明用 gh 当前账号", () => {
+    hub(lin.sessionId, "project.create", { folder: folder("stamp") });
+    const unset = hub(lin.sessionId, "status", {});
+    expect(unset.text).toContain("审查盖章账号：没配，项目在 GitHub 上时用 gh 当前登录的账号");
+    expect(unset.data).toMatchObject({ reviewStatusAccount: null });
+
+    const set = hub(lin.sessionId, "project.review-status", { account: "octo-cat" });
+    expect(set.data.account).toBe("octo-cat");
+    expect(set.text).toContain("令牌每次现从 gh 取");
+    expect(hub(lin.sessionId, "status", {}).text).toContain("审查盖章账号：octo-cat");
+    expect(hub(lin.sessionId, "status", {}).data).toMatchObject({ reviewStatusAccount: "octo-cat" });
+
+    hub(lin.sessionId, "project.review-status", { account: "other" });
+    expect(count("project_review_status")).toBe(1);
+    hub(lin.sessionId, "project.review-status", { account: null });
+    expect(count("project_review_status")).toBe(0);
+    expect(hub(lin.sessionId, "status", {}).data).toMatchObject({ reviewStatusAccount: null });
+  });
+
+  it("没有项目时 project review-status 报错", () => {
+    expectLedgerError(() => hub(lin.sessionId, "project.review-status", { account: "octo" }), "not_found");
+  });
+
+  it("老项目升级后没有 project_review_status 行，按 gh 当前账号处理；删项目时连带删掉", () => {
+    const project = hub(lin.sessionId, "project.create", { folder: folder("old") }).data.project;
+    expect(count("project_review_status", "project_id = ?", project.id)).toBe(0);
+    expect(hub(lin.sessionId, "status", {}).data).toMatchObject({ reviewStatusAccount: null });
+    hub(lin.sessionId, "project.review-status", { account: "octo" });
+    ledger.archivePm(lin.pmId);
+    ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS);
+    expect(count("projects", "id = ?", project.id)).toBe(0);
+    expect(count("project_review_status")).toBe(0);
+  });
 });

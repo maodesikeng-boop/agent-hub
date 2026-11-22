@@ -37,6 +37,7 @@ export interface ReviewVerifyParams {
 
 export interface ReviewStampParams {
   workerId: WorkerId;
+  reportMessageId: MessageId;
   sha: string;
   verdict: ReviewVerdict;
 }
@@ -82,7 +83,7 @@ export function actionDedupeKey(action: NewAction): string {
     case "review.verify":
       return `${action.params.workerId}:${action.params.reportMessageId}`;
     case "review.stamp":
-      return `${action.params.workerId}:${action.params.sha}`;
+      return `${action.params.workerId}:${action.params.reportMessageId}`;
   }
 }
 

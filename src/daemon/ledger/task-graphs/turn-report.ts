@@ -53,6 +53,7 @@ function mergeReportArtifact(node: TaskNodeDbRow, worker: ReportWorker, parsed: 
     ...(parsed.kind === "ok" ? { summary: truncateChars(parsed.report.summary, MAX_NODE_ARTIFACT_SUMMARY_CHARS) } : {}),
     ...(worker.review !== null && parsed.kind === "ok"
       ? {
+          reviewStamp: undefined,
           reviewVerdict: parsed.report.verdict ?? undefined,
           verifiedCommit:
             parsed.report.verifiedCommit === null ? undefined : truncateChars(parsed.report.verifiedCommit, MAX_NODE_ARTIFACT_COMMIT_CHARS),

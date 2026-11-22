@@ -81,6 +81,8 @@ import {
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveCommit } from "./git/index.ts";
+import { execGh } from "./git/gh.ts";
+import { postReviewStatus } from "./git/review-status.ts";
 import { createFetchedQuota, mergeFetchedQuotas, queryFetchedQuota } from "./quota/fetched-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
@@ -89,6 +91,7 @@ import {
   createSessionSendHandler,
   createSessionStartHandler,
   createReviewObserver,
+  createReviewStampHandler,
   createReviewVerifyHandler,
   createWorktreeCreateHandler,
   endedOnRevokedTokens,
@@ -553,6 +556,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     executor.register("session.end", createSessionEndHandler(deps));
     const observeReview = createReviewObserver({ resolveCommit, remoteBranchHead, probePr });
     executor.register("review.verify", createReviewVerifyHandler({ ledger, observeReview }));
+    executor.register("review.stamp", createReviewStampHandler({ ledger, postReviewStatus: (input) => postReviewStatus(input, { execGh, now: Date.now }) }));
     executor.register("worktree.create", createWorktreeCreateHandler({
         ledger, observeReview, addWorktree, setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),

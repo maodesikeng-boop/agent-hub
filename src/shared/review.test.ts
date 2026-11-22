@@ -8,6 +8,9 @@ import {
   reviewFindingSeverities,
   reviewPushGuardEnv,
   reviewReportProblem,
+  reviewStampRequestOf,
+  reviewStatusDescription,
+  REVIEW_STATUS_CONTEXT,
   type ReviewSnapshot,
 } from "./review.ts";
 import { taskGraphSkillBody } from "./task-graph-skill.ts";
@@ -118,16 +121,62 @@ describe("文案只查不修", () => {
 });
 
 describe("审查盖章：reviewStampRequestOf", () => {
-  it.todo("PASS 和 PASS+NOTES 收尾核对没发现变动时，返回被审提交上的 success");
-  it.todo("FAIL 且验证提交对得上时返回 failure，不等收尾核对");
-  it.todo("PASS 还没做收尾核对（verified 为 undefined）时返回 null");
-  it.todo("收尾核对发现被审分支被动过时返回 null");
-  it.todo("reviewReportProblem 判汇报有误（没写结论、验证提交对不上、PASS 却列着 [Important]）时返回 null");
-  it.todo("审查目录没记下开审快照时返回 null");
-  it.todo("返回的 sha 是快照里的完整提交号，不是汇报里写的短号");
+  const target = { branch: "hub/1-impl", snapshot: before };
+  const ok = { problems: [] };
+
+  it("PASS 和 PASS+NOTES 收尾核对没发现变动时，返回被审提交上的 success", () => {
+    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA, questions: "" }, target, ok)).toEqual({ sha: SHA, verdict: "PASS", state: "success" });
+    expect(reviewStampRequestOf({ verdict: "PASS+NOTES", verifiedCommit: SHA, questions: "- [Nit] 命名" }, target, ok)).toEqual({
+      sha: SHA,
+      verdict: "PASS+NOTES",
+      state: "success",
+    });
+  });
+
+  it("FAIL 且验证提交对得上时返回 failure，不等收尾核对", () => {
+    expect(reviewStampRequestOf({ verdict: "FAIL", verifiedCommit: SHA, questions: "- [Important] x" }, target, undefined)).toEqual({
+      sha: SHA,
+      verdict: "FAIL",
+      state: "failure",
+    });
+  });
+
+  it("PASS 还没做收尾核对（verified 为 undefined）时返回 null", () => {
+    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA, questions: "" }, target, undefined)).toBeNull();
+  });
+
+  it("收尾核对发现被审分支被动过时返回 null", () => {
+    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA, questions: "" }, target, { problems: ["本地分支变了"] })).toBeNull();
+  });
+
+  it("reviewReportProblem 判汇报有误（没写结论、验证提交对不上、PASS 却列着 [Important]）时返回 null", () => {
+    expect(reviewStampRequestOf({ verdict: null, verifiedCommit: SHA, questions: "" }, target, ok)).toBeNull();
+    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: "deadbeef00", questions: "" }, target, ok)).toBeNull();
+    expect(reviewStampRequestOf({ verdict: "FAIL", verifiedCommit: "deadbeef00", questions: "" }, target, undefined)).toBeNull();
+    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA, questions: "- [Important] a.ts:1" }, target, ok)).toBeNull();
+  });
+
+  it("审查目录没记下开审快照时返回 null", () => {
+    expect(reviewStampRequestOf({ verdict: "FAIL", verifiedCommit: SHA, questions: "" }, { branch: "hub/1-impl", snapshot: null }, undefined)).toBeNull();
+  });
+
+  it("返回的 sha 是快照里的完整提交号，不是汇报里写的短号", () => {
+    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA.slice(0, 8), questions: "" }, target, ok)?.sha).toBe(SHA);
+  });
 });
 
 describe("审查盖章：reviewStatusDescription 与状态名", () => {
-  it.todo("REVIEW_STATUS_CONTEXT 是 bellwood/review，跟本仓的合并门禁脚本用同一个常量");
-  it.todo("三种结论的描述都写明结论，长度不超过 GitHub 的 140 字符");
+  it("REVIEW_STATUS_CONTEXT 是 bellwood/review，跟本仓的合并门禁脚本用同一个常量", async () => {
+    expect(REVIEW_STATUS_CONTEXT).toBe("bellwood/review");
+    const gate = await import("../../scripts/review-stamp-gate.ts");
+    expect(gate.REVIEW_STATUS_CONTEXT).toBe(REVIEW_STATUS_CONTEXT);
+  });
+
+  it("三种结论的描述都写明结论，长度不超过 GitHub 的 140 字符", () => {
+    for (const verdict of ["PASS", "PASS+NOTES", "FAIL"] as const) {
+      const text = reviewStatusDescription(verdict);
+      expect(text).toContain(verdict);
+      expect(text.length).toBeLessThanOrEqual(140);
+    }
+  });
 });

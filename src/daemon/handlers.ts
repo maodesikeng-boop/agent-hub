@@ -307,7 +307,15 @@ export interface ReviewStampHandlerDeps {
  * Retryable failures rethrow so the executor backs off; after the last attempt `actionFailedIn` records a skip.
  */
 export function createReviewStampHandler(deps: ReviewStampHandlerDeps): ActionHandler<"review.stamp"> {
-  throw new Error("Not implemented");
+  return async (action) => {
+    const { params } = action;
+    const task = deps.ledger.getReviewStampTask(params);
+    if (task === null) return { kind: "done" };
+    const state = params.verdict === "FAIL" ? "failure" : "success";
+    const outcome = await deps.postReviewStatus({ cwd: task.repo, request: { sha: params.sha, verdict: params.verdict, state }, pr: task.pr, account: task.account });
+    deps.ledger.onReviewStamped(params, outcome);
+    return { kind: "done" };
+  };
 }
 
 /** Issuing for a revoked session throws SessionTokenRevokedError, which the driver turns into a non-retryable error. */

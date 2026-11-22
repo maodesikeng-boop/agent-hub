@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { normalizeName, utf8Bytes } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, Project, ProjectFolder, ProjectId } from "../../shared/domain.ts";
 import type { HubArgs, HubResult, ProjectCard } from "../../shared/hub.ts";
-import { MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_SETUP_COMMAND_BYTES } from "../../shared/limits.ts";
+import { MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_REVIEW_STATUS_ACCOUNT_CHARS, MAX_SETUP_COMMAND_BYTES } from "../../shared/limits.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
@@ -43,13 +43,25 @@ function validSetupCommand(command: unknown): string | null {
   return command;
 }
 
+// Enterprise Managed Users logins carry an underscore suffix, so `_` is allowed alongside GitHub's letters, digits, and single hyphens.
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9_]|-(?=[A-Za-z0-9_]))*$/u;
+
 /**
- * Validates the `hub project review-status --account` value: a GitHub login (letters, digits, single hyphens) up to
+ * Validates the `hub project review-status --account` value: a GitHub login up to
  * `MAX_REVIEW_STATUS_ACCOUNT_CHARS`, or null to clear. Throws `invalid` for anything else, including values shaped like tokens.
  */
 export function validReviewStatusAccount(raw: unknown): string | null {
-  throw new Error("Not implemented");
+  if (raw === null) return null;
+  const usage = `${HUB_COMMAND} project review-status --account <登录名>`;
+  if (typeof raw !== "string" || raw.trim() === "") throw fail("invalid", `账号不能是空的；要清除用 ${HUB_COMMAND} project review-status --clear`);
+  if (raw.length > MAX_REVIEW_STATUS_ACCOUNT_CHARS) throw fail("invalid", `账号不能超过 ${MAX_REVIEW_STATUS_ACCOUNT_CHARS} 个字符`);
+  if (/^(?:gh[pousr]_|github_pat_)/u.test(raw)) throw fail("invalid", `这里只填登录名，不要填令牌：${usage}`);
+  if (!GITHUB_LOGIN.test(raw)) throw fail("invalid", `账号只能是 gh 里登录的用户名（字母、数字、单个连字符或下划线）：${usage}`);
+  return raw;
 }
+
+export const reviewStatusAccountOf = (db: LedgerContext["db"], projectId: ProjectId): string | null =>
+  db.get<{ account: string }>("SELECT account FROM project_review_status WHERE project_id = ?", projectId)?.account ?? null;
 
 function writeSetupCommandIn(ctx: LedgerContext, p: Pending, projectId: ProjectId, command: string | null): ProjectDbRow {
   ctx.db.run("UPDATE projects SET setup_command = ?, updated_at = ? WHERE id = ?", command, ctx.now(), projectId);
@@ -246,6 +258,27 @@ export function createLedgerProjects(
     return { text, data: { project: toProject(row), setupCommand: command } };
   };
 
+  const reviewStatusIn = (caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.review-status">): HubResult<"project.review-status"> => {
+    assertPmNotArchived(caller.pmId);
+    const project = requireProject(caller.pmId);
+    const account = validReviewStatusAccount(args.account);
+    if (account === null) db.run("DELETE FROM project_review_status WHERE project_id = ?", project.id);
+    else {
+      db.run(
+        `INSERT INTO project_review_status (project_id, account, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT (project_id) DO UPDATE SET account = excluded.account, updated_at = excluded.updated_at`,
+        project.id,
+        account,
+        now(),
+      );
+    }
+    const text =
+      account === null
+        ? `已清除项目“${project.name}”的审查盖章账号：以后审查判完，用 gh 当前登录的账号挂提交状态。`
+        : `已设好项目“${project.name}”的审查盖章账号 ${account}：以后审查判完，用 gh 里这个账号的登录挂提交状态。账本只记登录名，令牌每次现从 gh 取。`;
+    return { text, data: { project: toProject(project), account } };
+  };
+
   const setSetupCommandIn = (p: Pending, projectId: ProjectId, command: string | null): Project => {
     const project = db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ? AND status = 'active'", projectId);
     if (project === undefined) throw fail("not_found", `没有编号 ${projectId} 的在用项目`);
@@ -253,5 +286,5 @@ export function createLedgerProjects(
     return toProject(writeSetupCommandIn(ctx, p, project.id, validSetupCommand(command)));
   };
 
-  return { activeProjectOf, projectCard, syncSessionFolders, createProjectIn, attachIn, detachIn, setupIn, setSetupCommandIn };
+  return { activeProjectOf, projectCard, syncSessionFolders, createProjectIn, attachIn, detachIn, setupIn, reviewStatusIn, setSetupCommandIn };
 }

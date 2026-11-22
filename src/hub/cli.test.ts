@@ -13,6 +13,7 @@ import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   HUB_COMMAND,
+  HUB_COMMAND_ROLES,
   HUB_EXIT,
   HUB_FILE_ARGS_MAX,
   LedgerRequestError,
@@ -845,13 +846,39 @@ describe("hub cli", () => {
   });
 
   describe("hub project review-status", () => {
-    it.todo("--account <登录名> 设置、--clear 清除，只有项目经理能调");
-    it.todo("--account 和 --clear 都不给、都给，或多给位置参数时报用法错误");
-    it.todo("用法里有这条命令，写明只存登录名、令牌由 gh 现取");
+    it("--account <登录名> 设置、--clear 清除，只有项目经理能调", async () => {
+      expect((await hub(["project", "review-status", "--account", "octo-cat"])).code).toBe(0);
+      expect((await hub(["project", "review-status", "--clear"])).code).toBe(0);
+      expect(ledger.calls).toEqual([
+        { sessionId: 42, command: "project.review-status", args: { account: "octo-cat" } },
+        { sessionId: 42, command: "project.review-status", args: { account: null } },
+      ]);
+      expect(HUB_COMMAND_ROLES["project.review-status"]).toEqual(["pm"]);
+    });
+
+    it.each([
+      [["project", "review-status"]],
+      [["project", "review-status", "--account", "a", "--clear"]],
+      [["project", "review-status", "--clear", "x"]],
+      [["project", "review-status", "--stdin"]],
+    ])("usage error: hub %j", async (argv) => {
+      const r = await hub([...argv]);
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("用法里有这条命令，写明只存登录名、令牌由 gh 现取", async () => {
+      const r = await hub(["--help"]);
+      expect(r.stdout).toContain(`${cmd} project review-status --account <登录名> | --clear`);
+      expect(r.stdout).toContain("只存登录名，令牌每次现从 gh 取");
+    });
   });
 
   describe("hub worker start 用法", () => {
-    it.todo("写明独立审查用单步审查图（审查步骤），不要派普通 Worker 审");
+    it("写明独立审查用单步审查图（审查步骤），不要派普通 Worker 审", async () => {
+      const r = await hub(["--help"]);
+      expect(r.stdout).toContain("独立审查请建单步审查图（审查步骤，写被审分支），不要派普通 Worker 审");
+    });
   });
 
   describe("long text via --stdin", () => {
