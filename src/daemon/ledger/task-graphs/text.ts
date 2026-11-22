@@ -93,7 +93,7 @@ export function unlockedNoteOf(progress: ProgressResult, graph: TaskGraph): stri
   }
   if (parts.length > 0) return `；${parts.join("；")}`;
   if (isTaskGraphReadyToFinish(graph)) {
-    return `；全部节点已完成（待交付），验收合并后用 ${HUB_COMMAND} graph finish 结束任务图`;
+    return `；全部节点已完成（待交付），验收交付后用 ${HUB_COMMAND} graph finish 结束任务图`;
   }
   return graph.status === "completed" ? "；整张任务图已全部完结！" : "";
 }

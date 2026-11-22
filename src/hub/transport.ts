@@ -25,7 +25,7 @@ export function readAllStdin(stream: Readable, idleMs: number): Promise<string> 
     };
     const arm = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => finish(new UsageError("标准输入一直没有结束，记得用 heredoc（<<'EOF' … EOF）把正文喂给 --stdin")), idleMs);
+      timer = setTimeout(() => finish(new UsageError("标准输入一直没有结束，记得把正文从标准输入喂给 --stdin：bash、zsh 用 heredoc（<<'EOF' … EOF），PowerShell 用单引号 here-string（@'…'@）管道传入")), idleMs);
     };
     const onData = (chunk: Buffer | string) => {
       const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
