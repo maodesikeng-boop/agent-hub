@@ -125,7 +125,8 @@ jobs:
 
   assemble:
     name: assemble release files
-    needs: [plan, windows-build, mac-build]
+    # The attestation below is public and permanent, so it waits for every test gate as well as both builds.
+    needs: [plan, check, windows, macos, smoke, windows-build, mac-build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -161,7 +162,7 @@ jobs:
           sha256sum -c ./*.sha256
       # Attestations go to the public Sigstore log, so rehearsals skip them; promote verifies them before reuse.
       - name: Attest build provenance
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |

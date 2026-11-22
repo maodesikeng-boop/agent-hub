@@ -106,7 +106,7 @@ describe(".github/workflows", () => {
     expect(jobs["windows-build"]?.uses).toBe("./.github/workflows/windows-desktop.yml");
     expect(jobs["mac-build"]?.uses).toBe("./.github/workflows/mac-desktop.yml");
     expect(jobs.smoke?.steps?.some((step) => step.run?.startsWith("pnpm verify"))).toBe(true);
-    expect(needsOf(jobs.assemble!).sort()).toEqual(["mac-build", "plan", "windows-build"]);
+    expect(needsOf(jobs.assemble!).sort()).toEqual(["check", "mac-build", "macos", "plan", "smoke", "windows", "windows-build"]);
     expect(needsOf(jobs.publish!).sort()).toEqual(["assemble", "check", "macos", "plan", "smoke", "windows"]);
     // Without its own if, publish keeps the implicit success() and is skipped unless every gate passed.
     expect(jobs.publish!.if).toBeUndefined();
@@ -143,6 +143,14 @@ describe(".github/workflows", () => {
     expect(jobs.promote!.if).toBe("needs.plan.outputs.mode == 'promote'");
   });
 
+  it("write the public provenance attestation only after every test gate and both installer builds pass", () => {
+    const { jobs } = workflow("release.yml");
+    const needs = needsOf(jobs.assemble!);
+    for (const gate of [...Object.keys(RELEASE_GATES), "smoke", "windows-build", "mac-build"]) expect(needs, gate).toContain(gate);
+    // Without its own if, assemble keeps the implicit success() and is skipped when any gate fails.
+    expect(jobs.assemble!.if).toBeUndefined();
+  });
+
   it("grant id-token and attestations write only to the job that attests the installers", () => {
     const { jobs } = workflow("release.yml");
     const attesting = Object.entries(jobs).filter(([, job]) => job.permissions?.["id-token"] === "write" || job.permissions?.attestations === "write");
@@ -150,7 +158,7 @@ describe(".github/workflows", () => {
     expect(workflow("release.yml")).toHaveProperty("permissions", { contents: "read" });
     const attest = jobs.assemble!.steps!.filter((step) => step.uses?.startsWith("actions/attest-build-provenance@"));
     expect(attest).toHaveLength(1);
-    expect(attest[0]!.if).toBe("github.event_name == 'push'");
+    expect(attest[0]!.if).toBe("github.event_name == 'push' && github.ref_type == 'tag'");
     expect(attest[0]!.with?.["subject-path"]?.trim().split("\n").sort()).toEqual([
       "release-assets/Bellwood-macos-arm64.dmg",
       "release-assets/Bellwood-windows-x64-setup.exe",
