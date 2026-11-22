@@ -94,6 +94,19 @@ describe("createMesh", () => {
     await waitFor(() => b.mesh.status().state === "signed_in" && a.mesh.trust.get(DEVICE_B) !== undefined && b.mesh.trust.get(DEVICE_A) !== undefined);
   });
 
+  it("连点几次批准时补发的是同一场核对，两边核对码一致并走完批准", async () => {
+    const relay = await startTestRelay();
+    const a = await startTestMeshNode(relay, DEVICE_A);
+    await loginNode(a);
+    const b = await startTestMeshNode(relay, DEVICE_B);
+    await loginNode(b);
+    await waitFor(() => signedIn(a).approvals.some((x) => x.requestId === DEVICE_B) && a.mesh.isOnline(DEVICE_B));
+    await a.mesh.beginApproval(DEVICE_B);
+    await a.mesh.beginApproval(DEVICE_B);
+    await approveNode(a, b);
+    expect(a.mesh.trust.get(DEVICE_B)!.fingerprint).toBe(b.mesh.trust.get(DEVICE_B)!.fingerprint);
+  });
+
   it("setCenterPriority 只收账号里的设备并去重", async () => {
     const { nodes } = await account(2);
     const [a, b] = nodes as [TestMeshNode, TestMeshNode];
