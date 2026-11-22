@@ -1,5 +1,6 @@
 import type { WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import { REVIEW_MAX_ROUNDS } from "./limits.ts";
+import { PRODUCT_NAME } from "./names.ts";
 
 export const REVIEW_VERDICTS = ["PASS", "PASS+NOTES", "FAIL"] as const;
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
@@ -103,6 +104,41 @@ export function reviewVerifyFailedText(problems: readonly string[]): string {
 
 export function reviewVerifyErrorProblem(error: string): string {
   return `收尾核对没跑成：${error}`;
+}
+
+// A review stamp is a commit status on the reviewed commit; it records a verdict and never blocks the Task Graph.
+export const REVIEW_STATUS_CONTEXT = `${PRODUCT_NAME.toLowerCase()}/review`;
+
+export type ReviewStampState = "success" | "failure";
+
+export interface ReviewStampRequest {
+  sha: string;
+  verdict: ReviewVerdict;
+  state: ReviewStampState;
+}
+
+export type ReviewStampOutcome =
+  | { kind: "posted"; sha: string; state: ReviewStampState; account: string | null; at: number }
+  | { kind: "skipped"; sha: string; reason: string; at: number };
+
+/**
+ * Returns the stamp to post once a review report is final, or null when nothing may be posted.
+ * PASS and PASS+NOTES map to success only after the branch check found no change (`verified.problems` is empty).
+ * FAIL maps to failure without waiting for the branch check, because FAIL never runs it.
+ * Returns null when the report fails `reviewReportProblem` (missing verdict, wrong verified commit, PASS with an [Important] line),
+ * when the target has no snapshot, or when a PASS has not been verified yet.
+ */
+export function reviewStampRequestOf(
+  report: { verdict: ReviewVerdict | null; verifiedCommit: string | null; questions: string },
+  target: ReviewTarget,
+  verified: ReviewVerifyResult | undefined,
+): ReviewStampRequest | null {
+  throw new Error("Not implemented");
+}
+
+/** Postcondition: an English status description of at most 140 characters (the GitHub limit) naming the verdict. */
+export function reviewStatusDescription(verdict: ReviewVerdict): string {
+  throw new Error("Not implemented");
 }
 
 // GIT_CONFIG_COUNT (git 2.31+) outranks repo config; append after any entries already in the daemon's env.

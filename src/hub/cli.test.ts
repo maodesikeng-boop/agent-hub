@@ -844,6 +844,16 @@ describe("hub cli", () => {
     });
   });
 
+  describe("hub project review-status", () => {
+    it.todo("--account <登录名> 设置、--clear 清除，只有项目经理能调");
+    it.todo("--account 和 --clear 都不给、都给，或多给位置参数时报用法错误");
+    it.todo("用法里有这条命令，写明只存登录名、令牌由 gh 现取");
+  });
+
+  describe("hub worker start 用法", () => {
+    it.todo("写明独立审查用单步审查图（审查步骤），不要派普通 Worker 审");
+  });
+
   describe("long text via --stdin", () => {
     it("delivers a 3 KB persona text with $, backticks and quotes unchanged", async () => {
       const line = "价格 $HUB_TOKEN `rm -rf /` \"双引号\" 'single' \\ $(whoami) ${x}\n";

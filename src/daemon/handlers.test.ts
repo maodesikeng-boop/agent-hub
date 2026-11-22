@@ -597,3 +597,10 @@ describe("session.send 处理函数：任务图交付单发送前异步补齐 di
     });
   });
 });
+
+describe("review.stamp 处理函数", () => {
+  it.todo("取到任务就调 postReviewStatus，并把结果交给 onReviewStamped");
+  it.todo("取不到任务（Worker 没了、快照对不上 sha）时直接 done，不调 gh、不写账本");
+  it.todo("postReviewStatus 抛 ReviewStatusRetryableError 时往外抛，交给执行器退避重试");
+  it.todo("跳过的结果照样记进账本，处理函数返回 done");
+});

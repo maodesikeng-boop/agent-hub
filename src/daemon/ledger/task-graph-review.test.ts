@@ -377,3 +377,18 @@ describe("审查步骤只查不修", () => {
     expect(docs.review_json).toBeNull();
   });
 });
+
+describe("审查盖章", () => {
+  it.todo("审查判 PASS、收尾核对没发现变动后，排一条 review.stamp，参数是被审提交和结论");
+  it.todo("PASS+NOTES 同样排 success，步骤照常完成或开检查点卡");
+  it.todo("FAIL 排一条 failure 的 review.stamp，步骤照常停下等项目经理");
+  it.todo("汇报有误或收尾核对发现分支被动过时不排 review.stamp");
+  it.todo("非审查步骤的 Worker 汇报不排 review.stamp");
+  it.todo("同一个 Worker、同一个提交只排一次（重放汇报、重启恢复都不重复）");
+  it.todo("getReviewStampTask 在 Worker 收工后仍返回主文件夹、快照里的 PR 和项目配的账号");
+  it.todo("onReviewStamped 把 posted 或 skipped 写进步骤 artifact 的 reviewStamp，步骤状态不变、不叫醒项目经理");
+  it.todo("步骤已换人接手、最新 Worker 不是盖章的 Worker 时，onReviewStamped 不写");
+  it.todo("新一轮审查汇报合并 artifact 时清掉上一轮的 reviewStamp");
+  it.todo("review.stamp 重试用完后 actionFailedIn 记一条 skipped，原因是最后的错误，任务图不受影响");
+  it.todo("交付单和 hub graph show 的步骤行写明提交状态已挂，或没挂和原因");
+});

@@ -116,3 +116,18 @@ describe("文案只查不修", () => {
     expect(taskGraphSkillBody()).not.toMatch(/REVIEW\.md|pnpm|bwrap/);
   });
 });
+
+describe("审查盖章：reviewStampRequestOf", () => {
+  it.todo("PASS 和 PASS+NOTES 收尾核对没发现变动时，返回被审提交上的 success");
+  it.todo("FAIL 且验证提交对得上时返回 failure，不等收尾核对");
+  it.todo("PASS 还没做收尾核对（verified 为 undefined）时返回 null");
+  it.todo("收尾核对发现被审分支被动过时返回 null");
+  it.todo("reviewReportProblem 判汇报有误（没写结论、验证提交对不上、PASS 却列着 [Important]）时返回 null");
+  it.todo("审查目录没记下开审快照时返回 null");
+  it.todo("返回的 sha 是快照里的完整提交号，不是汇报里写的短号");
+});
+
+describe("审查盖章：reviewStatusDescription 与状态名", () => {
+  it.todo("REVIEW_STATUS_CONTEXT 是 bellwood/review，跟本仓的合并门禁脚本用同一个常量");
+  it.todo("三种结论的描述都写明结论，长度不超过 GitHub 的 140 字符");
+});

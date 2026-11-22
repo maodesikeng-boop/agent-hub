@@ -1038,3 +1038,10 @@ describe("getLaunchContext", () => {
     expect(ledger.getLaunchContext(lin.sessionId)).toEqual(first);
   });
 });
+
+describe("审查盖章账号", () => {
+  it.todo("validReviewStatusAccount 接受 GitHub 登录名，null 表示清除");
+  it.todo("validReviewStatusAccount 拒绝空串、超长、带空格或斜杠的值，以及 ghp_ 等令牌形状的值");
+  it.todo("设置后 hub status 写明盖章账号；没配时写明用 gh 当前账号");
+  it.todo("老项目升级后没有 project_review_status 行，按 gh 当前账号处理；删项目时连带删掉");
+});

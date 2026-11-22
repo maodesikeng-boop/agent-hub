@@ -25,6 +25,10 @@ export const WORKER_LIST_RECENT_ENDED = 20;
 export const WORKER_VIEW_TEXT_MAX_CHARS = 100;
 export const WORKER_STALL_HINT_MS = 5 * 60_000;
 export const WORKER_PR_PROBE_TIMEOUT_MS = 5_000;
+export const REVIEW_STAMP_TIMEOUT_MS = 15_000;
+export const MAX_REVIEW_STAMP_REASON_CHARS = 300;
+/** GitHub login length cap (39) with room for enterprise hosts' longer logins. */
+export const MAX_REVIEW_STATUS_ACCOUNT_CHARS = 100;
 export const MAX_MESSAGE_BYTES = 100 * 1024;
 export const STREAMING_TEXT_THROTTLE_MS = 70;
 export const MAX_STREAMING_TEXT_CHARS = 16_000;

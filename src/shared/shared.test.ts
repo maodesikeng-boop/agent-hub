@@ -80,6 +80,7 @@ import type {
   WorkerMessageMeta,
   WorktreeCreateParams,
   WorktreeTask,
+  ReviewStampParams,
   ReviewVerifyParams,
   SetupOutcome,
 } from "./index.ts";
@@ -158,6 +159,10 @@ describe("动作", () => {
       if (row.type === "review.verify") {
         expectTypeOf(row.params).toEqualTypeOf<ReviewVerifyParams>();
         return row.params.reportMessageId;
+      }
+      if (row.type === "review.stamp") {
+        expectTypeOf(row.params).toEqualTypeOf<ReviewStampParams>();
+        return row.params.workerId;
       }
       expectTypeOf(row.params).toEqualTypeOf<SessionSendParams>();
       return row.params.messageId;

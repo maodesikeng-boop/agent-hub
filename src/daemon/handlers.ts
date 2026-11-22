@@ -15,6 +15,7 @@ import {
   type Ledger,
   type Message,
   type ReviewObservation,
+  type ReviewStampOutcome,
   type SessionStore,
   type SessionTokens,
   type WorkerId,
@@ -22,6 +23,7 @@ import {
   type WorkerPrProbeResult,
 } from "../shared/index.ts";
 import type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat } from "./git/index.ts";
+import type { PostReviewStatusInput } from "./git/review-status.ts";
 import type { SqliteLedger } from "./ledger/index.ts";
 import type { SessionTmpStore } from "./session-tmp.ts";
 import type { SetupRunner } from "./setup/index.ts";
@@ -293,6 +295,19 @@ export function createReviewVerifyHandler(deps: ReviewVerifyHandlerDeps): Action
     deps.ledger.onReviewVerified(action.params, { problems: diffReviewSnapshot(task.branch, task.snapshot, now) });
     return { kind: "done" };
   };
+}
+
+export interface ReviewStampHandlerDeps {
+  ledger: Pick<Ledger, "getReviewStampTask" | "onReviewStamped">;
+  postReviewStatus: (input: PostReviewStatusInput) => Promise<ReviewStampOutcome>;
+}
+
+/**
+ * Posts the stamp and records the outcome. A missing task (Worker gone, snapshot changed) finishes with no write.
+ * Retryable failures rethrow so the executor backs off; after the last attempt `actionFailedIn` records a skip.
+ */
+export function createReviewStampHandler(deps: ReviewStampHandlerDeps): ActionHandler<"review.stamp"> {
+  throw new Error("Not implemented");
 }
 
 /** Issuing for a revoked session throws SessionTokenRevokedError, which the driver turns into a non-retryable error. */

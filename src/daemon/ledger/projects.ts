@@ -43,6 +43,14 @@ function validSetupCommand(command: unknown): string | null {
   return command;
 }
 
+/**
+ * Validates the `hub project review-status --account` value: a GitHub login (letters, digits, single hyphens) up to
+ * `MAX_REVIEW_STATUS_ACCOUNT_CHARS`, or null to clear. Throws `invalid` for anything else, including values shaped like tokens.
+ */
+export function validReviewStatusAccount(raw: unknown): string | null {
+  throw new Error("Not implemented");
+}
+
 function writeSetupCommandIn(ctx: LedgerContext, p: Pending, projectId: ProjectId, command: string | null): ProjectDbRow {
   ctx.db.run("UPDATE projects SET setup_command = ?, updated_at = ? WHERE id = ?", command, ctx.now(), projectId);
   const row = ctx.db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", projectId)!;

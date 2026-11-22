@@ -210,6 +210,10 @@ describe(".github/workflows", () => {
     expect(workflow(name).on.push?.paths).toContain("scripts/staged-lockfile.ts");
   });
 
+  it.todo("run review-stamp.yml on pull_request_target for every PR to main with no path filter, so the required status always reports");
+  it.todo("never check out the PR head or pass PR refs to a step in review-stamp.yml");
+  it.todo("grant review-stamp.yml only contents read, pull-requests read, and statuses write");
+
   it("only filter on paths that exist", () => {
     for (const { name, wf } of WORKFLOWS) {
       for (const filter of [wf.on.push, wf.on.pull_request]) {

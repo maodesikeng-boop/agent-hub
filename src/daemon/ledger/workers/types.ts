@@ -1,6 +1,6 @@
 import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, WorkerId } from "../../../shared/domain.ts";
 import type { WorkerHubStatus } from "../../../shared/hub.ts";
-import type { ReviewTarget, ReviewVerifyResult } from "../../../shared/review.ts";
+import type { ReviewStampOutcome, ReviewTarget, ReviewVerifyResult } from "../../../shared/review.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { ParsedWorkerReport } from "../../../shared/worker.ts";
 import type { LedgerContext, Pending } from "../context.ts";
@@ -42,6 +42,7 @@ export interface LedgerWorkersTaskGraphHooks {
   onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
   workerGraphForkBase: (workerId: WorkerId) => string | undefined;
+  recordReviewStampIn: (p: Pending, workerId: WorkerId, outcome: ReviewStampOutcome) => void;
   workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;
 }
 
