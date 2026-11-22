@@ -145,6 +145,16 @@ function createSwitchableRelay(): RelayClient & { attach(client: RelayClient): v
   };
 }
 
+function approvalView(peer: RelayDeviceView, ceremony: ApprovalCeremony | undefined, expiresAt: number): MeshApprovalView {
+  return {
+    requestId: peer.id,
+    device: { id: peer.id, name: peer.name, platform: peer.platform, fingerprint: peer.fingerprint },
+    requestedAt: peer.addedAt,
+    expiresAt,
+    sas: ceremony?.sas() ?? null,
+  };
+}
+
 export async function createMesh(options: MeshOptions): Promise<Mesh> {
   const now = options.now ?? Date.now;
   const log = (line: string) => options.log(`组网：${line}`);
@@ -331,6 +341,7 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   const sendSignals = (to: DeviceId, signals: ApprovalSignal[]) => {
     for (const signal of signals) relay.send({ type: "signal", to, payload: JSON.stringify(signal) });
   };
+  const resendOutstanding = (peer: DeviceId) => sendSignals(peer, ceremonies.get(peer)?.outstanding() ?? []);
   const relayDevice = (id: DeviceId) => relayDevices.find((d) => d.id === id);
   const settle = (peer: DeviceId, ceremony: ApprovalCeremony) => {
     const outcome = ceremony.outcome();
@@ -410,6 +421,8 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
       const was = presence.get(entry.id)?.online ?? false;
       presence.set(entry.id, entry);
       if (was && !entry.online) dialer.forget(entry.id);
+      // The relay drops signals to a device without a control connection, so resend what the peer missed once it is back.
+      if (!was && entry.online) resendOutstanding(entry.id);
     }
     for (const id of [...presence.keys()]) {
       if (!seen.has(id)) {
@@ -549,13 +562,6 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
         lastSeenAt: self ? null : (presence.get(d.id)?.lastSeenAt ?? null),
       };
     });
-  const approvalView = (peer: RelayDeviceView, ceremony: ApprovalCeremony | undefined, expiresAt: number): MeshApprovalView => ({
-    requestId: peer.id,
-    device: { id: peer.id, name: peer.name, platform: peer.platform, fingerprint: peer.fingerprint },
-    requestedAt: peer.addedAt,
-    expiresAt,
-    sas: ceremony?.sas() ?? null,
-  });
   const status = (): AccountStatusView => {
     const state = account.state();
     if (state.kind === "signed_out") {
@@ -667,6 +673,8 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
         const started = startApproval({ role: "approver", requestId: newRelayToken(), self: identity, peerDeviceId: peer.id, expiresAt: now() + MESH_APPROVAL_TTL_MS });
         ceremonies.set(peer.id, started.ceremony);
         sendSignals(peer.id, started.first);
+      } else {
+        resendOutstanding(peer.id);
       }
       changed();
       return status();

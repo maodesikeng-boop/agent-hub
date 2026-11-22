@@ -296,6 +296,8 @@ export interface ApprovalCeremony {
   sas(): string | null;
   peerCertPem(): string | null;
   receive(signal: ApprovalSignal): Promise<ApprovalSignal[]>;
+  /** Signals the peer may still be missing; safe to resend because the peer replays its reply to a duplicate. */
+  outstanding(): ApprovalSignal[];
   confirmLocal(): ApprovalSignal[];
   cancel(reason: "mismatch" | "cancelled"): ApprovalSignal[];
   expire(now: number): ApprovalSignal[];
@@ -323,6 +325,8 @@ export function startApproval(input: {
   let sas: string | null = null;
   let localConfirmed = false;
   let remoteConfirmed = false;
+  const replies = new Map<string, Promise<ApprovalSignal[]>>();
+  let tail: Promise<unknown> = Promise.resolve();
 
   const abort = (reason: "mismatch" | "expired" | "cancelled" | "bad_signal"): ApprovalSignal[] => {
     if (step === "approved" || step === "aborted") return [];
@@ -344,12 +348,52 @@ export function startApproval(input: {
     const bytes = base64UrlDecode(text);
     return bytes !== null && bytes.length === MESH_SAS_NONCE_BYTES ? bytes : null;
   };
-  const computeSas = async (peerNonce: Uint8Array) => {
-    sas = await meshSasCode({ fingerprint: self.fingerprint, nonce }, { fingerprint: peerFingerprint!, nonce: peerNonce });
+  const computeSas = async (peerNonce: Uint8Array): Promise<boolean> => {
+    const code = await meshSasCode({ fingerprint: self.fingerprint, nonce }, { fingerprint: peerFingerprint!, nonce: peerNonce });
+    // cancel(), expire(), or a peer abort may land while the digest runs; an aborted ceremony must stay aborted.
+    if (step === "aborted") return false;
+    sas = code;
     step = "sas";
+    return true;
   };
+  const offer: ApprovalSignal = { kind: "offer", requestId, certPem: self.certPem };
+  const commit: ApprovalSignal = { kind: "commit", requestId, certPem: self.certPem, commitment: base64UrlEncode(sha256(nonce)) };
+  const reveal: ApprovalSignal = { kind: "reveal", requestId, nonce: base64UrlEncode(nonce) };
+  const confirm: ApprovalSignal = { kind: "confirm", requestId };
   const maybeApprove = () => {
     if (step === "sas" && localConfirmed && remoteConfirmed) step = "approved";
+  };
+
+  const advance = async (signal: Exclude<ApprovalSignal, { kind: "abort" }>): Promise<ApprovalSignal[]> => {
+    if (role === "joiner" && step === "awaiting_offer" && signal.kind === "offer") {
+      if (!acceptPeerCert(signal.certPem)) return abort("bad_signal");
+      step = "committed";
+      return [commit];
+    }
+    if (role === "approver" && step === "offered" && signal.kind === "commit") {
+      const commitment = base64UrlDecode(signal.commitment);
+      if (commitment === null || commitment.length !== 32 || !acceptPeerCert(signal.certPem)) return abort("bad_signal");
+      peerCommitment = commitment;
+      step = "revealed";
+      return [reveal];
+    }
+    if (role === "joiner" && step === "committed" && signal.kind === "reveal") {
+      const peerNonce = decodeNonce(signal.nonce);
+      if (peerNonce === null) return abort("bad_signal");
+      return (await computeSas(peerNonce)) ? [reveal] : [];
+    }
+    if (role === "approver" && step === "revealed" && signal.kind === "reveal") {
+      const peerNonce = decodeNonce(signal.nonce);
+      if (peerNonce === null || !Buffer.from(sha256(peerNonce)).equals(Buffer.from(peerCommitment!))) return abort("bad_signal");
+      await computeSas(peerNonce);
+      return [];
+    }
+    if (step === "sas" && signal.kind === "confirm" && !remoteConfirmed) {
+      remoteConfirmed = true;
+      maybeApprove();
+      return [];
+    }
+    return abort("bad_signal");
   };
 
   const ceremony: ApprovalCeremony = {
@@ -364,47 +408,36 @@ export function startApproval(input: {
         step = "aborted";
         return [];
       }
-      if (role === "joiner" && step === "awaiting_offer" && signal.kind === "offer") {
-        if (!acceptPeerCert(signal.certPem)) return abort("bad_signal");
-        step = "committed";
-        return [{ kind: "commit", requestId, certPem: self.certPem, commitment: base64UrlEncode(sha256(nonce)) }];
+      const key = canonicalJson(signal);
+      const known = replies.get(key);
+      if (known !== undefined) {
+        const out = await known;
+        return ceremony.outcome() === "aborted" ? [] : out;
       }
-      if (role === "approver" && step === "offered" && signal.kind === "commit") {
-        const commitment = base64UrlDecode(signal.commitment);
-        if (commitment === null || commitment.length !== 32 || !acceptPeerCert(signal.certPem)) return abort("bad_signal");
-        peerCommitment = commitment;
-        step = "revealed";
-        return [{ kind: "reveal", requestId, nonce: base64UrlEncode(nonce) }];
-      }
-      if (role === "joiner" && step === "committed" && signal.kind === "reveal") {
-        const peerNonce = decodeNonce(signal.nonce);
-        if (peerNonce === null) return abort("bad_signal");
-        await computeSas(peerNonce);
-        return [{ kind: "reveal", requestId, nonce: base64UrlEncode(nonce) }];
-      }
-      if (role === "approver" && step === "revealed" && signal.kind === "reveal") {
-        const peerNonce = decodeNonce(signal.nonce);
-        if (peerNonce === null || !Buffer.from(sha256(peerNonce)).equals(Buffer.from(peerCommitment!))) return abort("bad_signal");
-        await computeSas(peerNonce);
-        return [];
-      }
-      if (step === "sas" && signal.kind === "confirm" && !remoteConfirmed) {
-        remoteConfirmed = true;
-        maybeApprove();
-        return [];
-      }
-      return abort("bad_signal");
+      // Signals that arrive together must not interleave across the SAS digest, or a later step sees a stale one and aborts.
+      // Cache the queued reply before awaiting so a duplicate delivered in the same tick replays instead of aborting.
+      const result = tail.then(() => advance(signal));
+      tail = result.catch(() => {});
+      replies.set(key, result);
+      return result;
+    },
+    outstanding() {
+      if (step === "offered") return [offer];
+      if (step === "committed") return [commit];
+      if (step === "revealed") return [reveal];
+      if (step !== "sas") return [];
+      return [...(role === "joiner" ? [reveal] : []), ...(localConfirmed ? [confirm] : [])];
     },
     confirmLocal() {
       if (step !== "sas") throw new Error("核对码还没出来");
       if (localConfirmed) return [];
       localConfirmed = true;
       maybeApprove();
-      return [{ kind: "confirm", requestId }];
+      return [confirm];
     },
     cancel: (reason) => abort(reason),
     expire: (now) => (now > input.expiresAt ? abort("expired") : []),
     outcome: () => (step === "approved" ? "approved" : step === "aborted" ? "aborted" : "pending"),
   };
-  return { ceremony, first: role === "approver" ? [{ kind: "offer", requestId, certPem: self.certPem }] : [] };
+  return { ceremony, first: role === "approver" ? [offer] : [] };
 }
