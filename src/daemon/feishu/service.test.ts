@@ -1819,6 +1819,122 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
     expect(fake.callsOf("message.delete")).toEqual([{ message_id: statusCard.messageId }]);
   });
 
+  describe("底层模型报错结束这一轮时，群里看得到原因，状态卡不撤回", () => {
+    const openFailingTurn = async (text: string) => {
+      const chat = chatOf(lin.pmId);
+      say(chat, text);
+      await settle();
+      const m = userMessages(lin.conversationId).find((x) => x.text === text)!;
+      running(lin.sessionId);
+      ev(lin.sessionId, { type: "message.delivered", messageIds: [m.id], at: Date.now() });
+      ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+      await settle();
+      return { chat, message: m, statusCard: streamCardMessage(chat)! };
+    };
+    const closedText = (cardMessageId: string) => {
+      const cardId = (JSON.parse(fake.sent.find((s) => s.messageId === cardMessageId)!.content) as { data: { card_id: string } }).data.card_id;
+      const last = fake.callsOf("card.update").filter((u) => u.card_id === cardId).at(-1)!;
+      expect(cardJsonOf(last.card.data).config.streaming_mode).toBe(false);
+      expect(buttonValues(last.card.data)).toEqual([]);
+      return last.card.data;
+    };
+
+    it("turn.ended 带错误：状态卡收成报错原因，不撤回", async () => {
+      await connect();
+      const { message, statusCard } = await openFailingTurn("继续");
+      ev(lin.sessionId, {
+        type: "turn.ended",
+        ok: false,
+        interrupted: false,
+        messageIds: [message.id],
+        durationMs: 1,
+        error: { subtype: "error_during_execution", message: "API Error: 429 rate_limit_error: usage limit reached" },
+        at: Date.now(),
+      });
+      await settle();
+      expect(ledger.getMessage(message.id)!.status).toBe("failed");
+      expect(fake.callsOf("message.delete")).toEqual([]);
+      expect(closedText(statusCard.messageId)).toContain("额度用完了");
+    });
+
+    it("会话一开轮就崩溃退出：状态卡收成报错原因，不撤回", async () => {
+      await connect();
+      const { message, statusCard } = await openFailingTurn("继续啊");
+      ev(lin.sessionId, { type: "session.exited", reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [message.id], at: Date.now() });
+      await settle();
+      expect(ledger.getMessage(message.id)!.status).toBe("failed");
+      expect(fake.callsOf("message.delete")).toEqual([]);
+      expect(closedText(statusCard.messageId)).toContain("exit code 1");
+    });
+
+    it("还没开出状态卡就失败：在群里单发一张卡说明原因", async () => {
+      await connect();
+      const chat = chatOf(lin.pmId);
+      say(chat, "在吗");
+      await settle();
+      const m = userMessages(lin.conversationId).find((x) => x.text === "在吗")!;
+      const before = fake.sent.filter((s) => s.chatId === chat).length;
+      ev(lin.sessionId, { type: "driver.error", code: "spawn_failed", message: "spawn claude ENOENT", messageIds: [m.id], at: Date.now() });
+      await settle();
+      expect(ledger.getMessage(m.id)!.status).toBe("failed");
+      const posted = fake.sent.filter((s) => s.chatId === chat).slice(before);
+      expect(posted).toHaveLength(1);
+      expect(posted[0]!.content).toMatch(/没回成/);
+      expect(fake.callsOf("message.delete")).toEqual([]);
+    });
+
+    it("连着发几句、每句都在开轮前失败：每句都在群里说明原因", async () => {
+      await connect();
+      const chat = chatOf(lin.pmId);
+      const before = fake.sent.filter((s) => s.chatId === chat).length;
+      for (const text of ["继续", "继续啊？你怎么还撤回了", "消息都被你撤回了"]) {
+        say(chat, text);
+        await settle();
+        const m = userMessages(lin.conversationId).find((x) => x.text === text)!;
+        ev(lin.sessionId, { type: "driver.error", code: "spawn_failed", message: "spawn claude ENOENT", messageIds: [m.id], at: Date.now() });
+        await settle();
+        expect(ledger.getMessage(m.id)!.status).toBe("failed");
+      }
+      const notices = fake.sent.filter((s) => s.chatId === chat).slice(before).filter((s) => s.content.includes("没回成"));
+      expect(notices).toHaveLength(3);
+      expect(fake.callsOf("message.delete")).toEqual([]);
+    });
+
+    it("单发的说明卡和状态卡一样按飞书卡片 Markdown 收拾原因里的图片链接", async () => {
+      await connect();
+      const chat = chatOf(lin.pmId);
+      say(chat, "看图");
+      await settle();
+      const m = userMessages(lin.conversationId).find((x) => x.text === "看图")!;
+      const before = fake.sent.filter((s) => s.chatId === chat).length;
+      ev(lin.sessionId, { type: "driver.error", code: "invalid_input", message: "cannot read ![shot](/tmp/shot.png)", messageIds: [m.id], at: Date.now() });
+      await settle();
+      const posted = fake.sent.filter((s) => s.chatId === chat).slice(before);
+      expect(posted).toHaveLength(1);
+      expect(posted[0]!.content).toContain("图片「shot」");
+      expect(posted[0]!.content).not.toContain("/tmp/shot.png");
+    });
+
+    it("一轮里同时失败的几句只说明一次", async () => {
+      await connect();
+      const chat = chatOf(lin.pmId);
+      say(chat, "第一句");
+      say(chat, "第二句");
+      await settle();
+      const ids = userMessages(lin.conversationId).filter((x) => x.text === "第一句" || x.text === "第二句").map((x) => x.id);
+      running(lin.sessionId);
+      ev(lin.sessionId, { type: "message.delivered", messageIds: ids, at: Date.now() });
+      ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+      await settle();
+      const before = fake.sent.filter((s) => s.chatId === chat).length;
+      ev(lin.sessionId, { type: "turn.ended", ok: false, interrupted: false, messageIds: ids, durationMs: 1, error: { subtype: "error", message: "boom" }, at: Date.now() });
+      await settle();
+      expect(ids.map((id) => ledger.getMessage(id)!.status)).toEqual(["failed", "failed"]);
+      expect(fake.sent.filter((s) => s.chatId === chat).slice(before)).toEqual([]);
+      expect(fake.callsOf("message.delete")).toEqual([]);
+    });
+  });
+
   it("撤回被飞书拒绝（超过撤回时限）时把状态卡收成一行说明：关流式、去停止按钮", async () => {
     await connect();
     say(chatOf(lin.pmId), "跑一下");

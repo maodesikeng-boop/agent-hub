@@ -525,7 +525,7 @@ describe("全账号一个飞书机器人（假飞书传输层）", () => {
       const found = snap.conversations[0]!.messages.find((m) => m.sender === "user" && m.text.includes("合盖期间吩咐第二台的事"));
       return found !== undefined ? found : undefined;
     }, 15_000).then((found) => {
-      expect(found.text).toMatch(/^（离线期间 \d{2}-\d{2} \d{2}:\d{2} 发的）\n合盖期间吩咐第二台的事$/);
+      expect(found.text).toMatch(/^（\d{2}-\d{2} \d{2}:\d{2} 发的，暂存后补送）\n合盖期间吩咐第二台的事$/);
     });
   });
 
