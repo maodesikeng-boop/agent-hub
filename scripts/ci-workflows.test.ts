@@ -267,6 +267,24 @@ describe(".github/workflows", () => {
     expect(gateFiles.filter((file) => matchStampPaths([file], globs).length === 0)).toEqual([]);
   });
 
+  it("never let actions/setup-node cache a package manager that no earlier step in the job installed", () => {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { packageManager?: string };
+    expect(pkg.packageManager, "package.json must declare packageManager").toBeDefined();
+    const installers = (step: Step) => step.uses?.startsWith("pnpm/action-setup@") || /\bcorepack enable\b/u.test(step.run ?? "");
+    const offenders: string[] = [];
+    for (const { name, wf } of WORKFLOWS) {
+      for (const [jobName, job] of Object.entries(wf.jobs)) {
+        const steps = job.steps ?? [];
+        steps.forEach((step, index) => {
+          if (!step.uses?.startsWith("actions/setup-node@")) return;
+          const cacheOptOut = String(step.with?.["package-manager-cache"]) === "false" && step.with?.cache === undefined;
+          if (!cacheOptOut && !steps.slice(0, index).some(installers)) offenders.push(`${name}#${jobName}`);
+        });
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("only filter on paths that exist", () => {
     for (const { name, wf } of WORKFLOWS) {
       for (const filter of [wf.on.push, wf.on.pull_request]) {
