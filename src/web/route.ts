@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { isDeviceId, type ConversationId, type DeviceId, type PmId } from "../shared/index.ts";
 
+/** Drill-down pages inside PM settings; the settings summary itself has no page. */
+export type ProfilePage = "capabilities" | "persona" | "memory" | "worktree" | "history";
+
 export type ScopedRoute = (
   | { view: "conversation"; id: ConversationId }
   | { view: "worker"; id: ConversationId }
-  | { view: "profile"; pmId: PmId; page?: "capabilities" }
+  | { view: "profile"; pmId: PmId; page?: ProfilePage }
 ) & { device?: DeviceId };
 
 export const SETTINGS_SECTIONS = [

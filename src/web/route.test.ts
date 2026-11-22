@@ -110,3 +110,8 @@ describe("设置网址（docs/mobile-settings-design.md 第 2.2 节）", () => {
     expect(result.current.route).toEqual({ view: "settings", section: "computers" });
   });
 });
+
+describe("PM settings drill-down pages", () => {
+  it.todo("round-trips #/pm/<id>/<page> for capabilities, persona, memory, worktree, and history, with and without a device");
+  it.todo("rejects unknown pages and page suffixes on conversation and Piece routes");
+});
