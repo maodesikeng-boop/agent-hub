@@ -11,6 +11,7 @@ import {
   parseStampPaths,
   type GateDeps,
 } from "./review-stamp-gate.ts";
+import { REVIEW_STATUS_CONTEXT as DAEMON_REVIEW_STATUS_CONTEXT } from "../src/shared/review.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 
 const SHA = "b".repeat(40);
@@ -27,6 +28,10 @@ Intro text with \`not-a-glob-line\` in prose.
 
 - \`docs/**\`
 `;
+
+it("门禁读的状态名跟守护进程挂的一致", () => {
+  expect(REVIEW_STATUS_CONTEXT).toBe(DAEMON_REVIEW_STATUS_CONTEXT);
+});
 
 describe("parseStampPaths", () => {
   it("读出 REVIEW.md 里“Paths that require a review stamp”一节所有反引号里的 glob，到下一个 ## 为止", () => {
@@ -119,7 +124,7 @@ interface RecordedRequest {
   auth: string | null;
 }
 
-function fakeGitHub(pages: Array<Array<{ filename: string; previous_filename?: string }>>, statuses: unknown[] = []) {
+function fakeGitHub(pages: Array<Array<{ filename: string; previous_filename?: string }>>, statuses: unknown[] = [], headSha = SHA) {
   const requests: RecordedRequest[] = [];
   const logs: string[] = [];
   const deps: GateDeps = {
@@ -130,7 +135,7 @@ function fakeGitHub(pages: Array<Array<{ filename: string; previous_filename?: s
       const headers = new Headers(init?.headers);
       requests.push({ url, method: init?.method ?? "GET", body: init?.body === undefined ? undefined : JSON.parse(String(init.body)), auth: headers.get("authorization") });
       const page = Number(new URL(url).searchParams.get("page") ?? "1");
-      const json = url.includes("/files") ? (pages[page - 1] ?? []) : url.includes("/statuses?") ? statuses : {};
+      const json = url.includes("/files") ? (pages[page - 1] ?? []) : url.includes("/statuses?") ? statuses : url.endsWith(`/pulls/7`) ? { head: { sha: headSha } } : {};
       return new Response(JSON.stringify(json), { status: 200, headers: { "Content-Type": "application/json" } });
     }) as typeof fetch,
   };
@@ -164,6 +169,7 @@ describe("main", () => {
     expect(gh.requests.map((r) => `${r.method} ${new URL(r.url).pathname}${new URL(r.url).search}`)).toEqual([
       "GET /repos/acme/widgets/pulls/7/files?per_page=100&page=1",
       "GET /repos/acme/widgets/pulls/7/files?per_page=100&page=2",
+      "GET /repos/acme/widgets/pulls/7",
       `GET /repos/acme/widgets/commits/${SHA}/statuses?per_page=100`,
       `POST /repos/acme/widgets/statuses/${SHA}`,
     ]);
@@ -189,6 +195,20 @@ describe("main", () => {
     const docsOnly = fakeGitHub([[{ filename: "docs/a.md" }]]);
     expect(await main([], ENV, docsOnly.deps)).toBe(0);
     expect(docsOnly.requests.at(-1)!.body).toMatchObject({ state: "success" });
+  });
+
+  it("读完文件列表后 PR 头已经换了提交：不发状态，交给新推送那次运行", async () => {
+    const gh = fakeGitHub([[{ filename: "docs/a.md" }]], [], "c".repeat(40));
+    expect(await main([], ENV, gh.deps)).toBe(0);
+    expect(gh.requests.some((r) => r.method === "POST")).toBe(false);
+    expect(gh.logs[0]).toContain(`PR head moved to ${"c".repeat(40)}`);
+  });
+
+  it("按真实 REVIEW.md，只改门禁脚本本身的 PR 也要审查盖章", async () => {
+    const gh = fakeGitHub([[{ filename: "scripts/review-stamp-gate.ts" }]]);
+    gh.deps.readReviewMd = () => readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    expect(await main([], ENV, gh.deps)).toBe(0);
+    expect(gh.requests.at(-1)!.body).toMatchObject({ state: "pending", description: "Needs an independent review PASS on this commit: scripts/review-stamp-gate.ts" });
   });
 
   it("GitHub API 报错时返回 1，不发状态", async () => {

@@ -44,7 +44,7 @@ A PR that changes any path below merges into `main` only after an independent re
 - Vendor launch arguments: `src/vendors/*/protocol.ts`, `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/*/capabilities.ts`, `src/vendors/_common/acp/**`
 - Ledger storage and schema: `src/daemon/store/**`, `migrations/**`
 - Device trust, relay, and Feishu: `src/daemon/mesh/**`, `src/relay/**`, `src/daemon/feishu/**`
-- Review mechanism and its gate: `src/shared/review.ts`, `REVIEW.md`, `.github/**`
+- Review mechanism and its gate: `src/shared/review.ts`, `REVIEW.md`, `.github/**`, `scripts/review-stamp-gate.ts`, `src/daemon/git/review-status.ts`, `src/daemon/ledger/workers/review-stamp.ts`, `src/daemon/ledger/task-graphs/review-stamp.ts`
 - Release and packaging: `scripts/stage-*.ts`, `scripts/build-*.sh`, `scripts/release*.ts`
 
 ## Rules

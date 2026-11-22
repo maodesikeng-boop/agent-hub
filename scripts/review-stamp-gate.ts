@@ -5,9 +5,9 @@
 import { readFileSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { REVIEW_STATUS_CONTEXT } from "../src/shared/review.ts";
 
-export { REVIEW_STATUS_CONTEXT };
+/** Must equal the daemon's REVIEW_STATUS_CONTEXT in src/shared/review.ts; kept literal so the gate imports no module outside the stamp paths. */
+export const REVIEW_STATUS_CONTEXT = "bellwood/review";
 
 /** The REVIEW.md heading whose bullet list names the paths that need a review stamp. */
 export const STAMP_PATHS_HEADING = "## Paths that require a review stamp";
@@ -134,6 +134,10 @@ async function listChangedFiles(g: GateEnv, deps: GateDeps): Promise<{ files: st
   return { files, truncated: true };
 }
 
+async function headSha(g: GateEnv, deps: GateDeps): Promise<string> {
+  return (await github<{ head: { sha: string } }>(g, deps, `/repos/${g.repo}/pulls/${g.pr}`)).head.sha;
+}
+
 async function currentStatus(g: GateEnv, deps: GateDeps): Promise<CommitStatus | null> {
   const statuses = await github<Array<{ context: string; state: CommitStatusState; description: string | null; creator: { login: string } | null }>>(
     g,
@@ -165,6 +169,12 @@ export async function main(argv: readonly string[], env: Readonly<Record<string,
   try {
     const globs = parseStampPaths(deps.readReviewMd());
     const { files, truncated } = await listChangedFiles(g, deps);
+    // The file list is the PR's current diff, so it only describes HEAD_SHA if the head has not moved since the event.
+    const head = await headSha(g, deps);
+    if (head !== g.sha) {
+      deps.log(JSON.stringify({ pr: g.pr, sha: g.sha, decision: { kind: "keep", reason: `PR head moved to ${head}; the run for that push decides` }, dryRun }));
+      return 0;
+    }
     const matched = matchStampPaths(files, globs);
     const decision = decideGateStatus({ matched, filesTruncated: truncated, current: await currentStatus(g, deps) });
     deps.log(JSON.stringify({ pr: g.pr, sha: g.sha, matched: matched.slice(0, 10), filesTruncated: truncated, decision, dryRun }));

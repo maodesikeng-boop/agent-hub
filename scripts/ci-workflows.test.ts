@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { matchStampPaths, parseStampPaths } from "./review-stamp-gate.ts";
 import { REPO_ROOT, STAGED_RUNTIME_INPUTS } from "./stage-runtime-common.ts";
 
 interface TriggerFilter {
@@ -35,6 +36,22 @@ interface Workflow {
 }
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
+
+/** Repo-relative paths of `entries` and every relative module they import at runtime; type-only imports are erased before node runs. */
+function runtimeImportClosure(entries: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const queue = [...entries];
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = readFileSync(join(REPO_ROOT, file), "utf8");
+    for (const m of source.matchAll(/^\s*(?:import|export)\s+(?!type\b)(?:[^;]*?\sfrom\s+)?["'](\.{1,2}\/[^"']+)["']/gmu)) {
+      queue.push(relative(REPO_ROOT, join(REPO_ROOT, dirname(file), m[1]!)).split("\\").join("/"));
+    }
+  }
+  return [...seen];
+}
 const WORKFLOWS = readdirSync(WORKFLOW_DIR)
   .filter((name) => name.endsWith(".yml"))
   .map((name) => ({ name, wf: parse(readFileSync(join(WORKFLOW_DIR, name), "utf8")) as Workflow }));
@@ -239,6 +256,15 @@ describe(".github/workflows", () => {
     const wf = workflow("review-stamp.yml");
     expect(wf.permissions).toEqual({ contents: "read", "pull-requests": "read", statuses: "write" });
     expect(Object.values(wf.jobs).every((job) => job.permissions === undefined)).toBe(true);
+  });
+
+  it("list review-stamp.yml, REVIEW.md, and every module the gate runs under the stamp paths, so a PR cannot loosen the gate unreviewed", () => {
+    const runs = Object.values(workflow("review-stamp.yml").jobs).flatMap((job) => (job.steps ?? []).map((step) => step.run ?? ""));
+    const scripts = runs.flatMap((run) => [...run.matchAll(/\bnode\s+(\S+\.ts)\b/gu)].map((m) => m[1]!));
+    expect(scripts).toEqual(["scripts/review-stamp-gate.ts"]);
+    const gateFiles = [".github/workflows/review-stamp.yml", "REVIEW.md", ...runtimeImportClosure(scripts)];
+    const globs = parseStampPaths(readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8"));
+    expect(gateFiles.filter((file) => matchStampPaths([file], globs).length === 0)).toEqual([]);
   });
 
   it("only filter on paths that exist", () => {
