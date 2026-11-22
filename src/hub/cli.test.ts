@@ -877,7 +877,7 @@ describe("hub cli", () => {
     it("stdin that never sends anything exits 2 with a heredoc hint", async () => {
       const r = await hub(["persona", "edit", "--stdin"], { stdin: new TrapStdin(), stdinIdleMs: 100 });
       expect(r.code).toBe(HUB_EXIT.usage);
-      expect(r.stderr).toContain("标准输入一直没有结束，记得用 heredoc");
+      expect(r.stderr).toContain("标准输入一直没有结束，记得把正文从标准输入喂给 --stdin：bash、zsh 用 heredoc");
       expect(ledger.calls).toHaveLength(0);
     });
 
@@ -915,7 +915,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       });
       child.stdin.destroy();
       expect(code).toBe(HUB_EXIT.usage);
-      expect(stderr).toContain("记得用 heredoc");
+      expect(stderr).toContain("PowerShell 用单引号 here-string");
       expect(ledger.calls).toHaveLength(0);
     });
 

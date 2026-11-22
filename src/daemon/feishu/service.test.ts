@@ -18,6 +18,7 @@ import {
   FEISHU_INBOUND_CATCHUP_MAX_MESSAGES,
   FEISHU_INBOUND_CATCHUP_MAX_PAGES,
   FEISHU_INBOUND_CATCHUP_WINDOW_MS,
+  FEISHU_INBOUND_GAP_PROBE_MAX_PAGES,
   FEISHU_INBOUND_QUEUE_MAX,
   FEISHU_OUTBOUND_QUEUE_MAX,
   FEISHU_POLICY_CARD_COOLDOWN_MS,
@@ -2567,6 +2568,9 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     fake.recordMessage(event);
     return event;
   }
+  const textsTo = (chatId: string) =>
+    fake.callsOf("message.create").filter((c) => c.receive_id === chatId && c.msg_type === "text").map((c) => (JSON.parse(c.content) as { text: string }).text);
+  const RESEND_REMINDER = /^电脑离线超过 15 分钟，离线期间 \d\d-\d\d \d\d:\d\d 之前发的消息没收到。没得到回复的请重发。$/;
 
   it("20 秒闪断重连主动补拉总助单聊与项目群漏收消息，过滤机器人自身消息，且先于重连瞬间的第二条实时消息按时间顺序入库", async () => {
     let clockNow = 1_730_000_000_000;
@@ -2685,7 +2689,7 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     expect(userMessages(lin.conversationId)).toHaveLength(1);
   });
 
-  it("遵守最大回溯时间窗与单群分页条数硬上限：超窗旧消息不拉，极端刷屏只按页数上限取最新窗口消息", async () => {
+  it("超出回溯时间窗的旧消息不重放、在该会话提醒重发；窗口内刷屏从游标起按时间全部送达，不按页数截掉最早的", async () => {
     let clockNow = 1_730_001_000_000;
     await svc.close();
     fake = createFakeFeishu({ clock: () => clockNow });
@@ -2700,7 +2704,7 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     clockNow += FEISHU_INBOUND_CATCHUP_WINDOW_MS + 60_000;
     offlineUserMessage(zhouChat, "窗口内的新消息", { createTime: clockNow - 10_000 });
 
-    const totalSpam = FEISHU_INBOUND_CATCHUP_MAX_MESSAGES + 35;
+    const totalSpam = 235;
     for (let i = 1; i <= totalSpam; i++) {
       offlineUserMessage(linChat, `刷屏-${i}`, { createTime: clockNow - (totalSpam - i + 1) * 100 });
     }
@@ -2709,12 +2713,152 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     await settle();
 
     expect(userMessages(zhou.conversationId).map((m) => m.text)).toEqual(["窗口内的新消息"]);
+    expect(textsTo(zhouChat)).toEqual([expect.stringMatching(RESEND_REMINDER)]);
+    expect(textsTo(linChat)).toEqual([]);
     const linCalls = fake.callsOf("message.list").filter((c) => c.container_id === linChat);
-    expect(linCalls.length).toBeLessThanOrEqual(FEISHU_INBOUND_CATCHUP_MAX_PAGES);
-    const delivered = userMessages(lin.conversationId).map((m) => m.text);
-    expect(delivered).toHaveLength(FEISHU_INBOUND_CATCHUP_MAX_MESSAGES);
-    expect(delivered[0]).toBe("刷屏-36");
-    expect(delivered.at(-1)).toBe(`刷屏-${totalSpam}`);
+    expect(linCalls.length).toBeLessThanOrEqual(FEISHU_INBOUND_CATCHUP_MAX_PAGES + FEISHU_INBOUND_GAP_PROBE_MAX_PAGES);
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(Array.from({ length: totalSpam }, (_, i) => `刷屏-${i + 1}`));
+  });
+
+  it("断线期间先 @机器人 交代任务、随后群里闲聊超过旧的单群补拉条数：补拉从游标往后读完窗口，最早的那条指令照样送达", async () => {
+    let clockNow = 1_730_001_500_000;
+    const logs: string[] = [];
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow, log: (line) => logs.push(line) });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+
+    clockNow += 3_000;
+    fake.handlers!.onDisconnected("drop");
+    offlineUserMessage(chat, "断网时交代的任务", { mention: true, createTime: clockNow + 1_000 });
+    const chatter = 250;
+    for (let i = 1; i <= chatter; i++) offlineUserMessage(chat, `闲聊-${i}`, { sender: GUEST, createTime: clockNow + 1_000 + i * 100 });
+    clockNow += 60_000;
+    fake.handlers!.onConnected();
+    await settle();
+
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["断网时交代的任务"]);
+    expect(logs.filter((l) => l.includes("入站补拉"))).toEqual([]);
+  });
+
+  it("单群窗口内消息超过入站队列容量：先按时间收最早一批，记结构化日志并冻结游标，下次重连补回其余消息", async () => {
+    let clockNow = 1_730_001_700_000;
+    const logs: string[] = [];
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow, log: (line) => logs.push(line) });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+
+    clockNow += 3_000;
+    fake.handlers!.onDisconnected("drop");
+    const base = clockNow + 1_000;
+    const chatter = FEISHU_INBOUND_CATCHUP_MAX_MESSAGES + 20;
+    offlineUserMessage(chat, "最早的任务", { mention: true, createTime: base });
+    for (let i = 1; i <= chatter; i++) offlineUserMessage(chat, `闲聊-${i}`, { sender: GUEST, createTime: base + i * 10 });
+    offlineUserMessage(chat, "最后的任务", { mention: true, createTime: base + (chatter + 1) * 10 });
+    clockNow = base + 30_000;
+    fake.handlers!.onConnected();
+    await settle();
+
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["最早的任务"]);
+    expect(logs.some((l) => l.includes("入站补拉队列已满") && l.includes(chat) && l.includes("unfetched=true"))).toBe(true);
+    expect(svc.setup.status().lastError).toContain("入站队列已满");
+
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 2");
+    fake.handlers!.onConnected();
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["最早的任务", expect.stringContaining("最后的任务")]);
+  });
+
+  it("离线积压要三轮才补完：每轮重连游标都往前走，三批 @机器人 指令逐轮全部送达，不卡在第一轮留下的位置", async () => {
+    let clockNow = 1_730_001_800_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+
+    clockNow += 3_000;
+    fake.handlers!.onDisconnected("drop");
+    const batches = [
+      { task: "第一批任务", size: FEISHU_INBOUND_CATCHUP_MAX_MESSAGES, at: clockNow + 1_000 },
+      { task: "第二批任务", size: FEISHU_INBOUND_CATCHUP_MAX_MESSAGES, at: clockNow + 1_000 + 3 * 60_000 },
+      { task: "第三批任务", size: 50, at: clockNow + 1_000 + 6 * 60_000 },
+    ];
+    for (const batch of batches) {
+      offlineUserMessage(chat, batch.task, { mention: true, createTime: batch.at });
+      for (let i = 1; i < batch.size; i++) offlineUserMessage(chat, `闲聊-${batch.task}-${i}`, { sender: GUEST, createTime: batch.at + i * 10 });
+    }
+    clockNow += 7 * 60_000;
+
+    const cursors: number[] = [];
+    for (let round = 1; round <= batches.length; round++) {
+      if (round > 1) {
+        clockNow += 5_000;
+        fake.handlers!.onDisconnected(`drop ${round}`);
+      }
+      fake.handlers!.onConnected();
+      await settle();
+      cursors.push(store().inboundCursor(chat)!.lastInboundAt!);
+      expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(batches.slice(0, round).map((b) => b.task));
+    }
+    expect(cursors[1]).toBeGreaterThan(cursors[0]!);
+    expect(cursors[2]).toBeGreaterThan(cursors[1]!);
+  });
+
+  it("离线超过回溯时间窗：只在窗口外有主人消息或 @机器人 的会话提醒一次重发，安静的群和只有访客闲聊的群不打扰，再次重连不重复提醒", async () => {
+    let clockNow = 1_730_003_000_000;
+    const logs: string[] = [];
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow, log: (line) => logs.push(line) });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    const zhouChat = chatOf(zhou.pmId);
+    const rChat = routerChat();
+    join_(zhouChat);
+    await settle();
+
+    clockNow += 3_000;
+    fake.handlers!.onDisconnected("laptop lid closed");
+    offlineUserMessage(rChat, "睡前问总助", { p2p: true, createTime: clockNow + 1_000 });
+    offlineUserMessage(linChat, "睡前交代林", { createTime: clockNow + 2_000 });
+    offlineUserMessage(zhouChat, "访客闲聊", { sender: GUEST, createTime: clockNow + 3_000 });
+    clockNow += 2 * 60 * 60_000;
+    offlineUserMessage(rChat, "醒来又问一句", { p2p: true, createTime: clockNow - 60_000 });
+    fake.handlers!.onConnected();
+    await settle();
+
+    expect(routerCalls.map((c) => c.text)).toEqual(["醒来又问一句"]);
+    expect(userMessages(lin.conversationId)).toEqual([]);
+    expect(textsTo(rChat)).toEqual([expect.stringMatching(RESEND_REMINDER)]);
+    expect(textsTo(linChat)).toEqual([expect.stringMatching(RESEND_REMINDER)]);
+    expect(textsTo(zhouChat)).toEqual([]);
+    expect(logs.filter((l) => l.includes("超出回溯窗口")).map((l) => /chatId=(\S+)/.exec(l)?.[1]).sort()).toEqual([linChat, rChat].sort());
+    const probeEnds = fake.callsOf("message.list").filter((c) => c.sort_type === "ByCreateTimeDesc").map((c) => Number(c.end_time) * 1000);
+    expect(probeEnds.length).toBeGreaterThan(0);
+    expect(Math.min(...probeEnds)).toBeGreaterThanOrEqual(clockNow - FEISHU_INBOUND_CATCHUP_WINDOW_MS);
+
+    clockNow += 60_000;
+    fake.handlers!.onDisconnected("drop again");
+    clockNow += 5_000;
+    fake.handlers!.onConnected();
+    await settle();
+    expect(textsTo(rChat)).toHaveLength(1);
+    expect(textsTo(linChat)).toHaveLength(1);
   });
 
   it("缺少读群历史消息权限或单群接口报错时隔离单群静默降级记结构化日志，不阻塞总助单聊与其他群；并发多次闪断重连同一时间只跑一轮补拉", async () => {

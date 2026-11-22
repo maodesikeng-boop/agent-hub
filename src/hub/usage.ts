@@ -68,8 +68,9 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     cli: "project setup",
     usage: `  ${hub} project setup --stdin | --clear                     设置（从标准输入读）或清除 worktree 准备命令：
                                                           给 Worker 建好 worktree 后先在里面跑它，跑完 Worker 再开工。
-                                                          用守护进程的 $SHELL -c 跑，标准输入是空的，最多 ${SETUP_TIMEOUT_MS / 60_000} 分钟；
-                                                          能用 $${ENV_SETUP_ROOT_PATH}（主文件夹）、$${ENV_SETUP_WORKTREE_PATH}。
+                                                          macOS、Linux 用守护进程的 $SHELL -c 跑，Windows 依次找 Git Bash、PowerShell 7、cmd；
+                                                          标准输入是空的，最多 ${SETUP_TIMEOUT_MS / 60_000} 分钟；
+                                                          能读环境变量 ${ENV_SETUP_ROOT_PATH}（主文件夹）、${ENV_SETUP_WORKTREE_PATH}。
                                                           别把密钥写进命令：原文会出现在日志和失败附注里`,
   },
   {
@@ -304,7 +305,7 @@ ${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
 ${SELF_RELOAD_USAGE}
   ${hub} help graph                                        打印任务图手册：建图、改图、换人、审查的做法和全部 graph 命令
 
-长文本用 --stdin 从标准输入读，例如：
+长文本用 --stdin 从标准输入原样读。bash、zsh 用 heredoc（引号不能省），例如：
   ${hub} persona edit --stdin <<'EOF'
   新的完整性格设定
   EOF
@@ -314,6 +315,10 @@ ${SELF_RELOAD_USAGE}
   ${hub} schedule add --name "每日汇报" --daily 09:00 --stdin <<'EOF'
   每次要做的事
   EOF
+PowerShell 把正文写进单引号 here-string（@' 和 '@ 各占一行），再用管道传入，例如：
+  @'
+  任务说明：目标、验收标准
+  '@ | ${hub} worker start --title "修 X" --stdin
 令牌和 socket 路径由 ${hub} 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
 

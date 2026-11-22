@@ -479,7 +479,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     for (const word of ["**长命令放后台**", "等 CI", "`run_in_background`", "这一轮先结束", "命令跑完会叫醒你", "不会交给项目经理", "不要 `sleep`"]) {
       expect(WORKER_BACKGROUND_COMMAND_NOTE).toContain(word);
     }
-    for (const word of ["**长命令一条等到底**", "一条一直等到结束的命令", "`gh pr checks <PR 号> --watch`", "不要 `sleep`", "跑完不会叫醒你"]) {
+    for (const word of ["**长命令一条等到底**", "一条一直等到结束的命令", "CI 命令行工具的 watch 模式", "不要 `sleep`", "跑完不会叫醒你"]) {
       expect(WORKER_BLOCKING_WAIT_NOTE).toContain(word);
     }
     const restore = canWakeFromBackground("agy", "`run_command` 的 `WaitMsBeforeAsync`");
@@ -517,8 +517,7 @@ describe("提示词：数值和事实以代码为准", () => {
   });
 
   it("准备命令里能用的两个环境变量名用 limits.ts 的常量（在 hub help 里；提示词里 project 那一组只留一行）", () => {
-    expect(HUB_USAGE).toContain(`$${ENV_SETUP_ROOT_PATH}`);
-    expect(HUB_USAGE).toContain(`$${ENV_SETUP_WORKTREE_PATH}`);
+    expect(HUB_USAGE).toContain(`能读环境变量 ${ENV_SETUP_ROOT_PATH}（主文件夹）、${ENV_SETUP_WORKTREE_PATH}`);
     expect(HUB_USAGE_PROMPT).not.toContain(ENV_SETUP_ROOT_PATH);
   });
 
@@ -587,11 +586,11 @@ describe("提示词：项目经理（M3）", () => {
         "不读代码 diff，代码质量由审查负责。",
         `证据不够就打回让 Worker 补（\`${hub} worker send\`）`,
         `**该审查而没审查的，交付前补上**：改动碰了任务图手册里列出的四类高风险改动（${PM_REVIEW_REDLINES_BRIEF}），就按手册里的做法补一个审查。`,
-        "合并和发布按项目 `AGENTS.md` 的规矩做。",
+        "合并、发布这类收尾动作按项目自己的约定和用户要求做，没要求的不做。",
         "**同时向对话和总助汇报交付**：",
         "1. **只讲结论，说人话**：开头说清用户原本要做什么、现在做成了什么、何时生效",
         "2. **在对话里摆出能点开的证据**：用绝对路径写 Markdown（图片写 `![说明](/绝对/路径.png)`，文件或录屏写 `[文件名](/绝对/路径)`，路径含空格用 `<...>` 包裹）",
-        `3. **同步发到总助供用户验收**：建了图的合并后用 \`${hub} graph finish\` 结束（交付摘要和各步“文件”栏会自动发到总助）`,
+        `3. **同步发到总助供用户验收**：建了图的验收完用 \`${hub} graph finish\` 结束（交付摘要和各步“文件”栏会自动发到总助）`,
         `没建图的用 \`${hub} router report --pr … --worker … --file <截图或文件>\` 发一张以“请验收”开头的汇报卡到总助（不把路径写进卡片标题，也不贴到 PR 评论里代替）`,
       ]) {
         expect(delivery, word).toContain(word);
@@ -754,10 +753,11 @@ describe("提示词：项目经理（M3）", () => {
       `\`${hub} persona show|edit\`：查看、修改性格设定和干活模式`,
       `\`${hub} schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）`,
       `\`${hub} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`,
-      `\`${hub} self-reload [--build]\`：${PRODUCT_NAME} 自身代码合入后让守护进程热重启`,
     ]) {
       expect(HUB_USAGE_PROMPT, line).toContain(line);
     }
+    // Restarting Bellwood's own daemon only matters in Bellwood's repo, so it stays out of every project's PM prompt.
+    expect(HUB_USAGE_PROMPT).not.toContain("self-reload");
     // 以前写在提示词里、现在缩掉的参数和注意事项
     for (const detail of [
       `${hub} project create --folder <主文件夹> [--name <名>] [--description <说明>]`,
@@ -902,7 +902,7 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).toContain("不要设定时器，也不要 `sleep` 轮询");
     expect(prompt).toContain("轮到你时项目经理会叫醒你");
     // 等 CI 的写法只在长命令那一条里，不在“等别人”那条里重复
-    expect(prompt.split("gh pr checks")).toHaveLength(vendorSpec(DEFAULT_AGENT_VENDOR).capabilities.backgroundWake ? 1 : 2);
+    expect(prompt.split("watch 模式")).toHaveLength(vendorSpec(DEFAULT_AGENT_VENDOR).capabilities.backgroundWake ? 1 : 2);
   });
 
   it("在主文件夹里与接手目录：动态工作目录与附加文件夹说明在首条开工消息里写出", () => {
