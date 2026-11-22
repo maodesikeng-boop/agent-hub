@@ -326,6 +326,7 @@ export function startApproval(input: {
   let localConfirmed = false;
   let remoteConfirmed = false;
   const replies = new Map<string, Promise<ApprovalSignal[]>>();
+  let tail: Promise<unknown> = Promise.resolve();
 
   const abort = (reason: "mismatch" | "expired" | "cancelled" | "bad_signal"): ApprovalSignal[] => {
     if (step === "approved" || step === "aborted") return [];
@@ -347,9 +348,13 @@ export function startApproval(input: {
     const bytes = base64UrlDecode(text);
     return bytes !== null && bytes.length === MESH_SAS_NONCE_BYTES ? bytes : null;
   };
-  const computeSas = async (peerNonce: Uint8Array) => {
-    sas = await meshSasCode({ fingerprint: self.fingerprint, nonce }, { fingerprint: peerFingerprint!, nonce: peerNonce });
+  const computeSas = async (peerNonce: Uint8Array): Promise<boolean> => {
+    const code = await meshSasCode({ fingerprint: self.fingerprint, nonce }, { fingerprint: peerFingerprint!, nonce: peerNonce });
+    // cancel(), expire(), or a peer abort may land while the digest runs; an aborted ceremony must stay aborted.
+    if (step === "aborted") return false;
+    sas = code;
     step = "sas";
+    return true;
   };
   const offer: ApprovalSignal = { kind: "offer", requestId, certPem: self.certPem };
   const commit: ApprovalSignal = { kind: "commit", requestId, certPem: self.certPem, commitment: base64UrlEncode(sha256(nonce)) };
@@ -375,8 +380,7 @@ export function startApproval(input: {
     if (role === "joiner" && step === "committed" && signal.kind === "reveal") {
       const peerNonce = decodeNonce(signal.nonce);
       if (peerNonce === null) return abort("bad_signal");
-      await computeSas(peerNonce);
-      return [reveal];
+      return (await computeSas(peerNonce)) ? [reveal] : [];
     }
     if (role === "approver" && step === "revealed" && signal.kind === "reveal") {
       const peerNonce = decodeNonce(signal.nonce);
@@ -410,8 +414,10 @@ export function startApproval(input: {
         const out = await known;
         return ceremony.outcome() === "aborted" ? [] : out;
       }
-      // Cache the promise before awaiting so a duplicate delivered in the same tick replays instead of aborting.
-      const result = advance(signal);
+      // Signals that arrive together must not interleave across the SAS digest, or a later step sees a stale one and aborts.
+      // Cache the queued reply before awaiting so a duplicate delivered in the same tick replays instead of aborting.
+      const result = tail.then(() => advance(signal));
+      tail = result.catch(() => {});
       replies.set(key, result);
       return result;
     },
