@@ -226,8 +226,8 @@ export function feishuOfflineNotice(deviceName: string, queued: boolean): string
     : `「${deviceName}」现在离线，上线后再发。`;
 }
 
-export function feishuUnreachableNotice(deviceName: string): string {
-  return `「${deviceName}」这会儿没接上，这句先存着，接上后自动交给项目经理。`;
+export function feishuUnreachableNotice(deviceName: string, queued: boolean): string {
+  return queued ? `「${deviceName}」这会儿没接上，这句先存着，接上后自动交给项目经理。` : `「${deviceName}」这会儿没接上，暂存已满，这句没存下，请稍后再发。`;
 }
 
 export function feishuOfflineCardToast(deviceName: string): FeishuCardActionResponse {
@@ -398,6 +398,45 @@ async function forwardCardAction(mesh: FeishuAccountMeshPort, deviceId: DeviceId
   }
 }
 
+interface OwnerLookup {
+  local: FeishuLocalInbound;
+  log: (line: string) => void;
+  now: () => number;
+  owners: LRUCache<FeishuChatId, CachedOwner>;
+  inFlight: Map<FeishuChatId, Promise<FeishuChatOwner>>;
+}
+
+function lookupChatOwner(chatId: FeishuChatId, { local, log, now, owners, inFlight }: OwnerLookup): Promise<FeishuChatOwner> {
+  const current = now();
+  const cached = owners.get(chatId);
+  if (cached !== undefined && (cached.kind !== "unknown" || current < cached.retryAfter)) {
+    return Promise.resolve(cached.kind === "unknown" ? { kind: "unknown" } : cached);
+  }
+  const existing = inFlight.get(chatId);
+  if (existing !== undefined) return existing;
+  const pending = local
+    .chatDescription(chatId)
+    .catch((error: unknown) => {
+      log(`飞书中心：查群 ${chatId} 的说明出错：${errorText(error)}`);
+      return null;
+    })
+    .then((desc): FeishuChatOwner => {
+      const parsed = desc === null ? null : feishuChatOwnerOfDescription(desc);
+      if (parsed !== null) {
+        const found: CachedOwner = { kind: "device", deviceId: parsed.deviceId, pmId: parsed.pmId };
+        owners.set(chatId, found);
+        return found;
+      }
+      owners.set(chatId, { kind: "unknown", retryAfter: now() + FEISHU_MEMBERS_RETRY_MS });
+      return { kind: "unknown" };
+    })
+    .finally(() => {
+      inFlight.delete(chatId);
+    });
+  inFlight.set(chatId, pending);
+  return pending;
+}
+
 export function createFeishuAccountBot(options: FeishuAccountBotOptions): FeishuAccountBot {
   const { mesh, local, inbox, log } = options;
   const now = options.now ?? Date.now;
@@ -412,36 +451,8 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
 
   const deviceLabel = (id: DeviceId) => deviceLabelOf(mesh, id);
 
-  const lookupOwner = (chatId: FeishuChatId): Promise<FeishuChatOwner> => {
-    const current = now();
-    const cached = owners.get(chatId);
-    if (cached !== undefined && (cached.kind !== "unknown" || current < cached.retryAfter)) {
-      return Promise.resolve(cached.kind === "unknown" ? { kind: "unknown" } : cached);
-    }
-    const existing = inFlightOwners.get(chatId);
-    if (existing !== undefined) return existing;
-    const pending = local
-      .chatDescription(chatId)
-      .catch((error: unknown) => {
-        log(`飞书中心：查群 ${chatId} 的说明出错：${errorText(error)}`);
-        return null;
-      })
-      .then((desc): FeishuChatOwner => {
-        const parsed = desc === null ? null : feishuChatOwnerOfDescription(desc);
-        if (parsed !== null) {
-          const found: CachedOwner = { kind: "device", deviceId: parsed.deviceId, pmId: parsed.pmId };
-          owners.set(chatId, found);
-          return found;
-        }
-        owners.set(chatId, { kind: "unknown", retryAfter: now() + FEISHU_MEMBERS_RETRY_MS });
-        return { kind: "unknown" };
-      })
-      .finally(() => {
-        inFlightOwners.delete(chatId);
-      });
-    inFlightOwners.set(chatId, pending);
-    return pending;
-  };
+  const ownerLookup: OwnerLookup = { local, log, now, owners, inFlight: inFlightOwners };
+  const lookupOwner = (chatId: FeishuChatId) => lookupChatOwner(chatId, ownerLookup);
 
   const routeCardAction = async (action: FeishuRawCardAction): Promise<FeishuInboundRoute> => {
     const chatId = parseFeishuChatId(action.chatId);
@@ -454,23 +465,25 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
   const expireInbox = async () => {
     if (inbox === null || closed) return;
     for (const item of inbox.expire(now())) {
+      if (closed) return;
       await local
-        .say(item.chatId, `离线期间有 ${item.count} 句过了 24 小时没送到，已作废；还要办的话请再发一次。`)
+        .say(item.chatId, `有 ${item.count} 句暂存过了 24 小时没送到，已作废；还要办的话请再发一次。`)
         .catch((error: unknown) => log(`飞书中心：发过期提示出错：${errorText(error)}`));
     }
   };
 
   const holdEvent = async (deviceId: DeviceId, chatId: FeishuChatId, event: FeishuRawEvent, receivedAt: number) => {
-    if (!isUserMessage(event)) return;
+    if (closed || !isUserMessage(event)) return;
     const name = deviceLabel(deviceId);
     // The device still counts as online after a failed forward, so no online transition will drain the inbox for it.
     const online = mesh.isOnline(deviceId);
     if (inbox !== null) {
       await expireInbox();
+      if (closed) return;
       const added = inbox.add(deviceId, chatId, event, receivedAt);
       if (added === "duplicate") return;
       if (online) scheduleDrainRetry(deviceId);
-      await local.say(chatId, online && added === "queued" ? feishuUnreachableNotice(name) : feishuOfflineNotice(name, added === "queued"));
+      await local.say(chatId, online ? feishuUnreachableNotice(name, added === "queued") : feishuOfflineNotice(name, added === "queued"));
       return;
     }
     if (noticedOfflineMessages.has(event.messageId)) return;
@@ -489,6 +502,7 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     try {
       await mesh.post(deviceId, PEER_FEISHU_INBOUND_PATH, body, FEISHU_FORWARD_TIMEOUT_MS);
     } catch (error) {
+      if (closed) return;
       log(`飞书中心：转给「${deviceLabel(deviceId)}」没成，先存着稍后补送：${errorText(error)}`);
       await holdEvent(deviceId, chatId, event, receivedAt);
     }
@@ -550,7 +564,7 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     if (closed || drainRetryTimers.has(deviceId)) return;
     const retry = setTimeout(() => {
       drainRetryTimers.delete(deviceId);
-      if (!closed && mesh.isOnline(deviceId)) void drainInbox(deviceId);
+      if (!closed && mesh.isOnline(deviceId)) drainInBackground(deviceId);
     }, FEISHU_CONTROL_RETRY_MS);
     retry.unref?.();
     drainRetryTimers.set(deviceId, retry);
@@ -566,18 +580,22 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     const prev = draining.get(deviceId) ?? Promise.resolve();
     const next = prev
       .then(async () => {
+        if (closed) return;
         await expireInbox();
+        if (closed) return;
         for (const item of inbox.list(deviceId)) {
           if (closed || !mesh.isOnline(deviceId)) break;
           const body: FeishuForwardedEvent = { kind: "event", event: item.event, receivedAt: now(), queuedAt: item.receivedAt };
           try {
             await mesh.post(deviceId, PEER_FEISHU_INBOUND_PATH, body, FEISHU_FORWARD_TIMEOUT_MS);
-            inbox.remove(item.id);
           } catch (error) {
+            if (closed) return;
             log(`飞书中心：补送「${deviceLabel(deviceId)}」暂存消息没成，稍后再试：${errorText(error)}`);
             if (mesh.isOnline(deviceId)) scheduleDrainRetry(deviceId);
             break;
           }
+          if (closed) return;
+          inbox.remove(item.id);
         }
       })
       .finally(() => {
@@ -587,14 +605,16 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     return next;
   };
 
-  const offOnline = mesh.onOnline((deviceId) => {
-    void drainInbox(deviceId);
-  });
+  const drainInBackground = (deviceId: DeviceId) => {
+    drainInbox(deviceId).catch((error: unknown) => log(`飞书中心：补送「${deviceLabel(deviceId)}」暂存消息出错：${errorText(error)}`));
+  };
+
+  const offOnline = mesh.onOnline(drainInBackground);
   const expiryTimer =
     inbox === null
       ? null
       : setInterval(() => {
-          void expireInbox();
+          expireInbox().catch((error: unknown) => log(`飞书中心：清理过期暂存出错：${errorText(error)}`));
         }, EXPIRY_CHECK_INTERVAL_MS);
   expiryTimer?.unref?.();
 

@@ -393,7 +393,7 @@ describe("createFeishuAccountBot", () => {
       center.onEvent(rawMessage(remote.chatId, "om_jitter_2", "hello"));
       await vi.waitFor(() => expect(userTexts()).toEqual([expect.stringMatching(/暂存后补送）\n这种错误测试能测出来吗$/), "hello"]));
       expect(inbox.list(DEV_B)).toEqual([]);
-      expect(localA.said.map((s) => s.text)).toEqual([feishuUnreachableNotice("Mac")]);
+      expect(localA.said.map((s) => s.text)).toEqual([feishuUnreachableNotice("Mac", true)]);
     });
 
     it("没有下一句也会在设备在线时自动补送", async () => {
@@ -482,8 +482,82 @@ describe("createFeishuAccountBot", () => {
 
     bot.onEvent(rawMessage(CHAT_B, "om_fail_1", "半路断了"));
     await vi.waitFor(() => expect(localA.said).toHaveLength(1));
-    expect(localA.said[0]!.text).toBe(feishuUnreachableNotice("Mac"));
+    expect(localA.said[0]!.text).toBe(feishuUnreachableNotice("Mac", true));
     expect(inbox.list(DEV_B)).toHaveLength(1);
+  });
+
+  it("设备在线但暂存箱满了：说没接上、没存下，不说离线", async () => {
+    const db = memoryDb();
+    cleanups.push(() => db.close());
+    const inbox = createFeishuOfflineInbox(db);
+    for (let i = 0; i < FEISHU_OFFLINE_INBOX_MAX_PER_DEVICE; i++) inbox.add(DEV_B, CHAT_B, rawMessage(CHAT_B, `om_full_${i}`, `第 ${i} 句`), 1000);
+    const h = makeMeshHarness([DEV_B]);
+    h.setHandler(async () => {
+      throw new Error("connection reset");
+    });
+    const localA = makeFakeLocal({ [CHAT_B]: feishuChatMarker(DEV_B, 1) });
+    const bot = createFeishuAccountBot({ mesh: h.mesh, local: localA.local, inbox, now: () => 5000, log: () => {} });
+    cleanups.push(() => bot.close());
+
+    bot.onEvent(rawMessage(CHAT_B, "om_full_new", "又一句"));
+    await vi.waitFor(() => expect(localA.said).toHaveLength(1));
+    expect(localA.said[0]!.text).toBe(feishuUnreachableNotice("Mac", false));
+    expect(localA.said[0]!.text).not.toMatch(/离线/);
+  });
+
+  describe("关机时还有转发在路上", () => {
+    // Every microtask queued before the check phase runs first, so this settles the bot's promise chains without waiting on time.
+    const drainMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+    function closingCenter(prepare: (inbox: ReturnType<typeof createFeishuOfflineInbox>) => void = () => {}) {
+      const db = memoryDb();
+      const real = createFeishuOfflineInbox(db);
+      prepare(real);
+      let down = false;
+      const touchedAfterClose: string[] = [];
+      const inbox = new Proxy(real, {
+        get: (target, key: keyof typeof real) => (...args: never[]) => {
+          if (down) touchedAfterClose.push(key);
+          return (target[key] as (...a: never[]) => unknown)(...args);
+        },
+      });
+      const h = makeMeshHarness([DEV_B]);
+      const settles: { resolve: () => void; reject: (error: Error) => void }[] = [];
+      h.setHandler(() => new Promise((resolve, reject) => settles.push({ resolve: () => resolve({}), reject })));
+      const logs: string[] = [];
+      const localA = makeFakeLocal({ [CHAT_B]: feishuChatMarker(DEV_B, 1) });
+      const bot = createFeishuAccountBot({ mesh: h.mesh, local: localA.local, inbox, now: () => 5000, log: (line) => logs.push(line) });
+      const shutDown = () => {
+        bot.close();
+        db.close();
+        down = true;
+      };
+      return { h, settles, logs, localA, bot, shutDown, touchedAfterClose };
+    }
+
+    it("转发在关机后失败：不再碰暂存箱，也不在群里回话", async () => {
+      const { h, settles, logs, localA, bot, shutDown, touchedAfterClose } = closingCenter();
+      bot.onEvent(rawMessage(CHAT_B, "om_close_1", "关机前一句"));
+      await vi.waitFor(() => expect(h.posts).toHaveLength(1));
+      shutDown();
+      settles[0]!.reject(new Error("mesh closed"));
+      await drainMicrotasks();
+      expect(touchedAfterClose).toEqual([]);
+      expect(localA.said).toEqual([]);
+      expect(logs.filter((line) => line.includes("出错"))).toEqual([]);
+    });
+
+    it("补送暂存在关机后才送到：不再去删暂存箱里那条", async () => {
+      const { h, settles, logs, bot, shutDown, touchedAfterClose } = closingCenter((inbox) => inbox.add(DEV_B, CHAT_B, rawMessage(CHAT_B, "om_held_1", "先存着的一句"), 4000));
+      bot.onEvent(rawMessage(CHAT_B, "om_close_2", "关机前又一句"));
+      await vi.waitFor(() => expect(h.posts).toHaveLength(1));
+      shutDown();
+      settles[0]!.resolve();
+      await drainMicrotasks();
+      expect(touchedAfterClose).toEqual([]);
+      expect(h.posts.map((p) => (p.body as { event: { messageId: string } }).event.messageId)).toEqual(["om_held_1"]);
+      expect(logs).toEqual([]);
+    });
   });
 
   it("卡片点击转给归属设备，拿回它算出的 toast", async () => {
