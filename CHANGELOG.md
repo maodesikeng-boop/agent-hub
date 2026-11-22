@@ -12,6 +12,8 @@ Each `## vX.Y.Z` section becomes the GitHub release notes of that version and of
 - 飞书：多台电脑各自把待决定事项和简报发到你的 Router 单聊，卡片标明项目名，点击按钮会回传给产生它的那台电脑，对方离线时给出提示。不同电脑、或同一份交付物发到项目群和 Router 单聊时，文件消息不再被飞书去重吞掉。离线补收消息改为从旧到新，不再漏掉最早的消息；离线超过 15 分钟窗口且期间有你的消息时，机器人会请你重发一次。
 - 每日定时任务在设备切换时区后不再提前触发或在同一天重复运行。
 - 项目经理、Worker 和 Router 现在使用你的语言回复。Windows PowerShell 下 `hub` 命令传入中文不再变成问号。
+- 内置给 Agent 的提示词和审查清单不再写死只适用于本仓的做法，例如主分支叫 `main`、用 `pnpm`、托管在 GitHub、只给 macOS 与 Linux 终端的写法。换成其他语言、其他代码托管、没有 CI 或在 Windows 上的项目，同样适用。
+- 安装包按锁文件构建，每个安装包都带 GitHub 溯源证明。下载后可以用 `gh attestation verify` 核对安装包的来源。
 
 ### English
 
@@ -23,6 +25,8 @@ Each `## vX.Y.Z` section becomes the GitHub release notes of that version and of
 - Feishu: each computer posts its own decision cards and briefings to your Router 1-on-1 chat, titled with the project name. Button taps go back to the computer that raised the card, with a notice when it is offline. File messages from two computers, or the same deliverable sent to a project group and the Router chat, are no longer swallowed by Feishu's de-duplication. Catch-up after a disconnect reads oldest first so the earliest missed messages are kept. When a chat was offline longer than the 15-minute window and you wrote in the gap, the bot asks you to resend once.
 - Daily schedules no longer fire early or run twice on one day after the device changes time zone.
 - Project managers, Workers, and the Router now reply in your language. Chinese text passed to `hub` through Windows PowerShell no longer turns into question marks.
+- The built-in prompts and review checklist no longer assume this repository's own setup, such as a trunk named `main`, `pnpm`, GitHub hosting, or macOS and Linux shell syntax. They hold in projects with another language, another code host, no CI, or Windows.
+- Installers are built from the lockfile, and each one carries a GitHub provenance attestation. After you download one, run `gh attestation verify` to check where it came from.
 
 ## v0.3.0
 
