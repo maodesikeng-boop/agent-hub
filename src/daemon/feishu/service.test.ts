@@ -1883,6 +1883,38 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
       expect(fake.callsOf("message.delete")).toEqual([]);
     });
 
+    it("连着发几句、每句都在开轮前失败：每句都在群里说明原因", async () => {
+      await connect();
+      const chat = chatOf(lin.pmId);
+      const before = fake.sent.filter((s) => s.chatId === chat).length;
+      for (const text of ["继续", "继续啊？你怎么还撤回了", "消息都被你撤回了"]) {
+        say(chat, text);
+        await settle();
+        const m = userMessages(lin.conversationId).find((x) => x.text === text)!;
+        ev(lin.sessionId, { type: "driver.error", code: "spawn_failed", message: "spawn claude ENOENT", messageIds: [m.id], at: Date.now() });
+        await settle();
+        expect(ledger.getMessage(m.id)!.status).toBe("failed");
+      }
+      const notices = fake.sent.filter((s) => s.chatId === chat).slice(before).filter((s) => s.content.includes("没回成"));
+      expect(notices).toHaveLength(3);
+      expect(fake.callsOf("message.delete")).toEqual([]);
+    });
+
+    it("单发的说明卡和状态卡一样按飞书卡片 Markdown 收拾原因里的图片链接", async () => {
+      await connect();
+      const chat = chatOf(lin.pmId);
+      say(chat, "看图");
+      await settle();
+      const m = userMessages(lin.conversationId).find((x) => x.text === "看图")!;
+      const before = fake.sent.filter((s) => s.chatId === chat).length;
+      ev(lin.sessionId, { type: "driver.error", code: "invalid_input", message: "cannot read ![shot](/tmp/shot.png)", messageIds: [m.id], at: Date.now() });
+      await settle();
+      const posted = fake.sent.filter((s) => s.chatId === chat).slice(before);
+      expect(posted).toHaveLength(1);
+      expect(posted[0]!.content).toContain("图片「shot」");
+      expect(posted[0]!.content).not.toContain("/tmp/shot.png");
+    });
+
     it("一轮里同时失败的几句只说明一次", async () => {
       await connect();
       const chat = chatOf(lin.pmId);

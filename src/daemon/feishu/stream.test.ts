@@ -168,7 +168,8 @@ describe("stepFeishuStream", () => {
 
   describe("这一轮失败（turn_failed）", () => {
     const failure = { key: "7-1", note: "没回成：Claude 额度用完了" };
-    const failed: FeishuStreamEvent = { kind: "turn_failed", failure };
+    const failed: FeishuStreamEvent = { kind: "turn_failed", failure, turnActive: true };
+    const failedBeforeTurn = (key: string): FeishuStreamEvent => ({ kind: "turn_failed", failure: { key, note: failure.note }, turnActive: false });
 
     it("只有状态行的卡收成失败原因，不撤回；随后的 turn_end 不再动卡", () => {
       const live = run([[working("Working…"), 0], [opened(), 0]]);
@@ -185,17 +186,41 @@ describe("stepFeishuStream", () => {
     it("卡还在开：开好后收成失败原因；开卡失败时单发说明", () => {
       const done = run([[working("Working…"), 0], [failed, 1], [{ kind: "turn_end" }, 2], [opened(), 3]]);
       expect(done.effects.at(-1)).toEqual({ kind: "abandon", cardId: CARD, sequence: 1, text: failure.note });
-      expect(done.state).toEqual({ phase: "failed" });
       const openFailed = run([[working("Working…"), 0], [failed, 1], [{ kind: "open_failed" }, 2]]);
       expect(openFailed.effects.at(-1)).toEqual({ kind: "notice", failure });
     });
 
+    it("卡开好前这一轮已经结束：下一句开轮前又失败时照样说明", () => {
+      const done = run([[working("Working…"), 0], [failed, 1], [{ kind: "turn_end" }, 2], [opened(), 3]]);
+      expect(done.state).toEqual({ phase: "idle" });
+      const next = stepFeishuStream(done.state, failedBeforeTurn("9-1"), target, 4, always);
+      expect(next.effects).toEqual([{ kind: "notice", failure: { key: "9-1", note: failure.note } }]);
+    });
+
+    it("开卡失败时这一轮还在跑：同一轮后面失败的几句不再重复说明", () => {
+      const done = run([[working("Working…"), 0], [failed, 1], [{ kind: "open_failed" }, 2], [{ kind: "turn_failed", failure: { key: "8-1", note: failure.note }, turnActive: true }, 3]]);
+      expect(kinds(done.effects)).toEqual(["open", "notice"]);
+      expect(done.state).toEqual({ phase: "failed" });
+    });
+
     it("没有卡时单发说明；同一轮再失败几句也只说一次，下一轮照常开状态卡", () => {
-      const done = run([[failed, 0], [{ kind: "turn_failed", failure: { key: "8-1", note: failure.note } }, 0], [{ kind: "turn_end" }, 1]]);
+      const done = run([[failed, 0], [{ kind: "turn_failed", failure: { key: "8-1", note: failure.note }, turnActive: true }, 0], [{ kind: "turn_end" }, 1]]);
       expect(done.effects).toEqual([{ kind: "notice", failure }]);
       expect(done.state).toEqual({ phase: "idle" });
       const next = run([[failed, 0], [working("Working…"), 1]]);
       expect(kinds(next.effects)).toEqual(["notice", "open"]);
+    });
+
+    it("连着几句都在开轮前失败（没有 working 也没有 turn_end）：每句都说明原因", () => {
+      const done = run([[failedBeforeTurn("10-1"), 0], [failedBeforeTurn("11-1"), 1], [failedBeforeTurn("12-1"), 2]]);
+      expect(done.effects.map((e) => (e.kind === "notice" ? e.failure.key : e.kind))).toEqual(["10-1", "11-1", "12-1"]);
+      expect(done.state).toEqual({ phase: "idle" });
+    });
+
+    it("上一轮的失败没等到 turn_end：开轮前的新失败照样说明", () => {
+      const done = run([[failed, 0], [failedBeforeTurn("13-1"), 1]]);
+      expect(kinds(done.effects)).toEqual(["notice", "notice"]);
+      expect(done.state).toEqual({ phase: "idle" });
     });
   });
 

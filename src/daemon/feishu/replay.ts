@@ -29,7 +29,7 @@ import {
 } from "./projection.ts";
 import { refreshPolicyCard, refreshRouterSettingsCard, schedulePolicyCardRefresh, scheduleRouterSettingsCardRefresh } from "./settings-cards.ts";
 import type { FeishuChatBinding } from "./store.ts";
-import { feedStream, finalizeSegment, segmentDone, turnFailureOf } from "./stream-cards.ts";
+import { feedStream, finalizeSegment, segmentDone, turnFailed } from "./stream-cards.ts";
 import { mirrorUser, postRouterCommand } from "./text-cards.ts";
 import { FeishuAuthError } from "./transport.ts";
 
@@ -61,8 +61,8 @@ function runPmIntent(ctx: FeishuContext, intent: PmIntent) {
     case "turn_end":
       return enqueue(ctx, chatId, () => feedStream(ctx, id, { kind: "turn_end" }, chatId));
     case "turn_failed": {
-      const failure = turnFailureOf(ctx, intent.message);
-      return enqueue(ctx, chatId, () => feedStream(ctx, id, { kind: "turn_failed", failure }, chatId));
+      const event = turnFailed(ctx, intent.message);
+      return enqueue(ctx, chatId, () => feedStream(ctx, id, event, chatId));
     }
     case "mirror_user":
       startUploadsOf(ctx, intent.message);

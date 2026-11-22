@@ -8,10 +8,10 @@ import { attachmentViews, followUpAttachments, prepareAttachments } from "./atta
 import { renderReplyCard, unrenderableReplyText, type FeishuAttachmentView } from "./cards.ts";
 import type { FeishuContext, HostCard, StreamSlot } from "./context.ts";
 import { enqueue } from "./lanes.ts";
-import { splitFeishuMarkdown } from "./outbound.ts";
+import { feishuMarkdownPrefix, splitFeishuMarkdown } from "./outbound.ts";
 import { chatOfConversation, devicePostUuid } from "./projection.ts";
 import type { FeishuPostRef } from "./store.ts";
-import { stepFeishuStream, type FeishuStreamEffect, type FeishuStreamEvent, type FeishuTurnFailure } from "./stream.ts";
+import { stepFeishuStream, type FeishuStreamEffect, type FeishuStreamEvent } from "./stream.ts";
 import { FeishuApiError, isFeishuRejection } from "./transport.ts";
 
 type FinalizeEffect = Extract<FeishuStreamEffect, { kind: "finalize" }>;
@@ -25,10 +25,11 @@ export function segmentDone(ctx: FeishuContext, message: Message): FeishuStreamE
   return { kind: "segment_done", messageId: message.id, text: message.text, turnActive: ctx.activeTurns.has(message.conversationId) };
 }
 
-export function turnFailureOf(ctx: FeishuContext, message: Message): FeishuTurnFailure {
+export function turnFailed(ctx: FeishuContext, message: Message): FeishuStreamEvent {
   const vendor = message.sessionId === null ? undefined : ctx.db.get<{ vendor: string }>("SELECT vendor FROM agent_sessions WHERE id = ?", message.sessionId)?.vendor;
   const reason = describeFailure(message.failureReason ?? "", { unknown: "raw", ...(vendor !== undefined && isAgentVendor(vendor) ? { vendor } : {}) }).text;
-  return { key: `${message.id}-${message.updatedAt}`, note: `没回成：${reason}` };
+  const failure = { key: `${message.id}-${message.updatedAt}`, note: `没回成：${reason}` };
+  return { kind: "turn_failed", failure, turnActive: ctx.activeTurns.has(message.conversationId) };
 }
 
 export function dropStream(ctx: FeishuContext, id: ConversationId, slot: StreamSlot) {
@@ -196,7 +197,7 @@ async function runStreamEffect(ctx: FeishuContext, id: ConversationId, chatId: F
     case "discard":
       return discardStatusCard(ctx, id, effect);
     case "notice":
-      await sendReplyCard(ctx, chatId, id, effect.failure.note, devicePostUuid(ctx, "fail", effect.failure.key));
+      await sendReplyCard(ctx, chatId, id, feishuMarkdownPrefix(effect.failure.note), devicePostUuid(ctx, "fail", effect.failure.key));
       return;
     case "schedule_tick":
       scheduleTick(ctx, id, slot, effect.at);
