@@ -25,11 +25,17 @@ import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
 import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
+import { HUB_COMMAND } from "./names.ts";
 import type { LedgerErrorCode } from "./ledger.ts";
 
 // Agent shells reject commands containing env vars, so hub reads the token itself.
 export const ENV_HUB_TOKEN = "HUB_TOKEN";
 export const ENV_HUB_SOCK = "HUB_SOCK";
+
+// Windows PowerShell 5.1 pipes text to native programs as ASCII unless $OutputEncoding says otherwise, so CJK arrives as "?".
+export const POWERSHELL_UTF8_PIPE = "$OutputEncoding = [Text.UTF8Encoding]::new($false)";
+
+export const STDIN_SHELL_NOTE = `bash、zsh 用 \`--stdin <<'EOF'\`（引号不能省）；PowerShell 用单引号 here-string 管道传入：第一行写 \`${POWERSHELL_UTF8_PIPE}; @'\`（不设编码的话，Windows PowerShell 5.1 会把中文等非 ASCII 字符变成问号），正文另起行，最后一行顶格写 \`'@ | ${HUB_COMMAND} … --stdin\`。`;
 
 export const HUB_COMMANDS = [
   "status",

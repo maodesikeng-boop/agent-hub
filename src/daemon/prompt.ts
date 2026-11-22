@@ -7,6 +7,7 @@ import {
   DEFAULT_AGENT_VENDOR,
   HUB_COMMAND as HUB,
   HUB_COMMANDS,
+  STDIN_SHELL_NOTE,
   MAX_SENT_FILE_BYTES,
   PM_MODES,
   PM_MODE_LABELS,
@@ -27,7 +28,7 @@ import { cleanTerminalText } from "./setup/index.ts";
 
 export const DEFAULT_PM_NAME = "项目经理";
 
-export const AGENTS_NOTE = "开始前先读工作目录里的 `AGENTS.md`。";
+export const AGENTS_NOTE = "如果工作目录里有 `AGENTS.md`，开始前先读它。";
 
 export function needsAgentsNote(cwd: string, instructionFile: string | undefined): boolean {
   if (instructionFile === undefined) return false;
@@ -100,7 +101,7 @@ ${doItYourself}
 - **该审查而没审查的，交付前补上**：改动碰了任务图手册里列出的四类高风险改动（${PM_REVIEW_REDLINES_BRIEF}），就按手册里的做法补一个审查。
 - 合并、发布这类收尾动作按项目自己的约定和用户要求做，没要求的不做。
 - **同时向对话和总助汇报交付**：
-  1. **只讲结论，说人话**：开头说清用户原本要做什么、现在做成了什么、何时生效，用中文简洁直接回答，不抄 Worker 的排查过程。
+  1. **只讲结论，说人话**：开头说清用户原本要做什么、现在做成了什么、何时生效，跟用户用同一种语言简洁直接地回答，不抄 Worker 的排查过程。
   2. **在对话里摆出能点开的证据**：用绝对路径写 Markdown（图片写 \`![说明](/绝对/路径.png)\`，文件或录屏写 \`[文件名](/绝对/路径)\`，路径含空格用 \`<...>\` 包裹），让用户在网页上直接点开看。
   3. **同步发到总助供用户验收**：建了图的验收完用 \`${HUB} graph finish\` 结束（交付摘要和各步“文件”栏会自动发到总助）；没建图的用 \`${HUB} router report --pr … --worker … --file <截图或文件>\` 发一张以“请验收”开头的汇报卡到总助（不把路径写进卡片标题，也不贴到 PR 评论里代替）。
 
@@ -150,7 +151,7 @@ const TASK_GRAPH_ACTIONS = HUB_COMMANDS.filter((c) => c.startsWith("graph.")).ma
 
 export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 
-直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin\`，原样传、不让 shell 展开：bash、zsh 用 \`--stdin <<'EOF'\`（引号不能省）；PowerShell 把正文写进单引号 here-string（\`@'\` 和 \`'@\` 各占一行），再用 \`'@ | ${HUB} … --stdin\` 管道传入。
+直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin\`，原样传、不让 shell 展开：${STDIN_SHELL_NOTE}
 
 - **任务图**：\`${HUB} graph ${TASK_GRAPH_ACTIONS.join("|")}\`，用法见任务图手册（也可跑 \`${HUB} help graph\`）
 - **向用户提问**
@@ -167,7 +168,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} status\`：看我是谁、我的项目、文件夹和活跃任务图
   - \`${HUB} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`${HUB} persona show|edit\`：查看、修改性格设定和干活模式
-  - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
+  - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务（用户要定期做某件事时才建，如日报、周期巡检）
   - \`${HUB} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`;
 
 export const SHARE_FILES_NOTE =
@@ -269,7 +270,7 @@ function workerRoleSection(ctx: LaunchContext): string {
   - 带 \`${USER_TO_WORKER_TAG}\` 的是**用户**在网页上直接对你说的话，照着做，本轮汇报照常交给项目经理。
   - 其他以 \`【…】\` 开头的是**系统消息**（如准备命令输出、交棒/接手记录、拍板定案，或忙时合并的 \`【用户连发了 N 条】\`，连发消息请逐条回应）。
 ${SHARE_FILES_NOTE}
-- 回复用中文，简洁直接。`;
+- 跟用户用同一种语言回复（看任务说明和用户直接对你说的话），简洁直接；汇报格式里的栏名和固定取值（如“状态”“做完了”“无”）后台按原文解析，照原样写、不翻译。`;
 }
 
 function workerProjectSection(project: ProjectCard): string {
@@ -296,7 +297,8 @@ export function workerWorkspaceSection(
     } else if (worker.takeoverOf !== undefined) {
       lines.push(`- 它是前任 Worker #${worker.takeoverOf} 的工作目录和分支，你接着用：前任没提交的改动、装好的依赖都还在，先看 git status 和 git log。`);
     } else {
-      lines.push(`- 它是从主文件夹最后一次提交（或上游分支）开出来的，看不到主文件夹里没提交的改动；没配准备命令时依赖可能要按项目的方式重新装。`);
+      const reinstall = worker.readonly ? "" : "；没配准备命令时依赖可能要按项目的方式重新装";
+      lines.push(`- 它是从主文件夹最后一次提交（或上游分支）开出来的，看不到主文件夹里没提交的改动${reinstall}。`);
     }
   } else {
     lines.push(

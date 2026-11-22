@@ -751,7 +751,7 @@ describe("提示词：项目经理（M3）", () => {
       `\`${hub} status\`：看我是谁、我的项目、文件夹和活跃任务图`,
       `\`${hub} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本`,
       `\`${hub} persona show|edit\`：查看、修改性格设定和干活模式`,
-      `\`${hub} schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）`,
+      `\`${hub} schedule add|list|pause|resume|remove\`：定时任务（用户要定期做某件事时才建，如日报、周期巡检）`,
       `\`${hub} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`,
     ]) {
       expect(HUB_USAGE_PROMPT, line).toContain(line);
@@ -803,9 +803,10 @@ describe("提示词：定时任务（M6）", () => {
     }
   });
 
-  it("日报不默认建：提示词写明用户要日报才建；按四段写的要求在 hub schedule add 的用法里", () => {
-    expect(HUB_USAGE_PROMPT).toContain("用户要日报才建");
-    expect(HUB_USAGE).toContain("用户要日报才建");
+  it("定时任务不默认建：用户要定期做某件事才建，日报只是一例；日报的四段写法在 hub schedule add 的用法里", () => {
+    expect(HUB_USAGE_PROMPT).toContain("用户要定期做某件事时才建，如日报、周期巡检");
+    expect(HUB_USAGE).toContain("用户要定期做某件事时才建（如日报、周期巡检）");
+    expect(HUB_USAGE_PROMPT).not.toContain("用户要日报才建");
     for (const part of ["昨天做完什么", "什么在等你", "什么在进行", "风险"]) {
       expect(HUB_USAGE).toContain(part);
       expect(HUB_USAGE_PROMPT).not.toContain(part);
@@ -924,6 +925,24 @@ describe("提示词：Worker（M3）", () => {
     expect(buildWorkerPrompt(roCtx, dir)).not.toContain(WORKER_READONLY_NOTE);
     const roFirst = buildWorkerFirstMessage({ project: roCtx.project!, worker: roCtx.worker!, task: roCtx.worker!.task });
     expect(roFirst).toContain(WORKER_READONLY_NOTE);
+  });
+
+  it("新 worktree 的只读 Worker 不收到“依赖可能要重新装”，可写的照常收到", () => {
+    const reinstall = "依赖可能要按项目的方式重新装";
+    const first = (readonly: boolean) => {
+      const ctx = workerContext({ readonly });
+      return buildWorkerFirstMessage({ project: ctx.project!, worker: ctx.worker!, task: ctx.worker!.task });
+    };
+    expect(first(false)).toContain(reinstall);
+    expect(first(true)).not.toContain(reinstall);
+    expect(first(true)).toContain("看不到主文件夹里没提交的改动。");
+  });
+
+  it("回复语言跟用户走，汇报栏名和固定取值照原样写", () => {
+    const worker = buildWorkerPrompt(workerContext(), dir);
+    expect(worker).toContain("跟用户用同一种语言回复");
+    expect(worker).toContain("汇报格式里的栏名和固定取值（如“状态”“做完了”“无”）后台按原文解析，照原样写、不翻译");
+    expect(PM_MODE_PROMPTS.manage_only).toContain("跟用户用同一种语言简洁直接地回答");
   });
 
   it("按 M1 规则加“先读 AGENTS.md”（看 Worker 的工作目录）", () => {

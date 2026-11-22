@@ -3,6 +3,7 @@ import {
   ASK_CARD_WHERE,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
+  POWERSHELL_UTF8_PIPE,
   TASK_GRAPH_CREATE_JSON_HINT,
   TASK_GRAPH_PATCH_JSON_HINT,
   type HubCommand,
@@ -187,7 +188,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     usage: `  ${hub} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin
                                                           建定时任务：到点把任务说明（从标准输入读）发到我自己的对话里。
                                                           --daily 是每天几点（本机时间），--every 是每隔多久（最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟）。
-                                                          用户要日报才建，任务说明按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写`,
+                                                          用户要定期做某件事时才建（如日报、周期巡检），任务说明写清每次做什么；日报可按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写`,
   },
   {
     command: "schedule.list",
@@ -305,20 +306,21 @@ ${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
 ${SELF_RELOAD_USAGE}
   ${hub} help graph                                        打印任务图手册：建图、改图、换人、审查的做法和全部 graph 命令
 
-长文本用 --stdin 从标准输入原样读。bash、zsh 用 heredoc（引号不能省），例如：
-  ${hub} persona edit --stdin <<'EOF'
-  新的完整性格设定
-  EOF
-  ${hub} worker start --title "修 X" --stdin <<'EOF'
-  任务说明：目标、验收标准
-  EOF
-  ${hub} schedule add --name "每日汇报" --daily 09:00 --stdin <<'EOF'
-  每次要做的事
-  EOF
-PowerShell 把正文写进单引号 here-string（@' 和 '@ 各占一行），再用管道传入，例如：
-  @'
-  任务说明：目标、验收标准
-  '@ | ${hub} worker start --title "修 X" --stdin
+长文本用 --stdin 从标准输入原样读。下面的例子照抄时保持顶格，结束标记前不能有空格。
+bash、zsh 用 heredoc（引号不能省），例如：
+${hub} persona edit --stdin <<'EOF'
+新的完整性格设定
+EOF
+${hub} worker start --title "修 X" --stdin <<'EOF'
+任务说明：目标、验收标准
+EOF
+${hub} schedule add --name "每日汇报" --daily 09:00 --stdin <<'EOF'
+每次要做的事
+EOF
+PowerShell 用单引号 here-string 管道传入，先把 $OutputEncoding 设成 UTF-8（不设的话，Windows PowerShell 5.1 会把中文等非 ASCII 字符变成问号），例如：
+${POWERSHELL_UTF8_PIPE}; @'
+任务说明：目标、验收标准
+'@ | ${hub} worker start --title "修 X" --stdin
 令牌和 socket 路径由 ${hub} 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
 
