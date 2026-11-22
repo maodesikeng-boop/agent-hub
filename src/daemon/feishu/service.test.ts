@@ -2779,6 +2779,45 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["最早的任务", expect.stringContaining("最后的任务")]);
   });
 
+  it("离线积压要三轮才补完：每轮重连游标都往前走，三批 @机器人 指令逐轮全部送达，不卡在第一轮留下的位置", async () => {
+    let clockNow = 1_730_001_800_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+
+    clockNow += 3_000;
+    fake.handlers!.onDisconnected("drop");
+    const batches = [
+      { task: "第一批任务", size: FEISHU_INBOUND_CATCHUP_MAX_MESSAGES, at: clockNow + 1_000 },
+      { task: "第二批任务", size: FEISHU_INBOUND_CATCHUP_MAX_MESSAGES, at: clockNow + 1_000 + 3 * 60_000 },
+      { task: "第三批任务", size: 50, at: clockNow + 1_000 + 6 * 60_000 },
+    ];
+    for (const batch of batches) {
+      offlineUserMessage(chat, batch.task, { mention: true, createTime: batch.at });
+      for (let i = 1; i < batch.size; i++) offlineUserMessage(chat, `闲聊-${batch.task}-${i}`, { sender: GUEST, createTime: batch.at + i * 10 });
+    }
+    clockNow += 7 * 60_000;
+
+    const cursors: number[] = [];
+    for (let round = 1; round <= batches.length; round++) {
+      if (round > 1) {
+        clockNow += 5_000;
+        fake.handlers!.onDisconnected(`drop ${round}`);
+      }
+      fake.handlers!.onConnected();
+      await settle();
+      cursors.push(store().inboundCursor(chat)!.lastInboundAt!);
+      expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(batches.slice(0, round).map((b) => b.task));
+    }
+    expect(cursors[1]).toBeGreaterThan(cursors[0]!);
+    expect(cursors[2]).toBeGreaterThan(cursors[1]!);
+  });
+
   it("离线超过回溯时间窗：只在窗口外有主人消息或 @机器人 的会话提醒一次重发，安静的群和只有访客闲聊的群不打扰，再次重连不重复提醒", async () => {
     let clockNow = 1_730_003_000_000;
     const logs: string[] = [];
@@ -2809,6 +2848,9 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     expect(textsTo(linChat)).toEqual([expect.stringMatching(RESEND_REMINDER)]);
     expect(textsTo(zhouChat)).toEqual([]);
     expect(logs.filter((l) => l.includes("超出回溯窗口")).map((l) => /chatId=(\S+)/.exec(l)?.[1]).sort()).toEqual([linChat, rChat].sort());
+    const probeEnds = fake.callsOf("message.list").filter((c) => c.sort_type === "ByCreateTimeDesc").map((c) => Number(c.end_time) * 1000);
+    expect(probeEnds.length).toBeGreaterThan(0);
+    expect(Math.min(...probeEnds)).toBeGreaterThanOrEqual(clockNow - FEISHU_INBOUND_CATCHUP_WINDOW_MS);
 
     clockNow += 60_000;
     fake.handlers!.onDisconnected("drop again");

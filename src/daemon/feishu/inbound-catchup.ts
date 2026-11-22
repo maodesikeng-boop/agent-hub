@@ -61,11 +61,6 @@ export function releaseAllInboundGates(ctx: FeishuContext, maxEpoch?: number) {
 const isCatchUpStale = (ctx: FeishuContext, runEpoch: number) =>
   ctx.life.closed || !ctx.link.wsUp || ctx.link.transport === null || ctx.catchUp.epoch !== runEpoch;
 
-export function noteInboundQueueDrop(ctx: FeishuContext, chatId: FeishuChatId, at: number) {
-  const prev = ctx.catchUp.cursorHold.get(chatId);
-  ctx.catchUp.cursorHold.set(chatId, prev === undefined ? at : Math.min(prev, at));
-}
-
 function catchUpWindow(
   chat: FeishuChatBinding,
   target: FeishuChatTarget,
@@ -149,6 +144,8 @@ async function gapHasUnansweredAsk(
   skipId: FeishuMessageId | null,
   runEpoch: number,
 ): Promise<boolean | null> {
+  const startSec = Math.floor(gap.fromMs / 1000);
+  const endSec = Math.max(startSec + 1, Math.ceil(gap.toMs / 1000));
   let pageToken: string | undefined;
   for (let pages = 0; pages < FEISHU_INBOUND_GAP_PROBE_MAX_PAGES; pages++) {
     if (isCatchUpStale(ctx, runEpoch)) return null;
@@ -156,8 +153,8 @@ async function gapHasUnansweredAsk(
       chatId: win.chatId,
       chatType: win.chatType,
       botOpenId: win.botOpenId,
-      startTimeSec: String(Math.floor(gap.fromMs / 1000)),
-      endTimeSec: String(Math.floor((gap.toMs - 1) / 1000)),
+      startTimeSec: String(startSec),
+      endTimeSec: String(endSec),
       sortType: "ByCreateTimeDesc",
       pageSize: FEISHU_MESSAGE_LIST_PAGE_SIZE,
       ...(pageToken !== undefined ? { pageToken } : {}),
@@ -212,11 +209,10 @@ function queueMissedMessages(ctx: FeishuContext, chat: FeishuChatBinding, missed
   }
   const firstDropped = dropped[0];
   const holdAt = firstDropped?.at ?? unfetchedFrom;
-  if (holdAt === null) {
-    ctx.catchUp.cursorHold.delete(chat.chatId);
-    return;
-  }
-  if (holdAt > 0) noteInboundQueueDrop(ctx, chat.chatId, holdAt);
+  // Each round re-reads from the stored cursor, so its hold supersedes an earlier round's hold rather than keeping the older minimum.
+  if (holdAt !== null && holdAt > 0) ctx.catchUp.cursorHold.set(chat.chatId, holdAt);
+  else ctx.catchUp.cursorHold.delete(chat.chatId);
+  if (holdAt === null) return;
   ctx.directory.markAllStale();
   ctx.link.lastError = "飞书入站队列已满，请重发未收到回复的消息";
   ctx.log(
