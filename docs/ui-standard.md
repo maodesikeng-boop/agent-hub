@@ -29,17 +29,18 @@ Use only these Tailwind `4px`-step tokens:
 | Dialog padding | `24px` | `p-6` on `DialogContent` |
 | Popover padding | `16px` | `p-4` on `PopoverContent` |
 
-## 2. Border radius scale
+## 2. Corners and borders
 
-| Element | Class or value |
+Controls, containers, and cards use **square right-angle corners (`0px`) and plain `2px` (`border-2`) or `1px` solid borders** — no Apple-style pill/card roundness and no stepped `clip-path` pixel notches on frame edges. Pixel craft stays on characters, avatars, sprites, and brand illustrations, while controls use crisp straight borders and smooth line icons.
+
+| Element | Rule |
 | --- | --- |
-| Buttons, icon buttons, status badges, switches, avatars | `rounded-full` (`--radius-btn`) |
-| Persistent tool slots and counter badges | `4px` (`tool-slot` and `.tool-badge`) |
-| Plus, send, and stop buttons inside the chat composer | `10px` |
-| Sidebar rows, grouped boxes, cards, dialogs, popovers | `rounded-2xl` (`16px`) |
-| Inputs, textareas, selects, code blocks, option rows, settings tabs (`36px` tall) | `rounded-xl` (`12px`) |
+| Buttons, inputs, textareas, selects, code blocks, option rows, settings tabs | Square corners (`0px`), `border-2` plain borders (ghost buttons and plain selects are borderless) |
+| Sidebar rows, grouped boxes, cards, ask cards, thread cards, dialogs, popovers, drawers | Square corners (`0px`), `border-2` (`--border` for group boxes, `--border-strong` for overlays and composer) |
+| Persistent tool slots and counter badges | CSS `border-radius: 4px` with `border: 2px solid var(--slot-line)` and `2px` bottom inset shade |
+| Status indicators, attachment chips, thumbnail tiles, radio marks, switch track and thumb | Square (`0px` corners) |
 
-Task Graph full-view nodes use stepped pixel corners (section 12.1). Guard tests in `src/web/web-guard.test.ts` forbid `rounded-lg`, `rounded-md`, and `rounded-sm`.
+Guard tests in `src/web/web-guard.test.ts` forbid any `rounded-*` Tailwind utility class in `src/web/` and forbid raw `<select` elements outside `src/web/ui/select.tsx`.
 
 ## 3. Type scale, weights, and shell copy
 
@@ -67,27 +68,26 @@ The sole exception is the profile header name (`text-display`, `22px`, `600`, `t
 
 ## 4. Colors and avatars
 
+- **Warm zone palette (`src/web/styles.css`)**:
+  - Neutral chrome uses warm paper and sand tokens instead of cool zinc grays or fruit-tinted surface mixes: `--background` (`#ffffff`) for the conversation and cards, `--panel` (`#f7f4ed`) for secondary panels, `--foreground` (`#1c1917`), `--muted-foreground` (`#6f6862`), `--border` (`#eee8dc`), `--border-strong` (`#ddd4c2`), `--border-focus` (`#4a4038`), and `--hover` (`#f6f2e9`).
+  - Rail and list tokens (`--rail` `#ffcb3d`, `--rail-shade` `#e9a417`, `--rail-hover` `#ffd966`, `--rail-ink` `#4a2e00`, `--rail-ink-soft` `#6e4a00`, `--rail-outline` `#8a5300`, `--list` `#fff4cc`, `--list-edge` `#efd27d`, `--list-hover` `#ffedb0`, `--list-field` `#fffbeb`, `--list-ink` `#3b2600`, `--list-ink-soft` `#75561b`, `--select-line` `#e0b03c`) tint navigation zones, settings tabs, and selection outlines.
+  - Selected items on white or warm gray use `--open` (`#fff6d6`) with a `2px` `--open-line` (`#e9c25a`) border; selected items on cream (`--list`) use `bg-background` with `--select-line`. Neutral hover uses `bg-hover`. Selection never changes font weight.
 - **Dynamic PM accent (`--primary` and `--primary-foreground`)**:
   - `src/shared/slimes.ts` decouples 20 fruit slime shapes from 24 palette entries (`blob` for sprite fills, `accent` darkened to >= 4.5:1 WCAG AA contrast against white, verified in `src/web/lib/palette.test.ts`).
-  - `AccentScope` (`src/web/lib/accent-scope.tsx`, `display: contents`) wraps each PM conversation, its Piece conversations, its profile page, the right rail, and in-session dialogs. Outside `AccentScope` (the left sidebar, `#/router`, global settings, and New PM dialog), `:root` keeps `--primary` at neutral `#18181b`.
-  - **Solid accent (`bg-primary text-primary-foreground`) appears only on**: the single primary button on screen (`Create`, `Save`, `Send`, `Stop`, or the recommended gate option; hover uses `hover:brightness-90`), checked radio marks and active switches, `6px` attention dots on `Needs You` and the collapsed right-rail toggle, and the file-drop dashed border.
-  - **User message bubbles (`bg-bubble-me text-bubble-me-foreground`)**: Mix `--primary` at `12%` (`--mix-bubble-me`) into `#ffffff` with dark foreground text (>= 4.5:1 contrast across all 24 colors; neutral pale gray on `#/router`).
-  - **No colored alert banners or borders**: Inline secondary actions (`Undo`, `Retry`) use `text-muted-foreground` with `hover:text-foreground`. Colored borders appear only on the file-drop target, active `Waiting on you` gate cards (`border-primary`, section 12.1), and the blurred `.composer-frame` focus halo (section 7).
-  - **Sidebar attention dot**: Unanswered asks and waiting turns show an `8px` green dot (`size-2 rounded-full bg-status-active`, with `ring-2 ring-sidebar` on the `72px` narrow rail) with no text pill; screen-reader text lives on `aria-label` and `title`.
-- **Fruit jelly row highlights (`bg-jelly` and `hover:bg-jelly-hover`)**:
-  - PM sidebar rows, right-rail rows, and Task Graph node cards use `10%` selected and `5%` hover translucent fruit tints via `--jelly` (falling back to `--primary`).
-  - Pinned `Router`, settings categories, grouped rows, selects, and `Show more` use neutral `bg-sidebar-active` and `hover:bg-sidebar-hover`. Selection never changes font weight.
-- **Fruit-tinted shell surfaces (`FruitTint`)**:
-  - Mixes `--fruit` into shell surfaces and dividers (`--mix-chat: 2.5%`, `--mix-sidebar: 3%`, `--mix-line: 8%`; capped at `5%` for surfaces and `10%` for dividers in `palette.test.ts`), exposed as `bg-surface-chat`, `bg-surface-sidebar`, and `border-line` / `divide-line` with a `300ms` `.tint-fade` transition when switching PMs (disabled under `prefers-reduced-motion: reduce`).
+  - `AccentScope` (`src/web/lib/accent-scope.tsx`, `display: contents`) wraps each PM conversation, its Piece conversations, its profile page, the right rail, and in-session dialogs. Outside `AccentScope` (the left sidebar, `#/router`, global settings, and New PM dialog), `:root` sets `--primary` to `--rail-ink` (`#4a2e00`).
+  - **Solid accent (`bg-primary text-primary-foreground`) appears only on**: the single primary button on screen (`Create`, `Save`, `Send` inside a PM, `Stop`, or the recommended gate option; hover darkens with `hover:brightness-90`), checked switch tracks, checked radio marks, `6px` attention dots on `Needs You` and the collapsed right-rail toggle, and the file-drop dashed border. Outside `AccentScope` (Router's composer), `Send` uses honey `--rail` with `--rail-ink` foreground.
+  - **User message bubbles (`bg-bubble-me text-bubble-me-foreground`)**: Mix `--primary` at `12%` (`--mix-bubble-me`) into `#ffffff` with warm dark foreground text (>= 4.5:1 contrast across all 24 colors).
+  - **Text links outside Markdown**: Inline secondary text actions use `text-rail-ink` (`#4a2e00`) or `text-muted-foreground hover:text-foreground`. Colored borders appear only on the file-drop target, active `Waiting on you` items (`border-open-line`), and `--select-line` / `--open-line` selections.
+  - **Sidebar attention dot**: Unanswered asks and waiting turns show an `8px` square (`size-2 bg-status-active`, with `ring-2 ring-list` on compact rails) with no text pill; screen-reader text lives on `aria-label` and `title`.
 - **Avatars (`src/shared/slimes.ts`)**:
-  - Inline transparent-background pixel SVGs with no circular frame.
+  - Inline transparent-background pixel SVGs with no frame.
   - **Project Managers**: 20 fruit slimes paired with any of 24 colors via `SlimePicker` (`Fruit` and `Color` grids).
   - **Pieces**: Curled note sprite (`Avatar neutral`) tinted with the owning PM's color.
-  - **Router**: Sprout bell (`RouterAvatar`), unscoped neutral shell, preserving source PM avatars on incoming cards and reports.
+  - **Router**: Sprout bell (`RouterAvatar`), unscoped warm chrome, preserving source PM avatars on incoming cards and reports.
 
 ## 5. Icons
 
-Import all tool icons from `src/web/ui/icons.ts` (`lucide-react` smooth-line 24-grid icons alongside matching smooth-line custom SVGs for `PinFilled` and the five mainstream device types: macOS, Windows, Linux, iPhone, and Android; usage renders `Hourglass`). Icons inherit text color (`text-muted-foreground` for secondary actions), use `stroke="currentColor"` (`data-icon="line"`), and size via `size-pixel` (`24px` in `Large`), `size-pixel-md` (`18px`), or `size-pixel-sm` (`12px`). Never use emoji as UI icons.
+Import all UI icons from `src/web/ui/icons.ts` (`lucide-react` smooth-line 24-grid icons alongside matching smooth-line custom SVGs for `PinFilled` and the five mainstream device types: macOS, Windows, Linux, iPhone, and Android; usage renders `Hourglass`; composer uses `Plus`, `Send` paper plane, `Square`, `FileText`, `Video`, `X`, and `Bot`). Icons inherit text color (`text-muted-foreground` for secondary actions), use `stroke="currentColor"` (`data-icon="line"`), and size via `size-pixel` (`24px` in `Large`), `size-pixel-md` (`18px`), or `size-pixel-sm` (`12px`). Never use emoji as UI icons.
 
 ## 6. Control dimensions and tool slots
 
@@ -95,30 +95,31 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 
 | Control | Default | Small | Component |
 | --- | --- | --- | --- |
-| Button | `h-9 px-4` | `h-8 px-3` (`size="sm"`) | `Button` |
-| Icon button | `size-9` (`size="icon"`) | `size-8` (`size="icon-sm"`) | `Button` |
-| Text input | `h-9 px-3` (`w-60` inside desktop settings rows) | none | `Input` |
-| Select | `h-9`, max `260px` (`variant="plain"` for auto-saving rows) | none | `Select` |
+| Button | `h-9 px-4 border-2` | `h-8 px-3 border-2` (`size="sm"`) | `Button` |
+| Icon button | `size-9 border-2` (`size="icon"`) | `size-8` (`size="icon-sm"`) | `Button` |
+| Text input | `h-9 px-3 border-2` (`w-60` inside desktop settings rows) | none | `Input` |
+| Select | `h-9`, max `260px` (`variant="plain"` for auto-saving rows; Radix UI `Select`) | none | `Select` |
 | Textarea | `min-h-24` (borderless auto-sizing inside grouped boxes) | none | `Textarea` |
-| Switch | `h-5 w-9` (`size-4` thumb) | none | `Switch` |
+| Switch | `h-5.5 w-10 border-2` (`size-3.5` square thumb) | none | `Switch` |
 
-- **Destructive primary button (`Button variant="destructive"`)**: `bg-danger text-primary-foreground hover:brightness-90`, at most one per confirmation dialog or drawer.
+- **Primary and destructive buttons (`Button`)**: Solid `--primary` (`default`) or `--danger` (`destructive`) fill with a `2px` border, `2px` bottom inset shade (`shadow-[inset_0_-2px_0_rgb(0_0_0_/_0.22)]`), `hover:brightness-95`, and `1px` active press. `outline` uses `bg-background border-2 border-border-strong hover:bg-hover`; `ghost` is borderless with `hover:bg-hover`.
+- **Custom dropdowns (`src/web/ui/select.tsx`)**: All dropdowns use the custom `@radix-ui/react-select` component (zero browser-native `<select>`). Triggers show a smooth `ChevronDown`; the open `SelectContent` portal uses `border-2 border-border-strong bg-background` with smooth `Check` indicators on the selected option.
 - **Non-prose touch inputs**: URLs, domains, and pairing codes set `autoCapitalize="none" autoCorrect="off" spellCheck={false}` (plus `inputMode="url"` on URLs), and stretch full width (`h-11 w-full`) in mobile settings pages and drawers.
 - **Tool slots (`Button variant="slot"`) and `.tool-badge`**:
-  - Persistent shell actions (Settings, New PM, Usage, Back, Right-rail toggle) use `size="icon"` (`30px`, `size-7.5`, `18px` icon); the Router model picker uses `h-7.5 px-3`; inline header slots (Task Graph `Zoom`) use `size="icon-sm"` (`24px`, `12px` icon).
+  - Persistent shell actions (Settings, New PM, Usage, Back, Right-rail toggle) use `size="icon"` (`30px`, `size-7.5`, `18px` icon) or `size="icon-lg"` (`36px`); the Router model picker uses `h-7.5 px-3`; inline header slots (Task Graph `Zoom`) use `size="icon-sm"` (`24px`, `12px` icon).
   - The sidebar `Update` slot (`h-7.5 px-3`, `Download` icon + `Update`, icon-only on the `72px` rail, accessible name `Update to vX.Y.Z`) sits directly before Settings, which keeps its corner position, and appears only for a bundled install with a newer release that was not skipped (section 24).
-  - Styled from `--slot-*` tokens derived from the Router sprout bell: `#ffefb5` fill, `1px` `#d9a336` border, `4px` radius, `2px` `#e8bf55` bottom inset shadow, `#4a2e00` foreground (`10.9:1`), `#ffe48f` hover, and `1px` press depression. `.tool-badge` shares the static warm-yellow badge for Router counts, `Read-only` Piece badges, and `Custom` capability choices (section 23).
+  - Styled from `--slot-*` tokens derived from the Router sprout bell: `#ffefb5` fill, `2px` `#d9a336` border, `4px` CSS radius, `2px` `#e8bf55` bottom inset shadow, `#4a2e00` foreground (`10.9:1`), `#ffe48f` hover, and `1px` press depression. `.tool-badge` shares the static warm-yellow badge for Router counts, `Read-only` Piece badges, and `Custom` capability choices (section 23).
 
 ## 7. Focus states and chat composer
 
-- **Neutral keyboard ring**: Interactive controls show `focus-visible:ring-2 focus-visible:ring-ring/50` (`#a1a1aa`, `ring-inset` inside bordered rows) on keyboard focus only.
-- **Standard inputs (`Input`, `Textarea`, bordered `Select`)**: Keep border color, width, and shadow unchanged on focus; the blinking caret indicates focus.
+- **Crisp keyboard outline**: Buttons and interactive rows show a crisp `2px` `--border-focus` (`#4a4038`) outline (`focus-visible:outline-2 focus-visible:outline-border-focus`, inset `-2px` inside clipped boxes) on keyboard focus only — never soft fuzzy rings.
+- **Standard inputs (`Input`, `Textarea`, `Select`)**: Use a `2px` `--border-strong` (`#ddd4c2`) plain border that darkens cleanly to `--border-focus` (`#4a4038`) on focus or when `Select` is open (`variant="plain"` hovers/focuses to `bg-hover`).
 - **Chat composer (`.composer-frame` in `src/web/styles.css`)**:
-  - Resting state: `rounded-xl`, `1px` `border-border`, `0 2px 10px rgba(0, 0, 0, 0.05)`.
-  - `:focus-within`: Border stays `1px` `border-border`; shadow transitions (`180ms ease-out`, `--motion-focus`) to a two-layer blurred `--primary` halo (`0 0 14px` at `16%` + `0 0 28px` at `10%`), with no hard spread ring.
+  - Resting state: square corners, `2px` `border-border-strong`, `bg-background`, zero box shadow.
+  - `:focus-within`: Border darkens immediately to `2px` `--border-focus` (`#4a4038`), with no shadow halo or blur ring.
   - **Single-line vs multiline layout (`Composer.tsx` and `composer-layout.ts`)**: When empty or single-line without attachments, `+`, the textarea, and `Send`/`Stop` share one `48px` row. When text wraps, contains a newline, or has attachments, the textarea spans the top row while `+` and `Send`/`Stop` move to the bottom row within the same CSS grid so the DOM node, caret, and focus never reset.
-  - **Attachment chips and `FileCard`**: Pending composer chips (`rounded-full bg-muted py-1 pr-1 pl-3 text-minor`) pair `ComposerVideo` or `ComposerFile` (`16px`) with filename, size, and `x`. Sent `FileCard` items render a `40px` (`size-10 rounded-xl`) thumbnail, first video frame with centered `Play` overlay, or file icon, opening `FilePreview` on click.
-  - **Send button**: `36px`, `10px` radius, disabled neutral gray when empty, switching to `--primary` with a one-shot `150ms` `composer-send-bounce` when content becomes non-empty.
+  - **Attachment chips and `FileCard`**: Pending composer chips (`border border-border-strong bg-panel py-1 pr-1 pl-3 text-minor`) pair `Video` or `FileText` (`16px`) with filename, size, and `X`. Sent `FileCard` items render a crisp square `40px` (`size-10 border border-border`) thumbnail, first video frame with centered `Play` overlay, or file icon, opening `FilePreview` on click.
+  - **Send button**: `36px` (`size-9`) square button with the `Send` paper plane (`Stop` square while streaming): `--primary` fill + bottom shade inside a PM (`--rail` honey + `--rail-ink` plane on Router), disabled `#f3efe6` fill with `--border-strong` border and `#a8a29e` plane when empty, plus a one-shot `150ms` `composer-send-bounce` when content becomes non-empty.
 
 ## 8. Alignment and chat column width
 
@@ -134,12 +135,12 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 
 Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeRows` (`src/web/components/SettingsList.tsx`):
 
-- **Group box (`GROUP_BOX`)**: `rounded-2xl border border-border bg-background` with `1px` `divide-border` between rows, no gray fill, and no shadow. External headings use `13.5px` `500` `text-muted-foreground` `px-4` `min-h-8 items-center`, `8px` above the box.
-- **Icon rows** (computers and browser sessions): `size-pixel text-muted-foreground` + `gap-3` + title, with an `8px` status dot (`bg-success`, `bg-caution`, or `bg-muted-foreground/40`) before spaced metadata (`gap-3`, never middle dots).
+- **Group box (`GROUP_BOX`)**: `border-2 border-border bg-background` with `1px` `divide-border` between rows, square corners, no gray fill, and no shadow. External headings use `13.5px` `500` `text-muted-foreground` `px-4` `min-h-8 items-center`, `8px` above the box.
+- **Icon rows** (computers and browser sessions): `size-pixel text-muted-foreground` + `gap-3` + title, with a square `8px` status dot (`bg-success`, `bg-caution`, or `bg-muted-foreground/40`) before spaced metadata (`gap-3`, never middle dots).
 - **`CollapsibleGroup`**: Collapses low-frequency lists (signed-in browsers, edit history, `Memory files`) into one `52px` button row inside `h2` (`aria-expanded`, summary count + `16px` `ChevronDown` rotating `180deg`). Auto-expands on load only when action is required.
-- **Controls inside rows**: Auto-saving dropdowns use borderless `Select variant="plain"` (`ChevronsUpDown`); short inline choices use `Segmented` (`h-9 rounded-full p-0.5`, neutral `bg-sidebar-active`, `touch-target` items); multi-row single-choice lists use `ChoiceRows` (`20px` `RadioMark`); drill-down entries (mobile settings and the profile `Capabilities` row) use `SettingsNavRow` (`min-h-12 px-4 py-3` with status summary and `ChevronRight`).
-- **Search fields (`SearchField`, `src/web/components/SearchField.tsx`)**: The sidebar and `Capabilities` share one `h-9 rounded-xl bg-sidebar-active` field with a `12px` `Search` icon, `Search` placeholder, and an `icon-sm` `Clear search` button once the query is non-blank.
-- **Provider, model, and effort rows (`AgentRows`)**: Driven entirely from `useModelCatalogs` and `src/shared/vendors.ts`. Uninstalled providers are omitted (unless currently selected, which disables `Create`); signed-out providers appear as disabled `<option>` entries (`Codex (Not signed in)`). Single-tier effort rows hide automatically.
+- **Controls inside rows**: Auto-saving dropdowns use Radix `Select variant="plain"` (`ChevronDown`); short inline choices use `Segmented` (`h-9 border-2 border-border-strong bg-panel p-0.5`, square cells with active cell in slot colors, `touch-target` items); multi-row single-choice lists use `ChoiceRows` (`18px` square `RadioMark` with `8px` inner square); drill-down entries (mobile settings and the profile `Capabilities` row) use `SettingsNavRow` (`min-h-12 px-4 py-3` with status summary and `ChevronRight`).
+- **Search fields (`SearchField`, `src/web/components/SearchField.tsx`)**: Square `h-9 border-2` field (`border-list-edge bg-list-field` inside cream sidebars or `border-border-strong bg-background` in dialogs/settings, darkening on focus) with a `12px` `Search` icon, `Search` placeholder, and an `icon-sm` `Clear search` button once the query is non-blank.
+- **Provider, model, and effort rows (`AgentRows`)**: Driven entirely from `useModelCatalogs` and `src/shared/vendors.ts`. Uninstalled providers are omitted (unless currently selected, which disables `Create`); signed-out providers appear as disabled `SelectItem` entries (`Codex (Not signed in)`). Single-tier effort rows hide automatically.
 
 ### Form validation
 
@@ -150,16 +151,16 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 
 ## 10. Dialogs and bottom drawers
 
-- **`DialogContent` (`src/web/ui/dialog.tsx`)**: `rounded-2xl border border-border bg-background p-6` over `bg-black/30`. Width tiers: `520px` default (`NewPmDialog`, with `w-72` right-aligned field column), `max-w-110` for confirmations, and `780px` (`max-w-195`, fixed height `h-[min(35rem,calc(100%-3rem))]`, `p-0`) for desktop `SettingsDialog`.
-- **Desktop `SettingsDialog`**: Left vertical Radix `Tabs` (`w-48 bg-sidebar border-r border-border`, collapsing into a horizontal top tab bar below `720px`) for `General` (`Interface scale`, `Notifications`, and the `Updates` group from section 24), `Providers` (including `Vendor sync` and its `Sync preview` dialog), `Capabilities` (section 23), `Resources` (section 25), `Computers`, and `Security & Access`; right pane scrolls independently with `min-w-0` and `grid-cols-1` so long paths or URLs never clip right-hand buttons.
+- **`DialogContent` (`src/web/ui/dialog.tsx`)**: Square corners, `border-2 border-border-strong bg-background p-6` over `bg-[rgb(28_25_23_/_0.34)]`. Width tiers: `520px` default (`NewPmDialog`, with `w-72` right-aligned field column), `max-w-110` for confirmations, and `780px` (`max-w-195`, fixed height `h-[min(35rem,calc(100%-3rem))]`, `p-0`) for desktop `SettingsDialog`.
+- **Desktop `SettingsDialog`**: Left vertical Radix `Tabs` (`w-48 bg-list border-r-2 border-list-edge`, active tab styled with `bg-background border-2 border-select-line text-list-ink`, collapsing into a horizontal top tab bar below `720px`) for `General` (`Interface scale`, `Notifications`, and the `Updates` group from section 24), `Providers` (including `Vendor sync` and its `Sync preview` dialog), `Capabilities` (section 23), `Resources` (section 25), `Computers`, and `Security & Access`; right pane (`bg-panel`) scrolls independently with `min-w-0` and `grid-cols-1` so long paths or URLs never clip right-hand buttons.
 - **Fixed header and footer**: Only `DialogBody` scrolls, fading over its bottom `16px` (`.dialog-body-fade`).
 - **Zoom and preview dialogs (`ZOOM_DIALOG` and `FilePreview`)**: Size to content up to `min(96vw, 1400px)` by `90vh` for diagrams, Task Graphs, tables, Markdown, code, and audio; expand to `90vw` by `90vh` for PDFs, HTML pages, videos, and full-size images.
-- **Bottom `Drawer` (`src/web/ui/drawer.tsx`, wrapping `vaul`)**: Used on mobile for Pieces, destructive confirmations, and short form wizards (`rounded-t-2xl border-t border-line bg-surface-chat`, `max-h-[85dvh]`, `36x4` drag handle, bottom inset `max(var(--safe-bottom), var(--kb-inset))`).
+- **Bottom `Drawer` (`src/web/ui/drawer.tsx`, wrapping `vaul`)**: Used on mobile for Pieces, destructive confirmations, and short form wizards (`border-t-2 border-border-strong bg-background`, `max-h-[85dvh]`, `36x4` drag bar in `bg-border-strong`, bottom inset `max(var(--safe-bottom), var(--kb-inset))`).
 
 ## 11. Popovers and usage bars
 
-- **`PopoverContent`**: `rounded-2xl border border-border bg-background p-4`, content-sized between `280px` (`min-w-70`) and `min(22.5rem, var(--radix-popover-content-available-width))`, height-capped by `--radix-popover-content-available-height` with internal `grid-cols-1` truncation.
-- **`QuotaPopover`**: Groups windows (`5h`, `7d`, `30d`, or model families) per provider with `6px` (`h-1.5 rounded-full`) bars colored per window via `USAGE_BAR_COLORS`: neutral `bg-foreground/40` normally, amber `bg-caution` at `>= 80%` or `allowed_warning`, and solid `bg-foreground` (never red) at `100%` or `rejected`, followed by `Resets HH:MM` (`tabular-nums`).
+- **`PopoverContent`**: Square corners, `border-2 border-border-strong bg-background p-4`, content-sized between `280px` (`min-w-70`) and `min(22.5rem, var(--radix-popover-content-available-width))`, height-capped by `--radix-popover-content-available-height` with internal `grid-cols-1` truncation.
+- **`QuotaPopover`**: Groups windows (`5h`, `7d`, `30d`, or model families) per provider with `6px` (`h-1.5`) square bars colored per window via `USAGE_BAR_COLORS`: neutral `bg-foreground/40` normally, amber `bg-caution` at `>= 80%` or `allowed_warning`, and solid `bg-foreground` (never red) at `100%` or `rejected`, followed by `Resets HH:MM` (`tabular-nums`).
 
 ## 12. Right rail
 
@@ -169,7 +170,7 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
   1. `Needs You`: Standalone `hub ask` items not bound to a Task Graph (`6px` `--primary` dot when non-empty, max 3 visible before `Show more`).
   2. `Task Graph`: Active DAGs (`status === "active"`), rendered with `PeelTrack` and `TaskProgressIcon`.
   3. `Pieces`: Unbound active Workers (`isBusy` titles animate with `.status-shimmer`, max 3 visible before `Show more`; metadata lives in `title` and `PieceMeta`, and mechanical prefixes are stripped by `cleanPieceTitle`).
-  4. `Completed`: Collapsed and unmounted by default; lazily fetches `GET /api/projects/:id/task-graphs?status=history` (`GRAPH_HISTORY_PAGE_SIZE`, `Load more` up to `MAX_COMPLETED_GRAPH_PAGES`) alongside finished standalone Pieces (`opacity-60`).
+  4. `Completed`: Collapsed and unmounted by default; lazily fetches `GET /api/projects/:id/task-graphs?status=history` (`GRAPH_HISTORY_PAGE_SIZE`, `Load more` up to `MAX_COMPLETED_GRAPH_PAGES`) alongside finished standalone Pieces (`opacity-65`).
 - **Auto-open and persistence**: Renders beside chat automatically only when active work or unanswered asks exist; remembers manual rail collapse and per-section collapse (`agent-hub.rightRail.collapsed`) in `localStorage`.
 - **Jump-only ask rows**: Answering happens on the full card in the chat stream (or `TaskGraphDialog`), never duplicated inside the narrow rail; clicking a rail ask row scrolls the conversation to that card and highlights it for `2s`.
 
@@ -179,8 +180,8 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 - **`PeelTrack` vertical lanes**: Orthogonal pixel jelly pipes and beads (`pixel-path.ts`) scaled by `--peel-u` (`2.5rem` for 1 to 2 lanes, `+0.875rem` per extra parallel lane up to `6rem`), partitioned into connected components, transitive-reduced, and ordered with chain-first topological sort so every drawn segment represents a real dependency. Consecutive completed prefixes (`>= 2`) roll into `N done`, and trailing locked chains (`>= 2` depth) fold into `N next`.
 - **Decision gates (`waiting` + `waitingFor: "user"`) and `UserBlockerCard`**:
   - Show a `GateMark` pixel bell in the rail row (`text-body font-semibold text-primary`) that scrolls to the chat card or opens `TaskGraphDialog`.
-  - Inside `TaskGraphDialog` (and chat for `UserBlockerCard`), cards use `rounded-2xl border border-primary bg-jelly px-3.5 py-3` with `grid-cols-1` wrapping options, supporting one-click option selection, option + note, or custom note submission (`POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`; `confirm: true` checkpoints expand `Add note` by default). `UserBlockerCard` offers a `Done` (`Checking...`) re-probe button.
-- **`TaskGraphDialog` full view**: Left-to-right `@dagrejs/dagre` layout on a `16px` dot-grid canvas with stepped-corner cards, re-laid out once from `ResizeObserver` measured heights without locking card `min-height`. `Cancel graph` opens a `max-w-110` destructive confirmation dialog (`Keep going` vs `Cancel graph`), while `Skip step` executes directly. All requests go through `DeviceScope` (`useClient()`).
+  - Inside `TaskGraphDialog` (and chat for `UserBlockerCard`), cards use square corners with `border-2 border-open-line bg-open px-3.5 py-3` and `grid-cols-1` wrapping options, supporting one-click option selection, option + note, or custom note submission (`POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`; `confirm: true` checkpoints expand `Add note` by default). `UserBlockerCard` offers a `Done` (`Checking...`) re-probe button.
+- **`TaskGraphDialog` full view**: Left-to-right `@dagrejs/dagre` layout on a `16px` dot-grid canvas with plain 2px bordered square-corner cards (`.pixel-card`), re-laid out once from `ResizeObserver` measured heights without locking card `min-height`. `Cancel graph` opens a `max-w-110` destructive confirmation dialog (`Keep going` vs `Cancel graph`), while `Skip step` executes directly. All requests go through `DeviceScope` (`useClient()`).
 
 ## 13. Fonts, numbers, and list rows
 
@@ -191,14 +192,14 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 ## 14. Interaction states and motion
 
 - **Full-page states (`FullPage` in `App.tsx`)**: Centered `22rem` column (`20px` `Loader2` + `13.5px` muted label while loading, or `17px` `600` title + `13.5px` description + at most one primary button).
-- **Motion budget (`--motion-*` in `src/web/styles.css`)**: One-shot state transitions stay `<= 400ms` (`300ms` `.tint-fade`, `150ms` rail collapse, `200ms` chevron turn, `120ms` `.message-enter` on newly appended tail messages, `0ms` instant conversation switch). Only two loops are permitted while work is active: `.status-shimmer` (`2.2s` `currentColor` sweep on `Working...` / `Thinking...` and busy Piece titles) and `.slime-pet` (`520ms` hop every `1.8s`). `prefers-reduced-motion: reduce` disables every animation.
+- **Motion budget (`--motion-*` in `src/web/styles.css`)**: One-shot state transitions stay `<= 400ms` (`150ms` rail collapse, `200ms` chevron turn, `120ms` `.message-enter` on newly appended tail messages, `0ms` instant conversation switch). Only two loops are permitted while work is active: `.status-shimmer` (`2.2s` `currentColor` sweep on `Working...` / `Thinking...` and busy Piece titles) and `.slime-pet` (`520ms` hop every `1.8s`). `prefers-reduced-motion: reduce` disables every animation.
 
 ## 15. Markdown, code blocks, and charts
 
 `src/web/components/Markdown.tsx` and `.markdown` (`15px`, `1.65` line height, `remark-gfm`, `remark-breaks`, `remark-cjk-friendly`, `remark-cjk-friendly-gfm-strikethrough`):
 
-- **Headings, code, links, and tables**: Headings use weight `600` (`20px` `h1`, `17px` `h2`, `15px` `h3`, `15px` `500` muted `h4` to `h6`). Inline code uses `--muted` fill with `box-decoration-break: clone`. Links use `#2563eb` (`--link`, >= 4.5:1 on white). Fenced code blocks (`rounded-xl`, `--muted`, `13.5px` mono) highlight lazily with Shiki (`github-light`, `120ms` streaming debounce) and provide a raw-copy icon button. Tables scroll horizontally inside a wrapper when needed, follow Markdown column alignment (left by default), and apply `tabular-nums`.
-- **Inline media and file links**: Saved `![]()` images reserve a fixed `240px` height (`h-60 max-w-xs rounded-xl object-contain`) so streams never jump on load, switching to an expired-file card on HTTP 404. Local `[label](path)` links render inline as `[data-file-link]` opening `FilePreview` (or plain text if unsaved).
+- **Headings, code, links, and tables**: Headings use weight `600` (`20px` `h1`, `17px` `h2`, `15px` `h3`, `15px` `500` muted `h4` to `h6`). Inline code uses `--muted` fill with `box-decoration-break: clone`. Links use `#2563eb` (`--link`, >= 4.5:1 on white). Fenced code blocks (square corners, `border-2 border-border`, `--panel` / `--muted`, `13.5px` mono) highlight lazily with Shiki (`github-light`, `120ms` streaming debounce) and provide a raw-copy icon button. Tables scroll horizontally inside a wrapper when needed, follow Markdown column alignment (left by default), and apply `tabular-nums`.
+- **Inline media and file links**: Saved `![]()` images reserve a fixed `240px` height (`h-60 max-w-xs border-2 border-border object-contain`) so streams never jump on load, switching to an expired-file card on HTTP 404. Local `[label](path)` links render inline as `[data-file-link]` opening `FilePreview` (or plain text if unsaved).
 - **Charts (`mermaid` and `vega-lite` in `src/web/charts/`)**: Render after the fence closes inside a `.md-code` shell (`160px` min loading height, `480px` max inline height, scaling down no further than `12px` `CHART_MIN_INLINE_FONT_PX` before scrolling horizontally, sanitized with `dompurify`), with toolbar toggles for source, `Zoom` (`ZOOM_DIALOG` up to `2.5x`), and copy, styled from CSS variables and `CHART_CATEGORY_COLORS`.
 
 ## 16. Shell layout, narrow rail, routes, and native macOS frame
@@ -216,14 +217,14 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 `MessageList.tsx` and `Messages.tsx` hide process noise by default:
 
 - **One avatar per agent turn**: Renders `26px` avatar + `13.5px` `500` muted name once at the top of the turn, folds all tool calls, Worker dispatches, and schedule edits into `Worked for 23s >` (`Thinking...`, `Calling Linear: list issues`, `Loading skill verify`, etc. from `src/shared/step-labels.ts`, held at least `450ms` via `MIN_TOOL_STEP_VISIBLE_MS`), streams live Markdown in place without duplicate flash on commit, and ends with copy and timestamp.
-- **`hub ask` cards**: `rounded-2xl border border-border bg-background p-4` with `OptionRow` (`A`/`B` badges + `Recommended` inline) and `Add note` (`Input` + `Send`), settling in place to read-only (`bg-sidebar-active` on chosen option, `PencilLine` row for note, or `Closed`).
-- **Worker speech bubbles (`WorkerSpeech`)**: Left-aligned `rounded-[22px] px-4 py-2.5` neutral `--bubble-agent` button with curled-note avatar and a `10px` status dot (`bg-success`, `bg-caution`, `bg-danger`); inside a Piece thread, long PM briefs clamp to `8` lines (`LongBrief`), and ended threads show a `Completed` bar.
-- **System lines, handover divider, and message status**: System events render as `12px` muted single lines; session renewal renders a single clickable `Handed off to a new session >` `1px` divider; `/hub:worker` picks show a `Worker model` pill above the user bubble; user messages show no status text unless delivery failed (`size-5 rounded-full bg-danger` `!` retry button on the left) or a turn failed with zero reply (`Retry` link below).
-- **Stick-to-bottom**: `ResizeObserver` keeps bottom-pinned views anchored while `.chat-column` overlaps `26px` (`-mt-6.5`) and shows a centered `32px` scroll-to-end icon button once scrolled `> 80px` up.
+- **`hub ask` cards**: Square corners (`border-2 border-border bg-background p-4`) with `OptionRow` (`A`/`B` square keycaps + `.tool-badge` `Recommended` inline) and `Add note` (`Input` + `Send`), settling in place to read-only (`bg-hover` on chosen option, `PencilLine` row for note, or `Closed`).
+- **Worker thread cards (`ThreadCard`, replacing `WorkerSpeech`)**: Bordered square summary card (`border-2 border-border-strong bg-background px-3.5 py-2.5`, or `border-open-line bg-open` when open) with curled-note sprite in the PM's color, report title, report timestamp, muted latest status/preview line, and open indicator. Inside a Piece thread, long PM briefs clamp to `8` lines (`LongBrief`), and ended threads show a `Completed` bar.
+- **System lines, handover divider, and message status**: System events render as `12px` muted single lines; session renewal renders a single clickable `Handed off to a new session >` `1px` divider; `/hub:worker` picks show a `Worker model` tag above the user bubble; user messages show no status text unless delivery failed (`size-5 bg-danger` square `!` retry button on the left) or a turn failed with zero reply (`Retry` link below).
+- **Stick-to-bottom**: `ResizeObserver` keeps bottom-pinned views anchored while `.chat-column` overlaps `26px` (`-mt-6.5`) and shows a centered `32px` scroll-to-end square icon button once scrolled `> 80px` up.
 
 ## 18. Composer suggestion menu and Escape shortcuts
 
-- **`ComposerMenu` (`/` at start of message, `@` at start or after whitespace)**: Sits `8px` above the composer in document flow (`rounded-2xl border border-border bg-background p-1.5`, up to 8 rows of `36px` on desktop or `44px` on touch), preserves input focus via `preventDefault` on pointer down, blocks `Send` on `Enter` while open, debounces `@` file queries by `120ms`, and supports multi-stage `/hub:worker <vendor> <model> <effort>` completion that collapses into a removable `Worker model` chip.
+- **`ComposerMenu` (`/` at start of message, `@` at start or after whitespace)**: Sits `8px` above the composer in document flow (square corners, `border-2 border-border-strong bg-background p-1.5`, up to 8 rows of `36px` on desktop or `44px` on touch), preserves input focus via `preventDefault` on pointer down, blocks `Send` on `Enter` while open, debounces `@` file queries by `120ms`, and supports multi-stage `/hub:worker <vendor> <model> <effort>` completion that collapses into a removable `Worker model` chip.
 - **Two-step `Escape` in chat**: Ignored during IME composition, modifier/repeat keys, open modals/popovers/drawers, or non-chat inputs (closes `ComposerMenu` first if open). First `Escape` interrupts an active or queued turn without touching the draft; second `Escape` rewinds the just-stopped user message text and `workerPick` back into the draft box once (`meta.rewound`).
 
 ## 19. Touch screens and safe areas
@@ -240,9 +241,9 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 
 `#/router` (`RouterWorkbench.tsx`, [Router architecture](router-design.md)) has three stacked regions inside `.chat-column`:
 
-1. **`Needs You` tray**: Hidden when empty; capped at `50dvh` on desktop and `45dvh` on mobile with top/bottom scroll fades. Expands the first `RouterDecisionCard` (`Markdown` lead + details, shared `OptionRow` A/B buttons, and a persistent inline `<Input>` + `ArrowUp` button supporting one-click choice, choice + note, or custom text reply; dims to `Offline` when its remote computer disconnects) and lists remaining cards as compact rows (`Show more` past 3).
+1. **`Needs You` tray**: Hidden when empty; capped at `50dvh` on desktop and `45dvh` on mobile with top/bottom scroll fades. Expands the first `RouterDecisionCard` (square corners, `border-2 border-border-strong bg-background`, `Markdown` lead + details, shared `OptionRow` A/B buttons, and a persistent inline `<Input>` + `ArrowUp` button supporting one-click choice, choice + note, or custom text reply; dims to `Offline` when its remote computer disconnects) and lists remaining cards as compact rows (`Show more` past 3).
 2. **Borderless timeline (`RouterStream.tsx`)**: Stick-to-bottom stream of command turns (right-aligned user bubble, left-aligned `RouterAvatar` + clickable target rows + Router Markdown + inline `ForwardReply` showing the target PM's live `Working...`, `Stopped`, or full `AgentText` reply) and incoming PM milestone reports (grouped by consecutive PM, with an unread `New` divider). Empty state centers a `36px` `40%`-opacity `RouterAvatar` and `All clear`.
-3. **Header `RouterModelPicker` and composer**: Top-right `slot` button opens a `Popover` (desktop) or `Drawer` (mobile) with `Auto`, per-vendor radio rows, collapsible `Model & effort` plain selects, and `Manage providers...`. Bottom `<DraftComposer>` uses `Tell Router, or type @ to pick a project...` (`Tell Router...` on mobile).
+3. **Header `RouterModelPicker` and composer**: Top-right `slot` button opens a `Popover` (desktop) or `Drawer` (mobile) with `Auto`, per-vendor radio rows, collapsible `Model & effort` plain selects, and `Manage providers...`. Bottom `<DraftComposer>` uses `Tell Router, or type @ to pick a project...` (`Tell Router...` on mobile) and honey (`--rail`) send button styling.
 
 ## 22. Deliverables
 
@@ -250,20 +251,20 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 
 - **Fixed order**: Title, then lead summary (first paragraph via `splitLead`, clamped to 3 lines when collapsed), then deliverable files, then details (auto-shown when measured height `<= 2.4em`, or collapsed behind one shared `Show more` and `Show less` toggle), and finally options.
 - **Two file rows (`groupDeliverables`)**:
-  - **Documents** (`.md`, `.pdf`, `.html`, `.csv`, source files): Wrapping inline `[data-file-link]` links with `FileText` pixel icon (`gap-x-3 gap-y-1`, no pills or file sizes).
-  - **Media** (images and videos): Horizontal scrolling strip of `96px`-tall (`--deliverable-media-height`, `max-w-40 rounded-xl border border-border bg-muted object-cover`) thumbnails; videos render `preload="metadata"` first frames with a centered `36px` `Play` overlay. Clicking any item opens `FilePreview`; expired copies degrade cleanly to the expired-file card.
+  - **Documents** (`.md`, `.pdf`, `.html`, `.csv`, source files): Wrapping inline `[data-file-link]` links with `FileText` smooth icon (`gap-x-3 gap-y-1`, no pills or file sizes).
+  - **Media** (images and videos): Horizontal scrolling strip of `96px`-tall (`--deliverable-media-height`, `max-w-40 border-2 border-border bg-muted object-cover`) thumbnails; videos render `preload="metadata"` first frames with a centered `36px` `Play` overlay. Clicking any item opens `FilePreview`; expired copies degrade cleanly to the expired-file card.
 
 ## 23. Capabilities and worktree setup
 
 `CapabilitiesPanel` (`src/web/components/CapabilitiesPanel.tsx`) renders one capability scope ([External capabilities](pm-capabilities-design.md)): Project defaults, the Router, or one project. `CapabilitiesSettings` hosts it in the desktop `Capabilities` tab and the mobile `#/settings/capabilities` page, and `ProjectCapabilitiesPage` hosts it at `#/pm/<id>/capabilities`:
 
-- **Scope switch (settings only)**: A `Segmented` control (`aria-label="Scope"`) with `Project defaults` (selected on open), `Router`, and `Project` (hidden when no unarchived PM exists). `Project` adds a picker trigger beside it (`h-9 rounded-full border border-border`, `20px` slime, name, `12px` `ChevronDown`) that opens a `Popover` (`aria-label="Projects"`, `p-1.5`) of radio rows with a `20px` slime, the name, a `Custom` badge for projects with their own choices, and a `RadioMark`.
+- **Scope switch (settings only)**: A `Segmented` control (`aria-label="Scope"`) with `Project defaults` (selected on open), `Router`, and `Project` (hidden when no unarchived PM exists). `Project` adds a square picker trigger beside it (`h-9 border-2 border-border-strong bg-background`, `20px` slime, name, `12px` `ChevronDown`) that opens a `Popover` (`aria-label="Projects"`, `p-1.5`) of radio rows with a `20px` slime, the name, a `Custom` badge for projects with their own choices, and a square `RadioMark`.
 - **Project page**: The header holds the `Back` slot (returns to the profile), the `34px` slime, and the `17px` `600` PM name; the `max-w-160` content column opens with a `22px` `600` `Capabilities` heading and has no scope switch.
 - **Inheritance group (project scope)**: A `SettingsNavRow` `Project defaults` with the summary `Inherited` or `N custom` opens the Project defaults editor (Settings on desktop, `#/settings/capabilities` on mobile, the `Project defaults` segment inside Settings). While the project has its own choices, a chevron-less `Reset to Project defaults` row clears them in one click.
 - **Search and `Refresh`**: `SearchField` (`Search capabilities`) filters by name, key, description, or plugin name; matching plugin rows expand, collapsed provider groups open, and an empty result shows `No matches`. The ghost `Refresh` button rescans the inventory.
 - **Sections answer who can use an item**: `This project` (skills from the project's main folder, project scope only), `Shared` (items two or more providers load), then one section per provider in `AGENT_VENDORS` order for items only that provider loads (its plugins, `Built-in` skills, and `Apps`). In a project the PM's provider section follows `Shared`, and the other provider sections are default-collapsed `CollapsibleGroup`s with an `N of M` summary. A section header shows `N of M` (`13.5px` muted, `tabular-nums`) unless its only row already shows the count.
 - **Plugin and source rows**: A plugin package (its MCP servers and skills together) or a source list (`Skills`, `Built-in`, `Apps`) is one default-collapsed `min-h-12` row with a rotating `12px` `ChevronRight`, the name, `N of M`, and a `Switch` for every item in it. A standalone MCP server is a plain row with its own switch, its name aligned with the plugin names (`pl-10`).
-- **Item rows**: Indented to the plugin name (`pl-10`, `min-h-11`) with the name (description in `title`), a kind tag (`MCP`, `Skill`, or `App`: `rounded-full bg-muted px-2 text-xs` `500` muted), and a `Switch`. MCP servers list before skills. In `Shared` and `This project`, a `13.5px` muted provider list (`Codex, DeepSeek`) follows the tags when not every provider loads the item. A project's own choice shows a `Custom` `.tool-badge` on the item and its plugin row. On narrow rows the tags and badges wrap below the name instead of truncating it.
+- **Item rows**: Indented to the plugin name (`pl-10`, `min-h-11`) with the name (description in `title`), a kind tag (`MCP`, `Skill`, or `App`: square `bg-muted border border-border px-2 text-xs` `500` muted), and a `Switch`. MCP servers list before skills. In `Shared` and `This project`, a `13.5px` muted provider list (`Codex, DeepSeek`) follows the tags when not every provider loads the item. A project's own choice shows a `Custom` `.tool-badge` on the item and its plugin row. On narrow rows the tags and badges wrap below the name instead of truncating it.
 - **Saving**: Toggles apply optimistically, queue in order per scope, and fall back to the server state with a `px-4` row error when a save fails; a rescan that finishes after a toggle refetches instead of overwriting it.
 
 The profile page links and edits project-level settings next to `Folders`:
@@ -286,9 +287,9 @@ The profile page links and edits project-level settings next to `Folders`:
 
 `ResourcesSettings` (`src/web/components/ResourcesSettings.tsx`) renders the `Resources` tab in desktop `SettingsDialog` and the mobile `#/settings/resources` page (`src/web/mobile/settings/ResourcesPage.tsx`), reading `GET /api/resources` through `src/web/resources-model.ts`:
 
-- **Attention indicator**: An `8px` amber dot (`size-2 rounded-full bg-caution`) marks the sidebar `Settings` slot, the desktop `Resources` tab, and the mobile `Resources` `SettingsNavRow` whenever at least one held resource has `keptAt === null`. The mobile `#/settings` home reads only the React Query cache (`useCachedResourcesSummary`), so it issues zero network requests.
+- **Attention indicator**: An `8px` amber square (`size-2 bg-caution`) marks the sidebar `Settings` slot, the desktop `Resources` tab, and the mobile `Resources` `SettingsNavRow` whenever at least one held resource has `keptAt === null`. The mobile `#/settings` home reads only the React Query cache (`useCachedResourcesSummary`), so it issues zero network requests.
 - **Computer scope**: When two or more computers are online, a top `SettingsGroup` offers a borderless `Select variant="plain"` computer picker so each computer's disk, branches, and processes can be inspected through device proxy routes.
-- **Needs attention**: Shown above `Overview` only when unacknowledged held items exist. Each row shows the item label, an `8px` `bg-caution` status dot, spaced metadata (`gap-x-3`, never middle dots) with reason, project name, size (`tabular-nums`), and up to 5 sample paths (`font-mono text-xs`), paired with ghost `Keep` and danger-tinted `Discard...` actions.
+- **Needs attention**: Shown above `Overview` only when unacknowledged held items exist. Each row shows the item label, an `8px` `bg-caution` square status dot, spaced metadata (`gap-x-3`, never middle dots) with reason, project name, size (`tabular-nums`), and up to 5 sample paths (`font-mono text-xs`), paired with ghost `Keep` and danger-tinted `Discard...` actions.
 - **Overview**: A `SettingsGroup` (`Refresh` and `Run cleanup` actions in its header) with four rows: `Database`, `Storage`, `Worktrees & branches`, and `Processes`. Routine quota denominators stay hidden below `RESOURCES_WARN_RATIO` (`80%`); items at or above `80%` display the cap and a caution indicator. A default-collapsed `CollapsibleGroup` (`Storage details`) lists per-directory and per-table totals on demand.
 - **Kept by you**: A default-collapsed `CollapsibleGroup` holding items the user marked `Keep`, with `Unkeep` and `Discard...` actions.
 - **Discard confirmation**: Clicking `Discard...` always opens a `max-w-110` `DialogContent` showing the item path or branch, reason, size, sample paths, an optional `Also delete branch` switch for held worktrees, `Cancel` (`outline`), and one destructive `Discard` (`variant="destructive"`) button.

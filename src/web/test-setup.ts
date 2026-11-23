@@ -19,3 +19,9 @@ class ResizeObserverStub {
   disconnect(): void {}
 }
 globalThis.ResizeObserver ??= ResizeObserverStub;
+
+// jsdom 缺 Radix Select 用到的指针捕获和滚动方法
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.setPointerCapture ??= () => {};
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};

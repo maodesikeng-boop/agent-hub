@@ -23,7 +23,6 @@
     "src/web/components/ProfilePanel.tsx",
     "src/web/components/ProjectList.tsx",
     "src/web/components/SidePanel.tsx",
-    "src/web/components/ThreadCard.tsx",
     "src/web/mobile/TabBar.tsx",
     "src/web/pane-widths.ts",
     "src/web/project-list.ts",

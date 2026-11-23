@@ -105,21 +105,21 @@ The user compared four options in prototype v1 and chose A: a honey rail beside 
 The chosen layout, at the `Default` scale:
 
 - **Rail.** `4.5rem` wide, `--rail` background, outside the sheet. Router cell on top with the bell sprite, a `Router` label, and a dark count badge for pending decisions. A 2px divider. One cell per computer when two or more are linked, with a pixel computer icon from `PlatformIcon`, a short name, a square status dot (green online, amber reconnecting, gray offline), and a badge for unanswered asks on that computer. At the bottom, the Update cell when an update is waiting, the usage meter, the Settings gear with the amber resources dot, and the account cell. The selected cell is filled with `--list` and outlined in `--rail-outline`, so it reads as attached to the cream column beside it.
-- **Sheet.** Inset `6px` from the window's top, right, and bottom edges, with a 2px `--rail-shade` outline and stepped corners.
+- **Sheet.** Inset `6px` from the window's top, right, and bottom edges, with a 2px `--rail-shade` plain border and square right-angle corners.
 - **PM column.** `--list` background. A `3.5rem` header with the computer's name, a chevron that opens `ComputerSwitcher`, and the New PM slot. A cream search field. Groups `Pinned`, `Project managers`, and a collapsed `Archived`. Rows are `3.25rem` tall with a `2.25rem` avatar, a `text-body` semibold name, and a `text-minor` preview, with a time or a square status dot on the right.
 - **Conversation.** White. The header holds the PM's avatar, name, and a chevron as one button that opens PM settings, and a `Pieces` slot with the live count on the right.
 - **Side panel.** `--panel` background, a `3.5rem` header, and three contents: Pieces, a Worker, or PM settings.
 
 #### Visual language
 
-| | Stepped corners with `clip-path` | `border-radius: 2px` | `border-image` sprites |
+| | Plain 2px borders, right-angle corners | Stepped corners with `clip-path` | `border-image` sprites |
 | --- | --- | --- | --- |
-| Looks hand-pixeled | Yes, matches the slot buttons and Task Graph cards | No, reads as slightly rounded | Yes |
-| Works with 2px borders | Yes, the notch cuts the border corner | Yes | Needs a sprite per border color |
-| Focus ring | Needs an inset outline, because `clip-path` cuts outer rings | Normal ring | Normal ring |
-| Already in the codebase | `.pixel-card` in `src/web/styles.css` | No | No |
+| Clean across all DPIs | Yes, crisp straight edges with no stair-step aliasing | No, corner notches read as jagged frame art | Needs a sprite per border color |
+| Works with 2px borders | Yes, standard CSS border | Cuts border corners unevenly | Needs a sprite per border color |
+| Focus ring | Clean inset or darkened border (`#4a4038`) | Clipped by `clip-path` | Normal ring |
+| Visual contrast with characters | Keeps pixel craft on slimes, sprites, and brand art | Competes with UI frame edges | Heavy chrome |
 
-Recommendation: two `clip-path` utilities in `src/web/styles.css`. `px-corner` cuts a 2px notch and goes on controls, rows, cells, and badges. `px-corner-lg` cuts a two-step 4px notch and goes on cards, dialogs, popovers, drawers, and the sheet. Focus shows as a 2px inset outline (`outline-offset: -2px`), which survives the clip. No `rounded-*` class remains in the shell, and status dots become squares.
+Design tokens and borders follow user review after prototype v1: pixel craft stays on characters, avatars, sprites, and brand illustrations, while controls, switches, dropdowns, and frames use **smooth line icons and plain 2px solid borders with right-angle square corners** (`.tool-slot` and `.tool-badge` keep their `4px` radius with a `2px` border). Status dots become crisp squares (`rounded-none`), and all other `rounded-*` utility classes leave `src/web/`. Focus shows as a `2px` `--border-focus` (`#4a4038`) border or inset outline (`outline-offset: -2px`) with no blurry shadow halo.
 
 Color tokens, replacing the zinc neutrals, fruit tints, and jelly highlights:
 
@@ -141,6 +141,7 @@ Color tokens, replacing the zinc neutrals, fruit tints, and jelly highlights:
 | `--panel` | `#f7f4ed` | Side panel, phone Worker and Profile pages, phone Settings background |
 | `--border` | `#eee8dc` | 2px dividers |
 | `--border-strong` | `#ddd4c2` | Control and card borders |
+| `--border-focus` | `#4a4038` | Focused control border and keyboard focus outline |
 | `--hover` | `#f6f2e9` | Hover on white and warm gray |
 | `--open`, `--open-line` | `#fff6d6`, `#e9c25a` | Open thread card, gate row, selected item on white or warm gray |
 | `--foreground`, `--muted-foreground` | `#1c1917`, `#6f6862` | Text, now warm |
@@ -149,23 +150,20 @@ One selection style remains, an outlined block: white with `--select-line` on cr
 
 Primitives that change:
 
-- `src/web/ui/button.tsx`. Every variant gets `px-corner` and a 2px border. `default` is a solid accent fill with a darker border and a 2px inset bottom shade, `outline` is white with `--border-strong`, `ghost` has no border and hovers `--hover`, `slot` keeps the honey colors with a 2px border at 36px, and `destructive` matches `default` in `--danger`.
-- `src/web/ui/input.tsx`. `Input`, `Textarea`, and `Select` get a 2px `--border-strong` border and `px-corner`. On focus the border darkens to `#4a4038`, which is visible without a ring.
-- `src/web/ui/segmented.tsx`. A bordered track of square cells, with the checked cell in slot colors.
-- `src/web/ui/switch.tsx`. A `40x22` square track with a 2px border and a square thumb. On is the accent, or `--rail-ink` outside a PM.
-- `src/web/ui/dialog.tsx`, `src/web/ui/popover.tsx`, and `src/web/ui/drawer.tsx`. A 2px `--border-strong` border, `px-corner-lg`, and a `rgb(28 25 23 / 0.34)` backdrop.
-- `src/web/ui/icons.ts`. pixelarticons only. The drawn `Pin` and `PinFilled` join `MoreHorizontal` and `User`, and the `Composer*` line icons go.
-- `src/web/components/SettingsList.tsx`, `ChoiceRows.tsx`, and `ModeRows.tsx`. Group boxes get a 2px `--border` and `px-corner-lg`, and `RadioMark` becomes an `18px` square with an `8px` inner square.
-- `src/web/components/SearchField.tsx`. A pixel field, cream inside the PM column.
-- `src/web/components/OptionRow.tsx`. Warm option fills and pixel keycaps for `A` and `B`, and `Recommended` in slot colors.
-- `src/web/components/QuotaPopover.tsx`. Bars become 10-cell pixel meters.
-- `src/web/components/Composer.tsx`. A 2px border, no shadow, a pixel `Plus`, and a `36px` send key with the pixelarticons `Send` plane in the agent color. Disabled is `#f3efe6` with a `--border-strong` border.
-- `.tool-slot` and `.tool-badge` in `src/web/styles.css` move from a 1px to a 2px border.
+- `src/web/ui/button.tsx`. Plain crisp square corners and a 2px border (`slot` keeps `4px` `.tool-slot` geometry with a 2px `--slot-line` border). `default` is a solid accent fill with a darker border and a 2px inset bottom shade, `outline` is white with `--border-strong`, `ghost` has no border and hovers `--hover`, `slot` keeps the honey colors with a 2px border at 36px, and `destructive` matches `default` in `--danger`.
+- `src/web/ui/input.tsx` and `src/web/ui/select.tsx`. `Input`, `Textarea`, and custom Radix `Select` (`@radix-ui/react-select`) get square corners and a 2px `--border-strong` border (replacing browser native `<select>` across the app). On focus or open, the border darkens to `--border-focus` (`#4a4038`), visible without a shadow ring.
+- `src/web/ui/segmented.tsx`. A 2px `--border-strong` track (`--panel` fill) of square cells, with the checked cell in slot colors.
+- `src/web/ui/switch.tsx`. A `40x22` square track with a 2px border and a smooth square thumb. On is the accent, or `--rail-ink` outside a PM.
+- `src/web/ui/dialog.tsx`, `src/web/ui/popover.tsx`, and `src/web/ui/drawer.tsx`. A 2px `--border-strong` plain border, square corners, and a `rgb(28 25 23 / 0.34)` backdrop.
+- `src/web/ui/icons.ts`. Smooth-line `lucide-react` icons plus matching smooth custom SVGs for `PinFilled` and the five mainstream device types (`DeviceMacos`, `DeviceWindows`, `DeviceLinux`, `DeviceIphone`, `DeviceAndroid`). Quota uses `Hourglass`, and the seven legacy `Composer*` SVGs go in favor of `Plus`, `Send` (paper plane), `Square`, `FileText`, `Video`, `X`, and `Bot`.
+- `src/web/components/SettingsList.tsx`, `ChoiceRows.tsx`, and `ModeRows.tsx`. Group boxes get a 2px `--border` plain border, and `RadioMark` becomes an `18px` square with an `8px` inner square.
+- `src/web/components/SearchField.tsx`. A 2px bordered square field, cream `--list-field` inside the PM column or `--background` elsewhere.
+- `src/web/components/OptionRow.tsx`. Warm option fills, crisp square keycaps for `A` and `B`, and `Recommended` styled as `.tool-badge`.
+- `src/web/components/QuotaPopover.tsx`. Keep usage window layout until implementation step 3, while inheriting the 2px popover border and `Hourglass` icon.
+- `src/web/components/Composer.tsx`. A 2px `--border-strong` plain border darkening to `--border-focus` on focus-within with no shadow halo, a smooth `Plus`, and a `36px` paper-plane `Send` key in the agent color (or honey `--rail` with `--rail-ink` on Router). Disabled is `#f3efe6` with a `--border-strong` border.
+- `.tool-slot` and `.tool-badge` in `src/web/styles.css` move from a 1px to a 2px border. `.pixel-card` and `.pixel-card-body` drop the stepped `clip-path` notches for a plain 2px border.
 
-The drawn pin, on the 24 grid with 2px strokes. The outline form means "Pin" and the solid form means "Pinned".
-
-- Outline: `M8 2h8v2H8zM8 4h2v6H8zM14 4h2v6h-2zM6 10h2v2H6zM16 10h2v2h-2zM4 12h16v2H4zM11 14h2v8h-2z`
-- Solid: `M8 2h8v8h2v2h2v2H4v-2h2v-2h2zM11 14h2v8h-2z`
+Pin button icon uses `Pin` (outline) and `PinFilled` (solid) imported from `src/web/ui/icons.ts`.
 
 #### Resizing columns
 
@@ -254,21 +252,21 @@ Each implementation step edits its sections of `docs/ui-standard.md` before touc
 | --- | --- | --- |
 | 0. Interface scale | Pane widths and tier thresholds are `rem` values that follow the scale | 3 |
 | 1. Spacing scale | Add the rail, the `3.5rem` column headers, `3.25rem` PM rows, side panel padding, and the `6px` sheet inset. Drop the right-rail row | 3 |
-| 2. Border radius scale | Becomes "Corners": `px-corner`, `px-corner-lg`, no `rounded-*` in the shell, square status dots | 2 |
+| 2. Border radius scale | Becomes "Corners and borders": 2px plain borders, square right-angle corners, `.tool-slot` keeps 4px radius, no `rounded-*` utility classes in `src/web/`, square status dots, drop stepped `clip-path` | 2 |
 | 4. Colors and avatars | Zone tokens replace fruit-tinted surfaces and jelly highlights. One outlined selection style. Accent jobs listed above. Dark brown text links outside Markdown | 2 |
-| 5. Icons | pixelarticons only, the drawn pin, no `Composer*` line icons | 2 |
-| 6. Control dimensions and tool slots | Pixel button variants and 36px slots with 2px borders | 2 |
-| 7. Focus states and chat composer | Inset 2px outline for focus, darker field border on focus, no composer halo, pixel paper-plane send key in the agent color | 2 |
+| 5. Icons | Smooth-line icons from `lucide-react` plus matching custom device and `PinFilled` icons, quota uses `Hourglass`, no `Composer*` legacy SVGs | 2 |
+| 6. Control dimensions and tool slots | Plain 2px bordered buttons, custom Radix `Select` replacing native `<select>`, and 36px slots with 2px borders | 2 |
+| 7. Focus states and chat composer | 2px inset outline for focus, darker `--border-focus` field border on focus, no composer shadow halo, crisp paper-plane send key in the agent color | 2 |
 | 8. Alignment and chat column width | Conversation header button for PM settings and the `Pieces` slot. The centered profile page goes | 3 |
-| 9. Grouped settings lists | Pixel group boxes, segmented control, switch, radio mark, and search field | 2 |
-| 10. Dialogs and bottom drawers | Pixel frames, the new backdrop, settings tabs as a cream column with the PM row selection style | 2 |
-| 11. Popovers and usage bars | Pixel popovers, 10-cell meters in the popover, 5-cell meter in the rail | 2 and 3 |
+| 9. Grouped settings lists | 2px plain group boxes, segmented control, square switch, square radio mark, Radix `Select`, and warm search field | 2 |
+| 10. Dialogs and bottom drawers | 2px plain frames, the new backdrop, settings tabs as a cream column with the PM row selection style | 2 |
+| 11. Popovers and usage bars | 2px plain popover border in step 2; quota bar layout and metering in step 3 | 2 and 3 |
 | 12. Right rail | Becomes "Side panel": Pieces, Worker, and Profile contents, header, width limits, close and back targets | 3 |
 | 13. Fonts, numbers, and list rows | `3.25rem` PM rows with `2.25rem` avatars and `text-body` names | 3 |
-| 14. Interaction states and motion | Drop `.tint-fade` | 2 |
-| 15. Markdown, code blocks, and charts | Code blocks and images use `px-corner-lg` | 2 |
+| 14. Interaction states and motion | Drop `.tint-fade` and `--motion-focus` | 2 |
+| 15. Markdown, code blocks, and charts | Code blocks, charts, and images drop `rounded-xl` for plain 2px borders and square corners | 2 |
 | 16. Shell layout | Rail, sheet, PM column or strip, conversation, side panel, resize handles, tiers, macOS traffic lights over the rail | 3 |
-| 17. Message stream | `ThreadCard` replaces Worker speech bubbles. Pixel ask cards and bubbles | 2 |
+| 17. Message stream | `ThreadCard` replaces Worker speech bubbles. Plain 2px ask cards and user bubbles | 2 |
 | 19. Touch screens and safe areas | The hover-shortcut amendment | 3 |
 | 20. Mobile shell | Tab bar, computer switcher drawer, usage in Settings, profile drill-down pages | 3 |
 | 21. Router workbench | Full sheet on the desktop, pixel cards, honey send key | 2 and 3 |
@@ -307,11 +305,12 @@ Step 2, the visual language:
 - `FruitTint` in `src/web/lib/accent-scope.tsx`, `tintStyleOf` in `src/web/lib/palette.ts`, the `--mix-chat`, `--mix-sidebar`, and `--mix-line` tokens, `.tint-fade`, and the matching caps in `src/web/lib/palette.test.ts`.
 - Jelly selection: `--color-jelly`, `--color-jelly-hover`, `jellyStyleOf`, `JELLY_ROW`, `ITEM_SELECTED`, and `ITEM_HOVER`.
 - The composer halo, meaning the `.composer-frame` shadow rules and `--motion-focus`, plus `SQUARE_BUTTON` and the gray rounded send key.
-- The seven `Composer*` line icons in `src/web/ui/icons.ts`, replaced by pixelarticons `Plus`, `Send`, `Stop`, `FileText`, `Video`, `Close`, and `Robot`.
-- `--radius-btn` and every `rounded-*` class in shell components. The radius guard in `src/web/web-guard.test.ts` widens from `lg`, `md`, and `sm` to every `rounded-*` class.
+- The seven `Composer*` custom SVGs in `src/web/ui/icons.ts`, replaced by smooth-line `lucide-react` icons (`Plus`, `Send`, `Square`, `FileText`, `Video`, `X`, `Bot`).
+- Browser native `Select` in `src/web/ui/input.tsx`, replaced by `@radix-ui/react-select` in `src/web/ui/select.tsx` across all call sites; `src/web/web-guard.test.ts` forbids raw `<select` elements in `src/web/`.
+- `--radius-btn`, stepped `clip-path` frame edges in `.pixel-card`/`.pixel-card-body`, and every `rounded-*` utility class in `src/web/` (`src/web/web-guard.test.ts` widens from `lg`, `md`, and `sm` to every `rounded-*` utility class).
 - `BUBBLE` with `rounded-[22px]` and `WorkerSpeech` in `src/web/components/Messages.tsx`, replaced by `ThreadCard`.
 - Cool zinc neutrals such as `bg-zinc-300` in `src/web/ui/switch.tsx`.
-- The `docs/ui-standard.md` text for pill buttons, the `rounded-xl` and `rounded-2xl` tiers, jelly highlights, fruit-tinted surfaces, the focus halo, and Worker speech bubbles.
+- The `docs/ui-standard.md` text for pill buttons, the `rounded-xl` and `rounded-2xl` tiers, jelly highlights, fruit-tinted surfaces, the focus halo, stepped Task Graph corners, native selects, and Worker speech bubbles.
 
 Step 3, the shell structure:
 
@@ -362,7 +361,7 @@ Web components:
 
 Implementation order. The whole change does not fit one implementation session of 400K to 600K tokens. It rewrites most of `docs/ui-standard.md`, touches about 50 component files and 16 test files for the visual language, and adds about ten modules for the shell. It splits into two steps on this branch, in this order:
 
-1. **Visual language.** Tokens and corner utilities in `src/web/styles.css`, the primitives listed in section 3, the composer and send key, `ThreadCard`, ask cards and bubbles, Router cards, the settings dialog, the step 2 deletions, the guard tests, and the step 2 rows of the UI standard table. Screens keep today's layout and take the new look. The pin backend lands here too, because it does not depend on the UI: the migration, ledger method, route, client call, and `Pm.pinnedAt`.
+1. **Visual language.** Zone tokens and 2px border utilities in `src/web/styles.css`, custom Radix `Select` and the updated primitives in `src/web/ui/`, the composer and paper-plane send key, `ThreadCard`, ask cards and bubbles, Router cards, the settings dialog, the step 2 deletions, `@radix-ui/react-select` in `AGENTS.md`, the guard tests, and the step 2 rows of the UI standard table. Screens keep today's layout and take the new look. The pin backend lands here too, because it does not depend on the UI: the migration, ledger method, route, client call, and `Pm.pinnedAt`.
 2. **Shell structure.** The resize library and its `AGENTS.md` entry, `AppRail`, `ProjectList` with pins, `SidePanel` with Pieces, Worker, and Profile, the profile drill-down routes, narrow tiers, the phone tab bar and computer switcher, the step 3 deletions, the step 3 rows of the UI standard table, and the new `ui:polish` screens.
 
 Visual language goes first, so the new shell components are built from finished primitives instead of being restyled twice. The 2026-11-23 review adds a third implementation step for decision cards, the settings pages, and the usage popover, and an icon step that draws the hourglass and device-type icons and picks the line icon set for controls.
