@@ -1,5 +1,7 @@
 # Release flow
 
+> Snapshot: 2026-11-22 (commit `60fc1413`)
+
 ## For the user
 
 ### Files to review

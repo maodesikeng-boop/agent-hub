@@ -93,8 +93,8 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 
 ### UI primitives (`src/web/ui/`)
 
-- Built on Radix (`@radix-ui/react-*`) with `shadcn/ui` styling conventions. The repository has **no `components.json` and no `@/` path alias**, so `shadcn add` cannot run directly.
-- Installed primitives: `button` (`slot` + `cva`), `input`, `dialog`, `drawer` (`vaul`, wrapped only in `src/web/ui/drawer.tsx`), `popover`, `tabs`, `collapsible`, `avatar`, `switch`, and `segmented` (Radix `RadioGroup`). `ModeRows.tsx` and the `CapabilityScopeSwitch.tsx` project picker use `@radix-ui/react-radio-group` directly.
+- Built on Radix primitives with `shadcn/ui` styling conventions. The repository has **no `components.json` and no `@/` path alias**, so `shadcn add` cannot run directly.
+- Installed primitives: `button` (`@radix-ui/react-slot` and `class-variance-authority`), `input`, `dialog` (`@radix-ui/react-dialog`), `drawer` (`vaul`, wrapped only in `src/web/ui/drawer.tsx`), `popover` (`@radix-ui/react-popover`), `tabs` (`@radix-ui/react-tabs`), `collapsible` (`@radix-ui/react-collapsible`), `avatar` (`@radix-ui/react-avatar`), `switch`, and `segmented` (`@radix-ui/react-radio-group`). `ModeRows.tsx` and the `CapabilityScopeSwitch.tsx` project picker also use `@radix-ui/react-radio-group` directly.
 - Not installed: `Sheet`, `Select`, `Textarea`, `Tooltip`, `DropdownMenu`, `ScrollArea`, and `Sonner`.
 - To add a primitive: inspect upstream source with `pnpm dlx shadcn@latest view <name>`, copy it into `src/web/ui/<name>.tsx` with relative imports (`../lib/utils.ts`), install any runtime package with `pnpm add`, and align styles with `docs/ui-standard.md`.
 
@@ -111,7 +111,7 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 - `@axe-core/playwright`: Automated contrast and accessibility checks (`test/ui-polish/checks.ts`).
 - `yaml`: Parses GitHub workflow files in `scripts/ci-workflows.test.ts` and prunes `pnpm-lock.yaml` for the staged desktop daemon (`scripts/staged-lockfile.ts`).
 - `@tauri-apps/cli`: Exact-pinned Tauri CLI that builds the Windows NSIS installer from `node_modules/.bin` (`.github/workflows/windows-desktop.yml`); its version also pins the NSIS download it fetches.
-- `typescript` (`pnpm typecheck`), `knip` (`pnpm exec knip`), `@types/*` (`node`, `react`, `react-dom`, `ws`, `web-push`, `write-file-atomic`), and `oxc-parser` (AST timer guard in `src/web/web-guard.test.ts`).
+- `typescript` (`pnpm typecheck`), `knip` (`pnpm exec knip --treat-config-hints-as-errors`), `@types/node`, `@types/react`, `@types/react-dom`, `@types/ws`, `@types/web-push`, `@types/write-file-atomic`, and `oxc-parser` (AST timer guard in `src/web/web-guard.test.ts`).
 - `wrangler` and `@cloudflare/workers-types`: Deployment and local Durable Object integration tests for the Cloudflare relay (`wrangler.toml`, `src/relay/cloudflare/`).
 
 ## Repository skills (`pstack`)

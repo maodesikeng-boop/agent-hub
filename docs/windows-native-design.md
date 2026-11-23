@@ -1,5 +1,7 @@
 # Windows native architecture
 
+> Snapshot: 2026-11-20 (commit `6ac01224`)
+
 Bellwood runs natively on Windows x64 (`Windows 10 1809+` and `Windows 11`, with `Windows 11 24H2+` recommended for outer MXC read-only containers) with **no WSL 2 requirement and no administrator privileges**. User repositories stay on native NTFS drives so Visual Studio, MSBuild, Windows SDKs, and native agent CLIs work directly (`apps/windows/` and `src/daemon/platform/win32/`).
 
 ## Workspace crates (`apps/windows/`)

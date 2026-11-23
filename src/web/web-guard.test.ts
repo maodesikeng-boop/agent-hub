@@ -3,8 +3,34 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
+import { VENDOR_LIST } from "../vendors/registry.ts";
 
 const WEB_DIR = resolve("src/web");
+// Common CSS/UI terms (`cursor`, `pi`) would false-positive unquoted, so they are guarded when quoted.
+const UI_COLLISION_WORDS = new Set(["pi", "cursor"]);
+const EXTRA_VENDOR_BRAND_WORDS = ["gemini"] as const;
+
+interface VendorTermSource {
+  id: string;
+  label: string;
+  cli: { command: string };
+}
+
+const escapeRe = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function buildVendorPatterns(specs: readonly VendorTermSource[]): { vendorPattern: RegExp; quotedVendorIdPattern: RegExp } {
+  const quotedTerms = [...new Set(specs.flatMap((s) => [s.id, s.cli.command]))];
+  const wordTerms = [
+    ...new Set([
+      ...specs.flatMap((s) => [s.id, s.cli.command, s.label]).filter((term) => !UI_COLLISION_WORDS.has(term.toLowerCase())),
+      ...EXTRA_VENDOR_BRAND_WORDS,
+    ]),
+  ];
+  return {
+    vendorPattern: new RegExp(`\\b(${wordTerms.map(escapeRe).join("|")})\\b`, "i"),
+    quotedVendorIdPattern: new RegExp(`["'\`](${quotedTerms.map(escapeRe).join("|")})["'\`]`),
+  };
+}
 
 function collectSourceFiles(dir: string): string[] {
   const files: string[] = [];
@@ -108,8 +134,7 @@ describe("web-guard：src/web 代码守卫", () => {
 
   it("非测试、非注释代码里不写死单家厂商名（含全部已接入厂商字面量）", () => {
     const hits: string[] = [];
-    const vendorPattern = /\b(claude|codex|agy|antigravity|gemini|deepseek|dsh)\b/i;
-    const quotedVendorIdPattern = /["'`](claude|agy|codex|pi|deepseek|cursor)["'`]/;
+    const { vendorPattern, quotedVendorIdPattern } = buildVendorPatterns(VENDOR_LIST);
     for (const file of files) {
       const lines = stripComments(readFileSync(file, "utf8")).split("\n");
       lines.forEach((line, index) => {
@@ -119,6 +144,24 @@ describe("web-guard：src/web 代码守卫", () => {
       });
     }
     expect(hits).toEqual([]);
+  });
+
+  it("厂商正则从 VENDOR_LIST 动态生成：覆盖名单每家且自动拦住新接入厂商", () => {
+    const { vendorPattern, quotedVendorIdPattern } = buildVendorPatterns(VENDOR_LIST);
+    for (const spec of VENDOR_LIST) {
+      expect(quotedVendorIdPattern.test(`vendor === "${spec.id}"`), spec.id).toBe(true);
+      expect(quotedVendorIdPattern.test(`cmd = '${spec.cli.command}'`), spec.cli.command).toBe(true);
+      if (!UI_COLLISION_WORDS.has(spec.id.toLowerCase())) {
+        expect(vendorPattern.test(`const x = ${spec.id}Model;`), spec.id).toBe(false);
+        expect(vendorPattern.test(`title: "${spec.label}"`), spec.label).toBe(true);
+      }
+    }
+    expect(vendorPattern.test('className="cursor-pointer"')).toBe(false);
+    const withAcme = buildVendorPatterns([...VENDOR_LIST, { id: "acme", label: "Acme Code", cli: { command: "acme-cli" } }]);
+    expect(withAcme.vendorPattern.test("open acme-cli now")).toBe(true);
+    expect(withAcme.vendorPattern.test("Acme Code settings")).toBe(true);
+    expect(withAcme.quotedVendorIdPattern.test('vendor === "acme"')).toBe(true);
+    expect(vendorPattern.test('vendor === "acme"')).toBe(false);
   });
 
   it("圆角只用 docs/ui-standard.md 第 2 条的档位：不写 rounded-lg / rounded-md / rounded-sm", () => {

@@ -1,5 +1,7 @@
 # Review stamp design
 
+> Snapshot: 2026-11-22 (commit `9f2269fa`)
+
 ## For the user
 
 ### Files to review

@@ -1,5 +1,7 @@
 # Official relay release and operations
 
+> Snapshot: 2026-11-23 (commit `4b1fb2e2`)
+
 The public blind E2EE relay (`https://bellwood-relay.bellwood-mesh.workers.dev`, `MESH_DEFAULT_RELAY_URL` in [`src/shared/limits.ts`](../src/shared/limits.ts)) runs on Cloudflare Workers and SQLite-backed Durable Objects (`RelayAccountObject` in [`src/relay/cloudflare/worker.ts`](../src/relay/cloudflare/worker.ts)). Because all v0.3.0+ clients default to this endpoint, relay changes move through automated checks, an isolated staging Worker, and a manually approved production deployment.
 
 ## Environments
