@@ -8,6 +8,7 @@ import {
   type PickFolderResponse,
   type PmId,
   type PmLookResponse,
+  type PmPinResponse,
   type PmMemoryFileResponse,
   type PmMemoryFilesResponse,
   type PutPmMemoryFileResponse,
@@ -22,6 +23,7 @@ import {
   parseCreatePmBody,
   parseEditPersonaBody,
   parsePmLookBody,
+  parsePmPinBody,
   pickFolderBodySchema,
   putPmMemoryFileBodySchema,
   setScheduleEnabledBodySchema,
@@ -51,6 +53,11 @@ function registerPersonaRoutes(routes: FastifyInstance, c: UiCtx): void {
   routes.put("/api/pms/:id/look", async (req): Promise<PmLookResponse> => {
     const pmId = idParam(req.params, "pm id");
     return { pm: ledger.setPmLook(pmId, parsePmLookBody(req.body)) };
+  });
+
+  routes.put("/api/pms/:id/pin", async (req): Promise<PmPinResponse> => {
+    const pmId = idParam(req.params, "pm id");
+    return { pm: ledger.setPmPinned(pmId, parsePmPinBody(req.body).pinned) };
   });
 
   routes.post("/api/persona-changes/:id/revert", async (req): Promise<EditPersonaResponse> => {

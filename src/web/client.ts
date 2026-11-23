@@ -280,9 +280,7 @@ export function createClient(device: DeviceId | null) {
     fetchPersona: (pmId: PmId) => request<PersonaResponse>(at(API_PATHS.persona(pmId))),
     putPersona: (pmId: PmId, body: EditPersonaRequest) => putJson<EditPersonaResponse>(at(API_PATHS.persona(pmId)), body),
     putPmLook: (pmId: PmId, body: PmLookRequest) => putJson<PmLookResponse>(at(API_PATHS.pmLook(pmId)), body),
-    putPmPin: (_pmId: PmId, _body: PmPinRequest): Promise<PmPinResponse> => {
-      throw new Error("Not implemented");
-    },
+    putPmPin: (pmId: PmId, body: PmPinRequest) => putJson<PmPinResponse>(at(API_PATHS.pmPin(pmId)), body),
     postRevertPersonaChange: (changeId: PersonaChangeId) => postJson<EditPersonaResponse>(at(API_PATHS.revertPersonaChange(changeId))),
     fetchPmMemoryFiles: (pmId: PmId) => request<PmMemoryFilesResponse>(at(API_PATHS.pmMemoryFiles(pmId))),
     fetchPmMemoryFile: (pmId: PmId, name: string) => request<PmMemoryFileResponse>(at(API_PATHS.pmMemoryFile(pmId, name))),
