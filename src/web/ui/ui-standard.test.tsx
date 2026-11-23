@@ -241,25 +241,38 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     }
   });
 
-  it("在忙的状态词流光：只用字本身的颜色和 GPU opacity 合成，减少动态效果时不动", () => {
+  it("在忙的状态词流光：用合成层双反向位移扫过文字本身，无矩形底框，减少动态效果时停用并隐藏", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    const rule = css.match(/\.status-shimmer \{[^}]*\}/)?.[0] ?? "";
-    expect(rule).toMatch(/background-clip: text/);
-    expect(rule).toMatch(/animation: status-shimmer/);
-    expect(rule).toMatch(/will-change: opacity/);
-    expect(rule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
-    const keyframes = css.match(/@keyframes status-shimmer \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(keyframes).toContain("opacity");
-    expect(keyframes).not.toContain("background-position");
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer \{\s*animation: none;/);
+    const maskRule = css.match(/\.status-shimmer-mask \{[^}]*\}/)?.[0] ?? "";
+    const beamRule = css.match(/\.status-shimmer-beam \{[^}]*\}/)?.[0] ?? "";
+    expect(maskRule).toMatch(/mask-image:\s*linear-gradient\(/);
+    expect(maskRule).toMatch(/animation:\s*status-shimmer\b/);
+    expect(maskRule).toMatch(/will-change:\s*transform/);
+    expect(beamRule).toMatch(/animation:\s*status-shimmer-counter\b/);
+    expect(beamRule).toMatch(/will-change:\s*transform/);
+    expect(beamRule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
+    const kfSlide = css.match(/@keyframes status-shimmer \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const kfCounter = css.match(/@keyframes status-shimmer-counter \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(kfSlide).toContain("transform");
+    expect(kfSlide).not.toContain("background-position");
+    expect(kfSlide).not.toContain("opacity");
+    expect(kfCounter).toContain("transform");
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer-mask,\s*\.status-shimmer-beam \{\s*animation: none;\s*\}\s*\.status-shimmer-track \{\s*display: none;\s*\}\s*\}/);
   });
 
-  it("排版与动画边界守卫：消息区/左栏/输入底座启用 CSS containment，头像容器隔离尺寸与排版，Composer 不启用 field-sizing", () => {
+  it("排版隔离与滚动条守卫：滚动容器用 layout style 隔离并隐藏原生常驻滚动条，头像容器隔离尺寸与排版，Composer 不启用 field-sizing", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toMatch(/\.messages\[role="log"\]\s*\{[^}]*contain:\s*strict;/);
-    expect(css).toMatch(/\.sidebar-list\s*\{[^}]*contain:\s*strict;/);
+    expect(css).toMatch(/\.messages\[role="log"\]\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).toMatch(/\.sidebar-list\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).not.toMatch(/contain:\s*strict/);
     expect(css).toMatch(/\.composer-dock\s*\{[^}]*contain:\s*layout style;/);
     expect(css).toMatch(/\.router-timeline\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).toMatch(/\.sidebar-list,\s*\.right-rail-scroll,\s*\.router-tray-scroll,\s*\.messages,\s*\.page-fade,\s*\.dialog-body-fade\s*\{[^}]*scrollbar-width:\s*none;/);
+    expect(css).toMatch(/\.sidebar-list::-webkit-scrollbar,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar\s*\{[^}]*display:\s*none;/);
+    const rightRail = readFileSync("src/web/components/RightRail.tsx", "utf8");
+    expect(rightRail).toContain("right-rail-scroll");
+    expect(rightRail).toContain("[contain:layout_style]");
+    expect(rightRail).not.toContain("[contain:strict]");
     expect(readFileSync("src/web/components/Avatar.tsx", "utf8")).toContain("[contain:size_layout]");
     expect(readFileSync("src/web/components/RouterAvatar.tsx", "utf8")).toContain("[contain:size_layout]");
     expect(readFileSync("src/web/components/Composer.tsx", "utf8")).not.toContain("field-sizing");

@@ -165,7 +165,7 @@ code {
   overscroll-behavior-y: contain;
 }
 .messages[role="log"] {
-  contain: strict;
+  contain: layout style;
 }
 .router-timeline {
   contain: layout style;
@@ -187,7 +187,24 @@ code {
   --fade-bottom: 20px;
 }
 .sidebar-list {
-  contain: strict;
+  contain: layout style;
+}
+/* Hide native persistent scrollbar tracks across classic/external-mouse and overlay modes. */
+.sidebar-list,
+.right-rail-scroll,
+.router-tray-scroll,
+.messages,
+.page-fade,
+.dialog-body-fade {
+  scrollbar-width: none;
+}
+.sidebar-list::-webkit-scrollbar,
+.right-rail-scroll::-webkit-scrollbar,
+.router-tray-scroll::-webkit-scrollbar,
+.messages::-webkit-scrollbar,
+.page-fade::-webkit-scrollbar,
+.dialog-body-fade::-webkit-scrollbar {
+  display: none;
 }
 .router-tray-scroll {
   --fade-top: 8px;
@@ -244,29 +261,73 @@ input[type="search"]::-webkit-search-cancel-button {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
 }
+@layer components {
+  .status-shimmer {
+    display: inline-block;
+  }
+}
 .status-shimmer {
   --status-shimmer-duration: 2.2s;
-  background-image: linear-gradient(currentColor, currentColor);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  will-change: opacity;
+  position: relative;
+}
+.status-shimmer-track {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.status-shimmer-mask {
+  display: block;
+  width: 100%;
+  height: 100%;
+  -webkit-mask-image: linear-gradient(90deg, transparent 22%, black 50%, transparent 78%);
+  mask-image: linear-gradient(90deg, transparent 22%, black 50%, transparent 78%);
+  will-change: transform;
   animation: status-shimmer var(--status-shimmer-duration) ease-in-out infinite;
 }
+.status-shimmer-beam {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: color-mix(in srgb, var(--background) 68%, currentColor);
+  white-space: inherit;
+  overflow: hidden;
+  text-overflow: inherit;
+  will-change: transform;
+  animation: status-shimmer-counter var(--status-shimmer-duration) ease-in-out infinite;
+}
+.line-clamp-2 .status-shimmer-beam {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+.status-shimmer-beam::before {
+  content: attr(data-text);
+}
 @keyframes status-shimmer {
-  0%,
-  100% {
-    opacity: 1;
+  from {
+    transform: translateX(-100%);
   }
-  50% {
-    opacity: 0.42;
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes status-shimmer-counter {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(-100%);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .status-shimmer {
+  .status-shimmer-mask,
+  .status-shimmer-beam {
     animation: none;
-    background-image: none;
-    -webkit-text-fill-color: currentColor;
+  }
+  .status-shimmer-track {
+    display: none;
   }
 }
 :root {

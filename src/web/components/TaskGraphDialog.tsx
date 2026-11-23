@@ -27,6 +27,7 @@ import { GRAPH_TUBE_CELL_PX } from "../task-graph-layout.ts";
 import { GateMark } from "./GateMark.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { GateDecisionCard, JellyBead, resolveBoundWorker, TubeLayer } from "./PeelTrack.tsx";
+import { ShimmerOverlay } from "./StatusShimmer.tsx";
 import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 
 function readRootFontSizePx(): number {
@@ -379,7 +380,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                             (isPending || isSkipped) && "text-muted-foreground",
                           )}
                         >
-                          {node.title}
+                          {node.title}{isRunning && <ShimmerOverlay text={node.title} />}
                         </span>
                       </span>
                       {workerId !== null ? (

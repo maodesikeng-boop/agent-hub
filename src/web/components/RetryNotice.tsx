@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import type { ApiRetryInfo } from "../../shared/index.ts";
 import { retryCountdownText, retryText } from "../step-labels.ts";
+import { ShimmerOverlay } from "./StatusShimmer.tsx";
 
 const RETRY_TICK_MS = 1000;
 
-export function RetryNotice({ info }: { info: ApiRetryInfo }) {
+export function RetryNotice({ info, shimmer = false }: { info: ApiRetryInfo; shimmer?: boolean }) {
   const [, tick] = useState(0);
   const { retryAt } = info;
   useEffect(() => {
@@ -17,10 +18,20 @@ export function RetryNotice({ info }: { info: ApiRetryInfo }) {
   }, [retryAt]);
   const seconds = retryAt === null ? 0 : Math.ceil((retryAt - Date.now()) / RETRY_TICK_MS);
   const detail = [info.errorStatus, info.error].filter((x) => x !== null && x !== "").join(" ");
+  const label = retryText(info.attempt, info.maxRetries);
+  const countdown = seconds > 0 ? retryCountdownText(seconds) : null;
   return (
     <span title={detail === "" ? undefined : detail}>
-      {retryText(info.attempt, info.maxRetries)}
-      {seconds > 0 ? <span className="ml-1.5">{retryCountdownText(seconds)}</span> : null}
+      <span className="relative inline-block">
+        {label}
+        {shimmer && <ShimmerOverlay text={label} />}
+      </span>
+      {countdown !== null ? (
+        <span className="relative ml-1.5 inline-block">
+          {countdown}
+          {shimmer && <ShimmerOverlay text={countdown} />}
+        </span>
+      ) : null}
     </span>
   );
 }
