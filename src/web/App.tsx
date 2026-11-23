@@ -25,6 +25,7 @@ import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerP
 import { Button } from "./ui/button.tsx";
 import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
+import { useAutoHideScrollbars } from "./useAutoHideScrollbars.ts";
 import { isSelectable, type Pm } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 
@@ -277,6 +278,7 @@ function FirstRunProviderCheck({ client, onDone }: { client: HubClient; onDone: 
 }
 
 export function App() {
+  useAutoHideScrollbars();
   const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const model = useShellModel({ autoSelect: !mobile });

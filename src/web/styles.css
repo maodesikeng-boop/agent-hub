@@ -189,22 +189,77 @@ code {
 .sidebar-list {
   contain: layout style;
 }
-/* Hide native persistent scrollbar tracks across classic/external-mouse and overlay modes. */
+/* Keep shell scroll tracks invisible when idle and reveal only a subtle thumb while scrolling or dragging. */
+.messages,
 .sidebar-list,
 .right-rail-scroll,
 .router-tray-scroll,
-.messages,
+.router-timeline,
 .page-fade,
 .dialog-body-fade {
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
+.messages[data-scrolling],
+.sidebar-list[data-scrolling],
+.right-rail-scroll[data-scrolling],
+.router-tray-scroll[data-scrolling],
+.router-timeline[data-scrolling],
+.page-fade[data-scrolling],
+.dialog-body-fade[data-scrolling] {
+  scrollbar-color: color-mix(in srgb, var(--foreground) 26%, transparent) transparent;
+}
+.messages::-webkit-scrollbar,
 .sidebar-list::-webkit-scrollbar,
 .right-rail-scroll::-webkit-scrollbar,
 .router-tray-scroll::-webkit-scrollbar,
-.messages::-webkit-scrollbar,
+.router-timeline::-webkit-scrollbar,
 .page-fade::-webkit-scrollbar,
 .dialog-body-fade::-webkit-scrollbar {
-  display: none;
+  width: 6px;
+  background: transparent;
+}
+.messages::-webkit-scrollbar-track,
+.sidebar-list::-webkit-scrollbar-track,
+.right-rail-scroll::-webkit-scrollbar-track,
+.router-tray-scroll::-webkit-scrollbar-track,
+.router-timeline::-webkit-scrollbar-track,
+.page-fade::-webkit-scrollbar-track,
+.dialog-body-fade::-webkit-scrollbar-track {
+  background: transparent;
+}
+.messages::-webkit-scrollbar-thumb,
+.sidebar-list::-webkit-scrollbar-thumb,
+.right-rail-scroll::-webkit-scrollbar-thumb,
+.router-tray-scroll::-webkit-scrollbar-thumb,
+.router-timeline::-webkit-scrollbar-thumb,
+.page-fade::-webkit-scrollbar-thumb,
+.dialog-body-fade::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+.messages[data-scrolling]::-webkit-scrollbar-thumb,
+.sidebar-list[data-scrolling]::-webkit-scrollbar-thumb,
+.right-rail-scroll[data-scrolling]::-webkit-scrollbar-thumb,
+.router-tray-scroll[data-scrolling]::-webkit-scrollbar-thumb,
+.router-timeline[data-scrolling]::-webkit-scrollbar-thumb,
+.page-fade[data-scrolling]::-webkit-scrollbar-thumb,
+.dialog-body-fade[data-scrolling]::-webkit-scrollbar-thumb,
+.messages::-webkit-scrollbar-thumb:hover,
+.sidebar-list::-webkit-scrollbar-thumb:hover,
+.right-rail-scroll::-webkit-scrollbar-thumb:hover,
+.router-tray-scroll::-webkit-scrollbar-thumb:hover,
+.router-timeline::-webkit-scrollbar-thumb:hover,
+.page-fade::-webkit-scrollbar-thumb:hover,
+.dialog-body-fade::-webkit-scrollbar-thumb:hover,
+.messages::-webkit-scrollbar-thumb:active,
+.sidebar-list::-webkit-scrollbar-thumb:active,
+.right-rail-scroll::-webkit-scrollbar-thumb:active,
+.router-tray-scroll::-webkit-scrollbar-thumb:active,
+.router-timeline::-webkit-scrollbar-thumb:active,
+.page-fade::-webkit-scrollbar-thumb:active,
+.dialog-body-fade::-webkit-scrollbar-thumb:active {
+  background: color-mix(in srgb, var(--foreground) 26%, transparent);
 }
 .router-tray-scroll {
   --fade-top: 8px;
