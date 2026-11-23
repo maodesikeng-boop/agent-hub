@@ -7,12 +7,12 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    ERROR_PIPE_BUSY, ERROR_SUCCESS, GENERIC_ALL, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
+    LocalFree, ERROR_PIPE_BUSY, ERROR_SUCCESS, GENERIC_ALL, HLOCAL, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW,
-    SetSecurityInfo, DENY_ACCESS, EXPLICIT_ACCESS_W, GRANT_ACCESS, SE_FILE_OBJECT,
-    SE_KERNEL_OBJECT, SET_ACCESS, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    SetSecurityInfo, DENY_ACCESS, EXPLICIT_ACCESS_W, GRANT_ACCESS, SET_ACCESS, SE_FILE_OBJECT,
+    SE_KERNEL_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     DeleteAce, EqualSid, GetAce, GetSecurityDescriptorControl, ACCESS_ALLOWED_ACE,
@@ -21,15 +21,13 @@ use windows_sys::Win32::Security::{
     SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_DELETE_CHILD,
-    FILE_EXECUTE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_DATA,
-    FILE_READ_EA, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
-    FILE_WRITE_EA, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
+    CreateFileW, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_DELETE_CHILD, FILE_EXECUTE,
+    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_DATA, FILE_READ_EA,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA,
+    OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
-use windows_sys::Win32::System::SystemServices::{
-    ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE,
-};
+use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
 
 const INHERIT_CI_OI: u32 = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
 
@@ -43,11 +41,8 @@ pub const WORKER_DENY_WRITE_MASK: u32 = FILE_WRITE_DATA
     | WRITE_DAC
     | WRITE_OWNER;
 
-pub const WORKER_ALLOW_MODIFY_MASK: u32 = FILE_GENERIC_READ
-    | FILE_GENERIC_WRITE
-    | FILE_GENERIC_EXECUTE
-    | DELETE
-    | FILE_DELETE_CHILD;
+pub const WORKER_ALLOW_MODIFY_MASK: u32 =
+    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
 
 // Attributes stay readable because tools stat parent paths for config files; traversal is bypassed by SeChangeNotifyPrivilege.
 pub const WORKER_DENY_READ_MASK: u32 = FILE_READ_DATA | FILE_READ_EA | FILE_EXECUTE;
@@ -60,8 +55,7 @@ const CHECK_DENY_BITS: u32 =
     FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | FILE_DELETE_CHILD | WRITE_DAC | WRITE_OWNER;
 const CHECK_DENY_READ_BITS: u32 = FILE_READ_DATA | FILE_EXECUTE;
 const CHECK_ALLOW_READ_BITS: u32 = FILE_READ_DATA | FILE_EXECUTE;
-const CHECK_ALLOW_BITS: u32 =
-    FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | FILE_DELETE_CHILD;
+const CHECK_ALLOW_BITS: u32 = FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | FILE_DELETE_CHILD;
 
 unsafe fn dacl_has_ace(
     dacl: *const ACL,
@@ -238,14 +232,8 @@ pub fn protect_root(state_dir: &Path, root_path: &Path) -> io::Result<bool> {
     ];
 
     let mut new_dacl: *mut ACL = std::ptr::null_mut();
-    let code = unsafe {
-        SetEntriesInAclW(
-            entries.len() as u32,
-            entries.as_ptr(),
-            dacl,
-            &mut new_dacl,
-        )
-    };
+    let code =
+        unsafe { SetEntriesInAclW(entries.len() as u32, entries.as_ptr(), dacl, &mut new_dacl) };
     let res = if code != ERROR_SUCCESS {
         Err(win32_code_error("SetEntriesInAclW(protect_root)", code))
     } else {
@@ -632,7 +620,10 @@ fn add_pipe_ace(pipe_path: &str, explicit: &EXPLICIT_ACCESS_W, what: &str) -> io
     let res = unsafe {
         let acl_code = SetEntriesInAclW(1, explicit, dacl, &mut new_dacl);
         if acl_code != ERROR_SUCCESS {
-            Err(win32_code_error(&format!("SetEntriesInAclW({what})"), acl_code))
+            Err(win32_code_error(
+                &format!("SetEntriesInAclW({what})"),
+                acl_code,
+            ))
         } else {
             let set_code = SetSecurityInfo(
                 handle.0,

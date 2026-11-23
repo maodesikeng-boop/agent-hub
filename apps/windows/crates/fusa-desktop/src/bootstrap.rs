@@ -75,9 +75,10 @@ pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewMo
         SupervisorState::Idle => BootstrapViewModel::default(),
         SupervisorState::Starting { phase, .. } => {
             let (title, detail) = match phase {
-                StartupPhase::CheckingPortAndEnvironment | StartupPhase::LaunchingDaemon => {
-                    ("Starting Bellwood…".to_string(), format!("127.0.0.1:{}", snap.port))
-                }
+                StartupPhase::CheckingPortAndEnvironment | StartupPhase::LaunchingDaemon => (
+                    "Starting Bellwood…".to_string(),
+                    format!("127.0.0.1:{}", snap.port),
+                ),
                 StartupPhase::WaitingForReady {
                     elapsed_ms,
                     budget_ms,
@@ -89,9 +90,10 @@ pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewMo
                         format!("127.0.0.1:{}", snap.port)
                     },
                 ),
-                StartupPhase::ExchangingSession => {
-                    ("Signing in…".to_string(), format!("127.0.0.1:{}", snap.port))
-                }
+                StartupPhase::ExchangingSession => (
+                    "Signing in…".to_string(),
+                    format!("127.0.0.1:{}", snap.port),
+                ),
             };
             BootstrapViewModel {
                 tone: "working".to_string(),
@@ -155,7 +157,9 @@ pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewMo
     }
 }
 
-pub fn run_desktop_preflight_probe(runtime_cfg: &NativeRuntimeConfig) -> Result<DesktopPreflightSummary, String> {
+pub fn run_desktop_preflight_probe(
+    runtime_cfg: &NativeRuntimeConfig,
+) -> Result<DesktopPreflightSummary, String> {
     let script = runtime_cfg
         .daemon_root_dir
         .join("src/daemon/desktop-preflight.ts");

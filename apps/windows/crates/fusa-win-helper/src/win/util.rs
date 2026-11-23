@@ -4,9 +4,7 @@ use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSidToSidW,
-};
+use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 
 pub fn to_wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value

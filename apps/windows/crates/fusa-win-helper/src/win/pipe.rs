@@ -8,11 +8,9 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
 };
-use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
-use windows_sys::Win32::System::Threading::{
-    CreateEventW, ResetEvent, WaitForSingleObject,
-};
+use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForSingleObject};
+use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
 // Overlapped I/O with CancelIoEx and a blocking drain on timeout, so a hung peer cannot wedge hub.exe and OVERLAPPED pointers never dangle.
 pub struct TimedPipeStream {

@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use windows_sys::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
+    SetHandleInformation, ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, HANDLE, HANDLE_FLAG_INHERIT,
     INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
@@ -29,8 +29,8 @@ use windows_sys::Win32::System::Threading::{
     InitializeProcThreadAttributeList, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
     WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTUPINFOEXW,
-    STARTF_USESTDHANDLES,
+    PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 use windows_sys::Win32::System::WindowsProgramming::{
     PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE,
@@ -190,7 +190,8 @@ impl AttrList {
         let attr_count = if handles.is_empty() { 1 } else { 2 };
         let mut size = 0usize;
         unsafe {
-            let _ = InitializeProcThreadAttributeList(std::ptr::null_mut(), attr_count, 0, &mut size);
+            let _ =
+                InitializeProcThreadAttributeList(std::ptr::null_mut(), attr_count, 0, &mut size);
         }
         if size == 0 {
             return Err(last_os_error("InitializeProcThreadAttributeList(size)"));
@@ -336,8 +337,7 @@ pub fn run_session(spec: RunSessionSpec<'_>) -> io::Result<i32> {
         .map(|w| w.as_ptr())
         .unwrap_or(std::ptr::null());
 
-    let flags =
-        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+    let flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
     let inherit = if unique_handles.is_empty() { 0 } else { 1 };
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 

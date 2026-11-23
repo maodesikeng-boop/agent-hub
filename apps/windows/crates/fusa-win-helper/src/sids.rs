@@ -42,7 +42,9 @@ fn fill_random_bytes(buf: &mut [u8]) -> io::Result<()> {
             )
         };
         if status != 0 {
-            return Err(io::Error::other(format!("BCryptGenRandom failed: {status:#x}")));
+            return Err(io::Error::other(format!(
+                "BCryptGenRandom failed: {status:#x}"
+            )));
         }
         Ok(())
     }
@@ -144,12 +146,14 @@ pub fn load_or_create_sid_store(state_dir: &Path) -> io::Result<SandboxSidStore>
     load_or_create_locked(state_dir)
 }
 
-pub fn ensure_worker_sid(
-    state_dir: &Path,
-    worker_id: &str,
-) -> io::Result<(String, String)> {
+pub fn ensure_worker_sid(state_dir: &Path, worker_id: &str) -> io::Result<(String, String)> {
     let key = worker_id.trim();
-    if key.is_empty() || key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if key.is_empty()
+        || key.len() > 64
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("invalid worker id: {worker_id}"),
@@ -265,7 +269,10 @@ mod tests {
         let (_, worker) = ensure_worker_sid(tmp.path(), "7").expect("worker sid");
         let reader = ensure_reader_sid(tmp.path(), "7").expect("reader sid");
         assert_ne!(worker, reader);
-        assert_eq!(reader, ensure_reader_sid(tmp.path(), "7").expect("reader sid again"));
+        assert_eq!(
+            reader,
+            ensure_reader_sid(tmp.path(), "7").expect("reader sid again")
+        );
         assert!(ensure_reader_sid(tmp.path(), "bad key").is_err());
     }
 }

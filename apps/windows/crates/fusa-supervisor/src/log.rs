@@ -132,7 +132,10 @@ impl RotatingLogWriter {
             .create(true)
             .append(true)
             .open(&self.log_path)?;
-        let len = append_fallback.metadata().map(|m| m.len()).unwrap_or(self.current_bytes);
+        let len = append_fallback
+            .metadata()
+            .map(|m| m.len())
+            .unwrap_or(self.current_bytes);
         self.current_bytes = len;
         self.next_rotate_retry_bytes = if rename_failed {
             len.saturating_add(ROTATE_LOCK_RETRY_STEP_BYTES)

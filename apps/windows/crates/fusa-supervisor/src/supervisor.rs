@@ -204,7 +204,11 @@ impl NativeRuntimeConfig {
             exe
         } else {
             let plain = self.win_helpers_dir.join("fusa-run");
-            if plain.is_file() { plain } else { exe }
+            if plain.is_file() {
+                plain
+            } else {
+                exe
+            }
         }
     }
 
@@ -214,7 +218,11 @@ impl NativeRuntimeConfig {
             exe
         } else {
             let plain = self.win_helpers_dir.join("hub");
-            if plain.is_file() { plain } else { exe }
+            if plain.is_file() {
+                plain
+            } else {
+                exe
+            }
         }
     }
 }
@@ -1179,11 +1187,9 @@ where
                 "Graceful stop exceeded the budget; killing the owned process tree via Job run_id={}",
                 entry.run_id
             ));
-            let _ = self.runtime.signal_owned_daemon(
-                &entry.run_id,
-                OwnedSignal::Kill,
-                &self.contract,
-            );
+            let _ =
+                self.runtime
+                    .signal_owned_daemon(&entry.run_id, OwnedSignal::Kill, &self.contract);
             for _ in 0..5 {
                 if let Ok(st) = self.runtime.query_owned_status(&entry.run_id) {
                     if !st.any_alive() {
@@ -1495,7 +1501,10 @@ where
                     .lock()
                     .map(|t| t.summary_lines())
                     .unwrap_or_default();
-                let detail = format!("Timed out after {} s waiting for the daemon", budget_ms / 1000);
+                let detail = format!(
+                    "Timed out after {} s waiting for the daemon",
+                    budget_ms / 1000
+                );
                 self.update_state_and_notify(|g| {
                     g.ownership = DaemonOwnership::None;
                     g.state = SupervisorState::Faulted {
@@ -1540,9 +1549,7 @@ where
 
         let taken = {
             let mut g = self.inner.lock().unwrap();
-            if g.shutdown_requested
-                || !g.auto_restart_enabled
-                || g.restart_generation != generation
+            if g.shutdown_requested || !g.auto_restart_enabled || g.restart_generation != generation
             {
                 return;
             }
@@ -1586,7 +1593,9 @@ where
             g.restart_generation = g.restart_generation.wrapping_add(1);
             g.restart_generation
         };
-        self.log_supervisor_event("Owned daemon requested a hot restart after draining (exit code 75); respawning now");
+        self.log_supervisor_event(
+            "Owned daemon requested a hot restart after draining (exit code 75); respawning now",
+        );
         let sup = Arc::clone(self);
         thread::spawn(move || {
             if !sup.is_generation_active(next_gen) {
