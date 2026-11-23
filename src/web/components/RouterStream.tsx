@@ -31,6 +31,7 @@ import { errorLine, errorText, errorTitle, formatTime, type ErrorLike } from "..
 import { jellyStyleOf } from "../lib/palette.ts";
 import { defaultLookOf } from "../../shared/slimes.ts";
 import { cn } from "../lib/utils.ts";
+import { StatusShimmer } from "./StatusShimmer.tsx";
 import { useHubQueryClient } from "../query-client.ts";
 import {
   briefingEntryOfReport,
@@ -287,11 +288,7 @@ const TurnRow = memo(function TurnRow({
                 <p className="text-xs text-muted-foreground">Reply truncated</p>
               )}
 
-              {isRunning && (
-                <div className="text-minor text-muted-foreground">
-                  <span className="status-shimmer">Working…</span>
-                </div>
-              )}
+              {isRunning && <div className="text-minor text-muted-foreground"><StatusShimmer text="Working…" /></div>}
 
               {isFailed && (
                 <div className="flex items-start gap-2 text-minor leading-5">

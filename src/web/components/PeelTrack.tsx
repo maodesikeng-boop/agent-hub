@@ -24,6 +24,7 @@ import { stepBeadPaths, TUBE_WIDTH_CELLS, tubePaths, type PixelPoint, type StepB
 import { computeGraphComponents } from "../task-graph-layout.ts";
 import { CardBody, CardNoteForm } from "./Deliverables.tsx";
 import { GateMark } from "./GateMark.tsx";
+import { ShimmerOverlay } from "./StatusShimmer.tsx";
 import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 
 type GutterKind = "station" | "parA" | "parB" | "coil" | "gate" | "next";
@@ -380,6 +381,7 @@ function PeelStageRow({
           )}
         >
           {cleanPieceTitle(node.title)}
+          {isRunning && <ShimmerOverlay text={cleanPieceTitle(node.title)} />}
         </span>
         {rightLabel}
       </span>

@@ -1,7 +1,9 @@
 // 共用组件守着 docs/ui-standard.md 的几条硬规则：聚焦不用主色、控件统一高度、不能点的主按钮是中性灰。
-import { render, screen } from "@testing-library/react";
+import { act, render, renderHook, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { SCROLLBAR_IDLE_HIDE_MS } from "../../shared/limits.ts";
+import { useAutoHideScrollbars } from "../useAutoHideScrollbars.ts";
 import { Button } from "./button.tsx";
 import { Drawer, DrawerContent, DrawerTitle } from "./drawer.tsx";
 import { Input, Select, Textarea } from "./input.tsx";
@@ -241,27 +243,94 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     }
   });
 
-  it("在忙的状态词流光：只用字本身的颜色和 GPU opacity 合成，减少动态效果时不动", () => {
+  it("在忙的状态词流光：用合成层双反向位移扫过文字本身，无矩形底框，减少动态效果时停用并隐藏", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    const rule = css.match(/\.status-shimmer \{[^}]*\}/)?.[0] ?? "";
-    expect(rule).toMatch(/background-clip: text/);
-    expect(rule).toMatch(/animation: status-shimmer/);
-    expect(rule).toMatch(/will-change: opacity/);
-    expect(rule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
-    const keyframes = css.match(/@keyframes status-shimmer \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(keyframes).toContain("opacity");
-    expect(keyframes).not.toContain("background-position");
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer \{\s*animation: none;/);
+    const trackRule = css.match(/\.status-shimmer-track \{[^}]*\}/)?.[0] ?? "";
+    const maskRule = css.match(/\.status-shimmer-mask \{[^}]*\}/)?.[0] ?? "";
+    const beamRule = css.match(/\.status-shimmer-beam \{[^}]*\}/)?.[0] ?? "";
+    expect(trackRule).toMatch(/text-overflow:\s*inherit/);
+    expect(maskRule).toMatch(/text-overflow:\s*inherit/);
+    expect(maskRule).toMatch(/mask-image:\s*linear-gradient\(/);
+    expect(maskRule).toMatch(/animation:\s*status-shimmer\b/);
+    expect(maskRule).toMatch(/will-change:\s*transform/);
+    expect(beamRule).toMatch(/text-overflow:\s*inherit/);
+    expect(beamRule).toMatch(/animation:\s*status-shimmer-counter\b/);
+    expect(beamRule).toMatch(/will-change:\s*transform/);
+    expect(beamRule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
+    const kfSlide = css.match(/@keyframes status-shimmer \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const kfCounter = css.match(/@keyframes status-shimmer-counter \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(kfSlide).toContain("transform");
+    expect(kfSlide).not.toContain("background-position");
+    expect(kfSlide).not.toContain("opacity");
+    expect(kfCounter).toContain("transform");
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer-mask,\s*\.status-shimmer-beam \{\s*animation: none;\s*\}\s*\.status-shimmer-track \{\s*display: none;\s*\}\s*\}/);
   });
 
-  it("排版与动画边界守卫：消息区/左栏/输入底座启用 CSS containment，头像容器隔离尺寸与排版，Composer 不启用 field-sizing", () => {
+  it("排版隔离与滚动条守卫：滚动容器用 layout style 隔离，静止全透明无底槽，滚动/悬停时浮现细圆角滑块", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toMatch(/\.messages\[role="log"\]\s*\{[^}]*contain:\s*strict;/);
-    expect(css).toMatch(/\.sidebar-list\s*\{[^}]*contain:\s*strict;/);
+    expect(css).toMatch(/\.messages\[role="log"\]\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).toMatch(/\.sidebar-list\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).not.toMatch(/contain:\s*strict/);
     expect(css).toMatch(/\.composer-dock\s*\{[^}]*contain:\s*layout style;/);
     expect(css).toMatch(/\.router-timeline\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).toMatch(/\.messages,\s*\.sidebar-list,\s*\.right-rail-scroll,\s*\.router-tray-scroll,\s*\.router-timeline,\s*\.page-fade,\s*\.dialog-body-fade\s*\{[^}]*scrollbar-width:\s*thin;[^}]*scrollbar-color:\s*transparent transparent;/);
+    expect(css).toMatch(/\.messages\[data-scrolling\],[\s\S]*?\.dialog-body-fade\[data-scrolling\]\s*\{[^}]*scrollbar-color:\s*color-mix\(in srgb, var\(--foreground\) 26%, transparent\) transparent;/);
+    expect(css).toMatch(/\.messages::-webkit-scrollbar,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar\s*\{[^}]*width:\s*6px;[^}]*background:\s*transparent;/);
+    expect(css).toMatch(/\.messages::-webkit-scrollbar-thumb,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar-thumb\s*\{[^}]*background:\s*transparent;[^}]*border-radius:\s*9999px;/);
+    expect(css).toMatch(/\.messages\[data-scrolling\]::-webkit-scrollbar-thumb,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar-thumb:active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--foreground\) 26%, transparent\);/);
+    const rightRail = readFileSync("src/web/components/RightRail.tsx", "utf8");
+    expect(rightRail).toContain("right-rail-scroll");
+    expect(rightRail).toContain("[contain:layout_style]");
+    expect(rightRail).not.toContain("[contain:strict]");
     expect(readFileSync("src/web/components/Avatar.tsx", "utf8")).toContain("[contain:size_layout]");
     expect(readFileSync("src/web/components/RouterAvatar.tsx", "utf8")).toContain("[contain:size_layout]");
     expect(readFileSync("src/web/components/Composer.tsx", "utf8")).not.toContain("field-sizing");
+  });
+
+  it("自动隐藏滚动条委托：捕获滚动事件标 data-scrolling，停滚后按 SCROLLBAR_IDLE_HIDE_MS 自动摘掉，卸载清定时器", () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = renderHook(() => useAutoHideScrollbars());
+      const scroller = document.createElement("div");
+      scroller.className = "sidebar-list";
+      const ignored = document.createElement("div");
+      document.body.append(scroller, ignored);
+
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll"));
+        ignored.dispatchEvent(new Event("scroll"));
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(true);
+      expect(ignored.hasAttribute("data-scrolling")).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(SCROLLBAR_IDLE_HIDE_MS - 100);
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(true);
+
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      act(() => {
+        vi.advanceTimersByTime(SCROLLBAR_IDLE_HIDE_MS - 100);
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(false);
+
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(true);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      scroller.remove();
+      ignored.remove();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

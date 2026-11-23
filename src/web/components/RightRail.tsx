@@ -26,6 +26,7 @@ import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { defaultLookOf, type SlimeLook } from "../../shared/slimes.ts";
 import { PeelTrackList } from "./PeelTrack.tsx";
+import { ShimmerOverlay } from "./StatusShimmer.tsx";
 import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 import { TaskGraphDialog } from "./TaskGraphDialog.tsx";
 
@@ -213,6 +214,8 @@ export function PieceMeta({ worker }: { worker: WorkerEntry }) {
 function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: boolean; onOpen: () => void }) {
   const meta = usePieceMeta(worker);
   const hint = [worker.title, meta.model, meta.effort, meta.context].filter((line): line is string => line !== null).join("\n");
+  const title = cleanPieceTitle(worker.title);
+  const busy = isBusy(worker);
   return (
     <button
       type="button"
@@ -222,7 +225,10 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
       className={cn(ROW, "items-baseline", active ? ITEM_SELECTED : ITEM_HOVER)}
       onClick={onOpen}
     >
-      <span className={cn("min-w-0 truncate text-body leading-5", worker.ended && "opacity-60", isBusy(worker) && "status-shimmer")}>{cleanPieceTitle(worker.title)}</span>
+      <span className={cn("min-w-0 truncate text-body leading-5", worker.ended && "opacity-60", busy && "status-shimmer")}>
+        {title}
+        {busy && <ShimmerOverlay text={title} />}
+      </span>
     </button>
   );
 }
@@ -512,7 +518,7 @@ export function RailGroups({
 
   return (
     <>
-      <div className={cn("min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
+      <div className={cn("right-rail-scroll min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
         {hasAsks && (
           <section aria-labelledby="rail-asks" className="tint-fade py-3">
             <GroupTitle
@@ -649,8 +655,8 @@ export const RightRail = memo(function RightRail({
       id={RIGHT_RAIL_ID}
       aria-label="Side panel"
       className={cn(
-        "tint-fade flex min-w-0 shrink-0 flex-col overflow-hidden bg-surface-chat",
-        side ? "w-80 border-l border-line [contain:strict]" : "max-h-[40dvh] border-b border-line [contain:layout_style]",
+        "tint-fade flex min-w-0 shrink-0 flex-col overflow-hidden bg-surface-chat [contain:layout_style]",
+        side ? "w-80 border-l border-line" : "max-h-[40dvh] border-b border-line",
       )}
     >
       <RailGroups
