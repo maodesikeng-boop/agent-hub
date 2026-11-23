@@ -20,6 +20,8 @@ import {
   type WsServerMessage,
   type WorkerId,
   type WorkerPick,
+  WS_BURST_FRAME_LIMIT,
+  WS_FRAME_BUDGET_MS,
   userMessageDedupeKey,
   workerPickOf,
 } from "../shared/index.ts";
@@ -68,6 +70,10 @@ function waitForRecoveryRetry(signal: AbortSignal): Promise<void> {
   });
 }
 
+function isDocumentHidden(): boolean {
+  return typeof document === "object" && document.visibilityState === "hidden";
+}
+
 export class DeviceHub {
   readonly store: StoreApi<HubState> = createStore<HubState>(() => initialState);
   readonly link: LinkHistory = { lastOnlineAt: null, disconnectedAt: null };
@@ -84,9 +90,14 @@ export class DeviceHub {
   private alive = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private offlineTimer: ReturnType<typeof setTimeout> | undefined;
+  private notifyRaf: number | undefined;
+  private frameResetRaf: number | undefined;
+  private frameChangeCount = 0;
+  private frameRenderMs = 0;
   private closeStream: (() => void) | null = null;
   private loadAttempt = 0;
   private offUnauthorized: (() => void) | null = null;
+  private offVisibility: (() => void) | null = null;
 
   readonly key: DeviceKey;
   readonly client: HubClient;
@@ -137,7 +148,68 @@ export class DeviceHub {
       if (!this.state.conversations[id] || this.state.conversations[id]?.conversation.purgedAt !== undefined) this.rewindBarriers.delete(id);
     }
     this.trackLink();
+    if (action.type === "change") {
+      this.scheduleChangeNotify();
+      return;
+    }
+    this.flushPendingNotify();
     this.onChange();
+  }
+
+  private scheduleFrameReset(): void {
+    if (this.frameResetRaf !== undefined || typeof requestAnimationFrame !== "function") return;
+    this.frameResetRaf = requestAnimationFrame(() => {
+      this.frameResetRaf = undefined;
+      this.frameChangeCount = 0;
+      this.frameRenderMs = 0;
+    });
+  }
+
+  private clearFrameResetRaf(): void {
+    this.frameChangeCount = 0;
+    this.frameRenderMs = 0;
+    if (this.frameResetRaf !== undefined) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.frameResetRaf);
+      this.frameResetRaf = undefined;
+    }
+  }
+
+  private flushPendingNotify(): boolean {
+    this.clearFrameResetRaf();
+    if (this.notifyRaf === undefined) return false;
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.notifyRaf);
+    this.notifyRaf = undefined;
+    return true;
+  }
+
+  private handleVisibilityChange = (): void => {
+    const hadPending = this.flushPendingNotify();
+    if (hadPending && (this.alive || this.cursor !== null)) this.onChange();
+  };
+
+  private scheduleChangeNotify(): void {
+    // Browsers and WKWebView suspend rAF while hidden, which would stall background notifications.
+    if (isDocumentHidden() || typeof requestAnimationFrame !== "function") {
+      this.flushPendingNotify();
+      if (this.alive || this.cursor !== null) this.onChange();
+      return;
+    }
+    this.frameChangeCount++;
+    this.scheduleFrameReset();
+    const coalesce = this.frameChangeCount > WS_BURST_FRAME_LIMIT || this.frameRenderMs >= WS_FRAME_BUDGET_MS;
+    if (coalesce) {
+      if (this.notifyRaf !== undefined) return;
+      this.notifyRaf = requestAnimationFrame(() => {
+        this.notifyRaf = undefined;
+        this.clearFrameResetRaf();
+        if (this.alive || this.cursor !== null) this.onChange();
+      });
+      return;
+    }
+    if (this.notifyRaf !== undefined) return;
+    const t0 = typeof performance === "object" ? performance.now() : 0;
+    if (this.alive || this.cursor !== null) this.onChange();
+    if (typeof performance === "object") this.frameRenderMs += performance.now() - t0;
   }
 
   private trackLink(): void {
@@ -145,18 +217,29 @@ export class DeviceHub {
     if (online) {
       this.link.lastOnlineAt = Date.now();
       this.link.disconnectedAt = null;
-      clearTimeout(this.offlineTimer);
+      if (this.offlineTimer !== undefined) {
+        clearTimeout(this.offlineTimer);
+        this.offlineTimer = undefined;
+      }
       return;
     }
     if (this.state.phase === "ready" && this.state.connection === "reconnecting" && this.link.disconnectedAt === null) {
       this.link.disconnectedAt = Date.now();
-      clearTimeout(this.offlineTimer);
-      this.offlineTimer = setTimeout(() => this.alive && this.onChange(), OFFLINE_AFTER_MS);
+      if (this.offlineTimer !== undefined) clearTimeout(this.offlineTimer);
+      this.offlineTimer = setTimeout(() => {
+        this.offlineTimer = undefined;
+        if (this.alive) this.onChange();
+      }, OFFLINE_AFTER_MS);
     }
   }
 
   start(): void {
     this.alive = true;
+    this.offVisibility?.();
+    if (typeof document === "object" && typeof document.addEventListener === "function") {
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      this.offVisibility = () => document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    }
     if (!this.remote) {
       this.offUnauthorized = onUnauthorized(() => {
         if (!this.alive) return;
@@ -176,8 +259,12 @@ export class DeviceHub {
     this.rewindBarriers.clear();
     this.offUnauthorized?.();
     this.offUnauthorized = null;
+    this.offVisibility?.();
+    this.offVisibility = null;
     clearTimeout(this.timer);
     clearTimeout(this.offlineTimer);
+    this.offlineTimer = undefined;
+    this.flushPendingNotify();
     this.stopStream();
   }
 

@@ -1,30 +1,39 @@
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, localClient, type HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
-import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, type DeviceInfo, type StateSnapshot } from "../shared/index.ts";
+import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, PRODUCT_NAME, WAITING_SETTLE_MS, WS_BURST_FRAME_LIMIT, WS_FRAME_BUDGET_MS, type DeviceInfo, type StateSnapshot } from "../shared/index.ts";
 import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
 import { ACCOUNT_QUERY_KEY, queryClient } from "./query-client.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
+import { useDeviceReminders } from "./notify.ts";
 import {
   FakeApi,
+  FakeNotification,
   FakeWebSocket,
   OTHER_BOOT_ID,
   TEST_BOOT_ID,
   healthChange,
+  installFakeNotification,
   installFakeWebSocket,
   makeConvSnapshot,
   makeHealth,
   makeMessage,
   makePm,
+  makeSession,
   makeSnapshot,
   makeUserMessage,
+  makeWorkerConversation,
   messageChange,
+  sessionChange,
+  setForeground,
 } from "./test-utils.ts";
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  Reflect.deleteProperty(document, "visibilityState");
 });
 
 const REMOTE = "0f0e0d0c-0b0a-4908-8706-050403020100";
@@ -509,5 +518,183 @@ describe("DevicesStore（zustand store 驱动）", () => {
     expect(queryClient.getQueryState(ACCOUNT_QUERY_KEY)?.isInvalidated).toBe(true);
 
     store.dispose();
+  });
+
+  it("DeviceHub 按帧合并 WebSocket 突发变更：单帧超过次数/预算后延后到下一 rAF 一次通知", async () => {
+    installFakeWebSocket();
+    const rafQueue: Array<() => void> = [];
+    let rafId = 1;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafQueue.push(() => cb(0));
+      return rafId++;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+
+    const scripted = scriptedClient(null);
+    const onChange = vi.fn();
+    const hub = new DeviceHub(LOCAL_DEVICE, scripted.client, onChange);
+    hub.start();
+    scripted.requests[0]!.resolve(makeSnapshot({ seq: 1, bootId: BOOT_A }));
+    await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+    socketsFor(null).at(-1)!.open();
+
+    // Flush frameResetRaf queued by start/snapshot if any before counting burst calls
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    onChange.mockClear();
+
+    const ws = socketsFor(null).at(-1)!;
+    const total = WS_BURST_FRAME_LIMIT + 6;
+    for (let i = 1; i <= total; i++) {
+      ws.push(healthChange(1 + i, makeHealth({ lastError: `err-${i}` })));
+    }
+    expect(onChange.mock.calls.length).toBeLessThanOrEqual(WS_BURST_FRAME_LIMIT);
+    expect(hub.state.health.at(-1)?.lastError).toBe(`err-${total}`);
+
+    const beforeFlush = onChange.mock.calls.length;
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    expect(onChange.mock.calls.length).toBeGreaterThan(beforeFlush);
+
+    // Budget exceeded on first commit coalesces remaining changes within the frame
+    let nowStep = 1000;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => nowStep);
+    onChange.mockImplementation(() => {
+      nowStep += WS_FRAME_BUDGET_MS + 2;
+    });
+    onChange.mockClear();
+    ws.push(healthChange(100, makeHealth({ lastError: "budget-1" })));
+    ws.push(healthChange(101, makeHealth({ lastError: "budget-2" })));
+    ws.push(healthChange(102, makeHealth({ lastError: "budget-3" })));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    expect(onChange).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
+    hub.dispose();
+  });
+
+  it("隐藏页面（visibilityState === 'hidden'）rAF 挂起时，连续推送超过 WS_BURST_FRAME_LIMIT 条变更仍正常触发 onChange 与后台通知", async () => {
+    const T0 = 1_000_000;
+    installFakeWebSocket();
+    installFakeNotification("granted");
+    localStorage.clear();
+    document.title = PRODUCT_NAME;
+    setForeground(false);
+
+    const rafQueue: Array<() => void> = [];
+    let rafId = 1;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafQueue.push(() => cb(0));
+      return rafId++;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+
+    const scripted = scriptedClient(null);
+    let onChangeCalls = 0;
+    let rerenderReminders: ((props: { state: DeviceHub["state"] }) => void) | null = null;
+    const hub = new DeviceHub(LOCAL_DEVICE, scripted.client, () => {
+      onChangeCalls++;
+      rerenderReminders?.({ state: hub.state });
+    });
+    hub.start();
+    scripted.requests[0]!.resolve(
+      makeSnapshot({
+        seq: 1,
+        bootId: BOOT_A,
+        pms: [makePm({ id: 1, name: "小林" })],
+        conversations: [
+          makeConvSnapshot([makeUserMessage({ id: 1, conversationId: 1, createdAt: T0 - 5_000 })], {
+            conversation: { id: 1, pmId: 1, title: "小林" },
+          }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30 }) }),
+        ],
+        sessions: [
+          makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "working" }),
+          makeSession({ sessionId: 3, conversationId: 30, activity: "working" }),
+        ],
+      }),
+    );
+    await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+    socketsFor(null).at(-1)!.open();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const { rerender } = renderHook(
+      ({ state }) => useDeviceReminders([{ key: LOCAL_DEVICE, name: "本机", state }], null, () => {}),
+      { initialProps: { state: hub.state } },
+    );
+    rerenderReminders = rerender;
+
+    onChangeCalls = 0;
+    const ws = socketsFor(null).at(-1)!;
+    const burstCount = WS_BURST_FRAME_LIMIT + 3;
+    let seq = 1;
+    for (let i = 1; i <= burstCount; i++) {
+      ws.push(
+        sessionChange(
+          ++seq,
+          makeSession({ sessionId: 3, conversationId: 30, activity: "working", currentTool: `tool-${i}`, lastEventAt: T0 + i }),
+        ),
+      );
+    }
+    ws.push(messageChange(++seq, "message.created", makeMessage({ id: 2, conversationId: 1, text: "已处理完", createdAt: T0 + 100 })));
+    ws.push(sessionChange(++seq, makeSession({ sessionId: 3, conversationId: 30, activity: "idle", lastEventAt: T0 + 101 })));
+    ws.push(sessionChange(++seq, makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "idle", lastEventAt: T0 + 102 })));
+
+    expect(rafQueue).toHaveLength(0);
+    expect(onChangeCalls).toBe(burstCount + 3);
+
+    act(() => {
+      vi.advanceTimersByTime(WAITING_SETTLE_MS);
+    });
+    expect(FakeNotification.instances).toHaveLength(1);
+    expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
+
+    hub.dispose();
+  });
+
+  it("可见态突发排队 notifyRaf 后切到隐藏态，visibilitychange 立即冲刷挂起通知并继续即时通知", async () => {
+    installFakeWebSocket();
+    setForeground(true);
+
+    const rafQueue: Array<() => void> = [];
+    let rafId = 1;
+    const cancelled = new Set<number>();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      const id = rafId++;
+      rafQueue.push(() => {
+        if (!cancelled.has(id)) cb(0);
+      });
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      cancelled.add(id);
+    });
+
+    const scripted = scriptedClient(null);
+    const onChange = vi.fn();
+    const hub = new DeviceHub(LOCAL_DEVICE, scripted.client, onChange);
+    hub.start();
+    scripted.requests[0]!.resolve(makeSnapshot({ seq: 1, bootId: BOOT_A }));
+    await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+    socketsFor(null).at(-1)!.open();
+
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    onChange.mockClear();
+
+    const ws = socketsFor(null).at(-1)!;
+    for (let i = 1; i <= WS_BURST_FRAME_LIMIT + 2; i++) {
+      ws.push(healthChange(1 + i, makeHealth({ lastError: `visible-${i}` })));
+    }
+    expect(onChange).toHaveBeenCalledTimes(WS_BURST_FRAME_LIMIT);
+    expect(rafQueue.length).toBeGreaterThan(0);
+
+    setForeground(false);
+    expect(onChange).toHaveBeenCalledTimes(WS_BURST_FRAME_LIMIT + 1);
+
+    ws.push(healthChange(100, makeHealth({ lastError: "hidden-after" })));
+    expect(onChange).toHaveBeenCalledTimes(WS_BURST_FRAME_LIMIT + 2);
+    expect(hub.state.health.at(-1)?.lastError).toBe("hidden-after");
+
+    hub.dispose();
   });
 });

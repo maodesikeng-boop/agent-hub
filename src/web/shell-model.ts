@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isAgentVendor,
-  isSelectable,
   isTaskNodeWaitingUser,
   type ConversationId,
   type Message,
@@ -14,8 +13,7 @@ import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx"
 import type { DeviceSettings } from "./settings-model.ts";
 import { useDevices } from "./device-hub.ts";
 import type { DeviceStoreLookup } from "./forward-reply.ts";
-import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf } from "./devices.ts";
-import { useServerModelCatalogs } from "./models.tsx";
+import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf, type DeviceView } from "./devices.ts";
 import { useHubQueryClient } from "./query-client.ts";
 import {
   activeGraphsOf,
@@ -99,6 +97,93 @@ const saveRailClosed = (closed: boolean) => {
   } catch {
   }
 };
+
+function reuseEntryList(prev: SidebarGroup["entries"] | undefined, next: SidebarGroup["entries"]): SidebarGroup["entries"] {
+  if (prev === undefined || prev.length !== next.length) return next;
+  for (let i = 0; i < next.length; i++) if (next[i] !== prev[i]) return next;
+  return prev;
+}
+
+interface RetainDeps {
+  convs: unknown[];
+  listed: boolean;
+  pendingCreated: ConversationRef | null;
+}
+
+function retainValidDrafts(
+  devices: readonly DeviceView[],
+  listed: boolean,
+  pendingCreated: ConversationRef | null,
+  drafts: ReturnType<typeof useDraftStore<string>>,
+  prev: RetainDeps | null,
+): RetainDeps {
+  const convs = devices.map((d) => (d.state.phase === "ready" ? d.state.conversations : d.state.phase));
+  if (
+    prev !== null &&
+    prev.listed === listed &&
+    prev.pendingCreated === pendingCreated &&
+    prev.convs.length === convs.length &&
+    convs.every((c, i) => c === prev.convs[i])
+  ) {
+    return prev;
+  }
+  const valid = new Set<string>();
+  const pendingDevicePrefixes = new Set<string>();
+  let keepLocalAll = false;
+  for (const d of devices) {
+    if (d.state.phase === "ready") {
+      for (const id of Object.keys(d.state.conversations)) valid.add(conversationKey(d.key, Number(id)));
+    } else if (d.key === LOCAL_DEVICE) {
+      keepLocalAll = true;
+    } else {
+      pendingDevicePrefixes.add(`${d.key}/`);
+    }
+  }
+  if (pendingCreated !== null) valid.add(conversationKey(pendingCreated.device, pendingCreated.id));
+  drafts.retain((k) => {
+    if (k === ROUTER_DRAFT_KEY || valid.has(k)) return true;
+    const slash = k.indexOf("/");
+    if (slash < 0) return keepLocalAll;
+    return !listed || pendingDevicePrefixes.has(k.slice(0, slash + 1));
+  });
+  return { convs, listed, pendingCreated };
+}
+
+function buildSidebarGroups(
+  devices: readonly DeviceView[],
+  currentKey: string,
+  currentEntries: ConversationEntry[],
+  prevGroups: SidebarGroup[],
+): SidebarGroup[] {
+  const nextGroups: SidebarGroup[] = devices.map((d) => {
+    const prev = prevGroups.find((p) => p.key === d.key);
+    const nextEntries = d.state.phase === "ready" ? (d.key === currentKey ? currentEntries : listConversations(d.state)) : EMPTY_ENTRIES;
+    return {
+      key: d.key,
+      name: d.info.name,
+      platform: d.info.platform,
+      status: d.status,
+      lastOnlineAt: d.lastOnlineAt,
+      entries: reuseEntryList(prev?.entries, nextEntries),
+    };
+  });
+  const unchanged =
+    prevGroups.length === nextGroups.length &&
+    nextGroups.every((g, i) => {
+      const p = prevGroups[i]!;
+      return (
+        p.key === g.key &&
+        p.name === g.name &&
+        p.platform === g.platform &&
+        p.status === g.status &&
+        (g.status !== "offline" || p.lastOnlineAt === g.lastOnlineAt) &&
+        p.entries === g.entries
+      );
+    });
+  return unchanged ? prevGroups : nextGroups;
+}
+
+const EMPTY_NEW_PM_DEVICES: never[] = [];
 
 export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const qc = useHubQueryClient();
@@ -184,20 +269,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const localClientRef = fleet.hub(LOCAL_DEVICE).client;
   const shouldCheckFirstRunProviders =
     autoSelect && shellReady && local.state.pms.length === 0 && !providersGuided;
-  const localServerCatalogs = useServerModelCatalogs({
-    enabled: shouldCheckFirstRunProviders,
-    client: localClientRef,
-  });
-  useEffect(() => {
-    if (!shouldCheckFirstRunProviders || localServerCatalogs === undefined || localServerCatalogs.length === 0) {
-      return;
-    }
-    setProvidersGuided(true);
-    saveProvidersGuided();
-    if (localServerCatalogs.every((c) => !isSelectable(c.availability))) {
-      nav.setDesktop({ open: true, section: "providers", providerDevice: LOCAL_DEVICE });
-    }
-  }, [shouldCheckFirstRunProviders, localServerCatalogs, nav.setDesktop]);
+  const markProvidersGuided = useCallback(
+    (openProviders: boolean) => {
+      setProvidersGuided(true);
+      saveProvidersGuided();
+      if (openProviders) nav.setDesktop({ open: true, section: "providers", providerDevice: LOCAL_DEVICE });
+    },
+    [nav.setDesktop],
+  );
 
   useEffect(() => {
     if (!autoSelect || !shellReady) return;
@@ -236,26 +315,9 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   useEffect(() => {
     if (!awaitingCreated) setPendingCreated(null);
   }, [awaitingCreated]);
+  const retainDepsRef = useRef<RetainDeps | null>(null);
   useEffect(() => {
-    const valid = new Set<string>();
-    const pendingDevicePrefixes = new Set<string>();
-    let keepLocalAll = false;
-    for (const d of fleet.devices) {
-      if (d.state.phase === "ready") {
-        for (const id of Object.keys(d.state.conversations)) valid.add(conversationKey(d.key, Number(id)));
-      } else if (d.key === LOCAL_DEVICE) {
-        keepLocalAll = true;
-      } else {
-        pendingDevicePrefixes.add(`${d.key}/`);
-      }
-    }
-    if (pendingCreated !== null) valid.add(conversationKey(pendingCreated.device, pendingCreated.id));
-    drafts.retain((k) => {
-      if (k === ROUTER_DRAFT_KEY || valid.has(k)) return true;
-      const slash = k.indexOf("/");
-      if (slash < 0) return keepLocalAll;
-      return !fleet.listed || pendingDevicePrefixes.has(k.slice(0, slash + 1));
-    });
+    retainDepsRef.current = retainValidDrafts(fleet.devices, fleet.listed, pendingCreated, drafts, retainDepsRef.current);
   }, [fleet.devices, fleet.listed, pendingCreated, drafts]);
   const missingWorker = route?.view === "worker" && state.phase === "ready" && workerView === undefined && state.conversations[route.id] === undefined ? route.id : null;
   const workerLookup = missingWorker === null ? undefined : state.lookups[missingWorker];
@@ -469,39 +531,18 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
   const workerPmEntry = active;
   const look = active?.look ?? NO_LOOK;
-  const nextGroups: SidebarGroup[] = fleet.devices.map((d) => ({
-    key: d.key,
-    name: d.info.name,
-    platform: d.info.platform,
-    status: d.status,
-    lastOnlineAt: d.lastOnlineAt,
-    entries: d.state.phase === "ready" ? (d.key === current.key ? entries : listConversations(d.state)) : EMPTY_ENTRIES,
-  }));
-  const prevGroups = groupsRef.current;
-  const groups =
-    prevGroups.length === nextGroups.length &&
-    nextGroups.every((g, i) => {
-      const p = prevGroups[i]!;
-      return (
-        p.key === g.key &&
-        p.name === g.name &&
-        p.platform === g.platform &&
-        p.status === g.status &&
-        (g.status !== "offline" || p.lastOnlineAt === g.lastOnlineAt) &&
-        p.entries === g.entries
-      );
-    })
-      ? prevGroups
-      : nextGroups;
+  const groups = buildSidebarGroups(fleet.devices, current.key, entries, groupsRef.current);
   groupsRef.current = groups;
-  const newPmDevices = fleet.devices.map((d) => ({
-    key: d.key,
-    name: d.info.name,
-    status: d.status,
-    client: fleet.hub(d.key).client,
-    server: d.state.server,
-    takenLooks: d.state.pms.filter((pm) => pm.archivedAt == null).map(resolvePmLook),
-  }));
+  const newPmDevices = !creating
+    ? EMPTY_NEW_PM_DEVICES
+    : fleet.devices.map((d) => ({
+        key: d.key,
+        name: d.info.name,
+        status: d.status,
+        client: fleet.hub(d.key).client,
+        server: d.state.server,
+        takenLooks: d.state.pms.filter((pm) => pm.archivedAt == null).map(resolvePmLook),
+      }));
   return {
     ...shared,
     content: {
@@ -571,6 +612,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       workerPmEntry,
       workerView,
       ensureWorkers,
+      firstRunCheck: shouldCheckFirstRunProviders ? { client: localClientRef, onDone: markProvidersGuided } : null,
     },
   };
 }

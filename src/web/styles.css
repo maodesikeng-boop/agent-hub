@@ -164,6 +164,15 @@ code {
   overflow-x: hidden;
   overscroll-behavior-y: contain;
 }
+.messages[role="log"] {
+  contain: strict;
+}
+.router-timeline {
+  contain: layout style;
+}
+[data-ask-card] {
+  contain: layout style;
+}
 .sidebar-list,
 .router-tray-scroll,
 .router-timeline,
@@ -176,6 +185,9 @@ code {
 .sidebar-list {
   --fade-top: 12px;
   --fade-bottom: 20px;
+}
+.sidebar-list {
+  contain: strict;
 }
 .router-tray-scroll {
   --fade-top: 8px;
@@ -234,27 +246,20 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 .status-shimmer {
   --status-shimmer-duration: 2.2s;
-  background-image: linear-gradient(
-    90deg,
-    currentColor 0%,
-    currentColor 40%,
-    color-mix(in srgb, currentColor 35%, transparent) 50%,
-    currentColor 60%,
-    currentColor 100%
-  );
-  background-size: 250% 100%;
-  background-repeat: no-repeat;
+  background-image: linear-gradient(currentColor, currentColor);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+  will-change: opacity;
   animation: status-shimmer var(--status-shimmer-duration) ease-in-out infinite;
 }
 @keyframes status-shimmer {
-  from {
-    background-position: 100% 0;
+  0%,
+  100% {
+    opacity: 1;
   }
-  to {
-    background-position: 0% 0;
+  50% {
+    opacity: 0.42;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -367,6 +372,7 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .slime-pet[data-working] {
+  will-change: transform;
   animation: slime-hop-working var(--motion-hop-cycle) ease-out infinite;
 }
 @keyframes slime-hop {
@@ -419,6 +425,7 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .bell-swing[data-working] {
+  will-change: transform;
   animation: bell-swing-working var(--motion-hop-cycle) ease-out infinite;
 }
 @keyframes bell-swing {
@@ -488,6 +495,7 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .composer-dock {
+  contain: layout style;
   padding-bottom: 1.25rem;
 }
 .messages,
