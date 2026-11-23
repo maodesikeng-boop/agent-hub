@@ -382,7 +382,7 @@ pub fn run_session(spec: RunSessionSpec<'_>) -> io::Result<i32> {
     let thread_handle = OwnedHandle(pi.hThread);
 
     if let Some(ref job_ref) = job {
-        if let Err(assign_err) = job_ref.assign(proc_handle.0) {
+        if let Err(assign_err) = unsafe { job_ref.assign(proc_handle.0) } {
             if is_worker_sandbox {
                 unsafe {
                     let _ = TerminateProcess(proc_handle.0, 1);

@@ -77,6 +77,8 @@ impl Drop for LocalSid {
     }
 }
 
+/// # Safety
+/// `psid` must be null or point to a valid Windows `SID` buffer.
 pub unsafe fn sid_to_string(psid: *mut c_void) -> Option<String> {
     if psid.is_null() {
         return None;

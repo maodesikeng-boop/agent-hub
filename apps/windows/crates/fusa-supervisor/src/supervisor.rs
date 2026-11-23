@@ -486,11 +486,11 @@ impl DaemonRuntime for NativeDaemonRuntime {
 
         #[cfg(windows)]
         let job_arc = {
+            use fusa_win_helper::win::job::SessionJob;
             use std::os::windows::io::AsRawHandle;
-            let maybe_job = fusa_win_helper::win::job::SessionJob::create(false)
-                .ok()
-                .and_then(|job| job.assign(child.as_raw_handle()).ok().map(|()| job));
-            Arc::new(Mutex::new(maybe_job))
+            let h = child.as_raw_handle();
+            let ok = |j: &SessionJob| unsafe { j.assign(h).is_ok() };
+            Arc::new(Mutex::new(SessionJob::create(false).ok().filter(ok)))
         };
 
         #[cfg(windows)]
