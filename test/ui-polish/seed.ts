@@ -426,6 +426,10 @@ function standard(s: Story): void {
     { deviceId: SEED_DEVICES[0].id, pmId: you.pmId, messageId: 1, ok: true, op: "pm.forward", deviceName: SEED_DEVICES[0].name, pmName: "柚子", conversationId: you.conversationId },
   ]);
   s.routerCommand("今天哪些项目经理在忙？", "answered", { intent: "answer", reply: "小林在等你定失败结果缓存多久；小周卡在 Antigravity 没登录；其余都空闲。", actions: [] });
+
+  // 置顶两个常用项目经理：左栏置顶组与窄条分隔线都有数据
+  s.ledger.setPmPinned(lin.pmId, true);
+  s.ledger.setPmPinned(qing.pmId, true);
 }
 
 /** 超长、超多：20 多个项目经理、长名字、长消息、Markdown、图表、300 条历史、多张图、十几个 Piece。 */

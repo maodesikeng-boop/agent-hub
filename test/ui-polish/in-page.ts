@@ -199,9 +199,10 @@ export function applyMutationInPage(id: string): void {
     for (let p: HTMLElement | null = el; p !== null; p = p.parentElement) if (parseFloat(getComputedStyle(p).borderTopWidth) > 0 && p !== el) return p;
     throw new Error(`弄坏 ${id}：找不到卡片`);
   };
-  const rail = one('[aria-label="Side panel"]');
+  const rail = one('[aria-label="Pieces"]');
   const log = one('[aria-label="Messages"]');
-  const nav = one('[aria-label="Conversations"]');
+  const nav = one('[aria-label="Studio Mac"]');
+  const pmRows = () => nav.querySelectorAll<HTMLElement>(".project-row > button");
   // 拍板的选项只在对话里那张提问卡上（右栏里那一步是一行跳转，没有选项）
   const askOptions = [...byText(log, '[role="group"][aria-label="Options"]', "60 秒").querySelectorAll<HTMLElement>("button")];
   switch (id) {
@@ -222,7 +223,7 @@ export function applyMutationInPage(id: string): void {
       for (const el of log.querySelectorAll<HTMLElement>(".markdown, article")) el.style.color = "#cdcdcd";
       return;
     case "misalign": {
-      const row = nav.querySelectorAll<HTMLElement>("button")[2];
+      const row = pmRows()[2];
       if (row === undefined) throw new Error("弄坏 misalign：左栏不到 3 行");
       row.style.transform = "translateX(6px)";
       return;
@@ -254,7 +255,7 @@ export function applyMutationInPage(id: string): void {
     }
     case "small-preview": {
       const body = parseFloat(getComputedStyle(document.body).fontSize);
-      for (const el of nav.querySelectorAll<HTMLElement>("button *")) if (parseFloat(getComputedStyle(el).fontSize) < body - 0.5) el.style.fontSize = "11px";
+      for (const row of pmRows()) for (const el of row.querySelectorAll<HTMLElement>("*")) if (parseFloat(getComputedStyle(el).fontSize) < body - 0.5) el.style.fontSize = "11px";
       return;
     }
     case "dot-suffix": {
