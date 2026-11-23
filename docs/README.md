@@ -29,6 +29,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [macOS app and DMG distribution](mac-distribution-design.md): Native Swift and `WKWebView` shell (`apps/macos/`), source mode versus `--dist` bundled Node 24 LTS runtime, signing, DMG packaging, and GitHub Releases.
 - [Windows native architecture](windows-native-design.md): Native Tauri 2 desktop shell (`apps/windows/`), `fusa-supervisor`, `fusa-win-helper` Job Objects, restricted tokens, NTFS ACLs, Win11 24H2+ MXC read-only containers, and NSIS packaging.
 - [Release flow](release-flow-design.md): Installer builds pinned to `pnpm-lock.yaml`, release gates on the tagged commit, release candidates promoted byte for byte, build commits in `runtime-manifest.json`, and rollback by yanking.
+- [Official relay release and operations](relay-release-design.md): Cloudflare staging and production relay environments, `/health` build SHA contract, live smoke checks, manual production approval, and rollback runbook.
 - [Running Bellwood on Linux](linux.md): Ubuntu user-mode setup, Node 24.12+ and `bubblewrap` configuration, CLI lookup paths, `systemd --user` service management, and remote access.
 
 ## Naming lineage
