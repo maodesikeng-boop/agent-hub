@@ -2,8 +2,9 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, localClient, type HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
-import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, PRODUCT_NAME, WAITING_SETTLE_MS, WS_BURST_FRAME_LIMIT, WS_FRAME_BUDGET_MS, type StateSnapshot } from "../shared/index.ts";
+import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, PRODUCT_NAME, WAITING_SETTLE_MS, WS_BURST_FRAME_LIMIT, WS_FRAME_BUDGET_MS, type DeviceInfo, type StateSnapshot } from "../shared/index.ts";
 import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
+import { ACCOUNT_QUERY_KEY, queryClient } from "./query-client.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
 import { useDeviceReminders } from "./notify.ts";
 import {
@@ -453,6 +454,68 @@ describe("DevicesStore（zustand store 驱动）", () => {
     expect(third.devices[0]).toBe(second.devices[0]);
     expect(third.devices[1]).not.toBe(second.devices[1]);
     expect(third.devices[1]!.info.link).toBe("lan");
+
+    store.dispose();
+  });
+
+  it("account.updated 穿过 parseServerMessage 刷新本地账号查询与 DevicesStore 设备清单，并丢弃乱序的旧列表响应", async () => {
+    installFakeWebSocket();
+    const mac: DeviceInfo = { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
+    const tokyo: DeviceInfo = { id: REMOTE, name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
+    let devicesList: DeviceInfo[] = [mac];
+    let pendingList: ((devices: typeof devicesList) => void) | null = null;
+    let holdNextDevices = false;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = new URL(String(input), "http://127.0.0.1:1").pathname;
+        if (path === "/api/devices") {
+          if (holdNextDevices) {
+            holdNextDevices = false;
+            return new Promise<Response>((resolve) => {
+              pendingList = (devices) => resolve(Response.json({ devices }));
+            });
+          }
+          return Response.json({ devices: devicesList });
+        }
+        if (path.endsWith("/api/state")) return Response.json(makeSnapshot({ seq: 5, bootId: BOOT_A }));
+        return Response.json({ error: "not found" }, { status: 404 });
+      }),
+    );
+
+    queryClient.setQueryData(ACCOUNT_QUERY_KEY, { state: "signed_out", lastError: null });
+    const store = new DevicesStore();
+    store.start();
+    await vi.waitFor(() => expect(store.getSnapshot().listed).toBe(true));
+    await vi.waitFor(() => expect(socketsFor(null)).toHaveLength(1));
+    socketsFor(null).at(-1)!.open();
+
+    // 1) Hold an older refresh in flight, then push account.updated so a newer refresh starts and wins.
+    holdNextDevices = true;
+    const staleRefresh = store.refresh();
+    await vi.waitFor(() => expect(pendingList).not.toBeNull());
+    devicesList = [mac, tokyo];
+    socketsFor(null).at(-1)!.push({ type: "account.updated" });
+    await vi.waitFor(() => expect(store.getSnapshot().devices.map((d) => d.key)).toEqual([LOCAL_DEVICE, REMOTE]));
+    expect(queryClient.getQueryState(ACCOUNT_QUERY_KEY)?.isInvalidated).toBe(true);
+
+    // Resolving the older in-flight /api/devices response must not revert the newer device list.
+    pendingList!([mac]);
+    await staleRefresh;
+    expect(store.getSnapshot().devices.map((d) => d.key)).toEqual([LOCAL_DEVICE, REMOTE]);
+
+    // 2) Reconnecting the local stream also invalidates account and refreshes devices in case an account.updated frame was missed while offline.
+    await vi.waitFor(() => expect(socketsFor(REMOTE)).toHaveLength(1));
+    socketsFor(REMOTE).at(-1)!.open();
+    queryClient.setQueryData(ACCOUNT_QUERY_KEY, { state: "signed_out", lastError: null });
+    devicesList = [mac, { ...tokyo, name: "东京新机" }];
+    socketsFor(null).at(-1)!.drop();
+    window.dispatchEvent(new Event("online"));
+    await vi.waitFor(() => expect(socketsFor(null)).toHaveLength(2));
+    socketsFor(null).at(-1)!.open();
+    await vi.waitFor(() => expect(store.getSnapshot().devices[1]?.info.name).toBe("东京新机"));
+    expect(queryClient.getQueryState(ACCOUNT_QUERY_KEY)?.isInvalidated).toBe(true);
 
     store.dispose();
   });

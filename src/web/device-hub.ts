@@ -1,3 +1,4 @@
+import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
@@ -31,7 +32,7 @@ import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type
 import { openChangeStream, planSnapshotRecovery, reconnectDelay, type ChangeStreamConnection } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, sameDeviceInfo, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
 import { ErrorNotice, errorText, newClientId } from "./format.ts";
-import { ACCOUNT_QUERY_KEY, queryClient } from "./query-client.ts";
+import { invalidateAccount, queryClient, useHubQueryClient } from "./query-client.ts";
 import { parseRoute } from "./route.ts";
 import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer, type HubState } from "./state.ts";
@@ -103,13 +104,25 @@ export class DeviceHub {
   private readonly onChange: () => void;
   private readonly onResync: (() => void) | undefined;
   private readonly onBoot: ((bootId: string) => void) | undefined;
+  private readonly onAccountUpdated: (() => void) | undefined;
+  private readonly qc: QueryClient;
 
-  constructor(key: DeviceKey, client: HubClient, onChange: () => void, onResync?: () => void, onBoot?: (bootId: string) => void) {
+  constructor(
+    key: DeviceKey,
+    client: HubClient,
+    onChange: () => void,
+    onResync?: () => void,
+    onBoot?: (bootId: string) => void,
+    onAccountUpdated?: () => void,
+    qc: QueryClient = queryClient,
+  ) {
     this.key = key;
     this.client = client;
     this.onChange = onChange;
     this.onResync = onResync;
     this.onBoot = key === LOCAL_DEVICE ? onBoot : undefined;
+    this.onAccountUpdated = key === LOCAL_DEVICE ? onAccountUpdated : undefined;
+    this.qc = qc;
   }
 
   get state(): HubState {
@@ -338,8 +351,12 @@ export class DeviceHub {
 
   private receive(message: WsServerMessage, connection: ChangeStreamConnection): void {
     if (message.type === "account.updated") {
-      void queryClient.invalidateQueries({ queryKey: ACCOUNT_QUERY_KEY });
+      if (!this.remote) {
+        void invalidateAccount(this.qc);
+        this.onAccountUpdated?.();
+      }
     } else if (message.type === "resync") {
+      if (!this.remote) void invalidateAccount(this.qc);
       void this.resync(connection);
     } else if (this.recovery?.connection === connection) {
       const buffered = this.recovery.buffered;
@@ -359,9 +376,14 @@ export class DeviceHub {
       reportPresence: !this.remote,
       getCursor: () => this.cursor!,
       onStatus: (status, connection) => {
+        const reconnected = !this.remote && status === "open" && this.state.phase === "ready" && this.state.connection === "reconnecting";
         this.connection = connection;
         this.recovery = null;
         this.dispatch({ type: "connection", status });
+        if (reconnected) {
+          void invalidateAccount(this.qc);
+          this.onAccountUpdated?.();
+        }
       },
       onMessage: (message, connection) => this.receive(message, connection),
     });
@@ -568,26 +590,31 @@ export class DevicesStore {
   private running = false;
   private listTimer: ReturnType<typeof setTimeout> | undefined;
   private listAttempt = 0;
+  private listGen = 0;
+  private listController: AbortController | null = null;
 
   private readonly clientFor: (key: DeviceKey) => HubClient;
   private readonly autoReload: AutoReloader;
 
-  constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey, autoReloadEnv?: Partial<AutoReloadEnv>) {
+  constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey, autoReloadEnv?: Partial<AutoReloadEnv>, qc: QueryClient = queryClient) {
     this.clientFor = clientFor;
     this.autoReload = createAutoReloader({
       isStreaming: () => [...this.hubs.values()].some((hub) => hub.state.sessions.some((s) => s.streamingText != null)),
       ...autoReloadEnv,
     });
+    const refreshIfRunning = () => {
+      if (this.running) void this.refresh();
+    };
     this.hubs.set(
       LOCAL_DEVICE,
       new DeviceHub(
         LOCAL_DEVICE,
         this.clientFor(LOCAL_DEVICE),
         this.changed,
-        () => {
-          if (this.running) void this.refresh();
-        },
+        refreshIfRunning,
         (bootId) => this.autoReload.observeBoot(bootId),
+        refreshIfRunning,
+        qc,
       ),
     );
     if (routed !== undefined && routed !== LOCAL_DEVICE) this.hubs.set(routed, new DeviceHub(routed, this.clientFor(routed), this.changed));
@@ -647,18 +674,26 @@ export class DevicesStore {
 
   dispose(): void {
     this.running = false;
+    this.listGen++;
+    this.listController?.abort();
+    this.listController = null;
     clearTimeout(this.listTimer);
     this.autoReload.dispose();
     for (const hub of this.hubs.values()) hub.dispose();
   }
 
   refresh = async (): Promise<void> => {
+    if (!this.running) return;
     clearTimeout(this.listTimer);
+    this.listController?.abort();
+    const controller = new AbortController();
+    this.listController = controller;
+    const gen = ++this.listGen;
     let infos: readonly DeviceInfo[];
     try {
-      infos = (await fetchDevices()).devices;
+      infos = (await fetchDevices(controller.signal)).devices;
     } catch (err) {
-      if (!this.running) return;
+      if (!this.running || gen !== this.listGen) return;
       if (err instanceof ApiError && err.status === 404) {
         this.listAttempt = 0;
         this.managed = false;
@@ -668,8 +703,10 @@ export class DevicesStore {
       this.listTimer = setTimeout(() => void this.refresh(), reconnectDelay(this.listAttempt++));
       this.changed();
       return;
+    } finally {
+      if (this.listController === controller) this.listController = null;
     }
-    if (!this.running) return;
+    if (!this.running || gen !== this.listGen) return;
     this.listAttempt = 0;
     this.managed = true;
     this.setDevices(infos);
@@ -688,10 +725,17 @@ export class DevicesStore {
         this.hubs.delete(key);
       }
     }
-    for (const id of wanted) {
-      if (this.hubs.has(id)) continue;
-      const hub = new DeviceHub(id, this.clientFor(id), this.changed);
-      this.hubs.set(id, hub);
+    for (const info of infos) {
+      if (info.self) continue;
+      const existing = this.hubs.get(info.id);
+      if (existing !== undefined) {
+        if (!prevById.get(info.id)?.online && info.online && existing.state.phase === "error" && this.running) {
+          void existing.reload();
+        }
+        continue;
+      }
+      const hub = new DeviceHub(info.id, this.clientFor(info.id), this.changed);
+      this.hubs.set(info.id, hub);
       if (this.running) hub.start();
     }
     this.changed();
@@ -703,7 +747,8 @@ function defaultClientFor(key: DeviceKey): HubClient {
 }
 
 export function useDevices() {
-  const [store] = useState(() => new DevicesStore(defaultClientFor, parseRoute(window.location.hash)?.device));
+  const qc = useHubQueryClient();
+  const [store] = useState(() => new DevicesStore(defaultClientFor, parseRoute(window.location.hash)?.device, undefined, qc));
   useEffect(() => {
     store.start();
     return () => store.dispose();
