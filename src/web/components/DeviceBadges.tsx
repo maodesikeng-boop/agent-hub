@@ -1,3 +1,4 @@
+import { createElement } from "react";
 import {
   DeviceAndroid,
   DeviceIphone,
@@ -48,11 +49,9 @@ const PLATFORM_ICONS: Readonly<Record<string, Icon>> = {
   phone: Smartphone,
 };
 
-export function platformIcon(platform: string): Icon {
-  return PLATFORM_ICONS[platform.toLowerCase()] ?? Monitor;
-}
-
-export function PlatformIcon({ platform, className }: { platform: string; className?: string }) {
-  const Icon = platformIcon(platform);
-  return <Icon className={cn("size-pixel-sm shrink-0", className)} aria-hidden="true" />;
+export function PlatformIcon({ platform, className, size = "sm" }: { platform: string; className?: string; size?: "sm" | "inherit" }) {
+  return createElement(PLATFORM_ICONS[platform.toLowerCase()] ?? Monitor, {
+    className: cn(size === "sm" && "size-pixel-sm shrink-0", className),
+    "aria-hidden": true,
+  });
 }

@@ -29,7 +29,7 @@ export interface PanelExits {
  * Postcondition: a worker route gives that Worker, a profile route gives that PM's page or summary, a conversation route
  * gives Pieces only when piecesOpen and piecesHasContent, and the Router, settings, or no route give null.
  */
-export function sidePanelOf(input: SidePanelInput): SidePanelContent | null {
+export function sidePanelOf(_input: SidePanelInput): SidePanelContent | null {
   throw new Error("Not implemented");
 }
 
@@ -38,6 +38,6 @@ export function sidePanelOf(input: SidePanelInput): SidePanelContent | null {
  * Postcondition: close is the conversation route. back is the conversation route with backOpensPieces for a Worker,
  * the profile summary for a profile page, and null for Pieces and for the summary.
  */
-export function panelExitsOf(content: SidePanelContent, conversation: Extract<ScopedRoute, { view: "conversation" }>): PanelExits {
+export function panelExitsOf(_content: SidePanelContent, _conversation: Extract<ScopedRoute, { view: "conversation" }>): PanelExits {
   throw new Error("Not implemented");
 }

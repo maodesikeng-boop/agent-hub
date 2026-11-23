@@ -37,6 +37,6 @@ export interface ProjectListProps {
  * projectListOf; the strip shows avatars only, pinned ones above a divider; row shortcuts appear on hover and keyboard
  * focus on hover-capable pointers and never on touch screens.
  */
-export function ProjectList(props: ProjectListProps): React.ReactElement {
+export function ProjectList(_props: ProjectListProps): React.ReactElement {
   throw new Error("Not implemented");
 }

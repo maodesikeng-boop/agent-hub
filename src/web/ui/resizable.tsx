@@ -31,12 +31,12 @@ export interface PaneHandleProps {
 }
 
 /** Postcondition: lays its panes out side by side; panes with limits keep their pixel width when the window resizes. */
-export function PaneGroup(props: PaneGroupProps): React.ReactElement {
+export function PaneGroup(_props: PaneGroupProps): React.ReactElement {
   throw new Error("Not implemented");
 }
 
 /** Postcondition: renders a resizable pane that never leaves [minRem, maxRem]. */
-export function Pane(props: PaneProps): React.ReactElement {
+export function Pane(_props: PaneProps): React.ReactElement {
   throw new Error("Not implemented");
 }
 
@@ -44,6 +44,6 @@ export function Pane(props: PaneProps): React.ReactElement {
  * Postcondition: renders a 2px line that shows a 4px bar and pixel grip on hover or keyboard focus, darkens while dragging,
  * moves with the arrow keys, and calls onReset on double-click instead of the library's own reset.
  */
-export function PaneHandle(props: PaneHandleProps): React.ReactElement {
+export function PaneHandle(_props: PaneHandleProps): React.ReactElement {
   throw new Error("Not implemented");
 }

@@ -12,7 +12,7 @@ export interface ProjectListSections {
 }
 
 /** Postcondition: true when the entry's PM has a numeric pinnedAt and is not archived. */
-export function isPinned(entry: ConversationEntry): boolean {
+export function isPinned(_entry: ConversationEntry): boolean {
   throw new Error("Not implemented");
 }
 
@@ -21,7 +21,7 @@ export function isPinned(entry: ConversationEntry): boolean {
  * Postcondition: splits entries into pinned, active, and archived sections and returns the same object for the same
  * entries array.
  */
-export function projectListOf(entries: readonly ConversationEntry[]): ProjectListSections {
+export function projectListOf(_entries: readonly ConversationEntry[]): ProjectListSections {
   throw new Error("Not implemented");
 }
 
@@ -29,6 +29,6 @@ export function projectListOf(entries: readonly ConversationEntry[]): ProjectLis
  * Postcondition: keeps entries whose name or project name contains the trimmed query, ignoring case, in every section;
  * a blank query returns sections unchanged.
  */
-export function filterProjectList(sections: ProjectListSections, query: string): ProjectListSections {
+export function filterProjectList(_sections: ProjectListSections, _query: string): ProjectListSections {
   throw new Error("Not implemented");
 }

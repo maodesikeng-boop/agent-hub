@@ -32,7 +32,7 @@ export interface QuotaMeter {
  * Postcondition: returns an empty array while fewer than two computers are linked; otherwise one cell per computer in
  * input order with its ask count; returns the same array for the same inputs.
  */
-export function railComputersOf(computers: readonly RailComputerInput[], asking: ReadonlySet<string>): readonly RailComputer[] {
+export function railComputersOf(_computers: readonly RailComputerInput[], _asking: ReadonlySet<string>): readonly RailComputer[] {
   throw new Error("Not implemented");
 }
 
@@ -41,6 +41,6 @@ export function railComputersOf(computers: readonly RailComputerInput[], asking:
  * ceil(percent / 20) cells, warns at 80% or when the window warns, marks full at 100%, and returns null when no window
  * reports usage; returns the same object for the same quota array.
  */
-export function quotaMeterOf(quota: readonly QuotaVendor[]): QuotaMeter | null {
+export function quotaMeterOf(_quota: readonly QuotaVendor[]): QuotaMeter | null {
   throw new Error("Not implemented");
 }

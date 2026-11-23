@@ -2,15 +2,14 @@ import { Loader2 } from "../../ui/icons.ts";
 import { useMemo, useState } from "react";
 import type { BrowserSessionInfo } from "../../../shared/index.ts";
 import { describeUserAgent, formatAgo, userAgentDevice } from "../../browser-sessions.ts";
-import { platformIcon } from "../../components/DeviceBadges.tsx";
+import { PlatformIcon } from "../../components/DeviceBadges.tsx";
 import { RowError, SettingsGroup } from "../../components/SettingsList.tsx";
 import { useBrowserSessions } from "../../settings-model.ts";
 import { ConfirmBody, SettingsDrawer, useDrawerTarget } from "./SettingsDrawer.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
 
 function KindIcon({ userAgent }: { userAgent: string }) {
-  const Icon = platformIcon(userAgentDevice(userAgent));
-  return <Icon aria-hidden="true" />;
+  return <PlatformIcon platform={userAgentDevice(userAgent)} size="inherit" />;
 }
 
 const byRecency = (a: BrowserSessionInfo, b: BrowserSessionInfo) => Number(b.current) - Number(a.current) || b.lastSeenAt - a.lastSeenAt;

@@ -20,6 +20,6 @@ export interface ComputerSwitcherProps {
  * Postcondition: lists every computer with its status dot, connection text, and ask badge, marks the selected one,
  * closes after a pick, and ends with Manage computers...; offline computers stay selectable for reading.
  */
-export function ComputerSwitcher(props: ComputerSwitcherProps): React.ReactElement {
+export function ComputerSwitcher(_props: ComputerSwitcherProps): React.ReactElement {
   throw new Error("Not implemented");
 }

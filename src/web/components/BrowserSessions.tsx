@@ -2,7 +2,7 @@ import { Loader2 } from "../ui/icons.ts";
 import { describeUserAgent, formatAgo, formatCountdown, userAgentDevice } from "../browser-sessions.ts";
 import { useBrowserSessions, useSignInLink } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
-import { platformIcon } from "./DeviceBadges.tsx";
+import { PlatformIcon } from "./DeviceBadges.tsx";
 import { QrCode } from "./QrCode.tsx";
 import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
@@ -81,7 +81,6 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
           const name = describeUserAgent(session.userAgent);
           const ago = formatAgo(session.lastSeenAt, signIn.now);
           const confirming = session.current && confirmingSelf;
-          const KindIcon = platformIcon(userAgentDevice(session.userAgent));
           const detail = (
             <span className="flex flex-wrap items-center gap-x-3">
               {session.current && <span>This browser</span>}
@@ -89,7 +88,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
             </span>
           );
           return (
-            <SettingsRow key={session.id} label={name} icon={<KindIcon />} detail={detail} error={rowErrors[session.id]}>
+            <SettingsRow key={session.id} label={name} icon={<PlatformIcon platform={userAgentDevice(session.userAgent)} size="inherit" />} detail={detail} error={rowErrors[session.id]}>
               {(id) =>
                 confirming ? (
                   <span className="-mr-3 flex items-center gap-1">

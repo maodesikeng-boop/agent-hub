@@ -29,6 +29,6 @@ export interface ProfilePanelProps {
  * then rows that open the capabilities, persona, memory, worktree, and history pages; a page shows a back arrow to the
  * summary. Archived PMs show the restore group and no Pinned button.
  */
-export function ProfilePanel(props: ProfilePanelProps): React.ReactElement {
+export function ProfilePanel(_props: ProfilePanelProps): React.ReactElement {
   throw new Error("Not implemented");
 }

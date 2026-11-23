@@ -10,7 +10,7 @@ export interface LedgerPmPins {
 }
 
 /** Precondition: persona was created on the same ledger context. */
-export function createLedgerPmPins(ctx: LedgerContext, persona: Pick<LedgerPersona, "assertPmNotArchived">): LedgerPmPins {
+export function createLedgerPmPins(_ctx: LedgerContext, _persona: Pick<LedgerPersona, "assertPmNotArchived">): LedgerPmPins {
   return {
     setPmPinned: () => {
       throw new Error("Not implemented");

@@ -31,6 +31,6 @@ export interface AppRailProps {
  * the usage meter that opens the usage popover, the Settings gear with the resources dot, and the account cell; in the
  * native macOS app the top clears the traffic lights and drags the window.
  */
-export function AppRail(props: AppRailProps): React.ReactElement {
+export function AppRail(_props: AppRailProps): React.ReactElement {
   throw new Error("Not implemented");
 }

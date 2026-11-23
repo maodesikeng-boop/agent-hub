@@ -1,13 +1,3 @@
-import {
-  SHELL_CHAT_MIN_REM,
-  SHELL_FRAME_PX,
-  SHELL_LIST_REM,
-  SHELL_PANEL_REM,
-  SHELL_RAIL_REM,
-  SHELL_SEAM_PX,
-  SHELL_STRIP_REM,
-} from "../shared/limits.ts";
-
 // Invariant: every returned width is CSS px at the given root font size; the SHELL_* constants stay the single source of limits.
 
 /** How the desktop columns are arranged: all side by side, PM column collapsed to avatars, or the side panel covering the conversation. */
@@ -42,7 +32,7 @@ export interface ShellFitInput {
  * Precondition: remPx > 0.
  * Postcondition: returns the SHELL_* rem limits multiplied by remPx; frame and seam stay in px.
  */
-export function shellLimitsPx(remPx: number): ShellLimitsPx {
+export function shellLimitsPx(_remPx: number): ShellLimitsPx {
   throw new Error("Not implemented");
 }
 
@@ -53,7 +43,7 @@ export function shellLimitsPx(remPx: number): ShellLimitsPx {
  * Otherwise returns "strip" when the same fits with the PM column collapsed to the strip.
  * Otherwise returns "stack" when panelOpen and "strip" when not; a closed panel never yields "stack".
  */
-export function shellTierOf(input: ShellFitInput): ShellTier {
+export function shellTierOf(_input: ShellFitInput): ShellTier {
   throw new Error("Not implemented");
 }
 
@@ -62,6 +52,6 @@ export function shellTierOf(input: ShellFitInput): ShellTier {
  * Postcondition: returns shellTierOf for the element's current width and the root font size, and updates when the element
  * resizes or the interface scale changes; returns "wide" while shell is null.
  */
-export function useShellTier(shell: HTMLElement | null, panelOpen: boolean): ShellTier {
+export function useShellTier(_shell: HTMLElement | null, _panelOpen: boolean): ShellTier {
   throw new Error("Not implemented");
 }

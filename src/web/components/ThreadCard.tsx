@@ -18,6 +18,6 @@ export interface ThreadCardProps {
  * status word from workerStatusOf, the report time, and the report's first line truncated with its full text in title;
  * failures show describeFailure text; the open card uses the open fill and outline.
  */
-export function ThreadCard(props: ThreadCardProps): React.ReactElement {
+export function ThreadCard(_props: ThreadCardProps): React.ReactElement {
   throw new Error("Not implemented");
 }
