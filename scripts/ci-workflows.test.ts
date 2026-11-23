@@ -92,9 +92,10 @@ describe(".github/workflows", () => {
     }
   });
 
-  it("run the full suite on an unchanged main every night at 23:00 Beijing time without cancelling", () => {
+  it("run the full suite on an unchanged main every night at 22:17 Beijing time (off the top of the hour) without cancelling", () => {
     const nightly = workflow("nightly.yml");
-    expect(nightly.on.schedule).toEqual([{ cron: "0 15 * * *" }]);
+    expect(nightly.on.schedule).toEqual([{ cron: "17 14 * * *" }]);
+    expect(nightly.on.schedule?.[0]?.cron.startsWith("0 ")).toBe(false);
     expect(nightly.concurrency).toBeUndefined();
     const reused = Object.values(nightly.jobs).flatMap((job) => (job.uses ? [job.uses] : []));
     expect(reused.sort()).toEqual(["./.github/workflows/check.yml", "./.github/workflows/macos.yml", "./.github/workflows/windows.yml"]);

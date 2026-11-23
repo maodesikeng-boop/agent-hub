@@ -1,10 +1,11 @@
 name: nightly
 
-# Runs the full suite on an unchanged main every night at 23:00 Beijing time (15:00 UTC) so flaky tests show up
-# without a new change to blame. Failed tests print as "FAIL |<project>| <file> > <suite> > <test>" in the job log.
+# Runs the full suite on an unchanged main every night at 22:17 Beijing time (14:17 UTC, off the top of the hour
+# to avoid GitHub schedule queue delays) so flaky tests show up without a new change to blame. Failed tests
+# print as "FAIL |<project>| <file> > <suite> > <test>" in the job log.
 on:
   schedule:
-    - cron: "0 15 * * *"
+    - cron: "17 14 * * *"
   workflow_dispatch:
 
 permissions:
