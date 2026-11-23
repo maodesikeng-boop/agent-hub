@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, localClient, type HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
-import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, type StateSnapshot } from "../shared/index.ts";
+import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, WS_BURST_FRAME_LIMIT, WS_FRAME_BUDGET_MS, type StateSnapshot } from "../shared/index.ts";
 import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
 import {
@@ -446,5 +446,57 @@ describe("DevicesStore（zustand store 驱动）", () => {
     expect(third.devices[1]!.info.link).toBe("lan");
 
     store.dispose();
+  });
+
+  it("DeviceHub 按帧合并 WebSocket 突发变更：单帧超过次数/预算后延后到下一 rAF 一次通知", async () => {
+    installFakeWebSocket();
+    const rafQueue: Array<() => void> = [];
+    let rafId = 1;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafQueue.push(() => cb(0));
+      return rafId++;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+
+    const scripted = scriptedClient(null);
+    const onChange = vi.fn();
+    const hub = new DeviceHub(LOCAL_DEVICE, scripted.client, onChange);
+    hub.start();
+    scripted.requests[0]!.resolve(makeSnapshot({ seq: 1, bootId: BOOT_A }));
+    await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+    socketsFor(null).at(-1)!.open();
+
+    // Flush frameResetRaf queued by start/snapshot if any before counting burst calls
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    onChange.mockClear();
+
+    const ws = socketsFor(null).at(-1)!;
+    const total = WS_BURST_FRAME_LIMIT + 6;
+    for (let i = 1; i <= total; i++) {
+      ws.push(healthChange(1 + i, makeHealth({ lastError: `err-${i}` })));
+    }
+    expect(onChange.mock.calls.length).toBeLessThanOrEqual(WS_BURST_FRAME_LIMIT);
+    expect(hub.state.health.at(-1)?.lastError).toBe(`err-${total}`);
+
+    const beforeFlush = onChange.mock.calls.length;
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    expect(onChange.mock.calls.length).toBeGreaterThan(beforeFlush);
+
+    // Budget exceeded on first commit coalesces remaining changes within the frame
+    let nowStep = 1000;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => nowStep);
+    onChange.mockImplementation(() => {
+      nowStep += WS_FRAME_BUDGET_MS + 2;
+    });
+    onChange.mockClear();
+    ws.push(healthChange(100, makeHealth({ lastError: "budget-1" })));
+    ws.push(healthChange(101, makeHealth({ lastError: "budget-2" })));
+    ws.push(healthChange(102, makeHealth({ lastError: "budget-3" })));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    expect(onChange).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
+    hub.dispose();
   });
 });

@@ -241,12 +241,27 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     }
   });
 
-  it("在忙的状态词流光：只用字本身的颜色，减少动态效果时不动", () => {
+  it("在忙的状态词流光：只用字本身的颜色和 GPU opacity 合成，减少动态效果时不动", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const rule = css.match(/\.status-shimmer \{[^}]*\}/)?.[0] ?? "";
     expect(rule).toMatch(/background-clip: text/);
     expect(rule).toMatch(/animation: status-shimmer/);
+    expect(rule).toMatch(/will-change: opacity/);
     expect(rule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
+    const keyframes = css.match(/@keyframes status-shimmer \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(keyframes).toContain("opacity");
+    expect(keyframes).not.toContain("background-position");
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer \{\s*animation: none;/);
+  });
+
+  it("排版与动画边界守卫：消息区/左栏/输入底座启用 CSS containment，头像容器隔离尺寸与排版，Composer 不启用 field-sizing", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/\.messages\[role="log"\]\s*\{[^}]*contain:\s*strict;/);
+    expect(css).toMatch(/\.sidebar-list\s*\{[^}]*contain:\s*strict;/);
+    expect(css).toMatch(/\.composer-dock\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).toMatch(/\.router-timeline\s*\{[^}]*contain:\s*layout style;/);
+    expect(readFileSync("src/web/components/Avatar.tsx", "utf8")).toContain("[contain:size_layout]");
+    expect(readFileSync("src/web/components/RouterAvatar.tsx", "utf8")).toContain("[contain:size_layout]");
+    expect(readFileSync("src/web/components/Composer.tsx", "utf8")).not.toContain("field-sizing");
   });
 });

@@ -752,3 +752,77 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(screen.queryByRole("option", { name: /hub:worker|Claude Code/ })).toBeNull();
   });
 });
+
+describe("Composer 输入性能与零重排守卫", () => {
+  it("不使用 field-sizing-content，单行连续打字复用宽度/样式缓存并跳过 height:auto 与 scrollHeight 强制重排", () => {
+    let fontSets = 0;
+    const fakeCtx = {
+      _font: "",
+      set font(value: string) {
+        fontSets++;
+        this._font = value;
+      },
+      get font() {
+        return this._font;
+      },
+      measureText: (t: string) => ({ width: t.length * 8 }),
+    };
+    HTMLCanvasElement.prototype.getContext = (() => fakeCtx) as never;
+    const savedClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const savedScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    let scrollHeightReads = 0;
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 600 });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        scrollHeightReads++;
+        return String((this as HTMLTextAreaElement).value ?? "").includes("\n") ? 60 : 36;
+      },
+    });
+    const csSpy = vi.spyOn(window, "getComputedStyle").mockImplementation(
+      () =>
+        ({
+          getPropertyValue: () => "",
+          lineHeight: "20px",
+          paddingTop: "8px",
+          paddingBottom: "8px",
+          paddingLeft: "0px",
+          paddingRight: "0px",
+          fontStyle: "normal",
+          fontWeight: "400",
+          fontSize: "15px",
+          fontFamily: "sans-serif",
+          columnGap: "8px",
+        }) as unknown as CSSStyleDeclaration,
+    );
+
+    try {
+      const s = staging();
+      const onChange = () => {};
+      const onSend = () => {};
+      const { rerender } = render(<Composer value="a" placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
+      const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+      expect(box.className).not.toMatch(/field-sizing/);
+
+      scrollHeightReads = 0;
+      csSpy.mockClear();
+      const baselineFontSets = fontSets;
+
+      for (const next of ["ab", "abc", "abcd", "abcde"]) {
+        rerender(<Composer value={next} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
+      }
+      expect(scrollHeightReads).toBe(0);
+      expect(csSpy).not.toHaveBeenCalled();
+      expect(fontSets).toBe(baselineFontSets);
+
+      rerender(<Composer value={"line 1\nline 2"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
+      expect(scrollHeightReads).toBeGreaterThan(0);
+    } finally {
+      csSpy.mockRestore();
+      if (savedClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", savedClientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
+      if (savedScrollHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", savedScrollHeight);
+      else delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+    }
+  });
+});
