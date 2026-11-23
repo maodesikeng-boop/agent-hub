@@ -249,7 +249,7 @@ function decisionInstanceToken(entry: FleetDecisionEntry): string {
   return `${entry.decision.askMessageId ?? ""}:${entry.decision.updatedAt}`;
 }
 
-export function RouterWorkbench({
+export const RouterWorkbench = memo(function RouterWorkbench({
   leading,
   toolbar,
   notices,
@@ -679,4 +679,4 @@ export function RouterWorkbench({
       </FleetLooks>
     </FleetDeviceScopes>
   );
-}
+});

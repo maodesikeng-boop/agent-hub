@@ -279,20 +279,14 @@ function usePersonaText({
 }) {
   const client = useClient();
   const qc = useHubQueryClient();
-  const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
-  const [draftText, setDraftText] = useState<string | null>(null);
-  if (trackedPmId !== persona.pmId) {
-    setTrackedPmId(persona.pmId);
-    setDraftText(null);
-  }
-  const text = draftText ?? persona.text;
+  const [syncSeq, setSyncSeq] = useState(0);
 
   const textMutation = useMutation(
     {
-      mutationFn: async () => (await client.putPersona(pmId, { text })).persona,
+      mutationFn: async (text: string) => (await client.putPersona(pmId, { text })).persona,
       onSuccess: (next) => {
         if (!aliveRef.current) return;
-        setDraftText(null);
+        setSyncSeq((n) => n + 1);
         onUpdate(next);
       },
     },
@@ -304,7 +298,7 @@ function usePersonaText({
       onSuccess: (next) => {
         if (!aliveRef.current) return;
         onReverted();
-        setDraftText(null);
+        setSyncSeq((n) => n + 1);
         onUpdate(next);
       },
     },
@@ -318,14 +312,12 @@ function usePersonaText({
       : errorText(revertMutation.error)
     : undefined;
   return {
-    text,
-    setText: setDraftText,
-    dirty: text !== persona.text,
-    tooLong: utf8Bytes(text) > MAX_PERSONA_BYTES,
+    savedText: persona.text,
+    syncKey: `${persona.pmId}:${syncSeq}`,
     busy,
     textError,
     revertError,
-    save: () => textMutation.mutate(),
+    save: (nextText: string) => textMutation.mutate(nextText),
     revert: (changeId: number) => revertMutation.mutate(changeId),
   };
 }
@@ -381,14 +373,23 @@ function AgentGroup({
 }
 
 function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> }) {
-  const { text, tooLong, textError, busy } = persona;
+  const { savedText, syncKey, textError, busy, save } = persona;
+  const [trackedSyncKey, setTrackedSyncKey] = useState(syncKey);
+  const [draftText, setDraftText] = useState<string | null>(null);
+  if (trackedSyncKey !== syncKey) {
+    setTrackedSyncKey(syncKey);
+    setDraftText(null);
+  }
+  const text = draftText ?? savedText;
+  const dirty = text !== savedText;
+  const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
   const hint = personaLoadHint(text);
   return (
     <SettingsGroup
       title="Persona"
       action={
-        persona.dirty && (
-          <Button size="sm" disabled={tooLong || busy !== null} onClick={persona.save}>
+        dirty && (
+          <Button size="sm" disabled={tooLong || busy !== null} onClick={() => save(text)}>
             {busy === "text" && <Loader2 aria-hidden="true" />}
             Save
           </Button>
@@ -404,7 +405,7 @@ function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> 
           text === "" ? "text-body" : "font-mono text-minor",
         )}
         value={text}
-        onChange={(e) => persona.setText(e.target.value)}
+        onChange={(e) => setDraftText(e.target.value)}
       />
       {hint !== null && !tooLong && <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{hint}</p>}
       {(tooLong || textError) && (

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { QuotaVendor } from "../selectors.ts";
 import { useResourcesAttention } from "../resources-model.ts";
 import { Button } from "../ui/button.tsx";
@@ -5,7 +6,7 @@ import { Download, Plus, Settings } from "../ui/icons.ts";
 import { useUpdateReminder } from "../update-model.ts";
 import { QuotaPopover } from "./QuotaPopover.tsx";
 
-export function SidebarTools({
+export const SidebarTools = memo(function SidebarTools({
   narrow,
   quota,
   quotaFetchable,
@@ -67,4 +68,4 @@ export function SidebarTools({
       {settings}
     </div>
   );
-}
+});

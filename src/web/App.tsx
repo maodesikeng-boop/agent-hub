@@ -23,9 +23,10 @@ import { errorTitle } from "./format.ts";
 import { LOCAL_DEVICE, routeDeviceOf } from "./devices.ts";
 import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
-import { ModelCatalogProvider } from "./models.tsx";
+import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
-import type { Pm } from "../shared/index.ts";
+import { isSelectable, type Pm } from "../shared/index.ts";
+import type { HubClient } from "./client.ts";
 
 function FullPage({ title, lines = [], titleTip, busy = false, action, testId }: { title: string; lines?: readonly string[]; titleTip?: string; busy?: boolean; action?: React.ReactNode; testId?: string }) {
   return (
@@ -266,6 +267,15 @@ function railProps(c: ShellContent) {
   };
 }
 
+function FirstRunProviderCheck({ client, onDone }: { client: HubClient; onDone: (openProviders: boolean) => void }) {
+  const catalogs = useServerModelCatalogs({ enabled: true, client });
+  useEffect(() => {
+    if (catalogs === undefined || catalogs.length === 0) return;
+    onDone(catalogs.every((c) => !isSelectable(c.availability)));
+  }, [catalogs, onDone]);
+  return null;
+}
+
 export function App() {
   const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -301,20 +311,92 @@ export function App() {
     () => openManageProvidersRef?.(LOCAL_DEVICE),
     [openManageProvidersRef],
   );
+  const toggleDrawer = useCallback(() => setDrawerOpen((v) => !v), []);
+  const active = content?.active ?? null;
+  const look = content?.look;
+  const compact = content?.compact ?? false;
+  const profile = content?.profile ?? null;
+  const openWorker = content?.openWorker ?? null;
+  const railOpen = content?.railOpen ?? false;
+  const routerActive = content?.routerActive ?? false;
+  const view = content?.view;
+  const railHasContent = content?.railHasContent ?? false;
+  const quotaFetchable = content?.quotaFetchable ?? false;
+  const quota = quotaUsage(state);
+  const quotaInHeader = routerActive || (state.phase === "ready" && !profile && (openWorker !== null || (active && view)));
+  const quotaSlot = useMemo(
+    () => (quotaInHeader ? <QuotaPopover quota={quota} fetchable={quotaFetchable} placement="header" /> : null),
+    [quotaInHeader, quota, quotaFetchable],
+  );
+  const mobileToggle = useMemo(
+    () => <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAttention} look={look} onToggle={toggleDrawer} />,
+    [railHasContent, drawerOpen, railAttention, look, toggleDrawer],
+  );
+  const railControl = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
+  const toolbar = useMemo(() => <>{quotaSlot}{railControl}</>, [quotaSlot, railControl]);
+  const activeId = active?.id ?? null;
+  const routeView = route?.view ?? null;
+  const back = useCallback(
+    () => mobileBack(routeView !== "conversation" && activeId !== null ? { view: "conversation", id: activeId, ...routeDeviceOf(current.key) } : null, replace),
+    [routeView, activeId, current.key, replace],
+  );
+  const leading = useMemo(
+    () =>
+      mobile ? (
+        <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}>
+          <ArrowLeft aria-hidden="true" />
+        </Button>
+      ) : undefined,
+    [mobile, back],
+  );
+  const railAsks = content?.railAsks;
+  const railWorkers = content?.railWorkers;
+  const railGraphs = content?.railGraphs;
+  const railProjectId = content?.railProjectId;
+  const openAsk = content?.openAsk;
+  const openWorkerConversation = content?.openWorkerConversation;
+  const railLoadMoreWorkers = content?.railLoadMoreWorkers;
+  const ensureWorkers = content?.ensureWorkers;
+  const rail = useMemo(
+    () =>
+      content !== null && !routerActive && railOpen ? (
+        <RightRail
+          asks={railAsks!}
+          workers={railWorkers!}
+          activeGraphs={railGraphs}
+          projectId={railProjectId}
+          openWorkerId={openWorker}
+          look={look}
+          onOpenAsk={openAsk!}
+          onOpenWorker={openWorkerConversation!}
+          onLoadMoreWorkers={railLoadMoreWorkers}
+          onNeedWorkers={ensureWorkers}
+          layout={compact ? "top" : "side"}
+          toggle={railToggle}
+        />
+      ) : null,
+    [
+      content !== null,
+      routerActive,
+      railOpen,
+      railAsks,
+      railWorkers,
+      railGraphs,
+      railProjectId,
+      openWorker,
+      look,
+      openAsk,
+      openWorkerConversation,
+      railLoadMoreWorkers,
+      ensureWorkers,
+      compact,
+      railToggle,
+    ],
+  );
   const gate = gatePage(model, mobile);
   if (gate !== null) return gate;
   if (content === null) return null;
 
-  const { active, look, compact, profile, openWorker, railOpen, routerActive, view } = content;
-  const mobileToggle = <RightRailToggle visible={content.railHasContent} open={drawerOpen} attention={railAttention} look={look} onToggle={() => setDrawerOpen(!drawerOpen)} />;
-  const quota = quotaUsage(state);
-  const quotaInHeader = routerActive || (state.phase === "ready" && !profile && (openWorker !== null || (active && view)));
-  const quotaSlot = quotaInHeader ? <QuotaPopover quota={quota} fetchable={content.quotaFetchable} placement="header" /> : null;
-  const railControl = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
-  const toolbar = <>{quotaSlot}{railControl}</>;
-  const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
-  const leading = mobile ? <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
-  const rail = !routerActive && railOpen ? <RightRail {...railProps(content)} layout={compact ? "top" : "side"} toggle={railToggle} /> : null;
   const settingsRoute = mobile && route?.view === "settings" ? route : null;
   const tintColor = routerActive || settingsRoute !== null ? null : (active?.look.color ?? null);
   const chat = (
@@ -366,6 +448,9 @@ export function App() {
                   onCreated={content.created}
                   onManageProviders={content.openManageProviders}
                 />
+                {content.firstRunCheck !== null && (
+                  <FirstRunProviderCheck client={content.firstRunCheck.client} onDone={content.firstRunCheck.onDone} />
+                )}
               </FruitTint>
             </div>
           </CapabilityProjects>

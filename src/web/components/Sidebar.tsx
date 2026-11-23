@@ -1,5 +1,5 @@
 import { ChevronRight, Plus } from "../ui/icons.ts";
-import { Fragment, memo, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
 import type { ConversationRef, NotifySettings } from "../notify.ts";
@@ -114,7 +114,8 @@ function NarrowRouterButton({ router, active }: { router: SidebarRouterEntry; ac
   );
 }
 
-function EntryButton({
+const EntryButton = memo(function EntryButton({
+  deviceKey,
   entry,
   active,
   waiting,
@@ -122,12 +123,13 @@ function EntryButton({
   device,
   onSelect,
 }: {
+  deviceKey: DeviceKey;
   entry: ConversationEntry;
   active: boolean;
   waiting: boolean;
   asking: boolean;
   device?: string;
-  onSelect: () => void;
+  onSelect: (ref: ConversationRef) => void;
 }) {
   const tag =
     entry.pm?.archivedAt != null ? (
@@ -146,7 +148,7 @@ function EntryButton({
       aria-current={active ? "true" : undefined}
       className={cn(ROW, JELLY_ROW(active))}
       style={jellyStyleOf(entry.look.color)}
-      onClick={onSelect}
+      onClick={() => onSelect({ device: deviceKey, id: entry.id })}
     >
       <Avatar look={entry.look} size={ROW_AVATAR} />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -167,20 +169,22 @@ function EntryButton({
       </span>
     </button>
   );
-}
+});
 
-function NarrowEntryButton({
+const NarrowEntryButton = memo(function NarrowEntryButton({
+  deviceKey,
   entry,
   active,
   waiting,
   asking,
   onSelect,
 }: {
+  deviceKey: DeviceKey;
   entry: ConversationEntry;
   active: boolean;
   waiting: boolean;
   asking: boolean;
-  onSelect: () => void;
+  onSelect: (ref: ConversationRef) => void;
 }) {
   return (
     <button
@@ -192,7 +196,7 @@ function NarrowEntryButton({
         JELLY_ROW(active),
       )}
       style={jellyStyleOf(entry.look.color)}
-      onClick={onSelect}
+      onClick={() => onSelect({ device: deviceKey, id: entry.id })}
     >
       <span className="relative">
         <Avatar look={entry.look} size={40} />
@@ -217,7 +221,7 @@ function NarrowEntryButton({
       <span className="sr-only">{entry.name}</span>
     </button>
   );
-}
+});
 
 function matches(entry: ConversationEntry, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -319,11 +323,15 @@ export const Sidebar = memo(
     const [internalSettingsOpen, setInternalSettingsOpen] = useState(false);
     const dialogOpen = propSettingsOpen ?? internalSettingsOpen;
     const setDialogOpen = onSettingsOpenChange ?? setInternalSettingsOpen;
-    const handleOpenSettings = () => {
+    const handleOpenSettings = useCallback(() => {
       if (layout === "page" && onOpenSettings) onOpenSettings();
       else setDialogOpen(true);
-    };
-    const tools = <SidebarTools narrow={narrow} quota={quota} quotaFetchable={quotaFetchable} onNewPm={onNewPm} onOpenSettings={handleOpenSettings} onOpenUpdates={onOpenSettingsSection ? () => onOpenSettingsSection("updates") : handleOpenSettings} />;
+    }, [layout, onOpenSettings]);
+    const handleOpenUpdates = useCallback(
+      () => (onOpenSettingsSection ? onOpenSettingsSection("updates") : handleOpenSettings()),
+      [onOpenSettingsSection, handleOpenSettings],
+    );
+    const tools = <SidebarTools narrow={narrow} quota={quota} quotaFetchable={quotaFetchable} onNewPm={onNewPm} onOpenSettings={handleOpenSettings} onOpenUpdates={handleOpenUpdates} />;
     const [collapsed, setCollapsed] = useState<ReadonlySet<DeviceKey>>(new Set());
     const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<DeviceKey>>(new Set());
     const grouped = groups.length > 1;
@@ -343,12 +351,13 @@ export const Sidebar = memo(
       return (
         <EntryButton
           key={key}
+          deviceKey={group.key}
           entry={entry}
           active={active !== null && active.device === group.key && active.id === entry.id}
           waiting={waiting.has(key)}
           asking={asking.has(key)}
           device={device}
-          onSelect={() => onSelect({ device: group.key, id: entry.id })}
+          onSelect={onSelect}
         />
       );
     };
@@ -413,11 +422,12 @@ export const Sidebar = memo(
                 return (
                   <NarrowEntryButton
                     key={key}
+                    deviceKey={group.key}
                     entry={entry}
                     active={active !== null && active.device === group.key && active.id === entry.id}
                     waiting={waiting.has(key)}
                     asking={asking.has(key)}
-                    onSelect={() => onSelect({ device: group.key, id: entry.id })}
+                    onSelect={onSelect}
                   />
                 );
               })}

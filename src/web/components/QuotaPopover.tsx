@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { CircleGauge } from "../ui/icons.ts";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { useClient } from "../device-scope.tsx";
 import { formatQuotaReset } from "../format.ts";
 import { fetchedQuotaUsage, type QuotaVendor, type QuotaWindowUsage } from "../selectors.ts";
@@ -46,7 +46,7 @@ function groupByVendor(blocks: QuotaVendor[]): { name: string; blocks: QuotaVend
   return sections;
 }
 
-export function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }: {
+export const QuotaPopover = memo(function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }: {
   quota: QuotaVendor[];
   fetchable?: boolean;
   placement?: "sidebar" | "header";
@@ -113,4 +113,4 @@ export function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }
       </PopoverContent>
     </Popover>
   );
-}
+});
