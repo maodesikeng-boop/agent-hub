@@ -195,8 +195,9 @@ describe("第二次 Esc 回退内容到输入框", () => {
       ),
     );
     push(ws, sessionChange(12, makeSession({ status: "running", activity: "working" })));
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    expect(within(nav).getByRole("button", { name: /小林/ })).toHaveTextContent("把鉴权逻辑抽成中间件");
+    const nav = screen.getByRole("region", { name: "Project managers" });
+    const row = within(nav).getAllByRole("button", { name: /小林/ }).find((b) => !b.closest(".row-shortcuts"))!;
+    expect(row).toHaveTextContent("把鉴权逻辑抽成中间件");
 
     // 焦点故意离开输入框，验证第二次 Esc 会主动聚焦回输入框并把光标放到末尾
     box().blur();
@@ -223,7 +224,7 @@ describe("第二次 Esc 回退内容到输入框", () => {
     expect(screen.getByRole("button", { name: /^Worker model:/ })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Worker model" })).not.toBeInTheDocument();
     expect(within(log()).queryByText("把鉴权逻辑抽成中间件")).not.toBeInTheDocument();
-    expect(within(nav).getByRole("button", { name: /小林/ })).toHaveTextContent("早，要做什么？");
+    expect(row).toHaveTextContent("早，要做什么？");
     await waitFor(() => expect(api.callsTo("POST", /\/conversations\/1\/rewind$/)).toHaveLength(1));
   });
 
@@ -452,8 +453,8 @@ describe("跨项目经理（6 家厂商）与 Worker 对话一致生效", () => 
     expect(workerBox.selectionStart).toBe("顺便检查窄屏折行".length);
     await waitFor(() => expect(api.callsTo("POST", /\/conversations\/30\/rewind$/)).toHaveLength(1));
 
-    // 返回项目经理对话，项目经理自己的草稿完好无损
-    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
+    // 关闭 Worker 侧栏回到项目经理对话，项目经理自己的草稿完好无损
+    await user.click(screen.getByRole("button", { name: "Close Piece" }));
     expect(box().value).toBe("给项目经理留的话");
   });
 });

@@ -226,10 +226,10 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(css).toMatch(/--safe-top:\s*env\(safe-area-inset-top, 0px\)/);
     expect(css).toMatch(/--safe-bottom:\s*env\(safe-area-inset-bottom, 0px\)/);
     expect(css).toMatch(/\.chat-main\s*\{[^}]*padding-top:\s*var\(--safe-top\)[^}]*padding-bottom:\s*var\(--safe-bottom\)/s);
-    expect(readFileSync("src/web/components/Sidebar.tsx", "utf8")).toMatch(
+    expect(readFileSync("src/web/components/AppRail.tsx", "utf8")).toMatch(
       /pt-\[calc\(var\(--safe-top\)\+var\(--macos-traffic-lights-height\)\)\][^"]*pb-\[var\(--safe-bottom\)\]|pb-\[var\(--safe-bottom\)\][^"]*pt-\[calc\(var\(--safe-top\)\+var\(--macos-traffic-lights-height\)\)\]/,
     );
-    for (const file of ["Sidebar", "Conversation", "WorkerConversation", "PmProfile", "Composer", "RouterWorkbench", "RouterDecisionCard"]) {
+    for (const file of ["AppRail", "ProjectList", "SidePanel", "ProfilePanel", "Conversation", "WorkerConversation", "Composer", "RouterWorkbench", "RouterDecisionCard"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8"), `${file} 不直接写 env(`).not.toContain("env(");
     }
   });
@@ -275,8 +275,8 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(readFileSync("src/web/components/RightRail.tsx", "utf8")).toContain("pointer-coarse:min-h-11");
   });
 
-  it("没有悬停才出现的操作", () => {
-    for (const file of ["Messages", "RightRail", "Sidebar", "Composer", "Conversation", "RouterWorkbench", "RouterDecisionCard"]) {
+  it("没有悬停才出现的操作（仅项目列表行的快捷按键按媒体悬停规范显隐）", () => {
+    for (const file of ["Messages", "RightRail", "AppRail", "ProjectList", "SidePanel", "ProfilePanel", "Composer", "Conversation", "RouterWorkbench", "RouterDecisionCard"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8")).not.toMatch(/group-hover:(opacity|visible)|opacity-0/);
     }
   });

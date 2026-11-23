@@ -5,6 +5,7 @@ import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
 import { Button } from "../ui/button.tsx";
+import { ChevronDown } from "../ui/icons.ts";
 import { Avatar } from "./Avatar.tsx";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
 import { conversationSource } from "../composer-suggest.ts";
@@ -131,24 +132,37 @@ export function Conversation({
   const statusNode = useAgentStatusNode(session);
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
-      <header data-window-drag className="flex min-h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
-        {leading}
-        {entry.pm ? (
-          <button
-            type="button"
-            aria-label={`View ${entry.pm.name}'s profile`}
-            className="touch-target shrink-0 cursor-pointer outline-none focus-visible:outline-2 focus-visible:outline-border-focus"
-            onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
-          >
-            <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} />
-          </button>
-        ) : (
-          <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} />
-        )}
-        <div className="min-w-0 flex-1">
-          <h1 title={entry.name} className="w-fit max-w-full truncate text-title leading-snug font-semibold">
-            {entry.name}
-          </h1>
+      <header
+        data-window-drag
+        className={
+          mobile
+            ? "flex min-h-14 min-w-0 shrink-0 items-center justify-between gap-2 overflow-hidden border-b-2 border-border pt-[var(--safe-top)] pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+            : "flex h-14 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b-2 border-border pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+        }
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {leading}
+          {entry.pm ? (
+            <button
+              type="button"
+              aria-label={`View ${entry.pm.name}'s profile`}
+              className="-ml-1.5 flex h-11 min-w-0 max-w-full cursor-pointer items-center gap-2.5 pr-2 pl-1.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+              onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
+            >
+              <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} className="shrink-0" />
+              <h1 title={entry.name} className="min-w-0 truncate text-title leading-snug font-semibold text-foreground">
+                {entry.name}
+              </h1>
+              <ChevronDown className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+          ) : (
+            <div className="flex min-w-0 items-center gap-2.5">
+              <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} className="shrink-0" />
+              <h1 title={entry.name} className="min-w-0 truncate text-title leading-snug font-semibold text-foreground">
+                {entry.name}
+              </h1>
+            </div>
+          )}
         </div>
         {toolbar}
       </header>

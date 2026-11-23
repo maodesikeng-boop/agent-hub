@@ -16,27 +16,46 @@ function snapshot({ setupCommand = SAVED as string | null, archivedAt = null as 
   });
 }
 
-async function boot(options: Parameters<typeof snapshot>[0] = {}) {
-  window.history.replaceState(null, "", "/#/pm/1");
+async function boot(options: Parameters<typeof snapshot>[0] = {}, hash = "/#/pm/1/worktree") {
+  window.history.replaceState(null, "", hash);
   const api = new FakeApi(snapshot(options));
   api.install();
   installFakeWebSocket();
   render(<App />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.last.open());
-  const page = await screen.findByRole("region", { name: "小林's profile" });
+  const page = await screen.findByRole("complementary", { name: "小林's settings" });
+  if (hash.endsWith("/worktree")) {
+    const group = await within(page).findByRole("region", { name: "Worktree setup" });
+    const box = within(group).getByRole("textbox", { name: "Worktree setup" });
+    return { api, user: userEvent.setup(), page, group, box, ws: FakeWebSocket.last };
+  }
+  const nav = await within(page).findByRole("navigation", { name: "Project manager settings pages" });
+  const user = userEvent.setup();
+  await user.click(within(nav).getByRole("button", { name: /Worktree setup/ }));
   const group = await within(page).findByRole("region", { name: "Worktree setup" });
   const box = within(group).getByRole("textbox", { name: "Worktree setup" });
-  return { api, user: userEvent.setup(), group, box, ws: FakeWebSocket.last };
+  return { api, user, page, group, box, ws: FakeWebSocket.last };
 }
 
 const button = (group: HTMLElement, name: string) => within(group).queryByRole("button", { name });
 
 describe("资料页 → Worktree setup：准备命令查看、编辑、清空", () => {
-  it("挨着 Folders；已存的多行命令原样显示（等宽），旁边只有 Clear，没改时没有 Save", async () => {
-    const { group, box } = await boot();
-    const folders = screen.getByRole("region", { name: "Folders" });
-    expect(folders.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  it("从摘要页 Folders 下方的入口打开；已存的多行命令原样显示（等宽），旁边只有 Clear，没改时没有 Save", async () => {
+    window.history.replaceState(null, "", "/#/pm/1");
+    const api = new FakeApi(snapshot());
+    api.install();
+    installFakeWebSocket();
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.last.open());
+    const page = await screen.findByRole("complementary", { name: "小林's settings" });
+    const folders = await within(page).findByRole("region", { name: "Folders" });
+    const nav = within(page).getByRole("navigation", { name: "Project manager settings pages" });
+    expect(folders.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.setup().click(within(nav).getByRole("button", { name: /Worktree setup/ }));
+    const group = await within(page).findByRole("region", { name: "Worktree setup" });
+    const box = within(group).getByRole("textbox", { name: "Worktree setup" });
     expect(box).toHaveValue(SAVED);
     expect(box).toHaveClass("font-mono");
     expect(button(group, "Clear")).toBeInTheDocument();

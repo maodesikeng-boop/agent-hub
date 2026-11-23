@@ -18,7 +18,7 @@ import { errorText, formatTime, type ErrorLike } from "../format.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
-import { CollapsibleGroup, RowError, SettingsRow } from "./SettingsList.tsx";
+import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 const SOFT_SUBFILE_COUNT = Math.ceil(PM_MEMORY_MAX_SUBFILES * PM_MEMORY_SOFT_WARN_RATIO);
 const SOFT_SUBFILE_BYTES = Math.ceil(PM_MEMORY_MAX_SUBFILE_BYTES * PM_MEMORY_SOFT_WARN_RATIO);
@@ -472,8 +472,8 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
 
 export function PmMemoryFilesGroup({ pmId, archived = false }: { pmId: number; archived?: boolean }) {
   return (
-    <CollapsibleGroup title="Memory files">
+    <SettingsGroup title="Memory files">
       <PmMemoryFilesBody pmId={pmId} archived={archived} />
-    </CollapsibleGroup>
+    </SettingsGroup>
   );
 }

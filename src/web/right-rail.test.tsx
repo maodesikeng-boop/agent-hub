@@ -4,7 +4,8 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationId, Message, MessageId } from "../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../shared/index.ts";
-import { PieceMeta, RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RailGroups, RightRail, RightRailToggle } from "./components/RightRail.tsx";
+import { PieceMeta, PiecesSlot, RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RailGroups } from "./components/RightRail.tsx";
+import { SidePanel } from "./components/SidePanel.tsx";
 import { cleanPieceTitle } from "./format.ts";
 import { ModelCatalogProvider } from "./models.tsx";
 import type { WorkerEntry } from "./selectors.ts";
@@ -29,15 +30,24 @@ const ask = (id: number): Message => makeMessage({ id, text: `问题 ${id}`, met
 
 function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWorkerId?: ConversationId | null; look?: SlimeLook; onOpenAsk?: (id: MessageId) => void; onOpenWorker?: (id: ConversationId) => void } = {}) {
   render(
-    <RightRail
-      asks={props.asks ?? []}
-      workers={props.workers ?? []}
-      openWorkerId={props.openWorkerId ?? null}
+    <SidePanel
       layout="side"
-      look={props.look ?? defaultLookOf(0)}
-      onOpenAsk={props.onOpenAsk ?? (() => {})}
-      onOpenWorker={props.onOpenWorker ?? (() => {})}
-    />,
+      label="Side panel"
+      title={<span className="truncate px-1 text-title font-semibold text-foreground">Pieces</span>}
+      onClose={() => {}}
+      closeLabel="Close side panel"
+    >
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-5 py-3">
+        <RailGroups
+          asks={props.asks ?? []}
+          workers={props.workers ?? []}
+          openWorkerId={props.openWorkerId ?? null}
+          look={props.look ?? defaultLookOf(0)}
+          onOpenAsk={props.onOpenAsk ?? (() => {})}
+          onOpenWorker={props.onOpenWorker ?? (() => {})}
+        />
+      </div>
+    </SidePanel>,
   );
 }
 const workerGroup = () => screen.getByRole("region", { name: /^Pieces/ });
@@ -181,36 +191,28 @@ describe("RailGroups：右栏和手机抽屉共用的三组（不带 aside 外�
   });
 });
 
-describe("右栏：顶上不留空", () => {
-  const toggle = <button type="button" aria-label="Hide side panel" />;
-  const renderWithToggle = (props: { asks?: Message[]; workers?: WorkerEntry[] }) =>
-    render(<RightRail asks={props.asks ?? []} workers={props.workers ?? []} openWorkerId={null} layout="side" toggle={toggle} onOpenAsk={() => {}} onOpenWorker={() => {}} />);
-
-  it("开关和第一组的标题在同一行（右边），开关上面没有单独的一行；内容从最顶上开始", () => {
-    renderWithToggle({ workers: [busy(30)] });
-    const aside = screen.getByRole("complementary", { name: "Side panel" });
-    const heading = within(workerGroup()).getByRole("heading");
-    expect(within(heading.parentElement!).getByRole("button", { name: "Hide side panel" })).toBeInTheDocument();
-    expect(heading.parentElement).toHaveClass("flex", "items-center");
-    // aside 里第一个元素就是滚动的内容区，没有放开关的 64px 高的空行
-    expect(aside.firstElementChild).toBe(workerGroup().parentElement);
-    expect(aside.innerHTML).not.toMatch(/h-16/);
-  });
-
-  it("有“等你确定”时开关在“等你确定”那一行，Worker 那一行没有；只有一个开关", () => {
-    renderWithToggle({ asks: [ask(1)], workers: [busy(30)] });
-    expect(within(asksGroup()).getByRole("button", { name: "Hide side panel" })).toBeInTheDocument();
-    expect(within(workerGroup()).queryByRole("button", { name: "Hide side panel" })).toBeNull();
-    expect(screen.getAllByRole("button", { name: "Hide side panel" })).toHaveLength(1);
-  });
-
-  it("点标题还是收起这一组；点开关不会连带收起（两个按钮各管各的）", async () => {
+describe("右栏：Pieces 侧栏顶栏", () => {
+  it("SidePanel 顶栏标题与关闭按钮同一行；收起组不点穿关闭按钮", async () => {
     const user = userEvent.setup();
-    renderWithToggle({ workers: [busy(30)] });
-    await user.click(screen.getByRole("button", { name: "Hide side panel" }));
-    expect(titleButton(workerGroup())).toHaveAttribute("aria-expanded", "true");
+    const onClose = vi.fn();
+    render(
+      <SidePanel
+        layout="side"
+        label="Side panel"
+        title={<span className="truncate px-1 text-title font-semibold text-foreground">Pieces</span>}
+        onClose={onClose}
+        closeLabel="Close side panel"
+      >
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-3">
+          <RailGroups asks={[]} workers={[busy(30)]} openWorkerId={null} onOpenAsk={() => {}} onOpenWorker={() => {}} />
+        </div>
+      </SidePanel>,
+    );
+    const aside = screen.getByRole("complementary", { name: "Side panel" });
+    expect(within(aside).getByRole("button", { name: "Close side panel" })).toBeInTheDocument();
     await user.click(titleButton(workerGroup()));
     expect(titleButton(workerGroup())).toHaveAttribute("aria-expanded", "false");
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 
@@ -322,7 +324,7 @@ describe("右栏：只列几条", () => {
     let finish: (() => void) | undefined;
     const onLoadMoreWorkers = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
     const { rerender } = render(
-      <RightRail asks={[]} workers={[done(1)]} openWorkerId={null} layout="side" onOpenAsk={() => {}} onOpenWorker={() => {}} onLoadMoreWorkers={onLoadMoreWorkers} />,
+      <RailGroups asks={[]} workers={[done(1)]} openWorkerId={null} onOpenAsk={() => {}} onOpenWorker={() => {}} onLoadMoreWorkers={onLoadMoreWorkers} />,
     );
     await user.click(titleButton(completedGroup()));
     await user.click(within(completedGroup()).getByRole("button", { name: "Load more" }));
@@ -330,14 +332,14 @@ describe("右栏：只列几条", () => {
     expect(within(completedGroup()).getByRole("button", { name: "Loading…" })).toBeInTheDocument();
     finish!();
     expect(await within(completedGroup()).findByRole("button", { name: "Load more" })).toBeInTheDocument();
-    rerender(<RightRail asks={[]} workers={[done(1)]} openWorkerId={null} layout="side" onOpenAsk={() => {}} onOpenWorker={() => {}} />);
+    rerender(<RailGroups asks={[]} workers={[done(1)]} openWorkerId={null} onOpenAsk={() => {}} onOpenWorker={() => {}} />);
     expect(within(completedGroup()).queryByRole("button", { name: "Load more" })).toBeNull();
   });
 
-  it("只有收工的（手动打开右栏）：只有 Completed 一组，开关放在它那一行", () => {
-    render(<RightRail asks={[]} workers={[done(1)]} openWorkerId={null} layout="side" toggle={<button type="button" aria-label="Hide side panel" />} onOpenAsk={() => {}} onOpenWorker={() => {}} />);
+  it("只有收工的（手动打开右栏）：只有 Completed 一组", () => {
+    render(<RailGroups asks={[]} workers={[done(1)]} openWorkerId={null} onOpenAsk={() => {}} onOpenWorker={() => {}} />);
     expect(screen.queryByRole("region", { name: /^Pieces/ })).toBeNull();
-    expect(within(completedGroup()).getByRole("button", { name: "Hide side panel" })).toBeInTheDocument();
+    expect(completedGroup()).toBeInTheDocument();
   });
 
   it("正开着的是收工的 Piece：Completed 自动展开，当前那行看得见", () => {
@@ -461,18 +463,18 @@ describe("右栏：每组可以收起", () => {
   });
 });
 
-describe("RightRailToggle: Piece 纸片分身图标", () => {
+describe("PiecesSlot: Piece 纸片分身图标", () => {
   it("开关使用当前项目经理那只小动物的纸片分身（Avatar neutral 20px，按根字号缩放）", () => {
-    render(<RightRailToggle visible open={false} attention={false} look={defaultLookOf(3)} onToggle={() => {}} />);
-    const button = screen.getByRole("button", { name: "Show side panel" });
+    render(<PiecesSlot visible open={false} attention={false} count={0} look={defaultLookOf(3)} onToggle={() => {}} />);
+    const button = screen.getByRole("button", { name: "Show Pieces" });
     const avatar = button.querySelector("[data-neutral='true']");
     expect(avatar).toBeInTheDocument();
     expect((avatar as HTMLElement).style.width).toBe("1.25rem");
   });
 
   it("有等你确定且收起时右上角显示 6px 强调色小方块", () => {
-    render(<RightRailToggle visible open={false} attention={true} look={defaultLookOf(1)} onToggle={() => {}} />);
-    const button = screen.getByRole("button", { name: /needs you/ });
+    render(<PiecesSlot visible open={false} attention={true} count={2} look={defaultLookOf(1)} onToggle={() => {}} />);
+    const button = screen.getByRole("button", { name: "Show Pieces (needs you)" });
     expect(button.querySelector("span.bg-primary")).toHaveClass("size-1.5");
     expect(button.querySelector("span.bg-primary")!.className).not.toMatch(/rounded-/);
   });
@@ -534,18 +536,21 @@ describe("PieceMeta 与右栏窄屏收缩防溢出", () => {
 
   it("右栏外壳与各折叠组标题均带 min-w-0 / truncate，防止窄窗挤折行或跨栏撑破", () => {
     render(
-      <RightRail
-        asks={[ask(1)]}
-        workers={[busy(30), done(31)]}
-        openWorkerId={null}
+      <SidePanel
         layout="side"
-        toggle={<button type="button" aria-label="Hide side panel" />}
-        onOpenAsk={() => {}}
-        onOpenWorker={() => {}}
-      />,
+        label="Side panel"
+        title={<span className="truncate px-1 text-title font-semibold text-foreground">Pieces</span>}
+        onClose={() => {}}
+        closeLabel="Close side panel"
+      >
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-3">
+          <RailGroups asks={[ask(1)]} workers={[busy(30), done(31)]} openWorkerId={null} onOpenAsk={() => {}} onOpenWorker={() => {}} />
+        </div>
+      </SidePanel>,
     );
     const aside = screen.getByRole("complementary", { name: "Side panel" });
-    expect(aside).toHaveClass("min-w-0", "overflow-hidden");
+    expect(aside).toHaveClass("min-w-0");
+    expect(aside.lastElementChild).toHaveClass("overflow-hidden");
     for (const group of [asksGroup(), workerGroup(), completedGroup()]) {
       const heading = within(group).getByRole("heading");
       expect(heading).toHaveClass("min-w-0");

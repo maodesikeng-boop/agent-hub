@@ -60,13 +60,13 @@ function twoPms(lin: Message[], ma: Message[] = [makeUserMessage({ id: 21, conve
 }
 
 const QUESTION = "用 **方案 A** 还是方案 B？\n\n- A：保留三栏\n- B：单栏信息流";
-const rail = () => screen.queryByRole("complementary", { name: "Side panel" });
+const rail = () => screen.queryByRole("complementary", { name: "Pieces" });
 /** 右栏里的“等你确定”组；没有是 null。 */
 const asksGroup = () => (rail() === null ? null : within(rail()!).queryByRole("region", { name: /^Needs You/ }));
 /** 提问的行（不含组标题的收起按钮、同一行右边的整栏开关和 Show more）。 */
 const askRows = () => within(asksGroup()!).getAllByRole("button").filter((b) => !b.closest("h2") && b.getAttribute("aria-controls") !== "right-rail" && b.textContent !== "Show more");
-const nav = () => screen.getByRole("navigation", { name: "Conversations" });
-const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
+const nav = () => screen.getByRole("region", { name: "Project managers" });
+const row = (name: string) => within(nav()).getAllByRole("button", { name: new RegExp(name) }).find((b) => !b.closest(".row-shortcuts"))!;
 const hasTag = (name: string) => within(row(name)).queryByLabelText("Needs You") !== null;
 const askedByOldMa = () => twoPms([makeUserMessage({ id: 1, text: "小林说话了", createdAt: 20_000 })], [ask({ id: 22, conversationId: 2, text: QUESTION, createdAt: 9_000 })]);
 const answered = (over: Partial<Message> & Pick<Message, "id">) => ask({ ...over, meta: { needsUser: true, answered: true } });
@@ -166,9 +166,10 @@ describe("右栏的“等你确定”", () => {
     snapshot.conversations.push(makeConvSnapshot([makeMessage({ id: 40, conversationId: 30, text: "在干活" })], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "修 X" }) }));
     await boot(snapshot);
     fireEvent.click(within(rail()!).getByRole("button", { name: /修 X/ }));
-    expect(screen.getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "修 X" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Back to 小林" }));
     fireEvent.click(askRows()[0]!);
-    expect(screen.queryByRole("region", { name: "Piece 修 X" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "修 X" })).not.toBeInTheDocument();
     await waitFor(() => expect(document.querySelector('[data-message-id="1"]')).toHaveAttribute("data-highlighted", "true"));
   });
 });
@@ -191,12 +192,15 @@ describe("跳到提问只生效一次", () => {
     const snapshot = twoPms([ask({ id: 1, text: QUESTION })]);
     snapshot.conversations.push(makeConvSnapshot([makeMessage({ id: 40, conversationId: 30, text: "在干活" })], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "修 X" }) }));
     await boot(snapshot);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     fireEvent.click(askRows()[0]!);
     expect(scrolled).toHaveLength(1);
+    expect(messageOne()).toHaveAttribute("data-highlighted", "true");
     fireEvent.click(within(rail()!).getByRole("button", { name: /修 X/ }));
     fireEvent.click(row("小林"));
-    await waitFor(() => expect(messageOne()).toBeInTheDocument());
+    expect(messageOne()).toBeInTheDocument();
     expect(scrolled).toHaveLength(1);
+    act(() => void vi.advanceTimersByTime(2_000));
     expect(messageOne()).not.toHaveAttribute("data-highlighted", "true");
   });
 
@@ -265,7 +269,7 @@ describe("Notifications", () => {
     expect(FakeNotification.last.options.body).toBe(stripMarkdown(QUESTION));
     act(() => FakeNotification.last.onclick?.());
     expect(focus).toHaveBeenCalledOnce();
-    expect(row("老马")).toHaveAttribute("aria-current", "true");
+    expect(row("老马")).toHaveAttribute("aria-current", "page");
   });
 
   it("刚打开网页时已经有的提问不弹；同一条提问更新（比如被清掉）不再弹", async () => {

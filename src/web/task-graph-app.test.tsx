@@ -117,7 +117,7 @@ function plainSnapshot(name: string): StateSnapshot {
   });
 }
 
-const sidePanel = () => screen.getByRole("complementary", { name: "Side panel" });
+const sidePanel = () => screen.getByRole("complementary", { name: "Pieces" });
 
 beforeEach(() => {
   localStorage.clear();
@@ -403,9 +403,9 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
     expect(api.callsTo("POST", CANCEL_PATH)).toHaveLength(1);
   });
 
-  it("爆炸半径：带活跃任务图时连续 8 帧流式输出，RightRail 零重画", async () => {
+  it("爆炸半径：带活跃任务图时连续 8 帧流式输出，RailGroups 零重画", async () => {
     type MemoTarget = { type: (...args: unknown[]) => unknown };
-    const railSpy = vi.spyOn(RightRailMod.RightRail as unknown as MemoTarget, "type");
+    const railSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
     const { ws } = await bootSingle(graphSnapshot());
     await waitFor(() => expect(within(sidePanel()).getByRole("region", { name: /^Task Graph$/ })).toBeInTheDocument());
     railSpy.mockClear();
@@ -432,7 +432,7 @@ describe("手机抽屉：同一份 RailGroups", () => {
       removeEventListener() {},
     }));
     await bootSingle(graphSnapshot());
-    const toggle = await screen.findByRole("button", { name: "Show side panel (needs you)" });
+    const toggle = await screen.findByRole("button", { name: "Show Pieces (needs you)" });
     // vaul 的拖动手势要 setPointerCapture（jsdom 没有）：抽屉里用 fireEvent.click，和 mobile-shell.test.tsx 一样
     fireEvent.click(toggle);
     const drawer = await screen.findByRole("dialog", { name: "Pieces" });
@@ -456,7 +456,7 @@ describe("手机抽屉：流式帧", () => {
     type MemoTarget = { type: (...args: unknown[]) => unknown };
     const drawerSpy = vi.spyOn(PiecesDrawerMod.PiecesDrawer as unknown as MemoTarget, "type");
     const { ws } = await bootSingle(graphSnapshot());
-    fireEvent.click(await screen.findByRole("button", { name: "Show side panel (needs you)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show Pieces (needs you)" }));
     await screen.findByRole("dialog", { name: "Pieces" });
     drawerSpy.mockClear();
     for (let i = 1; i <= 8; i++) {

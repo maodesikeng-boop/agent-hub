@@ -64,9 +64,15 @@ function twoPms(busy: boolean): StateSnapshot {
   });
 }
 
-const nav = () => screen.getByRole("navigation", { name: "Conversations" });
-const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
-const hasName = (name: string) => within(nav()).queryByRole("button", { name: new RegExp(name) }) !== null;
+const nav = () => screen.getByRole("region", { name: "Project managers" });
+const row = (name: string) =>
+  within(nav())
+    .getAllByRole("button", { name: new RegExp(name) })
+    .find((b) => !b.closest(".row-shortcuts"))!;
+const hasName = (name: string) =>
+  within(nav())
+    .queryAllByRole("button", { name: new RegExp(name) })
+    .some((b) => !b.closest(".row-shortcuts"));
 const hasMark = (name: string) => within(row(name)).queryByRole("img", { name: "Your turn" }) !== null;
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
@@ -131,7 +137,7 @@ describe("通知和点通知", () => {
     const focus = vi.spyOn(window, "focus").mockImplementation(() => {});
     const ws = await boot(twoPms(true));
     vi.useFakeTimers();
-    expect(row("小林")).toHaveAttribute("aria-current", "true");
+    expect(row("小林")).toHaveAttribute("aria-current", "page");
 
     laoMaFinishes(ws, 11);
     wait(WAITING_SETTLE_MS);
@@ -143,7 +149,7 @@ describe("通知和点通知", () => {
     act(() => FakeNotification.last.onclick?.());
     act(() => setForeground(true)); // 浏览器听 window.focus() 回到前台
     expect(focus).toHaveBeenCalledOnce();
-    expect(row("老马")).toHaveAttribute("aria-current", "true");
+    expect(row("老马")).toHaveAttribute("aria-current", "page");
     expect(hasMark("老马")).toBe(false);
     expect(document.title).toBe(PRODUCT_NAME);
   });
@@ -303,8 +309,14 @@ describe("设置面板里的通知开关", () => {
 });
 
 describe("Search", () => {
-  const search = () => screen.getByRole("searchbox", { name: "Search" });
-  const names = () => within(nav()).queryAllByRole("button").map((b) => b.textContent ?? "");
+  const search = () => screen.getByRole("searchbox", { name: "Search conversations" });
+  const names = () =>
+    (screen.queryByRole("region", { name: "Project managers" })
+      ? within(nav())
+          .queryAllByRole("button")
+          .filter((b) => !b.closest(".row-shortcuts"))
+      : []
+    ).map((b) => b.textContent ?? "");
   const type = (value: string) => fireEvent.change(search(), { target: { value } });
   const withProjects = () => {
     const snapshot = twoPms(false);
@@ -353,19 +365,19 @@ describe("Search", () => {
     await boot(withProjects());
     type("没有这个");
     expect(names()).toEqual([]);
-    expect(nav()).toHaveTextContent(/^No matching conversations$/);
+    expect(screen.getByRole("region", { name: "This computer" })).toHaveTextContent(/No matching conversations$/);
     type("");
     expect(names()).toHaveLength(2);
   });
 
   it("筛掉了当前打开的对话：右边照常显示，不切换；清空后左栏还是它选中", async () => {
     await boot(withProjects());
-    expect(row("小林")).toHaveAttribute("aria-current", "true");
+    expect(row("小林")).toHaveAttribute("aria-current", "page");
     type("老马");
     expect(names()).toHaveLength(1);
     expect(screen.getByRole("heading", { name: "小林" })).toBeInTheDocument();
     type("");
-    expect(row("小林")).toHaveAttribute("aria-current", "true");
+    expect(row("小林")).toHaveAttribute("aria-current", "page");
   });
 
   it("筛选时“等你”标签照旧在；标题数字不受筛选影响", async () => {

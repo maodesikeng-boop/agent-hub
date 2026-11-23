@@ -1,20 +1,161 @@
-import { describe, it } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { shellLimitsPx, shellTierOf, useShellTier } from "./shell-layout.ts";
+import { applyUiScale, saveUiScale } from "./ui-scale.ts";
 
 describe("shellLimitsPx", () => {
-  it.todo("multiplies the rem limits by the root font size at the Default and Large scales");
-  it.todo("keeps the frame and seam widths in px at every scale");
+  it("multiplies the rem limits by the root font size at the Default and Large scales", () => {
+    expect(shellLimitsPx(16)).toEqual({
+      rail: 72,
+      strip: 72,
+      list: { min: 220, default: 264, max: 400 },
+      panel: { min: 360, default: 440, max: 720 },
+      chatMin: 480,
+      frame: 10,
+      seam: 2,
+    });
+    expect(shellLimitsPx(17.5)).toEqual({
+      rail: 78.75,
+      strip: 78.75,
+      list: { min: 240.625, default: 288.75, max: 437.5 },
+      panel: { min: 393.75, default: 481.25, max: 787.5 },
+      chatMin: 525,
+      frame: 10,
+      seam: 2,
+    });
+  });
+
+  it("keeps the frame and seam widths in px at every scale", () => {
+    for (const remPx of [14.5, 16, 17.5, 19]) {
+      const limits = shellLimitsPx(remPx);
+      expect(limits.frame).toBe(10);
+      expect(limits.seam).toBe(2);
+    }
+  });
 });
 
 describe("shellTierOf", () => {
-  it.todo("returns wide at 1146px and strip at 1145px with the panel open at the Default scale");
-  it.todo("returns strip down to 998px and stack below it with the panel open at the Default scale");
-  it.todo("uses the Large thresholds of 1253px, 1091px, and 857px at a 17.5px root");
-  it.todo("returns wide at 784px and strip below it with the panel closed at the Default scale");
-  it.todo("never returns stack while the panel is closed, however narrow the shell");
+  it("returns wide at 1146px and strip at 1145px with the panel open at the Default scale", () => {
+    expect(shellTierOf({ shellWidthPx: 1146, remPx: 16, panelOpen: true })).toBe("wide");
+    expect(shellTierOf({ shellWidthPx: 1145, remPx: 16, panelOpen: true })).toBe("strip");
+  });
+
+  it("returns strip down to 998px and stack below it with the panel open at the Default scale", () => {
+    expect(shellTierOf({ shellWidthPx: 998, remPx: 16, panelOpen: true })).toBe("strip");
+    expect(shellTierOf({ shellWidthPx: 997, remPx: 16, panelOpen: true })).toBe("stack");
+  });
+
+  it("uses the Large thresholds of 1253px, 1091px, and 857px at a 17.5px root", () => {
+    expect(shellTierOf({ shellWidthPx: 1253, remPx: 17.5, panelOpen: true })).toBe("wide");
+    expect(shellTierOf({ shellWidthPx: 1252, remPx: 17.5, panelOpen: true })).toBe("strip");
+    expect(shellTierOf({ shellWidthPx: 1091, remPx: 17.5, panelOpen: true })).toBe("strip");
+    expect(shellTierOf({ shellWidthPx: 1090, remPx: 17.5, panelOpen: true })).toBe("stack");
+    expect(shellTierOf({ shellWidthPx: 857, remPx: 17.5, panelOpen: false })).toBe("wide");
+    expect(shellTierOf({ shellWidthPx: 856, remPx: 17.5, panelOpen: false })).toBe("strip");
+  });
+
+  it("returns wide at 784px and strip below it with the panel closed at the Default scale", () => {
+    expect(shellTierOf({ shellWidthPx: 784, remPx: 16, panelOpen: false })).toBe("wide");
+    expect(shellTierOf({ shellWidthPx: 783, remPx: 16, panelOpen: false })).toBe("strip");
+  });
+
+  it("never returns stack while the panel is closed, however narrow the shell", () => {
+    for (const width of [700, 480, 120, 0]) {
+      expect(shellTierOf({ shellWidthPx: width, remPx: 16, panelOpen: false })).toBe("strip");
+    }
+  });
 });
 
 describe("useShellTier", () => {
-  it.todo("returns wide before the shell element mounts");
-  it.todo("re-evaluates when the shell element resizes");
-  it.todo("re-evaluates when the interface scale changes the root font size");
+  afterEach(() => {
+    document.documentElement.style.fontSize = "";
+    delete document.documentElement.dataset.uiScale;
+    localStorage.removeItem("agent-hub.uiScale");
+    vi.restoreAllMocks();
+  });
+
+  it("returns wide before the shell element mounts", () => {
+    const { result } = renderHook(({ el, open }) => useShellTier(el, open), {
+      initialProps: { el: null as HTMLElement | null, open: true },
+    });
+    expect(result.current).toBe("wide");
+  });
+
+  it("re-evaluates when the shell element resizes", () => {
+    let callback: ResizeObserverCallback | null = null;
+    class MockResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        callback = cb;
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+
+    applyUiScale("md");
+    const el = document.createElement("div");
+    let width = 1200;
+    vi.spyOn(el, "getBoundingClientRect").mockImplementation(() => ({
+      width,
+      height: 800,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: 800,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+
+    const { result } = renderHook(() => useShellTier(el, true));
+    expect(result.current).toBe("wide");
+
+    const fireResize = (nextWidth: number) => {
+      width = nextWidth;
+      act(() => {
+        callback?.([{ contentRect: { width: nextWidth } } as ResizeObserverEntry], {} as ResizeObserver);
+      });
+    };
+
+    fireResize(1050);
+    expect(result.current).toBe("strip");
+    fireResize(900);
+    expect(result.current).toBe("stack");
+    fireResize(1200);
+    expect(result.current).toBe("wide");
+  });
+
+  it("re-evaluates when the interface scale changes the root font size", async () => {
+    applyUiScale("md");
+    const el = document.createElement("div");
+    vi.spyOn(el, "getBoundingClientRect").mockReturnValue({
+      width: 1200,
+      height: 800,
+      top: 0,
+      left: 0,
+      right: 1200,
+      bottom: 800,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    const { result } = renderHook(() => useShellTier(el, true));
+    expect(result.current).toBe("wide");
+
+    act(() => saveUiScale("lg"));
+    expect(result.current).toBe("strip");
+
+    await act(async () => {
+      document.documentElement.style.fontSize = "19px";
+      await Promise.resolve();
+    });
+    expect(result.current).toBe("strip");
+    await act(async () => {
+      document.documentElement.style.fontSize = "16px";
+      await Promise.resolve();
+    });
+    expect(result.current).toBe("wide");
+  });
 });

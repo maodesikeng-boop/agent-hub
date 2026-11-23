@@ -4,9 +4,11 @@ import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx"
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { UpdateSettings } from "../../components/UpdateSettings.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
+import { cn } from "../../lib/utils.ts";
 import type { NotifySettings } from "../../notify.ts";
 import { useCachedResourcesSummary } from "../../resources-model.ts";
 import type { SettingsSection } from "../../route.ts";
+import type { QuotaVendor } from "../../selectors.ts";
 import {
   describeComputersSummary,
   describeNotifySummary,
@@ -32,6 +34,7 @@ export interface MobileSettingsProps {
   section: SettingsSection | undefined;
   notify: NotifySettings;
   devices: DeviceSettings | null;
+  quota?: readonly QuotaVendor[];
   defaultProviderDevice?: DeviceKey;
   onOpen: (section: SettingsSection) => void;
   onBack: () => void;
@@ -84,18 +87,53 @@ const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
   browsers: { title: "Signed-in browsers", render: (ctx) => <BrowsersPage {...(ctx.onSignedOut !== undefined ? { onSignedOut: ctx.onSignedOut } : {})} /> },
 };
 
+function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
+  const vendors = quota.filter((v) => v.windows.length > 0);
+  if (vendors.length === 0) return null;
+  return (
+    <SettingsGroup title="Usage">
+      {vendors.map((vendor) => (
+        <div key={vendor.id} className="grid gap-2.5 px-4 py-3">
+          {vendor.windows.map((w) => {
+            const full = w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100));
+            const barClass = full ? "bg-foreground" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-rail-ink";
+            return (
+              <div key={w.key} className="flex items-center gap-3 text-body">
+                <span className="min-w-28 truncate font-medium">{vendor.group ? `${vendor.name} (${vendor.group})` : vendor.name}</span>
+                <div
+                  role="progressbar"
+                  aria-label={`${vendor.name} ${w.short} usage`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={w.percent}
+                  className="h-2 min-w-0 flex-1 border border-border-strong bg-panel"
+                >
+                  <div className={cn("h-full", barClass)} style={{ width: `${w.percent}%` }} />
+                </div>
+                <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{`${w.percent}% ${w.short}`}</span>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </SettingsGroup>
+  );
+}
+
 function SettingsHome({
   notify,
   devices,
+  quota,
   vendorSynced,
   onOpen,
   onBack,
 }: {
   notify: NotifySettings;
   devices: DeviceSettings | null;
+  quota: readonly QuotaVendor[];
   vendorSynced: boolean;
   onOpen: (section: SettingsSection) => void;
-  onBack: () => void;
+  onBack?: () => void;
 }) {
   const { label: scaleLabel } = useUiScaleSetting();
   const providers = useCachedProvidersSummary();
@@ -104,7 +142,8 @@ function SettingsHome({
   const update = useCachedUpdateStatus();
   const updateReminder = updateReminderOf(update, useDismissedUpdate());
   return (
-    <SettingsPage title="Settings" home onBack={onBack}>
+    <SettingsPage title="Settings" home {...(onBack !== undefined ? { onBack } : {})}>
+      <UsageGroup quota={quota} />
       <SettingsGroup title="General">
         <SettingsNavRow icon={<Type aria-hidden="true" />} label="Interface scale" summary={scaleLabel} onClick={() => onOpen("scale")} />
         <SettingsNavRow icon={<Bell aria-hidden="true" />} label="Notifications" summary={describeNotifySummary(notify)} onClick={() => onOpen("notifications")} />
@@ -164,11 +203,14 @@ function SettingsHome({
   );
 }
 
+const NO_QUOTA: readonly QuotaVendor[] = [];
+
 // App rerenders on every streaming frame; all props here are stable.
 export const MobileSettings = memo(function MobileSettings({
   section,
   notify,
   devices,
+  quota = NO_QUOTA,
   defaultProviderDevice = LOCAL_DEVICE,
   onOpen,
   onBack,
@@ -186,7 +228,7 @@ export const MobileSettings = memo(function MobileSettings({
   return (
     <div data-testid="mobile-settings" className="flex h-full min-w-0 flex-1 flex-col">
       <Activity mode={spec === null ? "visible" : "hidden"}>
-        <SettingsHome notify={notify} devices={devices} vendorSynced={vendor.lastSummary !== null} onOpen={onOpen} onBack={onBack} />
+        <SettingsHome notify={notify} devices={devices} quota={quota} vendorSynced={vendor.lastSummary !== null} onOpen={onOpen} />
       </Activity>
       {spec !== null && (
         <SettingsPage key={section} title={spec.title} onBack={onBack} footer={spec.footer?.(ctx)}>

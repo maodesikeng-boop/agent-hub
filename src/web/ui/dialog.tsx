@@ -1,7 +1,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "./icons.ts";
 import type * as React from "react";
-import { useAccentContainer } from "../lib/accent-scope.tsx";
+import { AccentScope, useAccentColor } from "../lib/accent-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { Button } from "./button.tsx";
 
@@ -22,9 +22,9 @@ export function DialogContent({
   titleClassName?: string;
   fullScreen?: boolean;
 }) {
-  const container = useAccentContainer();
-  return (
-    <DialogPrimitive.Portal container={container}>
+  const accent = useAccentColor();
+  const content = (
+    <>
       <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-[rgb(28_25_23_/_0.34)]" />
       <DialogPrimitive.Content
         data-slot="dialog-content"
@@ -62,8 +62,9 @@ export function DialogContent({
           </>
         )}
       </DialogPrimitive.Content>
-    </DialogPrimitive.Portal>
+    </>
   );
+  return <DialogPrimitive.Portal>{accent === null ? content : <AccentScope color={accent}>{content}</AccentScope>}</DialogPrimitive.Portal>;
 }
 
 export function DialogBody({ className, ...props }: React.ComponentProps<"div">) {

@@ -10,6 +10,8 @@
   --color-rail-ink: var(--rail-ink);
   --color-rail-ink-soft: var(--rail-ink-soft);
   --color-rail-outline: var(--rail-outline);
+  --color-rail-danger: var(--rail-danger);
+  --color-rail-warn: var(--rail-warn);
   --color-list: var(--list);
   --color-list-edge: var(--list-edge);
   --color-list-hover: var(--list-hover);
@@ -98,10 +100,13 @@ html[data-ui-scale="xl"] {
 
   --rail: #ffcb3d;
   --rail-shade: #e9a417;
+  --rail-drag: #c98800;
   --rail-hover: #ffd966;
   --rail-ink: #4a2e00;
   --rail-ink-soft: #6e4a00;
   --rail-outline: #8a5300;
+  --rail-danger: #991b1b;
+  --rail-warn: #7c4100;
   --list: #fff4cc;
   --list-edge: #efd27d;
   --list-hover: #ffedb0;
@@ -133,7 +138,7 @@ html[data-ui-scale="xl"] {
   --warn-foreground: #8a4b00;
   --danger: #d92d20;
   --danger-soft: #feeeec;
-  --success: #16a34a;
+  --success: #15803d;
   --status-active: var(--success);
   --caution: #dba10b;
   --tube-empty-line: #d6cec0;
@@ -195,7 +200,6 @@ code {
   overflow-x: hidden;
   overscroll-behavior-y: contain;
 }
-.sidebar-list,
 .router-tray-scroll,
 .router-timeline,
 .messages-fade,
@@ -203,10 +207,6 @@ code {
 .dialog-body-fade {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent);
   mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent);
-}
-.sidebar-list {
-  --fade-top: 12px;
-  --fade-bottom: 20px;
 }
 .router-tray-scroll {
   --fade-top: 8px;
@@ -851,3 +851,83 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 
 [data-shell="mobile"] .composer-dock { padding-bottom: 8px; }
+
+.shell-sheet {
+  margin: 6px 6px 6px 0;
+  border: 2px solid var(--rail-shade);
+  background: var(--background);
+}
+
+.pane-handle {
+  position: relative;
+  width: 2px;
+  flex: none;
+  z-index: 3;
+  outline: none;
+}
+.pane-handle[data-tone="list"] {
+  background: var(--list-edge);
+}
+.pane-handle[data-tone="panel"] {
+  background: var(--border-strong);
+}
+.pane-handle-bar,
+.pane-handle-grip {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+}
+.pane-handle-bar {
+  top: 0;
+  bottom: 0;
+  left: -1px;
+  width: 4px;
+  background: var(--rail-shade);
+}
+.pane-handle-grip {
+  top: 50%;
+  left: -5px;
+  width: 12px;
+  height: 32px;
+  margin-top: -16px;
+  background: var(--rail);
+  border: 2px solid var(--rail-outline);
+}
+.pane-handle-dot {
+  position: absolute;
+  left: 2px;
+  width: 2px;
+  height: 2px;
+  background: var(--rail-outline);
+  box-shadow: 4px 0 0 var(--rail-outline);
+}
+.pane-handle[data-separator="hover"] .pane-handle-bar,
+.pane-handle[data-separator="hover"] .pane-handle-grip,
+.pane-handle[data-separator="focus"] .pane-handle-bar,
+.pane-handle[data-separator="focus"] .pane-handle-grip,
+.pane-handle:focus-visible .pane-handle-bar,
+.pane-handle:focus-visible .pane-handle-grip,
+.pane-handle[data-separator="active"] .pane-handle-bar,
+.pane-handle[data-separator="active"] .pane-handle-grip {
+  display: block;
+}
+.pane-handle[data-separator="active"] .pane-handle-bar {
+  background: var(--rail-drag);
+}
+.pane-handle[data-separator="active"] .pane-handle-grip {
+  background: var(--rail-shade);
+}
+
+.row-shortcuts {
+  display: none;
+}
+@media (hover: hover) {
+  .project-row:hover .row-shortcuts,
+  .project-row:focus-within .row-shortcuts {
+    display: flex;
+  }
+  .project-row:hover .project-row-meta,
+  .project-row:focus-within .project-row-meta {
+    display: none;
+  }
+}

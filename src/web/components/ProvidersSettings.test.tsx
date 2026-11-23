@@ -486,10 +486,11 @@ describe("桌面端 Settings → Providers", () => {
     expect(within(tablist).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
     expect(localStorage.getItem(PROVIDERS_GUIDED_KEY)).toBe("1");
 
-    // 关掉设置弹窗，打开 New project manager：0 家可用时自动展开 More settings 展示 Manage providers…
+    // 关掉设置弹窗，在单机常驻的本机格子切出工作区，打开 New project manager：0 家可用时自动展开 More settings 展示 Manage providers…
     await user.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("tablist", { name: "Settings categories" })).toBeNull());
 
+    await user.click(screen.getByRole("button", { name: /^This computer/ }));
     await user.click(screen.getByRole("button", { name: "New project manager" }));
     const newPmDialog = await screen.findByRole("dialog", { name: "New project manager" });
     const manageBtn = await within(newPmDialog).findByRole("button", { name: "Manage providers…" });

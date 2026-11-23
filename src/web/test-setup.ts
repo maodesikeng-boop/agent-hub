@@ -25,3 +25,14 @@ Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.setPointerCapture ??= () => {};
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
+
+// react-resizable-panels listens on document pointerdown in capture phase and hit-tests rects at (0,0).
+// In un-laid-out jsdom every rect is 0x0 at (0,0), so keep un-laid-out groups/separators off-screen unless explicitly mocked.
+const nativeGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+Element.prototype.getBoundingClientRect = function (this: Element) {
+  const rect = nativeGetBoundingClientRect.call(this);
+  if (rect.width === 0 && rect.height === 0 && (this.hasAttribute("data-group") || this.hasAttribute("data-separator"))) {
+    return { x: -10_000, y: -10_000, left: -10_000, top: -10_000, right: -10_000, bottom: -10_000, width: 0, height: 0, toJSON: () => ({}) } as DOMRect;
+  }
+  return rect;
+};

@@ -20,7 +20,7 @@ import {
 import { App } from "./App.tsx";
 import { createClient } from "./client.ts";
 import { DeliverableFiles } from "./components/Deliverables.tsx";
-import { RightRail } from "./components/RightRail.tsx";
+import { RailGroups } from "./components/RightRail.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import { DeviceScope } from "./device-scope.tsx";
 import { resetQueryClient } from "./query-client.ts";
@@ -424,7 +424,7 @@ describe("各处入口", () => {
     const ask = askMessage({ id: 52, text: `方案好了，请验收\n\n${CHECKPOINT_TEXT}`, meta: { needsUser: true, deliverables: [plan, rec] } });
     const onOpenAsk = vi.fn();
     render(
-      <RightRail asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} layout="side" look={defaultLookOf(1)} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
+      <RailGroups asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} look={defaultLookOf(1)} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
     );
     await user.click(screen.getByRole("button", { name: /方案好了，请验收/ }));
     expect(onOpenAsk).toHaveBeenCalledWith(52);
@@ -434,7 +434,7 @@ describe("各处入口", () => {
 
   it("右栏果皮轨里等拍板的步骤只有一行：不列交付物、不出选项", () => {
     render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[gateGraph()]} openWorkerId={null} layout="side" look={defaultLookOf(1)} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+      <RailGroups asks={[]} workers={[]} activeGraphs={[gateGraph()]} openWorkerId={null} look={defaultLookOf(1)} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
     );
     expect(screen.getByTestId("peel-gate-row")).toBeInTheDocument();
     expect(screen.queryByTestId("peel-gate-card")).toBeNull();

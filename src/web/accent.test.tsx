@@ -30,7 +30,7 @@ const two = () =>
   });
 
 /** 往上找第一个设了 --primary 的祖先。 */
-const nav = () => screen.getByRole("navigation", { name: "Conversations" });
+const nav = () => screen.getByRole("region", { name: "Project managers" });
 const scopeOf = (el: HTMLElement) => el.closest<HTMLElement>("[data-accent]");
 
 describe("强调色跟着项目经理", () => {
@@ -41,11 +41,12 @@ describe("强调色跟着项目经理", () => {
     expect(first).not.toBeNull();
     expect(first.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(1).color).accent);
     expect(first.style.getPropertyValue("--primary-foreground")).toBe(jellyColorOf(defaultLookOf(1).color).accentForeground);
-    expect(scopeOf(document.querySelector<HTMLElement>("aside")!)).toBeNull();
+    expect(scopeOf(screen.getByRole("navigation", { name: "Workspace" }))).toBeNull();
+    expect(scopeOf(nav())).toBeNull();
 
-    await userEvent.click(within(nav()).getByRole("button", { name: /小林/ }));
+    await userEvent.click(within(nav()).getAllByRole("button", { name: /小林/ }).find((b) => !b.closest(".row-shortcuts"))!);
     await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(1).color).accent));
-    await userEvent.click(within(nav()).getByRole("button", { name: /老马/ }));
+    await userEvent.click(within(nav()).getAllByRole("button", { name: /老马/ }).find((b) => !b.closest(".row-shortcuts"))!);
     await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(2).color).accent));
   });
 
@@ -68,8 +69,9 @@ describe("强调色跟着项目经理", () => {
   });
 
   it("不属于任何项目经理的地方（左栏、加载页）不写主色", () => {
-    expect(readFileSync("src/web/components/Sidebar.tsx", "utf8")).not.toMatch(/bg-primary|text-primary/);
-    expect(readFileSync("src/web/App.tsx", "utf8")).not.toMatch(/text-primary/);
+    expect(readFileSync("src/web/components/AppRail.tsx", "utf8")).not.toMatch(/\b(?:bg|text)-primary\b(?!-)/);
+    expect(readFileSync("src/web/components/ProjectList.tsx", "utf8")).not.toMatch(/\b(?:bg|text)-primary\b(?!-)/);
+    expect(readFileSync("src/web/App.tsx", "utf8")).not.toMatch(/\btext-primary\b(?!-)/);
   });
 });
 

@@ -32,8 +32,9 @@ async function openProfile(schedules = [makeSchedule()]) {
   act(() => ws.open());
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "View 小林\'s profile" }));
-  const page = screen.getByRole("region", { name: "小林\'s profile" });
+  const page = screen.getByRole("complementary", { name: "小林's settings" });
   const group = await within(page).findByRole("region", { name: "Schedules" });
+  await user.click(within(group).getByRole("button", { name: schedules.some((s) => s.pmId === 1) ? "Edit" : "New" }));
   return { user, group };
 }
 
@@ -59,7 +60,7 @@ describe("定时任务组", () => {
 
   it("没有任务：只有“新建”一行", async () => {
     const { group } = await openProfile([]);
-    expect(within(group).getAllByRole("button")).toHaveLength(1);
+    expect(within(group).getAllByRole("button").filter((b) => b.textContent !== "Done")).toHaveLength(1);
     expect(within(group).getByRole("button", { name: "New" })).toBeInTheDocument();
   });
 

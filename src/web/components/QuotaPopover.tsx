@@ -36,7 +36,7 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
   );
 }
 
-function groupByVendor(blocks: QuotaVendor[]): { name: string; blocks: QuotaVendor[] }[] {
+function groupByVendor(blocks: readonly QuotaVendor[]): { name: string; blocks: QuotaVendor[] }[] {
   const sections: { name: string; blocks: QuotaVendor[] }[] = [];
   for (const block of blocks) {
     const last = sections[sections.length - 1];
@@ -46,10 +46,20 @@ function groupByVendor(blocks: QuotaVendor[]): { name: string; blocks: QuotaVend
   return sections;
 }
 
-export function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }: {
-  quota: QuotaVendor[];
+export function QuotaPopover({
+  quota,
+  fetchable = false,
+  placement = "sidebar",
+  side,
+  align,
+  trigger,
+}: {
+  quota: readonly QuotaVendor[];
   fetchable?: boolean;
   placement?: "sidebar" | "header";
+  side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
+  trigger?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const client = useClient();
@@ -73,7 +83,7 @@ export function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }
   const inHeader = placement === "header";
   const head = quota[0];
   const window = head?.windows[0];
-  if (!window && !fetchable) return null;
+  if (!window && !fetchable && trigger === undefined) return null;
   const blocks = [...quota, ...fetched];
   const exhausted =
     quota.some((vendor) => vendor.exhausted) || fetched.some((vendor) => vendor.exhausted || vendor.windows.some((w) => w.percent >= 100));
@@ -81,17 +91,19 @@ export function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          variant="slot"
-          size="icon"
-          aria-label={label}
-          title={label}
-          className="shrink-0"
-        >
-          <Hourglass aria-hidden="true" />
-        </Button>
+        {trigger ?? (
+          <Button
+            variant="slot"
+            size="icon"
+            aria-label={label}
+            title={label}
+            className="shrink-0"
+          >
+            <Hourglass aria-hidden="true" />
+          </Button>
+        )}
       </PopoverTrigger>
-      <PopoverContent side={inHeader ? "bottom" : "top"} align="end" aria-label="Usage">
+      <PopoverContent side={side ?? (inHeader ? "bottom" : "top")} align={align ?? "end"} aria-label="Usage">
         <div className="grid gap-6">
           {groupByVendor(blocks).map((section) => (
             <section key={section.name} className="grid gap-2" aria-label={section.name}>

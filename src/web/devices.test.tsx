@@ -85,8 +85,10 @@ async function boot(fleet: Fleet, { connect = true }: { connect?: boolean } = {}
   }
 }
 
-const nav = () => screen.getByRole("navigation", { name: "Conversations" });
-const groupHeader = (name: string) => within(nav()).getByRole("button", { name: new RegExp(`^${name}`) });
+const rail = () => screen.getByRole("navigation", { name: "Workspace" });
+const railDevice = (name: string) => within(rail()).getByRole("button", { name: new RegExp(`^${name}(?:,|$)`) });
+const nav = () => screen.getByRole("region", { name: "Project managers" });
+const pmRow = (name: string) => within(nav()).getAllByRole("button", { name: new RegExp(name) }).find((b) => !b.closest(".row-shortcuts"))!;
 const title = () => screen.getByRole("main").querySelector("h1")?.textContent;
 const composer = () => screen.getByRole("textbox", { name: "Message" });
 
@@ -102,29 +104,34 @@ afterEach(() => {
 });
 
 describe("只有一台", () => {
-  it("守护进程还没有联机（GET /api/devices 404）：和现在一样，没有设备分组，桌面默认落到 #/router", async () => {
+  it("守护进程还没有联机（GET /api/devices 404）：桌面默认落到 #/router，最左栏常驻显示本机图标，点本机进列表且无设备切换器", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), null);
     await boot(fleet);
-    expect(await within(nav()).findByRole("button", { name: /小林/ })).toBeInTheDocument();
-    expect(within(nav()).getAllByRole("button")).toHaveLength(1);
-    expect(screen.queryByText("Mac")).toBeNull();
     expect(window.location.hash).toBe("#/router");
+    expect(railDevice("This computer")).toBeInTheDocument();
+    expect(within(rail()).queryByRole("button", { name: /^东京/ })).toBeNull();
+    await userEvent.click(railDevice("This computer"));
+    await waitFor(() => expect(pmRow("小林")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /Switch computer/ })).toBeNull();
   });
 
-  it("清单里只有本机：也不分组，设置里有“电脑”分类", async () => {
+  it("清单里只有本机：最左栏显示本机格子，设置里有“电脑”分类", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), [mac]);
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
-    expect(within(nav()).getAllByRole("button")).toHaveLength(1);
+    expect(await within(rail()).findByRole("button", { name: /^Mac/ })).toBeInTheDocument();
+    await userEvent.click(railDevice("Mac"));
+    await waitFor(() => expect(pmRow("小林")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const devices = await screen.findByRole("tabpanel", { name: "Computers" });
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
+    const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
     expect(within(devices).getByText("Mac")).toBeInTheDocument();
   });
 
   it("入口本机收到 resync 时自动重新拉 GET /api/devices，把新配对的设备加进界面并连上", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), [mac]);
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
+    expect(await within(rail()).findByRole("button", { name: /^Mac/ })).toBeInTheDocument();
     expect(sockets("tokyo")).toHaveLength(0);
 
     fleet.devices = [mac, tokyo];
@@ -132,26 +139,28 @@ describe("只有一台", () => {
 
     await waitFor(() => expect(sockets("tokyo")).toHaveLength(1));
     act(() => lastSocket("tokyo").open());
-    expect(await within(nav()).findByRole("button", { name: /阿青/ })).toBeInTheDocument();
-    expect(groupHeader("Mac")).toBeInTheDocument();
-    expect(groupHeader("东京")).toBeInTheDocument();
+    expect(await within(rail()).findByRole("button", { name: /^东京/ })).toBeInTheDocument();
+    expect(railDevice("Mac")).toBeInTheDocument();
   });
 });
 
 describe("两台", () => {
-  it("左栏按设备分组；同一个对话编号互不串；网址带设备", async () => {
+  it("最左栏放设备格子，项目列表只列当前设备；同一个对话编号互不串；网址带设备", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    expect(await within(nav()).findByRole("button", { name: /阿青/ })).toBeInTheDocument();
-    expect(groupHeader("Mac")).toBeInTheDocument();
-    expect(groupHeader("东京")).toBeInTheDocument();
+    expect(await within(rail()).findByRole("button", { name: /^东京/ })).toBeInTheDocument();
+    expect(railDevice("Mac")).toBeInTheDocument();
     expect(title()).toBe("Router");
 
-    await userEvent.click(within(nav()).getByRole("button", { name: /小林/ }));
+    await userEvent.click(railDevice("Mac"));
+    expect(within(nav()).queryByRole("button", { name: /阿青/ })).toBeNull();
+    await userEvent.click(pmRow("小林"));
     expect(window.location.hash).toBe("#/c/1");
     expect(title()).toBe("小林");
 
-    await userEvent.click(within(nav()).getByRole("button", { name: /阿青/ }));
+    await userEvent.click(railDevice("东京"));
+    await waitFor(() => expect(pmRow("阿青")).toBeInTheDocument());
+    expect(within(nav()).queryByRole("button", { name: /小林/ })).toBeNull();
     expect(window.location.hash).toBe(`#/d/${TOKYO}/c/1`);
     expect(title()).toBe("阿青");
 
@@ -171,19 +180,22 @@ describe("两台", () => {
     await waitFor(() => expect(title()).toBe("小林"));
   });
 
-  it("组头可以折叠", async () => {
+  it("点列表顶部的设备切换器也能在设备之间切换", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
-    await userEvent.click(groupHeader("东京"));
-    expect(groupHeader("东京")).toHaveAttribute("aria-expanded", "false");
-    expect(within(nav()).queryByRole("button", { name: /阿青/ })).toBeNull();
+    await within(rail()).findByRole("button", { name: /^东京/ });
+    await userEvent.click(railDevice("Mac"));
+    await userEvent.click(screen.getByRole("button", { name: "Switch computer (Mac)" }));
+    const list = await screen.findByRole("list", { name: "Linked computers" });
+    await userEvent.click(within(list).getByRole("button", { name: /东京/ }));
+    await waitFor(() => expect(title()).toBe("阿青"));
+    expect(within(nav()).queryByRole("button", { name: /小林/ })).toBeNull();
   });
 
   it("一台断线只补那一台：带它自己的 seq 重连，本机的连接不动", async () => {
     const fleet = new Fleet(onePm("小林"), { ...onePm("阿青"), seq: 77 });
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     act(() => lastSocket("tokyo").drop());
     act(() => void vi.advanceTimersByTime(1_000));
@@ -195,7 +207,7 @@ describe("两台", () => {
 });
 
 describe("Offline", () => {
-  it("断了不到 30 秒是重连中：能打字，发送等连上；更久是离线：组头变灰、提示几分钟前的内容、输入框禁用", async () => {
+  it("断了不到 30 秒是重连中：能打字，发送等连上；更久是离线：状态点变灰、提示几分钟前的内容、输入框禁用", async () => {
     window.history.replaceState(null, "", `/#/d/${TOKYO}/c/1`);
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
@@ -204,7 +216,8 @@ describe("Offline", () => {
     fleet.offline = true;
     act(() => lastSocket("tokyo").drop());
 
-    expect(within(groupHeader("东京")).getByText("Reconnecting")).toBeInTheDocument();
+    expect(railDevice("东京")).toHaveAccessibleName(/reconnecting/i);
+    expect(within(rail()).getByTestId(`rail-device-dot-${TOKYO}`)).toHaveAttribute("data-status", "reconnecting");
     expect(composer()).toBeEnabled();
     act(() => {
       composer().focus();
@@ -212,15 +225,15 @@ describe("Offline", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
     act(() => void vi.advanceTimersByTime(OFFLINE_AFTER_MS + 3 * 60_000));
-    expect(within(groupHeader("东京")).getByText("Offline")).toBeInTheDocument();
-    expect(groupHeader("东京").closest("[data-device-status]")).toHaveAttribute("data-device-status", "offline");
+    expect(railDevice("东京")).toHaveAccessibleName(/offline/i);
+    expect(within(rail()).getByTestId(`rail-device-dot-${TOKYO}`)).toHaveAttribute("data-status", "offline");
     expect(screen.getByRole("status")).toHaveTextContent("东京 is offline. Showing content from 3m ago");
     expect(composer()).toBeDisabled();
     expect(composer()).toHaveAttribute("placeholder", "东京 is offline. Can\'t send messages right now");
     // 消息照常显示
     expect(within(screen.getByRole("main")).getByText("阿青你好")).toBeInTheDocument();
     // 别的设备不受影响
-    expect(within(groupHeader("Mac")).queryByText("Offline")).toBeNull();
+    expect(within(rail()).getByTestId("rail-device-dot-local")).toHaveAttribute("data-status", "online");
   });
 
   it("离线设备在 Router 工作台 Needs You 托盘里变灰标 Offline（展开的卡和收起的单行都是），在线的不变", async () => {
@@ -271,11 +284,12 @@ describe("Offline", () => {
     expectStates();
   });
 
-  it("从没连上过：组头写离线，进去是“还没连上这台设备”", async () => {
+  it("从没连上过：最左栏标离线，进去是“还没连上这台设备”", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     fleet.offline = true;
     await boot(fleet);
-    await waitFor(() => expect(within(groupHeader("东京")).getByText("Offline")).toBeInTheDocument());
+    await waitFor(() => expect(railDevice("东京")).toHaveAccessibleName(/offline/i));
+    expect(["offline", "unreachable"]).toContain(within(rail()).getByTestId(`rail-device-dot-${TOKYO}`).getAttribute("data-status"));
     act(() => {
       window.location.hash = `#/d/${TOKYO}/c/1`;
     });
@@ -323,11 +337,12 @@ describe("跨设备的等你确定", () => {
     };
     const fleet = new Fleet(localSnap, remoteSnap);
     await boot(fleet);
-    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
-    const routerRow = await within(sidebar).findByRole("button", { name: /Router/ });
+    const routerRow = await within(rail()).findByRole("button", { name: /Router/ });
     await waitFor(() => expect(within(routerRow).getByText("2")).toBeInTheDocument());
+    await userEvent.click(railDevice("Mac"));
     expect(within(nav()).queryByRole("region", { name: "Needs You" })).toBeNull();
     expect(document.title).toBe(`(2) ${PRODUCT_NAME}`);
+    await userEvent.click(routerRow);
     const needsSection = await screen.findByRole("region", { name: "Needs You" });
     await userEvent.click(within(needsSection).getByRole("button", { name: /阿青/ }));
     expect(window.location.hash).toBe(`#/d/${TOKYO}/c/1`);
@@ -336,6 +351,8 @@ describe("跨设备的等你确定", () => {
   it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行自身绿点照常显示", async () => {
     const fleet = new Fleet(onePm("小林", [ask(5, "本机要确定")]), onePm("阿青"), [mac]);
     await boot(fleet);
+    await waitFor(() => expect(within(rail()).getByTestId("rail-device-badge-local")).toHaveTextContent("1"));
+    await userEvent.click(railDevice("Mac"));
     await within(nav()).findByLabelText("Needs You");
     expect(within(nav()).queryByRole("region", { name: "Needs You" })).toBeNull();
   });
@@ -345,7 +362,7 @@ describe("跨设备的等你确定", () => {
     installFakeNotification("granted");
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
     act(() => lastSocket("tokyo").push({ seq: 11, type: "message.created", data: { message: ask(6, "东京要确定") } }));
     await waitFor(() => expect(FakeNotification.instances.map((n) => n.title)).toEqual(["东京 · 阿青: Needs You"]));
   });
@@ -359,7 +376,8 @@ describe("新建项目经理选设备", () => {
       body: { catalogs: [{ ...bundledModelCatalog("claude"), availability: "not_installed" }, bundledModelCatalog("agy"), { ...bundledModelCatalog("codex"), availability: "not_installed" }].reverse() },
     });
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
+    await userEvent.click(railDevice("Mac"));
     await userEvent.click(screen.getByRole("button", { name: "New project manager" }));
     const dialog = await screen.findByRole("dialog");
     const device = within(dialog).getByRole("combobox", { name: "Device" });
@@ -386,7 +404,8 @@ describe("新建项目经理选设备", () => {
   it("只有一台时没有“设备”这一行", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), null);
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
+    await userEvent.click(railDevice("This computer"));
+    await waitFor(() => expect(pmRow("小林")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "New project manager" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByRole("combobox", { name: "Device" })).toBeNull();
@@ -397,9 +416,10 @@ describe("设置 → 设备", () => {
   it("列出每台的名字、系统、在线状态；本机标出来", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
     const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
     // 照 Grok Bot：框外小灰字组标题 + 白底 1px 浅边框圆角框，不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
     const mine = within(devices).getByRole("region", { name: "This computer" });
@@ -425,7 +445,7 @@ describe("设置 → 设备", () => {
   it("老守护进程（没有 /api/devices）：设置里没有“电脑”分类，默认打开“通用”", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), null);
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
+    await within(rail()).findByRole("button", { name: /Router/ });
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     await screen.findByRole("dialog");
     expect(screen.queryByRole("tab", { name: "Computers" })).toBeNull();
@@ -436,7 +456,7 @@ describe("设置 → 设备", () => {
   it("改名：PATCH 入口的 /api/devices/<编号>，再拉一次清单", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
     const fetchMock = vi.mocked(fetch);
     const inner = fetchMock.getMockImplementation()!;
     const patched: unknown[] = [];
@@ -449,7 +469,9 @@ describe("设置 → 设备", () => {
       return inner(input, init);
     });
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const devices = await screen.findByRole("tabpanel", { name: "Computers" });
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
+    const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
     await userEvent.click(within(devices).getByRole("button", { name: "Rename 东京" }));
     const input = within(devices).getByRole("textbox", { name: "Device name" });
     await userEvent.clear(input);
@@ -457,7 +479,7 @@ describe("设置 → 设备", () => {
     await waitFor(() => expect(patched).toEqual([{ name: "东京服务器" }]));
     expect(await within(devices).findByText("东京服务器")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
-    expect(await within(nav()).findByRole("button", { name: /^东京服务器/ })).toBeInTheDocument();
+    expect(await within(rail()).findByRole("button", { name: /^东京服务器/ })).toBeInTheDocument();
   });
 
 

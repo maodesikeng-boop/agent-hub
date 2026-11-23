@@ -481,7 +481,8 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.last.open());
-    const box = (await screen.findByRole("textbox", { name: "Message" })) as HTMLTextAreaElement;
+    const scope = hash?.startsWith("#/w/") ? await screen.findByRole("region", { name: /Piece / }) : await screen.findByRole("main");
+    const box = (await within(scope).findByRole("textbox", { name: "Message" })) as HTMLTextAreaElement;
     return { api, box, user: userEvent.setup() };
   };
   const labels = () => screen.queryAllByRole("option").map((o) => o.firstElementChild?.textContent);

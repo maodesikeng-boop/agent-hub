@@ -29,8 +29,11 @@ export interface PanelExits {
  * Postcondition: a worker route gives that Worker, a profile route gives that PM's page or summary, a conversation route
  * gives Pieces only when piecesOpen and piecesHasContent, and the Router, settings, or no route give null.
  */
-export function sidePanelOf(_input: SidePanelInput): SidePanelContent | null {
-  throw new Error("Not implemented");
+export function sidePanelOf({ route, piecesOpen, piecesHasContent }: SidePanelInput): SidePanelContent | null {
+  if (route === null || route.view === "router" || route.view === "settings") return null;
+  if (route.view === "worker") return { kind: "worker", workerId: route.id };
+  if (route.view === "profile") return { kind: "profile", pmId: route.pmId, page: route.page ?? null };
+  return piecesOpen && piecesHasContent ? { kind: "pieces" } : null;
 }
 
 /**
@@ -38,6 +41,16 @@ export function sidePanelOf(_input: SidePanelInput): SidePanelContent | null {
  * Postcondition: close is the conversation route. back is the conversation route with backOpensPieces for a Worker,
  * the profile summary for a profile page, and null for Pieces and for the summary.
  */
-export function panelExitsOf(_content: SidePanelContent, _conversation: Extract<ScopedRoute, { view: "conversation" }>): PanelExits {
-  throw new Error("Not implemented");
+export function panelExitsOf(
+  content: SidePanelContent,
+  conversation: Extract<ScopedRoute, { view: "conversation" }>,
+): PanelExits {
+  const onDevice = conversation.device === undefined ? {} : { device: conversation.device };
+  if (content.kind === "worker") {
+    return { close: conversation, back: conversation, backOpensPieces: true };
+  }
+  if (content.kind === "profile" && content.page !== null) {
+    return { close: conversation, back: { view: "profile", pmId: content.pmId, ...onDevice }, backOpensPieces: false };
+  }
+  return { close: conversation, back: null, backOpensPieces: false };
 }

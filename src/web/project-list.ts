@@ -11,9 +11,11 @@ export interface ProjectListSections {
   archived: readonly ConversationEntry[];
 }
 
+const sectionsCache = new WeakMap<readonly ConversationEntry[], ProjectListSections>();
+
 /** Postcondition: true when the entry's PM has a numeric pinnedAt and is not archived. */
-export function isPinned(_entry: ConversationEntry): boolean {
-  throw new Error("Not implemented");
+export function isPinned(entry: ConversationEntry): boolean {
+  return entry.pm !== null && entry.pm.archivedAt == null && typeof entry.pm.pinnedAt === "number" && Number.isFinite(entry.pm.pinnedAt);
 }
 
 /**
@@ -21,14 +23,39 @@ export function isPinned(_entry: ConversationEntry): boolean {
  * Postcondition: splits entries into pinned, active, and archived sections and returns the same object for the same
  * entries array.
  */
-export function projectListOf(_entries: readonly ConversationEntry[]): ProjectListSections {
-  throw new Error("Not implemented");
+export function projectListOf(entries: readonly ConversationEntry[]): ProjectListSections {
+  const hit = sectionsCache.get(entries);
+  if (hit !== undefined) return hit;
+
+  const pinned: ConversationEntry[] = [];
+  const active: ConversationEntry[] = [];
+  const archived: ConversationEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.pm?.archivedAt != null) archived.push(entry);
+    else if (isPinned(entry)) pinned.push(entry);
+    else active.push(entry);
+  }
+
+  pinned.sort((a, b) => a.pm!.pinnedAt! - b.pm!.pinnedAt! || a.pm!.id - b.pm!.id);
+
+  const sections: ProjectListSections = { pinned, active, archived };
+  sectionsCache.set(entries, sections);
+  return sections;
 }
 
 /**
  * Postcondition: keeps entries whose name or project name contains the trimmed query, ignoring case, in every section;
  * a blank query returns sections unchanged.
  */
-export function filterProjectList(_sections: ProjectListSections, _query: string): ProjectListSections {
-  throw new Error("Not implemented");
+export function filterProjectList(sections: ProjectListSections, query: string): ProjectListSections {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return sections;
+  const matches = (entry: ConversationEntry): boolean =>
+    entry.name.toLowerCase().includes(needle) || (entry.project?.name.toLowerCase().includes(needle) ?? false);
+  return {
+    pinned: sections.pinned.filter(matches),
+    active: sections.active.filter(matches),
+    archived: sections.archived.filter(matches),
+  };
 }

@@ -637,7 +637,7 @@ export function RouterWorkbench({
       <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
         <header
           data-window-drag
-          className="flex h-16 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+          className="flex h-14 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b-2 border-border pr-3 pl-4"
         >
           <div className="flex min-w-0 shrink-0 items-center gap-2.5">
             {leading}

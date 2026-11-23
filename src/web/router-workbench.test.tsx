@@ -37,7 +37,7 @@ import {
   type RouterStreamSource,
 } from "./router-stream.ts";
 import { resetQueryClient } from "./query-client.ts";
-import { MOBILE_SHELL_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
+import { MOBILE_SHELL_QUERY } from "./useMediaQuery.ts";
 import {
   FakeApi,
   FakeWebSocket,
@@ -81,14 +81,9 @@ vi.mock("./components/Markdown.tsx", async (importOriginal) => {
 const LOCAL_ID = "00000000-0000-4000-8000-000000000001";
 const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 
-let viewportMode: "wide" | "rail" | "mobile" = "wide";
-
-function installViewport(mode: "wide" | "rail" | "mobile") {
-  viewportMode = mode;
+function installViewport(mode: "wide" | "mobile") {
   vi.stubGlobal("matchMedia", (query: string) => ({
-    matches:
-      (mode === "mobile" && query === MOBILE_SHELL_QUERY) ||
-      (mode === "rail" && query === NARROW_QUERY),
+    matches: mode === "mobile" && query === MOBILE_SHELL_QUERY,
     media: query,
     addEventListener: () => {},
     removeEventListener: () => {},
@@ -323,7 +318,7 @@ describe("Router 第 2 波：路由与默认落地页", () => {
     expect(allClear.parentElement?.querySelector("[data-slot='router-avatar']")).toHaveClass("opacity-40");
   });
 
-  it("手机外壳空 hash 保持列表页首页（置顶挂 Router 入口且不带激活底色），点击进入 #/router，左上角 Back 退回列表页", async () => {
+  it("手机外壳空 hash 保持列表页首页（底栏 TabBar 挂 Router 入口且不带激活态），点击进入 #/router，点 Projects 退回列表页", async () => {
     installViewport("mobile");
     const { localApi } = installFleet({});
     const user = userEvent.setup();
@@ -332,7 +327,8 @@ describe("Router 第 2 波：路由与默认落地页", () => {
     act(openSockets);
 
     // 手机首页停在列表页，网址仍是空 hash
-    const routerEntry = await screen.findByRole("button", { name: /Router/ });
+    const tabBar = await screen.findByRole("navigation", { name: "Mobile navigation" });
+    const routerEntry = within(tabBar).getByRole("button", { name: /Router/ });
     expect(window.location.hash).toBe("");
     expect(routerEntry).not.toHaveAttribute("aria-current");
 
@@ -342,14 +338,14 @@ describe("Router 第 2 波：路由与默认落地页", () => {
     // 390px 宽放不下长的那句：换短句，不缩字号
     expect(screen.getByPlaceholderText("Tell Router…")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(within(screen.getByRole("navigation", { name: "Mobile navigation" })).getByRole("button", { name: "Projects" }));
     expect(window.location.hash).toBe("");
-    expect(await screen.findByRole("navigation", { name: "Conversations" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Project managers" })).toBeInTheDocument();
   });
 });
 
-describe("左栏置顶嫩芽铃入口（宽栏 / 72px 窄栏 / 多机去重）", () => {
-  it("宽栏与窄栏置顶渲染 RouterAvatar，副标题与徽标按优先级实时刷新，选中态中性灰不含 --jelly，多设备不再重复渲染左栏 Needs You 分组", async () => {
+describe("最左栏嫩芽铃入口与项目列表去重", () => {
+  it("AppRail 渲染 4.5rem 置顶 RouterAvatar 与跨机等待徽标，列表不再重复渲染 Needs You 分组", async () => {
     const localSnap = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
       projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
@@ -401,36 +397,20 @@ describe("左栏置顶嫩芽铃入口（宽栏 / 72px 窄栏 / 多机去重）",
     });
 
     const { localApi } = installFleet({ local: localSnap, tokyo: tokyoSnap });
-    const { unmount } = renderWithQuery(<App />);
+    renderWithQuery(<App />);
     await waitFor(() => expect(localApi.callsTo("GET", /^\/api\/state$/).length).toBeGreaterThan(0));
     act(openSockets);
 
-    const aside = await screen.findByRole("complementary");
-    const routerBtn = await within(aside).findByRole("button", { name: /Router/ });
+    const rail = await screen.findByRole("navigation", { name: "Workspace" });
+    const routerBtn = await within(rail).findByRole("button", { name: /Router/ });
     expect(routerBtn).toHaveAttribute("aria-current", "page");
-    expect(routerBtn.className).toContain("border-select-line");
-    expect(routerBtn.className).toContain("bg-background");
+    expect(routerBtn.querySelector("[data-slot='router-avatar']")).not.toBeNull();
     expect(routerBtn.className).not.toContain("jelly");
-    // 2 个跨机待决项（Tokyo gate + 本机 decision），副标题取最新待决问题
-    await waitFor(() => expect(within(routerBtn).getByText("Tokyo 要灰度吗？")).toBeInTheDocument());
-    expect(within(routerBtn).getByText("2")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("rail-router-badge")).toHaveTextContent("2"));
 
-    // 左栏项目列表不再重复挂顶置 Needs You 区域
-    const projectsNav = within(aside).getByRole("navigation", { name: "Conversations" });
-    expect(within(projectsNav).queryByRole("region", { name: "Needs You" })).toBeNull();
-
-    unmount();
-
-    // 切到 72px 窄栏：只显示 40px 刀标与右下角绿点 + 分隔短横线
-    installViewport("rail");
-    renderWithQuery(<App />);
-    await waitFor(() => expect(localApi.callsTo("GET", /^\/api\/state$/).length).toBeGreaterThan(1));
-    act(openSockets);
-    const railAside = await screen.findByRole("complementary");
-    const railBtn = await within(railAside).findByRole("button", { name: /Router/ });
-    expect(railBtn).toHaveAttribute("aria-current", "page");
-    expect(railBtn.querySelector("[data-slot='router-avatar']")).not.toBeNull();
-    expect(railBtn.querySelector(".bg-status-active")).not.toBeNull();
+    await userEvent.click(within(rail).getByRole("button", { name: /MacBook/ }));
+    const projectsRegion = await screen.findByRole("region", { name: "Project managers" });
+    expect(within(projectsRegion).queryByRole("region", { name: "Needs You" })).toBeNull();
   });
 });
 
@@ -917,7 +897,7 @@ describe("时间流：指令回合", () => {
     installFleet({ local: localSnap, tokyo: tokyoSnap });
     const user = userEvent.setup();
     await openRouter();
-    const backToRouter = () => user.click(within(screen.getByRole("complementary", { name: "Sidebar" })).getByRole("button", { name: /Router/ }));
+    const backToRouter = () => user.click(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: /Router/ }));
 
     // 按时间从上到下
     await waitFor(() => expect(turns().map((t) => t.querySelector("[data-bubble]")!.textContent)).toEqual(["让小林检查一下缓存上限", "开个 Piece 查慢测", "让阿青回滚"]));
@@ -1086,10 +1066,13 @@ describe("时间流：指令回合", () => {
 
     // 4. 在 Router 输入草稿后切去具体 PM 对话再切回 Router，草稿不丢失
     await user.type(input, "未发完的跨项目想法");
-    const aside = screen.getByRole("complementary");
-    await user.click(within(aside).getByRole("button", { name: /小林/ }));
+    const railNav = () => screen.getByRole("navigation", { name: "Workspace" });
+    act(() => {
+      window.history.pushState(null, "", "/#/c/1");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
     expect(await screen.findByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
-    await user.click(within(aside).getByRole("button", { name: /Router/ }));
+    await user.click(within(railNav()).getByRole("button", { name: /Router/ }));
     expect(await screen.findByDisplayValue("未发完的跨项目想法")).toBeInTheDocument();
   });
 
@@ -1097,11 +1080,14 @@ describe("时间流：指令回合", () => {
     const { localApi } = installFleet({});
     const user = userEvent.setup();
     await openRouter();
-    const aside = screen.getByRole("complementary");
+    const railNav = () => screen.getByRole("navigation", { name: "Workspace" });
     const leaveAndComeBack = async () => {
-      await user.click(within(aside).getByRole("button", { name: /小林/ }));
+      act(() => {
+        window.history.pushState(null, "", "/#/c/1");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
       expect(await screen.findByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
-      await user.click(within(aside).getByRole("button", { name: /Router/ }));
+      await user.click(within(railNav()).getByRole("button", { name: /Router/ }));
       await screen.findByRole("heading", { level: 1, name: "Router" });
     };
     const commandCalls = () => localApi.callsTo("POST", /^\/api\/router\/commands$/);
@@ -1361,7 +1347,7 @@ describe("时间流：简报、已读、贴底和历史", () => {
     // 链接和名字都能跳
     await user.click(within(briefings()[1]!).getByRole("button", { name: "Piece #30" }));
     expect(window.location.hash).toBe("#/w/30");
-    await user.click(within(screen.getByRole("complementary", { name: "Sidebar" })).getByRole("button", { name: /Router/ }));
+    await user.click(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: /Router/ }));
     // 离开再回来：都读过了，分隔线没了
     await waitFor(() => expect(timeline().querySelector("[data-new-divider]")).toBeNull());
     await user.click(within(timeline()).getByRole("button", { name: "阿青" }));

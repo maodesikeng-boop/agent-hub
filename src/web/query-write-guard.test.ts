@@ -10,7 +10,6 @@ const SHARED_GENERATION = /\b(?:queryGenerationOf|guardedQueryFn)\b/;
 // Legacy modules that write the query cache without the shared generation. The list may only shrink.
 const LEGACY_UNGUARDED_WRITERS = new Set([
   "components/PmMemoryFilesGroup.tsx",
-  "components/PmProfile.tsx",
   "composer-suggest.ts",
   "models.tsx",
   "settings-model.ts",

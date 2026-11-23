@@ -36,8 +36,6 @@ const NO_LOOK = defaultLookOf(0);
 
 const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(worker.activity) || !IDLE_ACTIVITIES.has(worker.activity));
 
-const RIGHT_RAIL_ID = "right-rail";
-
 const ROW_BASE =
   "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 border-2 border-transparent px-2.5 py-2 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]";
 const ROW = cn(ROW_BASE, "gap-3");
@@ -228,36 +226,6 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
   );
 }
 
-export const RightRailToggle = memo(function RightRailToggle({
-  visible,
-  open,
-  attention,
-  look = NO_LOOK,
-  onToggle,
-}: {
-  visible: boolean;
-  open: boolean;
-  attention: boolean;
-  look?: SlimeLook;
-  onToggle: () => void;
-}) {
-  if (!visible) return null;
-  return (
-    <Button
-      variant="slot"
-      size="icon"
-      aria-label={open ? "Hide side panel" : attention ? "Show side panel (needs you)" : "Show side panel"}
-      aria-expanded={open}
-      aria-controls={RIGHT_RAIL_ID}
-      className={cn("relative shrink-0", open && "text-foreground")}
-      onClick={onToggle}
-    >
-      <Avatar look={look} size={20} neutral />
-      {!open && attention && <span className="absolute top-1 right-1 size-1.5 bg-primary" aria-hidden="true" />}
-    </Button>
-  );
-});
-
 const NEVER = () => false;
 
 function useLimited<T>(items: readonly T[], mustShow: (item: T) => boolean) {
@@ -357,7 +325,7 @@ function CompletedGroup({
   );
 
   return (
-    <section aria-labelledby="rail-completed" className="py-3">
+    <section aria-labelledby="rail-completed" className="min-w-0 py-3">
       <GroupTitle id="rail-completed" bodyId="rail-completed-body" collapsed={!open} onToggle={() => setOpen((v) => !v)} trailing={trailing}>
         Completed
       </GroupTitle>
@@ -406,7 +374,7 @@ function CompletedGroup({
   );
 }
 
-export function RailGroups({
+export const RailGroups = memo(function RailGroups({
   asks,
   workers,
   activeGraphs,
@@ -515,7 +483,7 @@ export function RailGroups({
     <>
       <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
         {hasAsks && (
-          <section aria-labelledby="rail-asks" className="py-3">
+          <section aria-labelledby="rail-asks" className="min-w-0 py-3">
             <GroupTitle
               id="rail-asks"
               bodyId="rail-asks-body"
@@ -537,7 +505,7 @@ export function RailGroups({
           </section>
         )}
         {hasGraphs && activeGraphs !== undefined && (
-          <section aria-labelledby="rail-graphs" className="py-3">
+          <section aria-labelledby="rail-graphs" className="min-w-0 py-3">
             <GroupTitle
               id="rail-graphs"
               bodyId="rail-graphs-body"
@@ -562,7 +530,7 @@ export function RailGroups({
           </section>
         )}
         {hasLive && (
-          <section aria-labelledby="rail-workers" className="py-3">
+          <section aria-labelledby="rail-workers" className="min-w-0 py-3">
             <GroupTitle
               id="rail-workers"
               bodyId="rail-workers-body"
@@ -613,59 +581,45 @@ export function RailGroups({
       )}
     </>
   );
-}
-
-export const RightRail = memo(function RightRail({
-  asks,
-  workers,
-  activeGraphs,
-  completedGraphCount,
-  projectId,
-  openWorkerId,
-  layout,
-  toggle,
-  look = NO_LOOK,
-  onOpenAsk,
-  onOpenWorker,
-  onLoadMoreWorkers,
-  onNeedWorkers,
-}: {
-  asks: Message[];
-  workers: WorkerEntry[];
-  activeGraphs?: readonly TaskGraph[];
-  completedGraphCount?: number;
-  projectId?: ProjectId | null;
-  openWorkerId: ConversationId | null;
-  onLoadMoreWorkers?: () => Promise<void>;
-  onNeedWorkers?: (workerIds: WorkerId[]) => void;
-  layout: "side" | "top";
-  toggle?: React.ReactNode;
-  look?: SlimeLook;
-  onOpenAsk: (messageId: MessageId) => void;
-  onOpenWorker: (conversationId: ConversationId) => void;
-}) {
-  const side = layout === "side";
-  return (
-    <aside
-      id={RIGHT_RAIL_ID}
-      aria-label="Side panel"
-      className={cn("flex min-w-0 shrink-0 flex-col overflow-hidden bg-panel", side ? "w-80 border-l-2 border-border-strong" : "max-h-[40dvh] border-b-2 border-border-strong")}
-    >
-      <RailGroups
-        asks={asks}
-        workers={workers}
-        activeGraphs={activeGraphs}
-        completedGraphCount={completedGraphCount}
-        projectId={projectId}
-        look={look}
-        openWorkerId={openWorkerId}
-        toggle={side ? toggle : undefined}
-        className={side ? "pb-4" : "py-1"}
-        onOpenAsk={onOpenAsk}
-        onOpenWorker={onOpenWorker}
-        {...(onLoadMoreWorkers !== undefined ? { onLoadMoreWorkers } : {})}
-        {...(onNeedWorkers !== undefined ? { onNeedWorkers } : {})}
-      />
-    </aside>
-  );
 });
+
+export function PiecesSlot({
+  visible,
+  open,
+  attention,
+  count,
+  look,
+  onToggle,
+}: {
+  visible: boolean;
+  open: boolean;
+  attention: boolean;
+  count: number;
+  look: SlimeLook;
+  onToggle: () => void;
+}) {
+  if (!visible) return null;
+  const label = open ? "Hide Pieces" : attention ? "Show Pieces (needs you)" : "Show Pieces";
+  return (
+    <Button
+      variant="slot"
+      size="default"
+      aria-label={label}
+      aria-expanded={open}
+      onClick={onToggle}
+      className={cn("relative h-9 shrink-0 gap-1.5 px-2.5", open && "bg-slot-hover shadow-[inset_0_2px_0_var(--slot-shade)]")}
+    >
+      <Avatar look={look} size={20} neutral />
+      <span className="text-minor font-medium text-foreground">Pieces</span>
+      {count > 0 && (
+        <span
+          aria-hidden="true"
+          className="grid h-4.5 min-w-4.5 place-items-center bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums"
+        >
+          {count > 99 ? "99+" : count}
+        </span>
+      )}
+      {attention && !open && <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 size-1.5 bg-primary" />}
+    </Button>
+  );
+}

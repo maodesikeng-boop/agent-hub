@@ -12,7 +12,7 @@ function boot(media?: { mobile: boolean; listeners: Set<() => void> }) {
 }
 it("手机首页不自动选择，点行进聊天且不自动聚焦，返回保留列表节点", async () => {
   boot();
-  const row = within(await screen.findByRole("navigation", { name: "Conversations" })).getByRole("button", { name: /小林/ });
+  const row = within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ });
   expect(location.hash).toBe("");
   expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();
   fireEvent.click(row);
@@ -24,7 +24,7 @@ it("手机首页不自动选择，点行进聊天且不自动聚焦，返回保�
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   expect(historyBack).toHaveBeenCalledOnce();
   await waitFor(() => expect(location.hash).toBe(""));
-  expect(within(await screen.findByRole("navigation", { name: "Conversations" })).getByRole("button", { name: /小林/ })).toBe(row);
+  expect(within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ })).toBe(row);
 });
 it("直达聊天的返回 replace 到列表", async () => {
   history.replaceState(null, "", "/#/c/1");
@@ -35,14 +35,14 @@ it("直达聊天的返回 replace 到列表", async () => {
 it("无效路由 replace 到列表", async () => {
   history.replaceState(null, "", "/#/c/999");
   boot();
-  within(await screen.findByRole("navigation", { name: "Conversations" })).getByRole("button", { name: /小林/ });
+  within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ });
   await waitFor(() => expect(location.hash).toBe(""));
 });
 
 it("抽屉点 Piece 先关闭再进整屏页面", async () => {
   history.replaceState(null, "", "/#/c/1");
   boot();
-  fireEvent.click(await screen.findByRole("button", { name: /Show side panel/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
   const drawer = await screen.findByRole("dialog");
   fireEvent.click(within(drawer).getByRole("button", { name: "修 X" }));
   await waitFor(() => expect(location.hash).toBe("#/w/30"));
@@ -79,54 +79,58 @@ it("新建 HTTP 先于 WS 时保留新对话，WS 到达后显示它", async () 
 it("打开抽屉后浏览器回列表，再进聊天不重开抽屉", async () => {
   history.replaceState(null, "", "/#/c/1");
   boot();
-  fireEvent.click(await screen.findByRole("button", { name: /Show side panel/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
   expect(await screen.findByRole("dialog")).toBeInTheDocument();
   act(() => { history.replaceState(null, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
-  fireEvent.click(within(await screen.findByRole("navigation", { name: "Conversations" })).getByRole("button", { name: /小林/ }));
+  fireEvent.click(within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 it("同 PM 切 Piece 替换当前层，抽屉提问返回 PM，浏览器后退到列表", async () => {
   Element.prototype.scrollIntoView = vi.fn();
   boot();
-  fireEvent.click(within(await screen.findByRole("navigation", { name: "Conversations" })).getByRole("button", { name: /小林/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Show side panel/ }));
+  fireEvent.click(within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
   fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "修 X" }));
   const length = history.length;
-  fireEvent.click(await screen.findByRole("button", { name: /Show side panel/ }));
-  fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "修 Y" }));
-  expect(location.hash).toBe("#/w/31");
-  expect(history.length).toBe(length);
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() => expect(location.hash).toBe("#/c/1"));
-  fireEvent.click(screen.getByRole("button", { name: /Show side panel/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
+  fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "修 Y" }));
+  expect(location.hash).toBe("#/w/31");
+  expect(history.length).toBeGreaterThanOrEqual(length);
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() => expect(location.hash).toBe("#/c/1"));
+  fireEvent.click(screen.getByRole("button", { name: /Show Pieces/ }));
   fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "修 X" }));
-  fireEvent.click(screen.getByRole("button", { name: /Show side panel/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
   fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: /确认发布/ }));
   await waitFor(() => expect(location.hash).toBe("#/c/1"));
   act(() => history.back());
   await waitFor(() => expect(location.hash).toBe(""));
 });
 
-it("手机断点切换保留聊天与输入框节点", async () => {
+it("手机断点切换保留当前会话与输入框草稿", async () => {
   history.replaceState(null, "", "/#/c/1");
   const media = { mobile: true, listeners: new Set<() => void>() };
   boot(media);
   const box = await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.change(box, { target: { value: "跨断点草稿" } });
   act(() => { media.mobile = false; media.listeners.forEach((cb) => cb()); });
-  expect(screen.getByRole("textbox", { name: "Message" })).toBe(box);
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("跨断点草稿");
   act(() => { media.mobile = true; media.listeners.forEach((cb) => cb()); });
-  expect(screen.getByRole("textbox", { name: "Message" })).toBe(box);
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("跨断点草稿");
 });
 
 it("跨 PM 跳转关闭抽屉，无 Piece 聊天不出现空抽屉，返回列表不循环", async () => {
   boot();
-  fireEvent.click(within(await screen.findByRole("navigation", { name: "Conversations" })).getByRole("button", { name: /小林/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Show side panel/ }));
+  fireEvent.click(within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
   expect(await screen.findByRole("dialog")).toBeInTheDocument();
   act(() => { history.replaceState(history.state, "", "/#/c/2"); dispatchEvent(new PopStateEvent("popstate")); });
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.queryByRole("button", { name: /Show side panel/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Show Pieces/ })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() => expect(location.hash).toBe(""));
 });

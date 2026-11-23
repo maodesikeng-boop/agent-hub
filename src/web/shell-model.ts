@@ -10,13 +10,13 @@ import {
   type PmId,
   type WorkerId,
 } from "../shared/index.ts";
-import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx";
-import type { DeviceSettings } from "./settings-model.ts";
+import type { AppRailRouter } from "./components/AppRail.tsx";
 import { useDevices } from "./device-hub.ts";
 import type { DeviceStoreLookup } from "./forward-reply.ts";
-import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf } from "./devices.ts";
+import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf, type DeviceKey } from "./devices.ts";
 import { useServerModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
+import { railComputersOf } from "./rail-model.ts";
 import {
   activeGraphsOf,
   failingHealth,
@@ -35,15 +35,21 @@ import { totalRunningWorkers } from "../shared/reminders.ts";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
 import { mobileBack } from "./mobile/back.ts";
-import { routeHash, useRoute } from "./route.ts";
+import { routeHash, useRoute, type ProfilePage } from "./route.ts";
 import { desktopSectionOf, useSettingsNav } from "./settings-nav.ts";
-import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
-import { defaultLookOf, resolvePmLook } from "../shared/slimes.ts";
+import {
+  accountSettingsTarget,
+  newPmDevicesOf,
+  togglePmPin,
+  useDeviceSettings,
+  usePruneStaleDrafts,
+  useStableRailInputs,
+  useWindowDrag,
+} from "./shell-actions.ts";
+import { defaultLookOf } from "../shared/slimes.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
 
 const NO_LOOK = defaultLookOf(0);
-
-const DRAG_INTERACTIVE_SELECTOR = 'button, a, input, textarea, select, [role="button"], [data-no-drag]';
 export const ROUTER_DRAFT_KEY = "router";
 const EMPTY_ENTRIES: ConversationEntry[] = [];
 const EMPTY_WORKERS: WorkerEntry[] = [];
@@ -105,9 +111,19 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const fleet = useDevices();
   const { route, navigate, replace } = useRoute();
   const [pendingCreated, setPendingCreated] = useState<ConversationRef | null>(null);
+  const [pickedDevice, setPickedDevice] = useState<DeviceKey | null>(null);
+  const lastByDeviceRef = useRef(new Map<DeviceKey, ConversationId>());
+  const devicesRef = useRef(fleet.devices);
+  devicesRef.current = fleet.devices;
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const effectivePickedDevice = route === null ? pickedDevice : null;
   const local = fleet.devices[0]!;
-  const routedDevice = fleet.devices.find((d) => d.key === deviceKeyOf(route?.device, fleet.selfId));
-  const current = routedDevice ?? local;
+  const routedDevice = route !== null && route.view !== "router" && route.view !== "settings"
+    ? fleet.devices.find((d) => d.key === deviceKeyOf(route.device, fleet.selfId))
+    : undefined;
+  const pickedView = effectivePickedDevice === null ? undefined : fleet.devices.find((d) => d.key === effectivePickedDevice);
+  const current = routedDevice ?? pickedView ?? local;
   const hub = fleet.hub(current.key);
   const { state } = current;
   const remote = current.key !== LOCAL_DEVICE;
@@ -119,10 +135,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const nav = useSettingsNav({ autoSelect, managed: fleet.managed, currentKey: current.key, route, navigate, replace, setCreating });
   const [providersGuided, setProvidersGuided] = useState(loadProvidersGuided);
   const [railClosed, setRailClosed] = useState(loadRailClosed);
-  const [compactRailOpen, setCompactRailOpen] = useState(false);
   const [railPeek, setRailPeek] = useState<PmId | null>(null);
-  const narrow = useMediaQuery(NARROW_QUERY);
-  const compact = useMediaQuery(COMPACT_QUERY);
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
 
   const clearFocus = useCallback(() => setFocus(null), []);
@@ -130,10 +143,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const entries = useMemo(() => listConversations(state), [state.conversations, state.pms, state.projects, state.folders]);
   const profilePm = route?.view === "profile" ? route.pmId : null;
   const profile = profilePm === null ? null : (state.pms.find((p) => p.id === profilePm) ?? null);
+  const profilePage =
+    route?.view === "profile" && !(profile?.archivedAt != null && route.page === "capabilities")
+      ? (route.page ?? null)
+      : null;
   const routedWorker = route?.view === "worker" && state.conversations[route.id]?.conversation.kind !== "pm" ? route.id : null;
   const openWorker = routedWorker;
   const workerView = openWorker === null ? undefined : state.conversations[openWorker];
-  const routerActive = route?.view === "router" || (autoSelect && (route === null || route.view === "settings"));
+  const routerActive = effectivePickedDevice === null && (route?.view === "router" || (autoSelect && (route === null || route.view === "settings")));
   const routedEntry =
     route === null || route.view === "router" || route.view === "settings"
       ? undefined
@@ -144,16 +161,42 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
           : entries.find((e) => e.pm?.id === route.pmId);
   const firstUnarchived = entries.find((e) => e.pm?.archivedAt == null) ?? entries[0];
   const active = routerActive ? null : (routedEntry ?? (autoSelect ? firstUnarchived : null) ?? null);
+  if (active !== null) lastByDeviceRef.current.set(current.key, active.id);
   const select = useCallback(
     (ref: ConversationRef) => {
+      setPickedDevice(null);
       navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) }, !autoSelect && route !== null);
     },
     [navigate, autoSelect, route],
   );
   const selectRouter = useCallback(() => {
+    setPickedDevice(null);
     navigate({ view: "router" }, !autoSelect && route !== null);
   }, [navigate, autoSelect, route]);
-  const activeId = profile ? null : (active?.id ?? null);
+  const selectComputer = useCallback(
+    (key: DeviceKey) => {
+      if (!autoSelect) {
+        setPickedDevice(key);
+        return;
+      }
+      const target = devicesRef.current.find((d) => d.key === key);
+      const targetEntries = target?.state.phase === "ready" ? listConversations(target.state) : EMPTY_ENTRIES;
+      const lastId = lastByDeviceRef.current.get(key);
+      const chosen =
+        (lastId === undefined ? undefined : targetEntries.find((e) => e.id === lastId && e.pm?.archivedAt == null)) ??
+        targetEntries.find((e) => e.pm?.archivedAt == null) ??
+        targetEntries[0];
+      if (chosen !== undefined) {
+        setPickedDevice(null);
+        navigate({ view: "conversation", id: chosen.id, ...routeDeviceOf(key) }, false);
+        return;
+      }
+      setPickedDevice(key);
+      if (routeRef.current !== null) replace(null);
+    },
+    [autoSelect, navigate, replace],
+  );
+  const activeId = active?.id ?? null;
   const reminderDevices = useMemo(() => fleet.devices.map((d) => ({ key: d.key, name: d.info.name, state: d.state })), [fleet.devices]);
   const reminders = useDeviceReminders(reminderDevices, activeId === null ? null : { device: current.key, id: activeId }, select);
   const runningWorkers = useMemo(
@@ -166,17 +209,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     window.webkit?.messageHandlers?.hubStatus?.postMessage({ runningWorkers, askingCount, waitingCount });
   }, [runningWorkers, askingCount, waitingCount]);
 
-  useEffect(() => {
-    const onMouseDown = (e: MouseEvent) => {
-      if (e.button !== 0) return;
-      const target = e.target instanceof Element ? e.target : null;
-      if (!target || !target.closest("[data-window-drag]")) return;
-      if (target.closest(DRAG_INTERACTIVE_SELECTOR)) return;
-      window.webkit?.messageHandlers?.windowDrag?.postMessage({ doubleClick: e.detail === 2 });
-    };
-    window.addEventListener("mousedown", onMouseDown);
-    return () => window.removeEventListener("mousedown", onMouseDown);
-  }, []);
+  useWindowDrag();
 
   const shellReady = local.state.phase === "ready" &&
     !(route?.device !== undefined && routedDevice === undefined && !fleet.listed);
@@ -201,15 +234,15 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
 
   useEffect(() => {
     if (!autoSelect || !shellReady) return;
-    if (route === null) {
+    if (route === null && pickedDevice === null) {
       replace({ view: "router" });
       return;
     }
-    if (route.view === "settings") {
+    if (route?.view === "settings") {
       nav.setDesktop(route.section === undefined ? { open: true } : { open: true, section: desktopSectionOf(route.section, fleet.managed) });
       replace({ view: "router" });
     }
-  }, [autoSelect, shellReady, route, fleet.managed, replace, nav.setDesktop]);
+  }, [autoSelect, shellReady, route, pickedDevice, fleet.managed, replace, nav.setDesktop]);
   useEffect(() => {
     if (autoSelect || route?.view !== "settings") return;
     const unmanagedSection = fleet.listed && !fleet.managed && route.section === "computers";
@@ -236,27 +269,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   useEffect(() => {
     if (!awaitingCreated) setPendingCreated(null);
   }, [awaitingCreated]);
-  useEffect(() => {
-    const valid = new Set<string>();
-    const pendingDevicePrefixes = new Set<string>();
-    let keepLocalAll = false;
-    for (const d of fleet.devices) {
-      if (d.state.phase === "ready") {
-        for (const id of Object.keys(d.state.conversations)) valid.add(conversationKey(d.key, Number(id)));
-      } else if (d.key === LOCAL_DEVICE) {
-        keepLocalAll = true;
-      } else {
-        pendingDevicePrefixes.add(`${d.key}/`);
-      }
-    }
-    if (pendingCreated !== null) valid.add(conversationKey(pendingCreated.device, pendingCreated.id));
-    drafts.retain((k) => {
-      if (k === ROUTER_DRAFT_KEY || valid.has(k)) return true;
-      const slash = k.indexOf("/");
-      if (slash < 0) return keepLocalAll;
-      return !fleet.listed || pendingDevicePrefixes.has(k.slice(0, slash + 1));
-    });
-  }, [fleet.devices, fleet.listed, pendingCreated, drafts]);
+  usePruneStaleDrafts(fleet.devices, fleet.listed, pendingCreated, drafts, ROUTER_DRAFT_KEY);
   const missingWorker = route?.view === "worker" && state.phase === "ready" && workerView === undefined && state.conversations[route.id] === undefined ? route.id : null;
   const workerLookup = missingWorker === null ? undefined : state.lookups[missingWorker];
   useEffect(() => {
@@ -277,10 +290,9 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const keyOf = useCallback((id: ConversationId) => conversationKey(current.key, id), [current.key]);
   const openWorkerConversation = useCallback(
     (id: ConversationId) => {
-      if (compact) setCompactRailOpen(false);
       navigate({ view: "worker", id, ...here }, !autoSelect && route?.view === "worker");
     },
-    [compact, navigate, here, autoSelect, route?.view],
+    [navigate, here, autoSelect, route?.view],
   );
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -325,7 +337,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     [keyOf, drafts, hub, staging],
   );
   const handleLoadOlder = useCallback((id: ConversationId) => void hub.loadOlder(id), [hub]);
-  const openProfile = useCallback((pmId: PmId) => navigate({ view: "profile", pmId, ...here }), [navigate, here]);
+  const openProfile = useCallback(
+    (pmId: PmId, page?: ProfilePage) => navigate({ view: "profile", pmId, ...(page === undefined ? {} : { page }), ...here }),
+    [navigate, here],
+  );
   const health = useMemo(() => failingHealth(state), [state.health]);
   const quotaFetchable = useMemo(() => hasFetchedQuotaSession(state), [state.sessions]);
   const workerLine = useMemo(() => (openWorker === null ? null : workerLineOf(state, openWorker)), [state.conversations, openWorker]);
@@ -348,31 +363,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const openNewPm = useCallback(() => setCreating(true), []);
   const refreshFleet = useCallback(() => void fleet.refresh(), [fleet.refresh]);
-  const deviceSettingsRef = useRef<DeviceSettings | null>(null);
-  const deviceSettings = useMemo<DeviceSettings | null>(() => {
-    if (!fleet.managed) {
-      deviceSettingsRef.current = null;
-      return null;
-    }
-    const next: DeviceSettings = {
-      devices: fleet.devices,
-      onChanged: refreshFleet,
-    };
-    const prev = deviceSettingsRef.current;
-    if (
-      prev !== null &&
-      prev.onChanged === next.onChanged &&
-      prev.devices.length === next.devices.length &&
-      next.devices.every((d, i) => {
-        const o = prev.devices[i]!;
-        return d.key === o.key && d.info === o.info && d.status === o.status && (d.status !== "offline" || d.lastOnlineAt === o.lastOnlineAt);
-      })
-    ) {
-      return prev;
-    }
-    deviceSettingsRef.current = next;
-    return next;
-  }, [fleet.managed, fleet.devices, refreshFleet]);
+  const deviceSettings = useDeviceSettings(fleet.managed, fleet.devices, refreshFleet);
   const created = useCallback(
     (device: string, conversationId: ConversationId) => {
       setCreating(false);
@@ -382,21 +373,20 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     [select],
   );
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
-  const railHasContent = !profile && (railWorkers.length > 0 || railAsks.length > 0 || railGraphs.length > 0);
-  const railNeedsYou = !profile && (railAsks.length > 0 || railGraphs.length > 0 || railWorkers.some((w) => !w.ended));
-  const railAttention = !profile && (railAsks.length > 0 || railGraphNeedsYou);
+  const railHasContent = railWorkers.length > 0 || railAsks.length > 0 || railGraphs.length > 0;
+  const railNeedsYou = railAsks.length > 0 || railGraphs.length > 0 || railWorkers.some((w) => !w.ended);
+  const railAttention = railAsks.length > 0 || railGraphNeedsYou;
   const railPeeking = railPeek !== null && railPeek === railPm;
-  const railOpen = railHasContent && (compact ? compactRailOpen : !railClosed && (railNeedsYou || railPeeking));
-  const toggleRail = useCallback(() => {
-    if (compact) {
-      setCompactRailOpen((v) => !v);
-      return;
-    }
-    const closed = railOpen;
-    setRailClosed(closed);
-    saveRailClosed(closed);
-    setRailPeek(closed || railNeedsYou ? null : railPm);
-  }, [compact, railOpen, railNeedsYou, railPm]);
+  const railOpen = railHasContent && !railClosed && (railNeedsYou || railPeeking);
+  const toggleRail = useCallback(
+    (forceOpen?: boolean) => {
+      const closed = forceOpen === undefined ? railOpen : !forceOpen;
+      setRailClosed(closed);
+      saveRailClosed(closed);
+      setRailPeek(closed || railNeedsYou ? null : railPm);
+    },
+    [railOpen, railNeedsYou, railPm],
+  );
   const openAsk = useCallback(
     (messageId: MessageId) => {
       if (active && openWorker !== null) {
@@ -428,16 +418,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     [fleet.devices],
   );
   const routerWorking = local.state.router.commands.some((c) => c.status === "planning");
-  const sidebarRouter = useMemo<SidebarRouterEntry>(
+  const routerSummary = useMemo<AppRailRouter>(
     () => ({
       active: routerActive,
       pendingCount: routerView.summary.pendingCount,
-      unreadReportCount: routerView.summary.unreadReportCount,
-      subtitle: routerView.summary.subtitle,
       working: routerWorking,
       onSelect: selectRouter,
     }),
-    [routerActive, routerView.summary.pendingCount, routerView.summary.unreadReportCount, routerView.summary.subtitle, routerWorking, selectRouter],
+    [routerActive, routerView.summary.pendingCount, routerWorking, selectRouter],
   );
   const fleetHub = fleet.hub;
   const clientForDevice = useCallback((deviceKey: string) => fleetHub(deviceKey).client, [fleetHub]);
@@ -450,6 +438,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const openDeviceWorker = useCallback(
     (deviceKey: string, id: ConversationId) => {
+      setPickedDevice(null);
       navigate({ view: "worker", id, ...routeDeviceOf(deviceKey) });
     },
     [navigate],
@@ -460,7 +449,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     },
     [select],
   );
-  const groupsRef = useRef<SidebarGroup[]>([]);
+  const railInputs = useStableRailInputs(fleet.devices);
+  const railComputers = useMemo(() => railComputersOf(railInputs, reminders.asking), [railInputs, reminders.asking]);
+  const allDevices = useMemo(
+    () => railInputs.map((c) => ({ ...c, badge: railComputers.find((rc) => rc.key === c.key)?.badge ?? 0 })),
+    [railInputs, railComputers],
+  );
+  const togglePin = useCallback((pmId: PmId, pinned: boolean) => togglePmPin(hub.client, pmId, pinned), [hub.client]);
+  const accountTarget = accountSettingsTarget(fleet.devices, fleet.managed);
 
   const shared = { navigate, replace, qc, fleet, route, local, routedDevice, current, hub, state };
   if (!shellReady) return { ...shared, content: null };
@@ -469,50 +465,21 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
   const workerPmEntry = active;
   const look = active?.look ?? NO_LOOK;
-  const nextGroups: SidebarGroup[] = fleet.devices.map((d) => ({
-    key: d.key,
-    name: d.info.name,
-    platform: d.info.platform,
-    status: d.status,
-    lastOnlineAt: d.lastOnlineAt,
-    entries: d.state.phase === "ready" ? (d.key === current.key ? entries : listConversations(d.state)) : EMPTY_ENTRIES,
-  }));
-  const prevGroups = groupsRef.current;
-  const groups =
-    prevGroups.length === nextGroups.length &&
-    nextGroups.every((g, i) => {
-      const p = prevGroups[i]!;
-      return (
-        p.key === g.key &&
-        p.name === g.name &&
-        p.platform === g.platform &&
-        p.status === g.status &&
-        (g.status !== "offline" || p.lastOnlineAt === g.lastOnlineAt) &&
-        p.entries === g.entries
-      );
-    })
-      ? prevGroups
-      : nextGroups;
-  groupsRef.current = groups;
-  const newPmDevices = fleet.devices.map((d) => ({
-    key: d.key,
-    name: d.info.name,
-    status: d.status,
-    client: fleet.hub(d.key).client,
-    server: d.state.server,
-    takenLooks: d.state.pms.filter((pm) => pm.archivedAt == null).map(resolvePmLook),
-  }));
+  const listEntries = state.phase === "ready" ? entries : EMPTY_ENTRIES;
+  const railCount = railAsks.length + railGraphs.length + railWorkers.filter((w) => !w.ended).length;
+  const newPmDevices = newPmDevicesOf(fleet.devices, clientForDevice);
   return {
     ...shared,
     content: {
+      accountTarget,
       active,
       activeId,
       actions,
+      allDevices,
       look,
       clearFocus,
       clientForDevice,
       storeForDevice,
-      compact,
       created,
       creating,
       defaultProviderDevice: nav.defaultProviderDevice,
@@ -521,12 +488,11 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       deviceSettings,
       drafts,
       focus,
-      groups,
       handleLoadOlder,
       health,
       keyOf,
       link,
-      narrow,
+      listEntries,
       newPmDevices,
       offline,
       onSettingsOpenChange: nav.onSettingsOpenChange,
@@ -542,9 +508,12 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       openWorkerConversation,
       profile,
       profileEntry,
+      profilePage,
       quotaFetchable,
       railAsks,
       railAttention,
+      railComputers,
+      railCount,
       railGraphs,
       railHasContent,
       railLoadMoreWorkers,
@@ -555,15 +524,17 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       refreshFleet,
       reminders,
       routerActive,
+      routerSummary,
       routerView,
       select,
+      selectComputer,
       send,
       setCreating,
       settingsBack: nav.settingsBack,
       sidebarActive,
       sidebarActiveRef,
-      sidebarRouter,
       staging,
+      togglePin,
       toggleRail,
       view,
       workerLine,

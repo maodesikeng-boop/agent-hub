@@ -178,9 +178,9 @@ describe("web-guard：src/web 代码守卫", () => {
 
   it("禁止在 src/web/ui/select.tsx 之外直接写原生 <select>", () => {
     const hits: string[] = [];
-    const rawSelect = /<select(?:\s|>|\/?>)/;
+    const rawSelect = /<select(?![A-Za-z0-9_-])/;
     for (const file of files) {
-      if (relative(WEB_DIR, file) === "ui/select.tsx") continue;
+      if (relative(WEB_DIR, file).replaceAll("\\", "/") === "ui/select.tsx") continue;
       const lines = stripComments(readFileSync(file, "utf8")).split("\n");
       lines.forEach((line, index) => {
         if (rawSelect.test(line)) hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${line.trim()}`);
