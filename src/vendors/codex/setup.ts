@@ -18,6 +18,8 @@ import { readBoundedJsonObject, runShortSubcommand } from "../_common/setup/file
 
 const CODEX_POSIX_INSTALL_URL = "https://chatgpt.com/codex/install.sh";
 const CODEX_NPM_PACKAGE = "@openai/codex";
+// OpenAI OAuth rejects unrecognized originators, so login initialize must match codex login.
+const CODEX_LOGIN_CLIENT_INFO = { name: "codex_cli_rs", version: "0.1.0" } as const;
 
 const CODEX_AUTH_METHODS: readonly ProviderAuthMethodDescriptor[] = [
   {
@@ -160,7 +162,7 @@ function writeCodexLoginRequests(child: ChildProcessWithoutNullStreams, loginPar
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "fusa", version: "0.1.0" } },
+      params: { clientInfo: CODEX_LOGIN_CLIENT_INFO },
     })}\n`,
   );
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} })}\n`);
