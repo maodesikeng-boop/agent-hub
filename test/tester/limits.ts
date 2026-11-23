@@ -27,3 +27,26 @@ export const TESTER_FEISHU_TOKEN_SKEW_MS = 5 * 60_000;
 
 /** Whole-run budget for a nightly run, so a hung flow cannot hold the bench past morning. */
 export const TESTER_NIGHTLY_BUDGET_MS = 30 * 60_000;
+
+/** Poll interval while a flow waits on a daemon or on Feishu. */
+export const TESTER_POLL_MS = 1_000;
+
+/** How long the local test daemon may take to print its login link, and to exit after SIGTERM before it is killed. */
+export const TESTER_DAEMON_START_MS = 60_000;
+export const TESTER_DAEMON_STOP_MS = 35_000;
+
+/** One remote command over ssh, including a deploy that installs dependencies. */
+export const TESTER_REMOTE_COMMAND_TIMEOUT_MS = 10 * 60_000;
+
+/** Largest `logs <n>` the remote forced command accepts. */
+export const TESTER_REMOTE_LOG_MAX_LINES = 2_000;
+
+/** One vendor install command, and the stderr lines kept when it fails. */
+export const TESTER_INSTALL_TIMEOUT_MS = 10 * 60_000;
+export const TESTER_STDERR_TAIL_LINES = 20;
+
+/** Characters of any Feishu or chat message body a summary may show. */
+export const TESTER_SUMMARY_TEXT_MAX_CHARS = 200;
+
+/** A Feishu driver token refresh lock older than this is stale and taken over. */
+export const TESTER_FEISHU_LOCK_STALE_MS = 60_000;

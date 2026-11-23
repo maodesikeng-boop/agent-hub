@@ -272,7 +272,7 @@ export const FLOWS: readonly FlowSpec[] = [
     title: "Settings shows each vendor's real state",
     story: "The owner opens Settings and sees, for every supported vendor, whether it is installed and signed in, so no vendor quietly disappears from the workbench.",
     boundaries: { feishu: "none", network: "loopback", model: "real", devices: 1 },
-    needs: ["local_instance", "remote_instance"],
+    needs: [],
     cadences: ["nightly", "rc", "pr"],
     triggers: ["src/vendors/**", "src/daemon/driver/model-catalog.ts", "src/shared/paths.ts"],
     pass: [
@@ -344,11 +344,28 @@ export const FLOWS: readonly FlowSpec[] = [
 
 export const RUNNERS: Readonly<Record<string, FlowRunner>> = { ...feishuRunners, ...meshRunners, ...modelRunners, ...lifecycleRunners };
 
+/** Postcondition: true when `path` matches `glob`, where `**` spans directories and `*` stays within one. */
+export function matchesGlob(path: string, glob: string): boolean {
+  const pattern = glob
+    .split(/(\*\*\/|\*\*|\*)/)
+    .map((part) => (part === "**/" ? "(?:.*/)?" : part === "**" ? ".*" : part === "*" ? "[^/]*" : part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")))
+    .join("");
+  return new RegExp(`^${pattern}$`).test(path.split("\\").join("/"));
+}
+
 /**
  * Postcondition: flows in catalog order that list `cadence`, narrowed to `ids` when given,
  * and for `pr` runs to flows whose triggers match at least one of `changedPaths`.
  * Throws when `ids` names a flow that is not in the catalog.
  */
 export function selectFlows(catalog: readonly FlowSpec[], options: { cadence: Cadence; ids?: readonly string[]; changedPaths?: readonly string[] }): FlowSpec[] {
-  throw new Error("Not implemented");
+  const unknown = (options.ids ?? []).filter((id) => !catalog.some((f) => f.id === id));
+  if (unknown.length > 0) throw new Error(`unknown flow: ${unknown.join(", ")}; run \`node test/tester/cli.ts list\``);
+  const ids = options.ids === undefined || options.ids.length === 0 ? null : new Set(options.ids);
+  return catalog.filter((flow) => {
+    if (!flow.cadences.includes(options.cadence)) return false;
+    if (ids !== null) return ids.has(flow.id);
+    if (options.cadence !== "pr") return true;
+    return (options.changedPaths ?? []).some((path) => flow.triggers.some((glob) => matchesGlob(path, glob)));
+  });
 }

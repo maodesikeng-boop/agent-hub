@@ -3,7 +3,14 @@
 // exactly what a user installs. This file holds only the owner's coverage decision per vendor.
 // Invariant: coverage always has one entry per vendor per computer; a vendor that cannot be installed or signed in
 // appears with its status, reason, and fix, and is never left out. An accepted gap stops only the alert, never the listing.
-import type { AgentVendor } from "../../src/shared/vendors.ts";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { ProviderStatusItem } from "../../src/shared/providers.ts";
+import { vendorSpec, type AgentVendor } from "../../src/shared/vendors.ts";
+import { vendorConfigHome } from "../../src/shared/paths.ts";
+import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
+import { TESTER_INSTALL_TIMEOUT_MS, TESTER_STDERR_TAIL_LINES } from "./limits.ts";
 import type { InstanceRole } from "./types.ts";
 
 export type ReadinessStatus =
@@ -58,30 +65,169 @@ export const VENDOR_BENCH: Readonly<Record<AgentVendor, VendorBenchRecipe>> = {
 
 /** Postcondition: the product's install command for `vendor` on `platform`: windowsInstallCommand on win32, else installCommand. Throws when the vendor ships none. */
 export function installCommandFor(vendor: AgentVendor, platform: NodeJS.Platform): string {
-  throw new Error("Not implemented");
+  const paths = VENDOR_PATHS[vendor];
+  const command = platform === "win32" ? paths.windowsInstallCommand : paths.installCommand;
+  if (command === undefined) throw new Error(`${vendorSpec(vendor).label} ships no install command for ${platform}`);
+  return command;
 }
 
 /** Postcondition: the product's headless login command for `vendor`, falling back to its spec's cli.loginCommand. */
 export function loginCommandFor(vendor: AgentVendor): string {
-  throw new Error("Not implemented");
+  return VENDOR_PATHS[vendor].headlessLoginCommand ?? vendorSpec(vendor).cli.loginCommand;
+}
+
+export interface InstallRecord {
+  vendor: AgentVendor;
+  command: string;
+  exitCode: number | null;
+  stderrTail: string;
+  at: string;
+}
+
+export interface CommandResult {
+  exitCode: number | null;
+  stderr: string;
+}
+
+export type CommandRunner = (command: string, env: Record<string, string>, timeoutMs: number) => Promise<CommandResult>;
+
+/** Runs `command` through the platform shell, since the product's install commands are shell pipelines. */
+export const runShell: CommandRunner = (command, env, timeoutMs) =>
+  new Promise((resolve) => {
+    const [shell, args] = process.platform === "win32" ? ["powershell.exe", ["-NoProfile", "-Command", command]] : ["/bin/sh", ["-c", command]];
+    const child = spawn(shell, args, { env, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr!.setEncoding("utf8").on("data", (c: string) => (stderr = (stderr + c).slice(-64 * 1024)));
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      resolve({ exitCode: null, stderr: `${stderr}\n${error.message}` });
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      resolve({ exitCode: code, stderr });
+    });
+  });
+
+const tail = (text: string, lines: number) => text.trimEnd().split("\n").slice(-lines).join("\n");
+
+export const installRecordFile = (installDir: string, vendor: AgentVendor) => join(installDir, `${vendor}.json`);
+
+export function readInstallRecord(installDir: string, vendor: AgentVendor): InstallRecord | null {
+  const file = installRecordFile(installDir, vendor);
+  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as InstallRecord) : null;
+}
+
+export interface InstallTarget {
+  instance: InstanceRole;
+  /** The bench HOME the installer sees. */
+  userHome: string;
+  /** The test daemon's managed npm prefix, where npm-based CLIs land. */
+  npmPrefix: string;
+  /** PATH with only bench bins, a node-only directory, and system directories. */
+  path: string;
+  /** Where the outcome is recorded, so later probes report install_failed with its stderr. */
+  installDir: string;
+  platform: NodeJS.Platform;
+  /** Bench env entries such as CODEX_HOME, so a CLI that installs its own config lands in the bench HOME too. */
+  env: Record<string, string>;
+  run?: CommandRunner;
+  /** Re-resolves the CLI inside the bench after the install; null when it is still missing. */
+  resolveCli: () => string | null;
 }
 
 /**
  * Runs the product's install command with HOME set to the bench HOME (and npm's global prefix inside it), so nothing
  * lands in the developer's own tool directories.
- * Postcondition: `ready`, `signed_out`, or `install_failed` with the command's exit code and the last 20 stderr lines in detail.
+ * Postcondition: `signed_out` when the CLI now resolves inside the bench (the daemon decides ready later), or `install_failed`
+ * with the command's exit code and the last 20 stderr lines in detail. The outcome is recorded under installDir.
  */
-export async function installVendor(vendor: AgentVendor, bench: { instance: InstanceRole; userHome: string; platform: NodeJS.Platform }): Promise<VendorReadiness> {
-  throw new Error("Not implemented");
+export async function installVendor(vendor: AgentVendor, target: InstallTarget): Promise<VendorReadiness> {
+  const command = installCommandFor(vendor, target.platform);
+  const env = {
+    ...target.env,
+    HOME: target.userHome,
+    USERPROFILE: target.userHome,
+    PATH: target.path,
+    npm_config_prefix: target.npmPrefix,
+    NPM_CONFIG_PREFIX: target.npmPrefix,
+    SHELL: "/bin/sh",
+  };
+  const result = await (target.run ?? runShell)(command, env, TESTER_INSTALL_TIMEOUT_MS);
+  const record: InstallRecord = { vendor, command, exitCode: result.exitCode, stderrTail: tail(result.stderr, TESTER_STDERR_TAIL_LINES), at: new Date().toISOString() };
+  mkdirSync(target.installDir, { recursive: true });
+  const resolved = result.exitCode === 0 ? target.resolveCli() : null;
+  writeFileSync(installRecordFile(target.installDir, vendor), `${JSON.stringify({ ...record, exitCode: resolved === null && result.exitCode === 0 ? -1 : result.exitCode }, null, 2)}\n`);
+  if (resolved !== null) return withRecipe({ vendor, instance: target.instance, status: "signed_out", version: null, detail: `installed at ${resolved}`, fix: loginFix(vendor, target.userHome) });
+  const why = result.exitCode === 0 ? "exited 0 but the CLI is not inside the bench HOME" : `exited ${result.exitCode}`;
+  return withRecipe({ vendor, instance: target.instance, status: "install_failed", version: null, detail: `${command} ${why}\n${record.stderrTail}`, fix: installFix(vendor, target.platform) });
+}
+
+function installFix(vendor: AgentVendor, platform: NodeJS.Platform): string {
+  return `node test/tester/cli.ts vendors install (runs: ${installCommandFor(vendor, platform)})`;
+}
+
+function loginFix(vendor: AgentVendor, userHome: string | null): string {
+  const recipe = VENDOR_BENCH[vendor];
+  const how = recipe.coverage === "turn" ? recipe.signIn : `none needed: accepted gap (${recipe.reason})`;
+  return userHome === null ? `${loginCommandFor(vendor)} as the bench user; ${how}` : `HOME=${userHome} ${loginCommandFor(vendor)}; ${how}`;
+}
+
+/** Sets acceptedGap when the vendor's recipe accepts exactly this status. */
+export function withRecipe(entry: VendorReadiness): VendorReadiness {
+  const recipe = VENDOR_BENCH[entry.vendor];
+  if (recipe.coverage !== "accepted_gap" || entry.status !== recipe.status) return entry;
+  return { ...entry, acceptedGap: `${recipe.reason} (decided ${recipe.decided}; offline: ${recipe.fallbackTests.join(", ")})` };
+}
+
+/** True when a credential for the vendor lives in the bench HOME or the bench env, rather than somewhere shared such as a keychain. */
+export function benchHoldsCredential(vendor: AgentVendor, userHome: string, env: Readonly<Record<string, string>>): boolean {
+  const spec = vendorSpec(vendor);
+  const configHome = spec.home.configHome;
+  const base = configHome ? vendorConfigHome(vendor, userHome, env) : null;
+  const files = spec.home.readonlySecrets.map((rel) => (configHome && base && rel.startsWith(`${configHome.rel}/`) ? join(base, rel.slice(configHome.rel.length + 1)) : join(userHome, rel)));
+  const credentialEnv = VENDOR_PATHS[vendor].credentialEnv;
+  const envHit = Object.keys(env).some(
+    (k) => credentialEnv?.names?.includes(k) === true || credentialEnv?.prefixes?.some((p) => k.startsWith(p)) === true || credentialEnv?.pattern?.test(k) === true,
+  );
+  return envHit || files.some((f) => existsSync(f));
+}
+
+export interface ProbeTarget {
+  instance: InstanceRole;
+  /** The daemon's own report for the vendor from GET /api/providers; null when the computer did not answer. */
+  provider: Pick<ProviderStatusItem, "installed" | "version" | "availability" | "accountSummary"> | null;
+  /** Why the computer did not answer, when provider is null. */
+  unreachable?: string;
+  /** Local computer only: the CLI resolved inside the bench HOME (null when missing), the bench HOME, and its env. */
+  local?: { cliPath: string | null; userHome: string; env: Readonly<Record<string, string>>; installDir: string };
+  platform: NodeJS.Platform;
 }
 
 /**
- * Postcondition: one VendorReadiness for `vendor` on the computer, from three facts: the CLI resolves and prints a version,
- * the daemon's catalog reports its availability, and the vendor's own status command reports a signed-in account.
- * It starts no model turn and spends no tokens. `fix` names installCommandFor or loginCommandFor for that status.
+ * Postcondition: one VendorReadiness for `vendor` on the computer, from three facts: the CLI resolves inside the bench and
+ * the daemon reports it installed with a version, the daemon's catalog reports its availability, and the daemon's status
+ * shows an account. It starts no model turn and spends no tokens. `fix` names installCommandFor or loginCommandFor for that status.
  */
-export async function probeVendor(vendor: AgentVendor, target: { instance: InstanceRole; catalogAvailability: string | null; userHome: string; platform: NodeJS.Platform }): Promise<VendorReadiness> {
-  throw new Error("Not implemented");
+export function probeVendor(vendor: AgentVendor, target: ProbeTarget): VendorReadiness {
+  const base = { vendor, instance: target.instance, version: target.provider?.version ?? null };
+  const home = target.local?.userHome ?? null;
+  if (target.provider === null) return withRecipe({ ...base, status: "unknown", detail: target.unreachable ?? `the ${target.instance} computer did not answer`, fix: "Bring the bench computer back, then rerun preflight." });
+  const missing = target.local?.cliPath === null || !target.provider.installed || target.provider.availability === "not_installed";
+  if (missing) {
+    const record = target.local ? readInstallRecord(target.local.installDir, vendor) : null;
+    if (record !== null && record.exitCode !== 0) {
+      return withRecipe({ ...base, status: "install_failed", detail: `${record.command} exited ${record.exitCode} at ${record.at}\n${record.stderrTail}`, fix: installFix(vendor, target.platform) });
+    }
+    return withRecipe({ ...base, status: "not_installed", detail: "the CLI does not resolve inside the bench HOME", fix: installFix(vendor, target.platform) });
+  }
+  const availability = target.provider.availability;
+  if (availability === "signed_out") return withRecipe({ ...base, status: "signed_out", detail: "installed, not signed in", fix: loginFix(vendor, home) });
+  if (availability !== "available") return withRecipe({ ...base, status: "unknown", detail: `the daemon reports ${availability}`, fix: "Open Settings, Providers on that computer and read the vendor's error." });
+  if (target.local && target.platform === "darwin" && !benchHoldsCredential(vendor, target.local.userHome, target.local.env)) {
+    return withRecipe({ ...base, status: "login_blocked", detail: "signed in, but no credential lives in the bench HOME or bench env; the login comes from somewhere shared such as the keychain", fix: `Decide: accept the gap on this Mac, or let ${vendorSpec(vendor).label} use the developer's own login.` });
+  }
+  return withRecipe({ ...base, status: "ready", detail: target.provider.accountSummary ?? "signed in", fix: "" });
 }
 
 /**
@@ -89,5 +235,9 @@ export async function probeVendor(vendor: AgentVendor, target: { instance: Insta
  * and every entry of an `accepted_gap` vendor whose status differs from its accepted status (for example install_failed).
  */
 export function openGaps(coverage: readonly VendorReadiness[]): VendorReadiness[] {
-  throw new Error("Not implemented");
+  return coverage.filter((entry) => {
+    if (entry.status === "ready") return false;
+    const recipe = VENDOR_BENCH[entry.vendor];
+    return recipe.coverage === "turn" || entry.status !== recipe.status;
+  });
 }
