@@ -4,7 +4,7 @@ import { errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 
-const GROUP_SHELL = "overflow-hidden border-2 border-border bg-background";
+const GROUP_SHELL = "overflow-hidden border-2 border-border bg-background [contain:layout_style]";
 
 const GROUP_BOX = `divide-y divide-border ${GROUP_SHELL}`;
 

@@ -5,8 +5,49 @@ import { LOCAL_DEVICE, conversationKey, type DeviceKey } from "./devices.ts";
 import { NEEDS_YOU, YOUR_TURN } from "./format.ts";
 import { stripMarkdown } from "./plainText.ts";
 import { hasPushSubscription, pushSupport, subscribePush, unsubscribePush } from "./push.ts";
-import { askingConversations, listConversations, pendingAsks, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
+import { allPendingAsks, askingConversations, listConversations, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
 import type { HubState } from "./state.ts";
+
+function sameSessionActivities(a: HubState["sessions"], b: HubState["sessions"]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (
+      x !== y &&
+      (x.sessionId !== y.sessionId ||
+        x.conversationId !== y.conversationId ||
+        x.pmId !== y.pmId ||
+        x.generation !== y.generation ||
+        x.status !== y.status ||
+        x.activity !== y.activity)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+interface WaitingMemoEntry {
+  conversations: HubState["conversations"];
+  pms: HubState["pms"];
+  pending: HubState["pending"];
+  sessions: HubState["sessions"];
+  seenKey: string;
+  list: Array<{ device: DeviceKey; key: string; id: ConversationId }>;
+}
+
+interface AsksMemoEntry {
+  conversations: HubState["conversations"];
+  pms: HubState["pms"];
+  projects: HubState["projects"];
+  pending: HubState["pending"];
+  routerItems: unknown;
+  activeTaskGraphs: HubState["activeTaskGraphs"];
+  asks: Array<{ uid: string; device: DeviceKey; conversationId: ConversationId; text: string }>;
+  askingKey: string;
+}
 
 export { WAITING_SETTLE_MS };
 
@@ -124,12 +165,36 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
   const ready = devices.filter((d) => d.state.phase === "ready");
   // The local device key is "", so join() would collide; use JSON.
   const readyKey = JSON.stringify(ready.map((d) => d.key));
+  const readyKeys = useMemo(() => JSON.parse(readyKey) as DeviceKey[], [readyKey]);
+  const waitingCacheRef = useRef(new Map<DeviceKey, WaitingMemoEntry>());
   const candidates = useMemo(
     () =>
       ready.flatMap((d) => {
         const seen = getLastSeen(d.key);
-        const effectiveSeen = foreground && d.key === viewingDevice && viewingId !== null ? { ...seen, [viewingId]: Date.now() } : seen;
-        return waitingConversations(d.state, effectiveSeen).map((id) => ({ device: d.key, key: conversationKey(d.key, id), id }));
+        const isViewing = foreground && d.key === viewingDevice && viewingId !== null;
+        const effectiveSeen = isViewing ? { ...seen, [viewingId]: Date.now() } : seen;
+        const seenKey = `${Object.keys(seen).length}:${isViewing ? viewingId : ""}`;
+        const prev = waitingCacheRef.current.get(d.key);
+        if (
+          prev !== undefined &&
+          prev.conversations === d.state.conversations &&
+          prev.pms === d.state.pms &&
+          prev.pending === d.state.pending &&
+          prev.seenKey === seenKey &&
+          sameSessionActivities(prev.sessions, d.state.sessions)
+        ) {
+          return prev.list;
+        }
+        const list = waitingConversations(d.state, effectiveSeen).map((id) => ({ device: d.key, key: conversationKey(d.key, id), id }));
+        waitingCacheRef.current.set(d.key, {
+          conversations: d.state.conversations,
+          pms: d.state.pms,
+          pending: d.state.pending,
+          sessions: d.state.sessions,
+          seenKey,
+          list,
+        });
+        return list;
       }),
     [devices, foreground, viewingDevice, viewingId],
   );
@@ -176,7 +241,7 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
       }
     }
     for (const key of settled.current) if (!now.has(key)) settled.current.delete(key);
-    for (const device of JSON.parse(readyKey) as DeviceKey[]) {
+    for (const device of readyKeys) {
       if (opened.current.has(device)) continue;
       opened.current.add(device);
       for (const c of candidates) if (c.device === device) settled.current.add(c.key);
@@ -195,20 +260,32 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
     }
     setWaiting((prev) => (prev.size === settled.current.size && [...prev].every((key) => settled.current.has(key)) ? prev : new Set(settled.current)));
     // candidates is a new array on every state change; depend on its content key instead.
-  }, [readyKey, candidatesKey, announce]);
+  }, [readyKeys, candidatesKey, announce]);
 
-  const asks = useMemo(
-    () =>
-      ready.flatMap((d) => {
-        const msgItems = Object.keys(d.state.conversations).flatMap((key) =>
-          pendingAsks(d.state, Number(key)).map((message) => ({
-            uid: `ask:${d.key}:${message.id}`,
-            device: d.key,
-            conversationId: Number(key),
-            text: message.text,
-          })),
-        );
-        const decisionItems = pendingDecisionsOf(d.state, d.key === LOCAL_DEVICE ? "local" : d.key)
+  const asksCacheRef = useRef(new Map<DeviceKey, AsksMemoEntry>());
+  const { asks, askingKey } = useMemo(() => {
+    const allAsks: Array<{ uid: string; device: DeviceKey; conversationId: ConversationId; text: string }> = [];
+    const askingParts: string[] = [];
+    for (const d of ready) {
+      const prev = asksCacheRef.current.get(d.key);
+      let entry = prev;
+      if (
+        entry === undefined ||
+        entry.conversations !== d.state.conversations ||
+        entry.pms !== d.state.pms ||
+        entry.projects !== d.state.projects ||
+        entry.pending !== d.state.pending ||
+        entry.routerItems !== d.state.router.items ||
+        entry.activeTaskGraphs !== d.state.activeTaskGraphs
+      ) {
+        const deviceId = d.key === LOCAL_DEVICE ? "local" : d.key;
+        const msgItems = allPendingAsks(d.state).map(({ conversationId, message }) => ({
+          uid: `ask:${d.key}:${message.id}`,
+          device: d.key,
+          conversationId,
+          text: message.text,
+        }));
+        const decisionItems = pendingDecisionsOf(d.state, deviceId)
           .filter(
             (dec) =>
               dec.askMessageId === null &&
@@ -220,19 +297,24 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
             conversationId: dec.conversationId,
             text: dec.question,
           }));
-        return [...msgItems, ...decisionItems];
-      }),
-    [devices],
-  );
-  const askingKey = useMemo(
-    () =>
-      ready
-        .flatMap((d) =>
-          [...askingConversations(d.state, d.key === LOCAL_DEVICE ? "local" : d.key)].map((id) => conversationKey(d.key, id)),
-        )
-        .join(","),
-    [devices],
-  );
+        const askingIds = [...askingConversations(d.state, deviceId)].map((id) => conversationKey(d.key, id));
+        entry = {
+          conversations: d.state.conversations,
+          pms: d.state.pms,
+          projects: d.state.projects,
+          pending: d.state.pending,
+          routerItems: d.state.router.items,
+          activeTaskGraphs: d.state.activeTaskGraphs,
+          asks: [...msgItems, ...decisionItems],
+          askingKey: askingIds.join(","),
+        };
+        asksCacheRef.current.set(d.key, entry);
+      }
+      allAsks.push(...entry.asks);
+      if (entry.askingKey !== "") askingParts.push(entry.askingKey);
+    }
+    return { asks: allAsks, askingKey: askingParts.join(",") };
+  }, [devices]);
   const asking = useMemo<ReadonlySet<string>>(() => new Set(askingKey === "" ? [] : askingKey.split(",")), [askingKey]);
   const knownAsks = useRef(new Set<string>());
   const asksOpened = useRef(new Set<DeviceKey>());
@@ -243,8 +325,8 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
       knownAsks.current.add(uid);
       if (!fresh.has(device)) announce({ device, id: conversationId }, text);
     }
-    for (const device of JSON.parse(readyKey) as DeviceKey[]) asksOpened.current.add(device);
-  }, [readyKey, asks, announce]);
+    for (const device of readyKeys) asksOpened.current.add(device);
+  }, [readyKeys, asks, announce]);
 
   useEffect(() => {
     const pending = timers.current;

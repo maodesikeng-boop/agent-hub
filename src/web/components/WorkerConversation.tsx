@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { WORKER_RETENTION_DAYS, WORKER_RETENTION_MAX_ENDED, type ConversationId, type Message, type SessionState, type WorkerPick } from "../../shared/index.ts";
 import type { WorkerEntry, WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
@@ -15,7 +15,7 @@ import { useStop } from "../useStop.ts";
 import { hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 import { PieceMeta } from "./RightRail.tsx";
 
-export function WorkerConversation({
+export const WorkerConversation = memo(function WorkerConversation({
   title,
   readonly,
   phase,
@@ -169,4 +169,4 @@ export function WorkerConversation({
       )}
     </FileDropZone>
   );
-}
+});

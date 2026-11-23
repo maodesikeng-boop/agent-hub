@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { HUB_COMPOSER_COMMANDS, type ConversationId, type MessageId, type PmId, type WorkerPick } from "../../shared/index.ts";
 import { errorText, formatArchiveRemaining, type ErrorLike } from "../format.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
@@ -53,7 +53,7 @@ function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }
   );
 }
 
-export function Conversation({
+export const Conversation = memo(function Conversation({
   entry,
   view,
   pending,
@@ -204,4 +204,4 @@ export function Conversation({
       </div>
     </FileDropZone>
   );
-}
+});

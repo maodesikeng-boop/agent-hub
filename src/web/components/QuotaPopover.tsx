@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Hourglass } from "../ui/icons.ts";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { useClient } from "../device-scope.tsx";
 import { formatQuotaReset } from "../format.ts";
 import { fetchedQuotaUsage, type QuotaVendor, type QuotaWindowUsage } from "../selectors.ts";
@@ -46,7 +46,7 @@ function groupByVendor(blocks: readonly QuotaVendor[]): { name: string; blocks: 
   return sections;
 }
 
-export function QuotaPopover({
+export const QuotaPopover = memo(function QuotaPopover({
   quota,
   fetchable = false,
   placement = "sidebar",
@@ -125,4 +125,4 @@ export function QuotaPopover({
       </PopoverContent>
     </Popover>
   );
-}
+});

@@ -2,10 +2,12 @@ import { useRef, useState, useEffect } from "react";
 import type * as React from "react";
 import {
   DEFAULT_AGENT_VENDOR,
+  MAX_PERSONA_BYTES,
   MAX_SCHEDULES_PER_PM,
   effortLabel,
   modelLabel,
   splitModelEffort,
+  utf8Bytes,
   vendorLabel,
   type PersonaChange,
   type PersonaView,
@@ -327,14 +329,23 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
 }
 
 function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> }) {
-  const { text, tooLong, textError, busy } = persona;
+  const { savedText, syncKey, textError, busy, save } = persona;
+  const [trackedSyncKey, setTrackedSyncKey] = useState(syncKey);
+  const [draftText, setDraftText] = useState<string | null>(null);
+  if (trackedSyncKey !== syncKey) {
+    setTrackedSyncKey(syncKey);
+    setDraftText(null);
+  }
+  const text = draftText ?? savedText;
+  const dirty = text !== savedText;
+  const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
   const hint = personaLoadHint(text);
   return (
     <SettingsGroup
       title="Persona"
       action={
-        persona.dirty && (
-          <Button size="sm" disabled={tooLong || busy !== null} onClick={persona.save}>
+        dirty && (
+          <Button size="sm" disabled={tooLong || busy !== null} onClick={() => save(text)}>
             {busy === "text" && <Loader2 aria-hidden="true" />}
             Save
           </Button>
@@ -350,7 +361,7 @@ function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> 
           text === "" ? "text-body" : "font-mono text-minor",
         )}
         value={text}
-        onChange={(e) => persona.setText(e.target.value)}
+        onChange={(e) => setDraftText(e.target.value)}
       />
       {hint !== null && !tooLong && <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{hint}</p>}
       {(tooLong || textError) && (
@@ -697,7 +708,7 @@ export function ProfilePanel({
   const pageTitle = activePage === null ? pm.name : PAGE_TITLES[activePage];
 
   const body = (
-    <div className={cn("min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain", isPage ? "px-6 pt-4 pb-12" : "px-5 py-4")}>
+    <div className={cn("min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain", isPage ? "page-fade px-6 pt-4 pb-12" : "right-rail-scroll px-5 py-4")}>
       <div className={cn("mx-auto grid grid-cols-1 gap-4", isPage && "max-w-160")}>
         {activePage === null && (
           <>

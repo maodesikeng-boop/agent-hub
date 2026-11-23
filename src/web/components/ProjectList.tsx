@@ -47,7 +47,8 @@ export interface ProjectListProps {
 
 const SECTION_HEADING = "flex h-8 items-center gap-1.5 px-4 text-minor font-medium text-list-ink-soft";
 
-function StripItem({
+const StripItem = memo(function StripItem({
+  deviceKey,
   entry,
   active,
   waiting,
@@ -55,12 +56,13 @@ function StripItem({
   readOnly,
   onSelect,
 }: {
+  deviceKey: DeviceKey;
   entry: ConversationEntry;
   active: boolean;
   waiting: boolean;
   asking: boolean;
   readOnly: boolean;
-  onSelect: () => void;
+  onSelect: (ref: ConversationRef) => void;
 }) {
   const stateLabel = asking ? NEEDS_YOU : waiting ? YOUR_TURN : "";
   const ariaLabel = stateLabel ? `${entry.name} (${stateLabel})` : entry.name;
@@ -70,7 +72,7 @@ function StripItem({
       title={entry.name}
       aria-label={ariaLabel}
       aria-current={active ? "page" : undefined}
-      onClick={onSelect}
+      onClick={() => onSelect({ device: deviceKey, id: entry.id })}
       className={cn(
         "relative grid size-13 shrink-0 cursor-pointer place-items-center border-2 transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
         active ? "border-select-line bg-background" : "border-transparent hover:bg-list-hover",
@@ -87,9 +89,10 @@ function StripItem({
       )}
     </button>
   );
-}
+});
 
-function ProjectRow({
+const ProjectRow = memo(function ProjectRow({
+  deviceKey,
   entry,
   pageLayout,
   active,
@@ -100,13 +103,14 @@ function ProjectRow({
   onTogglePin,
   onOpenPmSettings,
 }: {
+  deviceKey: DeviceKey;
   entry: ConversationEntry;
   pageLayout: boolean;
   active: boolean;
   waiting: boolean;
   asking: boolean;
   readOnly: boolean;
-  onSelect: () => void;
+  onSelect: (ref: ConversationRef) => void;
   onTogglePin: (pmId: PmId, pinned: boolean) => void;
   onOpenPmSettings: (pmId: PmId) => void;
 }) {
@@ -136,7 +140,7 @@ function ProjectRow({
       <button
         type="button"
         aria-current={active ? "page" : undefined}
-        onClick={onSelect}
+        onClick={() => onSelect({ device: deviceKey, id: entry.id })}
         className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-1 text-left outline-none focus-visible:outline-2 focus-visible:outline-border-focus"
       >
         <Avatar look={entry.look} size={36} className={cn("shrink-0", readOnly && "opacity-60")} />
@@ -178,7 +182,7 @@ function ProjectRow({
       )}
     </div>
   );
-}
+});
 
 /**
  * Postcondition: renders the header, search, and the Pinned, Project managers, and collapsed Archived groups from
@@ -223,18 +227,19 @@ export const ProjectList = memo(function ProjectList({
             <Plus aria-hidden="true" />
           </Button>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 py-2.5">
+        <div className="sidebar-list flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 py-2.5">
           {sections.pinned.map((entry) => {
             const key = conversationKey(computer.key, entry.id);
             return (
               <StripItem
                 key={entry.id}
+                deviceKey={computer.key}
                 entry={entry}
                 active={isSelected(entry)}
                 waiting={waiting.has(key)}
                 asking={asking.has(key)}
                 readOnly={readOnly}
-                onSelect={() => onSelect({ device: computer.key, id: entry.id })}
+                onSelect={onSelect}
               />
             );
           })}
@@ -246,12 +251,13 @@ export const ProjectList = memo(function ProjectList({
             return (
               <StripItem
                 key={entry.id}
+                deviceKey={computer.key}
                 entry={entry}
                 active={isSelected(entry)}
                 waiting={waiting.has(key)}
                 asking={asking.has(key)}
                 readOnly={readOnly}
-                onSelect={() => onSelect({ device: computer.key, id: entry.id })}
+                onSelect={onSelect}
               />
             );
           })}
@@ -313,7 +319,7 @@ export const ProjectList = memo(function ProjectList({
         <SearchField label="Search conversations" tone="cream" value={query} onChange={setQuery} />
       </div>
 
-      <div className="page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-2 pt-2 pb-4">
+      <div className="sidebar-list page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-2 pt-2 pb-4">
         {!hasMatches ? (
           <p className="px-4 py-6 text-center text-minor text-list-ink-soft">
             {query.trim() === "" ? "No project managers yet" : "No matching conversations"}
@@ -329,13 +335,14 @@ export const ProjectList = memo(function ProjectList({
                     return (
                       <ProjectRow
                         key={entry.id}
+                        deviceKey={computer.key}
                         entry={entry}
                         pageLayout={isPage}
                         active={isSelected(entry)}
                         waiting={waiting.has(key)}
                         asking={asking.has(key)}
                         readOnly={readOnly}
-                        onSelect={() => onSelect({ device: computer.key, id: entry.id })}
+                        onSelect={onSelect}
                         onTogglePin={onTogglePin}
                         onOpenPmSettings={onOpenPmSettings}
                       />
@@ -354,13 +361,14 @@ export const ProjectList = memo(function ProjectList({
                     return (
                       <ProjectRow
                         key={entry.id}
+                        deviceKey={computer.key}
                         entry={entry}
                         pageLayout={isPage}
                         active={isSelected(entry)}
                         waiting={waiting.has(key)}
                         asking={asking.has(key)}
                         readOnly={readOnly}
-                        onSelect={() => onSelect({ device: computer.key, id: entry.id })}
+                        onSelect={onSelect}
                         onTogglePin={onTogglePin}
                         onOpenPmSettings={onOpenPmSettings}
                       />
@@ -389,13 +397,14 @@ export const ProjectList = memo(function ProjectList({
                       return (
                         <ProjectRow
                           key={entry.id}
+                          deviceKey={computer.key}
                           entry={entry}
                           pageLayout={isPage}
                           active={isSelected(entry)}
                           waiting={waiting.has(key)}
                           asking={asking.has(key)}
                           readOnly={readOnly}
-                          onSelect={() => onSelect({ device: computer.key, id: entry.id })}
+                          onSelect={onSelect}
                           onTogglePin={onTogglePin}
                           onOpenPmSettings={onOpenPmSettings}
                         />

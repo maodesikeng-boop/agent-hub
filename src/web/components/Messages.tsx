@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, Loader2, MessageSquare, PencilLine, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
+import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, PencilLine, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
@@ -37,11 +37,10 @@ import type { PendingMessage, RetryPhase } from "../state.ts";
 import { workedFor } from "../step-labels.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
-import { Input } from "../ui/input.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { SlimeLook } from "../../shared/slimes.ts";
-import { CardBody, DeliverableFiles } from "./Deliverables.tsx";
+import { CardBody, CardNoteForm, DeliverableFiles } from "./Deliverables.tsx";
 import { ThreadCard } from "./ThreadCard.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
@@ -115,7 +114,7 @@ export function displayText(text: string): string {
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
 
-function AskCard({
+const AskCard = memo(function AskCard({
   card,
   files,
   deliverables,
@@ -134,7 +133,8 @@ function AskCard({
   const hasOptions = card.options.length > 0;
   const [submitted, setSubmitted] = useState<{ chosenOption?: string; note?: string } | null>(null);
   const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(gateRef?.checkpoint));
-  const [note, setNote] = useState("");
+  const [noteRev, setNoteRev] = useState(0);
+  const noteRef = useRef("");
   const [err, setErr] = useState<ErrorLike | null>(null);
   const clientIdRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
@@ -152,7 +152,8 @@ function AskCard({
         clientIdRef.current = null;
         const chosenOption = vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : null);
         setSubmitted({ ...(chosenOption !== null ? { chosenOption } : {}), ...(vars.note !== null ? { note: vars.note } : {}) });
-        setNote("");
+        noteRef.current = "";
+        setNoteRev((n) => n + 1);
       },
       onError: (error) => {
         setErr(errorText(error));
@@ -206,7 +207,7 @@ function AskCard({
                 recommended={isRecommended}
                 onClick={() => {
                   if (disabled) return;
-                  submit(opt, note);
+                  submit(opt, noteRef.current);
                 }}
               >
                 <Markdown text={opt} files={files} messageId={messageId} />
@@ -234,30 +235,13 @@ function AskCard({
             Add note
           </button>
         ) : (
-          <div className="mt-2.5 flex items-center gap-2">
-            <Input
-              value={note}
-              disabled={disabled}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Add a note, or type a custom reply…"
-              aria-label="Add note"
-              className="min-w-0 flex-1"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
-                  e.preventDefault();
-                  submit(null, note);
-                }
-              }}
-            />
-            <Button
-              type="button"
-              disabled={disabled || note.trim() === ""}
-              onClick={() => submit(null, note)}
-            >
-              {decideMutation.isPending && <Loader2 className="size-pixel-sm" aria-hidden="true" />}
-              Send
-            </Button>
-          </div>
+          <CardNoteForm
+            disabled={disabled}
+            pending={decideMutation.isPending}
+            resetRev={noteRev}
+            noteRef={noteRef}
+            onSubmitNote={(raw) => submit(null, raw)}
+          />
         )
       )}
       {err !== null && (
@@ -267,7 +251,7 @@ function AskCard({
       )}
     </div>
   );
-}
+});
 
 const NO_DELIVERABLES: readonly Deliverable[] = [];
 

@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { ChevronRight, Loader2, Maximize2 } from "../ui/icons.ts";
+import { ChevronRight, Maximize2 } from "../ui/icons.ts";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
@@ -17,14 +17,14 @@ import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { sortActiveGraphs, taskGraphPriority, workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
-import { Input } from "../ui/input.tsx";
 import { PM_FRUITS } from "../../shared/fruits.ts";
 import { GATE_BELL_GRID, type JellyColorId } from "../../shared/slimes.ts";
 import { fruitTrackVars } from "../lib/palette.ts";
 import { stepBeadPaths, TUBE_WIDTH_CELLS, tubePaths, type PixelPoint, type StepBead, type TubePaths, type TubeState } from "../pixel-path.ts";
 import { computeGraphComponents } from "../task-graph-layout.ts";
-import { CardBody } from "./Deliverables.tsx";
+import { CardBody, CardNoteForm } from "./Deliverables.tsx";
 import { GateMark } from "./GateMark.tsx";
+import { ShimmerOverlay } from "./StatusShimmer.tsx";
 import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 
 type GutterKind = "station" | "parA" | "parB" | "coil" | "gate" | "next";
@@ -164,7 +164,7 @@ function makeClientId(): string {
   return `gate-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function GateDecisionCard({
+export const GateDecisionCard = memo(function GateDecisionCard({
   graphId,
   node,
   client,
@@ -178,7 +178,8 @@ export function GateDecisionCard({
   const qc = useHubQueryClient();
   const hasOptions = node.gateOptions.length > 0;
   const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(node.gateCheckpoint));
-  const [note, setNote] = useState("");
+  const [noteRev, setNoteRev] = useState(0);
+  const noteRef = useRef("");
   const [err, setErr] = useState<ErrorLike | null>(null);
   const clientIdRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
@@ -202,7 +203,8 @@ export function GateDecisionCard({
       onMutate: () => setErr(null),
       onSuccess: () => {
         clientIdRef.current = null;
-        setNote("");
+        noteRef.current = "";
+        setNoteRev((n) => n + 1);
       },
       onError: (error) => {
         setErr(errorText(error));
@@ -227,7 +229,7 @@ export function GateDecisionCard({
   return (
     <div
       data-testid="peel-gate-card"
-      className="border-2 border-open-line bg-open px-3.5 py-3"
+      className="border-2 border-open-line bg-open px-3.5 py-3 [contain:layout_style]"
     >
       {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
@@ -245,7 +247,7 @@ export function GateDecisionCard({
                 key={opt}
                 type="button"
                 disabled={decideMutation.isPending}
-                onClick={() => submit(opt, note)}
+                onClick={() => submit(opt, noteRef.current)}
                 className={cn(
                   "flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-center justify-between gap-2 border-2 px-3 py-1.5 text-left text-minor font-medium transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:border-border-strong disabled:bg-send-disabled disabled:text-muted-foreground",
                   isRec
@@ -272,31 +274,16 @@ export function GateDecisionCard({
           Add note
         </button>
       ) : (
-        <div className={cn("flex items-center gap-2", hasOptions && "mt-2.5")}>
-          <Input
-            value={note}
-            disabled={decideMutation.isPending}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Add a note, or type a custom reply…"
-            aria-label="Add note"
-            className="min-w-0 flex-1 text-minor"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
-                e.preventDefault();
-                submit(null, note);
-              }
-            }}
-          />
-          <Button
-            type="button"
-            size="sm"
-            disabled={decideMutation.isPending || note.trim() === ""}
-            onClick={() => submit(null, note)}
-          >
-            {decideMutation.isPending && <Loader2 className="size-pixel-sm" aria-hidden="true" />}
-            Send
-          </Button>
-        </div>
+        <CardNoteForm
+          disabled={decideMutation.isPending}
+          pending={decideMutation.isPending}
+          resetRev={noteRev}
+          noteRef={noteRef}
+          onSubmitNote={(raw) => submit(null, raw)}
+          className={cn("flex items-center gap-2", hasOptions && "mt-2.5")}
+          inputClassName="min-w-0 flex-1 text-minor"
+          buttonSize="sm"
+        />
       )}
       {err !== null && (
         <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
@@ -305,7 +292,7 @@ export function GateDecisionCard({
       )}
     </div>
   );
-}
+});
 
 export function resolveBoundWorker(
   node: TaskNode,
@@ -394,6 +381,7 @@ function PeelStageRow({
           )}
         >
           {cleanPieceTitle(node.title)}
+          {isRunning && <ShimmerOverlay text={cleanPieceTitle(node.title)} />}
         </span>
         {rightLabel}
       </span>

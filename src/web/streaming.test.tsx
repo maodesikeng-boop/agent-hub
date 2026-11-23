@@ -231,4 +231,63 @@ describe("网页流式文字渲染与无重影衔接", () => {
     sidebarSpy.mockRestore();
     rightRailSpy.mockRestore();
   });
+
+  it("后台 Worker 连续 session.status 脉冲期间 DraftComposer 与左栏零重渲染、零 DOM 变更", async () => {
+    const snapshot = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      conversations: [
+        makeConvSnapshot([makeUserMessage({ id: 1, conversationId: 1, text: "在吗" }), makeMessage({ id: 2, conversationId: 1, sessionId: 10, text: "在的" })], {
+          conversation: { id: 1, pmId: 1, title: "小林" },
+        }),
+        makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "后台活" }) }),
+      ],
+      sessions: [
+        makeSession({ sessionId: 10, conversationId: 1, pmId: 1, status: "running", activity: "idle" }),
+        makeSession({ sessionId: 300, conversationId: 30, pmId: 1, status: "running", activity: "working" }),
+      ],
+    });
+
+    type MemoTarget = { type: (...args: unknown[]) => unknown };
+    const composerSpy = vi.spyOn(ComposerMod.DraftComposer as unknown as MemoTarget, "type");
+    const sidebarSpy = vi.spyOn(ProjectListMod.ProjectList as unknown as MemoTarget, "type");
+    const rightRailSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
+
+    const { ws } = await bootApp(snapshot);
+    composerSpy.mockClear();
+    sidebarSpy.mockClear();
+    rightRailSpy.mockClear();
+
+    const sidebarEl = screen.getByRole("region", { name: "Project managers" });
+    const sidebarMutations = vi.fn();
+    const obs = new MutationObserver(sidebarMutations);
+    obs.observe(sidebarEl, { subtree: true, childList: true, attributes: true, characterData: true });
+
+    for (let i = 1; i <= 6; i++) {
+      push(
+        ws,
+        sessionChange(
+          20 + i,
+          makeSession({
+            sessionId: 300,
+            conversationId: 30,
+            pmId: 1,
+            status: "running",
+            activity: "working",
+            currentTool: `step-${i}`,
+            lastEventAt: 10_000 + i,
+          }),
+        ),
+      );
+    }
+    obs.disconnect();
+
+    expect(composerSpy).toHaveBeenCalledTimes(0);
+    expect(sidebarSpy).toHaveBeenCalledTimes(0);
+    expect(rightRailSpy).toHaveBeenCalledTimes(0);
+    expect(sidebarMutations).toHaveBeenCalledTimes(0);
+
+    composerSpy.mockRestore();
+    sidebarSpy.mockRestore();
+    rightRailSpy.mockRestore();
+  });
 });

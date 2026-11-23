@@ -410,7 +410,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "settings.sync-preview": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }, ...openSettings("Providers"), { waitFor: `${DIALOG} >> text=Sign in…` }, { click: btn("Scan…", DIALOG) }, { crop: TOP_DIALOG }],
   "settings.computers": [...openSettings("Computers"), { crop: DIALOG }],
   "settings.computers-multi": [{ patch: "account-approvals" }, ...openSettings("Computers"), { waitFor: `${DIALOG} >> text=042 917` }, { crop: DIALOG }],
-  "settings.computers-remove": [...openSettings("Computers"), { click: `${DIALOG} >> role=button[name^="Remove"]` }, { crop: TOP_DIALOG }],
+  "settings.computers-remove": [...openSettings("Computers"), { waitFor: `${DIALOG} >> text=Hub order` }, { click: `${DIALOG} >> role=button[name^="Remove"]` }, { crop: TOP_DIALOG }],
   "settings.security": [...openSettings("Security & Access"), { crop: DIALOG }],
   "settings.security-open": [{ patch: "browsers-multi" }, ...openSettings("Security & Access"), { click: `${DIALOG} >> role=button[name^="Signed-in browsers"]` }, { crop: DIALOG }],
   "settings.long": [

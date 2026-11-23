@@ -31,6 +31,7 @@ import { Input } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Segmented } from "../ui/segmented.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { StatusShimmer } from "./StatusShimmer.tsx";
 import { VendorSyncSettings } from "./VendorSyncSettings.tsx";
 
 function openExternalBrowserPage(url: string): void {
@@ -101,7 +102,7 @@ function GitEnvironmentGroup({ model }: { model: ProvidersSettingModel }) {
               <div className="line-clamp-2 text-body">Git</div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-minor leading-snug text-muted-foreground">
                 {running ? (
-                  <span className="status-shimmer">{gitJob.progressLine ?? "Installing…"}</span>
+                  <StatusShimmer text={gitJob.progressLine ?? "Installing…"} />
                 ) : (
                   <span>Not installed</span>
                 )}
@@ -194,9 +195,7 @@ function ProviderItemRow({
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-minor leading-snug text-muted-foreground">
               {jobRunning ? (
-                <span className="status-shimmer">
-                  {job.progressLine ?? (job.kind === "update" ? "Updating…" : "Installing…")}
-                </span>
+                <StatusShimmer text={job.progressLine ?? (job.kind === "update" ? "Updating…" : "Installing…")} />
               ) : !item.installed ? (
                 <span>Not installed</span>
               ) : authenticated ? (
@@ -458,7 +457,7 @@ export function ProviderSignInBody({
     await runSubmit(async () => {
       const updated = await model.submitAuth(item.vendor, { flowId: activeFlow.flowId, input: manualInput.trim() });
       setManualInput("");
-      if (updated?.authFlow?.phase === "succeeded" || (updated && isSelectable(updated.availability))) onDone();
+      if (updated?.authFlow?.phase === "succeeded" || (updated && updated.authFlow?.phase !== "failed" && updated.authFlow?.phase !== "expired" && updated.availability === "available")) onDone();
     });
   };
 
@@ -659,7 +658,7 @@ function WaitingForBrowser() {
   return (
     <div className="flex items-center gap-2 text-minor text-muted-foreground">
       <Loader2 className="size-pixel shrink-0" aria-hidden="true" />
-      <span className="status-shimmer">Waiting for browser…</span>
+      <StatusShimmer text="Waiting for browser…" />
     </div>
   );
 }

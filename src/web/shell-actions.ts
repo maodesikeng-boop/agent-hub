@@ -33,6 +33,12 @@ export function useWindowDrag(): void {
   }, []);
 }
 
+interface RetainDeps {
+  convs: unknown[];
+  listed: boolean;
+  pendingCreated: ConversationRef | null;
+}
+
 export function usePruneStaleDrafts(
   devices: readonly DeviceView[],
   listed: boolean,
@@ -40,7 +46,20 @@ export function usePruneStaleDrafts(
   drafts: ReturnType<typeof useDraftStore<string>>,
   routerDraftKey: string,
 ): void {
+  const prevRef = useRef<RetainDeps | null>(null);
   useEffect(() => {
+    const convs = devices.map((d) => (d.state.phase === "ready" ? d.state.conversations : d.state.phase));
+    const prev = prevRef.current;
+    if (
+      prev !== null &&
+      prev.listed === listed &&
+      prev.pendingCreated === pendingCreated &&
+      prev.convs.length === convs.length &&
+      convs.every((c, i) => c === prev.convs[i])
+    ) {
+      return;
+    }
+    prevRef.current = { convs, listed, pendingCreated };
     const valid = new Set<string>();
     const pendingDevicePrefixes = new Set<string>();
     let keepLocalAll = false;

@@ -200,6 +200,16 @@ code {
   overflow-x: hidden;
   overscroll-behavior-y: contain;
 }
+.messages[role="log"] {
+  contain: layout style;
+}
+.router-timeline {
+  contain: layout style;
+}
+[data-ask-card] {
+  contain: layout style;
+}
+.sidebar-list,
 .router-tray-scroll,
 .router-timeline,
 .messages-fade,
@@ -207,6 +217,85 @@ code {
 .dialog-body-fade {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent);
   mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent);
+}
+.sidebar-list {
+  --fade-top: 12px;
+  --fade-bottom: 20px;
+}
+.sidebar-list {
+  contain: layout style;
+}
+/* Keep shell scroll tracks invisible when idle and reveal only a subtle thumb while scrolling or dragging. */
+.messages,
+.sidebar-list,
+.right-rail-scroll,
+.router-tray-scroll,
+.router-timeline,
+.page-fade,
+.dialog-body-fade {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.messages[data-scrolling],
+.sidebar-list[data-scrolling],
+.right-rail-scroll[data-scrolling],
+.router-tray-scroll[data-scrolling],
+.router-timeline[data-scrolling],
+.page-fade[data-scrolling],
+.dialog-body-fade[data-scrolling] {
+  scrollbar-color: color-mix(in srgb, var(--foreground) 26%, transparent) transparent;
+}
+.messages::-webkit-scrollbar,
+.sidebar-list::-webkit-scrollbar,
+.right-rail-scroll::-webkit-scrollbar,
+.router-tray-scroll::-webkit-scrollbar,
+.router-timeline::-webkit-scrollbar,
+.page-fade::-webkit-scrollbar,
+.dialog-body-fade::-webkit-scrollbar {
+  width: 6px;
+  background: transparent;
+}
+.messages::-webkit-scrollbar-track,
+.sidebar-list::-webkit-scrollbar-track,
+.right-rail-scroll::-webkit-scrollbar-track,
+.router-tray-scroll::-webkit-scrollbar-track,
+.router-timeline::-webkit-scrollbar-track,
+.page-fade::-webkit-scrollbar-track,
+.dialog-body-fade::-webkit-scrollbar-track {
+  background: transparent;
+}
+.messages::-webkit-scrollbar-thumb,
+.sidebar-list::-webkit-scrollbar-thumb,
+.right-rail-scroll::-webkit-scrollbar-thumb,
+.router-tray-scroll::-webkit-scrollbar-thumb,
+.router-timeline::-webkit-scrollbar-thumb,
+.page-fade::-webkit-scrollbar-thumb,
+.dialog-body-fade::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+.messages[data-scrolling]::-webkit-scrollbar-thumb,
+.sidebar-list[data-scrolling]::-webkit-scrollbar-thumb,
+.right-rail-scroll[data-scrolling]::-webkit-scrollbar-thumb,
+.router-tray-scroll[data-scrolling]::-webkit-scrollbar-thumb,
+.router-timeline[data-scrolling]::-webkit-scrollbar-thumb,
+.page-fade[data-scrolling]::-webkit-scrollbar-thumb,
+.dialog-body-fade[data-scrolling]::-webkit-scrollbar-thumb,
+.messages::-webkit-scrollbar-thumb:hover,
+.sidebar-list::-webkit-scrollbar-thumb:hover,
+.right-rail-scroll::-webkit-scrollbar-thumb:hover,
+.router-tray-scroll::-webkit-scrollbar-thumb:hover,
+.router-timeline::-webkit-scrollbar-thumb:hover,
+.page-fade::-webkit-scrollbar-thumb:hover,
+.dialog-body-fade::-webkit-scrollbar-thumb:hover,
+.messages::-webkit-scrollbar-thumb:active,
+.sidebar-list::-webkit-scrollbar-thumb:active,
+.right-rail-scroll::-webkit-scrollbar-thumb:active,
+.router-tray-scroll::-webkit-scrollbar-thumb:active,
+.router-timeline::-webkit-scrollbar-thumb:active,
+.page-fade::-webkit-scrollbar-thumb:active,
+.dialog-body-fade::-webkit-scrollbar-thumb:active {
+  background: color-mix(in srgb, var(--foreground) 26%, transparent);
 }
 .router-tray-scroll {
   --fade-top: 8px;
@@ -263,36 +352,75 @@ input[type="search"]::-webkit-search-cancel-button {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
 }
+@layer components {
+  .status-shimmer {
+    display: inline-block;
+  }
+}
 .status-shimmer {
+  position: relative;
+}
+.status-shimmer-track {
   --status-shimmer-duration: 2.2s;
-  background-image: linear-gradient(
-    90deg,
-    currentColor 0%,
-    currentColor 40%,
-    color-mix(in srgb, currentColor 35%, transparent) 50%,
-    currentColor 60%,
-    currentColor 100%
-  );
-  background-size: 250% 100%;
-  background-repeat: no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  text-overflow: inherit;
+  pointer-events: none;
+}
+.status-shimmer-mask {
+  display: block;
+  width: 100%;
+  height: 100%;
+  text-overflow: inherit;
+  -webkit-mask-image: linear-gradient(90deg, transparent 22%, black 50%, transparent 78%);
+  mask-image: linear-gradient(90deg, transparent 22%, black 50%, transparent 78%);
+  will-change: transform;
   animation: status-shimmer var(--status-shimmer-duration) ease-in-out infinite;
+}
+.status-shimmer-beam {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: color-mix(in srgb, var(--background) 68%, currentColor);
+  white-space: inherit;
+  overflow: hidden;
+  text-overflow: inherit;
+  will-change: transform;
+  animation: status-shimmer-counter var(--status-shimmer-duration) ease-in-out infinite;
+}
+.line-clamp-2 .status-shimmer-beam {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+.status-shimmer-beam::before {
+  content: attr(data-text);
 }
 @keyframes status-shimmer {
   from {
-    background-position: 100% 0;
+    transform: translateX(-100%);
   }
   to {
-    background-position: 0% 0;
+    transform: translateX(100%);
+  }
+}
+@keyframes status-shimmer-counter {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(-100%);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .status-shimmer {
+  .status-shimmer-mask,
+  .status-shimmer-beam {
     animation: none;
-    background-image: none;
-    -webkit-text-fill-color: currentColor;
+  }
+  .status-shimmer-track {
+    display: none;
   }
 }
 :root {
@@ -387,6 +515,7 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .slime-pet[data-working] {
+  will-change: transform;
   animation: slime-hop-working var(--motion-hop-cycle) ease-out infinite;
 }
 @keyframes slime-hop {
@@ -439,6 +568,7 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .bell-swing[data-working] {
+  will-change: transform;
   animation: bell-swing-working var(--motion-hop-cycle) ease-out infinite;
 }
 @keyframes bell-swing {
@@ -481,6 +611,7 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .composer-dock {
+  contain: layout style;
   padding-bottom: 1.25rem;
 }
 .messages,

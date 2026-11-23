@@ -12,9 +12,9 @@ describe("各家怎么从名单那次查询里看登录状态", () => {
     for (const v of AGENT_VENDORS) expect(VENDOR_CATALOG_PROBES[v]).toBeDefined();
   });
 
-  it("claude：initialize 回应里有 account（实测有 email）是能用；没有说不清", () => {
+  it("claude: initialize account metadata does not prove credentials exist, so availabilityOf stays unknown", () => {
     const { availabilityOf } = VENDOR_CATALOG_PROBES.claude;
-    expect(availabilityOf({ models: [], account: { email: "a@b.c", organization: "X" } })).toBe("available");
+    expect(availabilityOf({ models: [], account: { email: "a@b.c", organization: "X" } })).toBe("unknown");
     expect(availabilityOf({ models: [], account: {} })).toBe("unknown");
     expect(availabilityOf({ models: [], account: { apiProvider: "firstParty" } })).toBe("unknown");
     expect(availabilityOf({ models: [] })).toBe("unknown");

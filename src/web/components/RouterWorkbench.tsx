@@ -270,7 +270,7 @@ function TargetChip({
   );
 }
 
-export function RouterWorkbench({
+export const RouterWorkbench = memo(function RouterWorkbench({
   leading,
   toolbar,
   notices,
@@ -694,4 +694,4 @@ export function RouterWorkbench({
       </FleetLooks>
     </FleetDeviceScopes>
   );
-}
+});

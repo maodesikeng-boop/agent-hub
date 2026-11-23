@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isAgentVendor,
-  isSelectable,
   isTaskNodeWaitingUser,
   type ConversationId,
   type Message,
@@ -14,7 +13,6 @@ import type { AppRailRouter } from "./components/AppRail.tsx";
 import { useDevices } from "./device-hub.ts";
 import type { DeviceStoreLookup } from "./forward-reply.ts";
 import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf, type DeviceKey } from "./devices.ts";
-import { useServerModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
 import { railComputersOf } from "./rail-model.ts";
 import {
@@ -106,6 +104,14 @@ const saveRailClosed = (closed: boolean) => {
   }
 };
 
+function reuseEntryList(prev: ConversationEntry[], next: ConversationEntry[]): ConversationEntry[] {
+  if (prev.length !== next.length) return next;
+  for (let i = 0; i < next.length; i++) if (next[i] !== prev[i]) return next;
+  return prev;
+}
+
+const EMPTY_NEW_PM_DEVICES: never[] = [];
+
 export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const qc = useHubQueryClient();
   const fleet = useDevices();
@@ -113,6 +119,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const [pendingCreated, setPendingCreated] = useState<ConversationRef | null>(null);
   const [pickedDevice, setPickedDevice] = useState<DeviceKey | null>(null);
   const lastByDeviceRef = useRef(new Map<DeviceKey, ConversationId>());
+  const prevEntriesRef = useRef<ConversationEntry[]>(EMPTY_ENTRIES);
   const devicesRef = useRef(fleet.devices);
   devicesRef.current = fleet.devices;
   const routeRef = useRef(route);
@@ -217,20 +224,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const localClientRef = fleet.hub(LOCAL_DEVICE).client;
   const shouldCheckFirstRunProviders =
     autoSelect && shellReady && local.state.pms.length === 0 && !providersGuided;
-  const localServerCatalogs = useServerModelCatalogs({
-    enabled: shouldCheckFirstRunProviders,
-    client: localClientRef,
-  });
-  useEffect(() => {
-    if (!shouldCheckFirstRunProviders || localServerCatalogs === undefined || localServerCatalogs.length === 0) {
-      return;
-    }
-    setProvidersGuided(true);
-    saveProvidersGuided();
-    if (localServerCatalogs.every((c) => !isSelectable(c.availability))) {
-      nav.setDesktop({ open: true, section: "providers", providerDevice: LOCAL_DEVICE });
-    }
-  }, [shouldCheckFirstRunProviders, localServerCatalogs, nav.setDesktop]);
+  const markProvidersGuided = useCallback(
+    (openProviders: boolean) => {
+      setProvidersGuided(true);
+      saveProvidersGuided();
+      if (openProviders) nav.setDesktop({ open: true, section: "providers", providerDevice: LOCAL_DEVICE });
+    },
+    [nav.setDesktop],
+  );
 
   useEffect(() => {
     if (!autoSelect || !shellReady) return;
@@ -465,9 +466,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
   const workerPmEntry = active;
   const look = active?.look ?? NO_LOOK;
-  const listEntries = state.phase === "ready" ? entries : EMPTY_ENTRIES;
+  const listEntries = reuseEntryList(prevEntriesRef.current, state.phase === "ready" ? entries : EMPTY_ENTRIES);
+  prevEntriesRef.current = listEntries;
   const railCount = railAsks.length + railGraphs.length + railWorkers.filter((w) => !w.ended).length;
-  const newPmDevices = newPmDevicesOf(fleet.devices, clientForDevice);
+  const newPmDevices = !creating ? EMPTY_NEW_PM_DEVICES : newPmDevicesOf(fleet.devices, clientForDevice);
   return {
     ...shared,
     content: {
@@ -542,6 +544,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       workerPmEntry,
       workerView,
       ensureWorkers,
+      firstRunCheck: shouldCheckFirstRunProviders ? { client: localClientRef, onDone: markProvidersGuided } : null,
     },
   };
 }

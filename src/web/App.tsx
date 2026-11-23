@@ -1,6 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Activity, useCallback, useEffect, useMemo, useState } from "react";
-import { SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM, type Pm, type PmId } from "../shared/index.ts";
+import { isSelectable, SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM, type Pm, type PmId } from "../shared/index.ts";
+import type { HubClient } from "./client.ts";
 import { AppRail } from "./components/AppRail.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
 import { Conversation } from "./components/Conversation.tsx";
@@ -22,7 +23,7 @@ import { MobileShell } from "./mobile/MobileShell.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
 import { TabBar, mobileTabOf, type MobileTab } from "./mobile/TabBar.tsx";
 import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
-import { ModelCatalogProvider } from "./models.tsx";
+import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
 import { usePaneWidths } from "./pane-widths.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
@@ -36,6 +37,7 @@ import { Button } from "./ui/button.tsx";
 import { ArrowLeft, Loader2 } from "./ui/icons.ts";
 import { Pane, PaneGroup, PaneHandle } from "./ui/resizable.tsx";
 import { useUpdateReminder } from "./update-model.ts";
+import { useAutoHideScrollbars } from "./useAutoHideScrollbars.ts";
 import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 
 const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
@@ -258,9 +260,7 @@ function DesktopSidePanel({
         onClose={() => c.toggleRail()}
         closeLabel="Close Pieces"
       >
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-5 py-3">
-          <RailGroups {...railProps(c)} />
-        </div>
+        <RailGroups {...railProps(c)} className="py-3" />
       </SidePanel>
     );
   }
@@ -724,29 +724,35 @@ function MobileWorkbench({
   );
 }
 
+function FirstRunProviderCheck({ client, onDone }: { client: HubClient; onDone: (openProviders: boolean) => void }) {
+  const catalogs = useServerModelCatalogs({ enabled: true, client });
+  useEffect(() => {
+    if (catalogs === undefined || catalogs.length === 0) return;
+    onDone(catalogs.every((c) => !isSelectable(c.availability)));
+  }, [catalogs, onDone]);
+  return null;
+}
+
 export function App() {
+  useAutoHideScrollbars();
   const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const model = useShellModel({ autoSelect: !mobile });
   const { qc, fleet, current, hub, state, content } = model;
-
+  const hasContent = content !== null;
   const openManageProvidersRef = content?.openManageProviders;
   const openCurrentProviders = useCallback(() => openManageProvidersRef?.(current.key), [openManageProvidersRef, current.key]);
   const openLocalProviders = useCallback(() => openManageProvidersRef?.(LOCAL_DEVICE), [openManageProvidersRef]);
+  const health = content?.health;
+  const reconnecting = content?.reconnecting;
+  const offline = content?.offline;
   const notices = useMemo(
     () =>
-      content === null ? null : (
-        <Notices
-          health={content.health}
-          reconnecting={content.reconnecting}
-          offline={content.offline}
-          listFailed={fleet.listFailed}
-          onManageProviders={openCurrentProviders}
-        />
+      !hasContent ? null : (
+        <Notices health={health!} reconnecting={reconnecting!} offline={offline!} listFailed={fleet.listFailed} onManageProviders={openCurrentProviders} />
       ),
-    [content?.health, content?.reconnecting, content?.offline, fleet.listFailed, openCurrentProviders],
+    [hasContent, health, reconnecting, offline, fleet.listFailed, openCurrentProviders],
   );
-
   const gate = gatePage(model, mobile);
   if (gate !== null) return gate;
   if (content === null) return null;
@@ -786,6 +792,9 @@ export function App() {
                 onCreated={content.created}
                 onManageProviders={content.openManageProviders}
               />
+              {content.firstRunCheck !== null && (
+                <FirstRunProviderCheck client={content.firstRunCheck.client} onDone={content.firstRunCheck.onDone} />
+              )}
             </div>
           </CapabilityProjects>
         </ModelCatalogProvider>
