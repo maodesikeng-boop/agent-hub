@@ -25,6 +25,10 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Ledger database](ledger-database.md): Exclusive SQLite file lock, the `migrations/manifest.sha256` completeness check, and upgrade tests on ledgers written by released versions.
 - [Reliable turn completion](turn-completion-design.md): SQLite turn-outcome receipts, ordered per-session settlement, bounded retries after write failures, send holds, and receipt-aware restart recovery.
 
+## Testing
+
+- [AI tester](ai-tester-design.md): The resident test bench (a Mac and a server on a test account, a test Feishu bot, all eight vendor CLIs), nightly script flows, the AI tester handbook in `.agents/skills/tester/`, vendor coverage reporting, and the `pnpm verify` round-trip and restart checks.
+
 ## Desktop and distribution
 
 - [macOS app and DMG distribution](mac-distribution-design.md): Native Swift and `WKWebView` shell (`apps/macos/`), source mode versus `--dist` bundled Node 24 LTS runtime, signing, DMG packaging, and GitHub Releases.
