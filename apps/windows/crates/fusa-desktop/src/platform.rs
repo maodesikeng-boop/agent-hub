@@ -39,7 +39,7 @@ pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
             .ok_or_else(|| "Can't read the LOCALAPPDATA environment variable".to_string())?;
         let dir = PathBuf::from(local_app_data).join("Fusa");
         validate_local_dir(&dir)?;
-        return Ok(dir);
+        Ok(dir)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -131,16 +131,16 @@ pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
     {
         let profile = base_home
             .ok_or_else(|| "Can't read the USERPROFILE environment variable".to_string())?;
-        let dir = PathBuf::from(profile).join(".agent-hub");
+        let dir = profile.join(".agent-hub");
         validate_local_dir(&dir)?;
-        return Ok(dir);
+        Ok(dir)
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         let home =
             base_home.ok_or_else(|| "Can't read the HOME environment variable".to_string())?;
-        let dir = PathBuf::from(home).join(".agent-hub");
+        let dir = home.join(".agent-hub");
         validate_local_dir(&dir)?;
         Ok(dir)
     }
