@@ -54,7 +54,7 @@ import { LOCAL_DEVICE, isReadOnly, type DeviceKey, type DeviceView } from "./dev
 import { errorText, nameError, type ErrorLike } from "./format.ts";
 import { modelsQueryKey, refreshDeviceModels } from "./models.tsx";
 import type { NotifySettings } from "./notify.ts";
-import { ACCOUNT_QUERY_KEY, useHubQueryClient } from "./query-client.ts";
+import { ACCOUNT_QUERY_KEY, accountQueryFn, claimAccountTicket, commitAccountStatus, useHubQueryClient } from "./query-client.ts";
 
 export { ACCOUNT_QUERY_KEY };
 import {
@@ -230,24 +230,23 @@ export function useDeviceRemove(device: Pick<DeviceView, "info">, onChanged?: ()
 
 export function useAccount() {
   const qc = useHubQueryClient();
-  const query = useQuery({ queryKey: ACCOUNT_QUERY_KEY, queryFn: fetchAccount, staleTime: Infinity }, qc);
+  const query = useQuery({ queryKey: ACCOUNT_QUERY_KEY, queryFn: accountQueryFn(qc, fetchAccount), staleTime: Infinity }, qc);
   const [error, setError] = useState<ErrorLike | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
+    return () => { mountedRef.current = false; };
   }, []);
   const run = useCallback(
     async (key: string, action: () => Promise<AccountStatusView | void>): Promise<boolean> => {
       if (busy !== null) return false;
+      const ticket = claimAccountTicket(qc);
       setBusy(key);
       setError(null);
       try {
         const next = await action();
-        if (mountedRef.current && next !== undefined) qc.setQueryData(ACCOUNT_QUERY_KEY, next);
+        if (mountedRef.current && next !== undefined) commitAccountStatus(qc, ticket, next);
         return true;
       } catch (err) {
         if (mountedRef.current) setError(errorText(err));

@@ -367,11 +367,11 @@ export const localClient: HubClient = createClient(null);
 
 export const { fetchState, postMessage, postUpload, fetchVendorSyncPreview, postVendorSyncApply } = localClient;
 
-export const fetchDevices = () => request<DevicesResponse>(API_PATHS.devices);
+export const fetchDevices = (signal?: AbortSignal) => request<DevicesResponse>(API_PATHS.devices, signal ? { signal } : undefined);
 export const patchDevice = (id: DeviceId, body: RenameDeviceRequest) => sendJson<DeviceInfo>("PATCH", API_PATHS.device(id), body);
 export const deleteDevice = (id: DeviceId) => request<void>(API_PATHS.device(id), { method: "DELETE" });
 
-export const fetchAccount = () => request<AccountStatusView>(API_PATHS.account);
+export const fetchAccount = (signal?: AbortSignal) => request<AccountStatusView>(API_PATHS.account, signal ? { signal } : undefined);
 export const postAccountLogin = (body: StartLoginRequest = {}) => postJson<AccountStatusView>(API_PATHS.accountLogin, body);
 export const cancelAccountLogin = () => request<AccountStatusView>(API_PATHS.accountLogin, { method: "DELETE" });
 export const postAccountLogout = () => postJson<AccountStatusView>(API_PATHS.accountLogout, {});
