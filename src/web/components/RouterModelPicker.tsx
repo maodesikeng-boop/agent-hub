@@ -7,9 +7,9 @@ import {
   bundledModelCatalog,
   effortLabel,
   effortsFor,
-  isListed,
   isSelectable,
   modelShortLabel,
+  pickableVendorCatalogs,
   resolveExplicitRouterChoice,
   resolveRouterEffortForModel,
   resolveRouterModelPreview,
@@ -23,7 +23,7 @@ import {
 import { localClient } from "../client.ts";
 import { errorText, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import { useModelCatalogs, useRefreshModelCatalogs, useRevalidateModels } from "../models.tsx";
+import { ADD_PROVIDER_LABEL, useModelCatalogs, useRefreshModelCatalogs, useRevalidateModels } from "../models.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Drawer, DrawerContent, DrawerTitle } from "../ui/drawer.tsx";
@@ -231,17 +231,12 @@ export const RouterModelPicker = memo(function RouterModelPicker({
     [effectiveSettings, activeResolution, catalogMap],
   );
 
-  const listedCatalogs = useMemo(() => {
-    const pref = effectiveSettings.vendor;
-    const withCurrent =
-      pref !== null && !catalogs.some((c) => c.vendor === pref)
-        ? [...catalogs, bundledModelCatalog(pref)]
-        : catalogs;
-    return withCurrent.filter((c) => isListed(c.availability) || c.vendor === pref);
-  }, [catalogs, effectiveSettings.vendor]);
+  const listedCatalogs = useMemo(
+    () => pickableVendorCatalogs(catalogs, effectiveSettings.vendor),
+    [catalogs, effectiveSettings.vendor],
+  );
 
-  const showManageProviders =
-    onManageProviders !== undefined && catalogs.some((c) => !isSelectable(c.availability));
+  const showAddProvider = onManageProviders !== undefined;
 
   const applyUpdate = useCallback(
     async (next: UpdateRouterSettingsRequest) => {
@@ -453,7 +448,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
 
       {saveError !== null && <RowError error={saveError} />}
 
-      {showManageProviders && (
+      {showAddProvider && (
         <div className="border-t-2 border-border pt-2">
           <button
             type="button"
@@ -463,10 +458,10 @@ export const RouterModelPicker = memo(function RouterModelPicker({
             }}
             className={cn(
               ROW_INTERACTIVE_CLASS,
-              "justify-between text-minor font-medium text-muted-foreground hover:text-foreground",
+              "justify-between text-minor font-medium text-rail-ink hover:text-foreground",
             )}
           >
-            <span>Manage providers…</span>
+            <span>{ADD_PROVIDER_LABEL}</span>
             <ChevronRight className="size-pixel-sm shrink-0" aria-hidden="true" />
           </button>
         </div>

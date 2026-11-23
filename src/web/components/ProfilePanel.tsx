@@ -8,7 +8,6 @@ import {
   modelLabel,
   splitModelEffort,
   utf8Bytes,
-  vendorLabel,
   type PersonaChange,
   type PersonaView,
   type Pm,
@@ -22,7 +21,7 @@ import { capabilitySections, capabilityTotals, useCapabilitiesView } from "../ca
 import { useClient } from "../device-scope.tsx";
 import { DEFAULT_CHOICE, MODE_LABELS, errorLine, errorText, formatArchiveRemaining, formatSchedule, shortPath, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import { useModelCatalog } from "../models.tsx";
+import { useModelCatalog, vendorOptionLabel } from "../models.tsx";
 import {
   formatChangeSummary,
   personaLoadHint,
@@ -538,7 +537,7 @@ function SummaryContent({
           <dl className="grid grid-cols-1 gap-1 text-body">
             <div className="flex items-baseline gap-3">
               <dt className="w-18 shrink-0 text-minor text-muted-foreground">Provider</dt>
-              <dd className="min-w-0 truncate">{vendorLabel(persona.vendor)}</dd>
+              <dd className="min-w-0 truncate">{vendorOptionLabel(catalog)}</dd>
             </div>
             <div className="flex items-baseline gap-3">
               <dt className="w-18 shrink-0 text-minor text-muted-foreground">Model</dt>

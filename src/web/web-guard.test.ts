@@ -704,4 +704,24 @@ describe("web-guard：src/web 代码守卫", () => {
       'styles.css:1: infinite animation references unknown @keyframes "unknown-spin"',
     ]);
   });
+
+  it("vendor pickers in src/web must use pickableVendorCatalogs and never call isListed or filter catalogs by availability directly", () => {
+    const isListedHits: string[] = [];
+    const directAvailabilityFilterHits: string[] = [];
+    const isListedRe = /\bisListed\b/;
+    const directFilterRe = /\.filter\([^)]*\.availability\b/;
+    const allowedAvailabilityFilter = new Set(["components/ProvidersSettings.tsx", "settings-model.ts"]);
+    for (const file of files) {
+      const rel = relative(WEB_DIR, file).replaceAll("\\", "/");
+      const lines = stripComments(readFileSync(file, "utf8")).split("\n");
+      lines.forEach((line, index) => {
+        if (isListedRe.test(line)) isListedHits.push(`${rel}:${index + 1}: ${line.trim()}`);
+        if (!allowedAvailabilityFilter.has(rel) && directFilterRe.test(line)) {
+          directAvailabilityFilterHits.push(`${rel}:${index + 1}: ${line.trim()}`);
+        }
+      });
+    }
+    expect(isListedHits).toEqual([]);
+    expect(directAvailabilityFilterHits).toEqual([]);
+  });
 });

@@ -76,6 +76,7 @@ export const Conversation = memo(function Conversation({
   focus,
   onFocusDone,
   onOpenProfile,
+  onManageProviders,
 }: {
   entry: ConversationEntry;
   view: ConversationView;
@@ -99,6 +100,7 @@ export const Conversation = memo(function Conversation({
   focus: { id: MessageId; n: number } | null;
   onFocusDone: () => void;
   onOpenProfile: (pmId: PmId) => void;
+  onManageProviders?: () => void;
 }) {
   const id = view.conversation.id;
   const hasQueuedUser = useMemo(
@@ -198,6 +200,7 @@ export const Conversation = memo(function Conversation({
             onRewind={onRewind ? handleRewind : undefined}
             link={link}
             source={source}
+            onManageProviders={onManageProviders}
             onSend={handleSend}
           />
         )}

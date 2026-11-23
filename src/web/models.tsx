@@ -5,8 +5,8 @@ import {
   AVAILABILITY_LABELS,
   bundledModelCatalog,
   isAgentVendor,
-  isListed,
   isSelectable,
+  pickableVendorCatalogs,
   REFRESH_UNUSABLE,
   type AgentVendor,
   type ModelCatalog,
@@ -156,14 +156,14 @@ export function useRefreshModelCatalogs(): () => void {
   };
 }
 
+export const ADD_PROVIDER_LABEL = "Add provider…";
+export const ADD_PROVIDER_VALUE = "__bellwood_add_provider__";
+
 export function useVendorChoices(current: AgentVendor): { options: readonly ModelCatalog[]; refreshUnusable: () => void } {
   const catalogs = useModelCatalogs();
   const refreshUnusable = useRefreshModelCatalogs();
-  const fallback = bundledModelCatalog(current);
-  const options = catalogs.some((c) => c.vendor === current || c.vendor === fallback.vendor) ? catalogs : [...catalogs, fallback];
-  const listed = options.filter((c) => isListed(c.availability) || c.vendor === current);
   return {
-    options: listed,
+    options: pickableVendorCatalogs(catalogs, current),
     refreshUnusable,
   };
 }

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { cn } from "../lib/utils.ts";
 import {
   CUSTOM_MODEL,
   checkModel,
@@ -14,10 +13,16 @@ import {
   type ModelCatalog,
 } from "../../shared/index.ts";
 import { DEFAULT_CHOICE, defaultModelText, type ErrorLike } from "../format.ts";
-import { useModelCatalog, useModelCatalogs, useRevalidateModels, useVendorChoices, vendorOptionLabel } from "../models.tsx";
-import { Button } from "../ui/button.tsx";
+import {
+  ADD_PROVIDER_LABEL,
+  ADD_PROVIDER_VALUE,
+  useModelCatalog,
+  useRevalidateModels,
+  useVendorChoices,
+  vendorOptionLabel,
+} from "../models.tsx";
 import { Input } from "../ui/input.tsx";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { ReadonlyValue, SettingsRow } from "./SettingsList.tsx";
 
 export interface AgentDraft {
@@ -77,7 +82,6 @@ export function AgentRows({
   onCustomSubmit?: () => void;
   onManageProviders?: () => void;
 }) {
-  const allCatalogs = useModelCatalogs();
   const { options: vendors, refreshUnusable } = useVendorChoices(value.vendor);
   const catalog = useModelCatalog(value.vendor);
   const revalidateModels = useRevalidateModels();
@@ -92,6 +96,10 @@ export function AgentRows({
   }, [focusCustom]);
 
   const setVendor = (vendor: string) => {
+    if (vendor === ADD_PROVIDER_VALUE) {
+      onManageProviders?.();
+      return;
+    }
     const next = vendors.find((c) => c.vendor === vendor);
     if (next === undefined || vendor === value.vendor) return;
     onChange({ vendor: next.vendor, modelChoice: "", customModel: "", effort: "" }, "vendor");
@@ -100,8 +108,7 @@ export function AgentRows({
   const unlisted = choice !== "" && choice !== CUSTOM_MODEL && !catalog.models.some((m) => m.id === choice);
   const efforts = effortsFor(catalog, modelOf(value));
   const customError = !result.ok ? result.error : null;
-  const showManageProviders =
-    onManageProviders !== undefined && allCatalogs.some((c) => !isSelectable(c.availability));
+  const showSelect = vendors.length > 1 || onManageProviders !== undefined;
   return (
     <>
       <SettingsRow
@@ -110,35 +117,36 @@ export function AgentRows({
         error={errors.vendor}
         wide
       >
-        {(id) => (
-          <>
-            {vendors.length > 1 ? (
-              <Select
-                value={value.vendor}
-                disabled={disabled || switchingToVendor != null}
-                onValueChange={(next) => setVendor(next)}
-              >
-                <SelectTrigger id={id} aria-label="Provider" variant="plain" onPointerDown={refreshUnusable} onFocus={refreshUnusable}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {vendors.map((c) => (
-                    <SelectItem key={c.vendor} value={c.vendor} disabled={!isSelectable(c.availability)}>
-                      {vendorOptionLabel(c)}
+        {(id) =>
+          showSelect ? (
+            <Select
+              value={value.vendor}
+              disabled={disabled || switchingToVendor != null}
+              onValueChange={(next) => setVendor(next)}
+            >
+              <SelectTrigger id={id} aria-label="Provider" variant="plain" onPointerDown={refreshUnusable} onFocus={refreshUnusable}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {vendors.map((c) => (
+                  <SelectItem key={c.vendor} value={c.vendor} disabled={!isSelectable(c.availability)}>
+                    {vendorOptionLabel(c)}
+                  </SelectItem>
+                ))}
+                {onManageProviders !== undefined && (
+                  <>
+                    <SelectSeparator />
+                    <SelectItem value={ADD_PROVIDER_VALUE} className="font-medium text-rail-ink">
+                      {ADD_PROVIDER_LABEL}
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <ReadonlyValue id={id}>{vendorOptionLabel(catalog)}</ReadonlyValue>
-            )}
-            {showManageProviders && (
-              <Button type="button" variant="ghost" size="sm" className={cn("-mr-3 shrink-0", vendors.length > 1 && "ml-4")} aria-label="Manage providers…" onClick={onManageProviders}>
-                Manage…
-              </Button>
-            )}
-          </>
-        )}
+                  </>
+                )}
+              </SelectContent>
+            </Select>
+          ) : (
+            <ReadonlyValue id={id}>{vendorOptionLabel(catalog)}</ReadonlyValue>
+          )
+        }
       </SettingsRow>
       <SettingsRow label="Model" wide error={errors.model}>
         {(id) => (

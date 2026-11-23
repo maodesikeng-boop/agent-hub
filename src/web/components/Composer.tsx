@@ -232,6 +232,7 @@ export const Composer = memo(function Composer({
   onWorkerPick,
   leadingChip = null,
   onSelectTarget,
+  onManageProviders,
   stop: stopProp,
   onRewind,
   focusRev = 0,
@@ -250,6 +251,7 @@ export const Composer = memo(function Composer({
   onWorkerPick?: (pick: WorkerPick | null) => void;
   leadingChip?: React.ReactNode;
   onSelectTarget?: (targetKey: string, text: string) => void;
+  onManageProviders?: () => void;
   disabled?: boolean;
   stop?: StopControl;
   onRewind?: (stopping: boolean) => boolean;
@@ -323,6 +325,7 @@ export const Composer = memo(function Composer({
         setCursor(at);
         onChange(rest);
       }),
+    onManageProviders,
   });
 
   const repick = () => {

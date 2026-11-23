@@ -6,6 +6,7 @@ import {
   DEFAULT_PM_MODE,
   isSelectable,
   normalizeName,
+  pickableVendorCatalogs,
   utf8Bytes,
   type ConversationId,
   type AgentVendor,
@@ -79,7 +80,7 @@ function NewPmForm({
   const agentResult = settingOf(agent, agentCatalog);
   const vendorUsable = isSelectable(agentCatalog.availability);
   const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && vendorUsable && !busy;
-  const zeroProvidersReady = allCatalogs.length > 0 && allCatalogs.every((c) => !isSelectable(c.availability));
+  const zeroProvidersReady = allCatalogs.length > 0 && pickableVendorCatalogs(allCatalogs).length === 0;
 
   useEffect(() => {
     if (zeroProvidersReady) setMoreOpen(true);

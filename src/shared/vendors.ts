@@ -301,6 +301,32 @@ export function isSelectable(availability: VendorAvailability): boolean {
   return availability === "available" || availability === "unknown";
 }
 
+const pickableCatalogsCache = new WeakMap<readonly ModelCatalog[], Map<string, readonly ModelCatalog[]>>();
+
+export function pickableVendorCatalogs(
+  catalogs: readonly ModelCatalog[],
+  current?: AgentVendor | null,
+): readonly ModelCatalog[] {
+  let byCurrent = pickableCatalogsCache.get(catalogs);
+  if (byCurrent === undefined) {
+    byCurrent = new Map();
+    pickableCatalogsCache.set(catalogs, byCurrent);
+  }
+  const key = current ?? "";
+  const cached = byCurrent.get(key);
+  if (cached !== undefined) return cached;
+
+  const filtered = catalogs.filter((c) => isSelectable(c.availability) || (current != null && c.vendor === current));
+  if (current != null && !filtered.some((c) => c.vendor === current)) {
+    const fallback = bundledModelCatalog(current);
+    if (!filtered.some((c) => c.vendor === fallback.vendor)) {
+      filtered.push(fallback);
+    }
+  }
+  byCurrent.set(key, filtered);
+  return filtered;
+}
+
 export type VendorNotFoundCode = `${AgentVendor}_not_found`;
 export function notFoundCode(vendor: AgentVendor): VendorNotFoundCode {
   return `${vendor}_not_found`;

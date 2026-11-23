@@ -395,7 +395,7 @@ describe("新建项目经理选设备", () => {
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "东京新人");
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
     await userEvent.click(vendor);
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Claude Code (Not installed)"]);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Claude Code (Not installed)", "Add provider…"]);
     await userEvent.click(screen.getByRole("option", { name: "Antigravity" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));

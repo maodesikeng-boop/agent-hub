@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bundledModelCatalog, type AgentVendor, type ModelCatalog } from "../shared/index.ts";
+import { bundledModelCatalog, pickableVendorCatalogs, type AgentVendor, type ModelCatalog } from "../shared/index.ts";
 import { WORKER_PICK_CACHE_MAX } from "../shared/limits.ts";
 import { WORKER_PICK_DEFAULT, workerPickFromArgs, workerPickLabels, workerPickRows } from "./worker-pick.ts";
 
@@ -25,25 +25,44 @@ const CATALOGS: readonly ModelCatalog[] = [
 
 const labels = (rows: ReturnType<typeof workerPickRows>) => rows?.items.map((i) => i.label);
 
+describe("pickableVendorCatalogs：全站统一的可用厂商筛选", () => {
+  it("只留可用厂商（available / unknown）；未安装、未登录都不列；保留当前已选且引用按 catalogs WeakMap 稳定", () => {
+    const first = pickableVendorCatalogs(CATALOGS);
+    expect(first.map((c) => c.vendor)).toEqual(["claude"]);
+    expect(pickableVendorCatalogs(CATALOGS)).toBe(first);
+
+    const keepingSignedOut = pickableVendorCatalogs(CATALOGS, "agy");
+    expect(keepingSignedOut.map((c) => c.vendor)).toEqual(["claude", "agy"]);
+    expect(pickableVendorCatalogs(CATALOGS, "agy")).toBe(keepingSignedOut);
+
+    const keepingMissing = pickableVendorCatalogs(CATALOGS, "codex");
+    expect(keepingMissing.map((c) => c.vendor)).toEqual(["claude", "codex"]);
+
+    const unknownVendor = pickableVendorCatalogs(CATALOGS, "mystery-vendor" as AgentVendor);
+    expect(unknownVendor.map((c) => c.vendor)).toEqual(["claude"]);
+  });
+});
+
 describe("workerPickRows：第 0 级厂商", () => {
-  it("没装的不列；没登录的列出来但不能选，说明位写 Not signed in；能用的说明位是空的", () => {
+  it("只列可用厂商，未安装与未登录都不列，说明位是空的", () => {
     const rows = workerPickRows(CATALOGS, [], "");
     expect(rows?.level).toBe("vendor");
     expect(rows?.items).toEqual([
       { id: "worker:vendor:claude", label: "Claude Code", detail: "", insert: "claude" },
-      { id: "worker:vendor:agy", label: "Antigravity", detail: "Not signed in", insert: "agy", disabled: true },
     ]);
   });
 
-  it("按 id 或显示名筛：开头命中排前，其次包含，最后说明里有", () => {
-    expect(labels(workerPickRows(CATALOGS, [], "anti"))).toEqual(["Antigravity"]);
-    expect(labels(workerPickRows(CATALOGS, [], "cl"))).toEqual(["Claude Code"]);
-    expect(labels(workerPickRows(CATALOGS, [], "signed"))).toEqual(["Antigravity"]);
+  it("按 id 或显示名筛：开头命中排前，未登录厂商不会被筛出来", () => {
+    const twoReady = [CATALOGS[0]!, catalog("agy", { label: "Antigravity", availability: "available" }), CATALOGS[2]!];
+    expect(labels(workerPickRows(twoReady, [], "anti"))).toEqual(["Antigravity"]);
+    expect(labels(workerPickRows(twoReady, [], "cl"))).toEqual(["Claude Code"]);
+    expect(labels(workerPickRows(CATALOGS, [], "anti"))).toEqual([]);
     expect(labels(workerPickRows(CATALOGS, [], "zzz"))).toEqual([]);
   });
 
   it("厂商顺序照名单，不按别的排", () => {
-    const swapped = [CATALOGS[1]!, CATALOGS[0]!];
+    const readyAgy = catalog("agy", { label: "Antigravity", availability: "available" });
+    const swapped = [readyAgy, CATALOGS[0]!];
     expect(labels(workerPickRows(swapped, [], ""))).toEqual(["Antigravity", "Claude Code"]);
   });
 });

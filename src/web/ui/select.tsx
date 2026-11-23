@@ -109,6 +109,16 @@ export function SelectContent({
   );
 }
 
+export function SelectSeparator({ className, ...props }: React.ComponentProps<typeof SelectPrimitive.Separator>) {
+  return (
+    <SelectPrimitive.Separator
+      data-slot="select-separator"
+      className={cn("-mx-1 my-1 h-0.5 bg-border", className)}
+      {...props}
+    />
+  );
+}
+
 export function SelectItem({ className, children, value, ...props }: React.ComponentProps<typeof SelectPrimitive.Item>) {
   return (
     <SelectPrimitive.Item

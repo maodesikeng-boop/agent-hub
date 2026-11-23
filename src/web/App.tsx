@@ -1,6 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Activity, useCallback, useEffect, useMemo, useState } from "react";
-import { isSelectable, SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM, type Pm, type PmId } from "../shared/index.ts";
+import { pickableVendorCatalogs, SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM, type Pm, type PmId } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 import { AppRail } from "./components/AppRail.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
@@ -327,6 +327,7 @@ function ConversationPane({
   leading,
   toolbar,
   notices,
+  onManageCurrentProviders,
 }: {
   model: ShellModel;
   content: ShellContent;
@@ -334,6 +335,7 @@ function ConversationPane({
   leading?: React.ReactNode;
   toolbar?: React.ReactNode;
   notices: React.ReactNode;
+  onManageCurrentProviders: () => void;
 }) {
   const { state, hub, current } = model;
   if (state.phase !== "ready") return <DeviceWaiting connecting={current.status === "connecting"} name={current.info.name} />;
@@ -362,6 +364,7 @@ function ConversationPane({
         focus={c.focus}
         onFocusDone={c.clearFocus}
         onOpenProfile={c.openProfile}
+        onManageProviders={onManageCurrentProviders}
         link={c.link}
       />
     );
@@ -380,12 +383,14 @@ function DesktopWorkbench({
   notices,
   quota,
   onManageLocalProviders,
+  onManageCurrentProviders,
 }: {
   model: ShellModel;
   content: ShellContent;
   notices: React.ReactNode;
   quota: ReturnType<typeof quotaUsage>;
   onManageLocalProviders: () => void;
+  onManageCurrentProviders: () => void;
 }) {
   const [shellEl, setShellEl] = useState<HTMLElement | null>(null);
   const { widths, commit, reset } = usePaneWidths((s) => s);
@@ -522,6 +527,7 @@ function DesktopWorkbench({
                         mobile={false}
                         toolbar={toolbar}
                         notices={notices}
+                        onManageCurrentProviders={onManageCurrentProviders}
                       />
                     </main>
                   </AccentScope>
@@ -579,6 +585,7 @@ function MobileWorkbench({
   drawerOpen,
   setDrawerOpen,
   onManageLocalProviders,
+  onManageCurrentProviders,
 }: {
   model: ShellModel;
   content: ShellContent;
@@ -587,6 +594,7 @@ function MobileWorkbench({
   drawerOpen: boolean;
   setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>;
   onManageLocalProviders: () => void;
+  onManageCurrentProviders: () => void;
 }) {
   const { fleet, state, current, route, replace, navigate } = model;
   useEffect(() => {
@@ -730,6 +738,7 @@ function MobileWorkbench({
             leading={leading}
             toolbar={mobileToolbar}
             notices={notices}
+            onManageCurrentProviders={onManageCurrentProviders}
           />
         </main>
         <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} {...railProps(c)} />
@@ -748,7 +757,7 @@ function FirstRunProviderCheck({ client, onDone }: { client: HubClient; onDone: 
   const catalogs = useServerModelCatalogs({ enabled: true, client });
   useEffect(() => {
     if (catalogs === undefined || catalogs.length === 0) return;
-    onDone(catalogs.every((c) => !isSelectable(c.availability)));
+    onDone(pickableVendorCatalogs(catalogs).length === 0);
   }, [catalogs, onDone]);
   return null;
 }
@@ -794,6 +803,7 @@ export function App() {
                   drawerOpen={drawerOpen}
                   setDrawerOpen={setDrawerOpen}
                   onManageLocalProviders={openLocalProviders}
+                  onManageCurrentProviders={openCurrentProviders}
                 />
               ) : (
                 <DesktopWorkbench
@@ -802,6 +812,7 @@ export function App() {
                   notices={notices}
                   quota={quota}
                   onManageLocalProviders={openLocalProviders}
+                  onManageCurrentProviders={openCurrentProviders}
                 />
               )}
               <NewPmDialog

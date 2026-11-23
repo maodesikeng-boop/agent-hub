@@ -488,17 +488,16 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
   const labels = () => screen.queryAllByRole("option").map((o) => o.firstElementChild?.textContent);
   const posts = (api: FakeApi) => api.callsTo("POST", /\/messages$/);
 
-  it("Enter、Tab 一级一级选（不发送），没登录的厂商灰掉写 Not signed in，没装的不列；选完命令从文字里拿掉、变成标签", async () => {
+  it("Enter、Tab 一级一级选（不发送），只列可用厂商且末尾带 Add provider…；未登录与未安装不列；选完命令从文字里拿掉、变成标签", async () => {
     const { api, box, user } = await boot();
     await user.type(box, "/hub");
     expect(await screen.findByRole("option", { name: /\/hub:worker/ })).toBeInTheDocument();
     await user.keyboard("{Enter}");
     expect(box.value).toBe("/hub:worker ");
-    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     expect(screen.getByRole("listbox", { name: "Providers" })).toBeInTheDocument();
-    const signedOut = screen.getByRole("option", { name: /Antigravity/ });
-    expect(signedOut).toHaveAttribute("aria-disabled", "true");
-    expect(signedOut).toHaveTextContent("Not signed in");
+    expect(screen.queryByRole("option", { name: /Antigravity/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Codex/ })).toBeNull();
 
     await user.keyboard("{Tab}");
     expect(box.value).toBe("/hub:worker claude ");
@@ -515,6 +514,16 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(tag()).toHaveTextContent("Claude CodeOpusHigh");
     expect(posts(api)).toHaveLength(0);
+  });
+
+  it("在 /hub:worker 厂商列表点 Add provider…：清掉斜杠命令并打开 Settings → Providers", async () => {
+    const { box, user } = await boot();
+    await user.type(box, "/hub:worker ");
+    const addOpt = await screen.findByRole("option", { name: "Add provider…" });
+    await user.click(addOpt);
+    expect(box.value).toBe("");
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    expect(within(dialog).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
   });
 
   /** 打完整命令，最后一级 Enter 选中。 */
@@ -567,7 +576,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.click(tag());
     expect(box).toHaveFocus();
     expect(box.value.startsWith("/hub:worker ")).toBe(true);
-    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     await user.keyboard("{Enter}");
     await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
     await user.keyboard("{Enter}{Enter}"); // Default 模型、Default 档位
@@ -582,7 +591,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.type(box, "修一下登录");
     box.setSelectionRange(2, 2);
     await user.click(tag());
-    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     await user.keyboard("{Enter}"); // 选到模型级：/hub:worker claude \n修一下登录
     await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
     await user.keyboard("{Enter}"); // 选到档位级：/hub:worker claude default \n修一下登录
@@ -592,7 +601,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     // 再点标签：清掉 claude default，重新打开厂商列表
     await user.click(tag());
     expect(box.value).toBe("/hub:worker \n修一下登录");
-    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     await user.keyboard("{Enter}{Enter}{Enter}");
     expect(box.value).toBe("修一下登录");
     expect(box.selectionStart).toBe(2);
@@ -727,25 +736,24 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.type(box, "/hub:worker claude ");
     await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
     await user.keyboard("{Backspace}");
-    expect(labels()).toEqual(["Claude Code"]);
+    expect(labels()).toEqual(["Claude Code", "Add provider…"]);
   });
 
   it("Esc 关列表，文字不动；不发送", async () => {
     const { api, box, user } = await boot();
     await user.type(box, "/hub:worker cl");
-    await waitFor(() => expect(labels()).toEqual(["Claude Code"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(box.value).toBe("/hub:worker cl");
     expect(posts(api)).toHaveLength(0);
   });
 
-  it("点不能选的厂商：不选、焦点留在输入框", async () => {
+  it("未登录与未安装的厂商不出现在 /hub:worker 列表里，搜索未登录厂商只保留 Add provider…", async () => {
     const { box, user } = await boot();
-    await user.type(box, "/hub:worker ");
-    const signedOut = await screen.findByRole("option", { name: /Antigravity/ });
-    await user.click(signedOut);
-    expect(box.value).toBe("/hub:worker ");
+    await user.type(box, "/hub:worker anti");
+    await waitFor(() => expect(labels()).toEqual(["Add provider…"]));
+    expect(screen.queryByRole("option", { name: /Antigravity/ })).toBeNull();
     expect(box).toHaveFocus();
   });
 
