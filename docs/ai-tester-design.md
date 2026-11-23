@@ -1,5 +1,7 @@
 # AI tester design
 
+> Snapshot: 2026-11-23 (commit `42ad066e`)
+
 ## For the user
 
 ### Files to review
@@ -137,7 +139,7 @@ The implementation step also adds: the `tester` script in `package.json`, the re
 | Data directory | `~/.bellwood-tester/local/home` | the test user's own `~/.agent-hub` |
 | `HOME` for the daemon and CLIs | `~/.bellwood-tester/local/user-home` | the test user's home |
 | UI port, mesh port | 4417, 4421 (loopback UI) | 4417, 4421 (loopback UI, no inbound port opened) |
-| Code | a dedicated checkout at `~/.bellwood-tester/src` (or the AI tester's worktree), at the commit under test | `~/src`, deployed by commit through the restricted key |
+| Code | a dedicated checkout at `~/.bellwood-tester/src` (or the AI tester's worktree), at the commit under test | `~/agent-hub`, deployed by commit through the restricted key |
 | Vendor CLIs | all eight, installed into the bench `HOME` with the product's install commands | all eight, installed by `scripts/provision-linux.sh` |
 | Role in the test account | second in Hub order, sleeps with the Mac | first in Hub order, holds the test bot's Feishu connection |
 
