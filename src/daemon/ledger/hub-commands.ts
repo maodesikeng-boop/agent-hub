@@ -11,7 +11,7 @@ import type { SentFile } from "../../shared/sent-files.ts";
 import { deliverablesOfFileArgs, fileArgsProblem } from "../deliverables.ts";
 import { HUB_COMMAND, LOG_PREFIX } from "../../shared/names.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
-import { AGENT_VENDORS, bundledModelCatalog, effortsFor, isAgentVendor } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, bundledModelCatalog, effortLabel, effortsFor, isAgentVendor } from "../../shared/vendors.ts";
 import type { AgentVendor, ModelCatalog, VendorAvailability } from "../../shared/vendors.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
@@ -81,6 +81,12 @@ const VENDOR_AVAILABILITY_TEXT: Readonly<Record<VendorAvailability, string>> = {
 };
 
 function toHubVendorModels(catalog: ModelCatalog): HubVendorModels {
+  const keys = new Set<string>([
+    ...catalog.efforts,
+    ...(catalog.defaultEfforts ?? []),
+    ...(catalog.defaultEffort ? [catalog.defaultEffort] : []),
+    ...catalog.models.flatMap((m) => m.efforts ?? []),
+  ]);
   return {
     vendor: catalog.vendor,
     label: catalog.label,
@@ -91,12 +97,18 @@ function toHubVendorModels(catalog: ModelCatalog): HubVendorModels {
     defaultEffort: catalog.defaultEffort ?? null,
     defaultEfforts: [...effortsFor(catalog, null)],
     efforts: [...catalog.efforts],
+    effortLabels: Object.fromEntries([...keys].map((e) => [e, effortLabel(e, catalog.vendor, catalog)])),
     models: catalog.models.map((m) => ({
       id: m.id,
       label: m.label,
       efforts: [...effortsFor(catalog, m.id)],
     })),
   };
+}
+
+function formatVendorEffort(vendor: AgentVendor, effort: string, labels?: Readonly<Record<string, string>>): string {
+  const label = labels?.[effort] ?? effortLabel(effort, vendor);
+  return label !== effort ? `${effort}（${label}）` : effort;
 }
 
 function formatDefaultModelText(entry: HubVendorModels): string {
@@ -109,11 +121,11 @@ function formatDefaultModelText(entry: HubVendorModels): string {
 function formatVendorModelsBlock(entry: HubVendorModels): string {
   const status = VENDOR_AVAILABILITY_TEXT[entry.availability] ?? "可用";
   const defaultModel = formatDefaultModelText(entry);
-  const defaultEffort = entry.defaultEffort ?? "默认";
+  const defaultEffort = entry.defaultEffort === null ? "默认" : formatVendorEffort(entry.vendor, entry.defaultEffort, entry.effortLabels);
   const header = `${entry.vendor}（${entry.label}）· 状态: ${status} · 默认模型: ${defaultModel} · 默认思考程度: ${defaultEffort}`;
   const modelLines = entry.models.map((m) => {
     const name = m.label && m.label !== m.id ? `${m.id}（${m.label}）` : m.id;
-    const effortText = m.efforts.length > 0 ? m.efforts.join(", ") : "不可调";
+    const effortText = m.efforts.length > 0 ? m.efforts.map((e) => formatVendorEffort(entry.vendor, e, entry.effortLabels)).join(", ") : "不可调";
     return `  - ${name} · 思考程度: ${effortText}`;
   });
   return [header, ...modelLines].join("\n");

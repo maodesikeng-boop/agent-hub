@@ -42,6 +42,7 @@ import {
   checkModelEffort,
   effortLabel,
   isAgentVendor,
+  normalizeEffortInput,
   splitModelEffort,
   vendorLabel,
 } from "../../shared/vendors.ts";
@@ -75,14 +76,23 @@ const agentOf = (pm: PmDbRow): AgentSetting => ({ vendor: pm.vendor as AgentVend
 
 const sameAgent = (a: AgentSetting, b: AgentSetting) => a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 
-function agentNotes(rawBefore: AgentSetting, rawAfter: AgentSetting, label: LedgerContext["modelLabel"]): string[] {
+function agentNotes(
+  rawBefore: AgentSetting,
+  rawAfter: AgentSetting,
+  label: LedgerContext["modelLabel"],
+  catalogOf?: (vendor: AgentVendor) => ReturnType<LedgerContext["modelCatalog"]>,
+): string[] {
+  const catalogBefore = catalogOf?.(rawBefore.vendor) ?? null;
+  const catalogAfter = catalogOf?.(rawAfter.vendor) ?? null;
   // Old agy rows store effort inside the model id, so split them before comparing.
-  const before = { vendor: rawBefore.vendor, ...splitModelEffort(rawBefore.vendor, rawBefore.model, rawBefore.effort) };
-  const after = { vendor: rawAfter.vendor, ...splitModelEffort(rawAfter.vendor, rawAfter.model, rawAfter.effort) };
+  const before = { vendor: rawBefore.vendor, ...splitModelEffort(rawBefore.vendor, rawBefore.model, rawBefore.effort, catalogBefore) };
+  const after = { vendor: rawAfter.vendor, ...splitModelEffort(rawAfter.vendor, rawAfter.model, rawAfter.effort, catalogAfter) };
   const notes: string[] = [];
   if (before.vendor !== after.vendor) notes.push(`厂商：${vendorLabel(before.vendor)} → ${vendorLabel(after.vendor)}`);
   if (before.model !== after.model) notes.push(`模型：${label(before.vendor, before.model)} → ${label(after.vendor, after.model)}`);
-  if (before.effort !== after.effort) notes.push(`思考程度：${effortLabel(before.effort)} → ${effortLabel(after.effort)}`);
+  if (before.effort !== after.effort) {
+    notes.push(`思考程度：${effortLabel(before.effort, before.vendor, catalogBefore)} → ${effortLabel(after.effort, after.vendor, catalogAfter)}`);
+  }
   return notes;
 }
 
@@ -93,8 +103,13 @@ function optionalSetting(value: unknown, what: string): string | null {
 }
 
 function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }, catalogOf?: (vendor: AgentVendor) => ReturnType<LedgerContext["modelCatalog"]>): AgentSetting {
-  const setting = { vendor: raw.vendor, model: optionalSetting(raw.model, "模型"), effort: optionalSetting(raw.effort, "思考程度") };
-  const catalog = isAgentVendor(setting.vendor) ? (catalogOf?.(setting.vendor) ?? null) : null;
+  const vendorCandidate = isAgentVendor(raw.vendor) ? raw.vendor : null;
+  const catalog = vendorCandidate ? (catalogOf?.(vendorCandidate) ?? null) : null;
+  const setting = {
+    vendor: raw.vendor,
+    model: optionalSetting(raw.model, "模型"),
+    effort: normalizeEffortInput(vendorCandidate, optionalSetting(raw.effort, "思考程度"), catalog),
+  };
   const problem = checkAgentSetting(setting, catalog);
   if (problem !== null) throw fail("invalid", problem);
   const { vendor, model, effort } = setting as AgentSetting;
@@ -114,7 +129,7 @@ function nextAgent(current: AgentSetting, input: EditPersonaInput, catalogOf?: (
         ? splitModelEffort(vendor, current.model, current.effort, catalog)
         : { model: current.model, effort: current.effort };
   const model = input.model === undefined ? from.model : optionalSetting(input.model, "模型");
-  const effort = input.effort === undefined ? from.effort : optionalSetting(input.effort, "思考程度");
+  const effort = input.effort === undefined ? from.effort : normalizeEffortInput(vendor, optionalSetting(input.effort, "思考程度"), catalog);
   const problem =
     (input.model !== undefined ? checkModel(vendor, model) : null) ??
     (input.effort !== undefined ? checkEffort(vendor, effort, catalog) : null) ??
@@ -345,7 +360,7 @@ export function createLedgerPersona(
       )!,
     );
     p.changes.push({ type: "pm.updated", data: { pm: toPm(pmRow(pm.id)!) } });
-    const notes = agentNotes(agentBefore, next.agent, ctx.modelLabel);
+    const notes = agentNotes(agentBefore, next.agent, ctx.modelLabel, ctx.modelCatalog);
     if (next.mode !== modeBefore) notes.unshift(`模式：${PM_MODE_LABELS[modeBefore]} → ${PM_MODE_LABELS[next.mode]}`);
     const modeNote = notes.length === 0 ? "" : `（${notes.join("，")}）`;
     const reasonNote = next.reason === null ? "" : `。理由：${next.reason}`;

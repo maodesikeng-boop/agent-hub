@@ -596,7 +596,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     // 会话那一行改了：驱动层下一条消息前比出不一样，--resume 重启
     expect(sessionRow(lin.sessionId)).toMatchObject({ model: "haiku", effort: "low", hasCompletedTurn: false, updatedAt: 3_000 });
     expect(sessionRow(zhou.sessionId)).toMatchObject({ model: null, effort: null });
-    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：默认 → Haiku，思考程度：默认 → low）");
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：默认 → Haiku，思考程度：默认 → Low）");
     expect(changes.map((c) => c.type)).toEqual(["pm.updated", "message.created", "session.status"]);
     expect(changes[0]).toMatchObject({ data: { pm: { id: lin.pmId, vendor: "claude", defaultModel: "haiku", effort: "low" } } });
     expect(changes[2]).toMatchObject({ data: { session: { sessionId: lin.sessionId, model: "haiku", effort: "low" } } });
@@ -689,7 +689,9 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(persona).toMatchObject({ vendor: "agy", model: "gemini-4-argon", effort: "low" });
     expect(sessionRow(agy.sessionId)).toMatchObject({ model: "gemini-4-argon", effort: "low" });
     // 对话里的系统消息：模型没变不写，思考程度单独一段（老数据里的 high 是从完整 ID 里拆出来的）
-    expect(messagesIn(agy.conversation.id).at(-1)!.text).toBe("你改了阿亮的设置（思考程度：high → low）");
+    expect(messagesIn(agy.conversation.id).at(-1)!.text).toBe("你改了阿亮的设置（思考程度：High → Low）");
+    expect(ledger.editPersona(agy.pm.id, { effort: "Extra" }, { kind: "user" }).persona).toMatchObject({ model: "gemini-4-argon", effort: "xhigh" });
+    expect(messagesIn(agy.conversation.id).at(-1)!.text).toBe("你改了阿亮的设置（思考程度：Low → Extra）");
   });
 
   it("agy 只给完整 ID：拆成 模型 + 思考程度；完整 ID 加对不上的思考程度：invalid", () => {
@@ -766,7 +768,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
       to_effort: null,
     });
     expect(messagesIn(lin.conversationId).at(-1)!.text).toBe(
-      "你改了小林的设置（厂商：Claude Code → Codex，模型：Opus → 默认，思考程度：max → 默认）",
+      "你改了小林的设置（厂商：Claude Code → Codex，模型：Opus → 默认，思考程度：Max → 默认）",
     );
 
     // 换厂商等待期间继续改新厂商下的模型、思考程度和正文
@@ -868,7 +870,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(reverted.persona).toMatchObject({ model: null, effort: null, text: "改一下" });
     expect(reverted.change).toMatchObject({ revertOf: agent.id, modelBefore: "haiku", modelAfter: null, effortBefore: "low", effortAfter: null });
     expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, effort: null });
-    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("已撤销小林的上一次设置修改（模型：Haiku → 默认，思考程度：low → 默认）");
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("已撤销小林的上一次设置修改（模型：Haiku → 默认，思考程度：Low → 默认）");
   });
 });
 

@@ -407,6 +407,7 @@ export interface HubVendorModels {
   defaultEffort: string | null;
   defaultEfforts: string[];
   efforts: string[];
+  effortLabels?: Record<string, string>;
   models: HubModelEntry[];
 }
 

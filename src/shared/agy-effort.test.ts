@@ -7,6 +7,7 @@ import {
   bundledModelCatalog,
   checkAgentSetting,
   checkModelEffort,
+  effortLabel,
   effortsFor,
   modelLabel,
   agentEffortOf,
@@ -15,8 +16,9 @@ import {
 } from "./vendors.ts";
 
 describe("splitModelEffort：完整 ID 拆成 模型 + 思考程度", () => {
-  it("带档位的 ID 拆开，档位用厂商清单里的（low、medium、high）", () => {
+  it("带档位的 ID 拆开，档位用厂商清单里的（low、medium、high、xhigh）", () => {
     expect(splitModelEffort("agy", "gemini-4-argon-high", null)).toEqual({ model: "gemini-4-argon", effort: "high" });
+    expect(splitModelEffort("agy", "gemini-4-neon-xhigh", null)).toEqual({ model: "gemini-4-neon", effort: "xhigh" });
     expect(splitModelEffort("agy", "gemini-3.8-flash-low", null)).toEqual({ model: "gemini-3.8-flash", effort: "low" });
     expect(splitModelEffort("agy", "claude-opus-5-5-medium", null)).toEqual({ model: "claude-opus-5-5", effort: "medium" });
     expect(splitModelEffort("agy", "gpt-oss-120b-medium", null)).toEqual({ model: "gpt-oss-120b", effort: "medium" });
@@ -38,6 +40,7 @@ describe("splitModelEffort：完整 ID 拆成 模型 + 思考程度", () => {
 describe("agy 的启动参数：拼回完整 ID，不同时传 --effort", () => {
   it("不带档位的模型 + 思考程度 → 拼成完整 ID 一个 --model", () => {
     expect(agentLaunchArgs({ vendor: "agy", model: "gemini-4-argon", effort: "high" })).toEqual(["--model", "gemini-4-argon-high"]);
+    expect(agentLaunchArgs({ vendor: "agy", model: "gemini-4-neon", effort: "xhigh" })).toEqual(["--model", "gemini-4-neon-xhigh"]);
     expect(agentLaunchArgs({ vendor: "agy", model: "claude-sonnet-5-5", effort: "low" })).toEqual(["--model", "claude-sonnet-5-5-low"]);
     expect(agentLaunchArgs({ vendor: "agy", model: "gpt-oss-120b", effort: "medium" })).toEqual(["--model", "gpt-oss-120b-medium"]);
   });
@@ -64,10 +67,11 @@ describe("agy 的启动参数：拼回完整 ID，不同时传 --effort", () => 
 });
 
 describe("agy 的取值校验", () => {
-  it("思考程度只有 low、medium、high（实测 xhigh、max 被 agy 拒绝）", () => {
-    expect(vendorSpec("agy").models.efforts).toEqual(["low", "medium", "high"]);
+  it("思考程度支持 low、medium、high、xhigh；max 被拒绝", () => {
+    expect(vendorSpec("agy").models.efforts).toEqual(["low", "medium", "high", "xhigh"]);
     expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-argon", effort: "high" })).toBeNull();
-    expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-argon", effort: "xhigh" })).toBe("思考程度只能是 low、medium、high");
+    expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-neon", effort: "xhigh" })).toBeNull();
+    expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-argon", effort: "max" })).toBe("思考程度只能是 low、medium、high、xhigh");
   });
 
   it("完整 ID 加同一档的 --effort、完整 ID 单独用都行；档位对不上的报错，说清楚怎么改", () => {
@@ -92,10 +96,10 @@ describe("打包的名单：照 agy models 的实际内容，模型不带档位"
     ]);
   });
 
-  it("effortsFor：GPT-OSS 只有 Medium 一档；默认模型用通用的三档", () => {
+  it("effortsFor：GPT-OSS 只有 Medium 一档；默认模型用通用的四档", () => {
     expect(effortsFor(catalog, "gpt-oss-120b")).toEqual(["medium"]);
     expect(effortsFor(catalog, "gemini-4-argon")).toEqual(["low", "medium", "high"]);
-    expect(effortsFor(catalog, null)).toEqual(["low", "medium", "high"]);
+    expect(effortsFor(catalog, null)).toEqual(["low", "medium", "high", "xhigh"]);
   });
 });
 
@@ -119,6 +123,8 @@ describe("老数据和右栏的显示：模型 + 档位", () => {
   it("老数据（完整 ID）：右栏模型名只显示模型，档位从 ID 里取，另外显示", () => {
     expect(modelShortLabel("agy", "gemini-4-argon-high", catalog)).toBe("Gemini 4 Argon");
     expect(agentEffortOf("agy", "gemini-4-argon-high", null)).toBe("high");
+    expect(agentEffortOf("agy", "gemini-4-neon-xhigh", null)).toBe("xhigh");
+    expect(effortLabel("xhigh", "agy", catalog)).toBe("Extra");
     expect(agentEffortOf("agy", "gemini-4-argon", "low")).toBe("low");
     expect(agentEffortOf("agy", null, null)).toBeNull();
     expect(agentEffortOf("claude", "opus", "max")).toBe("max");

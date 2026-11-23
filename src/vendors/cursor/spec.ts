@@ -62,6 +62,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "claude-opus-5-5",
     efforts: EFFORTS,
+    effortLabels: { minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max" },
     routerDefault: { model: "gemini-3.8-flash", effort: "medium" },
     shortName: shortCursorModelName,
   },

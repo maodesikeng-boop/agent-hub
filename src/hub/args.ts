@@ -5,6 +5,7 @@ import { HUB_FILE_ARGS_MAX } from "../shared/limits.ts";
 import { parseHubFileArg, type HubFileArg } from "../shared/deliverables.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { parseWorkerMaxTime } from "../shared/schedule.ts";
+import { ALL_EFFORTS, isAgentVendor, normalizeEffortInput } from "../shared/vendors.ts";
 
 const hub = HUB_COMMAND;
 
@@ -206,6 +207,15 @@ export function maxTimeMsOf(raw: string): number {
   const parsed = parseWorkerMaxTime(raw);
   if (!parsed.ok) throw new UsageError(parsed.error);
   return parsed.maxTimeMs;
+}
+
+export function effortOf(vendor: string | undefined, raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const candidate = normalizeEffortInput(isAgentVendor(vendor) ? vendor : undefined, raw);
+  if (candidate === null || !ALL_EFFORTS.includes(candidate)) {
+    throw new UsageError(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
+  }
+  return candidate;
 }
 
 export function requireStdin(values: Options, what: string): Parsed["textSource"] {

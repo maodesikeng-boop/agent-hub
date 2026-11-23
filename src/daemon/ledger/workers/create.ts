@@ -5,7 +5,7 @@ import type { ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { workerWorktreePath } from "../../../shared/paths.ts";
 import { UserBlockedError, userBlockerKindOf } from "../../../shared/user-blockers.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, normalizeEffortInput, splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
 import { workerBranchName } from "../../../shared/worker.ts";
 import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail } from "../context.ts";
@@ -67,9 +67,10 @@ export const assertAgentVendor = (vendor: string): void => {
 /** agy encodes effort in the model id, so both spellings are normalized to model plus effort. */
 export function checkedModelEffort(w: WorkersCtx, vendor: AgentVendor, model: string | null, effort: string | null) {
   const catalog = w.ctx.modelCatalog(vendor);
-  const badSetting = checkModel(vendor, model) ?? checkEffort(vendor, effort, catalog) ?? checkModelEffort(vendor, model, effort, catalog);
+  const normalizedEffort = normalizeEffortInput(vendor, effort, catalog);
+  const badSetting = checkModel(vendor, model) ?? checkEffort(vendor, normalizedEffort, catalog) ?? checkModelEffort(vendor, model, normalizedEffort, catalog);
   if (badSetting !== null) throw fail("invalid", badSetting);
-  return splitModelEffort(vendor, model, effort, catalog);
+  return splitModelEffort(vendor, model, normalizedEffort, catalog);
 }
 
 export type NewWorkerRows = {

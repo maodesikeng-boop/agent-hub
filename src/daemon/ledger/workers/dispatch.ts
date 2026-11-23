@@ -62,7 +62,8 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
     review: plan.kind === "review",
     reviewJson: newReviewJson(plan),
   });
-  const inheritedSetting = vendor === input.pmVendor ? splitModelEffort(vendor, input.pmModel, input.pmEffort) : { model: null, effort: null };
+  const inheritedSetting =
+    vendor === input.pmVendor ? splitModelEffort(vendor, input.pmModel, input.pmEffort, w.ctx.modelCatalog(vendor)) : { model: null, effort: null };
   const session = insertWorkerSessionIn(w, p, worker, card, { vendor, model, effort }, inheritedSetting);
 
   const workerRecord = toWorkerRecord(worker);

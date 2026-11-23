@@ -505,20 +505,20 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
 
     await user.keyboard("{ArrowDown}{Enter}");
     expect(box.value).toBe("/hub:worker claude opus ");
-    expect(labels()).toEqual(["Default", "low", "high"]);
+    expect(labels()).toEqual(["Default", "Low", "High"]);
     await user.type(box, "hi");
-    expect(labels()).toEqual(["high"]);
+    expect(labels()).toEqual(["High"]);
     await user.keyboard("{Enter}");
     expect(box.value).toBe("");
     expect(screen.queryByRole("listbox")).toBeNull();
-    expect(tag()).toHaveTextContent("Claude CodeOpushigh");
+    expect(tag()).toHaveTextContent("Claude CodeOpusHigh");
     expect(posts(api)).toHaveLength(0);
   });
 
   /** 打完整命令，最后一级 Enter 选中。 */
   const pickHigh = async (user: ReturnType<typeof userEvent.setup>, box: HTMLTextAreaElement) => {
     await user.type(box, "/hub:worker claude opus hi");
-    await waitFor(() => expect(labels()).toEqual(["high"]));
+    await waitFor(() => expect(labels()).toEqual(["High"]));
     await user.keyboard("{Enter}");
   };
   const tag = () => screen.getByRole("button", { name: /^Worker model/ });
@@ -529,7 +529,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.type(box, "/hub:worker claude ");
     await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
     await user.keyboard("{Enter}");
-    await waitFor(() => expect(labels()).toEqual(["Default", "low", "high"]));
+    await waitFor(() => expect(labels()).toEqual(["Default", "Low", "High"]));
     await user.keyboard("{Enter}");
     expect(box.value).toBe("");
     const chip = tag();
@@ -583,7 +583,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.keyboard("{Enter}"); // 选到模型级：/hub:worker claude \n修一下登录
     await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
     await user.keyboard("{Enter}"); // 选到档位级：/hub:worker claude default \n修一下登录
-    await waitFor(() => expect(labels()).toEqual(["Default", "low", "high"]));
+    await waitFor(() => expect(labels()).toEqual(["Default", "Low", "High"]));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("listbox")).toBeNull();
     // 再点标签：清掉 claude default，重新打开厂商列表
@@ -600,10 +600,10 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     const { box, user } = await boot();
     await pickHigh(user, box);
     await user.type(box, "/hub:worker claude opus lo");
-    await waitFor(() => expect(labels()).toEqual(["low"]));
+    await waitFor(() => expect(labels()).toEqual(["Low"]));
     await user.keyboard("{Enter}");
     expect(screen.getAllByRole("button", { name: /^Worker model/ })).toHaveLength(1);
-    expect(tag()).toHaveAccessibleName("Worker model: Claude Code Opus low");
+    expect(tag()).toHaveAccessibleName("Worker model: Claude Code Opus Low");
   });
 
   it("标签跟着草稿走：切到别的对话没有，切回来还在", async () => {
@@ -618,7 +618,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
       window.location.hash = "#/c/1";
     });
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute("placeholder", "Message 小林…"));
-    expect(tag()).toHaveAccessibleName("Worker model: Claude Code Opus high");
+    expect(tag()).toHaveAccessibleName("Worker model: Claude Code Opus High");
   });
 
   it("发送：请求体带 workerPick（Default 是 null），发出去后标签清掉；气泡上方是同样的只读标签", async () => {
@@ -629,7 +629,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(posts(api)[0]!.body).toMatchObject({ text: "修一下登录", workerPick: { vendor: "claude", model: "opus", effort: "high" } });
     expect(queryTag()).toBeNull();
     const sent = await screen.findByRole("group", { name: "Worker model" });
-    expect(sent).toHaveTextContent("Claude CodeOpushigh");
+    expect(sent).toHaveTextContent("Claude CodeOpusHigh");
     expect(within(sent).queryByRole("button")).toBeNull();
 
     // 下一条不带
@@ -654,7 +654,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await pickHigh(user, box);
     await user.type(box, "修一下登录{Enter}");
     const retry = await screen.findByRole("button", { name: "Not sent. Click to resend" });
-    expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpushigh");
+    expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpusHigh");
     api.postMessage = () => ({ status: 200, body: { messageId: 9 } });
     await user.click(retry);
     await waitFor(() => expect(posts(api)).toHaveLength(2));
@@ -676,7 +676,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await pickHigh(user, box);
     await user.type(box, "超时测试{Enter}");
     const retry = await screen.findByRole("button", { name: "Not sent. Click to resend" });
-    expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpushigh");
+    expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpusHigh");
     failTimeout = false;
     await user.click(retry);
     await waitFor(() => expect(posts(api)).toHaveLength(1));
@@ -712,7 +712,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     ]);
     const chips = await screen.findAllByRole("group", { name: "Worker model" });
     expect(chips).toHaveLength(1);
-    expect(chips[0]!.textContent).toBe("Claude Codehigh");
+    expect(chips[0]!.textContent).toBe("Claude CodeHigh");
     expect(chips[0]).toHaveClass("rounded-full", "bg-muted", "text-minor", "gap-2", "mb-1.5");
     const bubble = screen.getByText("派人做");
     expect(chips[0]!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

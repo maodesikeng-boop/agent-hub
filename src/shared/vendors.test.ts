@@ -13,6 +13,7 @@ import {
   checkAgentSetting,
   checkEffort,
   checkModel,
+  effortLabel,
   handoverTokenThresholdOf,
   isAgentVendor,
   bundledModelCatalog,
@@ -21,6 +22,7 @@ import {
   modelChoiceOf,
   modelLabel,
   modelShortLabel,
+  normalizeEffortInput,
   vendorFailureOf,
   vendorSpec,
   type ModelCatalog,
@@ -73,7 +75,7 @@ describe("厂商清单", () => {
     ]);
     expect(agy.models.customModel).toBe(true);
     expect(agy.models.customModelExample).toBe("如 gemini-4-argon");
-    expect(agy.models.efforts).toEqual(["low", "medium", "high"]);
+    expect(agy.models.efforts).toEqual(["low", "medium", "high", "xhigh"]);
     expect(agy.models.effortInModelId).toBe(true);
     expect(agy.models.flags.model).toBe("--model");
     expect(agy.models.flags.effort).toBe("--effort");
@@ -171,12 +173,12 @@ describe("取值校验", () => {
     for (const e of [null, "low", "medium", "high", "xhigh", "max"]) {
       expect(checkEffort("claude", e)).toBeNull();
     }
-    for (const e of [null, "low", "medium", "high"]) expect(checkEffort("agy", e)).toBeNull();
+    for (const e of [null, "low", "medium", "high", "xhigh"]) expect(checkEffort("agy", e)).toBeNull();
     for (const e of ["", "LOW", "min", "ultra", " high"]) {
       expect(checkEffort("claude", e)).toBe("思考程度只能是 low、medium、high、xhigh、max");
-      expect(checkEffort("agy", e)).toBe("思考程度只能是 low、medium、high");
+      expect(checkEffort("agy", e)).toBe("思考程度只能是 low、medium、high、xhigh");
     }
-    for (const e of ["xhigh", "max"]) expect(checkEffort("agy", e)).toBe("思考程度只能是 low、medium、high");
+    expect(checkEffort("agy", "max")).toBe("思考程度只能是 low、medium、high、xhigh");
     for (const e of [null, "low", "medium", "high", "xhigh", "max", "ultra"]) {
       expect(checkEffort("codex", e)).toBeNull();
     }
@@ -236,6 +238,33 @@ describe("界面上的叫法", () => {
     expect(modelLabel("claude", "claude-opus-4-6", catalog)).toBe("Opus 4.6");
     expect(modelLabel("claude", "haiku", catalog)).toBe("haiku");
   });
+
+  it("effortLabel：按各厂商应用显示名映射，动态名单优先，未知值回退原样", () => {
+    expect(effortLabel(null, "agy")).toBe("默认");
+    expect(effortLabel("xhigh", "agy")).toBe("Extra");
+    expect(effortLabel("xhigh", "claude")).toBe("Extra");
+    expect(effortLabel("xhigh", "codex")).toBe("Extra high");
+    expect(effortLabel("xhigh", "cursor")).toBe("Extra High");
+    expect(effortLabel("xhigh", "pi")).toBe("xhigh");
+    expect(effortLabel("low", "pi")).toBe("low");
+    expect(effortLabel("off", "deepseek")).toBe("Off");
+    expect(effortLabel("xhigh", "opencode")).toBe("Xhigh");
+    expect(effortLabel("xhigh", "kimi")).toBe("Xhigh");
+    expect(effortLabel("xhigh", "claude", { ...bundledModelCatalog("claude"), effortLabels: { xhigh: "Super" } })).toBe("Super");
+    expect(effortLabel("custom-tier", "claude")).toBe("custom-tier");
+  });
+
+  it("normalizeEffortInput：把各厂商显示名还原成标准键值，不破坏大小写校验和旧数据", () => {
+    expect(normalizeEffortInput("agy", "Extra")).toBe("xhigh");
+    expect(normalizeEffortInput("agy", "extra")).toBe("xhigh");
+    expect(normalizeEffortInput("claude", "Extra")).toBe("xhigh");
+    expect(normalizeEffortInput("codex", "Extra high")).toBe("xhigh");
+    expect(normalizeEffortInput("codex", "Extra High")).toBe("xhigh");
+    expect(normalizeEffortInput("claude", "Low")).toBe("low");
+    expect(normalizeEffortInput("claude", "LOW")).toBe("LOW");
+    expect(normalizeEffortInput(null, "Extra")).toBe("xhigh");
+    expect(normalizeEffortInput(null, "Low")).toBe("low");
+  });
 });
 
 const catalog: ModelCatalog = {
@@ -261,6 +290,7 @@ describe("模型名单", () => {
       defaultEfforts: null,
       defaultModel: null,
       defaultModelId: null,
+      effortLabels: vendorSpec("claude").models.effortLabels,
       efforts: vendorSpec("claude").models.efforts,
       customModelExample: vendorSpec("claude").models.customModelExample,
       models: vendorSpec("claude").models.bundled.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null })),

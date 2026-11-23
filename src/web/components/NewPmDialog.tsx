@@ -74,8 +74,9 @@ function NewPmForm({
   const cleanName = normalizeName(name);
   const nameProblem = nameError(name);
   const personaTooLong = utf8Bytes(persona) > MAX_PERSONA_BYTES;
-  const agentResult = settingOf(agent);
-  const vendorUsable = isSelectable(useModelCatalog(agent.vendor).availability);
+  const agentCatalog = useModelCatalog(agent.vendor);
+  const agentResult = settingOf(agent, agentCatalog);
+  const vendorUsable = isSelectable(agentCatalog.availability);
   const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && vendorUsable && !busy;
   const zeroProvidersReady = allCatalogs.length > 0 && allCatalogs.every((c) => !isSelectable(c.availability));
 
