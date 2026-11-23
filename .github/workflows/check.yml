@@ -62,6 +62,10 @@ jobs:
         if: matrix.shard == '1/4'
         run: pnpm typecheck
 
+      - name: Dead code check (knip)
+        if: matrix.shard == '1/4'
+        run: pnpm exec knip --treat-config-hints-as-errors
+
       # 沙箱依赖（bubblewrap/socat）的安装：先走 actions/cache 缓存的 .deb，缓存没命中再 apt 在线装；
       # runner 默认的 Azure 镜像连不上时自动切到 Ubuntu 官方源重试。装好后 scripts/linux-sandbox-setup.sh
       # 看到 bwrap/socat 已存在就会跳过它自己的 apt 步骤（脚本本身不用改，用户机器上的行为不变）。
@@ -153,3 +157,51 @@ jobs:
       - name: Build
         if: matrix.shard == '1/4'
         run: pnpm build
+
+  verify-smoke:
+    name: verify-smoke (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            !node_modules/.vite
+          key: node-modules-v2-${{ runner.os }}-node24-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright Chromium
+        id: cache-playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run pnpm verify
+        run: pnpm verify --out "$RUNNER_TEMP/verify-smoke"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: check-verify-smoke
+          path: ${{ runner.temp }}/verify-smoke
+          if-no-files-found: ignore
+          retention-days: 14

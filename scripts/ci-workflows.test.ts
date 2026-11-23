@@ -108,6 +108,23 @@ describe(".github/workflows", () => {
     expect(pr?.["paths-ignore"]).toBeUndefined();
   });
 
+  it("run pnpm verify and knip in check.yml on every pull request without artifact collisions in release.yml", () => {
+    const check = workflow("check.yml");
+    const verifyJob = check.jobs["verify-smoke"];
+    expect(verifyJob).toBeDefined();
+    expect(verifyJob!.if).toBeUndefined();
+    expect(verifyJob!.steps?.some((step) => step.run?.startsWith("pnpm verify"))).toBe(true);
+    const verifyArtifacts = (verifyJob!.steps ?? [])
+      .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
+      .map((step) => step.with?.name);
+    const releaseSmokeArtifacts = (workflow("release.yml").jobs.smoke?.steps ?? [])
+      .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
+      .map((step) => step.with?.name);
+    for (const name of verifyArtifacts) expect(releaseSmokeArtifacts).not.toContain(name);
+    const knipRuns = Object.values(check.jobs).flatMap((job) => (job.steps ?? []).filter((step) => step.run?.startsWith("pnpm exec knip")));
+    expect(knipRuns.length).toBeGreaterThan(0);
+  });
+
   it.each(["mac-desktop.yml", "windows-desktop.yml"])("%s rebuilds on main for every staged runtime input", (name) => {
     const paths = workflow(name).on.push?.paths ?? [];
     for (const input of STAGED_RUNTIME_INPUTS) {
