@@ -280,6 +280,3 @@ export interface TrialResult {
   /** 没通过时留着的现场目录；通过了是 null（已删）。 */
   workDir: string | null;
 }
-
-/** 剧本项目经理（自测用）：项目经理那一份假 claude 剧本。 */
-export type ScriptedPm = FakeScript;

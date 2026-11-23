@@ -709,7 +709,3 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
 export function createAcpDriver(config: AcpDriverConfig, options: AcpDriverOptions): AcpSessionDriver {
   return new AcpSessionDriver(config, options);
 }
-
-export function createAcpDriverFactory(config: AcpDriverConfig): (options: DriverOptions) => Driver {
-  return (options) => createAcpDriver(config, options);
-}

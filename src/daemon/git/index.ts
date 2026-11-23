@@ -34,9 +34,4 @@ export type {
   AddWorktreeResult,
   DiffFileStat,
   GitOptions,
-  LocalBranchInfo,
-  OrphanContentProbe,
-  ProbeOrphanOptions,
-  WorktreeLink,
-  WorktreeRemovalProbe,
 } from "./git.ts";

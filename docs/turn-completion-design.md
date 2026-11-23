@@ -1,5 +1,7 @@
 # Reliable turn completion
 
+> Snapshot: 2026-11-21 (commit `6883b2f4`)
+
 ## For the user
 
 ### Files to review

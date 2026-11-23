@@ -610,5 +610,3 @@ export function createResourceInspector(deps: ResourceInspectorDeps): ResourceIn
 
   return { inspect, decide, runCleanup, close };
 }
-
-export type { DirectoryResourceUsage };

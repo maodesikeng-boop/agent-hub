@@ -1,5 +1,7 @@
 # Vendor plugin architecture
 
+> Snapshot: 2026-11-20 (commit `e8ed3389`)
+
 Bellwood drives eight official coding-agent CLIs through one plugin contract so shared layers (the SQLite ledger, Task Graph scheduler, Router, Feishu, and React UI) contain zero hardcoded vendor branches (`src/vendors/`, guarded by `src/shared/vendor-guard.test.ts` and `src/vendors/contract.test.ts`).
 
 ## Directory structure and single registry

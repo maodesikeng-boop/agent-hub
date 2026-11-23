@@ -11,13 +11,3 @@ export function Avatar({ className, ...props }: React.ComponentProps<typeof Avat
     />
   );
 }
-
-export function AvatarFallback({ className, ...props }: React.ComponentProps<typeof AvatarPrimitive.Fallback>) {
-  return (
-    <AvatarPrimitive.Fallback
-      data-slot="avatar-fallback"
-      className={cn("flex size-full items-center justify-center", className)}
-      {...props}
-    />
-  );
-}

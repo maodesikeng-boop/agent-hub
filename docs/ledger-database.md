@@ -1,5 +1,7 @@
 # Ledger database
 
+> Snapshot: 2026-11-22 (commit `5c426864`)
+
 The daemon keeps all of its state in one SQLite file, `state/hub.sqlite` under the data directory. This page covers who may open that file, how schema migrations stay complete, and how upgrades from released versions are tested.
 
 ## The daemon owns the file

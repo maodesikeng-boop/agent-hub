@@ -1,5 +1,7 @@
 # macOS app and DMG distribution
 
+> Snapshot: 2026-11-22 (commit `60fc1413`)
+
 Bellwood's macOS desktop shell (`apps/macos/`) is a native Swift application (`AppKit`, `WKWebView`, and `UserNotifications`) supervised through `apps/desktop/contract.json`. `scripts/build-mac-app.sh` builds `Bellwood.app` in two modes without changing source-checkout ergonomics.
 
 ## Build modes

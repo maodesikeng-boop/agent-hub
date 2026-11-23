@@ -1,5 +1,7 @@
 # Linux sandbox design
 
+> Snapshot: 2026-11-20 (commit `e8ed3389`)
+
 On Linux, Bellwood wraps Worker processes in `bubblewrap` (`bwrap`) so normal write boundaries, data-directory read boundaries, and outer read-only Workers match macOS `sandbox-exec` semantics at the kernel mount and PID namespace level (`src/daemon/driver/write-scope.ts`).
 
 ## Why `bubblewrap` over Landlock or vendor-only sandboxes

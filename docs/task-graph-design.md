@@ -1,5 +1,7 @@
 # Task Graph orchestration
 
+> Snapshot: 2026-11-22 (commit `540c9189`)
+
 Bellwood models multi-step project work as a persistent directed acyclic Task Graph (`task_graphs`, `task_graph_nodes`, and `task_graph_edges` in SQLite). Once a Project Manager creates a graph via `hub graph create --stdin`, the daemon advances steps automatically in the background without waking the PM between clean steps.
 
 ## Node model and four-state machine
