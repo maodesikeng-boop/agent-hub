@@ -34,16 +34,18 @@ Owner time is about 40 minutes in total: accounts 5, mesh 7, Feishu 15, vendor s
 
 ## 5. Feishu
 
-1. **[Owner]** Create the test bot from the local test workbench: Settings, Feishu, scan the QR code (about 2 minutes). Name it so it cannot be mistaken for the real bot.
+1. **[Owner]** Create the test bot in the terminal (`Settings` in the web workbench has no Feishu tab). Start the local test daemon in one terminal (`node "$HOME/.bellwood-tester/src/test/tester/cli.ts" bench up`), then run in another terminal (use `$HOME` instead of `=` followed by `~`, which zsh does not expand):
+   `AGENT_HUB_HOME="$HOME/.bellwood-tester/local/home" node "$HOME/.bellwood-tester/src/src/feishu/main.ts" connect`
+   Scan the QR code printed in the terminal and name it so it cannot be mistaken for the real bot.
 2. **[Owner]** Send the test bot one direct message, so it binds you as owner (about 1 minute).
-3. **[Owner]** Create the driver app in the Feishu developer console (about 10 minutes): a custom app with user-identity scopes `im:message`, `im:message.send_as_user`, and `offline_access`; the redirect URL `http://127.0.0.1:47123/callback` under Security settings; then create and publish a version. If the tenant asks for admin approval, approve it.
+3. **[Owner]** Set up the driver app in the Feishu developer console (about 10 minutes): either create a separate custom app or reuse the test bot app above, with user-identity scopes `im:message`, `im:message.send_as_user`, and `offline_access`, and redirect URL `http://127.0.0.1:47123/callback` under Security settings; then create and publish a version. If the tenant asks for admin approval, approve it.
 4. **[PM]** Put the driver app's id and secret in `~/.bellwood-tester/secrets/feishu-driver.json` (mode 0600).
-5. **[Owner]** Run `node test/tester/cli.ts authorize-feishu` in your own terminal, outside any agent sandbox, and approve in the browser (1 minute). Repeat once a year: Feishu ends the consent after 365 days, and the tester reports it as a bench alert.
+5. **[Owner]** Run `node "$HOME/.bellwood-tester/src/test/tester/cli.ts" authorize-feishu` in your own terminal, outside any agent sandbox, and approve in the browser (1 minute). Repeat once a year: Feishu ends the consent after 365 days, and the tester reports it as a bench alert.
 6. **[Owner]** Mute the test bot's chats and project groups in Feishu (about 1 minute).
 
 ## 6. Vendor sign-ins
 
-Sign in the four covered vendors on each test computer with the bench `HOME`, so the owner's own CLI logins stay untouched. On the Mac, prefix each command with `HOME=~/.bellwood-tester/local/user-home`; on the server, run it as `bellwood-test`.
+Sign in the four covered vendors on each test computer with the bench `HOME`, so the owner's own CLI logins stay untouched. On the Mac, prefix each command with `HOME="$HOME/.bellwood-tester/local/user-home"`; on the server, run it as `bellwood-test`.
 
 | Vendor | Sign in | Time |
 | --- | --- | --- |

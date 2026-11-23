@@ -6,6 +6,8 @@ set -euo pipefail
 APP_DIR="${BELLWOOD_TESTER_APP_DIR:-$HOME/agent-hub}"
 SERVICE="${BELLWOOD_TESTER_SERVICE:-bellwood-tester}"
 PORT="${BELLWOOD_TESTER_PORT:-4417}"
+DATA_DIR="${BELLWOOD_TESTER_DATA_DIR:-${AGENT_HUB_HOME:-$HOME/.agent-hub}}"
+HEALTH_TIMEOUT_S="${BELLWOOD_TESTER_HEALTH_TIMEOUT_S:-60}"
 REPO_URL="${BELLWOOD_TESTER_REPO_URL:-https://github.com/maodesikeng-boop/agent-hub}"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 MODE_ENV="$SYSTEMD_DIR/${SERVICE}.mode.env"
@@ -62,14 +64,31 @@ EOF
 }
 
 wait_healthy() {
-  local i code
-  for ((i = 0; i < 60; i++)); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -m 2 "http://127.0.0.1:${PORT}/api/health" || true)
-    [ "$code" = "200" ] && return 0
-    sleep 1
+  local token_file="$DATA_DIR/state/ui-token"
+  local cookie_file token auth_code code i
+  cookie_file=$(mktemp)
+  trap 'rm -f "$cookie_file"' RETURN
+  for ((i = 0; i < HEALTH_TIMEOUT_S; i++)); do
+    if [ -s "$token_file" ]; then
+      token=$(tr -d '[:space:]' < "$token_file")
+      if [ -n "$token" ]; then
+        auth_code=$(curl -s -o /dev/null -w '%{http_code}' -m 2 -c "$cookie_file" "http://127.0.0.1:${PORT}/auth?token=${token}" || true)
+        if [ "$auth_code" = "302" ] || [ "$auth_code" = "200" ]; then
+          code=$(curl -s -o /dev/null -w '%{http_code}' -m 2 -b "$cookie_file" "http://127.0.0.1:${PORT}/api/health" || true)
+          if [ "$code" = "200" ]; then
+            rm -f "$cookie_file"
+            trap - RETURN
+            return 0
+          fi
+        fi
+      fi
+    fi
+    [ "$i" -lt $((HEALTH_TIMEOUT_S - 1)) ] && sleep 1
   done
+  rm -f "$cookie_file"
+  trap - RETURN
   journalctl --user -u "$SERVICE" -n 30 --no-pager >&2 || true
-  printf 'tester-remote: %s did not answer /api/health within 60 s\n' "$SERVICE" >&2
+  printf 'tester-remote: %s did not answer /api/health within %s s\n' "$SERVICE" "$HEALTH_TIMEOUT_S" >&2
   return 1
 }
 

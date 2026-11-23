@@ -126,6 +126,10 @@ describe("probeVendor", () => {
     expect(entry).toMatchObject({ status: "signed_out", fix: expect.stringContaining(`HOME=${join(root, "home")} pi`) });
     expect(entry.acceptedGap).toBeUndefined();
     expect(probeVendor("cursor", { instance: "remote", provider: provider("signed_out"), platform: "linux" }).acceptedGap).toMatch(/cannot use Cursor/);
+    expect(probeVendor("opencode", { instance: "local", provider: provider("signed_out"), local: local(root, "/b/opencode"), platform: "darwin" })).toMatchObject({ status: "signed_out", acceptedGap: expect.any(String) });
+    const opencodeUnknown = probeVendor("opencode", { instance: "local", provider: provider("unknown"), local: local(root, "/b/opencode"), platform: "darwin" });
+    expect(opencodeUnknown.status).toBe("unknown");
+    expect(opencodeUnknown.acceptedGap).toBeUndefined();
   });
 
   it("reports ready only when the CLI resolves, the daemon reports available, and the account is signed in", () => {

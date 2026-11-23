@@ -1,12 +1,17 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { FakeLedger } from "../../src/daemon/ui-server/fake-ledger.ts";
+import { startUiServer } from "../../src/daemon/ui-server/server.ts";
 import { createRemoteControl, remoteArgv, type SshSpawn } from "./remote.ts";
+
+const execFileAsync = promisify(execFile);
 
 const REMOTE_SCRIPT = fileURLToPath(new URL("./remote-command.sh", import.meta.url));
 const dirs: string[] = [];
@@ -109,6 +114,8 @@ describe("remote-command.sh", () => {
     mkdirSync(stubs, { recursive: true });
     mkdirSync(join(appDir, "scripts"), { recursive: true });
     mkdirSync(join(appDir, "test", "tester"), { recursive: true });
+    mkdirSync(join(home, ".agent-hub", "state"), { recursive: true });
+    writeFileSync(join(home, ".agent-hub", "state", "ui-token"), "stub-ui-token-0123456789abcdef\n");
     writeFileSync(join(appDir, ".deployed-sha"), `${"a".repeat(40)}\n`);
     writeFileSync(join(appDir, "scripts", "print-vendors.ts"), 'console.log("claude\\tclaude\\t\\t\\npi\\tpi\\t\\t");\n');
     writeFileSync(join(appDir, "test", "tester", "cli.ts"), 'console.log(JSON.stringify({ defaultTurn: { steps: [{ text: "ok" }] }, sessions: [] }));\n');
@@ -191,5 +198,84 @@ describe("remote-command.sh", () => {
     expect(logs.status).toBe(0);
     expect(logs.stdout).toContain("line 1");
     expect(readFileSync(logFile, "utf8")).toContain("journalctl --user -u bellwood-tester -n 25 --no-pager");
+  });
+
+  it("authenticates /api/health via /auth?token=... against a real ui-server while rejecting unauthenticated /api/health", async () => {
+    const root = scratch();
+    const home = join(root, "home");
+    const stubs = join(root, "stubs");
+    const appDir = join(home, "agent-hub");
+    const dataDir = join(root, "data");
+    const altDataDir = join(root, "alt-data");
+    const token = "real-ui-token-0123456789abcdef";
+    mkdirSync(join(appDir, "test", "tester"), { recursive: true });
+    mkdirSync(join(dataDir, "state"), { recursive: true });
+    mkdirSync(join(altDataDir, "state"), { recursive: true });
+    mkdirSync(stubs, { recursive: true });
+    writeFileSync(join(appDir, "test", "tester", "cli.ts"), 'console.log("{}");\n');
+    for (const [name, body] of [
+      ["systemctl", "exit 0"],
+      ["journalctl", "exit 0"],
+    ] as const) {
+      writeFileSync(join(stubs, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(stubs, name), 0o755);
+    }
+
+    const srv = await startUiServer({
+      port: 0,
+      token,
+      ledger: new FakeLedger().asLedger(),
+      uploadsDir: join(root, "uploads"),
+      sentFilesDir: join(root, "sent-files"),
+      staticDir: join(root, "missing-static"),
+    });
+    try {
+      const bareHealth = await fetch(`http://127.0.0.1:${srv.port}/api/health`);
+      expect(bareHealth.status).toBe(401);
+
+      const baseEnv = {
+        HOME: home,
+        PATH: `${stubs}:/usr/bin:/bin`,
+        BELLWOOD_TESTER_APP_DIR: appDir,
+        BELLWOOD_TESTER_PORT: String(srv.port),
+      };
+
+      writeFileSync(join(dataDir, "state", "ui-token"), "wrong-ui-token-0123456789abcdef\n");
+      const badRun = await execFileAsync("bash", [REMOTE_SCRIPT], {
+        env: {
+          ...baseEnv,
+          SSH_ORIGINAL_COMMAND: "restart real",
+          BELLWOOD_TESTER_DATA_DIR: dataDir,
+          BELLWOOD_TESTER_HEALTH_TIMEOUT_S: "1",
+        },
+      }).then(
+        () => ({ code: 0, stderr: "" }),
+        (err: { code?: number; stderr?: string }) => ({ code: err.code ?? 1, stderr: err.stderr ?? "" }),
+      );
+      expect(badRun.code).toBe(1);
+      expect(badRun.stderr).toContain("did not answer /api/health within 1 s");
+
+      writeFileSync(join(dataDir, "state", "ui-token"), `${token}\n`);
+      await execFileAsync("bash", [REMOTE_SCRIPT], {
+        env: {
+          ...baseEnv,
+          SSH_ORIGINAL_COMMAND: "restart real",
+          BELLWOOD_TESTER_DATA_DIR: dataDir,
+          BELLWOOD_TESTER_HEALTH_TIMEOUT_S: "5",
+        },
+      });
+
+      writeFileSync(join(altDataDir, "state", "ui-token"), `${token}\n`);
+      await execFileAsync("bash", [REMOTE_SCRIPT], {
+        env: {
+          ...baseEnv,
+          SSH_ORIGINAL_COMMAND: "start real",
+          AGENT_HUB_HOME: altDataDir,
+          BELLWOOD_TESTER_HEALTH_TIMEOUT_S: "5",
+        },
+      });
+    } finally {
+      await srv.close();
+    }
   });
 });
