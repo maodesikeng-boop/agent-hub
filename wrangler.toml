@@ -3,9 +3,13 @@ workers_dev = true
 main = "src/relay/cloudflare/worker.ts"
 compatibility_date = "2025-09-01"
 
+[version_metadata]
+binding = "VERSION_METADATA"
+
 [vars]
 PUBLIC_ORIGIN = "https://bellwood-relay.bellwood-mesh.workers.dev"
 GITHUB_API_ORIGIN = "https://api.github.com"
+BUILD_SHA = ""
 
 [[durable_objects.bindings]]
 name = "ACCOUNTS"
@@ -14,3 +18,19 @@ class_name = "RelayAccountObject"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RelayAccountObject"]
+
+[env.staging]
+name = "bellwood-relay-staging"
+workers_dev = true
+
+[env.staging.version_metadata]
+binding = "VERSION_METADATA"
+
+[env.staging.vars]
+PUBLIC_ORIGIN = "https://bellwood-relay-staging.bellwood-mesh.workers.dev"
+GITHUB_API_ORIGIN = "https://api.github.com"
+BUILD_SHA = ""
+
+[[env.staging.durable_objects.bindings]]
+name = "ACCOUNTS"
+class_name = "RelayAccountObject"
