@@ -1051,4 +1051,117 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
       await tokyoModels.close();
     }
   });
+
+  it("keeps Claude signed_out when claude auth login writes .claude.json before failing to save keychain credentials", async () => {
+    const root = makeTempDir("fusa-claude-keychain-fail-");
+    tempDirs.push(root);
+    const userHome = join(root, "home");
+    mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
+
+    const claudeJson = join(userHome, ".claude.json");
+    const fakeClaudeJs = join(userHome, ".local", "bin", "fake-claude-fail.cjs");
+    const binPath = join(userHome, ".local", "bin", "claude");
+    const scriptBody = [
+      'const { spawnSync } = require("node:child_process");',
+      'const { writeFileSync } = require("node:fs");',
+      'const { createInterface } = require("node:readline");',
+      `const claudeJson = ${JSON.stringify(claudeJson)};`,
+      "const args = process.argv.slice(2);",
+      'if (args[0] === "--version") { console.log("2.1.323 (Claude Code)"); process.exit(0); }',
+      'if (args[0] === "auth" && args[1] === "status") {',
+      '  console.log(JSON.stringify({ loggedIn: false, authMethod: "none" }));',
+      "  process.exit(1);",
+      "}",
+      'if (args[0] === "auth" && args[1] === "login") {',
+      '  const url = "https://claude.ai/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A55668%2Fcallback&state=st_fail_1";',
+      "  if (process.env.BROWSER) spawnSync(process.env.BROWSER, [url], { stdio: 'ignore' });",
+      "  createInterface({ input: process.stdin }).once('line', () => {",
+      '    writeFileSync(claudeJson, JSON.stringify({ oauthAccount: { emailAddress: "dev@fusa.app" } }), { mode: 0o600 });',
+      '    console.error("Couldn\'t log in: Couldn\'t save your login. If your Mac\'s keychain is locked, unlock it and log in again.");',
+      "    process.exit(1);",
+      "  });",
+      "} else {",
+      "  createInterface({ input: process.stdin }).once('line', (line) => {",
+      "    const req = JSON.parse(line);",
+      "    console.log(JSON.stringify({",
+      '      type: "control_response",',
+      "      response: {",
+      '        subtype: "success",',
+      "        request_id: req.request_id,",
+      '        response: { models: [{ value: "claude-sonnet-5-5", displayName: "Claude Sonnet 5.5" }], account: { email: "dev@fusa.app" } },',
+      "      },",
+      "    }));",
+      "    process.exit(0);",
+      "  });",
+      "}",
+    ].join("\n");
+    writeFileSync(fakeClaudeJs, scriptBody, { mode: 0o600 });
+    writeExecutable(binPath, `#!/bin/sh\nexec "${process.execPath}" "${fakeClaudeJs}" "$@"\n`);
+
+    const baseEnv: Record<string, string | undefined> = { HOME: userHome, PATH: "/usr/bin:/bin" };
+    const paths = resolveHubPaths(baseEnv, userHome);
+    const secrets = createManagedProviderSecrets(paths.providerSecretsFile);
+    const runtime = createVendorRuntimeResolver({
+      paths,
+      userHome,
+      baseEnv,
+      platform: "darwin",
+      secrets,
+    });
+    const models = createModelCatalogs({
+      sources: createVendorCatalogSources(
+        Object.fromEntries(
+          AGENT_VENDORS.map((vendor) => [
+            vendor,
+            {
+              path: () => runtime.resolveExecutablePath(vendor),
+              cwd: userHome,
+              env: () => runtime.resolveVendorEnv(vendor),
+              installed: () => runtime.installed(vendor),
+              fingerprint: () => runtime.catalogFingerprint(vendor),
+            },
+          ]),
+        ) as Parameters<typeof createVendorCatalogSources>[0],
+      ),
+    });
+    const manager = createProviderManager({ runtime, models });
+
+    try {
+      const started = await manager.startAuth("claude", { methodId: "browser", variantId: "claudeai" }, "session:1");
+      await waitForCondition(async () => {
+        const st = await manager.getStatus({ ownerKey: "session:1" });
+        return st.providers.find((p) => p.vendor === "claude")?.authFlow?.phase === "waiting_browser";
+      });
+
+      const submitted = await manager.submitAuth(
+        "claude",
+        { flowId: started.authFlow!.flowId, input: "auth-code-keychain-locked" },
+        "session:1",
+      );
+      let failedItem = submitted;
+      if (failedItem.authFlow?.phase !== "failed") {
+        await waitForCondition(async () => {
+          const st = await manager.getStatus({ ownerKey: "session:1" });
+          failedItem = st.providers.find((p) => p.vendor === "claude")!;
+          return failedItem.authFlow?.phase === "failed";
+        });
+      }
+
+      expect(failedItem.authFlow?.error).toContain("Couldn't save your login");
+      expect(existsSync(claudeJson)).toBe(true);
+      expect(failedItem.availability).toBe("signed_out");
+      expect(failedItem.accountSummary).toBeNull();
+      expect(failedItem.canSignOut).toBe(false);
+
+      const refreshed = await manager.getStatus({ refresh: true, ownerKey: "session:1" });
+      const claudeRefreshed = refreshed.providers.find((p) => p.vendor === "claude")!;
+      expect(claudeRefreshed.availability).toBe("signed_out");
+      expect(claudeRefreshed.accountSummary).toBeNull();
+      expect(claudeRefreshed.canSignOut).toBe(false);
+      expect((await models.list({ vendor: "claude" }))[0]?.availability).toBe("signed_out");
+    } finally {
+      await manager.close();
+      await models.close();
+    }
+  });
 });

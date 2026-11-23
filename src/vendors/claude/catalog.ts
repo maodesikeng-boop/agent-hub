@@ -207,24 +207,34 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
   });
 }
 
+const CLAUDE_MANAGED_KEY_ENVS: readonly string[] = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
+
+function hasClaudeKeyEnv(env: Record<string, string | undefined> | undefined): boolean {
+  if (!env) return false;
+  return CLAUDE_MANAGED_KEY_ENVS.some((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.trim() !== "";
+  });
+}
+
 export const claudeCatalogProbe: VendorCatalogProbe = {
   parse: (raw) => parseInitializeModels((raw as { models?: unknown } | null)?.models),
-  availabilityOf(raw) {
-    const account = (raw as { account?: { email?: unknown; organization?: unknown } } | null)?.account;
-    // Signed-out accounts may still carry apiProvider, so check identity fields only.
-    const identity = [account?.email, account?.organization].some((v) => typeof v === "string" && v.trim() !== "");
-    return identity ? "available" : "unknown";
+  availabilityOf() {
+    // initialize reads oauthAccount from .claude.json even when credentials are missing or failed to save.
+    return "unknown";
   },
 };
 
 export function createClaudeCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
+  const resolveEnv = () => (typeof options.env === "function" ? options.env() : options.env);
   const resolveOpts = () => {
     const claudePath = typeof options.path === "function" ? options.path() : options.path;
-    const env = typeof options.env === "function" ? options.env() : options.env;
+    const env = resolveEnv();
     return { claudePath, cwd: options.cwd, ...(env ? { env } : {}) };
   };
   return {
     ...claudeCatalogProbe,
+    availabilityOf: () => (hasClaudeKeyEnv(resolveEnv()) ? "available" : "unknown"),
     query: (signal) => queryClaudeInitialize({ ...resolveOpts(), signal }),
     confirm: (signal) => queryClaudeAuthStatus({ ...resolveOpts(), signal }),
     installed: options.installed,
