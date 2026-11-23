@@ -1,5 +1,7 @@
 # Feishu integration
 
+> Snapshot: 2026-11-22 (commit `3d3bac89`)
+
 Bellwood connects to Feishu (and Lark) over an outbound persistent WebSocket (`WSClient`) so users can talk to Router in 1-on-1 chat, run each project inside a dedicated slime-avatar group chat, invite teammates with three-tier guest permissions, and answer decision cards from a phone with zero public IP, domain, or reverse proxy (`src/daemon/feishu/`, `src/feishu/`, and `src/shared/feishu.ts`).
 
 ## SDK boundary and setup

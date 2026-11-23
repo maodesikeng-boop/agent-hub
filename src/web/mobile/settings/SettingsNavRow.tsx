@@ -92,10 +92,6 @@ export function FieldBlock({ label, error, bare = false, children }: { label: st
   );
 }
 
-export function CodeLine({ children }: { children: string }) {
-  return <code className="block rounded-xl bg-sidebar px-3 py-2.5 font-mono text-minor break-all select-all">{children}</code>;
-}
-
 // Disable iOS autocapitalize, autocorrect and spellcheck for URLs, domains and codes.
 export const TOUCH_INPUT = "h-11 w-full";
 export const NO_AUTOCORRECT = { autoCapitalize: "none", autoCorrect: "off", spellCheck: false, autoComplete: "off" } as const;

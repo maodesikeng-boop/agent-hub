@@ -25,16 +25,21 @@ import {
 
 export const RELAY_PROTOCOL_VERSION = 1;
 
+export interface RelayHealthResponse {
+  ok: true;
+  service: "bellwood-relay";
+  protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+  buildSha: string | null;
+  versionId: string | null;
+  deployedAt: string | null;
+}
+
 export const RELAY_PATHS = {
+  health: "/health",
   register: "/v1/register",
   control: (accountId: AccountId) => `/v1/accounts/${accountId}/control`,
   channel: (accountId: AccountId, channel: string) => `/v1/accounts/${accountId}/channels/${channel}`,
 } as const;
-
-export interface RelayChannelQuery {
-  device: DeviceId;
-  session: string;
-}
 
 export interface RelayRegisterRequest {
   provider: AccountProvider;

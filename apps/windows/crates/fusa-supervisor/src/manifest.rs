@@ -113,10 +113,7 @@ fn normalize_nfc(input: &str) -> String {
 // Must match dataDirPipeHash in src/shared/paths.ts: NFC, backslash to slash, trim trailing slash, lowercase, first 12 hex chars of SHA-256.
 pub fn data_dir_pipe_hash(home: &str) -> String {
     let nfc = normalize_nfc(home);
-    let normalized = nfc
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_lowercase();
+    let normalized = nfc.replace('\\', "/").trim_end_matches('/').to_lowercase();
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
     let digest = hasher.finalize();

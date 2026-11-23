@@ -21,13 +21,14 @@ import { parseAccountId, type AccountId } from "../../shared/mesh.ts";
 import { accountIdOf, verifyGithubToken } from "../auth.ts";
 import { createRelayAccountRoom, type RelayAccountRecord, type RelayAccountRoom, type RelayAccountStorage, type RelaySocket } from "../core.ts";
 import { clientKeyOf, createIpRateLimiter } from "../guards.ts";
-import { isRelayToken, parseRelayRegisterRequest, type RelayErrorCode } from "../protocol.ts";
+import { isRelayToken, parseRelayRegisterRequest, RELAY_PATHS, RELAY_PROTOCOL_VERSION, type RelayErrorCode, type RelayHealthResponse } from "../protocol.ts";
 
 export interface NodeRelayOptions {
   port: number;
   host?: string;
   dbFile: string;
   publicOrigin?: string;
+  buildSha?: string;
   trustProxy?: boolean;
   debugFrames?: boolean;
   onDataFrame?: (bytes: Uint8Array) => void;
@@ -285,6 +286,17 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
 
   const app = Fastify({ logger: false, trustProxy: options.trustProxy ?? false, bodyLimit: 64 * 1024 });
   await app.register(fastifyWebsocket, { options: { maxPayload: RELAY_MAX_DATA_FRAME_BYTES, perMessageDeflate: false } });
+  app.get(RELAY_PATHS.health, async (_req, reply): Promise<RelayHealthResponse> => {
+    reply.header("cache-control", "no-store");
+    return {
+      ok: true,
+      service: "bellwood-relay",
+      protocolVersion: RELAY_PROTOCOL_VERSION,
+      buildSha: options.buildSha?.trim() || null,
+      versionId: null,
+      deployedAt: null,
+    };
+  });
   registerRegisterRoute(app, ctx);
   registerControlRoute(app, ctx);
   registerChannelRoute(app, ctx);

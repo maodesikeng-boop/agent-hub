@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach } from "vitest";
-import { uiCookieName, type DeviceId, type DeviceInfo } from "../../shared/index.ts";
+import { uiCookieName, type DeviceId } from "../../shared/index.ts";
 import { createMesh, type Mesh } from "../mesh/index.ts";
 import { FAKE_GITHUB, approveNode, fakeGithubDeviceFlow, loginNode, startTestRelay, waitFor, type TestRelay } from "../mesh/test-helpers.ts";
 import { migrate, openDatabase, type Db } from "../store/index.ts";
@@ -148,9 +148,4 @@ export async function startTestAccount(count: number, options: Omit<TestDeviceOp
   }
   await waitFor(() => list.every((d) => d.mesh.trust.list().length === count), 10_000);
   return { relay, devices: list };
-}
-
-export async function deviceIds(d: TestDevice): Promise<string[]> {
-  const body = (await (await d.browser("/api/devices")).json()) as { devices: DeviceInfo[] };
-  return body.devices.map((x) => x.id);
 }

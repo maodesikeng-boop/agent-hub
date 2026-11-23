@@ -12,6 +12,8 @@ export const ALWAYS_RUN_TESTS = [
   "scripts/ci-workflows.test.ts",
   "src/code-hygiene.test.ts",
   "src/daemon/resources/registry.test.ts",
+  "src/direct-dependencies.test.ts",
+  "src/docs-guard.test.ts",
   "src/prompt-portability.test.ts",
   "src/shared/errors-guard.test.ts",
   "src/shared/vendor-guard.test.ts",
@@ -26,6 +28,7 @@ const DEFAULT_BASE = "origin/main";
 const MODULE_FILE = /\.[cm]?[jt]sx?$/;
 const TEST_FILE = /\.test\.tsx?$/;
 const SEARCH_ROOTS = ["src", "scripts", "test"];
+const MANIFEST_OR_LOCKFILE_NAMES = new Set(["package.json", "pnpm-lock.yaml"]);
 
 function gitLines(cwd: string, args: string[]): string[] {
   return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER_BYTES }).split("\0").filter(Boolean);
@@ -51,15 +54,25 @@ export function referenceNeedles(file: string): string[] {
   return [file, `${dir}/`];
 }
 
-/** Code files whose source mentions a needle. Markdown changes match test files only. */
+function isManifestOrLockfile(file: string): boolean {
+  return MANIFEST_OR_LOCKFILE_NAMES.has(posix.basename(file));
+}
+
+function matchesReferenceTarget(changedFile: string, candidatePath: string): boolean {
+  if (changedFile.endsWith(".md")) return TEST_FILE.test(candidatePath);
+  // Root manifests and lockfiles link only to tests and build scripts so literal "package.json" in src/ runtime code does not fan out across unrelated suites.
+  if (isManifestOrLockfile(changedFile)) return TEST_FILE.test(candidatePath) || candidatePath.startsWith("scripts/");
+  return true;
+}
+
+/** Code files whose source mentions a needle. Markdown matches tests only; manifests and lockfiles match tests and `scripts/` modules. */
 export function findReferencingFiles(changed: readonly string[], sources: ReadonlyMap<string, string>): string[] {
   const hits = new Set<string>();
   for (const file of changed) {
     const needles = referenceNeedles(file);
     if (needles.length === 0) continue;
-    const testsOnly = file.endsWith(".md");
     for (const [path, text] of sources) {
-      if (path === file || (testsOnly && !TEST_FILE.test(path))) continue;
+      if (path === file || !matchesReferenceTarget(file, path)) continue;
       if (needles.some((needle) => text.includes(needle))) hits.add(path);
     }
   }
@@ -86,6 +99,17 @@ function splitArgs(argv: string[]): { base: string; vitestArgs: string[] } {
   return { base, vitestArgs: [...argv.slice(0, at), ...argv.slice(at + 2)] };
 }
 
+/** Selects `vitest related` targets while omitting `package.json` and `pnpm-lock.yaml`, because Vitest's `forceRerunTriggers` expands `package.json` to the full suite and path linking plus `ALWAYS_RUN_TESTS` already cover manifest and lockfile consumers. */
+export function selectRelatedTargets(
+  changed: readonly string[],
+  sources: ReadonlyMap<string, string>,
+): { linked: string[]; targets: string[] } {
+  const linked = changed.some((file) => referenceNeedles(file).length > 0) ? findReferencingFiles(changed, sources) : [];
+  const direct = changed.filter((file) => !isManifestOrLockfile(file));
+  const targets = [...new Set([...direct, ...linked, ...ALWAYS_RUN_TESTS])];
+  return { linked, targets };
+}
+
 function main(argv: string[]): number {
   const { base, vitestArgs } = splitArgs(argv);
   let changed: string[];
@@ -99,8 +123,8 @@ function main(argv: string[]): number {
     console.log(`test:related: no changes since ${base}`);
     return 0;
   }
-  const linked = changed.some((file) => referenceNeedles(file).length > 0) ? findReferencingFiles(changed, readCodeSources(REPO_ROOT)) : [];
-  const targets = [...new Set([...changed, ...linked, ...ALWAYS_RUN_TESTS])];
+  const sources = changed.some((file) => referenceNeedles(file).length > 0) ? readCodeSources(REPO_ROOT) : new Map<string, string>();
+  const { linked, targets } = selectRelatedTargets(changed, sources);
   console.log(`test:related: ${changed.length} changed since ${base}, ${linked.length} linked by path, ${ALWAYS_RUN_TESTS.length} guards`);
   const vitest = join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
   const run = spawnSync(process.execPath, [vitest, "related", "--run", "--passWithNoTests", ...vitestArgs, ...targets], {

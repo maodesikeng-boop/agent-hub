@@ -168,12 +168,13 @@ export interface ModelCatalog {
   defaultModel: string | null;
   defaultModelId: string | null;
   efforts: readonly string[];
+  readonly effortLabels?: Readonly<Record<string, string>>;
   customModelExample: string | null;
 }
 
 export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
   const spec = SPECS[vendor];
-  const { bundled, efforts, customModel, customModelExample } = spec.models;
+  const { bundled, efforts, effortLabels, customModel, customModelExample } = spec.models;
   const models = bundled.map((m) => ({ id: m.id, label: m.label, description: null, efforts: m.efforts ?? null }));
   return {
     vendor,
@@ -185,6 +186,7 @@ export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
     defaultModel: null,
     defaultModelId: null,
     efforts,
+    ...(effortLabels !== undefined ? { effortLabels } : {}),
     customModelExample: customModel ? customModelExample : null,
   };
 }
@@ -224,8 +226,49 @@ export function agentEffortOf(vendor: AgentVendor, model: string | null, effort:
   return splitModelEffort(vendor, model, effort, catalog).effort;
 }
 
-export function effortLabel(effort: string | null): string {
-  return effort ?? "默认";
+export function effortLabel(
+  effort: string | null,
+  vendor?: AgentVendor | null,
+  catalog?: ModelCatalog | null,
+): string {
+  if (effort === null) return "默认";
+  const specLabels = vendor && isAgentVendor(vendor) ? SPECS[vendor].models.effortLabels : undefined;
+  return catalog?.effortLabels?.[effort] ?? specLabels?.[effort] ?? effort;
+}
+
+function matchesEffortLabel(key: string, label: string, input: string): boolean {
+  if (label === input) return true;
+  return label.toLowerCase() !== key.toLowerCase() && label.toLowerCase() === input.toLowerCase();
+}
+
+/** Map a vendor-specific display label back to its canonical effort key when unambiguous. */
+export function normalizeEffortInput(
+  vendor: AgentVendor | null | undefined,
+  effort: string | null,
+  catalog?: ModelCatalog | null,
+): string | null {
+  if (effort === null) return null;
+  const trimmed = effort.trim();
+  if (trimmed === "") return trimmed;
+  if (vendor && isAgentVendor(vendor)) {
+    const allowed = allowedEffortsOf(vendor, catalog);
+    if (allowed.includes(trimmed)) return trimmed;
+    const labels = { ...SPECS[vendor].models.effortLabels, ...catalog?.effortLabels };
+    for (const [key, label] of Object.entries(labels)) {
+      if (label !== undefined && matchesEffortLabel(key, label, trimmed) && allowed.includes(key)) return key;
+    }
+    return trimmed;
+  }
+  if (ALL_EFFORTS.includes(trimmed)) return trimmed;
+  const matches = new Set<string>();
+  for (const spec of VENDOR_LIST) {
+    const labels = spec.models.effortLabels;
+    if (!labels) continue;
+    for (const [key, label] of Object.entries(labels)) {
+      if (matchesEffortLabel(key, label, trimmed)) matches.add(key);
+    }
+  }
+  return matches.size === 1 ? [...matches][0]! : trimmed;
 }
 
 export function vendorLabel(vendor: string): string {

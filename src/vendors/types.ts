@@ -40,6 +40,7 @@ export interface VendorModelsSpec {
   customModel: boolean;
   customModelExample: string;
   efforts: readonly string[];
+  effortLabels?: Readonly<Record<string, string>>;
   readonly routerDefault: RouterModelPreset;
   // agy errors when model and effort flags disagree, so effort is appended to the model ID instead.
   effortInModelId?: boolean;

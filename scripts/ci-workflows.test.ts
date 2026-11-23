@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { MESH_DEFAULT_RELAY_URL } from "../src/shared/limits.ts";
 import { matchStampPaths, parseStampPaths } from "./review-stamp-gate.ts";
 import { REPO_ROOT, STAGED_RUNTIME_INPUTS } from "./stage-runtime-common.ts";
 
@@ -16,6 +17,7 @@ interface Step {
   uses?: string;
   run?: string;
   if?: string;
+  env?: Record<string, string>;
   with?: Record<string, string>;
 }
 
@@ -24,6 +26,8 @@ interface Job {
   "runs-on"?: string;
   needs?: string | string[];
   if?: string;
+  environment?: string | { name: string; url?: string };
+  concurrency?: { group: string; "cancel-in-progress": string | boolean };
   permissions?: Record<string, string>;
   steps?: Step[];
 }
@@ -80,7 +84,7 @@ const RELEASE_GATES = { check: "check.yml", windows: "windows.yml", macos: "maco
 describe(".github/workflows", () => {
   it("never cancel or replace a run on main", () => {
     const onMain = WORKFLOWS.filter(({ wf }) => runsOnMainPush(wf));
-    expect(onMain.map((w) => w.name).sort()).toEqual(["check.yml", "mac-desktop.yml", "windows-desktop.yml", "windows.yml"]);
+    expect(onMain.map((w) => w.name).sort()).toEqual(["check.yml", "mac-desktop.yml", "relay.yml", "windows-desktop.yml", "windows.yml"]);
     for (const { name, wf } of onMain) {
       expect(wf.concurrency?.["cancel-in-progress"], name).toBe("${{ github.event_name == 'pull_request' }}");
       // A shared group would still let a newer main run replace a pending one, so non-PR runs key on the commit.
@@ -88,9 +92,10 @@ describe(".github/workflows", () => {
     }
   });
 
-  it("run the full suite on an unchanged main every night at 23:00 Beijing time without cancelling", () => {
+  it("run the full suite on an unchanged main every night at 22:17 Beijing time (off the top of the hour) without cancelling", () => {
     const nightly = workflow("nightly.yml");
-    expect(nightly.on.schedule).toEqual([{ cron: "0 15 * * *" }]);
+    expect(nightly.on.schedule).toEqual([{ cron: "17 14 * * *" }]);
+    expect(nightly.on.schedule?.[0]?.cron.startsWith("0 ")).toBe(false);
     expect(nightly.concurrency).toBeUndefined();
     const reused = Object.values(nightly.jobs).flatMap((job) => (job.uses ? [job.uses] : []));
     expect(reused.sort()).toEqual(["./.github/workflows/check.yml", "./.github/workflows/macos.yml", "./.github/workflows/windows.yml"]);
@@ -102,6 +107,33 @@ describe(".github/workflows", () => {
     expect(pr?.branches).toEqual(["main"]);
     expect(pr?.paths).toBeUndefined();
     expect(pr?.["paths-ignore"]).toBeUndefined();
+  });
+
+  it("run pnpm verify and knip in check.yml on every pull request without artifact collisions in release.yml", () => {
+    const check = workflow("check.yml");
+    const verifyJob = check.jobs["verify-smoke"];
+    expect(verifyJob).toBeDefined();
+    expect(verifyJob!.if).toBeUndefined();
+    expect(verifyJob!.steps?.some((step) => step.run?.startsWith("pnpm verify"))).toBe(true);
+    const verifyArtifacts = (verifyJob!.steps ?? [])
+      .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
+      .map((step) => step.with?.name);
+    const releaseSmokeArtifacts = (workflow("release.yml").jobs.smoke?.steps ?? [])
+      .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
+      .map((step) => step.with?.name);
+    for (const name of verifyArtifacts) expect(releaseSmokeArtifacts).not.toContain(name);
+    const knipRuns = Object.values(check.jobs).flatMap((job) => (job.steps ?? []).filter((step) => step.run?.startsWith("pnpm exec knip")));
+    expect(knipRuns.length).toBeGreaterThan(0);
+  });
+
+  it("run TypeScript lint in check.yml and Rust fmt + clippy across the workspace in windows.yml", () => {
+    const checkSteps = workflow("check.yml").jobs.check!.steps ?? [];
+    expect(checkSteps.some((step) => step.run === "pnpm lint")).toBe(true);
+
+    const winSteps = workflow("windows.yml").jobs["windows-helper-and-integration"]!.steps ?? [];
+    const runs = winSteps.map((step) => step.run ?? "").join("\n");
+    expect(runs).toContain("cargo fmt --manifest-path apps/windows/Cargo.toml --all -- --check");
+    expect(runs).toContain("cargo clippy --manifest-path apps/windows/Cargo.toml --workspace --all-targets --locked -- -D warnings");
   });
 
   it.each(["mac-desktop.yml", "windows-desktop.yml"])("%s rebuilds on main for every staged runtime input", (name) => {
@@ -294,5 +326,67 @@ describe(".github/workflows", () => {
         }
       }
     }
+  });
+
+  it("gate relay staging and production deploys with dry-runs, smoke checks, main-only checks, and GitHub Environments", () => {
+    const wf = workflow("relay.yml");
+    expect(wf.permissions).toEqual({ contents: "read" });
+    const requiredPaths = ["src/relay/**", "src/shared/api.ts", "src/shared/limits.ts", "src/shared/mesh.ts", "wrangler.toml", "scripts/relay-smoke.ts"];
+    for (const path of requiredPaths) {
+      expect(wf.on.pull_request?.paths, `PR paths missing ${path}`).toContain(path);
+      expect(wf.on.push?.paths, `push paths missing ${path}`).toContain(path);
+    }
+
+    const checkRuns = (wf.jobs.check!.steps ?? []).map((step) => step.run ?? "").join("\n");
+    expect(checkRuns).toContain("vitest run --project=cloudflare");
+    expect(checkRuns).toContain("wrangler deploy --env=\"\" --dry-run");
+    expect(checkRuns).toContain("wrangler deploy --env staging --dry-run");
+
+    const staging = wf.jobs["deploy-staging"]!;
+    expect(needsOf(staging)).toEqual(["check"]);
+    expect(typeof staging.environment === "object" ? staging.environment.name : staging.environment).toBe("staging");
+    expect(staging.if).not.toContain("pull_request");
+    expect(staging.if).toContain("github.event_name == 'push'");
+    expect(staging.concurrency?.["cancel-in-progress"]).toBe(false);
+    const stagingRuns = (staging.steps ?? []).map((step) => step.run ?? "").join("\n");
+    expect(stagingRuns).toContain("wrangler deploy --env staging");
+    expect(stagingRuns).toContain("node scripts/relay-smoke.ts");
+
+    const prod = wf.jobs["deploy-production"]!;
+    expect(needsOf(prod).sort()).toEqual(["check", "deploy-staging"]);
+    expect(typeof prod.environment === "object" ? prod.environment.name : prod.environment).toBe("production");
+    expect(prod.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(prod.if).toContain("inputs.target == 'deploy-production'");
+    expect(prod.if).toContain("github.ref == 'refs/heads/main'");
+    expect(prod.concurrency?.["cancel-in-progress"]).toBe(false);
+    const prodRuns = (prod.steps ?? []).map((step) => step.run ?? "").join("\n");
+    expect(prodRuns).toContain("wrangler deploy --env=\"\"");
+    expect(prodRuns).toContain("node scripts/relay-smoke.ts");
+
+    const rollback = wf.jobs["rollback-production"]!;
+    expect(needsOf(rollback)).toEqual(["check"]);
+    expect(typeof rollback.environment === "object" ? rollback.environment.name : rollback.environment).toBe("production");
+    expect(rollback.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(rollback.if).toContain("inputs.target == 'rollback-production'");
+    expect(rollback.if).toContain("github.ref == 'refs/heads/main'");
+    expect(rollback.concurrency?.["cancel-in-progress"]).toBe(false);
+    for (const step of rollback.steps ?? []) {
+      expect(step.run ?? "").not.toMatch(/\$\{\{\s*inputs\./);
+    }
+    const rollbackRuns = (rollback.steps ?? []).map((step) => step.run ?? "").join("\n");
+    expect(rollbackRuns).toContain("wrangler rollback");
+    expect(rollbackRuns).toContain("node scripts/relay-smoke.ts");
+  });
+
+  it("configure production and isolated staging environments in wrangler.toml", () => {
+    const toml = readFileSync(join(REPO_ROOT, "wrangler.toml"), "utf8");
+    expect(toml).toMatch(/^name\s*=\s*"bellwood-relay"/m);
+    expect(toml).toContain(`PUBLIC_ORIGIN = "${MESH_DEFAULT_RELAY_URL}"`);
+    expect(toml).toMatch(/^\[env\.staging\]/m);
+    expect(toml).toMatch(/name\s*=\s*"bellwood-relay-staging"/);
+    expect(toml).toContain('PUBLIC_ORIGIN = "https://bellwood-relay-staging.bellwood-mesh.workers.dev"');
+    expect(toml).toMatch(/^\[version_metadata\]\s*\nbinding\s*=\s*"VERSION_METADATA"/m);
+    expect(toml).toMatch(/^\[env\.staging\.version_metadata\]\s*\nbinding\s*=\s*"VERSION_METADATA"/m);
+    expect(toml).toMatch(/^\[\[env\.staging\.durable_objects\.bindings\]\]/m);
   });
 });

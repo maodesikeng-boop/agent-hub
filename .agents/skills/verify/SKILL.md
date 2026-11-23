@@ -36,7 +36,7 @@ Look at the screenshot. A passing run with a wrong-looking screen is still a fai
 
 ## When to use it
 
-- Before you push: run `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`. After you push, wait for every check on the PR to finish green before you report done (`AGENTS.md`, "Cloud checks before done").
+- Before you push: run `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`. After you push, wait for the PR's CI checks with `node scripts/wait-checks.ts <PR>` (or `node scripts/wait-checks.ts` on the PR branch) instead of `gh pr checks --watch`, so pending `bellwood/review` does not hang and merge conflicts fail immediately (`AGENTS.md`, "Cloud checks before done").
 - In an independent review: run it on the commit under review.
 - Changes to the Linux `bwrap` sandbox, Windows native code, or packaging cannot be tested here. The matching cloud job on the PR is their only test.
 

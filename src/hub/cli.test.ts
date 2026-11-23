@@ -195,6 +195,15 @@ describe("hub cli", () => {
       );
     });
 
+    it("worker start --effort accepts vendor display labels and normalizes them to canonical keys", async () => {
+      expect((await hub(["worker", "start", "--title", "修 X", "--vendor", "agy", "--effort", "Extra", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
+      expect((await hub(["worker", "start", "--title", "修 Y", "--vendor", "codex", "--effort", "Extra High", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
+      expect(ledger.calls.map((c) => c.args)).toEqual([
+        { title: "修 X", vendor: "agy", effort: "xhigh", task: "任务" },
+        { title: "修 Y", vendor: "codex", effort: "xhigh", task: "任务" },
+      ]);
+    });
+
     it("worker start --effort with a level not in the list is a usage error", async () => {
       for (const level of ["turbo", "LOW", ""]) {
         const r = await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") });
@@ -1424,6 +1433,25 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
           { env: routerEnv },
         );
         expect(r3.code).toBe(HUB_EXIT.ok);
+        const r3b = await hub(
+          [
+            "dispatch",
+            "worker-start",
+            "--device",
+            "self",
+            "--project",
+            "5",
+            "--title",
+            "排查 Neon",
+            "--vendor",
+            "agy",
+            "--effort",
+            "Extra",
+            "--verbatim",
+          ],
+          { env: routerEnv },
+        );
+        expect(r3b.code).toBe(HUB_EXIT.ok);
 
         // 4. worker-stop
         const r4 = await hub(["dispatch", "worker-stop", "--device", "self", "--worker", "9"], { env: routerEnv });
@@ -1484,6 +1512,19 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
               verbatim: true,
             },
           },
+          {
+            sessionId: 901,
+            commandId: 77,
+            payload: {
+              op: "worker-start",
+              device: "self",
+              projectId: 5,
+              title: "排查 Neon",
+              vendor: "agy",
+              effort: "xhigh",
+              verbatim: true,
+            },
+          },
           { sessionId: 901, commandId: 77, payload: { op: "worker-stop", device: "self", workerId: 9 } },
           { sessionId: 901, commandId: 77, payload: { op: "worker-send", device: "dev-2", workerId: 11, verbatim: true } },
           { sessionId: 901, commandId: 77, payload: { op: "worker-end", device: "self", workerId: 9 } },
@@ -1518,6 +1559,10 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       const neither = await hub(["dispatch", "pm", "--device", "self", "--pm", "2"]);
       expect(neither.code).toBe(HUB_EXIT.usage);
       expect(neither.stderr).toContain("--verbatim 或 --stdin");
+
+      const badEffort = await hub(["dispatch", "worker-start", "--device", "self", "--project", "5", "--title", "x", "--effort", "LOW", "--verbatim"]);
+      expect(badEffort.code).toBe(HUB_EXIT.usage);
+      expect(badEffort.stderr).toContain(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
     });
 
     it("hub dispatch project-show：解析 --device 和 --project，缺一个报用法错误", async () => {

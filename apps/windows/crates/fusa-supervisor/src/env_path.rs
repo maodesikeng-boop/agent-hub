@@ -87,21 +87,22 @@ fn read_registry_env_map() -> (Vec<(String, String)>, Vec<String>) {
     let mut vars: Vec<(String, String)> = Vec::new();
     let mut raw_paths: Vec<String> = Vec::new();
 
-    let read_hive = |hive, subkey: &str, vars_out: &mut Vec<(String, String)>, paths_out: &mut Vec<String>| {
-        if let Ok(key) = RegKey::predef(hive).open_subkey_with_flags(subkey, KEY_READ) {
-            if let Ok(p) = key.get_value::<String, _>("Path") {
-                paths_out.push(p);
-            } else if let Ok(p) = key.get_value::<String, _>("PATH") {
-                paths_out.push(p);
-            }
-            for item in key.enum_values().flatten() {
-                let (name, reg_val) = item;
-                if let Ok(s) = String::from_reg_value(&reg_val) {
-                    vars_out.push((name, s));
+    let read_hive =
+        |hive, subkey: &str, vars_out: &mut Vec<(String, String)>, paths_out: &mut Vec<String>| {
+            if let Ok(key) = RegKey::predef(hive).open_subkey_with_flags(subkey, KEY_READ) {
+                if let Ok(p) = key.get_value::<String, _>("Path") {
+                    paths_out.push(p);
+                } else if let Ok(p) = key.get_value::<String, _>("PATH") {
+                    paths_out.push(p);
+                }
+                for item in key.enum_values().flatten() {
+                    let (name, reg_val) = item;
+                    if let Ok(s) = String::from_reg_value(&reg_val) {
+                        vars_out.push((name, s));
+                    }
                 }
             }
-        }
-    };
+        };
 
     // System before user, matching Explorer's merge order after WM_SETTINGCHANGE.
     read_hive(
@@ -134,7 +135,7 @@ pub fn build_refreshed_path_env(prepend_dirs: &[PathBuf]) -> String {
             .iter()
             .map(|p| expand_windows_env_vars(p, lookup))
             .collect();
-        return merge_path_entries(prepend_dirs, &expanded, current_proc_path.as_deref(), true);
+        merge_path_entries(prepend_dirs, &expanded, current_proc_path.as_deref(), true)
     }
 
     #[cfg(not(windows))]

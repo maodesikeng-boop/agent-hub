@@ -4,9 +4,7 @@ use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSidToSidW,
-};
+use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 
 pub fn to_wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value
@@ -79,6 +77,8 @@ impl Drop for LocalSid {
     }
 }
 
+/// # Safety
+/// `psid` must be null or point to a valid Windows `SID` buffer.
 pub unsafe fn sid_to_string(psid: *mut c_void) -> Option<String> {
     if psid.is_null() {
         return None;

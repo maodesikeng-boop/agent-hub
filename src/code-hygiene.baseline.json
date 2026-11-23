@@ -1,5 +1,8 @@
 {
   "files": {
+    "apps/macos/DaemonSupervisor.swift": 1471,
+    "apps/windows/crates/fusa-desktop/src/lib.rs": 1090,
+    "apps/windows/crates/fusa-supervisor/src/supervisor.rs": 1707,
     "src/daemon/daemon.ts": 1049,
     "src/daemon/driver/base-driver.ts": 1191,
     "src/daemon/driver/write-scope.ts": 1093,

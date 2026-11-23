@@ -30,6 +30,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "claude-opus-5-5",
     efforts: ["low", "medium", "high", "xhigh", "max"],
+    effortLabels: { low: "Low", medium: "Medium", high: "High", xhigh: "Extra", max: "Max" },
     routerDefault: { model: "haiku", effort: "low" },
     flags: { model: "--model", effort: "--effort" },
     shortName: (model) => {

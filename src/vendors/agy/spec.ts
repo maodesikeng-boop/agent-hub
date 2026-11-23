@@ -5,8 +5,8 @@ export const AGY_CLI_HOME_REL = ".gemini/antigravity-cli";
 export const AGY_LEGACY_HOME_REL = ".gemini/antigravity";
 export const AGY_MCP_CONFIG_REL = ".gemini/config/mcp_config.json";
 
-// agy rejects xhigh and max.
-const EFFORTS: readonly string[] = ["low", "medium", "high"];
+const STANDARD_EFFORTS: readonly string[] = ["low", "medium", "high"];
+const EFFORTS: readonly string[] = [...STANDARD_EFFORTS, "xhigh"];
 
 const SESSION_BLOCKED = `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮`;
 const MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
@@ -28,15 +28,16 @@ export default defineVendor({
   },
   models: {
     bundled: [
-      { id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: EFFORTS },
-      { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", efforts: EFFORTS },
-      { id: "claude-opus-5-5", label: "Claude Opus 5.5", efforts: EFFORTS },
-      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", efforts: EFFORTS },
+      { id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: STANDARD_EFFORTS },
+      { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", efforts: STANDARD_EFFORTS },
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", efforts: STANDARD_EFFORTS },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", efforts: STANDARD_EFFORTS },
       { id: "gpt-oss-120b", label: "GPT-OSS 120B", efforts: ["medium"] },
     ],
     customModel: true,
     customModelExample: "如 gemini-4-argon",
     efforts: EFFORTS,
+    effortLabels: { low: "Low", medium: "Medium", high: "High", xhigh: "Extra", max: "Max" },
     routerDefault: { model: "gemini-3.8-flash", effort: "low" },
     effortInModelId: true,
     flags: { model: "--model", effort: "--effort" },

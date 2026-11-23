@@ -356,7 +356,8 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
     review: space.reviewPlan !== null,
     reviewJson: space.reviewPlan === null ? null : newReviewJson(space.reviewPlan),
   });
-  const inherited = agent.vendor === caller.vendor ? splitModelEffort(agent.vendor, caller.model, caller.effort) : { model: null, effort: null };
+  const inherited =
+    agent.vendor === caller.vendor ? splitModelEffort(agent.vendor, caller.model, caller.effort, w.ctx.modelCatalog(agent.vendor)) : { model: null, effort: null };
   const session = insertWorkerSessionIn(w, p, worker, card, agent, inherited);
   const start = { worker, session, card, args, agent, brief, space };
   const firstMessageText = firstMessageOf(w, start, bindTarget, takeover, predecessors);

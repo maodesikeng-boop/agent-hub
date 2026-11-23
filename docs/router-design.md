@@ -1,5 +1,7 @@
 # Router architecture
 
+> Snapshot: 2026-11-20 (commit `58dd656f`)
+
 **Router** sits at the top of the Bellwood sidebar (`#/router`) and 1-on-1 Feishu bot chat as a single control center across all projects and linked computers. It combines zero-LLM card routing with a stateless, read-only single-turn dispatcher so cross-project triage stays fast regardless of how many months a workspace runs.
 
 ## Two-track architecture
