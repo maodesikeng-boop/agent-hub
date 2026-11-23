@@ -683,6 +683,7 @@ export class DevicesStore {
   }
 
   refresh = async (): Promise<void> => {
+    if (!this.running) return;
     clearTimeout(this.listTimer);
     this.listController?.abort();
     const controller = new AbortController();

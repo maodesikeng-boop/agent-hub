@@ -58,24 +58,28 @@ export function queryGenerationOf(qc: QueryClient, id: string): QueryGeneration 
   return state;
 }
 
+function advanceAccountGeneration(state: QueryGeneration): void {
+  const next = Math.max(state.gen, state.latest) + 1;
+  state.gen = next;
+  state.latest = next;
+}
+
 export function claimAccountTicket(qc: QueryClient): number {
   const state = queryGenerationOf(qc, ACCOUNT_GENERATION_ID);
-  state.latest += 1;
-  return state.latest;
+  const next = Math.max(state.gen, state.latest) + 1;
+  state.latest = next;
+  return next;
 }
 
 export function commitAccountStatus(qc: QueryClient, ticket: number, next: AccountStatusView): void {
   const state = queryGenerationOf(qc, ACCOUNT_GENERATION_ID);
   if (ticket !== state.latest) return;
-  state.gen += 1;
-  state.latest = state.gen;
+  advanceAccountGeneration(state);
   qc.setQueryData<AccountStatusView>(ACCOUNT_QUERY_KEY, next);
 }
 
 export function invalidateAccount(qc: QueryClient): Promise<void> {
-  const state = queryGenerationOf(qc, ACCOUNT_GENERATION_ID);
-  state.gen += 1;
-  state.latest = state.gen;
+  advanceAccountGeneration(queryGenerationOf(qc, ACCOUNT_GENERATION_ID));
   return qc.invalidateQueries({ queryKey: ACCOUNT_QUERY_KEY });
 }
 
