@@ -94,7 +94,7 @@ export function UpdateSettings({ titled = true }: { titled?: boolean }) {
         }
       >
         {() => (
-          <Button variant="ghost" size="sm" className="-mr-3" disabled={checking} onClick={() => check.mutate()}>
+          <Button variant="outline" size="sm" disabled={checking} onClick={() => check.mutate()}>
             {checking && <Loader2 aria-hidden="true" />}
             Check for updates
           </Button>

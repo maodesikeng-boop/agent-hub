@@ -174,11 +174,18 @@ export function AppRail({
                   type="button"
                   aria-label={meterLabel}
                   title={meterLabel}
-                  className="touch-target flex cursor-pointer flex-col items-center gap-1 px-1 py-0.5 transition-colors outline-none hover:bg-rail-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+                  className="touch-target flex cursor-pointer flex-col items-center gap-1 px-1.5 py-1 transition-colors outline-none hover:bg-rail-hover focus-visible:outline-2 focus-visible:outline-border-focus"
                 >
+                  <Hourglass data-testid="rail-usage-icon" className="size-pixel-sm text-rail-ink" aria-hidden="true" />
                   <span aria-hidden="true" className="flex gap-0.5">
                     {Array.from({ length: RAIL_QUOTA_CELLS }, (_, i) => (
-                      <span key={i} className={cn("h-3 w-1.5", i < meter.cells ? "bg-rail-ink" : "bg-rail-shade")} />
+                      <span
+                        key={i}
+                        className={cn(
+                          "h-2.5 w-1.5",
+                          i < meter.cells ? (meter.full ? "bg-rail-danger" : meter.warning ? "bg-rail-warn" : "bg-rail-ink") : "bg-rail-shade",
+                        )}
+                      />
                     ))}
                   </span>
                   <span className={cn("text-xs leading-none font-semibold tabular-nums", meter.full ? "text-rail-danger" : meter.warning ? "text-rail-warn" : "text-rail-ink")}>
@@ -201,7 +208,7 @@ export function AppRail({
 
         <button
           type="button"
-          aria-label={resources.attention ? `Settings (${resources.heldCount} held)` : "Settings"}
+          aria-label={resources.attention ? `Settings (${resources.heldCount} to review)` : "Settings"}
           title="Settings"
           onClick={onOpenSettings}
           className="touch-target relative grid size-10 cursor-pointer place-items-center text-rail-ink transition-colors outline-none hover:bg-rail-hover focus-visible:outline-2 focus-visible:outline-border-focus"

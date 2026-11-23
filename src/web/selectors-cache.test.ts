@@ -978,7 +978,7 @@ describe("resources selectors", () => {
     };
     const summary = describeResourcesSummary(snapshot);
     expect(describeResourcesSummary(snapshot)).toBe(summary);
-    expect(summary).toEqual({ summary: "1 held", attention: true, heldCount: 1 });
+    expect(summary).toEqual({ summary: "1 to review", attention: true, heldCount: 1 });
     expect(describeResourcesSummary({ ...snapshot, held: [held[1]!], attentionCount: 0 })).toEqual({
       summary: "8.0 KB",
       attention: false,

@@ -174,6 +174,7 @@ describe("AppRail", () => {
     );
     const meterBtn = screen.getByRole("button", { name: "Claude Code 5h usage 45%" });
     expect(meterBtn).toHaveTextContent("45%");
+    expect(screen.getByTestId("rail-usage-icon")).toBeInTheDocument();
     await user.click(meterBtn);
     expect(await screen.findByRole("dialog", { name: "Usage" })).toBeInTheDocument();
   });
@@ -256,7 +257,7 @@ describe("AppRail", () => {
     };
     queryClient.setQueryData(RESOURCES_QUERY_KEY(LOCAL_DEVICE), resources);
     renderRail();
-    expect(screen.getByRole("button", { name: "Settings (1 held)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Settings (1 to review)" })).toBeInTheDocument();
     expect(screen.getByTestId("settings-resources-attention")).toHaveClass("bg-caution");
   });
 });

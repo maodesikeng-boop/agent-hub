@@ -26,21 +26,49 @@ export interface ResourcesSettingsProps {
 }
 
 const REASON_LABELS: Readonly<Record<HeldResourceReason, string>> = {
-  uncommitted_changes: "Uncommitted changes",
+  uncommitted_changes: "Unsaved file edits",
   untracked_files: "Untracked files",
-  git_op_in_progress: "Git operation in progress",
+  git_op_in_progress: "Git operation paused",
   unmerged_branch: "Unmerged branch",
   probe_failed: "Could not inspect",
   unmerged_ended_branch: "Unmerged branch",
-  orphaned_temp_dir: "Orphaned temp directory",
-  leaked_process: "Leaked process",
-  shared_process: "Possibly shared",
+  orphaned_temp_dir: "Leftover temp folder",
+  leaked_process: "Leftover background process",
+  shared_process: "Possibly shared process",
 };
 
+const TABLE_LABELS: Readonly<Record<string, string>> = {
+  messages: "Chat messages",
+  step_logs: "Activity logs",
+  router_items: "Router & decisions",
+  router_commands: "Router commands",
+  task_graphs: "Task graphs",
+  task_nodes: "Task steps",
+  workers: "Worker records",
+  sessions: "Sessions",
+  conversations: "Conversations",
+  pms: "Project managers",
+  projects: "Projects",
+  schedules: "Schedules",
+  persona_changes: "Edit history",
+  user_blockers: "User blockers",
+};
+
+function humanTableName(table: string): string {
+  const mapped = TABLE_LABELS[table];
+  if (mapped !== undefined) return mapped;
+  const spaced = table.replaceAll("_", " ");
+  return spaced === "" ? table : spaced[0]!.toUpperCase() + spaced.slice(1);
+}
+
+function humanDirectoryLabel(dir: { id: string; label: string }): string {
+  return dir.id === "worktrees" ? "Worker workspaces" : dir.label;
+}
+
 function discardDialogTitle(item: HeldResourceItem): string {
-  if (item.kind === "worktree") return "Discard worktree?";
-  if (item.kind === "git_branch") return "Discard branch?";
-  if (item.kind === "temp_dir") return "Discard temp directory?";
+  if (item.kind === "worktree") return "Delete workspace?";
+  if (item.kind === "git_branch") return "Delete branch?";
+  if (item.kind === "temp_dir") return "Delete temp folder?";
   return "Stop process?";
 }
 
@@ -53,11 +81,11 @@ function discardTargetPath(item: HeldResourceItem): string {
 
 function summarizeCleanup(res: ResourceCleanupResponse): string {
   const parts: string[] = [];
-  if (res.purgedDbRows > 0) parts.push(`${res.purgedDbRows} DB rows`);
+  if (res.purgedDbRows > 0) parts.push(`${res.purgedDbRows} old records`);
   if (res.removedFiles > 0) parts.push(`${res.removedFiles} files`);
-  if (res.removedWorktrees > 0) parts.push(`${res.removedWorktrees} worktrees`);
+  if (res.removedWorktrees > 0) parts.push(`${res.removedWorktrees} workspaces`);
   if (res.removedBranches > 0) parts.push(`${res.removedBranches} branches`);
-  if (res.removedTempDirs > 0) parts.push(`${res.removedTempDirs} temp dirs`);
+  if (res.removedTempDirs > 0) parts.push(`${res.removedTempDirs} temp folders`);
   if (res.reapedProcesses > 0) parts.push(`${res.reapedProcesses} processes`);
   return parts.length === 0 ? "Nothing to clean" : `Cleaned ${parts.join(", ")}`;
 }
@@ -109,24 +137,24 @@ function HeldItemRow({
   return (
     <SettingsRow label={item.label} detail={detail}>
       {() => (
-        <span className="-mr-3 flex items-center gap-1">
+        <span className="flex items-center gap-2">
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             disabled={busy}
             onClick={kept ? onUnkeep : onKeep}
           >
             {busy && <Loader2 aria-hidden="true" />}
-            {kept ? "Unkeep" : "Keep"}
+            {kept ? "Allow cleanup" : "Keep"}
           </Button>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             disabled={busy}
             className="text-danger hover:text-danger"
             onClick={onDiscardClick}
           >
-            Discard…
+            {item.kind === "process" ? "Stop…" : "Delete…"}
           </Button>
         </span>
       )}
@@ -158,18 +186,18 @@ function OverviewGroup({
   const heldBranches = snapshot.branches.reduce((sum, r) => sum + r.unmergedHeldCount, 0);
   const heldWorktrees = snapshot.held.filter((h) => h.kind === "worktree").length;
 
-  const branchSummaryParts: string[] = [];
-  if (activeBranches > 0) branchSummaryParts.push(`${activeBranches} active`);
-  if (cleanableBranches > 0) branchSummaryParts.push(`${cleanableBranches} merged`);
-  if (heldWorktrees + heldBranches > 0) branchSummaryParts.push(`${heldWorktrees + heldBranches} held`);
+  const workspaceSummaryParts: string[] = [];
+  if (activeBranches > 0) workspaceSummaryParts.push(`${activeBranches} active`);
+  if (cleanableBranches > 0) workspaceSummaryParts.push(`${cleanableBranches} ready to clean`);
+  if (heldWorktrees + heldBranches > 0) workspaceSummaryParts.push(`${heldWorktrees + heldBranches} to review`);
 
   const dbDetail = dbWarnTable ? (
     <span className="inline-flex items-center gap-1.5 tabular-nums">
       <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />
-      <span>{`${dbWarnTable.table} ${dbWarnTable.rows.toLocaleString("en-US")} / ${dbWarnTable.rowLimit?.toLocaleString("en-US")}`}</span>
+      <span>{`${humanTableName(dbWarnTable.table)} ${dbWarnTable.rows.toLocaleString("en-US")} / ${dbWarnTable.rowLimit?.toLocaleString("en-US")}`}</span>
     </span>
   ) : snapshot.database.freelistBytes >= 1024 * 1024 ? (
-    <span className="tabular-nums">{`${formatBytes(snapshot.database.freelistBytes)} reclaimable`}</span>
+    <span className="tabular-nums">{`${formatBytes(snapshot.database.freelistBytes)} freeable`}</span>
   ) : undefined;
 
   const storageDetail = storageWarn ? (
@@ -177,8 +205,8 @@ function OverviewGroup({
       <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />
       <span>
         {storageWarn.maxBytes !== null
-          ? `${storageWarn.label} ${formatBytes(storageWarn.bytes)} / ${formatBytes(storageWarn.maxBytes)}`
-          : `${storageWarn.label} ${storageWarn.fileCount} / ${storageWarn.maxFiles} files`}
+          ? `${humanDirectoryLabel(storageWarn)} ${formatBytes(storageWarn.bytes)} / ${formatBytes(storageWarn.maxBytes)}`
+          : `${humanDirectoryLabel(storageWarn)} ${storageWarn.fileCount} / ${storageWarn.maxFiles} files`}
       </span>
     </span>
   ) : undefined;
@@ -191,41 +219,41 @@ function OverviewGroup({
       </Button>
       <Button variant="outline" size="sm" disabled={cleaning || refreshing} onClick={onRunCleanup}>
         {cleaning && <Loader2 aria-hidden="true" />}
-        Run cleanup
+        Clean up
       </Button>
     </div>
   );
 
   return (
-    <SettingsGroup title="Overview" action={actionBar}>
-      <SettingsRow label="Database" detail={dbDetail}>
+    <SettingsGroup title="Summary" action={actionBar}>
+      <SettingsRow label="Chat & app data" detail={dbDetail}>
         {(id) => <ReadonlyValue id={id}><span className="tabular-nums">{formatBytes(dbBytes)}</span></ReadonlyValue>}
       </SettingsRow>
-      <SettingsRow label="Storage" detail={storageDetail}>
+      <SettingsRow label="Files & workspaces" detail={storageDetail}>
         {(id) => <ReadonlyValue id={id}><span className="tabular-nums">{formatBytes(storageBytes)}</span></ReadonlyValue>}
       </SettingsRow>
-      <SettingsRow label="Worktrees & branches">
+      <SettingsRow label="Worker workspaces">
         {(id) => (
           <ReadonlyValue id={id}>
             <span className="inline-flex flex-wrap items-center justify-end gap-x-3 tabular-nums">
-              {branchSummaryParts.length === 0 ? (
+              {workspaceSummaryParts.length === 0 ? (
                 <span>None</span>
               ) : (
-                branchSummaryParts.map((part) => <span key={part}>{part}</span>)
+                workspaceSummaryParts.map((part) => <span key={part}>{part}</span>)
               )}
             </span>
           </ReadonlyValue>
         )}
       </SettingsRow>
-      <SettingsRow label="Processes">
+      <SettingsRow label="Background processes">
         {(id) => (
           <ReadonlyValue id={id}>
             <span className="inline-flex items-center gap-3 tabular-nums">
-              <span>{`${snapshot.processes.trackedCount} tracked`}</span>
+              <span>{`${snapshot.processes.trackedCount} running`}</span>
               {snapshot.processes.leakedCount > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-foreground">
                   <span aria-hidden="true" className="size-2 bg-caution" />
-                  <span>{`${snapshot.processes.leakedCount} leaked`}</span>
+                  <span>{`${snapshot.processes.leakedCount} leftover`}</span>
                 </span>
               )}
             </span>
@@ -244,11 +272,11 @@ function OverviewGroup({
 function StorageDetailsGroup({ snapshot }: { snapshot: ResourcesSnapshot }) {
   const topTables = snapshot.database.tables.filter((t) => t.rows > 0 || (t.bytes ?? 0) > 0).slice(0, 8);
   return (
-    <CollapsibleGroup title="Storage details" summary={formatBytes(snapshot.totalDiskBytes)}>
+    <CollapsibleGroup title="Storage breakdown" summary={formatBytes(snapshot.totalDiskBytes)}>
       {snapshot.directories.map((dir) => (
         <SettingsRow
           key={dir.id}
-          label={dir.label}
+          label={humanDirectoryLabel(dir)}
           detail={
             dir.warning ? (
               <span className="inline-flex items-center gap-1.5 tabular-nums">
@@ -274,12 +302,12 @@ function StorageDetailsGroup({ snapshot }: { snapshot: ResourcesSnapshot }) {
       {topTables.map((table) => (
         <SettingsRow
           key={table.table}
-          label={table.table}
+          label={humanTableName(table.table)}
           detail={
             <span className="tabular-nums">
               {table.warning && table.rowLimit !== null
-                ? `${table.rows.toLocaleString("en-US")} / ${table.rowLimit.toLocaleString("en-US")} rows`
-                : `${table.rows.toLocaleString("en-US")} rows`}
+                ? `${table.rows.toLocaleString("en-US")} / ${table.rowLimit.toLocaleString("en-US")} records`
+                : `${table.rows.toLocaleString("en-US")} records`}
             </span>
           }
         >
@@ -317,7 +345,7 @@ function DiscardConfirmDialog({
   return (
     <Dialog open={item !== null} onOpenChange={handleOpenChange}>
       <DialogContent
-        title={item ? discardDialogTitle(item) : "Discard resource?"}
+        title={item ? discardDialogTitle(item) : "Delete item?"}
         className="max-w-110"
       >
         {item !== null && (
@@ -360,7 +388,7 @@ function DiscardConfirmDialog({
                 onClick={() => onConfirm(item.kind === "worktree" && deleteBranch)}
               >
                 {busy && <Loader2 aria-hidden="true" />}
-                {item.kind === "process" ? "Stop process" : "Discard"}
+                {item.kind === "process" ? "Stop process" : "Delete"}
               </Button>
             </DialogFooter>
           </div>
@@ -372,7 +400,7 @@ function DiscardConfirmDialog({
 
 /**
  * Precondition: rendered inside SettingsDialog (desktop) or ResourcesPage (mobile).
- * Postcondition: renders Needs attention held items (Keep / Discard...), Overview totals (Database, Storage, Worktrees & branches, Processes), and collapsed Kept by you rows matching the UI standard.
+ * Postcondition: renders Needs review items (Keep / Delete or Stop), Summary totals, Storage breakdown, and collapsed Kept rows.
  */
 export function ResourcesSettings({
   active = true,
@@ -451,7 +479,7 @@ export function ResourcesSettings({
       {model.snapshot !== null && (
         <>
           {model.partitioned.needsDecision.length > 0 && (
-            <SettingsGroup title="Needs attention">
+            <SettingsGroup title="Needs review">
               {model.partitioned.needsDecision.map((item) => {
                 const key = `${item.kind}:${item.targetKey}`;
                 return (
@@ -482,7 +510,7 @@ export function ResourcesSettings({
 
           {model.partitioned.kept.length > 0 && (
             <CollapsibleGroup
-              title="Kept by you"
+              title="Kept"
               summary={String(model.partitioned.kept.length)}
               defaultOpen={false}
             >

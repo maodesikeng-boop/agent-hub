@@ -245,6 +245,7 @@ function ProviderItemRow({
               type="button"
               variant="outline"
               size="sm"
+              className="min-w-24"
               aria-label={`${jobFailed ? "Retry" : "Install"} ${item.label}`}
               disabled={!item.canInstall || busyKey === `install:${item.vendor}`}
               onClick={onInstall}
@@ -270,6 +271,7 @@ function ProviderItemRow({
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-w-24"
                 aria-label={`Account for ${item.label}`}
                 onClick={onOpenAccount}
               >
@@ -281,6 +283,7 @@ function ProviderItemRow({
               type="button"
               variant="outline"
               size="sm"
+              className="min-w-24"
               aria-label={`Sign in to ${item.label}`}
               onClick={onOpenSignIn}
             >
@@ -1049,18 +1052,10 @@ export function ProvidersListSection({
       <SettingsGroup
         {...(hasExtraTopGroup ? { title: "Providers" } : readyCount === null ? { label: "Providers" } : { title: `${readyCount} ready`, label: "Providers" })}
         action={
-          <span className="-mr-3 ml-auto flex items-center">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={model.loading || model.refreshing}
-              onClick={() => void model.refresh()}
-            >
-              {model.refreshing && <Loader2 aria-hidden="true" />}
-              Refresh
-            </Button>
-          </span>
+          <Button type="button" variant="outline" size="sm" className="min-w-24" disabled={model.loading || model.refreshing} onClick={() => void model.refresh()}>
+            {model.refreshing && <Loader2 aria-hidden="true" />}
+            Refresh
+          </Button>
         }
       >
         {model.loading && !model.status ? (

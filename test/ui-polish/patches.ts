@@ -19,6 +19,7 @@ import {
   type PmMemoryFilesList,
   type QuotaResponse,
   type RateLimitInfo,
+  type ResourcesSnapshot,
   type StateSnapshot,
   type VendorAvailability,
 } from "../../src/shared/index.ts";
@@ -53,6 +54,7 @@ export const PATCH_NAMES = [
   "browsers-multi",
   "account-approvals",
   "account-long-name",
+  "resources-attention",
 ] as const;
 export type PatchName = (typeof PATCH_NAMES)[number];
 
@@ -415,6 +417,67 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
       state: "signed_out",
       lastError: null,
     } satisfies AccountStatusView),
+  "resources-attention": (page) =>
+    fixedJson(page, anyDevice(API_PATHS.resources), {
+      scannedAt: NOW - 30_000,
+      database: {
+        fileBytes: 18 * 1024 * 1024,
+        walBytes: 420 * 1024,
+        freelistBytes: 2 * 1024 * 1024,
+        dbstatAvailable: true,
+        tables: [
+          { table: "messages", bytes: 10 * 1024 * 1024, rows: 12_400, rowLimit: null, warning: false },
+          { table: "step_logs", bytes: 5 * 1024 * 1024, rows: 28_900, rowLimit: 50_000, warning: false },
+          { table: "router_items", bytes: 1_200 * 1024, rows: 420, rowLimit: null, warning: false },
+          { table: "task_graphs", bytes: 420 * 1024, rows: 38, rowLimit: null, warning: false },
+        ],
+      },
+      directories: [
+        { id: "worktrees", label: "Worktrees", bytes: 12 * 1024 * 1024, fileCount: 42, maxBytes: null, maxFiles: null, truncated: false, warning: false },
+        { id: "sentFiles", label: "Delivered files", bytes: 4 * 1024 * 1024, fileCount: 15, maxBytes: 256 * 1024 * 1024, maxFiles: null, truncated: false, warning: false },
+        { id: "uploads", label: "Uploads", bytes: 3 * 1024 * 1024, fileCount: 8, maxBytes: 256 * 1024 * 1024, maxFiles: null, truncated: false, warning: false },
+        { id: "logs", label: "Logs", bytes: 1_800 * 1024, fileCount: 12, maxBytes: null, maxFiles: null, truncated: false, warning: false },
+      ],
+      branches: [{ projectId: 1, projectName: "agent-hub", repoFolder: "/tmp/fusa-ui-shots/projects/agent-hub", activeCount: 1, mergedCleanableCount: 3, unmergedHeldCount: 1 }],
+      processes: { trackedCount: 2, leakedCount: 1 },
+      held: [
+        {
+          kind: "worktree",
+          targetKey: "42",
+          reason: "uncommitted_changes",
+          label: "#42 Fix auth flow",
+          projectId: 1,
+          projectName: "agent-hub",
+          bytes: 12 * 1024 * 1024,
+          detectedAt: NOW - 2 * HOUR,
+          samplePaths: ["src/auth.ts", "src/auth.test.ts"],
+          keptAt: null,
+          workerId: 42,
+          branch: "hub/42-fix-auth",
+          worktreePath: "/Users/demo/.agent-hub/worktrees/1/42",
+          dirtyCount: 2,
+        },
+        {
+          kind: "git_branch",
+          targetKey: "1:hub/31-experiment",
+          reason: "unmerged_ended_branch",
+          label: "hub/31-experiment",
+          projectId: 1,
+          projectName: "agent-hub",
+          bytes: null,
+          detectedAt: NOW - 5 * HOUR,
+          samplePaths: [],
+          keptAt: NOW - 3 * HOUR,
+          workerId: 31,
+          branch: "hub/31-experiment",
+          repoFolder: "/tmp/fusa-ui-shots/projects/agent-hub",
+          commitsAhead: 2,
+        },
+      ],
+      heldTruncated: false,
+      totalDiskBytes: 40 * 1024 * 1024,
+      attentionCount: 1,
+    } satisfies ResourcesSnapshot),
 };
 
 /**

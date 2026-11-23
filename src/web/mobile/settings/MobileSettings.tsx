@@ -4,6 +4,7 @@ import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx"
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { UpdateSettings } from "../../components/UpdateSettings.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
+import { formatQuotaReset } from "../../format.ts";
 import { cn } from "../../lib/utils.ts";
 import type { NotifySettings } from "../../notify.ts";
 import { useCachedResourcesSummary } from "../../resources-model.ts";
@@ -94,23 +95,30 @@ function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
     <SettingsGroup title="Usage">
       {vendors.map((vendor) => (
         <div key={vendor.id} className="grid gap-2.5 px-4 py-3">
+          <div className="text-minor font-semibold text-foreground">{vendor.group ? `${vendor.name} (${vendor.group})` : vendor.name}</div>
           {vendor.windows.map((w) => {
             const full = w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100));
-            const barClass = full ? "bg-foreground" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-rail-ink";
+            const barClass = full ? "bg-danger" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-rail-ink";
+            const fillWidth = Math.min(100, Math.max(0, w.percent));
             return (
-              <div key={w.key} className="flex items-center gap-3 text-body">
-                <span className="min-w-28 truncate font-medium">{vendor.group ? `${vendor.name} (${vendor.group})` : vendor.name}</span>
+              <div key={w.key} className="grid gap-1.5">
+                <div className="flex items-baseline gap-2 text-minor">
+                  <span className="shrink-0 font-medium text-foreground">{w.short}</span>
+                  {w.resetsAt !== null && (
+                    <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">Resets {formatQuotaReset(w.resetsAt)}</span>
+                  )}
+                  <span className={cn("ml-auto shrink-0 font-semibold tabular-nums", full ? "text-danger" : "text-foreground")}>{w.percent}%</span>
+                </div>
                 <div
                   role="progressbar"
                   aria-label={`${vendor.name} ${w.short} usage`}
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={w.percent}
-                  className="h-2 min-w-0 flex-1 border border-border-strong bg-panel"
+                  className="h-2 overflow-hidden border border-border-strong bg-panel"
                 >
-                  <div className={cn("h-full", barClass)} style={{ width: `${w.percent}%` }} />
+                  <div className={cn("h-full", barClass)} style={{ width: `${fillWidth}%` }} />
                 </div>
-                <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{`${w.percent}% ${w.short}`}</span>
               </div>
             );
           })}

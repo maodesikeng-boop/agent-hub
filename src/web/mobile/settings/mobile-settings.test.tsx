@@ -686,13 +686,13 @@ describe("Updates page", () => {
     queryClient.setQueryData(["resources", ""], resourcesSnap);
     renderSettings("#/settings");
     const row = within(screen.getByRole("region", { name: "Resources" })).getByRole("button", { name: /^Resources/ });
-    expect(row).toHaveTextContent("1 held");
+    expect(row).toHaveTextContent("1 to review");
     expect(screen.getByTestId("resources-attention")).toBeInTheDocument();
     expect(api.calls).toEqual([]);
 
     fireEvent.click(row);
     expect(location.hash).toBe("#/settings/resources");
     expect(await screen.findByRole("heading", { level: 1, name: "Resources" })).toBeInTheDocument();
-    expect(await screen.findByRole("region", { name: "Needs attention" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Needs review" })).toBeInTheDocument();
   });
 });

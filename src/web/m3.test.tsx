@@ -665,12 +665,12 @@ describe("最左栏的额度", () => {
     expect(panel).toHaveClass("max-h-(--radix-popover-content-available-height)", "overflow-y-auto");
   });
 
-  it("用量条颜色：正常中性灰、偏高琥珀（caution）、用满前景色实心，都不用红色；百分比文字不上色", async () => {
+  it("用量条颜色：正常暖棕（rail-ink）、偏高琥珀（caution）、用满红色（danger）；未用满时百分比不上告警色", async () => {
     const user = userEvent.setup();
     await boot(withQuota(limit({ five_hour: win(0.37), seven_day: win(0.85, { resetsAt: 1_793_646_000 }) })));
     await user.click(badge());
     const fill = (name: string) => screen.getByRole("progressbar", { name }).firstElementChild!.className;
-    expect(fill("5h usage")).toContain("bg-foreground/40");
+    expect(fill("5h usage")).toContain("bg-rail-ink");
     expect(fill("7d usage")).toContain("bg-caution");
     expect(within(screen.getByRole("dialog", { name: "Usage" })).getByText("85%")).not.toHaveClass("text-danger", "text-warn-foreground", "text-rail-danger", "text-rail-warn");
   });

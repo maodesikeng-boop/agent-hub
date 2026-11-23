@@ -62,35 +62,43 @@ afterEach(() => {
 });
 
 describe("ResourcesSettings", () => {
-  it("renders Database, Storage, Worktrees & branches, and Processes overview rows", async () => {
+  it("renders plain-language storage overview rows and humanized storage breakdown", async () => {
+    const user = userEvent.setup();
     const api = new FakeApi(makeSnapshot({}));
     api.resources = () => ({ status: 200, body: makeResources([]) });
     api.install();
     renderPanel();
 
-    const overview = await screen.findByRole("region", { name: "Overview" });
-    expect(within(overview).getByText("Database")).toBeVisible();
-    expect(within(overview).getByText("Storage")).toBeVisible();
-    expect(within(overview).getByText("Worktrees & branches")).toBeVisible();
-    expect(within(overview).getByText("Processes")).toBeVisible();
-    expect(within(overview).getByText("2 tracked")).toBeVisible();
+    const overview = await screen.findByRole("region", { name: "Summary" });
+    expect(within(overview).getByText("Chat & app data")).toBeVisible();
+    expect(within(overview).getByText("Files & workspaces")).toBeVisible();
+    expect(within(overview).getByText("Worker workspaces")).toBeVisible();
+    expect(within(overview).getByText("Background processes")).toBeVisible();
+    expect(within(overview).getByText("2 running")).toBeVisible();
+    expect(within(overview).getByText("3 ready to clean")).toBeVisible();
+
+    const breakdown = screen.getByRole("region", { name: "Storage breakdown" });
+    await user.click(within(breakdown).getByRole("button", { name: /Storage breakdown/ }));
+    expect(within(breakdown).getByText("Worker workspaces")).toBeVisible();
+    expect(within(breakdown).getByText("Chat messages")).toBeVisible();
+    expect(within(breakdown).getByText("12,000 records")).toBeVisible();
   });
 
-  it("renders unacknowledged held items in Needs attention with Keep and Discard actions", async () => {
+  it("renders unacknowledged held items in Needs review with Keep and Delete actions", async () => {
     const api = new FakeApi(makeSnapshot({}));
     api.resources = () => ({ status: 200, body: makeResources([HELD_WORKTREE]) });
     api.install();
     renderPanel();
 
-    const attention = await screen.findByRole("region", { name: "Needs attention" });
-    expect(within(attention).getByText("#42 Fix auth flow")).toBeVisible();
-    expect(within(attention).getByText("Uncommitted changes")).toBeVisible();
-    expect(within(attention).getByText("src/auth.ts, src/auth.test.ts")).toBeVisible();
-    expect(within(attention).getByRole("button", { name: "Keep" })).toBeVisible();
-    expect(within(attention).getByRole("button", { name: "Discard…" })).toBeVisible();
+    const review = await screen.findByRole("region", { name: "Needs review" });
+    expect(within(review).getByText("#42 Fix auth flow")).toBeVisible();
+    expect(within(review).getByText("Unsaved file edits")).toBeVisible();
+    expect(within(review).getByText("src/auth.ts, src/auth.test.ts")).toBeVisible();
+    expect(within(review).getByRole("button", { name: "Keep" })).toBeVisible();
+    expect(within(review).getByRole("button", { name: "Delete…" })).toBeVisible();
   });
 
-  it("opens a destructive confirmation dialog before executing Discard", async () => {
+  it("opens a destructive confirmation dialog before executing Delete", async () => {
     const user = userEvent.setup();
     const api = new FakeApi(makeSnapshot({}));
     let current = makeResources([HELD_WORKTREE]);
@@ -104,19 +112,19 @@ describe("ResourcesSettings", () => {
     api.install();
     renderPanel();
 
-    const attention = await screen.findByRole("region", { name: "Needs attention" });
-    await user.click(within(attention).getByRole("button", { name: "Discard…" }));
+    const review = await screen.findByRole("region", { name: "Needs review" });
+    await user.click(within(review).getByRole("button", { name: "Delete…" }));
     expect(decisionBodies).toEqual([]);
 
-    const dialog = await screen.findByRole("dialog", { name: "Discard worktree?" });
+    const dialog = await screen.findByRole("dialog", { name: "Delete workspace?" });
     await user.click(within(dialog).getByRole("switch", { name: "Also delete branch hub/42-fix-auth" }));
-    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(decisionBodies).toEqual([{ kind: "worktree", targetKey: "42", action: "discard", deleteBranch: true }]));
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Needs attention" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Needs review" })).toBeNull());
   });
 
-  it("moves kept items into the default-collapsed Kept by you group", async () => {
+  it("moves kept items into the default-collapsed Kept group", async () => {
     const user = userEvent.setup();
     const api = new FakeApi(makeSnapshot({}));
     let current = makeResources([HELD_WORKTREE]);
@@ -128,19 +136,19 @@ describe("ResourcesSettings", () => {
     api.install();
     renderPanel();
 
-    const attention = await screen.findByRole("region", { name: "Needs attention" });
-    await user.click(within(attention).getByRole("button", { name: "Keep" }));
+    const review = await screen.findByRole("region", { name: "Needs review" });
+    await user.click(within(review).getByRole("button", { name: "Keep" }));
 
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Needs attention" })).toBeNull());
-    const keptRegion = await screen.findByRole("region", { name: "Kept by you" });
-    const trigger = within(keptRegion).getByRole("button", { name: /Kept by you/ });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Needs review" })).toBeNull());
+    const keptRegion = await screen.findByRole("region", { name: "Kept" });
+    const trigger = within(keptRegion).getByRole("button", { name: /Kept/ });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     await user.click(trigger);
     expect(within(keptRegion).getByText("#42 Fix auth flow")).toBeVisible();
-    expect(within(keptRegion).getByRole("button", { name: "Unkeep" })).toBeVisible();
+    expect(within(keptRegion).getByRole("button", { name: "Allow cleanup" })).toBeVisible();
   });
 
-  it("triggers Refresh and Run cleanup and shows inline errors when a request fails", async () => {
+  it("triggers Refresh and Clean up and shows inline errors when a request fails", async () => {
     const user = userEvent.setup();
     const api = new FakeApi(makeSnapshot({}));
     let failCleanup = false;
@@ -164,16 +172,16 @@ describe("ResourcesSettings", () => {
     api.install();
     renderPanel();
 
-    const overview = await screen.findByRole("region", { name: "Overview" });
+    const overview = await screen.findByRole("region", { name: "Summary" });
     await user.click(within(overview).getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(api.callsTo("GET", /^\/api\/resources$/)).toHaveLength(2));
     expect(api.callsTo("GET", /^\/api\/resources$/)[1]?.query.get("refresh")).toBe("1");
 
-    await user.click(within(overview).getByRole("button", { name: "Run cleanup" }));
-    expect(await within(overview).findByText("Cleaned 25 DB rows, 2 files, 3 branches")).toBeVisible();
+    await user.click(within(overview).getByRole("button", { name: "Clean up" }));
+    expect(await within(overview).findByText("Cleaned 25 old records, 2 files, 3 branches")).toBeVisible();
 
     failCleanup = true;
-    await user.click(within(overview).getByRole("button", { name: "Run cleanup" }));
+    await user.click(within(overview).getByRole("button", { name: "Clean up" }));
     expect(await screen.findByRole("alert")).toBeVisible();
   });
 });

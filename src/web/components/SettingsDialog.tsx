@@ -120,7 +120,7 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Settings" titleClassName="sr-only" className="h-[min(35rem,calc(100%-3rem))] max-w-195 gap-0 p-0">
+      <DialogContent title="Settings" titleClassName="sr-only" className="h-[min(35rem,calc(100%-3rem))] max-w-210 gap-0 p-0">
         <Tabs
           value={effectiveSection}
           onValueChange={(val) => setActiveSection(val as SettingsDialogSection)}
@@ -130,7 +130,7 @@ export function SettingsDialog({
           <div className="flex shrink-0 items-center border-b-2 border-list-edge bg-list pr-14 min-[720px]:block min-[720px]:border-r-2 min-[720px]:border-b-0 min-[720px]:pr-0">
             <TabsList
               aria-label="Settings categories"
-              className="flex min-w-0 flex-1 gap-1 overflow-x-auto px-3 py-3 min-[720px]:w-48 min-[720px]:flex-col min-[720px]:overflow-x-visible min-[720px]:py-4"
+              className="flex min-w-0 flex-1 gap-1 overflow-x-auto px-3 py-3 min-[720px]:w-56 min-[720px]:flex-col min-[720px]:overflow-x-visible min-[720px]:py-4"
             >
               {sections.map(({ id, label, icon: Icon }) => (
                 <TabsTrigger

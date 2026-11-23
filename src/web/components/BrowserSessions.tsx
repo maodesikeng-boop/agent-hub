@@ -32,11 +32,10 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
           {(id) => (
             <Button
               id={id}
-              variant="ghost"
+              variant="outline"
               size="sm"
               aria-label={signIn.link === null ? "Show QR code" : "Hide"}
               disabled={signIn.busy}
-              className="-mr-3"
               onClick={() => (signIn.link === null ? signIn.generate() : signIn.hide())}
             >
               {signIn.busy && <Loader2 aria-hidden="true" />}
@@ -91,17 +90,16 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
             <SettingsRow key={session.id} label={name} icon={<PlatformIcon platform={userAgentDevice(session.userAgent)} size="inherit" />} detail={detail} error={rowErrors[session.id]}>
               {(id) =>
                 confirming ? (
-                  <span className="-mr-3 flex items-center gap-1">
-                    <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
+                  <span className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
                       Cancel
                     </Button>
                     <Button
                       id={id}
-                      variant="ghost"
+                      variant="destructive"
                       size="sm"
                       aria-label="Confirm sign out"
                       disabled={busy !== null}
-                      className="text-danger hover:text-danger"
                       onClick={() => signOut(session)}
                     >
                       {busy === `exit:${session.id}` && <Loader2 aria-hidden="true" />}Sign out
@@ -110,11 +108,10 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
                 ) : (
                   <Button
                     id={id}
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     aria-label={`Sign out ${name}`}
                     disabled={busy !== null}
-                    className="-mr-3"
                     onClick={() => (session.current ? setConfirmingSelf(true) : signOut(session))}
                   >
                     {busy === `exit:${session.id}` && <Loader2 aria-hidden="true" />}Sign out
@@ -128,11 +125,10 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
           {(id) => (
             <Button
               id={id}
-              variant="ghost"
+              variant={confirmingAll ? "destructive" : "outline"}
               size="sm"
               aria-label={confirmingAll ? "Confirm sign out all" : "Sign out all"}
               disabled={busy !== null}
-              className={confirmingAll ? "-mr-3 text-danger hover:text-danger" : "-mr-3"}
               onClick={() => (confirmingAll ? signOutAll() : setConfirmingAll(true))}
               onBlur={() => setConfirmingAll(false)}
             >

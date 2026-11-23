@@ -121,7 +121,7 @@ function PriorityGroup({
           return (
             <SettingsRow key={id} label={`${index + 1}. ${name}`} detail={detail}>
               {() => (
-                <span className="-mr-2 flex items-center gap-1 pointer-coarse:gap-3.5">
+                <span className="flex items-center gap-1 pointer-coarse:gap-3.5">
                   <Button variant="ghost" size="icon-sm" aria-label={`Move ${name} up`} disabled={busy || index === 0} onClick={() => void account.setPriority(movePriority(priority, id, -1))}>
                     <ArrowUp aria-hidden="true" />
                   </Button>

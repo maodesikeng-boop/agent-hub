@@ -53,6 +53,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
               id={id}
               variant="outline"
               size="sm"
+              className="min-w-24"
               aria-label={scanning ? "Scanning…" : "Scan…"}
               disabled={scanning}
               onClick={previewVendorSync}

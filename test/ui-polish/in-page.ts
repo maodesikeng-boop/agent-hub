@@ -106,7 +106,7 @@ export function measureInPage(options: { touch: boolean }): RawHit[] {
   }
 
   const clickable = all.filter((el) => el.matches("button, a[href], input:not([type='hidden']), textarea, select, [role='button'], [role='radio'], [role='checkbox'], [role='switch'], [role='tab'], [role='menuitem'], [role='option']") && !(el as HTMLButtonElement).disabled);
-  const layerOf = (el: Element) => el.closest("[data-radix-popper-content-wrapper], [role='dialog'], [role='alertdialog'], [data-vaul-drawer]");
+  const layerOf = (el: Element) => el.closest("[data-radix-popper-content-wrapper], [role='dialog'], [role='alertdialog'], [data-vaul-drawer], [data-back-to-bottom]");
   const hittable = clickable.filter((el) => {
     const r = el.getBoundingClientRect();
     const x = Math.min(Math.max(r.left + r.width / 2, 0), vw - 1);

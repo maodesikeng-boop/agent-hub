@@ -188,7 +188,7 @@ export function CapabilitiesPanel({
       )}
       <div className="flex items-center gap-2">
         <SearchField label="Search capabilities" value={query} onChange={setQuery} />
-        <Button variant="ghost" size="sm" className="-mr-3" disabled={disabled || editor.refreshing} onClick={() => void editor.refresh()}>
+        <Button variant="outline" disabled={disabled || editor.refreshing} onClick={() => void editor.refresh()}>
           {editor.refreshing && <Loader2 aria-hidden="true" />}
           Refresh
         </Button>
