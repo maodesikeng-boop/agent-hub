@@ -340,7 +340,7 @@ pub fn open_external_url(url: &Url) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        return win32_shell::shell_execute("open", std::ffi::OsStr::new(url.as_str()), None);
+        win32_shell::shell_execute("open", std::ffi::OsStr::new(url.as_str()), None)
     }
 
     #[cfg(target_os = "macos")]
@@ -380,7 +380,7 @@ pub fn open_log_file_or_dir(log_path: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        return win32_shell::shell_execute("open", target.as_os_str(), None);
+        win32_shell::shell_execute("open", target.as_os_str(), None)
     }
 
     #[cfg(target_os = "macos")]

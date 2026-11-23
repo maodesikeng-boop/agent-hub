@@ -319,7 +319,7 @@ impl NativeDaemonRuntime {
             if stream.write_all(&wire).is_err() || stream.flush().is_err() {
                 return false;
             }
-            return matches!(read_http_response(stream), Ok((200, _)));
+            matches!(read_http_response(stream), Ok((200, _)))
         }
 
         #[cfg(unix)]
@@ -488,8 +488,7 @@ impl DaemonRuntime for NativeDaemonRuntime {
         let job_arc = {
             use fusa_win_helper::win::job::SessionJob;
             use std::os::windows::io::AsRawHandle;
-            let h = child.as_raw_handle();
-            let ok = |j: &SessionJob| unsafe { j.assign(h).is_ok() };
+            let ok = |j: &SessionJob| unsafe { j.assign(child.as_raw_handle()).is_ok() };
             Arc::new(Mutex::new(SessionJob::create(false).ok().filter(ok)))
         };
 
@@ -547,39 +546,40 @@ impl DaemonRuntime for NativeDaemonRuntime {
         let wait_child = Arc::clone(&shared_child);
         let wait_exit_slot = Arc::clone(&exit_code_slot);
         thread::spawn(move || {
-            #[cfg(windows)]
-            wait_for_exit();
-            let exit_code = loop {
+            let poll_once = || -> Option<Option<i32>> {
                 if let Some(already) = *wait_exit_slot.lock().unwrap() {
-                    break already;
+                    return Some(already);
                 }
-                let polled = {
-                    let mut guard = wait_child.lock().unwrap();
-                    match guard.as_mut() {
-                        None => break (*wait_exit_slot.lock().unwrap()).flatten(),
-                        Some(c) => match c.try_wait() {
-                            Ok(Some(st)) => {
-                                let code = st.code();
-                                *guard = None;
-                                *wait_exit_slot.lock().unwrap() = Some(code);
-                                break code;
-                            }
-                            Ok(None) => None,
-                            Err(_) => {
-                                *guard = None;
-                                *wait_exit_slot.lock().unwrap() = Some(None);
-                                break None;
-                            }
-                        },
-                    }
-                };
-                if polled.is_some() {
-                    break polled;
+                let mut guard = wait_child.lock().unwrap();
+                match guard.as_mut() {
+                    None => Some((*wait_exit_slot.lock().unwrap()).flatten()),
+                    Some(c) => match c.try_wait() {
+                        Ok(Some(st)) => {
+                            let code = st.code();
+                            *guard = None;
+                            *wait_exit_slot.lock().unwrap() = Some(code);
+                            Some(code)
+                        }
+                        Ok(None) => None,
+                        Err(_) => {
+                            *guard = None;
+                            *wait_exit_slot.lock().unwrap() = Some(None);
+                            Some(None)
+                        }
+                    },
                 }
-                #[cfg(not(windows))]
+            };
+            #[cfg(windows)]
+            let exit_code = {
+                wait_for_exit();
+                poll_once().unwrap_or(None)
+            };
+            #[cfg(not(windows))]
+            let exit_code = loop {
+                if let Some(code) = poll_once() {
+                    break code;
+                }
                 thread::sleep(Duration::from_millis(40));
-                #[cfg(windows)]
-                break None;
             };
             if let Some(j) = stderr_join {
                 let _ = j.join();

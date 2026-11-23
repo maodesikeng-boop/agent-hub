@@ -98,9 +98,11 @@ mod tests {
         }
     }
 
+    type StatusProbeFn = Arc<dyn Fn(u16, &DesktopContract) -> ProbeOutcome + Send + Sync>;
+
     #[derive(Clone)]
     struct MockHttpClient {
-        status_fn: Arc<dyn Fn(u16, &DesktopContract) -> ProbeOutcome + Send + Sync>,
+        status_fn: StatusProbeFn,
         cookie_exchanges: Arc<AtomicUsize>,
     }
 

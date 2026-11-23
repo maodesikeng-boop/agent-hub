@@ -135,7 +135,7 @@ pub fn build_refreshed_path_env(prepend_dirs: &[PathBuf]) -> String {
             .iter()
             .map(|p| expand_windows_env_vars(p, lookup))
             .collect();
-        return merge_path_entries(prepend_dirs, &expanded, current_proc_path.as_deref(), true);
+        merge_path_entries(prepend_dirs, &expanded, current_proc_path.as_deref(), true)
     }
 
     #[cfg(not(windows))]
