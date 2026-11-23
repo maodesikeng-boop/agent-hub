@@ -54,15 +54,25 @@ export function referenceNeedles(file: string): string[] {
   return [file, `${dir}/`];
 }
 
-/** Code files whose source mentions a needle. Markdown changes match test files only. */
+function isManifestOrLockfile(file: string): boolean {
+  return MANIFEST_OR_LOCKFILE_NAMES.has(posix.basename(file));
+}
+
+function matchesReferenceTarget(changedFile: string, candidatePath: string): boolean {
+  if (changedFile.endsWith(".md")) return TEST_FILE.test(candidatePath);
+  // Root manifests and lockfiles link only to tests and build scripts so literal "package.json" in src/ runtime code does not fan out across unrelated suites.
+  if (isManifestOrLockfile(changedFile)) return TEST_FILE.test(candidatePath) || candidatePath.startsWith("scripts/");
+  return true;
+}
+
+/** Code files whose source mentions a needle. Markdown matches tests only; manifests and lockfiles match tests and `scripts/` modules. */
 export function findReferencingFiles(changed: readonly string[], sources: ReadonlyMap<string, string>): string[] {
   const hits = new Set<string>();
   for (const file of changed) {
     const needles = referenceNeedles(file);
     if (needles.length === 0) continue;
-    const testsOnly = file.endsWith(".md");
     for (const [path, text] of sources) {
-      if (path === file || (testsOnly && !TEST_FILE.test(path))) continue;
+      if (path === file || !matchesReferenceTarget(file, path)) continue;
       if (needles.some((needle) => text.includes(needle))) hits.add(path);
     }
   }
@@ -95,7 +105,7 @@ export function selectRelatedTargets(
   sources: ReadonlyMap<string, string>,
 ): { linked: string[]; targets: string[] } {
   const linked = changed.some((file) => referenceNeedles(file).length > 0) ? findReferencingFiles(changed, sources) : [];
-  const direct = changed.filter((file) => !MANIFEST_OR_LOCKFILE_NAMES.has(posix.basename(file)));
+  const direct = changed.filter((file) => !isManifestOrLockfile(file));
   const targets = [...new Set([...direct, ...linked, ...ALWAYS_RUN_TESTS])];
   return { linked, targets };
 }
