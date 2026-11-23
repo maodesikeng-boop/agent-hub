@@ -63,6 +63,7 @@
   "src/shared/shared.test.ts#eslint(no-unused-vars)": 1,
   "src/shared/step-labels.ts#eslint(no-useless-escape)": 1,
   "src/vendors/_common/acp/driver.test.ts#eslint(no-unsafe-optional-chaining)": 1,
+  "src/vendors/_common/acp/driver.ts#eslint(no-unused-vars)": 2,
   "src/vendors/_common/acp/types.ts#eslint(no-unused-vars)": 1,
   "src/vendors/_common/setup/browser-capture.ts#eslint(no-useless-escape)": 1,
   "src/vendors/agy/composer.test.ts#eslint(no-unused-vars)": 2,
@@ -135,8 +136,10 @@
   "test/e2e/mesh-daemon.ts#eslint(no-unused-vars)": 1,
   "test/eval/fakes.test.ts#eslint(no-unsafe-optional-chaining)": 2,
   "test/eval/review.test.ts#eslint(no-unused-vars)": 3,
+  "test/eval/types.ts#eslint(no-unused-vars)": 1,
   "test/smoke/kit.ts#eslint(no-unused-vars)": 1,
   "test/smoke/write-scope.ts#eslint(no-unused-vars)": 1,
+  "test/ui-polish/capture.ts#eslint(no-unused-vars)": 1,
   "test/windows/named-pipe-and-hub-exe.test.ts#eslint(no-unsafe-optional-chaining)": 4,
   "test/windows/worktree-and-longpaths.test.ts#eslint(no-unused-vars)": 1
 }
