@@ -326,7 +326,7 @@ export const Sidebar = memo(
     const handleOpenSettings = useCallback(() => {
       if (layout === "page" && onOpenSettings) onOpenSettings();
       else setDialogOpen(true);
-    }, [layout, onOpenSettings]);
+    }, [layout, onOpenSettings, setDialogOpen]);
     const handleOpenUpdates = useCallback(
       () => (onOpenSettingsSection ? onOpenSettingsSection("updates") : handleOpenSettings()),
       [onOpenSettingsSection, handleOpenSettings],

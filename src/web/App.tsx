@@ -284,28 +284,36 @@ export function App() {
   useEffect(() => {
     setDrawerOpen(false);
   }, [route, current.key, content?.railHasContent, mobile]);
+  const hasContent = content !== null;
   const openManageProvidersRef = content?.openManageProviders;
   const openCurrentProviders = useCallback(() => openManageProvidersRef?.(current.key), [openManageProvidersRef, current.key]);
+  const health = content?.health;
+  const reconnecting = content?.reconnecting;
+  const offline = content?.offline;
   const notices = useMemo(
     () =>
-      content === null ? null : (
-        <Notices health={content.health} reconnecting={content.reconnecting} offline={content.offline} listFailed={fleet.listFailed} onManageProviders={openCurrentProviders} />
+      !hasContent ? null : (
+        <Notices health={health!} reconnecting={reconnecting!} offline={offline!} listFailed={fleet.listFailed} onManageProviders={openCurrentProviders} />
       ),
-    [content?.health, content?.reconnecting, content?.offline, fleet.listFailed, openCurrentProviders],
+    [hasContent, health, reconnecting, offline, fleet.listFailed, openCurrentProviders],
   );
   const railAttention = content?.railAttention ?? false;
+  const railHasContent = content?.railHasContent ?? false;
+  const railOpen = content?.railOpen ?? false;
+  const look = content?.look;
+  const toggleRail = content?.toggleRail;
   const railToggle = useMemo(
     () =>
-      content === null ? null : (
+      !hasContent ? null : (
         <RightRailToggle
-          visible={content.railHasContent}
-          open={content.railOpen}
+          visible={railHasContent}
+          open={railOpen}
           attention={railAttention}
-          look={content.look}
-          onToggle={content.toggleRail}
+          look={look}
+          onToggle={toggleRail!}
         />
       ),
-    [content === null, content?.railHasContent, content?.railOpen, railAttention, content?.look, content?.toggleRail],
+    [hasContent, railHasContent, railOpen, railAttention, look, toggleRail],
   );
   const openLocalProviders = useCallback(
     () => openManageProvidersRef?.(LOCAL_DEVICE),
@@ -313,14 +321,11 @@ export function App() {
   );
   const toggleDrawer = useCallback(() => setDrawerOpen((v) => !v), []);
   const active = content?.active ?? null;
-  const look = content?.look;
   const compact = content?.compact ?? false;
   const profile = content?.profile ?? null;
   const openWorker = content?.openWorker ?? null;
-  const railOpen = content?.railOpen ?? false;
   const routerActive = content?.routerActive ?? false;
   const view = content?.view;
-  const railHasContent = content?.railHasContent ?? false;
   const quotaFetchable = content?.quotaFetchable ?? false;
   const quota = quotaUsage(state);
   const quotaInHeader = routerActive || (state.phase === "ready" && !profile && (openWorker !== null || (active && view)));
@@ -359,7 +364,7 @@ export function App() {
   const ensureWorkers = content?.ensureWorkers;
   const rail = useMemo(
     () =>
-      content !== null && !routerActive && railOpen ? (
+      hasContent && !routerActive && railOpen ? (
         <RightRail
           asks={railAsks!}
           workers={railWorkers!}
@@ -376,7 +381,7 @@ export function App() {
         />
       ) : null,
     [
-      content !== null,
+      hasContent,
       routerActive,
       railOpen,
       railAsks,

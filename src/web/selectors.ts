@@ -52,9 +52,7 @@ import {
   type ProjectId,
   type QuotaResponse,
   type QuotaWindowKey,
-  type RateLimitInfo,
   type RateLimitWindow,
-  type SessionId,
   type SessionState,
   type WorkerId,
   type WorkerMessageMeta,
@@ -63,11 +61,9 @@ import { defaultLookOf, resolvePmLook, type SlimeLook } from "../shared/slimes.t
 import {
   renewingIn,
   routerReminderSummary,
-  runningWorkerCount,
   sessionOf,
   type RouterReminderSummary,
 } from "../shared/reminders.ts";
-import type { ConversationEntry } from "./conversation-list.ts";
 import { workerStatusOf, type WorkerTone } from "./worker-status.ts";
 import type { HubState, PendingMessage } from "./state.ts";
 

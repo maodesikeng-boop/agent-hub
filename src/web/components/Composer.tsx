@@ -371,7 +371,7 @@ export const Composer = memo(function Composer({
       el.setSelectionRange(pendingCursor.current, pendingCursor.current);
       pendingCursor.current = null;
     }
-  }, [value, multiline, focusRev, disabled]);
+  }, [value, multiline, focusRev, disabled, clientWidthRef]);
 
   const submit = () => {
     if (!canSend) return;
