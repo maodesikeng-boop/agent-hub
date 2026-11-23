@@ -39,7 +39,11 @@ impl TrayMenuModel {
         let mut fault_reason_title = None;
 
         let (summary_title, restart_title, restart_enabled) = match &snapshot.state {
-            SupervisorState::Idle => ("Preparing Bellwood…".to_string(), "Restart Daemon".to_string(), false),
+            SupervisorState::Idle => (
+                "Preparing Bellwood…".to_string(),
+                "Restart Daemon".to_string(),
+                false,
+            ),
             SupervisorState::Starting { .. } => (
                 "Starting daemon…".to_string(),
                 "Restart Daemon".to_string(),

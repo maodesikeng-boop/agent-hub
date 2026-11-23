@@ -34,7 +34,9 @@ pub fn run_internal_probe_child(
         );
         return 10;
     }
-    if let Err(err) = fs::write(allowed_file, b"ok").and_then(|()| fs::read(allowed_file).map(|_| ())) {
+    if let Err(err) =
+        fs::write(allowed_file, b"ok").and_then(|()| fs::read(allowed_file).map(|_| ()))
+    {
         eprintln!(
             "sandbox probe failed: write or read in allowed worktree directory failed ({}): {err}",
             allowed_file.display()

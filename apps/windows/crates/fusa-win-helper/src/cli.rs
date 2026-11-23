@@ -89,7 +89,9 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             let mut it = raw_args[1..].iter().map(String::as_str);
             while let Some(arg) = it.next() {
                 match arg {
-                    "--state-dir" => state_dir = Some(PathBuf::from(next_val(&mut it, "--state-dir")?)),
+                    "--state-dir" => {
+                        state_dir = Some(PathBuf::from(next_val(&mut it, "--state-dir")?))
+                    }
                     other => return Err(format!("unknown probe option: {other}")),
                 }
             }
@@ -102,7 +104,10 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
                 match arg {
                     "--pid" => {
                         let v = next_val(&mut it, "--pid")?;
-                        pid = Some(v.parse::<u32>().map_err(|_| format!("invalid --pid: {v}"))?);
+                        pid = Some(
+                            v.parse::<u32>()
+                                .map_err(|_| format!("invalid --pid: {v}"))?,
+                        );
                     }
                     other => return Err(format!("unknown inspect option: {other}")),
                 }
@@ -151,7 +156,9 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             let mut it = raw_args[2..].iter().map(String::as_str);
             while let Some(arg) = it.next() {
                 match arg {
-                    "--state-dir" => state_dir = Some(PathBuf::from(next_val(&mut it, "--state-dir")?)),
+                    "--state-dir" => {
+                        state_dir = Some(PathBuf::from(next_val(&mut it, "--state-dir")?))
+                    }
                     "--worker" => worker_id = Some(next_val(&mut it, "--worker")?),
                     "--reader" => reader = Some(next_val(&mut it, "--reader")?),
                     "--path" => path_raw = Some(next_val(&mut it, "--path")?),
@@ -162,16 +169,20 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             if action == "allow-pipe" {
                 return Ok(FusaRunCommand::AclAllowPipe { path: path_raw });
             }
-            let state_dir = state_dir.ok_or_else(|| "acl requires --state-dir <dir>".to_string())?;
+            let state_dir =
+                state_dir.ok_or_else(|| "acl requires --state-dir <dir>".to_string())?;
             if action == "deny-pipe" {
-                return Ok(FusaRunCommand::AclDenyPipe { state_dir, path: path_raw });
+                return Ok(FusaRunCommand::AclDenyPipe {
+                    state_dir,
+                    path: path_raw,
+                });
             }
             let path = PathBuf::from(path_raw);
             return match action {
                 "protect-root" => Ok(FusaRunCommand::AclProtectRoot { state_dir, path }),
                 "allow-worker" => {
-                    let worker_id =
-                        worker_id.ok_or_else(|| "acl allow-worker requires --worker <id>".to_string())?;
+                    let worker_id = worker_id
+                        .ok_or_else(|| "acl allow-worker requires --worker <id>".to_string())?;
                     Ok(FusaRunCommand::AclAllowWorker {
                         state_dir,
                         worker_id,
@@ -242,8 +253,8 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
     let sandbox = match sandbox_kind.as_str() {
         "none" => SandboxMode::None,
         "worker" => {
-            let state_dir =
-                state_dir.ok_or_else(|| "--sandbox worker requires --state-dir <dir>".to_string())?;
+            let state_dir = state_dir
+                .ok_or_else(|| "--sandbox worker requires --state-dir <dir>".to_string())?;
             if !readonly_fallback && worker_id.is_none() {
                 return Err(
                     "--sandbox worker requires --worker <id> (or --readonly-fallback)".to_string(),
@@ -359,15 +370,30 @@ mod tests {
     #[test]
     fn parses_read_boundary_subcommands() {
         assert_eq!(
-            parse_fusa_run_args(&vec_s(&["acl", "deny-read", "--state-dir", "C:\\s", "--path", "C:\\d"])).expect("deny-read"),
+            parse_fusa_run_args(&vec_s(&[
+                "acl",
+                "deny-read",
+                "--state-dir",
+                "C:\\s",
+                "--path",
+                "C:\\d"
+            ]))
+            .expect("deny-read"),
             FusaRunCommand::AclDenyRead {
                 state_dir: PathBuf::from("C:\\s"),
                 path: PathBuf::from("C:\\d"),
             }
         );
         assert_eq!(
-            parse_fusa_run_args(&vec_s(&["acl", "allow-read", "--state-dir", "C:\\s", "--path", "C:\\d\\worktrees"]))
-                .expect("allow-read for every worker"),
+            parse_fusa_run_args(&vec_s(&[
+                "acl",
+                "allow-read",
+                "--state-dir",
+                "C:\\s",
+                "--path",
+                "C:\\d\\worktrees"
+            ]))
+            .expect("allow-read for every worker"),
             FusaRunCommand::AclAllowRead {
                 state_dir: PathBuf::from("C:\\s"),
                 reader: None,
@@ -393,13 +419,22 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_fusa_run_args(&vec_s(&["acl", "deny-pipe", "--state-dir", "C:\\s", "--path", "\\\\.\\pipe\\fusa-x-admin"]))
-                .expect("deny-pipe"),
+            parse_fusa_run_args(&vec_s(&[
+                "acl",
+                "deny-pipe",
+                "--state-dir",
+                "C:\\s",
+                "--path",
+                "\\\\.\\pipe\\fusa-x-admin"
+            ]))
+            .expect("deny-pipe"),
             FusaRunCommand::AclDenyPipe {
                 state_dir: PathBuf::from("C:\\s"),
                 path: "\\\\.\\pipe\\fusa-x-admin".to_string(),
             }
         );
-        assert!(parse_fusa_run_args(&vec_s(&["acl", "deny-pipe", "--path", "\\\\.\\pipe\\x"])).is_err());
+        assert!(
+            parse_fusa_run_args(&vec_s(&["acl", "deny-pipe", "--path", "\\\\.\\pipe\\x"])).is_err()
+        );
     }
 }

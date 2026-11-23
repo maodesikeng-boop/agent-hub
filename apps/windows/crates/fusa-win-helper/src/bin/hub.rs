@@ -64,7 +64,10 @@ fn classify_win_hub_endpoint(raw: &str) -> ValidatedWinHubEndpoint {
         if let Some(colon) = trimmed.find(':') {
             let scheme = &trimmed[..colon];
             if !scheme.is_empty()
-                && scheme.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
+                && scheme
+                    .bytes()
+                    .next()
+                    .is_some_and(|b| b.is_ascii_alphabetic())
                 && scheme
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
@@ -154,7 +157,8 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
             send_hub_cli_over_stream(stream, &token, &req)
         }
         ValidatedWinHubEndpoint::LocalNamedPipe(ref pipe_path) => {
-            let pipe = connect_named_pipe(pipe_path, Duration::from_secs(5), HUB_CLI_TIMEOUT).ok()?;
+            let pipe =
+                connect_named_pipe(pipe_path, Duration::from_secs(5), HUB_CLI_TIMEOUT).ok()?;
             send_hub_cli_over_stream(pipe, &token, &req)
         }
         ValidatedWinHubEndpoint::UnsupportedLocalPath
@@ -193,7 +197,11 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
     if let Ok(err_body) = serde_json::from_slice::<HubErrBody>(&body) {
         if err_body.ok == Some(false) {
             if let Some(msg) = err_body.message {
-                let line = if msg.ends_with('\n') { msg } else { format!("{msg}\n") };
+                let line = if msg.ends_with('\n') {
+                    msg
+                } else {
+                    format!("{msg}\n")
+                };
                 let _ = io::stderr().write_all(line.as_bytes());
                 let _ = io::stderr().flush();
                 return Some(1);
@@ -248,12 +256,18 @@ mod tests {
 
     #[test]
     fn parses_loopback_tcp_endpoint_strictly() {
-        assert_eq!(parse_loopback_tcp_endpoint("tcp://127.0.0.1:4317"), Some(4317));
+        assert_eq!(
+            parse_loopback_tcp_endpoint("tcp://127.0.0.1:4317"),
+            Some(4317)
+        );
         assert_eq!(parse_loopback_tcp_endpoint("tcp://127.0.0.1:0"), None);
         assert_eq!(parse_loopback_tcp_endpoint("tcp://127.0.0.1:04317"), None);
         assert_eq!(parse_loopback_tcp_endpoint("tcp://0.0.0.0:4317"), None);
         assert_eq!(parse_loopback_tcp_endpoint("tcp://localhost:4317"), None);
-        assert_eq!(parse_loopback_tcp_endpoint("tcp://evil.example.com:4317"), None);
+        assert_eq!(
+            parse_loopback_tcp_endpoint("tcp://evil.example.com:4317"),
+            None
+        );
         assert_eq!(parse_loopback_tcp_endpoint(r"\\.\pipe\fusa-abc-hub"), None);
 
         assert_eq!(

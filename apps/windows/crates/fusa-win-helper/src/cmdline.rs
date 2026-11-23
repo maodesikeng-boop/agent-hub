@@ -1,5 +1,9 @@
 pub fn quote_windows_arg(value: &str) -> String {
-    if !value.is_empty() && !value.chars().any(|c| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '"')) {
+    if !value.is_empty()
+        && !value
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '"'))
+    {
         return value.to_string();
     }
     let mut out = String::with_capacity(value.len() + 2);
@@ -122,8 +126,14 @@ mod tests {
         assert_eq!(quote_windows_arg("a b"), "\"a b\"");
         assert_eq!(quote_windows_arg("a\"b"), "\"a\\\"b\"");
         assert_eq!(quote_windows_arg("C:\\dir\\"), "C:\\dir\\");
-        assert_eq!(quote_windows_arg("C:\\dir with space\\"), "\"C:\\dir with space\\\\\"");
-        assert_eq!(quote_windows_arg("{\"enableTerminalSandbox\":false}"), "\"{\\\"enableTerminalSandbox\\\":false}\"");
+        assert_eq!(
+            quote_windows_arg("C:\\dir with space\\"),
+            "\"C:\\dir with space\\\\\""
+        );
+        assert_eq!(
+            quote_windows_arg("{\"enableTerminalSandbox\":false}"),
+            "\"{\\\"enableTerminalSandbox\\\":false}\""
+        );
 
         let samples = vec![
             "C:\\Program Files\\nodejs\\node.exe".to_string(),

@@ -13,7 +13,9 @@ pub fn validate_local_dir(path: &Path) -> Result<(), String> {
         return Err("Directory path is empty".to_string());
     }
     if trimmed.starts_with(r"\\?\UNC\")
-        || (trimmed.starts_with(r"\\") && !trimmed.starts_with(r"\\?\") && !trimmed.starts_with(r"\\.\"))
+        || (trimmed.starts_with(r"\\")
+            && !trimmed.starts_with(r"\\?\")
+            && !trimmed.starts_with(r"\\.\"))
     {
         return Err(format!(
             "A network share can't be the local data directory: {trimmed}"
@@ -37,7 +39,7 @@ pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
             .ok_or_else(|| "Can't read the LOCALAPPDATA environment variable".to_string())?;
         let dir = PathBuf::from(local_app_data).join("Fusa");
         validate_local_dir(&dir)?;
-        return Ok(dir);
+        Ok(dir)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -118,7 +120,8 @@ pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
     if let Ok(override_home) = std::env::var("AGENT_HUB_HOME") {
         if !override_home.trim().is_empty() {
             let cwd = std::env::current_dir().ok();
-            let p = normalize_hub_home_override(&override_home, base_home.as_deref(), cwd.as_deref());
+            let p =
+                normalize_hub_home_override(&override_home, base_home.as_deref(), cwd.as_deref());
             validate_local_dir(&p)?;
             return Ok(p);
         }
@@ -128,16 +131,16 @@ pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
     {
         let profile = base_home
             .ok_or_else(|| "Can't read the USERPROFILE environment variable".to_string())?;
-        let dir = PathBuf::from(profile).join(".agent-hub");
+        let dir = profile.join(".agent-hub");
         validate_local_dir(&dir)?;
-        return Ok(dir);
+        Ok(dir)
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let home = base_home
-            .ok_or_else(|| "Can't read the HOME environment variable".to_string())?;
-        let dir = PathBuf::from(home).join(".agent-hub");
+        let home =
+            base_home.ok_or_else(|| "Can't read the HOME environment variable".to_string())?;
+        let dir = home.join(".agent-hub");
         validate_local_dir(&dir)?;
         Ok(dir)
     }
@@ -155,7 +158,11 @@ fn try_packaged_runtime_root(
             win
         } else {
             let unix = base.join("node").join("node");
-            if unix.is_file() { unix } else { return None }
+            if unix.is_file() {
+                unix
+            } else {
+                return None;
+            }
         }
     };
     let bin_dir = base.join("bin");
@@ -226,7 +233,8 @@ pub fn resolve_native_runtime_config(
     }
 
     for root in &candidate_roots {
-        if let Some(cfg) = try_packaged_runtime_root(root, &app_data_dir, &hub_home_dir, &extra_envs)
+        if let Some(cfg) =
+            try_packaged_runtime_root(root, &app_data_dir, &hub_home_dir, &extra_envs)
         {
             return Ok(cfg);
         }
@@ -324,12 +332,15 @@ mod win32_shell {
 
 pub fn open_external_url(url: &Url) -> Result<(), String> {
     if !matches!(url.scheme(), "http" | "https" | "mailto") {
-        return Err(format!("Refusing to open a link with an unsafe scheme: {}", url.scheme()));
+        return Err(format!(
+            "Refusing to open a link with an unsafe scheme: {}",
+            url.scheme()
+        ));
     }
 
     #[cfg(target_os = "windows")]
     {
-        return win32_shell::shell_execute("open", std::ffi::OsStr::new(url.as_str()), None);
+        win32_shell::shell_execute("open", std::ffi::OsStr::new(url.as_str()), None)
     }
 
     #[cfg(target_os = "macos")]
@@ -369,7 +380,7 @@ pub fn open_log_file_or_dir(log_path: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        return win32_shell::shell_execute("open", target.as_os_str(), None);
+        win32_shell::shell_execute("open", target.as_os_str(), None)
     }
 
     #[cfg(target_os = "macos")]

@@ -1,0 +1,79 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "oxc", "react", "vitest", "promise", "import"],
+  "categories": {
+    "correctness": "error"
+  },
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2024": true
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "build/**",
+    "coverage/**",
+    "node_modules/**",
+    ".pnpm-store/**",
+    "apps/**",
+    "experiments/**",
+    ".agents/**",
+    ".claude/**"
+  ],
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "react/refs": "off",
+    "react/set-state-in-effect": "off",
+    "react/purity": "off",
+    "react/use-memo": "off",
+    "react/preserve-manual-memoization": "off",
+    "react/incompatible-library": "off",
+    "react/globals": "off",
+    "oxc/no-async-endpoint-handlers": "off",
+    "typescript/unbound-method": "off",
+    "typescript/no-base-to-string": "off",
+    "typescript/no-misused-spread": "off",
+    "typescript/restrict-template-expressions": "off",
+    "typescript/no-redundant-type-constituents": "off",
+    "vitest/require-mock-type-parameters": "off",
+    "vitest/valid-expect": "off",
+    "vitest/no-conditional-expect": "off",
+    "vitest/require-to-throw-message": "off",
+    "vitest/expect-expect": "off",
+    "vitest/no-standalone-expect": "off",
+    "vitest/warn-todo": "off",
+    "vitest/valid-title": "off",
+    "vitest/no-disabled-tests": "off",
+    "eslint/no-control-regex": "off",
+    "eslint/no-template-curly-in-string": "off",
+    "import/namespace": "off",
+    "import/default": "off",
+
+    "eslint/no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ],
+    "eslint/no-var": "error",
+    "eslint/no-self-compare": "error",
+    "eslint/eqeqeq": ["error", "always", { "null": "ignore" }],
+    "eslint/no-duplicate-imports": ["error", { "allowSeparateTypeImports": true }],
+    "import/no-self-import": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/require-array-sort-compare": ["error", { "ignoreStringArrays": true }],
+    "typescript/no-for-in-array": "error",
+    "typescript/no-implied-eval": "error",
+    "typescript/only-throw-error": "error",
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error",
+    "vitest/no-focused-tests": "error",
+    "vitest/no-identical-title": "error",
+    "promise/no-callback-in-promise": "error"
+  }
+}

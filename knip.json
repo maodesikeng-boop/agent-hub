@@ -33,7 +33,9 @@
     "src/web/ui/resizable.tsx"
   ],
   "ignoreDependencies": [
-    "@tauri-apps/cli"
+    "@tauri-apps/cli",
+    "oxlint",
+    "oxlint-tsgolint"
   ],
   "ignoreBinaries": [
     "tar\\.exe",

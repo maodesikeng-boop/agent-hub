@@ -127,7 +127,10 @@ fn run_self_test_inner(app_data_dir: &Path, hub_home_dir: &Path) -> Result<Strin
         for rel in ["npm.cmd", "npx.cmd", r"node_modules\npm\bin\npm-cli.js"] {
             let p = node_dir.join(rel);
             if !p.is_file() {
-                return Err(format!("随包 Node 24 运行时缺少免管理员安装所需的 npm 组件：{}", p.display()));
+                return Err(format!(
+                    "随包 Node 24 运行时缺少免管理员安装所需的 npm 组件：{}",
+                    p.display()
+                ));
             }
         }
     }
@@ -161,7 +164,8 @@ fn run_self_test_inner(app_data_dir: &Path, hub_home_dir: &Path) -> Result<Strin
         }
     }
 
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("分配空闲端口失败：{e}"))?;
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("分配空闲端口失败：{e}"))?;
     let port = listener
         .local_addr()
         .map_err(|e| format!("读取空闲端口失败：{e}"))?
@@ -260,7 +264,10 @@ fn run_self_test_inner(app_data_dir: &Path, hub_home_dir: &Path) -> Result<Strin
     verify_result?;
 
     if stop_snap.state != SupervisorState::Stopped {
-        return Err(format!("关机后状态应为 Stopped，实际为 {:?}", stop_snap.state));
+        return Err(format!(
+            "关机后状态应为 Stopped，实际为 {:?}",
+            stop_snap.state
+        ));
     }
     if shutdown_ms >= 15_000 {
         return Err(format!(

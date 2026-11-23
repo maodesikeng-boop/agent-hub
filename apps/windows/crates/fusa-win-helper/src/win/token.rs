@@ -4,7 +4,7 @@ use crate::win::util::{last_os_error, win32_code_error, LocalSid, OwnedHandle};
 use std::ffi::c_void;
 use std::io;
 use std::path::Path;
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GENERIC_ALL, HANDLE, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS, GENERIC_ALL, HANDLE, HLOCAL};
 use windows_sys::Win32::Security::Authorization::{
     SetEntriesInAclW, EXPLICIT_ACCESS_W, GRANT_ACCESS, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
     TRUSTEE_W,
