@@ -4,7 +4,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "../shared/names.ts";
-import { bundledModelCatalog, emptyRouterSlice, type DeviceInfo, type Message, type RouterDecisionItem, type StateSnapshot } from "../shared/index.ts";
+import { bundledModelCatalog, emptyRouterSlice, type AccountStatusView, type DeviceFingerprint, type DeviceInfo, type Message, type RouterDecisionItem, type StateSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { OFFLINE_AFTER_MS, deviceStatus } from "./devices.ts";
 import {
@@ -458,13 +458,130 @@ describe("设置 → 设备", () => {
     expect(await within(nav()).findByRole("button", { name: /^东京服务器/ })).toBeInTheDocument();
   });
 
+  it("account.updated 全链路自动刷新：设备码登录完成切到待批准 → 对端发起核对弹出 6 位码 → 配对完成刷新设备列表、中心顺序及后续改名移除（零手动刷新）", async () => {
+    const FP = "a".repeat(64) as DeviceFingerprint;
+    const login = { provider: "github" as const, userId: "1", login: "alice" };
+    const fleet = new Fleet(onePm("小林"), onePm("阿青"), [mac]);
+    let accountState: AccountStatusView = { state: "signed_out", lastError: null };
+    fleet.local.account = () => ({ status: 200, body: accountState });
+    fleet.local.accountLogin = () => {
+      accountState = {
+        state: "signing_in",
+        userCode: "WDJB-MJHT",
+        verificationUri: "https://github.com/login/device",
+        expiresAt: Date.now() + 900_000,
+      };
+      return { status: 200, body: accountState };
+    };
+    fleet.local.accountApprovalAnswer = () => {
+      accountState = {
+        state: "signed_in",
+        login,
+        accountId: "acct_abcdefghijklmnopqrstuvwxyz" as Extract<AccountStatusView, { state: "signed_in" }>["accountId"],
+        relayUrl: "https://relay.test",
+        relay: "connected",
+        devices: [
+          { id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null },
+          { id: TOKYO, name: "东京", platform: "linux", fingerprint: FP, self: false, online: true, link: "relay", lastSeenAt: null },
+        ],
+        approvals: [],
+        centerPriority: [MAC, TOKYO],
+        feishuHolder: MAC,
+      };
+      fleet.devices = [mac, tokyo];
+      return { status: 200, body: accountState };
+    };
 
+    await boot(fleet);
+    await within(nav()).findByRole("button", { name: /小林/ });
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const panel = await screen.findByRole("tabpanel", { name: "Computers" });
+    expect(within(within(panel).getByRole("region", { name: "Your computers" })).getByText("No other computers")).toBeInTheDocument();
 
+    // 1) Start GitHub device code sign-in
+    await userEvent.click(within(panel).getByRole("button", { name: "Sign in with GitHub" }));
+    expect(await within(panel).findByText("Enter WDJB-MJHT on GitHub")).toBeInTheDocument();
 
+    // 2) Device code completes on daemon -> WS pushes raw account.updated -> automatically transitions to awaiting_approval
+    accountState = { state: "awaiting_approval", login, relay: "connected", approval: null };
+    act(() => lastSocket("local").push({ type: "account.updated" }));
+    expect(await within(panel).findByText("Waiting for approval")).toBeInTheDocument();
+    expect(within(panel).getByText("alice")).toBeInTheDocument();
 
+    // 3) Peer initiates SAS approval -> WS pushes account.updated -> 6-digit SAS code pops up automatically
+    accountState = {
+      state: "awaiting_approval",
+      login,
+      relay: "connected",
+      approval: {
+        requestId: TOKYO,
+        device: { id: TOKYO, name: "东京", platform: "linux", fingerprint: FP },
+        requestedAt: 1,
+        expiresAt: Date.now() + 600_000,
+        sas: "042917",
+      },
+    };
+    act(() => lastSocket("local").push({ type: "account.updated" }));
+    expect(await within(panel).findByTestId("sas-code")).toHaveTextContent("042 917");
 
+    // 4) Pairing completes (peer finishes and server pushes account.updated without resync) -> Hub order + Your computers refresh automatically
+    accountState = {
+      state: "signed_in",
+      login,
+      accountId: "acct_abcdefghijklmnopqrstuvwxyz" as Extract<AccountStatusView, { state: "signed_in" }>["accountId"],
+      relayUrl: "https://relay.test",
+      relay: "connected",
+      devices: [
+        { id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null },
+        { id: TOKYO, name: "东京", platform: "linux", fingerprint: FP, self: false, online: true, link: "relay", lastSeenAt: null },
+      ],
+      approvals: [],
+      centerPriority: [MAC, TOKYO],
+      feishuHolder: MAC,
+    };
+    fleet.devices = [mac, tokyo];
+    act(() => lastSocket("local").push({ type: "account.updated" }));
 
+    const order = await within(panel).findByRole("region", { name: "Hub order" });
+    expect(within(order).getByText("1. Mac")).toBeInTheDocument();
+    expect(within(order).getByText("2. 东京")).toBeInTheDocument();
 
+    await waitFor(() => expect(sockets("tokyo")).toHaveLength(1));
+    act(() => lastSocket("tokyo").open());
+    const others = within(panel).getByRole("region", { name: "Your computers" });
+    expect(await within(others).findByText("东京")).toBeInTheDocument();
+    expect(await within(others).findByText("Online")).toBeInTheDocument();
+
+    // 5) Remote rename & priority update pushed via account.updated -> both Your computers and Hub order refresh automatically
+    accountState = {
+      ...accountState,
+      devices: [
+        { id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null },
+        { id: TOKYO, name: "东京新机", platform: "linux", fingerprint: FP, self: false, online: true, link: "lan", lastSeenAt: null },
+      ],
+      centerPriority: [TOKYO, MAC],
+      feishuHolder: TOKYO,
+    };
+    fleet.devices = [mac, { ...tokyo, name: "东京新机", link: "lan" }];
+    act(() => lastSocket("local").push({ type: "account.updated" }));
+
+    expect(await within(others).findByText("东京新机")).toBeInTheDocument();
+    expect(await within(others).findByText("Same network")).toBeInTheDocument();
+    await waitFor(() => expect(within(order).getByText("1. 东京新机")).toBeInTheDocument());
+
+    // 6) Remote removal pushed via account.updated -> Your computers drops it automatically
+    accountState = {
+      ...accountState,
+      devices: [{ id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null }],
+      centerPriority: [MAC],
+      feishuHolder: MAC,
+    };
+    fleet.devices = [mac];
+    act(() => lastSocket("local").push({ type: "account.updated" }));
+
+    expect(await within(others).findByText("No other computers")).toBeInTheDocument();
+    await waitFor(() => expect(within(order).getByText("1. Mac")).toBeInTheDocument());
+  });
 });
 
 it("手机直达远端：清单及目标快照未到不误清路由，到达后仍清理真实无效编号", async () => {

@@ -429,6 +429,8 @@ describe("M2 新的变化类型", () => {
 
   it("parseServerMessage 认识新的变化类型", () => {
     for (const type of CHANGE_TYPES) expect(parseServerMessage(JSON.stringify({ seq: 1, type, data: {} }))).not.toBeNull();
+    expect(parseServerMessage(JSON.stringify({ type: "resync" }))).toEqual({ type: "resync" });
+    expect(parseServerMessage(JSON.stringify({ type: "account.updated" }))).toEqual({ type: "account.updated" });
   });
 
   it("快照带着 projects、folders", () => {
