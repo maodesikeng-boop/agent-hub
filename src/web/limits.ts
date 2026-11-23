@@ -1,0 +1,1 @@
+export const SCROLLBAR_IDLE_HIDE_MS = 900;

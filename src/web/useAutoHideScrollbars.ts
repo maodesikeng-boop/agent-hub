@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { SCROLLBAR_IDLE_HIDE_MS } from "../shared/limits.ts";
+import { SCROLLBAR_IDLE_HIDE_MS } from "./limits.ts";
 
 const SCROLLBAR_SELECTOR = ".messages, .sidebar-list, .right-rail-scroll, .router-tray-scroll, .router-timeline, .page-fade, .dialog-body-fade";
 

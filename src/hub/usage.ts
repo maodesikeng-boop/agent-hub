@@ -75,15 +75,6 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           别把密钥写进命令：原文会出现在日志和失败附注里`,
   },
   {
-    command: "project.review-status",
-    group: "project",
-    action: "review-status",
-    cli: "project review-status",
-    usage: `  ${hub} project review-status --account <登录名> | --clear   设置或清除审查盖章用的 gh 账号：项目在 GitHub 上时，审查判完后
-                                                          守护进程用这个账号给被审提交挂提交状态（没配就用 gh 当前登录的账号）。
-                                                          只存登录名，令牌每次现从 gh 取（gh auth token --user <登录名>），不落盘、不进日志`,
-  },
-  {
     command: "persona.show",
     group: "persona",
     action: "show",

@@ -11,7 +11,6 @@ import { idle } from "../sessions.ts";
 import { mainFolderOf, projectRow, workerRow, workerSession } from "./ctx.ts";
 import { enqueueFirstTurn, insertLine } from "./lines.ts";
 import { insertReport, insertTurnFailed } from "./reports.ts";
-import { reviewStampFailedIn } from "./review-stamp.ts";
 import { notStarted, taskDedupeKey, toReportMessage } from "./text.ts";
 import { clearMaxTime, startMaxTime, turnTimeoutOf } from "./timers.ts";
 import type { ReportMessageRow, WorkersCtx } from "./types.ts";
@@ -163,10 +162,6 @@ function worktreeCreateFailedIn(w: WorkersCtx, p: Pending, workerId: WorkerId, e
 }
 
 export function actionFailedIn(w: WorkersCtx, p: Pending, action: AnyActionRow, error: string): void {
-  if (action.type === "review.stamp") {
-    reviewStampFailedIn(w, p, action, error);
-    return;
-  }
   if (action.type === "review.verify") {
     reviewVerifiedIn(w, p, action.params, { problems: [reviewVerifyErrorProblem(error)] });
     return;

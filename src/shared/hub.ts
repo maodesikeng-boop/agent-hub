@@ -43,7 +43,6 @@ export const HUB_COMMANDS = [
   "project.attach",
   "project.detach",
   "project.setup",
-  "project.review-status",
   "persona.show",
   "persona.edit",
   "worker.start",
@@ -81,7 +80,6 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "project.attach": ["pm"],
   "project.detach": ["pm"],
   "project.setup": ["pm"],
-  "project.review-status": ["pm"],
   "persona.show": ["pm"],
   "persona.edit": ["pm"],
   "worker.start": ["pm"],
@@ -129,7 +127,6 @@ export interface HubArgsMap {
   "project.attach": { folder: string };
   "project.detach": { folder: string };
   "project.setup": { command: string | null };
-  "project.review-status": { account: string | null };
   "persona.show": Record<string, never>;
   "persona.edit": { text?: string; mode?: PmMode; reason?: string };
   "worker.start": {
@@ -333,7 +330,6 @@ interface PmHubStatus {
   conversationId: ConversationId;
   project: ProjectCard | null;
   setupCommand: string | null;
-  reviewStatusAccount: string | null;
   activeTaskGraphs?: PmActiveGraphSummary[];
   selfReload?: SelfReloadStatus;
 }
@@ -417,7 +413,6 @@ interface HubDataMap {
   "project.attach": { project: Project; folder: ProjectFolder };
   "project.detach": { project: Project; folder: ProjectFolder };
   "project.setup": { project: Project; setupCommand: string | null };
-  "project.review-status": { project: Project; account: string | null };
   "persona.show": { text: string; mode: PmMode };
   "persona.edit": { change: PersonaChange | null };
   "worker.start": { worker: WorkerRecord };

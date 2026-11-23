@@ -11,7 +11,6 @@ import {
   parseStampPaths,
   type GateDeps,
 } from "./review-stamp-gate.ts";
-import { REVIEW_STATUS_CONTEXT as DAEMON_REVIEW_STATUS_CONTEXT } from "../src/shared/review.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 
 const SHA = "b".repeat(40);
@@ -29,8 +28,8 @@ Intro text with \`not-a-glob-line\` in prose.
 - \`docs/**\`
 `;
 
-it("门禁读的状态名跟守护进程挂的一致", () => {
-  expect(REVIEW_STATUS_CONTEXT).toBe(DAEMON_REVIEW_STATUS_CONTEXT);
+it("门禁使用的状态名是 bellwood/review", () => {
+  expect(REVIEW_STATUS_CONTEXT).toBe("bellwood/review");
 });
 
 describe("parseStampPaths", () => {

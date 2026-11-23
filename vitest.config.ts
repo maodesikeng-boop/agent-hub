@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
-import { TEST_TIMEOUT_MS } from "./src/shared/limits.ts";
 
+// Kept local so editing src/shared/limits.ts does not invalidate Vitest's config and rerun the entire suite.
+const TEST_TIMEOUT_MS = 20_000;
 const timeouts = { testTimeout: TEST_TIMEOUT_MS, hookTimeout: TEST_TIMEOUT_MS };
 
 export default defineConfig({

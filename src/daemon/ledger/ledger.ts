@@ -486,8 +486,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     recordReviewSnapshot: workers.recordReviewSnapshot,
     getReviewVerifyTask: workers.getReviewVerifyTask,
     onReviewVerified: workers.onReviewVerified,
-    getReviewStampTask: workers.getReviewStampTask,
-    onReviewStamped: workers.onReviewStamped,
 
     syncPersonaFiles: persona.syncPersonaFiles,
     listEndedWorktreeWorkers: workers.listEndedWorktreeWorkers,

@@ -22,7 +22,6 @@ import {
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_SETUP_COMMAND_BYTES,
-  MAX_REVIEW_STATUS_ACCOUNT_CHARS,
   MAX_MODEL_CHARS,
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
@@ -137,12 +136,6 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["command"],
     properties: { command: { type: ["string", "null"], maxLength: MAX_SETUP_COMMAND_BYTES } },
-  },
-  "project.review-status": {
-    type: "object",
-    additionalProperties: false,
-    required: ["account"],
-    properties: { account: { type: ["string", "null"], maxLength: MAX_REVIEW_STATUS_ACCOUNT_CHARS } },
   },
   "persona.show": noArgs,
   "persona.edit": {
@@ -367,7 +360,6 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "project.attach": { folder: MAX_PATH_BYTES },
   "project.detach": { folder: MAX_PATH_BYTES },
   "project.setup": { command: MAX_SETUP_COMMAND_BYTES },
-  "project.review-status": { account: MAX_REVIEW_STATUS_ACCOUNT_CHARS },
   "persona.edit": { text: MAX_PERSONA_BYTES },
   "worker.start": { task: MAX_TASK_BYTES },
   "worker.send": { text: MAX_TASK_BYTES },

@@ -1,7 +1,7 @@
 // 审查步骤只查不修的账本测试（docs/review-verify-only-design.md 第 3、7 节），用真 git 和一个本地 bare 远端：
 // - 审查步骤拿到独立的 detached 审查目录，不挂分支，开审时记下被审分支；
 // - 判 FAIL、没写结论、提交号对不上：停在 waiting:pm；
-// - 判 PASS、PASS+NOTES：先核对被审分支，没变才完成、下游照常开工；变了或核对没跑成：停在 waiting:pm；
+// - 判 PASS：先核对被审分支，没变才完成、下游照常开工；变了或核对没跑成：停在 waiting:pm；
 // - 审查后面的修复步骤接手实现的 worktree 和分支；审查目录收工就能清理。
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -13,11 +13,10 @@ import type { ConversationId, PmId, SessionId, TaskNode, WorkerId } from "../../
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { askOf } from "../../shared/domain.ts";
-import { REVIEW_CHECKLIST, parseReviewTarget, type ReviewStampOutcome } from "../../shared/review.ts";
+import { REVIEW_CHECKLIST, parseReviewTarget } from "../../shared/review.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
-import type { PostReviewStatusInput } from "../git/review-status.ts";
-import { createReviewObserver, createReviewStampHandler, createReviewVerifyHandler, createWorktreeCreateHandler } from "../handlers.ts";
+import { createReviewObserver, createReviewVerifyHandler, createWorktreeCreateHandler } from "../handlers.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
@@ -227,12 +226,41 @@ describe("审查步骤只查不修", () => {
     expect(ledger.listEndedWorktreeWorkers().find((c) => c.workerId === wReview)).toMatchObject({ review: true, branch: null });
   });
 
-  it("判 PASS+NOTES：核对通过后完成，意见抄送项目经理", async () => {
+  it("判 PASS 带非阻塞意见：核对通过后完成，意见抄送项目经理；新汇报写 PASS+NOTES 按无效结论停下", async () => {
     const { graph, wReview, sha } = await startReview();
-    await reportTurn(wReview, report({ summary: "可以合", verdict: "pass + notes", sha: sha.slice(0, 8), questions: "a.ts 的命名可以再统一" }));
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS+NOTES", sha: sha.slice(0, 8), questions: "a.ts 的命名可以再统一" }));
+    expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(["done", "waiting:pm", "pending"]);
+    expect(pmTexts()[0]).toContain("只能是 PASS、FAIL");
+    enqueued.length = 0;
+    ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "改成 PASS" });
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "pass", sha: sha.slice(0, 8), questions: "a.ts 的命名可以再统一" }));
     await runVerify();
     expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(["done", "done", "running"]);
     expect(pmTexts().some((t) => t.includes("a.ts 的命名可以再统一"))).toBe(true);
+  });
+
+  it("旧库 artifact_json 里留存的 PASS+NOTES 和 reviewStamp 字段可只读兼容展示，不崩溃且不输出旧盖章文案", async () => {
+    const { graph, wReview, sha } = await startReview();
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
+    await runVerify();
+    db.run(
+      "UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ? AND node_key = 'review'",
+      JSON.stringify({
+        summary: "可以合",
+        reviewVerdict: "PASS+NOTES",
+        verifiedCommit: sha.slice(0, 8),
+        reviewStamp: { kind: "posted", sha, state: "success", account: "octo", at: now },
+      }),
+      graph.id,
+    );
+    const shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id });
+    expect(shown.data.graph.nodes[1]!.artifact).toEqual({
+      summary: "可以合",
+      reviewVerdict: "PASS+NOTES",
+      verifiedCommit: sha.slice(0, 8),
+    });
+    expect(shown.text).toContain(`审查 PASS+NOTES · 验证提交 ${sha.slice(0, 8)}`);
+    expect(shown.text).not.toContain("提交状态");
   });
 
   it("没写结论、验证提交对不上：停在 waiting:pm，不核对", async () => {
@@ -376,250 +404,5 @@ describe("审查步骤只查不修", () => {
     expect(docs.worktree_path).toBe(impl.worktree_path);
     expect(docs.branch).toBe(impl.branch);
     expect(docs.review_json).toBeNull();
-  });
-
-  describe("审查盖章", () => {
-    const stampRows = () =>
-      db.all<{ params: string; status: string }>("SELECT params, status FROM actions WHERE type = 'review.stamp' ORDER BY id").map((r) => ({
-        params: JSON.parse(r.params) as ActionRow<"review.stamp">["params"],
-        status: r.status,
-      }));
-    const enqueuedStamps = () => enqueued.filter((a): a is ActionRow<"review.stamp"> => a.type === "review.stamp");
-    const lastReportId = (workerId: WorkerId) =>
-      db.get<{ id: number }>("SELECT id FROM messages WHERE session_id = ? AND sender = 'agent' ORDER BY id DESC LIMIT 1", sessionOf(workerId).id)!.id;
-    const runStamp = async (action: ActionRow<"review.stamp">, outcome: (input: PostReviewStatusInput) => ReviewStampOutcome) => {
-      const inputs: PostReviewStatusInput[] = [];
-      await createReviewStampHandler({
-        ledger,
-        postReviewStatus: async (input) => {
-          inputs.push(input);
-          return outcome(input);
-        },
-      })(action);
-      return inputs;
-    };
-    const posted = (input: PostReviewStatusInput): ReviewStampOutcome => ({
-      kind: "posted",
-      sha: input.request.sha,
-      state: input.request.state,
-      account: input.account,
-      at: now,
-    });
-
-    it("审查判 PASS、收尾核对没发现变动后，排一条 review.stamp，参数是被审提交和结论", async () => {
-      const { wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha: sha.slice(0, 8) }));
-      expect(stampRows()).toEqual([]);
-      const reportMessageId = lastReportId(wReview);
-      await runVerify();
-      expect(enqueuedStamps().map((a) => a.params)).toEqual([{ workerId: wReview, reportMessageId, sha, verdict: "PASS" }]);
-    });
-
-    it("PASS+NOTES 同样排 success，步骤照常完成或开检查点卡", async () => {
-      const { graph, wReview, sha } = await startReview({ confirm: true });
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS+NOTES", sha, questions: "- [Nit] 命名" }));
-      await runVerify();
-      expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("waiting:user");
-      const [stamp] = enqueuedStamps();
-      expect(stamp!.params.verdict).toBe("PASS+NOTES");
-      const inputs = await runStamp(stamp!, posted);
-      expect(inputs[0]!.request).toEqual({ sha, verdict: "PASS+NOTES", state: "success" });
-    });
-
-    it("FAIL 排一条 failure 的 review.stamp，步骤照常停下等项目经理", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha, questions: "- [Important] a.ts:1 越界" }));
-      expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("waiting:pm");
-      const [stamp] = enqueuedStamps();
-      expect(stamp!.params).toMatchObject({ workerId: wReview, sha, verdict: "FAIL" });
-      const inputs = await runStamp(stamp!, posted);
-      expect(inputs[0]!.request.state).toBe("failure");
-    });
-
-    it("汇报有误或收尾核对发现分支被动过时不排 review.stamp", async () => {
-      const bad = await startReview();
-      await reportTurn(bad.wReview, report({ summary: "看完了" }));
-      ledger.hubCall(lin.sessionId, "worker.send", { workerId: bad.wReview, text: "补上结论" });
-      await reportTurn(bad.wReview, report({ summary: "可以合", verdict: "FAIL", sha: "deadbeef" }));
-      expect(stampRows()).toEqual([]);
-    });
-
-    it("收尾核对发现被审分支被推了新提交时不排 review.stamp", async () => {
-      const { wReview, impl, sha } = await startReview();
-      const reviewDir = workerRow(wReview).worktree_path;
-      writeFileSync(join(reviewDir, "a.ts"), "export const a = 3;\n");
-      git(reviewDir, "commit", "-am", "reviewer fix");
-      git(reviewDir, "push", "--no-verify", "origin", `HEAD:refs/heads/${impl.branch}`);
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
-      await runVerify();
-      expect(stampRows()).toEqual([]);
-    });
-
-    it("非审查步骤的 Worker 汇报不排 review.stamp", async () => {
-      await startReview();
-      expect(stampRows()).toEqual([]);
-    });
-
-    it("同一个 Worker、同一个提交只排一次（重放汇报、重启恢复都不重复）", async () => {
-      const { wReview, sha } = await startReview({ confirm: true });
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
-      const verify = enqueued.find((a): a is ActionRow<"review.verify"> => a.type === "review.verify")!;
-      await runVerify();
-      expect(stampRows()).toHaveLength(1);
-      db.run("UPDATE actions SET status = 'done' WHERE type = 'review.stamp'");
-      ledger.onReviewVerified(verify.params, { problems: [] });
-      expect(stampRows()).toEqual([{ params: expect.objectContaining({ sha }), status: "done" }]);
-    });
-
-    it("getReviewStampTask 在 Worker 收工后仍返回主文件夹、快照里的 PR 和项目配的账号", async () => {
-      const { wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
-      await runVerify();
-      expect(workerRow(wReview).status).toBe("ended");
-      const [stamp] = enqueuedStamps();
-      expect(ledger.getReviewStampTask(stamp!.params)).toEqual({ repo: repoDir, pr: null, account: null });
-      ledger.hubCall(lin.sessionId, "project.review-status", { account: "octo-cat" });
-      expect(ledger.getReviewStampTask(stamp!.params)).toEqual({ repo: repoDir, pr: null, account: "octo-cat" });
-      expect(ledger.getReviewStampTask({ ...stamp!.params, sha: "f".repeat(40) })).toBeNull();
-      expect(ledger.getReviewStampTask({ ...stamp!.params, workerId: 999 as WorkerId })).toBeNull();
-    });
-
-    it("onReviewStamped 把 posted 或 skipped 写进步骤 artifact 的 reviewStamp，步骤状态不变、不叫醒项目经理", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
-      await runVerify();
-      const before = graphNow(graph.id).nodes.map(stateOf);
-      enqueued.length = 0;
-      const [stamp] = stampRows();
-      const action = actionOf("review.stamp", stamp!.params);
-      await runStamp(action, posted);
-      const node = graphNow(graph.id).nodes[1]!;
-      expect(node.artifact?.reviewStamp).toEqual({ kind: "posted", sha, state: "success", account: null, at: now });
-      expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(before);
-      expect(pmTexts()).toEqual([]);
-      await runStamp(action, (input) => ({ kind: "skipped", sha: input.request.sha, reason: "项目的 git 远端都不在 GitHub 上", at: now }));
-      expect(graphNow(graph.id).nodes[1]!.artifact?.reviewStamp).toMatchObject({ kind: "skipped", reason: "项目的 git 远端都不在 GitHub 上" });
-      expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(before);
-    });
-
-    it("取不到任务时处理函数不调 gh、不写账本", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha }));
-      const inputs = await runStamp(actionOf("review.stamp", { workerId: wReview, reportMessageId: 1 as never, sha: "0".repeat(40), verdict: "FAIL" }), posted);
-      expect(inputs).toEqual([]);
-      expect(graphNow(graph.id).nodes[1]!.artifact?.reviewStamp).toBeUndefined();
-    });
-
-    it("步骤已换人接手、最新 Worker 不是盖章的 Worker 时，onReviewStamped 不写", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha }));
-      const [stamp] = enqueuedStamps();
-      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview });
-      const next = ledger.hubCall(lin.sessionId, "worker.start", { node: "review", graphId: graph.id }).data.worker.id;
-      expect(next).not.toBe(wReview);
-      ledger.onReviewStamped(stamp!.params, { kind: "posted", sha, state: "failure", account: null, at: now });
-      expect(graphNow(graph.id).nodes[1]!.artifact?.reviewStamp).toBeUndefined();
-    });
-
-    it("新一轮审查汇报合并 artifact 时清掉上一轮的 reviewStamp", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha }));
-      const [stamp] = enqueuedStamps();
-      ledger.onReviewStamped(stamp!.params, { kind: "posted", sha, state: "failure", account: null, at: now });
-      expect(graphNow(graph.id).nodes[1]!.artifact?.reviewStamp).toBeDefined();
-      ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "再看一遍" });
-      await reportTurn(wReview, report({ summary: "看错了", verdict: "PASS", sha }));
-      await runVerify();
-      expect(graphNow(graph.id).nodes[1]!.artifact?.reviewStamp).toBeUndefined();
-      expect(stampRows().map((r) => r.params.verdict)).toEqual(["FAIL", "PASS"]);
-    });
-
-    it("先 PASS 后改判 FAIL：旧的 PASS 盖章重试时不调 gh、不覆盖新结论的 reviewStamp，重试用完也不记", async () => {
-      const { graph, wReview, sha } = await startReview({ confirm: true });
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
-      await runVerify();
-      expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("waiting:user");
-      const [passStamp] = enqueuedStamps();
-      ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "再看一遍游标" });
-      await reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha, questions: "- [Important] a.ts:1 越界" }));
-      const failStamp = enqueuedStamps().at(-1)!;
-      expect([passStamp!.params.verdict, failStamp.params.verdict]).toEqual(["PASS", "FAIL"]);
-      expect((await runStamp(failStamp, posted)).map((i) => i.request.state)).toEqual(["failure"]);
-      expect(ledger.getReviewStampTask(passStamp!.params)).toBeNull();
-      expect(await runStamp(passStamp!, posted)).toEqual([]);
-      ledger.onReviewStamped(passStamp!.params, posted({ cwd: repoDir, request: { sha, verdict: "PASS", state: "success" }, pr: null, account: null }));
-      ledger.onActionFailed(passStamp!, "gh: Server Error (HTTP 502)");
-      expect(graphNow(graph.id).nodes[1]!.artifact).toMatchObject({ reviewVerdict: "FAIL", reviewStamp: { kind: "posted", state: "failure" } });
-    });
-
-    it("先 FAIL 后改判 PASS：旧的 FAIL 盖章重试时不调 gh、不覆盖新结论的 reviewStamp", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha, questions: "- [Important] a.ts:1 越界" }));
-      const [failStamp] = enqueuedStamps();
-      ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "再看一遍" });
-      await reportTurn(wReview, report({ summary: "看错了", verdict: "PASS", sha }));
-      await runVerify();
-      const passStamp = enqueuedStamps().at(-1)!;
-      expect(passStamp.params.verdict).toBe("PASS");
-      expect((await runStamp(passStamp, posted)).map((i) => i.request.state)).toEqual(["success"]);
-      expect(await runStamp(failStamp!, posted)).toEqual([]);
-      ledger.onActionFailed(failStamp!, "gh: Server Error (HTTP 502)");
-      expect(graphNow(graph.id).nodes[1]!.artifact).toMatchObject({ reviewVerdict: "PASS", reviewStamp: { kind: "posted", state: "success" } });
-    });
-
-    it("盖章在退避时 Worker 又开了新一轮：旧盖章作废，不调 gh", async () => {
-      const { wReview, sha } = await startReview({ confirm: true });
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
-      await runVerify();
-      const [stamp] = enqueuedStamps();
-      ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "再看一遍" });
-      const s = sessionOf(wReview);
-      ledger.applyDriverEvent(s.id, { type: "agent.text", uuid: `u-${wReview}-mid`, text: "在重看 a.ts", at: ++now });
-      await ledger.settleDriverEvents();
-      expect(await runStamp(stamp!, posted)).toEqual([]);
-    });
-
-    it("换人接手后，旧 Worker 的盖章重试取不到任务、不调 gh，重试用完也不记", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha }));
-      const [stamp] = enqueuedStamps();
-      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview });
-      const next = ledger.hubCall(lin.sessionId, "worker.start", { node: "review", graphId: graph.id }).data.worker.id;
-      expect(next).not.toBe(wReview);
-      expect(ledger.getReviewStampTask(stamp!.params)).toBeNull();
-      expect(await runStamp(stamp!, posted)).toEqual([]);
-      ledger.onActionFailed(stamp!, "gh: Server Error (HTTP 502)");
-      expect(graphNow(graph.id).nodes[1]!.artifact?.reviewStamp).toBeUndefined();
-    });
-
-    it("review.stamp 重试用完后 actionFailedIn 记一条 skipped，原因是最后的错误，任务图不受影响", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ status: "有问题", summary: "x", verdict: "FAIL", sha }));
-      const before = graphNow(graph.id).nodes.map(stateOf);
-      const [stamp] = enqueuedStamps();
-      enqueued.length = 0;
-      ledger.onActionFailed(stamp!, "gh: Server Error (HTTP 502)");
-      const node = graphNow(graph.id).nodes[1]!;
-      expect(node.artifact?.reviewStamp).toMatchObject({ kind: "skipped", sha });
-      expect(node.artifact?.reviewStamp?.kind === "skipped" && node.artifact.reviewStamp.reason).toContain("HTTP 502");
-      expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(before);
-      expect(pmTexts()).toEqual([]);
-    });
-
-    it("交付单和 hub graph show 的步骤行写明提交状态已挂，或没挂和原因", async () => {
-      const { graph, wReview, sha } = await startReview();
-      await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
-      await runVerify();
-      const [stamp] = stampRows();
-      await runStamp(actionOf("review.stamp", stamp!.params), posted);
-      expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).toContain("提交状态已挂（bellwood/review success）");
-      const docsWorker = graphNow(graph.id).nodes[2]!.activeWorkerId!;
-      await runWorktreeCreate(docsWorker);
-      enqueued.length = 0;
-      await reportTurn(docsWorker, report({ summary: "写好了" }));
-      expect(pmTexts().find((t) => t.includes("全部步骤做完"))).toContain("提交状态已挂（bellwood/review success）");
-      await runStamp(actionOf("review.stamp", stamp!.params), (input) => ({ kind: "skipped", sha: input.request.sha, reason: "本机没装 gh", at: now }));
-      expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).toContain("提交状态没挂：本机没装 gh");
-    });
   });
 });

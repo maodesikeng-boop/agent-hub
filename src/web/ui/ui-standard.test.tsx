@@ -4,7 +4,7 @@ import { userEvent } from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { SCROLLBAR_IDLE_HIDE_MS } from "../../shared/limits.ts";
+import { SCROLLBAR_IDLE_HIDE_MS } from "../limits.ts";
 import { useAutoHideScrollbars } from "../useAutoHideScrollbars.ts";
 import { Button } from "./button.tsx";
 import { Drawer, DrawerContent, DrawerTitle } from "./drawer.tsx";

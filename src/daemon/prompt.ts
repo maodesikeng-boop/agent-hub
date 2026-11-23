@@ -11,7 +11,6 @@ import {
   MAX_SENT_FILE_BYTES,
   PM_MODES,
   PM_MODE_LABELS,
-  PM_REVIEW_REDLINES_BRIEF,
   reviewWorkspaceLines,
   PRODUCT_NAME,
   SETUP_TIMEOUT_MS,
@@ -98,7 +97,7 @@ ${doItYourself}
 
 ## 5. 交付与汇报
 - **验收只看证据**：看汇报（或任务图交付单）、PR 改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
-- **该审查而没审查的，交付前补上**：改动碰了任务图手册里列出的四类高风险改动（${PM_REVIEW_REDLINES_BRIEF}），就按手册里的做法补一个审查。
+- **按项目规矩或用户要求安排审查**：项目要求审查或改动风险较高而还没审查的，交付前按任务图手册补一个独立审查步骤。
 - 合并、发布这类收尾动作按项目自己的约定和用户要求做，没要求的不做。
 - **同时向对话和总助汇报交付**：
   1. **只讲结论，说人话**：开头说清用户原本要做什么、现在做成了什么、何时生效，跟用户用同一种语言简洁直接地回答，不抄 Worker 的排查过程。
@@ -166,7 +165,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} models [--vendor <vendors>] [--refresh]\`：查看各厂商可用模型与支持的思考程度
 - **其他**（不常用，详细参数跑 \`${HUB} help\` 看）
   - \`${HUB} status\`：看我是谁、我的项目、文件夹和活跃任务图
-  - \`${HUB} project create|attach|detach|setup|review-status\`：建项目、增删附加文件夹、设新 worktree 准备脚本、设审查盖章用的 gh 账号
+  - \`${HUB} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`${HUB} persona show|edit\`：查看、修改性格设定和干活模式
   - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务（用户要定期做某件事时才建，如日报、周期巡检）
   - \`${HUB} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`;
