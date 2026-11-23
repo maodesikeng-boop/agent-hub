@@ -28,8 +28,6 @@ import { feishuActionDevice } from "./cards.ts";
 import type { FeishuCardActionResponse, FeishuRawCardAction, FeishuRawEvent } from "./transport.ts";
 
 export const PEER_FEISHU_INBOUND_PATH = "/api/peer/feishu/inbound";
-export const PEER_FEISHU_CHATS_PATH = "/api/peer/feishu/chats";
-export const PEER_FEISHU_APP_PATH = "/api/peer/feishu/app";
 
 const MARKER_SCAN = /(?:^|\s)fusa:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):pm:([1-9]\d*)(?=$|\s)/g;
 const EXPIRY_CHECK_INTERVAL_MS = 10 * 60_000;

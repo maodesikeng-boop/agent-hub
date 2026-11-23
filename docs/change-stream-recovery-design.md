@@ -1,5 +1,7 @@
 # Event stream recovery across daemon restarts
 
+> Snapshot: 2026-11-21 (commit `8bd3f956`)
+
 ## For the user
 
 ### Files to review

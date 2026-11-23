@@ -92,9 +92,10 @@ describe(".github/workflows", () => {
     }
   });
 
-  it("run the full suite on an unchanged main every night at 23:00 Beijing time without cancelling", () => {
+  it("run the full suite on an unchanged main every night at 22:17 Beijing time (off the top of the hour) without cancelling", () => {
     const nightly = workflow("nightly.yml");
-    expect(nightly.on.schedule).toEqual([{ cron: "0 15 * * *" }]);
+    expect(nightly.on.schedule).toEqual([{ cron: "17 14 * * *" }]);
+    expect(nightly.on.schedule?.[0]?.cron.startsWith("0 ")).toBe(false);
     expect(nightly.concurrency).toBeUndefined();
     const reused = Object.values(nightly.jobs).flatMap((job) => (job.uses ? [job.uses] : []));
     expect(reused.sort()).toEqual(["./.github/workflows/check.yml", "./.github/workflows/macos.yml", "./.github/workflows/windows.yml"]);
@@ -106,6 +107,23 @@ describe(".github/workflows", () => {
     expect(pr?.branches).toEqual(["main"]);
     expect(pr?.paths).toBeUndefined();
     expect(pr?.["paths-ignore"]).toBeUndefined();
+  });
+
+  it("run pnpm verify and knip in check.yml on every pull request without artifact collisions in release.yml", () => {
+    const check = workflow("check.yml");
+    const verifyJob = check.jobs["verify-smoke"];
+    expect(verifyJob).toBeDefined();
+    expect(verifyJob!.if).toBeUndefined();
+    expect(verifyJob!.steps?.some((step) => step.run?.startsWith("pnpm verify"))).toBe(true);
+    const verifyArtifacts = (verifyJob!.steps ?? [])
+      .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
+      .map((step) => step.with?.name);
+    const releaseSmokeArtifacts = (workflow("release.yml").jobs.smoke?.steps ?? [])
+      .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
+      .map((step) => step.with?.name);
+    for (const name of verifyArtifacts) expect(releaseSmokeArtifacts).not.toContain(name);
+    const knipRuns = Object.values(check.jobs).flatMap((job) => (job.steps ?? []).filter((step) => step.run?.startsWith("pnpm exec knip")));
+    expect(knipRuns.length).toBeGreaterThan(0);
   });
 
   it.each(["mac-desktop.yml", "windows-desktop.yml"])("%s rebuilds on main for every staged runtime input", (name) => {

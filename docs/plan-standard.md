@@ -4,7 +4,7 @@ Follow this standard whenever a task asks for a design plan. A planning step del
 
 ## Design document
 
-Write `docs/<topic>-design.md` in plain English following `.agents/skills/technical-writing/SKILL.md` and `.agents/skills/unslop/SKILL.md`. Keep every section below in order; write `None` when a section does not apply.
+Write `docs/<topic>-design.md` in plain English following `.agents/skills/technical-writing/SKILL.md` and `.agents/skills/unslop/SKILL.md`. Directly under `# <Title>`, record the snapshot date and git commit (`> Snapshot: YYYY-MM-DD (commit \`<sha>\`)`) so readers can see at a glance which codebase state the document describes (`src/docs-guard.test.ts` enforces this line and `docs/README.md` indexing). Keep every section below in order; write `None` when a section does not apply.
 
 ### For the user
 

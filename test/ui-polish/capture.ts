@@ -352,5 +352,3 @@ function currentCommit(repoRoot: string): string {
   const head = git("rev-parse", "HEAD");
   return git("status", "--porcelain").length > 0 ? `${head}+dirty` : head;
 }
-
-export const readManifest = (outDir: string): CaptureManifest => JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf8")) as CaptureManifest;

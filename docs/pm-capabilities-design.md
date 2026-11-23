@@ -1,5 +1,7 @@
 # External capabilities for the Router, PMs, and Workers
 
+> Snapshot: 2026-11-20 (commit `6b74d9e2`)
+
 Every agent session keeps its built-in hands: file reads and writes, the terminal, and the `hub` CLI. `--readonly` and the OS sandbox govern those, and nothing in this document widens them. The capability model covers only the external extras that cost context on every turn: skills, MCP servers, and vendor account connectors.
 
 One model serves every scope. Project defaults and the Router own a stored policy. Each project (PM) inherits Project defaults and stores only its own choices on top. A Worker owns no policy of its own; it picks one of three modes that narrow its project's effective policy.

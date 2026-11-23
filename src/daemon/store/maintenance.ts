@@ -8,7 +8,6 @@ const pragmaNumber = (db: Db, name: string): number => Number(Object.values(db.g
 
 export const autoVacuumMode = (db: Db): number => pragmaNumber(db, "auto_vacuum");
 export const freePages = (db: Db): number => pragmaNumber(db, "freelist_count");
-export const totalPages = (db: Db): number => pragmaNumber(db, "page_count");
 
 export interface EnsureIncrementalOptions {
   backup?: boolean;

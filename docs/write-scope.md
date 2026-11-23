@@ -1,5 +1,7 @@
 # Worker write and read scope
 
+> Snapshot: 2026-11-20 (commit `e8ed3389`)
+
 Every Worker runs inside a native OS sandbox that restricts writes inside protected roots and restricts reads across Bellwood's data directory (`~/.agent-hub` by default). Project Managers run unsandboxed (`workerWriteScope` returns `null` when `role !== "worker"`).
 
 - **Vendor-neutral scope definition**: `src/shared/write-scope.ts` builds `WriteScope` (`dataDir`, `protectedRoots`, `writableDirs`, and `readScope`) and attaches it to `LaunchFiles.writeScope`.

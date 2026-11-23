@@ -25,8 +25,6 @@ export interface SentFilesOptions {
   tmpDirs: string[];
 }
 
-export type LedgerSentFiles = ReturnType<typeof createLedgerSentFiles>;
-
 export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
   const ioSlots = createSentFileIoSlots();
   const projectOf = (session: AgentSessionRow): number | null => {

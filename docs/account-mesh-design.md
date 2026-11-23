@@ -1,5 +1,7 @@
 # Account mesh and E2EE relay
 
+> Snapshot: 2026-11-23 (commit `4b1fb2e2`)
+
 Bellwood links a user's macOS, Windows, and Linux computers into a private peer-to-peer mesh without public IPs, SSH tunnels, port forwarding, or third-party VPN clients (`src/daemon/mesh/`, `src/daemon/peers/`, `src/mesh/`, and `src/relay/`). Phones interact with every linked computer through a single account-wide Feishu bot ([Feishu integration](feishu-design.md)).
 
 ## Identity, GitHub login, and six-digit SAS trust

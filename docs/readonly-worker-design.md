@@ -1,5 +1,7 @@
 # Read-only Worker design
 
+> Snapshot: 2026-11-20 (commit `e8ed3389`)
+
 Read-only Workers power independent code reviews (`review: true` Task Graph steps) and `hub worker start --readonly`. A read-only Worker can read project files and run shell commands (`pnpm typecheck`, targeted `vitest` runs, `pnpm verify`, and `git diff`), cannot write anywhere except a private per-session temp directory and minimal vendor runtime state, cannot read user credentials or Bellwood's `state/` and `backups/` directories, and can call only read-only MCP connector tools.
 
 ## Vendor-neutral policy (`src/shared/readonly-policy.ts`)

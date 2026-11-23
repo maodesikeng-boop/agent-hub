@@ -10,11 +10,11 @@ import {
 } from "../../shared/index.ts";
 import { agyCapabilityDenyRules } from "./capabilities.ts";
 import { agyReadonlySettings, type AgyConnectorRules } from "./readonly.ts";
-import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "../../daemon/driver/protocol.ts";
+import { buildChildEnv, lineUuid, userContent } from "../../daemon/driver/protocol.ts";
 import type { TurnUsage } from "../../daemon/driver/usage.ts";
 import { runPs } from "../../daemon/driver/process.ts";
 
-export { buildChildEnv, mergeUserTexts };
+export { buildChildEnv };
 
 export const AGY_STREAM_ARGS: readonly string[] = ["--input-format", "stream-json", "--output-format", "stream-json"];
 const AGY_AUTO_PERMISSION_ARGS: readonly string[] = ["--mode", "auto", "--dangerously-skip-permissions"];

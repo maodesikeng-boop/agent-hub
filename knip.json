@@ -1,4 +1,41 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["{index,cli,main}.{js,mjs,cjs,jsx,ts,tsx,mts,cts}", "src/{index,cli,main}.{js,mjs,cjs,jsx,ts,tsx,mts,cts}", "src/vendors/*/{daemon,paths}.ts", "scripts/*.ts", "src/web/bench/*.tsx"]
+  "entry": [
+    "src/hub/main.ts",
+    "src/feishu/main.ts",
+    "src/mesh/main.ts",
+    "src/web/sw.ts",
+    "src/vendors/*/{daemon,paths}.ts",
+    "scripts/*.ts",
+    "src/web/bench/*.tsx",
+    "test/smoke/{main,auto-renew,multi-vendor,skill-carryover}.ts",
+    "test/eval/{cli,run.eval}.ts",
+    "test/eval/fakes/{gh,record}.ts",
+    "vitest.eval.config.ts",
+    "test/fake-devices/main.ts"
+  ],
+  "ignore": [
+    ".agents/**",
+    "experiments/**",
+    "apps/windows/crates/fusa-desktop/ui/**"
+  ],
+  "ignoreDependencies": [
+    "@tauri-apps/cli"
+  ],
+  "ignoreBinaries": [
+    "tar\\.exe",
+    "reg\\.exe",
+    "where\\.exe",
+    "taskkill\\.exe",
+    "subst\\.exe",
+    "pwsh\\.exe",
+    "mkfifo",
+    "codex",
+    "pi",
+    "pi-bridge"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "exclude": [
+    "duplicates"
+  ]
 }

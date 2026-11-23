@@ -1,5 +1,7 @@
 # Resource lifecycle design
 
+> Snapshot: 2026-11-22 (commit `2eb1332c`)
+
 ## For the user
 
 ### Files to review

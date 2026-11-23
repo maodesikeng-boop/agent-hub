@@ -482,7 +482,7 @@ export function calibrationReport(input: {
 
 /**
  * 校准时每档批大小各有一份报告：返回过了门槛的最大一档；都没过返回 null。
- * 用了较小一档时，一次评审的 Worker 会超过 JUDGE_MAX_WORKERS_PER_REVIEW，照 judgeWaves 分波次串行跑。
+ * 用了较小一档时，一次评审的 Worker 会超过 10 个，照 judgeWaves 分波次串行跑。
  */
 export function pickBatchSize(reports: ReadonlyMap<number, CalibrationReport>): number | null {
   let best: number | null = null;

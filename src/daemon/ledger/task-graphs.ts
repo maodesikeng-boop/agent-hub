@@ -32,7 +32,6 @@ import {
   workerGraphStatus,
 } from "./task-graphs/worker-hooks.ts";
 
-export { validateDagAndOrder } from "./task-graphs/spec.ts";
 export type { StepWorkspacePlan, TaskGraphWorkersBridge, WorkerBindTarget } from "./task-graphs/types.ts";
 
 export type LedgerTaskGraphs = ReturnType<typeof createLedgerTaskGraphs>;

@@ -23,7 +23,7 @@ import type { UiServerOptions } from "./types.ts";
 
 export { ROOT_DIR } from "./context.ts";
 export { DESKTOP_PRODUCT, DESKTOP_PROTOCOL_VERSION } from "./types.ts";
-export type { DesktopAuthStatusResponse, DesktopHealthResponse, UiServerOptions } from "./types.ts";
+export type { UiServerOptions } from "./types.ts";
 
 export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const c = createUiCtx(opts);
