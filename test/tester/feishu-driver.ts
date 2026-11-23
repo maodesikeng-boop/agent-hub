@@ -353,7 +353,10 @@ export function isRecalled(message: Pick<FeishuMessage, "deleted" | "content">):
 }
 
 function collectText(node: unknown, out: string[]): void {
-  if (Array.isArray(node)) return void node.forEach((n) => collectText(n, out));
+  if (Array.isArray(node)) {
+    for (const n of node) collectText(n, out);
+    return;
+  }
   if (node === null || typeof node !== "object") return;
   for (const [key, value] of Object.entries(node)) {
     if ((key === "content" || key === "text") && typeof value === "string") out.push(value);
