@@ -18,6 +18,7 @@
 
 <!-- Real commands and their results. -->
 
+- [ ] `pnpm lint`
 - [ ] `pnpm typecheck`
 - [ ] `pnpm test:related`
 - [ ] `pnpm verify`

@@ -78,13 +78,13 @@ describe("workerPickRows：第 2 级思考程度", () => {
     expect(rows?.level).toBe("effort");
     expect(rows?.items).toEqual([
       { id: "worker:effort:default", label: "Default", detail: "", insert: WORKER_PICK_DEFAULT },
-      { id: "worker:effort:low", label: "low", detail: "", insert: "low" },
-      { id: "worker:effort:high", label: "high", detail: "", insert: "high" },
+      { id: "worker:effort:low", label: "Low", detail: "", insert: "low" },
+      { id: "worker:effort:high", label: "High", detail: "", insert: "high" },
     ]);
   });
 
   it("模型选 Default：用默认模型支持的档位", () => {
-    expect(labels(workerPickRows(CATALOGS, ["claude", WORKER_PICK_DEFAULT], ""))).toEqual(["Default", "low", "medium", "high"]);
+    expect(labels(workerPickRows(CATALOGS, ["claude", WORKER_PICK_DEFAULT], ""))).toEqual(["Default", "Low", "Medium", "High"]);
   });
 
   it("只有一档或没有档位：跳过这一级", () => {
@@ -97,7 +97,7 @@ describe("workerPickRows：第 2 级思考程度", () => {
   });
 
   it("筛选", () => {
-    expect(labels(workerPickRows(CATALOGS, ["claude", "opus"], "hi"))).toEqual(["high"]);
+    expect(labels(workerPickRows(CATALOGS, ["claude", "opus"], "hi"))).toEqual(["High"]);
     expect(labels(workerPickRows(CATALOGS, ["claude", "opus"], "zzz"))).toEqual([]);
   });
 
@@ -130,6 +130,7 @@ describe("workerPickRows：引用稳定（WeakMap 按 catalogs 数组缓存）",
 describe("workerPickFromArgs", () => {
   it("文字里的 id 换成 WorkerPick：default 和没选到的级是 null；第一级不是认识的厂商返回 null", () => {
     expect(workerPickFromArgs(["claude", "opus", "high"])).toEqual({ vendor: "claude", model: "opus", effort: "high" });
+    expect(workerPickFromArgs(["claude", "opus", "Extra"], CATALOGS)).toEqual({ vendor: "claude", model: "opus", effort: "xhigh" });
     expect(workerPickFromArgs(["claude", WORKER_PICK_DEFAULT, WORKER_PICK_DEFAULT])).toEqual({ vendor: "claude", model: null, effort: null });
     expect(workerPickFromArgs(["claude", "haiku"])).toEqual({ vendor: "claude", model: "haiku", effort: null });
     expect(workerPickFromArgs(["nope", "x"])).toBeNull();
@@ -137,9 +138,9 @@ describe("workerPickFromArgs", () => {
 });
 
 describe("workerPickLabels", () => {
-  it("厂商名、模型显示名、档位原样；Default 的项不显示", () => {
-    expect(workerPickLabels({ vendor: "claude", model: "opus", effort: "high" }, CATALOGS)).toEqual(["Claude Code", "Opus", "high"]);
-    expect(workerPickLabels({ vendor: "claude", model: null, effort: "high" }, CATALOGS)).toEqual(["Claude Code", "high"]);
+  it("厂商名、模型显示名、档位显示名；Default 的项不显示", () => {
+    expect(workerPickLabels({ vendor: "claude", model: "opus", effort: "high" }, CATALOGS)).toEqual(["Claude Code", "Opus", "High"]);
+    expect(workerPickLabels({ vendor: "claude", model: null, effort: "xhigh" }, CATALOGS)).toEqual(["Claude Code", "Extra"]);
     expect(workerPickLabels({ vendor: "claude", model: null, effort: null }, CATALOGS)).toEqual(["Claude Code"]);
   });
 

@@ -1,9 +1,9 @@
+use crate::contract::DesktopContract;
+use crate::error::SupervisorError;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::Read;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
-use crate::contract::DesktopContract;
-use crate::error::SupervisorError;
 
 // Never log, serialize, put in a URL or expose to the frontend.
 #[derive(Clone, PartialEq, Eq)]
@@ -232,7 +232,10 @@ pub fn parse_status_http_response(
     })
 }
 
-pub fn parse_set_cookie_header(header_val: &str, expected_port: u16) -> Result<SessionCookie, SupervisorError> {
+pub fn parse_set_cookie_header(
+    header_val: &str,
+    expected_port: u16,
+) -> Result<SessionCookie, SupervisorError> {
     let mut segments = header_val.split(';').map(str::trim);
     let Some(first) = segments.next() else {
         return Err(SupervisorError::AuthExchangeFailed(
@@ -375,7 +378,12 @@ impl HostHttpClient for UreqHostHttpClient {
         }
 
         let mut body = Vec::with_capacity(512);
-        if let Err(err) = resp.into_body().into_reader().take(65_536).read_to_end(&mut body) {
+        if let Err(err) = resp
+            .into_body()
+            .into_reader()
+            .take(65_536)
+            .read_to_end(&mut body)
+        {
             return ProbeOutcome::Failed(ProbeFailureKind::Unreachable {
                 reason: err.to_string(),
             });

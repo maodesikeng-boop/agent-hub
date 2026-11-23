@@ -50,6 +50,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 deepseek-v4-pro",
     efforts: EFFORTS,
+    effortLabels: { off: "Off", low: "Low", high: "High", max: "Max" },
     routerDefault: { model: "deepseek-flash", effort: "off" },
     shortName: (rawModel) => {
       const bare = unwrapTupleModel(rawModel);

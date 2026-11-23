@@ -3,6 +3,7 @@ import { cn } from "../lib/utils.ts";
 import {
   CUSTOM_MODEL,
   checkModel,
+  effortLabel,
   effortsFor,
   modelChoiceOf,
   splitModelEffort,
@@ -27,12 +28,12 @@ export interface AgentDraft {
 
 export type AgentRowKey = "vendor" | "model" | "effort";
 
-export function draftOf(setting: AgentSetting): AgentDraft {
-  const { model, effort } = splitModelEffort(setting.vendor, setting.model, setting.effort);
+export function draftOf(setting: AgentSetting, catalog?: ModelCatalog | null): AgentDraft {
+  const { model, effort } = splitModelEffort(setting.vendor, setting.model, setting.effort, catalog);
   return { vendor: setting.vendor, modelChoice: modelChoiceOf(model), customModel: "", effort: effort ?? "" };
 }
 
-export function settingOf(draft: AgentDraft): { ok: true; setting: AgentSetting } | { ok: false; error: string | null } {
+export function settingOf(draft: AgentDraft, catalog?: ModelCatalog | null): { ok: true; setting: AgentSetting } | { ok: false; error: string | null } {
   let model: string | null = draft.modelChoice === "" ? null : draft.modelChoice;
   if (draft.modelChoice === CUSTOM_MODEL) {
     model = draft.customModel.trim();
@@ -40,7 +41,7 @@ export function settingOf(draft: AgentDraft): { ok: true; setting: AgentSetting 
     const problem = checkModel(draft.vendor, model);
     if (problem !== null) return { ok: false, error: problem };
   }
-  return { ok: true, setting: { vendor: draft.vendor, ...splitModelEffort(draft.vendor, model, draft.effort === "" ? null : draft.effort) } };
+  return { ok: true, setting: { vendor: draft.vendor, ...splitModelEffort(draft.vendor, model, draft.effort === "" ? null : draft.effort, catalog) } };
 }
 
 function modelOf(draft: AgentDraft): string | null {
@@ -197,10 +198,12 @@ export function AgentRows({
               <option value="">{DEFAULT_CHOICE}</option>
               {efforts.map((e) => (
                 <option key={e} value={e}>
-                  {e}
+                  {effortLabel(e, value.vendor, catalog)}
                 </option>
               ))}
-              {value.effort !== "" && !efforts.includes(value.effort) && <option value={value.effort}>{value.effort}</option>}
+              {value.effort !== "" && !efforts.includes(value.effort) && (
+                <option value={value.effort}>{effortLabel(value.effort, value.vendor, catalog)}</option>
+              )}
             </Select>
           )}
         </SettingsRow>

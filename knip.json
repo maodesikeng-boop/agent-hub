@@ -20,7 +20,9 @@
     "apps/windows/crates/fusa-desktop/ui/**"
   ],
   "ignoreDependencies": [
-    "@tauri-apps/cli"
+    "@tauri-apps/cli",
+    "oxlint",
+    "oxlint-tsgolint"
   ],
   "ignoreBinaries": [
     "tar\\.exe",

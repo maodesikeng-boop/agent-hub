@@ -204,7 +204,11 @@ impl NativeRuntimeConfig {
             exe
         } else {
             let plain = self.win_helpers_dir.join("fusa-run");
-            if plain.is_file() { plain } else { exe }
+            if plain.is_file() {
+                plain
+            } else {
+                exe
+            }
         }
     }
 
@@ -214,7 +218,11 @@ impl NativeRuntimeConfig {
             exe
         } else {
             let plain = self.win_helpers_dir.join("hub");
-            if plain.is_file() { plain } else { exe }
+            if plain.is_file() {
+                plain
+            } else {
+                exe
+            }
         }
     }
 }
@@ -311,7 +319,7 @@ impl NativeDaemonRuntime {
             if stream.write_all(&wire).is_err() || stream.flush().is_err() {
                 return false;
             }
-            return matches!(read_http_response(stream), Ok((200, _)));
+            matches!(read_http_response(stream), Ok((200, _)))
         }
 
         #[cfg(unix)]
@@ -478,11 +486,10 @@ impl DaemonRuntime for NativeDaemonRuntime {
 
         #[cfg(windows)]
         let job_arc = {
+            use fusa_win_helper::win::job::SessionJob;
             use std::os::windows::io::AsRawHandle;
-            let maybe_job = fusa_win_helper::win::job::SessionJob::create(false)
-                .ok()
-                .and_then(|job| job.assign(child.as_raw_handle()).ok().map(|()| job));
-            Arc::new(Mutex::new(maybe_job))
+            let ok = |j: &SessionJob| unsafe { j.assign(child.as_raw_handle()).is_ok() };
+            Arc::new(Mutex::new(SessionJob::create(false).ok().filter(ok)))
         };
 
         #[cfg(windows)]
@@ -539,39 +546,40 @@ impl DaemonRuntime for NativeDaemonRuntime {
         let wait_child = Arc::clone(&shared_child);
         let wait_exit_slot = Arc::clone(&exit_code_slot);
         thread::spawn(move || {
-            #[cfg(windows)]
-            wait_for_exit();
-            let exit_code = loop {
+            let poll_once = || -> Option<Option<i32>> {
                 if let Some(already) = *wait_exit_slot.lock().unwrap() {
-                    break already;
+                    return Some(already);
                 }
-                let polled = {
-                    let mut guard = wait_child.lock().unwrap();
-                    match guard.as_mut() {
-                        None => break (*wait_exit_slot.lock().unwrap()).flatten(),
-                        Some(c) => match c.try_wait() {
-                            Ok(Some(st)) => {
-                                let code = st.code();
-                                *guard = None;
-                                *wait_exit_slot.lock().unwrap() = Some(code);
-                                break code;
-                            }
-                            Ok(None) => None,
-                            Err(_) => {
-                                *guard = None;
-                                *wait_exit_slot.lock().unwrap() = Some(None);
-                                break None;
-                            }
-                        },
-                    }
-                };
-                if polled.is_some() {
-                    break polled;
+                let mut guard = wait_child.lock().unwrap();
+                match guard.as_mut() {
+                    None => Some((*wait_exit_slot.lock().unwrap()).flatten()),
+                    Some(c) => match c.try_wait() {
+                        Ok(Some(st)) => {
+                            let code = st.code();
+                            *guard = None;
+                            *wait_exit_slot.lock().unwrap() = Some(code);
+                            Some(code)
+                        }
+                        Ok(None) => None,
+                        Err(_) => {
+                            *guard = None;
+                            *wait_exit_slot.lock().unwrap() = Some(None);
+                            Some(None)
+                        }
+                    },
                 }
-                #[cfg(not(windows))]
+            };
+            #[cfg(windows)]
+            let exit_code = {
+                wait_for_exit();
+                poll_once().unwrap_or(None)
+            };
+            #[cfg(not(windows))]
+            let exit_code = loop {
+                if let Some(code) = poll_once() {
+                    break code;
+                }
                 thread::sleep(Duration::from_millis(40));
-                #[cfg(windows)]
-                break None;
             };
             if let Some(j) = stderr_join {
                 let _ = j.join();
@@ -1179,11 +1187,9 @@ where
                 "Graceful stop exceeded the budget; killing the owned process tree via Job run_id={}",
                 entry.run_id
             ));
-            let _ = self.runtime.signal_owned_daemon(
-                &entry.run_id,
-                OwnedSignal::Kill,
-                &self.contract,
-            );
+            let _ =
+                self.runtime
+                    .signal_owned_daemon(&entry.run_id, OwnedSignal::Kill, &self.contract);
             for _ in 0..5 {
                 if let Ok(st) = self.runtime.query_owned_status(&entry.run_id) {
                     if !st.any_alive() {
@@ -1495,7 +1501,10 @@ where
                     .lock()
                     .map(|t| t.summary_lines())
                     .unwrap_or_default();
-                let detail = format!("Timed out after {} s waiting for the daemon", budget_ms / 1000);
+                let detail = format!(
+                    "Timed out after {} s waiting for the daemon",
+                    budget_ms / 1000
+                );
                 self.update_state_and_notify(|g| {
                     g.ownership = DaemonOwnership::None;
                     g.state = SupervisorState::Faulted {
@@ -1540,9 +1549,7 @@ where
 
         let taken = {
             let mut g = self.inner.lock().unwrap();
-            if g.shutdown_requested
-                || !g.auto_restart_enabled
-                || g.restart_generation != generation
+            if g.shutdown_requested || !g.auto_restart_enabled || g.restart_generation != generation
             {
                 return;
             }
@@ -1586,7 +1593,9 @@ where
             g.restart_generation = g.restart_generation.wrapping_add(1);
             g.restart_generation
         };
-        self.log_supervisor_event("Owned daemon requested a hot restart after draining (exit code 75); respawning now");
+        self.log_supervisor_event(
+            "Owned daemon requested a hot restart after draining (exit code 75); respawning now",
+        );
         let sup = Arc::clone(self);
         thread::spawn(move || {
             if !sup.is_generation_active(next_gen) {

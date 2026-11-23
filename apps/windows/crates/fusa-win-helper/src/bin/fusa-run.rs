@@ -148,9 +148,14 @@ fn main() {
                 let res = inspect::inspect_process(pid);
                 println!(
                     "{}",
-                    serde_json::to_string(&res).unwrap_or_else(|_| r#"{"alive":false}"#.to_string())
+                    serde_json::to_string(&res)
+                        .unwrap_or_else(|_| r#"{"alive":false}"#.to_string())
                 );
-                if res.alive { 0 } else { 1 }
+                if res.alive {
+                    0
+                } else {
+                    1
+                }
             }
             FusaRunCommand::WhoLocks { path } => match locks::query_who_locks(&path) {
                 Ok(res) => {

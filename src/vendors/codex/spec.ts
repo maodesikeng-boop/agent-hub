@@ -37,6 +37,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 gpt-6.1-sol",
     efforts: EFFORTS,
+    effortLabels: { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra" },
     routerDefault: { model: "gpt-6-luna", effort: "low" },
     flags: { model: "--model", effort: "-c" },
     shortName: (model) => {

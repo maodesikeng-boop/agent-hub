@@ -66,7 +66,9 @@ impl SessionJob {
         Ok(Self { handle })
     }
 
-    pub fn assign(&self, process: HANDLE) -> io::Result<()> {
+    /// # Safety
+    /// `process` must be a valid open process handle with `PROCESS_SET_QUOTA` and `PROCESS_TERMINATE` rights.
+    pub unsafe fn assign(&self, process: HANDLE) -> io::Result<()> {
         let ok = unsafe { AssignProcessToJobObject(self.handle.0, process) };
         if ok == 0 {
             return Err(last_os_error("AssignProcessToJobObject"));

@@ -227,7 +227,7 @@ export function useComposerSuggest({
     }
     if (trigger.kind === "worker" && onPick) {
       const args = [...trigger.args, item.insert];
-      const pick = workerPickFromArgs(args);
+      const pick = workerPickFromArgs(args, catalogs);
       if (pick !== null && workerPickRows(catalogs, args, "") === null) {
         onPick(pick, removeLeadingCommand(value, trigger.end));
         return;

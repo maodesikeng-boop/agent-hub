@@ -68,7 +68,7 @@ import type {
   RouterSettings,
   RouterSlice,
 } from "../../shared/router.ts";
-import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, checkEffort, checkModel, isAgentVendor } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, checkEffort, checkModel, isAgentVendor, normalizeEffortInput } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -616,10 +616,11 @@ export function createLedgerRouter(
         }
         vendor = input.vendor;
       }
+      const catalog = vendor === null ? null : ctx.modelCatalog(vendor);
       const model = vendor === null ? null : typeof input.model === "string" ? input.model.trim() || null : null;
-      const effort = vendor === null ? null : typeof input.effort === "string" ? input.effort.trim() || null : null;
+      const effort =
+        vendor === null ? null : normalizeEffortInput(vendor, typeof input.effort === "string" ? input.effort.trim() || null : null, catalog);
       if (vendor !== null) {
-        const catalog = ctx.modelCatalog(vendor);
         const bad = checkModel(vendor, model) ?? checkEffort(vendor, effort, catalog);
         if (bad !== null) throw fail("invalid", bad);
       }

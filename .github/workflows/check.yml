@@ -62,6 +62,10 @@ jobs:
         if: matrix.shard == '1/4'
         run: pnpm typecheck
 
+      - name: Lint
+        if: matrix.shard == '1/4'
+        run: pnpm lint
+
       - name: Dead code check (knip)
         if: matrix.shard == '1/4'
         run: pnpm exec knip --treat-config-hints-as-errors

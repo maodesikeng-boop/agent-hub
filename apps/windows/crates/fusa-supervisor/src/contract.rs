@@ -1,8 +1,8 @@
+use crate::error::SupervisorError;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
-use crate::error::SupervisorError;
 
 pub const EMBEDDED_DESKTOP_CONTRACT_JSON: &str =
     include_str!("../../../../../apps/desktop/contract.json");

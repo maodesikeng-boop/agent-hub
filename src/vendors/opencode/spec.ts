@@ -65,6 +65,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 anthropic/claude-sonnet-5-5",
     efforts: EFFORTS,
+    effortLabels: { default: "Default", none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Xhigh", max: "Max" },
     routerDefault: { model: "opencode/big-pickle", effort: "default" },
     shortName: shortOpenCodeModelName,
   },

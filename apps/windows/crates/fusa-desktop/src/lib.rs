@@ -138,8 +138,11 @@ fn inject_cookie_and_navigate_to_daemon<R: tauri::Runtime>(
     controller: &DesktopController,
 ) -> Result<(), String> {
     sync_session_cookie_to_webview(window, controller)?;
-    let target_url = Url::parse(&format!("http://127.0.0.1:{}/", controller.supervisor.port()))
-        .map_err(|e| e.to_string())?;
+    let target_url = Url::parse(&format!(
+        "http://127.0.0.1:{}/",
+        controller.supervisor.port()
+    ))
+    .map_err(|e| e.to_string())?;
     window
         .navigate(target_url)
         .map_err(|e| format!("Failed to open the local workbench: {e}"))?;
@@ -228,10 +231,9 @@ pub fn run() {
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
-            let bridge = Arc::new(DesktopDialogBridge::start(
-                app_handle.clone(),
-                |h| show_and_focus_main_window(h),
-            )?);
+            let bridge = Arc::new(DesktopDialogBridge::start(app_handle.clone(), |h| {
+                show_and_focus_main_window(h)
+            })?);
             app.manage(Arc::clone(&bridge));
 
             let extra_envs = vec![
@@ -247,8 +249,7 @@ pub fn run() {
             )
             .map_err(std::io::Error::other)?;
 
-            let controller =
-                DesktopController::new(runtime_cfg).map_err(std::io::Error::other)?;
+            let controller = DesktopController::new(runtime_cfg).map_err(std::io::Error::other)?;
             app.manage(Arc::clone(&controller));
 
             let daemon_port = controller.supervisor.port();
@@ -263,14 +264,15 @@ pub fn run() {
             .inner_size(1180.0, 780.0)
             .min_inner_size(800.0, 560.0)
             .center()
-            .on_navigation(move |target_url| match classify_navigation_url(target_url, daemon_port)
-            {
-                NavigationDecision::AllowInApp => true,
-                NavigationDecision::OpenExternalBrowser => {
-                    open_external_url_with_app(&app_for_nav_ext, target_url);
-                    false
+            .on_navigation(move |target_url| {
+                match classify_navigation_url(target_url, daemon_port) {
+                    NavigationDecision::AllowInApp => true,
+                    NavigationDecision::OpenExternalBrowser => {
+                        open_external_url_with_app(&app_for_nav_ext, target_url);
+                        false
+                    }
+                    NavigationDecision::Block => false,
                 }
-                NavigationDecision::Block => false,
             })
             .on_new_window(move |target_url, _features| {
                 if classify_new_window_url(&target_url) == NavigationDecision::OpenExternalBrowser {
@@ -422,7 +424,9 @@ mod tests {
 
     #[test]
     fn local_dir_validation_rejects_unc_shares_and_accepts_local_volumes() {
-        assert!(platform::validate_local_dir(Path::new(r"C:\Users\alice\AppData\Local\Fusa")).is_ok());
+        assert!(
+            platform::validate_local_dir(Path::new(r"C:\Users\alice\AppData\Local\Fusa")).is_ok()
+        );
         assert!(platform::validate_local_dir(Path::new("/Users/alice/.agent-hub")).is_ok());
         assert!(platform::validate_local_dir(Path::new(r"\\fileserver\share\Fusa")).is_err());
         assert!(platform::validate_local_dir(Path::new(r"\\?\UNC\fileserver\share\Fusa")).is_err());
@@ -430,7 +434,8 @@ mod tests {
     }
 
     #[test]
-    fn main_frame_stays_on_bootstrap_and_daemon_shell_pages_and_sends_other_urls_to_system_browser() {
+    fn main_frame_stays_on_bootstrap_and_daemon_shell_pages_and_sends_other_urls_to_system_browser()
+    {
         let port = 4317u16;
 
         for internal in [
@@ -440,7 +445,10 @@ mod tests {
         ] {
             let u = Url::parse(internal).unwrap();
             assert!(is_embedded_bootstrap_origin(&u));
-            assert_eq!(classify_navigation_url(&u, port), NavigationDecision::AllowInApp);
+            assert_eq!(
+                classify_navigation_url(&u, port),
+                NavigationDecision::AllowInApp
+            );
         }
 
         for shell in [
@@ -453,7 +461,11 @@ mod tests {
         ] {
             let u = Url::parse(shell).unwrap();
             assert!(!is_embedded_bootstrap_origin(&u));
-            assert_eq!(classify_navigation_url(&u, port), NavigationDecision::AllowInApp, "{shell}");
+            assert_eq!(
+                classify_navigation_url(&u, port),
+                NavigationDecision::AllowInApp,
+                "{shell}"
+            );
         }
 
         for external in [
@@ -511,7 +523,11 @@ mod tests {
             "file:///C:/Windows/System32/calc.exe",
         ] {
             let u = Url::parse(blocked).unwrap();
-            assert_eq!(classify_new_window_url(&u), NavigationDecision::Block, "{blocked}");
+            assert_eq!(
+                classify_new_window_url(&u),
+                NavigationDecision::Block,
+                "{blocked}"
+            );
         }
     }
 
@@ -767,9 +783,13 @@ mod tests {
 
         let opt_resp = send_raw(b"OPTIONS /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         assert!(opt_resp.starts_with("HTTP/1.1 404"));
-        assert!(!opt_resp.to_ascii_lowercase().contains("access-control-allow-origin"));
+        assert!(!opt_resp
+            .to_ascii_lowercase()
+            .contains("access-control-allow-origin"));
 
-        let unauth = send_raw(b"POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}");
+        let unauth = send_raw(
+            b"POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}",
+        );
         assert!(unauth.starts_with("HTTP/1.1 401"));
         let upper_tok = bridge.token.to_ascii_uppercase();
         let case_tampered = format!(
@@ -892,7 +912,8 @@ mod tests {
                 "attempt {attempt}: reading the 413 response failed with {read_result:?}; got {resp:?}"
             );
             assert!(
-                resp.starts_with("HTTP/1.1 413") && resp.contains(r#"{"error":"payload_too_large"}"#),
+                resp.starts_with("HTTP/1.1 413")
+                    && resp.contains(r#"{"error":"payload_too_large"}"#),
                 "attempt {attempt}: expected a complete 413 response, got {resp:?}"
             );
         }
@@ -900,7 +921,8 @@ mod tests {
     }
 
     #[test]
-    fn dialog_bridge_413_linger_drain_bounds_stalled_and_flooding_clients_and_preserves_normal_200_path() {
+    fn dialog_bridge_413_linger_drain_bounds_stalled_and_flooding_clients_and_preserves_normal_200_path(
+    ) {
         use std::io::{Read, Write};
         use std::net::TcpStream;
         use std::time::{Duration, Instant};
@@ -936,7 +958,8 @@ mod tests {
             String::from_utf8_lossy(&buf).into_owned()
         }
 
-        let bridge = DesktopDialogBridge::start_with_handler(|_| Some(r"C:\Picked\Ok".to_string())).unwrap();
+        let bridge =
+            DesktopDialogBridge::start_with_handler(|_| Some(r"C:\Picked\Ok".to_string())).unwrap();
         let addr = bridge
             .url
             .strip_prefix("http://")
@@ -951,14 +974,18 @@ mod tests {
             bridge.token
         );
         let mut s_keep = TcpStream::connect(&addr).unwrap();
-        s_keep.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_keep
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         s_keep.write_all(ok_req.as_bytes()).unwrap();
         let first_ok = read_framed_http_response(&mut s_keep);
         assert!(first_ok.starts_with("HTTP/1.1 200"), "got {first_ok:?}");
 
         let t_normal = Instant::now();
         let mut s_second = TcpStream::connect(&addr).unwrap();
-        s_second.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_second
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         s_second.write_all(ok_req.as_bytes()).unwrap();
         let second_ok = read_framed_http_response(&mut s_second);
         let normal_elapsed = t_normal.elapsed();
@@ -974,22 +1001,32 @@ mod tests {
         drop(s_keep);
 
         let mut s_stalled = TcpStream::connect(&addr).unwrap();
-        s_stalled.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_stalled
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let big_head = format!(
             "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: 1000000\r\n\r\n",
             bridge.token
         );
         s_stalled.write_all(big_head.as_bytes()).unwrap();
         let stalled_resp = read_framed_http_response(&mut s_stalled);
-        assert!(stalled_resp.starts_with("HTTP/1.1 413"), "got {stalled_resp:?}");
+        assert!(
+            stalled_resp.starts_with("HTTP/1.1 413"),
+            "got {stalled_resp:?}"
+        );
 
         let t0 = Instant::now();
         let mut s_after_stall = TcpStream::connect(&addr).unwrap();
-        s_after_stall.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_after_stall
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         s_after_stall.write_all(ok_req.as_bytes()).unwrap();
         let after_stall_resp = read_framed_http_response(&mut s_after_stall);
         let stall_recovery = t0.elapsed();
-        assert!(after_stall_resp.starts_with("HTTP/1.1 200"), "got {after_stall_resp:?}");
+        assert!(
+            after_stall_resp.starts_with("HTTP/1.1 200"),
+            "got {after_stall_resp:?}"
+        );
         assert!(
             stall_recovery < Duration::from_secs(2),
             "accept loop took {stall_recovery:?} after stalled 413 client (expected ~500ms linger cap, not 5s read timeout)"
@@ -999,8 +1036,12 @@ mod tests {
 
         let total_flood: usize = 64 * 1024 * 1024;
         let mut s_flood = TcpStream::connect(&addr).unwrap();
-        s_flood.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        s_flood.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_flood
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        s_flood
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let flood_head = format!(
             "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: {total_flood}\r\n\r\n",
             bridge.token
@@ -1023,7 +1064,9 @@ mod tests {
         drop(s_flood);
 
         let mut s_after_flood = TcpStream::connect(&addr).unwrap();
-        s_after_flood.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_after_flood
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         s_after_flood.write_all(ok_req.as_bytes()).unwrap();
         assert!(read_framed_http_response(&mut s_after_flood).starts_with("HTTP/1.1 200"));
 
@@ -1034,7 +1077,8 @@ mod tests {
     fn normalize_hub_home_override_aligns_tilde_and_trailing_slashes_with_node() {
         let home = Path::new(r"C:\Users\Alice");
         let cwd = Path::new(r"D:\Work");
-        let p_tilde = platform::normalize_hub_home_override(r"~\.agent-hub\", Some(home), Some(cwd));
+        let p_tilde =
+            platform::normalize_hub_home_override(r"~\.agent-hub\", Some(home), Some(cwd));
         assert_eq!(
             fusa_supervisor::data_dir_pipe_hash(&p_tilde.to_string_lossy()),
             "6e74bd83902c"
