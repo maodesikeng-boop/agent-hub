@@ -1,10 +1,10 @@
 import { CircleAlert, ComposerAdd, ComposerFile, ComposerRemove, ComposerSend, ComposerStop, ComposerVideo, Info, X } from "../ui/icons.ts";
-import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
 import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES, previewKindOf, sentFileMime, type WorkerPick } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
 import { WORKER_COMMAND } from "../composer-trigger.ts";
-import { fitsBetweenButtons, isWrapped } from "../composer-layout.ts";
+import { fitsBetweenButtons, fitsSingleRowWidth, isWrapped } from "../composer-layout.ts";
 import { byteLength, errorLine, errorTitle } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { formatBytes, readDropped, useNoticeAutoHide, type ComposerNotice, type DraftSlot, type StagedFiles } from "../upload.ts";
@@ -49,10 +49,20 @@ const SQUARE_BUTTON = "rounded-[10px]";
 const ROW_CLASS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
 const ROW_MULTI_CLASS = "pb-2";
 const TEXTAREA_CLASS =
-  "block min-h-9 w-full min-w-0 resize-none bg-transparent px-3 py-1.5 pointer-coarse:py-2.5 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50 [field-sizing:content]";
-const ATTACH_CLASS = ["col-start-1 row-start-1", "col-start-1 row-start-2"] as const;
-const TEXT_CLASS = ["col-start-2 row-start-1", "col-span-3 col-start-1 row-start-1"] as const;
-const ACTIONS_CLASS = ["col-start-3 row-start-1", "col-start-3 row-start-2"] as const;
+  "block min-h-9 w-full min-w-0 resize-none bg-transparent px-3 py-1.5 pointer-coarse:py-2.5 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50";
+const TEXT_CLASSES = [
+  `${TEXTAREA_CLASS} col-start-2 row-start-1`,
+  `${TEXTAREA_CLASS} col-span-3 col-start-1 row-start-1`,
+] as const;
+const ATTACH_CLASSES = [
+  `${SQUARE_BUTTON} col-start-1 row-start-1`,
+  `${SQUARE_BUTTON} col-start-1 row-start-2`,
+] as const;
+const ACTIONS_CLASSES = [
+  "flex items-center gap-2 justify-self-end col-start-3 row-start-1",
+  "flex items-center gap-2 justify-self-end col-start-3 row-start-2",
+] as const;
+const FRAME_CLASSES = [ROW_CLASS, `${ROW_CLASS} ${ROW_MULTI_CLASS}`] as const;
 
 function StopButton({ stop }: { stop: StopControl }) {
   return (
@@ -112,7 +122,69 @@ export interface ComposerLink {
   waiting: boolean;
 }
 
-export function Composer({
+function useElementClientWidth(ref: RefObject<HTMLElement | null>): RefObject<number> {
+  const widthRef = useRef(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    widthRef.current = el.clientWidth;
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      widthRef.current = el.clientWidth;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return widthRef;
+}
+
+function syncComposerHeightAndWrap(params: {
+  el: HTMLTextAreaElement;
+  value: string;
+  prev: string | null;
+  multiline: boolean;
+  layoutChanged: boolean;
+  lastHeightPx: number | null;
+  clientWidthPx: number;
+  settledValue: string | null;
+  obstacleEls: (HTMLElement | null)[];
+}): { heightPx: number; wrapped: boolean; settled: string | null } {
+  const { el, value, prev, multiline, layoutChanged, lastHeightPx, clientWidthPx, settledValue, obstacleEls } = params;
+  const atMaxHeight = !layoutChanged && multiline && lastHeightPx !== null && lastHeightPx >= MAX_HEIGHT_PX && prev !== null && (value.startsWith(prev) || value.length === prev.length + 1);
+  if (atMaxHeight) {
+    return { heightPx: lastHeightPx, wrapped: true, settled: settledValue };
+  }
+  const singleRowKnownFit =
+    !multiline &&
+    !layoutChanged &&
+    value !== "" &&
+    !value.includes("\n") &&
+    prev !== null &&
+    clientWidthPx > 0 &&
+    lastHeightPx !== null &&
+    fitsSingleRowWidth(el, value, clientWidthPx);
+  if (singleRowKnownFit) {
+    return { heightPx: lastHeightPx, wrapped: false, settled: settledValue };
+  }
+  // Single-line mode is already at 1-row height, and appending only grows content, so skip height:auto reset there.
+  const maybeShrink = !value.startsWith(prev ?? "") && (multiline || layoutChanged || value === "");
+  if (prev === null || value === "" || layoutChanged || (maybeShrink && (value.length < prev.length || prev.includes("\n") !== value.includes("\n")))) {
+    el.style.height = "auto";
+  }
+  const contentHeight = el.scrollHeight;
+  const heightPx = Math.min(contentHeight, MAX_HEIGHT_PX);
+  const nextHeight = `${heightPx}px`;
+  if (el.style.height !== nextHeight) el.style.height = nextHeight;
+  if (value === "") return { heightPx, wrapped: false, settled: settledValue };
+  if (isWrapped(el, contentHeight)) {
+    return { heightPx, wrapped: true, settled: layoutChanged && !multiline ? value : settledValue };
+  }
+  if (!multiline) return { heightPx, wrapped: false, settled: settledValue };
+  const wrapped = value.includes("\n") || settledValue === value || !fitsBetweenButtons(el, value, obstacleEls);
+  return { heightPx, wrapped, settled: settledValue };
+}
+
+export const Composer = memo(function Composer({
   value,
   placeholder: placeholderProp,
   staging,
@@ -152,6 +224,7 @@ export function Composer({
   const placeholder = readOnly ?? placeholderProp;
   const stop = readOnly === null ? stopProp : undefined;
   const ref = useRef<HTMLTextAreaElement>(null);
+  const clientWidthRef = useElementClientWidth(ref);
   const picker = useRef<HTMLInputElement>(null);
   const { files, busy, notice } = staging;
   useNoticeAutoHide(staging);
@@ -261,6 +334,7 @@ export function Composer({
 
   const prevValue = useRef<string | null>(null);
   const prevFocusRev = useRef(focusRev);
+  const lastHeightPx = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -268,14 +342,22 @@ export function Composer({
     prevValue.current = value;
     const layoutChanged = layoutWas.current !== multiline;
     layoutWas.current = multiline;
-    // Appending only grows the content, so read scrollHeight directly and skip the height:auto reset that forces a sync reflow per keystroke.
-    if (prev === null || value === "" || !value.startsWith(prev) || layoutChanged) {
-      el.style.height = "auto";
-    }
-    const contentHeight = el.scrollHeight;
-    const nextHeight = `${Math.min(contentHeight, MAX_HEIGHT_PX)}px`;
-    if (el.style.height !== nextHeight) el.style.height = nextHeight;
-    if (focusRev !== prevFocusRev.current) {
+    const focusChanged = focusRev !== prevFocusRev.current;
+    const { heightPx, wrapped: nextWrapped, settled } = syncComposerHeightAndWrap({
+      el,
+      value,
+      prev,
+      multiline,
+      layoutChanged,
+      lastHeightPx: lastHeightPx.current,
+      clientWidthPx: clientWidthRef.current,
+      settledValue: settledValue.current,
+      obstacleEls: [attachRef.current, actionsRef.current],
+    });
+    lastHeightPx.current = heightPx;
+    settledValue.current = settled;
+    setWrapped(nextWrapped);
+    if (focusChanged) {
       prevFocusRev.current = focusRev;
       if (!disabled) {
         el.focus({ preventScroll: true });
@@ -289,18 +371,6 @@ export function Composer({
       el.setSelectionRange(pendingCursor.current, pendingCursor.current);
       pendingCursor.current = null;
     }
-    let nextWrapped: boolean;
-    if (value === "") {
-      nextWrapped = false;
-    } else if (isWrapped(el, contentHeight)) {
-      nextWrapped = true;
-      if (layoutChanged && !multiline) settledValue.current = value;
-    } else if (!multiline) {
-      nextWrapped = false;
-    } else {
-      nextWrapped = value.includes("\n") || settledValue.current === value || !fitsBetweenButtons(el, value, [attachRef.current, actionsRef.current]);
-    }
-    setWrapped(nextWrapped);
   }, [value, multiline, focusRev, disabled]);
 
   const submit = () => {
@@ -349,7 +419,7 @@ export function Composer({
             })}
           </ul>
         )}
-        <div className={cn(ROW_CLASS, multiline && ROW_MULTI_CLASS)}>
+        <div className={FRAME_CLASSES[+multiline]}>
           <input
             ref={picker}
             type="file"
@@ -368,7 +438,7 @@ export function Composer({
             aria-label="Add files"
             disabled={busy || disabled}
             onClick={() => picker.current?.click()}
-            className={cn(SQUARE_BUTTON, ATTACH_CLASS[+multiline])}
+            className={ATTACH_CLASSES[+multiline]}
           >
             <ComposerAdd className="size-5" aria-hidden="true" />
           </Button>
@@ -382,7 +452,7 @@ export function Composer({
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
-            className={cn(TEXTAREA_CLASS, TEXT_CLASS[+multiline])}
+            className={TEXT_CLASSES[+multiline]}
             value={value}
             aria-autocomplete={source ? "list" : undefined}
             aria-controls={menu ? menuId : undefined}
@@ -411,13 +481,13 @@ export function Composer({
               submit();
             }}
           />
-          <div ref={actionsRef} className={cn("flex items-center gap-2 justify-self-end", ACTIONS_CLASS[+multiline])}>
+          <div ref={actionsRef} className={ACTIONS_CLASSES[+multiline]}>
             {tooLong && <span className="text-minor text-danger">Message too long</span>}
             {stop?.failed && showStop && <span className="text-minor text-danger">Couldn't stop</span>}
             {showStop ? (
               <StopButton stop={stop} />
             ) : (
-              <Button size="icon" aria-label="Send" disabled={!canSend || picking} onClick={submit} className={cn(SQUARE_BUTTON, bounce && "composer-send-bounce")}>
+              <Button size="icon" aria-label="Send" disabled={!canSend || picking} onClick={submit} className={bounce ? `${SQUARE_BUTTON} composer-send-bounce` : SQUARE_BUTTON}>
                 <ComposerSend className="size-5" aria-hidden="true" />
               </Button>
             )}
@@ -426,7 +496,7 @@ export function Composer({
       </div>
     </>
   );
-}
+});
 
 export const DraftComposer = memo(function DraftComposer({
   draft,

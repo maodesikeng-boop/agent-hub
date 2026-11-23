@@ -647,7 +647,10 @@ export const RightRail = memo(function RightRail({
     <aside
       id={RIGHT_RAIL_ID}
       aria-label="Side panel"
-      className={cn("tint-fade flex min-w-0 shrink-0 flex-col overflow-hidden bg-surface-chat", side ? "w-80 border-l border-line" : "max-h-[40dvh] border-b border-line")}
+      className={cn(
+        "tint-fade flex min-w-0 shrink-0 flex-col overflow-hidden bg-surface-chat",
+        side ? "w-80 border-l border-line [contain:strict]" : "max-h-[40dvh] border-b border-line [contain:layout_style]",
+      )}
     >
       <RailGroups
         asks={asks}
