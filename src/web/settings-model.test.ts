@@ -277,6 +277,75 @@ describe("设备与账号 hooks", () => {
     });
     expect(calls.find((c) => c.path === API_PATHS.accountPriority)?.body).toEqual({ priority: [TOKYO_ID, MAC_ID] });
   });
+
+  it("useAccount 避免初始或过时 GET /api/account 覆盖较新的 account.updated 与变更结果", async () => {
+    let accountRequests = 0;
+    let resolveFirstGet!: (value: Response) => void;
+    let resolveThirdGet!: (value: Response) => void;
+    let resolveLogin!: (value: Response) => void;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://127.0.0.1:1");
+        const method = init?.method ?? "GET";
+        if (method === "GET" && url.pathname === API_PATHS.account) {
+          accountRequests += 1;
+          if (accountRequests === 1) return new Promise<Response>((resolve) => (resolveFirstGet = resolve));
+          if (accountRequests === 2) {
+            return Promise.resolve(
+              Response.json({
+                state: "signing_in",
+                userCode: "WDJB-MJHT",
+                verificationUri: "https://github.com/login/device",
+                expiresAt: Date.now() + 60_000,
+              }),
+            );
+          }
+          return new Promise<Response>((resolve) => (resolveThirdGet = resolve));
+        }
+        if (method === "POST" && url.pathname === API_PATHS.accountLogin) {
+          return new Promise<Response>((resolve) => (resolveLogin = resolve));
+        }
+        return Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
+      }),
+    );
+
+    const { qc, wrapper } = makeWrapper();
+    const { invalidateAccount } = await import("./query-client.ts");
+    const account = renderHook(() => useAccount(), { wrapper });
+    await waitFor(() => expect(accountRequests).toBe(1));
+
+    // Invalidate while initial GET #1 is still in flight (data === undefined): must re-fetch GET #2 automatically.
+    void invalidateAccount(qc);
+    resolveFirstGet(Response.json({ state: "signed_out", lastError: null }));
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ state: "signing_in", userCode: "WDJB-MJHT" }));
+    expect(accountRequests).toBe(2);
+
+    // Start GET #3, then complete a newer mutation before GET #3 resolves: stale GET #3 must not overwrite the mutation result.
+    void invalidateAccount(qc);
+    await waitFor(() => expect(accountRequests).toBe(3));
+    let signInPromise!: Promise<boolean>;
+    act(() => {
+      signInPromise = account.result.current.signIn();
+    });
+    await waitFor(() => expect(typeof resolveLogin).toBe("function"));
+    resolveLogin(
+      Response.json({
+        state: "awaiting_approval",
+        login: { provider: "github", userId: "1", login: "alice" },
+        relay: "connected",
+        approval: null,
+      }),
+    );
+    await act(async () => {
+      expect(await signInPromise).toBe(true);
+    });
+    expect(account.result.current.status).toMatchObject({ state: "awaiting_approval" });
+
+    resolveThirdGet(Response.json({ state: "signed_out", lastError: "stale" }));
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ state: "awaiting_approval" }));
+  });
 });
 
 describe("浏览器会话与扫码链接 hooks", () => {
