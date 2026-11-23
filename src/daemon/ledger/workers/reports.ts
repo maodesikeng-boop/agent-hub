@@ -2,7 +2,7 @@ import { agentTextOf } from "../../../shared/attachments.ts";
 import type { AgentSessionRow, MessageId, SessionId, WorkerId, WorkerLineStatus } from "../../../shared/domain.ts";
 import type { DriverEvent } from "../../../shared/driver.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
-import { parseReviewTarget, reviewStampRequestOf, type ReviewVerifyResult } from "../../../shared/review.ts";
+import { parseReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
 import { userBlockerKindOfFailure } from "../../../shared/user-blockers.ts";
 import { isAgentVendor } from "../../../shared/vendors.ts";
 import { parseWorkerReport } from "../../../shared/worker.ts";
@@ -14,7 +14,6 @@ import { userBlockedPmNote } from "../user-blockers.ts";
 import { workerRow, workerSession } from "./ctx.ts";
 import { endWorkerIn } from "./lifecycle.ts";
 import { insertLine } from "./lines.ts";
-import { enqueueReviewStampIn } from "./review-stamp.ts";
 import { NO_REPLY_TEXT, RECEIVED_STATUSES, TURN_STOPPED, backgroundKilledNote, toReportMessage } from "./text.ts";
 import { clearMaxTime } from "./timers.ts";
 import type { BackgroundWait, ReportMessage, ReportMessageRow, WorkersCtx } from "./types.ts";
@@ -127,9 +126,6 @@ export function insertReport(
   if (graphHandling.outcome === "verify") {
     w.enqueue(p, { type: "review.verify", params: { workerId: worker.id, turnMessageId, reportMessageId: reportMessage!.id } });
     return;
-  }
-  if (review !== null && reportMessage !== null && parsed.kind === "ok" && note === null && opts?.hasPendingFollowup !== true) {
-    enqueueReviewStampIn(w, p, worker, reportMessage.id, reviewStampRequestOf(parsed.report, review, opts?.reviewVerified));
   }
   if (graphHandling.outcome === "completed") {
     insertLine(w, p, worker, { ...report, deliver: body, wakePm: graphHandling.wakePmWithReport });

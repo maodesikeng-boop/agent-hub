@@ -21,7 +21,7 @@ import type {
 import type { Attachment } from "./attachments.ts";
 import type { FeishuMessageOrigin } from "./feishu.ts";
 import type { DriverEvent } from "./driver.ts";
-import type { AnyActionRow, ReviewStampParams, ReviewVerifyParams } from "./actions.ts";
+import type { AnyActionRow, ReviewVerifyParams } from "./actions.ts";
 import type {
   AgentRole,
   Conversation,
@@ -52,7 +52,7 @@ import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { CapabilitiesPatch, CapabilityPolicy, CapabilityScope, PmCapabilitiesStart, ScopeCapabilities, WorkerCapabilities } from "./pm-capabilities.ts";
 import type { PmLookSetting, SlimeLook } from "./slimes.ts";
-import type { ReviewSnapshot, ReviewStampOutcome, ReviewVerifyResult } from "./review.ts";
+import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
@@ -198,13 +198,6 @@ export interface WorktreeTask {
   setupCommand: string | null;
 }
 
-/** What the daemon needs to post one review stamp; `repo` is the project's main folder, used as the gh working directory. */
-export interface ReviewStampTask {
-  repo: string;
-  pr: WorkerPr | null;
-  account: string | null;
-}
-
 export interface SetupOutcome {
   kind: "ok" | "failed" | "timeout" | "stopped";
   command: string;
@@ -301,8 +294,6 @@ export interface Ledger extends LedgerHandoverWork {
 
   getReviewVerifyTask(workerId: WorkerId): { repo: string; branch: string; snapshot: ReviewSnapshot } | null;
   onReviewVerified(params: ReviewVerifyParams, result: ReviewVerifyResult): void;
-  getReviewStampTask(params: ReviewStampParams): ReviewStampTask | null;
-  onReviewStamped(params: ReviewStampParams, outcome: ReviewStampOutcome): void;
 
   syncPersonaFiles(): SyncPersonaFilesResult;
   onStopRequested(listener: (event: { conversationId: ConversationId; sessionId: SessionId }) => void): Unsubscribe;

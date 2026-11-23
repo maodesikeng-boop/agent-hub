@@ -1,16 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { REVIEW_MAX_ROUNDS } from "./limits.ts";
 import {
   REVIEW_CHECKLIST,
   diffReviewSnapshot,
   parseReviewCommit,
   parseReviewVerdict,
-  reviewFindingSeverities,
   reviewPushGuardEnv,
   reviewReportProblem,
-  reviewStampRequestOf,
-  reviewStatusDescription,
-  REVIEW_STATUS_CONTEXT,
   type ReviewSnapshot,
 } from "./review.ts";
 import { taskGraphSkillBody } from "./task-graph-skill.ts";
@@ -19,11 +14,11 @@ const SHA = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
 const before: ReviewSnapshot = { sha: SHA, remote: { sha: SHA }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } };
 
 describe("审查结论", () => {
-  it("三种结论，大小写、+ 两边空格、首尾标点不计较；别的写法是 null", () => {
+  it("只认 PASS 和 FAIL，大小写与首尾标点不计较；PASS+NOTES 和别的写法是 null", () => {
     expect(parseReviewVerdict("PASS")).toBe("PASS");
-    expect(parseReviewVerdict(" pass + notes。")).toBe("PASS+NOTES");
+    expect(parseReviewVerdict(" pass。")).toBe("PASS");
     expect(parseReviewVerdict("**FAIL**")).toBe("FAIL");
-    for (const bad of ["", "通过", "PASS / FAIL", "OK"]) expect(parseReviewVerdict(bad)).toBeNull();
+    for (const bad of ["", "PASS+NOTES", " pass + notes。", "通过", "PASS / FAIL", "OK"]) expect(parseReviewVerdict(bad)).toBeNull();
   });
 
   it("验证提交：首尾的反引号、句号、加粗不计较，转成小写；空的是 null", () => {
@@ -34,28 +29,13 @@ describe("审查结论", () => {
 
   it("汇报的毛病：没写结论；验证提交不是被审的提交（至少 7 位前缀才算）；开审时没记下被审提交", () => {
     const target = { branch: "hub/1-impl", snapshot: before };
-    const q = "";
-    expect(reviewReportProblem({ verdict: null, verifiedCommit: SHA, questions: q }, target)).toContain("没写“结论”");
-    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA, questions: q }, target)).toBeNull();
-    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA.slice(0, 7), questions: q }, target)).toBeNull();
-    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA.slice(0, 6), questions: q }, target)).toContain("被审的是分支 hub/1-impl");
-    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: null, questions: q }, target)).toContain("（没写）");
-    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA, questions: q }, { branch: "hub/1-impl", snapshot: null })).toContain("没记下被审分支 hub/1-impl 开审时的提交");
-  });
-
-  it("三档分级：只认行首的级别标签（可带列表符号、编号），正文里顺带提到的不算", () => {
-    const text = ["- [Important] a.ts:3 关机后还写库", "2. [nit] 命名", "* [Pre-existing] 主干就有", "没有别的 [Important] 了", "1、[Nit] 多余空行"].join("\n");
-    expect(reviewFindingSeverities(text)).toEqual(["Important", "Nit", "Pre-existing", "Nit"]);
-    expect(reviewFindingSeverities("无")).toEqual([]);
-  });
-
-  it("判 PASS、PASS+NOTES 还列着 [Important] 是汇报有误；FAIL 带 [Important]、PASS+NOTES 只带 [Nit]/[Pre-existing] 没毛病", () => {
-    const target = { branch: "hub/1-impl", snapshot: before };
-    const important = "- [Important] sandbox.ts:10 读得到 admin.sock";
-    expect(reviewReportProblem({ verdict: "PASS+NOTES", verifiedCommit: SHA, questions: important }, target)).toContain("只能判 FAIL");
-    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA, questions: important }, target)).toContain("只能判 FAIL");
-    expect(reviewReportProblem({ verdict: "FAIL", verifiedCommit: SHA, questions: important }, target)).toBeNull();
-    expect(reviewReportProblem({ verdict: "PASS+NOTES", verifiedCommit: SHA, questions: "- [Nit] 命名\n- [Pre-existing] 旧抖动" }, target)).toBeNull();
+    expect(reviewReportProblem({ verdict: null, verifiedCommit: SHA }, target)).toContain("没写“结论”");
+    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA }, target)).toBeNull();
+    expect(reviewReportProblem({ verdict: "FAIL", verifiedCommit: SHA }, target)).toBeNull();
+    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA.slice(0, 7) }, target)).toBeNull();
+    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA.slice(0, 6) }, target)).toContain("被审的是分支 hub/1-impl");
+    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: null }, target)).toContain("（没写）");
+    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA }, { branch: "hub/1-impl", snapshot: null })).toContain("没记下被审分支 hub/1-impl 开审时的提交");
   });
 });
 
@@ -89,94 +69,23 @@ describe("禁推环境变量", () => {
   });
 });
 
-describe("文案只查不修", () => {
-  it("审查清单和任务图手册里没有让审查直接修、推送的说法", () => {
+describe("极简通用审查协议", () => {
+  it("审查清单和任务图手册里只保留极简通用约束：只查不修、PASS/FAIL、增量复审、不硬逼重跑全量", () => {
     for (const text of [REVIEW_CHECKLIST, taskGraphSkillBody()]) {
       expect(text).not.toMatch(/直接修|推上去|接手实现的分支/);
     }
     expect(REVIEW_CHECKLIST).toContain("只查不修");
-    expect(REVIEW_CHECKLIST).toContain("结论: PASS | PASS+NOTES | FAIL");
+    expect(REVIEW_CHECKLIST).toContain("结论: PASS | FAIL");
+    expect(REVIEW_CHECKLIST).toContain("验证提交");
+    expect(REVIEW_CHECKLIST).toContain("复审");
+    expect(REVIEW_CHECKLIST).toContain("不硬要求已有云端 CI 的项目在本机重跑全量测试");
     expect(taskGraphSkillBody()).toContain("审查只查不修");
+    expect(taskGraphSkillBody()).toContain("结论只有 PASS 和 FAIL");
   });
 
-  it("审查清单写明两层审查只读主干的 REVIEW.md、三档分级、增量复审与轮次上限、本机优先", () => {
-    expect(REVIEW_CHECKLIST).toContain("git show <主干>:REVIEW.md");
-    expect(REVIEW_CHECKLIST).toContain("git diff --name-only <主干>...HEAD");
-    expect(REVIEW_CHECKLIST).not.toMatch(/origin\/main|git fetch origin/);
-    expect(REVIEW_CHECKLIST).toContain("被审分支自己改过的那份不算数");
-    for (const tag of ["[Important]", "[Nit]", "[Pre-existing]"]) expect(REVIEW_CHECKLIST).toContain(tag);
-    expect(REVIEW_CHECKLIST).toContain("git diff <上一轮被审提交>..HEAD");
-    expect(REVIEW_CHECKLIST).toContain(`第 ${REVIEW_MAX_ROUNDS} 轮还有未决的`);
-    expect(REVIEW_CHECKLIST).not.toMatch(/pnpm|bwrap|\bgh /);
-    expect(REVIEW_CHECKLIST).toContain("不许靠重跑盖住抖动的测试");
-    expect(taskGraphSkillBody()).toContain(`第 ${REVIEW_MAX_ROUNDS} 轮审查还有`);
-  });
-
-  it("判 FAIL 的每条 [Important] 附防复发落点，修复步骤同单落实", () => {
-    expect(REVIEW_CHECKLIST).toContain("防复发落点");
-    for (const field of ["Trigger:", "Check:", "Seen in:"]) expect(REVIEW_CHECKLIST).toContain(field);
-    expect(taskGraphSkillBody()).toContain("修复同一单落实审查给的防复发落点");
-    expect(taskGraphSkillBody()).not.toMatch(/REVIEW\.md|pnpm|bwrap/);
-  });
-});
-
-describe("审查盖章：reviewStampRequestOf", () => {
-  const target = { branch: "hub/1-impl", snapshot: before };
-  const ok = { problems: [] };
-
-  it("PASS 和 PASS+NOTES 收尾核对没发现变动时，返回被审提交上的 success", () => {
-    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA, questions: "" }, target, ok)).toEqual({ sha: SHA, verdict: "PASS", state: "success" });
-    expect(reviewStampRequestOf({ verdict: "PASS+NOTES", verifiedCommit: SHA, questions: "- [Nit] 命名" }, target, ok)).toEqual({
-      sha: SHA,
-      verdict: "PASS+NOTES",
-      state: "success",
-    });
-  });
-
-  it("FAIL 且验证提交对得上时返回 failure，不等收尾核对", () => {
-    expect(reviewStampRequestOf({ verdict: "FAIL", verifiedCommit: SHA, questions: "- [Important] x" }, target, undefined)).toEqual({
-      sha: SHA,
-      verdict: "FAIL",
-      state: "failure",
-    });
-  });
-
-  it("PASS 还没做收尾核对（verified 为 undefined）时返回 null", () => {
-    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA, questions: "" }, target, undefined)).toBeNull();
-  });
-
-  it("收尾核对发现被审分支被动过时返回 null", () => {
-    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA, questions: "" }, target, { problems: ["本地分支变了"] })).toBeNull();
-  });
-
-  it("reviewReportProblem 判汇报有误（没写结论、验证提交对不上、PASS 却列着 [Important]）时返回 null", () => {
-    expect(reviewStampRequestOf({ verdict: null, verifiedCommit: SHA, questions: "" }, target, ok)).toBeNull();
-    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: "deadbeef00", questions: "" }, target, ok)).toBeNull();
-    expect(reviewStampRequestOf({ verdict: "FAIL", verifiedCommit: "deadbeef00", questions: "" }, target, undefined)).toBeNull();
-    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA, questions: "- [Important] a.ts:1" }, target, ok)).toBeNull();
-  });
-
-  it("审查目录没记下开审快照时返回 null", () => {
-    expect(reviewStampRequestOf({ verdict: "FAIL", verifiedCommit: SHA, questions: "" }, { branch: "hub/1-impl", snapshot: null }, undefined)).toBeNull();
-  });
-
-  it("返回的 sha 是快照里的完整提交号，不是汇报里写的短号", () => {
-    expect(reviewStampRequestOf({ verdict: "PASS", verifiedCommit: SHA.slice(0, 8), questions: "" }, target, ok)?.sha).toBe(SHA);
-  });
-});
-
-describe("审查盖章：reviewStatusDescription 与状态名", () => {
-  it("REVIEW_STATUS_CONTEXT 是 bellwood/review，跟本仓的合并门禁脚本用同一个常量", async () => {
-    expect(REVIEW_STATUS_CONTEXT).toBe("bellwood/review");
-    const gate = await import("../../scripts/review-stamp-gate.ts");
-    expect(gate.REVIEW_STATUS_CONTEXT).toBe(REVIEW_STATUS_CONTEXT);
-  });
-
-  it("三种结论的描述都写明结论，长度不超过 GitHub 的 140 字符", () => {
-    for (const verdict of ["PASS", "PASS+NOTES", "FAIL"] as const) {
-      const text = reviewStatusDescription(verdict);
-      expect(text).toContain(verdict);
-      expect(text.length).toBeLessThanOrEqual(140);
+  it("不包含本仓私有过拟合规矩（REVIEW.md 路径触发、三档级别、PASS+NOTES、轮次上限、防复发落点、GitHub 盖章）", () => {
+    for (const text of [REVIEW_CHECKLIST, taskGraphSkillBody()]) {
+      expect(text).not.toMatch(/REVIEW\.md|Trigger:|Check:|Seen in:|\[Important\]|\[Nit\]|\[Pre-existing\]|PASS\+NOTES|防复发落点|不许靠重跑盖住抖动的测试|提交状态|pnpm|bwrap|\bgh /u);
     }
   });
 });

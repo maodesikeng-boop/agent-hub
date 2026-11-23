@@ -271,7 +271,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("default_capability_policies", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),
   table("default_capability_overrides", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),
   table("pm_capability_policies", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
-  table("project_review_status", "bounded_config", "src/daemon/ledger/projects.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("project_review_status", "bounded_config", "migrations/0048_project_review_status.sql", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("pm_capability_overrides", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("router_capability_policies", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),
   table("router_capability_overrides", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),

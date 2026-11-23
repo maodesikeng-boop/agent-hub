@@ -1,20 +1,9 @@
 import type { WorkerPr, WorkerPrProbeResult } from "./hub.ts";
-import { REVIEW_MAX_ROUNDS } from "./limits.ts";
-import { PRODUCT_NAME } from "./names.ts";
 
-export const REVIEW_VERDICTS = ["PASS", "PASS+NOTES", "FAIL"] as const;
+export const REVIEW_VERDICTS = ["PASS", "FAIL"] as const;
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
-
-const REVIEW_SEVERITIES = ["Important", "Nit", "Pre-existing"] as const;
-export type ReviewSeverity = (typeof REVIEW_SEVERITIES)[number];
-
-const REVIEW_RULES_FILE = "REVIEW.md";
-
-const FINDING_LINE = /^\s*(?:[-*+]|\d+[.)、])?\s*\[(Important|Nit|Pre-existing)\]/gimu;
-
-export function reviewFindingSeverities(text: string): ReviewSeverity[] {
-  return [...text.matchAll(FINDING_LINE)].map((m) => REVIEW_SEVERITIES.find((s) => s.toLowerCase() === m[1]!.toLowerCase())!);
-}
+/** Historical task-graph rows written before PASS+NOTES was removed remain readable for display. */
+export type StoredReviewVerdict = ReviewVerdict | "PASS+NOTES";
 
 export const REVIEW_VERDICT_FIELD = "结论";
 export const REVIEW_SHA_FIELD = "验证提交";
@@ -49,7 +38,7 @@ export function parseReviewTarget(json: string | null): ReviewTarget | null {
 const stripEdgeMarks = (raw: string): string => raw.trim().replace(/^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu, "");
 
 export function parseReviewVerdict(raw: string): ReviewVerdict | null {
-  const normalized = stripEdgeMarks(raw).replace(/\s*\+\s*/gu, "+").toUpperCase();
+  const normalized = stripEdgeMarks(raw).toUpperCase();
   return REVIEW_VERDICTS.find((v) => v === normalized) ?? null;
 }
 
@@ -66,13 +55,10 @@ function sameCommit(written: string | null, sha: string): boolean {
 }
 
 export function reviewReportProblem(
-  report: { verdict: ReviewVerdict | null; verifiedCommit: string | null; questions: string },
+  report: { verdict: ReviewVerdict | null; verifiedCommit: string | null },
   target: ReviewTarget,
 ): string | null {
   if (report.verdict === null) return `审查没写“${REVIEW_VERDICT_FIELD}”或写错了（只能是 ${REVIEW_VERDICTS.join("、")}）`;
-  if (report.verdict !== "FAIL" && reviewFindingSeverities(report.questions).includes("Important")) {
-    return `审查判 ${report.verdict}，“问题”栏却列着 [Important]：有未决的 [Important] 只能判 FAIL`;
-  }
   if (target.snapshot === null) return `审查目录没记下被审分支 ${target.branch} 开审时的提交，没法核对`;
   if (!sameCommit(report.verifiedCommit, target.snapshot.sha)) {
     return `审查的“${REVIEW_SHA_FIELD}”写的是 ${report.verifiedCommit ?? "（没写）"}，被审的是分支 ${target.branch} 的提交 ${target.snapshot.sha}`;
@@ -106,51 +92,6 @@ export function reviewVerifyErrorProblem(error: string): string {
   return `收尾核对没跑成：${error}`;
 }
 
-// A review stamp is a commit status on the reviewed commit; it records a verdict and never blocks the Task Graph.
-export const REVIEW_STATUS_CONTEXT = `${PRODUCT_NAME.toLowerCase()}/review`;
-
-type ReviewStampState = "success" | "failure";
-
-export interface ReviewStampRequest {
-  sha: string;
-  verdict: ReviewVerdict;
-  state: ReviewStampState;
-}
-
-export type ReviewStampOutcome =
-  | { kind: "posted"; sha: string; state: ReviewStampState; account: string | null; at: number }
-  | { kind: "skipped"; sha: string; reason: string; at: number };
-
-/**
- * Returns the stamp to post once a review report is final, or null when nothing may be posted.
- * PASS and PASS+NOTES map to success only after the branch check found no change (`verified.problems` is empty).
- * FAIL maps to failure without waiting for the branch check, because FAIL never runs it.
- * Returns null when the report fails `reviewReportProblem` (missing verdict, wrong verified commit, PASS with an [Important] line),
- * when the target has no snapshot, or when a PASS has not been verified yet.
- */
-export function reviewStampRequestOf(
-  report: { verdict: ReviewVerdict | null; verifiedCommit: string | null; questions: string },
-  target: ReviewTarget,
-  verified: ReviewVerifyResult | undefined,
-): ReviewStampRequest | null {
-  if (report.verdict === null || target.snapshot === null || reviewReportProblem(report, target) !== null) return null;
-  const sha = target.snapshot.sha;
-  if (report.verdict === "FAIL") return { sha, verdict: "FAIL", state: "failure" };
-  if (verified === undefined || verified.problems.length > 0) return null;
-  return { sha, verdict: report.verdict, state: "success" };
-}
-
-/** Postcondition: an English status description of at most 140 characters (the GitHub limit) naming the verdict. */
-export function reviewStatusDescription(verdict: ReviewVerdict): string {
-  return `Independent ${PRODUCT_NAME} review: ${verdict} on this commit`;
-}
-
-export function reviewStampNote(outcome: ReviewStampOutcome): string {
-  return outcome.kind === "posted"
-    ? `提交状态已挂（${REVIEW_STATUS_CONTEXT} ${outcome.state}）`
-    : `提交状态没挂：${outcome.reason}`;
-}
-
 // GIT_CONFIG_COUNT (git 2.31+) outranks repo config; append after any entries already in the daemon's env.
 export const REVIEW_HOOKS_DIR = "review-hooks";
 export const REVIEW_PRE_PUSH_HOOK = `#!/bin/sh
@@ -171,21 +112,16 @@ export function reviewPushGuardEnv(hooksDir: string, inherited: Readonly<Record<
 export function reviewWorkspaceLines(worktreePath: string, branch: string): string[] {
   return [
     `- 工作目录：${worktreePath}，是审查专用的 git worktree，detached 在被审分支 ${branch} 的提交上，不挂分支。被审的提交号用 \`git rev-parse HEAD\` 看。`,
-    `- 这里可以随便改文件、换回旧版本、本地提交，用来证明测试在修复前会失败；这些改动推不上去（pre-push 钩子拒绝），收工后目录直接删掉。`,
-    `- 被审分支 ${branch} 和它的 PR 只能看、评论，不能改。审查期间它一变，后台就判结论作废。`,
+    `- 这个目录仅供本地查证，改动推不上去（pre-push 钩子拒绝），收工后目录直接删掉。`,
+    `- 被审分支 ${branch} 不能改；审查期间它一变，后台就判结论作废。`,
   ];
 }
 
 export const REVIEW_CHECKLIST = [
-  "这一步是独立审查：只查不修，你不是作者。审查分两层，每条发现都标级别。",
-  "- 第一层（每次必跑）：看被审提交相对主干的全部改动，对照上面的目标和“怎么算做完”逐条核对。上一步在交棒里点名的地方只是线索，不是审查范围。项目说明（如 `AGENTS.md`）里有审查清单的照做。另外重点过这四类：撤不回来的副作用和安全边界；异步、并发、生命周期（两件事交错、中途退出、重启恢复）；会随时间变多的数据（失效、上限）和多方共用的格式（两边是不是都改了）；本地草稿和远端状态互相覆盖。",
-  `- 第二层（按路径触发，仅当项目主干有 \`${REVIEW_RULES_FILE}\` 时）：主干是项目合并改动的目标分支（远端的默认分支或项目说明里写的那条，不一定叫 main），下面记作 \`<主干>\`；有远端的先 fetch，用远端上的那条，没有远端用本地分支。读 \`git show <主干>:${REVIEW_RULES_FILE}\`，被审分支自己改过的那份不算数。用 \`git diff --name-only <主干>...HEAD\` 列出改动的文件，只核对 \`Trigger:\` 匹配到这些路径的条目，照它的 \`Check:\` 查。主干上没有这个文件，或一条都没匹配上，直接跳过这一层。`,
-  "- 每条发现在“问题”栏单独一行，以级别开头：`[Important]` 是真实崩溃、安全或沙箱越界、数据丢失或损坏、契约破坏；`[Nit]` 是命名、风格、细枝末节；`[Pre-existing]` 是主干上本来就有、不是这次改动引入的。只有 `[Important]` 能判 FAIL；`[Nit]` 和 `[Pre-existing]` 不挡合并。",
-  `- 复审（第 2 轮起，项目经理会在点名里写上一轮的被审提交和未决的 \`[Important]\`）：只核验这几条修好没有，再看 \`git diff <上一轮被审提交>..HEAD\` 的增量；增量没碰过的文件不从头重审，新看到的旧问题标 \`[Pre-existing]\`。第 ${REVIEW_MAX_ROUNDS} 轮还有未决的 \`[Important]\`，判 FAIL，状态写“有问题”，在“问题”栏写明已到 ${REVIEW_MAX_ROUNDS} 轮上限、交人工决断。`,
-  "- 验证照跑：按项目自己的验证方式（目标或项目说明里写的命令；都没写就用项目已有的测试、构建和检查）在本机跑受改动影响的检查；有测试的不只跑改动文件旁边的，凡是直接或间接用到被改文件的测试都要跑。本机测不了的（别的系统、打包、硬件或远程环境），核对能证明它的结果，比如项目 CI 上对应的检查，没有就照实写明没验证。项目有 CI 的，检查没跑完或红着的照实写成发现。不许靠重跑盖住抖动的测试，抖动照样写成发现。要证明测试在修复前会失败，就在审查目录里临时改回去或 checkout 旧提交再跑。",
-  "- 发现问题不修，写清复现：命令、输入、实际和期望的结果、文件和行号。要留在 PR 上的意见发成 PR 评论。修复由项目经理另派 Worker。",
-  `- 判 FAIL 时每条 \`[Important]\` 后面附一行“防复发落点”：优先给能根除这类错的共享函数、类型或防复发单测；若该项目使用 \`${REVIEW_RULES_FILE}\` 且同类错已在 2 个以上 PR 出现过，再按该文件格式附 \`Trigger:\`、\`Check:\`、\`Seen in:\` 条目草案。`,
-  `- 汇报在“摘要”下面多写两栏：\`${REVIEW_VERDICT_FIELD}: ${REVIEW_VERDICTS.join(" | ")}\` 和 \`${REVIEW_SHA_FIELD}: <你验证的完整提交号>\`。PASS 是没有发现、可以合；PASS+NOTES 是可以合，\`[Nit]\`、\`[Pre-existing]\` 写进“问题”；FAIL 是有未决的 \`[Important]\`、不能合，复现写进“问题”，步骤停下等项目经理处理。判 PASS 或 PASS+NOTES 时“问题”栏里不能有 \`[Important]\` 开头的行，否则后台判汇报有误。`,
-  `- “交棒”列出你查了什么，每条给出文件和行号；第二层命中了 \`${REVIEW_RULES_FILE}\` 哪几条也写上。`,
-  "- 结论和复现写成一份 Markdown 文件，连同截图、录屏写进“文件”栏，用户在检查点卡和总助上点开就能看。",
+  "这一步是独立审查：只查不修，你不是作者。",
+  "- 对照上面的目标、代码改动和项目自身的说明或规矩找真实缺陷；发现问题不修，写清复现方式、文件和行号，由项目经理另派 Worker 处理。",
+  "- 复审（第 2 轮起）聚焦上一轮未决的问题与增量改动，不从头重审无关文件。",
+  "- 按项目自身情况验证，不硬要求已有云端 CI 的项目在本机重跑全量测试。",
+  `- 汇报在“摘要”下面多写两栏：\`${REVIEW_VERDICT_FIELD}: ${REVIEW_VERDICTS.join(" | ")}\` 和 \`${REVIEW_SHA_FIELD}: <你验证的完整提交号>\`。PASS 表示可以通过，FAIL 表示有阻塞问题、步骤停下等项目经理处理。`,
+  "- “交棒”简述核查范围与结论；有审查报告或截图文件写进“文件”栏。",
 ].join("\n");

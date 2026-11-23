@@ -12,8 +12,6 @@ import {
   AGENT_VENDORS,
   HUB_COMMANDS,
   isInternalSkillCommand,
-  PM_REVIEW_REDLINES,
-  PM_REVIEW_REDLINES_BRIEF,
   TASK_GRAPH_CREATE_JSON_HINT,
   TASK_GRAPH_PATCH_JSON_HINT,
   TASK_GRAPH_SKILL_DESCRIPTION,
@@ -93,16 +91,13 @@ describe("任务图技能正文", () => {
       "「通过 / 打回」检查点拍板卡",
       "步骤只有四个状态：没轮到（`pending`）、在干（`running`）、等人（`waiting`，等你处理或等用户拍板）、完了（`done`，跳过也算完了）。",
       `别的拍板不要预先建空步骤，等干活的 Worker 撞上了再用 \`${hub} ask --node <步骤>\` 挂卡。`,
-      "**碰到下面任意一条，就在实现后面加一个审查步骤**（设 `\"review\": true`，能用别家模型的指定另一家 `vendor`，项目只用一家时同一家的新会话也行",
+      "**需要独立审查时，在实现后面加一个审查步骤**（设 `\"review\": true`，需要跨模型审查的指定另一家 `vendor`",
       "项目不是 git 仓库的，改加一个只读（`\"readonly\": true`）的普通步骤",
-      ...PM_REVIEW_REDLINES.map((line) => `  - ${line}`),
-      "项目或用户没另外要求的话，纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。",
+      "结论只有 PASS 和 FAIL，并写明验证提交号。",
+      "什么时候需要审查、怎么判定严重程度，按项目自身的规矩或用户要求来。",
     ]) {
       expect(body, word).toContain(word);
     }
-    // 基础提示词里那句压缩版和这里的四条说的是同一回事
-    expect(PM_REVIEW_REDLINES).toHaveLength(4);
-    expect(PM_REVIEW_REDLINES_BRIEF.split("；")).toHaveLength(4);
   });
 
   it("图里怎么跟进：顺利完成自动收工交棒不叫醒 PM、报偏离或异常停在 waiting、换人一条 --node 命令、计划变了 patch（addSteps/updateSteps/removeSteps/skipSteps）、待交付发交付单并用 finish 结束", () => {

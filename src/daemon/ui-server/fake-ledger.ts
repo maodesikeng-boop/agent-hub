@@ -713,8 +713,6 @@ export class FakeLedger {
       recordReviewSnapshot: unused("recordReviewSnapshot"),
       getReviewVerifyTask: unused("getReviewVerifyTask"),
       onReviewVerified: unused("onReviewVerified"),
-      getReviewStampTask: unused("getReviewStampTask"),
-      onReviewStamped: unused("onReviewStamped"),
       syncPersonaFiles: unused("syncPersonaFiles"),
     };
   }

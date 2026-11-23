@@ -32,12 +32,12 @@ export const gateOptionsOf = (row: Pick<TaskNodeDbRow, "gate_options_json">): st
 
 export const hasText = (s: string | null | undefined): s is string => s !== null && s !== undefined && s.trim() !== "";
 
-type StoredTaskArtifact = TaskArtifact & { checkpointPending?: boolean };
+type StoredTaskArtifact = TaskArtifact & { checkpointPending?: boolean; reviewStamp?: unknown };
 
 export function readStoredArtifact(raw: string | null): { artifact: TaskArtifact | null; checkpointPending: boolean } {
   const parsed = parseJsonOr<StoredTaskArtifact | null>(raw, null);
   if (parsed === null) return { artifact: null, checkpointPending: false };
-  const { checkpointPending, ...rest } = parsed;
+  const { checkpointPending, reviewStamp: _legacyReviewStamp, ...rest } = parsed;
   return {
     artifact: Object.keys(rest).length > 0 ? rest : null,
     checkpointPending: checkpointPending === true,

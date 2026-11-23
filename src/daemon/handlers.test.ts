@@ -10,13 +10,10 @@ import {
   type DriverSendResult,
   type Message,
   type RateLimitInfo,
-  type ReviewStampOutcome,
   type SetupOutcome,
   type WorktreeTask,
 } from "../shared/index.ts";
-import { ReviewStatusRetryableError, type PostReviewStatusInput } from "./git/review-status.ts";
 import {
-  createReviewStampHandler,
   createSessionEndHandler,
   createSessionSendHandler,
   createSessionStartHandler,
@@ -598,54 +595,5 @@ describe("session.send 处理函数：任务图交付单发送前异步补齐 di
       source: "system",
       text: "【任务图 #3 · 改造 待交付】\n原始正文\n文件数=1 PR=42",
     });
-  });
-});
-
-describe("review.stamp 处理函数", () => {
-  const SHA = "a".repeat(40);
-  const params = { workerId: 3, reportMessageId: 9, sha: SHA, verdict: "PASS" as const };
-  const stampAction: ActionRow<"review.stamp"> = { id: 1, type: "review.stamp", dedupeKey: "3:9", params, status: "running", attempts: 0, nextAttemptAt: 0, lastError: null, createdAt: 0, updatedAt: 0 };
-  const task = { repo: "/repo", pr: { number: 4, state: "OPEN", url: "https://github.com/o/r/pull/4" }, account: "octo" };
-
-  function stampDeps(found: typeof task | null, post: () => Promise<ReviewStampOutcome>) {
-    const onReviewStamped = vi.fn();
-    const postReviewStatus = vi.fn((_input: PostReviewStatusInput) => post());
-    return { onReviewStamped, postReviewStatus, handler: createReviewStampHandler({ ledger: { getReviewStampTask: () => found, onReviewStamped }, postReviewStatus }) };
-  }
-
-  it("取到任务就调 postReviewStatus，并把结果交给 onReviewStamped", async () => {
-    const outcome: ReviewStampOutcome = { kind: "posted", sha: SHA, state: "success", account: "octo", at: 1 };
-    const d = stampDeps(task, async () => outcome);
-    await expect(d.handler(stampAction)).resolves.toEqual({ kind: "done" });
-    expect(d.postReviewStatus).toHaveBeenCalledWith({ cwd: "/repo", request: { sha: SHA, verdict: "PASS", state: "success" }, pr: task.pr, account: "octo" });
-    expect(d.onReviewStamped).toHaveBeenCalledWith(params, outcome);
-  });
-
-  it("FAIL 结论挂 failure", async () => {
-    const d = stampDeps(task, async () => ({ kind: "posted", sha: SHA, state: "failure", account: "octo", at: 1 }));
-    await d.handler({ ...stampAction, params: { ...params, verdict: "FAIL" } });
-    expect(d.postReviewStatus.mock.calls[0]![0].request.state).toBe("failure");
-  });
-
-  it("取不到任务（Worker 没了、快照对不上 sha）时直接 done，不调 gh、不写账本", async () => {
-    const d = stampDeps(null, async () => ({ kind: "skipped", sha: SHA, reason: "x", at: 1 }));
-    await expect(d.handler(stampAction)).resolves.toEqual({ kind: "done" });
-    expect(d.postReviewStatus).not.toHaveBeenCalled();
-    expect(d.onReviewStamped).not.toHaveBeenCalled();
-  });
-
-  it("postReviewStatus 抛 ReviewStatusRetryableError 时往外抛，交给执行器退避重试", async () => {
-    const d = stampDeps(task, async () => {
-      throw new ReviewStatusRetryableError("gh 超时");
-    });
-    await expect(d.handler(stampAction)).rejects.toThrow(ReviewStatusRetryableError);
-    expect(d.onReviewStamped).not.toHaveBeenCalled();
-  });
-
-  it("跳过的结果照样记进账本，处理函数返回 done", async () => {
-    const outcome: ReviewStampOutcome = { kind: "skipped", sha: SHA, reason: "本机没装 gh", at: 1 };
-    const d = stampDeps(task, async () => outcome);
-    await expect(d.handler(stampAction)).resolves.toEqual({ kind: "done" });
-    expect(d.onReviewStamped).toHaveBeenCalledWith(params, outcome);
   });
 });

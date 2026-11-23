@@ -19,7 +19,7 @@ import type { LedgerContext, Pending } from "./context.ts";
 import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
-import { reviewStatusAccountOf, type LedgerProjects } from "./projects.ts";
+import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import type { LedgerSchedules } from "./schedules.ts";
 import type { LedgerTaskGraphs } from "./task-graphs.ts";
@@ -62,13 +62,6 @@ function describeSetup(card: ProjectCard | null, setupCommand: string | null): s
   return setupCommand === null
     ? `\n准备命令：没配（建 worktree 后不跑东西；要配用 ${HUB_COMMAND} project setup --stdin）。`
     : `\n准备命令（建好 worktree 后先跑它，跑完 Worker 再开工）：\n${setupCommand}`;
-}
-
-function describeReviewStatus(card: ProjectCard | null, account: string | null): string {
-  if (card === null) return "";
-  return account === null
-    ? `\n审查盖章账号：没配，项目在 GitHub 上时用 gh 当前登录的账号给被审提交挂状态（要换用 ${HUB_COMMAND} project review-status --account <登录名>）。`
-    : `\n审查盖章账号：${account}（项目在 GitHub 上时，用 gh 里这个账号的登录给被审提交挂状态）。`;
 }
 
 const commandLine = (command: HubCommand) => `${HUB_COMMAND} ${command.replace(".", " ")}`;
@@ -132,7 +125,6 @@ function formatVendorModelsBlock(entry: HubVendorModels): string {
 }
 
 interface PmStatusDeps {
-  db: LedgerContext["db"];
   persona: Pick<LedgerPersona, "pmRow">;
   projects: Pick<LedgerProjects, "activeProjectOf" | "projectCard">;
   taskGraphs: Pick<LedgerTaskGraphs, "pmStatusGraphs">;
@@ -144,13 +136,12 @@ function pmStatusIn(deps: PmStatusDeps, caller: AgentSessionRow & { pmId: PmId }
   const row = deps.projects.activeProjectOf(pm.id);
   const project = row === null ? null : deps.projects.projectCard(row);
   const setupCommand = row?.setup_command ?? null;
-  const reviewStatusAccount = row === null ? null : reviewStatusAccountOf(deps.db, row.id);
   const { summaries, textBlock } = deps.taskGraphs.pmStatusGraphs(pm.id);
   const manual = summaries.length > 0 ? deps.taskGraphManual(caller.id) : "";
   const selfReload = context.selfReload !== undefined && context.selfReload.state !== "idle" ? context.selfReload : undefined;
   const reloadNote = selfReload === undefined ? "" : `\n${describeSelfReload(selfReload)}`;
   return {
-    text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${describeReviewStatus(project, reviewStatusAccount)}${textBlock}${manual === "" ? "" : `\n${manual}`}${reloadNote}`,
+    text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}${manual === "" ? "" : `\n${manual}`}${reloadNote}`,
     data: {
       role: "pm",
       pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
@@ -158,7 +149,6 @@ function pmStatusIn(deps: PmStatusDeps, caller: AgentSessionRow & { pmId: PmId }
       conversationId: caller.conversationId ?? -1,
       project,
       setupCommand,
-      reviewStatusAccount,
       ...(summaries.length > 0 ? { activeTaskGraphs: summaries } : {}),
       ...(selfReload !== undefined ? { selfReload } : {}),
     },
@@ -204,7 +194,7 @@ export function createLedgerHubCommands(
     return { args, files: [...files] };
   };
   const { pmSession, getPersona, editPersonaChecked, assertPmNotArchived } = persona;
-  const { createProjectIn, attachIn, detachIn, setupIn, reviewStatusIn } = projects;
+  const { createProjectIn, attachIn, detachIn, setupIn } = projects;
 
   const runHub = (
     p: Pending,
@@ -215,7 +205,7 @@ export function createLedgerHubCommands(
   ): HubResult<HubCommand> => {
     switch (command) {
       case "status":
-        return pmStatusIn({ db, persona, projects, taskGraphs, taskGraphManual }, caller, context);
+        return pmStatusIn({ persona, projects, taskGraphs, taskGraphManual }, caller, context);
       case "project.create": {
         const a = projectCreateArgsSchema.parse(args);
         const { project, mainFolder } = createProjectIn(p, {
@@ -235,8 +225,6 @@ export function createLedgerHubCommands(
         return detachIn(p, caller, args as HubArgs<"project.detach">);
       case "project.setup":
         return setupIn(p, caller, args as HubArgs<"project.setup">);
-      case "project.review-status":
-        return reviewStatusIn(caller, args as HubArgs<"project.review-status">);
       case "persona.show": {
         const view = getPersona(caller.pmId, p);
         const body = view.text.trim() === "" ? "（还没有性格设定）" : view.text;

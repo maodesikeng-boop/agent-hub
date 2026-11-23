@@ -58,10 +58,10 @@ function parseSend(raw: ActionDbRow): AnyActionRow | null {
   } as AnyActionRow;
 }
 
-/** Actions sharing a lane run one at a time: one lane per session, and one for all review stamps. */
+const RETIRED_ACTION_TYPES: ReadonlySet<string> = new Set(["review.stamp"]);
+
+/** Actions sharing a session lane run one at a time. */
 function laneKey(row: AnyActionRow): string | null {
-  // GitHub keeps the last status posted, so two stamps in flight could land out of order and leave a stale verdict.
-  if (row.type === "review.stamp") return "review.stamp";
   const id = (row.params as { sessionId?: unknown }).sessionId;
   return typeof id === "number" ? `session:${id}` : null;
 }
@@ -173,6 +173,10 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
       }
       for (const raw of db.all<ActionDbRow>(DUE_SQL, t)) {
         if (inFlight.size >= concurrency) break;
+        if (RETIRED_ACTION_TYPES.has(raw.type)) {
+          setActionStatus(db, raw.id, { status: "abandoned", lastError: "retired action type" }, t);
+          continue;
+        }
         let row: AnyActionRow;
         try {
           row = toActionRow(raw);
@@ -216,7 +220,9 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     start() {
       if (started) return;
       started = true;
-      db.run("UPDATE actions SET status = 'pending', updated_at = ? WHERE status = 'running'", now());
+      const t = now();
+      db.run("UPDATE actions SET status = 'abandoned', last_error = 'retired action type', updated_at = ? WHERE type = 'review.stamp' AND status IN ('pending', 'running')", t);
+      db.run("UPDATE actions SET status = 'pending', updated_at = ? WHERE status = 'running'", t);
       schedule(0);
     },
     wake() {

@@ -48,6 +48,11 @@ describe("骨架", () => {
     expect(setup).toMatch(/afterEach\(\s*cleanup\s*\)/);
   });
 
+  it("vitest.config.ts 和 vite.config.ts 不反向导入 src/shared/limits.ts", () => {
+    expect(read("vitest.config.ts")).not.toMatch(/\bfrom\s+["'][^"']*shared\/limits/u);
+    expect(read("vite.config.ts")).not.toMatch(/\bfrom\s+["'][^"']*shared\/limits/u);
+  });
+
   it("vite 开发服务器把 /api/、/auth、别的设备的 /d/ 和 WebSocket 代理到守护进程端口，只改 vite 自己页面发的 Origin", async () => {
     vi.stubEnv(ENV_DEV_DAEMON_PORT, "4000");
     try {
