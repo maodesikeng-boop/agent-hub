@@ -184,10 +184,13 @@ impl DesktopDialogBridge {
                                         break;
                                     }
                                     header_end = Some(end);
-                                    let hdr = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                                    let hdr =
+                                        String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
                                     has_transfer_encoding =
                                         hdr.lines().any(|l| l.starts_with("transfer-encoding:"));
-                                    if let Some(raw_cl) = hdr.lines().find_map(|l| l.strip_prefix("content-length:")) {
+                                    if let Some(raw_cl) =
+                                        hdr.lines().find_map(|l| l.strip_prefix("content-length:"))
+                                    {
                                         match raw_cl.trim().parse::<usize>() {
                                             Ok(len) if len <= MAX_DIALOG_BODY_BYTES => {
                                                 content_len = len;

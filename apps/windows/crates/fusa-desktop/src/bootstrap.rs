@@ -75,9 +75,10 @@ pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewMo
         SupervisorState::Idle => BootstrapViewModel::default(),
         SupervisorState::Starting { phase, .. } => {
             let (title, detail) = match phase {
-                StartupPhase::CheckingPortAndEnvironment | StartupPhase::LaunchingDaemon => {
-                    ("Starting Bellwood…".to_string(), format!("127.0.0.1:{}", snap.port))
-                }
+                StartupPhase::CheckingPortAndEnvironment | StartupPhase::LaunchingDaemon => (
+                    "Starting Bellwood…".to_string(),
+                    format!("127.0.0.1:{}", snap.port),
+                ),
                 StartupPhase::WaitingForReady {
                     elapsed_ms,
                     budget_ms,
@@ -89,9 +90,10 @@ pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewMo
                         format!("127.0.0.1:{}", snap.port)
                     },
                 ),
-                StartupPhase::ExchangingSession => {
-                    ("Signing in…".to_string(), format!("127.0.0.1:{}", snap.port))
-                }
+                StartupPhase::ExchangingSession => (
+                    "Signing in…".to_string(),
+                    format!("127.0.0.1:{}", snap.port),
+                ),
             };
             BootstrapViewModel {
                 tone: "working".to_string(),
@@ -155,7 +157,9 @@ pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewMo
     }
 }
 
-pub fn run_desktop_preflight_probe(runtime_cfg: &NativeRuntimeConfig) -> Result<DesktopPreflightSummary, String> {
+pub fn run_desktop_preflight_probe(
+    runtime_cfg: &NativeRuntimeConfig,
+) -> Result<DesktopPreflightSummary, String> {
     let script = runtime_cfg
         .daemon_root_dir
         .join("src/daemon/desktop-preflight.ts");
@@ -199,6 +203,9 @@ pub fn run_desktop_preflight_probe(runtime_cfg: &NativeRuntimeConfig) -> Result<
         .map_err(|e| format!("Failed to parse desktop-preflight.ts JSON: {e}"))
 }
 
+type ViewCallback = Arc<dyn Fn(BootstrapViewModel) + Send + Sync>;
+type NavigateCallback = Arc<dyn Fn() + Send + Sync>;
+
 pub struct DesktopController {
     pub app_data_dir: PathBuf,
     pub contract: DesktopContract,
@@ -206,8 +213,8 @@ pub struct DesktopController {
     view: Mutex<BootstrapViewModel>,
     workflow_running: AtomicBool,
     navigated_to_daemon: AtomicBool,
-    on_view_changed: Mutex<Option<Arc<dyn Fn(BootstrapViewModel) + Send + Sync>>>,
-    on_ready_to_navigate: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    on_view_changed: Mutex<Option<ViewCallback>>,
+    on_ready_to_navigate: Mutex<Option<NavigateCallback>>,
 }
 
 impl DesktopController {
@@ -238,11 +245,7 @@ impl DesktopController {
         Ok(ctrl)
     }
 
-    pub fn set_callbacks(
-        &self,
-        on_view: Arc<dyn Fn(BootstrapViewModel) + Send + Sync>,
-        on_navigate: Arc<dyn Fn() + Send + Sync>,
-    ) {
+    pub fn set_callbacks(&self, on_view: ViewCallback, on_navigate: NavigateCallback) {
         *self.on_view_changed.lock().unwrap() = Some(on_view);
         *self.on_ready_to_navigate.lock().unwrap() = Some(on_navigate);
     }

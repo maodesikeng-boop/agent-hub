@@ -98,9 +98,11 @@ mod tests {
         }
     }
 
+    type StatusProbeFn = Arc<dyn Fn(u16, &DesktopContract) -> ProbeOutcome + Send + Sync>;
+
     #[derive(Clone)]
     struct MockHttpClient {
-        status_fn: Arc<dyn Fn(u16, &DesktopContract) -> ProbeOutcome + Send + Sync>,
+        status_fn: StatusProbeFn,
         cookie_exchanges: Arc<AtomicUsize>,
     }
 
@@ -204,7 +206,10 @@ mod tests {
         );
 
         let merged = merge_path_entries(
-            &[PathBuf::from(r"C:\Fusa\bin"), PathBuf::from(r"C:\Fusa\node")],
+            &[
+                PathBuf::from(r"C:\Fusa\bin"),
+                PathBuf::from(r"C:\Fusa\node"),
+            ],
             &[
                 r"C:\Windows\System32;C:\Program Files\Git\cmd".to_string(),
                 r"c:\windows\system32\;C:\Users\alice\.local\bin".to_string(),
@@ -246,7 +251,11 @@ mod tests {
             hub_sha256: compute_file_sha256_hex(&hub_exe).unwrap(),
         };
         let manifest_path = tmp.path().join("runtime-manifest.json");
-        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
 
         let rt = NativeDaemonRuntime::new(NativeRuntimeConfig {
             app_data_dir: tmp.path().join("app-data"),
@@ -328,7 +337,9 @@ mod tests {
 
         let srv_handle = thread::spawn(move || {
             while !stop_flag.load(Ordering::SeqCst) {
-                let Ok((mut stream, _)) = listener.accept() else { break };
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
                 if stop_flag.load(Ordering::SeqCst) {
                     break;
                 }
@@ -461,7 +472,10 @@ mod tests {
                     cleaned: Arc::clone(&self.cleaned),
                 }))
             }
-            fn query_owned_status(&self, _run_id: &str) -> Result<OwnedProcessStatus, SupervisorError> {
+            fn query_owned_status(
+                &self,
+                _run_id: &str,
+            ) -> Result<OwnedProcessStatus, SupervisorError> {
                 let alive = self.clock.now() < self.alive_until_ms.load(Ordering::SeqCst);
                 Ok(OwnedProcessStatus {
                     found: true,
@@ -486,7 +500,8 @@ mod tests {
             }
         }
 
-        let ext_http = MockHttpClient::with_status(|_, _| ProbeOutcome::Verified(ok_identity("ext-other")));
+        let ext_http =
+            MockHttpClient::with_status(|_, _| ProbeOutcome::Verified(ok_identity("ext-other")));
         let ext_sup = DaemonSupervisor::new(
             contract.clone(),
             4317,
@@ -550,7 +565,10 @@ mod tests {
                 self.inner
                     .spawn_owned_daemon(run_id, port, c, log, tail, on_exit)
             }
-            fn query_owned_status(&self, run_id: &str) -> Result<OwnedProcessStatus, SupervisorError> {
+            fn query_owned_status(
+                &self,
+                run_id: &str,
+            ) -> Result<OwnedProcessStatus, SupervisorError> {
                 self.inner.query_owned_status(run_id)
             }
             fn signal_owned_daemon(
@@ -885,8 +903,12 @@ adminServer.listen(adminEndpoint, () => {
         );
         for gen_idx in [1, 2] {
             let env_json: serde_json::Value = serde_json::from_str(
-                &fs::read_to_string(hub_home.join("state").join(format!("dialog-env-{gen_idx}.json")))
-                    .unwrap(),
+                &fs::read_to_string(
+                    hub_home
+                        .join("state")
+                        .join(format!("dialog-env-{gen_idx}.json")),
+                )
+                .unwrap(),
             )
             .unwrap();
             assert_eq!(env_json["dialogUrl"], "http://127.0.0.1:59123/pick-folder");
@@ -902,11 +924,26 @@ adminServer.listen(adminEndpoint, () => {
     #[test]
     fn admin_pipe_hash_matches_node_vectors_and_log_rotation_survives_locked_backup() {
         // Byte-for-byte parity with the hashes in src/daemon/platform/win32.test.ts.
-        assert_eq!(data_dir_pipe_hash(r"C:\Users\Alice\.agent-hub"), "6e74bd83902c");
-        assert_eq!(data_dir_pipe_hash(r"c:\users\alice\.agent-hub\"), "6e74bd83902c");
-        assert_eq!(data_dir_pipe_hash("C:/Users/Alice/.agent-hub///"), "6e74bd83902c");
-        assert_eq!(data_dir_pipe_hash(r"D:\Fusa Data\hub-home\"), "f80e5ce8634e");
-        assert_eq!(data_dir_pipe_hash(r"C:\Users\张宇新 Test\.agent-hub"), "e722a7a0d60e");
+        assert_eq!(
+            data_dir_pipe_hash(r"C:\Users\Alice\.agent-hub"),
+            "6e74bd83902c"
+        );
+        assert_eq!(
+            data_dir_pipe_hash(r"c:\users\alice\.agent-hub\"),
+            "6e74bd83902c"
+        );
+        assert_eq!(
+            data_dir_pipe_hash("C:/Users/Alice/.agent-hub///"),
+            "6e74bd83902c"
+        );
+        assert_eq!(
+            data_dir_pipe_hash(r"D:\Fusa Data\hub-home\"),
+            "f80e5ce8634e"
+        );
+        assert_eq!(
+            data_dir_pipe_hash(r"C:\Users\张宇新 Test\.agent-hub"),
+            "e722a7a0d60e"
+        );
         assert_eq!(
             admin_named_pipe_path(Path::new(r"C:\Users\Alice\.agent-hub\")),
             r"\\.\pipe\fusa-6e74bd83902c-admin"

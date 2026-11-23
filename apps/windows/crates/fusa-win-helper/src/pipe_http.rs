@@ -16,7 +16,10 @@ pub struct HubCliPipeRequest<'a> {
     pub exepath: Option<&'a str>,
     #[serde(rename = "stdinUtf8", skip_serializing_if = "Option::is_none")]
     pub stdin_utf8: Option<&'a str>,
-    #[serde(rename = "stdinInvalidUtf8", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        rename = "stdinInvalidUtf8",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub stdin_invalid_utf8: bool,
 }
 
@@ -29,9 +32,7 @@ pub struct HubCliPipeResponse {
 }
 
 pub fn valid_request_path(path: &str) -> bool {
-    path.starts_with('/')
-        && path.len() <= 1024
-        && path.bytes().all(|b| (0x21..=0x7e).contains(&b))
+    path.starts_with('/') && path.len() <= 1024 && path.bytes().all(|b| (0x21..=0x7e).contains(&b))
 }
 
 pub fn format_http_post(path: &str, token: &str, body: &[u8]) -> io::Result<Vec<u8>> {
@@ -159,12 +160,7 @@ pub fn read_http_response(stream: impl Read) -> io::Result<(u16, Vec<u8>)> {
             }
             let size_line = std::str::from_utf8(&size_raw)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad chunk header"))?;
-            let hex = size_line
-                .trim()
-                .split(';')
-                .next()
-                .unwrap_or("")
-                .trim();
+            let hex = size_line.trim().split(';').next().unwrap_or("").trim();
             let n = usize::from_str_radix(hex, 16)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad chunk size"))?;
             if n == 0 {
@@ -207,8 +203,8 @@ pub fn send_hub_cli_over_stream<S: Read + Write>(
     token: &str,
     req: &HubCliPipeRequest<'_>,
 ) -> io::Result<(u16, Vec<u8>)> {
-    let json = serde_json::to_vec(req)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let json =
+        serde_json::to_vec(req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let wire = format_http_post("/hub/cli", token, &json)?;
     stream.write_all(&wire)?;
     stream.flush()?;

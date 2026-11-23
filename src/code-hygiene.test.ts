@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,10 @@ const TS_FUNCTION_MAX_LINES = 250;
 const TSX_FUNCTION_MAX_LINES = 300;
 const BASELINE_PATH = "src/code-hygiene.baseline.json";
 
-const NON_PRODUCTION = /\.test\.tsx?$|(^|\/)(test|fake)-[\w-]+\.tsx?$|fixture/;
+const NON_PRODUCTION = /\.test\.tsx?$|Tests\.swift$|(^|\/)(Tests|tests)\/|(^|\/)(test|fake)-[\w-]+\.tsx?$|fixture/;
+const SKIP_DIRS = new Set(["target", ".build", "DerivedData", "node_modules", "dist", "build", ".git"]);
+const TS_SOURCE = /\.tsx?$/;
+const NATIVE_SOURCE = /\.(swift|rs)$/;
 const COMMENT_RULES: readonly { pattern: RegExp; problem: string; fix: string }[] = [
   { pattern: /[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/, problem: "non-English comment", fix: "rewrite it as one concise English line or delete it" },
   { pattern: /^[\s*]*(-{4,}|={4,})/, problem: "section banner", fix: "delete the banner" },
@@ -91,12 +94,18 @@ function inspectComments(comments: readonly AstNode[], lineOf: (offset: number) 
   return issues;
 }
 
+function countLines(source: string, lineOf: (offset: number) => number): number {
+  if (source.length === 0) return 0;
+  return source.endsWith("\n") ? lineOf(source.length - 1) : lineOf(source.length);
+}
+
 function analyzeSource(path: string, source: string): FileReport {
+  const lineOf = lineIndex(source);
+  const lines = countLines(source, lineOf);
+  if (!TS_SOURCE.test(path)) return { path, lines, commentIssues: [], functions: [] };
   const { program, comments, errors } = parseSync(path, source);
   if (errors.length > 0) throw new Error(`${path}: parse failed: ${errors[0]!.message}`);
-  const lineOf = lineIndex(source);
   const issues = inspectComments(comments as unknown as AstNode[], lineOf);
-  const lines = source.endsWith("\n") ? lineOf(source.length - 1) : lineOf(source.length);
   return { path, lines, commentIssues: issues, functions: measureFunctions(program as unknown as AstNode, lineOf) };
 }
 
@@ -123,12 +132,15 @@ function checkHygiene(reports: readonly FileReport[], baseline: Baseline): strin
   return reports.flatMap((r) => checkFile(r, baseline));
 }
 
-function productionFiles(dir: string, root: string): string[] {
+function productionFiles(dir: string, root: string, matcher: RegExp): string[] {
+  if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.isDirectory()) {
+      return SKIP_DIRS.has(entry.name) ? [] : productionFiles(join(dir, entry.name), root, matcher);
+    }
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) return productionFiles(full, root);
     const rel = relative(root, full).split("\\").join("/");
-    return /\.tsx?$/.test(entry.name) && !NON_PRODUCTION.test(rel) ? [rel] : [];
+    return matcher.test(entry.name) && !NON_PRODUCTION.test(rel) ? [rel] : [];
   });
 }
 
@@ -137,10 +149,17 @@ const body = (n: number) => Array.from({ length: n }, (_, i) => `  const v${i} =
 const fn = (name: string, bodyLines: number) => `export function ${name}() {\n${body(bodyLines)}\n}\n`;
 
 describe("code hygiene guard", () => {
-  it("keeps every production file under src within the file, function, and comment rules", () => {
+  it("keeps every production file under src and apps within the file, function, and comment rules", () => {
     const root = resolve(".");
     const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Baseline;
-    const reports = productionFiles(join(root, "src"), root).map((path) => analyzeSource(path, readFileSync(join(root, path), "utf8")));
+    const files = [
+      ...productionFiles(join(root, "src"), root, TS_SOURCE),
+      ...productionFiles(join(root, "apps"), root, NATIVE_SOURCE),
+    ];
+    expect(files.some((path) => path.endsWith(".swift"))).toBe(true);
+    expect(files.some((path) => path.endsWith(".rs"))).toBe(true);
+    expect(files.some((path) => /(^|\/)Tests\//.test(path) || path.endsWith("Tests.swift"))).toBe(false);
+    const reports = files.map((path) => analyzeSource(path, readFileSync(join(root, path), "utf8")));
     expect(checkHygiene(reports, baseline)).toEqual([]);
   });
 
@@ -200,5 +219,18 @@ describe("code hygiene guard", () => {
   it("rejects a new file over the file length limit", () => {
     const violations = checkHygiene([analyzeSource("src/x.ts", `${body(FILE_MAX_LINES + 1)}\n`)], EMPTY);
     expect(violations).toEqual([expect.stringMatching(/^src\/x\.ts file length: 1001 exceeds the limit of 1000\. Move cohesive parts/)]);
+  });
+
+  it("enforces the file length limit and shrink ratchet on Swift and Rust files under apps", () => {
+    const swiftLines = Array.from({ length: FILE_MAX_LINES + 1 }, (_, i) => `let v${i} = ${i}`).join("\n");
+    const rustLines = Array.from({ length: 1101 }, (_, i) => `let v${i} = ${i};`).join("\n");
+    const baseline: Baseline = { ...EMPTY, files: { "apps/windows/crates/old/src/lib.rs": 1100 } };
+
+    expect(checkHygiene([analyzeSource("apps/macos/NewView.swift", `${swiftLines}\n`)], EMPTY)).toEqual([
+      expect.stringMatching(/^apps\/macos\/NewView\.swift file length: 1001 exceeds the limit of 1000\. Move cohesive parts/),
+    ]);
+    expect(checkHygiene([analyzeSource("apps/windows/crates/old/src/lib.rs", `${rustLines}\n`)], baseline)).toEqual([
+      expect.stringMatching(/^apps\/windows\/crates\/old\/src\/lib\.rs file length: 1101 exceeds the limit of 1100\./),
+    ]);
   });
 });

@@ -126,6 +126,16 @@ describe(".github/workflows", () => {
     expect(knipRuns.length).toBeGreaterThan(0);
   });
 
+  it("run TypeScript lint in check.yml and Rust fmt + clippy across the workspace in windows.yml", () => {
+    const checkSteps = workflow("check.yml").jobs.check!.steps ?? [];
+    expect(checkSteps.some((step) => step.run === "pnpm lint")).toBe(true);
+
+    const winSteps = workflow("windows.yml").jobs["windows-helper-and-integration"]!.steps ?? [];
+    const runs = winSteps.map((step) => step.run ?? "").join("\n");
+    expect(runs).toContain("cargo fmt --manifest-path apps/windows/Cargo.toml --all -- --check");
+    expect(runs).toContain("cargo clippy --manifest-path apps/windows/Cargo.toml --workspace --all-targets --locked -- -D warnings");
+  });
+
   it.each(["mac-desktop.yml", "windows-desktop.yml"])("%s rebuilds on main for every staged runtime input", (name) => {
     const paths = workflow(name).on.push?.paths ?? [];
     for (const input of STAGED_RUNTIME_INPUTS) {
