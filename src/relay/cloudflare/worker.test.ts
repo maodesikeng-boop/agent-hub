@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { unstable_startWorker } from "wrangler";
+import { runRelaySmoke } from "../../../scripts/relay-smoke.ts";
 import { loadOrCreateMeshIdentity, type MeshIdentity } from "../../daemon/mesh/identity.ts";
 import { createRelayClient, registerWithRelay } from "../../daemon/mesh/relay-client.ts";
 import { startFakeGithub, type FakeGithub } from "../../../test/e2e/fake-github.ts";
@@ -26,7 +27,10 @@ const DEVICE_B = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 
 interface WorkerModule {
   handleRelayRequest(request: Request, env: unknown): Promise<Response>;
-  RelayAccountObject: new (state: FakeDoState, env: { PUBLIC_ORIGIN: string; GITHUB_API_ORIGIN?: string }) => {
+  RelayAccountObject: new (
+    state: FakeDoState,
+    env: { PUBLIC_ORIGIN: string; GITHUB_API_ORIGIN?: string; BUILD_SHA?: string; VERSION_METADATA?: { id: string; tag: string; timestamp: string } },
+  ) => {
     fetch(request: Request): Promise<Response>;
     webSocketMessage(ws: FakeCfSocket, message: string | ArrayBuffer): Promise<void>;
     webSocketClose(ws: FakeCfSocket, code: number, reason: string, wasClean: boolean): Promise<void>;
@@ -228,6 +232,57 @@ describe("handleRelayRequest", () => {
 
     const noUpgradeChannel = await fetch(`${relayOrigin}/v1/accounts/${accountId}/channels/0123456789abcdef0123456789abcdef`);
     expect(noUpgradeChannel.status).toBe(426);
+  });
+
+  it("GET and HEAD /health report protocolVersion, buildSha, and no-store caching", async () => {
+    const res = await fetch(`${relayOrigin}${RELAY_PATHS.health}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      service: "bellwood-relay",
+      protocolVersion: RELAY_PROTOCOL_VERSION,
+    });
+
+    const headRes = await fetch(`${relayOrigin}${RELAY_PATHS.health}`, { method: "HEAD" });
+    expect(headRes.status).toBe(200);
+    expect(headRes.headers.get("cache-control")).toBe("no-store");
+
+    const stub = { fetch: async () => new Response("{}", { status: 200 }) };
+    const baseEnv = { ACCOUNTS: { idFromName: (n: string) => n, get: () => stub }, PUBLIC_ORIGIN: "https://relay.test" };
+    const fromVar = await workerMod.handleRelayRequest(new Request("https://relay.test/health"), {
+      ...baseEnv,
+      BUILD_SHA: "deadbeef1234",
+      VERSION_METADATA: { id: "ver-1", tag: "fallback-tag", timestamp: "2026-11-23T00:00:00Z" },
+    });
+    expect(await fromVar.json()).toEqual({
+      ok: true,
+      service: "bellwood-relay",
+      protocolVersion: RELAY_PROTOCOL_VERSION,
+      buildSha: "deadbeef1234",
+      versionId: "ver-1",
+      deployedAt: "2026-11-23T00:00:00Z",
+    });
+
+    const fromMetadata = await workerMod.handleRelayRequest(new Request("https://relay.test/health"), {
+      ...baseEnv,
+      BUILD_SHA: "",
+      VERSION_METADATA: { id: "ver-2", tag: "cafebabe5678", timestamp: "2026-11-23T01:00:00Z" },
+    });
+    expect(await fromMetadata.json()).toEqual({
+      ok: true,
+      service: "bellwood-relay",
+      protocolVersion: RELAY_PROTOCOL_VERSION,
+      buildSha: "cafebabe5678",
+      versionId: "ver-2",
+      deployedAt: "2026-11-23T01:00:00Z",
+    });
+  });
+
+  it("passes scripts/relay-smoke.ts end-to-end against real workerd", async () => {
+    const report = await runRelaySmoke({ relayUrl: relayOrigin });
+    expect(report.origin).toBe(relayOrigin);
+    expect(report.checks).toHaveLength(7);
   });
 
   it("同一 IP 每分钟登记超过 RELAY_REGISTER_PER_IP_PER_MINUTE 次回 429", async () => {

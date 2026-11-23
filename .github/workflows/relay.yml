@@ -1,0 +1,242 @@
+name: relay
+
+# Pull requests touching relay inputs run typecheck, workerd/Node tests, and wrangler dry-runs.
+# Merges to main auto-deploy the staging Worker and run the live smoke check.
+# Production deploys and rollbacks run only from main via workflow_dispatch behind the production Environment approval gate.
+# Runbook: docs/relay-release-design.md
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/relay/**"
+      - "src/shared/api.ts"
+      - "src/shared/limits.ts"
+      - "src/shared/mesh.ts"
+      - "wrangler.toml"
+      - "scripts/relay-smoke.ts"
+      - "scripts/relay-smoke.test.ts"
+      - ".github/workflows/relay.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "src/relay/**"
+      - "src/shared/api.ts"
+      - "src/shared/limits.ts"
+      - "src/shared/mesh.ts"
+      - "wrangler.toml"
+      - "scripts/relay-smoke.ts"
+      - "scripts/relay-smoke.test.ts"
+      - ".github/workflows/relay.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Pipeline action (production actions require main and Environment approval)"
+        required: true
+        default: "deploy-staging"
+        type: choice
+        options:
+          - check-only
+          - deploy-staging
+          - deploy-production
+          - rollback-production
+      rollback_version_id:
+        description: "Optional Cloudflare Worker version UUID for rollback-production (empty = previous version)"
+        required: false
+        default: ""
+        type: string
+      rollback_reason:
+        description: "Rollback reason recorded in Cloudflare deployment history (used by rollback-production)"
+        required: false
+        default: "Manual rollback via GitHub Actions"
+        type: string
+
+# Pull requests cancel superseded runs; every main commit gets its own group so a later merge never cancels or replaces it.
+concurrency:
+  group: relay-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: relay check & wrangler dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Run Cloudflare workerd and Node relay tests
+        run: |
+          pnpm exec vitest run --project=cloudflare --reporter=verbose --reporter=github-actions
+          pnpm exec vitest run --project=node src/relay scripts/relay-smoke.test.ts scripts/ci-workflows.test.ts src/daemon/mesh/relay-client.test.ts --reporter=verbose --reporter=github-actions
+
+      - name: Dry-run Wrangler bundle (production and staging)
+        run: |
+          pnpm exec wrangler deploy --env="" --dry-run --outdir "$RUNNER_TEMP/wrangler-prod"
+          pnpm exec wrangler deploy --env staging --dry-run --outdir "$RUNNER_TEMP/wrangler-staging"
+
+  deploy-staging:
+    name: deploy staging & smoke
+    needs: check
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'deploy-staging' || inputs.target == 'deploy-production'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: staging
+      url: ${{ vars.RELAY_STAGING_URL || 'https://bellwood-relay-staging.bellwood-mesh.workers.dev' }}
+    concurrency:
+      group: relay-deploy-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Deploy staging Worker and run live smoke check
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELAY_STAGING_URL: ${{ vars.RELAY_STAGING_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID secret (see docs/relay-release-design.md)."
+            exit 1
+          fi
+          STAGING_URL="${RELAY_STAGING_URL:-https://bellwood-relay-staging.bellwood-mesh.workers.dev}"
+          STAGING_URL="${STAGING_URL%/}"
+          DEPLOY_VARS=(--var "BUILD_SHA:$GITHUB_SHA")
+          if [ -n "${RELAY_STAGING_URL:-}" ]; then
+            DEPLOY_VARS+=(--var "PUBLIC_ORIGIN:$STAGING_URL")
+          fi
+          pnpm exec wrangler deploy --env staging --tag "$GITHUB_SHA" "${DEPLOY_VARS[@]}" --message "staging ${GITHUB_SHA:0:12} (run $GITHUB_RUN_ID)"
+          node scripts/relay-smoke.ts --url "$STAGING_URL" --expect-sha "$GITHUB_SHA" --wait-ms 30000
+
+  deploy-production:
+    name: deploy production & smoke
+    needs: [check, deploy-staging]
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'deploy-production' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://bellwood-relay.bellwood-mesh.workers.dev
+    concurrency:
+      group: relay-deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Deploy production Worker and run live smoke check
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID secret (see docs/relay-release-design.md)."
+            exit 1
+          fi
+          PROD_URL="https://bellwood-relay.bellwood-mesh.workers.dev"
+          echo "::group::Pre-deploy production state"
+          curl -fsS "$PROD_URL/health" || true
+          echo ""
+          pnpm exec wrangler deployments list --env=""
+          echo "::endgroup::"
+          pnpm exec wrangler deploy --env="" --tag "$GITHUB_SHA" --var "BUILD_SHA:$GITHUB_SHA" --message "prod ${GITHUB_SHA:0:12} (run $GITHUB_RUN_ID)"
+          node scripts/relay-smoke.ts --url "$PROD_URL" --expect-sha "$GITHUB_SHA" --wait-ms 30000
+
+  rollback-production:
+    name: rollback production & smoke
+    needs: check
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'rollback-production' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://bellwood-relay.bellwood-mesh.workers.dev
+    concurrency:
+      group: relay-deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Roll back production Worker and run live smoke check
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_VERSION_ID: ${{ inputs.rollback_version_id }}
+          ROLLBACK_REASON: ${{ inputs.rollback_reason }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID secret (see docs/relay-release-design.md)."
+            exit 1
+          fi
+          PROD_URL="https://bellwood-relay.bellwood-mesh.workers.dev"
+          VERSION_ID="$(printf '%s' "${ROLLBACK_VERSION_ID:-}" | tr -d '[:space:]')"
+          if [ -n "$VERSION_ID" ] && ! [[ "$VERSION_ID" =~ ^[0-9a-fA-F-]+$ ]]; then
+            echo "::error::rollback_version_id must be a Cloudflare Worker version UUID"
+            exit 1
+          fi
+          REASON="$(printf '%s' "${ROLLBACK_REASON:-Manual rollback via GitHub Actions}" | tr '\r\n' '  ' | cut -c1-120)"
+          echo "::group::Pre-rollback production state"
+          curl -fsS "$PROD_URL/health" || true
+          echo ""
+          pnpm exec wrangler deployments list --env=""
+          echo "::endgroup::"
+          if [ -n "$VERSION_ID" ]; then
+            pnpm exec wrangler rollback --env="" "$VERSION_ID" --yes --message "$REASON"
+          else
+            pnpm exec wrangler rollback --env="" --yes --message "$REASON"
+          fi
+          node scripts/relay-smoke.ts --url "$PROD_URL" --wait-ms 30000
+          echo "Post-rollback /health:"
+          curl -fsS "$PROD_URL/health"
+          echo ""

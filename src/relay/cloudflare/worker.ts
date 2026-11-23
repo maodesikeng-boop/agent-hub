@@ -26,12 +26,14 @@ import {
   type RelaySocket,
 } from "../core.ts";
 import { clientKeyOf, createIpRateLimiter, createVerifiedTokenCache, tokenDigest } from "../guards.ts";
-import { isRelayToken, parseRelayRegisterRequest, type RelayErrorCode, type RelayRegisterRequest } from "../protocol.ts";
+import { isRelayToken, parseRelayRegisterRequest, RELAY_PATHS, RELAY_PROTOCOL_VERSION, type RelayErrorCode, type RelayHealthResponse, type RelayRegisterRequest } from "../protocol.ts";
 
 export interface RelayWorkerEnv {
   ACCOUNTS: DurableObjectNamespace;
   PUBLIC_ORIGIN: string;
   GITHUB_API_ORIGIN?: string;
+  BUILD_SHA?: string;
+  VERSION_METADATA?: WorkerVersionMetadata;
 }
 
 const INTERNAL_REGISTER_URL = "https://do.internal/internal/register";
@@ -60,8 +62,19 @@ function clientIpOf(request: Request): string {
 }
 
 function publicOriginOf(request: Request, env: Pick<RelayWorkerEnv, "PUBLIC_ORIGIN">): string {
-  const configured = env.PUBLIC_ORIGIN.trim();
+  const configured = env.PUBLIC_ORIGIN?.trim() ?? "";
   return configured !== "" ? new URL(configured).origin : new URL(request.url).origin;
+}
+
+function healthPayloadOf(env: Pick<RelayWorkerEnv, "BUILD_SHA" | "VERSION_METADATA">): RelayHealthResponse {
+  return {
+    ok: true,
+    service: "bellwood-relay",
+    protocolVersion: RELAY_PROTOCOL_VERSION,
+    buildSha: env.BUILD_SHA?.trim() || env.VERSION_METADATA?.tag?.trim() || null,
+    versionId: env.VERSION_METADATA?.id?.trim() || null,
+    deployedAt: env.VERSION_METADATA?.timestamp?.trim() || null,
+  };
 }
 
 function jsonResponse(status: number, body: unknown, extraHeaders?: Record<string, string>): Response {
@@ -146,7 +159,13 @@ function parseAccountRoute(pathname: string): { accountId: AccountId; kind: "con
 
 export async function handleRelayRequest(request: Request, env: RelayWorkerEnv): Promise<Response> {
   const url = new URL(request.url);
-  if (request.method === "POST" && url.pathname === "/v1/register") {
+  if ((request.method === "GET" || request.method === "HEAD") && url.pathname === RELAY_PATHS.health) {
+    if (request.method === "HEAD") {
+      return new Response(null, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+    }
+    return jsonResponse(200, healthPayloadOf(env), { "cache-control": "no-store" });
+  }
+  if (request.method === "POST" && url.pathname === RELAY_PATHS.register) {
     if (!registerLimiter.allow(clientKeyOf(clientIpOf(request)), Date.now())) {
       return jsonResponse(429, { error: "rate_limited" });
     }
@@ -295,11 +314,11 @@ export class RelayAccountObject {
     }
 
     const room = this.ensureRoom(route.accountId, publicOriginOf(request, this.env));
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
 
     if (route.kind === "control") {
+      const pair = new WebSocketPair();
+      const client = pair[0];
+      const server = pair[1];
       let closedOnOpen = false;
       const socketWrapper = wrapSocket(server);
       this.state.acceptWebSocket(server, ["control", ipTag]);
@@ -318,16 +337,30 @@ export class RelayAccountObject {
 
     const device = url.searchParams.get("device") ?? "";
     const session = url.searchParams.get("session") ?? "";
-    this.state.acceptWebSocket(server, ["channel", `ch:${route.channel}`, ipTag]);
     if (!isRelayToken(route.channel) || !isDeviceId(device) || !isRelayToken(session)) {
-      wrapSocket(server).close(WS_CLOSE_POLICY, "bad_frame");
-      return new Response(null, { status: 101, webSocket: client });
+      return jsonResponse(400, { error: "bad_frame" });
     }
-    const handle = room.openChannel({ channel: route.channel, device, session }, wrapSocket(server));
+    const queuedSends: Array<string | Uint8Array> = [];
+    let acceptedSocket: RelaySocket | null = null;
+    const channelSocket: RelaySocket = {
+      send(data) {
+        if (acceptedSocket === null) queuedSends.push(data);
+        else acceptedSocket.send(data);
+      },
+      close(code, reason) {
+        acceptedSocket?.close(code, reason);
+      },
+    };
+    const handle = room.openChannel({ channel: route.channel, device, session }, channelSocket);
     if ("error" in handle) {
-      wrapSocket(server).close(WS_CLOSE_POLICY, handle.error);
-      return new Response(null, { status: 101, webSocket: client });
+      return jsonResponse(REGISTER_ERROR_STATUS[handle.error], { error: handle.error });
     }
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    this.state.acceptWebSocket(server, ["channel", `ch:${route.channel}`, ipTag]);
+    acceptedSocket = wrapSocket(server);
+    for (const chunk of queuedSends) acceptedSocket.send(chunk);
     this.channels.set(server, handle);
     const att: SocketAttachment = {
       kind: "channel",
