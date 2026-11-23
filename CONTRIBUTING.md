@@ -19,9 +19,10 @@ pnpm start    # builds dist/web and starts the daemon on 127.0.0.1:4317
 
 ## Before you push
 
-Run these three commands. All three must pass.
+Run these four commands. All four must pass.
 
 ```sh
+pnpm lint
 pnpm typecheck
 pnpm test:related   # every test affected by your branch, not only the tests next to the files you changed
 pnpm verify         # real daemon plus headless Chromium smoke check
