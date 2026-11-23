@@ -1,22 +1,52 @@
 import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { ProviderAuthMethodDescriptor } from "../../shared/index.ts";
 import type { VendorSetupAdapter } from "../daemon-types.ts";
+import { readBoundedJsonObject } from "../_common/setup/file-helpers.ts";
 import { OPENCODE_DATA_REL } from "./spec.ts";
 
 const OPENCODE_INSTALL_URL = "https://opencode.ai/v2/install";
 const OPENCODE_NPM_SPEC = "@opencode/cli";
 const API_KEY_ENV = "OPENCODE_API_KEY";
+const OPENCODE_ACCOUNT_TABLES = ["credential", "account", "control_account"] as const;
 
 // `opencode auth login` needs an interactive terminal, so the UI offers only the OpenCode Zen key.
 const OPENCODE_AUTH_METHODS: readonly ProviderAuthMethodDescriptor[] = [
   { id: "api_key", kind: "api_key", label: "OpenCode Zen API key", placeholder: "sk-..." },
 ];
 
-function hasLocalAccountStore(userHome: string): boolean {
+function hasDbCredentials(dbPath: string): boolean {
+  if (!existsSync(dbPath)) return false;
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    for (const table of OPENCODE_ACCOUNT_TABLES) {
+      try {
+        if (db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get() !== undefined) return true;
+      } catch {
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+    }
+  }
+}
+
+function hasLocalAccountCredentials(userHome: string): boolean {
   const join = /^[A-Za-z]:/.test(userHome) || userHome.includes("\\") ? win32.join : posix.join;
   const dataDir = join(userHome, ...OPENCODE_DATA_REL.split("/"));
-  return existsSync(join(dataDir, "opencode.db")) || existsSync(join(dataDir, "auth.json"));
+  const authPath = join(dataDir, "auth.json");
+  if (existsSync(authPath)) {
+    const auth = readBoundedJsonObject(authPath);
+    if (auth !== null && Object.keys(auth).length > 0) return true;
+  }
+  return hasDbCredentials(join(dataDir, "opencode.db"));
 }
 
 export const opencodeSetupAdapter: VendorSetupAdapter = {
@@ -39,7 +69,7 @@ export const opencodeSetupAdapter: VendorSetupAdapter = {
     if (ctx.secrets.has("opencode", API_KEY_ENV)) {
       return { accountSummary: "API key configured", canSignOut: true, methods: OPENCODE_AUTH_METHODS };
     }
-    if (ctx.availability === "available" || (ctx.installed() && hasLocalAccountStore(ctx.userHome))) {
+    if (ctx.availability === "available" || (ctx.installed() && hasLocalAccountCredentials(ctx.userHome))) {
       return { accountSummary: "Signed in", canSignOut: false, methods: OPENCODE_AUTH_METHODS };
     }
     return { accountSummary: null, canSignOut: false, methods: OPENCODE_AUTH_METHODS };

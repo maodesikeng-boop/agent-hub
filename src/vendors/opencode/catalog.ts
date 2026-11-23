@@ -52,13 +52,26 @@ export function parseOpenCodeModelsText(text: string): ModelCatalog | null {
   return { ...base, source: "vendor", models: ordered.slice(0, MAX_CATALOG_MODELS) };
 }
 
+function countArrayAccounts(items: readonly unknown[]): number {
+  let count = 0;
+  for (const item of items) {
+    const rec = asRecord(item);
+    if (rec !== null && Array.isArray(rec.connections)) {
+      if (rec.connections.length > 0) count += 1;
+    } else {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 export function countOpenCodeAccounts(authJson: unknown): number | null {
-  if (Array.isArray(authJson)) return authJson.length;
+  if (Array.isArray(authJson)) return countArrayAccounts(authJson);
   const obj = asRecord(authJson);
   if (obj === null) return null;
   for (const key of ["accounts", "integrations", "providers", "credentials"]) {
     const value = obj[key];
-    if (Array.isArray(value)) return value.length;
+    if (Array.isArray(value)) return countArrayAccounts(value);
     const nested = asRecord(value);
     if (nested !== null) return Object.keys(nested).length;
   }
@@ -77,8 +90,6 @@ export const opencodeCatalogProbe: VendorCatalogProbe = {
       if (/\bENOENT\b/u.test(raw.error)) return "not_installed";
       if (vendorFailureOf(raw.error, "opencode")?.kind === "auth") return "signed_out";
     }
-    // Zen's free models answer without an account, so a listed catalog alone means usable.
-    if (raw.modelsText !== null && parseOpenCodeModelsText(raw.modelsText) !== null) return "available";
     return accounts === 0 ? "signed_out" : "unknown";
   },
   availabilityOfError(error) {
@@ -110,17 +121,28 @@ export function createOpenCodeCatalogSource(options: VendorCatalogSourceOptions)
     installed: options.installed,
     ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
     async query(signal): Promise<OpenCodeCatalogRaw> {
-      const [models, auth] = await Promise.allSettled([
-        runOpenCode(options, ["models"], signal),
-        runOpenCode(options, ["auth", "list", "--format", "json"], signal),
-      ]);
-      if (models.status === "rejected" && auth.status === "rejected") throw models.reason;
-      const parsedAuth = auth.status === "fulfilled" ? parseJsonOutput(auth.value) : { ok: false as const };
-      const failure = [models, auth].find((r) => r.status === "rejected");
+      // Run sequentially: concurrent --standalone starts race on first-time opencode.db migration.
+      let modelsText: string | null = null;
+      let modelsErr: Error | null = null;
+      try {
+        modelsText = await runOpenCode(options, ["models", "--standalone"], signal);
+      } catch (err) {
+        modelsErr = err instanceof Error ? err : new Error(String(err));
+      }
+      let authStdout: string | null = null;
+      let authErr: Error | null = null;
+      try {
+        authStdout = await runOpenCode(options, ["auth", "list", "--standalone", "--format", "json"], signal);
+      } catch (err) {
+        authErr = err instanceof Error ? err : new Error(String(err));
+      }
+      if (modelsErr !== null && authErr !== null) throw modelsErr;
+      const parsedAuth = authStdout !== null ? parseJsonOutput(authStdout) : { ok: false as const };
+      const failure = modelsErr ?? authErr;
       return {
-        modelsText: models.status === "fulfilled" ? models.value : null,
+        modelsText,
         authJson: parsedAuth.ok ? parsedAuth.value : null,
-        error: failure?.status === "rejected" ? String(failure.reason instanceof Error ? failure.reason.message : failure.reason) : null,
+        error: failure !== null ? failure.message : null,
       };
     },
   };
