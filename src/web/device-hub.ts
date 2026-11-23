@@ -69,6 +69,10 @@ function waitForRecoveryRetry(signal: AbortSignal): Promise<void> {
   });
 }
 
+function isDocumentHidden(): boolean {
+  return typeof document === "object" && document.visibilityState === "hidden";
+}
+
 export class DeviceHub {
   readonly store: StoreApi<HubState> = createStore<HubState>(() => initialState);
   readonly link: LinkHistory = { lastOnlineAt: null, disconnectedAt: null };
@@ -85,7 +89,6 @@ export class DeviceHub {
   private alive = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private offlineTimer: ReturnType<typeof setTimeout> | undefined;
-  private notifyQueued = false;
   private notifyRaf: number | undefined;
   private frameResetRaf: number | undefined;
   private frameChangeCount = 0;
@@ -93,6 +96,7 @@ export class DeviceHub {
   private closeStream: (() => void) | null = null;
   private loadAttempt = 0;
   private offUnauthorized: (() => void) | null = null;
+  private offVisibility: (() => void) | null = null;
 
   readonly key: DeviceKey;
   readonly client: HubClient;
@@ -148,26 +152,43 @@ export class DeviceHub {
     });
   }
 
-  private flushPendingNotify(): void {
-    this.notifyQueued = false;
+  private clearFrameResetRaf(): void {
     this.frameChangeCount = 0;
     this.frameRenderMs = 0;
-    if (this.notifyRaf !== undefined && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(this.notifyRaf);
-      this.notifyRaf = undefined;
+    if (this.frameResetRaf !== undefined) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.frameResetRaf);
+      this.frameResetRaf = undefined;
     }
   }
 
+  private flushPendingNotify(): boolean {
+    this.clearFrameResetRaf();
+    if (this.notifyRaf === undefined) return false;
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.notifyRaf);
+    this.notifyRaf = undefined;
+    return true;
+  }
+
+  private handleVisibilityChange = (): void => {
+    const hadPending = this.flushPendingNotify();
+    if (hadPending && (this.alive || this.cursor !== null)) this.onChange();
+  };
+
   private scheduleChangeNotify(): void {
+    // Browsers and WKWebView suspend rAF while hidden, which would stall background notifications.
+    if (isDocumentHidden() || typeof requestAnimationFrame !== "function") {
+      this.flushPendingNotify();
+      if (this.alive || this.cursor !== null) this.onChange();
+      return;
+    }
     this.frameChangeCount++;
     this.scheduleFrameReset();
     const coalesce = this.frameChangeCount > WS_BURST_FRAME_LIMIT || this.frameRenderMs >= WS_FRAME_BUDGET_MS;
-    if (coalesce && typeof requestAnimationFrame === "function") {
+    if (coalesce) {
       if (this.notifyRaf !== undefined) return;
       this.notifyRaf = requestAnimationFrame(() => {
         this.notifyRaf = undefined;
-        this.frameChangeCount = 0;
-        this.frameRenderMs = 0;
+        this.clearFrameResetRaf();
         if (this.alive || this.cursor !== null) this.onChange();
       });
       return;
@@ -201,6 +222,11 @@ export class DeviceHub {
 
   start(): void {
     this.alive = true;
+    this.offVisibility?.();
+    if (typeof document === "object" && typeof document.addEventListener === "function") {
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      this.offVisibility = () => document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    }
     if (!this.remote) {
       this.offUnauthorized = onUnauthorized(() => {
         if (!this.alive) return;
@@ -220,15 +246,12 @@ export class DeviceHub {
     this.rewindBarriers.clear();
     this.offUnauthorized?.();
     this.offUnauthorized = null;
+    this.offVisibility?.();
+    this.offVisibility = null;
     clearTimeout(this.timer);
     clearTimeout(this.offlineTimer);
     this.offlineTimer = undefined;
     this.flushPendingNotify();
-    if (this.frameResetRaf !== undefined && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(this.frameResetRaf);
-      this.frameResetRaf = undefined;
-    }
-    this.frameChangeCount = 0;
     this.stopStream();
   }
 

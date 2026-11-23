@@ -237,6 +237,10 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
   }
   let minNowMs = Number.NEGATIVE_INFINITY;
   let maxNowMs = Number.POSITIVE_INFINITY;
+  const boundNowMs = (thresholdMs: number) => {
+    if (thresholdMs <= now) minNowMs = Math.max(minNowMs, thresholdMs);
+    else maxNowMs = Math.min(maxNowMs, thresholdMs);
+  };
   const vendors: QuotaVendor[] = [];
   for (const spec of QUOTA_VENDORS) {
     const windows: QuotaWindowUsage[] = [];
@@ -246,21 +250,16 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
       .map((s) => {
         if (s.rateLimit !== null) {
           if (s.rateLimit.resetsAt !== null && Number.isFinite(s.rateLimit.resetsAt) && s.rateLimit.resetsAt > 0) {
-            const topResetMs = s.rateLimit.resetsAt * 1000;
-            if (topResetMs <= now) minNowMs = Math.max(minNowMs, topResetMs);
-            else maxNowMs = Math.min(maxNowMs, topResetMs);
+            boundNowMs(s.rateLimit.resetsAt * 1000);
           }
           for (const key of spec.windows) {
             const w = s.rateLimit.windows[key];
             if (w === undefined || !Number.isFinite(w.utilization) || !Number.isFinite(w.resetsAt)) continue;
-            if (w.resetsAt > 0) {
-              const resetMs = w.resetsAt * 1000;
-              if (resetMs <= now) minNowMs = Math.max(minNowMs, resetMs);
-              else maxNowMs = Math.min(maxNowMs, resetMs);
-            }
+            if (w.resetsAt > 0) boundNowMs(w.resetsAt * 1000);
             if (w.resetsAt >= REAL_EPOCH_SEC) {
               const maxSpanSec = QUOTA_WINDOWS[key].durationMins * 60 + WINDOW_DURATION_TOLERANCE_SEC;
-              if (w.resetsAt - now / 1000 > maxSpanSec) minNowMs = Math.max(minNowMs, now + 1);
+              boundNowMs(REAL_EPOCH_SEC * 1000);
+              boundNowMs((w.resetsAt - maxSpanSec) * 1000);
             }
           }
         }

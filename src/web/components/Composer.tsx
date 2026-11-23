@@ -150,7 +150,7 @@ function syncComposerHeightAndWrap(params: {
   obstacleEls: (HTMLElement | null)[];
 }): { heightPx: number; wrapped: boolean; settled: string | null } {
   const { el, value, prev, multiline, layoutChanged, lastHeightPx, clientWidthPx, settledValue, obstacleEls } = params;
-  const atMaxHeight = !layoutChanged && multiline && lastHeightPx !== null && lastHeightPx >= MAX_HEIGHT_PX && prev !== null && (value.startsWith(prev) || value.length === prev.length + 1);
+  const atMaxHeight = !layoutChanged && multiline && lastHeightPx !== null && lastHeightPx >= MAX_HEIGHT_PX && prev !== null && value.startsWith(prev);
   if (atMaxHeight) {
     return { heightPx: lastHeightPx, wrapped: true, settled: settledValue };
   }
@@ -166,9 +166,8 @@ function syncComposerHeightAndWrap(params: {
   if (singleRowKnownFit) {
     return { heightPx: lastHeightPx, wrapped: false, settled: settledValue };
   }
-  // Single-line mode is already at 1-row height, and appending only grows content, so skip height:auto reset there.
-  const maybeShrink = !value.startsWith(prev ?? "") && (multiline || layoutChanged || value === "");
-  if (prev === null || value === "" || layoutChanged || (maybeShrink && (value.length < prev.length || prev.includes("\n") !== value.includes("\n")))) {
+  // Single-line mode is already at 1-row height, and appending in multiline mode only grows content, so skip height:auto reset there.
+  if (prev === null || value === "" || layoutChanged || (multiline && !value.startsWith(prev))) {
     el.style.height = "auto";
   }
   const contentHeight = el.scrollHeight;

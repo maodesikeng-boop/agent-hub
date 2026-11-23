@@ -1,16 +1,19 @@
 // Slack that keeps text near the edge from flipping between layouts.
 const SINGLE_ROW_SLACK_PX = 4;
 
+let probedGetContext: unknown;
 let measureContext: CanvasRenderingContext2D | null = null;
 let lastCanvasFont = "";
 
 function getMeasureContext(): CanvasRenderingContext2D | null {
-  if (!measureContext) {
+  const getContext = typeof HTMLCanvasElement === "function" ? HTMLCanvasElement.prototype.getContext : null;
+  if (probedGetContext !== getContext) {
+    probedGetContext = getContext;
+    lastCanvasFont = "";
     try {
       measureContext = document.createElement("canvas").getContext("2d");
-      lastCanvasFont = "";
     } catch {
-      return null;
+      measureContext = null;
     }
   }
   return measureContext;

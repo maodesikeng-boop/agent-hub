@@ -806,9 +806,14 @@ describe("Composer 输入性能与零重排守卫", () => {
 
       scrollHeightReads = 0;
       csSpy.mockClear();
-      const baselineFontSets = fontSets;
 
-      for (const next of ["ab", "abc", "abcd", "abcde"]) {
+      rerender(<Composer value="ab" placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
+      expect(scrollHeightReads).toBe(0);
+      expect(csSpy).not.toHaveBeenCalled();
+      const baselineFontSets = fontSets;
+      expect(baselineFontSets).toBe(1);
+
+      for (const next of ["abc", "abcd", "abcde"]) {
         rerender(<Composer value={next} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
       }
       expect(scrollHeightReads).toBe(0);
@@ -823,6 +828,94 @@ describe("Composer 输入性能与零重排守卫", () => {
       else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
       if (savedScrollHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", savedScrollHeight);
       else delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+    }
+  });
+
+  it("多行模式下非前缀替换成更少行但字符数 >= 原文本，或从上限高度替换为单行，都能正确缩回真实高度", () => {
+    const savedClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const savedScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 600 });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        const el = this as HTMLTextAreaElement;
+        const text = String(el.value ?? "");
+        const lines = text === "" ? 1 : text.split("\n").length;
+        const contentHeight = lines === 1 ? 36 : 16 + lines * 20;
+        const current = el.style.height;
+        if (current && current !== "auto" && current.endsWith("px")) {
+          return Math.max(contentHeight, parseFloat(current));
+        }
+        return contentHeight;
+      },
+    });
+    const csSpy = vi.spyOn(window, "getComputedStyle").mockImplementation(
+      () =>
+        ({
+          getPropertyValue: () => "",
+          lineHeight: "20px",
+          paddingTop: "8px",
+          paddingBottom: "8px",
+          paddingLeft: "0px",
+          paddingRight: "0px",
+          fontStyle: "normal",
+          fontWeight: "400",
+          fontSize: "15px",
+          fontFamily: "sans-serif",
+          columnGap: "8px",
+        }) as unknown as CSSStyleDeclaration,
+    );
+
+    try {
+      const s = staging();
+      const onChange = () => {};
+      const onSend = () => {};
+
+      const { container, rerender } = render(<Composer value={"line 1\nline 2\nline 3\nline 4"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
+      const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+      expect(box.style.height).toBe("96px");
+
+      // 34 chars > 27 chars, fewer lines (2 rows = 56px): must reset height:auto so it shrinks instead of sticking at 96px
+      rerender(<Composer value={"line 1\nlonger single second line!!"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
+      expect(box.style.height).toBe("56px");
+
+      // At MAX_HEIGHT_PX (180px), replacing 11 lines (21 chars) with a 22-char single line must shrink back to 36px and single-line layout
+      rerender(<Composer value={"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
+      expect(box.style.height).toBe("180px");
+      expect(container.querySelector(".composer-frame")).toHaveAttribute("data-multiline", "true");
+
+      rerender(<Composer value={"1234567890123456789012"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
+      expect(box.style.height).toBe("36px");
+      expect(container.querySelector(".composer-frame")).toHaveAttribute("data-multiline", "false");
+    } finally {
+      csSpy.mockRestore();
+      if (savedClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", savedClientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
+      if (savedScrollHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", savedScrollHeight);
+      else delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+    }
+  });
+
+  it("getMeasureContext 缓存按 HTMLCanvasElement.prototype.getContext 引用失效，无 canvas 实现时不重复探测", () => {
+    const nullSpy = vi.fn(() => null);
+    HTMLCanvasElement.prototype.getContext = nullSpy as never;
+
+    const savedClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 600 });
+    try {
+      const s = staging();
+      const { rerender } = render(<Composer value="a" placeholder="发消息" staging={s} onChange={() => {}} onSend={() => {}} />);
+      rerender(<Composer value="ab" placeholder="发消息" staging={s} onChange={() => {}} onSend={() => {}} />);
+      rerender(<Composer value="abc" placeholder="发消息" staging={s} onChange={() => {}} onSend={() => {}} />);
+      expect(nullSpy).toHaveBeenCalledTimes(1);
+
+      const mockSpy = vi.fn(() => ({ font: "", measureText: (t: string) => ({ width: t.length * 8 }) }));
+      HTMLCanvasElement.prototype.getContext = mockSpy as never;
+      rerender(<Composer value="abcd" placeholder="发消息" staging={s} onChange={() => {}} onSend={() => {}} />);
+      expect(mockSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      if (savedClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", savedClientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
     }
   });
 });
