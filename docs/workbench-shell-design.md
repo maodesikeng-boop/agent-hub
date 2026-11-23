@@ -1,5 +1,7 @@
 # Workbench shell design
 
+> Snapshot: 2026-11-23 (commit `42ad066e`)
+
 The web workbench moves to one layout and one visual language. A fixed honey-yellow rail holds Router, the linked computers, usage, Settings, and the account. A cream column lists the selected computer's Project Managers, with a pinned group on top. The conversation sits on one white sheet, and a warm-gray side panel to its right shows Pieces, a Worker, or the PM's settings. Columns resize within limits. Pixel art marks the characters, avatars, and brand pieces, and controls use smooth line icons and plain borders.
 
 **Revision after review.** On 2026-11-23 the user approved this plan, chose (a) for both open choices, and asked for changes that override the control styling in section 3. Button icons, switches, select arrows, and button and frame borders drop the pixel corners and pixel icons for smooth lines and plain borders. Usage shows as an hourglass, and device icons follow the device type for macOS, Windows, Linux, iPhone, and Android. The first implementation step rewrites the affected parts of section 3 and the UI standard table. The review also adds work on decision cards, the settings pages, and the usage popover.

@@ -17,7 +17,20 @@
   "ignore": [
     ".agents/**",
     "experiments/**",
-    "apps/windows/crates/fusa-desktop/ui/**"
+    "apps/windows/crates/fusa-desktop/ui/**",
+    "src/web/components/AppRail.tsx",
+    "src/web/components/ComputerSwitcher.tsx",
+    "src/web/components/ProfilePanel.tsx",
+    "src/web/components/ProjectList.tsx",
+    "src/web/components/SidePanel.tsx",
+    "src/web/components/ThreadCard.tsx",
+    "src/web/mobile/TabBar.tsx",
+    "src/web/pane-widths.ts",
+    "src/web/project-list.ts",
+    "src/web/rail-model.ts",
+    "src/web/shell-layout.ts",
+    "src/web/side-panel.ts",
+    "src/web/ui/resizable.tsx"
   ],
   "ignoreDependencies": [
     "@tauri-apps/cli"
