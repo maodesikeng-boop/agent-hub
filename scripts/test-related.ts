@@ -28,6 +28,7 @@ const DEFAULT_BASE = "origin/main";
 const MODULE_FILE = /\.[cm]?[jt]sx?$/;
 const TEST_FILE = /\.test\.tsx?$/;
 const SEARCH_ROOTS = ["src", "scripts", "test"];
+const MANIFEST_OR_LOCKFILE_NAMES = new Set(["package.json", "pnpm-lock.yaml"]);
 
 function gitLines(cwd: string, args: string[]): string[] {
   return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER_BYTES }).split("\0").filter(Boolean);
@@ -88,6 +89,17 @@ function splitArgs(argv: string[]): { base: string; vitestArgs: string[] } {
   return { base, vitestArgs: [...argv.slice(0, at), ...argv.slice(at + 2)] };
 }
 
+/** Selects `vitest related` targets while omitting `package.json` and `pnpm-lock.yaml`, because Vitest's `forceRerunTriggers` expands `package.json` to the full suite and path linking plus `ALWAYS_RUN_TESTS` already cover manifest and lockfile consumers. */
+export function selectRelatedTargets(
+  changed: readonly string[],
+  sources: ReadonlyMap<string, string>,
+): { linked: string[]; targets: string[] } {
+  const linked = changed.some((file) => referenceNeedles(file).length > 0) ? findReferencingFiles(changed, sources) : [];
+  const direct = changed.filter((file) => !MANIFEST_OR_LOCKFILE_NAMES.has(posix.basename(file)));
+  const targets = [...new Set([...direct, ...linked, ...ALWAYS_RUN_TESTS])];
+  return { linked, targets };
+}
+
 function main(argv: string[]): number {
   const { base, vitestArgs } = splitArgs(argv);
   let changed: string[];
@@ -101,8 +113,8 @@ function main(argv: string[]): number {
     console.log(`test:related: no changes since ${base}`);
     return 0;
   }
-  const linked = changed.some((file) => referenceNeedles(file).length > 0) ? findReferencingFiles(changed, readCodeSources(REPO_ROOT)) : [];
-  const targets = [...new Set([...changed, ...linked, ...ALWAYS_RUN_TESTS])];
+  const sources = changed.some((file) => referenceNeedles(file).length > 0) ? readCodeSources(REPO_ROOT) : new Map<string, string>();
+  const { linked, targets } = selectRelatedTargets(changed, sources);
   console.log(`test:related: ${changed.length} changed since ${base}, ${linked.length} linked by path, ${ALWAYS_RUN_TESTS.length} guards`);
   const vitest = join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
   const run = spawnSync(process.execPath, [vitest, "related", "--run", "--passWithNoTests", ...vitestArgs, ...targets], {
