@@ -322,19 +322,21 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .status-shimmer {
-  --status-shimmer-duration: 2.2s;
   position: relative;
 }
 .status-shimmer-track {
+  --status-shimmer-duration: 2.2s;
   position: absolute;
   inset: 0;
   overflow: hidden;
+  text-overflow: inherit;
   pointer-events: none;
 }
 .status-shimmer-mask {
   display: block;
   width: 100%;
   height: 100%;
+  text-overflow: inherit;
   -webkit-mask-image: linear-gradient(90deg, transparent 22%, black 50%, transparent 78%);
   mask-image: linear-gradient(90deg, transparent 22%, black 50%, transparent 78%);
   will-change: transform;

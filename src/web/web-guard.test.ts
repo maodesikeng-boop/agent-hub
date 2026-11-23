@@ -645,7 +645,7 @@ describe("web-guard：src/web 代码守卫", () => {
     const scriptInputs = files.map((file) => ({ file: relative(WEB_DIR, file), content: readFileSync(file, "utf8") }));
     const result = checkInfiniteAnimations(cssInputs, scriptInputs);
     expect(result.infiniteRefs.map((ref) => ref.name)).toEqual(
-      expect.arrayContaining(["status-shimmer", "slime-hop-working", "bell-swing-working", "pixel-loader"]),
+      expect.arrayContaining(["status-shimmer", "status-shimmer-counter", "slime-hop-working", "bell-swing-working", "pixel-loader"]),
     );
     expect(result.violations).toEqual([]);
   });

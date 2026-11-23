@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ApiRetryInfo } from "../../shared/index.ts";
 import { retryCountdownText, retryText } from "../step-labels.ts";
-import { ShimmerOverlay } from "./StatusShimmer.tsx";
+import { StatusShimmer } from "./StatusShimmer.tsx";
 
 const RETRY_TICK_MS = 1000;
 
@@ -22,15 +22,9 @@ export function RetryNotice({ info, shimmer = false }: { info: ApiRetryInfo; shi
   const countdown = seconds > 0 ? retryCountdownText(seconds) : null;
   return (
     <span title={detail === "" ? undefined : detail}>
-      <span className="relative inline-block">
-        {label}
-        {shimmer && <ShimmerOverlay text={label} />}
-      </span>
+      {shimmer ? <StatusShimmer text={label} /> : <span>{label}</span>}
       {countdown !== null ? (
-        <span className="relative ml-1.5 inline-block">
-          {countdown}
-          {shimmer && <ShimmerOverlay text={countdown} />}
-        </span>
+        shimmer ? <StatusShimmer text={countdown} className="ml-1.5" /> : <span className="ml-1.5">{countdown}</span>
       ) : null}
     </span>
   );

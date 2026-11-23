@@ -245,11 +245,15 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
 
   it("在忙的状态词流光：用合成层双反向位移扫过文字本身，无矩形底框，减少动态效果时停用并隐藏", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
+    const trackRule = css.match(/\.status-shimmer-track \{[^}]*\}/)?.[0] ?? "";
     const maskRule = css.match(/\.status-shimmer-mask \{[^}]*\}/)?.[0] ?? "";
     const beamRule = css.match(/\.status-shimmer-beam \{[^}]*\}/)?.[0] ?? "";
+    expect(trackRule).toMatch(/text-overflow:\s*inherit/);
+    expect(maskRule).toMatch(/text-overflow:\s*inherit/);
     expect(maskRule).toMatch(/mask-image:\s*linear-gradient\(/);
     expect(maskRule).toMatch(/animation:\s*status-shimmer\b/);
     expect(maskRule).toMatch(/will-change:\s*transform/);
+    expect(beamRule).toMatch(/text-overflow:\s*inherit/);
     expect(beamRule).toMatch(/animation:\s*status-shimmer-counter\b/);
     expect(beamRule).toMatch(/will-change:\s*transform/);
     expect(beamRule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);

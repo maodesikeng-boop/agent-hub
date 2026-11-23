@@ -44,4 +44,15 @@ describe("RetryNotice", () => {
     render(<RetryNotice info={info({ errorStatus: 529, error: "overloaded" })} />);
     expect(screen.getByText(/Retrying/).closest("[title]")).toHaveAttribute("title", "529 overloaded");
   });
+
+  it("开启 shimmer 时独立复用 StatusShimmer 宿主与流光覆盖层", () => {
+    vi.useFakeTimers({ now: 5_000 });
+    const { container } = render(<RetryNotice info={info()} shimmer />);
+    expect(screen.getByText(/Retrying 3\/10/)).toHaveClass("status-shimmer");
+    expect(screen.getByText("in 5s")).toHaveClass("status-shimmer");
+    expect(Array.from(container.querySelectorAll(".status-shimmer-beam")).map((el) => el.getAttribute("data-text"))).toEqual([
+      "Retrying 3/10",
+      "in 5s",
+    ]);
+  });
 });
