@@ -11,6 +11,7 @@ import {
   type TaskGraphId,
   type TaskNode,
 } from "../../shared/index.ts";
+import { clearDecisionDraft, gateDecisionDraftKey, useDecisionDraft } from "../decision-drafts.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -24,6 +25,7 @@ import type { JellyColorId } from "../../shared/slimes.ts";
 import { fruitTrackVars } from "../lib/palette.ts";
 import type { StepBead } from "../pixel-path.ts";
 import { GRAPH_TUBE_CELL_PX } from "../task-graph-layout.ts";
+import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { GateMark } from "./GateMark.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { GateDecisionCard, JellyBead, resolveBoundWorker, TubeLayer } from "./PeelTrack.tsx";
@@ -85,6 +87,12 @@ function statusLabelOf(node: TaskNode): string {
   }
 }
 
+function SettledGateDraft({ draftKey, settledNote }: { draftKey: string; settledNote: string | null }) {
+  const draft = useDecisionDraft(draftKey);
+  if (draft.trim() === "" || (settledNote !== null && settledNote.trim() === draft.trim())) return null;
+  return <UnsentDraftBanner draft={draft} compact onDismiss={() => clearDecisionDraft(draftKey)} />;
+}
+
 export const TaskGraphDialog = memo(function TaskGraphDialog({
   graph,
   open,
@@ -131,6 +139,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   }, []);
   const [actionError, setActionError] = useState<ErrorLike | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const seenGateDraftKeyRef = useRef(new Map<string, string>());
 
   const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
   const inFlightRef = useRef(false);
@@ -316,6 +325,9 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
               const measureKey = measureKeyOf(graph.id, node.key, isWaitingGate);
 
+              const nodeRefKey = `${graph.id}:${node.key}`;
+              const activeDraftKey = gateDecisionDraftKey(client.device, graph.id, node.key, node.gateAskMessageId);
+              if (isWaitingGate) seenGateDraftKeyRef.current.set(nodeRefKey, activeDraftKey);
               if (isWaitingGate) {
                 return (
                   <div
@@ -349,6 +361,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
 
               const decisionLabel = node.decision?.choice ?? node.decision?.note ?? null;
               const summaryText = node.artifact?.summary ?? null;
+              const settledDraftKey =
+                node.gateAskMessageId !== null ? activeDraftKey : (seenGateDraftKeyRef.current.get(nodeRefKey) ?? activeDraftKey);
 
               return (
                 <div
@@ -401,6 +415,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                     {summaryText !== null && (
                       <p className="line-clamp-2 text-xs text-muted-foreground">{summaryText}</p>
                     )}
+                    <SettledGateDraft draftKey={settledDraftKey} settledNote={node.decision?.note ?? null} />
                     {canSkip && (
                       <div className="flex justify-end">
                         <button

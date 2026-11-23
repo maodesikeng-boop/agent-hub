@@ -1,13 +1,13 @@
-import { FileText, Loader2, PencilLine, Play, Send } from "../ui/icons.ts";
-import { memo, useId, useMemo, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
+import { Check, Copy, FileText, Loader2, PencilLine, Play, Send } from "../ui/icons.ts";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, type Deliverable, type SentFile } from "../../shared/index.ts";
 import { DELIVERABLE_MEDIA_HEIGHT_REM } from "../deliverable-size.ts";
 import { layoutCardDeliverables } from "../deliverables-layout.ts";
 import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
-import { Input } from "../ui/input.tsx";
 import { FileCard, useFileExpired } from "./Attachments.tsx";
+import { COPIED_RESET_MS, copyText } from "./CodeBlock.tsx";
 import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -149,13 +149,14 @@ export const CardBody = memo(function CardBody({
   );
 });
 
+const NOTE_MAX_HEIGHT_PX = 144;
+
 export function CardNoteForm({
   disabled,
   pending,
   value: controlledValue,
   onChange: controlledOnChange,
-  resetRev = 0,
-  noteRef,
+  onFocus,
   onSubmitNote,
   tone = "default",
   className,
@@ -166,8 +167,7 @@ export function CardNoteForm({
   pending: boolean;
   value?: string;
   onChange?: (value: string) => void;
-  resetRev?: number;
-  noteRef?: MutableRefObject<string>;
+  onFocus?: () => void;
   onSubmitNote: (rawNote: string) => void;
   tone?: "default" | "open";
   className?: string;
@@ -175,18 +175,28 @@ export function CardNoteForm({
   buttonSize?: "sm";
 }) {
   const id = useId();
-  const [trackedRev, setTrackedRev] = useState(resetRev);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [localNote, setLocalNote] = useState("");
-  if (controlledValue === undefined && trackedRev !== resetRev) {
-    setTrackedRev(resetRev);
-    setLocalNote("");
-  }
   const note = controlledValue ?? localNote;
   const setNote = (next: string) => {
-    if (noteRef !== undefined) noteRef.current = next;
     if (controlledOnChange !== undefined) controlledOnChange(next);
     else setLocalNote(next);
   };
+
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (el === null) return;
+    if (note === "") {
+      el.style.height = "";
+      return;
+    }
+    el.style.height = "auto";
+    if (el.scrollHeight > 0) {
+      const borderY = Math.max(0, el.offsetHeight - el.clientHeight);
+      el.style.height = `${Math.min(el.scrollHeight + borderY, NOTE_MAX_HEIGHT_PX)}px`;
+    }
+  }, [note]);
+
   const canSend = !disabled && note.trim() !== "";
   return (
     <div
@@ -201,14 +211,23 @@ export function CardNoteForm({
         <PencilLine className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />
         <span>Your reply</span>
       </label>
-      <div className="flex items-center gap-2">
-        <Input
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={textareaRef}
           id={id}
+          rows={1}
           value={note}
           disabled={disabled}
+          onFocus={onFocus}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Reply or note…"
-          className={cn("min-w-0 flex-1 bg-background", buttonSize === "sm" && "h-8", inputClassName)}
+          className={cn(
+            "min-w-0 flex-1 resize-none overflow-y-auto border-2 border-border-strong bg-background px-3 text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-border-focus disabled:cursor-default disabled:opacity-50 max-h-36",
+            buttonSize === "sm"
+              ? "min-h-8 pointer-coarse:min-h-11 py-1 pointer-coarse:py-2.5 text-minor leading-5"
+              : "min-h-9 pointer-coarse:min-h-11 py-1 pointer-coarse:py-2 text-body leading-6",
+            inputClassName,
+          )}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && canSend) {
               e.preventDefault();
@@ -227,6 +246,59 @@ export function CardNoteForm({
           Send
         </Button>
       </div>
+    </div>
+  );
+}
+
+export function UnsentDraftBanner({
+  draft,
+  onDismiss,
+  compact = false,
+  className,
+}: {
+  draft: string;
+  onDismiss: () => void;
+  compact?: boolean;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const CopyIcon = copied ? Check : Copy;
+  return (
+    <div
+      data-unsent-draft
+      className={cn("border-2 border-border-strong bg-panel", compact ? "mt-2 p-2" : "mt-3 p-2.5", className)}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1.5 text-minor font-medium text-foreground">
+          <PencilLine className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />
+          <span>Unsent reply</span>
+        </span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void copyText(draft).then(() => {
+                setCopied(true);
+                clearTimeout(timer.current);
+                timer.current = setTimeout(() => setCopied(false), COPIED_RESET_MS);
+              });
+            }}
+          >
+            <CopyIcon className="size-pixel-sm" aria-hidden="true" />
+            {copied ? "Copied" : "Copy"}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
+            Dismiss
+          </Button>
+        </div>
+      </div>
+      <p className="mt-1.5 border border-border bg-background px-2.5 py-1.5 text-minor whitespace-pre-wrap select-text [overflow-wrap:anywhere] text-foreground">
+        {draft}
+      </p>
     </div>
   );
 }

@@ -379,15 +379,20 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     }
   });
 
-  it("回复框和同排的 Send 按钮同一档高度（36px），输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
+  it("回复框和同排的 Send 按钮同一档高度（36px），支持 Shift+Enter 换行且输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
     await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" })]));
     const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
     const input = within(card).getByRole("textbox", { name: "Your reply" });
     const send = within(card).getByRole("button", { name: "Send" });
-    expect(input).toHaveClass("h-9", "text-body");
+    expect(input.tagName).toBe("TEXTAREA");
+    expect(input).toHaveClass("min-h-9", "text-body");
     expect(input).not.toHaveClass("text-minor");
     expect(send).toHaveClass("h-9");
     expect(send).not.toHaveClass("h-8");
+
+    fireEvent.change(input, { target: { value: "第一行" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(api.calls.filter((c) => c.path === "/api/asks/3/answer")).toEqual([]);
   });
 
   it("点击某个选项按钮只回答这一张卡（POST /api/asks/:id/answer），不发用户消息；回答后选项按钮变为 disabled 并高亮所选项", async () => {
@@ -434,5 +439,51 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
+  });
+
+  it("切到别的项目经理再切回：AskCard 未提交的 Your reply 草稿通过共享草稿库保留不丢失", async () => {
+    await boot(twoPms([ask({ id: 3, text: "确认缓存策略", meta: { needsUser: true, options: ["方案 A", "方案 B"] } })]));
+    const card1 = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
+    const input1 = within(card1).getByRole("textbox", { name: "Your reply" }) as HTMLTextAreaElement;
+    fireEvent.change(input1, { target: { value: "第 2 节边界条件还没写清楚" } });
+    expect(input1.value).toBe("第 2 节边界条件还没写清楚");
+
+    fireEvent.click(row("老马"));
+    await waitFor(() => expect(document.querySelector('[data-message-id="3"]')).toBeNull());
+
+    fireEvent.click(row("小林"));
+    const restoredCard = await waitFor(() => {
+      const el = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect((within(restoredCard).getByRole("textbox", { name: "Your reply" }) as HTMLTextAreaElement).value).toBe("第 2 节边界条件还没写清楚");
+  });
+
+  it("远端定案或被关闭替换时：若 AskCard 已有非空未发草稿，保留只读可复制草稿提示直到手动关闭", async () => {
+    const ws = await boot(twoPms([ask({ id: 3, text: "是否下线旧接口？", meta: { needsUser: true, options: ["下线", "保留"] } })]));
+    const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
+    const input = within(card).getByRole("textbox", { name: "Your reply" });
+    fireEvent.change(input, { target: { value: "请保留旧接口兼容一周" } });
+
+    act(() =>
+      ws.push(
+        messageChange(
+          11,
+          "message.updated",
+          ask({ id: 3, text: "是否下线旧接口？", meta: { needsUser: true, options: ["下线", "保留"], answered: true, closed: true } }),
+        ),
+      ),
+    );
+
+    await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Your reply" })).toBeNull());
+    const banner = card.querySelector<HTMLElement>("[data-unsent-draft]")!;
+    expect(banner).not.toBeNull();
+    expect(banner).toHaveTextContent("Unsent reply");
+    expect(banner).toHaveTextContent("请保留旧接口兼容一周");
+    expect(within(banner).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    expect(card.querySelector("[data-unsent-draft]")).toBeNull();
   });
 });

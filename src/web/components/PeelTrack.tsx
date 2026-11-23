@@ -12,6 +12,7 @@ import {
   type WorkerId,
 } from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
+import { clearDecisionDraft, gateDecisionDraftKey, getDecisionDraft, setDecisionDraft, useDecisionDraft } from "../decision-drafts.ts";
 import { cleanPieceTitle, errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
@@ -174,9 +175,9 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   client: HubClient;
 }) {
   const qc = useHubQueryClient();
+  const draftKey = gateDecisionDraftKey(client.device, graphId, node.key, node.gateAskMessageId);
+  const draft = useDecisionDraft(draftKey);
   const hasOptions = node.gateOptions.length > 0;
-  const [noteRev, setNoteRev] = useState(0);
-  const noteRef = useRef("");
   const [err, setErr] = useState<ErrorLike | null>(null);
   const clientIdRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
@@ -194,8 +195,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
       onMutate: () => setErr(null),
       onSuccess: () => {
         clientIdRef.current = null;
-        noteRef.current = "";
-        setNoteRev((n) => n + 1);
+        clearDecisionDraft(draftKey);
       },
       onError: (error) => {
         setErr(errorText(error));
@@ -239,7 +239,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
                 key={opt}
                 type="button"
                 disabled={decideMutation.isPending}
-                onClick={() => submit(opt, noteRef.current)}
+                onClick={() => submit(opt, getDecisionDraft(draftKey))}
                 className={cn(
                   "flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-center justify-between gap-2 border-2 px-3 py-1.5 text-left text-minor font-medium transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:border-border-strong disabled:bg-send-disabled disabled:text-muted-foreground",
                   isRec
@@ -255,10 +255,11 @@ export const GateDecisionCard = memo(function GateDecisionCard({
         </div>
       )}
       <CardNoteForm
+        key={draftKey}
+        value={draft}
+        onChange={(next) => setDecisionDraft(draftKey, next)}
         disabled={decideMutation.isPending}
         pending={decideMutation.isPending}
-        resetRev={noteRev}
-        noteRef={noteRef}
         onSubmitNote={(raw) => submit(null, raw)}
         tone="open"
         className={hasOptions ? "mt-3" : "mt-2"}

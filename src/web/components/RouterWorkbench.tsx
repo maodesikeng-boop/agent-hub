@@ -21,6 +21,13 @@ import { localClient, type HubClient } from "../client.ts";
 import { FleetDeviceScopes, FleetLooks, type DeviceScopeLookup } from "../device-scope.tsx";
 import type { ComposerSource, MenuItem } from "../composer-suggest.ts";
 import { submitDecision } from "../decision-actions.ts";
+import {
+  clearDecisionDraft,
+  getDecisionDraft,
+  routerDecisionDraftKey,
+  setDecisionDraft,
+  useDecisionDraft,
+} from "../decision-drafts.ts";
 import { LOCAL_DEVICE, isReadOnly, type DeviceView } from "../devices.ts";
 import { errorText, formatTime, newClientId, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -42,6 +49,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/colla
 import { uploadFiles, type DraftSlot, type StagedFiles } from "../upload.ts";
 import { Avatar } from "./Avatar.tsx";
 import { DraftComposer } from "./Composer.tsx";
+import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { RouterAvatar } from "./RouterAvatar.tsx";
 import { RIGHT_RAIL_VISIBLE_ROWS } from "./RightRail.tsx";
@@ -96,24 +104,80 @@ function pruneRouterCommandMutations(qc: QueryClient, confirmedClientIds: Readon
   }
 }
 
+interface ClosedRouterDraft {
+  decisionKey: string;
+  draftKey: string;
+  pmName: string;
+  question: string;
+  deviceKey: string;
+  conversationId: ConversationId;
+  look: Parameters<typeof Avatar>[0]["look"];
+}
+
+function closedDraftOf(entry: FleetDecisionEntry): ClosedRouterDraft {
+  return {
+    decisionKey: entry.decision.key,
+    draftKey: routerDecisionDraftKey(entry.deviceId, entry.decision),
+    pmName: entry.decision.pmName,
+    question: entry.decision.question,
+    deviceKey: entry.deviceKey,
+    conversationId: entry.decision.conversationId,
+    look: entry.look,
+  };
+}
+
+const ClosedRouterDraftCard = memo(function ClosedRouterDraftCard({
+  closed,
+  onDismiss,
+  onOpenConversation,
+}: {
+  closed: ClosedRouterDraft;
+  onDismiss: () => void;
+  onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
+}) {
+  const draft = useDecisionDraft(closed.draftKey);
+  if (draft.trim() === "") return null;
+  return (
+    <article aria-label={closed.question} data-closed-draft-card className="border-2 border-border-strong bg-background p-4">
+      <div className="flex flex-wrap items-center gap-2 text-minor">
+        <button
+          type="button"
+          className="touch-target inline-flex cursor-pointer items-center gap-2 text-left font-semibold text-foreground outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus"
+          onClick={() => onOpenConversation(closed.deviceKey, closed.conversationId)}
+        >
+          <Avatar look={closed.look} size={24} />
+          <span className="truncate">{closed.pmName}</span>
+        </button>
+        <span className="border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Closed</span>
+      </div>
+      <h3 className="mt-2.5 text-body font-medium text-foreground">{closed.question}</h3>
+      <UnsentDraftBanner draft={draft} onDismiss={onDismiss} />
+    </article>
+  );
+});
+
 const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   decisions,
+  closedDraft,
   mobile,
   multiDevice,
-  decisionNotes,
   decisionErrors,
+  onNoteFocus,
   onNoteChange,
+  onDismissClosedDraft,
   onSubmit,
   onOpenConversation,
   selectedKey,
   onSelectKey,
 }: {
   decisions: readonly FleetDecisionEntry[];
+  closedDraft: ClosedRouterDraft | null;
   mobile: boolean;
   multiDevice: boolean;
-  decisionNotes: Readonly<Record<string, string>>;
   decisionErrors: Readonly<Record<string, ErrorLike>>;
-  onNoteChange: (key: string, value: string) => void;
+  onNoteFocus: (decisionKey: string) => void;
+  onNoteChange: (decisionKey: string, draftKey: string, value: string) => void;
+  onDismissClosedDraft: () => void;
   onSubmit: (entry: FleetDecisionEntry, optionIndex: number | null, note: string) => void;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   selectedKey: string | null;
@@ -122,25 +186,33 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   const [collapsed, setCollapsed] = useState(false);
   const [rowsExpanded, setRowsExpanded] = useState(false);
 
+  const hasContent = decisions.length > 0 || closedDraft !== null;
   useEffect(() => {
-    if (decisions.length === 0) {
+    if (!hasContent) {
       setCollapsed(false);
       setRowsExpanded(false);
     }
-  }, [decisions.length]);
-
-  const trayRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const tray = trayRef.current;
-    if (tray !== null) tray.scrollTop = 0;
-  }, [selectedKey]);
-
-  if (decisions.length === 0) return null;
+  }, [hasContent]);
 
   const expandedEntry =
-    (selectedKey !== null ? decisions.find((d) => d.decision.key === selectedKey) : undefined) ??
-    decisions[0]!;
-  const otherEntries = decisions.filter((d) => d.decision.key !== expandedEntry.decision.key);
+    closedDraft !== null
+      ? null
+      : ((selectedKey !== null ? decisions.find((d) => d.decision.key === selectedKey) : undefined) ?? decisions[0] ?? null);
+  const activeSlotKey = closedDraft !== null ? `closed:${closedDraft.draftKey}` : (expandedEntry?.decision.key ?? null);
+
+  const trayRef = useRef<HTMLDivElement>(null);
+  const prevSlotKeyRef = useRef<string | null>(activeSlotKey);
+  useEffect(() => {
+    if (prevSlotKeyRef.current === activeSlotKey) return;
+    prevSlotKeyRef.current = activeSlotKey;
+    const tray = trayRef.current;
+    if (tray !== null) tray.scrollTop = 0;
+  }, [activeSlotKey]);
+
+  if (!hasContent) return null;
+
+  const otherEntries =
+    expandedEntry === null ? decisions : decisions.filter((d) => d.decision.key !== expandedEntry.decision.key);
   const hasMoreRows = otherEntries.length > RIGHT_RAIL_VISIBLE_ROWS;
   const shownRows =
     hasMoreRows && !rowsExpanded ? otherEntries.slice(0, RIGHT_RAIL_VISIBLE_ROWS) : otherEntries;
@@ -170,16 +242,25 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
               mobile ? "max-h-[45dvh]" : "max-h-[50dvh]",
             )}
           >
-            <RouterDecisionCard
-              entry={expandedEntry}
-              multiDevice={multiDevice}
-              busy={false}
-              note={decisionNotes[expandedEntry.decision.key] ?? ""}
-              error={decisionErrors[expandedEntry.decision.key] ?? null}
-              onNoteChange={onNoteChange}
-              onSubmit={onSubmit}
-              onOpenConversation={onOpenConversation}
-            />
+            {closedDraft !== null ? (
+              <ClosedRouterDraftCard
+                closed={closedDraft}
+                onDismiss={onDismissClosedDraft}
+                onOpenConversation={onOpenConversation}
+              />
+            ) : expandedEntry !== null ? (
+              <RouterDecisionCard
+                key={expandedEntry.decision.key}
+                entry={expandedEntry}
+                multiDevice={multiDevice}
+                busy={false}
+                error={decisionErrors[expandedEntry.decision.key] ?? null}
+                onNoteFocus={onNoteFocus}
+                onNoteChange={onNoteChange}
+                onSubmit={onSubmit}
+                onOpenConversation={onOpenConversation}
+              />
+            ) : null}
 
             {shownRows.length > 0 && (
               <div className="-mx-2.5 flex flex-col gap-0.5 pt-0.5">
@@ -270,6 +351,158 @@ function TargetChip({
   );
 }
 
+function useRouterDecisions(
+  decisions: readonly FleetDecisionEntry[],
+  clientForDevice: (deviceKey: string) => HubClient,
+) {
+  const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
+  const [decisionErrors, setDecisionErrors] = useState<Readonly<Record<string, ErrorLike>>>({});
+  const [selectedDecisionKey, setSelectedDecisionKey] = useState<string | null>(null);
+  const [closedDraft, setClosedDraft] = useState<ClosedRouterDraft | null>(null);
+  const [trackedExpanded, setTrackedExpanded] = useState<FleetDecisionEntry | null>(null);
+  const decisionsRef = useRef(decisions);
+  decisionsRef.current = decisions;
+
+  const visibleDecisions = useMemo(
+    () => decisions.filter((d) => hiddenDecisionTokens[d.decision.key] !== decisionInstanceToken(d)),
+    [decisions, hiddenDecisionTokens],
+  );
+
+  // Promote a remotely closed card with an unsent draft during render so the next card never mounts in its slot.
+  let activeClosedDraft = closedDraft;
+  if (activeClosedDraft !== null && getDecisionDraft(activeClosedDraft.draftKey).trim() === "") {
+    activeClosedDraft = null;
+    setClosedDraft(null);
+  }
+  if (trackedExpanded !== null) {
+    const trackedKey = trackedExpanded.decision.key;
+    const trackedDraftKey = routerDecisionDraftKey(trackedExpanded.deviceId, trackedExpanded.decision);
+    const stillPresent = decisions.some(
+      (d) => d.decision.key === trackedKey && routerDecisionDraftKey(d.deviceId, d.decision) === trackedDraftKey,
+    );
+    const locallyHidden = hiddenDecisionTokens[trackedKey] === decisionInstanceToken(trackedExpanded);
+    if (!stillPresent && !locallyHidden && getDecisionDraft(trackedDraftKey).trim() !== "") {
+      const nextClosed = closedDraftOf(trackedExpanded);
+      activeClosedDraft = nextClosed;
+      setClosedDraft(nextClosed);
+      setTrackedExpanded(null);
+    }
+  }
+
+  const currentExpanded =
+    activeClosedDraft !== null
+      ? null
+      : ((selectedDecisionKey !== null ? visibleDecisions.find((d) => d.decision.key === selectedDecisionKey) : undefined) ??
+        visibleDecisions[0] ??
+        null);
+
+  useEffect(() => {
+    setTrackedExpanded((prev) => {
+      if (prev === currentExpanded) return prev;
+      if (
+        prev !== null &&
+        currentExpanded !== null &&
+        prev.decision.key === currentExpanded.decision.key &&
+        routerDecisionDraftKey(prev.deviceId, prev.decision) === routerDecisionDraftKey(currentExpanded.deviceId, currentExpanded.decision)
+      ) {
+        return prev;
+      }
+      return currentExpanded;
+    });
+  }, [currentExpanded]);
+
+  useEffect(() => {
+    const activeTokenByKey = new Map(decisions.map((d) => [d.decision.key, decisionInstanceToken(d)]));
+    setHiddenDecisionTokens((prev) => {
+      const entries = Object.entries(prev);
+      if (entries.length === 0) return prev;
+      const kept = entries.filter(([k, tok]) => activeTokenByKey.get(k) === tok);
+      return kept.length === entries.length ? prev : Object.fromEntries(kept);
+    });
+    setDecisionErrors((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.length === 0 || keys.every((k) => activeTokenByKey.has(k))) return prev;
+      return Object.fromEntries(Object.entries(prev).filter(([k]) => activeTokenByKey.has(k)));
+    });
+  }, [decisions]);
+
+  const handleNoteFocus = useCallback((decisionKey: string) => {
+    setSelectedDecisionKey(decisionKey);
+  }, []);
+
+  const handleNoteChange = useCallback((decisionKey: string, draftKey: string, value: string) => {
+    setSelectedDecisionKey(decisionKey);
+    setDecisionDraft(draftKey, value);
+    setDecisionErrors((prev) => {
+      if (prev[decisionKey] === undefined) return prev;
+      const { [decisionKey]: _removed, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+
+  const handleSelectKey = useCallback((key: string) => {
+    setClosedDraft(null);
+    setSelectedDecisionKey(key);
+  }, []);
+
+  const handleDismissClosedDraft = useCallback(() => {
+    setClosedDraft((prev) => {
+      if (prev !== null) clearDecisionDraft(prev.draftKey);
+      return null;
+    });
+    setSelectedDecisionKey(null);
+  }, []);
+
+  const inflightDecisions = useRef(new Set<string>());
+  const handleDecisionSubmit = useCallback(
+    async (entry: FleetDecisionEntry, optionIndex: number | null, note: string) => {
+      const key = entry.decision.key;
+      const draftKey = routerDecisionDraftKey(entry.deviceId, entry.decision);
+      const token = decisionInstanceToken(entry);
+      if (inflightDecisions.current.has(key)) return;
+      inflightDecisions.current.add(key);
+      setHiddenDecisionTokens((prev) => ({ ...prev, [key]: token }));
+      setDecisionErrors((prev) => {
+        if (prev[key] === undefined) return prev;
+        const { [key]: _removed, ...rest } = prev;
+        return rest;
+      });
+      try {
+        const client = clientForDevice(entry.deviceKey);
+        await submitDecision(client, entry.decision, { optionIndex, note });
+        clearDecisionDraft(draftKey);
+      } catch (err) {
+        setHiddenDecisionTokens((prev) => {
+          if (prev[key] !== token) return prev;
+          const { [key]: _removed, ...rest } = prev;
+          return rest;
+        });
+        if (!decisionsRef.current.some((d) => d.decision.key === key) && getDecisionDraft(draftKey).trim() !== "") {
+          setClosedDraft(closedDraftOf(entry));
+        } else {
+          setSelectedDecisionKey(key);
+          setDecisionErrors((prev) => ({ ...prev, [key]: errorText(err) }));
+        }
+      } finally {
+        inflightDecisions.current.delete(key);
+      }
+    },
+    [clientForDevice],
+  );
+
+  return {
+    visibleDecisions,
+    closedDraft: activeClosedDraft,
+    decisionErrors,
+    selectedDecisionKey,
+    handleNoteFocus,
+    handleNoteChange,
+    handleSelectKey,
+    handleDismissClosedDraft,
+    handleDecisionSubmit,
+  };
+}
+
 export const RouterWorkbench = memo(function RouterWorkbench({
   leading,
   toolbar,
@@ -317,82 +550,19 @@ export const RouterWorkbench = memo(function RouterWorkbench({
     [clientForDevice],
   );
 
-  const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
-  const [decisionNotes, setDecisionNotes] = useState<Readonly<Record<string, string>>>({});
-  const [decisionErrors, setDecisionErrors] = useState<Readonly<Record<string, ErrorLike>>>({});
-  const [selectedDecisionKey, setSelectedDecisionKey] = useState<string | null>(null);
+  const {
+    visibleDecisions,
+    closedDraft,
+    decisionErrors,
+    selectedDecisionKey,
+    handleNoteFocus,
+    handleNoteChange,
+    handleSelectKey,
+    handleDismissClosedDraft,
+    handleDecisionSubmit,
+  } = useRouterDecisions(view.decisions, clientForDevice);
 
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    const activeTokenByKey = new Map(view.decisions.map((d) => [d.decision.key, decisionInstanceToken(d)]));
-    setHiddenDecisionTokens((prev) => {
-      const entries = Object.entries(prev);
-      if (entries.length === 0) return prev;
-      const kept = entries.filter(([k, tok]) => activeTokenByKey.get(k) === tok);
-      return kept.length === entries.length ? prev : Object.fromEntries(kept);
-    });
-    setDecisionNotes((prev) => {
-      const keys = Object.keys(prev);
-      if (keys.length === 0 || keys.every((k) => activeTokenByKey.has(k))) return prev;
-      return Object.fromEntries(Object.entries(prev).filter(([k]) => activeTokenByKey.has(k)));
-    });
-    setDecisionErrors((prev) => {
-      const keys = Object.keys(prev);
-      if (keys.length === 0 || keys.every((k) => activeTokenByKey.has(k))) return prev;
-      return Object.fromEntries(Object.entries(prev).filter(([k]) => activeTokenByKey.has(k)));
-    });
-  }, [view.decisions]);
-
-  const visibleDecisions = useMemo(
-    () => view.decisions.filter((d) => hiddenDecisionTokens[d.decision.key] !== decisionInstanceToken(d)),
-    [view.decisions, hiddenDecisionTokens],
-  );
-
-  const handleNoteChange = useCallback((key: string, value: string) => {
-    setDecisionNotes((prev) => ({ ...prev, [key]: value }));
-    setDecisionErrors((prev) => {
-      if (prev[key] === undefined) return prev;
-      const { [key]: _removed, ...rest } = prev;
-      return rest;
-    });
-  }, []);
-
-  const inflightDecisions = useRef(new Set<string>());
-  const handleDecisionSubmit = useCallback(
-    async (entry: FleetDecisionEntry, optionIndex: number | null, note: string) => {
-      const key = entry.decision.key;
-      const token = decisionInstanceToken(entry);
-      if (inflightDecisions.current.has(key)) return;
-      inflightDecisions.current.add(key);
-      setHiddenDecisionTokens((prev) => ({ ...prev, [key]: token }));
-      setDecisionErrors((prev) => {
-        if (prev[key] === undefined) return prev;
-        const { [key]: _removed, ...rest } = prev;
-        return rest;
-      });
-      try {
-        const client = clientForDevice(entry.deviceKey);
-        await submitDecision(client, entry.decision, { optionIndex, note });
-        setDecisionNotes((prev) => {
-          if (prev[key] === undefined) return prev;
-          const { [key]: _removed, ...rest } = prev;
-          return rest;
-        });
-      } catch (err) {
-        setHiddenDecisionTokens((prev) => {
-          if (prev[key] !== token) return prev;
-          const { [key]: _removed, ...rest } = prev;
-          return rest;
-        });
-        setSelectedDecisionKey(key);
-        setDecisionErrors((prev) => ({ ...prev, [key]: errorText(err) }));
-      } finally {
-        inflightDecisions.current.delete(key);
-      }
-    },
-    [clientForDevice],
-  );
 
   const stream = useMemo<FleetRouterStream>(() => {
     const inputs: RouterStreamDeviceInput[] = devices.map((d) => ({
@@ -654,22 +824,24 @@ export const RouterWorkbench = memo(function RouterWorkbench({
 
         <RouterNeedsYouTray
           decisions={visibleDecisions}
+          closedDraft={closedDraft}
           mobile={mobile}
           multiDevice={view.multiDevice}
-          decisionNotes={decisionNotes}
           decisionErrors={decisionErrors}
+          onNoteFocus={handleNoteFocus}
           onNoteChange={handleNoteChange}
+          onDismissClosedDraft={handleDismissClosedDraft}
           onSubmit={handleDecisionSubmit}
           onOpenConversation={onOpenConversation}
           selectedKey={selectedDecisionKey}
-          onSelectKey={setSelectedDecisionKey}
+          onSelectKey={handleSelectKey}
         />
 
         <RouterStream
           stream={stream}
           selfId={resolvedSelfId}
           pendingTurns={pendingTurns}
-          hasDecisions={visibleDecisions.length > 0}
+          hasDecisions={visibleDecisions.length > 0 || closedDraft !== null}
           clientForDevice={clientForDevice}
           storeForDevice={storeForDevice}
           onRetryUnsent={handleRetryUnsent}

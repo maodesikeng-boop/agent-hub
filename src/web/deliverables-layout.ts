@@ -1,4 +1,5 @@
 import { sentFileUrl, type Deliverable } from "../shared/index.ts";
+import { LAYOUT_CACHE_PER_ARRAY_MAX } from "./limits.ts";
 
 export interface DeliverableSegment {
   readonly markdown: string;
@@ -16,7 +17,6 @@ interface RawBlock {
   readonly isListItem: boolean;
 }
 
-const LAYOUT_CACHE_PER_ARRAY_MAX = 64;
 const layoutCache = new WeakMap<readonly Deliverable[], Map<string, CardDeliverablesLayout>>();
 
 const EMPTY_DELIVERABLES: readonly Deliverable[] = [];

@@ -561,4 +561,62 @@ describe("待交付状态展示（Ready to finish）", () => {
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
     expect(within(zoom).getByText("Ready to finish")).toBeInTheDocument();
   });
+
+  it("任务图门禁卡草稿跨开关弹窗与对话 AskCard 共享；远端定案离开 waiting:user 后在节点上保留只读可复制未发草稿", async () => {
+    const user = userEvent.setup();
+    const { ws } = await bootSingle(graphSnapshot());
+    const rail = await waitFor(sidePanel);
+
+    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
+    const gateCard = within(zoom).getByTestId("peel-gate-card");
+    await user.type(within(gateCard).getByLabelText("Your reply"), "补充回滚方案");
+
+    // 关掉全览弹窗再打开，草稿仍在，且对话里同一门禁 AskCard 同步显示同一份草稿
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "发布流水线" })).toBeNull());
+    const chatCard = document.querySelector<HTMLElement>('[data-message-id="99"] [data-ask-card]')!;
+    expect((within(chatCard).getByLabelText("Your reply") as HTMLTextAreaElement).value).toBe("补充回滚方案");
+
+    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    const zoomReopened = await screen.findByRole("dialog", { name: "发布流水线" });
+    expect((within(within(zoomReopened).getByTestId("peel-gate-card")).getByLabelText("Your reply") as HTMLTextAreaElement).value).toBe("补充回滚方案");
+
+    // 远端定案离开 waiting:user（即使 gateAskMessageId 被清空，也靠活跃时记住的 key 保住未发草稿）
+    act(() =>
+      ws.push({
+        seq: 31,
+        type: "task_graph.updated",
+        data: {
+          graph: {
+            ...graph(),
+            nodes: [
+              makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
+              makeNode({
+                key: "gate",
+                title: "确认上线",
+                status: "done",
+                waitingFor: null,
+                sortOrder: 1,
+                gateAskMessageId: null,
+                decision: { choice: "上线", note: null, decidedAt: 2_000, decidedBy: "user" },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+
+    const unsent = await waitFor(() => {
+      const el = zoomReopened.querySelector<HTMLElement>("[data-unsent-draft]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(unsent).toHaveTextContent("Unsent reply");
+    expect(unsent).toHaveTextContent("补充回滚方案");
+    expect(within(unsent).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+
+    await user.click(within(unsent).getByRole("button", { name: "Dismiss" }));
+    expect(zoomReopened.querySelector("[data-unsent-draft]")).toBeNull();
+  });
 });

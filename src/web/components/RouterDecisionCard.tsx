@@ -1,6 +1,7 @@
 import { memo } from "react";
 import type { ConversationId } from "../../shared/index.ts";
 import { cleanOptionLabel, recommendedIndexOf } from "../decision-actions.ts";
+import { getDecisionDraft, routerDecisionDraftKey, useDecisionDraft } from "../decision-drafts.ts";
 import { formatTime, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { FleetDecisionEntry } from "../selectors.ts";
@@ -14,9 +15,9 @@ export interface RouterDecisionCardProps {
   entry: FleetDecisionEntry;
   multiDevice: boolean;
   busy: boolean;
-  note: string;
   error: ErrorLike | null;
-  onNoteChange: (key: string, value: string) => void;
+  onNoteFocus: (decisionKey: string) => void;
+  onNoteChange: (decisionKey: string, draftKey: string, value: string) => void;
   onSubmit: (entry: FleetDecisionEntry, optionIndex: number | null, note: string) => void;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
 }
@@ -25,13 +26,15 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
   entry,
   multiDevice,
   busy,
-  note,
   error,
+  onNoteFocus,
   onNoteChange,
   onSubmit,
   onOpenConversation,
 }: RouterDecisionCardProps) {
   const { decision, online } = entry;
+  const draftKey = routerDecisionDraftKey(entry.deviceId, decision);
+  const note = useDecisionDraft(draftKey);
   const recommendedIdx = recommendedIndexOf(decision);
   const disabled = !online || busy;
   const showProject = decision.projectName !== null && decision.projectName !== decision.pmName;
@@ -85,7 +88,13 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
             const label = cleanOptionLabel(rawOption);
             const isRecommended = idx === recommendedIdx;
             return (
-              <OptionRow key={`${decision.key}-opt-${idx}`} index={idx} disabled={disabled} recommended={isRecommended} onClick={() => onSubmit(entry, idx, note)}>
+              <OptionRow
+                key={`${decision.key}-opt-${idx}`}
+                index={idx}
+                disabled={disabled}
+                recommended={isRecommended}
+                onClick={() => onSubmit(entry, idx, getDecisionDraft(draftKey))}
+              >
                 {label}
               </OptionRow>
             );
@@ -94,8 +103,10 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
       )}
 
       <CardNoteForm
+        key={draftKey}
         value={note}
-        onChange={(next) => onNoteChange(decision.key, next)}
+        onFocus={() => onNoteFocus(decision.key)}
+        onChange={(next) => onNoteChange(decision.key, draftKey, next)}
         disabled={disabled}
         pending={busy}
         onSubmitNote={(raw) => onSubmit(entry, null, raw)}

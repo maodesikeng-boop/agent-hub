@@ -2,10 +2,12 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
+import { resetDecisionDrafts } from "./decision-drafts.ts";
 import { resetQueryClient } from "./query-client.ts";
 
 afterEach(cleanup);
 afterEach(resetQueryClient);
+afterEach(resetDecisionDrafts);
 // 网址（每个对话一个，route.ts）和右栏收起的记忆不带到下一条测试
 afterEach(() => {
   window.history.replaceState(null, "", "/");

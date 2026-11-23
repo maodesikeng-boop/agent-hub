@@ -1,17 +1,14 @@
-import { useMutation } from "@tanstack/react-query";
-import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, PencilLine, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
+import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
   attachmentsOf,
-  CONFIRM_REJECT_OPTION,
   extractAskCard,
   isRewoundMessage,
   REPORT_END,
   REPORT_START,
   sentFilesOf,
   sentFilesOfDeliverables,
-  splitCardTitle,
   systemEventOf,
   systemNoticeText,
   workerEventOf,
@@ -19,33 +16,30 @@ import {
   type AgentVendor,
   type ConversationId,
   type Deliverable,
-  type ExtractedAskCard,
   type Message,
   type MessageId,
   type PersonaChangeId,
   type WorkerMessageMeta,
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
-import { useClient } from "../device-scope.tsx";
 import { describeFailure } from "../../shared/errors.ts";
-import { errorLine, errorText, errorTitle, formatTime, newClientId, pieceLineParts, type ErrorLike } from "../format.ts";
+import { errorLine, errorTitle, formatTime, pieceLineParts } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import { useHubQueryClient } from "../query-client.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
 import { workedFor } from "../step-labels.ts";
 import { describeSystemEvent, type EventFamily, type EventIconName } from "../system-events.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
+import { AskCard } from "./AskCard.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { SlimeLook } from "../../shared/slimes.ts";
-import { CardBody, CardNoteForm, DeliverableFiles } from "./Deliverables.tsx";
+import { DeliverableFiles } from "./Deliverables.tsx";
 import { ThreadCard } from "./ThreadCard.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { OptionRow } from "./OptionRow.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 
 export interface AgentIdentity {
@@ -113,135 +107,6 @@ export function displayText(text: string): string {
     .map((line) => `- ${line}`);
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
-
-const AskCard = memo(function AskCard({
-  card,
-  files,
-  deliverables,
-  messageId,
-  onAnswerAsk,
-}: {
-  card: ExtractedAskCard;
-  files: ReturnType<typeof sentFilesOf>;
-  deliverables: readonly Deliverable[];
-  messageId: MessageId;
-  onAnswerAsk?: MessageActions["onAnswerAsk"];
-}) {
-  const client = useClient();
-  const qc = useHubQueryClient();
-  const gateRef = card.gateRef;
-  const hasOptions = card.options.length > 0;
-  const [submitted, setSubmitted] = useState<{ chosenOption?: string; note?: string } | null>(null);
-  const [noteRev, setNoteRev] = useState(0);
-  const noteRef = useRef("");
-  const [err, setErr] = useState<ErrorLike | null>(null);
-  const clientIdRef = useRef<string | null>(null);
-  const inFlightRef = useRef(false);
-
-  const decideMutation = useMutation(
-    {
-      mutationFn: async (vars: { choice: string | null; note: string | null }) => {
-        clientIdRef.current ??= newClientId();
-        const body = { clientId: clientIdRef.current, choice: vars.choice, ...(vars.note !== null ? { note: vars.note } : {}) };
-        if (gateRef === undefined) return onAnswerAsk?.(messageId, body);
-        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, body);
-      },
-      onMutate: () => setErr(null),
-      onSuccess: (_data, vars) => {
-        clientIdRef.current = null;
-        const chosenOption = vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : null);
-        setSubmitted({ ...(chosenOption !== null ? { chosenOption } : {}), ...(vars.note !== null ? { note: vars.note } : {}) });
-        noteRef.current = "";
-        setNoteRev((n) => n + 1);
-      },
-      onError: (error) => {
-        setErr(errorText(error));
-      },
-      onSettled: () => {
-        inFlightRef.current = false;
-      },
-    },
-    qc,
-  );
-
-  const submit = (choice: string | null, rawNote: string) => {
-    if (inFlightRef.current) return;
-    const trimmed = rawNote.trim();
-    if (choice === null && trimmed === "") return;
-    inFlightRef.current = true;
-    decideMutation.mutate({ choice, note: trimmed === "" ? null : trimmed });
-  };
-
-  const effectiveChosen = card.chosenOption ?? submitted?.chosenOption;
-  const answerNote = card.answerNote ?? submitted?.note;
-  const answered = card.answered || submitted !== null;
-  const disabled = answered || (gateRef === undefined && !onAnswerAsk) || decideMutation.isPending;
-  const { title: cardTitle, body: cardBody } = useMemo(() => splitCardTitle(card.question), [card.question]);
-
-  return (
-    <div className="w-full min-w-0 border-2 border-border-strong bg-background p-4" data-ask-card>
-      <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
-        <Markdown text={cardTitle} files={files} messageId={messageId} />
-      </div>
-      <CardBody
-        text={cardBody}
-        titleText={cardTitle}
-        deliverables={deliverables}
-        files={files}
-        messageId={messageId}
-        className="mt-2"
-        textClassName="text-body leading-relaxed text-foreground"
-      />
-      {(hasOptions || answerNote !== undefined) && (
-        <div className="mt-3 flex flex-col gap-2" role="group" aria-label="Options">
-          {card.options.map((opt, i) => {
-            const isChosen = effectiveChosen === opt;
-            const isRecommended = card.recommended !== undefined && opt === card.recommended;
-            return (
-              <OptionRow
-                key={i}
-                index={i}
-                data-ask-option
-                disabled={disabled}
-                chosen={isChosen}
-                recommended={isRecommended}
-                onClick={() => {
-                  if (disabled) return;
-                  submit(opt, noteRef.current);
-                }}
-              >
-                <Markdown text={opt} files={files} messageId={messageId} />
-              </OptionRow>
-            );
-          })}
-          {answerNote !== undefined && (
-            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 border border-border bg-panel px-3 py-2.5 leading-6">
-              <span className="flex size-6 shrink-0 items-center justify-center border border-border-strong bg-background text-muted-foreground">
-                <PencilLine className="size-pixel-sm" aria-hidden="true" />
-              </span>
-              <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
-            </div>
-          )}
-        </div>
-      )}
-      {card.closed && <p className="mt-2 text-minor text-muted-foreground">Closed</p>}
-      {!answered && (
-        <CardNoteForm
-          disabled={disabled}
-          pending={decideMutation.isPending}
-          resetRev={noteRev}
-          noteRef={noteRef}
-          onSubmitNote={(raw) => submit(null, raw)}
-        />
-      )}
-      {err !== null && (
-        <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
-          {errorLine(err)}
-        </p>
-      )}
-    </div>
-  );
-});
 
 const NO_DELIVERABLES: readonly Deliverable[] = [];
 

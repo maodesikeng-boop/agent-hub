@@ -603,6 +603,193 @@ describe("Needs You 托盘", () => {
     });
   });
 
+  it("草稿保活与防串卡：在默认展开卡编辑期间新卡插入不抢焦点不切卡，且继续回车提交给原卡而非新卡", async () => {
+    const item1 = makeDecisionItem({
+      id: 101,
+      pmId: 1,
+      projectId: 10,
+      conversationId: 1,
+      question: "小林：缓存层用什么？",
+      options: ["lru-cache", "Map"],
+      askMessageId: 501,
+      createdAt: 20_000,
+      updatedAt: 20_000,
+    });
+    const item2 = makeDecisionItem({
+      id: 102,
+      pmId: 2,
+      projectId: 11,
+      conversationId: 2,
+      question: "老马：数据库迁移立即执行吗？",
+      options: ["执行", "暂缓"],
+      askMessageId: 502,
+      createdAt: 30_000,
+      updatedAt: 30_000,
+    });
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "老马" })],
+      projects: [
+        makeProject({ id: 10, name: "web", pmId: 1, conversationId: 1 }),
+        makeProject({ id: 11, name: "db", pmId: 2, conversationId: 2 }),
+      ],
+      conversations: [
+        makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } }),
+        makeConvSnapshot([], { conversation: { id: 2, pmId: 2, projectId: 11, title: "老马" } }),
+      ],
+      router: { ...emptyRouterSlice(), items: [item1] },
+    });
+    const { localApi } = installFleet({ local: localSnap });
+    const user = userEvent.setup();
+    await openRouter();
+
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    const card1 = within(tray).getByText("小林：缓存层用什么？").closest("article")!;
+    const replyBox = within(card1).getByLabelText("Your reply") as HTMLTextAreaElement;
+    await user.type(replyBox, "给小林的意见：用 lru-cache");
+    expect(document.activeElement).toBe(replyBox);
+
+    act(() => localSocket().push(changeOf(20, "router.item.created", { item: item2 })));
+
+    await waitFor(() => expect(within(tray).getByRole("button", { name: /老马：数据库迁移立即执行吗？/ })).toBeInTheDocument());
+    expect(within(tray).getByText("小林：缓存层用什么？").closest("article")).toBe(card1);
+    expect(replyBox.value).toBe("给小林的意见：用 lru-cache");
+    expect(document.activeElement).toBe(replyBox);
+
+    await user.type(replyBox, "！{Enter}");
+    await waitFor(() => expect(localApi.callsTo("POST", /^\/api\/router\/items\/101\/resolve$/)).toHaveLength(1));
+    expect(localApi.callsTo("POST", /^\/api\/router\/items\/101\/resolve$/)[0]!.body).toMatchObject({
+      optionIndex: null,
+      note: "给小林的意见：用 lru-cache！",
+    });
+    expect(localApi.callsTo("POST", /^\/api\/router\/items\/102\/resolve$/)).toHaveLength(0);
+  });
+
+  it("草稿保活与防串卡：当前卡被远端定案/替换时保留只读可复制草稿且绝不把焦点移给下一张卡；空草稿切卡亦不串焦", async () => {
+    const item1 = makeDecisionItem({
+      id: 101,
+      pmId: 1,
+      projectId: 10,
+      conversationId: 1,
+      question: "小林：现在发版吗？",
+      options: ["发版", "再等等"],
+      askMessageId: 601,
+      createdAt: 30_000,
+      updatedAt: 30_000,
+    });
+    const item2 = makeDecisionItem({
+      id: 102,
+      pmId: 2,
+      projectId: 11,
+      conversationId: 2,
+      question: "老马：删掉旧索引吗？",
+      options: ["删", "留着"],
+      askMessageId: 602,
+      createdAt: 20_000,
+      updatedAt: 20_000,
+    });
+    const item3 = makeDecisionItem({
+      id: 103,
+      pmId: 2,
+      projectId: 11,
+      conversationId: 2,
+      question: "老马：改端口吗？",
+      options: ["改", "不改"],
+      askMessageId: 603,
+      createdAt: 10_000,
+      updatedAt: 10_000,
+    });
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "老马" })],
+      projects: [
+        makeProject({ id: 10, name: "web", pmId: 1, conversationId: 1 }),
+        makeProject({ id: 11, name: "db", pmId: 2, conversationId: 2 }),
+      ],
+      conversations: [
+        makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } }),
+        makeConvSnapshot([], { conversation: { id: 2, pmId: 2, projectId: 11, title: "老马" } }),
+      ],
+      router: { ...emptyRouterSlice(), items: [item1, item2, item3] },
+    });
+    const { localApi } = installFleet({ local: localSnap });
+    const user = userEvent.setup();
+    await openRouter();
+
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    const card1 = within(tray).getByText("小林：现在发版吗？").closest("article")!;
+    await user.type(within(card1).getByLabelText("Your reply"), "马上执行");
+
+    act(() => localSocket().push(changeOf(21, "router.item.updated", { item: { ...item1, status: "superseded" } })));
+
+    const closedCard = await waitFor(() => {
+      const el = tray.querySelector<HTMLElement>("[data-closed-draft-card]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(within(closedCard).getByText("Closed")).toBeInTheDocument();
+    expect(within(closedCard).getByText("Unsent reply")).toBeInTheDocument();
+    expect(within(closedCard).getByText("马上执行")).toBeInTheDocument();
+    expect(within(closedCard).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(document.activeElement?.tagName).not.toBe("TEXTAREA");
+    await user.keyboard("吧{Enter}");
+    expect(localApi.callsTo("POST", /^\/api\/router\/items\/102\/resolve$/)).toHaveLength(0);
+
+    // 点 Dismiss 后展开下一张卡；即使空草稿聚焦 item2，item2 被远端关闭后焦点也绝不落到 item3
+    await user.click(within(closedCard).getByRole("button", { name: "Dismiss" }));
+    const card2 = await waitFor(() => within(tray).getByText("老马：删掉旧索引吗？").closest("article")!);
+    const box2 = within(card2).getByLabelText("Your reply");
+    await user.click(box2);
+    expect(document.activeElement).toBe(box2);
+
+    act(() => localSocket().push(changeOf(22, "router.item.updated", { item: { ...item2, status: "superseded" } })));
+
+    const card3 = await waitFor(() => within(tray).getByText("老马：改端口吗？").closest("article")!);
+    expect(document.activeElement).not.toBe(within(card3).getByLabelText("Your reply"));
+    await user.keyboard("误发{Enter}");
+    expect(localApi.callsTo("POST", /^\/api\/router\/items\/103\/resolve$/)).toHaveLength(0);
+  });
+
+  it("同一张拍板卡在 Router 与 PM 对话 AskCard 之间共享草稿", async () => {
+    const askMsg = makeMessage({
+      id: 701,
+      conversationId: 1,
+      text: "确认 API 版本",
+      meta: { needsUser: true, options: ["v1", "v2"] },
+      dedupeKey: "ask:1:701",
+    });
+    const item = makeDecisionItem({
+      id: 101,
+      pmId: 1,
+      projectId: 10,
+      conversationId: 1,
+      question: "确认 API 版本",
+      options: ["v1", "v2"],
+      askMessageId: 701,
+      createdAt: 20_000,
+      updatedAt: 20_000,
+    });
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 10, name: "web", pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([askMsg], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+      router: { ...emptyRouterSlice(), items: [item] },
+    });
+    installFleet({ local: localSnap });
+    const user = userEvent.setup();
+    await openRouter();
+
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    const card = within(tray).getByText("确认 API 版本").closest("article")!;
+    await user.type(within(card).getByLabelText("Your reply"), "先发 v2 并保留 v1 兼容");
+
+    await user.click(within(card).getByRole("button", { name: "小林" }));
+    const askCard = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('[data-message-id="701"] [data-ask-card]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect((within(askCard).getByRole("textbox", { name: "Your reply" }) as HTMLTextAreaElement).value).toBe("先发 v2 并保留 v1 兼容");
+  });
+
   it("收起的行超过 3 条出 Show more；标题整行可点收起，收起后时间流照常；防重入：同一帧连点同一张卡只提交一次", async () => {
     const now = Date.now();
     const decisions = Array.from({ length: 6 }, (_, i) => makeDecisionItem({ id: 111 + i, question: `第 ${i + 1} 个问题`, options: ["好", "不好"], createdAt: now - (i + 1) * 1_000 }));

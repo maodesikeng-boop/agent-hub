@@ -213,7 +213,7 @@ function OverviewGroup({
 
   const actionBar = (
     <div className="flex items-center gap-2">
-      <Button variant="ghost" size="sm" disabled={refreshing || cleaning} onClick={onRefresh}>
+      <Button variant="outline" size="sm" disabled={refreshing || cleaning} onClick={onRefresh}>
         {refreshing ? <Loader2 aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
         Refresh
       </Button>

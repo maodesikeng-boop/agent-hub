@@ -1,1 +1,4 @@
 export const SCROLLBAR_IDLE_HIDE_MS = 900;
+export const LAYOUT_CACHE_PER_ARRAY_MAX = 64;
+export const DECISION_DRAFTS_MAX = 200;
+
