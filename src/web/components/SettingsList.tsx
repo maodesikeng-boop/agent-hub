@@ -4,7 +4,7 @@ import { errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 
-const GROUP_SHELL = "overflow-hidden rounded-2xl border border-border bg-background";
+const GROUP_SHELL = "overflow-hidden border-2 border-border bg-background";
 
 const GROUP_BOX = `divide-y divide-border ${GROUP_SHELL}`;
 
@@ -55,7 +55,7 @@ export function CollapsibleGroup({
     <section aria-label={title}>
       <Collapsible open={open} onOpenChange={setOpen} className={GROUP_SHELL}>
         <h2>
-          <CollapsibleTrigger className="group flex min-h-13 w-full cursor-pointer items-center gap-4 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset">
+          <CollapsibleTrigger className="group flex min-h-13 w-full cursor-pointer items-center gap-4 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]">
             <span className="min-w-0 flex-1 truncate">{title}</span>
             {summary !== undefined && <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{summary}</span>}
             <ChevronDown

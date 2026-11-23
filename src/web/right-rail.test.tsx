@@ -64,13 +64,14 @@ describe("右栏：照 Claude desktop 的样子", () => {
       expect(heading.querySelector("button")!.lastElementChild).toBe(arrowOf(group));
     }
     expect(classes.size).toBe(1);
-    expect(asksGroup().querySelector("h2 button > span.bg-primary")).toHaveClass("size-1.5", "rounded-full");
+    expect(asksGroup().querySelector("h2 button > span.bg-primary")).toHaveClass("size-1.5");
+    expect(asksGroup().querySelector("h2 button > span.bg-primary")!.className).not.toMatch(/rounded-/);
   });
 
-  it("组和组之间一条 1px 细分隔线（掺水果色的 divide-line），上下留白一样；没有框、没有阴影", () => {
+  it("组和组之间一条 1px 细分隔线（divide-border），上下留白一样；没有框、没有阴影", () => {
     renderRail({ asks: [ask(1)], workers: [busy(30), done(31)] });
     const sections = [asksGroup(), workerGroup(), completedGroup()];
-    expect(sections[0]!.parentElement).toHaveClass("divide-y", "divide-line");
+    expect(sections[0]!.parentElement).toHaveClass("divide-y", "divide-border");
     for (const section of sections) expect(section).toHaveClass("py-3");
     expect(screen.getByRole("complementary", { name: "Side panel" }).innerHTML).not.toMatch(/shadow|bg-sidebar(?!-)/);
   });
@@ -78,8 +79,8 @@ describe("右栏：照 Claude desktop 的样子", () => {
   it("Piece 行：单行，无左侧图标，只有 15px 标题，不写状态词；行距舒展（py-2 px-2.5）", () => {
     renderRail({ workers: [busy(30)], look: defaultLookOf(2) });
     const row = within(workerGroup()).getByRole("button", { name: /活 30/ });
-    expect(row).toHaveClass("px-2.5", "-mx-2.5", "py-2", "rounded-xl");
-    expect(row.className).not.toMatch(/rounded-2xl|rounded-lg/);
+    expect(row).toHaveClass("px-2.5", "-mx-2.5", "py-2", "border-2");
+    expect(row.className).not.toMatch(/rounded-/);
     expect(row.querySelector("[data-neutral='true']")).toBeNull();
     expect(within(row).getByText("活 30")).toHaveClass("text-body", "truncate");
     // 只有标题一样，没有状态词、没有第二行
@@ -112,8 +113,8 @@ describe("右栏：照 Claude desktop 的样子", () => {
     const ended = screen.getByRole("button", { name: /活 36/ });
     expect(ended).toHaveTextContent(/^活 36$/);
     // 只把字调淡，选中时果冻底不跟着变淡
-    expect(within(ended).getByText("活 36")).toHaveClass("opacity-60");
-    expect(ended).not.toHaveClass("opacity-60");
+    expect(within(ended).getByText("活 36")).toHaveClass("opacity-65");
+    expect(ended).not.toHaveClass("opacity-65");
     expect(within(completedGroup()).queryByText("Ended")).toBeNull();
   });
 
@@ -214,22 +215,22 @@ describe("右栏：行的底色是完整的圆角（不被收起动画的容器�
   /** class 里 -mx-N 的 N（单位 rem/4，即 Tailwind 的档位）。 */
   const bleed = (el: Element) => Number(/(?:^|\s)-mx-(\d+(?:\.\d+)?)(?:\s|$)/.exec(el.className)?.[1] ?? 0);
 
-  it("行向两边伸出的距离，不超过外面 overflow-hidden 容器多留的（再留 0.5 档给聚焦圈）；选中、悬停都是 rounded-xl", () => {
+  it("行向两边伸出的距离，不超过外面 overflow-hidden 容器多留的（再留 0.5 档给聚焦圈）；直角 2px 边、选中是浅暖黄 open 态", () => {
     renderRail({ asks: [ask(1)], workers: [busy(30), done(40)], openWorkerId: 40 });
     for (const group of [asksGroup(), workerGroup(), completedGroup()]) {
       const clip = group.querySelector("[data-group-body] > .overflow-hidden")!;
       for (const row of within(group).getAllByRole("button").filter((b) => !b.closest("h2") && b.closest("li") !== null)) {
-        expect(row).toHaveClass("rounded-xl");
+        expect(row.className).not.toMatch(/rounded-/);
         expect(row.className).toMatch(/px-2\.5/);
         expect(bleed(clip)).toBeGreaterThanOrEqual(bleed(row) + 0.5);
         expect(clip).toHaveClass("px-3");
       }
     }
     const active = within(completedGroup()).getByRole("button", { name: /活 40/ });
-    // 选中、悬停是当前项目经理水果色的极淡果冻底（styles.css 的 --color-jelly）
-    expect(active).toHaveClass("bg-jelly", "rounded-xl");
-    expect(active.className).not.toMatch(/bg-sidebar-active/);
-    expect(titleButton(completedGroup())).toHaveClass("rounded-xl", "hover:bg-sidebar-hover");
+    expect(active).toHaveClass("bg-open", "border-open-line", "border-2");
+    expect(active.className).not.toMatch(/rounded-|bg-jelly|bg-sidebar-active/);
+    expect(titleButton(completedGroup())).toHaveClass("hover:bg-hover");
+    expect(titleButton(completedGroup()).className).not.toMatch(/rounded-|bg-sidebar-hover/);
   });
 
   it("没有横向滚动：外层滚动区向两边留的内边距（px-5）比行伸出的多", () => {
@@ -259,7 +260,7 @@ describe("右栏：只列几条", () => {
     const more = screen.getByRole("button", { name: "Show more" });
     expect(more).toHaveAttribute("aria-expanded", "false");
     expect(more).toHaveClass("text-minor", "text-muted-foreground", "hover:text-foreground");
-    expect(more.className).not.toMatch(/(^|\s)(bg-|border|rounded-full)/);
+    expect(more.className).not.toMatch(/(?:^|\s)(?:bg-|border-(?!2\b|transparent\b)|rounded-)/);
     await user.click(more);
     expect(names()).toEqual(["活 3", "活 5", "活 1", "活 2", "活 4"]);
     expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
@@ -295,7 +296,7 @@ describe("右栏：只列几条", () => {
     expect(document.getElementById("rail-completed-body")).toBeNull();
     await user.click(title);
     expect(buttons(completedGroup())).toHaveLength(30);
-    expect(within(within(completedGroup()).getByRole("button", { name: /活 100/ })).getByText("活 100")).toHaveClass("opacity-60");
+    expect(within(within(completedGroup()).getByRole("button", { name: /活 100/ })).getByText("活 100")).toHaveClass("opacity-65");
   });
 
   it("Completed 收着时不挂载已收工的行（300 个也一样），点开才渲染；300 个展开不到 1 秒", async () => {
@@ -355,7 +356,8 @@ describe("右栏：提问行", () => {
     const onOpenAsk = vi.fn();
     renderRail({ asks: [ask(1)], onOpenAsk });
     const row = within(asksGroup()).getByRole("button", { name: /问题 1/ });
-    expect(row).toHaveClass("px-2.5", "-mx-2.5", "gap-3", "rounded-xl");
+    expect(row).toHaveClass("px-2.5", "-mx-2.5", "gap-3", "border-2");
+    expect(row.className).not.toMatch(/rounded-/);
     expect(row.querySelector("svg")).toHaveClass("size-4");
     expect(within(row).getByText("问题 1")).toHaveClass("text-body", "truncate");
     expect(row).not.toHaveAttribute("aria-expanded");
@@ -447,7 +449,7 @@ describe("右栏：每组可以收起", () => {
     const user = userEvent.setup();
     renderRail({ workers: [busy(30)] });
     const title = titleButton(workerGroup());
-    expect(title.className).toMatch(/focus-visible:ring-2/);
+    expect(title.className).toMatch(/focus-visible:outline-border-focus/);
     title.focus();
     await user.keyboard("{Enter}");
     expect(title).toHaveAttribute("aria-expanded", "false");
@@ -465,10 +467,11 @@ describe("RightRailToggle: Piece 纸片分身图标", () => {
     expect((avatar as HTMLElement).style.width).toBe("1.25rem");
   });
 
-  it("有等你确定且收起时右上角显示 6px 强调色小圆点", () => {
+  it("有等你确定且收起时右上角显示 6px 强调色小方块", () => {
     render(<RightRailToggle visible open={false} attention={true} look={defaultLookOf(1)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: /needs you/ });
-    expect(button.querySelector("span.bg-primary")).toHaveClass("size-1.5", "rounded-full");
+    expect(button.querySelector("span.bg-primary")).toHaveClass("size-1.5");
+    expect(button.querySelector("span.bg-primary")!.className).not.toMatch(/rounded-/);
   });
 });
 

@@ -6,7 +6,7 @@ import { mobileBack } from "./mobile/back.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2 } from "./ui/icons.ts";
-import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
+import { AccentScope } from "./lib/accent-scope.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
@@ -330,7 +330,7 @@ export function App() {
         />
       ) : (
         <>
-          <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-chat">
+          <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
             <ChatPane
               model={model}
               content={content}
@@ -356,17 +356,15 @@ export function App() {
         <ModelCatalogProvider>
           <CapabilityProjects pms={model.local.state.pms}>
             <div className="relative flex h-full">
-              <FruitTint color={tintColor}>
-                <MobileShell mobile={mobile} list={route === null} sidebar={<ShellSidebar content={content} mobile={mobile} quota={quota} quotaInHeader={Boolean(quotaInHeader)} />}>{chat}</MobileShell>
-                <NewPmDialog
-                  open={content.creating}
-                  devices={content.newPmDevices}
-                  defaultDevice={current.key}
-                  onOpenChange={content.setCreating}
-                  onCreated={content.created}
-                  onManageProviders={content.openManageProviders}
-                />
-              </FruitTint>
+              <MobileShell mobile={mobile} list={route === null} sidebar={<ShellSidebar content={content} mobile={mobile} quota={quota} quotaInHeader={Boolean(quotaInHeader)} />}>{chat}</MobileShell>
+              <NewPmDialog
+                open={content.creating}
+                devices={content.newPmDevices}
+                defaultDevice={current.key}
+                onOpenChange={content.setCreating}
+                onCreated={content.created}
+                onManageProviders={content.openManageProviders}
+              />
             </div>
           </CapabilityProjects>
         </ModelCatalogProvider>

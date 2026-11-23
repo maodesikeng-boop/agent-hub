@@ -17,7 +17,7 @@ export function SettingsPage({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col bg-surface-sidebar pt-[var(--safe-top)]">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col bg-panel pt-[var(--safe-top)]">
       <header
         className={cn(
           "h-16 shrink-0 items-center gap-1 px-2",

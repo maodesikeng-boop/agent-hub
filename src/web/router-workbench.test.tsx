@@ -407,7 +407,8 @@ describe("左栏置顶嫩芽铃入口（宽栏 / 72px 窄栏 / 多机去重）",
     const aside = await screen.findByRole("complementary");
     const routerBtn = await within(aside).findByRole("button", { name: /Router/ });
     expect(routerBtn).toHaveAttribute("aria-current", "page");
-    expect(routerBtn.className).toContain("bg-sidebar-active");
+    expect(routerBtn.className).toContain("border-select-line");
+    expect(routerBtn.className).toContain("bg-background");
     expect(routerBtn.className).not.toContain("jelly");
     // 2 个跨机待决项（Tokyo gate + 本机 decision），副标题取最新待决问题
     await waitFor(() => expect(within(routerBtn).getByText("Tokyo 要灰度吗？")).toBeInTheDocument());
@@ -852,7 +853,7 @@ describe("时间流：指令回合", () => {
     // 用户说的话：靠右的气泡，和项目经理对话里的用户气泡同一套
     const bubble = turn.querySelector("[data-bubble]")!;
     expect(bubble.className).toContain("bg-bubble-me");
-    expect(bubble.className).toContain("rounded-[22px]");
+    expect(bubble.className).not.toMatch(/rounded-/);
     expect(bubble.closest("[data-side='right']")).not.toBeNull();
     // 总助的结果：嫩芽铃头像 + Router，Markdown 全文
     expect(within(turn).getByText("Router")).toBeInTheDocument();
@@ -866,7 +867,7 @@ describe("时间流：指令回合", () => {
     expect(reply.querySelector(".truncate, [class*='line-clamp']")).toBeNull();
     expect(within(turn).getByRole("button", { name: "Copy" })).toBeInTheDocument();
     // 回合没有外框和底色
-    expect(turn.className).not.toMatch(/border|bg-sidebar|rounded-2xl/);
+    expect(turn.className).not.toMatch(/border|bg-sidebar|rounded-/);
 
     expect(within(turnOf("把所有项目的状态都列出来")).getByText("Reply truncated")).toHaveClass("text-muted-foreground");
     expect(within(turn).queryByText("Reply truncated")).toBeNull();
@@ -927,7 +928,7 @@ describe("时间流：指令回合", () => {
     expect(pmRow).toHaveTextContent("MacBook");
     expect(pmRow.textContent).not.toMatch(/[·|/]/);
     expect(pmRow.className).toContain("pointer-coarse:min-h-11");
-    expect(pmRow.className).toContain("hover:bg-jelly-hover");
+    expect(pmRow.className).toContain("hover:bg-hover");
     // 轨道 A 成功：回执那句话和去向行重复，不画；也就没有复制键
     expect(within(pmTurn).queryByText(/已转给本机/)).toBeNull();
     expect(within(pmTurn).queryByRole("button", { name: "Copy" })).toBeNull();
@@ -1308,7 +1309,7 @@ describe("时间流：简报、已读、贴底和历史", () => {
     await waitFor(() => expect(briefings().map((b) => b.querySelector(".markdown")!.textContent)).toEqual(["旧简报：上周已经看过", "PR #398 已合并，回归全绿", "第二条未读", "Tokyo 部署完成"]));
 
     // 没有容器、没有 Done
-    expect(briefings()[1]!.className).not.toMatch(/border|bg-sidebar|bg-background|rounded-2xl/);
+    expect(briefings()[1]!.className).not.toMatch(/border|bg-sidebar|bg-background|rounded-/);
     expect(briefings()[1]!.querySelector("strong")).toHaveTextContent("已合并");
     expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Archive all" })).toBeNull();
@@ -2044,8 +2045,11 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     // 4. 展开细节：切换该家其他模型与思考程度，每次变更立即调 putRouterSettings
     await user.click(detailsTrigger);
     expect(detailsTrigger).toHaveAttribute("aria-expanded", "true");
-    const modelSelect = within(popover).getByRole("combobox", { name: "Model" });
-    await user.selectOptions(modelSelect, altModelId);
+    const pickOption = async (name: string, label: RegExp | string) => {
+      await user.click(within(popover).getByRole("combobox", { name }));
+      await user.click(await screen.findByRole("option", { name: label }));
+    };
+    await pickOption("Model", altModelLabel);
     await waitFor(() => expect(putCalls()).toHaveLength(2));
     expect(putCalls()[1]!.body).toMatchObject({
       vendor: secondSpec.id,
@@ -2053,8 +2057,7 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     });
     expect(screen.getByRole("button", { name: new RegExp(`Router model: ${secondSpec.label} ${altModelLabel}`) })).toBeInTheDocument();
 
-    const effortSelect = within(popover).getByRole("combobox", { name: "Effort" });
-    await user.selectOptions(effortSelect, altEffort);
+    await pickOption("Effort", altEffort);
     await waitFor(() => expect(putCalls()).toHaveLength(3));
     expect(putCalls()[2]!.body).toEqual({
       vendor: secondSpec.id,
@@ -2124,12 +2127,13 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
 
     // 第二次：换模型，请求挂着时第一次的回声才到
     await user.click(within(popover).getByRole("button", { name: /Model & effort/ }));
-    await user.selectOptions(within(popover).getByRole("combobox", { name: "Model" }), altModelId);
+    await user.click(within(popover).getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByRole("option", { name: altModelLabel }));
     await waitFor(() => expect(replies).toHaveLength(2));
     expect(altTrigger()).toBeInTheDocument();
     act(() => localSocket().push(changeOf(60, "router.settings.updated", { settings: { ...preset, updatedAt: 1_000 } })));
     expect(altTrigger()).toBeInTheDocument();
-    expect(within(popover).getByRole("combobox", { name: "Model" })).toHaveValue(altModelId);
+    expect(within(popover).getByRole("combobox", { name: "Model" })).toHaveTextContent(altModelLabel);
 
     // 第二次确认、回声到达：一直是第二次的值
     await act(async () => replies[1]!(2_000));

@@ -9,7 +9,7 @@ import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 export const INLINE_LINK_CLASS =
-  "touch-target inline-flex cursor-pointer items-center gap-1 rounded-xl text-link underline decoration-link/40 transition-colors outline-none hover:decoration-link focus-visible:ring-2 focus-visible:ring-ring/50";
+  "touch-target inline-flex cursor-pointer items-center gap-1 text-link underline decoration-link/40 transition-colors outline-none hover:decoration-link focus-visible:outline-2 focus-visible:outline-border-focus";
 
 function usePreview(item: Deliverable): PreviewFile {
   const client = useClient();
@@ -49,7 +49,7 @@ function MediaThumb({ item }: { item: Deliverable }) {
         aria-label={item.label}
         onClick={() => setOpen(true)}
         className={cn(
-          "relative h-(--deliverable-media-height) shrink-0 overflow-hidden rounded-xl border border-border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          "relative h-(--deliverable-media-height) shrink-0 overflow-hidden border-2 border-border-strong bg-panel outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
           video ? "cursor-pointer" : "cursor-zoom-in",
         )}
       >
@@ -60,7 +60,7 @@ function MediaThumb({ item }: { item: Deliverable }) {
           <img src={preview.url} alt={item.label} loading="lazy" onError={markExpired} className="block h-(--deliverable-media-height) w-auto max-w-40 object-cover" />
         )}
         {video && (
-          <span data-play-badge className="absolute inset-0 m-auto flex size-9 items-center justify-center rounded-full bg-black/55 text-white">
+          <span data-play-badge className="absolute inset-0 m-auto flex size-9 items-center justify-center bg-black/55 text-white">
             <Play className="size-pixel translate-x-px fill-current" aria-hidden="true" />
           </span>
         )}
@@ -192,7 +192,7 @@ export const CardBody = memo(function CardBody({
           type="button"
           aria-expanded={expanded}
           aria-controls={id}
-          className="touch-target inline-flex cursor-pointer items-center rounded-full text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="touch-target inline-flex cursor-pointer items-center text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
           onClick={() => setExpanded((v) => !v)}
         >
           {expanded ? "Show less" : "Show more"}

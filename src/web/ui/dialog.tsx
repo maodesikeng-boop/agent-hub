@@ -25,21 +25,21 @@ export function DialogContent({
   const container = useAccentContainer();
   return (
     <DialogPrimitive.Portal container={container}>
-      <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/30" />
+      <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-[rgb(28_25_23_/_0.34)]" />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         aria-describedby={undefined}
         className={cn(
           fullScreen
-            ? "fixed inset-0 z-50 flex flex-col overflow-hidden bg-surface-sidebar pt-[var(--safe-top)] pb-[max(var(--safe-bottom),var(--kb-inset))] outline-none"
-            : "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-130 -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden rounded-2xl border border-border bg-background p-6 outline-none",
+            ? "fixed inset-0 z-50 flex flex-col overflow-hidden bg-panel pt-[var(--safe-top)] pb-[max(var(--safe-bottom),var(--kb-inset))] outline-none"
+            : "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-130 -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden border-2 border-border-strong bg-background p-6 outline-none",
           className,
         )}
         {...props}
       >
         {fullScreen ? (
           <>
-            <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
+            <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b-2 border-border bg-background px-4">
               <DialogPrimitive.Title className={cn("min-w-0 truncate text-title font-semibold", titleClassName)}>{title}</DialogPrimitive.Title>
               <DialogPrimitive.Close asChild>
                 <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label="Close">
@@ -55,7 +55,7 @@ export function DialogContent({
             {children}
             <DialogPrimitive.Close
               aria-label="Close"
-              className="touch-target absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="touch-target absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
             >
               <X className="size-pixel" aria-hidden="true" />
             </DialogPrimitive.Close>

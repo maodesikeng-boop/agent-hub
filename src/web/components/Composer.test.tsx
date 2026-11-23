@@ -49,17 +49,17 @@ afterEach(() => {
 });
 
 describe("Composer 布局", () => {
-  it("“+”和发送键同尺寸、同圆角（36px、圆角 10px 的方块）；“+”是不带底色的 ghost 图标按钮（悬停才有浅底）；框是 rounded-xl 的方框", () => {
+  it("“+”和发送键同尺寸、直角（36px）；“+”是不带底色的 ghost 图标按钮（悬停 hover:bg-hover）；框是直角 2px 边", () => {
     setup();
     const attach = screen.getByRole("button", { name: "Add files" });
     const send = screen.getByRole("button", { name: "Send" });
-    expect(attach).toHaveClass("text-muted-foreground", "hover:bg-accent");
+    expect(attach).toHaveClass("text-muted-foreground", "hover:bg-hover");
     expect(attach.className).not.toMatch(/(^|\s)bg-/);
-    for (const cls of ["size-9", "rounded-[10px]"]) {
-      expect(attach).toHaveClass(cls);
-      expect(send).toHaveClass(cls);
+    for (const el of [attach, send]) {
+      expect(el).toHaveClass("size-9");
+      expect(el.className).not.toMatch(/rounded-/);
     }
-    expect(attach.closest(".composer-frame")).toHaveClass("rounded-xl");
+    expect(attach.closest(".composer-frame")?.className).not.toMatch(/rounded-/);
   });
 
   it("空输入框是单行：回形针、文字区、发送键在同一个网格行，从左到右排开", () => {
@@ -192,7 +192,8 @@ describe("Composer 布局", () => {
       );
       const btn = screen.queryByRole("button", { name: "Stop" });
       if (files.length === 0) {
-        expect(btn).toHaveClass("size-9", "rounded-[10px]");
+        expect(btn).toHaveClass("size-9");
+        expect(btn?.className).not.toMatch(/rounded-/);
         expect(btn?.parentElement).toHaveClass("col-start-3", "row-start-1");
       } else {
         expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(); // 有待发文件：不是停止
@@ -201,11 +202,11 @@ describe("Composer 布局", () => {
     }
   });
 
-  it("聚焦态写在 styles.css 的 .composer-frame（只多一团水果色模糊光晕，边框不变，不套圈）：外框不带 ring / 实心描边类，边框粗细不变，文字框自身无 focus ring，不用内联 <style>", () => {
+  it("聚焦态写在 styles.css 的 .composer-frame（Plain 2px 框聚焦只加深到 --border-focus，无光晕无套圈）：外框不带 ring / focus-within:，文字框自身无 focus ring，不用内联 <style>", () => {
     const { container } = setup();
     const frame = container.firstElementChild as HTMLElement;
-    expect(frame).toHaveClass("composer-frame", "border", "border-border");
-    expect(frame.className).not.toMatch(/border-primary|border-2|ring|focus-within:|0_0_0_3px/);
+    expect(frame).toHaveClass("composer-frame", "bg-background");
+    expect(frame.className).not.toMatch(/border-primary|border-2|ring|focus-within:|rounded-|0_0_0_3px/);
     expect(screen.getByRole("textbox", { name: "Message" }).className).not.toMatch(/ring/);
     expect(container.querySelector("style")).toBeNull();
   });
@@ -539,7 +540,8 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(chip.querySelector("svg")).toHaveClass("size-4", "text-muted-foreground");
     expect(chip.querySelector("svg")).toHaveAttribute("data-icon", "line");
     const li = chip.closest("li")!;
-    expect(li).toHaveClass("rounded-full", "bg-muted", "py-1", "pr-1", "pl-3", "text-minor");
+    expect(li).toHaveClass("border", "border-border-strong", "bg-panel", "py-1", "pr-1", "pl-3", "text-minor");
+    expect(li.className).not.toMatch(/rounded-/);
     expect(li.parentElement).toHaveAccessibleName("Files to send");
     expect(li.parentElement!.firstElementChild).toBe(li);
     expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("touch-target", "size-6");
@@ -713,7 +715,8 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     const chips = await screen.findAllByRole("group", { name: "Worker model" });
     expect(chips).toHaveLength(1);
     expect(chips[0]!.textContent).toBe("Claude Codehigh");
-    expect(chips[0]).toHaveClass("rounded-full", "bg-muted", "text-minor", "gap-2", "mb-1.5");
+    expect(chips[0]).toHaveClass("border", "border-border-strong", "bg-panel", "text-minor", "gap-2", "mb-1.5");
+    expect(chips[0]!.className).not.toMatch(/rounded-/);
     const bubble = screen.getByText("派人做");
     expect(chips[0]!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

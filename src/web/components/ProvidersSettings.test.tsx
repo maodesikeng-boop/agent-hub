@@ -375,7 +375,7 @@ describe("桌面端 Settings → Providers", () => {
       expect(api.callsTo("GET", new RegExp(`^/d/${TOKYO_ID}/api/providers$`))).toHaveLength(1),
     );
     const computerSelect = within(panel).getByRole("combobox", { name: "Computer" });
-    expect(computerSelect).toHaveDisplayValue("Tokyo");
+    expect(computerSelect).toHaveTextContent("Tokyo");
 
     // 1. 远端打开 preferDeviceCodeWhenRemote 的厂商（v2）→ 默认选中 Device code
     const v2 = AGENT_VENDORS[2]!;
@@ -411,10 +411,13 @@ describe("桌面端 Settings → Providers", () => {
     await user.click(within(within(panel).getByTestId(`provider-row-${v3}`)).getByRole("button", { name: /Sign in/ }));
     dialog = await screen.findByRole("dialog", { name: `Sign in to ${vendorLabel(v3)}` });
     const subSelect = within(dialog).getByRole("combobox", { name: "Model provider" });
-    expect(within(subSelect).getAllByRole("option").map((o) => o.textContent)).toEqual([
+    await user.click(subSelect);
+    const subListbox = await screen.findByRole("listbox");
+    expect(within(subListbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "DeepSeek",
       "OpenAI Codex (Configured)",
     ]);
+    await user.keyboard("{Escape}");
     await user.type(within(dialog).getByPlaceholderText("sk-..."), "sk-live-secret-key");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>

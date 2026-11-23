@@ -43,7 +43,7 @@ export function SidebarTools({
         <span
           data-testid="settings-resources-attention"
           aria-hidden="true"
-          className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-caution ring-2 ring-surface-sidebar"
+          className="absolute -top-0.5 -right-0.5 size-2 bg-caution ring-2 ring-list"
         />
       )}
     </Button>

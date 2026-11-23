@@ -15,7 +15,8 @@ import {
 import { DEFAULT_CHOICE, defaultModelText, type ErrorLike } from "../format.ts";
 import { useModelCatalog, useModelCatalogs, useRevalidateModels, useVendorChoices, vendorOptionLabel } from "../models.tsx";
 import { Button } from "../ui/button.tsx";
-import { Input, Select } from "../ui/input.tsx";
+import { Input } from "../ui/input.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { ReadonlyValue, SettingsRow } from "./SettingsList.tsx";
 
 export interface AgentDraft {
@@ -81,6 +82,7 @@ export function AgentRows({
   const revalidateModels = useRevalidateModels();
   const result = settingOf(value);
   const customRef = useRef<HTMLInputElement>(null);
+  const focusCustomOnClose = useRef(false);
   const [focusCustom, setFocusCustom] = useState(false);
   useEffect(() => {
     if (!focusCustom) return;
@@ -111,19 +113,20 @@ export function AgentRows({
           <>
             {vendors.length > 1 ? (
               <Select
-                id={id}
-                variant="plain"
                 value={value.vendor}
                 disabled={disabled || switchingToVendor != null}
-                onPointerDown={refreshUnusable}
-                onFocus={refreshUnusable}
-                onChange={(e) => setVendor(e.target.value)}
+                onValueChange={(next) => setVendor(next)}
               >
-                {vendors.map((c) => (
-                  <option key={c.vendor} value={c.vendor} disabled={!isSelectable(c.availability)}>
-                    {vendorOptionLabel(c)}
-                  </option>
-                ))}
+                <SelectTrigger id={id} aria-label="Provider" variant="plain" onPointerDown={refreshUnusable} onFocus={refreshUnusable}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {vendors.map((c) => (
+                    <SelectItem key={c.vendor} value={c.vendor} disabled={!isSelectable(c.availability)}>
+                      {vendorOptionLabel(c)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             ) : (
               <ReadonlyValue id={id}>{vendorOptionLabel(catalog)}</ReadonlyValue>
@@ -139,25 +142,36 @@ export function AgentRows({
       <SettingsRow label="Model" wide error={errors.model}>
         {(id) => (
           <Select
-            id={id}
-            variant="plain"
             value={choice}
             disabled={disabled}
-            onPointerDown={revalidateModels}
-            onFocus={revalidateModels}
-            onChange={(e) => {
-              onChange(withModel(value, e.target.value, catalog), "model");
-              if (e.target.value === CUSTOM_MODEL) setFocusCustom(true);
+            onValueChange={(next) => {
+              onChange(withModel(value, next, catalog), "model");
+              if (next === CUSTOM_MODEL) {
+                focusCustomOnClose.current = true;
+                setFocusCustom(true);
+              }
             }}
           >
-            <option value="">{defaultModelText(catalog)}</option>
-            {catalog.models.map((m) => (
-              <option key={m.id} value={m.id} title={m.description ?? undefined}>
-                {m.label}
-              </option>
-            ))}
-            {unlisted && <option value={choice}>Custom: {choice}</option>}
-            {catalog.customModelExample !== null && <option value={CUSTOM_MODEL}>Custom</option>}
+            <SelectTrigger id={id} aria-label="Model" variant="plain" onPointerDown={revalidateModels} onFocus={revalidateModels}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              onCloseAutoFocus={(e) => {
+                if (!focusCustomOnClose.current) return;
+                e.preventDefault();
+                focusCustomOnClose.current = false;
+                customRef.current?.focus();
+              }}
+            >
+              <SelectItem value="">{defaultModelText(catalog)}</SelectItem>
+              {catalog.models.map((m) => (
+                <SelectItem key={m.id} value={m.id} title={m.description ?? undefined}>
+                  {m.label}
+                </SelectItem>
+              ))}
+              {unlisted && <SelectItem value={choice}>Custom: {choice}</SelectItem>}
+              {catalog.customModelExample !== null && <SelectItem value={CUSTOM_MODEL}>Custom</SelectItem>}
+            </SelectContent>
           </Select>
         )}
       </SettingsRow>
@@ -193,14 +207,19 @@ export function AgentRows({
       {efforts.length > 1 && (
         <SettingsRow label="Effort" error={errors.effort}>
           {(id) => (
-            <Select id={id} variant="plain" value={value.effort} disabled={disabled} onChange={(e) => onChange({ ...value, effort: e.target.value }, "effort")}>
-              <option value="">{DEFAULT_CHOICE}</option>
-              {efforts.map((e) => (
-                <option key={e} value={e}>
-                  {e}
-                </option>
-              ))}
-              {value.effort !== "" && !efforts.includes(value.effort) && <option value={value.effort}>{value.effort}</option>}
+            <Select value={value.effort} disabled={disabled} onValueChange={(next) => onChange({ ...value, effort: next }, "effort")}>
+              <SelectTrigger id={id} aria-label="Effort" variant="plain">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">{DEFAULT_CHOICE}</SelectItem>
+                {efforts.map((e) => (
+                  <SelectItem key={e} value={e}>
+                    {e}
+                  </SelectItem>
+                ))}
+                {value.effort !== "" && !efforts.includes(value.effort) && <SelectItem value={value.effort}>{value.effort}</SelectItem>}
+              </SelectContent>
             </Select>
           )}
         </SettingsRow>

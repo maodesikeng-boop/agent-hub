@@ -27,9 +27,9 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={window.percent}
-        className="h-1.5 overflow-hidden rounded-full bg-sidebar-active"
+        className="h-1.5 overflow-hidden border border-border-strong bg-panel"
       >
-        <div className={cn("h-full rounded-full", USAGE_BAR_COLORS[level])} style={{ width: `${window.percent}%` }} />
+        <div className={cn("h-full", USAGE_BAR_COLORS[level])} style={{ width: `${window.percent}%` }} />
       </div>
       {window.resetsAt !== null && <span className="text-xs text-muted-foreground tabular-nums">Resets {formatQuotaReset(window.resetsAt)}</span>}
     </div>

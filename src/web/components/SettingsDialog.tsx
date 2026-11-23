@@ -127,26 +127,28 @@ export function SettingsDialog({
           orientation="vertical"
           className="flex min-h-0 flex-1 flex-col min-[720px]:flex-row"
         >
-          <TabsList
-            aria-label="Settings categories"
-            className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-sidebar py-3 pr-14 pl-3 min-[720px]:w-48 min-[720px]:flex-col min-[720px]:overflow-x-visible min-[720px]:border-r min-[720px]:border-b-0 min-[720px]:px-3 min-[720px]:py-4"
-          >
-            {sections.map(({ id, label, icon: Icon }) => (
-              <TabsTrigger
-                key={id}
-                value={id}
-                className="flex h-9 shrink-0 cursor-pointer items-center gap-3 rounded-xl px-3 text-body whitespace-nowrap transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=active]:bg-sidebar-active"
-              >
-                <Icon className="size-pixel shrink-0 max-[719px]:hidden" aria-hidden="true" />
-                {label}
-                {id === "resources" && resourcesSummary.attention && (
-                  <span data-testid="resources-tab-attention" aria-hidden="true" className="ml-auto size-2 shrink-0 rounded-full bg-caution" />
-                )}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          <div className="flex shrink-0 items-center border-b-2 border-list-edge bg-list pr-14 min-[720px]:block min-[720px]:border-r-2 min-[720px]:border-b-0 min-[720px]:pr-0">
+            <TabsList
+              aria-label="Settings categories"
+              className="flex min-w-0 flex-1 gap-1 overflow-x-auto px-3 py-3 min-[720px]:w-48 min-[720px]:flex-col min-[720px]:overflow-x-visible min-[720px]:py-4"
+            >
+              {sections.map(({ id, label, icon: Icon }) => (
+                <TabsTrigger
+                  key={id}
+                  value={id}
+                  className="flex h-9 shrink-0 cursor-pointer items-center gap-3 border-2 border-transparent px-3 text-body whitespace-nowrap text-list-ink-soft transition-colors outline-none hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] data-[state=active]:border-select-line data-[state=active]:bg-background data-[state=active]:text-list-ink"
+                >
+                  <Icon className="size-pixel shrink-0 max-[719px]:hidden" aria-hidden="true" />
+                  {label}
+                  {id === "resources" && resourcesSummary.attention && (
+                    <span data-testid="resources-tab-attention" aria-hidden="true" className="ml-auto size-2 shrink-0 bg-caution" />
+                  )}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
           {sections.map(({ id, label }) => (
-            <TabsContent key={id} value={id} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
+            <TabsContent key={id} value={id} className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel outline-none">
               <h2 className="shrink-0 px-6 pt-6 pr-14 pb-5 text-title font-semibold">{label}</h2>
               <div className="dialog-body-fade grid min-h-0 flex-1 grid-cols-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-6">{content[id]}</div>
             </TabsContent>

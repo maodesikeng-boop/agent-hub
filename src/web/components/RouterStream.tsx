@@ -28,7 +28,6 @@ import {
 } from "../../shared/index.ts";
 import { ApiError, localClient, type HubClient } from "../client.ts";
 import { errorLine, errorText, errorTitle, formatTime, type ErrorLike } from "../format.ts";
-import { jellyStyleOf } from "../lib/palette.ts";
 import { defaultLookOf } from "../../shared/slimes.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
@@ -161,8 +160,7 @@ function DestinationRow({
     <button
       type="button"
       data-destination
-      style={jellyStyleOf(look.color)}
-      className="flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-3 px-2.5 py-2 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
       onClick={() =>
         dest.worker
           ? onOpenWorker(dest.deviceKey, dest.conversationId)
@@ -924,7 +922,7 @@ export const RouterStream = memo(function RouterStream({
           {hasMore && (
             <button
               type="button"
-              className="touch-target mb-2 cursor-pointer self-center rounded-full px-3 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60"
+              className="touch-target mb-2 cursor-pointer self-center px-3 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
               disabled={anyFetching}
               onClick={loadOlder}
             >

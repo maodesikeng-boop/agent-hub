@@ -284,7 +284,8 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     const rows = screen.getAllByTestId("peel-gate-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]!.tagName).toBe("BUTTON");
-    expect(rows[0]).toHaveClass("min-h-8", "pointer-coarse:min-h-11", "rounded-xl");
+    expect(rows[0]).toHaveClass("min-h-8", "pointer-coarse:min-h-11", "border-2");
+    expect(rows[0]!.className).not.toMatch(/rounded-/);
     expect(within(rows[0]!).getByText("确认同步范围")).toHaveClass("truncate", "text-primary");
     // 作答只在对话里：右栏不出选项、补充框，也不出门禁提问那一行
     expect(screen.queryByTestId("peel-gate-card")).toBeNull();
@@ -334,7 +335,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     // 1) 一键点选推荐项
     const first = openDialog(5);
     const firstCard = screen.getByTestId("peel-gate-card");
-    expect(firstCard).toHaveClass("rounded-2xl", "border-primary", "bg-jelly");
+    expect(firstCard).toHaveClass("border-2", "border-open-line", "bg-open");
     await user.click(within(firstCard).getByRole("button", { name: /全量同步并先备份/ }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.url).toBe("/api/task-graphs/5/nodes/gate-sync/decide");

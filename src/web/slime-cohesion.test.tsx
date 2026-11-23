@@ -87,8 +87,8 @@ describe("换水果和颜色", () => {
     expect(within(color).getAllByRole("radio")).toHaveLength(JELLY_COLOR_IDS.length);
     for (const avatar of fruit.querySelectorAll("[data-look]")) expect(avatar.getAttribute("data-look")).toMatch(/:sky$/);
     const selected = within(fruit).getByRole("radio", { checked: true });
-    expect(selected).toHaveClass("bg-jelly");
-    expect(within(color).getByRole("radio", { checked: true })).toHaveClass("ring-2");
+    expect(selected).toHaveClass("bg-open", "border-open-line");
+    expect(within(color).getByRole("radio", { checked: true })).toHaveClass("border-border-focus", "bg-hover");
     expect(selected).toHaveFocus();
     await user.keyboard("{ArrowRight}{Enter}");
     const next = change.mock.lastCall?.[0];

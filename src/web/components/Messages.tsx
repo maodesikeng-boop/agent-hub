@@ -35,7 +35,6 @@ import { useHubQueryClient } from "../query-client.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
 import { workedFor } from "../step-labels.ts";
-import { workerStatusOf, type WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Input } from "../ui/input.tsx";
@@ -43,6 +42,7 @@ import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { SlimeLook } from "../../shared/slimes.ts";
 import { CardBody, DeliverableFiles } from "./Deliverables.tsx";
+import { ThreadCard } from "./ThreadCard.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -57,6 +57,7 @@ export interface AgentIdentity {
 
 export interface MessageActions {
   onOpenWorker: (workerConversationId: ConversationId) => void;
+  openWorkerId?: ConversationId | null;
   retry: Record<MessageId, RetryPhase | undefined>;
   onRetryMessage: (messageId: MessageId) => void;
   onRevertPersona: (changeId: PersonaChangeId) => Promise<void>;
@@ -64,31 +65,24 @@ export interface MessageActions {
   onAnswerAsk?: (messageId: MessageId, body: { clientId: string; choice: string | null; note?: string }) => Promise<void>;
 }
 
-export const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-body leading-relaxed";
+export const BUBBLE = "w-fit max-w-full px-4 py-2.5 text-body leading-relaxed";
 export const SECONDARY = "text-minor text-muted-foreground";
-export const TEXT_BUTTON = "touch-target cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
+export const TEXT_BUTTON = "touch-target cursor-pointer transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 
 export function AgentHead({
   identity,
-  dot,
   avatar,
   onClick,
   trailing,
   working = false,
 }: {
   identity: AgentIdentity;
-  dot?: Exclude<WorkerTone, "neutral">;
   avatar?: React.ReactNode;
   onClick?: () => void;
   trailing?: React.ReactNode;
   working?: boolean;
 }) {
-  const icon = (
-    <span className="relative flex shrink-0">
-      {avatar ?? <Avatar look={identity.look} size={26} neutral={identity.neutral} working={working} />}
-      {dot && <span data-dot={dot} aria-hidden="true" className={cn("absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background", TONE_DOT[dot])} />}
-    </span>
-  );
+  const icon = <span className="relative flex shrink-0">{avatar ?? <Avatar look={identity.look} size={26} neutral={identity.neutral} working={working} />}</span>;
   const name = <div className={cn("min-w-0 truncate font-medium", SECONDARY)}>{identity.name}</div>;
   return (
     <div className="mb-1.5 flex min-w-0 items-center gap-2" data-slot="agent-head">
@@ -185,7 +179,7 @@ function AskCard({
   const { title: cardTitle, body: cardBody } = useMemo(() => splitCardTitle(card.question), [card.question]);
 
   return (
-    <div className="w-full min-w-0 rounded-2xl border border-border bg-background p-4" data-ask-card>
+    <div className="w-full min-w-0 border-2 border-border bg-background p-4" data-ask-card>
       <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
         <Markdown text={cardTitle} files={files} messageId={messageId} />
       </div>
@@ -220,8 +214,8 @@ function AskCard({
             );
           })}
           {answerNote !== undefined && (
-            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 rounded-xl bg-sidebar px-3 py-2.5 leading-6">
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground">
+            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 border border-border bg-panel px-3 py-2.5 leading-6">
+              <span className="flex size-6 shrink-0 items-center justify-center border border-border-strong bg-background text-muted-foreground">
                 <PencilLine className="size-pixel-sm" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
@@ -235,7 +229,7 @@ function AskCard({
           <button
             type="button"
             onClick={() => setNoteOpen(true)}
-            className="mt-2 inline-flex min-h-7 pointer-coarse:min-h-11 cursor-pointer items-center rounded-xl px-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="mt-2 inline-flex min-h-7 pointer-coarse:min-h-11 cursor-pointer items-center px-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
           >
             Add note
           </button>
@@ -298,7 +292,7 @@ export const AgentText = memo(function AgentText({
   const blocker = askCard === null ? askOf(message) : null;
   return (
     <article
-      className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}
+      className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "outline-2 outline-offset-4 outline-border-focus")}
       data-side="left"
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
@@ -521,7 +515,7 @@ function RevertButton({
       {phase === "error" && <span className="text-danger">Couldn't undo</span>}
       <button
         type="button"
-        className="touch-target cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60"
+        className="touch-target cursor-pointer font-medium text-rail-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:no-underline disabled:opacity-60"
         disabled={phase === "busy"}
         onClick={revert}
       >
@@ -661,48 +655,19 @@ function SystemNotice({
   }
 }
 
-const TONE_DOT: Record<Exclude<WorkerTone, "neutral">, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger" };
-
-function WorkerSpeech({
-  line,
-  look,
-  onOpen,
-  vendor,
-}: {
-  line: WorkerMessageMeta;
-  look: SlimeLook;
-  onOpen: MessageActions["onOpenWorker"];
-  vendor?: AgentVendor;
-}) {
-  const { tone, label } = workerStatusOf(line);
-  const failed = line.event !== "report";
-  const summary = line.summary?.trim() ?? "";
-  const body = failed && summary !== "" ? describeFailure(summary, { unknown: "raw", vendor }) : null;
-  const text = body ? body.text : summary;
-  return (
-    <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone}>
-      <AgentHead identity={{ name: line.title, look, neutral: true }} dot={tone !== "neutral" ? tone : undefined} />
-      <button
-        type="button"
-        data-bubble
-        title={label ?? undefined}
-        aria-label={label ? `${line.title}, ${label}: ${text}` : undefined}
-        className={cn(
-          BUBBLE,
-          "cursor-pointer bg-bubble-agent text-left transition-colors outline-none hover:bg-[color-mix(in_srgb,var(--bubble-agent),var(--foreground)_5%)] focus-visible:ring-2 focus-visible:ring-ring/50 [overflow-wrap:anywhere]",
-        )}
-        onClick={() => onOpen(line.workerConversationId)}
-      >
-        <span title={body ? body.raw : undefined}>{text}</span>
-      </button>
-    </article>
-  );
-}
-
-function WorkerItem({ line, look, actions }: { line: WorkerMessageMeta; look: SlimeLook; actions: MessageActions }) {
+function WorkerItem({ line, look, createdAt, actions }: { line: WorkerMessageMeta; look: SlimeLook; createdAt: number; actions: MessageActions }) {
   const onOpen = actions.onOpenWorker;
   if (line.event === "report" || line.event === "turn_failed" || line.event === "worktree_failed") {
-    return <WorkerSpeech line={line} look={look} onOpen={onOpen} vendor={actions.vendorOf?.(line.workerConversationId)} />;
+    return (
+      <ThreadCard
+        line={line}
+        look={look}
+        open={actions.openWorkerId === line.workerConversationId}
+        createdAt={createdAt}
+        vendor={actions.vendorOf?.(line.workerConversationId)}
+        onOpen={onOpen}
+      />
+    );
   }
   return (
     <NoticeLine icon={WORKER_NOTICE_ICONS[line.event] ?? Info}>
@@ -728,7 +693,7 @@ export const MessageBubble = memo(
     revertedChanges?: ReadonlySet<PersonaChangeId>;
   }) {
     const workerLine = workerEventOf(message);
-    if (workerLine) return <WorkerItem line={workerLine} look={identity.look} actions={actions} />;
+    if (workerLine) return <WorkerItem line={workerLine} look={identity.look} createdAt={message.createdAt} actions={actions} />;
     if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
     if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
     return (
@@ -828,7 +793,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
       {failed && delivered && (
         <button
           type="button"
-          className="touch-target text-minor text-muted-foreground rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-60"
+          className="touch-target text-minor text-muted-foreground outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:opacity-60"
           title={[failure?.text, failure?.raw].filter(Boolean).join("\n")}
           disabled={phase === "retrying"}
           onClick={() => actions.onRetryMessage(message.id)}
@@ -852,7 +817,7 @@ export function SentBody({ unsent, children }: { unsent: React.ReactNode; childr
   );
 }
 
-const UNSENT_DOT = "flex size-5 shrink-0 items-center justify-center rounded-full bg-danger text-xs leading-none font-semibold text-white";
+const UNSENT_DOT = "flex size-5 shrink-0 items-center justify-center bg-danger text-xs leading-none font-semibold text-white";
 const UNSENT_LABEL = "Not sent";
 
 export function UnsentMark({
@@ -892,7 +857,7 @@ export function UnsentMark({
       aria-busy={retrying || undefined}
       disabled={retrying}
       data-unsent
-      className="touch-target flex shrink-0 cursor-pointer rounded-full outline-none hover:brightness-90 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60"
+      className="touch-target flex shrink-0 cursor-pointer outline-none hover:brightness-90 focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
       onClick={onRetry}
     >
       {mark}

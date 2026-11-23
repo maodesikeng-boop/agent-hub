@@ -34,7 +34,7 @@ export function CustomBadge() {
 }
 
 function KindTag({ kind }: { kind: CapabilityRow["kind"] }) {
-  return <span className="shrink-0 rounded-full bg-muted px-2 text-xs leading-5 font-medium text-muted-foreground">{CAPABILITY_KIND_TAGS[kind]}</span>;
+  return <span className="shrink-0 border border-border bg-panel px-2 text-xs leading-5 font-medium text-muted-foreground">{CAPABILITY_KIND_TAGS[kind]}</span>;
 }
 
 function Audience({ vendors }: { vendors: readonly AgentVendor[] | null }) {
@@ -74,8 +74,8 @@ function UnitRow({ unit, expanded, onApply }: { unit: CapabilityUnit; expanded: 
   if (unit.single) return <ItemRow row={{ ...unit.rows[0]!, audience: unit.audience }} nested={false} onApply={onApply} />;
   return (
     <Collapsible open={open || expanded} onOpenChange={setOpen}>
-      <div className="flex min-h-12 items-center gap-3 pr-4 transition-colors hover:bg-sidebar-hover">
-        <CollapsibleTrigger className="group flex min-w-0 flex-1 cursor-pointer items-center gap-3 self-stretch py-2 pl-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset">
+      <div className="flex min-h-12 items-center gap-3 pr-4 transition-colors hover:bg-hover">
+        <CollapsibleTrigger className="group flex min-w-0 flex-1 cursor-pointer items-center gap-3 self-stretch py-2 pl-4 text-left outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]">
           <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
           <Labels>
             <span title={unit.label} className="max-w-full min-w-0 truncate text-body">

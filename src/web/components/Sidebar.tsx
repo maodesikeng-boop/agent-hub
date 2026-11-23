@@ -4,7 +4,6 @@ import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "
 import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
 import type { ConversationRef, NotifySettings } from "../notify.ts";
 import { previewText, type ConversationEntry, type QuotaVendor } from "../selectors.ts";
-import { jellyStyleOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { NARROW_QUERY, useMediaQuery } from "../useMediaQuery.ts";
@@ -16,16 +15,16 @@ import { SearchField } from "./SearchField.tsx";
 import { SettingsDialog, type DeviceSettings, type SettingsDialogSection } from "./SettingsDialog.tsx";
 import { SidebarTools } from "./SidebarTools.tsx";
 
-const ROW = "flex h-18 w-full cursor-pointer items-center gap-3 rounded-2xl px-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const ROW =
+  "flex h-18 w-full cursor-pointer items-center gap-3 border-2 border-transparent px-3 text-left text-list-ink transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]";
 const ROW_AVATAR = 48;
 const ROW_NAME = "truncate text-title leading-snug font-semibold";
-const ROW_PREVIEW = "mt-0.5 block truncate text-minor leading-snug text-muted-foreground";
-const JELLY_ROW = (active: boolean) => (active ? "bg-jelly" : "hover:bg-jelly-hover");
+const ROW_PREVIEW = "mt-0.5 block truncate text-minor leading-snug text-list-ink-soft";
+const LIST_ROW = (active: boolean) => (active ? "border-select-line bg-background" : "hover:bg-list-hover");
 
-const RAIL_DOT = "absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-surface-sidebar";
-const RAIL_DOT_ON_JELLY = "ring-[color-mix(in_srgb,var(--jelly)_10%,var(--color-surface-sidebar))]";
+const RAIL_DOT = "absolute right-0 bottom-0 size-2 bg-status-active ring-2 ring-list";
 const GROUP_HEADER =
-  "flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 pointer-coarse:h-11";
+  "flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left text-xs font-medium text-list-ink-soft outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] pointer-coarse:h-11";
 
 export type SidebarLayout = "wide" | "rail" | "page";
 
@@ -57,7 +56,7 @@ function RouterRowButton({ router, active }: { router: SidebarRouterEntry; activ
           aria-label={NEEDS_YOU}
           title={NEEDS_YOU}
           data-testid="router-pending-indicator"
-          className="size-2 rounded-full bg-status-active"
+          className="size-2 bg-status-active"
         />
       </span>
     ) : router.unreadReportCount > 0 ? (
@@ -68,7 +67,7 @@ function RouterRowButton({ router, active }: { router: SidebarRouterEntry; activ
     <button
       type="button"
       aria-current={active ? "page" : undefined}
-      className={cn(ROW, active ? "bg-sidebar-active" : "hover:bg-sidebar-hover")}
+      className={cn(ROW, LIST_ROW(active))}
       onClick={router.onSelect}
     >
       <RouterAvatar size={ROW_AVATAR} working={router.working} />
@@ -92,8 +91,8 @@ function NarrowRouterButton({ router, active }: { router: SidebarRouterEntry; ac
       aria-current={active ? "page" : undefined}
       title="Router"
       className={cn(
-        "relative flex size-13 shrink-0 cursor-pointer items-center justify-center rounded-2xl transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        active ? "bg-sidebar-active" : "hover:bg-sidebar-hover",
+        "relative flex size-13 shrink-0 cursor-pointer items-center justify-center border-2 border-transparent transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
+        LIST_ROW(active),
       )}
       onClick={router.onSelect}
     >
@@ -105,7 +104,7 @@ function NarrowRouterButton({ router, active }: { router: SidebarRouterEntry; ac
             aria-label={NEEDS_YOU}
             title={NEEDS_YOU}
             data-testid="router-pending-indicator"
-            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-surface-sidebar"
+            className={cn(RAIL_DOT, active && "ring-background")}
           />
         )}
       </span>
@@ -131,21 +130,20 @@ function EntryButton({
 }) {
   const tag =
     entry.pm?.archivedAt != null ? (
-      <span className="text-xs text-muted-foreground tabular-nums">{formatArchiveRemaining(entry.pm.archivedAt)}</span>
+      <span className="text-xs text-list-ink-soft tabular-nums">{formatArchiveRemaining(entry.pm.archivedAt)}</span>
     ) : asking ? (
-      <span role="img" aria-label={NEEDS_YOU} title={NEEDS_YOU} data-testid="asking-indicator" className="size-2 rounded-full bg-status-active" />
+      <span role="img" aria-label={NEEDS_YOU} title={NEEDS_YOU} data-testid="asking-indicator" className="size-2 bg-status-active" />
     ) : waiting ? (
-      <span role="img" aria-label={YOUR_TURN} title={YOUR_TURN} data-testid="waiting-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
+      <span role="img" aria-label={YOUR_TURN} title={YOUR_TURN} data-testid="waiting-indicator" className="size-2 shrink-0 bg-status-active" />
     ) : entry.lastMessage ? (
-      <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
+      <span className="text-xs text-list-ink-soft tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
     ) : null;
   const preview = previewText(entry);
   return (
     <button
       type="button"
       aria-current={active ? "true" : undefined}
-      className={cn(ROW, JELLY_ROW(active))}
-      style={jellyStyleOf(entry.look.color)}
+      className={cn(ROW, LIST_ROW(active))}
       onClick={onSelect}
     >
       <Avatar look={entry.look} size={ROW_AVATAR} />
@@ -188,10 +186,9 @@ function NarrowEntryButton({
       aria-current={active ? "true" : undefined}
       title={entry.name}
       className={cn(
-        "relative flex size-13 shrink-0 items-center justify-center rounded-2xl transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        JELLY_ROW(active),
+        "relative flex size-13 shrink-0 items-center justify-center border-2 border-transparent transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
+        LIST_ROW(active),
       )}
-      style={jellyStyleOf(entry.look.color)}
       onClick={onSelect}
     >
       <span className="relative">
@@ -202,7 +199,7 @@ function NarrowEntryButton({
             aria-label={NEEDS_YOU}
             title={NEEDS_YOU}
             data-testid="asking-indicator"
-            className={cn(RAIL_DOT, active && RAIL_DOT_ON_JELLY)}
+            className={cn(RAIL_DOT, active && "ring-background")}
           />
         ) : waiting ? (
           <span
@@ -210,7 +207,7 @@ function NarrowEntryButton({
             aria-label={YOUR_TURN}
             title={YOUR_TURN}
             data-testid="waiting-indicator"
-            className={cn(RAIL_DOT, active && RAIL_DOT_ON_JELLY)}
+            className={cn(RAIL_DOT, active && "ring-background")}
           />
         ) : null}
       </span>
@@ -391,8 +388,8 @@ export const Sidebar = memo(
         id="sidebar"
         aria-label="Sidebar"
         className={cn(
-          "tint-fade flex shrink-0 flex-col bg-surface-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)]",
-          layout === "rail" ? "w-18 border-r border-line" : layout === "page" ? "w-full" : "w-75",
+          "flex shrink-0 flex-col bg-list pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)]",
+          layout === "rail" ? "w-18 border-r-2 border-list-edge" : layout === "page" ? "w-full" : "w-75 border-r-2 border-list-edge",
         )}
       >
         {narrow ? (
@@ -401,7 +398,7 @@ export const Sidebar = memo(
             {router && (
               <div className="flex shrink-0 flex-col items-center gap-2 pb-2">
                 <NarrowRouterButton router={router} active={routerActive} />
-                <div className="w-8 border-b border-line" aria-hidden="true" />
+                <div className="w-8 border-b-2 border-list-edge" aria-hidden="true" />
               </div>
             )}
             <nav
@@ -430,7 +427,7 @@ export const Sidebar = memo(
               data-window-drag
               className="relative flex h-16 shrink-0 items-center gap-2 px-3 before:absolute before:inset-x-0 before:bottom-full before:h-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] before:content-['']"
             >
-              <SearchField label="Search" value={query} onChange={setQuery} />
+              <SearchField label="Search" tone="cream" value={query} onChange={setQuery} />
               <Button variant="slot" size="icon" className="shrink-0" aria-label="New project manager" onClick={onNewPm}>
                 <Plus aria-hidden="true" />
               </Button>
@@ -438,7 +435,7 @@ export const Sidebar = memo(
             {router && routerMatches && (
               <div className="shrink-0 px-3">
                 <RouterRowButton router={router} active={routerActive} />
-                <div className="mx-3 mt-2 border-b border-line" aria-hidden="true" />
+                <div className="mx-3 mt-2 border-b-2 border-list-edge" aria-hidden="true" />
               </div>
             )}
             <nav className={cn("sidebar-list flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-3 pb-5", !grouped && "space-y-1")} aria-label="Conversations">

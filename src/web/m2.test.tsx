@@ -83,8 +83,18 @@ function textSave(page: HTMLElement): HTMLElement | null {
 /** 厂商下拉应列出的显示名：按名单顺序逐家取（以后接入新厂商不用改这里）。 */
 const VENDOR_LABELS = AGENT_VENDORS.map((vendor) => vendorSpec(vendor).label);
 
-function optionsOf(select: HTMLElement): string[] {
-  return within(select).getAllByRole("option").map((o) => o.textContent ?? "");
+async function readOptions(user: ReturnType<typeof userEvent.setup>, trigger: HTMLElement): Promise<string[]> {
+  await user.click(trigger);
+  const listbox = await screen.findByRole("listbox");
+  const labels = within(listbox).getAllByRole("option").map((o) => o.textContent ?? "");
+  await user.keyboard("{Escape}");
+  return labels;
+}
+
+async function pickOption(user: ReturnType<typeof userEvent.setup>, trigger: HTMLElement, label: string) {
+  await user.click(trigger);
+  const listbox = await screen.findByRole("listbox");
+  await user.click(within(listbox).getByRole("option", { name: label }));
 }
 
 function nav() {
@@ -248,16 +258,16 @@ describe("New project manager", () => {
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
     // 打包的名单列出名单里的每一家厂商：显示厂商下拉（默认 Claude Code）；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
     const vendor = within(dialog).getByRole("combobox", { name: "Provider" });
-    expect(optionsOf(vendor)).toEqual(VENDOR_LABELS);
-    expect(vendor).toHaveDisplayValue("Claude Code");
+    expect(await readOptions(user, vendor)).toEqual(VENDOR_LABELS);
+    expect(vendor).toHaveTextContent("Claude Code");
     const model = within(dialog).getByRole("combobox", { name: "Model" });
     const effort = within(dialog).getByRole("combobox", { name: "Effort" });
-    expect(optionsOf(model)).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
-    expect(optionsOf(effort)).toEqual(["Default", "low", "medium", "high", "xhigh", "max"]);
-    expect(model).toHaveDisplayValue("Default");
-    expect(effort).toHaveDisplayValue("Default");
-    await user.selectOptions(model, "Opus");
-    await user.selectOptions(effort, "high");
+    expect(await readOptions(user, model)).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
+    expect(await readOptions(user, effort)).toEqual(["Default", "low", "medium", "high", "xhigh", "max"]);
+    expect(model).toHaveTextContent("Default");
+    expect(effort).toHaveTextContent("Default");
+    await pickOption(user, model, "Opus");
+    await pickOption(user, effort, "high");
     const persona = within(dialog).getByRole("textbox", { name: "Persona" });
     expect(persona).toHaveValue("");
     await user.type(persona, "话少");
@@ -281,7 +291,7 @@ describe("New project manager", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "阿明");
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
     expect(within(dialog).queryByRole("textbox", { name: "Model name" })).not.toBeInTheDocument();
-    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Model" }), "Custom");
+    await pickOption(user, within(dialog).getByRole("combobox", { name: "Model" }), "Custom");
     const name = within(dialog).getByRole("textbox", { name: "Model name" });
     expect(name).toHaveFocus();
     const create = within(dialog).getByRole("button", { name: "Create" });
@@ -308,14 +318,14 @@ describe("New project manager", () => {
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
     const agent = within(dialog).getByRole("region", { name: "Model" });
     const model = within(agent).getByRole("combobox", { name: "Model" });
-    await waitFor(() => expect(optionsOf(model)).toEqual(["Default", "Opus 5.5", "Fable 5.1", "Haiku 4.5", "Opus 4.6", "Custom"]));
+    await waitFor(async () => expect(await readOptions(user, model)).toEqual(["Default", "Opus 5.5", "Fable 5.1", "Haiku 4.5", "Opus 4.6", "Custom"]));
     const effort = within(agent).getByRole("combobox", { name: "Effort" });
-    await user.selectOptions(effort, "xhigh");
+    await pickOption(user, effort, "xhigh");
     // Opus 4.6 没有 xhigh：思考程度回到默认
-    await user.selectOptions(model, "Opus 4.6");
-    expect(effort).toHaveDisplayValue("Default");
-    expect(optionsOf(effort)).toEqual(["Default", "low", "medium", "high", "max"]);
-    await user.selectOptions(effort, "max");
+    await pickOption(user, model, "Opus 4.6");
+    expect(effort).toHaveTextContent("Default");
+    expect(await readOptions(user, effort)).toEqual(["Default", "low", "medium", "high", "max"]);
+    await pickOption(user, effort, "max");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
     expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ defaultModel: "claude-opus-4-6", effort: "max" });
@@ -328,17 +338,17 @@ describe("New project manager", () => {
     const dialog = screen.getByRole("dialog");
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "阿明");
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
-    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Provider" }), "Antigravity");
+    await pickOption(user, within(dialog).getByRole("combobox", { name: "Provider" }), "Antigravity");
     const model = within(dialog).getByRole("combobox", { name: "Model" });
-    expect(optionsOf(model)).toEqual(["Default", "Gemini 4 Argon", "Gemini 3.8 Flash", "Claude Opus 5.5", "Claude Sonnet 5.5", "GPT-OSS 120B", "Custom"]);
-    expect(optionsOf(within(dialog).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "low", "medium", "high"]);
-    await user.selectOptions(model, "Gemini 4 Argon");
-    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Effort" }), "high");
+    expect(await readOptions(user, model)).toEqual(["Default", "Gemini 4 Argon", "Gemini 3.8 Flash", "Claude Opus 5.5", "Claude Sonnet 5.5", "GPT-OSS 120B", "Custom"]);
+    expect(await readOptions(user, within(dialog).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "low", "medium", "high"]);
+    await pickOption(user, model, "Gemini 4 Argon");
+    await pickOption(user, within(dialog).getByRole("combobox", { name: "Effort" }), "high");
     // 换成只有一档的 GPT-OSS：思考程度这一行不显示（档位 high 它没有，回到默认）
-    await user.selectOptions(model, "GPT-OSS 120B");
+    await pickOption(user, model, "GPT-OSS 120B");
     expect(within(dialog).queryByRole("combobox", { name: "Effort" })).not.toBeInTheDocument();
-    await user.selectOptions(model, "Claude Opus 5.5");
-    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Effort" }), "low");
+    await pickOption(user, model, "Claude Opus 5.5");
+    await pickOption(user, within(dialog).getByRole("combobox", { name: "Effort" }), "low");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
     expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ vendor: "agy", defaultModel: "claude-opus-5-5", effort: "low" });
@@ -351,7 +361,7 @@ describe("New project manager", () => {
     const dialog = screen.getByRole("dialog");
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "阿明");
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
-    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Model" }), "Custom");
+    await pickOption(user, within(dialog).getByRole("combobox", { name: "Model" }), "Custom");
     await user.click(within(dialog).getByRole("textbox", { name: "Model name" }));
     await user.paste("m".repeat(101));
     expect(within(dialog).getByText("模型名最多 100 个字")).toBeInTheDocument();
@@ -502,8 +512,8 @@ describe("撤销性格设定修改", () => {
     const ws = await boot(makeSnapshot());
     push(ws, messageChange(11, "message.created", changed(3, 42)));
     const revert = within(log()).getByRole("button", { name: "Undo" });
-    // 灰色的文字按钮，不用主色；悬停变前景色
-    expect(revert).toHaveClass("text-muted-foreground", "hover:text-foreground");
+    // 暖棕色文字链接，不用主色；悬停加下划线
+    expect(revert).toHaveClass("text-rail-ink", "hover:underline");
     expect(revert.className).not.toMatch(/primary/);
     await user.click(revert);
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/persona-changes\/42\/revert$/)).toHaveLength(1));
@@ -604,7 +614,7 @@ describe("资料页", () => {
     expect(changesHeader).toHaveAttribute("aria-expanded", "false");
     expect(changesHeader).toHaveTextContent("1");
     expect(within(page).queryByRole("list", { name: "History" })).not.toBeInTheDocument();
-    expect(groupIn(page, "History").firstElementChild).toHaveClass("rounded-2xl", "border", "border-border", "bg-background");
+    expect(groupIn(page, "History").firstElementChild).toHaveClass("border-2", "border-border", "bg-background");
     expect(groupIn(page, "History").querySelector(".bg-sidebar, .bg-neutral-50")).toBeNull();
     await openChanges(page);
     expect(changesHeader).toHaveAttribute("aria-expanded", "true");
@@ -625,7 +635,8 @@ describe("资料页", () => {
     expect(within(groupIn(page, "Model")).queryByRole("heading")).not.toBeInTheDocument();
     for (const title of groups.slice(1)) expect(within(groupIn(page, title)).getByRole("heading", { name: new RegExp(`^${title}`) })).toBeInTheDocument();
     // 性格设定也是白底细框（框外小灰字标题），不是灰底色块
-    expect(groupIn(page, "Persona").lastElementChild).toHaveClass("rounded-2xl", "border", "border-border", "bg-background");
+    expect(groupIn(page, "Persona").lastElementChild).toHaveClass("border-2", "border-border", "bg-background");
+    expect(groupIn(page, "Persona").lastElementChild?.className).not.toMatch(/rounded-/);
     expect(within(page).queryByText("Agent")).not.toBeInTheDocument();
     expect(within(page).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
   });
@@ -878,11 +889,11 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
     // 打包的名单列出名单里的每一家厂商：显示厂商下拉（默认 Claude Code）
     const vendor = combo(page, "Provider");
-    expect(optionsOf(vendor)).toEqual(VENDOR_LABELS);
-    expect(vendor).toHaveDisplayValue("Claude Code");
-    expect(optionsOf(combo(page, "Model"))).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
-    expect(combo(page, "Model")).toHaveDisplayValue("Haiku");
-    expect(combo(page, "Effort")).toHaveDisplayValue("xhigh");
+    expect(await readOptions(user, vendor)).toEqual(VENDOR_LABELS);
+    expect(vendor).toHaveTextContent("Claude Code");
+    expect(await readOptions(user, combo(page, "Model"))).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
+    expect(combo(page, "Model")).toHaveTextContent("Haiku");
+    expect(combo(page, "Effort")).toHaveTextContent("xhigh");
     expect(within(page).queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -892,10 +903,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     serveCatalog();
     serve({ model: "claude-opus-4-6" });
     const page = await open(user);
-    await waitFor(() => expect(optionsOf(combo(page, "Model"))).toEqual(["Default", "Opus 5.5", "Fable 5.1", "Haiku 4.5", "Opus 4.6", "Custom"]));
-    expect(combo(page, "Model")).toHaveDisplayValue("Opus 4.6");
-    expect((combo(page, "Model") as HTMLSelectElement).value).toBe("claude-opus-4-6");
-    expect(optionsOf(combo(page, "Effort"))).toEqual(["Default", "low", "medium", "high", "max"]);
+    await waitFor(async () => expect(await readOptions(user, combo(page, "Model"))).toEqual(["Default", "Opus 5.5", "Fable 5.1", "Haiku 4.5", "Opus 4.6", "Custom"]));
+    expect(combo(page, "Model")).toHaveTextContent("Opus 4.6");
+    expect(await readOptions(user, combo(page, "Effort"))).toEqual(["Default", "low", "medium", "high", "max"]);
     expect(api.callsTo("GET", /^\/api\/models$/)).toHaveLength(1);
   });
 
@@ -905,10 +915,10 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     serveCatalog();
     serve({ model: "claude-opus-4-1", effort: "high" });
     const page = await open(user);
-    await waitFor(() => expect(optionsOf(combo(page, "Model"))).toContain("Opus 4.6"));
-    expect(combo(page, "Model")).toHaveDisplayValue("Custom: claude-opus-4-1");
+    await waitFor(async () => expect(await readOptions(user, combo(page, "Model"))).toContain("Opus 4.6"));
+    expect(combo(page, "Model")).toHaveTextContent("Custom: claude-opus-4-1");
     expect(within(page).queryByRole("textbox", { name: "Model name" })).not.toBeInTheDocument();
-    expect(combo(page, "Effort")).toHaveDisplayValue("high");
+    expect(combo(page, "Effort")).toHaveTextContent("high");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
   });
 
@@ -934,16 +944,16 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(modelSave(page)).not.toBeInTheDocument();
     expect(modelCancel(page)).not.toBeInTheDocument();
 
-    await user.selectOptions(combo(page, "Provider"), "Codex");
-    expect(combo(page, "Provider")).toHaveDisplayValue("Codex");
-    expect(combo(page, "Model")).toHaveDisplayValue("Default");
-    expect(combo(page, "Effort")).toHaveDisplayValue("Default");
+    await pickOption(user, combo(page, "Provider"), "Codex");
+    expect(combo(page, "Provider")).toHaveTextContent("Codex");
+    expect(combo(page, "Model")).toHaveTextContent("Default");
+    expect(combo(page, "Effort")).toHaveTextContent("Default");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
 
-    await user.selectOptions(combo(page, "Model"), "GPT-6-Luna");
+    await pickOption(user, combo(page, "Model"), "GPT-6-Luna");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
 
-    await user.selectOptions(combo(page, "Effort"), "high");
+    await pickOption(user, combo(page, "Effort"), "high");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
 
     const save = modelSave(page)!;
@@ -970,9 +980,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     release();
     await waitFor(() => expect(modelSave(page)).not.toBeInTheDocument());
     expect(modelCancel(page)).not.toBeInTheDocument();
-    expect(combo(page, "Provider")).toHaveDisplayValue("Codex");
-    expect(combo(page, "Model")).toHaveDisplayValue("GPT-6-Luna");
-    expect(combo(page, "Effort")).toHaveDisplayValue("high");
+    expect(combo(page, "Provider")).toHaveTextContent("Codex");
+    expect(combo(page, "Model")).toHaveTextContent("GPT-6-Luna");
+    expect(combo(page, "Effort")).toHaveTextContent("high");
     expect(combo(page, "Provider")).toBeEnabled();
     expect(combo(page, "Model")).toBeEnabled();
     expect(combo(page, "Effort")).toBeEnabled();
@@ -984,23 +994,23 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     serve({ vendor: "claude", model: "haiku", effort: "low" });
     const page = await open(user);
 
-    await user.selectOptions(combo(page, "Provider"), "Codex");
-    await user.selectOptions(combo(page, "Model"), "GPT-6-Luna");
-    await user.selectOptions(combo(page, "Effort"), "high");
+    await pickOption(user, combo(page, "Provider"), "Codex");
+    await pickOption(user, combo(page, "Model"), "GPT-6-Luna");
+    await pickOption(user, combo(page, "Effort"), "high");
     expect(modelCancel(page)).toBeEnabled();
     expect(modelSave(page)).toBeEnabled();
 
     await user.click(modelCancel(page)!);
-    expect(combo(page, "Provider")).toHaveDisplayValue("Claude Code");
-    expect(combo(page, "Model")).toHaveDisplayValue("Haiku");
-    expect(combo(page, "Effort")).toHaveDisplayValue("low");
+    expect(combo(page, "Provider")).toHaveTextContent("Claude Code");
+    expect(combo(page, "Model")).toHaveTextContent("Haiku");
+    expect(combo(page, "Effort")).toHaveTextContent("low");
     expect(modelSave(page)).not.toBeInTheDocument();
     expect(modelCancel(page)).not.toBeInTheDocument();
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
 
-    await user.selectOptions(combo(page, "Effort"), "max");
+    await pickOption(user, combo(page, "Effort"), "max");
     expect(modelSave(page)).toBeInTheDocument();
-    await user.selectOptions(combo(page, "Effort"), "low");
+    await pickOption(user, combo(page, "Effort"), "low");
     expect(modelSave(page)).not.toBeInTheDocument();
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
   });
@@ -1011,9 +1021,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     serveCatalog();
     serve();
     const page = await open(user);
-    await waitFor(() => expect(optionsOf(combo(page, "Model"))).toContain("Fable 5.1"));
-    await user.selectOptions(combo(page, "Model"), "Fable 5.1");
-    await user.selectOptions(combo(page, "Effort"), "low");
+    await waitFor(async () => expect(await readOptions(user, combo(page, "Model"))).toContain("Fable 5.1"));
+    await pickOption(user, combo(page, "Model"), "Fable 5.1");
+    await pickOption(user, combo(page, "Effort"), "low");
     expect(api.callsTo("PUT", /^\/api\/pms\/1\/persona$/)).toHaveLength(0);
 
     await user.click(modelSave(page)!);
@@ -1024,8 +1034,8 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const log = await within(page).findByRole("list", { name: "History" });
     await waitFor(() => expect(within(log).getAllByRole("listitem")).toHaveLength(1));
     expect(within(log).getAllByRole("listitem")[0]).toHaveTextContent("You set model to Fable 5.1, set effort to low");
-    expect(combo(page, "Model")).toHaveDisplayValue("Fable 5.1");
-    expect(combo(page, "Effort")).toHaveDisplayValue("low");
+    expect(combo(page, "Model")).toHaveTextContent("Fable 5.1");
+    expect(combo(page, "Effort")).toHaveTextContent("low");
     expect(modelSave(page)).not.toBeInTheDocument();
   });
 
@@ -1035,16 +1045,16 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     serveCatalog();
     serve({ model: "opus", effort: "xhigh" });
     const page = await open(user);
-    await waitFor(() => expect(optionsOf(combo(page, "Model"))).toContain("Opus 4.6"));
-    await user.selectOptions(combo(page, "Model"), "Opus 4.6");
-    expect(combo(page, "Effort")).toHaveDisplayValue("Default");
+    await waitFor(async () => expect(await readOptions(user, combo(page, "Model"))).toContain("Opus 4.6"));
+    await pickOption(user, combo(page, "Model"), "Opus 4.6");
+    expect(combo(page, "Effort")).toHaveTextContent("Default");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
 
     await user.click(modelSave(page)!);
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
     expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ vendor: "claude", model: "claude-opus-4-6", effort: null });
 
-    await user.selectOptions(combo(page, "Model"), "Default");
+    await pickOption(user, combo(page, "Model"), "Default");
     await user.click(modelSave(page)!);
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
     expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ vendor: "claude", model: null, effort: null });
@@ -1057,15 +1067,15 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     api.putPersona = () => ({ status: 400, body: { error: "思考程度只能是 low、medium、high、xhigh、max", code: "invalid" } });
     const page = await open(user);
 
-    await user.selectOptions(combo(page, "Model"), "Opus");
-    await user.selectOptions(combo(page, "Effort"), "max");
+    await pickOption(user, combo(page, "Model"), "Opus");
+    await pickOption(user, combo(page, "Effort"), "max");
     await user.click(modelSave(page)!);
 
     const alert = await within(groupIn(page, "Model")).findByRole("alert");
     expect(alert).toHaveTextContent("思考程度只能是 low、medium、high、xhigh、max");
     expect(within(groupIn(page, "Persona")).queryByRole("alert")).not.toBeInTheDocument();
-    expect(combo(page, "Model")).toHaveDisplayValue("Opus");
-    expect(combo(page, "Effort")).toHaveDisplayValue("max");
+    expect(combo(page, "Model")).toHaveTextContent("Opus");
+    expect(combo(page, "Effort")).toHaveTextContent("max");
     expect(modelSave(page)).toBeEnabled();
 
     api.fetch.mockImplementationOnce(async () => {
@@ -1073,8 +1083,8 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     });
     await user.click(modelSave(page)!);
     expect(await within(groupIn(page, "Model")).findByRole("alert")).toBeInTheDocument();
-    expect(combo(page, "Model")).toHaveDisplayValue("Opus");
-    expect(combo(page, "Effort")).toHaveDisplayValue("max");
+    expect(combo(page, "Model")).toHaveTextContent("Opus");
+    expect(combo(page, "Effort")).toHaveTextContent("max");
 
     api.putPersona = (_id, body) => ({
       status: 200,
@@ -1091,16 +1101,16 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await user.click(modelSave(page)!);
     await waitFor(() => expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument());
     expect(modelSave(page)).not.toBeInTheDocument();
-    expect(combo(page, "Model")).toHaveDisplayValue("Opus");
-    expect(combo(page, "Effort")).toHaveDisplayValue("max");
+    expect(combo(page, "Model")).toHaveTextContent("Opus");
+    expect(combo(page, "Effort")).toHaveTextContent("max");
 
     api.putPersona = () => ({ status: 500, body: { error: "boom" } });
-    await user.selectOptions(combo(page, "Effort"), "low");
+    await pickOption(user, combo(page, "Effort"), "low");
     await user.click(modelSave(page)!);
     expect(await within(groupIn(page, "Model")).findByRole("alert")).toBeInTheDocument();
     await user.click(modelCancel(page)!);
     expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument();
-    expect(combo(page, "Effort")).toHaveDisplayValue("max");
+    expect(combo(page, "Effort")).toHaveTextContent("max");
     expect(modelSave(page)).not.toBeInTheDocument();
   });
 
@@ -1110,7 +1120,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     serve();
     const page = await open(user);
     const agent = groupIn(page, "Model");
-    await user.selectOptions(combo(page, "Model"), "Custom");
+    await pickOption(user, combo(page, "Model"), "Custom");
     const name = within(agent).getByRole("textbox", { name: "Model name" });
     expect(name).toHaveFocus();
     expect(name).toHaveAttribute("placeholder", vendorSpec("claude").models.customModelExample);
@@ -1131,12 +1141,12 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
     expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ vendor: "claude", model: "claude-sonnet-5-5[1m]", effort: null });
     // 存好了：下拉显示“自定义：模型名”，输入框与按钮收起
-    await waitFor(() => expect(combo(page, "Model")).toHaveDisplayValue("Custom: claude-sonnet-5-5[1m]"));
+    await waitFor(() => expect(combo(page, "Model")).toHaveTextContent("Custom: claude-sonnet-5-5[1m]"));
     expect(within(agent).queryByRole("textbox", { name: "Model name" })).not.toBeInTheDocument();
     expect(modelSave(page)).not.toBeInTheDocument();
 
     // 回车也能存
-    await user.selectOptions(combo(page, "Model"), "Custom");
+    await pickOption(user, combo(page, "Model"), "Custom");
     await user.type(within(agent).getByRole("textbox", { name: "Model name" }), "claude-opus-5-5{Enter}");
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
     expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ vendor: "claude", model: "claude-opus-5-5", effort: null });
@@ -1149,7 +1159,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
     const agent = groupIn(page, "Model");
 
-    await user.selectOptions(combo(page, "Model"), "Custom");
+    await pickOption(user, combo(page, "Model"), "Custom");
     const name = within(agent).getByRole("textbox", { name: "Model name" });
     expect(name).toHaveFocus();
 
@@ -1173,7 +1183,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
       model: "opus-preview",
       effort: "low",
     });
-    await waitFor(() => expect(combo(page, "Model")).toHaveDisplayValue("Custom: opus-preview"));
+    await waitFor(() => expect(combo(page, "Model")).toHaveTextContent("Custom: opus-preview"));
     expect(within(agent).queryByRole("textbox", { name: "Model name" })).not.toBeInTheDocument();
     expect(modelSave(page)).not.toBeInTheDocument();
     expect(modelCancel(page)).not.toBeInTheDocument();
@@ -1198,7 +1208,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
     const agent = groupIn(page, "Model");
     const sessionGroup = groupIn(page, "Session");
-    await user.selectOptions(combo(page, "Provider"), "Codex");
+    await pickOption(user, combo(page, "Provider"), "Codex");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
     expect(within(agent).queryByText("Switching to Codex…")).not.toBeInTheDocument();
 
@@ -1215,9 +1225,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     view = makePersonaView({ pmId: 1, vendor: "claude", model: "opus", effort: "high", switchingToVendor: null });
     push(ws, changeOf(11, "pm.updated", { pm: makePm({ id: 1, name: "小林", vendor: "claude" }) }));
     await waitFor(() => expect(within(agent).queryByText("Switching to Codex…")).not.toBeInTheDocument());
-    expect(combo(page, "Provider")).toHaveDisplayValue("Claude Code");
-    expect(combo(page, "Model")).toHaveDisplayValue("Opus");
-    expect(combo(page, "Effort")).toHaveDisplayValue("high");
+    expect(combo(page, "Provider")).toHaveTextContent("Claude Code");
+    expect(combo(page, "Model")).toHaveTextContent("Opus");
+    expect(combo(page, "Effort")).toHaveTextContent("high");
     expect(combo(page, "Provider")).toBeEnabled();
     expect(within(sessionGroup).getByRole("button", { name: "Start…" })).toBeEnabled();
   });
@@ -1233,14 +1243,14 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page1 = await open(user);
     pm1View = makePersonaView({ pmId: 1, vendor: "claude", model: "haiku", effort: "low" });
     push(ws, changeOf(11, "pm.updated", { pm: makePm({ id: 1, name: "小林" }) }));
-    await waitFor(() => expect(combo(page1, "Model")).toHaveDisplayValue("Haiku"));
-    expect(combo(page1, "Effort")).toHaveDisplayValue("low");
+    await waitFor(() => expect(combo(page1, "Model")).toHaveTextContent("Haiku"));
+    expect(combo(page1, "Effort")).toHaveTextContent("low");
 
-    await user.selectOptions(combo(page1, "Model"), "Opus");
+    await pickOption(user, combo(page1, "Model"), "Opus");
     pm1View = makePersonaView({ pmId: 1, vendor: "claude", model: "sonnet", effort: "max", text: "外部改的" });
     push(ws, changeOf(12, "pm.updated", { pm: makePm({ id: 1, name: "小林" }) }));
     await waitFor(() => expect(within(page1).getByRole("textbox", { name: "Persona" })).toHaveValue("外部改的"));
-    expect(combo(page1, "Model")).toHaveDisplayValue("Opus");
+    expect(combo(page1, "Model")).toHaveTextContent("Opus");
     expect(modelSave(page1)).toBeEnabled();
 
     await user.click(modelSave(page1)!);
@@ -1250,9 +1260,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await user.click(screen.getByRole("button", { name: "View 阿周's profile" }));
     const page2 = screen.getByRole("region", { name: "阿周's profile" });
     await within(page2).findByRole("textbox", { name: "Persona" });
-    expect(combo(page2, "Provider")).toHaveDisplayValue("Codex");
-    expect(combo(page2, "Model")).toHaveDisplayValue("GPT-6-Luna");
-    expect(combo(page2, "Effort")).toHaveDisplayValue("high");
+    expect(combo(page2, "Provider")).toHaveTextContent("Codex");
+    expect(combo(page2, "Model")).toHaveTextContent("GPT-6-Luna");
+    expect(combo(page2, "Effort")).toHaveTextContent("high");
     expect(within(groupIn(page2, "Model")).queryByRole("alert")).not.toBeInTheDocument();
     expect(modelSave(page2)).not.toBeInTheDocument();
   });
@@ -1546,10 +1556,10 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     api.models = () => ({ status: 200, body: { catalogs: [CLAUDE_CATALOG, FAKE_VENDOR] } });
     const group = await openMore(user);
     const vendor = await within(group).findByRole("combobox", { name: "Provider" });
-    expect(optionsOf(vendor)).toEqual(["Claude Code", "FakeCo Agent"]);
-    await user.selectOptions(vendor, "FakeCo Agent");
-    expect(optionsOf(within(group).getByRole("combobox", { name: "Model" }))).toEqual(["Fake Large (default)", "Fake Large"]);
-    expect(optionsOf(within(group).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "quick", "deep"]);
+    expect(await readOptions(user, vendor)).toEqual(["Claude Code", "FakeCo Agent"]);
+    await pickOption(user, vendor, "FakeCo Agent");
+    expect(await readOptions(user, within(group).getByRole("combobox", { name: "Model" }))).toEqual(["Fake Large (default)", "Fake Large"]);
+    expect(await readOptions(user, within(group).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "quick", "deep"]);
   });
 
   it("只有一家：厂商一行只显示名单里的厂商名（换个名字也跟着变），不是下拉", async () => {
@@ -1560,7 +1570,7 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     expect(await within(group).findByText("Claude Code Next")).toBeInTheDocument();
     expect(within(group).queryByRole("combobox", { name: "Provider" })).not.toBeInTheDocument();
     // 默认模型那项名单没说思考程度：用这家自己的通用档位
-    await waitFor(() => expect(optionsOf(within(group).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "low", "max"]));
+    await waitFor(async () => expect(await readOptions(user, within(group).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "low", "max"]));
   });
 
   it("模型显示实际用的模型：名单说了默认是哪个，“默认”写成“Opus 5.5 (default)”；没说只写“默认”", async () => {
@@ -1572,8 +1582,8 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     const page = screen.getByRole("region", { name: "小林\'s profile" });
     await within(page).findByRole("textbox", { name: "Persona" });
     const model = within(groupIn(page, "Model")).getByRole("combobox", { name: "Model" });
-    await waitFor(() => expect(model).toHaveDisplayValue("Opus 5.5 (default)"));
-    expect(optionsOf(model)[0]).toBe("Opus 5.5 (default)");
+    await waitFor(() => expect(model).toHaveTextContent("Opus 5.5 (default)"));
+    expect((await readOptions(user, model))[0]).toBe("Opus 5.5 (default)");
   });
 });
 
@@ -1586,7 +1596,8 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
     return { dialog, group: within(dialog).getByRole("region", { name: "Model" }) };
   };
-  const optionNamed = (select: HTMLElement, text: string) => within(select).getAllByRole("option").find((o) => o.textContent === text)! as HTMLOptionElement;
+  const openOptions = () => within(screen.getByRole("listbox")).getAllByRole("option");
+  const optionNamed = (text: string) => openOptions().find((o) => o.textContent === text)!;
 
   it("没装的不出现；没登录的灰掉、后面标 Not signed in", async () => {
     const user = userEvent.setup();
@@ -1594,9 +1605,10 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
     api.models = () => ({ status: 200, body: { catalogs: [CLAUDE_CATALOG, agy("not_installed"), codex("signed_out")] } });
     const { group } = await openDialog(user);
     const vendor = await within(group).findByRole("combobox", { name: "Provider" });
-    expect(optionsOf(vendor)).toEqual(["Claude Code", "Codex (Not signed in)"]);
-    expect(optionNamed(vendor, "Codex (Not signed in)").disabled).toBe(true);
-    expect(optionNamed(vendor, "Claude Code").disabled).toBe(false);
+    await user.click(vendor);
+    expect(openOptions().map((o) => o.textContent)).toEqual(["Claude Code", "Codex (Not signed in)"]);
+    expect(optionNamed("Codex (Not signed in)")).toHaveAttribute("aria-disabled", "true");
+    expect(optionNamed("Claude Code")).not.toHaveAttribute("aria-disabled", "true");
   });
 
   it("打开厂商下拉时在后台只重问不能用的（?refresh=unusable），下拉不等；登录好了回来就能选", async () => {
@@ -1616,10 +1628,10 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
     await waitFor(() => expect(api.calls.filter((c) => c.path === "/api/models" && c.query.get("refresh") === "unusable")).toHaveLength(1));
     // 还没回来：下拉照旧可用，没登录那项还是灰的
     expect(vendor).toBeEnabled();
-    expect(optionNamed(vendor, "Codex (Not signed in)").disabled).toBe(true);
+    expect(optionNamed("Codex (Not signed in)")).toHaveAttribute("aria-disabled", "true");
     release();
-    await waitFor(() => expect(optionsOf(vendor)).toEqual(["Claude Code", "Codex"]));
-    expect(optionNamed(vendor, "Codex").disabled).toBe(false);
+    await waitFor(() => expect(openOptions().map((o) => o.textContent)).toEqual(["Claude Code", "Codex"]));
+    expect(optionNamed("Codex")).not.toHaveAttribute("aria-disabled", "true");
   });
 
   it("距上次拉取满冷却间隔后点开模型下拉：后台重拉 /api/models 并更新新发布的模型列表", async () => {
@@ -1639,18 +1651,19 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
       };
       const { group } = await openDialog(user);
       const model = await within(group).findByRole("combobox", { name: "Model" });
-      await waitFor(() => expect(optionsOf(model)).toContain("Opus 5.5"));
-      expect(optionsOf(model)).not.toContain("Opus 6.0");
+      await waitFor(async () => expect(await readOptions(user, model)).toContain("Opus 5.5"));
+      expect(await readOptions(user, model)).not.toContain("Opus 6.0");
       expect(calls).toBe(1);
 
       // 冷却时间内点模型下拉不重复发请求
       await user.click(model);
       expect(calls).toBe(1);
+      await user.keyboard("{Escape}");
 
       // 超过 MODEL_CATALOG_REVALIDATE_MS 后点模型下拉，后台重拉并显示新模型
       now += MODEL_CATALOG_REVALIDATE_MS + 1;
       await user.click(model);
-      await waitFor(() => expect(optionsOf(model)).toContain("Opus 6.0"));
+      await waitFor(() => expect(openOptions().map((o) => o.textContent)).toContain("Opus 6.0"));
       expect(calls).toBe(2);
     } finally {
       nowSpy.mockRestore();
@@ -1664,10 +1677,10 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
     const { dialog, group } = await openDialog(user);
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "小王");
     const vendor = await within(group).findByRole("combobox", { name: "Provider" });
-    await waitFor(() => expect(vendor).toHaveDisplayValue("Claude Code (Not installed)"));
-    expect(optionsOf(vendor)).toEqual(["Claude Code (Not installed)", "Codex"]);
+    await waitFor(() => expect(vendor).toHaveTextContent("Claude Code (Not installed)"));
+    expect(await readOptions(user, vendor)).toEqual(["Claude Code (Not installed)", "Codex"]);
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
-    await user.selectOptions(vendor, "Codex");
+    await pickOption(user, vendor, "Codex");
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeEnabled();
   });
 });

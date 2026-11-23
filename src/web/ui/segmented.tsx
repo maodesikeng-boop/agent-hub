@@ -23,13 +23,13 @@ export function Segmented<T extends string>({
       orientation="horizontal"
       value={value}
       onValueChange={(v) => onChange(v as T)}
-      className={cn("inline-flex h-9 items-center gap-0.5 rounded-full border border-border bg-background p-0.5", className)}
+      className={cn("inline-flex h-9 items-center gap-0.5 border-2 border-border-strong bg-panel p-0.5", className)}
     >
       {options.map((o) => (
         <RadioGroup.Item
           key={o.value}
           value={o.value}
-          className="touch-target h-full cursor-pointer rounded-full px-3 text-minor font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=checked]:bg-sidebar-active data-[state=checked]:text-foreground"
+          className="touch-target h-full cursor-pointer border border-transparent px-3 text-minor font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] data-[state=checked]:border-slot-line data-[state=checked]:bg-slot-bg data-[state=checked]:text-slot-ink"
         >
           {o.label}
         </RadioGroup.Item>

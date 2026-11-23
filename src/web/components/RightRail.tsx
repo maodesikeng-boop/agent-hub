@@ -37,10 +37,11 @@ const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(wo
 
 const RIGHT_RAIL_ID = "right-rail";
 
-const ROW_BASE = "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const ROW_BASE =
+  "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 border-2 border-transparent px-2.5 py-2 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]";
 const ROW = cn(ROW_BASE, "gap-3");
-const ITEM_HOVER = "hover:bg-jelly-hover";
-const ITEM_SELECTED = "bg-jelly";
+const ITEM_HOVER = "hover:bg-hover";
+const ITEM_SELECTED = "border-open-line bg-open";
 const ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 const ICON_STROKE = 1.5;
 const TONE_DOT: Record<WorkerTone, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger", neutral: "bg-muted-foreground/50" };
@@ -101,10 +102,10 @@ function GroupTitle({
         type="button"
         aria-expanded={!collapsed}
         aria-controls={bodyId}
-        className="-mx-2.5 flex h-8 pointer-coarse:h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-2 rounded-xl px-2.5 text-left transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="-mx-2.5 flex h-8 pointer-coarse:h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-2 px-2.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
         onClick={onToggle}
       >
-        {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
+        {dot && <span className="size-1.5 shrink-0 bg-primary" aria-hidden="true" />}
         <span className="min-w-0 truncate">{children}</span>
         <ChevronRight
           className={cn(
@@ -142,7 +143,7 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
 
 function MoreToggle({ expanded, onClick, children, ...rest }: { expanded: boolean; onClick: () => void; children: React.ReactNode } & React.AriaAttributes) {
   return (
-    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-minor text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
+    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-minor text-muted-foreground hover:bg-hover hover:text-foreground")} onClick={onClick} {...rest}>
       {children}
     </button>
   );
@@ -221,7 +222,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
       className={cn(ROW, "items-baseline", active ? ITEM_SELECTED : ITEM_HOVER)}
       onClick={onOpen}
     >
-      <span className={cn("min-w-0 truncate text-body leading-5", worker.ended && "opacity-60", isBusy(worker) && "status-shimmer")}>{cleanPieceTitle(worker.title)}</span>
+      <span className={cn("min-w-0 truncate text-body leading-5", worker.ended && "opacity-65", isBusy(worker) && "status-shimmer")}>{cleanPieceTitle(worker.title)}</span>
     </button>
   );
 }
@@ -251,7 +252,7 @@ export const RightRailToggle = memo(function RightRailToggle({
       onClick={onToggle}
     >
       <Avatar look={look} size={20} neutral />
-      {!open && attention && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" aria-hidden="true" />}
+      {!open && attention && <span className="absolute top-1 right-1 size-1.5 bg-primary" aria-hidden="true" />}
     </Button>
   );
 });
@@ -355,7 +356,7 @@ function CompletedGroup({
   );
 
   return (
-    <section aria-labelledby="rail-completed" className="tint-fade py-3">
+    <section aria-labelledby="rail-completed" className="py-3">
       <GroupTitle id="rail-completed" bodyId="rail-completed-body" collapsed={!open} onToggle={() => setOpen((v) => !v)} trailing={trailing}>
         Completed
       </GroupTitle>
@@ -378,7 +379,7 @@ function CompletedGroup({
                   className={cn(ROW, "items-center", ITEM_HOVER)}
                 >
                   <TaskProgressIcon graph={graph} color={look.color} size={18} />
-                  <span className="min-w-0 flex-1 truncate text-body leading-5 opacity-60">{graph.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-body leading-5 opacity-65">{graph.title}</span>
                 </button>
               </li>
             ))}
@@ -511,9 +512,9 @@ export function RailGroups({
 
   return (
     <>
-      <div className={cn("min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
+      <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
         {hasAsks && (
-          <section aria-labelledby="rail-asks" className="tint-fade py-3">
+          <section aria-labelledby="rail-asks" className="py-3">
             <GroupTitle
               id="rail-asks"
               bodyId="rail-asks-body"
@@ -535,7 +536,7 @@ export function RailGroups({
           </section>
         )}
         {hasGraphs && activeGraphs !== undefined && (
-          <section aria-labelledby="rail-graphs" className="tint-fade py-3">
+          <section aria-labelledby="rail-graphs" className="py-3">
             <GroupTitle
               id="rail-graphs"
               bodyId="rail-graphs-body"
@@ -560,7 +561,7 @@ export function RailGroups({
           </section>
         )}
         {hasLive && (
-          <section aria-labelledby="rail-workers" className="tint-fade py-3">
+          <section aria-labelledby="rail-workers" className="py-3">
             <GroupTitle
               id="rail-workers"
               bodyId="rail-workers-body"
@@ -647,7 +648,7 @@ export const RightRail = memo(function RightRail({
     <aside
       id={RIGHT_RAIL_ID}
       aria-label="Side panel"
-      className={cn("tint-fade flex min-w-0 shrink-0 flex-col overflow-hidden bg-surface-chat", side ? "w-80 border-l border-line" : "max-h-[40dvh] border-b border-line")}
+      className={cn("flex min-w-0 shrink-0 flex-col overflow-hidden bg-panel", side ? "w-80 border-l-2 border-border-strong" : "max-h-[40dvh] border-b-2 border-border-strong")}
     >
       <RailGroups
         asks={asks}

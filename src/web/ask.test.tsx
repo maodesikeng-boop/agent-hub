@@ -214,9 +214,10 @@ describe("左栏标签和标题数字", () => {
   it("有提问的项目经理那一行显示极简无字圆点指示器（不显示中文胶囊）；标题数字算上；守护进程标成已回答后都消失", async () => {
     const ws = await boot(askedByOldMa());
     expect(hasTag("老马")).toBe(true);
-    // 左栏不属于任何项目经理：实心的绿色小圆点（size-2 rounded-full bg-status-active），不显示“等你确定”中文胶囊
+    // 左栏不属于任何项目经理：实心绿色小方块（size-2 bg-status-active），不显示中文胶囊
     const dot = within(row("老马")).getByLabelText("Needs You");
-    expect(dot).toHaveClass("size-2", "rounded-full", "bg-status-active");
+    expect(dot).toHaveClass("size-2", "bg-status-active");
+    expect(dot.className).not.toMatch(/rounded-/);
     expect(dot).toHaveAttribute("title", "Needs You");
     expect(dot).toHaveTextContent("");
     expect(within(row("老马")).queryByText("Needs You")).toBeNull();
@@ -360,8 +361,8 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     const card = (id: number) => document.querySelector(`[data-message-id="${id}"] [data-ask-card]`) as HTMLElement;
-    // 选中的选项是 bg-sidebar-active，用户写的原话是浅一档的 bg-sidebar（[data-ask-answer]）
-    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-sidebar-active, [data-ask-answer]")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
+    // 选中的选项是 bg-open，用户写的原话是带底色的行（[data-ask-answer]）
+    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-open, [data-ask-answer]")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
 
     expect(highlighted(3)).toEqual(["qa-test@example.com"]);
     expect(highlighted(4)).toEqual(["不接", "开完会再接"]);
@@ -411,7 +412,7 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
     expect(buttons[0]).toBeDisabled();
     expect(buttons[1]).toBeDisabled();
-    expect(buttons[1]).toHaveClass("bg-sidebar-active");
+    expect(buttons[1]).toHaveClass("bg-open");
     for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
   });
 

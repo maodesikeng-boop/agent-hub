@@ -33,7 +33,7 @@ function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }
     }
   };
   return (
-    <div className="rounded-2xl bg-sidebar px-4 py-3">
+    <div className="border-2 border-border bg-panel px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 text-body">
           <span>Archived</span>
@@ -137,7 +137,7 @@ export function Conversation({
           <button
             type="button"
             aria-label={`View ${entry.pm.name}'s profile`}
-            className="touch-target shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="touch-target shrink-0 cursor-pointer outline-none focus-visible:outline-2 focus-visible:outline-border-focus"
             onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
           >
             <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} />

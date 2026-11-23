@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JELLY_COLOR_IDS, jellyColorOf } from "../../shared/slimes.ts";
-import { accentStyleOf, CHART_CATEGORY_COLORS, contrastRatio, fruitTrackVars, jellyStyleOf, tintStyleOf } from "./palette.ts";
+import { accentStyleOf, CHART_CATEGORY_COLORS, contrastRatio, fruitTrackVars } from "./palette.ts";
 
 const WHITE = "#ffffff";
 
@@ -25,7 +25,7 @@ describe("颜色表", () => {
     expect(a["--primary"]).toBe(jellyColorOf("grapefruit").accent);
     expect(a["--primary-foreground"]).toBe(jellyColorOf("grapefruit").accentForeground);
     expect(b["--primary"]).toBe(jellyColorOf("sky").accent);
-    for (const fn of [accentStyleOf, tintStyleOf, jellyStyleOf, fruitTrackVars]) expect(fn("teal")).toBe(fn("teal"));
+    for (const fn of [accentStyleOf, fruitTrackVars]) expect(fn("teal")).toBe(fn("teal"));
   });
 
   it("fruitTrackVars：果冻管道的三层和珠子的暗面取这个颜色的描边、身体、浅色、暗面", () => {
@@ -64,46 +64,26 @@ function mix(hex: string, percent: number, base: string): string {
   return `#${out.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
-describe("水果色的掺入比例（styles.css 的 --mix-*，docs/ui-standard.md 第 4 条）", () => {
+describe("分区色板与对比度（styles.css，docs/ui-standard.md 第 4 条）", () => {
   const css = readFileSync("src/web/styles.css", "utf8");
+  const token = (name: string) => new RegExp(`\\n  --${name}: (#[0-9a-f]{6});`).exec(css)![1]!;
   const mixOf = (name: string) => Number(new RegExp(`--mix-${name}: ([0-9.]+)%;`).exec(css)?.[1]);
-  const foreground = /--foreground: (#[0-9a-f]{6});/.exec(css)![1]!;
+  const foreground = token("foreground");
+  const surfaces = (): Array<[string, string]> =>
+    (["background", "panel", "hover", "open", "list", "list-hover", "list-field", "send-disabled"] as const).map((name) => [name, token(name)]);
+
+  it("已删除水果混底和果冻选中底，只保留分区色板", () => {
+    expect(css).not.toMatch(/--mix-(chat|sidebar|line)|--color-(surface-chat|surface-sidebar|line|jelly)/);
+    expect(css).not.toContain(".tint-fade");
+  });
 
   it.each(JELLY_COLOR_IDS)("%s：已完成步骤角标与前景色字的对比度 ≥ 4.5:1", (id) => {
     const vars = fruitTrackVars(id);
     expect(contrastRatio(foreground, vars["--step-done-bg"])).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("外壳底色不超过 5%、分割线不超过 10%，不让界面发黄发粉", () => {
-    expect(mixOf("chat")).toBeGreaterThan(0);
-    expect(mixOf("chat")).toBeLessThanOrEqual(5);
-    expect(mixOf("sidebar")).toBeLessThanOrEqual(5);
-    expect(mixOf("line")).toBeLessThanOrEqual(10);
-  });
-
-  it.each(PALETTE.map((c) => [c.name, c] as const))("%s：用户气泡的浅果冻底上，前景色字对比度 ≥ 4.5:1", (_name, c) => {
+  it.each(PALETTE.map((c) => [c.name, c] as const))("%s：用户气泡浅底上，前景色字对比度 ≥ 4.5:1", (_name, c) => {
     expect(contrastRatio(foreground, mix(c.accent, mixOf("bubble-me"), WHITE))).toBeGreaterThanOrEqual(4.5);
-  });
-});
-
-describe("次要文字和状态字的对比度（styles.css 的 --muted-foreground、--warn-foreground，WCAG 1.4.3）", () => {
-  const css = readFileSync("src/web/styles.css", "utf8");
-  const token = (name: string) => new RegExp(`\\n  --${name}: (#[0-9a-f]{6});`).exec(css)![1]!;
-  const mixOf = (name: string) => Number(new RegExp(`--mix-${name}: ([0-9.]+)%;`).exec(css)?.[1]);
-  const JELLY_PERCENT = 10;
-  /** 次要文字会压在上面的每一种底：中性的几种，加上每种水果各自的左栏底、对话区底，以及盖在它们上面的选中果冻底。 */
-  const surfaces = (): Array<[string, string]> => {
-    const list: Array<[string, string]> = ["background", "sidebar", "sidebar-active", "sidebar-hover", "muted", "bubble-agent"].map((name) => [name, token(name)]);
-    for (const c of PALETTE) {
-      const sidebar = mix(c.accent, mixOf("sidebar"), token("sidebar"));
-      const chat = mix(c.accent, mixOf("chat"), token("background"));
-      list.push([`${c.name} 左栏底`, sidebar], [`${c.name} 对话区底`, chat], [`${c.name} 左栏选中果冻底`, mix(c.accent, JELLY_PERCENT, sidebar)], [`${c.name} 右栏选中果冻底`, mix(c.accent, JELLY_PERCENT, chat)]);
-    }
-    return list;
-  };
-
-  it("果冻底的浓度和这里算的一样（10%）", () => {
-    expect(css).toMatch(/--color-jelly: color-mix\(in srgb, var\(--jelly, var\(--primary\)\) 10%, transparent\);/);
   });
 
   it.each(surfaces())("次要文字压在 %s 上 ≥ 4.5:1", (_name, surface) => {
@@ -114,7 +94,16 @@ describe("次要文字和状态字的对比度（styles.css 的 --muted-foregrou
     expect(contrastRatio(token("warn-foreground"), surface)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("琥珀色的填充色（--caution）对白底不到 3:1，只能当圆点、用量条的颜色，组件里不拿它当字色", () => {
+  it("蜜黄 rail 与奶油 list 区域文字对比度 ≥ 4.5:1", () => {
+    expect(contrastRatio(token("rail-ink"), token("rail"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(token("rail-ink"), token("rail-hover"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(token("rail-ink-soft"), token("rail"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(token("list-ink"), token("list"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(token("list-ink-soft"), token("list"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(token("list-ink-soft"), token("list-hover"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("琥珀色的填充色（--caution）对白底不到 3:1，只能当方块指示和用量条颜色，组件里不拿它当字色", () => {
     expect(contrastRatio(token("caution"), WHITE)).toBeLessThan(3);
     const sources = readdirSync("src/web", { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".tsx") && !f.includes(".test."));
     for (const file of sources) expect(readFileSync(`src/web/${file}`, "utf8"), file).not.toContain("text-caution");

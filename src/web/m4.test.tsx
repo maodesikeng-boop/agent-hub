@@ -107,8 +107,9 @@ describe("左栏和标题", () => {
     expect(hasMark("老马")).toBe(true);
     // 左栏不属于任何项目经理：标签是中性色，不带主色
     expect(within(row("老马")).getByRole("img", { name: "Your turn" }).className).not.toMatch(/primary/);
-    // 只有绿点，不写“等你”两个字
-    expect(within(row("老马")).getByRole("img", { name: "Your turn" })).toHaveClass("size-2", "rounded-full", "bg-status-active");
+    // 只有绿方块，不写文字
+    expect(within(row("老马")).getByRole("img", { name: "Your turn" })).toHaveClass("size-2", "bg-status-active");
+    expect(within(row("老马")).getByRole("img", { name: "Your turn" }).className).not.toMatch(/rounded-/);
     expect(within(row("老马")).queryByText("Your turn")).toBeNull();
     expect(hasMark("小林")).toBe(false);
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);

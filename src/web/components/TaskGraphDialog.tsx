@@ -390,7 +390,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                               onOpenChange(false);
                               onOpenWorker(worker.conversationId);
                             }}
-                            className="shrink-0 cursor-pointer rounded-xl px-1.5 py-0.5 text-xs font-medium text-primary transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50 tabular-nums"
+                            className="shrink-0 cursor-pointer px-1.5 py-0.5 text-xs font-medium text-primary transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus tabular-nums"
                           >
                             #{workerId}
                           </button>
@@ -413,7 +413,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                           type="button"
                           disabled={skipMutation.isPending || cancelMutation.isPending}
                           onClick={() => runExclusive(() => skipMutation.mutate(node.key))}
-                          className="pointer-coarse:min-h-11 cursor-pointer rounded-xl px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                          className="pointer-coarse:min-h-11 cursor-pointer px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
                         >
                           Skip step
                         </button>

@@ -18,7 +18,7 @@ export function StatusDot({ status }: { status: DeviceStatus }) {
   return (
     <span
       aria-hidden="true"
-      className={cn("size-2 shrink-0 rounded-full", status === "online" ? "bg-success" : status === "reconnecting" ? "bg-caution" : "bg-muted-foreground/40")}
+      className={cn("size-2 shrink-0", status === "online" ? "bg-success" : status === "reconnecting" ? "bg-caution" : "bg-muted-foreground/40")}
     />
   );
 }

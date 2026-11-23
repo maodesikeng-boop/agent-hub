@@ -139,15 +139,13 @@ describe("焦点", () => {
 });
 
 describe("Sidebar", () => {
-  it("选中的对话：只靠果冻底表示，名字字重不变（选中没选中都是 600）", async () => {
+  it("选中的对话：浅奶油导航底上用白底 + --select-line 边表示，名字字重不变（选中没选中都是 600）", async () => {
     await boot();
     const name = (label: string) => within(row(label)).getByText(label);
     expect(row("小林")).toHaveAttribute("aria-current", "true");
-    expect(row("小林")).toHaveClass("bg-jelly");
-    // 果冻底的颜色是这个项目经理水果的 accent（styles.css 的 --color-jelly 取行上的 --jelly）
-    expect(row("小林").style.getPropertyValue("--jelly")).toMatch(/^#[0-9a-f]{6}$/);
-    expect(row("老马")).toHaveClass("hover:bg-jelly-hover");
-    expect(row("老马").className).not.toMatch(/bg-sidebar-active/);
+    expect(row("小林")).toHaveClass("border-select-line", "bg-background");
+    expect(row("老马")).toHaveClass("hover:bg-list-hover");
+    expect(row("老马").className).not.toMatch(/border-select-line|bg-background|bg-jelly/);
     expect(name("小林")).toHaveClass("font-semibold");
     expect(name("老马")).toHaveClass("font-semibold");
   });
@@ -481,11 +479,13 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
     }));
     await boot();
     const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
-    expect(sidebar).toHaveClass("w-18", "border-r", "border-line", "bg-surface-sidebar");
+    expect(sidebar).toHaveClass("w-18", "border-r-2", "border-list-edge", "bg-list");
     expect(within(sidebar).queryByRole("searchbox", { name: "Search" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Conversations" })).toBeNull();
     const navEl = screen.getByRole("navigation", { name: "Conversations" });
-    expect(within(navEl).getByRole("button", { name: /小林/ })).toHaveClass("size-13", "rounded-2xl");
+    const btn = within(navEl).getByRole("button", { name: /小林/ });
+    expect(btn).toHaveClass("size-13", "border-2");
+    expect(btn.className).not.toMatch(/rounded-/);
     expect(within(sidebar).getByRole("button", { name: "New project manager" })).toBeInTheDocument();
     expect(within(sidebar).getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });

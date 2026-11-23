@@ -120,7 +120,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
       </div>
       {textChanged && (
         <Collapsible open={open} onOpenChange={setOpen}>
-          <CollapsibleTrigger className="group mt-1 flex cursor-pointer items-center gap-1 rounded-full text-minor text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+          <CollapsibleTrigger className="group mt-1 flex cursor-pointer items-center gap-1 text-minor text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus">
             <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             View changes
           </CollapsibleTrigger>
@@ -128,7 +128,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
             {(["Before", "After"] as const).map((label) => (
               <div key={label} className="min-w-0">
                 <div className="mb-1 text-minor font-medium text-muted-foreground">{label}</div>
-                <pre className="max-h-60 overflow-auto rounded-xl bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <pre className="max-h-60 overflow-auto border border-border-strong bg-panel p-3 text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {label === "Before" ? change.textBefore : change.textAfter}
                 </pre>
               </div>
@@ -400,7 +400,7 @@ function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> 
         placeholder="No persona yet"
         rows={1}
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0",
+          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0",
           text === "" ? "text-body" : "font-mono text-minor",
         )}
         value={text}
@@ -666,7 +666,7 @@ function LookButton({ pm }: { pm: Pm }) {
         type="button"
         aria-label="Change look"
         title="Change look"
-        className="cursor-pointer rounded-2xl p-1 transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=open]:bg-jelly"
+        className="cursor-pointer border-2 border-transparent p-1 transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-open-line data-[state=open]:bg-open"
       >
         <Avatar look={look} size={64} />
       </button>

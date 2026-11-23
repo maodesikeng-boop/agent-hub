@@ -363,17 +363,19 @@ describe("新建项目经理选设备", () => {
     await userEvent.click(screen.getByRole("button", { name: "New project manager" }));
     const dialog = await screen.findByRole("dialog");
     const device = within(dialog).getByRole("combobox", { name: "Device" });
-    expect(device).toHaveValue("");
-    await userEvent.selectOptions(device, TOKYO);
+    expect(device).toHaveTextContent("Mac");
+    await userEvent.click(device);
+    await userEvent.click(await screen.findByRole("option", { name: /东京/ }));
     await userEvent.click(within(dialog).getByRole("button", { name: /More settings/ }));
     // 东京没装 claude、codex：选着的 claude 不悄悄换掉，标状态词，“创建”是灰的；没装的 codex 不列
     const vendor = await within(dialog).findByRole("combobox", { name: "Provider" });
-    await waitFor(() => expect(vendor).toHaveDisplayValue("Claude Code (Not installed)"));
-    expect(within(vendor).getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Claude Code (Not installed)"]);
+    await waitFor(() => expect(vendor).toHaveTextContent("Claude Code (Not installed)"));
     expect(fleet.remote.callsTo("GET", /^\/api\/models$/).length).toBeGreaterThan(0);
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "东京新人");
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
-    await userEvent.selectOptions(vendor, "Antigravity");
+    await userEvent.click(vendor);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Claude Code (Not installed)"]);
+    await userEvent.click(screen.getByRole("option", { name: "Antigravity" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
     expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)[0]!.body).toMatchObject({ name: "东京新人", vendor: "agy" });
@@ -404,8 +406,8 @@ describe("设置 → 设备", () => {
     const others = within(devices).getByRole("region", { name: "Your computers" });
     for (const group of [mine, others]) {
       expect(within(group).getByRole("heading")).toHaveClass("text-minor", "text-muted-foreground");
-      expect(group.lastElementChild).toHaveClass("rounded-2xl", "border", "border-border", "bg-background");
-      expect(group.lastElementChild).not.toHaveClass("bg-sidebar");
+      expect(group.lastElementChild).toHaveClass("border-2", "border-border", "bg-background");
+      expect(group.lastElementChild?.className).not.toMatch(/rounded-|bg-sidebar/);
     }
     expect(within(mine).getByTestId("device-row")).toHaveTextContent("Mac");
     expect(within(others).getByTestId("device-row")).toHaveTextContent("东京");

@@ -125,7 +125,8 @@ describe("新建表单", () => {
   it("每隔：小时换算成分钟", async () => {
     const { user, group } = await openProfile([]);
     await fill(user, group, { name: "巡检", prompt: "看一眼" });
-    await user.selectOptions(within(group).getByRole("combobox", { name: "Repeat" }), "interval");
+    await user.click(within(group).getByRole("combobox", { name: "Repeat" }));
+    await user.click(await screen.findByRole("option", { name: "Every" }));
     await user.clear(within(group).getByRole("textbox", { name: "Interval" }));
     await user.type(within(group).getByRole("textbox", { name: "Interval" }), "2");
     await save(user, group);
@@ -190,8 +191,10 @@ describe("新建表单", () => {
   it("间隔小于 15 分钟：频率那一行下面写原因", async () => {
     const { user, group } = await openProfile([]);
     await fill(user, group, { name: "巡检", prompt: "x" });
-    await user.selectOptions(within(group).getByRole("combobox", { name: "Repeat" }), "interval");
-    await user.selectOptions(within(group).getByRole("combobox", { name: "Unit" }), "minutes");
+    await user.click(within(group).getByRole("combobox", { name: "Repeat" }));
+    await user.click(await screen.findByRole("option", { name: "Every" }));
+    await user.click(within(group).getByRole("combobox", { name: "Unit" }));
+    await user.click(await screen.findByRole("option", { name: "minutes" }));
     const every = within(group).getByRole("textbox", { name: "Interval" });
     await user.clear(every);
     await user.type(every, "5");

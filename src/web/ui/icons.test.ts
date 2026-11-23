@@ -9,7 +9,7 @@ import * as icons from "./icons.ts";
 describe("图标出口", () => {
   it("每个导出都渲染成一个 24x24 平滑线条 <svg data-icon=\"line\">，没有 crispEdges、渐变和 <image>", () => {
     const entries = Object.entries(icons).filter((entry): entry is [string, icons.Icon] => typeof entry[1] === "function");
-    expect(entries.length).toBeGreaterThanOrEqual(70);
+    expect(entries.length).toBeGreaterThanOrEqual(65);
 
     for (const [name, Icon] of entries) {
       const { container } = render(createElement(Icon));
@@ -18,7 +18,7 @@ describe("图标出口", () => {
       expect(svg, name).toHaveAttribute("data-icon", "line");
       expect(svg, name).toHaveAttribute("aria-hidden", "true");
       expect(svg, name).toHaveAttribute("viewBox", "0 0 24 24");
-      expect(svg, name).toHaveAttribute("fill", name === "ComposerStop" ? "currentColor" : "none");
+      expect(svg, name).toHaveAttribute("fill", "none");
       expect(svg, name).toHaveAttribute("stroke", "currentColor");
       expect(svg!.getAttribute("shape-rendering"), name).toBeNull();
       expect(container.querySelector("image, linearGradient, radialGradient"), name).toBeNull();
@@ -52,11 +52,14 @@ describe("图标出口", () => {
       ["Send", icons.Send],
       ["MoreHorizontal", icons.MoreHorizontal],
       ["User", icons.User],
+      ["Video", icons.Video],
     ] as const) {
       const svg = render(createElement(Icon)).container.querySelector("svg");
       expect(svg, name).not.toBeNull();
       expect(svg, name).toHaveAttribute("data-icon", "line");
     }
+    expect("ComposerSend" in icons).toBe(false);
+    expect("ComposerStop" in icons).toBe(false);
 
     const deviceSvgs = [
       icons.DeviceMacos,

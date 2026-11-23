@@ -96,7 +96,7 @@ function log() {
  * 或者只有“已派出”一行时那很淡的一行。
  */
 function workerButton() {
-  return within(log()).getByRole("button", { name: /Started|做完了/ });
+  return within(log()).getByRole("button", { name: /Started|Done/ });
 }
 
 beforeEach(() => {
@@ -109,10 +109,10 @@ afterEach(() => {
 });
 
 describe("那一行", () => {
-  it("Worker 的汇报是“头像 + 标题”加一个摘要气泡，整个气泡是一个按钮（状态是颜色，字在 aria-label）；“已派出”收在项目经理那一轮的 Worked for 里", async () => {
+  it("Worker 的汇报是 ThreadCard 卡片，整个卡片是一个按钮；“已派出”收在项目经理那一轮的 Worked for 里", async () => {
     const user = userEvent.setup();
     await boot();
-    const done = within(log()).getByRole("button", { name: /做完了/ });
+    const done = within(log()).getByRole("button", { name: /Done/ });
     expect(done.closest("[data-worker-report]")).toHaveTextContent("修 X");
     expect(done).toHaveTextContent("改好了，测试通过");
     expect(done.closest("[data-worker-report]")).toHaveAttribute("data-tone", "success");
@@ -227,7 +227,7 @@ describe("点开 Worker", () => {
   it("点那一行：右边是 Worker 的对话，有任务、回复和折叠的操作", async () => {
     const user = userEvent.setup();
     await boot();
-    await user.click(within(log()).getByRole("button", { name: /做完了/ }));
+    await user.click(within(log()).getByRole("button", { name: /Done/ }));
     const section = screen.getByRole("region", { name: "Piece 修 X" });
     expect(within(section).getByRole("heading", { name: "修 X" })).toBeInTheDocument();
     expect(within(section).getByText("任务：修 X")).toBeInTheDocument();
@@ -766,7 +766,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(aside.parentElement).toBe(main.parentElement);
     const classes = aside.className.split(" ");
     expect(classes.some((c) => /(^|:)(fixed|absolute)$/.test(c))).toBe(false);
-    expect(classes).toEqual(expect.arrayContaining(["shrink-0", "w-80", "border-l"]));
+    expect(classes).toEqual(expect.arrayContaining(["shrink-0", "w-80", "border-l-2"]));
     expect(aside.className).not.toMatch(/shadow|rounded/);
     expect(within(main).getByRole("heading", { name: "小林" })).toBeInTheDocument();
     expect(within(main).getByRole("textbox")).toBeVisible();
@@ -859,8 +859,8 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     await user.click(toggleEnded);
     expect(toggleEnded).toHaveAttribute("aria-expanded", "true");
     expect(rows()).toEqual(["修 X", "写文档", "查日志"]);
-    expect(within(within(completedGroup()!).getByRole("button", { name: /查日志/ })).getByText("查日志")).toHaveClass("opacity-60");
-    expect(within(within(workerGroup()).getByRole("button", { name: /修 X/ })).getByText("修 X")).not.toHaveClass("opacity-60");
+    expect(within(within(completedGroup()!).getByRole("button", { name: /查日志/ })).getByText("查日志")).toHaveClass("opacity-65");
+    expect(within(within(workerGroup()).getByRole("button", { name: /修 X/ })).getByText("修 X")).not.toHaveClass("opacity-65");
     await user.click(toggleEnded);
     expect(rows()).toEqual(["修 X", "写文档"]);
     expect(busyRows()).toEqual(["修 X"]);
@@ -1001,7 +1001,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()).toBeInTheDocument();
     expect(row(/修 X/)).toHaveAttribute("aria-current", "true");
     // 选中是当前项目经理水果色的极淡果冻底
-    expect(row(/修 X/)).toHaveClass("bg-jelly");
+    expect(row(/修 X/)).toHaveClass("bg-open", "border-open-line");
     // 选中只靠底色，标题字重不变
     expect(within(row(/修 X/)).getByText("修 X")).not.toHaveClass("font-semibold");
     expect(row(/写文档/)).not.toHaveAttribute("aria-current");
@@ -1035,7 +1035,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     await userEvent.setup().click(endedToggle()!);
     expect(rows()).toEqual(["写文档", "修 X", "查日志"]);
     expect(busyRows()).toEqual(["写文档"]);
-    expect(within(within(completedGroup()!).getByRole("button", { name: /修 X/ })).getByText("修 X")).toHaveClass("opacity-60");
+    expect(within(within(completedGroup()!).getByRole("button", { name: /修 X/ })).getByText("修 X")).toHaveClass("opacity-65");
   });
 
   it("第一个 Worker 一派出来，右栏自己展开", async () => {
@@ -1100,19 +1100,20 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()!.closest("main")).toBeNull();
     expect(rail()!.className.split(" ").some((c) => /(fixed|absolute)$/.test(c))).toBe(false);
     const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
-    expect(sidebar).toHaveClass("w-18", "border-r", "border-line", "bg-surface-sidebar");
+    expect(sidebar).toHaveClass("w-18", "border-r-2", "border-list-edge", "bg-list");
     expect(within(sidebar).queryByRole("searchbox", { name: "Search" })).toBeNull();
     // 顶栏没有 PanelLeft 抽屉按钮
     expect(screen.queryByRole("button", { name: "Conversations" })).not.toBeInTheDocument();
-    // 列表居中显示各项目经理头像按钮（size-13 rounded-2xl）
+    // 列表居中显示各项目经理头像按钮（size-13 直角边）
     const avatarButtons = within(nav()).getAllByRole("button");
     expect(avatarButtons.length).toBeGreaterThan(0);
     for (const btn of avatarButtons) {
-      expect(btn).toHaveClass("size-13", "rounded-2xl");
+      expect(btn).toHaveClass("size-13", "border-2");
+      expect(btn.className).not.toMatch(/rounded-/);
     }
     // 点头像切换对话
     await user.click(within(nav()).getByRole("button", { name: /老马/ }));
-    expect(within(nav()).getByRole("button", { name: /老马/ })).toHaveClass("bg-jelly");
+    expect(within(nav()).getByRole("button", { name: /老马/ })).toHaveClass("border-select-line", "bg-background");
     // 窄栏底部的常驻工具格
     expect(within(sidebar).getByRole("button", { name: "New project manager" })).toHaveClass("touch-target");
     expect(within(sidebar).getByRole("button", { name: "Settings" })).toHaveClass("touch-target");
@@ -1137,7 +1138,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     // 这一档右栏在顶栏下面，开关留在顶栏右边
     expect(within(screen.getByRole("heading", { name: "小林" }).closest("header")!).getByRole("button", { name: "Hide side panel" })).toBe(toggle());
     expect(rail()!.className).not.toMatch(/fixed|absolute/);
-    expect(rail()).toHaveClass("max-h-[40dvh]", "border-b");
+    expect(rail()).toHaveClass("max-h-[40dvh]", "border-b-2");
     expect(within(main).getByRole("textbox")).toBeVisible();
     await user.click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
     expect(screen.getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();

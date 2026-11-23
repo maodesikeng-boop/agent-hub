@@ -15,6 +15,7 @@ import {
   ChevronDown as LucideChevronDown,
   ChevronLeft as LucideChevronLeft,
   ChevronRight as LucideChevronRight,
+  ChevronUp as LucideChevronUp,
   ChevronsUpDown as LucideChevronsUpDown,
   CircleAlert as LucideCircleAlert,
   CirclePlay as LucideCirclePlay,
@@ -58,6 +59,7 @@ import {
   Type as LucideType,
   User as LucideUser,
   UserPen as LucideUserPen,
+  Video as LucideVideo,
   WifiOff as LucideWifiOff,
   X as LucideX,
   type LucideIcon,
@@ -84,26 +86,6 @@ function smooth(raw: LucideIcon, name: string): Icon {
   return SmoothIcon;
 }
 
-function line(name: string, d: string, strokeWidth = 1.75, fill = "none"): Icon {
-  const LineIcon = (props: IconProps) =>
-    createElement(
-      "svg",
-      {
-        viewBox: "0 0 24 24",
-        fill,
-        stroke: "currentColor",
-        strokeWidth,
-        strokeLinecap: "round",
-        strokeLinejoin: "round",
-        ...LINE_MARK,
-        ...a11y(props),
-      },
-      createElement("path", { d }),
-    );
-  LineIcon.displayName = name;
-  return LineIcon;
-}
-
 function customStroke(name: string, renderChildren: () => ReactElement[]): Icon {
   const CustomIcon = (props: IconProps) =>
     createElement(
@@ -125,14 +107,6 @@ function customStroke(name: string, renderChildren: () => ReactElement[]): Icon 
   CustomIcon.displayName = name;
   return CustomIcon;
 }
-
-export const ComposerAdd = line("ComposerAdd", "M12 5v14M5 12h14");
-export const ComposerSend = line("ComposerSend", "M12 19V5m-6 6 6-6 6 6", 2.25);
-export const ComposerStop = line("ComposerStop", "M5 5h14v14H5z", 2, "currentColor");
-export const ComposerFile = line("ComposerFile", "M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6");
-export const ComposerVideo = line("ComposerVideo", "M3 6h12v12H3zM15 10l6-3v10l-6-3");
-export const ComposerRemove = line("ComposerRemove", "m6 6 12 12M18 6 6 18", 2);
-export const ComposerBot = line("ComposerBot", "M12 3v4M5 7h14v12H5zM2 12v3m20-3v3M9 12v1m6-1v1");
 
 export const Loader2: Icon = Object.assign(
   ({ className, ...props }: IconProps) =>
@@ -208,6 +182,7 @@ export const Check = smooth(LucideCheck, "Check");
 export const ChevronDown = smooth(LucideChevronDown, "ChevronDown");
 export const ChevronLeft = smooth(LucideChevronLeft, "ChevronLeft");
 export const ChevronRight = smooth(LucideChevronRight, "ChevronRight");
+export const ChevronUp = smooth(LucideChevronUp, "ChevronUp");
 export const ChevronsUpDown = smooth(LucideChevronsUpDown, "ChevronsUpDown");
 export const CircleAlert = smooth(LucideCircleAlert, "CircleAlert");
 export const CirclePlay = smooth(LucideCirclePlay, "CirclePlay");
@@ -249,5 +224,6 @@ export const TriangleAlert = smooth(LucideTriangleAlert, "TriangleAlert");
 export const Type = smooth(LucideType, "Type");
 export const User = smooth(LucideUser, "User");
 export const UserPen = smooth(LucideUserPen, "UserPen");
+export const Video = smooth(LucideVideo, "Video");
 export const WifiOff = smooth(LucideWifiOff, "WifiOff");
 export const X = smooth(LucideX, "X");

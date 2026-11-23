@@ -26,7 +26,7 @@ describe("Sidebar layout", () => {
 
   it("rail：72px 头像窄栏", () => {
     const aside = sidebar({ layout: "rail" });
-    expect(aside).toHaveClass("w-18", "border-r");
+    expect(aside).toHaveClass("w-18", "border-r-2");
     expect(screen.getByRole("button", { name: "小林" })).toHaveAttribute("aria-current", "true");
   });
 
@@ -37,7 +37,7 @@ describe("Sidebar layout", () => {
     expect(screen.getByRole("searchbox", { name: "Search" })).toBeInTheDocument();
     const row = screen.getByRole("button", { name: /小林/ });
     expect(row).not.toHaveAttribute("aria-current");
-    expect(row).not.toHaveClass("bg-jelly");
+    expect(row).not.toHaveClass("border-select-line", "bg-background");
   });
 
   it("没传 layout 时按媒体查询（默认宽屏）", () => {

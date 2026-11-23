@@ -34,7 +34,7 @@ export function ComposerMenu({
   }, [menu.activeIndex, menu.items]);
 
   return (
-    <div className="mb-2 rounded-2xl border border-border bg-background p-1.5">
+    <div className="mb-2 border-2 border-border-strong bg-background p-1.5">
       {menu.items.length === 0 ? (
         <p className="flex h-9 items-center px-3 text-minor text-muted-foreground">{text.empty}</p>
       ) : (
@@ -47,8 +47,8 @@ export function ComposerMenu({
               aria-selected={index === menu.activeIndex}
               aria-disabled={item.disabled || undefined}
               className={cn(
-                "flex h-9 cursor-pointer items-center gap-3 rounded-xl px-3 pointer-coarse:min-h-11",
-                index === menu.activeIndex && "bg-sidebar-active",
+                "flex h-9 cursor-pointer items-center gap-3 px-3 pointer-coarse:min-h-11",
+                index === menu.activeIndex && "bg-hover",
                 item.disabled && "cursor-default",
               )}
               onPointerDown={keepFocus}

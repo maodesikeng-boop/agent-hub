@@ -164,13 +164,26 @@ describe("web-guard：src/web 代码守卫", () => {
     expect(vendorPattern.test('vendor === "acme"')).toBe(false);
   });
 
-  it("圆角只用 docs/ui-standard.md 第 2 条的档位：不写 rounded-lg / rounded-md / rounded-sm", () => {
+  it("直角设计：src/web/ 非测试代码禁止使用 rounded-* 圆角类", () => {
     const hits: string[] = [];
-    const bannedRadius = /(?:^|[\s"'`:])rounded-(?:lg|md|sm)\b/;
+    const bannedRadius = /(?:^|[\s"'`:])rounded-[a-z0-9[\]._-]+/i;
     for (const file of files) {
       const lines = stripComments(readFileSync(file, "utf8")).split("\n");
       lines.forEach((line, index) => {
         if (bannedRadius.test(line)) hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${line.trim()}`);
+      });
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it("禁止在 src/web/ui/select.tsx 之外直接写原生 <select>", () => {
+    const hits: string[] = [];
+    const rawSelect = /<select(?:\s|>|\/?>)/;
+    for (const file of files) {
+      if (relative(WEB_DIR, file) === "ui/select.tsx") continue;
+      const lines = stripComments(readFileSync(file, "utf8")).split("\n");
+      lines.forEach((line, index) => {
+        if (rawSelect.test(line)) hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${line.trim()}`);
       });
     }
     expect(hits).toEqual([]);

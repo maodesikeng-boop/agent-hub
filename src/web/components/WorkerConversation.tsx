@@ -147,7 +147,7 @@ export function WorkerConversation({
           )}
           <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
             {phase === "ended" && view.conversation.purgedAt === undefined && (
-              <div role="status" className="rounded-2xl bg-sidebar px-4 py-3 text-body">
+              <div role="status" className="border-2 border-border bg-panel px-4 py-3 text-body">
                 Completed
               </div>
             )}

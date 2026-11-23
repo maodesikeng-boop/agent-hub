@@ -1,5 +1,5 @@
 import { useMutation, useMutationState, type Mutation, type QueryClient } from "@tanstack/react-query";
-import { ChevronRight, ComposerRemove } from "../ui/icons.ts";
+import { ChevronRight, X } from "../ui/icons.ts";
 import {
   memo,
   useCallback,
@@ -23,7 +23,6 @@ import type { ComposerSource, MenuItem } from "../composer-suggest.ts";
 import { submitDecision } from "../decision-actions.ts";
 import { LOCAL_DEVICE, isReadOnly, type DeviceView } from "../devices.ts";
 import { errorText, formatTime, newClientId, type ErrorLike } from "../format.ts";
-import { jellyStyleOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import {
@@ -54,7 +53,7 @@ import { RouterStream } from "./RouterStream.tsx";
 const ROUTER_COMMAND_MUTATION_KEY = ["router-command"] as const;
 
 const CHIP_REMOVE_CLASS =
-  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-sidebar-active hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
+  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 
 const NO_PENDING_TURNS: readonly RouterTurnEntry[] = [];
 const DEFAULT_ROUTER_SETTINGS = defaultRouterSettings();
@@ -152,7 +151,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
         <div className="border-b border-border pt-2.5">
           <CollapsibleTrigger
             type="button"
-            className="touch-target flex h-8 w-full cursor-pointer items-center gap-2 rounded-xl text-left text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="touch-target flex h-8 w-full cursor-pointer items-center gap-2 text-left text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
           >
             <span className="inline-flex min-w-0 items-center gap-1.5">
               <ChevronRight
@@ -193,9 +192,8 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                       key={entry.decision.key}
                       type="button"
                       aria-expanded={false}
-                      style={jellyStyleOf(entry.look.color)}
                       className={cn(
-                        "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50",
+                        "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 border-2 border-transparent px-2.5 py-2 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
                         !entry.online && "[&_[data-slot=avatar]]:opacity-50",
                       )}
                       onClick={() => onSelectKey(entry.decision.key)}
@@ -214,7 +212,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                         <span className="shrink-0 text-xs text-muted-foreground">{entry.deviceName}</span>
                       )}
                       {!entry.online && (
-                        <span className="shrink-0 rounded-full bg-sidebar px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        <span className="shrink-0 border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">
                           Offline
                         </span>
                       )}
@@ -232,7 +230,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
               <button
                 type="button"
                 aria-expanded={rowsExpanded}
-                className="touch-target inline-flex cursor-pointer items-center gap-1 rounded-full px-1 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="touch-target inline-flex cursor-pointer items-center gap-1 px-1 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
                 onClick={() => setRowsExpanded((v) => !v)}
               >
                 {rowsExpanded ? "Show less" : "Show more"}
@@ -247,6 +245,29 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
 
 function decisionInstanceToken(entry: FleetDecisionEntry): string {
   return `${entry.decision.askMessageId ?? ""}:${entry.decision.updatedAt}`;
+}
+
+function TargetChip({
+  label,
+  deviceName,
+  look,
+  onRemove,
+}: {
+  label: string;
+  deviceName: string | null;
+  look: Parameters<typeof Avatar>[0]["look"];
+  onRemove: () => void;
+}) {
+  return (
+    <li className="flex max-w-full items-center gap-1.5 border border-border-strong bg-panel py-1 pr-1 pl-2.5 text-minor text-foreground">
+      <Avatar look={look} size={16} />
+      <span className="truncate font-medium">{label}</span>
+      {deviceName !== null && <span className="shrink-0 text-xs text-muted-foreground">{deviceName}</span>}
+      <button type="button" className={CHIP_REMOVE_CLASS} aria-label={`Remove target ${label}`} onClick={onRemove}>
+        <X className="size-3.5" aria-hidden="true" />
+      </button>
+    </li>
+  );
 }
 
 export function RouterWorkbench({
@@ -597,25 +618,18 @@ export function RouterWorkbench({
     [selectedTarget, draft, staging, mutateSend],
   );
 
-  const targetChip = useMemo(() => {
-    if (!selectedTarget) return null;
-    const showDevice = view.multiDevice || !selectedTarget.self;
-    return (
-      <li className="flex max-w-full items-center gap-1.5 rounded-full bg-muted py-1 pr-1 pl-2.5 text-minor text-foreground">
-        <Avatar look={selectedTarget.look} size={16} />
-        <span className="truncate font-medium">{selectedTarget.label}</span>
-        {showDevice && <span className="shrink-0 text-xs text-muted-foreground">{selectedTarget.deviceName}</span>}
-        <button
-          type="button"
-          className={CHIP_REMOVE_CLASS}
-          aria-label={`Remove target ${selectedTarget.label}`}
-          onClick={() => setSelectedTargetKey(null)}
-        >
-          <ComposerRemove className="size-3.5" aria-hidden="true" />
-        </button>
-      </li>
-    );
-  }, [selectedTarget, view.multiDevice]);
+  const targetChip = useMemo(
+    () =>
+      selectedTarget ? (
+        <TargetChip
+          label={selectedTarget.label}
+          deviceName={view.multiDevice || !selectedTarget.self ? selectedTarget.deviceName : null}
+          look={selectedTarget.look}
+          onRemove={() => setSelectedTargetKey(null)}
+        />
+      ) : null,
+    [selectedTarget, view.multiDevice],
+  );
 
   return (
     <FleetDeviceScopes lookup={deviceScopeLookup}>
@@ -671,6 +685,7 @@ export function RouterWorkbench({
             placeholder={mobile ? "Tell Router…" : "Tell Router, or type @ to pick a project…"}
             autoFocus={!mobile}
             leadingChip={targetChip}
+            sendTone="rail"
             onSelectTarget={handleSelectTarget}
             onSend={handleComposerSend}
           />

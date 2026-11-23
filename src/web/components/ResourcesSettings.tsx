@@ -13,7 +13,7 @@ import type { DeviceSettings } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Loader2, RefreshCw } from "../ui/icons.ts";
-import { Select } from "../ui/input.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { formatBytes } from "../upload.ts";
 import { CollapsibleGroup, ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
@@ -86,7 +86,7 @@ function HeldItemRow({
     <div className="grid grid-cols-1 gap-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 tabular-nums">
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          {!kept && <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-caution" />}
+          {!kept && <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />}
           <span>{REASON_LABELS[item.reason]}</span>
         </span>
         {item.projectName && <span>{item.projectName}</span>}
@@ -165,7 +165,7 @@ function OverviewGroup({
 
   const dbDetail = dbWarnTable ? (
     <span className="inline-flex items-center gap-1.5 tabular-nums">
-      <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-caution" />
+      <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />
       <span>{`${dbWarnTable.table} ${dbWarnTable.rows.toLocaleString("en-US")} / ${dbWarnTable.rowLimit?.toLocaleString("en-US")}`}</span>
     </span>
   ) : snapshot.database.freelistBytes >= 1024 * 1024 ? (
@@ -174,7 +174,7 @@ function OverviewGroup({
 
   const storageDetail = storageWarn ? (
     <span className="inline-flex items-center gap-1.5 tabular-nums">
-      <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-caution" />
+      <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />
       <span>
         {storageWarn.maxBytes !== null
           ? `${storageWarn.label} ${formatBytes(storageWarn.bytes)} / ${formatBytes(storageWarn.maxBytes)}`
@@ -224,7 +224,7 @@ function OverviewGroup({
               <span>{`${snapshot.processes.trackedCount} tracked`}</span>
               {snapshot.processes.leakedCount > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-foreground">
-                  <span aria-hidden="true" className="size-2 rounded-full bg-caution" />
+                  <span aria-hidden="true" className="size-2 bg-caution" />
                   <span>{`${snapshot.processes.leakedCount} leaked`}</span>
                 </span>
               )}
@@ -252,7 +252,7 @@ function StorageDetailsGroup({ snapshot }: { snapshot: ResourcesSnapshot }) {
           detail={
             dir.warning ? (
               <span className="inline-flex items-center gap-1.5 tabular-nums">
-                <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-caution" />
+                <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />
                 <span>
                   {dir.maxBytes !== null
                     ? `${formatBytes(dir.bytes)} / ${formatBytes(dir.maxBytes)}`
@@ -330,13 +330,13 @@ function DiscardConfirmDialog({
                 {item.bytes !== null && <span>{formatBytes(item.bytes)}</span>}
               </div>
               {item.samplePaths.length > 0 && (
-                <p className="rounded-xl bg-sidebar px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground">
+                <p className="border border-border bg-panel px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground">
                   {item.samplePaths.join("\n")}
                 </p>
               )}
             </div>
             {item.kind === "worktree" && item.branch !== null && (
-              <div className="rounded-2xl border border-border">
+              <div className="border-2 border-border">
                 <SettingsRow label={`Also delete branch ${item.branch}`}>
                   {(id) => (
                     <Switch
@@ -408,18 +408,17 @@ export function ResourcesSettings({
         <SettingsGroup label="Computer">
           <SettingsRow label="Computer">
             {(id) => (
-              <Select
-                id={id}
-                variant="plain"
-                aria-label="Computer"
-                value={effectiveDeviceKey ?? LOCAL_DEVICE}
-                onChange={(e) => setSelectedDeviceKey(e.target.value as DeviceKey)}
-              >
-                {computers.map((c) => (
-                  <option key={c.key} value={c.key}>
-                    {c.info.name}
-                  </option>
-                ))}
+              <Select value={effectiveDeviceKey ?? LOCAL_DEVICE} onValueChange={(next) => setSelectedDeviceKey(next as DeviceKey)}>
+                <SelectTrigger id={id} aria-label="Computer" variant="plain">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {computers.map((c) => (
+                    <SelectItem key={c.key} value={c.key}>
+                      {c.info.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             )}
           </SettingsRow>

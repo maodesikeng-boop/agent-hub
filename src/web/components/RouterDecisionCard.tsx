@@ -45,12 +45,12 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
   return (
     <article
       aria-label={decision.question}
-      className={cn("rounded-2xl border border-border bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
+      className={cn("border-2 border-border-strong bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
     >
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
           type="button"
-          className="touch-target inline-flex cursor-pointer items-center gap-2 rounded-full text-left font-semibold text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="touch-target inline-flex cursor-pointer items-center gap-2 text-left font-semibold text-foreground outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus"
           onClick={() => onOpenConversation(entry.deviceKey, decision.conversationId)}
         >
           <Avatar look={entry.look} size={24} />
@@ -59,7 +59,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         {showProject && <span className="truncate text-muted-foreground">{decision.projectName}</span>}
         {showDevice && <span className="truncate text-xs text-muted-foreground">{entry.deviceName}</span>}
         {!online && (
-          <span className="rounded-full bg-sidebar px-2 py-0.5 text-xs font-medium text-muted-foreground">Offline</span>
+          <span className="border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Offline</span>
         )}
         <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(decision.createdAt)}</span>
       </div>

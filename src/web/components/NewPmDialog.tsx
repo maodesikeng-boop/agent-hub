@@ -23,7 +23,8 @@ import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogForm } from "../ui/dialog.tsx";
-import { Input, Select, Textarea } from "../ui/input.tsx";
+import { Input, Textarea } from "../ui/input.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { useIsMobile } from "../useMediaQuery.ts";
 import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -147,7 +148,7 @@ function NewPmForm({
                   id={id}
                   type="button"
                   aria-label="Change look"
-                  className="flex cursor-pointer items-center gap-2 rounded-xl px-1.5 py-1 text-minor text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                  className="flex cursor-pointer items-center gap-2 px-1.5 py-1 text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
                 >
                   <Avatar look={look} size={34} />
                   <ChevronRight className="size-pixel-sm" aria-hidden="true" />
@@ -183,7 +184,7 @@ function NewPmForm({
           <ModeRows label="Mode" value={mode} onChange={setMode} disabled={busy} />
         </SettingsGroup>
         <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
-          <CollapsibleTrigger className="touch-target group flex cursor-pointer items-center gap-1 rounded-full px-4 text-minor font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+          <CollapsibleTrigger className="touch-target group flex cursor-pointer items-center gap-1 px-4 text-minor font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus">
             <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             More settings
           </CollapsibleTrigger>
@@ -202,7 +203,7 @@ function NewPmForm({
                 aria-label="Persona"
                 placeholder="Optional"
                 rows={4}
-                className="block max-h-[60vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0"
+                className="block max-h-[60vh] min-h-24 resize-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0"
                 value={persona}
                 onChange={(e) => setPersona(e.target.value)}
               />
@@ -220,7 +221,7 @@ function NewPmForm({
           {errorLine(error)}
         </p>
       )}
-      <DialogFooter className={mobile ? "border-t border-border bg-surface-sidebar px-4 py-3" : undefined}>
+      <DialogFooter className={mobile ? "border-t-2 border-border bg-panel px-4 py-3" : undefined}>
         <Button type="submit" disabled={!canSubmit} className={mobile ? "h-11 w-full" : undefined}>
           {busy && <Loader2 aria-hidden="true" />}
           {busy ? "Creating…" : "Create"}
@@ -284,12 +285,17 @@ function DevicePicker({
     devices.length > 1 ? (
       <SettingsRow label="Device">
         {(id) => (
-          <Select id={id} variant="plain" value={device.key} onChange={(e) => setKey(e.target.value)}>
-            {devices.map((d) => (
-              <option key={d.key} value={d.key} disabled={isReadOnly(d.status)}>
-                {d.name}
-              </option>
-            ))}
+          <Select value={device.key} onValueChange={setKey}>
+            <SelectTrigger id={id} aria-label="Device" variant="plain">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {devices.map((d) => (
+                <SelectItem key={d.key} value={d.key} disabled={isReadOnly(d.status)}>
+                  {d.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         )}
       </SettingsRow>
