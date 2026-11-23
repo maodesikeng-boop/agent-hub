@@ -457,7 +457,7 @@ export function ProviderSignInBody({
     await runSubmit(async () => {
       const updated = await model.submitAuth(item.vendor, { flowId: activeFlow.flowId, input: manualInput.trim() });
       setManualInput("");
-      if (updated?.authFlow?.phase === "succeeded" || (updated && isSelectable(updated.availability))) onDone();
+      if (updated?.authFlow?.phase === "succeeded" || (updated && updated.authFlow?.phase !== "failed" && updated.authFlow?.phase !== "expired" && updated.availability === "available")) onDone();
     });
   };
 

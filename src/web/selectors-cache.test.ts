@@ -30,6 +30,7 @@ import {
   deviceRouterView,
   fleetRouterView,
   groupMessages,
+  hasFetchedQuotaSession,
   listConversations,
   pendingDecisionsOf,
   previewText,
@@ -233,6 +234,88 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(listConversations(next)).toBe(entriesBefore);
     expect(quotaUsage(next, 0)).toBe(quotaBefore);
     expect(quotaResetTimes(next)).toBe(resetsBefore);
+
+    // 无关 Worker status 更新（仅改 currentTool / lastEventAt）不重算 workersOf，也不穿透 quotaUsage / hasFetchedQuotaSession
+    let rated = applyChange(
+      state,
+      sessionChange(
+        state.seq + 1,
+        makeSession({
+          sessionId: 88_888,
+          conversationId: PM_CONVERSATION,
+          vendor: "claude",
+          rateLimit: {
+            status: "allowed",
+            resetsAt: 2_000,
+            windows: { five_hour: { utilization: 0.42, resetsAt: 2_000, status: "allowed" } },
+          },
+        }),
+      ),
+    );
+    rated = applyChange(
+      rated,
+      sessionChange(
+        rated.seq + 1,
+        makeSession({
+          sessionId: workerSessionOf(0),
+          conversationId: workerConversationOf(0),
+          status: "running",
+          activity: "working",
+        }),
+      ),
+    );
+    const ratedWorkersBefore = workersOf(rated, 1);
+    const ratedQuotaBefore = quotaUsage(rated, 1_500_000);
+    const fetchedBefore = hasFetchedQuotaSession(rated);
+    const workerNoise = applyChange(
+      rated,
+      sessionChange(
+        rated.seq + 1,
+        makeSession({
+          sessionId: workerSessionOf(0),
+          conversationId: workerConversationOf(0),
+          status: "running",
+          activity: "working",
+          currentTool: "vitest",
+          lastEventAt: 9_999,
+        }),
+      ),
+    );
+    expect(workersOf(workerNoise, 1)).toBe(ratedWorkersBefore);
+    expect(quotaUsage(workerNoise, 1_500_000)).toBe(ratedQuotaBefore);
+    expect(hasFetchedQuotaSession(workerNoise)).toBe(fetchedBefore);
+    // 到 reset 时刻即时失效
+    expect(quotaUsage(workerNoise, 2_000_000)).not.toBe(ratedQuotaBefore);
+    expect(quotaUsage(workerNoise, 2_000_000)[0]?.windows[0]?.percent).toBe(0);
+
+    // 真实时间戳窗口的 [minNowMs, maxNowMs) 边界：同一 now 命中快速缓存，跨过 REAL_EPOCH_SEC*1000 或 (resetsAt - maxSpanSec)*1000 即时失效
+    const futureResetsAt = 1_700_000_000;
+    const spanStartMs = (futureResetsAt - (5 * 60 * 60 + 3600)) * 1000;
+    const realEpochMs = 1_000_000_000 * 1000;
+    const farFutureState = applyChange(
+      state,
+      sessionChange(
+        state.seq + 1,
+        makeSession({
+          sessionId: 77_777,
+          conversationId: PM_CONVERSATION,
+          vendor: "claude",
+          rateLimit: {
+            status: "allowed",
+            resetsAt: futureResetsAt,
+            windows: { five_hour: { utilization: 0.55, resetsAt: futureResetsAt, status: "allowed" } },
+          },
+        }),
+      ),
+    );
+    const farNow = realEpochMs + 1_000;
+    const rejectedFirst = quotaUsage(farFutureState, farNow);
+    expect(rejectedFirst).toEqual([]);
+    expect(quotaUsage(farFutureState, farNow)).toBe(rejectedFirst);
+    const validAtSpanStart = quotaUsage(farFutureState, spanStartMs);
+    expect(validAtSpanStart[0]?.windows[0]?.percent).toBe(55);
+    expect(quotaUsage(farFutureState, spanStartMs)).toBe(validAtSpanStart);
+    expect(quotaUsage(farFutureState, realEpochMs - 1)[0]?.windows[0]?.percent).toBe(55);
   });
 
   it("在跑的 Worker 个数：所有项目经理一次算完、按 conversations + sessions 缓存；“等你”按项目经理问个数不再每个对话扫一遍全部 Worker", () => {

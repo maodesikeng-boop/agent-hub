@@ -130,6 +130,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     ctx.secrets.set("codex", { OPENAI_API_KEY: "sk-stale" });
 
     let capturedUrl: string | null = null;
+    const controller = new AbortController();
     const flowPromise = codexSetupAdapter.startAuthFlow!(
       ctx,
       { methodId: "browser" },
@@ -140,40 +141,45 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         onDeviceCode: () => {},
         onUserInput: () => {},
       },
-      AbortSignal.timeout(10_000),
+      AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
     );
 
-    await expect.poll(() => capturedUrl, { timeout: 5_000 }).not.toBeNull();
-    const parsedUrl = new URL(capturedUrl!);
-    expect(parsedUrl.searchParams.get("originator")).toBe("codex_cli_rs");
-    expect(capturedUrl).not.toContain("originator=fusa");
+    try {
+      await expect.poll(() => capturedUrl, { timeout: 5_000 }).not.toBeNull();
+      const parsedUrl = new URL(capturedUrl!);
+      expect(parsedUrl.searchParams.get("originator")).toBe("codex_cli_rs");
+      expect(capturedUrl).not.toContain("originator=fusa");
 
-    const contract = parseLoopbackCallbackContract(capturedUrl!);
-    expect(contract).not.toBeNull();
-    const callbackUrl = `http://127.0.0.1:${contract!.port}${contract!.pathname}?code=auth_code_ok&state=${encodeURIComponent(contract!.expectedState!)}`;
-    const validated = validateLoopbackCallbackUrl(callbackUrl, contract);
-    expect(validated.ok).toBe(true);
-    if (validated.ok) {
-      await forwardValidatedLoopbackCallback(validated.url);
+      const contract = parseLoopbackCallbackContract(capturedUrl!);
+      expect(contract).not.toBeNull();
+      const callbackUrl = `http://127.0.0.1:${contract!.port}${contract!.pathname}?code=auth_code_ok&state=${encodeURIComponent(contract!.expectedState!)}`;
+      const validated = validateLoopbackCallbackUrl(callbackUrl, contract);
+      expect(validated.ok).toBe(true);
+      if (validated.ok) {
+        await forwardValidatedLoopbackCallback(validated.url);
+      }
+
+      await flowPromise;
+      expect(store).toEqual({});
+
+      const envLog = JSON.parse(readFileSync(envLogFile, "utf8")) as { argv: string[]; noOpen: string };
+      expect(envLog.argv).toEqual(["app-server", "--listen", "stdio://"]);
+      expect(envLog.noOpen).toBe("1");
+
+      const rpcLines = readFileSync(rpcLogFile, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { method: string; params?: { clientInfo?: { name?: string } } });
+      expect(rpcLines[0]?.method).toBe("initialize");
+      expect(rpcLines[0]?.params?.clientInfo?.name).toBe("codex_cli_rs");
+
+      const inspected = await codexSetupAdapter.inspectAuth(ctx);
+      expect(inspected.accountSummary).toBe("alice@example.com");
+      expect(inspected.canSignOut).toBe(true);
+    } finally {
+      controller.abort();
+      await flowPromise.catch(() => {});
     }
-
-    await flowPromise;
-    expect(store).toEqual({});
-
-    const envLog = JSON.parse(readFileSync(envLogFile, "utf8")) as { argv: string[]; noOpen: string };
-    expect(envLog.argv).toEqual(["app-server", "--listen", "stdio://"]);
-    expect(envLog.noOpen).toBe("1");
-
-    const rpcLines = readFileSync(rpcLogFile, "utf8")
-      .trim()
-      .split("\n")
-      .map((l) => JSON.parse(l) as { method: string; params?: { clientInfo?: { name?: string } } });
-    expect(rpcLines[0]?.method).toBe("initialize");
-    expect(rpcLines[0]?.params?.clientInfo?.name).toBe("codex_cli_rs");
-
-    const inspected = await codexSetupAdapter.inspectAuth(ctx);
-    expect(inspected.accountSummary).toBe("alice@example.com");
-    expect(inspected.canSignOut).toBe(true);
   });
 
   it("device_code sign-in uses codex_cli_rs clientInfo and emits verificationUrl and userCode", async () => {

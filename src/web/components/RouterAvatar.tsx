@@ -10,7 +10,7 @@ export const RouterAvatar = memo(function RouterAvatar({ size = 44, working = fa
   const rem = `${size / 16}rem`;
   const ref = useSyncedLoop<SVGSVGElement>(working);
   return (
-    <span data-slot="router-avatar" aria-hidden="true" style={{ width: rem, height: rem }} className={cn("inline-flex shrink-0 select-none", className)}>
+    <span data-slot="router-avatar" aria-hidden="true" style={{ width: rem, height: rem }} className={cn("inline-flex shrink-0 select-none [contain:size_layout]", className)}>
       <svg
         ref={ref}
         viewBox={`0 ${ROUTER_BELL_LIFT} ${SLIME_GRID} ${SLIME_GRID}`}

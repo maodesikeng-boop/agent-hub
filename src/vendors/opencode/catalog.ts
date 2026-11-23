@@ -122,19 +122,24 @@ export function createOpenCodeCatalogSource(options: VendorCatalogSourceOptions)
     ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
     async query(signal): Promise<OpenCodeCatalogRaw> {
       // Run sequentially: concurrent --standalone starts race on first-time opencode.db migration.
+      const probeSignal = AbortSignal.any([signal, AbortSignal.timeout(MODEL_CATALOG_TIMEOUT_MS)]);
       let modelsText: string | null = null;
       let modelsErr: Error | null = null;
       try {
-        modelsText = await runOpenCode(options, ["models", "--standalone"], signal);
+        modelsText = await runOpenCode(options, ["models", "--standalone"], probeSignal);
       } catch (err) {
         modelsErr = err instanceof Error ? err : new Error(String(err));
       }
       let authStdout: string | null = null;
       let authErr: Error | null = null;
-      try {
-        authStdout = await runOpenCode(options, ["auth", "list", "--standalone", "--format", "json"], signal);
-      } catch (err) {
-        authErr = err instanceof Error ? err : new Error(String(err));
+      if (probeSignal.aborted) {
+        authErr = probeSignal.reason instanceof Error ? probeSignal.reason : new Error(String(probeSignal.reason ?? "opencode probe aborted"));
+      } else {
+        try {
+          authStdout = await runOpenCode(options, ["auth", "list", "--standalone", "--format", "json"], probeSignal);
+        } catch (err) {
+          authErr = err instanceof Error ? err : new Error(String(err));
+        }
       }
       if (modelsErr !== null && authErr !== null) throw modelsErr;
       const parsedAuth = authStdout !== null ? parseJsonOutput(authStdout) : { ok: false as const };

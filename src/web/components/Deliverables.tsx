@@ -1,9 +1,11 @@
-import { FileText, Play } from "../ui/icons.ts";
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { FileText, Loader2, Play } from "../ui/icons.ts";
+import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
 import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, splitLead, type Deliverable, type SentFile } from "../../shared/index.ts";
 import { DELIVERABLE_MEDIA_HEIGHT_REM } from "../deliverable-size.ts";
 import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
+import { Button } from "../ui/button.tsx";
+import { Input } from "../ui/input.tsx";
 import { FileCard, useFileExpired } from "./Attachments.tsx";
 import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -201,3 +203,60 @@ export const CardBody = memo(function CardBody({
     </div>
   );
 });
+
+export function CardNoteForm({
+  disabled,
+  pending,
+  resetRev,
+  noteRef,
+  onSubmitNote,
+  className = "mt-2.5 flex items-center gap-2",
+  inputClassName = "min-w-0 flex-1",
+  buttonSize,
+}: {
+  disabled: boolean;
+  pending: boolean;
+  resetRev: number;
+  noteRef: MutableRefObject<string>;
+  onSubmitNote: (rawNote: string) => void;
+  className?: string;
+  inputClassName?: string;
+  buttonSize?: "sm";
+}) {
+  const [trackedRev, setTrackedRev] = useState(resetRev);
+  const [note, setNote] = useState("");
+  if (trackedRev !== resetRev) {
+    setTrackedRev(resetRev);
+    setNote("");
+  }
+  return (
+    <div className={className}>
+      <Input
+        value={note}
+        disabled={disabled}
+        onChange={(e) => {
+          noteRef.current = e.target.value;
+          setNote(e.target.value);
+        }}
+        placeholder="Add a note, or type a custom reply…"
+        aria-label="Add note"
+        className={inputClassName}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
+            e.preventDefault();
+            onSubmitNote(note);
+          }
+        }}
+      />
+      <Button
+        type="button"
+        {...(buttonSize !== undefined ? { size: buttonSize } : {})}
+        disabled={disabled || note.trim() === ""}
+        onClick={() => onSubmitNote(note)}
+      >
+        {pending && <Loader2 className="size-pixel-sm" aria-hidden="true" />}
+        Send
+      </Button>
+    </div>
+  );
+}

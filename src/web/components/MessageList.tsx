@@ -164,7 +164,7 @@ export const MessageList = memo(function MessageList({
                 ref={virtualizer.measureElement}
                 data-index={row.index}
                 data-list-head={row.index === 0 && !hasMore ? "" : undefined}
-                className="absolute top-0 left-0 flex w-full flex-col"
+                className="absolute top-0 left-0 flex w-full flex-col [contain:layout_style]"
                 style={{ transform: `translateY(${row.start - scrollMargin}px)` }}
               >
                 {rowContent(row.index, rowContext)}

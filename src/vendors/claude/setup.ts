@@ -91,17 +91,16 @@ export const claudeSetupAdapter: VendorSetupAdapter = {
         methods: CLAUDE_AUTH_METHODS,
       };
     }
-    const email = readClaudeAccountEmail(ctx);
-    if (email) {
+    if (ctx.availability === "signed_out" || ctx.availability === "not_installed") {
       return {
-        accountSummary: email,
-        canSignOut: true,
+        accountSummary: null,
+        canSignOut: false,
         methods: CLAUDE_AUTH_METHODS,
       };
     }
     if (ctx.availability === "available" || hasClaudeCredentialsFile(ctx)) {
       return {
-        accountSummary: "Signed in",
+        accountSummary: readClaudeAccountEmail(ctx) ?? "Signed in",
         canSignOut: true,
         methods: CLAUDE_AUTH_METHODS,
       };
