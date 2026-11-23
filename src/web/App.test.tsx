@@ -438,12 +438,13 @@ describe("消息状态", () => {
     expect(bubbles()).toHaveLength(3);
   });
 
-  it("系统消息是靠左很淡的一行，不是气泡；schedule.failed 和 handover.failed 的 meta.rawReason 在 [data-notice] 的 title 上", async () => {
+  it("系统消息是靠左结构化活动条，不是气泡；schedule.failed 和 handover.failed 的 meta.rawReason 在 [data-notice] 的 title 上", async () => {
     const ws = await boot();
     push(ws, messageChange(11, "message.created", makeMessage({ id: 3, sender: "system", text: "已建工单" })));
     const notice = within(log()).getByText("已建工单").closest("[data-notice]");
     expect(notice).toHaveAttribute("data-side", "left");
-    expect(notice).toHaveClass("text-xs", "text-muted-foreground");
+    expect(within(notice as HTMLElement).getByText("System")).toBeInTheDocument();
+    expect(notice!.parentElement).toHaveClass("border-2", "bg-panel");
 
     push(
       ws,

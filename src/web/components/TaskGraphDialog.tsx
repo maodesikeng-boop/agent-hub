@@ -102,7 +102,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
 }) {
   const client = useClient();
   const qc = useHubQueryClient();
-  const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
   const [measuredHeights, setMeasuredHeights] = useState<Readonly<Record<string, number>>>({});
   const observerRef = useRef<ResizeObserver | null>(null);
   const measureCard = useCallback((el: HTMLDivElement | null) => {
@@ -165,10 +164,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
           optionCount: n.gateOptions.length,
           hasSummary: Boolean(n.gateSummaryMd || n.artifact?.summary || n.decision),
           hasQuestion: n.gateQuestion !== null && n.gateQuestion.trim() !== "" && n.gateQuestion !== n.title,
-          noteExpanded: Boolean(
-            expandedNotes[n.key] ||
-              (activeWaitingUser && (n.gateCheckpoint || n.gateOptions.length === 0)),
-          ),
+          noteExpanded: activeWaitingUser,
           ...(activeWaitingUser && n.userBlocker == null && n.artifact?.deliverables !== undefined
             ? { deliverables: n.artifact.deliverables }
             : {}),
@@ -180,7 +176,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       rootFontSizePx,
       coarsePointer,
     });
-  }, [graph, expandedNotes, measuredHeights, rootFontSizePx, coarsePointer]);
+  }, [graph, measuredHeights, rootFontSizePx, coarsePointer]);
 
   const { emptyTubes, filledTubes } = useMemo(() => {
     const edges = layout?.edges ?? [];
@@ -345,9 +341,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                         graphId={graph.id}
                         node={node}
                         client={client}
-                        onNoteToggle={(noteOpen) =>
-                          setExpandedNotes((prev) => ({ ...prev, [node.key]: noteOpen }))
-                        }
                       />
                     )}
                   </div>

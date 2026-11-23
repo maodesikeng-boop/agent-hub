@@ -1,15 +1,12 @@
-import { ArrowUp } from "../ui/icons.ts";
 import { memo } from "react";
 import type { ConversationId } from "../../shared/index.ts";
 import { cleanOptionLabel, recommendedIndexOf } from "../decision-actions.ts";
 import { formatTime, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { FleetDecisionEntry } from "../selectors.ts";
-import { Button } from "../ui/button.tsx";
-import { Input } from "../ui/input.tsx";
 import { DeviceScopeOf } from "../device-scope.tsx";
 import { Avatar } from "./Avatar.tsx";
-import { CardBody } from "./Deliverables.tsx";
+import { CardBody, CardNoteForm } from "./Deliverables.tsx";
 import { OptionRow } from "./OptionRow.tsx";
 import { RowError } from "./SettingsList.tsx";
 
@@ -37,7 +34,6 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
   const { decision, online } = entry;
   const recommendedIdx = recommendedIndexOf(decision);
   const disabled = !online || busy;
-  const canSendCustom = !disabled && note.trim().length > 0;
   const showProject = decision.projectName !== null && decision.projectName !== decision.pmName;
   const showDevice = multiDevice || !entry.self;
   const blockedCount = decision.source.kind === "gate" ? decision.source.blockedNodeCount : 0;
@@ -69,6 +65,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         <CardBody
           key={decision.key}
           text={decision.context}
+          titleText={decision.question}
           deliverables={decision.deliverables}
           extra={
             blockedCount > 0 && (
@@ -77,8 +74,8 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
               </p>
             )
           }
-          className="mt-1"
-          textClassName="text-minor text-muted-foreground"
+          className="mt-2"
+          textClassName="text-body leading-relaxed text-foreground"
         />
       </DeviceScopeOf>
 
@@ -96,29 +93,13 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         </div>
       )}
 
-      <div className="mt-2.5 flex items-center gap-2">
-        <Input
-          value={note}
-          disabled={disabled}
-          aria-label="Note or custom reply"
-          placeholder="Add a note, or type a custom reply…"
-          className="min-w-0 flex-1"
-          onChange={(e) => onNoteChange(decision.key, e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-            e.preventDefault();
-            if (canSendCustom) onSubmit(entry, null, note);
-          }}
-        />
-        <Button
-          size="icon"
-          aria-label="Send reply"
-          disabled={!canSendCustom}
-          onClick={() => onSubmit(entry, null, note)}
-        >
-          <ArrowUp className="size-pixel" aria-hidden="true" />
-        </Button>
-      </div>
+      <CardNoteForm
+        value={note}
+        onChange={(next) => onNoteChange(decision.key, next)}
+        disabled={disabled}
+        pending={busy}
+        onSubmitNote={(raw) => onSubmit(entry, null, raw)}
+      />
 
       {error && (
         <div className="mt-2">

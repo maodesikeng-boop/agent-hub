@@ -246,15 +246,15 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
     const { api } = await bootSingle(snap);
     // 右栏果皮轨里检查点只有一行，不出选项和补充框
     const railRow = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-row"));
-    expect(within(sidePanel()).queryByLabelText("Add note")).toBeNull();
+    expect(within(sidePanel()).queryByLabelText("Your reply")).toBeNull();
     expect(within(sidePanel()).queryByText("Recommended")).toBeNull();
     expect(railRow.tagName).toBe("BUTTON");
 
-    // 对话消息流里的检查点 AskCard 展示 Recommended 并默认展开补充输入框，点「打回」带修改意见直调 /decide，不调 /messages
+    // 对话消息流里的检查点 AskCard 展示 Recommended 并常驻回复输入框，点「打回」带修改意见直调 /decide，不调 /messages
     const chatArticle = document.querySelector('[data-message-id="105"]') as HTMLElement;
     const chatCard = chatArticle.querySelector("[data-ask-card]") as HTMLElement;
     expect(within(chatCard).getByText("Recommended")).toBeInTheDocument();
-    const noteInput = within(chatCard).getByLabelText("Add note");
+    const noteInput = within(chatCard).getByLabelText("Your reply");
     await user.type(noteInput, "把缓存淘汰改成 lru-cache");
     await user.click(within(chatCard).getByRole("button", { name: /打回/ }));
 
@@ -328,7 +328,7 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
     // 在对话检查点卡输入框填修改意见并直接点 Send（未点「通过」也未点「打回」）
     const chatArticle = await waitFor(() => document.querySelector('[data-message-id="106"]') as HTMLElement);
     const chatCard = chatArticle.querySelector("[data-ask-card]") as HTMLElement;
-    await user.type(within(chatCard).getByLabelText("Add note"), "补充上限常量到 limits.ts");
+    await user.type(within(chatCard).getByLabelText("Your reply"), "补充上限常量到 limits.ts");
     await user.click(within(chatCard).getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(1));

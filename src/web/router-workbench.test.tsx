@@ -483,7 +483,7 @@ describe("Needs You 托盘", () => {
 
     // 路径 B + 失败回滚：输入备注后点击选项，接口报错时卡片回弹且保留输入的备注并显示中文错误
     failNext = true;
-    await user.type(within(card2).getByPlaceholderText("Add a note, or type a custom reply…"), "补在第 21 节末尾");
+    await user.type(within(card2).getByLabelText("Your reply"), "补在第 21 节末尾");
     await user.click(within(card2).getByRole("button", { name: /立即更新/ }));
     await waitFor(() => expect(within(tray).getByRole("alert")).toHaveTextContent("该待决项已被其他终端处理"));
     const restored = within(tray).getByText("是否同步更新文档？").closest("article")!;
@@ -493,7 +493,7 @@ describe("Needs You 托盘", () => {
     await user.click(within(tray).getByRole("button", { name: /保留多少天历史？/ }));
     expect(tray.querySelectorAll("article")).toHaveLength(1);
     const card3 = within(tray).getByText("保留多少天历史？").closest("article")!;
-    await user.type(within(card3).getByPlaceholderText("Add a note, or type a custom reply…"), "改成 45 天折中{Enter}");
+    await user.type(within(card3).getByLabelText("Your reply"), "改成 45 天折中{Enter}");
     await waitFor(() =>
       expect(localApi.callsTo("POST", /^\/api\/router\/items\/103\/resolve$/)[0]?.body).toMatchObject({ optionIndex: null, note: "改成 45 天折中" }),
     );
@@ -569,8 +569,8 @@ describe("Needs You 托盘", () => {
     expect(within(card1).getByText("Recommended")).toBeInTheDocument();
 
     // 1. 直接输入自定义修改意见并点发送箭头（未选「通过」/「打回」）：路由到远端 Tokyo /decide，本机零请求
-    await user.type(within(card1).getByPlaceholderText("Add a note, or type a custom reply…"), "缓存改用 lru-cache");
-    await user.click(within(card1).getByRole("button", { name: "Send reply" }));
+    await user.type(within(card1).getByLabelText("Your reply"), "缓存改用 lru-cache");
+    await user.click(within(card1).getByRole("button", { name: "Send" }));
     await waitFor(() =>
       expect(tokyoApi!.callsTo("POST", /^\/api\/task-graphs\/5\/nodes\/design\/decide$/)).toHaveLength(1),
     );
@@ -646,7 +646,7 @@ describe("Needs You 托盘", () => {
     await act(async () => releaseResolve!());
   });
 
-  it("补充依据按 Markdown 渲染（段落、编号、子列表、行内代码），第一段是摘要（超过 3 行收起），其余是细节默认收起，Show more / Show less 一起管；托盘不画全宽分割线、滚动区留底边、时间流顶边渐隐；长选项和 Recommended 分开排", async () => {
+  it("补充依据按 Markdown 完整展开（段落、编号、子列表、行内代码），不折叠、不出 Show more；托盘不画全宽分割线、滚动区留底边、时间流顶边渐隐；长选项和 Recommended 分开排", async () => {
     const longContext = [
       "方案文档：`docs/orchestration-skill-design.md`",
       "",
@@ -674,94 +674,53 @@ describe("Needs You 托盘", () => {
       },
     });
     installFleet({ local: localSnap });
-    // jsdom 不排版：摘要框的内容高度按正文行数算（每行 26.4px = 1.65 × 16px，一行 30 字），框高 3 行（收起时）
-    const proto = HTMLElement.prototype;
-    const lines = (el: HTMLElement) => Math.ceil((el.textContent ?? "").length / 30);
-    Object.defineProperty(proto, "scrollHeight", {
-      configurable: true,
-      get(this: HTMLElement) {
-        return this.hasAttribute("data-card-lead") ? lines(this) * 26.4 : 0;
-      },
-    });
-    Object.defineProperty(proto, "clientHeight", {
-      configurable: true,
-      get(this: HTMLElement) {
-        if (!this.hasAttribute("data-card-lead")) return 0;
-        const full = lines(this) * 26.4;
-        return this.classList.contains("card-lead-clamp") ? Math.min(full, 3 * 26.4) : full;
-      },
-    });
-    try {
-      const user = userEvent.setup();
-      await openRouter();
-      const tray = await screen.findByRole("region", { name: "Needs You" });
+    const user = userEvent.setup();
+    await openRouter();
+    const tray = await screen.findByRole("region", { name: "Needs You" });
 
-      // 托盘本身不画横贯主区的线：线在对话列宽的内层；滚动区上下留出渐隐带的内边距，卡片底边不贴着裁剪边
-      expect(tray.className).not.toMatch(/\bborder-b\b/);
-      expect(tray.firstElementChild!.className).toContain("border-b");
-      // 线下留 12px 空白再接时间流的视口，滚上来的字不贴着线
-      expect(tray.className).toContain("pb-3");
-      const scrollBox = tray.querySelector<HTMLElement>(".router-tray-scroll")!;
-      expect(scrollBox.className).toContain("pb-5");
-      expect(scrollBox.className).toContain("pt-2");
-      // 时间流顶边渐隐，内容上内边距和渐隐带一样高
-      expect(timeline().className).toContain("router-timeline");
-      expect(timeline().firstElementChild!.className).toContain("pt-8");
-      // 窄屏表格：最宽是消息列（长说明在列内折行，不在滚动边上切半个字），时间流里前几列短词不折；行内代码折行时两段各自带圆角
-      const css = readFileSync("src/web/styles.css", "utf8");
-      expect(css).toMatch(/\n\.markdown table\s*\{[^}]*max-width:\s*100%/);
-      expect(css).toMatch(/\.router-timeline \.markdown :is\(th, td\):not\(:last-child\)\s*\{[^}]*white-space:\s*nowrap/);
-      expect(css).toMatch(/\n\.markdown code\s*\{[^}]*(?<!-webkit-)box-decoration-break:\s*clone/);
+    // 托盘本身不画横贯主区的线：线在对话列宽的内层；滚动区上下留出渐隐带的内边距，卡片底边不贴着裁剪边
+    expect(tray.className).not.toMatch(/\bborder-b\b/);
+    expect(tray.firstElementChild!.className).toContain("border-b");
+    // 线下留 12px 空白再接时间流的视口，滚上来的字不贴着线
+    expect(tray.className).toContain("pb-3");
+    const scrollBox = tray.querySelector<HTMLElement>(".router-tray-scroll")!;
+    expect(scrollBox.className).toContain("pb-5");
+    expect(scrollBox.className).toContain("pt-2");
+    // 时间流顶边渐隐，内容上内边距和渐隐带一样高
+    expect(timeline().className).toContain("router-timeline");
+    expect(timeline().firstElementChild!.className).toContain("pt-8");
+    // 窄屏表格：最宽是消息列（长说明在列内折行，不在滚动边上切半个字），时间流里前几列短词不折；行内代码折行时两段各自带圆角
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/\n\.markdown table\s*\{[^}]*max-width:\s*100%/);
+    expect(css).toMatch(/\.router-timeline \.markdown :is\(th, td\):not\(:last-child\)\s*\{[^}]*white-space:\s*nowrap/);
+    expect(css).toMatch(/\n\.markdown code\s*\{[^}]*(?<!-webkit-)box-decoration-break:\s*clone/);
 
-      const card = tray.querySelector("article")!;
-      const lead = card.querySelector<HTMLElement>("[data-card-lead]")!;
-      expect(lead).toHaveTextContent("方案文档：docs/orchestration-skill-design.md");
-      expect(lead.className).toContain("text-minor");
-      expect(lead.className).toContain("text-muted-foreground");
-      expect(lead).not.toHaveAttribute("data-overflowing");
-      // 细节默认收起，Show more 展开、Show less 收回
-      expect(card.querySelector("[data-card-details]")).toBeNull();
-      const more = within(card).getByRole("button", { name: "Show more" });
-      expect(more).toHaveAttribute("aria-expanded", "false");
-      expect(more).toHaveAttribute("aria-controls", card.querySelector("[data-card-body]")!.id);
-      await user.click(more);
-      const details = card.querySelector<HTMLElement>("[data-card-details]")!;
-      // Markdown：段落、编号列表、子列表、行内代码都是真的元素，不是一坨纯文本
-      expect(details.querySelector("ol > li")).toHaveTextContent(/拆不拆只看/);
-      expect(details.querySelectorAll("ol > li > ul > li")).toHaveLength(2);
-      expect([...card.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["docs/orchestration-skill-design.md", "fusa-task-graph"]);
-      expect(details.className).toContain("text-muted-foreground");
-      await user.click(within(card).getByRole("button", { name: "Show less" }));
-      expect(card.querySelector("[data-card-details]")).toBeNull();
+    const card = tray.querySelector("article")!;
+    const body = card.querySelector<HTMLElement>("[data-card-body]")!;
+    expect(body).toHaveTextContent("方案文档：docs/orchestration-skill-design.md");
+    expect(within(card).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
+    // Markdown：段落、编号列表、子列表、行内代码完整展开，不折叠
+    expect(body.querySelector("ol > li")).toHaveTextContent(/拆不拆只看/);
+    expect(body.querySelectorAll("ol > li > ul > li")).toHaveLength(2);
+    expect([...card.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["docs/orchestration-skill-design.md", "fusa-task-graph"]);
 
-      // 长选项：键帽、文字、Recommended 顶对齐，Recommended 和文字分开（放得下在右边，放不下换到下面）
-      const recOption = within(card).getByRole("button", { name: new RegExp(longOption) });
-      expect(recOption.className).toContain("items-start");
-      const rec = within(recOption).getByText("Recommended");
-      expect(rec.parentElement!.className).toContain("flex-wrap");
-      expect(rec.previousElementSibling).toHaveTextContent(longOption);
+    // 长选项：键帽、文字、Recommended 顶对齐，Recommended 和文字分开（放得下在右边，放不下换到下面）
+    const recOption = within(card).getByRole("button", { name: new RegExp(longOption) });
+    expect(recOption.className).toContain("items-start");
+    const rec = within(recOption).getByText("Recommended");
+    expect(rec.parentElement!.className).toContain("flex-wrap");
+    expect(rec.previousElementSibling).toHaveTextContent(longOption);
 
-      // 短的不收起、不出按钮；换一张卡展开状态不带过去
-      await user.click(within(tray).getByRole("button", { name: /要不要覆盖手机？/ }));
-      const shortCard = tray.querySelector("article")!;
-      expect(within(shortCard).getByText("只差手机外壳")).toBeInTheDocument();
-      expect(within(shortCard).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
-      expect(shortCard.querySelector("[data-card-lead]")).not.toHaveAttribute("data-overflowing");
+    // 短卡与长卡都完整展示，不出折叠按钮
+    await user.click(within(tray).getByRole("button", { name: /要不要覆盖手机？/ }));
+    const shortCard = tray.querySelector("article")!;
+    expect(within(shortCard).getByText("只差手机外壳")).toBeInTheDocument();
+    expect(within(shortCard).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
 
-      // 摘要超过 3 行：收起、底部渐隐，Show more 放开
-      await user.click(within(tray).getByRole("button", { name: /首页改版要不要上？/ }));
-      const longCard = tray.querySelector("article")!;
-      const longLead = longCard.querySelector<HTMLElement>("[data-card-lead]")!;
-      expect(longLead.className).toContain("card-lead-clamp");
-      expect(longLead).toHaveAttribute("data-overflowing");
-      await user.click(within(longCard).getByRole("button", { name: "Show more" }));
-      expect(longLead.className).not.toContain("card-lead-clamp");
-      expect(longLead).not.toHaveAttribute("data-overflowing");
-    } finally {
-      // 两个 getter 原本在 Element.prototype 上，删掉 HTMLElement.prototype 上的这层就还原了
-      Reflect.deleteProperty(proto, "scrollHeight");
-      Reflect.deleteProperty(proto, "clientHeight");
-    }
+    await user.click(within(tray).getByRole("button", { name: /首页改版要不要上？/ }));
+    const longCard = tray.querySelector("article")!;
+    expect(longCard.querySelector<HTMLElement>("[data-card-body]")).toHaveTextContent("首页改版".repeat(45));
+    expect(within(longCard).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
   });
 
   it("手机外壳下托盘上限降为 45dvh 并保持内部纵向滚动，第一张卡完整展开、其余收成单行", async () => {
@@ -1311,9 +1270,8 @@ describe("时间流：简报、已读、贴底和历史", () => {
     expect(tokyoHead).toHaveTextContent("Tokyo");
     expect(tokyoHead.textContent).not.toMatch(/[·|/]/);
 
-    // 链接行是细节，默认收起（docs/ui-standard.md 第 22 条）。外链是普通行内链接（带图标，不用胶囊）；worker:N 可点；文件路径没有可预览的副本，画成普通文字
-    expect(within(briefings()[1]!).queryByRole("link", { name: /PR #398/ })).toBeNull();
-    await user.click(within(briefings()[1]!).getByRole("button", { name: "Show more" }));
+    // 链接行直接展示在正文下，不再折叠到 Show more。外链是普通行内链接（带图标，不用胶囊）；worker:N 可点；文件路径没有可预览的副本，画成普通文字
+    expect(within(briefings()[1]!).queryByRole("button", { name: "Show more" })).toBeNull();
     const external = within(briefings()[1]!).getByRole("link", { name: /PR #398/ });
     expect(external).toHaveAttribute("href", "https://github.com/example/agent-hub/pull/398");
     expect(external).toHaveAttribute("target", "_blank");
@@ -1993,7 +1951,7 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(trigger.textContent).not.toMatch(/[·|/]/);
     expect(trigger.className).not.toContain("bg-muted");
 
-    // 2. 点开桌面端 Popover：Auto 选中，已就绪厂商可选，未登录厂商灰显 Not signed in 禁用，未安装厂商不塞满列表
+    // 2. 点开桌面端 Popover：Auto 选中，只列可用厂商；未登录与未安装厂商都不出现
     await user.click(trigger);
     const popover = await screen.findByRole("dialog", { name: "Router model" });
     expect(popover).toHaveAttribute("data-slot", "popover-content");
@@ -2005,10 +1963,9 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(group).toHaveClass("grid-cols-1");
     expect(group.parentElement).toHaveClass("grid-cols-1");
     expect(within(group).getByRole("radio", { name: new RegExp(`Auto.*${firstPresetShort}`) })).toHaveAttribute("aria-checked", "true");
-    const signedOutRadio = within(group).getByRole("radio", { name: new RegExp(`${signedOutSpec.label}.*Not signed in`) });
-    expect(signedOutRadio).toBeDisabled();
+    expect(within(group).queryByRole("radio", { name: new RegExp(signedOutSpec.label) })).toBeNull();
     for (const spec of VENDOR_LIST) {
-      if (spec.id !== firstSpec.id && spec.id !== secondSpec.id && spec.id !== signedOutSpec.id) {
+      if (spec.id !== firstSpec.id && spec.id !== secondSpec.id) {
         expect(within(group).queryByRole("radio", { name: new RegExp(spec.label) })).toBeNull();
       }
     }
@@ -2075,8 +2032,8 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(putCalls()[4]!.body).toEqual({ vendor: null, model: null, effort: null });
     expect(screen.getByRole("button", { name: new RegExp(`Router model: Auto ${firstPresetShort}`) })).toBeInTheDocument();
 
-    // 7. 存在未安装/未登录厂商时，点击底部 Manage providers… 关闭 Popover 并打开桌面 Settings → Providers
-    await user.click(within(popover).getByRole("button", { name: "Manage providers…" }));
+    // 7. 固定末尾带 Add provider…：点击关闭 Popover 并打开桌面 Settings → Providers
+    await user.click(within(popover).getByRole("button", { name: "Add provider…" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Router model" })).toBeNull());
     const settingsDialog = await screen.findByRole("dialog", { name: "Settings" });
     expect(within(settingsDialog).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
@@ -2188,8 +2145,8 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(within(updatedTrigger).getByText(secondSpec.label)).toHaveClass("@max-[25rem]/chat:hidden");
     expect(within(updatedTrigger).getByText(secondPresetShort)).toHaveClass("min-w-0", "truncate");
 
-    // 手机端点击 Manage providers… 关闭抽屉并钻取进入 #/settings/providers
-    await user.click(within(drawer).getByRole("button", { name: "Manage providers…" }));
+    // 手机端点击 Add provider… 关闭抽屉并钻取进入 #/settings/providers
+    await user.click(within(drawer).getByRole("button", { name: "Add provider…" }));
     await waitFor(() => expect(window.location.hash).toBe("#/settings/providers"));
   });
 });

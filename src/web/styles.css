@@ -327,17 +327,6 @@ input[type="search"]::-webkit-search-cancel-button {
 .router-timeline .markdown :is(th, td):not(:last-child) {
   white-space: nowrap;
 }
-[data-card-lead] {
-  --card-lead-lines: 3;
-}
-.card-lead-clamp {
-  max-height: calc(var(--card-lead-lines) * 1.65em);
-  overflow: hidden;
-}
-.card-lead-clamp[data-overflowing] {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
-}
 [data-brief] {
   --brief-lines: 8;
 }

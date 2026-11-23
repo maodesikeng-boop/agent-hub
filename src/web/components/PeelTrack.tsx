@@ -168,27 +168,18 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   graphId,
   node,
   client,
-  onNoteToggle,
 }: {
   graphId: TaskGraphId;
   node: TaskNode;
   client: HubClient;
-  onNoteToggle?: (open: boolean) => void;
 }) {
   const qc = useHubQueryClient();
   const hasOptions = node.gateOptions.length > 0;
-  const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(node.gateCheckpoint));
   const [noteRev, setNoteRev] = useState(0);
   const noteRef = useRef("");
   const [err, setErr] = useState<ErrorLike | null>(null);
   const clientIdRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
-
-  useEffect(() => {
-    if (!hasOptions || node.gateCheckpoint) {
-      setNoteOpen(true);
-    }
-  }, [hasOptions, node.gateCheckpoint, node.gateAskMessageId]);
 
   const decideMutation = useMutation(
     {
@@ -234,6 +225,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
       {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
         text={node.gateSummaryMd ?? ""}
+        titleText={node.gateQuestion ?? ""}
         deliverables={node.artifact?.deliverables}
         className="mb-2"
         textClassName="text-minor leading-relaxed text-foreground"
@@ -262,29 +254,17 @@ export const GateDecisionCard = memo(function GateDecisionCard({
           })}
         </div>
       )}
-      {!noteOpen && hasOptions ? (
-        <button
-          type="button"
-          onClick={() => {
-            setNoteOpen(true);
-            onNoteToggle?.(true);
-          }}
-          className="mt-2 inline-flex min-h-7 pointer-coarse:min-h-11 cursor-pointer items-center px-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
-        >
-          Add note
-        </button>
-      ) : (
-        <CardNoteForm
-          disabled={decideMutation.isPending}
-          pending={decideMutation.isPending}
-          resetRev={noteRev}
-          noteRef={noteRef}
-          onSubmitNote={(raw) => submit(null, raw)}
-          className={cn("flex items-center gap-2", hasOptions && "mt-2.5")}
-          inputClassName="min-w-0 flex-1 text-minor"
-          buttonSize="sm"
-        />
-      )}
+      <CardNoteForm
+        disabled={decideMutation.isPending}
+        pending={decideMutation.isPending}
+        resetRev={noteRev}
+        noteRef={noteRef}
+        onSubmitNote={(raw) => submit(null, raw)}
+        tone="open"
+        className={hasOptions ? "mt-3" : "mt-2"}
+        inputClassName="min-w-0 flex-1 text-minor"
+        buttonSize="sm"
+      />
       {err !== null && (
         <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
           {errorLine(err)}

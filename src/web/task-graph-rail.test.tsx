@@ -342,11 +342,11 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     expect(typeof calls[0]!.body.clientId).toBe("string");
     first.unmount();
 
-    // 2) 点选 + 补充备注
+    // 2) 点选 + 常驻回复框补充备注（不再需要先点 Add note）
     openDialog(6);
     const secondCard = screen.getByTestId("peel-gate-card");
-    await user.click(within(secondCard).getByRole("button", { name: "Add note" }));
-    const noteInput = within(secondCard).getByPlaceholderText("Add a note, or type a custom reply…");
+    expect(within(secondCard).queryByRole("button", { name: "Add note" })).toBeNull();
+    const noteInput = within(secondCard).getByLabelText("Your reply");
     await user.type(noteInput, "备份放到 .bak 目录");
     await user.click(within(secondCard).getByRole("button", { name: /仅同步无冲突项/ }));
     await waitFor(() => expect(calls).toHaveLength(2));

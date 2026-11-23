@@ -271,14 +271,27 @@ describe("Worker 线程卡（ThreadCard）", () => {
 });
 
 describe("系统行", () => {
-  it("建项目、挂文件夹：靠左很淡的一行（12px、灰），不居中、没有底色", () => {
-    const { container } = list([makeSystemMessage({ id: 1, text: "项目已建好" })]);
+  it("建项目、挂文件夹：结构化活动条靠左展示（带标签与 2px 边），不居中、没有灰气泡", () => {
+    const { container } = list([makeSystemMessage({ id: 1, text: "项目已建好", event: { event: "project.created", projectId: 1 } })]);
     const notice = screen.getByText("项目已建好").closest("[data-notice]") as HTMLElement;
     expect(notice).toHaveAttribute("data-side", "left");
-    expect(notice.className).toContain("text-xs");
-    expect(notice.className).toContain("text-muted-foreground");
-    expect(container.innerHTML).not.toContain("justify-center");
+    expect(within(notice).getByText("Project")).toBeInTheDocument();
+    expect(notice.parentElement?.className).toContain("border-2");
+    expect(notice.parentElement?.className).toContain("bg-panel");
+    expect(notice.className).not.toContain("justify-center");
     expect(container.innerHTML).not.toContain("bg-muted");
+  });
+
+  it("连续同族系统事件合并在同一个活动条容器里，不重复画外边框", () => {
+    const { container } = list([
+      makeSystemMessage({ id: 1, text: "挂上了文件夹：/repo", event: { event: "folder.attached", projectId: 1, folderId: 1, path: "/repo" } }),
+      makeSystemMessage({ id: 2, text: "项目经理改了性格设定", event: { event: "persona.changed", pmId: 1, personaChangeId: 1, revertOf: null } }),
+    ]);
+    const groups = container.querySelectorAll("[data-event-group]");
+    expect(groups).toHaveLength(1);
+    expect(within(groups[0] as HTMLElement).getByText("Folder")).toBeInTheDocument();
+    expect(within(groups[0] as HTMLElement).getByText("Persona")).toBeInTheDocument();
+    expect(within(groups[0] as HTMLElement).getByRole("button", { name: "Undo" })).toBeInTheDocument();
   });
 
   it("不在一轮里的派出、收工：很淡的一行，点开 Worker", async () => {

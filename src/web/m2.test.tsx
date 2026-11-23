@@ -275,7 +275,7 @@ describe("New project manager", () => {
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
     // 打包的名单列出名单里的每一家厂商：显示厂商下拉（默认 Claude Code）；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
     const vendor = within(dialog).getByRole("combobox", { name: "Provider" });
-    expect(await readOptions(user, vendor)).toEqual(VENDOR_LABELS);
+    expect(await readOptions(user, vendor)).toEqual([...VENDOR_LABELS, "Add provider…"]);
     expect(vendor).toHaveTextContent("Claude Code");
     const model = within(dialog).getByRole("combobox", { name: "Model" });
     const effort = within(dialog).getByRole("combobox", { name: "Effort" });
@@ -530,8 +530,7 @@ describe("撤销性格设定修改", () => {
     const ws = await boot(makeSnapshot());
     push(ws, messageChange(11, "message.created", changed(3, 42)));
     const revert = within(log()).getByRole("button", { name: "Undo" });
-    // 暖棕色文字链接，不用主色；悬停加下划线
-    expect(revert).toHaveClass("text-rail-ink", "hover:underline");
+    expect(revert.className).toContain("border-border-strong");
     expect(revert.className).not.toMatch(/primary/);
     await user.click(revert);
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/persona-changes\/42\/revert$/)).toHaveLength(1));
@@ -919,7 +918,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
     // 打包的名单列出名单里的每一家厂商：显示厂商下拉（默认 Claude Code）
     const vendor = combo(page, "Provider");
-    expect(await readOptions(user, vendor)).toEqual(VENDOR_LABELS);
+    expect(await readOptions(user, vendor)).toEqual([...VENDOR_LABELS, "Add provider…"]);
     expect(vendor).toHaveTextContent("Claude Code");
     expect(await readOptions(user, combo(page, "Model"))).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
     expect(combo(page, "Model")).toHaveTextContent("Haiku");
@@ -1574,25 +1573,26 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     return within(dialog).getByRole("region", { name: "Model" });
   };
 
-  it("两家厂商：厂商是下拉，列名单里的厂商名；换到另一家，模型、思考程度换成那家的", async () => {
+  it("两家厂商：厂商是下拉，列名单里的厂商名加末尾 Add provider…；换到另一家，模型、思考程度换成那家的", async () => {
     const user = userEvent.setup();
     await boot();
     api.models = () => ({ status: 200, body: { catalogs: [CLAUDE_CATALOG, FAKE_VENDOR] } });
     const group = await openMore(user);
     const vendor = await within(group).findByRole("combobox", { name: "Provider" });
-    expect(await readOptions(user, vendor)).toEqual(["Claude Code", "FakeCo Agent"]);
+    expect(await readOptions(user, vendor)).toEqual(["Claude Code", "FakeCo Agent", "Add provider…"]);
     await pickOption(user, vendor, "FakeCo Agent");
     expect(await readOptions(user, within(group).getByRole("combobox", { name: "Model" }))).toEqual(["Fake Large (default)", "Fake Large"]);
     expect(await readOptions(user, within(group).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "quick", "deep"]);
   });
 
-  it("只有一家：厂商一行只显示名单里的厂商名（换个名字也跟着变），不是下拉", async () => {
+  it("只有一家可用：厂商下拉仍提供 Add provider… 入口，显示名单里的厂商名", async () => {
     const user = userEvent.setup();
     await boot();
     api.models = () => ({ status: 200, body: { catalogs: [{ ...CLAUDE_CATALOG, label: "Claude Code Next", efforts: ["low", "max"] }] } });
     const group = await openMore(user);
-    expect(await within(group).findByText("Claude Code Next")).toBeInTheDocument();
-    expect(within(group).queryByRole("combobox", { name: "Provider" })).not.toBeInTheDocument();
+    const vendor = await within(group).findByRole("combobox", { name: "Provider" });
+    expect(vendor).toHaveTextContent("Claude Code Next");
+    expect(await readOptions(user, vendor)).toEqual(["Claude Code Next", "Add provider…"]);
     // 默认模型那项名单没说思考程度：用这家自己的通用档位
     await waitFor(async () => expect(await readOptions(user, within(group).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "Low", "Max"]));
   });
@@ -1624,16 +1624,16 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
   const openOptions = () => within(screen.getByRole("listbox")).getAllByRole("option");
   const optionNamed = (text: string) => openOptions().find((o) => o.textContent === text)!;
 
-  it("没装的不出现；没登录的灰掉、后面标 Not signed in", async () => {
+  it("没装与没登录的都不出现；末尾带 Add provider… 入口", async () => {
     const user = userEvent.setup();
     await boot();
     api.models = () => ({ status: 200, body: { catalogs: [CLAUDE_CATALOG, agy("not_installed"), codex("signed_out")] } });
     const { group } = await openDialog(user);
     const vendor = await within(group).findByRole("combobox", { name: "Provider" });
     await user.click(vendor);
-    expect(openOptions().map((o) => o.textContent)).toEqual(["Claude Code", "Codex (Not signed in)"]);
-    expect(optionNamed("Codex (Not signed in)")).toHaveAttribute("aria-disabled", "true");
+    expect(openOptions().map((o) => o.textContent)).toEqual(["Claude Code", "Add provider…"]);
     expect(optionNamed("Claude Code")).not.toHaveAttribute("aria-disabled", "true");
+    expect(optionNamed("Add provider…")).not.toHaveAttribute("aria-disabled", "true");
   });
 
   it("打开厂商下拉时在后台只重问不能用的（?refresh=unusable），下拉不等；登录好了回来就能选", async () => {
@@ -1651,11 +1651,10 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
     const vendor = await within(group).findByRole("combobox", { name: "Provider" });
     await user.click(vendor);
     await waitFor(() => expect(api.calls.filter((c) => c.path === "/api/models" && c.query.get("refresh") === "unusable")).toHaveLength(1));
-    // 还没回来：下拉照旧可用，没登录那项还是灰的
     expect(vendor).toBeEnabled();
-    expect(optionNamed("Codex (Not signed in)")).toHaveAttribute("aria-disabled", "true");
+    expect(openOptions().map((o) => o.textContent)).toEqual(["Claude Code", "Add provider…"]);
     release();
-    await waitFor(() => expect(openOptions().map((o) => o.textContent)).toEqual(["Claude Code", "Codex"]));
+    await waitFor(() => expect(openOptions().map((o) => o.textContent)).toEqual(["Claude Code", "Codex", "Add provider…"]));
     expect(optionNamed("Codex")).not.toHaveAttribute("aria-disabled", "true");
   });
 
@@ -1703,7 +1702,7 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "小王");
     const vendor = await within(group).findByRole("combobox", { name: "Provider" });
     await waitFor(() => expect(vendor).toHaveTextContent("Claude Code (Not installed)"));
-    expect(await readOptions(user, vendor)).toEqual(["Claude Code (Not installed)", "Codex"]);
+    expect(await readOptions(user, vendor)).toEqual(["Claude Code (Not installed)", "Codex", "Add provider…"]);
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
     await pickOption(user, vendor, "Codex");
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeEnabled();

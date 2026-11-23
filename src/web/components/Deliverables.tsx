@@ -1,7 +1,8 @@
-import { FileText, Loader2, Play } from "../ui/icons.ts";
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
-import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, splitLead, type Deliverable, type SentFile } from "../../shared/index.ts";
+import { FileText, Loader2, PencilLine, Play, Send } from "../ui/icons.ts";
+import { memo, useId, useMemo, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
+import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, type Deliverable, type SentFile } from "../../shared/index.ts";
 import { DELIVERABLE_MEDIA_HEIGHT_REM } from "../deliverable-size.ts";
+import { layoutCardDeliverables } from "../deliverables-layout.ts";
 import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
@@ -51,7 +52,7 @@ function MediaThumb({ item }: { item: Deliverable }) {
         aria-label={item.label}
         onClick={() => setOpen(true)}
         className={cn(
-          "relative h-(--deliverable-media-height) shrink-0 overflow-hidden border-2 border-border-strong bg-panel outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
+          "relative box-content h-(--deliverable-media-height) shrink-0 overflow-hidden border-2 border-border-strong bg-panel outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
           video ? "cursor-pointer" : "cursor-zoom-in",
         )}
       >
@@ -89,7 +90,7 @@ export const DeliverableFiles = memo(function DeliverableFiles({ deliverables, c
         </div>
       )}
       {media.length > 0 && (
-        <div data-deliverable-media className="flex gap-2 overflow-x-auto">
+        <div data-deliverable-media className="flex flex-wrap gap-2">
           {media.map((item) => (
             <MediaThumb key={item.id} item={item} />
           ))}
@@ -100,13 +101,10 @@ export const DeliverableFiles = memo(function DeliverableFiles({ deliverables, c
 });
 
 const NO_DELIVERABLES: readonly Deliverable[] = [];
-const DETAILS_ONE_LINE_MAX_EM = 2.4;
-const LEAD_LINE_HEIGHT_EM = 1.65;
-const LEAD_FALLBACK_LINES = 3;
-const FALLBACK_FONT_PX = 16;
 
 export const CardBody = memo(function CardBody({
   text,
+  titleText = "",
   deliverables = NO_DELIVERABLES,
   extra,
   files = sentFilesOfDeliverables(deliverables),
@@ -115,6 +113,7 @@ export const CardBody = memo(function CardBody({
   textClassName,
 }: {
   text: string;
+  titleText?: string;
   deliverables?: readonly Deliverable[] | undefined;
   extra?: ReactNode;
   files?: SentFile[];
@@ -122,84 +121,30 @@ export const CardBody = memo(function CardBody({
   className?: string;
   textClassName?: string;
 }) {
-  const { lead, details } = useMemo(() => splitLead(text), [text]);
+  const layout = useMemo(
+    () => layoutCardDeliverables(text, deliverables, titleText),
+    [text, deliverables, titleText],
+  );
   const hasExtra = extra !== undefined && extra !== null && extra !== false;
-  const hasDetails = details !== "" || hasExtra;
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const [width, setWidth] = useState(0);
-  const [fit, setFit] = useState<{ key: string; oneLine: boolean } | null>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const leadRef = useRef<HTMLDivElement>(null);
-  const detailsRef = useRef<HTMLDivElement>(null);
-  const id = useId();
-  const fitKey = `${width}\u0000${hasExtra}\u0000${details}`;
-  const oneLine = fit?.key === fitKey ? fit.oneLine : null;
-  const showDetails = hasDetails && (expanded || oneLine !== false);
+  if (layout.segments.length === 0 && layout.trailing.length === 0 && !hasExtra) return null;
 
-  useLayoutEffect(() => {
-    const box = leadRef.current;
-    if (box === null || expanded) return;
-    const measure = () => {
-      const style = getComputedStyle(box);
-      const lineHeight = LEAD_LINE_HEIGHT_EM * (Number.parseFloat(style.fontSize) || FALLBACK_FONT_PX);
-      const lines = Number.parseInt(style.getPropertyValue("--card-lead-lines"), 10) || LEAD_FALLBACK_LINES;
-      setOverflowing(box.scrollHeight > (lines + 1) * lineHeight + 1);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(box);
-    if (box.firstElementChild !== null) observer.observe(box.firstElementChild);
-    return () => observer.disconnect();
-  }, [expanded, lead]);
-
-  useLayoutEffect(() => {
-    const box = bodyRef.current;
-    if (box === null) return;
-    const observer = new ResizeObserver(() => setWidth(Math.round(box.clientWidth)));
-    observer.observe(box);
-    return () => observer.disconnect();
-  }, []);
-
-  useLayoutEffect(() => {
-    const box = detailsRef.current;
-    if (oneLine !== null || box === null) return;
-    const height = box.getBoundingClientRect().height;
-    const fontPx = Number.parseFloat(getComputedStyle(box).fontSize) || FALLBACK_FONT_PX;
-    setFit({ key: fitKey, oneLine: height > 0 && height < DETAILS_ONE_LINE_MAX_EM * fontPx });
-  });
-
-  if (lead === "" && !hasDetails && deliverables.length === 0) return null;
   return (
-    <div ref={bodyRef} id={id} data-card-body className={cn("flex min-w-0 flex-col items-start gap-2", className)}>
-      {lead !== "" && (
-        <div
-          ref={leadRef}
-          data-card-lead
-          data-overflowing={overflowing && !expanded ? "" : undefined}
-          className={cn("w-full min-w-0", textClassName, overflowing && !expanded && "card-lead-clamp")}
-        >
-          <Markdown text={lead} files={files} messageId={messageId} />
+    <div data-card-body className={cn("flex min-w-0 flex-col items-start gap-2", className)}>
+      {layout.segments.map((segment, index) => (
+        <div key={index} className="flex w-full min-w-0 flex-col gap-1.5">
+          <div className={cn("w-full min-w-0", textClassName)}>
+            <Markdown text={segment.markdown} files={files} messageId={messageId} />
+          </div>
+          {segment.deliverables.length > 0 && (
+            <DeliverableFiles
+              deliverables={segment.deliverables}
+              className={cn("w-full", segment.isListItem && "border-l-2 border-border-strong pl-3")}
+            />
+          )}
         </div>
-      )}
-      <DeliverableFiles deliverables={deliverables} className="w-full" />
-      {showDetails && (
-        <div ref={detailsRef} data-card-details className={cn("flex w-full min-w-0 flex-col gap-2", textClassName)}>
-          {details !== "" && <Markdown text={details} files={files} messageId={messageId} />}
-          {extra}
-        </div>
-      )}
-      {((hasDetails && oneLine === false) || overflowing) && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={id}
-          className="touch-target inline-flex cursor-pointer items-center text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      )}
+      ))}
+      <DeliverableFiles deliverables={layout.trailing} className="w-full" />
+      {hasExtra && <div className={cn("flex w-full min-w-0 flex-col gap-2", textClassName)}>{extra}</div>}
     </div>
   );
 });
@@ -207,56 +152,81 @@ export const CardBody = memo(function CardBody({
 export function CardNoteForm({
   disabled,
   pending,
-  resetRev,
+  value: controlledValue,
+  onChange: controlledOnChange,
+  resetRev = 0,
   noteRef,
   onSubmitNote,
-  className = "mt-2.5 flex items-center gap-2",
-  inputClassName = "min-w-0 flex-1",
+  tone = "default",
+  className,
+  inputClassName,
   buttonSize,
 }: {
   disabled: boolean;
   pending: boolean;
-  resetRev: number;
-  noteRef: MutableRefObject<string>;
+  value?: string;
+  onChange?: (value: string) => void;
+  resetRev?: number;
+  noteRef?: MutableRefObject<string>;
   onSubmitNote: (rawNote: string) => void;
+  tone?: "default" | "open";
   className?: string;
   inputClassName?: string;
   buttonSize?: "sm";
 }) {
+  const id = useId();
   const [trackedRev, setTrackedRev] = useState(resetRev);
-  const [note, setNote] = useState("");
-  if (trackedRev !== resetRev) {
+  const [localNote, setLocalNote] = useState("");
+  if (controlledValue === undefined && trackedRev !== resetRev) {
     setTrackedRev(resetRev);
-    setNote("");
+    setLocalNote("");
   }
+  const note = controlledValue ?? localNote;
+  const setNote = (next: string) => {
+    if (noteRef !== undefined) noteRef.current = next;
+    if (controlledOnChange !== undefined) controlledOnChange(next);
+    else setLocalNote(next);
+  };
+  const canSend = !disabled && note.trim() !== "";
   return (
-    <div className={className}>
-      <Input
-        value={note}
-        disabled={disabled}
-        onChange={(e) => {
-          noteRef.current = e.target.value;
-          setNote(e.target.value);
-        }}
-        placeholder="Add a note, or type a custom reply…"
-        aria-label="Add note"
-        className={inputClassName}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
-            e.preventDefault();
-            onSubmitNote(note);
-          }
-        }}
-      />
-      <Button
-        type="button"
-        {...(buttonSize !== undefined ? { size: buttonSize } : {})}
-        disabled={disabled || note.trim() === ""}
-        onClick={() => onSubmitNote(note)}
-      >
-        {pending && <Loader2 className="size-pixel-sm" aria-hidden="true" />}
-        Send
-      </Button>
+    <div
+      data-card-reply
+      className={cn(
+        "mt-3 border-2 p-2.5",
+        tone === "open" ? "border-open-line bg-background/85" : "border-border-strong bg-panel",
+        className,
+      )}
+    >
+      <label htmlFor={id} className="mb-1.5 flex items-center gap-1.5 text-minor font-medium text-foreground">
+        <PencilLine className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />
+        <span>Your reply</span>
+      </label>
+      <div className="flex items-center gap-2">
+        <Input
+          id={id}
+          value={note}
+          disabled={disabled}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Reply or note…"
+          className={cn("min-w-0 flex-1 bg-background", buttonSize === "sm" && "h-8", inputClassName)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && canSend) {
+              e.preventDefault();
+              onSubmitNote(note);
+            }
+          }}
+        />
+        <Button
+          type="button"
+          {...(buttonSize !== undefined ? { size: buttonSize } : {})}
+          disabled={!canSend}
+          onClick={() => onSubmitNote(note)}
+          className="shrink-0"
+        >
+          {pending ? <Loader2 className="size-pixel-sm" aria-hidden="true" /> : <Send className="size-pixel-sm" aria-hidden="true" />}
+          Send
+        </Button>
+      </div>
     </div>
   );
 }

@@ -1,18 +1,19 @@
 import { ChevronDown } from "../ui/icons.ts";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId, type PersonaChangeId } from "../../shared/index.ts";
-import { groupMessages, type RenderItem } from "../selectors.ts";
+import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
+import { groupMessageRows, type DisplayRow } from "../system-events.ts";
 import { Button } from "../ui/button.tsx";
 import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
 import { useFocusMessage, useVirtualRows } from "../useVirtualRows.ts";
-import { EmptyConversation, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
+import { EmptyConversation, EventGroupView, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
 const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
 
 interface RowContext {
-  items: RenderItem[];
+  items: readonly DisplayRow[];
   pending: PendingMessage[];
   agentOf: (message: Message) => AgentIdentity;
   onRetry: (clientId: string) => void;
@@ -25,6 +26,9 @@ interface RowContext {
 function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus }: RowContext): React.ReactNode {
   const item = items[index];
   if (item === undefined) return <PendingBubble pending={pending[index - items.length]!} onRetry={onRetry} />;
+  if (item.kind === "event_group") {
+    return <EventGroupView family={item.family} messages={item.messages} actions={actions} revertedChanges={revertedChanges} />;
+  }
   if (item.kind === "turn") {
     const first = item.work[0] ?? item.parts[0]!;
     const live = index === items.length - 1 ? lastTurnStatus : null;
@@ -84,7 +88,7 @@ export const MessageList = memo(function MessageList({
   statusAgent?: AgentIdentity;
   streamingText?: string | null;
 }) {
-  const items = useMemo(() => groupMessages(messages), [messages]);
+  const items = useMemo(() => groupMessageRows(groupMessages(messages)), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null || Boolean(streamingText);
   const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}`;
@@ -103,13 +107,20 @@ export const MessageList = memo(function MessageList({
     (index: number) => {
       const item = items[index];
       if (item === undefined) return `pending:${pending[index - items.length]!.clientId}`;
-      return item.kind === "turn" ? item.key : `message:${item.message.id}`;
+      return item.kind === "message" ? `message:${item.message.id}` : item.key;
     },
     [items, pending],
   );
   const { virtualizer, onFocus, onBlur } = useVirtualRows({ scrollRef: ref, listRef, count, getItemKey, headLayoutKey: `${hasMore}:${older}:${items.length === 0}` });
   const indexOf = useCallback(
-    (id: MessageId) => items.findLastIndex((item) => (item.kind === "turn" ? [...item.work, ...item.parts].some((m) => m.id === id) : item.message.id === id)),
+    (id: MessageId) =>
+      items.findLastIndex((item) =>
+        item.kind === "turn"
+          ? [...item.work, ...item.parts].some((m) => m.id === id)
+          : item.kind === "event_group"
+            ? item.messages.some((m) => m.id === id)
+            : item.message.id === id,
+      ),
     [items],
   );
   const highlightId = useFocusMessage({ scrollRef: ref, virtualizer, focus, onFocusDone, indexOf });
@@ -131,7 +142,9 @@ export const MessageList = memo(function MessageList({
       return { key: userMessageDedupeKey(p.conversationId, p.clientId), turn: false };
     }
     const item = items[index]!;
-    return item.kind === "turn" ? { key: item.key, turn: true } : { key: item.message.dedupeKey, turn: false };
+    if (item.kind === "turn") return { key: item.key, turn: true };
+    if (item.kind === "event_group") return { key: item.key, turn: false };
+    return { key: item.message.dedupeKey, turn: false };
   };
   const enterRows = () => ({
     row: (index: number) => listRef.current?.querySelector(`:scope > [data-index="${index}"]`)?.firstElementChild,

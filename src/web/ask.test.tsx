@@ -141,8 +141,9 @@ describe("右栏的“等你确定”", () => {
 
   it("在输入框里发一条普通消息：右栏的提问还在（发消息不回答任何卡），发送中、发完都一样", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION })]));
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "用 A" } });
-    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    const composer = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.change(composer, { target: { value: "用 A" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
     expect(askRows()).toHaveLength(1);
     await waitFor(() => expect(api.calls.some((c) => c.path === "/api/conversations/1/messages")).toBe(true));
     expect(askRows()).toHaveLength(1);
@@ -337,10 +338,10 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(within(card3).queryAllByRole("button").filter((b) => b.hasAttribute("data-ask-option"))).toEqual([]);
   });
 
-  it("没有选项的独立提问也是一张卡：补充框直接展开，填一句回车只回答这一张；回答后卡变只读", async () => {
+  it("没有选项的独立提问也是一张卡：回复框直接展开，填一句回车只回答这一张；回答后卡变只读", async () => {
     await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" }), ask({ id: 4, text: "请接电源", meta: { needsUser: true, options: ["已接", "不接"] } })]));
     const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
-    const input = within(card).getByRole("textbox", { name: "Add note" });
+    const input = within(card).getByRole("textbox", { name: "Your reply" });
     fireEvent.change(input, { target: { value: "按第二种来" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() =>
@@ -349,7 +350,7 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
-    await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Add note" })).toBeNull());
+    await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Your reply" })).toBeNull());
     expect(card.querySelector("[data-ask-answer]")).toHaveTextContent("按第二种来");
     const other = document.querySelector('[data-message-id="4"] [data-ask-card]') as HTMLElement;
     for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
@@ -378,10 +379,10 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     }
   });
 
-  it("补充框和同排的 Send 按钮同一档高度（36px），输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
+  it("回复框和同排的 Send 按钮同一档高度（36px），输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
     await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" })]));
     const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
-    const input = within(card).getByRole("textbox", { name: "Add note" });
+    const input = within(card).getByRole("textbox", { name: "Your reply" });
     const send = within(card).getByRole("button", { name: "Send" });
     expect(input).toHaveClass("h-9", "text-body");
     expect(input).not.toHaveClass("text-minor");
@@ -420,11 +421,11 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
   });
 
-  it("没点选项、在卡上填一句话回车：也只回答这一张卡（note）", async () => {
+  it("没点选项、在常驻回复框里填一句话回车：直接回答这一张卡（无需先点 Add note）", async () => {
     await boot(twoPms([ask({ id: 1, text: "请接电源", meta: { needsUser: true, options: ["已接", "不接"] } })]));
     const card = document.querySelector('[data-message-id="1"] [data-ask-card]') as HTMLElement;
-    fireEvent.click(within(card).getByRole("button", { name: "Add note" }));
-    const input = within(card).getByRole("textbox", { name: "Add note" });
+    expect(within(card).queryByRole("button", { name: "Add note" })).toBeNull();
+    const input = within(card).getByRole("textbox", { name: "Your reply" });
     fireEvent.change(input, { target: { value: "已经接上了" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() =>
