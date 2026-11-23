@@ -1,12 +1,14 @@
 # Workbench shell design
 
-The web workbench moves to one layout and one visual language. A fixed honey-yellow rail holds Router, the linked computers, usage, Settings, and the account. A cream column lists the selected computer's Project Managers, with a pinned group on top. The conversation sits on one white sheet, and a warm-gray side panel to its right shows Pieces, a Worker, or the PM's settings. Columns resize within limits, and every control uses square pixel corners, 2px lines, and pixelarticons.
+The web workbench moves to one layout and one visual language. A fixed honey-yellow rail holds Router, the linked computers, usage, Settings, and the account. A cream column lists the selected computer's Project Managers, with a pinned group on top. The conversation sits on one white sheet, and a warm-gray side panel to its right shows Pieces, a Worker, or the PM's settings. Columns resize within limits. Pixel art marks the characters, avatars, and brand pieces, and controls use smooth line icons and plain borders.
+
+**Revision after review.** On 2026-11-23 the user approved this plan, chose (a) for both open choices, and asked for changes that override the control styling in section 3. Button icons, switches, select arrows, and button and frame borders drop the pixel corners and pixel icons for smooth lines and plain borders. Usage shows as an hourglass, and device icons follow the device type for macOS, Windows, Linux, iPhone, and Android. The first implementation step rewrites the affected parts of section 3 and the UI standard table. The review also adds work on decision cards, the settings pages, and the usage popover.
 
 ## For the user
 
 ### Files to review
 
-- [Workbench shell design](workbench-shell-design.md): this document. It covers the layout, the visual tokens, resizing, narrow windows, the phone, pinning, what gets deleted, and how the implementation splits into two steps.
+- [Workbench shell design](workbench-shell-design.md): this document. It covers the layout, the visual tokens, resizing, narrow windows, the phone, pinning, what gets deleted, and the order of the implementation steps.
 - [`src/web/shell-layout.ts`](../src/web/shell-layout.ts): how the columns give way when the window narrows.
 - [`src/web/pane-widths.ts`](../src/web/pane-widths.ts): where column widths are remembered.
 - [`src/web/project-list.ts`](../src/web/project-list.ts): how the PM column orders pinned, active, and archived PMs.
@@ -16,8 +18,10 @@ The web workbench moves to one layout and one visual language. A fixed honey-yel
 
 ### Decisions needed
 
-1. Switching computers on a phone. (a) Three fixed bottom tabs, Router, Projects, and Settings, where the Projects header names the computer and opens a computer list, the same header as the desktop PM column. (b) One bottom tab per computer, as first discussed. Recommendation: (a). The tab bar keeps the same three tabs whether you link one computer or five, and a phone never runs out of room for tabs.
-2. The Router page on a computer. (a) Router fills the whole sheet and the PM column is hidden. (b) The last computer's PM column stays beside Router. Recommendation: (a). Router answers for every computer at once, so one computer's list beside it suggests a scope it does not have, and the rail reaches any computer in one click.
+None. The user settled both open choices on 2026-11-23 by picking the recommended option:
+
+1. Switching computers on a phone uses three fixed bottom tabs, Router, Projects, and Settings, and the Projects header opens the computer list, the same header as the desktop PM column. One tab per computer was rejected, because the tab count would change with every computer and run out of room.
+2. On a computer, Router fills the whole sheet and the PM column is hidden. Router answers for every computer at once, and the rail reaches any computer in one click.
 
 ## For Workers and reviewers
 
@@ -37,6 +41,17 @@ Original user requests, verbatim and in order. Messages that compared the layout
 10. Summarized: columns should be draggable, with an upper limit.
 11. After prototype v1: "就 a 比较好"
 12. On the start card: "开工，其余按推荐"
+
+After reviewing this plan on 2026-11-23. "排版" and "拍版" are typos for "拍板", making a decision.
+
+13. "需要我排版的事情每次都显示的不完全还需要展开？"
+14. "这个信息排布的方式也不是很好，把交付文件都放在了最后，应该还是嵌入相关的文字最好"
+15. "我拍版的时候说实话这个我自己说话这一栏是最重要的，但是现在就是一个小小的add note，不清晰"
+16. "按钮内部的图像的线不需要像素，还有这些也是，设置页面的功能对齐，现在的设置页面做的很不好"
+17. "不懂的人看不懂在干嘛，尤其是resources"
+18. "界面统一出的方案是好看的，这些线框边缘的像素画就没必要了，这些地方的"
+19. "额度还是用沙漏，设计页面的时候不要把这种额度页面忘记检查了，这个额度页面做的不好目前，也要改"
+20. "给不同种类的设备使用不同的图标，主流的就行"
 
 The workbench ends up with one visual language and the layout the user approved in prototype v1, option A. The three main screens match v1: the PM conversation, a Worker opened in the side panel, and PM settings in the side panel. The Router page, the settings dialog, narrow windows, and the phone use the same language. Columns resize within limits and remember their widths, and PMs can be pinned.
 
@@ -223,7 +238,7 @@ Recommendation: a `pm_pins` table on each computer's ledger, `(pm_id INTEGER PRI
 
 #### Phone
 
-The rail becomes a bottom tab bar, `4rem` tall plus the safe area, in rail colors and cell styles. It shows on the three top-level pages, `#/` for Projects, `#/router`, and `#/settings`, and hides on pushed pages and while the keyboard is open. Projects uses `ProjectList` in its page layout, and its header opens `ComputerSwitcher` as a bottom drawer. Usage moves to the top of the Settings home. Worker and PM settings pages use `--panel` and the side panel's header. Decision 1 above covers the alternative of one tab per computer.
+The rail becomes a bottom tab bar, `4rem` tall plus the safe area, in rail colors and cell styles. It shows on the three top-level pages, `#/` for Projects, `#/router`, and `#/settings`, and hides on pushed pages and while the keyboard is open. Projects uses `ProjectList` in its page layout, and its header opens `ComputerSwitcher` as a bottom drawer. Usage moves to the top of the Settings home. Worker and PM settings pages use `--panel` and the side panel's header. The user chose these three fixed tabs over one tab per computer.
 
 #### Hover shortcuts on list rows
 
@@ -348,7 +363,7 @@ Implementation order. The whole change does not fit one implementation session o
 1. **Visual language.** Tokens and corner utilities in `src/web/styles.css`, the primitives listed in section 3, the composer and send key, `ThreadCard`, ask cards and bubbles, Router cards, the settings dialog, the step 2 deletions, the guard tests, and the step 2 rows of the UI standard table. Screens keep today's layout and take the new look. The pin backend lands here too, because it does not depend on the UI: the migration, ledger method, route, client call, and `Pm.pinnedAt`.
 2. **Shell structure.** The resize library and its `AGENTS.md` entry, `AppRail`, `ProjectList` with pins, `SidePanel` with Pieces, Worker, and Profile, the profile drill-down routes, narrow tiers, the phone tab bar and computer switcher, the step 3 deletions, the step 3 rows of the UI standard table, and the new `ui:polish` screens.
 
-Visual language goes first, so the new shell components are built from finished primitives instead of being restyled twice.
+Visual language goes first, so the new shell components are built from finished primitives instead of being restyled twice. The 2026-11-23 review adds a third implementation step for decision cards, the settings pages, and the usage popover, and an icon step that draws the hourglass and device-type icons and picks the line icon set for controls.
 
 ### 8. Verification plan
 
