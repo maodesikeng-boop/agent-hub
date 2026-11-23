@@ -35,7 +35,7 @@ pnpm verify         # real daemon plus headless Chromium smoke check
 - Title the PR in Conventional Commits form, for example `fix(daemon): close the socket on shutdown`.
 - Fill in the PR template. Write the description, commit messages, code comments, and docs in English.
 - Open a design or plan PR that still waits for a decision as a draft. Mark it ready after the decision.
-- Wait for every check on the PR to finish green. A red check blocks the merge, even when it looks unrelated. Never rerun a failed job to hide a flaky test; report the flake instead.
+- Wait for every CI check on the PR to finish green (`node scripts/wait-checks.ts <PR>`, which skips pending `bellwood/review` on paths awaiting independent review and fails immediately on merge conflicts). A red check blocks the merge, even when it looks unrelated. Never rerun a failed job to hide a flaky test; report the flake instead.
 - Changes that touch a `Trigger:` path in `REVIEW.md` need an independent review before merge.
 - Maintainers merge with squash merge. Direct pushes to `main` are blocked.
 
