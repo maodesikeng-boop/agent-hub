@@ -5,7 +5,7 @@ description: "Run the local end-to-end smoke check for Bellwood: build the web a
 
 # Verify
 
-`pnpm verify` proves the app still starts and renders on this machine. One run takes about 4 seconds and has a 20-second budget.
+`pnpm verify` proves the app still starts and renders on this machine. One run takes about 7 seconds and has a 20-second budget.
 
 ## Run it
 
@@ -31,8 +31,10 @@ Look at the screenshot. A passing run with a wrong-looking screen is still a fai
 3. Open the passwordless login link and expect a 302 with a session cookie.
 4. Call `GET /api/health` and `GET /api/state` with that cookie.
 5. Open the workbench in headless Chromium and wait for the composer. Any `console.error` or `pageerror` fails the run.
-6. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
-7. Delete the temporary directory and check that it is gone.
+6. Open the first Project Manager in the sidebar, send one message in the composer, wait until the fake claude's reply renders in the message list and the message is stored as `replied`, then capture `workbench-smoke.png`.
+7. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
+8. Start a second daemon on the same `AGENT_HUB_HOME`, verify the conversation and both messages survived unchanged, and stop it cleanly.
+9. Delete the temporary directory and check that it is gone.
 
 ## When to use it
 

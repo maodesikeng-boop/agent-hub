@@ -1,8 +1,7 @@
-// 本机端到端冒烟（.agents/skills/verify/SKILL.md）：构建网页，在一次性的临时数据目录里用随机端口起真守护进程，
-// 查免密登录、健康状态和 /api/state，用无头 Chromium 打开工作台截图（console.error、pageerror 必须是 0），
-// 最后正常关机、核对守护进程记过的子进程都退出了，再删掉临时目录。
-// 用法：node scripts/verify-smoke.ts [--runs <次数>] [--out <目录>]
-// 截图和每次的耗时写到 --out（默认 /tmp/bellwood-verify-smoke）：workbench-smoke.png、smoke-runs.txt。
+// Local end-to-end smoke check: build the web app, start a real daemon on a throwaway data directory, log in, render the
+// workbench in headless Chromium, send one message and wait for the fake claude's reply, shut down cleanly, restart on the
+// same data directory and check the conversation survived, then delete the directory.
+// Usage: node scripts/verify-smoke.ts [--runs <n>] [--out <dir>]; writes workbench-smoke.png and smoke-runs.txt to --out.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
@@ -12,10 +11,11 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { readLedgerFile } from "../src/daemon/process-ledger.ts";
-import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST } from "../src/shared/index.ts";
+import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST, type StateSnapshot } from "../src/shared/index.ts";
 import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import { resolveHubPaths } from "../src/shared/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
+import { digestOf, lostAfterRestart, sendAndAwaitReply, type RoundTrip } from "./verify-steps.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const FAKE_CLAUDE = fileURLToPath(new URL("../test/fake-claude/fake-claude.ts", import.meta.url));
@@ -24,6 +24,7 @@ const DAEMON_MAIN = join(REPO_ROOT, "src", "daemon", "main.ts");
 const LOGIN_URL = /http:\/\/127\.0\.0\.1:(\d+)\/auth\?token=([A-Za-z0-9_-]+)/;
 const SCREENSHOT = "workbench-smoke.png";
 const RUNS_LOG = "smoke-runs.txt";
+const ROUND_TRIP_TEXT = "verify round trip";
 
 interface RunResult {
   ok: boolean;
@@ -89,6 +90,93 @@ function isAlive(pid: number): boolean {
   }
 }
 
+interface LaunchedDaemon {
+  child: ChildProcess;
+  exited: Promise<Exit>;
+  origin: string;
+  uiToken: string;
+  loginUrl: string;
+  stderr: () => string;
+}
+
+async function launchDaemon(home: string, scratch: string): Promise<LaunchedDaemon> {
+  const child = spawn(process.execPath, [DAEMON_MAIN], { cwd: REPO_ROOT, env: daemonEnv(home, scratch), stdio: ["ignore", "pipe", "pipe"] });
+  const exited = new Promise<Exit>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+  let out = "";
+  let err = "";
+  child.stdout!.setEncoding("utf8").on("data", (c: string) => (out += c));
+  child.stderr!.setEncoding("utf8").on("data", (c: string) => (err += c));
+  const login = await withTimeout(
+    "等守护进程给出登录网址",
+    new Promise<RegExpExecArray>((resolve, reject) => {
+      child.stdout!.on("data", () => {
+        const m = LOGIN_URL.exec(out);
+        if (m) resolve(m);
+      });
+      void exited.then(({ code }) => reject(new Error(`守护进程提前退出（退出码 ${code}）：${err}`)));
+    }),
+  ).catch(async (error: unknown) => {
+    child.kill("SIGKILL");
+    await exited;
+    throw error;
+  });
+  const origin = `http://127.0.0.1:${login[1]}`;
+  const uiToken = login[2]!;
+  return { child, exited, origin, uiToken, loginUrl: `${origin}${API_PATHS.auth}?token=${uiToken}`, stderr: () => err };
+}
+
+async function loginCookie(daemon: LaunchedDaemon): Promise<string> {
+  const auth = await fetch(daemon.loginUrl, { redirect: "manual" });
+  const cookie = (auth.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
+  if (auth.status !== 302 || cookie === "") throw new Error(`免密登录没跳转或没给 cookie：HTTP ${auth.status}`);
+  return cookie;
+}
+
+async function fetchState(daemon: LaunchedDaemon, cookie: string): Promise<StateSnapshot> {
+  const state = await fetch(`${daemon.origin}${API_PATHS.state}`, { headers: { cookie, origin: daemon.origin } });
+  const body = (await state.json()) as StateSnapshot;
+  if (state.status !== 200 || !Array.isArray(body.conversations)) throw new Error(`/api/state 不对：HTTP ${state.status}`);
+  return body;
+}
+
+/** Stops the daemon the way the desktop shell does and checks that no child it recorded outlives it. */
+async function stopDaemon(daemon: LaunchedDaemon, home: string): Promise<void> {
+  requestShutdown(daemon.child, home, daemon.uiToken);
+  const exit = await withTimeout("等守护进程正常关机", daemon.exited);
+  if (exit.code !== 0) throw new Error(`守护进程关机退出码 ${exit.code}（信号 ${exit.signal}）：${daemon.stderr()}`);
+  const leftovers = readLedgerFile(resolveHubPaths({ [ENV_HOME]: home }, home).childProcessesFile).filter((e) => isAlive(e.pid));
+  if (leftovers.length > 0) throw new Error(`关机后还有子进程没退出：${leftovers.map((e) => `${e.pid}（${e.purpose}）`).join("、")}`);
+}
+
+async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir: string, phase: (name: string) => void): Promise<RoundTrip> {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const pageErrors: string[] = [];
+    page.on("console", (m) => {
+      if (m.type() === "error") pageErrors.push(`console.error: ${m.text()}`);
+    });
+    page.on("pageerror", (e) => pageErrors.push(`pageerror: ${e.message}`));
+    await page.goto(daemon.loginUrl);
+    await page.waitForURL(`${daemon.origin}/`, { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    // 输入框出来了说明快照已经拉到、主界面画完，不只是挂上了加载页
+    await page.locator("#root textarea").first().waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await page.waitForLoadState("networkidle", { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    const rootText = (await page.locator("#root").innerText()).trim();
+    if (rootText === "") throw new Error("工作台渲染出来是空的");
+    if (pageErrors.length > 0) throw new Error(`页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
+    phase("浏览器渲染工作台");
+
+    const trip = await sendAndAwaitReply(page, { origin: daemon.origin, cookie, text: ROUND_TRIP_TEXT, timeoutMs: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await page.screenshot({ path: join(outDir, SCREENSHOT) });
+    if (pageErrors.length > 0) throw new Error(`发消息时页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
+    phase("发消息等假 claude 回复、截图");
+    return trip;
+  } finally {
+    await browser.close();
+  }
+}
+
 async function runOnce(outDir: string): Promise<RunResult> {
   const started = performance.now();
   const phases: Array<[string, number]> = [];
@@ -102,74 +190,39 @@ async function runOnce(outDir: string): Promise<RunResult> {
   const root = mkdtempSync(join(shortTmp(), "bellwood-verify-"));
   const home = join(root, "home");
   const scratch = join(root, "scratch");
-  let daemon: { child: ChildProcess; exited: Promise<Exit> } | null = null;
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let daemon: LaunchedDaemon | null = null;
   try {
     const build = spawnSync(process.execPath, [VITE_BIN, "build", "--logLevel", "error"], { cwd: REPO_ROOT, encoding: "utf8" });
     if (build.status !== 0) throw new Error(`构建网页失败（退出码 ${build.status}）：${build.stderr}`);
     phase("构建网页");
 
-    const child = spawn(process.execPath, [DAEMON_MAIN], { cwd: REPO_ROOT, env: daemonEnv(home, scratch), stdio: ["ignore", "pipe", "pipe"] });
-    const exited = new Promise<Exit>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
-    daemon = { child, exited };
-    let out = "";
-    let err = "";
-    child.stdout!.setEncoding("utf8").on("data", (c: string) => (out += c));
-    child.stderr!.setEncoding("utf8").on("data", (c: string) => (err += c));
-    const login = await withTimeout(
-      "等守护进程给出登录网址",
-      new Promise<RegExpExecArray>((resolve, reject) => {
-        child.stdout!.on("data", () => {
-          const m = LOGIN_URL.exec(out);
-          if (m) resolve(m);
-        });
-        void exited.then(({ code }) => reject(new Error(`守护进程提前退出（退出码 ${code}）：${err}`)));
-      }),
-    );
-    const origin = `http://127.0.0.1:${login[1]}`;
-    const uiToken = login[2]!;
-    const loginUrl = `${origin}${API_PATHS.auth}?token=${uiToken}`;
+    daemon = await launchDaemon(home, scratch);
     phase("起守护进程");
 
-    const auth = await fetch(loginUrl, { redirect: "manual" });
-    const cookie = (auth.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
-    if (auth.status !== 302 || cookie === "") throw new Error(`免密登录没跳转或没给 cookie：HTTP ${auth.status}`);
-    const headers = { cookie, origin };
-    const health = await fetch(`${origin}${API_PATHS.health}`, { headers });
+    const cookie = await loginCookie(daemon);
+    const headers = { cookie, origin: daemon.origin };
+    const health = await fetch(`${daemon.origin}${API_PATHS.health}`, { headers });
     const healthBody = (await health.json()) as { ok?: boolean };
     if (health.status !== 200 || healthBody.ok !== true) throw new Error(`健康检查不对：HTTP ${health.status} ${JSON.stringify(healthBody)}`);
-    const state = await fetch(`${origin}${API_PATHS.state}`, { headers });
-    const stateBody = (await state.json()) as { conversations?: unknown };
-    if (state.status !== 200 || !Array.isArray(stateBody.conversations)) throw new Error(`/api/state 不对：HTTP ${state.status}`);
+    await fetchState(daemon, cookie);
     phase("登录、健康检查、/api/state");
 
-    browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const pageErrors: string[] = [];
-    page.on("console", (m) => {
-      if (m.type() === "error") pageErrors.push(`console.error: ${m.text()}`);
-    });
-    page.on("pageerror", (e) => pageErrors.push(`pageerror: ${e.message}`));
-    await page.goto(loginUrl);
-    await page.waitForURL(`${origin}/`, { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-    // 输入框出来了说明快照已经拉到、主界面画完，不只是挂上了加载页
-    await page.locator("#root textarea").first().waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-    await page.waitForLoadState("networkidle", { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-    const rootText = (await page.locator("#root").innerText()).trim();
-    if (rootText === "") throw new Error("工作台渲染出来是空的");
-    await page.screenshot({ path: join(outDir, SCREENSHOT) });
-    if (pageErrors.length > 0) throw new Error(`页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
-    await browser.close();
-    browser = null;
-    phase("浏览器渲染工作台、截图");
+    const trip = await renderAndRoundTrip(daemon, cookie, outDir, phase);
+    const before = digestOf(await fetchState(daemon, cookie), [trip.conversationId]);
 
-    requestShutdown(child, home, uiToken);
-    const exit = await withTimeout("等守护进程正常关机", exited);
+    await stopDaemon(daemon, home);
     daemon = null;
-    if (exit.code !== 0) throw new Error(`守护进程关机退出码 ${exit.code}（信号 ${exit.signal}）：${err}`);
-    const leftovers = readLedgerFile(resolveHubPaths({ [ENV_HOME]: home }, home).childProcessesFile).filter((e) => isAlive(e.pid));
-    if (leftovers.length > 0) throw new Error(`关机后还有子进程没退出：${leftovers.map((e) => `${e.pid}（${e.purpose}）`).join("、")}`);
     phase("正常关机");
+
+    daemon = await launchDaemon(home, scratch);
+    phase("同一数据目录重启");
+    const after = digestOf(await fetchState(daemon, await loginCookie(daemon)), [trip.conversationId]);
+    const lost = lostAfterRestart(before, after);
+    if (lost.length > 0) throw new Error(`同一数据目录重启后数据变了：\n${lost.join("\n")}`);
+    if (!after.messages.some((m) => m.id === trip.replyMessageId)) throw new Error(`重启后找不到回复 ${trip.replyMessageId}`);
+    await stopDaemon(daemon, home);
+    daemon = null;
+    phase("核对消息、再关机");
 
     rmSync(root, { recursive: true });
     if (existsSync(root)) throw new Error(`临时目录没删掉：${root}`);
@@ -178,7 +231,6 @@ async function runOnce(outDir: string): Promise<RunResult> {
   } catch (error) {
     return { ok: false, totalMs: performance.now() - started, phases, error: error instanceof Error ? error.message : String(error) };
   } finally {
-    await browser?.close();
     if (daemon !== null) {
       daemon.child.kill("SIGKILL");
       await daemon.exited;
