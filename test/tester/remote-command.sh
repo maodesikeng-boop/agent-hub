@@ -12,7 +12,7 @@ MODE_ENV="$SYSTEMD_DIR/${SERVICE}.mode.env"
 STATE_DIR="$HOME/.config/${SERVICE}"
 MODE_FILE="$STATE_DIR/mode"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
+export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.kimi-code/bin:$HOME/.pi/bin:$HOME/.npm-global/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}:/usr/local/bin"
 
 die() { printf 'tester-remote: %s\n' "$*" >&2; exit 2; }
 

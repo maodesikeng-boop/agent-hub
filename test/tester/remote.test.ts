@@ -151,6 +151,30 @@ describe("remote-command.sh", () => {
     expect(res.stdout).toContain("cli pi missing");
   });
 
+  it("detects vendor CLIs installed in vendor-specific home bin directories", () => {
+    const { home, appDir, run } = setupRemoteStubs();
+    writeFileSync(
+      join(appDir, "scripts", "print-vendors.ts"),
+      'console.log("opencode\\topencode\\t\\t\\nkimi\\tkimi\\t\\t\\npi\\tpi\\t\\t");\n',
+    );
+    for (const [relDir, name, version] of [
+      [".opencode/bin", "opencode", "opencode 1.2.3"],
+      [".kimi-code/bin", "kimi", "kimi 0.9.0"],
+      [".pi/bin", "pi", "pi 0.4.0"],
+    ] as const) {
+      const dir = join(home, relDir);
+      mkdirSync(dir, { recursive: true });
+      const exe = join(dir, name);
+      writeFileSync(exe, `#!/bin/sh\necho '${version}'\n`);
+      chmodSync(exe, 0o755);
+    }
+    const res = run("status");
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("cli opencode installed opencode 1.2.3");
+    expect(res.stdout).toContain("cli kimi installed kimi 0.9.0");
+    expect(res.stdout).toContain("cli pi installed pi 0.4.0");
+  });
+
   it("switches systemd mode env between fake and real", () => {
     const { home, run } = setupRemoteStubs();
     expect(run("restart fake").status).toBe(0);

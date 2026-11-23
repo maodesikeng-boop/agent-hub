@@ -43,6 +43,7 @@ die() { printf '\033[1;31m[provision] 失败：%s\033[0m\n' "$*" >&2; exit 1; }
 # ═══════════════════════ 服务器这一半 ═══════════════════════
 on_server() {
   local port="$DEFAULT_PORT" mesh_port="$DEFAULT_MESH_PORT" target_user="" sha="" host_only=0 arg
+  cd "$HOME"
   while [ $# -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
@@ -58,14 +59,14 @@ on_server() {
   done
   [ "$(id -u)" -ne 0 ] || die "不要用 root 跑：CLI 和服务都装在普通用户名下"
   if sudo -n true 2>/dev/null; then HAS_SUDO=1; else HAS_SUDO=0; fi
-  export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:$PATH"
+  export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.kimi-code/bin:$HOME/.pi/bin:$HOME/.npm-global/bin:/usr/local/bin:$PATH"
   export DEBIAN_FRONTEND=noninteractive
 
   local app="$HOME/$APP_DIR_NAME" incoming="$HOME/.$APP_DIR_NAME-incoming" manifest_dir
   if [ "$host_only" = 1 ] && [ -n "$target_user" ] && [ "$(id -un)" != "$target_user" ]; then
     local target_home
     target_home=$(getent passwd "$target_user" | cut -d: -f6)
-    [ -n "$target_home" ] || die "Linux 用户 $target_user 不存在；先建一个不带 sudo 的用户"
+    [ -n "$target_home" ] || die "Linux 用户 ${target_user} 不存在；先建一个不带 sudo 的用户"
     app="$target_home/$APP_DIR_NAME"
     incoming="$target_home/.$APP_DIR_NAME-incoming"
   fi
@@ -77,10 +78,10 @@ on_server() {
     step_apt
     step_swap
     step_node "$manifest_dir"
-    step_pnpm "$manifest_dir"
+    step_pnpm "$manifest_dir" "${target_user:+1}"
     if [ -n "$target_user" ]; then
-      id "$target_user" >/dev/null 2>&1 || die "Linux 用户 $target_user 不存在；先建一个不带 sudo 的用户"
-      loginctl show-user "$target_user" -p Linger 2>/dev/null | grep -q yes || { log "enable-linger $target_user"; sudo loginctl enable-linger "$target_user"; }
+      id "$target_user" >/dev/null 2>&1 || die "Linux 用户 ${target_user} 不存在；先建一个不带 sudo 的用户"
+      loginctl show-user "$target_user" -p Linger 2>/dev/null | grep -q yes || { log "enable-linger ${target_user}"; sudo loginctl enable-linger "$target_user"; }
     fi
     return
   fi
@@ -143,7 +144,7 @@ step_node() {
   base="https://nodejs.org/dist/latest-v$NODE_MAJOR.x"
   local tmp; tmp=$(mktemp -d)
   file=$(curl -fsSL "$base/SHASUMS256.txt" | awk -v a="linux-$dist_arch.tar.xz" '$2 ~ a"$" {print $2}')
-  [ -n "$file" ] || die "在 $base 里没找到 linux-$dist_arch 的包"
+  [ -n "$file" ] || die "在 ${base} 里没找到 linux-${dist_arch} 的包"
   log "装 Node（${file}）"
   curl -fsSL -o "$tmp/$file" "$base/$file"
   curl -fsSL "$base/SHASUMS256.txt" | grep " $file\$" > "$tmp/sum"
@@ -152,19 +153,29 @@ step_node() {
   rm -rf "$tmp"
   hash -r
   have=$(node -v | tr -d v)
-  version_ge "$have" "$need" || die "装完 node 是 ${have}，仍低于 $need"
+  version_ge "$have" "$need" || die "装完 node 是 ${have}，仍低于 ${need}"
 }
 
 step_pnpm() {
-  local src="$1" want="" have=""
+  local src="$1" system_only="${2:-0}" want="" have=""
+  local sys_bins="${PROVISION_SYSTEM_BIN_DIRS:-/usr/local/bin:/usr/bin:/bin}"
+  local sys_prefix="${PROVISION_SYSTEM_PREFIX:-/usr/local}"
   # 版本以 package.json 的 packageManager（pnpm@x.y.z）为准
   if [ -f "$src/package.json" ]; then want=$(pkg_field "$src" "['packageManager']" | sed 's/^pnpm@//; s/+.*//'); fi
   [ -n "$want" ] || want=10
-  have=$(pnpm -v 2>/dev/null || true)
+  if [ "$system_only" = 1 ]; then
+    have=$(PATH="$sys_bins" pnpm -v 2>/dev/null || true)
+  else
+    have=$(pnpm -v 2>/dev/null || true)
+  fi
   if [ -n "$have" ] && { [ "$have" = "$want" ] || [ "${have%%.*}" = "$want" ]; }; then skip "pnpm $have"; return; fi
-  [ "$HAS_SUDO" = 1 ] || die "需要管理员安装 pnpm@$want（当前 ${have:-未安装}）"
-  log "装 pnpm@$want"
-  sudo env "PATH=$PATH" npm install -g "pnpm@$want" --no-fund --no-audit --loglevel=error
+  [ "$HAS_SUDO" = 1 ] || die "需要管理员安装 pnpm@${want}（当前 ${have:-未安装}）"
+  log "装 pnpm@${want}"
+  if [ "$system_only" = 1 ]; then
+    sudo env "PATH=${sys_bins}:$PATH" npm install -g --prefix "$sys_prefix" "pnpm@$want" --no-fund --no-audit --loglevel=error
+  else
+    sudo env "PATH=$PATH" npm install -g "pnpm@$want" --no-fund --no-audit --loglevel=error
+  fi
   hash -r
 }
 
@@ -178,7 +189,7 @@ step_code() {
     rsync -a --delete --exclude node_modules --exclude dist --exclude .deployed-sha "$incoming/" "$app/"
     rm -rf "$incoming"
   elif [ ! -f "$app/package.json" ]; then
-    die "$app 里没有代码，也没收到新代码"
+    die "${app} 里没有代码，也没收到新代码"
   fi
   if [ -n "$sha" ] && [ "$sha" = "$deployed" ] && [ -d "$app/dist/web" ] && [ -d "$app/node_modules" ]; then
     skip "代码已是 ${sha:0:8}，依赖和构建都在"; return
@@ -226,13 +237,13 @@ unit_text() {
   fi
   cat <<EOF
 [Unit]
-Description=$SERVICE_NAME 守护进程（只听 127.0.0.1:${port}）
+Description=${SERVICE_NAME} 守护进程（只听 127.0.0.1:${port}）
 After=network-online.target
 
 [Service]
 WorkingDirectory=$app
 # 用户服务的 PATH 很短：node、pnpm、git、各家 CLI 都靠这一行找到
-Environment=PATH=$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.kimi-code/bin:$HOME/.pi/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 Environment=AGENT_HUB_PORT=$port${mesh_line}
 EnvironmentFile=-$HOME/.config/systemd/user/$SERVICE_NAME.env
 EnvironmentFile=-$HOME/.config/systemd/user/$SERVICE_NAME.mode.env
@@ -283,8 +294,8 @@ step_report() {
     [ "$code" = 200 ] && break
     sleep 1
   done
-  [ "$code" = 200 ] || { journalctl --user -u "$SERVICE_NAME" -n 30 --no-pager || true; die "网页 $READY_TIMEOUT_S 秒内没就绪（HTTP ${code}）"; }
-  log "网页就绪：http://127.0.0.1:$port/${mesh_port:+（mesh 端口 $mesh_port）}"
+  [ "$code" = 200 ] || { journalctl --user -u "$SERVICE_NAME" -n 30 --no-pager || true; die "网页 ${READY_TIMEOUT_S} 秒内没就绪（HTTP ${code}）"; }
+  log "网页就绪：http://127.0.0.1:${port}/${mesh_port:+（mesh 端口 ${mesh_port}）}"
   echo "── 监听（只应看到 127.0.0.1）──"; ss -ltnH "sport = :$port"
   echo "── 内存 ──"; free -m
   local pid; pid=$(systemctl --user show -p MainPID --value "$SERVICE_NAME")
@@ -298,7 +309,7 @@ step_report() {
   done 3<<<"$lines"
   echo "── 登录（要人来做，凭据只存在这台机器上）──"
   printf '%s\n' "${logins[@]}"
-  echo "界面令牌：cat ~/.agent-hub/state/ui-token（本机浏览器打开 http://127.0.0.1:$port/auth?token=<令牌>）"
+  echo "界面令牌：cat ~/.agent-hub/state/ui-token（本机浏览器打开 http://127.0.0.1:${port}/auth?token=<令牌>）"
 }
 
 # ═══════════════════════ 本机这一半 ═══════════════════════
@@ -326,7 +337,7 @@ on_local() {
   root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
   sha=$(git -C "$root" rev-parse --verify "$ref^{commit}") || die "找不到 ${ref}，先 git fetch origin"
   remote_user=$("${ssh_cmd[@]}" "$host" "id -un")
-  log "部署 ${ref}（${sha:0:8}）→ ${host}${target_user:+（用户 $target_user）}，端口 $port${mesh_port:+，mesh $mesh_port}，服务 $service"
+  log "部署 ${ref}（${sha:0:8}）→ ${host}${target_user:+（用户 ${target_user}）}，端口 ${port}${mesh_port:+，mesh ${mesh_port}}，服务 ${service}"
 
   local server_args=(--on-server --sha "$sha" --port "$port" --service "$service" --app-dir "$app_dir")
   [ -z "$mesh_port" ] || server_args+=(--mesh-port "$mesh_port")
@@ -335,7 +346,7 @@ on_local() {
   local run_prefix="" target_home="~"
   if [ -n "$target_user" ] && [ "$remote_user" != "$target_user" ]; then
     local target_uid
-    target_uid=$("${ssh_cmd[@]}" "$host" "id -u $(printf '%q' "$target_user")") || die "服务器上没有用户 $target_user"
+    target_uid=$("${ssh_cmd[@]}" "$host" "id -u $(printf '%q' "$target_user")") || die "服务器上没有用户 ${target_user}"
     target_home=$("${ssh_cmd[@]}" "$host" "getent passwd $(printf '%q' "$target_user") | cut -d: -f6")
     run_prefix="sudo -H -u $(printf '%q' "$target_user") env XDG_RUNTIME_DIR=/run/user/$target_uid "
   fi
@@ -348,14 +359,14 @@ on_local() {
   else
     log "推代码（git archive，只含已提交的文件，不含 GitHub 令牌）"
     git -C "$root" archive --format=tar "$sha" |
-      "${ssh_cmd[@]}" "$host" "${run_prefix}sh -c 'rm -rf \"\$HOME/.$app_dir-incoming\" && mkdir -p \"\$HOME/.$app_dir-incoming\" && tar -x -C \"\$HOME/.$app_dir-incoming\"'"
+      "${ssh_cmd[@]}" "$host" "${run_prefix}sh -c 'cd \"\$HOME\" && rm -rf \"\$HOME/.$app_dir-incoming\" && mkdir -p \"\$HOME/.$app_dir-incoming\" && tar -x -C \"\$HOME/.$app_dir-incoming\"'"
   fi
 
   if [ -n "$run_prefix" ]; then
     "${ssh_cmd[@]}" "$host" bash -s -- --on-server --host-only --user "$target_user" --app-dir "$app_dir" <"$0"
   fi
   "${ssh_cmd[@]}" "$host" "${run_prefix}bash -s -- $(printf '%q ' "${server_args[@]}")" <"$0"
-  log "完成。本机打开网页：ssh ${key:+-i $key }-N -L $port:127.0.0.1:$port ${host}，然后浏览器开 http://127.0.0.1:$port/"
+  log "完成。本机打开网页：ssh ${key:+-i ${key} }-N -L ${port}:127.0.0.1:${port} ${host}，然后浏览器开 http://127.0.0.1:${port}/"
 }
 
 if [ "${1:-}" = "--on-server" ]; then
