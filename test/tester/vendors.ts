@@ -1,8 +1,8 @@
-// Vendor coverage on the bench: every vendor in VENDOR_LIST, on every bench computer, installed and signed in from the
-// bench's own HOME. Install commands and login commands come from the product (VENDOR_PATHS and each spec's cli),
-// so the bench installs exactly what a user installs. Only the model choice and bench-only notes live here.
+// Vendor coverage on the bench: every vendor in VENDOR_LIST, on every bench computer, installed from the bench's own HOME.
+// Install commands and login commands come from the product (VENDOR_PATHS and each spec's cli), so the bench installs
+// exactly what a user installs. This file holds only the owner's coverage decision per vendor.
 // Invariant: coverage always has one entry per vendor per computer; a vendor that cannot be installed or signed in
-// appears with its status, reason, and fix, and is never left out.
+// appears with its status, reason, and fix, and is never left out. An accepted gap stops only the alert, never the listing.
 import type { AgentVendor } from "../../src/shared/vendors.ts";
 import type { InstanceRole } from "./types.ts";
 
@@ -28,27 +28,32 @@ export interface VendorReadiness {
   detail: string;
   /** The exact command or step that fixes a non-ready status, shown to the Project Manager and the owner. */
   fix: string;
-  /** Set when the owner recorded in bench.json that this gap is accepted for now; it is still listed in every summary. */
+  /** The owner's reason when this entry matches the vendor's accepted gap; the entry is still listed in every summary. */
   acceptedGap?: string;
 }
 
-export interface VendorBenchRecipe {
-  /** Model the turn flow uses: the cheapest one the vendor offers, or null for the account default. */
-  model: string | null;
-  /** Bench-only notes for the owner, such as which account or API key the vendor needs. */
-  account: string;
-}
+/**
+ * turn: the owner has an account; the vendor's real CLI answers a turn on both bench computers every night.
+ * accepted_gap: the owner decided not to cover it on the bench. The CLI is still installed and probed, so a broken install
+ * command or a wrong Settings state still alerts; only `status` itself is accepted. `fallbackTests` keep covering it offline.
+ */
+export type VendorBenchRecipe =
+  | { coverage: "turn"; model: string | null; signIn: string }
+  | { coverage: "accepted_gap"; status: Extract<ReadinessStatus, "signed_out">; reason: string; decided: string; fallbackTests: readonly string[] };
 
-/** A Record over AgentVendor, so adding a vendor to VENDOR_LIST fails typecheck until its bench recipe exists. */
+const NO_TEST_ACCOUNTS = "The owner has no account for this vendor and does not open accounts for testing.";
+const fallbackTests = (vendor: AgentVendor): readonly string[] => [`src/vendors/${vendor}/${vendor}.test.ts`, "src/vendors/contract.test.ts"];
+
+/** A Record over AgentVendor, so adding a vendor to VENDOR_LIST fails typecheck until the owner's coverage decision for it exists. */
 export const VENDOR_BENCH: Readonly<Record<AgentVendor, VendorBenchRecipe>> = {
-  claude: { model: "haiku", account: "Claude subscription; sign in with `claude setup-token` and give the daemon CLAUDE_CODE_OAUTH_TOKEN from <root>/secrets." },
-  agy: { model: "gemini-3.8-flash", account: "Google account through `agy`, or GEMINI_API_KEY." },
-  codex: { model: null, account: "ChatGPT plan through `codex login --device-auth` with CODEX_HOME inside the bench HOME." },
-  pi: { model: "deepseek/deepseek-flash", account: "Run `pi`, then /login; a DeepSeek API key keeps it cheap." },
-  deepseek: { model: "deepseek-flash", account: "DEEPSEEK_API_KEY written to <bench HOME>/.dsh/.env." },
-  cursor: { model: "gemini-3.8-flash", account: "Cursor account through `NO_OPEN_BROWSER=1 cursor-agent login`." },
-  opencode: { model: "opencode/big-pickle", account: "`opencode auth login`, or OPENCODE_API_KEY." },
-  kimi: { model: "kimi-code/k3", account: "Kimi account through `kimi login` (device code)." },
+  claude: { coverage: "turn", model: "haiku", signIn: "`claude setup-token` once; both computers get CLAUDE_CODE_OAUTH_TOKEN from <root>/secrets." },
+  agy: { coverage: "turn", model: "gemini-3.8-flash", signIn: "Run `agy` and paste the code with the owner's Google account." },
+  codex: { coverage: "turn", model: null, signIn: "`codex login --device-auth` with the owner's ChatGPT plan, CODEX_HOME inside the bench HOME." },
+  pi: { coverage: "turn", model: null, signIn: "Run `pi`, then /login with one of the owner's existing subscriptions." },
+  cursor: { coverage: "accepted_gap", status: "signed_out", reason: "The owner cannot use Cursor.", decided: "2026-11-23", fallbackTests: fallbackTests("cursor") },
+  deepseek: { coverage: "accepted_gap", status: "signed_out", reason: NO_TEST_ACCOUNTS, decided: "2026-11-23", fallbackTests: fallbackTests("deepseek") },
+  opencode: { coverage: "accepted_gap", status: "signed_out", reason: NO_TEST_ACCOUNTS, decided: "2026-11-23", fallbackTests: fallbackTests("opencode") },
+  kimi: { coverage: "accepted_gap", status: "signed_out", reason: NO_TEST_ACCOUNTS, decided: "2026-11-23", fallbackTests: fallbackTests("kimi") },
 };
 
 /** Postcondition: the product's install command for `vendor` on `platform`: windowsInstallCommand on win32, else installCommand. Throws when the vendor ships none. */
@@ -79,7 +84,10 @@ export async function probeVendor(vendor: AgentVendor, target: { instance: Insta
   throw new Error("Not implemented");
 }
 
-/** Postcondition: the non-ready entries whose gap the owner has not accepted; these raise a coverage alert on every run. */
+/**
+ * Postcondition: the non-ready entries that raise a coverage alert on every run: every non-ready entry of a `turn` vendor,
+ * and every entry of an `accepted_gap` vendor whose status differs from its accepted status (for example install_failed).
+ */
 export function openGaps(coverage: readonly VendorReadiness[]): VendorReadiness[] {
   throw new Error("Not implemented");
 }

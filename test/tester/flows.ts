@@ -20,7 +20,10 @@ const oneDevice = { feishu: "real", network: "relay", model: "real", devices: 1 
 const twoDevicesFake = { feishu: "real", network: "relay", model: "fake", devices: 2 } as const;
 const feishuNeeds = ["remote_instance", "feishu_bot", "feishu_driver"] as const;
 
-/** One real-CLI turn flow per vendor in VENDOR_LIST, run on each bench computer, so a new vendor is covered the day it is registered. */
+/**
+ * One real-CLI turn flow per vendor in VENDOR_LIST, run on each bench computer, so a new vendor is covered the day it is registered.
+ * A vendor whose VENDOR_BENCH entry is an accepted gap still gets its flow; the flow reports not_ready with the owner's reason.
+ */
 function vendorTurnFlows(): FlowSpec[] {
   return VENDOR_LIST.map(({ id, label }) => ({
     id: `model.turn.${id}`,

@@ -4,10 +4,12 @@ One-time setup of the test bench. **[Owner]** steps need the owner's hands or ac
 
 Commands marked "implementation step" land with the tester implementation; this runbook names them so the steps can be reviewed now.
 
+Owner time is about 40 minutes in total: accounts 5, mesh 7, Feishu 15, vendor sign-ins 11, and the permission rule 2.
+
 ## 1. Accounts
 
 1. **[Owner]** Create a GitHub machine account for the bench (about 5 minutes). It needs no repository access; the repository is public.
-2. **[Owner]** Decide which vendor accounts the bench uses (design decision 4). For a vendor without an account, write the reason under `acceptedGaps` in `bench.json` (step 3.3). The vendor still shows in every summary.
+2. Vendor accounts are decided (design decision 4): Claude Code, Codex, Antigravity, and Pi use the owner's existing accounts; Cursor, DeepSeek, OpenCode, and Kimi Code are accepted gaps in `test/tester/vendors.ts`. No new account is opened for testing.
 
 ## 2. Remote test computer (the server)
 
@@ -29,38 +31,36 @@ Commands marked "implementation step" land with the tester implementation; this 
 ## 4. Mesh
 
 1. **[Owner]** Sign both test computers in to the machine account: start the local test instance (`node test/tester/cli.ts bench up`, implementation step) and open its workbench, then Settings, Computers, Sign in; do the same on the remote through the local workbench once it is paired, or with `AGENT_HUB_HOME` set for the test user on the server. Each sign-in is a GitHub device code (about 2 minutes each).
-2. **[Owner]** Verify the two test computers with the six-digit code on both screens.
-3. **[Owner]** Set Hub order: the remote first, the Mac second.
+2. **[Owner]** Verify the two test computers with the six-digit code on both screens (about 2 minutes).
+3. **[Owner]** Set Hub order: the remote first, the Mac second (about 1 minute).
 
 ## 5. Feishu
 
 1. **[Owner]** Create the test bot from the local test workbench: Settings, Feishu, scan the QR code (about 2 minutes). Name it so it cannot be mistaken for the real bot.
-2. **[Owner]** Send the test bot one direct message, so it binds you as owner.
+2. **[Owner]** Send the test bot one direct message, so it binds you as owner (about 1 minute).
 3. **[Owner]** Create the driver app in the Feishu developer console (about 10 minutes): a custom app with user-identity scopes `im:message`, `im:message.send_as_user`, and `offline_access`; the redirect URL `http://127.0.0.1:47123/callback` under Security settings; then create and publish a version. If the tenant asks for admin approval, approve it.
 4. **[PM]** Put the driver app's id and secret in `~/.bellwood-tester/secrets/feishu-driver.json` (mode 0600).
 5. **[Owner]** Run `node test/tester/cli.ts authorize-feishu` in your own terminal, outside any agent sandbox, and approve in the browser (1 minute). Repeat once a year: Feishu ends the consent after 365 days, and the tester reports it as a bench alert.
-6. **[Owner]** Mute the test bot's chats and project groups in Feishu.
+6. **[Owner]** Mute the test bot's chats and project groups in Feishu (about 1 minute).
 
 ## 6. Vendor sign-ins
 
-Sign in each vendor on each test computer with the bench `HOME`, so the owner's own CLI logins stay untouched. On the Mac, prefix each command with `HOME=~/.bellwood-tester/local/user-home`; on the server, run it as `bellwood-test`.
+Sign in the four covered vendors on each test computer with the bench `HOME`, so the owner's own CLI logins stay untouched. On the Mac, prefix each command with `HOME=~/.bellwood-tester/local/user-home`; on the server, run it as `bellwood-test`.
 
-| Vendor | Sign in |
-| --- | --- |
-| Claude Code | `claude setup-token` once, and save the token in `secrets/claude-oauth-token`; both computers use it as `CLAUDE_CODE_OAUTH_TOKEN` |
-| Antigravity | run `agy` and paste the code, or save `GEMINI_API_KEY` in `secrets/` |
-| Codex | `codex login --device-auth` |
-| Pi | run `pi`, then `/login` |
-| DeepSeek | write `DEEPSEEK_API_KEY=<key>` to `<bench HOME>/.dsh/.env` |
-| Cursor | `NO_OPEN_BROWSER=1 cursor-agent login` |
-| OpenCode | `opencode auth login`, or save `OPENCODE_API_KEY` in `secrets/` |
-| Kimi Code | `kimi login` |
+| Vendor | Sign in | Time |
+| --- | --- | --- |
+| Claude Code | **[Owner]** `claude setup-token` once; **[PM]** saves the token in `secrets/claude-oauth-token`, and both computers use it as `CLAUDE_CODE_OAUTH_TOKEN` | 2 min |
+| Codex | **[Owner]** `codex login --device-auth` on each computer | 2 × 1.5 min |
+| Antigravity | **[Owner]** run `agy` and paste the code on each computer | 2 × 1.5 min |
+| Pi | **[Owner]** run `pi`, then `/login` with an existing subscription, on each computer | 2 × 1.5 min |
 
-Then run `node test/tester/cli.ts preflight`. Its coverage matrix lists all eight vendors on both computers. Each entry that is not `ready` carries its fix; either do it or accept the gap in `bench.json` with a reason.
+Cursor, DeepSeek, OpenCode, and Kimi Code need no sign-in. Their CLIs are still installed (step 3.4 and step 2.2) and stay `signed_out`, which the summary shows as an accepted gap.
+
+Then run `node test/tester/cli.ts preflight`. Its coverage matrix lists all eight vendors on both computers: the four covered ones `ready`, the four gaps `signed_out` and marked accepted. Any other status carries its fix and raises an alert until it is fixed.
 
 ## 7. Permissions and schedule
 
-1. **[Owner]** If design decision 5 is A: allow `Bash(node test/tester/cli.ts:*)` in Claude Code's permission settings, so AI tester sessions can run flows that restart the remote test computer.
+1. **[Owner]** Per design decision 5, allow `Bash(node test/tester/cli.ts:*)` in Claude Code's permission settings, so AI tester sessions can run flows that restart the remote test computer (about 2 minutes).
 2. **[PM]** Install the nightly job: `~/Library/LaunchAgents/com.bellwood.tester.nightly.plist` from the template (implementation step), running `node test/tester/cli.ts run --cadence nightly` at 23:30. launchd runs it at the next wake if the Mac was asleep.
 3. **[PM]** Add to the 00:00 review: read `~/.bellwood-tester/runs/latest/summary.md`; dispatch a tester triage step for a product alert; raise a card for the owner for a bench or coverage alert.
 
@@ -68,4 +68,4 @@ Then run `node test/tester/cli.ts preflight`. Its coverage matrix lists all eigh
 
 - Feishu driver consent: once a year (step 5.5).
 - Vendor tokens: renew when preflight reports `signed_out`; `claude setup-token` tokens last a year.
-- Accepted gaps: review them at each release candidate.
+- Accepted gaps: review them at each release candidate. Changing one means editing `VENDOR_BENCH` in `test/tester/vendors.ts` through a PR.

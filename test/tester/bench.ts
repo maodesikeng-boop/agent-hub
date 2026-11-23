@@ -3,8 +3,6 @@
 // with the test account and the test bot. The local computer reaches the remote one only through the mesh proxy
 // (/d/<deviceId>/api/...), the same path a user's browser takes.
 import type { Message, StateSnapshot } from "../../src/shared/index.ts";
-import type { AgentVendor } from "../../src/shared/vendors.ts";
-import type { InstanceRole } from "./types.ts";
 
 /** Default bench root on the developer machine; BELLWOOD_TESTER_HOME overrides it. */
 export const TESTER_HOME_ENV = "BELLWOOD_TESTER_HOME";
@@ -48,11 +46,6 @@ export interface BenchConfig {
   instances: InstanceConfig[];
   testAccount: { githubLogin: string };
   feishu?: { botAppId: string; driverAppId: string };
-  /**
-   * Vendor gaps the owner accepted for now, with the reason, such as no account for that vendor yet. Every vendor in
-   * VENDOR_LIST is still probed and listed in each summary; an accepted gap only stops it from raising a coverage alert.
-   */
-  acceptedGaps: Partial<Record<AgentVendor, Partial<Record<InstanceRole, string>>>>;
   /** Small git repository each test computer uses as its project's main folder. */
   sandboxProject: string;
   guards: ProductionGuards;

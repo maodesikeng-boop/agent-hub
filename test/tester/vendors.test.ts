@@ -1,8 +1,9 @@
 import { describe, it } from "vitest";
 
 describe("VENDOR_BENCH", () => {
-  it.todo("has a recipe for every vendor in VENDOR_LIST");
+  it.todo("has a coverage decision for every vendor in VENDOR_LIST");
   it.todo("names only models the vendor accepts (bundled, or custom when the vendor allows custom models)");
+  it.todo("lists fallback test files that exist for every accepted gap");
 });
 
 describe("installCommandFor and loginCommandFor", () => {
@@ -25,6 +26,7 @@ describe("probeVendor", () => {
 });
 
 describe("openGaps", () => {
-  it.todo("returns every non-ready entry the owner has not accepted");
-  it.todo("keeps accepted gaps out of the alert list while they stay in coverage");
+  it.todo("returns every non-ready entry of a turn vendor");
+  it.todo("leaves out an accepted gap vendor whose status equals its accepted status, while coverage still lists it");
+  it.todo("returns an accepted gap vendor whose status differs from its accepted status, such as install_failed");
 });

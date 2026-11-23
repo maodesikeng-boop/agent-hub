@@ -8,28 +8,19 @@
 - [.agents/skills/tester/SKILL.md](../.agents/skills/tester/SKILL.md): the tester handbook that any model loads to test Bellwood on the bench.
 - [.agents/skills/tester/references/bench-setup.md](../.agents/skills/tester/references/bench-setup.md): the one-time setup runbook, with every step you do by hand marked.
 - [test/tester/flows.ts](../test/tester/flows.ts): the user flow list with pass rules and evidence, as data.
-- [test/tester/vendors.ts](../test/tester/vendors.ts): how each of the eight vendors is installed, signed in, and reported when it is not ready.
+- [test/tester/vendors.ts](../test/tester/vendors.ts): your coverage decision per vendor: four run nightly, four are accepted gaps, and every one is installed, probed, and listed.
 - [scripts/verify-steps.ts](../scripts/verify-steps.ts): the two checks `pnpm verify` gains.
 
 ### Decisions needed
 
-1. **Where the second test computer runs.** Multi-computer flows need two Bellwood instances on a test account.
-   - A. **Recommended.** A test instance on this Mac plus a test instance under a separate Linux user on the Tokyo server. The Tokyo one is always on and holds the test bot's Feishu connection, like your real setup. The Mac one starts only while a test runs, so it sleeps with your Mac and uses no memory otherwise. This is the topology where the recent Feishu and relay bugs happened.
-   - B. Two instances on the Tokyo server in separate containers. Always on and nothing runs on the Mac, but it never sees your home network or macOS, and Tokyo needs Docker.
-   - C. Mac only. No multi-computer, failover, or relay flows.
-2. **How test computers stay apart from yours.** The relay groups computers by GitHub account.
-   - A. **Recommended.** A GitHub machine account (GitHub's terms allow one for automation) signed in on the official relay. Test computers then live in a separate relay account and can never appear in your Computers list or take your Feishu connection.
-   - B. A second relay deployment with your own GitHub account. No new account, but it tests a relay that users do not use.
-3. **Who "the user" is in Feishu.**
-   - A. **Recommended.** Your own Feishu account, through a small driver app you authorize once. The tester posts as you, but only into the test bot's chats; the code refuses any other chat. Test groups appear in your Feishu, so you mute them.
-   - B. A second Feishu account. Needs another phone number, and also lets the tester cover team mode and guest permissions.
-4. **Accounts for all eight vendors on both test computers.** Every vendor in `VENDOR_LIST` is installed and probed on every run. A vendor that is not installed or not signed in shows in every summary with the reason and the fix command, and raises a coverage alert until it is fixed or you accept the gap.
-   - A. **Recommended.** Use the accounts you already pay for (Claude, ChatGPT, Cursor, Google), add pay-as-you-go API keys where they cost cents (DeepSeek, and Pi through a DeepSeek key), and decide for OpenCode and Kimi Code whether to sign up. A vendor you decide not to cover is recorded as an accepted gap with your reason. It stays listed in every summary but stops alerting.
-   - B. Dedicated API keys for every vendor with a 10 USD monthly cap. Cleaner billing, but not every vendor offers keys, and more to set up.
-5. **Whether AI tester sessions may restart the Tokyo test instance.** Claude Code refused my attempt to SSH to Tokyo from this Worker, which is the right default.
-   - A. **Recommended.** A dedicated key for the Tokyo test user that can only run six commands (status, start, stop, restart, deploy, logs), plus one Claude Code permission rule for the tester command. Restart, failover, and catch-up flows then work in AI sessions too.
-   - B. No rule. Those flows run only in the nightly job, which is not a Claude Code session; AI sessions read its results and run the other flows.
-6. **One small product change.** A second Bellwood on the same computer currently tries the default LAN port 4320. If it starts first, your own instance loses its LAN path until restart. I recommend a `FUSA_MESH_PORT` setting so test instances use their own port. The alternative is option 1B only.
+None. You approved the plan on 2026-11-23 with these decisions:
+
+1. **Where the test computers run.** A test instance on this Mac, which starts only while a test runs, plus an always-on test instance under a separate Linux user on the Tokyo server that holds the test bot's Feishu connection. This mirrors your real setup, where the recent Feishu and relay bugs happened. Rejected: two containers on Tokyo, or the Mac alone.
+2. **How test computers stay apart from yours.** A GitHub machine account on the official relay, so test computers live in a separate relay account and never appear in your Computers list or take your Feishu connection. Rejected: a second relay deployment.
+3. **Who "the user" is in Feishu.** Your own Feishu account, through a driver app you authorize once. The tester posts only into the test bot's chats; the code refuses any other chat. You mute the test groups. Rejected: a second Feishu account, so team mode and guest permissions stay untested on the bench.
+4. **Vendor accounts.** No new accounts for testing. Claude Code, Codex, Antigravity, and Pi run a real turn on both test computers every night. Cursor (you cannot use it), DeepSeek, OpenCode, and Kimi Code are accepted gaps: the bench still installs and probes them, every summary lists them with the reason, they do not alert, and their existing unit and contract tests keep covering them offline.
+5. **AI sessions may restart the Tokyo test instance.** Through a dedicated key that can run only six commands (status, start, stop, restart, deploy, logs), plus one Claude Code permission rule for the tester command.
+6. **`FUSA_MESH_PORT`.** A second Bellwood on the same computer gets its own LAN port, so a test instance can never take port 4320 from your own instance.
 
 ## For Workers and reviewers
 
@@ -46,6 +37,7 @@ The tester is a resident test bench plus a handbook in this repository. Any mode
 - [Measured] `pnpm verify` stops once the composer renders (`scripts/verify-smoke.ts:156`). It sends no message and never restarts the daemon. Three runs in this Worker passed with a median of 4.04 s against a 20 s budget (`VERIFY_SMOKE_BUDGET_MS`, `src/shared/limits.ts:241`). Output: `/tmp/ai-tester/verify-baseline/smoke-runs.txt`.
 - [Measured] Every test that crosses an external boundary uses a stand-in: the fake claude (`test/fake-claude/fake-claude.ts`), a fake Feishu hub (`test/e2e/fake-feishu-hub.ts`), a fake gh (`test/fake-gh.ts`), fake devices (`test/fake-devices/main.ts`), and jsdom for web tests. `pnpm smoke` drives the real claude, but only by hand and only claude (`test/smoke/main.ts:1-3`). The nightly workflow runs that same suite (`.github/workflows/nightly.yml`).
 - [Measured] Six of the eight vendor CLIs are installed on this Mac (claude 2.1.330, agy 1.5.14, codex 0.169.0, pi 1.5.2, dsh 0.2.2-rc.1, cursor-agent 2026.11.10). `opencode` and `kimi` are not on PATH. Checked with `command -v` and `--version`. Sign-in state was not probed, so the developer's own CLI accounts stayed untouched.
+- [Measured] The four vendors without bench accounts are covered only offline: each one's `src/vendors/<id>/<id>.test.ts` drives the driver against the shared fake ACP agent and samples copied from real CLI output, and `src/vendors/contract.test.ts` checks every spec statically. No test starts their real CLIs. Checked by reading those files.
 - [Measured] The product already knows how to install and sign in each vendor: `installCommand`, `windowsInstallCommand`, and `headlessLoginCommand` in each `src/vendors/<id>/paths.ts`, `cli.loginCommand` in each spec, and the table in `docs/linux.md` section 2. `scripts/provision-linux.sh` installs every vendor's CLI on Ubuntu from those commands. The daemon reports each vendor as `available`, `not_installed`, or `signed_out` (`src/shared/vendors.ts:240-249`, `src/daemon/daemon.ts:523-526`).
 - [Measured] Inside this Worker's macOS sandbox: outbound HTTPS works (`curl` to `open.feishu.cn` and to the official relay returned HTTP 404 in 0.05 s and 0.88 s), loopback works (`pnpm verify` passed), writes outside the data directory work (a probe directory in `$HOME` was created and removed), and the production state directory is unreadable (`ls ~/.agent-hub/state`: "Operation not permitted"). The sandbox denies outbound connections only to Unix sockets inside the data directory (`src/daemon/driver/write-scope.ts:250`).
 - [Measured] Claude Code's auto-mode classifier refused `ssh` to the Tokyo host with the existing key as unauthorized access. That is a harness policy, not the OS sandbox, so the AI tester needs an explicit permission to reach Tokyo (decision 5). Tokyo's memory and CPU were therefore not checked.
@@ -97,7 +89,7 @@ The bench's long-lived data directories are the point of `lifecycle.restart-keep
 
 - One flow, `model.turn.<id>`, is generated from `VENDOR_LIST` for every vendor and runs on both bench computers, with results keyed `model.turn.<id>@local` and `@remote`. `model.provider-status` checks that the daemon reports every vendor's real state.
 - Install and login commands come from the product (`VENDOR_PATHS` and each spec), the same ones Settings, `docs/linux.md`, and `scripts/provision-linux.sh` use.
-- A future vendor implements one entry in `test/tester/vendors.ts` `VENDOR_BENCH` (its cheapest model and account note). The record is typed over `AgentVendor`, so typecheck fails until the entry exists. Its flows appear automatically.
+- A future vendor implements one entry in `test/tester/vendors.ts` `VENDOR_BENCH`: either a nightly turn with its cheapest model and sign-in step, or an accepted gap with the owner's reason and its offline tests. The record is typed over `AgentVendor`, so typecheck fails until the entry exists. Its flows appear automatically.
 - Platforms: the bench covers macOS (local) and Linux (remote). Windows has no resident machine; it stays covered by the `windows.yml` job and the manual candidate acceptance in `docs/release-flow-design.md`. The tester code itself uses Node APIs and spawns without a shell, so it can run from any of the three.
 
 ### 6. Deletions
@@ -130,9 +122,9 @@ The implementation step also adds: the `tester` script in `package.json`, the re
 - `pnpm typecheck`, `pnpm test:related`, and every `test/tester/*.test.ts`, `scripts/verify-steps.test.ts`, and `src/daemon/mesh/listen-port.test.ts` case filled in. `vendors.test.ts` asserts a recipe for every vendor in `VENDOR_LIST`.
 - `pnpm verify --runs 3`: all pass, the screenshot shows the sent message and the reply, `smoke-runs.txt` lists the two new phases, and the median stays under 10 s.
 - First probe on the real bench: one driver-app message to the test bot's 1-on-1 chat produces a receive event and a Router reply. Save the message list as JSON.
-- `node test/tester/cli.ts preflight` on the real bench: the coverage matrix lists all eight vendors on both computers. Save the output.
+- `node test/tester/cli.ts preflight` on the real bench: the coverage matrix lists all eight vendors on both computers; Claude Code, Codex, Antigravity, and Pi are `ready`, and Cursor, DeepSeek, OpenCode, and Kimi Code are `signed_out` and marked accepted. Save the output.
 - `node test/tester/cli.ts run --cadence nightly` on the real bench, with output and `runs/<runId>/summary.md` saved as files and attached to the PR.
-- Fault check: stop the Tokyo test instance and run `feishu.group-round-trip`; it must come out `env_unavailable` or `product_fail` with the hub's offline notice as evidence, never `pass`. Then rename one vendor's CLI on the bench; preflight must show it `not_installed` with the install command as the fix, and the summary status must be `bench`.
+- Fault check: stop the Tokyo test instance and run `feishu.group-round-trip`; it must come out `env_unavailable` or `product_fail` with the hub's offline notice as evidence, never `pass`. Then rename one vendor's CLI on the bench, once for a nightly vendor and once for an accepted gap; both times preflight must show it `not_installed` with the install command as the fix, and the summary status must be `bench`.
 - Guard check: point a copy of `bench.json` at the production data directory and the production bot; `run` must exit 2 with ProductionGuardError before any instance is touched.
 
 ### 9. Design details
@@ -188,26 +180,35 @@ Every flow saves evidence: Feishu message lists as JSON (including deleted ones)
 
 #### Vendor coverage
 
-Every run probes all eight vendors on both computers without spending tokens: the CLI resolves from the bench `HOME` (ignoring the developer's own tool directories), prints a version, the daemon reports it available, and the vendor's status command shows an account. The result is one of `ready`, `not_installed`, `install_failed`, `signed_out`, `login_blocked`, or `unknown`, each with the fix command.
+Every run probes all eight vendors on both computers without spending tokens: the CLI resolves from the bench `HOME` (ignoring the developer's own tool directories), prints a version, the daemon reports it available, and the vendor's status command shows an account. The result is one of `ready`, `not_installed`, `install_failed`, `signed_out`, `login_blocked`, or `unknown`, each with the fix command. The bench installs all eight CLIs, including the four without accounts, because installing needs no account and it keeps the product's install commands and Settings' "Not signed in" state under test.
 
-| Vendor | Install (from the product) | Sign in on the bench | Turn model |
-| --- | --- | --- | --- |
-| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN` | haiku |
-| Antigravity | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | run `agy` and paste the code, or `GEMINI_API_KEY` | gemini-3.8-flash |
-| Codex | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `codex login --device-auth` with `CODEX_HOME` in the bench `HOME` | account default |
-| Pi | `curl -fsSL https://pi.dev/install.sh \| sh` | run `pi`, then `/login` | deepseek/deepseek-flash |
-| DeepSeek | `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` (npm prefix in the bench `HOME`) | `DEEPSEEK_API_KEY` in `<bench HOME>/.dsh/.env` | deepseek-flash |
-| Cursor | `curl https://cursor.com/install -fsS \| bash` | `NO_OPEN_BROWSER=1 cursor-agent login` | gemini-3.8-flash |
-| OpenCode | `curl -fsSL https://opencode.ai/v2/install \| bash` | `opencode auth login`, or `OPENCODE_API_KEY` | opencode/big-pickle |
-| Kimi Code | `curl -fsSL https://code.kimi.com/kimi-code/install.sh \| bash` | `kimi login` (device code) | kimi-code/k3 |
+| Vendor | Coverage | Install (from the product) | Sign in on the bench | Turn model |
+| --- | --- | --- | --- | --- |
+| Claude Code | nightly turn | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude setup-token` once, passed to both computers as `CLAUDE_CODE_OAUTH_TOKEN` | haiku |
+| Codex | nightly turn | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `codex login --device-auth` with `CODEX_HOME` in the bench `HOME` | account default |
+| Antigravity | nightly turn | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | run `agy` and paste the code | gemini-3.8-flash |
+| Pi | nightly turn | `curl -fsSL https://pi.dev/install.sh \| sh` | run `pi`, then `/login` with an existing subscription | account default |
+| Cursor | accepted gap: the owner cannot use it | `curl https://cursor.com/install -fsS \| bash` | none | none |
+| DeepSeek | accepted gap: no account | `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` (npm prefix in the bench `HOME`) | none | none |
+| OpenCode | accepted gap: no account | `curl -fsSL https://opencode.ai/v2/install \| bash` | none | none |
+| Kimi Code | accepted gap: no account | `curl -fsSL https://code.kimi.com/kimi-code/install.sh \| bash` | none | none |
+
+The decision lives in `test/tester/vendors.ts` `VENDOR_BENCH`, typed over `AgentVendor`, so changing it goes through a reviewed PR and a new vendor cannot be added without one.
 
 Rules:
 
 - A vendor that is not ready gives `not_ready` for its flows on that computer, with the status and fix in the reason. It is never dropped from a run or a summary.
-- Each open gap raises a `coverage` alert on every run. The owner can accept a gap in `bench.json` with a reason (for example, no account yet). An accepted gap stays in the coverage matrix of every summary but stops alerting.
+- A `turn` vendor that is not ready raises a `coverage` alert on every run.
+- An accepted gap is accepted for one status only, `signed_out`. Its turn flows report `not_ready` with the owner's reason and do not alert. Any other status, such as `install_failed` or `not_installed`, still alerts, because a broken install command breaks real users.
+- Every summary lists the four accepted gaps in its coverage matrix, with the date of the decision and the tests that cover them offline.
 - A failed install is retried by `node test/tester/cli.ts vendors install` and saves the command's exit code and last 20 stderr lines.
-- If a vendor's macOS login cannot live in the bench `HOME` (for example, a credential kept only in the login keychain), it is `login_blocked`. The owner then decides between accepting the gap on the Mac and letting that one vendor use the developer's own login.
+- If a vendor's macOS login cannot live in the bench `HOME` (for example, a credential kept only in the login keychain), it is `login_blocked` and alerts. The owner then decides between accepting the gap on the Mac and letting that one vendor use the developer's own login.
 - `model.provider-status` fails when the daemon's reported state differs from the probe, which catches a vendor that is installed but missing from the workbench.
+
+What covers the accepted gaps, and what does not:
+
+- `src/vendors/cursor/cursor.test.ts`, `src/vendors/deepseek/deepseek.test.ts`, `src/vendors/opencode/opencode.test.ts`, and `src/vendors/kimi/kimi.test.ts` drive each driver against a shared fake ACP agent (`src/vendors/_common/acp/fixtures/fake-acp-agent.ts`) and against samples taken from real CLI output, such as the Kimi Code 2.7.1 wire records in `kimi.test.ts` and `REAL_CURSOR_MODELS_TEXT` in `cursor.test.ts`. `src/vendors/contract.test.ts` runs the same static contract for every vendor.
+- These tests catch a Bellwood change that breaks a known CLI behavior. They cannot catch a new CLI release that changes its output, login, or install path; for these four vendors that risk is accepted until an account exists.
 
 #### Two layers
 
@@ -241,10 +242,10 @@ Feishu, the relay, real vendor CLIs, and a second computer stay out of verify; t
 | --- | --- |
 | Servers | 0: Tokyo and the Mac exist. If Tokyo lacks about 1 GB of free memory for the test user, a larger plan costs about 5 USD. |
 | Relay, Feishu, GitHub | 0: free tiers and free accounts |
-| Script layer vendor turns | 16 turns a night on the cheapest models: inside existing subscriptions, plus cents for DeepSeek and Pi keys |
+| Script layer vendor turns | 8 turns a night (four vendors on two computers) on the cheapest models, inside existing subscriptions; no API keys |
 | AI tester sessions | about 4 to 6 a month (RC and triage): inside existing subscriptions; 2 to 10 USD each if paid by API instead |
 
-One-time owner time is about 40 to 50 minutes, more than the 30 minutes first estimated, because sixteen vendor sign-ins (eight vendors on two computers) take 15 to 20 minutes of it. Each later year needs one Feishu consent and renewed vendor tokens.
+One-time owner time is about 40 minutes: the GitHub machine account 5, mesh sign-in and pairing 7, Feishu bot, driver app, consent, and muting 15, seven vendor sign-ins 11 (one Claude token shared by both computers, then Codex, Antigravity, and Pi on each), and the permission rule 2. That is still about 10 minutes over the 30 first estimated; the driver app and the two-computer pairing take most of it. Each later year needs one Feishu consent and renewed vendor tokens.
 
 #### What the bench cannot do
 
@@ -252,5 +253,5 @@ One-time owner time is about 40 to 50 minutes, more than the 30 minutes first es
 - How cards look on the phone: a manual glance during the RC pass.
 - Windows: no resident machine; the Windows CI job and manual candidate acceptance stay.
 - The macOS app shell: the bench runs the daemon from source; the shell stays in manual candidate acceptance.
-- Team mode and guest permissions: need a second Feishu account (decision 3B).
-- Vendors without an account: listed as gaps in every summary until an account exists or the owner accepts the gap.
+- Team mode and guest permissions: need a second Feishu account, which decision 3 rejected.
+- Real turns on Cursor, DeepSeek, OpenCode, and Kimi Code: accepted gaps (decision 4), listed in every summary and covered offline by their unit and contract tests.

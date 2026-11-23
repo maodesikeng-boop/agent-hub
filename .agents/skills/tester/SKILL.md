@@ -15,7 +15,7 @@ Design and rationale: [docs/ai-tester-design.md](../../../docs/ai-tester-design.
 - Never post in a Feishu chat yourself. Only the tester commands post, and only into the test bot's chats.
 - Do not fix product code in a tester step. Report the defect with evidence; a separate step fixes it.
 - Never rerun a failed product check until it passes and call that a pass. A flake is a finding.
-- Never leave a vendor out. Every vendor in `src/vendors/registry.ts` `VENDOR_LIST` appears in your report, ready or not, with the reason and the fix when it is not ready.
+- Never leave a vendor out. Every vendor in `src/vendors/registry.ts` `VENDOR_LIST` appears in your report, ready or not, with the reason and the fix when it is not ready. The owner's coverage decision per vendor is `VENDOR_BENCH` in `test/tester/vendors.ts`: an accepted gap is listed with its reason and does not alert, but only while its status is the accepted one. Do not change that file to make a run go green.
 
 ## The bench
 
@@ -86,7 +86,7 @@ Scripts check rules. You also check what a user would notice:
 
 1. Verdict: PASS, FAIL, or BLOCKED (the bench could not test it), in one line.
 2. Flows: one line per flow result with verdict and evidence path.
-3. Vendor coverage: all eight vendors on both computers, with status, and the fix for each one not ready.
+3. Vendor coverage: all eight vendors on both computers, with status; the fix for each one not ready; accepted gaps marked as such with the owner's reason.
 4. Defects: numbered user steps, expected, actual, evidence.
 5. Bench work for the owner or Project Manager.
 6. Escapes: for each defect no flow caught, the flow or check you propose.
