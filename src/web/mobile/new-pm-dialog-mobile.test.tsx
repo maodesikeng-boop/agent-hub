@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CUSTOM_MODEL, DEFAULT_AGENT_VENDOR, serverInfoFor } from "../../shared/index.ts";
+import { DEFAULT_AGENT_VENDOR, serverInfoFor } from "../../shared/index.ts";
 import { createClient } from "../client.ts";
 import { NewPmDialog, type NewPmDevice } from "../components/NewPmDialog.tsx";
 import { LOCAL_DEVICE } from "../devices.ts";
@@ -92,7 +92,7 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
     const closeBtn = within(dialog).getByRole("button", { name: "Close" });
     expect(closeBtn).toHaveClass("touch-target", "text-muted-foreground");
     expect(closeBtn.className).not.toMatch(/(^|\s)bg-/);
-    expect(closeBtn.className).not.toContain("border");
+    expect(closeBtn.className).not.toMatch(/(?:^|\s)border(?:-\S+)?(?=\s|$)/);
 
     const body = dialog.querySelector<HTMLElement>('[data-slot="dialog-body"]')!;
     expect(body).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
@@ -128,7 +128,8 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
     const modelSelect = within(dialog).getByRole("combobox", { name: "Model" });
-    await user.selectOptions(modelSelect, CUSTOM_MODEL);
+    await user.click(modelSelect);
+    await user.click(await screen.findByRole("option", { name: /Custom/i }));
 
     const customModelInput = within(dialog).getByRole("textbox", { name: "Model name" });
     expect(customModelInput).toHaveAttribute("autocapitalize", "none");
@@ -192,7 +193,8 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
     );
 
     const dialog = screen.getByRole("dialog", { name: "New project manager" });
-    expect(dialog).toHaveClass("max-w-130", "rounded-2xl", "p-6");
+    expect(dialog).toHaveClass("max-w-130", "border-2", "p-6");
+    expect(dialog.className).not.toMatch(/rounded-/);
     expect(dialog.className).not.toContain("inset-0");
 
     const nameInput = within(dialog).getByRole("textbox", { name: "Name" });

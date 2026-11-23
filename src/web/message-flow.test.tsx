@@ -165,36 +165,31 @@ describe("正在跑和跑完", () => {
   });
 });
 
-describe("Worker 的发言", () => {
+describe("Worker 线程卡（ThreadCard）", () => {
   const report = (over: Parameters<typeof makeWorkerLine>[0]["line"] = {}) =>
     makeWorkerLine({ id: 5, line: { event: "report", status: "done", summary: "按钮统一成 36px，开了 PR #128", ...over } });
 
-  it("头像和标题在气泡上面，摘要在靠左的气泡里，整个气泡点开 Worker 的对话", async () => {
+  it("一张直角 2px 卡片内放纸片小灵头像、标题、状态词、时间和第一行摘要，整张卡片可点开 Worker 对话", async () => {
     const onOpenWorker = vi.fn();
     const { container } = list([report()], { actions: actions({ onOpenWorker }) });
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
     expect(row).toHaveAttribute("data-side", "left");
-    expect(row.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
-    expect(within(row).getByText("修 X")).toBeInTheDocument();
     const bubble = within(row).getByRole("button");
     expect(bubble).toHaveAttribute("data-bubble");
+    expect(bubble.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
+    expect(bubble).toHaveTextContent("修 X");
+    expect(bubble).toHaveTextContent("Done");
     expect(bubble).toHaveTextContent("按钮统一成 36px，开了 PR #128");
-    // 头像和标题在气泡外面、气泡前面
-    expect(bubble).not.toContainElement(row.querySelector("[data-slot='avatar']"));
-    expect(bubble).not.toHaveTextContent("修 X");
-    // 圆角、内边距和用户气泡同一套，悬停有反馈
-    const user = list([makeUserMessage({ id: 1 })]).container.querySelector("[data-bubble]") as HTMLElement;
-    for (const cls of ["rounded-[22px]", "px-4", "py-2.5"]) {
-      expect(bubble.className).toContain(cls);
-      expect(user.className).toContain(cls);
-    }
-    expect(bubble.className).toContain("hover:");
+    const userBubble = list([makeUserMessage({ id: 1 })]).container.querySelector("[data-bubble]") as HTMLElement;
+    expect(bubble.className).not.toMatch(/rounded-/);
+    expect(userBubble.className).not.toMatch(/rounded-/);
+    expect(bubble).toHaveClass("border-2", "border-border-strong", "bg-background", "hover:bg-hover");
     expect(row.innerHTML).not.toContain("Piece「");
     await userEvent.click(bubble);
     expect(onOpenWorker).toHaveBeenCalledWith(30);
   });
 
-  it("状态不写字：做完了、有问题、放弃了、出错各一种颜色，字放在 title 和 aria-label", () => {
+  it("状态写英文状态词配颜色方块：Done / Problem / Gave up / Error，失败原因写成人话且原文在 title", () => {
     const { container } = list([
       report(),
       report({ status: "problem", summary: "缺一个 key" }),
@@ -205,40 +200,37 @@ describe("Worker 的发言", () => {
     const rows = Array.from(container.querySelectorAll("[data-worker-report]")) as HTMLElement[];
     expect(rows.map((r) => r.getAttribute("data-tone"))).toEqual(["success", "warn", "danger", "danger", "danger"]);
     const buttons = rows.map((r) => within(r).getByRole("button"));
-    expect(buttons.map((b) => b.getAttribute("title"))).toEqual(["做完了", "有问题", "放弃了", "Error", "Error"]);
+    for (const [i, label] of ["Done", "Problem", "Gave up", "Error", "Error"].entries()) {
+      expect(buttons[i]!).toHaveTextContent(label);
+    }
     expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
-      "修 X, 做完了: 按钮统一成 36px，开了 PR #128",
-      "修 X, 有问题: 缺一个 key",
-      "修 X, 放弃了: 做不了",
-      "修 X, Error: Claude 服务繁忙，稍后重试",
-      "修 X, Error: 被停止了",
+      "修 X, Done, 按钮统一成 36px，开了 PR #128",
+      "修 X, Problem, 缺一个 key",
+      "修 X, Gave up, 做不了",
+      "修 X, Error, Claude 服务繁忙，稍后重试",
+      "修 X, Error, 被停止了",
     ]);
-    // 界面上不再有状态的字
-    for (const word of ["做完了", "有问题", "放弃了"]) expect(container).not.toHaveTextContent(word);
-    expect(container.querySelector("[data-tag]")).toBeNull();
-    // 出错的原因写成人话，原文在正文的 title
     expect(within(rows[3]!).getByText("Claude 服务繁忙，稍后重试")).toHaveAttribute("title", "error_during_execution: API Error: 529 Overloaded");
   });
 
-  it("气泡永远是中性浅灰，状态是头像右下角的色点；中性的没有点", () => {
+  it("卡片内部状态方块按 tone 着色（bg-success / bg-caution / bg-danger），无状态时无方块", () => {
     const { container } = list([report({ status: "problem" })]);
-    const bubble = container.querySelector("[data-bubble]") as HTMLElement;
-    expect(bubble.className).toContain("bg-bubble-agent");
     const dot = container.querySelector("[data-dot]") as HTMLElement;
     expect(dot).toHaveAttribute("data-dot", "warn");
     expect(dot).toHaveAttribute("aria-hidden", "true");
     expect(dot.className).toContain("bg-caution");
-    expect(dot.closest("[data-slot='agent-head']")).not.toBeNull();
+    expect(dot.className).not.toContain("rounded-");
+    expect(dot.closest("[data-bubble]")).not.toBeNull();
     const dots = list([report(), report({ status: "gave_up" }), report({ status: "unformatted" })]).container.querySelectorAll("[data-dot]");
     expect(Array.from(dots).map((d) => d.getAttribute("data-dot"))).toEqual(["success", "danger"]);
   });
 
-  it("没按格式：中性灰、没有 title，正文是第一行", () => {
+  it("没按格式：中性边、没有状态方块和状态字，正文是第一行", () => {
     const { container } = list([report({ status: "unformatted", summary: "我改完了" })]);
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
     expect(row).toHaveAttribute("data-tone", "neutral");
+    expect(row.querySelector("[data-dot]")).toBeNull();
     const bubble = within(row).getByRole("button");
-    expect(bubble).not.toHaveAttribute("title");
     expect(bubble).toHaveTextContent("我改完了");
   });
 
@@ -251,7 +243,8 @@ describe("Worker 的发言", () => {
 
   it("汇报后面项目经理的回复另起一轮（新头像）", () => {
     const { container } = list([makeMessage({ id: 1, text: "派好了" }), report(), makeMessage({ id: 6, text: "收到" })]);
-    expect(heads(container)).toHaveLength(3);
+    expect(heads(container)).toHaveLength(2);
+    expect(container.querySelectorAll("[data-worker-report]")).toHaveLength(1);
   });
 
   it("Worker 对话里：项目经理的话是项目经理的水果小动物头像 + 名字，Worker 自己是同一只小动物的纸片分身头像", () => {
@@ -278,14 +271,27 @@ describe("Worker 的发言", () => {
 });
 
 describe("系统行", () => {
-  it("建项目、挂文件夹：靠左很淡的一行（12px、灰），不居中、没有底色", () => {
-    const { container } = list([makeSystemMessage({ id: 1, text: "项目已建好" })]);
+  it("建项目、挂文件夹：结构化活动条靠左展示（带标签与 2px 边），不居中、没有灰气泡", () => {
+    const { container } = list([makeSystemMessage({ id: 1, text: "项目已建好", event: { event: "project.created", projectId: 1 } })]);
     const notice = screen.getByText("项目已建好").closest("[data-notice]") as HTMLElement;
     expect(notice).toHaveAttribute("data-side", "left");
-    expect(notice.className).toContain("text-xs");
-    expect(notice.className).toContain("text-muted-foreground");
-    expect(container.innerHTML).not.toContain("justify-center");
+    expect(within(notice).getByText("Project")).toBeInTheDocument();
+    expect(notice.parentElement?.className).toContain("border-2");
+    expect(notice.parentElement?.className).toContain("bg-panel");
+    expect(notice.className).not.toContain("justify-center");
     expect(container.innerHTML).not.toContain("bg-muted");
+  });
+
+  it("连续同族系统事件合并在同一个活动条容器里，不重复画外边框", () => {
+    const { container } = list([
+      makeSystemMessage({ id: 1, text: "挂上了文件夹：/repo", event: { event: "folder.attached", projectId: 1, folderId: 1, path: "/repo" } }),
+      makeSystemMessage({ id: 2, text: "项目经理改了性格设定", event: { event: "persona.changed", pmId: 1, personaChangeId: 1, revertOf: null } }),
+    ]);
+    const groups = container.querySelectorAll("[data-event-group]");
+    expect(groups).toHaveLength(1);
+    expect(within(groups[0] as HTMLElement).getByText("Folder")).toBeInTheDocument();
+    expect(within(groups[0] as HTMLElement).getByText("Persona")).toBeInTheDocument();
+    expect(within(groups[0] as HTMLElement).getByRole("button", { name: "Undo" })).toBeInTheDocument();
   });
 
   it("不在一轮里的派出、收工：很淡的一行，点开 Worker", async () => {
@@ -395,7 +401,8 @@ describe("消息状态（照微信）：不写字，只有没发出去左边一�
     const row = mark.parentElement as HTMLElement;
     expect(row).toHaveClass("flex", "items-center", "justify-end");
     expect(row.firstElementChild).toBe(mark);
-    expect(mark.querySelector("span")).toHaveClass("size-5", "rounded-full", "bg-danger", "text-white");
+    expect(mark.querySelector("span")).toHaveClass("size-5", "bg-danger", "text-white");
+    expect(mark.querySelector("span")!.className).not.toMatch(/rounded-/);
     fireEvent.click(mark);
     expect(onRetryMessage).toHaveBeenCalledWith(1);
   });

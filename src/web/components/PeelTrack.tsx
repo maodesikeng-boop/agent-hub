@@ -12,6 +12,7 @@ import {
   type WorkerId,
 } from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
+import { clearDecisionDraft, gateDecisionDraftKey, getDecisionDraft, setDecisionDraft, useDecisionDraft } from "../decision-drafts.ts";
 import { cleanPieceTitle, errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
@@ -168,27 +169,18 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   graphId,
   node,
   client,
-  onNoteToggle,
 }: {
   graphId: TaskGraphId;
   node: TaskNode;
   client: HubClient;
-  onNoteToggle?: (open: boolean) => void;
 }) {
   const qc = useHubQueryClient();
+  const draftKey = gateDecisionDraftKey(client.device, graphId, node.key, node.gateAskMessageId);
+  const draft = useDecisionDraft(draftKey);
   const hasOptions = node.gateOptions.length > 0;
-  const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(node.gateCheckpoint));
-  const [noteRev, setNoteRev] = useState(0);
-  const noteRef = useRef("");
   const [err, setErr] = useState<ErrorLike | null>(null);
   const clientIdRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
-
-  useEffect(() => {
-    if (!hasOptions || node.gateCheckpoint) {
-      setNoteOpen(true);
-    }
-  }, [hasOptions, node.gateCheckpoint, node.gateAskMessageId]);
 
   const decideMutation = useMutation(
     {
@@ -203,8 +195,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
       onMutate: () => setErr(null),
       onSuccess: () => {
         clientIdRef.current = null;
-        noteRef.current = "";
-        setNoteRev((n) => n + 1);
+        clearDecisionDraft(draftKey);
       },
       onError: (error) => {
         setErr(errorText(error));
@@ -229,11 +220,12 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   return (
     <div
       data-testid="peel-gate-card"
-      className="rounded-2xl border border-primary bg-jelly px-3.5 py-3 [contain:layout_style]"
+      className="border-2 border-open-line bg-open px-3.5 py-3 [contain:layout_style]"
     >
       {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
         text={node.gateSummaryMd ?? ""}
+        titleText={node.gateQuestion ?? ""}
         deliverables={node.artifact?.deliverables}
         className="mb-2"
         textClassName="text-minor leading-relaxed text-foreground"
@@ -247,12 +239,12 @@ export const GateDecisionCard = memo(function GateDecisionCard({
                 key={opt}
                 type="button"
                 disabled={decideMutation.isPending}
-                onClick={() => submit(opt, noteRef.current)}
+                onClick={() => submit(opt, getDecisionDraft(draftKey))}
                 className={cn(
-                  "flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-left text-minor font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:bg-sidebar-active disabled:text-muted-foreground",
+                  "flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-center justify-between gap-2 border-2 px-3 py-1.5 text-left text-minor font-medium transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:border-border-strong disabled:bg-send-disabled disabled:text-muted-foreground",
                   isRec
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                    : "border border-border bg-background text-foreground hover:bg-jelly-hover",
+                    ? "border-black/25 bg-primary text-primary-foreground shadow-[inset_0_-2px_0_rgb(0_0_0_/_0.22)] hover:brightness-90"
+                    : "border-border-strong bg-background text-foreground hover:bg-hover",
                 )}
               >
                 <span className="min-w-0 flex-1 wrap-anywhere">{opt}</span>
@@ -262,29 +254,18 @@ export const GateDecisionCard = memo(function GateDecisionCard({
           })}
         </div>
       )}
-      {!noteOpen && hasOptions ? (
-        <button
-          type="button"
-          onClick={() => {
-            setNoteOpen(true);
-            onNoteToggle?.(true);
-          }}
-          className="mt-2 inline-flex min-h-7 pointer-coarse:min-h-11 cursor-pointer items-center rounded-xl px-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          Add note
-        </button>
-      ) : (
-        <CardNoteForm
-          disabled={decideMutation.isPending}
-          pending={decideMutation.isPending}
-          resetRev={noteRev}
-          noteRef={noteRef}
-          onSubmitNote={(raw) => submit(null, raw)}
-          className={cn("flex items-center gap-2", hasOptions && "mt-2.5")}
-          inputClassName="min-w-0 flex-1 text-minor"
-          buttonSize="sm"
-        />
-      )}
+      <CardNoteForm
+        key={draftKey}
+        value={draft}
+        onChange={(next) => setDecisionDraft(draftKey, next)}
+        disabled={decideMutation.isPending}
+        pending={decideMutation.isPending}
+        onSubmitNote={(raw) => submit(null, raw)}
+        tone="open"
+        className={hasOptions ? "mt-3" : "mt-2"}
+        inputClassName="min-w-0 flex-1 text-minor"
+        buttonSize="sm"
+      />
       {err !== null && (
         <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
           {errorLine(err)}
@@ -332,7 +313,7 @@ function PeelStageRow({
         data-testid="peel-gate-row"
         title={node.title}
         onClick={() => onOpenStepAsk(node)}
-        className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center border-2 border-transparent px-2.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
       >
         <PeelGutter kind="gate" gutterWidth={gutterWidth} dotX={dotX} segments={segments} />
         <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
@@ -375,7 +356,7 @@ function PeelStageRow({
           className={cn(
             "min-w-0 truncate text-minor",
             (isBlocked || isSkipped) && "text-muted-foreground",
-            isSkipped && "opacity-60",
+            isSkipped && "opacity-65",
             isRunning && "status-shimmer text-foreground",
             !isBlocked && !isSkipped && !isRunning && "text-foreground",
           )}
@@ -398,8 +379,8 @@ function PeelStageRow({
         title={node.title}
         onClick={() => onOpenWorker(worker.conversationId)}
         className={cn(
-          "-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-          active ? "bg-jelly" : "hover:bg-jelly-hover",
+          "-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center border-2 border-transparent px-2.5 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
+          active ? "border-open-line bg-open" : "hover:bg-hover",
         )}
       >
         {content}
@@ -897,7 +878,7 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
               key={row.item.key}
               type="button"
               onClick={() => setDoneExpanded(true)}
-              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-jelly-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
             >
               <PeelGutter
                 kind="coil"
@@ -915,7 +896,7 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
               key={row.item.key}
               type="button"
               onClick={() => setNextExpanded(true)}
-              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-jelly-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
             >
               <PeelGutter
                 kind={row.gutterKind}
@@ -1051,7 +1032,7 @@ export const PeelTrackList = memo(function PeelTrackList({
                 data-testid="peel-graph-toggle"
                 aria-expanded={open}
                 onClick={() => toggleGraph(graph.id)}
-                className="flex min-h-9 pointer-coarse:min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-xl py-1.5 pr-1 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="flex min-h-9 pointer-coarse:min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-1.5 pr-1 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
               >
                 <TaskProgressIcon graph={graph} color={color} size={20} />
                 <span title={graph.title} className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>

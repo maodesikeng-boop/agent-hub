@@ -2,7 +2,8 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MessageBubble, type MessageActions } from "./components/Messages.tsx";
-import { Sidebar } from "./components/Sidebar.tsx";
+import { ProjectList } from "./components/ProjectList.tsx";
+import { LOCAL_DEVICE } from "./devices.ts";
 import type { ConversationEntry } from "./selectors.ts";
 import { makeMessage, makeUserMessage } from "./test-utils.ts";
 import { stripMarkdown } from "./plainText.ts";
@@ -10,9 +11,19 @@ import { stripMarkdown } from "./plainText.ts";
 import { defaultLookOf } from "../shared/slimes.ts";
 const identity = { name: "小林", look: defaultLookOf(1) };
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
-const sidebarProps = { waiting: new Set<string>(), asking: new Set<string>(), notify: { permission: "granted" as const, enabled: true, setEnabled: async () => {} }, quota: [], onNewPm: () => {} };
-/** 只有入口本机一台（没有设备分组）。 */
-const only = (entries: ConversationEntry[]) => [{ key: "", name: "本机", platform: "darwin", status: "online" as const, lastOnlineAt: null, entries }];
+const listProps = {
+  layout: "column" as const,
+  computer: { key: LOCAL_DEVICE, name: "本机", status: "online" as const },
+  switchable: false,
+  waiting: new Set<string>(),
+  asking: new Set<string>(),
+  readOnly: false,
+  onSelect: () => {},
+  onNewPm: () => {},
+  onTogglePin: () => {},
+  onOpenPmSettings: () => {},
+  onOpenComputers: () => {},
+};
 
 function agentSays(text: string) {
   return render(<MessageBubble message={makeMessage({ id: 1, text })} identity={identity} head actions={actions} />);
@@ -144,7 +155,7 @@ describe("左栏预览", () => {
   }
 
   it("agent 的最后一条消息去掉 Markdown 符号", () => {
-    render(<Sidebar groups={only([entry("原因找到了：**ack** 发早了，见 [文档](https://x.y)")])} active={{ device: "", id: 1 }} onSelect={() => {}} {...sidebarProps} />);
+    render(<ProjectList entries={[entry("原因找到了：**ack** 发早了，见 [文档](https://x.y)")]} active={{ device: LOCAL_DEVICE, id: 1 }} {...listProps} />);
     const button = screen.getByRole("button", { name: /小林/ });
     expect(button).toHaveTextContent("原因找到了：ack 发早了，见 文档");
     expect(button).not.toHaveTextContent("**");
@@ -154,7 +165,7 @@ describe("左栏预览", () => {
   it("用户发的最后一条消息也按原文显示（不是 Markdown）", () => {
     const e = entry("我写了 **两个** 星号");
     e.lastMessage = makeUserMessage({ id: 9, text: "我写了 **两个** 星号" });
-    render(<Sidebar groups={only([e])} active={{ device: "", id: 1 }} onSelect={() => {}} {...sidebarProps} />);
+    render(<ProjectList entries={[e]} active={{ device: LOCAL_DEVICE, id: 1 }} {...listProps} />);
     expect(screen.getByRole("button", { name: /小林/ })).toHaveTextContent("我写了 **两个** 星号");
   });
 });

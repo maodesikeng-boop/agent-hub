@@ -77,7 +77,7 @@ async function boot(snap: StateSnapshot) {
   return api;
 }
 
-const sidePanel = () => screen.getByRole("complementary", { name: "Side panel" });
+const sidePanel = () => screen.getByRole("complementary", { name: "Pieces" });
 
 beforeEach(() => {
   localStorage.clear();

@@ -4,9 +4,12 @@ import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx"
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { UpdateSettings } from "../../components/UpdateSettings.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
+import { formatQuotaReset } from "../../format.ts";
+import { cn } from "../../lib/utils.ts";
 import type { NotifySettings } from "../../notify.ts";
 import { useCachedResourcesSummary } from "../../resources-model.ts";
 import type { SettingsSection } from "../../route.ts";
+import type { QuotaVendor } from "../../selectors.ts";
 import {
   describeComputersSummary,
   describeNotifySummary,
@@ -32,6 +35,7 @@ export interface MobileSettingsProps {
   section: SettingsSection | undefined;
   notify: NotifySettings;
   devices: DeviceSettings | null;
+  quota?: readonly QuotaVendor[];
   defaultProviderDevice?: DeviceKey;
   onOpen: (section: SettingsSection) => void;
   onBack: () => void;
@@ -84,18 +88,60 @@ const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
   browsers: { title: "Signed-in browsers", render: (ctx) => <BrowsersPage {...(ctx.onSignedOut !== undefined ? { onSignedOut: ctx.onSignedOut } : {})} /> },
 };
 
+function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
+  const vendors = quota.filter((v) => v.windows.length > 0);
+  if (vendors.length === 0) return null;
+  return (
+    <SettingsGroup title="Usage">
+      {vendors.map((vendor) => (
+        <div key={vendor.id} className="grid gap-2.5 px-4 py-3">
+          <div className="text-minor font-semibold text-foreground">{vendor.group ? `${vendor.name} (${vendor.group})` : vendor.name}</div>
+          {vendor.windows.map((w) => {
+            const full = w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100));
+            const barClass = full ? "bg-danger" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-rail-ink";
+            const fillWidth = Math.min(100, Math.max(0, w.percent));
+            return (
+              <div key={w.key} className="grid gap-1.5">
+                <div className="flex items-baseline gap-2 text-minor">
+                  <span className="shrink-0 font-medium text-foreground">{w.short}</span>
+                  {w.resetsAt !== null && (
+                    <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">Resets {formatQuotaReset(w.resetsAt)}</span>
+                  )}
+                  <span className={cn("ml-auto shrink-0 font-semibold tabular-nums", full ? "text-danger" : "text-foreground")}>{w.percent}%</span>
+                </div>
+                <div
+                  role="progressbar"
+                  aria-label={`${vendor.name} ${w.short} usage`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={w.percent}
+                  className="h-2 overflow-hidden border border-border-strong bg-panel"
+                >
+                  <div className={cn("h-full", barClass)} style={{ width: `${fillWidth}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </SettingsGroup>
+  );
+}
+
 function SettingsHome({
   notify,
   devices,
+  quota,
   vendorSynced,
   onOpen,
   onBack,
 }: {
   notify: NotifySettings;
   devices: DeviceSettings | null;
+  quota: readonly QuotaVendor[];
   vendorSynced: boolean;
   onOpen: (section: SettingsSection) => void;
-  onBack: () => void;
+  onBack?: () => void;
 }) {
   const { label: scaleLabel } = useUiScaleSetting();
   const providers = useCachedProvidersSummary();
@@ -104,7 +150,8 @@ function SettingsHome({
   const update = useCachedUpdateStatus();
   const updateReminder = updateReminderOf(update, useDismissedUpdate());
   return (
-    <SettingsPage title="Settings" home onBack={onBack}>
+    <SettingsPage title="Settings" home {...(onBack !== undefined ? { onBack } : {})}>
+      <UsageGroup quota={quota} />
       <SettingsGroup title="General">
         <SettingsNavRow icon={<Type aria-hidden="true" />} label="Interface scale" summary={scaleLabel} onClick={() => onOpen("scale")} />
         <SettingsNavRow icon={<Bell aria-hidden="true" />} label="Notifications" summary={describeNotifySummary(notify)} onClick={() => onOpen("notifications")} />
@@ -164,11 +211,14 @@ function SettingsHome({
   );
 }
 
+const NO_QUOTA: readonly QuotaVendor[] = [];
+
 // App rerenders on every streaming frame; all props here are stable.
 export const MobileSettings = memo(function MobileSettings({
   section,
   notify,
   devices,
+  quota = NO_QUOTA,
   defaultProviderDevice = LOCAL_DEVICE,
   onOpen,
   onBack,
@@ -186,7 +236,7 @@ export const MobileSettings = memo(function MobileSettings({
   return (
     <div data-testid="mobile-settings" className="flex h-full min-w-0 flex-1 flex-col">
       <Activity mode={spec === null ? "visible" : "hidden"}>
-        <SettingsHome notify={notify} devices={devices} vendorSynced={vendor.lastSummary !== null} onOpen={onOpen} onBack={onBack} />
+        <SettingsHome notify={notify} devices={devices} quota={quota} vendorSynced={vendor.lastSummary !== null} onOpen={onOpen} />
       </Activity>
       {spec !== null && (
         <SettingsPage key={section} title={spec.title} onBack={onBack} footer={spec.footer?.(ctx)}>

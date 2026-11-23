@@ -14,7 +14,7 @@ manage every repository and machine through Router, and ship or verify work by `
 
 <br>
 
-<img src="docs/screenshots/readme/workspace-en.png" width="900" alt="Bellwood three-pane workspace: Router and paired machines in the left sidebar, a single Project Manager thread with worker summary bubbles and a decision card in the center, and the live Task Graph track on the right">
+<img src="docs/screenshots/readme/workspace-en.png" width="900" alt="Bellwood workspace: fixed left rail with Router and paired computers, resizable project list with pinned managers, one continuous Project Manager thread with worker cards and a decision card, and the Pieces and Task Graph side panel">
 
 </div>
 
@@ -55,7 +55,7 @@ Long-running agent threads bog down when context fills up, branches collide, or 
 <img src="docs/screenshots/readme/task-graph-en.png" alt="Task Graph full DAG dialog with parallel branches, automatic progression, and an inline decision card">
 </td>
 <td width="50%">
-<img src="docs/screenshots/readme/memory-en.png" alt="Project Manager profile showing cross-vendor Persona rules and editable topic memory files">
+<img src="docs/screenshots/readme/memory-en.png" alt="Project Manager settings panel showing editable topic memory files alongside the conversation">
 </td>
 </tr>
 </table>
@@ -98,20 +98,21 @@ Once a Task Graph is created, the daemon advances each step on its own. When a s
 
 Code searches, test runs, and noisy logs stay inside short-lived Workers, and critical changes run through an independent read-only review on a second model vendor so you never have to wade through thousand-line diffs in the main chat. What reaches you are clear decision cards with a recommended option alongside inline screenshots, screen recordings, diagrams, and verification summaries.
 
-### 7. A calm three-pane view
+### 7. A calm four-pane view
 
 | Pane | What lives there |
 | :-- | :-- |
-| **Left sidebar** | Pinned **Router** at the top, followed by one pixel fruit slime per project, grouped by computer when linked. Hundreds of historical sub-tasks never clutter your conversation list. |
+| **Workspace rail** | Pinned **Router** at the top alongside your paired computers with status dots and attention badges, plus usage, settings, and account actions at the bottom. |
+| **Project list** | Resizable column showing your **Pinned** and active Project Managers—one pixel fruit slime per project—while keeping hundreds of historical sub-tasks out of your sidebar. |
 | **Center chat** | One continuous PM conversation. Routine tool calls stay folded by default so the thread reads like a clean chat. |
-| **Right rail** | Live **Task Graph** pipeline, active **Pieces**, and items waiting for your call. Open any Piece to inspect its steps or message it directly, with automatic copies to the PM so context never splits. |
+| **Side panel** | Live **Task Graph** pipeline, active **Pieces**, inline **Worker** threads, and PM settings pages open beside the chat without losing your place. |
 
 ## Router: one entry point across projects and machines
 
-When your projects span a laptop, a desktop workstation, and a remote Linux server, **Router** sits at the top of the sidebar as your single control center. How does one entry point coordinate everything without bogging down?
+When your projects span a laptop, a desktop workstation, and a remote Linux server, **Router** sits at the top of the workspace rail as your single control center. How does one entry point coordinate everything without bogging down?
 
 <div align="center">
-<img src="docs/screenshots/readme/router-en.png" width="900" alt="Router workbench: pending decision cards from Studio Mac and Tokyo Server alongside cross-project status answers">
+<img src="docs/screenshots/readme/router-en.png" width="900" alt="Router workbench: full-width queue of pending decision cards from Studio Mac and Tokyo Mini alongside cross-project status answers">
 </div>
 
 <br>

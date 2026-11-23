@@ -4,11 +4,16 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { JELLY_COLOR_IDS, opticalLiftOf, routerBellPaths, slimePaths, type SlimeLook } from "../shared/slimes.ts";
 import { App } from "./App.tsx";
+import { createClient } from "./client.ts";
 import { Avatar } from "./components/Avatar.tsx";
 import { MessageList } from "./components/MessageList.tsx";
 import { RouterAvatar } from "./components/RouterAvatar.tsx";
 import { SlimePicker } from "./components/SlimePicker.tsx";
-import { Sidebar, type SidebarLayout } from "./components/Sidebar.tsx";
+import { AppRail } from "./components/AppRail.tsx";
+import { ProjectList, type ProjectListLayout } from "./components/ProjectList.tsx";
+import { LOCAL_DEVICE } from "./devices.ts";
+import { DeviceScope } from "./device-scope.tsx";
+import { serverInfoFor } from "../shared/index.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeMessage, makePm, makeSnapshot, makeUserMessage, openFirstConversation, type Reply } from "./test-utils.ts";
 
 const look: SlimeLook = { fruit: "orange", color: "sky" };
@@ -48,29 +53,50 @@ describe("史莱姆与总助", () => {
     expect(avatarArt(container)).not.toEqual(piece);
   });
 
-  it.each<SidebarLayout>(["wide", "rail", "page"])("%s 左栏使用同尺寸的总助和项目经理头像框", (layout) => {
+  it.each<ProjectListLayout>(["column", "strip", "page"])("%s 左栏列表与 AppRail 保持紧凑头像框与 slot 按钮样式", (layout) => {
     const entries = [
       { id: 1, name: "Juniper", lastMessage: makeMessage({ id: 10, text: "One update" }), lastAt: 1 },
       { id: 2, name: "Fern", lastMessage: null, lastAt: 0 },
     ].map((entry) => ({ ...entry, look, pm: null, project: null, folders: [] }));
-    render(<Sidebar
-      layout={layout}
-      groups={[{ key: "", name: "This computer", platform: "darwin", status: "online", lastOnlineAt: null, entries }]}
-      active={null}
-      router={{ active: false, pendingCount: 2, unreadReportCount: 0, subtitle: "", working: false, onSelect: vi.fn() }}
-      waiting={new Set()}
-      asking={new Set()}
-      notify={{ permission: "granted", enabled: true, setEnabled: async () => {} }}
-      onSelect={vi.fn()}
-      onNewPm={vi.fn()}
-    />);
-    for (const name of ["Router", "Juniper", "Fern"]) {
+    render(
+      <DeviceScope client={createClient(null)} server={serverInfoFor("darwin")}>
+        <div className="flex">
+          <AppRail
+            router={{ active: false, pendingCount: 2, working: false, onSelect: vi.fn() }}
+            computers={[]}
+            selectedComputer={LOCAL_DEVICE}
+            meter={null}
+            quota={[]}
+            quotaFetchable={false}
+            onSelectComputer={vi.fn()}
+            onOpenSettings={vi.fn()}
+            onOpenUpdates={vi.fn()}
+            onOpenAccount={vi.fn()}
+          />
+          <ProjectList
+            layout={layout}
+            computer={{ key: LOCAL_DEVICE, name: "This computer", status: "online" }}
+            switchable={false}
+            entries={entries}
+            active={null}
+            waiting={new Set()}
+            asking={new Set()}
+            readOnly={false}
+            onSelect={vi.fn()}
+            onNewPm={vi.fn()}
+            onTogglePin={vi.fn()}
+            onOpenPmSettings={vi.fn()}
+            onOpenComputers={vi.fn()}
+          />
+        </div>
+      </DeviceScope>,
+    );
+    expect(screen.getByRole("button", { name: "Router (2 waiting)" }).querySelector('[data-slot="router-avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
+    for (const name of ["Juniper", "Fern"]) {
       const row = screen.getByRole("button", { name: new RegExp(name) });
-      expect(row).toHaveClass(layout === "rail" ? "size-13" : "h-18");
-      expect(row.querySelector('[data-slot$="avatar"]')?.getAttribute("style")).toContain(layout === "rail" ? "width: 2.5rem" : "width: 3rem");
-      if (layout !== "rail") expect(within(row).getByText(name)).toHaveClass("text-title", "font-semibold");
+      expect(row.querySelector('[data-slot="avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
     }
-    for (const name of ["Settings", "New project manager"]) expect(screen.getByRole("button", { name })).toHaveClass("tool-slot");
+    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("tool-slot");
   });
 });
 
@@ -87,8 +113,8 @@ describe("换水果和颜色", () => {
     expect(within(color).getAllByRole("radio")).toHaveLength(JELLY_COLOR_IDS.length);
     for (const avatar of fruit.querySelectorAll("[data-look]")) expect(avatar.getAttribute("data-look")).toMatch(/:sky$/);
     const selected = within(fruit).getByRole("radio", { checked: true });
-    expect(selected).toHaveClass("bg-jelly");
-    expect(within(color).getByRole("radio", { checked: true })).toHaveClass("ring-2");
+    expect(selected).toHaveClass("bg-open", "border-open-line");
+    expect(within(color).getByRole("radio", { checked: true })).toHaveClass("border-border-focus", "bg-hover");
     expect(selected).toHaveFocus();
     await user.keyboard("{ArrowRight}{Enter}");
     const next = change.mock.lastCall?.[0];

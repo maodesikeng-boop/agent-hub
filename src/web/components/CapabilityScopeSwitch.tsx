@@ -34,7 +34,7 @@ function ProjectPicker({
       <PopoverTrigger
         aria-label={`Project: ${value.label}`}
         title={value.label}
-        className="touch-target flex h-9 max-w-full min-w-0 cursor-pointer items-center gap-2 rounded-full border border-border bg-background pr-3 pl-2 text-minor font-medium transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=open]:bg-sidebar-active"
+        className="touch-target flex h-9 max-w-full min-w-0 cursor-pointer items-center gap-2 border-2 border-border-strong bg-background pr-3 pl-2 text-minor font-medium transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-open-line data-[state=open]:bg-open"
       >
         <Avatar look={value.look} size={20} />
         <span className="min-w-0 truncate">{value.label}</span>
@@ -55,7 +55,7 @@ function ProjectPicker({
               key={project.pmId}
               value={String(project.pmId)}
               title={project.label}
-              className="flex min-h-9 w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 pointer-coarse:min-h-11"
+              className="flex min-h-9 w-full min-w-0 cursor-pointer items-center gap-3 px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] pointer-coarse:min-h-11"
             >
               <Avatar look={project.look} size={20} />
               <span className="min-w-0 flex-1 truncate text-body">{project.label}</span>

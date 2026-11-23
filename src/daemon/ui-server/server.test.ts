@@ -707,6 +707,7 @@ const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["POST /api/pms", "POST", "/api/pms", NEW_PM],
   ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
   ["PUT look", "PUT", "/api/pms/1/look", { fruit: "kiwi", color: null }],
+  ["PUT pin", "PUT", "/api/pms/1/pin", { pinned: true }],
   ["PATCH capabilities", "PATCH", "/api/pms/1/capabilities", { set: { "skill:aws-auth": false } }],
   ["DELETE capabilities", "DELETE", "/api/pms/1/capabilities"],
   ["PATCH default capabilities", "PATCH", "/api/defaults/capabilities", { set: { "skill:aws-auth": false } }],

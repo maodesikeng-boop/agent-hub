@@ -1,4 +1,4 @@
-import { CircleAlert, ComposerAdd, ComposerFile, ComposerRemove, ComposerSend, ComposerStop, ComposerVideo, Info, X } from "../ui/icons.ts";
+import { CircleAlert, FileText, Info, Plus, Send, Square, Video, X } from "../ui/icons.ts";
 import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
 import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES, previewKindOf, sentFileMime, type WorkerPick } from "../../shared/index.ts";
@@ -43,8 +43,7 @@ function isOtherEditable(target: EventTarget | null, ownTextarea: HTMLTextAreaEl
   return false;
 }
 
-const FRAME_CLASS = "composer-frame rounded-xl border border-border bg-background";
-const SQUARE_BUTTON = "rounded-[10px]";
+const FRAME_CLASS = "composer-frame bg-background";
 
 const ROW_CLASS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
 const ROW_MULTI_CLASS = "pb-2";
@@ -55,8 +54,8 @@ const TEXT_CLASSES = [
   `${TEXTAREA_CLASS} col-span-3 col-start-1 row-start-1`,
 ] as const;
 const ATTACH_CLASSES = [
-  `${SQUARE_BUTTON} col-start-1 row-start-1`,
-  `${SQUARE_BUTTON} col-start-1 row-start-2`,
+  "col-start-1 row-start-1",
+  "col-start-1 row-start-2",
 ] as const;
 const ACTIONS_CLASSES = [
   "flex items-center gap-2 justify-self-end col-start-3 row-start-1",
@@ -66,26 +65,68 @@ const FRAME_CLASSES = [ROW_CLASS, `${ROW_CLASS} ${ROW_MULTI_CLASS}`] as const;
 
 function StopButton({ stop }: { stop: StopControl }) {
   return (
-    <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className={SQUARE_BUTTON}>
-      <ComposerStop className="size-3.5" aria-hidden="true" />
+    <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className="disabled:text-send-disabled-ink">
+      <Square className="size-3.5 fill-current" aria-hidden="true" />
     </Button>
   );
 }
 
+function ComposerChips({
+  leadingChip,
+  workerPick,
+  files,
+  disabled,
+  busy,
+  onEditPick,
+  onRemovePick,
+  onRemoveFile,
+}: {
+  leadingChip: React.ReactNode;
+  workerPick: WorkerPick | null;
+  files: StagedFiles["files"];
+  disabled: boolean;
+  busy: boolean;
+  onEditPick: () => void;
+  onRemovePick: () => void;
+  onRemoveFile: (key: string) => void;
+}) {
+  return (
+    <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
+      {leadingChip}
+      {workerPick !== null && (
+        <WorkerPickChip pick={workerPick} disabled={busy || disabled} onEdit={onEditPick} onRemove={onRemovePick} />
+      )}
+      {files.map(({ key, file }) => {
+        const FileIcon = previewKindOf(file.name, sentFileMime(file.name)) === "video" ? Video : FileText;
+        return (
+          <li key={key} className="flex max-w-full items-center gap-2 border border-border-strong bg-panel py-1 pr-1 pl-3 text-minor">
+            <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="min-w-0 truncate">{file.name}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
+            <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => onRemoveFile(key)}>
+              <X className="size-3.5" aria-hidden="true" />
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 const CHIP_CLOSE_CLASS =
-  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-sidebar-active hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50";
+  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:opacity-50";
 
 const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 
 function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick; disabled: boolean; onEdit: () => void; onRemove: () => void }) {
   const labels = useWorkerPickLabels(pick);
   return (
-    <li className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
+    <li className="flex max-w-full items-center gap-2 border border-border-strong bg-panel py-1 pr-1 pl-3 text-minor">
       <button
         type="button"
         aria-label={`Worker model: ${labels.join(" ")}`}
         disabled={disabled}
-        className="touch-target flex min-w-0 cursor-pointer items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default"
+        className="touch-target flex min-w-0 cursor-pointer items-center gap-2 outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default"
         onPointerDown={keepFocus}
         onMouseDown={keepFocus}
         onClick={onEdit}
@@ -93,7 +134,7 @@ function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick
         <WorkerPickParts labels={labels} inComposer />
       </button>
       <button type="button" aria-label="Remove" disabled={disabled} className={CHIP_CLOSE_CLASS} onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={onRemove}>
-        <ComposerRemove className="size-3.5" aria-hidden="true" />
+        <X className="size-3.5" aria-hidden="true" />
       </button>
     </li>
   );
@@ -191,6 +232,7 @@ export const Composer = memo(function Composer({
   onWorkerPick,
   leadingChip = null,
   onSelectTarget,
+  onManageProviders,
   stop: stopProp,
   onRewind,
   focusRev = 0,
@@ -200,6 +242,7 @@ export const Composer = memo(function Composer({
   disabled: disabledProp = false,
   link = null,
   autoFocus = false,
+  sendTone = "accent",
 }: {
   value: string;
   placeholder: string;
@@ -208,6 +251,7 @@ export const Composer = memo(function Composer({
   onWorkerPick?: (pick: WorkerPick | null) => void;
   leadingChip?: React.ReactNode;
   onSelectTarget?: (targetKey: string, text: string) => void;
+  onManageProviders?: () => void;
   disabled?: boolean;
   stop?: StopControl;
   onRewind?: (stopping: boolean) => boolean;
@@ -217,6 +261,7 @@ export const Composer = memo(function Composer({
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
   autoFocus?: boolean;
+  sendTone?: "accent" | "rail";
 }) {
   const readOnly = link?.readOnly ?? null;
   const disabled = disabledProp || readOnly !== null;
@@ -280,6 +325,7 @@ export const Composer = memo(function Composer({
         setCursor(at);
         onChange(rest);
       }),
+    onManageProviders,
   });
 
   const repick = () => {
@@ -390,33 +436,19 @@ export const Composer = memo(function Composer({
       {notice !== null && <NoticeBar notice={notice} onDismiss={staging.dismissNotice} />}
       <div data-multiline={multiline} className={FRAME_CLASS}>
         {(files.length > 0 || workerPick !== null || hasLeadingChip) && (
-          <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
-            {leadingChip}
-            {workerPick !== null && onWorkerPick && (
-              <WorkerPickChip
-                pick={workerPick}
-                disabled={busy || disabled}
-                onEdit={repick}
-                onRemove={() => {
-                  repickCaret.current = null;
-                  onWorkerPick(null);
-                }}
-              />
-            )}
-            {files.map(({ key, file }) => {
-              const FileIcon = previewKindOf(file.name, sentFileMime(file.name)) === "video" ? ComposerVideo : ComposerFile;
-              return (
-                <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
-                  <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <span className="min-w-0 truncate">{file.name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
-                  <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => staging.remove(key)}>
-                    <ComposerRemove className="size-3.5" aria-hidden="true" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <ComposerChips
+            leadingChip={leadingChip}
+            workerPick={onWorkerPick ? workerPick : null}
+            files={files}
+            disabled={disabled}
+            busy={busy}
+            onEditPick={repick}
+            onRemovePick={() => {
+              repickCaret.current = null;
+              onWorkerPick?.(null);
+            }}
+            onRemoveFile={staging.remove}
+          />
         )}
         <div className={FRAME_CLASSES[+multiline]}>
           <input
@@ -439,7 +471,7 @@ export const Composer = memo(function Composer({
             onClick={() => picker.current?.click()}
             className={ATTACH_CLASSES[+multiline]}
           >
-            <ComposerAdd className="size-5" aria-hidden="true" />
+            <Plus className="size-5" aria-hidden="true" />
           </Button>
           <textarea
             ref={ref}
@@ -486,8 +518,19 @@ export const Composer = memo(function Composer({
             {showStop ? (
               <StopButton stop={stop} />
             ) : (
-              <Button size="icon" aria-label="Send" disabled={!canSend || picking} onClick={submit} className={bounce ? `${SQUARE_BUTTON} composer-send-bounce` : SQUARE_BUTTON}>
-                <ComposerSend className="size-5" aria-hidden="true" />
+              <Button
+                size="icon"
+                aria-label="Send"
+                disabled={!canSend || picking}
+                onClick={submit}
+                className={cn(
+                  "disabled:text-send-disabled-ink",
+                  sendTone === "rail" &&
+                    "enabled:border-rail-outline enabled:bg-rail enabled:text-rail-ink enabled:shadow-[inset_0_-2px_0_var(--rail-shade)] enabled:hover:bg-rail-hover enabled:hover:brightness-100",
+                  bounce && "composer-send-bounce",
+                )}
+              >
+                <Send className="size-5" aria-hidden="true" />
               </Button>
             )}
           </div>

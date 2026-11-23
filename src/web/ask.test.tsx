@@ -60,13 +60,13 @@ function twoPms(lin: Message[], ma: Message[] = [makeUserMessage({ id: 21, conve
 }
 
 const QUESTION = "用 **方案 A** 还是方案 B？\n\n- A：保留三栏\n- B：单栏信息流";
-const rail = () => screen.queryByRole("complementary", { name: "Side panel" });
+const rail = () => screen.queryByRole("complementary", { name: "Pieces" });
 /** 右栏里的“等你确定”组；没有是 null。 */
 const asksGroup = () => (rail() === null ? null : within(rail()!).queryByRole("region", { name: /^Needs You/ }));
 /** 提问的行（不含组标题的收起按钮、同一行右边的整栏开关和 Show more）。 */
 const askRows = () => within(asksGroup()!).getAllByRole("button").filter((b) => !b.closest("h2") && b.getAttribute("aria-controls") !== "right-rail" && b.textContent !== "Show more");
-const nav = () => screen.getByRole("navigation", { name: "Conversations" });
-const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
+const nav = () => screen.getByRole("region", { name: "Project managers" });
+const row = (name: string) => within(nav()).getAllByRole("button", { name: new RegExp(name) }).find((b) => !b.closest(".row-shortcuts"))!;
 const hasTag = (name: string) => within(row(name)).queryByLabelText("Needs You") !== null;
 const askedByOldMa = () => twoPms([makeUserMessage({ id: 1, text: "小林说话了", createdAt: 20_000 })], [ask({ id: 22, conversationId: 2, text: QUESTION, createdAt: 9_000 })]);
 const answered = (over: Partial<Message> & Pick<Message, "id">) => ask({ ...over, meta: { needsUser: true, answered: true } });
@@ -141,8 +141,9 @@ describe("右栏的“等你确定”", () => {
 
   it("在输入框里发一条普通消息：右栏的提问还在（发消息不回答任何卡），发送中、发完都一样", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION })]));
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "用 A" } });
-    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    const composer = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.change(composer, { target: { value: "用 A" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
     expect(askRows()).toHaveLength(1);
     await waitFor(() => expect(api.calls.some((c) => c.path === "/api/conversations/1/messages")).toBe(true));
     expect(askRows()).toHaveLength(1);
@@ -166,9 +167,10 @@ describe("右栏的“等你确定”", () => {
     snapshot.conversations.push(makeConvSnapshot([makeMessage({ id: 40, conversationId: 30, text: "在干活" })], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "修 X" }) }));
     await boot(snapshot);
     fireEvent.click(within(rail()!).getByRole("button", { name: /修 X/ }));
-    expect(screen.getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "修 X" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Back to 小林" }));
     fireEvent.click(askRows()[0]!);
-    expect(screen.queryByRole("region", { name: "Piece 修 X" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "修 X" })).not.toBeInTheDocument();
     await waitFor(() => expect(document.querySelector('[data-message-id="1"]')).toHaveAttribute("data-highlighted", "true"));
   });
 });
@@ -191,12 +193,15 @@ describe("跳到提问只生效一次", () => {
     const snapshot = twoPms([ask({ id: 1, text: QUESTION })]);
     snapshot.conversations.push(makeConvSnapshot([makeMessage({ id: 40, conversationId: 30, text: "在干活" })], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "修 X" }) }));
     await boot(snapshot);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     fireEvent.click(askRows()[0]!);
     expect(scrolled).toHaveLength(1);
+    expect(messageOne()).toHaveAttribute("data-highlighted", "true");
     fireEvent.click(within(rail()!).getByRole("button", { name: /修 X/ }));
     fireEvent.click(row("小林"));
-    await waitFor(() => expect(messageOne()).toBeInTheDocument());
+    expect(messageOne()).toBeInTheDocument();
     expect(scrolled).toHaveLength(1);
+    act(() => void vi.advanceTimersByTime(2_000));
     expect(messageOne()).not.toHaveAttribute("data-highlighted", "true");
   });
 
@@ -214,9 +219,10 @@ describe("左栏标签和标题数字", () => {
   it("有提问的项目经理那一行显示极简无字圆点指示器（不显示中文胶囊）；标题数字算上；守护进程标成已回答后都消失", async () => {
     const ws = await boot(askedByOldMa());
     expect(hasTag("老马")).toBe(true);
-    // 左栏不属于任何项目经理：实心的绿色小圆点（size-2 rounded-full bg-status-active），不显示“等你确定”中文胶囊
+    // 左栏不属于任何项目经理：实心绿色小方块（size-2 bg-status-active），不显示中文胶囊
     const dot = within(row("老马")).getByLabelText("Needs You");
-    expect(dot).toHaveClass("size-2", "rounded-full", "bg-status-active");
+    expect(dot).toHaveClass("size-2", "bg-status-active");
+    expect(dot.className).not.toMatch(/rounded-/);
     expect(dot).toHaveAttribute("title", "Needs You");
     expect(dot).toHaveTextContent("");
     expect(within(row("老马")).queryByText("Needs You")).toBeNull();
@@ -264,7 +270,7 @@ describe("Notifications", () => {
     expect(FakeNotification.last.options.body).toBe(stripMarkdown(QUESTION));
     act(() => FakeNotification.last.onclick?.());
     expect(focus).toHaveBeenCalledOnce();
-    expect(row("老马")).toHaveAttribute("aria-current", "true");
+    expect(row("老马")).toHaveAttribute("aria-current", "page");
   });
 
   it("刚打开网页时已经有的提问不弹；同一条提问更新（比如被清掉）不再弹", async () => {
@@ -332,10 +338,10 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(within(card3).queryAllByRole("button").filter((b) => b.hasAttribute("data-ask-option"))).toEqual([]);
   });
 
-  it("没有选项的独立提问也是一张卡：补充框直接展开，填一句回车只回答这一张；回答后卡变只读", async () => {
+  it("没有选项的独立提问也是一张卡：回复框直接展开，填一句回车只回答这一张；回答后卡变只读", async () => {
     await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" }), ask({ id: 4, text: "请接电源", meta: { needsUser: true, options: ["已接", "不接"] } })]));
     const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
-    const input = within(card).getByRole("textbox", { name: "Add note" });
+    const input = within(card).getByRole("textbox", { name: "Your reply" });
     fireEvent.change(input, { target: { value: "按第二种来" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() =>
@@ -344,7 +350,7 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
-    await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Add note" })).toBeNull());
+    await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Your reply" })).toBeNull());
     expect(card.querySelector("[data-ask-answer]")).toHaveTextContent("按第二种来");
     const other = document.querySelector('[data-message-id="4"] [data-ask-card]') as HTMLElement;
     for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
@@ -360,8 +366,8 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     const card = (id: number) => document.querySelector(`[data-message-id="${id}"] [data-ask-card]`) as HTMLElement;
-    // 选中的选项是 bg-sidebar-active，用户写的原话是浅一档的 bg-sidebar（[data-ask-answer]）
-    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-sidebar-active, [data-ask-answer]")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
+    // 选中的选项是 bg-open，用户写的原话是带底色的行（[data-ask-answer]）
+    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-open, [data-ask-answer]")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
 
     expect(highlighted(3)).toEqual(["qa-test@example.com"]);
     expect(highlighted(4)).toEqual(["不接", "开完会再接"]);
@@ -373,15 +379,20 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     }
   });
 
-  it("补充框和同排的 Send 按钮同一档高度（36px），输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
+  it("回复框和同排的 Send 按钮同一档高度（36px），支持 Shift+Enter 换行且输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
     await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" })]));
     const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
-    const input = within(card).getByRole("textbox", { name: "Add note" });
+    const input = within(card).getByRole("textbox", { name: "Your reply" });
     const send = within(card).getByRole("button", { name: "Send" });
-    expect(input).toHaveClass("h-9", "text-body");
+    expect(input.tagName).toBe("TEXTAREA");
+    expect(input).toHaveClass("min-h-9", "text-body");
     expect(input).not.toHaveClass("text-minor");
     expect(send).toHaveClass("h-9");
     expect(send).not.toHaveClass("h-8");
+
+    fireEvent.change(input, { target: { value: "第一行" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(api.calls.filter((c) => c.path === "/api/asks/3/answer")).toEqual([]);
   });
 
   it("点击某个选项按钮只回答这一张卡（POST /api/asks/:id/answer），不发用户消息；回答后选项按钮变为 disabled 并高亮所选项", async () => {
@@ -411,15 +422,15 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
     expect(buttons[0]).toBeDisabled();
     expect(buttons[1]).toBeDisabled();
-    expect(buttons[1]).toHaveClass("bg-sidebar-active");
+    expect(buttons[1]).toHaveClass("bg-open");
     for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
   });
 
-  it("没点选项、在卡上填一句话回车：也只回答这一张卡（note）", async () => {
+  it("没点选项、在常驻回复框里填一句话回车：直接回答这一张卡（无需先点 Add note）", async () => {
     await boot(twoPms([ask({ id: 1, text: "请接电源", meta: { needsUser: true, options: ["已接", "不接"] } })]));
     const card = document.querySelector('[data-message-id="1"] [data-ask-card]') as HTMLElement;
-    fireEvent.click(within(card).getByRole("button", { name: "Add note" }));
-    const input = within(card).getByRole("textbox", { name: "Add note" });
+    expect(within(card).queryByRole("button", { name: "Add note" })).toBeNull();
+    const input = within(card).getByRole("textbox", { name: "Your reply" });
     fireEvent.change(input, { target: { value: "已经接上了" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() =>
@@ -428,5 +439,51 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
+  });
+
+  it("切到别的项目经理再切回：AskCard 未提交的 Your reply 草稿通过共享草稿库保留不丢失", async () => {
+    await boot(twoPms([ask({ id: 3, text: "确认缓存策略", meta: { needsUser: true, options: ["方案 A", "方案 B"] } })]));
+    const card1 = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
+    const input1 = within(card1).getByRole("textbox", { name: "Your reply" }) as HTMLTextAreaElement;
+    fireEvent.change(input1, { target: { value: "第 2 节边界条件还没写清楚" } });
+    expect(input1.value).toBe("第 2 节边界条件还没写清楚");
+
+    fireEvent.click(row("老马"));
+    await waitFor(() => expect(document.querySelector('[data-message-id="3"]')).toBeNull());
+
+    fireEvent.click(row("小林"));
+    const restoredCard = await waitFor(() => {
+      const el = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect((within(restoredCard).getByRole("textbox", { name: "Your reply" }) as HTMLTextAreaElement).value).toBe("第 2 节边界条件还没写清楚");
+  });
+
+  it("远端定案或被关闭替换时：若 AskCard 已有非空未发草稿，保留只读可复制草稿提示直到手动关闭", async () => {
+    const ws = await boot(twoPms([ask({ id: 3, text: "是否下线旧接口？", meta: { needsUser: true, options: ["下线", "保留"] } })]));
+    const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
+    const input = within(card).getByRole("textbox", { name: "Your reply" });
+    fireEvent.change(input, { target: { value: "请保留旧接口兼容一周" } });
+
+    act(() =>
+      ws.push(
+        messageChange(
+          11,
+          "message.updated",
+          ask({ id: 3, text: "是否下线旧接口？", meta: { needsUser: true, options: ["下线", "保留"], answered: true, closed: true } }),
+        ),
+      ),
+    );
+
+    await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Your reply" })).toBeNull());
+    const banner = card.querySelector<HTMLElement>("[data-unsent-draft]")!;
+    expect(banner).not.toBeNull();
+    expect(banner).toHaveTextContent("Unsent reply");
+    expect(banner).toHaveTextContent("请保留旧接口兼容一周");
+    expect(within(banner).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    expect(card.querySelector("[data-unsent-draft]")).toBeNull();
   });
 });

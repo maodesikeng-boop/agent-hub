@@ -170,6 +170,8 @@ export class FakeLedger {
   readonly archived: PmId[] = [];
   readonly unarchived: PmId[] = [];
   readonly lookCalls: Array<{ pmId: PmId; look: PmLookSetting }> = [];
+  readonly pinCalls: Array<{ pmId: PmId; pinned: boolean }> = [];
+  nextPinTimestamp = 1_000;
   readonly capabilityReads: CapabilityScope[] = [];
   readonly capabilityPatches: Array<{ scope: CapabilityScope; patch: CapabilitiesPatch }> = [];
   readonly capabilityResets: PmId[] = [];
@@ -410,6 +412,24 @@ export class FakeLedger {
     const pm: Pm = { ...this.snapshotValue.pms[index]!, avatarFruit: look.fruit, avatarColor: look.color };
     this.snapshotValue = { ...this.snapshotValue, pms: this.snapshotValue.pms.with(index, pm) };
     this.emitChange("pm.updated", { pm });
+    return pm;
+  }
+
+  setPmPinned(pmId: PmId, pinned: boolean): Pm {
+    this.check();
+    this.pinCalls.push({ pmId, pinned });
+    const index = this.snapshotValue.pms.findIndex((p) => p.id === pmId);
+    if (index === -1) throw new LedgerRequestError("not_found", `没有编号 ${pmId} 的项目经理`);
+    const existing = this.snapshotValue.pms[index]!;
+    if (existing.archivedAt != null) throw new LedgerRequestError("conflict", "这个项目经理已归档，请先恢复");
+    const currentPinned = existing.pinnedAt ?? null;
+    const nextPinnedAt = pinned ? (currentPinned ?? this.nextPinTimestamp++) : null;
+    const changed = currentPinned !== nextPinnedAt;
+    const pm: Pm = { ...existing, pinnedAt: nextPinnedAt };
+    if (changed) {
+      this.snapshotValue = { ...this.snapshotValue, pms: this.snapshotValue.pms.with(index, pm) };
+      this.emitChange("pm.updated", { pm });
+    }
     return pm;
   }
 
@@ -657,6 +677,7 @@ export class FakeLedger {
       customizedCapabilityPms: () => this.customizedCapabilityPms(),
       setProjectSetupCommand: (id, command) => this.setProjectSetupCommand(id, command),
       setPmLook: (p, look) => this.setPmLook(p, look),
+      setPmPinned: (p, pinned) => this.setPmPinned(p, pinned),
       pmProjectMainFolder: (p) => this.pmProjectMainFolder(p),
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),

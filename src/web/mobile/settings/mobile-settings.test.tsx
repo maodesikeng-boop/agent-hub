@@ -116,7 +116,7 @@ describe("App 路由接入（手机外壳）", () => {
     render(<App />);
     return { api, media };
   }
-  const listNav = () => screen.findByRole("navigation", { name: "Conversations" });
+  const listNav = () => screen.findByRole("region", { name: "Project managers" });
   const settled = () => act(() => new Promise((resolve) => setTimeout(resolve, 30)));
 
   it("列表点齿轮进 #/settings：整屏一级主页（无弹窗、无横排分类），打开时 0 次 HTTP 请求", async () => {
@@ -144,7 +144,7 @@ describe("App 路由接入（手机外壳）", () => {
   });
 
 
-  it("一级 → 子页 → 逐级返回都走 history.back，一级主页节点保活，最后回到列表", async () => {
+  it("一级 → 子页 → history.back 返回一级设置，一级主页节点保活，点底栏 Projects 回到列表", async () => {
     bootMobile();
     await listNav();
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -157,20 +157,19 @@ describe("App 路由接入（手机外壳）", () => {
     expect(historyBack).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(location.hash).toBe("#/settings"));
     expect(await screen.findByRole("button", { name: /Interface scale/ })).toBe(row);
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(historyBack).toHaveBeenCalledTimes(2);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Mobile navigation" })).getByRole("button", { name: "Projects" }));
     await waitFor(() => expect(location.hash).toBe(""));
     expect(await listNav()).toBeInTheDocument();
   });
 
-  it("新标签直达子页：连点两次返回依次退到 #/settings 与列表，不调 history.back、历史不增殖", async () => {
+  it("新标签直达子页：点返回退到 #/settings，再点底栏 Projects 回到列表，不调 history.back、历史不增殖", async () => {
     history.replaceState(null, "", "/#/settings/browsers");
     const length = history.length;
     bootMobile();
     const historyBack = vi.spyOn(history, "back");
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     await waitFor(() => expect(location.hash).toBe("#/settings"));
-    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Mobile navigation" })).getByRole("button", { name: "Projects" }));
     await waitFor(() => expect(location.hash).toBe(""));
     expect(await listNav()).toBeInTheDocument();
     expect(historyBack).not.toHaveBeenCalled();
@@ -224,7 +223,7 @@ describe("一级设置主页", () => {
     expect(main.textContent).not.toMatch(/[·|]/);
     for (const row of within(main).getAllByRole("button").filter((b) => b.dataset.slot === "settings-nav-row")) {
       expect(row.className).toContain("min-h-12");
-      expect(row.querySelector(":scope > svg[data-icon='pixel']:last-child")).toBeInTheDocument();
+      expect(row.querySelector(":scope > svg[data-icon='line']:last-child")).toBeInTheDocument();
     }
   });
   beforeEach(() => new FakeApi(makeSnapshot({})).install());
@@ -687,13 +686,13 @@ describe("Updates page", () => {
     queryClient.setQueryData(["resources", ""], resourcesSnap);
     renderSettings("#/settings");
     const row = within(screen.getByRole("region", { name: "Resources" })).getByRole("button", { name: /^Resources/ });
-    expect(row).toHaveTextContent("1 held");
+    expect(row).toHaveTextContent("1 to review");
     expect(screen.getByTestId("resources-attention")).toBeInTheDocument();
     expect(api.calls).toEqual([]);
 
     fireEvent.click(row);
     expect(location.hash).toBe("#/settings/resources");
     expect(await screen.findByRole("heading", { level: 1, name: "Resources" })).toBeInTheDocument();
-    expect(await screen.findByRole("region", { name: "Needs attention" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Needs review" })).toBeInTheDocument();
   });
 });

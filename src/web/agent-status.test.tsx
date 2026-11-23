@@ -184,9 +184,10 @@ describe("Composer：发送键和停止键", () => {
     expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
     const button = screen.getByRole("button", { name: "Stop" });
     expect(button).toBeEnabled();
-    expect(button).toHaveClass("size-9", "rounded-[10px]");
+    expect(button).toHaveClass("size-9");
+    expect(button.className).not.toMatch(/rounded-/);
     expect(button.parentElement).toHaveClass("col-start-3", "justify-self-end");
-    expect(button.querySelector("svg")).toHaveAttribute("fill", "currentColor");
+    expect(button.querySelector("svg")).toHaveClass("fill-current");
     await userEvent.click(button);
     expect(stop.onStop).toHaveBeenCalledTimes(1);
   });

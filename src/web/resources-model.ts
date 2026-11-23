@@ -71,7 +71,7 @@ export function describeResourcesSummary(snapshot: ResourcesSnapshot | null | un
   const attentionCount = Math.max(snapshot.attentionCount, unacknowledged);
   const summary =
     attentionCount > 0
-      ? `${attentionCount} held`
+      ? `${attentionCount} to review`
       : formatBytes(snapshot.totalDiskBytes);
   const result: ResourcesSummary = {
     summary,

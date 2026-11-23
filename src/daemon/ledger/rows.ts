@@ -24,7 +24,7 @@ import type { ScheduleKind, ScheduleRecord, ScheduleStatus } from "../../shared/
 import type { AgentVendor } from "../../shared/vendors.ts";
 
 export const PM_SELECT =
-  "SELECT p.*, a.archived_at, l.fruit AS look_fruit, l.color AS look_color FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id LEFT JOIN pm_looks l ON l.pm_id = p.id";
+  "SELECT p.*, a.archived_at, l.fruit AS look_fruit, l.color AS look_color, pin.pinned_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id LEFT JOIN pm_looks l ON l.pm_id = p.id LEFT JOIN pm_pins pin ON pin.pm_id = p.id";
 
 export interface PmDbRow {
   id: number;
@@ -40,6 +40,7 @@ export interface PmDbRow {
   archived_at?: number | null;
   look_fruit?: string | null;
   look_color?: string | null;
+  pinned_at?: number | null;
 }
 
 export interface ProjectDbRow {
@@ -169,6 +170,7 @@ export function toPm(row: PmDbRow): Pm {
     personaFile: row.persona_file,
     createdAt: row.created_at,
     archivedAt: row.archived_at ?? null,
+    pinnedAt: row.pinned_at ?? null,
   };
 }
 

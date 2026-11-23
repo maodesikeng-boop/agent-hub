@@ -173,11 +173,12 @@ export interface ModelCatalog {
 }
 
 export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
-  const spec = SPECS[vendor];
+  const resolved = isAgentVendor(vendor) ? vendor : DEFAULT_AGENT_VENDOR;
+  const spec = SPECS[resolved];
   const { bundled, efforts, effortLabels, customModel, customModelExample } = spec.models;
   const models = bundled.map((m) => ({ id: m.id, label: m.label, description: null, efforts: m.efforts ?? null }));
   return {
-    vendor,
+    vendor: resolved,
     label: spec.label,
     source: "bundled",
     availability: "unknown",
@@ -219,7 +220,8 @@ export function modelShortLabel(vendor: AgentVendor, model: string | null, catal
   if (model === null) return catalog.defaultModel ?? "默认";
   const bare = splitModelEffort(vendor, model, null, catalog).model!;
   const label = modelLabel(vendor, bare, catalog);
-  return label === bare ? (SPECS[vendor].models.shortName?.(bare) ?? bare) : label;
+  const shortName = isAgentVendor(vendor) ? SPECS[vendor].models.shortName : undefined;
+  return label === bare ? (shortName?.(bare) ?? bare) : label;
 }
 
 export function agentEffortOf(vendor: AgentVendor, model: string | null, effort: string | null, catalog?: ModelCatalog | null): string | null {
@@ -297,6 +299,32 @@ export function isListed(availability: VendorAvailability): boolean {
 
 export function isSelectable(availability: VendorAvailability): boolean {
   return availability === "available" || availability === "unknown";
+}
+
+const pickableCatalogsCache = new WeakMap<readonly ModelCatalog[], Map<string, readonly ModelCatalog[]>>();
+
+export function pickableVendorCatalogs(
+  catalogs: readonly ModelCatalog[],
+  current?: AgentVendor | null,
+): readonly ModelCatalog[] {
+  let byCurrent = pickableCatalogsCache.get(catalogs);
+  if (byCurrent === undefined) {
+    byCurrent = new Map();
+    pickableCatalogsCache.set(catalogs, byCurrent);
+  }
+  const key = current ?? "";
+  const cached = byCurrent.get(key);
+  if (cached !== undefined) return cached;
+
+  const filtered = catalogs.filter((c) => isSelectable(c.availability) || (current != null && c.vendor === current));
+  if (current != null && !filtered.some((c) => c.vendor === current)) {
+    const fallback = bundledModelCatalog(current);
+    if (!filtered.some((c) => c.vendor === fallback.vendor)) {
+      filtered.push(fallback);
+    }
+  }
+  byCurrent.set(key, filtered);
+  return filtered;
 }
 
 export type VendorNotFoundCode = `${AgentVendor}_not_found`;

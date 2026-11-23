@@ -25,7 +25,7 @@ describe("带设备的网址", () => {
     for (const route of routes) expect(parseRoute(routeHash(route))).toEqual(route);
     expect(routeHash({ view: "profile", pmId: 3, page: "capabilities" })).toBe("#/pm/3/capabilities");
     expect(parseRoute("#/pm/3")).toEqual({ view: "profile", pmId: 3 });
-    for (const bad of ["#/c/3/capabilities", "#/w/3/capabilities", "#/pm/3/capabilities/x", "#/pm/3/memory"]) expect(parseRoute(bad)).toBeNull();
+    for (const bad of ["#/c/3/capabilities", "#/w/3/capabilities", "#/pm/3/capabilities/x", "#/pm/3/bogus"]) expect(parseRoute(bad)).toBeNull();
   });
 
   it("老网址不带设备，还是原来的样子", () => {
@@ -108,5 +108,34 @@ describe("设置网址（docs/mobile-settings-design.md 第 2.2 节）", () => {
     expect(location.hash).toBe("#/settings/computers");
     expect(history.state).toEqual({ hub: true, previous: "#/settings" });
     expect(result.current.route).toEqual({ view: "settings", section: "computers" });
+  });
+});
+
+describe("PM settings drill-down pages", () => {
+  it("round-trips #/pm/<id>/<page> for capabilities, persona, memory, worktree, and history, with and without a device", () => {
+    for (const page of ["capabilities", "persona", "memory", "worktree", "history"] as const) {
+      const localRoute: Route = { view: "profile", pmId: 5, page };
+      expect(routeHash(localRoute)).toBe(`#/pm/5/${page}`);
+      expect(parseRoute(`#/pm/5/${page}`)).toEqual(localRoute);
+
+      const remoteRoute: Route = { view: "profile", pmId: 5, page, device: TOKYO };
+      expect(routeHash(remoteRoute)).toBe(`#/d/${TOKYO}/pm/5/${page}`);
+      expect(parseRoute(`#/d/${TOKYO}/pm/5/${page}`)).toEqual(remoteRoute);
+    }
+  });
+
+  it("rejects unknown pages and page suffixes on conversation and Piece routes", () => {
+    for (const bad of [
+      "#/pm/5/unknown",
+      "#/pm/5/__proto__",
+      "#/pm/5/memory/extra",
+      "#/pm/5/",
+      "#/c/5/persona",
+      "#/w/5/history",
+      `#/d/${TOKYO}/c/5/worktree`,
+      `#/d/${TOKYO}/w/5/memory`,
+    ]) {
+      expect(parseRoute(bad)).toBeNull();
+    }
   });
 });

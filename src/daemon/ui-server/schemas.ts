@@ -30,6 +30,7 @@ import {
   type CapabilitiesPatch,
   type PmFruit,
   type PmLookRequest,
+  type PmPinRequest,
   type WorkerPick,
 } from "../../shared/index.ts";
 import { workerPickSchema } from "../../shared/worker-pick-schema.ts";
@@ -52,6 +53,12 @@ const pmLookBodySchema = z.object({ fruit: pmFruitSchema.nullable(), color: jell
 
 export function parsePmLookBody(body: unknown): PmLookRequest {
   return parseWithSchema(pmLookBodySchema, body);
+}
+
+const pmPinBodySchema = z.object({ pinned: z.boolean() }).strict();
+
+export function parsePmPinBody(body: unknown): PmPinRequest {
+  return parseWithSchema(pmPinBodySchema, body);
 }
 
 const createPmBodySchema = z

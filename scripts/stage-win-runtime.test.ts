@@ -36,7 +36,7 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
     expect(deps).not.toContain("wrangler");
 
     // 纯前端包已由 vite build 打进 dist/web，绝不能混入随包 node_modules 膨胀 NSIS 安装包体积
-    for (const frontendOnly of ["shiki", "mermaid", "vega", "vega-lite", "react", "react-dom", "pixelarticons"]) {
+    for (const frontendOnly of ["shiki", "mermaid", "vega", "vega-lite", "react", "react-dom", "lucide-react"]) {
       expect(deps).not.toContain(frontendOnly);
     }
 

@@ -1,10 +1,8 @@
-import { ArrowLeft } from "../ui/icons.ts";
 import { memo, useCallback, useMemo } from "react";
 import { WORKER_RETENTION_DAYS, WORKER_RETENTION_MAX_ENDED, type ConversationId, type Message, type SessionState, type WorkerPick } from "../../shared/index.ts";
 import type { WorkerEntry, WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
-import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { SlimeLook } from "../../shared/slimes.ts";
 import { conversationSource } from "../composer-suggest.ts";
@@ -35,7 +33,6 @@ export const WorkerConversation = memo(function WorkerConversation({
   toolbar,
   top,
   notices,
-  onBack,
   onSend,
   onRetry,
   onStop,
@@ -61,7 +58,7 @@ export const WorkerConversation = memo(function WorkerConversation({
   toolbar: React.ReactNode;
   top: React.ReactNode;
   notices: React.ReactNode;
-  onBack: () => void;
+  onBack?: () => void;
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
@@ -99,25 +96,27 @@ export const WorkerConversation = memo(function WorkerConversation({
   const statusNode = useAgentStatusNode(session);
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
-      <header data-window-drag className="flex min-h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
-        {leading}
-        {!mobile && (
-          <Button variant="slot" size="icon" className="shrink-0" aria-label={`Back to ${pm.name}`} onClick={onBack}>
-            <ArrowLeft aria-hidden="true" />
-          </Button>
-        )}
-        <Avatar look={identity.look} size={34} neutral working={hasAgentStatus(session)} />
-        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 overflow-hidden">
-          <div className="flex min-w-[40%] shrink-[9999] items-center gap-3 overflow-hidden">
-            <h1 title={title} className="min-w-0 truncate text-title leading-snug font-semibold">
-              {title}
-            </h1>
-            {!mobile && readonly && <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Read-only</span>}
+      {mobile && (
+        <header data-window-drag className="flex min-h-14 min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b-2 border-border pt-[var(--safe-top)] pr-3 pl-3">
+          {leading}
+          <Avatar look={identity.look} size={34} neutral working={hasAgentStatus(session)} />
+          <div className="flex min-w-0 flex-1 items-center justify-between gap-3 overflow-hidden">
+            <div className="flex min-w-[40%] shrink-[9999] items-center gap-2 overflow-hidden">
+              <h1 title={title} className="min-w-0 truncate text-title leading-snug font-semibold">
+                {title}
+              </h1>
+              {readonly && <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Read-only</span>}
+            </div>
+            {meta && <PieceMeta worker={meta} />}
           </div>
-          {!mobile && meta && <PieceMeta worker={meta} />}
-        </div>
-        {toolbar}
-      </header>
+          {toolbar}
+        </header>
+      )}
+      {!mobile && (
+        <>
+          <h1 className="sr-only">{title}</h1>
+        </>
+      )}
       {top}
       {notices}
       {view === undefined ? (
@@ -147,7 +146,7 @@ export const WorkerConversation = memo(function WorkerConversation({
           )}
           <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
             {phase === "ended" && view.conversation.purgedAt === undefined && (
-              <div role="status" className="rounded-2xl bg-sidebar px-4 py-3 text-body">
+              <div role="status" className="border-2 border-border bg-panel px-4 py-3 text-body">
                 Completed
               </div>
             )}

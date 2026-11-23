@@ -11,7 +11,7 @@ import {
   type TaskNode,
 } from "../shared/index.ts";
 import * as RightRailMod from "./components/RightRail.tsx";
-import { RightRail } from "./components/RightRail.tsx";
+import { RailGroups } from "./components/RightRail.tsx";
 import { TaskProgressIcon } from "./components/TaskProgressIcon.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
@@ -187,12 +187,11 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     ];
 
     render(
-      <RightRail
+      <RailGroups
         asks={[]}
         workers={workers}
         activeGraphs={[graph]}
         openWorkerId={null}
-        layout="side"
         look={defaultLookOf(1)}
         onOpenAsk={() => {}}
         onOpenWorker={onOpenWorker}
@@ -270,11 +269,11 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     const user = userEvent.setup();
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const onOpenAsk = vi.fn();
-    const railProps = { workers: [] as WorkerEntry[], openWorkerId: null, layout: "side" as const, look: defaultLookOf(1), onOpenAsk, onOpenWorker: () => {} };
+    const railProps = { workers: [] as WorkerEntry[], openWorkerId: null, look: defaultLookOf(1), onOpenAsk, onOpenWorker: () => {} };
 
     // 同屏渲染两个 waiting_user 任务：每个等你拍板的步骤在轨道槽里一枚小铃，纯像素路径、没有渐变和 id
     const { rerender } = render(
-      <RightRail {...railProps} asks={[gateAsk(5), gateAsk(6)]} activeGraphs={[buildGateGraph(5, 5_000), buildGateGraph(6, 4_000)]} />,
+      <RailGroups {...railProps} asks={[gateAsk(5), gateAsk(6)]} activeGraphs={[buildGateGraph(5, 5_000), buildGateGraph(6, 4_000)]} />,
     );
 
     const bells = document.querySelectorAll("[data-slot='gate-mark']");
@@ -284,7 +283,8 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     const rows = screen.getAllByTestId("peel-gate-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]!.tagName).toBe("BUTTON");
-    expect(rows[0]).toHaveClass("min-h-8", "pointer-coarse:min-h-11", "rounded-xl");
+    expect(rows[0]).toHaveClass("min-h-8", "pointer-coarse:min-h-11", "border-2");
+    expect(rows[0]!.className).not.toMatch(/rounded-/);
     expect(within(rows[0]!).getByText("确认同步范围")).toHaveClass("truncate", "text-primary");
     // 作答只在对话里：右栏不出选项、补充框，也不出门禁提问那一行
     expect(screen.queryByTestId("peel-gate-card")).toBeNull();
@@ -300,7 +300,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     expect(screen.queryByRole("dialog")).toBeNull();
 
     // 拍板通过后：小铃收起，门禁节点收合为紧凑单行并在右侧展示所选简称
-    rerender(<RightRail {...railProps} asks={[]} activeGraphs={[buildGateGraph(5, 6_000, "全量同步并先备份")]} />);
+    rerender(<RailGroups {...railProps} asks={[]} activeGraphs={[buildGateGraph(5, 6_000, "全量同步并先备份")]} />);
     expect(screen.queryByTestId("peel-gate-row")).toBeNull();
     expect(document.querySelector("[data-slot='gate-mark']")).toBeNull();
     expect(screen.getByText("确认同步范围")).toBeInTheDocument();
@@ -311,7 +311,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     const user = userEvent.setup();
     const onOpenAsk = vi.fn();
     render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[buildGateGraph(5, 5_000)]} openWorkerId={null} layout="side" look={defaultLookOf(1)} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
+      <RailGroups asks={[]} workers={[]} activeGraphs={[buildGateGraph(5, 5_000)]} openWorkerId={null} look={defaultLookOf(1)} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
     );
     await user.click(screen.getByTestId("peel-gate-row"));
     expect(onOpenAsk).not.toHaveBeenCalled();
@@ -334,7 +334,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     // 1) 一键点选推荐项
     const first = openDialog(5);
     const firstCard = screen.getByTestId("peel-gate-card");
-    expect(firstCard).toHaveClass("rounded-2xl", "border-primary", "bg-jelly");
+    expect(firstCard).toHaveClass("border-2", "border-open-line", "bg-open");
     await user.click(within(firstCard).getByRole("button", { name: /全量同步并先备份/ }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.url).toBe("/api/task-graphs/5/nodes/gate-sync/decide");
@@ -342,11 +342,11 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     expect(typeof calls[0]!.body.clientId).toBe("string");
     first.unmount();
 
-    // 2) 点选 + 补充备注
+    // 2) 点选 + 常驻回复框补充备注（不再需要先点 Add note）
     openDialog(6);
     const secondCard = screen.getByTestId("peel-gate-card");
-    await user.click(within(secondCard).getByRole("button", { name: "Add note" }));
-    const noteInput = within(secondCard).getByPlaceholderText("Add a note, or type a custom reply…");
+    expect(within(secondCard).queryByRole("button", { name: "Add note" })).toBeNull();
+    const noteInput = within(secondCard).getByLabelText("Your reply");
     await user.type(noteInput, "备份放到 .bak 目录");
     await user.click(within(secondCard).getByRole("button", { name: /仅同步无冲突项/ }));
     await waitFor(() => expect(calls).toHaveLength(2));
@@ -390,12 +390,11 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     });
 
     render(
-      <RightRail
+      <RailGroups
         asks={[]}
         workers={[]}
         activeGraphs={[bgGraph, urgentGraph]}
         openWorkerId={null}
-        layout="side"
         look={defaultLookOf(2)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
@@ -449,12 +448,11 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     });
 
     render(
-      <RightRail
+      <RailGroups
         asks={[gateAsk, freeAsk]}
         workers={[boundWorker, unboundWorker]}
         activeGraphs={[activeGraph]}
         openWorkerId={null}
-        layout="side"
         look={defaultLookOf(0)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
@@ -522,7 +520,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     });
 
     render(
-      <RightRail
+      <RailGroups
         asks={[]}
         workers={[
           makeWorker(101, { workerId: 81, ended: true, activity: "idle" }),
@@ -534,7 +532,6 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         completedGraphCount={2}
         projectId={1}
         openWorkerId={null}
-        layout="side"
         look={defaultLookOf(3)}
         onOpenAsk={() => {}}
         onOpenWorker={onOpenWorker}
@@ -584,13 +581,12 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     const onNeedWorkers = vi.fn();
     const onOpenWorker = vi.fn();
     const rail = (workers: ReturnType<typeof makeWorker>[]) => (
-      <RightRail
+      <RailGroups
         asks={[]}
         workers={workers}
         completedGraphCount={1}
         projectId={1}
         openWorkerId={null}
-        layout="side"
         onOpenAsk={() => {}}
         onOpenWorker={onOpenWorker}
         onNeedWorkers={onNeedWorkers}
@@ -692,16 +688,15 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
 
     const noop = () => {};
     type MemoTarget = { type: (...args: unknown[]) => unknown };
-    const rightRailSpy = vi.spyOn(RightRailMod.RightRail as unknown as MemoTarget, "type");
+    const rightRailSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
 
     const renderWith = (s: HubState) => (
-      <RightRail
+      <RailGroups
         asks={pendingAsks(s, 1)}
         workers={workersOf(s, 1)}
         activeGraphs={activeGraphsOf(s, 1)}
         projectId={1}
         openWorkerId={null}
-        layout="side"
         look={defaultLookOf(1)}
         onOpenAsk={noop}
         onOpenWorker={noop}
@@ -787,12 +782,11 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
       nodes: [makeNode({ key: "s1", title: "图内步骤", status: "running", activeWorkerId: 12, workerIds: [12] })],
     });
     render(
-      <RightRail
+      <RailGroups
         asks={[]}
         workers={[stray]}
         activeGraphs={[graph]}
         openWorkerId={null}
-        layout="side"
         look={defaultLookOf(0)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
@@ -997,13 +991,12 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
       return jsonResponse(page);
     });
     render(
-      <RightRail
+      <RailGroups
         asks={[]}
         workers={[]}
         completedGraphCount={999}
         projectId={1}
         openWorkerId={null}
-        layout="side"
         look={defaultLookOf(0)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
@@ -1200,12 +1193,11 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
 
   function renderRail(graph: TaskGraph, workers: WorkerEntry[] = []) {
     render(
-      <RightRail
+      <RailGroups
         asks={[]}
         workers={workers}
         activeGraphs={[graph]}
         openWorkerId={null}
-        layout="side"
         look={defaultLookOf(1)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}

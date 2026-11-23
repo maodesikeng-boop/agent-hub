@@ -1,17 +1,15 @@
-import { Loader2, Monitor, Smartphone, Tablet } from "../../ui/icons.ts";
+import { Loader2 } from "../../ui/icons.ts";
 import { useMemo, useState } from "react";
 import type { BrowserSessionInfo } from "../../../shared/index.ts";
-import { describeUserAgent, formatAgo, userAgentKind } from "../../browser-sessions.ts";
+import { describeUserAgent, formatAgo, userAgentDevice } from "../../browser-sessions.ts";
+import { PlatformIcon } from "../../components/DeviceBadges.tsx";
 import { RowError, SettingsGroup } from "../../components/SettingsList.tsx";
 import { useBrowserSessions } from "../../settings-model.ts";
 import { ConfirmBody, SettingsDrawer, useDrawerTarget } from "./SettingsDrawer.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
 
-const KIND_ICONS = { computer: Monitor, phone: Smartphone, tablet: Tablet } as const;
-
 function KindIcon({ userAgent }: { userAgent: string }) {
-  const Icon = KIND_ICONS[userAgentKind(userAgent)];
-  return <Icon aria-hidden="true" />;
+  return <PlatformIcon platform={userAgentDevice(userAgent)} size="inherit" />;
 }
 
 const byRecency = (a: BrowserSessionInfo, b: BrowserSessionInfo) => Number(b.current) - Number(a.current) || b.lastSeenAt - a.lastSeenAt;

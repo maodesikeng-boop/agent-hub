@@ -37,6 +37,20 @@ export function userAgentKind(userAgent: string): "phone" | "tablet" | "computer
   return "computer";
 }
 
+export type DeviceKind = "iphone" | "android" | "macos" | "windows" | "linux" | "tablet" | "phone" | "computer";
+
+export function userAgentDevice(userAgent: string): DeviceKind {
+  if (/iPhone/.test(userAgent)) return "iphone";
+  if (/iPad|Android(?!.*Mobile)/.test(userAgent)) return "tablet";
+  if (/Android/.test(userAgent)) return "android";
+  if (/Macintosh/.test(userAgent)) return "macos";
+  if (/Windows/.test(userAgent)) return "windows";
+  if (/CrOS/.test(userAgent)) return "computer";
+  if (/Linux|X11/.test(userAgent)) return "linux";
+  if (/Mobile/.test(userAgent)) return "phone";
+  return "computer";
+}
+
 export function formatAgo(ms: number, now: number = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - ms) / 1000));
   if (seconds < 60) return "just now";

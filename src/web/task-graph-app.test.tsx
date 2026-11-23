@@ -117,7 +117,7 @@ function plainSnapshot(name: string): StateSnapshot {
   });
 }
 
-const sidePanel = () => screen.getByRole("complementary", { name: "Side panel" });
+const sidePanel = () => screen.getByRole("complementary", { name: "Pieces" });
 
 beforeEach(() => {
   localStorage.clear();
@@ -246,15 +246,15 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
     const { api } = await bootSingle(snap);
     // 右栏果皮轨里检查点只有一行，不出选项和补充框
     const railRow = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-row"));
-    expect(within(sidePanel()).queryByLabelText("Add note")).toBeNull();
+    expect(within(sidePanel()).queryByLabelText("Your reply")).toBeNull();
     expect(within(sidePanel()).queryByText("Recommended")).toBeNull();
     expect(railRow.tagName).toBe("BUTTON");
 
-    // 对话消息流里的检查点 AskCard 展示 Recommended 并默认展开补充输入框，点「打回」带修改意见直调 /decide，不调 /messages
+    // 对话消息流里的检查点 AskCard 展示 Recommended 并常驻回复输入框，点「打回」带修改意见直调 /decide，不调 /messages
     const chatArticle = document.querySelector('[data-message-id="105"]') as HTMLElement;
     const chatCard = chatArticle.querySelector("[data-ask-card]") as HTMLElement;
     expect(within(chatCard).getByText("Recommended")).toBeInTheDocument();
-    const noteInput = within(chatCard).getByLabelText("Add note");
+    const noteInput = within(chatCard).getByLabelText("Your reply");
     await user.type(noteInput, "把缓存淘汰改成 lru-cache");
     await user.click(within(chatCard).getByRole("button", { name: /打回/ }));
 
@@ -328,7 +328,7 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
     // 在对话检查点卡输入框填修改意见并直接点 Send（未点「通过」也未点「打回」）
     const chatArticle = await waitFor(() => document.querySelector('[data-message-id="106"]') as HTMLElement);
     const chatCard = chatArticle.querySelector("[data-ask-card]") as HTMLElement;
-    await user.type(within(chatCard).getByLabelText("Add note"), "补充上限常量到 limits.ts");
+    await user.type(within(chatCard).getByLabelText("Your reply"), "补充上限常量到 limits.ts");
     await user.click(within(chatCard).getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(1));
@@ -336,11 +336,11 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
       choice: null,
       note: "补充上限常量到 limits.ts",
     });
-    // 乐观态立即高亮「打回」选项，不误高亮「通过」
+    // 乐观态立即高亮「打回」选项（border-open-line bg-open），不误高亮「通过」
     const passBtn = within(chatCard).getByRole("button", { name: /通过/ });
     const rejectBtn = within(chatCard).getByRole("button", { name: /打回/ });
-    expect(rejectBtn.className).toContain("bg-sidebar-active");
-    expect(passBtn.className).not.toContain("bg-sidebar-active");
+    expect(rejectBtn.className).toContain("bg-open");
+    expect(passBtn.className).not.toContain("bg-open");
 
     // 打开已取消的历史图全览弹窗：绝不渲染活体 GateDecisionCard 或 Waiting on you
     render(
@@ -403,9 +403,9 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
     expect(api.callsTo("POST", CANCEL_PATH)).toHaveLength(1);
   });
 
-  it("爆炸半径：带活跃任务图时连续 8 帧流式输出，RightRail 零重画", async () => {
+  it("爆炸半径：带活跃任务图时连续 8 帧流式输出，RailGroups 零重画", async () => {
     type MemoTarget = { type: (...args: unknown[]) => unknown };
-    const railSpy = vi.spyOn(RightRailMod.RightRail as unknown as MemoTarget, "type");
+    const railSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
     const { ws } = await bootSingle(graphSnapshot());
     await waitFor(() => expect(within(sidePanel()).getByRole("region", { name: /^Task Graph$/ })).toBeInTheDocument());
     railSpy.mockClear();
@@ -432,7 +432,7 @@ describe("手机抽屉：同一份 RailGroups", () => {
       removeEventListener() {},
     }));
     await bootSingle(graphSnapshot());
-    const toggle = await screen.findByRole("button", { name: "Show side panel (needs you)" });
+    const toggle = await screen.findByRole("button", { name: "Show Pieces (needs you)" });
     // vaul 的拖动手势要 setPointerCapture（jsdom 没有）：抽屉里用 fireEvent.click，和 mobile-shell.test.tsx 一样
     fireEvent.click(toggle);
     const drawer = await screen.findByRole("dialog", { name: "Pieces" });
@@ -456,7 +456,7 @@ describe("手机抽屉：流式帧", () => {
     type MemoTarget = { type: (...args: unknown[]) => unknown };
     const drawerSpy = vi.spyOn(PiecesDrawerMod.PiecesDrawer as unknown as MemoTarget, "type");
     const { ws } = await bootSingle(graphSnapshot());
-    fireEvent.click(await screen.findByRole("button", { name: "Show side panel (needs you)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show Pieces (needs you)" }));
     await screen.findByRole("dialog", { name: "Pieces" });
     drawerSpy.mockClear();
     for (let i = 1; i <= 8; i++) {
@@ -560,5 +560,63 @@ describe("待交付状态展示（Ready to finish）", () => {
     await user.click(within(rail).getByRole("button", { name: "Zoom" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
     expect(within(zoom).getByText("Ready to finish")).toBeInTheDocument();
+  });
+
+  it("任务图门禁卡草稿跨开关弹窗与对话 AskCard 共享；远端定案离开 waiting:user 后在节点上保留只读可复制未发草稿", async () => {
+    const user = userEvent.setup();
+    const { ws } = await bootSingle(graphSnapshot());
+    const rail = await waitFor(sidePanel);
+
+    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
+    const gateCard = within(zoom).getByTestId("peel-gate-card");
+    await user.type(within(gateCard).getByLabelText("Your reply"), "补充回滚方案");
+
+    // 关掉全览弹窗再打开，草稿仍在，且对话里同一门禁 AskCard 同步显示同一份草稿
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "发布流水线" })).toBeNull());
+    const chatCard = document.querySelector<HTMLElement>('[data-message-id="99"] [data-ask-card]')!;
+    expect((within(chatCard).getByLabelText("Your reply") as HTMLTextAreaElement).value).toBe("补充回滚方案");
+
+    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    const zoomReopened = await screen.findByRole("dialog", { name: "发布流水线" });
+    expect((within(within(zoomReopened).getByTestId("peel-gate-card")).getByLabelText("Your reply") as HTMLTextAreaElement).value).toBe("补充回滚方案");
+
+    // 远端定案离开 waiting:user（即使 gateAskMessageId 被清空，也靠活跃时记住的 key 保住未发草稿）
+    act(() =>
+      ws.push({
+        seq: 31,
+        type: "task_graph.updated",
+        data: {
+          graph: {
+            ...graph(),
+            nodes: [
+              makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
+              makeNode({
+                key: "gate",
+                title: "确认上线",
+                status: "done",
+                waitingFor: null,
+                sortOrder: 1,
+                gateAskMessageId: null,
+                decision: { choice: "上线", note: null, decidedAt: 2_000, decidedBy: "user" },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+
+    const unsent = await waitFor(() => {
+      const el = zoomReopened.querySelector<HTMLElement>("[data-unsent-draft]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(unsent).toHaveTextContent("Unsent reply");
+    expect(unsent).toHaveTextContent("补充回滚方案");
+    expect(within(unsent).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+
+    await user.click(within(unsent).getByRole("button", { name: "Dismiss" }));
+    expect(zoomReopened.querySelector("[data-unsent-draft]")).toBeNull();
   });
 });

@@ -155,6 +155,54 @@ async function runOnce(outDir: string): Promise<RunResult> {
     // 输入框出来了说明快照已经拉到、主界面画完，不只是挂上了加载页
     await page.locator("#root textarea").first().waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
     await page.waitForLoadState("networkidle", { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    const openLocalList = async () => {
+      await page.locator('nav[aria-label="Workspace"] button:has([data-testid^="rail-device-dot-"])').first().click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    };
+    await openLocalList();
+    const handle = page.getByRole("separator", { name: "Resize project list" });
+    await handle.waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    const remPx = await page.evaluate(() => {
+      const g = globalThis as unknown as { document: { documentElement: unknown }; getComputedStyle(el: unknown): { fontSize: string } };
+      return Number.parseFloat(g.getComputedStyle(g.document.documentElement).fontSize) || 17.5;
+    });
+    const listBoxWidth = async () => (await page.locator("#list").boundingBox())?.width ?? null;
+    const waitForListWidth = async (wantPx: number, label: string) => {
+      await withTimeout(
+        label,
+        (async () => {
+          const deadline = Date.now() + VERIFY_SMOKE_STEP_TIMEOUT_MS;
+          for (;;) {
+            const width = await listBoxWidth();
+            if (width !== null && Math.abs(width - wantPx) <= 2) return;
+            if (Date.now() > deadline) throw new Error(`list width ${width}px did not reach ${wantPx}px`);
+            await page.waitForTimeout(50);
+          }
+        })(),
+      );
+    };
+    const box = (await handle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 600, box.y + box.height / 2, { steps: 10 });
+    await page.mouse.up();
+    await waitForListWidth(25 * remPx, "等左栏拖到 25rem 上限");
+
+    await handle.dblclick();
+    await waitForListWidth(16.5 * remPx, "等双击把手恢复 16.5rem 默认宽");
+
+    const box2 = (await handle.boundingBox())!;
+    await page.mouse.move(box2.x + box2.width / 2, box2.y + box2.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box2.x + box2.width / 2 + 100, box2.y + box2.height / 2, { steps: 8 });
+    await page.mouse.up();
+    const draggedPx = (await listBoxWidth()) ?? 0;
+    if (draggedPx <= 16.5 * remPx + 20) throw new Error(`拖动后左栏未变宽：${draggedPx}px`);
+
+    await page.reload();
+    await openLocalList();
+    await handle.waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await waitForListWidth(draggedPx, "等刷新后保持记住的左栏宽度");
+
     const rootText = (await page.locator("#root").innerText()).trim();
     if (rootText === "") throw new Error("工作台渲染出来是空的");
     await page.screenshot({ path: join(outDir, SCREENSHOT) });

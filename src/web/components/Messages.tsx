@@ -1,17 +1,14 @@
-import { useMutation } from "@tanstack/react-query";
-import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, PencilLine, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
+import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
   attachmentsOf,
-  CONFIRM_REJECT_OPTION,
   extractAskCard,
   isRewoundMessage,
   REPORT_END,
   REPORT_START,
   sentFilesOf,
   sentFilesOfDeliverables,
-  splitCardTitle,
   systemEventOf,
   systemNoticeText,
   workerEventOf,
@@ -19,33 +16,30 @@ import {
   type AgentVendor,
   type ConversationId,
   type Deliverable,
-  type ExtractedAskCard,
   type Message,
   type MessageId,
   type PersonaChangeId,
-  type SystemMessageMeta,
   type WorkerMessageMeta,
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
-import { useClient } from "../device-scope.tsx";
 import { describeFailure } from "../../shared/errors.ts";
-import { errorLine, errorText, errorTitle, formatTime, newClientId, pieceLineParts, type ErrorLike } from "../format.ts";
+import { errorLine, errorTitle, formatTime, pieceLineParts } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import { useHubQueryClient } from "../query-client.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
 import { workedFor } from "../step-labels.ts";
-import { workerStatusOf, type WorkerTone } from "../worker-status.ts";
+import { describeSystemEvent, type EventFamily, type EventIconName } from "../system-events.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
+import { AskCard } from "./AskCard.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { SlimeLook } from "../../shared/slimes.ts";
-import { CardBody, CardNoteForm, DeliverableFiles } from "./Deliverables.tsx";
+import { DeliverableFiles } from "./Deliverables.tsx";
+import { ThreadCard } from "./ThreadCard.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { OptionRow } from "./OptionRow.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 
 export interface AgentIdentity {
@@ -56,6 +50,7 @@ export interface AgentIdentity {
 
 export interface MessageActions {
   onOpenWorker: (workerConversationId: ConversationId) => void;
+  openWorkerId?: ConversationId | null;
   retry: Record<MessageId, RetryPhase | undefined>;
   onRetryMessage: (messageId: MessageId) => void;
   onRevertPersona: (changeId: PersonaChangeId) => Promise<void>;
@@ -63,31 +58,24 @@ export interface MessageActions {
   onAnswerAsk?: (messageId: MessageId, body: { clientId: string; choice: string | null; note?: string }) => Promise<void>;
 }
 
-export const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-body leading-relaxed";
+export const BUBBLE = "w-fit max-w-full px-4 py-2.5 text-body leading-relaxed";
 export const SECONDARY = "text-minor text-muted-foreground";
-export const TEXT_BUTTON = "touch-target cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
+export const TEXT_BUTTON = "touch-target cursor-pointer transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 
 export function AgentHead({
   identity,
-  dot,
   avatar,
   onClick,
   trailing,
   working = false,
 }: {
   identity: AgentIdentity;
-  dot?: Exclude<WorkerTone, "neutral">;
   avatar?: React.ReactNode;
   onClick?: () => void;
   trailing?: React.ReactNode;
   working?: boolean;
 }) {
-  const icon = (
-    <span className="relative flex shrink-0">
-      {avatar ?? <Avatar look={identity.look} size={26} neutral={identity.neutral} working={working} />}
-      {dot && <span data-dot={dot} aria-hidden="true" className={cn("absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background", TONE_DOT[dot])} />}
-    </span>
-  );
+  const icon = <span className="relative flex shrink-0">{avatar ?? <Avatar look={identity.look} size={26} neutral={identity.neutral} working={working} />}</span>;
   const name = <div className={cn("min-w-0 truncate font-medium", SECONDARY)}>{identity.name}</div>;
   return (
     <div className="mb-1.5 flex min-w-0 items-center gap-2" data-slot="agent-head">
@@ -120,145 +108,6 @@ export function displayText(text: string): string {
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
 
-const AskCard = memo(function AskCard({
-  card,
-  files,
-  deliverables,
-  messageId,
-  onAnswerAsk,
-}: {
-  card: ExtractedAskCard;
-  files: ReturnType<typeof sentFilesOf>;
-  deliverables: readonly Deliverable[];
-  messageId: MessageId;
-  onAnswerAsk?: MessageActions["onAnswerAsk"];
-}) {
-  const client = useClient();
-  const qc = useHubQueryClient();
-  const gateRef = card.gateRef;
-  const hasOptions = card.options.length > 0;
-  const [submitted, setSubmitted] = useState<{ chosenOption?: string; note?: string } | null>(null);
-  const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(gateRef?.checkpoint));
-  const [noteRev, setNoteRev] = useState(0);
-  const noteRef = useRef("");
-  const [err, setErr] = useState<ErrorLike | null>(null);
-  const clientIdRef = useRef<string | null>(null);
-  const inFlightRef = useRef(false);
-
-  const decideMutation = useMutation(
-    {
-      mutationFn: async (vars: { choice: string | null; note: string | null }) => {
-        clientIdRef.current ??= newClientId();
-        const body = { clientId: clientIdRef.current, choice: vars.choice, ...(vars.note !== null ? { note: vars.note } : {}) };
-        if (gateRef === undefined) return onAnswerAsk?.(messageId, body);
-        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, body);
-      },
-      onMutate: () => setErr(null),
-      onSuccess: (_data, vars) => {
-        clientIdRef.current = null;
-        const chosenOption = vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : null);
-        setSubmitted({ ...(chosenOption !== null ? { chosenOption } : {}), ...(vars.note !== null ? { note: vars.note } : {}) });
-        noteRef.current = "";
-        setNoteRev((n) => n + 1);
-      },
-      onError: (error) => {
-        setErr(errorText(error));
-      },
-      onSettled: () => {
-        inFlightRef.current = false;
-      },
-    },
-    qc,
-  );
-
-  const submit = (choice: string | null, rawNote: string) => {
-    if (inFlightRef.current) return;
-    const trimmed = rawNote.trim();
-    if (choice === null && trimmed === "") return;
-    inFlightRef.current = true;
-    decideMutation.mutate({ choice, note: trimmed === "" ? null : trimmed });
-  };
-
-  const effectiveChosen = card.chosenOption ?? submitted?.chosenOption;
-  const answerNote = card.answerNote ?? submitted?.note;
-  const answered = card.answered || submitted !== null;
-  const disabled = answered || (gateRef === undefined && !onAnswerAsk) || decideMutation.isPending;
-  const { title: cardTitle, body: cardBody } = useMemo(() => splitCardTitle(card.question), [card.question]);
-
-  return (
-    <div className="w-full min-w-0 rounded-2xl border border-border bg-background p-4" data-ask-card>
-      <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
-        <Markdown text={cardTitle} files={files} messageId={messageId} />
-      </div>
-      <CardBody
-        text={cardBody}
-        deliverables={deliverables}
-        files={files}
-        messageId={messageId}
-        className="mt-1.5"
-        textClassName="text-minor leading-relaxed text-muted-foreground"
-      />
-      {(hasOptions || answerNote !== undefined) && (
-        <div className="mt-3 flex flex-col gap-2" role="group" aria-label="Options">
-          {card.options.map((opt, i) => {
-            const isChosen = effectiveChosen === opt;
-            const isRecommended = card.recommended !== undefined && opt === card.recommended;
-            return (
-              <OptionRow
-                key={i}
-                index={i}
-                data-ask-option
-                disabled={disabled}
-                chosen={isChosen}
-                recommended={isRecommended}
-                onClick={() => {
-                  if (disabled) return;
-                  submit(opt, noteRef.current);
-                }}
-              >
-                <Markdown text={opt} files={files} messageId={messageId} />
-              </OptionRow>
-            );
-          })}
-          {answerNote !== undefined && (
-            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 rounded-xl bg-sidebar px-3 py-2.5 leading-6">
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground">
-                <PencilLine className="size-pixel-sm" aria-hidden="true" />
-              </span>
-              <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
-            </div>
-          )}
-        </div>
-      )}
-      {card.closed && <p className="mt-2 text-minor text-muted-foreground">Closed</p>}
-      {!answered && (
-        !noteOpen && hasOptions ? (
-          <button
-            type="button"
-            onClick={() => setNoteOpen(true)}
-            className="mt-2 inline-flex min-h-7 pointer-coarse:min-h-11 cursor-pointer items-center rounded-xl px-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
-            Add note
-          </button>
-        ) : (
-          <CardNoteForm
-            disabled={disabled}
-            pending={decideMutation.isPending}
-            resetRev={noteRev}
-            noteRef={noteRef}
-            onSubmitNote={(raw) => submit(null, raw)}
-          />
-        )
-      )}
-      {err !== null && (
-        <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
-          {errorLine(err)}
-        </p>
-      )}
-    </div>
-  );
-});
-
 const NO_DELIVERABLES: readonly Deliverable[] = [];
 
 export const AgentText = memo(function AgentText({
@@ -282,7 +131,7 @@ export const AgentText = memo(function AgentText({
   const blocker = askCard === null ? askOf(message) : null;
   return (
     <article
-      className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}
+      className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "outline-2 outline-offset-4 outline-border-focus")}
       data-side="left"
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
@@ -491,7 +340,9 @@ function RevertButton({
   onRevert: MessageActions["onRevertPersona"];
 }) {
   const [phase, setPhase] = useState<RevertPhase>("idle");
-  if (reverted || phase === "done") return <span>Undone</span>;
+  if (reverted || phase === "done") {
+    return <span className="border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground">Undone</span>;
+  }
   const revert = () => {
     setPhase("busy");
     onRevert(changeId).then(
@@ -501,17 +352,110 @@ function RevertButton({
   };
   return (
     <>
-      {phase === "conflict" && <span className="text-danger">Only the latest change can be undone</span>}
-      {phase === "error" && <span className="text-danger">Couldn't undo</span>}
-      <button
-        type="button"
-        className="touch-target cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60"
-        disabled={phase === "busy"}
-        onClick={revert}
-      >
+      {phase === "conflict" && <span className="text-xs text-danger">Only the latest change can be undone</span>}
+      {phase === "error" && <span className="text-xs text-danger">Couldn't undo</span>}
+      <Button variant="outline" size="sm" disabled={phase === "busy"} onClick={revert}>
         {phase === "busy" ? "Undoing…" : "Undo"}
-      </button>
+      </Button>
     </>
+  );
+}
+
+const EVENT_ICONS: Readonly<Record<EventIconName, Icon>> = {
+  "folder-plus": FolderPlus,
+  "folder-minus": FolderMinus,
+  "user-pen": UserPen,
+  calendar: CalendarClock,
+  clock: Clock,
+  refresh: RefreshCw,
+  error: CircleX,
+  info: Info,
+  "worker-start": CirclePlay,
+  "worker-end": Archive,
+  "worker-message": MessageSquare,
+};
+
+const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], Icon>> = {
+  started: CirclePlay,
+  ended: Archive,
+  user_message: MessageSquare,
+};
+
+function EventIconTile({ icon: Icon, danger = false }: { icon: Icon; danger?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "mt-0.5 flex size-6 shrink-0 items-center justify-center border bg-background",
+        danger ? "border-danger/40 text-danger" : "border-border-strong text-muted-foreground",
+      )}
+    >
+      <Icon className="size-pixel-sm" aria-hidden="true" />
+    </span>
+  );
+}
+
+function EventTag({ label, danger = false }: { label: string; danger?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "mr-2 inline-flex shrink-0 items-center border bg-background px-1.5 text-xs leading-5 font-medium align-baseline",
+        danger ? "border-danger/40 text-danger" : "border-border text-muted-foreground",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function EventStripShell({
+  danger = false,
+  inTurn = false,
+  grouped = false,
+  children,
+}: {
+  danger?: boolean;
+  inTurn?: boolean;
+  grouped?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      data-event-group={grouped ? "true" : undefined}
+      className={cn(
+        "w-full min-w-0 border-2",
+        inTurn ? "mt-1" : "mt-4",
+        danger ? "divide-y divide-danger/20 border-danger/40 bg-danger/5" : "divide-y divide-border border-border bg-panel",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function EventRow({
+  icon,
+  tag,
+  danger = false,
+  title,
+  trailing,
+  children,
+}: {
+  icon: Icon;
+  tag: string;
+  danger?: boolean;
+  title?: string;
+  trailing?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2.5 px-3 py-2 text-minor leading-5" data-side="left" data-notice title={title}>
+      <EventIconTile icon={icon} danger={danger} />
+      <div className="min-w-0 flex-1 pt-0.5 text-foreground [overflow-wrap:anywhere]">
+        <EventTag label={tag} danger={danger} />
+        {children}
+      </div>
+      {trailing && <div className="ml-auto flex shrink-0 items-center gap-2 self-center">{trailing}</div>}
+    </div>
   );
 }
 
@@ -521,52 +465,23 @@ function ScheduleRun({ text }: { text: string }) {
   const title = match?.[1] ?? "Scheduled task";
   const body = (match?.[2] ?? text).trim();
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mt-6 flex flex-col items-start" data-side="left" data-event="schedule.run">
-      <CollapsibleTrigger className={cn("group inline-flex items-center gap-1.5", TEXT_BUTTON, SECONDARY)} disabled={body === ""}>
-        <Clock className="size-pixel-sm shrink-0" aria-hidden="true" />
-        <span className="[overflow-wrap:anywhere]">{title}</span>
-        {body !== "" && <ChevronRight className="size-pixel-sm shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
+    <Collapsible open={open} onOpenChange={setOpen} className="mt-6 border-2 border-border bg-panel" data-side="left" data-event="schedule.run">
+      <CollapsibleTrigger
+        aria-label={title}
+        className="group flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left text-minor leading-5 transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
+        disabled={body === ""}
+      >
+        <EventIconTile icon={Clock} />
+        <span className="min-w-0 flex-1 pt-0.5 text-foreground [overflow-wrap:anywhere]">
+          <EventTag label="Scheduled" />
+          <span className="font-medium">{title}</span>
+        </span>
+        {body !== "" && <ChevronRight className="mt-1 size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
       </CollapsibleTrigger>
-      <CollapsibleContent className="w-full">
-        <p className={cn("mt-1.5 border-l border-border pl-3 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]", SECONDARY)}>{body}</p>
+      <CollapsibleContent className="border-t border-border bg-background px-3 py-2.5">
+        <p className={cn("leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]", SECONDARY)}>{body}</p>
       </CollapsibleContent>
     </Collapsible>
-  );
-}
-
-const NOTICE_ICONS: Partial<Record<SystemMessageMeta["event"], Icon>> = {
-  "project.created": FolderPlus,
-  "folder.attached": FolderPlus,
-  "folder.detached": FolderMinus,
-  "persona.changed": UserPen,
-  "schedule.created": CalendarClock,
-  "schedule.removed": CalendarClock,
-};
-
-const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], Icon>> = {
-  started: CirclePlay,
-  ended: Archive,
-  user_message: MessageSquare,
-};
-
-function NoticeLine({
-  icon: Icon,
-  danger = false,
-  title,
-  inTurn = false,
-  children,
-}: {
-  icon: Icon;
-  danger?: boolean;
-  title?: string;
-  inTurn?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={cn("flex items-start gap-1.5 text-xs leading-5 text-muted-foreground", !inTurn && "mt-4")} data-side="left" data-notice title={title}>
-      <Icon className={cn("mt-1.5 size-pixel-sm shrink-0", danger && "text-danger")} aria-hidden="true" />
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 [overflow-wrap:anywhere]">{children}</div>
-    </div>
   );
 }
 
@@ -574,21 +489,71 @@ function SessionRenewed({ text, handover }: { text: string; handover: string }) 
   const [open, setOpen] = useState(false);
   const body = handover.trim();
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mt-4 flex flex-col" data-side="left" data-notice data-event="session.renewed">
-      <div className="flex items-center gap-2.5">
-        <CollapsibleTrigger className={cn("group inline-flex shrink-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground", TEXT_BUTTON)} disabled={body === ""}>
-          <RefreshCw className="size-pixel-sm shrink-0" aria-hidden="true" />
-          <span>{text}</span>
-          {body !== "" && <ChevronRight className="size-pixel-sm shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
-        </CollapsibleTrigger>
-        <span className="h-px min-w-6 flex-1 bg-border" aria-hidden="true" />
-      </div>
-      <CollapsibleContent>
-        <div className={cn("mt-1.5 border-l border-border pl-3 leading-relaxed [overflow-wrap:anywhere]", SECONDARY)} data-handover>
+    <Collapsible open={open} onOpenChange={setOpen} className="mt-4 border-2 border-border bg-panel" data-side="left" data-notice data-event="session.renewed">
+      <CollapsibleTrigger
+        aria-label={text}
+        className="group flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left text-minor leading-5 transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
+        disabled={body === ""}
+      >
+        <EventIconTile icon={RefreshCw} />
+        <span className="min-w-0 flex-1 pt-0.5 text-foreground [overflow-wrap:anywhere]">
+          <EventTag label="Session" />
+          <span className="font-medium">{text}</span>
+        </span>
+        {body !== "" && <ChevronRight className="mt-1 size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t border-border bg-background px-3 py-2.5">
+        <div className={cn("leading-relaxed [overflow-wrap:anywhere]", SECONDARY)} data-handover>
           <Markdown text={body} />
         </div>
       </CollapsibleContent>
     </Collapsible>
+  );
+}
+
+function SystemNoticeRow({
+  message,
+  actions,
+  revertedChanges,
+}: {
+  message: Message;
+  actions: MessageActions;
+  revertedChanges?: ReadonlySet<PersonaChangeId>;
+}) {
+  const event = systemEventOf(message);
+  const summary = describeSystemEvent(message, actions.vendorOf?.(message.conversationId));
+  const trailing =
+    event?.event === "persona.changed" ? (
+      <RevertButton changeId={event.personaChangeId} reverted={revertedChanges?.has(event.personaChangeId)} onRevert={actions.onRevertPersona} />
+    ) : undefined;
+  return (
+    <EventRow icon={EVENT_ICONS[summary.icon]} tag={summary.tag} danger={summary.tone === "danger"} title={summary.rawTitle} trailing={trailing}>
+      <span>{summary.text}</span>
+    </EventRow>
+  );
+}
+
+function WorkerNoticeRow({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
+  const { title, state, detail } = pieceLineParts(line);
+  const icon = WORKER_NOTICE_ICONS[line.event] ?? Info;
+  return (
+    <div data-side="left" data-notice>
+      <button
+        type="button"
+        aria-label={[title, state, detail].filter((part) => part !== "").join(" ")}
+        className="touch-target flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left text-minor leading-5 transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+        onClick={() => onOpen(line.workerConversationId)}
+      >
+        <EventIconTile icon={icon} />
+        <span className="min-w-0 flex-1 pt-0.5 [overflow-wrap:anywhere]">
+          <EventTag label="Worker" />
+          <span className="font-medium text-foreground">{title}</span>
+          <span className="ml-2 text-muted-foreground">{state}</span>
+          {detail !== "" && <span className="ml-2 text-muted-foreground">{detail}</span>}
+        </span>
+        <ChevronRight className="mt-1 size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 
@@ -605,93 +570,63 @@ function SystemNotice({
 }) {
   const event = systemEventOf(message);
   const text = systemNoticeText(message);
-  switch (event?.event) {
-    case "schedule.run":
-      return <ScheduleRun text={text} />;
-    case "session.renewed":
-      return <SessionRenewed text={text} handover={message.text} />;
-    case "schedule.failed": {
-      const reason =
-        event.rawReason === undefined ? null : describeFailure(event.rawReason, { unknown: "raw", vendor: actions.vendorOf?.(message.conversationId) }).text;
-      return (
-        <NoticeLine icon={CircleX} danger title={event.rawReason ?? text} inTurn={inTurn}>
-          <span>{reason === null ? text : `Scheduled task "${event.name}" failed: ${reason}`}</span>
-        </NoticeLine>
-      );
-    }
-    case "handover.failed":
-      return (
-        <NoticeLine icon={CircleX} danger title={event.rawReason} inTurn={inTurn}>
-          <span>{text}</span>
-        </NoticeLine>
-      );
-    case "persona.changed":
-      return (
-        <NoticeLine icon={UserPen} inTurn={inTurn}>
-          <span>{text}</span>
-          <RevertButton
-            changeId={event.personaChangeId}
-            reverted={revertedChanges?.has(event.personaChangeId)}
-            onRevert={actions.onRevertPersona}
-          />
-        </NoticeLine>
-      );
-    default:
-      return (
-        <NoticeLine icon={(event && NOTICE_ICONS[event.event]) ?? Info} inTurn={inTurn}>
-          <span>{text}</span>
-        </NoticeLine>
-      );
-  }
-}
-
-const TONE_DOT: Record<Exclude<WorkerTone, "neutral">, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger" };
-
-function WorkerSpeech({
-  line,
-  look,
-  onOpen,
-  vendor,
-}: {
-  line: WorkerMessageMeta;
-  look: SlimeLook;
-  onOpen: MessageActions["onOpenWorker"];
-  vendor?: AgentVendor;
-}) {
-  const { tone, label } = workerStatusOf(line);
-  const failed = line.event !== "report";
-  const summary = line.summary?.trim() ?? "";
-  const body = failed && summary !== "" ? describeFailure(summary, { unknown: "raw", vendor }) : null;
-  const text = body ? body.text : summary;
+  if (event?.event === "schedule.run") return <ScheduleRun text={text} />;
+  if (event?.event === "session.renewed") return <SessionRenewed text={text} handover={message.text} />;
+  const danger = event?.event === "schedule.failed" || event?.event === "handover.failed";
   return (
-    <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone}>
-      <AgentHead identity={{ name: line.title, look, neutral: true }} dot={tone !== "neutral" ? tone : undefined} />
-      <button
-        type="button"
-        data-bubble
-        title={label ?? undefined}
-        aria-label={label ? `${line.title}, ${label}: ${text}` : undefined}
-        className={cn(
-          BUBBLE,
-          "cursor-pointer bg-bubble-agent text-left transition-colors outline-none hover:bg-[color-mix(in_srgb,var(--bubble-agent),var(--foreground)_5%)] focus-visible:ring-2 focus-visible:ring-ring/50 [overflow-wrap:anywhere]",
-        )}
-        onClick={() => onOpen(line.workerConversationId)}
-      >
-        <span title={body ? body.raw : undefined}>{text}</span>
-      </button>
-    </article>
+    <EventStripShell danger={danger} inTurn={inTurn}>
+      <SystemNoticeRow message={message} actions={actions} revertedChanges={revertedChanges} />
+    </EventStripShell>
   );
 }
 
-function WorkerItem({ line, look, actions }: { line: WorkerMessageMeta; look: SlimeLook; actions: MessageActions }) {
+export const EventGroupView = memo(
+  function EventGroupView({
+    family,
+    messages,
+    actions,
+    revertedChanges,
+  }: {
+    family: EventFamily;
+    messages: readonly Message[];
+    actions: MessageActions;
+    revertedChanges?: ReadonlySet<PersonaChangeId>;
+  }) {
+    return (
+      <EventStripShell danger={family === "danger"} grouped>
+        {messages.map((message) => {
+          const workerLine = workerEventOf(message);
+          if (workerLine !== null) return <WorkerNoticeRow key={message.id} line={workerLine} onOpen={actions.onOpenWorker} />;
+          return <SystemNoticeRow key={message.id} message={message} actions={actions} revertedChanges={revertedChanges} />;
+        })}
+      </EventStripShell>
+    );
+  },
+  (prev, next) =>
+    prev.family === next.family &&
+    sameList(prev.messages, next.messages) &&
+    prev.actions === next.actions &&
+    prev.revertedChanges === next.revertedChanges,
+);
+
+function WorkerItem({ line, look, createdAt, actions }: { line: WorkerMessageMeta; look: SlimeLook; createdAt: number; actions: MessageActions }) {
   const onOpen = actions.onOpenWorker;
   if (line.event === "report" || line.event === "turn_failed" || line.event === "worktree_failed") {
-    return <WorkerSpeech line={line} look={look} onOpen={onOpen} vendor={actions.vendorOf?.(line.workerConversationId)} />;
+    return (
+      <ThreadCard
+        line={line}
+        look={look}
+        open={actions.openWorkerId === line.workerConversationId}
+        createdAt={createdAt}
+        vendor={actions.vendorOf?.(line.workerConversationId)}
+        onOpen={onOpen}
+      />
+    );
   }
   return (
-    <NoticeLine icon={WORKER_NOTICE_ICONS[line.event] ?? Info}>
-      <PieceLineButton line={line} onOpen={onOpen} />
-    </NoticeLine>
+    <EventStripShell>
+      <WorkerNoticeRow line={line} onOpen={onOpen} />
+    </EventStripShell>
   );
 }
 
@@ -712,7 +647,7 @@ export const MessageBubble = memo(
     revertedChanges?: ReadonlySet<PersonaChangeId>;
   }) {
     const workerLine = workerEventOf(message);
-    if (workerLine) return <WorkerItem line={workerLine} look={identity.look} actions={actions} />;
+    if (workerLine) return <WorkerItem line={workerLine} look={identity.look} createdAt={message.createdAt} actions={actions} />;
     if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
     if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
     return (
@@ -812,7 +747,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
       {failed && delivered && (
         <button
           type="button"
-          className="touch-target text-minor text-muted-foreground rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-60"
+          className="touch-target text-minor text-muted-foreground outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:opacity-60"
           title={[failure?.text, failure?.raw].filter(Boolean).join("\n")}
           disabled={phase === "retrying"}
           onClick={() => actions.onRetryMessage(message.id)}
@@ -836,7 +771,7 @@ export function SentBody({ unsent, children }: { unsent: React.ReactNode; childr
   );
 }
 
-const UNSENT_DOT = "flex size-5 shrink-0 items-center justify-center rounded-full bg-danger text-xs leading-none font-semibold text-white";
+const UNSENT_DOT = "flex size-5 shrink-0 items-center justify-center bg-danger text-xs leading-none font-semibold text-white";
 const UNSENT_LABEL = "Not sent";
 
 export function UnsentMark({
@@ -876,7 +811,7 @@ export function UnsentMark({
       aria-busy={retrying || undefined}
       disabled={retrying}
       data-unsent
-      className="touch-target flex shrink-0 cursor-pointer rounded-full outline-none hover:brightness-90 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60"
+      className="touch-target flex shrink-0 cursor-pointer outline-none hover:brightness-90 focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
       onClick={onRetry}
     >
       {mark}

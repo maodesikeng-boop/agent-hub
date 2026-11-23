@@ -18,7 +18,7 @@ import { errorText, formatTime, type ErrorLike } from "../format.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
-import { CollapsibleGroup, RowError, SettingsRow } from "./SettingsList.tsx";
+import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 const SOFT_SUBFILE_COUNT = Math.ceil(PM_MEMORY_MAX_SUBFILES * PM_MEMORY_SOFT_WARN_RATIO);
 const SOFT_SUBFILE_BYTES = Math.ceil(PM_MEMORY_MAX_SUBFILE_BYTES * PM_MEMORY_SOFT_WARN_RATIO);
@@ -138,7 +138,7 @@ function EditMemoryFileRow({
             aria-label={`${file.name} content`}
             rows={4}
             readOnly={archived}
-            className="block max-h-[50vh] min-h-28 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-minor field-sizing-content focus-visible:ring-0"
+            className="block max-h-[50vh] min-h-28 resize-none border-0 bg-transparent px-4 py-3 font-mono text-minor field-sizing-content focus:border-0"
             value={text}
             aria-invalid={contentProblem !== null}
             onChange={(e) => setDraft(e.target.value)}
@@ -329,7 +329,7 @@ function NewMemoryFileForm({
           aria-label="Content"
           placeholder="Content"
           rows={4}
-          className="block max-h-[40vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0"
+          className="block max-h-[40vh] min-h-24 resize-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0"
           value={content}
           aria-invalid={contentProblem !== null}
           onChange={(e) => setContent(e.target.value)}
@@ -454,7 +454,7 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
           <button
             type="button"
             disabled={full}
-            className="flex min-h-13 w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-default disabled:hover:bg-transparent"
+            className="flex min-h-13 w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
             onClick={() => {
               setEditingName(null);
               setConfirmingName(null);
@@ -470,10 +470,10 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
   );
 }
 
-export function PmMemoryFilesGroup({ pmId, archived = false }: { pmId: number; archived?: boolean }) {
+export function PmMemoryFilesGroup({ pmId, archived = false, titled = true }: { pmId: number; archived?: boolean; titled?: boolean }) {
   return (
-    <CollapsibleGroup title="Memory files">
+    <SettingsGroup {...(titled ? { title: "Memory files" } : { label: "Memory files" })}>
       <PmMemoryFilesBody pmId={pmId} archived={archived} />
-    </CollapsibleGroup>
+    </SettingsGroup>
   );
 }

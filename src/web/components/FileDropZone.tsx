@@ -39,7 +39,7 @@ export function FileDropZone({
     >
       {children}
       {dragging && (
-        <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-[28px] border-2 border-dashed border-primary bg-background/90 text-title font-medium text-primary">
+        <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center border-2 border-dashed border-primary bg-background/90 text-title font-medium text-primary">
           Drop to add files
         </div>
       )}

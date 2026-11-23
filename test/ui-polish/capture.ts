@@ -229,7 +229,7 @@ async function captureOne(browser: Browser, backend: Backend, shot: Shot, mutati
     if (!steps.some((s) => "goto" in s)) await page.waitForSelector("#root > *", { timeout: SHOT_READY_TIMEOUT_MS });
     for (const step of steps) crop = (await runStep(page, step, backend.daemon.origin)) ?? crop;
     await page.evaluate(inPage.fontsReady);
-    await page.mouse.move(view.width - 1, view.height - 1);
+    if (!steps.some((s) => "hover" in s)) await page.mouse.move(view.width - 1, view.height - 1);
     if (mutation !== undefined) await applyMutation(page, mutation);
     const key = `${shot.key}${mutation === undefined ? "" : `!${mutation}`}`;
     await network.quiet();
@@ -282,7 +282,10 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
     await page.goto(`${origin}/${step.goto}`);
     await page.waitForSelector("#root > *", { timeout });
   } else if ("click" in step) await page.locator(step.click).first().click({ timeout });
-  else if ("hover" in step) await page.locator(step.hover).first().hover({ timeout });
+  else if ("clickIfPresent" in step) {
+    const loc = page.locator(step.clickIfPresent).first();
+    if ((await loc.count()) > 0 && (await loc.isVisible())) await loc.click({ timeout });
+  } else if ("hover" in step) await page.locator(step.hover).first().hover({ timeout });
   else if ("focus" in step) await page.locator(step.focus).first().focus({ timeout });
   else if ("type" in step) {
     const input = page.locator(step.type.into).first();
