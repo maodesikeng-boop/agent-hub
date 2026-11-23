@@ -16,7 +16,6 @@ import {
   purgeExpiredBatch,
 } from "./task-graphs/overview.ts";
 import { patchIn } from "./task-graphs/patch.ts";
-import { isLatestStepWorker, recordReviewStampIn } from "./task-graphs/review-stamp.ts";
 import { onWorkerTurnReportIn } from "./task-graphs/turn-report.ts";
 import type { TaskGraphCtx, TaskGraphOptions } from "./task-graphs/types.ts";
 import {
@@ -96,8 +95,6 @@ export function createLedgerTaskGraphs(
     onWorkerEndedIn: bind(onWorkerEndedIn),
     workerGraphForkBase: bind(workerGraphForkBase),
     workerGraphStatus: bind(workerGraphStatus),
-    recordReviewStampIn: bind(recordReviewStampIn),
-    isLatestStepWorker: bind(isLatestStepWorker),
     activeSnapshotGraphs: bind(activeSnapshotGraphs),
     pmStatusGraphs: bind(pmStatusGraphs),
     liveHandoverSection: bind(liveHandoverSection),

@@ -48,7 +48,6 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "project.attach": { folder: "/y" },
   "project.detach": { folder: "/y" },
   "project.setup": { command: "pnpm install --frozen-lockfile --ignore-scripts" },
-  "project.review-status": { account: "octo-cat" },
   "persona.show": {},
   "persona.edit": { text: "新的性格设定", mode: "hands_on", reason: "用户要求" },
   models: { vendor: "claude", refresh: true },

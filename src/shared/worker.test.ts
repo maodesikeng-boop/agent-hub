@@ -273,10 +273,11 @@ describe("parseWorkerReport", () => {
 });
 
 describe("审查步骤的两栏", () => {
-  it("结论、验证提交：大小写和 + 两边的空格不计较，加粗、列表写法也认；没写是 null，写错的结论是 null", () => {
-    const parsed = parseWorkerReport(report("- 状态: 做完了\n- 摘要: 可以合\n- **结论**: pass + notes\n- 验证提交: 1a2b3c4d\n- 问题: 命名再统一"));
-    expect(parsed).toMatchObject({ kind: "ok", report: { verdict: "PASS+NOTES", verifiedCommit: "1a2b3c4d", questions: "命名再统一" } });
+  it("结论只认 PASS 和 FAIL，大小写与加粗、列表写法不计较；PASS+NOTES、没写或写错是 null", () => {
+    const parsed = parseWorkerReport(report("- 状态: 做完了\n- 摘要: 可以合\n- **结论**: pass\n- 验证提交: 1a2b3c4d\n- 问题: 命名再统一"));
+    expect(parsed).toMatchObject({ kind: "ok", report: { verdict: "PASS", verifiedCommit: "1a2b3c4d", questions: "命名再统一" } });
     expect(parseWorkerReport(report("状态: 有问题\n摘要: 不能合\n结论: FAIL。\n验证提交: abc"))).toMatchObject({ kind: "ok", report: { verdict: "FAIL" } });
+    expect(parseWorkerReport(report("状态: 做完了\n摘要: 可以合\n结论: PASS+NOTES\n验证提交: 1a2b3c4d"))).toMatchObject({ kind: "ok", report: { verdict: null, verifiedCommit: "1a2b3c4d" } });
     expect(parseWorkerReport(report("状态: 做完了\n摘要: 看完了\n结论: 通过"))).toMatchObject({ kind: "ok", report: { verdict: null, verifiedCommit: null } });
   });
 

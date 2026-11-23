@@ -15,7 +15,6 @@ import type { WorkerPr } from "../../../shared/hub.ts";
 import type { GraphPrTarget } from "../../../shared/ledger.ts";
 import { DELIVERY_FILES_MAX, DELIVERY_NOTE_MAX_CHARS } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
-import { reviewStampNote } from "../../../shared/review.ts";
 import { parseWorkerReport } from "../../../shared/worker.ts";
 import type { Db } from "../../store/index.ts";
 import type { Pending } from "../context.ts";
@@ -114,7 +113,6 @@ function deliveryNodeLine(db: Db, graph: TaskGraph, n: TaskNode, i: number, extr
   if (commit) parts.push(`提交 ${collapseOneLine(commit, 40)}`);
   if (n.artifact?.reviewVerdict) parts.push(`审查 ${n.artifact.reviewVerdict}`);
   if (n.artifact?.verifiedCommit) parts.push(`验证提交 ${n.artifact.verifiedCommit}`);
-  if (n.artifact?.reviewStamp) parts.push(collapseOneLine(reviewStampNote(n.artifact.reviewStamp), 200));
   const probedPr = branch ? extra?.prs?.[branch] : undefined;
   if (probedPr !== undefined) parts.push(`PR #${probedPr.number}（${prStateLabelZh(probedPr.state)}）`);
   else if (n.artifact?.prUrl?.trim()) parts.push(`PR ${collapseOneLine(n.artifact.prUrl, 120)}`);

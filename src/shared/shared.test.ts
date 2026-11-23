@@ -80,7 +80,6 @@ import type {
   WorkerMessageMeta,
   WorktreeCreateParams,
   WorktreeTask,
-  ReviewStampParams,
   ReviewVerifyParams,
   SetupOutcome,
 } from "./index.ts";
@@ -159,10 +158,6 @@ describe("动作", () => {
       if (row.type === "review.verify") {
         expectTypeOf(row.params).toEqualTypeOf<ReviewVerifyParams>();
         return row.params.reportMessageId;
-      }
-      if (row.type === "review.stamp") {
-        expectTypeOf(row.params).toEqualTypeOf<ReviewStampParams>();
-        return row.params.workerId;
       }
       expectTypeOf(row.params).toEqualTypeOf<SessionSendParams>();
       return row.params.messageId;
@@ -510,7 +505,6 @@ describe("M2：agent 接口", () => {
       "project.attach",
       "project.detach",
       "project.setup",
-      "project.review-status",
       "persona.show",
       "persona.edit",
       "worker.start",
@@ -805,7 +799,6 @@ describe("M3：hub 命令按角色放行", () => {
       "project.attach": ["pm"],
       "project.detach": ["pm"],
       "project.setup": ["pm"],
-      "project.review-status": ["pm"],
       "persona.show": ["pm"],
       "persona.edit": ["pm"],
       "worker.start": ["pm"],

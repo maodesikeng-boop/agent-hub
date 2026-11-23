@@ -15,7 +15,6 @@ import {
   type Ledger,
   type Message,
   type ReviewObservation,
-  type ReviewStampOutcome,
   type SessionStore,
   type SessionTokens,
   type WorkerId,
@@ -23,7 +22,6 @@ import {
   type WorkerPrProbeResult,
 } from "../shared/index.ts";
 import type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat } from "./git/index.ts";
-import type { PostReviewStatusInput } from "./git/review-status.ts";
 import type { SqliteLedger } from "./ledger/index.ts";
 import type { SessionTmpStore } from "./session-tmp.ts";
 import type { SetupRunner } from "./setup/index.ts";
@@ -293,27 +291,6 @@ export function createReviewVerifyHandler(deps: ReviewVerifyHandlerDeps): Action
     if (task === null) return { kind: "done" };
     const now = await deps.observeReview(task.repo, task.branch);
     deps.ledger.onReviewVerified(action.params, { problems: diffReviewSnapshot(task.branch, task.snapshot, now) });
-    return { kind: "done" };
-  };
-}
-
-export interface ReviewStampHandlerDeps {
-  ledger: Pick<Ledger, "getReviewStampTask" | "onReviewStamped">;
-  postReviewStatus: (input: PostReviewStatusInput) => Promise<ReviewStampOutcome>;
-}
-
-/**
- * Posts the stamp and records the outcome. A missing task (Worker gone, snapshot changed) finishes with no write.
- * Retryable failures rethrow so the executor backs off; after the last attempt `actionFailedIn` records a skip.
- */
-export function createReviewStampHandler(deps: ReviewStampHandlerDeps): ActionHandler<"review.stamp"> {
-  return async (action) => {
-    const { params } = action;
-    const task = deps.ledger.getReviewStampTask(params);
-    if (task === null) return { kind: "done" };
-    const state = params.verdict === "FAIL" ? "failure" : "success";
-    const outcome = await deps.postReviewStatus({ cwd: task.repo, request: { sha: params.sha, verdict: params.verdict, state }, pr: task.pr, account: task.account });
-    deps.ledger.onReviewStamped(params, outcome);
     return { kind: "done" };
   };
 }
