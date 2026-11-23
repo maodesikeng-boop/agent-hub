@@ -680,4 +680,3 @@ export const RESOURCES_SAMPLE_PATHS_MAX = 5;
 export const CN_CLASS_CACHE_MAX = 2_048;
 export const WS_BURST_FRAME_LIMIT = 8;
 export const WS_FRAME_BUDGET_MS = 16;
-export const SCROLLBAR_IDLE_HIDE_MS = 900;

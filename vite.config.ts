@@ -2,9 +2,11 @@ import type { IncomingMessage } from "node:http";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
-import { ENV_DEV_DAEMON_PORT } from "./src/shared/limits.ts";
 import { PRODUCT_NAME } from "./src/shared/names.ts";
 import { webManifest } from "./src/web/pwa-manifest.ts";
+
+// Kept local so editing src/shared/limits.ts does not invalidate Vite's config and trigger a full Vitest run.
+const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
 
 // 只管 src/web：守护进程只发打包好的 dist/ 静态文件。
 // 开发时（pnpm dev）：先起守护进程，把它的端口设到 AGENT_HUB_DAEMON_PORT，再跑 vite；
