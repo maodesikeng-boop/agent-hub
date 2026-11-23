@@ -64,7 +64,7 @@ Settled before this plan, by the user or by accepting the PM's recommendation:
 - Worker reports in the conversation become thread cards with a title, a status, and the latest line. Clicking one opens the full Worker conversation in the side panel.
 - The send key is a pixel paper plane in the PM's own color. The blue `Edit` and `New` links in the settings panel become dark brown. A pin icon is drawn, because pixelarticons has none.
 - Pins are scoped to one computer and ordered by when they were pinned. Drag reordering is out of scope for this version.
-- Computer cells are hidden while only one computer is linked.
+- Computer cells stay visible in the rail even on single-computer setups so Router can always fill the workspace sheet.
 - PM settings open in the side panel. On a phone they stay full screen.
 
 Hard limits: the Geist body font stays, character sprites stay, nothing childish, no purple or blue-violet gradients, no large radii, heavy shadows, glow, or frosted glass. Cross-computer pins, pin reordering, Feishu, and the Channels page are out of scope.

@@ -7,6 +7,7 @@ Shared interface specification for the Bellwood web workbench (`src/web/`). Colo
 - **Interface scale** (**Settings**, **General**, **Appearance**): `Compact`, `Default`, `Large`, and `XL` (`Segmented`, section 9), saved per browser in `localStorage` (`agent-hub.uiScale`, `src/web/ui-scale.ts`). **`Large` is the default.**
 - **Root font size (`<html data-ui-scale>` in `src/web/styles.css`)**: `Compact` `90.625%` (`14.5px`), `Default` `100%` (`16px`), `Large` `109.375%` (`17.5px`), and `XL` `118.75%` (`19px`). Type tokens (`--text-*`), `Avatar` sizes, and Tailwind spacing (`rem`) scale proportionally together.
 - **Pixel values in this document reflect the `Default` (`16px`) scale** (`Large` multiplies all `rem` sizes by `1.09375x`).
+- **Shell pane and tier geometry (`src/shared/limits.ts`)**: Fixed honey rail (`SHELL_RAIL_REM = 4.5`), collapsed strip (`SHELL_STRIP_REM = 4.5`), PM column (`SHELL_LIST_REM`, min `13.75`, default `16.5`, max `25`), side panel (`SHELL_PANEL_REM`, min `22.5`, default `27.5`, max `45`), conversation minimum (`SHELL_CHAT_MIN_REM = 30`), and `shellTierOf()` responsive breakpoints scale from the active root `rem` (with `SHELL_FRAME_PX = 10` sheet frame overhead and `SHELL_SEAM_PX = 2` column seams in `px`).
 - Never hardcode arbitrary pixel font sizes or widths (`text-[15px]`, `w-[240px]`); use the type tokens in section 3 and Tailwind numeric scales (`w-60`, `max-w-110`). Border radii, `1px` borders, viewport breakpoints (`max-[1100px]`, `min-[720px]:`), macOS traffic-light insets, and pixel icons stay in `px` (guarded by `src/web/ui-scale.test.tsx`).
 
 ## 1. Spacing scale
@@ -15,11 +16,15 @@ Use only these Tailwind `4px`-step tokens:
 
 | Location | Default px | Class or variable |
 | --- | --- | --- |
+| Honey rail (`AppRail`) width | `72px` (`4.5rem`) | `w-18` (`SHELL_RAIL_REM`) |
+| Sheet frame beside the rail | `6px` top, right, bottom inset + `2px` outline | `.shell-sheet` (`SHELL_FRAME_PX = 10`) |
+| Column header height (`ProjectList`, `SidePanel`, `Conversation`) | `56px` (`3.5rem`) | `h-14` |
+| Desktop PM list row height | `52px` (`3.25rem`) | `h-13` |
 | Main pane horizontal padding | `24px` | `px-6` |
 | Chat column minimum side gutter | `12px` below `40rem` main width, `48px` at or above `40rem` | `--chat-gutter` on `.chat-column` and `.messages` (section 8) |
 | Conversation header inset | `20px` start, `12px` end | `--header-gutter-start` and `--header-gutter-end` |
-| Right rail horizontal and group vertical padding | `20px` and `12px` | `px-5` and `py-3` |
-| Left sidebar horizontal padding and row gap | `12px` and `4px` | `px-3` and `space-y-1` |
+| Side panel horizontal and group vertical padding | `20px` and `12px` | `px-5` and `py-3` |
+| PM column horizontal padding and row gap | `12px` and `4px` | `px-3` and `space-y-1` |
 | Gap between groups or dialog sections | `24px` | `gap-6` |
 | Gap between a group heading and its box | `8px` | `gap-2` |
 | Settings row padding | `16px` horizontal, `10px` vertical | `px-4 py-2.5` (`py-2` for `min-h-9` rows, `py-3` with helper text) |
@@ -31,7 +36,7 @@ Use only these Tailwind `4px`-step tokens:
 
 ## 2. Corners and borders
 
-Controls, containers, and cards use **square right-angle corners (`0px`) and plain `2px` (`border-2`) or `1px` solid borders** — no Apple-style pill/card roundness and no stepped `clip-path` pixel notches on frame edges. Pixel craft stays on characters, avatars, sprites, and brand illustrations, while controls use crisp straight borders and smooth line icons.
+Controls, containers, and cards use **square right-angle corners (`0px`) and plain `2px` (`border-2`) or `1px` solid borders** — zero pill or card roundness and no stepped `clip-path` pixel notches on frame edges. Pixel craft stays on characters, avatars, sprites, and brand illustrations, while controls use crisp straight borders and smooth line icons.
 
 | Element | Rule |
 | --- | --- |
@@ -52,8 +57,8 @@ All panes and dialogs share **four UI type sizes** defined in `src/web/styles.cs
 | --- | --- | --- | --- |
 | Micro metadata and rail headers | `text-xs` | `12` | Timestamps, counts (`tabular-nums`), `Recommended`, `Archived`, `Needs You`, `Task Graph`, `Pieces`, `Completed` (`500` for headers, `400` for metadata) |
 | Secondary text and buttons | `text-minor` | `13.5` | Button labels (`500`), segmented controls, group headings outside boxes (`500`), row descriptions (`leading-snug`), sidebar previews, Worker names (`500`), `Show more`, inline errors (`text-danger`) |
-| Body copy and row titles | `text-body` | `15` | Message prose, row titles, inputs, selects, ask card questions (`500`), option text (`400`), right-rail row titles |
-| Pane and dialog titles | `text-title` | `17` | Conversation header name, sidebar PM name (`600`, unchanged when selected), dialog titles (`600`) |
+| Body copy and row titles | `text-body` | `15` | Message prose, row titles, `ProjectList` PM names (`600`), inputs, selects, ask card questions (`500`), option text (`400`), side-panel row titles |
+| Pane and dialog titles | `text-title` | `17` | Conversation header name, side panel header, dialog titles (`600`) |
 
 The sole exception is the profile header name (`text-display`, `22px`, `600`, `tracking-tight`). Never use `13px` or `14px`. Markdown headings and code blocks follow section 15.
 
@@ -70,7 +75,7 @@ The sole exception is the profile header name (`text-display`, `22px`, `600`, `t
 
 - **Warm zone palette (`src/web/styles.css`)**:
   - Neutral chrome uses warm paper and sand tokens instead of cool zinc grays or fruit-tinted surface mixes: `--background` (`#ffffff`) for the conversation and cards, `--panel` (`#f7f4ed`) for secondary panels, `--foreground` (`#1c1917`), `--muted-foreground` (`#6f6862`), `--border` (`#eee8dc`), `--border-strong` (`#ddd4c2`), `--border-focus` (`#4a4038`), and `--hover` (`#f6f2e9`).
-  - Rail and list tokens (`--rail` `#ffcb3d`, `--rail-shade` `#e9a417`, `--rail-hover` `#ffd966`, `--rail-ink` `#4a2e00`, `--rail-ink-soft` `#6e4a00`, `--rail-outline` `#8a5300`, `--list` `#fff4cc`, `--list-edge` `#efd27d`, `--list-hover` `#ffedb0`, `--list-field` `#fffbeb`, `--list-ink` `#3b2600`, `--list-ink-soft` `#75561b`, `--select-line` `#e0b03c`) tint navigation zones, settings tabs, and selection outlines.
+  - Rail and list tokens (`--rail` `#ffcb3d`, `--rail-shade` `#e9a417`, `--rail-hover` `#ffd966`, `--rail-ink` `#4a2e00`, `--rail-ink-soft` `#6e4a00`, `--rail-outline` `#8a5300`, `--rail-warn` `#7c4100`, `--rail-danger` `#991b1b`, `--list` `#fff4cc`, `--list-edge` `#efd27d`, `--list-hover` `#ffedb0`, `--list-field` `#fffbeb`, `--list-ink` `#3b2600`, `--list-ink-soft` `#75561b`, `--select-line` `#e0b03c`) tint navigation zones, settings tabs, and selection outlines.
   - Selected items on white or warm gray use `--open` (`#fff6d6`) with a `2px` `--open-line` (`#e9c25a`) border; selected items on cream (`--list`) use `bg-background` with `--select-line`. Neutral hover uses `bg-hover`. Selection never changes font weight.
 - **Dynamic PM accent (`--primary` and `--primary-foreground`)**:
   - `src/shared/slimes.ts` decouples 20 fruit slime shapes from 24 palette entries (`blob` for sprite fills, `accent` darkened to >= 4.5:1 WCAG AA contrast against white, verified in `src/web/lib/palette.test.ts`).
@@ -78,7 +83,7 @@ The sole exception is the profile header name (`text-display`, `22px`, `600`, `t
   - **Solid accent (`bg-primary text-primary-foreground`) appears only on**: the single primary button on screen (`Create`, `Save`, `Send` inside a PM, `Stop`, or the recommended gate option; hover darkens with `hover:brightness-90`), checked switch tracks, checked radio marks, `6px` attention dots on `Needs You` and the collapsed right-rail toggle, and the file-drop dashed border. Outside `AccentScope` (Router's composer), `Send` uses honey `--rail` with `--rail-ink` foreground.
   - **User message bubbles (`bg-bubble-me text-bubble-me-foreground`)**: Mix `--primary` at `12%` (`--mix-bubble-me`) into `#ffffff` with warm dark foreground text (>= 4.5:1 contrast across all 24 colors).
   - **Text links outside Markdown**: Inline secondary text actions use `text-rail-ink` (`#4a2e00`) or `text-muted-foreground hover:text-foreground`. Colored borders appear only on the file-drop target, active `Waiting on you` items (`border-open-line`), and `--select-line` / `--open-line` selections.
-  - **Sidebar attention dot**: Unanswered asks and waiting turns show an `8px` square (`size-2 bg-status-active`, with `ring-2 ring-list` on compact rails) with no text pill; screen-reader text lives on `aria-label` and `title`.
+  - **Sidebar attention dot**: Unanswered asks and waiting turns show an `8px` square (`size-2 bg-status-active`, with `ring-2 ring-list` on compact strips and `border-2 border-rail` on rail computer dots) with no text pill; screen-reader text lives on `aria-label` and `title`.
 - **Avatars (`src/shared/slimes.ts`)**:
   - Inline transparent-background pixel SVGs with no frame.
   - **Project Managers**: 20 fruit slimes paired with any of 24 colors via `SlimePicker` (`Fruit` and `Color` grids).
@@ -102,7 +107,7 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 | Textarea | `min-h-24` (borderless auto-sizing inside grouped boxes) | none | `Textarea` |
 | Switch | `h-5.5 w-10 border-2` (`size-3.5` square thumb) | none | `Switch` |
 
-- **Primary and destructive buttons (`Button`)**: Solid `--primary` (`default`) or `--danger` (`destructive`) fill with a `2px` border, `2px` bottom inset shade (`shadow-[inset_0_-2px_0_rgb(0_0_0_/_0.22)]`), `hover:brightness-95`, and `1px` active press. `outline` uses `bg-background border-2 border-border-strong hover:bg-hover`; `ghost` is borderless with `hover:bg-hover`.
+- **Primary and destructive buttons (`Button`)**: Solid `--primary` (`default`) or `--danger` (`destructive`) fill with a `2px` border, `2px` bottom inset shade (`shadow-[inset_0_-2px_0_rgb(0_0_0_/_0.22)]`), `hover:brightness-90`, and `1px` active press. `outline` uses `bg-background border-2 border-border-strong hover:bg-hover`; `ghost` is borderless with `hover:bg-hover`.
 - **Custom dropdowns (`src/web/ui/select.tsx`)**: All dropdowns use the custom `@radix-ui/react-select` component (zero browser-native `<select>`). Triggers show a smooth `ChevronDown`; the open `SelectContent` portal uses `border-2 border-border-strong bg-background` with smooth `Check` indicators on the selected option.
 - **Non-prose touch inputs**: URLs, domains, and pairing codes set `autoCapitalize="none" autoCorrect="off" spellCheck={false}` (plus `inputMode="url"` on URLs), and stretch full width (`h-11 w-full`) in mobile settings pages and drawers.
 - **Tool slots (`Button variant="slot"`) and `.tool-badge`**:
@@ -125,8 +130,7 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 
 - **Left baseline**: Group boxes, external group headings, collapsible toggles, and row errors align on `px-4` (`16px`).
 - **Rows**: Label left, control right, vertically centered; subtext aligns with the label. Folder rows place the folder name (`15px`) above the truncated path (`13.5px` muted, `~` shortened, full path in `title`).
-- **Conversation header**: Left side shows only the `34px` avatar (clicking opens PM profile) and `17px` `600` name; Piece headers add `PieceMeta` (`12px` muted model, effort, and context length, hidden below `720px`) before the right-rail toggle.
-- **Profile page**: Centered `64px` avatar, `22px` name, and `13.5px` muted project name (`max-w-[640px]`). Groups run `Model`, `Mode`, `Capabilities`, `Folders`, `Worktree setup`, `Schedules`, `Persona`, `Memory files`, `History`, and `Session` (section 23).
+- **Conversation header**: Left side renders one interactive button (`Avatar look size={36}`, `17px` `600` name, and `12px` `ChevronDown`) that opens PM settings in the side panel (`#/pm/<id>`); right side holds the `Pieces` `slot` button (`Avatar neutral`, `Pieces`, and a `.tool-badge` count when active asks, items, or Task Graphs exist). Piece thread headers render inside the side panel (desktop) or full-screen header (mobile) with `PieceMeta` (`12px` muted model, effort, and context length, hidden below `720px`).
 - **Container-responsive chat column (`.chat-main`, `.chat-column`, and `.messages`)**:
   - `.chat-main` declares `container: chat / inline-size` and scales `--chat-max` by main-pane width: `46rem` default, `52rem` at `>= 64rem`, `58rem` at `>= 80rem`, and `64rem` at `>= 112rem`.
   - `.chat-column` and `.messages` center via `padding-inline: max(var(--chat-gutter), calc((100% - var(--chat-max)) / 2))` (`0.75rem` below `40rem`, `3rem` at or above `40rem`). Conversation headers stay full-width (`--header-gutter-start: 20px`, `--header-gutter-end: 12px`).
@@ -160,13 +164,15 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 ## 11. Popovers and usage bars
 
 - **`PopoverContent`**: Square corners, `border-2 border-border-strong bg-background p-4`, content-sized between `280px` (`min-w-70`) and `min(22.5rem, var(--radix-popover-content-available-width))`, height-capped by `--radix-popover-content-available-height` with internal `grid-cols-1` truncation.
-- **`QuotaPopover`**: Groups windows (`5h`, `7d`, `30d`, or model families) per provider with `6px` (`h-1.5`) square bars colored per window via `USAGE_BAR_COLORS`: neutral `bg-foreground/40` normally, amber `bg-caution` at `>= 80%` or `allowed_warning`, and solid `bg-foreground` (never red) at `100%` or `rejected`, followed by `Resets HH:MM` (`tabular-nums`).
+- **`QuotaPopover` and usage meters (`quotaMeterOf` in `src/web/rail-model.ts`)**: `AppRail` (desktop footer) and `Settings` home (mobile) render the single fullest provider window as `5` vertical cells (filled count `ceil(percent / 20)`) with `Hourglass` and `percent%` (`tabular-nums`); on desktop clicking the rail meter opens `QuotaPopover` (`side="right"`). Inside `QuotaPopover`, windows (`5h`, `7d`, `30d`, or model families) group per provider with `6px` (`h-1.5`) square bars colored per window via `USAGE_BAR_COLORS`: neutral `bg-foreground/40` normally, amber `bg-caution` at `>= 80%` or `allowed_warning`, and solid `bg-foreground` (never red) at `100%` or `rejected`, followed by `Resets HH:MM` (`tabular-nums`).
 
-## 12. Right rail
+## 12. Side panel
 
-`RightRail` (`src/web/components/RightRail.tsx`) sits beside `main` (`320px`, `border-l border-line bg-surface-chat px-5`, dropping below the header at `max-h-[40dvh]` under `720px` on desktop, and becoming the bottom Pieces `Drawer` on mobile):
+`SidePanel` (`src/web/components/SidePanel.tsx`) renders beside chat on desktop (`22.5rem` min, `27.5rem` default, `45rem` max, `border-l-2 border-border bg-panel`, `px-5`, `3.5rem` header with optional `Back` arrow, title, and `Close` `X`, becoming `flex-1` over hidden chat in `stack` tier, and becoming the bottom Pieces `Drawer` on mobile):
 
-- **Four collapsible sections (`divide-y divide-line`)**:
+- **Three panel views (`sidePanelOf`)**: `Pieces` (`RailGroups`, at `#/c/<id>` when `piecesOpen` and items exist), a `Worker` thread (`WorkerConversation`, at `#/w/<id>`), or `Profile` (`ProfilePanel`, at `#/pm/<id>` and `#/pm/<id>/<page>`).
+- **Navigation and exits (`panelExitsOf`)**: Closing always returns to `#/c/<id>` (preserving whether Pieces was opened manually); clicking `Back` inside a Worker returns to `#/c/<id>` and opens `Pieces`; clicking `Back` on a Profile drill-down page returns to `#/pm/<id>`. `Escape` inside a Worker composer interrupts/rewinds per section 18 without closing `SidePanel`. In `stack` tier, the underlying conversation stays mounted inside React `<Activity mode="hidden">` so draft text and scroll position survive.
+- **Four collapsible Pieces sections (`divide-y divide-border py-3`)**:
   1. `Needs You`: Standalone `hub ask` items not bound to a Task Graph (`6px` `--primary` dot when non-empty, max 3 visible before `Show more`).
   2. `Task Graph`: Active DAGs (`status === "active"`), rendered with `PeelTrack` and `TaskProgressIcon`.
   3. `Pieces`: Unbound active Workers (`isBusy` titles animate with `.status-shimmer`, max 3 visible before `Show more`; metadata lives in `title` and `PieceMeta`, and mechanical prefixes are stripped by `cleanPieceTitle`).
@@ -188,6 +194,7 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 - **Font stacks (`--font-ui` and `--font-code` in `src/web/styles.css`)**: Bundled `Geist Variable` with system CJK fallbacks (`font-sans`), and `"SF Mono"`, `ui-monospace`, `Menlo`, `Consolas` (`font-mono`).
 - **English units and compact counts (`src/shared/count-format.ts`)**: Format tokens and sizes with `K`, `M`, `KB`, and `MB` (`820 tokens`, `291K tokens`, `158K context`), using `—` (never `0`) when historical metrics were not recorded.
 - **Tabular numerals and spacing**: Apply `tabular-nums` to all counts, times, percentages, and token totals. Separate items on a row with `gap-3` and size hierarchy (`15px` `500` primary vs `12px` muted secondary), never `·`, `|`, or `/`.
+- **Desktop `ProjectList` rows**: `3.25rem` (`52px`) row height (`h-13`), `2.25rem` (`36px`) avatar, `15px` `600` (`text-body font-semibold`) name (unchanged when selected), `13.5px` (`text-minor`) muted preview, right-aligned relative time or waiting dot, and hover/focus `.row-shortcuts` (`Pin` and `Settings`).
 
 ## 14. Interaction states and motion
 
@@ -202,15 +209,14 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 - **Inline media and file links**: Saved `![]()` images reserve a fixed `240px` height (`h-60 max-w-xs border-2 border-border object-contain`) so streams never jump on load, switching to an expired-file card on HTTP 404. Local `[label](path)` links render inline as `[data-file-link]` opening `FilePreview` (or plain text if unsaved).
 - **Charts (`mermaid` and `vega-lite` in `src/web/charts/`)**: Render after the fence closes inside a `.md-code` shell (`160px` min loading height, `480px` max inline height, scaling down no further than `12px` `CHART_MIN_INLINE_FONT_PX` before scrolling horizontally, sanitized with `dompurify`), with toolbar toggles for source, `Zoom` (`ZOOM_DIALOG` up to `2.5x`), and copy, styled from CSS variables and `CHART_CATEGORY_COLORS`.
 
-## 16. Shell layout, narrow rail, routes, and native macOS frame
+## 16. Shell layout, tiers, routes, and native macOS frame
 
-- **Three-pane desktop shell**: `300px` `Sidebar` (`bg-surface-sidebar`) | `main` (`bg-surface-chat`) | `320px` `RightRail`, separated by `1px` `border-line` with zero drop shadows.
-- **Narrow desktop rail (`< 1100px`)**: Collapses the sidebar into a permanent `72px` vertical avatar rail (`w-18`, hiding search and rendering `size-13 rounded-2xl` buttons with `40px` avatars, jelly highlights, and `size-2` green dots).
-- **Sidebar rows, `Archived`, and edge fades**: `72px` row height (`h-18`), `48px` avatar, `17px` `600` name on line 1, preview on line 2, and one right-hand indicator (pending ask dot, waiting dot, timestamp, or `Deletes in Nd` inside the default-collapsed `Archived` group). Scrollable containers define `--fade-top` and `--fade-bottom` with matching padding so items never clip abruptly.
-- **Hash routes (`src/web/route.ts`)**: `#/router` (default desktop landing when hash is empty), `#/c/<id>`, `#/w/<id>`, `#/pm/<id>`, `#/pm/<id>/capabilities`, and `#/d/<deviceId>/...` for remote mesh computers.
-- **Pinned `Router` entry**: Sits above the conversation list across `wide` (`300px`), `rail` (`72px`), and mobile `page` layouts with `RouterAvatar`, summary subtitle, and `.tool-badge` counters.
-- **Multi-computer sidebar and `Computers` settings**: Groups projects by computer when two or more computers are linked (`ChevronRight`, status dot, `Same network` or `Via relay`, offline banner, and `Computers` tab for GitHub login, 6-digit SAS verification, and `Hub order` showing `Hosting the Feishu bot now`).
-- **Native macOS app (`html[data-macos-app="true"]`)**: Reserves `--macos-traffic-lights-width: 72px` and `--macos-traffic-lights-height: 28px` at the top of the permanent left sidebar and marks non-interactive header regions with `data-window-drag`.
+- **Fixed honey rail (`AppRail`, `4.5rem`, `bg-rail`) + framed workspace sheet (`.shell-sheet`)**: Desktop pairs `AppRail` (`Router` button with pending badge, per-computer cells with `PlatformIcon` and square status dot including single-computer setups, bottom `Update` slot, quota `meter`, `Settings` icon slot, and `Account` slot) on honey `--rail` (`#ffcb3d`) with `.shell-sheet` (`margin: 6px 6px 6px 0; border: 2px solid var(--rail-shade); bg-background`). Zero drop shadows.
+- **Resizable sheet columns (`ui/resizable.tsx`)**: Inside `.shell-sheet`, `ProjectList` (`bg-list`, `13.75rem`–`25rem`, default `16.5rem`) | `Conversation` (`bg-background`, `>= 30rem`) | optional `SidePanel` (`bg-panel`, `22.5rem`–`45rem`, default `27.5rem`), separated by `2px` seams (`--list-edge` / `--border`). Dragging handles widens the active seam (`4px` + `12x32` honey pixel grip), double-clicking a handle resets its pane to default, and widths persist per browser in `localStorage` (`agent-hub.paneWidths`).
+- **Responsive desktop tiers (`shellTierOf()` in `src/web/shell-layout.ts`)**: Evaluated in `rem` from container width and active scale (`1146px` / `998px` / `784px` at `Default`): `wide` (full `ProjectList` + `Conversation` + optional `SidePanel`), `strip` (collapses `ProjectList` to a fixed `4.5rem` avatar strip with New PM `+` and pinned avatars above a divider), and `stack` (`SidePanel` replaces chat width while conversation stays mounted inside `<Activity mode="hidden">`).
+- **`ProjectList` groups and edge fades**: `3.5rem` (`h-14`) header (`ComputerSwitcher` trigger + New PM `slot`), cream `SearchField`, optional `Pinned` group (section 26), `Project managers` group, and default-collapsed `Archived` group (`Deletes in Nd`, auto-expanding on search or active archived selection). Scrollable containers define `--fade-top` and `--fade-bottom` with matching padding so items never clip abruptly.
+- **Hash routes (`src/web/route.ts`)**: `#/router` (fills the entire desktop sheet with `ProjectList` and `SidePanel` closed), `#/c/<id>`, `#/w/<id>`, `#/pm/<id>`, `#/pm/<id>/<page>` (`capabilities`, `persona`, `memory`, `worktree`, `history`), and `#/d/<deviceId>/...` for remote mesh computers.
+- **Native macOS app (`html[data-macos-app="true"]`)**: Reserves `--macos-traffic-lights-height: 28px` at the top of `AppRail` and marks empty rail chrome with `data-window-drag`.
 
 ## 17. Message stream
 
@@ -230,16 +236,17 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 ## 19. Touch screens and safe areas
 
 - **Viewport and scroll locking**: `viewport-fit=cover` and `interactive-widget=resizes-content`, `100dvh` on `#root`, `overflow: hidden; overscroll-behavior: none` on `html, body, #root`, and `overflow-x: hidden; overscroll-behavior-y: contain` on internal scroll panes, padded with `--safe-top` and `--safe-bottom`.
-- **`>= 16px` inputs and `>= 44px` hit targets**: Under `(pointer: coarse)`, all `input`, `textarea`, and `select` elements use `16px` font size (preventing iOS zoom), standalone controls expand hit areas via `.touch-target::after`, and stacked list rows enforce `min-h-11` (`44px`). Never gate actions behind hover, and never allow horizontal page overflow at `390px`.
+- **`>= 16px` inputs and `>= 44px` hit targets**: Under `(pointer: coarse)`, all `input`, `textarea`, and `select` elements use `16px` font size (preventing iOS zoom), standalone controls expand hit areas via `.touch-target::after`, and stacked list rows enforce `min-h-11` (`44px`). Never gate an exclusive action behind hover, and never allow horizontal page overflow at `390px`. Only `.row-shortcuts` (`src/web/styles.css`) — hover and `:focus-within` shortcuts on desktop `ProjectList` rows for Pin and PM settings, both independently reachable in `ProfilePanel` and the conversation header — may reveal on `@media (hover: hover)` devices (and remain absent on touch screens).
 
 ## 20. Mobile shell
 
 - Activated solely by `MOBILE_SHELL_QUERY` (`(pointer: coarse)` and short viewport edge `< 600px`).
-- Full-screen navigation stack (`#/` list kept warm with React 19 `<Activity mode="hidden">`, pushing `#/c/<id>` chat, then `#/w/<id>` Piece or `#/pm/<id>` profile and its `#/pm/<id>/capabilities` page) with deterministic `mobileBack` history handling, bottom Pieces `Drawer`, and full-screen two-level drill-down settings (`#/settings` to `#/settings/<section>`: `scale`, `notifications`, `updates`, `providers`, `vendor-sync`, `capabilities`, `resources`, `computers`, `sign-in`, `browsers`) sharing `src/web/settings-model.ts` with zero extra network requests on `#/settings`.
+- Bottom navigation + full-screen navigation stack: `TabBar` (`src/web/mobile/TabBar.tsx`, `4rem` honey bottom bar padded by `--safe-bottom`) switches between `Router` (`#/router`, with pending badge), `Projects` (`#/`), and `Settings` (`#/settings`, with attention dot), hiding automatically when the soft keyboard is open or on pushed views (`#/c/<id>`, `#/w/<id>`, `#/pm/<id>`, `#/pm/<id>/<page>`, `#/settings/<section>`).
+- Kept-warm views and drawers: `#/` `ProjectList layout="page"` (with `ComputerSwitcher` bottom `Drawer` in its header) stays warm inside React 19 `<Activity mode="hidden">` while viewing chat; `Conversation` pushes `#/c/<id>` with a bottom Pieces `Drawer`, `#/w/<id>` pushes `WorkerConversation`, and `#/pm/<id>` pushes `ProfilePanel variant="page"` (drilling down to `#/pm/<id>/capabilities`, `persona`, `memory`, `worktree`, `history`). Full-screen `#/settings` puts the `Usage` meter group at the top (reading query cache with zero extra network requests) above `General`, `Providers`, `Capabilities`, `Resources`, `Computers`, and `Security & Access` using deterministic `mobileBack` history handling.
 
 ## 21. Router workbench: decision tray and timeline
 
-`#/router` (`RouterWorkbench.tsx`, [Router architecture](router-design.md)) has three stacked regions inside `.chat-column`:
+`#/router` (`RouterWorkbench.tsx`, [Router architecture](router-design.md)) fills the entire desktop `.shell-sheet` (both `ProjectList` and `SidePanel` closed) and has three stacked regions inside `.chat-column`:
 
 1. **`Needs You` tray**: Hidden when empty; capped at `50dvh` on desktop and `45dvh` on mobile with top/bottom scroll fades. Expands the first `RouterDecisionCard` (square corners, `border-2 border-border-strong bg-background`, `Markdown` lead + details, shared `OptionRow` A/B buttons, and a persistent inline `<Input>` + `ArrowUp` button supporting one-click choice, choice + note, or custom text reply; dims to `Offline` when its remote computer disconnects) and lists remaining cards as compact rows (`Show more` past 3).
 2. **Borderless timeline (`RouterStream.tsx`)**: Stick-to-bottom stream of command turns (right-aligned user bubble, left-aligned `RouterAvatar` + clickable target rows + Router Markdown + inline `ForwardReply` showing the target PM's live `Working...`, `Stopped`, or full `AgentText` reply) and incoming PM milestone reports (grouped by consecutive PM, with an unread `New` divider). Empty state centers a `36px` `40%`-opacity `RouterAvatar` and `All clear`.
@@ -256,10 +263,10 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 
 ## 23. Capabilities and worktree setup
 
-`CapabilitiesPanel` (`src/web/components/CapabilitiesPanel.tsx`) renders one capability scope ([External capabilities](pm-capabilities-design.md)): Project defaults, the Router, or one project. `CapabilitiesSettings` hosts it in the desktop `Capabilities` tab and the mobile `#/settings/capabilities` page, and `ProjectCapabilitiesPage` hosts it at `#/pm/<id>/capabilities`:
+`CapabilitiesPanel` (`src/web/components/CapabilitiesPanel.tsx`) renders one capability scope ([External capabilities](pm-capabilities-design.md)): Project defaults, the Router, or one project. `CapabilitiesSettings` hosts it in the desktop `Capabilities` tab and the mobile `#/settings/capabilities` page, and `ProfilePanel` (`src/web/components/ProfilePanel.tsx`) hosts project-level `Capabilities`, `Persona`, `Memory files`, `Worktree setup`, and `History` as drill-down pages at `#/pm/<id>/<page>` (returning to `#/pm/<id>` via the panel or page `Back` button):
 
 - **Scope switch (settings only)**: A `Segmented` control (`aria-label="Scope"`) with `Project defaults` (selected on open), `Router`, and `Project` (hidden when no unarchived PM exists). `Project` adds a square picker trigger beside it (`h-9 border-2 border-border-strong bg-background`, `20px` slime, name, `12px` `ChevronDown`) that opens a `Popover` (`aria-label="Projects"`, `p-1.5`) of radio rows with a `20px` slime, the name, a `Custom` badge for projects with their own choices, and a square `RadioMark`.
-- **Project page**: The header holds the `Back` slot (returns to the profile), the `34px` slime, and the `17px` `600` PM name; the `max-w-160` content column opens with a `22px` `600` `Capabilities` heading and has no scope switch.
+- **Drill-down pages**: On `#/pm/<id>/<page>`, the panel (`SidePanel` on desktop) or page (`variant="page"` on mobile) header shows `Back` (`onBack` to `#/pm/<id>`) and the section title (`Capabilities`, `Persona`, `Memory files`, `Worktree setup`, or `History`); `Capabilities` opens with no scope switch.
 - **Inheritance group (project scope)**: A `SettingsNavRow` `Project defaults` with the summary `Inherited` or `N custom` opens the Project defaults editor (Settings on desktop, `#/settings/capabilities` on mobile, the `Project defaults` segment inside Settings). While the project has its own choices, a chevron-less `Reset to Project defaults` row clears them in one click.
 - **Search and `Refresh`**: `SearchField` (`Search capabilities`) filters by name, key, description, or plugin name; matching plugin rows expand, collapsed provider groups open, and an empty result shows `No matches`. The ghost `Refresh` button rescans the inventory.
 - **Sections answer who can use an item**: `This project` (skills from the project's main folder, project scope only), `Shared` (items two or more providers load), then one section per provider in `AGENT_VENDORS` order for items only that provider loads (its plugins, `Built-in` skills, and `Apps`). In a project the PM's provider section follows `Shared`, and the other provider sections are default-collapsed `CollapsibleGroup`s with an `N of M` summary. A section header shows `N of M` (`13.5px` muted, `tabular-nums`) unless its only row already shows the count.
@@ -280,16 +287,23 @@ The profile page links and edits project-level settings next to `Folders`:
 - **Version row**: `Bellwood vX.Y.Z`, a `Source` `.tool-badge` for source checkouts, and a ghost `Check for updates` row action (`-mr-3`, `Loader2` while checking) that posts `POST /api/update/check`. The detail line holds the status (`Up to date`, `vX.Y.Z available`, or `Couldn't check for updates`) and a `Release notes` link with a `12px` `ExternalLink` icon.
 - **Download row**: Only for bundled installs with a newer release. `vX.Y.Z available` with a small primary `Download for macOS` or `Download for Windows` link (`Download` icon); its detail line moves `Release notes` here and adds `SHA-256` and `Skip this version`. Source checkouts get the status line only, never a download button.
 - **Inline actions**: `Release notes`, `SHA-256`, and `Skip this version` use the `Undo` text-action style (`font-medium text-muted-foreground`, `hover:text-foreground hover:underline`, `touch-target`) with `gap-x-3` between them. Downloads and release links open in the system browser (`target="_blank"`).
-- **Skip this version**: Stored per version in `localStorage` (`agent-hub.update.dismissed`); it hides the sidebar `Update` slot (section 6) and the mobile attention dot until a newer release appears, while the download row stays available.
-- **Mobile entry**: An `Updates` `SettingsNavRow` in the `General` group with the cached `vX.Y.Z` summary and the amber attention dot while the sidebar reminder would show; it reads only the query cache, so `#/settings` still makes no requests.
+- **Skip this version**: Stored per version in `localStorage` (`agent-hub.update.dismissed`); it hides the rail `Update` slot (section 6) and the mobile attention dot until a newer release appears, while the download row stays available.
+- **Mobile entry**: An `Updates` `SettingsNavRow` in the `General` group with the cached `vX.Y.Z` summary and the amber attention dot while the rail reminder would show; it reads only the query cache, so `#/settings` still makes no requests.
 
 ## 25. Resources
 
 `ResourcesSettings` (`src/web/components/ResourcesSettings.tsx`) renders the `Resources` tab in desktop `SettingsDialog` and the mobile `#/settings/resources` page (`src/web/mobile/settings/ResourcesPage.tsx`), reading `GET /api/resources` through `src/web/resources-model.ts`:
 
-- **Attention indicator**: An `8px` amber square (`size-2 bg-caution`) marks the sidebar `Settings` slot, the desktop `Resources` tab, and the mobile `Resources` `SettingsNavRow` whenever at least one held resource has `keptAt === null`. The mobile `#/settings` home reads only the React Query cache (`useCachedResourcesSummary`), so it issues zero network requests.
+- **Attention indicator**: An `8px` amber square (`size-2 bg-caution`) marks the rail `Settings` slot, the desktop `Resources` tab, and the mobile `Resources` `SettingsNavRow` whenever at least one held resource has `keptAt === null`. The mobile `#/settings` home reads only the React Query cache (`useCachedResourcesSummary`), so it issues zero network requests.
 - **Computer scope**: When two or more computers are online, a top `SettingsGroup` offers a borderless `Select variant="plain"` computer picker so each computer's disk, branches, and processes can be inspected through device proxy routes.
 - **Needs attention**: Shown above `Overview` only when unacknowledged held items exist. Each row shows the item label, an `8px` `bg-caution` square status dot, spaced metadata (`gap-x-3`, never middle dots) with reason, project name, size (`tabular-nums`), and up to 5 sample paths (`font-mono text-xs`), paired with ghost `Keep` and danger-tinted `Discard...` actions.
 - **Overview**: A `SettingsGroup` (`Refresh` and `Run cleanup` actions in its header) with four rows: `Database`, `Storage`, `Worktrees & branches`, and `Processes`. Routine quota denominators stay hidden below `RESOURCES_WARN_RATIO` (`80%`); items at or above `80%` display the cap and a caution indicator. A default-collapsed `CollapsibleGroup` (`Storage details`) lists per-directory and per-table totals on demand.
 - **Kept by you**: A default-collapsed `CollapsibleGroup` holding items the user marked `Keep`, with `Unkeep` and `Discard...` actions.
 - **Discard confirmation**: Clicking `Discard...` always opens a `max-w-110` `DialogContent` showing the item path or branch, reason, size, sample paths, an optional `Also delete branch` switch for held worktrees, `Cancel` (`outline`), and one destructive `Discard` (`variant="destructive"`) button.
+
+## 26. Pins
+
+`PUT /api/pms/:id/pin` persists per-PM pins per computer (`pm_pins` SQLite table, `pinnedAt` epoch ms):
+
+- **`Pinned` group (`ProjectList` and `projectListOf`)**: Renders above `Project managers` in both `column` and `strip` layouts only when at least one unarchived PM on the selected computer has `pinnedAt !== null`. Order follows `pinnedAt` ascending (oldest pin first, tie-broken by `pm.id` ascending).
+- **Where pins toggle**: On desktop `ProjectList` rows via `.row-shortcuts` (`Pin` / `PinFilled`), and inside `ProfilePanel` (`Pinned` header action) for all form factors. Archiving preserves `pinnedAt` (so unarchiving restores the pin) without displaying archived PMs in `Pinned`; offline/read-only remote views disable pin toggling.
