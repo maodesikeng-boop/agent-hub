@@ -102,11 +102,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+          components: clippy, rustfmt
 
       - name: Cache Cargo build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/windows -> target
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path apps/windows/Cargo.toml --all -- --check
 
       - name: Test and build fusa-win-helper
         env:
@@ -114,6 +118,9 @@ jobs:
         run: |
           cargo test --manifest-path apps/windows/Cargo.toml -p fusa-win-helper --locked
           cargo build --release --manifest-path apps/windows/Cargo.toml -p fusa-win-helper --locked
+
+      - name: Lint Rust workspace with Clippy
+        run: cargo clippy --manifest-path apps/windows/Cargo.toml --workspace --all-targets --locked -- -D warnings
 
       - name: Smoke probe fusa-run.exe sandbox
         shell: pwsh
