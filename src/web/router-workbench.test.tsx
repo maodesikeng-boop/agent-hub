@@ -12,6 +12,7 @@ import {
   ROUTER_STREAM_PAGE_SIZE,
   VENDOR_LIST,
   bundledModelCatalog,
+  effortLabel,
   effortsFor,
   emptyRouterSlice,
   modelShortLabel,
@@ -2057,7 +2058,7 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     });
     expect(screen.getByRole("button", { name: new RegExp(`Router model: ${secondSpec.label} ${altModelLabel}`) })).toBeInTheDocument();
 
-    await pickOption("Effort", altEffort);
+    await pickOption("Effort", effortLabel(altEffort, secondSpec.id, secondCat));
     await waitFor(() => expect(putCalls()).toHaveLength(3));
     expect(putCalls()[2]!.body).toEqual({
       vendor: secondSpec.id,

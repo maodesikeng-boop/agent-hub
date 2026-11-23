@@ -349,10 +349,13 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     expect(sessionRow(workerSessionId(start({ vendor: "agy", effort: "low" }).data.worker.id))).toMatchObject({ model: null, effort: "low" });
   });
 
-  it("agy：完整 ID 的档位和 --effort 对不上、思考程度不是 low/medium/high：invalid，说清楚怎么改", () => {
+  it("agy：完整 ID 的档位和 --effort 对不上、思考程度不在清单里：invalid，说清楚怎么改；支持 --effort Extra", () => {
     repos.add(main);
     expectLedgerError(() => start({ vendor: "agy", model: "gemini-4-argon-low", effort: "high" }), "invalid", /gemini-4-argon-low.*low.*high/);
-    expectLedgerError(() => start({ vendor: "agy", model: "gemini-4-argon", effort: "xhigh" }), "invalid", /思考程度只能是 low、medium、high/);
+    expectLedgerError(() => start({ vendor: "agy", model: "gemini-4-argon", effort: "max" }), "invalid", /思考程度只能是 low、medium、high、xhigh/);
+    const extraWorker = start({ vendor: "agy", model: "gemini-4-neon", effort: "Extra" }).data.worker;
+    expect(extraWorker).toMatchObject({ model: "gemini-4-neon", effort: "xhigh" });
+    expect(sessionRow(workerSessionId(extraWorker.id))).toMatchObject({ vendor: "agy", model: "gemini-4-neon", effort: "xhigh" });
   });
 
   it("主文件夹有没提交的改动：返回的话提醒 Worker 看不到这些改动", () => {
@@ -1220,7 +1223,7 @@ describe("派活：思考程度（--effort）", () => {
     const b = start({ title: "乙" }).data.worker;
     const text = hub(lin.sessionId, "worker.list", {}).text;
     expect(text).toContain(`#${a.id} 甲 · 进行中 · `);
-    expect(text).toContain("模型 Haiku · 思考程度 low");
+    expect(text).toContain("模型 Haiku · 思考程度 Low");
     expect(text).toContain(`#${b.id} 乙`);
     expect(text).toContain("模型 Sonnet 5.5 · 思考程度 默认");
   });
@@ -2453,11 +2456,13 @@ describe("查看各厂商可用的模型（hub models）", () => {
       { id: "opus[1m]", label: "Opus 5.6 (1M context)", efforts: ["low", "medium", "high", "xhigh", "max"] },
       { id: "haiku", label: "haiku", efforts: [] },
     ]);
-    expect(all.text).toContain("claude（Claude Code）· 状态: 可用 · 默认模型: opus[1m]（Opus 5.6 (1M context)） · 默认思考程度: xhigh");
-    expect(all.text).toContain("  - opus[1m]（Opus 5.6 (1M context)） · 思考程度: low, medium, high, xhigh, max");
+    expect(all.text).toContain("claude（Claude Code）· 状态: 可用 · 默认模型: opus[1m]（Opus 5.6 (1M context)） · 默认思考程度: xhigh（Extra）");
+    expect(all.text).toContain("  - opus[1m]（Opus 5.6 (1M context)） · 思考程度: low（Low）, medium（Medium）, high（High）, xhigh（Extra）, max（Max）");
     expect(all.text).toContain("  - haiku · 思考程度: 不可调");
     expect(all.text).toContain("agy（Antigravity）· 状态: 未登录 · 默认模型: gemini-4-argon · 默认思考程度: 默认");
     expect(all.text).toContain("codex（Codex）· 状态: 未安装 · 默认模型: gpt-5.4 · 默认思考程度: 默认");
+    expect(all.text).toContain("  - deepseek/deepseek-v4-pro（DeepSeek V4 Pro） · 思考程度: off, high, max");
+    expect(all.data.vendors[0]?.effortLabels).toEqual({ low: "Low", medium: "Medium", high: "High", xhigh: "Extra", max: "Max" });
 
     const single = ledger.hubCall(lin.sessionId, "models", { vendor: "claude" }, { modelCatalogs: customCatalogs });
     expect(single.data.vendors.map((v) => v.vendor)).toEqual(["claude"]);

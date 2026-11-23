@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import {
   AVAILABILITY_LABELS,
   bundledModelCatalog,
+  effortLabel,
   effortsFor,
   isListed,
   isSelectable,
@@ -99,7 +100,7 @@ function RouterModelEffortFields({
             <SelectContent>
               {supportedEfforts.map((eff) => (
                 <SelectItem key={eff} value={eff}>
-                  {eff}
+                  {effortLabel(eff, selectedVendor, selectedCatalog)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -113,6 +114,60 @@ function RouterModelEffortFields({
 interface OptimisticSettings {
   settings: RouterSettings;
   confirmed: boolean;
+}
+
+function buildRouterTriggerDisplay(
+  effectiveSettings: RouterSettings,
+  activeResolution: ReturnType<typeof resolveRouterModelPreview>,
+  catalogMap: ReadonlyMap<AgentVendor, ModelCatalog>,
+) {
+  if (effectiveSettings.vendor === null) {
+    if (activeResolution.ok) {
+      const cat = catalogMap.get(activeResolution.vendor) ?? bundledModelCatalog(activeResolution.vendor);
+      const shortModel = modelShortLabel(activeResolution.vendor, activeResolution.model, cat);
+      const vLabel = vendorLabel(activeResolution.vendor);
+      return {
+        prefix: "Auto",
+        prefixHideClass: "@max-[19rem]/chat:hidden",
+        primary: shortModel,
+        ariaLabel: `Router model: Auto ${shortModel}`,
+        title: `Auto: ${vLabel} ${shortModel}, ${effortLabel(activeResolution.effort, activeResolution.vendor, cat)}`,
+      };
+    }
+    return {
+      prefix: null,
+      prefixHideClass: "",
+      primary: "Auto",
+      ariaLabel: "Router model: Auto",
+      title: "Auto",
+    };
+  }
+
+  const prefVendor = effectiveSettings.vendor;
+  if (activeResolution.ok) {
+    const cat = catalogMap.get(activeResolution.vendor) ?? bundledModelCatalog(activeResolution.vendor);
+    const shortModel = modelShortLabel(activeResolution.vendor, activeResolution.model, cat);
+    const vLabel = vendorLabel(activeResolution.vendor);
+    return {
+      prefix: vLabel,
+      prefixHideClass: "@max-[25rem]/chat:hidden",
+      primary: shortModel,
+      ariaLabel: `Router model: ${vLabel} ${shortModel}`,
+      title: `${vLabel} ${shortModel}, ${effortLabel(activeResolution.effort, activeResolution.vendor, cat)}`,
+    };
+  }
+
+  const prefCat = catalogMap.get(prefVendor) ?? bundledModelCatalog(prefVendor);
+  const chosen = resolveExplicitRouterChoice(prefVendor, effectiveSettings, prefCat);
+  const shortModel = modelShortLabel(prefVendor, chosen.model, prefCat);
+  const vLabel = vendorLabel(prefVendor);
+  return {
+    prefix: vLabel,
+    prefixHideClass: "@max-[25rem]/chat:hidden",
+    primary: shortModel,
+    ariaLabel: `Router model: ${vLabel} ${shortModel}`,
+    title: chosen.effort === null ? `${vLabel} ${shortModel}` : `${vLabel} ${shortModel}, ${effortLabel(chosen.effort, prefVendor, prefCat)}`,
+  };
 }
 
 export const RouterModelPicker = memo(function RouterModelPicker({
@@ -171,55 +226,10 @@ export const RouterModelPicker = memo(function RouterModelPicker({
     return modelShortLabel(autoResolution.vendor, autoResolution.model, cat);
   }, [autoResolution, catalogMap]);
 
-  const triggerDisplay = useMemo(() => {
-    if (effectiveSettings.vendor === null) {
-      if (activeResolution.ok) {
-        const cat = catalogMap.get(activeResolution.vendor) ?? bundledModelCatalog(activeResolution.vendor);
-        const shortModel = modelShortLabel(activeResolution.vendor, activeResolution.model, cat);
-        const vLabel = vendorLabel(activeResolution.vendor);
-        return {
-          prefix: "Auto",
-          prefixHideClass: "@max-[19rem]/chat:hidden",
-          primary: shortModel,
-          ariaLabel: `Router model: Auto ${shortModel}`,
-          title: `Auto: ${vLabel} ${shortModel}, ${activeResolution.effort}`,
-        };
-      }
-      return {
-        prefix: null,
-        prefixHideClass: "",
-        primary: "Auto",
-        ariaLabel: "Router model: Auto",
-        title: "Auto",
-      };
-    }
-
-    const prefVendor = effectiveSettings.vendor;
-    if (activeResolution.ok) {
-      const cat = catalogMap.get(activeResolution.vendor) ?? bundledModelCatalog(activeResolution.vendor);
-      const shortModel = modelShortLabel(activeResolution.vendor, activeResolution.model, cat);
-      const vLabel = vendorLabel(activeResolution.vendor);
-      return {
-        prefix: vLabel,
-        prefixHideClass: "@max-[25rem]/chat:hidden",
-        primary: shortModel,
-        ariaLabel: `Router model: ${vLabel} ${shortModel}`,
-        title: `${vLabel} ${shortModel}, ${activeResolution.effort}`,
-      };
-    }
-
-    const prefCat = catalogMap.get(prefVendor) ?? bundledModelCatalog(prefVendor);
-    const chosen = resolveExplicitRouterChoice(prefVendor, effectiveSettings, prefCat);
-    const shortModel = modelShortLabel(prefVendor, chosen.model, prefCat);
-    const vLabel = vendorLabel(prefVendor);
-    return {
-      prefix: vLabel,
-      prefixHideClass: "@max-[25rem]/chat:hidden",
-      primary: shortModel,
-      ariaLabel: `Router model: ${vLabel} ${shortModel}`,
-      title: chosen.effort === null ? `${vLabel} ${shortModel}` : `${vLabel} ${shortModel}, ${chosen.effort}`,
-    };
-  }, [effectiveSettings, activeResolution, catalogMap]);
+  const triggerDisplay = useMemo(
+    () => buildRouterTriggerDisplay(effectiveSettings, activeResolution, catalogMap),
+    [effectiveSettings, activeResolution, catalogMap],
+  );
 
   const listedCatalogs = useMemo(() => {
     const pref = effectiveSettings.vendor;
@@ -413,7 +423,9 @@ export const RouterModelPicker = memo(function RouterModelPicker({
             >
               <span>{showEffort ? "Model & effort" : "Model"}</span>
               <span className="flex items-center gap-1.5 font-normal">
-                {!detailsOpen && showEffort && selectedChoice.effort !== null && <span>{selectedChoice.effort}</span>}
+                {!detailsOpen && showEffort && selectedChoice.effort !== null && (
+                  <span>{effortLabel(selectedChoice.effort, selectedVendor, selectedCatalog)}</span>
+                )}
                 <ChevronDown
                   className={cn(
                     "size-pixel-sm shrink-0 transition-transform motion-reduce:transition-none",

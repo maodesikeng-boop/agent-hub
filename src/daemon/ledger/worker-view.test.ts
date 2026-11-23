@@ -378,14 +378,16 @@ describe("模型名、思考程度：和网页右栏、资料页一样的写法"
 
   it("claude 的完整模型名写成显示名；默认写“默认”", () => {
     expect(line(startWorker("claude", { model: "claude-opus-5-5" }))).toBe("厂商 Claude Code，模型 Opus 5.5，思考程度 默认");
-    expect(line(startWorker("claude", { model: "claude-sonnet-5-5", effort: "high" }))).toBe("厂商 Claude Code，模型 Sonnet 5.5，思考程度 high");
+    expect(line(startWorker("claude", { model: "claude-sonnet-5-5", effort: "high" }))).toBe("厂商 Claude Code，模型 Sonnet 5.5，思考程度 High");
+    expect(line(startWorker("claude", { model: "claude-opus-5-5", effort: "xhigh" }))).toBe("厂商 Claude Code，模型 Opus 5.5，思考程度 Extra");
   });
 
   it("agy：模型和思考程度分开写（另存的、写在模型 ID 末尾的老数据都拆开）", () => {
-    expect(line(startWorker("agy", { model: "gemini-4-argon", effort: "high" }))).toBe("厂商 Antigravity，模型 Gemini 4 Argon，思考程度 high");
+    expect(line(startWorker("agy", { model: "gemini-4-argon", effort: "high" }))).toBe("厂商 Antigravity，模型 Gemini 4 Argon，思考程度 High");
+    expect(line(startWorker("agy", { model: "gemini-4-neon", effort: "xhigh" }))).toBe("厂商 Antigravity，模型 Gemini 4 Neon，思考程度 Extra");
     const old = startWorker("agy");
     db.run("UPDATE agent_sessions SET model = 'gpt-oss-120b-medium', effort = NULL WHERE worker_id = ?", old);
-    expect(line(old)).toMatch(/，思考程度 medium$/);
+    expect(line(old)).toMatch(/，思考程度 Medium$/);
     expect(line(old)).not.toContain("gpt-oss-120b-medium");
   });
 

@@ -16,6 +16,10 @@ exports[`迁移前快照：agentLaunchArgs > agy：模型 × 思考程度各组�
     "medium",
   ],
   """ × null": [],
+  """ × xhigh": [
+    "--effort",
+    "xhigh",
+  ],
   "claude-opus-5-5 × """: [
     "--model",
     "claude-opus-5-5",
@@ -35,6 +39,10 @@ exports[`迁移前快照：agentLaunchArgs > agy：模型 × 思考程度各组�
   "claude-opus-5-5 × null": [
     "--model",
     "claude-opus-5-5",
+  ],
+  "claude-opus-5-5 × xhigh": [
+    "--model",
+    "claude-opus-5-5-xhigh",
   ],
   "claude-sonnet-5-5 × """: [
     "--model",
@@ -56,6 +64,10 @@ exports[`迁移前快照：agentLaunchArgs > agy：模型 × 思考程度各组�
     "--model",
     "claude-sonnet-5-5",
   ],
+  "claude-sonnet-5-5 × xhigh": [
+    "--model",
+    "claude-sonnet-5-5-xhigh",
+  ],
   "custom-model-1 × """: [
     "--model",
     "custom-model-1",
@@ -75,6 +87,10 @@ exports[`迁移前快照：agentLaunchArgs > agy：模型 × 思考程度各组�
   "custom-model-1 × null": [
     "--model",
     "custom-model-1",
+  ],
+  "custom-model-1 × xhigh": [
+    "--model",
+    "custom-model-1-xhigh",
   ],
   "gemini-3.8-flash × """: [
     "--model",
@@ -96,6 +112,10 @@ exports[`迁移前快照：agentLaunchArgs > agy：模型 × 思考程度各组�
     "--model",
     "gemini-3.8-flash",
   ],
+  "gemini-3.8-flash × xhigh": [
+    "--model",
+    "gemini-3.8-flash-xhigh",
+  ],
   "gemini-4-argon × """: [
     "--model",
     "gemini-4-argon",
@@ -116,25 +136,33 @@ exports[`迁移前快照：agentLaunchArgs > agy：模型 × 思考程度各组�
     "--model",
     "gemini-4-argon",
   ],
-  "gemini-4-argon-high × """: [
+  "gemini-4-argon × xhigh": [
     "--model",
-    "gemini-4-argon-high",
+    "gemini-4-argon-xhigh",
   ],
-  "gemini-4-argon-high × high": [
+  "gemini-4-argon-xhigh × """: [
     "--model",
-    "gemini-4-argon-high",
+    "gemini-4-argon-xhigh",
   ],
-  "gemini-4-argon-high × low": [
+  "gemini-4-argon-xhigh × high": [
     "--model",
-    "gemini-4-argon-high",
+    "gemini-4-argon-xhigh",
   ],
-  "gemini-4-argon-high × medium": [
+  "gemini-4-argon-xhigh × low": [
     "--model",
-    "gemini-4-argon-high",
+    "gemini-4-argon-xhigh",
   ],
-  "gemini-4-argon-high × null": [
+  "gemini-4-argon-xhigh × medium": [
     "--model",
-    "gemini-4-argon-high",
+    "gemini-4-argon-xhigh",
+  ],
+  "gemini-4-argon-xhigh × null": [
+    "--model",
+    "gemini-4-argon-xhigh",
+  ],
+  "gemini-4-argon-xhigh × xhigh": [
+    "--model",
+    "gemini-4-argon-xhigh",
   ],
   "gpt-oss-120b × """: [
     "--model",
@@ -156,6 +184,10 @@ exports[`迁移前快照：agentLaunchArgs > agy：模型 × 思考程度各组�
     "--model",
     "gpt-oss-120b",
   ],
+  "gpt-oss-120b × xhigh": [
+    "--model",
+    "gpt-oss-120b-xhigh",
+  ],
   "null × """: [],
   "null × high": [
     "--effort",
@@ -170,6 +202,10 @@ exports[`迁移前快照：agentLaunchArgs > agy：模型 × 思考程度各组�
     "medium",
   ],
   "null × null": [],
+  "null × xhigh": [
+    "--effort",
+    "xhigh",
+  ],
 }
 `;
 
@@ -2035,6 +2071,7 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 1`] = `
       "low",
       "medium",
       "high",
+      "xhigh",
     ],
     "envVar": "AGENT_HUB_AGY",
     "explicitDefaultModel": false,

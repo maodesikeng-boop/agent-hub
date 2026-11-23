@@ -9,6 +9,7 @@ import {
   PM_MEMORY_MAX_BYTES,
   PM_MEMORY_MAX_LINES,
   PM_MEMORY_SOFT_WARN_RATIO,
+  effortLabel,
   isAgentVendor,
   modelLabel,
   splitModelEffort,
@@ -91,10 +92,11 @@ function describeChange(change: PersonaChange, catalog: ModelCatalog): string {
   if (change.textBefore !== change.textAfter) parts.push("edited the persona");
   if (change.modeBefore !== change.modeAfter) parts.push(`set mode to ${MODE_LABELS[change.modeAfter]}`);
   if (change.vendorBefore !== change.vendorAfter) parts.push(`set provider to ${vendorLabel(change.vendorAfter)}`);
-  const before = splitModelEffort(change.vendorBefore, change.modelBefore, change.effortBefore);
-  const after = splitModelEffort(change.vendorAfter, change.modelAfter, change.effortAfter);
+  const beforeCatalog = change.vendorBefore === change.vendorAfter ? catalog : null;
+  const before = splitModelEffort(change.vendorBefore, change.modelBefore, change.effortBefore, beforeCatalog);
+  const after = splitModelEffort(change.vendorAfter, change.modelAfter, change.effortAfter, catalog);
   if (before.model !== after.model) parts.push(`set model to ${after.model === null ? DEFAULT_CHOICE : modelLabel(change.vendorAfter, after.model, catalog)}`);
-  if (before.effort !== after.effort) parts.push(`set effort to ${after.effort ?? DEFAULT_CHOICE}`);
+  if (before.effort !== after.effort) parts.push(`set effort to ${after.effort === null ? DEFAULT_CHOICE : effortLabel(after.effort, change.vendorAfter, catalog)}`);
   return parts.join(", ") || "changed settings";
 }
 
@@ -193,9 +195,11 @@ function useAliveRef(): AliveRef {
 
 function useAgentEditor(pmId: number, persona: PersonaView, onUpdate: (p: PersonaView) => void, aliveRef: AliveRef) {
   const client = useClient();
-  const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort) };
+  const savedCatalog = useModelCatalog(persona.vendor);
+  const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort, savedCatalog) };
   const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
   const [editedAgent, setEditedAgent] = useState<AgentDraft | null>(null);
+  const draftCatalog = useModelCatalog(editedAgent?.vendor ?? persona.vendor);
   const [agentError, setAgentError] = useState<ErrorInfo | null>(null);
   const [agentSaving, setAgentSaving] = useState(false);
   const agentSavingRef = useRef(false);
@@ -208,8 +212,8 @@ function useAgentEditor(pmId: number, persona: PersonaView, onUpdate: (p: Person
     setAgentSaving(false);
   }
 
-  const draft: AgentDraft = editedAgent ?? draftOf(saved);
-  const agentResult = settingOf(draft);
+  const draft: AgentDraft = editedAgent ?? draftOf(saved, savedCatalog);
+  const agentResult = settingOf(draft, draftCatalog);
   const agentChanged = !agentResult.ok || !sameSetting(agentResult.setting, saved);
   if (!agentSaving && editedAgent !== null && editedAgent.modelChoice !== CUSTOM_MODEL && !agentChanged) {
     setEditedAgent(null);
@@ -219,7 +223,7 @@ function useAgentEditor(pmId: number, persona: PersonaView, onUpdate: (p: Person
 
   const change = (next: AgentDraft, row: AgentRowKey) => {
     const updated = row === "vendor" ? draftOf({ vendor: next.vendor, model: null, effort: null }) : next;
-    const result = settingOf(updated);
+    const result = settingOf(updated, row === "vendor" ? null : draftCatalog);
     setAgentError(null);
     setEditedAgent(updated.modelChoice !== CUSTOM_MODEL && result.ok && sameSetting(result.setting, saved) ? null : updated);
   };

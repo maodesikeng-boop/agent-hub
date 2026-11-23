@@ -72,9 +72,16 @@ function outcomeText(end: StepRow): string {
   return end.summary === null ? "出错" : `出错：${clipText(end.summary)}`;
 }
 
-export function agentSettingOf(ctx: Pick<LedgerContext, "modelShortLabel">, session: Pick<AgentSessionRow, "vendor" | "model" | "effort">): { model: string; effort: string } {
+export function agentSettingOf(
+  ctx: Pick<LedgerContext, "modelShortLabel"> & Partial<Pick<LedgerContext, "modelCatalog">>,
+  session: Pick<AgentSessionRow, "vendor" | "model" | "effort">,
+): { model: string; effort: string } {
   const vendor = session.vendor as AgentVendor;
-  return { model: ctx.modelShortLabel(vendor, session.model), effort: effortLabel(agentEffortOf(vendor, session.model, session.effort)) };
+  const catalog = ctx.modelCatalog?.(vendor) ?? null;
+  return {
+    model: ctx.modelShortLabel(vendor, session.model),
+    effort: effortLabel(agentEffortOf(vendor, session.model, session.effort, catalog), vendor, catalog),
+  };
 }
 
 export interface WorkerViewDeps {

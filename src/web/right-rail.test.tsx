@@ -121,7 +121,7 @@ describe("右栏：照 Claude desktop 的样子", () => {
   it("模型、思考程度、对话长度不常驻显示，收进整行的悬停提示（第一行是完整标题，每项一行，不用“·”）", () => {
     renderRail({ workers: [worker(30), worker(31, { vendor: "claude", model: "sonnet", effort: "high", usage: { input: 1, cacheRead: 2_000_000, cacheWrite: 0, output: 5, context: 158_000 } })] });
     const row31 = screen.getByRole("button", { name: /活 31/ });
-    expect(row31).toHaveAttribute("title", ["活 31", "Sonnet", "high", "158K context"].join("\n"));
+    expect(row31).toHaveAttribute("title", ["活 31", "Sonnet", "High", "158K context"].join("\n"));
     expect(row31).not.toHaveTextContent(/Sonnet|158K/);
     expect(screen.queryByTestId("worker-meta")).toBeNull();
     // 没有厂商、模型、用量：提示里只有标题，不放“—”
@@ -130,10 +130,10 @@ describe("右栏：照 Claude desktop 的样子", () => {
 
   it("有模型、还没有对话长度：提示里只有模型和思考程度", () => {
     renderRail({ workers: [worker(30, { vendor: "claude", model: "sonnet", effort: "high" })] });
-    expect(screen.getByRole("button", { name: /活 30/ })).toHaveAttribute("title", ["活 30", "Sonnet", "high"].join("\n"));
+    expect(screen.getByRole("button", { name: /活 30/ })).toHaveAttribute("title", ["活 30", "Sonnet", "High"].join("\n"));
   });
 
-  it("Antigravity：模型和思考程度分开写；老数据里带档位的完整 ID 也一样（Gemini 4 Argon + high）", () => {
+  it("Antigravity：模型和思考程度分开写；老数据里带档位的完整 ID 也一样（Gemini 4 Argon + High / Extra）", () => {
     renderRail({
       workers: [
         worker(30, { vendor: "agy", model: "gemini-4-argon", effort: "high" }),
@@ -142,9 +142,12 @@ describe("右栏：照 Claude desktop 的样子", () => {
       ],
     });
     const parts = (name: RegExp) => screen.getByRole("button", { name }).getAttribute("title")!.split("\n").slice(1);
-    expect(parts(/活 30/)).toEqual(["Gemini 4 Argon", "high"]);
-    expect(parts(/活 31/)).toEqual(["Claude Opus 5.5", "low"]);
-    expect(parts(/活 32/)).toEqual(["GPT-OSS 120B", "medium"]);
+    expect(parts(/活 30/)).toEqual(["Gemini 4 Argon", "High"]);
+    expect(parts(/活 31/)).toEqual(["Claude Opus 5.5", "Low"]);
+    expect(parts(/活 32/)).toEqual(["GPT-OSS 120B", "Medium"]);
+    cleanup();
+    renderRail({ workers: [worker(33, { vendor: "agy", model: "gemini-4-neon-xhigh", effort: null })] });
+    expect(parts(/活 33/)).toEqual(["Gemini 4 Neon", "Extra"]);
   });
 
   it("标题开头的分类前缀（界面：、修复：……）在列表里去掉，读屏名字和悬停提示还是完整标题", () => {
@@ -510,7 +513,7 @@ describe("PieceMeta 与右栏窄屏收缩防溢出", () => {
     expect(model).toHaveClass("min-w-0", "truncate", "@max-[22rem]/chat:hidden");
     expect(model).toHaveAttribute("title", "Gemini 4 Carbon · Antigravity");
 
-    const effort = within(meta).getByText("high");
+    const effort = within(meta).getByText("High");
     expect(effort).toHaveClass("shrink-0", "@max-[26rem]/chat:hidden");
 
     const context = within(meta).getByText("304K context");

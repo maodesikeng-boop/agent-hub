@@ -2,7 +2,7 @@ import { validateAskOptions } from "../shared/domain.ts";
 import { MAX_GATE_OPTIONS, WORKER_LOG_MAX_STEPS, WORKER_SEARCH_MAX_LIMIT } from "../shared/limits.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { workerCapabilitiesOf } from "../shared/pm-capabilities.ts";
-import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
+import { AGENT_VENDORS, isAgentVendor } from "../shared/vendors.ts";
 import {
   UsageError,
   type Parsed,
@@ -13,6 +13,7 @@ import {
   idOf,
   workerIdOf,
   maxTimeMsOf,
+  effortOf,
   requireStdin,
 } from "./args.ts";
 
@@ -31,16 +32,14 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
     if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
       throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
     }
-    if (values.effort !== undefined && !ALL_EFFORTS.includes(values.effort)) {
-      throw new UsageError(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
-    }
+    const normalizedEffort = effortOf(values.vendor, values.effort);
     if (values.graph !== undefined && values.node === undefined) {
       throw new UsageError(`${hub} worker start 传 --graph 时要同时传 --node <节点>`);
     }
     const body: Record<string, unknown> = values.title === undefined ? {} : { title: values.title };
     if (values.vendor !== undefined) body.vendor = values.vendor;
     if (values.model !== undefined) body.model = values.model;
-    if (values.effort !== undefined) body.effort = values.effort;
+    if (normalizedEffort !== undefined) body.effort = normalizedEffort;
     if (values["max-time"] !== undefined) body.maxTimeMs = maxTimeMsOf(values["max-time"]);
     if (values.readonly === true) body.readonly = true;
     if (values.caps !== undefined || values.allow !== undefined) {

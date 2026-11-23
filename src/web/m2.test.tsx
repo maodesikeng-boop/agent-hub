@@ -263,11 +263,11 @@ describe("New project manager", () => {
     const model = within(dialog).getByRole("combobox", { name: "Model" });
     const effort = within(dialog).getByRole("combobox", { name: "Effort" });
     expect(await readOptions(user, model)).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
-    expect(await readOptions(user, effort)).toEqual(["Default", "low", "medium", "high", "xhigh", "max"]);
+    expect(await readOptions(user, effort)).toEqual(["Default", "Low", "Medium", "High", "Extra", "Max"]);
     expect(model).toHaveTextContent("Default");
     expect(effort).toHaveTextContent("Default");
     await pickOption(user, model, "Opus");
-    await pickOption(user, effort, "high");
+    await pickOption(user, effort, "High");
     const persona = within(dialog).getByRole("textbox", { name: "Persona" });
     expect(persona).toHaveValue("");
     await user.type(persona, "话少");
@@ -320,18 +320,18 @@ describe("New project manager", () => {
     const model = within(agent).getByRole("combobox", { name: "Model" });
     await waitFor(async () => expect(await readOptions(user, model)).toEqual(["Default", "Opus 5.5", "Fable 5.1", "Haiku 4.5", "Opus 4.6", "Custom"]));
     const effort = within(agent).getByRole("combobox", { name: "Effort" });
-    await pickOption(user, effort, "xhigh");
+    await pickOption(user, effort, "Extra");
     // Opus 4.6 没有 xhigh：思考程度回到默认
     await pickOption(user, model, "Opus 4.6");
     expect(effort).toHaveTextContent("Default");
-    expect(await readOptions(user, effort)).toEqual(["Default", "low", "medium", "high", "max"]);
-    await pickOption(user, effort, "max");
+    expect(await readOptions(user, effort)).toEqual(["Default", "Low", "Medium", "High", "Max"]);
+    await pickOption(user, effort, "Max");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
     expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ defaultModel: "claude-opus-4-6", effort: "max" });
   });
 
-  it("Antigravity：模型下拉只列不带档位的模型，思考程度只列 low/medium/high，GPT-OSS 只有一档所以没有思考程度下拉；请求体带不带档位的模型和思考程度", async () => {
+  it("Antigravity：模型下拉只列不带档位的模型，思考程度按模型列显示名（Gemini 4 Neon 最高档 Extra），GPT-OSS 只有一档所以没有思考程度下拉", async () => {
     const user = userEvent.setup();
     await boot();
     await user.click(screen.getByRole("button", { name: "New project manager" }));
@@ -341,14 +341,15 @@ describe("New project manager", () => {
     await pickOption(user, within(dialog).getByRole("combobox", { name: "Provider" }), "Antigravity");
     const model = within(dialog).getByRole("combobox", { name: "Model" });
     expect(await readOptions(user, model)).toEqual(["Default", "Gemini 4 Argon", "Gemini 3.8 Flash", "Claude Opus 5.5", "Claude Sonnet 5.5", "GPT-OSS 120B", "Custom"]);
-    expect(await readOptions(user, within(dialog).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "low", "medium", "high"]);
+    expect(await readOptions(user, within(dialog).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "Low", "Medium", "High", "Extra"]);
     await pickOption(user, model, "Gemini 4 Argon");
-    await pickOption(user, within(dialog).getByRole("combobox", { name: "Effort" }), "high");
+    expect(await readOptions(user, within(dialog).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "Low", "Medium", "High"]);
+    await pickOption(user, within(dialog).getByRole("combobox", { name: "Effort" }), "High");
     // 换成只有一档的 GPT-OSS：思考程度这一行不显示（档位 high 它没有，回到默认）
     await pickOption(user, model, "GPT-OSS 120B");
     expect(within(dialog).queryByRole("combobox", { name: "Effort" })).not.toBeInTheDocument();
     await pickOption(user, model, "Claude Opus 5.5");
-    await pickOption(user, within(dialog).getByRole("combobox", { name: "Effort" }), "low");
+    await pickOption(user, within(dialog).getByRole("combobox", { name: "Effort" }), "Low");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
     expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ vendor: "agy", defaultModel: "claude-opus-5-5", effort: "low" });
@@ -893,7 +894,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(vendor).toHaveTextContent("Claude Code");
     expect(await readOptions(user, combo(page, "Model"))).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
     expect(combo(page, "Model")).toHaveTextContent("Haiku");
-    expect(combo(page, "Effort")).toHaveTextContent("xhigh");
+    expect(combo(page, "Effort")).toHaveTextContent("Extra");
     expect(within(page).queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -905,7 +906,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
     await waitFor(async () => expect(await readOptions(user, combo(page, "Model"))).toEqual(["Default", "Opus 5.5", "Fable 5.1", "Haiku 4.5", "Opus 4.6", "Custom"]));
     expect(combo(page, "Model")).toHaveTextContent("Opus 4.6");
-    expect(await readOptions(user, combo(page, "Effort"))).toEqual(["Default", "low", "medium", "high", "max"]);
+    expect(await readOptions(user, combo(page, "Effort"))).toEqual(["Default", "Low", "Medium", "High", "Max"]);
     expect(api.callsTo("GET", /^\/api\/models$/)).toHaveLength(1);
   });
 
@@ -918,7 +919,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await waitFor(async () => expect(await readOptions(user, combo(page, "Model"))).toContain("Opus 4.6"));
     expect(combo(page, "Model")).toHaveTextContent("Custom: claude-opus-4-1");
     expect(within(page).queryByRole("textbox", { name: "Model name" })).not.toBeInTheDocument();
-    expect(combo(page, "Effort")).toHaveTextContent("high");
+    expect(combo(page, "Effort")).toHaveTextContent("High");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
   });
 
@@ -953,7 +954,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await pickOption(user, combo(page, "Model"), "GPT-6-Luna");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
 
-    await pickOption(user, combo(page, "Effort"), "high");
+    await pickOption(user, combo(page, "Effort"), "High");
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
 
     const save = modelSave(page)!;
@@ -982,7 +983,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(modelCancel(page)).not.toBeInTheDocument();
     expect(combo(page, "Provider")).toHaveTextContent("Codex");
     expect(combo(page, "Model")).toHaveTextContent("GPT-6-Luna");
-    expect(combo(page, "Effort")).toHaveTextContent("high");
+    expect(combo(page, "Effort")).toHaveTextContent("High");
     expect(combo(page, "Provider")).toBeEnabled();
     expect(combo(page, "Model")).toBeEnabled();
     expect(combo(page, "Effort")).toBeEnabled();
@@ -996,21 +997,21 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
 
     await pickOption(user, combo(page, "Provider"), "Codex");
     await pickOption(user, combo(page, "Model"), "GPT-6-Luna");
-    await pickOption(user, combo(page, "Effort"), "high");
+    await pickOption(user, combo(page, "Effort"), "High");
     expect(modelCancel(page)).toBeEnabled();
     expect(modelSave(page)).toBeEnabled();
 
     await user.click(modelCancel(page)!);
     expect(combo(page, "Provider")).toHaveTextContent("Claude Code");
     expect(combo(page, "Model")).toHaveTextContent("Haiku");
-    expect(combo(page, "Effort")).toHaveTextContent("low");
+    expect(combo(page, "Effort")).toHaveTextContent("Low");
     expect(modelSave(page)).not.toBeInTheDocument();
     expect(modelCancel(page)).not.toBeInTheDocument();
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
 
-    await pickOption(user, combo(page, "Effort"), "max");
+    await pickOption(user, combo(page, "Effort"), "Max");
     expect(modelSave(page)).toBeInTheDocument();
-    await pickOption(user, combo(page, "Effort"), "low");
+    await pickOption(user, combo(page, "Effort"), "Low");
     expect(modelSave(page)).not.toBeInTheDocument();
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
   });
@@ -1023,7 +1024,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
     await waitFor(async () => expect(await readOptions(user, combo(page, "Model"))).toContain("Fable 5.1"));
     await pickOption(user, combo(page, "Model"), "Fable 5.1");
-    await pickOption(user, combo(page, "Effort"), "low");
+    await pickOption(user, combo(page, "Effort"), "Low");
     expect(api.callsTo("PUT", /^\/api\/pms\/1\/persona$/)).toHaveLength(0);
 
     await user.click(modelSave(page)!);
@@ -1033,9 +1034,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await openChanges(page);
     const log = await within(page).findByRole("list", { name: "History" });
     await waitFor(() => expect(within(log).getAllByRole("listitem")).toHaveLength(1));
-    expect(within(log).getAllByRole("listitem")[0]).toHaveTextContent("You set model to Fable 5.1, set effort to low");
+    expect(within(log).getAllByRole("listitem")[0]).toHaveTextContent("You set model to Fable 5.1, set effort to Low");
     expect(combo(page, "Model")).toHaveTextContent("Fable 5.1");
-    expect(combo(page, "Effort")).toHaveTextContent("low");
+    expect(combo(page, "Effort")).toHaveTextContent("Low");
     expect(modelSave(page)).not.toBeInTheDocument();
   });
 
@@ -1068,14 +1069,14 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
 
     await pickOption(user, combo(page, "Model"), "Opus");
-    await pickOption(user, combo(page, "Effort"), "max");
+    await pickOption(user, combo(page, "Effort"), "Max");
     await user.click(modelSave(page)!);
 
     const alert = await within(groupIn(page, "Model")).findByRole("alert");
     expect(alert).toHaveTextContent("思考程度只能是 low、medium、high、xhigh、max");
     expect(within(groupIn(page, "Persona")).queryByRole("alert")).not.toBeInTheDocument();
     expect(combo(page, "Model")).toHaveTextContent("Opus");
-    expect(combo(page, "Effort")).toHaveTextContent("max");
+    expect(combo(page, "Effort")).toHaveTextContent("Max");
     expect(modelSave(page)).toBeEnabled();
 
     api.fetch.mockImplementationOnce(async () => {
@@ -1084,7 +1085,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await user.click(modelSave(page)!);
     expect(await within(groupIn(page, "Model")).findByRole("alert")).toBeInTheDocument();
     expect(combo(page, "Model")).toHaveTextContent("Opus");
-    expect(combo(page, "Effort")).toHaveTextContent("max");
+    expect(combo(page, "Effort")).toHaveTextContent("Max");
 
     api.putPersona = (_id, body) => ({
       status: 200,
@@ -1102,15 +1103,15 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await waitFor(() => expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument());
     expect(modelSave(page)).not.toBeInTheDocument();
     expect(combo(page, "Model")).toHaveTextContent("Opus");
-    expect(combo(page, "Effort")).toHaveTextContent("max");
+    expect(combo(page, "Effort")).toHaveTextContent("Max");
 
     api.putPersona = () => ({ status: 500, body: { error: "boom" } });
-    await pickOption(user, combo(page, "Effort"), "low");
+    await pickOption(user, combo(page, "Effort"), "Low");
     await user.click(modelSave(page)!);
     expect(await within(groupIn(page, "Model")).findByRole("alert")).toBeInTheDocument();
     await user.click(modelCancel(page)!);
     expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument();
-    expect(combo(page, "Effort")).toHaveTextContent("max");
+    expect(combo(page, "Effort")).toHaveTextContent("Max");
     expect(modelSave(page)).not.toBeInTheDocument();
   });
 
@@ -1227,7 +1228,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await waitFor(() => expect(within(agent).queryByText("Switching to Codex…")).not.toBeInTheDocument());
     expect(combo(page, "Provider")).toHaveTextContent("Claude Code");
     expect(combo(page, "Model")).toHaveTextContent("Opus");
-    expect(combo(page, "Effort")).toHaveTextContent("high");
+    expect(combo(page, "Effort")).toHaveTextContent("High");
     expect(combo(page, "Provider")).toBeEnabled();
     expect(within(sessionGroup).getByRole("button", { name: "Start…" })).toBeEnabled();
   });
@@ -1244,7 +1245,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     pm1View = makePersonaView({ pmId: 1, vendor: "claude", model: "haiku", effort: "low" });
     push(ws, changeOf(11, "pm.updated", { pm: makePm({ id: 1, name: "小林" }) }));
     await waitFor(() => expect(combo(page1, "Model")).toHaveTextContent("Haiku"));
-    expect(combo(page1, "Effort")).toHaveTextContent("low");
+    expect(combo(page1, "Effort")).toHaveTextContent("Low");
 
     await pickOption(user, combo(page1, "Model"), "Opus");
     pm1View = makePersonaView({ pmId: 1, vendor: "claude", model: "sonnet", effort: "max", text: "外部改的" });
@@ -1262,7 +1263,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await within(page2).findByRole("textbox", { name: "Persona" });
     expect(combo(page2, "Provider")).toHaveTextContent("Codex");
     expect(combo(page2, "Model")).toHaveTextContent("GPT-6-Luna");
-    expect(combo(page2, "Effort")).toHaveTextContent("high");
+    expect(combo(page2, "Effort")).toHaveTextContent("High");
     expect(within(groupIn(page2, "Model")).queryByRole("alert")).not.toBeInTheDocument();
     expect(modelSave(page2)).not.toBeInTheDocument();
   });
@@ -1570,7 +1571,7 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     expect(await within(group).findByText("Claude Code Next")).toBeInTheDocument();
     expect(within(group).queryByRole("combobox", { name: "Provider" })).not.toBeInTheDocument();
     // 默认模型那项名单没说思考程度：用这家自己的通用档位
-    await waitFor(async () => expect(await readOptions(user, within(group).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "low", "max"]));
+    await waitFor(async () => expect(await readOptions(user, within(group).getByRole("combobox", { name: "Effort" }))).toEqual(["Default", "Low", "Max"]));
   });
 
   it("模型显示实际用的模型：名单说了默认是哪个，“默认”写成“Opus 5.5 (default)”；没说只写“默认”", async () => {

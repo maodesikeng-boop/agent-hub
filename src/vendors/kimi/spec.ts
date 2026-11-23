@@ -39,6 +39,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 kimi-code/k3",
     efforts: EFFORTS,
+    effortLabels: { off: "Off", on: "On", low: "Low", medium: "Medium", high: "High", xhigh: "Xhigh", max: "Max" },
     routerDefault: { model: "kimi-code/k3", effort: "off" },
     shortName: (model) => {
       const k = /^(?:[\w.:-]+\/)?(?:kimi-)?k(\d+(?:\.\d+)?)(-[a-z0-9-]+)?$/i.exec(model.trim());

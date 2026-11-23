@@ -7,6 +7,7 @@ import {
   GRAPH_HISTORY_PAGE_SIZE,
   MAX_COMPLETED_GRAPH_PAGES,
   agentEffortOf,
+  effortLabel,
   isAgentVendor,
   isTaskNodeWaitingUser,
   modelShortLabel,
@@ -175,10 +176,10 @@ function usePieceMeta(worker: WorkerEntry): { model: string | null; effort: stri
   const catalog = useModelCatalog(vendor);
   const context = formatContext(worker.usage);
   const model = worker.model ?? null;
-  const effort = agentEffortOf(vendor, model, worker.effort ?? null);
+  const rawEffort = agentEffortOf(vendor, model, worker.effort ?? null, catalog);
   return {
     model: worker.vendor === undefined ? null : model === null ? (catalog.defaultModel ?? null) : modelShortLabel(vendor, model, catalog),
-    effort: effort || null,
+    effort: rawEffort === null || rawEffort === "" ? null : effortLabel(rawEffort, vendor, catalog),
     context: context !== NO_DATA ? context : null,
   };
 }
