@@ -91,11 +91,11 @@ function SetupActions({ setup }: { setup: ReturnType<typeof useSetupCommandEdito
   );
 }
 
-export function WorktreeSetupGroup({ project, readOnly }: { project: Project; readOnly: boolean }) {
+export function WorktreeSetupGroup({ project, readOnly, titled = true }: { project: Project; readOnly: boolean; titled?: boolean }) {
   const setup = useSetupCommandEditor(project);
   const problem = setup.problem ?? setup.error;
   return (
-    <SettingsGroup title="Worktree setup" action={readOnly ? null : <SetupActions setup={setup} />}>
+    <SettingsGroup {...(titled ? { title: "Worktree setup" } : { label: "Worktree setup" })} action={readOnly ? null : <SetupActions setup={setup} />}>
       <Textarea
         aria-label="Worktree setup"
         placeholder="No setup command"

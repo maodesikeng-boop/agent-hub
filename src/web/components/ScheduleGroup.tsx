@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Switch } from "../ui/switch.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
+function ScheduleItem({ schedule, disabled }: { schedule: ScheduleRecord; disabled: boolean }) {
   const client = useClient();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -35,6 +35,7 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
     }
   };
   const now = Date.now();
+  const locked = busy || disabled;
   return (
     <SettingsRow
       label={schedule.name}
@@ -54,18 +55,18 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
       {(id) =>
         confirming ? (
           <>
-            <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
+            <Button variant="outline" size="sm" disabled={locked} onClick={() => setConfirming(false)}>
               Cancel
             </Button>
-            <Button size="sm" disabled={busy} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
+            <Button size="sm" disabled={locked} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
               {busy && <Loader2 aria-hidden="true" />}
               Delete
             </Button>
           </>
         ) : (
           <>
-            <Switch id={id} aria-label={`${schedule.name} enabled`} checked={schedule.enabled} disabled={busy} onCheckedChange={(on) => void run(() => client.putScheduleEnabled(schedule.id, on))} />
-            <Button variant="ghost" size="icon-sm" aria-label={`Delete ${schedule.name}`} disabled={busy} onClick={() => setConfirming(true)}>
+            <Switch id={id} aria-label={`${schedule.name} enabled`} checked={schedule.enabled} disabled={locked} onCheckedChange={(on) => void run(() => client.putScheduleEnabled(schedule.id, on))} />
+            <Button variant="ghost" size="icon-sm" aria-label={`Delete ${schedule.name}`} disabled={locked} onClick={() => setConfirming(true)}>
               <Trash2 aria-hidden="true" />
             </Button>
           </>
@@ -183,25 +184,25 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
   );
 }
 
-export function ScheduleGroup({ pmId, schedules }: { pmId: number; schedules: ScheduleRecord[] }) {
+export function ScheduleGroup({ pmId, schedules, disabled = false }: { pmId: number; schedules: ScheduleRecord[]; disabled?: boolean }) {
   const [adding, setAdding] = useState(false);
   const full = schedules.length >= MAX_SCHEDULES_PER_PM;
   return (
     <SettingsGroup>
       {schedules.map((s) => (
-        <ScheduleItem key={s.id} schedule={s} />
+        <ScheduleItem key={s.id} schedule={s} disabled={disabled} />
       ))}
-      {adding ? (
+      {adding && !disabled ? (
         <NewScheduleForm pmId={pmId} onClose={() => setAdding(false)} />
       ) : (
         <button
           type="button"
-          disabled={full}
+          disabled={disabled || full}
           className="flex min-h-13 w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
           onClick={() => setAdding(true)}
         >
           <Plus className="size-pixel text-muted-foreground" aria-hidden="true" />
-          <span className={full ? "text-muted-foreground" : undefined}>New</span>
+          <span className={disabled || full ? "text-muted-foreground" : undefined}>New</span>
           {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`${MAX_SCHEDULES_PER_PM} max`}</span>}
         </button>
       )}

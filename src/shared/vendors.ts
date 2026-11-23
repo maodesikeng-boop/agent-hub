@@ -173,11 +173,12 @@ export interface ModelCatalog {
 }
 
 export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
-  const spec = SPECS[vendor];
+  const resolved = isAgentVendor(vendor) ? vendor : DEFAULT_AGENT_VENDOR;
+  const spec = SPECS[resolved];
   const { bundled, efforts, effortLabels, customModel, customModelExample } = spec.models;
   const models = bundled.map((m) => ({ id: m.id, label: m.label, description: null, efforts: m.efforts ?? null }));
   return {
-    vendor,
+    vendor: resolved,
     label: spec.label,
     source: "bundled",
     availability: "unknown",
@@ -219,7 +220,8 @@ export function modelShortLabel(vendor: AgentVendor, model: string | null, catal
   if (model === null) return catalog.defaultModel ?? "默认";
   const bare = splitModelEffort(vendor, model, null, catalog).model!;
   const label = modelLabel(vendor, bare, catalog);
-  return label === bare ? (SPECS[vendor].models.shortName?.(bare) ?? bare) : label;
+  const shortName = isAgentVendor(vendor) ? SPECS[vendor].models.shortName : undefined;
+  return label === bare ? (shortName?.(bare) ?? bare) : label;
 }
 
 export function agentEffortOf(vendor: AgentVendor, model: string | null, effort: string | null, catalog?: ModelCatalog | null): string | null {

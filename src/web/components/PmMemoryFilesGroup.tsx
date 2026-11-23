@@ -470,9 +470,9 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
   );
 }
 
-export function PmMemoryFilesGroup({ pmId, archived = false }: { pmId: number; archived?: boolean }) {
+export function PmMemoryFilesGroup({ pmId, archived = false, titled = true }: { pmId: number; archived?: boolean; titled?: boolean }) {
   return (
-    <SettingsGroup title="Memory files">
+    <SettingsGroup {...(titled ? { title: "Memory files" } : { label: "Memory files" })}>
       <PmMemoryFilesBody pmId={pmId} archived={archived} />
     </SettingsGroup>
   );

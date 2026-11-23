@@ -24,7 +24,7 @@ export function SettingsGroup({
   return (
     <section aria-label={label ?? title} className="grid grid-cols-1 gap-2">
       {(title || action) && (
-        <div className="flex min-h-8 items-center justify-between gap-3 px-4">
+        <div className={cn("flex min-h-8 items-center gap-3 px-4", title ? "justify-between" : "justify-end")}>
           {title && <h2 className={GROUP_TITLE}>{title}</h2>}
           {action}
         </div>

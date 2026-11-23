@@ -16,6 +16,7 @@ export function SettingsNavRow({
   attentionTestId,
   danger = false,
   chevron = !danger,
+  disabled = false,
   className,
   onClick,
 }: {
@@ -27,15 +28,17 @@ export function SettingsNavRow({
   attentionTestId?: string;
   danger?: boolean;
   chevron?: boolean;
+  disabled?: boolean;
   className?: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       data-slot="settings-nav-row"
       className={cn(
-        "flex min-h-12 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors outline-none hover:bg-hover focus-visible:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] active:bg-hover",
+        "flex min-h-12 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors outline-none hover:bg-hover focus-visible:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] active:bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
         className,
       )}
       onClick={onClick}

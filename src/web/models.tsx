@@ -159,7 +159,8 @@ export function useRefreshModelCatalogs(): () => void {
 export function useVendorChoices(current: AgentVendor): { options: readonly ModelCatalog[]; refreshUnusable: () => void } {
   const catalogs = useModelCatalogs();
   const refreshUnusable = useRefreshModelCatalogs();
-  const options = catalogs.some((c) => c.vendor === current) ? catalogs : [...catalogs, bundledModelCatalog(current)];
+  const fallback = bundledModelCatalog(current);
+  const options = catalogs.some((c) => c.vendor === current || c.vendor === fallback.vendor) ? catalogs : [...catalogs, fallback];
   const listed = options.filter((c) => isListed(c.availability) || c.vendor === current);
   return {
     options: listed,

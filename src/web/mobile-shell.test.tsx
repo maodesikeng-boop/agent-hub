@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import type { DeviceInfo } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { changeOf, FakeApi, FakeWebSocket, installFakeWebSocket, makeSnapshot, makeMessage, makePm, makeConvSnapshot, makeWorkerLine, makeWorkerConversation } from "./test-utils.ts";
 
@@ -133,4 +134,42 @@ it("跨 PM 跳转关闭抽屉，无 Piece 聊天不出现空抽屉，返回列�
   expect(screen.queryByRole("button", { name: /Show Pieces/ })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() => expect(location.hash).toBe(""));
+});
+
+it("手机切到远端电脑进对话再点 Back：保留远端电脑而不跳回本机", async () => {
+  const MAC = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
+  const TOKYO = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
+  const devices: DeviceInfo[] = [
+    { id: MAC, name: "Studio Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+    { id: TOKYO, name: "Tokyo Mini", platform: "linux", self: false, online: true, link: "relay", fingerprint: null },
+  ];
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("coarse"), addEventListener() {}, removeEventListener() {} }));
+  const localApi = new FakeApi(makeSnapshot({ pms: [makePm({ id: 1, name: "本机经理" })], conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "本机经理" } })] }));
+  const remoteApi = new FakeApi(makeSnapshot({ pms: [makePm({ id: 1, name: "东京经理" })], conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "东京经理" } })] }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://127.0.0.1:1");
+      if (url.pathname === "/api/devices" && (init?.method ?? "GET") === "GET") return Response.json({ devices });
+      const proxied = /^\/d\/([^/]+)(\/.*)$/.exec(url.pathname);
+      if (proxied && proxied[1] === TOKYO) return remoteApi.fetch(`${proxied[2]}${url.search}`, init);
+      return localApi.fetch(input, init);
+    }),
+  );
+  installFakeWebSocket();
+  render(<App />);
+
+  const switcher = await screen.findByRole("button", { name: "Switch computer (Studio Mac)" });
+  fireEvent.click(switcher);
+  const dialog = await screen.findByRole("dialog", { name: "Computers" });
+  fireEvent.click(within(dialog).getByRole("button", { name: /Tokyo Mini/ }));
+
+  expect(await screen.findByRole("button", { name: "Switch computer (Tokyo Mini)" })).toBeInTheDocument();
+  const remotePm = await within(screen.getByRole("region", { name: "Project managers" })).findByRole("button", { name: /东京经理/ });
+  fireEvent.click(remotePm);
+  await waitFor(() => expect(location.hash).toBe(`#/d/${TOKYO}/c/1`));
+
+  fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+  await waitFor(() => expect(location.hash).toBe(""));
+  expect(screen.getByRole("button", { name: "Switch computer (Tokyo Mini)" })).toBeInTheDocument();
 });

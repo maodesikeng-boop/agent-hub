@@ -34,6 +34,7 @@ import {
 } from "../pm-persona.ts";
 import type { ProfilePage } from "../route.ts";
 import { Button } from "../ui/button.tsx";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Textarea } from "../ui/input.tsx";
 import { ArrowLeft, ChevronRight, Loader2, MoreHorizontal, Pin, PinFilled } from "../ui/icons.ts";
@@ -221,7 +222,7 @@ function SummaryHeader({
   return (
     <header className="grid grid-cols-1 gap-3 pb-4">
       <div className="flex items-start gap-4">
-        <LookButton pm={pm} disabled={readOnly} />
+        <LookButton pm={pm} disabled={readOnly || archived} />
         <div className="min-w-0 flex-1">
           <h1 title={pm.name} className="truncate text-display leading-tight font-semibold tracking-tight text-foreground">
             {pm.name}
@@ -308,27 +309,49 @@ function SummaryHeader({
 }
 
 function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChange; revertable: boolean; busy: boolean; onRevert: () => void }) {
+  const [open, setOpen] = useState(false);
   const catalog = useModelCatalog(change.vendorAfter);
   const { actor, summary, timestamp } = formatChangeSummary(change, catalog);
+  const textChanged = change.textBefore !== change.textAfter;
   return (
-    <li className="flex items-start justify-between gap-4 px-4 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="text-body break-words">
-          <span className="font-medium">{actor}</span> {summary}
-          {change.reason && <span>: {change.reason}</span>}
+    <li className="px-4 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-body break-words">
+            <span className="font-medium">{actor}</span> {summary}
+            {change.reason && <span>: {change.reason}</span>}
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">{timestamp}</div>
         </div>
-        <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">{timestamp}</div>
+        {revertable && (
+          <Button variant="ghost" size="sm" className="shrink-0" disabled={busy} onClick={onRevert}>
+            Undo
+          </Button>
+        )}
       </div>
-      {revertable && (
-        <Button variant="ghost" size="sm" className="shrink-0" disabled={busy} onClick={onRevert}>
-          Undo
-        </Button>
+      {textChanged && (
+        <Collapsible open={open} onOpenChange={setOpen}>
+          <CollapsibleTrigger className="group mt-1.5 flex cursor-pointer items-center gap-1 text-minor text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus">
+            <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
+            View changes
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2 grid grid-cols-1 gap-2">
+            {(["Before", "After"] as const).map((label) => (
+              <div key={label} className="min-w-0">
+                <div className="mb-1 text-minor font-medium text-muted-foreground">{label}</div>
+                <pre className="min-h-10 max-h-60 overflow-auto border-2 border-border bg-panel p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {label === "Before" ? change.textBefore : change.textAfter}
+                </pre>
+              </div>
+            ))}
+          </CollapsibleContent>
+        </Collapsible>
       )}
     </li>
   );
 }
 
-function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> }) {
+function PersonaGroup({ persona, readOnly }: { persona: ReturnType<typeof usePersonaText>; readOnly: boolean }) {
   const { savedText, syncKey, textError, busy, save } = persona;
   const [trackedSyncKey, setTrackedSyncKey] = useState(syncKey);
   const [draftText, setDraftText] = useState<string | null>(null);
@@ -336,13 +359,13 @@ function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> 
     setTrackedSyncKey(syncKey);
     setDraftText(null);
   }
-  const text = draftText ?? savedText;
-  const dirty = text !== savedText;
+  const text = readOnly ? savedText : (draftText ?? savedText);
+  const dirty = !readOnly && text !== savedText;
   const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
   const hint = personaLoadHint(text);
   return (
     <SettingsGroup
-      title="Persona"
+      label="Persona"
       action={
         dirty && (
           <Button size="sm" disabled={tooLong || busy !== null} onClick={() => save(text)}>
@@ -356,12 +379,15 @@ function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> 
         aria-label="Persona"
         placeholder="No persona yet"
         rows={1}
+        disabled={readOnly}
         className={cn(
           "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0",
           text === "" ? "text-body" : "font-mono text-minor",
         )}
         value={text}
-        onChange={(e) => setDraftText(e.target.value)}
+        onChange={(e) => {
+          if (!readOnly) setDraftText(e.target.value);
+        }}
       />
       {hint !== null && !tooLong && <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{hint}</p>}
       {(tooLong || textError) && (
@@ -385,7 +411,7 @@ function HistoryGroup({
   onRevert: (changeId: number) => void;
 }) {
   return (
-    <SettingsGroup title="History">
+    <SettingsGroup label="History">
       {revertError && (
         <div className="px-4 py-2.5">
           <RowError error={revertError} />
@@ -472,6 +498,7 @@ function SummaryContent({
     setEditing((prev) => (prev === key ? null : key));
   };
 
+  const locked = readOnly || pm.archivedAt != null;
   const mode = modeSave.draft ?? persona.mode;
   const split = splitModelEffort(persona.vendor, persona.model, persona.effort, catalog);
   const modelText = split.model === null ? DEFAULT_CHOICE : modelLabel(persona.vendor, split.model, catalog);
@@ -481,13 +508,13 @@ function SummaryContent({
 
   return (
     <div>
-      <SectionFrame title="Model" actionLabel="Edit" editing={editing === "model"} readOnly={readOnly} onToggle={() => toggleSection("model")}>
+      <SectionFrame title="Model" actionLabel="Edit" editing={editing === "model"} readOnly={locked} onToggle={() => toggleSection("model")}>
         {editing === "model" ? (
           <SettingsGroup>
             <AgentRows
               value={agent.draft}
               onChange={agent.change}
-              disabled={agent.saving || readOnly}
+              disabled={agent.saving || locked}
               switchingToVendor={persona.switchingToVendor}
               onCustomSubmit={() => void agent.save()}
               {...(onManageProviders !== undefined ? { onManageProviders } : {})}
@@ -499,7 +526,7 @@ function SummaryContent({
                   <Button type="button" variant="ghost" size="sm" disabled={agent.saving} onClick={agent.cancel}>
                     Cancel
                   </Button>
-                  <Button type="button" size="sm" disabled={!agent.canSave || readOnly} onClick={() => void agent.save()}>
+                  <Button type="button" size="sm" disabled={!agent.canSave || locked} onClick={() => void agent.save()}>
                     {agent.saving && <Loader2 aria-hidden="true" />}
                     Save
                   </Button>
@@ -525,10 +552,10 @@ function SummaryContent({
         )}
       </SectionFrame>
 
-      <SectionFrame title="Mode" actionLabel="Edit" editing={editing === "mode"} readOnly={readOnly} onToggle={() => toggleSection("mode")}>
+      <SectionFrame title="Mode" actionLabel="Edit" editing={editing === "mode"} readOnly={locked} onToggle={() => toggleSection("mode")}>
         {editing === "mode" ? (
           <SettingsGroup>
-            <ModeRows label="Mode" value={mode} onChange={(m) => modeSave.save(m, m === persona.mode ? {} : { mode: m })} />
+            <ModeRows label="Mode" value={mode} disabled={locked} onChange={(m) => modeSave.save(m, m === persona.mode ? {} : { mode: m })} />
             {modeSave.error && (
               <div className="px-4 py-2.5">
                 <RowError error={modeSave.error} />
@@ -562,11 +589,11 @@ function SummaryContent({
         title="Schedules"
         actionLabel={schedules.length === 0 ? "New" : "Edit"}
         editing={editing === "schedules"}
-        readOnly={readOnly}
+        readOnly={locked}
         onToggle={() => toggleSection("schedules")}
       >
         {editing === "schedules" ? (
-          <ScheduleGroup pmId={pm.id} schedules={schedules} />
+          <ScheduleGroup pmId={pm.id} schedules={schedules} disabled={locked} />
         ) : schedules.length === 0 ? (
           <p className="text-body text-muted-foreground">No schedules</p>
         ) : (
@@ -663,21 +690,23 @@ function DetailPageContent({
   const aliveRef = useAliveRef();
   const text = usePersonaText({ pmId: pm.id, persona, onUpdate, aliveRef, onReverted: () => {} });
 
+  const locked = readOnly || pm.archivedAt != null;
   if (page === "capabilities") {
     return (
       <CapabilitiesPanel
         scope={{ kind: "pm", pmId: pm.id }}
         lead={pm.vendor ?? DEFAULT_AGENT_VENDOR}
+        disabled={locked}
         {...(onEditDefaults !== undefined ? { onEditDefaults } : {})}
       />
     );
   }
-  if (page === "persona") return <PersonaGroup persona={text} />;
-  if (page === "memory") return <PmMemoryFilesGroup key={pm.id} pmId={pm.id} archived={readOnly || pm.archivedAt != null} />;
+  if (page === "persona") return <PersonaGroup persona={text} readOnly={locked} />;
+  if (page === "memory") return <PmMemoryFilesGroup key={pm.id} pmId={pm.id} archived={locked} titled={false} />;
   if (page === "worktree") {
-    return project !== null ? <WorktreeSetupGroup project={project} readOnly={readOnly || pm.archivedAt != null} /> : null;
+    return project !== null ? <WorktreeSetupGroup project={project} readOnly={locked} titled={false} /> : null;
   }
-  return <HistoryGroup persona={persona} revertError={text.revertError} busy={readOnly || text.busy !== null} onRevert={text.revert} />;
+  return <HistoryGroup persona={persona} revertError={text.revertError} busy={locked || text.busy !== null} onRevert={text.revert} />;
 }
 
 /**

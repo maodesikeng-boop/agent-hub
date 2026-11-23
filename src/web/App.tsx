@@ -288,7 +288,6 @@ function DesktopSidePanel({
         }}
         backLabel={c.workerPmEntry ? `Back to ${c.workerPmEntry.name}` : "Back"}
         onClose={() => {
-          if (exits.backOpensPieces && c.railOpen) c.toggleRail(false);
           if (convRoute) navigate(exits.close);
           else c.routerSummary.onSelect();
         }}
@@ -403,22 +402,38 @@ function DesktopWorkbench({
     () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
     [computer.key, computer.info.name, computer.status],
   );
-  const { openProfile, openSettingsSection } = c;
+  const { activeId, openProfile, openSettingsSection, toggleRail, select } = c;
   const openPmSettings = useCallback((pmId: PmId) => openProfile(pmId), [openProfile]);
   const openComputers = useCallback(() => openSettingsSection("computers"), [openSettingsSection]);
   const switchable = fleet.devices.length >= 2;
   const readOnly = isReadOnly(current.status);
   const tintColor = c.routerActive ? null : (c.active?.look.color ?? null);
 
-  const togglePieces = () => {
-    if (!c.active) return;
-    if (route?.view === "worker" || route?.view === "profile") {
-      c.toggleRail(true);
-      c.select({ device: current.key, id: c.active.id });
+  const routeView = route?.view;
+  const togglePieces = useCallback(() => {
+    if (activeId === null) return;
+    if (routeView === "worker" || routeView === "profile") {
+      toggleRail(true);
+      select({ device: current.key, id: activeId });
     } else {
-      c.toggleRail();
+      toggleRail();
     }
-  };
+  }, [activeId, routeView, toggleRail, select, current.key]);
+
+  const piecesOpen = panelContent?.kind === "pieces";
+  const toolbar = useMemo(
+    () => (
+      <PiecesSlot
+        visible={c.railHasContent}
+        open={piecesOpen}
+        attention={c.railAttention}
+        count={c.railCount}
+        look={c.look}
+        onToggle={togglePieces}
+      />
+    ),
+    [c.railHasContent, piecesOpen, c.railAttention, c.railCount, c.look, togglePieces],
+  );
 
   const listNode = (layout: "column" | "strip") => (
     <ProjectList
@@ -505,16 +520,7 @@ function DesktopWorkbench({
                         model={model}
                         content={c}
                         mobile={false}
-                        toolbar={
-                          <PiecesSlot
-                            visible={c.railHasContent}
-                            open={panelContent?.kind === "pieces"}
-                            attention={c.railAttention}
-                            count={c.railCount}
-                            look={c.look}
-                            onToggle={togglePieces}
-                          />
-                        }
+                        toolbar={toolbar}
                         notices={notices}
                       />
                     </main>
@@ -579,7 +585,7 @@ function MobileWorkbench({
   notices: React.ReactNode;
   quota: ReturnType<typeof quotaUsage>;
   drawerOpen: boolean;
-  setDrawerOpen: (open: boolean) => void;
+  setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>;
   onManageLocalProviders: () => void;
 }) {
   const { fleet, state, current, route, replace, navigate } = model;
@@ -596,22 +602,45 @@ function MobileWorkbench({
     () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
     [computer.key, computer.info.name, computer.status],
   );
-  const { openProfile } = c;
+  const { activeId, openProfile } = c;
   const openPmSettings = useCallback((pmId: PmId) => openProfile(pmId), [openProfile]);
   const openComputers = useCallback(() => navigate({ view: "settings", section: "computers" }), [navigate]);
   const switchable = fleet.devices.length >= 2;
   const readOnly = isReadOnly(current.status);
   const tintColor = route?.view === "router" || route?.view === "settings" ? null : (c.active?.look.color ?? null);
 
-  const back = () =>
-    mobileBack(
-      route?.view !== "conversation" && c.active ? { view: "conversation", id: c.active.id, ...routeDeviceOf(current.key) } : null,
-      replace,
-    );
-  const leading = (
-    <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}>
-      <ArrowLeft aria-hidden="true" />
-    </Button>
+  const routeView = route?.view;
+  const back = useCallback(
+    () =>
+      mobileBack(
+        routeView !== "conversation" && activeId !== null
+          ? { view: "conversation", id: activeId, ...routeDeviceOf(current.key) }
+          : null,
+        replace,
+      ),
+    [routeView, activeId, current.key, replace],
+  );
+  const leading = useMemo(
+    () => (
+      <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}>
+        <ArrowLeft aria-hidden="true" />
+      </Button>
+    ),
+    [back],
+  );
+  const toggleMobileDrawer = useCallback(() => setDrawerOpen((open) => !open), [setDrawerOpen]);
+  const mobileToolbar = useMemo(
+    () => (
+      <PiecesSlot
+        visible={c.railHasContent}
+        open={drawerOpen}
+        attention={c.railAttention}
+        count={c.railCount}
+        look={c.look}
+        onToggle={toggleMobileDrawer}
+      />
+    ),
+    [c.railHasContent, drawerOpen, c.railAttention, c.railCount, c.look, toggleMobileDrawer],
   );
 
   const selectMobileTab = (tab: MobileTab) => {
@@ -699,16 +728,7 @@ function MobileWorkbench({
             content={c}
             mobile
             leading={leading}
-            toolbar={
-              <PiecesSlot
-                visible={c.railHasContent}
-                open={drawerOpen}
-                attention={c.railAttention}
-                count={c.railCount}
-                look={c.look}
-                onToggle={() => setDrawerOpen(!drawerOpen)}
-              />
-            }
+            toolbar={mobileToolbar}
             notices={notices}
           />
         </main>

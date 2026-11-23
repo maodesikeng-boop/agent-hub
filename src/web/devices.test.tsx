@@ -11,14 +11,17 @@ import {
   FakeApi,
   FakeWebSocket,
   TEST_BOOT_ID,
+  changeOf,
   installFakeNotification,
   installFakeWebSocket,
   makeConvSnapshot,
+  makeConversation,
   makeMessage,
   makePm,
   makeSession,
   makeSnapshot,
   makeUserMessage,
+  messageChange,
 } from "./test-utils.ts";
 
 const MAC = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
@@ -628,4 +631,51 @@ it("手机直达远端：清单及目标快照未到不误清路由，到达后�
   expect(location.hash).toBe(`#/d/${TOKYO}/c/999`);
   await act(async () => finishState({ status: 200, body: onePm("东京") }));
   await waitFor(() => expect(location.hash).toBe(""));
+});
+
+it("桌面点 0-PM 或连接中的电脑，随后新来 PM 时自动写入对话路由并恢复 Pieces 展开与切换", async () => {
+  const user = userEvent.setup();
+  const empty = makeSnapshot({ pms: [], conversations: [], sessions: [] });
+  const fleet = new Fleet(empty, onePm("东京"), null);
+  await boot(fleet);
+
+  await user.click(railDevice("This computer"));
+  expect(location.hash).toBe("");
+
+  act(() => {
+    lastSocket("local").push(changeOf(11, "pm.created", { pm: makePm({ id: 1, name: "新经理" }) }));
+    lastSocket("local").push(
+      changeOf(12, "conversation.created", { conversation: makeConversation({ id: 1, pmId: 1, title: "新经理" }) }),
+    );
+    lastSocket("local").push(
+      messageChange(13, "message.created", makeMessage({ id: 9, conversationId: 1, text: "要发布吗？", meta: { needsUser: true } })),
+    );
+  });
+
+  await waitFor(() => expect(location.hash).toBe("#/c/1"));
+  expect(await screen.findByRole("complementary", { name: "Pieces" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Close Pieces" }));
+  expect(screen.queryByRole("complementary", { name: "Pieces" })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: /Show Pieces/ }));
+  expect(screen.getByRole("complementary", { name: "Pieces" })).toBeInTheDocument();
+});
+
+it("桌面点连接中的远端电脑，加载完成出现 PM 后自动写入远端对话路由并支持 Show Pieces", async () => {
+  const user = userEvent.setup();
+  let finishRemote!: (reply: { status: number; body: StateSnapshot }) => void;
+  const remoteSnapshot = onePm("东京经理", [
+    makeMessage({ id: 9, conversationId: 1, text: "要部署吗？", meta: { needsUser: true } }),
+  ]);
+  const fleet = new Fleet(onePm("本机经理"), remoteSnapshot, [mac, tokyo]);
+  fleet.remote.state = () => new Promise((resolve) => { finishRemote = resolve; });
+  await boot(fleet, { connect: false });
+
+  await user.click(railDevice("东京"));
+  expect(location.hash).toBe("");
+
+  await act(async () => finishRemote({ status: 200, body: remoteSnapshot }));
+  await waitFor(() => expect(location.hash).toBe(`#/d/${TOKYO}/c/1`));
+  expect(await screen.findByRole("complementary", { name: "Pieces" })).toBeInTheDocument();
 });

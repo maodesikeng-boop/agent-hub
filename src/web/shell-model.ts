@@ -171,13 +171,13 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   if (active !== null) lastByDeviceRef.current.set(current.key, active.id);
   const select = useCallback(
     (ref: ConversationRef) => {
-      setPickedDevice(null);
+      setPickedDevice(autoSelect ? null : ref.device);
       navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) }, !autoSelect && route !== null);
     },
     [navigate, autoSelect, route],
   );
   const selectRouter = useCallback(() => {
-    setPickedDevice(null);
+    if (autoSelect) setPickedDevice(null);
     navigate({ view: "router" }, !autoSelect && route !== null);
   }, [navigate, autoSelect, route]);
   const selectComputer = useCallback(
@@ -235,15 +235,20 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
 
   useEffect(() => {
     if (!autoSelect || !shellReady) return;
-    if (route === null && pickedDevice === null) {
-      replace({ view: "router" });
+    if (route === null) {
+      if (pickedDevice === null) {
+        replace({ view: "router" });
+      } else if (active !== null) {
+        setPickedDevice(null);
+        replace({ view: "conversation", id: active.id, ...routeDeviceOf(current.key) });
+      }
       return;
     }
-    if (route?.view === "settings") {
+    if (route.view === "settings") {
       nav.setDesktop(route.section === undefined ? { open: true } : { open: true, section: desktopSectionOf(route.section, fleet.managed) });
       replace({ view: "router" });
     }
-  }, [autoSelect, shellReady, route, pickedDevice, fleet.managed, replace, nav.setDesktop]);
+  }, [autoSelect, shellReady, route, pickedDevice, active, current.key, fleet.managed, replace, nav.setDesktop]);
   useEffect(() => {
     if (autoSelect || route?.view !== "settings") return;
     const unmanagedSection = fleet.listed && !fleet.managed && route.section === "computers";
@@ -439,10 +444,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const openDeviceWorker = useCallback(
     (deviceKey: string, id: ConversationId) => {
-      setPickedDevice(null);
+      setPickedDevice(autoSelect ? null : deviceKey);
       navigate({ view: "worker", id, ...routeDeviceOf(deviceKey) });
     },
-    [navigate],
+    [autoSelect, navigate],
   );
   const openDeviceConversation = useCallback(
     (deviceKey: string, id: ConversationId) => {

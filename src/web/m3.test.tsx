@@ -1134,7 +1134,46 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(screen.queryByRole("button", { name: "Conversations" })).not.toBeInTheDocument();
   });
 
-  it("窄窗 stack 档：侧栏叠盖主对话且不销毁聊天状态，点 Worker 切换详情、关掉后恢复对话", async () => {
+  it("从自动展开的 Pieces 点开 Worker 再点 Close Piece：不写入 agent-hub.rightRail=closed，回到 Pieces 且切到另一有待办 PM 仍自动展开", async () => {
+    const user = userEvent.setup();
+    await boot(
+      crowd({
+        conversations: [
+          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1, createdAt: 20_000, line: { event: "started" } })], {
+            conversation: { id: 1, pmId: 1, title: "小林" },
+          }),
+          makeConvSnapshot(
+            [makeMessage({ id: 9, conversationId: 2, createdAt: 10_000, text: "方案 A 还是 B？", meta: { needsUser: true } })],
+            { conversation: { id: 2, pmId: 2, title: "老马" } },
+          ),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "修 X" }) }),
+        ],
+        sessions: [
+          makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }),
+          makeSession({ sessionId: 2, conversationId: 2, pmId: 2 }),
+          makeSession({ sessionId: 3, conversationId: 30, status: "running", activity: "working" }),
+        ],
+      }),
+    );
+    expect(rail()).toBeInTheDocument();
+    expect(localStorage.getItem("agent-hub.rightRail")).toBeNull();
+
+    await user.click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
+    expect(screen.getByRole("complementary", { name: "修 X" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Close Piece" }));
+    expect(localStorage.getItem("agent-hub.rightRail")).toBeNull();
+    expect(rail()).toBeInTheDocument();
+
+    const laoMaRow = within(screen.getByRole("region", { name: "Project managers" }))
+      .getAllByRole("button", { name: /老马/ })
+      .find((b) => !b.closest(".row-shortcuts"))!;
+    await user.click(laoMaRow);
+    expect(rail()).toBeInTheDocument();
+    expect(within(rail()!).getByRole("region", { name: /^Needs You/ })).toBeInTheDocument();
+  });
+
+  it("窄窗 stack 档：侧栏叠盖主对话且不销毁聊天状态，点 Worker 切换详情、关掉后回到 Pieces 再关 Pieces 恢复对话", async () => {
     const resizeShell = installShellSize();
     const user = userEvent.setup();
     await boot(crowd());
@@ -1144,6 +1183,9 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     await user.click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
     expect(screen.getByRole("complementary", { name: "修 X" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Close Piece" }));
+    expect(rail()).toBeInTheDocument();
+    expect(localStorage.getItem("agent-hub.rightRail")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Close Pieces" }));
     expect(screen.getByRole("main")).toBeVisible();
   });
 });
