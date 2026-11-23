@@ -83,15 +83,15 @@ importers:
       lru-cache:
         specifier: ^11.5.3
         version: 11.5.3
+      lucide-react:
+        specifier: ^1.77.0
+        version: 1.77.0(@types/react@19.3.0)(react@19.3.1)
       mermaid:
         specifier: ^12.3.0
         version: 12.3.0
       p-limit:
         specifier: ^7.3.3
         version: 7.3.3
-      pixelarticons:
-        specifier: 2.4.2
-        version: 2.4.2(react@19.3.1)
       qrcode-generator:
         specifier: ^2.0.4
         version: 2.0.4
@@ -3184,6 +3184,15 @@ packages:
     resolution: {integrity: sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg==}
     engines: {node: 20 || >=22}
 
+  lucide-react@1.77.0:
+    resolution: {integrity: sha512-VS6sOi8ZUH1qm6swBL/tpI4xAhB6pFTdHvw3pfCJD+DaTJwpyynVzfOS6mdyMZ+OCdY/GMSQbqinOMOPbNSrQA==}
+    peerDependencies:
+      '@types/react': '*'
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+
   lz-string@1.5.0:
     resolution: {integrity: sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==}
     hasBin: true
@@ -3534,12 +3543,6 @@ packages:
   pino@10.4.0:
     resolution: {integrity: sha512-bk1ZMTwG/Vymx+zPoa28MhNzucFvXJWp3csrSuxuHPSMeUettaCoQ5Jvg07mtC4JGNpcfTwz41oVCnNgBK9+vA==}
     hasBin: true
-
-  pixelarticons@2.4.2:
-    resolution: {integrity: sha512-BZKSU5ckLuioZCzES4fEmdQfnI8XEiQlHljdIVk+N6+KH7vTBQJNtMs+V0LQF7nC7cZbKT0qBXFOsT35sl8uhg==}
-    hasBin: true
-    peerDependencies:
-      react: '>=16'
 
   playwright-core@1.65.1:
     resolution: {integrity: sha512-hqPpz7blSMPxWVdoeE1yiBSzXsKiVOd2k+kjCvmUywD2GPO2Dd9HfcWnq9NN0GHbNZDFgZ9JfBFr+X5/BLo0qw==}
@@ -6981,6 +6984,12 @@ snapshots:
 
   lru-cache@11.5.3: {}
 
+  lucide-react@1.77.0(@types/react@19.3.0)(react@19.3.1):
+    dependencies:
+      react: 19.3.1
+    optionalDependencies:
+      '@types/react': 19.3.0
+
   lz-string@1.5.0: {}
 
   magic-string@1.4.5:
@@ -7601,10 +7610,6 @@ snapshots:
       safe-stable-stringify: 2.5.0
       sonic-boom: 4.2.1
       thread-stream: 4.2.0
-
-  pixelarticons@2.4.2(react@19.3.1):
-    dependencies:
-      react: 19.3.1
 
   playwright-core@1.65.1: {}
 

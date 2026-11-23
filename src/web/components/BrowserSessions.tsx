@@ -1,11 +1,10 @@
-import { Loader2, Monitor, Smartphone, Tablet } from "../ui/icons.ts";
-import { describeUserAgent, formatAgo, formatCountdown, userAgentKind } from "../browser-sessions.ts";
+import { Loader2 } from "../ui/icons.ts";
+import { describeUserAgent, formatAgo, formatCountdown, userAgentDevice } from "../browser-sessions.ts";
 import { useBrowserSessions, useSignInLink } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
+import { platformIcon } from "./DeviceBadges.tsx";
 import { QrCode } from "./QrCode.tsx";
 import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
-
-const KIND_ICONS = { computer: Monitor, phone: Smartphone, tablet: Tablet } as const;
 
 export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => void }) {
   const signIn = useSignInLink();
@@ -82,7 +81,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
           const name = describeUserAgent(session.userAgent);
           const ago = formatAgo(session.lastSeenAt, signIn.now);
           const confirming = session.current && confirmingSelf;
-          const KindIcon = KIND_ICONS[userAgentKind(session.userAgent)];
+          const KindIcon = platformIcon(userAgentDevice(session.userAgent));
           const detail = (
             <span className="flex flex-wrap items-center gap-x-3">
               {session.current && <span>This browser</span>}

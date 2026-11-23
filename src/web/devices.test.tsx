@@ -409,7 +409,7 @@ describe("设置 → 设备", () => {
     }
     expect(within(mine).getByTestId("device-row")).toHaveTextContent("Mac");
     expect(within(others).getByTestId("device-row")).toHaveTextContent("东京");
-    expect(within(others).getByTestId("device-row").querySelector("svg[data-icon='pixel']")).toBeInTheDocument();
+    expect(within(others).getByTestId("device-row").querySelector("svg[data-icon='line']")).toBeInTheDocument();
     expect(within(others).getByTestId("device-row").querySelector(".bg-success")).not.toBeNull();
     const rows = within(devices).getAllByTestId("device-row");
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Mac"), expect.stringContaining("东京")]);

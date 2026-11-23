@@ -1,4 +1,14 @@
-import { Laptop, Monitor, Server } from "../ui/icons.ts";
+import {
+  DeviceAndroid,
+  DeviceIphone,
+  DeviceLinux,
+  DeviceMacos,
+  DeviceWindows,
+  Monitor,
+  Smartphone,
+  Tablet,
+  type Icon,
+} from "../ui/icons.ts";
 import type { DeviceStatus } from "../devices.ts";
 import { formatAgo } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -24,7 +34,25 @@ export function StatusText({ status, lastOnlineAt, online = false }: { status: D
   );
 }
 
+const PLATFORM_ICONS: Readonly<Record<string, Icon>> = {
+  darwin: DeviceMacos,
+  macos: DeviceMacos,
+  win32: DeviceWindows,
+  windows: DeviceWindows,
+  linux: DeviceLinux,
+  iphone: DeviceIphone,
+  ios: DeviceIphone,
+  android: DeviceAndroid,
+  tablet: Tablet,
+  ipad: Tablet,
+  phone: Smartphone,
+};
+
+export function platformIcon(platform: string): Icon {
+  return PLATFORM_ICONS[platform.toLowerCase()] ?? Monitor;
+}
+
 export function PlatformIcon({ platform, className }: { platform: string; className?: string }) {
-  const Icon = platform === "darwin" ? Laptop : platform === "linux" ? Server : Monitor;
+  const Icon = platformIcon(platform);
   return <Icon className={cn("size-pixel-sm shrink-0", className)} aria-hidden="true" />;
 }

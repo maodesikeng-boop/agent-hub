@@ -87,7 +87,7 @@ The sole exception is the profile header name (`text-display`, `22px`, `600`, `t
 
 ## 5. Icons
 
-Import all tool icons from `src/web/ui/icons.ts` (`pixelarticons` 24-grid sprites: `size-pixel` renders at `24px` in `Large`, `size-pixel-md` at `18px`, and `size-pixel-sm` at `12px`). Icons inherit text color (`text-muted-foreground` for secondary actions). Inside the chat composer, use `Composer*` stroke icons (`20px` for plus and send). Never use emoji as UI icons.
+Import all tool icons from `src/web/ui/icons.ts` (`lucide-react` smooth-line 24-grid icons alongside matching smooth-line custom SVGs for `PinFilled` and the five mainstream device types: macOS, Windows, Linux, iPhone, and Android; usage renders `Hourglass`). Icons inherit text color (`text-muted-foreground` for secondary actions), use `stroke="currentColor"` (`data-icon="line"`), and size via `size-pixel` (`24px` in `Large`), `size-pixel-md` (`18px`), or `size-pixel-sm` (`12px`). Never use emoji as UI icons.
 
 ## 6. Control dimensions and tool slots
 

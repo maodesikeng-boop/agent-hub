@@ -224,7 +224,7 @@ describe("一级设置主页", () => {
     expect(main.textContent).not.toMatch(/[·|]/);
     for (const row of within(main).getAllByRole("button").filter((b) => b.dataset.slot === "settings-nav-row")) {
       expect(row.className).toContain("min-h-12");
-      expect(row.querySelector(":scope > svg[data-icon='pixel']:last-child")).toBeInTheDocument();
+      expect(row.querySelector(":scope > svg[data-icon='line']:last-child")).toBeInTheDocument();
     }
   });
   beforeEach(() => new FakeApi(makeSnapshot({})).install());

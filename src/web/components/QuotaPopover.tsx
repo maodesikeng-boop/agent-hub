@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CircleGauge } from "../ui/icons.ts";
+import { Hourglass } from "../ui/icons.ts";
 import { useState } from "react";
 import { useClient } from "../device-scope.tsx";
 import { formatQuotaReset } from "../format.ts";
@@ -88,7 +88,7 @@ export function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }
           title={label}
           className="shrink-0"
         >
-          <CircleGauge aria-hidden="true" />
+          <Hourglass aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent side={inHeader ? "bottom" : "top"} align="end" aria-label="Usage">

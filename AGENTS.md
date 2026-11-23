@@ -82,7 +82,7 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 - `@tanstack/react-query`: On-demand fetching and caching (`App.tsx`, `components/BrowserSessions.tsx`, `components/PmProfile.tsx`).
 - `@tanstack/react-virtual`: Dynamic row-height virtual scrolling for the chat message list (`useVirtualRows.ts`, `components/MessageList.tsx`).
 - `tailwindcss` and `@tailwindcss/vite`: Styling (`styles.css`).
-- `pixelarticons`: 24-grid pixel icons re-exported from `src/web/ui/icons.ts` alongside inline composer stroke icons.
+- `lucide-react`: Smooth-line UI icons re-exported from `src/web/ui/icons.ts` alongside custom device-type, pinned, and composer SVGs.
 - `@fontsource-variable/geist`: Bundled Geist Variable font (`src/web/styles.css`).
 - `clsx` and `tailwind-merge`: Class merging in `cn()` (`lib/utils.ts`). `class-variance-authority`: button variants (`ui/button.tsx`).
 - `qrcode-generator`: QR code rendering in `components/QrCode.tsx` and terminal QR output in `src/feishu/main.ts`.

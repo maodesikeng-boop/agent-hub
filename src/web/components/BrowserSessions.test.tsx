@@ -61,7 +61,7 @@ describe("已登录的浏览器列表", () => {
     expect(screen.queryByRole("button", { name: "Sign out all" })).not.toBeInTheDocument();
     fireEvent.click(toggle());
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    const iconOf = (name: string) => rowOf(name).querySelector("svg[data-icon='pixel']")!;
+    const iconOf = (name: string) => rowOf(name).querySelector("svg[data-icon='line']")!;
     expect(iconOf("Mac Chrome")).not.toBeNull();
     expect(iconOf("iPhone Safari")).not.toBeNull();
     // 电脑和手机是两个不同的图标
