@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import * as ComposerMod from "./components/Composer.tsx";
+import * as ConversationMod from "./components/Conversation.tsx";
 import * as MessagesMod from "./components/Messages.tsx";
 import * as RightRailMod from "./components/RightRail.tsx";
 import * as SidebarMod from "./components/Sidebar.tsx";
@@ -249,11 +250,13 @@ describe("网页流式文字渲染与无重影衔接", () => {
 
     type MemoTarget = { type: (...args: unknown[]) => unknown };
     const composerSpy = vi.spyOn(ComposerMod.DraftComposer as unknown as MemoTarget, "type");
+    const conversationSpy = vi.spyOn(ConversationMod.Conversation as unknown as MemoTarget, "type");
     const sidebarSpy = vi.spyOn(SidebarMod.Sidebar as unknown as MemoTarget, "type");
     const rightRailSpy = vi.spyOn(RightRailMod.RightRail as unknown as MemoTarget, "type");
 
     const { ws, container } = await bootApp(snapshot);
     composerSpy.mockClear();
+    conversationSpy.mockClear();
     sidebarSpy.mockClear();
     rightRailSpy.mockClear();
 
@@ -282,11 +285,13 @@ describe("网页流式文字渲染与无重影衔接", () => {
     obs.disconnect();
 
     expect(composerSpy).toHaveBeenCalledTimes(0);
+    expect(conversationSpy).toHaveBeenCalledTimes(0);
     expect(sidebarSpy).toHaveBeenCalledTimes(0);
     expect(rightRailSpy).toHaveBeenCalledTimes(0);
     expect(sidebarMutations).toHaveBeenCalledTimes(0);
 
     composerSpy.mockRestore();
+    conversationSpy.mockRestore();
     sidebarSpy.mockRestore();
     rightRailSpy.mockRestore();
   });
