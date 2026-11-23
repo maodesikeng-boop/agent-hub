@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
-import { ALWAYS_RUN_TESTS, findReferencingFiles, listChangedFiles, referenceNeedles } from "./test-related.ts";
+import { ALWAYS_RUN_TESTS, findReferencingFiles, listChangedFiles, referenceNeedles, selectRelatedTargets } from "./test-related.ts";
 
 describe("scripts/test-related.ts", () => {
   const dirs: string[] = [];
@@ -78,6 +78,42 @@ describe("scripts/test-related.ts", () => {
       "test/migration.test.ts",
     ]);
     expect(findReferencingFiles(["docs/ui-polish/baseline/style-brief.md"], sources)).toEqual(["test/ui-polish/rubric.test.ts"]);
+  });
+
+  it("keeps package manifests and lockfiles out of vitest related targets and skips src/ runtime propagation while keeping tests, scripts/, other changes, and guards", () => {
+    const sources = new Map([
+      ["scripts/staged-lockfile.ts", 'readFileSync(join(REPO_ROOT, "pnpm-lock.yaml"), "utf8")'],
+      ["scripts/stage-runtime-common.ts", 'readFileSync(join(REPO_ROOT, "package.json"), "utf8")'],
+      ["src/daemon/self-reload.ts", 'join(options.repoDir, "package.json")'],
+      ["src/daemon/self-reload.test.ts", 'writeFileSync(join(root, "package.json"), "{}")'],
+      ["src/vendors/deepseek/driver.ts", 'join(dshHome, "profiles", DEEPSEEK_PROFILE, "package.json")'],
+      ["test/smoke/setup.ts", 'readFileSync("pnpm-lock.yaml", "utf8")'],
+      ["src/web/App.tsx", "export {}"],
+    ]);
+    const { linked, targets } = selectRelatedTargets(
+      ["package.json", "pnpm-lock.yaml", ".agents/skills/poteto-mode/scripts/package.json", "src/web/App.tsx"],
+      sources,
+    );
+    expect(linked).toEqual(["scripts/stage-runtime-common.ts", "scripts/staged-lockfile.ts", "src/daemon/self-reload.test.ts"]);
+    expect(targets).not.toContain("package.json");
+    expect(targets).not.toContain("pnpm-lock.yaml");
+    expect(targets).not.toContain(".agents/skills/poteto-mode/scripts/package.json");
+    expect(targets).not.toContain("src/daemon/self-reload.ts");
+    expect(targets).not.toContain("src/vendors/deepseek/driver.ts");
+    expect(targets).not.toContain("test/smoke/setup.ts");
+    expect(targets).toContain("src/web/App.tsx");
+    expect(targets).toContain("scripts/stage-runtime-common.ts");
+    expect(targets).toContain("scripts/staged-lockfile.ts");
+    expect(targets).toContain("src/daemon/self-reload.test.ts");
+    expect(targets).toContain("src/direct-dependencies.test.ts");
+    for (const guard of ALWAYS_RUN_TESTS) expect(targets).toContain(guard);
+  });
+
+  it("keeps vitest and vite config files in vitest related targets so config edits still run the full suite", () => {
+    const { targets } = selectRelatedTargets(["vitest.config.ts", "vitest.eval.config.ts", "vite.config.ts"], new Map());
+    expect(targets).toContain("vitest.config.ts");
+    expect(targets).toContain("vitest.eval.config.ts");
+    expect(targets).toContain("vite.config.ts");
   });
 
   it("always runs guard tests that exist", () => {
