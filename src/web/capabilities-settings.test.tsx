@@ -266,27 +266,27 @@ describe("设置 → Capabilities：Project defaults、总助、单个项目三�
 describe("资料页的能力入口：直接进当前项目的能力页", () => {
   it("显示开了几项；点一下进项目自己的能力页，顶栏是这个项目，Back 回资料页", async () => {
     const { api, user } = await boot("#/pm/1");
-    const page = await screen.findByRole("region", { name: "小林's profile" });
-    const entry = await within(within(page).getByRole("region", { name: "Capabilities" })).findByRole("button", { name: /Plugins, skills, and MCP servers/ });
+    const page = await screen.findByRole("complementary", { name: "小林's settings" });
+    const entry = await within(within(page).getByRole("navigation", { name: "Project manager settings pages" })).findByRole("button", { name: /Capabilities/ });
     await waitFor(() => expect(entry).toHaveTextContent("10 of 10"));
     await user.click(entry);
-    const caps = await screen.findByRole("region", { name: "小林's capabilities" });
+    const caps = await screen.findByRole("complementary", { name: "小林's settings" });
     expect(window.location.hash).toBe("#/pm/1/capabilities");
     expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument();
-    expect(within(caps).getByRole("heading", { level: 1, name: "Capabilities" })).toBeInTheDocument();
+    expect(caps).toHaveTextContent("Capabilities");
     expect(within(caps).queryByRole("radiogroup", { name: "Scope" })).not.toBeInTheDocument();
     await within(caps).findByRole("region", { name: "This project" });
     expect(within(caps).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Inheritance", "This project", "Shared", lead, other]);
     expect(within(region(caps, other)).getByRole("button", { name: new RegExp(`^${other}`) })).toHaveAttribute("aria-expanded", "false");
     expect(api.callsTo("GET", /^\/api\/pms\/1\/capabilities$/).length).toBeGreaterThanOrEqual(1);
-    await user.click(within(caps).getByRole("button", { name: "Back" }));
-    await screen.findByRole("region", { name: "小林's profile" });
+    await user.click(within(caps).getByRole("button", { name: "Back to settings summary" }));
+    await within(page).findByRole("navigation", { name: "Project manager settings pages" });
     expect(window.location.hash).toBe("#/pm/1");
   });
 
   it("能力页里点 Project defaults 打开设置，落在 Project defaults 上", async () => {
     const { user } = await boot("#/pm/1/capabilities");
-    const caps = await screen.findByRole("region", { name: "小林's capabilities" });
+    const caps = await screen.findByRole("complementary", { name: "小林's settings" });
     await user.click(await within(caps).findByRole("button", { name: /^Project defaults/ }));
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     expect(within(dialog).getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
@@ -295,15 +295,15 @@ describe("资料页的能力入口：直接进当前项目的能力页", () => {
 
   it("手输已归档项目的能力页地址：回落到只读资料页，不渲染可编辑的能力页", async () => {
     await boot("#/pm/3/capabilities");
-    const page = await screen.findByRole("region", { name: "旧项目's profile" });
-    await within(page).findByRole("textbox", { name: "Persona" });
-    expect(screen.queryByRole("region", { name: "旧项目's capabilities" })).not.toBeInTheDocument();
+    const page = await screen.findByRole("complementary", { name: "旧项目's settings" });
+    await within(page).findByRole("region", { name: "Archive status" });
+    expect(within(page).queryByRole("region", { name: "This project" })).not.toBeInTheDocument();
   });
 
   it("归档的项目经理没有能力入口", async () => {
     await boot("#/pm/3");
-    const page = await screen.findByRole("region", { name: "旧项目's profile" });
-    await within(page).findByRole("textbox", { name: "Persona" });
-    expect(within(page).queryByRole("region", { name: "Capabilities" })).not.toBeInTheDocument();
+    const page = await screen.findByRole("complementary", { name: "旧项目's settings" });
+    const nav = await within(page).findByRole("navigation", { name: "Project manager settings pages" });
+    expect(within(nav).queryByRole("button", { name: /Capabilities/ })).not.toBeInTheDocument();
   });
 });

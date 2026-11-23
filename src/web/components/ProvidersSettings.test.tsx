@@ -375,7 +375,7 @@ describe("桌面端 Settings → Providers", () => {
       expect(api.callsTo("GET", new RegExp(`^/d/${TOKYO_ID}/api/providers$`))).toHaveLength(1),
     );
     const computerSelect = within(panel).getByRole("combobox", { name: "Computer" });
-    expect(computerSelect).toHaveDisplayValue("Tokyo");
+    expect(computerSelect).toHaveTextContent("Tokyo");
 
     // 1. 远端打开 preferDeviceCodeWhenRemote 的厂商（v2）→ 默认选中 Device code
     const v2 = AGENT_VENDORS[2]!;
@@ -411,10 +411,13 @@ describe("桌面端 Settings → Providers", () => {
     await user.click(within(within(panel).getByTestId(`provider-row-${v3}`)).getByRole("button", { name: /Sign in/ }));
     dialog = await screen.findByRole("dialog", { name: `Sign in to ${vendorLabel(v3)}` });
     const subSelect = within(dialog).getByRole("combobox", { name: "Model provider" });
-    expect(within(subSelect).getAllByRole("option").map((o) => o.textContent)).toEqual([
+    await user.click(subSelect);
+    const subListbox = await screen.findByRole("listbox");
+    expect(within(subListbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "DeepSeek",
       "OpenAI Codex (Configured)",
     ]);
+    await user.keyboard("{Escape}");
     await user.type(within(dialog).getByPlaceholderText("sk-..."), "sk-live-secret-key");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
@@ -483,14 +486,16 @@ describe("桌面端 Settings → Providers", () => {
     expect(within(tablist).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
     expect(localStorage.getItem(PROVIDERS_GUIDED_KEY)).toBe("1");
 
-    // 关掉设置弹窗，打开 New project manager：0 家可用时自动展开 More settings 展示 Manage providers…
+    // 关掉设置弹窗，在单机常驻的本机格子切出工作区，打开 New project manager：0 家可用时自动展开 More settings，厂商下拉末尾带 Add provider…
     await user.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("tablist", { name: "Settings categories" })).toBeNull());
 
+    await user.click(screen.getByRole("button", { name: /^This computer/ }));
     await user.click(screen.getByRole("button", { name: "New project manager" }));
     const newPmDialog = await screen.findByRole("dialog", { name: "New project manager" });
-    const manageBtn = await within(newPmDialog).findByRole("button", { name: "Manage providers…" });
-    await user.click(manageBtn);
+    const providerSelect = await within(newPmDialog).findByRole("combobox", { name: "Provider" });
+    await user.click(providerSelect);
+    await user.click(await screen.findByRole("option", { name: "Add provider…" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "New project manager" })).toBeNull());
     const reopenedTablist = await screen.findByRole("tablist", { name: "Settings categories" });

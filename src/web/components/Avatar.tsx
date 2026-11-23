@@ -28,7 +28,7 @@ export const Avatar = memo(function Avatar({
   return (
     <AvatarRoot
       style={{ width: rem, height: rem }}
-      className={cn("overflow-visible rounded-none [contain:size_layout]", className)}
+      className={cn("overflow-visible [contain:size_layout]", className)}
       aria-hidden="true"
       data-neutral={neutral ? "true" : undefined}
       data-look={`${look.fruit}:${look.color}`}

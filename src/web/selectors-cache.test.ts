@@ -24,6 +24,9 @@ import {
 import { runningWorkerCount, totalRunningWorkers, waitingConversations } from "../shared/reminders.ts";
 import { capabilityProjectOptions, capabilitySections, capabilityTotals, filterCapabilitySections, patchedView } from "./capabilities-model.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
+import { LOCAL_DEVICE } from "./devices.ts";
+import { filterProjectList, projectListOf } from "./project-list.ts";
+import { quotaMeterOf, railComputersOf, type RailComputerInput } from "./rail-model.ts";
 import { fleetRouterStream, mergeRouterStream, routerStreamOf, type RouterStreamDeviceInput } from "./router-stream.ts";
 import {
   activeGraphsOf,
@@ -975,7 +978,7 @@ describe("resources selectors", () => {
     };
     const summary = describeResourcesSummary(snapshot);
     expect(describeResourcesSummary(snapshot)).toBe(summary);
-    expect(summary).toEqual({ summary: "1 held", attention: true, heldCount: 1 });
+    expect(summary).toEqual({ summary: "1 to review", attention: true, heldCount: 1 });
     expect(describeResourcesSummary({ ...snapshot, held: [held[1]!], attentionCount: 0 })).toEqual({
       summary: "8.0 KB",
       attention: false,
@@ -985,5 +988,90 @@ describe("resources selectors", () => {
     expect(partitionHeldResources(held)).toBe(partitioned);
     expect(partitioned.needsDecision).toHaveLength(1);
     expect(partitioned.kept).toHaveLength(1);
+  });
+});
+
+describe("shell list and rail selectors", () => {
+  it("caches projectListOf, railComputersOf, and quotaMeterOf per input reference and invalidates immediately on change", () => {
+    let state = monthState();
+    const pms = Array.from({ length: 40 }, (_, i) =>
+      makePm({
+        id: i + 1,
+        name: `PM ${i + 1}`,
+        pinnedAt: i < 5 ? 1_000 + (5 - i) : null,
+        archivedAt: i >= 35 ? 2_000 + i : null,
+      }),
+    );
+    const conversations = { ...state.conversations };
+    for (let i = 1; i < 40; i++) {
+      const id = i + 1;
+      conversations[id] = { conversation: makeConversation({ id, pmId: id, title: `PM ${id}` }), messages: [], hasMore: false };
+    }
+    state = { ...state, pms, conversations };
+
+    const entries = listConversations(state);
+    const sections = projectListOf(entries);
+    expect(projectListOf(entries)).toBe(sections);
+    expect(filterProjectList(sections, "  ")).toBe(sections);
+    expect(sections.pinned).toHaveLength(5);
+    expect(sections.archived).toHaveLength(5);
+    expect(sections.active).toHaveLength(30);
+
+    // Streaming updates on a session keep listConversations and projectListOf references stable.
+    const streamed = applyChange(
+      state,
+      sessionChange(
+        state.seq + 1,
+        makeSession({ sessionId: 77_001, conversationId: PM_CONVERSATION, pmId: 1, status: "running", activity: "working", streamingText: "chunk" }),
+      ),
+    );
+    expect(projectListOf(listConversations(streamed))).toBe(sections);
+
+    // Pinning an unpinned PM invalidates listConversations and projectListOf immediately.
+    const pinned = applyChange(streamed, changeOf(streamed.seq + 1, "pm.updated", { pm: { ...pms[10]!, pinnedAt: 9_000 } }));
+    const nextSections = projectListOf(listConversations(pinned));
+    expect(nextSections).not.toBe(sections);
+    expect(nextSections.pinned).toHaveLength(6);
+    expect(projectListOf(listConversations(pinned))).toBe(nextSections);
+
+    const computers: readonly RailComputerInput[] = [
+      { key: LOCAL_DEVICE, name: "Mac", platform: "darwin", status: "online" },
+      { key: "tokyo", name: "Tokyo", platform: "linux", status: "online" },
+    ];
+    const asking = new Set<string>(["1", "tokyo/2", "tokyo/3"]);
+    const rail0 = railComputersOf(computers, asking);
+    expect(railComputersOf(computers, asking)).toBe(rail0);
+    expect(rail0.map((c) => c.badge)).toEqual([1, 2]);
+    const rail1 = railComputersOf(computers, new Set<string>(["1"]));
+    expect(rail1).not.toBe(rail0);
+    expect(rail1.map((c) => c.badge)).toEqual([1, 0]);
+    expect(railComputersOf(computers, new Set<string>(["1"]))).not.toBe(rail1);
+
+    const withRate = applyChange(
+      streamed,
+      sessionChange(
+        streamed.seq + 1,
+        makeSession({
+          sessionId: 77_002,
+          conversationId: PM_CONVERSATION,
+          vendor: "claude",
+          rateLimit: {
+            status: "allowed",
+            resetsAt: 2_000,
+            windows: { five_hour: { utilization: 0.62, resetsAt: 2_000, status: "allowed" } },
+          },
+        }),
+      ),
+    );
+    const quota0 = quotaUsage(withRate, 1_500_000);
+    const meter0 = quotaMeterOf(quota0);
+    expect(quotaMeterOf(quota0)).toBe(meter0);
+    expect(meter0).toMatchObject({ percent: 62, cells: 4, warning: false, full: false });
+
+    const quotaReset = quotaUsage(withRate, 2_000_000);
+    const meter1 = quotaMeterOf(quotaReset);
+    expect(meter1).not.toBe(meter0);
+    expect(meter1).toMatchObject({ percent: 0, cells: 0 });
+    expect(quotaMeterOf(quotaReset)).toBe(meter1);
   });
 });

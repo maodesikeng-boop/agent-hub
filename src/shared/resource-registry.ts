@@ -255,6 +255,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("pms", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("pm_archives", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("pm_looks", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("pm_pins", "retained_metadata", "src/daemon/ledger/pm-pins.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("projects", "retained_metadata", "src/daemon/ledger/projects.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("project_folders", "retained_metadata", "src/daemon/ledger/projects.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("project_catalogs", "retained_metadata", "src/daemon/ledger/project-catalog.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),

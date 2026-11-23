@@ -92,10 +92,10 @@ describe("新消息淡入", () => {
     expect(entering()).toHaveLength(0);
   });
 
-  it("保留的动效变量与样式：.message-enter 淡入、--motion-tint 换人底色过渡、.status-shimmer 流光", () => {
+  it("保留的动效变量与样式：.message-enter 淡入、.status-shimmer 流光", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).toMatch(/--motion-enter: 120ms;/);
-    expect(css).toMatch(/--motion-tint: 300ms;/);
+    expect(css).not.toContain("--motion-tint");
     expect(css).toMatch(/@keyframes message-enter \{\s*from \{\s*opacity: 0;\s*transform: translateY\(4px\);/);
     expect(css).toMatch(/\.message-enter \{\s*animation: message-enter var\(--motion-enter\) ease-out;\s*\}/);
     expect(css).toMatch(/\.status-shimmer/);

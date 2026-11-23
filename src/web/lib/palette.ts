@@ -13,10 +13,6 @@ export const accentStyleOf = cachedBy((id): CSSProperties => {
   return { "--primary": accent, "--primary-foreground": accentForeground } as CSSProperties;
 });
 
-export const tintStyleOf = cachedBy((id): CSSProperties => ({ "--fruit": jellyColorOf(id).accent }) as CSSProperties);
-
-export const jellyStyleOf = cachedBy((id): CSSProperties => ({ "--jelly": jellyColorOf(id).accent }) as CSSProperties);
-
 type FruitTrackVars = CSSProperties & Record<"--tube-line" | "--tube-core" | "--tube-glint" | "--tube-shade" | "--peel" | "--step-done-bg", string>;
 
 export const fruitTrackVars = cachedBy((id): FruitTrackVars => {

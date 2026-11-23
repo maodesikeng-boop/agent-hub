@@ -1,8 +1,5 @@
 import { useEffect, useState } from "react";
 
-export const NARROW_QUERY = "(max-width: 1100px)";
-export const COMPACT_QUERY = "(max-width: 719px)";
-
 const matches = (query: string) => (typeof window.matchMedia === "function" ? window.matchMedia(query).matches : false);
 
 export function useMediaQuery(query: string): boolean {

@@ -1,6 +1,6 @@
 // 设置里“已登录的浏览器”的文字：User-Agent 显示成“iPhone Safari”这样的名字，最后活动显示成“3 分钟前”，登录链接剩余时间显示成“4:32”。
 import { describe, expect, it } from "vitest";
-import { describeUserAgent, formatAgo, formatCountdown, userAgentKind } from "./browser-sessions.ts";
+import { describeUserAgent, formatAgo, formatCountdown, userAgentDevice, userAgentKind } from "./browser-sessions.ts";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 const IPHONE_CHROME = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.0.0 Mobile/15E148 Safari/604.1";
@@ -47,6 +47,22 @@ describe("userAgentKind（行左边的电脑 / 手机图标）", () => {
     ["", "computer"],
   ] as const)("%s → %s", (ua, kind) => {
     expect(userAgentKind(ua)).toBe(kind);
+  });
+});
+
+describe("userAgentDevice（五种主流平台识别）", () => {
+  it.each([
+    [IPHONE, "iphone"],
+    [IPHONE_CHROME, "iphone"],
+    [ANDROID_CHROME, "android"],
+    [MAC_CHROME, "macos"],
+    [MAC_SAFARI, "macos"],
+    [WIN_EDGE, "windows"],
+    [LINUX_FIREFOX, "linux"],
+    [IPAD, "tablet"],
+    ["", "computer"],
+  ] as const)("%s → %s", (ua, device) => {
+    expect(userAgentDevice(ua)).toBe(device);
   });
 });
 

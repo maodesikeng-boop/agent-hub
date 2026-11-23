@@ -80,7 +80,7 @@ describe("resources-model", () => {
 
   it("marks attention true when at least one held item has keptAt === null", () => {
     const withUnkept = makeResourcesSnapshot({ held: [makeHeldWorktree({ keptAt: null })], attentionCount: 1 });
-    expect(describeResourcesSummary(withUnkept)).toEqual({ summary: "1 held", attention: true, heldCount: 1 });
+    expect(describeResourcesSummary(withUnkept)).toEqual({ summary: "1 to review", attention: true, heldCount: 1 });
 
     const allKept = makeResourcesSnapshot({ held: [makeHeldWorktree({ keptAt: 2_000 })], attentionCount: 0 });
     expect(describeResourcesSummary(allKept)).toEqual({ summary: "4.0 MB", attention: false, heldCount: 0 });
@@ -94,7 +94,7 @@ describe("resources-model", () => {
     qc.setQueryData(RESOURCES_QUERY_KEY(LOCAL_DEVICE), cached);
 
     const { result } = renderHook(() => useCachedResourcesSummary(LOCAL_DEVICE), { wrapper: makeWrapper(qc) });
-    expect(result.current).toEqual({ summary: "1 held", attention: true, heldCount: 1 });
+    expect(result.current).toEqual({ summary: "1 to review", attention: true, heldCount: 1 });
     expect(api.calls).toEqual([]);
   });
 

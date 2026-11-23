@@ -55,6 +55,7 @@ export const API_PATHS = {
     `/api/pms/${pmId}/ended-workers${before === null ? "" : `?before=${before}`}`,
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
   pmLook: (pmId: PmId) => `/api/pms/${pmId}/look`,
+  pmPin: (pmId: PmId) => `/api/pms/${pmId}/pin`,
   pmCapabilities: (pmId: PmId) => `/api/pms/${pmId}/capabilities`,
   routerCapabilities: "/api/router/capabilities",
   defaultCapabilities: "/api/defaults/capabilities",
@@ -246,6 +247,14 @@ export interface EditPersonaRequest {
 export type PmLookRequest = PmLookSetting;
 
 export interface PmLookResponse {
+  pm: Pm;
+}
+
+export interface PmPinRequest {
+  pinned: boolean;
+}
+
+export interface PmPinResponse {
   pm: Pm;
 }
 

@@ -1,36 +1,14 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { MAX_SETUP_COMMAND_BYTES, utf8Bytes, type Project, type ProjectFolder } from "../../shared/index.ts";
+import { MAX_SETUP_COMMAND_BYTES, utf8Bytes, type Project } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
-import { errorText, shortPath } from "../format.ts";
+import { errorText } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Loader2 } from "../ui/icons.ts";
 import { Textarea } from "../ui/input.tsx";
 import { RowError, SettingsGroup } from "./SettingsList.tsx";
-
-function folderName(path: string): string {
-  return path.replace(/\/+$/, "").split("/").pop() || path;
-}
-
-export function FoldersGroup({ folders }: { folders: ProjectFolder[] }) {
-  return (
-    <SettingsGroup title="Folders">
-      <ul aria-label="Folders" className="divide-y divide-border">
-        {folders.map((f) => (
-          <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-body">{folderName(f.path)}</div>
-              <div className="truncate text-minor leading-snug text-muted-foreground">{shortPath(f.path)}</div>
-            </div>
-            {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">Main folder</span>}
-          </li>
-        ))}
-      </ul>
-    </SettingsGroup>
-  );
-}
 
 function setupCommandProblem(text: string): string | null {
   if (text.includes("\0")) return "Setup command can't contain NUL characters";
@@ -113,11 +91,11 @@ function SetupActions({ setup }: { setup: ReturnType<typeof useSetupCommandEdito
   );
 }
 
-export function WorktreeSetupGroup({ project, readOnly }: { project: Project; readOnly: boolean }) {
+export function WorktreeSetupGroup({ project, readOnly, titled = true }: { project: Project; readOnly: boolean; titled?: boolean }) {
   const setup = useSetupCommandEditor(project);
   const problem = setup.problem ?? setup.error;
   return (
-    <SettingsGroup title="Worktree setup" action={readOnly ? null : <SetupActions setup={setup} />}>
+    <SettingsGroup {...(titled ? { title: "Worktree setup" } : { label: "Worktree setup" })} action={readOnly ? null : <SetupActions setup={setup} />}>
       <Textarea
         aria-label="Worktree setup"
         placeholder="No setup command"
@@ -128,7 +106,7 @@ export function WorktreeSetupGroup({ project, readOnly }: { project: Project; re
         autoCorrect="off"
         aria-invalid={setup.problem !== null || undefined}
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0",
+          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0",
           setup.text === "" ? "text-body" : "font-mono text-minor",
         )}
         value={setup.text}

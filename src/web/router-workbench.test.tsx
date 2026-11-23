@@ -12,6 +12,7 @@ import {
   ROUTER_STREAM_PAGE_SIZE,
   VENDOR_LIST,
   bundledModelCatalog,
+  effortLabel,
   effortsFor,
   emptyRouterSlice,
   modelShortLabel,
@@ -36,7 +37,7 @@ import {
   type RouterStreamSource,
 } from "./router-stream.ts";
 import { resetQueryClient } from "./query-client.ts";
-import { MOBILE_SHELL_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
+import { MOBILE_SHELL_QUERY } from "./useMediaQuery.ts";
 import {
   FakeApi,
   FakeWebSocket,
@@ -80,14 +81,9 @@ vi.mock("./components/Markdown.tsx", async (importOriginal) => {
 const LOCAL_ID = "00000000-0000-4000-8000-000000000001";
 const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 
-let viewportMode: "wide" | "rail" | "mobile" = "wide";
-
-function installViewport(mode: "wide" | "rail" | "mobile") {
-  viewportMode = mode;
+function installViewport(mode: "wide" | "mobile") {
   vi.stubGlobal("matchMedia", (query: string) => ({
-    matches:
-      (mode === "mobile" && query === MOBILE_SHELL_QUERY) ||
-      (mode === "rail" && query === NARROW_QUERY),
+    matches: mode === "mobile" && query === MOBILE_SHELL_QUERY,
     media: query,
     addEventListener: () => {},
     removeEventListener: () => {},
@@ -322,7 +318,7 @@ describe("Router 第 2 波：路由与默认落地页", () => {
     expect(allClear.parentElement?.querySelector("[data-slot='router-avatar']")).toHaveClass("opacity-40");
   });
 
-  it("手机外壳空 hash 保持列表页首页（置顶挂 Router 入口且不带激活底色），点击进入 #/router，左上角 Back 退回列表页", async () => {
+  it("手机外壳空 hash 保持列表页首页（底栏 TabBar 挂 Router 入口且不带激活态），点击进入 #/router，点 Projects 退回列表页", async () => {
     installViewport("mobile");
     const { localApi } = installFleet({});
     const user = userEvent.setup();
@@ -331,7 +327,8 @@ describe("Router 第 2 波：路由与默认落地页", () => {
     act(openSockets);
 
     // 手机首页停在列表页，网址仍是空 hash
-    const routerEntry = await screen.findByRole("button", { name: /Router/ });
+    const tabBar = await screen.findByRole("navigation", { name: "Mobile navigation" });
+    const routerEntry = within(tabBar).getByRole("button", { name: /Router/ });
     expect(window.location.hash).toBe("");
     expect(routerEntry).not.toHaveAttribute("aria-current");
 
@@ -341,14 +338,14 @@ describe("Router 第 2 波：路由与默认落地页", () => {
     // 390px 宽放不下长的那句：换短句，不缩字号
     expect(screen.getByPlaceholderText("Tell Router…")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(within(screen.getByRole("navigation", { name: "Mobile navigation" })).getByRole("button", { name: "Projects" }));
     expect(window.location.hash).toBe("");
-    expect(await screen.findByRole("navigation", { name: "Conversations" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Project managers" })).toBeInTheDocument();
   });
 });
 
-describe("左栏置顶嫩芽铃入口（宽栏 / 72px 窄栏 / 多机去重）", () => {
-  it("宽栏与窄栏置顶渲染 RouterAvatar，副标题与徽标按优先级实时刷新，选中态中性灰不含 --jelly，多设备不再重复渲染左栏 Needs You 分组", async () => {
+describe("最左栏嫩芽铃入口与项目列表去重", () => {
+  it("AppRail 渲染 4.5rem 置顶 RouterAvatar 与跨机等待徽标，列表不再重复渲染 Needs You 分组", async () => {
     const localSnap = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
       projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
@@ -400,35 +397,20 @@ describe("左栏置顶嫩芽铃入口（宽栏 / 72px 窄栏 / 多机去重）",
     });
 
     const { localApi } = installFleet({ local: localSnap, tokyo: tokyoSnap });
-    const { unmount } = renderWithQuery(<App />);
+    renderWithQuery(<App />);
     await waitFor(() => expect(localApi.callsTo("GET", /^\/api\/state$/).length).toBeGreaterThan(0));
     act(openSockets);
 
-    const aside = await screen.findByRole("complementary");
-    const routerBtn = await within(aside).findByRole("button", { name: /Router/ });
+    const rail = await screen.findByRole("navigation", { name: "Workspace" });
+    const routerBtn = await within(rail).findByRole("button", { name: /Router/ });
     expect(routerBtn).toHaveAttribute("aria-current", "page");
-    expect(routerBtn.className).toContain("bg-sidebar-active");
+    expect(routerBtn.querySelector("[data-slot='router-avatar']")).not.toBeNull();
     expect(routerBtn.className).not.toContain("jelly");
-    // 2 个跨机待决项（Tokyo gate + 本机 decision），副标题取最新待决问题
-    await waitFor(() => expect(within(routerBtn).getByText("Tokyo 要灰度吗？")).toBeInTheDocument());
-    expect(within(routerBtn).getByText("2")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("rail-router-badge")).toHaveTextContent("2"));
 
-    // 左栏项目列表不再重复挂顶置 Needs You 区域
-    const projectsNav = within(aside).getByRole("navigation", { name: "Conversations" });
-    expect(within(projectsNav).queryByRole("region", { name: "Needs You" })).toBeNull();
-
-    unmount();
-
-    // 切到 72px 窄栏：只显示 40px 刀标与右下角绿点 + 分隔短横线
-    installViewport("rail");
-    renderWithQuery(<App />);
-    await waitFor(() => expect(localApi.callsTo("GET", /^\/api\/state$/).length).toBeGreaterThan(1));
-    act(openSockets);
-    const railAside = await screen.findByRole("complementary");
-    const railBtn = await within(railAside).findByRole("button", { name: /Router/ });
-    expect(railBtn).toHaveAttribute("aria-current", "page");
-    expect(railBtn.querySelector("[data-slot='router-avatar']")).not.toBeNull();
-    expect(railBtn.querySelector(".bg-status-active")).not.toBeNull();
+    await userEvent.click(within(rail).getByRole("button", { name: /MacBook/ }));
+    const projectsRegion = await screen.findByRole("region", { name: "Project managers" });
+    expect(within(projectsRegion).queryByRole("region", { name: "Needs You" })).toBeNull();
   });
 });
 
@@ -501,7 +483,7 @@ describe("Needs You 托盘", () => {
 
     // 路径 B + 失败回滚：输入备注后点击选项，接口报错时卡片回弹且保留输入的备注并显示中文错误
     failNext = true;
-    await user.type(within(card2).getByPlaceholderText("Add a note, or type a custom reply…"), "补在第 21 节末尾");
+    await user.type(within(card2).getByLabelText("Your reply"), "补在第 21 节末尾");
     await user.click(within(card2).getByRole("button", { name: /立即更新/ }));
     await waitFor(() => expect(within(tray).getByRole("alert")).toHaveTextContent("该待决项已被其他终端处理"));
     const restored = within(tray).getByText("是否同步更新文档？").closest("article")!;
@@ -511,7 +493,7 @@ describe("Needs You 托盘", () => {
     await user.click(within(tray).getByRole("button", { name: /保留多少天历史？/ }));
     expect(tray.querySelectorAll("article")).toHaveLength(1);
     const card3 = within(tray).getByText("保留多少天历史？").closest("article")!;
-    await user.type(within(card3).getByPlaceholderText("Add a note, or type a custom reply…"), "改成 45 天折中{Enter}");
+    await user.type(within(card3).getByLabelText("Your reply"), "改成 45 天折中{Enter}");
     await waitFor(() =>
       expect(localApi.callsTo("POST", /^\/api\/router\/items\/103\/resolve$/)[0]?.body).toMatchObject({ optionIndex: null, note: "改成 45 天折中" }),
     );
@@ -587,8 +569,8 @@ describe("Needs You 托盘", () => {
     expect(within(card1).getByText("Recommended")).toBeInTheDocument();
 
     // 1. 直接输入自定义修改意见并点发送箭头（未选「通过」/「打回」）：路由到远端 Tokyo /decide，本机零请求
-    await user.type(within(card1).getByPlaceholderText("Add a note, or type a custom reply…"), "缓存改用 lru-cache");
-    await user.click(within(card1).getByRole("button", { name: "Send reply" }));
+    await user.type(within(card1).getByLabelText("Your reply"), "缓存改用 lru-cache");
+    await user.click(within(card1).getByRole("button", { name: "Send" }));
     await waitFor(() =>
       expect(tokyoApi!.callsTo("POST", /^\/api\/task-graphs\/5\/nodes\/design\/decide$/)).toHaveLength(1),
     );
@@ -619,6 +601,193 @@ describe("Needs You 托盘", () => {
     expect(tokyoApi!.callsTo("POST", /^\/api\/task-graphs\/5\/nodes\/design\/decide$/)[1]!.body).toMatchObject({
       choice: "通过",
     });
+  });
+
+  it("草稿保活与防串卡：在默认展开卡编辑期间新卡插入不抢焦点不切卡，且继续回车提交给原卡而非新卡", async () => {
+    const item1 = makeDecisionItem({
+      id: 101,
+      pmId: 1,
+      projectId: 10,
+      conversationId: 1,
+      question: "小林：缓存层用什么？",
+      options: ["lru-cache", "Map"],
+      askMessageId: 501,
+      createdAt: 20_000,
+      updatedAt: 20_000,
+    });
+    const item2 = makeDecisionItem({
+      id: 102,
+      pmId: 2,
+      projectId: 11,
+      conversationId: 2,
+      question: "老马：数据库迁移立即执行吗？",
+      options: ["执行", "暂缓"],
+      askMessageId: 502,
+      createdAt: 30_000,
+      updatedAt: 30_000,
+    });
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "老马" })],
+      projects: [
+        makeProject({ id: 10, name: "web", pmId: 1, conversationId: 1 }),
+        makeProject({ id: 11, name: "db", pmId: 2, conversationId: 2 }),
+      ],
+      conversations: [
+        makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } }),
+        makeConvSnapshot([], { conversation: { id: 2, pmId: 2, projectId: 11, title: "老马" } }),
+      ],
+      router: { ...emptyRouterSlice(), items: [item1] },
+    });
+    const { localApi } = installFleet({ local: localSnap });
+    const user = userEvent.setup();
+    await openRouter();
+
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    const card1 = within(tray).getByText("小林：缓存层用什么？").closest("article")!;
+    const replyBox = within(card1).getByLabelText("Your reply") as HTMLTextAreaElement;
+    await user.type(replyBox, "给小林的意见：用 lru-cache");
+    expect(document.activeElement).toBe(replyBox);
+
+    act(() => localSocket().push(changeOf(20, "router.item.created", { item: item2 })));
+
+    await waitFor(() => expect(within(tray).getByRole("button", { name: /老马：数据库迁移立即执行吗？/ })).toBeInTheDocument());
+    expect(within(tray).getByText("小林：缓存层用什么？").closest("article")).toBe(card1);
+    expect(replyBox.value).toBe("给小林的意见：用 lru-cache");
+    expect(document.activeElement).toBe(replyBox);
+
+    await user.type(replyBox, "！{Enter}");
+    await waitFor(() => expect(localApi.callsTo("POST", /^\/api\/router\/items\/101\/resolve$/)).toHaveLength(1));
+    expect(localApi.callsTo("POST", /^\/api\/router\/items\/101\/resolve$/)[0]!.body).toMatchObject({
+      optionIndex: null,
+      note: "给小林的意见：用 lru-cache！",
+    });
+    expect(localApi.callsTo("POST", /^\/api\/router\/items\/102\/resolve$/)).toHaveLength(0);
+  });
+
+  it("草稿保活与防串卡：当前卡被远端定案/替换时保留只读可复制草稿且绝不把焦点移给下一张卡；空草稿切卡亦不串焦", async () => {
+    const item1 = makeDecisionItem({
+      id: 101,
+      pmId: 1,
+      projectId: 10,
+      conversationId: 1,
+      question: "小林：现在发版吗？",
+      options: ["发版", "再等等"],
+      askMessageId: 601,
+      createdAt: 30_000,
+      updatedAt: 30_000,
+    });
+    const item2 = makeDecisionItem({
+      id: 102,
+      pmId: 2,
+      projectId: 11,
+      conversationId: 2,
+      question: "老马：删掉旧索引吗？",
+      options: ["删", "留着"],
+      askMessageId: 602,
+      createdAt: 20_000,
+      updatedAt: 20_000,
+    });
+    const item3 = makeDecisionItem({
+      id: 103,
+      pmId: 2,
+      projectId: 11,
+      conversationId: 2,
+      question: "老马：改端口吗？",
+      options: ["改", "不改"],
+      askMessageId: 603,
+      createdAt: 10_000,
+      updatedAt: 10_000,
+    });
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "老马" })],
+      projects: [
+        makeProject({ id: 10, name: "web", pmId: 1, conversationId: 1 }),
+        makeProject({ id: 11, name: "db", pmId: 2, conversationId: 2 }),
+      ],
+      conversations: [
+        makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } }),
+        makeConvSnapshot([], { conversation: { id: 2, pmId: 2, projectId: 11, title: "老马" } }),
+      ],
+      router: { ...emptyRouterSlice(), items: [item1, item2, item3] },
+    });
+    const { localApi } = installFleet({ local: localSnap });
+    const user = userEvent.setup();
+    await openRouter();
+
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    const card1 = within(tray).getByText("小林：现在发版吗？").closest("article")!;
+    await user.type(within(card1).getByLabelText("Your reply"), "马上执行");
+
+    act(() => localSocket().push(changeOf(21, "router.item.updated", { item: { ...item1, status: "superseded" } })));
+
+    const closedCard = await waitFor(() => {
+      const el = tray.querySelector<HTMLElement>("[data-closed-draft-card]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(within(closedCard).getByText("Closed")).toBeInTheDocument();
+    expect(within(closedCard).getByText("Unsent reply")).toBeInTheDocument();
+    expect(within(closedCard).getByText("马上执行")).toBeInTheDocument();
+    expect(within(closedCard).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(document.activeElement?.tagName).not.toBe("TEXTAREA");
+    await user.keyboard("吧{Enter}");
+    expect(localApi.callsTo("POST", /^\/api\/router\/items\/102\/resolve$/)).toHaveLength(0);
+
+    // 点 Dismiss 后展开下一张卡；即使空草稿聚焦 item2，item2 被远端关闭后焦点也绝不落到 item3
+    await user.click(within(closedCard).getByRole("button", { name: "Dismiss" }));
+    const card2 = await waitFor(() => within(tray).getByText("老马：删掉旧索引吗？").closest("article")!);
+    const box2 = within(card2).getByLabelText("Your reply");
+    await user.click(box2);
+    expect(document.activeElement).toBe(box2);
+
+    act(() => localSocket().push(changeOf(22, "router.item.updated", { item: { ...item2, status: "superseded" } })));
+
+    const card3 = await waitFor(() => within(tray).getByText("老马：改端口吗？").closest("article")!);
+    expect(document.activeElement).not.toBe(within(card3).getByLabelText("Your reply"));
+    await user.keyboard("误发{Enter}");
+    expect(localApi.callsTo("POST", /^\/api\/router\/items\/103\/resolve$/)).toHaveLength(0);
+  });
+
+  it("同一张拍板卡在 Router 与 PM 对话 AskCard 之间共享草稿", async () => {
+    const askMsg = makeMessage({
+      id: 701,
+      conversationId: 1,
+      text: "确认 API 版本",
+      meta: { needsUser: true, options: ["v1", "v2"] },
+      dedupeKey: "ask:1:701",
+    });
+    const item = makeDecisionItem({
+      id: 101,
+      pmId: 1,
+      projectId: 10,
+      conversationId: 1,
+      question: "确认 API 版本",
+      options: ["v1", "v2"],
+      askMessageId: 701,
+      createdAt: 20_000,
+      updatedAt: 20_000,
+    });
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 10, name: "web", pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([askMsg], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+      router: { ...emptyRouterSlice(), items: [item] },
+    });
+    installFleet({ local: localSnap });
+    const user = userEvent.setup();
+    await openRouter();
+
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    const card = within(tray).getByText("确认 API 版本").closest("article")!;
+    await user.type(within(card).getByLabelText("Your reply"), "先发 v2 并保留 v1 兼容");
+
+    await user.click(within(card).getByRole("button", { name: "小林" }));
+    const askCard = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('[data-message-id="701"] [data-ask-card]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect((within(askCard).getByRole("textbox", { name: "Your reply" }) as HTMLTextAreaElement).value).toBe("先发 v2 并保留 v1 兼容");
   });
 
   it("收起的行超过 3 条出 Show more；标题整行可点收起，收起后时间流照常；防重入：同一帧连点同一张卡只提交一次", async () => {
@@ -664,7 +833,7 @@ describe("Needs You 托盘", () => {
     await act(async () => releaseResolve!());
   });
 
-  it("补充依据按 Markdown 渲染（段落、编号、子列表、行内代码），第一段是摘要（超过 3 行收起），其余是细节默认收起，Show more / Show less 一起管；托盘不画全宽分割线、滚动区留底边、时间流顶边渐隐；长选项和 Recommended 分开排", async () => {
+  it("补充依据按 Markdown 完整展开（段落、编号、子列表、行内代码），不折叠、不出 Show more；托盘不画全宽分割线、滚动区留底边、时间流顶边渐隐；长选项和 Recommended 分开排", async () => {
     const longContext = [
       "方案文档：`docs/orchestration-skill-design.md`",
       "",
@@ -692,94 +861,53 @@ describe("Needs You 托盘", () => {
       },
     });
     installFleet({ local: localSnap });
-    // jsdom 不排版：摘要框的内容高度按正文行数算（每行 26.4px = 1.65 × 16px，一行 30 字），框高 3 行（收起时）
-    const proto = HTMLElement.prototype;
-    const lines = (el: HTMLElement) => Math.ceil((el.textContent ?? "").length / 30);
-    Object.defineProperty(proto, "scrollHeight", {
-      configurable: true,
-      get(this: HTMLElement) {
-        return this.hasAttribute("data-card-lead") ? lines(this) * 26.4 : 0;
-      },
-    });
-    Object.defineProperty(proto, "clientHeight", {
-      configurable: true,
-      get(this: HTMLElement) {
-        if (!this.hasAttribute("data-card-lead")) return 0;
-        const full = lines(this) * 26.4;
-        return this.classList.contains("card-lead-clamp") ? Math.min(full, 3 * 26.4) : full;
-      },
-    });
-    try {
-      const user = userEvent.setup();
-      await openRouter();
-      const tray = await screen.findByRole("region", { name: "Needs You" });
+    const user = userEvent.setup();
+    await openRouter();
+    const tray = await screen.findByRole("region", { name: "Needs You" });
 
-      // 托盘本身不画横贯主区的线：线在对话列宽的内层；滚动区上下留出渐隐带的内边距，卡片底边不贴着裁剪边
-      expect(tray.className).not.toMatch(/\bborder-b\b/);
-      expect(tray.firstElementChild!.className).toContain("border-b");
-      // 线下留 12px 空白再接时间流的视口，滚上来的字不贴着线
-      expect(tray.className).toContain("pb-3");
-      const scrollBox = tray.querySelector<HTMLElement>(".router-tray-scroll")!;
-      expect(scrollBox.className).toContain("pb-5");
-      expect(scrollBox.className).toContain("pt-2");
-      // 时间流顶边渐隐，内容上内边距和渐隐带一样高
-      expect(timeline().className).toContain("router-timeline");
-      expect(timeline().firstElementChild!.className).toContain("pt-8");
-      // 窄屏表格：最宽是消息列（长说明在列内折行，不在滚动边上切半个字），时间流里前几列短词不折；行内代码折行时两段各自带圆角
-      const css = readFileSync("src/web/styles.css", "utf8");
-      expect(css).toMatch(/\n\.markdown table\s*\{[^}]*max-width:\s*100%/);
-      expect(css).toMatch(/\.router-timeline \.markdown :is\(th, td\):not\(:last-child\)\s*\{[^}]*white-space:\s*nowrap/);
-      expect(css).toMatch(/\n\.markdown code\s*\{[^}]*(?<!-webkit-)box-decoration-break:\s*clone/);
+    // 托盘本身不画横贯主区的线：线在对话列宽的内层；滚动区上下留出渐隐带的内边距，卡片底边不贴着裁剪边
+    expect(tray.className).not.toMatch(/\bborder-b\b/);
+    expect(tray.firstElementChild!.className).toContain("border-b");
+    // 线下留 12px 空白再接时间流的视口，滚上来的字不贴着线
+    expect(tray.className).toContain("pb-3");
+    const scrollBox = tray.querySelector<HTMLElement>(".router-tray-scroll")!;
+    expect(scrollBox.className).toContain("pb-5");
+    expect(scrollBox.className).toContain("pt-2");
+    // 时间流顶边渐隐，内容上内边距和渐隐带一样高
+    expect(timeline().className).toContain("router-timeline");
+    expect(timeline().firstElementChild!.className).toContain("pt-8");
+    // 窄屏表格：最宽是消息列（长说明在列内折行，不在滚动边上切半个字），时间流里前几列短词不折；行内代码折行时两段各自带圆角
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/\n\.markdown table\s*\{[^}]*max-width:\s*100%/);
+    expect(css).toMatch(/\.router-timeline \.markdown :is\(th, td\):not\(:last-child\)\s*\{[^}]*white-space:\s*nowrap/);
+    expect(css).toMatch(/\n\.markdown code\s*\{[^}]*(?<!-webkit-)box-decoration-break:\s*clone/);
 
-      const card = tray.querySelector("article")!;
-      const lead = card.querySelector<HTMLElement>("[data-card-lead]")!;
-      expect(lead).toHaveTextContent("方案文档：docs/orchestration-skill-design.md");
-      expect(lead.className).toContain("text-minor");
-      expect(lead.className).toContain("text-muted-foreground");
-      expect(lead).not.toHaveAttribute("data-overflowing");
-      // 细节默认收起，Show more 展开、Show less 收回
-      expect(card.querySelector("[data-card-details]")).toBeNull();
-      const more = within(card).getByRole("button", { name: "Show more" });
-      expect(more).toHaveAttribute("aria-expanded", "false");
-      expect(more).toHaveAttribute("aria-controls", card.querySelector("[data-card-body]")!.id);
-      await user.click(more);
-      const details = card.querySelector<HTMLElement>("[data-card-details]")!;
-      // Markdown：段落、编号列表、子列表、行内代码都是真的元素，不是一坨纯文本
-      expect(details.querySelector("ol > li")).toHaveTextContent(/拆不拆只看/);
-      expect(details.querySelectorAll("ol > li > ul > li")).toHaveLength(2);
-      expect([...card.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["docs/orchestration-skill-design.md", "fusa-task-graph"]);
-      expect(details.className).toContain("text-muted-foreground");
-      await user.click(within(card).getByRole("button", { name: "Show less" }));
-      expect(card.querySelector("[data-card-details]")).toBeNull();
+    const card = tray.querySelector("article")!;
+    const body = card.querySelector<HTMLElement>("[data-card-body]")!;
+    expect(body).toHaveTextContent("方案文档：docs/orchestration-skill-design.md");
+    expect(within(card).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
+    // Markdown：段落、编号列表、子列表、行内代码完整展开，不折叠
+    expect(body.querySelector("ol > li")).toHaveTextContent(/拆不拆只看/);
+    expect(body.querySelectorAll("ol > li > ul > li")).toHaveLength(2);
+    expect([...card.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["docs/orchestration-skill-design.md", "fusa-task-graph"]);
 
-      // 长选项：键帽、文字、Recommended 顶对齐，Recommended 和文字分开（放得下在右边，放不下换到下面）
-      const recOption = within(card).getByRole("button", { name: new RegExp(longOption) });
-      expect(recOption.className).toContain("items-start");
-      const rec = within(recOption).getByText("Recommended");
-      expect(rec.parentElement!.className).toContain("flex-wrap");
-      expect(rec.previousElementSibling).toHaveTextContent(longOption);
+    // 长选项：键帽、文字、Recommended 顶对齐，Recommended 和文字分开（放得下在右边，放不下换到下面）
+    const recOption = within(card).getByRole("button", { name: new RegExp(longOption) });
+    expect(recOption.className).toContain("items-start");
+    const rec = within(recOption).getByText("Recommended");
+    expect(rec.parentElement!.className).toContain("flex-wrap");
+    expect(rec.previousElementSibling).toHaveTextContent(longOption);
 
-      // 短的不收起、不出按钮；换一张卡展开状态不带过去
-      await user.click(within(tray).getByRole("button", { name: /要不要覆盖手机？/ }));
-      const shortCard = tray.querySelector("article")!;
-      expect(within(shortCard).getByText("只差手机外壳")).toBeInTheDocument();
-      expect(within(shortCard).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
-      expect(shortCard.querySelector("[data-card-lead]")).not.toHaveAttribute("data-overflowing");
+    // 短卡与长卡都完整展示，不出折叠按钮
+    await user.click(within(tray).getByRole("button", { name: /要不要覆盖手机？/ }));
+    const shortCard = tray.querySelector("article")!;
+    expect(within(shortCard).getByText("只差手机外壳")).toBeInTheDocument();
+    expect(within(shortCard).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
 
-      // 摘要超过 3 行：收起、底部渐隐，Show more 放开
-      await user.click(within(tray).getByRole("button", { name: /首页改版要不要上？/ }));
-      const longCard = tray.querySelector("article")!;
-      const longLead = longCard.querySelector<HTMLElement>("[data-card-lead]")!;
-      expect(longLead.className).toContain("card-lead-clamp");
-      expect(longLead).toHaveAttribute("data-overflowing");
-      await user.click(within(longCard).getByRole("button", { name: "Show more" }));
-      expect(longLead.className).not.toContain("card-lead-clamp");
-      expect(longLead).not.toHaveAttribute("data-overflowing");
-    } finally {
-      // 两个 getter 原本在 Element.prototype 上，删掉 HTMLElement.prototype 上的这层就还原了
-      Reflect.deleteProperty(proto, "scrollHeight");
-      Reflect.deleteProperty(proto, "clientHeight");
-    }
+    await user.click(within(tray).getByRole("button", { name: /首页改版要不要上？/ }));
+    const longCard = tray.querySelector("article")!;
+    expect(longCard.querySelector<HTMLElement>("[data-card-body]")).toHaveTextContent("首页改版".repeat(45));
+    expect(within(longCard).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
   });
 
   it("手机外壳下托盘上限降为 45dvh 并保持内部纵向滚动，第一张卡完整展开、其余收成单行", async () => {
@@ -852,7 +980,7 @@ describe("时间流：指令回合", () => {
     // 用户说的话：靠右的气泡，和项目经理对话里的用户气泡同一套
     const bubble = turn.querySelector("[data-bubble]")!;
     expect(bubble.className).toContain("bg-bubble-me");
-    expect(bubble.className).toContain("rounded-[22px]");
+    expect(bubble.className).not.toMatch(/rounded-/);
     expect(bubble.closest("[data-side='right']")).not.toBeNull();
     // 总助的结果：嫩芽铃头像 + Router，Markdown 全文
     expect(within(turn).getByText("Router")).toBeInTheDocument();
@@ -866,7 +994,7 @@ describe("时间流：指令回合", () => {
     expect(reply.querySelector(".truncate, [class*='line-clamp']")).toBeNull();
     expect(within(turn).getByRole("button", { name: "Copy" })).toBeInTheDocument();
     // 回合没有外框和底色
-    expect(turn.className).not.toMatch(/border|bg-sidebar|rounded-2xl/);
+    expect(turn.className).not.toMatch(/border|bg-sidebar|rounded-/);
 
     expect(within(turnOf("把所有项目的状态都列出来")).getByText("Reply truncated")).toHaveClass("text-muted-foreground");
     expect(within(turn).queryByText("Reply truncated")).toBeNull();
@@ -915,7 +1043,7 @@ describe("时间流：指令回合", () => {
     installFleet({ local: localSnap, tokyo: tokyoSnap });
     const user = userEvent.setup();
     await openRouter();
-    const backToRouter = () => user.click(within(screen.getByRole("complementary", { name: "Sidebar" })).getByRole("button", { name: /Router/ }));
+    const backToRouter = () => user.click(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: /Router/ }));
 
     // 按时间从上到下
     await waitFor(() => expect(turns().map((t) => t.querySelector("[data-bubble]")!.textContent)).toEqual(["让小林检查一下缓存上限", "开个 Piece 查慢测", "让阿青回滚"]));
@@ -927,7 +1055,7 @@ describe("时间流：指令回合", () => {
     expect(pmRow).toHaveTextContent("MacBook");
     expect(pmRow.textContent).not.toMatch(/[·|/]/);
     expect(pmRow.className).toContain("pointer-coarse:min-h-11");
-    expect(pmRow.className).toContain("hover:bg-jelly-hover");
+    expect(pmRow.className).toContain("hover:bg-hover");
     // 轨道 A 成功：回执那句话和去向行重复，不画；也就没有复制键
     expect(within(pmTurn).queryByText(/已转给本机/)).toBeNull();
     expect(within(pmTurn).queryByRole("button", { name: "Copy" })).toBeNull();
@@ -1084,10 +1212,13 @@ describe("时间流：指令回合", () => {
 
     // 4. 在 Router 输入草稿后切去具体 PM 对话再切回 Router，草稿不丢失
     await user.type(input, "未发完的跨项目想法");
-    const aside = screen.getByRole("complementary");
-    await user.click(within(aside).getByRole("button", { name: /小林/ }));
+    const railNav = () => screen.getByRole("navigation", { name: "Workspace" });
+    act(() => {
+      window.history.pushState(null, "", "/#/c/1");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
     expect(await screen.findByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
-    await user.click(within(aside).getByRole("button", { name: /Router/ }));
+    await user.click(within(railNav()).getByRole("button", { name: /Router/ }));
     expect(await screen.findByDisplayValue("未发完的跨项目想法")).toBeInTheDocument();
   });
 
@@ -1095,11 +1226,14 @@ describe("时间流：指令回合", () => {
     const { localApi } = installFleet({});
     const user = userEvent.setup();
     await openRouter();
-    const aside = screen.getByRole("complementary");
+    const railNav = () => screen.getByRole("navigation", { name: "Workspace" });
     const leaveAndComeBack = async () => {
-      await user.click(within(aside).getByRole("button", { name: /小林/ }));
+      act(() => {
+        window.history.pushState(null, "", "/#/c/1");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
       expect(await screen.findByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
-      await user.click(within(aside).getByRole("button", { name: /Router/ }));
+      await user.click(within(railNav()).getByRole("button", { name: /Router/ }));
       await screen.findByRole("heading", { level: 1, name: "Router" });
     };
     const commandCalls = () => localApi.callsTo("POST", /^\/api\/router\/commands$/);
@@ -1308,7 +1442,7 @@ describe("时间流：简报、已读、贴底和历史", () => {
     await waitFor(() => expect(briefings().map((b) => b.querySelector(".markdown")!.textContent)).toEqual(["旧简报：上周已经看过", "PR #398 已合并，回归全绿", "第二条未读", "Tokyo 部署完成"]));
 
     // 没有容器、没有 Done
-    expect(briefings()[1]!.className).not.toMatch(/border|bg-sidebar|bg-background|rounded-2xl/);
+    expect(briefings()[1]!.className).not.toMatch(/border|bg-sidebar|bg-background|rounded-/);
     expect(briefings()[1]!.querySelector("strong")).toHaveTextContent("已合并");
     expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Archive all" })).toBeNull();
@@ -1323,9 +1457,8 @@ describe("时间流：简报、已读、贴底和历史", () => {
     expect(tokyoHead).toHaveTextContent("Tokyo");
     expect(tokyoHead.textContent).not.toMatch(/[·|/]/);
 
-    // 链接行是细节，默认收起（docs/ui-standard.md 第 22 条）。外链是普通行内链接（带图标，不用胶囊）；worker:N 可点；文件路径没有可预览的副本，画成普通文字
-    expect(within(briefings()[1]!).queryByRole("link", { name: /PR #398/ })).toBeNull();
-    await user.click(within(briefings()[1]!).getByRole("button", { name: "Show more" }));
+    // 链接行直接展示在正文下，不再折叠到 Show more。外链是普通行内链接（带图标，不用胶囊）；worker:N 可点；文件路径没有可预览的副本，画成普通文字
+    expect(within(briefings()[1]!).queryByRole("button", { name: "Show more" })).toBeNull();
     const external = within(briefings()[1]!).getByRole("link", { name: /PR #398/ });
     expect(external).toHaveAttribute("href", "https://github.com/example/agent-hub/pull/398");
     expect(external).toHaveAttribute("target", "_blank");
@@ -1359,7 +1492,7 @@ describe("时间流：简报、已读、贴底和历史", () => {
     // 链接和名字都能跳
     await user.click(within(briefings()[1]!).getByRole("button", { name: "Piece #30" }));
     expect(window.location.hash).toBe("#/w/30");
-    await user.click(within(screen.getByRole("complementary", { name: "Sidebar" })).getByRole("button", { name: /Router/ }));
+    await user.click(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: /Router/ }));
     // 离开再回来：都读过了，分隔线没了
     await waitFor(() => expect(timeline().querySelector("[data-new-divider]")).toBeNull());
     await user.click(within(timeline()).getByRole("button", { name: "阿青" }));
@@ -2005,7 +2138,7 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(trigger.textContent).not.toMatch(/[·|/]/);
     expect(trigger.className).not.toContain("bg-muted");
 
-    // 2. 点开桌面端 Popover：Auto 选中，已就绪厂商可选，未登录厂商灰显 Not signed in 禁用，未安装厂商不塞满列表
+    // 2. 点开桌面端 Popover：Auto 选中，只列可用厂商；未登录与未安装厂商都不出现
     await user.click(trigger);
     const popover = await screen.findByRole("dialog", { name: "Router model" });
     expect(popover).toHaveAttribute("data-slot", "popover-content");
@@ -2017,10 +2150,9 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(group).toHaveClass("grid-cols-1");
     expect(group.parentElement).toHaveClass("grid-cols-1");
     expect(within(group).getByRole("radio", { name: new RegExp(`Auto.*${firstPresetShort}`) })).toHaveAttribute("aria-checked", "true");
-    const signedOutRadio = within(group).getByRole("radio", { name: new RegExp(`${signedOutSpec.label}.*Not signed in`) });
-    expect(signedOutRadio).toBeDisabled();
+    expect(within(group).queryByRole("radio", { name: new RegExp(signedOutSpec.label) })).toBeNull();
     for (const spec of VENDOR_LIST) {
-      if (spec.id !== firstSpec.id && spec.id !== secondSpec.id && spec.id !== signedOutSpec.id) {
+      if (spec.id !== firstSpec.id && spec.id !== secondSpec.id) {
         expect(within(group).queryByRole("radio", { name: new RegExp(spec.label) })).toBeNull();
       }
     }
@@ -2044,8 +2176,11 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     // 4. 展开细节：切换该家其他模型与思考程度，每次变更立即调 putRouterSettings
     await user.click(detailsTrigger);
     expect(detailsTrigger).toHaveAttribute("aria-expanded", "true");
-    const modelSelect = within(popover).getByRole("combobox", { name: "Model" });
-    await user.selectOptions(modelSelect, altModelId);
+    const pickOption = async (name: string, label: RegExp | string) => {
+      await user.click(within(popover).getByRole("combobox", { name }));
+      await user.click(await screen.findByRole("option", { name: label }));
+    };
+    await pickOption("Model", altModelLabel);
     await waitFor(() => expect(putCalls()).toHaveLength(2));
     expect(putCalls()[1]!.body).toMatchObject({
       vendor: secondSpec.id,
@@ -2053,8 +2188,7 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     });
     expect(screen.getByRole("button", { name: new RegExp(`Router model: ${secondSpec.label} ${altModelLabel}`) })).toBeInTheDocument();
 
-    const effortSelect = within(popover).getByRole("combobox", { name: "Effort" });
-    await user.selectOptions(effortSelect, altEffort);
+    await pickOption("Effort", effortLabel(altEffort, secondSpec.id, secondCat));
     await waitFor(() => expect(putCalls()).toHaveLength(3));
     expect(putCalls()[2]!.body).toEqual({
       vendor: secondSpec.id,
@@ -2085,8 +2219,8 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(putCalls()[4]!.body).toEqual({ vendor: null, model: null, effort: null });
     expect(screen.getByRole("button", { name: new RegExp(`Router model: Auto ${firstPresetShort}`) })).toBeInTheDocument();
 
-    // 7. 存在未安装/未登录厂商时，点击底部 Manage providers… 关闭 Popover 并打开桌面 Settings → Providers
-    await user.click(within(popover).getByRole("button", { name: "Manage providers…" }));
+    // 7. 固定末尾带 Add provider…：点击关闭 Popover 并打开桌面 Settings → Providers
+    await user.click(within(popover).getByRole("button", { name: "Add provider…" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Router model" })).toBeNull());
     const settingsDialog = await screen.findByRole("dialog", { name: "Settings" });
     expect(within(settingsDialog).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
@@ -2124,12 +2258,13 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
 
     // 第二次：换模型，请求挂着时第一次的回声才到
     await user.click(within(popover).getByRole("button", { name: /Model & effort/ }));
-    await user.selectOptions(within(popover).getByRole("combobox", { name: "Model" }), altModelId);
+    await user.click(within(popover).getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByRole("option", { name: altModelLabel }));
     await waitFor(() => expect(replies).toHaveLength(2));
     expect(altTrigger()).toBeInTheDocument();
     act(() => localSocket().push(changeOf(60, "router.settings.updated", { settings: { ...preset, updatedAt: 1_000 } })));
     expect(altTrigger()).toBeInTheDocument();
-    expect(within(popover).getByRole("combobox", { name: "Model" })).toHaveValue(altModelId);
+    expect(within(popover).getByRole("combobox", { name: "Model" })).toHaveTextContent(altModelLabel);
 
     // 第二次确认、回声到达：一直是第二次的值
     await act(async () => replies[1]!(2_000));
@@ -2197,8 +2332,8 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(within(updatedTrigger).getByText(secondSpec.label)).toHaveClass("@max-[25rem]/chat:hidden");
     expect(within(updatedTrigger).getByText(secondPresetShort)).toHaveClass("min-w-0", "truncate");
 
-    // 手机端点击 Manage providers… 关闭抽屉并钻取进入 #/settings/providers
-    await user.click(within(drawer).getByRole("button", { name: "Manage providers…" }));
+    // 手机端点击 Add provider… 关闭抽屉并钻取进入 #/settings/providers
+    await user.click(within(drawer).getByRole("button", { name: "Add provider…" }));
     await waitFor(() => expect(window.location.hash).toBe("#/settings/providers"));
   });
 });

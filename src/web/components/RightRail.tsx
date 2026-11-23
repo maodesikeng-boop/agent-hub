@@ -37,12 +37,11 @@ const NO_LOOK = defaultLookOf(0);
 
 const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(worker.activity) || !IDLE_ACTIVITIES.has(worker.activity));
 
-const RIGHT_RAIL_ID = "right-rail";
-
-const ROW_BASE = "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const ROW_BASE =
+  "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 border-2 border-transparent px-2.5 py-2 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]";
 const ROW = cn(ROW_BASE, "gap-3");
-const ITEM_HOVER = "hover:bg-jelly-hover";
-const ITEM_SELECTED = "bg-jelly";
+const ITEM_HOVER = "hover:bg-hover";
+const ITEM_SELECTED = "border-open-line bg-open";
 const ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 const ICON_STROKE = 1.5;
 const TONE_DOT: Record<WorkerTone, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger", neutral: "bg-muted-foreground/50" };
@@ -103,10 +102,10 @@ function GroupTitle({
         type="button"
         aria-expanded={!collapsed}
         aria-controls={bodyId}
-        className="-mx-2.5 flex h-8 pointer-coarse:h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-2 rounded-xl px-2.5 text-left transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="-mx-2.5 flex h-8 pointer-coarse:h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-2 px-2.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
         onClick={onToggle}
       >
-        {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
+        {dot && <span className="size-1.5 shrink-0 bg-primary" aria-hidden="true" />}
         <span className="min-w-0 truncate">{children}</span>
         <ChevronRight
           className={cn(
@@ -144,7 +143,7 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
 
 function MoreToggle({ expanded, onClick, children, ...rest }: { expanded: boolean; onClick: () => void; children: React.ReactNode } & React.AriaAttributes) {
   return (
-    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-minor text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
+    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-minor text-muted-foreground hover:bg-hover hover:text-foreground")} onClick={onClick} {...rest}>
       {children}
     </button>
   );
@@ -225,43 +224,13 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
       className={cn(ROW, "items-baseline", active ? ITEM_SELECTED : ITEM_HOVER)}
       onClick={onOpen}
     >
-      <span className={cn("min-w-0 truncate text-body leading-5", worker.ended && "opacity-60", busy && "status-shimmer")}>
+      <span className={cn("min-w-0 truncate text-body leading-5", worker.ended && "opacity-65", busy && "status-shimmer")}>
         {title}
         {busy && <ShimmerOverlay text={title} />}
       </span>
     </button>
   );
 }
-
-export const RightRailToggle = memo(function RightRailToggle({
-  visible,
-  open,
-  attention,
-  look = NO_LOOK,
-  onToggle,
-}: {
-  visible: boolean;
-  open: boolean;
-  attention: boolean;
-  look?: SlimeLook;
-  onToggle: () => void;
-}) {
-  if (!visible) return null;
-  return (
-    <Button
-      variant="slot"
-      size="icon"
-      aria-label={open ? "Hide side panel" : attention ? "Show side panel (needs you)" : "Show side panel"}
-      aria-expanded={open}
-      aria-controls={RIGHT_RAIL_ID}
-      className={cn("relative shrink-0", open && "text-foreground")}
-      onClick={onToggle}
-    >
-      <Avatar look={look} size={20} neutral />
-      {!open && attention && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" aria-hidden="true" />}
-    </Button>
-  );
-});
 
 const NEVER = () => false;
 
@@ -362,7 +331,7 @@ function CompletedGroup({
   );
 
   return (
-    <section aria-labelledby="rail-completed" className="tint-fade py-3">
+    <section aria-labelledby="rail-completed" className="min-w-0 py-3">
       <GroupTitle id="rail-completed" bodyId="rail-completed-body" collapsed={!open} onToggle={() => setOpen((v) => !v)} trailing={trailing}>
         Completed
       </GroupTitle>
@@ -385,7 +354,7 @@ function CompletedGroup({
                   className={cn(ROW, "items-center", ITEM_HOVER)}
                 >
                   <TaskProgressIcon graph={graph} color={look.color} size={18} />
-                  <span className="min-w-0 flex-1 truncate text-body leading-5 opacity-60">{graph.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-body leading-5 opacity-65">{graph.title}</span>
                 </button>
               </li>
             ))}
@@ -411,7 +380,7 @@ function CompletedGroup({
   );
 }
 
-export function RailGroups({
+export const RailGroups = memo(function RailGroups({
   asks,
   workers,
   activeGraphs,
@@ -518,9 +487,9 @@ export function RailGroups({
 
   return (
     <>
-      <div className={cn("right-rail-scroll min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
+      <div className={cn("right-rail-scroll min-h-0 flex-1 divide-y divide-border overflow-x-hidden overflow-y-auto overscroll-y-contain px-5 [contain:layout_style]", className)}>
         {hasAsks && (
-          <section aria-labelledby="rail-asks" className="tint-fade py-3">
+          <section aria-labelledby="rail-asks" className="min-w-0 py-3">
             <GroupTitle
               id="rail-asks"
               bodyId="rail-asks-body"
@@ -542,7 +511,7 @@ export function RailGroups({
           </section>
         )}
         {hasGraphs && activeGraphs !== undefined && (
-          <section aria-labelledby="rail-graphs" className="tint-fade py-3">
+          <section aria-labelledby="rail-graphs" className="min-w-0 py-3">
             <GroupTitle
               id="rail-graphs"
               bodyId="rail-graphs-body"
@@ -567,7 +536,7 @@ export function RailGroups({
           </section>
         )}
         {hasLive && (
-          <section aria-labelledby="rail-workers" className="tint-fade py-3">
+          <section aria-labelledby="rail-workers" className="min-w-0 py-3">
             <GroupTitle
               id="rail-workers"
               bodyId="rail-workers-body"
@@ -618,62 +587,45 @@ export function RailGroups({
       )}
     </>
   );
-}
-
-export const RightRail = memo(function RightRail({
-  asks,
-  workers,
-  activeGraphs,
-  completedGraphCount,
-  projectId,
-  openWorkerId,
-  layout,
-  toggle,
-  look = NO_LOOK,
-  onOpenAsk,
-  onOpenWorker,
-  onLoadMoreWorkers,
-  onNeedWorkers,
-}: {
-  asks: Message[];
-  workers: WorkerEntry[];
-  activeGraphs?: readonly TaskGraph[];
-  completedGraphCount?: number;
-  projectId?: ProjectId | null;
-  openWorkerId: ConversationId | null;
-  onLoadMoreWorkers?: () => Promise<void>;
-  onNeedWorkers?: (workerIds: WorkerId[]) => void;
-  layout: "side" | "top";
-  toggle?: React.ReactNode;
-  look?: SlimeLook;
-  onOpenAsk: (messageId: MessageId) => void;
-  onOpenWorker: (conversationId: ConversationId) => void;
-}) {
-  const side = layout === "side";
-  return (
-    <aside
-      id={RIGHT_RAIL_ID}
-      aria-label="Side panel"
-      className={cn(
-        "tint-fade flex min-w-0 shrink-0 flex-col overflow-hidden bg-surface-chat [contain:layout_style]",
-        side ? "w-80 border-l border-line" : "max-h-[40dvh] border-b border-line",
-      )}
-    >
-      <RailGroups
-        asks={asks}
-        workers={workers}
-        activeGraphs={activeGraphs}
-        completedGraphCount={completedGraphCount}
-        projectId={projectId}
-        look={look}
-        openWorkerId={openWorkerId}
-        toggle={side ? toggle : undefined}
-        className={side ? "pb-4" : "py-1"}
-        onOpenAsk={onOpenAsk}
-        onOpenWorker={onOpenWorker}
-        {...(onLoadMoreWorkers !== undefined ? { onLoadMoreWorkers } : {})}
-        {...(onNeedWorkers !== undefined ? { onNeedWorkers } : {})}
-      />
-    </aside>
-  );
 });
+
+export function PiecesSlot({
+  visible,
+  open,
+  attention,
+  count,
+  look,
+  onToggle,
+}: {
+  visible: boolean;
+  open: boolean;
+  attention: boolean;
+  count: number;
+  look: SlimeLook;
+  onToggle: () => void;
+}) {
+  if (!visible) return null;
+  const label = open ? "Hide Pieces" : attention ? "Show Pieces (needs you)" : "Show Pieces";
+  return (
+    <Button
+      variant="slot"
+      size="default"
+      aria-label={label}
+      aria-expanded={open}
+      onClick={onToggle}
+      className={cn("relative h-9 shrink-0 gap-1.5 px-2.5", open && "bg-slot-hover shadow-[inset_0_2px_0_var(--slot-shade)]")}
+    >
+      <Avatar look={look} size={20} neutral />
+      <span className="text-minor font-medium text-foreground">Pieces</span>
+      {count > 0 && (
+        <span
+          aria-hidden="true"
+          className="grid h-4.5 min-w-4.5 place-items-center bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums"
+        >
+          {count > 99 ? "99+" : count}
+        </span>
+      )}
+      {attention && !open && <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 size-1.5 bg-primary" />}
+    </Button>
+  );
+}

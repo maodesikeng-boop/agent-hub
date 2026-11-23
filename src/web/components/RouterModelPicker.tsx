@@ -7,9 +7,9 @@ import {
   bundledModelCatalog,
   effortLabel,
   effortsFor,
-  isListed,
   isSelectable,
   modelShortLabel,
+  pickableVendorCatalogs,
   resolveExplicitRouterChoice,
   resolveRouterEffortForModel,
   resolveRouterModelPreview,
@@ -23,19 +23,93 @@ import {
 import { localClient } from "../client.ts";
 import { errorText, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import { useModelCatalogs, useRefreshModelCatalogs, useRevalidateModels } from "../models.tsx";
+import { ADD_PROVIDER_LABEL, useModelCatalogs, useRefreshModelCatalogs, useRevalidateModels } from "../models.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Drawer, DrawerContent, DrawerTitle } from "../ui/drawer.tsx";
-import { Select } from "../ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { RadioMark } from "./ChoiceRows.tsx";
 import { RowError } from "./SettingsList.tsx";
 
 const AUTO_VALUE = "auto";
 
 const ROW_INTERACTIVE_CLASS =
-  "-mx-2.5 flex min-h-9 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-3 rounded-xl px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-sidebar-hover active:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 pointer-coarse:min-h-11";
+  "-mx-2.5 flex min-h-9 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-3 px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-hover active:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] pointer-coarse:min-h-11";
+
+interface RouterModelEffortFieldsProps {
+  modelSelectId: string;
+  effortSelectId: string;
+  selectedVendor: AgentVendor;
+  selectedCatalog: ModelCatalog;
+  selectedChoice: { model: string; effort: string | null };
+  unlistedSelectedModel: boolean;
+  showEffort: boolean;
+  supportedEfforts: readonly string[];
+  revalidateModels: () => void;
+  onModelChange: (model: string) => void;
+  onEffortChange: (effort: string) => void;
+}
+
+function RouterModelEffortFields({
+  modelSelectId,
+  effortSelectId,
+  selectedVendor,
+  selectedCatalog,
+  selectedChoice,
+  unlistedSelectedModel,
+  showEffort,
+  supportedEfforts,
+  revalidateModels,
+  onModelChange,
+  onEffortChange,
+}: RouterModelEffortFieldsProps) {
+  return (
+    <CollapsibleContent className="grid gap-1 pt-1">
+      <div className="flex min-h-9 items-center justify-between gap-3 pointer-coarse:min-h-11">
+        <label htmlFor={modelSelectId} className="shrink-0 text-body text-foreground">
+          Model
+        </label>
+        <Select value={selectedChoice.model} onValueChange={onModelChange}>
+          <SelectTrigger id={modelSelectId} aria-label="Model" variant="plain" onPointerDown={revalidateModels} onFocus={revalidateModels}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {selectedCatalog.models.map((m) => (
+              <SelectItem key={m.id} value={m.id} title={m.description ?? undefined}>
+                {m.label}
+              </SelectItem>
+            ))}
+            {unlistedSelectedModel && (
+              <SelectItem value={selectedChoice.model}>
+                {modelShortLabel(selectedVendor, selectedChoice.model, selectedCatalog)}
+              </SelectItem>
+            )}
+          </SelectContent>
+        </Select>
+      </div>
+      {showEffort && selectedChoice.effort !== null && (
+        <div className="flex min-h-9 items-center justify-between gap-3 pointer-coarse:min-h-11">
+          <label htmlFor={effortSelectId} className="shrink-0 text-body text-foreground">
+            Effort
+          </label>
+          <Select value={selectedChoice.effort} onValueChange={onEffortChange}>
+            <SelectTrigger id={effortSelectId} aria-label="Effort" variant="plain">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {supportedEfforts.map((eff) => (
+                <SelectItem key={eff} value={eff}>
+                  {effortLabel(eff, selectedVendor, selectedCatalog)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+    </CollapsibleContent>
+  );
+}
 
 interface OptimisticSettings {
   settings: RouterSettings;
@@ -157,17 +231,12 @@ export const RouterModelPicker = memo(function RouterModelPicker({
     [effectiveSettings, activeResolution, catalogMap],
   );
 
-  const listedCatalogs = useMemo(() => {
-    const pref = effectiveSettings.vendor;
-    const withCurrent =
-      pref !== null && !catalogs.some((c) => c.vendor === pref)
-        ? [...catalogs, bundledModelCatalog(pref)]
-        : catalogs;
-    return withCurrent.filter((c) => isListed(c.availability) || c.vendor === pref);
-  }, [catalogs, effectiveSettings.vendor]);
+  const listedCatalogs = useMemo(
+    () => pickableVendorCatalogs(catalogs, effectiveSettings.vendor),
+    [catalogs, effectiveSettings.vendor],
+  );
 
-  const showManageProviders =
-    onManageProviders !== undefined && catalogs.some((c) => !isSelectable(c.availability));
+  const showAddProvider = onManageProviders !== undefined;
 
   const applyUpdate = useCallback(
     async (next: UpdateRouterSettingsRequest) => {
@@ -361,58 +430,26 @@ export const RouterModelPicker = memo(function RouterModelPicker({
                 />
               </span>
             </CollapsibleTrigger>
-            <CollapsibleContent className="grid gap-1 pt-1">
-              <div className="flex min-h-9 items-center justify-between gap-3 pointer-coarse:min-h-11">
-                <label htmlFor={modelSelectId} className="shrink-0 text-body text-foreground">
-                  Model
-                </label>
-                <Select
-                  id={modelSelectId}
-                  variant="plain"
-                  value={selectedChoice.model}
-                  onPointerDown={revalidateModels}
-                  onFocus={revalidateModels}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                >
-                  {selectedCatalog.models.map((m) => (
-                    <option key={m.id} value={m.id} title={m.description ?? undefined}>
-                      {m.label}
-                    </option>
-                  ))}
-                  {unlistedSelectedModel && (
-                    <option value={selectedChoice.model}>
-                      {modelShortLabel(selectedVendor, selectedChoice.model, selectedCatalog)}
-                    </option>
-                  )}
-                </Select>
-              </div>
-              {showEffort && selectedChoice.effort !== null && (
-                <div className="flex min-h-9 items-center justify-between gap-3 pointer-coarse:min-h-11">
-                  <label htmlFor={effortSelectId} className="shrink-0 text-body text-foreground">
-                    Effort
-                  </label>
-                  <Select
-                    id={effortSelectId}
-                    variant="plain"
-                    value={selectedChoice.effort}
-                    onChange={(e) => handleEffortChange(e.target.value)}
-                  >
-                    {supportedEfforts.map((eff) => (
-                      <option key={eff} value={eff}>
-                        {effortLabel(eff, selectedVendor, selectedCatalog)}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-              )}
-            </CollapsibleContent>
+            <RouterModelEffortFields
+              modelSelectId={modelSelectId}
+              effortSelectId={effortSelectId}
+              selectedVendor={selectedVendor}
+              selectedCatalog={selectedCatalog}
+              selectedChoice={selectedChoice}
+              unlistedSelectedModel={unlistedSelectedModel}
+              showEffort={showEffort}
+              supportedEfforts={supportedEfforts}
+              revalidateModels={revalidateModels}
+              onModelChange={handleModelChange}
+              onEffortChange={handleEffortChange}
+            />
           </Collapsible>
         )}
 
       {saveError !== null && <RowError error={saveError} />}
 
-      {showManageProviders && (
-        <div className="border-t border-border pt-2">
+      {showAddProvider && (
+        <div className="border-t-2 border-border pt-2">
           <button
             type="button"
             onClick={() => {
@@ -421,10 +458,10 @@ export const RouterModelPicker = memo(function RouterModelPicker({
             }}
             className={cn(
               ROW_INTERACTIVE_CLASS,
-              "justify-between text-minor font-medium text-muted-foreground hover:text-foreground",
+              "justify-between text-minor font-medium text-rail-ink hover:text-foreground",
             )}
           >
-            <span>Manage providers…</span>
+            <span>{ADD_PROVIDER_LABEL}</span>
             <ChevronRight className="size-pixel-sm shrink-0" aria-hidden="true" />
           </button>
         </div>

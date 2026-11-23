@@ -1,4 +1,15 @@
-import { Laptop, Monitor, Server } from "../ui/icons.ts";
+import { createElement } from "react";
+import {
+  DeviceAndroid,
+  DeviceIphone,
+  DeviceLinux,
+  DeviceMacos,
+  DeviceWindows,
+  Monitor,
+  Smartphone,
+  Tablet,
+  type Icon,
+} from "../ui/icons.ts";
 import type { DeviceStatus } from "../devices.ts";
 import { formatAgo } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -7,7 +18,7 @@ export function StatusDot({ status }: { status: DeviceStatus }) {
   return (
     <span
       aria-hidden="true"
-      className={cn("size-2 shrink-0 rounded-full", status === "online" ? "bg-success" : status === "reconnecting" ? "bg-caution" : "bg-muted-foreground/40")}
+      className={cn("size-2 shrink-0", status === "online" ? "bg-success" : status === "reconnecting" ? "bg-caution" : "bg-muted-foreground/40")}
     />
   );
 }
@@ -24,7 +35,23 @@ export function StatusText({ status, lastOnlineAt, online = false }: { status: D
   );
 }
 
-export function PlatformIcon({ platform, className }: { platform: string; className?: string }) {
-  const Icon = platform === "darwin" ? Laptop : platform === "linux" ? Server : Monitor;
-  return <Icon className={cn("size-pixel-sm shrink-0", className)} aria-hidden="true" />;
+const PLATFORM_ICONS: Readonly<Record<string, Icon>> = {
+  darwin: DeviceMacos,
+  macos: DeviceMacos,
+  win32: DeviceWindows,
+  windows: DeviceWindows,
+  linux: DeviceLinux,
+  iphone: DeviceIphone,
+  ios: DeviceIphone,
+  android: DeviceAndroid,
+  tablet: Tablet,
+  ipad: Tablet,
+  phone: Smartphone,
+};
+
+export function PlatformIcon({ platform, className, size = "sm" }: { platform: string; className?: string; size?: "sm" | "inherit" }) {
+  return createElement(PLATFORM_ICONS[platform.toLowerCase()] ?? Monitor, {
+    className: cn(size === "sm" && "size-pixel-sm shrink-0", className),
+    "aria-hidden": true,
+  });
 }

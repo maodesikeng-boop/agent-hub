@@ -107,7 +107,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
               </Button>
             </>
           ) : (
-            <span className="-mr-2 flex items-center gap-1">
+            <span className="flex items-center gap-1">
               <Button variant="ghost" size="icon-sm" aria-label={`Rename ${info.name}`} onClick={() => setRenaming(true)}>
                 <Pencil aria-hidden="true" />
               </Button>

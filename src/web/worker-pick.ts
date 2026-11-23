@@ -1,12 +1,11 @@
 import {
-  AVAILABILITY_LABELS,
   effortLabel,
   effortsFor,
   isAgentVendor,
-  isListed,
   isSelectable,
   modelLabel,
   normalizeEffortInput,
+  pickableVendorCatalogs,
   vendorLabel,
   WORKER_PICK_CACHE_MAX,
   type ModelCatalog,
@@ -53,10 +52,10 @@ function compute(catalogs: readonly ModelCatalog[], args: readonly string[], que
   if (args.length >= WORKER_ARG_LEVELS) return null;
   const level = LEVELS[args.length]!;
   if (level === "vendor") {
-    const vendors = catalogs.filter((c) => isListed(c.availability));
+    const vendors = pickableVendorCatalogs(catalogs);
     return rank(
       level,
-      vendors.map((c) => ({ value: c.vendor, label: c.label, detail: AVAILABILITY_LABELS[c.availability] ?? "", ...(!isSelectable(c.availability) && { disabled: true as const }) })),
+      vendors.map((c) => ({ value: c.vendor, label: c.label, detail: "" })),
       query,
     );
   }

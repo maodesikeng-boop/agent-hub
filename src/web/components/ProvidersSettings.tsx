@@ -27,7 +27,8 @@ import {
 } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
-import { Input, Select } from "../ui/input.tsx";
+import { Input } from "../ui/input.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Segmented } from "../ui/segmented.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { StatusShimmer } from "./StatusShimmer.tsx";
@@ -64,7 +65,7 @@ function JobLogDisclosure({ job, open }: { job: ProviderJobSnapshot | null; open
   return (
     <pre
       data-testid="provider-job-log"
-      className="mt-2.5 max-h-48 overflow-auto rounded-xl bg-sidebar p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
+      className="mt-2.5 max-h-48 overflow-auto border border-border-strong bg-panel p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
     >
       {job.logTail}
     </pre>
@@ -93,7 +94,7 @@ function GitEnvironmentGroup({ model }: { model: ProvidersSettingModel }) {
             <span
               aria-hidden="true"
               className={cn(
-                "mt-2 size-2 shrink-0 rounded-full",
+                "mt-2 size-2 shrink-0",
                 running ? "bg-caution" : "bg-muted-foreground/40",
               )}
             />
@@ -186,7 +187,7 @@ function ProviderItemRow({
           <span
             aria-hidden="true"
             data-tone={tone}
-            className={cn("mt-2 size-2 shrink-0 rounded-full", DOT_CLASS[tone])}
+            className={cn("mt-2 size-2 shrink-0", DOT_CLASS[tone])}
           />
           <div className="min-w-0 flex-1 break-words">
             <div title={item.label} className="line-clamp-2 text-body">
@@ -244,6 +245,7 @@ function ProviderItemRow({
               type="button"
               variant="outline"
               size="sm"
+              className="min-w-24"
               aria-label={`${jobFailed ? "Retry" : "Install"} ${item.label}`}
               disabled={!item.canInstall || busyKey === `install:${item.vendor}`}
               onClick={onInstall}
@@ -269,6 +271,7 @@ function ProviderItemRow({
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-w-24"
                 aria-label={`Account for ${item.label}`}
                 onClick={onOpenAccount}
               >
@@ -280,6 +283,7 @@ function ProviderItemRow({
               type="button"
               variant="outline"
               size="sm"
+              className="min-w-24"
               aria-label={`Sign in to ${item.label}`}
               onClick={onOpenSignIn}
             >
@@ -568,18 +572,17 @@ function AuthTargetPicker({
   onChange: (targetId: string) => void;
 }) {
   const select = (id: string) => (
-    <Select
-      id={id}
-      {...(mobile ? { className: TOUCH_INPUT } : { variant: "plain" as const })}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {targets.map((t) => (
-        <option key={t.id} value={t.id}>
-          {t.configured ? `${t.label} (Configured)` : t.label}
-        </option>
-      ))}
+    <Select value={value} disabled={disabled} onValueChange={onChange}>
+      <SelectTrigger id={id} aria-label="Model provider" {...(mobile ? { className: TOUCH_INPUT } : { variant: "plain" as const })}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {targets.map((t) => (
+          <SelectItem key={t.id} value={t.id}>
+            {t.configured ? `${t.label} (Configured)` : t.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
     </Select>
   );
   if (mobile) {
@@ -804,7 +807,7 @@ function DeviceCodePanel(props: SignInPanelProps & { codeCopy: CopyFeedback }) {
   return (
     <div className="grid grid-cols-1 gap-4">
       {userCode ? (
-        <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-sidebar px-4 py-3">
+        <div className="flex items-center justify-between gap-3 border-2 border-border-strong bg-panel px-4 py-3">
           <code data-testid="device-user-code" className="font-mono text-title font-semibold tracking-wider select-all">
             {userCode}
           </code>
@@ -894,7 +897,7 @@ export function ProviderAccountBody({
         <div data-slot="settings-row" className="px-4 py-3">
           <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2">
             <div className="flex min-w-32 flex-1 items-start gap-3">
-              <span aria-hidden="true" className="mt-2 size-2 shrink-0 rounded-full bg-success" />
+              <span aria-hidden="true" className="mt-2 size-2 shrink-0 bg-success" />
               <div className="min-w-0 flex-1 break-words">
                 <div className="text-body">{item.accountSummary ?? "Signed in"}</div>
                 {item.version && (
@@ -1027,17 +1030,17 @@ export function ProvidersListSection({
         <SettingsGroup label="Computer">
           <SettingsRow label="Computer">
             {(id) => (
-              <Select
-                id={id}
-                variant="plain"
-                value={model.deviceKey}
-                onChange={(e) => model.selectDevice(e.target.value)}
-              >
-                {model.selectableComputers.map((d) => (
-                  <option key={d.key} value={d.key}>
-                    {d.info.self ? "This computer" : d.info.name}
-                  </option>
-                ))}
+              <Select value={model.deviceKey} onValueChange={(next) => model.selectDevice(next)}>
+                <SelectTrigger id={id} aria-label="Computer" variant="plain">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {model.selectableComputers.map((d) => (
+                    <SelectItem key={d.key} value={d.key}>
+                      {d.info.self ? "This computer" : d.info.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             )}
           </SettingsRow>
@@ -1049,18 +1052,10 @@ export function ProvidersListSection({
       <SettingsGroup
         {...(hasExtraTopGroup ? { title: "Providers" } : readyCount === null ? { label: "Providers" } : { title: `${readyCount} ready`, label: "Providers" })}
         action={
-          <span className="-mr-3 ml-auto flex items-center">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={model.loading || model.refreshing}
-              onClick={() => void model.refresh()}
-            >
-              {model.refreshing && <Loader2 aria-hidden="true" />}
-              Refresh
-            </Button>
-          </span>
+          <Button type="button" variant="outline" size="sm" className="min-w-24" disabled={model.loading || model.refreshing} onClick={() => void model.refresh()}>
+            {model.refreshing && <Loader2 aria-hidden="true" />}
+            Refresh
+          </Button>
         }
       >
         {model.loading && !model.status ? (

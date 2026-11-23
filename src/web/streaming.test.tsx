@@ -10,7 +10,7 @@ import * as ComposerMod from "./components/Composer.tsx";
 import * as ConversationMod from "./components/Conversation.tsx";
 import * as MessagesMod from "./components/Messages.tsx";
 import * as RightRailMod from "./components/RightRail.tsx";
-import * as SidebarMod from "./components/Sidebar.tsx";
+import * as ProjectListMod from "./components/ProjectList.tsx";
 import { applyChange, initialState, reducer, type HubState } from "./state.ts";
 import {
   FakeApi,
@@ -191,16 +191,16 @@ describe("网页流式文字渲染与无重影衔接", () => {
     type MemoTarget = { type: (...args: unknown[]) => unknown };
     const composerSpy = vi.spyOn(ComposerMod.DraftComposer as unknown as MemoTarget, "type");
     const turnSpy = vi.spyOn(MessagesMod.TurnView as unknown as MemoTarget, "type");
-    const sidebarSpy = vi.spyOn(SidebarMod.Sidebar as unknown as MemoTarget, "type");
-    const rightRailSpy = vi.spyOn(RightRailMod.RightRail as unknown as MemoTarget, "type");
+    const sidebarSpy = vi.spyOn(ProjectListMod.ProjectList as unknown as MemoTarget, "type");
+    const rightRailSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
 
-    const { ws, container } = await bootApp(snapshot);
+    const { ws } = await bootApp(snapshot);
     composerSpy.mockClear();
     turnSpy.mockClear();
     sidebarSpy.mockClear();
     rightRailSpy.mockClear();
 
-    const sidebarEl = container.querySelector("aside")!;
+    const sidebarEl = screen.getByRole("region", { name: "Project managers" });
     const sidebarMutations = vi.fn();
     const obs = new MutationObserver(sidebarMutations);
     obs.observe(sidebarEl, { subtree: true, childList: true, attributes: true, characterData: true });
@@ -250,17 +250,17 @@ describe("网页流式文字渲染与无重影衔接", () => {
 
     type MemoTarget = { type: (...args: unknown[]) => unknown };
     const composerSpy = vi.spyOn(ComposerMod.DraftComposer as unknown as MemoTarget, "type");
-    const conversationSpy = vi.spyOn(ConversationMod.Conversation as unknown as MemoTarget, "type");
-    const sidebarSpy = vi.spyOn(SidebarMod.Sidebar as unknown as MemoTarget, "type");
-    const rightRailSpy = vi.spyOn(RightRailMod.RightRail as unknown as MemoTarget, "type");
+    const convSpy = vi.spyOn(ConversationMod.Conversation as unknown as MemoTarget, "type");
+    const sidebarSpy = vi.spyOn(ProjectListMod.ProjectList as unknown as MemoTarget, "type");
+    const rightRailSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
 
-    const { ws, container } = await bootApp(snapshot);
+    const { ws } = await bootApp(snapshot);
     composerSpy.mockClear();
-    conversationSpy.mockClear();
+    convSpy.mockClear();
     sidebarSpy.mockClear();
     rightRailSpy.mockClear();
 
-    const sidebarEl = container.querySelector("aside")!;
+    const sidebarEl = screen.getByRole("region", { name: "Project managers" });
     const sidebarMutations = vi.fn();
     const obs = new MutationObserver(sidebarMutations);
     obs.observe(sidebarEl, { subtree: true, childList: true, attributes: true, characterData: true });
@@ -285,13 +285,13 @@ describe("网页流式文字渲染与无重影衔接", () => {
     obs.disconnect();
 
     expect(composerSpy).toHaveBeenCalledTimes(0);
-    expect(conversationSpy).toHaveBeenCalledTimes(0);
+    expect(convSpy).toHaveBeenCalledTimes(0);
     expect(sidebarSpy).toHaveBeenCalledTimes(0);
     expect(rightRailSpy).toHaveBeenCalledTimes(0);
     expect(sidebarMutations).toHaveBeenCalledTimes(0);
 
     composerSpy.mockRestore();
-    conversationSpy.mockRestore();
+    convSpy.mockRestore();
     sidebarSpy.mockRestore();
     rightRailSpy.mockRestore();
   });

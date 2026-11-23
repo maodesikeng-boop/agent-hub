@@ -30,7 +30,7 @@ const two = () =>
   });
 
 /** 往上找第一个设了 --primary 的祖先。 */
-const nav = () => screen.getByRole("navigation", { name: "Conversations" });
+const nav = () => screen.getByRole("region", { name: "Project managers" });
 const scopeOf = (el: HTMLElement) => el.closest<HTMLElement>("[data-accent]");
 
 describe("强调色跟着项目经理", () => {
@@ -41,41 +41,37 @@ describe("强调色跟着项目经理", () => {
     expect(first).not.toBeNull();
     expect(first.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(1).color).accent);
     expect(first.style.getPropertyValue("--primary-foreground")).toBe(jellyColorOf(defaultLookOf(1).color).accentForeground);
-    expect(scopeOf(document.querySelector<HTMLElement>("aside")!)).toBeNull();
+    expect(scopeOf(screen.getByRole("navigation", { name: "Workspace" }))).toBeNull();
+    expect(scopeOf(nav())).toBeNull();
 
-    await userEvent.click(within(nav()).getByRole("button", { name: /小林/ }));
+    await userEvent.click(within(nav()).getAllByRole("button", { name: /小林/ }).find((b) => !b.closest(".row-shortcuts"))!);
     await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(1).color).accent));
-    await userEvent.click(within(nav()).getByRole("button", { name: /老马/ }));
+    await userEvent.click(within(nav()).getAllByRole("button", { name: /老马/ }).find((b) => !b.closest(".row-shortcuts"))!);
     await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(2).color).accent));
   });
 
-  it(":root 的 --primary 是中性色（前景黑），不是粉色；用户气泡是强调色掺白的浅果冻底 + 前景色字（不是实心强调色）", () => {
+  it(":root 的 --primary 是轨道深棕（前景白色），不是粉色；用户气泡是强调色掺白的浅底 + 深褐文字", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).not.toMatch(/d6336c/i);
-    expect(css).toMatch(/--primary: #18181b;/);
+    expect(css).toMatch(/--primary: var\(--rail-ink\);/);
     expect(css).toMatch(/--color-bubble-me: color-mix\(in srgb, var\(--primary\) var\(--mix-bubble-me\), #ffffff\);/);
     expect(css).toMatch(/--color-bubble-me-foreground: var\(--foreground\);/);
   });
 
-  it("外壳底色（对话区、左栏、分割线）掺当前项目经理的水果色：FruitTint 设 --fruit，切换时跟着换", async () => {
+  it("已清理 FruitTint 与旧果冻混色变量：styles.css 不含混色表面或 tint-fade，不写 * { transition }", async () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toMatch(/--color-surface-chat: color-mix\(in srgb, var\(--fruit, var\(--background\)\) var\(--mix-chat\), var\(--background\)\);/);
-    expect(css).toMatch(/--color-surface-sidebar: color-mix\(in srgb, var\(--fruit, var\(--sidebar\)\) var\(--mix-sidebar\), var\(--sidebar\)\);/);
-    expect(css).toMatch(/--color-line: color-mix\(in srgb, var\(--fruit, var\(--border\)\) var\(--mix-line\), var\(--border\)\);/);
-    // 不写 * { transition }：只有带 tint-fade 的几个容器淡变
+    for (const removed of ["--color-surface-chat", "--color-surface-sidebar", "--color-line", "--color-jelly", "--mix-chat", "--mix-sidebar", "--mix-line", ".tint-fade"]) {
+      expect(css).not.toContain(removed);
+    }
     expect(css).not.toMatch(/(^|[},])\s*\*\s*\{[^}]*transition/m);
-    const { FruitTint } = await import("./lib/accent-scope.tsx");
-    const { container, rerender } = render(<FruitTint color={defaultLookOf(1).color}><span /></FruitTint>);
-    const scope = container.firstElementChild as HTMLElement;
-    expect(scope.style.getPropertyValue("--fruit")).toBe(jellyColorOf(defaultLookOf(1).color).accent);
-    expect(scope.style.getPropertyValue("--primary")).toBe("");
-    rerender(<FruitTint color={null}><span /></FruitTint>);
-    expect(scope.style.getPropertyValue("--fruit")).toBe("");
+    const scopeMod = await import("./lib/accent-scope.tsx");
+    expect("FruitTint" in scopeMod).toBe(false);
   });
 
   it("不属于任何项目经理的地方（左栏、加载页）不写主色", () => {
-    expect(readFileSync("src/web/components/Sidebar.tsx", "utf8")).not.toMatch(/bg-primary|text-primary/);
-    expect(readFileSync("src/web/App.tsx", "utf8")).not.toMatch(/text-primary/);
+    expect(readFileSync("src/web/components/AppRail.tsx", "utf8")).not.toMatch(/\b(?:bg|text)-primary\b(?!-)/);
+    expect(readFileSync("src/web/components/ProjectList.tsx", "utf8")).not.toMatch(/\b(?:bg|text)-primary\b(?!-)/);
+    expect(readFileSync("src/web/App.tsx", "utf8")).not.toMatch(/\btext-primary\b(?!-)/);
   });
 });
 
