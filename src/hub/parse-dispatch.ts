@@ -1,6 +1,6 @@
 import { PM_MODES } from "../shared/domain.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
-import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
+import { AGENT_VENDORS, isAgentVendor } from "../shared/vendors.ts";
 import {
   UsageError,
   type Parsed,
@@ -10,6 +10,7 @@ import {
   expectPositionals,
   idOf,
   workerIdOf,
+  effortOf,
   requireDevice,
   requireVerbatimOrStdin,
 } from "./args.ts";
@@ -50,14 +51,12 @@ export function parseDispatchPmCommand({ group, action, rest, values }: GroupArg
     if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
       throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
     }
-    if (values.effort !== undefined && !ALL_EFFORTS.includes(values.effort)) {
-      throw new UsageError(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
-    }
+    const normalizedEffort = effortOf(values.vendor, values.effort);
     const verbatim = requireVerbatimOrStdin(values, "dispatch worker-start");
     const body: Record<string, unknown> = { op: "worker-start", device, projectId, title };
     if (values.vendor !== undefined) body.vendor = values.vendor;
     if (values.model !== undefined) body.model = values.model;
-    if (values.effort !== undefined) body.effort = values.effort;
+    if (normalizedEffort !== undefined) body.effort = normalizedEffort;
     if (values.readonly === true) body.readonly = true;
     if (values["no-worktree"] === true) body.noWorktree = true;
     if (verbatim) {

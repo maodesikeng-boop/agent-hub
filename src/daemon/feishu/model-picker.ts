@@ -123,10 +123,10 @@ export function buildPmModelSection(agent: FeishuPmModelView, catalogs: readonly
   if (efforts.length > 1) {
     const rawEfforts: FeishuSelectOption[] = [
       { label: "默认", value: FEISHU_DEFAULT_OPTION },
-      ...efforts.map((e) => ({ label: e, value: e })),
+      ...efforts.map((e) => ({ label: effortLabel(e, agent.vendor, catalog), value: e })),
     ];
     if (split.effort !== null && !efforts.includes(split.effort)) {
-      rawEfforts.push({ label: split.effort, value: split.effort });
+      rawEfforts.push({ label: effortLabel(split.effort, agent.vendor, catalog), value: split.effort });
     }
     selects.push({
       field: "effort",
@@ -138,7 +138,7 @@ export function buildPmModelSection(agent: FeishuPmModelView, catalogs: readonly
   }
 
   const modelText = split.model === null ? defaultModelOption(catalog) : modelLabel(agent.vendor, split.model, catalog);
-  const effortPart = efforts.length > 1 ? ` · **${effortLabel(split.effort)}**` : "";
+  const effortPart = efforts.length > 1 ? ` · **${effortLabel(split.effort, agent.vendor, catalog)}**` : "";
   const switchNote = agent.switchingToVendor ? `\n正在切到 **${vendorLabel(agent.switchingToVendor)}**，当前这一轮跑完生效。` : "";
   return {
     summary: `当前：**${vendorLabel(agent.vendor)}** · **${modelText}**${effortPart}${switchNote}`,
@@ -196,8 +196,9 @@ export function buildRouterModelSection(settings: RouterSettings, catalogs: read
   };
   const preview = resolveRouterModelPreview(settings, catalogs);
   if (settings.vendor === null) {
+    const previewCatalog = preview.ok ? catalogForVendor(catalogs, preview.vendor) : undefined;
     const summary = preview.ok
-      ? `当前：**Auto（自动）** · 实际选用 **${vendorLabel(preview.vendor)} · ${modelShortLabel(preview.vendor, preview.model, catalogForVendor(catalogs, preview.vendor))} · ${preview.effort}**`
+      ? `当前：**Auto（自动）** · 实际选用 **${vendorLabel(preview.vendor)} · ${modelShortLabel(preview.vendor, preview.model, previewCatalog)} · ${effortLabel(preview.effort, preview.vendor, previewCatalog)}**`
       : `当前：**Auto（自动）**\n${preview.message}`;
     return { summary, selects: [vendorSelect], fixedEffortNote: null };
   }
@@ -223,11 +224,12 @@ export function buildRouterModelSection(settings: RouterSettings, catalogs: read
       field: "effort",
       label: "思考程度",
       initialOption: choice.effort,
-      options: supportedEfforts.map((e) => ({ label: e, value: e })),
+      options: supportedEfforts.map((e) => ({ label: effortLabel(e, settings.vendor, selectedCatalog), value: e })),
     });
     fixedEffortNote = null;
   }
-  const effortPart = supportedEfforts.length > 1 && choice.effort !== null ? ` · **${choice.effort}**` : "";
+  const effortPart =
+    supportedEfforts.length > 1 && choice.effort !== null ? ` · **${effortLabel(choice.effort, settings.vendor, selectedCatalog)}**` : "";
   const fallbackNote =
     preview.ok && preview.fallbackFromPreferred !== undefined
       ? `\n${vendorOptionLabel(selectedCatalog)} 暂不可用，当前自动回退到 **${vendorLabel(preview.vendor)}**。`

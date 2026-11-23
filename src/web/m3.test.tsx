@@ -944,7 +944,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     it("右栏的行只有一行：模型的显示名（模型目录里的名字）、思考程度、现在的对话长度收在悬停提示里；不写厂商，也没有“·”", async () => {
       await boot(withAgent({ vendor: "claude", model: "sonnet", effort: "high", usage }));
       const row = within(workerGroup()).getByRole("button", { name: /修 X/ });
-      expect(metaOf()).toEqual(["Sonnet", "high", "117K context"]);
+      expect(metaOf()).toEqual(["Sonnet", "High", "117K context"]);
       expect(row).toHaveTextContent(/^修 X$/);
       expect(row.getAttribute("title")).not.toMatch(/Claude Code|·/);
     });
@@ -976,7 +976,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       await boot(withAgent({ vendor: "claude", model: "sonnet", effort: "high", usage }));
       await userEvent.setup().click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
       const meta = within(screen.getByRole("region", { name: "Piece 修 X" })).getByTestId("piece-meta");
-      expect([...meta.children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "117K context"]);
+      expect([...meta.children].map((c) => c.textContent)).toEqual(["Sonnet", "High", "117K context"]);
       expect(meta).toHaveClass("text-xs", "text-muted-foreground", "gap-3");
       expect(within(meta).getByText("117K context")).toHaveAttribute(
         "title",

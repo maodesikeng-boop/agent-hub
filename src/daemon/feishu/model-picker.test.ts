@@ -42,6 +42,9 @@ describe("buildPmModelSection 与 resolvePmModelEdit（项目经理模型与思�
     const agySection = buildPmModelSection({ vendor: "agy", model: "gemini-4-argon-high", effort: null }, catalogs());
     expect(agySection.selects.find((s) => s.field === "model")?.initialOption).toBe("gemini-4-argon");
     expect(agySection.selects.find((s) => s.field === "effort")?.initialOption).toBe("high");
+    const neonSection = buildPmModelSection({ vendor: "agy", model: "gemini-4-neon", effort: "xhigh" }, catalogs());
+    expect(neonSection.selects.find((s) => s.field === "effort")?.options).toContainEqual({ label: "Extra", value: "xhigh" });
+    expect(neonSection.summary).toContain("**Extra**");
 
     const customSection = buildPmModelSection({ vendor: "claude", model: "claude-opus-5-5[1m]", effort: "high" }, catalogs());
     const modelSelect = customSection.selects.find((s) => s.field === "model")!;

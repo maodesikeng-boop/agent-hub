@@ -24,6 +24,7 @@ import {
   checkModel,
   checkModelEffort,
   isAgentVendor,
+  normalizeEffortInput,
   splitModelEffort,
   type AgentVendor,
   type ModelCatalog,
@@ -257,8 +258,8 @@ export function validateStepAgentSetting(
   }
   const targetVendor = resolvedVendor ?? fallbackVendor;
   const givenModel = typeof input.model === "string" ? input.model.trim() || null : null;
-  const givenEffort = typeof input.effort === "string" ? input.effort.trim() || null : null;
   const catalog = catalogOf(targetVendor);
+  const givenEffort = normalizeEffortInput(targetVendor, typeof input.effort === "string" ? input.effort.trim() || null : null, catalog);
   const bad =
     checkModel(targetVendor, givenModel) ??
     checkEffort(targetVendor, givenEffort, catalog) ??

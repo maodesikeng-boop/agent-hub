@@ -1,10 +1,12 @@
 import {
   AVAILABILITY_LABELS,
+  effortLabel,
   effortsFor,
   isAgentVendor,
   isListed,
   isSelectable,
   modelLabel,
+  normalizeEffortInput,
   vendorLabel,
   WORKER_PICK_CACHE_MAX,
   type ModelCatalog,
@@ -74,7 +76,14 @@ function compute(catalogs: readonly ModelCatalog[], args: readonly string[], que
   if (model !== null && !catalog.models.some((m) => m.id === model)) return null;
   const efforts = effortsFor(catalog, model);
   if (efforts.length <= 1) return null;
-  return rank(level, [{ value: WORKER_PICK_DEFAULT, label: DEFAULT_CHOICE, detail: "" }, ...efforts.map((e) => ({ value: e, label: e, detail: "" }))], query);
+  return rank(
+    level,
+    [
+      { value: WORKER_PICK_DEFAULT, label: DEFAULT_CHOICE, detail: "" },
+      ...efforts.map((e) => ({ value: e, label: effortLabel(e, catalog.vendor, catalog), detail: "" })),
+    ],
+    query,
+  );
 }
 
 const cache = new WeakMap<readonly ModelCatalog[], Map<string, WorkerPickRows | null>>();
@@ -93,11 +102,17 @@ export function workerPickRows(catalogs: readonly ModelCatalog[], args: readonly
   return rows;
 }
 
-export function workerPickFromArgs(args: readonly string[]): WorkerPick | null {
-  const [vendor, model, effort] = args;
+export function workerPickFromArgs(args: readonly string[], catalogs?: readonly ModelCatalog[]): WorkerPick | null {
+  const [vendor, model, rawEffort] = args;
   if (!isAgentVendor(vendor)) return null;
   const pick = (value: string | undefined) => (value === undefined || value === WORKER_PICK_DEFAULT ? null : value);
-  return { vendor, model: pick(model), effort: pick(effort) };
+  const effortVal = pick(rawEffort);
+  const catalog = catalogs?.find((c) => c.vendor === vendor) ?? null;
+  return {
+    vendor,
+    model: pick(model),
+    effort: effortVal === null ? null : (normalizeEffortInput(vendor, effortVal, catalog) ?? effortVal),
+  };
 }
 
 export function workerPickLabels(pick: WorkerPick, catalogs: readonly ModelCatalog[]): string[] {
@@ -105,6 +120,6 @@ export function workerPickLabels(pick: WorkerPick, catalogs: readonly ModelCatal
   return [
     catalog?.label ?? vendorLabel(pick.vendor),
     ...(pick.model === null ? [] : [catalog ? modelLabel(pick.vendor, pick.model, catalog) : pick.model]),
-    ...(pick.effort === null ? [] : [pick.effort]),
+    ...(pick.effort === null ? [] : [effortLabel(pick.effort, pick.vendor, catalog)]),
   ];
 }
