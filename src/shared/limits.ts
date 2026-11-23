@@ -682,3 +682,6 @@ export const RESOURCES_DIR_SCAN_TIMEOUT_MS = 5_000;
 export const RESOURCES_HELD_MAX_ITEMS = 200;
 export const RESOURCES_WARN_RATIO = 0.8;
 export const RESOURCES_SAMPLE_PATHS_MAX = 5;
+export const CN_CLASS_CACHE_MAX = 2_048;
+export const WS_BURST_FRAME_LIMIT = 8;
+export const WS_FRAME_BUDGET_MS = 16;

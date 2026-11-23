@@ -1,4 +1,5 @@
 import { Loader2, TriangleAlert, WifiOff } from "../ui/icons.ts";
+import { memo } from "react";
 import { HEALTH_FAILURE_THRESHOLD, type HealthEntry } from "../../shared/index.ts";
 import { describeFailure } from "../../shared/errors.ts";
 import { cn } from "../lib/utils.ts";
@@ -7,7 +8,7 @@ const PILL = "flex w-fit max-w-full items-center gap-2 rounded-full bg-muted px-
 const ICON = "size-4 shrink-0";
 const PILL_ACTION = "touch-target shrink-0 cursor-pointer rounded-full font-medium underline decoration-foreground/30 underline-offset-3 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
-export function Notices({
+export const Notices = memo(function Notices({
   health,
   reconnecting,
   offline = null,
@@ -62,4 +63,4 @@ export function Notices({
       )}
     </div>
   );
-}
+});

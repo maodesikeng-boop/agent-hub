@@ -254,13 +254,15 @@ export function NewPmDialog({
         fullScreen={mobile}
         onOpenAutoFocus={mobile ? (e) => e.preventDefault() : undefined}
       >
-        <DevicePicker
-          mobile={mobile}
-          devices={devices}
-          defaultDevice={defaultDevice}
-          onCreated={onCreated}
-          {...(onManageProviders !== undefined ? { onManageProviders } : {})}
-        />
+        {devices.length > 0 ? (
+          <DevicePicker
+            mobile={mobile}
+            devices={devices}
+            defaultDevice={defaultDevice}
+            onCreated={onCreated}
+            {...(onManageProviders !== undefined ? { onManageProviders } : {})}
+          />
+        ) : null}
       </DialogContent>
     </Dialog>
   );
