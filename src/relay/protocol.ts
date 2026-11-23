@@ -41,11 +41,6 @@ export const RELAY_PATHS = {
   channel: (accountId: AccountId, channel: string) => `/v1/accounts/${accountId}/channels/${channel}`,
 } as const;
 
-export interface RelayChannelQuery {
-  device: DeviceId;
-  session: string;
-}
-
 export interface RelayRegisterRequest {
   provider: AccountProvider;
   token: string;

@@ -35,13 +35,8 @@ import {
   type SignedTrustStatement,
 } from "./trust.ts";
 
-export { createAccountService, readAccountFile, type AccountFile, type AccountService } from "./account.ts";
-export { agentFetch } from "./agent-fetch.ts";
-export { createMeshDialer, localCandidates, startMeshListener, type MeshConnection, type MeshDialer, type MeshListener } from "./dialer.ts";
-export { loadOrCreateMeshIdentity, type MeshIdentity } from "./identity.ts";
-export { createCenterLease, stepCenterLease, type CenterLease } from "./lease.ts";
-export { createRelayClient, registerWithRelay, RelayDialError, type RelayClient } from "./relay-client.ts";
-export { acceptTrustStatement, openMeshTrust, signTrustStatement, startApproval, type MeshTrust, type TrustedDevice } from "./trust.ts";
+export type { MeshConnection } from "./dialer.ts";
+export type { CenterLease } from "./lease.ts";
 
 export interface MeshOptions {
   identityDir: string;

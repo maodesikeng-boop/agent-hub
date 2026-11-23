@@ -35,7 +35,7 @@ import {
 } from "./workers/worktree.ts";
 
 export { assertWorkerOpenForUser, notStarted } from "./workers/text.ts";
-export type { EndedWorktreeCandidate, LedgerWorkersTaskGraphHooks, ReportMessage } from "./workers/types.ts";
+export type { EndedWorktreeCandidate, ReportMessage } from "./workers/types.ts";
 
 export type LedgerWorkers = ReturnType<typeof createLedgerWorkers>;
 

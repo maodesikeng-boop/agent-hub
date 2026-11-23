@@ -534,19 +534,7 @@ export interface RouterCommandsPage {
 
 export type { PostRouterCommandTarget } from "./router.ts";
 
-export interface RouterItemsQuery {
-  cursor?: string;
-  limit?: number;
-  kind?: RouterItemsKind;
-}
 export type RouterItemsKind = "report";
-
-export interface DecideRouterItemRequest {
-  clientId: string;
-  optionIndex?: number | null;
-  choice?: string | null;
-  note?: string;
-}
 
 export type ResolveRouterItemRequest =
   | {

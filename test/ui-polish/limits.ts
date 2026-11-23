@@ -63,8 +63,6 @@ export const CALIBRATION_MIN_HITS = 2;
 export const CALIBRATION_DETECT_SHARE = 0.9;
 /** 校准：两家评委同一张图的页面分差不超过 1 的图至少占几成。 */
 export const CALIBRATION_AGREE_SHARE = 0.8;
-/** 校准不过就把评分标准写细再来，最多几次，再不过报给用户。 */
-export const CALIBRATION_MAX_ATTEMPTS = 3;
 
 /** 每轮混进去的哨兵图（基准图和两张弄坏的）：它们的分和校准时差得超过这个数，这一次评审作废重评。 */
 export const SENTINEL_MAX_DRIFT = 1;
@@ -76,8 +74,6 @@ export const SENTINEL_MAX_DRIFT = 1;
 export const JUDGE_BATCH_CANDIDATES = [14, 28] as const;
 /** 同时在跑的评委 Worker 最多几个（这台 Mac 吃紧）。任务图里靠分波次排依赖做到。 */
 export const JUDGE_MAX_CONCURRENT = 6;
-/** 一次评审两家评委合起来最多派几个 Worker。136 张图每批 28 张是每家 5 个，正好 10 个。 */
-export const JUDGE_MAX_WORKERS_PER_REVIEW = 10;
 /** 两家评委的发现算同一处：框的交并比不低于它，或同一张图引了同一条规则。 */
 export const FINDING_MATCH_IOU = 0.3;
 /** 对比度的严重度线（WCAG 1.4.3、1.4.11）：不到 P0_BELOW 记 P0，不到 P1_BELOW 记 P1。评委和机器检查都照它判。 */
