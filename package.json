@@ -88,6 +88,7 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.24.1",
     "reflect-metadata": "^0.2.2",
     "remark-breaks": "^4.0.0",
     "remark-cjk-friendly": "^2.3.4",

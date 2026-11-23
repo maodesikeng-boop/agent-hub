@@ -79,10 +79,11 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 
 - `react` and `react-dom`: UI runtime. `vite` and `@vitejs/plugin-react`: bundler (`vite.config.ts`).
 - `zustand`: Client state (`components/Composer.tsx`, `device-hub.ts`).
-- `@tanstack/react-query`: On-demand fetching and caching (`App.tsx`, `components/BrowserSessions.tsx`, `components/PmProfile.tsx`).
+- `@tanstack/react-query`: On-demand fetching and caching (`App.tsx`, `components/BrowserSessions.tsx`, `components/PmMemoryFilesGroup.tsx`).
 - `@tanstack/react-virtual`: Dynamic row-height virtual scrolling for the chat message list (`useVirtualRows.ts`, `components/MessageList.tsx`).
 - `tailwindcss` and `@tailwindcss/vite`: Styling (`styles.css`).
-- `lucide-react`: Smooth-line UI icons re-exported from `src/web/ui/icons.ts` alongside custom device-type, pinned, and composer SVGs.
+- `lucide-react`: Smooth-line UI icons re-exported from `src/web/ui/icons.ts` alongside custom device-type and pinned SVGs.
+- `react-resizable-panels`: Resizable multi-column shell panes with min/max bounds (`src/web/ui/resizable.tsx`).
 - `@fontsource-variable/geist`: Bundled Geist Variable font (`src/web/styles.css`).
 - `clsx` and `tailwind-merge`: Class merging in `cn()` (`lib/utils.ts`). `class-variance-authority`: button variants (`ui/button.tsx`).
 - `qrcode-generator`: QR code rendering in `components/QrCode.tsx` and terminal QR output in `src/feishu/main.ts`.
@@ -94,7 +95,7 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 ### UI primitives (`src/web/ui/`)
 
 - Built on Radix primitives with `shadcn/ui` styling conventions. The repository has **no `components.json` and no `@/` path alias**, so `shadcn add` cannot run directly.
-- Installed primitives: `button` (`@radix-ui/react-slot` and `class-variance-authority`), `input`, `select` (`@radix-ui/react-select`), `dialog` (`@radix-ui/react-dialog`), `drawer` (`vaul`, wrapped only in `src/web/ui/drawer.tsx`), `popover` (`@radix-ui/react-popover`), `tabs` (`@radix-ui/react-tabs`), `collapsible` (`@radix-ui/react-collapsible`), `avatar` (`@radix-ui/react-avatar`), `switch`, and `segmented` (`@radix-ui/react-radio-group`). `ModeRows.tsx` and the `CapabilityScopeSwitch.tsx` project picker also use `@radix-ui/react-radio-group` directly.
+- Installed primitives: `button` (`@radix-ui/react-slot` and `class-variance-authority`), `input`, `select` (`@radix-ui/react-select`), `resizable` (`react-resizable-panels`), `dialog` (`@radix-ui/react-dialog`), `drawer` (`vaul`, wrapped only in `src/web/ui/drawer.tsx`), `popover` (`@radix-ui/react-popover`), `tabs` (`@radix-ui/react-tabs`), `collapsible` (`@radix-ui/react-collapsible`), `avatar` (`@radix-ui/react-avatar`), `switch`, and `segmented` (`@radix-ui/react-radio-group`). `ModeRows.tsx` and the `CapabilityScopeSwitch.tsx` project picker also use `@radix-ui/react-radio-group` directly.
 - Not installed: `Sheet`, `Textarea`, `Tooltip`, `DropdownMenu`, `ScrollArea`, and `Sonner`.
 - To add a primitive: inspect upstream source with `pnpm dlx shadcn@latest view <name>`, copy it into `src/web/ui/<name>.tsx` with relative imports (`../lib/utils.ts`), install any runtime package with `pnpm add`, and align styles with `docs/ui-standard.md`.
 
