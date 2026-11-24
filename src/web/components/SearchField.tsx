@@ -19,10 +19,8 @@ export function SearchField({
   return (
     <div
       className={cn(
-        "flex h-9 min-w-0 flex-1 items-center gap-2 border-2 pr-0.5 pl-3 transition-colors pointer-coarse:h-11",
-        tone === "cream"
-          ? "border-list-edge bg-list-field focus-within:border-select-line"
-          : "border-border-strong bg-background focus-within:border-border-focus",
+        "flex h-9 min-w-0 flex-1 items-center gap-2 rounded-sm border border-border-strong pr-0.5 pl-3 transition-[border-color,box-shadow] focus-within:field-focus pointer-coarse:h-11",
+        tone === "cream" ? "bg-list-field" : "bg-background",
         className,
       )}
     >
@@ -31,7 +29,7 @@ export function SearchField({
         type="search"
         aria-label={label}
         placeholder="Search"
-        className="h-full min-w-0 flex-1 border-0 bg-transparent px-0 focus:border-0 pointer-coarse:h-full"
+        className="h-full min-w-0 flex-1 border-0 bg-transparent px-0 focus:border-0 focus:shadow-none pointer-coarse:h-full"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
