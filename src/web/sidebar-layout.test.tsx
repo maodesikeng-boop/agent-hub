@@ -21,7 +21,6 @@ const baseProps = {
   onSelect: () => {},
   onNewPm: () => {},
   onTogglePin: () => {},
-  onOpenPmSettings: () => {},
   onOpenComputers: () => {},
 };
 
@@ -35,7 +34,7 @@ describe("ProjectList layout", () => {
     const region = listRegion("column");
     expect(region).toHaveClass("h-full");
     expect(screen.getByRole("button", { name: /小林/ })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: /小林/ }).closest(".project-row")).toHaveClass("border-select-line", "bg-background");
+    expect(screen.getByRole("button", { name: /小林/ }).closest(".project-row")).toHaveClass("tile-selected");
   });
 
   it("strip：72px 头像窄条", () => {
