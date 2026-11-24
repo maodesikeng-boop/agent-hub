@@ -20,7 +20,7 @@ export function SettingsPage({
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col bg-panel pt-[var(--safe-top)]">
       <header
         className={cn(
-          "h-14 shrink-0 items-center gap-1 border-b-2 border-border px-4",
+          "h-14 shrink-0 items-center gap-1 border-b border-border px-4",
           home ? "flex" : "grid grid-cols-[1fr_minmax(0,auto)_1fr] px-2",
         )}
       >

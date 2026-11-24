@@ -115,9 +115,9 @@ function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={w.percent}
-                  className="h-2 overflow-hidden border border-border-strong bg-panel"
+                  className="h-1.5 overflow-hidden rounded-xs bg-border"
                 >
-                  <div className={cn("h-full", barClass)} style={{ width: `${fillWidth}%` }} />
+                  <div className={cn("usage-fill h-full rounded-xs", barClass)} style={{ width: `${fillWidth}%` }} />
                 </div>
               </div>
             );

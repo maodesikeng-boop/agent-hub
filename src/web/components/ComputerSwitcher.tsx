@@ -62,7 +62,7 @@ function SwitcherList({
               className={cn(
                 "flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
                 variant === "drawer" && "min-h-12",
-                current ? "border-2 border-select-line bg-open text-foreground" : "border-2 border-transparent hover:bg-hover",
+                current ? "tile-open text-foreground" : "hover:bg-hover",
                 offline && !current && "text-muted-foreground",
               )}
             >

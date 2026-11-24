@@ -52,7 +52,7 @@ function MediaThumb({ item }: { item: Deliverable }) {
         aria-label={item.label}
         onClick={() => setOpen(true)}
         className={cn(
-          "relative box-content h-(--deliverable-media-height) shrink-0 overflow-hidden border-2 border-border-strong bg-panel outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
+          "relative box-content h-(--deliverable-media-height) shrink-0 overflow-hidden rounded-sm border border-border bg-panel outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
           video ? "cursor-pointer" : "cursor-zoom-in",
         )}
       >
@@ -138,7 +138,7 @@ export const CardBody = memo(function CardBody({
           {segment.deliverables.length > 0 && (
             <DeliverableFiles
               deliverables={segment.deliverables}
-              className={cn("w-full", segment.isListItem && "border-l-2 border-border-strong pl-3")}
+              className={cn("w-full", segment.isListItem && "border-l border-border pl-3")}
             />
           )}
         </div>
@@ -158,7 +158,6 @@ export function CardNoteForm({
   onChange: controlledOnChange,
   onFocus,
   onSubmitNote,
-  tone = "default",
   className,
   inputClassName,
   buttonSize,
@@ -169,7 +168,6 @@ export function CardNoteForm({
   onChange?: (value: string) => void;
   onFocus?: () => void;
   onSubmitNote: (rawNote: string) => void;
-  tone?: "default" | "open";
   className?: string;
   inputClassName?: string;
   buttonSize?: "sm";
@@ -198,54 +196,44 @@ export function CardNoteForm({
   }, [note]);
 
   const canSend = !disabled && note.trim() !== "";
+  const small = buttonSize === "sm";
+  // Same shape as the chat composer: one framed field with its send button inside, no panel around it.
   return (
     <div
       data-card-reply
       className={cn(
-        "mt-3 border-2 p-2.5",
-        tone === "open" ? "border-open-line bg-background/85" : "border-border-strong bg-panel",
+        "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 transition-[border-color,box-shadow] focus-within:field-focus",
+        disabled && "opacity-60",
         className,
       )}
     >
-      <label htmlFor={id} className="mb-1.5 flex items-center gap-1.5 text-minor font-medium text-foreground">
-        <PencilLine className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />
-        <span>Your reply</span>
+      <label htmlFor={id} className="sr-only">
+        Your reply
       </label>
-      <div className="flex items-end gap-2">
-        <textarea
-          ref={textareaRef}
-          id={id}
-          rows={1}
-          value={note}
-          disabled={disabled}
-          onFocus={onFocus}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="Reply or note…"
-          className={cn(
-            "min-w-0 flex-1 resize-none overflow-y-auto border-2 border-border-strong bg-background px-3 text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-border-focus disabled:cursor-default disabled:opacity-50 max-h-36",
-            buttonSize === "sm"
-              ? "min-h-8 pointer-coarse:min-h-11 py-1 pointer-coarse:py-2.5 text-minor leading-5"
-              : "min-h-9 pointer-coarse:min-h-11 py-1 pointer-coarse:py-2 text-body leading-6",
-            inputClassName,
-          )}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && canSend) {
-              e.preventDefault();
-              onSubmitNote(note);
-            }
-          }}
-        />
-        <Button
-          type="button"
-          {...(buttonSize !== undefined ? { size: buttonSize } : {})}
-          disabled={!canSend}
-          onClick={() => onSubmitNote(note)}
-          className="shrink-0"
-        >
-          {pending ? <Loader2 className="size-pixel-sm" aria-hidden="true" /> : <Send className="size-pixel-sm" aria-hidden="true" />}
-          Send
-        </Button>
-      </div>
+      <textarea
+        ref={textareaRef}
+        id={id}
+        rows={1}
+        value={note}
+        disabled={disabled}
+        onFocus={onFocus}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Reply or add a note…"
+        className={cn(
+          "max-h-36 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-default pointer-coarse:min-h-10 pointer-coarse:py-2",
+          small ? "min-h-7 py-1 text-minor leading-5" : "min-h-8 py-1 text-body leading-6",
+          inputClassName,
+        )}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && canSend) {
+            e.preventDefault();
+            onSubmitNote(note);
+          }
+        }}
+      />
+      <Button type="button" size="icon-sm" aria-label="Send" disabled={!canSend} onClick={() => onSubmitNote(note)} className={cn("shrink-0", small && "size-7")}>
+        {pending ? <Loader2 className="size-pixel-sm" aria-hidden="true" /> : <Send className="size-pixel-sm" aria-hidden="true" />}
+      </Button>
     </div>
   );
 }
@@ -268,7 +256,7 @@ export function UnsentDraftBanner({
   return (
     <div
       data-unsent-draft
-      className={cn("border-2 border-border-strong bg-panel", compact ? "mt-2 p-2" : "mt-3 p-2.5", className)}
+      className={cn("rounded-sm border border-border bg-panel", compact ? "mt-2 p-2" : "mt-3 p-2.5", className)}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5 text-minor font-medium text-foreground">
@@ -296,7 +284,7 @@ export function UnsentDraftBanner({
           </Button>
         </div>
       </div>
-      <p className="mt-1.5 border border-border bg-background px-2.5 py-1.5 text-minor whitespace-pre-wrap select-text [overflow-wrap:anywhere] text-foreground">
+      <p className="mt-1.5 rounded-sm border border-border bg-background px-2.5 py-1.5 text-minor whitespace-pre-wrap select-text [overflow-wrap:anywhere] text-foreground">
         {draft}
       </p>
     </div>

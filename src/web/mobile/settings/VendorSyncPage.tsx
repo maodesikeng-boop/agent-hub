@@ -16,7 +16,7 @@ function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) 
   return (
     <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
       {badges.map((badge) => (
-        <span key={badge.vendor} className="inline-flex items-center gap-1.5 border border-border bg-panel px-2.5 py-0.5 text-xs text-muted-foreground">
+        <span key={badge.vendor} className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-panel px-2.5 py-0.5 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">{badge.label}</span>
           <span>{VENDOR_STATUS_LABELS[badge.status]}</span>
         </span>
@@ -116,7 +116,7 @@ export function VendorSyncPage({ vendor }: { vendor: VendorSync }) {
               label={item.name}
               detail={
                 <span className="flex flex-col gap-1">
-                  <span className="inline-flex w-fit items-center border border-border bg-panel px-2.5 py-0.5 text-xs font-medium text-foreground">{item.vendorLabel}</span>
+                  <span className="inline-flex w-fit items-center rounded-sm border border-border bg-panel px-2.5 py-0.5 text-xs font-medium text-foreground">{item.vendorLabel}</span>
                   <span>{item.reason}</span>
                 </span>
               }

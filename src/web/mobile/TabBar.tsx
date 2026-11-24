@@ -34,7 +34,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
   return (
     <nav
       aria-label="Mobile navigation"
-      className="grid h-[calc(4rem+var(--safe-bottom))] shrink-0 grid-cols-3 border-t-2 border-rail-shade bg-rail pb-[var(--safe-bottom)] text-rail-ink select-none"
+      className="grid h-[calc(4rem+var(--safe-bottom))] shrink-0 grid-cols-3 border-t border-border bg-rail pb-[var(--safe-bottom)] text-rail-ink select-none"
     >
       <button
         type="button"
@@ -91,7 +91,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
             <span
               data-testid="tabbar-settings-attention"
               aria-hidden="true"
-              className="absolute -top-0.5 -right-1 size-2 bg-caution ring-2 ring-rail"
+              className="absolute -top-0.5 -right-1 size-2 rounded-full bg-caution ring-2 ring-rail"
             />
           )}
         </span>

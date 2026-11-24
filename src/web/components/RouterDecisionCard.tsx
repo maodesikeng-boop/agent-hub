@@ -44,7 +44,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
   return (
     <article
       aria-label={decision.question}
-      className={cn("border-2 border-border-strong bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
+      className={cn("rounded-sm border border-border bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
     >
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
@@ -58,7 +58,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         {showProject && <span className="truncate text-muted-foreground">{decision.projectName}</span>}
         {showDevice && <span className="truncate text-xs text-muted-foreground">{entry.deviceName}</span>}
         {!online && (
-          <span className="border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Offline</span>
+          <span className="rounded-sm border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Offline</span>
         )}
         <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(decision.createdAt)}</span>
       </div>

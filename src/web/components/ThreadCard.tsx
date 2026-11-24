@@ -57,8 +57,8 @@ export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: Thre
         data-bubble
         aria-label={ariaLabel}
         className={cn(
-          "flex w-full max-w-136 cursor-pointer items-start gap-3 border-2 px-3 py-2.5 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
-          open ? "border-open-line bg-open" : "border-border-strong bg-background hover:bg-hover",
+          "flex w-full max-w-136 cursor-pointer items-start gap-3 rounded-sm border px-3.5 py-3 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 motion-reduce:transition-none",
+          open ? "border-select-line bg-open" : "border-border bg-background hover:border-border-strong hover:bg-hover",
         )}
         onClick={() => onOpen(line.workerConversationId)}
       >
@@ -68,7 +68,7 @@ export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: Thre
             <span
               data-dot={tone}
               aria-hidden="true"
-              className={cn("absolute -right-1 -bottom-0.5 size-2.5 border-2", open ? "border-open" : "border-background", TONE_SQUARE[tone])}
+              className={cn("absolute -right-1 -bottom-0.5 size-2.5 rounded-full", open ? "shadow-[0_0_0_2px_var(--open)]" : "shadow-[0_0_0_2px_var(--background)]", TONE_SQUARE[tone])}
             />
           )}
         </span>

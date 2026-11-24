@@ -114,7 +114,7 @@ function HeldItemRow({
     <div className="grid grid-cols-1 gap-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 tabular-nums">
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          {!kept && <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />}
+          {!kept && <span aria-hidden="true" className="size-2 rounded-full shrink-0 bg-caution" />}
           <span>{REASON_LABELS[item.reason]}</span>
         </span>
         {item.projectName && <span>{item.projectName}</span>}
@@ -193,7 +193,7 @@ function OverviewGroup({
 
   const dbDetail = dbWarnTable ? (
     <span className="inline-flex items-center gap-1.5 tabular-nums">
-      <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />
+      <span aria-hidden="true" className="size-2 rounded-full shrink-0 bg-caution" />
       <span>{`${humanTableName(dbWarnTable.table)} ${dbWarnTable.rows.toLocaleString("en-US")} / ${dbWarnTable.rowLimit?.toLocaleString("en-US")}`}</span>
     </span>
   ) : snapshot.database.freelistBytes >= 1024 * 1024 ? (
@@ -202,7 +202,7 @@ function OverviewGroup({
 
   const storageDetail = storageWarn ? (
     <span className="inline-flex items-center gap-1.5 tabular-nums">
-      <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />
+      <span aria-hidden="true" className="size-2 rounded-full shrink-0 bg-caution" />
       <span>
         {storageWarn.maxBytes !== null
           ? `${humanDirectoryLabel(storageWarn)} ${formatBytes(storageWarn.bytes)} / ${formatBytes(storageWarn.maxBytes)}`
@@ -252,7 +252,7 @@ function OverviewGroup({
               <span>{`${snapshot.processes.trackedCount} running`}</span>
               {snapshot.processes.leakedCount > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-foreground">
-                  <span aria-hidden="true" className="size-2 bg-caution" />
+                  <span aria-hidden="true" className="size-2 rounded-full bg-caution" />
                   <span>{`${snapshot.processes.leakedCount} leftover`}</span>
                 </span>
               )}
@@ -280,7 +280,7 @@ function StorageDetailsGroup({ snapshot }: { snapshot: ResourcesSnapshot }) {
           detail={
             dir.warning ? (
               <span className="inline-flex items-center gap-1.5 tabular-nums">
-                <span aria-hidden="true" className="size-2 shrink-0 bg-caution" />
+                <span aria-hidden="true" className="size-2 rounded-full shrink-0 bg-caution" />
                 <span>
                   {dir.maxBytes !== null
                     ? `${formatBytes(dir.bytes)} / ${formatBytes(dir.maxBytes)}`
@@ -358,13 +358,13 @@ function DiscardConfirmDialog({
                 {item.bytes !== null && <span>{formatBytes(item.bytes)}</span>}
               </div>
               {item.samplePaths.length > 0 && (
-                <p className="border border-border bg-panel px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground">
+                <p className="rounded-sm border border-border bg-panel px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground">
                   {item.samplePaths.join("\n")}
                 </p>
               )}
             </div>
             {item.kind === "worktree" && item.branch !== null && (
-              <div className="border-2 border-border">
+              <div className="rounded-sm border border-border">
                 <SettingsRow label={`Also delete branch ${item.branch}`}>
                   {(id) => (
                     <Switch

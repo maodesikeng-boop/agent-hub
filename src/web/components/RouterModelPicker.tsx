@@ -449,7 +449,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
       {saveError !== null && <RowError error={saveError} />}
 
       {showAddProvider && (
-        <div className="border-t-2 border-border pt-2">
+        <div className="border-t border-border pt-2">
           <button
             type="button"
             onClick={() => {

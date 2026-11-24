@@ -330,6 +330,15 @@ export const TurnView = memo(
 
 type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
 
+// Event rows share one grid: a bare 16px icon centered on the first 20px line, an inline label, muted detail that wraps
+// under the label rather than under a box, and a compact text action centered on the first line.
+const EVENT_ROW = "flex w-full items-start gap-3 px-3.5 py-2.5 text-left text-minor leading-5";
+const EVENT_TEXT = "min-w-0 flex-1 text-muted-foreground [overflow-wrap:anywhere]";
+const EVENT_TRIGGER =
+  "cursor-pointer rounded-none transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent";
+const EVENT_ACTION =
+  "touch-target inline-flex h-7 shrink-0 cursor-pointer items-center rounded-sm px-2 text-minor font-medium text-rail-ink transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60";
+
 function RevertButton({
   changeId,
   reverted = false,
@@ -341,7 +350,7 @@ function RevertButton({
 }) {
   const [phase, setPhase] = useState<RevertPhase>("idle");
   if (reverted || phase === "done") {
-    return <span className="border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground">Undone</span>;
+    return <span className="px-2 text-minor text-muted-foreground">Undone</span>;
   }
   const revert = () => {
     setPhase("busy");
@@ -352,11 +361,11 @@ function RevertButton({
   };
   return (
     <>
-      {phase === "conflict" && <span className="text-xs text-danger">Only the latest change can be undone</span>}
-      {phase === "error" && <span className="text-xs text-danger">Couldn't undo</span>}
-      <Button variant="outline" size="sm" disabled={phase === "busy"} onClick={revert}>
+      {phase === "conflict" && <span className="text-minor text-danger">Only the latest change can be undone</span>}
+      {phase === "error" && <span className="text-minor text-danger">Couldn't undo</span>}
+      <button type="button" className={EVENT_ACTION} disabled={phase === "busy"} onClick={revert}>
         {phase === "busy" ? "Undoing…" : "Undo"}
-      </Button>
+      </button>
     </>
   );
 }
@@ -381,29 +390,20 @@ const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], Icon>> = {
   user_message: MessageSquare,
 };
 
-function EventIconTile({ icon: Icon, danger = false }: { icon: Icon; danger?: boolean }) {
-  return (
-    <span
-      className={cn(
-        "mt-0.5 flex size-6 shrink-0 items-center justify-center border bg-background",
-        danger ? "border-danger/40 text-danger" : "border-border-strong text-muted-foreground",
-      )}
-    >
-      <Icon className="size-pixel-sm" aria-hidden="true" />
-    </span>
-  );
+function EventIcon({ icon: Icon, danger = false }: { icon: Icon; danger?: boolean }) {
+  return <Icon className={cn("mt-0.5 size-4 shrink-0", danger ? "text-danger" : "text-muted-foreground")} aria-hidden="true" />;
 }
 
-function EventTag({ label, danger = false }: { label: string; danger?: boolean }) {
+function EventLabel({ label, danger = false }: { label: string; danger?: boolean }) {
+  return <span className={cn("mr-2 font-medium", danger ? "text-danger" : "text-foreground")}>{label}</span>;
+}
+
+function EventChevron() {
   return (
-    <span
-      className={cn(
-        "mr-2 inline-flex shrink-0 items-center border bg-background px-1.5 text-xs leading-5 font-medium align-baseline",
-        danger ? "border-danger/40 text-danger" : "border-border text-muted-foreground",
-      )}
-    >
-      {label}
-    </span>
+    <ChevronRight
+      className="mt-0.5 size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+      aria-hidden="true"
+    />
   );
 }
 
@@ -422,9 +422,9 @@ function EventStripShell({
     <div
       data-event-group={grouped ? "true" : undefined}
       className={cn(
-        "w-full min-w-0 border-2",
+        "w-full min-w-0 overflow-hidden rounded-sm",
         inTurn ? "mt-1" : "mt-4",
-        danger ? "divide-y divide-danger/20 border-danger/40 bg-danger/5" : "divide-y divide-border border-border bg-panel",
+        danger ? "divide-y divide-danger/15 bg-danger-soft" : "divide-y divide-border bg-panel",
       )}
     >
       {children}
@@ -448,66 +448,71 @@ function EventRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2.5 px-3 py-2 text-minor leading-5" data-side="left" data-notice title={title}>
-      <EventIconTile icon={icon} danger={danger} />
-      <div className="min-w-0 flex-1 pt-0.5 text-foreground [overflow-wrap:anywhere]">
-        <EventTag label={tag} danger={danger} />
+    <div className={EVENT_ROW} data-side="left" data-notice title={title}>
+      <EventIcon icon={icon} danger={danger} />
+      <p className={EVENT_TEXT}>
+        <EventLabel label={tag} danger={danger} />
         {children}
-      </div>
-      {trailing && <div className="ml-auto flex shrink-0 items-center gap-2 self-center">{trailing}</div>}
+      </p>
+      {trailing && <div className="-my-1 ml-auto flex shrink-0 items-center gap-2">{trailing}</div>}
     </div>
   );
 }
 
-function ScheduleRun({ text }: { text: string }) {
+function CollapsibleEvent({
+  icon,
+  tag,
+  text,
+  event,
+  className,
+  notice = false,
+  children,
+}: {
+  icon: Icon;
+  tag: string;
+  text: string;
+  event: string;
+  className: string;
+  notice?: boolean;
+  children: React.ReactNode | null;
+}) {
   const [open, setOpen] = useState(false);
-  const match = /^【([^】]*)】\s*([\s\S]*)$/.exec(text);
-  const title = match?.[1] ?? "Scheduled task";
-  const body = (match?.[2] ?? text).trim();
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mt-6 border-2 border-border bg-panel" data-side="left" data-event="schedule.run">
-      <CollapsibleTrigger
-        aria-label={title}
-        className="group flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left text-minor leading-5 transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
-        disabled={body === ""}
-      >
-        <EventIconTile icon={Clock} />
-        <span className="min-w-0 flex-1 pt-0.5 text-foreground [overflow-wrap:anywhere]">
-          <EventTag label="Scheduled" />
-          <span className="font-medium">{title}</span>
+    <Collapsible open={open} onOpenChange={setOpen} className={cn("overflow-hidden rounded-sm bg-panel", className)} data-side="left" data-notice={notice || undefined} data-event={event}>
+      <CollapsibleTrigger aria-label={text} className={cn(EVENT_ROW, "group", EVENT_TRIGGER)} disabled={children === null}>
+        <EventIcon icon={icon} />
+        <span className={EVENT_TEXT}>
+          <EventLabel label={tag} />
+          {text}
         </span>
-        {body !== "" && <ChevronRight className="mt-1 size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
+        {children !== null && <EventChevron />}
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-border bg-background px-3 py-2.5">
-        <p className={cn("leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]", SECONDARY)}>{body}</p>
-      </CollapsibleContent>
+      {children !== null && <CollapsibleContent className="border-t border-border pt-2.5 pr-3.5 pb-3 pl-10.5">{children}</CollapsibleContent>}
     </Collapsible>
   );
 }
 
+function ScheduleRun({ text }: { text: string }) {
+  const match = /^【([^】]*)】\s*([\s\S]*)$/.exec(text);
+  const title = match?.[1] ?? "Scheduled task";
+  const body = (match?.[2] ?? text).trim();
+  return (
+    <CollapsibleEvent icon={Clock} tag="Scheduled" text={title} event="schedule.run" className="mt-6">
+      {body === "" ? null : <p className={cn("leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]", SECONDARY)}>{body}</p>}
+    </CollapsibleEvent>
+  );
+}
+
 function SessionRenewed({ text, handover }: { text: string; handover: string }) {
-  const [open, setOpen] = useState(false);
   const body = handover.trim();
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mt-4 border-2 border-border bg-panel" data-side="left" data-notice data-event="session.renewed">
-      <CollapsibleTrigger
-        aria-label={text}
-        className="group flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left text-minor leading-5 transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
-        disabled={body === ""}
-      >
-        <EventIconTile icon={RefreshCw} />
-        <span className="min-w-0 flex-1 pt-0.5 text-foreground [overflow-wrap:anywhere]">
-          <EventTag label="Session" />
-          <span className="font-medium">{text}</span>
-        </span>
-        {body !== "" && <ChevronRight className="mt-1 size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
-      </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-border bg-background px-3 py-2.5">
+    <CollapsibleEvent icon={RefreshCw} tag="Session" text={text} event="session.renewed" className="mt-4" notice>
+      {body === "" ? null : (
         <div className={cn("leading-relaxed [overflow-wrap:anywhere]", SECONDARY)} data-handover>
           <Markdown text={body} />
         </div>
-      </CollapsibleContent>
-    </Collapsible>
+      )}
+    </CollapsibleEvent>
   );
 }
 
@@ -528,7 +533,7 @@ function SystemNoticeRow({
     ) : undefined;
   return (
     <EventRow icon={EVENT_ICONS[summary.icon]} tag={summary.tag} danger={summary.tone === "danger"} title={summary.rawTitle} trailing={trailing}>
-      <span>{summary.text}</span>
+      {summary.text}
     </EventRow>
   );
 }
@@ -541,17 +546,16 @@ function WorkerNoticeRow({ line, onOpen }: { line: WorkerMessageMeta; onOpen: Me
       <button
         type="button"
         aria-label={[title, state, detail].filter((part) => part !== "").join(" ")}
-        className="touch-target flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left text-minor leading-5 transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+        className={cn(EVENT_ROW, "touch-target", EVENT_TRIGGER)}
         onClick={() => onOpen(line.workerConversationId)}
       >
-        <EventIconTile icon={icon} />
-        <span className="min-w-0 flex-1 pt-0.5 [overflow-wrap:anywhere]">
-          <EventTag label="Worker" />
-          <span className="font-medium text-foreground">{title}</span>
-          <span className="ml-2 text-muted-foreground">{state}</span>
-          {detail !== "" && <span className="ml-2 text-muted-foreground">{detail}</span>}
+        <EventIcon icon={icon} />
+        <span className={EVENT_TEXT}>
+          <EventLabel label={title} />
+          {state}
+          {detail !== "" && <span className="ml-2">{detail}</span>}
         </span>
-        <ChevronRight className="mt-1 size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
+        <ChevronRight className="mt-0.5 size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
       </button>
     </div>
   );

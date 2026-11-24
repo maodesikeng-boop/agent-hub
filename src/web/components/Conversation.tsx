@@ -34,7 +34,7 @@ function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }
     }
   };
   return (
-    <div className="border-2 border-border bg-panel px-4 py-3">
+    <div className="rounded-sm border border-border bg-panel px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 text-body">
           <span>Archived</span>
@@ -138,8 +138,8 @@ export const Conversation = memo(function Conversation({
         data-window-drag
         className={
           mobile
-            ? "flex min-h-14 min-w-0 shrink-0 items-center justify-between gap-2 overflow-hidden border-b-2 border-border pt-[var(--safe-top)] pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
-            : "flex h-14 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b-2 border-border pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+            ? "flex min-h-14 min-w-0 shrink-0 items-center justify-between gap-2 overflow-hidden border-b border-border pt-[var(--safe-top)] pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+            : "flex h-14 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-border pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
         }
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
