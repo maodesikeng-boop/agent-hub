@@ -474,6 +474,7 @@ describe("最左栏的额度", () => {
     withWorker({ sessions: [makeSession({ conversationId: 1, pmId: 1, rateLimit, lastEventAt: 5 })] });
   const railNav = () => screen.getByRole("navigation", { name: "Workspace" });
   const badge = () => within(railNav()).getByRole("button", { name: /usage/i });
+  const sandTone = () => badge().querySelector("svg.hourglass")?.getAttribute("data-tone");
   // 样例里的重置时间（1_793_619_600、1_793_646_000）要在“现在”之后，不然窗口算已重置
   const T_BEFORE_RESET = (1_793_619_600 - 3600) * 1000;
   const currentQuotaServer = { platform: "darwin", folderPicker: true, fileActions: true, currentQuota: true } as const;
@@ -572,7 +573,6 @@ describe("最左栏的额度", () => {
       expect(within(screen.getByRole("group", { name: "Claude and GPT" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "90");
       expect(ask()).toBe(1);
       expect(badge()).toHaveAccessibleName(/7d usage 59%/);
-      expect(badge()).toHaveTextContent("59%");
     });
 
     it("没有别家的事件额度、有 agy 会话：按钮也在（沙漏图标），打开后先显示 Loading…，拉到后显示 agy 的", async () => {
@@ -601,7 +601,6 @@ describe("最左栏的额度", () => {
       await user.click(badge());
       await screen.findByRole("group", { name: "Gemini" });
       expect(badge()).toHaveAccessibleName(/7d usage 59%/);
-      expect(badge()).toHaveTextContent("59%");
     });
 
     it("查失败或没有：不显示 agy 那块，别家的照常", async () => {
@@ -631,19 +630,18 @@ describe("最左栏的额度", () => {
     expect(screen.queryByRole("button", { name: /usage/i })).not.toBeInTheDocument();
   });
 
-  it("最左栏显示 5 格像素电量 + 百分比，悬停和读屏带窗口信息", async () => {
+  it("最左栏只画沙漏、不写百分比，悬停和读屏带窗口信息", async () => {
     await boot(withQuota(quota(0.37, 0.59)));
-    expect(badge()).toHaveTextContent("59%");
+    expect(badge().textContent).toBe("");
     expect(badge()).toHaveAccessibleName(/7d usage 59%/);
     expect(badge().getAttribute("title")).toMatch(/7d usage 59%/);
-    expect(within(badge()).getByText("59%")).toHaveClass("text-rail-ink");
+    expect(sandTone()).toBe("normal");
   });
 
   it("推 session.status 带来新的额度：跟着变", async () => {
     const ws = await boot(withQuota(quota(0.37, 0.59)));
     push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: quota(0.4, 0.6), lastEventAt: 9 })));
     expect(badge()).toHaveAccessibleName(/7d usage 60%/);
-    expect(badge()).toHaveTextContent("60%");
   });
 
   describe("到了重置时间", () => {
@@ -661,12 +659,12 @@ describe("最左栏的额度", () => {
       clock(RESET - 600);
       await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
       expect(badge()).toHaveAccessibleName(/5h usage 99%/);
-      expect(within(badge()).getByText("99%")).toHaveClass("text-rail-warn");
+      expect(sandTone()).toBe("warning");
       advance(599);
       expect(badge()).toHaveAccessibleName(/5h usage 99%/);
       advance(2);
       expect(badge()).toHaveAccessibleName(/7d usage 31%/);
-      expect(within(badge()).getByText("31%")).toHaveClass("text-rail-ink");
+      expect(sandTone()).toBe("normal");
       await user.click(badge());
       expect(screen.getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "0");
       expect(screen.getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "31");
@@ -688,24 +686,24 @@ describe("最左栏的额度", () => {
       clock(RESET - 600);
       await boot(withQuota(rl(1, RESET, "rejected")));
       expect(badge()).toHaveAccessibleName(/5h usage 100%/);
-      expect(within(badge()).getByText("100%")).toHaveClass("text-rail-danger");
+      expect(sandTone()).toBe("full");
       advance(601);
       expect(badge()).toHaveAccessibleName(/7d usage 31%/);
-      expect(within(badge()).getByText("31%")).toHaveClass("text-rail-ink");
+      expect(sandTone()).toBe("normal");
     });
   });
 
-  it("按 80% 警告和 100% 满格区分数字颜色，普通用量保持 rail-ink", async () => {
+  it("按 80% 警告和 100% 满格区分沙子颜色，普通用量保持默认沙色", async () => {
     const ws = await boot(withQuota(limit({ five_hour: win(0.79, { status: "allowed" }) })));
-    expect(within(badge()).getByText("79%")).toHaveClass("text-rail-ink");
+    expect(sandTone()).toBe("normal");
     push(ws, sessionChange(12, makeSession({ conversationId: 1, pmId: 1, rateLimit: limit({ five_hour: win(0.85, { status: "allowed_warning" }) }), lastEventAt: 8 })));
-    expect(within(badge()).getByText("85%")).toHaveClass("text-rail-warn");
+    expect(sandTone()).toBe("warning");
   });
 
-  it("用完了（rejected）：仪表标 100% 且使用危险色", async () => {
+  it("用完了（rejected）：仪表读作 100% 且沙子用危险色", async () => {
     await boot(withQuota(limit({ five_hour: win(1, { status: "rejected" }) }, "rejected")));
-    expect(badge()).toHaveTextContent("100%");
-    expect(within(badge()).getByText("100%")).toHaveClass("text-rail-danger");
+    expect(badge()).toHaveAccessibleName(/5h usage 100%/);
+    expect(sandTone()).toBe("full");
   });
 
   it("点开小窗口：按厂商分组，每个窗口一行：名字、百分比、进度条、重置时间", async () => {
@@ -748,7 +746,6 @@ describe("最左栏的额度", () => {
     const user = userEvent.setup();
     await boot(withQuota(limit({ seven_day: win(0.2) })));
     expect(badge()).toHaveAccessibleName(/7d usage 20%/);
-    expect(badge()).toHaveTextContent("20%");
     await user.click(badge());
     expect(screen.getAllByRole("progressbar")).toHaveLength(1);
     expect(screen.getByRole("progressbar", { name: "7d usage" })).toBeInTheDocument();
