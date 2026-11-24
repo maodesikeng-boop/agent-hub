@@ -338,7 +338,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
             {(["Before", "After"] as const).map((label) => (
               <div key={label} className="min-w-0">
                 <div className="mb-1 text-minor font-medium text-muted-foreground">{label}</div>
-                <pre className="min-h-10 max-h-60 overflow-auto rounded-sm border border-border bg-panel p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <pre className="min-h-10 max-h-60 overflow-auto rounded-sm bg-panel p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {label === "Before" ? change.textBefore : change.textAfter}
                 </pre>
               </div>

@@ -45,16 +45,16 @@ export function FileCard({
   const body = (
     <>
       {imageUrl !== undefined ? (
-        <img src={imageUrl} alt={name} loading="lazy" onError={markExpired} className="size-10 shrink-0 rounded-sm border border-border bg-background object-cover" />
+        <img src={imageUrl} alt={name} loading="lazy" onError={markExpired} className="size-10 shrink-0 rounded-sm bg-background object-cover" />
       ) : videoUrl !== undefined ? (
-        <span className="relative size-10 shrink-0 overflow-hidden rounded-sm border border-border bg-black">
+        <span className="relative size-10 shrink-0 overflow-hidden rounded-sm bg-black">
           <video src={videoUrl} preload="metadata" muted playsInline aria-hidden="true" tabIndex={-1} className="size-full object-cover" />
           <span data-play-badge className="absolute inset-0 m-auto flex size-5 items-center justify-center bg-black/55 text-white">
             <Play className="size-pixel-sm translate-x-px fill-current" aria-hidden="true" />
           </span>
         </span>
       ) : (
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-sm border border-border bg-background text-muted-foreground">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-sm bg-background text-muted-foreground">
           <FileText className="size-pixel" aria-hidden="true" />
         </span>
       )}

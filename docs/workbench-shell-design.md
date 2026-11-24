@@ -280,7 +280,7 @@ Each implementation step edits its sections of `docs/ui-standard.md` before touc
 3. **Stable front-end references.** `projectListOf` caches its result per `entries` array in a `WeakMap`, so the PM column's `memo` boundary holds while the list is unchanged. `railComputersOf` and `quotaMeterOf` cache per input array the same way.
 4. **Measured verification.** The PR records `pnpm build` chunk sizes before and after. The library should add about 48 kB minified and 16 kB gzip, 3.7% of the current main chunk. Thread cards change how Worker reports render, so the PR also records `scripts/bench-message-list.ts` before and after, following `.agents/skills/benchmark-checklist/SKILL.md`.
 
-New constants in `src/shared/limits.ts` are layout thresholds rather than collection caps, so one-month sizing does not apply.
+New constants in `src/web/limits.ts` (only the web workbench reads them) are layout thresholds rather than collection caps, so one-month sizing does not apply.
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
@@ -289,8 +289,8 @@ New constants in `src/shared/limits.ts` are layout thresholds rather than collec
 | `SHELL_LIST_REM` | `{ min: 13.75, default: 16.5, max: 25 }` | PM column, 220, 264, and 400px |
 | `SHELL_PANEL_REM` | `{ min: 22.5, default: 27.5, max: 45 }` | Side panel, 360, 440, and 720px |
 | `SHELL_CHAT_MIN_REM` | `30` | Conversation minimum, 480px |
-| `SHELL_FRAME_PX` | `10` | Sheet inset and outline beside the rail |
-| `SHELL_SEAM_PX` | `2` | One column line |
+| `SHELL_FRAME_PX` | `6` | The cream frame's right inset around the white sheets |
+| `SHELL_SEAM_PX` | `6` | The gap between columns; columns part by tone, not lines |
 
 ### 5. Cross-vendor and cross-platform unification
 

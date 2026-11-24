@@ -256,7 +256,7 @@ export function UnsentDraftBanner({
   return (
     <div
       data-unsent-draft
-      className={cn("rounded-sm border border-border bg-panel", compact ? "mt-2 p-2" : "mt-3 p-2.5", className)}
+      className={cn("rounded-sm bg-panel", compact ? "mt-2 p-2" : "mt-3 p-2.5", className)}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5 text-minor font-medium text-foreground">

@@ -99,7 +99,7 @@ function ComposerChips({
       {files.map(({ key, file }) => {
         const FileIcon = previewKindOf(file.name, sentFileMime(file.name)) === "video" ? Video : FileText;
         return (
-          <li key={key} className="flex max-w-full items-center gap-2 rounded-sm border border-border bg-panel py-1 pr-1 pl-3 text-minor">
+          <li key={key} className="flex max-w-full items-center gap-2 rounded-sm bg-panel py-1 pr-1 pl-3 text-minor">
             <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span className="min-w-0 truncate">{file.name}</span>
             <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
@@ -121,7 +121,7 @@ const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick; disabled: boolean; onEdit: () => void; onRemove: () => void }) {
   const labels = useWorkerPickLabels(pick);
   return (
-    <li className="flex max-w-full items-center gap-2 rounded-sm border border-border bg-panel py-1 pr-1 pl-3 text-minor">
+    <li className="flex max-w-full items-center gap-2 rounded-sm bg-panel py-1 pr-1 pl-3 text-minor">
       <button
         type="button"
         aria-label={`Worker model: ${labels.join(" ")}`}

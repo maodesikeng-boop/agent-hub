@@ -358,7 +358,7 @@ function DiscardConfirmDialog({
                 {item.bytes !== null && <span>{formatBytes(item.bytes)}</span>}
               </div>
               {item.samplePaths.length > 0 && (
-                <p className="rounded-sm border border-border bg-panel px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground">
+                <p className="rounded-sm bg-panel px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground">
                   {item.samplePaths.join("\n")}
                 </p>
               )}
