@@ -30,7 +30,6 @@ import {
   FolderPlus as LucideFolderPlus,
   FolderSearch as LucideFolderSearch,
   Globe as LucideGlobe,
-  Hourglass as LucideHourglass,
   Info as LucideInfo,
   Laptop as LucideLaptop,
   Loader2 as LucideLoader2,
@@ -121,6 +120,10 @@ export const Loader2: Icon = Object.assign(
 const PIN_HEAD_PATH =
   "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z";
 
+/** Curved-bulb glass shared by the static usage icon and the rail's sand hourglass. */
+export const HOURGLASS_GLASS_PATH = "M5 3h14M5 21h14M7 3c0 3.6 2.2 6 5 9-2.8 3-5 5.4-5 9M17 3c0 3.6-2.2 6-5 9 2.8 3 5 5.4 5 9";
+export const Hourglass = customStroke("Hourglass", () => [createElement("path", { key: "glass", d: HOURGLASS_GLASS_PATH })]);
+
 export const Pin = smooth(LucidePin, "Pin");
 export const PinFilled = customStroke("PinFilled", () => [
   createElement("path", { key: "needle", d: "M12 17v5" }),
@@ -197,7 +200,6 @@ export const FolderMinus = smooth(LucideFolderMinus, "FolderMinus");
 export const FolderPlus = smooth(LucideFolderPlus, "FolderPlus");
 export const FolderSearch = smooth(LucideFolderSearch, "FolderSearch");
 export const Globe = smooth(LucideGlobe, "Globe");
-export const Hourglass = smooth(LucideHourglass, "Hourglass");
 export const Info = smooth(LucideInfo, "Info");
 export const Laptop = smooth(LucideLaptop, "Laptop");
 export const Maximize2 = smooth(LucideMaximize2, "Maximize2");
