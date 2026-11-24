@@ -1,5 +1,5 @@
 import { ChevronDown } from "../ui/icons.ts";
-import { useId, useState, type ReactNode } from "react";
+import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
@@ -7,6 +7,15 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/colla
 const GROUP_SHELL = "overflow-hidden rounded-sm border border-border bg-background [contain:layout_style]";
 
 const GROUP_BOX = `divide-y divide-border ${GROUP_SHELL}`;
+
+const GROUP_FLAT = "divide-y divide-border [contain:layout_style]";
+
+// A page lays its sections flat on the sheet; panels, dialogs, and phone pages keep each group in one hairline box.
+const FlatGroups = createContext(false);
+
+export function FlatSettingsGroups({ children }: { children: ReactNode }) {
+  return <FlatGroups.Provider value>{children}</FlatGroups.Provider>;
+}
 
 const GROUP_TITLE = "text-minor font-medium text-muted-foreground";
 
@@ -21,6 +30,7 @@ export function SettingsGroup({
   action?: ReactNode;
   children: ReactNode;
 }) {
+  const flat = useContext(FlatGroups);
   return (
     <section aria-label={label ?? title} className="grid grid-cols-1 gap-2">
       {(title || action) && (
@@ -29,7 +39,7 @@ export function SettingsGroup({
           {action}
         </div>
       )}
-      <div className={GROUP_BOX}>{children}</div>
+      <div className={flat ? GROUP_FLAT : GROUP_BOX}>{children}</div>
     </section>
   );
 }
@@ -45,6 +55,7 @@ export function CollapsibleGroup({
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
+  const flat = useContext(FlatGroups);
   const [open, setOpen] = useState(defaultOpen);
   const [prevDefaultOpen, setPrevDefaultOpen] = useState(defaultOpen);
   if (defaultOpen !== prevDefaultOpen) {
@@ -53,7 +64,7 @@ export function CollapsibleGroup({
   }
   return (
     <section aria-label={title}>
-      <Collapsible open={open} onOpenChange={setOpen} className={GROUP_SHELL}>
+      <Collapsible open={open} onOpenChange={setOpen} className={flat ? "border-y border-border" : GROUP_SHELL}>
         <h2>
           <CollapsibleTrigger className="group flex min-h-13 w-full cursor-pointer items-center gap-4 rounded-none px-4 py-2 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]">
             <span className="min-w-0 flex-1 truncate">{title}</span>

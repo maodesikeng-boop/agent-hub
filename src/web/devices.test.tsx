@@ -424,13 +424,13 @@ describe("设置 → 设备", () => {
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
     const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
-    // 照 Grok Bot：框外小灰字组标题 + 白底 1px 浅边框圆角框，不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
+    // 设置是一页：小灰字组标题 + 细线分开的行，组不画白框、不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
     const mine = within(devices).getByRole("region", { name: "This computer" });
     const others = within(devices).getByRole("region", { name: "Your computers" });
     for (const group of [mine, others]) {
       expect(within(group).getByRole("heading")).toHaveClass("text-minor", "text-muted-foreground");
-      expect(group.lastElementChild).toHaveClass("rounded-sm", "border", "border-border", "bg-background");
-      expect(group.lastElementChild?.className).not.toMatch(/border-2|rounded-(?!sm\b)|bg-sidebar/);
+      expect(group.lastElementChild).toHaveClass("divide-y", "divide-border");
+      expect(group.lastElementChild?.className).not.toMatch(/(^|\s)(border|rounded-\S+|bg-\S+)(\s|$)/);
     }
     expect(within(mine).getByTestId("device-row")).toHaveTextContent("Mac");
     expect(within(others).getByTestId("device-row")).toHaveTextContent("东京");

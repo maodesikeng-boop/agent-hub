@@ -29,6 +29,8 @@ export interface AppRailProps {
   quotaFetchable: boolean;
   onSelectComputer: (key: DeviceKey) => void;
   onOpenSettings: () => void;
+  /** Settings is open as a page; its tile stays raised like a tile whose popover is open. */
+  settingsOpen?: boolean;
   onOpenUpdates: () => void;
   /** Opens Settings on Computers when an account is linked, otherwise on Security & Access. */
   onOpenAccount: () => void;
@@ -143,6 +145,7 @@ export function AppRail({
   quotaFetchable,
   onSelectComputer,
   onOpenSettings,
+  settingsOpen = false,
   onOpenUpdates,
   onOpenAccount,
 }: AppRailProps): React.ReactElement {
@@ -198,6 +201,7 @@ export function AppRail({
         <FooterButton
           label={resources.attention ? `Settings (${resources.heldCount} to review)` : "Settings"}
           title="Settings"
+          data-state={settingsOpen ? "open" : "closed"}
           onClick={onOpenSettings}
         >
           <span className="relative grid">
