@@ -575,6 +575,7 @@ function makeCodexHarness(
     script?: FakeCodexScript;
     driver?: Partial<CodexDriverOptions>;
     personaRevision?: () => number;
+    capabilityFingerprint?: () => Promise<string>;
     /** 数据目录放在临时目录下的这个子目录里（默认就是临时目录本身）：真包 OS 沙箱时，假 codex 的日志、剧本得在数据目录外。 */
     dataDirName?: string;
     /** 假 codex 启动时试着往数据目录里写这个文件（FAKE_CODEX_PROBE），结果记进日志。 */
@@ -617,6 +618,12 @@ function makeCodexHarness(
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
       if (options.personaRevision) files.personaRevision = options.personaRevision();
+      if (options.capabilityFingerprint) {
+        files.capabilityCheck = {
+          fingerprint: await options.capabilityFingerprint(),
+          currentFingerprint: options.capabilityFingerprint,
+        };
+      }
       if (options.skills && session.role === "pm") files.skillsDir = join(launchDir, "skills");
       // 数据目录默认是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
       const writeScope = workerWriteScope({ role: session.role, dataDir, cwd: session.cwd });
@@ -1620,6 +1627,26 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
     expect(await t.waitFor("turn.ended")).toMatchObject({ ok: true, messageIds: [1, 2] });
     expect(t.of("message.processing").map((e) => e.messageIds)).toEqual([[1], [2]]);
     expect(methods(t).filter((m) => m === "turn/start")).toHaveLength(1);
+  });
+
+  it("queues a message after capabilities change and sends it on the resumed thread", async () => {
+    let fingerprint = "before";
+    const t = makeCodexHarness({ capabilityFingerprint: async () => fingerprint });
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [holdTurn(t.dir)] }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("agent.tool");
+
+    fingerprint = "after";
+    await expect(t.driver.send(s.id, user(2, "Use the new capability"))).resolves.toEqual({ kind: "queued" });
+    expect(methods(t)).not.toContain("turn/steer");
+    expect(t.of("message.delivered").map((event) => event.messageIds)).toEqual([[1]]);
+
+    release(t.dir);
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1], ok: true });
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ messageIds: [2], ok: true });
+    expect(methods(t)).toContain("thread/resume");
+    expect(methods(t)).not.toContain("turn/steer");
   });
 
   it("连发两条：各一个 turn/steer，不拼成一条，同一轮都取走", async () => {

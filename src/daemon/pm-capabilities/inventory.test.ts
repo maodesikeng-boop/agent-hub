@@ -279,6 +279,53 @@ describe("createCapabilityInventory", () => {
     expect(r3.items.some((i) => i.key === "connector:claude:claude.ai Gmail")).toBe(true);
   });
 
+  it("detects SKILL.md creation and removal inside an existing skill folder", async () => {
+    const skillsRoot = join(userHome, ".agents", "skills");
+    const skillDir = join(skillsRoot, "calendar");
+    mkdirSync(skillDir, { recursive: true });
+    const inv = createCapabilityInventory({ ctx: { userHome, env: {} }, now: () => now });
+    const scope = { projectDir: null };
+    expect((await inv.get(scope)).items).toEqual([]);
+
+    writeSkill(skillsRoot, "calendar");
+    expect((await inv.get(scope)).items.map((item) => item.key)).toEqual(["skill:calendar"]);
+    rmSync(join(skillDir, "SKILL.md"));
+    expect((await inv.get(scope)).items).toEqual([]);
+  });
+
+  it("detects the preferred OpenCode config appearing beside the original path", async () => {
+    const configDir = join(userHome, ".config", "opencode");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "opencode.json"), "{}");
+    const inv = createCapabilityInventory({ ctx: { userHome, env: {} }, now: () => now });
+    const scope = { projectDir: null };
+    expect((await inv.get(scope)).items).toEqual([]);
+    writeFileSync(join(configDir, "opencode.jsonc"), '{"mcp":{"calendar":{"type":"local","command":["echo"]}}}');
+    expect((await inv.get(scope)).items.map((item) => item.key)).toEqual(["mcp:calendar"]);
+  });
+
+  it("retries an inventory scan when MCP config changes during the scan", async () => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    const claude: VendorSyncAdapter = {
+      ...claudeSyncAdapter,
+      async scanCapabilities() {
+        await promise;
+        return { skills: [], mcp: [], connectors: [], plugins: [] };
+      },
+    };
+    const cfg = join(userHome, ".claude.json");
+    writeFileSync(cfg, '{"mcpServers":{}}');
+    const inv = createCapabilityInventory({ ctx: { userHome, env: {} }, now: () => now, adapters: { claude } });
+    const scope = { projectDir: null };
+    const scan = inv.get(scope);
+    writeFileSync(cfg, '{"mcpServers":{"calendar":{"command":"echo"}}}');
+    release();
+    const result = await scan;
+    expect(result.items.map((item) => item.key)).toEqual(["mcp:calendar"]);
+    expect(await inv.get(scope)).toBe(result);
+  });
+
   it("超过 PM_CAPABILITY_INVENTORY_MAX_ITEMS 时截断并标 truncated", async () => {
     const hugeClaude: VendorSyncAdapter = {
       ...claudeSyncAdapter,

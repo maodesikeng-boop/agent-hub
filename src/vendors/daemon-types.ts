@@ -33,6 +33,7 @@ export interface VendorDaemon {
   transcriptPath?(ref: TranscriptRef, roots: TranscriptRoots): string | null;
   sessionFiles?(ref: TranscriptRef, roots: TranscriptRoots): string[];
   launchFiles?(input: VendorLaunchInput): VendorLaunchFiles;
+  /** Represents every launch option that changes with the capability policy. */
   capabilityLaunch?(caps: SessionCapabilities): unknown;
   sync?: VendorSyncAdapter;
   setup?: VendorSetupAdapter;
@@ -176,6 +177,7 @@ export interface VendorSyncAdapter {
     },
   ): VendorMcpPatchPlan;
   skillTarget(ctx: VendorSyncContext, scope: { kind: "global" } | { kind: "project"; projectDir: string }): VendorSkillTarget;
+  mcpConfigPaths?(ctx: VendorSyncContext): readonly string[];
   scanCapabilities?(ctx: VendorSyncContext, scope: { projectDir: string | null }): Promise<VendorCapabilityScan>;
 }
 

@@ -3,6 +3,7 @@ import {
   RESEND_NOTE,
   type AgentSessionRow,
   type DriverEvent,
+  type LaunchCapabilityCheck,
   type MessageId,
   type MessageSource,
 } from "../../shared/index.ts";
@@ -21,7 +22,7 @@ export interface PendingEntry {
 export interface BatchNotes {
   recovery: boolean;
   crash: boolean;
-  relaunch: boolean;
+  relaunch: string | null;
   killed: string | null;
   persona: PersonaNoteTaken | null;
   preamble: PreambleTaken | null;
@@ -30,7 +31,7 @@ export interface BatchNotes {
 export const NO_NOTES: BatchNotes = {
   recovery: false,
   crash: false,
-  relaunch: false,
+  relaunch: null,
   killed: null,
   persona: null,
   preamble: null,
@@ -74,6 +75,7 @@ export interface BaseProc<TOutcome = StartupOutcome> {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
+  capabilityCheck?: LaunchCapabilityCheck;
   personaLaunched: number | null;
   backgroundHoldMaxMs: number;
   initSeen: boolean;

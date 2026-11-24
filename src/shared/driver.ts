@@ -26,6 +26,7 @@ export const RESTART_RECOVERY_NOTE = "【系统】守护进程重启，你上一
 export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发给过你。如果你已经处理过这条，忽略它。";
 // Never point at the system prompt: claude --resume keeps the original one, which may list stale projects.
 export const RELAUNCH_NOTE = `【系统】你的设置（文件夹、管着的项目、模型或思考程度）刚更新过，已经按新设置重新启动。系统提示词里的项目和文件夹可能是旧的，最新的以 \`${HUB_COMMAND} status\`、\`${HUB_COMMAND} persona show\` 为准。`;
+export const CAPABILITY_RELAUNCH_NOTE = "【系统】可用的 Skill 或 MCP 有更新，会话已按最新能力设置续接。";
 const KILLED_NOTE_MAX_TASKS = 5;
 const KILLED_NOTE_MAX_DESC_CHARS = 80;
 export function backgroundTasksKilledNote(reason: "relaunch" | "hold_max" | "stopped", descriptions: string[]): string {
@@ -269,12 +270,19 @@ interface LaunchFilesBase {
   settingsFile?: string;
   skillsDir?: string;
   env: Record<string, string>;
+  /** If capabilityCheck is set, this fingerprint excludes capability-dependent options. */
   fingerprint: string;
   backgroundHoldMaxMs?: number;
   writeScope?: WriteScope;
   capabilities?: SessionCapabilities;
+  capabilityCheck?: LaunchCapabilityCheck;
   personaRevision?: number;
   ownerTag?: string;
+}
+
+export interface LaunchCapabilityCheck {
+  fingerprint: string | undefined;
+  currentFingerprint: () => Promise<string | undefined>;
 }
 
 // Read-only sandboxes deny every write outside the session temp dir, so a read-only launch cannot exist without one.
