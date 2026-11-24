@@ -25,21 +25,22 @@ export function DialogContent({
   const accent = useAccentColor();
   const content = (
     <>
-      <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-[rgb(28_25_23_/_0.34)]" />
+      <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-[rgb(28_25_23_/_0.3)]" />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        data-fullscreen={fullScreen || undefined}
         aria-describedby={undefined}
         className={cn(
           fullScreen
             ? "fixed inset-0 z-50 flex flex-col overflow-hidden bg-panel pt-[var(--safe-top)] pb-[max(var(--safe-bottom),var(--kb-inset))] outline-none"
-            : "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-130 -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden border-2 border-border-strong bg-background p-6 outline-none",
+            : "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-130 -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden rounded-sm border border-border bg-background p-6 shadow-[var(--shadow-dialog)] outline-none",
           className,
         )}
         {...props}
       >
         {fullScreen ? (
           <>
-            <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b-2 border-border bg-background px-4">
+            <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border bg-background px-4">
               <DialogPrimitive.Title className={cn("min-w-0 truncate text-title font-semibold", titleClassName)}>{title}</DialogPrimitive.Title>
               <DialogPrimitive.Close asChild>
                 <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label="Close">
