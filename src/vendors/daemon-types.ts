@@ -33,6 +33,7 @@ export interface VendorDaemon {
   transcriptPath?(ref: TranscriptRef, roots: TranscriptRoots): string | null;
   sessionFiles?(ref: TranscriptRef, roots: TranscriptRoots): string[];
   launchFiles?(input: VendorLaunchInput): VendorLaunchFiles;
+  /** Represents every launch option that changes with the capability policy. */
   capabilityLaunch?(caps: SessionCapabilities): unknown;
   sync?: VendorSyncAdapter;
   setup?: VendorSetupAdapter;

@@ -66,6 +66,70 @@ function addMcp(vendor: (typeof AGENT_VENDORS)[number]): string {
 }
 
 describe("capability refresh in existing sessions", () => {
+  it.each([false, true])("keeps the running background task when an MCP is added (existing deny rule: %s)", async (denied) => {
+    const finish = join(dir, "finish");
+    if (denied) ledger.patchCapabilities({ kind: "default" }, { set: { "mcp:calendar": false } });
+    harness = makeHarness({
+      dir,
+      script: {
+        turns: [
+          { steps: [{ backgroundTasks: ["ci-wait"] }, { text: "Waiting on CI" }] },
+          { steps: [{ text: "Still waiting" }, { waitFile: finish }, { backgroundTasks: [] }] },
+        ],
+      },
+      driver: { prepareLaunch },
+    });
+    harness.store.add(session);
+    await harness.driver.send(session.id, user(1));
+    await harness.waitFor("background.changed", (event) => event.count === 1);
+    await harness.waitFor("turn.ended");
+
+    addMcp("claude");
+    await harness.driver.send(session.id, user(2));
+    await harness.waitFor("agent.text", (event) => event.text === "Still waiting");
+    expect(harness.argvs()).toHaveLength(1);
+    expect(harness.of("session.exited")).toEqual([]);
+    expect(harness.stdinTexts()).toEqual(["Message 1", "Message 2"]);
+
+    writeFileSync(finish, "");
+    await harness.waitFor("background.changed", (event) => event.count === 0);
+    await harness.waitFor("turn.ended", () => true, 2);
+    await harness.driver.send(session.id, user(3));
+    await harness.waitFor("turn.ended", () => true, 3);
+    expect(harness.argvs()).toHaveLength(2);
+    expect(harness.argvs()[1]).toContain("--resume");
+    expect(harness.stdinTexts()[2]).toContain("Skill 或 MCP");
+    expect(harness.stdinTexts()[2]).not.toContain("被结束了");
+    expect(harness.of("turn.ended").map((turn) => turn.messageIds)).toEqual([[1], [2], [3]]);
+    if (denied) {
+      expect(JSON.parse(readFileSync(join(dir, "data", "launch", String(session.id), "settings.json"), "utf8")))
+        .toMatchObject({ deniedMcpServers: [{ serverName: "calendar" }] });
+    }
+  });
+
+  it.each(["model", "cwd", "addDirs"] as const)("still relaunches for a %s change with active background tasks", async (setting) => {
+    const folder = join(dir, "extra");
+    mkdirSync(folder);
+    const settings = { model: { model: "sonnet" }, cwd: { cwd: folder }, addDirs: { addDirs: [folder] } };
+    harness = makeHarness({
+      dir,
+      script: { turns: [{ steps: [{ backgroundTasks: ["ci-wait"] }, { text: "Waiting on CI" }] }] },
+      driver: { prepareLaunch },
+    });
+    harness.store.add(session);
+    await harness.driver.send(session.id, user(1));
+    await harness.waitFor("background.changed", (event) => event.count === 1);
+    await harness.waitFor("turn.ended");
+
+    addMcp("claude");
+    harness.store.set(session.id, settings[setting]);
+    await harness.driver.send(session.id, user(2));
+    await harness.waitFor("turn.ended", () => true, 2);
+    expect(harness.argvs()).toHaveLength(2);
+    expect(harness.argvs()[1]).toContain("--resume");
+    expect(harness.stdinTexts()[1]).toContain("被结束了");
+  });
+
   it("resumes a live PM with an externally added MCP before delivering the next message", async () => {
     harness = makeHarness({ dir, driver: { prepareLaunch } });
     harness.store.add(session);
@@ -116,7 +180,10 @@ describe("capability refresh in existing sessions", () => {
     const workerId = started.data.worker.id;
     const workerSessionId = db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE worker_id = ?", workerId)!.id;
     const worker = { ...getAgentSession(db, workerSessionId)!, vendor };
-    const fingerprint = async () => [(await prepareLaunch(pm)).fingerprint, (await prepareLaunch(worker)).fingerprint];
+    const fingerprint = async () => [
+      (await prepareLaunch(pm)).capabilityCheck?.fingerprint,
+      (await prepareLaunch(worker)).capabilityCheck?.fingerprint,
+    ];
     const before = await fingerprint();
     const mcp = addMcp(vendor);
     const withMcp = await fingerprint();

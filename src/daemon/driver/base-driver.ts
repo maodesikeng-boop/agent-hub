@@ -3,6 +3,7 @@ import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   BACKGROUND_TASKS_HOLD_MAX_MS,
+  CAPABILITY_RELAUNCH_NOTE,
   CRASH_RECOVERY_NOTE,
   DriverError,
   IDLE_CLOSE_MS,
@@ -112,7 +113,7 @@ export interface BaseSessionState<TProc extends BaseProc<any>, TBatch extends Ba
   preambleTaken: boolean;
   recoveryNote: boolean;
   crashNote: boolean;
-  relaunchNote: boolean;
+  relaunchNote: string | null;
   killedNote: string | null;
   ended: boolean;
   ending: Promise<void> | null;
@@ -168,7 +169,7 @@ export function createBaseSessionState<TProc extends BaseProc<any>, TBatch exten
     preambleTaken: false,
     recoveryNote: false,
     crashNote: false,
-    relaunchNote: false,
+    relaunchNote: null,
     killedNote: null,
     ended: false,
     ending: null,
@@ -273,7 +274,7 @@ export abstract class BaseSessionDriver<
     st.pending = [];
     st.recoveryNote = false;
     st.crashNote = false;
-    st.relaunchNote = false;
+    st.relaunchNote = null;
     st.killedNote = null;
     this.clearTimer(st, "idleTimer");
   }
@@ -450,13 +451,13 @@ export abstract class BaseSessionDriver<
       preamble?.note ?? null,
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
-      notes.relaunch ? RELAUNCH_NOTE : null,
+      notes.relaunch,
       notes.killed,
       persona?.note ?? null,
     ].filter((p): p is string => p !== null);
     st.recoveryNote = false;
     st.crashNote = false;
-    st.relaunchNote = false;
+    st.relaunchNote = null;
     st.killedNote = null;
     return { notes, prefixes };
   }
@@ -474,7 +475,7 @@ export abstract class BaseSessionDriver<
     st.inFlight = st.inFlight.filter((b) => b !== batch);
     if (batch.notes.recovery) st.recoveryNote = true;
     if (batch.notes.crash) st.crashNote = true;
-    if (batch.notes.relaunch) st.relaunchNote = true;
+    if (batch.notes.relaunch !== null) st.relaunchNote = batch.notes.relaunch;
     if (batch.notes.killed !== null) st.killedNote = batch.notes.killed;
     batch.notes.persona?.restore();
     batch.notes.preamble?.restore();
@@ -572,7 +573,9 @@ export abstract class BaseSessionDriver<
       this.assertRunning();
       if (st.ended || st.proc !== proc || proc.closing || this.busy(st)) return;
       const row = files ? this.row(st) : null;
-      if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
+      const settingsChanged = files !== null && row !== null && launchChanged(proc.launched, row, files.fingerprint);
+      const capabilitiesChanged = files?.capabilityCheck?.fingerprint !== proc.capabilityCheck?.fingerprint;
+      if (files && row && (settingsChanged || (capabilitiesChanged && !st.background.active))) {
         if (st.background.active) {
           st.killedNote = backgroundTasksKilledNote("relaunch", st.background.descriptions());
         }
@@ -580,7 +583,7 @@ export abstract class BaseSessionDriver<
         await proc.exited;
         this.assertRunning();
         if (st.ended) return;
-        st.relaunchNote = true;
+        st.relaunchNote = settingsChanged ? RELAUNCH_NOTE : CAPABILITY_RELAUNCH_NOTE;
         const batch = this.takeBatch(st);
         if (batch) await this.startup(st, batch, null, files);
         return;

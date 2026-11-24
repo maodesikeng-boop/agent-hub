@@ -22,7 +22,7 @@ export interface PendingEntry {
 export interface BatchNotes {
   recovery: boolean;
   crash: boolean;
-  relaunch: boolean;
+  relaunch: string | null;
   killed: string | null;
   persona: PersonaNoteTaken | null;
   preamble: PreambleTaken | null;
@@ -31,7 +31,7 @@ export interface BatchNotes {
 export const NO_NOTES: BatchNotes = {
   recovery: false,
   crash: false,
-  relaunch: false,
+  relaunch: null,
   killed: null,
   persona: null,
   preamble: null,

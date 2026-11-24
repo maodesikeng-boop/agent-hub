@@ -82,6 +82,7 @@ function makePiHarness(
   options: {
     script?: FakePiScript;
     driver?: Partial<PiDriverOptions>;
+    capabilityFingerprint?: () => Promise<string>;
   } = {},
 ): PiTestHarness {
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "agent-hub-pi-driver-")));
@@ -117,6 +118,12 @@ function makePiHarness(
         },
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
+      if (options.capabilityFingerprint) {
+        files.capabilityCheck = {
+          fingerprint: await options.capabilityFingerprint(),
+          currentFingerprint: options.capabilityFingerprint,
+        };
+      }
       const writeScope = workerWriteScope({ role: session.role, dataDir: dir, cwd: session.cwd });
       if (writeScope !== null) files.writeScope = writeScope;
       return readonly ? { ...files, readonly: buildReadonlyPolicy({ homeDir: dir, stateDir }), tmpDir: sessionTmpDir } : files;
@@ -317,6 +324,31 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
       output: 45,
       context: 295,
     });
+  });
+
+  it("queues a message after capabilities change and sends it on the resumed session", async () => {
+    let fingerprint = "before";
+    const h = makePiHarness({ capabilityFingerprint: async () => fingerprint });
+    const hold = join(h.dir, "hold");
+    h.fake.updateScript({
+      turns: [{ holdFile: hold, tools: [{ id: "bash", name: "bash", arguments: { command: "echo" } }] }],
+    });
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [1], source: "user", text: "Start" });
+    await h.waitFor("agent.tool");
+
+    fingerprint = "after";
+    await expect(h.driver.send(row.id, { messageIds: [2], source: "user", text: "Use the new capability" }))
+      .resolves.toEqual({ kind: "queued" });
+    expect(h.of("message.delivered").map((event) => event.messageIds)).toEqual([[1]]);
+
+    writeFileSync(hold, "");
+    expect(await h.waitFor("turn.ended")).toMatchObject({ messageIds: [1], ok: true });
+    expect(await h.waitFor("turn.ended", undefined, 2)).toMatchObject({ messageIds: [2], ok: true });
+    const procs = h.log().filter((entry) => entry.kind === "argv");
+    expect(procs).toHaveLength(2);
+    expect(procs[1]?.argv).toContain("--session");
+    expect(h.rpcIn().some((rpc) => rpc.type === "prompt" && rpc.streamingBehavior === "steer")).toBe(false);
   });
 
   it("steer 中途插话：忙时走 streamingBehavior: steer 同一轮消费；若轮末未取走则自动排入下一轮", async () => {

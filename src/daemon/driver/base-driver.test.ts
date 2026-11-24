@@ -350,7 +350,7 @@ describe("BaseSessionDriver 公共状态机", () => {
     const st = driver.exposeState(1);
     st.recoveryNote = true;
     st.crashNote = true;
-    st.relaunchNote = true;
+    st.relaunchNote = RELAUNCH_NOTE;
     st.killedNote = backgroundTasksKilledNote("relaunch", ["sleep 10"]);
     st.pending.push({ messageIds: [10], source: "user", text: "干活", prefixes: ["【用户前缀】"], resend: false });
 
@@ -366,7 +366,7 @@ describe("BaseSessionDriver 公共状态机", () => {
     ]);
     expect(st.recoveryNote).toBe(false);
     expect(st.crashNote).toBe(false);
-    expect(st.relaunchNote).toBe(false);
+    expect(st.relaunchNote).toBeNull();
     expect(st.killedNote).toBeNull();
     expect(st.preambleTaken).toBe(true);
     expect(st.personaSeen).toBe(2);
@@ -386,7 +386,7 @@ describe("BaseSessionDriver 公共状态机", () => {
     driver.exposeDropBatch(1, batch);
     expect(st.recoveryNote).toBe(true);
     expect(st.crashNote).toBe(true);
-    expect(st.relaunchNote).toBe(true);
+    expect(st.relaunchNote).toBe(RELAUNCH_NOTE);
     expect(st.killedNote).toBe(backgroundTasksKilledNote("relaunch", ["sleep 10"]));
     expect(preambleRestored).toBe(true);
     expect(personaRestored).toBe(true);

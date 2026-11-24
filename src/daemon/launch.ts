@@ -220,17 +220,19 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const readCapabilities = agentCapabilityReader(options, vendor, ctx);
     const { capabilities, capabilityFingerprint } = (await readCapabilities?.()) ?? {};
     const nativeReadonly = readonlyPolicy !== undefined && vendor !== null && vendorSpec(vendor).capabilities.readonly === "settings";
-    const vendorFiles = vendor !== null
-      ? VENDOR_DAEMONS[vendor].launchFiles?.({
-          role,
-          readonly: nativeReadonly ? { policy: readonlyPolicy, denyWrite: [session.cwd, ...session.addDirs].map(realpathOr) } : undefined,
-          hubSock,
-          stateDir,
-          osSandboxed,
-          ...(capabilities === undefined ? {} : { capabilities }),
-        })
-      : undefined;
+    const buildVendorFiles = vendor === null ? undefined : VENDOR_DAEMONS[vendor].launchFiles;
+    const vendorInput = {
+      role,
+      readonly: nativeReadonly ? { policy: readonlyPolicy, denyWrite: [session.cwd, ...session.addDirs].map(realpathOr) } : undefined,
+      hubSock,
+      stateDir,
+      osSandboxed,
+    };
+    const vendorFiles = buildVendorFiles?.({ ...vendorInput, capabilities });
     const settings = vendorFiles?.settings;
+    const baseSettings = settings !== undefined && capabilities !== undefined
+      ? buildVendorFiles?.(vendorInput)?.settings
+      : settings;
     const promptFile = join(dir, "prompt.md");
     writeFileSync(promptFile, prompt, { mode: 0o600 });
     let settingsFile: string | undefined;
@@ -280,10 +282,9 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       // Persona and mode are excluded from the fingerprint so edits do not restart the process; the driver adds a note before the next message instead.
       fingerprint: launchFingerprint({
         prompt: buildFingerprintPrompt(ctx, session.cwd, promptOptions),
-        settings: settings ?? "",
+        settings: baseSettings ?? "",
         readonly: readonlyPolicy,
         ...(skillsDir === undefined ? {} : { skills: taskGraphSkillCatalogEntry() }),
-        ...(capabilityFingerprint === undefined ? {} : { capabilityLaunch: capabilityFingerprint }),
       }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),

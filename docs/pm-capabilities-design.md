@@ -97,9 +97,9 @@ Each vendor declares `capabilities.isolation` in its `spec.ts` to record what a 
 
 ## Launch and restart
 
-Before delivering a PM or Worker turn, the driver reads the current policy and compares the vendor's launch options and discovered capabilities with the running process. A change closes the old process and resumes the conversation with the current settings. This includes MCP and skill additions and removals under an all-open policy, where the vendor loads them from its own configuration.
+Before delivering a PM or Worker turn, the driver reads the current policy and compares the vendor's launch options and discovered capabilities with the running process. When only capabilities change, the process keeps taking turns while background tasks are active. The driver resumes with the new capabilities before the first turn after those tasks finish, including after a normal idle close. Changes to the model, working directory, or added directories still restart the process before delivery. MCP and skill additions and removals also apply under an all-open policy, where the vendor loads them from its own configuration.
 
-Claude, Codex, and Pi also check capabilities before steering an active turn. When they detect a change, the new message waits for the turn to finish and goes to the resumed process. Other drivers already queue messages behind an active turn. Vendors with shared configuration still load capabilities according to their own settings.
+Claude, Codex, and Pi also check capabilities before steering an active turn. When they detect a change, the new message waits for the turn to finish. If another message arrives during the check, both wait so they stay in order. Other drivers already queue messages behind an active turn. Vendors with shared configuration still load capabilities according to their own settings.
 
 ## HTTP API
 
