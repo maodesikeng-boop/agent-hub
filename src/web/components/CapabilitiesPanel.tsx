@@ -187,7 +187,8 @@ export function CapabilitiesPanel({
         />
       )}
       <div className="flex items-center gap-2">
-        <SearchField label="Search capabilities" value={query} onChange={setQuery} />
+        {/* The icon starts on the 16px edge where the rows below start their text. */}
+        <SearchField label="Search capabilities" value={query} onChange={setQuery} className="pl-4" />
         <Button variant="outline" disabled={disabled || editor.refreshing} onClick={() => void editor.refresh()}>
           {editor.refreshing && <Loader2 aria-hidden="true" />}
           Refresh
