@@ -613,13 +613,28 @@ describe("web-guard：src/web 代码守卫", () => {
     expect(vendorPattern.test('vendor === "acme"')).toBe(false);
   });
 
-  it("直角设计：src/web/ 非测试代码禁止使用 rounded-* 圆角类", () => {
+  it("一个小圆角：src/web/ 非测试代码只用 rounded-xs（2px，嵌套）、rounded-sm（4px）、rounded-t-sm、rounded-full（点）和 rounded-none", () => {
     const hits: string[] = [];
-    const bannedRadius = /(?:^|[\s"'`:])rounded-[a-z0-9[\]._-]+/i;
+    const radius = /(?:^|[\s"'`:!])(rounded(?:-[a-z0-9[\]._/%-]+)?)(?=$|[\s"'`])/g;
+    const allowed = new Set(["rounded-xs", "rounded-sm", "rounded-t-sm", "rounded-full", "rounded-none"]);
     for (const file of files) {
       const lines = stripComments(readFileSync(file, "utf8")).split("\n");
       lines.forEach((line, index) => {
-        if (bannedRadius.test(line)) hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${line.trim()}`);
+        for (const match of line.matchAll(radius)) if (!allowed.has(match[1]!)) hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${match[1]}`);
+      });
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it("线一律 1px：src/web/ 非测试代码不写 border-2 及更粗的边和分隔线；只有拖放文件的虚线框是 2px", () => {
+    const hits: string[] = [];
+    const thick = /(?:^|[\s"'`:!])((?:border(?:-[xytrbles])?|divide-[xy])-(?:[2-9]|\[\d))/;
+    for (const file of files) {
+      const rel = relative(WEB_DIR, file).replaceAll("\\", "/");
+      const lines = stripComments(readFileSync(file, "utf8")).split("\n");
+      lines.forEach((line, index) => {
+        if (rel === "components/FileDropZone.tsx" && line.includes("border-dashed")) return;
+        if (thick.test(line)) hits.push(`${rel}:${index + 1}: ${line.trim()}`);
       });
     }
     expect(hits).toEqual([]);

@@ -1057,7 +1057,7 @@ describe("ChoiceRows、ModeRows 与 Button destructive", () => {
     render(createElement(Button, { variant: "destructive" }, "Remove"));
     const btn = screen.getByRole("button", { name: "Remove" });
     expect(btn.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["bg-danger", "text-primary-foreground", "hover:brightness-90", "disabled:bg-send-disabled", "disabled:text-muted-foreground"]),
+      expect.arrayContaining(["btn-solid", "bg-danger", "text-primary-foreground", "disabled:bg-send-disabled", "disabled:text-muted-foreground"]),
     );
   });
 

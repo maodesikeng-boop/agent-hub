@@ -33,8 +33,9 @@ type DotTone = "done" | "run" | "warn" | "blocked";
 
 const GUTTER_H = 32;
 // Every track row, clickable or not, shares this box: a border or extra padding on one row would break the pipe joints.
-const PEEL_ROW =
-  "-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-sm px-2.5 text-left transition-[background-color,box-shadow] duration-150 outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none";
+// Every row, clickable or not, shares one box so each gutter's pipe meets the next row's pipe with no gap or sideways step.
+const PEEL_BOX = "-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] items-center px-2.5";
+const PEEL_ROW = `${PEEL_BOX} cursor-pointer rounded-sm text-left transition-[background-color,box-shadow] duration-150 outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none`;
 const peelLen = (units: number) => `calc(${units} * var(--peel-u))`;
 const GUTTER_CY = GUTTER_H / 2;
 const CELL = 2;
@@ -385,7 +386,7 @@ function PeelStageRow({
   }
 
   return (
-    <div data-node-key={node.key} title={isTaskNodeWaitingPm(node) ? `${node.title}\nWaiting on PM` : node.title} className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] items-center px-2.5">
+    <div data-node-key={node.key} title={isTaskNodeWaitingPm(node) ? `${node.title}\nWaiting on PM` : node.title} className={PEEL_BOX}>
       {content}
     </div>
   );

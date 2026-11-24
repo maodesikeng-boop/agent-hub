@@ -85,7 +85,6 @@ describe("史莱姆与总助", () => {
             onSelect={vi.fn()}
             onNewPm={vi.fn()}
             onTogglePin={vi.fn()}
-            onOpenPmSettings={vi.fn()}
             onOpenComputers={vi.fn()}
           />
         </div>
@@ -96,7 +95,7 @@ describe("史莱姆与总助", () => {
       const row = screen.getByRole("button", { name: new RegExp(name) });
       expect(row.querySelector('[data-slot="avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
     }
-    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("tool-slot");
+    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("btn-honey");
   });
 });
 
@@ -113,8 +112,8 @@ describe("换水果和颜色", () => {
     expect(within(color).getAllByRole("radio")).toHaveLength(JELLY_COLOR_IDS.length);
     for (const avatar of fruit.querySelectorAll("[data-look]")) expect(avatar.getAttribute("data-look")).toMatch(/:sky$/);
     const selected = within(fruit).getByRole("radio", { checked: true });
-    expect(selected).toHaveClass("bg-open", "border-open-line");
-    expect(within(color).getByRole("radio", { checked: true })).toHaveClass("border-border-focus", "bg-hover");
+    expect(selected).toHaveClass("tile-open");
+    expect(within(color).getByRole("radio", { checked: true })).toHaveClass("tile-open");
     expect(selected).toHaveFocus();
     await user.keyboard("{ArrowRight}{Enter}");
     const next = change.mock.lastCall?.[0];

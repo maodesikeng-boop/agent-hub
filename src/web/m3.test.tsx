@@ -807,7 +807,8 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     const header = screen.getByRole("heading", { name: "小林" }).closest("header")!;
     expect(within(header).getByRole("button", { name: "Hide Pieces" })).toBe(toggle());
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    expect(toggle()).toHaveClass("bg-slot-hover");
+    // The honey slot sinks into its pressed shade from aria-expanded alone (styles.css .btn-honey[aria-expanded="true"]).
+    expect(toggle()).toHaveClass("btn-honey");
     await user.click(closeRail());
     expect(rail()).not.toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Show Pieces" })).toBe(toggle());
@@ -1118,11 +1119,11 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     const avatarButtons = within(listRegion).getAllByRole("button").filter((b) => /小林|老马/.test(b.getAttribute("aria-label") ?? ""));
     expect(avatarButtons.length).toBeGreaterThan(0);
     for (const btn of avatarButtons) {
-      expect(btn).toHaveClass("size-13", "border-2");
-      expect(btn.className).not.toMatch(/rounded-/);
+      expect(btn).toHaveClass("size-13");
+      expect(btn.className).not.toMatch(/border-2|rounded-(?!sm\b)/);
     }
     await user.click(within(listRegion).getByRole("button", { name: /老马/ }));
-    expect(within(listRegion).getByRole("button", { name: /老马/ })).toHaveClass("border-select-line", "bg-background");
+    expect(within(listRegion).getByRole("button", { name: /老马/ })).toHaveClass("tile-selected");
     expect(within(listRegion).getByRole("button", { name: "New project manager" })).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });

@@ -78,8 +78,7 @@ describe("ThreadCard", () => {
         onOpen={vi.fn()}
       />,
     );
-    expect(container.querySelector("[data-dot]")).toHaveClass("bg-success");
-    expect(container.querySelector("[data-dot]")!.className).not.toContain("rounded-");
+    expect(container.querySelector("[data-dot]")).toHaveClass("bg-success", "rounded-full");
 
     rerender(
       <ThreadCard
@@ -144,8 +143,9 @@ describe("ThreadCard", () => {
       />,
     );
     const closedBtn = screen.getByRole("button");
-    expect(closedBtn).toHaveClass("border-border-strong", "bg-background");
-    expect(closedBtn).not.toHaveClass("bg-open", "border-open-line");
+    // A card is a container: hairline at rest, never the control line.
+    expect(closedBtn).toHaveClass("rounded-sm", "border", "border-border", "bg-background");
+    expect(closedBtn).not.toHaveClass("bg-open", "border-select-line");
 
     rerender(
       <ThreadCard
@@ -156,7 +156,7 @@ describe("ThreadCard", () => {
       />,
     );
     const openBtn = screen.getByRole("button");
-    expect(openBtn).toHaveClass("border-open-line", "bg-open");
+    expect(openBtn).toHaveClass("border-select-line", "bg-open");
     expect(openBtn.closest("[data-open]")).not.toBeNull();
   });
 });

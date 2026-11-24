@@ -530,8 +530,9 @@ describe("撤销性格设定修改", () => {
     const ws = await boot(makeSnapshot());
     push(ws, messageChange(11, "message.created", changed(3, 42)));
     const revert = within(log()).getByRole("button", { name: "Undo" });
-    expect(revert.className).toContain("border-border-strong");
-    expect(revert.className).not.toMatch(/primary/);
+    // Undo is a text action on the strip's first line, not a boxed button.
+    expect(revert).toHaveClass("text-rail-ink", "font-medium", "hover:bg-hover");
+    expect(revert.className).not.toMatch(/primary|(?:^|\s)border(?:-|\s|$)/);
     await user.click(revert);
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/persona-changes\/42\/revert$/)).toHaveLength(1));
     expect(api.callsTo("POST", /revert$/)[0]?.body).toBeUndefined();
@@ -630,7 +631,7 @@ describe("资料页", () => {
     expect(historyEntry).toHaveTextContent("1");
     expect(within(page).queryByRole("list", { name: "History" })).not.toBeInTheDocument();
     await openSettingsPage(user, page, /^History/);
-    expect(groupIn(page, "History").lastElementChild).toHaveClass("border-2", "border-border", "bg-background");
+    expect(groupIn(page, "History").lastElementChild).toHaveClass("rounded-sm", "border", "border-border", "bg-background");
     expect(groupIn(page, "History").querySelector(".bg-sidebar, .bg-neutral-50")).toBeNull();
     const rows = within(within(page).getByRole("list", { name: "History" })).getAllByRole("listitem");
     expect(rows).toHaveLength(1);
@@ -661,8 +662,8 @@ describe("资料页", () => {
     expect(within(page).queryByText("Agent")).not.toBeInTheDocument();
     expect(within(page).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     await openSettingsPage(user, page, /^Persona/);
-    expect(groupIn(page, "Persona").lastElementChild).toHaveClass("border-2", "border-border", "bg-background");
-    expect(groupIn(page, "Persona").lastElementChild?.className).not.toMatch(/rounded-/);
+    expect(groupIn(page, "Persona").lastElementChild).toHaveClass("rounded-sm", "border", "border-border", "bg-background");
+    expect(groupIn(page, "Persona").lastElementChild?.className).not.toContain("border-2");
   });
 
   it("性格设定：改了才出现“保存”，改回原样又没了；保存发 PUT 只带 text，存好后按钮没了，修改记录多一条", async () => {
