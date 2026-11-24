@@ -1987,6 +1987,8 @@ describe("GET /api/quota（额度）", () => {
     try {
       const res = await other.inject({ method: "GET", url: "/api/quota", headers: { host: HOST, cookie: COOKIE } });
       expect(res.json()).toEqual(value);
+      const state = await other.inject({ method: "GET", url: "/api/state", headers: { host: HOST, cookie: COOKIE } });
+      expect(state.json().server.currentQuota).toBe(true);
     } finally {
       await other.close();
     }

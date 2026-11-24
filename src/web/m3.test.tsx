@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledModelCatalog, vendorSpec } from "../shared/index.ts";
+import { bundledModelCatalog, FETCHED_QUOTA_FRESH_MS, vendorSpec } from "../shared/index.ts";
 import type { AgentVendor, Message, QuotaResponse, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { formatContext, formatCount, formatQuotaReset, formatTokens } from "./format.ts";
 import { App } from "./App.tsx";
@@ -29,9 +29,10 @@ import {
 
 let api: FakeApi;
 
-async function boot(snapshot: StateSnapshot = withWorker()) {
+async function boot(snapshot: StateSnapshot = withWorker(), configure?: (api: FakeApi) => void) {
   openFirstConversation(snapshot);
   api = new FakeApi(snapshot);
+  configure?.(api);
   api.install();
   installFakeWebSocket();
   render(<App />);
@@ -475,8 +476,76 @@ describe("最左栏的额度", () => {
   const badge = () => within(railNav()).getByRole("button", { name: /usage/i });
   // 样例里的重置时间（1_793_619_600、1_793_646_000）要在“现在”之后，不然窗口算已重置
   const T_BEFORE_RESET = (1_793_619_600 - 3600) * 1000;
+  const currentQuotaServer = { platform: "darwin", folderPicker: true, fileActions: true, currentQuota: true } as const;
   beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"], now: T_BEFORE_RESET }));
   afterEach(() => void vi.useRealTimers());
+
+  it("uses the current Codex account instead of the 30-day window from ledger session 201", async () => {
+    vi.setSystemTime(new Date("2026-11-24T05:47:00Z"));
+    const user = userEvent.setup();
+    await boot(withWorker({
+      server: currentQuotaServer,
+      sessions: [
+        makeSession({ sessionId: 201, vendor: "codex", lastEventAt: 1_794_118_727_948, rateLimit: {
+          status: "allowed", resetsAt: 1_796_193_546, windows: { thirty_day: win(0.4, { resetsAt: 1_796_193_546 }) },
+        } }),
+        makeSession({ sessionId: 1221, vendor: "codex", lastEventAt: 1_795_409_451_168, rateLimit: limit({}, "rejected") }),
+      ],
+    }), (fake) => { fake.quota = () => ({ status: 200, body: {
+      groups: [{ vendor: "codex", id: "codex", windows: { seven_day: win(0, { resetsAt: 1_796_104_026 }) } }],
+    } }); });
+    await within(railNav()).findByRole("button", { name: /usage/i });
+    await user.click(badge());
+    expect(screen.queryByRole("progressbar", { name: "30d usage" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "0");
+  });
+
+  it("shows current Claude and Antigravity quota before any session and omits expired windows", async () => {
+    const user = userEvent.setup();
+    await boot(withWorker({ server: currentQuotaServer, sessions: [] }), (fake) => {
+      fake.quota = () => ({ status: 200, body: {
+        groups: [
+          { vendor: "claude", id: "claude", windows: { five_hour: win(0.9, { resetsAt: T_BEFORE_RESET / 1000 }), seven_day: win(0.05) } },
+          { vendor: "agy", id: "gemini", windows: { five_hour: win(0.25) } },
+        ],
+      } });
+    });
+    await user.click(await within(railNav()).findByRole("button", { name: /5h usage 25%/ }));
+    const claude = screen.getByRole("region", { name: "Claude" });
+    expect(within(claude).queryByRole("progressbar", { name: "5h usage" })).not.toBeInTheDocument();
+    expect(within(claude).getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "5");
+    expect(within(screen.getByRole("group", { name: "Gemini" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
+  });
+
+  it("requests current quota while Usage is open and stops after it closes", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({
+      toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
+      shouldAdvanceTime: true,
+      now: T_BEFORE_RESET,
+    });
+    const user = userEvent.setup();
+    let utilization = 0.25;
+    const readQuota = vi.fn(() => ({ status: 200, body: {
+      groups: [{ vendor: "codex", id: "codex", windows: { five_hour: win(utilization) } }],
+    } }));
+    await boot(withWorker({ server: currentQuotaServer, sessions: [] }), (fake) => { fake.quota = readQuota; });
+    await within(railNav()).findByRole("button", { name: /5h usage 25%/ });
+    await act(() => vi.advanceTimersByTimeAsync(10 * FETCHED_QUOTA_FRESH_MS));
+    expect(readQuota).toHaveBeenCalledTimes(1);
+    expect(badge()).toHaveAccessibleName("Usage");
+
+    utilization = 0.5;
+    await user.click(badge());
+    expect(await screen.findByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "50");
+    expect(readQuota).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(FETCHED_QUOTA_FRESH_MS));
+    expect(readQuota).toHaveBeenCalledTimes(3);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(10 * FETCHED_QUOTA_FRESH_MS));
+    expect(readQuota).toHaveBeenCalledTimes(3);
+  });
 
   describe("按需查的额度（agy）", () => {
     const agySession = () => makeSession({ sessionId: 9, conversationId: 30, vendor: "agy", lastEventAt: 5 });

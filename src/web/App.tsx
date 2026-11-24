@@ -25,6 +25,7 @@ import { TabBar, mobileTabOf, type MobileTab } from "./mobile/TabBar.tsx";
 import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
 import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
 import { usePaneWidths } from "./pane-widths.ts";
+import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
 import type { ProfilePage } from "./route.ts";
@@ -468,7 +469,7 @@ function DesktopWorkbench({
         selectedComputer={c.routerActive ? null : current.key}
         meter={meter}
         quota={quota}
-        quotaFetchable={c.quotaFetchable}
+        quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
         onSelectComputer={c.selectComputer}
         onOpenSettings={() => c.openSettingsSection("scale")}
         onOpenUpdates={() => c.openSettingsSection("updates")}
@@ -768,6 +769,11 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const model = useShellModel({ autoSelect: !mobile });
   const { qc, fleet, current, hub, state, content } = model;
+  const mobileUsageVisible = mobile && model.route?.view === "settings" && model.route.section === undefined;
+  const currentQuota = useCurrentQuota(qc, hub.client, {
+    enabled: state.phase === "ready" && state.server.currentQuota === true && (!mobile || mobileUsageVisible),
+    visible: mobileUsageVisible,
+  });
   const hasContent = content !== null;
   const openManageProvidersRef = content?.openManageProviders;
   const openCurrentProviders = useCallback(() => openManageProvidersRef?.(current.key), [openManageProvidersRef, current.key]);
@@ -786,7 +792,7 @@ export function App() {
   if (gate !== null) return gate;
   if (content === null) return null;
 
-  const quota = quotaUsage(state);
+  const quota = state.server.currentQuota ? currentQuota : quotaUsage(state);
 
   return (
     <QueryClientProvider client={qc}>

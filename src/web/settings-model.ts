@@ -52,9 +52,10 @@ import { COPIED_RESET_MS, copyText } from "./components/CodeBlock.tsx";
 import { useClient } from "./device-scope.tsx";
 import { LOCAL_DEVICE, isReadOnly, type DeviceKey, type DeviceView } from "./devices.ts";
 import { errorText, nameError, type ErrorLike } from "./format.ts";
-import { modelsQueryKey, refreshDeviceModels } from "./models.tsx";
+import { modelsQueryKey } from "./models.tsx";
 import type { NotifySettings } from "./notify.ts";
 import { ACCOUNT_QUERY_KEY, accountQueryFn, claimAccountTicket, commitAccountStatus, useHubQueryClient } from "./query-client.ts";
+import { refreshProviderData } from "./quota.ts";
 
 export { ACCOUNT_QUERY_KEY };
 import {
@@ -917,13 +918,13 @@ function scanProviderWork(status: ProvidersStatusResponse, previous: ActiveProvi
   return { next, justSucceeded };
 }
 
-function useRefreshModelsWhenWorkFinishes(qc: QueryClient, status: ProvidersStatusResponse | undefined, targetClient: HubClient) {
+function useRefreshProviderDataWhenWorkFinishes(qc: QueryClient, status: ProvidersStatusResponse | undefined, targetClient: HubClient) {
   const trackedActiveRef = useRef<ActiveProviderWork>({ jobs: new Set(), flows: new Set() });
   useEffect(() => {
     if (!status) return;
     const { next, justSucceeded } = scanProviderWork(status, trackedActiveRef.current);
     trackedActiveRef.current = next;
-    if (justSucceeded) refreshDeviceModels(qc, targetClient);
+    if (justSucceeded) refreshProviderData(qc, targetClient);
   }, [qc, status, targetClient]);
 }
 
@@ -966,7 +967,7 @@ function useVendorActionRunner(qc: QueryClient, queryKey: readonly unknown[], ta
       try {
         const item = await fn();
         upsertItem(item);
-        if (options.syncModelsImmediately) refreshDeviceModels(qc, targetClient);
+        if (options.syncModelsImmediately || item.authFlow?.phase === "succeeded") refreshProviderData(qc, targetClient);
         return item;
       } catch (err) {
         if (options.rethrow) throw err;
@@ -1012,7 +1013,7 @@ function useStatusActions(qc: QueryClient, queryKey: readonly unknown[], targetC
     try {
       const next = await targetClient.fetchProviders({ refresh: true });
       qc.setQueryData<ProvidersStatusResponse>(queryKey, next);
-      refreshDeviceModels(qc, targetClient);
+      refreshProviderData(qc, targetClient);
     } catch {
       // A failed manual refresh keeps the last status.
     } finally {
@@ -1067,7 +1068,7 @@ export function useProvidersSetting({
     },
     qc,
   );
-  useRefreshModelsWhenWorkFinishes(qc, status, targetClient);
+  useRefreshProviderDataWhenWorkFinishes(qc, status, targetClient);
 
   const { rowErrors, setRowErrors, run } = useVendorActionRunner(qc, queryKey, targetClient, setBusyKey);
   const vendorActions = useVendorActions(run, targetClient);

@@ -4,6 +4,7 @@ import { codexCatalogProbe, createCodexCatalogSource } from "./catalog.ts";
 import { codexComposerBase, createCodexComposer } from "./composer.ts";
 import { createCodexDriver } from "./driver.ts";
 import { CODEX_FORKERS } from "./handover.ts";
+import { codexQuotaScope, queryCodexQuota } from "./quota.ts";
 import { codexSetupAdapter } from "./setup.ts";
 import { codexSyncAdapter } from "./sync.ts";
 import { codexTranscriptPath } from "./transcript.ts";
@@ -19,4 +20,6 @@ export default defineVendorDaemon({
   capabilityLaunch: codexCapabilityArgs,
   sync: codexSyncAdapter,
   setup: codexSetupAdapter,
+  quotaScope: codexQuotaScope,
+  queryQuota: queryCodexQuota,
 });

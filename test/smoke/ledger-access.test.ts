@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { startDaemon } from "../../src/daemon/daemon.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
+import { VENDOR_LIST } from "../../src/shared/index.ts";
 import { smokeDaemonEnv } from "./kit.ts";
 
 const SMOKE_DIR = fileURLToPath(new URL("./", import.meta.url));
@@ -22,7 +23,9 @@ describe("smoke scripts that read the ledger while the daemon runs", () => {
 
   it("a daemon started with smokeDaemonEnv() lets the script open its ledger", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ah-smoke-env-"));
-    const daemon = await startDaemon({ userHome: join(dir, "user"), env: smokeDaemonEnv(join(dir, "home")), log: () => {} });
+    const env = smokeDaemonEnv(join(dir, "home"));
+    for (const { id, cli } of VENDOR_LIST) env[cli.envVar] = join(dir, `missing-${id}`);
+    const daemon = await startDaemon({ userHome: join(dir, "user"), env, log: () => {} });
     try {
       const db = openDatabase(daemon.paths.dbFile);
       try {

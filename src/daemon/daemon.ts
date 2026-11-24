@@ -26,7 +26,6 @@ import {
   MESH_LISTEN_PORT,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
-  VENDOR_LIST,
   AUTO_RENEW_TICK_MS,
   checkModel,
   type ActionExecutor,
@@ -81,7 +80,7 @@ import {
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveCommit } from "./git/index.ts";
-import { createFetchedQuota, mergeFetchedQuotas, queryFetchedQuota } from "./quota/fetched-quota.ts";
+import { createProviderQuota } from "./quota/provider-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
 import {
@@ -226,6 +225,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     sleepInhibitor?: SleepInhibitor;
     selfReload?: SelfReloadController;
     unsubscribe: Unsubscribe[];
+    quota?: ReturnType<typeof createProviderQuota>;
   } = { unsubscribe: [] };
   const step = async (what: string, fn: () => unknown) => {
     try {
@@ -237,6 +237,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const shutdown = async () => {
     const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, mesh, admin, agentApi, db, lock } = parts;
     parts.selfReload?.close();
+    parts.quota?.close();
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
     if (archiveCleanup) clearInterval(archiveCleanup);
@@ -377,9 +378,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log,
     });
     parts.models = models;
+    const quota = createProviderQuota(vendorRuntime);
+    parts.quota = quota;
     const providerManager = createProviderManager({
       runtime: vendorRuntime,
       models,
+      onVendorChanged: quota.refresh,
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
     parts.providerManager = providerManager;
@@ -686,24 +690,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           )
           .map((row) => ({ path: row.path, projectName: row.project_name })),
     });
-    const quota = mergeFetchedQuotas(
-      VENDOR_LIST.flatMap(({ id, quota: spec }) => {
-        const fetched = spec?.fetched;
-        if (fetched === undefined) return [];
-        return [
-          createFetchedQuota({
-            query: () =>
-              queryFetchedQuota({
-                vendor: id,
-                path: vendorRuntime.resolveExecutablePath(id),
-                env: vendorRuntime.resolveVendorEnv(id),
-                spec: fetched,
-                cwd: options.userHome,
-              }),
-          }),
-        ];
-      }),
-    );
     const rotateToken = () => {
       const next = rotateUiToken(paths.uiTokenFile);
       log(`${LOG_PREFIX} 已全部退出，新的登录链接：${loginUrl(parts.ui?.port ?? port, next)}`);
@@ -1030,6 +1016,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       ...(options.folderPicker ? { folderPicker: options.folderPicker } : {}),
     });
 
+    void quota.get();
     let stopping: Promise<void> | undefined;
     return {
       paths,
