@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { webkit, type Page } from "playwright";
-import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
+import { verifyComposerInteractions, verifyTouchSoftWrap } from "./verify-composer-interactions.ts";
 
 interface TimelineRecord {
   type: string;
@@ -32,6 +32,7 @@ interface FrameClock {
 }
 
 const KEYS = ["x", "Backspace", "y", "Backspace", "z", "Backspace"] as const;
+const WEBKIT_VIEWPORT_WARNING = 'Viewport argument key "interactive-widget" not recognized and ignored.';
 const CASES = [
   { name: "single line", draft: "Draft text", cursor: 5 },
   { name: "multiline middle edit", draft: "First line\nSecond line\nThird line", cursor: 5 },
@@ -131,26 +132,37 @@ async function recordKeys(page: Page): Promise<string[]> {
   return lines;
 }
 
+async function openComposer(page: Page, loginUrl: string, conversationId: number, errors: string[]): Promise<void> {
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text() !== WEBKIT_VIEWPORT_WARNING) errors.push(message.text());
+  });
+  await page.goto(loginUrl);
+  await page.goto(new URL(`/#/c/${conversationId}`, loginUrl).href);
+  await page.getByRole("textbox", { name: "Message", exact: true }).waitFor();
+  await page.evaluate(async () => {
+    const { document } = globalThis as unknown as { document: { fonts: { ready: Promise<unknown> } } };
+    await document.fonts.ready;
+  });
+}
+
 export async function verifyComposerLayout(loginUrl: string, conversationId: number, outDir: string): Promise<void> {
   const browser = await webkit.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
     const errors: string[] = [];
-    page.on("pageerror", (error) => errors.push(error.message));
-    page.on("console", (message) => {
-      if (message.type() === "error") errors.push(message.text());
-    });
-    await page.goto(loginUrl);
-    await page.goto(new URL(`/#/c/${conversationId}`, loginUrl).href);
-    await page.getByRole("textbox", { name: "Message", exact: true }).waitFor();
-    await page.evaluate(async () => {
-      const { document } = globalThis as unknown as { document: { fonts: { ready: Promise<unknown> } } };
-      await document.fonts.ready;
-    });
+    await openComposer(page, loginUrl, conversationId, errors);
     const lines = await recordKeys(page);
     writeFileSync(join(outDir, "composer-layout.txt"), `${lines.join("\n")}\n`);
     for (const line of lines) console.log(line);
     await verifyComposerInteractions(page, "WebKit", outDir);
+    await page.close();
+    for (const scale of ["sm", "md"] as const) {
+      const touchPage = await browser.newPage({ viewport: { width: 1280, height: 800 }, hasTouch: true, reducedMotion: "reduce" });
+      await openComposer(touchPage, loginUrl, conversationId, errors);
+      await verifyTouchSoftWrap(touchPage, scale, outDir);
+      await touchPage.close();
+    }
     assert.deepEqual(errors, []);
     assert(!lines.some((line) => line.startsWith("FAIL")), "WebKit composer exceeded its layout budget");
   } finally {

@@ -17,12 +17,14 @@ interface BrowserTextarea {
 
 const geometry = (box: Locator) => box.evaluate((node) => {
   const el = node as unknown as BrowserTextarea;
+  const style = el.ownerDocument.defaultView.getComputedStyle(el);
   return {
     multiline: el.closest(".composer-frame")?.getAttribute("data-multiline") === "true",
     focused: el.ownerDocument.activeElement === el,
     caret: [el.selectionStart, el.selectionEnd],
     height: el.clientHeight,
-    sizing: el.ownerDocument.defaultView.getComputedStyle(el).getPropertyValue("field-sizing"),
+    sizing: style.getPropertyValue("field-sizing"),
+    fontSize: Number.parseFloat(style.getPropertyValue("font-size")),
     width: el.clientWidth,
     scrollHeight: el.scrollHeight,
     scrollWidth: el.scrollWidth,
@@ -33,7 +35,8 @@ function assertSingleRow(size: Awaited<ReturnType<typeof geometry>>, height: num
   assert.equal(size.multiline, false, "The draft did not return to one row");
   assert.equal(size.height, height, "Single row changed height");
   assert.notEqual(size.sizing, "content", "The single row uses intrinsic text sizing");
-  assert(size.scrollHeight <= size.height && size.scrollWidth <= size.width, "Text overflowed the single row");
+  assert(size.scrollHeight <= size.height && size.scrollWidth <= size.width,
+    `Text overflowed the single row: ${size.scrollWidth}×${size.scrollHeight}px in ${size.width}×${size.height}px`);
 }
 
 async function verifySoftWrap(page: Page, box: Locator, singleHeight: number, engine: string, outDir: string): Promise<void> {
@@ -47,6 +50,8 @@ async function verifySoftWrap(page: Page, box: Locator, singleHeight: number, en
   }
   assert(length < 180, "Typing never crossed the soft wrap boundary");
   assert.equal(await box.inputValue(), "W".repeat(length + 1));
+  const wrapped = await geometry(box);
+  assert(wrapped.scrollHeight <= wrapped.height, "Text overflowed after the composer switched rows");
   await frame.screenshot({ path: join(outDir, `composer-${engine}-wrapped.png`) });
   await box.press("Backspace");
   assertSingleRow(await geometry(box), singleHeight);
@@ -130,4 +135,27 @@ export async function verifyComposerInteractions(page: Page, engine: "Chromium" 
   await verifySoftWrap(page, box, height, engine, outDir);
   await verifyTextPaste(page, box, height, engine);
   await verifyComposition(page, box, height, engine, outDir);
+}
+
+export async function verifyTouchSoftWrap(page: Page, scale: "sm" | "md", outDir: string): Promise<void> {
+  const { coarse, bodyFontSize } = await page.evaluate(async (uiScale) => {
+    const browser = globalThis as unknown as {
+      document: { documentElement: { dataset: { uiScale: string } }; body: unknown };
+      requestAnimationFrame(callback: () => void): void;
+      matchMedia(query: string): { matches: boolean };
+      getComputedStyle(el: unknown): { fontSize: string };
+    };
+    browser.document.documentElement.dataset.uiScale = uiScale;
+    await new Promise<void>((resolve) => browser.requestAnimationFrame(() => browser.requestAnimationFrame(resolve)));
+    return {
+      coarse: browser.matchMedia("(pointer: coarse)").matches,
+      bodyFontSize: Number.parseFloat(browser.getComputedStyle(browser.document.body).fontSize),
+    };
+  }, scale);
+  assert(coarse && bodyFontSize < 16, "Composer touch check requires a coarse pointer and body text under 16px");
+  const box = page.getByRole("textbox", { name: "Message", exact: true });
+  await box.fill("One short line");
+  const { height, fontSize } = await geometry(box);
+  assert.equal(fontSize, 16, "Composer touch check requires the textarea font floor");
+  await verifySoftWrap(page, box, height, `WebKit-touch-${scale}`, outDir);
 }

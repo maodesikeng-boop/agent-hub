@@ -46,12 +46,13 @@ const FRAME_CLASS = "composer-frame bg-background";
 
 const ROW_CLASS = "relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
 const ROW_MULTI_CLASS = "pb-2";
-const TEXT_METRICS = "block min-h-9 w-full min-w-0 px-3 py-1.5 text-body leading-6 pointer-coarse:py-2.5";
+const TEXT_TYPE = "px-3 text-body leading-6";
+const TEXT_METRICS = `block min-h-9 w-full min-w-0 py-1.5 pointer-coarse:py-2.5 ${TEXT_TYPE}`;
 const TEXTAREA_CLASS =
   `${TEXT_METRICS} resize-none bg-transparent outline-none placeholder:text-muted-foreground disabled:opacity-50`;
-const MIRROR_CLASS = `${TEXT_METRICS} invisible overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word]`;
+const MIRROR_CLASS = `composer-text-measure ${TEXT_METRICS} invisible overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word]`;
 const TEXT_LIMIT = { maxHeight: COMPOSER_MAX_HEIGHT_PX };
-const PROBE_CLASS = "invisible absolute inset-x-0 top-0 h-px px-3 text-body leading-6";
+const PROBE_CLASS = `composer-text-measure invisible absolute inset-x-0 top-0 h-[1em] ${TEXT_TYPE}`;
 const TEXT_CELL = [
   "col-start-2 col-end-3 row-start-1 row-end-2",
   "col-start-1 col-end-4 row-start-1 row-end-2",
