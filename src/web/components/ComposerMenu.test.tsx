@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +132,23 @@ describe("输入框 / 命令列表", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it("keeps commands open and filters them during composition", async () => {
+    const onSend = vi.fn();
+    render(<Harness src={source()} onSend={onSend} />);
+    await user.type(box(), "/co");
+    const menu = await screen.findByRole("listbox", { name: "Commands" });
+    fireEvent.compositionStart(box());
+    expect(menu).toBeInTheDocument();
+    fireEvent.input(box(), { target: { value: "/comp" }, inputType: "insertCompositionText", isComposing: true });
+    expect(options().map((o) => o.textContent)).toEqual(["/compact压缩上下文"]);
+    fireEvent.keyDown(box(), { key: "Enter" });
+    expect(box().value).toBe("/comp");
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(box());
+    await user.keyboard("{Enter}");
+    expect(box().value).toBe("/compact ");
+  });
+
   it("10 没有匹配时显示“没有匹配的命令”，Enter 照常发送原文", async () => {
     const onSend = vi.fn();
     render(<Harness src={source()} onSend={onSend} />);
@@ -207,6 +224,19 @@ describe("输入框 / 命令列表", () => {
 
 describe("输入框 @ 文件列表", () => {
   const entry = (path: string, insert = `@${path}`) => ({ path, root: "/repo", insert });
+
+  it("keeps file suggestions open and searches for marked text", async () => {
+    const files = vi.fn(async () => ({ entries: [entry("说明.md")], truncated: false }));
+    render(<Harness src={source({ files })} />);
+    await user.type(box(), "@");
+    const menu = await screen.findByRole("listbox", { name: "Files" });
+    fireEvent.compositionStart(box());
+    expect(menu).toBeInTheDocument();
+    fireEvent.input(box(), { target: { value: "@说明" }, inputType: "insertCompositionText", isComposing: true });
+    await waitFor(() => expect(files).toHaveBeenCalledWith("说明", expect.any(AbortSignal)));
+    fireEvent.compositionEnd(box());
+    expect(menu).toBeInTheDocument();
+  });
   const filesOf = (...entries: ReturnType<typeof entry>[]) => vi.fn(async () => ({ entries, truncated: false }));
 
   afterEach(() => vi.useRealTimers());

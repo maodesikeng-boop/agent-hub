@@ -12,10 +12,12 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { readLedgerFile } from "../src/daemon/process-ledger.ts";
-import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST } from "../src/shared/index.ts";
+import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST, type StateSnapshot } from "../src/shared/index.ts";
 import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import { resolveHubPaths } from "../src/shared/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
+import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
+import { verifyComposerLayout } from "./verify-composer-layout.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const FAKE_CLAUDE = fileURLToPath(new URL("../test/fake-claude/fake-claude.ts", import.meta.url));
@@ -89,7 +91,7 @@ function isAlive(pid: number): boolean {
   }
 }
 
-async function runOnce(outDir: string): Promise<RunResult> {
+async function runOnce(outDir: string, checkComposer: boolean): Promise<RunResult> {
   const started = performance.now();
   const phases: Array<[string, number]> = [];
   let mark = started;
@@ -139,7 +141,7 @@ async function runOnce(outDir: string): Promise<RunResult> {
     const healthBody = (await health.json()) as { ok?: boolean };
     if (health.status !== 200 || healthBody.ok !== true) throw new Error(`健康检查不对：HTTP ${health.status} ${JSON.stringify(healthBody)}`);
     const state = await fetch(`${origin}${API_PATHS.state}`, { headers });
-    const stateBody = (await state.json()) as { conversations?: unknown };
+    const stateBody = (await state.json()) as Partial<StateSnapshot>;
     if (state.status !== 200 || !Array.isArray(stateBody.conversations)) throw new Error(`/api/state 不对：HTTP ${state.status}`);
     phase("登录、健康检查、/api/state");
 
@@ -207,9 +209,20 @@ async function runOnce(outDir: string): Promise<RunResult> {
     if (rootText === "") throw new Error("工作台渲染出来是空的");
     await page.screenshot({ path: join(outDir, SCREENSHOT) });
     if (pageErrors.length > 0) throw new Error(`页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
+    phase("浏览器渲染工作台、截图");
+
+    if (checkComposer) {
+      const id = stateBody.conversations[0]?.conversation.id;
+      if (id === undefined) throw new Error("Composer layout check requires a conversation");
+      await verifyComposerLayout(loginUrl, id, outDir);
+      phase("WebKit composer layout");
+      await page.goto(new URL(`/#/c/${id}`, loginUrl).href);
+      await verifyComposerInteractions(page, "Chromium", outDir);
+      if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
+      phase("Chromium composer interactions");
+    }
     await browser.close();
     browser = null;
-    phase("浏览器渲染工作台、截图");
 
     requestShutdown(child, home, uiToken);
     const exit = await withTimeout("等守护进程正常关机", exited);
@@ -245,7 +258,7 @@ function describeRun(i: number, r: RunResult): string {
 }
 
 async function main(): Promise<number> {
-  const { values } = parseArgs({ options: { runs: { type: "string", default: "1" }, out: { type: "string", default: join(shortTmp(), "bellwood-verify-smoke") } } });
+  const { values } = parseArgs({ options: { runs: { type: "string", default: "1" }, out: { type: "string", default: join(shortTmp(), "bellwood-verify-smoke") }, "composer-layout": { type: "boolean" } } });
   const runs = Number.parseInt(values.runs, 10);
   if (!Number.isInteger(runs) || runs < 1) throw new Error(`--runs 要是正整数：${values.runs}`);
   const outDir = values.out;
@@ -254,7 +267,7 @@ async function main(): Promise<number> {
   const lines: string[] = [`verify 冒烟 ${new Date().toISOString()}，${process.platform}/${process.arch}，Node ${process.version}`];
   const results: RunResult[] = [];
   for (let i = 1; i <= runs; i++) {
-    const r = await runOnce(outDir);
+    const r = await runOnce(outDir, values["composer-layout"] ?? false);
     results.push(r);
     const line = describeRun(i, r);
     lines.push(line);

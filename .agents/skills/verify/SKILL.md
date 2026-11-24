@@ -13,6 +13,7 @@ description: "Run the local end-to-end smoke check for Bellwood: build the web a
 pnpm verify              # one run
 pnpm verify --runs 3     # three runs, with median and range
 pnpm verify --out <dir>  # write the screenshot and timing log somewhere else
+pnpm verify --composer-layout # also check composer layout and interactions
 ```
 
 The command exits 0 only if every run passes. It writes two files to `/tmp/bellwood-verify-smoke/` by default:
@@ -21,6 +22,14 @@ The command exits 0 only if every run passes. It writes two files to `/tmp/bellw
 - `smoke-runs.txt`: the time of each phase in each run, the median, and the range.
 
 Look at the screenshot. A passing run with a wrong-looking screen is still a failure.
+
+The pull request smoke job installs WebKit and runs the composer check.
+For local runs, install the browser with `pnpm exec playwright install webkit`.
+The check types into the real composer and uses the WebKit timeline to count layout events.
+It covers stable single-line typing and edits in the middle of a multiline draft.
+It also checks that single-line edits lay out only the textarea. These checks do not depend on machine speed. jsdom cannot measure browser layout.
+Chromium and WebKit also check that typing across the wrap boundary, deleting back to one row, pasting text, and composing text preserve the draft. The composition test uses browser events and does not start an OS input method.
+The check writes `composer-layout.txt` and interaction screenshots under the same output directory.
 
 ## What one run checks
 

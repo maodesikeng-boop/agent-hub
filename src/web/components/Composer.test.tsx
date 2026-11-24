@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as shared from "../../shared/index.ts";
 import { App } from "../App.tsx";
 import * as composerSuggest from "../composer-suggest.ts";
@@ -38,15 +38,6 @@ const staging = (over: Partial<StagedFiles> = {}): StagedFiles => ({
 
 const setup = (over: Partial<StagedFiles> = {}) =>
   render(<Composer value="第一行\n第二行" placeholder="发消息" staging={staging(over)} onChange={() => {}} onSend={() => {}} />);
-
-// jsdom 没有 canvas：给量文字宽度的 getContext 一个假的（每个字 8px）
-const savedGetContext = HTMLCanvasElement.prototype.getContext;
-beforeEach(() => {
-  HTMLCanvasElement.prototype.getContext = (() => ({ font: "", measureText: (t: string) => ({ width: t.length * 8 }) })) as never;
-});
-afterEach(() => {
-  HTMLCanvasElement.prototype.getContext = savedGetContext;
-});
 
 describe("Composer 布局", () => {
   it("“+”和发送键同尺寸、直角（36px）；“+”是不带底色的 ghost 图标按钮（悬停 hover:bg-hover）；框是直角 2px 边", () => {
@@ -86,7 +77,7 @@ describe("Composer 布局", () => {
     const box = screen.getByRole("textbox", { name: "Message" });
     const attach = screen.getByRole("button", { name: "Add files" });
     const send = screen.getByRole("button", { name: "Send" });
-    expect(box).toHaveClass("w-full", "col-span-3", "col-start-1", "row-start-1");
+    expect(box).toHaveClass("w-full", "col-end-4", "col-start-1", "row-start-1");
     expect(attach).toHaveClass("col-start-1", "row-start-2");
     expect(send.parentElement).toHaveClass("col-start-3", "row-start-2", "justify-self-end");
     const list = screen.getByRole("list", { name: "Files to send" });
@@ -108,80 +99,42 @@ describe("Composer 布局", () => {
     expect(box.parentElement).toHaveClass("px-2");
   });
 
-  describe("单行 ⇄ 多行切换（按 scrollHeight 判断，jsdom 里用假的排版数据）", () => {
-    let style: HTMLStyleElement;
-    const proto = HTMLTextAreaElement.prototype;
-    beforeEach(() => {
-      style = document.createElement("style");
-      style.textContent = "textarea { line-height: 24px; padding-top: 6px; padding-bottom: 6px; }";
-      document.head.append(style);
-      // 一行 36px（24 + 上下内边距）；有换行符或超过 40 个字符就算多行（模拟窄栏里自动换行）
-      Object.defineProperty(proto, "scrollHeight", {
-        configurable: true,
-        get(this: HTMLTextAreaElement) {
-          const text = this.value;
-          return text.includes("\n") ? 60 : text.length > 40 ? 60 : 36;
-        },
-      });
-      Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 600 });
-    });
-    afterEach(() => {
-      style.remove();
-      delete (proto as { scrollHeight?: number }).scrollHeight;
-      delete (proto as { clientWidth?: number }).clientWidth;
-    });
-    const view = (value: string) => <Composer value={value} placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />;
+  it("keeps the same textarea and its focus when a newline moves the controls down", () => {
+    const view = (value: string) => <Composer value={value} placeholder="Message" staging={staging()} onChange={() => {}} onSend={() => {}} />;
+    const { container, rerender } = render(view("One line"));
+    const box = screen.getByRole("textbox");
+    box.focus();
+    rerender(view("First line\nSecond line"));
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "true");
+    expect(screen.getByRole("textbox")).toBe(box);
+    expect(box).toHaveFocus();
+    expect(box).toHaveClass("col-start-1", "col-end-4");
+    expect(screen.getByRole("button", { name: "Add files" })).toHaveClass("row-start-2");
+    rerender(view("One line"));
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "false");
+    expect(box).toHaveFocus();
+  });
 
-    it("一行字仍是单行；有换行符或自动换行变多行，文字区占满一行、回形针和发送键落到下一行", () => {
-      const { container, rerender } = render(view("一行字"));
-      const frame = container.firstElementChild as HTMLElement;
-      const box = screen.getByRole("textbox", { name: "Message" });
-      expect(frame).toHaveAttribute("data-multiline", "false");
-      rerender(view("第一行\n第二行"));
-      expect(frame).toHaveAttribute("data-multiline", "true");
-      expect(box).toHaveClass("col-span-3", "row-start-1");
-      expect(screen.getByRole("button", { name: "Add files" })).toHaveClass("row-start-2");
-      expect(screen.getByRole("button", { name: "Send" }).parentElement).toHaveClass("row-start-2");
-      rerender(view("一".repeat(45)));
-      expect(frame).toHaveAttribute("data-multiline", "true");
-    });
-
-    it("切换时是同一个文字区节点（不重建，光标和焦点不丢）", () => {
-      const { rerender } = render(view("一行字"));
-      const box = screen.getByRole("textbox", { name: "Message" });
-      box.focus();
-      rerender(view("第一行\n第二行"));
-      expect(screen.getByRole("textbox", { name: "Message" })).toBe(box);
-      expect(box).toHaveFocus();
-    });
-
-    it("多行删回一行、放得进回形针和发送键中间时退回单行；清空也回单行", () => {
-      const { container, rerender } = render(view("第一行\n第二行"));
-      const frame = container.firstElementChild as HTMLElement;
-      expect(frame).toHaveAttribute("data-multiline", "true");
-      rerender(view("短"));
-      expect(frame).toHaveAttribute("data-multiline", "false");
-      rerender(view("第一行\n第二行"));
-      expect(frame).toHaveAttribute("data-multiline", "true");
-      rerender(view(""));
-      expect(frame).toHaveAttribute("data-multiline", "false");
-    });
-
-    it("宽度够一行、但放不进回形针和发送键中间的文字，留在多行（不来回切）", () => {
-      const { container, rerender } = render(view("第一行\n第二行"));
-      Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 100 });
-      rerender(view("一".repeat(30))); // 30 × 8 = 240 > 100
-      expect(container.firstElementChild).toHaveAttribute("data-multiline", "true");
-    });
-
-    it("切换布局时先把 height 重置成 auto 再量，不沿用旧布局的高度", () => {
-      const { rerender } = render(view("一行字"));
-      const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
-      rerender(view("第一行\n第二行"));
-      expect(box.style.height).toBe("60px");
-      rerender(view("短"));
-      expect(box.style.height).toBe("36px");
-    });
+  it("keeps the controls in place until composition ends and keeps the committed text", () => {
+    const onChange = vi.fn();
+    const onSend = vi.fn();
+    const staged = staging();
+    const view = (value: string) => <Composer value={value} placeholder="Message" staging={staged} onChange={onChange} onSend={onSend} />;
+    const { container, rerender } = render(view("草稿"));
+    const box = screen.getByRole("textbox");
+    box.focus();
+    fireEvent.compositionStart(box);
+    fireEvent.input(box, { target: { value: "草稿\n输入法" }, inputType: "insertCompositionText", isComposing: true });
+    expect(onChange).toHaveBeenLastCalledWith("草稿\n输入法");
+    rerender(view("草稿\n输入法"));
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box).toHaveValue("草稿\n输入法");
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "false");
+    fireEvent.compositionEnd(box, { data: "输入法" });
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "true");
+    expect(box).toHaveValue("草稿\n输入法");
+    expect(box).toHaveFocus();
   });
 
   it("停止键和发送键在同一个位置、同样大小（单行和多行都在按钮组里）", () => {
@@ -249,22 +202,6 @@ describe("Composer 布局", () => {
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute("readonly");
     expect(screen.getByRole("button", { name: "Add files" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-  });
-
-  it("继续往后打字时不把 height 先重置成 auto（避免多行时每次按键触发整页同步回流），删字或清空时才重置", () => {
-    const files = [{ key: "a", file: new File(["x"], "a.txt") }]; // 有待发文件：始终多行布局，布局切换不会插进来
-    const view = (value: string) => <Composer value={value} placeholder="发消息" staging={staging({ files })} onChange={() => {}} onSend={() => {}} />;
-    const { rerender } = render(view("第一行"));
-    const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
-    box.style.height = "80px";
-    Object.defineProperty(box, "scrollHeight", {
-      configurable: true,
-      get: () => (box.style.height === "auto" ? 36 : 80),
-    });
-    rerender(view("第一行继续打字"));
-    expect(box.style.height).toBe("80px");
-    rerender(view("第一"));
-    expect(box.style.height).toBe("36px");
   });
 
   it("文字框关闭系统自动拼写检查、自动纠错与自动大写（防 macOS AppleSpell 同步扫描卡顿）", () => {
@@ -765,169 +702,15 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
   });
 });
 
-describe("Composer 输入性能与零重排守卫", () => {
-  it("不使用 field-sizing-content，单行连续打字复用宽度/样式缓存并跳过 height:auto 与 scrollHeight 强制重排", () => {
-    let fontSets = 0;
-    const fakeCtx = {
-      _font: "",
-      set font(value: string) {
-        fontSets++;
-        this._font = value;
-      },
-      get font() {
-        return this._font;
-      },
-      measureText: (t: string) => ({ width: t.length * 8 }),
-    };
-    HTMLCanvasElement.prototype.getContext = (() => fakeCtx) as never;
-    const savedClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
-    const savedScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
-    let scrollHeightReads = 0;
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 600 });
-    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
-      configurable: true,
-      get() {
-        scrollHeightReads++;
-        return String((this as HTMLTextAreaElement).value ?? "").includes("\n") ? 60 : 36;
-      },
-    });
-    const csSpy = vi.spyOn(window, "getComputedStyle").mockImplementation(
-      () =>
-        ({
-          getPropertyValue: () => "",
-          lineHeight: "20px",
-          paddingTop: "8px",
-          paddingBottom: "8px",
-          paddingLeft: "0px",
-          paddingRight: "0px",
-          fontStyle: "normal",
-          fontWeight: "400",
-          fontSize: "15px",
-          fontFamily: "sans-serif",
-          columnGap: "8px",
-        }) as unknown as CSSStyleDeclaration,
-    );
-
-    try {
-      const s = staging();
-      const onChange = () => {};
-      const onSend = () => {};
-      const { rerender } = render(<Composer value="a" placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
-      const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
-      expect(box.className).not.toMatch(/field-sizing/);
-
-      scrollHeightReads = 0;
-      csSpy.mockClear();
-
-      rerender(<Composer value="ab" placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
-      expect(scrollHeightReads).toBe(0);
-      expect(csSpy).not.toHaveBeenCalled();
-      const baselineFontSets = fontSets;
-      expect(baselineFontSets).toBe(1);
-
-      for (const next of ["abc", "abcd", "abcde"]) {
-        rerender(<Composer value={next} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
-      }
-      expect(scrollHeightReads).toBe(0);
-      expect(csSpy).not.toHaveBeenCalled();
-      expect(fontSets).toBe(baselineFontSets);
-
-      rerender(<Composer value={"line 1\nline 2"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
-      expect(scrollHeightReads).toBeGreaterThan(0);
-    } finally {
-      csSpy.mockRestore();
-      if (savedClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", savedClientWidth);
-      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
-      if (savedScrollHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", savedScrollHeight);
-      else delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
-    }
-  });
-
-  it("多行模式下非前缀替换成更少行但字符数 >= 原文本，或从上限高度替换为单行，都能正确缩回真实高度", () => {
-    const savedClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
-    const savedScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 600 });
-    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
-      configurable: true,
-      get() {
-        const el = this as HTMLTextAreaElement;
-        const text = String(el.value ?? "");
-        const lines = text === "" ? 1 : text.split("\n").length;
-        const contentHeight = lines === 1 ? 36 : 16 + lines * 20;
-        const current = el.style.height;
-        if (current && current !== "auto" && current.endsWith("px")) {
-          return Math.max(contentHeight, parseFloat(current));
-        }
-        return contentHeight;
-      },
-    });
-    const csSpy = vi.spyOn(window, "getComputedStyle").mockImplementation(
-      () =>
-        ({
-          getPropertyValue: () => "",
-          lineHeight: "20px",
-          paddingTop: "8px",
-          paddingBottom: "8px",
-          paddingLeft: "0px",
-          paddingRight: "0px",
-          fontStyle: "normal",
-          fontWeight: "400",
-          fontSize: "15px",
-          fontFamily: "sans-serif",
-          columnGap: "8px",
-        }) as unknown as CSSStyleDeclaration,
-    );
-
-    try {
-      const s = staging();
-      const onChange = () => {};
-      const onSend = () => {};
-
-      const { container, rerender } = render(<Composer value={"line 1\nline 2\nline 3\nline 4"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
-      const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
-      expect(box.style.height).toBe("96px");
-
-      // 34 chars > 27 chars, fewer lines (2 rows = 56px): must reset height:auto so it shrinks instead of sticking at 96px
-      rerender(<Composer value={"line 1\nlonger single second line!!"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
-      expect(box.style.height).toBe("56px");
-
-      // At MAX_HEIGHT_PX (180px), replacing 11 lines (21 chars) with a 22-char single line must shrink back to 36px and single-line layout
-      rerender(<Composer value={"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
-      expect(box.style.height).toBe("180px");
-      expect(container.querySelector(".composer-frame")).toHaveAttribute("data-multiline", "true");
-
-      rerender(<Composer value={"1234567890123456789012"} placeholder="发消息" staging={s} onChange={onChange} onSend={onSend} />);
-      expect(box.style.height).toBe("36px");
-      expect(container.querySelector(".composer-frame")).toHaveAttribute("data-multiline", "false");
-    } finally {
-      csSpy.mockRestore();
-      if (savedClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", savedClientWidth);
-      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
-      if (savedScrollHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", savedScrollHeight);
-      else delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
-    }
-  });
-
-  it("getMeasureContext 缓存按 HTMLCanvasElement.prototype.getContext 引用失效，无 canvas 实现时不重复探测", () => {
-    const nullSpy = vi.fn(() => null);
-    HTMLCanvasElement.prototype.getContext = nullSpy as never;
-
-    const savedClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 600 });
-    try {
-      const s = staging();
-      const { rerender } = render(<Composer value="a" placeholder="发消息" staging={s} onChange={() => {}} onSend={() => {}} />);
-      rerender(<Composer value="ab" placeholder="发消息" staging={s} onChange={() => {}} onSend={() => {}} />);
-      rerender(<Composer value="abc" placeholder="发消息" staging={s} onChange={() => {}} onSend={() => {}} />);
-      expect(nullSpy).toHaveBeenCalledTimes(1);
-
-      const mockSpy = vi.fn(() => ({ font: "", measureText: (t: string) => ({ width: t.length * 8 }) }));
-      HTMLCanvasElement.prototype.getContext = mockSpy as never;
-      rerender(<Composer value="abcd" placeholder="发消息" staging={s} onChange={() => {}} onSend={() => {}} />);
-      expect(mockSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      if (savedClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", savedClientWidth);
-      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
-    }
-  });
+it("does not read textarea height when editing or replacing a multiline draft", () => {
+  const staged = staging();
+  const view = (value: string) => <Composer value={value} placeholder="Message" staging={staged} onChange={() => {}} onSend={() => {}} />;
+  const { rerender } = render(view("First line\nSecond line\nThird line"));
+  const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+  const measure = vi.fn(() => 100);
+  Object.defineProperty(box, "scrollHeight", { get: measure });
+  rerender(view("First change\nSecond line\nThird line"));
+  rerender(view("One short line"));
+  expect(measure).not.toHaveBeenCalled();
+  expect(box.style.height).toBe("");
 });
