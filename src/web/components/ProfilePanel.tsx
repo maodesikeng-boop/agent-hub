@@ -266,7 +266,7 @@ function SummaryHeader({
                       setMenuOpen(false);
                       setConfirmArchive(true);
                     }}
-                    className="flex min-h-9 w-full cursor-pointer items-center px-3 py-1.5 text-left text-minor font-medium text-danger transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex min-h-9 w-full cursor-pointer items-center rounded-xs px-3 py-1.5 text-left text-minor font-medium text-danger transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Archive...
                   </button>
@@ -612,7 +612,7 @@ function SummaryContent({
           <button
             type="button"
             onClick={() => onNavigate("capabilities")}
-            className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+            className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
           >
             <span>Capabilities</span>
             <span className="flex items-center gap-2 text-minor text-muted-foreground tabular-nums">
@@ -624,7 +624,7 @@ function SummaryContent({
         <button
           type="button"
           onClick={() => onNavigate("persona")}
-          className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+          className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
         >
           <span>Persona</span>
           <span className="flex items-center gap-2 text-minor text-muted-foreground tabular-nums">
@@ -635,7 +635,7 @@ function SummaryContent({
         <button
           type="button"
           onClick={() => onNavigate("memory")}
-          className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+          className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
         >
           <span>Memory files</span>
           <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -644,7 +644,7 @@ function SummaryContent({
           <button
             type="button"
             onClick={() => onNavigate("worktree")}
-            className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+            className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
           >
             <span>Worktree setup</span>
             <span className="flex items-center gap-2 text-minor text-muted-foreground">
@@ -656,7 +656,7 @@ function SummaryContent({
         <button
           type="button"
           onClick={() => onNavigate("history")}
-          className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+          className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
         >
           <span>History</span>
           <span className="flex items-center gap-2 text-minor text-muted-foreground tabular-nums">
