@@ -40,7 +40,7 @@ async function postHeldProbe(store: DatabaseSync, client: Client, conversationId
   holdReplied(store);
   const id = await client.post(conversationId, PROBE);
   await waitUntil("pending turn completion receipt", () => (receipts(store) > 0 ? true : undefined));
-  const row = store.prepare("SELECT m.status, a.status AS action FROM messages m JOIN actions a ON a.type = 'session.send' AND a.dedupe_key = CAST(m.id AS TEXT) WHERE m.id = ?").get(id);
+  const row = store.prepare("SELECT m.status, a.status AS action FROM messages m JOIN actions a ON a.type = 'session.send' AND a.dedupe_key = (CAST(m.session_id AS TEXT) || ':' || CAST(m.id AS TEXT)) WHERE m.id = ?").get(id);
   expect(row).toEqual({ status: "processing", action: "done" });
   expect(probePrompts()).toBe(1);
   return id;

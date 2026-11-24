@@ -18,6 +18,7 @@ import {
   MIN_TOOL_STEP_VISIBLE_MS,
   STREAMING_TEXT_THROTTLE_MS,
 } from "../../shared/limits.ts";
+import { deleteLegacyPendingSessionSend } from "../actions/index.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -40,6 +41,31 @@ export interface LiveSession {
 }
 
 const THINKING: AgentStep = { type: "thinking" };
+
+const RECOVER_MESSAGES_SQL = `
+SELECT m.id, m.session_id, m.sender, m.status FROM messages m
+JOIN agent_sessions s ON s.id = m.session_id
+LEFT JOIN workers w ON w.id = s.worker_id
+LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
+WHERE pa.pm_id IS NULL
+  AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
+  AND NOT EXISTS (
+    SELECT 1 FROM turn_completions c, json_each(c.event, '$.messageIds') ids
+    WHERE c.session_id = m.session_id AND ids.value = m.id
+      AND NOT (COALESCE(json_extract(c.event, '$.shutdown'), 0) = 1 AND (s.role = 'worker' OR m.sender = 'system'))
+  )
+  AND (
+    m.status IN ('delivered', 'processing')
+    OR (m.status = 'queued' AND NOT EXISTS (
+      SELECT 1 FROM actions a
+      WHERE a.type = 'session.send' AND a.status IN ('pending', 'running')
+        AND (
+          a.dedupe_key = (CAST(m.session_id AS TEXT) || ':' || CAST(m.id AS TEXT))
+          OR (a.dedupe_key = CAST(m.id AS TEXT) AND json_extract(a.params, '$.sessionId') = m.session_id)
+        )
+    ))
+  )
+ORDER BY m.id`;
 
 function sameToolStep(a: AgentStep | null | undefined, b: AgentStep | null | undefined): boolean {
   if (a?.type !== "tool_use" || b?.type !== "tool_use" || a.name !== b.name) return false;
@@ -456,28 +482,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
 
   const recoverAfterRestart = () => {
     return write((p) => {
-      const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(
-        `SELECT m.id, m.session_id, m.sender, m.status FROM messages m
-         JOIN agent_sessions s ON s.id = m.session_id
-         LEFT JOIN workers w ON w.id = s.worker_id
-         LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
-         WHERE pa.pm_id IS NULL
-           AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
-           AND NOT EXISTS (
-             SELECT 1 FROM turn_completions c, json_each(c.event, '$.messageIds') ids
-             WHERE c.session_id = m.session_id AND ids.value = m.id
-               AND NOT (COALESCE(json_extract(c.event, '$.shutdown'), 0) = 1 AND (s.role = 'worker' OR m.sender = 'system'))
-           )
-           AND (
-             m.status IN ('delivered', 'processing')
-             -- 排队中的已有活动动作就不用管；已送达、处理中的总要再登记一次，把参数改成 resend
-             OR (m.status = 'queued' AND NOT EXISTS (
-               SELECT 1 FROM actions a
-               WHERE a.type = 'session.send' AND a.dedupe_key = CAST(m.id AS TEXT) AND a.status IN ('pending', 'running')
-             ))
-           )
-         ORDER BY m.id`,
-      );
+      const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(RECOVER_MESSAGES_SQL);
       const resentMessageIds: MessageId[] = [];
       const requeuedMessageIds: MessageId[] = [];
       // Resume the oldest interrupted message first.
@@ -488,6 +493,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
         const recovery = resend && !recoveredSessionIds.includes(row.session_id);
         if (recovery) recoveredSessionIds.push(row.session_id);
         const source = row.sender === "system" ? "system" : "user";
+        if (resend) deleteLegacyPendingSessionSend(db, row.session_id, row.id);
         enqueue(p, {
           type: "session.send",
           params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },

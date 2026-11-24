@@ -119,18 +119,19 @@ import {
 } from "./paths.ts";
 
 describe("动作", () => {
-  it("去重键：启动按（会话，第几代），发消息按消息编号", () => {
+  it("去重键：启动按（会话，第几代），发消息按（会话，消息编号）", () => {
     expect(actionDedupeKey({ type: "session.start", params: { sessionId: 7, generation: 2 } })).toBe("7:2");
-    expect(actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user" } })).toBe("42");
+    expect(actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user" } })).toBe("7:42");
+    expect(actionDedupeKey({ type: "session.send", params: { sessionId: 8, messageId: 42, source: "user" } })).toBe("8:42");
   });
 
-  it("恢复和重发的标记不进去重键：同一个动作重新登记会重置那一行", () => {
+  it("恢复和重发的标记不进去重键：同一会话下重新登记会重置那一行", () => {
     expect(
       actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user", resend: true, recovery: true } }),
-    ).toBe("42");
+    ).toBe("7:42");
     expect(
       actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user", resend: true } }),
-    ).toBe("42");
+    ).toBe("7:42");
   });
 
   it("启动动作：5 秒起翻倍，封顶 5 分钟，共试 3 次", () => {
