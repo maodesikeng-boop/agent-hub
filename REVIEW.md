@@ -137,6 +137,14 @@ Check: The PR shows the changed screen rendered in a real browser (`pnpm verify`
 
 Seen in: `0fc0e181`, `a55ca6f0`
 
+### A rewrite keeps what the old code guaranteed
+
+Trigger: `src/web/**`
+
+Check: When a PR replaces, moves, or rebuilds a component, hook, or layout path, every guarantee of the old version survives or the PR body names it as intentionally dropped: fallbacks for unknown values (such as an unknown vendor), read-only and archived states, actions (such as a diff view), and the performance limits its guards enforced. Every test case or guard the diff deletes is replaced by an equivalent check in the same PR. Bringing back a technique that a guard banned comes with before and after numbers showing that the regression the guard blocked does not return.
+
+Seen in: `9dd20f40`, #436
+
 ### The relay trusts only CF-Connecting-IP and resists flushing
 
 Trigger: `src/relay/**`
@@ -160,6 +168,14 @@ Trigger: `src/daemon/driver/**`, `src/daemon/handover/**`, `src/daemon/setup/**`
 Check: Each new child process the daemon starts goes through `trackChild`, so a crash leaves nothing behind after the next start. A test stops the daemon and waits for it and its children to exit before it deletes the temporary `AGENT_HUB_HOME`. Never use `rmSync` retries or `gh run rerun` to hide `ENOTEMPTY`.
 
 Seen in: `6af05c80`, `4b557b03`
+
+### Automatic restarts and closes spare background tasks
+
+Trigger: `src/daemon/driver/**`, `src/daemon/launch.ts`, `src/daemon/pm-capabilities/**`, `src/daemon/ledger/handover.ts`, `src/vendors/*/driver.ts`, `src/vendors/_common/acp/**`
+
+Check: A restart or close that the user did not ask for (the idle timer, a changed capability fingerprint such as a plugin auto-update, a handover switch) never ends a process while `st.background.active`; it waits until the background tasks finish. Only a user stop, a change to the model, working directory, or extra directories, and the `BACKGROUND_TASKS_HOLD_MAX_MS` fallback may end them, and each of those sets `backgroundTasksKilledNote` so the agent learns which tasks stopped. A test starts a background task, fires the new trigger, and shows the process and its task survive.
+
+Seen in: `2717bd20`, `0d43d30f`
 
 ### Tests wait for events, not for time
 
