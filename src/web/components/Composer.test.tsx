@@ -90,6 +90,38 @@ describe("Composer 布局", () => {
     expect(list.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("待发图片用本地缩略图预览，卸载时回收 object URL；解码失败时退回文件图标", () => {
+    const createSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:thumb-1");
+    const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    try {
+      const { container, unmount } = setup({ files: [{ key: "img", file: new File(["png"], "shot.png", { type: "image/png" }) }] });
+      const img = container.querySelector('li img[src="blob:thumb-1"]');
+      expect(img).not.toBeNull();
+      expect(createSpy).toHaveBeenCalledTimes(1);
+      fireEvent.error(img!);
+      expect(container.querySelector("li img")).toBeNull();
+      unmount();
+      expect(revokeSpy).toHaveBeenCalledWith("blob:thumb-1");
+    } finally {
+      createSpy.mockRestore();
+      revokeSpy.mockRestore();
+    }
+  });
+
+  it("超长输入时标出超出的字节数并给外框和文本框标 invalid；只读或禁用时给外框标 disabled", () => {
+    const huge = "a".repeat(shared.MAX_MESSAGE_BYTES + 2048);
+    const { container, rerender } = render(<Composer value={huge} placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    expect(container.querySelector(".composer-frame")).toHaveAttribute("data-invalid", "true");
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Message too long")).toBeInTheDocument();
+    expect(screen.getByText("2.0 KB over")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    rerender(<Composer value="" placeholder="发消息" disabled staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    expect(container.querySelector(".composer-frame")).toHaveAttribute("data-disabled", "true");
+    expect(container.querySelector(".composer-frame")).not.toHaveAttribute("data-invalid");
+  });
+
   it("待发的视频（.mov、.mp4）用摄像机图标，别的文件用文件图标", () => {
     setup({ files: [{ key: "a", file: new File(["x"], "录屏.mov") }, { key: "b", file: new File(["x"], "clip.MP4") }, { key: "c", file: new File(["x"], "a.txt") }] });
     const icons = screen.getAllByRole("listitem").map((li) => li.querySelector("svg path")!.getAttribute("d"));
@@ -336,14 +368,13 @@ describe("Composer 布局", () => {
 });
 
 describe("Composer 提示条", () => {
-  it("加文件被拒（skipped）：输入框上方一行灰字（框外、没有底色），点 × 或打字立刻关闭，4 秒后自动消失", () => {
+  it("加文件被拒（skipped）：贴在输入框顶边后方的浅底耳签，点 × 或打字立刻关闭，4 秒后自动消失", () => {
     vi.useFakeTimers();
     try {
       const dismissNotice = vi.fn();
       setup({ notice: { message: "「空.txt」是空文件，没有加入", kind: "skipped" }, dismissNotice });
       const alert = screen.getByRole("alert");
-      expect(alert).toHaveClass("text-muted-foreground");
-      expect(alert.className).not.toMatch(/bg-|rounded/);
+      expect(alert).toHaveClass("bg-panel", "rounded-t-sm", "text-muted-foreground");
       expect(alert.closest(".composer-frame")).toBeNull();
       expect(alert).toHaveTextContent("「空.txt」是空文件，没有加入");
 
@@ -362,13 +393,13 @@ describe("Composer 提示条", () => {
     }
   });
 
-  it("发送失败（failed）：整行 text-danger，4 秒后不自动消失", () => {
+  it("发送失败（failed）：淡红底深红字耳签，4 秒后不自动消失", () => {
     vi.useFakeTimers();
     try {
       const dismissNotice = vi.fn();
       setup({ notice: { message: "上传失败", kind: "failed" }, dismissNotice });
       const alert = screen.getByRole("alert");
-      expect(alert).toHaveClass("text-danger");
+      expect(alert).toHaveClass("bg-danger-soft", "rounded-t-sm", "text-danger", "composer-notice-danger");
       expect(alert).toHaveTextContent("上传失败");
 
       act(() => vi.advanceTimersByTime(NOTICE_AUTO_HIDE_MS * 2));

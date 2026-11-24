@@ -191,12 +191,15 @@ describe("Composer：发送键和停止键", () => {
     expect(stop.onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("停止键和发送键的外观一样（只是图标不同）", () => {
+  it("停止键是同尺寸的淡雅凸起中性按钮（btn-raised），强调色留给发送键；空发送键退回透明无框", () => {
     const { unmount } = composer("", undefined);
-    const sendClass = screen.getByRole("button", { name: "Send" }).className;
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send).toHaveClass("size-9", "rounded-sm", "btn-solid", "disabled:bg-transparent", "disabled:border-transparent");
     unmount();
     composer("", stopControl());
-    expect(screen.getByRole("button", { name: "Stop" }).className).toBe(sendClass);
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop).toHaveClass("size-9", "rounded-sm", "btn-raised");
+    expect(stop).not.toHaveClass("btn-solid");
   });
 
   it("忙 + 有字：变回“发送”，发出去照常排队", async () => {

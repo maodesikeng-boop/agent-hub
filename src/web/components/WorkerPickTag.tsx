@@ -15,7 +15,7 @@ export function WorkerPickParts({ labels, inComposer = false }: { labels: readon
     <>
       <Bot className={cn("shrink-0 text-muted-foreground", inComposer ? "size-4" : "size-pixel-sm")} aria-hidden="true" />
       {labels.map((label, i) => (
-        <span key={i} className="min-w-0 truncate">
+        <span key={i} title={label} className={cn("min-w-0 truncate", i === 0 ? "font-medium" : "text-muted-foreground")}>
           {label}
         </span>
       ))}

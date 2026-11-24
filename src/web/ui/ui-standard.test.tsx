@@ -101,7 +101,7 @@ describe("界面标准：共用组件", () => {
     expect(readFileSync("src/web/ui/drawer.tsx", "utf8")).not.toMatch(/animate-in|animate-out|fade-in|fade-out/);
   });
 
-  it("聊天输入框（Composer）：.composer-frame 是 1px 控件线、4px 圆角、聚焦加深到 --border-focus 且不起模糊光晕、空输入发送键不可点、回弹动画在 styles.css", () => {
+  it("聊天输入框（Composer）：.composer-frame 是 1px 控件线、4px 圆角、聚焦加深到 1px --border-focus 配柔和浮起投影（无 2px 硬框）、空输入发送键不可点、回弹与菜单动效在 styles.css", () => {
     const composerSrc = readFileSync("src/web/components/Composer.tsx", "utf8");
     expect(composerSrc).toContain("composer-frame");
     expect(composerSrc).not.toContain("focus-within:");
@@ -120,8 +120,7 @@ describe("界面标准：共用组件", () => {
     expect(rest).toMatch(/border-radius: var\(--radius-sm\);/);
     const focus = /\.composer-frame:focus-within \{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(focus).toMatch(/border-color: var\(--border-focus\);/);
-    // A focus ring is a crisp 1px spread, never a blurred halo.
-    expect(focus).toMatch(/box-shadow: 0 0 0 1px var\(--border-focus\);/);
+    expect(focus).not.toMatch(/box-shadow:\s*0 0 0 1px/);
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-frame\s*\{\s*transition: none/);
   });
 

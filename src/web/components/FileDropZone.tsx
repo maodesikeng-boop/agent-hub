@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { cn } from "../lib/utils.ts";
+import { Plus } from "../ui/icons.ts";
 import { readDropped } from "../upload.ts";
 
 const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
@@ -39,8 +40,11 @@ export function FileDropZone({
     >
       {children}
       {dragging && (
-        <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-sm border-2 border-dashed border-primary bg-background/90 text-title font-medium text-primary">
-          Drop to add files
+        <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-sm border-2 border-dashed border-primary bg-background/85">
+          <span className="flex items-center gap-2 rounded-sm bg-background px-4 py-2 text-body font-medium text-primary shadow-[var(--shadow-overlay)]">
+            <Plus className="size-4 shrink-0" aria-hidden="true" />
+            Drop to add files
+          </span>
         </div>
       )}
     </section>

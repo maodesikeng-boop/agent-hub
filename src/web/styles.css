@@ -442,21 +442,98 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .composer-frame {
+  position: relative;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background-color: var(--background);
-  box-shadow: var(--shadow-tile);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--foreground) 6%, transparent),
+    0 6px 20px -8px color-mix(in srgb, var(--foreground) 16%, transparent);
   transition:
     border-color 150ms ease,
-    box-shadow 150ms ease;
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+.composer-frame:hover:not(:focus-within):not([data-disabled]) {
+  border-color: color-mix(in srgb, var(--border-focus) 42%, var(--border-strong));
+  box-shadow:
+    0 1px 3px color-mix(in srgb, var(--foreground) 8%, transparent),
+    0 8px 22px -8px color-mix(in srgb, var(--foreground) 20%, transparent);
 }
 .composer-frame:focus-within {
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 1px var(--border-focus);
+  box-shadow:
+    0 2px 6px -1px color-mix(in srgb, var(--foreground) 8%, transparent),
+    0 10px 26px -10px color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+.composer-frame[data-invalid],
+.composer-frame[data-invalid]:focus-within {
+  border-color: var(--danger);
+}
+.composer-frame[data-disabled] {
+  border-color: var(--border);
+  background-color: var(--panel);
+  box-shadow: none;
+}
+.composer-frame textarea,
+.composer-menu-list {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent;
+}
+.composer-frame textarea::-webkit-scrollbar,
+.composer-menu-list::-webkit-scrollbar {
+  width: 6px;
+  background: transparent;
+}
+.composer-frame textarea::-webkit-scrollbar-track,
+.composer-menu-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.composer-frame textarea::-webkit-scrollbar-thumb,
+.composer-menu-list::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+.composer-notice {
+  animation: composer-notice-in 140ms ease-out;
+}
+/* Deepen danger text on danger-soft so contrast stays above WCAG AA 4.5:1. */
+.composer-notice-danger {
+  color: color-mix(in srgb, var(--danger) 82%, var(--foreground));
+}
+.composer-menu {
+  transform-origin: bottom center;
+  animation: composer-menu-in var(--motion-surface) cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.composer-chip-enter {
+  animation: composer-chip-enter 140ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+@keyframes composer-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes composer-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.99);
+  }
+}
+@keyframes composer-chip-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .composer-frame {
     transition: none;
+  }
+  .composer-notice,
+  .composer-menu,
+  .composer-chip-enter {
+    animation: none;
   }
 }
 /* Selected items lift into a lighter tile with the selection hairline; inset rings never shift layout or get clipped. */

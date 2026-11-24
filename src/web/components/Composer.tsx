@@ -63,11 +63,61 @@ const ACTIONS_CLASSES = [
 ] as const;
 const FRAME_CLASSES = [ROW_CLASS, `${ROW_CLASS} ${ROW_MULTI_CLASS}`] as const;
 
+// Stop stays a calm raised control so a long run does not keep a solid accent block on screen; Send owns the accent.
 function StopButton({ stop }: { stop: StopControl }) {
   return (
-    <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className="disabled:text-send-disabled-ink">
+    <Button variant="outline" size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className="disabled:text-send-disabled-ink">
       <Square className="size-3.5 fill-current" aria-hidden="true" />
     </Button>
+  );
+}
+
+const SEND_CLASS = "disabled:border-transparent disabled:bg-transparent disabled:text-send-disabled-ink";
+const SEND_RAIL_CLASS =
+  "enabled:border-[color:var(--slot-line)] enabled:bg-rail enabled:text-rail-ink enabled:hover:bg-rail-hover enabled:hover:filter-none";
+
+function ComposerActions({
+  tooLong,
+  overBytes,
+  stop,
+  canSend,
+  picking,
+  sendTone,
+  bounce,
+  onSubmit,
+}: {
+  tooLong: boolean;
+  overBytes: number;
+  stop: StopControl | undefined;
+  canSend: boolean;
+  picking: boolean;
+  sendTone: "accent" | "rail";
+  bounce: boolean;
+  onSubmit: () => void;
+}) {
+  return (
+    <>
+      {tooLong && (
+        <span className="inline-flex items-baseline gap-1.5 text-minor text-danger">
+          <span>Message too long</span>
+          <span className="text-xs tabular-nums">{formatBytes(overBytes)} over</span>
+        </span>
+      )}
+      {stop?.failed && <span className="text-minor text-danger">Couldn't stop</span>}
+      {stop !== undefined ? (
+        <StopButton stop={stop} />
+      ) : (
+        <Button
+          size="icon"
+          aria-label="Send"
+          disabled={!canSend || picking}
+          onClick={onSubmit}
+          className={cn(SEND_CLASS, sendTone === "rail" && SEND_RAIL_CLASS, bounce && "composer-send-bounce")}
+        >
+          <Send className="size-5" aria-hidden="true" />
+        </Button>
+      )}
+    </>
   );
 }
 
@@ -90,6 +140,10 @@ function ComposerChips({
   onRemovePick: () => void;
   onRemoveFile: (key: string) => void;
 }) {
+  useEffect(() => {
+    for (const { file } of files) seenChips.add(file);
+    if (workerPick !== null) seenChips.add(workerPick);
+  }, [files, workerPick]);
   return (
     <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
       {leadingChip}
@@ -97,12 +151,13 @@ function ComposerChips({
         <WorkerPickChip pick={workerPick} disabled={busy || disabled} onEdit={onEditPick} onRemove={onRemovePick} />
       )}
       {files.map(({ key, file }) => {
-        const FileIcon = previewKindOf(file.name, sentFileMime(file.name)) === "video" ? Video : FileText;
+        const kind = previewKindOf(file.name, sentFileMime(file.name));
+        const FileIcon = kind === "video" ? Video : FileText;
         return (
-          <li key={key} className="flex max-w-full items-center gap-2 rounded-sm bg-panel py-1 pr-1 pl-3 text-minor">
-            <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <span className="min-w-0 truncate">{file.name}</span>
-            <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
+          <li key={key} className={cn(CHIP_CLASS, kind === "image" ? "pl-1" : "pl-3", chipEnter(file))}>
+            {kind === "image" ? <ChipThumb file={file} /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+            <span title={file.name} className="min-w-0 truncate">{file.name}</span>
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatBytes(file.size)}</span>
             <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => onRemoveFile(key)}>
               <X className="size-3.5" aria-hidden="true" />
             </button>
@@ -113,20 +168,46 @@ function ComposerChips({
   );
 }
 
+const CHIP_CLASS = "flex max-w-full items-center gap-2 rounded-sm bg-panel py-1 pr-1 text-minor";
+
+// Chips pop in only when first staged: a draft reopened with files already attached renders them still.
+const seenChips = new WeakSet<object>();
+const chipEnter = (item: object) => (seenChips.has(item) ? undefined : "composer-chip-enter");
+
+function ChipThumb({ file }: { file: File }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [broken, setBroken] = useState(false);
+  useEffect(() => {
+    if (typeof URL.createObjectURL !== "function") return;
+    const next = URL.createObjectURL(file);
+    setUrl(next);
+    setBroken(false);
+    return () => URL.revokeObjectURL(next);
+  }, [file]);
+  if (url === null || broken) {
+    return (
+      <span className="flex size-6 shrink-0 items-center justify-center">
+        <FileText className="size-4 text-muted-foreground" aria-hidden="true" />
+      </span>
+    );
+  }
+  return <img src={url} alt="" draggable={false} onError={() => setBroken(true)} className="size-6 shrink-0 rounded-xs bg-background object-cover" />;
+}
+
 const CHIP_CLOSE_CLASS =
-  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:opacity-50";
+  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors outline-none hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:opacity-50";
 
 const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 
 function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick; disabled: boolean; onEdit: () => void; onRemove: () => void }) {
   const labels = useWorkerPickLabels(pick);
   return (
-    <li className="flex max-w-full items-center gap-2 rounded-sm bg-panel py-1 pr-1 pl-3 text-minor">
+    <li className={cn(CHIP_CLASS, "pl-3", chipEnter(pick))}>
       <button
         type="button"
         aria-label={`Worker model: ${labels.join(" ")}`}
         disabled={disabled}
-        className="touch-target flex min-w-0 cursor-pointer items-center gap-2 outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default"
+        className="touch-target -ml-2 flex h-6 min-w-0 cursor-pointer items-center gap-2 rounded-xs px-2 transition-colors outline-none hover:bg-background focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:hover:bg-transparent"
         onPointerDown={keepFocus}
         onMouseDown={keepFocus}
         onClick={onEdit}
@@ -147,7 +228,10 @@ function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: (
     <div
       role="alert"
       title={errorTitle(notice.message)}
-      className={cn("mb-2 flex items-center gap-2 pr-3 pl-5 text-minor leading-snug", failed ? "text-danger" : "text-muted-foreground")}
+      className={cn(
+        "composer-notice mx-3 -mb-px flex items-center gap-2 rounded-t-sm py-1.5 pr-1.5 pl-3 text-minor leading-snug",
+        failed ? "composer-notice-danger bg-danger-soft text-danger" : "bg-panel text-muted-foreground",
+      )}
     >
       <Icon className="size-pixel-sm shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1">{errorLine(notice.message)}</span>
@@ -272,7 +356,8 @@ export const Composer = memo(function Composer({
   const picker = useRef<HTMLInputElement>(null);
   const { files, busy, notice } = staging;
   useNoticeAutoHide(staging);
-  const tooLong = value.length * 3 > MAX_MESSAGE_BYTES && byteLength(value) > MAX_MESSAGE_BYTES;
+  const bytes = value.length * 3 > MAX_MESSAGE_BYTES ? byteLength(value) : 0;
+  const tooLong = bytes > MAX_MESSAGE_BYTES;
   const hasContent = value.trim() !== "" || files.length > 0;
   const canSend = !disabled && !link?.waiting && hasContent && !tooLong && !busy;
   const showStop = stop !== undefined && stop.busy && !hasContent;
@@ -434,7 +519,7 @@ export const Composer = memo(function Composer({
     <>
       {menu && <ComposerMenu id={menuId} menu={menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
       {notice !== null && <NoticeBar notice={notice} onDismiss={staging.dismissNotice} />}
-      <div data-multiline={multiline} className={FRAME_CLASS}>
+      <div data-multiline={multiline} data-invalid={tooLong || undefined} data-disabled={disabled || undefined} className={FRAME_CLASS}>
         {(files.length > 0 || workerPick !== null || hasLeadingChip) && (
           <ComposerChips
             leadingChip={leadingChip}
@@ -477,6 +562,7 @@ export const Composer = memo(function Composer({
             ref={ref}
             rows={1}
             aria-label="Message"
+            aria-invalid={tooLong || undefined}
             placeholder={placeholder}
             readOnly={busy}
             disabled={disabled}
@@ -513,26 +599,16 @@ export const Composer = memo(function Composer({
             }}
           />
           <div ref={actionsRef} className={ACTIONS_CLASSES[+multiline]}>
-            {tooLong && <span className="text-minor text-danger">Message too long</span>}
-            {stop?.failed && showStop && <span className="text-minor text-danger">Couldn't stop</span>}
-            {showStop ? (
-              <StopButton stop={stop} />
-            ) : (
-              <Button
-                size="icon"
-                aria-label="Send"
-                disabled={!canSend || picking}
-                onClick={submit}
-                className={cn(
-                  "disabled:text-send-disabled-ink",
-                  sendTone === "rail" &&
-                    "enabled:border-[rgb(138_83_0_/_0.34)] enabled:bg-rail enabled:text-rail-ink enabled:hover:bg-rail-hover enabled:hover:filter-none",
-                  bounce && "composer-send-bounce",
-                )}
-              >
-                <Send className="size-5" aria-hidden="true" />
-              </Button>
-            )}
+            <ComposerActions
+              tooLong={tooLong}
+              overBytes={bytes - MAX_MESSAGE_BYTES}
+              stop={showStop ? stop : undefined}
+              canSend={canSend}
+              picking={picking}
+              sendTone={sendTone}
+              bounce={bounce}
+              onSubmit={submit}
+            />
           </div>
         </div>
       </div>

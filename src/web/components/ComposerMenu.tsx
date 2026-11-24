@@ -34,11 +34,11 @@ export function ComposerMenu({
   }, [menu.activeIndex, menu.items]);
 
   return (
-    <div className="mb-2 rounded-sm border border-border bg-background p-1.5 shadow-[var(--shadow-overlay)]">
+    <div className="composer-menu mb-2 rounded-sm border border-border bg-background p-1.5 shadow-[var(--shadow-overlay)]">
       {menu.items.length === 0 ? (
         <p className="flex h-9 items-center px-3 text-minor text-muted-foreground">{text.empty}</p>
       ) : (
-        <ul ref={listRef} id={id} role="listbox" aria-label={text.label} className="max-h-[calc(8*2.25rem)] overflow-y-auto pointer-coarse:max-h-[calc(8*2.75rem)]">
+        <ul ref={listRef} id={id} role="listbox" aria-label={text.label} className="composer-menu-list max-h-[calc(8*2.25rem)] overflow-y-auto pointer-coarse:max-h-[calc(8*2.75rem)]">
           {menu.items.map((item, index) => {
             const isAction = item.action === "add_provider";
             return (
@@ -49,9 +49,9 @@ export function ComposerMenu({
                 aria-selected={index === menu.activeIndex}
                 aria-disabled={item.disabled || undefined}
                 className={cn(
-                  "flex h-9 cursor-pointer items-center gap-3 px-3 pointer-coarse:min-h-11",
-                  isAction && index > 0 && "mt-1 border-t border-border",
-                  index === menu.activeIndex && "bg-hover",
+                  "flex h-9 cursor-pointer items-center gap-3 rounded-xs px-3 transition-colors pointer-coarse:min-h-11",
+                  isAction && index > 0 && "relative mt-2 before:pointer-events-none before:absolute before:-top-1 before:inset-x-1 before:h-px before:bg-border",
+                  index === menu.activeIndex && "tile-open",
                   item.disabled && "cursor-default",
                 )}
                 onPointerDown={keepFocus}
@@ -59,7 +59,7 @@ export function ComposerMenu({
                 onMouseMove={() => index !== menu.activeIndex && onHighlight(index)}
                 onClick={() => onSelect(item)}
               >
-                {menu.kind === "file" && <FileText className="size-pixel shrink-0 text-muted-foreground" aria-hidden="true" />}
+                {menu.kind === "file" && <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
                 {menu.kind === "target" && item.look !== undefined && <Avatar look={item.look} size={20} />}
                 <span
                   title={item.label}

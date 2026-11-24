@@ -61,7 +61,7 @@ import { RouterStream } from "./RouterStream.tsx";
 const ROUTER_COMMAND_MUTATION_KEY = ["router-command"] as const;
 
 const CHIP_REMOVE_CLASS =
-  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
+  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors outline-none hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]";
 
 const NO_PENDING_TURNS: readonly RouterTurnEntry[] = [];
 const DEFAULT_ROUTER_SETTINGS = defaultRouterSettings();
@@ -340,9 +340,9 @@ function TargetChip({
   onRemove: () => void;
 }) {
   return (
-    <li className="flex max-w-full items-center gap-1.5 rounded-sm bg-panel py-1 pr-1 pl-2.5 text-minor text-foreground">
+    <li className="composer-chip-enter flex max-w-full items-center gap-1.5 rounded-sm bg-panel py-1 pr-1 pl-2.5 text-minor text-foreground">
       <Avatar look={look} size={16} />
-      <span className="truncate font-medium">{label}</span>
+      <span title={label} className="truncate font-medium">{label}</span>
       {deviceName !== null && <span className="shrink-0 text-xs text-muted-foreground">{deviceName}</span>}
       <button type="button" className={CHIP_REMOVE_CLASS} aria-label={`Remove target ${label}`} onClick={onRemove}>
         <X className="size-3.5" aria-hidden="true" />
