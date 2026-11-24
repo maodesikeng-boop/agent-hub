@@ -6,6 +6,8 @@ The web workbench moves to one layout and one visual language. A fixed honey-yel
 
 **Revision after review.** On 2026-11-23 the user approved this plan, chose (a) for both open choices, and asked for changes that override the control styling in section 3. Button icons, switches, select arrows, and button and frame borders drop the pixel corners and pixel icons for smooth lines and plain borders. Usage shows as an hourglass, and device icons follow the device type for macOS, Windows, Linux, iPhone, and Android. The first implementation step rewrites the affected parts of section 3 and the UI standard table. The review also adds work on decision cards, the settings pages, and the usage popover.
 
+**Revision after release.** On 2026-11-24 the user reviewed the shipped workbench and asked for one small radius, even line weights, and regions parted by tone instead of lines. `docs/ui-standard.md` now defines the result and overrides the borders, corners, color tokens, and selection style in section 3. The PM column sits on the cream frame, the conversation and the side panel are white sheets 6px apart, every line is 1px, and every corner is 4px.
+
 ## For the user
 
 ### Files to review
@@ -199,8 +201,8 @@ Columns give way in this order. First the PM column and the side panel shrink to
 
 | Interface scale | Four columns side by side | Strip and panel | Panel covers conversation | PM column full width with the panel closed |
 | --- | --- | --- | --- | --- |
-| `Default` | 1146px and wider | 998 to 1145px | below 998px | 784px and wider |
-| `Large`, the default | 1253px and wider | 1091 to 1252px | below 1091px | 857px and wider |
+| `Default` | 1150px and wider | 1002 to 1149px | below 1002px | 784px and wider |
+| `Large`, the default | 1257px and wider | 1095 to 1256px | below 1095px | 857px and wider |
 
 #### Side panel and routes
 
