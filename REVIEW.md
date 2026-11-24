@@ -117,9 +117,9 @@ Seen in: `2bdf6ff9`, `eb0386bd`, `4ba0f65d`, `50b3d57a`
 
 Trigger: `src/web/App.tsx`, `src/web/selectors.ts`, `src/web/shell-model.ts`, `src/web/device-hub.ts`, `src/web/**/use*.ts`, `src/web/**/use*.tsx`
 
-Check: A selector or hook returns the same reference while its input is unchanged, for example through a `WeakMap` keyed on the input object, so it does not break `memo` in child components. Parent shell components (such as `App.tsx`) memoize JSX slots (`toolbar`, `leading`, `notices`), objects, and callbacks passed to `memo` children (`Conversation`, `DraftComposer`, `Sidebar`, `RightRail`) directly or through pane wrappers; `src/web/streaming.test.tsx` asserts zero re-renders on background Worker pulses, and a new selector has a case in `src/web/selectors-cache.test.ts`.
+Check: A selector or hook returns the same reference while its input is unchanged, for example through a `WeakMap` keyed on the input object, so it does not break `memo` in child components. Parent shell components (such as `App.tsx`) memoize JSX slots (`toolbar`, `leading`, `notices`), objects, and callbacks passed to `memo` children (`Conversation`, `DraftComposer`, `ProjectList`, `RailGroups`) directly or through pane wrappers; `src/web/streaming.test.tsx` asserts zero re-renders on background Worker pulses, and a new selector has a case in `src/web/selectors-cache.test.ts`.
 
-Seen in: `43d70fad`, `473db164`, `0fc0e181`, `f52e5e95`
+Seen in: `43d70fad`, `473db164`, `0fc0e181`, `f52e5e95`, `9dd20f40`
 
 ### Stale in-flight queries never overwrite fresh mutations
 
