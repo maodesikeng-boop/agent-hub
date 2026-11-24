@@ -141,7 +141,7 @@ export function SettingsDialog({
                   <Icon className="size-pixel shrink-0 max-[719px]:hidden" aria-hidden="true" />
                   {label}
                   {id === "resources" && resourcesSummary.attention && (
-                    <span data-testid="resources-tab-attention" aria-hidden="true" className="ml-auto size-2 shrink-0 rounded-full bg-caution" />
+                    <span data-testid="resources-tab-attention" aria-hidden="true" className="ml-auto size-2 shrink-0 rounded-full bg-danger" />
                   )}
                 </TabsTrigger>
               ))}

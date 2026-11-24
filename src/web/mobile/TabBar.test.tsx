@@ -42,7 +42,7 @@ describe("TabBar", () => {
 
     rerender(<TabBar active="router" routerBadge={4} settingsAttention={true} onSelect={vi.fn()} />);
     expect(screen.getByTestId("tabbar-router-badge")).toHaveTextContent("4");
-    expect(screen.getByTestId("tabbar-settings-attention")).toHaveClass("bg-caution");
+    expect(screen.getByTestId("tabbar-settings-attention")).toHaveClass("bg-danger");
   });
 
   it("keeps every tab at least 44px tall and wide", () => {
