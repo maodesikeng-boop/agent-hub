@@ -55,7 +55,7 @@ describe("PaneHandle", () => {
         <Pane id="list" defaultRem={16.5} minRem={13.75} maxRem={25}>
           <div>list</div>
         </Pane>
-        <PaneHandle tone="list" label="Resize project list" onReset={vi.fn()} />
+        <PaneHandle label="Resize project list" onReset={vi.fn()} />
         <Pane id="chat" minRem={30}>
           <div>chat</div>
         </Pane>
@@ -78,7 +78,7 @@ describe("PaneHandle", () => {
         <Pane id="list" defaultRem={20} minRem={13.75} maxRem={25} onCommit={onCommit}>
           <div>list</div>
         </Pane>
-        <PaneHandle tone="list" label="Resize project list" onReset={onReset} />
+        <PaneHandle label="Resize project list" onReset={onReset} />
         <Pane id="chat" minRem={30}>
           <div>chat</div>
         </Pane>
@@ -105,7 +105,7 @@ describe("PaneHandle", () => {
         <Pane id="list" defaultRem={16.5} minRem={13.75} maxRem={25}>
           <div>list</div>
         </Pane>
-        <PaneHandle tone="list" label="Resize project list" onReset={vi.fn()} />
+        <PaneHandle label="Resize project list" onReset={vi.fn()} />
         <Pane id="chat" minRem={30}>
           <div>chat</div>
         </Pane>
@@ -126,28 +126,12 @@ describe("PaneHandle", () => {
     expect(css).toContain('.pane-handle[data-separator="active"] .pane-handle-bar');
   });
 
-  it("uses the PM column edge color for tone list and the panel edge color for tone panel", () => {
-    mockHorizontalLayout();
-    render(
-      <PaneGroup id="test-tones">
-        <Pane id="list" defaultRem={16.5} minRem={13.75} maxRem={25}>
-          <div>list</div>
-        </Pane>
-        <PaneHandle tone="list" label="List seam" onReset={vi.fn()} />
-        <Pane id="chat" minRem={30}>
-          <div>chat</div>
-        </Pane>
-        <PaneHandle tone="panel" label="Panel seam" onReset={vi.fn()} />
-        <Pane id="panel" defaultRem={27.5} minRem={22.5} maxRem={45}>
-          <div>panel</div>
-        </Pane>
-      </PaneGroup>,
-    );
-    expect(screen.getByRole("separator", { name: "List seam" })).toHaveAttribute("data-tone", "list");
-    expect(screen.getByRole("separator", { name: "Panel seam" })).toHaveAttribute("data-tone", "panel");
+  it("draws every column seam as one 1px structure line", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toMatch(/\.pane-handle\[data-tone="list"\]\s*\{\s*background:\s*var\(--list-edge\);/);
-    expect(css).toMatch(/\.pane-handle\[data-tone="panel"\]\s*\{\s*background:\s*var\(--border-strong\);/);
+    const handle = /\.pane-handle \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(handle).toMatch(/width: 1px;/);
+    expect(handle).toMatch(/background: var\(--border\);/);
+    expect(css).not.toMatch(/\.pane-handle\[data-tone=/);
   });
 });
 
@@ -166,11 +150,11 @@ describe("Pane", () => {
         <Pane id="list" defaultRem={16.5} minRem={13.75} maxRem={25} onCommit={onCommitList}>
           <div>list</div>
         </Pane>
-        <PaneHandle tone="list" label="List seam" onReset={vi.fn()} />
+        <PaneHandle label="List seam" onReset={vi.fn()} />
         <Pane id="chat" minRem={30}>
           <div>chat</div>
         </Pane>
-        <PaneHandle tone="panel" label="Panel seam" onReset={vi.fn()} />
+        <PaneHandle label="Panel seam" onReset={vi.fn()} />
         <Pane id="panel" defaultRem={27.5} minRem={22.5} maxRem={45} onCommit={onCommitPanel}>
           <div>panel</div>
         </Pane>
@@ -198,7 +182,7 @@ describe("Pane", () => {
         <Pane id="list" defaultRem={20} minRem={13.75} maxRem={25} onCommit={onCommit}>
           <div>list</div>
         </Pane>
-        <PaneHandle tone="list" label="List seam" onReset={vi.fn()} />
+        <PaneHandle label="List seam" onReset={vi.fn()} />
         <Pane id="chat" minRem={30}>
           <div>chat</div>
         </Pane>
@@ -211,7 +195,7 @@ describe("Pane", () => {
         <Pane id="list" defaultRem={16.5} minRem={13.75} maxRem={25} onCommit={onCommit}>
           <div>list</div>
         </Pane>
-        <PaneHandle tone="list" label="List seam" onReset={vi.fn()} />
+        <PaneHandle label="List seam" onReset={vi.fn()} />
         <Pane id="chat" minRem={30}>
           <div>chat</div>
         </Pane>

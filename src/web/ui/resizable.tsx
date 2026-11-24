@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef } from "react";
 import { Group, Panel, Separator, usePanelRef, type Layout, type LayoutChangedMeta } from "react-resizable-panels";
-import { SHELL_SEAM_PX } from "../../shared/limits.ts";
+import { SHELL_SEAM_PX } from "../limits.ts";
 import { cn } from "../lib/utils.ts";
 import { readRootRemPx } from "../shell-layout.ts";
 
@@ -26,8 +26,6 @@ export interface PaneProps {
 }
 
 export interface PaneHandleProps {
-  /** Line color: the PM column edge or the side panel edge. */
-  tone: "list" | "panel";
   /** Accessible name of the separator. */
   label: string;
   /** Double-click: the caller clears the remembered width; the adjacent pane returns to its default. */
@@ -159,11 +157,10 @@ export function Pane({ id, defaultRem, minRem, maxRem, onCommit, className, chil
  * Postcondition: renders a 2px line that shows a 4px bar and pixel grip on hover or keyboard focus, darkens while dragging,
  * moves with the arrow keys, and calls onReset on double-click instead of the library's own reset.
  */
-export function PaneHandle({ tone, label, onReset }: PaneHandleProps): React.ReactElement {
+export function PaneHandle({ label, onReset }: PaneHandleProps): React.ReactElement {
   return (
     <Separator
       aria-label={label}
-      data-tone={tone}
       disableDoubleClick
       className="pane-handle cursor-col-resize"
       onDoubleClick={(e) => {

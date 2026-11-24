@@ -7,7 +7,7 @@ import {
   SHELL_RAIL_REM,
   SHELL_SEAM_PX,
   SHELL_STRIP_REM,
-} from "../shared/limits.ts";
+} from "./limits.ts";
 import { subscribeUiScale, type UiScale } from "./ui-scale.ts";
 
 // Invariant: every returned width is CSS px at the given root font size; the SHELL_* constants stay the single source of limits.
