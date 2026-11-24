@@ -296,9 +296,12 @@ export function collectStructureInPage(): { frames: FrameBox[]; edges: EdgeItem[
     for (const root of document.querySelectorAll(selector)) {
       if (!visible(root)) continue;
       for (const el of root.querySelectorAll("*")) {
-        if (!visible(el) || el.closest(".markdown") !== null) continue;
+        const graphic = el.matches("svg, img, [data-slot='avatar']");
+        // Avatars and icons are aria-hidden decoration, but they are what the eye lines a row up by.
+        const drawn = graphic ? el.getBoundingClientRect().width >= 2 && getComputedStyle(el).visibility !== "hidden" : visible(el);
+        if (!drawn || el.closest(".markdown") !== null) continue;
         let left: number | null = null;
-        if (el.matches("svg, img, [data-slot='avatar']")) {
+        if (graphic) {
           if (el.parentElement?.closest("svg, [data-slot='avatar']")) continue;
           left = el.getBoundingClientRect().left;
         } else {
