@@ -4,7 +4,7 @@ import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { sandboxAllowsPs } from "../sandbox-probes.ts";
-import { API_PATHS, CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE, isDeviceId, type Attachment } from "../../src/shared/index.ts";
+import { API_PATHS, CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE, isDeviceId, type Attachment, type QuotaResponse } from "../../src/shared/index.ts";
 import { AGENTS_NOTE, DEFAULT_PM_NAME, HUB_USAGE_PROMPT, buildPmModePrompt } from "../../src/daemon/prompt.ts";
 import { taskGraphSkillMarkdown } from "../../src/shared/task-graph-skill.ts";
 import {
@@ -44,6 +44,20 @@ async function terminate(daemon: RunningDaemon) {
 const fakePids = () => env.argvs().map((a) => a.pid);
 
 describe("W5 组装 + 端到端", () => {
+  it("reads the signed-in account quota at startup before launching a session", async () => {
+    env = makeEnv();
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+    env.setScript({ subscriptionQuota: { five_hour: { utilization: 37, resets_at: new Date(resetsAt * 1000).toISOString() } } });
+    const { daemon, client, state } = await boot();
+    await waitUntil("startup quota probe", () =>
+      env.log().find((entry) => entry.kind === "stdin" && entry.line.includes('"subtype":"get_usage"')),
+    );
+    const quota = (await (await client.get(API_PATHS.quota)).json()) as QuotaResponse;
+    expect(quota.groups).toEqual([{ id: "claude", vendor: "claude", windows: { five_hour: { utilization: 0.37, resetsAt, status: "allowed" } } }]);
+    expect(env.procsOf(state.sessions[0]!.sessionId)).toHaveLength(0);
+    expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
+  });
+
   it("首次启动：打印登录链接，自动建一个项目经理和它的私聊；再启动不重复建", async () => {
     env = makeEnv();
     const { daemon, client, state } = await boot();
@@ -90,7 +104,7 @@ describe("W5 组装 + 端到端", () => {
     ws.close();
 
     const pmId = state.pms[0]!.id;
-    const [launch] = env.argvs();
+    const [launch] = env.procsOf(state.sessions[0]!.sessionId);
     expect(launch!.cwd).toBe(realpathSync(join(env.home, "pm-home", String(pmId))));
     const argv = launch!.argv;
     const promptFile = argv[argv.indexOf("--append-system-prompt-file") + 1]!;
@@ -118,7 +132,7 @@ describe("W5 组装 + 端到端", () => {
   it("停止：控制消息打断这一轮，消息标已停止，进程还在，再发照常回复", async () => {
     env = makeEnv();
     env.setScript({ turns: [slow(20_000)], defaultTurn: quick("你好呀") });
-    const { daemon, client, conversationId } = await boot();
+    const { daemon, client, state, conversationId } = await boot();
     const id = await client.post(conversationId, "写一篇 1500 字的文章");
     await waitForStatus(client, id, "processing");
     expect(await client.stop(conversationId)).toBe(202);
@@ -127,7 +141,7 @@ describe("W5 组装 + 端到端", () => {
     await waitForStatus(client, next, "replied");
     expect(agentTexts(await client.state(), conversationId)).toContain("你好呀");
     // 同一个进程：只起过一次，没收到 SIGINT，标准输入里有 interrupt 控制消息
-    expect(env.argvs()).toHaveLength(1);
+    expect(env.procsOf(state.sessions[0]!.sessionId)).toHaveLength(1);
     expect(env.log().some((e) => e.kind === "signal")).toBe(false);
     expect(env.log().some((e) => e.kind === "stdin" && e.line.includes('"interrupt"'))).toBe(true);
     await terminate(daemon);
@@ -187,10 +201,10 @@ describe("W5 组装 + 端到端", () => {
 
   it("停止：没有在跑的会话时什么也不做，仍回 202；对话不存在回 404", async () => {
     env = makeEnv();
-    const { daemon, client, conversationId } = await boot();
+    const { daemon, client, state, conversationId } = await boot();
     expect(await client.stop(conversationId)).toBe(202);
     expect(await client.stop(9999)).toBe(404);
-    expect(env.argvs()).toHaveLength(0);
+    expect(env.procsOf(state.sessions[0]!.sessionId)).toHaveLength(0);
     await terminate(daemon);
   });
 
@@ -242,7 +256,7 @@ describe("W5 组装 + 端到端", () => {
     expect(messagesOf(before, first.conversationId).map((m) => m.text)).toEqual(["记住暗号：蓝鲸", "记住了"]);
     const next = await client.post(first.conversationId, "暗号是什么");
     await waitForStatus(client, next, "replied");
-    const [a, b] = env.argvs().map((x) => x.argv);
+    const [a, b] = env.procsOf(first.state.sessions[0]!.sessionId).map((x) => x.argv);
     const sessionId = a![a!.indexOf("--session-id") + 1];
     expect(b![b!.indexOf("--resume") + 1]).toBe(sessionId);
     // 正常重启不补发：没有恢复说明、重发说明
@@ -268,7 +282,7 @@ describe("W5 组装 + 端到端", () => {
     expect(messageById(state, id)?.status).toBe("stopped");
     // 已停止的不补发
     await sleep(300);
-    expect(env.argvs()).toHaveLength(1);
+    expect(env.procsOf(state.sessions[0]!.sessionId)).toHaveLength(1);
     await terminate(again);
   });
 
@@ -281,19 +295,19 @@ describe("W5 组装 + 端到端", () => {
     await waitForStatus(first.client, id, "processing");
     first.daemon.child.kill("SIGKILL");
     await first.daemon.exited;
-    const [orphan] = fakePids();
-    if (process.platform !== "win32") expect(env.isAlive(orphan!)).toBe(true);
+    const orphan = env.procsOf(first.state.sessions[0]!.sessionId)[0]!.pid;
+    if (process.platform !== "win32") expect(env.isAlive(orphan)).toBe(true);
 
     const daemon = await env.start();
     const client = first.client.withPort(daemon.port);
-    await waitUntil("stale claude killed", () => (env.isAlive(orphan!) ? undefined : true));
+    await waitUntil("stale claude killed", () => (env.isAlive(orphan) ? undefined : true));
     await waitForStatus(client, id, "replied");
     // 按行：重启后只写了一行，恢复说明、重发说明和原文在同一行
     expect(env.stdinTexts()).toEqual(["做一件长的事", `${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n做一件长的事`]);
     const users = messagesOf(await client.state(), first.conversationId).filter((m) => m.sender === "user");
     expect(users.map((m) => m.id)).toEqual([id]);
     // 留下的进程被结束，之后起的进程用 --resume
-    const argvs = env.argvs();
+    const argvs = env.procsOf(first.state.sessions[0]!.sessionId);
     expect(argvs.length).toBeGreaterThanOrEqual(2);
     expect(argvs.at(-1)!.argv).toContain("--resume");
     await terminate(daemon);

@@ -112,6 +112,7 @@ export interface FakeScript {
    * 见 docs/composer-commands.md 的 T1）。不给就不带 commands。
    */
   commands?: unknown[];
+  subscriptionQuota?: Record<string, { utilization: number; resets_at: string }>;
   /** 标准输入关掉也不退出（测空闲关闭的升级）。 */
   ignoreStdinEnd?: boolean;
   /** 回显推迟到第一个不是 sleepMs、waitFile 的步骤之前。 */
@@ -775,6 +776,13 @@ function onLine(line: string): void {
   if (msg.type === "control_response") return;
   if (msg.type === "control_request") {
     if (script.ignoreControl) return;
+    if (msg.request?.subtype === "get_usage") {
+      emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {
+        rate_limits_available: script.subscriptionQuota !== undefined,
+        rate_limits: script.subscriptionQuota ?? null,
+      } } });
+      return;
+    }
     const handle = () => {
       if (script.control === "error") {
         emit({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "cannot interrupt now" } });

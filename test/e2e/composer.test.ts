@@ -1,6 +1,6 @@
 // 输入框的“/”命令和“@”文件，端到端：真守护进程 + 假 claude，临时数据目录。
 // 命令列表（会话没在跑时另起进程问、正在跑时问它）、手打 /clear 被拦、/compact 在对话里记一行、@ 文件搜索。
-import { writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, type CommandsResponse, type FilesResponse } from "../../src/shared/index.ts";
@@ -32,22 +32,24 @@ describe("输入框的“/”“@”（端到端）", () => {
     const client = await Client.login(daemon);
     const state = await client.state();
     const conversationId = state.conversations[0]!.conversation.id;
+    const pmHome = realpathSync.native(join(env.home, "pm-home", String(state.pms[0]!.id)));
+    const commandProbes = () => env.argvs().filter((a) => a.cwd === pmHome && a.argv.includes("--no-session-persistence"));
 
     // 会话还没起来：另起一个 claude 问（不写会话）
     const before = (await (await client.get(API_PATHS.commands(conversationId))).json()) as CommandsResponse;
     expect(before.commands).toEqual(VISIBLE);
-    const query = env.argvs().find((a) => a.argv.includes("--no-session-persistence"))!;
+    const [query] = commandProbes();
     // 另起的进程不跑钩子、不连 MCP（docs/composer-commands.md 的 T10）
-    expect(query.argv).toContain("--strict-mcp-config");
-    expect(query.argv[query.argv.indexOf("--settings") + 1]).toBe('{"disableAllHooks":true}');
+    expect(query?.argv).toContain("--strict-mcp-config");
+    expect(query!.argv[query!.argv.indexOf("--settings") + 1]).toBe('{"disableAllHooks":true}');
 
     // 正在跑：问它本身（不再另起进程）
     const first = await client.post(conversationId, "你好");
     await waitForStatus(client, first, "replied");
-    const spawned = env.argvs().length;
+    const spawned = commandProbes().length;
     const running = (await (await client.get(API_PATHS.commands(conversationId))).json()) as CommandsResponse;
     expect(running.commands).toEqual(VISIBLE);
-    expect(env.argvs()).toHaveLength(spawned);
+    expect(commandProbes()).toHaveLength(spawned);
 
     // 手打 /clear：不存、不发，回原因
     const blocked = await client.postJson(API_PATHS.messages(conversationId), { clientId: "clear-1", text: "/clear" });
@@ -64,7 +66,7 @@ describe("输入框的“/”“@”（端到端）", () => {
     expect(env.stdinTexts().at(-1)).toBe("/compact");
 
     // @ 文件：项目经理还没项目，工作目录是 pm-home/<编号>/，插相对路径
-    const cwd = env.argvs().find((a) => !a.argv.includes("--no-session-persistence"))!.cwd;
+    const cwd = env.procsOf(state.sessions[0]!.sessionId)[0]!.cwd;
     writeFileSync(join(cwd, "plan notes.md"), "x");
     const files = (await (await client.get(API_PATHS.files(conversationId, "plan"))).json()) as FilesResponse;
     expect(files.entries.map(({ path, insert }) => ({ path, insert }))).toContainEqual({ path: "plan notes.md", insert: '@"plan notes.md"' });
