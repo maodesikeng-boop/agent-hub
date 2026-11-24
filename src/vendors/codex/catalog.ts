@@ -31,9 +31,7 @@ import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
-
-const CODEX_APP_SERVER_ARGS: readonly string[] = ["app-server", "--listen", "stdio://"];
-const CODEX_CLIENT_INFO = { name: "agent-hub", version: "0.1.0" } as const;
+import { buildCodexArgs, CODEX_CLIENT_INFO } from "./protocol.ts";
 
 function extractCodexModels(raw: unknown): unknown[] | null {
   if (Array.isArray(raw)) return raw;
@@ -125,14 +123,14 @@ interface CodexCall {
   optional?: boolean;
 }
 
-function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly CodexCall[]): Promise<unknown[]> {
+export function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly CodexCall[]): Promise<unknown[]> {
   const { codexPath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   const label = calls.map((c) => c.method).join("、");
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));
     let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
     try {
-      spawned = spawnOwnedProcess(codexPath, [...CODEX_APP_SERVER_ARGS], {
+      spawned = spawnOwnedProcess(codexPath, buildCodexArgs(), {
         cwd,
         env: buildChildEnv(options.env ?? process.env, undefined),
         stdio: ["pipe", "pipe", "pipe"],

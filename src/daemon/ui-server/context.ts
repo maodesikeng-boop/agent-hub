@@ -47,7 +47,10 @@ export interface UiCtx {
 }
 
 export function createUiCtx(opts: UiServerOptions): UiCtx {
-  const serverInfo = opts.serverInfo ?? { ...serverInfoFor(process.platform, { supervised: opts.selfReload !== undefined }), repoDir: ROOT_DIR };
+  const serverInfo: ServerInfo = {
+    ...(opts.serverInfo ?? { ...serverInfoFor(process.platform, { supervised: opts.selfReload !== undefined }), repoDir: ROOT_DIR }),
+    ...(opts.quota ? { currentQuota: true } : {}),
+  };
   const runOpen: RunOpen =
     opts.runOpen ??
     (serverInfo.fileActions

@@ -319,17 +319,21 @@ function legacyFetchedQuota(id: string): (typeof QUOTA_VENDORS)[number] | undefi
   return owners.length === 1 ? owners[0] : undefined;
 }
 
-export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()): QuotaVendor[] {
+export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now(), current = false): QuotaVendor[] {
   const blocks: QuotaVendor[] = [];
   for (const group of res.groups) {
     const quota = group.vendor === undefined ? legacyFetchedQuota(group.id) : isAgentVendor(group.vendor) ? vendorSpec(group.vendor).quota : undefined;
-    const spec = quota?.fetched?.groups.find((g) => g.key === group.id);
-    if (quota === undefined || spec === undefined) continue;
-    const windows = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).flatMap((key) => {
+    const name = quota?.fetched?.groups.find((g) => g.key === group.id)?.name;
+    if (quota === undefined || (name === undefined && !(current && group.id === group.vendor && quota.fetched === undefined))) continue;
+    let exhausted = false;
+    const windows = quota.windows.flatMap((key) => {
       const window = group.windows[key];
-      return window === undefined || !Number.isFinite(window.utilization) ? [] : [windowUsage(key, window, now, undefined)];
+      if (window === undefined || !Number.isFinite(window.utilization) || (current && isReset(window.resetsAt, now))) return [];
+      const usage = windowUsage(key, window, now, quota.warningStatus);
+      exhausted ||= usage.percent >= 100 || (current && window.status === "rejected");
+      return [usage];
     });
-    if (windows.length > 0) blocks.push({ id: group.id, name: quota.name, group: spec.name, windows, exhausted: windows.some((w) => w.percent >= 100) });
+    if (windows.length > 0) blocks.push({ id: group.id, name: quota.name, group: name, windows, exhausted });
   }
   return blocks;
 }

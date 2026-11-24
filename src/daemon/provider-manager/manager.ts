@@ -129,6 +129,7 @@ export interface ProviderManagerOptions {
   authStartWaitMs?: number;
   now?: () => number;
   log?: (line: string) => void;
+  onVendorChanged?: (vendor: AgentVendor) => void;
 }
 
 export interface ProviderManager {
@@ -299,6 +300,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
   const refreshVendorAfterChange = async (vendor: AgentVendor, probeVer: boolean): Promise<void> => {
     runtime.refreshSystemPath();
     runtime.invalidate(vendor);
+    if (!closed) options.onVendorChanged?.(vendor);
     if (probeVer) {
       versionCache.invalidate(vendor);
       const binaryPath = runtime.locateBinary(vendor);

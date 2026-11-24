@@ -294,7 +294,7 @@ export function createClient(device: DeviceId | null) {
     deleteSchedule: (scheduleId: ScheduleId) => request<void>(at(API_PATHS.schedule(scheduleId)), { method: "DELETE" }),
     fetchModels: (options: { refresh?: typeof REFRESH_UNUSABLE } = {}) =>
       request<ModelsResponse>(at(options.refresh ? `${API_PATHS.models}?refresh=${options.refresh}` : API_PATHS.models), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
-    fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
+    fetchQuota: (signal?: AbortSignal) => request<QuotaResponse>(at(API_PATHS.quota), signal ? { signal } : undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     fetchResources: (options: { refresh?: boolean } = {}) =>
       request<ResourcesSnapshot>(
         at(options.refresh ? `${API_PATHS.resources}?refresh=1` : API_PATHS.resources),

@@ -88,6 +88,10 @@ export async function queryClaudeModels(options: ClaudeModelQueryOptions): Promi
 }
 
 export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise<Record<string, unknown>> {
+  return queryClaudeControl(options);
+}
+
+export function queryClaudeControl(options: ClaudeModelQueryOptions, afterInitialize?: "get_usage"): Promise<Record<string, unknown>> {
   const { claudePath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   const args = [...INITIALIZE_QUERY_ARGS];
   for (const dir of options.addDirs ?? []) args.push("--add-dir", dir);
@@ -105,7 +109,7 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
     }
     const { child, detached } = spawned;
     trackChild(child, "probe:claude-initialize", { detached });
-    const requestId = `initialize-${randomUUID()}`;
+    let requestId = `initialize-${randomUUID()}`;
     let stderr = "";
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
@@ -152,8 +156,14 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
       const o = obj as { type?: unknown; response?: { subtype?: unknown; request_id?: unknown; error?: unknown; response?: unknown } };
       if (o?.type !== "control_response" || o.response?.request_id !== requestId) return;
       const body = o.response.response;
-      if (o.response.subtype === "success") finish(null, typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {});
-      else finish(new Error(`claude 回了错误：${typeof o.response.error === "string" ? o.response.error : JSON.stringify(o.response)}`));
+      if (o.response.subtype !== "success") {
+        finish(new Error(`claude 回了错误：${typeof o.response.error === "string" ? o.response.error : JSON.stringify(o.response)}`));
+      } else if (afterInitialize && requestId.startsWith("initialize-")) {
+        requestId = afterInitialize;
+        child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: afterInitialize } })}\n`);
+      } else {
+        finish(null, typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {});
+      }
     });
     child.stdin.write(`${buildInitializeLine(requestId)}\n`);
   });

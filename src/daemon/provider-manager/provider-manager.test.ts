@@ -885,9 +885,11 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     const callbackDone = new Promise<void>((r) => {
       resolveCallbackDone = r;
     });
+    const onVendorChanged = vi.fn();
     const manager = createProviderManager({
       runtime,
       models,
+      onVendorChanged,
       adapters: {
         codex: {
           ...VENDOR_DAEMONS.codex.setup!,
@@ -939,6 +941,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
 
       const afterFail = await manager.getStatus({ ownerKey: "session:1" });
       expect(afterFail.providers.find((p) => p.vendor === "codex")?.authFlow?.phase).toBe("waiting_browser");
+      expect(onVendorChanged).not.toHaveBeenCalled();
 
       const retried = await manager.submitAuth(
         "codex",
@@ -950,6 +953,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
         const st = await manager.getStatus({ ownerKey: "session:1" });
         return st.providers.find((p) => p.vendor === "codex")?.authFlow?.phase === "succeeded";
       });
+      expect(onVendorChanged).toHaveBeenCalledExactlyOnceWith("codex");
     } finally {
       resolveCallbackDone();
       await manager.close();

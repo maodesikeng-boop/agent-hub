@@ -1,6 +1,5 @@
-import { execFile } from "node:child_process";
-import { LRUCache } from "lru-cache";
 import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, FETCHED_QUOTA_TIMEOUT_MS, type AgentVendor, type FetchedQuotaSpec, type QuotaResponse } from "../../shared/index.ts";
+import { runShortSubcommand } from "../../vendors/_common/setup/file-helpers.ts";
 
 const EMPTY: QuotaResponse = { groups: [] };
 
@@ -29,55 +28,90 @@ export interface QueryFetchedQuotaOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
-export function queryFetchedQuota(options: QueryFetchedQuotaOptions): Promise<QuotaResponse> {
-  const { vendor, path, spec, cwd, env, timeoutMs = FETCHED_QUOTA_TIMEOUT_MS } = options;
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      path,
-      [...spec.args],
-      { cwd, ...(env ? { env } : {}), timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 1 << 20 },
-      (error, stdout) => {
-      if (error) reject(error);
-      else resolve(parseFetchedQuota(stdout, spec, vendor));
-      },
-    );
-    child.stdin?.end();
-  });
+export async function queryFetchedQuota(options: QueryFetchedQuotaOptions): Promise<QuotaResponse> {
+  const { vendor, path, spec, cwd, env, signal, timeoutMs = FETCHED_QUOTA_TIMEOUT_MS } = options;
+  const { code, stdout } = await runShortSubcommand(path, spec.args, { cwd, env, timeoutMs, signal, purpose: `probe:${vendor}-quota` });
+  if (code !== 0) throw new Error(`Could not read ${vendor} quota`);
+  return parseFetchedQuota(stdout, spec, vendor);
 }
 
 export interface FetchedQuota {
   get(): Promise<QuotaResponse>;
 }
 
-export function createFetchedQuota(options: { query: (() => Promise<QuotaResponse>) | undefined; now?: () => number }): FetchedQuota {
+interface CachedQuota extends FetchedQuota {
+  invalidate(): void;
+  isCurrent(value: QuotaResponse): boolean;
+}
+
+function currentWindows(value: QuotaResponse, at: number): { value: QuotaResponse; until: number } {
+  let until = at + FETCHED_QUOTA_FRESH_MS;
+  const groups = value.groups.flatMap((group) => {
+    const entries = Object.entries(group.windows).filter(([, w]) => {
+      if (w.resetsAt <= 0) return true;
+      const reset = w.resetsAt * 1000;
+      if (reset <= at) return false;
+      until = Math.min(until, reset);
+      return true;
+    });
+    return entries.length ? [{ ...group, windows: Object.fromEntries(entries) }] : [];
+  });
+  return groups.length ? { value: { groups }, until } : { value: EMPTY, until: at + FETCHED_QUOTA_RETRY_MS };
+}
+
+export function createFetchedQuota(options: {
+  query: ((signal: AbortSignal) => Promise<QuotaResponse>) | undefined;
+  fingerprint?: () => string;
+  now?: () => number;
+}): CachedQuota {
   const now = options.now ?? Date.now;
-  const cache = new LRUCache<"quota", { at: number; ttl: number; value: QuotaResponse }>({ max: 1 });
-  let inflight: Promise<QuotaResponse> | null = null;
+  const fingerprint = options.fingerprint ?? (() => "");
+  let scope: string | undefined;
+  let cached: ReturnType<typeof currentWindows> | undefined;
+  let inflight: { abort: AbortController; result: Promise<QuotaResponse> } | undefined;
+  const invalidate = () => {
+    inflight?.abort.abort();
+    inflight = undefined;
+    cached = undefined;
+  };
+
   return {
+    invalidate,
+    isCurrent: (value) => cached?.value === value && now() < cached.until && scope === fingerprint(),
     get() {
       if (options.query === undefined) return Promise.resolve(EMPTY);
-      const cached = cache.get("quota");
-      if (cached !== undefined && now() - cached.at < cached.ttl) return Promise.resolve(cached.value);
-      inflight ??= options
-        .query()
+      const key = fingerprint();
+      if (key !== scope) {
+        invalidate();
+        scope = key;
+      }
+      if (cached !== undefined && now() < cached.until) return Promise.resolve(cached.value);
+      if (inflight !== undefined) return inflight.result;
+      const abort = new AbortController();
+      const result = options
+        .query(abort.signal)
         .catch(() => EMPTY)
         .then((value) => {
-          cache.set("quota", { at: now(), ttl: value.groups.length > 0 ? FETCHED_QUOTA_FRESH_MS : FETCHED_QUOTA_RETRY_MS, value });
-          inflight = null;
-          return value;
+          if (inflight?.abort !== abort) return EMPTY;
+          inflight = undefined;
+          if (key !== fingerprint()) return EMPTY;
+          cached = currentWindows(value, now());
+          return cached.value;
         });
-      return inflight;
+      inflight = { abort, result };
+      return result;
     },
   };
 }
 
-export function mergeFetchedQuotas(quotas: readonly FetchedQuota[]): FetchedQuota {
+export function mergeFetchedQuotas(quotas: readonly CachedQuota[]): FetchedQuota {
   return {
     async get() {
       const all = await Promise.all(quotas.map((q) => q.get()));
-      return { groups: all.flatMap((r) => r.groups) };
+      return { groups: all.flatMap((value, i) => quotas[i]!.isCurrent(value) ? value.groups : []) };
     },
   };
 }
