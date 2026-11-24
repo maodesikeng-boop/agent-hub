@@ -483,8 +483,9 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(chip.querySelector("svg")).toHaveClass("size-4", "text-muted-foreground");
     expect(chip.querySelector("svg")).toHaveAttribute("data-icon", "line");
     const li = chip.closest("li")!;
-    // A chip is a label, not a control: hairline structure line, flat panel fill, the one small radius.
-    expect(li).toHaveClass("rounded-sm", "border", "border-border", "bg-panel", "py-1", "pr-1", "pl-3", "text-minor");
+    // A chip is a flat paper fill with the one small radius: no outline inside the composer's frame.
+    expect(li).toHaveClass("rounded-sm", "bg-panel", "py-1", "pr-1", "pl-3", "text-minor");
+    expect(li.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     expect(li.parentElement).toHaveAccessibleName("Files to send");
     expect(li.parentElement!.firstElementChild).toBe(li);
     expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("touch-target", "size-6");
@@ -658,7 +659,8 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     const chips = await screen.findAllByRole("group", { name: "Worker model" });
     expect(chips).toHaveLength(1);
     expect(chips[0]!.textContent).toBe("Claude CodeHigh");
-    expect(chips[0]).toHaveClass("rounded-sm", "border", "border-border", "bg-panel", "text-minor", "gap-2", "mb-1.5");
+    expect(chips[0]).toHaveClass("rounded-sm", "bg-panel", "text-minor", "gap-2", "mb-1.5");
+    expect(chips[0]!.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     const bubble = screen.getByText("派人做");
     expect(chips[0]!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

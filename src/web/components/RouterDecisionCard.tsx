@@ -58,7 +58,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         {showProject && <span className="truncate text-muted-foreground">{decision.projectName}</span>}
         {showDevice && <span className="truncate text-xs text-muted-foreground">{entry.deviceName}</span>}
         {!online && (
-          <span className="rounded-sm border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Offline</span>
+          <span className="rounded-sm bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Offline</span>
         )}
         <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(decision.createdAt)}</span>
       </div>

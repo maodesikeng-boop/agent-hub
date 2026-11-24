@@ -565,7 +565,6 @@ input[type="search"]::-webkit-search-cancel-button {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
-    border: 1px solid var(--slot-line);
     border-radius: var(--radius-sm);
     background-color: var(--slot-bg);
     color: var(--slot-ink);
@@ -1010,11 +1009,10 @@ input[type="search"]::-webkit-search-cancel-button {
   text-decoration: none;
 }
 .markdown code {
-  /* Give each wrapped fragment of inline code its own border and padding. */
+  /* Give each wrapped fragment of inline code its own fill and padding. */
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
   padding: 0.12em 0.4em;
-  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--muted);
   font-size: 0.875em;

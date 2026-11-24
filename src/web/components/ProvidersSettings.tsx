@@ -65,7 +65,7 @@ function JobLogDisclosure({ job, open }: { job: ProviderJobSnapshot | null; open
   return (
     <pre
       data-testid="provider-job-log"
-      className="mt-2.5 max-h-48 overflow-auto rounded-sm border border-border bg-panel p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
+      className="mt-2.5 max-h-48 overflow-auto rounded-sm bg-panel p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
     >
       {job.logTail}
     </pre>
@@ -807,7 +807,7 @@ function DeviceCodePanel(props: SignInPanelProps & { codeCopy: CopyFeedback }) {
   return (
     <div className="grid grid-cols-1 gap-4">
       {userCode ? (
-        <div className="flex items-center justify-between gap-3 rounded-sm border border-border bg-panel px-4 py-3">
+        <div className="flex items-center justify-between gap-3 rounded-sm bg-panel px-4 py-3">
           <code data-testid="device-user-code" className="font-mono text-title font-semibold tracking-wider select-all">
             {userCode}
           </code>

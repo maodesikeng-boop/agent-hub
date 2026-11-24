@@ -353,7 +353,10 @@ function CompletedGroup({
                   onClick={() => onZoomGraph(graph)}
                   className={cn(ROW, "items-center", ITEM_HOVER)}
                 >
-                  <TaskProgressIcon graph={graph} color={look.color} size={18} />
+                  {/* The sprout keeps its 18px pixel grid inside the rows' 16px icon slot, so every title in the list starts on one edge. */}
+                  <span className="grid size-4 shrink-0 place-items-center">
+                    <TaskProgressIcon graph={graph} color={look.color} size={18} />
+                  </span>
                   <span className="min-w-0 flex-1 truncate text-body leading-5 opacity-65">{graph.title}</span>
                 </button>
               </li>
