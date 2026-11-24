@@ -125,9 +125,6 @@ function UsageTrigger({ meter, ...rest }: { meter: QuotaMeter | null } & React.C
       <span className={cn(TILE, "size-10 text-rail-ink", TILE_REST)}>
         <QuotaHourglass data-testid="rail-usage-icon" percent={meter.percent} tone={tone} className="size-pixel" />
       </span>
-      <span aria-hidden="true" className={cn(LABEL, "tabular-nums", meter.full ? "text-rail-danger" : meter.warning ? "text-rail-warn" : "text-rail-ink")}>
-        {meter.percent}%
-      </span>
     </button>
   );
 }

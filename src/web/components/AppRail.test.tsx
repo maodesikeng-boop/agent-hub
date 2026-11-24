@@ -190,8 +190,10 @@ describe("AppRail", () => {
       </DeviceScope>,
     );
     const meterBtn = screen.getByRole("button", { name: "Claude Code 5h usage 45%" });
-    expect(meterBtn).toHaveTextContent("45%");
-    expect(screen.getByTestId("rail-usage-icon")).toBeInTheDocument();
+    // The hourglass alone carries the share; the percent lives in the name, the title, and the popover.
+    expect(meterBtn.textContent).toBe("");
+    expect(meterBtn).toHaveAttribute("title", "Claude Code 5h usage 45%");
+    expect(screen.getByTestId("rail-usage-icon")).toHaveAttribute("data-tone", "normal");
     await user.click(meterBtn);
     expect(await screen.findByRole("dialog", { name: "Usage" })).toBeInTheDocument();
   });
