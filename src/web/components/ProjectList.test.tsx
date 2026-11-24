@@ -165,6 +165,17 @@ describe("ProjectList", () => {
     expect(container.querySelector(".row-shortcuts")).toBeNull();
   });
 
+  it("collapses and caps preview tooltips so long multi-line replies never sprawl over the rail", () => {
+    const longReply = "Line one\n\nLine two ".repeat(20);
+    renderList({
+      entries: [entry(1, { name: "Chatty", text: longReply })],
+    });
+    const title = screen.getByText(/Line one/).getAttribute("title") ?? "";
+    expect(title).not.toContain("\n");
+    expect(title.length).toBeLessThanOrEqual(80);
+    expect(title.endsWith("…")).toBe(true);
+  });
+
   it("pins and unpins from the row shortcut and disables it while the computer is offline", async () => {
     const user = userEvent.setup();
     const onTogglePin = vi.fn();

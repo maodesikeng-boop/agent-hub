@@ -46,6 +46,13 @@ export interface ProjectListProps {
 // Headings share the avatars' 16px left edge: 8px list inset plus the rows' 8px padding.
 const SECTION_HEADING = "flex h-8 items-center gap-1.5 px-2 text-minor font-medium text-list-ink-soft";
 const NEW_PM_BUTTON = "text-list-ink-soft hover:bg-list-hover hover:text-list-ink active:bg-list-hover";
+const PREVIEW_TITLE_MAX_CHARS = 80;
+
+// Cap native hover tooltips so a long multi-line agent reply never covers the left rail.
+function capPreviewTitle(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length <= PREVIEW_TITLE_MAX_CHARS ? flat : `${flat.slice(0, PREVIEW_TITLE_MAX_CHARS - 1)}…`;
+}
 
 const StripItem = memo(function StripItem({
   deviceKey,
@@ -155,7 +162,7 @@ const ProjectRow = memo(function ProjectRow({
           {preview !== "" && (
             <>
               {" "}
-              <p title={preview} className="truncate text-minor leading-snug text-list-ink-soft">
+              <p title={capPreviewTitle(preview)} className="truncate text-minor leading-snug text-list-ink-soft">
                 {preview}
               </p>
             </>

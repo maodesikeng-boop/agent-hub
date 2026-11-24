@@ -3,7 +3,7 @@ import { cn } from "../lib/utils.ts";
 import { HOURGLASS_GLASS_PATH } from "../ui/icons.ts";
 
 const TOP_BULB = "M8 4C8 7 10 9.3 12 11.3 14 9.3 16 7 16 4Z";
-const BOTTOM_BULB = "M8 20C8 17 10 14.7 12 12.7 14 14.7 16 17 16 20Z";
+const BOTTOM_BULB = "M8 21.5V17.5C8 15.8 10 14.2 12 12.7 14 14.2 16 15.8 16 17.5V21.5Z";
 const BULB_TOP_Y = 4;
 const BULB_NECK_Y = 11.3;
 const BULB_SAMPLES = 64;
@@ -82,7 +82,7 @@ export function QuotaHourglass({
           <rect className="hourglass-sand hourglass-sand-top" x="6" y="0" width="12" height="12" />
         </g>
         <g clipPath={`url(#${id}-bottom)`}>
-          <path className="hourglass-sand hourglass-sand-bottom" d="M6 0.5 12 -0.5 18 0.5V12H6Z" />
+          <path className="hourglass-sand hourglass-sand-bottom" d="M6 2 12 1 18 2V14H6Z" />
         </g>
         <path className="hourglass-glass" d={HOURGLASS_GLASS_PATH} />
       </g>
