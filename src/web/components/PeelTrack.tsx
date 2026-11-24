@@ -224,7 +224,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   return (
     <div
       data-testid="peel-gate-card"
-      className="rounded-sm border border-select-line bg-open px-3.5 py-3 [contain:layout_style]"
+      className="overflow-hidden rounded-sm border border-select-line bg-open px-3.5 py-3 [contain:layout_style]"
     >
       {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
@@ -235,7 +235,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
         textClassName="text-minor leading-relaxed text-foreground"
       />
       {hasOptions && (
-        <div className="grid grid-cols-1 gap-2">
+        <div className="-mx-3.5 grid grid-cols-1 divide-y divide-border border-t border-border">
           {node.gateOptions.map((opt) => {
             const isRec = node.gateRecommended !== null && opt === node.gateRecommended;
             return (
@@ -244,33 +244,31 @@ export const GateDecisionCard = memo(function GateDecisionCard({
                 type="button"
                 disabled={decideMutation.isPending}
                 onClick={() => submit(opt, getDecisionDraft(draftKey))}
-                className={cn(
-                  "flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-3 py-1.5 text-left text-minor font-medium outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 disabled:pointer-events-none disabled:opacity-60",
-                  isRec ? "btn-solid bg-primary text-primary-foreground" : "btn-raised",
-                )}
+                className="flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-baseline justify-between gap-2 rounded-none px-3.5 py-2 text-left text-minor font-medium transition-colors duration-150 outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:opacity-60 motion-reduce:transition-none"
               >
                 <span className="min-w-0 flex-1 wrap-anywhere">{opt}</span>
-                {isRec && <span className="shrink-0 text-xs font-normal">Recommended</span>}
+                {isRec && <span className="tool-badge shrink-0 px-1.5 text-xs leading-5 font-medium">Recommended</span>}
               </button>
             );
           })}
         </div>
       )}
+      {err !== null && (
+        <p role="alert" title={errorTitle(err)} className="my-2 text-xs text-danger">
+          {errorLine(err)}
+        </p>
+      )}
       <CardNoteForm
         key={draftKey}
+        variant="row"
         value={draft}
         onChange={(next) => setDecisionDraft(draftKey, next)}
         disabled={decideMutation.isPending}
         pending={decideMutation.isPending}
         onSubmitNote={(raw) => submit(null, raw)}
-        className={hasOptions ? "mt-3" : "mt-2"}
+        className={cn("-mx-3.5 -mb-3 pl-3.5", !hasOptions && err === null && "mt-2")}
         buttonSize="sm"
       />
-      {err !== null && (
-        <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
-          {errorLine(err)}
-        </p>
-      )}
     </div>
   );
 });

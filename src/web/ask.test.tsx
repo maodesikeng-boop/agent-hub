@@ -365,8 +365,8 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     const card = (id: number) => document.querySelector(`[data-message-id="${id}"] [data-ask-card]`) as HTMLElement;
-    // 选中的选项是 tile-open（浅暖黄底 + 1px 选中内描边），用户写的原话是带底色的行（[data-ask-answer]）
-    const highlighted = (id: number) => [...card(id).querySelectorAll(".tile-open, [data-ask-answer]")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
+    // 选中的选项是带 data-chosen 的暖黄底行（不画框），用户写的原话是同色底的一行（[data-ask-answer]）
+    const highlighted = (id: number) => [...card(id).querySelectorAll("[data-chosen], [data-ask-answer]")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
 
     expect(highlighted(3)).toEqual(["qa-test@example.com"]);
     expect(highlighted(4)).toEqual(["不接", "开完会再接"]);
@@ -378,7 +378,7 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     }
   });
 
-  it("回复框和聊天输入框同形：一个 1px 控件线的框，Send 图标按钮在框里；支持 Shift+Enter 换行且输入框是 15px 正文字号（docs/ui-standard.md 第 3、17 条）", async () => {
+  it("回复框是卡片列表的最后一行：不自带框，靠上方细线和卡片外框收住，Send 图标按钮在行里；支持 Shift+Enter 换行且输入框是 15px 正文字号", async () => {
     await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" })]));
     const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
     const input = within(card).getByRole("textbox", { name: "Your reply" });
@@ -386,10 +386,12 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(input.tagName).toBe("TEXTAREA");
     expect(input).toHaveClass("min-h-8", "text-body");
     expect(input).not.toHaveClass("text-minor");
-    const frame = input.closest("[data-card-reply]")!;
-    expect(frame).toContainElement(send);
-    // Same recipe as the chat composer, so the field reads as the place to type without a visible label.
-    expect(frame).toHaveClass("rounded-sm", "border", "border-border-strong", "bg-background", "shadow-[var(--shadow-tile)]", "focus-within:field-focus");
+    const row = input.closest("[data-card-reply]")!;
+    expect(row).toContainElement(send);
+    expect(row).toHaveAttribute("data-card-reply", "row");
+    expect(row).toHaveClass("-mx-4", "-mb-4", "border-t", "border-border");
+    expect(row.className).not.toMatch(/shadow-\[var\(--shadow-tile\)\]|border-border-strong|rounded-sm/);
+    expect(card).toHaveClass("overflow-hidden", "rounded-sm");
     expect(send).toHaveClass("size-8");
 
     fireEvent.change(input, { target: { value: "第一行" } });
@@ -424,8 +426,12 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
     expect(buttons[0]).toBeDisabled();
     expect(buttons[1]).toBeDisabled();
-    expect(buttons[1]).toHaveClass("tile-open");
-    expect(buttons[0]).toHaveClass("btn-raised");
+    expect(buttons[1]).toHaveAttribute("data-chosen");
+    expect(buttons[1]).toHaveClass("bg-open");
+    expect(buttons[0]).not.toHaveAttribute("data-chosen");
+    for (const b of buttons) expect(b.className).not.toMatch(/btn-raised|tile-open|shadow/);
+    // 回答后卡片收在最后一行：列表贴到卡片底边，不留一截白边
+    expect(buttons[1]!.closest("[role='group']")).toHaveClass("-mb-4");
     for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
   });
 

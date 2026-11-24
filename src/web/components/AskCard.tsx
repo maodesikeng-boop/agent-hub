@@ -12,11 +12,12 @@ import {
 import { askDecisionDraftKey, clearDecisionDraft, getDecisionDraft, setDecisionDraft, useDecisionDraft } from "../decision-drafts.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorLine, errorText, errorTitle, newClientId, type ErrorLike } from "../format.ts";
+import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { CardBody, CardNoteForm, UnsentDraftBanner } from "./Deliverables.tsx";
 import { Markdown } from "./Markdown.tsx";
 import type { MessageActions } from "./Messages.tsx";
-import { OptionRow } from "./OptionRow.tsx";
+import { OPTION_LIST, OptionRow } from "./OptionRow.tsx";
 
 export const AskCard = memo(function AskCard({
   card,
@@ -86,8 +87,11 @@ export const AskCard = memo(function AskCard({
     draft.trim() !== "" &&
     (answerNote === undefined || answerNote.trim() !== draft.trim());
 
+  // A settled card ends on its last row, so the row's fill meets the card's bottom edge like the reply row does.
+  const listEndsCard = answered && !card.closed && !showUnsentDraft && err === null;
+
   return (
-    <div className="w-full min-w-0 rounded-sm border border-border bg-background p-4" data-ask-card>
+    <div className="w-full min-w-0 overflow-hidden rounded-sm border border-border bg-background p-4" data-ask-card>
       <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
         <Markdown text={cardTitle} files={files} messageId={messageId} />
       </div>
@@ -101,7 +105,7 @@ export const AskCard = memo(function AskCard({
         textClassName="text-body leading-relaxed text-foreground"
       />
       {(hasOptions || answerNote !== undefined) && (
-        <div className="mt-3 flex flex-col gap-2" role="group" aria-label="Options">
+        <div className={cn(OPTION_LIST, listEndsCard && "-mb-4")} role="group" aria-label="Options">
           {card.options.map((opt, i) => {
             const isChosen = effectiveChosen === opt;
             const isRecommended = card.recommended !== undefined && opt === card.recommended;
@@ -123,8 +127,8 @@ export const AskCard = memo(function AskCard({
             );
           })}
           {answerNote !== undefined && (
-            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 rounded-sm bg-panel px-3 py-2.5 leading-6">
-              <span className="flex h-6 w-5 shrink-0 items-center justify-center text-muted-foreground">
+            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 bg-open px-4 py-2.5 leading-6">
+              <span className="flex h-6 w-4 shrink-0 items-center text-foreground">
                 <PencilLine className="size-pixel-sm" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
@@ -133,20 +137,22 @@ export const AskCard = memo(function AskCard({
         </div>
       )}
       {card.closed && <p className="mt-2 text-minor text-muted-foreground">Closed</p>}
+      {showUnsentDraft && <UnsentDraftBanner draft={draft} onDismiss={() => clearDecisionDraft(draftKey)} />}
+      {err !== null && (
+        <p role="alert" title={errorTitle(err)} className="my-2 text-xs text-danger">
+          {errorLine(err)}
+        </p>
+      )}
       {!answered && (
         <CardNoteForm
+          variant="row"
           value={draft}
           onChange={(next) => setDecisionDraft(draftKey, next)}
           disabled={disabled}
           pending={decideMutation.isPending}
           onSubmitNote={(raw) => submit(null, raw)}
+          className={err !== null || (hasOptions && !card.closed) ? undefined : "mt-3"}
         />
-      )}
-      {showUnsentDraft && <UnsentDraftBanner draft={draft} onDismiss={() => clearDecisionDraft(draftKey)} />}
-      {err !== null && (
-        <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
-          {errorLine(err)}
-        </p>
       )}
     </div>
   );
