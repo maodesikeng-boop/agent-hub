@@ -146,7 +146,7 @@ describe("那一行", () => {
     expect(within(log()).getByRole("button", { name: "调查 Y Started read-only" })).toBeInTheDocument();
   });
 
-  it("用户直接对 Worker 说的话：一行“Worker「标题」你对它说：原文”，点开是 Worker 的对话", async () => {
+  it("opens the Worker from a legacy direct message notice", async () => {
     const user = userEvent.setup();
     await boot(
       withWorker({

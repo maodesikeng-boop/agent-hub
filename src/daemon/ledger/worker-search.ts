@@ -50,7 +50,9 @@ export function createLedgerWorkerSearch(ctx: LedgerContext) {
     if (reports.length === 0) throw fail("invalid", `Worker #${worker.id}“${worker.title}”还没有汇报过`);
     const row = reports[n === "latest" ? reports.length - 1 : n - 1];
     if (row === undefined) throw fail("invalid", `Worker #${worker.id}“${worker.title}”只汇报过 ${reports.length} 次，没有第 ${n} 轮`);
-    return reportBody(worker, row.text);
+    const summary = db.get<{ summary: string | null }>("SELECT json_extract(meta, '$.directChatSummary') AS summary FROM messages WHERE id = ?", row.id)?.summary;
+    const body = reportBody(worker, row.text);
+    return summary == null ? body : `${summary}\n\n${body}`;
   };
 
   const search = (caller: { pmId: number }, args: HubArgs<"worker.search">): HubResult<"worker.search"> => {

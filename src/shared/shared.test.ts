@@ -703,9 +703,6 @@ describe("M3：对话和消息", () => {
     expect(workerMessageDedupeKey(3, "report", 41)).not.toBe(workerMessageDedupeKey(3, "turn_failed", 41));
     expect(workerMessageDedupeKey(3, "report", 42)).not.toBe(workerMessageDedupeKey(3, "report", 41));
     expect(() => workerMessageDedupeKey(3, "report", null)).toThrow();
-    // 用户直接对 Worker 说的话：每条用户消息一行
-    expect(workerMessageDedupeKey(3, "user_message", 43)).toBe("worker:3:user_message:43");
-    expect(() => workerMessageDedupeKey(3, "user_message", null)).toThrow();
   });
 });
 

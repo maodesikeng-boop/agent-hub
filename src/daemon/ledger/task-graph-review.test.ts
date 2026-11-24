@@ -226,6 +226,19 @@ describe("审查步骤只查不修", () => {
     expect(ledger.listEndedWorktreeWorkers().find((c) => c.workerId === wReview)).toMatchObject({ review: true, branch: null });
   });
 
+  it.each(["chat", "report"] as const)("settles a pending review after a newer direct %s", async (kind) => {
+    const { graph, wReview, sha } = await startReview();
+    await reportTurn(wReview, report({ summary: "Pass", verdict: "PASS", sha }));
+    ledger.postUserMessage({ conversationId: sessionOf(wReview).conversation_id, clientId: "direct", text: "What did you find?" });
+    const reply = kind === "chat"
+      ? "The cursor is consistent."
+      : report({ status: "有问题", summary: "Found a regression", verdict: "FAIL", sha, questions: "Please reopen the implementation step" });
+    await reportTurn(wReview, reply);
+    await runVerify();
+    expect(graphNow(graph.id).nodes.map(stateOf))
+      .toEqual(kind === "chat" ? ["done", "done", "running"] : ["done", "waiting:pm", "pending"]);
+  });
+
   it("判 PASS 带非阻塞意见：核对通过后完成，意见抄送项目经理；新汇报写 PASS+NOTES 按无效结论停下", async () => {
     const { graph, wReview, sha } = await startReview();
     await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS+NOTES", sha: sha.slice(0, 8), questions: "a.ts 的命名可以再统一" }));

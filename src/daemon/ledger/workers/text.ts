@@ -15,7 +15,6 @@ import type { ReportMessage, ReportMessageRow } from "./types.ts";
 export const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改动，Worker 是从最后一次提交开始的，看不到这些改动。";
 export const TURN_STOPPED = "被停止了";
 const TURN_FAILED = "这一轮出错了";
-export const RECEIVED_STATUSES: ReadonlySet<string> = new Set(["delivered", "processing", "replied"]);
 export const NO_REPLY_TEXT = "（这一轮没有文字回复）";
 
 export function backgroundKilledNote(reason: "idle" | "shutdown" | "restart"): string {

@@ -292,7 +292,7 @@ function startReceipt(
   if (space.workspace === "main" && args.noWorktree !== true) notes.push("（主文件夹不是有提交的 git 仓库，所以没建 worktree）");
   if (agent.readonly) notes.push("。它是只读的，只看不改");
   notes.push(capabilitiesReceiptNote(agent.capabilities, readPmCapabilityPolicy(w.db, worker.pm_id)));
-  notes.push(`。它每做完一轮，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
+  notes.push(`。你交办的一轮结束后，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
   const freshWorktree = space.workspace === "worktree" && space.effectiveInherit === null;
   if (freshWorktree && project.setup_command !== null) notes.push(SETUP_RECEIPT_NOTE);
   if (freshWorktree && space.probe.hasUncommittedChanges) notes.push(WORKTREE_DIRTY_NOTE);

@@ -8,13 +8,14 @@ import type { AnyActionRow } from "../../shared/actions.ts";
 import { askOf, isSilentTriggerMessage, systemEventOf, workerEventOf } from "../../shared/domain.ts";
 import type { ConversationId, Message, MessageId, PmId, SessionId, WorkerId, WorkerRecord } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
+import type { FeishuOpenId } from "../../shared/feishu.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LEDGER_ERROR_HTTP_STATUS, LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
 import { AGENT_VENDORS, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
-import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
+import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
-import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
+import { REPORT_END, REPORT_START, deliveryParts, workerBranchName } from "../../shared/worker.ts";
 import { listActions } from "../actions/index.ts";
 import { createSessionSendHandler } from "../handlers.ts";
 import { buildLaunchPrompt, SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
@@ -1419,7 +1420,7 @@ describe("审查后补的（PR #34）", () => {
     const sessionId = workerSessionId(worker.id);
     runTurn(worker, [taskMessage(worker).id], report("做完了", "第一轮"));
     const reportsBefore = workerLines().filter((l) => workerEventOf(l)?.event === "report").length;
-    const compact = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "compact2", text: "/compact" }).messageId;
+    const compact = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "/compact" }).data.messageId;
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [compact], at: now });
     ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [compact], at: now });
     ledger.applyDriverEvent(sessionId, { type: "context.compacted", uuid: "cb-m2", trigger: "manual", preTokens: 100, postTokens: 10, at: now });
@@ -1726,9 +1727,14 @@ describe("准备命令：审查后补的（PR #47）", () => {
   });
 });
 
-describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
+describe("Direct user chat with a Worker", () => {
   let worker: WorkerRecord;
   let sessionId: SessionId;
+  const pmMessages = () => messagesIn(lin.conversationId);
+  const pmSends = () => enqueued.filter((a) => a.type === "session.send" && a.params.sessionId === lin.sessionId);
+  const post = (text: string, clientId = `c-${text}`) =>
+    ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId, text }).messageId;
+
   beforeEach(() => {
     worker = start({ noWorktree: true }).data.worker;
     sessionId = workerSessionId(worker.id);
@@ -1736,51 +1742,159 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     changes = [];
   });
 
-  const post = (text: string, clientId = `c-${text}`) =>
-    ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId, text }).messageId;
-  const userMessageLines = () => workerLines().filter((m) => workerEventOf(m)?.event === "user_message");
-
-  it("发一条：Worker 对话里一条 sender user、带 Worker 编号的排队消息，登记 session.send（source user）；项目经理那边这时还没有那一行", () => {
-    const id = post("顺便把 README 也改了");
+  it("keeps receipt, processing, and a plain reply in the Worker conversation", () => {
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "First turn"));
+    const before = pmMessages();
+    enqueued = [];
+    const id = post("What did you find?");
     expect(ledger.getMessage(id)).toMatchObject({
-      conversationId: worker.workerConversationId,
-      sessionId,
-      workerId: worker.id,
-      sender: "user",
-      kind: "text",
-      text: "顺便把 README 也改了",
-      status: "queued",
+      conversationId: worker.workerConversationId, sessionId, workerId: worker.id, sender: "user", status: "queued",
     });
-    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId, messageId: id, source: "user" }]]);
-    expect(userMessageLines()).toEqual([]);
+    expect(enqueued).toMatchObject([{ type: "session.send", params: { sessionId, messageId: id, source: "user" } }]);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
+    expect(pmMessages()).toEqual(before);
+    expect(pmSends()).toEqual([]);
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "direct", text: "The README is up to date.", at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 1, at: now });
+    expect(ledger.getMessage(id)?.status).toBe("replied");
+    expect(messagesIn(worker.workerConversationId).at(-1)?.text).toBe("The README is up to date.");
+    expect(pmMessages()).toEqual(before);
+    expect(pmSends()).toEqual([]);
   });
 
-  it("项目经理对话里用户发的消息照旧不带 Worker 编号", () => {
-    const id = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "pm-1", text: "在吗" }).messageId;
-    expect(ledger.getMessage(id)!.workerId).toBeNull();
+  it("keeps Feishu input and routine progress in the Worker conversation", () => {
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "First turn"));
+    const before = pmMessages();
+    enqueued = [];
+    const { messageId } = ledger.postUserMessage({
+      conversationId: worker.workerConversationId, clientId: "feishu-direct", text: "What is left?",
+      origin: { kind: "feishu", openId: "ou_owner" as FeishuOpenId, name: "Owner", role: "owner", mode: "shared", guestTier: "chat_only", context: [] },
+    });
+    runTurn(worker, [messageId], report("有问题", "Still checking"));
+    expect(ledger.getMessage(messageId)?.status).toBe("replied");
+    expect(pmMessages()).toEqual(before);
+    expect(pmSends()).toEqual([]);
   });
 
-  it("Worker 收到了（message.delivered）：同一个事务里项目经理对话多一行 user_message，全文带标签和原文，交给项目经理（source system）", () => {
-    const id = post("顺便把 README 也改了");
+  it.each(["done", "question"] as const)("delivers the formal %s report with the direct chat summary", (kind) => {
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "First turn"));
+    const before = pmMessages().length;
+    enqueued = [];
+    const id = post("Check the README too");
+    const text = kind === "done"
+      ? report("做完了", "Finished")
+      : report("有问题", "Need a decision").replace("问题: 无", "问题: Please choose a release branch");
+    runTurn(worker, [id], text);
+    const line = pmMessages().at(-1)!;
+    expect(pmMessages()).toHaveLength(before + 1);
+    expect(workerEventOf(line)).toMatchObject({ event: "report", status: kind === "done" ? "done" : "problem" });
+    expect(pmSends()).toMatchObject([{ params: { messageId: line.id, source: "system" } }]);
+    expect(deliveryParts(line).prefixes).toEqual(["【用户近期直接发给此 Worker 的消息摘要】\n> Check the README too"]);
+    expect(hub(lin.sessionId, "worker.show", { workerId: worker.id, report: "latest" }).text).toContain("Check the README too");
+    expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "Next task" }).text).not.toContain("Check the README too");
+  });
+
+  it("returns one bounded summary to the PM on its next send, without changing the outgoing message", () => {
+    const label = "Private discussion";
+    const attachment = { id: "u1", name: "diagram.png", path: "/data/uploads/u1/diagram.png", size: 10, mime: "image/png" };
+    ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "file", text: "See the drawing", attachments: [attachment] });
+    post(label + "📝".repeat(WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS) + " Hidden tail", "long");
+    const send = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "Continue" });
+    const summary = send.text.split("\n\n")[1]!;
+    expect(summary).toContain(label);
+    expect([...summary]).toHaveLength(WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS);
+    expect(summary.endsWith("…")).toBe(true);
+    expect(send.text).not.toContain("Hidden tail");
+    expect(ledger.getMessage(send.data.messageId)?.text).toBe("Continue");
+    const second = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "Continue again" });
+    expect(second.text).not.toContain(label);
+    ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "file2", text: "New drawing", attachments: [attachment] });
+    expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "One more" }).text).toContain("New drawing 附件：diagram.png");
+  });
+
+  it("still reports a turn that includes a PM message", () => {
+    const fromPm = taskMessage(worker).id;
+    const fromUser = post("Check the README too");
+    runTurn(worker, [fromPm, fromUser], "The combined turn ran.");
+    const line = pmMessages().at(-1)!;
+    expect(workerEventOf(line)).toMatchObject({ event: "report", status: "unformatted" });
+    expect(deliveryParts(line).prefixes[0]).toContain("Check the README too");
+    expect(line.dedupeKey).toBe(`worker:${worker.id}:report:${fromUser}`);
+  });
+
+  it.each(["done", "question"] as const)("keeps graph state during chat and handles a formal %s report", (kind) => {
+    const graph = hub(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "Direct chat", steps: [{ key: "implement", title: "Implement" }] }),
+    }).data.graph;
+    worker = start({ noWorktree: true, graphId: graph.id, node: "implement" }).data.worker;
+    const graphNow = () => hub(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    runTurn(worker, [taskMessage(worker).id], report("有问题", "Waiting for the PM"));
+    const before = graphNow().nodes;
+    expect(before[0]).toMatchObject({ status: "waiting", waitingFor: "pm", activeWorkerId: worker.id });
+    const pmBefore = pmMessages();
     enqueued = [];
     changes = [];
+    runTurn(worker, [post("What did you find?")], "I found the cause.");
+    expect(graphNow().nodes).toEqual(before);
+    expect(pmMessages()).toEqual(pmBefore);
+    expect(pmSends()).toEqual([]);
+    const reply = kind === "done"
+      ? report("做完了", "Fixed the issue")
+      : report("有问题", "Need the PM").replace("问题: 无", "问题: Choose the target branch");
+    runTurn(worker, [post("What comes next?")], reply);
+    const node = graphNow().nodes[0];
+    if (kind === "done") {
+      expect(node).toMatchObject({ status: "done", activeWorkerId: null });
+    } else {
+      expect(node).toMatchObject({ status: "waiting", waitingFor: "pm", activeWorkerId: worker.id });
+      expect(pmSends()).toHaveLength(1);
+    }
+    expect(workerLines().filter((m) => m.workerId === worker.id).map((m) => workerEventOf(m)?.event))
+      .toEqual(kind === "done" ? ["started", "report", "report", "ended"] : ["started", "report", "report"]);
+  });
+
+  it("keeps direct turn failures and send failures with the Worker while PM send failures still report", () => {
+    const before = pmMessages();
+    const id = post("Run a check");
+    runTurn(worker, [id], null, { ok: false, error: { subtype: "error_during_execution", message: "Failed" } });
+    expect(ledger.getMessage(id)?.status).toBe("failed");
+    const notSent = post("Try this instead");
+    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === notSent)!;
+    ledger.onActionFailed(send, "claude_not_found: Missing CLI");
+    expect(ledger.getMessage(notSent)?.status).toBe("failed");
+    expect(pmMessages()).toEqual(before);
+    expect(pmSends()).toEqual([]);
+    const task = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "driver.error", code: "invalid_input", messageIds: [task], message: "Invalid", at: now });
+    expect(workerEventOf(pmMessages().at(-1)!)).toMatchObject({ event: "turn_failed" });
+  });
+
+  it("leaves a withdrawn direct message out of the PM's summary", () => {
+    const id = post("Withdrawn message");
+    runTurn(worker, [id], null, { ok: false, interrupted: true });
+    expect(ledger.rewindLastUserMessage(worker.workerConversationId)?.id).toBe(id);
+    post("Current message");
+    const sent = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "Continue" });
+    expect(sent.text).toContain("Current message");
+    expect(sent.text).not.toContain("Withdrawn message");
+  });
+
+  it("resends only the direct message after a restart and keeps the summary for the PM", () => {
+    const before = pmMessages();
+    const id = post("Check the README");
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    const [line] = userMessageLines();
-    expect(workerEventOf(line!)).toEqual({
-      workerId: worker.id,
-      workerConversationId: worker.workerConversationId,
-      title: "修 X",
-      readonly: false,
-      event: "user_message",
-      status: null,
-      summary: "顺便把 README 也改了",
-    });
-    expect(line).toMatchObject({ sender: "system", kind: "worker", status: "queued", sessionId: lin.sessionId, workerId: worker.id });
-    expect(line!.text).toBe("【用户直接对 Worker #1 · 修 X 说的话（Worker 已收到）】\n\n顺便把 README 也改了");
-    expect(line!.dedupeKey).toBe(`worker:${worker.id}:user_message:${id}`);
-    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId: lin.sessionId, messageId: line!.id, source: "system" }]]);
-    // 消息状态和那一行在同一批变化里
-    expect(changes.map((c) => c.type)).toEqual(["message.updated", "message.created", "session.status"]);
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: true, shutdown: true, messageIds: [id], durationMs: 1, at: now });
+    db.run("DELETE FROM actions");
+    enqueued = [];
+    expect(ledger.recoverAfterRestart().resentMessageIds).toEqual([id]);
+    expect(enqueued.filter((a) => a.type === "session.send" && a.params.resend).map((a) => a.params))
+      .toEqual([{ sessionId, messageId: id, source: "user", resend: true, recovery: true }]);
+    runTurn(worker, [id], "I checked it.");
+    expect(pmMessages()).toEqual(before);
+    expect(pmSends()).toEqual([]);
+    expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "Continue" }).text).toContain("Check the README");
   });
 
   it("Worker 的对话里带 workerPick：invalid（它只对项目经理对话有意义），不存消息、不入队、没有变化", () => {
@@ -1791,41 +1905,9 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     expect(changes).toEqual([]);
   });
 
-  it("带附件：交给项目经理的全文里有附件的完整路径，那一行的摘要还是用户写的字", () => {
-    const attachment = { id: "u1", name: "图.png", path: "/data/uploads/u1/图.png", size: 10, mime: "image/png" };
-    const id = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "f", text: "看这张图", attachments: [attachment] }).messageId;
-    expect(ledger.getMessage(id)).toMatchObject({ workerId: worker.id, meta: { attachments: [attachment] } });
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    const line = userMessageLines()[0]!;
-    expect(workerEventOf(line)?.summary).toBe("看这张图");
-    expect(line.text).toContain(attachment.path);
-  });
-
-  it("一轮中途送达的（midTurn）：等 Worker 真的读到（处理中）才交给项目经理；读到之前点了停止、被取消的，项目经理那边没有这一行", () => {
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taskMessage(worker).id], at: now });
-    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [taskMessage(worker).id], at: now });
-    const cancelled = post("先别动 Y");
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [cancelled], midTurn: true, at: now });
-    expect(userMessageLines()).toEqual([]);
-    ledger.requestStop(worker.workerConversationId);
-    ledger.applyDriverEvent(sessionId, { type: "message.cancelled", messageIds: [cancelled], reason: "stop", at: now });
-    expect(ledger.getMessage(cancelled)!.status).toBe("cancelled");
-    expect(userMessageLines()).toEqual([]);
-    // 读到了的：处理中时交给项目经理，只一行
-    const taken = post("改 README");
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taken], midTurn: true, at: now });
-    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [taken], at: now });
-    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [taken], at: now });
-    expect(userMessageLines().map((m) => workerEventOf(m)?.summary)).toEqual(["改 README"]);
-  });
-
-  it("同一个 delivered 重放（重启后重发）：还是只有一行，只登记一次", () => {
-    const id = post("改 README");
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    enqueued = [];
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    expect(userMessageLines()).toHaveLength(1);
-    expect(enqueued).toEqual([]);
+  it("项目经理对话里用户发的消息照旧不带 Worker 编号", () => {
+    const id = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "pm-1", text: "在吗" }).messageId;
+    expect(ledger.getMessage(id)!.workerId).toBeNull();
   });
 
   it("Worker 已收工：发消息、重试失败的消息都是 conflict，什么都没写", () => {
@@ -1848,12 +1930,11 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     expect(post("改 README", "same")).toBe(id);
   });
 
-  it("收工时用户的话还在排队（Worker 正忙）：照停止的规则标已取消，项目经理不会收到 user_message", () => {
+  it("收工时用户的话还在排队（Worker 正忙）：照停止的规则标已取消", () => {
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taskMessage(worker).id], at: now });
     const id = post("先别动 Y");
     hub(lin.sessionId, "worker.end", { workerId: worker.id });
     expect(ledger.getMessage(id)!.status).toBe("cancelled");
-    expect(userMessageLines()).toEqual([]);
   });
 
   it("worktree 还没建好（Worker 还在准备）：发消息是 conflict（还在准备），什么都没写；建好之后能发，排在任务说明后面", () => {
@@ -1882,109 +1963,6 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     expect(ledger.getMessage(id)!.status).toBe("failed");
   });
 
-  it("消息已经取消了才收到 delivered（收工时被标已取消，驱动层的事件晚到）：不发“Worker 已收到”那一行", () => {
-    const id = post("改 README");
-    hub(lin.sessionId, "worker.end", { workerId: worker.id });
-    expect(ledger.getMessage(id)!.status).toBe("cancelled");
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    expect(userMessageLines()).toEqual([]);
-  });
-
-  it("这一轮里有用户的话、这一轮出错：turn_failed 交给项目经理的话里带用户的原文，写明用户可以自己点重试", () => {
-    runTurn(worker, [taskMessage(worker).id], report("做完了", "第一轮"));
-    const id = post("顺便改 README");
-    runTurn(worker, [id], null, { ok: false, error: { subtype: "error_during_execution", message: "炸了" } });
-    expect(ledger.getMessage(id)!.status).toBe("failed");
-    const line = workerLines().at(-1)!;
-    expect(workerEventOf(line)).toMatchObject({ event: "turn_failed" });
-    expect(line.text).toContain("「顺便改 README」");
-    expect(line.text).toContain("自己点重试");
-  });
-
-  it("用户的话发不出去（session.send 次数用完）：turn_failed 里同样带原文和重试说明；项目经理的话发不出去不带", () => {
-    const id = post("顺便改 README");
-    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === id)!;
-    ledger.onActionFailed(send, "claude_not_found: 找不到 claude");
-    const line = workerLines().at(-1)!;
-    expect(line.text).toContain("「顺便改 README」");
-    expect(line.text).toContain("自己点重试");
-    const fromPm = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再看看" }).data.messageId;
-    const pmSend = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === fromPm)!;
-    ledger.onActionFailed(pmSend, "claude_not_found: 找不到 claude");
-    expect(workerLines().at(-1)!.text).not.toContain("重试");
-  });
-
-  it("Worker 正忙时用户连发两条：都排队；一起送达后项目经理收到两行，各带各的原文", () => {
-    const task = taskMessage(worker).id;
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [task], at: now });
-    const a = post("第一条");
-    const b = post("第二条");
-    expect([a, b].map((id) => ledger.getMessage(id)!.status)).toEqual(["queued", "queued"]);
-    expect(userMessageLines()).toEqual([]);
-    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [task], durationMs: 1, at: now });
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [a, b], at: now });
-    expect(userMessageLines().map((m) => workerEventOf(m)?.summary)).toEqual(["第一条", "第二条"]);
-  });
-
-  it("项目经理和用户同时发：一起送达，只有用户那条通知项目经理；这一轮结束照常一行汇报，去重键用这一轮最大的编号", () => {
-    const task = taskMessage(worker).id;
-    runTurn(worker, [task], report("做完了", "第一轮"));
-    const fromPm = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再跑一遍测试" }).data.messageId;
-    const fromUser = post("顺便改 README");
-    runTurn(worker, [fromPm, fromUser], report("做完了", "都做了"));
-    expect(userMessageLines().map((m) => workerEventOf(m)?.summary)).toEqual(["顺便改 README"]);
-    const last = workerLines().at(-1)!;
-    expect(workerEventOf(last)).toMatchObject({ event: "report", summary: "都做了" });
-    expect(last.dedupeKey).toBe(`worker:${worker.id}:report:${Math.max(fromPm, fromUser)}`);
-    expect([fromPm, fromUser].map((id) => ledger.getMessage(id)!.status)).toEqual(["replied", "replied"]);
-  });
-
-  it("用户的消息发不出去（session.send 次数用完）：标失败，项目经理收到一行 turn_failed", () => {
-    const id = post("改 README");
-    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === id)!;
-    ledger.onActionFailed(send, "claude_not_found: 找不到 claude");
-    expect(ledger.getMessage(id)).toMatchObject({ status: "failed", failureReason: "claude_not_found: 找不到 claude" });
-    expect(workerLines().at(-1)!.dedupeKey).toBe(`worker:${worker.id}:turn_failed:${id}`);
-    // 重试：回到排队，重新登记（执行器在调 onActionFailed 前已经把动作标 failed）
-    db.run("UPDATE actions SET status = 'failed' WHERE id = ?", send.id);
-    enqueued = [];
-    ledger.retryMessage(id);
-    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId, messageId: id, source: "user" }]]);
-  });
-
-  it("关机打断有用户的话的那一轮：消息不标已停止，重启后重发给同一个会话；交给项目经理的那一行也重发", () => {
-    const task = taskMessage(worker).id;
-    runTurn(worker, [task], report("做完了", "第一轮"));
-    const id = post("改 README");
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
-    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: true, shutdown: true, messageIds: [id], durationMs: 1, at: now });
-    expect(ledger.getMessage(id)!.status).toBe("processing");
-    const line = userMessageLines()[0]!;
-    // 项目经理那边也在处理那一行时被关机打断
-    ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [line.id], at: now });
-    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, shutdown: true, messageIds: [line.id], durationMs: 1, at: now });
-    db.run("DELETE FROM actions");
-    enqueued = [];
-    const recovered = ledger.recoverAfterRestart();
-    expect(recovered.resentMessageIds).toEqual(expect.arrayContaining([id, line.id]));
-    expect(enqueued.map((a) => [a.type, a.params])).toEqual(
-      expect.arrayContaining([
-        ["session.send", { sessionId, messageId: id, source: "user", resend: true, recovery: true }],
-        ["session.send", { sessionId: lin.sessionId, messageId: line.id, source: "system", resend: true, recovery: true }],
-      ]),
-    );
-    // 重启后再送达：不多出一行
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    expect(userMessageLines()).toHaveLength(1);
-  });
-
-  it("老数据：Worker 对话里没有 Worker 编号的消息送达了，不发 user_message", () => {
-    const id = post("老的");
-    db.run("UPDATE messages SET worker_id = NULL WHERE id = ?", id);
-    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    expect(userMessageLines()).toEqual([]);
-  });
 });
 
 describe("项目经理开新会话（ledger/handover.ts）时 Worker 的汇报", () => {
@@ -2186,15 +2164,35 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["两个都好了"]);
   });
 
-  it("等的时候用户直接对它说话：照常插进来（交给项目经理一行 user_message），那一轮结束也不汇报，后台命令跑完汇报一次", () => {
+  it("A direct chat reply stays quiet while the original background report waits", () => {
     firstTurnWithBackground();
     const said = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "u1", text: "顺便看下 README" }).messageId;
     runTurn(worker, [said], "好的，README 看过了，CI 还在跑。");
-    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "user_message"]);
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started"]);
     expect(activity()).toBe("background");
     background(0);
     wakeTurn("wake", report("做完了", "CI 过了"));
     expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["CI 过了"]);
+  });
+
+  it("uses the original background reply when the wake turn has no text after a quiet chat", () => {
+    firstTurnWithBackground(report("做完了", "Original task complete"));
+    const said = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "u1", text: "Can you explain the change?" }).messageId;
+    runTurn(worker, [said], "Here is the explanation.");
+    background(0);
+    wakeTurn("wake", null);
+    expect(reports().map((m) => workerEventOf(m)?.summary)).toEqual(["Original task complete"]);
+  });
+
+  it("keeps a direct chat's background reply quiet across daemon restart", () => {
+    runTurn(worker, [taskMessage(worker).id], report("有问题", "Waiting for the PM"));
+    const said = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "u1", text: "What version is installed?" }).messageId;
+    background(1);
+    runTurn(worker, [said], "Checking the version.");
+    ledger.close();
+    ledger = createLedger(db, options());
+    ledger.recoverAfterRestart();
+    expect(reports().map((m) => workerEventOf(m)?.summary)).toEqual(["Waiting for the PM"]);
   });
 
   it("后台命令太久没结束、进程被关（session.exited idle）：照常汇报，正文前面说明后台命令被停了", () => {

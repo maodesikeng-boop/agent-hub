@@ -12,7 +12,6 @@ import {
   parseWorkerReport,
   workerPickNote,
   workerPickOf,
-  userToWorkerHeader,
   workerBranchName,
   workerLineText,
   workerReportHeader,
@@ -314,12 +313,11 @@ describe("回到项目经理那一行", () => {
     );
   });
 
-  it("用户直接对 Worker 说的话：交给项目经理的开头；写给 Worker 时带【用户直接对你说】标签（单独一块），项目经理的话和别的对话里的没有标签", () => {
-    expect(userToWorkerHeader(3, "修 X")).toBe("【用户直接对 Worker #3 · 修 X 说的话（Worker 已收到）】");
+  it("用户直接对 Worker 说的话：写给 Worker 时带【用户直接对你说】标签（单独一块），项目经理的话和别的对话里的没有标签", () => {
     expect(deliveryParts({ workerId: 3, sender: "user", text: "改 README", meta: null })).toEqual({ prefixes: ["【用户直接对你说】"], text: "改 README" });
     expect(deliveryParts({ workerId: 3, sender: "pm", text: "改 README", meta: null })).toEqual({ prefixes: [], text: "改 README" });
     expect(deliveryParts({ workerId: null, sender: "user", text: "改 README", meta: null })).toEqual({ prefixes: [], text: "改 README" });
-    // 带附件：原文和附件路径在 text 里（和项目经理收到的一样，见 agentTextOf），标签另放
+    // 带附件：原文和附件路径在 text 里，标签另放
     const withFile = { workerId: 3, sender: "user" as const, text: "看这张图", meta: { attachments: [ATTACHMENT] } };
     expect(deliveryParts(withFile)).toEqual({ prefixes: ["【用户直接对你说】"], text: agentTextOf(withFile) });
     expect(agentTextOf(withFile)).toContain(ATTACHMENT.path);

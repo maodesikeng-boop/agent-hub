@@ -121,12 +121,19 @@ export function getReviewVerifyTask(w: WorkersCtx, workerId: WorkerId): { repo: 
 function reviewVerifiedIn(w: WorkersCtx, p: Pending, params: ReviewVerifyParams, result: ReviewVerifyResult): void {
   const worker = workerRow(w, params.workerId);
   if (worker === null || worker.status === "ended") return;
-  const newerInput = w.db.get(
-    "SELECT 1 AS x FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user') AND id > ? LIMIT 1",
-    worker.worker_conversation_id,
+  const supersedingReportOrInput = w.db.get(
+    `SELECT 1 FROM messages WHERE worker_id = ? AND id > ?
+      AND (sender = 'pm' OR (kind = 'worker' AND json_extract(meta, '$.event') = 'report'))
+     UNION ALL
+     SELECT 1 FROM actions WHERE type = 'review.verify' AND json_extract(params, '$.workerId') = ?
+      AND json_extract(params, '$.reportMessageId') > ?
+     LIMIT 1`,
+    worker.id,
+    params.reportMessageId,
+    worker.id,
     params.reportMessageId,
   );
-  if (newerInput !== undefined) return;
+  if (supersedingReportOrInput !== undefined) return;
   const reportMessage = toReportMessage(w.db.get<ReportMessageRow>("SELECT id, text, meta FROM messages WHERE id = ?", params.reportMessageId));
   insertReport(w, p, worker, params.turnMessageId, reportMessage, null, { reviewVerified: result });
 }
@@ -172,7 +179,7 @@ export function actionFailedIn(w: WorkersCtx, p: Pending, action: AnyActionRow, 
   }
   if (action.type !== "session.send") return;
   const message = w.db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", action.params.messageId);
-  if (message === undefined || message.session_id !== action.params.sessionId || (message.sender !== "pm" && message.sender !== "user") || message.worker_id === null) return;
+  if (message === undefined || message.session_id !== action.params.sessionId || message.sender !== "pm" || message.worker_id === null) return;
   const worker = workerRow(w, message.worker_id);
   if (worker === null) return;
   clearMaxTime(w, worker.worker_conversation_id);

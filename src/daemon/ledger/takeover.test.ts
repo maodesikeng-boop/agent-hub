@@ -525,7 +525,7 @@ describe("单轮超时计时落盘：守护进程重启后照常提醒", () => {
     expect(wakes()).toEqual([]);
   });
 
-  it("已超时提醒过的一轮在等后台命令时重启，或自发轮异常退出：残留计时行被清掉，用户直接发下一轮消息时照常重新计时并提醒", () => {
+  it("clears recovered deadlines and keeps the next direct user turn quiet", () => {
     const w = start({ title: "修后台", task: "修", noWorktree: true, maxTimeMs: 10 * 60_000 });
     const sid = sessionIdOf(w.id);
     const firstId = firstMessage(w).id;
@@ -544,13 +544,12 @@ describe("单轮超时计时落盘：守护进程重启后照常提醒", () => {
     restart();
     expect(timeoutRow(w.id)).toBeUndefined();
 
-    // 用户直接在网页发下一轮消息（靠 ensureTurnMaxTime 兜底挂默认计时）：不会因残留 notified=1 而漏挂计时
     const { messageId: userMsgId } = ledger.postUserMessage({ conversationId: w.workerConversationId, clientId: "c-1", text: "继续查" });
     ledger.applyDriverEvent(sid, { type: "message.delivered", messageIds: [userMsgId], at: now });
     ledger.applyDriverEvent(sid, { type: "message.processing", messageIds: [userMsgId], at: now });
-    expect(timeoutRow(w.id)).toEqual({ max_time_ms: DEFAULT_WORKER_MAX_TIME_MS, deadline_at: now + DEFAULT_WORKER_MAX_TIME_MS, notified: 0 });
+    expect(timeoutRow(w.id)).toBeUndefined();
     advance(DEFAULT_WORKER_MAX_TIME_MS);
-    expect(wakes()).toHaveLength(2);
+    expect(wakes()).toHaveLength(1);
     ledger.applyDriverEvent(sid, { type: "turn.ended", ok: false, interrupted: true, messageIds: [userMsgId], durationMs: 1, at: now });
     expect(timeoutRow(w.id)).toBeUndefined();
 

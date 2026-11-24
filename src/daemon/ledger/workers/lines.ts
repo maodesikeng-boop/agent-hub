@@ -1,14 +1,15 @@
 import { workerMessageDedupeKey } from "../../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, WorkerEvent, WorkerLineStatus, WorkerMessageMeta } from "../../../shared/domain.ts";
-import { userToWorkerHeader, workerLineText, workerReportHeader } from "../../../shared/worker.ts";
+import { workerLineText, workerReportHeader } from "../../../shared/worker.ts";
 import type { Pending } from "../context.ts";
 import { toMessage } from "../rows.ts";
 import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
 import { workerSession } from "./ctx.ts";
+import { directChatSummary } from "./direct-chat.ts";
 import type { WorkersCtx } from "./types.ts";
 
 export type WorkerLine = {
-  event: WorkerEvent;
+  event: Exclude<WorkerEvent, "user_message">;
   status: WorkerLineStatus | null;
   summary: string | null;
   turnMessageId: MessageId | null;
@@ -17,7 +18,6 @@ export type WorkerLine = {
 };
 
 export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line: WorkerLine): void {
-  const header = line.event === "user_message" ? userToWorkerHeader(worker.id, worker.title) : workerReportHeader(worker.id, worker.title);
   const meta: WorkerMessageMeta = {
     workerId: worker.id,
     workerConversationId: worker.worker_conversation_id,
@@ -30,7 +30,7 @@ export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line:
   const shouldWakePm = line.wakePm ?? (line.deliver !== null);
   const pmSession = shouldWakePm ? w.sessions.currentSession(worker.pm_conversation_id) : null;
   if (shouldWakePm && pmSession === null) throw new Error(`conversation ${worker.pm_conversation_id} has no agent session`);
-  const text = line.deliver === null ? workerLineText(meta) : `${header}\n\n${line.deliver}`;
+  const text = line.deliver === null ? workerLineText(meta) : `${workerReportHeader(worker.id, worker.title)}\n\n${line.deliver}`;
   const t = w.now();
   const row = w.db.get<MessageDbRow>(
     `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
@@ -47,6 +47,14 @@ export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line:
     t,
   );
   if (row === undefined) return;
+  if (line.event === "report") {
+    const summary = directChatSummary(w, worker, { markSeen: shouldWakePm });
+    if (summary !== undefined) {
+      meta.directChatSummary = summary;
+      row.meta = JSON.stringify(meta);
+      w.db.run("UPDATE messages SET meta = ? WHERE id = ?", row.meta, row.id);
+    }
+  }
   p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   if (pmSession !== null) w.enqueue(p, { type: "session.send", params: { sessionId: pmSession.id, messageId: row.id, source: "system" } });
 }

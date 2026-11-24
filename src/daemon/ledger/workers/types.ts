@@ -53,11 +53,11 @@ export interface LedgerWorkersOptions {
   takeover?: LedgerTakeover;
 }
 
-export type BackgroundWait = { turnStart: MessageId; background: boolean };
+export type BackgroundWait = { turnStart: MessageId; turnEnd: MessageId | null; directChat: boolean; background: boolean };
 
 export interface AwaitingBackground {
   get: (sessionId: SessionId) => BackgroundWait | undefined;
-  set: (sessionId: SessionId, turnStart: MessageId) => void;
+  set: (sessionId: SessionId, turn: Omit<BackgroundWait, "background">) => void;
   setBackground: (sessionId: SessionId, background: boolean) => void;
   take: (sessionId: SessionId) => BackgroundWait | undefined;
 }
@@ -77,8 +77,6 @@ export interface WorkersCtx {
   options: LedgerWorkersOptions;
   /** Max message id at turn start, in memory only, so a PM message sent mid-turn cannot make the last reply look older than the previous turn's text. */
   turnStarts: Map<SessionId, MessageId>;
-  /** Mid-turn deliveries count only once the Worker reads them, because a stop before that cancels them. */
-  midTurnWaiting: Set<MessageId>;
   /** Turns interrupted by endIn are not reported back because the PM stopped them itself. */
   endInterrupted: Set<SessionId>;
   /** Only the timers live in memory; duration, deadline and reminder state persist in worker_turn_timeouts for restart recovery. */

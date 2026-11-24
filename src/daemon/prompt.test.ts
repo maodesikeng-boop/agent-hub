@@ -18,7 +18,6 @@ import {
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
   WORKER_REPORT_FORMAT,
-  userToWorkerHeader,
   workerReportHeader,
   type AgentVendor,
   type SetupOutcome,
@@ -504,10 +503,9 @@ describe("提示词：数值和事实以代码为准", () => {
     for (const mode of PM_MODES) expect(PM_MODE_PROMPTS[mode]).toContain(`对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手`);
   });
 
-  it("消息写法和驱动层、账本发的一致：汇报标题、连发合并；用户直接对 Worker 说的话不用在提示词里再讲（通知的标题自己写明了 Worker 已收到）", () => {
+  it("消息写法和驱动层、账本发的一致：汇报标题、连发合并", () => {
     const report = workerReportHeader(3, "修 X");
     for (const mode of PM_MODES) expect(PM_MODE_PROMPTS[mode]).toContain(report.replace("#3", "#编号").replace("修 X", "标题"));
-    expect(userToWorkerHeader(3, "修 X")).toContain("Worker 已收到");
     const prompt = buildLaunchPrompt(projectContext(), dir);
     expect(prompt).not.toContain("无需转告");
     expect(prompt).not.toContain("用户直接对 Worker");
@@ -874,11 +872,15 @@ describe("提示词：Worker（M3）", () => {
     expect(firstMsg).not.toContain("只读");
   });
 
-  it("用户直接对它说的话带【用户直接对你说】，照做、照样汇报给项目经理；连发时每条开头的标签说明是谁说的", () => {
+  it("用户直接对它说的话带【用户直接对你说】，普通回复留在 Worker 对话，完成或明确提问时汇报；连发时每条开头的标签说明是谁说的", () => {
     const prompt = buildWorkerPrompt(workerContext(), dir);
-    expect(prompt).toContain(`带 \`${USER_TO_WORKER_TAG}\` 的是**用户**在网页上直接对你说的话，照着做，本轮汇报照常交给项目经理`);
+    expect(prompt).toContain(`带 \`${USER_TO_WORKER_TAG}\` 的是**用户**直接对你说的话，照着做，直接回复用户`);
     // 重启等情况下前面可能先有【系统】说明，所以不说“开头”
     expect(prompt).not.toContain(`以“${USER_TO_WORKER_TAG}”开头`);
+    for (const vendor of AGENT_VENDORS) {
+      const prompt = buildWorkerPrompt({ ...workerContext(), vendor }, dir);
+      expect(prompt).toContain("在“问题”栏写清要项目经理回答什么或采取什么行动");
+    }
     expect(prompt).toContain("不带标签的消息来自**项目经理**");
     expect(prompt).toContain("【用户连发了 N 条】");
     expect(prompt).not.toContain("发给你的消息都来自项目经理");
