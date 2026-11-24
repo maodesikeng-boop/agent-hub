@@ -137,6 +137,14 @@ Check: The PR shows the changed screen rendered in a real browser (`pnpm verify`
 
 Seen in: `0fc0e181`, `a55ca6f0`
 
+### A rewrite keeps what the old code guaranteed
+
+Trigger: `src/web/**`
+
+Check: When a PR replaces, moves, or rebuilds a component, hook, or layout path, every guarantee of the old version survives or the PR body names it as intentionally dropped: fallbacks for unknown values (such as an unknown vendor), read-only and archived states, actions (such as a diff view), and the performance limits its guards enforced. Every test case or guard the diff deletes is replaced by an equivalent check in the same PR. Bringing back a technique that a guard banned comes with before and after numbers showing that the regression the guard blocked does not return.
+
+Seen in: `9dd20f40`, #436
+
 ### The relay trusts only CF-Connecting-IP and resists flushing
 
 Trigger: `src/relay/**`
