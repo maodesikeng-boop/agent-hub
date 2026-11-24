@@ -23,6 +23,9 @@ const GUEST_SLASH = "以“/”开头的命令只有主人能用。";
 export const OWNER_ONLY_SETTINGS_CARD = "设置卡只有主人能叫出来。";
 export const GUEST_NO_FILES = "这个群的访客发的文件不收，有事先用文字说。要发文件，请主人在群里的「群设置」卡上切到“协作者”。";
 const FILES_ONLY_TEXT = "（发了文件）";
+const CONTEXT_WAKE_TEXT = "（@机器人，请看上面的讨论）";
+const ONLINE_HINT = "我在，直接 @我 后面说事就行。";
+const TOPIC_HINT = "暂不支持在话题里回复，请到群聊主消息流 @我。";
 export const OWNER_ONLY_DECIDE = "只有主人能拍板";
 export const OWNER_ONLY_STOP = "只有主人能停止";
 export const OWNER_ONLY_SETTINGS = "只有主人能改设置";
@@ -56,6 +59,7 @@ export type FeishuMessageRoute =
       droppedFiles: number;
     }
   | { kind: "context"; line: FeishuContextLine }
+  | { kind: "hint"; text: string }
   | { kind: "settings_card" }
   | { kind: "reject"; openId: FeishuOpenId; reason: string; guestDenied?: true }
   | { kind: "ignore" };
@@ -77,22 +81,32 @@ export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingCo
       droppedFiles: 0,
     };
   }
-  if (ownerOpenId === null || ctx.binding === null || ctx.binding.archived || ctx.binding.target.kind !== "pm" || message.inThread) return { kind: "ignore" };
+  if (ownerOpenId === null || ctx.binding === null || ctx.binding.archived || ctx.binding.target.kind !== "pm") return { kind: "ignore" };
   const role = feishuSpeakerRole(speaker, ownerOpenId);
+  const mayWake = role === "owner" || feishuGuestMay(ctx.guestTier, "talk");
+  if (message.inThread) return mayWake && message.mentionedBot ? { kind: "hint", text: TOPIC_HINT } : { kind: "ignore" };
   if (isSettingsCommand(message)) return role === "owner" ? { kind: "settings_card" } : { kind: "reject", openId: speaker, reason: OWNER_ONLY_SETTINGS_CARD };
-  const wakes = (role === "owner" || feishuGuestMay(ctx.guestTier, "talk")) && feishuWakes(ctx, message.mentionedBot);
-  if (message.text === "" && message.files.length === 0 && !(wakes && ctx.pendingFiles.length > 0)) return { kind: "ignore" };
+  const wakes = mayWake && feishuWakes(ctx, message.mentionedBot);
+  if (!wakes && message.text === "" && message.files.length === 0) return { kind: "ignore" };
   if (!wakes) return { kind: "context", line: { name: ctx.speakerName, role, text: message.text === "" ? FILES_ONLY_TEXT : message.text, at: message.at } };
   if (role === "guest" && message.text.startsWith("/")) return { kind: "reject", openId: speaker, reason: GUEST_SLASH };
   const mayAttach = (openId: FeishuOpenId) => feishuSpeakerRole(openId, ownerOpenId) === "owner" || feishuGuestMay(ctx.guestTier, "send_files");
   const candidates = [...ctx.pendingFiles, ...message.files.map((file) => ({ messageId: message.messageId, speaker, file }))];
   const files = candidates.filter((c) => mayAttach(c.speaker)).map(({ messageId, file }) => ({ messageId, file }));
   const droppedFiles = mayAttach(speaker) ? 0 : candidates.filter((c) => c.speaker === speaker).length;
-  if (message.text === "" && files.length === 0) return droppedFiles > 0 ? { kind: "reject", openId: speaker, reason: GUEST_NO_FILES, guestDenied: true } : { kind: "ignore" };
+  let text = message.text;
+  if (text === "" && files.length === 0) {
+    const hasDiscussion = ctx.pendingContext.some((line) => line.text !== FILES_ONLY_TEXT);
+    if (!message.mentionedBot || !hasDiscussion) {
+      if (droppedFiles > 0) return { kind: "reject", openId: speaker, reason: GUEST_NO_FILES, guestDenied: true };
+      return message.mentionedBot ? { kind: "hint", text: ONLINE_HINT } : { kind: "ignore" };
+    }
+    text = CONTEXT_WAKE_TEXT;
+  }
   return {
     kind: "deliver",
     target: ctx.binding.target,
-    text: message.text,
+    text,
     origin: { kind: "feishu", openId: speaker, name: ctx.speakerName, role, mode: ctx.mode, guestTier: ctx.guestTier, context: [...ctx.pendingContext] },
     files,
     droppedFiles,

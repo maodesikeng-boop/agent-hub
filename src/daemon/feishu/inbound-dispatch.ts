@@ -62,9 +62,13 @@ export function onRawEvent(ctx: FeishuContext, raw: FeishuRawEvent, queuedAt: nu
   }
   const limit = event.kind === "message" ? ctx.inbound.limit : Math.floor(ctx.inbound.limit / 2);
   if (admitInbound(ctx, event.chatId, () => handleInbound(ctx, event, queuedAt), limit)) return;
-  if (isReady(ctx) && !ctx.life.closed && event.kind === "message") {
-    if (event.at > 0) noteLiveQueueDrop(ctx, event.chatId, event.at);
-    ctx.log(`飞书：实时入站队列已满 chatId=${event.chatId} dropped=1 limit=${limit} firstDroppedId=${event.messageId}`);
+  if (event.kind === "message") {
+    if (isReady(ctx)) {
+      if (event.at > 0) noteLiveQueueDrop(ctx, event.chatId, event.at);
+      ctx.log(`飞书：实时入站队列已满 chatId=${event.chatId} dropped=1 limit=${limit} firstDroppedId=${event.messageId}`);
+    } else {
+      logIgnoredMention(ctx, event, "inbound-unavailable");
+    }
   }
   ctx.directory.markAllStale();
   ctx.link.lastError = "飞书入站队列已满，请重发未收到回复的消息";
@@ -107,6 +111,10 @@ const isBindCode = (ctx: FeishuContext, text: string) => {
   return code !== null && code.expiresAt > ctx.now() && text.trim() === code.code;
 };
 
+function logIgnoredMention(ctx: FeishuContext, message: InboundMessage, reason: string) {
+  if (message.mentionedBot) ctx.log(`飞书：未处理机器人提及 chatId=${message.chatId} messageId=${message.messageId} reason=${reason}`);
+}
+
 async function handleMessage(ctx: FeishuContext, message: InboundMessage, queuedAt: number | null) {
   if (ctx.catchUp.seen.has(message.messageId)) return;
   const o = owner(ctx);
@@ -120,6 +128,7 @@ async function handleMessage(ctx: FeishuContext, message: InboundMessage, queued
   const group = message.chatType === "group" && target?.kind === "pm";
   const mode = group && o !== null ? await ctx.directory.modeOf(message.chatId, o, message.senderOpenId, t) : "solo";
   if (message.chatType === "p2p" && message.senderOpenId === o && target?.kind !== "router") {
+    logIgnoredMention(ctx, message, "inactive-router");
     scene.recordSeen();
     return;
   }
@@ -153,8 +162,15 @@ async function applyMessageRoute(ctx: FeishuContext, scene: MessageScene, route:
   const { message, chat, target } = scene;
   switch (route.kind) {
     case "ignore":
+      logIgnoredMention(ctx, message, target === null ? "inactive-chat" : message.inThread ? "topic" : "no-route");
       scene.recordSeen();
       return;
+    case "hint": {
+      const at = message.senderOpenId === scene.owner ? "" : `<at user_id="${message.senderOpenId}"></at> `;
+      await sendText(ctx, { chatId: message.chatId }, at + route.text);
+      scene.recordSeen();
+      return;
+    }
     case "bind_owner":
       return bindOwner(ctx, message, route.openId, scene.t);
     case "reject":
@@ -172,6 +188,7 @@ async function applyMessageRoute(ctx: FeishuContext, scene: MessageScene, route:
       scene.recordSeen();
       return;
     case "context":
+      logIgnoredMention(ctx, message, "context-only");
       ctx.contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
       scene.recordSeen();
       return;
@@ -232,6 +249,7 @@ async function deliverToPm(ctx: FeishuContext, scene: MessageScene, pmId: PmId, 
   const chatId = scene.message.chatId;
   const conversationId = activeTarget(ctx, ctx.store.chatById(chatId))?.kind === "pm" ? conversationOfPm(ctx, pmId) : null;
   if (conversationId === null) {
+    logIgnoredMention(ctx, scene.message, "inactive-pm");
     scene.recordSeen();
     return;
   }

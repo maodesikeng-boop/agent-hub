@@ -16,7 +16,6 @@ import {
   type FeishuListMessagesPage,
   type FeishuMethod,
   type FeishuMethodArgs,
-  type FeishuRawEvent,
   type FeishuRawMessageEvent,
   type FeishuTransport,
 } from "./transport.ts";
@@ -135,6 +134,23 @@ function checkAuth(result: FeishuApiResult): void {
   if (AUTH_CODES.has(result.code)) throw new FeishuAuthError(result.code, result.msg ?? "");
 }
 
+export async function normalizeFeishuMessageEvent(raw: lark.RawMessageEvent, botIdentity: lark.BotIdentity): Promise<FeishuRawMessageEvent> {
+  const message = await lark.normalize(raw, { botIdentity, stripBotMentions: true });
+  return {
+    type: "im.message.receive_v1",
+    messageId: message.messageId,
+    chatId: message.chatId,
+    chatType: message.chatType,
+    senderOpenId: message.senderId,
+    senderType: raw.sender.sender_type === "user" ? "user" : "app",
+    content: message.content,
+    mentionedBot: message.mentionedBot,
+    threadId: message.threadId ?? null,
+    resources: message.resources.map((r) => ({ type: r.type, fileKey: r.fileKey, fileName: r.fileName ?? null })),
+    createTime: message.createTime,
+  };
+}
+
 export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTransport {
   const domain = options.domain ?? (options.brand === "lark" ? lark.Domain.Lark : lark.Domain.Feishu);
   const logger = {
@@ -211,7 +227,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
       const items: FeishuRawMessageEvent[] = [];
       for (const raw of (data.items as RawListedItem[] | undefined) ?? []) {
         if (raw.deleted === true || Boolean(raw.upper_message_id) || !raw.message_id) continue;
-        const adapted = {
+        const adapted: lark.RawMessageEvent = {
           sender: {
             sender_id: { open_id: raw.sender?.id_type === "open_id" ? (raw.sender.id ?? "") : "" },
             sender_type: raw.sender?.sender_type ?? "unknown",
@@ -241,21 +257,8 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
             thread_id: raw.thread_id,
             create_time: raw.create_time ?? "0",
           },
-        } as unknown as lark.RawMessageEvent;
-        const normalized = await lark.normalize(adapted, { botIdentity, stripBotMentions: true });
-        items.push({
-          type: "im.message.receive_v1",
-          messageId: normalized.messageId,
-          chatId: normalized.chatId,
-          chatType: normalized.chatType,
-          senderOpenId: normalized.senderId,
-          senderType: raw.sender?.sender_type === "user" ? "user" : "app",
-          content: normalized.content,
-          mentionedBot: normalized.mentionedBot,
-          threadId: normalized.threadId ?? null,
-          resources: normalized.resources.map((r) => ({ type: r.type, fileKey: r.fileKey, fileName: r.fileName ?? null })),
-          createTime: normalized.createTime,
-        });
+        };
+        items.push(await normalizeFeishuMessageEvent(adapted, botIdentity));
       }
       const pageToken = data.has_more === true ? feishuStringField(data, "page_token") : null;
       return { items, pageToken, hasMore: data.has_more === true && pageToken !== null };
@@ -291,20 +294,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
       });
       const dispatcher = new lark.EventDispatcher({ logger, loggerLevel: lark.LoggerLevel.warn }).register({
         "im.message.receive_v1": async (data: lark.RawMessageEvent) => {
-          const message = await lark.normalize(data, { botIdentity, stripBotMentions: true });
-          const event: FeishuRawEvent = {
-            type: "im.message.receive_v1",
-            messageId: message.messageId,
-            chatId: message.chatId,
-            chatType: message.chatType,
-            senderOpenId: message.senderId,
-            senderType: data.sender.sender_type === "user" ? "user" : "app",
-            content: message.content,
-            mentionedBot: message.mentionedBot,
-            threadId: message.threadId ?? null,
-            resources: message.resources.map((r) => ({ type: r.type, fileKey: r.fileKey, fileName: r.fileName ?? null })),
-            createTime: message.createTime,
-          };
+          const event = await normalizeFeishuMessageEvent(data, botIdentity);
           safe(() => handlers.onEvent(event));
         },
         "im.chat.member.user.added_v1": async (data: Parameters<typeof members>[0]) => safe(() => handlers.onEvent({ type: "im.chat.member.user.added_v1", ...members(data) })),
