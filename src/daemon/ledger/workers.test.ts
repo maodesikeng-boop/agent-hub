@@ -13,7 +13,7 @@ import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LEDGER_ERROR_HTTP_STATUS, LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
 import { AGENT_VENDORS, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
-import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
+import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS, WORKER_DIRECT_CHAT_SUMMARY_MAX_MESSAGES, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, deliveryParts, workerBranchName } from "../../shared/worker.ts";
 import { listActions } from "../actions/index.ts";
@@ -1777,6 +1777,26 @@ describe("Direct user chat with a Worker", () => {
     expect(pmSends()).toEqual([]);
   });
 
+  it.each([
+    { label: "deviation", text: report("有问题", "Scope changed").replace("问题: 无", "偏离: Requires a new scope\n问题: 无"), status: "problem" },
+    { label: "abandonment", text: report("放弃了", "Cannot proceed"), status: "gave_up" },
+  ])("requires an explicit request to send a direct chat report about $label", ({ text, status }) => {
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "First turn"));
+    const before = pmMessages();
+    enqueued = [];
+    runTurn(worker, [post("What did you find?")], text);
+    expect(pmMessages()).toEqual(before);
+    expect(pmSends()).toEqual([]);
+
+    const request = "Please decide whether to reassign this task.";
+    runTurn(worker, [post("What comes next?")], text.replace("问题: 无", `问题: ${request}`));
+    const line = pmMessages().at(-1)!;
+    expect(pmMessages()).toHaveLength(before.length + 1);
+    expect(workerEventOf(line)).toMatchObject({ event: "report", status });
+    expect(line.text).toContain(request);
+    expect(pmSends()).toMatchObject([{ params: { messageId: line.id, source: "system" } }]);
+  });
+
   it.each(["done", "question"] as const)("delivers the formal %s report with the direct chat summary", (kind) => {
     runTurn(worker, [taskMessage(worker).id], report("做完了", "First turn"));
     const before = pmMessages().length;
@@ -1790,9 +1810,44 @@ describe("Direct user chat with a Worker", () => {
     expect(pmMessages()).toHaveLength(before + 1);
     expect(workerEventOf(line)).toMatchObject({ event: "report", status: kind === "done" ? "done" : "problem" });
     expect(pmSends()).toMatchObject([{ params: { messageId: line.id, source: "system" } }]);
-    expect(deliveryParts(line).prefixes).toEqual(["【用户近期直接发给此 Worker 的消息摘要】\n> Check the README too"]);
+    expect(deliveryParts(line).prefixes[0]).toContain("> Check the README too");
     expect(hub(lin.sessionId, "worker.show", { workerId: worker.id, report: "latest" }).text).toContain("Check the README too");
     expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "Next task" }).text).not.toContain("Check the README too");
+  });
+
+  it.each(["next send", "formal report"] as const)("shows the withdrawal after the approval on the PM's %s", (contact) => {
+    const approval = "You can merge now.";
+    const withdrawal = "I withdraw my approval. Do not merge.";
+    runTurn(worker, [post(approval)], "Understood.");
+    const id = post(withdrawal);
+    let summary: string;
+    if (contact === "next send") {
+      runTurn(worker, [id], "I'll hold off.");
+      summary = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "What did the user say?" }).text.split("\n\n")[1]!;
+    } else {
+      runTurn(worker, [id], report("有问题", "Approval withdrawn").replace("问题: 无", "问题: Please hold the merge"));
+      summary = deliveryParts(pmMessages().at(-1)!).prefixes[0]!;
+    }
+    expect(summary).toContain("最后一条最新");
+    expect(summary.split("\n").slice(1)).toEqual([`> ${approval}`, `> ${withdrawal}`]);
+  });
+
+  it("preserves the withdrawal and marks older messages omitted when the text budget runs out", () => {
+    post("Earlier discussion");
+    post("You can merge now. " + "📝".repeat(WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS), "long-approval");
+    post("I withdraw my approval. Do not merge.");
+    const summary = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "What did the user say?" }).text.split("\n\n")[1]!;
+    expect([...summary].length).toBeLessThanOrEqual(WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS);
+    expect(summary.split("\n").slice(1)).toEqual(["…（更早的消息省略）", "> I withdraw my approval. Do not merge."]);
+  });
+
+  it("keeps the newest messages in order at the message limit", () => {
+    for (let i = 0; i <= WORKER_DIRECT_CHAT_SUMMARY_MAX_MESSAGES; i++) post(`Note ${i}`);
+    const summary = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "Continue" }).text.split("\n\n")[1]!;
+    expect(summary.split("\n").slice(1)).toEqual([
+      "…（更早的消息省略）",
+      ...Array.from({ length: WORKER_DIRECT_CHAT_SUMMARY_MAX_MESSAGES }, (_, i) => `> Note ${i + 1}`),
+    ]);
   });
 
   it("returns one bounded summary to the PM on its next send, without changing the outgoing message", () => {
@@ -1804,6 +1859,7 @@ describe("Direct user chat with a Worker", () => {
     const summary = send.text.split("\n\n")[1]!;
     expect(summary).toContain(label);
     expect([...summary]).toHaveLength(WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS);
+    expect(summary).toContain("…（更早的消息省略）\n>");
     expect(summary.endsWith("…")).toBe(true);
     expect(send.text).not.toContain("Hidden tail");
     expect(ledger.getMessage(send.data.messageId)?.text).toBe("Continue");

@@ -16,7 +16,8 @@ export function shouldDeliverDirectChatReport(text: string): boolean {
   return parsed.kind === "ok" && (parsed.report.status === "done" || hasReportQuestion(parsed.report.questions));
 }
 
-const SUMMARY_HEADING = "【用户近期直接发给此 Worker 的消息摘要】";
+const SUMMARY_HEADING = "【用户近期直接发给此 Worker 的消息摘要（按发送顺序，最后一条最新）】";
+const EARLIER_MESSAGES_OMITTED = "…（更早的消息省略）";
 
 export function directChatSummary(w: WorkersCtx, worker: WorkerDbRow, { markSeen }: { markSeen: boolean }): string | undefined {
   const rows = w.db.all<{ id: MessageId; text: string; meta: string | null }>(
@@ -40,11 +41,21 @@ export function directChatSummary(w: WorkersCtx, worker: WorkerDbRow, { markSeen
       worker.id, latest.id,
     );
   }
-  const excerpts = rows.slice(0, WORKER_DIRECT_CHAT_SUMMARY_MAX_MESSAGES).map(({ text, meta }) => {
+  const excerpts: string[] = [];
+  let remaining = WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS - SUMMARY_HEADING.length - 1;
+  for (const [index, { text, meta }] of rows.slice(0, WORKER_DIRECT_CHAT_SUMMARY_MAX_MESSAGES).entries()) {
     const files = attachmentsOf({ meta: parseMessageMeta("text", meta) }).map((file) => file.name);
     const excerpt = files.length === 0 ? text : [text, `附件：${files.join("、")}`].join(" ");
-    return `> ${excerpt.replace(/\s+/gu, " ").trim()}`;
-  });
-  if (rows.length > excerpts.length) excerpts.push("…（更早的消息省略）");
-  return truncateChars([SUMMARY_HEADING, ...excerpts].join("\n"), WORKER_DIRECT_CHAT_SUMMARY_MAX_CHARS);
+    const line = `> ${excerpt.replace(/\s+/gu, " ").trim()}`;
+    const lineChars = [...line].length;
+    const reserved = index + 1 < rows.length ? EARLIER_MESSAGES_OMITTED.length + 1 : 0;
+    if (lineChars > remaining - reserved) {
+      if (index === 0) excerpts.push(truncateChars(line, remaining - reserved));
+      break;
+    }
+    excerpts.push(line);
+    remaining -= lineChars + 1;
+  }
+  if (excerpts.length < rows.length) excerpts.push(EARLIER_MESSAGES_OMITTED);
+  return [SUMMARY_HEADING, ...excerpts.reverse()].join("\n");
 }

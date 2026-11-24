@@ -503,12 +503,15 @@ describe("提示词：数值和事实以代码为准", () => {
     for (const mode of PM_MODES) expect(PM_MODE_PROMPTS[mode]).toContain(`对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手`);
   });
 
-  it("消息写法和驱动层、账本发的一致：汇报标题、连发合并", () => {
+  it("消息写法和驱动层、账本发的一致：汇报标题、用户直聊例外、连发合并", () => {
     const report = workerReportHeader(3, "修 X");
-    for (const mode of PM_MODES) expect(PM_MODE_PROMPTS[mode]).toContain(report.replace("#3", "#编号").replace("修 X", "标题"));
+    for (const mode of PM_MODES) {
+      const prompt = PM_MODE_PROMPTS[mode];
+      expect(prompt).toContain(report.replace("#3", "#编号").replace("修 X", "标题"));
+      expect(prompt).toContain("普通消息和回复留在 Worker 对话。Worker 做完交办的任务，或在汇报的“问题”栏明确请你处理时，按原流程处理。");
+      expect(prompt).toContain("指示冲突时，以用户最后一条相关指示为准");
+    }
     const prompt = buildLaunchPrompt(projectContext(), dir);
-    expect(prompt).not.toContain("无需转告");
-    expect(prompt).not.toContain("用户直接对 Worker");
     expect(mergeUserTexts(["甲", "乙"]).prefixes).toEqual(["【用户连发了 2 条】", "1. 甲"]);
     expect(prompt).toContain("`【用户连发了 N 条】` 加编号，请逐条回应");
   });
@@ -851,7 +854,7 @@ describe("提示词：Worker（M3）", () => {
       expect(prompt).toContain(field);
     }
     expect(prompt).toContain("偏离: 无");
-    expect(prompt).toContain("踩刹车交给项目经理，不擅自扩范围");
+    expect(prompt).toContain("并在“问题”栏写明要项目经理决定什么；先暂停，不擅自扩范围");
     expect(prompt).toContain("**交棒**：给下一步接手的人看的关键结论");
     expect(prompt).toContain(`忘了目标或上游背景时随时跑 \`${hub} status\` 查看`);
     expect(prompt).toContain(WORKER_HUB_USAGE_PROMPT);
@@ -879,7 +882,9 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).not.toContain(`以“${USER_TO_WORKER_TAG}”开头`);
     for (const vendor of AGENT_VENDORS) {
       const prompt = buildWorkerPrompt({ ...workerContext(), vendor }, dir);
-      expect(prompt).toContain("在“问题”栏写清要项目经理回答什么或采取什么行动");
+      expect(prompt).toContain("只有做完交办的任务，或确实需要项目经理处理时，才在回复末尾加正式汇报");
+      expect(prompt).toContain("必须在“问题”栏写清要项目经理回答什么或采取什么行动");
+      expect(prompt).toContain("卡住了写“有问题”，做不了写“放弃了”。在“问题”栏写明原因和需要项目经理处理的事");
     }
     expect(prompt).toContain("不带标签的消息来自**项目经理**");
     expect(prompt).toContain("【用户连发了 N 条】");
@@ -901,6 +906,7 @@ describe("提示词：Worker（M3）", () => {
     for (const tool of ["`Agent`", "`Task`", "`invoke_subagent`", "`spawn_agent`"]) expect(prompt).toContain(tool);
     expect(prompt).toContain("确需并行拆步的，在“问题”栏建议项目经理加 Worker 或加步骤");
     expect(prompt).toContain("**等别人时直接结束本轮**");
+    expect(prompt).toContain("按上面的汇报规则结束本轮");
     expect(prompt).toContain("不要设定时器，也不要 `sleep` 轮询");
     expect(prompt).toContain("轮到你时项目经理会叫醒你");
     // 等 CI 的写法只在长命令那一条里，不在“等别人”那条里重复
