@@ -145,17 +145,20 @@ function ComposerChips({
     if (workerPick !== null) seenChips.add(workerPick);
   }, [files, workerPick]);
   return (
-    <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
+    <ul aria-label="Files to send" className="composer-chips flex max-h-36 flex-wrap items-center gap-2 overflow-y-auto px-5 pt-3">
       {leadingChip}
       {workerPick !== null && (
         <WorkerPickChip pick={workerPick} disabled={busy || disabled} onEdit={onEditPick} onRemove={onRemovePick} />
       )}
       {files.map(({ key, file }) => {
         const kind = previewKindOf(file.name, sentFileMime(file.name));
+        if (kind === "image") {
+          return <ImageFileChip key={key} file={file} busy={busy} onRemove={() => onRemoveFile(key)} />;
+        }
         const FileIcon = kind === "video" ? Video : FileText;
         return (
-          <li key={key} className={cn(CHIP_CLASS, kind === "image" ? "pl-1" : "pl-3", chipEnter(file))}>
-            {kind === "image" ? <ChipThumb file={file} /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+          <li key={key} className={cn(CHIP_CLASS, "max-w-60 pl-3", chipEnter(file))}>
+            <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span title={file.name} className="min-w-0 truncate">{file.name}</span>
             <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatBytes(file.size)}</span>
             <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => onRemoveFile(key)}>
@@ -174,7 +177,10 @@ const CHIP_CLASS = "flex max-w-full items-center gap-2 rounded-sm bg-panel py-1 
 const seenChips = new WeakSet<object>();
 const chipEnter = (item: object) => (seenChips.has(item) ? undefined : "composer-chip-enter");
 
-function ChipThumb({ file }: { file: File }) {
+const CHIP_THUMB_CLOSE_CLASS =
+  "composer-thumb-close touch-target absolute top-1 right-1 z-10 flex size-5 cursor-pointer items-center justify-center rounded-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 disabled:cursor-default disabled:opacity-50";
+
+function ImageFileChip({ file, busy, onRemove }: { file: File; busy: boolean; onRemove: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
   const [broken, setBroken] = useState(false);
   useEffect(() => {
@@ -186,12 +192,28 @@ function ChipThumb({ file }: { file: File }) {
   }, [file]);
   if (url === null || broken) {
     return (
-      <span className="flex size-6 shrink-0 items-center justify-center">
-        <FileText className="size-4 text-muted-foreground" aria-hidden="true" />
-      </span>
+      <li className={cn(CHIP_CLASS, "max-w-60 pl-3", chipEnter(file))}>
+        <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span title={file.name} className="min-w-0 truncate">{file.name}</span>
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatBytes(file.size)}</span>
+        <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={onRemove}>
+          <X className="size-3.5" aria-hidden="true" />
+        </button>
+      </li>
     );
   }
-  return <img src={url} alt="" draggable={false} onError={() => setBroken(true)} className="size-6 shrink-0 rounded-xs bg-background object-cover" />;
+  return (
+    <li
+      title={`${file.name} (${formatBytes(file.size)})`}
+      className={cn("composer-thumb relative h-12 w-16 shrink-0 rounded-sm bg-panel", chipEnter(file))}
+    >
+      <img src={url} alt="" draggable={false} onError={() => setBroken(true)} className="size-full rounded-sm object-cover" />
+      <span className="sr-only">{file.name}</span>
+      <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_THUMB_CLOSE_CLASS} onClick={onRemove}>
+        <X className="size-3" aria-hidden="true" />
+      </button>
+    </li>
+  );
 }
 
 const CHIP_CLOSE_CLASS =

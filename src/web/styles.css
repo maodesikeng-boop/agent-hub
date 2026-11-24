@@ -476,23 +476,47 @@ input[type="search"]::-webkit-search-cancel-button {
   box-shadow: none;
 }
 .composer-frame textarea,
+.composer-chips,
 .composer-menu-list {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent;
 }
 .composer-frame textarea::-webkit-scrollbar,
+.composer-chips::-webkit-scrollbar,
 .composer-menu-list::-webkit-scrollbar {
   width: 6px;
   background: transparent;
 }
 .composer-frame textarea::-webkit-scrollbar-track,
+.composer-chips::-webkit-scrollbar-track,
 .composer-menu-list::-webkit-scrollbar-track {
   background: transparent;
 }
 .composer-frame textarea::-webkit-scrollbar-thumb,
+.composer-chips::-webkit-scrollbar-thumb,
 .composer-menu-list::-webkit-scrollbar-thumb {
   border-radius: 9999px;
   background: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+/* Draw the edge hairline over the thumbnail image without adding a CSS border or clipping touch targets. */
+.composer-thumb {
+  box-shadow: var(--shadow-tile);
+}
+.composer-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--border);
+  pointer-events: none;
+}
+.composer-thumb-close {
+  background-color: color-mix(in srgb, var(--foreground) 72%, transparent);
+  color: var(--background);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--background) 28%, transparent);
+}
+.composer-thumb-close:hover:not(:disabled) {
+  background-color: var(--foreground);
 }
 .composer-notice {
   animation: composer-notice-in 140ms ease-out;

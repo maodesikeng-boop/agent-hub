@@ -90,16 +90,20 @@ describe("Composer 布局", () => {
     expect(list.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("待发图片用本地缩略图预览，卸载时回收 object URL；解码失败时退回文件图标", () => {
+  it("待发图片渲染为紧凑缩略图瓷砖（带文件名读屏与 tooltip），卸载时回收 object URL；解码失败时退回文件条", () => {
     const createSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:thumb-1");
     const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     try {
       const { container, unmount } = setup({ files: [{ key: "img", file: new File(["png"], "shot.png", { type: "image/png" }) }] });
-      const img = container.querySelector('li img[src="blob:thumb-1"]');
+      const img = container.querySelector('li.composer-thumb img[src="blob:thumb-1"]');
       expect(img).not.toBeNull();
+      expect(screen.getByText("shot.png")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove shot.png" })).toHaveClass("touch-target");
       expect(createSpy).toHaveBeenCalledTimes(1);
       fireEvent.error(img!);
+      expect(container.querySelector("li.composer-thumb")).toBeNull();
       expect(container.querySelector("li img")).toBeNull();
+      expect(screen.getByText("shot.png")).toBeInTheDocument();
       unmount();
       expect(revokeSpy).toHaveBeenCalledWith("blob:thumb-1");
     } finally {
