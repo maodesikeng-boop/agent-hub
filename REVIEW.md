@@ -115,19 +115,19 @@ Seen in: `2bdf6ff9`, `eb0386bd`, `4ba0f65d`, `50b3d57a`
 
 ### Front-end selectors return stable references
 
-Trigger: `src/web/selectors.ts`, `src/web/shell-model.ts`, `src/web/device-hub.ts`, `src/web/**/use*.ts`, `src/web/**/use*.tsx`
+Trigger: `src/web/App.tsx`, `src/web/selectors.ts`, `src/web/shell-model.ts`, `src/web/device-hub.ts`, `src/web/**/use*.ts`, `src/web/**/use*.tsx`
 
-Check: A selector or hook returns the same reference while its input is unchanged, for example through a `WeakMap` keyed on the input object, so it does not break `memo` in child components. A new selector has a case in `src/web/selectors-cache.test.ts`.
+Check: A selector or hook returns the same reference while its input is unchanged, for example through a `WeakMap` keyed on the input object, so it does not break `memo` in child components. Parent shell components (such as `App.tsx`) memoize JSX slots (`toolbar`, `leading`, `notices`), objects, and callbacks passed to `memo` children (`Conversation`, `DraftComposer`, `ProjectList`, `RailGroups`) directly or through pane wrappers; `src/web/streaming.test.tsx` asserts zero re-renders on background Worker pulses, and a new selector has a case in `src/web/selectors-cache.test.ts`.
 
-Seen in: `43d70fad`, `473db164`, `0fc0e181`
+Seen in: `43d70fad`, `473db164`, `0fc0e181`, `f52e5e95`, `9dd20f40`
 
 ### Stale in-flight queries never overwrite fresh mutations
 
 Trigger: `src/web/**`, `src/daemon/actions/**`
 
-Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them, but it cannot tell whether every write path advances the generation. On the daemon, a queued or retried action that publishes a result checks when it runs that its source is still the latest (same Worker, same report, no newer action) and drops itself otherwise, and actions that write the same target run on one lane.
+Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; whenever a mutation claims a ticket (`latest`) without advancing `gen`, advance both counters from `Math.max(gen, latest) + 1` so an invalidation cannot collide with or regress past an in-flight ticket. `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them or mixes decoupled `.latest` writes with `.latest = .gen` or direct increments, though it cannot tell whether every write path advances the generation. On the daemon, a queued or retried action that publishes a result checks when it runs that its source is still the latest (same Worker, same report, no newer action) and drops itself otherwise, and actions that write the same target run on one lane.
 
-Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`, `9f2269fa`
+Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`, `9f2269fa`, `c8241fe9`
 
 ### Interface changes come with a real-browser render
 
