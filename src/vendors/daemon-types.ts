@@ -38,7 +38,8 @@ export interface VendorDaemon {
   composer?: { base: VendorComposerBase; create(deps: VendorComposerDeps): VendorComposer };
   // Must not open a session, connect MCP, or run hooks.
   catalog?: { probe: VendorCatalogProbe; source(options: VendorCatalogSourceOptions): VendorCatalogSource };
-  queryQuota?(options: VendorQuotaQuery): Promise<QuotaResponse>;
+  /** Null means the current login does not provide subscription quota. */
+  queryQuota?(options: VendorQuotaQuery): Promise<QuotaResponse | null>;
   quotaScope?(home: string, env: NodeJS.ProcessEnv): string;
   forkers?: readonly SessionForker[];
   transcriptPath?(ref: TranscriptRef, roots: TranscriptRoots): string | null;

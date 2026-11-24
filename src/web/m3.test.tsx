@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledModelCatalog, vendorSpec } from "../shared/index.ts";
+import { bundledModelCatalog, FETCHED_QUOTA_FRESH_MS, vendorSpec } from "../shared/index.ts";
 import type { AgentVendor, Message, QuotaResponse, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { formatContext, formatCount, formatQuotaReset, formatTokens } from "./format.ts";
 import { App } from "./App.tsx";
@@ -515,6 +515,36 @@ describe("最左栏的额度", () => {
     expect(within(claude).queryByRole("progressbar", { name: "5h usage" })).not.toBeInTheDocument();
     expect(within(claude).getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "5");
     expect(within(screen.getByRole("group", { name: "Gemini" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
+  });
+
+  it("requests current quota while Usage is open and stops after it closes", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({
+      toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
+      shouldAdvanceTime: true,
+      now: T_BEFORE_RESET,
+    });
+    const user = userEvent.setup();
+    let utilization = 0.25;
+    const readQuota = vi.fn(() => ({ status: 200, body: {
+      groups: [{ vendor: "codex", id: "codex", windows: { five_hour: win(utilization) } }],
+    } }));
+    await boot(withWorker({ server: currentQuotaServer, sessions: [] }), (fake) => { fake.quota = readQuota; });
+    await within(railNav()).findByRole("button", { name: /5h usage 25%/ });
+    await act(() => vi.advanceTimersByTimeAsync(10 * FETCHED_QUOTA_FRESH_MS));
+    expect(readQuota).toHaveBeenCalledTimes(1);
+    expect(badge()).toHaveAccessibleName("Usage");
+
+    utilization = 0.5;
+    await user.click(badge());
+    expect(await screen.findByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "50");
+    expect(readQuota).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(FETCHED_QUOTA_FRESH_MS));
+    expect(readQuota).toHaveBeenCalledTimes(3);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(10 * FETCHED_QUOTA_FRESH_MS));
+    expect(readQuota).toHaveBeenCalledTimes(3);
   });
 
   describe("按需查的额度（agy）", () => {

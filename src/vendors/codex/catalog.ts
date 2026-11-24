@@ -123,6 +123,15 @@ interface CodexCall {
   optional?: boolean;
 }
 
+export class CodexRpcError extends Error {
+  readonly rpcMessage: string;
+
+  constructor(rpcMessage: string) {
+    super(`codex 回了错误：${rpcMessage}`);
+    this.rpcMessage = rpcMessage;
+  }
+}
+
 export function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly CodexCall[]): Promise<unknown[]> {
   const { codexPath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   const label = calls.map((c) => c.method).join("、");
@@ -203,7 +212,7 @@ export function queryCodexAppServer(options: CodexModelQueryOptions, calls: read
       if (call === undefined || index in results) return;
       if (o.error !== undefined) {
         if (!call.optional) {
-          finish(new Error(`codex 回了错误：${errorText(o.error)}`));
+          finish(new CodexRpcError(errorText(o.error)));
           return;
         }
         results[index] = undefined;

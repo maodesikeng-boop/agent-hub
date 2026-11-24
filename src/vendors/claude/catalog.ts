@@ -108,7 +108,7 @@ export function queryClaudeControl(options: ClaudeModelQueryOptions, afterInitia
       return reject(err);
     }
     const { child, detached } = spawned;
-    trackChild(child, "probe:claude-initialize", { detached });
+    trackChild(child, afterInitialize === "get_usage" ? "probe:claude-quota" : "probe:claude-initialize", { detached });
     let requestId = `initialize-${randomUUID()}`;
     let stderr = "";
     let settled = false;

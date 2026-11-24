@@ -245,6 +245,7 @@ export const PICK_FOLDER_TIMEOUT_MS = 5 * 60 * 1000;
 export const FETCHED_QUOTA_FRESH_MS = 60_000;
 export const FETCHED_QUOTA_RETRY_MS = 30_000;
 export const FETCHED_QUOTA_TIMEOUT_MS = 20_000;
+export const CLAUDE_QUOTA_ACCOUNT_CACHE_MAX_ENTRIES = 1;
 
 export const UPDATE_RELEASE_REPO = "maodesikeng-boop/agent-hub";
 export const UPDATE_CHECK_TTL_MS = 60 * 60_000;

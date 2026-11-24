@@ -469,7 +469,7 @@ function DesktopWorkbench({
         selectedComputer={c.routerActive ? null : current.key}
         meter={meter}
         quota={quota}
-        quotaFetchable={state.server.currentQuota !== true && c.quotaFetchable}
+        quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
         onSelectComputer={c.selectComputer}
         onOpenSettings={() => c.openSettingsSection("scale")}
         onOpenUpdates={() => c.openSettingsSection("updates")}
@@ -769,7 +769,11 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const model = useShellModel({ autoSelect: !mobile });
   const { qc, fleet, current, hub, state, content } = model;
-  const currentQuota = useCurrentQuota(qc, hub.client, state.phase === "ready" && state.server.currentQuota === true);
+  const mobileUsageVisible = mobile && model.route?.view === "settings" && model.route.section === undefined;
+  const currentQuota = useCurrentQuota(qc, hub.client, {
+    enabled: state.phase === "ready" && state.server.currentQuota === true && (!mobile || mobileUsageVisible),
+    visible: mobileUsageVisible,
+  });
   const hasContent = content !== null;
   const openManageProvidersRef = content?.openManageProviders;
   const openCurrentProviders = useCallback(() => openManageProvidersRef?.(current.key), [openManageProvidersRef, current.key]);

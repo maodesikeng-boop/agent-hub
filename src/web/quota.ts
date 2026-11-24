@@ -1,6 +1,6 @@
-import { useQuery, type QueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery, type QueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, type QuotaResponse } from "../shared/index.ts";
+import { FETCHED_QUOTA_FRESH_MS, type QuotaResponse } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 import { refreshDeviceModels } from "./models.tsx";
 import { fetchedQuotaUsage, type QuotaVendor } from "./selectors.ts";
@@ -10,6 +10,14 @@ const EMPTY: QuotaResponse = { groups: [] };
 const NO_QUOTA: QuotaVendor[] = [];
 const currentQuotaKey = (client: HubClient) => ["current-quota", client.device ?? ""] as const;
 
+export function quotaQueryOptions(client: HubClient, current: boolean) {
+  return queryOptions({
+    queryKey: current ? currentQuotaKey(client) : ["quota", client.device ?? ""],
+    queryFn: ({ signal }) => client.fetchQuota(signal).catch(() => EMPTY),
+    staleTime: 0,
+  });
+}
+
 export function refreshProviderData(qc: QueryClient, client: HubClient) {
   refreshDeviceModels(qc, client);
   const queryKey = currentQuotaKey(client);
@@ -17,14 +25,17 @@ export function refreshProviderData(qc: QueryClient, client: HubClient) {
   void qc.resetQueries({ queryKey, exact: true });
 }
 
-export function useCurrentQuota(qc: QueryClient, client: HubClient, enabled: boolean): QuotaVendor[] {
+export function useCurrentQuota(
+  qc: QueryClient,
+  client: HubClient,
+  { enabled, visible }: { enabled: boolean; visible: boolean },
+): QuotaVendor[] {
   const { data, dataUpdatedAt } = useQuery({
-    queryKey: currentQuotaKey(client),
-    queryFn: ({ signal }) => client.fetchQuota(signal).catch(() => EMPTY),
+    ...quotaQueryOptions(client, true),
     enabled,
-    staleTime: 0,
-    refetchOnWindowFocus: true,
-    refetchInterval: enabled ? FETCHED_QUOTA_RETRY_MS : false,
+    refetchOnWindowFocus: visible,
+    refetchOnReconnect: visible,
+    refetchInterval: visible ? FETCHED_QUOTA_FRESH_MS : false,
   }, qc);
   const expires = dataUpdatedAt + FETCHED_QUOTA_FRESH_MS;
   const resets = useMemo(() => data?.groups.flatMap((g) => Object.values(g.windows).map((w) => w.resetsAt * 1000)) ?? [], [data]);

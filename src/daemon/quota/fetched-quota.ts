@@ -31,11 +31,11 @@ export interface QueryFetchedQuotaOptions {
   signal?: AbortSignal;
 }
 
-export async function queryFetchedQuota(options: QueryFetchedQuotaOptions): Promise<QuotaResponse> {
+export async function queryFetchedQuota(options: QueryFetchedQuotaOptions): Promise<QuotaResponse | null> {
   const { vendor, path, spec, cwd, env, signal, timeoutMs = FETCHED_QUOTA_TIMEOUT_MS } = options;
   const { code, stdout } = await runShortSubcommand(path, spec.args, { cwd, env, timeoutMs, signal, purpose: `probe:${vendor}-quota` });
   if (code !== 0) throw new Error(`Could not read ${vendor} quota`);
-  return parseFetchedQuota(stdout, spec, vendor);
+  return stdout.trim() === "" ? null : parseFetchedQuota(stdout, spec, vendor);
 }
 
 export interface FetchedQuota {
@@ -63,7 +63,7 @@ function currentWindows(value: QuotaResponse, at: number): { value: QuotaRespons
 }
 
 export function createFetchedQuota(options: {
-  query: ((signal: AbortSignal) => Promise<QuotaResponse>) | undefined;
+  query: ((signal: AbortSignal) => Promise<QuotaResponse | null>) | undefined;
   fingerprint?: () => string;
   now?: () => number;
 }): CachedQuota {
@@ -98,7 +98,7 @@ export function createFetchedQuota(options: {
           if (inflight?.abort !== abort) return EMPTY;
           inflight = undefined;
           if (key !== fingerprint()) return EMPTY;
-          cached = currentWindows(value, now());
+          cached = value === null ? { value: EMPTY, until: Infinity } : currentWindows(value, now());
           return cached.value;
         });
       inflight = { abort, result };

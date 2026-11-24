@@ -1,13 +1,13 @@
 import { join } from "node:path";
 import { LRUCache } from "lru-cache";
-import { MAX_VENDOR_SYNC_CONFIG_BYTES, type QuotaResponse } from "../../shared/index.ts";
+import { CLAUDE_QUOTA_ACCOUNT_CACHE_MAX_ENTRIES, MAX_VENDOR_SYNC_CONFIG_BYTES, type QuotaResponse } from "../../shared/index.ts";
 import { readBoundedJsonObject } from "../_common/setup/file-helpers.ts";
 import { fileStamp } from "../_common/setup/file-stamp.ts";
 import type { VendorQuotaQuery } from "../daemon-types.ts";
 import { queryClaudeControl } from "./catalog.ts";
 import spec from "./spec.ts";
 
-const accountByFile = new LRUCache<string, { stamp: string; account: string }>({ max: 1 });
+const accountByFile = new LRUCache<string, { stamp: string; account: string }>({ max: CLAUDE_QUOTA_ACCOUNT_CACHE_MAX_ENTRIES });
 
 function accountScope(file: string): string {
   const stamp = fileStamp(file);
@@ -42,6 +42,7 @@ function parseClaudeQuota(usage: Record<string, unknown>): QuotaResponse {
   return { groups: Object.keys(windows).length > 0 ? [{ vendor: spec.id, id: spec.id, windows }] : [] };
 }
 
-export async function queryClaudeQuota({ path, ...options }: VendorQuotaQuery): Promise<QuotaResponse> {
-  return parseClaudeQuota(await queryClaudeControl({ ...options, claudePath: path }, "get_usage"));
+export async function queryClaudeQuota({ path, ...options }: VendorQuotaQuery): Promise<QuotaResponse | null> {
+  const usage = await queryClaudeControl({ ...options, claudePath: path }, "get_usage");
+  return usage.rate_limits_available === false ? null : parseClaudeQuota(usage);
 }

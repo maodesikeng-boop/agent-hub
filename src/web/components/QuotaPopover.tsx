@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { FETCHED_QUOTA_FRESH_MS } from "../../shared/index.ts";
 import { Hourglass } from "../ui/icons.ts";
 import { memo, useState } from "react";
 import { useClient } from "../device-scope.tsx";
@@ -6,10 +7,10 @@ import { formatQuotaReset } from "../format.ts";
 import { fetchedQuotaUsage, type QuotaVendor, type QuotaWindowUsage } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
+import { quotaQueryOptions } from "../quota.ts";
+import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
-
-const QUOTA_REFETCH_INTERVAL_MS = 60_000;
 
 const USAGE_BAR_COLORS = { normal: "bg-rail-ink", high: "bg-caution", full: "bg-danger" } as const;
 
@@ -69,25 +70,21 @@ export const QuotaPopover = memo(function QuotaPopover({
   const [open, setOpen] = useState(false);
   const client = useClient();
   const qc = useHubQueryClient();
-  const { data: fetched = [], isFetching: loading } = useQuery(
+  const current = useServerInfo().currentQuota === true;
+  const reading = open && fetchable;
+  const { data, isFetching: loading } = useQuery(
     {
-      queryKey: ["quota", client.device ?? ""] as const,
-      queryFn: async () => {
-        try {
-          return fetchedQuotaUsage(await client.fetchQuota());
-        } catch {
-          return [];
-        }
-      },
-      enabled: open && fetchable,
-      staleTime: 0,
-      refetchInterval: open && fetchable ? QUOTA_REFETCH_INTERVAL_MS : false,
+      ...quotaQueryOptions(client, current),
+      enabled: reading,
+      refetchOnWindowFocus: current && reading,
+      refetchInterval: reading ? FETCHED_QUOTA_FRESH_MS : false,
     },
     qc,
   );
   const inHeader = placement === "header";
   const head = quota[0];
   const window = head?.windows[0];
+  const fetched = !current && data ? fetchedQuotaUsage(data) : [];
   if (!window && !fetchable && trigger === undefined) return null;
   const blocks = [...quota, ...fetched];
   const exhausted =
@@ -129,7 +126,7 @@ export const QuotaPopover = memo(function QuotaPopover({
               </div>
             </section>
           ))}
-          {loading && fetched.length === 0 && <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>}
+          {loading && (current ? quota.length === 0 : fetched.length === 0) && <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>}
           {!loading && blocks.length === 0 && <p className="px-4 py-3 text-minor text-muted-foreground">No usage reported yet</p>}
         </div>
       </PopoverContent>

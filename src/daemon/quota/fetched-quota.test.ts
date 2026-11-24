@@ -1,5 +1,12 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, vendorSpec, type QuotaResponse } from "../../shared/index.ts";
+import { queryClaudeQuota } from "../../vendors/claude/quota.ts";
+import { queryCodexQuota } from "../../vendors/codex/quota.ts";
+import type { VendorQuotaQuery } from "../../vendors/daemon-types.ts";
 import { createFetchedQuota, mergeFetchedQuotas, parseFetchedQuota, queryFetchedQuota } from "./fetched-quota.ts";
 
 const spec = vendorSpec("agy").quota!.fetched!;
@@ -111,6 +118,22 @@ describe("createFetchedQuota（缓存）", () => {
     expect(await createFetchedQuota({ query: undefined }).get()).toEqual({ groups: [] });
   });
 
+  it("does not probe again after a provider confirms it has no quota until the login changes", async () => {
+    let now = 1_000;
+    let account = "api-key";
+    const query = vi.fn(async () => account === "api-key" ? null : sample);
+    const quota = createFetchedQuota({ query, now: () => now, fingerprint: () => account });
+    expect(await quota.get()).toEqual({ groups: [] });
+    for (let i = 0; i < 10; i++) {
+      now += FETCHED_QUOTA_FRESH_MS;
+      expect(await quota.get()).toEqual({ groups: [] });
+    }
+    expect(query).toHaveBeenCalledTimes(1);
+    account = "subscription";
+    expect(await quota.get()).toEqual(sample);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
   it("drops an old account's in-flight result after credentials change", async () => {
     let account = "old";
     let finishOld!: (result: QuotaResponse) => void;
@@ -142,6 +165,67 @@ describe("createFetchedQuota（缓存）", () => {
 describe("queryFetchedQuota", () => {
   it("程序不存在：报错（上面当失败处理）", async () => {
     await expect(queryFetchedQuota({ vendor: "agy", path: "/nonexistent/agy", spec, cwd: "/tmp" })).rejects.toThrow();
+  });
+});
+
+describe("provider responses without quota", () => {
+  const codexError = (code: number, message: string) => `
+    require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+      const request = JSON.parse(line);
+      if (request.method === "account/rateLimits/read") {
+        console.log(JSON.stringify({ id: request.id, error: { code: ${code}, message: ${JSON.stringify(message)} } }));
+      }
+    });
+  `;
+
+  const probes = [
+    {
+      provider: "Claude",
+      script: `
+        require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+          const request = JSON.parse(line);
+          console.log(JSON.stringify({
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: request.request_id,
+              response: { rate_limits_available: false, rate_limits: null },
+            },
+          }));
+        });
+      `,
+      query: queryClaudeQuota,
+    },
+    {
+      provider: "Codex",
+      script: codexError(-32600, "chatgpt authentication required to read rate limits"),
+      query: queryCodexQuota,
+    },
+    {
+      provider: "Antigravity",
+      script: "process.exit(0);",
+      query: (options: VendorQuotaQuery) => queryFetchedQuota({ ...options, vendor: "agy", spec }),
+    },
+  ];
+
+  const usingFixture = async (script: string, run: (options: VendorQuotaQuery) => Promise<void>) => {
+    const cwd = mkdtempSync(join(tmpdir(), "quota-probe-"));
+    try {
+      const path = writeExecutableNodeScript(join(cwd, "fixture"), script);
+      await run({ cwd, path, env: process.env, signal: new AbortController().signal, timeoutMs: 5_000 });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  };
+
+  it.each(probes)("$provider reports no subscription quota", async ({ script, query }) => {
+    await usingFixture(script, async (options) => expect(await query(options)).toBeNull());
+  });
+
+  it("keeps a failed Codex usage request retryable", async () => {
+    await usingFixture(codexError(-32603, "usage endpoint timed out"), async (options) => {
+      await expect(queryCodexQuota(options)).rejects.toThrow("usage endpoint timed out");
+    });
   });
 });
 
