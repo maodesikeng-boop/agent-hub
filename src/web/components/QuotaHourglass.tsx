@@ -8,7 +8,7 @@ const BULB_TOP_Y = 4;
 const BULB_NECK_Y = 11.3;
 const BULB_SAMPLES = 64;
 
-export type HourglassTone = "normal" | "warning" | "full";
+type HourglassTone = "normal" | "warning" | "full";
 
 function cubic(t: number, a: number, b: number, c: number, d: number): number {
   const u = 1 - t;
