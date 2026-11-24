@@ -471,6 +471,7 @@ function DesktopWorkbench({
         quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
         onSelectComputer={c.selectComputer}
         onOpenSettings={() => c.openSettingsSection("scale")}
+        settingsOpen={c.desktopSettingsOpen}
         onOpenUpdates={() => c.openSettingsSection("updates")}
         onOpenAccount={() => c.openSettingsSection(c.accountTarget)}
       />

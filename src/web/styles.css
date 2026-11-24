@@ -594,10 +594,11 @@ input[type="search"]::-webkit-search-cancel-button {
     opacity: 0;
   }
 }
-[data-slot="dialog-overlay"][data-state="open"] {
+[data-slot="dialog-overlay"][data-state="open"],
+[data-slot="dialog-content"][data-page][data-state="open"] {
   animation: overlay-in var(--motion-surface) ease-out;
 }
-[data-slot="dialog-content"][data-state="open"]:not([data-fullscreen]),
+[data-slot="dialog-content"][data-state="open"]:not([data-fullscreen], [data-page]),
 [data-slot="popover-content"][data-state="open"],
 [data-slot="select-content"][data-state="open"] {
   transform-origin: var(--radix-popover-content-transform-origin, var(--radix-select-content-transform-origin, center));
