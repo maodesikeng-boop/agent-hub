@@ -388,7 +388,8 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(input).not.toHaveClass("text-minor");
     const frame = input.closest("[data-card-reply]")!;
     expect(frame).toContainElement(send);
-    expect(frame).toHaveClass("rounded-sm", "border", "border-border-strong", "bg-background", "focus-within:field-focus");
+    // Same recipe as the chat composer, so the field reads as the place to type without a visible label.
+    expect(frame).toHaveClass("rounded-sm", "border", "border-border-strong", "bg-background", "shadow-[var(--shadow-tile)]", "focus-within:field-focus");
     expect(send).toHaveClass("size-8");
 
     fireEvent.change(input, { target: { value: "第一行" } });
