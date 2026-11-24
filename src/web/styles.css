@@ -1227,22 +1227,23 @@ input[type="search"]::-webkit-search-cancel-button {
 [data-shell="mobile"] .composer-dock { padding-bottom: 8px; }
 
 /* The sheet sits on the honey frame as paper: a hairline ring and a soft drop instead of a drawn outline. */
+/* Regions part by tone, not lines: the PM list sits on the cream frame and each content pane is a white sheet 6px away. */
+.shell-frame {
+  padding-right: 6px;
+  background: var(--list);
+}
 .shell-sheet {
-  margin: 6px 6px 6px 0;
+  margin-block: 6px;
   border-radius: var(--radius-sm);
   background: var(--background);
-  box-shadow:
-    0 0 0 1px rgb(74 46 0 / 0.12),
-    0 1px 3px rgb(74 46 0 / 0.14);
 }
 
 .pane-handle {
   position: relative;
-  width: 1px;
+  width: 6px;
   flex: none;
   z-index: 3;
   outline: none;
-  background: var(--border);
 }
 .pane-handle-bar,
 .pane-handle-grip {
@@ -1251,15 +1252,16 @@ input[type="search"]::-webkit-search-cancel-button {
   position: absolute;
 }
 .pane-handle-bar {
-  top: 0;
-  bottom: 0;
-  left: -1px;
-  width: 3px;
+  top: 6px;
+  bottom: 6px;
+  left: 2px;
+  width: 2px;
+  border-radius: 9999px;
   background: var(--rail-shade);
 }
 .pane-handle-grip {
   top: 50%;
-  left: -5px;
+  left: -2.5px;
   width: 11px;
   height: 32px;
   margin-top: -16px;

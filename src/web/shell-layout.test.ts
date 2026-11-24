@@ -12,7 +12,7 @@ describe("shellLimitsPx", () => {
       panel: { min: 360, default: 440, max: 720 },
       chatMin: 480,
       frame: 6,
-      seam: 1,
+      seam: 6,
     });
     expect(shellLimitsPx(17.5)).toEqual({
       rail: 78.75,
@@ -21,7 +21,7 @@ describe("shellLimitsPx", () => {
       panel: { min: 393.75, default: 481.25, max: 787.5 },
       chatMin: 525,
       frame: 6,
-      seam: 1,
+      seam: 6,
     });
   });
 
@@ -29,34 +29,34 @@ describe("shellLimitsPx", () => {
     for (const remPx of [14.5, 16, 17.5, 19]) {
       const limits = shellLimitsPx(remPx);
       expect(limits.frame).toBe(6);
-      expect(limits.seam).toBe(1);
+      expect(limits.seam).toBe(6);
     }
   });
 });
 
 describe("shellTierOf", () => {
-  it("returns wide at 1140px and strip at 1139px with the panel open at the Default scale", () => {
-    expect(shellTierOf({ shellWidthPx: 1140, remPx: 16, panelOpen: true })).toBe("wide");
-    expect(shellTierOf({ shellWidthPx: 1139, remPx: 16, panelOpen: true })).toBe("strip");
+  it("returns wide at 1150px and strip at 1149px with the panel open at the Default scale", () => {
+    expect(shellTierOf({ shellWidthPx: 1150, remPx: 16, panelOpen: true })).toBe("wide");
+    expect(shellTierOf({ shellWidthPx: 1149, remPx: 16, panelOpen: true })).toBe("strip");
   });
 
-  it("returns strip down to 992px and stack below it with the panel open at the Default scale", () => {
-    expect(shellTierOf({ shellWidthPx: 992, remPx: 16, panelOpen: true })).toBe("strip");
-    expect(shellTierOf({ shellWidthPx: 991, remPx: 16, panelOpen: true })).toBe("stack");
+  it("returns strip down to 1002px and stack below it with the panel open at the Default scale", () => {
+    expect(shellTierOf({ shellWidthPx: 1002, remPx: 16, panelOpen: true })).toBe("strip");
+    expect(shellTierOf({ shellWidthPx: 1001, remPx: 16, panelOpen: true })).toBe("stack");
   });
 
-  it("uses the Large thresholds of 1247px, 1085px, and 852px at a 17.5px root", () => {
-    expect(shellTierOf({ shellWidthPx: 1247, remPx: 17.5, panelOpen: true })).toBe("wide");
-    expect(shellTierOf({ shellWidthPx: 1246, remPx: 17.5, panelOpen: true })).toBe("strip");
-    expect(shellTierOf({ shellWidthPx: 1085, remPx: 17.5, panelOpen: true })).toBe("strip");
-    expect(shellTierOf({ shellWidthPx: 1084, remPx: 17.5, panelOpen: true })).toBe("stack");
-    expect(shellTierOf({ shellWidthPx: 852, remPx: 17.5, panelOpen: false })).toBe("wide");
-    expect(shellTierOf({ shellWidthPx: 851, remPx: 17.5, panelOpen: false })).toBe("strip");
+  it("uses the Large thresholds of 1257px, 1095px, and 857px at a 17.5px root", () => {
+    expect(shellTierOf({ shellWidthPx: 1257, remPx: 17.5, panelOpen: true })).toBe("wide");
+    expect(shellTierOf({ shellWidthPx: 1256, remPx: 17.5, panelOpen: true })).toBe("strip");
+    expect(shellTierOf({ shellWidthPx: 1095, remPx: 17.5, panelOpen: true })).toBe("strip");
+    expect(shellTierOf({ shellWidthPx: 1094, remPx: 17.5, panelOpen: true })).toBe("stack");
+    expect(shellTierOf({ shellWidthPx: 857, remPx: 17.5, panelOpen: false })).toBe("wide");
+    expect(shellTierOf({ shellWidthPx: 856, remPx: 17.5, panelOpen: false })).toBe("strip");
   });
 
-  it("returns wide at 779px and strip below it with the panel closed at the Default scale", () => {
-    expect(shellTierOf({ shellWidthPx: 779, remPx: 16, panelOpen: false })).toBe("wide");
-    expect(shellTierOf({ shellWidthPx: 778, remPx: 16, panelOpen: false })).toBe("strip");
+  it("returns wide at 784px and strip below it with the panel closed at the Default scale", () => {
+    expect(shellTierOf({ shellWidthPx: 784, remPx: 16, panelOpen: false })).toBe("wide");
+    expect(shellTierOf({ shellWidthPx: 783, remPx: 16, panelOpen: false })).toBe("strip");
   });
 
   it("never returns stack while the panel is closed, however narrow the shell", () => {

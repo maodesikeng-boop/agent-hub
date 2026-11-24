@@ -11,6 +11,6 @@ export const SHELL_STRIP_REM = 4.5;
 export const SHELL_LIST_REM = { min: 13.75, default: 16.5, max: 25 } as const;
 export const SHELL_PANEL_REM = { min: 22.5, default: 27.5, max: 45 } as const;
 export const SHELL_CHAT_MIN_REM = 30;
-// The sheet's 6px right inset (its edge is a shadow, not an outline) and the 1px column seams, drawn in px like every line.
+// The cream frame's 6px right inset and the 6px gaps between the list and the white sheets, in px like every line.
 export const SHELL_FRAME_PX = 6;
-export const SHELL_SEAM_PX = 1;
+export const SHELL_SEAM_PX = 6;

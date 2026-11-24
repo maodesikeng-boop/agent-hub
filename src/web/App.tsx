@@ -475,9 +475,9 @@ function DesktopWorkbench({
         onOpenAccount={() => c.openSettingsSection(c.accountTarget)}
       />
 
-      <div className="shell-sheet flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div className="shell-frame flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {c.routerActive ? (
-          <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+          <main className="shell-sheet chat-main ml-1.5 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <RouterWorkbench
               toolbar={null}
               notices={notices}
@@ -495,7 +495,7 @@ function DesktopWorkbench({
           </main>
         ) : (
           <>
-            {tier !== "wide" && listNode("strip")}
+            {tier !== "wide" && <div className="flex shrink-0 py-1.5 pr-1.5">{listNode("strip")}</div>}
             <PaneGroup id="shell-panes">
               {tier === "wide" && (
                 <>
@@ -507,7 +507,7 @@ function DesktopWorkbench({
                     maxRem={SHELL_LIST_REM.max}
                     onCommit={(rem) => commit("list", rem)}
                   >
-                    {listNode("column")}
+                    <div className="flex min-h-0 flex-1 flex-col py-1.5">{listNode("column")}</div>
                   </Pane>
                   <PaneHandle label="Resize project list" onReset={() => reset("list")} />
                 </>
@@ -520,7 +520,7 @@ function DesktopWorkbench({
               >
                 <Activity mode={stackPanel ? "hidden" : "visible"}>
                   <AccentScope color={tintColor}>
-                    <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+                    <main className="shell-sheet chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                       <ConversationPane
                         model={model}
                         content={c}

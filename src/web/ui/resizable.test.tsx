@@ -126,12 +126,13 @@ describe("PaneHandle", () => {
     expect(css).toContain('.pane-handle[data-separator="active"] .pane-handle-bar');
   });
 
-  it("draws every column seam as one 1px structure line", () => {
+  it("parts columns with a 6px gap of the frame's tone instead of a line, showing the honey bar only while dragging or focused", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const handle = /\.pane-handle \{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(handle).toMatch(/width: 1px;/);
-    expect(handle).toMatch(/background: var\(--border\);/);
-    expect(css).not.toMatch(/\.pane-handle\[data-tone=/);
+    expect(handle).toMatch(/width: 6px;/);
+    expect(handle).not.toMatch(/background/);
+    expect(css).toMatch(/\.shell-frame \{[^}]*background: var\(--list\);/);
+    expect(css).toMatch(/\.shell-sheet \{[^}]*margin-block: 6px;[^}]*background: var\(--background\);/);
   });
 });
 
