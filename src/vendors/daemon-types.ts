@@ -176,6 +176,7 @@ export interface VendorSyncAdapter {
     },
   ): VendorMcpPatchPlan;
   skillTarget(ctx: VendorSyncContext, scope: { kind: "global" } | { kind: "project"; projectDir: string }): VendorSkillTarget;
+  mcpConfigPaths?(ctx: VendorSyncContext): readonly string[];
   scanCapabilities?(ctx: VendorSyncContext, scope: { projectDir: string | null }): Promise<VendorCapabilityScan>;
 }
 
