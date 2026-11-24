@@ -127,14 +127,21 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       if (input.recovery) st.recoveryNote = true;
       const proc = st.proc;
       if (proc && this.#canWriteMidTurn(st, proc, entry)) {
-        const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
-        batch.midTurn = true;
-        const outcome = await this.#writeMidTurn(st, proc, batch);
+        const outcome = await this.steerWithCurrentCapabilities(st, proc, entry, () => this.#canWriteMidTurn(st, proc, entry), async () => {
+          const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
+          batch.midTurn = true;
+          const result = await this.#writeMidTurn(st, proc, batch);
+          if (result === "retry") {
+            this.dropBatch(st, batch);
+            if (!st.ended) st.pending.unshift(entry);
+          }
+          return result;
+        });
         if (outcome === "written") return { kind: "written", midTurn: true };
         if (outcome === "cancelled") return { kind: "cancelled" };
-        this.dropBatch(st, batch);
+      } else {
+        st.pending.push(entry);
       }
-      st.pending.push(entry);
     }
     await this.pump(st);
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };

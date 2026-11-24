@@ -492,7 +492,7 @@ describe("prepareLaunch（M2、M3）", () => {
       truncated: false,
     };
 
-    it("全开（defaultCapabilityPolicy）时 capabilities 为 undefined，设置文件和 fingerprint 与未接入时逐字一致", async () => {
+    it("keeps launch settings unchanged under the all-open policy while tracking inventory changes", async () => {
       const baseline = await make()(row(7));
       const withAllOpen = createLaunchPreparer({ sessionTmp,
         launchDir,
@@ -511,7 +511,7 @@ describe("prepareLaunch（M2、M3）", () => {
       const files = await withAllOpen(row(7));
       expect(files.capabilities).toBeUndefined();
       expect(readFileSync(files.settingsFile!, "utf8")).toBe(readFileSync(baseline.settingsFile!, "utf8"));
-      expect(files.fingerprint).toBe(baseline.fingerprint);
+      expect(files.fingerprint).not.toBe(baseline.fingerprint);
     });
 
     it("PM 与名下普通、只读、审查 Worker 均继承该 PM 选择并计入 fingerprint；总助不跟项目走，默认一个不带", async () => {
@@ -675,7 +675,7 @@ describe("prepareLaunch（M2、M3）", () => {
       expect(custom.writeScope).toEqual(plain.writeScope);
     });
 
-    it("fingerprint 只算各家翻出来的结果：多了一个开着的全局技能，claude、codex 不重启，靠允许清单的 pi 重启", async () => {
+    it("refreshes only the vendors that can see the added global skill", async () => {
       const policy = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), {
         set: { "skill:aws-auth": false, "mcp:codegraph": false },
       });
@@ -700,6 +700,7 @@ describe("prepareLaunch（M2、M3）", () => {
         claude: (await prepare(row(7))).fingerprint,
         codex: (await prepare({ ...row(9, dir, "worker"), vendor: "codex" })).fingerprint,
         pi: (await prepare({ ...row(9, dir, "worker"), vendor: "pi" })).fingerprint,
+        cursor: (await prepare({ ...row(9, dir, "worker"), vendor: "cursor" })).fingerprint,
       };
       inventory = {
         ...sampleInventory,
@@ -720,10 +721,12 @@ describe("prepareLaunch（M2、M3）", () => {
         claude: (await prepare(row(7))).fingerprint,
         codex: (await prepare({ ...row(9, dir, "worker"), vendor: "codex" })).fingerprint,
         pi: (await prepare({ ...row(9, dir, "worker"), vendor: "pi" })).fingerprint,
+        cursor: (await prepare({ ...row(9, dir, "worker"), vendor: "cursor" })).fingerprint,
       };
-      expect(after.claude).toBe(before.claude);
-      expect(after.codex).toBe(before.codex);
+      expect(after.claude).not.toBe(before.claude);
+      expect(after.codex).not.toBe(before.codex);
       expect(after.pi).not.toBe(before.pi);
+      expect(after.cursor).toBe(before.cursor);
     });
   });
 });

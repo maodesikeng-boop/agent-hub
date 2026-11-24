@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -22,6 +22,8 @@ import {
 } from "../shared/index.ts";
 import type {
   AgentSessionRow,
+  AgentVendor,
+  CapabilityInventory,
   CapabilityPolicy,
   LaunchContext,
   LaunchFiles,
@@ -86,18 +88,51 @@ function sessionRole(ctx: LaunchContext): SessionRole {
 async function sessionCapabilities(
   inventory: LaunchPreparerOptions["capabilityInventory"],
   vendor: string,
-  policy: CapabilityPolicy | undefined,
+  readPolicy: () => CapabilityPolicy | undefined,
   projectDir: string | null,
-): Promise<SessionCapabilities | undefined> {
-  if (inventory === undefined || policy === undefined || !isAgentVendor(vendor)) return undefined;
-  return resolveSessionCapabilities(policy, await inventory.get({ projectDir }), vendor) ?? undefined;
+): Promise<{ capabilities?: SessionCapabilities; capabilityFingerprint?: string }> {
+  if (inventory === undefined || !isAgentVendor(vendor)) return {};
+  const snapshot = await inventory.get({ projectDir });
+  const policy = readPolicy();
+  if (policy === undefined) return {};
+  const capabilities = resolveSessionCapabilities(policy, snapshot, vendor) ?? undefined;
+  const launch = capabilities === undefined ? undefined : VENDOR_DAEMONS[vendor].capabilityLaunch?.(capabilities);
+  const external = inventoryFingerprint(snapshot, vendor);
+  const capabilityFingerprint = external === undefined && launch === undefined ? undefined : hash([external, launch]);
+  return { capabilities, capabilityFingerprint };
 }
 
-// Workers narrow their project's policy; readonly enforcement stays independent of whatever gets mounted.
-function agentCapabilityPolicy(options: LaunchPreparerOptions, ctx: LaunchContext): CapabilityPolicy | undefined {
-  const project = options.capabilityPolicies?.getPmCapabilityPolicy(ctx.pm.id);
-  if (project === undefined || ctx.role !== "worker") return project;
-  return workerCapabilityPolicy(project, ctx.workerCapabilities ?? INHERIT_WORKER_CAPABILITIES);
+const inventoryFingerprints = new WeakMap<CapabilityInventory, Map<AgentVendor, string | undefined>>();
+
+function hash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function inventoryFingerprint(snapshot: CapabilityInventory, vendor: AgentVendor): string | undefined {
+  let cached = inventoryFingerprints.get(snapshot);
+  if (cached === undefined) {
+    cached = new Map();
+    inventoryFingerprints.set(snapshot, cached);
+  }
+  if (cached.has(vendor)) return cached.get(vendor);
+  const items = snapshot.items
+    .filter((item) => item.vendors.includes(vendor))
+    .map((item) => [item.key, item.skillDirs?.[vendor] ?? item.dir, item.plugins?.[vendor], item.description]);
+  const fingerprint = items.length === 0 ? undefined : hash(items);
+  cached.set(vendor, fingerprint);
+  return fingerprint;
+}
+
+function agentCapabilityReader(options: LaunchPreparerOptions, vendor: AgentVendor | null, ctx: LaunchContext) {
+  const { capabilityInventory, capabilityPolicies } = options;
+  if (capabilityInventory === undefined || capabilityPolicies === undefined || vendor === null) return undefined;
+  const pmId = ctx.pm.id;
+  const worker = ctx.role === "worker" ? ctx.workerCapabilities ?? INHERIT_WORKER_CAPABILITIES : null;
+  const projectDir = ctx.project?.mainFolder.trim() || null;
+  return () => sessionCapabilities(capabilityInventory, vendor, () => {
+    const project = capabilityPolicies.getPmCapabilityPolicy(pmId);
+    return worker === null ? project : workerCapabilityPolicy(project, worker);
+  }, projectDir);
 }
 
 async function prepareRouterLaunch(
@@ -113,7 +148,7 @@ async function prepareRouterLaunch(
   },
 ): Promise<LaunchFiles> {
   const { launchDir, dataDir, stateDir } = options;
-  const capabilities = await sessionCapabilities(options.capabilityInventory, session.vendor, options.capabilityPolicies?.getRouterCapabilityPolicy(), null);
+  const { capabilities } = await sessionCapabilities(options.capabilityInventory, session.vendor, () => options.capabilityPolicies?.getRouterCapabilityPolicy(), null);
   const files = prepareRouterSandboxLaunch(session, {
     launchDir,
     dataDir,
@@ -182,7 +217,8 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
           });
     // Vendors that enforce readonly through settings (claude's own sandbox) are not wrapped in the outer sandbox, because sandboxes cannot nest.
     const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
-    const capabilities = await sessionCapabilities(options.capabilityInventory, session.vendor, agentCapabilityPolicy(options, ctx), ctx.project?.mainFolder.trim() || null);
+    const readCapabilities = agentCapabilityReader(options, vendor, ctx);
+    const { capabilities, capabilityFingerprint } = (await readCapabilities?.()) ?? {};
     const nativeReadonly = readonlyPolicy !== undefined && vendor !== null && vendorSpec(vendor).capabilities.readonly === "settings";
     const vendorFiles = vendor !== null
       ? VENDOR_DAEMONS[vendor].launchFiles?.({
@@ -195,7 +231,6 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         })
       : undefined;
     const settings = vendorFiles?.settings;
-    const capabilityLaunch = capabilities !== undefined && vendor !== null ? VENDOR_DAEMONS[vendor].capabilityLaunch?.(capabilities) : undefined;
     const promptFile = join(dir, "prompt.md");
     writeFileSync(promptFile, prompt, { mode: 0o600 });
     let settingsFile: string | undefined;
@@ -248,7 +283,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         settings: settings ?? "",
         readonly: readonlyPolicy,
         ...(skillsDir === undefined ? {} : { skills: taskGraphSkillCatalogEntry() }),
-        ...(capabilityLaunch === undefined ? {} : { capabilityLaunch }),
+        ...(capabilityFingerprint === undefined ? {} : { capabilityLaunch: capabilityFingerprint }),
       }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),
@@ -256,6 +291,12 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         ? tmpDir === undefined ? {} : { tmpDir }
         : { readonly: readonlyPolicy, tmpDir: tmpDir ?? options.sessionTmp.allocate(session.id) }),
       ...(capabilities === undefined ? {} : { capabilities }),
+      ...(readCapabilities === undefined ? {} : {
+        capabilityCheck: {
+          fingerprint: capabilityFingerprint,
+          currentFingerprint: async () => (await readCapabilities()).capabilityFingerprint,
+        },
+      }),
       // The Worker background hold is shorter than the PM's wait so the PM is not left waiting.
       ...(role === "worker" ? { backgroundHoldMaxMs: WORKER_BACKGROUND_HOLD_MAX_MS } : {}),
     };

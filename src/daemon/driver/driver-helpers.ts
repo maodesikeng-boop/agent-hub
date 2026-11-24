@@ -3,6 +3,7 @@ import {
   RESEND_NOTE,
   type AgentSessionRow,
   type DriverEvent,
+  type LaunchCapabilityCheck,
   type MessageId,
   type MessageSource,
 } from "../../shared/index.ts";
@@ -74,6 +75,7 @@ export interface BaseProc<TOutcome = StartupOutcome> {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
+  capabilityCheck?: LaunchCapabilityCheck;
   personaLaunched: number | null;
   backgroundHoldMaxMs: number;
   initSeen: boolean;

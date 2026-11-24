@@ -505,6 +505,29 @@ export abstract class BaseSessionDriver<
     this.update(st, { personaRevision: revision });
   }
 
+  protected async steerWithCurrentCapabilities<T>(
+    st: TState,
+    proc: TProc,
+    entry: PendingEntry,
+    canSteer: () => boolean,
+    send: () => Promise<T>,
+  ): Promise<T | null> {
+    const check = proc.capabilityCheck;
+    if (!check) return send();
+    st.pending.push(entry);
+    try {
+      if (await check.currentFingerprint() !== check.fingerprint) return null;
+    } catch (error) {
+      this.internalError(st.id, `could not check capabilities before steering: ${errorMessage(error)}`);
+      return null;
+    }
+    if (st.ended || st.proc !== proc || st.pending.length !== 1 || st.pending[0] !== entry) return null;
+    st.pending.shift();
+    if (canSteer()) return send();
+    st.pending.unshift(entry);
+    return null;
+  }
+
   protected async pump(st: TState): Promise<void> {
     st.deliveringCount++;
     try {
@@ -838,6 +861,7 @@ export abstract class BaseSessionDriver<
     const baseProc: BaseProc<TOutcome> = {
       child,
       resume,
+      capabilityCheck: files.capabilityCheck,
       launched: {
         fingerprint: files.fingerprint,
         cwd: row.cwd,

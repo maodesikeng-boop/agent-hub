@@ -97,7 +97,9 @@ Each vendor declares `capabilities.isolation` in its `spec.ts` to record what a 
 
 ## Launch and restart
 
-`prepareRouterLaunch` and `createLaunchPreparer` resolve capabilities, pass them to the vendor's `launchFiles` and `capabilityLaunch`, and include the vendor-specific result in the launch fingerprint. Changing a policy changes the fingerprint, and the driver restarts the session before its next message. A change in inventory restarts only vendors whose launch output depends on it, such as allow-list vendors.
+Before delivering a PM or Worker turn, the driver reads the current policy and compares the vendor's launch options and discovered capabilities with the running process. A change closes the old process and resumes the conversation with the current settings. This includes MCP and skill additions and removals under an all-open policy, where the vendor loads them from its own configuration.
+
+Claude, Codex, and Pi also check capabilities before steering an active turn. When they detect a change, the new message waits for the turn to finish and goes to the resumed process. Other drivers already queue messages behind an active turn. Vendors with shared configuration still load capabilities according to their own settings.
 
 ## HTTP API
 

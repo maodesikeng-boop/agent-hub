@@ -122,9 +122,11 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       if (input.recovery) st.recoveryNote = true;
       const proc = st.proc;
       if (proc && this.#canSteer(st, proc, entry)) {
-        const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
-        batch.midTurn = true;
-        const outcome = await this.#steer(st, proc, batch, entry);
+        const outcome = await this.steerWithCurrentCapabilities(st, proc, entry, () => this.#canSteer(st, proc, entry), () => {
+          const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
+          batch.midTurn = true;
+          return this.#steer(st, proc, batch, entry);
+        });
         if (outcome === "written") return { kind: "written", midTurn: true };
         if (outcome === "cancelled") return { kind: "cancelled" };
       } else {

@@ -273,8 +273,14 @@ interface LaunchFilesBase {
   backgroundHoldMaxMs?: number;
   writeScope?: WriteScope;
   capabilities?: SessionCapabilities;
+  capabilityCheck?: LaunchCapabilityCheck;
   personaRevision?: number;
   ownerTag?: string;
+}
+
+export interface LaunchCapabilityCheck {
+  fingerprint: string | undefined;
+  currentFingerprint: () => Promise<string | undefined>;
 }
 
 // Read-only sandboxes deny every write outside the session temp dir, so a read-only launch cannot exist without one.

@@ -147,7 +147,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       if (input.recovery) st.recoveryNote = true;
       const proc = st.proc;
       if (proc && this.#canSteer(st, proc, entry)) {
-        const result = await this.#sendSteer(st, proc, entry);
+        const result = await this.steerWithCurrentCapabilities(st, proc, entry, () => this.#canSteer(st, proc, entry), () => this.#sendSteer(st, proc, entry));
         if (result === "written") return { kind: "written", midTurn: true };
         if (result === "cancelled") return { kind: "cancelled" };
       } else {
