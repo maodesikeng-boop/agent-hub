@@ -131,7 +131,7 @@ describe("App 路由接入（手机外壳）", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.getByRole("button", { name: /Interface scale/ })).toHaveTextContent("Large");
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent("Off");
-    expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Providers and capabilities" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Providers/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Vendor sync/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Sign in on another device/ })).toBeInTheDocument();
@@ -211,11 +211,10 @@ describe("一级设置主页", () => {
     };
     renderSettings("#/settings", { notify: notifyOf({ enabled: true }), devices });
     expect(screen.getByRole("region", { name: "General" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Capabilities" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Resources" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Computers" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Providers and capabilities" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Resources and computers" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Security & Access" })).toBeInTheDocument();
+    expect(within(screen.getByRole("main")).queryAllByRole("heading", { level: 2 })).toEqual([]);
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent(/On$/);
     expect(screen.getByRole("button", { name: /^Computers/ })).toHaveTextContent("2 online");
     expect(screen.queryByRole("button", { name: /Public access/ })).toBeNull();
@@ -685,7 +684,7 @@ describe("Updates page", () => {
     api.install();
     queryClient.setQueryData(["resources", ""], resourcesSnap);
     renderSettings("#/settings");
-    const row = within(screen.getByRole("region", { name: "Resources" })).getByRole("button", { name: /^Resources/ });
+    const row = within(screen.getByRole("region", { name: "Resources and computers" })).getByRole("button", { name: /^Resources/ });
     expect(row).toHaveTextContent("1 to review");
     expect(screen.getByTestId("resources-attention")).toBeInTheDocument();
     expect(api.calls).toEqual([]);

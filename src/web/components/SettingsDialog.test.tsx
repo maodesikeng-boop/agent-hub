@@ -49,8 +49,8 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     expect(classOf(panel)).toContain("min-w-0");
     const scroller = panel.lastElementChild as HTMLElement;
     expect(classOf(scroller)).toContain("overflow-y-auto");
-    // 内容列限宽（max-w-180）并且 grid-cols-1，长内容撑不开
-    expect(classOf(scroller.firstElementChild as HTMLElement)).toEqual(expect.arrayContaining(["grid-cols-1", "max-w-180"]));
+    // The content column is capped and centered (max-w-248, mx-auto) and grid-cols-1, so long content cannot widen it.
+    expect(classOf(scroller.firstElementChild as HTMLElement)).toEqual(expect.arrayContaining(["grid-cols-1", "max-w-248", "mx-auto"]));
     for (const group of within(panel).getAllByRole("region")) {
       // 自己是 grid 的分组（带标题的）列宽也不跟内容走
       if (classOf(group).includes("grid")) expect(classOf(group)).toContain("grid-cols-1");

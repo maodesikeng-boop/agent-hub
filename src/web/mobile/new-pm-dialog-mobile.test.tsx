@@ -199,10 +199,10 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
 
     const nameInput = within(dialog).getByRole("textbox", { name: "Name" });
     await waitFor(() => expect(nameInput).toHaveFocus());
-    expect(nameInput).toHaveClass("w-72");
+    expect(nameInput).toHaveClass("w-full");
 
     const folderInput = within(dialog).getByRole("textbox", { name: "Main folder" });
-    // 主文件夹的输入框和 Choose… 一起占 w-72，和上面名字那一行同宽、不折行
+    // The main folder field and Choose… share one w-72 column and never wrap.
     expect(folderInput).toHaveClass("flex-1", "min-w-0");
     expect(folderInput.parentElement).toHaveClass("w-72");
     expect(folderInput).toHaveAttribute("autocapitalize", "none");

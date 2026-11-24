@@ -11,7 +11,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 
 const QUOTA_REFETCH_INTERVAL_MS = 60_000;
 
-const USAGE_BAR_COLORS = { normal: "bg-rail-ink", high: "bg-caution", full: "bg-danger" } as const;
+// The bars are the hourglass's sand poured flat, so the normal fill is the same sand tone as the rail meter.
+const USAGE_BAR_COLORS = { normal: "bg-(--sand)", high: "bg-caution", full: "bg-danger" } as const;
 
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
   const level = exhausted ? "full" : window.warning || window.percent >= 80 ? "high" : "normal";

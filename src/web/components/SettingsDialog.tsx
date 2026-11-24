@@ -1,5 +1,5 @@
 import { Blocks, Cable, Monitor, Server, Settings, Shield, X, type Icon } from "../ui/icons.ts";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import type { NotifySettings } from "../notify.ts";
 import { useCachedResourcesSummary } from "../resources-model.ts";
@@ -79,11 +79,16 @@ export function SettingsDialog({
 
   const effectiveSection = activeSection === "computers" && devices === null ? initialSection : activeSection;
   const resourcesSummary = useCachedResourcesSummary();
+  const tabsRef = useRef<HTMLDivElement>(null);
+  // Below 720px the categories scroll sideways; keep the open one in view when Settings opens on a later category.
+  useEffect(() => {
+    if (open) tabsRef.current?.querySelector<HTMLElement>('[data-state="active"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [open, effectiveSection]);
 
   const content: Record<SettingsDialogSection, ReactNode> = {
     general: (
       <>
-        <SettingsGroup label="General">
+        <SettingsGroup title="This browser">
           <UiScaleRow />
           <SettingsRow label="Notifications" detail={NOTIFY_BLOCKED[notify.permission]}>
             {(id) => (
@@ -135,8 +140,9 @@ export function SettingsDialog({
               Settings
             </div>
             <TabsList
+              ref={tabsRef}
               aria-label="Settings categories"
-              className="flex min-w-0 gap-1 overflow-x-auto px-2 py-1.5 min-[720px]:flex-col min-[720px]:overflow-x-visible min-[720px]:py-2"
+              className="flex min-w-0 gap-1 overflow-x-auto px-2 py-1.5 max-[719px]:pr-10 max-[719px]:[mask-image:linear-gradient(to_right,#000_calc(100%-2.5rem),transparent)] min-[720px]:flex-col min-[720px]:overflow-x-visible min-[720px]:py-2"
             >
               {sections.map(({ id, label, icon: Icon }) => (
                 <TabsTrigger
@@ -155,18 +161,18 @@ export function SettingsDialog({
           </div>
           {sections.map(({ id, label }) => (
             <TabsContent key={id} value={id} className="shell-sheet ml-1.5 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none">
-              <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b border-border pr-3 pl-6">
-                <h2 className="min-w-0 flex-1 truncate text-title font-semibold">{label}</h2>
+              <header data-window-drag className="relative flex h-14 shrink-0 items-center border-b border-border">
+                <h2 className="mx-auto w-full max-w-252 min-w-0 truncate pr-14 pl-6 text-title font-semibold">{label}</h2>
                 <DialogClose asChild>
-                  <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close">
+                  <Button variant="ghost" size="icon" className="absolute right-3" aria-label="Close">
                     <X aria-hidden="true" />
                   </Button>
                 </DialogClose>
               </header>
-              <div className="dialog-body-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-2 pt-5 pb-6">
+              <div className="@container/settings dialog-body-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-2 pt-5 pb-10">
                 {/* Rows keep their 16px padding, so the 8px inset puts every row's text on the 24px edge of the title. */}
-                <div className="grid max-w-180 grid-cols-1 content-start gap-6">
-                  <FlatSettingsGroups>{content[id]}</FlatSettingsGroups>
+                <div className="mx-auto grid w-full max-w-248 grid-cols-1 content-start gap-8 @min-[52rem]/settings:gap-10">
+                  <FlatSettingsGroups page={id !== "capabilities"}>{content[id]}</FlatSettingsGroups>
                 </div>
               </div>
             </TabsContent>

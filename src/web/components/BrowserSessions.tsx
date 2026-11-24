@@ -27,7 +27,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
 
   return (
     <>
-      <SettingsGroup label="Sign in on another device">
+      <SettingsGroup title="Browsers">
         <SettingsRow label="Sign in on another device" error={signIn.error}>
           {(id) => (
             <Button

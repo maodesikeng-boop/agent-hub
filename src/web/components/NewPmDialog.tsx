@@ -1,5 +1,5 @@
-import { ChevronRight, Loader2 } from "../ui/icons.ts";
-import { useEffect, useState, type ReactNode } from "react";
+import { ChevronRight, Loader2, Pencil } from "../ui/icons.ts";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import {
   DEFAULT_AGENT_SETTING,
   MAX_PERSONA_BYTES,
@@ -72,6 +72,7 @@ function NewPmForm({
   const [picking, setPicking] = useState(false);
   const [pickError, setPickError] = useState<ErrorLike | null>(null);
   const canPick = useServerInfo().folderPicker;
+  const nameId = useId();
 
   const cleanName = normalizeName(name);
   const nameProblem = nameError(name);
@@ -128,36 +129,45 @@ function NewPmForm({
   return (
     <DialogForm className={mobile ? "gap-0" : undefined} onSubmit={(e) => void submit(e)}>
       <DialogBody className={mobile ? "mx-0 my-0 px-4 py-4" : undefined}>
+        <div className="flex items-end gap-4">
+          <SlimePicker look={look} onChange={setPickedLook}>
+            <button
+              type="button"
+              aria-label="Change look"
+              title="Change look"
+              className="group relative flex size-18 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-border-strong bg-background transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 data-[state=open]:tile-open"
+            >
+              <Avatar look={look} size={52} />
+              <span
+                aria-hidden="true"
+                className="absolute -right-1.5 -bottom-1.5 flex size-6 items-center justify-center rounded-sm border border-border-strong bg-background text-muted-foreground transition-colors group-hover:text-foreground"
+              >
+                <Pencil className="size-pixel-sm" />
+              </span>
+            </button>
+          </SlimePicker>
+          <div className="grid min-w-0 flex-1 grid-cols-1 gap-1.5">
+            <label htmlFor={nameId} className="text-minor font-medium text-muted-foreground">
+              Name
+            </label>
+            <Input
+              id={nameId}
+              value={name}
+              autoFocus={!mobile}
+              autoComplete="off"
+              className="w-full min-w-0"
+              aria-invalid={nameProblem !== null}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+        </div>
+        {nameProblem !== null && (
+          <div className="-mt-4 pl-22">
+            <RowError error={nameProblem} />
+          </div>
+        )}
         <SettingsGroup>
           {deviceRow}
-          <SettingsRow label="Name" stacked={mobile} error={nameProblem}>
-            {(id) => (
-              <Input
-                id={id}
-                value={name}
-                autoFocus={!mobile}
-                autoComplete="off"
-                className={mobile ? "min-w-0 flex-1" : FIELD_WIDTH}
-                aria-invalid={nameProblem !== null}
-                onChange={(e) => setName(e.target.value)}
-              />
-            )}
-          </SettingsRow>
-          <SettingsRow label="Look" stacked={mobile}>
-            {(id) => (
-              <SlimePicker look={look} onChange={setPickedLook}>
-                <button
-                  id={id}
-                  type="button"
-                  aria-label="Change look"
-                  className="flex cursor-pointer items-center gap-2 px-1.5 py-1 text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
-                >
-                  <Avatar look={look} size={34} />
-                  <ChevronRight className="size-pixel-sm" aria-hidden="true" />
-                </button>
-              </SlimePicker>
-            )}
-          </SettingsRow>
           <SettingsRow label="Main folder" stacked={mobile} error={pickError}>
             {(id) => (
               <div className={cn("flex items-center gap-2", mobile ? "min-w-0 flex-1" : FIELD_WIDTH)}>

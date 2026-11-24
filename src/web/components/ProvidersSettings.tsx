@@ -269,7 +269,7 @@ function ProviderItemRow({
               )}
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 className="min-w-24"
                 aria-label={`Account for ${item.label}`}

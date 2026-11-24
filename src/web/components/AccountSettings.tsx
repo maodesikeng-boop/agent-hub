@@ -16,10 +16,13 @@ const RELAY_TEXT: Readonly<Record<RelayConnectionState, string>> = {
 
 type Account = ReturnType<typeof useAccount>;
 
+const SAS_GROUP = "rounded-sm bg-panel px-2 py-0.5 font-mono text-title font-medium tabular-nums tracking-[0.18em]";
+
+// The code is compared digit by digit with the other screen, so each half reads as one flat block.
 function SasCode({ code }: { code: string }) {
   return (
-    <span data-testid="sas-code" className="font-mono text-title tabular-nums tracking-widest">
-      {code.slice(0, 3)} {code.slice(3)}
+    <span data-testid="sas-code" className="flex items-center gap-1.5">
+      <span className={SAS_GROUP}>{code.slice(0, 3)}</span> <span className={SAS_GROUP}>{code.slice(3)}</span>
     </span>
   );
 }

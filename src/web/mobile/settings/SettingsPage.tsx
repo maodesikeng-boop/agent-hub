@@ -45,7 +45,7 @@ export function SettingsPage({
       </header>
       <main
         className={cn(
-          "min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 pt-2",
+          "min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 pt-4",
           footer ? "pb-6" : "pb-[calc(var(--bottom-inset)+2rem)]",
         )}
       >

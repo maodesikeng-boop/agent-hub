@@ -10,14 +10,23 @@ const GROUP_BOX = `divide-y divide-border ${GROUP_SHELL}`;
 
 const GROUP_FLAT = "divide-y divide-border [contain:layout_style]";
 
-// A page lays its sections flat on the sheet; panels, dialogs, and phone pages keep each group in one hairline box.
-const FlatGroups = createContext(false);
+type GroupLayout = "box" | "flat" | "page";
 
-export function FlatSettingsGroups({ children }: { children: ReactNode }) {
-  return <FlatGroups.Provider value>{children}</FlatGroups.Provider>;
+// Panels, dialogs, and phone pages keep each group in one hairline box; a sheet lays its sections flat, and the Settings
+// page also turns every section into a title column beside its rows once the sheet is wide enough to hold both.
+const GroupLayoutContext = createContext<GroupLayout>("box");
+
+export function FlatSettingsGroups({ page = false, children }: { page?: boolean; children: ReactNode }) {
+  return <GroupLayoutContext.Provider value={page ? "page" : "flat"}>{children}</GroupLayoutContext.Provider>;
 }
 
 const GROUP_TITLE = "text-minor font-medium text-muted-foreground";
+
+// Only the Settings page body declares the `settings` container, so these never reach a dialog opened from the page.
+const PAGE_SECTION = "@min-[52rem]/settings:grid-cols-[12rem_minmax(0,1fr)] @min-[52rem]/settings:gap-x-6 @min-[52rem]/settings:gap-y-0";
+const PAGE_HEADING =
+  "@min-[52rem]/settings:min-h-0 @min-[52rem]/settings:flex-col @min-[52rem]/settings:items-start @min-[52rem]/settings:justify-start @min-[52rem]/settings:pt-3.5";
+const PAGE_ROWS = "@min-[52rem]/settings:col-start-2 @min-[52rem]/settings:row-start-1";
 
 export function SettingsGroup({
   title,
@@ -30,16 +39,17 @@ export function SettingsGroup({
   action?: ReactNode;
   children: ReactNode;
 }) {
-  const flat = useContext(FlatGroups);
+  const layout = useContext(GroupLayoutContext);
+  const page = layout === "page";
   return (
-    <section aria-label={label ?? title} className="grid grid-cols-1 gap-2">
+    <section aria-label={label ?? title} className={cn("grid grid-cols-1", layout === "box" ? "gap-2" : "gap-0", page && PAGE_SECTION)}>
       {(title || action) && (
-        <div className={cn("flex min-h-8 items-center gap-3 px-4", title ? "justify-between" : "justify-end")}>
+        <div className={cn("flex min-h-8 items-center gap-3 px-4", title ? "justify-between" : "justify-end", page && PAGE_HEADING)}>
           {title && <h2 className={GROUP_TITLE}>{title}</h2>}
           {action}
         </div>
       )}
-      <div className={flat ? GROUP_FLAT : GROUP_BOX}>{children}</div>
+      <div className={cn(layout === "box" ? GROUP_BOX : GROUP_FLAT, page && PAGE_ROWS)}>{children}</div>
     </section>
   );
 }
@@ -55,7 +65,7 @@ export function CollapsibleGroup({
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const flat = useContext(FlatGroups);
+  const layout = useContext(GroupLayoutContext);
   const [open, setOpen] = useState(defaultOpen);
   const [prevDefaultOpen, setPrevDefaultOpen] = useState(defaultOpen);
   if (defaultOpen !== prevDefaultOpen) {
@@ -63,8 +73,16 @@ export function CollapsibleGroup({
     if (defaultOpen) setOpen(true);
   }
   return (
-    <section aria-label={title}>
-      <Collapsible open={open} onOpenChange={setOpen} className={flat ? "border-y border-border" : GROUP_SHELL}>
+    // On the Settings page a collapsed list closes the section above it, sharing its hairline instead of opening a gap.
+    <section
+      aria-label={title}
+      className={cn(layout === "page" && "@min-[0rem]/settings:-mt-8 @min-[52rem]/settings:-mt-10 @min-[52rem]/settings:ml-54")}
+    >
+      <Collapsible
+        open={open}
+        onOpenChange={setOpen}
+        className={layout === "box" ? GROUP_SHELL : layout === "page" ? "border-t border-border" : "border-y border-border"}
+      >
         <h2>
           <CollapsibleTrigger className="group flex min-h-13 w-full cursor-pointer items-center gap-4 rounded-none px-4 py-2 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]">
             <span className="min-w-0 flex-1 truncate">{title}</span>

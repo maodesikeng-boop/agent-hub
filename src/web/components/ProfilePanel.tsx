@@ -453,7 +453,7 @@ function SectionFrame({
   return (
     <section aria-label={title} className="border-t border-border py-3.5">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-minor font-semibold text-foreground">{title}</h2>
+        <h2 className="text-minor font-medium text-muted-foreground">{title}</h2>
         {onToggle !== undefined && actionLabel !== undefined && (
           <button type="button" disabled={readOnly && !editing} onClick={onToggle} className={EDIT_LINK}>
             {editing ? "Done" : actionLabel}

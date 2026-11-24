@@ -12,7 +12,7 @@ import { useResourcesModel } from "../resources-model.ts";
 import type { DeviceSettings } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
-import { Loader2, RefreshCw } from "../ui/icons.ts";
+import { Loader2 } from "../ui/icons.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { formatBytes } from "../upload.ts";
@@ -214,7 +214,7 @@ function OverviewGroup({
   const actionBar = (
     <div className="flex items-center gap-2">
       <Button variant="outline" size="sm" disabled={refreshing || cleaning} onClick={onRefresh}>
-        {refreshing ? <Loader2 aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+        {refreshing && <Loader2 aria-hidden="true" />}
         Refresh
       </Button>
       <Button variant="outline" size="sm" disabled={cleaning || refreshing} onClick={onRunCleanup}>
