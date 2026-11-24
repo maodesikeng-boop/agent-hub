@@ -75,6 +75,24 @@ export function createMultiVendorDriver(options: MultiVendorDriverOptions): Driv
       return registeredDrivers().some((d) => d.isRunning?.(sessionId) === true);
     },
 
+    isBusy(sessionId: SessionId): boolean {
+      const row = store.get(sessionId);
+      if (row) {
+        const driver = drivers[row.vendor as AgentVendor];
+        return driver?.isBusy?.(sessionId) ?? false;
+      }
+      return registeredDrivers().some((d) => d.isBusy?.(sessionId) === true);
+    },
+
+    markEnding(sessionId: SessionId): void {
+      const row = store.get(sessionId);
+      if (row) {
+        drivers[row.vendor as AgentVendor]?.markEnding?.(sessionId);
+        return;
+      }
+      for (const driver of registeredDrivers()) driver.markEnding?.(sessionId);
+    },
+
     async queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null> {
       const row = store.get(sessionId);
       if (!row) return null;

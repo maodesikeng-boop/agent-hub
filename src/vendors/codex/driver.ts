@@ -241,6 +241,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     const problem = checkCodexTurnText(batch.combinedText);
     if (problem) {
+      st.inFlight = st.inFlight.filter((b) => b !== batch);
       this.invalidInput(st, problem, batch.messageIds);
       this.afterTurn(st, proc);
       return;
@@ -248,6 +249,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     const row = this.row(st);
     const threadId = proc.threadId ?? row?.vendorSessionId;
     if (!threadId) {
+      st.inFlight = st.inFlight.filter((b) => b !== batch);
       this.invalidInput(st, "缺少 threadId", batch.messageIds);
       this.afterTurn(st, proc);
       return;
@@ -325,10 +327,16 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
         this.armStartTimer(st, proc);
         const outcome = await proc.ready;
         if (outcome.kind === "ok") {
+          if (st.ended || proc.closing || st.proc !== proc) {
+            this.dropBatch(st, batch);
+            if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
+            return;
+          }
           await this.writeBatch(st, proc, batch);
           return;
         }
         if (outcome.kind === "closed") {
+          if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
           if (outcome.reason === "interrupt") return;
           throw new DriverError(
             "spawn_failed",

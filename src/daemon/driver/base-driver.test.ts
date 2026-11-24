@@ -504,4 +504,48 @@ describe("BaseSessionDriver 公共状态机", () => {
     expect(() => driver.exposeEmit(1, { type: "turn.started", at: 123 })).not.toThrow();
     expect(events.map((e) => e.type)).toEqual(["turn.started", "driver.error"]);
   });
+
+  it("isBusy / markEnding / onSessionQuiescent：冷启动和投递准备期间占忙，结束后回调，markEnding 立即丢弃排队消息", async () => {
+    const { store } = makeMemoryStore();
+    const quiescent: SessionId[] = [];
+    let releasePrepare!: () => void;
+    let enteredPrepare!: () => void;
+    const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+    const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+    let calls = 0;
+
+    const driver = new DummyDriver({
+      store,
+      interruptGraceMs: 30,
+      onSessionQuiescent: (id) => quiescent.push(id),
+      prepareLaunch: async () => {
+        calls++;
+        if (calls === 1) {
+          enteredPrepare();
+          await prepareGate;
+        }
+        return dummyLaunchFiles();
+      },
+    });
+
+    expect(driver.isBusy(1)).toBe(false);
+    const starting = driver.start(1);
+    await prepareEntered;
+    expect(driver.isBusy(1)).toBe(true);
+    expect(quiescent).toEqual([]);
+
+    releasePrepare();
+    await starting;
+    expect(driver.isBusy(1)).toBe(false);
+    expect(quiescent).toEqual([1]);
+
+    // markEnding synchronously marks ended and clears st.pending so later send throws session_ended.
+    const st = driver.exposeState(1);
+    st.pending.push({ messageIds: [99], source: "user", text: "queued", prefixes: [], resend: false });
+    driver.markEnding(1);
+    expect(st.ended).toBe(true);
+    expect(st.pending).toEqual([]);
+    await expect(driver.send(1, { messageIds: [100], source: "user", text: "late" })).rejects.toThrow(/session_ended/);
+    await driver.end(1);
+  });
 });

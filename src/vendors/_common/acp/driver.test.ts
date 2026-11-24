@@ -1561,6 +1561,34 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
     });
     expect(h.of("agent.tool_result")).toHaveLength(1);
   });
+
+  it("冷启动期间 isBusy 为真且 end() 中断启动抛 session_ended；markEnding 同步清空缓存命令", async () => {
+    let releasePrepare!: () => void;
+    let enteredPrepare!: () => void;
+    const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+    const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+
+    const h = makeAcpHarness({
+      driverOptions: {
+        prepareLaunch: async () => {
+          enteredPrepare();
+          await prepareGate;
+          return { promptFile: h.promptFile, env: {}, fingerprint: "fp-acp-race" };
+        },
+      },
+    });
+    const row = h.addSession();
+    const sendPromise = h.driver.send(row.id, { messageIds: [402 as never], source: "user", text: "hi" });
+    await prepareEntered;
+    expect(h.driver.isBusy(row.id)).toBe(true);
+
+    const endPromise = h.driver.end(row.id);
+    releasePrepare();
+    await expect(sendPromise).rejects.toSatisfy((err: unknown) => err instanceof DriverError && err.code === "session_ended");
+    await endPromise;
+    expect(h.driver.isBusy(row.id)).toBe(false);
+    expect(h.logs().filter((e) => e.event === "prompt")).toHaveLength(0);
+  });
 });
 import { fileURLToPath } from "node:url";
 import { wrapScriptAsPlatformCli } from "../../../../test/fake-cli-shim.ts";

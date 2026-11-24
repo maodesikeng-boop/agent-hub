@@ -2360,4 +2360,34 @@ it("启动与续接都检查最新项目规则预算，超限发可见告警但�
   expect(t.argvs()).toHaveLength(2);
   expect(t.of("driver.warning")).toHaveLength(1);
 });
+
+it("冷启动 prepareLaunch 期间 isBusy 为真；end() 介入后抛 session_ended 且不启动 agy 进程", async () => {
+  let releasePrepare!: () => void;
+  let enteredPrepare!: () => void;
+  const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+  const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+
+  const t = makeAgyHarness({
+    driver: {
+      prepareLaunch: async (session) => {
+        enteredPrepare();
+        await prepareGate;
+        const promptFile = join(t.dir, `prompt-${session.id}.md`);
+        writeFileSync(promptFile, "hi");
+        return { promptFile, env: {}, fingerprint: "fp-agy-race" };
+      },
+    },
+  });
+  const s = t.addSession();
+  const sendPromise = t.driver.send(s.id, user(1, "hello"));
+  await prepareEntered;
+  expect(t.driver.isBusy(s.id)).toBe(true);
+
+  const endPromise = t.driver.end(s.id);
+  releasePrepare();
+  await expect(sendPromise).rejects.toSatisfy((err: unknown) => err instanceof DriverError && err.code === "session_ended");
+  await endPromise;
+  expect(t.driver.isBusy(s.id)).toBe(false);
+  expect(t.argvs()).toHaveLength(0);
+});
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
