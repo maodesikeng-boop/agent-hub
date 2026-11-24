@@ -34,7 +34,7 @@ function ProjectPicker({
       <PopoverTrigger
         aria-label={`Project: ${value.label}`}
         title={value.label}
-        className="touch-target flex h-9 max-w-full min-w-0 cursor-pointer items-center gap-2 border-2 border-border-strong bg-background pr-3 pl-2 text-minor font-medium transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-open-line data-[state=open]:bg-open"
+        className="touch-target flex h-9 max-w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm border border-border-strong bg-background pr-3 pl-2 text-minor font-medium transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-select-line data-[state=open]:bg-open"
       >
         <Avatar look={value.look} size={20} />
         <span className="min-w-0 truncate">{value.label}</span>

@@ -125,7 +125,7 @@ function LookButton({ pm, disabled }: { pm: Pm; disabled: boolean }) {
         disabled={disabled}
         aria-label="Change look"
         title="Change look"
-        className="cursor-pointer border-2 border-transparent bg-hover p-2 transition-colors outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-open-line data-[state=open]:bg-open disabled:cursor-not-allowed disabled:opacity-60"
+        className="cursor-pointer rounded-sm border border-transparent bg-hover p-2 transition-colors outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-select-line data-[state=open]:bg-open disabled:cursor-not-allowed disabled:opacity-60"
       >
         <Avatar look={look} size={64} />
       </button>
@@ -338,7 +338,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
             {(["Before", "After"] as const).map((label) => (
               <div key={label} className="min-w-0">
                 <div className="mb-1 text-minor font-medium text-muted-foreground">{label}</div>
-                <pre className="min-h-10 max-h-60 overflow-auto border-2 border-border bg-panel p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <pre className="min-h-10 max-h-60 overflow-auto rounded-sm border border-border bg-panel p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {label === "Before" ? change.textBefore : change.textAfter}
                 </pre>
               </div>
@@ -380,7 +380,7 @@ function PersonaGroup({ persona, readOnly }: { persona: ReturnType<typeof usePer
         rows={1}
         disabled={readOnly}
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0",
+          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0 focus:shadow-none",
           text === "" ? "text-body" : "font-mono text-minor",
         )}
         value={text}
@@ -451,7 +451,7 @@ function SectionFrame({
   children: React.ReactNode;
 }) {
   return (
-    <section aria-label={title} className="border-t-2 border-border py-3.5">
+    <section aria-label={title} className="border-t border-border py-3.5">
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="text-minor font-semibold text-foreground">{title}</h2>
         {onToggle !== undefined && actionLabel !== undefined && (
@@ -607,7 +607,7 @@ function SummaryContent({
         )}
       </SectionFrame>
 
-      <nav aria-label="Project manager settings pages" className="divide-y-2 divide-border border-y-2 border-border">
+      <nav aria-label="Project manager settings pages" className="divide-y divide-border border-y border-border">
         {pm.archivedAt == null && (
           <button
             type="button"
@@ -803,7 +803,7 @@ export function ProfilePanel({
   if (isPage) {
     return (
       <section aria-label={`${pm.name}'s settings`} className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel text-foreground">
-        <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b-2 border-border px-3 pt-[var(--safe-top)]">
+        <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3 pt-[var(--safe-top)]">
           <Button
             variant="ghost"
             size="icon"

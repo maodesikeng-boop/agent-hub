@@ -97,7 +97,7 @@ export const WorkerConversation = memo(function WorkerConversation({
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
       {mobile && (
-        <header data-window-drag className="flex min-h-14 min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b-2 border-border pt-[var(--safe-top)] pr-3 pl-3">
+        <header data-window-drag className="flex min-h-14 min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b border-border pt-[var(--safe-top)] pr-3 pl-3">
           {leading}
           <Avatar look={identity.look} size={34} neutral working={hasAgentStatus(session)} />
           <div className="flex min-w-0 flex-1 items-center justify-between gap-3 overflow-hidden">
@@ -146,7 +146,7 @@ export const WorkerConversation = memo(function WorkerConversation({
           )}
           <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
             {phase === "ended" && view.conversation.purgedAt === undefined && (
-              <div role="status" className="border-2 border-border bg-panel px-4 py-3 text-body">
+              <div role="status" className="rounded-sm border border-border bg-panel px-4 py-3 text-body">
                 Completed
               </div>
             )}

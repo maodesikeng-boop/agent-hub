@@ -26,7 +26,7 @@ export function WorkerPickParts({ labels, inComposer = false }: { labels: readon
 export function WorkerPickTag({ pick, className }: { pick: WorkerPick; className?: string }) {
   const labels = useWorkerPickLabels(pick);
   return (
-    <div role="group" aria-label="Worker model" className={cn("flex max-w-full items-center gap-2 border border-border-strong bg-panel px-3 py-1 text-minor", className)}>
+    <div role="group" aria-label="Worker model" className={cn("flex max-w-full items-center gap-2 rounded-sm border border-border bg-panel px-3 py-1 text-minor", className)}>
       <WorkerPickParts labels={labels} />
     </div>
   );

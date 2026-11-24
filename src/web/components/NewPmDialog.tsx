@@ -205,7 +205,7 @@ function NewPmForm({
                 aria-label="Persona"
                 placeholder="Optional"
                 rows={4}
-                className="block max-h-[60vh] min-h-24 resize-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0"
+                className="block max-h-[60vh] min-h-24 resize-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0 focus:shadow-none"
                 value={persona}
                 onChange={(e) => setPersona(e.target.value)}
               />
@@ -223,7 +223,7 @@ function NewPmForm({
           {errorLine(error)}
         </p>
       )}
-      <DialogFooter className={mobile ? "border-t-2 border-border bg-panel px-4 py-3" : undefined}>
+      <DialogFooter className={mobile ? "border-t border-border bg-panel px-4 py-3" : undefined}>
         <Button type="submit" disabled={!canSubmit} className={mobile ? "h-11 w-full" : undefined}>
           {busy && <Loader2 aria-hidden="true" />}
           {busy ? "Creating…" : "Create"}

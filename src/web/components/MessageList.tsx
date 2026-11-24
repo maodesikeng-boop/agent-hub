@@ -193,7 +193,7 @@ export const MessageList = memo(function MessageList({
       </div>
       {away && (
         <div className="messages pointer-events-none absolute inset-x-0 bottom-9 flex justify-center" data-back-to-bottom>
-          <Button variant="secondary" size="icon-sm" className="pointer-events-auto" aria-label="Scroll to bottom" title="Scroll to bottom" onClick={scrollToBottom}>
+          <Button variant="outline" size="icon-sm" className="pointer-events-auto" aria-label="Scroll to bottom" title="Scroll to bottom" onClick={scrollToBottom}>
             <ChevronDown aria-hidden="true" />
           </Button>
         </div>

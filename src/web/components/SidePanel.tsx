@@ -38,7 +38,7 @@ export function SidePanel({
       data-layout={layout}
       className={cn("flex min-h-0 min-w-0 flex-col bg-panel text-foreground", layout === "stack" ? "flex-1" : "h-full")}
     >
-      <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b-2 border-border px-3">
+      <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
         {onBack !== undefined && (
           <Button variant="ghost" size="icon" className="shrink-0" aria-label={backLabel} onClick={onBack}>
             <ArrowLeft aria-hidden="true" />

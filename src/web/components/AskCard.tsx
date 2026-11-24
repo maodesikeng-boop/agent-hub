@@ -87,7 +87,7 @@ export const AskCard = memo(function AskCard({
     (answerNote === undefined || answerNote.trim() !== draft.trim());
 
   return (
-    <div className="w-full min-w-0 border-2 border-border-strong bg-background p-4" data-ask-card>
+    <div className="w-full min-w-0 rounded-sm border border-border bg-background p-4" data-ask-card>
       <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
         <Markdown text={cardTitle} files={files} messageId={messageId} />
       </div>
@@ -123,8 +123,8 @@ export const AskCard = memo(function AskCard({
             );
           })}
           {answerNote !== undefined && (
-            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 border border-border bg-panel px-3 py-2.5 leading-6">
-              <span className="flex size-6 shrink-0 items-center justify-center border border-border-strong bg-background text-muted-foreground">
+            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 rounded-sm bg-panel px-3 py-2.5 leading-6">
+              <span className="flex h-6 w-5 shrink-0 items-center justify-center text-muted-foreground">
                 <PencilLine className="size-pixel-sm" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>

@@ -138,7 +138,7 @@ const ClosedRouterDraftCard = memo(function ClosedRouterDraftCard({
   const draft = useDecisionDraft(closed.draftKey);
   if (draft.trim() === "") return null;
   return (
-    <article aria-label={closed.question} data-closed-draft-card className="border-2 border-border-strong bg-background p-4">
+    <article aria-label={closed.question} data-closed-draft-card className="rounded-sm border border-border bg-background p-4">
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
           type="button"
@@ -148,7 +148,7 @@ const ClosedRouterDraftCard = memo(function ClosedRouterDraftCard({
           <Avatar look={closed.look} size={24} />
           <span className="truncate">{closed.pmName}</span>
         </button>
-        <span className="border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Closed</span>
+        <span className="rounded-sm border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Closed</span>
       </div>
       <h3 className="mt-2.5 text-body font-medium text-foreground">{closed.question}</h3>
       <UnsentDraftBanner draft={draft} onDismiss={onDismiss} />
@@ -274,7 +274,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                       type="button"
                       aria-expanded={false}
                       className={cn(
-                        "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 border-2 border-transparent px-2.5 py-2 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
+                        "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 border border-transparent px-2.5 py-2 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
                         !entry.online && "[&_[data-slot=avatar]]:opacity-50",
                       )}
                       onClick={() => onSelectKey(entry.decision.key)}
@@ -293,7 +293,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                         <span className="shrink-0 text-xs text-muted-foreground">{entry.deviceName}</span>
                       )}
                       {!entry.online && (
-                        <span className="shrink-0 border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        <span className="shrink-0 rounded-sm border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">
                           Offline
                         </span>
                       )}
@@ -340,7 +340,7 @@ function TargetChip({
   onRemove: () => void;
 }) {
   return (
-    <li className="flex max-w-full items-center gap-1.5 border border-border-strong bg-panel py-1 pr-1 pl-2.5 text-minor text-foreground">
+    <li className="flex max-w-full items-center gap-1.5 rounded-sm border border-border bg-panel py-1 pr-1 pl-2.5 text-minor text-foreground">
       <Avatar look={look} size={16} />
       <span className="truncate font-medium">{label}</span>
       {deviceName !== null && <span className="shrink-0 text-xs text-muted-foreground">{deviceName}</span>}
@@ -807,7 +807,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
       <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
         <header
           data-window-drag
-          className="flex h-14 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b-2 border-border pr-3 pl-4"
+          className="flex h-14 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-border pr-3 pl-4"
         >
           <div className="flex min-w-0 shrink-0 items-center gap-2.5">
             {leading}
