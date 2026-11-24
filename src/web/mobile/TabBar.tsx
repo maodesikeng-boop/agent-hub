@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { CountPill } from "../components/CountPill.tsx";
 import { RouterAvatar } from "../components/RouterAvatar.tsx";
 import { cn } from "../lib/utils.ts";
 import type { Route } from "../route.ts";
@@ -26,9 +27,46 @@ export function mobileTabOf(route: Route | null): MobileTab | null {
   return null;
 }
 
+function Tab({
+  current,
+  label,
+  ariaLabel,
+  onSelect,
+  children,
+}: {
+  current: boolean;
+  label: string;
+  ariaLabel: string;
+  onSelect: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      aria-current={current ? "page" : undefined}
+      onClick={onSelect}
+      className={cn(
+        "touch-target group relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-1 text-xs outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-border-focus",
+        current ? "font-semibold text-rail-ink" : "font-medium text-rail-ink-soft",
+      )}
+    >
+      <span
+        className={cn(
+          "relative grid h-8 w-14 place-items-center rounded-full transition-colors duration-150 motion-reduce:transition-none",
+          current ? "bg-list" : "group-hover:bg-rail-hover",
+        )}
+      >
+        {children}
+      </span>
+      <span>{label}</span>
+    </button>
+  );
+}
+
 /**
- * Postcondition: renders the honey tab bar with Router, Projects, and Settings cells, marks the active one current, and
- * pads the bottom by the safe area; the shell hides it while the keyboard is open.
+ * Postcondition: renders the honey tab bar with Router, Projects, and Settings cells, marks the active one current with
+ * a cream pill behind its icon, and pads the bottom by the safe area; the shell hides it while the keyboard is open.
  */
 export function TabBar({ active, routerBadge, settingsAttention, onSelect }: TabBarProps): React.ReactElement {
   return (
@@ -36,67 +74,41 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
       aria-label="Mobile navigation"
       className="grid h-[calc(4rem+var(--safe-bottom))] shrink-0 grid-cols-3 border-t border-border bg-rail pb-[var(--safe-bottom)] text-rail-ink select-none"
     >
-      <button
-        type="button"
-        aria-label={routerBadge > 0 ? `Router (${routerBadge} waiting)` : "Router"}
-        aria-current={active === "router" ? "page" : undefined}
-        onClick={() => onSelect("router")}
-        className={cn(
-          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
-          active === "router" ? "bg-list font-semibold text-list-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
-        )}
+      <Tab
+        current={active === "router"}
+        label="Router"
+        ariaLabel={routerBadge > 0 ? `Router (${routerBadge} waiting)` : "Router"}
+        onSelect={() => onSelect("router")}
       >
-        <span className="relative">
-          <RouterAvatar size={22} />
-          {routerBadge > 0 && (
-            <span
-              data-testid="tabbar-router-badge"
-              aria-hidden="true"
-              className="absolute -top-1 -right-2.5 grid min-w-4 h-4 place-items-center bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums"
-            >
-              {routerBadge > 99 ? "99+" : routerBadge}
-            </span>
-          )}
-        </span>
-        <span>Router</span>
-      </button>
+        <RouterAvatar size={22} />
+        {routerBadge > 0 && (
+          <CountPill
+            count={routerBadge}
+            testId="tabbar-router-badge"
+            className="absolute -top-1 right-1 shadow-[0_0_0_2px_var(--rail)]"
+          />
+        )}
+      </Tab>
 
-      <button
-        type="button"
-        aria-label="Projects"
-        aria-current={active === "projects" ? "page" : undefined}
-        onClick={() => onSelect("projects")}
-        className={cn(
-          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
-          active === "projects" ? "bg-list font-semibold text-list-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
-        )}
-      >
+      <Tab current={active === "projects"} label="Projects" ariaLabel="Projects" onSelect={() => onSelect("projects")}>
         <MessageSquare className="size-pixel-md" aria-hidden="true" />
-        <span>Projects</span>
-      </button>
+      </Tab>
 
-      <button
-        type="button"
-        aria-label={settingsAttention ? "Settings (attention needed)" : "Settings"}
-        aria-current={active === "settings" ? "page" : undefined}
-        onClick={() => onSelect("settings")}
-        className={cn(
-          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
-          active === "settings" ? "bg-list font-semibold text-list-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
-        )}
+      <Tab
+        current={active === "settings"}
+        label="Settings"
+        ariaLabel={settingsAttention ? "Settings (attention needed)" : "Settings"}
+        onSelect={() => onSelect("settings")}
       >
-        <span className="relative">
-          <Settings className="size-pixel-md" aria-hidden="true" />
-          {settingsAttention && (
-            <span
-              data-testid="tabbar-settings-attention"
-              aria-hidden="true"
-              className="absolute -top-0.5 -right-1 size-2 rounded-full bg-danger ring-2 ring-rail"
-            />
-          )}
-        </span>
-        <span>Settings</span>
-      </button>
+        <Settings className="size-pixel-md" aria-hidden="true" />
+        {settingsAttention && (
+          <span
+            data-testid="tabbar-settings-attention"
+            aria-hidden="true"
+            className={cn("absolute top-1 right-4 size-2 rounded-full bg-danger ring-2", active === "settings" ? "ring-list" : "ring-rail")}
+          />
+        )}
+      </Tab>
     </nav>
   );
 }

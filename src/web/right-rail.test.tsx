@@ -464,18 +464,27 @@ describe("右栏：每组可以收起", () => {
 });
 
 describe("PiecesSlot: Piece 纸片分身图标", () => {
-  it("开关使用当前项目经理那只小动物的纸片分身（Avatar neutral 20px，按根字号缩放）", () => {
-    render(<PiecesSlot visible open={false} attention={false} count={0} look={defaultLookOf(3)} onToggle={() => {}} />);
+  it("开关只放当前项目经理那只小动物的纸片分身（Avatar neutral 22px，按根字号缩放），不加框、不写 Pieces、不显示数字", () => {
+    render(<PiecesSlot visible open={false} attention={false} look={defaultLookOf(3)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "Show Pieces" });
     const avatar = button.querySelector("[data-neutral='true']");
     expect(avatar).toBeInTheDocument();
-    expect((avatar as HTMLElement).style.width).toBe("1.25rem");
+    expect((avatar as HTMLElement).style.width).toBe("1.375rem");
+    expect(button).not.toHaveClass("btn-honey");
+    expect(button).toHaveTextContent("");
+    expect(button).toHaveAttribute("title", "Pieces");
   });
 
-  it("有等你确定且收起时右上角显示 8px 强调色圆点，带一圈 2px 底色把它和按钮隔开", () => {
-    render(<PiecesSlot visible open={false} attention={true} count={2} look={defaultLookOf(1)} onToggle={() => {}} />);
+  it("有等你确定且收起时右上角显示 8px 强调色圆点，带一圈 2px 底色把它和纸片分身隔开；展开后圆点收起", () => {
+    const { rerender } = render(<PiecesSlot visible open={false} attention={true} look={defaultLookOf(1)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "Show Pieces (needs you)" });
-    expect(button.querySelector("span.bg-primary")).toHaveClass("size-2", "rounded-full", "shadow-[0_0_0_2px_var(--background)]");
+    expect(button.className).toContain("[--dot-ring:var(--background)]");
+    expect(button.className).toContain("hover:[--dot-ring:var(--hover)]");
+    expect(button.querySelector("span.bg-primary")).toHaveClass("size-2", "rounded-full", "shadow-[0_0_0_2px_var(--dot-ring)]");
+    rerender(<PiecesSlot visible open attention={true} look={defaultLookOf(1)} onToggle={() => {}} />);
+    const open = screen.getByRole("button", { name: "Hide Pieces" });
+    expect(open).toHaveAttribute("aria-expanded", "true");
+    expect(open.querySelector("span.bg-primary")).toBeNull();
   });
 });
 

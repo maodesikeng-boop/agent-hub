@@ -45,6 +45,7 @@ export interface ProjectListProps {
 
 // Headings share the avatars' 16px left edge: 8px list inset plus the rows' 8px padding.
 const SECTION_HEADING = "flex h-8 items-center gap-1.5 px-2 text-minor font-medium text-list-ink-soft";
+const NEW_PM_BUTTON = "text-list-ink-soft hover:bg-list-hover hover:text-list-ink active:bg-list-hover";
 
 const StripItem = memo(function StripItem({
   deviceKey,
@@ -73,7 +74,7 @@ const StripItem = memo(function StripItem({
       aria-current={active ? "page" : undefined}
       onClick={() => onSelect({ device: deviceKey, id: entry.id })}
       className={cn(
-        "relative grid size-13 shrink-0 cursor-pointer place-items-center transition-[background-color,box-shadow] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus motion-reduce:transition-none",
+        "pet-trigger group relative grid size-13 shrink-0 cursor-pointer place-items-center transition-[background-color,box-shadow] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus motion-reduce:transition-none",
         active ? "tile-selected" : "hover:bg-list-hover",
       )}
     >
@@ -83,7 +84,10 @@ const StripItem = memo(function StripItem({
           role="img"
           aria-label={asking ? NEEDS_YOU : YOUR_TURN}
           data-testid={asking ? "asking-indicator" : "waiting-indicator"}
-          className={cn("absolute right-1 bottom-1 size-2 rounded-full bg-status-active ring-2", active ? "ring-background" : "ring-list")}
+          className={cn(
+            "absolute right-1 bottom-1 size-2 rounded-full bg-status-active ring-2 transition-shadow duration-150 motion-reduce:transition-none",
+            active ? "ring-background" : "ring-list group-hover:ring-list-hover",
+          )}
         />
       )}
     </button>
@@ -119,9 +123,9 @@ const ProjectRow = memo(function ProjectRow({
     archivedAt !== null ? (
       <span className="text-xs text-list-ink-soft tabular-nums">{formatArchiveRemaining(archivedAt)}</span>
     ) : asking ? (
-      <span role="img" aria-label={NEEDS_YOU} title={NEEDS_YOU} data-testid="asking-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
+      <span role="img" aria-label={NEEDS_YOU} title={NEEDS_YOU} data-testid="asking-indicator" className="block size-2 shrink-0 rounded-full bg-status-active" />
     ) : waiting ? (
-      <span role="img" aria-label={YOUR_TURN} title={YOUR_TURN} data-testid="waiting-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
+      <span role="img" aria-label={YOUR_TURN} title={YOUR_TURN} data-testid="waiting-indicator" className="block size-2 shrink-0 rounded-full bg-status-active" />
     ) : entry.lastMessage ? (
       <span className="text-xs text-list-ink-soft tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
     ) : null;
@@ -142,25 +146,30 @@ const ProjectRow = memo(function ProjectRow({
       >
         <Avatar look={entry.look} size={36} className={cn("shrink-0", readOnly && "opacity-60")} />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-baseline justify-between gap-2">
+          <div className="flex min-w-0 items-center justify-between gap-2">
             <span title={entry.name} className="min-w-0 flex-1 truncate text-body font-semibold text-list-ink">
               {entry.name}
             </span>{" "}
-            {meta && <span className="project-row-meta shrink-0">{meta}</span>}
-          </div>{" "}
-          <p title={preview || undefined} className="truncate text-minor leading-snug text-list-ink-soft">
-            {preview || "\u00a0"}
-          </p>
+            {meta && <span className="project-row-meta inline-flex shrink-0 items-center">{meta}</span>}
+          </div>
+          {preview !== "" && (
+            <>
+              {" "}
+              <p title={preview} className="truncate text-minor leading-snug text-list-ink-soft">
+                {preview}
+              </p>
+            </>
+          )}
         </div>
       </button>
 
-      {!pageLayout && pm !== null && (
+      {!pageLayout && pm !== null && archivedAt === null && (
         <div className="row-shortcuts shrink-0 items-center gap-0.5">
           <button
             type="button"
             aria-label={pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
             title={pinned ? "Unpin" : "Pin"}
-            disabled={readOnly || archivedAt !== null}
+            disabled={readOnly}
             onClick={() => onTogglePin(pm.id, !pinned)}
             className="grid size-7 cursor-pointer place-items-center text-list-ink-soft transition-colors outline-none hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -210,7 +219,7 @@ export const ProjectList = memo(function ProjectList({
     return (
       <section aria-label={computer.name} className="flex h-full w-18 shrink-0 flex-col bg-list text-list-ink">
         <div className="flex h-14 shrink-0 items-center justify-center border-b border-border">
-          <Button variant="slot" size="icon" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
+          <Button variant="ghost" size="icon" className={NEW_PM_BUTTON} aria-label="New project manager" title="New project manager" onClick={onNewPm}>
             <Plus aria-hidden="true" />
           </Button>
         </div>
@@ -258,12 +267,15 @@ export const ProjectList = memo(function ProjectList({
       type="button"
       aria-label={`Switch computer (${computer.name})`}
       onClick={computers === undefined ? onOpenComputers : undefined}
-      className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left text-title font-semibold text-list-ink transition-colors outline-none hover:text-rail-ink focus-visible:outline-2 focus-visible:outline-border-focus"
+      className="-ml-2 flex h-9 min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm px-2 text-left text-title font-semibold text-list-ink transition-colors outline-none hover:bg-list-hover data-[state=open]:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus"
     >
       <span title={computer.name} className="min-w-0 truncate">
         {computer.name}
       </span>
-      <ChevronDown className="size-pixel-sm shrink-0 text-list-ink-soft" aria-hidden="true" />
+      <ChevronDown
+        className={cn("size-pixel-sm shrink-0 text-list-ink-soft transition-transform duration-200 motion-reduce:transition-none", switcherOpen && "rotate-180")}
+        aria-hidden="true"
+      />
     </button>
   );
 
@@ -297,13 +309,13 @@ export const ProjectList = memo(function ProjectList({
             </h1>
           )}
         </div>
-        <Button variant="slot" size="icon" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
+        <Button variant="ghost" size="icon" className={cn("-mr-1.5", NEW_PM_BUTTON)} aria-label="New project manager" title="New project manager" onClick={onNewPm}>
           <Plus aria-hidden="true" />
         </Button>
       </header>
 
       <div className="shrink-0 px-2 pt-3 pb-1">
-        <SearchField label="Search conversations" tone="cream" value={query} onChange={setQuery} />
+        <SearchField label="Search conversations" tone="cream" value={query} onChange={setQuery} className="pl-2" />
       </div>
 
       <div className="sidebar-list page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-2 pt-2 pb-4">

@@ -151,6 +151,37 @@ describe("AppRail", () => {
     expect(onSelectComputer).toHaveBeenCalledWith(LOCAL_DEVICE);
   });
 
+  it("omits the duplicate count badge on a single computer once Router carries the count", () => {
+    const single: RailComputer[] = [
+      { key: LOCAL_DEVICE, name: "MacBook Pro", platform: "darwin", status: "online", badge: 2 },
+    ];
+    const { rerender } = renderRail({
+      router: { active: false, pendingCount: 2, working: false, onSelect: vi.fn() },
+      computers: single,
+    });
+    expect(screen.getByTestId("rail-router-badge")).toHaveTextContent("2");
+    expect(screen.queryByTestId("rail-device-badge-local")).toBeNull();
+    expect(screen.getByRole("button", { name: "MacBook Pro, 2 waiting" })).toBeInTheDocument();
+
+    rerender(
+      <DeviceScope client={createClient(null)} server={TEST_SERVER}>
+        <AppRail
+          router={{ active: false, pendingCount: 0, working: false, onSelect: vi.fn() }}
+          computers={single}
+          selectedComputer={LOCAL_DEVICE}
+          meter={null}
+          quota={[]}
+          quotaFetchable={false}
+          onSelectComputer={vi.fn()}
+          onOpenSettings={vi.fn()}
+          onOpenUpdates={vi.fn()}
+          onOpenAccount={vi.fn()}
+        />
+      </DeviceScope>,
+    );
+    expect(screen.getByTestId("rail-device-badge-local")).toHaveTextContent("2");
+  });
+
   it("anchors each status dot on its device icon, so a selected and an unselected cell put the dot in the same place", () => {
     const computers: RailComputer[] = [
       { key: LOCAL_DEVICE, name: "MacBook Pro", platform: "darwin", status: "online", badge: 0 },

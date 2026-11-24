@@ -5,6 +5,7 @@ import type { RailComputer } from "../rail-model.ts";
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from "../ui/drawer.tsx";
 import { Check } from "../ui/icons.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
+import { CountPill } from "./CountPill.tsx";
 import { PlatformIcon, StatusDot } from "./DeviceBadges.tsx";
 
 export interface ComputerSwitcherProps {
@@ -60,28 +61,34 @@ function SwitcherList({
                 onClose();
               }}
               className={cn(
-                "flex w-full cursor-pointer items-center gap-3 rounded-xs px-3 py-2 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
-                variant === "drawer" && "min-h-12",
+                "flex w-full cursor-pointer items-center gap-3 rounded-xs px-3 py-1.5 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
+                variant === "drawer" ? "min-h-12" : "min-h-11",
                 current ? "tile-open text-foreground" : "hover:bg-hover",
-                offline && !current && "text-muted-foreground",
               )}
             >
-              <PlatformIcon platform={c.platform} size="inherit" className="size-pixel shrink-0 text-muted-foreground" />
+              <PlatformIcon platform={c.platform} size="inherit" className={cn("size-pixel shrink-0 text-muted-foreground", offline && "opacity-60")} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span title={c.name} className="truncate text-body font-medium text-foreground">
+                  <span title={c.name} className={cn("truncate text-body font-medium", offline ? "text-muted-foreground" : "text-foreground")}>
                     {c.name}
                   </span>
                   <StatusDot status={c.status} />
                 </div>
-                <div className="text-xs text-muted-foreground">{CONNECTION_TEXT[c.status]}</div>
+                {c.status === "online" ? (
+                  <span className="sr-only">{CONNECTION_TEXT.online}</span>
+                ) : (
+                  <div className="text-xs text-muted-foreground">{CONNECTION_TEXT[c.status]}</div>
+                )}
               </div>
               {c.badge > 0 && (
-                <span className="shrink-0 bg-rail-ink px-1.5 py-0.5 text-xs font-semibold text-primary-foreground tabular-nums">
-                  {c.badge}
-                </span>
+                <>
+                  <CountPill count={c.badge} className="shrink-0" />
+                  <span className="sr-only">{`${c.badge} waiting`}</span>
+                </>
               )}
-              {current && <Check className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />}
+              <span className="grid size-4 shrink-0 place-items-center" aria-hidden="true">
+                {current && <Check className="size-pixel-sm text-rail-ink" />}
+              </span>
             </button>
           );
         })}

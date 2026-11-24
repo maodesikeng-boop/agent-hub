@@ -806,8 +806,9 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     const header = screen.getByRole("heading", { name: "小林" }).closest("header")!;
     expect(within(header).getByRole("button", { name: "Hide Pieces" })).toBe(toggle());
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    // The honey slot sinks into its pressed shade from aria-expanded alone (styles.css .btn-honey[aria-expanded="true"]).
-    expect(toggle()).toHaveClass("btn-honey");
+    // The frameless toggle keeps a soft fill from aria-expanded alone while the panel is open.
+    expect(toggle()).toHaveClass("aria-expanded:bg-hover");
+    expect(toggle()).not.toHaveClass("btn-honey");
     await user.click(closeRail());
     expect(rail()).not.toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Show Pieces" })).toBe(toggle());

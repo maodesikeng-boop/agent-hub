@@ -6,6 +6,7 @@ import { useResourcesAttention } from "../resources-model.ts";
 import type { QuotaVendor } from "../selectors.ts";
 import { Download, Hourglass, Settings, User } from "../ui/icons.ts";
 import { useUpdateReminder } from "../update-model.ts";
+import { CountPill } from "./CountPill.tsx";
 import { PlatformIcon } from "./DeviceBadges.tsx";
 import { QuotaHourglass } from "./QuotaHourglass.tsx";
 import { QuotaPopover } from "./QuotaPopover.tsx";
@@ -43,21 +44,8 @@ const TILE_REST = "group-hover:bg-rail-hover group-hover:[--dot-ring:var(--rail-
 const TILE_ON = "tile-selected [--tile-fill:var(--list)] [--dot-ring:var(--list)] text-list-ink";
 const ITEM = "group flex cursor-pointer flex-col items-center gap-1 outline-none";
 const LABEL = "max-w-16 truncate text-xs leading-4 font-medium";
-const BADGE =
-  "badge-pop absolute -top-1.5 -right-2 grid h-5 min-w-5 place-items-center rounded-sm bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums shadow-[0_0_0_2px_var(--rail)]";
+const BADGE = "absolute -top-1 -right-1.5 shadow-[0_0_0_2px_var(--rail)]";
 const DOT = "absolute size-2.5 rounded-full shadow-[0_0_0_2px_var(--dot-ring)] transition-shadow duration-150 motion-reduce:transition-none";
-
-function badgeText(count: number): string {
-  return count > 99 ? "99+" : String(count);
-}
-
-function CountBadge({ count, testId }: { count: number; testId: string }) {
-  return (
-    <span key={count} data-testid={testId} aria-hidden="true" className={BADGE}>
-      {badgeText(count)}
-    </span>
-  );
-}
 
 const STATUS_DOT: Record<RailComputer["status"], string> = {
   online: "bg-success",
@@ -67,7 +55,18 @@ const STATUS_DOT: Record<RailComputer["status"], string> = {
   unreachable: "bg-muted-foreground",
 };
 
-function ComputerCell({ computer, selected, onSelect }: { computer: RailComputer; selected: boolean; onSelect: () => void }) {
+function ComputerCell({
+  computer,
+  selected,
+  counted,
+  onSelect,
+}: {
+  computer: RailComputer;
+  selected: boolean;
+  /** Omit on single-computer setups once Router already carries the count. */
+  counted: boolean;
+  onSelect: () => void;
+}) {
   const offline = computer.status === "offline" || computer.status === "unreachable";
   const ariaParts = [computer.name];
   if (offline) ariaParts.push("offline");
@@ -89,7 +88,7 @@ function ComputerCell({ computer, selected, onSelect }: { computer: RailComputer
           <PlatformIcon platform={computer.platform} size="inherit" className="size-pixel" />
           <span data-testid={`rail-device-dot-${testKey}`} data-status={computer.status} aria-hidden="true" className={cn(DOT, "-right-1 -bottom-0.5", STATUS_DOT[computer.status])} />
         </span>
-        {computer.badge > 0 && <CountBadge count={computer.badge} testId={`rail-device-badge-${testKey}`} />}
+        {counted && computer.badge > 0 && <CountPill count={computer.badge} testId={`rail-device-badge-${testKey}`} className={BADGE} />}
       </span>
       <span className={cn(LABEL, offline ? "text-rail-ink-soft" : "text-rail-ink")}>{computer.name}</span>
     </button>
@@ -164,11 +163,11 @@ export function AppRail({
           aria-label={router.pendingCount > 0 ? `Router (${router.pendingCount} waiting)` : "Router"}
           aria-current={router.active ? "page" : undefined}
           onClick={router.onSelect}
-          className={ITEM}
+          className={cn(ITEM, "pet-trigger")}
         >
           <span className={cn(TILE, "size-12", router.active ? TILE_ON : TILE_REST)}>
             <RouterAvatar size={36} working={router.working} />
-            {router.pendingCount > 0 && <CountBadge count={router.pendingCount} testId="rail-router-badge" />}
+            {router.pendingCount > 0 && <CountPill count={router.pendingCount} testId="rail-router-badge" className={BADGE} />}
           </span>
           <span className={cn(LABEL, "text-rail-ink")}>Router</span>
         </button>
@@ -179,7 +178,13 @@ export function AppRail({
           <div aria-hidden="true" className="my-3 h-px w-8 shrink-0 bg-border" />
           <div className="flex min-h-0 w-full flex-col items-center gap-3 overflow-y-auto px-1 pt-1.5">
             {computers.map((c) => (
-              <ComputerCell key={c.key} computer={c} selected={selectedComputer === c.key} onSelect={() => onSelectComputer(c.key)} />
+              <ComputerCell
+                key={c.key}
+                computer={c}
+                selected={selectedComputer === c.key}
+                counted={computers.length > 1 || router.pendingCount === 0}
+                onSelect={() => onSelectComputer(c.key)}
+              />
             ))}
           </div>
         </>

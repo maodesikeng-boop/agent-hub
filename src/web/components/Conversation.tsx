@@ -148,7 +148,7 @@ export const Conversation = memo(function Conversation({
             <button
               type="button"
               aria-label={`View ${entry.pm.name}'s profile`}
-              className="-ml-1.5 flex h-11 min-w-0 max-w-full cursor-pointer items-center gap-2.5 pr-2 pl-1.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+              className="pet-trigger -ml-1.5 flex h-11 min-w-0 max-w-full cursor-pointer items-center gap-2.5 pr-2 pl-1.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
               onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
             >
               <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} className="shrink-0" />

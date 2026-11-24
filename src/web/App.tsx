@@ -432,12 +432,11 @@ function DesktopWorkbench({
         visible={c.railHasContent}
         open={piecesOpen}
         attention={c.railAttention}
-        count={c.railCount}
         look={c.look}
         onToggle={togglePieces}
       />
     ),
-    [c.railHasContent, piecesOpen, c.railAttention, c.railCount, c.look, togglePieces],
+    [c.railHasContent, piecesOpen, c.railAttention, c.look, togglePieces],
   );
 
   const listNode = (layout: "column" | "strip") => (
@@ -629,7 +628,7 @@ function MobileWorkbench({
   );
   const leading = useMemo(
     () => (
-      <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}>
+      <Button variant="ghost" size="icon" className="-ml-2 shrink-0 text-foreground" aria-label="Back" onClick={back}>
         <ArrowLeft aria-hidden="true" />
       </Button>
     ),
@@ -642,12 +641,11 @@ function MobileWorkbench({
         visible={c.railHasContent}
         open={drawerOpen}
         attention={c.railAttention}
-        count={c.railCount}
         look={c.look}
         onToggle={toggleMobileDrawer}
       />
     ),
-    [c.railHasContent, drawerOpen, c.railAttention, c.railCount, c.look, toggleMobileDrawer],
+    [c.railHasContent, drawerOpen, c.railAttention, c.look, toggleMobileDrawer],
   );
 
   const selectMobileTab = (tab: MobileTab) => {

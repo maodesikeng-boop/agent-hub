@@ -20,11 +20,13 @@ export function SearchField({
     <div
       className={cn(
         "flex h-9 min-w-0 flex-1 items-center gap-2 rounded-sm border border-border-strong pr-0.5 pl-3 transition-[border-color,box-shadow] focus-within:field-focus pointer-coarse:h-11",
-        tone === "cream" ? "bg-list-field" : "bg-background",
+        tone === "cream"
+          ? "border-transparent bg-list-ink/7 transition-[border-color,box-shadow,background-color] hover:bg-list-ink/10 focus-within:bg-list-field"
+          : "bg-background",
         className,
       )}
     >
-      <Search className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
+      <Search className={cn("size-pixel-sm shrink-0", tone === "cream" ? "text-list-ink-soft" : "text-muted-foreground")} aria-hidden="true" />
       <Input
         type="search"
         aria-label={label}
@@ -34,7 +36,13 @@ export function SearchField({
         onChange={(e) => onChange(e.target.value)}
       />
       {value.trim() !== "" && (
-        <Button variant="ghost" size="icon-sm" className="shrink-0" aria-label="Clear search" onClick={() => onChange("")}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn("shrink-0", tone === "cream" && "text-list-ink-soft hover:bg-list-hover hover:text-list-ink")}
+          aria-label="Clear search"
+          onClick={() => onChange("")}
+        >
           <X aria-hidden="true" />
         </Button>
       )}

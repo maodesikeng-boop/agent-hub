@@ -151,8 +151,18 @@ describe("ProjectList", () => {
     const activeBtn = screen.getByRole("button", { name: /^Ask PM.*Needs You$/ });
     expect(activeBtn).toHaveAttribute("aria-current", "page");
     expect(activeBtn.closest(".project-row")).toHaveClass("tile-selected");
-    expect(screen.getByTestId("asking-indicator")).toHaveClass("bg-status-active");
-    expect(screen.getByTestId("waiting-indicator")).toHaveClass("bg-status-active");
+    expect(screen.getByTestId("asking-indicator")).toHaveClass("block", "bg-status-active");
+    expect(screen.getByTestId("waiting-indicator")).toHaveClass("block", "bg-status-active");
+  });
+
+  it("omits row pin shortcuts on archived PMs so archive countdowns stay visible", async () => {
+    const user = userEvent.setup();
+    const { container } = renderList({
+      entries: [entry(1, { name: "Old Work", archived: true })],
+    });
+    await user.click(screen.getByRole("button", { name: /Archived/ }));
+    expect(screen.getByRole("button", { name: /^Old Work/ })).toBeInTheDocument();
+    expect(container.querySelector(".row-shortcuts")).toBeNull();
   });
 
   it("pins and unpins from the row shortcut and disables it while the computer is offline", async () => {

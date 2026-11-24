@@ -53,7 +53,7 @@ describe("史莱姆与总助", () => {
     expect(avatarArt(container)).not.toEqual(piece);
   });
 
-  it.each<ProjectListLayout>(["column", "strip", "page"])("%s 左栏列表与 AppRail 保持紧凑头像框与 slot 按钮样式", (layout) => {
+  it.each<ProjectListLayout>(["column", "strip", "page"])("%s 左栏列表与 AppRail 保持紧凑头像框，新建按钮不加框", (layout) => {
     const entries = [
       { id: 1, name: "Juniper", lastMessage: makeMessage({ id: 10, text: "One update" }), lastAt: 1 },
       { id: 2, name: "Fern", lastMessage: null, lastAt: 0 },
@@ -95,7 +95,9 @@ describe("史莱姆与总助", () => {
       const row = screen.getByRole("button", { name: new RegExp(name) });
       expect(row.querySelector('[data-slot="avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
     }
-    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("btn-honey");
+    const newPm = screen.getByRole("button", { name: "New project manager" });
+    expect(newPm).not.toHaveClass("btn-honey");
+    expect(newPm).toHaveClass("hover:bg-list-hover");
   });
 });
 

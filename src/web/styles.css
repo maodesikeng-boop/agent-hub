@@ -1298,11 +1298,21 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 @media (hover: hover) {
   .project-row:hover .row-shortcuts,
-  .project-row:focus-within .row-shortcuts {
+  .project-row:has(:focus-visible) .row-shortcuts {
     display: flex;
   }
-  .project-row:hover .project-row-meta,
-  .project-row:focus-within .project-row-meta {
+  .project-row:has(.row-shortcuts):hover .project-row-meta,
+  .project-row:has(.row-shortcuts):has(:focus-visible) .project-row-meta {
     display: none;
+  }
+}
+/* The whole row or button is the pointer target, so its pet hops (or its bell swings) once wherever the pointer lands. */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .project-row:hover .slime-pet:not([data-working]),
+  .pet-trigger:hover .slime-pet:not([data-working]) {
+    animation: slime-hop var(--motion-hop) ease-out;
+  }
+  .pet-trigger:hover .bell-swing:not([data-working]) {
+    animation: bell-swing var(--motion-hop) ease-out;
   }
 }

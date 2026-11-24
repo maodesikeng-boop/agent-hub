@@ -162,14 +162,13 @@ describe("ProjectList", () => {
     expect(time()).toBeInTheDocument();
   });
 
-  it("没有消息时保留第二行占位，名字与有预览的行对齐", async () => {
+  it("没有消息时不留空白第二行，名字和头像一起居中；行高和有预览的行一样", async () => {
     await boot();
     const empty = row("新来的");
     const withPreview = row("小林");
-    const placeholder = empty.querySelector("p")!;
-    const preview = within(withPreview).getByText("小林你好");
-    expect(placeholder.textContent).toBe("\u00a0");
-    expect(placeholder.className).toBe(preview.className);
+    expect(empty.querySelector("p")).toBeNull();
+    expect(within(withPreview).getByText("小林你好").tagName).toBe("P");
+    expect(empty).toHaveClass("items-center");
     expect(empty.closest(".project-row")).toHaveClass("h-13");
     expect(withPreview.closest(".project-row")).toHaveClass("h-13");
     expect(empty).toHaveTextContent("新来的");
@@ -201,7 +200,7 @@ describe("ProjectList", () => {
     );
     const quotaBtn = within(rail).getByRole("button", { name: /5h usage 37%/ });
     expect(quotaBtn).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("btn-honey");
+    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("hover:bg-list-hover");
 
     await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
     expect(within(rail).getByRole("button", { name: /5h usage 37%/ })).toBe(quotaBtn);
