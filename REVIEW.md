@@ -169,14 +169,6 @@ Check: Each new child process the daemon starts goes through `trackChild`, so a 
 
 Seen in: `6af05c80`, `4b557b03`
 
-### Automatic restarts and closes spare background tasks
-
-Trigger: `src/daemon/driver/**`, `src/daemon/launch.ts`, `src/daemon/pm-capabilities/**`, `src/daemon/ledger/handover.ts`, `src/vendors/*/driver.ts`, `src/vendors/_common/acp/**`
-
-Check: A restart or close that the user did not ask for (the idle timer, a changed capability fingerprint such as a plugin auto-update, a handover switch) never ends a process while `st.background.active`; it waits until the background tasks finish. Only a user stop, a change to the model, working directory, or extra directories, and the `BACKGROUND_TASKS_HOLD_MAX_MS` fallback may end them, and each of those sets `backgroundTasksKilledNote` so the agent learns which tasks stopped. A test starts a background task, fires the new trigger, and shows the process and its task survive.
-
-Seen in: `2717bd20`, `0d43d30f`
-
 ### Tests wait for events, not for time
 
 Trigger: `**/*.test.ts`, `**/*.test.tsx`, `test/**`
