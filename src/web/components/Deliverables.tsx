@@ -202,7 +202,7 @@ export function CardNoteForm({
     <div
       data-card-reply
       className={cn(
-        "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 transition-[border-color,box-shadow] focus-within:field-focus",
+        "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 shadow-[var(--shadow-tile)] transition-[border-color,box-shadow] focus-within:field-focus",
         disabled && "opacity-60",
         className,
       )}
