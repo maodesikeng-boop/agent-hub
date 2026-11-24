@@ -156,7 +156,6 @@ function onDisconnected(ctx: FeishuContext, reason: string) {
   link.wsUp = false;
   link.lastError = link.disconnectError = reason;
   stopInboundSession(ctx);
-  ctx.contexts.clearAll();
 }
 
 async function startWs(ctx: FeishuContext, transport: FeishuTransport) {

@@ -104,6 +104,35 @@ describe("routeFeishuMessage", () => {
     expect(route).toEqual({ kind: "context", line: { name: "李四", role: "guest", text: "看看登录页", at: 100 } });
   });
 
+  it("keeps an observer's bare mention quiet even when there is earlier discussion", () => {
+    const message = msg({ senderOpenId: GUEST, mentionedBot: true, text: "" });
+    const policy = ctx({
+      mode: "shared",
+      guestTier: "observer",
+      pendingContext: [{ name: "张三", role: "owner", text: "等会", at: 90 }],
+    });
+    expect(routeFeishuMessage(message, policy)).toEqual({ kind: "ignore" });
+    expect(routeFeishuMessage({ ...message, inThread: true }, policy)).toEqual({ kind: "ignore" });
+  });
+
+  it("wakes with earlier discussion and a nonempty body when the mention has no new text", () => {
+    const pendingContext = [{ name: "张三", role: "owner" as const, text: "等会", at: 90 }];
+    expect(routeFeishuMessage(msg({ mentionedBot: true, text: "" }), ctx({ mode: "shared", pendingContext }))).toMatchObject({
+      kind: "deliver",
+      text: "（@机器人，请看上面的讨论）",
+      origin: { context: pendingContext },
+      files: [],
+    });
+  });
+
+  it("answers a bare mention without context and ignores unmentioned empty input", () => {
+    expect(routeFeishuMessage(msg({ mentionedBot: true, text: "" }), ctx({ mode: "shared" }))).toEqual({
+      kind: "hint",
+      text: "我在，直接 @我 后面说事就行。",
+    });
+    expect(routeFeishuMessage(msg({ text: "" }), ctx())).toEqual({ kind: "ignore" });
+  });
+
   it("访客以“/”开头的话 → reject", () => {
     expect(routeFeishuMessage(msg({ senderOpenId: GUEST, mentionedBot: true, text: "/clear" }), ctx({ mode: "shared" }))).toMatchObject({ kind: "reject", openId: GUEST });
     expect(routeFeishuMessage(msg({ mentionedBot: true, text: "/compact" }), ctx({ mode: "shared" }))).toMatchObject({ kind: "deliver" });
@@ -155,18 +184,29 @@ describe("routeFeishuMessage", () => {
       expect(route).toMatchObject({ kind: "deliver", files: [{ messageId: "om_0", file: image }], droppedFiles: 1 });
     });
 
-    it("下一个气泡只 @机器人、没写字：照样把前面的文件交出；前面没有文件时不理", () => {
+    it("passes earlier files when the next bubble only mentions the bot", () => {
       expect(routeFeishuMessage(msg({ mentionedBot: true, text: "" }), ctx(mentionOnly))).toMatchObject({
         kind: "deliver",
         text: "",
         files: [{ messageId: "om_0", file: image }],
       });
-      expect(routeFeishuMessage(msg({ mentionedBot: true, text: "" }), ctx({ mode: "shared" }))).toEqual({ kind: "ignore" });
     });
 
     it("仅对话档访客只 @机器人、前面只有自己发的文件：回他一句文件不收，不投空消息", () => {
-      const route = routeFeishuMessage(msg({ senderOpenId: GUEST, mentionedBot: true, text: "" }), ctx({ ...mentionOnly, pendingFiles: [guestDoc] }));
+      const route = routeFeishuMessage(msg({ senderOpenId: GUEST, mentionedBot: true, text: "" }), ctx({
+        ...mentionOnly,
+        pendingFiles: [guestDoc],
+        pendingContext: [{ name: "李四", role: "guest", text: "（发了文件）", at: 95 }],
+      }));
       expect(route).toEqual({ kind: "reject", openId: GUEST, reason: GUEST_NO_FILES, guestDenied: true });
+    });
+
+    it("delivers earlier discussion and sheds a guest file they cannot submit", () => {
+      const pendingContext = [{ name: "李四", role: "guest" as const, text: "先看注册页", at: 80 }];
+      const route = routeFeishuMessage(msg({ senderOpenId: GUEST, mentionedBot: true, text: "" }), ctx({
+        ...mentionOnly, pendingContext, pendingFiles: [guestDoc],
+      }));
+      expect(route).toMatchObject({ kind: "deliver", origin: { context: pendingContext }, files: [], droppedFiles: 1 });
     });
 
     it("没唤醒的文件气泡仍记成背景“（发了文件）”，文件留给下一次唤醒", () => {

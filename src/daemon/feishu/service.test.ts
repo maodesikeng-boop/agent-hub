@@ -41,6 +41,7 @@ import { feishuChatMarker } from "./chats.ts";
 import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "./scopes.ts";
 import { renderFeishuAvatar } from "./avatars.ts";
 import { createFeishuService, type FeishuService } from "./service.ts";
+import { normalizeFeishuMessageEvent } from "./sdk.ts";
 import { FeishuSetupError } from "./setup.ts";
 import { createFeishuStore } from "./store.ts";
 import { createFakeFeishu, type FakeFeishu } from "./test-helpers.ts";
@@ -153,6 +154,23 @@ const say = (chatId: string, text: string, opts: { sender?: string; mention?: bo
   });
   return messageId;
 };
+async function receiveText(chatId: string, text: string, opts: { at?: number; sender?: string; threadId?: string } = {}) {
+  const messageId = `om_in${++seq}`;
+  fake.event(await normalizeFeishuMessageEvent({
+    sender: { sender_id: { open_id: opts.sender ?? OWNER }, sender_type: "user" },
+    message: {
+      message_id: messageId,
+      chat_id: chatId,
+      chat_type: "group",
+      message_type: "text",
+      create_time: String(opts.at ?? Date.now()),
+      content: JSON.stringify({ text }),
+      ...(opts.threadId === undefined ? {} : { thread_id: opts.threadId }),
+      ...(text.includes("@_user_1") ? { mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "项目助手" }] } : {}),
+    },
+  }, { openId: "ou_bot", name: "项目助手" }));
+  return messageId;
+}
 const join_ = (chatId: string, openId = GUEST, name = "李四") => {
   fake.chats.get(chatId)!.members.push({ member_id: openId, name });
   fake.event({ type: "im.chat.member.user.added_v1", chatId, openIds: [openId] });
@@ -433,6 +451,76 @@ describe("createFeishuService：接入与建群", () => {
 });
 
 describe("createFeishuService：唤醒规则", () => {
+  it.each([false, true])("wakes the PM with the incident's earlier text on a bare mention (reconnect: %s)", async (reconnect) => {
+    let now = 1_795_424_073_369;
+    svc = makeService({ now: () => now });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "collaborator" });
+    now = 1_795_424_073_370;
+    await receiveText(chat, "等会", { at: now });
+    await settle();
+    expect(userMessages(lin.conversationId)).toHaveLength(0);
+    if (reconnect) {
+      fake.handlers!.onDisconnected("网络断了");
+      fake.handlers!.onConnected();
+      await settle();
+    }
+    now = 1_795_424_207_628;
+    await receiveText(chat, "@_user_1", { at: now });
+    await settle();
+    const messages = userMessages(lin.conversationId);
+    expect(messages).toHaveLength(1);
+    expect(ledger.deliveryOf(messages[0]!)).toMatchObject({
+      text: "（@机器人，请看上面的讨论）",
+      prefixes: expect.arrayContaining([expect.stringContaining("（主人）：等会")]),
+    });
+    await receiveText(chat, "@_user_1 继续", { at: ++now });
+    await settle();
+    const [, next] = userMessages(lin.conversationId);
+    expect(ledger.deliveryOf(next!).prefixes.join("\n")).not.toContain("等会");
+  });
+
+  it.each([OWNER, GUEST])("acknowledges an empty context with one group reply and no PM turn (%s)", async (sender) => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+    const text = sender === OWNER ? "我在，直接 @我 后面说事就行。" : `<at user_id="${GUEST}"></at> 我在，直接 @我 后面说事就行。`;
+    const id = await receiveText(chat, "  @_user_1  ", { sender });
+    const event = fake.history.get(chat)!.find((item) => item.messageId === id)!;
+    fake.event(event);
+    await settle();
+    const replies = fake.callsOf("message.create").filter((call) => call.receive_id === chat && call.msg_type === "text");
+    expect(replies.map((call) => JSON.parse(call.content).text)).toEqual([text]);
+    expect(userMessages(lin.conversationId)).toHaveLength(0);
+  });
+
+  it("tells an authorized sender where to mention the bot outside a topic", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    await receiveText(chat, "@_user_1", { threadId: "omt_topic" });
+    await settle();
+    expect(fake.callsOf("message.create")).toContainEqual(expect.objectContaining({
+      receive_id: chat,
+      msg_type: "text",
+      content: JSON.stringify({ text: "暂不支持在话题里回复，请到群聊主消息流 @我。" }),
+    }));
+    expect(userMessages(lin.conversationId)).toHaveLength(0);
+  });
+
+  it("logs explicit mentions in unbound groups without sending a reply", async () => {
+    const log = vi.fn();
+    svc = makeService({ log });
+    await connect();
+    const chat = "oc_unbound";
+    const id = await receiveText(chat, "@_user_1");
+    await settle();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(`chatId=${chat} messageId=${id}`));
+    expect(fake.callsOf("message.create").some((call) => call.receive_id === chat)).toBe(false);
+  });
+
   it("群里只有主人时，主人不 @机器人 说的话进账本，发给 agent 时没有署名", async () => {
     await connect();
     say(chatOf(lin.pmId), "看看登录页");
@@ -783,13 +871,13 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     expect(policyCards()).toHaveLength(joined + 1);
     expect(fake.sent.at(-1)!.messageId).toBe(policyPost()!.messageId);
     say(chat, "", { sender: GUEST, files: [{ type: "file", fileKey: "file_g2", fileName: "h.txt" }] });
-    say(chat, "", { sender: GUEST, mention: true });
+    await receiveText(chat, "@_user_1", { sender: GUEST });
     await settle();
     expect(policyCards()).toHaveLength(joined + 1);
     expect(textsTo(chat).filter((t) => t.includes("文件不收"))).toHaveLength(2);
     offset += FEISHU_POLICY_CARD_COOLDOWN_MS;
     say(chat, "", { sender: GUEST, files: [{ type: "file", fileKey: "file_g3", fileName: "i.txt" }] });
-    say(chat, "", { sender: GUEST, mention: true });
+    await receiveText(chat, "@_user_1", { sender: GUEST });
     await settle();
     expect(policyCards()).toHaveLength(joined + 2);
     expect(fake.calls.some((c) => c.method === "downloadResource")).toBe(false);
@@ -2437,7 +2525,7 @@ describe("createFeishuService：多人群里前面气泡的文件随 @机器人 
     const chat = await mentionOnlyGroupWithGuest();
     fake.resources.set("img_q", png());
     say(chat, "![image](img_q)", { files: [{ type: "image", fileKey: "img_q", fileName: null }] });
-    say(chat, "", { mention: true });
+    await receiveText(chat, "@_user_1");
     await settle();
     const [m] = userMessages(lin.conversationId);
     expect(m?.text).toBe("");
@@ -2465,11 +2553,11 @@ describe("createFeishuService：多人群里前面气泡的文件随 @机器人 
   it("前面的文件下载失败、下一个气泡只 @机器人：只回一次“没收下”，失败的文件不留在近窗里，换发正常文件再 @ 不再重下坏文件", async () => {
     const chat = await mentionOnlyGroupWithGuest();
     const badBubble = say(chat, "![image](img_bad)", { files: [{ type: "image", fileKey: "img_bad", fileName: null }] });
-    say(chat, "", { mention: true });
+    await receiveText(chat, "@_user_1");
     await settle();
     fake.resources.set("img_good", png());
     const goodBubble = say(chat, "![image](img_good)", { files: [{ type: "image", fileKey: "img_good", fileName: null }] });
-    say(chat, "", { mention: true });
+    await receiveText(chat, "@_user_1");
     await settle();
     expect(downloads().map((d) => d.messageId)).toEqual([badBubble, goodBubble]);
     expect(textsTo(chat).filter((t) => t.includes("没收下"))).toHaveLength(1);
@@ -2480,7 +2568,7 @@ describe("createFeishuService：多人群里前面气泡的文件随 @机器人 
     const chat = await mentionOnlyGroupWithGuest();
     fake.resources.set("img_y", png());
     say(chat, "![image](img_y)", { sender: GUEST, files: [{ type: "image", fileKey: "img_y", fileName: null }] });
-    say(chat, "", { sender: GUEST, mention: true });
+    await receiveText(chat, "@_user_1", { sender: GUEST });
     await settle();
     expect(textsTo(chat).filter((t) => t.includes("访客发的文件不收"))).toHaveLength(1);
     say(chat, "那我用文字说：写一版文案", { sender: GUEST, mention: true });
@@ -2489,7 +2577,7 @@ describe("createFeishuService：多人群里前面气泡的文件随 @机器人 
     expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["那我用文字说：写一版文案"]);
   });
 
-  it("长连接断开时前面没交出的文件跟背景一起清掉，重连后 @机器人 不再带上", async () => {
+  it("preserves pending files and context when the socket reconnects", async () => {
     const chat = await mentionOnlyGroupWithGuest();
     fake.resources.set("img_d", png());
     say(chat, "![image](img_d)", { files: [{ type: "image", fileKey: "img_d", fileName: null }] });
@@ -2499,8 +2587,10 @@ describe("createFeishuService：多人群里前面气泡的文件随 @机器人 
     await settle();
     say(chat, "看图", { mention: true });
     await settle();
-    expect(attachmentNames(userMessages(lin.conversationId)[0])).toEqual([]);
-    expect(downloads()).toEqual([]);
+    const [message] = userMessages(lin.conversationId);
+    expect(attachmentNames(message)).toEqual([expect.stringMatching(/\.png$/)]);
+    expect(ledger.deliveryOf(message!).prefixes.join("\n")).toContain("（发了文件）");
+    expect(downloads()).toHaveLength(1);
   });
 });
 

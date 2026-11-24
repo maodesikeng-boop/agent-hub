@@ -8,6 +8,7 @@ import {
   FEISHU_CARDKIT_MIN_SHARE_PER_SECOND,
   FEISHU_CONTROL_RETRY_MS,
   FEISHU_FORWARD_CARD_TIMEOUT_MS,
+  FEISHU_INBOUND_QUEUE_MAX,
   FEISHU_MEMBERS_RETRY_MS,
   FEISHU_OFFLINE_INBOX_MAX_PER_DEVICE,
   FEISHU_OFFLINE_INBOX_TTL_MS,
@@ -673,6 +674,22 @@ describe("createFeishuAccountBot", () => {
     bot.onEvent(rawMessage(unknownChat, "om_u_3", "丙"));
     await new Promise((r) => setTimeout(r, 20));
     expect(localA.descCalls()).toBe(3);
+  });
+
+  it("logs lost mentions at the account bot without logging their text", async () => {
+    const h = makeMeshHarness([DEV_B]);
+    const localA = makeFakeLocal();
+    const log = vi.fn();
+    const bot = createFeishuAccountBot({ mesh: h.mesh, local: localA.local, inbox: null, log });
+    cleanups.push(() => bot.close());
+
+    for (let i = 0; i < FEISHU_INBOUND_QUEUE_MAX; i++) bot.onEvent(rawMessage(CHAT_B, `om_full_${i}`, "群聊内容"));
+    bot.onEvent({ ...rawMessage(CHAT_B, "om_dropped", "提及正文"), mentionedBot: true });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(`chatId=${CHAT_B} messageId=om_dropped reason=queue-full`));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    bot.onEvent({ ...rawMessage(CHAT_C, "om_unknown", "提及正文"), mentionedBot: true });
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining(`chatId=${CHAT_C} messageId=om_unknown reason=unknown-chat-owner`)));
+    expect(log.mock.calls.flat().join("\n")).not.toContain("提及正文");
   });
 
   it("learnChats 只收广播者自己设备编号的群", async () => {
