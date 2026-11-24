@@ -37,13 +37,13 @@ const NO_LOOK = defaultLookOf(0);
 
 const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(worker.activity) || !IDLE_ACTIVITIES.has(worker.activity));
 
+// Rows bleed 10px each side so their text shares the section heading's left edge; selection is an inset ring, never a border.
 const ROW_BASE =
-  "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 border-2 border-transparent px-2.5 py-2 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]";
+  "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 rounded-sm px-2.5 py-2 text-left transition-[background-color,box-shadow] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none";
 const ROW = cn(ROW_BASE, "gap-3");
 const ITEM_HOVER = "hover:bg-hover";
-const ITEM_SELECTED = "border-open-line bg-open";
+const ITEM_SELECTED = "tile-open";
 const ROW_ICON = "size-4 shrink-0 text-muted-foreground";
-const ICON_STROKE = 1.5;
 const TONE_DOT: Record<WorkerTone, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger", neutral: "bg-muted-foreground/50" };
 
 export const RIGHT_RAIL_COLLAPSED_KEY = "agent-hub.rightRail.collapsed";
@@ -97,16 +97,16 @@ function GroupTitle({
   trailing?: React.ReactNode;
 }) {
   const title = (
-    <h2 id={id} className={cn("h-8 min-w-0 pointer-coarse:h-11 text-xs font-medium text-muted-foreground", trailing && "flex-1")}>
+    <h2 id={id} className={cn("h-8 min-w-0 pointer-coarse:h-11 text-minor font-medium text-muted-foreground", trailing && "flex-1")}>
       <button
         type="button"
         aria-expanded={!collapsed}
         aria-controls={bodyId}
-        className="-mx-2.5 flex h-8 pointer-coarse:h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-2 px-2.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+        className="-mx-2.5 flex h-8 pointer-coarse:h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-1.5 px-2.5 text-left transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
         onClick={onToggle}
       >
-        {dot && <span className="size-1.5 shrink-0 bg-primary" aria-hidden="true" />}
         <span className="min-w-0 truncate">{children}</span>
+        {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
         <ChevronRight
           className={cn(
             "size-pixel-sm shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
@@ -162,7 +162,7 @@ function AskRow({ ask, onOpen }: { ask: Message; onOpen: () => void }) {
   return (
     <li>
       <button type="button" title={summary} className={cn(ROW, "items-center", ITEM_HOVER)} onClick={onOpen}>
-        <MessageCircleQuestionMark className={ROW_ICON} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        <MessageCircleQuestionMark className={ROW_ICON} aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-body leading-5">{summary}</span>
         <ChevronRight className={cn(ROW_ICON, "size-pixel-sm")} aria-hidden="true" />
       </button>
@@ -613,19 +613,20 @@ export function PiecesSlot({
       aria-label={label}
       aria-expanded={open}
       onClick={onToggle}
-      className={cn("relative h-9 shrink-0 gap-1.5 px-2.5", open && "bg-slot-hover shadow-[inset_0_2px_0_var(--slot-shade)]")}
+      className="relative shrink-0 gap-1.5 px-2.5"
     >
       <Avatar look={look} size={20} neutral />
       <span className="text-minor font-medium text-foreground">Pieces</span>
       {count > 0 && (
         <span
+          key={count}
           aria-hidden="true"
-          className="grid h-4.5 min-w-4.5 place-items-center bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums"
+          className="badge-pop grid h-4.5 min-w-4.5 place-items-center rounded-xs bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums"
         >
           {count > 99 ? "99+" : count}
         </span>
       )}
-      {attention && !open && <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 size-1.5 bg-primary" />}
+      {attention && !open && <span aria-hidden="true" className="absolute -top-1 -right-1 size-2 rounded-full bg-primary shadow-[0_0_0_2px_var(--background)]" />}
     </Button>
   );
 }

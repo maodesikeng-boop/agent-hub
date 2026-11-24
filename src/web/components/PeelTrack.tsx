@@ -32,6 +32,9 @@ type GutterKind = "station" | "parA" | "parB" | "coil" | "gate" | "next";
 type DotTone = "done" | "run" | "warn" | "blocked";
 
 const GUTTER_H = 32;
+// Every track row, clickable or not, shares this box: a border or extra padding on one row would break the pipe joints.
+const PEEL_ROW =
+  "-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-sm px-2.5 text-left transition-[background-color,box-shadow] duration-150 outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none";
 const peelLen = (units: number) => `calc(${units} * var(--peel-u))`;
 const GUTTER_CY = GUTTER_H / 2;
 const CELL = 2;
@@ -220,7 +223,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   return (
     <div
       data-testid="peel-gate-card"
-      className="border-2 border-open-line bg-open px-3.5 py-3 [contain:layout_style]"
+      className="rounded-sm border border-select-line bg-open px-3.5 py-3 [contain:layout_style]"
     >
       {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
@@ -241,10 +244,8 @@ export const GateDecisionCard = memo(function GateDecisionCard({
                 disabled={decideMutation.isPending}
                 onClick={() => submit(opt, getDecisionDraft(draftKey))}
                 className={cn(
-                  "flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-center justify-between gap-2 border-2 px-3 py-1.5 text-left text-minor font-medium transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:border-border-strong disabled:bg-send-disabled disabled:text-muted-foreground",
-                  isRec
-                    ? "border-black/25 bg-primary text-primary-foreground shadow-[inset_0_-2px_0_rgb(0_0_0_/_0.22)] hover:brightness-90"
-                    : "border-border-strong bg-background text-foreground hover:bg-hover",
+                  "flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-3 py-1.5 text-left text-minor font-medium outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 disabled:pointer-events-none disabled:opacity-60",
+                  isRec ? "btn-solid bg-primary text-primary-foreground" : "btn-raised",
                 )}
               >
                 <span className="min-w-0 flex-1 wrap-anywhere">{opt}</span>
@@ -261,9 +262,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
         disabled={decideMutation.isPending}
         pending={decideMutation.isPending}
         onSubmitNote={(raw) => submit(null, raw)}
-        tone="open"
         className={hasOptions ? "mt-3" : "mt-2"}
-        inputClassName="min-w-0 flex-1 text-minor"
         buttonSize="sm"
       />
       {err !== null && (
@@ -313,7 +312,7 @@ function PeelStageRow({
         data-testid="peel-gate-row"
         title={node.title}
         onClick={() => onOpenStepAsk(node)}
-        className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center border-2 border-transparent px-2.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+        className={PEEL_ROW}
       >
         <PeelGutter kind="gate" gutterWidth={gutterWidth} dotX={dotX} segments={segments} />
         <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
@@ -378,10 +377,7 @@ function PeelStageRow({
         aria-label={node.title}
         title={node.title}
         onClick={() => onOpenWorker(worker.conversationId)}
-        className={cn(
-          "-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center border-2 border-transparent px-2.5 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
-          active ? "border-open-line bg-open" : "hover:bg-hover",
-        )}
+        className={cn(PEEL_ROW, active && "tile-open")}
       >
         {content}
       </button>
@@ -389,7 +385,7 @@ function PeelStageRow({
   }
 
   return (
-    <div data-node-key={node.key} title={isTaskNodeWaitingPm(node) ? `${node.title}\nWaiting on PM` : node.title} className="flex min-h-8 pointer-coarse:min-h-11 items-center">
+    <div data-node-key={node.key} title={isTaskNodeWaitingPm(node) ? `${node.title}\nWaiting on PM` : node.title} className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] items-center px-2.5">
       {content}
     </div>
   );
@@ -878,7 +874,7 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
               key={row.item.key}
               type="button"
               onClick={() => setDoneExpanded(true)}
-              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+              className={cn(PEEL_ROW, "text-minor text-muted-foreground hover:text-foreground")}
             >
               <PeelGutter
                 kind="coil"
@@ -896,7 +892,7 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
               key={row.item.key}
               type="button"
               onClick={() => setNextExpanded(true)}
-              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+              className={cn(PEEL_ROW, "text-minor text-muted-foreground hover:text-foreground")}
             >
               <PeelGutter
                 kind={row.gutterKind}

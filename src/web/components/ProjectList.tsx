@@ -45,7 +45,8 @@ export interface ProjectListProps {
   onSelectComputer?: (key: DeviceKey) => void;
 }
 
-const SECTION_HEADING = "flex h-8 items-center gap-1.5 px-4 text-minor font-medium text-list-ink-soft";
+// Headings share the avatars' 16px left edge: 8px list inset plus the rows' 8px padding.
+const SECTION_HEADING = "flex h-8 items-center gap-1.5 px-2 text-minor font-medium text-list-ink-soft";
 
 const StripItem = memo(function StripItem({
   deviceKey,
@@ -74,8 +75,8 @@ const StripItem = memo(function StripItem({
       aria-current={active ? "page" : undefined}
       onClick={() => onSelect({ device: deviceKey, id: entry.id })}
       className={cn(
-        "relative grid size-13 shrink-0 cursor-pointer place-items-center border-2 transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
-        active ? "border-select-line bg-background" : "border-transparent hover:bg-list-hover",
+        "relative grid size-13 shrink-0 cursor-pointer place-items-center transition-[background-color,box-shadow] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus motion-reduce:transition-none",
+        active ? "tile-selected" : "hover:bg-list-hover",
       )}
     >
       <Avatar look={entry.look} size={36} className={readOnly ? "opacity-60" : undefined} />
@@ -84,7 +85,7 @@ const StripItem = memo(function StripItem({
           role="img"
           aria-label={asking ? NEEDS_YOU : YOUR_TURN}
           data-testid={asking ? "asking-indicator" : "waiting-indicator"}
-          className={cn("absolute right-1 bottom-1 size-2 bg-status-active ring-2", active ? "ring-background" : "ring-list")}
+          className={cn("absolute right-1 bottom-1 size-2 rounded-full bg-status-active ring-2", active ? "ring-background" : "ring-list")}
         />
       )}
     </button>
@@ -122,9 +123,9 @@ const ProjectRow = memo(function ProjectRow({
     archivedAt !== null ? (
       <span className="text-xs text-list-ink-soft tabular-nums">{formatArchiveRemaining(archivedAt)}</span>
     ) : asking ? (
-      <span role="img" aria-label={NEEDS_YOU} title={NEEDS_YOU} data-testid="asking-indicator" className="size-2 shrink-0 bg-status-active" />
+      <span role="img" aria-label={NEEDS_YOU} title={NEEDS_YOU} data-testid="asking-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
     ) : waiting ? (
-      <span role="img" aria-label={YOUR_TURN} title={YOUR_TURN} data-testid="waiting-indicator" className="size-2 shrink-0 bg-status-active" />
+      <span role="img" aria-label={YOUR_TURN} title={YOUR_TURN} data-testid="waiting-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
     ) : entry.lastMessage ? (
       <span className="text-xs text-list-ink-soft tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
     ) : null;
@@ -132,9 +133,9 @@ const ProjectRow = memo(function ProjectRow({
   return (
     <div
       className={cn(
-        "project-row flex min-w-0 items-center gap-1 border-2 transition-colors",
+        "project-row flex min-w-0 items-center gap-1 rounded-sm transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none",
         pageLayout ? "min-h-15 pr-3 pl-2" : "h-13 pr-2 pl-2",
-        active ? "border-select-line bg-background" : "border-transparent hover:bg-list-hover",
+        active ? "tile-selected" : "hover:bg-list-hover",
       )}
     >
       <button
@@ -222,8 +223,8 @@ export const ProjectList = memo(function ProjectList({
     const stripExtras = filtered.archived.filter(isSelected);
     return (
       <section aria-label={computer.name} className="flex h-full w-18 shrink-0 flex-col bg-list text-list-ink">
-        <div className="flex h-14 shrink-0 items-center justify-center border-b-2 border-list-edge">
-          <Button variant="slot" size="icon-lg" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
+        <div className="flex h-14 shrink-0 items-center justify-center border-b border-border">
+          <Button variant="slot" size="icon" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
             <Plus aria-hidden="true" />
           </Button>
         </div>
@@ -244,7 +245,7 @@ export const ProjectList = memo(function ProjectList({
             );
           })}
           {sections.pinned.length > 0 && (sections.active.length > 0 || stripExtras.length > 0) && (
-            <div aria-hidden="true" data-testid="strip-pin-divider" className="my-0.5 w-8 shrink-0 border-b-2 border-list-edge" />
+            <div aria-hidden="true" data-testid="strip-pin-divider" className="my-0.5 w-8 shrink-0 border-b border-border" />
           )}
           {[...sections.active, ...stripExtras].map((entry) => {
             const key = conversationKey(computer.key, entry.id);
@@ -287,7 +288,7 @@ export const ProjectList = memo(function ProjectList({
       aria-label={computer.name}
       className={cn("flex min-h-0 min-w-0 flex-col bg-list text-list-ink", isPage ? "flex-1 pt-[var(--safe-top)]" : "h-full")}
     >
-      <header data-window-drag className="flex h-14 shrink-0 items-center justify-between gap-2 border-b-2 border-list-edge pr-2.5 pl-4">
+      <header data-window-drag className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border pr-3 pl-4">
         <div className="min-w-0 flex-1">
           {switchable ? (
             computers !== undefined && onSelectComputer !== undefined ? (
@@ -310,12 +311,12 @@ export const ProjectList = memo(function ProjectList({
             </h1>
           )}
         </div>
-        <Button variant="slot" size="icon-lg" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
+        <Button variant="slot" size="icon" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
           <Plus aria-hidden="true" />
         </Button>
       </header>
 
-      <div className="shrink-0 px-3 pt-3 pb-1">
+      <div className="shrink-0 px-2 pt-3 pb-1">
         <SearchField label="Search conversations" tone="cream" value={query} onChange={setQuery} />
       </div>
 
