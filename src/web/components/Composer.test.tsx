@@ -40,17 +40,14 @@ const setup = (over: Partial<StagedFiles> = {}) =>
   render(<Composer value="第一行\n第二行" placeholder="发消息" staging={staging(over)} onChange={() => {}} onSend={() => {}} />);
 
 describe("Composer 布局", () => {
-  it("“+”和发送键同尺寸、直角（36px）；“+”是不带底色的 ghost 图标按钮（悬停 hover:bg-hover）；框是直角 2px 边", () => {
+  it("“+”和发送键同尺寸（36px）、4px 小圆角；“+”是不带底色的 ghost 图标按钮（悬停 hover:bg-hover）；框是 .composer-frame", () => {
     setup();
     const attach = screen.getByRole("button", { name: "Add files" });
     const send = screen.getByRole("button", { name: "Send" });
     expect(attach).toHaveClass("text-muted-foreground", "hover:bg-hover");
     expect(attach.className).not.toMatch(/(^|\s)bg-/);
-    for (const el of [attach, send]) {
-      expect(el).toHaveClass("size-9");
-      expect(el.className).not.toMatch(/rounded-/);
-    }
-    expect(attach.closest(".composer-frame")?.className).not.toMatch(/rounded-/);
+    for (const el of [attach, send]) expect(el).toHaveClass("size-9", "rounded-sm");
+    expect(attach.closest(".composer-frame")).not.toBeNull();
   });
 
   it("空输入框是单行：回形针、文字区、发送键在同一个网格行，从左到右排开", () => {
@@ -145,8 +142,7 @@ describe("Composer 布局", () => {
       );
       const btn = screen.queryByRole("button", { name: "Stop" });
       if (files.length === 0) {
-        expect(btn).toHaveClass("size-9");
-        expect(btn?.className).not.toMatch(/rounded-/);
+        expect(btn).toHaveClass("size-9", "rounded-sm");
         expect(btn?.parentElement).toHaveClass("col-start-3", "row-start-1");
       } else {
         expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(); // 有待发文件：不是停止
@@ -487,8 +483,8 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(chip.querySelector("svg")).toHaveClass("size-4", "text-muted-foreground");
     expect(chip.querySelector("svg")).toHaveAttribute("data-icon", "line");
     const li = chip.closest("li")!;
-    expect(li).toHaveClass("border", "border-border-strong", "bg-panel", "py-1", "pr-1", "pl-3", "text-minor");
-    expect(li.className).not.toMatch(/rounded-/);
+    // A chip is a label, not a control: hairline structure line, flat panel fill, the one small radius.
+    expect(li).toHaveClass("rounded-sm", "border", "border-border", "bg-panel", "py-1", "pr-1", "pl-3", "text-minor");
     expect(li.parentElement).toHaveAccessibleName("Files to send");
     expect(li.parentElement!.firstElementChild).toBe(li);
     expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("touch-target", "size-6");
@@ -662,8 +658,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     const chips = await screen.findAllByRole("group", { name: "Worker model" });
     expect(chips).toHaveLength(1);
     expect(chips[0]!.textContent).toBe("Claude CodeHigh");
-    expect(chips[0]).toHaveClass("border", "border-border-strong", "bg-panel", "text-minor", "gap-2", "mb-1.5");
-    expect(chips[0]!.className).not.toMatch(/rounded-/);
+    expect(chips[0]).toHaveClass("rounded-sm", "border", "border-border", "bg-panel", "text-minor", "gap-2", "mb-1.5");
     const bubble = screen.getByText("派人做");
     expect(chips[0]!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

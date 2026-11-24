@@ -151,6 +151,23 @@ describe("AppRail", () => {
     expect(onSelectComputer).toHaveBeenCalledWith(LOCAL_DEVICE);
   });
 
+  it("anchors each status dot on its device icon, so a selected and an unselected cell put the dot in the same place", () => {
+    const computers: RailComputer[] = [
+      { key: LOCAL_DEVICE, name: "MacBook Pro", platform: "darwin", status: "online", badge: 0 },
+      { key: "tokyo", name: "Tokyo", platform: "linux", status: "online", badge: 0 },
+    ];
+    renderRail({ computers, selectedComputer: LOCAL_DEVICE });
+    for (const key of ["local", "tokyo"]) {
+      const dot = screen.getByTestId(`rail-device-dot-${key}`);
+      const anchor = dot.parentElement!;
+      expect(anchor.querySelector("svg")).not.toBeNull();
+      expect(anchor).toHaveClass("relative");
+      expect(dot).toHaveClass("absolute", "rounded-full", "-right-1", "-bottom-0.5");
+      // The halo follows the tile, so the dot reads as cut out of whatever surface sits behind it.
+      expect(dot.className).toContain("shadow-[0_0_0_2px_var(--dot-ring)]");
+    }
+  });
+
   it("opens the usage popover from the meter and hides the meter when no usage is reported", async () => {
     const user = userEvent.setup();
     const { rerender } = renderRail({ meter: null, quota: [] });
@@ -162,7 +179,7 @@ describe("AppRail", () => {
           router={{ active: false, pendingCount: 0, working: false, onSelect: vi.fn() }}
           computers={[]}
           selectedComputer={LOCAL_DEVICE}
-          meter={{ vendorName: "Claude Code", windowShort: "5h", percent: 45, cells: 3, warning: false, full: false }}
+          meter={{ vendorName: "Claude Code", windowShort: "5h", percent: 45, warning: false, full: false }}
           quota={SAMPLE_QUOTA}
           quotaFetchable={false}
           onSelectComputer={vi.fn()}
@@ -258,6 +275,6 @@ describe("AppRail", () => {
     queryClient.setQueryData(RESOURCES_QUERY_KEY(LOCAL_DEVICE), resources);
     renderRail();
     expect(screen.getByRole("button", { name: "Settings (1 to review)" })).toBeInTheDocument();
-    expect(screen.getByTestId("settings-resources-attention")).toHaveClass("bg-caution");
+    expect(screen.getByTestId("settings-resources-attention")).toHaveClass("bg-danger", "rounded-full");
   });
 });

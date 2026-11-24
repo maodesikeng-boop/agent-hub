@@ -169,7 +169,7 @@ describe("Worker 线程卡（ThreadCard）", () => {
   const report = (over: Parameters<typeof makeWorkerLine>[0]["line"] = {}) =>
     makeWorkerLine({ id: 5, line: { event: "report", status: "done", summary: "按钮统一成 36px，开了 PR #128", ...over } });
 
-  it("一张直角 2px 卡片内放纸片小灵头像、标题、状态词、时间和第一行摘要，整张卡片可点开 Worker 对话", async () => {
+  it("一张 4px 圆角、1px 结构线的卡片内放纸片小灵头像、标题、状态词、时间和第一行摘要，整张卡片可点开 Worker 对话", async () => {
     const onOpenWorker = vi.fn();
     const { container } = list([report()], { actions: actions({ onOpenWorker }) });
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
@@ -181,9 +181,9 @@ describe("Worker 线程卡（ThreadCard）", () => {
     expect(bubble).toHaveTextContent("Done");
     expect(bubble).toHaveTextContent("按钮统一成 36px，开了 PR #128");
     const userBubble = list([makeUserMessage({ id: 1 })]).container.querySelector("[data-bubble]") as HTMLElement;
-    expect(bubble.className).not.toMatch(/rounded-/);
-    expect(userBubble.className).not.toMatch(/rounded-/);
-    expect(bubble).toHaveClass("border-2", "border-border-strong", "bg-background", "hover:bg-hover");
+    expect(bubble).toHaveClass("rounded-sm", "border", "border-border", "bg-background", "hover:bg-hover");
+    expect(bubble.className).not.toContain("border-2");
+    expect(userBubble.className).not.toMatch(/rounded-(?!sm\b)/);
     expect(row.innerHTML).not.toContain("Piece「");
     await userEvent.click(bubble);
     expect(onOpenWorker).toHaveBeenCalledWith(30);
@@ -219,7 +219,7 @@ describe("Worker 线程卡（ThreadCard）", () => {
     expect(dot).toHaveAttribute("data-dot", "warn");
     expect(dot).toHaveAttribute("aria-hidden", "true");
     expect(dot.className).toContain("bg-caution");
-    expect(dot.className).not.toContain("rounded-");
+    expect(dot.className).toContain("rounded-full");
     expect(dot.closest("[data-bubble]")).not.toBeNull();
     const dots = list([report(), report({ status: "gave_up" }), report({ status: "unformatted" })]).container.querySelectorAll("[data-dot]");
     expect(Array.from(dots).map((d) => d.getAttribute("data-dot"))).toEqual(["success", "danger"]);
@@ -271,13 +271,13 @@ describe("Worker 线程卡（ThreadCard）", () => {
 });
 
 describe("系统行", () => {
-  it("建项目、挂文件夹：结构化活动条靠左展示（带标签与 2px 边），不居中、没有灰气泡", () => {
+  it("建项目、挂文件夹：结构化活动条靠左展示（带标签，纸色底、4px 圆角、没有框），不居中、没有灰气泡", () => {
     const { container } = list([makeSystemMessage({ id: 1, text: "项目已建好", event: { event: "project.created", projectId: 1 } })]);
     const notice = screen.getByText("项目已建好").closest("[data-notice]") as HTMLElement;
     expect(notice).toHaveAttribute("data-side", "left");
     expect(within(notice).getByText("Project")).toBeInTheDocument();
-    expect(notice.parentElement?.className).toContain("border-2");
-    expect(notice.parentElement?.className).toContain("bg-panel");
+    expect(notice.parentElement).toHaveClass("rounded-sm", "bg-panel");
+    expect(notice.parentElement?.className).not.toMatch(/(^|\s)border(-|\s|$)/);
     expect(notice.className).not.toContain("justify-center");
     expect(container.innerHTML).not.toContain("bg-muted");
   });

@@ -336,11 +336,11 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
       choice: null,
       note: "补充上限常量到 limits.ts",
     });
-    // 乐观态立即高亮「打回」选项（border-open-line bg-open），不误高亮「通过」
+    // 乐观态立即高亮「打回」选项（tile-open），不误高亮「通过」
     const passBtn = within(chatCard).getByRole("button", { name: /通过/ });
     const rejectBtn = within(chatCard).getByRole("button", { name: /打回/ });
-    expect(rejectBtn.className).toContain("bg-open");
-    expect(passBtn.className).not.toContain("bg-open");
+    expect(rejectBtn.className).toContain("tile-open");
+    expect(passBtn.className).not.toContain("tile-open");
 
     // 打开已取消的历史图全览弹窗：绝不渲染活体 GateDecisionCard 或 Waiting on you
     render(

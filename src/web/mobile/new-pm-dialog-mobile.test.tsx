@@ -193,8 +193,8 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
     );
 
     const dialog = screen.getByRole("dialog", { name: "New project manager" });
-    expect(dialog).toHaveClass("max-w-130", "border-2", "p-6");
-    expect(dialog.className).not.toMatch(/rounded-/);
+    expect(dialog).toHaveClass("max-w-130", "rounded-sm", "border", "border-border", "p-6", "shadow-[var(--shadow-dialog)]");
+    expect(dialog.className).not.toContain("border-2");
     expect(dialog.className).not.toContain("inset-0");
 
     const nameInput = within(dialog).getByRole("textbox", { name: "Name" });

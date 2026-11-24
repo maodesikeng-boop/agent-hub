@@ -214,7 +214,10 @@ describe("sidebar update badge", () => {
     serve(bundledUpdate());
     const onOpenUpdates = renderRailTools();
     const badge = await screen.findByRole("button", { name: "Update to v0.3.0" });
-    expect(badge).toHaveClass("tool-slot", "size-9");
+    // Update shares the footer tile recipe with Settings, so the two stack as one family.
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(badge.firstElementChild!.className).toBe(settings.firstElementChild!.className);
+    expect(badge.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await userEvent.click(badge);
     expect(onOpenUpdates).toHaveBeenCalledTimes(1);
   });

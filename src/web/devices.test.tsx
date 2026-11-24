@@ -429,8 +429,8 @@ describe("设置 → 设备", () => {
     const others = within(devices).getByRole("region", { name: "Your computers" });
     for (const group of [mine, others]) {
       expect(within(group).getByRole("heading")).toHaveClass("text-minor", "text-muted-foreground");
-      expect(group.lastElementChild).toHaveClass("border-2", "border-border", "bg-background");
-      expect(group.lastElementChild?.className).not.toMatch(/rounded-|bg-sidebar/);
+      expect(group.lastElementChild).toHaveClass("rounded-sm", "border", "border-border", "bg-background");
+      expect(group.lastElementChild?.className).not.toMatch(/border-2|rounded-(?!sm\b)|bg-sidebar/);
     }
     expect(within(mine).getByTestId("device-row")).toHaveTextContent("Mac");
     expect(within(others).getByTestId("device-row")).toHaveTextContent("东京");

@@ -140,15 +140,15 @@ describe("焦点", () => {
 });
 
 describe("ProjectList", () => {
-  it("选中的对话：浅奶油导航底上用白底 + --select-line 边表示，名字字重不变（选中没选中都是 600）", async () => {
+  it("选中的对话：浅奶油导航底上浮起一块白底 tile（1px --select-line 内描边 + 柔和投影），名字字重不变（选中没选中都是 600）", async () => {
     await boot();
     const name = (label: string) => within(row(label)).getByText(label);
     const activeRow = row("小林").closest(".project-row")!;
     const idleRow = row("老马").closest(".project-row")!;
     expect(row("小林")).toHaveAttribute("aria-current", "page");
-    expect(activeRow).toHaveClass("border-select-line", "bg-background");
-    expect(idleRow).toHaveClass("hover:bg-list-hover");
-    expect(idleRow.className).not.toMatch(/border-select-line|bg-background|bg-jelly/);
+    expect(activeRow).toHaveClass("tile-selected", "rounded-sm");
+    expect(idleRow).toHaveClass("hover:bg-list-hover", "rounded-sm");
+    expect(idleRow.className).not.toMatch(/tile-selected|border-select-line|bg-background|bg-jelly/);
     expect(name("小林")).toHaveClass("font-semibold");
     expect(name("老马")).toHaveClass("font-semibold");
   });
@@ -201,7 +201,7 @@ describe("ProjectList", () => {
     );
     const quotaBtn = within(rail).getByRole("button", { name: /5h usage 37%/ });
     expect(quotaBtn).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("tool-slot");
+    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("btn-honey");
 
     await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
     expect(within(rail).getByRole("button", { name: /5h usage 37%/ })).toBe(quotaBtn);
@@ -488,8 +488,8 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
     expect(listRegion).toHaveClass("w-18", "shrink-0", "bg-list");
     expect(within(listRegion).queryByRole("searchbox", { name: "Search conversations" })).toBeNull();
     const btn = within(listRegion).getByRole("button", { name: /小林/ });
-    expect(btn).toHaveClass("size-13", "border-2");
-    expect(btn.className).not.toMatch(/rounded-/);
+    expect(btn).toHaveClass("size-13");
+    expect(btn.className).not.toMatch(/border-2|rounded-(?!sm\b)/);
     expect(within(listRegion).getByRole("button", { name: "New project manager" })).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });

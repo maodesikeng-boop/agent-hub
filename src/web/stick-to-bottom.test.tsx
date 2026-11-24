@@ -102,7 +102,7 @@ describe("贴底", () => {
     expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
   });
 
-  it("用户往上翻了：内容变高不拉回去，“回到底部”浮在消息列水平正中（暖灰底、直角 2px 边、没有阴影、不带字），点了回到底部", () => {
+  it("用户往上翻了：内容变高不拉回去，“回到底部”浮在消息列水平正中（立体小图标按钮、不带字），点了回到底部", () => {
     const { log, box } = setup();
     log.scrollTop = 100;
     fireEvent.scroll(log);
@@ -110,8 +110,7 @@ describe("贴底", () => {
     resize();
     expect(log.scrollTop).toBe(100);
     const back = screen.getByRole("button", { name: "Scroll to bottom" });
-    expect(back.className).not.toMatch(/shadow|rounded-/);
-    expect(back).toHaveClass("bg-panel", "border-2");
+    expect(back).toHaveClass("btn-raised", "size-8", "rounded-sm");
     expect(back).toHaveTextContent("");
     // 浮在输入框上方一点、消息列正中；外层不挡鼠标，只有按钮自己能点；消息区的高度不跟着变（不让出一条、不加蒙版）
     expect(log).not.toContainElement(back);

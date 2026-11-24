@@ -55,22 +55,10 @@ describe("quotaMeterOf", () => {
       vendorName: "Claude Code",
       windowShort: "7d",
       percent: 60,
-      cells: 3,
       warning: false,
       full: false,
     });
     expect(quotaMeterOf(quota)).toBe(quotaMeterOf(quota));
-  });
-
-  it("fills ceil(percent / 20) of five cells", () => {
-    const sample = (percent: number): QuotaVendor[] => [
-      { id: "v", name: "Vendor", exhausted: false, windows: [{ key: "w", short: "5h", percent, resetsAt: null, warning: false }] },
-    ];
-    expect(quotaMeterOf(sample(0))?.cells).toBe(0);
-    expect(quotaMeterOf(sample(1))?.cells).toBe(1);
-    expect(quotaMeterOf(sample(20))?.cells).toBe(1);
-    expect(quotaMeterOf(sample(21))?.cells).toBe(2);
-    expect(quotaMeterOf(sample(81))?.cells).toBe(5);
   });
 
   it("warns at 80% and when the window itself warns, and marks full at 100%", () => {
@@ -87,7 +75,7 @@ describe("quotaMeterOf", () => {
     const full: QuotaVendor[] = [
       { id: "v", name: "Vendor", exhausted: true, windows: [{ key: "w", short: "5h", percent: 100, resetsAt: null, warning: true }] },
     ];
-    expect(quotaMeterOf(full)).toMatchObject({ warning: true, full: true, cells: 5 });
+    expect(quotaMeterOf(full)).toMatchObject({ warning: true, full: true, percent: 100 });
   });
 
   it("returns null when no window reports usage", () => {

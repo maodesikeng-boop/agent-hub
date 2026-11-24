@@ -1066,12 +1066,12 @@ describe("shell list and rail selectors", () => {
     const quota0 = quotaUsage(withRate, 1_500_000);
     const meter0 = quotaMeterOf(quota0);
     expect(quotaMeterOf(quota0)).toBe(meter0);
-    expect(meter0).toMatchObject({ percent: 62, cells: 4, warning: false, full: false });
+    expect(meter0).toMatchObject({ percent: 62, warning: false, full: false });
 
     const quotaReset = quotaUsage(withRate, 2_000_000);
     const meter1 = quotaMeterOf(quotaReset);
     expect(meter1).not.toBe(meter0);
-    expect(meter1).toMatchObject({ percent: 0, cells: 0 });
+    expect(meter1).toMatchObject({ percent: 0, warning: false });
     expect(quotaMeterOf(quotaReset)).toBe(meter1);
   });
 });

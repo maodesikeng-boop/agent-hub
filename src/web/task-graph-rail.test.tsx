@@ -283,8 +283,8 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     const rows = screen.getAllByTestId("peel-gate-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]!.tagName).toBe("BUTTON");
-    expect(rows[0]).toHaveClass("min-h-8", "pointer-coarse:min-h-11", "border-2");
-    expect(rows[0]!.className).not.toMatch(/rounded-/);
+    expect(rows[0]).toHaveClass("min-h-8", "pointer-coarse:min-h-11", "rounded-sm");
+    expect(rows[0]!.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     expect(within(rows[0]!).getByText("确认同步范围")).toHaveClass("truncate", "text-primary");
     // 作答只在对话里：右栏不出选项、补充框，也不出门禁提问那一行
     expect(screen.queryByTestId("peel-gate-card")).toBeNull();
@@ -334,7 +334,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     // 1) 一键点选推荐项
     const first = openDialog(5);
     const firstCard = screen.getByTestId("peel-gate-card");
-    expect(firstCard).toHaveClass("border-2", "border-open-line", "bg-open");
+    expect(firstCard).toHaveClass("rounded-sm", "border", "border-select-line", "bg-open");
     await user.click(within(firstCard).getByRole("button", { name: /全量同步并先备份/ }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.url).toBe("/api/task-graphs/5/nodes/gate-sync/decide");
@@ -1205,6 +1205,39 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
     );
     return screen.getByRole("region", { name: /^Task Graph$/ });
   }
+
+  it("管子接得上：门禁行、Worker 行和普通行共用同一个盒子（同样的外扩、宽度、内边距和最小高度），哪一行都不带边框", () => {
+    const graph = makeGraph({
+      id: 431,
+      title: "管子不断",
+      nodes: [
+        makeNode({ key: "plan", title: "方案", status: "done", sortOrder: 0 }),
+        makeNode({ key: "gate", title: "确认方案", status: "waiting", waitingFor: "user", sortOrder: 1 }),
+        makeNode({ key: "impl", title: "实现", status: "running", sortOrder: 2, activeWorkerId: 61, workerIds: [61] }),
+        makeNode({ key: "check", title: "验收", status: "pending", sortOrder: 3 }),
+      ],
+      edges: [
+        { fromKey: "plan", toKey: "gate" },
+        { fromKey: "gate", toKey: "impl" },
+        { fromKey: "impl", toKey: "check" },
+      ],
+    });
+    const track = renderRail(graph, [makeWorker(81, { workerId: 61 })]);
+    const rows = [...track.querySelectorAll<HTMLElement>("[data-node-key]")];
+    expect(rows.map((r) => r.tagName)).toEqual(["DIV", "BUTTON", "BUTTON", "DIV"]);
+    const geometry = (row: HTMLElement) =>
+      row.className
+        .split(/\s+/)
+        .filter((c) => /^(?:-?m[xy]?-|w-|min-h-|pointer-coarse:min-h-|p[xylrtb]?-|flex$|items-)/.test(c))
+        .toSorted()
+        .join(" ");
+    const box = geometry(rows[0]!);
+    expect(box).toContain("-mx-2.5");
+    for (const row of rows) {
+      expect(geometry(row)).toBe(box);
+      expect(row.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
+    }
+  });
 
   it("一张图含 3 个互不相连的子图（独立单步 + 三步含门禁链 + 双起点合流）：分组排布，子图之间不画任何假连线", async () => {
     const user = userEvent.setup();
