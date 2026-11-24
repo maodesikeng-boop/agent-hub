@@ -161,6 +161,7 @@ export function CardNoteForm({
   className,
   inputClassName,
   buttonSize,
+  variant = "field",
 }: {
   disabled: boolean;
   pending: boolean;
@@ -171,6 +172,8 @@ export function CardNoteForm({
   className?: string;
   inputClassName?: string;
   buttonSize?: "sm";
+  /** `row` is the last row of a decision card's option list: no frame of its own, a pencil in the letter column. */
+  variant?: "field" | "row";
 }) {
   const id = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -197,16 +200,23 @@ export function CardNoteForm({
 
   const canSend = !disabled && note.trim() !== "";
   const small = buttonSize === "sm";
-  // Same shape as the chat composer: one framed field with its send button inside, no panel around it.
+  const row = variant === "row";
   return (
     <div
-      data-card-reply
+      data-card-reply={variant}
       className={cn(
-        "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 shadow-[var(--shadow-tile)] transition-[border-color,box-shadow] focus-within:field-focus",
+        row
+          ? "-mx-4 -mb-4 flex items-end gap-3 border-t border-border py-1.5 pr-1.5 pl-4 transition-shadow focus-within:shadow-[inset_0_0_0_1px_var(--border-focus)]"
+          : "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 shadow-[var(--shadow-tile)] transition-[border-color,box-shadow] focus-within:field-focus",
         disabled && "opacity-60",
         className,
       )}
     >
+      {row && (
+        <span aria-hidden="true" className={cn("mt-1 flex w-4 shrink-0 items-center self-start text-muted-foreground", small ? "h-5" : "h-6")}>
+          <PencilLine className="size-pixel-sm" />
+        </span>
+      )}
       <label htmlFor={id} className="sr-only">
         Your reply
       </label>
