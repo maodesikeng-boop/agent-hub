@@ -10,7 +10,7 @@ import { createSessionTokens } from "../../src/daemon/agent-api/tokens.ts";
 import { startDaemon, type RunningDaemon } from "../../src/daemon/daemon.ts";
 import { removeTreeWithRetry } from "../../src/daemon/platform/index.ts";
 import { DaemonAlreadyRunningError } from "../../src/daemon/store/index.ts";
-import { ENV_HOME, ENV_HUB_SOCK, ENV_HUB_TOKEN, ENV_PORT } from "../../src/shared/index.ts";
+import { ENV_HOME, ENV_HUB_SOCK, ENV_HUB_TOKEN, ENV_PORT, VENDOR_LIST } from "../../src/shared/index.ts";
 import { isWindowsNamedPipe, resolveHubPaths } from "../../src/shared/paths.ts";
 import { writeDiagLog } from "./diag-helper.ts";
 
@@ -180,6 +180,7 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：命名管�
       ...process.env,
       [ENV_HOME]: dataHome,
       [ENV_PORT]: "0",
+      ...Object.fromEntries(VENDOR_LIST.map(({ id, cli }) => [cli.envVar, join(dir, `missing-${id}`)])),
     };
 
     const first: RunningDaemon = await startDaemon({

@@ -5,8 +5,9 @@ import { createServer } from "node:net";
 import { arch, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeExecutableNodeScript } from "../../test/fake-cli-shim.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
-import { DAEMON_LOG_MAX_BYTES, ENV_HOME, ENV_PORT, LOG_PREFIX } from "../shared/index.ts";
+import { API_PATHS, DAEMON_LOG_MAX_BYTES, ENV_HOME, ENV_PORT, LOG_PREFIX, VENDOR_LIST } from "../shared/index.ts";
 import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
 import { resolveHubPaths } from "../shared/paths.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
@@ -25,6 +26,7 @@ describe("守护进程启动失败：终端上的输出", () => {
     for (const [key, value] of Object.entries(process.env)) if (!PARENT_SESSION_ENV.includes(key)) env[key] = value;
     env[ENV_HOME] = join(dir, name);
     env[ENV_PORT] = port;
+    for (const { id, cli } of VENDOR_LIST) env[cli.envVar] = join(dir, `missing-${id}`);
     return env;
   };
   const home = (name: string) => join(dir, name);
@@ -41,9 +43,28 @@ describe("守护进程启动失败：终端上的输出", () => {
 
   afterEach(async () => {
     process.exitCode = undefined;
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     for (const daemon of running.splice(0)) await daemon.stop();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not launch inherited vendor executables during startup", async () => {
+    const marker = join(dir, "vendor-launched");
+    for (const { id, cli } of VENDOR_LIST) {
+      const path = writeExecutableNodeScript(join(dir, id),
+        `require("node:fs").appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify(id + "\n")});`,
+      );
+      vi.stubEnv(cli.envVar, path);
+    }
+    const daemon = await startDaemon({ userHome, env: envOf("no-vendors", "0"), log: () => {} });
+    running.push(daemon);
+    const login = await fetch(daemon.url, { redirect: "manual" });
+    const headers = { cookie: login.headers.get("set-cookie")?.split(";", 1)[0] ?? "" };
+    const response = await fetch(new URL(API_PATHS.quota, daemon.url), { headers });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ groups: [] });
+    expect(existsSync(marker) ? readFileSync(marker, "utf8") : "").toBe("");
   });
 
   it("同一个端口起两个守护进程：终端上只有一句话加 hint，没有堆栈、没有英文异常", async () => {
@@ -126,7 +147,6 @@ describe("守护进程启动失败：终端上的输出", () => {
         import { runDaemonProcess } from "./src/daemon/entry.ts";
         await runDaemonProcess({
           userHome: ${JSON.stringify(userHome)},
-          env: { ...process.env, AGENT_HUB_HOME: ${JSON.stringify(subHome)}, AGENT_HUB_PORT: "0" },
         });
         if (${JSON.stringify(kind)} === "uncaughtException") {
           setImmediate(() => { throw new Error("crash-by-uncaught"); });
@@ -137,6 +157,7 @@ describe("守护进程启动失败：终端上的输出", () => {
       const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
         const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
           cwd: process.cwd(),
+          env: envOf(`sub-${kind}`, "0"),
           stdio: ["ignore", "pipe", "pipe"],
         });
         let stderr = "";
@@ -166,7 +187,6 @@ describe("守护进程启动失败：终端上的输出", () => {
       import { runDaemonProcess } from "./src/daemon/entry.ts";
       await runDaemonProcess({
         userHome: ${JSON.stringify(userHome)},
-        env: { ...process.env, AGENT_HUB_HOME: ${JSON.stringify(subHome)}, AGENT_HUB_PORT: "0" },
       });
       setImmediate(() => {
         setImmediate(() => { throw new Error("second-during-shutdown"); });
@@ -174,7 +194,7 @@ describe("守护进程启动失败：终端上的输出", () => {
       });
     `;
     const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
-      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), env: envOf("sub-double", "0"), stdio: ["ignore", "pipe", "pipe"] });
       let stderr = "";
       child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
       child.on("error", reject);
@@ -189,8 +209,7 @@ describe("守护进程启动失败：终端上的输出", () => {
 
   it("热重启全链路：有外壳监管时经 POST /api/self-reload 登记，全库空闲静默后正常关机、以 reloadExitCode 退出；没有监管回 409", async () => {
     const run = async (name: string, supervised: boolean) => {
-      const subHome = home(name);
-      const env: Record<string, string | undefined> = { ...process.env, AGENT_HUB_HOME: subHome, AGENT_HUB_PORT: "0" };
+      const env = envOf(name, "0");
       delete env[DESKTOP_CONTRACT.supervisedEnv];
       delete env.INVOCATION_ID;
       if (supervised) env[DESKTOP_CONTRACT.supervisedEnv] = "test";
