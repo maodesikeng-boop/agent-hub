@@ -34,11 +34,8 @@ const killing = new WeakMap<ChildProcessWithoutNullStreams, Promise<void>>();
 export function forceKill(child: ChildProcessWithoutNullStreams): Promise<void> {
   const running = killing.get(child);
   if (running) return running;
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  if (child.pid === undefined) {
-    child.kill("SIGKILL");
-    return Promise.resolve();
-  }
+  // A failed spawn has no PID. Signaling its native handle can target the caller's process group.
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return Promise.resolve();
   const done = forceKillTree(child.pid, true);
   killing.set(child, done);
   return done;
@@ -46,12 +43,12 @@ export function forceKill(child: ChildProcessWithoutNullStreams): Promise<void> 
 
 /** A just-spawned claude has no descendants yet, so a synchronous group kill is enough. */
 export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined || child.pid <= 1) return;
   if (process.platform === "win32") {
     child.kill("SIGKILL");
     return;
   }
-  if (child.pid !== undefined && child.pid > 1 && signalOk(-child.pid, "SIGKILL")) return;
+  if (signalOk(-child.pid, "SIGKILL")) return;
   child.kill("SIGKILL");
 }
 

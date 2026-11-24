@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import { PS_TIMEOUT_MS } from "../../shared/index.ts";
-import { forceKill, forceKillTree, killTargets, parsePs, signalChild, signalTarget, termGroupAfterExit, type PsRow } from "./process.ts";
+import { forceKill, forceKillTree, killFreshGroup, killTargets, parsePs, signalChild, signalTarget, termGroupAfterExit, type PsRow } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
 describe("parsePs", () => {
@@ -20,6 +20,23 @@ describe("parsePs", () => {
       { pid: 301, ppid: 300, pgid: 300 },
     ]);
   });
+});
+
+it("does not signal a child whose spawn failed before it acquired a PID", async () => {
+  const root = mkdtempSync(join(tmpdir(), "failed-spawn-"));
+  try {
+    const child = spawn(process.execPath, ["--version"], { cwd: join(root, "missing"), detached: true });
+    child.on("error", () => {});
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const kill = vi.spyOn(child, "kill").mockReturnValue(false);
+    expect(child.pid).toBeUndefined();
+    await forceKill(child);
+    killFreshGroup(child);
+    await closed;
+    expect(kill).not.toHaveBeenCalled();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 describe("killTargets（负数 = 进程组，正数 = 单个进程）", () => {
