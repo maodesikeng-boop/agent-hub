@@ -781,7 +781,9 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(aside.closest("[data-panel]")?.parentElement).toBe(main.closest("[data-panel]")?.parentElement);
     const classes = aside.className.split(" ");
     expect(classes.some((c) => /(^|:)(fixed|absolute)$/.test(c))).toBe(false);
-    expect(classes).toContain("bg-panel");
+    // Both content panes are white sheets on the cream frame, parted by the frame's tone rather than a line.
+    expect(classes).toContain("shell-sheet");
+    expect(main).toHaveClass("shell-sheet");
     expect(within(main).getByRole("heading", { name: "小林" })).toBeInTheDocument();
     expect(within(main).getByRole("textbox")).toBeVisible();
   });
