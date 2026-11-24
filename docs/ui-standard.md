@@ -7,8 +7,8 @@ Shared interface specification for the Bellwood web workbench (`src/web/`). Colo
 - **Interface scale** (**Settings**, **General**, **Appearance**): `Compact`, `Default`, `Large`, and `XL` (`Segmented`, section 9), saved per browser in `localStorage` (`agent-hub.uiScale`, `src/web/ui-scale.ts`). **`Large` is the default.**
 - **Root font size (`<html data-ui-scale>` in `src/web/styles.css`)**: `Compact` `90.625%` (`14.5px`), `Default` `100%` (`16px`), `Large` `109.375%` (`17.5px`), and `XL` `118.75%` (`19px`). Type tokens (`--text-*`), `Avatar` sizes, and Tailwind spacing (`rem`) scale proportionally together.
 - **Pixel values in this document reflect the `Default` (`16px`) scale** (`Large` multiplies all `rem` sizes by `1.09375x`).
-- **Shell pane and tier geometry (`src/shared/limits.ts`)**: Fixed honey rail (`SHELL_RAIL_REM = 4.5`), collapsed strip (`SHELL_STRIP_REM = 4.5`), PM column (`SHELL_LIST_REM`, min `13.75`, default `16.5`, max `25`), side panel (`SHELL_PANEL_REM`, min `22.5`, default `27.5`, max `45`), conversation minimum (`SHELL_CHAT_MIN_REM = 30`), and `shellTierOf()` responsive breakpoints scale from the active root `rem` (with `SHELL_FRAME_PX = 10` sheet frame overhead and `SHELL_SEAM_PX = 2` column seams in `px`).
-- Never hardcode arbitrary pixel font sizes or widths (`text-[15px]`, `w-[240px]`); use the type tokens in section 3 and Tailwind numeric scales (`w-60`, `max-w-110`). Border radii, `1px` borders, viewport breakpoints (`max-[1100px]`, `min-[720px]:`), macOS traffic-light insets, and pixel icons stay in `px` (guarded by `src/web/ui-scale.test.tsx`).
+- **Shell pane and tier geometry (`src/shared/limits.ts`)**: Fixed honey rail (`SHELL_RAIL_REM = 4.5`), collapsed strip (`SHELL_STRIP_REM = 4.5`), PM column (`SHELL_LIST_REM`, min `13.75`, default `16.5`, max `25`), side panel (`SHELL_PANEL_REM`, min `22.5`, default `27.5`, max `45`), conversation minimum (`SHELL_CHAT_MIN_REM = 30`), and `shellTierOf()` responsive breakpoints scale from the active root `rem` (with `SHELL_FRAME_PX = 6` sheet inset and `SHELL_SEAM_PX = 1` column seams in `px`).
+- Never hardcode arbitrary pixel font sizes or widths (`text-[15px]`, `w-[240px]`); use the type tokens in section 3 and Tailwind numeric scales (`w-60`, `max-w-110`). Border radii (`rounded-xs` `2px`, `rounded-sm` `4px`), `1px` lines, viewport breakpoints (`max-[1100px]`, `min-[720px]:`), macOS traffic-light insets, and pixel icons stay in `px` (guarded by `src/web/ui-scale.test.tsx`).
 
 ## 1. Spacing scale
 
@@ -17,14 +17,14 @@ Use only these Tailwind `4px`-step tokens:
 | Location | Default px | Class or variable |
 | --- | --- | --- |
 | Honey rail (`AppRail`) width | `72px` (`4.5rem`) | `w-18` (`SHELL_RAIL_REM`) |
-| Sheet frame beside the rail | `6px` top, right, bottom inset + `2px` outline | `.shell-sheet` (`SHELL_FRAME_PX = 10`) |
+| Sheet frame beside the rail | `6px` top, right, bottom inset; the edge is a hairline ring and a soft drop, never an outline | `.shell-sheet` (`SHELL_FRAME_PX = 6`) |
 | Column header height (`ProjectList`, `SidePanel`, `Conversation`) | `56px` (`3.5rem`) | `h-14` |
 | Desktop PM list row height | `52px` (`3.25rem`) | `h-13` |
 | Main pane horizontal padding | `24px` | `px-6` |
 | Chat column minimum side gutter | `12px` below `40rem` main width, `48px` at or above `40rem` | `--chat-gutter` on `.chat-column` and `.messages` (section 8) |
 | Conversation header inset | `20px` start, `12px` end | `--header-gutter-start` and `--header-gutter-end` |
 | Side panel horizontal and group vertical padding | `20px` and `12px` | `px-5` and `py-3` |
-| PM column horizontal padding and row gap | `12px` and `4px` | `px-3` and `space-y-1` |
+| PM column inset, row padding, and row gap | `8px` list inset, `8px` row padding (avatars, section headings, and the header title share one `16px` left edge), `2px` gap | `px-2`, `pl-2`, and `gap-0.5` |
 | Gap between groups or dialog sections | `24px` | `gap-6` |
 | Gap between a group heading and its box | `8px` | `gap-2` |
 | Settings row padding | `16px` horizontal, `10px` vertical | `px-4 py-2.5` (`py-2` for `min-h-9` rows, `py-3` with helper text) |
@@ -34,18 +34,52 @@ Use only these Tailwind `4px`-step tokens:
 | Dialog padding | `24px` | `p-6` on `DialogContent` |
 | Popover padding | `16px` | `p-4` on `PopoverContent` |
 
-## 2. Corners and borders
+## 2. Corners, lines, and depth
 
-Controls, containers, and cards use **square right-angle corners (`0px`) and plain `2px` (`border-2`) or `1px` solid borders** — zero pill or card roundness and no stepped `clip-path` pixel notches on frame edges. Pixel craft stays on characters, avatars, sprites, and brand illustrations, while controls use crisp straight borders and smooth line icons.
+### 2.1 Corners
+
+One small radius everywhere: **`4px` (`rounded-sm`, `--radius-sm`)**, the corner the tool slots already used. `src/web/styles.css` resets the Tailwind radius scale to two tokens (`--radius-xs: 2px`, `--radius-sm: 4px`), so `rounded-md` and larger do not exist.
 
 | Element | Rule |
 | --- | --- |
-| Buttons, inputs, textareas, selects, code blocks, option rows, settings tabs | Square corners (`0px`), `border-2` plain borders (ghost buttons and plain selects are borderless) |
-| Sidebar rows, grouped boxes, cards, ask cards, thread cards, dialogs, popovers, drawers | Square corners (`0px`), `border-2` (`--border` for group boxes, `--border-strong` for overlays and composer) |
-| Persistent tool slots and counter badges | CSS `border-radius: 4px` with `border: 2px solid var(--slot-line)` and `2px` bottom inset shade |
-| Status indicators, attachment chips, thumbnail tiles, radio marks, switch track and thumb | Square (`0px` corners) |
+| Buttons, inputs, textareas, selects | `4px` by default: the base layer gives every `button`, `input`, `textarea`, and `select` `--radius-sm`, so new controls inherit it |
+| Cards, group boxes, ask cards, thread cards, event strips, code blocks, chips, badges, thumbnails, popovers, menus, dialogs, the composer, the workspace sheet | `rounded-sm` (`4px`) |
+| Rows and selection tiles (list rows, rail tiles, settings tabs, side-panel rows, menu items) | `rounded-sm`; menu items inside a padded menu use `rounded-xs` |
+| Elements nested inside a padded `4px` parent (segmented cells, switch thumb, keycaps, progress bars) | `rounded-xs` (`2px`), so inner corners stay smaller than outer ones |
+| Full-bleed rows inside a group box (`ChoiceRows`, `CollapsibleGroup` triggers, `SettingsNavRow`, event triggers) | `rounded-none`: the box clips them, and a rounded hover inside a divided list would notch the divider |
+| Status dots, attention dots, radio marks, scrollbar thumbs | Circles (`rounded-full`); a dot is what the `4px` radius becomes at `8px` |
 
-Guard tests in `src/web/web-guard.test.ts` forbid any `rounded-*` Tailwind utility class in `src/web/` and forbid raw `<select` elements outside `src/web/ui/select.tsx`.
+Pixel craft stays on characters, avatars, sprites, Task Graph beads and pipes, and brand illustrations. `src/web/web-guard.test.ts` allows only `rounded-xs`, `rounded-sm`, `rounded-t-sm`, `rounded-full`, and `rounded-none`.
+
+### 2.2 Lines
+
+Every line is **`1px`** and comes from one warm-ink family, defined as alpha so the same token reads as the same line on white, paper, cream, and honey:
+
+| Token | Value | Used for |
+| --- | --- | --- |
+| `--border` (`border-border`, `divide-border`, `bg-border`) | `rgb(110 74 0 / 0.14)` | Structure: pane seams, header bottoms, dividers, group boxes, cards, popovers, menus, dialogs, chips, thumbnails, rail and strip dividers, progress-bar tracks |
+| `--border-strong` | `rgb(110 74 0 / 0.26)` | Interactive outlines only: inputs, selects, search fields, raised buttons, switch track, radio ring, the composer and card reply fields |
+| `--select-line` | `#e0b03c` | The one selection line (section 4), drawn as a `1px` inset ring |
+| `--border-focus` | `#4a4038` | Focus (section 7) |
+
+- The only strokes wider than `1px` are the `2px` keyboard focus outline, the `2px` dashed file-drop target, the `3px` Markdown blockquote bar, and the `2px` halos that separate dots and badges from the surface behind them.
+- Containers get the hairline (`--border`); controls get `--border-strong`. A container never takes `--border-strong` to look heavier.
+- Do not put a bordered box inside another bordered box. Inside a card, separate parts with spacing or one hairline divider; options and fields inside cards are controls, not boxes.
+
+### 2.3 Depth
+
+Depth is reserved for things that are raised or float, and each has one recipe in `src/web/styles.css`:
+
+| Recipe | Where |
+| --- | --- |
+| `btn-raised`, `btn-honey`, `btn-solid` | Buttons (section 6): `1px` line, a top-lit fill, an inner top highlight, and a `1px` soft drop that sinks into an inset shade when pressed or open |
+| `tile-selected` | Selected item on a tinted surface: lighter fill (`--tile-fill`, white by default, cream on the honey rail), `1px` `--select-line` inset ring, `--shadow-tile` (`0 1px 2px rgb(74 46 0 / 0.12)`) |
+| `tile-open` | Selected item on white or paper: `--open` fill and the `1px` `--select-line` inset ring, no drop |
+| `--shadow-overlay` | Popovers, select menus, the composer menu |
+| `--shadow-dialog` | Dialogs (section 10) |
+| `.shell-sheet` | The workspace sheet on the honey frame: hairline ring plus a `1px 3px` soft drop |
+
+Cards, group boxes, and event strips stay flat. No gradients outside the button recipes, no frosted glass, no glow.
 
 ## 3. Type scale, weights, and shell copy
 
@@ -55,8 +89,8 @@ All panes and dialogs share **four UI type sizes** defined in `src/web/styles.cs
 
 | Tier | Class | Default px | Typical uses |
 | --- | --- | --- | --- |
-| Micro metadata and rail headers | `text-xs` | `12` | Timestamps, counts (`tabular-nums`), `Recommended`, `Archived`, `Needs You`, `Task Graph`, `Pieces`, `Completed` (`500` for headers, `400` for metadata) |
-| Secondary text and buttons | `text-minor` | `13.5` | Button labels (`500`), segmented controls, group headings outside boxes (`500`), row descriptions (`leading-snug`), sidebar previews, Worker names (`500`), `Show more`, inline errors (`text-danger`) |
+| Micro metadata | `text-xs` | `12` | Timestamps, counts (`tabular-nums`), `Recommended`, rail labels (`500`), badge numerals |
+| Secondary text, buttons, and every section heading | `text-minor` | `13.5` | Button labels (`500`), segmented controls, all section and group headings (`500` muted: `Pinned`, `Project managers`, `Archived`, `Needs You`, `Task Graph`, `Pieces`, `Completed`, settings groups), row descriptions (`leading-snug`), sidebar previews, event strips, `Show more`, inline errors (`text-danger`) |
 | Body copy and row titles | `text-body` | `15` | Message prose, row titles, `ProjectList` PM names (`600`), inputs, selects, ask card questions (`500`), option text (`400`), side-panel row titles |
 | Pane and dialog titles | `text-title` | `17` | Conversation header name, side panel header, dialog titles (`600`) |
 
