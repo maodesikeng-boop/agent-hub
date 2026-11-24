@@ -91,7 +91,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
             <span
               data-testid="tabbar-settings-attention"
               aria-hidden="true"
-              className="absolute -top-0.5 -right-1 size-2 rounded-full bg-caution ring-2 ring-rail"
+              className="absolute -top-0.5 -right-1 size-2 rounded-full bg-danger ring-2 ring-rail"
             />
           )}
         </span>
