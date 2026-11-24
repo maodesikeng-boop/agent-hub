@@ -140,6 +140,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       const refreshed = deps.ledger.getMessage(messageId);
       if (!canSendTo(refreshed, sessionId)) return { kind: "done" };
       if (deps.ledger.waitsForTurnCompletion(sessionId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "turn_completion" };
+      if (deps.ledger.waitsForHandover(messageId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "handover" };
       message = refreshed;
     }
     let result;
@@ -156,14 +157,17 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     } catch (error) {
       if (!isSessionEnded(error)) throw error;
       const now = deps.ledger.getMessage(messageId);
-      if (now === null) return { kind: "done" };
+      if (now === null || now.sessionId !== sessionId) return { kind: "done" };
       if (now.status === "queued") deps.ledger.onActionFailed(action, "这个会话已经结束，发不出去了");
-      else deps.ledger.stopMessage(messageId);
+      else deps.ledger.stopMessage(messageId, sessionId);
       return { kind: "done" };
     }
     if (result.kind === "queued") return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_busy" };
     // The message was reclaimed while send was in flight, so its result is ignored.
-    if (result.kind === "written" && deps.ledger.getMessage(messageId)?.status === "queued") return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "requeued" };
+    if (result.kind === "written") {
+      const after = deps.ledger.getMessage(messageId);
+      if (after?.sessionId === sessionId && after.status === "queued") return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "requeued" };
+    }
     return { kind: "done" };
   };
 }

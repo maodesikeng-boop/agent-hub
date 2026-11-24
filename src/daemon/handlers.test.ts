@@ -279,7 +279,7 @@ describe("session.send 处理函数：撞上 session_ended（会话已经结束�
     for (const status of ["delivered", "processing"] as const) {
       const { d, onActionFailed, stopMessage } = deps({ send: new DriverError("session_ended", "session 1 has been ended"), message: message({ sessionId: 1, status }) });
       expect(await createSessionSendHandler(d)(sendAction({ resend: true }))).toEqual({ kind: "done" });
-      expect(stopMessage).toHaveBeenCalledWith(7);
+      expect(stopMessage).toHaveBeenCalledWith(7, 1);
       expect(onActionFailed).not.toHaveBeenCalled();
     }
   });

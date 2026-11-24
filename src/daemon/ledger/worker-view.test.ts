@@ -112,9 +112,12 @@ const COMMAND_TOOLS: Record<AgentVendor, (command: string) => { name: string; in
 };
 
 let seq = 0;
+const taskMessageIdOf = (workerId: WorkerId): number =>
+  db.get<{ id: number }>("SELECT id FROM messages WHERE session_id = ? ORDER BY id LIMIT 1", sessionOf(workerId))!.id;
 const startTurn = (workerId: WorkerId) => {
-  emit(workerId, { type: "message.delivered", messageIds: [1], ...at() });
-  emit(workerId, { type: "message.processing", messageIds: [1], ...at() });
+  const id = taskMessageIdOf(workerId);
+  emit(workerId, { type: "message.delivered", messageIds: [id], ...at() });
+  emit(workerId, { type: "message.processing", messageIds: [id], ...at() });
 };
 function runTool(vendor: AgentVendor, workerId: WorkerId, command: string, opts: { finish?: boolean; sub?: string } = {}) {
   const tool = COMMAND_TOOLS[vendor](command);
@@ -127,7 +130,7 @@ function runTool(vendor: AgentVendor, workerId: WorkerId, command: string, opts:
   return id;
 }
 const endTurn = (workerId: WorkerId, extra: Partial<Extract<DriverEvent, { type: "turn.ended" }>> = {}) =>
-  emit(workerId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [1], durationMs: null, ...at(), ...extra });
+  emit(workerId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [taskMessageIdOf(workerId)], durationMs: null, ...at(), ...extra });
 
 function mark(workerId: WorkerId, patch: { pid?: number | null; lastEventAt?: number | null; context?: number }) {
   const store = createSessionStore(db);
@@ -218,7 +221,7 @@ describe.each(AGENT_VENDORS)("%s 的 Worker", (vendor) => {
   it("进程崩溃（没有 result）也算这一轮结束：出错，带退出码", () => {
     const w = startWorker(vendor);
     startTurn(w);
-    emit(w, { type: "session.exited", reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [1], ...at() });
+    emit(w, { type: "session.exited", reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [taskMessageIdOf(w)], ...at() });
     expect(show(w).text).toContain("上一轮：出错：crash: exit code 1，");
   });
 
@@ -644,9 +647,9 @@ describe("hub worker log --stats：认不出的工具、其它、多会话、没
     const list = cols.map((c) => (c === "generation" ? "generation + 1" : c === "vendor_session_id" ? "vendor_session_id || '-gen2'" : c)).join(", ");
     db.run(`INSERT INTO agent_sessions (${cols.join(", ")}) SELECT ${list} FROM agent_sessions WHERE id = ?`, sessionOf(w));
     const second = db.get<{ id: number }>("SELECT max(id) AS id FROM agent_sessions")!.id;
-    ledger.applyDriverEvent(second, { type: "message.processing", messageIds: [1], ...at() });
+    ledger.applyDriverEvent(second, { type: "message.processing", messageIds: [], ...at() });
     ledger.applyDriverEvent(second, { type: "agent.tool", uuid: "g2", toolUseId: "g2", name: "Bash", input: { command: "pnpm test" }, ...at() });
-    ledger.applyDriverEvent(second, { type: "turn.ended", ok: true, interrupted: false, messageIds: [1], durationMs: null, ...at() });
+    ledger.applyDriverEvent(second, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: null, ...at() });
     const text = stats(w).text;
     expect(text).toContain("（2 个会话）");
     expect(text).toContain("共 3 步，2 轮：ok 2 / interrupted 0 / failed 0");

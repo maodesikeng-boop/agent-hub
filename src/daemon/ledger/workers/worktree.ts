@@ -172,7 +172,7 @@ export function actionFailedIn(w: WorkersCtx, p: Pending, action: AnyActionRow, 
   }
   if (action.type !== "session.send") return;
   const message = w.db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", action.params.messageId);
-  if (message === undefined || (message.sender !== "pm" && message.sender !== "user") || message.worker_id === null) return;
+  if (message === undefined || message.session_id !== action.params.sessionId || (message.sender !== "pm" && message.sender !== "user") || message.worker_id === null) return;
   const worker = workerRow(w, message.worker_id);
   if (worker === null) return;
   clearMaxTime(w, worker.worker_conversation_id);

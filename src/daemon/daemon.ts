@@ -403,6 +403,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       ...(options.autoRenew ? { autoRenew: options.autoRenew } : {}),
       onHandoverClaimable: () => parts.handoverRunner?.wake(),
       onCatalogClaimable: () => parts.catalogRunner?.wake(),
+      isSessionBusy: (id) => parts.driver?.isBusy?.(id) ?? false,
       log,
     });
     parts.ledger = ledger;
@@ -469,7 +470,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sessionTmp: sessionScope.tmp, sessionTagNonce: sessionScope.tagNonce, parentSessionTag: sessionScope.parentTag,
     });
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
-    const launch = { store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
+    const launch = { store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId), onSessionQuiescent: (sessionId: number) => ledger.onSessionQuiescent?.(sessionId) };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: createVendorDrivers(
@@ -598,7 +599,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }),
     );
     parts.unsubscribe.push(
-      ledger.onActionEnqueued(() => executor.wake()),
+      ledger.onActionEnqueued((action) => {
+        if (action.type === "session.end") driver.markEnding?.(action.params.sessionId);
+        executor.wake();
+      }),
       ledger.onStopRequested(({ sessionId }) => {
         setup.cancel(sessionId);
         driver.interrupt(sessionId).catch((error: unknown) => log(`${LOG_PREFIX} 停止失败：${String(error)}`));
