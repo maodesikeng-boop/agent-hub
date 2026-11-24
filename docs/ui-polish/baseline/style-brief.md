@@ -12,7 +12,7 @@ This brief defines rules `S1` through `S6` for visual evaluation in `pnpm ui:pol
 
 ## S1 Color
 
-- **Three zones by tone.** The honey rail (`#ffcb3d`) is the only saturated surface. The cream frame (`#fff4cc`) carries the PM list, the strip, and the gaps between sheets. Content sits on white sheets (`#ffffff`); paper (`#f7f4ed`) marks secondary surfaces inside a sheet: event strips, chips, the settings pane.
+- **Three zones by tone.** The honey rail (`#ffcb3d`) is the only saturated surface. The cream frame (`#fff4cc`) carries the PM list, the strip, and the gaps between sheets. Content sits on white sheets (`#ffffff`); paper (`#f7f4ed`) marks secondary surfaces inside a sheet: event strips and chips. Settings opens as a page of the workbench, its categories on the cream frame and the open category on a white sheet, never as a framed window over a scrim.
 - **Sparse solid accent.** Solid `--primary` (the PM's fruit accent, `#4a2e00` outside a PM) appears only on the single primary button on screen, checked switches and radios, completed Task Graph pipes and beads, active gate titles, and the small dots beside `Needs You`.
 - **Selection is a ring, not a fill.** On cream or honey, the selected row or tile lifts into a lighter `tile-selected` (white, or cream on the rail) with a `1px` gold `#e0b03c` inset ring and a soft `1px` drop. On white or paper, `tile-open` uses the pale `#fff6d6` fill with the same ring. Text weight never changes.
 - **Semantic dots.** Waiting and asking rows show an `8px` green dot with no text pill. The one attention dot for something to review in Settings is red on every surface. Dots on tiles and icons carry a `2px` halo in the surface color.
@@ -41,7 +41,7 @@ Values below reflect the `Default` 16px root scale (`Large` scales all `rem` tok
 
 - **One radius**: `4px` (`rounded-sm`) on controls, cards, group boxes, chips, popovers, dialogs, sheets, and rows; `2px` (`rounded-xs`) only for parts nested in a `4px` control; circles only for dots, radio marks, and scrollbar thumbs. Nothing larger, nothing square.
 - **One line weight**: every line is `1px`: `rgb(110 74 0 / 0.14)` for structure (dividers, header bottoms, cards, group boxes, dialogs) and `rgb(110 74 0 / 0.26)` for controls (inputs, selects, raised buttons, the composer). The only wider strokes are the `2px` focus outline, the dashed file-drop target, the Markdown quote bar, and dot halos.
-- **No lines between columns and no box in a box.** Columns part by tone and a `6px` gap. A framed box never sits inside another framed box; inside a card, parts separate by space or one divider, and chips, tags, and inline code are flat fills.
+- **No lines between columns and no box in a box.** Columns part by tone and a `6px` gap. A framed box never sits inside another framed box; inside a card, parts separate by space or one divider, and chips, tags, and inline code are flat fills. Decision cards list their options and the reply as full-bleed rows parted by hairlines, with plain `A`/`B` letters, and the Settings page lays its groups flat as headings over divided rows.
 - **Depth only where something is raised or floats**: buttons (a top-lit fill, an inner highlight, and a `1px` soft drop that sinks into an inset shade when pressed), selected tiles, the composer, popovers and menus, and dialogs. Cards, strips, and group boxes stay flat. No frosted glass, no glow, no gradients outside button fills.
 
 ## S5 Information density
