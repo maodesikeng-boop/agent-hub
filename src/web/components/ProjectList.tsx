@@ -9,7 +9,7 @@ import { filterProjectList, isPinned, projectListOf } from "../project-list.ts";
 import type { RailComputer } from "../rail-model.ts";
 import { previewText, type ConversationEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
-import { ChevronDown, ChevronRight, Pin, PinFilled, Plus, Settings } from "../ui/icons.ts";
+import { ChevronDown, ChevronRight, Pin, PinFilled, Plus } from "../ui/icons.ts";
 import { Avatar } from "./Avatar.tsx";
 import { ComputerSwitcher } from "./ComputerSwitcher.tsx";
 import { SearchField } from "./SearchField.tsx";
@@ -39,8 +39,6 @@ export interface ProjectListProps {
   onSelect: (ref: ConversationRef) => void;
   onNewPm: () => void;
   onTogglePin: (pmId: PmId, pinned: boolean) => void;
-  /** Row shortcut to the PM's settings in the side panel. */
-  onOpenPmSettings: (pmId: PmId) => void;
   onOpenComputers: () => void;
   onSelectComputer?: (key: DeviceKey) => void;
 }
@@ -102,7 +100,6 @@ const ProjectRow = memo(function ProjectRow({
   readOnly,
   onSelect,
   onTogglePin,
-  onOpenPmSettings,
 }: {
   deviceKey: DeviceKey;
   entry: ConversationEntry;
@@ -113,7 +110,6 @@ const ProjectRow = memo(function ProjectRow({
   readOnly: boolean;
   onSelect: (ref: ConversationRef) => void;
   onTogglePin: (pmId: PmId, pinned: boolean) => void;
-  onOpenPmSettings: (pmId: PmId) => void;
 }) {
   const pm = entry.pm;
   const pinned = isPinned(entry);
@@ -170,15 +166,6 @@ const ProjectRow = memo(function ProjectRow({
           >
             {pinned ? <PinFilled className="size-pixel-sm" /> : <Pin className="size-pixel-sm" />}
           </button>
-          <button
-            type="button"
-            aria-label={`${entry.name} settings`}
-            title="Project manager settings"
-            onClick={() => onOpenPmSettings(pm.id)}
-            className="grid size-7 cursor-pointer place-items-center text-list-ink-soft transition-colors outline-none hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus"
-          >
-            <Settings className="size-pixel-sm" />
-          </button>
         </div>
       )}
     </div>
@@ -203,7 +190,6 @@ export const ProjectList = memo(function ProjectList({
   onSelect,
   onNewPm,
   onTogglePin,
-  onOpenPmSettings,
   onOpenComputers,
   onSelectComputer,
 }: ProjectListProps): React.ReactElement {
@@ -345,7 +331,6 @@ export const ProjectList = memo(function ProjectList({
                         readOnly={readOnly}
                         onSelect={onSelect}
                         onTogglePin={onTogglePin}
-                        onOpenPmSettings={onOpenPmSettings}
                       />
                     );
                   })}
@@ -371,7 +356,6 @@ export const ProjectList = memo(function ProjectList({
                         readOnly={readOnly}
                         onSelect={onSelect}
                         onTogglePin={onTogglePin}
-                        onOpenPmSettings={onOpenPmSettings}
                       />
                     );
                   })}
@@ -407,7 +391,6 @@ export const ProjectList = memo(function ProjectList({
                           readOnly={readOnly}
                           onSelect={onSelect}
                           onTogglePin={onTogglePin}
-                          onOpenPmSettings={onOpenPmSettings}
                         />
                       );
                     })}

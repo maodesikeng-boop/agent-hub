@@ -1,6 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Activity, useCallback, useEffect, useMemo, useState } from "react";
-import { pickableVendorCatalogs, type Pm, type PmId } from "../shared/index.ts";
+import { pickableVendorCatalogs, type Pm } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 import { AppRail } from "./components/AppRail.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
@@ -408,8 +408,7 @@ function DesktopWorkbench({
     () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
     [computer.key, computer.info.name, computer.status],
   );
-  const { activeId, openProfile, openSettingsSection, toggleRail, select } = c;
-  const openPmSettings = useCallback((pmId: PmId) => openProfile(pmId), [openProfile]);
+  const { activeId, openSettingsSection, toggleRail, select } = c;
   const openComputers = useCallback(() => openSettingsSection("computers"), [openSettingsSection]);
   const switchable = fleet.devices.length >= 2;
   const readOnly = isReadOnly(current.status);
@@ -455,7 +454,6 @@ function DesktopWorkbench({
       onSelect={c.select}
       onNewPm={c.openNewPm}
       onTogglePin={c.togglePin}
-      onOpenPmSettings={openPmSettings}
       onOpenComputers={openComputers}
       onSelectComputer={c.selectComputer}
     />
@@ -611,8 +609,7 @@ function MobileWorkbench({
     () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
     [computer.key, computer.info.name, computer.status],
   );
-  const { activeId, openProfile } = c;
-  const openPmSettings = useCallback((pmId: PmId) => openProfile(pmId), [openProfile]);
+  const { activeId } = c;
   const openComputers = useCallback(() => navigate({ view: "settings", section: "computers" }), [navigate]);
   const switchable = fleet.devices.length >= 2;
   const readOnly = isReadOnly(current.status);
@@ -672,7 +669,6 @@ function MobileWorkbench({
       onSelect={c.select}
       onNewPm={c.openNewPm}
       onTogglePin={c.togglePin}
-      onOpenPmSettings={openPmSettings}
       onOpenComputers={openComputers}
       onSelectComputer={c.selectComputer}
     />

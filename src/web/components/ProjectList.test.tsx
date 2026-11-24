@@ -53,7 +53,6 @@ function renderList(overrides: Partial<ProjectListProps> = {}) {
     onSelect: vi.fn(),
     onNewPm: vi.fn(),
     onTogglePin: vi.fn(),
-    onOpenPmSettings: vi.fn(),
     onOpenComputers: vi.fn(),
     ...overrides,
   };
@@ -79,7 +78,6 @@ describe("ProjectList", () => {
         onSelect={vi.fn()}
         onNewPm={vi.fn()}
         onTogglePin={vi.fn()}
-        onOpenPmSettings={vi.fn()}
         onOpenComputers={vi.fn()}
       />,
     );
@@ -137,7 +135,6 @@ describe("ProjectList", () => {
         onSelect={vi.fn()}
         onNewPm={vi.fn()}
         onTogglePin={vi.fn()}
-        onOpenPmSettings={vi.fn()}
         onOpenComputers={vi.fn()}
       />,
     );
@@ -153,7 +150,7 @@ describe("ProjectList", () => {
     });
     const activeBtn = screen.getByRole("button", { name: /^Ask PM.*Needs You$/ });
     expect(activeBtn).toHaveAttribute("aria-current", "page");
-    expect(activeBtn.closest(".project-row")).toHaveClass("border-select-line", "bg-background");
+    expect(activeBtn.closest(".project-row")).toHaveClass("tile-selected");
     expect(screen.getByTestId("asking-indicator")).toHaveClass("bg-status-active");
     expect(screen.getByTestId("waiting-indicator")).toHaveClass("bg-status-active");
   });
@@ -181,22 +178,17 @@ describe("ProjectList", () => {
         onSelect={vi.fn()}
         onNewPm={vi.fn()}
         onTogglePin={onTogglePin}
-        onOpenPmSettings={vi.fn()}
         onOpenComputers={vi.fn()}
       />,
     );
     expect(screen.getByRole("button", { name: "Unpin Docs" })).toBeDisabled();
   });
 
-  it("opens the PM's settings from the row shortcut", async () => {
-    const user = userEvent.setup();
-    const onOpenPmSettings = vi.fn();
-    renderList({
-      entries: [entry(7, { name: "API" })],
-      onOpenPmSettings,
-    });
-    await user.click(screen.getByRole("button", { name: "API settings" }));
-    expect(onOpenPmSettings).toHaveBeenCalledWith(7);
+  it("keeps Pin as the row's only shortcut, leaving the name room; PM settings open from the conversation header", () => {
+    const { container } = renderList({ entries: [entry(7, { name: "API" })] });
+    const shortcuts = container.querySelector(".row-shortcuts")!;
+    expect(within(shortcuts as HTMLElement).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Pin API"]);
+    expect(screen.queryByRole("button", { name: "API settings" })).toBeNull();
   });
 
   it("renders row shortcuts inside the hover-only class and nowhere else", () => {
@@ -230,7 +222,6 @@ describe("ProjectList", () => {
         onSelect={vi.fn()}
         onNewPm={vi.fn()}
         onTogglePin={vi.fn()}
-        onOpenPmSettings={vi.fn()}
         onOpenComputers={onOpenComputers}
       />,
     );

@@ -122,7 +122,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("sidebar.long", "左栏：超长名字、超长预览、20 多个要滚动", DM, "long", "stress", "#/c/1，列表滚到中间，看上下渐隐"),
   s("sidebar.strip", "左栏：72px 头像窄条（置顶在上），带右侧面板", ["narrow"], "normal", "standard", "#/c/1，narrow 视口下收成 72px 头像条", "头像窄条"),
   s("sidebar.devices", "左栏：多台电脑最左栏与离线状态", D, "normal", "two-devices", "#/c/1；最左栏展示多台电脑及状态"),
-  s("sidebar.row-hover", "左栏：行悬停显示置顶与设置快捷键", D, "normal", "standard", "鼠标悬停在老马一行上", "悬停行"),
+  s("sidebar.row-hover", "左栏：行悬停显示置顶快捷键", D, "normal", "standard", "鼠标悬停在老马一行上", "悬停行"),
   s("sidebar.switcher", "左栏：切换电脑浮层（电脑）与抽屉（手机）", DM, "normal", "two-devices", "点左栏顶部 Studio Mac 切换器", "切换浮层"),
   s("sidebar.list-mobile", "手机列表页", M, "normal", "standard", "首页（网址为空）"),
   s("chat.normal", "对话：四栏主界面（含最左栏与置顶）", DNM, "normal", "standard", "#/c/1；手机从列表点进去"),
