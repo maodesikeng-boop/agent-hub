@@ -76,9 +76,10 @@ export function createLedgerMessages(
   };
 
   /** Invalid transitions, including same-state ones, are ignored. */
-  const transition = (p: Pending, id: MessageId, to: MessageStatus, reason: string | null = null) => {
+  const transition = (p: Pending, id: MessageId, to: MessageStatus, reason: string | null = null, ownerSessionId?: SessionId) => {
     const message = getMessage(id);
     if (message === null || message.status === null || !canTransitionMessage(message.status, to)) return;
+    if (ownerSessionId !== undefined && message.sessionId !== ownerSessionId) return;
     db.run(
       `UPDATE messages SET status = ?, failure_reason = ?, updated_at = ?,
          meta = CASE WHEN ? IN ('delivered', 'processing') THEN json_set(COALESCE(meta, '{}'), '$.deliveryConfirmed', json('true'))
@@ -265,21 +266,21 @@ export function createLedgerMessages(
         return;
       case "message.cancelled":
         // Written but never taken by the agent before the stop, so it is not resent.
-        for (const id of event.messageIds) transition(p, id, "cancelled");
+        for (const id of event.messageIds) transition(p, id, "cancelled", null, sessionId);
         return;
       case "message.requeued":
         // Written but reclaimed before the agent read it, so it goes back to the queue.
         for (const id of event.messageIds) {
           const message = getMessage(id);
-          if (message?.status !== "delivered" || message.sessionId === null) continue;
-          transition(p, id, "queued");
-          enqueue(p, { type: "session.send", params: { sessionId: message.sessionId, messageId: id, source: message.sender === "user" ? "user" : "system" } });
+          if (message?.status !== "delivered" || message.sessionId !== sessionId) continue;
+          transition(p, id, "queued", null, sessionId);
+          enqueue(p, { type: "session.send", params: { sessionId, messageId: id, source: message.sender === "system" ? "system" : "user" } });
         }
         return;
       case "message.delivered":
       case "message.processing": {
         const to = event.type === "message.delivered" ? "delivered" : "processing";
-        for (const id of event.messageIds) transition(p, id, to);
+        for (const id of event.messageIds) transition(p, id, to, null, sessionId);
         dropCarriedRateLimit(p, sessionId);
         updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
         return;
@@ -360,8 +361,8 @@ export function createLedgerMessages(
       case "session.exited": {
         for (const id of event.messageIds) {
           if (event.reason === "shutdown" && keptAfterShutdown(session, id)) continue;
-          if (event.reason === "interrupt" || event.reason === "shutdown") transition(p, id, "stopped");
-          else if (event.reason === "crash" || event.reason === "startup_failed") transition(p, id, "failed", exitFailureReason(event));
+          if (event.reason === "interrupt" || event.reason === "shutdown") transition(p, id, "stopped", null, sessionId);
+          else if (event.reason === "crash" || event.reason === "startup_failed") transition(p, id, "failed", exitFailureReason(event), sessionId);
         }
         updateLive(p, sessionId, (l) => {
           idle(l);
@@ -371,7 +372,7 @@ export function createLedgerMessages(
         return;
       }
       case "driver.error":
-        for (const id of event.messageIds ?? []) transition(p, id, "failed", event.message);
+        for (const id of event.messageIds ?? []) transition(p, id, "failed", event.message, sessionId);
         reportHealthIn(p, "driver", event.message);
         return;
       case "driver.warning":
@@ -402,9 +403,9 @@ export function createLedgerMessages(
     const reason = event.error === undefined ? "turn_failed" : turnFailureReason(event.error);
     for (const id of event.messageIds) {
       if (event.shutdown === true && keptAfterShutdown(session, id)) continue;
-      if (event.interrupted) transition(p, id, "stopped");
-      else if (event.ok || facts.finishedWithText.includes(id)) transition(p, id, "replied");
-      else transition(p, id, "failed", reason);
+      if (event.interrupted) transition(p, id, "stopped", null, session.id);
+      else if (event.ok || facts.finishedWithText.includes(id)) transition(p, id, "replied", null, session.id);
+      else transition(p, id, "failed", reason, session.id);
     }
     updateLive(p, session.id, (l) => {
       idle(l);
@@ -560,13 +561,13 @@ export function createLedgerMessages(
   };
 
   const actionFailedIn = (p: Pending, action: AnyActionRow, error: string) => {
-    if (action.type === "session.send") transition(p, action.params.messageId, "failed", error);
+    if (action.type === "session.send") transition(p, action.params.messageId, "failed", error, action.params.sessionId);
   };
 
-  const stopMessage = (messageId: MessageId) => {
+  const stopMessage = (messageId: MessageId, sessionId?: SessionId) => {
     write((p) => {
       const status = getMessage(messageId)?.status;
-      if (status === "delivered" || status === "processing") transition(p, messageId, "stopped");
+      if (status === "delivered" || status === "processing") transition(p, messageId, "stopped", null, sessionId);
     });
   };
 

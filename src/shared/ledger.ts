@@ -321,7 +321,8 @@ export interface Ledger extends LedgerHandoverWork {
   sentFileAllows(sessionId: SessionId, realPath: string): boolean;
   shareHubFiles(sessionId: SessionId, args: readonly HubFileArg[], signal?: AbortSignal): Promise<SentFile[]>;
   onActionFailed(action: AnyActionRow, error: string): void;
-  stopMessage(messageId: MessageId): void;
+  onSessionQuiescent?(sessionId: SessionId): void;
+  stopMessage(messageId: MessageId, sessionId?: SessionId): void;
   reportHealth(module: HealthModule, error: string | null): void;
   getRouterDigest(): DeviceRouterDigest;
   listRouterItems(beforeCursor?: string, limit?: number, kind?: import("./api.ts").RouterItemsKind): RouterItemsPage;

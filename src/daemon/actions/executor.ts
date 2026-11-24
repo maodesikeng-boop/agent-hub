@@ -16,7 +16,7 @@ import type { Db } from "../store/index.ts";
 import { setActionStatus, toActionRow } from "./queue.ts";
 import type { ActionDbRow } from "./queue.ts";
 
-export type ActionExecutorDeps = Pick<Ledger, "reportHealth" | "onActionFailed">;
+export type ActionExecutorDeps = Pick<Ledger, "reportHealth" | "onActionFailed" | "onSessionQuiescent">;
 
 interface ActionExecutorOptions {
   now?: () => number;
@@ -109,19 +109,43 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     timer = setTimeout(tick, Math.max(0, delayMs));
   };
 
+  const notifySessionSettled = (row: AnyActionRow) => {
+    if (stopping) return;
+    if (row.type === "session.send" || row.type === "session.start") {
+      safely(() => deps.onSessionQuiescent?.(row.params.sessionId));
+    }
+  };
+
   const abandon = (id: ActionId, error: string, send: AnyActionRow | null) => {
     setActionStatus(db, id, { status: "abandoned", lastError: error }, now());
     report("actions", error);
     if (send !== null) {
       const abandoned: AnyActionRow = { ...send, status: "abandoned", lastError: error };
       safely(() => deps.onActionFailed(abandoned, `放弃：${error}`));
+      notifySessionSettled(send);
     }
   };
 
   const laterDelay = (delayMs: number) => (Number.isFinite(delayMs) ? Math.max(0, Math.ceil(delayMs)) : pollIntervalMs);
 
-  const finish = (row: AnyActionRow, result: ActionResult) => {
+  const reclaimIfSuperseded = (id: ActionId, startedParams: string, t: number): "deleted" | "superseded" | "same" => {
+    const current = db.get<{ params: string }>("SELECT params FROM actions WHERE id = ?", id);
+    if (current === undefined) return "deleted";
+    if (current.params !== startedParams) {
+      // Action params changed while running; re-queue with fresh attempts instead of marking the new payload done or failed.
+      setActionStatus(db, id, { status: "pending", attempts: 0, lastError: null, nextAttemptAt: t }, t);
+      return "superseded";
+    }
+    return "same";
+  };
+
+  const finish = (row: AnyActionRow, startedParams: string, result: ActionResult) => {
     const t = now();
+    const state = reclaimIfSuperseded(row.id, startedParams, t);
+    if (state !== "same") {
+      notifySessionSettled(row);
+      return;
+    }
     if (result.kind === "done") {
       setActionStatus(db, row.id, { status: "done", lastError: null }, t);
       report("driver", null);
@@ -129,13 +153,19 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     } else {
       setActionStatus(db, row.id, { status: "pending", nextAttemptAt: t + laterDelay(result.delayMs) }, t);
     }
+    notifySessionSettled(row);
   };
 
-  const fail = (row: AnyActionRow, error: unknown) => {
+  const fail = (row: AnyActionRow, startedParams: string, error: unknown) => {
+    const t = now();
+    const state = reclaimIfSuperseded(row.id, startedParams, t);
+    if (state !== "same") {
+      notifySessionSettled(row);
+      return;
+    }
     const message = errorMessage(error);
     const attempts = row.attempts + 1;
     const policy = retry[row.type];
-    const t = now();
     const exhausted = attempts >= policy.maxAttempts;
     if (exhausted) {
       setActionStatus(db, row.id, { status: "failed", attempts, lastError: message }, t);
@@ -147,17 +177,18 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
       const failed: AnyActionRow = { ...row, status: "failed", attempts, lastError: message, updatedAt: t };
       safely(() => deps.onActionFailed(failed, message));
     }
+    notifySessionSettled(row);
   };
 
-  const execute = async (row: AnyActionRow, handler: ActionHandler): Promise<void> => {
+  const execute = async (row: AnyActionRow, startedParams: string, handler: ActionHandler): Promise<void> => {
     let result: ActionResult;
     try {
       result = await handler(row);
     } catch (error) {
-      safely(() => fail(row, error));
+      safely(() => fail(row, startedParams, error));
       return;
     }
-    safely(() => finish(row, result));
+    safely(() => finish(row, startedParams, result));
   };
 
   function tick() {
@@ -193,7 +224,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
         }
         setActionStatus(db, row.id, { status: "running" }, t);
         if (key !== null) busyLanes.add(key);
-        const job = execute({ ...row, status: "running", updatedAt: t }, handler).finally(() => {
+        const job = execute({ ...row, status: "running", updatedAt: t }, raw.params, handler).finally(() => {
           inFlight.delete(row.id);
           if (key !== null) busyLanes.delete(key);
           schedule(0);

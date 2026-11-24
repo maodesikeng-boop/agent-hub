@@ -599,4 +599,34 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
       input: { path: "/repo/src/app.ts", oldText: "a", newText: "b" },
     });
   });
+
+  it("冷启动 prepareLaunch 期间 isBusy 为真；end() 介入后抛 session_ended 且不再写 prompt", async () => {
+    let releasePrepare!: () => void;
+    let enteredPrepare!: () => void;
+    const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+    const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+
+    const h = makePiHarness({
+      driver: {
+        prepareLaunch: async (session) => {
+          enteredPrepare();
+          await prepareGate;
+          const promptFile = join(h.stateDir, `prompt-${session.id}.md`);
+          writeFileSync(promptFile, "hi");
+          return { promptFile, env: {}, fingerprint: "fp-pi-race" };
+        },
+      },
+    });
+    const row = h.addSession();
+    const sendPromise = h.driver.send(row.id, { messageIds: [90], source: "user", text: "hello" });
+    await prepareEntered;
+    expect(h.driver.isBusy(row.id)).toBe(true);
+
+    const endPromise = h.driver.end(row.id);
+    releasePrepare();
+    await expect(sendPromise).rejects.toSatisfy((err: unknown) => err instanceof DriverError && err.code === "session_ended");
+    await endPromise;
+    expect(h.driver.isBusy(row.id)).toBe(false);
+    expect(h.rpcIn().filter((m) => m.type === "prompt")).toHaveLength(0);
+  });
 });

@@ -66,7 +66,7 @@ export function actionDedupeKey(action: NewAction): string {
     case "session.start":
       return `${action.params.sessionId}:${action.params.generation}`;
     case "session.send":
-      return String(action.params.messageId);
+      return `${action.params.sessionId}:${action.params.messageId}`;
     case "session.end":
       return `${action.params.sessionId}:${action.params.generation}`;
     case "worktree.create":

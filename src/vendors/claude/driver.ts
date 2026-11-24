@@ -304,10 +304,8 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       try {
         let resume = proc?.resume ?? this.resumeFor(st);
         for (let attempt = 0; ; attempt++) {
-          if (!proc) {
-            proc = await this.#spawn(st, resume, files);
-            this.abortIfStopped(st, proc);
-          }
+          if (!proc) proc = await this.#spawn(st, resume, files);
+          this.abortIfStopped(st, proc);
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
           proc.child.stdin.write(batch.line + "\n");
@@ -315,6 +313,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           const outcome = await proc.ready;
           if (outcome.kind === "ok") return;
           if (outcome.kind === "closed") {
+            if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
             if (outcome.reason === "interrupt") return;
             throw new DriverError(
               "spawn_failed",
@@ -397,6 +396,8 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         this.#platform,
       );
     }
+    this.assertRunning();
+    this.assertNotEnded(st);
     const child = await this.spawnDetachedChild(
       this.#resolveClaudePath(),
       launch.command,

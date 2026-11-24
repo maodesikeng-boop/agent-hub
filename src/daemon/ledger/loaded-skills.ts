@@ -128,8 +128,9 @@ export function createLedgerLoadedSkills(ctx: LedgerContext, skillFiles: SkillFi
       case "message.processing": {
         if (event.messageIds.length === 0) return;
         const texts = db.all<{ text: string }>(
-          `SELECT text FROM messages WHERE id IN (${event.messageIds.map(() => "?").join(", ")}) AND sender = 'user' AND kind = 'text' ORDER BY id`,
+          `SELECT text FROM messages WHERE id IN (${event.messageIds.map(() => "?").join(", ")}) AND session_id = ? AND sender = 'user' AND kind = 'text' ORDER BY id`,
           ...event.messageIds,
+          session.id,
         );
         for (const { text } of texts) {
           const name = userSkillCommandOf(session.vendor, text);

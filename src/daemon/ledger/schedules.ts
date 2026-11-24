@@ -238,9 +238,10 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     });
   };
 
-  const failedRunIn = (p: Pending, messageId: MessageId) => {
+  const failedRunIn = (p: Pending, messageId: MessageId, sessionId?: number) => {
     const row = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", messageId);
     if (row === undefined || row.status !== "failed" || row.meta === null) return;
+    if (sessionId !== undefined && row.session_id !== sessionId) return;
     const meta = JSON.parse(row.meta) as SystemMessageMeta;
     if (meta.event !== "schedule.run") return;
     const reason = row.failure_reason ?? NO_REASON;
@@ -254,13 +255,13 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     insertSystemMessage(p, row.conversation_id, failedMeta, `定时任务没跑成：${meta.name}：${describeFailure(reason, { unknown: "raw" }).text}`);
   };
 
-  const afterDriverEvent = (p: Pending, event: DriverEvent) => {
+  const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (event.type !== "turn.ended" && event.type !== "session.exited" && event.type !== "driver.error") return;
-    for (const id of event.messageIds ?? []) failedRunIn(p, id);
+    for (const id of event.messageIds ?? []) failedRunIn(p, id, session.id);
   };
 
   const actionFailedIn = (p: Pending, action: AnyActionRow) => {
-    if (action.type === "session.send") failedRunIn(p, action.params.messageId);
+    if (action.type === "session.send") failedRunIn(p, action.params.messageId, action.params.sessionId);
   };
 
   const addForUser = (pmId: PmId, args: HubArgs<"schedule.add">): ScheduleRecord =>

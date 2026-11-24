@@ -2,7 +2,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LedgerSnapshot } from "../../shared/api.ts";
 import { agentMessageDedupeKey } from "../../shared/domain.ts";
-import type { Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
+import type { Message, MessageId, Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { deliveryParts } from "../../shared/worker.ts";
@@ -111,14 +111,11 @@ export interface LedgerOptions {
   skillFiles?: SkillFiles;
   onHandoverClaimable?: HandoverOptions["onHandoverClaimable"];
   onCatalogClaimable?: ProjectCatalogLedgerOptions["onCatalogClaimable"];
+  isSessionBusy?: HandoverOptions["isSessionBusy"];
 }
 
-export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
-  const ctx = createLedgerContext(db, options);
-  const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
-  const userHome = options.userHome ?? homedir();
-  const dataHome = options.dataHome ?? dirname(options.pmHomeRoot);
-  const files: LedgerFiles = {
+function buildLedgerFiles(options: LedgerOptions, userHome: string, dataHome: string): LedgerFiles {
+  return {
     pmHomeRoot: options.pmHomeRoot,
     personasDir: options.personasDir,
     pmMemoryDir: options.pmMemoryDir ?? (options.dataHome !== undefined ? join(options.dataHome, "state", "pm-memory") : undefined),
@@ -131,6 +128,39 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     resolveFolder: options.resolveFolder ?? createResolveFolder({ dataHome, userHome }),
     writeFile: options.writeFileAtomic ?? defaultWriteFileAtomic,
   };
+}
+
+function scopeDriverEvent(
+  sessionId: SessionId,
+  event: Exclude<DriverEvent, TurnEndedEvent>,
+  getMessage: (id: MessageId) => Message | null,
+): Exclude<DriverEvent, TurnEndedEvent> | null {
+  switch (event.type) {
+    case "message.delivered":
+    case "message.processing":
+    case "message.cancelled":
+    case "message.requeued": {
+      if (event.messageIds.length === 0) return event;
+      const owned = event.messageIds.filter((id) => getMessage(id)?.sessionId === sessionId);
+      return owned.length === 0 ? null : { ...event, messageIds: owned };
+    }
+    case "session.exited":
+      return { ...event, messageIds: event.messageIds.filter((id) => getMessage(id)?.sessionId === sessionId) };
+    case "driver.error":
+      return event.messageIds === undefined
+        ? event
+        : { ...event, messageIds: event.messageIds.filter((id) => getMessage(id)?.sessionId === sessionId) };
+    default:
+      return event;
+  }
+}
+
+export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
+  const ctx = createLedgerContext(db, options);
+  const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
+  const userHome = options.userHome ?? homedir();
+  const dataHome = options.dataHome ?? dirname(options.pmHomeRoot);
+  const files = buildLedgerFiles(options, userHome, dataHome);
   const taskGraphManual = (sessionId: SessionId) => taskGraphManualNote(files.launchDir, sessionId);
   const sessions = createLedgerSessions(ctx);
   const { sessionState } = sessions;
@@ -191,6 +221,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     autoRenew: options.autoRenew,
     log: options.log,
     onHandoverClaimable: options.onHandoverClaimable,
+    isSessionBusy: options.isSessionBusy,
+    hasPendingDriverEvents: (sessionId) => driverEvents.hasPending(sessionId),
+    hasPendingTurnCompletions: (sessionId) => completions.blocksSend(sessionId),
     waitingAsks: router.waitingAsksOf,
     liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
     onRenewedIn: (p, conversationId) => {
@@ -239,14 +272,16 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     const session = getAgentSession(db, sessionId);
     if (session === null || session.role === "assistant") return;
     write((p) => {
-      messages.applyEvent(p, session, event, textMeta);
-      turnReplies.afterDriverEvent(p, session, event);
-      steps.afterDriverEvent(session, event);
-      loadedSkills.afterDriverEvent(session, event);
-      workers.afterDriverEvent(p, session, event);
-      handover.afterDriverEvent(p, session, event);
-      schedules.afterDriverEvent(p, event);
-      projectCatalog.afterDriverEvent(p, session, event);
+      const scoped = scopeDriverEvent(session.id, event, messages.getMessage);
+      if (scoped === null) return;
+      messages.applyEvent(p, session, scoped, textMeta);
+      turnReplies.afterDriverEvent(p, session, scoped);
+      steps.afterDriverEvent(session, scoped);
+      loadedSkills.afterDriverEvent(session, scoped);
+      workers.afterDriverEvent(p, session, scoped);
+      handover.afterDriverEvent(p, session, scoped);
+      schedules.afterDriverEvent(p, session, scoped);
+      projectCatalog.afterDriverEvent(p, session, scoped);
     });
   };
 
@@ -297,7 +332,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       steps.afterDriverEvent(session, event);
       if (receipt.event.messageIds.length === 0 || event.messageIds.length > 0) workers.settleTurn(p, session, event, facts.worker, previousRun);
       handover.afterDriverEvent(p, session, event);
-      schedules.afterDriverEvent(p, event);
+      schedules.afterDriverEvent(p, session, event);
       projectCatalog.afterDriverEvent(p, session, event);
     },
     onSettled: (receipt) => driverEvents.onSettled(receipt),
@@ -313,6 +348,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     localLinks: sentFiles.localLinks,
     textMetaFor,
     onOverflow,
+    onSessionDrained: (sessionId) => {
+      if (!closing.signal.aborted) handover.onSessionQuiescent(sessionId);
+    },
   });
 
   return {
@@ -413,6 +451,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         handover.actionFailedIn(p, action);
         schedules.actionFailedIn(p, action);
       });
+    },
+    onSessionQuiescent(sessionId) {
+      if (!closing.signal.aborted) handover.onSessionQuiescent(sessionId);
     },
     stopMessage: messages.stopMessage,
     turnsLostOnShutdown: messages.turnsLostOnShutdown,

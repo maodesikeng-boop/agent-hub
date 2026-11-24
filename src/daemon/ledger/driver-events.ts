@@ -18,6 +18,7 @@ type QueueItem = { event: OrdinaryEvent; links: LocalLink[] } | { receipt: TurnC
 interface Queue {
   items: QueueItem[];
   copy: AbortController | null;
+  applying: boolean;
   waiting: boolean;
   offline: boolean;
   plainLinks: boolean;
@@ -32,6 +33,18 @@ interface DriverEventDrainOptions {
   localLinks(text: string): LocalLink[];
   textMetaFor(sessionId: SessionId, event: OrdinaryEvent, links: LocalLink[], signal: AbortSignal): Promise<AgentTextMeta | null>;
   onOverflow(sessionId: SessionId): void;
+  onSessionDrained?(sessionId: SessionId): void;
+}
+
+const HANDOVER_TRIGGER_EVENTS = new Set<DriverEvent["type"]>([
+  "session.exited",
+  "message.requeued",
+  "message.cancelled",
+  "background.changed",
+]);
+
+function isHandoverTrigger(item: QueueItem): boolean {
+  return "receipt" in item || HANDOVER_TRIGGER_EVENTS.has(item.event.type);
 }
 
 export function createDriverEventDrain(options: DriverEventDrainOptions) {
@@ -68,32 +81,57 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
     }).then((meta) => {
       if (copy.signal.aborted) return;
       queue.items.shift();
-      applyLogged(sessionId, item.event, meta);
+      queue.applying = true;
+      try {
+        applyLogged(sessionId, item.event, meta);
+      } finally {
+        queue.applying = false;
+      }
       queue.copy = null;
-      drain(sessionId, queue);
+      drain(sessionId, queue, isHandoverTrigger(item));
     }).catch((error) => log(sessionId, item.event.type, error));
   }
 
-  function drain(sessionId: SessionId, queue: Queue): void {
+  function drain(sessionId: SessionId, queue: Queue, lastTrigger = false): void {
     if (queue.copy !== null || queue.waiting) return;
+    let lastWasTrigger = lastTrigger;
     while (queue.items.length > 0) {
       const item = queue.items[0]!;
       if ("receipt" in item) {
         item.facts ??= factsFor(sessionId, item.receipt.event);
         queue.waiting = true;
-        const result = completions.settle(item.receipt, item.facts);
+        queue.applying = true;
+        let result;
+        try {
+          result = completions.settle(item.receipt, item.facts);
+        } finally {
+          queue.applying = false;
+        }
         if (result.kind === "pending") return;
         queue.waiting = false;
       } else if (!queue.plainLinks && item.links.length > 0) {
         copyReply(sessionId, queue, item);
         return;
       } else {
-        applyLogged(sessionId, item.event, null);
+        queue.applying = true;
+        try {
+          applyLogged(sessionId, item.event, null);
+        } finally {
+          queue.applying = false;
+        }
       }
+      lastWasTrigger = isHandoverTrigger(item);
       queue.items.shift();
     }
     if (queues.get(sessionId) === queue) queues.delete(sessionId);
     queue.finish();
+    if (!lastWasTrigger) {
+      try {
+        options.onSessionDrained?.(sessionId);
+      } catch (error) {
+        console.error(`${LOG_PREFIX} driver event drain callback (session ${sessionId}):`, error);
+      }
+    }
   }
 
   function flush(sessionId: SessionId, queue: Queue): void {
@@ -134,7 +172,7 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
       const done = new Promise<void>((resolve) => {
         finish = resolve;
       });
-      queue = { items: [], copy: null, waiting: false, offline: false, plainLinks: false, done, finish };
+      queue = { items: [], copy: null, applying: false, waiting: false, offline: false, plainLinks: false, done, finish };
       queues.set(sessionId, queue);
     }
     queue.items.push(item);
@@ -143,13 +181,19 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
 
   return {
     push,
+    hasPending(sessionId: SessionId): boolean {
+      const queue = queues.get(sessionId);
+      if (queue === undefined) return false;
+      if (queue.applying) return queue.items.length > (queue.copy !== null ? 0 : 1);
+      return queue.items.length > 0;
+    },
     onSettled(receipt: TurnCompletionReceipt) {
       const queue = queues.get(receipt.sessionId);
       const head = queue?.items[0];
       if (queue === undefined || head === undefined || !("receipt" in head) || head.receipt.sequence !== receipt.sequence) return;
       queue.waiting = false;
       queue.items.shift();
-      drain(receipt.sessionId, queue);
+      drain(receipt.sessionId, queue, true);
     },
     async wait() {
       while (queues.size > 0) await Promise.all([...queues.values()].map((queue) => queue.done));

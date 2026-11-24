@@ -257,6 +257,10 @@ export interface Driver {
   cleanupStale(): Promise<void>;
   queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null>;
   isRunning?(sessionId: SessionId): boolean;
+  /** True while the driver has an active turn or an in-progress startup or delivery for the session. */
+  isBusy?(sessionId: SessionId): boolean;
+  /** Synchronously marks the session ending so queued follow-up batches are dropped before session.end runs. */
+  markEnding?(sessionId: SessionId): void;
   onEvent(listener: DriverEventListener): Unsubscribe;
 }
 
@@ -288,6 +292,8 @@ export interface DriverOptions {
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   personaNote?: (sessionId: SessionId, sinceRevision: number) => PersonaNote | null;
   sessionPreamble?: (sessionId: SessionId) => string | null;
+  /** Called when a session finishes an in-progress startup, delivery, or turn and becomes idle in the driver. */
+  onSessionQuiescent?: (sessionId: SessionId) => void;
   env?: Record<string, string> | (() => Record<string, string>);
   pmMemoryDir?: string;
   log?: (line: string) => void;

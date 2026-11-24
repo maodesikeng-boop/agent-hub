@@ -141,10 +141,10 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     };
   }
 
-  override end(sessionId: SessionId): Promise<void> {
+  override markEnding(sessionId: SessionId): void {
     const st = this.sessions.get(sessionId);
     if (st) st.cachedCommands = null;
-    return super.end(sessionId);
+    super.markEnding(sessionId);
   }
 
   override queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null> {
@@ -340,18 +340,16 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     existing: AcpProc | null,
     files: LaunchFiles | null,
   ): Promise<void> {
+    if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     let proc = existing;
-    if (!proc) {
-      try {
-        proc = await this.#spawn(st, this.resumeFor(st), files);
-        this.abortIfStopped(st, proc);
-      } catch (error) {
-        this.dropBatch(st, batch);
-        throw error;
-      }
+    try {
+      if (!proc) proc = await this.#spawn(st, this.resumeFor(st), files);
+      this.abortIfStopped(st, proc);
+    } catch (error) {
+      this.dropBatch(st, batch);
+      throw error;
     }
     this.clearTimer(st, "idleTimer");
-    if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     this.armStartTimer(st, proc);
 
     const outcome = await proc.ready;
@@ -511,6 +509,8 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
         ? [...this.#config.launchArgs(launchCtx)]
         : [...this.#config.launchArgs];
     const { spawnCmd, spawnArgs, extraEnv } = await this.#wrapLaunch(st, launchCtx, rawLaunchArgs);
+    this.assertRunning();
+    this.assertNotEnded(st);
 
     const child = await this.spawnDetachedChild(
       exePath,

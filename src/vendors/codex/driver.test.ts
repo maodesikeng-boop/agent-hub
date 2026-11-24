@@ -2466,5 +2466,35 @@ describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
     await t.waitFor("turn.ended");
     expect(t.store.get(s.id)!.usage).toEqual({ input: 15_000, cacheRead: 110_000, cacheWrite: 0, output: 500, context: 65_000 });
   });
+
+  it("冷启动 prepareLaunch 期间 isBusy 为真；end() 介入后抛 session_ended 且不发 turn/start", async () => {
+    let releasePrepare!: () => void;
+    let enteredPrepare!: () => void;
+    const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+    const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+
+    const t = makeCodexHarness({
+      driver: {
+        prepareLaunch: async (session) => {
+          enteredPrepare();
+          await prepareGate;
+          const promptFile = join(t.dir, `prompt-${session.id}.md`);
+          writeFileSync(promptFile, "hi");
+          return { promptFile, env: {}, fingerprint: "fp-codex-race" };
+        },
+      },
+    });
+    const s = t.addSession();
+    const sendPromise = t.driver.send(s.id, user(1, "hello"));
+    await prepareEntered;
+    expect(t.driver.isBusy(s.id)).toBe(true);
+
+    const endPromise = t.driver.end(s.id);
+    releasePrepare();
+    await expect(sendPromise).rejects.toThrow(/session_ended/);
+    await endPromise;
+    expect(t.driver.isBusy(s.id)).toBe(false);
+    expect(t.rpcIn().filter((r) => r.method === "turn/start")).toHaveLength(0);
+  });
 });
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
