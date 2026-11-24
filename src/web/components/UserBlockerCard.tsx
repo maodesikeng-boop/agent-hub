@@ -1,25 +1,28 @@
 import { useMutation } from "@tanstack/react-query";
-import { Loader2 } from "../ui/icons.ts";
+import { Check, Loader2 } from "../ui/icons.ts";
 import { useRef, useState } from "react";
 import type { UserBlockerId } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
-import { Button } from "../ui/button.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { decisionFrame } from "./OptionRow.tsx";
 
 export function UserBlockerCard({
   blockerId,
   text,
   answered = false,
   showStatus = true,
+  compact = false,
   className,
 }: {
   blockerId: UserBlockerId;
   text: string;
   answered?: boolean;
   showStatus?: boolean;
+  /** Task Graph canvas: secondary text size and the narrower inset. */
+  compact?: boolean;
   className?: string;
 }) {
   const client = useClient();
@@ -41,11 +44,7 @@ export function UserBlockerCard({
   return (
     <div
       data-testid="user-blocker-card"
-      className={cn(
-        "border px-3.5 py-3",
-        answered ? "border-border bg-background" : "border-select-line bg-open",
-        className,
-      )}
+      className={cn(compact ? "px-3.5 py-3" : "p-4", decisionFrame(!answered), className)}
     >
       {showStatus && (
         <div className="mb-1.5 flex items-center gap-2">
@@ -55,24 +54,29 @@ export function UserBlockerCard({
           </span>
         </div>
       )}
-      <div className="text-minor leading-relaxed text-foreground">
+      <div className={cn("leading-relaxed text-foreground", compact ? "text-minor" : "text-body")}>
         <Markdown text={text} />
       </div>
       {!answered && (
-        <div className="mt-2.5 flex justify-end">
-          <Button
+        <div className={cn("mt-3 border-t border-border", compact ? "-mx-3.5 -mb-3" : "-mx-4 -mb-4")}>
+          <button
             type="button"
-            size="sm"
             disabled={recheck.isPending}
+            className={cn(
+              "group/done flex w-full cursor-pointer items-center gap-3 rounded-none text-left font-medium text-foreground transition-colors duration-150 outline-none hover:bg-hover active:bg-open focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent pointer-coarse:min-h-11 motion-reduce:transition-none",
+              compact ? "min-h-9 px-3.5 py-2 text-minor leading-5" : "min-h-10 px-4 py-2 text-body leading-6",
+            )}
             onClick={() => {
               if (inFlightRef.current) return;
               inFlightRef.current = true;
               recheck.mutate();
             }}
           >
-            {recheck.isPending && <Loader2 className="size-pixel-sm" aria-hidden="true" />}
+            <span className="flex w-4 shrink-0 justify-center text-muted-foreground group-hover/done:text-foreground">
+              {recheck.isPending ? <Loader2 className="size-pixel-sm" aria-hidden="true" /> : <Check className="size-pixel-sm" aria-hidden="true" />}
+            </span>
             {recheck.isPending ? "Checking…" : "Done"}
-          </Button>
+          </button>
         </div>
       )}
       {err !== null && (

@@ -444,8 +444,7 @@ describe("消息状态", () => {
     const notice = within(log()).getByText("已建工单").closest("[data-notice]");
     expect(notice).toHaveAttribute("data-side", "left");
     expect(within(notice as HTMLElement).getByText("System")).toBeInTheDocument();
-    expect(notice!.parentElement).toHaveClass("rounded-sm", "bg-panel");
-    expect(notice!.parentElement!.className).not.toMatch(/(^|\s)border(-|\s|$)/);
+    expect(notice!.parentElement!.className).not.toMatch(/(^|\s)(bg-|rounded-|border(-|\s|$))/);
 
     push(
       ws,

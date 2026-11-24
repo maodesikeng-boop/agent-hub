@@ -25,6 +25,7 @@ import { stepBeadPaths, TUBE_WIDTH_CELLS, tubePaths, type PixelPoint, type StepB
 import { computeGraphComponents } from "../task-graph-layout.ts";
 import { CardBody, CardNoteForm } from "./Deliverables.tsx";
 import { GateMark } from "./GateMark.tsx";
+import { decisionFrame, OptionRow } from "./OptionRow.tsx";
 import { ShimmerOverlay } from "./StatusShimmer.tsx";
 import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 
@@ -222,11 +223,8 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   const showQuestion = node.gateQuestion !== null && node.gateQuestion.trim() !== "" && node.gateQuestion !== node.title;
 
   return (
-    <div
-      data-testid="peel-gate-card"
-      className="overflow-hidden rounded-sm border border-select-line bg-open px-3.5 py-3 [contain:layout_style]"
-    >
-      {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
+    <div data-testid="peel-gate-card" className={cn("px-3.5 py-3 [contain:layout_style]", decisionFrame(true))}>
+      {showQuestion && <p className="mb-1 text-minor leading-5 font-semibold wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
         text={node.gateSummaryMd ?? ""}
         titleText={node.gateQuestion ?? ""}
@@ -235,22 +233,19 @@ export const GateDecisionCard = memo(function GateDecisionCard({
         textClassName="text-minor leading-relaxed text-foreground"
       />
       {hasOptions && (
-        <div className="-mx-3.5 grid grid-cols-1 divide-y divide-border border-t border-border">
-          {node.gateOptions.map((opt) => {
-            const isRec = node.gateRecommended !== null && opt === node.gateRecommended;
-            return (
-              <button
-                key={opt}
-                type="button"
-                disabled={decideMutation.isPending}
-                onClick={() => submit(opt, getDecisionDraft(draftKey))}
-                className="flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-baseline justify-between gap-2 rounded-none px-3.5 py-2 text-left text-minor font-medium transition-colors duration-150 outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:opacity-60 motion-reduce:transition-none"
-              >
-                <span className="min-w-0 flex-1 wrap-anywhere">{opt}</span>
-                {isRec && <span className="tool-badge shrink-0 px-1.5 text-xs leading-5 font-medium">Recommended</span>}
-              </button>
-            );
-          })}
+        <div className="-mx-3.5 grid grid-cols-1 divide-y divide-border border-t border-border" role="group" aria-label="Options">
+          {node.gateOptions.map((opt, i) => (
+            <OptionRow
+              key={opt}
+              index={i}
+              compact
+              recommended={node.gateRecommended !== null && opt === node.gateRecommended}
+              disabled={decideMutation.isPending}
+              onClick={() => submit(opt, getDecisionDraft(draftKey))}
+            >
+              {opt}
+            </OptionRow>
+          ))}
         </div>
       )}
       {err !== null && (
@@ -260,7 +255,6 @@ export const GateDecisionCard = memo(function GateDecisionCard({
       )}
       <CardNoteForm
         key={draftKey}
-        variant="row"
         value={draft}
         onChange={(next) => setDecisionDraft(draftKey, next)}
         disabled={decideMutation.isPending}

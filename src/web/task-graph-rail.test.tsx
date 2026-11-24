@@ -334,7 +334,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     // 1) 一键点选推荐项
     const first = openDialog(5);
     const firstCard = screen.getByTestId("peel-gate-card");
-    expect(firstCard).toHaveClass("rounded-sm", "border", "border-select-line", "bg-open");
+    expect(firstCard).toHaveClass("rounded-sm", "border", "border-select-line", "bg-background");
     await user.click(within(firstCard).getByRole("button", { name: /全量同步并先备份/ }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.url).toBe("/api/task-graphs/5/nodes/gate-sync/decide");

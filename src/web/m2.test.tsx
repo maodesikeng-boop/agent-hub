@@ -530,8 +530,8 @@ describe("撤销性格设定修改", () => {
     const ws = await boot(makeSnapshot());
     push(ws, messageChange(11, "message.created", changed(3, 42)));
     const revert = within(log()).getByRole("button", { name: "Undo" });
-    // Undo is a text action on the strip's first line, not a boxed button.
-    expect(revert).toHaveClass("text-rail-ink", "font-medium", "hover:bg-hover");
+    // Undo is a text action right after the event text, not a boxed button.
+    expect(revert).toHaveClass("text-rail-ink", "font-medium", "hover:underline");
     expect(revert.className).not.toMatch(/primary|(?:^|\s)border(?:-|\s|$)/);
     await user.click(revert);
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/persona-changes\/42\/revert$/)).toHaveLength(1));

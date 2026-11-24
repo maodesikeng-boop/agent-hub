@@ -151,6 +151,8 @@ export const CardBody = memo(function CardBody({
 
 const NOTE_MAX_HEIGHT_PX = 144;
 
+/** The last row of a decision card: no frame of its own, a pencil in the option letters' column, and a Send that stays a quiet
+ * icon until there is something to send. */
 export function CardNoteForm({
   disabled,
   pending,
@@ -161,7 +163,6 @@ export function CardNoteForm({
   className,
   inputClassName,
   buttonSize,
-  variant = "field",
 }: {
   disabled: boolean;
   pending: boolean;
@@ -172,8 +173,6 @@ export function CardNoteForm({
   className?: string;
   inputClassName?: string;
   buttonSize?: "sm";
-  /** `row` is the last row of a decision card's option list: no frame of its own, a pencil in the letter column. */
-  variant?: "field" | "row";
 }) {
   const id = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -200,23 +199,24 @@ export function CardNoteForm({
 
   const canSend = !disabled && note.trim() !== "";
   const small = buttonSize === "sm";
-  const row = variant === "row";
   return (
     <div
-      data-card-reply={variant}
+      data-card-reply
       className={cn(
-        row
-          ? "-mx-4 -mb-4 flex items-end gap-3 border-t border-border py-1.5 pr-1.5 pl-4 transition-shadow focus-within:shadow-[inset_0_0_0_1px_var(--border-focus)]"
-          : "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 shadow-[var(--shadow-tile)] transition-[border-color,box-shadow] focus-within:field-focus",
+        "group/reply -mx-4 -mb-4 flex items-end gap-3 border-t border-border py-1.5 pr-1.5 pl-4 transition-shadow focus-within:shadow-[inset_0_0_0_1px_var(--border-focus)]",
         disabled && "opacity-60",
         className,
       )}
     >
-      {row && (
-        <span aria-hidden="true" className={cn("mt-1 flex w-4 shrink-0 items-center self-start text-muted-foreground", small ? "h-5" : "h-6")}>
-          <PencilLine className="size-pixel-sm" />
-        </span>
-      )}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mt-1 flex w-4 shrink-0 items-center self-start text-muted-foreground transition-colors group-focus-within/reply:text-foreground motion-reduce:transition-none",
+          small ? "h-5" : "h-6",
+        )}
+      >
+        <PencilLine className="size-pixel-sm" />
+      </span>
       <label htmlFor={id} className="sr-only">
         Your reply
       </label>
@@ -241,7 +241,15 @@ export function CardNoteForm({
           }
         }}
       />
-      <Button type="button" size="icon-sm" aria-label="Send" disabled={!canSend} onClick={() => onSubmitNote(note)} className={cn("shrink-0", small && "size-7")}>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant={canSend ? "default" : "ghost"}
+        aria-label="Send"
+        disabled={!canSend}
+        onClick={() => onSubmitNote(note)}
+        className={cn("shrink-0", small && "size-7")}
+      >
         {pending ? <Loader2 className="size-pixel-sm" aria-hidden="true" /> : <Send className="size-pixel-sm" aria-hidden="true" />}
       </Button>
     </div>

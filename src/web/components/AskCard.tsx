@@ -17,7 +17,7 @@ import { useHubQueryClient } from "../query-client.ts";
 import { CardBody, CardNoteForm, UnsentDraftBanner } from "./Deliverables.tsx";
 import { Markdown } from "./Markdown.tsx";
 import type { MessageActions } from "./Messages.tsx";
-import { OPTION_LIST, OptionRow } from "./OptionRow.tsx";
+import { decisionFrame, OPTION_LIST, OptionRow } from "./OptionRow.tsx";
 
 export const AskCard = memo(function AskCard({
   card,
@@ -91,9 +91,12 @@ export const AskCard = memo(function AskCard({
   const listEndsCard = answered && !card.closed && !showUnsentDraft && err === null;
 
   return (
-    <div className="w-full min-w-0 overflow-hidden rounded-sm border border-border bg-background p-4" data-ask-card>
-      <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
-        <Markdown text={cardTitle} files={files} messageId={messageId} />
+    <div className={cn("w-full min-w-0 p-4", decisionFrame(!answered && !card.closed))} data-ask-card data-waiting={!answered && !card.closed ? "" : undefined}>
+      <div className="flex w-full min-w-0 items-start gap-3">
+        <div className="min-w-0 flex-1 text-body leading-relaxed font-semibold text-foreground">
+          <Markdown text={cardTitle} files={files} messageId={messageId} />
+        </div>
+        {card.closed && <span className="mt-0.5 shrink-0 rounded-sm bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Closed</span>}
       </div>
       <CardBody
         text={cardBody}
@@ -127,7 +130,7 @@ export const AskCard = memo(function AskCard({
             );
           })}
           {answerNote !== undefined && (
-            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 bg-open px-4 py-2.5 leading-6">
+            <div data-ask-answer className="flex min-h-10 w-full items-start gap-3 bg-open px-4 py-2 leading-6">
               <span className="flex h-6 w-4 shrink-0 items-center text-foreground">
                 <PencilLine className="size-pixel-sm" aria-hidden="true" />
               </span>
@@ -136,7 +139,6 @@ export const AskCard = memo(function AskCard({
           )}
         </div>
       )}
-      {card.closed && <p className="mt-2 text-minor text-muted-foreground">Closed</p>}
       {showUnsentDraft && <UnsentDraftBanner draft={draft} onDismiss={() => clearDecisionDraft(draftKey)} />}
       {err !== null && (
         <p role="alert" title={errorTitle(err)} className="my-2 text-xs text-danger">
@@ -145,7 +147,6 @@ export const AskCard = memo(function AskCard({
       )}
       {!answered && (
         <CardNoteForm
-          variant="row"
           value={draft}
           onChange={(next) => setDecisionDraft(draftKey, next)}
           disabled={disabled}

@@ -271,13 +271,13 @@ describe("Worker 线程卡（ThreadCard）", () => {
 });
 
 describe("系统行", () => {
-  it("建项目、挂文件夹：结构化活动条靠左展示（带标签，纸色底、4px 圆角、没有框），不居中、没有灰气泡", () => {
+  it("建项目、挂文件夹：一行淡色事件靠左展示（带标签，没有底色、圆角和框），不居中、没有灰气泡", () => {
     const { container } = list([makeSystemMessage({ id: 1, text: "项目已建好", event: { event: "project.created", projectId: 1 } })]);
     const notice = screen.getByText("项目已建好").closest("[data-notice]") as HTMLElement;
     expect(notice).toHaveAttribute("data-side", "left");
     expect(within(notice).getByText("Project")).toBeInTheDocument();
-    expect(notice.parentElement).toHaveClass("rounded-sm", "bg-panel");
-    expect(notice.parentElement?.className).not.toMatch(/(^|\s)border(-|\s|$)/);
+    expect(notice).toHaveClass("text-minor", "text-muted-foreground");
+    expect(notice.parentElement?.className).not.toMatch(/(^|\s)(bg-|rounded-|border(-|\s|$))/);
     expect(notice.className).not.toContain("justify-center");
     expect(container.innerHTML).not.toContain("bg-muted");
   });
@@ -401,8 +401,7 @@ describe("消息状态（照微信）：不写字，只有没发出去左边一�
     const row = mark.parentElement as HTMLElement;
     expect(row).toHaveClass("flex", "items-center", "justify-end");
     expect(row.firstElementChild).toBe(mark);
-    expect(mark.querySelector("span")).toHaveClass("size-5", "bg-danger", "text-white");
-    expect(mark.querySelector("span")!.className).not.toMatch(/rounded-/);
+    expect(mark.querySelector("span")).toHaveClass("size-5", "rounded-full", "bg-danger", "text-white");
     fireEvent.click(mark);
     expect(onRetryMessage).toHaveBeenCalledWith(1);
   });

@@ -1,4 +1,4 @@
-import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
+import { Archive, CalendarClock, Check, ChevronRight, CircleAlert, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
@@ -330,14 +330,14 @@ export const TurnView = memo(
 
 type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
 
-// Event rows share one grid: a bare 16px icon centered on the first 20px line, an inline label, muted detail that wraps
-// under the label rather than under a box, and a compact text action centered on the first line.
-const EVENT_ROW = "flex w-full items-start gap-3 px-3.5 py-2.5 text-left text-minor leading-5";
-const EVENT_TEXT = "min-w-0 flex-1 text-muted-foreground [overflow-wrap:anywhere]";
-const EVENT_TRIGGER =
-  "cursor-pointer rounded-none transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent";
+// Events are quiet lines, not boxes: a bare icon on the first line, then the label, the muted detail, and any action in
+// one wrapping run, so a Worker starting or a folder attaching never outweighs the messages around it.
+const EVENT_ROW = "flex w-full min-w-0 items-start gap-2 py-0.5 text-left text-minor leading-5 text-muted-foreground";
+const EVENT_TEXT = "min-w-0 [overflow-wrap:anywhere]";
+const EVENT_LINK =
+  "touch-target group/event inline-flex max-w-full cursor-pointer items-start gap-2 rounded-xs py-0.5 text-left text-minor leading-5 text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus disabled:cursor-default disabled:hover:text-muted-foreground motion-reduce:transition-none";
 const EVENT_ACTION =
-  "touch-target inline-flex h-7 shrink-0 cursor-pointer items-center rounded-sm px-2 text-minor font-medium text-rail-ink transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60";
+  "touch-target ml-3 cursor-pointer font-medium text-rail-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:no-underline disabled:opacity-60";
 
 function RevertButton({
   changeId,
@@ -350,7 +350,7 @@ function RevertButton({
 }) {
   const [phase, setPhase] = useState<RevertPhase>("idle");
   if (reverted || phase === "done") {
-    return <span className="px-2 text-minor text-muted-foreground">Undone</span>;
+    return <span className="ml-3 text-muted-foreground">Undone</span>;
   }
   const revert = () => {
     setPhase("busy");
@@ -361,11 +361,11 @@ function RevertButton({
   };
   return (
     <>
-      {phase === "conflict" && <span className="text-minor text-danger">Only the latest change can be undone</span>}
-      {phase === "error" && <span className="text-minor text-danger">Couldn't undo</span>}
       <button type="button" className={EVENT_ACTION} disabled={phase === "busy"} onClick={revert}>
         {phase === "busy" ? "Undoing…" : "Undo"}
       </button>
+      {phase === "conflict" && <span className="ml-3 text-danger">Only the latest change can be undone</span>}
+      {phase === "error" && <span className="ml-3 text-danger">Couldn't undo</span>}
     </>
   );
 }
@@ -391,17 +391,17 @@ const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], Icon>> = {
 };
 
 function EventIcon({ icon: Icon, danger = false }: { icon: Icon; danger?: boolean }) {
-  return <Icon className={cn("mt-0.5 size-4 shrink-0", danger ? "text-danger" : "text-muted-foreground")} aria-hidden="true" />;
+  return <Icon className={cn("mt-0.75 size-3.5 shrink-0", danger && "text-danger")} aria-hidden="true" />;
 }
 
 function EventLabel({ label, danger = false }: { label: string; danger?: boolean }) {
-  return <span className={cn("mr-2 font-medium", danger ? "text-danger" : "text-foreground")}>{label}</span>;
+  return <span className={cn("mr-2 font-medium", danger && "text-danger")}>{label}</span>;
 }
 
-function EventChevron() {
+function EventChevron({ turns = false }: { turns?: boolean }) {
   return (
     <ChevronRight
-      className="mt-0.5 size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+      className={cn("ml-1 inline size-pixel-sm align-[-0.0625rem]", turns && "transition-transform group-data-[state=open]/event:rotate-90 motion-reduce:transition-none")}
       aria-hidden="true"
     />
   );
@@ -421,11 +421,8 @@ function EventStripShell({
   return (
     <div
       data-event-group={grouped ? "true" : undefined}
-      className={cn(
-        "w-full min-w-0 overflow-hidden rounded-sm",
-        inTurn ? "mt-1" : "mt-4",
-        danger ? "divide-y divide-danger/15 bg-danger-soft" : "divide-y divide-border bg-panel",
-      )}
+      data-tone={danger ? "danger" : undefined}
+      className={cn("flex w-full min-w-0 flex-col items-start", inTurn ? "mt-0.5" : "mt-4 [[data-list-head]>&]:mt-2")}
     >
       {children}
     </div>
@@ -437,14 +434,14 @@ function EventRow({
   tag,
   danger = false,
   title,
-  trailing,
+  action,
   children,
 }: {
   icon: Icon;
   tag: string;
   danger?: boolean;
   title?: string;
-  trailing?: React.ReactNode;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -453,8 +450,8 @@ function EventRow({
       <p className={EVENT_TEXT}>
         <EventLabel label={tag} danger={danger} />
         {children}
+        {action}
       </p>
-      {trailing && <div className="-my-1 ml-auto flex shrink-0 items-center gap-2">{trailing}</div>}
     </div>
   );
 }
@@ -478,16 +475,16 @@ function CollapsibleEvent({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className={cn("overflow-hidden rounded-sm bg-panel", className)} data-side="left" data-notice={notice || undefined} data-event={event}>
-      <CollapsibleTrigger aria-label={text} className={cn(EVENT_ROW, "group", EVENT_TRIGGER)} disabled={children === null}>
+    <Collapsible open={open} onOpenChange={setOpen} className={cn("flex w-full min-w-0 flex-col items-start", className)} data-side="left" data-notice={notice || undefined} data-event={event}>
+      <CollapsibleTrigger aria-label={text} className={EVENT_LINK} disabled={children === null}>
         <EventIcon icon={icon} />
         <span className={EVENT_TEXT}>
           <EventLabel label={tag} />
           {text}
+          {children !== null && <EventChevron turns />}
         </span>
-        {children !== null && <EventChevron />}
       </CollapsibleTrigger>
-      {children !== null && <CollapsibleContent className="border-t border-border pt-2.5 pr-3.5 pb-3 pl-10.5">{children}</CollapsibleContent>}
+      {children !== null && <CollapsibleContent className="mt-1.5 mb-1 ml-1.5 w-full min-w-0 border-l border-border pl-4">{children}</CollapsibleContent>}
     </Collapsible>
   );
 }
@@ -527,12 +524,12 @@ function SystemNoticeRow({
 }) {
   const event = systemEventOf(message);
   const summary = describeSystemEvent(message, actions.vendorOf?.(message.conversationId));
-  const trailing =
+  const action =
     event?.event === "persona.changed" ? (
       <RevertButton changeId={event.personaChangeId} reverted={revertedChanges?.has(event.personaChangeId)} onRevert={actions.onRevertPersona} />
     ) : undefined;
   return (
-    <EventRow icon={EVENT_ICONS[summary.icon]} tag={summary.tag} danger={summary.tone === "danger"} title={summary.rawTitle} trailing={trailing}>
+    <EventRow icon={EVENT_ICONS[summary.icon]} tag={summary.tag} danger={summary.tone === "danger"} title={summary.rawTitle} action={action}>
       {summary.text}
     </EventRow>
   );
@@ -542,11 +539,11 @@ function WorkerNoticeRow({ line, onOpen }: { line: WorkerMessageMeta; onOpen: Me
   const { title, state, detail } = pieceLineParts(line);
   const icon = WORKER_NOTICE_ICONS[line.event] ?? Info;
   return (
-    <div data-side="left" data-notice>
+    <div data-side="left" data-notice className="max-w-full">
       <button
         type="button"
         aria-label={[title, state, detail].filter((part) => part !== "").join(" ")}
-        className={cn(EVENT_ROW, "touch-target", EVENT_TRIGGER)}
+        className={EVENT_LINK}
         onClick={() => onOpen(line.workerConversationId)}
       >
         <EventIcon icon={icon} />
@@ -554,8 +551,8 @@ function WorkerNoticeRow({ line, onOpen }: { line: WorkerMessageMeta; onOpen: Me
           <EventLabel label={title} />
           {state}
           {detail !== "" && <span className="ml-2">{detail}</span>}
+          <EventChevron />
         </span>
-        <ChevronRight className="mt-0.5 size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
       </button>
     </div>
   );
@@ -751,12 +748,15 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
       {failed && delivered && (
         <button
           type="button"
-          className="touch-target text-minor text-muted-foreground outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:opacity-60"
+          aria-label={phase === "retrying" ? "Retrying…" : phase === "error" ? "Retry failed. Try again" : "Failed. Retry"}
+          className="group/retry touch-target mt-1.5 inline-flex cursor-pointer items-center gap-1.5 text-minor text-muted-foreground outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
           title={[failure?.text, failure?.raw].filter(Boolean).join("\n")}
           disabled={phase === "retrying"}
           onClick={() => actions.onRetryMessage(message.id)}
         >
-          {phase === "retrying" ? "Retrying…" : phase === "error" ? "Retry failed. Try again" : "Failed. Retry"}
+          <CircleAlert className="size-pixel-sm text-danger" aria-hidden="true" />
+          <span>{phase === "retrying" ? "Retrying…" : phase === "error" ? "Retry failed" : "Failed"}</span>
+          {phase !== "retrying" && <span className="font-medium text-rail-ink group-hover/retry:underline">{phase === "error" ? "Try again" : "Retry"}</span>}
         </button>
       )}
     </article>
@@ -775,7 +775,8 @@ export function SentBody({ unsent, children }: { unsent: React.ReactNode; childr
   );
 }
 
-const UNSENT_DOT = "flex size-5 shrink-0 items-center justify-center bg-danger text-xs leading-none font-semibold text-white";
+// The WeChat-style unsent mark is a red circle like every other status dot, never a square.
+const UNSENT_DOT = "flex size-5 shrink-0 items-center justify-center rounded-full bg-danger text-xs leading-none font-semibold text-white";
 const UNSENT_LABEL = "Not sent";
 
 export function UnsentMark({
@@ -815,7 +816,7 @@ export function UnsentMark({
       aria-busy={retrying || undefined}
       disabled={retrying}
       data-unsent
-      className="touch-target flex shrink-0 cursor-pointer outline-none hover:brightness-90 focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
+      className="touch-target flex shrink-0 cursor-pointer rounded-full outline-none hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
       onClick={onRetry}
     >
       {mark}

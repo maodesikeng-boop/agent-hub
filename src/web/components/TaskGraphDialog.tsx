@@ -346,7 +346,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                       <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
                     </div>
                     {node.userBlocker != null ? (
-                      <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} />
+                      <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} compact />
                     ) : (
                       <GateDecisionCard
                         key={node.gateAskMessageId ?? node.key}

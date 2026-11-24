@@ -8,7 +8,7 @@ import type { FleetDecisionEntry } from "../selectors.ts";
 import { DeviceScopeOf } from "../device-scope.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { CardBody, CardNoteForm } from "./Deliverables.tsx";
-import { OPTION_LIST, OptionRow } from "./OptionRow.tsx";
+import { decisionFrame, OPTION_LIST, OptionRow } from "./OptionRow.tsx";
 import { RowError } from "./SettingsList.tsx";
 
 export interface RouterDecisionCardProps {
@@ -44,7 +44,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
   return (
     <article
       aria-label={decision.question}
-      className={cn("overflow-hidden rounded-sm border border-border bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
+      className={cn("p-4", decisionFrame(online), !online && "[&_[data-slot=avatar]]:opacity-50")}
     >
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
@@ -63,7 +63,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(decision.createdAt)}</span>
       </div>
 
-      <h3 className="mt-2.5 text-body font-medium text-foreground">{decision.question}</h3>
+      <h3 className="mt-2.5 text-body leading-relaxed font-semibold text-foreground">{decision.question}</h3>
       <DeviceScopeOf deviceKey={entry.deviceKey}>
         <CardBody
           key={decision.key}
@@ -110,7 +110,6 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
 
       <CardNoteForm
         key={draftKey}
-        variant="row"
         value={note}
         onFocus={() => onNoteFocus(decision.key)}
         onChange={(next) => onNoteChange(decision.key, draftKey, next)}

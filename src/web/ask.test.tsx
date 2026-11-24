@@ -388,13 +388,17 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(input).not.toHaveClass("text-minor");
     const row = input.closest("[data-card-reply]")!;
     expect(row).toContainElement(send);
-    expect(row).toHaveAttribute("data-card-reply", "row");
+    expect(row).toHaveAttribute("data-card-reply");
     expect(row).toHaveClass("-mx-4", "-mb-4", "border-t", "border-border");
     expect(row.className).not.toMatch(/shadow-\[var\(--shadow-tile\)\]|border-border-strong|rounded-sm/);
     expect(card).toHaveClass("overflow-hidden", "rounded-sm");
     expect(send).toHaveClass("size-8");
+    // A card still waiting on the user wears the gold line; Send stays a quiet icon until there is text.
+    expect(card).toHaveClass("border-select-line");
+    expect(send).not.toHaveClass("btn-solid");
 
     fireEvent.change(input, { target: { value: "第一行" } });
+    expect(send).toHaveClass("btn-solid");
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
     expect(api.calls.filter((c) => c.path === "/api/asks/3/answer")).toEqual([]);
   });

@@ -395,7 +395,7 @@ describe("各处入口", () => {
       await expectPlanOpens(cardOf(65));
     });
 
-    it("了结后的卡：文件行在上，回答那一行、Closed 在下，文件照样能点开", async () => {
+    it("了结后的卡：文件行在上，回答那一行在下，Closed 标在问题那一行，文件照样能点开", async () => {
       const answeredCard = askMessage({
         id: 63,
         text: "方案好了，请验收",
@@ -418,7 +418,7 @@ describe("各处入口", () => {
       const closedFiles = closed.querySelector<HTMLElement>("[data-deliverables]")!;
       const closedMark = within(closed).getByText("Closed");
       expect(within(closedFiles).getByRole("img", { name: "桌面截图" })).toBeInTheDocument();
-      expect(closedFiles.compareDocumentPosition(closedMark) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(closedMark.compareDocumentPosition(closedFiles) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(within(closed).queryByRole("textbox")).toBeNull();
       await expectPlanOpens(answered);
     });
@@ -472,9 +472,9 @@ describe("各处入口", () => {
     graph.nodes[0] = { ...graph.nodes[0]!, gateQuestion: longWord, gateOptions: [longWord, "短"], gateRecommended: longWord, gateSummaryMd: "" };
     renderGateDialog(graph);
     const card = screen.getByTestId("peel-gate-card");
-    const longOption = within(card).getByRole("button", { name: new RegExp(`^${longWord}`) });
+    const longOption = within(within(card).getByRole("group", { name: "Options" })).getAllByRole("button")[0]!;
     expect(longOption.parentElement).toHaveClass("grid-cols-1");
-    expect(longOption.firstElementChild).toHaveClass("wrap-anywhere");
+    expect(within(longOption).getByText(longWord)).toHaveClass("[overflow-wrap:anywhere]");
     expect(within(longOption).getByText("Recommended")).toHaveClass("shrink-0");
     expect(within(card).getAllByText(longWord)[0]).toHaveClass("wrap-anywhere");
   });

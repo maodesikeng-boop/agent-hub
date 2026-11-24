@@ -8,6 +8,7 @@ export function OptionRow({
   index,
   recommended = false,
   chosen = false,
+  compact = false,
   className,
   children,
   ...props
@@ -15,19 +16,30 @@ export function OptionRow({
   index: number;
   recommended?: boolean;
   chosen?: boolean;
+  /** Task Graph canvas cards: secondary text size and the narrower card's inset. */
+  compact?: boolean;
 }) {
   return (
     <button
       type="button"
       data-chosen={chosen || undefined}
       className={cn(
-        "flex min-h-11 w-full cursor-pointer items-baseline gap-3 rounded-none px-4 py-2.5 text-left text-body leading-6 transition-colors duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default motion-reduce:transition-none",
-        chosen ? "bg-open" : "hover:bg-hover active:bg-hover disabled:opacity-60 disabled:hover:bg-transparent",
+        "group/option flex w-full cursor-pointer items-baseline gap-3 rounded-none text-left transition-colors duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default pointer-coarse:min-h-11 motion-reduce:transition-none",
+        compact ? "min-h-9 px-3.5 py-2 text-minor leading-5" : "min-h-10 px-4 py-2 text-body leading-6",
+        chosen ? "bg-open" : "hover:bg-hover active:bg-open disabled:opacity-60 disabled:hover:bg-transparent disabled:active:bg-transparent",
         className,
       )}
       {...props}
     >
-      <span className={cn("w-4 shrink-0 text-minor font-semibold", chosen ? "text-foreground" : "text-muted-foreground")}>{String.fromCharCode(65 + index)}</span>
+      <span
+        className={cn(
+          "w-4 shrink-0 font-semibold tabular-nums transition-colors duration-150 motion-reduce:transition-none",
+          compact ? "text-xs" : "text-minor",
+          chosen ? "text-foreground" : "text-muted-foreground group-enabled/option:group-hover/option:text-foreground",
+        )}
+      >
+        {String.fromCharCode(65 + index)}
+      </span>
       <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="min-w-0 [overflow-wrap:anywhere] [&_p]:m-0">{children}</span>
         {recommended && <span className="tool-badge shrink-0 px-1.5 text-xs leading-5 font-medium">Recommended</span>}
@@ -39,3 +51,9 @@ export function OptionRow({
 
 /** The option list's frame: bleeds to the card's padded edges and draws the hairlines above and between rows. */
 export const OPTION_LIST = "-mx-4 mt-3 divide-y divide-border border-t border-border";
+
+/** Every decision card (chat asks, Router, Task Graph gates, steps that need the user) is one frame: the gold select line
+ * while it waits on the user, the plain hairline once it settles. */
+export function decisionFrame(waiting: boolean): string {
+  return cn("overflow-hidden rounded-sm border bg-background", waiting ? "border-select-line" : "border-border");
+}
