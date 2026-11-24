@@ -1,6 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Activity, useCallback, useEffect, useMemo, useState } from "react";
-import { pickableVendorCatalogs, SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM, type Pm, type PmId } from "../shared/index.ts";
+import { pickableVendorCatalogs, type Pm, type PmId } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 import { AppRail } from "./components/AppRail.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
@@ -18,6 +18,7 @@ import { DeviceScope } from "./device-scope.tsx";
 import { LOCAL_DEVICE, isReadOnly, routeDeviceOf } from "./devices.ts";
 import { errorTitle } from "./format.ts";
 import { AccentScope } from "./lib/accent-scope.tsx";
+import { SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
 import { mobileBack } from "./mobile/back.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
@@ -510,7 +511,7 @@ function DesktopWorkbench({
                   >
                     {listNode("column")}
                   </Pane>
-                  <PaneHandle tone="list" label="Resize project list" onReset={() => reset("list")} />
+                  <PaneHandle label="Resize project list" onReset={() => reset("list")} />
                 </>
               )}
 
@@ -535,7 +536,7 @@ function DesktopWorkbench({
                 </Activity>
               </Pane>
 
-              {panelVisible && !stackPanel && <PaneHandle tone="panel" label="Resize side panel" onReset={() => reset("panel")} />}
+              {panelVisible && !stackPanel && <PaneHandle label="Resize side panel" onReset={() => reset("panel")} />}
 
               {panelVisible && (
                 <Pane
