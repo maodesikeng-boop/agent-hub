@@ -20,10 +20,10 @@ interface RowContext {
   actions: MessageActions;
   highlightId: MessageId | null;
   revertedChanges: ReadonlySet<PersonaChangeId>;
-  lastTurnStatus: { status: React.ReactNode; stepStartedAt: number | null; streamingText: string | null | undefined } | null;
+  liveTurn: { key: string; status: React.ReactNode; stepStartedAt: number | null; streamingText: string | null | undefined } | null;
 }
 
-function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus }: RowContext): React.ReactNode {
+function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, liveTurn }: RowContext): React.ReactNode {
   const item = items[index];
   if (item === undefined) return <PendingBubble pending={pending[index - items.length]!} onRetry={onRetry} />;
   if (item.kind === "event_group") {
@@ -31,7 +31,7 @@ function rowContent(index: number, { items, pending, agentOf, onRetry, actions, 
   }
   if (item.kind === "turn") {
     const first = item.work[0] ?? item.checklists[0] ?? item.parts[0]!;
-    const live = index === items.length - 1 ? lastTurnStatus : null;
+    const live = item.key === liveTurn?.key ? liveTurn : null;
     return (
       <TurnView
         turn={item}
@@ -93,7 +93,8 @@ export const MessageList = memo(function MessageList({
   streamingText?: string | null;
   footer?: React.ReactNode;
 }) {
-  const items = useMemo(() => groupMessageRows(groupMessages(messages)), [messages]);
+  const grouped = groupMessages(messages);
+  const items = groupMessageRows(grouped.items);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null || Boolean(streamingText);
   const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}:${footer != null}`;
@@ -136,9 +137,10 @@ export const MessageList = memo(function MessageList({
     }
   }, [messages.length, hasMore, older, onLoadOlder]);
 
-  const lastItem = items.at(-1);
-  const rideOnTurn = busy && pending.length === 0 && lastItem?.kind === "turn";
-  const typing = busy && !rideOnTurn && statusAgent !== undefined;
+  const liveTurn = busy && pending.length === 0 && grouped.tailTurnKey !== null
+    ? { key: grouped.tailTurnKey, status, stepStartedAt, streamingText }
+    : null;
+  const typing = busy && liveTurn === null && statusAgent !== undefined;
   const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore && footer == null;
 
   const enterItemAt = (index: number): EnterItem => {
@@ -157,7 +159,7 @@ export const MessageList = memo(function MessageList({
   });
   useMessageEnter(enterRows, count, enterItemAt, typing, empty);
 
-  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus: rideOnTurn ? { status, stepStartedAt, streamingText } : null };
+  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, liveTurn };
   const scrollMargin = virtualizer.options.scrollMargin;
 
   return (

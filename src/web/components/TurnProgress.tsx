@@ -14,6 +14,12 @@ import type { MessageActions } from "./Messages.tsx";
 const SECONDARY = "text-minor text-muted-foreground";
 const TEXT_BUTTON = "touch-target cursor-pointer transition-colors outline-none hover:text-foreground focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-border-focus";
 const CHEVRON_CLS = "size-pixel-sm shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-90 motion-reduce:transition-none";
+const STATUS_LABEL: Readonly<Record<ChecklistStatus, string>> = {
+  pending: "Pending",
+  in_progress: "In progress",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
 
 export interface TurnProgressProps {
   progress: TurnProgressModel;
@@ -113,13 +119,18 @@ function ChecklistRow({ step, running, onOpenWorker }: { step: ChecklistStepView
   const { item, process } = step;
   const label = running && item.status === "in_progress" ? (item.activeTitle ?? item.title) : item.title;
   const tone = item.status === "in_progress" ? "font-semibold text-foreground" : item.status === "completed" ? "turn-progress-done" : "turn-progress-muted";
+  const title = (
+    <span className="min-w-0 [overflow-wrap:anywhere]">
+      {label}<span className="sr-only">, {STATUS_LABEL[item.status]}</span>
+    </span>
+  );
   const expandable = !running && process.length > 0;
   if (!expandable) {
     return (
       <li className="turn-progress-item" data-checklist-item={item.id} data-status={item.status}>
         <div className={cn("turn-progress-row", tone)}>
           <ChecklistStatusIcon status={item.status} />
-          <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
+          {title}
         </div>
       </li>
     );
@@ -134,7 +145,7 @@ function ChecklistRow({ step, running, onOpenWorker }: { step: ChecklistStepView
           )}
         >
           <ChecklistStatusIcon status={item.status} />
-          <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
+          {title}
           <ChevronRight
             className="mt-1 size-pixel-sm shrink-0 text-muted-foreground opacity-55 transition-transform duration-200 group-hover/step:opacity-100 group-data-[state=open]/step:rotate-90 motion-reduce:transition-none"
             aria-hidden="true"

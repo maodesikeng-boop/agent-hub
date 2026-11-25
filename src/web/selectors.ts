@@ -766,9 +766,14 @@ function placeHandovers(all: Message[]): Message[] {
   return rest;
 }
 
-const groupMessagesCache = new WeakMap<readonly Message[], RenderItem[]>();
+interface GroupedMessages {
+  items: RenderItem[];
+  tailTurnKey: string | null;
+}
 
-export function groupMessages(all: Message[]): RenderItem[] {
+const groupMessagesCache = new WeakMap<readonly Message[], GroupedMessages>();
+
+export function groupMessages(all: Message[]): GroupedMessages {
   const hit = groupMessagesCache.get(all);
   if (hit !== undefined) return hit;
   const messages = placeHandovers(all);
@@ -822,9 +827,10 @@ export function groupMessages(all: Message[]): RenderItem[] {
     turn.endedAt = message.createdAt;
     lastAgentAt = message.createdAt;
   }
+  const grouped = { items, tailTurnKey: turn?.key ?? null };
   close();
-  groupMessagesCache.set(all, items);
-  return items;
+  groupMessagesCache.set(all, grouped);
+  return grouped;
 }
 
 export interface DeviceRouterView {

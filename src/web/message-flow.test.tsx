@@ -25,11 +25,11 @@ const running = (step: Parameters<typeof makeSession>[0] = {}) => (
   <AgentStatus session={makeSession({ status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} }, ...step })} />
 );
 
-function list(
+function listView(
   messages: Message[],
-  over: { status?: React.ReactNode; pending?: PendingMessage[]; actions?: MessageActions; agentOf?: (m: Message) => AgentIdentity; hasMore?: boolean } = {},
+  over: { status?: React.ReactNode; stepStartedAt?: number; pending?: PendingMessage[]; actions?: MessageActions; agentOf?: (m: Message) => AgentIdentity; hasMore?: boolean } = {},
 ) {
-  return render(
+  return (
     <MessageList
       messages={messages}
       pending={over.pending ?? []}
@@ -40,10 +40,13 @@ function list(
       onRetry={() => {}}
       actions={over.actions ?? actions()}
       status={over.status ?? null}
+      stepStartedAt={over.stepStartedAt}
       statusAgent={pm}
-    />,
+    />
   );
 }
+
+const list = (...args: Parameters<typeof listView>) => render(listView(...args));
 
 const heads = (c: HTMLElement) => Array.from(c.querySelectorAll("[data-slot='agent-head']")) as HTMLElement[];
 const workLines = (c: HTMLElement) => Array.from(c.querySelectorAll("[data-work-line]")) as HTMLElement[];
@@ -124,6 +127,39 @@ describe("一轮回复只出一次头像", () => {
 });
 
 describe("正在跑和跑完", () => {
+  it("keeps the live checklist and clock on the same turn through trailing notices", async () => {
+    const messages = [
+      makeUserMessage({ id: 1, status: "processing" }),
+      makeMessage({ id: 2, kind: "checklist", text: "", meta: {
+        checklist: [{ id: "read", title: "Read files", activeTitle: "Reading files", status: "in_progress" }],
+      } }),
+      makeToolMessage({ id: 3, text: "Read: probe.ts" }),
+    ];
+    const notices = [
+      makeSystemMessage({ id: 4, text: "Persona updated", event: { event: "persona.changed", pmId: 1, personaChangeId: 1, revertOf: null } }),
+      makeSystemMessage({ id: 5, text: "Folder attached", event: { event: "folder.attached", projectId: 1, folderId: 1, path: "/probe" } }),
+    ];
+    const live = { status: running(), stepStartedAt: Date.now() - 16_000 };
+    const { container, rerender } = list(messages, live);
+    const turn = screen.getByText("Reading files").closest("[data-turn]")!;
+    rerender(listView([...messages, ...notices], live));
+    expect(screen.getByText("Persona updated")).toBeInTheDocument();
+    expect(screen.getByText("Folder attached")).toBeInTheDocument();
+    expect(screen.getByText("Reading files").closest("[data-turn]")).toBe(turn);
+    expect(workLines(container)).toHaveLength(1);
+    expect(workLines(container)[0]).toHaveTextContent(/Running command\.\.\.\d+s/);
+    expect(workLines(container)[0]?.closest("[data-turn]")).toBe(turn);
+    expect(screen.queryByText(/Worked for/)).not.toBeInTheDocument();
+    await userEvent.click(within(workLines(container)[0]!).getByRole("button"));
+    expect(screen.getByText("Read: probe.ts")).toBeInTheDocument();
+
+    rerender(listView([...messages, ...notices]));
+    expect(workLines(container)).toHaveLength(1);
+    expect(screen.queryByText("Read files")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Worked for/ }));
+    expect(screen.getByRole("button", { name: "Read files, In progress" })).toBeInTheDocument();
+  });
+
   it("正在跑：这一轮正文上方一行英文状态，可点开看明细；没有 Worked for、没有复制", async () => {
     const { container } = list(turn(), { status: running() });
     const lines = workLines(container);
@@ -151,11 +187,17 @@ describe("正在跑和跑完", () => {
   });
 
   it("最后是 Worker 的汇报：项目经理的新一轮单独出头像和状态", () => {
-    const { container } = list([makeMessage({ id: 1, text: "派好了" }), makeWorkerLine({ id: 2, line: { event: "report", status: "done", summary: "改好了" } })], {
+    const { container } = list([
+      makeToolMessage({ id: 1 }),
+      makeMessage({ id: 2, text: "派好了" }),
+      makeWorkerLine({ id: 3, line: { event: "report", status: "done", summary: "改好了" } }),
+    ], {
       status: running({ step: { type: "text" } }),
     });
     const all = heads(container);
+    expect(all).toHaveLength(2);
     expect(all.at(-1)).toHaveTextContent("小林");
+    expect(workLines(container)[0]).toHaveTextContent("Worked for");
     expect(workLines(container).at(-1)).toHaveTextContent("Writing...");
   });
 

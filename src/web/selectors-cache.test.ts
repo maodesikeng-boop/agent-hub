@@ -196,7 +196,7 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
       all.push(makeSystemMessage({ id: id++, event: { event: "session.renewed", sessionId: g + 2, fromSessionId: g + 1, turnStartId } }));
     }
     expect(medianMs(7, () => void groupMessages([...all]))).toBeLessThan(50);
-    const flat = groupMessages(all).flatMap((item) => (item.kind === "message" ? [item.message] : [...item.work, ...item.parts]));
+    const flat = groupMessages(all).items.flatMap((item) => (item.kind === "message" ? [item.message] : [...item.work, ...item.parts]));
     const first = flat.findIndex((m) => m.sender === "system");
     expect(flat.slice(first, first + 4).map((m) => [m.sender, m.sessionId])).toEqual([
       ["system", null],
@@ -1155,7 +1155,7 @@ describe("shell list and rail selectors", () => {
 
     const grouped = groupMessages(base);
     expect(groupMessages(base)).toBe(grouped);
-    const turn = grouped.find((item) => item.kind === "turn")!;
+    const turn = grouped.items.find((item) => item.kind === "turn")!;
     expect(turn.checklists.map((m) => m.id)).toEqual([2, 4]);
     expect(turn.work.map((m) => m.id)).toEqual([3, 5]);
 
