@@ -19,8 +19,6 @@ export type EventIconName =
   | "refresh"
   | "error"
   | "info"
-  | "worker-start"
-  | "worker-end"
   | "worker-message";
 
 export interface SystemEventView {

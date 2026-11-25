@@ -106,7 +106,7 @@ export function WorktreeSetupGroup({ project, readOnly, titled = true }: { proje
         autoCorrect="off"
         aria-invalid={setup.problem !== null || undefined}
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0",
+          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0 focus:shadow-none",
           setup.text === "" ? "text-body" : "font-mono text-minor",
         )}
         value={setup.text}

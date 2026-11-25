@@ -132,7 +132,7 @@ describe("AppRail", () => {
     expect(screen.getByRole("button", { name: "Office Mini, offline, 2 waiting" })).toBeInTheDocument();
   });
 
-  it("marks the selected computer current and shows its status dot and ask badge", async () => {
+  it("marks the selected computer current with a solid icon and its status dot, and keeps the waiting count in its name only", async () => {
     const user = userEvent.setup();
     const onSelectComputer = vi.fn();
     const computers: RailComputer[] = [
@@ -144,11 +144,35 @@ describe("AppRail", () => {
     expect(screen.getByRole("button", { name: "Office Mini, offline, 4 waiting" })).toHaveAttribute("aria-current", "true");
     expect(screen.getByRole("button", { name: "MacBook Pro, 1 waiting" })).not.toHaveAttribute("aria-current");
     expect(screen.getByTestId("rail-device-dot-local")).toHaveClass("bg-success");
-    expect(screen.getByTestId("rail-device-dot-tokyo")).toHaveClass("bg-muted-foreground");
-    expect(screen.getByTestId("rail-device-badge-tokyo")).toHaveTextContent("4");
+    expect(screen.getByTestId("rail-device-dot-tokyo")).toHaveClass("bg-rail-ink-soft");
+    expect(screen.queryByTestId("rail-device-badge-tokyo")).toBeNull();
+    expect(screen.queryByTestId("rail-device-badge-local")).toBeNull();
+    const selectedTile = screen.getByRole("button", { name: "Office Mini, offline, 4 waiting" }).firstElementChild!;
+    expect(selectedTile).toHaveClass("bg-rail-selected", "rounded-tile");
+    expect(selectedTile.querySelector("svg")!.outerHTML).toMatch(/fill="currentColor"/);
+    const restTile = screen.getByRole("button", { name: "MacBook Pro, 1 waiting" }).firstElementChild!;
+    expect(restTile).toHaveClass("group-hover:bg-rail-hover");
+    expect(restTile.querySelector("svg")!.outerHTML).not.toMatch(/fill="currentColor"/);
 
     await user.click(screen.getByRole("button", { name: "MacBook Pro, 1 waiting" }));
     expect(onSelectComputer).toHaveBeenCalledWith(LOCAL_DEVICE);
+  });
+
+  it("anchors each status dot on its device icon, so a selected and an unselected cell put the dot in the same place", () => {
+    const computers: RailComputer[] = [
+      { key: LOCAL_DEVICE, name: "MacBook Pro", platform: "darwin", status: "online", badge: 0 },
+      { key: "tokyo", name: "Tokyo", platform: "linux", status: "online", badge: 0 },
+    ];
+    renderRail({ computers, selectedComputer: LOCAL_DEVICE });
+    for (const key of ["local", "tokyo"]) {
+      const dot = screen.getByTestId(`rail-device-dot-${key}`);
+      const anchor = dot.parentElement!;
+      expect(anchor.querySelector("svg")).not.toBeNull();
+      expect(anchor).toHaveClass("relative");
+      expect(dot).toHaveClass("absolute", "rounded-full", "-right-1", "-bottom-0.5");
+      // The halo follows the tile, so the dot reads as cut out of whatever surface sits behind it.
+      expect(dot.className).toContain("shadow-[0_0_0_2px_var(--dot-ring)]");
+    }
   });
 
   it("opens the usage popover from the meter and hides the meter when no usage is reported", async () => {
@@ -162,7 +186,7 @@ describe("AppRail", () => {
           router={{ active: false, pendingCount: 0, working: false, onSelect: vi.fn() }}
           computers={[]}
           selectedComputer={LOCAL_DEVICE}
-          meter={{ vendorName: "Claude Code", windowShort: "5h", percent: 45, cells: 3, warning: false, full: false }}
+          meter={{ vendorName: "Claude Code", windowShort: "5h", percent: 45, warning: false, full: false }}
           quota={SAMPLE_QUOTA}
           quotaFetchable={false}
           onSelectComputer={vi.fn()}
@@ -173,8 +197,10 @@ describe("AppRail", () => {
       </DeviceScope>,
     );
     const meterBtn = screen.getByRole("button", { name: "Claude Code 5h usage 45%" });
-    expect(meterBtn).toHaveTextContent("45%");
-    expect(screen.getByTestId("rail-usage-icon")).toBeInTheDocument();
+    // The hourglass alone carries the share; the percent lives in the name, the title, and the popover.
+    expect(meterBtn.textContent).toBe("");
+    expect(meterBtn).toHaveAttribute("title", "Claude Code 5h usage 45%");
+    expect(screen.getByTestId("rail-usage-icon")).toHaveAttribute("data-tone", "normal");
     await user.click(meterBtn);
     expect(await screen.findByRole("dialog", { name: "Usage" })).toBeInTheDocument();
   });
@@ -258,6 +284,6 @@ describe("AppRail", () => {
     queryClient.setQueryData(RESOURCES_QUERY_KEY(LOCAL_DEVICE), resources);
     renderRail();
     expect(screen.getByRole("button", { name: "Settings (1 to review)" })).toBeInTheDocument();
-    expect(screen.getByTestId("settings-resources-attention")).toHaveClass("bg-caution");
+    expect(screen.getByTestId("settings-resources-attention")).toHaveClass("bg-danger", "rounded-full");
   });
 });

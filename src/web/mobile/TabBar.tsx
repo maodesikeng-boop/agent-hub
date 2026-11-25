@@ -27,14 +27,14 @@ export function mobileTabOf(route: Route | null): MobileTab | null {
 }
 
 /**
- * Postcondition: renders the honey tab bar with Router, Projects, and Settings cells, marks the active one current, and
- * pads the bottom by the safe area; the shell hides it while the keyboard is open.
+ * Postcondition: renders the tab bar on the frame wood with Router, Projects, and Settings cells, marks the active one
+ * current with the rail's selected fill, and pads the bottom by the safe area; the shell hides it while the keyboard is open.
  */
 export function TabBar({ active, routerBadge, settingsAttention, onSelect }: TabBarProps): React.ReactElement {
   return (
     <nav
       aria-label="Mobile navigation"
-      className="grid h-[calc(4rem+var(--safe-bottom))] shrink-0 grid-cols-3 border-t-2 border-rail-shade bg-rail pb-[var(--safe-bottom)] text-rail-ink select-none"
+      className="wood on-frame grid h-[calc(4rem+var(--safe-bottom))] shrink-0 grid-cols-3 border-t border-[var(--groove-dark)] pb-[var(--safe-bottom)] text-rail-ink shadow-[inset_0_1px_0_var(--groove-light)] select-none"
     >
       <button
         type="button"
@@ -43,7 +43,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
         onClick={() => onSelect("router")}
         className={cn(
           "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
-          active === "router" ? "bg-list font-semibold text-list-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
+          active === "router" ? "bg-rail-selected-strong font-semibold text-rail-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
         )}
       >
         <span className="relative">
@@ -52,7 +52,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
             <span
               data-testid="tabbar-router-badge"
               aria-hidden="true"
-              className="absolute -top-1 -right-2.5 grid min-w-4 h-4 place-items-center bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums"
+              className="absolute -top-1 -right-2.5 grid min-w-4 h-4 place-items-center rounded-xs bg-rail-ink px-1 text-xs leading-none font-semibold text-rail tabular-nums"
             >
               {routerBadge > 99 ? "99+" : routerBadge}
             </span>
@@ -68,7 +68,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
         onClick={() => onSelect("projects")}
         className={cn(
           "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
-          active === "projects" ? "bg-list font-semibold text-list-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
+          active === "projects" ? "bg-rail-selected-strong font-semibold text-rail-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
         )}
       >
         <MessageSquare className="size-pixel-md" aria-hidden="true" />
@@ -82,7 +82,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
         onClick={() => onSelect("settings")}
         className={cn(
           "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
-          active === "settings" ? "bg-list font-semibold text-list-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
+          active === "settings" ? "bg-rail-selected-strong font-semibold text-rail-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
         )}
       >
         <span className="relative">
@@ -91,7 +91,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
             <span
               data-testid="tabbar-settings-attention"
               aria-hidden="true"
-              className="absolute -top-0.5 -right-1 size-2 bg-caution ring-2 ring-rail"
+              className="absolute -top-0.5 -right-1 size-2 rounded-full bg-danger ring-2 ring-rail"
             />
           )}
         </span>

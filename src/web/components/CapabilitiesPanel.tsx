@@ -34,7 +34,7 @@ export function CustomBadge() {
 }
 
 function KindTag({ kind }: { kind: CapabilityRow["kind"] }) {
-  return <span className="shrink-0 border border-border bg-panel px-2 text-xs leading-5 font-medium text-muted-foreground">{CAPABILITY_KIND_TAGS[kind]}</span>;
+  return <span className="shrink-0 rounded-xs bg-panel px-2 text-xs leading-5 font-medium text-muted-foreground">{CAPABILITY_KIND_TAGS[kind]}</span>;
 }
 
 function Audience({ vendors }: { vendors: readonly AgentVendor[] | null }) {
@@ -187,7 +187,8 @@ export function CapabilitiesPanel({
         />
       )}
       <div className="flex items-center gap-2">
-        <SearchField label="Search capabilities" value={query} onChange={setQuery} />
+        {/* The icon starts on the 16px edge where the rows below start their text. */}
+        <SearchField label="Search capabilities" value={query} onChange={setQuery} className="pl-4" />
         <Button variant="outline" disabled={disabled || editor.refreshing} onClick={() => void editor.refresh()}>
           {editor.refreshing && <Loader2 aria-hidden="true" />}
           Refresh

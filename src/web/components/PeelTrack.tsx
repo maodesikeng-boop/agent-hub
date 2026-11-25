@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { ChevronRight, Maximize2 } from "../ui/icons.ts";
+import { ChevronRight } from "../ui/icons.ts";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
@@ -27,12 +27,15 @@ import { computeGraphComponents } from "../task-graph-layout.ts";
 import { CardBody, CardNoteForm } from "./Deliverables.tsx";
 import { GateMark } from "./GateMark.tsx";
 import { ShimmerOverlay } from "./StatusShimmer.tsx";
-import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 
 type GutterKind = "station" | "parA" | "parB" | "coil" | "gate" | "next";
 type DotTone = "done" | "run" | "warn" | "blocked";
 
 const GUTTER_H = 32;
+// Every track row, clickable or not, shares this box: a border or extra padding on one row would break the pipe joints.
+// Every row, clickable or not, shares one box so each gutter's pipe meets the next row's pipe with no gap or sideways step.
+const PEEL_BOX = "-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] items-center px-2.5";
+const PEEL_ROW = `${PEEL_BOX} cursor-pointer rounded-sm text-left transition-[background-color,box-shadow] duration-150 outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none`;
 const peelLen = (units: number) => `calc(${units} * var(--peel-u))`;
 const GUTTER_CY = GUTTER_H / 2;
 const CELL = 2;
@@ -222,7 +225,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   return (
     <div
       data-testid="peel-gate-card"
-      className="border-2 border-open-line bg-open px-3.5 py-3 [contain:layout_style]"
+      className="overflow-hidden rounded-sm border border-select-line bg-open px-3.5 py-3 [contain:layout_style]"
     >
       {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
@@ -233,7 +236,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
         textClassName="text-minor leading-relaxed text-foreground"
       />
       {hasOptions && (
-        <div className="grid grid-cols-1 gap-2">
+        <div className="-mx-3.5 grid grid-cols-1 divide-y divide-border border-t border-border">
           {node.gateOptions.map((opt) => {
             const isRec = node.gateRecommended !== null && opt === node.gateRecommended;
             return (
@@ -242,37 +245,31 @@ export const GateDecisionCard = memo(function GateDecisionCard({
                 type="button"
                 disabled={decideMutation.isPending}
                 onClick={() => submit(opt, getDecisionDraft(draftKey))}
-                className={cn(
-                  "flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-center justify-between gap-2 border-2 px-3 py-1.5 text-left text-minor font-medium transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:border-border-strong disabled:bg-send-disabled disabled:text-muted-foreground",
-                  isRec
-                    ? "border-black/25 bg-primary text-primary-foreground shadow-[inset_0_-2px_0_rgb(0_0_0_/_0.22)] hover:brightness-90"
-                    : "border-border-strong bg-background text-foreground hover:bg-hover",
-                )}
+                className="flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-baseline justify-between gap-2 rounded-none px-3.5 py-2 text-left text-minor font-medium transition-colors duration-150 outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:opacity-60 motion-reduce:transition-none"
               >
                 <span className="min-w-0 flex-1 wrap-anywhere">{opt}</span>
-                {isRec && <span className="shrink-0 text-xs font-normal">Recommended</span>}
+                {isRec && <span className="tool-badge shrink-0 px-1.5 text-xs leading-5 font-medium">Recommended</span>}
               </button>
             );
           })}
         </div>
       )}
+      {err !== null && (
+        <p role="alert" title={errorTitle(err)} className="my-2 text-xs text-danger">
+          {errorLine(err)}
+        </p>
+      )}
       <CardNoteForm
         key={draftKey}
+        variant="row"
         value={draft}
         onChange={(next) => setDecisionDraft(draftKey, next)}
         disabled={decideMutation.isPending}
         pending={decideMutation.isPending}
         onSubmitNote={(raw) => submit(null, raw)}
-        tone="open"
-        className={hasOptions ? "mt-3" : "mt-2"}
-        inputClassName="min-w-0 flex-1 text-minor"
+        className={cn("-mx-3.5 -mb-3 pl-3.5", !hasOptions && err === null && "mt-2")}
         buttonSize="sm"
       />
-      {err !== null && (
-        <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
-          {errorLine(err)}
-        </p>
-      )}
     </div>
   );
 });
@@ -315,7 +312,7 @@ function PeelStageRow({
         data-testid="peel-gate-row"
         title={node.title}
         onClick={() => onOpenStepAsk(node)}
-        className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center border-2 border-transparent px-2.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+        className={PEEL_ROW}
       >
         <PeelGutter kind="gate" gutterWidth={gutterWidth} dotX={dotX} segments={segments} />
         <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
@@ -380,10 +377,7 @@ function PeelStageRow({
         aria-label={node.title}
         title={node.title}
         onClick={() => onOpenWorker(worker.conversationId)}
-        className={cn(
-          "-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center border-2 border-transparent px-2.5 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
-          active ? "border-open-line bg-open" : "hover:bg-hover",
-        )}
+        className={cn(PEEL_ROW, active && "tile-open")}
       >
         {content}
       </button>
@@ -391,7 +385,7 @@ function PeelStageRow({
   }
 
   return (
-    <div data-node-key={node.key} title={isTaskNodeWaitingPm(node) ? `${node.title}\nWaiting on PM` : node.title} className="flex min-h-8 pointer-coarse:min-h-11 items-center">
+    <div data-node-key={node.key} title={isTaskNodeWaitingPm(node) ? `${node.title}\nWaiting on PM` : node.title} className={PEEL_BOX}>
       {content}
     </div>
   );
@@ -882,7 +876,7 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
               key={row.item.key}
               type="button"
               onClick={() => setDoneExpanded(true)}
-              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+              className={cn(PEEL_ROW, "text-minor text-muted-foreground hover:text-foreground")}
             >
               <PeelGutter
                 kind="coil"
@@ -900,7 +894,7 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
               key={row.item.key}
               type="button"
               onClick={() => setNextExpanded(true)}
-              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+              className={cn(PEEL_ROW, "text-minor text-muted-foreground hover:text-foreground")}
             >
               <PeelGutter
                 kind={row.gutterKind}
@@ -1030,42 +1024,43 @@ export const PeelTrackList = memo(function PeelTrackList({
         const open = openIds.has(graph.id);
         return (
           <div key={graph.id} data-graph-id={graph.id}>
-            <div className="-mx-2.5 flex items-center gap-1 px-2.5">
-              <button
-                type="button"
-                data-testid="peel-graph-toggle"
-                aria-expanded={open}
-                onClick={() => toggleGraph(graph.id)}
-                className="flex min-h-9 pointer-coarse:min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-1.5 pr-1 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
-              >
-                <TaskProgressIcon graph={graph} color={color} size={20} />
-                <span title={graph.title} className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>
-                  {graph.title}
-                </span>
-                {isTaskGraphReadyToFinish(graph) && (
-                  <span className="shrink-0 text-xs text-muted-foreground">Ready to finish</span>
+            <button
+              type="button"
+              data-testid="peel-graph-toggle"
+              aria-expanded={open}
+              onClick={() => toggleGraph(graph.id)}
+              className={cn(PEEL_ROW, "gap-2.5 py-1.5")}
+            >
+              <span title={graph.title} className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>
+                {graph.title}
+              </span>
+              {isTaskGraphReadyToFinish(graph) && (
+                <span className="shrink-0 text-xs text-muted-foreground">Ready to finish</span>
+              )}
+              <ChevronRight
+                className={cn(
+                  "size-pixel-sm shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
+                  open && "rotate-90",
                 )}
-                <ChevronRight
-                  className={cn(
-                    "size-pixel-sm shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
-                    open && "rotate-90",
-                  )}
-                  aria-hidden="true"
-                />
-              </button>
-              <Button type="button" variant="slot" size="icon-sm" aria-label="Zoom" onClick={() => onZoomGraph(graph)} className="shrink-0">
-                <Maximize2 className="size-pixel-sm" aria-hidden="true" />
-              </Button>
-            </div>
-            {open && (
-              <PeelTrackBody
-                graph={graph}
-                color={color}
-                workerByKey={workerByKey}
-                openWorkerId={openWorkerId}
-                onOpenWorker={onOpenWorker}
-                onOpenStepAsk={onOpenStepAsk}
+                aria-hidden="true"
               />
+            </button>
+            {open && (
+              <>
+                <PeelTrackBody
+                  graph={graph}
+                  color={color}
+                  workerByKey={workerByKey}
+                  openWorkerId={openWorkerId}
+                  onOpenWorker={onOpenWorker}
+                  onOpenStepAsk={onOpenStepAsk}
+                />
+                <div className="flex justify-end">
+                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal text-muted-foreground pointer-coarse:h-11" onClick={() => onZoomGraph(graph)}>
+                    Zoom
+                  </Button>
+                </div>
+              </>
             )}
           </div>
         );

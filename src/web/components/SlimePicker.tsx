@@ -71,8 +71,8 @@ export function SlimePicker({
                   tabIndex={checked ? 0 : -1}
                   onClick={() => onChange(candidate)}
                   className={cn(
-                    "flex size-12 cursor-pointer items-center justify-center border-2 transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
-                    checked ? "border-open-line bg-open" : "border-transparent hover:bg-hover",
+                    "flex size-12 cursor-pointer items-center justify-center rounded-sm transition-[background-color,box-shadow] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none",
+                    checked ? "tile-open" : "hover:bg-hover",
                   )}
                 >
                   <Avatar look={candidate} size={34} />
@@ -100,11 +100,11 @@ export function SlimePicker({
                   tabIndex={checked ? 0 : -1}
                   onClick={() => onChange(slimeLookOf(look.fruit, id))}
                   className={cn(
-                    "flex size-8 cursor-pointer items-center justify-center border-2 outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
-                    checked ? "border-border-focus bg-hover" : "border-transparent hover:bg-hover",
+                    "flex size-8 cursor-pointer items-center justify-center rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
+                    checked ? "tile-open" : "hover:bg-hover",
                   )}
                 >
-                  <span aria-hidden="true" style={{ backgroundColor: color.blob }} className="size-6 border border-black/15" />
+                  <span aria-hidden="true" style={{ backgroundColor: color.blob }} className="size-6 rounded-xs shadow-[inset_0_0_0_1px_rgb(0_0_0_/_0.12)]" />
                 </button>
               );
             })}

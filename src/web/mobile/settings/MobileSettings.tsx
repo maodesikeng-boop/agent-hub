@@ -98,7 +98,7 @@ function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
           <div className="text-minor font-semibold text-foreground">{vendor.group ? `${vendor.name} (${vendor.group})` : vendor.name}</div>
           {vendor.windows.map((w) => {
             const full = w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100));
-            const barClass = full ? "bg-danger" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-rail-ink";
+            const barClass = full ? "bg-danger" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-brand-ink";
             const fillWidth = Math.min(100, Math.max(0, w.percent));
             return (
               <div key={w.key} className="grid gap-1.5">
@@ -115,9 +115,9 @@ function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={w.percent}
-                  className="h-2 overflow-hidden border border-border-strong bg-panel"
+                  className="h-1.5 overflow-hidden rounded-xs bg-border"
                 >
-                  <div className={cn("h-full", barClass)} style={{ width: `${fillWidth}%` }} />
+                  <div className={cn("usage-fill h-full rounded-xs", barClass)} style={{ width: `${fillWidth}%` }} />
                 </div>
               </div>
             );

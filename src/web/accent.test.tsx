@@ -50,10 +50,10 @@ describe("强调色跟着项目经理", () => {
     await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(2).color).accent));
   });
 
-  it(":root 的 --primary 是轨道深棕（前景白色），不是粉色；用户气泡是强调色掺白的浅底 + 深褐文字", () => {
+  it(":root sets --primary to the brand's dark brown (white text), not pink; user bubbles mix the accent into white with dark text", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).not.toMatch(/d6336c/i);
-    expect(css).toMatch(/--primary: var\(--rail-ink\);/);
+    expect(css).toMatch(/--primary: var\(--brand-ink\);/);
     expect(css).toMatch(/--color-bubble-me: color-mix\(in srgb, var\(--primary\) var\(--mix-bubble-me\), #ffffff\);/);
     expect(css).toMatch(/--color-bubble-me-foreground: var\(--foreground\);/);
   });

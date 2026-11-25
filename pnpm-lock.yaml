@@ -26,9 +26,6 @@ importers:
       '@fastify/websocket':
         specifier: ^11.3.6
         version: 11.3.6
-      '@fontsource-variable/geist':
-        specifier: 5.3.0
-        version: 5.3.0
       '@larksuiteoapi/node-sdk':
         specifier: ^1.76.0
         version: 1.76.0
@@ -83,6 +80,9 @@ importers:
       jsonc-parser:
         specifier: ^3.3.1
         version: 3.3.1
+      lato-font:
+        specifier: 3.0.0
+        version: 3.0.0
       lru-cache:
         specifier: ^11.5.3
         version: 11.5.3
@@ -646,9 +646,6 @@ packages:
 
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
-
-  '@fontsource-variable/geist@5.3.0':
-    resolution: {integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA==}
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -3272,6 +3269,9 @@ packages:
   koffi@3.3.8:
     resolution: {integrity: sha512-CTDlV3BDh8LFyCgv9vamD+5eu49HQ5wBetAJ9wxERAoAy6rfodahgo28tqhz010l2OGcZvrnBC6MOTyQUt4EIQ==}
 
+  lato-font@3.0.0:
+    resolution: {integrity: sha512-wKhFCh9XX91Lepf38ynnZTNpkQD1OWuXV1RwFgcchUVQZzBixJ/yXCaVCIrNI3CbgT9pLcLzWKgn+6OETzAnug==}
+
   layout-base@1.0.2:
     resolution: {integrity: sha512-8h2oVEZNktL4BH2JCOI90iD1yXwL6iNW7KcCKT2QZgQJR2vbqDsldCTPRU9NifTCqHZci57XvQQ15YTu+sTYPg==}
 
@@ -4905,8 +4905,6 @@ snapshots:
       react-dom: 19.3.1(react@19.3.1)
 
   '@floating-ui/utils@0.2.12': {}
-
-  '@fontsource-variable/geist@5.3.0': {}
 
   '@iconify/types@2.0.0': {}
 
@@ -7244,6 +7242,8 @@ snapshots:
       '@koromix/koffi-win32-arm64': 3.3.8
       '@koromix/koffi-win32-ia32': 3.3.8
       '@koromix/koffi-win32-x64': 3.3.8
+
+  lato-font@3.0.0: {}
 
   layout-base@1.0.2: {}
 

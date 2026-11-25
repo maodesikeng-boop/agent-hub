@@ -12,7 +12,7 @@ import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 
-const USAGE_BAR_COLORS = { normal: "bg-rail-ink", high: "bg-caution", full: "bg-danger" } as const;
+const USAGE_BAR_COLORS = { normal: "bg-brand-ink", high: "bg-caution", full: "bg-danger" } as const;
 
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
   const level = exhausted ? "full" : window.warning || window.percent >= 80 ? "high" : "normal";
@@ -34,9 +34,9 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={window.percent}
-        className="h-2 overflow-hidden border border-border-strong bg-panel"
+        className="h-1.5 overflow-hidden rounded-xs bg-border"
       >
-        <div className={cn("h-full", USAGE_BAR_COLORS[level])} style={{ width: `${fillWidth}%` }} />
+        <div className={cn("usage-fill h-full rounded-xs", USAGE_BAR_COLORS[level])} style={{ width: `${fillWidth}%` }} />
       </div>
     </div>
   );
@@ -106,11 +106,11 @@ export const QuotaPopover = memo(function QuotaPopover({
         )}
       </PopoverTrigger>
       <PopoverContent side={side ?? (inHeader ? "bottom" : "top")} align={align ?? "end"} aria-label="Usage" className="w-80 p-0">
-        <div className="flex items-center gap-2 border-b-2 border-border bg-panel px-4 py-2.5">
-          <Hourglass className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />
+        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <Hourglass className="size-pixel-md shrink-0 text-brand-ink" aria-hidden="true" />
           <h2 className="text-body font-semibold text-foreground">Usage</h2>
         </div>
-        <div className="divide-y-2 divide-border">
+        <div className="divide-y divide-border">
           {groupByVendor(blocks).map((section) => (
             <section key={section.name} className="grid gap-3 px-4 py-3" aria-label={section.name}>
               <h3 className="text-minor font-semibold text-foreground">{section.name}</h3>
