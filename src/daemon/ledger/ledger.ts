@@ -168,6 +168,14 @@ function reconcileTurnWorktree(
   return workerId == null ? null : branches.reconcileWorkerGraph(workerId, signal);
 }
 
+function sessionRoleOf(db: Db, sessionId: SessionId): SqliteLedger["sessionRole"] extends (id: SessionId) => infer R ? R : never {
+  const s = getAgentSession(db, sessionId);
+  if (s === null) return null;
+  if (s.role === "pm" && s.pmId === null) return null;
+  if (s.role === "worker" && s.workerId === null) return null;
+  return s.role;
+}
+
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const ctx = createLedgerContext(db, options);
   const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
@@ -512,13 +520,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     uncleanedHandovers: handover.uncleanedHandovers,
 
     hubCall: hub.hubCall,
-    sessionRole: (sessionId) => {
-      const s = getAgentSession(db, sessionId);
-      if (s === null) return null;
-      if (s.role === "pm" && s.pmId === null) return null;
-      if (s.role === "worker" && s.workerId === null) return null;
-      return s.role;
-    },
+    sessionRole: (sessionId) => sessionRoleOf(db, sessionId),
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),

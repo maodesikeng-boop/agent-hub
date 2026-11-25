@@ -241,6 +241,7 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
       workerConversationId: worker.workerConversationId,
       title: "修 X",
       readonly: false,
+      branch: worker.branch,
       event: "started",
       status: null,
       summary: null,
