@@ -15,19 +15,17 @@
 
 ### Decisions needed
 
-**1. Which Worker should a manual `graph done` end?**
+None (resolved on 2026-11-26: **1B** and **2A**).
 
-- **Option A: Only a review Worker parked by a FAIL verdict.** This matches the task brief's wording. An implementation Worker parked by a deviation report stays open until `graph finish`, as it does today.
-- **Option B (recommended): The step's latest Worker whenever it is still open and idle.** This makes a manual release behave like an automatic step completion (`src/daemon/ledger/workers/reports.ts:114-118`), which always ends the Worker. Once a step is done its Worker has no further use: `worker send` to it is already refused once a downstream step starts (`task-graph-auto-dispatch.test.ts`, part 3 of the end-to-end case). The PM can still ask the Worker follow-up questions before running `graph done`.
+**Resolved decision 1: Which Worker does a manual `graph done` end?**
 
-Recommendation: B, because the defect is that the manual path skips the automatic path's cleanup, not that reviewers are special. The skeleton contract is written for B. Choosing A narrows `parkedStepWorkersOf` to review Workers and leaves `task-graph-auto-dispatch.test.ts` unchanged.
+- **Selected (Option B): The step's latest Worker whenever it is still open and not running.** A manual release now does the same cleanup as an automatic step completion (`src/daemon/ledger/workers/reports.ts:114-118`), which always ends the Worker. Once a step is done its Worker has no further use: `worker send` to it is already refused once a downstream step starts. The PM can still ask the Worker follow-up questions before running `graph done`. The open-Worker assertions after `graph done` in `task-graph-auto-dispatch.test.ts` change with it.
+- **Rejected (Option A):** End only a review Worker parked by a FAIL verdict, and leave implementation Workers parked by a deviation report open until `graph finish`.
 
-**2. What happens to a model Bellwood cannot verify?**
+**Resolved decision 2: What happens to a model Bellwood cannot verify?**
 
-- **Option A (recommended): Reject only pairs the catalog proves unsupported; pass models that neither the live nor the bundled catalog lists.** If the CLI then rejects the pair, the failed first launch now shows the real error in `hub worker show` and reaches the PM as a turn failure (fix 1c).
-- **Option B: For vendors that encode effort in the model ID (Antigravity), reject any explicit effort on an unlisted model and ask for a full model ID instead.** This also blocks new models that work.
-
-Recommendation: A. `gemini-4-neon` is not in the bundled Antigravity list, so whether A rejects `gemini-4-neon` + `xhigh` up front depends on the live `agy models` catalog listing `gemini-4-neon`. If that catalog does not list it, the pair still reaches the CLI and fails visibly, as described above.
+- **Selected (Option A): Reject only pairs the catalog proves unsupported; pass models that neither the live nor the bundled catalog lists.** If the CLI then rejects the pair, the failed first launch shows the real error in `hub worker show` and reaches the PM as a turn failure (fix 1c). `gemini-4-neon` is not in the bundled Antigravity list, so `gemini-4-neon` + `xhigh` is rejected at dispatch only when the live `agy models` catalog lists `gemini-4-neon`. Otherwise it fails visibly at launch.
+- **Rejected (Option B):** For vendors that encode effort in the model ID (Antigravity), reject any explicit effort on an unlisted model and require a full model ID. This would also block new models that work.
 
 ## For Workers and reviewers
 
@@ -84,8 +82,8 @@ Batch 1 makes sure a Worker's brief is never dropped silently and that a system 
 
 - **More drivers than Antigravity.** The report reproduced only Antigravity. Code reading shows Claude, Codex, and Pi can also cancel user messages on shutdown (table in 2.1); the ACP vendors cannot. For Codex and Pi the lost messages are mid-turn ones, not the first brief. Whether each CLI actually emits the triggering event on `SIGINT` is unverified ([Inferred]). The fix closes the branch in all of them either way.
 - **A stale notice can stay queued forever.** The report did not cover this. `stopStaleNotice` calls `stopMessage`, which changes only `delivered` and `processing` messages (`messages.ts:588-593`). A stale Worker notice the driver requeued is `queued`, so the handler returns `done` and leaves the message `queued`. Restart recovery then enqueues it again ([Inferred]). The new `retireStaleSystemMessage` stops all three statuses.
-- **Item 3's "locked" tests.** `task-graph-review.test.ts:199-210` asserts that the reviewer stays open right after a FAIL verdict. That is still correct, because the PM may question the reviewer before releasing the step, and it is kept. The only test that locks the old manual-`done` behavior is `task-graph-auto-dispatch.test.ts:825-839`, and it uses an implementation Worker, not a reviewer. That is why decision 1 exists.
-- **Item 4's test evidence.** `agy-effort.test.ts:44` asserts launch arguments, which stay correct. Line 72 validates `gemini-4-neon` + `xhigh` with no catalog. Bellwood has no data on `gemini-4-neon` in that case, so the assertion stays valid under option A. The regression test supplies a live catalog that lists the model.
+- **Item 3's "locked" tests.** `task-graph-review.test.ts:199-210` asserts that the reviewer stays open right after a FAIL verdict. That is still correct, because the PM may question the reviewer before releasing the step, and it is kept. The only test that locks the old manual-`done` behavior is `task-graph-auto-dispatch.test.ts:825-839`, and it uses an implementation Worker, not a reviewer. That is why decision 1 was needed. It resolved to Option B, so that test changes and the review test stays.
+- **Item 4's test evidence.** `agy-effort.test.ts:44` asserts launch arguments, which stay correct. Line 72 validates `gemini-4-neon` + `xhigh` with no catalog. Bellwood has no data on `gemini-4-neon` in that case, so the assertion stays valid under resolved decision 2. The regression test supplies a live catalog that lists the model.
 
 ### 3. Approach comparison
 
@@ -101,7 +99,7 @@ Batch 1 makes sure a Worker's brief is never dropped silently and that a system 
 | Stale notices | **A (chosen): one `isSystemMessageCurrent(db, id, now)` used by the send handler and by every driver's pre-write `canDeliverSystemMessage`** | Covers queued, driver-pending, and requeued copies; one rule per event | Small read per system write |
 | | B: also withdraw `delivered` notes at change time | Visible earlier | Cannot reach copies already in a driver's pending queue; a later requeue revives them |
 | | C: expire notices after a TTL | Simple | Wrong in both directions: a fresh note can be stale and an old one current |
-| Manual `done` | **A (chosen): `doneIn` ends `parkedStepWorkersOf(node)` through the existing `stopWorkersIn`** | Same cleanup as automatic completion | Changes one asserted behavior (decision 1) |
+| Manual `done` | **A (chosen): `doneIn` ends `parkedStepWorkersOf(node)` through the existing `stopWorkersIn`** | Same cleanup as automatic completion | Changes one asserted behavior (resolved decision 1) |
 | | B: leave it to `graph finish` | No change | Parked reviewers hold a slot until the whole graph ends, which is what #1201 and #1203 hit |
 | Model and effort | **A (chosen): per-model check in shared `checkModelEffort` via `modelEffortsOf`** | Every dispatch path (worker start, graph spec, PM settings) already calls it | Only as good as the catalog |
 | | B: validate in `agentLaunchArgs` at launch | Agy-only | Too late: the Worker and step already exist |
@@ -127,7 +125,7 @@ No `src/shared/limits.ts` constants are needed.
 - `BaseSessionDriver.releaseOnStop` and its `SessionDriverHost` entry, merged into `releaseUntaken(st, batches, cause, at)`. The `stopped: boolean` parameter goes away, along with the comment above `releaseUntaken` that restates the old rule.
 - `isWorkerPmNoticeActionable` in `src/shared/ledger.ts`, `src/daemon/ledger/ledger.ts`, and `src/daemon/ui-server/fake-ledger.ts`. Its Worker rules move into `notice-currency.ts`, and its tests in `stale-notices.test.ts` move with it.
 - The `message.workerId === null` shortcut in `canDeliverSystemMessage` and `stopStaleNotice` (`src/daemon/handlers.ts`). `stopStaleNotice` calls `retireStaleSystemMessage` instead of `stopMessage`.
-- The open-Worker assertions after `graph done` in `task-graph-auto-dispatch.test.ts` (part 2 and part 3 of the end-to-end case), if decision 1 lands on B.
+- The open-Worker assertions after `graph done` in `task-graph-auto-dispatch.test.ts` (part 2 and part 3 of the end-to-end case), per decision 1.
 - Kept on purpose: `stopQueuedDeliveryNotesIn` still withdraws queued notes as soon as the graph changes, so the UI shows them stopped right away. The new check covers only copies that already left the queue.
 
 ### 7. Skeleton files
