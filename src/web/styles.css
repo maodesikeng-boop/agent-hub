@@ -88,14 +88,14 @@
 
 /* Percentages respect the browser's default font size. */
 html,
-html[data-ui-scale="lg"] {
-  font-size: 109.375%;
+html[data-ui-scale="md"] {
+  font-size: 100%;
 }
 html[data-ui-scale="sm"] {
   font-size: 90.625%;
 }
-html[data-ui-scale="md"] {
-  font-size: 100%;
+html[data-ui-scale="lg"] {
+  font-size: 109.375%;
 }
 html[data-ui-scale="xl"] {
   font-size: 118.75%;

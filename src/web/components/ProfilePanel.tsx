@@ -125,9 +125,10 @@ function LookButton({ pm, disabled }: { pm: Pm; disabled: boolean }) {
         disabled={disabled}
         aria-label="Change look"
         title="Change look"
-        className="cursor-pointer rounded-sm border border-transparent bg-hover p-2 transition-colors outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-select-line data-[state=open]:bg-open disabled:cursor-not-allowed disabled:opacity-60"
+        className="cursor-pointer rounded-sm border border-transparent bg-hover p-4 transition-colors outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-select-line data-[state=open]:bg-open disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <Avatar look={look} size={64} />
+        {/* The tile's border and padding match a group box's, so the slime starts on the same edge as the text in the boxes below. */}
+        <Avatar look={look} size={48} />
       </button>
     </SlimePicker>
   );

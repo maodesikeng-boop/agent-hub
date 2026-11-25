@@ -17,22 +17,24 @@ afterEach(() => {
 });
 
 describe("Interface scale", () => {
-  it("没存过、存坏了都按默认的“大”", () => {
-    expect(DEFAULT_UI_SCALE).toBe("lg");
-    expect(readUiScale()).toBe("lg");
+  it("falls back to Default when nothing or a broken value is stored, and keeps a saved choice", () => {
+    expect(DEFAULT_UI_SCALE).toBe("md");
+    expect(readUiScale()).toBe("md");
     localStorage.setItem(UI_SCALE_KEY, "huge");
+    expect(readUiScale()).toBe("md");
+    localStorage.setItem(UI_SCALE_KEY, "lg");
     expect(readUiScale()).toBe("lg");
     localStorage.setItem(UI_SCALE_KEY, "sm");
     expect(readUiScale()).toBe("sm");
   });
 
-  it("设置 → 通用 → 外观：紧凑 / 标准 / 大 / 特大，默认选“大”；点了马上改根字号档位并记住", async () => {
+  it("Settings offers Compact, Default, Large, and XL with Default checked, and a click applies and saves the scale", async () => {
     const user = userEvent.setup();
     render(<SettingsDialog open onOpenChange={() => {}} notify={notify} />);
     const group = screen.getByRole("radiogroup", { name: "Interface scale" });
     const options = within(group).getAllByRole("radio");
     expect(options.map((o) => o.textContent)).toEqual(["Compact", "Default", "Large", "XL"]);
-    expect(within(group).getByRole("radio", { name: "Large" })).toHaveAttribute("aria-checked", "true");
+    expect(within(group).getByRole("radio", { name: "Default" })).toHaveAttribute("aria-checked", "true");
 
     await user.click(within(group).getByRole("radio", { name: "XL" }));
     expect(document.documentElement.dataset.uiScale).toBe("xl");
@@ -44,11 +46,11 @@ describe("Interface scale", () => {
     expect(localStorage.getItem(UI_SCALE_KEY)).toBe("sm");
   });
 
-  it("各档根字号在 styles.css 一处，用百分比；没设时是“大”", () => {
+  it("keeps every root size in styles.css as a percentage, and an unset scale renders as Default before the app starts", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toMatch(/html,\s*html\[data-ui-scale="lg"\]\s*\{\s*font-size:\s*109\.375%/);
+    expect(css).toMatch(/html,\s*html\[data-ui-scale="md"\]\s*\{\s*font-size:\s*100%/);
     expect(css).toMatch(/html\[data-ui-scale="sm"\]\s*\{\s*font-size:\s*90\.625%/);
-    expect(css).toMatch(/html\[data-ui-scale="md"\]\s*\{\s*font-size:\s*100%/);
+    expect(css).toMatch(/html\[data-ui-scale="lg"\]\s*\{\s*font-size:\s*109\.375%/);
     expect(css).toMatch(/html\[data-ui-scale="xl"\]\s*\{\s*font-size:\s*118\.75%/);
     for (const token of ["display", "title", "body", "minor"]) expect(css).toMatch(new RegExp(`--text-${token}: [0-9.]+rem;`));
   });

@@ -100,12 +100,12 @@ afterEach(() => {
 });
 
 describe("useUiScaleSetting", () => {
-  it("默认读取 lg（Large），切换时立即更新 data-ui-scale 与 localStorage，并在多个挂载实例间同步且保持引用稳定", () => {
+  it("reads md (Default) by default, applies and saves a change at once, and keeps mounted copies in sync with stable references", () => {
     const first = renderHook(() => useUiScaleSetting());
     const second = renderHook(() => useUiScaleSetting());
 
-    expect(first.result.current.scale).toBe("lg");
-    expect(first.result.current.label).toBe("Large");
+    expect(first.result.current.scale).toBe("md");
+    expect(first.result.current.label).toBe("Default");
     expect(first.result.current.options.map((o) => o.label)).toEqual(["Compact", "Default", "Large", "XL"]);
 
     const initialRef = first.result.current;

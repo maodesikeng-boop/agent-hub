@@ -129,7 +129,7 @@ describe("App 路由接入（手机外壳）", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.getByRole("button", { name: /Interface scale/ })).toHaveTextContent("Large");
+    expect(screen.getByRole("button", { name: /Interface scale/ })).toHaveTextContent("Default");
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent("Off");
     expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Providers/ })).toBeInTheDocument();

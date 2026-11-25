@@ -230,7 +230,7 @@ export function CardNoteForm({
         onChange={(e) => setNote(e.target.value)}
         placeholder="Reply or add a note…"
         className={cn(
-          "max-h-36 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-default pointer-coarse:min-h-10 pointer-coarse:py-2",
+          "max-h-36 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-default pointer-coarse:min-h-11 pointer-coarse:py-2.5",
           small ? "min-h-7 py-1 text-minor leading-5" : "min-h-8 py-1 text-body leading-6",
           inputClassName,
         )}

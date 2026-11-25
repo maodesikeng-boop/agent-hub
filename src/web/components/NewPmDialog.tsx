@@ -150,7 +150,7 @@ function NewPmForm({
                   id={id}
                   type="button"
                   aria-label="Change look"
-                  className="flex cursor-pointer items-center gap-2 px-1.5 py-1 text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
+                  className="touch-target flex cursor-pointer items-center gap-2 px-1.5 py-1 text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
                 >
                   <Avatar look={look} size={34} />
                   <ChevronRight className="size-pixel-sm" aria-hidden="true" />
