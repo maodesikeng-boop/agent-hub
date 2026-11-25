@@ -891,9 +891,9 @@ describe("Needs You 托盘", () => {
     expect(body.querySelectorAll("ol > li > ul > li")).toHaveLength(2);
     expect([...card.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["docs/orchestration-skill-design.md", "fusa-task-graph"]);
 
-    // 长选项：键帽、文字、Recommended 顶对齐，Recommended 和文字分开（放得下在右边，放不下换到下面）
+    // 长选项：字母、文字、Recommended 按首行基线对齐，Recommended 和文字分开（放得下在右边，放不下换到下面）
     const recOption = within(card).getByRole("button", { name: new RegExp(longOption) });
-    expect(recOption.className).toContain("items-start");
+    expect(recOption.className).toContain("items-baseline");
     const rec = within(recOption).getByText("Recommended");
     expect(rec.parentElement!.className).toContain("flex-wrap");
     expect(rec.previousElementSibling).toHaveTextContent(longOption);

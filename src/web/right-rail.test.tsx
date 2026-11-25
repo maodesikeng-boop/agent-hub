@@ -60,13 +60,13 @@ const buttons = (group: HTMLElement) => within(group).getAllByRole("button").fil
 const titleButton = (group: HTMLElement) => within(group).getByRole("heading").querySelector("button")!;
 
 describe("右栏：照 Claude desktop 的样子", () => {
-  it("三组标题（Needs You、Pieces、Completed）一模一样：12px、灰、500，不带个数；后面一个普通箭头；“等你确定”前一个 6px 强调色圆点", () => {
+  it("三组标题（Needs You、Pieces、Completed）一模一样：13.5px、灰、500（和左栏 Pinned 同一档），不带个数；后面一个普通箭头；“等你确定”前一个 6px 强调色圆点", () => {
     renderRail({ asks: [ask(1)], workers: [busy(30), done(31)], look: defaultLookOf(2) });
     const classes = new Set<string>();
     for (const [name, group] of [["Needs You", asksGroup()], ["Pieces", workerGroup()], ["Completed", completedGroup()]] as const) {
       const heading = within(group).getByRole("heading");
       expect(heading).toHaveTextContent(new RegExp(`^${name}$`));
-      expect(heading).toHaveClass("text-xs", "font-medium", "text-muted-foreground");
+      expect(heading).toHaveClass("text-minor", "font-medium", "text-muted-foreground");
       classes.add(heading.className);
       // 标题里不放头像，只有字后面一个普通箭头
       expect(heading.querySelector("[data-neutral='true']")).toBeNull();
@@ -74,8 +74,7 @@ describe("右栏：照 Claude desktop 的样子", () => {
       expect(heading.querySelector("button")!.lastElementChild).toBe(arrowOf(group));
     }
     expect(classes.size).toBe(1);
-    expect(asksGroup().querySelector("h2 button > span.bg-primary")).toHaveClass("size-1.5");
-    expect(asksGroup().querySelector("h2 button > span.bg-primary")!.className).not.toMatch(/rounded-/);
+    expect(asksGroup().querySelector("h2 button > span.bg-primary")).toHaveClass("size-1.5", "rounded-full");
   });
 
   it("组和组之间一条 1px 细分隔线（divide-border），上下留白一样；没有框、没有阴影", () => {
@@ -83,14 +82,14 @@ describe("右栏：照 Claude desktop 的样子", () => {
     const sections = [asksGroup(), workerGroup(), completedGroup()];
     expect(sections[0]!.parentElement).toHaveClass("divide-y", "divide-border");
     for (const section of sections) expect(section).toHaveClass("py-3");
-    expect(screen.getByRole("complementary", { name: "Side panel" }).innerHTML).not.toMatch(/shadow|bg-sidebar(?!-)/);
+    expect(screen.getByRole("complementary", { name: "Side panel" }).innerHTML).not.toMatch(/(?:^|[\s"])shadow(?:-|[\s"])|bg-sidebar(?!-)/);
   });
 
   it("Piece 行：单行，无左侧图标，只有 15px 标题，不写状态词；行距舒展（py-2 px-2.5）", () => {
     renderRail({ workers: [busy(30)], look: defaultLookOf(2) });
     const row = within(workerGroup()).getByRole("button", { name: /活 30/ });
-    expect(row).toHaveClass("px-2.5", "-mx-2.5", "py-2", "border-2");
-    expect(row.className).not.toMatch(/rounded-/);
+    expect(row).toHaveClass("px-2.5", "-mx-2.5", "py-2", "rounded-sm");
+    expect(row.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     expect(row.querySelector("[data-neutral='true']")).toBeNull();
     expect(within(row).getByText("活 30")).toHaveClass("text-body", "truncate");
     // 只有标题一样，没有状态词、没有第二行
@@ -220,20 +219,21 @@ describe("右栏：行的底色是完整的圆角（不被收起动画的容器�
   /** class 里 -mx-N 的 N（单位 rem/4，即 Tailwind 的档位）。 */
   const bleed = (el: Element) => Number(/(?:^|\s)-mx-(\d+(?:\.\d+)?)(?:\s|$)/.exec(el.className)?.[1] ?? 0);
 
-  it("行向两边伸出的距离，不超过外面 overflow-hidden 容器多留的（再留 0.5 档给聚焦圈）；直角 2px 边、选中是浅暖黄 open 态", () => {
+  it("行向两边伸出的距离，不超过外面 overflow-hidden 容器多留的（再留 0.5 档给聚焦圈）；4px 圆角、不带边框，选中是 tile-open", () => {
     renderRail({ asks: [ask(1)], workers: [busy(30), done(40)], openWorkerId: 40 });
     for (const group of [asksGroup(), workerGroup(), completedGroup()]) {
       const clip = group.querySelector("[data-group-body] > .overflow-hidden")!;
       for (const row of within(group).getAllByRole("button").filter((b) => !b.closest("h2") && b.closest("li") !== null)) {
-        expect(row.className).not.toMatch(/rounded-/);
+        expect(row).toHaveClass("rounded-sm");
+        expect(row.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
         expect(row.className).toMatch(/px-2\.5/);
         expect(bleed(clip)).toBeGreaterThanOrEqual(bleed(row) + 0.5);
         expect(clip).toHaveClass("px-3");
       }
     }
     const active = within(completedGroup()).getByRole("button", { name: /活 40/ });
-    expect(active).toHaveClass("bg-open", "border-open-line", "border-2");
-    expect(active.className).not.toMatch(/rounded-|bg-jelly|bg-sidebar-active/);
+    expect(active).toHaveClass("tile-open", "rounded-sm");
+    expect(active.className).not.toMatch(/rounded-(?!sm\b)|bg-jelly|bg-sidebar-active/);
     expect(titleButton(completedGroup())).toHaveClass("hover:bg-hover");
     expect(titleButton(completedGroup()).className).not.toMatch(/rounded-|bg-sidebar-hover/);
   });
@@ -265,7 +265,7 @@ describe("右栏：只列几条", () => {
     const more = screen.getByRole("button", { name: "Show more" });
     expect(more).toHaveAttribute("aria-expanded", "false");
     expect(more).toHaveClass("text-minor", "text-muted-foreground", "hover:text-foreground");
-    expect(more.className).not.toMatch(/(?:^|\s)(?:bg-|border-(?!2\b|transparent\b)|rounded-)/);
+    expect(more.className).not.toMatch(/(?:^|\s)(?:bg-|border)/);
     await user.click(more);
     expect(names()).toEqual(["活 3", "活 5", "活 1", "活 2", "活 4"]);
     expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
@@ -361,8 +361,8 @@ describe("右栏：提问行", () => {
     const onOpenAsk = vi.fn();
     renderRail({ asks: [ask(1)], onOpenAsk });
     const row = within(asksGroup()).getByRole("button", { name: /问题 1/ });
-    expect(row).toHaveClass("px-2.5", "-mx-2.5", "gap-3", "border-2");
-    expect(row.className).not.toMatch(/rounded-/);
+    expect(row).toHaveClass("px-2.5", "-mx-2.5", "gap-3", "rounded-sm");
+    expect(row.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     expect(row.querySelector("svg")).toHaveClass("size-4");
     expect(within(row).getByText("问题 1")).toHaveClass("text-body", "truncate");
     expect(row).not.toHaveAttribute("aria-expanded");
@@ -464,19 +464,23 @@ describe("右栏：每组可以收起", () => {
 });
 
 describe("PiecesSlot: Piece 纸片分身图标", () => {
-  it("开关使用当前项目经理那只小动物的纸片分身（Avatar neutral 20px，按根字号缩放）", () => {
-    render(<PiecesSlot visible open={false} attention={false} count={0} look={defaultLookOf(3)} onToggle={() => {}} />);
+  it("shows only the PM's note sprite (Avatar neutral 22px, scaled with the root size) in a 32px button, with no text", () => {
+    render(<PiecesSlot visible open={false} attention={false} look={defaultLookOf(3)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "Show Pieces" });
     const avatar = button.querySelector("[data-neutral='true']");
     expect(avatar).toBeInTheDocument();
-    expect((avatar as HTMLElement).style.width).toBe("1.25rem");
+    expect((avatar as HTMLElement).style.width).toBe("1.375rem");
+    expect(button.className).toContain("size-8");
+    expect(button).toHaveTextContent("");
   });
 
-  it("有等你确定且收起时右上角显示 6px 强调色小方块", () => {
-    render(<PiecesSlot visible open={false} attention={true} count={2} look={defaultLookOf(1)} onToggle={() => {}} />);
+  it("有等你确定且收起时只在读屏名字里说出来，按钮上不画圆点也不写数字", () => {
+    render(<PiecesSlot visible open={false} attention={true} look={defaultLookOf(1)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "Show Pieces (needs you)" });
-    expect(button.querySelector("span.bg-primary")).toHaveClass("size-1.5");
-    expect(button.querySelector("span.bg-primary")!.className).not.toMatch(/rounded-/);
+    expect(button).toHaveAttribute("title", "Show Pieces (needs you)");
+    expect(button.children).toHaveLength(1);
+    expect(button.firstElementChild).toHaveAttribute("data-neutral", "true");
+    expect(button).toHaveTextContent("");
   });
 });
 

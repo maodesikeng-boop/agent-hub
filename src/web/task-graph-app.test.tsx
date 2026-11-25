@@ -139,7 +139,7 @@ async function bootSingle(snapshot: StateSnapshot) {
   return { api, ws: FakeWebSocket.last };
 }
 
-describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
+describe("桌面右栏：App 接通果冻管道，任务图标题前不放进度图标", () => {
   it("渲染当前项目的活跃任务图；绑图 Piece 不进 Pieces，门禁提问不进 Needs You；点节点进那个 Piece 的对话", async () => {
     const user = userEvent.setup();
     await bootSingle(graphSnapshot());
@@ -147,7 +147,7 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
 
     const graphs = within(rail).getByRole("region", { name: /^Task Graph$/ });
     expect(within(graphs).getByText("发布流水线")).toBeInTheDocument();
-    expect(graphs.querySelector("[data-slot='task-progress']")).toBeInTheDocument();
+    expect(graphs.querySelector("[data-slot='task-progress']")).toBeNull();
     // 等你拍板的步骤在右栏只有一行，作答在对话里
     expect(within(graphs).getByTestId("peel-gate-row")).toHaveTextContent("确认上线");
     expect(within(graphs).queryByTestId("peel-gate-card")).toBeNull();
@@ -336,11 +336,11 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
       choice: null,
       note: "补充上限常量到 limits.ts",
     });
-    // 乐观态立即高亮「打回」选项（border-open-line bg-open），不误高亮「通过」
+    // 乐观态立即高亮「打回」选项（data-chosen 暖黄底行），不误高亮「通过」
     const passBtn = within(chatCard).getByRole("button", { name: /通过/ });
     const rejectBtn = within(chatCard).getByRole("button", { name: /打回/ });
-    expect(rejectBtn.className).toContain("bg-open");
-    expect(passBtn.className).not.toContain("bg-open");
+    expect(rejectBtn).toHaveAttribute("data-chosen");
+    expect(passBtn).not.toHaveAttribute("data-chosen");
 
     // 打开已取消的历史图全览弹窗：绝不渲染活体 GateDecisionCard 或 Waiting on you
     render(
@@ -425,7 +425,7 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
 });
 
 describe("手机抽屉：同一份 RailGroups", () => {
-  it("抽屉里有果冻管道与嫩芽进度图标，门禁提问同样去重；点节点先关抽屉再进 Piece", async () => {
+  it("抽屉里有果冻管道、标题前不放进度图标，门禁提问同样去重；点节点先关抽屉再进 Piece", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query.includes("coarse"),
       addEventListener() {},
@@ -437,7 +437,8 @@ describe("手机抽屉：同一份 RailGroups", () => {
     fireEvent.click(toggle);
     const drawer = await screen.findByRole("dialog", { name: "Pieces" });
     const graphs = within(drawer).getByRole("region", { name: /^Task Graph$/ });
-    expect(graphs.querySelector("[data-slot='task-progress']")).toBeInTheDocument();
+    expect(within(graphs).getByText("发布流水线")).toBeInTheDocument();
+    expect(graphs.querySelector("[data-slot='task-progress']")).toBeNull();
     expect(within(drawer).queryByText(/门禁提问/)).toBeNull();
     expect(within(drawer).queryByRole("button", { name: "绑图的活" })).toBeNull();
     fireEvent.click(within(graphs).getByRole("button", { name: /构建产物/ }));

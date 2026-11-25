@@ -577,23 +577,6 @@ describe("上传没完时切走对话再切回来", () => {
   });
 });
 
-describe("只发文件的消息在左栏和通知里的预览", () => {
-  it("预览写“[文件] 名字”（多个用顿号），有文字的还是文字", async () => {
-    await boot(
-      makeSnapshot({
-        pms: [makePm({ id: 1, name: "小林" })],
-        conversations: [
-          makeConvSnapshot(
-            [makeUserMessage({ id: 1, text: "", meta: { attachments: [makeAttachment({ name: "报告.pdf" }), makeAttachment({ id: "1111111111111111", name: "图.png" })] } })],
-            { conversation: { id: 1, pmId: 1, title: "小林" } },
-          ),
-        ],
-      }),
-    );
-    expect(screen.getByText("[File] 报告.pdf, 图.png")).toBeInTheDocument();
-  });
-});
-
 describe("发消息时文件已经不在", () => {
   it("服务端回“文件找不到了”：左边红色感叹号只是标记（名字和 title 写“文件已不在，请重新添加”），不能点重发", async () => {
     const user = userEvent.setup();

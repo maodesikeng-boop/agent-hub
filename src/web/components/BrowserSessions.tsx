@@ -54,7 +54,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
               </>
             ) : (
               <>
-                <QrCode text={signIn.link.url} label="Sign-in QR code" className="size-40 border-2 border-border" />
+                <QrCode text={signIn.link.url} label="Sign-in QR code" className="size-40 rounded-sm border border-border" />
                 <p className="text-body text-muted-foreground tabular-nums">{formatCountdown(signIn.remainingMs)}</p>
               </>
             )}

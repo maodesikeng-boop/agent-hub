@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { SHELL_LIST_REM, SHELL_PANEL_REM } from "../shared/limits.ts";
+import { SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
 
 // Invariant: widths are rem and always inside their pane's limits; storage holds only widths a user dragged to.
 

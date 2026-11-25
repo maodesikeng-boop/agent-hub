@@ -1,6 +1,6 @@
 // 本机端到端冒烟（.agents/skills/verify/SKILL.md）：构建网页，在一次性的临时数据目录里用随机端口起真守护进程，
 // 查免密登录、健康状态和 /api/state，用无头 Chromium 打开工作台截图（console.error、pageerror 必须是 0），
-// 最后正常关机、核对守护进程记过的子进程都退出了，再删掉临时目录。
+// 打开设置页确认木头顶栏照样能拖窗和双击缩放，最后正常关机、核对守护进程记过的子进程都退出了，再删掉临时目录。
 // 用法：node scripts/verify-smoke.ts [--runs <次数>] [--out <目录>]
 // 截图和每次的耗时写到 --out（默认 /tmp/bellwood-verify-smoke）：workbench-smoke.png、smoke-runs.txt。
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -18,6 +18,7 @@ import { resolveHubPaths } from "../src/shared/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
 import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
 import { verifyComposerLayout } from "./verify-composer-layout.ts";
+import { verifyTopBarUnderSettings } from "./verify-window-drag.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const FAKE_CLAUDE = fileURLToPath(new URL("../test/fake-claude/fake-claude.ts", import.meta.url));
@@ -210,6 +211,10 @@ async function runOnce(outDir: string, checkComposer: boolean): Promise<RunResul
     await page.screenshot({ path: join(outDir, SCREENSHOT) });
     if (pageErrors.length > 0) throw new Error(`页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
     phase("浏览器渲染工作台、截图");
+
+    await verifyTopBarUnderSettings(page);
+    if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
+    phase("设置页打开时顶栏照样拖窗");
 
     if (checkComposer) {
       const id = stateBody.conversations[0]?.conversation.id;

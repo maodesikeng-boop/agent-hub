@@ -61,10 +61,10 @@ export interface Principle {
 }
 
 export const PRINCIPLES: readonly Principle[] = [
-  { id: "S1", dimension: "style", title: "配色", source: "基准图的风格说明；ui-standard 第 4 条", check: "大面积底色极淡中性或微暖；强调色只在主按钮、选中态、小圆点这几处小面积出现，选中和门禁用 10% 浅果冻底；颜色跑出这套气质才记，对比度不在这里记" },
+  { id: "S1", dimension: "style", title: "配色", source: "基准图的风格说明；ui-standard 第 4 条", check: "三个区靠底色分：蜜黄最左栏是唯一饱和的面，奶油色外框托着项目经理列表，对话和右栏是白纸面，纸色只给纸面里的次要块；实心强调色只在主按钮、勾选、完成的管子和小圆点这几处小面积出现；选中是 1px 金色内描边的浮起格，不是大块实心或果冻底；颜色跑出这套气质才记，对比度不在这里记" },
   { id: "S2", dimension: "style", title: "字号层级", source: "基准图的风格说明；ui-standard 第 3 条", check: "一屏里的字号只有 12、13.5、15、17 四档（资料页名字 22 除外），字重只有 400、500、600" },
   { id: "S3", dimension: "style", title: "间距节奏", source: "基准图的风格说明；ui-standard 第 1 条", check: "间距落在 ui-standard 的间距档位上，同类容器的内边距、同类行的行高在本屏内一致；不要求和基准图的像素一样，比基准图更舒展匀称是加分；同类区域的行高或内边距比基准图压缩一半以上、文字挤成一团记 P1" },
-  { id: "S4", dimension: "style", title: "形状", source: "基准图的风格说明；ui-standard 第 2、4 条", check: "圆角只有三档；除聊天输入框外没有阴影；没有渐变和毛玻璃；分隔只用 1px 细线或底色" },
+  { id: "S4", dimension: "style", title: "形状", source: "基准图的风格说明；ui-standard 第 2、4 条", check: "圆角只有 4px 一档（嵌在 4px 控件里的部件 2px，点和单选圈是圆的）；线一律 1px（结构线和控件线两种暖墨色），栏与栏靠底色和 6px 缝分开、不画线；不框套框，标签和行内代码是平的色块；立体只在按钮、选中格、输入框、浮层和弹窗上，卡片和事件条是平的；没有毛玻璃、发光和按钮以外的渐变" },
   { id: "S5", dimension: "style", title: "疏密", source: "基准图的风格说明", check: "导航栏紧凑、阅读区宽裕，过程细节默认收起；不要求留白占比和基准图一样，更通透更好；同类区域的行高或内边距比基准图压缩一半以上、文字挤成一团记 P1，空得说不出理由记 P2" },
   { id: "S6", dimension: "style", title: "语气", source: "ui-standard 第 3、13、14 条；frontend-rules 第 2 条", check: "外壳用英文、句首大写；状态词是 Working… 这一套；不用“·”“|”“/”拼接；没有解释性的灰色小字" },
 

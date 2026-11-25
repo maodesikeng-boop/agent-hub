@@ -6,6 +6,10 @@ The web workbench moves to one layout and one visual language. A fixed honey-yel
 
 **Revision after review.** On 2026-11-23 the user approved this plan, chose (a) for both open choices, and asked for changes that override the control styling in section 3. Button icons, switches, select arrows, and button and frame borders drop the pixel corners and pixel icons for smooth lines and plain borders. Usage shows as an hourglass, and device icons follow the device type for macOS, Windows, Linux, iPhone, and Android. The first implementation step rewrites the affected parts of section 3 and the UI standard table. The review also adds work on decision cards, the settings pages, and the usage popover.
 
+**Revision after release.** On 2026-11-24 the user reviewed the shipped workbench and asked for one small radius, even line weights, and regions parted by tone instead of lines. `docs/ui-standard.md` now defines the result and overrides the borders, corners, color tokens, and selection style in section 3. The PM column sits on the cream frame, the conversation and the side panel are white sheets 6px apart, every line is 1px, and every corner is 4px.
+
+**Revision: wood shell.** On 2026-11-25 the user approved a wood shell that replaces the honey and cream zones, and `docs/ui-standard.md` sections 2.4 and 16 define it. The window is frame wood with a 40px top bar that holds the macOS traffic lights; the rail sits on the wood without a traffic-light inset; the PM column sits on year-ring wood joined to the conversation sheet; a 4px gap of wood comes before the side panel; one inlay rim surrounds the panels; corners are 12, 11, 8, and 4px; and buttons are flat.
+
 ## For the user
 
 ### Files to review
@@ -86,7 +90,7 @@ Measurements were taken on `main` at `60fc1413`. Searches used `grep -rn` over `
 - [Measured] The gear opens Settings on `Computers` whenever computers are managed, because `initialSection` falls back to it (`src/web/components/SettingsDialog.tsx:57`).
 - [Measured] `pnpm build` produces a main chunk of 1,299.56 kB, 398.24 kB gzip.
 - [Measured] `react-resizable-panels` 4.24.1, published 2026-11-18 under MIT with React 18 or 19 as peers, exports `Group`, `Panel`, and `Separator`. I read its type definitions after `npm pack`. Panel sizes accept pixels and `rem`. Double-clicking a separator resizes the adjacent panel to its `defaultSize`, and `disableDoubleClick` opts out. Separators carry the ARIA `separator` role and move with the arrow keys, and `groupResizeBehavior: "preserve-pixel-size"` keeps a panel's width when the window resizes. Bundling only those three exports with esbuild, React external, gives 48,261 bytes minified and 16,204 bytes gzip. The shadcn `resizable` registry item wraps the same package at `^4`.
-- [Measured] Every proposed text color passes WCAG AA on its surface, checked with the WCAG relative-luminance formula: `#75561b` on `#fff4cc` is 6.14:1, `#6f6862` on `#f7f4ed` is 4.99:1, `#8a5a00` on `#fff6d6` is 5.48:1, `#4a2e00` on `#ffcb3d` is 8.24:1, and white on the grapefruit send key `#c83220` is 5.34:1.
+- [Measured] Every proposed text color passes WCAG AA on its surface, checked with the WCAG relative-luminance formula: `#725317` on `#fcd771` is 5.09:1, `#6f6862` on `#f7f4ed` is 4.99:1, `#8a5a00` on `#fff6d6` is 5.48:1, `#4a2e00` on `#f9bd01` is 7.32:1, and white on the grapefruit send key `#c83220` is 5.34:1.
 - [Inferred] Changing tokens and primitives restyles most screens at once, but 16 test files assert today's classes (`rounded-xl`, `bg-jelly`, `surface-chat`, `composer-frame`, `w-75`, `w-80`) and change with the code.
 
 Older complaints and what happens to them:
@@ -125,17 +129,17 @@ Color tokens, replacing the zinc neutrals, fruit tints, and jelly highlights:
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `--rail` | `#ffcb3d` | Rail and phone tab bar |
-| `--rail-shade` | `#e9a417` | Rail divider, sheet outline, handle bar on hover |
-| `--rail-hover` | `#ffd966` | Rail cell hover |
+| `--rail` | `#f9bd01` | Rail and phone tab bar |
+| `--rail-shade` | `#e39600` | Rail divider, sheet outline, handle bar on hover |
+| `--rail-hover` | `#f9cb4b` | Rail cell hover |
 | `--rail-ink` | `#4a2e00` | Rail text and icons, badges, the primary button and text links outside a PM |
 | `--rail-ink-soft` | `#6e4a00` | Offline computer labels |
 | `--rail-outline` | `#8a5300` | Selected rail cell, handle grip |
-| `--list` | `#fff4cc` | PM column, settings dialog tabs, phone Projects page |
+| `--list` | `#fcd771` | PM column, settings dialog tabs, phone Projects page |
 | `--list-edge` | `#efd27d` | PM column header line and the line beside the column |
-| `--list-hover` | `#ffedb0` | PM row hover |
+| `--list-hover` | `#f9ce55` | PM row hover |
 | `--list-field` | `#fffbeb` | Search field on cream |
-| `--list-ink`, `--list-ink-soft` | `#3b2600`, `#75561b` | PM column text |
+| `--list-ink`, `--list-ink-soft` | `#3b2600`, `#725317` | PM column text |
 | `--select-line` | `#e0b03c` | Selected row outline on cream |
 | `--background` | `#ffffff` | Conversation, dialogs, cards |
 | `--panel` | `#f7f4ed` | Side panel, phone Worker and Profile pages, phone Settings background |
@@ -183,7 +187,7 @@ How it is wired:
 - The PM column, conversation, and side panel are three panels in one `PaneGroup`. The column and the panel keep their pixel widths when the window resizes, so the conversation absorbs the change.
 - A panel's `defaultSize` is its remembered width from `usePaneWidths`. The handle turns off the library's double-click and calls the store's `reset`, so a reset clears the stored width and returns to `16.5rem` or `27.5rem`.
 - Widths are stored in `rem` under the `agent-hub.paneWidths` key in `localStorage`, one entry per browser profile, which is one per device for the native apps. Storing `rem` keeps proportions when the interface scale changes. Values are clamped on read, and only user drags are written.
-- The handle draws a 2px line in the column's edge color: `--list-edge` beside the PM column and `--border-strong` beside the side panel. On hover or keyboard focus it becomes a 4px `--rail-shade` bar with a `12x32` honey grip, outlined in `--rail-outline` with three 2px dots. While dragging, the bar darkens to `#c98800`. At a limit the cursor becomes a one-way arrow.
+- The handle draws a 2px line in the column's edge color: `--list-edge` beside the PM column and `--border-strong` beside the side panel. On hover or keyboard focus it becomes a 4px `--rail-shade` bar with a `12x32` honey grip, outlined in `--rail-outline` with three 2px dots. While dragging, the bar darkens to `#c37a00`. At a limit the cursor becomes a one-way arrow.
 
 #### Narrow windows
 
@@ -199,8 +203,8 @@ Columns give way in this order. First the PM column and the side panel shrink to
 
 | Interface scale | Four columns side by side | Strip and panel | Panel covers conversation | PM column full width with the panel closed |
 | --- | --- | --- | --- | --- |
-| `Default` | 1146px and wider | 998 to 1145px | below 998px | 784px and wider |
-| `Large`, the default | 1253px and wider | 1091 to 1252px | below 1091px | 857px and wider |
+| `Default`, the default | 1142px and wider | 994 to 1141px | below 994px | 778px and wider |
+| `Large` | 1249px and wider | 1087 to 1248px | below 1087px | 851px and wider |
 
 #### Side panel and routes
 
@@ -265,7 +269,7 @@ Each implementation step edits its sections of `docs/ui-standard.md` before touc
 | 13. Fonts, numbers, and list rows | `3.25rem` PM rows with `2.25rem` avatars and `text-body` names | 3 |
 | 14. Interaction states and motion | Drop `.tint-fade` and `--motion-focus` | 2 |
 | 15. Markdown, code blocks, and charts | Code blocks, charts, and images drop `rounded-xl` for plain 2px borders and square corners | 2 |
-| 16. Shell layout | Rail, sheet, PM column or strip, conversation, side panel, resize handles, tiers, macOS traffic lights over the rail | 3 |
+| 16. Shell layout | Rail, sheet, PM column or strip, conversation, side panel, resize handles, tiers, macOS traffic lights in the top bar | 3 |
 | 17. Message stream | `ThreadCard` replaces Worker speech bubbles. Plain 2px ask cards and user bubbles | 2 |
 | 19. Touch screens and safe areas | The hover-shortcut amendment | 3 |
 | 20. Mobile shell | Tab bar, computer switcher drawer, usage in Settings, profile drill-down pages | 3 |
@@ -280,7 +284,7 @@ Each implementation step edits its sections of `docs/ui-standard.md` before touc
 3. **Stable front-end references.** `projectListOf` caches its result per `entries` array in a `WeakMap`, so the PM column's `memo` boundary holds while the list is unchanged. `railComputersOf` and `quotaMeterOf` cache per input array the same way.
 4. **Measured verification.** The PR records `pnpm build` chunk sizes before and after. The library should add about 48 kB minified and 16 kB gzip, 3.7% of the current main chunk. Thread cards change how Worker reports render, so the PR also records `scripts/bench-message-list.ts` before and after, following `.agents/skills/benchmark-checklist/SKILL.md`.
 
-New constants in `src/shared/limits.ts` are layout thresholds rather than collection caps, so one-month sizing does not apply.
+New constants in `src/web/limits.ts` (only the web workbench reads them) are layout thresholds rather than collection caps, so one-month sizing does not apply.
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
@@ -289,14 +293,14 @@ New constants in `src/shared/limits.ts` are layout thresholds rather than collec
 | `SHELL_LIST_REM` | `{ min: 13.75, default: 16.5, max: 25 }` | PM column, 220, 264, and 400px |
 | `SHELL_PANEL_REM` | `{ min: 22.5, default: 27.5, max: 45 }` | Side panel, 360, 440, and 720px |
 | `SHELL_CHAT_MIN_REM` | `30` | Conversation minimum, 480px |
-| `SHELL_FRAME_PX` | `10` | Sheet inset and outline beside the rail |
-| `SHELL_SEAM_PX` | `2` | One column line |
+| `SHELL_FRAME_PX` | `6` | The frame's inset around the panels (top, right, and bottom) |
+| `SHELL_GAP_PX` | `4` | The gap of wood before the side panel; the PM column and the conversation join with no gap |
 
 ### 5. Cross-vendor and cross-platform unification
 
 The shell has no vendor-specific code. The rail's usage meter reads `quotaUsage()` in `src/web/selectors.ts`, which walks every vendor in `src/shared/vendors.ts` that declares a `quota` spec, and shows the single fullest window. A future vendor appears in the meter by declaring `quota` in its own `src/vendors/<vendor>/` spec, the file it already implements. Thread card status words come from `workerStatusOf` in `src/web/worker-status.ts`, which is vendor-neutral.
 
-Computer cells reuse `PlatformIcon` from `src/web/components/DeviceBadges.tsx`, which already covers `darwin`, `win32`, and `linux`. In the native macOS app the rail starts below `--macos-traffic-lights-height` and acts as the window drag region. The Windows Tauri shell draws a native title bar, and Linux runs in a browser, so neither needs anything extra. Pins are SQLite rows, identical on all three platforms, and nothing in `src/daemon/platform/index.ts` changes.
+Computer cells reuse `PlatformIcon` from `src/web/components/DeviceBadges.tsx`, which already covers `darwin`, `win32`, and `linux`. In the native macOS app the traffic lights sit centered on the 40px wood top bar, and the top bar and empty rail chrome act as the window drag region. The Windows Tauri shell draws a native title bar, and Linux runs in a browser, so neither needs anything extra. Pins are SQLite rows, identical on all three platforms, and nothing in `src/daemon/platform/index.ts` changes.
 
 ### 6. Deletions
 
