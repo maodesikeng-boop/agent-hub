@@ -45,5 +45,5 @@ export function isWorkerPmNoticeActionable(db: Db, messageId: MessageId): boolea
   if (step === undefined) return notice.status !== "ended" || launchFailed;
   if (step.latest !== notice.worker_id) return false;
   if (launchFailed) return step.graph_status === "active" && step.status === "waiting" && step.waiting_for === "pm";
-  return notice.completed !== 1 || step.status === "done";
+  return notice.completed !== 1 || (step.graph_status === "active" && step.status === "done");
 }

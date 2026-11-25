@@ -33,7 +33,7 @@ describe("PM notices from superseded Workers", () => {
     const { id: graphId } = f.hub("graph.create", { specJson: '{"title":"Retry","nodes":[{"key":"fix","title":"Fix"}]}' }).data.graph;
     const start = () => f.hub("worker.start", { node: "fix", graphId, task: "Fix the problem", noWorktree: true, maxTimeMs: MIN_WORKER_MAX_TIME_MS }).data.worker;
     const node = () => f.hub("graph.show", { graphId }).data.graph.nodes[0];
-    return { start, node };
+    return { graphId, start, node };
   }
 
   const error = { subtype: "failed", message: "You've hit your 5-hour limit · resets 7:10pm (Asia/Shanghai)" };
@@ -175,6 +175,24 @@ describe("PM notices from superseded Workers", () => {
     start();
     expect(f.ledger.isWorkerPmNoticeActionable?.(report.id)).toBe(false);
     send.mockClear();
+    await deliver(report.id);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("drops a queued completed-step question after the graph is delivered", async () => {
+    const { graphId, start } = startGraph();
+    const worker = start();
+    f.begin(worker.id);
+    f.emit(worker.id, {
+      type: "agent.text", uuid: "completed-before-delivery", at: f.now(),
+      text: `${REPORT_START}\n状态: 做完了\n摘要: Fixed\n问题: Confirm rollout date?\n${REPORT_END}`,
+    });
+    f.end(worker.id);
+    const report = notices(worker.id).find((notice) => notice.event === "report")!;
+    expect(f.ledger.isWorkerPmNoticeActionable?.(report.id)).toBe(true);
+    f.hub("graph.finish", { graphId, summary: "Delivered the fix" });
+    expect(f.ledger.isWorkerPmNoticeActionable?.(report.id)).toBe(false);
+    const { deliver, send } = deliverThrough();
     await deliver(report.id);
     expect(send).not.toHaveBeenCalled();
   });
