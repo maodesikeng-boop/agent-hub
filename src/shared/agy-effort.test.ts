@@ -130,3 +130,12 @@ describe("老数据和右栏的显示：模型 + 档位", () => {
     expect(agentEffortOf("claude", "opus", "max")).toBe("max");
   });
 });
+
+describe("per-model effort support", () => {
+  it.todo("rejects gemini-4-neon with xhigh when the live agy catalog lists neon with low, medium, and high, naming those options");
+  it.todo("accepts a known model with an effort it lists, and a full ID whose suffix it lists");
+  it.todo("rejects a full ID whose suffix the base model does not list");
+  it.todo("passes a model neither the catalog nor the bundled list knows");
+  it.todo("applies the same per-model check to vendors that pass effort as a separate flag");
+  it.todo("rejects the unsupported pair at worker start, graph step validation, and PM default settings");
+});

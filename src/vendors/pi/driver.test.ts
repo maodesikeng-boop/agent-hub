@@ -676,3 +676,8 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(h.rpcIn().filter((m) => m.type === "prompt")).toHaveLength(0);
   });
 });
+
+describe("PiDriver daemon shutdown is not a user stop", () => {
+  it.todo("requeues mid-turn user messages that pi did not echo when the shutdown turn ends aborted");
+  it.todo("does not cancel unacknowledged mid-turn user messages whose write fails during shutdown");
+});

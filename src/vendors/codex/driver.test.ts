@@ -2567,3 +2567,8 @@ describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
   });
 });
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
+
+describe("CodexDriver daemon shutdown is not a user stop", () => {
+  it.todo("requeues mid-turn user messages that codex did not echo when the shutdown turn completes as interrupted");
+  it.todo("does not cancel unacknowledged mid-turn user messages whose write fails during shutdown");
+});

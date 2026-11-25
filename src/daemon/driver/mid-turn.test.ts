@@ -442,3 +442,8 @@ describe("不和别的机制搅在一起", () => {
     expect(t.of("session.exited")).toEqual([expect.objectContaining({ reason: "idle", messageIds: [] })]);
   });
 });
+
+describe("daemon shutdown is not a user stop (Claude)", () => {
+  it.todo("requeues a user batch that claude reports as cancelled in command_lifecycle while the process closes for shutdown");
+  it.todo("cancels the same batch when the user stopped the turn");
+});

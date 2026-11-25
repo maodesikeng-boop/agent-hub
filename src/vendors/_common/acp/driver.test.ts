@@ -1588,3 +1588,7 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
 });
 import { fileURLToPath } from "node:url";
 import { wrapScriptAsPlatformCli } from "../../../../test/fake-cli-shim.ts";
+
+describe("ACP daemon shutdown keeps every in-flight message", () => {
+  it.todo("reports every in-flight batch in the shutdown turn.ended or session.exited event and emits no message.cancelled");
+});

@@ -1012,3 +1012,8 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(takeoverMsg.split("补跑边界用例")).toHaveLength(2);
   });
 });
+
+describe("manual graph done ends the step's parked Worker", () => {
+  it.todo("ends an implementation Worker parked by a deviation report when the PM runs graph done, like an automatic completion");
+  it.todo("refuses graph done while the step's Worker is still running");
+});

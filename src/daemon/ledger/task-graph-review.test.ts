@@ -419,3 +419,9 @@ describe("审查步骤只查不修", () => {
     expect(docs.review_json).toBeNull();
   });
 });
+
+describe("manual graph done after a FAIL verdict", () => {
+  it.todo("ends the review Worker parked by FAIL when the PM releases the step with graph done");
+  it.todo("keeps the PM's done note and unlocks downstream steps as before");
+  it.todo("queues no stale PM notice from the ended review Worker");
+});

@@ -26,6 +26,8 @@ export interface StepRow {
 const MAX_STORED_CHARS = 300;
 const TURN_FAILED_REASON = "这一轮出错了";
 const RESTART_INTERRUPTED_REASON = "进程重启，这一轮被打断了";
+/** Stored as the turn_ended summary when daemon shutdown interrupted the turn; restart recovery looks for it. */
+export const SHUTDOWN_INTERRUPTED_REASON = "守护进程关闭打断了这一轮，重启后会重发";
 
 const clip = (text: string) => {
   const chars = [...text];
@@ -152,8 +154,17 @@ export function createLedgerSteps(ctx: LedgerContext) {
     }
   };
 
+  /**
+   * Records a turn that failed before the vendor opened it, such as a launch the vendor CLI rejected.
+   * Postcondition: the session's latest turn_ended row is "failed" with the given reason; an open turn is ended
+   * with that reason instead of starting a new one. Non-Worker sessions are ignored.
+   */
+  const recordFailedStart = (_session: AgentSessionRow, _reason: string): void => {
+    throw new Error("Not implemented");
+  };
+
   const rows = (sessionId: SessionId): StepRow[] =>
     db.all<StepRow>("SELECT * FROM session_steps WHERE session_id = ? ORDER BY id DESC LIMIT ?", sessionId, SESSION_STEPS_KEEP).reverse();
 
-  return { afterDriverEvent, rows, openTurn, lastBoundary };
+  return { afterDriverEvent, recordFailedStart, rows, openTurn, lastBoundary };
 }

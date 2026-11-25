@@ -90,6 +90,16 @@ function assertNotRunning(node: TaskNodeDbRow, nodeKey: TaskNodeKey, graphId: Ta
   );
 }
 
+/**
+ * Workers that `graph done` must end so a manual release matches an automatic step completion.
+ * Postcondition: returns the step's latest Worker when it is still open and not running (for example a reviewer
+ * parked by a FAIL verdict, or an implementer parked by a deviation report); returns an empty list otherwise.
+ * Earlier Workers on the step and Workers already ended are never returned.
+ */
+export function parkedStepWorkersOf(_db: Db, _node: Pick<TaskNodeDbRow, "worker_ids_json" | "status">): WorkerId[] {
+  throw new Error("Not implemented");
+}
+
 export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubArgs<"graph.done">, context?: HubCallContext): HubResult<"graph.done"> {
   g.persona.assertPmNotArchived(caller.pmId);
   const nodeKey = validateNodeKey(args.nodeKey);

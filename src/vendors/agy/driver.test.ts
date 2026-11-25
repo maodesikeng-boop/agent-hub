@@ -2384,3 +2384,8 @@ it("冷启动 prepareLaunch 期间 isBusy 为真；end() 介入后抛 session_en
   expect(t.argvs()).toHaveLength(0);
 });
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
+
+describe("daemon shutdown is not a user stop", () => {
+  it.todo("requeues the first brief when agy answers the shutdown SIGINT with an interrupted result before taking the input");
+  it.todo("still cancels the untaken brief when a user stop was pending before shutdown");
+});

@@ -107,6 +107,22 @@ export function splitEffortSuffix(id: string, efforts: readonly string[]): { bas
   return efforts.includes(effort) ? { base: id.slice(0, dash), effort } : null;
 }
 
+/**
+ * Thinking levels the vendor accepts for one model.
+ * Postcondition: returns the model's effort list from the catalog when it lists the model, else from the vendor's
+ * bundled list; for vendors that encode effort in the model ID, a full ID such as `gemini-4-argon-high` is looked up
+ * by its base model. Returns null when neither list knows the model or the entry has no effort list, so callers
+ * cannot reject what they cannot verify.
+ */
+export function modelEffortsOf(_vendor: AgentVendor, _model: string | null, _catalog?: ModelCatalog | null): readonly string[] | null {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Postcondition: returns null when effort is null or compatible with model. Rejects an effort that differs from the
+ * one already encoded in the model ID, and an effort missing from `modelEffortsOf` for a known model; the rejection
+ * names the model and lists the efforts it accepts. Models `modelEffortsOf` does not know pass unchanged.
+ */
 export function checkModelEffort(
   vendor: AgentVendor,
   model: string | null,
