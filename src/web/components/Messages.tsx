@@ -27,8 +27,8 @@ import { errorLine, errorTitle, formatTime, workerLineParts } from "../format.ts
 import { cn } from "../lib/utils.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
-import { workedFor } from "../step-labels.ts";
 import { describeSystemEvent, type EventFamily, type EventIconName } from "../system-events.ts";
+import { turnProgress } from "../turn-progress.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { AskCard } from "./AskCard.tsx";
@@ -37,6 +37,7 @@ import { Avatar } from "./Avatar.tsx";
 import type { SlimeLook } from "../../shared/slimes.ts";
 import { DeliverableFiles } from "./Deliverables.tsx";
 import { ThreadCard } from "./ThreadCard.tsx";
+import { TurnProgress } from "./TurnProgress.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -162,61 +163,6 @@ export const AgentText = memo(function AgentText({
   );
 });
 
-function WorkerLineButton({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
-  const { title, state, detail } = workerLineParts(line);
-  return (
-    <button
-      type="button"
-      aria-label={[title, state, detail].filter((part) => part !== "").join(" ")}
-      className={cn(TEXT_BUTTON, "inline-flex flex-wrap gap-x-2 text-left [overflow-wrap:anywhere]")}
-      onClick={() => onOpen(line.workerConversationId)}
-    >
-      <span className="text-foreground">{title}</span>
-      <span>{state}</span>
-      {detail !== "" && <span>{detail}</span>}
-    </button>
-  );
-}
-
-function WorkStep({ message, onOpenWorker }: { message: Message; onOpenWorker: MessageActions["onOpenWorker"] }) {
-  const line = workerEventOf(message);
-  if (line) {
-    return (
-      <li>
-        <WorkerLineButton line={line} onOpen={onOpenWorker} />
-      </li>
-    );
-  }
-  if (message.sender === "system") return <li className="[overflow-wrap:anywhere]">{systemNoticeText(message)}</li>;
-  return <li className="font-mono [overflow-wrap:anywhere]">{message.text}</li>;
-}
-
-function WorkLine({ label, work, onOpenWorker }: { label: React.ReactNode; work: Message[]; onOpenWorker: MessageActions["onOpenWorker"] }) {
-  const [open, setOpen] = useState(false);
-  if (work.length === 0) {
-    return (
-      <div className={SECONDARY} data-work-line>
-        {label}
-      </div>
-    );
-  }
-  return (
-    <Collapsible open={open} onOpenChange={setOpen} data-work-line>
-      <CollapsibleTrigger className={cn("group inline-flex items-center gap-1", TEXT_BUTTON, SECONDARY)}>
-        {label}
-        <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <ul className="mt-1.5 mb-1 space-y-1 border-l border-border pl-3 text-xs leading-relaxed text-muted-foreground">
-          {work.map((m) => (
-            <WorkStep key={m.id} message={m} onOpenWorker={onOpenWorker} />
-          ))}
-        </ul>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
 export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -274,15 +220,17 @@ export const TurnView = memo(
     turn,
     identity,
     status,
+    stepStartedAt = null,
     streamingText,
     actions,
     highlightId,
     revertedChanges,
     leanReports = false,
   }: {
-    turn: Pick<Turn, "work" | "parts" | "startedAt" | "endedAt">;
+    turn: Pick<Turn, "work" | "checklists" | "parts" | "startedAt" | "endedAt">;
     identity: AgentIdentity;
     status?: React.ReactNode;
+    stepStartedAt?: number | null;
     streamingText?: string | null;
     actions: MessageActions;
     highlightId?: MessageId | null;
@@ -294,11 +242,20 @@ export const TurnView = memo(
     const texts = turn.parts.filter((m) => m.sender === "agent");
     const lastText = texts.at(-1);
     const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
+    const progress = turnProgress(turn.work, turn.checklists);
     return (
       <div className="mt-6 flex flex-col [[data-list-head]>&]:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
         <AgentHead identity={identity} working={running} />
         <div className="flex flex-col gap-2.5">
-          {!running && turn.work.length > 0 && <WorkLine label={workedFor(turn.endedAt - turn.startedAt)} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
+          {(!running || status != null) && (
+            <TurnProgress
+              progress={progress}
+              status={status ?? null}
+              stepStartedAt={stepStartedAt}
+              workedForMs={turn.endedAt - turn.startedAt}
+              onOpenWorker={actions.onOpenWorker}
+            />
+          )}
           {turn.parts.map((m) =>
             m.sender === "agent" ? (
               <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} leanReports={leanReports} />
@@ -313,7 +270,6 @@ export const TurnView = memo(
               </div>
             </article>
           )}
-          {running && status != null && <WorkLine label={status} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
           {!running && lastText && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
               <CopyButton text={texts.map((m) => m.text).join("\n\n")} />
@@ -328,9 +284,11 @@ export const TurnView = memo(
     prev.turn.startedAt === next.turn.startedAt &&
     prev.turn.endedAt === next.turn.endedAt &&
     sameList(prev.turn.work, next.turn.work) &&
+    sameList(prev.turn.checklists, next.turn.checklists) &&
     sameList(prev.turn.parts, next.turn.parts) &&
     sameIdentity(prev.identity, next.identity) &&
     prev.status === next.status &&
+    prev.stepStartedAt === next.stepStartedAt &&
     prev.streamingText === next.streamingText &&
     prev.actions === next.actions &&
     prev.highlightId === next.highlightId &&

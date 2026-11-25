@@ -107,6 +107,7 @@ export default defineVendor({
       web_fetch: "web_fetch",
     },
   },
+  checklist: { sources: ["todo_tool"] },
   skillSignals: {
     // read output lines are 'N: <text>'.
     outputField: "content",

@@ -48,7 +48,7 @@ describe("selectors：Worker 超时静默触发消息过滤", () => {
     expect(visible.map((m) => m.id)).toEqual([1, 2, 11, 12]);
     expect(visible.some((m) => m.id === 10)).toBe(false);
 
-    const grouped = groupMessages(all);
+    const { items: grouped } = groupMessages(all);
     // 渲染流中不包含超时触发消息本身，但包含用户消息、第一轮 PM 回复、以及超时唤醒后 PM 的新一轮回复（含折叠的步骤与正文）
     expect(grouped.some((item) => item.kind === "message" && item.message.id === 10)).toBe(false);
     const turnReplies = grouped.filter((item): item is Extract<typeof item, { kind: "turn" }> => item.kind === "turn");

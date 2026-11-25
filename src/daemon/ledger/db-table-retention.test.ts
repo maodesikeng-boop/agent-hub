@@ -68,7 +68,7 @@ const count = (table: string, where = "1 = 1", ...params: (string | number)[]): 
   db.get<{ n: number }>(`SELECT count(*) AS n FROM ${table} WHERE ${where}`, ...params)!.n;
 
 describe("createDbTableRetention", () => {
-  it("purges PM conversation kind='tool' messages past PM_TOOL_MESSAGE_RETENTION_MS or above PM_TOOL_MESSAGES_MAX_PER_CONV without deleting text, ask, worker, or system messages", () => {
+  it("purges PM conversation process messages past PM_TOOL_MESSAGE_RETENTION_MS or above PM_TOOL_MESSAGES_MAX_PER_CONV without deleting text, ask, worker, or system messages", () => {
     const oldAt = T0 - PM_TOOL_MESSAGE_RETENTION_MS - 1_000;
     const freshAt = T0 - 1_000;
     db.exec("BEGIN");
@@ -93,25 +93,25 @@ describe("createDbTableRetention", () => {
       oldAt,
       oldAt,
     );
-    // 5 old PM tool rows + (PM_TOOL_MESSAGES_MAX_PER_CONV + 25) fresh PM tool rows.
+    // Mix checklist and tool rows so neither kind has enough rows to exceed the cap on its own.
     for (let i = 0; i < 5; i++) {
       db.run(
-        "INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (?, ?, 'agent', 'tool', 'Read', ?, ?, ?)",
-        pmConvId, pmSessionId, `old-tool:${i}`, oldAt + i, oldAt + i,
+        "INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (?, ?, 'agent', ?, 'Read', ?, ?, ?)",
+        pmConvId, pmSessionId, i % 2 === 0 ? "checklist" : "tool", `old-tool:${i}`, oldAt + i, oldAt + i,
       );
     }
     for (let i = 0; i < PM_TOOL_MESSAGES_MAX_PER_CONV + 25; i++) {
       db.run(
-        "INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (?, ?, 'agent', 'tool', 'Read', ?, ?, ?)",
-        pmConvId, pmSessionId, `fresh-tool:${i}`, freshAt + i, freshAt + i,
+        "INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (?, ?, 'agent', ?, 'Read', ?, ?, ?)",
+        pmConvId, pmSessionId, i % 2 === 0 ? "checklist" : "tool", `fresh-tool:${i}`, freshAt + i, freshAt + i,
       );
     }
     db.exec("COMMIT");
 
     const res = retention.purgePmToolMessagesBatch(T0, 1_000);
     expect(res).toEqual({ rows: 30, more: false });
-    expect(count("messages", "conversation_id = ? AND kind = 'tool'", pmConvId)).toBe(PM_TOOL_MESSAGES_MAX_PER_CONV);
-    expect(count("messages", "conversation_id = ? AND kind != 'tool'", pmConvId)).toBe(4);
+    expect(count("messages", "conversation_id = ? AND kind IN ('tool', 'checklist')", pmConvId)).toBe(PM_TOOL_MESSAGES_MAX_PER_CONV);
+    expect(count("messages", "conversation_id = ? AND kind NOT IN ('tool', 'checklist')", pmConvId)).toBe(4);
     expect(count("messages", "conversation_id = ? AND kind = 'tool'", workerConvId)).toBe(1);
   });
 

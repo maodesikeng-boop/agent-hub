@@ -44,8 +44,11 @@ export function flushBufferedTexts(host: PiDriverHost, st: SessionState, at: num
   }
 }
 
-function emitToolOnce(host: PiDriverHost, st: SessionState, toolId: string, name: string, input: unknown, at: number): void {
-  if (st.emittedToolIds.has(toolId)) return;
+function emitToolOnce(host: PiDriverHost, st: SessionState, toolId: string, name: string, input: unknown, at: number, pending = true): void {
+  if (st.emittedToolIds.has(toolId)) {
+    if (!pending) host.emit(st.id, { type: "agent.tool_running", toolUseId: toolId, at });
+    return;
+  }
   st.emittedToolIds.add(toolId);
   host.emit(st.id, {
     type: "agent.tool",
@@ -53,6 +56,7 @@ function emitToolOnce(host: PiDriverHost, st: SessionState, toolId: string, name
     toolUseId: toolId,
     name,
     input,
+    ...(pending ? { pending: true } : {}),
     at,
   });
 }
@@ -257,7 +261,7 @@ export function onToolExecutionStart(host: PiDriverHost, st: SessionState, obj: 
   const toolId = typeof obj.toolCallId === "string" && obj.toolCallId !== "" ? obj.toolCallId : null;
   if (!toolId) return;
   const name = typeof obj.toolName === "string" ? obj.toolName : "";
-  emitToolOnce(host, st, toolId, name, obj.args ?? {}, at);
+  emitToolOnce(host, st, toolId, name, obj.args ?? {}, at, false);
 }
 
 export function onToolExecutionEnd(host: PiDriverHost, st: SessionState, obj: Record<string, unknown>, at: number): void {

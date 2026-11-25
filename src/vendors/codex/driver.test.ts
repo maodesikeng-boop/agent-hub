@@ -764,7 +764,7 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
 
     // 1. 检查启动命令参数
     const argvEntry = t.log().find((e) => e.kind === "argv");
-    expect(argvEntry?.argv).toEqual(["app-server", "--listen", "stdio://"]);
+    expect(argvEntry?.argv).toEqual(["-c", "tools.update_plan.enabled=true", "app-server", "--listen", "stdio://"]);
 
     // 2. 检查握手与请求顺序
     const rpcs = t.rpcIn();

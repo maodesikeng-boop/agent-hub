@@ -1,0 +1,2 @@
+{"type":"tool_execution_start","toolCallId":"toolu_01RkPgUrTuSt8GxDSnMqKmau","toolName":"read","args":{"path":"probe.txt","offset":1,"limit":null}}
+{"type":"tool_execution_end","toolCallId":"toolu_01RkPgUrTuSt8GxDSnMqKmau","toolName":"read","result":{"content":[{"type":"text","text":"progress-card-probe\n"}],"structuredContent":"progress-card-probe\n"},"isError":false,"durationMs":3}

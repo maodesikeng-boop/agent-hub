@@ -129,8 +129,10 @@ export default defineVendor({
       Task: "subagent",
       TodoWrite: "todo",
       update_todos: "todo",
+      updateTodos: "todo",
     },
   },
+  checklist: { sources: ["extension"] },
   skillSignals: {
     // rawOutput: read is {content}, shell is {exitCode, stdout, stderr}.
     outputField: "rawOutput",

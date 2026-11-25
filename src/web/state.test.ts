@@ -235,7 +235,7 @@ describe("groupMessages：一轮一轮", () => {
       makeMessage({ id: 4 }),
       makeToolMessage({ id: 5 }),
       makeMessage({ id: 6 }),
-    ]);
+    ]).items;
     expect(items.map((i) => i.kind)).toEqual(["message", "turn"]);
     const turn = items[1]!;
     if (turn.kind !== "turn") throw new Error("not a turn");
@@ -252,7 +252,7 @@ describe("groupMessages：一轮一轮", () => {
       makeMessage({ id: 3 }),
       makeSystemMessage({ id: 4, event: { event: "schedule.run", scheduleId: 1, name: "日报", scheduledAt: 0, catchUp: false } }),
       makeToolMessage({ id: 5 }),
-    ]);
+    ]).items;
     expect(items.map((i) => i.kind)).toEqual(["turn", "message", "turn", "message", "turn"]);
     const first = items[0]!;
     expect(first.kind === "turn" && first.endedAt - first.startedAt).toBe(0);
@@ -265,7 +265,7 @@ describe("groupMessages：一轮一轮", () => {
       makeSystemMessage({ id: 3 }),
       makeMessage({ id: 4 }),
       makeSystemMessage({ id: 5 }),
-    ]);
+    ]).items;
     expect(items.map((i) => (i.kind === "turn" ? `turn:${i.parts.map((m) => m.id).join(",")}` : `message:${i.message.id}`))).toEqual([
       "message:1",
       "turn:2,3,4",
@@ -274,7 +274,7 @@ describe("groupMessages：一轮一轮", () => {
   });
 
   it("换新会话：交接请求排队时就来了、压到换代才交给新会话的 Worker 汇报，显示在分隔线下面；旧会话处理的留在上面（审查 #113 第 8 条）", () => {
-    const shown = (items: ReturnType<typeof groupMessages>) => items.map((i) => (i.kind === "turn" ? `turn:${i.parts.map((m) => m.id).join(",")}` : `message:${i.message.id}`));
+    const shown = (items: ReturnType<typeof groupMessages>["items"]) => items.map((i) => (i.kind === "turn" ? `turn:${i.parts.map((m) => m.id).join(",")}` : `message:${i.message.id}`));
     const items = groupMessages([
       // 用户点开新会话时项目经理在忙（1、2 那一轮，旧会话）；交接请求 3 排着，这时来了 Worker 汇报 4（压着）
       makeUserMessage({ id: 1, sessionId: 1, status: "replied" }),
@@ -285,7 +285,7 @@ describe("groupMessages：一轮一轮", () => {
       makeMessage({ id: 6, sessionId: 1, meta: { handover: true } }),
       makeSystemMessage({ id: 7, text: "交接", event: { event: "session.renewed", sessionId: 2, fromSessionId: 1, turnStartId: 5 } }),
       makeMessage({ id: 8, sessionId: 2 }),
-    ]);
+    ]).items;
     expect(shown(items)).toEqual(["message:1", "turn:5", "message:7", "message:4", "turn:8"]);
   });
 });

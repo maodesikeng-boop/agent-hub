@@ -19,6 +19,7 @@ import type {
   ToolCallUpdate,
   ToolKind,
 } from "@agentclientprotocol/sdk/unstable";
+import type { AcpChecklistConfig } from "./checklist.ts";
 import type {
   AgentSessionRow,
   AgentVendor,
@@ -187,6 +188,7 @@ export interface AcpTrackedToolCall {
   input: unknown;
   kind?: ToolKind | null;
   resultEmitted: boolean;
+  pending?: boolean;
 }
 
 export interface AcpDriverConfig {
@@ -212,6 +214,7 @@ export interface AcpDriverConfig {
     toolCall: ToolCall | ToolCallUpdate,
     previous?: AcpTrackedToolCall,
   ) => { name: string; input: unknown };
+  checklist?: AcpChecklistConfig;
 }
 
 export interface AcpDriverOptions extends DriverOptions {

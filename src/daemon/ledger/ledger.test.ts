@@ -1026,7 +1026,7 @@ describe("snapshot 和翻页", () => {
     expect(conv.messages[99]?.text).toBe("m104");
     expect(conv.hasMore).toBe(true);
     expect(snap.sessions).toEqual([
-      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, apiRetry: null, step: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 }, vendor: "claude", model: null, effort: null, lastEventAt: null },
+      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, apiRetry: null, step: null, stepStartedAt: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 }, vendor: "claude", model: null, effort: null, lastEventAt: null },
     ]);
 
     const page = ledger.messagesBefore(conversationId, conv.messages[0]!.id);

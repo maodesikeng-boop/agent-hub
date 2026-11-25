@@ -50,6 +50,7 @@ export interface AcpProc extends BaseProc<StartupOutcome> {
   turnSeq: number;
   textSegmentSeq: number;
   thinkingSeq: number;
+  checklistSeq: number;
   textBuffer: string;
   textBufferBytes: number;
   textMessageId: string | null;

@@ -126,7 +126,7 @@ function callingText(server: string | undefined, tool: string | undefined): stri
   return "Calling tool";
 }
 
-const ACTION_TEXT: Readonly<Record<ToolAction, (input: AgentStepInput) => string>> = {
+const ACTION_TEXT: Readonly<Record<Exclude<ToolAction, "todo">, (input: AgentStepInput) => string>> = {
   command: () => "Running command",
   read: (input) => {
     const skill = skillNameOfFile(filePathOf(input) ?? "");
@@ -139,7 +139,6 @@ const ACTION_TEXT: Readonly<Record<ToolAction, (input: AgentStepInput) => string
   web_fetch: () => "Reading web page",
   skill: (input) => loadingSkill(input.skill),
   subagent: () => "Running subagent",
-  todo: () => "Updating todos",
   tool_search: () => "Finding tools",
   connector: (input) => callingText(input.server ?? input.ServerName, input.tool ?? input.ToolName),
   connector_resource: (input) => {
@@ -151,7 +150,7 @@ const ACTION_TEXT: Readonly<Record<ToolAction, (input: AgentStepInput) => string
 
 const TOOL_ACTIONS: Readonly<Record<string, ToolAction>> = Object.assign({}, ...VENDOR_LIST.map((spec) => spec.tools?.actions ?? {}));
 
-function toolAction(name: string): ToolAction | undefined {
+export function toolAction(name: string): ToolAction | undefined {
   return Object.hasOwn(TOOL_ACTIONS, name) ? TOOL_ACTIONS[name] : undefined;
 }
 
@@ -200,6 +199,7 @@ function usingText(name: string): string {
 function describeTool(name: string, input: AgentStepInput): string {
   if (name === "") return STEP_TEXT.working;
   const action = toolAction(name);
+  if (action === "todo") return STEP_TEXT.working;
   if (action !== undefined) return ACTION_TEXT[action](input);
   if (name.startsWith(MCP_PREFIX)) return describeMcpTool(name);
   if (name.startsWith(MCP_FLAT_PREFIX) && name.length > MCP_FLAT_PREFIX.length) return callingText(undefined, name.slice(MCP_FLAT_PREFIX.length));

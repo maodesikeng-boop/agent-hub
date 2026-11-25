@@ -1,3 +1,4 @@
+import { claudeChecklistFromToolResult, claudeChecklistFromToolUse, createClaudeChecklistState } from "./checklist.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -422,6 +423,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         : null,
       capabilities: new Set(),
       toolPreviews: new StreamingToolPreviewTracker(),
+      checklist: createClaudeChecklistState(),
     };
     this.attachChildProcess(st, proc, resolveExited, () => {
       proc.readonlyGate?.dispose();
@@ -461,7 +463,16 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           if (!proc.capabilities.has("msg_lifecycle_v1") && first) this.markProcessing(st, first, at);
         } else {
           const result = parseToolResults(obj, at);
-          if (result) this.emit(st.id, result);
+          if (result) {
+            if (result.parentToolUseId === undefined) {
+              const toolUseResult = result.toolUseIds.length === 1 ? obj.tool_use_result : undefined;
+              for (const toolUseId of result.toolUseIds) {
+                const update = claudeChecklistFromToolResult(proc.checklist, toolUseId, toolUseResult);
+                if (update) this.emit(st.id, { type: "agent.checklist", uuid: `${lineUuid(obj, line)}:${toolUseId}`, update, at });
+              }
+            }
+            this.emit(st.id, result);
+          }
         }
         return;
       case "stream_event": {
@@ -474,7 +485,13 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         const row = this.row(st);
         const live = row ? st.turnUsage.observe(obj, row.usage) : null;
         if (live) this.pushUsage(st, live);
-        for (const ev of parseAssistant(obj, line, at)) this.emit(st.id, ev);
+        for (const ev of parseAssistant(obj, line, at)) {
+          if (ev.type === "agent.tool" && ev.parentToolUseId === undefined) {
+            const update = claudeChecklistFromToolUse(proc.checklist, ev);
+            if (update) this.emit(st.id, { type: "agent.checklist", uuid: `${ev.uuid}:${ev.toolUseId}`, update, at });
+          }
+          this.emit(st.id, ev);
+        }
         return;
       }
       case "rate_limit_event": {
@@ -506,6 +523,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         return;
       }
       case "result":
+        proc.checklist.pending.clear();
         this.#onResult(st, proc, obj, at);
         return;
     }
