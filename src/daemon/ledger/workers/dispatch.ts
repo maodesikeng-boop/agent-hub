@@ -15,6 +15,7 @@ import {
   probeWorkspaceForStep,
 } from "./create.ts";
 import { endOpenUpstreamIn } from "./lifecycle.ts";
+import { requireSandboxRequest } from "./sandbox.ts";
 import { newReviewJson, validMaxTimeMs, validTask } from "./text.ts";
 import type { WorkersCtx } from "./types.ts";
 
@@ -36,7 +37,10 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
   checkTargetVendorUsable(w, vendor);
   const { model, effort } = checkedModelEffort(w, vendor, input.model, input.effort);
 
-  if (!w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+  if (input.sandboxStepId === undefined && !w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+  const capabilities = input.sandboxStepId === undefined ? null : requireSandboxRequest(w, input.pmId, {
+    vendor, readonly: input.readonly, review: input.workspacePlan.kind === "review", capabilities: input.capabilities, inventory: input.context?.capabilityInventory,
+  });
 
   const card = w.projects.projectCard(project);
   const plan = input.workspacePlan;
@@ -68,6 +72,8 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
 
   const workerRecord = toWorkerRecord(worker);
   const firstMessageText = input.buildFirstMessage(session.id, inheritedPlan?.fromWorkerId ?? null, workerRecord, card);
-  kickOffWorkerIn(w, p, { worker, session, project, firstMessageText, inherited: inheritedPlan !== null, maxTimeMs });
+  kickOffWorkerIn(w, p, { worker, session, project, firstMessageText, inherited: inheritedPlan !== null, maxTimeMs,
+    sandbox: capabilities === null ? undefined : { capabilities, stepId: input.sandboxStepId ?? null },
+  });
   return workerRecord;
 }

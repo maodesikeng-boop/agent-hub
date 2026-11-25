@@ -60,6 +60,7 @@ JOIN agent_sessions s ON s.id = m.session_id
 LEFT JOIN workers w ON w.id = s.worker_id
 LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
 WHERE pa.pm_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.worker_id = w.id AND a.status = 'pending')
   AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
   AND NOT EXISTS (
     SELECT 1 FROM turn_completions c, json_each(c.event, '$.messageIds') ids

@@ -353,6 +353,32 @@ describe("ActiveTab", () => {
     expect(onOpenAsk).toHaveBeenCalledWith(88);
   });
 
+  it("opens a sandbox approval chat card even when the graph step has an old gate", () => {
+    const onOpenAsk = vi.fn();
+    const onExpandGraph = vi.fn();
+    const graph = makeGraph(7, "Desktop check", [makeNode({
+      key: "inspect", title: "Inspect Calculator", status: "waiting", waitingFor: "user",
+      gateAskMessageId: 99, gateAskPending: false,
+      sandboxApproval: { id: 8, text: "Inspect Calculator in this run." },
+    })]);
+    render(
+      <ActiveTab
+        work={activeWorkOf([graph], [])}
+        workers={[]}
+        asks={[
+          makeMessage({ id: 99, meta: { needsUser: true } }),
+          makeMessage({ id: 11, meta: { needsUser: true, sandboxApprovalRef: { approvalId: 8, workerId: 3 } } }),
+        ]}
+        onOpenWorker={vi.fn()}
+        onOpenAsk={onOpenAsk}
+        onExpandGraph={onExpandGraph}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Calculator, waiting on you" }));
+    expect(onOpenAsk).toHaveBeenCalledExactlyOnceWith(11);
+    expect(onExpandGraph).not.toHaveBeenCalled();
+  });
+
   it("shows the empty state when nothing is running", () => {
     render(
       <ActiveTab

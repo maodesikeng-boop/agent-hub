@@ -8,6 +8,7 @@ import type { TurnOutcome } from "./steps.ts";
 
 export interface WorkerStateInput {
   status: string;
+  sandboxApprovalPending?: boolean;
   notStarted: boolean;
   live: Pick<LiveSession, "activity">;
   lastTurnOutcome: TurnOutcome | null;
@@ -20,8 +21,9 @@ export interface FormatWorkerStateOptions {
 }
 
 export function formatWorkerState(input: WorkerStateInput, options?: FormatWorkerStateOptions): string {
-  const { status, notStarted, live, lastTurnOutcome, lastEventAt, now } = input;
+  const { status, sandboxApprovalPending, notStarted, live, lastTurnOutcome, lastEventAt, now } = input;
   if (status === "ended") return "已收工";
+  if (sandboxApprovalPending) return "等待沙箱确认";
   if (live.activity === "preparing" || notStarted) return "准备中";
   if (live.activity === "background") return "在等后台命令";
   if (live.activity !== "idle") return "在干活";

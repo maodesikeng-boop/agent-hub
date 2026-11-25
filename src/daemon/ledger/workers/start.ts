@@ -41,6 +41,7 @@ import { endOpenUpstreamIn, endWorkerIn, type EndedWorker } from "./lifecycle.ts
 import { isWorkerInFlight } from "./lines.ts";
 import { cancelQueuedWorkerPmNoticesIn } from "./stale-notices.ts";
 import { WORKTREE_DIRTY_NOTE, describeWorkspace, newReviewJson, notStarted, validMaxTimeMs, validTask } from "./text.ts";
+import { requireSandboxRequest } from "./sandbox.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
 type StartArgs = HubArgs<"worker.start">;
@@ -335,8 +336,9 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
   const brief = resolveStartTask(args, bindTarget, takeover);
   const maxTimeMs = validMaxTimeMs(args.maxTimeMs ?? bindTarget?.maxTimeMs ?? undefined);
   const agent = resolveStartAgent(w, caller, args, bindTarget);
-  // Every Worker requires a working OS sandbox; there is no rule-based fallback.
-  if (!w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+  const sandboxRequest = args.noOuterSandbox === true || bindTarget?.noOuterSandbox === true;
+  if (!sandboxRequest && !w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+  const computerUse = sandboxRequest ? requireSandboxRequest(w, caller.pmId, { ...agent, review: bindTarget?.review === true, inventory: context.capabilityInventory }) : null;
   const card = w.projects.projectCard(project);
   const space = resolveStartWorkspace(w, project, card, args, context, bindTarget, takeover);
   const { predecessors, endedOld } = endPredecessorsIn(w, p, takeover, bindTarget);
@@ -372,10 +374,12 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
     firstMessageText,
     inherited: space.effectiveInherit !== null,
     maxTimeMs,
+    sandbox: computerUse === null ? undefined : { capabilities: computerUse, stepId: bindTarget?.stepId ?? null },
     afterStartedLine:
       bindTarget === undefined
         ? undefined
         : () => w.options.taskGraphs?.bindWorkerStartedIn(p, bindTarget, worker.id, { vendor: agent.vendor, model: session.model, effort: session.effort }),
   });
-  return { text: startReceipt(w, worker, project, card, args, { agent, brief, space }, { bindTarget, takeover, endedOld }), data: { worker: toWorkerRecord(worker) } };
+  const text = startReceipt(w, worker, project, card, args, { agent, brief, space }, { bindTarget, takeover, endedOld });
+  return { text: computerUse === null ? text : `Worker #${worker.id}“${worker.title}”正在等用户确认取消外层沙箱，批准后才开工。`, data: { worker: toWorkerRecord(worker) } };
 }

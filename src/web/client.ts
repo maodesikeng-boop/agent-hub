@@ -1,3 +1,4 @@
+import type { DecideSandboxApprovalRequest, DecideSandboxApprovalResponse, SandboxApprovalId } from "../shared/index.ts";
 import {
   API_PATHS,
   API_REQUEST_TIMEOUT_MS,
@@ -314,6 +315,8 @@ export function createClient(device: DeviceId | null) {
     postArchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.archivePm(pmId))),
     postUnarchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.unarchivePm(pmId))),
     postRetryMessage: (messageId: MessageId) => postJson<RetryMessageResponse>(at(API_PATHS.retryMessage(messageId))),
+    postDecideSandboxApproval: (id: SandboxApprovalId, body: DecideSandboxApprovalRequest) =>
+      postJson<DecideSandboxApprovalResponse>(at(API_PATHS.decideSandboxApproval(id)), body),
     postRecheckUserBlocker: (id: UserBlockerId) => postJson<RecheckUserBlockerResponse>(at(API_PATHS.recheckUserBlocker(id))),
     postFileAction: (target: FileActionTarget, action: FileAction) => {
       const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);

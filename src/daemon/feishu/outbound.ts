@@ -64,7 +64,7 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
       if (ask.answered === true || ask.closed === true) {
         return [{ kind: "ask_settled", conversationId: message.conversationId, message }];
       }
-      return ask.blockerRef !== undefined ? [{ kind: "ask_updated", conversationId: message.conversationId, message }] : [];
+      return ask.blockerRef !== undefined || ask.sandboxApprovalRef !== undefined ? [{ kind: "ask_updated", conversationId: message.conversationId, message }] : [];
     }
     case "router.item.created":
     case "router.item.updated":
@@ -87,7 +87,7 @@ const ROUTER_COMMAND_DONE: ReadonlySet<RouterCommandRecord["status"]> = new Set(
 function isRouterSyncedAsk(message: Message): boolean {
   if (message.workerId !== null || message.kind !== "text" || message.sender !== "agent" || isHandoverTraffic(message)) return false;
   const ask = askOf(message);
-  return ask !== null && (ask.gateRef !== undefined || ask.blockerRef !== undefined);
+  return ask !== null && (ask.gateRef !== undefined || ask.blockerRef !== undefined || ask.sandboxApprovalRef !== undefined);
 }
 
 function createdMessageIntents(message: Message, ctx: FeishuProjectionContext): FeishuOutboundIntent[] {

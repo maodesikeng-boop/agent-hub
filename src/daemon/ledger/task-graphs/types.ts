@@ -109,6 +109,8 @@ export type StepWorkspacePlan =
   | { kind: "review"; branch: string; implWorktreePath: string | null };
 
 export interface WorkerBindTarget {
+  stepId?: number;
+  noOuterSandbox?: boolean;
   graphId: TaskGraphId;
   nodeKey: TaskNodeKey;
   graphTitle: string;
@@ -156,6 +158,7 @@ export interface TaskGraphWorkersBridge {
       effort: string | null;
       readonly: boolean;
       capabilities: WorkerCapabilities;
+      sandboxStepId?: number;
       maxTimeMs: number | null;
       workspacePlan: StepWorkspacePlan;
       buildFirstMessage: (
@@ -176,6 +179,7 @@ export interface TaskGraphWorkersBridge {
 
 export interface TaskGraphOptions {
   launchDir: string;
+  workerPlatform?: NodeJS.Platform;
   workers?: () => TaskGraphWorkersBridge | undefined;
   userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "blockStep" | "ofSteps">;
   onGraphFinishedIn?: (p: Pending, projectId: ProjectId) => void;

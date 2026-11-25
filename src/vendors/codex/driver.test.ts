@@ -577,6 +577,7 @@ function makeCodexHarness(
     driver?: Partial<CodexDriverOptions>;
     personaRevision?: () => number;
     capabilityFingerprint?: () => Promise<string>;
+    sandboxMode?: () => LaunchFiles["outerSandbox"];
     /** 数据目录放在临时目录下的这个子目录里（默认就是临时目录本身）：真包 OS 沙箱时，假 codex 的日志、剧本得在数据目录外。 */
     dataDirName?: string;
     /** 假 codex 启动时试着往数据目录里写这个文件（FAKE_CODEX_PROBE），结果记进日志。 */
@@ -618,6 +619,7 @@ function makeCodexHarness(
         },
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
+      if (options.sandboxMode) files.outerSandbox = options.sandboxMode();
       if (options.personaRevision) files.personaRevision = options.personaRevision();
       if (options.capabilityFingerprint) {
         files.capabilityCheck = {
@@ -1424,6 +1426,33 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
     expect(policies[0]).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
     expect(policies[1]).toMatchObject({ type: "workspaceWrite" });
     expect(policies[2]).toBeUndefined();
+  });
+
+  it("starts an approved Worker without the outer wrapper and preserves the native sandbox and driver checks", async () => {
+    const scopes: (LaunchFiles["writeScope"] | null)[] = [];
+    const t = makeCodexHarness({
+      sandboxMode: () => "vendor_only",
+      driver: {
+        platform: "darwin",
+        writeScopeSpawn: (base, scope) => {
+          scopes.push(scope);
+          return { ...base, osSandboxed: scope !== null };
+        },
+      },
+    });
+    const worker = t.addSession({ role: "worker", workerId: 3, addDirs: [join(t.dir, "state")] });
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [{
+      serverRequests: [{ id: 7, method: "item/commandExecution/requestApproval", params: {
+        itemId: "command-1", command: `touch ${join(t.dir, "state", "protected")}`, cwd: worker.cwd,
+      } }],
+    }] } satisfies FakeCodexScript));
+    await t.driver.send(worker.id, user(1, "Check the window"));
+    await t.waitFor("turn.ended");
+    expect(scopes).toEqual([null]);
+    expect(t.rpcIn().find((rpc) => rpc.method === "turn/start")?.params).toMatchObject({
+      sandboxPolicy: { type: "workspaceWrite", networkAccess: true, writableRoots: [worker.cwd] },
+    });
+    expect(t.rpcIn().find((rpc) => rpc.id === 7 && rpc.method === undefined)?.result).toEqual({ decision: "decline" });
   });
 
   it("Worker 的 turn/start 沙箱：writableRoots 只留自己的目录和数据目录外的附加目录", async () => {

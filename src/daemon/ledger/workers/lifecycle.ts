@@ -21,7 +21,7 @@ import type { PmCaller, WorkersCtx } from "./types.ts";
 
 export type EndedWorker = { ended: WorkerDbRow; interrupted: boolean; nodeNote: string | null };
 
-export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts: { notifyGraph?: boolean } & CancelWorkerPmNoticesOptions = {}): EndedWorker {
+export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts: { notifyGraph?: boolean; deliver?: string } & CancelWorkerPmNoticesOptions = {}): EndedWorker {
   clearMaxTimeIn(w, p, worker.worker_conversation_id);
   const session = workerSession(w, worker);
   const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
@@ -30,11 +30,12 @@ export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts
   const t = w.now();
   w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
   recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
+  w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
   const ended = workerRow(w, worker.id)!;
   w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
   stopQueued(w, p, ended);
   cancelQueuedWorkerPmNoticesIn(w, p, ended, opts);
-  insertLine(w, p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
+  insertLine(w, p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: opts.deliver ?? null });
   const nodeNote = opts.notifyGraph === false ? null : (w.options.taskGraphs?.onWorkerEndedIn(p, ended.id) ?? null);
   return { ended, interrupted, nodeNote };
 }
@@ -64,7 +65,7 @@ export function deliverToWorkerIn(w: WorkersCtx, p: Pending, input: DeliverInput
   const existing = w.db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", input.dedupeKey);
   if (existing !== undefined) return existing.id;
   const worker = workerRow(w, input.workerId);
-  if (worker === null || worker.status === "ended") return null;
+  if (worker === null || worker.status === "ended" || w.sandboxApprovals.isPendingForWorker(input.workerId)) return null;
   const session = workerSession(w, worker);
   const message = insertPmMessage(w, p, worker, session, input.text, input.dedupeKey);
   if (!notStarted(worker)) {
@@ -109,6 +110,7 @@ export function sendIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArg
   const maxTimeMs = validMaxTimeMs(args.maxTimeMs);
   const worker = ownWorker(w, caller.pmId, args.workerId);
   if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，要接着做请重新派一个`);
+  if (w.sandboxApprovals.isPendingForWorker(worker.id)) throw fail("conflict", "Worker 还在等用户确认沙箱，不能发消息");
   // Before work starts the first turn must be the task brief; sending now would start the session early.
   if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
   const text = validTask(args.text, "要发给 Worker 的话");
@@ -138,6 +140,7 @@ export function maxTimeIn(w: WorkersCtx, _p: Pending, caller: PmCaller, args: Hu
   const maxTimeMs = validMaxTimeMs(args.maxTimeMs);
   const worker = ownWorker(w, caller.pmId, args.workerId);
   if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，不能再改最大时间`);
+  if (w.sandboxApprovals.isPendingForWorker(worker.id)) throw fail("conflict", "Worker 还在等用户确认沙箱，尚未开始计时");
   if (!notStarted(worker) && !isWorkerInFlight(w, worker)) {
     throw fail("conflict", `Worker #${worker.id} 当前没有正在运行的一轮，发下一条时用 --max-time 指定即可`);
   }
@@ -198,6 +201,7 @@ export function endOpenWorkersIn(w: WorkersCtx, p: Pending, pmId: PmId): void {
     w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
     recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
     w.db.run("UPDATE agent_sessions SET status = 'ended', updated_at = ? WHERE id = ? AND status != 'ended'", t, session.id);
+    w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
     const ended = workerRow(w, worker.id)!;
     w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
     w.sessions.updateLive(p, session.id, idle);

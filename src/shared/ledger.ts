@@ -53,6 +53,12 @@ import type { HubArgs, HubCommand, HubResult, HubVendorQuota, ProjectCard, Worke
 import type { CapabilitiesPatch, CapabilityPolicy, CapabilityScope, PmCapabilitiesStart, ScopeCapabilities, WorkerCapabilities } from "./pm-capabilities.ts";
 import type { PmLookSetting, SlimeLook } from "./slimes.ts";
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
+import type {
+  DecideSandboxApprovalRequest,
+  DecideSandboxApprovalResponse,
+  SandboxApprovalId,
+  SandboxApprovalRecord,
+} from "./sandbox-approval.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
@@ -179,6 +185,7 @@ export interface LaunchContext {
   project: ProjectCard | null;
   worker: WorkerRecord | null;
   workerCapabilities?: WorkerCapabilities;
+  outerSandboxApproval?: SandboxApprovalRecord | null;
   vendor?: AgentVendor;
 }
 
@@ -217,6 +224,7 @@ export type WorkspaceProbe =
   | { kind: "failed"; error: string };
 
 export interface HubCallContext {
+  capabilityInventory?: import("./pm-capabilities.ts").CapabilityInventory;
   workspace?: WorkspaceProbe;
   pr?: WorkerPrProbeResult;
   prError?: string | null;
@@ -339,6 +347,12 @@ export interface Ledger extends LedgerHandoverWork {
   answerAsk(askMessageId: MessageId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
   recheckUserBlocker(id: UserBlockerId): RecheckUserBlockerResponse;
   userBlockerVendor(id: UserBlockerId): AgentVendor | null;
+  /**
+   * Precondition: called only from authenticated human UI routes (never from agent-api); id names a pending approval for an open Worker.
+   * Postcondition: approve transitions status to approved and enqueues the deferred Worker launch; reject transitions to rejected, ends the Worker, and notifies the PM.
+   */
+  decideSandboxApproval?(id: SandboxApprovalId, input: DecideSandboxApprovalRequest): DecideSandboxApprovalResponse;
+  getSandboxApproval?(id: SandboxApprovalId): SandboxApprovalRecord | null;
   deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string };
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;

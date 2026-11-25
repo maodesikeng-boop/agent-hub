@@ -53,6 +53,7 @@ export function createLedgerWorkers(
     (...args: A): R =>
       fn(w, ...args);
   return {
+    ...w.sandboxApprovals,
     startIn: bind(startIn),
     dispatchStepWorkerIn: bind(dispatchStepWorkerIn),
     sendIn: bind(sendIn),

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { AgentSessionRow, PmId } from "../../../shared/domain.ts";
-import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
+import type { CapabilityKey, WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import type { ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { workerWorktreePath } from "../../../shared/paths.ts";
@@ -14,7 +14,8 @@ import { toConversation } from "../rows.ts";
 import type { ConversationDbRow, ProjectDbRow, WorkerDbRow } from "../rows.ts";
 import { hasGitCommitSync } from "../task-graph-handoff.ts";
 import { workerRow } from "./ctx.ts";
-import { enqueueFirstTurn, insertLine, insertPmMessage } from "./lines.ts";
+import { enqueueFirstTurn, enqueueWorkerTask, insertLine, insertPmMessage } from "./lines.ts";
+import { holdWorkerForSandboxIn } from "./sandbox.ts";
 import { gitFailed, taskDedupeKey } from "./text.ts";
 import { startMaxTime } from "./timers.ts";
 import type { WorkersCtx } from "./types.ts";
@@ -166,16 +167,21 @@ export function kickOffWorkerIn(
     firstMessageText: string;
     inherited: boolean;
     maxTimeMs: number;
+    sandbox?: { capabilities: readonly CapabilityKey[]; stepId: number | null };
     afterStartedLine?: () => void;
   },
 ): void {
   const { worker, session } = launch;
   insertPmMessage(w, p, worker, session, launch.firstMessageText, taskDedupeKey(worker.id));
+  if (launch.sandbox !== undefined) {
+    holdWorkerForSandboxIn(w, p, { worker, session, ...launch.sandbox, maxTimeMs: launch.maxTimeMs });
+    launch.afterStartedLine?.();
+    return;
+  }
   insertLine(w, p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
   launch.afterStartedLine?.();
   if (launch.inherited) {
-    const first = w.db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id))!;
-    w.enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: first.id, source: "user" } });
+    enqueueWorkerTask(w, p, worker);
   } else if (worker.workspace === "worktree") {
     w.enqueue(p, { type: "worktree.create", params: { workerId: worker.id } });
     w.projects.syncSessionFolders(launch.project);

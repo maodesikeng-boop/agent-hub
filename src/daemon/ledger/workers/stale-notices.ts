@@ -32,8 +32,11 @@ export function isWorkerPmNoticeActionable(db: Db, messageId: MessageId): boolea
       WHERE m.id = ? AND m.sender = 'system'`, messageId,
   );
   if (notice === undefined) return true;
-  const launchFailed = notice.event === "worktree_failed";
-  if (notice.status === "ended" && notice.completed !== 1 && !launchFailed) return false;
+  const didNotStart = notice.event === "worktree_failed" ||
+    (notice.event === "ended" && db.get(
+      "SELECT 1 FROM worker_sandbox_approvals WHERE worker_id = ? AND status = 'rejected'", notice.worker_id,
+    ) !== undefined);
+  if (notice.status === "ended" && notice.completed !== 1 && !didNotStart) return false;
   // A completed report is still useful while this Worker owns the finished result.
   const step = db.get<{ status: string; waiting_for: string | null; graph_status: string; latest: number | null }>(
     `SELECT s.status, s.waiting_for, g.status AS graph_status, json_extract(s.worker_ids_json, '$[#-1]') AS latest
@@ -42,8 +45,8 @@ export function isWorkerPmNoticeActionable(db: Db, messageId: MessageId): boolea
       WHERE w.id = ? AND EXISTS (SELECT 1 FROM json_each(s.worker_ids_json) WHERE value = w.id)
       ORDER BY s.id DESC LIMIT 1`, notice.worker_id,
   );
-  if (step === undefined) return notice.status !== "ended" || launchFailed;
+  if (step === undefined) return notice.status !== "ended" || didNotStart;
   if (step.latest !== notice.worker_id) return false;
-  if (launchFailed) return step.graph_status === "active" && step.status === "waiting" && step.waiting_for === "pm";
+  if (didNotStart) return step.graph_status === "active" && step.status === "waiting" && step.waiting_for === "pm";
   return notice.completed !== 1 || (step.graph_status === "active" && step.status === "done");
 }

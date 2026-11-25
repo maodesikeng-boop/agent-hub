@@ -43,6 +43,7 @@ export function list(w: WorkersCtx, caller: PmCaller, args?: HubArgs<"worker.lis
     const where = x.workspace === "worktree" ? worktreeLabel(x) : "主文件夹";
     const state = formatWorkerState({
       status: x.status, notStarted: notStarted(x), live: w.sessions.liveOf(session.id),
+      sandboxApprovalPending: x.status !== "ended" && w.sandboxApprovals.isPendingForWorker(x.id),
       lastTurnOutcome: outcomes.get(session.id) ?? null, lastEventAt: session.lastEventAt, now,
     }, { includeIdleDuration: true });
     const shown = agentSettingOf(w.ctx, session);
@@ -142,6 +143,7 @@ export function launchContextFor(w: WorkersCtx, session: AgentSessionRow): Launc
   const worker = workerRow(w, session.workerId);
   if (worker === null) return null;
   const pm = w.persona.pmRow(worker.pm_id)!;
+  const approval = w.sandboxApprovals.getByWorkerId(worker.id);
   return {
     sessionId: session.id,
     role: "worker",
@@ -149,6 +151,7 @@ export function launchContextFor(w: WorkersCtx, session: AgentSessionRow): Launc
     pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: pm.persona ?? "" },
     project: w.projects.projectCard(projectRow(w, worker.project_id)),
     worker: withTakeoverOf(w, worker),
+    ...(approval === null ? {} : { outerSandboxApproval: approval }),
     ...workerCapabilitiesOfRow(w, worker.id),
     ...(isAgentVendor(session.vendor) ? { vendor: session.vendor } : {}),
   };
