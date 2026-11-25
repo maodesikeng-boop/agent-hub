@@ -2,10 +2,10 @@ import { useEffect, useLayoutEffect, useState } from "react";
 import {
   SHELL_CHAT_MIN_REM,
   SHELL_FRAME_PX,
+  SHELL_GAP_PX,
   SHELL_LIST_REM,
   SHELL_PANEL_REM,
   SHELL_RAIL_REM,
-  SHELL_SEAM_PX,
   SHELL_STRIP_REM,
 } from "./limits.ts";
 import { subscribeUiScale, type UiScale } from "./ui-scale.ts";
@@ -28,7 +28,7 @@ export interface ShellLimitsPx {
   panel: PaneLimitsPx;
   chatMin: number;
   frame: number;
-  seam: number;
+  gap: number;
 }
 
 export interface ShellFitInput {
@@ -70,7 +70,7 @@ function measureShellWidth(el: HTMLElement | null): number | null {
 
 /**
  * Precondition: remPx > 0.
- * Postcondition: returns the SHELL_* rem limits multiplied by remPx; frame and seam stay in px.
+ * Postcondition: returns the SHELL_* rem limits multiplied by remPx; frame and gap stay in px.
  */
 export function shellLimitsPx(remPx: number): ShellLimitsPx {
   const safeRem = remPx > 0 ? remPx : 16;
@@ -89,21 +89,21 @@ export function shellLimitsPx(remPx: number): ShellLimitsPx {
     },
     chatMin: SHELL_CHAT_MIN_REM * safeRem,
     frame: SHELL_FRAME_PX,
-    seam: SHELL_SEAM_PX,
+    gap: SHELL_GAP_PX,
   };
 }
 
 /**
  * Precondition: shellWidthPx >= 0 and remPx > 0.
- * Postcondition: returns "wide" when the rail, the frame, the PM column at its minimum, the conversation at its minimum,
- * and, when panelOpen, the side panel at its minimum fit together with one seam per column boundary.
+ * Postcondition: returns "wide" when the rail, the frame's right inset, the PM column at its minimum joined to the
+ * conversation at its minimum, and, when panelOpen, the gap and the side panel at its minimum fit side by side.
  * Otherwise returns "strip" when the same fits with the PM column collapsed to the strip.
  * Otherwise returns "stack" when panelOpen and "strip" when not; a closed panel never yields "stack".
  */
 export function shellTierOf({ shellWidthPx, remPx, panelOpen }: ShellFitInput): ShellTier {
   const limits = shellLimitsPx(remPx);
-  const panelNeed = panelOpen ? limits.seam + limits.panel.min : 0;
-  const fixed = limits.rail + limits.frame + limits.seam + limits.chatMin + panelNeed;
+  const panelNeed = panelOpen ? limits.gap + limits.panel.min : 0;
+  const fixed = limits.rail + limits.frame + limits.chatMin + panelNeed;
   if (shellWidthPx >= fixed + limits.list.min) return "wide";
   if (!panelOpen || shellWidthPx >= fixed + limits.strip) return "strip";
   return "stack";

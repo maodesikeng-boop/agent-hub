@@ -5,9 +5,9 @@
 export const VIEWPORTS = {
   /** 三栏宽屏。 */
   desktop: { width: 1440, height: 900, touch: false },
-  /** 1091–1252px（默认 Large 界面）：左栏收成 72px 头像窄条，同时保留右侧面板（strip 档）。 */
+  /** 994–1141px (the default Default scale): the PM list collapses to the 72px avatar strip and the side panel stays (strip tier). */
   narrow: { width: 1140, height: 800, touch: false },
-  /** 1091px / 720px 以下：有右侧面板时切 stack 档盖住对话；设置弹窗分类变成顶上一排。 */
+  /** Below 994px and 720px: with a side panel the stack tier covers the conversation; Settings puts its categories on top. */
   slim: { width: 700, height: 800, touch: false },
   /** 手机外壳（第 19、20 条）。 */
   mobile: { width: 390, height: 844, touch: true },

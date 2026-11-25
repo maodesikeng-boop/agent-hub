@@ -12,7 +12,7 @@ import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 
-const USAGE_BAR_COLORS = { normal: "bg-rail-ink", high: "bg-caution", full: "bg-danger" } as const;
+const USAGE_BAR_COLORS = { normal: "bg-brand-ink", high: "bg-caution", full: "bg-danger" } as const;
 
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
   const level = exhausted ? "full" : window.warning || window.percent >= 80 ? "high" : "normal";
@@ -107,7 +107,7 @@ export const QuotaPopover = memo(function QuotaPopover({
       </PopoverTrigger>
       <PopoverContent side={side ?? (inHeader ? "bottom" : "top")} align={align ?? "end"} aria-label="Usage" className="w-80 p-0">
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Hourglass className="size-pixel-md shrink-0 text-rail-ink" aria-hidden="true" />
+          <Hourglass className="size-pixel-md shrink-0 text-brand-ink" aria-hidden="true" />
           <h2 className="text-body font-semibold text-foreground">Usage</h2>
         </div>
         <div className="divide-y divide-border">

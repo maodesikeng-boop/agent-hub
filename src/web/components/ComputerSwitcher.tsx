@@ -77,11 +77,11 @@ function SwitcherList({
                 <div className="text-xs text-muted-foreground">{CONNECTION_TEXT[c.status]}</div>
               </div>
               {c.badge > 0 && (
-                <span className="shrink-0 bg-rail-ink px-1.5 py-0.5 text-xs font-semibold text-primary-foreground tabular-nums">
+                <span className="shrink-0 bg-brand-ink px-1.5 py-0.5 text-xs font-semibold text-primary-foreground tabular-nums">
                   {c.badge}
                 </span>
               )}
-              {current && <Check className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />}
+              {current && <Check className="size-pixel-sm shrink-0 text-brand-ink" aria-hidden="true" />}
             </button>
           );
         })}

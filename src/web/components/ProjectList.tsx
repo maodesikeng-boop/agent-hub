@@ -47,6 +47,10 @@ export interface ProjectListProps {
 const GROUP_HEADING = "flex h-6.5 items-center gap-1.5 pr-2 text-minor font-medium text-list-ink-soft";
 const GROUP_ICON = "size-3.5 shrink-0";
 
+function GroupGroove() {
+  return <div aria-hidden="true" data-testid="group-groove" className="groove" />;
+}
+
 const StripItem = memo(function StripItem({
   deviceKey,
   entry,
@@ -74,8 +78,8 @@ const StripItem = memo(function StripItem({
       aria-current={active ? "page" : undefined}
       onClick={() => onSelect({ device: deviceKey, id: entry.id })}
       className={cn(
-        "relative grid size-13 shrink-0 cursor-pointer place-items-center transition-[background-color,box-shadow] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus motion-reduce:transition-none",
-        active ? "tile-selected" : "hover:bg-list-hover",
+        "relative grid size-13 shrink-0 cursor-pointer place-items-center rounded-sm transition-[background-color] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus motion-reduce:transition-none",
+        active ? "row-selected" : "hover:bg-list-hover",
       )}
     >
       <Avatar look={entry.look} size={36} className={readOnly ? "opacity-60" : undefined} />
@@ -84,7 +88,7 @@ const StripItem = memo(function StripItem({
           role="img"
           aria-label={asking ? NEEDS_YOU : YOUR_TURN}
           data-testid={asking ? "asking-indicator" : "waiting-indicator"}
-          className={cn("absolute right-1 bottom-1 size-2 rounded-full bg-status-active ring-2", active ? "ring-background" : "ring-list")}
+          className={cn("absolute right-1 bottom-1 size-2 rounded-full bg-status-active ring-2", active ? "ring-[var(--row-selected)]" : "ring-list")}
         />
       )}
     </button>
@@ -198,8 +202,8 @@ export const ProjectList = memo(function ProjectList({
   if (layout === "strip") {
     const stripExtras = filtered.archived.filter(isSelected);
     return (
-      <section aria-label={computer.name} className="flex h-full w-18 shrink-0 flex-col bg-list text-list-ink">
-        <div className="flex h-11 shrink-0 items-center justify-center border-b border-border">
+      <section aria-label={computer.name} className="wood-rings shell-list flex h-full w-18 shrink-0 flex-col text-list-ink">
+        <div className="groove-bottom flex h-11 shrink-0 items-center justify-center">
           <Button variant="slot" size="icon" className="size-7" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
             <Plus aria-hidden="true" />
           </Button>
@@ -221,7 +225,7 @@ export const ProjectList = memo(function ProjectList({
             );
           })}
           {sections.pinned.length > 0 && (sections.active.length > 0 || stripExtras.length > 0) && (
-            <div aria-hidden="true" data-testid="strip-pin-divider" className="my-0.5 w-8 shrink-0 border-b border-border" />
+            <div aria-hidden="true" data-testid="strip-pin-divider" className="groove my-0.5 w-8 shrink-0" />
           )}
           {[...sections.active, ...stripExtras].map((entry) => {
             const key = conversationKey(computer.key, entry.id);
@@ -248,7 +252,7 @@ export const ProjectList = memo(function ProjectList({
       type="button"
       aria-label={`Switch computer (${computer.name})`}
       onClick={computers === undefined ? onOpenComputers : undefined}
-      className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left text-title font-semibold text-list-ink transition-colors outline-none hover:text-rail-ink focus-visible:outline-2 focus-visible:outline-border-focus"
+      className="-mx-1.5 flex h-7 min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 text-left text-title font-semibold text-list-ink transition-colors outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus"
     >
       <span title={computer.name} className="min-w-0 truncate">
         {computer.name}
@@ -262,9 +266,9 @@ export const ProjectList = memo(function ProjectList({
   return (
     <section
       aria-label={computer.name}
-      className={cn("flex min-h-0 min-w-0 flex-col bg-list text-list-ink", isPage ? "flex-1 pt-[var(--safe-top)]" : "h-full")}
+      className={cn("wood-rings flex min-h-0 min-w-0 flex-col text-list-ink", isPage ? "flex-1 pt-[var(--safe-top)]" : "shell-list h-full")}
     >
-      <header data-window-drag className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border pr-3 pl-4">
+      <header data-window-drag className="groove-bottom flex h-11 shrink-0 items-center justify-between gap-3 pr-3 pl-4">
         <div className="min-w-0 flex-1">
           {switchable ? (
             computers !== undefined && onSelectComputer !== undefined ? (
@@ -293,7 +297,7 @@ export const ProjectList = memo(function ProjectList({
       </header>
 
       <div className="shrink-0 px-2 pt-3 pb-1">
-        <SearchField label="Search conversations" tone="cream" value={query} onChange={setQuery} />
+        <SearchField label="Search conversations" tone="list" value={query} onChange={setQuery} />
       </div>
 
       <div className="sidebar-list page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-2 pt-2 pb-4">
@@ -331,6 +335,7 @@ export const ProjectList = memo(function ProjectList({
               </section>
             )}
 
+            {filtered.active.length > 0 && filtered.pinned.length > 0 && <GroupGroove />}
             {filtered.active.length > 0 && (
               <section aria-label="Project managers" className="min-w-0">
                 <h2 className={GROUP_HEADING}>
@@ -359,6 +364,7 @@ export const ProjectList = memo(function ProjectList({
               </section>
             )}
 
+            {filtered.archived.length > 0 && filtered.pinned.length + filtered.active.length > 0 && <GroupGroove />}
             {filtered.archived.length > 0 && (
               <section aria-label="Archived" className="min-w-0">
                 <button

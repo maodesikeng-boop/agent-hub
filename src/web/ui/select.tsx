@@ -132,7 +132,7 @@ export function SelectItem({ className, children, value, ...props }: React.Compo
     >
       <span data-slot="select-item-indicator" className="absolute right-2.5 flex size-4 items-center justify-center">
         <SelectPrimitive.ItemIndicator>
-          <Check className="size-3.5 text-rail-ink" aria-hidden="true" />
+          <Check className="size-3.5 text-brand-ink" aria-hidden="true" />
         </SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>

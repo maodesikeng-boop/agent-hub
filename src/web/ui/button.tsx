@@ -15,6 +15,7 @@ export const buttonVariants = cva(
         outline: "btn-raised",
         ghost: "text-muted-foreground hover:bg-hover hover:text-foreground active:bg-[rgb(110_74_0_/_0.08)] aria-expanded:bg-hover aria-expanded:text-foreground",
         slot: "btn-honey",
+        send: "send-button disabled:opacity-100",
       },
       size: {
         default: "h-9 px-4 text-minor",

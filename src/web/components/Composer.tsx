@@ -1,4 +1,4 @@
-import { CircleAlert, FileText, Info, Plus, Send, Square, Video, X } from "../ui/icons.ts";
+import { ArrowUp, CircleAlert, FileText, Info, Plus, Square, Video, X } from "../ui/icons.ts";
 import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES, previewKindOf, sentFileMime, type WorkerPick } from "../../shared/index.ts";
@@ -44,34 +44,26 @@ function isOtherEditable(target: EventTarget | null, ownTextarea: HTMLTextAreaEl
 
 const FRAME_CLASS = "composer-frame bg-background";
 
-const ROW_CLASS = "relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
-const ROW_MULTI_CLASS = "pb-2";
-const TEXT_TYPE = "px-3 text-body leading-6";
-const TEXT_METRICS = `block min-h-9 w-full min-w-0 py-1.5 pointer-coarse:py-2.5 ${TEXT_TYPE}`;
+// The draft always spans the top row; + sits under its first letter and Send or Stop at the end of the row below. Only the
+// sizing differs once the draft wraps: one fixed line, then the browser's own content sizing up to the height cap.
+const ROW_CLASS = "relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-y-0.5 px-1.5 pt-1 pb-1.5";
+const TEXT_TYPE = "px-2.5 text-body leading-6";
+const TEXT_METRICS = `block min-h-10 w-full min-w-0 pt-2.5 pb-1.5 pointer-coarse:pt-3 pointer-coarse:pb-2 ${TEXT_TYPE}`;
 const TEXTAREA_CLASS =
   `${TEXT_METRICS} resize-none bg-transparent outline-none placeholder:text-muted-foreground disabled:opacity-50`;
 const MIRROR_CLASS = `composer-text-measure ${TEXT_METRICS} invisible overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word]`;
 const TEXT_LIMIT = { maxHeight: COMPOSER_MAX_HEIGHT_PX };
 const PROBE_CLASS = `composer-text-measure invisible absolute inset-x-0 top-0 h-[1em] ${TEXT_TYPE}`;
-const TEXT_CELL = [
-  "col-start-2 col-end-3 row-start-1 row-end-2",
-  "col-start-1 col-end-4 row-start-1 row-end-2",
-] as const;
-const SINGLE_ROW_HEIGHT_CLASS = "h-9 pointer-coarse:h-11";
-const ATTACH_CLASSES = [
-  "col-start-1 row-start-1",
-  "col-start-1 row-start-2",
-] as const;
-const ACTIONS_CLASSES = [
-  "flex items-center gap-2 justify-self-end col-start-3 row-start-1",
-  "flex items-center gap-2 justify-self-end col-start-3 row-start-2",
-] as const;
-const FRAME_CLASSES = [ROW_CLASS, `${ROW_CLASS} ${ROW_MULTI_CLASS}`] as const;
+const TEXT_CELL = "col-start-1 col-end-4 row-start-1 row-end-2";
+const SINGLE_ROW_HEIGHT_CLASS = "h-10 pointer-coarse:h-11";
+const ATTACH_CLASS = "col-start-1 row-start-2 size-7.5 text-foreground";
+const ACTIONS_CLASS = "flex items-center gap-2 justify-self-end col-start-3 row-start-2";
+const SEND_SIZE = "size-7.5";
 
 function StopButton({ stop }: { stop: StopControl }) {
   return (
-    <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className="disabled:text-send-disabled-ink">
-      <Square className="size-3.5 fill-current" aria-hidden="true" />
+    <Button variant="send" size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className={SEND_SIZE}>
+      <Square className="size-3 fill-current" aria-hidden="true" />
     </Button>
   );
 }
@@ -96,7 +88,7 @@ function ComposerChips({
   onRemoveFile: (key: string) => void;
 }) {
   return (
-    <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
+    <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-4 pt-3">
       {leadingChip}
       {workerPick !== null && (
         <WorkerPickChip pick={workerPick} disabled={busy || disabled} onEdit={onEditPick} onRemove={onRemovePick} />
@@ -104,7 +96,7 @@ function ComposerChips({
       {files.map(({ key, file }) => {
         const FileIcon = previewKindOf(file.name, sentFileMime(file.name)) === "video" ? Video : FileText;
         return (
-          <li key={key} className="flex max-w-full items-center gap-2 rounded-sm bg-panel py-1 pr-1 pl-3 text-minor">
+          <li key={key} className="flex max-w-full items-center gap-2 rounded-xs bg-panel py-1 pr-1 pl-3 text-minor">
             <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span className="min-w-0 truncate">{file.name}</span>
             <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
@@ -126,7 +118,7 @@ const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick; disabled: boolean; onEdit: () => void; onRemove: () => void }) {
   const labels = useWorkerPickLabels(pick);
   return (
-    <li className="flex max-w-full items-center gap-2 rounded-sm bg-panel py-1 pr-1 pl-3 text-minor">
+    <li className="flex max-w-full items-center gap-2 rounded-xs bg-panel py-1 pr-1 pl-3 text-minor">
       <button
         type="button"
         aria-label={`Worker model: ${labels.join(" ")}`}
@@ -186,7 +178,6 @@ export const Composer = memo(function Composer({
   disabled: disabledProp = false,
   link = null,
   autoFocus = false,
-  sendTone = "accent",
 }: {
   value: string;
   placeholder: string;
@@ -205,7 +196,6 @@ export const Composer = memo(function Composer({
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
   autoFocus?: boolean;
-  sendTone?: "accent" | "rail";
 }) {
   const readOnly = link?.readOnly ?? null;
   const disabled = disabledProp || readOnly !== null;
@@ -380,34 +370,13 @@ export const Composer = memo(function Composer({
             onRemoveFile={staging.remove}
           />
         )}
-        <div className={FRAME_CLASSES[+multiline]}>
-          <input
-            ref={picker}
-            type="file"
-            multiple
-            hidden
-            aria-label="Choose files"
-            onChange={(e) => {
-              staging.add(Array.from(e.target.files ?? []));
-              e.target.value = "";
-            }}
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Add files"
-            disabled={busy || disabled}
-            onClick={() => picker.current?.click()}
-            className={ATTACH_CLASSES[+multiline]}
-          >
-            <Plus className="size-5" aria-hidden="true" />
-          </Button>
+        <div className={ROW_CLASS}>
           {multiline && !nativeSizing && (
-            <div aria-hidden="true" className={`${MIRROR_CLASS} ${TEXT_CELL[1]}`} style={TEXT_LIMIT}>
+            <div aria-hidden="true" className={`${MIRROR_CLASS} ${TEXT_CELL}`} style={TEXT_LIMIT}>
               {sizingValue}{"\u200b"}
             </div>
           )}
-          <div aria-hidden="true" ref={probe} className={`${PROBE_CLASS} ${TEXT_CELL[0]}`} />
+          <div aria-hidden="true" ref={probe} className={`${PROBE_CLASS} ${TEXT_CELL}`} />
           <textarea
             ref={ref}
             rows={1}
@@ -418,7 +387,7 @@ export const Composer = memo(function Composer({
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
-            className={`${TEXTAREA_CLASS} ${TEXT_CELL[+multiline]} ${!multiline ? SINGLE_ROW_HEIGHT_CLASS : nativeSizing ? "" : "absolute inset-0 h-full"}`}
+            className={`${TEXTAREA_CLASS} ${TEXT_CELL} ${!multiline ? SINGLE_ROW_HEIGHT_CLASS : nativeSizing ? "" : "absolute inset-0 h-full"}`}
             style={nativeSizing ? { ...TEXT_LIMIT, fieldSizing: "content", height: composing?.height ?? undefined } : undefined}
             value={value}
             aria-autocomplete={source ? "list" : undefined}
@@ -451,25 +420,42 @@ export const Composer = memo(function Composer({
               submit();
             }}
           />
-          <div className={ACTIONS_CLASSES[+multiline]}>
+          <input
+            ref={picker}
+            type="file"
+            multiple
+            hidden
+            aria-label="Choose files"
+            onChange={(e) => {
+              staging.add(Array.from(e.target.files ?? []));
+              e.target.value = "";
+            }}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Add files"
+            disabled={busy || disabled}
+            onClick={() => picker.current?.click()}
+            className={ATTACH_CLASS}
+          >
+            <Plus className="size-4.5" strokeWidth={1.5} aria-hidden="true" />
+          </Button>
+          <div className={ACTIONS_CLASS}>
             {tooLong && <span className="text-minor text-danger">Message too long</span>}
             {stop?.failed && showStop && <span className="text-minor text-danger">Couldn't stop</span>}
             {showStop ? (
               <StopButton stop={stop} />
             ) : (
               <Button
+                variant="send"
                 size="icon"
                 aria-label="Send"
                 disabled={!canSend || picking}
                 onClick={submit}
-                className={cn(
-                  "disabled:text-send-disabled-ink",
-                  sendTone === "rail" &&
-                    "enabled:border-[rgb(138_83_0_/_0.34)] enabled:bg-rail enabled:text-rail-ink enabled:hover:bg-rail-hover enabled:hover:filter-none",
-                  bounce && "composer-send-bounce",
-                )}
+                className={cn(SEND_SIZE, bounce && "composer-send-bounce")}
               >
-                <Send className="size-5" aria-hidden="true" />
+                <ArrowUp className="size-4" strokeWidth={1.75} aria-hidden="true" />
               </Button>
             )}
           </div>

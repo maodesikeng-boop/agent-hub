@@ -13,14 +13,15 @@ export function SearchField({
   label: string;
   value: string;
   onChange: (value: string) => void;
-  tone?: "default" | "cream";
+  /** list: the translucent field on the year rings of the PM list. */
+  tone?: "default" | "list";
   className?: string;
 }) {
   return (
     <div
       className={cn(
         "flex h-9 min-w-0 flex-1 items-center gap-2 rounded-sm border border-border-strong pr-0.5 pl-3 transition-[border-color,box-shadow] focus-within:field-focus pointer-coarse:h-auto",
-        tone === "cream" ? "bg-list-field" : "bg-background",
+        tone === "list" ? "bg-list-field" : "bg-background",
         className,
       )}
     >

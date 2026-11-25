@@ -22,8 +22,8 @@ export function DialogContent({
   title: string;
   titleClassName?: string;
   fullScreen?: boolean;
-  /** Covers the workspace beside the rail as a page of the workbench: the cream frame with no scrim, outline, or shadow.
-   * The page draws its own close button in its header. */
+  /** Covers the workspace beside the rail and below the top bar as a page of the workbench: the frame wood with no scrim,
+   * outline, or shadow. The page draws its own close button in its header. */
   page?: boolean;
 }) {
   const accent = useAccentColor();
@@ -39,7 +39,7 @@ export function DialogContent({
           fullScreen
             ? "fixed inset-0 z-50 flex flex-col overflow-hidden bg-panel pt-[var(--safe-top)] pb-[max(var(--safe-bottom),var(--kb-inset))] outline-none"
             : page
-              ? "shell-frame fixed inset-y-0 right-0 left-18 z-50 flex flex-col overflow-hidden pt-[var(--safe-top)] pb-[var(--safe-bottom)] outline-none"
+              ? "wood shell-frame fixed top-[var(--topbar-height)] right-0 bottom-0 left-18 z-50 flex flex-col overflow-hidden outline-none"
               : "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-130 -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden rounded-sm border border-border bg-background p-6 shadow-[var(--shadow-dialog)] outline-none",
           className,
         )}

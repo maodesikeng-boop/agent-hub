@@ -1,4 +1,4 @@
-import { Check, Copy, FileText, Loader2, PencilLine, Play, Send } from "../ui/icons.ts";
+import { ArrowUp, Check, Copy, FileText, Loader2, PencilLine, Play } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, type Deliverable, type SentFile } from "../../shared/index.ts";
 import { DELIVERABLE_MEDIA_HEIGHT_REM } from "../deliverable-size.ts";
@@ -241,8 +241,8 @@ export function CardNoteForm({
           }
         }}
       />
-      <Button type="button" size="icon-sm" aria-label="Send" disabled={!canSend} onClick={() => onSubmitNote(note)} className={cn("shrink-0", small && "size-7")}>
-        {pending ? <Loader2 className="size-pixel-sm" aria-hidden="true" /> : <Send className="size-pixel-sm" aria-hidden="true" />}
+      <Button type="button" variant="send" size="icon-sm" aria-label="Send" disabled={!canSend} onClick={() => onSubmitNote(note)} className={cn("shrink-0", small ? "size-7" : "size-7.5")}>
+        {pending ? <Loader2 className="size-4" aria-hidden="true" /> : <ArrowUp className="size-4" strokeWidth={1.75} aria-hidden="true" />}
       </Button>
     </div>
   );
@@ -270,7 +270,7 @@ export function UnsentDraftBanner({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5 text-minor font-medium text-foreground">
-          <PencilLine className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />
+          <PencilLine className="size-pixel-sm shrink-0 text-brand-ink" aria-hidden="true" />
           <span>Unsent reply</span>
         </span>
         <div className="flex shrink-0 items-center gap-1.5">

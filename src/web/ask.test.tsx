@@ -389,7 +389,7 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(row).toHaveClass("-mx-4", "-mb-4", "border-t", "border-border");
     expect(row.className).not.toMatch(/shadow-\[var\(--shadow-tile\)\]|border-border-strong|rounded-sm/);
     expect(card).toHaveClass("overflow-hidden", "rounded-sm");
-    expect(send).toHaveClass("size-8");
+    expect(send).toHaveClass("size-7.5", "send-button");
 
     fireEvent.change(input, { target: { value: "第一行" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });

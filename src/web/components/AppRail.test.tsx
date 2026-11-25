@@ -132,7 +132,7 @@ describe("AppRail", () => {
     expect(screen.getByRole("button", { name: "Office Mini, offline, 2 waiting" })).toBeInTheDocument();
   });
 
-  it("marks the selected computer current and shows its status dot and ask badge", async () => {
+  it("marks the selected computer current with a solid icon and its status dot, and keeps the waiting count in its name only", async () => {
     const user = userEvent.setup();
     const onSelectComputer = vi.fn();
     const computers: RailComputer[] = [
@@ -144,8 +144,15 @@ describe("AppRail", () => {
     expect(screen.getByRole("button", { name: "Office Mini, offline, 4 waiting" })).toHaveAttribute("aria-current", "true");
     expect(screen.getByRole("button", { name: "MacBook Pro, 1 waiting" })).not.toHaveAttribute("aria-current");
     expect(screen.getByTestId("rail-device-dot-local")).toHaveClass("bg-success");
-    expect(screen.getByTestId("rail-device-dot-tokyo")).toHaveClass("bg-muted-foreground");
-    expect(screen.getByTestId("rail-device-badge-tokyo")).toHaveTextContent("4");
+    expect(screen.getByTestId("rail-device-dot-tokyo")).toHaveClass("bg-rail-ink-soft");
+    expect(screen.queryByTestId("rail-device-badge-tokyo")).toBeNull();
+    expect(screen.queryByTestId("rail-device-badge-local")).toBeNull();
+    const selectedTile = screen.getByRole("button", { name: "Office Mini, offline, 4 waiting" }).firstElementChild!;
+    expect(selectedTile).toHaveClass("bg-rail-selected", "rounded-tile");
+    expect(selectedTile.querySelector("svg")!.outerHTML).toMatch(/fill="currentColor"/);
+    const restTile = screen.getByRole("button", { name: "MacBook Pro, 1 waiting" }).firstElementChild!;
+    expect(restTile).toHaveClass("group-hover:bg-rail-hover");
+    expect(restTile.querySelector("svg")!.outerHTML).not.toMatch(/fill="currentColor"/);
 
     await user.click(screen.getByRole("button", { name: "MacBook Pro, 1 waiting" }));
     expect(onSelectComputer).toHaveBeenCalledWith(LOCAL_DEVICE);

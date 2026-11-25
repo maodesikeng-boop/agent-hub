@@ -116,12 +116,14 @@ describe("界面标准：共用组件", () => {
     expect(css).not.toContain("--motion-focus");
 
     const rest = /\.composer-frame \{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(rest).toMatch(/border: 1px solid var\(--border-strong\);/);
+    expect(rest).toMatch(/border: 1px solid var\(--composer-line\);/);
     expect(rest).toMatch(/border-radius: var\(--radius-sm\);/);
+    expect(rest).toMatch(/box-shadow: var\(--shadow-composer\);/);
     const focus = /\.composer-frame:focus-within \{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(focus).toMatch(/border-color: var\(--border-focus\);/);
-    // A focus ring is a crisp 1px spread, never a blurred halo.
-    expect(focus).toMatch(/box-shadow: 0 0 0 1px var\(--border-focus\);/);
+    expect(focus).toMatch(/border-color: var\(--composer-line-focus\);/);
+    // Focus deepens the light line and adds a faint 1px ring; the edge itself never blurs.
+    expect(focus).toMatch(/box-shadow: var\(--shadow-composer-focus\);/);
+    expect(css).toMatch(/--shadow-composer-focus: 0 0 0 1px rgb\(60 40 20 \/ 0\.1\)/);
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-frame\s*\{\s*transition: none/);
   });
 
@@ -235,19 +237,18 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(css).toMatch(/--safe-top:\s*env\(safe-area-inset-top, 0px\)/);
     expect(css).toMatch(/--safe-bottom:\s*env\(safe-area-inset-bottom, 0px\)/);
     expect(css).toMatch(/\.chat-main\s*\{[^}]*padding-top:\s*var\(--safe-top\)[^}]*padding-bottom:\s*var\(--safe-bottom\)/s);
-    expect(readFileSync("src/web/components/AppRail.tsx", "utf8")).toMatch(
-      /pt-\[calc\(var\(--safe-top\)\+var\(--macos-traffic-lights-height\)\)\][^"]*pb-\[var\(--safe-bottom\)\]|pb-\[var\(--safe-bottom\)\][^"]*pt-\[calc\(var\(--safe-top\)\+var\(--macos-traffic-lights-height\)\)\]/,
-    );
+    expect(readFileSync("src/web/components/AppRail.tsx", "utf8")).toMatch(/pb-\[var\(--safe-bottom\)\]/);
     for (const file of ["AppRail", "ProjectList", "SidePanel", "ProfilePanel", "Conversation", "WorkerConversation", "Composer", "RouterWorkbench", "RouterDecisionCard"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8"), `${file} 不直接写 env(`).not.toContain("env(");
     }
   });
 
-  it("Mac 桌面应用（第 16 条）：红黄绿交通灯安全区变量在 styles.css 集中定义，左栏常驻避让红黄绿，顶栏无需额外让出 72px", () => {
-    expect(css).toMatch(/--macos-traffic-lights-width:\s*0px;/);
-    expect(css).toMatch(/--macos-traffic-lights-height:\s*0px;/);
-    expect(css).toMatch(/html\[data-macos-app="true"\]\s*\{[^}]*--macos-traffic-lights-width:\s*72px;[^}]*--macos-traffic-lights-height:\s*28px;/s);
-    expect(css).not.toMatch(/@media \(max-width: 1100px\)\s*\{[^}]*html\[data-macos-app="true"\]/s);
+  it("Mac app (section 16): one 40px wood top bar holds the traffic lights for every platform, and the native shell centers them on it", () => {
+    expect(css).not.toMatch(/--macos-traffic-lights/);
+    expect(css).toMatch(/--topbar-height: 40px;/);
+    expect(css).toMatch(/\.shell-topbar \{\s*height: var\(--topbar-height\);/);
+    const swift = readFileSync("apps/macos/MainWindowController.swift", "utf8");
+    expect(swift).toMatch(/static let webTopBarHeight: CGFloat = 40\b/);
   });
 
   it("触屏（pointer: coarse）下 input / textarea / select 一律 16px，防 iOS 聚焦放大；电脑上仍是组件自己的 15px", () => {

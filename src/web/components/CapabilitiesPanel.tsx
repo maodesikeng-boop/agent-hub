@@ -34,7 +34,7 @@ export function CustomBadge() {
 }
 
 function KindTag({ kind }: { kind: CapabilityRow["kind"] }) {
-  return <span className="shrink-0 rounded-sm bg-panel px-2 text-xs leading-5 font-medium text-muted-foreground">{CAPABILITY_KIND_TAGS[kind]}</span>;
+  return <span className="shrink-0 rounded-xs bg-panel px-2 text-xs leading-5 font-medium text-muted-foreground">{CAPABILITY_KIND_TAGS[kind]}</span>;
 }
 
 function Audience({ vendors }: { vendors: readonly AgentVendor[] | null }) {

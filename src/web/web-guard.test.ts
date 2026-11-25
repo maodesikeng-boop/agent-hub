@@ -613,10 +613,10 @@ describe("web-guard：src/web 代码守卫", () => {
     expect(vendorPattern.test('vendor === "acme"')).toBe(false);
   });
 
-  it("一个小圆角：src/web/ 非测试代码只用 rounded-xs（2px，嵌套）、rounded-sm（4px）、rounded-t-sm、rounded-full（点）和 rounded-none", () => {
+  it("radius tokens only: src/web/ code uses rounded-xs (4px chips), rounded-sm (8px), rounded-t-sm, rounded-tile (11px rail tiles), rounded-full (dots), and rounded-none", () => {
     const hits: string[] = [];
     const radius = /(?:^|[\s"'`:!])(rounded(?:-[a-z0-9[\]._/%-]+)?)(?=$|[\s"'`])/g;
-    const allowed = new Set(["rounded-xs", "rounded-sm", "rounded-t-sm", "rounded-full", "rounded-none"]);
+    const allowed = new Set(["rounded-xs", "rounded-sm", "rounded-t-sm", "rounded-tile", "rounded-full", "rounded-none"]);
     for (const file of files) {
       const lines = stripComments(readFileSync(file, "utf8")).split("\n");
       lines.forEach((line, index) => {

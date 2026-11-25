@@ -8,6 +8,8 @@ The web workbench moves to one layout and one visual language. A fixed honey-yel
 
 **Revision after release.** On 2026-11-24 the user reviewed the shipped workbench and asked for one small radius, even line weights, and regions parted by tone instead of lines. `docs/ui-standard.md` now defines the result and overrides the borders, corners, color tokens, and selection style in section 3. The PM column sits on the cream frame, the conversation and the side panel are white sheets 6px apart, every line is 1px, and every corner is 4px.
 
+**Revision: wood shell.** On 2026-11-25 the user approved a wood shell that replaces the honey and cream zones, and `docs/ui-standard.md` sections 2.4 and 16 define it. The window is frame wood with a 40px top bar that holds the macOS traffic lights; the rail sits on the wood without a traffic-light inset; the PM column sits on year-ring wood joined to the conversation sheet; a 4px gap of wood comes before the side panel; one inlay rim surrounds the panels; corners are 12, 11, 8, and 4px; and buttons are flat.
+
 ## For the user
 
 ### Files to review
@@ -201,8 +203,8 @@ Columns give way in this order. First the PM column and the side panel shrink to
 
 | Interface scale | Four columns side by side | Strip and panel | Panel covers conversation | PM column full width with the panel closed |
 | --- | --- | --- | --- | --- |
-| `Default` | 1150px and wider | 1002 to 1149px | below 1002px | 784px and wider |
-| `Large`, the default | 1257px and wider | 1095 to 1256px | below 1095px | 857px and wider |
+| `Default`, the default | 1142px and wider | 994 to 1141px | below 994px | 778px and wider |
+| `Large` | 1249px and wider | 1087 to 1248px | below 1087px | 851px and wider |
 
 #### Side panel and routes
 
@@ -267,7 +269,7 @@ Each implementation step edits its sections of `docs/ui-standard.md` before touc
 | 13. Fonts, numbers, and list rows | `3.25rem` PM rows with `2.25rem` avatars and `text-body` names | 3 |
 | 14. Interaction states and motion | Drop `.tint-fade` and `--motion-focus` | 2 |
 | 15. Markdown, code blocks, and charts | Code blocks, charts, and images drop `rounded-xl` for plain 2px borders and square corners | 2 |
-| 16. Shell layout | Rail, sheet, PM column or strip, conversation, side panel, resize handles, tiers, macOS traffic lights over the rail | 3 |
+| 16. Shell layout | Rail, sheet, PM column or strip, conversation, side panel, resize handles, tiers, macOS traffic lights in the top bar | 3 |
 | 17. Message stream | `ThreadCard` replaces Worker speech bubbles. Plain 2px ask cards and user bubbles | 2 |
 | 19. Touch screens and safe areas | The hover-shortcut amendment | 3 |
 | 20. Mobile shell | Tab bar, computer switcher drawer, usage in Settings, profile drill-down pages | 3 |
@@ -291,14 +293,14 @@ New constants in `src/web/limits.ts` (only the web workbench reads them) are lay
 | `SHELL_LIST_REM` | `{ min: 13.75, default: 16.5, max: 25 }` | PM column, 220, 264, and 400px |
 | `SHELL_PANEL_REM` | `{ min: 22.5, default: 27.5, max: 45 }` | Side panel, 360, 440, and 720px |
 | `SHELL_CHAT_MIN_REM` | `30` | Conversation minimum, 480px |
-| `SHELL_FRAME_PX` | `6` | The cream frame's right inset around the white sheets |
-| `SHELL_SEAM_PX` | `6` | The gap between columns; columns part by tone, not lines |
+| `SHELL_FRAME_PX` | `6` | The frame's inset around the panels (top, right, and bottom) |
+| `SHELL_GAP_PX` | `4` | The gap of wood before the side panel; the PM column and the conversation join with no gap |
 
 ### 5. Cross-vendor and cross-platform unification
 
 The shell has no vendor-specific code. The rail's usage meter reads `quotaUsage()` in `src/web/selectors.ts`, which walks every vendor in `src/shared/vendors.ts` that declares a `quota` spec, and shows the single fullest window. A future vendor appears in the meter by declaring `quota` in its own `src/vendors/<vendor>/` spec, the file it already implements. Thread card status words come from `workerStatusOf` in `src/web/worker-status.ts`, which is vendor-neutral.
 
-Computer cells reuse `PlatformIcon` from `src/web/components/DeviceBadges.tsx`, which already covers `darwin`, `win32`, and `linux`. In the native macOS app the rail starts below `--macos-traffic-lights-height` and acts as the window drag region. The Windows Tauri shell draws a native title bar, and Linux runs in a browser, so neither needs anything extra. Pins are SQLite rows, identical on all three platforms, and nothing in `src/daemon/platform/index.ts` changes.
+Computer cells reuse `PlatformIcon` from `src/web/components/DeviceBadges.tsx`, which already covers `darwin`, `win32`, and `linux`. In the native macOS app the traffic lights sit centered on the 40px wood top bar, and the top bar and empty rail chrome act as the window drag region. The Windows Tauri shell draws a native title bar, and Linux runs in a browser, so neither needs anything extra. Pins are SQLite rows, identical on all three platforms, and nothing in `src/daemon/platform/index.ts` changes.
 
 ### 6. Deletions
 

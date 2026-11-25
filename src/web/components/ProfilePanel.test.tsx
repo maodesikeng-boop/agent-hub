@@ -146,8 +146,8 @@ describe("ProfilePanel summary", () => {
     await screen.findByText("Provider");
     const editButtons = screen.getAllByRole("button", { name: "Edit" });
     expect(editButtons.length).toBe(2);
-    for (const btn of editButtons) expect(btn).toHaveClass("text-rail-ink");
-    expect(screen.getByRole("button", { name: "New" })).toHaveClass("text-rail-ink");
+    for (const btn of editButtons) expect(btn).toHaveClass("text-brand-ink");
+    expect(screen.getByRole("button", { name: "New" })).toHaveClass("text-brand-ink");
   });
 
   it("hides Pinned and shows the restore group for an archived PM", async () => {

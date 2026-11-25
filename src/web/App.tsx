@@ -460,109 +460,114 @@ function DesktopWorkbench({
   );
 
   return (
-    <div ref={setShellEl} data-shell="desktop" className="relative flex h-full w-full min-w-0 overflow-hidden bg-rail">
-      <AppRail
-        router={c.routerSummary}
-        computers={c.railComputers}
-        selectedComputer={c.routerActive ? null : current.key}
-        meter={meter}
-        quota={quota}
-        quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
-        onSelectComputer={c.selectComputer}
-        onOpenSettings={() => c.openSettingsSection("scale")}
-        settingsOpen={c.desktopSettingsOpen}
-        onOpenUpdates={() => c.openSettingsSection("updates")}
-        onOpenAccount={() => c.openSettingsSection(c.accountTarget)}
-      />
+    <div ref={setShellEl} data-shell="desktop" className="wood relative flex h-full w-full min-w-0 flex-col overflow-hidden">
+      <div aria-hidden="true" data-window-drag className="shell-topbar shrink-0" />
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <AppRail
+          router={c.routerSummary}
+          computers={c.railComputers}
+          selectedComputer={c.routerActive ? null : current.key}
+          meter={meter}
+          quota={quota}
+          quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
+          onSelectComputer={c.selectComputer}
+          onOpenSettings={() => c.openSettingsSection("scale")}
+          settingsOpen={c.desktopSettingsOpen}
+          onOpenUpdates={() => c.openSettingsSection("updates")}
+          onOpenAccount={() => c.openSettingsSection(c.accountTarget)}
+        />
 
-      <div className="shell-frame flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        {c.routerActive ? (
-          <main className="shell-sheet chat-main ml-1.5 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <RouterWorkbench
-              toolbar={null}
-              notices={notices}
-              view={c.routerView}
-              devices={fleet.devices}
-              selfId={fleet.selfId}
-              draft={c.drafts.of(ROUTER_DRAFT_KEY)}
-              staging={c.staging.of(ROUTER_DRAFT_KEY)}
-              clientForDevice={c.clientForDevice}
-              storeForDevice={c.storeForDevice}
-              onOpenConversation={c.openDeviceConversation}
-              onOpenWorker={c.openDeviceWorker}
-              onManageProviders={onManageLocalProviders}
-            />
-          </main>
-        ) : (
-          <>
-            {tier !== "wide" && <div className="flex shrink-0 py-1.5 pr-1.5">{listNode("strip")}</div>}
-            <PaneGroup id="shell-panes">
-              {tier === "wide" && (
-                <>
+        <div className="shell-frame flex min-h-0 min-w-0 flex-1">
+          {c.routerActive ? (
+            <main className="shell-group chat-main flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+              <RouterWorkbench
+                toolbar={null}
+                notices={notices}
+                view={c.routerView}
+                devices={fleet.devices}
+                selfId={fleet.selfId}
+                draft={c.drafts.of(ROUTER_DRAFT_KEY)}
+                staging={c.staging.of(ROUTER_DRAFT_KEY)}
+                clientForDevice={c.clientForDevice}
+                storeForDevice={c.storeForDevice}
+                onOpenConversation={c.openDeviceConversation}
+                onOpenWorker={c.openDeviceWorker}
+                onManageProviders={onManageLocalProviders}
+              />
+            </main>
+          ) : (
+            <div className="shell-group flex min-h-0 min-w-0 flex-1">
+              {tier !== "wide" && listNode("strip")}
+              <PaneGroup id="shell-panes">
+                {tier === "wide" && (
+                  <>
+                    <Pane
+                      key="list"
+                      id="list"
+                      defaultRem={widths.list}
+                      minRem={SHELL_LIST_REM.min}
+                      maxRem={SHELL_LIST_REM.max}
+                      onCommit={(rem) => commit("list", rem)}
+                    >
+                      {listNode("column")}
+                    </Pane>
+                    <PaneHandle seam="joint" label="Resize project list" onReset={() => reset("list")} />
+                  </>
+                )}
+
+                <Pane
+                  key="chat"
+                  id="chat"
+                  className="shell-sheet shell-sheet-joined"
+                  {...(stackPanel ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" } : { minRem: SHELL_CHAT_MIN_REM })}
+                >
+                  <Activity mode={stackPanel ? "hidden" : "visible"}>
+                    <AccentScope color={tintColor}>
+                      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                        <ConversationPane
+                          model={model}
+                          content={c}
+                          mobile={false}
+                          toolbar={toolbar}
+                          notices={notices}
+                          onManageCurrentProviders={onManageCurrentProviders}
+                        />
+                      </main>
+                    </AccentScope>
+                  </Activity>
+                </Pane>
+
+                {panelVisible && !stackPanel && <PaneHandle seam="gap" label="Resize side panel" onReset={() => reset("panel")} />}
+
+                {panelVisible && (
                   <Pane
-                    key="list"
-                    id="list"
-                    defaultRem={widths.list}
-                    minRem={SHELL_LIST_REM.min}
-                    maxRem={SHELL_LIST_REM.max}
-                    onCommit={(rem) => commit("list", rem)}
+                    key="panel"
+                    id="panel"
+                    {...(stackPanel
+                      ? { className: "shell-sheet shell-sheet-joined min-w-0 flex-1" }
+                      : {
+                          className: "shell-sheet",
+                          defaultRem: widths.panel,
+                          minRem: SHELL_PANEL_REM.min,
+                          maxRem: SHELL_PANEL_REM.max,
+                          onCommit: (rem: number) => commit("panel", rem),
+                        })}
                   >
-                    <div className="flex min-h-0 flex-1 flex-col py-1.5">{listNode("column")}</div>
-                  </Pane>
-                  <PaneHandle label="Resize project list" onReset={() => reset("list")} />
-                </>
-              )}
-
-              <Pane
-                key="chat"
-                id="chat"
-                {...(stackPanel ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" } : { minRem: SHELL_CHAT_MIN_REM })}
-              >
-                <Activity mode={stackPanel ? "hidden" : "visible"}>
-                  <AccentScope color={tintColor}>
-                    <main className="shell-sheet chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                      <ConversationPane
+                    <AccentScope color={tintColor}>
+                      <DesktopSidePanel
                         model={model}
                         content={c}
-                        mobile={false}
-                        toolbar={toolbar}
+                        panelContent={panelContent}
+                        layout={stackPanel ? "stack" : "side"}
                         notices={notices}
-                        onManageCurrentProviders={onManageCurrentProviders}
                       />
-                    </main>
-                  </AccentScope>
-                </Activity>
-              </Pane>
-
-              {panelVisible && !stackPanel && <PaneHandle label="Resize side panel" onReset={() => reset("panel")} />}
-
-              {panelVisible && (
-                <Pane
-                  key="panel"
-                  id="panel"
-                  {...(stackPanel
-                    ? { className: "min-w-0 flex-1" }
-                    : {
-                        defaultRem: widths.panel,
-                        minRem: SHELL_PANEL_REM.min,
-                        maxRem: SHELL_PANEL_REM.max,
-                        onCommit: (rem: number) => commit("panel", rem),
-                      })}
-                >
-                  <AccentScope color={tintColor}>
-                    <DesktopSidePanel
-                      model={model}
-                      content={c}
-                      panelContent={panelContent}
-                      layout={stackPanel ? "stack" : "side"}
-                      notices={notices}
-                    />
-                  </AccentScope>
-                </Pane>
-              )}
-            </PaneGroup>
-          </>
-        )}
+                    </AccentScope>
+                  </Pane>
+                )}
+              </PaneGroup>
+            </div>
+          )}
+        </div>
       </div>
 
       <SettingsDialog

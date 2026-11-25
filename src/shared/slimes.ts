@@ -526,6 +526,8 @@ const ROUTER_BELL_COLORS = {
   k: "#c98800",
   c: "#ff7a1a",
 } as const;
+/** The Router bell's honey body, the hue of its pastel send button. */
+export const ROUTER_BELL_BODY = ROUTER_BELL_COLORS.b;
 const ROUTER_BELL_ROWS = [
   "...gg..GG...",
   "....gggG....",

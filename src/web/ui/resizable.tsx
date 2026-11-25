@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef } from "react";
 import { Group, Panel, Separator, usePanelRef, type Layout, type LayoutChangedMeta } from "react-resizable-panels";
-import { SHELL_SEAM_PX } from "../limits.ts";
+import { SHELL_GAP_PX } from "../limits.ts";
 import { cn } from "../lib/utils.ts";
 import { readRootRemPx } from "../shell-layout.ts";
 
@@ -25,7 +25,13 @@ export interface PaneProps {
   children: React.ReactNode;
 }
 
+/** joint: the boundary of two joined panes, taking no width; gap: a strip of frame between two sheets. */
+export type PaneSeam = "joint" | "gap";
+
+const SEAM_PX: Readonly<Record<PaneSeam, number>> = { joint: 0, gap: SHELL_GAP_PX };
+
 export interface PaneHandleProps {
+  seam: PaneSeam;
   /** Accessible name of the separator. */
   label: string;
   /** Double-click: the caller clears the remembered width; the adjacent pane returns to its default. */
@@ -44,7 +50,7 @@ function measureAvailableAxisPx(groupEl: HTMLElement | null): number {
   if (!(totalWidth > 0)) return 0;
   let seams = 0;
   for (const sep of groupEl.querySelectorAll<HTMLElement>("[data-separator]")) {
-    seams += sep.offsetWidth > 0 ? sep.offsetWidth : SHELL_SEAM_PX;
+    seams += SEAM_PX[(sep.dataset.seam as PaneSeam | undefined) ?? "gap"];
   }
   return Math.max(0, totalWidth - seams);
 }
@@ -154,13 +160,14 @@ export function Pane({ id, defaultRem, minRem, maxRem, onCommit, className, chil
 }
 
 /**
- * Postcondition: renders a 2px line that shows a 4px bar and pixel grip on hover or keyboard focus, darkens while dragging,
- * moves with the arrow keys, and calls onReset on double-click instead of the library's own reset.
+ * Postcondition: renders a joint or a gap that shows a 2px bar and a grip on hover or keyboard focus,
+ * brightens while dragging, moves with the arrow keys, and calls onReset on double-click instead of the library's own reset.
  */
-export function PaneHandle({ label, onReset }: PaneHandleProps): React.ReactElement {
+export function PaneHandle({ seam, label, onReset }: PaneHandleProps): React.ReactElement {
   return (
     <Separator
       aria-label={label}
+      data-seam={seam}
       disableDoubleClick
       className="pane-handle cursor-col-resize"
       onDoubleClick={(e) => {

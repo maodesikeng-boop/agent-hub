@@ -119,8 +119,8 @@ export function SettingsDialog({
     security: <BrowserSessionsSettings />,
   };
 
-  // Settings is a page of the workbench: the categories sit on the cream frame like the PM list, and the open category is a
-  // white sheet whose header line stays level with the categories header.
+  // Settings is a page of the workbench laid out like the PM page: the categories sit on the year rings joined to the white
+  // sheet of the open category, and both header lines stay level.
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="Settings" page>
@@ -128,10 +128,10 @@ export function SettingsDialog({
           value={effectiveSection}
           onValueChange={(val) => setActiveSection(val as SettingsDialogSection)}
           orientation="vertical"
-          className="flex min-h-0 flex-1 flex-col min-[720px]:flex-row"
+          className="shell-group flex min-h-0 flex-1 flex-col min-[720px]:flex-row"
         >
-          <div className="flex shrink-0 flex-col pt-1.5 min-[720px]:w-66">
-            <div aria-hidden="true" data-window-drag className="flex h-11 shrink-0 items-center border-b border-border pl-4 text-title font-semibold text-list-ink max-[719px]:hidden">
+          <div className="wood-rings shell-list flex shrink-0 flex-col max-[719px]:after:hidden min-[720px]:w-66">
+            <div aria-hidden="true" data-window-drag className="groove-bottom flex h-11 shrink-0 items-center pl-4 text-title font-semibold text-list-ink max-[719px]:hidden">
               Settings
             </div>
             <TabsList
@@ -154,7 +154,7 @@ export function SettingsDialog({
             </TabsList>
           </div>
           {sections.map(({ id, label }) => (
-            <TabsContent key={id} value={id} className="shell-sheet ml-1.5 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none">
+            <TabsContent key={id} value={id} className="shell-sheet shell-sheet-joined flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none max-[719px]:rounded-none">
               <header data-window-drag className="flex h-11 shrink-0 items-center gap-2 border-b border-border pr-3 pl-6">
                 <h2 className="min-w-0 flex-1 truncate text-title font-semibold">{label}</h2>
                 <DialogClose asChild>

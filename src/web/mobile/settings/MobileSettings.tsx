@@ -98,7 +98,7 @@ function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
           <div className="text-minor font-semibold text-foreground">{vendor.group ? `${vendor.name} (${vendor.group})` : vendor.name}</div>
           {vendor.windows.map((w) => {
             const full = w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100));
-            const barClass = full ? "bg-danger" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-rail-ink";
+            const barClass = full ? "bg-danger" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-brand-ink";
             const fillWidth = Math.min(100, Math.max(0, w.percent));
             return (
               <div key={w.key} className="grid gap-1.5">

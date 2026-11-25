@@ -11,6 +11,7 @@ export const SHELL_STRIP_REM = 4.5;
 export const SHELL_LIST_REM = { min: 13.75, default: 16.5, max: 25 } as const;
 export const SHELL_PANEL_REM = { min: 22.5, default: 27.5, max: 45 } as const;
 export const SHELL_CHAT_MIN_REM = 30;
-// The cream frame's 6px right inset and the 6px gaps between the list and the white sheets, in px like every line.
+// The frame's 6px inset around the panels and the 4px gap before the side panel, in px like every line; the list and the
+// conversation sheet join with no gap. styles.css keeps the same values in --frame-inset and --shell-gap.
 export const SHELL_FRAME_PX = 6;
-export const SHELL_SEAM_PX = 6;
+export const SHELL_GAP_PX = 4;

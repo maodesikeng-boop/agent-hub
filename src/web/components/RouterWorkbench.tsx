@@ -148,7 +148,7 @@ const ClosedRouterDraftCard = memo(function ClosedRouterDraftCard({
           <Avatar look={closed.look} size={24} />
           <span className="truncate">{closed.pmName}</span>
         </button>
-        <span className="rounded-sm bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Closed</span>
+        <span className="rounded-xs bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Closed</span>
       </div>
       <h3 className="mt-2.5 text-body font-medium text-foreground">{closed.question}</h3>
       <UnsentDraftBanner draft={draft} onDismiss={onDismiss} />
@@ -293,7 +293,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                         <span className="shrink-0 text-xs text-muted-foreground">{entry.deviceName}</span>
                       )}
                       {!entry.online && (
-                        <span className="shrink-0 rounded-sm bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        <span className="shrink-0 rounded-xs bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">
                           Offline
                         </span>
                       )}
@@ -340,7 +340,7 @@ function TargetChip({
   onRemove: () => void;
 }) {
   return (
-    <li className="flex max-w-full items-center gap-1.5 rounded-sm bg-panel py-1 pr-1 pl-2.5 text-minor text-foreground">
+    <li className="flex max-w-full items-center gap-1.5 rounded-xs bg-panel py-1 pr-1 pl-2.5 text-minor text-foreground">
       <Avatar look={look} size={16} />
       <span className="truncate font-medium">{label}</span>
       {deviceName !== null && <span className="shrink-0 text-xs text-muted-foreground">{deviceName}</span>}
@@ -857,7 +857,6 @@ export const RouterWorkbench = memo(function RouterWorkbench({
             placeholder={mobile ? "Tell Router…" : "Tell Router, or type @ to pick a project…"}
             autoFocus={!mobile}
             leadingChip={targetChip}
-            sendTone="rail"
             onSelectTarget={handleSelectTarget}
             onSend={handleComposerSend}
           />

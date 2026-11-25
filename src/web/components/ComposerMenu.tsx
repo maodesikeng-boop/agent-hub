@@ -66,7 +66,7 @@ export function ComposerMenu({
                   className={cn(
                     "min-w-0 truncate font-medium",
                     isAction
-                      ? "flex-1 text-minor text-rail-ink"
+                      ? "flex-1 text-minor text-brand-ink"
                       : menu.kind === "file"
                         ? "max-w-[60%] shrink-0"
                         : "max-w-[45%] shrink-0",
@@ -76,7 +76,7 @@ export function ComposerMenu({
                   {item.label}
                 </span>
                 {item.detail !== "" && <span title={item.detail} className="min-w-0 flex-1 truncate text-minor text-muted-foreground">{item.detail}</span>}
-                {isAction && <ChevronRight className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />}
+                {isAction && <ChevronRight className="size-pixel-sm shrink-0 text-brand-ink" aria-hidden="true" />}
               </li>
             );
           })}

@@ -40,17 +40,22 @@ const setup = (over: Partial<StagedFiles> = {}) =>
   render(<Composer value="第一行\n第二行" placeholder="发消息" staging={staging(over)} onChange={() => {}} onSend={() => {}} />);
 
 describe("Composer 布局", () => {
-  it("“+”和发送键同尺寸（36px）、4px 小圆角；“+”是不带底色的 ghost 图标按钮（悬停 hover:bg-hover）；框是 .composer-frame", () => {
+  it("keeps + and Send the same 30px size: + is a ghost icon button in the body color with an 18px thin plus, Send a flat pastel square with a thin arrow", () => {
     setup();
     const attach = screen.getByRole("button", { name: "Add files" });
     const send = screen.getByRole("button", { name: "Send" });
-    expect(attach).toHaveClass("text-muted-foreground", "hover:bg-hover");
+    expect(attach).toHaveClass("text-foreground", "hover:bg-hover");
     expect(attach.className).not.toMatch(/(^|\s)bg-/);
-    for (const el of [attach, send]) expect(el).toHaveClass("size-9", "rounded-sm");
+    for (const el of [attach, send]) expect(el).toHaveClass("size-7.5", "rounded-sm");
+    expect(attach.querySelector("svg")).toHaveClass("size-4.5");
+    expect(attach.querySelector("svg")).toHaveAttribute("stroke-width", "1.5");
+    expect(send).toHaveClass("send-button");
+    expect(send.className).not.toMatch(/btn-solid|btn-honey/);
+    expect(send.querySelector("svg")).toHaveAttribute("stroke-width", "1.75");
     expect(attach.closest(".composer-frame")).not.toBeNull();
   });
 
-  it("空输入框是单行：回形针、文字区、发送键在同一个网格行，从左到右排开", () => {
+  it("puts the empty draft on the top row across the frame, with + and Send on the row below", () => {
     const { container } = render(<Composer value="" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
     const frame = container.firstElementChild as HTMLElement;
     expect(frame).toHaveAttribute("data-multiline", "false");
@@ -59,13 +64,11 @@ describe("Composer 布局", () => {
     const send = screen.getByRole("button", { name: "Send" });
     expect(attach.parentElement).toBe(box.parentElement);
     expect(send.parentElement?.parentElement).toBe(box.parentElement);
-    for (const el of [attach, box, send.parentElement as HTMLElement]) expect(el).toHaveClass("row-start-1");
-    expect(attach).toHaveClass("col-start-1");
-    expect(box).toHaveClass("col-start-2");
-    expect(send.parentElement).toHaveClass("col-start-3");
-    expect(box).toHaveClass("min-h-9"); // 文字区 36px，和按钮同高，整条约 48px
-    expect(attach.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(box.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(box).toHaveClass("col-start-1", "col-end-4", "row-start-1", "h-10");
+    expect(attach).toHaveClass("col-start-1", "row-start-2");
+    expect(send.parentElement).toHaveClass("col-start-3", "row-start-2", "justify-self-end");
+    expect(box.compareDocumentPosition(attach) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(attach.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("有待发文件时按多行布局：文字区占满一行，回形针在左、发送在右落到下一行；文件小条在文字上方", () => {
@@ -88,12 +91,12 @@ describe("Composer 布局", () => {
     expect(icons[2]).not.toBe(icons[0]);
   });
 
-  it("待发文件列表和文字的左边距一致（文件条 20px，多行时文字区 12px + 外层 8px）", () => {
+  it("starts the pending files on the draft's text edge (files 16px, text 10px inside a 6px row inset)", () => {
     setup({ files: [{ key: "a", file: new File(["x"], "a.txt") }] });
-    expect(screen.getByRole("list", { name: "Files to send" })).toHaveClass("px-5");
+    expect(screen.getByRole("list", { name: "Files to send" })).toHaveClass("px-4");
     const box = screen.getByRole("textbox", { name: "Message" });
-    expect(box).toHaveClass("px-3");
-    expect(box.parentElement).toHaveClass("px-2");
+    expect(box).toHaveClass("px-2.5");
+    expect(box.parentElement).toHaveClass("px-1.5");
   });
 
   it("keeps the same textarea and its focus when a newline moves the controls down", () => {
@@ -142,8 +145,8 @@ describe("Composer 布局", () => {
       );
       const btn = screen.queryByRole("button", { name: "Stop" });
       if (files.length === 0) {
-        expect(btn).toHaveClass("size-9", "rounded-sm");
-        expect(btn?.parentElement).toHaveClass("col-start-3", "row-start-1");
+        expect(btn).toHaveClass("size-7.5", "rounded-sm", "send-button");
+        expect(btn?.parentElement).toHaveClass("col-start-3", "row-start-2");
       } else {
         expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(); // 有待发文件：不是停止
       }
@@ -483,8 +486,8 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(chip.querySelector("svg")).toHaveClass("size-4", "text-muted-foreground");
     expect(chip.querySelector("svg")).toHaveAttribute("data-icon", "line");
     const li = chip.closest("li")!;
-    // A chip is a flat paper fill with the one small radius: no outline inside the composer's frame.
-    expect(li).toHaveClass("rounded-sm", "bg-panel", "py-1", "pr-1", "pl-3", "text-minor");
+    // A chip is a flat paper fill with the chip radius: no outline inside the composer's frame.
+    expect(li).toHaveClass("rounded-xs", "bg-panel", "py-1", "pr-1", "pl-3", "text-minor");
     expect(li.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     expect(li.parentElement).toHaveAccessibleName("Files to send");
     expect(li.parentElement!.firstElementChild).toBe(li);
@@ -659,7 +662,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     const chips = await screen.findAllByRole("group", { name: "Worker model" });
     expect(chips).toHaveLength(1);
     expect(chips[0]!.textContent).toBe("Claude CodeHigh");
-    expect(chips[0]).toHaveClass("rounded-sm", "bg-panel", "text-minor", "gap-2", "mb-1.5");
+    expect(chips[0]).toHaveClass("rounded-xs", "bg-panel", "text-minor", "gap-2", "mb-1.5");
     expect(chips[0]!.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     const bubble = screen.getByText("派人做");
     expect(chips[0]!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

@@ -29,22 +29,26 @@ export interface AppRailProps {
   quotaFetchable: boolean;
   onSelectComputer: (key: DeviceKey) => void;
   onOpenSettings: () => void;
-  /** Settings is open as a page; its tile stays raised like a tile whose popover is open. */
+  /** Settings is open as a page; its tile keeps the selected fill like a tile whose popover is open. */
   settingsOpen?: boolean;
   onOpenUpdates: () => void;
   /** Opens Settings on Computers when an account is linked, otherwise on Security & Access. */
   onOpenAccount: () => void;
 }
 
-// One tile recipe for every rail item: honey hover, and a raised cream tile while it is the current page or open.
+// One tile recipe for every rail item: a warm fill on hover, and a stronger fill while it is the current page or open. A
+// selected computer also turns its icon solid; the Router bell, the gear, and the hourglass have no solid form, so their
+// selected fill is stronger to stay apart from hover.
 const TILE =
-  "relative grid shrink-0 place-items-center rounded-sm [--dot-ring:var(--rail)] transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none group-focus-visible:outline-2 group-focus-visible:outline-border-focus";
-const TILE_REST = "group-hover:bg-rail-hover group-hover:[--dot-ring:var(--rail-hover)] group-data-[state=open]:tile-selected group-data-[state=open]:[--tile-fill:var(--list)] group-data-[state=open]:[--dot-ring:var(--list)]";
-const TILE_ON = "tile-selected [--tile-fill:var(--list)] [--dot-ring:var(--list)] text-list-ink";
+  "relative grid shrink-0 place-items-center rounded-tile [--dot-ring:var(--rail)] transition-[background-color] duration-150 motion-reduce:transition-none group-focus-visible:outline-2 group-focus-visible:outline-border-focus";
+const TILE_REST =
+  "group-hover:bg-rail-hover group-hover:[--dot-ring:var(--rail-hover-solid)] group-data-[state=open]:bg-rail-selected-strong group-data-[state=open]:[--dot-ring:var(--rail-selected-strong-solid)]";
+const TILE_ON = "bg-rail-selected [--dot-ring:var(--rail-selected-solid)]";
+const TILE_ON_STRONG = "bg-rail-selected-strong [--dot-ring:var(--rail-selected-strong-solid)]";
 const ITEM = "group flex cursor-pointer flex-col items-center gap-1 outline-none";
 const LABEL = "max-w-16 truncate text-xs leading-4 font-medium";
 const BADGE =
-  "badge-pop absolute -top-1.5 -right-2 grid h-5 min-w-5 place-items-center rounded-sm bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums shadow-[0_0_0_2px_var(--rail)]";
+  "badge-pop absolute -top-1.5 -right-2 grid h-5 min-w-5 place-items-center rounded-xs bg-rail-ink px-1 text-xs leading-none font-semibold text-rail tabular-nums shadow-[0_0_0_2px_var(--dot-ring)]";
 const DOT = "absolute size-2.5 rounded-full shadow-[0_0_0_2px_var(--dot-ring)] transition-shadow duration-150 motion-reduce:transition-none";
 
 function badgeText(count: number): string {
@@ -61,10 +65,10 @@ function CountBadge({ count, testId }: { count: number; testId: string }) {
 
 const STATUS_DOT: Record<RailComputer["status"], string> = {
   online: "bg-success",
-  connecting: "bg-muted-foreground",
-  reconnecting: "bg-warn-foreground",
-  offline: "bg-muted-foreground",
-  unreachable: "bg-muted-foreground",
+  connecting: "bg-rail-ink-soft",
+  reconnecting: "bg-rail-warn",
+  offline: "bg-rail-ink-soft",
+  unreachable: "bg-rail-ink-soft",
 };
 
 function ComputerCell({ computer, selected, onSelect }: { computer: RailComputer; selected: boolean; onSelect: () => void }) {
@@ -83,13 +87,12 @@ function ComputerCell({ computer, selected, onSelect }: { computer: RailComputer
       onClick={onSelect}
       className={ITEM}
     >
-      <span className={cn(TILE, "size-12", selected ? TILE_ON : TILE_REST, !selected && (offline ? "text-rail-ink-soft" : "text-rail-ink"))}>
-        {/* The dot belongs to the icon, so it stays beside it whether or not the tile is raised. */}
+      <span className={cn(TILE, "size-12", selected ? TILE_ON : TILE_REST, offline ? "text-rail-ink-soft" : "text-rail-ink")}>
+        {/* The dot belongs to the icon, so it stays beside it whether or not the tile is selected. */}
         <span className="relative grid">
-          <PlatformIcon platform={computer.platform} size="inherit" className="size-pixel" />
+          <PlatformIcon platform={computer.platform} size="inherit" solid={selected} className="size-pixel" />
           <span data-testid={`rail-device-dot-${testKey}`} data-status={computer.status} aria-hidden="true" className={cn(DOT, "-right-1 -bottom-0.5", STATUS_DOT[computer.status])} />
         </span>
-        {computer.badge > 0 && <CountBadge count={computer.badge} testId={`rail-device-badge-${testKey}`} />}
       </span>
       <span className={cn(LABEL, offline ? "text-rail-ink-soft" : "text-rail-ink")}>{computer.name}</span>
     </button>
@@ -132,9 +135,10 @@ function UsageTrigger({ meter, ...rest }: { meter: QuotaMeter | null } & React.C
 }
 
 /**
- * Postcondition: renders the 4.5rem honey rail with the Router cell, computer cells, the Update cell while an update waits,
- * the sand hourglass that opens the usage popover, the Settings gear with the resources dot, and the account cell; every
- * item shares one tile recipe. In the native macOS app the top clears the traffic lights and drags the window.
+ * Postcondition: renders the 4.5rem rail on the frame wood with the Router cell and its waiting count, computer cells with
+ * no count, the Update cell while an update waits, the sand hourglass that opens the usage popover, the Settings gear with
+ * the resources dot, and the account cell; every item shares one tile recipe, and grooves part the Router, the computers,
+ * and the footer.
  */
 export function AppRail({
   router,
@@ -156,9 +160,9 @@ export function AppRail({
   return (
     <nav
       aria-label="Workspace"
-      className="flex h-full w-18 shrink-0 flex-col items-center bg-rail pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)] text-rail-ink select-none"
+      className="on-frame flex h-full w-18 shrink-0 flex-col items-center pb-[var(--safe-bottom)] text-rail-ink select-none"
     >
-      <div data-window-drag className="flex w-full shrink-0 flex-col items-center pt-3.5">
+      <div data-window-drag className="flex w-full shrink-0 flex-col items-center pt-[var(--frame-inset)]">
         <button
           type="button"
           aria-label={router.pendingCount > 0 ? `Router (${router.pendingCount} waiting)` : "Router"}
@@ -166,7 +170,7 @@ export function AppRail({
           onClick={router.onSelect}
           className={ITEM}
         >
-          <span className={cn(TILE, "size-12", router.active ? TILE_ON : TILE_REST)}>
+          <span className={cn(TILE, "size-12", router.active ? TILE_ON_STRONG : TILE_REST)}>
             <RouterAvatar size={36} working={router.working} />
             {router.pendingCount > 0 && <CountBadge count={router.pendingCount} testId="rail-router-badge" />}
           </span>
@@ -176,7 +180,7 @@ export function AppRail({
 
       {computers.length > 0 && (
         <>
-          <div aria-hidden="true" className="my-3 h-px w-8 shrink-0 bg-border" />
+          <div aria-hidden="true" className="groove my-3 w-8 shrink-0" />
           <div className="flex min-h-0 w-full flex-col items-center gap-3 overflow-y-auto px-1 pt-1.5">
             {computers.map((c) => (
               <ComputerCell key={c.key} computer={c} selected={selectedComputer === c.key} onSelect={() => onSelectComputer(c.key)} />
@@ -187,7 +191,8 @@ export function AppRail({
 
       <div data-window-drag className="min-h-4 w-full flex-1" />
 
-      <div className="flex shrink-0 flex-col items-center gap-1.5 pt-2 pb-3">
+      <div aria-hidden="true" className="groove mb-2 w-8 shrink-0" />
+      <div className="flex shrink-0 flex-col items-center gap-1.5 pb-[var(--frame-inset)]">
         {reminder !== null && (
           <FooterButton label={updateLabel} title={updateLabel} onClick={onOpenUpdates}>
             <Download className="size-pixel" aria-hidden="true" />

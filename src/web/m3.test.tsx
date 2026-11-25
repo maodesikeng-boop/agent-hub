@@ -733,12 +733,12 @@ describe("最左栏的额度", () => {
     expect(panel).toHaveClass("max-h-(--radix-popover-content-available-height)", "overflow-y-auto");
   });
 
-  it("用量条颜色：正常暖棕（rail-ink）、偏高琥珀（caution）、用满红色（danger）；未用满时百分比不上告警色", async () => {
+  it("用量条颜色：正常暖棕（brand-ink）、偏高琥珀（caution）、用满红色（danger）；未用满时百分比不上告警色", async () => {
     const user = userEvent.setup();
     await boot(withQuota(limit({ five_hour: win(0.37), seven_day: win(0.85, { resetsAt: 1_793_646_000 }) })));
     await user.click(badge());
     const fill = (name: string) => screen.getByRole("progressbar", { name }).firstElementChild!.className;
-    expect(fill("5h usage")).toContain("bg-rail-ink");
+    expect(fill("5h usage")).toContain("bg-brand-ink");
     expect(fill("7d usage")).toContain("bg-caution");
     expect(within(screen.getByRole("dialog", { name: "Usage" })).getByText("85%")).not.toHaveClass("text-danger", "text-warn-foreground", "text-rail-danger", "text-rail-warn");
   });
@@ -848,9 +848,14 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(aside.closest("[data-panel]")?.parentElement).toBe(main.closest("[data-panel]")?.parentElement);
     const classes = aside.className.split(" ");
     expect(classes.some((c) => /(^|:)(fixed|absolute)$/.test(c))).toBe(false);
-    // Both content panes are white sheets on the cream frame, parted by the frame's tone rather than a line.
-    expect(classes).toContain("shell-sheet");
-    expect(main).toHaveClass("shell-sheet");
+    // Both content panes are white sheets in one inlaid block: the conversation joins the list, the side panel stands alone.
+    const sheetOf = (el: Element) => el.closest(".shell-sheet");
+    expect(sheetOf(aside)).not.toBeNull();
+    expect(sheetOf(aside)).not.toHaveClass("shell-sheet-joined");
+    expect(sheetOf(main)).toHaveClass("shell-sheet-joined");
+    expect(sheetOf(aside)!.closest(".shell-group")).toBe(sheetOf(main)!.closest(".shell-group"));
+    expect(screen.getByRole("separator", { name: "Resize side panel" })).toHaveAttribute("data-seam", "gap");
+    expect(screen.getByRole("separator", { name: "Resize project list" })).toHaveAttribute("data-seam", "joint");
     expect(within(main).getByRole("heading", { name: "小林" })).toBeInTheDocument();
     expect(within(main).getByRole("textbox")).toBeVisible();
   });
@@ -1183,7 +1188,8 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()!.closest("main")).toBeNull();
     expect(rail()!.className.split(" ").some((c) => /(fixed|absolute)$/.test(c))).toBe(false);
     const listRegion = screen.getByRole("region", { name: "This computer" });
-    expect(listRegion).toHaveClass("w-18", "shrink-0", "bg-list");
+    expect(listRegion).toHaveClass("w-18", "shrink-0", "wood-rings", "shell-list");
+    expect(listRegion.parentElement).toHaveClass("shell-group");
     expect(within(listRegion).queryByRole("searchbox", { name: "Search conversations" })).toBeNull();
     const avatarButtons = within(listRegion).getAllByRole("button").filter((b) => /小林|老马/.test(b.getAttribute("aria-label") ?? ""));
     expect(avatarButtons.length).toBeGreaterThan(0);
@@ -1192,7 +1198,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       expect(btn.className).not.toMatch(/border-2|rounded-(?!sm\b)/);
     }
     await user.click(within(listRegion).getByRole("button", { name: /老马/ }));
-    expect(within(listRegion).getByRole("button", { name: /老马/ })).toHaveClass("tile-selected");
+    expect(within(listRegion).getByRole("button", { name: /老马/ })).toHaveClass("row-selected");
     expect(within(listRegion).getByRole("button", { name: "New project manager" })).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });

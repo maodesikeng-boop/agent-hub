@@ -6,6 +6,8 @@
   --color-foreground: var(--foreground);
   --color-rail: var(--rail);
   --color-rail-hover: var(--rail-hover);
+  --color-rail-selected: var(--rail-selected);
+  --color-rail-selected-strong: var(--rail-selected-strong);
   --color-rail-ink: var(--rail-ink);
   --color-rail-ink-soft: var(--rail-ink-soft);
   --color-rail-danger: var(--rail-danger);
@@ -16,6 +18,7 @@
   --color-list-ink: var(--list-ink);
   --color-list-ink-soft: var(--list-ink-soft);
   --color-select-line: var(--select-line);
+  --color-brand-ink: var(--brand-ink);
   --color-panel: var(--panel);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
@@ -72,11 +75,13 @@
   --text-body: 0.9375rem;
   --text-minor: 0.84375rem;
   --radius-*: initial;
-  --radius-xs: 2px;
-  --radius-sm: 4px;
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-tile: 11px;
+  --radius-panel: 12px;
 }
 
-/* Every control shares the one small radius; containers opt in with rounded-sm. */
+/* Every control shares the small radius; containers opt in with rounded-sm. */
 @layer base {
   button,
   input,
@@ -105,32 +110,52 @@ html[data-ui-scale="xl"] {
   --font-ui: "Geist Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-code: "SF Mono", ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
 
-  --rail: #f9bd01;
-  --rail-shade: #e39600;
-  --rail-drag: #c37a00;
-  --rail-hover: #f9cb4b;
-  --rail-ink: #4a2e00;
-  --rail-ink-soft: #6e4a00;
-  --rail-danger: #991b1b;
-  --rail-warn: #7c4100;
-  --sand: #a35f00;
-  --list: #fcd771;
-  --list-hover: #f9ce55;
-  --list-field: #fffbeb;
-  --list-ink: #3b2600;
-  --list-ink-soft: #725317;
+  --wood-top: #5f3302;
+  --wood-bottom: #542d00;
+  --rings-top: #774511;
+  --rings-bottom: #6f3d05;
+  --topbar-height: 40px;
+  --frame-inset: 6px;
+  --shell-gap: 4px;
+  --inlay-shadow: 0 0 12px rgb(10 5 2 / 0.376);
+  --groove-dark: rgb(14 7 2 / 0.298);
+  --groove-light: rgb(255 248 236 / 0.137);
+  --rail: var(--wood-top);
+  --rail-hover: rgb(255 244 228 / 0.1);
+  --rail-selected: rgb(255 244 228 / 0.17);
+  --rail-selected-strong: rgb(255 244 228 / 0.24);
+  /* Opaque versions of the fills above, for the halos that part a dot or badge from its tile. */
+  --rail-hover-solid: color-mix(in srgb, rgb(255 244 228) 10%, var(--rail));
+  --rail-selected-solid: color-mix(in srgb, rgb(255 244 228) 17%, var(--rail));
+  --rail-selected-strong-solid: color-mix(in srgb, rgb(255 244 228) 24%, var(--rail));
+  --rail-shade: rgb(255 244 228 / 0.45);
+  --rail-drag: rgb(255 244 228 / 0.75);
+  --rail-ink: #fcf2e5;
+  --rail-ink-soft: #c5b099;
+  --rail-danger: #fe9aa2;
+  --rail-warn: #f2b966;
+  --sand: #e6c99a;
+  --list: var(--rings-top);
+  --list-hover: rgb(255 240 220 / 0.07);
+  --list-field: rgb(255 244 228 / 0.1);
+  --list-ink: #fdf6ec;
+  --list-ink-soft: #eed8c0;
+  --row-selected: #fffaf2;
+  --row-selected-ink: #24140a;
+  --row-selected-ink-soft: #7e6550;
+  --brand-ink: #4a2e00;
   --select-line: #e0b03c;
   --background: #ffffff;
   --panel: #f7f4ed;
   --foreground: #1c1917;
-  --primary: var(--rail-ink);
+  --primary: var(--brand-ink);
   --primary-foreground: #ffffff;
   --secondary: var(--panel);
   --secondary-foreground: var(--foreground);
   --muted: var(--panel);
   --muted-foreground: #6f6862;
   --accent: var(--hover);
-  /* One warm-ink line family: alpha lines read as the same line on white, paper, cream, and honey surfaces. */
+  /* One warm-ink line family: alpha lines read as the same line on white and paper; the wood surfaces re-point them. */
   --border: rgb(110 74 0 / 0.14);
   --border-strong: rgb(110 74 0 / 0.26);
   --border-focus: #4a4038;
@@ -144,8 +169,16 @@ html[data-ui-scale="xl"] {
   --motion-surface: 160ms;
   --motion-pour: 700ms;
   --bubble-agent: var(--panel);
+  --send: #fcd882;
+  --send-hover: #f4cc6b;
+  --send-press: #ebc25a;
+  --send-ink: #443302;
   --send-disabled: #f3efe6;
   --send-disabled-ink: #a8a29e;
+  --composer-line: rgb(60 40 20 / 0.16);
+  --composer-line-focus: rgb(60 40 20 / 0.4);
+  --shadow-composer: 0 1px 2px rgb(40 25 10 / 0.06), 0 4px 14px rgb(40 25 10 / 0.07);
+  --shadow-composer-focus: 0 0 0 1px rgb(60 40 20 / 0.1), 0 4px 14px rgb(40 25 10 / 0.08);
   --warn: #fff4e0;
   --warn-foreground: #8a4b00;
   --danger: #d92d20;
@@ -167,15 +200,8 @@ html[data-ui-scale="xl"] {
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --kb-inset: 0px;
   --bottom-inset: max(var(--safe-bottom), var(--kb-inset));
-  --macos-traffic-lights-width: 0px;
-  --macos-traffic-lights-height: 0px;
 
   color-scheme: light;
-}
-
-html[data-macos-app="true"] {
-  --macos-traffic-lights-width: 72px;
-  --macos-traffic-lights-height: 28px;
 }
 
 html,
@@ -442,17 +468,17 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 }
 .composer-frame {
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--composer-line);
   border-radius: var(--radius-sm);
   background-color: var(--background);
-  box-shadow: var(--shadow-tile);
+  box-shadow: var(--shadow-composer);
   transition:
     border-color 150ms ease,
     box-shadow 150ms ease;
 }
 .composer-frame:focus-within {
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 1px var(--border-focus);
+  border-color: var(--composer-line-focus);
+  box-shadow: var(--shadow-composer-focus);
 }
 @media (prefers-reduced-motion: reduce) {
   .composer-frame {
@@ -461,13 +487,27 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 /* Selected items lift into a lighter tile with the selection hairline; inset rings never shift layout or get clipped. */
 @utility tile-selected {
-  background-color: var(--tile-fill, var(--background));
+  background-color: var(--background);
   box-shadow:
     inset 0 0 0 1px var(--select-line),
     var(--shadow-tile);
 }
+/* The selected list row is a cream band; it re-points the list inks so its name, meta, and focus ring turn dark. */
 @utility row-selected {
-  background-color: var(--background);
+  --list-ink: var(--row-selected-ink);
+  --list-ink-soft: var(--row-selected-ink-soft);
+  --list-hover: rgb(36 20 10 / 0.06);
+  --border-focus: var(--row-selected-ink);
+  background-color: var(--row-selected);
+  color: var(--row-selected-ink);
+}
+@utility groove {
+  height: 2px;
+  background: linear-gradient(var(--groove-dark) 0 1px, var(--groove-light) 1px 2px);
+}
+@utility groove-bottom {
+  border-bottom: 1px solid var(--groove-dark);
+  box-shadow: 0 1px 0 var(--groove-light);
 }
 /* Flex centering then lines an icon up with the label's capitals instead of the font's taller line box. */
 @utility trim-cap {
@@ -489,7 +529,7 @@ input[type="search"]::-webkit-search-cancel-button {
   --slot-ink-soft: #6e4a00;
   --slot-line: rgb(138 83 0 / 0.3);
 }
-/* Raised buttons: a hairline, a top-lit fill, an inner highlight, and a 1px soft drop that sinks into an inset shade when pressed. */
+/* Buttons are flat: a fill and, on raised and slot buttons, one line; hover and press only shift the fill. */
 @layer components {
   .btn-raised,
   .btn-honey,
@@ -497,43 +537,28 @@ input[type="search"]::-webkit-search-cancel-button {
     transition:
       background-color var(--motion-press) ease-out,
       border-color var(--motion-press) ease-out,
-      box-shadow var(--motion-press) ease-out,
-      filter var(--motion-press) ease-out,
-      transform var(--motion-press) ease-out;
+      filter var(--motion-press) ease-out;
   }
   .btn-raised {
     border: 1px solid var(--border-strong);
     background-color: var(--background);
-    background-image: linear-gradient(180deg, rgb(255 255 255 / 0), rgb(110 74 0 / 0.03));
-    box-shadow:
-      0 1px 2px rgb(74 46 0 / 0.08),
-      inset 0 1px 0 rgb(255 255 255 / 0.9);
     color: var(--foreground);
   }
   .btn-raised:hover:not(:disabled) {
-    border-color: rgb(110 74 0 / 0.36);
-    background-image: none;
+    background-color: var(--hover);
   }
   .btn-honey {
     --foreground: var(--slot-ink);
     --muted-foreground: var(--slot-ink-soft);
     border: 1px solid var(--slot-line);
     background-color: var(--slot-bg);
-    background-image: linear-gradient(180deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0) 70%);
-    box-shadow:
-      0 1px 2px rgb(138 83 0 / 0.16),
-      inset 0 1px 0 rgb(255 255 255 / 0.75);
     color: var(--slot-ink);
   }
   .btn-honey:hover:not(:disabled) {
     background-color: var(--slot-hover);
   }
   .btn-solid {
-    border: 1px solid rgb(0 0 0 / 0.2);
-    background-image: linear-gradient(180deg, rgb(255 255 255 / 0.16), rgb(255 255 255 / 0) 60%);
-    box-shadow:
-      0 1px 2px rgb(0 0 0 / 0.16),
-      inset 0 1px 0 rgb(255 255 255 / 0.18);
+    border: 1px solid transparent;
   }
   .btn-solid:hover:not(:disabled) {
     filter: brightness(1.08);
@@ -541,52 +566,50 @@ input[type="search"]::-webkit-search-cancel-button {
   .btn-raised:active:not(:disabled),
   .btn-raised[aria-expanded="true"],
   .btn-raised[data-state="open"] {
-    background-color: var(--hover);
-    background-image: none;
-    box-shadow: inset 0 1px 2px rgb(74 46 0 / 0.14);
+    background-color: color-mix(in srgb, var(--foreground) 6%, var(--hover));
   }
   .btn-honey:active:not(:disabled),
   .btn-honey[aria-expanded="true"],
   .btn-honey[data-state="open"] {
     background-color: var(--slot-press);
-    background-image: none;
-    box-shadow: inset 0 1px 2px rgb(138 83 0 / 0.26);
   }
   .btn-solid:active:not(:disabled) {
-    filter: none;
-    background-image: none;
-    box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.3);
-  }
-  .btn-raised:active:not(:disabled),
-  .btn-honey:active:not(:disabled),
-  .btn-solid:active:not(:disabled) {
-    transform: translateY(0.5px);
-  }
-  .btn-raised:disabled,
-  .btn-honey:disabled,
-  .btn-solid:disabled {
-    background-image: none;
-    box-shadow: none;
+    filter: brightness(0.92);
   }
   .tool-badge {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-xs);
     background-color: var(--slot-bg);
     color: var(--slot-ink);
+  }
+  /* The send button takes the conversation's pastel: the PM's hue made light, or honey outside a PM. */
+  .send-button {
+    display: grid;
+    place-items: center;
+    border-radius: var(--radius-sm);
+    background-color: var(--send);
+    color: var(--send-ink);
+    transition: background-color var(--motion-press) ease-out;
+  }
+  .send-button:hover:not(:disabled) {
+    background-color: var(--send-hover);
+  }
+  .send-button:active:not(:disabled) {
+    background-color: var(--send-press);
+  }
+  .send-button:disabled {
+    background-color: var(--send-disabled);
+    color: var(--send-disabled-ink);
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .btn-raised,
   .btn-honey,
-  .btn-solid {
+  .btn-solid,
+  .send-button {
     transition: none;
-  }
-  .btn-raised:active:not(:disabled),
-  .btn-honey:active:not(:disabled),
-  .btn-solid:active:not(:disabled) {
-    transform: none;
   }
 }
 /* Overlays settle in once from their anchor; nothing loops. */
@@ -1249,73 +1272,138 @@ input[type="search"]::-webkit-search-cancel-button {
 
 [data-shell="mobile"] .composer-dock { padding-bottom: 8px; }
 
-/* Regions part by tone, not lines: the PM list sits on the cream frame and each content pane is a white sheet 6px away. */
-.shell-frame {
-  padding-right: 6px;
-  background: var(--list);
-}
-.shell-sheet {
-  margin-block: 6px;
-  border-radius: var(--radius-sm);
-  background: var(--background);
-}
+@layer components {
+  /* The window is wood: the frame grain behind the rail, the top bar, and the rims, fixed to the viewport so every layer
+     that paints it (the shell, the Settings page) lines up. */
+  .wood {
+    background:
+      url("./assets/wood-grain.svg") 0 0 / 1200px 1000px repeat fixed,
+      linear-gradient(180deg, var(--wood-top), var(--wood-bottom)) fixed;
+  }
+  .on-frame {
+    --border-focus: var(--rail-ink);
+    --groove-dark: rgb(14 7 2 / 0.476);
+    --groove-light: rgb(255 248 236 / 0.118);
+    color: var(--rail-ink);
+  }
+  /* The year-ring panel the PM list and the Settings categories sit on; controls on it switch to light lines and fills. */
+  .wood-rings {
+    --foreground: var(--list-ink);
+    --muted-foreground: var(--list-ink-soft);
+    --hover: var(--list-hover);
+    --border: rgb(255 244 228 / 0.12);
+    --border-strong: rgb(255 244 228 / 0.16);
+    --border-focus: var(--list-ink);
+    --slot-bg: rgb(255 244 228 / 0.1);
+    --slot-hover: rgb(255 244 228 / 0.16);
+    --slot-press: rgb(255 244 228 / 0.22);
+    --slot-ink: var(--list-ink);
+    --slot-ink-soft: var(--list-ink-soft);
+    --slot-line: rgb(255 244 228 / 0.16);
+    position: relative;
+    background:
+      url("./assets/wood-rings.avif") 0 0 / 480px 1400px no-repeat,
+      linear-gradient(180deg, var(--rings-top), var(--rings-bottom));
+    color: var(--list-ink);
+  }
+  .shell-topbar {
+    height: var(--topbar-height);
+  }
+  /* Panels sit one inset in from the frame's top, right, and bottom, so the list and the sheets share both edges. */
+  .shell-frame {
+    padding: var(--frame-inset) var(--frame-inset) var(--frame-inset) 0;
+  }
+  .shell-group {
+    border-radius: var(--radius-panel);
+    box-shadow: var(--inlay-shadow);
+    overflow: hidden;
+  }
+  /* A sheet keeps the rim only in its own rounded corners; one joined to the list on its left lets the rim run into the gap
+     on its right, so the gap reads as deep as the outer rim. */
+  .shell-sheet {
+    border-radius: var(--radius-panel);
+    background: var(--background);
+    box-shadow: var(--inlay-shadow);
+    clip-path: inset(0);
+  }
+  .shell-sheet-joined {
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
+    clip-path: inset(0 calc(-1 * var(--shell-gap)) 0 0);
+  }
+  /* The conversation sheet's shade on the list where the two meet, the tail of a 20px blur offset 10px onto the list. */
+  .shell-list::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    right: 0;
+    width: 24px;
+    pointer-events: none;
+    background: linear-gradient(to left, rgb(10 5 2 / 0.29), rgb(10 5 2 / 0.25) 2px, rgb(10 5 2 / 0.17) 6px, rgb(10 5 2 / 0.08) 12px, rgb(10 5 2 / 0.03) 17px, transparent 24px);
+    -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0 / 0.2), #000 28px, #000 calc(100% - 28px), rgb(0 0 0 / 0.2));
+    mask-image: linear-gradient(to bottom, rgb(0 0 0 / 0.2), #000 28px, #000 calc(100% - 28px), rgb(0 0 0 / 0.2));
+  }
 
-.pane-handle {
-  position: relative;
-  width: 6px;
-  flex: none;
-  z-index: 3;
-  outline: none;
-}
-.pane-handle-bar,
-.pane-handle-grip {
-  display: none;
-  pointer-events: none;
-  position: absolute;
-}
-.pane-handle-bar {
-  top: 6px;
-  bottom: 6px;
-  left: 2px;
-  width: 2px;
-  border-radius: 9999px;
-  background: var(--rail-shade);
-}
-.pane-handle-grip {
-  top: 50%;
-  left: -2.5px;
-  width: 11px;
-  height: 32px;
-  margin-top: -16px;
-  border: 1px solid var(--slot-line);
-  border-radius: var(--radius-sm);
-  background: var(--rail);
-  box-shadow: var(--shadow-tile);
-}
-.pane-handle-dot {
-  position: absolute;
-  left: 2px;
-  width: 2px;
-  height: 2px;
-  border-radius: 9999px;
-  background: var(--rail-ink-soft);
-  box-shadow: 3px 0 0 var(--rail-ink-soft);
-}
-.pane-handle[data-separator="hover"] .pane-handle-bar,
-.pane-handle[data-separator="hover"] .pane-handle-grip,
-.pane-handle[data-separator="focus"] .pane-handle-bar,
-.pane-handle[data-separator="focus"] .pane-handle-grip,
-.pane-handle:focus-visible .pane-handle-bar,
-.pane-handle:focus-visible .pane-handle-grip,
-.pane-handle[data-separator="active"] .pane-handle-bar,
-.pane-handle[data-separator="active"] .pane-handle-grip {
-  display: block;
-}
-.pane-handle[data-separator="active"] .pane-handle-bar {
-  background: var(--rail-drag);
-}
-.pane-handle[data-separator="active"] .pane-handle-grip {
-  background: var(--rail-shade);
+  /* A joint is the boundary of the list and the conversation: a 6px handle that overlaps both by 3px, so it takes no
+     width. A gap is the 4px of wood before the side panel. */
+  .pane-handle {
+    position: relative;
+    flex: none;
+    z-index: 3;
+    outline: none;
+  }
+  .pane-handle[data-seam="joint"] {
+    width: 6px;
+    margin-inline: -3px;
+  }
+  .pane-handle[data-seam="gap"] {
+    width: var(--shell-gap);
+  }
+  .pane-handle-bar,
+  .pane-handle-grip {
+    display: none;
+    pointer-events: none;
+    position: absolute;
+  }
+  .pane-handle-bar {
+    top: 6px;
+    bottom: 6px;
+    left: calc(50% - 1px);
+    width: 2px;
+    border-radius: 9999px;
+    background: var(--rail-shade);
+  }
+  .pane-handle-grip {
+    top: 50%;
+    left: calc(50% - 5.5px);
+    width: 11px;
+    height: 32px;
+    margin-top: -16px;
+    border-radius: var(--radius-xs);
+    background: var(--rail-ink);
+  }
+  .pane-handle-dot {
+    position: absolute;
+    left: 2px;
+    width: 2px;
+    height: 2px;
+    border-radius: 9999px;
+    background: var(--rail);
+    box-shadow: 3px 0 0 var(--rail);
+  }
+  .pane-handle[data-separator="hover"] .pane-handle-bar,
+  .pane-handle[data-separator="hover"] .pane-handle-grip,
+  .pane-handle[data-separator="focus"] .pane-handle-bar,
+  .pane-handle[data-separator="focus"] .pane-handle-grip,
+  .pane-handle:focus-visible .pane-handle-bar,
+  .pane-handle:focus-visible .pane-handle-grip,
+  .pane-handle[data-separator="active"] .pane-handle-bar,
+  .pane-handle[data-separator="active"] .pane-handle-grip {
+    display: block;
+  }
+  .pane-handle[data-separator="active"] .pane-handle-bar {
+    background: var(--rail-drag);
+  }
 }
 
 .row-shortcuts {

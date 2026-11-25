@@ -70,7 +70,7 @@ export interface ProfilePanelProps {
 }
 
 const EDIT_LINK =
-  "touch-target cursor-pointer text-minor font-medium text-rail-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-50";
+  "touch-target cursor-pointer text-minor font-medium text-brand-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-50";
 
 const PAGE_TITLES: Readonly<Record<ProfilePage, string>> = {
   capabilities: "Capabilities",

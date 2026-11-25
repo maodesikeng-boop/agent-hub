@@ -354,7 +354,8 @@ describe("跨设备的等你确定", () => {
   it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行照常给读屏标出 Needs You", async () => {
     const fleet = new Fleet(onePm("小林", [ask(5, "本机要确定")]), onePm("阿青"), [mac]);
     await boot(fleet);
-    await waitFor(() => expect(within(rail()).getByTestId("rail-device-badge-local")).toHaveTextContent("1"));
+    await waitFor(() => expect(railDevice("Mac")).toHaveAccessibleName(/1 waiting/));
+    expect(within(rail()).queryByTestId("rail-device-badge-local")).toBeNull();
     await userEvent.click(railDevice("Mac"));
     await within(nav()).findByText("Needs You");
     expect(within(nav()).queryByRole("region", { name: "Needs You" })).toBeNull();

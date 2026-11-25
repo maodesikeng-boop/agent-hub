@@ -299,13 +299,17 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     window.history.replaceState(null, "", "/");
   });
 
-  it("data-macos-app='true' 下最左栏带交通灯避让类名，各列顶栏带 data-window-drag", async () => {
+  it("data-macos-app='true': the wood top bar holds the traffic lights, so the rail has no inset of its own; the top bar and every column header drag the window", async () => {
     document.documentElement.dataset.macosApp = "true";
     const user = userEvent.setup();
     await boot();
 
+    const shell = document.querySelector<HTMLElement>("[data-shell='desktop']")!;
+    const topBar = shell.firstElementChild!;
+    expect(topBar).toHaveClass("shell-topbar");
+    expect(topBar).toHaveAttribute("data-window-drag");
     const rail = screen.getByRole("navigation", { name: "Workspace" });
-    expect(rail.className).toContain("pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))]");
+    expect(rail.className).not.toMatch(/traffic-lights/);
     expect(rail.querySelector("[data-window-drag]")).not.toBeNull();
 
     const convHeader = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header")!;
@@ -478,7 +482,7 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
       }
     });
     const listRegion = screen.getByRole("region", { name: "This computer" });
-    expect(listRegion).toHaveClass("w-18", "shrink-0", "bg-list");
+    expect(listRegion).toHaveClass("w-18", "shrink-0", "wood-rings");
     expect(within(listRegion).queryByRole("searchbox", { name: "Search conversations" })).toBeNull();
     const btn = within(listRegion).getByRole("button", { name: /小林/ });
     expect(btn).toHaveClass("size-13");

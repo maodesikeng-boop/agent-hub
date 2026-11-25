@@ -46,7 +46,6 @@ import {
   QrCode as LucideQrCode,
   RefreshCw as LucideRefreshCw,
   Search as LucideSearch,
-  SendHorizontal as LucideSendHorizontal,
   Server as LucideServer,
   Settings as LucideSettings,
   Shield as LucideShield,
@@ -130,12 +129,18 @@ export const PinFilled = customStroke("PinFilled", () => [
   createElement("path", { key: "head", d: PIN_HEAD_PATH, fill: "currentColor" }),
 ]);
 
+const MACOS_LEAF_PATH = "M12 6c.2-1.9 1.6-3.5 3.6-3.8-.2 2-1.6 3.5-3.6 3.8Z";
+const MACOS_APPLE_PATH =
+  "M12 8.5c-1.1 0-2-.9-3.4-.9C6.1 7.6 4 9.9 4 13.4 4 17.3 6.3 21 8.6 21c1.2 0 1.9-.7 3.4-.7s2.2.7 3.4.7c2 0 3.8-2.6 4.4-5-2.5-1.1-2.7-4.5-.2-5.8-.7-1.3-2.1-2.6-4.2-2.6-1.4 0-2.3.9-3.4.9Z";
+const LINUX_BODY_PATH =
+  "M8.2 9.8C8.2 5.2 9.8 3 12 3s3.8 2.2 3.8 6.8c1.7 1.7 2.7 4 2.7 6.3 0 2.8-2 4.4-6.5 4.4s-6.5-1.6-6.5-4.4c0-2.3 1-4.6 2.7-6.3Z";
+const IPHONE_BODY_PATH = "M8.5 2h7A2.5 2.5 0 0 1 18 4.5v15a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 6 19.5v-15A2.5 2.5 0 0 1 8.5 2Z";
+const ANDROID_DOME_PATH = "M3.5 18.5a8.5 8.5 0 0 1 17 0Z";
+const dot = (x: number, y: number, r: number) => `M${x - r} ${y}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0Z`;
+
 export const DeviceMacos = customStroke("DeviceMacos", () => [
-  createElement("path", { key: "leaf", d: "M12 6c.2-1.9 1.6-3.5 3.6-3.8-.2 2-1.6 3.5-3.6 3.8Z" }),
-  createElement("path", {
-    key: "apple",
-    d: "M12 8.5c-1.1 0-2-.9-3.4-.9C6.1 7.6 4 9.9 4 13.4 4 17.3 6.3 21 8.6 21c1.2 0 1.9-.7 3.4-.7s2.2.7 3.4.7c2 0 3.8-2.6 4.4-5-2.5-1.1-2.7-4.5-.2-5.8-.7-1.3-2.1-2.6-4.2-2.6-1.4 0-2.3.9-3.4.9Z",
-  }),
+  createElement("path", { key: "leaf", d: MACOS_LEAF_PATH }),
+  createElement("path", { key: "apple", d: MACOS_APPLE_PATH }),
 ]);
 
 export const DeviceWindows = customStroke("DeviceWindows", () => [
@@ -145,10 +150,7 @@ export const DeviceWindows = customStroke("DeviceWindows", () => [
 ]);
 
 export const DeviceLinux = customStroke("DeviceLinux", () => [
-  createElement("path", {
-    key: "body",
-    d: "M8.2 9.8C8.2 5.2 9.8 3 12 3s3.8 2.2 3.8 6.8c1.7 1.7 2.7 4 2.7 6.3 0 2.8-2 4.4-6.5 4.4s-6.5-1.6-6.5-4.4c0-2.3 1-4.6 2.7-6.3Z",
-  }),
+  createElement("path", { key: "body", d: LINUX_BODY_PATH }),
   createElement("path", { key: "eye-l", d: "M10.2 7.5h.01" }),
   createElement("path", { key: "eye-r", d: "M13.8 7.5h.01" }),
   createElement("path", { key: "beak", d: "m10.5 10.3 1.5 1.2 1.5-1.2" }),
@@ -162,11 +164,46 @@ export const DeviceIphone = customStroke("DeviceIphone", () => [
 ]);
 
 export const DeviceAndroid = customStroke("DeviceAndroid", () => [
-  createElement("path", { key: "dome", d: "M3.5 18.5a8.5 8.5 0 0 1 17 0Z" }),
+  createElement("path", { key: "dome", d: ANDROID_DOME_PATH }),
   createElement("path", { key: "ant-l", d: "m7.5 11.1-2-4.3" }),
   createElement("path", { key: "ant-r", d: "m16.5 11.1 2-4.3" }),
   createElement("path", { key: "eye-l", d: "M9.2 14.5h.01" }),
   createElement("path", { key: "eye-r", d: "M14.8 14.5h.01" }),
+]);
+
+// Solid forms of the device icons for the selected computer on the rail. Each keeps the line form's outline, so both read
+// the same size, and fills the inside with the details cut out (even-odd).
+const solidFill = (key: string, d: string) => createElement("path", { key, d, fill: "currentColor", fillRule: "evenodd", stroke: "none" });
+
+export const DeviceMacosSolid = customStroke("DeviceMacosSolid", () => [
+  createElement("path", { key: "leaf", d: MACOS_LEAF_PATH, fill: "currentColor" }),
+  createElement("path", { key: "apple", d: MACOS_APPLE_PATH, fill: "currentColor" }),
+]);
+
+export const DeviceWindowsSolid = customStroke("DeviceWindowsSolid", () => [
+  createElement("path", {
+    key: "panes",
+    d: "M3 5.5 10 4.53V11H3ZM12 4.25 21 3v8h-9ZM3 13h7v6.47L3 18.5ZM12 13h9v8l-9-1.25Z",
+    fill: "currentColor",
+    strokeWidth: 1,
+  }),
+]);
+
+export const DeviceLinuxSolid = customStroke("DeviceLinuxSolid", () => [
+  createElement("path", { key: "outline", d: LINUX_BODY_PATH }),
+  solidFill("body", `${LINUX_BODY_PATH}${dot(10.2, 7.5, 0.85)}${dot(13.8, 7.5, 0.85)}M10.4 10.1h3.2L12 11.6ZM9.1 20.1c0-2.7 1.3-4.6 2.9-4.6s2.9 1.9 2.9 4.6Z`),
+]);
+
+export const DeviceIphoneSolid = customStroke("DeviceIphoneSolid", () => [
+  createElement("rect", { key: "outline", x: 6, y: 2, width: 12, height: 20, rx: 2.5 }),
+  solidFill("body", `${IPHONE_BODY_PATH}M10.5 4.6h3a.6.6 0 0 1 0 1.2h-3a.6.6 0 0 1 0-1.2ZM10 18.2h4a.6.6 0 0 1 0 1.2h-4a.6.6 0 0 1 0-1.2Z`),
+]);
+
+export const DeviceAndroidSolid = customStroke("DeviceAndroidSolid", () => [
+  createElement("path", { key: "outline", d: ANDROID_DOME_PATH }),
+  createElement("path", { key: "ant-l", d: "m7.5 11.1-2-4.3" }),
+  createElement("path", { key: "ant-r", d: "m16.5 11.1 2-4.3" }),
+  solidFill("dome", `${ANDROID_DOME_PATH}${dot(9.2, 14.5, 0.9)}${dot(14.8, 14.5, 0.9)}`),
 ]);
 
 export const AlertCircle = smooth(LucideAlertCircle, "AlertCircle");
@@ -214,7 +251,6 @@ export const Plus = smooth(LucidePlus, "Plus");
 export const QrCode = smooth(LucideQrCode, "QrCode");
 export const RefreshCw = smooth(LucideRefreshCw, "RefreshCw");
 export const Search = smooth(LucideSearch, "Search");
-export const Send = smooth(LucideSendHorizontal, "Send");
 export const Server = smooth(LucideServer, "Server");
 export const Settings = smooth(LucideSettings, "Settings");
 export const Shield = smooth(LucideShield, "Shield");
