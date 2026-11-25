@@ -252,7 +252,7 @@ export const ProjectList = memo(function ProjectList({
       type="button"
       aria-label={`Switch computer (${computer.name})`}
       onClick={computers === undefined ? onOpenComputers : undefined}
-      className="-mx-1.5 flex h-7 min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 text-left text-title font-semibold text-list-ink transition-colors outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+      className="touch-target flex h-7 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 text-left text-title font-semibold text-list-ink transition-colors outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus"
     >
       <span title={computer.name} className="min-w-0 truncate">
         {computer.name}
@@ -268,8 +268,8 @@ export const ProjectList = memo(function ProjectList({
       aria-label={computer.name}
       className={cn("wood-rings flex min-h-0 min-w-0 flex-col text-list-ink", isPage ? "flex-1 pt-[var(--safe-top)]" : "shell-list h-full")}
     >
-      <header data-window-drag className="groove-bottom flex h-11 shrink-0 items-center justify-between gap-3 pr-3 pl-4">
-        <div className="min-w-0 flex-1">
+      <header data-window-drag className="groove-bottom flex h-11 min-w-0 shrink-0 items-center justify-between gap-3 pr-3 pl-4">
+        <div className={cn("flex min-w-0 flex-1 items-center", switchable && "-ml-1.5")}>
           {switchable ? (
             computers !== undefined && onSelectComputer !== undefined ? (
               <ComputerSwitcher
@@ -286,12 +286,12 @@ export const ProjectList = memo(function ProjectList({
               headerTrigger
             )
           ) : (
-            <h1 title={computer.name} className="truncate text-title font-semibold text-list-ink">
+            <h1 title={computer.name} className="min-w-0 truncate text-title font-semibold text-list-ink">
               {computer.name}
             </h1>
           )}
         </div>
-        <Button variant="slot" size="icon" className="size-7" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
+        <Button variant="slot" size="icon" className="size-7 shrink-0" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
           <Plus aria-hidden="true" />
         </Button>
       </header>
