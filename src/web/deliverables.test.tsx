@@ -19,10 +19,11 @@ import {
 } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { createClient } from "./client.ts";
+import { ActiveTab } from "./components/ActiveTab.tsx";
 import { DeliverableFiles } from "./components/Deliverables.tsx";
-import { RailGroups } from "./components/RightRail.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import { DeviceScope } from "./device-scope.tsx";
+import { activeWorkOf } from "./work-panel-model.ts";
 import { resetQueryClient } from "./query-client.ts";
 import {
   FakeApi,
@@ -431,25 +432,24 @@ describe("各处入口", () => {
     expectBodyFileLinks(screen.getByTestId("peel-gate-card"), ["验收结论"]);
   });
 
-  it("右栏 Needs You 的提问行只有一行：不展开、不列交付物（文件在对话里那张卡上看），点了交给 onOpenAsk", async () => {
-    const ask = askMessage({ id: 52, text: `方案好了，请验收\n\n${CHECKPOINT_TEXT}`, meta: { needsUser: true, deliverables: [plan, rec] } });
+  it("ActiveTab 里等拍板的步骤只有一步：不列交付物、不出选项，点了交给 onOpenAsk", async () => {
+    const graph = gateGraph();
     const onOpenAsk = vi.fn();
     render(
-      <RailGroups asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} look={defaultLookOf(1)} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
+      <ActiveTab
+        work={activeWorkOf([graph], [])}
+        workers={[]}
+        asks={[makeMessage({ id: 77, meta: { needsUser: true } })]}
+        onOpenAsk={onOpenAsk}
+        onOpenWorker={() => {}}
+        onExpandGraph={() => {}}
+      />,
     );
-    await user.click(screen.getByRole("button", { name: /方案好了，请验收/ }));
-    expect(onOpenAsk).toHaveBeenCalledWith(52);
-    expect(document.querySelector("[data-deliverables]")).toBeNull();
-    expect(screen.queryByText(/做完了/)).toBeNull();
-  });
-
-  it("右栏果皮轨里等拍板的步骤只有一行：不列交付物、不出选项", () => {
-    render(
-      <RailGroups asks={[]} workers={[]} activeGraphs={[gateGraph()]} openWorkerId={null} look={defaultLookOf(1)} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
-    expect(screen.getByTestId("peel-gate-row")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^实现, waiting on you$/ }));
+    expect(onOpenAsk).toHaveBeenCalledWith(77);
     expect(screen.queryByTestId("peel-gate-card")).toBeNull();
     expect(document.querySelector("[data-deliverables]")).toBeNull();
+    expect(screen.queryByText(/做完了/)).toBeNull();
   });
 
   it("全览弹窗的门禁卡：长正文完整展示不折叠", () => {

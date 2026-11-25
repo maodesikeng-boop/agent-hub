@@ -739,4 +739,18 @@ describe("web-guard：src/web 代码守卫", () => {
     expect(isListedHits).toEqual([]);
     expect(directAvailabilityFilterHits).toEqual([]);
   });
+
+  it("no user-facing Piece/Pieces wording remains in non-test src/web files", () => {
+    const pieceWord = /\bpieces?\b/i;
+    const hits: string[] = [];
+    for (const file of files) {
+      const rel = relative(WEB_DIR, file).replaceAll("\\", "/");
+      const lines = stripComments(readFileSync(file, "utf8")).split("\n");
+      lines.forEach((line, index) => {
+        if (rel === "components/Avatar.tsx" && line.includes('neutral ? "piece" : "main"')) return;
+        if (pieceWord.test(line)) hits.push(`${rel}:${index + 1}: ${line.trim()}`);
+      });
+    }
+    expect(hits).toEqual([]);
+  });
 });

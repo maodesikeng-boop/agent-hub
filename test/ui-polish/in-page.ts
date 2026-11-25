@@ -345,7 +345,7 @@ export function applyMutationInPage(id: string): void {
     for (let p: HTMLElement | null = el; p !== null; p = p.parentElement) if (parseFloat(getComputedStyle(p).borderTopWidth) > 0 && p !== el) return p;
     throw new Error(`弄坏 ${id}：找不到卡片`);
   };
-  const rail = one('[aria-label="Pieces"]');
+  const rail = one('[aria-label="Work panel"]');
   const log = one('[aria-label="Messages"]');
   const nav = one('[aria-label="Studio Mac"]');
   const pmRows = () => nav.querySelectorAll<HTMLElement>(".project-row > button");

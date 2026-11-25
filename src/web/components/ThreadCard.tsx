@@ -3,7 +3,7 @@ import type { AgentVendor, ConversationId, WorkerMessageMeta } from "../../share
 import { describeFailure } from "../../shared/errors.ts";
 import type { SlimeLook } from "../../shared/slimes.ts";
 import { ChevronRight } from "../ui/icons.ts";
-import { cleanPieceTitle, formatTime } from "../format.ts";
+import { cleanWorkerTitle, formatTime } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { workerStatusOf, type WorkerTone } from "../worker-status.ts";
 import { Avatar } from "./Avatar.tsx";
@@ -29,7 +29,7 @@ const TONE_SQUARE: Record<Exclude<WorkerTone, "neutral">, string> = {
 
 /**
  * Postcondition: renders one compact row with the note sprite and its status dot in the agent header's avatar column, the
- * cleaned Piece title, the report time, and a right chevron; the accessible name adds the status word and the first report
+ * cleaned Worker title, the report time, and a right chevron; the accessible name adds the status word and the first report
  * line (describeFailure text for failures); the open row takes the open fill.
  */
 export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: ThreadCardProps): React.ReactElement {
@@ -39,7 +39,7 @@ export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: Thre
   const body = failed && summary !== "" ? describeFailure(summary, { unknown: "raw", vendor }) : null;
   const fullText = body ? body.text : summary;
   const firstLine = fullText.split(/\r?\n/, 1)[0] ?? "";
-  const cleanTitle = cleanPieceTitle(line.title);
+  const cleanTitle = cleanWorkerTitle(line.title);
   const ariaLabel = [cleanTitle, label, firstLine].filter(Boolean).join(", ");
 
   return (

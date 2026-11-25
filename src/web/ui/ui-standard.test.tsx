@@ -256,7 +256,7 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(css).toMatch(/--safe-bottom:\s*env\(safe-area-inset-bottom, 0px\)/);
     expect(css).toMatch(/\.chat-main\s*\{[^}]*padding-top:\s*var\(--safe-top\)[^}]*padding-bottom:\s*var\(--safe-bottom\)/s);
     expect(readFileSync("src/web/components/AppRail.tsx", "utf8")).toMatch(/pb-\[var\(--safe-bottom\)\]/);
-    for (const file of ["AppRail", "ProjectList", "SidePanel", "ProfilePanel", "Conversation", "WorkerConversation", "Composer", "RouterWorkbench", "RouterDecisionCard"]) {
+    for (const file of ["AppRail", "ProjectList", "WorkPanel", "ActiveTab", "CompletedTab", "InfoTab", "WorkerDetail", "Conversation", "WorkerConversation", "Composer", "RouterWorkbench", "RouterDecisionCard"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8"), `${file} 不直接写 env(`).not.toContain("env(");
     }
   });
@@ -300,11 +300,13 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
   });
 
   it("右栏的行（一行挨一行）触屏下本身 44px 高，不用撑开的办法", () => {
-    expect(readFileSync("src/web/components/RightRail.tsx", "utf8")).toContain("pointer-coarse:min-h-11");
+    for (const file of ["ActiveTab", "CompletedTab", "InfoTab"]) {
+      expect(readFileSync(`src/web/components/${file}.tsx`, "utf8"), file).toContain("pointer-coarse:min-h-11");
+    }
   });
 
   it("没有悬停才出现的操作（仅项目列表行的快捷按键按媒体悬停规范显隐）", () => {
-    for (const file of ["Messages", "RightRail", "AppRail", "ProjectList", "SidePanel", "ProfilePanel", "Composer", "Conversation", "RouterWorkbench", "RouterDecisionCard"]) {
+    for (const file of ["Messages", "WorkPanel", "ActiveTab", "CompletedTab", "InfoTab", "WorkerDetail", "AppRail", "ProjectList", "Composer", "Conversation", "RouterWorkbench", "RouterDecisionCard"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8")).not.toMatch(/group-hover:(opacity|visible)|opacity-0/);
     }
   });
@@ -344,10 +346,12 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(css).toMatch(/\.messages::-webkit-scrollbar,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar\s*\{[^}]*width:\s*6px;[^}]*background:\s*transparent;/);
     expect(css).toMatch(/\.messages::-webkit-scrollbar-thumb,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar-thumb\s*\{[^}]*background:\s*transparent;[^}]*border-radius:\s*9999px;/);
     expect(css).toMatch(/\.messages\[data-scrolling\]::-webkit-scrollbar-thumb,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar-thumb:active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--foreground\) 26%, transparent\);/);
-    const rightRail = readFileSync("src/web/components/RightRail.tsx", "utf8");
-    expect(rightRail).toContain("right-rail-scroll");
-    expect(rightRail).toContain("[contain:layout_style]");
-    expect(rightRail).not.toContain("[contain:strict]");
+    for (const file of ["ActiveTab", "CompletedTab", "InfoTab"]) {
+      const src = readFileSync(`src/web/components/${file}.tsx`, "utf8");
+      expect(src, file).toContain("right-rail-scroll");
+      expect(src, file).toContain("[contain:layout_style]");
+      expect(src, file).not.toContain("[contain:strict]");
+    }
     expect(readFileSync("src/web/components/Avatar.tsx", "utf8")).toContain("[contain:size_layout]");
     expect(readFileSync("src/web/components/RouterAvatar.tsx", "utf8")).toContain("[contain:size_layout]");
   });

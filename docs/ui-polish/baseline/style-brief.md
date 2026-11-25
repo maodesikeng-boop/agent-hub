@@ -13,18 +13,18 @@ This brief defines rules `S1` through `S6` for visual evaluation in `pnpm ui:pol
 ## S1 Color
 
 - **Three zones by tone.** The frame wood (`#5f3302` to `#542d00` with sparse vertical grain) holds the top bar, the rail, the panel rims, and the gap before the side panel. The year-ring wood (`#774511` to `#6f3d05`) carries the PM list, the strip, and the Settings categories, with light text on it. Content sits on white sheets (`#ffffff`); paper (`#f7f4ed`) marks secondary surfaces inside a sheet: event strips and chips. Settings opens as a page of the workbench, its categories on the year rings joined to the open category's white sheet, never as a framed window over a scrim.
-- **Sparse solid accent.** Solid `--primary` (the PM's fruit accent, `#4a2e00` outside a PM) appears only on the single primary button on screen, checked switches and radios, completed Task Graph pipes and beads, active gate titles, and the small dots beside `Needs You`. The send button is the PM's color made pastel, with a dark arrow of the same hue.
+- **Sparse solid accent.** Solid `--primary` (the PM's fruit accent, `#4a2e00` outside a PM) appears only on the single primary button on screen, checked switches and radios, and active gate accents. The send button is the PM's color made pastel, with a dark arrow of the same hue.
 - **Selection is a fill.** On the year rings the selected row is a flat cream band (`#fffaf2`) with dark text. On the rail a selected tile takes a warm white fill and a selected computer's icon turns solid; hover is a lighter fill only. On white or paper, `tile-open` uses the pale `#fff6d6` fill with a `1px` gold `#e0b03c` ring. Text weight never changes.
 - **Semantic dots.** Waiting and asking rows show an `8px` green dot with no text pill. The one attention dot for something to review in Settings is red on every surface. Dots on tiles and icons carry a `2px` halo in the surface color.
-- **Consistent pixel art avatars.** Project Managers use fruit slime sprites, Pieces use curled note sprites in the PM color, and Router uses the sprout bell sprite. Controls and icons are smooth line art; pixels stay on characters, avatars, beads and pipes, and brand art.
+- **Consistent pixel art avatars.** Project Managers use fruit slime sprites, Workers use curled note sprites in the PM color, and Router uses the sprout bell sprite. Controls and icons are smooth line art; pixels stay on characters, avatars, and brand art.
 
 ## S2 Type scale
 
 Values below reflect the `Default` 16px root scale, the default (`Large` scales all `rem` tokens by `1.09375x`):
 
-1. `16px` (`600`): Conversation header name, side panel header, and dialog titles (`text-title`). The profile page display name at `22px` (`text-display`) is the sole exception.
-2. `15px`: Body copy and row titles outside a conversation (settings and side-panel rows, form inputs), and PM names and chat on the phone (`text-body`).
-3. `13.5px`: Every section heading (`500` muted: `Pinned`, `Project managers`, `Needs You`, `Task Graph`, `Pieces`, `Completed`, settings groups), PM names in the desktop list (`400`), Worker report rows, buttons (`500`), event strips, and `Show more` (`text-minor`). On the desktop a conversation reads at this size too: the messages, ask card questions (`500`) and options (`400`), and the composer of a PM's conversation, the Router, and a Worker thread (`text-body` inside `.chat-text`).
+1. `16px` (`600`): Conversation header name, Info header name, and dialog titles (`text-title`).
+2. `15px`: Body copy and row titles outside a conversation (settings rows, form inputs), and PM names and chat on the phone (`text-body`).
+3. `13.5px`: Every section heading (`500` muted: `Pinned`, `Project managers`, `Workers`, `Completed`, settings groups), work-panel tabs and rows, PM names in the desktop list (`400`), Worker report rows, buttons (`500`), event strips, and `Show more` (`text-minor`). On the desktop a conversation reads at this size too: the messages, ask card questions (`500`) and options (`400`), and the composer of a PM's conversation, the Router, and a Worker thread (`text-body` inside `.chat-text`).
 4. `12px`: Timestamps, counts, `Recommended`, rail labels, and step numbers (`text-xs`).
 
 - **One typeface**: Lato for Latin text and digits in its true Regular, Medium, and Semibold, with PingFang SC and the other system fonts for Chinese; code blocks use the system monospace.
@@ -53,6 +53,6 @@ Values below reflect the `Default` 16px root scale, the default (`Large` scales 
 
 ## S6 Copy and tone
 
-- Shell labels, buttons, placeholders, and status words use concise sentence-case English (`Search`, `Router`, `Archived`, `Task Graph`, `Recommended`, `Reply or add a note…`). User messages, PM names, and Piece titles keep the user's language.
+- Shell labels, buttons, placeholders, and status words use concise sentence-case English (`Search`, `Router`, `Archived`, `Task Graph`, `Recommended`, `Reply or add a note…`). User messages, PM names, and Worker titles keep the user's language.
 - Separate metadata items on one row with spacing (`gap-2` or `gap-3`), never middle dots, pipes, or slashes.
 - Omit explanatory helper captions above or below controls when position and verb labels already state the action.

@@ -47,6 +47,8 @@ import { applyChange, initialState, reducer, type ConversationView, type HubStat
 import { turnProgress } from "./turn-progress.ts";
 import { downloadOfferOf, updateReminderOf } from "./update-model.ts";
 import { describeResourcesSummary, partitionHeldResources } from "./resources-model.ts";
+import { graphFlowOf, horizontalLayoutOf, verticalRowsOf, type MeasureStepText } from "./graph-flow.ts";
+import { activeWorkOf, completedDaysOf } from "./work-panel-model.ts";
 import { changeOf, makeCapabilitiesView, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
 const WORKERS = 300;
@@ -1179,5 +1181,84 @@ describe("shell list and rail selectors", () => {
     const bigWork = Array.from({ length: 300 }, (_, i) => makeToolMessage({ id: 100 + i * 2, conversationId: PM_CONVERSATION }));
     const bigChecklists = Array.from({ length: 200 }, (_, i) => checklistMsg(101 + i * 2, i % 2 === 0 ? "in_progress" : "completed"));
     expect(medianMs(21, () => void turnProgress([...bigWork], [...bigChecklists]))).toBeLessThan(5);
+  });
+
+  it("work panel selectors (activeWorkOf, graphFlowOf, horizontalLayoutOf, verticalRowsOf, completedDaysOf) keep stable references and stay fast at 1-month scale", () => {
+    const state = monthState();
+    const workers = workersOf(state, 1);
+    const makeStep = (key: string, sortOrder: number, status: TaskNode["status"]): TaskNode => ({
+      key,
+      title: `Step ${key}`,
+      status,
+      waitingFor: null,
+      skipped: false,
+      sortOrder,
+      activeWorkerId: null,
+      workerIds: [],
+      artifact: null,
+      gateQuestion: null,
+      gateOptions: [],
+      gateSummaryMd: null,
+      gateRecommended: null,
+      gateAskMessageId: null,
+      decision: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const graphs: TaskGraph[] = Array.from({ length: 4 }, (_, i) => ({
+      id: i + 1,
+      projectId: 1,
+      pmId: 1,
+      conversationId: PM_CONVERSATION,
+      title: `Graph ${i + 1}`,
+      status: "active",
+      originMsgId: null,
+      nodes: [
+        makeStep("a", 0, "done"),
+        makeStep("b", 1, "running"),
+        makeStep("c", 2, "running"),
+        makeStep("d", 3, "pending"),
+      ],
+      edges: [
+        { fromKey: "a", toKey: "b" },
+        { fromKey: "a", toKey: "c" },
+        { fromKey: "b", toKey: "d" },
+        { fromKey: "c", toKey: "d" },
+      ],
+      createdAt: 1000,
+      updatedAt: 1000 + i,
+      completedAt: null,
+    }));
+
+    const work0 = activeWorkOf(graphs, workers);
+    expect(activeWorkOf(graphs, workers)).toBe(work0);
+    const measure: MeasureStepText = (t) => t.length * 8;
+    const flow0 = graphFlowOf(graphs[0]!);
+    expect(graphFlowOf(graphs[0]!)).toBe(flow0);
+    const layout0 = horizontalLayoutOf(flow0, measure);
+    expect(horizontalLayoutOf(flow0, measure)).toBe(layout0);
+    expect(verticalRowsOf(flow0)).toBe(verticalRowsOf(flow0));
+
+    const now = new Date(2026, 10, 25, 16, 0, 0).getTime();
+    const pages = Array.from({ length: 8 }, (_, p) => ({
+      total: 400,
+      next: null,
+      items: Array.from({ length: 50 }, (_, i) => {
+        const idx = p * 50 + i + 1;
+        return {
+          kind: "worker" as const,
+          conversationId: idx,
+          workerId: idx,
+          title: `Done ${idx}`,
+          outcome: "done" as const,
+          finishedAt: now - idx * 3_600_000,
+          prUrl: null,
+        };
+      }),
+    }));
+    const days0 = completedDaysOf(pages, now);
+    expect(completedDaysOf(pages, now)).toBe(days0);
+    expect(days0.reduce((sum, d) => sum + d.items.length, 0)).toBe(400);
+    expect(medianMs(21, () => void completedDaysOf([...pages], now))).toBeLessThan(15);
   });
 });

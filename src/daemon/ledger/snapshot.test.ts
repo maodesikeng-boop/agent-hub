@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENDED_WORKERS_PAGE_SIZE, SNAPSHOT_ENDED_WORKERS_PER_PM } from "../../shared/limits.ts";
+import { SNAPSHOT_ENDED_WORKERS_PER_PM } from "../../shared/limits.ts";
 import type { ConversationId } from "../../shared/domain.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -89,7 +89,7 @@ function seed(): Seeded {
 }
 
 describe("初始快照只带界面现在要的", () => {
-  it("每个项目经理只带最近几个收工的 Worker，加上在跑的、绑在活跃任务图上的；更早的给翻页起点", () => {
+  it("每个项目经理只带最近几个收工的 Worker，加上在跑的、绑在活跃任务图上的", () => {
     const s = seed();
     const snap = ledger.snapshot();
     const ids = new Set(snap.conversations.map((c) => c.conversation.id));
@@ -97,33 +97,11 @@ describe("初始快照只带界面现在要的", () => {
     const recent = ended.slice(-SNAPSHOT_ENDED_WORKERS_PER_PM);
     for (const w of [...recent, ...s.workers.filter((x) => !x.ended), s.bound]) expect(ids.has(w.conversationId)).toBe(true);
     expect(snap.conversations.filter((c) => c.conversation.kind === "worker")).toHaveLength(SNAPSHOT_ENDED_WORKERS_PER_PM + LIVE + 1);
-    expect(snap.olderEndedWorkers).toEqual({ [s.pmId]: recent[0]!.conversationId });
     // 绑在图上的早收工 Worker 带着摘要（任务图详情按 Worker 编号找它）
     expect(snap.conversations.find((c) => c.conversation.id === s.bound.conversationId)!.workerLine?.line.workerId).toBe(s.bound.workerId);
     // 会话只带快照里这些对话的
     expect(new Set(snap.sessions.map((x) => x.conversationId)).size).toBe(snap.sessions.length);
     expect(snap.sessions.every((x) => x.conversationId === null || ids.has(x.conversationId))).toBe(true);
-  });
-
-  it("从翻页起点一页页往前拉，和快照合起来每个收工的 Worker 正好拿到一次（绑在图上的那个可能再出现一次）", () => {
-    const s = seed();
-    const snap = ledger.snapshot();
-    const seen = snap.conversations.filter((c) => c.conversation.kind === "worker").map((c) => c.conversation.id);
-    let before: ConversationId | null = snap.olderEndedWorkers![s.pmId]!;
-    let pages = 0;
-    while (before !== null) {
-      const page = ledger.endedWorkersPage(s.pmId, before);
-      expect(page.conversations.length).toBeLessThanOrEqual(ENDED_WORKERS_PAGE_SIZE);
-      expect(page.conversations.every((c) => c.messages.length === 0 && c.hasMore && c.workerLine?.endedAt !== null)).toBe(true);
-      expect(page.sessions.map((x) => x.conversationId).toSorted()).toEqual(page.conversations.map((c) => c.conversation.id).toSorted());
-      seen.push(...page.conversations.map((c) => c.conversation.id));
-      before = page.nextBefore;
-      pages++;
-    }
-    expect(pages).toBe(Math.ceil((ENDED - SNAPSHOT_ENDED_WORKERS_PER_PM) / ENDED_WORKERS_PAGE_SIZE));
-    const unique = new Set(seen);
-    expect(unique).toEqual(new Set(s.workers.map((w) => w.conversationId)));
-    expect(seen.length - unique.size).toBeLessThanOrEqual(1);
   });
 
   it("按对话编号、Worker 编号单拉：和快照里同一个形状，带最新一代的会话；不存在的不回", () => {
@@ -136,11 +114,6 @@ describe("初始快照只带界面现在要的", () => {
     const byWorker = ledger.lookupConversations({ ids: [], workerIds: [oldest.workerId] });
     expect(byWorker.conversations).toEqual(byId.conversations);
     expect(ledger.lookupConversations({ ids: [], workerIds: [] })).toEqual({ conversations: [], sessions: [] });
-  });
-
-  it("没有这个项目经理：翻页回 not_found", () => {
-    seed();
-    expect(() => ledger.endedWorkersPage(999, null)).toThrow(expect.objectContaining({ code: "not_found" }));
   });
 
   it("换过代的会话只带最新一代；每家厂商最新的会话照带（额度、按需查额度要看），哪怕它的对话不在快照里", () => {

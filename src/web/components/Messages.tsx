@@ -23,7 +23,7 @@ import {
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { describeFailure } from "../../shared/errors.ts";
-import { errorLine, errorTitle, formatTime, pieceLineParts } from "../format.ts";
+import { errorLine, errorTitle, formatTime, workerLineParts } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
@@ -42,6 +42,8 @@ import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
+import { WorkerReportText } from "./WorkerReportText.tsx";
+import { leanReportOf } from "../worker-report-view.ts";
 
 export interface AgentIdentity {
   name: string;
@@ -115,10 +117,12 @@ export const AgentText = memo(function AgentText({
   message,
   highlighted,
   onAnswerAsk,
+  leanReports = false,
 }: {
   message: Message;
   highlighted: boolean;
   onAnswerAsk?: MessageActions["onAnswerAsk"];
+  leanReports?: boolean;
 }) {
   const deliverables = useMemo(() => askOf(message)?.deliverables ?? NO_DELIVERABLES, [message.sender, message.meta]);
   const files = useMemo(() => {
@@ -130,6 +134,7 @@ export const AgentText = memo(function AgentText({
   }, [message.meta, deliverables]);
   const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
   const blocker = askCard === null ? askOf(message) : null;
+  const leanReport = useMemo(() => (leanReports && blocker?.blockerRef === undefined && askCard === null ? leanReportOf(message.text) : null), [leanReports, blocker, askCard, message.text]);
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "outline-2 outline-offset-4 outline-border-focus")}
@@ -146,6 +151,8 @@ export const AgentText = memo(function AgentText({
         />
       ) : askCard ? (
         <AskCard card={askCard} files={files} deliverables={deliverables} messageId={message.id} onAnswerAsk={onAnswerAsk} />
+      ) : leanReport !== null ? (
+        <WorkerReportText report={leanReport} message={message} />
       ) : (
         <div className="w-full min-w-0 text-body leading-relaxed">
           <Markdown text={displayText(message.text)} files={files} messageId={message.id} />
@@ -218,6 +225,7 @@ export const TurnView = memo(
     actions,
     highlightId,
     revertedChanges,
+    leanReports = false,
   }: {
     turn: Pick<Turn, "work" | "checklists" | "parts" | "startedAt" | "endedAt">;
     identity: AgentIdentity;
@@ -227,6 +235,7 @@ export const TurnView = memo(
     actions: MessageActions;
     highlightId?: MessageId | null;
     revertedChanges?: ReadonlySet<PersonaChangeId>;
+    leanReports?: boolean;
   }) {
     const liveText = streamingText ? displayText(streamingText) : "";
     const running = status != null || liveText !== "";
@@ -249,7 +258,7 @@ export const TurnView = memo(
           )}
           {turn.parts.map((m) =>
             m.sender === "agent" ? (
-              <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} />
+              <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} leanReports={leanReports} />
             ) : (
               <SystemNotice key={m.id} message={m} actions={actions} revertedChanges={reverted} inTurn />
             ),
@@ -283,7 +292,8 @@ export const TurnView = memo(
     prev.streamingText === next.streamingText &&
     prev.actions === next.actions &&
     prev.highlightId === next.highlightId &&
-    prev.revertedChanges === next.revertedChanges,
+    prev.revertedChanges === next.revertedChanges &&
+    prev.leanReports === next.leanReports,
 );
 
 type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
@@ -493,7 +503,7 @@ function SystemNoticeRow({
 }
 
 function WorkerNoticeRow({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
-  const { title, state, detail } = pieceLineParts(line);
+  const { title, state, detail } = workerLineParts(line);
   const icon = WORKER_NOTICE_ICONS[line.event] ?? Info;
   return (
     <div data-side="left" data-notice>
@@ -641,7 +651,8 @@ function LongBrief({ children }: { children: React.ReactNode }) {
       const style = getComputedStyle(box);
       const lineHeight = Number.parseFloat(style.lineHeight) || 1.65 * (Number.parseFloat(style.fontSize) || 16);
       const lines = Number.parseInt(style.getPropertyValue("--brief-lines"), 10) || BRIEF_FALLBACK_LINES;
-      setOverflowing(box.scrollHeight > (lines + BRIEF_SLACK_LINES) * lineHeight);
+      const slack = lines <= 2 ? 0.5 : BRIEF_SLACK_LINES;
+      setOverflowing(box.scrollHeight > (lines + slack) * lineHeight);
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;

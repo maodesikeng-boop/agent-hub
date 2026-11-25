@@ -60,9 +60,9 @@ describe("TurnProgress", () => {
     expect(rows[0]).toHaveTextContent("读完右栏规格和原型");
     expect(rows[1]).toHaveTextContent("正在查看提交与发布");
     expect(rows[2]).toHaveTextContent("汇总变化");
-    expect(rows.map((row) => row.querySelector("[data-checklist-status]")?.getAttribute("data-checklist-status"))).toEqual([
-      "completed",
-      "in_progress",
+    expect(rows.map((row) => row.querySelector("svg.work-status-icon")?.getAttribute("data-status"))).toEqual([
+      "done",
+      "running",
       "pending",
     ]);
     const actionLine = container.querySelector("[data-work-line]") as HTMLElement;
@@ -241,11 +241,11 @@ describe("TurnProgress", () => {
     expect(doneRow).not.toHaveClass("font-semibold");
     expect(pendingRow).not.toHaveClass("font-semibold");
 
-    const statuses: ChecklistStatus[] = ["completed", "in_progress", "pending", "cancelled"];
-    for (const st of statuses) {
+    const statuses: [ChecklistStatus, string][] = [["completed", "done"], ["in_progress", "running"], ["pending", "pending"], ["cancelled", "cancelled"]];
+    for (const [st, iconStatus] of statuses) {
       const { container: iconBox } = render(<ChecklistStatusIcon status={st} />);
       const svg = iconBox.querySelector("svg") as SVGSVGElement;
-      expect(svg).toHaveAttribute("data-checklist-status", st);
+      expect(svg).toHaveAttribute("data-status", iconStatus);
       expect(svg).toHaveAttribute("aria-hidden", "true");
       expect(svg.querySelector("circle")).not.toBeNull();
       if (st === "pending") expect(svg.querySelector("path")).toBeNull();

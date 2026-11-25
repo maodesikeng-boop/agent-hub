@@ -11,12 +11,11 @@ import {
   type WorkerPick,
 } from "../../shared/index.ts";
 import { describeFailure } from "../../shared/errors.ts";
-import type { WorkerEntry, WorkerOutcome, WorkerPhase } from "../selectors.ts";
+import type { WorkerOutcome, WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
 import { formatTime } from "../format.ts";
 import { workerStatusOf } from "../worker-status.ts";
-import { Avatar } from "./Avatar.tsx";
 import type { SlimeLook } from "../../shared/slimes.ts";
 import { conversationSource } from "../composer-suggest.ts";
 import { useClient } from "../device-scope.tsx";
@@ -27,11 +26,10 @@ import { Markdown } from "./Markdown.tsx";
 import { MessageList } from "./MessageList.tsx";
 import { AgentHead, CopyButton, displayText, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 import { useStop } from "../useStop.ts";
-import { actionStartedAt, hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
-import { PieceMeta } from "./RightRail.tsx";
+import { actionStartedAt, useAgentStatusNode } from "./AgentStatus.tsx";
 
 const NO_OUTCOMES: readonly WorkerOutcome[] = [];
-const CLEARED_NOTICE = `Conversation cleared. Finished Pieces keep their conversations for up to ${WORKER_RETENTION_DAYS} days, and only the latest ${WORKER_RETENTION_MAX_ENDED}.`;
+const CLEARED_NOTICE = `Conversation cleared. Finished Workers keep their conversations for up to ${WORKER_RETENTION_DAYS} days, and only the latest ${WORKER_RETENTION_MAX_ENDED}.`;
 
 function WorkerFailureStrip({ outcome, vendor }: { outcome: WorkerOutcome; vendor?: AgentVendor }) {
   const tag = outcome.line.event === "worktree_failed" ? "Couldn't create worktree" : "Turn failed";
@@ -110,10 +108,8 @@ function PurgedWorkerHistory({
 
 export const WorkerConversation = memo(function WorkerConversation({
   title,
-  readonly,
   phase,
   pm,
-  meta,
   outcomes = NO_OUTCOMES,
   view,
   loading = false,
@@ -123,8 +119,6 @@ export const WorkerConversation = memo(function WorkerConversation({
   draft,
   staging,
   mobile = false,
-  leading,
-  toolbar,
   top,
   notices,
   onSend,
@@ -136,10 +130,8 @@ export const WorkerConversation = memo(function WorkerConversation({
   link = null,
 }: {
   title: string;
-  readonly: boolean;
   phase: WorkerPhase;
   pm: { name: string; look: SlimeLook };
-  meta?: WorkerEntry;
   outcomes?: readonly WorkerOutcome[];
   view: ConversationView | undefined;
   loading?: boolean;
@@ -148,12 +140,9 @@ export const WorkerConversation = memo(function WorkerConversation({
   older: OlderState | undefined;
   draft: DraftSlot;
   staging: StagedFiles;
-  leading?: React.ReactNode;
   mobile?: boolean;
-  toolbar: React.ReactNode;
-  top: React.ReactNode;
+  top?: React.ReactNode;
   notices: React.ReactNode;
-  onBack?: () => void;
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
@@ -204,32 +193,16 @@ export const WorkerConversation = memo(function WorkerConversation({
     [trailingFailure, vendor],
   );
   return (
-    <FileDropZone className="chat-text flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
-      {mobile && (
-        <header data-window-drag className="flex min-h-14 min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b border-border pt-[var(--safe-top)] pr-3 pl-3">
-          {leading}
-          <Avatar look={identity.look} size={34} neutral working={hasAgentStatus(session)} />
-          <div className="flex min-w-0 flex-1 items-center justify-between gap-3 overflow-hidden">
-            <div className="flex min-w-[40%] shrink-[9999] items-center gap-2 overflow-hidden">
-              <h1 title={title} className="min-w-0 truncate text-title leading-snug font-semibold">
-                {title}
-              </h1>
-              {readonly && <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Read-only</span>}
-            </div>
-            {meta && <PieceMeta worker={meta} />}
-          </div>
-          {toolbar}
-        </header>
-      )}
-      {!mobile && (
-        <>
-          <h1 className="sr-only">{title}</h1>
-        </>
-      )}
+    <FileDropZone
+      data-worker-detail=""
+      className="chat-text flex min-h-0 flex-1 flex-col"
+      aria-label={`Worker ${title}`}
+      onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}
+    >
       {top}
       {notices}
       {view === undefined ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">{loading ? "Loading…" : "Piece not found"}</div>
+        <div className="flex flex-1 items-center justify-center text-muted-foreground">{loading ? "Loading…" : "Worker not found"}</div>
       ) : (
         <>
           {view.conversation.purgedAt !== undefined ? (
@@ -256,6 +229,7 @@ export const WorkerConversation = memo(function WorkerConversation({
                 statusAgent={identity}
                 streamingText={session?.streamingText ?? null}
                 footer={failureFooter}
+                leanReports
               />
             </div>
           )}

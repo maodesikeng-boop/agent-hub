@@ -16,6 +16,7 @@ export type WorkerLine = {
   deliver: string | null;
   wakePm?: boolean;
   completedStep?: true;
+  prUrl?: string | null;
 };
 
 export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line: WorkerLine): MessageId | undefined {
@@ -28,6 +29,8 @@ export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line:
     status: line.status,
     summary: line.summary,
     ...(line.completedStep ? { completedStep: true } : {}),
+    ...(line.prUrl ? { prUrl: line.prUrl } : {}),
+    ...(worker.branch ? { branch: worker.branch } : {}),
   };
   const shouldWakePm = line.wakePm ?? (line.deliver !== null);
   const pmSession = shouldWakePm ? w.sessions.currentSession(worker.pm_conversation_id) : null;

@@ -160,7 +160,7 @@ describe("PmProfile 记忆子文件折叠管理（Memory files）", () => {
     const personaGroup = await within(page).findByRole("region", { name: "Persona" });
     expect(personaGroup.textContent).toMatch(/200 lines/i);
 
-    await user.click(within(page).getByRole("button", { name: "Back to settings summary" }));
+    await user.click(within(page).getByRole("button", { name: "Back to Info" }));
     const summaryNav = await within(page).findByRole("navigation", { name: "Project manager settings pages" });
     await user.click(within(summaryNav).getByRole("button", { name: /Memory files/ }));
     const memoryGroup = await within(page).findByRole("region", { name: "Memory files" });

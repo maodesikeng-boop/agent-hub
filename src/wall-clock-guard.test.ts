@@ -26,7 +26,6 @@ const BASELINE: Readonly<Record<string, number>> = {
   "src/daemon/workspace-files.test.ts": 1,
   "src/vendors/agy/handover.test.ts": 1,
   "src/web/components/BrowserSessions.test.tsx": 1,
-  "src/web/right-rail.test.tsx": 1,
   "test/e2e/account-mesh.test.ts": 2,
   "test/e2e/daemon.test.ts": 1,
   "test/e2e/m2.test.ts": 2,

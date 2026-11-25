@@ -6,11 +6,11 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo, StateSnapshot, TaskGraph, TaskNode } from "../shared/index.ts";
 import { App } from "./App.tsx";
-import * as RightRailMod from "./components/RightRail.tsx";
+import * as ActiveTabMod from "./components/ActiveTab.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
-import * as PiecesDrawerMod from "./mobile/PiecesDrawer.tsx";
 import {
   FakeApi,
+  changeOf,
   FakeWebSocket,
   installFakeWebSocket,
   makeConvSnapshot,
@@ -118,7 +118,7 @@ function plainSnapshot(name: string): StateSnapshot {
   });
 }
 
-const sidePanel = () => screen.getByRole("complementary", { name: "Pieces" });
+const sidePanel = () => screen.getByRole("complementary", { name: "Work panel" });
 
 beforeEach(() => {
   localStorage.clear();
@@ -129,9 +129,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function bootSingle(snapshot: StateSnapshot) {
+async function bootSingle(snapshot: StateSnapshot, configure?: (api: FakeApi) => void) {
   window.history.replaceState(null, "", "/#/c/1");
   const api = new FakeApi(snapshot);
+  configure?.(api);
   api.install();
   installFakeWebSocket();
   render(<App />);
@@ -146,47 +147,165 @@ function deferred() {
   return { promise, resolve };
 }
 
-describe("桌面右栏：App 接通果冻管道，任务图标题前不放进度图标", () => {
-  it("渲染当前项目的活跃任务图；绑图 Piece 不进 Pieces，门禁提问不进 Needs You；点节点进那个 Piece 的对话", async () => {
+describe("桌面右栏：App 接通工作面板任务图画布", () => {
+  it("渲染当前项目的活跃任务图与单独 Workers；绑图 Worker 不重复列出，无 Needs You 组；点节点进那个 Worker 的对话", async () => {
     const user = userEvent.setup();
     await bootSingle(graphSnapshot());
     const rail = await waitFor(sidePanel);
 
-    const graphs = within(rail).getByRole("region", { name: /^Task Graph$/ });
-    expect(within(graphs).getByText("发布流水线")).toBeInTheDocument();
-    expect(graphs.querySelector("[data-slot='task-progress']")).toBeNull();
-    // 等你拍板的步骤在右栏只有一行，作答在对话里
-    expect(within(graphs).getByTestId("peel-gate-row")).toHaveTextContent("确认上线");
-    expect(within(graphs).queryByTestId("peel-gate-card")).toBeNull();
+    const graphSection = within(rail).getByRole("region", { name: "发布流水线" });
+    expect(within(graphSection).getByText("发布流水线")).toBeInTheDocument();
+    expect(within(graphSection).getByText("0/2")).toBeInTheDocument();
+    expect(within(graphSection).getByRole("button", { name: /确认上线/ })).toBeInTheDocument();
+    expect(within(graphSection).queryByTestId("peel-gate-card")).toBeNull();
+    expect(within(rail).queryByRole("region", { name: /^Needs You$/ })).toBeNull();
 
-    const asks = within(rail).getByRole("region", { name: /^Needs You$/ });
-    expect(within(asks).getByText("独立提问：要不要加日志？")).toBeInTheDocument();
-    expect(within(asks).queryByText(/门禁提问/)).toBeNull();
+    const workersSection = within(rail).getByRole("region", { name: "Workers" });
+    expect(within(workersSection).getByRole("button", { name: /零散的活/ })).toBeInTheDocument();
+    expect(within(workersSection).queryByRole("button", { name: /绑图的活/ })).toBeNull();
 
-    const pieces = within(rail).getByRole("region", { name: /^Pieces$/ });
-    expect(within(pieces).getByRole("button", { name: "零散的活" })).toBeInTheDocument();
-    expect(within(pieces).queryByRole("button", { name: "绑图的活" })).toBeNull();
-
-    await user.click(within(graphs).getByRole("button", { name: /构建产物/ }));
+    await user.click(within(graphSection).getByRole("button", { name: /构建产物/ }));
     await waitFor(() => expect(window.location.hash).toBe("#/w/30"));
   });
 
-  it("点右栏里等你拍板的那一行：对话滚到那张拍板卡并高亮，不发请求；在全览弹窗的卡上点选项才 POST 到本机的 /api/task-graphs/:id/nodes/:key/decide", async () => {
+  it("keeps keyboard focus across the Info route and exposes a panel for every tab", async () => {
+    const user = userEvent.setup();
+    await bootSingle(graphSnapshot());
+    const active = await within(sidePanel()).findByRole("tab", { name: /^Active/ });
+    active.focus();
+    await user.keyboard("{End}");
+    const info = await screen.findByRole("tab", { name: "Info", selected: true });
+    expect(info).toHaveFocus();
+    expect(window.location.hash).toBe("#/pm/1");
+    for (const tab of screen.getAllByRole("tab")) {
+      const target = document.getElementById(tab.getAttribute("aria-controls") ?? "");
+      expect(target).toHaveAttribute("role", "tabpanel");
+      expect(target).toHaveAttribute("aria-labelledby", tab.id);
+      expect(target?.hidden).toBe(tab !== info);
+    }
+    await user.keyboard("{Home}");
+    await waitFor(() => expect(active).toHaveAttribute("aria-selected", "true"));
+    expect(active).toHaveFocus();
+    expect(window.location.hash).toBe("#/c/1");
+  });
+
+  it("opens the decision card ahead of a bound Worker, with the dialog as a fallback", async () => {
+    const user = userEvent.setup();
+    const snapshot = graphSnapshot();
+    const waiting = graph();
+    waiting.nodes = waiting.nodes.map((node) => node.key === "gate"
+      ? { ...node, activeWorkerId: 3, workerIds: [3], gateAskPending: true }
+      : { ...node, activeWorkerId: null, workerIds: [] });
+    snapshot.activeTaskGraphs = [waiting];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn();
+    const { ws } = await bootSingle(snapshot);
+    const step = await within(sidePanel()).findByRole("button", { name: /确认上线/ });
+    await user.click(step);
+    const message = document.querySelector('[data-message-id="99"]');
+    await waitFor(() => expect(message).toHaveAttribute("data-highlighted", "true"));
+    expect(window.location.hash).toBe("#/c/1");
+
+    const closed = snapshot.conversations[0]?.messages.find((item) => item.id === 99);
+    if (closed === undefined) throw new Error("Missing gate message");
+    act(() => ws.push(messageChange(11, "message.updated", { ...closed, meta: { ...closed.meta, answered: true } })));
+    await user.click(step);
+    const dialog = await screen.findByRole("dialog", { name: waiting.title });
+    expect(within(dialog).getByTestId("peel-gate-card")).toBeInTheDocument();
+    expect(within(dialog).getByText("Waiting on you").closest("[data-decision-key]")).toHaveFocus();
+    expect(window.location.hash).toBe("#/c/1");
+    Element.prototype.scrollIntoView = original;
+  });
+
+  it("updates an open graph and dismisses its cancel confirmation when another window cancels it", async () => {
+    const user = userEvent.setup();
+    const { ws } = await bootSingle(graphSnapshot());
+    await user.click(within(sidePanel()).getByRole("button", { name: "Expand 发布流水线" }));
+    const dialog = await screen.findByRole("dialog", { name: "发布流水线" });
+    expect(within(dialog).getByText("Waiting on you")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel graph" }));
+    expect(screen.getByRole("dialog", { name: "Cancel this task graph?" })).toBeInTheDocument();
+    act(() => ws.push(changeOf(11, "task_graph.updated", { graph: { ...graph(), status: "cancelled", completedAt: 4_000 } })));
+    expect(await screen.findByRole("dialog", { name: "发布流水线" })).toBe(dialog);
+    expect(within(dialog).getAllByText("Cancelled").length).toBeGreaterThan(0);
+    expect(within(dialog).queryByText("Waiting on you")).not.toBeInTheDocument();
+    expect(dialog.querySelector('[data-step-key="gate"]')).toHaveAttribute("data-status", "cancelled");
+    expect(within(dialog).queryByRole("button", { name: "Cancel graph" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Cancel this task graph?" })).not.toBeInTheDocument();
+  });
+
+  it("refreshes the count and row after a standalone Worker ends while Completed is unmounted", async () => {
+    const user = userEvent.setup();
+    let ended = false;
+    const { api, ws } = await bootSingle(graphSnapshot(), (api) => {
+      api.completedWork = () => ({ status: 200, body: {
+        items: ended ? [{ kind: "worker", workerId: 4, conversationId: 31, title: "零散的活", outcome: "done", finishedAt: Date.now(), prUrl: null }] : [],
+        total: ended ? 1 : 0,
+        next: null,
+      } });
+    });
+    await user.click(await within(sidePanel()).findByRole("tab", { name: "Completed 0" }));
+    expect(await within(sidePanel()).findByText("Nothing completed yet")).toBeInTheDocument();
+    await user.click(within(sidePanel()).getByRole("tab", { name: /^Active/ }));
+    await user.click(within(sidePanel()).getByRole("button", { name: /零散的活/ }));
+    await user.click(await screen.findByRole("button", { name: "More worker actions" }));
+    await user.click(screen.getByRole("button", { name: "End" }));
+    expect(api.callsTo("POST", /^\/api\/conversations\/31\/end$/)).toHaveLength(1);
+    ended = true;
+    act(() => ws.push(messageChange(11, "message.created", makeWorkerLine({
+      id: 101, line: { workerId: 4, workerConversationId: 31, title: "零散的活", event: "ended" },
+    }))));
+    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
+    await user.click(await within(sidePanel()).findByRole("tab", { name: "Completed 1" }));
+    expect(await within(sidePanel()).findByRole("button", { name: /零散的活/ })).toBeInTheDocument();
+    expect(api.callsTo("GET", /\/completed$/)).toHaveLength(2);
+  });
+
+  it("does not let an in-flight first page overwrite a Worker finish", async () => {
+    const user = userEvent.setup();
+    const firstRead = deferred();
+    const { ws, api } = await bootSingle(graphSnapshot(), (api) => {
+      api.completedWork = vi
+        .fn<FakeApi["completedWork"]>(() => ({
+          status: 200,
+          body: {
+            items: [{ kind: "worker", workerId: 4, conversationId: 31, title: "零散的活", outcome: "done", finishedAt: Date.now(), prUrl: null }],
+            total: 1,
+            next: null,
+          },
+        }))
+        .mockImplementationOnce(async () => {
+          await firstRead.promise;
+          return { status: 200, body: { items: [], total: 0, next: null } };
+        });
+    });
+    await user.click(await within(sidePanel()).findByRole("tab", { name: "Completed" }));
+    await waitFor(() => expect(api.callsTo("GET", /\/completed$/)).toHaveLength(1));
+    act(() => ws.push(messageChange(11, "message.created", makeWorkerLine({
+      id: 101, line: { workerId: 4, workerConversationId: 31, title: "零散的活", event: "ended" },
+    }))));
+    expect(await within(sidePanel()).findByRole("tab", { name: "Completed 1" })).toBeInTheDocument();
+    await act(async () => firstRead.resolve());
+    expect(within(sidePanel()).getByRole("tab", { name: "Completed 1" })).toBeInTheDocument();
+    expect(within(sidePanel()).getByRole("button", { name: /零散的活/ })).toBeInTheDocument();
+  });
+
+  it("点右栏里等你拍板的步骤：对话滚到那张拍板卡并高亮，不发请求；点放大按钮打开弹窗才 POST /decide", async () => {
     const user = userEvent.setup();
     const scrolled: Element[] = [];
     Element.prototype.scrollIntoView = function (this: Element) {
       scrolled.push(this);
     };
     const { api } = await bootSingle(graphSnapshot());
-    const row = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-row"));
-    await user.click(row);
+    const step = await waitFor(() => within(sidePanel()).getByRole("button", { name: /确认上线/ }));
+    await user.click(step);
     const target = document.querySelector('[data-message-id="99"]')!;
     await waitFor(() => expect(target).toHaveAttribute("data-highlighted", "true"));
     expect(scrolled).toEqual([target]);
     expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(0);
     Reflect.deleteProperty(Element.prototype, "scrollIntoView");
 
-    await user.click(within(sidePanel()).getByRole("button", { name: "Zoom" }));
+    await user.click(within(sidePanel()).getByRole("button", { name: "Expand 发布流水线" }));
     const card = within(await screen.findByRole("dialog", { name: "发布流水线" })).getByTestId("peel-gate-card");
     await user.click(within(card).getByRole("button", { name: /再等等/ }));
     await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(1));
@@ -251,11 +370,11 @@ describe("桌面右栏：App 接通果冻管道，任务图标题前不放进度
     });
 
     const { api } = await bootSingle(snap);
-    // 右栏果皮轨里检查点只有一行，不出选项和补充框
-    const railRow = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-row"));
+    // The work panel shows the checkpoint as a single step box, without options or a reply form.
+    const railStep = await waitFor(() => within(sidePanel()).getByRole("button", { name: /方案检查点/ }));
     expect(within(sidePanel()).queryByLabelText("Your reply")).toBeNull();
     expect(within(sidePanel()).queryByText("Recommended")).toBeNull();
-    expect(railRow.tagName).toBe("BUTTON");
+    expect(railStep.tagName).toBe("BUTTON");
 
     // 对话消息流里的检查点 AskCard 展示 Recommended 并常驻回复输入框，点「打回」带修改意见直调 /decide，不调 /messages
     const chatArticle = document.querySelector('[data-message-id="105"]') as HTMLElement;
@@ -374,8 +493,8 @@ describe("桌面右栏：App 接通果冻管道，任务图标题前不放进度
   it("Cancel graph 要二次确认：点一下只弹确认，Keep going 不发请求；确认后才 POST，成功后两层弹窗都关", async () => {
     const user = userEvent.setup();
     const { api } = await bootSingle(graphSnapshot());
-    const graphs = await waitFor(() => within(sidePanel()).getByRole("region", { name: /^Task Graph$/ }));
-    await user.click(within(graphs).getByRole("button", { name: "Zoom" }));
+    const graphs = await waitFor(() => within(sidePanel()).getByRole("region", { name: "发布流水线" }));
+    await user.click(within(graphs).getByRole("button", { name: "Expand 发布流水线" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
     expect(zoom.querySelector("[data-step='running']")).toHaveTextContent("构建产物");
     expect(zoom.querySelector("[data-slot='dialog-body']")?.className).not.toContain("-mx-6");
@@ -402,7 +521,7 @@ describe("桌面右栏：App 接通果冻管道，任务图标题前不放进度
     const user = userEvent.setup();
     const { api } = await bootSingle(graphSnapshot());
     api.cancelTaskGraph = () => ({ status: 409, body: { error: "任务图已经全部完成，无需取消", code: "conflict" } });
-    await user.click(await waitFor(() => within(sidePanel()).getByRole("button", { name: "Zoom" })));
+    await user.click(await waitFor(() => within(sidePanel()).getByRole("button", { name: "Expand 发布流水线" })));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
     await user.click(within(zoom).getByRole("button", { name: "Cancel graph" }));
     await user.click(within(await screen.findByRole("dialog", { name: "Cancel this task graph?" })).getByRole("button", { name: "Cancel graph" }));
@@ -411,11 +530,11 @@ describe("桌面右栏：App 接通果冻管道，任务图标题前不放进度
     expect(api.callsTo("POST", CANCEL_PATH)).toHaveLength(1);
   });
 
-  it("爆炸半径：带活跃任务图时连续 8 帧流式输出，RailGroups 零重画", async () => {
+  it("爆炸半径：带活跃任务图时连续 8 帧流式输出，ActiveTab 零重画", async () => {
     type MemoTarget = { type: (...args: unknown[]) => unknown };
-    const railSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
+    const railSpy = vi.spyOn(ActiveTabMod.ActiveTab as unknown as MemoTarget, "type");
     const { ws } = await bootSingle(graphSnapshot());
-    await waitFor(() => expect(within(sidePanel()).getByRole("region", { name: /^Task Graph$/ })).toBeInTheDocument());
+    await waitFor(() => expect(within(sidePanel()).getByRole("region", { name: "发布流水线" })).toBeInTheDocument());
     railSpy.mockClear();
     for (let i = 1; i <= 8; i++) {
       act(() =>
@@ -432,8 +551,8 @@ describe("桌面右栏：App 接通果冻管道，任务图标题前不放进度
   });
 });
 
-describe("手机抽屉：同一份 RailGroups", () => {
-  it("marks Pieces as needing attention when a running step still has a pending card", async () => {
+describe("手机整页工作面板：同一份 ActiveTab", () => {
+  it("marks Work panel as needing attention when a running step still has a pending card", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query.includes("coarse"),
       addEventListener() {},
@@ -448,47 +567,46 @@ describe("手机抽屉：同一份 RailGroups", () => {
       conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1 } })],
       activeTaskGraphs: [active],
     }));
-    const toggle = await screen.findByRole("button", { name: "Show Pieces (needs you)" });
+    const toggle = await screen.findByRole("button", { name: "Show work panel (needs you)" });
     fireEvent.click(toggle);
-    const drawer = await screen.findByRole("dialog", { name: "Pieces" });
-    expect(within(drawer).getByTestId("peel-gate-row")).toHaveTextContent("Confirm");
+    const panel = await screen.findByRole("complementary", { name: "Work panel" });
+    expect(within(panel).getByRole("button", { name: /Confirm/ })).toBeInTheDocument();
   });
 
-  it("抽屉里有果冻管道、标题前不放进度图标，门禁提问同样去重；点节点先关抽屉再进 Piece", async () => {
+  it("手机打开整页 WorkPanel，绑图 Worker 不重复列出；点步骤关闭面板并进入 Worker", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query.includes("coarse"),
       addEventListener() {},
       removeEventListener() {},
     }));
     await bootSingle(graphSnapshot());
-    const toggle = await screen.findByRole("button", { name: "Show Pieces (needs you)" });
-    // vaul 的拖动手势要 setPointerCapture（jsdom 没有）：抽屉里用 fireEvent.click，和 mobile-shell.test.tsx 一样
+    const toggle = await screen.findByRole("button", { name: "Show work panel (needs you)" });
     fireEvent.click(toggle);
-    const drawer = await screen.findByRole("dialog", { name: "Pieces" });
-    const graphs = within(drawer).getByRole("region", { name: /^Task Graph$/ });
+    const panel = await screen.findByRole("complementary", { name: "Work panel" });
+    expect(panel).toHaveAttribute("data-layout", "page");
+    const graphs = within(panel).getByRole("region", { name: "发布流水线" });
     expect(within(graphs).getByText("发布流水线")).toBeInTheDocument();
-    expect(graphs.querySelector("[data-slot='task-progress']")).toBeNull();
-    expect(within(drawer).queryByText(/门禁提问/)).toBeNull();
-    expect(within(drawer).queryByRole("button", { name: "绑图的活" })).toBeNull();
+    expect(within(panel).queryByText(/门禁提问/)).toBeNull();
+    expect(within(panel).queryByRole("button", { name: /绑图的活/ })).toBeNull();
     fireEvent.click(within(graphs).getByRole("button", { name: /构建产物/ }));
     await waitFor(() => expect(window.location.hash).toBe("#/w/30"));
-    expect(screen.queryByRole("dialog", { name: "Pieces" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Work panel" })).toBeNull();
   });
 });
 
-describe("手机抽屉：流式帧", () => {
-  it("抽屉开着时连续 8 帧流式输出，PiecesDrawer 零重画", async () => {
+describe("手机整页工作面板：流式帧", () => {
+  it("手机面板开着时连续 8 帧流式输出，ActiveTab 零重画", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query.includes("coarse"),
       addEventListener() {},
       removeEventListener() {},
     }));
     type MemoTarget = { type: (...args: unknown[]) => unknown };
-    const drawerSpy = vi.spyOn(PiecesDrawerMod.PiecesDrawer as unknown as MemoTarget, "type");
+    const tabSpy = vi.spyOn(ActiveTabMod.ActiveTab as unknown as MemoTarget, "type");
     const { ws } = await bootSingle(graphSnapshot());
-    fireEvent.click(await screen.findByRole("button", { name: "Show Pieces (needs you)" }));
-    await screen.findByRole("dialog", { name: "Pieces" });
-    drawerSpy.mockClear();
+    fireEvent.click(await screen.findByRole("button", { name: "Show work panel (needs you)" }));
+    await screen.findByRole("complementary", { name: "Work panel" });
+    tabSpy.mockClear();
     for (let i = 1; i <= 8; i++) {
       act(() =>
         ws.push(
@@ -499,8 +617,7 @@ describe("手机抽屉：流式帧", () => {
         ),
       );
     }
-    expect(screen.getByText("流式片段".repeat(8))).toBeInTheDocument();
-    expect(drawerSpy).toHaveBeenCalledTimes(0);
+    expect(tabSpy).toHaveBeenCalledTimes(0);
   });
 });
 
@@ -532,84 +649,68 @@ function historyFixture(status: "completed" | "cancelled") {
   return { pending, settled, snapshot, message };
 }
 
-async function openHistory(user: ReturnType<typeof userEvent.setup>) {
-  const completed = within(sidePanel()).getByRole("region", { name: "Completed" });
-  await user.click(within(completed).getByRole("button", { name: "Completed" }));
-  const row = await within(completed).findByRole("button", { name: "Release history" });
-  const progress = row.querySelector("[data-slot='task-progress']")!;
-  await user.click(row);
-  const dialog = await screen.findByRole("dialog", { name: "Release history" });
-  expect(within(dialog).getByText("Waiting on you")).toBeInTheDocument();
-  return { dialog, progress };
+function completedPageFor(title: string, outcome: "done" | "cancelled") {
+  return {
+    status: 200,
+    body: {
+      items: [
+        {
+          kind: "graph" as const,
+          graphId: GRAPH_ID,
+          title,
+          outcome,
+          finishedAt: 2_000,
+          prUrl: null,
+          steps: [{ key: "gate", title: "Review notes", skipped: false, done: outcome === "done" }],
+          edges: [],
+        },
+      ],
+      total: 1,
+      next: null,
+    },
+  };
 }
 
 describe("Settling a card in task graph history", () => {
-  it.each([
-    ["chat", "completed"],
-    ["dialog", "completed"],
-    ["dialog", "cancelled"],
-  ] as const)("refreshes the Completed row and open dialog after a %s answer on a %s graph", async (source, status) => {
+  it("keeps a pending card open in TaskGraphDialog on a completed graph and sends askMessageId when decided", async () => {
     const user = userEvent.setup();
-    const { pending, settled, snapshot, message } = historyFixture(status);
-    const { api, ws } = await bootSingle(snapshot);
-    const response = deferred();
-    let historyGraph = pending;
-    api.projectTaskGraphs = () => ({ status: 200, body: { graphs: [historyGraph], hasMore: false } });
-    api.decideTaskNode = async () => {
-      await response.promise;
-      return { status: 200, body: { graph: settled, messageId: null } };
-    };
-
-    if (source === "chat") {
-      const options = await screen.findByRole("group", { name: "Options" });
-      const chatOption = within(options).getByRole("button", { name: /Keep/ });
-      await user.click(chatOption);
-    }
-    const { dialog, progress } = await openHistory(user);
-    const pendingIcon = progress.innerHTML;
-    if (source === "dialog") await user.click(within(dialog).getByRole("button", { name: "Keep" }));
+    const { pending, settled, message } = historyFixture("completed");
+    const api = new FakeApi(makeSnapshot());
+    api.install();
+    const { rerender } = render(
+      <TaskGraphDialog open graph={pending} workers={[]} onOpenChange={() => {}} onOpenWorker={() => {}} />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Release history" });
+    expect(within(dialog).getByText("Waiting on you")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Keep" }));
     await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)[0]?.body).toMatchObject({ askMessageId: message.id, choice: "Keep" }));
 
-    historyGraph = settled;
-    await act(async () => {
-      ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, answered: true, chosenOption: "Keep" } }));
-      ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
-      response.resolve();
-    });
-
-    await waitFor(() => expect(api.callsTo("GET", /task-graphs/)).toHaveLength(2));
-    await waitFor(() => {
-      expect(dialog).toBeInTheDocument();
-      expect(within(dialog).queryByText("Waiting on you")).toBeNull();
-    });
+    rerender(<TaskGraphDialog open graph={settled} workers={[]} onOpenChange={() => {}} onOpenWorker={() => {}} />);
+    expect(within(dialog).queryByText("Waiting on you")).toBeNull();
     expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull();
-    expect(progress.innerHTML).not.toBe(pendingIcon);
-    await user.keyboard("{Escape}");
-    await user.click(within(sidePanel()).getByRole("button", { name: "Release history" }));
-    expect(within(await screen.findByRole("dialog", { name: "Release history" })).queryByTestId("peel-gate-card")).toBeNull();
   });
 
-  it("discards a pending first history read when the PM closes the card", async () => {
+  it("refreshes the Completed feed when a graph settles after an in-flight first read", async () => {
     const user = userEvent.setup();
-    const { pending, settled, snapshot, message } = historyFixture("cancelled");
+    const { settled, snapshot, message } = historyFixture("cancelled");
     const { api, ws } = await bootSingle(snapshot);
     const firstRead = deferred();
-    const historyPage = (graph: TaskGraph) => ({ status: 200, body: { graphs: [graph], hasMore: false } });
-    api.projectTaskGraphs = vi.fn<FakeApi["projectTaskGraphs"]>(() => historyPage(settled)).mockImplementationOnce(async () => {
-      await firstRead.promise;
-      return historyPage(pending);
-    });
+    api.completedWork = vi
+      .fn<FakeApi["completedWork"]>(() => completedPageFor("Release history settled", "cancelled"))
+      .mockImplementationOnce(async () => {
+        await firstRead.promise;
+        return completedPageFor("Release history stale", "cancelled");
+      });
 
-    await user.click(within(sidePanel()).getByRole("button", { name: "Completed" }));
-    await waitFor(() => expect(api.callsTo("GET", /task-graphs/)).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: /Show work panel/ }));
+    await user.click(within(sidePanel()).getByRole("tab", { name: /^Completed/ }));
+    await waitFor(() => expect(api.callsTo("GET", /\/completed$/)).toHaveLength(1));
     act(() => {
       ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, closed: true } }));
       ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
     });
-    const row = await within(sidePanel()).findByRole("button", { name: "Release history" });
     await act(async () => firstRead.resolve());
-    await user.click(row);
-    expect(within(await screen.findByRole("dialog", { name: "Release history" })).queryByText("Waiting on you")).toBeNull();
+    expect(await within(sidePanel()).findByRole("button", { name: /Release history settled/ })).toBeInTheDocument();
   });
 });
 
@@ -645,32 +746,31 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
     return { local, remote, ws: sockets(true)[0]! };
   }
 
-  it("refreshes the open history dialog on the remote device when its PM closes the card", async () => {
+  it("refreshes the Completed feed on the remote device when its PM closes a graph card", async () => {
     const user = userEvent.setup();
-    const { pending, settled, snapshot, message } = historyFixture("cancelled");
+    const { settled, snapshot, message } = historyFixture("cancelled");
     const { local, remote, ws } = await bootFleet(snapshot);
-    let historyGraph = pending;
-    remote.projectTaskGraphs = () => ({ status: 200, body: { graphs: [historyGraph], hasMore: false } });
-    const { dialog, progress } = await openHistory(user);
-    const pendingIcon = progress.innerHTML;
+    let title = "Release history";
+    remote.completedWork = () => completedPageFor(title, "cancelled");
+    await user.click(screen.getByRole("button", { name: /Show work panel/ }));
+    await user.click(within(sidePanel()).getByRole("tab", { name: /^Completed/ }));
+    expect(await within(sidePanel()).findByRole("button", { name: /Release history/ })).toBeInTheDocument();
 
-    historyGraph = settled;
+    title = "Release history updated";
     act(() => {
       ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, closed: true } }));
       ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
     });
 
-    await waitFor(() => expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull());
-    expect(dialog).toBeInTheDocument();
-    expect(progress.innerHTML).not.toBe(pendingIcon);
-    expect(local.callsTo("GET", /task-graphs/)).toHaveLength(0);
+    expect(await within(sidePanel()).findByRole("button", { name: /Release history updated/ })).toBeInTheDocument();
+    expect(local.callsTo("GET", /\/completed$/)).toHaveLength(0);
   });
 
   it("看东京的项目经理：门禁拍板、Cancel graph 都发到东京（/d/<东京>/...），本机一条都不收", async () => {
     const user = userEvent.setup();
     const { local, remote } = await bootFleet();
     const rail = await waitFor(sidePanel);
-    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    await user.click(within(rail).getByRole("button", { name: "Expand 发布流水线" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
     const card = within(zoom).getByTestId("peel-gate-card");
     await user.click(within(card).getByRole("button", { name: /上线/ }));
@@ -693,11 +793,11 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
 });
 
 describe("待交付状态展示（Ready to finish）", () => {
-  it("所有节点均已到达终态但图仍 active 时，果皮轨头与全览弹窗均克制显示 Ready to finish；仍有未完节点时不显示", async () => {
+  it("所有节点均已到达终态但图仍 active 时，右栏显示 2/2 进度，全览弹窗显示 Ready to finish", async () => {
     const user = userEvent.setup();
     const { ws } = await bootSingle(graphSnapshot());
     const rail = await waitFor(sidePanel);
-    expect(within(rail).queryByText("Ready to finish")).not.toBeInTheDocument();
+    expect(within(rail).getByText("0/2")).toBeInTheDocument();
 
     act(() =>
       ws.push({
@@ -715,9 +815,9 @@ describe("待交付状态展示（Ready to finish）", () => {
       }),
     );
 
-    expect(await within(rail).findByText("Ready to finish")).toBeInTheDocument();
+    expect(await within(rail).findByText("2/2")).toBeInTheDocument();
 
-    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    await user.click(within(rail).getByRole("button", { name: "Expand 发布流水线" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
     expect(within(zoom).getByText("Ready to finish")).toBeInTheDocument();
   });
@@ -727,7 +827,7 @@ describe("待交付状态展示（Ready to finish）", () => {
     const { ws } = await bootSingle(graphSnapshot());
     const rail = await waitFor(sidePanel);
 
-    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    await user.click(within(rail).getByRole("button", { name: "Expand 发布流水线" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
     const gateCard = within(zoom).getByTestId("peel-gate-card");
     await user.type(within(gateCard).getByLabelText("Your reply"), "补充回滚方案");
@@ -738,7 +838,7 @@ describe("待交付状态展示（Ready to finish）", () => {
     const chatCard = document.querySelector<HTMLElement>('[data-message-id="99"] [data-ask-card]')!;
     expect((within(chatCard).getByLabelText("Your reply") as HTMLTextAreaElement).value).toBe("补充回滚方案");
 
-    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    await user.click(within(rail).getByRole("button", { name: "Expand 发布流水线" }));
     const zoomReopened = await screen.findByRole("dialog", { name: "发布流水线" });
     expect((within(within(zoomReopened).getByTestId("peel-gate-card")).getByLabelText("Your reply") as HTMLTextAreaElement).value).toBe("补充回滚方案");
 

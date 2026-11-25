@@ -1,6 +1,8 @@
 import { memo, useEffect, useState } from "react";
 import { systemNoticeText, workerEventOf, type ChecklistStatus, type Message, type WorkerMessageMeta } from "../../shared/index.ts";
-import { pieceLineParts } from "../format.ts";
+import { workerLineParts } from "../format.ts";
+import type { WorkStatus } from "../work-status.ts";
+import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 import { cn } from "../lib/utils.ts";
 import { ACTION_ELAPSED_TICK_MS } from "../limits.ts";
 import { formatDuration, workedFor } from "../step-labels.ts";
@@ -31,8 +33,8 @@ export interface TurnProgressProps {
   onOpenWorker: MessageActions["onOpenWorker"];
 }
 
-function PieceLineButton({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
-  const { title, state, detail } = pieceLineParts(line);
+function WorkerLineButton({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
+  const { title, state, detail } = workerLineParts(line);
   return (
     <button
       type="button"
@@ -52,7 +54,7 @@ function WorkStep({ message, onOpenWorker }: { message: Message; onOpenWorker: M
   if (line) {
     return (
       <li>
-        <PieceLineButton line={line} onOpen={onOpenWorker} />
+        <WorkerLineButton line={line} onOpen={onOpenWorker} />
       </li>
     );
   }
@@ -70,33 +72,15 @@ function ProcessList({ work, onOpenWorker, className }: { work: readonly Message
   );
 }
 
-/** Renders the same status glyph set as the task graph: check, ink pie, hollow circle, slashed circle. */
-export function ChecklistStatusIcon({ status }: { status: ChecklistStatus }): React.ReactNode {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" className="turn-progress-icon size-3.5 shrink-0 rounded-full" data-checklist-status={status} aria-hidden="true">
-      {status === "completed" && (
-        <>
-          <circle cx="8" cy="8" r="6.2" fill="var(--checklist-done-fill)" stroke="var(--checklist-done-stroke)" strokeWidth="1.25" />
-          <path d="M5.2 8.2 7.1 10.1 10.8 6.1" stroke="var(--checklist-done-check)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </>
-      )}
-      {status === "in_progress" && (
-        <>
-          <circle cx="8" cy="8" r="6.2" fill="var(--pc-icon-bg, var(--background))" stroke="var(--checklist-active-ink)" strokeWidth="1.35" />
-          <path d="M8 8 V3.6 A4.4 4.4 0 0 1 12.4 8 A4.4 4.4 0 0 1 8 12.4 Z" fill="var(--checklist-active-ink)" />
-        </>
-      )}
-      {status === "pending" && (
-        <circle cx="8" cy="8" r="5.5" fill="var(--pc-icon-bg, var(--background))" stroke="var(--checklist-pending-stroke)" strokeWidth="1.3" />
-      )}
-      {status === "cancelled" && (
-        <>
-          <circle cx="8" cy="8" r="6.2" fill="var(--pc-icon-bg, var(--background))" stroke="var(--checklist-cancelled-stroke)" strokeWidth="1.3" />
-          <path d="M5.6 10.4 10.4 5.6" stroke="var(--checklist-cancelled-stroke)" strokeWidth="1.3" strokeLinecap="round" />
-        </>
-      )}
-    </svg>
-  );
+const CHECKLIST_WORK_STATUS = {
+  completed: "done",
+  in_progress: "running",
+  pending: "pending",
+  cancelled: "cancelled",
+} satisfies Record<ChecklistStatus, WorkStatus>;
+
+export function ChecklistStatusIcon({ status }: { status: ChecklistStatus }) {
+  return <WorkStatusIcon status={CHECKLIST_WORK_STATUS[status]} className="turn-progress-icon rounded-full" />;
 }
 
 /** Ticks every ACTION_ELAPSED_TICK_MS and formats now - startedAt with formatDuration; stops ticking on unmount. */

@@ -44,7 +44,8 @@ import {
   type FileActionResponse,
   type MessageId,
   type ConversationsLookup,
-  type EndedWorkersPage,
+  type CompletedCursor,
+  type CompletedWorkPage,
   type MessagesPage,
   type WorkerId,
   type ModelsResponse,
@@ -93,7 +94,6 @@ import {
   type SkipTaskNodeResponse,
   type StateSnapshot,
   type TaskGraphId,
-  type TaskGraphsPage,
   type TaskNodeKey,
   type UpdateRouterSettingsRequest,
   type UpdateRouterSettingsResponse,
@@ -254,7 +254,8 @@ export function createClient(device: DeviceId | null) {
       request<MessagesPage>(`${at(API_PATHS.messages(conversationId))}?before=${before}`),
     fetchConversationsLookup: (query: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
       request<ConversationsLookup>(at(API_PATHS.conversationsLookup(query))),
-    fetchEndedWorkers: (pmId: PmId, before: ConversationId | null) => request<EndedWorkersPage>(at(API_PATHS.endedWorkers(pmId, before))),
+    fetchCompletedWork: (pmId: PmId, cursor: CompletedCursor | null, signal?: AbortSignal) =>
+      request<CompletedWorkPage>(at(API_PATHS.completedWork(pmId, cursor)), signal ? { signal } : undefined),
     fetchTurnReply: (messageId: MessageId) => request<TurnReplyView>(at(API_PATHS.messageTurnReply(messageId))),
     postMessage: (conversationId: ConversationId, body: PostMessageRequest) => postJson<PostMessageResponse>(at(API_PATHS.messages(conversationId)), body),
     postUpload: async (file: Blob, name: string): Promise<Attachment> => {
@@ -274,6 +275,7 @@ export function createClient(device: DeviceId | null) {
       }
     },
     postStop: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.stop(conversationId))),
+    postEndWorker: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.endWorker(conversationId))),
     postRewind: (conversationId: ConversationId) => postJson<RewindMessageResponse>(at(API_PATHS.rewind(conversationId))),
     postCreatePm: (body: CreatePmRequest) => postJson<CreatePmResponse>(at(API_PATHS.pms), body),
     postPickFolder: (body: PickFolderRequest) => postJson<PickFolderResponse>(at(API_PATHS.pickFolder), body, null),
@@ -345,12 +347,6 @@ export function createClient(device: DeviceId | null) {
       postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommands), body),
     postRetryRouterCommand: (id: RouterCommandId) =>
       postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), {}),
-    fetchProjectTaskGraphs: (projectId: ProjectId, options: { before?: TaskGraphId; limit?: number; signal?: AbortSignal } = {}) => {
-      const params = new URLSearchParams({ status: "history" });
-      if (options.before !== undefined) params.set("before", String(options.before));
-      if (options.limit !== undefined) params.set("limit", String(options.limit));
-      return request<TaskGraphsPage>(`${at(API_PATHS.projectTaskGraphs(projectId))}?${params.toString()}`, { signal: options.signal });
-    },
     postTaskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: DecideTaskNodeRequest) =>
       postJson<DecideTaskNodeResponse>(at(API_PATHS.taskGraphDecide(graphId, nodeKey)), body),
     postTaskGraphSkip: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: SkipTaskNodeRequest = {}) =>

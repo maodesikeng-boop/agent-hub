@@ -450,7 +450,7 @@ describe("跨项目经理（6 家厂商）与 Worker 对话一致生效", () => 
     await waitFor(() => expect(api.callsTo("POST", /\/conversations\/30\/rewind$/)).toHaveLength(1));
 
     // 关闭 Worker 侧栏回到项目经理对话，项目经理自己的草稿完好无损
-    await user.click(screen.getByRole("button", { name: "Close Piece" }));
+    await user.click(screen.getByRole("button", { name: "Close work panel" }));
     expect(box().value).toBe("给项目经理留的话");
   });
 });

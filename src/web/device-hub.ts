@@ -9,13 +9,16 @@ import {
   MAX_MESSAGE_BYTES,
   MAX_REWOUND_PENDING_KEYS,
   findRewindableMessage,
+  isWorkerEndLine,
+  workerEventOf,
   type Attachment,
   type Change,
   type ConversationId,
   type DeviceInfo,
   type MessageId,
-  type PmId,
   type PostMessageRequest,
+  type PmId,
+  type TaskGraph,
   type StateSnapshot,
   type WsServerMessage,
   type WorkerId,
@@ -32,7 +35,7 @@ import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type
 import { openChangeStream, planSnapshotRecovery, reconnectDelay, type ChangeStreamConnection } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, sameDeviceInfo, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
 import { ErrorNotice, errorText, newClientId } from "./format.ts";
-import { invalidateAccount, queryClient, taskGraphHistoryKey, useHubQueryClient } from "./query-client.ts";
+import { completedWorkKey, invalidateAccount, queryClient, useHubQueryClient } from "./query-client.ts";
 import { parseRoute } from "./route.ts";
 import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer, type HubState } from "./state.ts";
@@ -83,9 +86,9 @@ export class DeviceHub {
   private loading: AbortController | null = null;
   private readonly olderInFlight = new Set<ConversationId>();
   private readonly requestedWorkers = new Set<WorkerId>();
-  private readonly endedWorkersInFlight = new Set<PmId>();
   private readonly inFlightPosts = new Map<string, { conversationId: ConversationId; after: "none" | "stop" | "rewind" }>();
   private readonly rewindBarriers = new Map<ConversationId, number>();
+  private readonly taskGraphListeners = new Set<(graph: TaskGraph) => void>();
   private readonly stopRequests = new Map<ConversationId, Promise<void>>();
   private alive = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -134,6 +137,11 @@ export class DeviceHub {
   }
 
   subscribe = (listener: (state: HubState, prevState: HubState) => void): (() => void) => this.store.subscribe(listener);
+
+  subscribeTaskGraphs = (listener: (graph: TaskGraph) => void): (() => void) => {
+    this.taskGraphListeners.add(listener);
+    return () => this.taskGraphListeners.delete(listener);
+  };
 
   private get remote(): boolean {
     return this.key !== LOCAL_DEVICE;
@@ -256,6 +264,7 @@ export class DeviceHub {
     this.loading = null;
     this.inFlightPosts.clear();
     this.stopRequests.clear();
+    this.taskGraphListeners.clear();
     this.rewindBarriers.clear();
     this.offUnauthorized?.();
     this.offUnauthorized = null;
@@ -271,13 +280,24 @@ export class DeviceHub {
   private applyChange(change: Change): void {
     if (!this.cursor || change.seq <= this.cursor.seq) return;
     this.cursor = { bootId: this.cursor.bootId, seq: change.seq };
+    const pmId = this.completedWorkPmOf(change);
     this.dispatch({ type: "change", change });
-    if (change.type === "task_graph.updated" && change.data.graph.status !== "active") {
-      const queryKey = taskGraphHistoryKey(this.key, change.data.graph.projectId);
+    if (change.type === "task_graph.updated") for (const listener of this.taskGraphListeners) listener(change.data.graph);
+    if (pmId !== null) {
+      const queryKey = completedWorkKey(this.key, pmId);
       // Invalidation alone leaves a fetch with no cached data running.
-      void this.qc.cancelQueries({ queryKey });
-      void this.qc.invalidateQueries({ queryKey });
+      void this.qc.cancelQueries({ queryKey, exact: true });
+      void this.qc.invalidateQueries({ queryKey, exact: true });
     }
+  }
+
+  private completedWorkPmOf(change: Change): PmId | null {
+    if (change.type === "task_graph.updated" && change.data.graph.status !== "active") return change.data.graph.pmId;
+    if (change.type !== "message.created") return null;
+    const { message } = change.data;
+    const line = workerEventOf(message);
+    if (line === null || !isWorkerEndLine(line)) return null;
+    return this.state.conversations[message.conversationId]?.conversation.pmId ?? null;
   }
 
   private installSnapshot(snapshot: StateSnapshot, cursor: ChangeCursor): void {
@@ -285,7 +305,7 @@ export class DeviceHub {
     this.cursor = cursor;
     this.dispatch({ type: "loaded", snapshot });
     if (replacing) {
-      const queryKey = ["project-task-graphs", this.key];
+      const queryKey = ["completed-work", this.key];
       void this.qc.cancelQueries({ queryKey });
       void this.qc.invalidateQueries({ queryKey });
     }
@@ -555,18 +575,6 @@ export class DeviceHub {
       for (const id of workerIds) this.requestedWorkers.delete(id);
     }
   }
-
-  loadEndedWorkers = async (pmId: PmId): Promise<void> => {
-    const before = this.state.olderEndedWorkers[pmId];
-    if (before === undefined || this.endedWorkersInFlight.has(pmId)) return;
-    this.endedWorkersInFlight.add(pmId);
-    try {
-      const page = await this.client.fetchEndedWorkers(pmId, before);
-      if (this.alive) this.dispatch({ type: "endedWorkersLoaded", pmId, before, page });
-    } finally {
-      this.endedWorkersInFlight.delete(pmId);
-    }
-  };
 
   loadOlder = async (conversationId: ConversationId): Promise<void> => {
     const view = this.state.conversations[conversationId];

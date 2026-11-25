@@ -52,6 +52,7 @@ import { LOG_PREFIX } from "../../shared/names.ts";
 import { isJellyColorId, isPmFruit, pickNewPmLook, resolvePmLook, type PmLookSetting, type SlimeLook } from "../../shared/slimes.ts";
 import {
   deletePmMemoryFile as deleteMemorySubfile,
+  countPmMemoryFiles,
   listPmMemoryFiles as listMemorySubfiles,
   quarantinePmMemoryIndex,
   readPmMemoryFile as readMemorySubfile,
@@ -170,8 +171,7 @@ export function createLedgerPersona(
     return ok;
   };
 
-  const pmRow = (id: PmId): PmDbRow | null =>
-    db.get<PmDbRow>(`${PM_SELECT} WHERE p.id = ?`, id) ?? null;
+  const pmRow = (id: PmId) => db.get<PmDbRow>(`${PM_SELECT} WHERE p.id = ?`, id) ?? null;
 
   const isPmArchived = (pmId: PmId): boolean =>
     db.get("SELECT 1 AS x FROM pm_archives WHERE pm_id = ?", pmId) !== undefined;
@@ -247,6 +247,7 @@ export function createLedgerPersona(
       switchingToVendor: active !== null ? (active.to_vendor as AgentVendor) : null,
       changes,
       revertableChangeId: changes[0]?.id ?? null,
+      memoryFileCount: countPmMemoryFiles(subfilesRoot, pmId),
     };
   };
 

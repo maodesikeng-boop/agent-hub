@@ -188,7 +188,7 @@ export function ScheduleGroup({ pmId, schedules, disabled = false }: { pmId: num
   const [adding, setAdding] = useState(false);
   const full = schedules.length >= MAX_SCHEDULES_PER_PM;
   return (
-    <SettingsGroup>
+    <SettingsGroup label="Schedules">
       {schedules.map((s) => (
         <ScheduleItem key={s.id} schedule={s} disabled={disabled} />
       ))}

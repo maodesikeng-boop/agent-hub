@@ -15,14 +15,9 @@ function previousCalls(): RecordedCall[] {
   if (!file || !existsSync(file)) return [];
   return readFileSync(file, "utf8")
     .split("\n")
+    .slice(0, -1)
     .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as RecordedCall];
-      } catch {
-        return [];
-      }
-    });
+    .map((line): RecordedCall => JSON.parse(line));
 }
 
 function replay(): { index: number; output: StubOutput } | null {

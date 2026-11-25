@@ -90,7 +90,6 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 - Markdown rendering: `react-markdown`, `remark-gfm`, `remark-breaks`, `remark-cjk-friendly`, and `remark-cjk-friendly-gfm-strikethrough` (`components/Markdown.tsx`).
 - Syntax highlighting: `shiki` (`highlight.ts`).
 - Charts and diagrams: `mermaid`, `vega`, `vega-lite`, `vega-embed`, `vega-interpreter`, and `dompurify` (`charts/`).
-- DAG layout: `@dagrejs/dagre` for layered Task Graph layout (`task-graph-layout.ts`).
 
 ### UI primitives (`src/web/ui/`)
 
