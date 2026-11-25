@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyRouterSlice, type RouterDecisionItem, type StateSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { FakeApi, installFakeWebSocket, makeConvSnapshot, makePm, makeProject, makeSnapshot } from "./test-utils.ts";
@@ -157,4 +157,23 @@ it("turns the open Settings dialog into the phone page for its tab, and back, ke
   const dialog = await screen.findByRole("dialog", { name: "Settings" });
   expect(within(dialog).getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
   expect(within(dialog).getByRole("radio", { name: "Router" })).toBeChecked();
+});
+
+// Each scenario crosses the one-column width twice and expects the same DOM element for the input after every switch.
+describe("layout switch acceptance", () => {
+  it.todo("Router: the @ target and text stay on the same composer across two round trips, and Enter sends both");
+  it.todo("Router: a command sent in one column after the switch carries its @ target");
+  it.todo("Persona behind Settings: closing Settings after two round trips returns to the Persona page with the unsaved text");
+  it.todo("Persona behind Settings: Back in one column closes Settings onto the Persona page with the unsaved text");
+  it.todo("Router tray: the open card, its reply, and a closed card's unsent reply survive two round trips");
+  it.todo("Project list: the search survives two round trips in the column and on the one-column list page");
+  it.todo("PM settings pages: Model, Persona, Schedules, Memory files, Worktree setup, and Capabilities search edits survive two round trips");
+  it.todo("Settings: the Capabilities scope, the Resources computer, and a custom relay URL survive two round trips");
+  it.todo("Settings: a one-column section the dialog groups under General comes back after a round trip");
+  it.todo("Composer: PM and Worker text, the /hub:worker pick, and a staged attachment survive two round trips");
+  it.todo("Automatic reload after two round trips restores composer drafts and the Router target");
+  it.todo("Navigation: Router, a conversation, a Worker, a PM page, and Settings over each keep their URL and Back entries");
+  it.todo("Navigation: crossing the width never writes the URL or history");
+  it.todo("Providers: an open sign-in sheet keeps its method and typed API key across two round trips and sends no cancel");
+  it.todo("Computers: an unsaved computer name stays in its editor across two round trips");
 });
