@@ -37,9 +37,9 @@ None (resolved on 2026-11-26: **1B** and **2A**).
 
 Batch 1 makes sure a Worker's brief is never dropped silently and that a system notice is checked against the current state right before it is written. It covers: daemon shutdown is never treated as a user stop; an interrupted turn is resent after restart or the PM is told; a failed first launch shows its real error; delivery notes and timeout reminders are rechecked before each write; `graph done` ends the parked Worker; and Antigravity model and effort pairs the CLI does not support are rejected at dispatch.
 
-### 2. Current state
+### 2. Baseline behavior
 
-`origin/main` is `fd5c1170`, the same commit the investigation report used, so its line numbers still apply. I copied the investigation's repro file into `src/daemon/ledger/` and ran `pnpm exec vitest run --disableConsoleIntercept src/daemon/ledger/bug-roots-local.test.ts`: 16 of 16 passed, and every printed observation matched `/tmp/bug-fix1/repro-output.txt`. The repro asserts the wrong behavior, so passing means each defect is still present.
+The source line references in this section point to `fd5c1170`, the commit used for the investigation. I copied the investigation's repro file into `src/daemon/ledger/` and ran `pnpm exec vitest run --disableConsoleIntercept src/daemon/ledger/bug-roots-local.test.ts`: 16 of 16 passed, and every printed observation matched `/tmp/bug-fix1/repro-output.txt`. The repro asserts the wrong behavior, so passing means each defect is still present.
 
 #### 2.1 Daemon shutdown is treated as a user stop
 
@@ -57,6 +57,19 @@ Batch 1 makes sure a Worker's brief is never dropped silently and that a system 
 
 - [Measured] The ledger then writes `cancelled` (`src/daemon/ledger/messages.ts:279-282`). The restart query only picks up `queued`, `delivered`, and `processing` messages (`src/daemon/ledger/sessions.ts:57-80`). The shutdown `turn.ended` produces no PM wakeup (`src/daemon/ledger/workers/text.ts:48`). The step log records the turn as `interrupted` with no reason (`steps.ts:138-142`). Nothing tells the PM.
 - [Inferred] After the driver fix, every brief interrupted by shutdown stays `delivered` or `processing`, or is requeued, so the restart query resends it. The cases restart still cannot resend are intentional skips in `RECOVER_MESSAGES_SQL` (a Worker that ended or whose worktree is not prepared yet) and anything a future driver drops. Today none of these reaches the PM.
+
+#### Local SIGINT observations
+
+The probe used a temporary working directory and the prompt `Reply only with OK; do not use any tools.` It sent SIGINT once the pipe write completed, before an acknowledgement arrived. For Claude and Codex, a second run sent a follow-up after the first turn started. Pi used the configured Anthropic provider.
+
+| CLI | Observed after SIGINT | Regression coverage |
+|---|---|---|
+| Claude Code 2.1.330, Haiku | Exited with code 0. No further JSON arrived in either run. | Test a silent close and separately test the defensive path for a `command_lifecycle` cancellation. |
+| Antigravity 1.5.17, Gemini 3.8 Flash Low | Emitted a nested `result` with `status: "ERROR"`, `error: "context canceled"`, and `finished_reason: "interrupted"` before any `init` or `user_input`. Exited with code 1. | Replay the captured result before init. Also test the result after init and before the input acknowledgement. That ordering was reproduced with the fake CLI. |
+| Codex CLI 0.169.0, GPT 5.4 Mini | Exited on SIGINT with no turn result, including after a `turn/steer` write during a started turn. | Test a silent close and defensively test an interrupted turn result while a steer is pending or acknowledged. |
+| Pi 1.5.2, Claude Haiku 4.5 | Acknowledged the prompt after SIGINT. On the follow-up run, emitted `queue_update` and a successful `prompt` response before exiting on SIGINT. No abort or turn-end event arrived. | Test an acknowledged steer followed by a silent close, and defensively test an abort result during shutdown. |
+
+The captures confirm which events these CLI versions emitted on these runs. They do not establish that Claude, Codex, or Pi returned an explicit cancellation during the reported incidents. The live Antigravity catalog on this machine already lists `gemini-4-neon-xhigh`, so the validation accepts it here. The rejection tests use a catalog that lists Neon with only Low, Medium, and High.
 
 #### 2.2 A failed first launch reads as "no turn yet"
 
@@ -99,7 +112,7 @@ Batch 1 makes sure a Worker's brief is never dropped silently and that a system 
 | Stale notices | **A (chosen): one `isSystemMessageCurrent(db, id, now)` used by the send handler and by every driver's pre-write `canDeliverSystemMessage`** | Covers queued, driver-pending, and requeued copies; one rule per event | Small read per system write |
 | | B: also withdraw `delivered` notes at change time | Visible earlier | Cannot reach copies already in a driver's pending queue; a later requeue revives them |
 | | C: expire notices after a TTL | Simple | Wrong in both directions: a fresh note can be stale and an old one current |
-| Manual `done` | **A (chosen): `doneIn` ends `parkedStepWorkersOf(node)` through the existing `stopWorkersIn`** | Same cleanup as automatic completion | Changes one asserted behavior (resolved decision 1) |
+| Manual `done` | **A (chosen): `doneIn` ends the latest open Worker through `stopWorkersIn` after checking it is idle** | Same cleanup as automatic completion | Changes one asserted behavior (resolved decision 1) |
 | | B: leave it to `graph finish` | No change | Parked reviewers hold a slot until the whole graph ends, which is what #1201 and #1203 hit |
 | Model and effort | **A (chosen): per-model check in shared `checkModelEffort` via `modelEffortsOf`** | Every dispatch path (worker start, graph spec, PM settings) already calls it | Only as good as the catalog |
 | | B: validate in `agentLaunchArgs` at launch | Agy-only | Too late: the Worker and step already exist |
@@ -108,7 +121,7 @@ Batch 1 makes sure a Worker's brief is never dropped silently and that a system 
 
 No cache, snapshot, or growing collection is added. Each check reads a bounded number of indexed rows:
 
-- `isSystemMessageCurrent` reads the message row by primary key, plus either one graph's steps (`task_graph_steps` by `graph_id`) or one `worker_turn_timeouts` row by `worker_id`. It runs once per system-message send attempt and once per driver write.
+- `isSystemMessageCurrent` reads the message by primary key. For a delivery note it checks the graph, its steps, and whether a newer delivery note exists. For a timeout it checks the Worker, deadline, and whether a turn is still in flight. It runs once per system-message send attempt and once per driver write.
 - `noticeUnresentShutdownTurnsIn` runs once per daemon start over open Workers, each with one indexed lookup of the latest `turn_ended` step (`session_steps_session`) and one message-status probe by `session_id`. At the one-month sizing (300 finished Workers; open Workers are a small subset) this costs one indexed lookup per open Worker.
 - `recordFailedStart` writes at most two `session_steps` rows per final send failure, and the existing `SESSION_STEPS_KEEP` trim still applies.
 
@@ -128,27 +141,12 @@ No `src/shared/limits.ts` constants are needed.
 - The open-Worker assertions after `graph done` in `task-graph-auto-dispatch.test.ts` (part 2 and part 3 of the end-to-end case), per decision 1.
 - Kept on purpose: `stopQueuedDeliveryNotesIn` still withdraws queued notes as soon as the graph changes, so the UI shows them stopped right away. The new check covers only copies that already left the queue.
 
-### 7. Skeleton files
+### 7. Implementation and coverage
 
-- `src/daemon/driver/stop-untaken.ts`: `UntakenReleaseCause`, `untakenReleaseCause`, and `untakenReleaseEvents` contracts.
-- `src/daemon/driver/stop-untaken.test.ts` (new): cause and event mapping specs.
-- `src/vendors/agy/driver.test.ts`, `src/daemon/driver/mid-turn.test.ts` (Claude), `src/vendors/codex/driver.test.ts`, `src/vendors/pi/driver.test.ts`, and `src/vendors/_common/acp/driver.test.ts`: per-vendor shutdown specs against each fake CLI.
-- `src/daemon/ledger/steps.ts`: `SHUTDOWN_INTERRUPTED_REASON` and the `recordFailedStart` contract. Implementation stores the reason when `turn.ended` carries `shutdown: true` or `session.exited` has reason `shutdown`, and `ledger.onActionFailed` calls `recordFailedStart` for a failed `session.send`.
-- `src/daemon/ledger/workers/restart-recovery.ts` (new): `noticeUnresentShutdownTurnsIn` and `SHUTDOWN_TURN_NOT_RESENT`. Implementation calls it from `ledger.recoverAfterRestart` right after `sessions.recoverAfterRestart`, inside one write.
-- `src/daemon/ledger/turn-recovery.test.ts` (new): end-to-end specs for the lost brief, the recovery notice, and the failed first launch.
-- `src/daemon/ledger/notice-currency.ts` (new) and `notice-currency.test.ts` (new): the shared currency rule and its specs.
-- `src/shared/domain.ts`: optional `deadlineAt` on `worker.max_time_exceeded` meta. Implementation writes it in `insertMaxTimeNoticeIn`.
-- `src/shared/ledger.ts`: `isSystemMessageCurrent` and `retireStaleSystemMessage` on the `Ledger` interface.
-- `src/daemon/ledger/task-graphs/lifecycle.ts`: `parkedStepWorkersOf`. Implementation calls it from `doneIn` and ends the result through `g.options.workers?.()?.stopWorkersIn`.
-- `src/daemon/ledger/task-graph-review.test.ts` and `src/daemon/ledger/task-graph-auto-dispatch.test.ts`: manual `graph done` specs.
-- `src/shared/vendors.ts`: `modelEffortsOf` and the extended `checkModelEffort` contract.
-- `src/shared/agy-effort.test.ts`: per-model effort specs.
+- The drivers share `untakenReleaseCause` and `untakenReleaseEvents`. During shutdown, the action executor sends the first recovered input for a session before an already pending follow-up.
+- Restart records the interruption in the step log and runs the resend and PM notice checks in one SQLite transaction. A terminal launch failure records its reason in the same log that `worker show` reads.
+- Both the send action and the driver check whether a system notice is current before writing. An obsolete notice becomes stopped, including when a driver already put it back in the queue.
+- The graph release stops the step's latest open Worker if idle. The model check runs on individual choices and on the settings after the Worker inherits PM defaults.
+- The regression suite drives real ledgers and fake vendor processes. It asserts the contents that reach the PM or Worker, and it tests a notice that becomes stale after the driver takes it. The daemon test stops and restarts an actual daemon in a temporary data directory. One case reads the resent brief and follow-up from the new Worker process. The other makes the stored brief ineligible for resend and reads the failure notice from the new PM process. In a macOS Worker that cannot apply a nested sandbox, the test launcher replaces the second wrapper for its fake Claude only.
 
-Until implementation wires them, `knip` reports the new exports as unused. That is expected at this step and clears in step 2.
-
-### 8. Verification plan
-
-- **Regression tests through real paths.** Item 1 regressions drive each vendor's fake CLI through `driver.shutdown()` and check the emitted events. A ledger test feeds those events into a real ledger, runs `recoverAfterRestart()`, and checks that the brief is resent or the PM notice is queued. Item 1c and item 2 regressions use `workerOpsFixture` with `hub` calls, driver events, and `createSessionSendHandler` with a fake driver, counting real writes as the repro does. Item 3 uses the existing Task Graph harnesses. Item 4 calls `hub worker start` and `graph create` with a live-style catalog. None of these tests imports a new module, so on `origin/main` they fail on assertions, not on missing imports.
-- **Repro cases carried over.** The batch 1 cases in `/tmp/bug-fix1/bug-roots-local.test.ts` become assertions of correct behavior: `graph patch`/`graph finish` and `timeout extend`/`timeout complete` → `notice-currency.test.ts`; `launch` → `turn-recovery.test.ts` (first turn fails before start); `shutdown` → `turn-recovery.test.ts` and `src/vendors/agy/driver.test.ts`; `agy-model` → `agy-effort.test.ts`. The other ten cases belong to batch 2 or out-of-scope items and are not merged.
-- **Fail-on-main evidence.** Check out `origin/main` in a scratch worktree, copy in the regression test files, and run `pnpm exec vitest run <files>` there and on the branch. Paste both outputs into the final report.
-- **Final gate** once all edits are final: `pnpm lint`, `pnpm typecheck`, `pnpm test:related` (including `src/code-hygiene.test.ts` and `src/prompt-portability.test.ts` for the new Chinese reason strings), `pnpm verify`, and `pnpm exec knip --treat-config-hints-as-errors`. After the push, `node scripts/wait-checks.ts <PR>` must be green, including the Windows workflow that driver changes trigger.
+Run the related gate and smoke check before pushing. Run the regression files against the baseline with the same fake CLI fixtures to confirm the failures reproduce there.
