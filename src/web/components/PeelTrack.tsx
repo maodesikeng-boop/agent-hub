@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { ChevronRight, Maximize2 } from "../ui/icons.ts";
+import { ChevronRight } from "../ui/icons.ts";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
@@ -26,7 +26,6 @@ import { computeGraphComponents } from "../task-graph-layout.ts";
 import { CardBody, CardNoteForm } from "./Deliverables.tsx";
 import { GateMark } from "./GateMark.tsx";
 import { ShimmerOverlay } from "./StatusShimmer.tsx";
-import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 
 type GutterKind = "station" | "parA" | "parB" | "coil" | "gate" | "next";
 type DotTone = "done" | "run" | "warn" | "blocked";
@@ -1021,42 +1020,43 @@ export const PeelTrackList = memo(function PeelTrackList({
         const open = openIds.has(graph.id);
         return (
           <div key={graph.id} data-graph-id={graph.id}>
-            <div className="-mx-2.5 flex items-center gap-1 px-2.5">
-              <button
-                type="button"
-                data-testid="peel-graph-toggle"
-                aria-expanded={open}
-                onClick={() => toggleGraph(graph.id)}
-                className="flex min-h-9 pointer-coarse:min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-1.5 pr-1 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
-              >
-                <TaskProgressIcon graph={graph} color={color} size={20} />
-                <span title={graph.title} className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>
-                  {graph.title}
-                </span>
-                {isTaskGraphReadyToFinish(graph) && (
-                  <span className="shrink-0 text-xs text-muted-foreground">Ready to finish</span>
+            <button
+              type="button"
+              data-testid="peel-graph-toggle"
+              aria-expanded={open}
+              onClick={() => toggleGraph(graph.id)}
+              className={cn(PEEL_ROW, "gap-2.5 py-1.5")}
+            >
+              <span title={graph.title} className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>
+                {graph.title}
+              </span>
+              {isTaskGraphReadyToFinish(graph) && (
+                <span className="shrink-0 text-xs text-muted-foreground">Ready to finish</span>
+              )}
+              <ChevronRight
+                className={cn(
+                  "size-pixel-sm shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
+                  open && "rotate-90",
                 )}
-                <ChevronRight
-                  className={cn(
-                    "size-pixel-sm shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
-                    open && "rotate-90",
-                  )}
-                  aria-hidden="true"
-                />
-              </button>
-              <Button type="button" variant="slot" size="icon-sm" aria-label="Zoom" onClick={() => onZoomGraph(graph)} className="shrink-0">
-                <Maximize2 className="size-pixel-sm" aria-hidden="true" />
-              </Button>
-            </div>
-            {open && (
-              <PeelTrackBody
-                graph={graph}
-                color={color}
-                workerByKey={workerByKey}
-                openWorkerId={openWorkerId}
-                onOpenWorker={onOpenWorker}
-                onOpenStepAsk={onOpenStepAsk}
+                aria-hidden="true"
               />
+            </button>
+            {open && (
+              <>
+                <PeelTrackBody
+                  graph={graph}
+                  color={color}
+                  workerByKey={workerByKey}
+                  openWorkerId={openWorkerId}
+                  onOpenWorker={onOpenWorker}
+                  onOpenStepAsk={onOpenStepAsk}
+                />
+                <div className="flex justify-end">
+                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal text-muted-foreground pointer-coarse:h-11" onClick={() => onZoomGraph(graph)}>
+                    Zoom
+                  </Button>
+                </div>
+              </>
             )}
           </div>
         );

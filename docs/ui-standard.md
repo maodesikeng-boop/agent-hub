@@ -150,7 +150,7 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 - **Custom dropdowns (`src/web/ui/select.tsx`)**: All dropdowns use the custom `@radix-ui/react-select` component (zero browser-native `<select>`). Triggers show a smooth `ChevronDown`; the open `SelectContent` portal is `rounded-sm border border-border bg-background shadow-[var(--shadow-overlay)]` with `rounded-xs` items and a smooth `Check` on the selected option.
 - **Non-prose touch inputs**: URLs, domains, and pairing codes set `autoCapitalize="none" autoCorrect="off" spellCheck={false}` (plus `inputMode="url"` on URLs), and stretch full width (`h-11 w-full`) in mobile settings pages and drawers.
 - **Tool slots (`Button variant="slot"`, `btn-honey`)**:
-  - Header actions (New PM, the `Pieces` toggle, the Router model picker) use `size="icon"` (`32px`, `18px` icon), `size="icon-lg"` (`36px`), or `h-8 px-3` with a label; inline header slots (Task Graph `Zoom`) use `size="icon-sm"` (`24px`, `12px` icon).
+  - Header actions (New PM, the `Pieces` toggle, the Router model picker) use `size="icon"` or `size="icon-lg"` for icons, or `h-8 px-3` for text labels.
   - Honey recipe: `--slot-bg` `#ffefb5` fill, `1px` `--slot-line`, `--slot-ink` `#4a2e00` foreground (`10.9:1`), `--slot-hover` on hover, and `--slot-press` with the inset shade while pressed or open. `.tool-badge` shares the honey fill as a flat chip (section 4).
   - The rail footer (`Update`, usage, `Settings`, `Account`) uses rail tiles (section 16), not slots. The `Update` tile (`Download` icon, accessible name `Update to vX.Y.Z`) sits directly above `Settings` and appears only for a bundled install with a newer release that was not skipped (section 24).
 
@@ -214,9 +214,9 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 
 - **Three panel views (`sidePanelOf`)**: `Pieces` (`RailGroups`, at `#/c/<id>` when `piecesOpen` and items exist), a `Worker` thread (`WorkerConversation`, at `#/w/<id>`), or `Profile` (`ProfilePanel`, at `#/pm/<id>` and `#/pm/<id>/<page>`).
 - **Navigation and exits (`panelExitsOf`)**: Closing always returns to `#/c/<id>` (preserving whether Pieces was opened manually); clicking `Back` inside a Worker returns to `#/c/<id>` and opens `Pieces`; clicking `Back` on a Profile drill-down page returns to `#/pm/<id>`. `Escape` inside a Worker composer interrupts/rewinds per section 18 without closing `SidePanel`. In `stack` tier, the underlying conversation stays mounted inside React `<Activity mode="hidden">` so draft text and scroll position survive.
-- **Four collapsible Pieces sections (`divide-y divide-border py-3`)**:
-  1. `Needs You`: Standalone `hub ask` items not bound to a Task Graph (`6px` `--primary` dot when non-empty, max 3 visible before `Show more`).
-  2. `Task Graph`: Active DAGs (`status === "active"`), rendered with `PeelTrack` and `TaskProgressIcon`.
+- **Four collapsible Pieces sections (`divide-y divide-border`)**:
+  1. `Task Graph`: Active DAGs (`status === "active"`), rendered with `PeelTrack`. This section starts just below the panel header.
+  2. `Needs You`: Standalone `hub ask` items not bound to a Task Graph (`6px` `--primary` dot when non-empty, max 3 visible before `Show more`).
   3. `Pieces`: Unbound active Workers (`isBusy` titles animate with `.status-shimmer`, max 3 visible before `Show more`; metadata lives in `title` and `PieceMeta`, and mechanical prefixes are stripped by `cleanPieceTitle`).
   4. `Completed`: Collapsed and unmounted by default; lazily fetches `GET /api/projects/:id/task-graphs?status=history` (`GRAPH_HISTORY_PAGE_SIZE`, `Load more` up to `MAX_COMPLETED_GRAPH_PAGES`) alongside finished standalone Pieces (`opacity-65`).
 - **Auto-open and persistence**: Renders beside chat automatically only when active work or unanswered asks exist; remembers manual rail collapse and per-section collapse (`agent-hub.rightRail.collapsed`) in `localStorage`.
@@ -224,7 +224,7 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 
 ### 12.1 Task Graph: peel track, sprout progress, and gate bell
 
-- **`TaskProgressIcon` and multi-graph accordion**: `20px` `10x10` pixel sprout icon colored by step states, paired with `Ready to finish` (`12px` muted) when all nodes are `done`, `Zoom` (`Maximize2`), and accordion `ChevronRight` (graphs waiting on user or PM sort first and expand by default).
+- **Multi-graph accordion**: Select the graph title to expand or collapse its steps. A trailing `ChevronRight` shows whether the graph is open. Show a muted `Ready to finish` label when all nodes are `done`. A text `Zoom` action below the expanded steps opens the full graph. Graphs waiting on the user or PM sort first and expand by default.
 - **`PeelTrack` vertical lanes**: Orthogonal pixel jelly pipes and beads (`pixel-path.ts`) scaled by `--peel-u` (`2.5rem` for 1 to 2 lanes, `+0.875rem` per extra parallel lane up to `6rem`), partitioned into connected components, transitive-reduced, and ordered with chain-first topological sort so every drawn segment represents a real dependency. Consecutive completed prefixes (`>= 2`) roll into `N done`, and trailing locked chains (`>= 2` depth) fold into `N next`. Every row (gate, Worker, plain, and fold rows) shares one box (`PEEL_BOX`) with no border, so each row's pipe meets the next with no gap or sideways step (guarded in `src/web/task-graph-rail.test.tsx`).
 - **Decision gates (`waiting` + `waitingFor: "user"`) and `UserBlockerCard`**:
   - Show a `GateMark` pixel bell in the rail row (`text-body font-semibold text-primary`) that scrolls to the chat card or opens `TaskGraphDialog`.

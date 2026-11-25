@@ -1281,8 +1281,8 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
     expect(tubeLines(components[0]!)).toHaveLength(0);
     expect(components[0]!.querySelectorAll("[data-bead]")).toHaveLength(1);
 
-    // 任务标题前是嫩芽进度图标
-    expect(graphGroup.querySelector("[data-slot='task-progress']")).not.toBeNull();
+    // 任务标题前不放进度图标，点标题直接展开收起
+    expect(graphGroup.querySelector("[data-slot='task-progress']")).toBeNull();
   });
 
   it.each([2, 3])("首层 %i 个无上游并行起点合流到同一下游：分道并行、无断头悬空线、无假串联", (roots) => {

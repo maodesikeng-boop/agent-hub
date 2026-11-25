@@ -491,37 +491,15 @@ export const RailGroups = memo(function RailGroups({
   return (
     <>
       <div className={cn("right-rail-scroll min-h-0 flex-1 divide-y divide-border overflow-x-hidden overflow-y-auto overscroll-y-contain px-5 [contain:layout_style]", className)}>
-        {hasAsks && (
-          <section aria-labelledby="rail-asks" className="min-w-0 py-3">
-            <GroupTitle
-              id="rail-asks"
-              bodyId="rail-asks-body"
-              collapsed={groups.collapsed.asks === true}
-              onToggle={() => groups.toggle("asks")}
-              dot
-              trailing={toggle}
-            >
-              {NEEDS_YOU}
-            </GroupTitle>
-            <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
-              <ul>
-                {shownAsks.shown.map((ask) => (
-                  <AskRow key={ask.id} ask={ask} onOpen={() => onOpenAsk(ask.id)} />
-                ))}
-              </ul>
-              <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
-            </GroupBody>
-          </section>
-        )}
         {hasGraphs && activeGraphs !== undefined && (
-          <section aria-labelledby="rail-graphs" className="min-w-0 py-3">
+          <section aria-labelledby="rail-graphs" className="min-w-0 pt-1 pb-3">
             <GroupTitle
               id="rail-graphs"
               bodyId="rail-graphs-body"
               collapsed={groups.collapsed.graphs === true}
               onToggle={() => groups.toggle("graphs")}
               dot={graphNeedsYou}
-              trailing={!hasAsks ? toggle : undefined}
+              trailing={toggle}
             >
               Task Graph
             </GroupTitle>
@@ -535,6 +513,28 @@ export const RailGroups = memo(function RailGroups({
                 onZoomGraph={zoomGraph}
                 onOpenStepAsk={openStepAsk}
               />
+            </GroupBody>
+          </section>
+        )}
+        {hasAsks && (
+          <section aria-labelledby="rail-asks" className="min-w-0 py-3">
+            <GroupTitle
+              id="rail-asks"
+              bodyId="rail-asks-body"
+              collapsed={groups.collapsed.asks === true}
+              onToggle={() => groups.toggle("asks")}
+              dot
+              trailing={!hasGraphs ? toggle : undefined}
+            >
+              {NEEDS_YOU}
+            </GroupTitle>
+            <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
+              <ul>
+                {shownAsks.shown.map((ask) => (
+                  <AskRow key={ask.id} ask={ask} onOpen={() => onOpenAsk(ask.id)} />
+                ))}
+              </ul>
+              <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
             </GroupBody>
           </section>
         )}
