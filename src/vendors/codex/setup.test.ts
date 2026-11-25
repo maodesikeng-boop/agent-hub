@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import { removeTreeWithRetry } from "../../daemon/platform/index.ts";
 import type { ManagedProviderSecrets, VendorSetupContext } from "../daemon-types.ts";
@@ -166,10 +167,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       expect(envLog.argv).toEqual(["app-server", "--listen", "stdio://"]);
       expect(envLog.noOpen).toBe("1");
 
-      const rpcLines = readFileSync(rpcLogFile, "utf8")
-        .trim()
-        .split("\n")
-        .map((l) => JSON.parse(l) as { method: string; params?: { clientInfo?: { name?: string } } });
+      const rpcLines = readJsonLog<{ method: string; params?: { clientInfo?: { name?: string } } }>(rpcLogFile);
       expect(rpcLines[0]?.method).toBe("initialize");
       expect(rpcLines[0]?.params?.clientInfo?.name).toBe("codex_cli_rs");
 

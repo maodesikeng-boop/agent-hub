@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import {
   DriverError,
@@ -558,13 +559,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
       check();
     });
 
-  const log = (): FakeAgyLogEntry[] =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .split("\n")
-          .filter(Boolean)
-          .map((l) => JSON.parse(l) as FakeAgyLogEntry)
-      : [];
+  const log = () => readJsonLog<FakeAgyLogEntry>(logFile);
 
   const stdinBlocks = () =>
     log().flatMap((e) => {
