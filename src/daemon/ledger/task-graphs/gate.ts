@@ -125,11 +125,7 @@ export function closeStepAskIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, me
   const { graphId, nodeKey } = ask.gateRef;
   const node = getStepRow(g.db, graphId, nodeKey);
   if (node?.gate_ask_message_id === messageId) {
-    const waitingFor = node.waiting_for === "user" && !isUserBlocked(g.db, node.id) ? "pm" : node.waiting_for;
-    const t = g.now();
-    g.db.run("UPDATE task_graph_steps SET waiting_for = ?, artifact_json = ?, updated_at = ? WHERE id = ?",
-      waitingFor, artifactWithoutCheckpoint(node), t, node.id);
-    touchGraph(g.db, graphId, t);
+    clearStepAskWaitIn(g, node);
     pushSlimGraphIn(g, p, graphId);
   }
   return { text: `已关掉步骤拍板卡 #${messageId}。`, data: { messageId } };
@@ -156,10 +152,19 @@ function decideReplyText(nodeKey: TaskNodeKey, choice: string, graphId: TaskGrap
   }
 }
 
+function clearStepAskWaitIn(g: TaskGraphCtx, node: TaskNodeDbRow): void {
+  const waitingFor = node.waiting_for === "user" && !isUserBlocked(g.db, node.id) ? "pm" : node.waiting_for;
+  const t = g.now();
+  g.db.run("UPDATE task_graph_steps SET waiting_for = ?, artifact_json = ?, updated_at = ? WHERE id = ?",
+    waitingFor, artifactWithoutCheckpoint(node), t, node.id);
+  touchGraph(g.db, node.graph_id, t);
+}
+
 function settleInactiveCardIn(
   g: TaskGraphCtx,
   p: Pending,
   graphId: TaskGraphId,
+  node: TaskNodeDbRow | undefined,
   messageId: MessageId,
   choice: string | null,
   note: string | null,
@@ -169,6 +174,7 @@ function settleInactiveCardIn(
     ...(choice !== null ? { chosenOption: choice } : {}),
     ...(note !== null ? { note } : {}),
   });
+  if (node?.gate_ask_message_id === messageId) clearStepAskWaitIn(g, node);
   pushSlimGraphIn(g, p, graphId);
   return { graph: loadGraph(g, graphId)!, messageId: null };
 }
@@ -190,13 +196,14 @@ export function decideIn(
   if (note !== null && charLen(note) > MAX_DECISION_NOTE_CHARS) throw fail("invalid", `补充说明最多 ${MAX_DECISION_NOTE_CHARS} 字`);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: false });
   const node = requireStepRow(g.db, graphRow.id, nodeKey);
-  if (isStoredCheckpoint(node) && choice !== CONFIRM_PASS_OPTION && choice !== CONFIRM_REJECT_OPTION) {
+  const pendingAsk = hasPendingStepAsk(g, node);
+  if (pendingAsk && isStoredCheckpoint(node) && choice !== CONFIRM_PASS_OPTION && choice !== CONFIRM_REJECT_OPTION) {
     throw fail("invalid", `步骤「${nodeKey}」当前是检查点拍板卡，--choice 请传「${CONFIRM_PASS_OPTION}」或「${CONFIRM_REJECT_OPTION}」`);
   }
   if (node.status === "done" || graphRow.status !== "active") {
     const messageId = node.gate_ask_message_id;
-    if (messageId !== null && hasPendingStepAsk(g, node)) {
-      const { graph } = settleInactiveCardIn(g, p, graphRow.id, messageId, choice, note);
+    if (messageId !== null && pendingAsk) {
+      const { graph } = settleInactiveCardIn(g, p, graphRow.id, node, messageId, choice, note);
       return { text: `步骤「${nodeKey}」已记录定案「${choice}」。`, data: { graph } };
     }
     if (graphRow.status !== "active") throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
@@ -237,6 +244,7 @@ function decideInactiveCardIn(
   g: TaskGraphCtx,
   p: Pending,
   graphRow: TaskGraphDbRow,
+  node: TaskNodeDbRow | undefined,
   nodeKey: TaskNodeKey,
   input: DecideTaskNodeRequest,
   messageId: MessageId,
@@ -248,7 +256,7 @@ function decideInactiveCardIn(
   }
   if (ask.answered || ask.closed) throw fail("conflict", "这张拍板卡已经被处理过了");
   const { choice, note } = userDecisionOf(input, ask.options ?? []);
-  return settleInactiveCardIn(g, p, graphRow.id, messageId, choice ?? (ask.gateRef.checkpoint ? CONFIRM_REJECT_OPTION : null), note);
+  return settleInactiveCardIn(g, p, graphRow.id, node, messageId, choice ?? (ask.gateRef.checkpoint ? CONFIRM_REJECT_OPTION : null), note);
 }
 
 export function decideNode(
@@ -270,7 +278,7 @@ export function decideNode(
     g.persona.assertPmNotArchived(graphRow.pm_id);
     if (input.askMessageId !== undefined &&
         (node?.gate_ask_message_id !== input.askMessageId || node.status === "done" || graphRow.status !== "active")) {
-      const result = decideInactiveCardIn(g, p, graphRow, nodeKey, input, input.askMessageId);
+      const result = decideInactiveCardIn(g, p, graphRow, node, nodeKey, input, input.askMessageId);
       onDecisionWritten?.();
       return result;
     }

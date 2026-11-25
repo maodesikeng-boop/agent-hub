@@ -156,7 +156,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - **任务图**：\`${HUB} graph ${TASK_GRAPH_ACTIONS.join("|")}\`，用法见任务图手册（也可跑 \`${HUB} help graph\`）
 - **向用户提问**
   - \`${HUB} ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`${HUB} ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`${HUB} ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。步骤拍板卡用 \`${HUB} ask close --message <消息编号>\`；还在等的卡和编号在用户消息前面的系统说明里列着
 - **Worker**
   - \`${HUB} worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
