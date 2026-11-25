@@ -37,3 +37,8 @@ export const WORK_GRAPH_PX = {
   paperPadY: 12,
   stroke: 1.35,
 } as const;
+
+// Top-bar quick Router input and reply popover geometry and session cap.
+export const TOPBAR_ROUTER_POPOVER_TURNS_MAX = 20;
+export const TOPBAR_ROUTER_INPUT_MAX_REM = 35;
+export const TOPBAR_ROUTER_POPOVER_MAX_HEIGHT_REM = 32;
