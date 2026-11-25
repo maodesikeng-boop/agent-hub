@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MACHINE_CHECKS } from "./checks.ts";
-import { nestedFrameHits, raggedEdgeHits, thickLineHits, type EdgeItem, type FrameBox } from "./structure-checks.ts";
+import { composerRowHits, nestedFrameHits, raggedEdgeHits, thickLineHits, type ComposerBox, type EdgeItem, type FrameBox } from "./structure-checks.ts";
 
 const rect = { x: 0, y: 0, w: 100, h: 40 };
 const box = (over: Partial<FrameBox> & Pick<FrameBox, "label">): FrameBox => ({
@@ -94,9 +94,29 @@ describe("ragged-edge", () => {
   });
 });
 
-it("registers the three structure checks with severities the rubric can cite", () => {
+describe("composer-row", () => {
+  const composer = (label: string, x: number, y: number, h = 84, resting = true): ComposerBox => ({ label, rect: { x, y, w: 520, h }, resting });
+
+  it("reports a Worker composer beside the conversation's that leaves their shared row", () => {
+    const hits = composerRowHits([composer("conversation", 384, 790), composer("worker", 1010, 784, 90)]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.check).toBe("composer-row");
+    expect(hits[0]!.evidence).toBe("conversation 在 790–874px，worker 在 784–874px，顶边差 6px、底边差 0px");
+    expect(composerRowHits([composer("conversation", 384, 790), composer("worker", 1010, 792)])).toHaveLength(1);
+  });
+
+  it("accepts one shared row with sub-pixel rounding, composers stacked in one column, a growing draft, and a lone composer", () => {
+    expect(composerRowHits([composer("conversation", 384, 780.44, 91.69), composer("worker", 1010, 780.6, 91.6)])).toEqual([]);
+    expect(composerRowHits([composer("conversation", 384, 790), composer("composer above it", 400, 600)])).toEqual([]);
+    expect(composerRowHits([composer("conversation", 384, 700, 174, false), composer("worker", 1010, 790)])).toEqual([]);
+    expect(composerRowHits([composer("router", 300, 790)])).toEqual([]);
+  });
+});
+
+it("registers the structure checks with severities the rubric can cite", () => {
   const byId = new Map(MACHINE_CHECKS.map((c) => [c.id, c.severity]));
   expect(byId.get("thick-line")).toBe("P1");
   expect(byId.get("box-in-box")).toBe("P1");
   expect(byId.get("ragged-edge")).toBe("P2");
+  expect(byId.get("composer-row")).toBe("P1");
 });

@@ -1,7 +1,8 @@
 // Structure checks over boxes the page reports (in-page.ts collectStructureInPage): line weight, framed boxes inside
-// framed boxes, and near-miss left edges in a column. Pure functions, so they are tested without a browser.
+// framed boxes, near-miss left edges in a column, and composers side by side that leave their shared row. Pure functions,
+// so they are tested without a browser.
 import type { RawHit } from "./checks.ts";
-import { EDGE_NEAR_MISS_PX, LINE_MAX_PX } from "./limits.ts";
+import { COMPOSER_ROW_TOLERANCE_PX, EDGE_NEAR_MISS_PX, LINE_MAX_PX } from "./limits.ts";
 
 type Rect = RawHit["rect"];
 
@@ -31,6 +32,13 @@ export interface EdgeItem {
   left: number;
   top: number;
   bottom: number;
+}
+
+/** A composer frame. resting is false while it grows for wrapped text, a newline, or attachments. */
+export interface ComposerBox {
+  label: string;
+  rect: Rect;
+  resting: boolean;
 }
 
 const framed = (box: FrameBox) => box.sides.every((w) => w > 0);
@@ -87,6 +95,34 @@ export function raggedEdgeHits(items: readonly EdgeItem[]): RawHit[] {
         const rect = { x: a.left, y: Math.min(a.top, b.top), w: gap, h: Math.max(a.bottom, b.bottom) - Math.min(a.top, b.top) };
         hits.push({ check: "ragged-edge", rect, evidence: `${column}：${a.label} 从 ${edges[i]}px 起，${b.label} 从 ${edges[j]}px 起，只差 ${gap}px` });
       }
+    }
+  }
+  return hits;
+}
+
+/**
+ * Postcondition: one hit per pair of resting composers laid out side by side (no horizontal overlap), such as a
+ * conversation and the Worker thread beside it, whose top or bottom edges differ by more than COMPOSER_ROW_TOLERANCE_PX.
+ */
+export function composerRowHits(composers: readonly ComposerBox[]): RawHit[] {
+  const hits: RawHit[] = [];
+  const resting = composers.filter((c) => c.resting).toSorted((a, b) => a.rect.x - b.rect.x);
+  for (let i = 0; i < resting.length; i++) {
+    for (let j = i + 1; j < resting.length; j++) {
+      const left = resting[i]!.rect;
+      const right = resting[j]!.rect;
+      if (left.x + left.w > right.x) continue;
+      const top = Math.abs(left.y - right.y);
+      const bottom = Math.abs(left.y + left.h - (right.y + right.h));
+      if (Math.max(top, bottom) <= COMPOSER_ROW_TOLERANCE_PX) continue;
+      const y = Math.min(left.y, right.y);
+      const rect = { x: left.x, y, w: right.x + right.w - left.x, h: Math.max(left.y + left.h, right.y + right.h) - y };
+      const span = (r: Rect) => `${+r.y.toFixed(2)}–${+(r.y + r.h).toFixed(2)}px`;
+      hits.push({
+        check: "composer-row",
+        rect,
+        evidence: `${resting[i]!.label} 在 ${span(left)}，${resting[j]!.label} 在 ${span(right)}，顶边差 ${+top.toFixed(2)}px、底边差 ${+bottom.toFixed(2)}px`,
+      });
     }
   }
   return hits;

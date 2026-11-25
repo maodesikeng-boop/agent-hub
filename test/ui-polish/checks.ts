@@ -5,7 +5,7 @@ import type { Page } from "playwright";
 import { inPage } from "./in-page-api.ts";
 import { CONTRAST_SEVERITY_LINES, FINDING_TEXT_MAX_CHARS } from "./limits.ts";
 import type { Finding, Severity } from "./rubric.ts";
-import { nestedFrameHits, raggedEdgeHits, thickLineHits } from "./structure-checks.ts";
+import { composerRowHits, nestedFrameHits, raggedEdgeHits, thickLineHits } from "./structure-checks.ts";
 
 export const MACHINE_CHECKS = [
   { id: "clipped", severity: "P0", what: "元素的内容超出了会裁切它的祖先，露不全（没有截断样式的）", fix: "让装它的容器在这个方向上放得下（grid-cols-1、min-w-0、换行），或者给它截断样式和 title" },
@@ -19,6 +19,7 @@ export const MACHINE_CHECKS = [
   { id: "thick-line", severity: "P1", what: "线比 1px 粗（实线边框或内描边超过 1.5px；虚线拖放框、Markdown 引用竖条和圆点的隔离圈除外）", fix: "改成 1px：结构线用 --border，控件描边用 --border-strong，选中用 1px --select-line 内描边" },
   { id: "box-in-box", severity: "P1", what: "带框的盒子套在另一个带框的盒子里（框套框；弹窗、浮层、工作区纸面不算外框，按钮和输入框不算盒子）", fix: "去掉里面那层框，用间距或一条细分隔线分开；里面是标签就改成平的色块" },
   { id: "ragged-edge", severity: "P2", what: "同一栏里几行的起点只差一两个像素（差 1.5 到 8px，不像缩进，像没对齐）", fix: "让标题、图标、头像和行文字落在同一条左边缘上，或者明确缩进一档（12px 以上）" },
+  { id: "composer-row", severity: "P1", what: "并排的两个输入框（对话和右栏 Worker）顶边或底边没对齐（差 0.5px 以上）", fix: "两边都用同一个 composer-dock 底座，让两块面板的底边落在同一条线上" },
 ] as const;
 export type MachineCheckId = (typeof MACHINE_CHECKS)[number]["id"];
 
@@ -47,7 +48,7 @@ export async function runMachineChecks(page: Page, options: { touch: boolean }):
   if (viewport === null) throw new Error("页面没有固定视口，量不了位置");
   const hits = await page.evaluate(inPage.measureInPage, { touch: options.touch });
   const structure = await page.evaluate(inPage.collectStructureInPage);
-  hits.push(...thickLineHits(structure.frames), ...nestedFrameHits(structure.frames), ...raggedEdgeHits(structure.edges));
+  hits.push(...thickLineHits(structure.frames), ...nestedFrameHits(structure.frames), ...raggedEdgeHits(structure.edges), ...composerRowHits(structure.composers));
   hits.push(...(await contrastHits(page)));
   const seen = new Set<string>();
   const findings: MachineFinding[] = [];

@@ -183,7 +183,7 @@ export function measureInPage(options: { touch: boolean }): RawHit[] {
   return hits;
 }
 
-/** Same shapes as structure-checks.ts FrameBox and EdgeItem; this file cannot import them. */
+/** Same shapes as structure-checks.ts FrameBox, EdgeItem, and ComposerBox; this file cannot import them. */
 interface FrameBox {
   label: string;
   rect: { x: number; y: number; w: number; h: number };
@@ -203,9 +203,14 @@ interface EdgeItem {
   top: number;
   bottom: number;
 }
+interface ComposerBox {
+  label: string;
+  rect: { x: number; y: number; w: number; h: number };
+  resting: boolean;
+}
 
-/** Reads every visible border, inset ring, and navigation-column row start; structure-checks.ts judges them. Read-only. */
-export function collectStructureInPage(): { frames: FrameBox[]; edges: EdgeItem[] } {
+/** Reads every visible border, inset ring, navigation-column row start, and composer; structure-checks.ts judges them. Read-only. */
+export function collectStructureInPage(): { frames: FrameBox[]; edges: EdgeItem[]; composers: ComposerBox[] } {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   // describe and visible repeat measureInPage's: Playwright serializes each page function alone, so they cannot share helpers.
@@ -317,7 +322,11 @@ export function collectStructureInPage(): { frames: FrameBox[]; edges: EdgeItem[
       }
     }
   }
-  return { frames, edges };
+  const composers: ComposerBox[] = [...document.querySelectorAll(".composer-frame")].filter(visible).map((el) => {
+    const r = el.getBoundingClientRect();
+    return { label: describe(el).split(" “")[0]!, rect: { x: r.x, y: r.y, w: r.width, h: r.height }, resting: el.getAttribute("data-multiline") !== "true" };
+  });
+  return { frames, edges, composers };
 }
 
 /** 校准用的弄坏（mutations.ts 的 MUTATIONS）：只改这个页面里的样式和元素，id 认不出抛错。前置：页面是基准图那一屏（小林的对话三栏）。 */

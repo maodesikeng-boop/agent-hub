@@ -86,3 +86,5 @@ export const FINDING_TEXT_MAX_CHARS = 300;
 export const LINE_MAX_PX = 1.5;
 /** Two row starts in one column closer than this band are a near miss, not an intended indent. */
 export const EDGE_NEAR_MISS_PX = { min: 1.5, max: 8 } as const;
+/** Structure checks: two resting composers side by side share one row; more than this between their edges is a misalignment. */
+export const COMPOSER_ROW_TOLERANCE_PX = 0.5;
