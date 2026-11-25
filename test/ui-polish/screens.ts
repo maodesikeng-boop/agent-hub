@@ -226,7 +226,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("m-settings.browsers", "手机设置：已登录的浏览器", M, "normal", "standard", "#/settings/browsers，补丁 browsers-multi"),
   s("m-settings.drawer-confirm", "手机设置：危险操作的确认抽屉", M, "normal", "standard", "浏览器页点 Sign out all browsers…", "抽屉"),
   s("m-settings.drawer-form", "手机设置：短表单抽屉（改名）", M, "normal", "two-devices", "电脑页点改名", "抽屉"),
-  s("quota.normal", "额度浮层：两家各两个窗口", D, "normal", "standard", "点最左栏额度沙漏，补丁 quota-normal", "浮层"),
+  s("quota.normal", "额度浮层：只列当前登录账号的那一家，两个窗口", D, "normal", "standard", "点最左栏额度沙漏，补丁 quota-normal", "浮层"),
   s("quota.max", "额度浮层：用满、偏高、Antigravity 两个模型族", D, "long", "standard", "同上，补丁 quota-max", "浮层"),
   s("quota.short-window", "额度浮层：窗口矮时在浮层里滚动", ["slim"], "long", "standard", "同上，补丁 quota-max", "浮层"),
   s("quota.rail", "额度浮层：在窄屏打开", ["narrow"], "normal", "standard", "点最左栏额度沙漏，补丁 quota-normal", "浮层"),
