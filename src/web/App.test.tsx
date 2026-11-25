@@ -99,12 +99,13 @@ beforeEach(() => {
 });
 
 describe("首屏", () => {
-  it("左栏有项目经理和最后一条消息；点开看到消息，用户的靠右，agent 的靠左带名字", async () => {
+  it("左栏每个项目经理一行，只有名字不带最后一条消息；点开看到消息，用户的靠右，agent 的靠左带名字", async () => {
     const user = userEvent.setup();
     await boot();
     const nav = screen.getByRole("region", { name: "Project managers" });
     const item = within(nav).getAllByRole("button", { name: /小林/ }).find((b) => !b.closest(".row-shortcuts"))!;
-    expect(item).toHaveTextContent("我在，有什么要做的？");
+    expect(item).toHaveTextContent("小林");
+    expect(item).not.toHaveTextContent("我在，有什么要做的？");
     await user.click(item);
     const [mine, theirs] = bubbles() as [HTMLElement, HTMLElement];
     expect(mine).toHaveTextContent("你好");
@@ -483,7 +484,7 @@ describe("消息状态", () => {
     );
   });
 
-  it("别的对话的消息不出现在当前对话，但更新左栏预览", async () => {
+  it("别的对话的消息不出现在当前对话，但把那个项目经理顶到左栏最上面", async () => {
     const ws = await boot(
       makeSnapshot({
         pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "阿周" })],
@@ -497,10 +498,13 @@ describe("消息状态", () => {
         ],
       }),
     );
-    push(ws, messageChange(11, "message.created", makeMessage({ id: 3, conversationId: 2, text: "阿周的新消息" })));
-    expect(within(log()).queryByText("阿周的新消息")).not.toBeInTheDocument();
     const nav = screen.getByRole("region", { name: "Project managers" });
-    expect(within(nav).getAllByRole("button", { name: /阿周/ }).find((b) => !b.closest(".row-shortcuts"))!).toHaveTextContent("阿周的新消息");
+    const names = () => within(nav).getAllByRole("button").filter((b) => !b.closest(".row-shortcuts")).map((b) => b.textContent);
+    expect(names()).toEqual([expect.stringContaining("小林"), expect.stringContaining("阿周")]);
+    push(ws, messageChange(11, "message.created", makeMessage({ id: 3, conversationId: 2, text: "阿周的新消息", createdAt: 10_000 })));
+    expect(within(log()).queryByText("阿周的新消息")).not.toBeInTheDocument();
+    expect(names()).toEqual([expect.stringContaining("阿周"), expect.stringContaining("小林")]);
+    expect(within(nav).queryByText("阿周的新消息")).not.toBeInTheDocument();
   });
 });
 
@@ -1204,20 +1208,6 @@ describe("多个对话", () => {
     await user.click(items[1] as HTMLElement);
     expect(within(log()).getByText("小林的消息")).toBeInTheDocument();
     expect(within(log()).queryByText("阿周的消息")).not.toBeInTheDocument();
-  });
-
-  it("对话列表预览跳过工具调用，显示最后一条文字", async () => {
-    await boot(
-      makeSnapshot({
-        conversations: [
-          makeConvSnapshot([makeMessage({ id: 1, text: "最后的话" }), makeToolMessage({ id: 2, text: "Bash: ls" })]),
-        ],
-      }),
-    );
-    const nav = screen.getByRole("region", { name: "Project managers" });
-    const item = within(nav).getAllByRole("button").find((b) => !b.closest(".row-shortcuts"))!;
-    expect(item).toHaveTextContent("最后的话");
-    expect(item).not.toHaveTextContent("Bash: ls");
   });
 
   it("没有对应项目经理的对话用对话标题", async () => {

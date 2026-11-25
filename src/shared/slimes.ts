@@ -695,6 +695,14 @@ export function opticalLiftOf(fruit: PmFruit, kind: SlimeKind): number {
   return (bodyTop + lastRowOf(rows) + 1) / 2 - SLIME_GRID / 2;
 }
 
+const firstRowOf = (rows: readonly string[]) => rows.findIndex((row) => /[^.]/.test(row));
+
+// A tile's edges show every row's margin, so ears and leaves count here, unlike opticalLiftOf.
+export function silhouetteLiftOf(fruit: PmFruit): number {
+  const { rows } = SPRITES[fruit];
+  return (firstRowOf(rows) + lastRowOf(rows) + 1) / 2 - SLIME_GRID / 2;
+}
+
 const svgOf = (paths: readonly SlimePath[], size: number) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges">${paths.map((p) => `<path d="${p.d}" fill="${p.fill}"/>`).join("")}</svg>\n`;
 

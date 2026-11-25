@@ -351,12 +351,12 @@ describe("跨设备的等你确定", () => {
     expect(window.location.hash).toBe(`#/d/${TOKYO}/c/1`);
   });
 
-  it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行自身绿点照常显示", async () => {
+  it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行照常给读屏标出 Needs You", async () => {
     const fleet = new Fleet(onePm("小林", [ask(5, "本机要确定")]), onePm("阿青"), [mac]);
     await boot(fleet);
     await waitFor(() => expect(within(rail()).getByTestId("rail-device-badge-local")).toHaveTextContent("1"));
     await userEvent.click(railDevice("Mac"));
-    await within(nav()).findByLabelText("Needs You");
+    await within(nav()).findByText("Needs You");
     expect(within(nav()).queryByRole("region", { name: "Needs You" })).toBeNull();
   });
 

@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JELLY_COLOR_IDS, jellyColorOf } from "../../shared/slimes.ts";
-import { accentStyleOf, CHART_CATEGORY_COLORS, contrastRatio, fruitTrackVars } from "./palette.ts";
+import { accentStyleOf, avatarTileFillOf, CHART_CATEGORY_COLORS, contrastRatio, fruitTrackVars } from "./palette.ts";
 
 const WHITE = "#ffffff";
 
@@ -32,6 +32,20 @@ describe("颜色表", () => {
     const vars = fruitTrackVars("sakura");
     const { roles } = jellyColorOf("sakura");
     expect([vars["--tube-line"], vars["--tube-core"], vars["--tube-glint"], vars["--tube-shade"]]).toEqual([roles.outline, roles.body, roles.light, roles.shade]);
+  });
+
+  it("avatarTileFillOf：每种颜色的头像方块都比黄色列表底深出 1.08:1 以上，也比白色选中行和原来的浅底深；同一种颜色两次返回同一个值", () => {
+    const list = readFileSync("src/web/styles.css", "utf8").match(/\n {2}--list: (#[0-9a-f]{6});/)![1]!;
+    const darker = (a: string, b: string) => contrastRatio(a, "#000000") < contrastRatio(b, "#000000");
+    for (const id of JELLY_COLOR_IDS) {
+      const fill = avatarTileFillOf(id);
+      expect(fill, id).toMatch(/^#[0-9a-f]{6}$/);
+      expect(darker(fill, list), id).toBe(true);
+      expect(contrastRatio(fill, list), id).toBeGreaterThanOrEqual(1.08);
+      expect(darker(fill, WHITE), id).toBe(true);
+      expect(darker(fill, jellyColorOf(id).backdrop), id).toBe(true);
+    }
+    expect(avatarTileFillOf("lemon")).toBe(avatarTileFillOf("lemon"));
   });
 
   it("图表分类色：颜色表 accent 里的 6 种，互不重复", () => {
@@ -86,7 +100,7 @@ describe("分区色板与对比度（styles.css，docs/ui-standard.md 第 4 条�
     expect(contrastRatio(foreground, mix(c.accent, mixOf("bubble-me"), WHITE))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it.each(surfaces())("次要文字压在 %s 上 ≥ 4.5:1", (_name, surface) => {
+  it.each(surfaces().filter(([name]) => !name.startsWith("list") || name === "list-field"))("次要文字压在 %s 上 ≥ 4.5:1（黄色列表底上的次要文字用 --list-ink-soft，见下面一条）", (_name, surface) => {
     expect(contrastRatio(token("muted-foreground"), surface)).toBeGreaterThanOrEqual(4.5);
   });
 

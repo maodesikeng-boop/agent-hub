@@ -34,7 +34,7 @@ describe("ProjectList layout", () => {
     const region = listRegion("column");
     expect(region).toHaveClass("h-full");
     expect(screen.getByRole("button", { name: /小林/ })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: /小林/ }).closest(".project-row")).toHaveClass("tile-selected");
+    expect(screen.getByRole("button", { name: /小林/ }).closest(".project-row")).toHaveClass("row-selected");
   });
 
   it("strip：72px 头像窄条", () => {

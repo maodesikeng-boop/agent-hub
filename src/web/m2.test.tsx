@@ -133,11 +133,12 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
-  it("只列项目经理，每人一行：头像、名字、最后一条消息；按最后一条消息时间从新到旧；没有分组，也没有“新建项目”", async () => {
+  it("只列项目经理，每人一行：头像和名字，不带最后一条消息；按最后一条消息时间从新到旧；没有分组，也没有“新建项目”", async () => {
     await boot();
     const items = navRows();
-    expect(items.map((b) => b.textContent)).toEqual([expect.stringContaining("阿周在"), expect.stringContaining("小林在")]);
-    expect(items[0]).toHaveTextContent("阿周");
+    expect(items.map((b) => b.textContent)).toEqual([expect.stringContaining("阿周"), expect.stringContaining("小林")]);
+    expect(items[0]).not.toHaveTextContent("阿周在");
+    expect(items[1]).not.toHaveTextContent("小林在");
     expect(within(listPanel()).queryByRole("region", { name: "Pinned" })).not.toBeInTheDocument();
     expect(within(listPanel()).queryByRole("region", { name: "Archived" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "新建项目" })).not.toBeInTheDocument();
@@ -1342,13 +1343,13 @@ describe("资料页：开新会话", () => {
   const renewedLine = (id: number, text: string, createdAt: number) =>
     makeSystemMessage({ id, conversationId: 1, text, createdAt, event: { event: "session.renewed", sessionId: 2, fromSessionId: 1, turnStartId: 30, auto: true } });
 
-  it("左栏：写交接的请求、交接全文、换代那一行都不进预览，也不把这个对话顶到最上面", async () => {
+  it("左栏：写交接的请求、交接全文、换代那一行都不显示，也不把这个对话顶到最上面", async () => {
     const ws = await boot();
     push(ws, messageChange(11, "message.created", { ...request("processing"), createdAt: 20_000, meta: { event: "handover.requested", sessionId: 1, auto: true } }));
     push(ws, messageChange(12, "message.created", handoverText(31, "交接全文：暗号是蓝鲸", 21_000)));
     push(ws, messageChange(13, "message.updated", { ...request("replied"), createdAt: 20_000 }));
     push(ws, messageChange(14, "message.created", renewedLine(32, "交接全文：暗号是蓝鲸", 22_000)));
-    expect(navRows().map((b) => b.textContent)).toEqual([expect.stringContaining("阿周在"), expect.stringContaining("小林在")]);
+    expect(navRows().map((b) => b.textContent)).toEqual([expect.stringContaining("阿周"), expect.stringContaining("小林")]);
     expect(within(nav()).queryByText(/交接|Handed off/)).not.toBeInTheDocument();
   });
 

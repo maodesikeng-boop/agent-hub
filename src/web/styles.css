@@ -105,20 +105,20 @@ html[data-ui-scale="xl"] {
   --font-ui: "Geist Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-code: "SF Mono", ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
 
-  --rail: #ffcb3d;
-  --rail-shade: #e9a417;
-  --rail-drag: #c98800;
-  --rail-hover: #ffd966;
+  --rail: #f9bd01;
+  --rail-shade: #e39600;
+  --rail-drag: #c37a00;
+  --rail-hover: #f9cb4b;
   --rail-ink: #4a2e00;
   --rail-ink-soft: #6e4a00;
   --rail-danger: #991b1b;
   --rail-warn: #7c4100;
   --sand: #a35f00;
-  --list: #fff4cc;
-  --list-hover: #ffedb0;
+  --list: #fcd771;
+  --list-hover: #f9ce55;
   --list-field: #fffbeb;
   --list-ink: #3b2600;
-  --list-ink-soft: #75561b;
+  --list-ink-soft: #725317;
   --select-line: #e0b03c;
   --background: #ffffff;
   --panel: #f7f4ed;
@@ -466,6 +466,13 @@ input[type="search"]::-webkit-search-cancel-button {
     inset 0 0 0 1px var(--select-line),
     var(--shadow-tile);
 }
+@utility row-selected {
+  background-color: var(--background);
+}
+/* Flex centering then lines an icon up with the label's capitals instead of the font's taller line box. */
+@utility trim-cap {
+  text-box: trim-both cap alphabetic;
+}
 @utility tile-open {
   background-color: var(--open);
   box-shadow: inset 0 0 0 1px var(--select-line);
@@ -640,6 +647,23 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 .slime-pet {
   transform-origin: 50% 100%;
+}
+/* Whole-pixel padding and sprite size snap the tile and the sprite in step, so the animal stays exactly centered. */
+.avatar-tile {
+  padding: 0.21875rem;
+}
+.avatar-tile > svg {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+@supports (width: round(1px, 1px)) {
+  .avatar-tile {
+    padding: round(0.21875rem, 1px);
+  }
+  .avatar-tile > svg {
+    width: round(0.8125rem, 1px);
+    height: round(0.8125rem, 1px);
+  }
 }
 @media (hover: hover) {
   .slime-pet:hover {

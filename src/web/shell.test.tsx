@@ -140,38 +140,31 @@ describe("焦点", () => {
 });
 
 describe("ProjectList", () => {
-  it("选中的对话：浅奶油导航底上浮起一块白底 tile（1px --select-line 内描边 + 柔和投影），名字字重不变（选中没选中都是 600）", async () => {
+  it("选中的对话：奶油导航底上一条平的白色选中带，没有描边和投影，选中的名字用深色", async () => {
     await boot();
-    const name = (label: string) => within(row(label)).getByText(label);
     const activeRow = row("小林").closest(".project-row")!;
     const idleRow = row("老马").closest(".project-row")!;
     expect(row("小林")).toHaveAttribute("aria-current", "page");
-    expect(activeRow).toHaveClass("tile-selected", "rounded-sm");
+    expect(activeRow).toHaveClass("row-selected", "rounded-sm");
     expect(idleRow).toHaveClass("hover:bg-list-hover", "rounded-sm");
-    expect(idleRow.className).not.toMatch(/tile-selected|border-select-line|bg-background|bg-jelly/);
-    expect(name("小林")).toHaveClass("font-semibold");
-    expect(name("老马")).toHaveClass("font-semibold");
+    expect(idleRow.className).not.toMatch(/row-selected|tile-selected|border-select-line|bg-background|bg-jelly/);
+    expect(within(row("小林")).getByText("小林")).toHaveClass("text-list-ink");
   });
 
-  it("项目经理在忙：不另加标记，行右边照旧是时间", async () => {
+  it("项目经理在忙：行里不另加标记，也不显示时间", async () => {
     const ws = await boot();
-    const time = () => within(row("老马")).getByText(formatTime(20_000));
-    expect(time()).toBeInTheDocument();
+    expect(within(row("老马")).queryByText(formatTime(20_000))).not.toBeInTheDocument();
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 2, pmId: 2, status: "running", activity: "working" })));
     expect(within(row("老马")).queryByText(/Working/)).not.toBeInTheDocument();
-    expect(time()).toBeInTheDocument();
   });
 
-  it("没有消息时保留第二行占位，名字与有预览的行对齐", async () => {
+  it("每行只有头像和名字：有消息和没消息的行一样高，都不显示最近消息", async () => {
     await boot();
     const empty = row("新来的");
-    const withPreview = row("小林");
-    const placeholder = empty.querySelector("p")!;
-    const preview = within(withPreview).getByText("小林你好");
-    expect(placeholder.textContent).toBe("\u00a0");
-    expect(placeholder.className).toBe(preview.className);
-    expect(empty.closest(".project-row")).toHaveClass("h-13");
-    expect(withPreview.closest(".project-row")).toHaveClass("h-13");
+    const withMessage = row("小林");
+    expect(within(withMessage).queryByText("小林你好")).not.toBeInTheDocument();
+    expect(empty.closest(".project-row")).toHaveClass("h-6.5");
+    expect(withMessage.closest(".project-row")).toHaveClass("h-6.5");
     expect(empty).toHaveTextContent("新来的");
   });
 

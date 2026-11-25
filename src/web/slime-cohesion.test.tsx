@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { JELLY_COLOR_IDS, opticalLiftOf, routerBellPaths, slimePaths, type SlimeLook } from "../shared/slimes.ts";
+import { JELLY_COLOR_IDS, lookKey, opticalLiftOf, routerBellPaths, slimePaths, type SlimeLook } from "../shared/slimes.ts";
 import { App } from "./App.tsx";
 import { createClient } from "./client.ts";
 import { Avatar } from "./components/Avatar.tsx";
@@ -12,6 +12,7 @@ import { SlimePicker } from "./components/SlimePicker.tsx";
 import { AppRail } from "./components/AppRail.tsx";
 import { ProjectList, type ProjectListLayout } from "./components/ProjectList.tsx";
 import { LOCAL_DEVICE } from "./devices.ts";
+import { avatarTileFillOf } from "./lib/palette.ts";
 import { DeviceScope } from "./device-scope.tsx";
 import { serverInfoFor } from "../shared/index.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeMessage, makePm, makeSnapshot, makeUserMessage, openFirstConversation, type Reply } from "./test-utils.ts";
@@ -53,7 +54,7 @@ describe("史莱姆与总助", () => {
     expect(avatarArt(container)).not.toEqual(piece);
   });
 
-  it.each<ProjectListLayout>(["column", "strip", "page"])("%s 左栏列表与 AppRail 保持紧凑头像框与 slot 按钮样式", (layout) => {
+  it.each<ProjectListLayout>(["column", "strip", "page"])("%s 左栏列表与 AppRail 保持紧凑头像框与 slot 按钮样式（窄条用 36px 头像，单行列表用项目经理颜色的圆角方块）", (layout) => {
     const entries = [
       { id: 1, name: "Juniper", lastMessage: makeMessage({ id: 10, text: "One update" }), lastAt: 1 },
       { id: 2, name: "Fern", lastMessage: null, lastAt: 0 },
@@ -93,7 +94,13 @@ describe("史莱姆与总助", () => {
     expect(screen.getByRole("button", { name: "Router (2 waiting)" }).querySelector('[data-slot="router-avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
     for (const name of ["Juniper", "Fern"]) {
       const row = screen.getByRole("button", { name: new RegExp(name) });
-      expect(row.querySelector('[data-slot="avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
+      if (layout === "strip") {
+        expect(row.querySelector('[data-slot="avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
+      } else {
+        const tile = row.querySelector(".avatar-tile");
+        expect(tile).toHaveAttribute("data-look", lookKey(look));
+        expect(tile).toHaveStyle({ backgroundColor: avatarTileFillOf(look.color) });
+      }
     }
     expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("btn-honey");
   });

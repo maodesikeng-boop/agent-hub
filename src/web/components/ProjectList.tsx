@@ -2,15 +2,15 @@ import { memo, useMemo, useState } from "react";
 import type * as React from "react";
 import type { PmId } from "../../shared/index.ts";
 import { conversationKey, type DeviceKey, type DeviceStatus } from "../devices.ts";
-import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
+import { formatArchiveRemaining, NEEDS_YOU, YOUR_TURN } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { ConversationRef } from "../notify.ts";
 import { filterProjectList, isPinned, projectListOf } from "../project-list.ts";
 import type { RailComputer } from "../rail-model.ts";
-import { previewText, type ConversationEntry } from "../selectors.ts";
+import type { ConversationEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
-import { ChevronDown, ChevronRight, Pin, PinFilled, Plus } from "../ui/icons.ts";
-import { Avatar } from "./Avatar.tsx";
+import { ChevronDown, ChevronRight, MessageSquare, Pin, PinFilled, Plus } from "../ui/icons.ts";
+import { Avatar, AvatarTile } from "./Avatar.tsx";
 import { ComputerSwitcher } from "./ComputerSwitcher.tsx";
 import { SearchField } from "./SearchField.tsx";
 
@@ -43,8 +43,9 @@ export interface ProjectListProps {
   onSelectComputer?: (key: DeviceKey) => void;
 }
 
-// Headings share the avatars' 16px left edge: 8px list inset plus the rows' 8px padding.
-const SECTION_HEADING = "flex h-8 items-center gap-1.5 px-2 text-minor font-medium text-list-ink-soft";
+// Headings start on the list's 8px edge, shared with the search field and the selected band.
+const GROUP_HEADING = "flex h-6.5 items-center gap-1.5 pr-2 text-minor font-medium text-list-ink-soft";
+const GROUP_ICON = "size-3.5 shrink-0";
 
 const StripItem = memo(function StripItem({
   deviceKey,
@@ -113,45 +114,34 @@ const ProjectRow = memo(function ProjectRow({
 }) {
   const pm = entry.pm;
   const pinned = isPinned(entry);
-  const preview = previewText(entry);
   const archivedAt = pm?.archivedAt ?? null;
-  const meta =
-    archivedAt !== null ? (
-      <span className="text-xs text-list-ink-soft tabular-nums">{formatArchiveRemaining(archivedAt)}</span>
-    ) : asking ? (
-      <span role="img" aria-label={NEEDS_YOU} title={NEEDS_YOU} data-testid="asking-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
-    ) : waiting ? (
-      <span role="img" aria-label={YOUR_TURN} title={YOUR_TURN} data-testid="waiting-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
-    ) : entry.lastMessage ? (
-      <span className="text-xs text-list-ink-soft tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
-    ) : null;
+  const waitsOnYou = asking ? NEEDS_YOU : waiting ? YOUR_TURN : null;
 
   return (
     <div
       className={cn(
         "project-row flex min-w-0 items-center gap-1 rounded-sm transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none",
-        pageLayout ? "min-h-15 pr-3 pl-2" : "h-13 pr-2 pl-2",
-        active ? "tile-selected" : "hover:bg-list-hover",
+        pageLayout ? "min-h-11 pr-3 pl-2" : "pointer-coarse:h-11 h-6.5 pr-2 pl-2",
+        active ? "row-selected" : "hover:bg-list-hover",
       )}
     >
       <button
         type="button"
         aria-current={active ? "page" : undefined}
         onClick={() => onSelect({ device: deviceKey, id: entry.id })}
-        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-1 text-left outline-none focus-visible:outline-2 focus-visible:outline-border-focus"
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch text-left outline-none focus-visible:outline-2 focus-visible:outline-border-focus"
       >
-        <Avatar look={entry.look} size={36} className={cn("shrink-0", readOnly && "opacity-60")} />
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-baseline justify-between gap-2">
-            <span title={entry.name} className="min-w-0 flex-1 truncate text-body font-semibold text-list-ink">
-              {entry.name}
-            </span>{" "}
-            {meta && <span className="project-row-meta shrink-0">{meta}</span>}
-          </div>{" "}
-          <p title={preview || undefined} className="truncate text-minor leading-snug text-list-ink-soft">
-            {preview || "\u00a0"}
-          </p>
-        </div>
+        <AvatarTile look={entry.look} className={readOnly ? "opacity-60" : undefined} />
+        <span
+          title={entry.name}
+          className={cn("min-w-0 flex-1 truncate text-list-ink", pageLayout ? "text-body" : "text-minor")}
+        >
+          {entry.name}
+        </span>{" "}
+        {waitsOnYou !== null && <span className="sr-only">{waitsOnYou}</span>}
+        {archivedAt !== null && (
+          <span className="project-row-meta shrink-0 text-xs text-list-ink-soft tabular-nums">{formatArchiveRemaining(archivedAt)}</span>
+        )}
       </button>
 
       {!pageLayout && pm !== null && (
@@ -315,8 +305,11 @@ export const ProjectList = memo(function ProjectList({
           <div className="grid grid-cols-1 gap-3">
             {filtered.pinned.length > 0 && (
               <section aria-label="Pinned" className="min-w-0">
-                <h2 className={SECTION_HEADING}>Pinned</h2>
-                <div className="grid grid-cols-1 gap-0.5">
+                <h2 className={GROUP_HEADING}>
+                  <Pin className={GROUP_ICON} aria-hidden="true" />
+                  <span className="trim-cap">Pinned</span>
+                </h2>
+                <div className="grid grid-cols-1">
                   {filtered.pinned.map((entry) => {
                     const key = conversationKey(computer.key, entry.id);
                     return (
@@ -340,8 +333,11 @@ export const ProjectList = memo(function ProjectList({
 
             {filtered.active.length > 0 && (
               <section aria-label="Project managers" className="min-w-0">
-                <h2 className={SECTION_HEADING}>Project managers</h2>
-                <div className="grid grid-cols-1 gap-0.5">
+                <h2 className={GROUP_HEADING}>
+                  <MessageSquare className={GROUP_ICON} aria-hidden="true" />
+                  <span className="trim-cap">Project managers</span>
+                </h2>
+                <div className="grid grid-cols-1">
                   {filtered.active.map((entry) => {
                     const key = conversationKey(computer.key, entry.id);
                     return (
@@ -369,14 +365,14 @@ export const ProjectList = memo(function ProjectList({
                   type="button"
                   aria-expanded={showArchived}
                   onClick={() => setArchivedOpen((open) => !open)}
-                  className={cn(SECTION_HEADING, "pointer-coarse:min-h-11 w-full cursor-pointer text-left outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus")}
+                  className={cn(GROUP_HEADING, "pointer-coarse:min-h-11 w-full cursor-pointer rounded-sm text-left outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus")}
                 >
-                  <ChevronRight className={cn("size-pixel-sm shrink-0 transition-transform", showArchived && "rotate-90")} aria-hidden="true" />
-                  <span>Archived</span>
-                  <span className="ml-auto text-xs tabular-nums">{filtered.archived.length}</span>
+                  <ChevronRight className={cn(GROUP_ICON, "transition-transform", showArchived && "rotate-90")} aria-hidden="true" />
+                  <span className="trim-cap">Archived</span>
+                  <span className="trim-cap ml-auto text-xs tabular-nums">{filtered.archived.length}</span>
                 </button>
                 {showArchived && (
-                  <div className="mt-0.5 grid grid-cols-1 gap-0.5">
+                  <div className="grid grid-cols-1">
                     {filtered.archived.map((entry) => {
                       const key = conversationKey(computer.key, entry.id);
                       return (

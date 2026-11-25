@@ -204,11 +204,12 @@ describe("那一行", () => {
     expect(buttons[5]!.closest("[data-notice]")).not.toBeNull();
   });
 
-  it("推一条新的 worker 消息，会话里多一行；左栏的预览还是最后一条文字", async () => {
+  it("推一条新的 worker 消息，会话里多一行；左栏那一行只有名字，不带上这条消息", async () => {
     const ws = await boot();
     push(ws, messageChange(11, "message.created", makeWorkerLine({ id: 4, conversationId: 1, line: { event: "ended" } })));
     expect(within(log()).getByRole("button", { name: "修 X Ended" })).toBeInTheDocument();
-    expect(within(nav()).getByRole("button", { name: /派个 Worker 修 X/ })).toBeInTheDocument();
+    expect(navRow(/小林/)).toHaveAccessibleName("小林");
+    expect(within(nav()).queryByText(/修 X|Ended/)).not.toBeInTheDocument();
   });
 
   it("meta 不认识（事件名没见过）：当普通的系统提示显示原文，不崩", async () => {

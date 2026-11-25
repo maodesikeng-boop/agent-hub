@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { groupMessages, listConversations, previewText, visibleMessages } from "./selectors.ts";
 import { initialState, type HubState } from "./state.ts";
-import { makeConversation, makeMessage, makePm, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage } from "./test-utils.ts";
+import {
+  makeAttachment,
+  makeConversation,
+  makeMessage,
+  makePm,
+  makeSession,
+  makeSystemMessage,
+  makeToolMessage,
+  makeUserMessage,
+  makeWorkerLine,
+} from "./test-utils.ts";
+import type { Message } from "../shared/index.ts";
 
 describe("selectors：Worker 超时静默触发消息过滤", () => {
   const maxTimeTrigger = makeSystemMessage({
@@ -66,5 +77,51 @@ describe("selectors：Worker 超时静默触发消息过滤", () => {
       },
     };
     expect(previewText(listConversations(stateAfterReply)[0]!)).toBe("我刚看了一眼 #268，它在收尾");
+  });
+});
+
+describe("previewText：通知正文用的对话预览", () => {
+  function entryOf(messages: Message[]) {
+    const state: HubState = {
+      ...initialState,
+      phase: "ready",
+      pms: [makePm({ id: 1, name: "小林" })],
+      conversations: { 1: { conversation: makeConversation({ id: 1, pmId: 1, title: "小林", createdAt: 0 }), messages, hasMore: false } },
+    };
+    return listConversations(state)[0]!;
+  }
+
+  it("跳过工具调用和 Worker 开工、收工行，显示最后一条文字", () => {
+    const entry = entryOf([
+      makeMessage({ id: 1, conversationId: 1, text: "最后的话", createdAt: 1_000 }),
+      makeToolMessage({ id: 2, conversationId: 1, text: "Bash: ls", createdAt: 2_000 }),
+      makeWorkerLine({ id: 3, conversationId: 1, line: { event: "ended" }, createdAt: 3_000 }),
+    ]);
+    expect(previewText(entry)).toBe("最后的话");
+  });
+
+  it("只发文件的消息写“[File] 名字”，多个用逗号隔开；有文字的还是文字", () => {
+    const files = [makeAttachment({ name: "报告.pdf" }), makeAttachment({ id: "1111111111111111", name: "图.png" })];
+    expect(previewText(entryOf([makeUserMessage({ id: 1, conversationId: 1, text: "", meta: { attachments: files } })]))).toBe("[File] 报告.pdf, 图.png");
+    expect(previewText(entryOf([makeUserMessage({ id: 1, conversationId: 1, text: "看这两个", meta: { attachments: files } })]))).toBe("看这两个");
+  });
+
+  it("撤回到输入框的消息不进预览，回到上一句", () => {
+    const entry = entryOf([
+      makeMessage({ id: 1, conversationId: 1, text: "早，要做什么？", createdAt: 1_000 }),
+      makeUserMessage({ id: 2, conversationId: 1, text: "把鉴权逻辑抽成中间件", status: "stopped", meta: { rewound: true }, createdAt: 2_000 }),
+    ]);
+    expect(previewText(entry)).toBe("早，要做什么？");
+  });
+
+  it("写交接的请求、交接全文和换代那一行都不进预览，也不算最后活动时间", () => {
+    const entry = entryOf([
+      makeMessage({ id: 1, conversationId: 1, text: "小林在", createdAt: 1_000 }),
+      makeSystemMessage({ id: 2, conversationId: 1, text: "写交接", status: "replied", createdAt: 2_000, event: { event: "handover.requested", sessionId: 1, auto: true } }),
+      makeMessage({ id: 3, conversationId: 1, text: "交接全文：暗号是蓝鲸", meta: { handover: true }, createdAt: 3_000 }),
+      makeSystemMessage({ id: 4, conversationId: 1, text: "交接全文：暗号是蓝鲸", createdAt: 4_000, event: { event: "session.renewed", sessionId: 2, fromSessionId: 1, turnStartId: 30, auto: true } }),
+    ]);
+    expect(previewText(entry)).toBe("小林在");
+    expect(entry.lastAt).toBe(1_000);
   });
 });

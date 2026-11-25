@@ -88,7 +88,7 @@ Measurements were taken on `main` at `60fc1413`. Searches used `grep -rn` over `
 - [Measured] The gear opens Settings on `Computers` whenever computers are managed, because `initialSection` falls back to it (`src/web/components/SettingsDialog.tsx:57`).
 - [Measured] `pnpm build` produces a main chunk of 1,299.56 kB, 398.24 kB gzip.
 - [Measured] `react-resizable-panels` 4.24.1, published 2026-11-18 under MIT with React 18 or 19 as peers, exports `Group`, `Panel`, and `Separator`. I read its type definitions after `npm pack`. Panel sizes accept pixels and `rem`. Double-clicking a separator resizes the adjacent panel to its `defaultSize`, and `disableDoubleClick` opts out. Separators carry the ARIA `separator` role and move with the arrow keys, and `groupResizeBehavior: "preserve-pixel-size"` keeps a panel's width when the window resizes. Bundling only those three exports with esbuild, React external, gives 48,261 bytes minified and 16,204 bytes gzip. The shadcn `resizable` registry item wraps the same package at `^4`.
-- [Measured] Every proposed text color passes WCAG AA on its surface, checked with the WCAG relative-luminance formula: `#75561b` on `#fff4cc` is 6.14:1, `#6f6862` on `#f7f4ed` is 4.99:1, `#8a5a00` on `#fff6d6` is 5.48:1, `#4a2e00` on `#ffcb3d` is 8.24:1, and white on the grapefruit send key `#c83220` is 5.34:1.
+- [Measured] Every proposed text color passes WCAG AA on its surface, checked with the WCAG relative-luminance formula: `#725317` on `#fcd771` is 5.09:1, `#6f6862` on `#f7f4ed` is 4.99:1, `#8a5a00` on `#fff6d6` is 5.48:1, `#4a2e00` on `#f9bd01` is 7.32:1, and white on the grapefruit send key `#c83220` is 5.34:1.
 - [Inferred] Changing tokens and primitives restyles most screens at once, but 16 test files assert today's classes (`rounded-xl`, `bg-jelly`, `surface-chat`, `composer-frame`, `w-75`, `w-80`) and change with the code.
 
 Older complaints and what happens to them:
@@ -127,17 +127,17 @@ Color tokens, replacing the zinc neutrals, fruit tints, and jelly highlights:
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `--rail` | `#ffcb3d` | Rail and phone tab bar |
-| `--rail-shade` | `#e9a417` | Rail divider, sheet outline, handle bar on hover |
-| `--rail-hover` | `#ffd966` | Rail cell hover |
+| `--rail` | `#f9bd01` | Rail and phone tab bar |
+| `--rail-shade` | `#e39600` | Rail divider, sheet outline, handle bar on hover |
+| `--rail-hover` | `#f9cb4b` | Rail cell hover |
 | `--rail-ink` | `#4a2e00` | Rail text and icons, badges, the primary button and text links outside a PM |
 | `--rail-ink-soft` | `#6e4a00` | Offline computer labels |
 | `--rail-outline` | `#8a5300` | Selected rail cell, handle grip |
-| `--list` | `#fff4cc` | PM column, settings dialog tabs, phone Projects page |
+| `--list` | `#fcd771` | PM column, settings dialog tabs, phone Projects page |
 | `--list-edge` | `#efd27d` | PM column header line and the line beside the column |
-| `--list-hover` | `#ffedb0` | PM row hover |
+| `--list-hover` | `#f9ce55` | PM row hover |
 | `--list-field` | `#fffbeb` | Search field on cream |
-| `--list-ink`, `--list-ink-soft` | `#3b2600`, `#75561b` | PM column text |
+| `--list-ink`, `--list-ink-soft` | `#3b2600`, `#725317` | PM column text |
 | `--select-line` | `#e0b03c` | Selected row outline on cream |
 | `--background` | `#ffffff` | Conversation, dialogs, cards |
 | `--panel` | `#f7f4ed` | Side panel, phone Worker and Profile pages, phone Settings background |
@@ -185,7 +185,7 @@ How it is wired:
 - The PM column, conversation, and side panel are three panels in one `PaneGroup`. The column and the panel keep their pixel widths when the window resizes, so the conversation absorbs the change.
 - A panel's `defaultSize` is its remembered width from `usePaneWidths`. The handle turns off the library's double-click and calls the store's `reset`, so a reset clears the stored width and returns to `16.5rem` or `27.5rem`.
 - Widths are stored in `rem` under the `agent-hub.paneWidths` key in `localStorage`, one entry per browser profile, which is one per device for the native apps. Storing `rem` keeps proportions when the interface scale changes. Values are clamped on read, and only user drags are written.
-- The handle draws a 2px line in the column's edge color: `--list-edge` beside the PM column and `--border-strong` beside the side panel. On hover or keyboard focus it becomes a 4px `--rail-shade` bar with a `12x32` honey grip, outlined in `--rail-outline` with three 2px dots. While dragging, the bar darkens to `#c98800`. At a limit the cursor becomes a one-way arrow.
+- The handle draws a 2px line in the column's edge color: `--list-edge` beside the PM column and `--border-strong` beside the side panel. On hover or keyboard focus it becomes a 4px `--rail-shade` bar with a `12x32` honey grip, outlined in `--rail-outline` with three 2px dots. While dragging, the bar darkens to `#c37a00`. At a limit the cursor becomes a one-way arrow.
 
 #### Narrow windows
 
