@@ -107,6 +107,11 @@ describe("zone palette and contrast (styles.css, docs/ui-standard.md sections 2.
   const frameLightest = mix(sheen[1]!, Number(sheen[2]) * 100, token("wood-top"));
   const railHoverLightest = mix("#fff4e4", 10, frameLightest);
   const ringsLightest = mix("#fff0dc", 7, token("rings-top"));
+  const translucent = (name: string) => {
+    const [, r, g, b, alpha] = new RegExp(`\\n  --${name}: rgb\\((\\d+) (\\d+) (\\d+) / ([0-9.]+)\\);`).exec(css)!;
+    const hex = `#${[r, g, b].map((v) => Number(v).toString(16).padStart(2, "0")).join("")}`;
+    return mix(hex, Number(alpha) * 100, token("rings-top"));
+  };
 
   it("已删除水果混底和果冻选中底，只保留分区色板", () => {
     expect(css).not.toMatch(/--mix-(chat|sidebar|line)|--color-(surface-chat|surface-sidebar|line|jelly)/);
@@ -138,6 +143,12 @@ describe("zone palette and contrast (styles.css, docs/ui-standard.md sections 2.
     expect(contrastRatio(token("list-ink-soft"), ringsLightest)).toBeGreaterThanOrEqual(4.63);
     expect(contrastRatio(token("row-selected-ink"), token("row-selected"))).toBeGreaterThanOrEqual(7);
     expect(contrastRatio(token("row-selected-ink-soft"), token("row-selected"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("keeps the soft ink at 4.6:1 or more on the translucent fills under text on the year rings, the search field's placeholder included", () => {
+    // `.wood-rings` points the placeholder color (--muted-foreground) at the soft ink, so the field's fill sits under it.
+    expect(css).toMatch(/\.wood-rings \{[^}]*--muted-foreground: var\(--list-ink-soft\);/);
+    for (const fill of ["list-field", "list-hover"]) expect(contrastRatio(token("list-ink-soft"), translucent(fill)), fill).toBeGreaterThanOrEqual(4.6);
   });
 
   it("keeps the hourglass sand, warning, and full colors readable on the frame wood", () => {

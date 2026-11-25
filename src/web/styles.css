@@ -137,7 +137,7 @@ html[data-ui-scale="xl"] {
   --sand: #e6c99a;
   --list: var(--rings-top);
   --list-hover: rgb(255 240 220 / 0.07);
-  --list-field: rgb(255 244 228 / 0.1);
+  --list-field: rgb(255 244 228 / 0.07);
   --list-ink: #fdf6ec;
   --list-ink-soft: #eed8c0;
   --row-selected: #fffaf2;
