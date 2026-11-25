@@ -23,10 +23,11 @@ This brief defines rules `S1` through `S6` for visual evaluation in `pnpm ui:pol
 Values below reflect the `Default` 16px root scale, the default (`Large` scales all `rem` tokens by `1.09375x`):
 
 1. `16px` (`600`): Conversation header name, side panel header, and dialog titles (`text-title`). The profile page display name at `22px` (`text-display`) is the sole exception.
-2. `15px`: Body copy, row titles, PM names (`600`), ask card questions (`500`), option text (`400`), and form inputs (`text-body`).
-3. `13.5px`: Every section heading (`500` muted: `Pinned`, `Project managers`, `Needs You`, `Task Graph`, `Pieces`, `Completed`, settings groups), sidebar previews, buttons (`500`), event strips, and `Show more` (`text-minor`).
+2. `15px`: Body copy and row titles outside a conversation (settings and side-panel rows, form inputs), and PM names and chat on the phone (`text-body`).
+3. `13.5px`: Every section heading (`500` muted: `Pinned`, `Project managers`, `Needs You`, `Task Graph`, `Pieces`, `Completed`, settings groups), PM names in the desktop list (`400`), Worker report rows, buttons (`500`), event strips, and `Show more` (`text-minor`). On the desktop a conversation reads at this size too: the messages, ask card questions (`500`) and options (`400`), and the composer of a PM's conversation, the Router, and a Worker thread (`text-body` inside `.chat-text`).
 4. `12px`: Timestamps, counts, `Recommended`, rail labels, and step numbers (`text-xs`).
 
+- **One typeface**: Lato for Latin text and digits in its true Regular, Medium, and Semibold, with PingFang SC and the other system fonts for Chinese; code blocks use the system monospace.
 - **Three weights only**: `400`, `500`, and `600`. Selected rows change background only, never font weight.
 - **Tabular numerals**: Timestamps, counts, percentages, and step IDs use `tabular-nums`.
 
