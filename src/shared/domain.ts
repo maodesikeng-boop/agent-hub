@@ -490,6 +490,7 @@ export type WorkerMessageMeta = {
   event: WorkerEvent;
   status: WorkerLineStatus | null;
   summary: string | null;
+  directChatSummary?: string;
 };
 
 export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMessageMeta | null {
@@ -497,8 +498,8 @@ export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMe
   return isOneOf(WORKER_EVENTS, message.meta.event) ? (message.meta as WorkerMessageMeta) : null;
 }
 
-export function workerMessageDedupeKey(workerId: WorkerId, event: WorkerEvent, turnMessageId: MessageId | null): string {
-  if (event === "report" || event === "turn_failed" || event === "user_message") {
+export function workerMessageDedupeKey(workerId: WorkerId, event: Exclude<WorkerEvent, "user_message">, turnMessageId: MessageId | null): string {
+  if (event === "report" || event === "turn_failed") {
     if (turnMessageId === null) throw new Error(`workerMessageDedupeKey: ${event} needs the turn's message id`);
     return `worker:${workerId}:${event}:${turnMessageId}`;
   }

@@ -9,8 +9,7 @@
 // S21 Worker 跑后台命令（sleep 90）：先回一句结束这一轮，这时还有后台命令，不算汇报、会话显示在等后台命令；跑完 claude 自己开一轮再回一句，
 //     项目经理只收到这一次汇报（ledger/workers.ts 的 awaitingBackground）。
 // S21b 等后台命令时项目经理收工：后台的 sleep 跟着停，不发汇报。
-// S19 用户在网页上直接对 Worker 说：Worker 收到带【用户直接对你说】的原文、照做并汇报；项目经理收到“用户直接对 Worker 说的话”，
-//     回复里提到了这件事；之后汇报也到了项目经理。
+// S19 用户直接问 Worker：Worker 收到带标签的原文，普通回复留在 Worker 对话。
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -21,11 +20,10 @@ import {
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
   USER_TO_WORKER_TAG,
-  userToWorkerHeader,
   workerEventOf,
   type WorkerMessageMeta,
 } from "../../src/shared/index.ts";
-import { messagesOf, waitUntil } from "../e2e/harness.ts";
+import { messagesOf, waitForStatus, waitUntil } from "../e2e/harness.ts";
 import { MODEL, Smoke, TURN_MS, expect, psLines, scenario, sleep, type Outcome } from "./kit.ts";
 
 /** S21 后台命令跑多久（要明显长于一轮，中途能多看几次）；S21b 用另一个数，好按命令行找进程。 */
@@ -291,7 +289,7 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
     });
   }
   if (only("S19")) {
-    await inFreshSmoke(outcomes, "S19 用户直接对 Worker 说：Worker 照做、汇报；项目经理知道用户说了什么", async (smoke) => {
+    await inFreshSmoke(outcomes, "S19 用户直达 Worker：回复留在 Worker 对话", async (smoke) => {
       const dir = repo(smoke, "s19", { "README.md": "# s19\n" });
       const tasks = smoke.folder("tasks", { "notes.txt": "在 notes.txt 里写一行 notes，git add 并 git commit -m notes，然后按汇报格式汇报。" });
       const chat = await pmWithFolder(smoke, "小林", dir);
@@ -301,37 +299,19 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
       await waitResults(smoke, chat, 1);
       await waitSettled(smoke, chat);
 
-      // 用户在 Worker 页面说一句（网页走的就是这个 POST）
-      const said = "顺便在 README.md 末尾加一行 direct-from-user，然后提交。";
+      const pmBefore = messagesOf(await smoke.client.state(), chat).map((m) => m.id);
+      const said = "notes.txt 的第一行是什么？只回复这一行，不用汇报。";
       const messageId = await smoke.client.post(worker!.worker_conversation_id, said);
+      await waitForStatus(smoke.client, messageId, "replied", TURN_MS);
       const workerSession = sessionIdOf(smoke, worker!.worker_conversation_id);
-      const reports = await waitUntil(
-        "第二份汇报",
-        async () => {
-          const r = (await workerLines(smoke, chat)).filter((l) => l.event === "report" || l.event === "turn_failed");
-          return r.length >= 2 ? r : undefined;
-        },
-        TURN_MS * 2,
-      );
-      expect(reports[1]!.event === "report", `第二轮不是汇报：${JSON.stringify(reports[1])}`);
       const written = smoke.writtenTexts(workerSession);
-      expect(written.some((t) => t.includes(`${USER_TO_WORKER_TAG}\n\n${said}`)), `Worker 收到的不带标签：${JSON.stringify(written.slice(-2))}`);
-      const readme = git(worker!.worktree_path!, "show", "HEAD:README.md");
-      expect(readme.includes("direct-from-user"), `Worker 没照用户说的改 README：${readme}`);
-      const status = smoke.query<{ status: string }>("SELECT status FROM messages WHERE id = ?", messageId)[0]?.status;
-      expect(status === "replied", `用户那条消息是 ${status}`);
-
-      // 项目经理：会话里有 user_message 那一行，收到了带开头的原文，回了一句提到 README
-      const lines = await workerLines(smoke, chat);
-      expect(lines.some((l) => l.event === "user_message" && l.summary === said), `项目经理会话里没有 user_message 那一行：${JSON.stringify(lines.map((l) => l.event))}`);
-      await waitSettled(smoke, chat);
-      const pmWritten = smoke.writtenTexts(sessionIdOf(smoke, chat));
-      const header = userToWorkerHeader(worker!.id, "写笔记");
-      expect(pmWritten.some((t) => t.includes(header) && t.includes(said)), `项目经理没收到用户对 Worker 说的话：${JSON.stringify(pmWritten.slice(-3))}`);
-      const noticeId = messagesOf(await smoke.client.state(), chat).find((m) => workerEventOf(m)?.event === "user_message")!.id;
-      const replies = await smoke.repliesAfter(chat, noticeId);
-      expect(replies.some((r) => r.includes("README")), `项目经理之后的回复没提到 README：${replies.join("|")}`);
-      return `Worker 收到带标签的原文并照做（README 有 direct-from-user），汇报“${reports[1]!.summary}”；项目经理收到通知并回复：${replies[0]?.slice(0, 60)}`;
+      expect(written.some((t) => t.includes(`${USER_TO_WORKER_TAG}\n\n${said}`)), "Worker 没收到带标签的原文");
+      const state = await smoke.client.state();
+      const reply = messagesOf(state, worker!.worker_conversation_id).find((m) => m.id > messageId && m.sender === "agent" && m.kind === "text");
+      expect(reply?.text.trim() === "notes", `Worker 没在自己的对话里回复：${reply?.text}`);
+      const pmAfter = messagesOf(state, chat).map((m) => m.id);
+      expect(JSON.stringify(pmAfter) === JSON.stringify(pmBefore), "项目经理对话有新消息");
+      return "Worker 收到带标签的原文并回复 notes；项目经理对话无新消息";
     });
   }
 

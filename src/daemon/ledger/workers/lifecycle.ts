@@ -11,6 +11,7 @@ import type { WorkerDbRow } from "../rows.ts";
 import { idle } from "../sessions.ts";
 import type { StepWorkspacePlan, TaskGraphWorkersBridge } from "../task-graphs.ts";
 import { ownWorker, workerRow, workerSession } from "./ctx.ts";
+import { directChatSummary } from "./direct-chat.ts";
 import { insertLine, insertPmMessage, isWorkerInFlight, stopQueued } from "./lines.ts";
 import { notStarted, sendDedupeKey, validMaxTimeMs, validTask, worktreeLabel } from "./text.ts";
 import { clearMaxTime, clearMaxTimeIn, startMaxTime } from "./timers.ts";
@@ -116,10 +117,12 @@ export function sendIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArg
   w.enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
   const compactOnly = composerBaseOf(session.vendor)?.isCompactCommand(text) === true;
   startMaxTime(w, worker, maxTimeMs);
+  const confirmed = compactOnly
+    ? `已发给 Worker #${worker.id}“${worker.title}”：这一轮只压缩上下文，不会有汇报，压缩完它就空闲了，不用等。`
+    : `已发给 Worker #${worker.id}“${worker.title}”，它会接着做，做完一轮汇报会自动发给你。`;
+  const summary = directChatSummary(w, worker, { markSeen: true });
   return {
-    text: compactOnly
-      ? `已发给 Worker #${worker.id}“${worker.title}”：这一轮只压缩上下文，不会有汇报，压缩完它就空闲了，不用等。`
-      : `已发给 Worker #${worker.id}“${worker.title}”，它会接着做，做完一轮汇报会自动发给你。`,
+    text: summary === undefined ? confirmed : `${confirmed}\n\n${summary}`,
     data: { worker: toWorkerRecord(worker), messageId: message.id },
   };
 }

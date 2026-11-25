@@ -215,10 +215,6 @@ export function unwrapWorkerReportText(worker: { id: WorkerId; title: string }, 
   return body;
 }
 
-export function userToWorkerHeader(workerId: WorkerId, title: string): string {
-  return `【用户直接对 Worker #${workerId} · ${title} 说的话（Worker 已收到）】`;
-}
-
 export const USER_TO_WORKER_TAG = "【用户直接对你说】";
 
 export interface WorkerPick {
@@ -252,6 +248,7 @@ export function deliveryParts(message: Pick<Message, "workerId" | "sender" | "te
     const origin = feishuOriginOf(message);
     if (origin !== null) prefixes.push(...feishuDeliveryPrefixes(origin));
   }
+  if (message.sender === "system" && typeof message.meta?.directChatSummary === "string") prefixes.push(message.meta.directChatSummary);
   return { prefixes, text };
 }
 
