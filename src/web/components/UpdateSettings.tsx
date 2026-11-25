@@ -14,7 +14,7 @@ import {
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 const INLINE_ACTION =
-  "touch-target inline-flex cursor-pointer items-center gap-1 font-medium text-rail-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus";
+  "touch-target inline-flex cursor-pointer items-center gap-1 font-medium text-brand-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus";
 
 function InlineLink({ href, children }: { href: string; children: ReactNode }) {
   return (

@@ -38,7 +38,7 @@ export function SettingsNavRow({
       disabled={disabled}
       data-slot="settings-nav-row"
       className={cn(
-        "flex min-h-12 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors outline-none hover:bg-hover focus-visible:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] active:bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
+        "flex min-h-12 w-full cursor-pointer items-center gap-3 rounded-none px-4 py-3 text-left transition-colors outline-none hover:bg-hover focus-visible:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] active:bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
         className,
       )}
       onClick={onClick}
@@ -48,7 +48,7 @@ export function SettingsNavRow({
         <span className={cn("block text-body break-words", danger && "text-danger")}>{label}</span>
         {detail && <span className="mt-0.5 block text-minor leading-snug text-muted-foreground">{detail}</span>}
       </span>
-      {attention && <span data-testid={attentionTestId} aria-hidden="true" className="size-2 shrink-0 bg-caution" />}
+      {attention && <span data-testid={attentionTestId} aria-hidden="true" className="size-2 shrink-0 rounded-full bg-danger" />}
       {summary !== undefined && <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{summary}</span>}
       {chevron && <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />}
     </button>

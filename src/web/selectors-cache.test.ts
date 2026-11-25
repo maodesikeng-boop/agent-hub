@@ -40,6 +40,7 @@ import {
   quotaResetTimes,
   quotaUsage,
   unboundWorkersOf,
+  workerOutcomesOf,
   workersOf,
 } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
@@ -1066,12 +1067,64 @@ describe("shell list and rail selectors", () => {
     const quota0 = quotaUsage(withRate, 1_500_000);
     const meter0 = quotaMeterOf(quota0);
     expect(quotaMeterOf(quota0)).toBe(meter0);
-    expect(meter0).toMatchObject({ percent: 62, cells: 4, warning: false, full: false });
+    expect(meter0).toMatchObject({ percent: 62, warning: false, full: false });
 
     const quotaReset = quotaUsage(withRate, 2_000_000);
     const meter1 = quotaMeterOf(quotaReset);
     expect(meter1).not.toBe(meter0);
-    expect(meter1).toMatchObject({ percent: 0, cells: 0 });
+    expect(meter1).toMatchObject({ percent: 0, warning: false });
     expect(quotaMeterOf(quotaReset)).toBe(meter1);
+  });
+
+  it("workerOutcomesOf: returns a stable reference across streaming pulses and invalidates when a new outcome arrives", () => {
+    let state = monthState();
+    const targetWorker = workerConversationOf(WORKERS - 1);
+    const first = workerOutcomesOf(state, targetWorker);
+    expect(first).toHaveLength(1);
+    expect(workerOutcomesOf(state, targetWorker)).toBe(first);
+
+    const streamed = applyChange(
+      state,
+      sessionChange(
+        state.seq + 1,
+        makeSession({
+          sessionId: 99_998,
+          conversationId: PM_CONVERSATION,
+          pmId: 1,
+          status: "running",
+          activity: "working",
+          streamingText: "streaming chunk",
+        }),
+      ),
+    );
+    expect(workerOutcomesOf(streamed, targetWorker)).toBe(first);
+
+    const otherWorkerMsg = applyChange(
+      streamed,
+      messageChange(
+        streamed.seq + 1,
+        "message.created",
+        makeMessage({ id: 2_000_001, conversationId: workerConversationOf(0), sessionId: workerSessionOf(0) }),
+      ),
+    );
+    expect(workerOutcomesOf(otherWorkerMsg, targetWorker)).toBe(first);
+
+    const failed = applyChange(
+      otherWorkerMsg,
+      messageChange(
+        otherWorkerMsg.seq + 1,
+        "message.created",
+        makeWorkerLine({
+          id: 2_000_002,
+          conversationId: PM_CONVERSATION,
+          line: { workerId: WORKERS - 1, workerConversationId: targetWorker, title: `W${WORKERS - 1}`, event: "turn_failed", summary: "disk full" },
+        }),
+      ),
+    );
+    const after = workerOutcomesOf(failed, targetWorker);
+    expect(after).not.toBe(first);
+    expect(after).toHaveLength(2);
+    expect(after.at(-1)?.line.summary).toBe("disk full");
+    expect(workerOutcomesOf(failed, targetWorker)).toBe(after);
   });
 });

@@ -1,7 +1,7 @@
 // 网页外壳（docs/ui-standard.md 第 6、16 条）：每个对话的网址、刷新回到原来那个、前进后退，打开对话时焦点进输入框，
 // 左栏的在忙、行高一致，左下角的按钮，“重连中”提示条。接口、WebSocket 都是假的。
 import { readFileSync } from "node:fs";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateSnapshot, WsServerMessage } from "../shared/index.ts";
@@ -140,38 +140,31 @@ describe("焦点", () => {
 });
 
 describe("ProjectList", () => {
-  it("选中的对话：浅奶油导航底上用白底 + --select-line 边表示，名字字重不变（选中没选中都是 600）", async () => {
+  it("选中的对话：奶油导航底上一条平的白色选中带，没有描边和投影，选中的名字用深色", async () => {
     await boot();
-    const name = (label: string) => within(row(label)).getByText(label);
     const activeRow = row("小林").closest(".project-row")!;
     const idleRow = row("老马").closest(".project-row")!;
     expect(row("小林")).toHaveAttribute("aria-current", "page");
-    expect(activeRow).toHaveClass("border-select-line", "bg-background");
-    expect(idleRow).toHaveClass("hover:bg-list-hover");
-    expect(idleRow.className).not.toMatch(/border-select-line|bg-background|bg-jelly/);
-    expect(name("小林")).toHaveClass("font-semibold");
-    expect(name("老马")).toHaveClass("font-semibold");
+    expect(activeRow).toHaveClass("row-selected", "rounded-sm");
+    expect(idleRow).toHaveClass("hover:bg-list-hover", "rounded-sm");
+    expect(idleRow.className).not.toMatch(/row-selected|tile-selected|border-select-line|bg-background|bg-jelly/);
+    expect(within(row("小林")).getByText("小林")).toHaveClass("text-list-ink");
   });
 
-  it("项目经理在忙：不另加标记，行右边照旧是时间", async () => {
+  it("项目经理在忙：行里不另加标记，也不显示时间", async () => {
     const ws = await boot();
-    const time = () => within(row("老马")).getByText(formatTime(20_000));
-    expect(time()).toBeInTheDocument();
+    expect(within(row("老马")).queryByText(formatTime(20_000))).not.toBeInTheDocument();
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 2, pmId: 2, status: "running", activity: "working" })));
     expect(within(row("老马")).queryByText(/Working/)).not.toBeInTheDocument();
-    expect(time()).toBeInTheDocument();
   });
 
-  it("没有消息时保留第二行占位，名字与有预览的行对齐", async () => {
+  it("每行只有头像和名字：有消息和没消息的行一样高，都不显示最近消息", async () => {
     await boot();
     const empty = row("新来的");
-    const withPreview = row("小林");
-    const placeholder = empty.querySelector("p")!;
-    const preview = within(withPreview).getByText("小林你好");
-    expect(placeholder.textContent).toBe("\u00a0");
-    expect(placeholder.className).toBe(preview.className);
-    expect(empty.closest(".project-row")).toHaveClass("h-13");
-    expect(withPreview.closest(".project-row")).toHaveClass("h-13");
+    const withMessage = row("小林");
+    expect(within(withMessage).queryByText("小林你好")).not.toBeInTheDocument();
+    expect(empty.closest(".project-row")).toHaveClass("h-6.5");
+    expect(withMessage.closest(".project-row")).toHaveClass("h-6.5");
     expect(empty).toHaveTextContent("新来的");
   });
 
@@ -201,7 +194,7 @@ describe("ProjectList", () => {
     );
     const quotaBtn = within(rail).getByRole("button", { name: /5h usage 37%/ });
     expect(quotaBtn).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("tool-slot");
+    expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("btn-honey");
 
     await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
     expect(within(rail).getByRole("button", { name: /5h usage 37%/ })).toBe(quotaBtn);
@@ -266,6 +259,21 @@ describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", (
     expect(value(column, "padding-right")).toBeUndefined();
   });
 
+  it("chat text (section 3): the desktop conversations of a PM, the Router, and a Worker set their body one step down; Settings and Pieces keep 15px", async () => {
+    expect(value(body('\\[data-shell="desktop"\\] \\.chat-text'), "--text-body")).toBe("var(--text-minor)");
+    const user = userEvent.setup();
+    await boot();
+    expect(screen.getByRole("region", { name: "小林" })).toHaveClass("chat-text");
+    window.location.hash = "#/w/30";
+    expect(await screen.findByRole("region", { name: "Piece 修 X" })).toHaveClass("chat-text");
+    expect(screen.getByRole("complementary", { name: "修 X" }).querySelectorAll(".chat-text")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect((await screen.findByRole("dialog", { name: "Settings" })).closest(".chat-text")).toBeNull();
+    await user.keyboard("{Escape}");
+    window.location.hash = "#/router";
+    expect((await screen.findByRole("log", { name: "Router timeline" })).closest(".chat-text")).not.toBeNull();
+  });
+
   it("主区套 chat-main；顶栏不跟着列居中：标题在左上、按钮在右上，边距是顶栏自己的 gutter；底部输入框外层向上叠盖 26px 避免顶部圆角外侧水平硬切", async () => {
     await boot();
     const main = screen.getByRole("main");
@@ -306,13 +314,17 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     window.history.replaceState(null, "", "/");
   });
 
-  it("data-macos-app='true' 下最左栏带交通灯避让类名，各列顶栏带 data-window-drag", async () => {
+  it("data-macos-app='true': the wood top bar holds the traffic lights, so the rail has no inset of its own; the top bar and every column header drag the window", async () => {
     document.documentElement.dataset.macosApp = "true";
     const user = userEvent.setup();
     await boot();
 
+    const shell = document.querySelector<HTMLElement>("[data-shell='desktop']")!;
+    const topBar = shell.firstElementChild!;
+    expect(topBar).toHaveClass("shell-topbar");
+    expect(topBar).toHaveAttribute("data-window-drag");
     const rail = screen.getByRole("navigation", { name: "Workspace" });
-    expect(rail.className).toContain("pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))]");
+    expect(rail.className).not.toMatch(/traffic-lights/);
     expect(rail.querySelector("[data-window-drag]")).not.toBeNull();
 
     const convHeader = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header")!;
@@ -411,6 +423,36 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     }
     expect(postWindowDrag).toHaveBeenCalledTimes(2);
   });
+
+  it("Settings 打开时木头顶栏照样拖窗、双击缩放，按在顶栏上不算点了外面，Esc 照样关", async () => {
+    const user = userEvent.setup();
+    const postWindowDrag = vi.fn();
+    window.webkit = { messageHandlers: { windowDrag: { postMessage: postWindowDrag } } };
+    await boot();
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog", { name: "Settings" });
+    expect(document.querySelector("[data-slot='dialog-overlay']")).toHaveClass("top-[var(--topbar-height)]");
+    expect(document.querySelector("[data-slot='dialog-overlay']")).not.toHaveClass("inset-0");
+    // Radix starts listening for outside presses one tick after the page mounts.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    const topBar = document.querySelector(".shell-topbar[data-window-drag]")!;
+    for (const detail of [1, 2]) {
+      act(() => {
+        fireEvent.pointerDown(topBar, { button: 0, pointerType: "mouse" });
+        fireEvent.mouseDown(topBar, { button: 0, detail });
+        fireEvent.pointerUp(topBar, { button: 0, pointerType: "mouse" });
+        fireEvent.mouseUp(topBar, { button: 0, detail });
+        fireEvent.click(topBar, { button: 0, detail });
+      });
+    }
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(postWindowDrag.mock.calls).toEqual([[{ doubleClick: false }], [{ doubleClick: true }]]);
+    expect(settings).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument());
+  });
 });
 
 describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () => {
@@ -485,11 +527,11 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
       }
     });
     const listRegion = screen.getByRole("region", { name: "This computer" });
-    expect(listRegion).toHaveClass("w-18", "shrink-0", "bg-list");
+    expect(listRegion).toHaveClass("w-18", "shrink-0", "wood-rings");
     expect(within(listRegion).queryByRole("searchbox", { name: "Search conversations" })).toBeNull();
     const btn = within(listRegion).getByRole("button", { name: /小林/ });
-    expect(btn).toHaveClass("size-13", "border-2");
-    expect(btn.className).not.toMatch(/rounded-/);
+    expect(btn).toHaveClass("size-13");
+    expect(btn.className).not.toMatch(/border-2|rounded-(?!sm\b)/);
     expect(within(listRegion).getByRole("button", { name: "New project manager" })).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });

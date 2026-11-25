@@ -39,6 +39,20 @@ const productName: Plugin = {
   transformIndexHtml: (html) => html.replaceAll("%PRODUCT_NAME%", PRODUCT_NAME),
 };
 
+// The Lato faces start downloading with the HTML instead of after the first layout, so the first paint is already in Lato.
+const LATO_FILE = /[\\/]lato-font[\\/]fonts[\\/]/;
+const preloadFonts: Plugin = {
+  name: "preload-fonts",
+  apply: "build",
+  transformIndexHtml: {
+    order: "post",
+    handler: (_html, ctx) =>
+      Object.values(ctx.bundle ?? {})
+        .filter((file) => file.type === "asset" && file.originalFileNames.some((name) => LATO_FILE.test(name)))
+        .map((file) => ({ tag: "link", attrs: { rel: "preload", href: `/${file.fileName}`, as: "font", type: "font/woff2", crossorigin: true }, injectTo: "head" as const })),
+  },
+};
+
 /**
  * 加到主屏幕、推送（联机 P4）：/manifest.webmanifest 由 pwa-manifest.ts 生成（名字跟着 names.ts）；Service Worker（sw.ts）
  * 单独打包成根目录的 /sw.js（范围要是 /，文件名不能带哈希）。开发模式只出 manifest，不注册 Service Worker（pwa.ts）。
@@ -59,7 +73,7 @@ const pwa: Plugin = {
 
 export default defineConfig({
   root: "src/web",
-  plugins: [react(), tailwindcss(), productName, pwa],
+  plugins: [react(), tailwindcss(), productName, pwa, preloadFonts],
   // Service Worker（sw.ts）不引 names.ts（会被拆成共享的 chunk，普通 Service Worker 不能 import），产品名从这里填
   define: { __PRODUCT_NAME__: JSON.stringify(PRODUCT_NAME) },
   build: {

@@ -473,7 +473,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const look = active?.look ?? NO_LOOK;
   const listEntries = reuseEntryList(prevEntriesRef.current, state.phase === "ready" ? entries : EMPTY_ENTRIES);
   prevEntriesRef.current = listEntries;
-  const railCount = railAsks.length + railGraphs.length + railWorkers.filter((w) => !w.ended).length;
   const newPmDevices = !creating ? EMPTY_NEW_PM_DEVICES : newPmDevicesOf(fleet.devices, clientForDevice);
   return {
     ...shared,
@@ -520,7 +519,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       railAsks,
       railAttention,
       railComputers,
-      railCount,
       railGraphs,
       railHasContent,
       railLoadMoreWorkers,

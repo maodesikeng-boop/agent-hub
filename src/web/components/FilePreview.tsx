@@ -310,7 +310,7 @@ function PreviewContent({ file, kind }: { file: PreviewFile; kind: PreviewKind }
           {result !== null ? <span className={result.error ? "text-danger" : undefined} title={errorTitle(result.text)}>{errorLine(result.text)}</span> : note}
         </span>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto border-2 border-border-strong">{content}</div>
+      <div className="min-h-0 flex-1 overflow-auto rounded-sm border border-border">{content}</div>
     </>
   );
 }
