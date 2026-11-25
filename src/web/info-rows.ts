@@ -30,8 +30,8 @@ export interface InfoRowsInput {
 /**
  * Postcondition: returns two groups. The first holds Model (model and effort, such as `Opus 5.5 Max`), Mode, and
  * Folders (the main folder's name, or the count when there are several). The second holds Schedules (count),
- * Capabilities (`enabled/total`, omitted for an archived PM), Persona (`Set` or `Empty`), Memory files (count), then
- * Worktree setup and History while those rows are kept. A value still loading is null.
+ * Capabilities (`enabled/total`, omitted for an archived PM), Persona (`Set` or `Empty`), Memory files (count),
+ * Worktree setup (`Configured` or `None`, only with a project), and History (change count). A value still loading is null.
  */
 export function infoRowsOf(_input: InfoRowsInput): readonly (readonly InfoRow[])[] {
   throw new Error("Not implemented");

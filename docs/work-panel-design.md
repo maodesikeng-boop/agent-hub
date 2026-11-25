@@ -15,12 +15,14 @@ The right side of the workbench becomes one wide work panel with three tabs, `Ac
 
 ### Decisions needed
 
-1. **Phone and the narrowest desktop tier.** Recommendation: on a phone the panel opens as a full page with the same three tabs and a back arrow, replacing the bottom Pieces drawer; Worker detail and Info pages push full pages as they do today. In the desktop `stack` tier the panel covers the conversation exactly as the side panel does today. Option B keeps a bottom drawer holding the tabs; it leaves graphs about 60% of the screen height and nests a sheet inside a sheet.
-2. **Router page.** Recommendation: no work panel on the Router this round. Every tab belongs to one PM, and the Router already gathers decisions across PMs. Opening a Worker from the Router keeps going to that PM's conversation with Worker detail open. Option B gives the Router an `Active` tab across all PMs.
-3. **Empty, loading, and error states.** Recommendation: one centered muted line per empty tab (`Nothing running`, `Nothing completed yet`), a spinner with `Loading…` while the first page loads, and on failure one red line with the error and a `Retry` text button. A failed next page in Completed shows the same line inline at the end of the list. Info keeps the current persona loading and error rows.
-4. **Info rows the spec leaves out.** Today's PM settings also open `Worktree setup` and `History`. Recommendation: keep both as the last two rows of the second group so no feature disappears. Option B drops them from the panel.
-5. **The expand icon on an Active graph.** Recommendation: it opens the existing full graph dialog, redrawn with the new nodes, icons, and curves, keeping its decision cards, `Skip step`, and `Cancel graph`. Those actions have no other home. Option B removes the dialog and moves Skip and Cancel into Worker detail's `⋯` menu.
-6. **Standalone asks.** The Pieces panel lists `hub ask` cards not tied to a graph under `Needs You`. The spec's Active tab has no such section. Recommendation: drop it; those cards stay in the chat and in the Router tray, and the panel toggle keeps its attention dot.
+None. On 2026-11-25 the user chose the recommended option for each open point:
+
+1. **Phone and the narrowest desktop tier.** On a phone the panel opens as a full page with the three tabs and a back arrow, and replaces the bottom Pieces drawer. Worker detail and Info pages push full pages as they do today. In the desktop `stack` tier the panel covers the conversation as the side panel does today.
+2. **Router page.** The Router gets no work panel this round. Opening a Worker from the Router goes to that PM's conversation with Worker detail open.
+3. **Empty, loading, and error states.** An empty tab shows one centered muted line (`Nothing running`, `Nothing completed yet`). Loading shows a spinner with `Loading…`. A failure shows one red line with the error and a `Retry` text button, inline at the end of Completed when a later page fails. Info keeps the current persona loading and error rows.
+4. **Info rows the spec left out.** `Worktree setup` and `History` stay as the last two rows of the second group.
+5. **The expand icon on an Active graph.** It opens the full graph dialog, redrawn with the new nodes, icons, and curves, and keeps its decision cards, `Skip step`, and `Cancel graph`.
+6. **Standalone asks.** The `Needs You` group goes away. Those cards stay in the chat and in the Router tray, and the panel toggle keeps its attention dot.
 
 ## For Workers and reviewers
 
@@ -104,7 +106,7 @@ The panel reads vendor-neutral data: Task Graphs, Worker entries, report lines, 
 Deleted in the same PR so the old and new panels never coexist:
 
 - `src/web/components/RightRail.tsx` (`RailGroups`, `CompletedGroup`, `PiecesSlot`, `PieceMeta`, `RIGHT_RAIL_*`) and its tests (`src/web/right-rail.test.tsx`, Pieces parts of `src/web/task-graph-rail.test.tsx`). `RouterWorkbench` stops importing `RIGHT_RAIL_VISIBLE_ROWS`; it gets its own constant.
-- `src/web/components/PeelTrack.tsx`, `src/web/pixel-path.ts`, `src/web/task-progress.ts`, `src/web/components/TaskProgressIcon.tsx`, and the pipe and bead geometry in `src/web/task-graph-layout.ts`, once the graph dialog draws with `GraphCanvas` (decision 5). `GateDecisionCard` moves to its own file if the dialog keeps it.
+- `src/web/components/PeelTrack.tsx`, `src/web/pixel-path.ts`, `src/web/task-progress.ts`, `src/web/components/TaskProgressIcon.tsx`, and the pipe and bead geometry in `src/web/task-graph-layout.ts`, once the graph dialog draws with `GraphCanvas` (decision 5). `GateDecisionCard` moves to its own file for the dialog.
 - `src/web/mobile/PiecesDrawer.tsx` (decision 1).
 - `src/web/components/SidePanel.tsx` and the old `SidePanelContent`, `sidePanelOf`, and `panelExitsOf` in `src/web/side-panel.ts`, replaced by `WorkPanel` and the `workPanel*` exports.
 - `ProfilePanel` as a panel and a page: its summary layout, `SectionFrame`, `SummaryHeader`, the in-place Model, Mode, and Schedules editors, and the `variant` prop. The editors it wraps stay and move under `InfoTab`. `ProfilePage` and `PROFILE_PAGES` in `src/web/route.ts` become `InfoPage` and `INFO_PAGES`.
@@ -136,6 +138,8 @@ Reused, not rewritten: `WorkerConversation`, `MessageList`, `DraftComposer`, `Lo
 - `src/web/components/WorkPanel.tsx`: the sheet and both header kinds.
 - `src/web/components/WorkStatusIcon.tsx`, `GraphCanvas.tsx`, `ActiveTab.tsx`, `CompletedTab.tsx`, `InfoTab.tsx`, `WorkerDetail.tsx`, `WorkerReportText.tsx`: one component per surface.
 - Tests: `src/web/{work-status,graph-flow,work-panel-model,info-rows,worker-report-view}.test.ts`, `src/web/work-panel.test.tsx`, and `src/daemon/ledger/completed-work.test.ts`.
+
+On a phone, `MobileWorkbench` in `src/web/App.tsx` renders `WorkPanel layout="page"` over the conversation in place of `PiecesDrawer`; the back arrow returns to the conversation, and a route change closes it as the drawer does today.
 
 The panel opens and closes as today: by itself while something needs the user, and from the toggle in the conversation header, which keeps the PM's note sprite with the label `Show work panel` or `Hide work panel`. Selecting `Info` navigates to `#/pm/<id>`; selecting `Active` or `Completed` navigates to `#/c/<id>` and remembers the tab in `localStorage`. Worker detail lives at `#/w/<id>`. Clicking a step opens the result of `stepTargetOf`.
 
