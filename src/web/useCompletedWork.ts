@@ -1,4 +1,4 @@
-import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { CompletedCursor, CompletedWorkPage, PmId } from "../shared/index.ts";
 import { useClient } from "./device-scope.tsx";
@@ -56,11 +56,6 @@ export function useCompletedWork(pmId: PmId | null, enabled: boolean, finishSign
     if (pmId === null || !enabled) return;
     if (prev.pmId !== pmId || prev.device !== client.device) return;
     if (finishSignal === undefined || prev.signal === undefined || prev.signal === finishSignal) return;
-    qc.setQueryData<InfiniteData<CompletedWorkPage, CompletedCursor | null>>(queryKey, (existing) =>
-      existing === undefined || existing.pages.length <= 1
-        ? existing
-        : { pages: existing.pages.slice(0, 1), pageParams: existing.pageParams.slice(0, 1) },
-    );
     void qc.invalidateQueries({ queryKey, exact: true });
   }, [pmId, client.device, enabled, finishSignal, qc, queryKey]);
 

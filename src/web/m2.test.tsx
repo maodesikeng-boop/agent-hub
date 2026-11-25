@@ -78,7 +78,7 @@ async function openSettingsPage(user: ReturnType<typeof userEvent.setup>, page: 
   await user.click(within(pagesNav).getByRole("button", { name }));
 }
 async function backToSettingsSummary(user: ReturnType<typeof userEvent.setup>, page: HTMLElement) {
-  await user.click(within(page).getByRole("button", { name: "Back to settings summary" }));
+  await user.click(within(page).getByRole("button", { name: "Back to Info" }));
 }
 
 /** 性格设定那一组的“保存”（改了才有）。 */
@@ -841,7 +841,7 @@ describe("资料页", () => {
     expect(within(folders).queryByRole("list")).not.toBeInTheDocument();
     expect(within(settingsPagesNav(page)).queryByRole("button", { name: /Worktree setup/ })).not.toBeInTheDocument();
     expect(within(page).queryByText("还没有")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Close settings" }));
+    await user.click(screen.getByRole("button", { name: "Close work panel" }));
     expect(screen.queryByRole("complementary", { name: "阿周's settings" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
   });

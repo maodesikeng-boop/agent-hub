@@ -279,7 +279,7 @@ describe("资料页的能力入口：直接进当前项目的能力页", () => {
     expect(within(caps).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Inheritance", "This project", "Shared", lead, other]);
     expect(within(region(caps, other)).getByRole("button", { name: new RegExp(`^${other}`) })).toHaveAttribute("aria-expanded", "false");
     expect(api.callsTo("GET", /^\/api\/pms\/1\/capabilities$/).length).toBeGreaterThanOrEqual(1);
-    await user.click(within(caps).getByRole("button", { name: "Back to settings summary" }));
+    await user.click(within(caps).getByRole("button", { name: "Back to Info" }));
     await within(page).findByRole("navigation", { name: "Project manager settings pages" });
     expect(window.location.hash).toBe("#/pm/1");
   });
