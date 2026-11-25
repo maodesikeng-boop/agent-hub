@@ -1,4 +1,5 @@
-import type { CapabilityIsolationMap } from "../shared/pm-capabilities.ts";
+import type { CapabilityIsolationMap, CapabilityKey } from "../shared/pm-capabilities.ts";
+import type { SandboxPlatform } from "../shared/sandbox-approval.ts";
 import type { QuotaWindowKey } from "../shared/vendors.ts";
 
 export interface FetchedQuotaSpec {
@@ -48,6 +49,13 @@ export interface VendorModelsSpec {
   shortName?: (model: string) => string | null;
 }
 
+export interface VendorBuiltInSandboxSpec {
+  readonly platforms: readonly SandboxPlatform[];
+  readonly computerUseCapabilities: readonly CapabilityKey[];
+  readonly computerUsePlugins?: readonly string[];
+  readonly ownSandboxOnArgs?: readonly string[];
+}
+
 interface VendorCapabilities {
   backgroundWake: boolean;
   readonly: "settings" | "driver" | "os_sandbox";
@@ -59,6 +67,7 @@ interface VendorCapabilities {
   explicitDefaultModel?: boolean;
   // macOS sandboxes cannot nest, so the vendor's own sandbox is disabled inside the OS sandbox.
   ownSandboxOffArgs?: readonly string[];
+  builtInSandbox?: VendorBuiltInSandboxSpec;
 }
 
 export type ChecklistSource = "todo_tool" | "plan_update" | "extension";

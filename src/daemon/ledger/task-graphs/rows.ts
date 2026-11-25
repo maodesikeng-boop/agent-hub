@@ -1,11 +1,11 @@
-import type {
-  TaskArtifact,
-  TaskDecision,
-  MessageId,
-  TaskNode,
-  TaskNodeStatus,
-  TaskNodeWaitingFor,
-  WorkerId,
+import {
+  isTaskNodeWaitingDecision,
+  type TaskArtifact,
+  type TaskDecision,
+  type TaskNode,
+  type TaskNodeStatus,
+  type TaskNodeWaitingFor,
+  type WorkerId,
 } from "../../../shared/domain.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { TaskNodeDbRow } from "./types.ts";
@@ -66,24 +66,22 @@ function artifactForView(artifact: TaskArtifact | null, waitingDecision: boolean
   return Object.keys(rest).length > 0 ? rest : null;
 }
 
-export function toTaskNode(
-  row: TaskNodeDbRow,
-  includeDetails = false,
-  blockers?: ReadonlyMap<number, UserBlocker>,
-  pendingAsks?: ReadonlySet<MessageId>,
-): TaskNode {
+export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?: {
+  userBlocker?: UserBlocker;
+  sandboxApproval?: TaskNode["sandboxApproval"];
+  gateAskPending?: boolean;
+}): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
-  const waitingUser = row.status === "waiting" && row.waiting_for === "user";
-  const userBlocker = blockers?.get(row.id) ?? null;
-  const gateAskPending = pendingAsks !== undefined && row.gate_ask_message_id !== null
-    ? pendingAsks.has(row.gate_ask_message_id)
-    : undefined;
-  const waitingDecision = gateAskPending ?? (waitingUser && userBlocker === null);
+  const status = row.status as TaskNodeStatus;
+  const waitingFor = status === "waiting" ? ((row.waiting_for ?? "pm") as TaskNodeWaitingFor) : null;
+  const userBlocker = waiting?.userBlocker ?? null;
+  const { sandboxApproval, gateAskPending } = waiting ?? {};
+  const waitingDecision = isTaskNodeWaitingDecision({ status, waitingFor, userBlocker, sandboxApproval, gateAskPending });
   const base: TaskNode = {
     key: row.node_key,
     title: row.title,
-    status: row.status as TaskNodeStatus,
-    waitingFor: row.status === "waiting" ? ((row.waiting_for ?? "pm") as TaskNodeWaitingFor) : null,
+    status,
+    waitingFor,
     skipped: row.status === "done" && row.skipped === 1,
     sortOrder: row.sort_order,
     activeWorkerId: row.active_worker_id,
@@ -97,6 +95,7 @@ export function toTaskNode(
     ...(gateAskPending !== undefined ? { gateAskPending } : {}),
     ...(waitingDecision && checkpointPending ? { gateCheckpoint: true } : {}),
     userBlocker,
+    ...(sandboxApproval !== undefined ? { sandboxApproval } : {}),
     decision: decisionOf(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

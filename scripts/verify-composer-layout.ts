@@ -157,7 +157,8 @@ export async function verifyComposerLayout(loginUrl: string, conversationId: num
     for (const line of lines) console.log(line);
     await verifyComposerInteractions(page, "WebKit", outDir);
     await page.close();
-    for (const scale of ["sm", "md"] as const) {
+    // Only Compact keeps body text under 16px, where the touch textarea's 16px font floor applies.
+    for (const scale of ["sm"] as const) {
       const touchPage = await browser.newPage({ viewport: { width: 1280, height: 800 }, hasTouch: true, reducedMotion: "reduce" });
       await openComposer(touchPage, loginUrl, conversationId, errors);
       await verifyTouchSoftWrap(touchPage, scale, outDir);

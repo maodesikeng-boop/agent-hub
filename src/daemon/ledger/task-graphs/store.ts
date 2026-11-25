@@ -1,3 +1,4 @@
+import { pendingSandboxCardsForSteps, writeStepNoOuterSandbox } from "../sandbox-approvals.ts";
 import { askOf, type AskMeta, type MessageId, type PmId, type ProjectId, type TaskEdge, type TaskGraph, type TaskGraphId, type TaskGraphStatus, type TaskNode, type TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
@@ -52,7 +53,8 @@ export function pendingStepAskCounts(db: Db): ReadonlyMap<PmId, number> {
        FROM task_graph_steps n JOIN task_graphs g ON g.id = n.graph_id
       WHERE g.status = 'active' AND (
         n.gate_ask_message_id IS NOT NULL OR (n.status = 'waiting' AND n.waiting_for = 'user'
-          AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id))
+          AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
+          AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.step_id = n.id AND a.status = 'pending'))
       )`,
   );
   const ids = pendingStepAskIds(db, rows);
@@ -117,6 +119,18 @@ const graphOfRow = (row: TaskGraphDbRow, nodes: TaskNode[], edges: TaskEdge[], g
   completedAt: row.completed_at,
 });
 
+export function hydrateNodes(g: TaskGraphCtx, rows: readonly TaskNodeDbRow[], includeDetails: boolean): TaskNode[] {
+  const blockers = blockersOf(g, rows);
+  const waitingIds = rows.filter((n) => n.status === "waiting" && n.waiting_for === "user" && n.active_worker_id !== null).map((n) => n.id);
+  const approvals = pendingSandboxCardsForSteps(g.db, waitingIds);
+  const pendingAsks = pendingStepAskIds(g.db, rows);
+  return rows.map((n) => toTaskNode(n, includeDetails, {
+    userBlocker: blockers.get(n.id),
+    sandboxApproval: approvals.get(n.id),
+    ...(n.gate_ask_message_id !== null ? { gateAskPending: pendingAsks.has(n.gate_ask_message_id) } : {}),
+  }));
+}
+
 export function loadGraph(g: TaskGraphCtx, id: TaskGraphId, includeDetails = true): TaskGraph | null {
   const row = getGraphRow(g.db, id);
   if (row === undefined) return null;
@@ -125,11 +139,9 @@ export function loadGraph(g: TaskGraphCtx, id: TaskGraphId, includeDetails = tru
     "SELECT * FROM task_graph_edges WHERE graph_id = ? ORDER BY from_key ASC, to_key ASC",
     id,
   );
-  const blockers = blockersOf(g, nodeRows);
-  const pendingAsks = pendingStepAskIds(g.db, nodeRows);
   return graphOfRow(
     row,
-    nodeRows.map((n) => toTaskNode(n, includeDetails, blockers, pendingAsks)),
+    hydrateNodes(g, nodeRows, includeDetails),
     edgeRows.map((e) => ({ fromKey: e.from_key, toKey: e.to_key })),
     includeDetails ? { goal: row.goal } : undefined,
   );
@@ -145,10 +157,9 @@ export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[], 
       ORDER BY n.graph_id ASC, n.sort_order ASC, n.id ASC`,
     idsJson,
   );
-  const blockers = blockersOf(g, nodeRows);
-  const pendingAsks = pendingStepAskIds(g.db, nodeRows);
-  for (const n of nodeRows) {
-    const node = toTaskNode(n, false, blockers, pendingAsks);
+  const nodes = hydrateNodes(g, nodeRows, false);
+  for (const [i, node] of nodes.entries()) {
+    const n = nodeRows[i]!;
     byId.get(n.graph_id)?.nodes.push(includeAgentSettings ? { ...node, vendor: n.vendor, model: n.model, effort: n.effort } : node);
   }
   const edgeRows = g.db.all<TaskEdgeDbRow>(
@@ -230,6 +241,7 @@ export function insertStepRow(db: Db, graphId: TaskGraphId, n: NewStep, sortOrde
     t,
   ).lastInsertRowid;
   writeWorkerCapabilities(db, { table: "task_graph_step_capabilities", stepId }, n.capabilities);
+  if (n.noOuterSandbox) writeStepNoOuterSandbox(db, stepId, true);
 }
 
 export const insertEdgeRow = (db: Db, graphId: TaskGraphId, e: TaskEdge): void => {

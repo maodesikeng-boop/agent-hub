@@ -9,6 +9,7 @@ import {
 } from "./limits.ts";
 import { deliverablesOf, type Deliverable } from "./deliverables.ts";
 import type { ReviewTarget, StoredReviewVerdict } from "./review.ts";
+import type { SandboxApprovalId, SandboxApprovalRef } from "./sandbox-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
@@ -271,7 +272,7 @@ export type SystemMessageMeta =
   | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }
   | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
-  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number }
+  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number; deadlineAt?: number }
   | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean };
 
 export interface GateRef {
@@ -291,6 +292,7 @@ export type AskMeta = {
   recommended?: string;
   gateRef?: GateRef;
   blockerRef?: BlockerRef;
+  sandboxApprovalRef?: SandboxApprovalRef;
   chosenOption?: string;
   answerNote?: string;
   closed?: true;
@@ -330,6 +332,11 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     rawBlockerRef !== null && typeof rawBlockerRef === "object" && typeof rawBlockerRef.blockerId === "number"
       ? { blockerId: rawBlockerRef.blockerId }
       : undefined;
+  const sandbox = message.meta.sandboxApprovalRef;
+  const sandboxApprovalRef = sandbox !== null && typeof sandbox === "object" &&
+    "approvalId" in sandbox && typeof sandbox.approvalId === "number" && "workerId" in sandbox && typeof sandbox.workerId === "number"
+    ? { approvalId: sandbox.approvalId, workerId: sandbox.workerId }
+    : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
   const answerNote = typeof message.meta.answerNote === "string" && message.meta.answerNote !== "" ? message.meta.answerNote : undefined;
   const deliverables = deliverablesOf(message.meta.deliverables);
@@ -340,6 +347,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(recommended !== undefined ? { recommended } : {}),
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(blockerRef !== undefined ? { blockerRef } : {}),
+    ...(sandboxApprovalRef !== undefined ? { sandboxApprovalRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
     ...(answerNote !== undefined ? { answerNote } : {}),
     ...(message.meta.closed === true ? { closed: true } : {}),
@@ -427,7 +435,7 @@ export function extractAskCard(
   message: Pick<Message, "sender" | "meta" | "text">,
 ): ExtractedAskCard | null {
   const ask = askOf(message);
-  if (ask === null || ask.blockerRef !== undefined) return null;
+  if (ask === null || ask.blockerRef !== undefined || ask.sandboxApprovalRef !== undefined) return null;
   const answered = ask.answered === true;
   const extras = {
     ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
@@ -725,7 +733,7 @@ export function taskNodeStateFromLegacy(status: string): TaskNodeState {
 }
 
 export function taskNodeStatusText(
-  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker">,
+  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker" | "sandboxApproval">,
   viewer: "pm" | "user",
 ): string {
   switch (node.status) {
@@ -734,6 +742,7 @@ export function taskNodeStatusText(
     case "running":
       return "在干";
     case "waiting":
+      if (node.sandboxApproval != null) return viewer === "user" ? "等你确认 Worker 沙箱" : "等用户确认 Worker 沙箱";
       if (isTaskNodeUserBlocked(node)) return viewer === "user" ? "等你动手" : "等用户动手";
       if (node.waitingFor === "user") return viewer === "user" ? "等你拍板" : "等用户拍板";
       return viewer === "user" ? "等项目经理" : "等你处理";
@@ -750,8 +759,12 @@ export function isTaskNodeUserBlocked(node: Pick<TaskNode, "status" | "waitingFo
   return isTaskNodeWaitingUser(node) && node.userBlocker != null;
 }
 
-export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker" | "gateAskPending">): boolean {
-  return node.gateAskPending ?? (isTaskNodeWaitingUser(node) && node.userBlocker == null);
+export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker" | "gateAskPending" | "sandboxApproval">): boolean {
+  return node.sandboxApproval == null && (node.gateAskPending ?? (isTaskNodeWaitingUser(node) && node.userBlocker == null));
+}
+
+export function isTaskNodeAwaitingUserAction(node: Parameters<typeof isTaskNodeWaitingDecision>[0]): boolean {
+  return node.sandboxApproval !== undefined || isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node);
 }
 
 export function isTaskNodeWaitingPm(node: Pick<TaskNode, "status" | "waitingFor">): boolean {
@@ -808,6 +821,7 @@ export interface TaskNode {
   gateAskPending?: boolean;
   gateCheckpoint?: boolean;
   userBlocker?: UserBlocker | null;
+  sandboxApproval?: { id: SandboxApprovalId; text: string };
   decision: TaskDecision | null;
   createdAt: number;
   updatedAt: number;

@@ -42,6 +42,7 @@ export type Options = {
   readonly?: boolean;
   caps?: string;
   allow?: string[];
+  "no-outer-sandbox"?: boolean;
   "no-worktree"?: boolean;
   node?: string;
   graph?: string;
@@ -106,6 +107,7 @@ export const HUB_ARG_OPTIONS = {
   readonly: { type: "boolean" },
   caps: { type: "string" },
   allow: { type: "string", multiple: true },
+  "no-outer-sandbox": { type: "boolean" },
   "no-worktree": { type: "boolean" },
   node: { type: "string" },
   graph: { type: "string" },

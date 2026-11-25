@@ -54,7 +54,7 @@ describe("史莱姆与总助", () => {
     expect(avatarArt(container)).not.toEqual(piece);
   });
 
-  it.each<ProjectListLayout>(["column", "strip", "page"])("%s 左栏列表与 AppRail 保持紧凑头像框与 slot 按钮样式（窄条用 36px 头像，单行列表用项目经理颜色的圆角方块）", (layout) => {
+  it.each<ProjectListLayout>(["column", "page"])("%s 左栏列表与 AppRail 保持紧凑头像框与 slot 按钮样式（单行列表用项目经理颜色的圆角方块）", (layout) => {
     const entries = [
       { id: 1, name: "Juniper", lastMessage: makeMessage({ id: 10, text: "One update" }), lastAt: 1 },
       { id: 2, name: "Fern", lastMessage: null, lastAt: 0 },
@@ -83,6 +83,8 @@ describe("史莱姆与总助", () => {
             waiting={new Set()}
             asking={new Set()}
             readOnly={false}
+            query=""
+            onQueryChange={vi.fn()}
             onSelect={vi.fn()}
             onNewPm={vi.fn()}
             onTogglePin={vi.fn()}
@@ -93,14 +95,9 @@ describe("史莱姆与总助", () => {
     );
     expect(screen.getByRole("button", { name: "Router (2 waiting)" }).querySelector('[data-slot="router-avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
     for (const name of ["Juniper", "Fern"]) {
-      const row = screen.getByRole("button", { name: new RegExp(name) });
-      if (layout === "strip") {
-        expect(row.querySelector('[data-slot="avatar"]')?.getAttribute("style")).toContain("width: 2.25rem");
-      } else {
-        const tile = row.querySelector(".avatar-tile");
-        expect(tile).toHaveAttribute("data-look", lookKey(look));
-        expect(tile).toHaveStyle({ backgroundColor: avatarTileFillOf(look.color) });
-      }
+      const tile = screen.getByRole("button", { name: new RegExp(name) }).querySelector(".avatar-tile");
+      expect(tile).toHaveAttribute("data-look", lookKey(look));
+      expect(tile).toHaveStyle({ backgroundColor: avatarTileFillOf(look.color) });
     }
     expect(screen.getByRole("button", { name: "New project manager" })).toHaveClass("btn-honey");
   });

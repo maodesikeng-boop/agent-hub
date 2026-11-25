@@ -22,7 +22,7 @@ import type { MessageDbRow } from "./rows.ts";
 import { clearStreaming, idle, toolRunning, toolStarted, working } from "./sessions.ts";
 import { isPathInsideOrEqual } from "../platform/index.ts";
 import { getAgentSession } from "../store/index.ts";
-import type { LedgerSessions } from "./sessions.ts";
+import type { LedgerSessions, LiveSession } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
 export type AskSettlement = { by: "answer"; chosenOption?: string; note?: string } | { by: "close" };
@@ -44,6 +44,11 @@ function resumesAfterShutdown(session: AgentSessionRow, message: Pick<MessageDbR
 }
 
 export type LedgerMessages = ReturnType<typeof createLedgerMessages>;
+
+function clearBackgroundTasks(live: LiveSession): void {
+  live.backgroundTasks = undefined;
+  live.backgroundTaskList = undefined;
+}
 
 export interface LedgerMessagesOptions {
   assertUserCanPost?: (conversationId: ConversationId) => void;
@@ -128,7 +133,9 @@ export function createLedgerMessages(
       to,
       id,
     );
-    p.changes.push({ type: "message.updated", data: { message: getMessage(id)! } });
+    const updated = getMessage(id)!;
+    p.changes.push({ type: "message.updated", data: { message: updated } });
+    return updated;
   };
 
   const insertAskMessage = (
@@ -139,6 +146,7 @@ export function createLedgerMessages(
     extra?: {
       gateRef?: GateRef;
       blockerRef?: BlockerRef;
+      sandboxApprovalRef?: AskMeta["sandboxApprovalRef"];
       recommended?: string;
       skipRouterBridge?: boolean;
       fileArgs?: { args: readonly HubFileArg[]; files: readonly SentFile[] };
@@ -152,6 +160,7 @@ export function createLedgerMessages(
       ...(extra?.recommended !== undefined ? { recommended: extra.recommended } : {}),
       ...(extra?.gateRef !== undefined ? { gateRef: extra.gateRef } : {}),
       ...(extra?.blockerRef !== undefined ? { blockerRef: extra.blockerRef } : {}),
+      ...(extra?.sandboxApprovalRef !== undefined ? { sandboxApprovalRef: extra.sandboxApprovalRef } : {}),
       ...(extra?.fileArgs !== undefined && extra.fileArgs.files.length > 0 ? { files: [...extra.fileArgs.files] } : {}),
     };
     let row = db.get<MessageDbRow>(
@@ -174,7 +183,7 @@ export function createLedgerMessages(
     }
     const message = toMessage(row);
     p.changes.push({ type: "message.created", data: { message } });
-    if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined) {
+    if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined && extra?.sandboxApprovalRef === undefined) {
       onIndependentAskCreated(p, session, message, askOptions);
     }
     return message;
@@ -265,8 +274,7 @@ export function createLedgerMessages(
       case "session.started":
         updateLive(p, sessionId, (l) => {
           if (l.activity === "stopping") idle(l);
-          l.backgroundTasks = undefined;
-          l.backgroundTaskList = undefined;
+          clearBackgroundTasks(l);
           clearStreaming(l);
         });
         return;
@@ -381,8 +389,7 @@ export function createLedgerMessages(
         }
         updateLive(p, sessionId, (l) => {
           idle(l);
-          l.backgroundTasks = undefined;
-          l.backgroundTaskList = undefined;
+          clearBackgroundTasks(l);
           l.rateLimitReported = false;
         });
         return;
@@ -577,7 +584,10 @@ export function createLedgerMessages(
   };
 
   const actionFailedIn = (p: Pending, action: AnyActionRow, error: string) => {
-    if (action.type === "session.send") transition(p, action.params.messageId, "failed", error, action.params.sessionId);
+    if (action.type !== "session.send") return null;
+    const { messageId, sessionId } = action.params;
+    const failed = transition(p, messageId, "failed", error, sessionId);
+    return failed?.sender === "pm" ? getAgentSession(db, sessionId) : null;
   };
 
   const stopMessage = (messageId: MessageId, sessionId?: SessionId) => {
@@ -585,6 +595,10 @@ export function createLedgerMessages(
       const status = getMessage(messageId)?.status;
       if (status === "delivered" || status === "processing") transition(p, messageId, "stopped", null, sessionId);
     });
+  };
+
+  const retireStaleSystemMessage = (id: MessageId): void => {
+    if (getMessage(id)?.sender === "system") write((p) => transition(p, id, "stopped"));
   };
 
   const retryMessage = (messageId: MessageId): { messageId: MessageId } => {
@@ -629,6 +643,7 @@ export function createLedgerMessages(
     messagesAfter,
     actionFailedIn,
     stopMessage,
+    retireStaleSystemMessage,
     retryMessage,
   };
 }

@@ -1,8 +1,8 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { SettingsDialogSection } from "./components/SettingsDialog.tsx";
 import type { DeviceKey } from "./devices.ts";
 import { mobileBack, settingsParent } from "./mobile/back.ts";
-import type { Route, SettingsSection } from "./route.ts";
+import type { Route, SettingsRoute, SettingsSection } from "./route.ts";
 
 export interface DesktopSettingsTarget {
   open: boolean;
@@ -19,6 +19,23 @@ export function desktopSectionOf(section: SettingsSection, managed: boolean): Se
   return "security";
 }
 
+const ROUTE_SECTION_OF: Record<SettingsDialogSection, SettingsSection> = {
+  general: "scale",
+  providers: "providers",
+  capabilities: "capabilities",
+  resources: "resources",
+  computers: "computers",
+  security: "browsers",
+};
+
+export function dialogTargetOf(route: SettingsRoute, managed: boolean): DesktopSettingsTarget {
+  return route.section === undefined ? { open: true } : { open: true, section: desktopSectionOf(route.section, managed) };
+}
+
+function pageRouteOf({ section }: DesktopSettingsTarget): SettingsRoute {
+  return section === undefined ? { view: "settings" } : { view: "settings", section: ROUTE_SECTION_OF[section] };
+}
+
 interface SettingsNavOptions {
   autoSelect: boolean;
   managed: boolean;
@@ -33,6 +50,21 @@ export function useSettingsNav({ autoSelect, managed, currentKey, route, navigat
   const [desktop, setDesktop] = useState<DesktopSettingsTarget>({ open: false });
   const [mobileProviderDevice, setMobileProviderDevice] = useState<DeviceKey | undefined>(undefined);
   const onSettingsOpenChange = useCallback((open: boolean) => setDesktop({ open }), []);
+  const onSettingsSectionChange = useCallback(
+    (section: SettingsDialogSection) => setDesktop((current) => (current.open ? { ...current, section } : current)),
+    [],
+  );
+  // The one-column shell has no settings dialog: an open dialog becomes the settings page for its section.
+  useEffect(() => {
+    if (autoSelect || !desktop.open) return;
+    setDesktop({ open: false });
+    if (desktop.providerDevice !== undefined) setMobileProviderDevice(desktop.providerDevice);
+    navigate(pageRouteOf(desktop));
+  }, [autoSelect, desktop, navigate]);
+  // In the render that swaps shells, the new shell already shows the settings the old one had open, so they mount in one commit.
+  const settingsRoute = route?.view === "settings" ? route : null;
+  const dialog = autoSelect && !desktop.open && settingsRoute !== null ? dialogTargetOf(settingsRoute, managed) : desktop;
+  const page = settingsRoute ?? (!autoSelect && desktop.open ? pageRouteOf(desktop) : null);
   const openSettings = useCallback(() => {
     setMobileProviderDevice(currentKey);
     navigate({ view: "settings" });
@@ -60,5 +92,17 @@ export function useSettingsNav({ autoSelect, managed, currentKey, route, navigat
     if (currentRoute?.view === "settings") mobileBack(settingsParent(currentRoute), replace);
   }, [replace]);
   const defaultProviderDevice = desktop.providerDevice ?? mobileProviderDevice ?? currentKey;
-  return { desktop, setDesktop, onSettingsOpenChange, openSettings, openSettingsSection, openManageProviders, settingsBack, defaultProviderDevice };
+  return {
+    desktop,
+    dialog,
+    page,
+    setDesktop,
+    onSettingsOpenChange,
+    onSettingsSectionChange,
+    openSettings,
+    openSettingsSection,
+    openManageProviders,
+    settingsBack,
+    defaultProviderDevice,
+  };
 }

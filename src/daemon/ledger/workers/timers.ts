@@ -51,7 +51,7 @@ export const turnTimeoutOf = (w: WorkersCtx, workerId: WorkerId) =>
     workerId,
   ) ?? null;
 
-function insertMaxTimeNoticeIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, maxTimeMs: number, startedAt: number): void {
+function insertMaxTimeNoticeIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, maxTimeMs: number, deadlineAt: number): void {
   const pmSession = w.sessions.currentSession(worker.pm_conversation_id);
   if (pmSession === null) return;
   const t = w.now();
@@ -65,6 +65,7 @@ function insertMaxTimeNoticeIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, m
     workerId: worker.id,
     workerConversationId: worker.worker_conversation_id,
     maxTimeMs,
+    deadlineAt,
   };
   const row = w.db.get<MessageDbRow>(
     `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
@@ -75,7 +76,7 @@ function insertMaxTimeNoticeIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, m
     worker.id,
     text,
     JSON.stringify(meta),
-    `${systemMessageDedupeKey(worker.pm_conversation_id, meta)}:${startedAt}:${randomUUID()}`,
+    `${systemMessageDedupeKey(worker.pm_conversation_id, meta)}:${deadlineAt}:${randomUUID()}`,
     t,
     t,
   );
@@ -91,7 +92,7 @@ function onMaxTimeExceeded(
   workerConversationId: ConversationId,
   timer: ReturnType<typeof setTimeout>,
   maxTimeMs: number,
-  startedAt: number,
+  deadlineAt: number,
 ): void {
   const current = w.maxTimeTimers.get(workerConversationId);
   if (current?.timer !== timer) return;
@@ -105,7 +106,7 @@ function onMaxTimeExceeded(
         return;
       }
       if (turnTimeoutOf(w, worker.id)?.notified === 1) return;
-      insertMaxTimeNoticeIn(w, p, worker, maxTimeMs, startedAt);
+      insertMaxTimeNoticeIn(w, p, worker, maxTimeMs, deadlineAt);
     });
   } catch {
     // Writes fail during shutdown; do not retry, restart recovery re-arms timers from stored state.
@@ -116,7 +117,7 @@ function armTimer(w: WorkersCtx, worker: TimedWorker, maxTimeMs: number, deadlin
   stopTimer(w, worker.worker_conversation_id);
   const startedAt = deadline - maxTimeMs;
   const timer = setTimeout(() => {
-    onMaxTimeExceeded(w, worker.id, worker.worker_conversation_id, timer, maxTimeMs, startedAt);
+    onMaxTimeExceeded(w, worker.id, worker.worker_conversation_id, timer, maxTimeMs, deadline);
   }, Math.max(0, deadline - w.now()));
   timer.unref?.();
   w.maxTimeTimers.set(worker.worker_conversation_id, { timer, maxTimeMs, startedAt });

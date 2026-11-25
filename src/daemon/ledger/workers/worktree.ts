@@ -44,7 +44,7 @@ function refreshPendingReviewBranch(w: WorkersCtx, workerId: WorkerId, path: str
 
 export function getWorktreeTask(w: WorkersCtx, workerId: WorkerId): WorktreeTask | null {
   const worker = workerRow(w, workerId);
-  if (worker === null || worker.workspace !== "worktree") return null;
+  if (worker === null || worker.workspace !== "worktree" || w.sandboxApprovals.isPendingForWorker(workerId)) return null;
   const review = parseReviewTarget(worker.review_json);
   const plan = worker.status !== "ended" && (review === null || review.snapshot === null)
     ? w.options.taskGraphs?.workerGraphWorkspacePlan(workerId)
@@ -99,7 +99,7 @@ export function waitsForFirstTurn(w: WorkersCtx, sessionId: SessionId, messageId
   const workerId = w.db.get<{ worker_id: number | null }>("SELECT worker_id FROM agent_sessions WHERE id = ?", sessionId)?.worker_id ?? null;
   const worker = workerId === null ? null : workerRow(w, workerId);
   if (worker === null || worker.status === "ended") return false;
-  if (notStarted(worker)) return true;
+  if (notStarted(worker) || w.sandboxApprovals.isPendingForWorker(worker.id)) return true;
   if (worktreeBusyByOthers(w, worker)) return true;
   const task = w.db.get<{ id: number; status: string }>("SELECT id, status FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id));
   return task !== undefined && task.status === "queued" && task.id !== messageId;
@@ -129,7 +129,8 @@ export function onWorktreeCreated(w: WorkersCtx, workerId: WorkerId, baseCommit:
 export const recoverWorktrees = (w: WorkersCtx): WorkerId[] =>
   w.write((p) => {
     const ids = w.db
-      .all<{ id: number }>("SELECT id FROM workers WHERE status = 'open' AND workspace = 'worktree' AND base_commit IS NULL ORDER BY id")
+      .all<{ id: number }>(`SELECT w.id FROM workers w WHERE w.status = 'open' AND w.workspace = 'worktree' AND w.base_commit IS NULL
+        AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.worker_id = w.id AND a.status = 'pending') ORDER BY w.id`)
       .map((r) => r.id);
     for (const id of ids) w.enqueue(p, { type: "worktree.create", params: { workerId: id } });
     return ids;
@@ -185,6 +186,7 @@ function worktreeCreateFailedIn(w: WorkersCtx, p: Pending, workerId: WorkerId, e
   const t = w.now();
   w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
   recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
+  w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
   const session = workerSession(w, worker.id);
   w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
   cancelQueuedWorkerPmNoticesIn(w, p, worker);

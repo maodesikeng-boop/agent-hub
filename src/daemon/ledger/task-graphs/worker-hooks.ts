@@ -1,3 +1,4 @@
+import { readStepNoOuterSandbox, sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { taskNodeStatusText } from "../../../shared/domain.ts";
 import type { PmId, SessionId, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
 import type { WorkerHubStatus } from "../../../shared/hub.ts";
@@ -74,6 +75,8 @@ export function prepareWorkerBind(g: TaskGraphCtx, pmId: PmId, rawNodeKey: TaskN
   const launchDir = g.options.launchDir;
   return {
     graphId: graphRow.id,
+    stepId: node.id,
+    noOuterSandbox: readStepNoOuterSandbox(g.db, node.id),
     nodeKey,
     graphTitle: graphRow.title,
     graphGoal: graphRow.goal,
@@ -129,10 +132,11 @@ export function bindWorkerStartedIn(
   const nextIds = prevIds.includes(workerId) ? prevIds : [...prevIds, workerId];
   const t = g.now();
   const setAgent = agent !== undefined ? 1 : 0;
+  const sandboxPending = sandboxApprovalPendingForStep(g.db, node.id);
   g.db.run(
     `UPDATE task_graph_steps
-        SET status = 'running',
-            waiting_for = NULL,
+        SET status = ?,
+            waiting_for = ?,
             skipped = 0,
             active_worker_id = ?,
             worker_ids_json = ?,
@@ -141,6 +145,8 @@ export function bindWorkerStartedIn(
             effort = CASE WHEN ? = 1 THEN ? ELSE effort END,
             updated_at = ?
       WHERE id = ?`,
+    sandboxPending ? "waiting" : "running",
+    sandboxPending ? "user" : null,
     workerId,
     JSON.stringify(nextIds),
     agent?.vendor ?? null,

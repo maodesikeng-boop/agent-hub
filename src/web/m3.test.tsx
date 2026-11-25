@@ -1291,27 +1291,20 @@ describe("右栏工作面板（Active、Completed、Info 与 Worker 详情，推
     });
   });
 
-  it("窄窗 strip 档：右栏照样并排推开对话；项目列表收成 72px 垂直头像条，隐藏搜索框，居中列出头像", async () => {
+  it("窄窗：项目列表在原头像条宽度区间和窗口下限都保留搜索框、头像和名字，右栏盖住对话", async () => {
     const resizeShell = installShellSize();
-    const user = userEvent.setup();
     await boot(crowd());
-    resizeShell(1020);
-    expect(rail()!.closest("main")).toBeNull();
-    expect(rail()!.className.split(" ").some((c) => /(fixed|absolute)$/.test(c))).toBe(false);
-    const listRegion = screen.getByRole("region", { name: "This computer" });
-    expect(listRegion).toHaveClass("w-18", "shrink-0", "wood-rings", "shell-list");
-    expect(listRegion.parentElement).toHaveClass("shell-group");
-    expect(within(listRegion).queryByRole("searchbox", { name: "Search conversations" })).toBeNull();
-    const avatarButtons = within(listRegion).getAllByRole("button").filter((b) => /小林|老马/.test(b.getAttribute("aria-label") ?? ""));
-    expect(avatarButtons.length).toBeGreaterThan(0);
-    for (const btn of avatarButtons) {
-      expect(btn).toHaveClass("size-13");
-      expect(btn.className).not.toMatch(/border-2|rounded-(?!sm\b)/);
+    for (const width of [1141, 1100, 994, 860]) {
+      resizeShell(width);
+      const listRegion = screen.getByRole("region", { name: "This computer" });
+      expect(listRegion).not.toHaveClass("w-18");
+      expect(within(listRegion).getByRole("searchbox", { name: "Search conversations" })).toBeInTheDocument();
+      expect(within(listRegion).getByTitle("老马").closest(".project-row")?.querySelector(".avatar-tile")).not.toBeNull();
+      expect(rail()).toHaveAttribute("data-layout", "stack");
     }
-    await user.click(within(listRegion).getByRole("button", { name: /老马/ }));
-    expect(within(listRegion).getByRole("button", { name: /老马/ })).toHaveClass("row-selected");
-    expect(within(listRegion).getByRole("button", { name: "New project manager" })).toBeInTheDocument();
-    expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Settings" })).toBeInTheDocument();
+    resizeShell(1249);
+    expect(rail()).not.toHaveAttribute("data-layout", "stack");
+    expect(screen.getByRole("region", { name: "This computer" })).not.toHaveClass("w-18");
   });
 
   it("宽屏带完整项目列表和搜索框，没有抽屉切换按钮", async () => {

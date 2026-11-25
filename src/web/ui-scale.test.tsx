@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Avatar } from "./components/Avatar.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
 import { cn } from "./lib/utils.ts";
-import { DEFAULT_UI_SCALE, readUiScale, UI_SCALE_KEY } from "./ui-scale.ts";
+import { DEFAULT_UI_SCALE, readUiScale, UI_SCALE_KEY, UI_SCALE_ROOT_PX, UI_SCALES } from "./ui-scale.ts";
 
 import { defaultLookOf } from "../shared/slimes.ts";
 const notify = { permission: "granted" as const, enabled: false, setEnabled: async () => {} };
@@ -46,16 +46,18 @@ describe("Interface scale", () => {
     expect(localStorage.getItem(UI_SCALE_KEY)).toBe("sm");
   });
 
-  it("keeps every root size in styles.css as a percentage, and an unset scale renders as Default before the app starts", () => {
+  it("sets Default to 17.5px with the other scales 1.5px apart, as percentages in styles.css, and an unset scale renders as Default", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toMatch(/html,\s*html\[data-ui-scale="md"\]\s*\{\s*font-size:\s*100%/);
-    expect(css).toMatch(/html\[data-ui-scale="sm"\]\s*\{\s*font-size:\s*90\.625%/);
-    expect(css).toMatch(/html\[data-ui-scale="lg"\]\s*\{\s*font-size:\s*109\.375%/);
-    expect(css).toMatch(/html\[data-ui-scale="xl"\]\s*\{\s*font-size:\s*118\.75%/);
+    expect(UI_SCALES.map((scale) => UI_SCALE_ROOT_PX[scale])).toEqual([16, 17.5, 19, 20.5]);
+    expect(css).toMatch(/html,\s*html\[data-ui-scale="md"\]\s*\{/);
+    for (const scale of UI_SCALES) {
+      const percent = new RegExp(`html\\[data-ui-scale="${scale}"\\]\\s*\\{\\s*font-size:\\s*([0-9.]+)%`).exec(css)?.[1];
+      expect(Number(percent), scale).toBe((UI_SCALE_ROOT_PX[scale] / 16) * 100);
+    }
     for (const token of ["display", "title", "body", "minor"]) expect(css).toMatch(new RegExp(`--text-${token}: [0-9.]+rem;`));
   });
 
-  it("keeps four type sizes (12, 13.5, 15, 16 at Default) with no 14px label size and no old text-small name", () => {
+  it("keeps four type sizes (12, 13.5, 15, 16 at a 16px root) with no 14px label size and no old text-small name", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const rem = (token: string) => Number(new RegExp(`--text-${token}: ([0-9.]+)rem;`).exec(css)?.[1]) * 16;
     expect([rem("minor"), rem("body"), rem("title")]).toEqual([13.5, 15, 16]);

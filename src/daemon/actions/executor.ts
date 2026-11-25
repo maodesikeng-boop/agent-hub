@@ -28,7 +28,11 @@ interface ActionExecutorOptions {
 const DUE_SQL = `
 SELECT * FROM actions
 WHERE status = 'pending' AND next_attempt_at <= ?
-ORDER BY CASE type WHEN 'session.start' THEN 0 ELSE 1 END, next_attempt_at, id`;
+ORDER BY CASE
+  WHEN type = 'session.start' THEN 0
+  WHEN type = 'session.send' AND (CASE WHEN json_valid(params) THEN json_extract(params, '$.recovery') END) = 1 THEN 1
+  ELSE 2
+END, next_attempt_at, id`;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

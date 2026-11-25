@@ -121,6 +121,7 @@ export interface FakeScript {
   ignoreSigint?: boolean;
   /** 收到 SIGINT 不写 result 直接退出（测一轮中途被停止、驱动层还算它在忙时就退了）。 */
   sigintNoResult?: boolean;
+  cancelQueuedOnSigint?: boolean;
   /** 不管会话在不在，--session-id 一律报 “already in use”，--resume 一律报 “No conversation found”。 */
   rejectSessionArgs?: boolean;
   /** 一起来就起一个子进程（同 spawnChild 步骤；配合 noInit 测启动超时按进程组强制结束）。 */
@@ -832,6 +833,7 @@ function onLine(line: string): void {
 process.on("SIGINT", () => {
   log({ kind: "signal", pid: myPid, signal: "SIGINT" });
   if (script.ignoreSigint) return;
+  if (script.cancelQueuedOnSigint) for (const entry of inbox.splice(0)) emitLifecycle(entry.uuid, "cancelled");
   if (busy && !script.sigintNoResult) {
     turnSeq++;
     interruptedMarker();

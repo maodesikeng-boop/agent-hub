@@ -26,6 +26,8 @@ export interface StepRow {
 const MAX_STORED_CHARS = 300;
 const TURN_FAILED_REASON = "这一轮出错了";
 const RESTART_INTERRUPTED_REASON = "进程重启，这一轮被打断了";
+/** Stored as the turn_ended summary when daemon shutdown interrupted the turn; restart recovery looks for it. */
+export const SHUTDOWN_INTERRUPTED_REASON = "守护进程关闭打断了这一轮，重启后会重发";
 
 const clip = (text: string) => {
   const chars = [...text];
@@ -137,14 +139,14 @@ export function createLedgerSteps(ctx: LedgerContext) {
         return;
       case "turn.ended": {
         const outcome: TurnOutcome = event.interrupted ? "interrupted" : event.ok ? "ok" : "failed";
-        const reason = outcome === "failed" ? (event.error === undefined ? TURN_FAILED_REASON : turnFailureReason(event.error)) : null;
+        const reason = event.shutdown ? SHUTDOWN_INTERRUPTED_REASON : outcome === "failed" ? (event.error === undefined ? TURN_FAILED_REASON : turnFailureReason(event.error)) : null;
         endTurn(sessionId, outcome, reason, event.durationMs);
         return;
       }
       case "session.exited": {
         if (event.reason === "idle" || openTurn(sessionId) === null) return;
         const crashed = event.reason === "crash" || event.reason === "startup_failed";
-        endTurn(sessionId, crashed ? "failed" : "interrupted", crashed ? exitFailureReason(event) : null, null);
+        endTurn(sessionId, crashed ? "failed" : "interrupted", crashed ? exitFailureReason(event) : event.reason === "shutdown" ? SHUTDOWN_INTERRUPTED_REASON : null, null);
         return;
       }
       default:
@@ -152,8 +154,14 @@ export function createLedgerSteps(ctx: LedgerContext) {
     }
   };
 
+  const recordFailedStart = (session: AgentSessionRow, reason: string): void => {
+    if (session.role !== "worker") return;
+    ensureTurn(session.id);
+    endTurn(session.id, "failed", reason, null);
+  };
+
   const rows = (sessionId: SessionId): StepRow[] =>
     db.all<StepRow>("SELECT * FROM session_steps WHERE session_id = ? ORDER BY id DESC LIMIT ?", sessionId, SESSION_STEPS_KEEP).reverse();
 
-  return { afterDriverEvent, rows, openTurn, lastBoundary };
+  return { afterDriverEvent, recordFailedStart, rows, openTurn, lastBoundary };
 }

@@ -28,6 +28,7 @@ export type FeishuLedgerPort = Pick<
   | "snapshot"
   | "onChange"
   | "getMessage"
+  | "getSandboxApproval"
   | "getPersona"
   | "editPersona"
   | "getRouterSettings"

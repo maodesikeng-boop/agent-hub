@@ -96,6 +96,11 @@ export default defineVendor({
     userTriggers: ["/", "$"],
   },
   capabilities: {
+    builtInSandbox: {
+      platforms: ["darwin", "linux", "win32"],
+      computerUseCapabilities: ["mcp:cua_repl"],
+      computerUsePlugins: ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"],
+    },
     // Finished background commands do not start a new turn to wake the agent.
     backgroundWake: false,
     readonly: "driver",

@@ -1,5 +1,6 @@
 import {
   isTaskGraphReadyToFinish,
+  isTaskNodeAwaitingUserAction,
   isTaskNodeUserBlocked,
   isTaskNodeWaitingDecision,
   isTaskNodeWaitingPm,
@@ -35,7 +36,7 @@ function graphSummary(graph: TaskGraph): PmActiveGraphSummary {
     doneCount: graph.nodes.filter((n) => n.status === "done").length,
     runningCount: graph.nodes.filter((n) => n.status === "running").length,
     waitingPmCount: graph.nodes.filter(isTaskNodeWaitingPm).length,
-    waitingUserCount: graph.nodes.filter((n) => isTaskNodeWaitingDecision(n) || isTaskNodeUserBlocked(n)).length,
+    waitingUserCount: graph.nodes.filter(isTaskNodeAwaitingUserAction).length,
     readyToFinish: isTaskGraphReadyToFinish(graph),
   };
 }
@@ -45,6 +46,7 @@ function graphStatusLine(graph: TaskGraph): string {
   const runningKeys = keys((n) => n.status === "running");
   const waitingPmKeys = keys(isTaskNodeWaitingPm);
   const waitingDecisionKeys = keys(isTaskNodeWaitingDecision);
+  const sandboxApprovalKeys = keys((n) => n.sandboxApproval !== undefined);
   const userBlockedKeys = keys(isTaskNodeUserBlocked);
   const doneCount = graph.nodes.filter((n) => n.status === "done").length;
   const tags: string[] = [`进度 ${doneCount}/${graph.nodes.length}`];
@@ -52,6 +54,7 @@ function graphStatusLine(graph: TaskGraph): string {
   if (runningKeys.length > 0) tags.push(`在干：${runningKeys.join("、")}`);
   if (waitingPmKeys.length > 0) tags.push(`等你处理：${waitingPmKeys.join("、")}`);
   if (waitingDecisionKeys.length > 0) tags.push(`等用户拍板：${waitingDecisionKeys.join("、")}`);
+  if (sandboxApprovalKeys.length > 0) tags.push(`等用户确认 Worker 沙箱：${sandboxApprovalKeys.join("、")}`);
   if (userBlockedKeys.length > 0) tags.push(`等用户动手（已挂卡，处理完自动接着派）：${userBlockedKeys.join("、")}`);
   return `- #${graph.id}「${graph.title}」（${tags.join("；")}）`;
 }

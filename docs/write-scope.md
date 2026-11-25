@@ -2,7 +2,7 @@
 
 > Snapshot: 2026-11-20 (commit `e8ed3389`)
 
-Every Worker runs inside a native OS sandbox that restricts writes inside protected roots and restricts reads across Bellwood's data directory (`~/.agent-hub` by default). Project Managers run unsandboxed (`workerWriteScope` returns `null` when `role !== "worker"`).
+Ordinary Workers run inside a native OS sandbox that restricts writes inside protected roots and restricts reads across Bellwood's data directory (`~/.agent-hub` by default). On macOS, an explicitly mounted Computer Use capability can [request a user-approved exception to the outer sandbox](worker-no-outer-sandbox-design.md). Project Managers run unsandboxed (`workerWriteScope` returns `null` when `role !== "worker"`).
 
 - **Vendor-neutral scope definition**: `src/shared/write-scope.ts` builds `WriteScope` (`dataDir`, `protectedRoots`, `writableDirs`, and `readScope`) and attaches it to `LaunchFiles.writeScope`.
 - **OS enforcement**: `src/daemon/driver/write-scope.ts` (`WRITE_SCOPE_ENFORCERS` and `spawnInWriteScope`) wraps Worker processes on macOS, Linux, and Windows.
@@ -38,12 +38,12 @@ Normal Workers, read-only Workers, and single-turn Router sessions all enforce l
 
 ## macOS: `sandbox-exec` (`seatbelt`)
 
-Normal Workers across all eight vendors and outer-sandboxed read-only Workers run inside `/usr/bin/sandbox-exec`. Because macOS forbids nested `sandbox-exec` calls (`sandbox_apply: Operation not permitted`, exit code 71), wrapped processes disable each vendor CLI's built-in sandbox:
+Ordinary Workers across all eight vendors and read-only Workers that use Apple’s outer sandbox run inside `/usr/bin/sandbox-exec`. Because macOS forbids nested `sandbox-exec` calls (`sandbox_apply: Operation not permitted`, exit code 71), wrapped processes disable each vendor CLI's built-in sandbox:
 
 | Vendor | Built-in sandbox | How Bellwood disables nesting |
 | --- | --- | --- |
 | `claude` | `sandbox.enabled` in user or project settings | Passes `sandbox.enabled: false` via `--settings` (`buildSessionSettings`), overriding project and user settings. |
-| `codex` | Per-command `sandbox-exec` (`workspace-write` or `read-only`) | Normal Workers pass `sandboxPolicy: { type: "externalSandbox" }` on `turn/start`. Read-only Workers omit the outer wrapper and enforce boundaries through Codex's own permission profile. |
+| `codex` | Per-command `sandbox-exec` (`workspace-write` or `read-only`) | Ordinary Workers pass `sandboxPolicy: { type: "externalSandbox" }` on `turn/start`. Read-only Workers omit the outer wrapper and enforce boundaries through Codex's own permission profile. An approved Computer Use Worker omits the wrapper and uses Codex’s `workspaceWrite` policy. |
 | `agy` | Terminal sandbox (`--sandbox` or `enableTerminalSandbox: true`) | Passes `--settings {"enableTerminalSandbox":false}` (`AGY_SANDBOX_OFF_ARGS`). |
 | `deepseek` (`dsh`) | Local sandbox in built-in presets | Runs under `danger-full-access` inside Bellwood's outer OS sandbox. |
 | `pi`, `cursor`, `opencode`, and `kimi` | No nested `sandbox-exec` by default in headless RPC or ACP | Wrapped directly by Bellwood's outer OS sandbox. |
@@ -73,5 +73,5 @@ Windows enforces Worker isolation without administrator privileges or WSL 2 thro
 
 ## Fail-closed startup and known boundaries
 
-- **Fail closed when the sandbox is unavailable**: Whenever `!osSandboxAvailable()` (for example missing `bwrap` or AppArmor profile on Linux, or missing `fusa-win-helper` or non-ACL FAT/exFAT storage on Windows), both task dispatch and process spawn fail immediately with platform remediation instructions. There is no flag to run Workers without an OS sandbox.
+- **Fail closed when the sandbox is unavailable**: Whenever `!osSandboxAvailable()` (for example missing `bwrap` or AppArmor profile on Linux, or missing `fusa-win-helper` or non-ACL FAT/exFAT storage on Windows), both task dispatch and process spawn fail immediately with platform remediation instructions. On macOS, a Worker can request `--no-outer-sandbox` only with an explicitly mounted Computer Use capability. It remains paused until the user approves in the Web workbench. The vendor sandbox still applies, and it can read files across the disk, including Bellwood’s data directory and credentials. The approval expires when that Worker ends.
 - **Known OS boundaries**: Normal Workers retain network access and run under the current OS user outside `protectedRoots`. Same-user IPC services reachable outside masked paths, such as `launchctl` on macOS, an unguarded `tmux` socket in `/tmp` on Unix, or out-of-process COM, Task Scheduler, or WMI on Windows, remain outside the threat model, which targets accidental cross-branch writes, credential reads, and privilege drift rather than hostile kernel escapes.

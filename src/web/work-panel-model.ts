@@ -2,7 +2,7 @@ import {
   COMPLETED_WORK_PAGE_SIZE,
   askOf,
   isTaskNodeUserBlocked,
-  isTaskNodeWaitingDecision,
+  isTaskNodeAwaitingUserAction,
   type CompletedWorkItem,
   type CompletedWorkPage,
   type ConversationId,
@@ -151,15 +151,17 @@ export function stepTargetOf(
   node: Pick<TaskNode, "activeWorkerId" | "workerIds" | "gateAskMessageId" | "status" | "waitingFor"> & {
     gateAskPending?: boolean;
     userBlocker?: TaskNode["userBlocker"];
+    sandboxApproval?: TaskNode["sandboxApproval"];
     key?: TaskNode["key"];
   },
   workers: readonly WorkerEntry[],
   asks?: readonly Message[],
   graphId?: TaskGraphId,
 ): StepTarget {
-  if (isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node)) {
+  if (isTaskNodeAwaitingUserAction(node)) {
     const match = asks?.find((message) => {
       const meta = askOf(message);
+      if (node.sandboxApproval != null) return meta?.sandboxApprovalRef?.approvalId === node.sandboxApproval.id;
       if (isTaskNodeUserBlocked(node)) return meta?.blockerRef?.blockerId === node.userBlocker?.id;
       if (node.gateAskMessageId !== null) return message.id === node.gateAskMessageId;
       return graphId !== undefined && node.key !== undefined && meta?.gateRef?.graphId === graphId && meta.gateRef.nodeKey === node.key;

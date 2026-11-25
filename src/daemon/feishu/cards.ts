@@ -202,6 +202,7 @@ export function feishuCardStateOf(ask: AskMeta, byName: string): FeishuCardState
 }
 
 function askTitle(ask: AskMeta): { title: string; template: string } {
+  if (ask.sandboxApprovalRef !== undefined) return { title: "确认 Worker 沙箱", template: "orange" };
   if (ask.blockerRef !== undefined) return { title: "要你动手", template: "orange" };
   if (ask.gateRef?.checkpoint === true) return { title: "检查点", template: "purple" };
   return { title: "等你确定", template: "blue" };
@@ -270,9 +271,14 @@ function askCard(
   const title = titled(base.title, origin.pmName);
   const { template } = base;
   const ref = feishuCardRefOf(message, ask);
+  const displayState = state.kind === "answered" && ask.sandboxApprovalRef !== undefined
+    ? { ...state, chosenOption: state.chosenOption === "Approved" ? "批准" : "拒绝" }
+    : state;
   const rest = [
     ...attachmentElements(attachments),
-    ...(state.kind === "pending" ? pendingElements(ref, ask, feishuAskOptions(ask), ask.recommended, origin.deviceId) : settledElements(state)),
+    ...(displayState.kind !== "pending" ? settledElements(displayState) : ask.sandboxApprovalRef !== undefined
+      ? [markdown("请在 Bellwood 工作台确认或拒绝。")]
+      : pendingElements(ref, ask, feishuAskOptions(ask), ask.recommended, origin.deviceId)),
     ...extra,
   ];
   return fitBody(message.text, (body) => card({ title, template, summary: message.text, elements: [markdown(body), ...rest] }));

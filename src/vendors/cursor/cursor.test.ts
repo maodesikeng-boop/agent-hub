@@ -104,6 +104,7 @@ describe("cursor spec 与 paths 声明边界", () => {
     expect(cursorSpec.models.flags).toBeUndefined();
     // 不开 explicitDefaultModel：没选模型时驱动自己显式设 Auto，不用名单里的默认
     expect(cursorSpec.capabilities).toEqual({
+      builtInSandbox: { platforms: ["darwin"], computerUseCapabilities: [] },
       backgroundWake: false,
       readonly: "os_sandbox",
       ownSandboxOffArgs: ["--sandbox", "disabled"],

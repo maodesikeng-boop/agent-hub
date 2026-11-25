@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { checklistLaunchArgs } from "../_common/checklist.ts";
 import codexSpec from "./spec.ts";
 import {
@@ -378,7 +379,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     this.assertRunning();
     this.assertNotEnded(st);
     // macOS sandboxes cannot nest; read-only codex relies on its own readOnly sandbox instead.
-    const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
+    const wrapScope = launchConfig.readonly || files.outerSandbox === "vendor_only" ? null : (files.writeScope ?? null);
     const exePath = this.#resolveCodexPath();
     const args = [...checklistLaunchArgs(codexSpec), ...buildCodexArgs(files.capabilities)];
     const baseSpawn: SpawnCommand = { command: exePath, args };
@@ -563,7 +564,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
         st.crashNote = true;
         this.forgetWritten(st, taken);
       }
-      const stopped = reason === "interrupt" || st.stopRequested;
+      const cause = untakenReleaseCause(reason, st.stopRequested);
       st.interruptRequestId = null;
       st.stopRequested = false;
       this.emit(st.id, {
@@ -575,7 +576,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.releaseUntaken(st, missed, stopped, at);
+      this.releaseUntaken(st, missed, cause, at);
     } finally {
       this.resolveInterrupt(st);
       resolveExited();

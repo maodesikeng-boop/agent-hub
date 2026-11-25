@@ -1,6 +1,6 @@
 # Baseline style brief
 
-Baseline screenshot: `docs/ui-polish/baseline/baseline.png` (`chat.normal@desktop`, `1440x900` desktop viewport at 2x device pixel ratio, default `Default` interface scale).
+Baseline screenshot: `docs/ui-polish/baseline/baseline.png` (`chat.normal@desktop`, `1440x900` desktop viewport at 2x device pixel ratio, at a 16px root, now the `Compact` interface scale).
 
 This brief defines rules `S1` through `S6` for visual evaluation in `pnpm ui:polish`. It restates `docs/ui-standard.md` sections 1 to 4; when the two disagree, the standard wins.
 
@@ -20,7 +20,7 @@ This brief defines rules `S1` through `S6` for visual evaluation in `pnpm ui:pol
 
 ## S2 Type scale
 
-Values below reflect the `Default` 16px root scale, the default (`Large` scales all `rem` tokens by `1.09375x`):
+Values below are at a 16px root, the `Compact` scale (`Default` scales all `rem` tokens by `1.09375x`):
 
 1. `16px` (`600`): Conversation header name, Info header name, and dialog titles (`text-title`).
 2. `15px`: Body copy and row titles outside a conversation (settings rows, form inputs), and PM names and chat on the phone (`text-body`).
