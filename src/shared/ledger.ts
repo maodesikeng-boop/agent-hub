@@ -53,6 +53,12 @@ import type { HubArgs, HubCommand, HubResult, HubVendorQuota, ProjectCard, Worke
 import type { CapabilitiesPatch, CapabilityPolicy, CapabilityScope, PmCapabilitiesStart, ScopeCapabilities, WorkerCapabilities } from "./pm-capabilities.ts";
 import type { PmLookSetting, SlimeLook } from "./slimes.ts";
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
+import type {
+  DecideSandboxApprovalRequest,
+  DecideSandboxApprovalResponse,
+  SandboxApprovalId,
+  SandboxApprovalRecord,
+} from "./sandbox-approval.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
@@ -179,6 +185,7 @@ export interface LaunchContext {
   project: ProjectCard | null;
   worker: WorkerRecord | null;
   workerCapabilities?: WorkerCapabilities;
+  outerSandboxApproval?: SandboxApprovalRecord | null;
   vendor?: AgentVendor;
 }
 
@@ -217,6 +224,7 @@ export type WorkspaceProbe =
   | { kind: "failed"; error: string };
 
 export interface HubCallContext {
+  capabilityInventory?: import("./pm-capabilities.ts").CapabilityInventory;
   workspace?: WorkspaceProbe;
   pr?: WorkerPrProbeResult;
   prError?: string | null;
@@ -278,7 +286,10 @@ export interface Ledger extends LedgerHandoverWork {
   workerTranscriptTarget(sessionId: SessionId, workerId: WorkerId): { vendor: string; vendorSessionId: string; cwd: string } | null;
   listWorktreeBranchTargets?(scope?: { pmId?: PmId; workerId?: WorkerId; graphId?: TaskGraphId }): Array<{ worktreePath: string; branch: string | null }>;
   syncWorktreeBranch?(worktreePath: string, branch: string): { updatedWorkerIds: WorkerId[]; updatedGraphIds: TaskGraphId[] };
-  isWorkerPmNoticeActionable?(messageId: MessageId): boolean;
+  /** Whether the business state behind a system message still holds, so it may be written to a driver. */
+  isSystemMessageCurrent?(messageId: MessageId): boolean;
+  /** Postcondition: a queued, delivered, or processing message becomes stopped; other statuses are left unchanged. */
+  retireStaleSystemMessage?(messageId: MessageId): void;
   reconcileWorktreeBranches?(scope: { graphId?: TaskGraphId; workerId?: WorkerId }): Promise<void> | null;
   reconcileWorkerGraph?(workerId: WorkerId): Promise<void> | null;
   reconcileHubBranches?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<void> | null;
@@ -339,6 +350,12 @@ export interface Ledger extends LedgerHandoverWork {
   answerAsk(askMessageId: MessageId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
   recheckUserBlocker(id: UserBlockerId): RecheckUserBlockerResponse;
   userBlockerVendor(id: UserBlockerId): AgentVendor | null;
+  /**
+   * Precondition: called only from authenticated human UI routes (never from agent-api); id names a pending approval for an open Worker.
+   * Postcondition: approve transitions status to approved and enqueues the deferred Worker launch; reject transitions to rejected, ends the Worker, and notifies the PM.
+   */
+  decideSandboxApproval?(id: SandboxApprovalId, input: DecideSandboxApprovalRequest): DecideSandboxApprovalResponse;
+  getSandboxApproval?(id: SandboxApprovalId): SandboxApprovalRecord | null;
   deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string };
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;

@@ -225,7 +225,7 @@ describe("换人接手同一步：重放 441", () => {
     expect(ledger.waitsForFirstTurn(w2Session, firstMessage(w2).id)).toBe(false);
   });
 
-  it("前任还在跑准备命令（base_commit 还是 null）就换人：不复用未就绪目录，新开独立 worktree，旧人收工；经 graph done 放行后再打回重派也会把仍 open 的前任自动收工", () => {
+  it("前任还在跑准备命令（base_commit 还是 null）就换人：不复用未就绪目录，新开独立 worktree，旧人收工；经 graph done 收工后可重派接手目录", () => {
     const graph = createGraph();
     const wPrep = start({ title: "准备阶段", task: "原始任务 P", node: "s1" });
     mkdirSync(wPrep.worktreePath!, { recursive: true });
@@ -235,16 +235,13 @@ describe("换人接手同一步：重放 441", () => {
     expect(wNext.worktreePath).toBe(workerWorktreePath(worktreesDir, projectId, wNext.id));
     expect(wNext.worktreePath).not.toBe(wPrep.worktreePath);
 
-    // wNext 建成目录后汇报“有问题”，PM 先用 graph.done 放行（清空了 active_worker_id，但 wNext 自身仍 open），再重派 w3
     worktreeReady(wNext);
     turn(wNext, firstMessage(wNext).id, ["pnpm lint"], report("有问题", "卡在一半"), "ok");
     hub("graph.done", { nodeKey: "s1", graphId: graph.id });
     expect(nodeOf(graph.id, "s1")).toMatchObject({ status: "done", activeWorkerId: null });
-    expect(workerRow(wNext.id).status).toBe("open");
+    expect(workerRow(wNext.id).status).toBe("ended");
 
     const w3 = hub("worker.start", { node: "s1" }, { workspace: repoProbe }).data.worker;
-    // 仍 open 的前任 wNext 已被自动收工，等其 session 结束后 w3 即可顺利开工，不会永久卡在 waitsForFirstTurn
-    expect(workerRow(wNext.id).status).toBe("ended");
     expect(w3.worktreePath).toBe(wNext.worktreePath);
     db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE id = ?", sessionIdOf(wNext.id));
     expect(ledger.waitsForFirstTurn(sessionIdOf(w3.id), firstMessage(w3).id)).toBe(false);

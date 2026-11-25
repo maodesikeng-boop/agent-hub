@@ -19,7 +19,7 @@ import {
   type PostRouterCommandTarget,
 } from "../../shared/index.ts";
 import { localClient, type HubClient } from "../client.ts";
-import { FleetDeviceScopes, FleetLooks, type DeviceScopeLookup } from "../device-scope.tsx";
+import { DeviceScopeOf, FleetDeviceScopes, FleetLooks, type DeviceScopeLookup } from "../device-scope.tsx";
 import type { ComposerSource, MenuItem } from "../composer-suggest.ts";
 import { submitDecision } from "../decision-actions.ts";
 import {
@@ -54,6 +54,7 @@ import { DraftComposer } from "./Composer.tsx";
 import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { RouterAvatar } from "./RouterAvatar.tsx";
+import { SandboxApprovalCard } from "./SandboxApprovalCard.tsx";
 import { RouterDecisionCard } from "./RouterDecisionCard.tsx";
 import { RouterModelPicker } from "./RouterModelPicker.tsx";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
@@ -66,8 +67,35 @@ const ROUTER_COMMAND_MUTATION_KEY = ["router-command"] as const;
 const CHIP_REMOVE_CLASS =
   "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 
+const NO_SANDBOX_CARDS: readonly ReactNode[] = [];
 const NO_PENDING_TURNS: readonly RouterTurnEntry[] = [];
 const DEFAULT_ROUTER_SETTINGS = defaultRouterSettings();
+
+function useFleetSandboxCards(devices: readonly DeviceView[], multiDevice: boolean): readonly ReactNode[] {
+  const inputs = devices.flatMap((device) => {
+    const cards = device.state.pendingSandboxCards;
+    return cards === undefined || cards.length === 0 ? [] : [{
+      key: device.key,
+      cards,
+      disabled: isReadOnly(device.status),
+      name: multiDevice || device.key !== LOCAL_DEVICE ? device.info.name : undefined,
+    }];
+  });
+  const cache = useRef<{ inputs: typeof inputs; cards: readonly ReactNode[] } | null>(null);
+  const prev = cache.current;
+  if (prev !== null && inputs.length === prev.inputs.length && inputs.every((input, i) => {
+    const old = prev.inputs[i];
+    return old?.key === input.key && old.cards === input.cards && old.disabled === input.disabled && old.name === input.name;
+  })) return prev.cards;
+
+  const cards = inputs.length === 0 ? NO_SANDBOX_CARDS : inputs.flatMap(({ key, cards, disabled, name }) => cards.map((card) => (
+    <DeviceScopeOf key={`${key}:${card.id}`} deviceKey={key}>
+      <SandboxApprovalCard approvalId={card.id} text={card.text} disabled={disabled} deviceName={name} />
+    </DeviceScopeOf>
+  )));
+  cache.current = { inputs, cards };
+  return cards;
+}
 
 interface RouterCommandVariables {
   clientId: string;
@@ -161,6 +189,7 @@ const ClosedRouterDraftCard = memo(function ClosedRouterDraftCard({
 
 const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   decisions,
+  sandboxCards,
   closedDraft,
   mobile,
   multiDevice,
@@ -174,6 +203,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   onSelectKey,
 }: {
   decisions: readonly FleetDecisionEntry[];
+  sandboxCards: readonly ReactNode[];
   closedDraft: ClosedRouterDraft | null;
   mobile: boolean;
   multiDevice: boolean;
@@ -189,7 +219,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   const [collapsed, setCollapsed] = useState(false);
   const [rowsExpanded, setRowsExpanded] = useState(false);
 
-  const hasContent = decisions.length > 0 || closedDraft !== null;
+  const hasContent = decisions.length > 0 || sandboxCards.length > 0 || closedDraft !== null;
   useEffect(() => {
     if (!hasContent) {
       setCollapsed(false);
@@ -235,7 +265,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
               />
               <span className="truncate">Needs You</span>
             </span>
-            <span className="shrink-0 font-normal text-muted-foreground tabular-nums">{decisions.length}</span>
+            <span className="shrink-0 font-normal text-muted-foreground tabular-nums">{decisions.length + sandboxCards.length}</span>
           </CollapsibleTrigger>
 
           <CollapsibleContent
@@ -245,6 +275,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
               mobile ? "max-h-[45dvh]" : "max-h-[50dvh]",
             )}
           >
+            {sandboxCards}
             {closedDraft !== null ? (
               <ClosedRouterDraftCard
                 closed={closedDraft}
@@ -574,6 +605,8 @@ export const RouterWorkbench = memo(function RouterWorkbench({
     handleDecisionSubmit,
   } = useRouterDecisions(view.decisions, clientForDevice);
 
+  const sandboxCards = useFleetSandboxCards(devices, view.multiDevice);
+
   const selectedTargetKey = useStore(draft.target);
 
   const stream = useMemo<FleetRouterStream>(() => {
@@ -835,6 +868,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
 
         <RouterNeedsYouTray
           decisions={visibleDecisions}
+          sandboxCards={sandboxCards}
           closedDraft={closedDraft}
           mobile={mobile}
           multiDevice={view.multiDevice}
@@ -852,7 +886,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
           stream={stream}
           selfId={resolvedSelfId}
           pendingTurns={pendingTurns}
-          hasDecisions={visibleDecisions.length > 0 || closedDraft !== null}
+          hasDecisions={visibleDecisions.length > 0 || sandboxCards.length > 0 || closedDraft !== null}
           clientForDevice={clientForDevice}
           storeForDevice={storeForDevice}
           onRetryUnsent={handleRetryUnsent}

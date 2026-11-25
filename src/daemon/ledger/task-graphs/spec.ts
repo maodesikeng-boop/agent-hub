@@ -284,6 +284,7 @@ export interface NewStep {
   effort: string | null;
   readonly: number;
   capabilities: WorkerCapabilities;
+  noOuterSandbox?: boolean;
   maxTimeMs: number | null;
   confirm: number;
   review: number;
@@ -317,6 +318,7 @@ export function normalizeNewStep(
     effort: agent.effort,
     readonly: n.readonly === true ? 1 : 0,
     capabilities: validateStepCapabilities(n.caps, n.allow),
+    noOuterSandbox: n.noOuterSandbox === true,
     maxTimeMs,
     confirm: n.confirm === true ? 1 : 0,
     review: n.review === true ? 1 : 0,
@@ -371,6 +373,7 @@ const createStepItemSchema = z.object({
   maxTime: z.union([z.string(), z.number()]).optional(),
   readonly: z.boolean().optional(),
   caps: z.string().optional(),
+  noOuterSandbox: z.boolean().optional(),
   allow: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
   review: z.boolean().optional(),
@@ -404,6 +407,7 @@ const patchUpdateItemSchema = z.object({
   maxTime: z.union([z.string(), z.number()]).nullable().optional(),
   readonly: z.boolean().optional(),
   caps: z.string().nullable().optional(),
+  noOuterSandbox: z.boolean().optional(),
   allow: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
   review: z.boolean().optional(),

@@ -1,3 +1,4 @@
+import { sandboxApprovalPending } from "../sandbox-approvals.ts";
 import { randomUUID } from "node:crypto";
 import { utf8Bytes, type ConversationId, type MessageId, type WorkerId } from "../../../shared/domain.ts";
 import { turnFailureReason, type DriverEvent } from "../../../shared/driver.ts";
@@ -69,6 +70,7 @@ export function assertWorkerOpenForUser(db: Db, conversationId: ConversationId):
   );
   if (worker === undefined) return;
   if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，不能再给它发消息`);
+  if (sandboxApprovalPending(db, worker.id)) throw fail("conflict", "Worker 还在等用户确认沙箱，不能发消息");
   if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
 }
 

@@ -552,14 +552,21 @@ describe("桌面右栏：App 接通工作面板任务图画布", () => {
 });
 
 describe("手机整页工作面板：同一份 ActiveTab", () => {
-  it("marks Work panel as needing attention when a running step still has a pending card", async () => {
+  it.each([
+    ["a running step still has a pending card", makeNode({ key: "gate", title: "Confirm", status: "running", gateAskMessageId: 99, gateAskPending: true })],
+    ["a step awaits sandbox approval after its gate closes", makeNode({
+      key: "inspect", title: "Inspect Calculator", status: "waiting", waitingFor: "user",
+      gateAskMessageId: 99, gateAskPending: false,
+      sandboxApproval: { id: 8, text: "Inspect Calculator in this run." },
+    })],
+  ] as const)("marks Work panel as needing attention when %s", async (_case, node) => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query.includes("coarse"),
       addEventListener() {},
       removeEventListener() {},
     }));
     const active = graph();
-    active.nodes = [makeNode({ key: "gate", title: "Confirm", status: "running", gateAskMessageId: 99, gateAskPending: true })];
+    active.nodes = [node];
     active.edges = [];
     await bootSingle(makeSnapshot({
       pms: [makePm({ id: 1 })],
@@ -570,7 +577,16 @@ describe("手机整页工作面板：同一份 ActiveTab", () => {
     const toggle = await screen.findByRole("button", { name: "Show work panel (needs you)" });
     fireEvent.click(toggle);
     const panel = await screen.findByRole("complementary", { name: "Work panel" });
-    expect(within(panel).getByRole("button", { name: /Confirm/ })).toBeInTheDocument();
+    const step = within(panel).getByRole("button", { name: `${node.title}, waiting on you` });
+    expect(step).toBeInTheDocument();
+    if (node.sandboxApproval !== undefined) {
+      fireEvent.click(step);
+      const dialog = await screen.findByRole("dialog", { name: active.title });
+      const card = within(dialog).getByRole("article", { name: "Worker sandbox approval" });
+      expect(card).toHaveTextContent(node.sandboxApproval.text);
+      expect(within(card).getByRole("button", { name: "Approve this run" })).toBeEnabled();
+      expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull();
+    }
   });
 
   it("手机打开整页 WorkPanel，绑图 Worker 不重复列出；点步骤关闭面板并进入 Worker", async () => {

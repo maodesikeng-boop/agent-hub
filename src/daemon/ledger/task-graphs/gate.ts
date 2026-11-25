@@ -1,3 +1,4 @@
+import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import type { DecideTaskNodeRequest, DecideTaskNodeResponse } from "../../../shared/api.ts";
 import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, askOf, taskNodeStatusText } from "../../../shared/domain.ts";
 import type { MessageId, PmId, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
@@ -45,6 +46,9 @@ function askGateOf(args: AskOnStepArgs): GateFields {
 function askTargetStep(g: TaskGraphCtx, graphRow: TaskGraphDbRow, nodeKey: TaskNodeKey): TaskNodeDbRow {
   const node = requireStepRow(g.db, graphRow.id, nodeKey);
   if (node.status === "done") throw fail("conflict", `步骤「${nodeKey}」已经完了，不能再挂拍板卡`);
+  if (sandboxApprovalPendingForStep(g.db, node.id)) {
+    throw fail("conflict", `步骤「${nodeKey}」在等用户确认 Worker 沙箱，不能另挂步骤拍板卡。要问别的事，用不带 --node 的 ${HUB_COMMAND} ask`);
+  }
   const blocker = blockersOf(g, [node]).get(node.id);
   if (blocker !== undefined) {
     throw fail(
@@ -153,7 +157,8 @@ function decideReplyText(nodeKey: TaskNodeKey, choice: string, graphId: TaskGrap
 }
 
 function clearStepAskWaitIn(g: TaskGraphCtx, node: TaskNodeDbRow): void {
-  const waitingFor = node.waiting_for === "user" && !isUserBlocked(g.db, node.id) ? "pm" : node.waiting_for;
+  const waitingFor = node.waiting_for === "user" && !isUserBlocked(g.db, node.id) &&
+    !sandboxApprovalPendingForStep(g.db, node.id) ? "pm" : node.waiting_for;
   const t = g.now();
   g.db.run("UPDATE task_graph_steps SET waiting_for = ?, artifact_json = ?, updated_at = ? WHERE id = ?",
     waitingFor, artifactWithoutCheckpoint(node), t, node.id);
@@ -285,6 +290,7 @@ export function decideNode(
     if (graphRow.status !== "active") throw fail("conflict", `任务图 #${graphId} 已结束（${graphRow.status}）`);
     if (node === undefined) throw fail("not_found", `任务图 #${graphId} 中没有节点「${nodeKey}」`);
     if (node.status === "done") throw fail("conflict", `步骤「${nodeKey}」已经完了`);
+    if (sandboxApprovalPendingForStep(g.db, node.id)) throw fail("conflict", "只能由用户在工作台确认 Worker 沙箱");
     const canDecideWithoutCard = node.gate_ask_message_id === null && node.status === "waiting" &&
       !isUserBlocked(g.db, node.id) && (node.waiting_for === "user" || node.active_worker_id === null);
     if (!canDecideWithoutCard && !hasPendingStepAsk(g, node)) {

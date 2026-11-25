@@ -72,6 +72,7 @@ export interface BaseBatch {
 }
 
 export interface BaseProc<TOutcome = StartupOutcome> {
+  outerSandbox?: import("../../shared/sandbox-approval.ts").WorkerOuterSandboxMode;
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;

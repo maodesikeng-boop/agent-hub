@@ -12,7 +12,8 @@ import type {
 } from "../../../shared/domain.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
-import type { Pending } from "../context.ts";
+import { fail, type Pending } from "../context.ts";
+import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { formatStepWaitingPmMessage } from "../task-graph-handoff.ts";
 import { stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
@@ -242,6 +243,7 @@ function settleStepIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, upsDone: bo
 }
 
 export function executeStepDecisionIn(g: TaskGraphCtx, p: Pending, graphRow: TaskGraphDbRow, node: TaskNodeDbRow, input: DecisionInput): DecisionResult {
+  if (sandboxApprovalPendingForStep(g.db, node.id)) throw fail("conflict", "只能由用户在工作台确认 Worker 沙箱");
   const t = g.now();
   const run: DecisionRun = { graphRow, node, input, t, dedupeId: input.clientId ?? `pm:${t}:${node.id}` };
   if (isStoredCheckpoint(node) && hasPendingStepAsk(g, node)) {

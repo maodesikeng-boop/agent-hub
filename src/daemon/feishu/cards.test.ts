@@ -13,6 +13,7 @@ import {
   FEISHU_STOP_ELEMENT_ID,
   FEISHU_STREAM_ELEMENT_ID,
   renderAskCard,
+  renderRouterAskCard,
   renderChatPolicyCard,
   renderMeshApprovalCard,
   renderReplyCard,
@@ -144,6 +145,15 @@ describe("renderAskCard", () => {
     const b = renderAskCard(message(13, "去登录", blocker), blocker, { kind: "pending" });
     expect(callbackButtons(b).map(textOf)).toEqual(["已处理"]);
     expect(valueOf(callbackButtons(b)[0]!)).toEqual({ kind: "blocker_done", card: { kind: "blocker", askMessageId: 13, blockerId: 7 } });
+  });
+
+  it("shows a sandbox approval as an informational card with no approval controls", () => {
+    const ask: AskMeta = { needsUser: true, sandboxApprovalRef: { approvalId: 4, workerId: 9 } };
+    const msg = message(13, "Worker #9 · Check Calculator", ask);
+    for (const card of [renderAskCard(msg, ask, { kind: "pending" }), renderRouterAskCard(msg, ask, { kind: "pending" }, null)]) {
+      expect(allText(card)).toContain("请在 Bellwood 工作台确认或拒绝");
+      expect(callbackButtons(card)).toHaveLength(0);
+    }
   });
 
   it("answered 时没有按钮，写明谁选了什么和补充说明；closed 时写明已关闭", () => {

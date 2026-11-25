@@ -2,7 +2,7 @@
 // 忙着也直接写进标准输入（带 uuid），用 command_lifecycle 对账；没有就照旧排在驱动层自己的队列里。假 claude 照真 claude 2.1.314 的行为回。
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CRASH_RECOVERY_NOTE, RELAUNCH_NOTE, RESEND_NOTE } from "../../shared/index.ts";
 import type { FakeScript, FakeTurn } from "../../../test/fake-claude/fake-claude.ts";
 import { makeHarness, realSleep, type Harness } from "./test-helpers.ts";
@@ -441,4 +441,24 @@ describe("不和别的机制搅在一起", () => {
     expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [2]]);
     expect(t.of("session.exited")).toEqual([expect.objectContaining({ reason: "idle", messageIds: [] })]);
   });
+});
+
+it.each(["cancelled event", "silent close"])("preserves an untaken Claude message during daemon shutdown (%s)", async (mode) => {
+  const t = harness([]);
+  writeFileSync(join(t.dir, "script.json"), JSON.stringify({
+    capabilities: CAPS, cancelQueuedOnSigint: mode === "cancelled event", sigintNoResult: mode === "silent close", turns: [toolTurn(t.dir)],
+  }));
+  const s = t.addSession();
+  await t.driver.send(s.id, user(1, "Start"));
+  await t.waitFor("agent.text");
+  await expect(t.driver.send(s.id, user(2, "Follow up"))).resolves.toEqual({ kind: "written", midTurn: true });
+  await vi.waitFor(() => expect(userLines(t)).toHaveLength(2), { timeout: 10_000 });
+  await t.driver.shutdown();
+  if (mode === "silent close") {
+    expect(t.of("session.exited")).toContainEqual(expect.objectContaining({ reason: "shutdown", messageIds: [1] }));
+  } else {
+    expect(t.of("turn.ended")).toContainEqual(expect.objectContaining({ shutdown: true, messageIds: [1] }));
+  }
+  expect(t.of("message.requeued")).toContainEqual(expect.objectContaining({ messageIds: [2] }));
+  expect(t.of("message.cancelled")).toEqual([]);
 });

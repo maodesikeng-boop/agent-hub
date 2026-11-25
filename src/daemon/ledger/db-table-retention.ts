@@ -1,4 +1,5 @@
 import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
+import { pruneSandboxApprovalsIn } from "./sandbox-approvals.ts";
 // Invariant: every table retention batch deletes at most maxRows rows in a single synchronous SQLite transaction and never deletes active-session state or user/PM text history.
 import type { SessionId } from "../../shared/domain.ts";
 import {
@@ -419,6 +420,10 @@ export function createDbTableRetention(ctx: LedgerContext): DbTableRetention {
       (rem) => purgeTerminalActionsBatch(nowMs, rem),
       (rem) => purgeHubCallsBatch(nowMs, rem),
       (rem) => purgeHandoversBatch(nowMs, rem),
+      (rem) => write(() => {
+        const rows = pruneSandboxApprovalsIn(db, nowMs, rem);
+        return { rows, more: rows >= rem };
+      }),
       (rem) => prunePersonaChangesBatch(rem),
       (rem) => write(() => trimOversizedEndedWorkerStepsIn(db, rem)),
     ];

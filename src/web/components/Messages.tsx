@@ -41,6 +41,7 @@ import { TurnProgress } from "./TurnProgress.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { SandboxApprovalCard } from "./SandboxApprovalCard.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { WorkerReportText } from "./WorkerReportText.tsx";
 import { leanReportOf } from "../worker-report-view.ts";
@@ -142,7 +143,16 @@ export const AgentText = memo(function AgentText({
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
     >
-      {blocker?.blockerRef !== undefined ? (
+      {blocker?.sandboxApprovalRef !== undefined ? (
+        <SandboxApprovalCard
+          approvalId={blocker.sandboxApprovalRef.approvalId}
+          text={message.text}
+          answered={blocker.answered === true}
+          chosenOption={blocker.chosenOption}
+          closed={blocker.closed === true}
+          className="w-full max-w-[min(100%,36rem)]"
+        />
+      ) : blocker?.blockerRef !== undefined ? (
         <UserBlockerCard
           blockerId={blocker.blockerRef.blockerId}
           text={message.text}

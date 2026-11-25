@@ -20,6 +20,7 @@ interface FakePiTurnScript {
   tools?: FakePiToolCall[];
   holdFile?: string;
   waitForAbort?: boolean;
+  abortOnSigint?: boolean;
   ignoreAbort?: boolean;
   blockingUiMethod?: "select" | "confirm" | "input" | "editor";
   autoRetry?: { attempt: number; maxAttempts: number; delayMs: number; errorMessage: string };
@@ -124,7 +125,8 @@ if (typeof script.exitBeforeReadyCode === "number") {
 
 process.on("SIGINT", () => {
   appendLog({ kind: "signal", signal: "SIGINT" });
-  process.exit(0);
+  if (currentTurn?.turnScript.abortOnSigint) abortCurrentTurn();
+  process.stdout.write("", () => process.exit(0));
 });
 
 function argValue(flag) {

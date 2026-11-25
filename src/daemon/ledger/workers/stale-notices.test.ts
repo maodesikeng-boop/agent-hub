@@ -76,14 +76,15 @@ describe("PM notices from superseded Workers", () => {
     sessions.update(f.pm.sessionId, { rateLimit: { status: "rejected", resetsAt: f.now() / 1000 + 300, windows: {} } });
     const { deliver, send } = deliverThrough();
     expect(await deliver(failure.id)).toMatchObject({ kind: "later", reason: "rate_limited" });
-    expect(await deliver(timeout.id)).toMatchObject({ kind: "later", reason: "rate_limited" });
+    expect(await deliver(timeout.id)).toEqual({ kind: "done" });
+    expect(f.ledger.getMessage(timeout.id)?.status).toBe("stopped");
 
     const replacement = start();
     expect(replacement.id).not.toBe(old.id);
     expect(node()).toMatchObject({ status: "running", activeWorkerId: replacement.id });
     for (const { id } of [failure, timeout]) {
       expect(f.ledger.getMessage(id)?.status).toBe("stopped");
-      expect(f.ledger.isWorkerPmNoticeActionable?.(id)).toBe(false);
+      expect(f.ledger.isSystemMessageCurrent?.(id)).toBe(false);
     }
     f.advance(301_000);
     expect(await deliver(failure.id)).toEqual({ kind: "done" });
@@ -148,7 +149,7 @@ describe("PM notices from superseded Workers", () => {
     const { start, node } = startGraph();
     const worker = start();
     const { timeout, failure } = failWithTimeout(worker.id);
-    expect(f.ledger.isWorkerPmNoticeActionable?.(failure.id)).toBe(true);
+    expect(f.ledger.isSystemMessageCurrent?.(failure.id)).toBe(true);
     f.hub("worker.send", { workerId: worker.id, text: "Quota recovered; continue." });
     expect(node()).toMatchObject({ status: "running", activeWorkerId: worker.id });
     expect(f.ledger.getMessage(timeout.id)?.status).toBe("stopped");
@@ -168,12 +169,12 @@ describe("PM notices from superseded Workers", () => {
     const report = notices(worker.id).find((notice) => notice.event === "report")!;
     expect(report.status).toBe("queued");
     expect(f.hub("worker.show", { workerId: worker.id }).data.worker.status).toBe("ended");
-    expect(f.ledger.isWorkerPmNoticeActionable?.(report.id)).toBe(true);
+    expect(f.ledger.isSystemMessageCurrent?.(report.id)).toBe(true);
     const { deliver, send } = deliverThrough();
     expect(await deliver(report.id)).toEqual({ kind: "done" });
     expect(send).toHaveBeenCalledWith(f.pm.sessionId, expect.objectContaining({ text: expect.stringContaining("Confirm rollout date?") }));
     start();
-    expect(f.ledger.isWorkerPmNoticeActionable?.(report.id)).toBe(false);
+    expect(f.ledger.isSystemMessageCurrent?.(report.id)).toBe(false);
     send.mockClear();
     await deliver(report.id);
     expect(send).not.toHaveBeenCalled();
@@ -189,9 +190,9 @@ describe("PM notices from superseded Workers", () => {
     });
     f.end(worker.id);
     const report = notices(worker.id).find((notice) => notice.event === "report")!;
-    expect(f.ledger.isWorkerPmNoticeActionable?.(report.id)).toBe(true);
+    expect(f.ledger.isSystemMessageCurrent?.(report.id)).toBe(true);
     f.hub("graph.finish", { graphId, summary: "Delivered the fix" });
-    expect(f.ledger.isWorkerPmNoticeActionable?.(report.id)).toBe(false);
+    expect(f.ledger.isSystemMessageCurrent?.(report.id)).toBe(false);
     const { deliver, send } = deliverThrough();
     await deliver(report.id);
     expect(send).not.toHaveBeenCalled();
@@ -206,10 +207,10 @@ describe("PM notices from superseded Workers", () => {
     f.ledger.onActionFailed(action, "Branch already exists");
     const failure = notices(worker.id).find((notice) => notice.event === "worktree_failed")!;
     expect(f.hub("worker.show", { workerId: worker.id }).data.worker.status).toBe("ended");
-    expect(f.ledger.isWorkerPmNoticeActionable?.(failure.id)).toBe(true);
+    expect(f.ledger.isSystemMessageCurrent?.(failure.id)).toBe(true);
     const replacement = f.hub("worker.start", { graphId, node: "fix", noWorktree: true }).data.worker;
     expect(f.ledger.getMessage(failure.id)?.status).toBe("stopped");
-    expect(f.ledger.isWorkerPmNoticeActionable?.(failure.id)).toBe(false);
+    expect(f.ledger.isSystemMessageCurrent?.(failure.id)).toBe(false);
     f.ledger.onActionFailed(action, "Late failure callback");
     expect(notices(worker.id).filter(({ event }) => event === "worktree_failed")).toHaveLength(1);
     expect(f.hub("graph.show", { graphId }).data.graph.nodes[0]).toMatchObject({ status: "running", activeWorkerId: replacement.id });
@@ -231,6 +232,6 @@ describe("PM notices from superseded Workers", () => {
     f.hub("worker.end", { workerId: first.id });
     expect(f.ledger.getMessage(delivered.id)?.status).toBe("delivered");
     expect(f.ledger.getMessage(unrelated.id)?.status).toBe("queued");
-    expect(f.ledger.isWorkerPmNoticeActionable?.(unrelated.id)).toBe(true);
+    expect(f.ledger.isSystemMessageCurrent?.(unrelated.id)).toBe(true);
   });
 });

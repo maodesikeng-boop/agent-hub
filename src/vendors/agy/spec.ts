@@ -121,6 +121,10 @@ export default defineVendor({
     readByPath: { read_file: { ok: /^\d+ lines?, \d+ bytes?$/u, fromStart: { StartLine: 1, ByteOffset: 0 } } },
   },
   capabilities: {
+    builtInSandbox: {
+      platforms: ["darwin"],
+      computerUseCapabilities: [],
+    },
     // Finished background commands do not wake the agent, and results are lost once the idle process exits.
     backgroundWake: false,
     readonly: "os_sandbox",

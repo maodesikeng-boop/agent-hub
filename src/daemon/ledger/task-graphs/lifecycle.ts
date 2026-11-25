@@ -22,11 +22,12 @@ import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { RouterReportLink } from "../../../shared/router.ts";
 import type { Db } from "../../store/index.ts";
 import { fail, type Pending } from "../context.ts";
+import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { collectGraphBranches, collectGraphPrUrls, stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
-import { isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
+import { isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, lastWorkerIdOf, workerIdsOf } from "./rows.ts";
 import { charLen, validateNodeKey } from "./spec.ts";
-import { getGraphRow, hydrateGraphs, isGraphAllSettled, listStepRows, loadGraph, publishGraphIn, requireStepRow, resolveGraphForPm } from "./store.ts";
+import { getGraphRow, hydrateGraphs, hydrateNodes, isGraphAllSettled, listStepRows, loadGraph, publishGraphIn, requireStepRow, resolveGraphForPm } from "./store.ts";
 import { collapseOneLine, formatGraphText, unlockedNoteOf, workerIdList } from "./text.ts";
 import { emptyProgress, type PmCaller, type ProgressResult, type TaskGraphCtx, type TaskGraphDbRow, type TaskNodeDbRow } from "./types.ts";
 
@@ -98,6 +99,15 @@ export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
     throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
   }
   assertNotRunning(node, nodeKey, graphRow.id);
+  if (sandboxApprovalPendingForStep(g.db, node.id)) {
+    throw fail("conflict", `步骤「${nodeKey}」在等用户确认 Worker 沙箱。请等用户确认，或先收工这个 Worker`);
+  }
+  const latest = lastWorkerIdOf(node);
+  const workers = g.options.workers?.();
+  const openWorker = latest !== null && g.db.get("SELECT 1 FROM workers WHERE id = ? AND status = 'open'", latest) !== undefined ? latest : null;
+  if (openWorker !== null && workers?.isWorkerInFlight(openWorker)) {
+    assertNotRunning({ ...node, status: "running", active_worker_id: openWorker }, nodeKey, graphRow.id);
+  }
   const { artifact, note } = doneArtifact(args, node);
   const nextPmNote = note && note !== "" ? note : node.pm_note;
   const active = graphRow.status === "active";
@@ -117,6 +127,7 @@ export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
     t,
     node.id,
   );
+  if (openWorker !== null) workers?.stopWorkersIn(p, [openWorker]);
   const progress: ProgressResult = active
     ? recomputeGraphProgressIn(g, p, graphRow, caller, context, { retractBlockedWaiting: false })
     : emptyProgress();
@@ -290,10 +301,10 @@ function reportLinks(branches: GraphBranches, graphPrs: Readonly<Record<string, 
   return links;
 }
 
-function assertAllSettled(graphRow: TaskGraphDbRow, nodeRows: readonly TaskNodeDbRow[]): void {
+function assertAllSettled(g: TaskGraphCtx, graphRow: TaskGraphDbRow, nodeRows: readonly TaskNodeDbRow[]): void {
   const unsettled = nodeRows.filter((n) => n.status !== "done");
   if (nodeRows.length > 0 && unsettled.length === 0) return;
-  const listText = unsettled.map((n) => `${n.node_key} [${taskNodeStatusText(toTaskNode(n), "pm")}]`).join("、");
+  const listText = hydrateNodes(g, unsettled, false).map((n) => `${n.key} [${taskNodeStatusText(n, "pm")}]`).join("、");
   throw fail(
     "conflict",
     `任务图 #${graphRow.id} 还有未完成的节点：${listText}。所有节点完成后才能 ${HUB_COMMAND} graph finish；若要中途放弃整张图，请用 ${HUB_COMMAND} graph cancel ${graphRow.id}`,
@@ -306,7 +317,7 @@ export function finishIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: Hu
   if (summary === "") throw fail("invalid", "交付摘要不能是空的（用 --stdin 传入交付摘要）");
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: true });
   const nodeRows = listStepRows(g.db, graphRow.id);
-  assertAllSettled(graphRow, nodeRows);
+  assertAllSettled(g, graphRow, nodeRows);
   const branches = collectGraphBranches(g.db, graphRow);
   const graphPrs = context?.graphPrs;
   if (args.unmergedOk !== true && graphPrs !== undefined) assertNoOpenPrs(g.db, graphRow, branches, graphPrs);

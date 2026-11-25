@@ -676,3 +676,19 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(h.rpcIn().filter((m) => m.type === "prompt")).toHaveLength(0);
   });
 });
+
+it.each(["aborted event", "silent close"])("preserves a Pi steer on daemon shutdown (%s)", async (mode) => {
+  const h = makePiHarness({ script: { turns: [{ waitForAbort: true, abortOnSigint: mode === "aborted event" }] } });
+  const row = h.addSession();
+  await h.driver.send(row.id, { messageIds: [1], source: "user", text: "Start" });
+  await h.waitFor("message.processing");
+  await expect(h.driver.send(row.id, { messageIds: [2], source: "user", text: "Follow up" })).resolves.toEqual({ kind: "written", midTurn: true });
+  await h.driver.shutdown();
+  if (mode === "silent close") {
+    expect(h.of("session.exited")).toContainEqual(expect.objectContaining({ reason: "shutdown", messageIds: [1] }));
+  } else {
+    expect(h.of("turn.ended")).toContainEqual(expect.objectContaining({ shutdown: true, messageIds: [1] }));
+  }
+  expect(h.of("message.requeued")).toContainEqual(expect.objectContaining({ messageIds: [2] }));
+  expect(h.of("message.cancelled")).toEqual([]);
+});

@@ -3,7 +3,7 @@ import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
   isTaskNodeUserBlocked,
-  isTaskNodeWaitingDecision,
+  isTaskNodeAwaitingUserAction,
   isTaskNodeWaitingPm,
   userBlockerCardText,
   type ConversationId,
@@ -25,12 +25,13 @@ import { nodeWorkStatusOf } from "../work-status.ts";
 import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { GateDecisionCard, resolveBoundWorker } from "./GateDecisionCard.tsx";
 import { GraphCanvas } from "./GraphCanvas.tsx";
+import { SandboxApprovalCard } from "./SandboxApprovalCard.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
 function showUserCard(node: TaskNode, status: TaskGraph["status"]): boolean {
   return status !== "cancelled" && (node.gateAskPending === true ||
-    (status === "active" && (isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node))));
+    (status === "active" && isTaskNodeAwaitingUserAction(node)));
 }
 
 function statusLabelOf(node: TaskNode, graphStatus: TaskGraph["status"]): string {
@@ -255,7 +256,9 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
               const nodeRefKey = `${graph.id}:${node.key}`;
               const activeDraftKey = gateDecisionDraftKey(client.device, graph.id, node.key, node.gateAskMessageId);
-              if (isWaitingGate) seenGateDraftKeyRef.current.set(nodeRefKey, activeDraftKey);
+              if (isWaitingGate && node.sandboxApproval == null && !isTaskNodeUserBlocked(node)) {
+                seenGateDraftKeyRef.current.set(nodeRefKey, activeDraftKey);
+              }
               if (isWaitingGate) {
                 return (
                   <div
@@ -274,7 +277,9 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                       </span>
                       <span className="shrink-0 text-xs font-medium text-brand-ink">Waiting on you</span>
                     </div>
-                    {node.userBlocker != null ? (
+                    {node.sandboxApproval != null ? (
+                      <SandboxApprovalCard key={node.sandboxApproval.id} approvalId={node.sandboxApproval.id} text={node.sandboxApproval.text} />
+                    ) : node.userBlocker != null && isTaskNodeUserBlocked(node) ? (
                       <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} />
                     ) : (
                       <GateDecisionCard key={node.gateAskMessageId ?? node.key} graphId={graph.id} node={node} client={client} />

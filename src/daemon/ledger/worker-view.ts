@@ -13,6 +13,7 @@ import { fail } from "./context.ts";
 import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
 import { toWorkerRecord } from "./rows.ts";
+import { sandboxApprovalPending } from "./sandbox-approvals.ts";
 import { formatBackgroundTasksSummary, formatWorkerState, lastTurnOutcomesBySession } from "./worker-state.ts";
 import { workerStatsLines } from "./worker-stats.ts";
 import { createLedgerWorkerSearch } from "./worker-search.ts";
@@ -156,8 +157,9 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     const lastEnded = [...turns].reverse().find((turn) => turn.end !== null) ?? null;
     const t = now();
 
+    const awaitingSandbox = worker.status !== "ended" && sandboxApprovalPending(db, worker.id);
     const state = formatWorkerState({
-      status: worker.status, notStarted: notStarted(worker), live,
+      status: worker.status, sandboxApprovalPending: awaitingSandbox, notStarted: notStarted(worker), live,
       lastTurnOutcome: lastEnded?.end?.outcome ?? (purged === null ? lastTurnOutcomesBySession(db, [session.id]).get(session.id) ?? null : null),
       lastEventAt: session.lastEventAt, now: t,
     });
@@ -170,7 +172,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     const quiet = session.lastEventAt === null ? "还没有过动静" : `最后一次有动静是 ${formatDuration(t - session.lastEventAt)} 前`;
     lines.push(`进程${alive ? "在跑" : "没在跑"}，${quiet}`);
 
-    const doing = doingOf(worker, live, current, lastEnded);
+    const doing = awaitingSandbox ? null : doingOf(worker, live, current, lastEnded);
     if (doing !== null) {
       const stalled =
         live.activity === "working" &&

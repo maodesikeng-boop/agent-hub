@@ -794,7 +794,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(s3First).toContain("s1 关键交棒线索在 mod.ts");
   });
 
-  it("下游已接手步骤禁止回退重开抢占同线 worktree、removeEdges 禁改在跑/已完节点，且 graph.finish 自动收工残留 open Worker", async () => {
+  it("下游已接手步骤禁止回退重开抢占同线 worktree、removeEdges 禁改在跑/已完节点，且 graph.done 收工停在确认中的 Worker", async () => {
     // 1) 单线 s1 -> s2：s1 完成后 s2 已自动开工并接手同一 worktree，此时禁止对 s1 调 worker.start --node 抢目录
     const g = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
@@ -822,26 +822,21 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
       }),
     ).toThrow(/不能移除其前置依赖/);
 
-    // 2) s2 报偏离停在 waiting:pm（w2 保持 open），PM 用 graph.done 放行 s2 进入待交付，再调 graph.finish：
-    //    finish 时后台自动把残留 open 的 w2 收工，目录随即满足清理前提！
     const w2 = afterS1.nodes[1]!.activeWorkerId!;
     runWorkerReportTurn(
       w2,
       buildReportBlock({ status: "做完了", summary: "s2 改了方案", deviation: "微调了参数名", handoff: "s2 交棒" }),
     );
-    ledger.hubCall(lin.sessionId, "graph.done", { graphId: g.id, nodeKey: "s2", note: "认可微调" });
-    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", w2)?.status).toBe("open");
-
     enqueued.length = 0;
-    ledger.hubCall(lin.sessionId, "graph.finish", { graphId: g.id, summary: "全部验收通过交付" });
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: g.id, nodeKey: "s2", note: "认可微调" });
     expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", w2)?.status).toBe("ended");
     expect(
       enqueued.some((a) => a.type === "session.end" && a.params.sessionId === workerSessionOf(w2).id),
     ).toBe(true);
     createSessionStore(db).update(workerSessionOf(w2).id, { status: "ended", pid: null });
+    ledger.hubCall(lin.sessionId, "graph.finish", { graphId: g.id, summary: "Delivered" });
     expect(ledger.isWorkerCleanable(w1)).toBe(true);
 
-    // 3) 分叉图 p -> f1：p 经 graph.done 放行（wp 仍 open），f1 已自动开工后，禁止对 wp 调 worker.send 倒挂重开 p
     const gFork = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "防 send 倒挂重开",
@@ -857,7 +852,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     ledger.hubCall(lin.sessionId, "graph.done", { graphId: gFork.id, nodeKey: "p", note: "直接放行" });
     expect(() =>
       ledger.hubCall(lin.sessionId, "worker.send", { workerId: wp, text: "回退重做 p" }),
-    ).toThrow(/下游步骤「f1」正在执行/);
+    ).toThrow(/已经收工/);
   });
 
   it("upstream/ 落盘防路径穿越与单文件/总体积上限保护", () => {

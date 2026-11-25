@@ -164,7 +164,7 @@ function formatDeliveryNote(db: Db, graph: TaskGraph, extra?: DeliveryExtra): st
 }
 
 /** GLOB on the BINARY-collated unique dedupe_key uses its index; LIKE is case-insensitive and would scan every message. */
-const deliveryNoteKeyGlob = (conversationId: ConversationId, graphId: TaskGraphId): string =>
+export const deliveryNoteKeyGlob = (conversationId: ConversationId, graphId: TaskGraphId): string =>
   `system:${conversationId}:task_graph.ready_to_finish:${graphId}:*`;
 
 export function stopQueuedDeliveryNotesIn(g: TaskGraphCtx, p: Pending, conversationId: ConversationId, graphId: TaskGraphId): void {

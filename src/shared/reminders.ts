@@ -34,6 +34,7 @@ export interface ReminderState {
   sessions: SessionState[];
   router?: RouterSlice;
   activeTaskGraphs?: TaskGraph[];
+  pendingSandboxCards?: readonly { id: number }[];
   pending: readonly { conversationId: ConversationId; phase: "sending" | "failed" }[];
 }
 
@@ -273,6 +274,7 @@ export function routerReminderSummary(
   devices: readonly { deviceId: string; state: ReminderState }[],
 ): RouterReminderSummary {
   let pendingCount = 0;
+  let sandboxCount = 0;
   let unreadReportCount = 0;
   let topDecision: PendingDecision | null = null;
   let topReport: RouterReportItem | null = null;
@@ -280,6 +282,7 @@ export function routerReminderSummary(
   for (const { deviceId, state } of devices) {
     const decisions = pendingDecisionsOf(state, deviceId);
     pendingCount += decisions.length;
+    sandboxCount += state.pendingSandboxCards?.length ?? 0;
     const firstDec = decisions[0];
     if (
       firstDec !== undefined &&
@@ -303,8 +306,8 @@ export function routerReminderSummary(
     }
   }
 
-  const subtitle = topDecision?.question ?? topReport?.summary ?? "All clear";
-  return { pendingCount, unreadReportCount, subtitle };
+  const subtitle = topDecision?.question ?? (sandboxCount > 0 ? "Worker sandbox approval" : topReport?.summary ?? "All clear");
+  return { pendingCount: pendingCount + sandboxCount, unreadReportCount, subtitle };
 }
 
 export function renewingIn(messages: Message[]): boolean {

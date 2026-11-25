@@ -7,6 +7,7 @@ import type { LedgerContext, Pending } from "../context.ts";
 import type { LedgerMessages } from "../messages.ts";
 import type { LedgerPersona } from "../persona.ts";
 import type { LedgerProjects } from "../projects.ts";
+import type { SandboxApprovalStore } from "../sandbox-approvals.ts";
 import type { LedgerSessions } from "../sessions.ts";
 import type { StepWorkspacePlan, WorkerBindTarget } from "../task-graphs.ts";
 import type { LedgerTakeover } from "../takeover.ts";
@@ -47,6 +48,7 @@ export interface LedgerWorkersTaskGraphHooks {
 
 export interface LedgerWorkersOptions {
   worktreesDir: string;
+  platform?: NodeJS.Platform;
   extraWorktreeRoots?: () => readonly string[];
   taskGraphs?: LedgerWorkersTaskGraphHooks;
   userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "attachWorkerIn">;
@@ -75,6 +77,7 @@ export interface WorkersCtx {
   persona: LedgerPersona;
   projects: LedgerProjects;
   options: LedgerWorkersOptions;
+  sandboxApprovals: SandboxApprovalStore;
   /** Max message id at turn start, in memory only, so a PM message sent mid-turn cannot make the last reply look older than the previous turn's text. */
   turnStarts: Map<SessionId, MessageId>;
   /** Turns interrupted by endIn are not reported back because the PM stopped them itself. */

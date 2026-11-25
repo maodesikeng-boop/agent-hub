@@ -60,6 +60,7 @@ JOIN agent_sessions s ON s.id = m.session_id
 LEFT JOIN workers w ON w.id = s.worker_id
 LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
 WHERE pa.pm_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.worker_id = w.id AND a.status = 'pending')
   AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
   AND NOT EXISTS (
     SELECT 1 FROM turn_completions c, json_each(c.event, '$.messageIds') ids
@@ -513,28 +514,27 @@ export function createLedgerSessions(ctx: LedgerContext) {
     write((p) => updateLive(p, sessionId, idle));
   };
 
-  const recoverAfterRestart = () => {
-    return write((p) => {
-      const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(RECOVER_MESSAGES_SQL);
-      const resentMessageIds: MessageId[] = [];
-      const requeuedMessageIds: MessageId[] = [];
-      // Resume the oldest interrupted message first.
-      const recoveredSessionIds: SessionId[] = [];
-      for (const row of rows) {
-        const resend = row.status !== "queued";
-        (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
-        const recovery = resend && !recoveredSessionIds.includes(row.session_id);
-        if (recovery) recoveredSessionIds.push(row.session_id);
-        const source = row.sender === "system" ? "system" : "user";
-        if (resend) deleteLegacyPendingSessionSend(db, row.session_id, row.id);
-        enqueue(p, {
-          type: "session.send",
-          params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },
-        });
-      }
-      return { resentMessageIds, requeuedMessageIds, recoveredSessionIds };
-    });
-  };
+  const recoverAfterRestart = (afterResends: (p: Pending) => void) => write((p) => {
+    const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(RECOVER_MESSAGES_SQL);
+    const resentMessageIds: MessageId[] = [];
+    const requeuedMessageIds: MessageId[] = [];
+    // Resume the oldest interrupted message first.
+    const recoveredSessionIds: SessionId[] = [];
+    for (const row of rows) {
+      const resend = row.status !== "queued";
+      (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
+      const recovery = resend && !recoveredSessionIds.includes(row.session_id);
+      if (recovery) recoveredSessionIds.push(row.session_id);
+      const source = row.sender === "system" ? "system" : "user";
+      if (resend) deleteLegacyPendingSessionSend(db, row.session_id, row.id);
+      enqueue(p, {
+        type: "session.send",
+        params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },
+      });
+    }
+    afterResends(p);
+    return { resentMessageIds, requeuedMessageIds, recoveredSessionIds };
+  });
 
   return {
     currentSession,

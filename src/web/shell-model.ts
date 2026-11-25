@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isAgentVendor,
-  isTaskNodeUserBlocked,
-  isTaskNodeWaitingDecision,
+  isTaskNodeAwaitingUserAction,
   type ConversationId,
   type Message,
   type MessageId,
@@ -382,7 +381,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const railProjectId = active?.project?.id ?? null;
   const railGraphs = useMemo(() => activeGraphsOf(state, railProjectId), [state.activeTaskGraphs, railProjectId]);
   const railGraphNeedsYou = useMemo(
-    () => railGraphs.some((g) => g.nodes.some((n) => isTaskNodeWaitingDecision(n) || isTaskNodeUserBlocked(n))),
+    () => railGraphs.some((g) => g.nodes.some(isTaskNodeAwaitingUserAction)),
     [railGraphs],
   );
   const { offline, link: rawLink } = deviceNotices(current);

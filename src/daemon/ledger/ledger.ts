@@ -1,7 +1,7 @@
 import { isChecklistToolCall } from "./checklist.ts";
 import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
 import { createLedgerBranchSync } from "./workers/branch-sync.ts";
-import { isWorkerPmNoticeActionable } from "./workers/stale-notices.ts";
+import { isSystemMessageCurrent } from "./notice-currency.ts";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LedgerSnapshot } from "../../shared/api.ts";
@@ -97,6 +97,7 @@ export interface LedgerOptions {
   initialSeq?: number;
   changeBufferSize?: number;
   osSandboxed?: LedgerContextOptions["osSandboxed"];
+  workerPlatform?: NodeJS.Platform;
   pmHomeRoot: string;
   personasDir?: string;
   pmMemoryDir?: string;
@@ -224,14 +225,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     resumeWorkerIn: workers.resumeUserBlockedWorkerIn,
   }));
   const taskGraphs = createLedgerTaskGraphs(ctx, sessions, messages, persona, projects, router, {
-    launchDir: effectiveLaunchDir,
+    launchDir: effectiveLaunchDir, workerPlatform: options.workerPlatform,
     workers: () => workers,
     userBlockers,
     onGraphFinishedIn: (p, projectId) => projectCatalog.markForcedIn(p, projectId, "graph_finished"),
   });
   const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
-    worktreesDir: files.worktreesDir,
+    worktreesDir: files.worktreesDir, platform: options.workerPlatform,
     ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     taskGraphs,
     userBlockers,
@@ -392,6 +393,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       messages.composerTarget(conversationId, files.worktreesDir, files.extraWorktreeRoots?.()),
 
     snapshot(): LedgerSnapshot {
+      const pendingSandboxApprovals = workers.listPendingSummaries();
       const activeTaskGraphs = taskGraphs.activeSnapshotGraphs();
       const { conversations, sessions } = snapshotQueries.snapshotConversations(activeTaskGraphs);
       return {
@@ -410,6 +412,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         schedules: schedules.all(),
         router: router.snapshotSlice(),
         activeTaskGraphs,
+        ...(pendingSandboxApprovals.length > 0 ? { pendingSandboxApprovals } : {}),
       };
     },
 
@@ -439,7 +442,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     refreshSessionState: sessions.refreshSessionState,
     recoverAfterRestart() {
       completions.recover();
-      const recovered = sessions.recoverAfterRestart();
+      const recovered = sessions.recoverAfterRestart(workers.noticeUnresentShutdownTurnsIn);
       workers.recoverWorktrees();
       workers.recoverBackgroundWaits();
       workers.recoverTurnTimeouts();
@@ -469,7 +472,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     onActionFailed(action, error) {
       write((p) => {
-        messages.actionFailedIn(p, action, error);
+        const failedSession = messages.actionFailedIn(p, action, error);
+        if (failedSession !== null) steps.recordFailedStart(failedSession, error);
         workers.actionFailedIn(p, action, error);
         handover.actionFailedIn(p, action);
         schedules.actionFailedIn(p, action);
@@ -524,7 +528,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),
     ...branches,
-    isWorkerPmNoticeActionable: (id) => isWorkerPmNoticeActionable(db, id),
+    isSystemMessageCurrent: (id) => isSystemMessageCurrent(db, id, ctx.now(), workers.isWorkerInFlight),
+    retireStaleSystemMessage: messages.retireStaleSystemMessage,
     graphPrTargets: (sessionId, graphId) => taskGraphs.graphPrTargets(getAgentSession(db, sessionId), graphId),
     graphAutoDispatchVendors: (sessionId, command, body) =>
       taskGraphs.graphAutoDispatchVendors(getAgentSession(db, sessionId), command, body),
@@ -555,7 +560,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     listRouterItems: router.listItems,
     resolveRouterItem: router.resolveItem,
     answerAsk: router.answerAsk,
-    recheckUserBlocker: userBlockers.recheck,
+    recheckUserBlocker: userBlockers.recheck, decideSandboxApproval: workers.decide, getSandboxApproval: workers.getById,
     userBlockerVendor: userBlockers.vendorOf,
     deliveryOf: (message) => {
       const parts = deliveryParts(message);
