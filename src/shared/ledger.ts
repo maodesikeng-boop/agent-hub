@@ -7,6 +7,8 @@ import type {
   ConversationsLookup,
   DecideTaskNodeRequest,
   DecideTaskNodeResponse,
+  CompletedCursor,
+  CompletedWorkPage,
   EndedWorkersPage,
   LedgerSnapshot,
   MessagesPage,
@@ -239,6 +241,7 @@ export interface Ledger extends LedgerHandoverWork {
   messagesBefore(conversationId: ConversationId, before: MessageId): MessagesPage;
   lookupConversations(query: { ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }): ConversationsLookup;
   endedWorkersPage(pmId: PmId, before: ConversationId | null): EndedWorkersPage;
+  completedWork(pmId: PmId, cursor: CompletedCursor | null, limit: number): CompletedWorkPage;
   changesSince(seq: number): ChangesSince;
   onChange(listener: (change: Change) => void): Unsubscribe;
 

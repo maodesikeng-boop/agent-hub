@@ -492,6 +492,8 @@ export type WorkerMessageMeta = {
   status: WorkerLineStatus | null;
   summary: string | null;
   directChatSummary?: string;
+  /** The PR field of a report line, when the report named one. */
+  prUrl?: string;
 };
 
 export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMessageMeta | null {

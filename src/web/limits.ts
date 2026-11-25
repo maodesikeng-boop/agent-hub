@@ -15,3 +15,23 @@ export const SHELL_CHAT_MIN_REM = 30;
 // conversation sheet join with no gap. styles.css keeps the same values in --frame-inset and --shell-gap.
 export const SHELL_FRAME_PX = 6;
 export const SHELL_GAP_PX = 4;
+
+// One month is about 300 finished Workers plus their graphs; 8 pages of COMPLETED_WORK_PAGE_SIZE (50) cover it.
+export const COMPLETED_WORK_MAX_PAGES = 8;
+// Distinct step titles measured for the graph canvas; a month of graphs holds about 500.
+export const GRAPH_TEXT_WIDTH_CACHE_MAX = 2_000;
+// Work panel graph geometry in px, matching the decided prototype.
+export const WORK_GRAPH_PX = {
+  node: 26,
+  nodePadStart: 7,
+  nodePadEnd: 9,
+  iconGap: 6,
+  icon: 14,
+  border: 1,
+  parallelGap: 6,
+  line: 24,
+  fork: 28,
+  paperPadX: 14,
+  paperPadY: 12,
+  stroke: 1.35,
+} as const;

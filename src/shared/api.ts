@@ -18,6 +18,7 @@ import type {
   RouterItemId,
   SessionState,
   TaskGraph,
+  TaskEdge,
   TaskGraphId,
   TaskNodeKey,
   WorkerId,
@@ -53,6 +54,8 @@ export const API_PATHS = {
   pms: "/api/pms",
   endedWorkers: (pmId: PmId, before: ConversationId | null) =>
     `/api/pms/${pmId}/ended-workers${before === null ? "" : `?before=${before}`}`,
+  completedWork: (pmId: PmId, cursor: CompletedCursor | null) =>
+    `/api/pms/${pmId}/completed${cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`}`,
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
   pmLook: (pmId: PmId) => `/api/pms/${pmId}/look`,
   pmPin: (pmId: PmId) => `/api/pms/${pmId}/pin`,
@@ -590,6 +593,45 @@ export interface PostRouterCommandRequest {
 
 export interface PostRouterCommandResponse {
   command: RouterCommandRecord;
+}
+
+/** Opaque paging token from a CompletedWorkPage; clients pass it back unchanged. */
+export type CompletedCursor = string & { readonly __brand: "CompletedCursor" };
+
+export interface CompletedStep {
+  key: TaskNodeKey;
+  title: string;
+  skipped: boolean;
+}
+
+/** A finished Task Graph or a finished Worker that no Task Graph step owns. */
+export type CompletedWorkItem =
+  | {
+      kind: "graph";
+      graphId: TaskGraphId;
+      title: string;
+      outcome: "done" | "cancelled";
+      finishedAt: number;
+      prUrl: string | null;
+      steps: CompletedStep[];
+      edges: TaskEdge[];
+    }
+  | {
+      kind: "worker";
+      conversationId: ConversationId;
+      workerId: WorkerId;
+      title: string;
+      outcome: "done" | "cancelled";
+      finishedAt: number;
+      prUrl: string | null;
+    };
+
+export interface CompletedWorkPage {
+  /** Newest finishedAt first; ties break by kind then id, descending, so pages never overlap or skip. */
+  items: CompletedWorkItem[];
+  /** Finished graphs plus finished standalone Workers for this PM, counted when the page was read. */
+  total: number;
+  next: CompletedCursor | null;
 }
 
 export interface TaskGraphsPage {

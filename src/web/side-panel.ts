@@ -1,5 +1,7 @@
 import type { ConversationId, PmId } from "../shared/index.ts";
+import type { InfoPage } from "./info-rows.ts";
 import type { ProfilePage, Route, ScopedRoute } from "./route.ts";
+import type { WorkPanelTab } from "./work-panel-model.ts";
 
 // Invariant: on the desktop the route alone decides Worker and Profile content; Pieces is the only content held outside the route.
 
@@ -53,4 +55,45 @@ export function panelExitsOf(
     return { close: conversation, back: { view: "profile", pmId: content.pmId, ...onDevice }, backOpensPieces: false };
   }
   return { close: conversation, back: null, backOpensPieces: false };
+}
+
+// The work panel replaces SidePanelContent, sidePanelOf, and panelExitsOf above; the implementation step deletes them.
+
+export type WorkPanelContent =
+  | { kind: "tab"; tab: Exclude<WorkPanelTab, "info"> }
+  | { kind: "info"; pmId: PmId; page: InfoPage | null }
+  | { kind: "worker"; workerId: ConversationId };
+
+export interface WorkPanelInput {
+  route: Route | null;
+  /** The user has the panel open on the conversation route; the toggle and the auto-open rule set it. */
+  open: boolean;
+  /** Last Active or Completed tab the user picked, persisted per browser. */
+  tab: Exclude<WorkPanelTab, "info">;
+}
+
+/**
+ * Postcondition: a worker route gives that Worker, a profile route gives Info with its page, a conversation route gives
+ * the remembered tab when open and null when closed, and the Router, settings, or no route give null.
+ */
+export function workPanelOf(_props: WorkPanelInput): WorkPanelContent | null {
+  throw new Error("Not implemented");
+}
+
+export interface WorkPanelExits {
+  close: ScopedRoute;
+  /** Where the back arrow goes, or null when the header shows tabs instead. */
+  back: ScopedRoute | null;
+}
+
+/**
+ * Precondition: conversation is the active PM conversation on the same computer as the panel content.
+ * Postcondition: close is the conversation route and also closes the panel. back is null for a tab and for the Info
+ * summary, the conversation route (panel open on the remembered tab) for a Worker, and the Info summary for an Info page.
+ */
+export function workPanelExitsOf(
+  _content: WorkPanelContent,
+  _conversation: Extract<ScopedRoute, { view: "conversation" }>,
+): WorkPanelExits {
+  throw new Error("Not implemented");
 }

@@ -42,6 +42,7 @@ import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
+import { completedWorkPage } from "./completed-work.ts";
 import { createLedgerSnapshotQueries } from "./snapshot.ts";
 import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
@@ -407,6 +408,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     messagesAfter: messages.messagesAfter,
     lookupConversations: snapshotQueries.lookupConversations,
     endedWorkersPage: snapshotQueries.endedWorkersPage,
+    completedWork: (pmId, cursor, limit) => completedWorkPage(db, pmId, cursor, limit),
 
     changesSince: (seq) => log.since(seq),
     onChange: (listener) => subscribe(changeListeners, listener),

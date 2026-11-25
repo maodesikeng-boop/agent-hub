@@ -642,6 +642,7 @@ export class FakeLedger {
       messagesAfter: unused("messagesAfter"),
       lookupConversations: (q) => this.lookupConversations(q),
       endedWorkersPage: (p, b) => this.endedWorkersPage(p, b),
+      completedWork: unused("completedWork"),
       changesSince: (s) => this.changesSince(s),
       onChange: (l) => this.onChange(l),
       onStopRequested: unused("onStopRequested"),

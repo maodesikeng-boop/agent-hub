@@ -264,6 +264,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("conversation_purges", "retained_metadata", "src/daemon/ledger/worker-retention.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("agent_sessions", "retained_metadata", "src/daemon/ledger/sessions.ts", "src/daemon/ledger/persona.ts, src/daemon/ledger/router.ts", "on_archive_or_delete"),
   table("workers", "retained_metadata", "src/daemon/ledger/workers.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("worker_endings", "retained_metadata", "src/daemon/ledger/completed-work.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("worker_direct_chat_receipts", "retained_metadata", "src/daemon/ledger/workers/direct-chat.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("worker_capabilities", "retained_metadata", "src/daemon/ledger/workers.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("router_worker_origins", "retained_metadata", "src/daemon/ledger/router.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
