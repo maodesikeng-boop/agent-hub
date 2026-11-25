@@ -254,6 +254,48 @@ describe("RouterTopBar", () => {
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/router\/commands\/500\/retry$/)).toHaveLength(1));
   });
 
+  it("keeps one shared retry running across Expand, so the full Router page shows it in progress and cannot send it twice", async () => {
+    await boot();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ok = api.retryRouterCommand;
+    api.retryRouterCommand = async (id) => {
+      await gate;
+      return ok(id);
+    };
+    const retryCalls = () => api.callsTo("POST", /^\/api\/router\/commands\/500\/retry$/);
+    const user = await sendFromTopBar("重试不重复");
+    const sent = sentBodies()[0]!;
+    push(record(sent, { status: "failed", error: "Router 没有回应", updatedAt: 42_000 }));
+    const failed = await waitFor(() => {
+      const el = popover().querySelector<HTMLElement>("[data-router-turn][data-status='failed']");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    await user.click(within(failed).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retryCalls()).toHaveLength(1));
+    expect(within(popover()).getByText("Working…")).toBeInTheDocument();
+
+    await user.click(within(popover()).getByRole("button", { name: "Expand" }));
+    await waitFor(() => expect(window.location.hash).toBe("#/router"));
+    const timeline = await screen.findByRole("log", { name: "Router timeline" });
+    const row = await waitFor(() => {
+      const el = [...timeline.querySelectorAll<HTMLElement>("[data-router-turn]")].find((r) => r.textContent?.includes("重试不重复"));
+      expect(el).toBeDefined();
+      return el!;
+    });
+    expect(row).toHaveAttribute("data-status", "planning");
+    expect(within(row).getByText("Working…")).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
+
+    await act(async () => release());
+    push(record(sent, { status: "planning", updatedAt: 43_000 }));
+    expect(row).toHaveAttribute("data-status", "planning");
+    expect(retryCalls()).toHaveLength(1);
+  });
+
   it("navigates to #/router, hands off any unsent follow-up draft, and closes the popover when Expand is clicked", async () => {
     await boot();
     const user = await sendFromTopBar("先发一句");
