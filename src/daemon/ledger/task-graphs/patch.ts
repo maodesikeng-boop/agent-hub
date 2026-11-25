@@ -15,7 +15,7 @@ import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import { syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
-import { parseJsonOr, toTaskNode, workerIdsOf } from "./rows.ts";
+import { artifactWithoutCheckpoint, hasText, parseJsonOr, toTaskNode, workerIdsOf } from "./rows.ts";
 import {
   assertReviewStepsHaveTarget,
   edgeSig,
@@ -37,7 +37,7 @@ import {
   type GateFields,
   type NewStep,
 } from "./spec.ts";
-import { getGraphRow, insertEdgeRow, insertStepRow, listStepRows, publishGraphIn, resolveGraphForPm } from "./store.ts";
+import { getGraphRow, insertEdgeRow, insertStepRow, isUserBlocked, listStepRows, publishGraphIn, resolveGraphForPm } from "./store.ts";
 import { formatGraphText, unlockedNoteOf } from "./text.ts";
 import type { PmCaller, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 import { sameVendorReviewHint } from "./workspace.ts";
@@ -188,22 +188,22 @@ function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNod
 
 function writeUpdateIn(g: TaskGraphCtx, p: Pending, u: PreparedUpdate, t: number): void {
   const { cur, gate } = u;
+  const hasGateQuestion = hasText(gate?.question);
   const reevaluate =
     cur.status === "waiting" &&
     cur.active_worker_id === null &&
-    workerIdsOf(cur).length === 0 &&
-    (gate !== null || (u.nextBrief !== null && u.nextBrief.trim() !== ""))
-      ? 1
-      : 0;
+    (hasGateQuestion || (workerIdsOf(cur).length === 0 && (gate !== null || hasText(u.nextBrief))));
+  const clearsAskWait = gate !== null && cur.waiting_for === "user" && !isUserBlocked(g.db, cur.id);
   if (gate !== null && cur.gate_ask_message_id !== null) g.messages.settleAskIn(p, cur.gate_ask_message_id, { by: "close" });
-  const gateSql = gate !== null ? "gate_question = ?, gate_options_json = ?, gate_summary_md = ?, gate_recommended = ?, gate_ask_message_id = NULL," : "";
-  const gateParams = gate !== null ? [gate.question, gateOptionsJsonOf(gate), gate.summaryMd, gate.recommended] : [];
+  const gateSql = gate === null ? "" : `gate_question = ?, gate_options_json = ?, gate_summary_md = ?,
+    gate_recommended = ?, gate_ask_message_id = NULL, artifact_json = ?, ${hasGateQuestion ? "decision_json = NULL," : ""}`;
+  const gateParams = gate !== null ? [gate.question, gateOptionsJsonOf(gate), gate.summaryMd, gate.recommended, artifactWithoutCheckpoint(cur)] : [];
   g.db.run(
     `UPDATE task_graph_steps
         SET title = ?, brief = ?, vendor = ?, model = ?, effort = ?, readonly = ?, max_time_ms = ?,
             confirm = ?, review = ?, base = ?, ${gateSql}
-            status = CASE WHEN ? = 1 THEN 'pending' ELSE status END,
-            waiting_for = CASE WHEN ? = 1 THEN NULL ELSE waiting_for END,
+            status = CASE WHEN ? THEN 'pending' ELSE status END,
+            waiting_for = CASE WHEN ? THEN NULL WHEN ? AND waiting_for = 'user' THEN 'pm' ELSE waiting_for END,
             updated_at = ?
       WHERE id = ?`,
     u.nextTitle,
@@ -217,22 +217,22 @@ function writeUpdateIn(g: TaskGraphCtx, p: Pending, u: PreparedUpdate, t: number
     u.nextReview,
     u.nextBase,
     ...gateParams,
-    reevaluate,
-    reevaluate,
+    Number(reevaluate),
+    Number(reevaluate),
+    Number(clearsAskWait),
     t,
     cur.id,
   );
   if (u.nextCapabilities !== null) writeWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: cur.id }, u.nextCapabilities);
 }
 
-function applySkipsIn(g: TaskGraphCtx, p: Pending, rawSkip: readonly TaskNodeKey[], nodesByKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>, t: number): void {
+function applySkips(g: TaskGraphCtx, rawSkip: readonly TaskNodeKey[], nodesByKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>, t: number): void {
   for (const skRaw of rawSkip) {
     const sk = validateNodeKey(skRaw);
     const cur = nodesByKey.get(sk);
     if (cur === undefined) throw fail("not_found", `要跳过的节点「${sk}」不存在`);
     if (isLocked(cur)) throw fail("conflict", `节点「${sk}」${statusOf(cur)}，无法跳过`);
     g.db.run("UPDATE task_graph_steps SET status = 'done', waiting_for = NULL, skipped = 1, updated_at = ? WHERE id = ?", t, cur.id);
-    if (cur.gate_ask_message_id !== null) g.messages.settleAskIn(p, cur.gate_ask_message_id, { by: "close" });
   }
 }
 
@@ -286,13 +286,11 @@ function applyPatchIn(g: TaskGraphCtx, p: Pending, plan: PatchPlan): void {
   }
   if (plan.nextGoal !== undefined) g.db.run("UPDATE task_graphs SET goal = ?, updated_at = ? WHERE id = ?", plan.nextGoal, t, graphRow.id);
   for (const rmKey of plan.removeKeySet) {
-    const removed = plan.existingNodes.find((n) => n.node_key === rmKey);
-    if (removed?.gate_ask_message_id != null) g.messages.settleAskIn(p, removed.gate_ask_message_id, { by: "close" });
     g.db.run("DELETE FROM task_graph_steps WHERE graph_id = ? AND node_key = ?", graphRow.id, rmKey);
   }
   for (const a of plan.added) insertStepRow(g.db, graphRow.id, a, plan.rankOf.get(a.key) ?? 0, t);
   for (const u of plan.updates) writeUpdateIn(g, p, u, t);
-  applySkipsIn(g, p, plan.lists.skip, plan.nodesByKey, t);
+  applySkips(g, plan.lists.skip, plan.nodesByKey, t);
   for (const [k, idx] of plan.rankOf) {
     g.db.run("UPDATE task_graph_steps SET sort_order = ? WHERE graph_id = ? AND node_key = ?", idx, graphRow.id, k);
   }
@@ -319,7 +317,7 @@ export function patchIn(
   const progressNote = unlockedNoteOf(progress, graph).replace(/^；/u, "");
   const reviewHint = sameVendorReviewHint(g.db, graphRow.id, caller.vendor);
   return {
-    text: `已更新${formatGraphText(graph)}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
+    text: `已更新${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
     data: { graph },
   };
 }

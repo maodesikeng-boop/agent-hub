@@ -35,7 +35,7 @@ To keep the base PM system prompt short (`src/daemon/prompt.ts`) and avoid over-
 
 ## Decisions, user blockers, and deliverables
 
-- **Unified decision source**: A node waiting on the user (`waitingFor: "user"`) surfaces simultaneously in the project conversation (`hub ask` card), the right-rail `PeelTrack` (`GateMark` bell), `TaskGraphDialog`, Router's `Needs You` tray, and the Feishu project group. Answering from any surface calls `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`, settles the card everywhere, injects the user's choice into downstream prompts, and resumes execution.
+- **Unified decision source**: The ask message records whether a decision card is pending. Worker and step state changes leave the card open. The user can answer to settle the card and send the decision to the step's active Worker. The project manager can record a reply from chat with `hub graph decide`, replace the card with a new one, or close it with `hub ask close --message <messageId>`. Use `hub graph show` to find the message ID of a pending step card.
 - **System `UserBlocker` cards (`src/shared/user-blockers.ts`)**: When automatic dispatch hits an unauthenticated or missing vendor CLI, the daemon posts a `UserBlockerCard` directly instead of stalling on `Waiting on PM`. Clicking `Done` (`POST /api/user-blockers/:id/recheck`) re-probes `ModelCatalogs` outside the SQLite transaction and dispatches every unblocked step and Worker automatically.
 - **Deliverables (`src/shared/deliverables.ts`)**: Files listed in a Worker's `文件:` report field (or `--file label=path` on `hub ask` / `hub router report`) are copied asynchronously outside SQLite transactions into `sent-files/` (`src/daemon/sent-files.ts`, bounded by `SENT_FILES_*` limits and `DataDirReadScope`) and rendered inline via `<CardBody>` (`docs/ui-standard.md` section 22).
 
@@ -54,7 +54,7 @@ hub graph create --stdin                          # create a DAG of steps and ed
 hub graph show [<graphId>]                        # inspect active or historical graph state
 hub graph patch <graphId> --stdin                 # add, rewire, or prune pending/waiting nodes (cycle-checked)
 hub graph ask --node <key> --option "..." --stdin # attach options and summary to a waiting gate
-hub graph decide --node <key> --choice "..."      # record an explicit user decision from chat
+hub graph decide <key> --choice "..."             # record an explicit user decision from chat
 hub graph skip --node <key>                       # skip a step and unblock dependents
 hub graph finish <graphId>                        # close an all-done graph after final acceptance
 hub graph cancel <graphId>                        # cancel an active graph

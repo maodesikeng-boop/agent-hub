@@ -1169,7 +1169,7 @@ describe("收工", () => {
     const result = hub(lin.sessionId, "worker.list", {});
     const recent = ended.slice(-WORKER_LIST_RECENT_ENDED);
     expect(result.data.workers.map((w) => w.id)).toEqual([open.id, ...recent.map((w) => w.id)]);
-    expect(result.text).toContain(`#${open.id} 还在干 · 进行中`);
+    expect(result.text).toContain(`#${open.id} 还在干 · 空闲，还没开始第一轮`);
     expect(result.text).not.toContain(`#${ended[0]!.id} 旧活0`);
     expect(result.text).toContain(`另有 3 个更早收工的 Worker 没列出`);
     expect(result.text).toContain("worker search");
@@ -1223,7 +1223,7 @@ describe("派活：思考程度（--effort）", () => {
     const a = start({ title: "甲", model: "haiku", effort: "low" }).data.worker;
     const b = start({ title: "乙" }).data.worker;
     const text = hub(lin.sessionId, "worker.list", {}).text;
-    expect(text).toContain(`#${a.id} 甲 · 进行中 · `);
+    expect(text).toContain(`#${a.id} 甲 · 空闲，还没开始第一轮 · `);
     expect(text).toContain("模型 Haiku · 思考程度 Low");
     expect(text).toContain(`#${b.id} 乙`);
     expect(text).toContain("模型 Sonnet 5.5 · 思考程度 默认");
@@ -1449,7 +1449,7 @@ describe("审查后补的（PR #34）", () => {
     expect(enqueued.map((a) => [a.type, a.params])).toContainEqual(["session.end", { sessionId: workerSessionId(worker.id), generation: 1 }]);
   });
 
-  it("收工后正在跑的那一轮照样汇报给项目经理", () => {
+  it("A late success after ending a Worker stays in its own conversation and does not wake the PM", () => {
     const worker = start({ noWorktree: true }).data.worker;
     const sessionId = workerSessionId(worker.id);
     const id = taskMessage(worker).id;
@@ -1458,8 +1458,8 @@ describe("审查后补的（PR #34）", () => {
     hub(lin.sessionId, "worker.end", { workerId: worker.id });
     ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "late", text: report("做完了", "收工前做完的"), at: now });
     ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 1, at: now });
-    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "ended", "report"]);
-    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ summary: "收工前做完的" });
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "ended"]);
+    expect(db.get("SELECT id FROM messages WHERE session_id = ? AND sender = 'agent' AND text LIKE ?", sessionId, "%收工前做完的%")).toBeDefined();
   });
 });
 
@@ -1555,7 +1555,7 @@ describe("worktree 准备命令（hub project setup）", () => {
     expect(hub(lin.sessionId, "worker.list", {}).text).toContain(`#${worker.id} 修 X · 准备中`);
     ledger.onWorktreeCreated(worker.id, "c0ffee", outcome());
     expect(activityOf(worker.id)).toBe("idle");
-    expect(hub(lin.sessionId, "worker.list", {}).text).toContain(`#${worker.id} 修 X · 进行中`);
+    expect(hub(lin.sessionId, "worker.list", {}).text).toContain(`#${worker.id} 修 X · 空闲，还没开始第一轮`);
   });
 
   it("19b onSetupStarted：已收工、已经开工的什么也不做", () => {

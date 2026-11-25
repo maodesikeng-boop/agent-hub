@@ -64,6 +64,7 @@ export async function submitDecision(
   const choice = optionIndex === null ? null : (decision.options[optionIndex] ?? null);
   await client.postTaskGraphDecide(decision.source.graphId, decision.source.nodeKey, {
     clientId,
+    ...(decision.askMessageId !== null ? { askMessageId: decision.askMessageId } : {}),
     choice,
     ...(trimmedNote.length > 0 ? { note: trimmedNote } : {}),
   });

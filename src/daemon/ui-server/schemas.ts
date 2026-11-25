@@ -220,6 +220,7 @@ export const updateRouterSettingsBodySchema = z
 export const decideTaskNodeBodySchema = z
   .object({
     clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
+    askMessageId: z.number().int().positive().optional(),
     choice: boundedCharsSchema(MAX_DECISION_CHOICE_CHARS, "choice").nullable().optional(),
     note: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "note").nullable().optional(),
   })

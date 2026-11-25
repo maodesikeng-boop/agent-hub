@@ -137,7 +137,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "list",
     cli: "worker list",
-    usage: `  ${hub} worker list                                         我派出去的 Worker（进行中的和最近收工的）：状态、在哪干活、模型和思考程度`,
+    usage: `  ${hub} worker list [--vendor <厂商>]                         我派出去的 Worker（未收工的和最近收工的）：状态、在哪干活、厂商、模型和思考程度`,
   },
   {
     command: "worker.show",
@@ -179,7 +179,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "close",
     cli: "ask close",
     usage: `  ${hub} ask close <卡编号>                                    关掉自己名下一张还在等用户的提问卡（用户在对话里打字答了、没点卡，或问题过时了）；
-                                                          卡编号见用户消息前面说明块里的 #编号`,
+                                                          普通卡编号见用户消息前面的说明；步骤拍板卡用 ${hub} ask close --message <消息编号>，编号见 ${hub} graph show`,
   },
   {
     command: "schedule.add",
@@ -240,7 +240,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "show",
     cli: "graph show",
-    usage: `  ${hub} graph show [<图编号>]                                查看当前活跃任务图或指定编号任务图：每个节点的状态、Worker 和结果（分支、提交、PR、摘要、定案）`,
+    usage: `  ${hub} graph show [<图编号>]                                查看当前活跃任务图或指定编号任务图：每个节点的状态、厂商、模型、思考程度、Worker 和结果（分支、提交、PR、摘要、定案）`,
   },
   {
     command: "graph.list",
@@ -248,7 +248,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "list",
     cli: "graph list",
     usage: `  ${hub} graph list [--all | --status active|completed|cancelled]
-                                                          列出当前项目的任务图`,
+                                                          列出当前项目的任务图与步骤的厂商、模型和思考程度`,
   },
   {
     command: "graph.patch",

@@ -13,6 +13,7 @@ import { fail } from "./context.ts";
 import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
 import { toWorkerRecord } from "./rows.ts";
+import { formatBackgroundTasksSummary, formatWorkerState, lastTurnOutcomesBySession } from "./worker-state.ts";
 import { workerStatsLines } from "./worker-stats.ts";
 import { createLedgerWorkerSearch } from "./worker-search.ts";
 import type { LiveSession } from "./sessions.ts";
@@ -98,16 +99,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
   const { ownWorker, workerSession, notStarted, liveOf, turnMaxTimeOf, isWorktreeCleaned } = deps;
   const workerSearch = createLedgerWorkerSearch(ctx);
 
-  const stateOf = (worker: WorkerDbRow, live: LiveSession, lastEnded: Turn | null): string => {
-    if (worker.status === "ended") return "已收工";
-    if (live.activity === "preparing" || notStarted(worker)) return "准备中";
-    if (live.activity === "background") return "在等后台命令";
-    if (live.activity !== "idle") return "在干活";
-    const end = lastEnded?.end;
-    if (end === undefined || end === null) return "空闲，还没开始第一轮";
-    return end.outcome === "ok" ? "空闲，等验收" : end.outcome === "interrupted" ? "空闲，上一轮被打断了" : "空闲，上一轮出错了";
-  };
-
   const doingOf = (worker: WorkerDbRow, live: LiveSession, current: Turn | null, lastEnded: Turn | null): string | null => {
     if (worker.status === "ended") return null;
     if (live.activity === "preparing") return "在跑项目的准备命令，跑完才开工";
@@ -165,7 +156,11 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     const lastEnded = [...turns].reverse().find((turn) => turn.end !== null) ?? null;
     const t = now();
 
-    const state = stateOf(worker, live, lastEnded);
+    const state = formatWorkerState({
+      status: worker.status, notStarted: notStarted(worker), live,
+      lastTurnOutcome: lastEnded?.end?.outcome ?? (purged === null ? lastTurnOutcomesBySession(db, [session.id]).get(session.id) ?? null : null),
+      lastEventAt: session.lastEventAt, now: t,
+    });
     const setting = agentSettingOf(ctx, session);
     const lines: string[] = [];
     lines.push(`Worker #${worker.id}“${worker.title}”：${state}${worker.readonly === 1 ? "，只读" : ""}`);
@@ -210,6 +205,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     if (alive && live.backgroundTasks !== undefined) parts.push(`后台任务 ${live.backgroundTasks} 个`);
     parts.push(`对话 ${session.usage.context > 0 ? `${formatCount(session.usage.context)} context` : NO_DATA}`);
     lines.push(parts.join("，"));
+    if (worker.status !== "ended" && live.backgroundTaskList?.length) lines.push(...formatBackgroundTasksSummary(live.backgroundTaskList, t));
 
     lines.push(
       worker.workspace === "worktree"

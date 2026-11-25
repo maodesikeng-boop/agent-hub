@@ -1503,7 +1503,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
   "agy": {
     "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
-    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
     "serviceName": "Antigravity",
     "signs": [
       {
@@ -1516,7 +1516,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "quota",
-        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
       },
       {
         "kind": "busy",
@@ -1535,7 +1535,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
   "claude": {
     "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
-    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
     "serviceName": "Claude",
     "signs": [
       {
@@ -1548,7 +1548,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "quota",
-        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
       },
       {
         "kind": "busy",
@@ -1567,7 +1567,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
   "codex": {
     "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
-    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
     "serviceName": "Codex",
     "signs": [
       {
@@ -1580,7 +1580,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "quota",
-        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
       },
       {
         "kind": "busy",
@@ -1599,7 +1599,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
   "cursor": {
     "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
-    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
     "serviceName": "Cursor",
     "signs": [
       {
@@ -1612,7 +1612,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "quota",
-        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
       },
       {
         "kind": "busy",
@@ -1631,7 +1631,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
   "deepseek": {
     "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
-    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
     "serviceName": "DeepSeek",
     "signs": [
       {
@@ -1644,7 +1644,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "quota",
-        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
       },
       {
         "kind": "busy",
@@ -1663,7 +1663,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
   "kimi": {
     "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
-    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
     "serviceName": "Kimi Code",
     "signs": [
       {
@@ -1676,7 +1676,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "quota",
-        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
       },
       {
         "kind": "busy",
@@ -1695,7 +1695,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
   "opencode": {
     "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
-    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
     "serviceName": "OpenCode",
     "signs": [
       {
@@ -1708,7 +1708,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "quota",
-        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
       },
       {
         "kind": "busy",
@@ -1727,7 +1727,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
   "pi": {
     "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
-    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
     "serviceName": "Pi",
     "signs": [
       {
@@ -1740,7 +1740,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "quota",
-        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota\\|\\\\b\\(\\?:session\\|weekly\\|daily\\|monthly\\|\\\\d\\+\\[ -\\]\\(\\?:hour\\|day\\|week\\)\\) limit\\\\b/i,
       },
       {
         "kind": "busy",
@@ -3337,7 +3337,7 @@ Bellwood 里有三层角色：**总助（Router） → 你（项目经理） →
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法见任务图手册（也可跑 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`hub ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
   - \`hub worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
@@ -3510,7 +3510,7 @@ Bellwood 里有三层角色：**总助（Router） → 你（项目经理） →
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法见任务图手册（也可跑 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`hub ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
   - \`hub worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
@@ -3683,7 +3683,7 @@ Bellwood 里有三层角色：**总助（Router） → 你（项目经理） →
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法见任务图手册（也可跑 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`hub ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
   - \`hub worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
@@ -3856,7 +3856,7 @@ Bellwood 里有三层角色：**总助（Router） → 你（项目经理） →
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法见任务图手册（也可跑 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`hub ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
   - \`hub worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
@@ -4029,7 +4029,7 @@ Bellwood 里有三层角色：**总助（Router） → 你（项目经理） →
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法见任务图手册（也可跑 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`hub ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
   - \`hub worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
@@ -4202,7 +4202,7 @@ Bellwood 里有三层角色：**总助（Router） → 你（项目经理） →
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法见任务图手册（也可跑 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`hub ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
   - \`hub worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
@@ -4375,7 +4375,7 @@ Bellwood 里有三层角色：**总助（Router） → 你（项目经理） →
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法见任务图手册（也可跑 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`hub ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
   - \`hub worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
@@ -4548,7 +4548,7 @@ Bellwood 里有三层角色：**总助（Router） → 你（项目经理） →
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法见任务图手册（也可跑 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`hub ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`hub ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
   - \`hub worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干

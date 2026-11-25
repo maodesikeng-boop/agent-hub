@@ -13,22 +13,24 @@ import type { StepWorkspacePlan, TaskGraphWorkersBridge } from "../task-graphs.t
 import { ownWorker, workerRow, workerSession } from "./ctx.ts";
 import { directChatSummary } from "./direct-chat.ts";
 import { insertLine, insertPmMessage, isWorkerInFlight, stopQueued } from "./lines.ts";
+import { cancelQueuedWorkerPmNoticesIn, type CancelWorkerPmNoticesOptions } from "./stale-notices.ts";
 import { notStarted, sendDedupeKey, validMaxTimeMs, validTask, worktreeLabel } from "./text.ts";
 import { clearMaxTime, clearMaxTimeIn, startMaxTime } from "./timers.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
 export type EndedWorker = { ended: WorkerDbRow; interrupted: boolean; nodeNote: string | null };
 
-export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts: { notifyGraph?: boolean } = {}): EndedWorker {
+export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts: { notifyGraph?: boolean } & CancelWorkerPmNoticesOptions = {}): EndedWorker {
   clearMaxTimeIn(w, p, worker.worker_conversation_id);
   const session = workerSession(w, worker);
   const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
-  if (interrupted) p.after.push(() => w.endInterrupted.add(session.id));
   w.awaitingBackground.take(session.id);
+  p.after.push(() => { w.turnStarts.delete(session.id); });
   w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", w.now(), worker.id);
   const ended = workerRow(w, worker.id)!;
   w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
   stopQueued(w, p, ended);
+  cancelQueuedWorkerPmNoticesIn(w, p, ended, opts);
   insertLine(w, p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
   const nodeNote = opts.notifyGraph === false ? null : (w.options.taskGraphs?.onWorkerEndedIn(p, ended.id) ?? null);
   return { ended, interrupted, nodeNote };
@@ -111,6 +113,7 @@ export function sendIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArg
   // Hidden commands like /clear would swap the session id and later resumes would reattach the old conversation.
   const blocked = w.ctx.commandBlockReason(session, text);
   if (blocked !== null) throw fail("invalid", blocked);
+  cancelQueuedWorkerPmNoticesIn(w, p, worker);
   w.options.taskGraphs?.onWorkerResumedIn(p, worker.id);
   w.sessions.dropRateLimitRejection(p, session.id);
   const message = insertPmMessage(w, p, worker, session, text, sendDedupeKey(worker.id));
@@ -173,16 +176,17 @@ export function endOpenWorkersIn(w: WorkersCtx, p: Pending, pmId: PmId): void {
     const queued = w.db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued' ORDER BY id", worker.worker_conversation_id);
     for (const { id } of queued) w.messages.transition(p, id, "stopped");
     const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
-    if (interrupted) w.endInterrupted.add(session.id);
     if (!interrupted && !notStarted(worker) && (queued.length > 0 || session.status === "running")) {
       p.stops.push({ conversationId: worker.worker_conversation_id, sessionId: session.id });
     }
     w.awaitingBackground.take(session.id);
+    p.after.push(() => { w.turnStarts.delete(session.id); });
     w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
     w.db.run("UPDATE agent_sessions SET status = 'ended', updated_at = ? WHERE id = ? AND status != 'ended'", t, session.id);
     const ended = workerRow(w, worker.id)!;
     w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
     w.sessions.updateLive(p, session.id, idle);
+    cancelQueuedWorkerPmNoticesIn(w, p, ended);
     insertLine(w, p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
     w.options.taskGraphs?.onWorkerEndedIn(p, ended.id);
   }

@@ -1,3 +1,4 @@
+import { normalizeBackgroundTasks } from "../../daemon/driver/background-tasks.ts";
 import { pickStepInput, toolStepSignature } from "../../daemon/driver/protocol.ts";
 import { MAX_STREAMING_TOOL_BLOCKS } from "../../shared/index.ts";
 import { toolResultOutputs } from "../_common/tool-output.ts";
@@ -17,31 +18,20 @@ import { checkWorkerToolViolation, observeAgyUsage } from "./protocol.ts";
 import { checkAgyConnectorCall } from "./readonly.ts";
 
 export function onReportedBackgroundTasks(host: AgyDriverHost, st: SessionState, proc: Proc, rawTasks: unknown): void {
-  if (!Array.isArray(rawTasks)) return;
-  const next = new Map<string, { task_id: string; description: string }>();
-  for (const t of rawTasks) {
-    if (typeof t !== "object" || t === null) continue;
-    const { task_id: id, ambient, description } = t as {
-      task_id?: unknown;
-      ambient?: unknown;
-      description?: unknown;
-    };
-    if (typeof id === "string" && id !== "" && ambient !== true) {
-      next.set(id, { task_id: id, description: typeof description === "string" ? description : "" });
-    }
-  }
+  const next = normalizeBackgroundTasks(rawTasks, st.reportedTasks, Date.now());
+  if (next === null) return;
   st.reportedTasks = next;
   syncBackgroundTasks(host, st, proc);
 }
 
 export function syncBackgroundTasks(host: AgyDriverHost, st: SessionState, proc: Proc): void {
-  const merged = new Map<string, { task_id: string; description: string }>(st.reportedTasks);
+  const tasks = Array.from(st.reportedTasks.values(), ({ id, label, startedAt }) => ({
+    task_id: id, description: label, started_at: startedAt,
+  }));
   for (const step of st.activeToolSteps.values()) {
-    if (step.promoted && !merged.has(step.task_id)) {
-      merged.set(step.task_id, { task_id: step.task_id, description: step.description });
-    }
+    if (step.promoted && !st.reportedTasks.has(step.task_id)) tasks.push(step);
   }
-  host.onBackgroundTasksChanged(st, proc, [...merged.values()]);
+  host.onBackgroundTasksChanged(st, proc, tasks);
 }
 
 export function flushStepTexts(host: AgyDriverHost, st: SessionState, at: number, exceptStepId?: string): void {
@@ -206,6 +196,7 @@ function onToolStep(host: AgyDriverHost, st: SessionState, proc: Proc, ctx: Step
       task_id: stepId,
       description: extractToolDescription(toolName, parameters),
       promoted,
+      started_at: st.activeToolSteps.get(stepId)?.started_at ?? at,
     });
     if (promoted) syncBackgroundTasks(host, st, proc);
   }

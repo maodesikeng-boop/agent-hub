@@ -2,30 +2,66 @@ import type { AnyActionRow, ReviewVerifyParams } from "../../../shared/actions.t
 import type { MessageId, SessionId, WorkerId } from "../../../shared/domain.ts";
 import type { SetupOutcome, WorktreeTask } from "../../../shared/ledger.ts";
 import { DEFAULT_WORKER_MAX_TIME_MS } from "../../../shared/limits.ts";
-import { parseReviewTarget, reviewVerifyErrorProblem, type ReviewSnapshot, type ReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
+import { parseReviewTarget, reviewTakeoverWorkspaceNote, reviewVerifyErrorProblem, reviewWorkspaceLines, type ReviewSnapshot, type ReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
 import { setupNote } from "../../prompt.ts";
 import type { Pending } from "../context.ts";
 import { toMessage } from "../rows.ts";
 import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
 import { idle } from "../sessions.ts";
+import { refreshHandoffBranch } from "../task-graph-handoff.ts";
 import { mainFolderOf, projectRow, workerRow, workerSession } from "./ctx.ts";
 import { enqueueFirstTurn, insertLine } from "./lines.ts";
 import { insertReport, insertTurnFailed } from "./reports.ts";
+import { cancelQueuedWorkerPmNoticesIn } from "./stale-notices.ts";
 import { notStarted, taskDedupeKey, toReportMessage } from "./text.ts";
 import { clearMaxTime, startMaxTime, turnTimeoutOf } from "./timers.ts";
 import type { ReportMessageRow, WorkersCtx } from "./types.ts";
+
+function refreshPendingReviewBranch(w: WorkersCtx, workerId: WorkerId, path: string, previous: string, branch: string): void {
+  w.write((p) => {
+    w.db.run(
+      "UPDATE workers SET review_json = json_set(review_json, '$.branch', ?), updated_at = ? WHERE id = ?",
+      branch, w.now(), workerId,
+    );
+    const task = w.db.get<MessageDbRow>(
+      "SELECT * FROM messages WHERE dedupe_key = ? AND status = 'queued'",
+      taskDedupeKey(workerId),
+    );
+    if (task === undefined) return;
+    const workspace = task.text
+      .replace(reviewWorkspaceLines(path, previous).join("\n"), () => reviewWorkspaceLines(path, branch).join("\n"))
+      .replace(reviewTakeoverWorkspaceNote(path, previous), () => reviewTakeoverWorkspaceNote(path, branch));
+    const text = refreshHandoffBranch(workspace, previous, branch);
+    if (text === task.text) return;
+    const updated = w.db.get<MessageDbRow>(
+      "UPDATE messages SET text = ?, updated_at = ? WHERE id = ? RETURNING *",
+      text, w.now(), task.id,
+    )!;
+    p.changes.push({ type: "message.updated", data: { message: toMessage(updated) } });
+  });
+}
 
 export function getWorktreeTask(w: WorkersCtx, workerId: WorkerId): WorktreeTask | null {
   const worker = workerRow(w, workerId);
   if (worker === null || worker.workspace !== "worktree") return null;
   const review = parseReviewTarget(worker.review_json);
-  const base = review === null ? w.options.taskGraphs?.workerGraphForkBase(workerId) : undefined;
+  const plan = worker.status !== "ended" && (review === null || review.snapshot === null)
+    ? w.options.taskGraphs?.workerGraphWorkspacePlan(workerId)
+    : undefined;
+  const worktreePath = worker.worktree_path!;
+  let reviewBranch = review?.branch;
+  if (review?.snapshot === null && plan?.kind === "review" && review.branch !== plan.branch) {
+    refreshPendingReviewBranch(w, workerId, worktreePath, review.branch, plan.branch);
+    reviewBranch = plan.branch;
+  }
   return {
     workerId,
     sessionId: workerSession(w, workerId).id,
     repo: mainFolderOf(w, worker.project_id),
-    worktreePath: worker.worktree_path!,
-    checkout: review !== null ? { kind: "review", branch: review.branch } : { kind: "branch", branch: worker.branch!, ...(base !== undefined ? { base } : {}) },
+    worktreePath,
+    checkout: reviewBranch !== undefined
+      ? { kind: "review", branch: reviewBranch }
+      : { kind: "branch", branch: worker.branch!, ...(plan?.kind === "fork" ? { base: plan.baseBranch } : {}) },
     status: worker.status as WorktreeTask["status"],
     setupCommand: projectRow(w, worker.project_id).setup_command,
   };
@@ -143,13 +179,12 @@ export const onReviewVerified = (w: WorkersCtx, params: ReviewVerifyParams, resu
 
 function worktreeCreateFailedIn(w: WorkersCtx, p: Pending, workerId: WorkerId, error: string): void {
   const worker = workerRow(w, workerId);
-  if (worker === null) return;
+  if (worker === null || worker.status === "ended") return;
   clearMaxTime(w, worker.worker_conversation_id);
-  if (worker.status !== "ended") {
-    w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", w.now(), worker.id);
-    const session = workerSession(w, worker.id);
-    w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
-  }
+  w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", w.now(), worker.id);
+  const session = workerSession(w, worker.id);
+  w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
+  cancelQueuedWorkerPmNoticesIn(w, p, worker);
   const deliver = `建 worktree 失败，这个 Worker 没能开工，已经收工：${error}。要的话修好问题后重新派一个。`;
   const graphDeliver =
     w.options.taskGraphs?.onWorkerFailedIn(p, worker.id, {

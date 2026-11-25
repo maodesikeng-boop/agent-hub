@@ -2704,7 +2704,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId }).data.graph.nodes.find((n) => n.key === "impl")!.activeWorkerId).toBe(implWorkerId);
   });
 
-  it("在项目群点打回、在网页上拍板或取消任务图（含断线期间网页处理后重连）时，总助单聊与项目群两边的检查点卡均实时同步收口", async () => {
+  it("settles checkpoint cards in both Feishu chats on an answer or explicit close, including after reconnect", async () => {
     await connect();
     const first = await raiseCheckpointWithDeliverables();
     const rejectAction = { fusa: 1, kind: "choose", card: { kind: "gate", askMessageId: first.askMsgId, graphId: first.graphId, nodeKey: "design" }, optionIndex: 1 };
@@ -2721,7 +2721,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(store().postOf({ kind: "router_ask", messageId: secondAskId })?.state).toBe("card_pending");
 
     fake.handlers!.onDisconnected("offline during web decide");
-    ledger.decideTaskNode(first.graphId, "design", { clientId: "web-reject-2", choice: "打回", note: "再补一处" });
+    ledger.decideTaskNode(first.graphId, "design", { clientId: "web-reject-2", askMessageId: secondAskId, choice: "打回", note: "再补一处" });
     fake.handlers!.onConnected();
     await settle();
     expect(postOfAsk(secondAskId).state).toBe("card_settled");
@@ -2733,6 +2733,11 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(store().postOf({ kind: "router_ask", messageId: thirdAskId })?.state).toBe("card_pending");
 
     ledger.cancelTaskGraph(first.graphId, { reason: "直接取消" });
+    await settle();
+    expect(postOfAsk(thirdAskId).state).toBe("card_pending");
+    expect(store().postOf({ kind: "router_ask", messageId: thirdAskId })?.state).toBe("card_pending");
+
+    ledger.hubCall(lin.sessionId, "ask.close", { messageId: thirdAskId });
     await settle();
     expect(postOfAsk(thirdAskId).state).toBe("card_settled");
     expect(store().postOf({ kind: "router_ask", messageId: thirdAskId })?.state).toBe("card_settled");

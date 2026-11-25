@@ -146,7 +146,7 @@ export interface HubArgsMap {
   "worker.send": { workerId: WorkerId; text: string; maxTimeMs?: number };
   "worker.max-time": { workerId: WorkerId; maxTimeMs: number };
   "worker.end": { workerId: WorkerId };
-  "worker.list": Record<string, never>;
+  "worker.list": { vendor?: AgentVendor };
   "worker.show": { workerId: WorkerId; task?: boolean; report?: number | "latest" };
   "worker.search": { keywords: string[]; limit?: number };
   "worker.log": { workerId: WorkerId; last?: number; stats?: boolean };
@@ -160,7 +160,7 @@ export interface HubArgsMap {
     replaceItemId?: RouterItemId;
     files?: HubFileArg[];
   };
-  "ask.close": { itemId: RouterItemId };
+  "ask.close": { itemId: RouterItemId } | { messageId: MessageId };
   "schedule.add": { name: string; prompt: string; daily?: string; everyMinutes?: number };
   "schedule.list": Record<string, never>;
   "schedule.pause": { scheduleId: ScheduleId };
@@ -393,11 +393,28 @@ interface HubModelEntry {
   efforts: string[];
 }
 
+export interface HubVendorQuotaWindow {
+  id: string;
+  label: string;
+  utilization: number;
+  resetsAt: number | null;
+}
+
+export interface HubVendorQuota {
+  status: "ok" | "limited";
+  source: "observed" | "fetched" | "rate_limit";
+  resetsAt: number | null;
+  observedAt: number;
+  reason: string | null;
+  windows?: readonly HubVendorQuotaWindow[];
+}
+
 export interface HubVendorModels {
   vendor: AgentVendor;
   label: string;
   source: "vendor" | "bundled";
   availability: VendorAvailability;
+  quota?: HubVendorQuota;
   defaultModel: string | null;
   defaultModelId: string | null;
   defaultEffort: string | null;
@@ -425,7 +442,7 @@ interface HubDataMap {
   "worker.search": { hits: WorkerSearchHit[] };
   models: { vendors: HubVendorModels[] };
   ask: { messageId: MessageId; graph?: TaskGraph; item?: RouterItem };
-  "ask.close": { item: RouterItem };
+  "ask.close": { item: RouterItem } | { messageId: MessageId };
   "schedule.add": { schedule: ScheduleRecord };
   "schedule.list": { schedules: ScheduleRecord[] };
   "schedule.pause": { schedule: ScheduleRecord };

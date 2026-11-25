@@ -17,7 +17,7 @@ import { formatStepWaitingPmMessage } from "../task-graph-handoff.ts";
 import { stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
 import { artifactWithoutCheckpoint, hasText, isStoredCheckpoint, workerIdsOf } from "./rows.ts";
-import { buildGraphMaps, isGraphAllSettled, loadGraph, publishGraphIn, stepPosition, touchGraph } from "./store.ts";
+import { buildGraphMaps, hasPendingStepAsk, isGraphAllSettled, loadGraph, publishGraphIn, stepPosition, touchGraph } from "./store.ts";
 import { formatCheckpointRejectionMessage, formatWorkerDecisionMessage, turnedListText } from "./text.ts";
 import { emptyProgress, type ProgressResult, type TaskGraphCtx, type TaskGraphDbRow, type TaskNodeDbRow } from "./types.ts";
 
@@ -244,7 +244,7 @@ function settleStepIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, upsDone: bo
 export function executeStepDecisionIn(g: TaskGraphCtx, p: Pending, graphRow: TaskGraphDbRow, node: TaskNodeDbRow, input: DecisionInput): DecisionResult {
   const t = g.now();
   const run: DecisionRun = { graphRow, node, input, t, dedupeId: input.clientId ?? `pm:${t}:${node.id}` };
-  if (isStoredCheckpoint(node)) {
+  if (isStoredCheckpoint(node) && hasPendingStepAsk(g, node)) {
     return input.choice === CONFIRM_PASS_OPTION ? passCheckpointIn(g, p, run) : rejectCheckpointIn(g, p, run);
   }
   const questionText = (node.gate_question ?? node.title).trim();

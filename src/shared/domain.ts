@@ -483,6 +483,7 @@ export type WorkerEvent = (typeof WORKER_EVENTS)[number];
 export type WorkerLineStatus = WorkerReportStatus | "unformatted";
 
 export type WorkerMessageMeta = {
+  completedStep?: true;
   workerId: WorkerId;
   workerConversationId: ConversationId;
   title: string;
@@ -745,8 +746,8 @@ export function isTaskNodeUserBlocked(node: Pick<TaskNode, "status" | "waitingFo
   return isTaskNodeWaitingUser(node) && node.userBlocker != null;
 }
 
-export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker">): boolean {
-  return isTaskNodeWaitingUser(node) && node.userBlocker == null;
+export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker" | "gateAskPending">): boolean {
+  return node.gateAskPending ?? (isTaskNodeWaitingUser(node) && node.userBlocker == null);
 }
 
 export function isTaskNodeWaitingPm(node: Pick<TaskNode, "status" | "waitingFor">): boolean {
@@ -800,6 +801,7 @@ export interface TaskNode {
   gateSummaryMd: string | null;
   gateRecommended: string | null;
   gateAskMessageId: MessageId | null;
+  gateAskPending?: boolean;
   gateCheckpoint?: boolean;
   userBlocker?: UserBlocker | null;
   decision: TaskDecision | null;

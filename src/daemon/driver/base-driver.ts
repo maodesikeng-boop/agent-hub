@@ -426,10 +426,23 @@ export abstract class BaseSessionDriver<
   }
 
   protected takePendingEntryBatch(st: TState): PendingBatchParts | null {
+    st.pending = st.pending.filter((entry) => this.systemBatchCurrent(st, entry));
     const res = takePendingBatch(st.pending, (text) => this.composer.isCommand(text));
     if (!res) return null;
     st.pending = res.remaining;
     return res.taken;
+  }
+
+  private systemBatchCurrent(st: TState, batch: Pick<BaseBatch, "source" | "messageIds">): boolean {
+    const validate = this.opts.canDeliverSystemMessage;
+    return batch.source !== "system" || validate === undefined || batch.messageIds.every((id) => validate(st.id, id));
+  }
+
+  protected discardStaleSystemBatch(st: TState, proc: TProc, batch: TBatch): boolean {
+    if (this.systemBatchCurrent(st, batch)) return false;
+    this.dropBatch(st, batch);
+    this.afterTurn(st, proc);
+    return true;
   }
 
   protected takeNotesPrefixes(
@@ -526,6 +539,7 @@ export abstract class BaseSessionDriver<
     }
     if (st.ended || st.proc !== proc || st.pending.length !== 1 || st.pending[0] !== entry) return null;
     st.pending.shift();
+    if (!this.systemBatchCurrent(st, entry)) return null;
     if (canSteer()) return send();
     st.pending.unshift(entry);
     return null;
@@ -591,7 +605,7 @@ export abstract class BaseSessionDriver<
         return;
       }
       const batch = this.takeBatch(st);
-      if (!batch) return;
+      if (!batch) return this.armIdle(st, proc);
       if (proc.initSeen) await this.writeBatch(st, proc, batch);
       else await this.startup(st, batch, proc, null);
     };
@@ -703,13 +717,13 @@ export abstract class BaseSessionDriver<
   protected onBackgroundTasksChanged(st: TState, proc: TProc, rawTasks: unknown): void {
     if (st.proc !== proc) return;
     const wasActive = st.background.active;
-    if (!st.background.replace(rawTasks)) return;
-    this.emit(st.id, { type: "background.changed", count: st.background.count, at: Date.now() });
+    const at = Date.now();
+    if (!st.background.replace(rawTasks, at)) return;
+    this.emit(st.id, { type: "background.changed", count: st.background.count, tasks: st.background.snapshot(), at });
     if (st.background.active === wasActive || st.idleTimer === null) return;
     if (!proc.closing && !this.busy(st) && !st.ended) this.armIdle(st, proc);
   }
 
-  /** Interrupting while only background tasks remain closes the process and stops them too. */
   protected stopIdleBackgroundTasks(st: TState, proc: TProc): Promise<void> | null {
     if (this.busy(st) || !st.background.active) return null;
     this.logSession(st.id, `停止时只剩 ${st.background.count} 个后台任务，关掉进程把它们一起停掉`);

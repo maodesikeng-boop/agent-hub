@@ -263,7 +263,7 @@ function DesktopSidePanel({
         onClose={() => c.toggleRail()}
         closeLabel="Close Pieces"
       >
-        <RailGroups {...railProps(c)} className="pb-3" />
+        <RailGroups {...railProps(c)} onShowHistory={c.keepRailOpen} className="pb-3" />
       </SidePanel>
     );
   }

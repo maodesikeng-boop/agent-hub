@@ -25,6 +25,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Ledger database](ledger-database.md): Exclusive SQLite file lock, the `migrations/manifest.sha256` completeness check, and upgrade tests on ledgers written by released versions.
 - [Reliable turn completion](turn-completion-design.md): SQLite turn-outcome receipts, ordered per-session settlement, bounded retries after write failures, send holds, and receipt-aware restart recovery.
 - [In-chat progress checklist](progress-checklist-design.md): Normalized vendor checklists, launch switches for hidden todo tools, append-only checklist messages, per-step process grouping, and live action timing in the `Worked for` slot.
+- [Worker state accuracy and operations](worker-ops-fix-design.md): Worktree branch reconciliation, shared Worker list/show states, cross-vendor context-token preservation, stale Worker PM notice suppression, Task Graph step agent display, live `hub models` quota tracking, and background command inspection.
 
 ## Desktop and distribution
 

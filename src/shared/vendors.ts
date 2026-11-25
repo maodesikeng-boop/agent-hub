@@ -342,7 +342,7 @@ export interface VendorFailureSigns {
 }
 
 const COMMON_AUTH_PATTERN = /not logged in|unauthenticated|authentication required|sign in|to log in|\b401\b|invalid_api_key/i;
-const COMMON_QUOTA_PATTERN = /quota[_ ]?exceeded|rate[_ ]?limit|usage[_ ]?limit(?:_reached)?|resource_exhausted|\b429\b|credit balance|quota/i;
+const COMMON_QUOTA_PATTERN = /quota[_ ]?exceeded|rate[_ ]?limit|usage[_ ]?limit(?:_reached)?|resource_exhausted|\b429\b|credit balance|quota|\b(?:session|weekly|daily|monthly|\d+[ -](?:hour|day|week)) limit\b/i;
 const COMMON_CONTEXT_PATTERN = /context_length_exceeded|context window|prompt is too long/i;
 const COMMON_BUSY_PATTERN = /\b529\b|overloaded|api_error|\b5\d\d\b|internal server error|service unavailable/i;
 

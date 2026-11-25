@@ -277,6 +277,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const problem = checkUserLine(batch.line);
     if (problem) {
       this.invalidInput(st, problem, batch.messageIds);
@@ -314,6 +315,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         for (let attempt = 0; ; attempt++) {
           if (!proc) proc = await this.#spawn(st, resume, files);
           this.abortIfStopped(st, proc);
+          if (this.discardStaleSystemBatch(st, proc, batch)) return;
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
           proc.child.stdin.write(batch.line + "\n");

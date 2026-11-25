@@ -1,4 +1,5 @@
 import { acpChecklistFromSessionUpdate, acpChecklistFromToolUpdate } from "./checklist.ts";
+import { positiveContextTokens } from "../../../daemon/driver/usage.ts";
 import type { SessionNotification, ToolCall, ToolCallUpdate } from "@agentclientprotocol/sdk/unstable";
 import { pickStepInput, toolStepSignature } from "../../../daemon/driver/protocol.ts";
 import { MAX_MESSAGE_BYTES, SESSION_STEPS_KEEP, type ChecklistUpdate } from "../../../shared/index.ts";
@@ -223,8 +224,9 @@ export function handleSessionUpdate(
       return;
     }
     case "usage_update": {
-      if (typeof update.used === "number" && Number.isFinite(update.used) && update.used >= 0) {
-        proc.latestContextUsed = Math.floor(update.used);
+      const measured = positiveContextTokens(update.used);
+      if (measured !== null) {
+        proc.latestContextUsed = measured;
         const current = host.row(st)?.usage ?? ZERO_USAGE;
         const next = applyAcpUsageUpdate(current, update);
         if (next !== null) host.pushUsage(st, next);

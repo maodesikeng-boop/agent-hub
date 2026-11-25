@@ -26,7 +26,7 @@ import type { Db } from "../../store/index.ts";
 import { fail, type Pending } from "../context.ts";
 import { collectGraphBranches, collectGraphPrUrls, stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
-import { artifactWithoutCheckpoint, isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
+import { isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
 import { charLen, validateNodeKey } from "./spec.ts";
 import { getGraphRow, hydrateGraphs, isGraphAllSettled, listStepRows, loadGraph, publishGraphIn, requireStepRow, resolveGraphForPm } from "./store.ts";
 import { collapseOneLine, formatGraphText, unlockedNoteOf, workerIdList } from "./text.ts";
@@ -35,7 +35,7 @@ import { emptyProgress, type PmCaller, type ProgressResult, type TaskGraphCtx, t
 export function show(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.show">): HubResult<"graph.show"> {
   const row = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: false });
   const graph = loadGraph(g, row.id)!;
-  return { text: formatGraphText(graph), data: { graph } };
+  return { text: formatGraphText(graph, true, { ...g, pmVendor: caller.vendor }), data: { graph } };
 }
 
 export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.list">): HubResult<"graph.list"> {
@@ -55,11 +55,11 @@ export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.lis
             caller.pmId,
             MAX_ACTIVE_GRAPHS_PER_PROJECT,
           );
-  const graphs = hydrateGraphs(g, rows);
+  const graphs = hydrateGraphs(g, rows, true);
   if (graphs.length === 0) {
     return { text: filtered ? "还没有符合条件的任务图。" : "当前没有活跃的任务图。", data: { graphs: [] } };
   }
-  return { text: graphs.map((graph) => formatGraphText(graph, false)).join("\n\n"), data: { graphs } };
+  return { text: graphs.map((graph) => formatGraphText(graph, false, { ...g, pmVendor: caller.vendor })).join("\n\n"), data: { graphs } };
 }
 
 export function listProjectHistory(g: TaskGraphCtx, projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage {
@@ -123,30 +123,16 @@ export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
   const active = graphRow.status === "active";
   const wasAllSettled = active && isGraphAllSettled(g.db, graphRow.id);
   const t = g.now();
-  const cp = isStoredCheckpoint(node) ? 1 : 0;
-  if (node.status !== "done" && node.gate_ask_message_id !== null && node.decision_json === null) {
-    g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
-  }
   g.db.run(
     `UPDATE task_graph_steps
         SET status = 'done',
             waiting_for = NULL,
             active_worker_id = NULL,
             artifact_json = ?,
-            gate_question = CASE WHEN ? = 1 THEN NULL ELSE gate_question END,
-            gate_options_json = CASE WHEN ? = 1 THEN NULL ELSE gate_options_json END,
-            gate_summary_md = CASE WHEN ? = 1 THEN NULL ELSE gate_summary_md END,
-            gate_recommended = CASE WHEN ? = 1 THEN NULL ELSE gate_recommended END,
-            gate_ask_message_id = CASE WHEN ? = 1 THEN NULL ELSE gate_ask_message_id END,
             pm_note = ?,
             updated_at = ?
       WHERE id = ?`,
-    serializeArtifact(artifact, false),
-    cp,
-    cp,
-    cp,
-    cp,
-    cp,
+    serializeArtifact(artifact, isStoredCheckpoint(node)),
     nextPmNote,
     t,
     node.id,
@@ -184,11 +170,10 @@ function skipNodeInternalIn(
   const artifact: TaskArtifact | null = trimmedReason ? { summary: `已跳过：${trimmedReason}` } : readStoredArtifact(node.artifact_json).artifact;
   g.db.run(
     "UPDATE task_graph_steps SET status = 'done', waiting_for = NULL, skipped = 1, artifact_json = ?, updated_at = ? WHERE id = ?",
-    serializeArtifact(artifact, false),
+    serializeArtifact(artifact, isStoredCheckpoint(node)),
     t,
     node.id,
   );
-  if (node.gate_ask_message_id !== null) g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
   const progress = recomputeGraphProgressIn(g, p, graphRow, callerSession, context, { retractBlockedWaiting: false });
   syncDeliveryNoteAfterProgressIn(g, p, graphRow, wasAllSettled);
   const lead = `用户在网页上跳过了步骤「${nodeKey}（${node.title}）」${trimmedReason ? `（说明：${trimmedReason}）` : ""}，`;
@@ -202,7 +187,7 @@ export function skipIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
   const nodeKey = validateNodeKey(args.nodeKey);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: true });
   const { graph, progress } = skipNodeInternalIn(g, p, graphRow, nodeKey, args.reason, false, caller, context);
-  return { text: `已跳过节点「${nodeKey}」${unlockedNoteOf(progress, graph)}\n${formatGraphText(graph)}`, data: { graph } };
+  return { text: `已跳过节点「${nodeKey}」${unlockedNoteOf(progress, graph)}\n${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}`, data: { graph } };
 }
 
 export function skipNode(g: TaskGraphCtx, graphId: TaskGraphId, rawNodeKey: TaskNodeKey, input: SkipTaskNodeRequest): SkipTaskNodeResponse {
@@ -234,19 +219,6 @@ function releaseGraphRowsIn(g: TaskGraphCtx, graphId: TaskGraphId, status: "canc
   g.db.run("UPDATE task_graphs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?", status, t, t, graphId);
 }
 
-function closeGraphCardsIn(g: TaskGraphCtx, p: Pending, graphId: TaskGraphId, t: number): void {
-  const nodes = g.db.all<TaskNodeDbRow>(
-    "SELECT * FROM task_graph_steps WHERE graph_id = ? AND (gate_ask_message_id IS NOT NULL OR artifact_json IS NOT NULL)",
-    graphId,
-  );
-  for (const n of nodes) {
-    if (n.gate_ask_message_id !== null) g.messages.settleAskIn(p, n.gate_ask_message_id, { by: "close" });
-    if (isStoredCheckpoint(n)) {
-      g.db.run("UPDATE task_graph_steps SET artifact_json = ?, updated_at = ? WHERE id = ?", artifactWithoutCheckpoint(n), t, n.id);
-    }
-  }
-}
-
 function cancelGraphInternalIn(
   g: TaskGraphCtx,
   p: Pending,
@@ -263,7 +235,6 @@ function cancelGraphInternalIn(
       graphRow.id,
     ),
   );
-  closeGraphCardsIn(g, p, graphRow.id, t);
   releaseGraphRowsIn(g, graphRow.id, "cancelled", t);
   const stoppedWorkerIds = candidates.size > 0 ? (g.options.workers?.()?.stopWorkersIn(p, [...candidates]) ?? []) : [];
   stopQueuedDeliveryNotesIn(g, p, graphRow.conversation_id, graphRow.id);

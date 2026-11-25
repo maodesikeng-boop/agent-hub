@@ -4,6 +4,7 @@ import type { HubArgs, HubResult, ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { MAX_TASK_BYTES, TAKEOVER_PREDECESSORS_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
+import { reviewTakeoverWorkspaceNote } from "../../../shared/review.ts";
 import { splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
 import { SETUP_RECEIPT_NOTE, WORKER_READONLY_NOTE, buildWorkerFirstMessage } from "../../prompt.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../../driver/write-scope.ts";
@@ -38,6 +39,7 @@ import {
 } from "./create.ts";
 import { endOpenUpstreamIn, endWorkerIn, type EndedWorker } from "./lifecycle.ts";
 import { isWorkerInFlight } from "./lines.ts";
+import { cancelQueuedWorkerPmNoticesIn } from "./stale-notices.ts";
 import { WORKTREE_DIRTY_NOTE, describeWorkspace, newReviewJson, notStarted, validMaxTimeMs, validTask } from "./text.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
@@ -183,6 +185,8 @@ function endPredecessorsIn(w: WorkersCtx, p: Pending, takeover: Takeover | null,
           : "换人时它还开着（没在跑），后台已按“没做完”把它收工（节点不标完成）。"
         : "它已经收工了。",
     }));
+    const latest = takeover.predecessors[0];
+    if (latest?.status === "ended") cancelQueuedWorkerPmNoticesIn(w, p, latest);
     for (const old of takeover.openOld) {
       endedOld.push(endWorkerIn(w, p, old, { notifyGraph: false }));
     }
@@ -202,7 +206,7 @@ function takeoverWorkspaceNote(
   const branches = [...new Set(takeover.predecessors.map((x) => x.branch).filter((b): b is string => b !== null && b !== ""))];
   const branchNote = branches.length === 0 ? "" : `前任的分支 ${branches.join("、")} 还在，要的话自己合进来。`;
   if (reviewPlan !== null) {
-    return `你在新开的审查目录 ${worker.worktree_path} 里，detached 在被审分支 ${reviewPlan.branch} 上；前任的审查目录不接手，它的结论和复现看下面的记录。`;
+    return reviewTakeoverWorkspaceNote(worker.worktree_path!, reviewPlan.branch);
   }
   if (inherit !== null) {
     return `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`;
