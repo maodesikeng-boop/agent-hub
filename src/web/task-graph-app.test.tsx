@@ -426,6 +426,27 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
 });
 
 describe("手机抽屉：同一份 RailGroups", () => {
+  it("marks Pieces as needing attention when a running step still has a pending card", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query.includes("coarse"),
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    const active = graph();
+    active.nodes = [makeNode({ key: "gate", title: "Confirm", status: "running", gateAskMessageId: 99, gateAskPending: true })];
+    active.edges = [];
+    await bootSingle(makeSnapshot({
+      pms: [makePm({ id: 1 })],
+      projects: [makeProject({ id: 1, pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1 } })],
+      activeTaskGraphs: [active],
+    }));
+    const toggle = await screen.findByRole("button", { name: "Show Pieces (needs you)" });
+    fireEvent.click(toggle);
+    const drawer = await screen.findByRole("dialog", { name: "Pieces" });
+    expect(within(drawer).getByTestId("peel-gate-row")).toHaveTextContent("Confirm");
+  });
+
   it("抽屉里有果冻管道与嫩芽进度图标，门禁提问同样去重；点节点先关抽屉再进 Piece", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query.includes("coarse"),

@@ -413,6 +413,9 @@ export const RailGroups = memo(function RailGroups({
   const [zoomedState, setZoomedState] = useState<{ id: TaskGraphId; fallback: TaskGraph } | null>(null);
   // Stable callback keeps the memoized PeelTrackList from rerendering.
   const zoomGraph = useCallback((g: TaskGraph) => setZoomedState({ id: g.id, fallback: g }), []);
+  const updateZoomedGraph = useCallback((graph: TaskGraph) => {
+    setZoomedState((current) => current?.id === graph.id ? { id: graph.id, fallback: graph } : current);
+  }, []);
 
   const asksRef = useRef(asks);
   asksRef.current = asks;
@@ -584,6 +587,7 @@ export const RailGroups = memo(function RailGroups({
           onOpenChange={(open) => {
             if (!open) setZoomedState(null);
           }}
+          onDecided={updateZoomedGraph}
           workers={workers}
           color={look.color}
           onOpenWorker={onOpenWorker}

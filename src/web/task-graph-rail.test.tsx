@@ -826,6 +826,52 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
     expect(titles).not.toContain("图内活");
   });
 
+  it.each(["cancelled", "completed"] as const)("settles a card in a %s graph and refreshes its history", async (status) => {
+    const user = userEvent.setup();
+    const answer = makeNode({
+      key: "gate",
+      title: "Approve the release",
+      status: status === "completed" ? "done" : "waiting",
+      waitingFor: status === "completed" ? null : "user",
+      gateOptions: ["Ship", "Hold"],
+      gateAskMessageId: 106,
+      gateAskPending: true,
+    });
+    const pending = makeGraph({ id: 50, title: "Release history", status, completedAt: 20_000, nodes: [answer] });
+    const settled = { ...pending, nodes: [{ ...answer, waitingFor: status === "completed" ? null : "pm", gateAskPending: false }] } satisfies TaskGraph;
+    let saved = false;
+    const readHistory = vi.fn((): TaskGraphsPage => ({ graphs: [saved ? settled : pending], hasMore: false }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      if (init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toMatchObject({ askMessageId: 106, choice: "Ship" });
+        saved = true;
+        return jsonResponse({ graph: settled, messageId: null });
+      }
+      return jsonResponse(readHistory());
+    });
+    render(
+      <RailGroups
+        asks={[]} workers={[]} completedGraphCount={1} projectId={1} openWorkerId={null}
+        onOpenAsk={() => {}} onOpenWorker={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    const open = async () => {
+      await user.click(await screen.findByRole("button", { name: "Release history" }));
+      return screen.findByRole("dialog", { name: "Release history" });
+    };
+    const dialog = await open();
+    expect(within(dialog).getByText("Waiting on you")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Ship" }));
+    await waitFor(() => expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull());
+    expect(within(dialog).queryByText("Waiting on you")).toBeNull();
+    await waitFor(() => expect(readHistory).toHaveBeenCalledTimes(2));
+
+    await user.keyboard("{Escape}");
+    expect(within(await open()).queryByTestId("peel-gate-card")).toBeNull();
+  });
+
   it("门禁拍板同步防重入：同一帧连点只发一次；失败显示错误，重试沿用同一个 clientId", async () => {
     const calls: DecideTaskNodeRequest[] = [];
     let fail = true;

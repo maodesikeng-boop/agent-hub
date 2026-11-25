@@ -170,10 +170,12 @@ export const GateDecisionCard = memo(function GateDecisionCard({
   graphId,
   node,
   client,
+  onDecided,
 }: {
   graphId: TaskGraphId;
   node: TaskNode;
   client: HubClient;
+  onDecided?: ((graph: TaskGraph) => void) | undefined;
 }) {
   const qc = useHubQueryClient();
   const draftKey = gateDecisionDraftKey(client.device, graphId, node.key, node.gateAskMessageId);
@@ -195,9 +197,13 @@ export const GateDecisionCard = memo(function GateDecisionCard({
         });
       },
       onMutate: () => setErr(null),
-      onSuccess: () => {
+      onSuccess: ({ graph }) => {
         clientIdRef.current = null;
         clearDecisionDraft(draftKey);
+        if (graph.status !== "active") {
+          onDecided?.(graph);
+          void qc.invalidateQueries({ queryKey: ["project-task-graphs", client.device, graph.projectId] });
+        }
       },
       onError: (error) => {
         setErr(errorText(error));
