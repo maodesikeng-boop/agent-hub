@@ -43,14 +43,6 @@ export function parseUsage(usage: unknown): Omit<TokenUsage, "context"> {
   };
 }
 
-export function assistantContext(obj: Record<string, unknown>): number | null {
-  if (obj.parent_tool_use_id !== undefined && obj.parent_tool_use_id !== null) return null;
-  const usage = (obj.message as { usage?: unknown } | undefined)?.usage;
-  if (typeof usage !== "object" || usage === null) return null;
-  const { input, cacheRead, cacheWrite } = parseUsage(usage);
-  return input + cacheRead + cacheWrite;
-}
-
 export const PARENT_SESSION_ENV: readonly string[] = [
   ...new Set([
     ...VENDOR_LIST.flatMap(({ id }) => VENDOR_PATHS[id].parentSessionEnv ?? []),

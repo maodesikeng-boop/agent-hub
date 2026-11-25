@@ -1,3 +1,4 @@
+import { preservePositiveContext } from "../../daemon/driver/usage.ts";
 import { EMPTY_TOKEN_USAGE, type AgentSessionPatch, type DriverEvent, type TokenUsage } from "../../shared/index.ts";
 import { clearTurnBuffers, type PiDriverHost, type Proc, type SessionState } from "./driver-state.ts";
 import { flushBufferedTexts } from "./events.ts";
@@ -127,9 +128,7 @@ function settleTurnUsage(
       st.turnUsage.reset();
       finished = { ...(row?.usage ?? EMPTY_TOKEN_USAGE) };
     }
-    if (parsedStats.contextTokens !== null) {
-      finished.context = parsedStats.contextTokens;
-    }
+    finished.context = preservePositiveContext(parsedStats.contextTokens, finished.context);
     patch.usage = finished;
   } else {
     st.turnUsage.reset();
