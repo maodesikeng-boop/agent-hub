@@ -21,6 +21,7 @@
   ],
   "ignoreDependencies": [
     "@tauri-apps/cli",
+    "lato-font",
     "oxlint",
     "oxlint-tsgolint"
   ],

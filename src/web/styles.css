@@ -1,5 +1,29 @@
 @import "tailwindcss";
-@import "@fontsource-variable/geist";
+
+/* Lato 2.015 (lato-font), the official files unmodified: the license reserves the name "Lato" for unaltered fonts, so they
+   are not subset. The build preloads all three from index.html (vite.config.ts), so the first screen never paints in a
+   fallback font. */
+@font-face {
+  font-family: "Lato";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("lato-font/fonts/lato-normal/lato-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Lato";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("lato-font/fonts/lato-medium/lato-medium.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Lato";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("lato-font/fonts/lato-semibold/lato-semibold.woff2") format("woff2");
+}
 
 @theme inline {
   --color-background: var(--background);
@@ -107,7 +131,7 @@ html[data-ui-scale="xl"] {
 }
 
 :root {
-  --font-ui: "Geist Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-ui: "Lato", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-code: "SF Mono", ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
 
   --wood-top: #5f3302;

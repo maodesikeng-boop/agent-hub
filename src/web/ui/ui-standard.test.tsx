@@ -192,16 +192,34 @@ describe("界面标准：共用组件", () => {
     expect(css).toMatch(/--border-focus: #4a4038;/);
   });
 
-  it("界面字体（第 13 条）：英文和数字是打包进来的 Geist，系统英文字体兜底，中文字体在最后；只在 styles.css 引一次，不用像素字", () => {
+  it("界面字体（第 13 条）：英文和数字是打包进来、未改动的 Lato 2.015 三个字重，系统英文字体兜底，中文字体在后；构建出的首页预载这三个文件", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const stack = /--font-ui:\s*([^;]+);/.exec(css)![1]!;
-    expect(stack).not.toMatch(/Inter|Pixel|Tiny5|Silkscreen/);
-    const order = ['"Geist Variable"', "-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"PingFang SC"', '"Microsoft YaHei"', "sans-serif"].map((f) => stack.indexOf(f));
+    expect(stack).not.toMatch(/Inter|Pixel|Tiny5|Silkscreen|Geist/);
+    const order = ['"Lato"', "-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"PingFang SC"', '"Microsoft YaHei"', "sans-serif"].map((f) => stack.indexOf(f));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect(order).toEqual(order.toSorted((a, b) => a - b));
-    expect(css.match(/@import "@fontsource-variable\/geist";/g)).toHaveLength(1);
-    expect(readFileSync("src/web/main.tsx", "utf8")).not.toMatch(/fontsource/);
-    expect(JSON.parse(readFileSync("package.json", "utf8")).dependencies).toHaveProperty("@fontsource-variable/geist");
+    const faces = [...css.matchAll(/@font-face \{([^}]*)\}/g)].map(([, body]) => ({
+      family: /font-family: ([^;]+);/.exec(body!)?.[1],
+      weight: /font-weight: (\d+);/.exec(body!)?.[1],
+      display: /font-display: (\w+);/.exec(body!)?.[1],
+      src: /src: url\("([^"]+)"\) format\("woff2"\);/.exec(body!)?.[1],
+    }));
+    expect(faces).toEqual([
+      { family: '"Lato"', weight: "400", display: "swap", src: "lato-font/fonts/lato-normal/lato-normal.woff2" },
+      { family: '"Lato"', weight: "500", display: "swap", src: "lato-font/fonts/lato-medium/lato-medium.woff2" },
+      { family: '"Lato"', weight: "600", display: "swap", src: "lato-font/fonts/lato-semibold/lato-semibold.woff2" },
+    ]);
+    expect(css).not.toMatch(/fontsource/);
+    expect(readFileSync("src/web/main.tsx", "utf8")).not.toMatch(/fontsource|lato-font/);
+    const deps = JSON.parse(readFileSync("package.json", "utf8")).dependencies;
+    expect(deps).toHaveProperty("lato-font");
+    expect(deps).not.toHaveProperty("@fontsource-variable/geist");
+    const vite = readFileSync("vite.config.ts", "utf8");
+    expect(vite).toMatch(/rel: "preload", href: `\/\$\{file\.fileName\}`, as: "font", type: "font\/woff2", crossorigin: true/);
+    expect(vite).toMatch(/plugins: \[[^\]]*\bpreloadFonts\b[^\]]*\]/);
+    const latoFile = new RegExp(/const LATO_FILE = \/(.+)\/;/.exec(vite)![1]!);
+    for (const face of faces) expect(latoFile.test(`/repo/node_modules/${face.src}`), face.src).toBe(true);
   });
 });
 
