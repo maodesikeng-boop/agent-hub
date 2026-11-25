@@ -169,27 +169,27 @@ describe("Worker 线程卡（ThreadCard）", () => {
   const report = (over: Parameters<typeof makeWorkerLine>[0]["line"] = {}) =>
     makeWorkerLine({ id: 5, line: { event: "report", status: "done", summary: "按钮统一成 36px，开了 PR #128", ...over } });
 
-  it("一张 4px 圆角、1px 结构线的卡片内放纸片小灵头像、标题、状态词、时间和第一行摘要，整张卡片可点开 Worker 对话", async () => {
+  it("汇报是一行：纸片小灵头像、标题、时间和箭头，状态词和第一行摘要只给读屏，没有常驻边框，整行可点开 Worker 对话", async () => {
     const onOpenWorker = vi.fn();
     const { container } = list([report()], { actions: actions({ onOpenWorker }) });
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
     expect(row).toHaveAttribute("data-side", "left");
-    const bubble = within(row).getByRole("button");
+    const bubble = within(row).getByRole("button", { name: "修 X, Done, 按钮统一成 36px，开了 PR #128" });
     expect(bubble).toHaveAttribute("data-bubble");
     expect(bubble.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
     expect(bubble).toHaveTextContent("修 X");
-    expect(bubble).toHaveTextContent("Done");
-    expect(bubble).toHaveTextContent("按钮统一成 36px，开了 PR #128");
+    expect(bubble).not.toHaveTextContent("Done");
+    expect(bubble).not.toHaveTextContent("按钮统一成 36px");
     const userBubble = list([makeUserMessage({ id: 1 })]).container.querySelector("[data-bubble]") as HTMLElement;
-    expect(bubble).toHaveClass("rounded-sm", "border", "border-border", "bg-background", "hover:bg-hover");
-    expect(bubble.className).not.toContain("border-2");
+    expect(bubble).toHaveClass("rounded-sm", "text-minor", "hover:bg-hover");
+    expect(bubble).not.toHaveClass("border", "bg-background");
     expect(userBubble.className).not.toMatch(/rounded-(?!sm\b)/);
     expect(row.innerHTML).not.toContain("Piece「");
     await userEvent.click(bubble);
     expect(onOpenWorker).toHaveBeenCalledWith(30);
   });
 
-  it("状态写英文状态词配颜色方块：Done / Problem / Gave up / Error，失败原因写成人话且原文在 title", () => {
+  it("状态词 Done / Problem / Gave up / Error 和写成人话的失败原因只在读屏名字里，行内只看得到标题", () => {
     const { container } = list([
       report(),
       report({ status: "problem", summary: "缺一个 key" }),
@@ -201,7 +201,7 @@ describe("Worker 线程卡（ThreadCard）", () => {
     expect(rows.map((r) => r.getAttribute("data-tone"))).toEqual(["success", "warn", "danger", "danger", "danger"]);
     const buttons = rows.map((r) => within(r).getByRole("button"));
     for (const [i, label] of ["Done", "Problem", "Gave up", "Error", "Error"].entries()) {
-      expect(buttons[i]!).toHaveTextContent(label);
+      expect(buttons[i]!).not.toHaveTextContent(label);
     }
     expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
       "修 X, Done, 按钮统一成 36px，开了 PR #128",
@@ -210,7 +210,7 @@ describe("Worker 线程卡（ThreadCard）", () => {
       "修 X, Error, Claude 服务繁忙，稍后重试",
       "修 X, Error, 被停止了",
     ]);
-    expect(within(rows[3]!).getByText("Claude 服务繁忙，稍后重试")).toHaveAttribute("title", "error_during_execution: API Error: 529 Overloaded");
+    expect(rows[3]).not.toHaveTextContent("Claude 服务繁忙");
   });
 
   it("卡片内部状态方块按 tone 着色（bg-success / bg-caution / bg-danger），无状态时无方块", () => {
@@ -225,13 +225,12 @@ describe("Worker 线程卡（ThreadCard）", () => {
     expect(Array.from(dots).map((d) => d.getAttribute("data-dot"))).toEqual(["success", "danger"]);
   });
 
-  it("没按格式：中性边、没有状态方块和状态字，正文是第一行", () => {
+  it("没按格式：没有状态点，读屏名字是标题加第一行", () => {
     const { container } = list([report({ status: "unformatted", summary: "我改完了" })]);
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
     expect(row).toHaveAttribute("data-tone", "neutral");
     expect(row.querySelector("[data-dot]")).toBeNull();
-    const bubble = within(row).getByRole("button");
-    expect(bubble).toHaveTextContent("我改完了");
+    expect(within(row).getByRole("button")).toHaveAccessibleName("修 X, 我改完了");
   });
 
   it("老数据：meta 里没有 summary、status 也能显示", () => {

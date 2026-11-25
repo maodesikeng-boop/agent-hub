@@ -416,7 +416,7 @@ describe("跨项目经理（6 家厂商）与 Worker 对话一致生效", () => 
       makeSnapshot({
         pms: [makePm({ id: 1, name: "小林" })],
         conversations: [
-          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1, line: { workerId: 3, workerConversationId: 30, title: "修表格", event: "started" } })], {
+          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1, line: { workerId: 3, workerConversationId: 30, title: "修表格", event: "report", status: "problem", summary: "窄屏表格折行" } })], {
             conversation: { id: 1, pmId: 1, title: "小林" },
           }),
           makeConvSnapshot(

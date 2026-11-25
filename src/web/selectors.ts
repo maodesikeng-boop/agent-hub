@@ -644,8 +644,15 @@ export function isRenewing(state: HubState, conversationId: ConversationId): boo
   return renewingIn(state.conversations[conversationId]?.messages ?? []);
 }
 
+// Routine Worker start and end lines carry no status or summary; Pieces and the Task Graph show that state instead.
+function hiddenFromChat(message: Message): boolean {
+  if (isSilentTriggerMessage(message)) return true;
+  const event = workerEventOf(message)?.event;
+  return event === "started" || event === "ended";
+}
+
 export function visibleMessages(messages: Message[]): Message[] {
-  const filtered = messages.some(isSilentTriggerMessage) ? messages.filter((m) => !isSilentTriggerMessage(m)) : messages;
+  const filtered = messages.some(hiddenFromChat) ? messages.filter((m) => !hiddenFromChat(m)) : messages;
   if (!renewingIn(filtered)) return filtered;
   return filtered.map((m) => (m.sender === "user" && m.status === "queued" ? { ...m, status: "delivered" } : m));
 }

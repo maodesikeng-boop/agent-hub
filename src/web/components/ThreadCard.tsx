@@ -27,17 +27,10 @@ const TONE_SQUARE: Record<Exclude<WorkerTone, "neutral">, string> = {
   danger: "bg-danger",
 };
 
-const TONE_LABEL: Record<WorkerTone, string> = {
-  neutral: "text-muted-foreground",
-  success: "text-success",
-  warn: "text-warn-foreground",
-  danger: "text-danger",
-};
-
 /**
- * Postcondition: renders one button-like card with the note sprite and status square anchored at its corner, the cleaned
- * Piece title, the tone-colored status word, the report time, the indented first report line truncated with its full
- * text in title, and a right chevron; failures show describeFailure text; the open card uses the open fill and outline.
+ * Postcondition: renders one compact row with the note sprite and its status dot in the agent header's avatar column, the
+ * cleaned Piece title, the report time, and a right chevron; the accessible name adds the status word and the first report
+ * line (describeFailure text for failures); the open row takes the open fill.
  */
 export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: ThreadCardProps): React.ReactElement {
   const { tone, label } = workerStatusOf(line);
@@ -46,7 +39,6 @@ export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: Thre
   const body = failed && summary !== "" ? describeFailure(summary, { unknown: "raw", vendor }) : null;
   const fullText = body ? body.text : summary;
   const firstLine = fullText.split(/\r?\n/, 1)[0] ?? "";
-  const rawTitle = body ? body.raw : summary;
   const cleanTitle = cleanPieceTitle(line.title);
   const ariaLabel = [cleanTitle, label, firstLine].filter(Boolean).join(", ");
 
@@ -57,34 +49,26 @@ export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: Thre
         data-bubble
         aria-label={ariaLabel}
         className={cn(
-          "flex w-full max-w-136 cursor-pointer items-start gap-3 rounded-sm border px-3.5 py-3 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 motion-reduce:transition-none",
-          open ? "border-select-line bg-open" : "border-border bg-background hover:border-border-strong hover:bg-hover",
+          "group touch-target flex w-full cursor-pointer items-center gap-2 rounded-sm py-1 pr-3.5 text-left text-minor transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 motion-reduce:transition-none pointer-coarse:min-h-11",
+          open ? "bg-open" : "hover:bg-hover",
         )}
         onClick={() => onOpen(line.workerConversationId)}
       >
-        <span className="relative mt-0.5 shrink-0">
-          <Avatar look={look} neutral size={24} />
+        <span className="relative flex shrink-0">
+          <Avatar look={look} neutral size={26} />
           {tone !== "neutral" && (
             <span
               data-dot={tone}
               aria-hidden="true"
-              className={cn("absolute -right-1 -bottom-0.5 size-2.5 rounded-full", open ? "shadow-[0_0_0_2px_var(--open)]" : "shadow-[0_0_0_2px_var(--background)]", TONE_SQUARE[tone])}
+              className={cn("absolute -right-1 -bottom-0.5 size-2.5 rounded-full", open ? "shadow-[0_0_0_2px_var(--open)]" : "shadow-[0_0_0_2px_var(--background)] group-hover:shadow-[0_0_0_2px_var(--hover)]", TONE_SQUARE[tone])}
             />
           )}
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-baseline gap-2.5">
-            <span className="min-w-0 truncate text-body font-medium text-foreground" title={cleanTitle}>
-              {cleanTitle}
-            </span>
-            {label && <span className={cn("shrink-0 text-xs font-medium", TONE_LABEL[tone])}>{label}</span>}
-            {createdAt !== undefined && <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">{formatTime(createdAt)}</span>}
-          </div>
-          {firstLine !== "" && (
-            <p className="mt-0.5 truncate text-minor text-muted-foreground" title={rawTitle !== "" ? rawTitle : undefined}>
-              {firstLine}
-            </p>
-          )}
+        <div className="flex min-w-0 flex-1 items-baseline gap-2.5 leading-5">
+          <span className="min-w-0 truncate text-foreground" title={cleanTitle}>
+            {cleanTitle}
+          </span>
+          {createdAt !== undefined && <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">{formatTime(createdAt)}</span>}
         </div>
         <ChevronRight className="size-pixel-sm shrink-0 self-center text-muted-foreground" aria-hidden="true" />
       </button>

@@ -1,4 +1,4 @@
-import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
+import { CalendarClock, Check, ChevronRight, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
@@ -379,14 +379,10 @@ const EVENT_ICONS: Readonly<Record<EventIconName, Icon>> = {
   refresh: RefreshCw,
   error: CircleX,
   info: Info,
-  "worker-start": CirclePlay,
-  "worker-end": Archive,
   "worker-message": MessageSquare,
 };
 
 const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], Icon>> = {
-  started: CirclePlay,
-  ended: Archive,
   user_message: MessageSquare,
 };
 

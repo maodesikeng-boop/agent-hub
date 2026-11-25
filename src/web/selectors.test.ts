@@ -14,6 +14,20 @@ import {
 } from "./test-utils.ts";
 import type { Message } from "../shared/index.ts";
 
+describe("visibleMessages: routine Worker start and end lines", () => {
+  it("hides started and ended lines and keeps reports, failures, and direct messages in order", () => {
+    const events = ["started", "report", "turn_failed", "worktree_failed", "user_message", "ended"] as const;
+    const lines = events.map((event, i) => makeWorkerLine({ id: i + 1, conversationId: 1, line: { event } }));
+    const reply = makeMessage({ id: 10, conversationId: 1, text: "收到" });
+    expect(visibleMessages([...lines, reply]).map((m) => m.id)).toEqual([2, 3, 4, 5, 10]);
+  });
+
+  it("returns the same array when nothing is hidden", () => {
+    const plain = [makeUserMessage({ id: 1, conversationId: 1 }), makeWorkerLine({ id: 2, conversationId: 1, line: { event: "report", status: "done" } })];
+    expect(visibleMessages(plain)).toBe(plain);
+  });
+});
+
 describe("selectors：Worker 超时静默触发消息过滤", () => {
   const maxTimeTrigger = makeSystemMessage({
     id: 10,
