@@ -8,74 +8,34 @@ Bellwood's desktop shell already reserves a `40px` wood top bar above the rail a
 
 ### Files to review
 
-- [docs/router-topbar-design.md](router-topbar-design.md): This plan: locked visual and interaction rules, open product decisions with options and recommendations, architecture trade-offs, bounds, deletions, and verification plan.
+- [docs/router-topbar-design.md](router-topbar-design.md): This plan: locked visual and interaction rules, the settled product details, architecture trade-offs, bounds, deletions, and verification plan.
 - [docs/ui-standard.md](ui-standard.md) sections 1, 2.4, 10, 16, and 21.1: The visual tokens, spacing, contrast math on the dark frame wood, dialog chrome rules, and popover geometry written before implementation.
 - [docs/README.md](README.md): Adds this design document to the documentation index.
 - [src/web/limits.ts](../src/web/limits.ts): Adds `TOPBAR_ROUTER_POPOVER_TURNS_MAX`, `TOPBAR_ROUTER_INPUT_MAX_REM`, and `TOPBAR_ROUTER_POPOVER_MAX_HEIGHT_REM`.
 - [src/web/ui/popover.tsx](../src/web/ui/popover.tsx): Re-exports `PopoverAnchor` from `@radix-ui/react-popover` so the popover anchors to the text input container without button trigger semantics.
 - [src/web/router-commands.ts](../src/web/router-commands.ts) and [src/web/router-commands.test.ts](../src/web/router-commands.test.ts): Shared React Query command mutation, optimistic pending turn builder, and retry state used by both `RouterWorkbench` and `RouterTopBar`.
 - [src/web/router-topbar-model.ts](../src/web/router-topbar-model.ts) and [src/web/router-topbar-model.test.ts](../src/web/router-topbar-model.test.ts): Pure quick-chat session state, turn projection, message validation, draft handoff on `Expand`, and outside-press dismissal policy.
+- [src/web/router-stream.ts](../src/web/router-stream.ts): Adds `routerTurnsOf`, the local Router's live turns cached per commands array, so the top bar never runs the fleet stream merge.
+- [src/web/styles.css](../src/web/styles.css), [src/web/lib/palette.test.ts](../src/web/lib/palette.test.ts), and [src/web/selectors-cache.test.ts](../src/web/selectors-cache.test.ts): The top-bar tokens, safe-gutter grid, and field states, with their contrast and reference-stability guards.
+- [src/web/ui/dialog.tsx](../src/web/ui/dialog.tsx), [src/web/components/Deliverables.tsx](../src/web/components/Deliverables.tsx), and [scripts/verify-window-drag.ts](../scripts/verify-window-drag.ts): A press on a control in the window chrome closes the Settings page and keeps its focus; `CardNoteForm` takes a label, a placeholder, and an invalid reason for the popover reply row; the smoke check drags on the wood beside the input.
+- [test/ui-polish/screens.ts](../test/ui-polish/screens.ts) and [test/ui-polish/patches.ts](../test/ui-polish/patches.ts): The `router.quick-*` screens and the `router-quick-working` and `router-quick-reply` patches that answer the top-bar POST.
 - [src/web/components/RouterTurnRow.tsx](../src/web/components/RouterTurnRow.tsx): Shared turn renderer (user bubble, Router header, clickable destinations, Markdown reply, retry row, and inline `ForwardReply`) reused by `RouterStream` and `RouterTopBarPopover`.
 - [src/web/components/RouterTopBar.tsx](../src/web/components/RouterTopBar.tsx), [src/web/components/RouterTopBarPopover.tsx](../src/web/components/RouterTopBarPopover.tsx), and [src/web/router-topbar.test.tsx](../src/web/router-topbar.test.tsx): Top-bar Router input component, anchored quick-reply popover component, and integration `it.todo` specification.
 
 ### Decisions needed
 
-The user already locked two core choices on 2026-11-25 (cards #292 and #293):
+None. The user locked the two core choices on 2026-11-25 (cards #292 and #293), and the seven secondary details were settled on 2026-11-26 by taking every recommended option (A):
 
-- **Appearance.** The `40px` wood top bar holds a centered `560px` (`35rem` at `Default`) translucent input that blends into the dark wood at rest (`b`) and turns solid with a crisp focus ring while typing (`d`), led by Router's pixel bell and placeholder `Message Router…`.
-- **Interaction.** Submitting keeps you on the current page, opens a popover below the input showing Router's reply, lets you continue chatting inside the popover, and offers an `Expand` action to open `#/router`.
+- **Appearance.** The `40px` wood top bar holds a centered `35rem` (`560px` at `Compact`) translucent input that blends into the dark wood at rest (`b`) and turns solid with a crisp focus ring while typing (`d`), led by Router's pixel bell and the placeholder `Message Router…`.
+- **Interaction.** Sending keeps you on the current page, opens a popover below the input with Router's reply, lets you keep chatting inside it, and offers `Expand` to open `#/router`.
 
-Seven secondary details remain for sign-off. Each item below lists concrete options and our recommendation.
-
-1. **Which turns appear inside the reply popover.**
-   - **Option A (recommended).** Show only turns sent during the current open quick-chat session (oldest first, capped at `TOPBAR_ROUTER_POPOVER_TURNS_MAX = 20`). Closing the popover resets the session so the next top-bar message starts clean; every turn stays persisted in `#/router`.
-     - *Why.* Keeps the popover compact and focused on the immediate exchange without dumping unrelated historical briefings into a small floating box.
-   - **Option B.** Preload the latest 5 persisted Router commands whenever the input focuses or the popover opens.
-     - *Why not.* Dropping a tall history panel over the active conversation before you send anything makes the top bar feel heavy.
-   - **Option C.** Keep the previous quick-chat turns across close and reopen until the user clicks a `Clear` button.
-     - *Why not.* Adds extra chrome and creates a second pseudo-history that diverges from `#/router`.
-
-2. **Where follow-up messages are typed once the popover is open.**
-   - **Option A (recommended).** Put a full-bleed auto-sizing reply row (`Reply to Router…` and a honey pastel `Send` button, `Enter` sends, `Shift+Enter` adds a newline) at the bottom of the popover and focus it when the popover opens. The top-bar input clears and returns to its translucent resting state once focus moves into the popover; typing into the top-bar input again also appends to the open popover.
-     - *Why.* Reading flows top-to-bottom (message, reply, follow-up input), supports multi-line follow-ups, matches "continue chatting inside the popup", and never shows two white focused inputs at the same time.
-   - **Option B.** Keep only the single-line top-bar input and omit any input inside the popover.
-     - *Why not.* Forces the eye to jump back to the `40px` top bar after reading a reply at the bottom of the popover and prevents multi-line follow-ups.
-
-3. **Top-bar input visibility on `#/router`.**
-   - **Option A (recommended).** Keep the `40px` wood top bar so the window frame and macOS traffic lights never shift, hide the quick Router input on `#/router`, and close the popover when clicking `Expand` or navigating to `#/router`.
-     - *Why.* Avoids showing two Router inputs on the same screen and avoids focus contention with `RouterWorkbench`'s auto-focused composer.
-   - **Option B.** Keep the top-bar input visible on `#/router` and append turns to the page timeline without opening a popover.
-     - *Why not.* Duplicates the composer already on `#/router` and makes one control behave two different ways.
-   - **Option C.** Keep both the input and popover active on `#/router`.
-     - *Why not.* Floating a Router reply popover directly over the Router timeline shows every turn twice.
-
-4. **Top-bar input behavior while the desktop `Settings` page (`DialogContent page`) is open.**
-   - **Option A (recommended).** Keep the top-bar input visible above Settings. Clicking blank wood (`[data-window-drag]` outside `[data-no-drag]`) still drags or double-click zooms the window without closing Settings, while clicking the Router input (`[data-no-drag]`) dismisses Settings and focuses the input.
-     - *Why.* Keeps the top bar visually steady when toggling Settings and lets you message Router straight from Settings.
-   - **Option B.** Hide the top-bar input while Settings is open so the whole `40px` bar acts as drag chrome.
-     - *Why not.* Causes the top-bar input to blink out whenever you open Settings.
-
-5. **Mobile shell (`MOBILE_SHELL_QUERY`) scope.**
-   - **Option A (recommended).** Render the top-bar Router input only in `DesktopWorkbench` (covering `wide`, `strip`, `stack`, and narrow desktop windows). Keep `MobileWorkbench` unchanged with its bottom `TabBar` (`Router` is already one tap away).
-     - *Why.* The mobile shell has no wood top bar or traffic lights, and a floating reply popover would fight the soft keyboard (`--kb-inset`).
-   - **Option B.** Add a compact top-bar input on mobile `#/` and `#/c/<id>` that opens a bottom `Drawer`.
-     - *Why not.* Duplicates the `Router` tab in `TabBar` and consumes `40px` of vertical space on small screens.
-
-6. **Popover dismissal and in-flight Router commands.**
-   - **Option A (recommended).** Use a non-modal Radix `Popover` (`modal={false}`) that closes on outside click (excluding clicks on the top-bar anchor or inside an open `FilePreview` dialog), `Escape`, `Close`, `Expand`, or clicking a PM or Worker destination inside a reply. Closing never cancels a running Router command: the top-bar and rail bells keep swinging until it finishes, and the full turn lives in `#/router`.
-     - *Why.* Matches every other popover in `docs/ui-standard.md` section 11 without blocking background chat inspection or closing an open `FilePreview` dialog.
-   - **Option B.** Keep the popover pinned open until the user clicks `Close`.
-     - *Why not.* Blocks the top portion of the active PM conversation until manually dismissed.
-   - **Option C.** Show a "Reopen reply" pill in the top bar after closing while a turn finishes.
-     - *Why not.* Adds extra chrome inside the `28px` bar; the swinging bell and `#/router` already show ongoing and finished work.
-
-7. **Input capabilities inside the quick bar and popover.**
-   - **Option A (recommended).** Support plain text messages, multi-line `Shift+Enter` in the popover reply row, retry on failed sends or turns, clickable PM and Worker destinations, and live inline `ForwardReply`. Defer `@` target pickers, file attachments, `Needs You` cards, and `RouterModelPicker` to `Expand` (`#/router`).
-     - *Why.* Router's two-tier project catalog already resolves natural-language project mentions without `@`. Keeping the quick input minimal avoids nested popovers (`@` menu inside a reply popover) and avoids mounting a second `.composer-frame` (which would violate `machine:composer-row`).
-   - **Option B.** Add an `@` target picker inside the top-bar input and popover.
-     - *Why not.* Stacking a suggestion listbox inside or above a top-bar popover creates focus and collision conflicts on short viewports.
-   - **Option C.** Embed full `DraftComposer` with file uploads inside the popover.
-     - *Why not.* Duplicates `#/router` inside a floating card and breaks the `machine:composer-row` alignment check.
+1. **Turns in the popover.** Only the turns sent in the open quick-chat session, oldest first and capped at `TOPBAR_ROUTER_POPOVER_TURNS_MAX = 20`. Closing the popover resets the session, and every turn stays in `#/router`.
+2. **Follow-ups.** A full-bleed reply row at the bottom of the popover (`Reply to Router…`, `Enter` sends, `Shift+Enter` adds a newline) takes focus when the popover opens. The top-bar input clears after sending, and a new line typed there joins the open popover.
+3. **`#/router`.** The `40px` wood top bar stays so the frame and the traffic lights never shift, the quick input hides, and `Expand` or any navigation to `#/router` closes the popover.
+4. **Settings page.** The input stays visible above Settings. Blank wood still drags or zooms the window without closing Settings, and clicking the input closes Settings and focuses the input.
+5. **Mobile shell.** Only `DesktopWorkbench` renders the input; the phone keeps the `Router` tab in its `TabBar`.
+6. **Dismissal.** The popover is a non-modal Radix `Popover` that closes on an outside click (except on the top-bar input or inside an open dialog such as `FilePreview`), `Escape`, `Close`, `Expand`, or a PM or Worker destination click. Closing never cancels a running Router command.
+7. **What the quick input does.** Plain text, retry for unsent and failed turns, clickable destinations, and live `ForwardReply`. `@` targets, attachments, `Needs You` cards, and the model picker stay in `#/router`.
 
 ## For Workers and reviewers
 
@@ -141,16 +101,16 @@ Option A uses pure CSS, respects all four interface scales (`--topbar-input-max:
 
 ### 4. Performance and bounds
 
-1. **Invalidation.** Quick-chat turns read live command records from `state.router.commands` (updated immediately on `router.command.created` and `router.command.updated`) merged with `ROUTER_COMMAND_MUTATION_KEY` mutations. Once a mutation's `clientId` appears in `state.router.commands`, `pruneRouterCommandMutations` removes the confirmed mutation entry. Closing the popover calls `closeQuickSession`, clearing `clientIds` and releasing popover state immediately; failed sends stay retryable while open and never pollute normal cache entries.
+1. **Invalidation.** Quick-chat turns read live command records from `state.router.commands` (updated immediately on `router.command.created` and `router.command.updated`) merged with `ROUTER_COMMAND_MUTATION_KEY` mutations. Once a mutation's `clientId` appears in `state.router.commands`, `pruneRouterCommandMutations` removes the confirmed mutation entry. Closing the popover resets the session to `CLOSED_TOPBAR_SESSION`, clearing `clientIds` and releasing popover state immediately; failed sends stay retryable while open and never pollute normal cache entries.
 2. **Upper bounds.** A quick-chat session holds at most `TOPBAR_ROUTER_POPOVER_TURNS_MAX = 20` `clientId` entries (FIFO eviction of the oldest ID from the popover only; the daemon retains full history per `ROUTER_COMMANDS_RETENTION_MAX = 500` and `ROUTER_STREAM_LIVE_MAX = 200`). Message length enforces `ROUTER_COMMAND_MAX_CHARS = 4_000` (existing `src/shared/limits.ts:335`) before dispatch. Mutation cache entries remain capped at `ROUTER_STREAM_LIVE_MAX = 200`. No new daemon API endpoints or snapshot fields are added.
-3. **Stable references.** `RouterTopBar` is `memo` and skips `fleetRouterStream` computation while the popover is closed (`!open`). `selectQuickRouterTurns` caches per input references (`WeakMap` or structural identity check) so unrelated PM streaming frames and background Worker `session.status` pulses return the exact same turn array reference and trigger zero re-renders in `RouterTopBarPopover`, `Conversation`, `DraftComposer`, `ProjectList`, and `ActiveTab`. `buildPendingRouterTurns` preserves the existing referential stability contract when pending mutations have not changed.
+3. **Stable references.** `RouterTopBar` is `memo` and keeps its open state, drafts, and session local, so opening, typing, and closing re-render nothing outside the top bar. It reads the local Router's turns through `routerTurnsOf` (cached per `state.router.commands` array) instead of the fleet stream merge, and `selectQuickRouterTurns` caches per session array and reuses its previous result while the session's turns are the same objects, so PM streaming frames and background Worker `session.status` pulses return the same turn array and the memoized timeline skips rendering. `buildPendingRouterTurns` returns the previous array when no pending entry's key, status, command, or error changed.
 4. **Measured verification.** Implementation verifies zero re-renders of `DraftComposer`, `Conversation`, `ProjectList`, and `ActiveTab` during streaming and background Worker pulses (`src/web/streaming.test.tsx`), adds `selectQuickRouterTurns` and `buildPendingRouterTurns` reference-stability cases to `src/web/selectors-cache.test.ts`, and measures top-bar + popover render in headless Chromium via `pnpm verify` and `pnpm ui:polish`.
 
 | Constant | File | Value | Sizing |
 | --- | --- | --- | --- |
 | `TOPBAR_ROUTER_POPOVER_TURNS_MAX` | `src/web/limits.ts` | `20` | Bounds one quick-chat popup session while full history stays in `#/router` (30-day ledger cap `ROUTER_COMMANDS_RETENTION_MAX = 500`) |
-| `TOPBAR_ROUTER_INPUT_MAX_REM` | `src/web/limits.ts` | `35` | `560px` at `Default` (`16px` root), matching the decided `560px` width while scaling with `rem` |
-| `TOPBAR_ROUTER_POPOVER_MAX_HEIGHT_REM` | `src/web/limits.ts` | `32` | `512px` at `Default`, further clamped by `--radix-popover-content-available-height` on short windows |
+| `TOPBAR_ROUTER_INPUT_MAX_REM` | `src/web/limits.ts` | `35` | `560px` at `Compact` (`16px` root) and `612.5px` at `Default` (`17.5px` root), the decided `560px` width scaling with `rem` like the rest of the shell |
+| `TOPBAR_ROUTER_POPOVER_MAX_HEIGHT_REM` | `src/web/limits.ts` | `32` | `512px` at `Compact` and `560px` at `Default`, further clamped by `--radix-popover-content-available-height` on short windows |
 | `ROUTER_COMMAND_MAX_CHARS` | `src/shared/limits.ts` (existing) | `4_000` | Matches `POST /api/router/commands` server validation |
 | `ROUTER_STREAM_LIVE_MAX` | `src/shared/limits.ts` (existing) | `200` | Caps live command cache and unconfirmed React Query mutations |
 
@@ -177,7 +137,7 @@ Deleted or replaced in the same implementation PR so old and new paths never coe
 - `src/web/ui/popover.tsx`: Exports `PopoverAnchor` from `@radix-ui/react-popover`.
 - `src/web/router-commands.ts`: Shared Router command dispatch, pending mutation projection, cache pruning, and failed-command retry contract.
 - `src/web/router-commands.test.ts`: Unit test skeleton (`it.todo`) for `pruneRouterCommandMutations` and `buildPendingRouterTurns`.
-- `src/web/router-topbar-model.ts`: Pure quick-chat session state, turn selector, length validation, draft handoff, and outside-press dismissal contracts.
+- `src/web/router-topbar-model.ts`: Pure quick-chat session state, turn selector, length validation, draft handoff (unsent quick drafts join any draft already in the Router composer instead of replacing it), and outside-press dismissal contracts.
 - `src/web/router-topbar-model.test.ts`: Unit test skeleton (`it.todo`) covering every contract clause in `router-topbar-model.ts`.
 - `src/web/components/RouterTurnRow.tsx`: Shared `RouterTurnRow` component contract used by `RouterStream` and `RouterTopBarPopover`.
 - `src/web/components/RouterTopBar.tsx`: Top-bar Router input shell contract hosting the translucent-to-solid field, `RouterAvatar`, and popover orchestration.
