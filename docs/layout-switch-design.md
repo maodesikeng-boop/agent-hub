@@ -17,14 +17,16 @@
 
 ### Decisions needed
 
-**Decision 1: Fix Providers sign-in and computer rename in this line?**
+Both decisions await the user and default to Option A. Approving the plan as written accepts A for both.
+
+**Decision 1 (awaiting the user, default A): Fix Providers sign-in and computer rename in this line?**
 
 Desktop and phone settings use different components for these two tasks: a dialog versus a drawer for sign-in, and an inline row versus a drawer for rename. A component that does not exist in the other layout cannot be moved there, so its input needs a home outside both.
 
 - **Option A (recommended): include them.** The open sign-in sheet (computer, provider, sign-in or account view) and the rename draft (computer, typed name) move into `settings-drafts.ts`. Both presentations read it. The sign-in form itself becomes a surface, so the chosen method, API key, and pasted code survive the move. A sign-in flow is cancelled only when the user closes the sheet, never when the layout swaps it. Cost: about 200 changed lines plus tests in `ProvidersSettings.tsx`, `ProvidersPage.tsx`, `DeviceSettings.tsx`, `ComputersPage.tsx`, and `settings-model.ts`, and the sign-in flow joins the review scope. `ProvidersSettings.tsx` is on the oversized-file baseline and must not grow, which this change satisfies because state moves out of it.
 - **Option B: leave them as known gaps.** Cost: a browser user who resizes across the width in the middle of a sign-in sees the sheet close and must start again, including retyping an API key or pasting a new code. A browser sign-in started in another tab keeps running on the daemon, but this window stops watching it. A half-typed computer name is lost. This only happens in a browser window between about 618 and 791px wide, or on a touch device rotating across the width.
 
-**Decision 2: Should the settings dialog get a history entry too?**
+**Decision 2 (awaiting the user, default A): Should the settings dialog get a history entry too?**
 
 Today the settings dialog changes no URL, while the phone settings page is `#/settings/<section>`. One navigation state needs one rule.
 
