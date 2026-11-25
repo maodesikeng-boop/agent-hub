@@ -1,4 +1,5 @@
 import type { ComposerCommand } from "./api.ts";
+import type { ChecklistUpdate } from "./checklist.ts";
 import type { AgentSessionRow, AgentStep, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionCapabilities } from "./pm-capabilities.ts";
 import type { ReadonlyPolicy } from "./readonly-policy.ts";
@@ -130,6 +131,23 @@ export interface AgentToolEvent extends DriverEventBase, SubtaskField {
   toolUseId: string;
   name: string;
   input: unknown;
+  /** Set when the vendor reports the call only as proposed; agent.tool_running later marks when it starts executing. */
+  pending?: true;
+  /** Vendor-reported start time in epoch ms; absent means the call started when the event was received (`at`). */
+  startedAt?: number;
+}
+
+export interface AgentToolRunningEvent extends DriverEventBase, SubtaskField {
+  type: "agent.tool_running";
+  toolUseId: string;
+  startedAt?: number;
+}
+
+/** Carries the vendor's own checklist change; the ledger applies it to the session's last stored snapshot. */
+export interface AgentChecklistEvent extends DriverEventBase, SubtaskField {
+  type: "agent.checklist";
+  uuid: string;
+  update: ChecklistUpdate;
 }
 
 export interface AgentToolPreviewEvent extends DriverEventBase, SubtaskField {
@@ -235,6 +253,8 @@ export type DriverEvent =
   | AgentTextDeltaEvent
   | AgentThinkingEvent
   | AgentToolEvent
+  | AgentToolRunningEvent
+  | AgentChecklistEvent
   | AgentToolPreviewEvent
   | AgentToolResultEvent
   | TurnEndedEvent

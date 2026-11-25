@@ -85,6 +85,7 @@ export default defineVendor({
       SetTodoList: "todo",
     },
   },
+  checklist: { sources: ["plan_update", "todo_tool"] },
   skillSignals: {
     outputField: "content",
     outputLinePrefix: /^\s*\d+(?:\t|[:|] ?)/u,

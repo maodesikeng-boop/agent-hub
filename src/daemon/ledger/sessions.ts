@@ -32,7 +32,8 @@ export interface LiveSession {
   rateLimitReported?: boolean;
   apiRetry?: ApiRetryInfo | null;
   step?: AgentStep | null;
-  openTools?: Array<{ toolUseId: string; step: AgentStep }>;
+  stepStartedAt?: number | null;
+  openTools?: Array<{ toolUseId: string; step: AgentStep; startedAt?: number | null }>;
   backgroundTasks?: number;
   streamingText?: string;
   /** Cached code point count so each delta does not re-count the whole string. */
@@ -86,6 +87,14 @@ export const working = (currentTool: string | null, step?: AgentStep) => (l: Liv
 export const toolStarted = (currentTool: string, toolUseId: string, step: AgentStep) => (l: LiveSession) => {
   working(currentTool, step)(l);
   l.openTools = [...(l.openTools ?? []).filter((t) => t.toolUseId !== toolUseId), { toolUseId, step }];
+};
+
+/**
+ * Postcondition: records startedAt on the open tool; when that tool is the shown step, stepStartedAt becomes startedAt.
+ * Unknown tool ids are ignored.
+ */
+export const toolRunning = (_toolUseId: string, _startedAt: number) => (_l: LiveSession): void => {
+  throw new Error("Not implemented");
 };
 
 export const toolFinished = (toolUseIds: string[]) => (l: LiveSession) => {

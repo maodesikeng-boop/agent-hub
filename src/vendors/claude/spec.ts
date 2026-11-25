@@ -104,6 +104,8 @@ export default defineVendor({
       ToolSearch: "tool_search",
     },
   },
+  // Print mode hides the checklist tools unless this switch is set (claude 2.1.330).
+  checklist: { sources: ["todo_tool"], enable: { env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" } } },
   skillSignals: {
     // Read output lines are 'N\t<text>'.
     outputField: "content",

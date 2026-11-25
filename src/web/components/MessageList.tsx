@@ -10,7 +10,7 @@ import { useStickToBottom } from "../useStickToBottom.ts";
 import { useFocusMessage, useVirtualRows } from "../useVirtualRows.ts";
 import { EmptyConversation, EventGroupView, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
-const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
+const EMPTY_TURN = { work: [], checklists: [], parts: [], startedAt: 0, endedAt: 0 };
 
 interface RowContext {
   items: readonly DisplayRow[];

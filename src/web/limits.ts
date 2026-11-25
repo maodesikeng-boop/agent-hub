@@ -5,3 +5,5 @@ export const DECISION_DRAFTS_MAX = 200;
 export const COMPOSER_MAX_HEIGHT_PX = 180;
 export const COMPOSER_SINGLE_ROW_SLACK_PX = 4;
 export const COMPOSER_WRAP_PROBE_CHARS = 512;
+
+export const ACTION_ELAPSED_TICK_MS = 1_000;

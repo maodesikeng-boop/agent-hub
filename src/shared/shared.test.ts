@@ -668,7 +668,7 @@ describe("M2：socket 路径长度", () => {
 describe("M3：对话和消息", () => {
   it("对话多一种 worker；消息多一种 kind worker、发送方多一种 pm", () => {
     expect(CONVERSATION_KINDS).toEqual(["assistant", "pm", "project_group", "worker"]);
-    expect(MESSAGE_KINDS).toEqual(["text", "tool", "worker"]);
+    expect(MESSAGE_KINDS).toEqual(["text", "tool", "worker", "checklist"]);
     expect(WORKER_MESSAGE_KIND).toBe("worker");
     expect(MESSAGE_SENDERS).toEqual(["user", "agent", "system", "pm"]);
   });

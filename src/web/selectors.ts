@@ -21,6 +21,7 @@ export {
   workersByWorkerId,
 } from "./task-graph-selectors.ts";
 import {
+  CHECKLIST_MESSAGE_KIND,
   VENDOR_LIST,
   DEFAULT_AGENT_VENDOR,
   QUOTA_WINDOWS,
@@ -656,7 +657,7 @@ export function failingHealth(state: HubState): HealthEntry[] {
 
 export type RenderItem =
   | { kind: "message"; message: Message }
-  | { kind: "turn"; key: string; work: Message[]; parts: Message[]; startedAt: number; endedAt: number };
+  | { kind: "turn"; key: string; work: Message[]; checklists: Message[]; parts: Message[]; startedAt: number; endedAt: number };
 
 type FlowRole =
   | "input"
@@ -735,7 +736,7 @@ export function groupMessages(all: Message[]): RenderItem[] {
     }
     if (role === "agent" && turn === null) {
       const starts = [lastInputAt, lastAgentAt].filter((t): t is number => t !== null);
-      turn = { kind: "turn", key: `turn-${message.id}`, work: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt };
+      turn = { kind: "turn", key: `turn-${message.id}`, work: [], checklists: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt };
       items.push(turn);
     }
     if (turn === null) {
@@ -746,7 +747,8 @@ export function groupMessages(all: Message[]): RenderItem[] {
       turn.parts.push(message);
       continue;
     }
-    if (message.kind === "tool" || role === "work") turn.work.push(message);
+    if (message.kind === CHECKLIST_MESSAGE_KIND) turn.checklists.push(message);
+    else if (message.kind === "tool" || role === "work") turn.work.push(message);
     else turn.parts.push(message);
     turn.endedAt = message.createdAt;
     lastAgentAt = message.createdAt;
