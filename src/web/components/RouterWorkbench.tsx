@@ -1,4 +1,3 @@
-import { useMutation, useMutationState, type Mutation, type QueryClient } from "@tanstack/react-query";
 import { ChevronRight, X } from "../ui/icons.ts";
 import {
   memo,
@@ -11,11 +10,9 @@ import {
 } from "react";
 import { useStore } from "zustand";
 import {
-  ROUTER_STREAM_LIVE_MAX,
   defaultRouterSettings,
   type Attachment,
   type ConversationId,
-  type PostRouterCommandResponse,
   type PostRouterCommandTarget,
 } from "../../shared/index.ts";
 import { localClient, type HubClient } from "../client.ts";
@@ -30,16 +27,10 @@ import {
   useDecisionDraft,
 } from "../decision-drafts.ts";
 import { LOCAL_DEVICE, isReadOnly, type DeviceView } from "../devices.ts";
-import { errorText, formatTime, newClientId, type ErrorLike } from "../format.ts";
+import { errorText, formatTime, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import { useHubQueryClient } from "../query-client.ts";
-import {
-  fleetRouterStream,
-  turnEntryOfCommand,
-  type FleetRouterStream,
-  type RouterStreamDeviceInput,
-  type RouterTurnEntry,
-} from "../router-stream.ts";
+import { useRouterCommands } from "../router-commands.ts";
+import { fleetRouterStream, type FleetRouterStream, type RouterStreamDeviceInput } from "../router-stream.ts";
 import type {
   FleetDecisionEntry,
   FleetRouterView,
@@ -62,13 +53,10 @@ import { RouterStream } from "./RouterStream.tsx";
 
 const ROUTER_TRAY_VISIBLE_ROWS = 3;
 
-const ROUTER_COMMAND_MUTATION_KEY = ["router-command"] as const;
-
 const CHIP_REMOVE_CLASS =
   "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 
 const NO_SANDBOX_CARDS: readonly ReactNode[] = [];
-const NO_PENDING_TURNS: readonly RouterTurnEntry[] = [];
 const DEFAULT_ROUTER_SETTINGS = defaultRouterSettings();
 
 function useFleetSandboxCards(devices: readonly DeviceView[], multiDevice: boolean): readonly ReactNode[] {
@@ -95,44 +83,6 @@ function useFleetSandboxCards(devices: readonly DeviceView[], multiDevice: boole
   )));
   cache.current = { inputs, cards };
   return cards;
-}
-
-interface RouterCommandVariables {
-  clientId: string;
-  text: string;
-  attachments: Attachment[];
-  attachmentIds: string[];
-  target?: PostRouterCommandTarget;
-  createdAt: number;
-}
-
-interface RawRouterMutation {
-  clientId: string;
-  variables: RouterCommandVariables;
-  status: "idle" | "pending" | "success" | "error";
-  data: PostRouterCommandResponse | undefined;
-  error: unknown;
-}
-
-function pruneRouterCommandMutations(qc: QueryClient, confirmedClientIds: ReadonlySet<string>) {
-  const cache = qc.getMutationCache();
-  const all = cache.findAll({ mutationKey: ROUTER_COMMAND_MUTATION_KEY });
-  for (const m of all) {
-    const vars = m.state.variables as RouterCommandVariables | undefined;
-    if (m.state.status === "success" && vars && confirmedClientIds.has(vars.clientId)) {
-      cache.remove(m);
-    }
-  }
-  const remaining = cache.findAll({ mutationKey: ROUTER_COMMAND_MUTATION_KEY });
-  if (remaining.length <= ROUTER_STREAM_LIVE_MAX) return;
-  let excess = remaining.length - ROUTER_STREAM_LIVE_MAX;
-  for (const m of remaining) {
-    if (excess <= 0) break;
-    if (m.state.status !== "pending") {
-      cache.remove(m);
-      excess--;
-    }
-  }
 }
 
 interface ClosedRouterDraft {
@@ -575,7 +525,6 @@ export const RouterWorkbench = memo(function RouterWorkbench({
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
   onManageProviders?: () => void;
 }) {
-  const qc = useHubQueryClient();
   const mobile = useMobileShell();
   const resolvedSelfId = selfId ?? undefined;
   const localSettings = useMemo(() => {
@@ -620,130 +569,8 @@ export const RouterWorkbench = memo(function RouterWorkbench({
     return fleetRouterStream(inputs, resolvedSelfId);
   }, [devices, resolvedSelfId]);
 
-  // Destructure only the stable mutate so RouterStream's memo holds.
-  const { mutate: mutateSend } = useMutation<PostRouterCommandResponse, unknown, RouterCommandVariables>(
-    {
-      mutationKey: ROUTER_COMMAND_MUTATION_KEY,
-      gcTime: Infinity,
-      mutationFn: (vars) =>
-        localClient.postRouterCommand({
-          clientId: vars.clientId,
-          text: vars.text,
-          ...(vars.attachmentIds.length > 0 ? { attachmentIds: vars.attachmentIds } : {}),
-          ...(vars.target !== undefined ? { target: vars.target } : {}),
-        }),
-    },
-    qc,
-  );
-
-  const selectMutation = useCallback(
-    (m: Mutation<unknown, unknown, unknown, unknown>): RawRouterMutation | null => {
-      const vars = m.state.variables as RouterCommandVariables | undefined;
-      if (!vars || typeof vars.clientId !== "string") return null;
-      return {
-        clientId: vars.clientId,
-        variables: vars,
-        status: m.state.status,
-        data: m.state.data as PostRouterCommandResponse | undefined,
-        error: m.state.error,
-      };
-    },
-    [],
-  );
-  const rawMutations = useMutationState(
-    { filters: { mutationKey: ROUTER_COMMAND_MUTATION_KEY }, select: selectMutation },
-    qc,
-  );
-
-  const latestVarsByClientIdRef = useRef(new Map<string, RouterCommandVariables>());
-  const prevPendingTurnsRef = useRef<readonly RouterTurnEntry[]>(NO_PENDING_TURNS);
-
-  const pendingTurns = useMemo<readonly RouterTurnEntry[]>(() => {
-    if (rawMutations.length === 0) {
-      latestVarsByClientIdRef.current.clear();
-      prevPendingTurnsRef.current = NO_PENDING_TURNS;
-      return NO_PENDING_TURNS;
-    }
-    const liveClientIds = new Set<string>();
-    for (const t of stream.turns) {
-      if (t.clientId) liveClientIds.add(t.clientId);
-    }
-    const deduped = new Map<string, RawRouterMutation>();
-    for (const m of rawMutations) {
-      if (m !== null) deduped.set(m.clientId, m);
-    }
-    const varsMap = new Map<string, RouterCommandVariables>();
-    const built: RouterTurnEntry[] = [];
-    for (const [clientId, m] of deduped) {
-      varsMap.set(clientId, m.variables);
-      if (liveClientIds.has(clientId)) continue;
-      if (m.status === "success" && m.data?.command) {
-        built.push(turnEntryOfCommand(m.data.command, resolvedSelfId, true));
-        continue;
-      }
-      const status = m.status === "error" ? "send_failed" : "sending";
-      built.push({
-        kind: "turn",
-        key: `turn:${clientId}`,
-        clientId,
-        createdAt: m.variables.createdAt,
-        inputText: m.variables.text,
-        attachments: m.variables.attachments,
-        status,
-        ...(m.status === "error" ? { unsentError: m.error } : {}),
-        command: null,
-        destinations: [],
-        live: true,
-      });
-    }
-    latestVarsByClientIdRef.current = varsMap;
-    if (built.length === 0) {
-      prevPendingTurnsRef.current = NO_PENDING_TURNS;
-      return NO_PENDING_TURNS;
-    }
-    const prev = prevPendingTurnsRef.current;
-    if (
-      prev.length === built.length &&
-      built.every((cur, i) => {
-        const p = prev[i]!;
-        return (
-          p.key === cur.key &&
-          p.status === cur.status &&
-          p.command === cur.command &&
-          p.unsentError === cur.unsentError
-        );
-      })
-    ) {
-      return prev;
-    }
-    prevPendingTurnsRef.current = built;
-    return built;
-  }, [rawMutations, stream.turns, resolvedSelfId]);
-
-  useEffect(() => {
-    if (rawMutations.length === 0) return;
-    const confirmed = new Set<string>();
-    for (const t of stream.turns) {
-      if (t.clientId) confirmed.add(t.clientId);
-    }
-    pruneRouterCommandMutations(qc, confirmed);
-  }, [rawMutations.length, stream.turns, qc]);
-
-  const handleRetryUnsent = useCallback(
-    (clientId: string) => {
-      const vars = latestVarsByClientIdRef.current.get(clientId);
-      if (!vars) return;
-      const cache = qc.getMutationCache();
-      for (const m of cache.findAll({ mutationKey: ROUTER_COMMAND_MUTATION_KEY })) {
-        const mv = m.state.variables as RouterCommandVariables | undefined;
-        if (mv?.clientId === clientId && m.state.status === "error") {
-          cache.remove(m);
-        }
-      }
-      mutateSend(vars);
-    },
-    [qc, mutateSend],
-  );
+  const commands = useRouterCommands(stream.turns, resolvedSelfId);
+  const { send: sendCommand } = commands;
 
   const selectedTarget = useMemo<RouterTargetCandidate | null>(
     () => (selectedTargetKey === null ? null : (view.targets.find((t) => t.key === selectedTargetKey) ?? null)),
@@ -804,15 +631,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
       }
 
       const dispatchCommand = (uploaded: Attachment[]) => {
-        const clientId = newClientId();
-        mutateSend({
-          clientId,
-          text: trimmed,
-          attachments: uploaded,
-          attachmentIds: uploaded.map((a) => a.id),
-          ...(targetPayload !== undefined ? { target: targetPayload } : {}),
-          createdAt: Date.now(),
-        });
+        sendCommand({ text: trimmed, attachments: uploaded, ...(targetPayload !== undefined ? { target: targetPayload } : {}) });
       };
 
       if (files.length === 0) {
@@ -829,7 +648,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
         dispatchCommand(uploaded);
       });
     },
-    [selectedTargetKey, selectedTarget, draft, staging, mutateSend],
+    [selectedTargetKey, selectedTarget, draft, staging, sendCommand],
   );
 
   const targetChip = useMemo(
@@ -885,11 +704,14 @@ export const RouterWorkbench = memo(function RouterWorkbench({
         <RouterStream
           stream={stream}
           selfId={resolvedSelfId}
-          pendingTurns={pendingTurns}
+          pendingTurns={commands.pendingTurns}
           hasDecisions={visibleDecisions.length > 0 || sandboxCards.length > 0 || closedDraft !== null}
           clientForDevice={clientForDevice}
           storeForDevice={storeForDevice}
-          onRetryUnsent={handleRetryUnsent}
+          retryingMap={commands.retryingMap}
+          retryErrors={commands.retryErrors}
+          onRetryCommand={commands.retryCommand}
+          onRetryUnsent={commands.retryUnsent}
           onOpenConversation={onOpenConversation}
           onOpenWorker={onOpenWorker}
         />

@@ -8,7 +8,7 @@ describe("RouterTopBar", () => {
   it("exposes the planned component contract surface", () => {
     expect(typeof RouterTopBar).toBe("function");
     expect(typeof RouterTopBarPopover).toBe("function");
-    expect(typeof RouterTurnRow).toBe("function");
+    expect(RouterTurnRow).toBeDefined();
     expect(PopoverAnchor).toBeDefined();
     type ContractTypes = [RouterTopBarProps, RouterTopBarPopoverProps, RouterTurnRowProps];
     const _typeCheck: ContractTypes | null = null;

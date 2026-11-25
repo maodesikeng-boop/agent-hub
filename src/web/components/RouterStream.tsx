@@ -6,16 +6,8 @@ import {
   type InfiniteQueryObserverOptions,
   type QueryClient,
 } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, CircleAlert, ExternalLink } from "../ui/icons.ts";
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { ChevronDown, ExternalLink } from "../ui/icons.ts";
+import { memo, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   ROUTER_STREAM_LIVE_MAX,
   ROUTER_STREAM_MAX_PAGES,
@@ -26,15 +18,13 @@ import {
   type RouterReportItem,
   type RouterReportLink,
 } from "../../shared/index.ts";
-import { ApiError, localClient, type HubClient } from "../client.ts";
-import { errorLine, errorText, errorTitle, formatTime, type ErrorLike } from "../format.ts";
-import { defaultLookOf } from "../../shared/slimes.ts";
+import { localClient, type HubClient } from "../client.ts";
+import { formatTime, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import { StatusShimmer } from "./StatusShimmer.tsx";
 import { useHubQueryClient } from "../query-client.ts";
+import { retryStateOf } from "../router-commands.ts";
 import {
   briefingEntryOfReport,
-  canRetryCommand,
   mergeRouterStream,
   turnEntryOfCommand,
   type FleetRouterStream,
@@ -42,7 +32,6 @@ import {
   type RouterDeviceBriefings,
   type RouterStreamPos,
   type RouterStreamSource,
-  type RouterTurnDestination,
   type RouterTurnEntry,
 } from "../router-stream.ts";
 import { Button } from "../ui/button.tsx";
@@ -50,15 +39,10 @@ import { childRows, useMessageEnter, type EnterItem } from "../useMessageEnter.t
 import { useStickToBottom } from "../useStickToBottom.ts";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { DeviceScopeOf, useFleetLookOf } from "../device-scope.tsx";
-import { AttachmentList } from "./Attachments.tsx";
-import { Avatar } from "./Avatar.tsx";
 import { CardBody, INLINE_LINK_CLASS } from "./Deliverables.tsx";
 import { RouterAvatar } from "./RouterAvatar.tsx";
-import { Markdown } from "./Markdown.tsx";
-import { AgentHead, BUBBLE, CopyButton, SentBody, TEXT_BUTTON, UnsentMark } from "./Messages.tsx";
-import { ForwardReply } from "./ForwardReply.tsx";
-
-const ROUTER_IDENTITY = { name: "Router", look: defaultLookOf(0) } as const;
+import { AgentHead } from "./Messages.tsx";
+import { RouterTurnRow } from "./RouterTurnRow.tsx";
 
 type ParsedBriefingLink =
   | { kind: "external"; url: string }
@@ -142,197 +126,6 @@ function BriefingLinks({
     </div>
   );
 }
-
-function DestinationRow({
-  dest,
-  multiDevice,
-  onOpenConversation,
-  onOpenWorker,
-}: {
-  dest: RouterTurnDestination;
-  multiDevice: boolean;
-  onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
-  onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
-}) {
-  const showProject = dest.projectName !== null && dest.projectName !== dest.name;
-  const showDevice = (multiDevice || !dest.self) && dest.deviceName !== "";
-  const look = useFleetLookOf()(dest.deviceKey, dest.pmId);
-  return (
-    <button
-      type="button"
-      data-destination
-      className="flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-3 px-2.5 py-2 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
-      onClick={() =>
-        dest.worker
-          ? onOpenWorker(dest.deviceKey, dest.conversationId)
-          : onOpenConversation(dest.deviceKey, dest.conversationId)
-      }
-    >
-      <Avatar look={look} size={20} neutral={dest.worker} />
-      <span className="min-w-0 truncate text-body font-medium text-foreground">{dest.name}</span>
-      {showProject && <span className="max-w-32 shrink-0 truncate text-xs text-muted-foreground">{dest.projectName}</span>}
-      {showDevice && <span className="shrink-0 text-xs text-muted-foreground">{dest.deviceName}</span>}
-      {dest.opLabel !== null && (
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">{dest.opLabel}</span>
-      )}
-      <ChevronRight
-        className={cn("size-pixel-sm shrink-0 text-muted-foreground", dest.opLabel === null && "ml-auto")}
-        aria-hidden="true"
-      />
-    </button>
-  );
-}
-
-const TurnRow = memo(function TurnRow({
-  entry,
-  multiDevice,
-  clientForDevice,
-  storeForDevice,
-  retryPending,
-  retryError,
-  onRetryCommand,
-  onRetryUnsent,
-  onOpenConversation,
-  onOpenWorker,
-}: {
-  entry: RouterTurnEntry;
-  multiDevice: boolean;
-  clientForDevice: (deviceKey: string) => HubClient;
-  storeForDevice: DeviceStoreLookup;
-  retryPending: boolean;
-  retryError: ErrorLike | undefined;
-  onRetryCommand: (commandId: RouterCommandId, updatedAt: number) => void;
-  onRetryUnsent: (clientId: string) => void;
-  onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
-  onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
-}) {
-  const effectiveStatus = retryPending ? "planning" : entry.status;
-  const isSending = effectiveStatus === "sending";
-  const isSendFailed = effectiveStatus === "send_failed";
-  const command = entry.command;
-  const plan = command?.plan ?? null;
-  const rawReply = plan?.reply ?? "";
-  const showReply = rawReply.trim() !== "" && !(plan?.track === "A" && effectiveStatus === "dispatched");
-  const isRunning = effectiveStatus === "planning";
-  const isFailed = effectiveStatus === "failed";
-  const canRetry = isFailed && entry.live && command !== null && canRetryCommand(command);
-
-  let unsentNode: React.ReactNode = null;
-  if (isSendFailed) {
-    const err = entry.unsentError;
-    const rejected = err instanceof ApiError && err.status === 400;
-    const info = err !== undefined ? errorText(err) : undefined;
-    const reason = info !== undefined ? errorLine(info) : undefined;
-    const raw = info !== undefined ? errorTitle(info) : undefined;
-    unsentNode = (
-      <UnsentMark
-        reason={reason}
-        raw={raw}
-        {...(rejected ? {} : { onRetry: () => onRetryUnsent(entry.clientId) })}
-      />
-    );
-  }
-
-  const failReason =
-    retryError !== undefined ? errorLine(retryError) : (command?.error ?? "Router couldn't finish this. Try again");
-  const failRaw =
-    retryError !== undefined ? errorTitle(retryError) : (plan?.errorRaw !== undefined && plan.errorRaw !== failReason ? plan.errorRaw : undefined);
-
-  return (
-    <div data-stream-entry className="w-full">
-      <div data-router-turn data-status={effectiveStatus} className="mt-6 flex flex-col first:mt-2">
-        <article className="flex flex-col items-end" data-side="right" title={formatTime(entry.createdAt)}>
-          <SentBody unsent={unsentNode}>
-            {(entry.inputText !== "" || entry.attachments.length === 0) && (
-              <div
-                data-bubble
-                className={cn(
-                  BUBBLE,
-                  "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]",
-                )}
-              >
-                {entry.inputText}
-              </div>
-            )}
-            <AttachmentList attachments={entry.attachments} />
-          </SentBody>
-        </article>
-
-        {!isSending && !isSendFailed && (
-          <div className="mt-4 flex flex-col" data-side="left">
-            <AgentHead identity={ROUTER_IDENTITY} avatar={<RouterAvatar size={26} working={isRunning} />} />
-            <div className="flex flex-col gap-2.5">
-              {entry.destinations.length > 0 && (
-                <div className="-mx-2.5 flex flex-col gap-0.5">
-                  {entry.destinations.map((dest) => (
-                    <DestinationRow
-                      key={dest.key}
-                      dest={dest}
-                      multiDevice={multiDevice}
-                      onOpenConversation={onOpenConversation}
-                      onOpenWorker={onOpenWorker}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {showReply && (
-                <div className="w-full min-w-0 text-body leading-relaxed">
-                  <Markdown text={rawReply} />
-                </div>
-              )}
-
-              {plan?.replyTruncated === true && (
-                <p className="text-xs text-muted-foreground">Reply truncated</p>
-              )}
-
-              {isRunning && <div className="text-minor text-muted-foreground"><StatusShimmer text="Working…" /></div>}
-
-              {isFailed && (
-                <div className="flex items-start gap-2 text-minor leading-5">
-                  <CircleAlert className="mt-0.75 size-pixel-sm shrink-0 text-danger" aria-hidden="true" />
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 [overflow-wrap:anywhere]">
-                    <span className="text-minor text-muted-foreground" title={failRaw}>
-                      {failReason}
-                    </span>
-                    {canRetry && command !== null && (
-                      <button
-                        type="button"
-                        className={cn(TEXT_BUTTON, "px-1 text-minor font-medium text-muted-foreground")}
-                        onClick={() => onRetryCommand(command.id, command.updatedAt)}
-                      >
-                        Retry
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {!isRunning && !isFailed && (
-                <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
-                  {showReply && <CopyButton text={rawReply} />}
-                  <span>{formatTime(entry.createdAt)}</span>
-                </div>
-              )}
-            </div>
-            {entry.destinations.map(
-              (dest) =>
-                dest.forwardMessageId !== null && (
-                  <ForwardReply
-                    key={dest.key}
-                    dest={dest}
-                    stores={storeForDevice}
-                    client={clientForDevice(dest.deviceKey)}
-                    onOpenConversation={onOpenConversation}
-                  />
-                ),
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-});
 
 const BriefingRow = memo(function BriefingRow({
   entry,
@@ -579,6 +372,9 @@ export const RouterStream = memo(function RouterStream({
   hasDecisions,
   clientForDevice,
   storeForDevice,
+  retryingMap,
+  retryErrors,
+  onRetryCommand,
   onRetryUnsent,
   onOpenConversation,
   onOpenWorker,
@@ -589,6 +385,9 @@ export const RouterStream = memo(function RouterStream({
   hasDecisions: boolean;
   clientForDevice: (deviceKey: string) => HubClient;
   storeForDevice: DeviceStoreLookup;
+  retryingMap: Readonly<Record<RouterCommandId, number>>;
+  retryErrors: Readonly<Record<RouterCommandId, ErrorLike>>;
+  onRetryCommand: (commandId: RouterCommandId, updatedAt: number) => void;
   onRetryUnsent: (clientId: string) => void;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
@@ -616,54 +415,6 @@ export const RouterStream = memo(function RouterStream({
     clientForDevice,
     qc,
   );
-
-  const retryingLockRef = useRef(new Set<RouterCommandId>());
-  const [retryingMap, setRetryingMap] = useState<Readonly<Record<RouterCommandId, number>>>({});
-  const [retryErrors, setRetryErrors] = useState<Readonly<Record<RouterCommandId, ErrorLike>>>({});
-
-  useEffect(() => {
-    const hasRetrying = Object.keys(retryingMap).length > 0;
-    const hasErrors = Object.keys(retryErrors).length > 0;
-    if (!hasRetrying && !hasErrors) return;
-    const liveFailed = new Map<RouterCommandId, number>();
-    for (const t of stream.turns) {
-      if (t.command && t.command.status === "failed") liveFailed.set(t.command.id, t.command.updatedAt);
-    }
-    if (hasRetrying) {
-      setRetryingMap((prev) => {
-        const kept = Object.entries(prev).filter(([id, prevAt]) => liveFailed.get(Number(id)) === prevAt);
-        return kept.length === Object.keys(prev).length ? prev : Object.fromEntries(kept);
-      });
-    }
-    if (hasErrors) {
-      setRetryErrors((prev) => {
-        const kept = Object.entries(prev).filter(([id]) => liveFailed.has(Number(id)));
-        return kept.length === Object.keys(prev).length ? prev : Object.fromEntries(kept);
-      });
-    }
-  }, [stream.turns, retryingMap, retryErrors]);
-
-  const handleRetryCommand = useCallback(async (commandId: RouterCommandId, updatedAt: number) => {
-    if (retryingLockRef.current.has(commandId)) return;
-    retryingLockRef.current.add(commandId);
-    setRetryingMap((prev) => ({ ...prev, [commandId]: updatedAt }));
-    setRetryErrors((prev) => {
-      if (prev[commandId] === undefined) return prev;
-      const { [commandId]: _cleared, ...rest } = prev;
-      return rest;
-    });
-    try {
-      await localClient.postRetryRouterCommand(commandId);
-    } catch (err) {
-      setRetryingMap((prev) => {
-        const { [commandId]: _cleared, ...rest } = prev;
-        return rest;
-      });
-      setRetryErrors((prev) => ({ ...prev, [commandId]: errorText(err) }));
-    } finally {
-      retryingLockRef.current.delete(commandId);
-    }
-  }, []);
 
   const ackedBriefings = getAckedBriefings(qc);
   const newDividerCaptureRef = useRef<{ key: string | null; seenDevices: Set<string> }>({
@@ -936,15 +687,9 @@ export const RouterStream = memo(function RouterStream({
 
           {entries.map((entry, index) => {
             if (entry.kind === "turn") {
-              const cmdId = entry.command?.id;
-              const retryPending =
-                cmdId !== undefined &&
-                entry.command?.status === "failed" &&
-                retryingMap[cmdId] !== undefined &&
-                retryingMap[cmdId] === entry.command.updatedAt;
-              const retryError = cmdId !== undefined ? retryErrors[cmdId] : undefined;
+              const { retryPending, retryError } = retryStateOf(entry, retryingMap, retryErrors);
               return (
-                <TurnRow
+                <RouterTurnRow
                   key={entry.key}
                   entry={entry}
                   multiDevice={stream.multiDevice}
@@ -952,7 +697,7 @@ export const RouterStream = memo(function RouterStream({
                   storeForDevice={storeForDevice}
                   retryPending={retryPending}
                   retryError={retryError}
-                  onRetryCommand={handleRetryCommand}
+                  onRetryCommand={onRetryCommand}
                   onRetryUnsent={onRetryUnsent}
                   onOpenConversation={onOpenConversation}
                   onOpenWorker={onOpenWorker}
