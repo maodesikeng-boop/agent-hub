@@ -70,7 +70,7 @@ export interface ProfilePanelProps {
 }
 
 const EDIT_LINK =
-  "touch-target cursor-pointer text-minor font-medium text-rail-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-50";
+  "touch-target cursor-pointer text-minor font-medium text-brand-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-50";
 
 const PAGE_TITLES: Readonly<Record<ProfilePage, string>> = {
   capabilities: "Capabilities",
@@ -125,9 +125,10 @@ function LookButton({ pm, disabled }: { pm: Pm; disabled: boolean }) {
         disabled={disabled}
         aria-label="Change look"
         title="Change look"
-        className="cursor-pointer border-2 border-transparent bg-hover p-2 transition-colors outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-open-line data-[state=open]:bg-open disabled:cursor-not-allowed disabled:opacity-60"
+        className="cursor-pointer rounded-sm border border-transparent bg-hover p-4 transition-colors outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-select-line data-[state=open]:bg-open disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <Avatar look={look} size={64} />
+        {/* The tile's border and padding match a group box's, so the slime starts on the same edge as the text in the boxes below. */}
+        <Avatar look={look} size={48} />
       </button>
     </SlimePicker>
   );
@@ -266,7 +267,7 @@ function SummaryHeader({
                       setMenuOpen(false);
                       setConfirmArchive(true);
                     }}
-                    className="flex min-h-9 w-full cursor-pointer items-center px-3 py-1.5 text-left text-minor font-medium text-danger transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex min-h-9 w-full cursor-pointer items-center rounded-xs px-3 py-1.5 text-left text-minor font-medium text-danger transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Archive...
                   </button>
@@ -338,7 +339,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
             {(["Before", "After"] as const).map((label) => (
               <div key={label} className="min-w-0">
                 <div className="mb-1 text-minor font-medium text-muted-foreground">{label}</div>
-                <pre className="min-h-10 max-h-60 overflow-auto border-2 border-border bg-panel p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <pre className="min-h-10 max-h-60 overflow-auto rounded-sm bg-panel p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {label === "Before" ? change.textBefore : change.textAfter}
                 </pre>
               </div>
@@ -380,7 +381,7 @@ function PersonaGroup({ persona, readOnly }: { persona: ReturnType<typeof usePer
         rows={1}
         disabled={readOnly}
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0",
+          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0 focus:shadow-none",
           text === "" ? "text-body" : "font-mono text-minor",
         )}
         value={text}
@@ -451,7 +452,7 @@ function SectionFrame({
   children: React.ReactNode;
 }) {
   return (
-    <section aria-label={title} className="border-t-2 border-border py-3.5">
+    <section aria-label={title} className="border-t border-border py-3.5">
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="text-minor font-semibold text-foreground">{title}</h2>
         {onToggle !== undefined && actionLabel !== undefined && (
@@ -607,12 +608,12 @@ function SummaryContent({
         )}
       </SectionFrame>
 
-      <nav aria-label="Project manager settings pages" className="divide-y-2 divide-border border-y-2 border-border">
+      <nav aria-label="Project manager settings pages" className="divide-y divide-border border-y border-border">
         {pm.archivedAt == null && (
           <button
             type="button"
             onClick={() => onNavigate("capabilities")}
-            className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+            className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
           >
             <span>Capabilities</span>
             <span className="flex items-center gap-2 text-minor text-muted-foreground tabular-nums">
@@ -624,7 +625,7 @@ function SummaryContent({
         <button
           type="button"
           onClick={() => onNavigate("persona")}
-          className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+          className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
         >
           <span>Persona</span>
           <span className="flex items-center gap-2 text-minor text-muted-foreground tabular-nums">
@@ -635,7 +636,7 @@ function SummaryContent({
         <button
           type="button"
           onClick={() => onNavigate("memory")}
-          className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+          className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
         >
           <span>Memory files</span>
           <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -644,7 +645,7 @@ function SummaryContent({
           <button
             type="button"
             onClick={() => onNavigate("worktree")}
-            className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+            className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
           >
             <span>Worktree setup</span>
             <span className="flex items-center gap-2 text-minor text-muted-foreground">
@@ -656,7 +657,7 @@ function SummaryContent({
         <button
           type="button"
           onClick={() => onNavigate("history")}
-          className="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+          className="flex min-h-12 w-full cursor-pointer rounded-none items-center justify-between gap-3 py-2.5 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
         >
           <span>History</span>
           <span className="flex items-center gap-2 text-minor text-muted-foreground tabular-nums">
@@ -803,7 +804,7 @@ export function ProfilePanel({
   if (isPage) {
     return (
       <section aria-label={`${pm.name}'s settings`} className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel text-foreground">
-        <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b-2 border-border px-3 pt-[var(--safe-top)]">
+        <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3 pt-[var(--safe-top)]">
           <Button
             variant="ghost"
             size="icon"

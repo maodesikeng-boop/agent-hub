@@ -165,7 +165,7 @@ export function measureInPage(options: { touch: boolean }): RawHit[] {
   }
 
   const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize);
-  const tiers = [0.75, 0.84375, 0.9375, 1.0625, 1.375].map((rem) => rem * rootPx);
+  const tiers = [0.75, 0.84375, 0.9375, 1, 1.375].map((rem) => rem * rootPx);
   for (const el of all) {
     if (!ownText(el) || content(el)) continue;
     const style = getComputedStyle(el);
@@ -181,6 +181,152 @@ export function measureInPage(options: { touch: boolean }): RawHit[] {
     if (/\S\s*[·|]\s*\S/.test(text)) hits.push({ check: "dot-joined", rect: rectOf(el.getBoundingClientRect()), evidence: describe(el) });
   }
   return hits;
+}
+
+/** Same shapes as structure-checks.ts FrameBox, EdgeItem, and ComposerBox; this file cannot import them. */
+interface FrameBox {
+  label: string;
+  rect: { x: number; y: number; w: number; h: number };
+  sides: [number, number, number, number];
+  dashed: boolean;
+  ring: number;
+  dot: boolean;
+  control: boolean;
+  media: boolean;
+  quote: boolean;
+  frameParent: number;
+}
+interface EdgeItem {
+  column: string;
+  label: string;
+  left: number;
+  top: number;
+  bottom: number;
+}
+interface ComposerBox {
+  label: string;
+  rect: { x: number; y: number; w: number; h: number };
+  resting: boolean;
+}
+
+/** Reads every visible border, inset ring, navigation-column row start, and composer; structure-checks.ts judges them. Read-only. */
+export function collectStructureInPage(): { frames: FrameBox[]; edges: EdgeItem[]; composers: ComposerBox[] } {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // describe and visible repeat measureInPage's: Playwright serializes each page function alone, so they cannot share helpers.
+  const describe = (el: Element): string => {
+    const parts: string[] = [];
+    let node: Element | null = el;
+    while (node !== null && node !== document.body && parts.length < 4) {
+      const label = node.getAttribute("aria-label");
+      parts.unshift(node.tagName.toLowerCase() + (label ? `[aria-label="${label}"]` : node.id ? `#${node.id}` : ""));
+      node = node.parentElement;
+    }
+    const text = (el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+    return `${parts.join(" > ")}${text ? ` “${text}”` : ""}`;
+  };
+  const visible = (el: Element): boolean => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2 || r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== "hidden" && Number(style.opacity) > 0 && el.closest("[aria-hidden='true'], [inert]") === null;
+  };
+  const CONTROL = "button, a[href], input, textarea, select, [role='button'], [role='radio'], [role='radiogroup'], [role='checkbox'], [role='switch'], [role='tab'], [role='tablist'], [role='menuitem'], [role='option'], [role='combobox'], [role='textbox']";
+  // A frame drawn around one text field (the composer, a card's reply, a search box) is that field's edge, not a box.
+  const FIELD_SHELL = ":has(> input:not([type='hidden']), > textarea, > select, > [contenteditable='true'])";
+  const OVERLAY = "[role='dialog'], [role='alertdialog'], [data-radix-popper-content-wrapper], [role='listbox'], [role='menu'], [data-vaul-drawer], .shell-sheet";
+  const alphaOf = (color: string): number => {
+    if (color === "" || color === "transparent") return 0;
+    const slash = /\/\s*([\d.]+)(%?)\s*\)$/.exec(color);
+    if (slash !== null) return parseFloat(slash[1]!) / (slash[2] === "%" ? 100 : 1);
+    const rgba = /^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)$/.exec(color);
+    return rgba === null ? 1 : parseFloat(rgba[1]!);
+  };
+  const SIDES = ["top", "right", "bottom", "left"] as const;
+  const ringOf = (shadow: string): number => {
+    let widest = 0;
+    for (const part of shadow === "none" ? [] : shadow.split(/,(?![^(]*\))/)) {
+      if (!part.includes("inset")) continue;
+      const color = /(?:rgba?|color|oklab|oklch|hsla?)\([^)]*\)/.exec(part)?.[0] ?? "";
+      const [x, y, blur, spread] = (part.replace(color, "").match(/-?[\d.]+px/g) ?? []).map(parseFloat);
+      if (x === 0 && y === 0 && blur === 0 && spread !== undefined && alphaOf(color) >= 0.05) widest = Math.max(widest, spread);
+    }
+    return widest;
+  };
+
+  const index = new Map<Element, number>();
+  const frames: FrameBox[] = [];
+  for (const el of document.body.querySelectorAll("*")) {
+    if (el.parentElement?.closest("svg") || !visible(el)) continue;
+    const style = getComputedStyle(el);
+    const sides = SIDES.map((side) => {
+      const kind = style.getPropertyValue(`border-${side}-style`);
+      if (kind === "none" || kind === "hidden" || alphaOf(style.getPropertyValue(`border-${side}-color`)) < 0.05) return 0;
+      return parseFloat(style.getPropertyValue(`border-${side}-width`)) || 0;
+    }) as [number, number, number, number];
+    const ring = ringOf(style.boxShadow);
+    if (Math.max(...sides) === 0 && ring === 0) continue;
+    const r = el.getBoundingClientRect();
+    index.set(el, frames.length);
+    frames.push({
+      label: describe(el),
+      rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+      sides,
+      dashed: SIDES.some((side) => style.getPropertyValue(`border-${side}-style`) === "dashed"),
+      ring,
+      dot: (parseFloat(style.borderTopLeftRadius) || 0) >= Math.min(r.width, r.height) / 2 - 0.5,
+      control: el.closest(CONTROL) !== null || el.matches(FIELD_SHELL),
+      media: el.matches("img, video, canvas") || (el.children.length === 1 && el.firstElementChild!.matches("img, video, canvas")),
+      quote: el.matches("blockquote"),
+      frameParent: -1,
+    });
+  }
+  for (const [el, i] of index) {
+    for (let a = el.parentElement; a !== null && !a.matches(OVERLAY); a = a.parentElement) {
+      const j = index.get(a);
+      if (j !== undefined && frames[j]!.sides.every((w) => w > 0)) {
+        frames[i]!.frameParent = j;
+        break;
+      }
+    }
+  }
+
+  const COLUMNS = [
+    [".sidebar-list", "左栏"],
+    [".right-rail-scroll", "右栏"],
+    ["[role='tablist'][aria-orientation='vertical']", "设置分类"],
+  ] as const;
+  const edges: EdgeItem[] = [];
+  for (const [selector, column] of COLUMNS) {
+    for (const root of document.querySelectorAll(selector)) {
+      if (!visible(root)) continue;
+      for (const el of root.querySelectorAll("*")) {
+        const graphic = el.matches("svg, img, [data-slot='avatar']");
+        // Avatars and icons are aria-hidden decoration, but they are what the eye lines a row up by.
+        const drawn = graphic ? el.getBoundingClientRect().width >= 2 && getComputedStyle(el).visibility !== "hidden" : visible(el);
+        if (!drawn || el.closest(".markdown") !== null) continue;
+        let left: number | null = null;
+        if (graphic) {
+          if (el.parentElement?.closest("svg, [data-slot='avatar']")) continue;
+          left = el.getBoundingClientRect().left;
+        } else {
+          const text = [...el.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
+          if (text === undefined) continue;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          left = range.getClientRects()[0]?.left ?? null;
+        }
+        if (left === null) continue;
+        const r = el.getBoundingClientRect();
+        edges.push({ column, label: describe(el), left, top: r.top, bottom: r.bottom });
+      }
+    }
+  }
+  const composers: ComposerBox[] = [...document.querySelectorAll(".composer-frame")].filter(visible).map((el) => {
+    const r = el.getBoundingClientRect();
+    return { label: describe(el).split(" “")[0]!, rect: { x: r.x, y: r.y, w: r.width, h: r.height }, resting: el.getAttribute("data-multiline") !== "true" };
+  });
+  return { frames, edges, composers };
 }
 
 /** 校准用的弄坏（mutations.ts 的 MUTATIONS）：只改这个页面里的样式和元素，id 认不出抛错。前置：页面是基准图那一屏（小林的对话三栏）。 */

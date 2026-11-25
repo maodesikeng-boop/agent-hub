@@ -3,7 +3,7 @@ export type UiScale = (typeof UI_SCALES)[number];
 
 export const UI_SCALE_LABELS: Readonly<Record<UiScale, string>> = { sm: "Compact", md: "Default", lg: "Large", xl: "XL" };
 
-export const DEFAULT_UI_SCALE: UiScale = "lg";
+export const DEFAULT_UI_SCALE: UiScale = "md";
 
 export const UI_SCALE_KEY = "agent-hub.uiScale";
 

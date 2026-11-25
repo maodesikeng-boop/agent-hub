@@ -53,7 +53,6 @@ function renderList(overrides: Partial<ProjectListProps> = {}) {
     onSelect: vi.fn(),
     onNewPm: vi.fn(),
     onTogglePin: vi.fn(),
-    onOpenPmSettings: vi.fn(),
     onOpenComputers: vi.fn(),
     ...overrides,
   };
@@ -79,7 +78,6 @@ describe("ProjectList", () => {
         onSelect={vi.fn()}
         onNewPm={vi.fn()}
         onTogglePin={vi.fn()}
-        onOpenPmSettings={vi.fn()}
         onOpenComputers={vi.fn()}
       />,
     );
@@ -137,25 +135,27 @@ describe("ProjectList", () => {
         onSelect={vi.fn()}
         onNewPm={vi.fn()}
         onTogglePin={vi.fn()}
-        onOpenPmSettings={vi.fn()}
         onOpenComputers={vi.fn()}
       />,
     );
     expect(screen.getByRole("button", { name: /^Old Work(?:\s+Deletes|\s*$)/ })).toBeInTheDocument();
   });
 
-  it("marks the active row with the outlined selection and its waiting or asking square", () => {
+  it("marks the active row and keeps every name at one weight, naming the waiting state only for screen readers", () => {
     renderList({
-      entries: [entry(1, { name: "Ask PM" }), entry(2, { name: "Wait PM" })],
+      entries: [entry(1, { name: "Ask PM" }), entry(2, { name: "Wait PM" }), entry(3, { name: "Read PM", text: "Done." })],
       active: { device: LOCAL_DEVICE, id: 1 },
       asking: new Set(["1"]),
       waiting: new Set(["2"]),
     });
-    const activeBtn = screen.getByRole("button", { name: /^Ask PM.*Needs You$/ });
+    const activeBtn = screen.getByRole("button", { name: /^Ask PM\s+Needs You$/ });
     expect(activeBtn).toHaveAttribute("aria-current", "page");
-    expect(activeBtn.closest(".project-row")).toHaveClass("border-select-line", "bg-background");
-    expect(screen.getByTestId("asking-indicator")).toHaveClass("bg-status-active");
-    expect(screen.getByTestId("waiting-indicator")).toHaveClass("bg-status-active");
+    expect(activeBtn.closest(".project-row")).toHaveClass("row-selected");
+    expect(screen.getByRole("button", { name: /^Wait PM\s+Your turn$/ })).toBeInTheDocument();
+    const readBtn = screen.getByRole("button", { name: "Read PM" });
+    const nameClasses = ["Ask PM", "Wait PM", "Read PM"].map((name) => screen.getByText(name).className);
+    expect(new Set(nameClasses).size).toBe(1);
+    expect(within(readBtn).queryByText("Done.")).toBeNull();
   });
 
   it("pins and unpins from the row shortcut and disables it while the computer is offline", async () => {
@@ -181,22 +181,17 @@ describe("ProjectList", () => {
         onSelect={vi.fn()}
         onNewPm={vi.fn()}
         onTogglePin={onTogglePin}
-        onOpenPmSettings={vi.fn()}
         onOpenComputers={vi.fn()}
       />,
     );
     expect(screen.getByRole("button", { name: "Unpin Docs" })).toBeDisabled();
   });
 
-  it("opens the PM's settings from the row shortcut", async () => {
-    const user = userEvent.setup();
-    const onOpenPmSettings = vi.fn();
-    renderList({
-      entries: [entry(7, { name: "API" })],
-      onOpenPmSettings,
-    });
-    await user.click(screen.getByRole("button", { name: "API settings" }));
-    expect(onOpenPmSettings).toHaveBeenCalledWith(7);
+  it("keeps Pin as the row's only shortcut, leaving the name room; PM settings open from the conversation header", () => {
+    const { container } = renderList({ entries: [entry(7, { name: "API" })] });
+    const shortcuts = container.querySelector(".row-shortcuts")!;
+    expect(within(shortcuts as HTMLElement).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Pin API"]);
+    expect(screen.queryByRole("button", { name: "API settings" })).toBeNull();
   });
 
   it("renders row shortcuts inside the hover-only class and nowhere else", () => {
@@ -230,7 +225,6 @@ describe("ProjectList", () => {
         onSelect={vi.fn()}
         onNewPm={vi.fn()}
         onTogglePin={vi.fn()}
-        onOpenPmSettings={vi.fn()}
         onOpenComputers={onOpenComputers}
       />,
     );

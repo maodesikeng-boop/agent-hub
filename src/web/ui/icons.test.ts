@@ -41,7 +41,7 @@ describe("图标出口", () => {
     expect(svg.className.baseVal).not.toContain("pixel-loader");
   });
 
-  it("提供图钉实心态、沙漏额度、纸飞机发送、更多/用户及五种主流设备图标", () => {
+  it("provides the solid pin, the usage hourglass, the send arrow, more and user, and five device icons", () => {
     const pinOutline = render(createElement(icons.Pin)).container.querySelector("svg")!;
     const pinFilled = render(createElement(icons.PinFilled)).container.querySelector("svg")!;
     expect(pinFilled.innerHTML).toContain('fill="currentColor"');
@@ -49,7 +49,7 @@ describe("图标出口", () => {
 
     for (const [name, Icon] of [
       ["Hourglass", icons.Hourglass],
-      ["Send", icons.Send],
+      ["ArrowUp", icons.ArrowUp],
       ["MoreHorizontal", icons.MoreHorizontal],
       ["User", icons.User],
       ["Video", icons.Video],
@@ -91,5 +91,15 @@ describe("图标出口", () => {
       (platform) => render(createElement(PlatformIcon, { platform })).container.querySelector("svg")!.innerHTML,
     );
     expect(new Set(rendered).size).toBe(6);
+  });
+
+  it("gives every device a solid form for the selected computer that fills its outline and keeps the line icon's size", () => {
+    for (const platform of ["darwin", "win32", "linux", "iphone", "android", "freebsd"]) {
+      const line = render(createElement(PlatformIcon, { platform })).container.querySelector("svg")!;
+      const solid = render(createElement(PlatformIcon, { platform, solid: true })).container.querySelector("svg")!;
+      expect(solid.getAttribute("viewBox"), platform).toBe(line.getAttribute("viewBox"));
+      expect(solid.outerHTML, platform).toMatch(/fill="currentColor"/);
+      expect(solid.outerHTML, platform).not.toBe(line.outerHTML);
+    }
   });
 });

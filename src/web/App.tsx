@@ -1,6 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Activity, useCallback, useEffect, useMemo, useState } from "react";
-import { pickableVendorCatalogs, SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM, type Pm, type PmId } from "../shared/index.ts";
+import { pickableVendorCatalogs, type Pm } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 import { AppRail } from "./components/AppRail.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
@@ -18,6 +18,7 @@ import { DeviceScope } from "./device-scope.tsx";
 import { LOCAL_DEVICE, isReadOnly, routeDeviceOf } from "./devices.ts";
 import { errorTitle } from "./format.ts";
 import { AccentScope } from "./lib/accent-scope.tsx";
+import { SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
 import { mobileBack } from "./mobile/back.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
@@ -29,7 +30,7 @@ import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
 import type { ProfilePage } from "./route.ts";
-import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
+import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerOutcomesOf, workerPhaseOf } from "./selectors.ts";
 import { useShellTier } from "./shell-layout.ts";
 import { railComputerKeyOrFallback } from "./shell-actions.ts";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
@@ -124,7 +125,7 @@ function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boo
 function DeviceWaiting({ connecting, name }: { connecting: boolean; name: string }) {
   return (
     <>
-      <header data-window-drag className="flex h-14 shrink-0 items-center px-3" />
+      <header data-window-drag className="flex h-11 shrink-0 items-center px-3" />
       {connecting ? (
         <FullPage busy title="Loading…" />
       ) : (
@@ -163,6 +164,7 @@ function WorkerPane({
       phase={workerPhaseOf(state, workerId)}
       pm={{ name: c.workerPmEntry?.name ?? "Project manager", look: c.workerPmEntry?.look ?? c.look }}
       meta={c.railWorkers.find((w) => w.conversationId === workerId)}
+      outcomes={workerOutcomesOf(state, workerId)}
       view={c.workerView}
       loading={c.workerLoading}
       pending={pendingOf(state, workerId)}
@@ -261,7 +263,7 @@ function DesktopSidePanel({
         onClose={() => c.toggleRail()}
         closeLabel="Close Pieces"
       >
-        <RailGroups {...railProps(c)} className="py-3" />
+        <RailGroups {...railProps(c)} className="pb-3" />
       </SidePanel>
     );
   }
@@ -408,8 +410,7 @@ function DesktopWorkbench({
     () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
     [computer.key, computer.info.name, computer.status],
   );
-  const { activeId, openProfile, openSettingsSection, toggleRail, select } = c;
-  const openPmSettings = useCallback((pmId: PmId) => openProfile(pmId), [openProfile]);
+  const { activeId, openSettingsSection, toggleRail, select } = c;
   const openComputers = useCallback(() => openSettingsSection("computers"), [openSettingsSection]);
   const switchable = fleet.devices.length >= 2;
   const readOnly = isReadOnly(current.status);
@@ -433,12 +434,11 @@ function DesktopWorkbench({
         visible={c.railHasContent}
         open={piecesOpen}
         attention={c.railAttention}
-        count={c.railCount}
         look={c.look}
         onToggle={togglePieces}
       />
     ),
-    [c.railHasContent, piecesOpen, c.railAttention, c.railCount, c.look, togglePieces],
+    [c.railHasContent, piecesOpen, c.railAttention, c.look, togglePieces],
   );
 
   const listNode = (layout: "column" | "strip") => (
@@ -455,115 +455,120 @@ function DesktopWorkbench({
       onSelect={c.select}
       onNewPm={c.openNewPm}
       onTogglePin={c.togglePin}
-      onOpenPmSettings={openPmSettings}
       onOpenComputers={openComputers}
       onSelectComputer={c.selectComputer}
     />
   );
 
   return (
-    <div ref={setShellEl} data-shell="desktop" className="relative flex h-full w-full min-w-0 overflow-hidden bg-rail">
-      <AppRail
-        router={c.routerSummary}
-        computers={c.railComputers}
-        selectedComputer={c.routerActive ? null : current.key}
-        meter={meter}
-        quota={quota}
-        quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
-        onSelectComputer={c.selectComputer}
-        onOpenSettings={() => c.openSettingsSection("scale")}
-        onOpenUpdates={() => c.openSettingsSection("updates")}
-        onOpenAccount={() => c.openSettingsSection(c.accountTarget)}
-      />
+    <div ref={setShellEl} data-shell="desktop" className="wood relative flex h-full w-full min-w-0 flex-col overflow-hidden">
+      <div aria-hidden="true" data-window-drag className="shell-topbar shrink-0" />
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <AppRail
+          router={c.routerSummary}
+          computers={c.railComputers}
+          selectedComputer={c.routerActive ? null : current.key}
+          meter={meter}
+          quota={quota}
+          quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
+          onSelectComputer={c.selectComputer}
+          onOpenSettings={() => c.openSettingsSection("scale")}
+          settingsOpen={c.desktopSettingsOpen}
+          onOpenUpdates={() => c.openSettingsSection("updates")}
+          onOpenAccount={() => c.openSettingsSection(c.accountTarget)}
+        />
 
-      <div className="shell-sheet flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        {c.routerActive ? (
-          <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-            <RouterWorkbench
-              toolbar={null}
-              notices={notices}
-              view={c.routerView}
-              devices={fleet.devices}
-              selfId={fleet.selfId}
-              draft={c.drafts.of(ROUTER_DRAFT_KEY)}
-              staging={c.staging.of(ROUTER_DRAFT_KEY)}
-              clientForDevice={c.clientForDevice}
-              storeForDevice={c.storeForDevice}
-              onOpenConversation={c.openDeviceConversation}
-              onOpenWorker={c.openDeviceWorker}
-              onManageProviders={onManageLocalProviders}
-            />
-          </main>
-        ) : (
-          <>
-            {tier !== "wide" && listNode("strip")}
-            <PaneGroup id="shell-panes">
-              {tier === "wide" && (
-                <>
+        <div className="shell-frame flex min-h-0 min-w-0 flex-1">
+          {c.routerActive ? (
+            <main className="shell-group chat-main flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+              <RouterWorkbench
+                toolbar={null}
+                notices={notices}
+                view={c.routerView}
+                devices={fleet.devices}
+                selfId={fleet.selfId}
+                draft={c.drafts.of(ROUTER_DRAFT_KEY)}
+                staging={c.staging.of(ROUTER_DRAFT_KEY)}
+                clientForDevice={c.clientForDevice}
+                storeForDevice={c.storeForDevice}
+                onOpenConversation={c.openDeviceConversation}
+                onOpenWorker={c.openDeviceWorker}
+                onManageProviders={onManageLocalProviders}
+              />
+            </main>
+          ) : (
+            <div className="shell-group flex min-h-0 min-w-0 flex-1">
+              {tier !== "wide" && listNode("strip")}
+              <PaneGroup id="shell-panes">
+                {tier === "wide" && (
+                  <>
+                    <Pane
+                      key="list"
+                      id="list"
+                      defaultRem={widths.list}
+                      minRem={SHELL_LIST_REM.min}
+                      maxRem={SHELL_LIST_REM.max}
+                      onCommit={(rem) => commit("list", rem)}
+                    >
+                      {listNode("column")}
+                    </Pane>
+                    <PaneHandle seam="joint" label="Resize project list" onReset={() => reset("list")} />
+                  </>
+                )}
+
+                <Pane
+                  key="chat"
+                  id="chat"
+                  className="shell-sheet shell-sheet-joined"
+                  {...(stackPanel ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" } : { minRem: SHELL_CHAT_MIN_REM })}
+                >
+                  <Activity mode={stackPanel ? "hidden" : "visible"}>
+                    <AccentScope color={tintColor}>
+                      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                        <ConversationPane
+                          model={model}
+                          content={c}
+                          mobile={false}
+                          toolbar={toolbar}
+                          notices={notices}
+                          onManageCurrentProviders={onManageCurrentProviders}
+                        />
+                      </main>
+                    </AccentScope>
+                  </Activity>
+                </Pane>
+
+                {panelVisible && !stackPanel && <PaneHandle seam="gap" label="Resize side panel" onReset={() => reset("panel")} />}
+
+                {panelVisible && (
                   <Pane
-                    key="list"
-                    id="list"
-                    defaultRem={widths.list}
-                    minRem={SHELL_LIST_REM.min}
-                    maxRem={SHELL_LIST_REM.max}
-                    onCommit={(rem) => commit("list", rem)}
+                    key="panel"
+                    id="panel"
+                    {...(stackPanel
+                      ? { className: "shell-sheet shell-sheet-joined min-w-0 flex-1" }
+                      : {
+                          className: "shell-sheet",
+                          defaultRem: widths.panel,
+                          minRem: SHELL_PANEL_REM.min,
+                          maxRem: SHELL_PANEL_REM.max,
+                          onCommit: (rem: number) => commit("panel", rem),
+                        })}
                   >
-                    {listNode("column")}
-                  </Pane>
-                  <PaneHandle tone="list" label="Resize project list" onReset={() => reset("list")} />
-                </>
-              )}
-
-              <Pane
-                key="chat"
-                id="chat"
-                {...(stackPanel ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" } : { minRem: SHELL_CHAT_MIN_REM })}
-              >
-                <Activity mode={stackPanel ? "hidden" : "visible"}>
-                  <AccentScope color={tintColor}>
-                    <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-                      <ConversationPane
+                    <AccentScope color={tintColor}>
+                      <DesktopSidePanel
                         model={model}
                         content={c}
-                        mobile={false}
-                        toolbar={toolbar}
+                        panelContent={panelContent}
+                        layout={stackPanel ? "stack" : "side"}
                         notices={notices}
-                        onManageCurrentProviders={onManageCurrentProviders}
                       />
-                    </main>
-                  </AccentScope>
-                </Activity>
-              </Pane>
-
-              {panelVisible && !stackPanel && <PaneHandle tone="panel" label="Resize side panel" onReset={() => reset("panel")} />}
-
-              {panelVisible && (
-                <Pane
-                  key="panel"
-                  id="panel"
-                  {...(stackPanel
-                    ? { className: "min-w-0 flex-1" }
-                    : {
-                        defaultRem: widths.panel,
-                        minRem: SHELL_PANEL_REM.min,
-                        maxRem: SHELL_PANEL_REM.max,
-                        onCommit: (rem: number) => commit("panel", rem),
-                      })}
-                >
-                  <AccentScope color={tintColor}>
-                    <DesktopSidePanel
-                      model={model}
-                      content={c}
-                      panelContent={panelContent}
-                      layout={stackPanel ? "stack" : "side"}
-                      notices={notices}
-                    />
-                  </AccentScope>
-                </Pane>
-              )}
-            </PaneGroup>
-          </>
-        )}
+                    </AccentScope>
+                  </Pane>
+                )}
+              </PaneGroup>
+            </div>
+          )}
+        </div>
       </div>
 
       <SettingsDialog
@@ -611,8 +616,7 @@ function MobileWorkbench({
     () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
     [computer.key, computer.info.name, computer.status],
   );
-  const { activeId, openProfile } = c;
-  const openPmSettings = useCallback((pmId: PmId) => openProfile(pmId), [openProfile]);
+  const { activeId } = c;
   const openComputers = useCallback(() => navigate({ view: "settings", section: "computers" }), [navigate]);
   const switchable = fleet.devices.length >= 2;
   const readOnly = isReadOnly(current.status);
@@ -644,12 +648,11 @@ function MobileWorkbench({
         visible={c.railHasContent}
         open={drawerOpen}
         attention={c.railAttention}
-        count={c.railCount}
         look={c.look}
         onToggle={toggleMobileDrawer}
       />
     ),
-    [c.railHasContent, drawerOpen, c.railAttention, c.railCount, c.look, toggleMobileDrawer],
+    [c.railHasContent, drawerOpen, c.railAttention, c.look, toggleMobileDrawer],
   );
 
   const selectMobileTab = (tab: MobileTab) => {
@@ -672,7 +675,6 @@ function MobileWorkbench({
       onSelect={c.select}
       onNewPm={c.openNewPm}
       onTogglePin={c.togglePin}
-      onOpenPmSettings={openPmSettings}
       onOpenComputers={openComputers}
       onSelectComputer={c.selectComputer}
     />

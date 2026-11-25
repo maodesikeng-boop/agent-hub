@@ -42,14 +42,14 @@ export function UserBlockerCard({
     <div
       data-testid="user-blocker-card"
       className={cn(
-        "border-2 px-3.5 py-3",
-        answered ? "border-border-strong bg-background" : "border-open-line bg-open",
+        "border px-3.5 py-3",
+        answered ? "border-border bg-background" : "border-select-line bg-open",
         className,
       )}
     >
       {showStatus && (
         <div className="mb-1.5 flex items-center gap-2">
-          <span aria-hidden="true" className={cn("size-2 shrink-0", answered ? "bg-muted-foreground" : "bg-status-active")} />
+          <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", answered ? "bg-muted-foreground" : "bg-status-active")} />
           <span className={cn("text-xs font-medium", answered ? "text-muted-foreground" : "text-foreground")}>
             {answered ? "Done" : "Waiting on you"}
           </span>

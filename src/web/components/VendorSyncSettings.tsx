@@ -15,7 +15,7 @@ function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) 
       {badges.map((badge) => (
         <span
           key={badge.vendor}
-          className="inline-flex items-center gap-1.5 border border-border bg-panel px-2.5 py-0.5 text-xs text-muted-foreground"
+          className="inline-flex items-center gap-1.5 rounded-xs bg-panel px-2.5 py-0.5 text-xs text-muted-foreground"
         >
           <span className="font-medium text-foreground">{badge.label}</span>
           <span>{VENDOR_STATUS_LABELS[badge.status]}</span>
@@ -84,7 +84,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                   const detail = (
                     <div className="flex flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="border border-border bg-panel px-2 py-0.5 font-mono text-xs text-muted-foreground">
+                        <span className="rounded-xs bg-panel px-2 py-0.5 font-mono text-xs text-muted-foreground">
                           {item.transport}
                         </span>
                         <span className="font-mono text-xs break-all">{item.maskedTarget}</span>
@@ -94,7 +94,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                           {item.maskedAuth.map((entry) => (
                             <span
                               key={entry}
-                              className="border border-border bg-panel px-2 py-0.5 font-mono text-xs text-muted-foreground"
+                              className="rounded-xs bg-panel px-2 py-0.5 font-mono text-xs text-muted-foreground"
                             >
                               {entry}
                             </span>
@@ -130,7 +130,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                   const detail = (
                     <div className="flex flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="border border-border bg-panel px-2 py-0.5 text-xs text-muted-foreground">
+                        <span className="rounded-xs bg-panel px-2 py-0.5 text-xs text-muted-foreground">
                           {item.scope === "global" ? "Global" : (item.projectLabel ?? "Project")}
                         </span>
                         <span className="font-mono text-xs break-all">{item.sourcePath}</span>
@@ -161,7 +161,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                 {preview.nonSyncable.map((item) => {
                   const detail = (
                     <div className="flex flex-col gap-1">
-                      <span className="inline-flex w-fit items-center border border-border bg-panel px-2.5 py-0.5 text-xs font-medium text-foreground">
+                      <span className="inline-flex w-fit items-center rounded-xs bg-panel px-2.5 py-0.5 text-xs font-medium text-foreground">
                         {item.vendorLabel}
                       </span>
                       <span>{item.reason}</span>

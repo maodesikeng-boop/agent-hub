@@ -526,6 +526,8 @@ const ROUTER_BELL_COLORS = {
   k: "#c98800",
   c: "#ff7a1a",
 } as const;
+/** The Router bell's honey body, the hue of its pastel send button. */
+export const ROUTER_BELL_BODY = ROUTER_BELL_COLORS.b;
 const ROUTER_BELL_ROWS = [
   "...gg..GG...",
   "....gggG....",
@@ -693,6 +695,14 @@ export function opticalLiftOf(fruit: PmFruit, kind: SlimeKind): number {
   if (kind === "piece") return 0;
   const { rows, bodyTop } = SPRITES[fruit];
   return (bodyTop + lastRowOf(rows) + 1) / 2 - SLIME_GRID / 2;
+}
+
+const firstRowOf = (rows: readonly string[]) => rows.findIndex((row) => /[^.]/.test(row));
+
+// A tile's edges show every row's margin, so ears and leaves count here, unlike opticalLiftOf.
+export function silhouetteLiftOf(fruit: PmFruit): number {
+  const { rows } = SPRITES[fruit];
+  return (firstRowOf(rows) + lastRowOf(rows) + 1) / 2 - SLIME_GRID / 2;
 }
 
 const svgOf = (paths: readonly SlimePath[], size: number) =>

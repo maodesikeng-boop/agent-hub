@@ -73,7 +73,7 @@ const hasName = (name: string) =>
   within(nav())
     .queryAllByRole("button", { name: new RegExp(name) })
     .some((b) => !b.closest(".row-shortcuts"));
-const hasMark = (name: string) => within(row(name)).queryByRole("img", { name: "Your turn" }) !== null;
+const hasMark = (name: string) => within(row(name)).queryByText("Your turn") !== null;
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 /** 老马停下来，说了一句新的话。 */
@@ -99,7 +99,7 @@ afterEach(() => {
 });
 
 describe("左栏和标题", () => {
-  it("停稳的那个项目经理那一行显示“等你”，标题是“(N) 产品名”；没有时没有括号", async () => {
+  it("停稳的那个项目经理那一行给读屏标出“等你”，标题是“(N) 产品名”；没有时没有括号", async () => {
     const ws = await boot(twoPms(true));
     vi.useFakeTimers();
     expect(document.title).toBe(PRODUCT_NAME);
@@ -111,12 +111,10 @@ describe("左栏和标题", () => {
     expect(document.title).toBe(PRODUCT_NAME);
     wait(1);
     expect(hasMark("老马")).toBe(true);
-    // 左栏不属于任何项目经理：标签是中性色，不带主色
-    expect(within(row("老马")).getByRole("img", { name: "Your turn" }).className).not.toMatch(/primary/);
-    // 只有绿方块，不写文字
-    expect(within(row("老马")).getByRole("img", { name: "Your turn" })).toHaveClass("size-2", "bg-status-active");
-    expect(within(row("老马")).getByRole("img", { name: "Your turn" }).className).not.toMatch(/rounded-/);
-    expect(within(row("老马")).queryByText("Your turn")).toBeNull();
+    // 列表上不画标记，只有读屏读出“Your turn”
+    expect(row("老马")).toHaveAccessibleName(/^老马\s+Your turn$/);
+    expect(within(row("老马")).getByText("Your turn")).toHaveClass("sr-only");
+    expect(within(row("老马")).queryByRole("img")).toBeNull();
     expect(hasMark("小林")).toBe(false);
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
 
