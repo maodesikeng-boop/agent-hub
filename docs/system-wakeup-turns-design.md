@@ -17,13 +17,15 @@
 
 ### Decisions needed
 
-**1. How should a system wakeup look in the chat?**
+Both decisions are pending the user's answer on the plan checkpoint. Until then, the default is the recommended option.
+
+**1. How should a system wakeup look in the chat?** Pending the user's decision; default: Option A.
 
 - **Option A (recommended): a collapsed left-aligned event row**, the same component as a scheduled-task run. One line shows a bell icon, the tag `Task graph` or `Router`, and the bracketed title; clicking it opens the full text. Users see why the PM started working without reading the command text meant for the PM.
 - **Option B:** Hide it from the chat. The PM's reply carries the context. Users lose the visible cause of a turn they did not start.
 - **Option C:** Show the full text as a muted left-aligned block. Accurate, but it shows several lines of `hub` commands meant for the PM.
 
-**2. Should Worker reports and scheduled-task runs follow the same placement rule?** Measured below: a Worker report or a scheduled-task run that arrives while the PM is mid-turn also splits the running card in two and ends the first half as `Worked for`. Both are system wakeups, so the same rule fixes them.
+**2. Should Worker reports and scheduled-task runs follow the same placement rule?** Pending the user's decision; default: Option A. Measured below: a Worker report or a scheduled-task run that arrives while the PM is mid-turn also splits the running card in two and ends the first half as `Worked for`. Both are system wakeups, so the same rule fixes them.
 
 - **Option A (recommended): yes.** One rule for every system-queued input.
 - **Option B:** Only Task Graph and Router wakeups. Worker reports keep splitting running cards.
@@ -135,7 +137,7 @@ None of the four cache rules gains a new in-memory collection.
 ### 7. Skeleton files
 
 - `src/shared/domain.ts`: `pm.wakeup` system event, `PmWakeupSource`, and its dedupe key.
-- `migrations/0054_system_wakeups.sql`: `session_checklist_turns` with its session-end trigger, and conversion of stored wakeups and their pending sends.
+- `migrations/0054_system_wakeups.sql`: `session_checklist_turns` with its session-end trigger, and conversion of stored wakeups and their pending sends. Known conflict: draft PR #451 also adds `0054_worker_app_approvals.sql`. Before merging, check the numbers already taken on the latest `main` and move this migration to the next free number if 0054 is taken ([Ledger database](ledger-database.md#migrations-and-their-manifest)).
 - `src/daemon/ledger/system-wakeups.ts`: `enqueueSystemWakeupIn`, the single writer of PM wakeups.
 - `src/shared/taken-input.ts`: `TakenInput` and `takenInputOf`, the stamp shape shared by ledger and web.
 - `src/daemon/ledger/taken-inputs.ts`: writes the stamp from driver events; wired next to `turnReplies.afterDriverEvent` in `src/daemon/ledger/ledger.ts`.
