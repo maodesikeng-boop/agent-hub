@@ -216,6 +216,15 @@ html[data-ui-scale="xl"] {
   --bead-wait-line: #9a6a00;
   --bead-wait-core: var(--caution);
   --bead-wait-glint: #f6d77a;
+  --checklist-rail: #ddd6cc;
+  --checklist-done-fill: #e7f4eb;
+  --checklist-done-stroke: #36874e;
+  --checklist-done-check: #2d7a44;
+  --checklist-active-ink: #3b2f25;
+  --checklist-pending-stroke: #c7bfb4;
+  --checklist-cancelled-stroke: #b5ada3;
+  --checklist-done-text: #59514a;
+  --checklist-muted-text: #736b63;
   --mix-bubble-me: 12%;
   --link: #2563eb;
   --header-gutter-start: 1.25rem;
@@ -1447,5 +1456,78 @@ input[type="search"]::-webkit-search-cancel-button {
   .project-row:hover .project-row-meta,
   .project-row:focus-within .project-row-meta {
     display: none;
+  }
+}
+
+.turn-progress-list {
+  margin: 0;
+  padding: 0.125rem 0;
+  list-style: none;
+}
+.turn-progress-item {
+  --pc-icon-cy: 0.8125rem;
+  position: relative;
+}
+.turn-progress-item:first-child:not(:last-child)::before,
+.turn-progress-item:not(:first-child):not(:last-child)::before,
+.turn-progress-item:last-child:not(:first-child)::before {
+  content: "";
+  position: absolute;
+  left: calc(0.4375rem - 0.675px);
+  width: 1.35px;
+  background: var(--checklist-rail);
+  pointer-events: none;
+  z-index: 0;
+}
+.turn-progress-item:first-child:not(:last-child)::before {
+  top: var(--pc-icon-cy);
+  bottom: 0;
+}
+.turn-progress-item:not(:first-child):not(:last-child)::before {
+  top: 0;
+  bottom: 0;
+}
+.turn-progress-item:last-child:not(:first-child)::before {
+  top: 0;
+  height: var(--pc-icon-cy);
+}
+.turn-progress-row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5625rem;
+  min-height: 1.625rem;
+  padding-block: 0.1875rem;
+  font-size: var(--text-minor);
+  line-height: 1.25rem;
+}
+.turn-progress-step-trigger {
+  margin-inline: -0.375rem;
+  padding-inline: 0.375rem;
+}
+.turn-progress-step-trigger:hover {
+  --pc-icon-bg: var(--hover);
+}
+.turn-progress-icon {
+  margin-top: 0.1875rem;
+  background: var(--pc-icon-bg, var(--background));
+}
+.turn-progress-step-process {
+  padding-left: 1.4375rem;
+}
+.turn-progress-done {
+  color: var(--checklist-done-text);
+}
+.turn-progress-muted {
+  color: var(--checklist-muted-text);
+}
+@media (pointer: coarse) {
+  .turn-progress-list[data-ended] .turn-progress-item {
+    --pc-icon-cy: 1.375rem;
+  }
+  .turn-progress-list[data-ended] .turn-progress-row {
+    min-height: 2.75rem;
+    padding-block: 0.75rem;
   }
 }

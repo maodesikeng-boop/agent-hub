@@ -93,7 +93,7 @@ function list(messages: ReturnType<typeof makeMessage>[], over: { pending?: Pend
 const heads = (container: HTMLElement) => Array.from(container.querySelectorAll("[data-slot='agent-head']")) as HTMLElement[];
 const statusLine = () => screen.getByRole("status", { name: "Status" }).closest("[data-work-line]") as HTMLElement;
 
-describe("MessageList：状态在这一轮最下面", () => {
+describe("MessageList：状态在这一轮上面（Worked for 位置）", () => {
   it("这一轮还没出回复（最后一条是用户的消息）：底部先出一轮“头像 名字”，下面一行状态", () => {
     const { container } = list([makeUserMessage({ id: 1, text: "做点事", status: "processing" })]);
     const [head] = heads(container);
@@ -112,11 +112,13 @@ describe("MessageList：状态在这一轮最下面", () => {
     expect(statusLine().closest("[data-turn]")).toBe(heads(container)[1]!.closest("[data-turn]"));
   });
 
-  it("回复出来后：状态在这一轮最下面，不再单独出一轮", () => {
+  it("回复出来后：状态留在这一轮正文上方，不再单独出一轮，也不在下面重复显示", () => {
     const { container } = list([makeUserMessage({ id: 1, text: "做点事" }), makeMessage({ id: 2, text: "好的" })]);
     expect(heads(container)).toHaveLength(1);
-    expect(statusLine().closest("[data-turn]")).toHaveTextContent("好的");
-    expect(screen.getByText("好的").compareDocumentPosition(statusLine()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const turn = statusLine().closest("[data-turn]") as HTMLElement;
+    expect(turn).toHaveTextContent("好的");
+    expect(turn.querySelectorAll("[data-work-line]")).toHaveLength(1);
+    expect(statusLine().compareDocumentPosition(screen.getByText("好的")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("一串操作和回复：一个头像，状态那一行能点开看操作", () => {

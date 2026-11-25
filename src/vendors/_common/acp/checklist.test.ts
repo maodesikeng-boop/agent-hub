@@ -42,4 +42,16 @@ describe("ACP checklists", () => {
       .toEqual({ kind: "replace", items: [] });
     expect(acpChecklistFromToolUpdate("cursor", "updateTodos", tool)).toBeNull();
   });
+
+  it("reads merged tool input when the update frame omits rawInput", () => {
+    const [, running] = progressFrames<Frame>("opencode-todo.live.jsonl");
+    const tool = toolOf(running!);
+    const mergedInput = tool.rawInput;
+    const withoutRawInput = { ...tool, rawInput: undefined };
+    expect(acpChecklistFromToolUpdate("opencode", "todowrite", withoutRawInput)).toBeNull();
+    expect(acpChecklistFromToolUpdate("opencode", "todowrite", withoutRawInput, mergedInput)).toMatchObject({
+      kind: "replace",
+      items: [{ title: "Read probe" }, { title: "Confirm marker" }, { title: "Reply" }],
+    });
+  });
 });

@@ -766,7 +766,11 @@ function placeHandovers(all: Message[]): Message[] {
   return rest;
 }
 
+const groupMessagesCache = new WeakMap<readonly Message[], RenderItem[]>();
+
 export function groupMessages(all: Message[]): RenderItem[] {
+  const hit = groupMessagesCache.get(all);
+  if (hit !== undefined) return hit;
   const messages = placeHandovers(all);
   const items: RenderItem[] = [];
   let turn: Extract<RenderItem, { kind: "turn" }> | null = null;
@@ -819,6 +823,7 @@ export function groupMessages(all: Message[]): RenderItem[] {
     lastAgentAt = message.createdAt;
   }
   close();
+  groupMessagesCache.set(all, items);
   return items;
 }
 

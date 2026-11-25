@@ -27,7 +27,7 @@ import { Markdown } from "./Markdown.tsx";
 import { MessageList } from "./MessageList.tsx";
 import { AgentHead, CopyButton, displayText, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 import { useStop } from "../useStop.ts";
-import { hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
+import { actionStartedAt, hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 import { PieceMeta } from "./RightRail.tsx";
 
 const NO_OUTCOMES: readonly WorkerOutcome[] = [];
@@ -252,6 +252,7 @@ export const WorkerConversation = memo(function WorkerConversation({
                 onRetry={onRetry}
                 actions={actions}
                 status={statusNode}
+                stepStartedAt={actionStartedAt(session)}
                 statusAgent={identity}
                 streamingText={session?.streamingText ?? null}
                 footer={failureFooter}

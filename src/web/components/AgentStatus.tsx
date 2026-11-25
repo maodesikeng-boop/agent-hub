@@ -10,9 +10,15 @@ export function hasAgentStatus(session: SessionState | null): boolean {
   return (session?.activity ?? "idle") !== "idle" || isWaitingForQuota(session);
 }
 
+export function actionStartedAt(session: SessionState | null): number | null {
+  if (!hasAgentStatus(session) || isWaitingForQuota(session) || session?.apiRetry) return null;
+  const at = session?.stepStartedAt;
+  return typeof at === "number" && Number.isFinite(at) ? at : null;
+}
+
 // Rebuild only when status fields change so streaming text deltas keep the same node reference.
 export function useAgentStatusNode(session: SessionState | null): React.ReactNode {
-  const statusKey = session === null ? "" : JSON.stringify([session.activity, session.step, session.apiRetry, session.rateLimit]);
+  const statusKey = session === null ? "" : JSON.stringify([session.activity, session.step, session.stepStartedAt ?? null, session.apiRetry, session.rateLimit]);
   return useMemo(() => (hasAgentStatus(session) ? <AgentStatus session={session} /> : null), [statusKey]);
 }
 

@@ -11,14 +11,19 @@ export function acpChecklistFromSessionUpdate(vendor: AgentVendor, update: Sessi
   return checklistFromTodoList({ todos: update.entries });
 }
 
-export function acpChecklistFromToolUpdate(vendor: AgentVendor, name: string, toolCall: ToolCall | ToolCallUpdate): ChecklistUpdate | null {
+export function acpChecklistFromToolUpdate(
+  vendor: AgentVendor,
+  name: string,
+  toolCall: ToolCall | ToolCallUpdate,
+  input: unknown = toolCall.rawInput,
+): ChecklistUpdate | null {
   const spec = vendorSpec(vendor);
   if (!isChecklistTool(spec, name)) return null;
-  const { rawInput, rawOutput } = toolCall;
+  const { rawOutput } = toolCall;
   if (toolCall.status === "failed" || toolCall.status === "pending") return null;
   const confirmed = toolCall.status === "completed" && rawOutput && typeof rawOutput === "object" && "metadata" in rawOutput
     ? checklistFromTodoList(rawOutput.metadata) : null;
-  const requested = checklistFromTodoList(rawInput);
+  const requested = checklistFromTodoList(input);
   if (spec.checklist.sources.includes("plan_update")) {
     // ACP plan omits clears. Ignore nonempty tool lists when plan supplies the same data.
     return confirmed?.items.length === 0 ? confirmed : requested?.items.length === 0 ? requested : null;

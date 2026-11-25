@@ -124,15 +124,16 @@ describe("一轮回复只出一次头像", () => {
 });
 
 describe("正在跑和跑完", () => {
-  it("正在跑：这一轮最下面一行英文状态，可点开看明细；没有 Worked for、没有复制", async () => {
+  it("正在跑：这一轮正文上方一行英文状态，可点开看明细；没有 Worked for、没有复制", async () => {
     const { container } = list(turn(), { status: running() });
     const lines = workLines(container);
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toHaveTextContent("Worked for");
     const status = within(lines[0]!).getByRole("status", { name: "Status" });
     expect(status).toHaveTextContent("Running command...");
-    // 在最后一段文字下面
-    expect(screen.getByText("派好了").compareDocumentPosition(lines[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 在名字下面、正文上面（与 Worked for 共用同一个位置）
+    expect(heads(container)[0]!.compareDocumentPosition(lines[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(lines[0]!.compareDocumentPosition(screen.getByText("派好了")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
     await userEvent.click(within(lines[0]!).getByRole("button"));
     expect(container).toHaveTextContent("Bash: hub worker start");

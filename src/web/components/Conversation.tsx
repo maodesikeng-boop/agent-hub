@@ -17,7 +17,7 @@ import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { RowError } from "./SettingsList.tsx";
 import { useStop } from "../useStop.ts";
-import { hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
+import { actionStartedAt, hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 
 function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }) {
   const client = useClient();
@@ -188,6 +188,7 @@ export const Conversation = memo(function Conversation({
           focus={focus}
           onFocusDone={onFocusDone}
           status={statusNode}
+          stepStartedAt={actionStartedAt(session)}
           statusAgent={agent}
           streamingText={session?.streamingText ?? null}
         />

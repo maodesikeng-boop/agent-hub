@@ -33,10 +33,15 @@ export function claudeChecklistFromToolUse(state: ClaudeChecklistState, block: {
 
   const input = taskInput.safeParse(block.input).data;
   if (!input) return null;
-  const activeTitle = typeof input.activeForm === "string" ? clipChecklistTitle(input.activeForm) || null : undefined;
+  const title = typeof input.subject === "string" ? clipChecklistTitle(input.subject) : "";
+  const activeTitle = input.activeForm === null
+    ? null
+    : typeof input.activeForm === "string"
+      ? clipChecklistTitle(input.activeForm) || null
+      : undefined;
   if (block.name === "TaskCreate") {
-    if (typeof input.subject !== "string" || input.subject.trim() === "") return null;
-    rememberCall(state, block.toolUseId, { kind: "create", title: clipChecklistTitle(input.subject), activeTitle: activeTitle ?? null });
+    if (title === "") return null;
+    rememberCall(state, block.toolUseId, { kind: "create", title, activeTitle: activeTitle ?? null });
     return null;
   }
 
@@ -45,7 +50,7 @@ export function claudeChecklistFromToolUse(state: ClaudeChecklistState, block: {
   const status = normalizeChecklistStatus(input.status);
   return { kind: "merge", items: [{
     id: input.taskId,
-    ...(typeof input.subject === "string" ? { title: input.subject } : {}),
+    ...(title !== "" ? { title } : {}),
     ...(activeTitle !== undefined ? { activeTitle } : {}),
     ...(status !== null ? { status } : {}),
   }] };

@@ -316,7 +316,7 @@ export function visibleSessionOf(state: Pick<ReminderState, "sessions" | "conver
   const messages = state.conversations[conversationId]?.messages ?? [];
   if (session === null || !inHandoverTurn(messages, session.sessionId)) return session;
   const waiting = messages.some((m) => m.status === "queued" && !isHandoverTraffic(m)) || pendingIn(state, conversationId).some((p) => p.phase === "sending");
-  const quiet = { currentTool: null, apiRetry: null, streamingText: undefined };
+  const quiet = { currentTool: null, apiRetry: null, stepStartedAt: null, streamingText: undefined };
   return waiting ? { ...session, ...quiet, activity: "working", step: { type: "thinking" } } : { ...session, ...quiet, activity: "idle", step: null };
 }
 

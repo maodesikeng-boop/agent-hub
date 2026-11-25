@@ -128,7 +128,7 @@ function handleToolUpdate(
   const extractor = host.config.extractToolUse ?? defaultExtractAcpToolUse;
   const { name, input } = extractor(toolCall, existing);
 
-  const checklist = acpChecklistFromToolUpdate(host.vendor, name, toolCall);
+  const checklist = acpChecklistFromToolUpdate(host.vendor, name, toolCall, input);
   if (checklist) emitAcpChecklist(host, st, proc, checklist, at);
 
   let tracked = existing;

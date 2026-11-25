@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { progressFrames } from "../../../test/fixtures/progress/load.ts";
+import { applyChecklistUpdate } from "../../shared/checklist.ts";
 import { CHECKLIST_PENDING_CALLS_MAX } from "../../shared/limits.ts";
 import { claudeChecklistFromToolResult, claudeChecklistFromToolUse, createClaudeChecklistState } from "./checklist.ts";
 import { parseAssistant, parseToolResults } from "./protocol.ts";
@@ -49,5 +50,17 @@ describe("Claude checklist", () => {
     }
     expect(state.pending.size).toBe(CHECKLIST_PENDING_CALLS_MAX);
     expect(claudeChecklistFromToolResult(state, "0", { task: { id: "lost" } })).toBeNull();
+  });
+
+  it("ignores whitespace-only TaskUpdate subjects and clears activeTitle on explicit null", () => {
+    const state = createClaudeChecklistState();
+    const prev = [{ id: "1", title: "Read", activeTitle: "Reading", status: "in_progress" as const }];
+    const blankSubject = claudeChecklistFromToolUse(state, {
+      name: "TaskUpdate",
+      toolUseId: "u1",
+      input: { taskId: "1", subject: "   ", activeForm: null, status: "completed" },
+    });
+    expect(blankSubject).toEqual({ kind: "merge", items: [{ id: "1", activeTitle: null, status: "completed" }] });
+    expect(applyChecklistUpdate(prev, blankSubject!)).toEqual([{ id: "1", title: "Read", activeTitle: null, status: "completed" }]);
   });
 });

@@ -44,6 +44,7 @@ import {
   workersOf,
 } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
+import { turnProgress } from "./turn-progress.ts";
 import { downloadOfferOf, updateReminderOf } from "./update-model.ts";
 import { describeResourcesSummary, partitionHeldResources } from "./resources-model.ts";
 import { changeOf, makeCapabilitiesView, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
@@ -1126,5 +1127,57 @@ describe("shell list and rail selectors", () => {
     expect(after).toHaveLength(2);
     expect(after.at(-1)?.line.summary).toBe("disk full");
     expect(workerOutcomesOf(failed, targetWorker)).toBe(after);
+  });
+
+  it("groupMessages with checklists and turnProgress keep stable references and invalidate immediately on changes", () => {
+    const checklistMsg = (id: number, status: "in_progress" | "completed") =>
+      makeMessage({
+        id,
+        conversationId: PM_CONVERSATION,
+        kind: "checklist",
+        text: "",
+        collapsed: true,
+        meta: {
+          checklist: [
+            { id: "a", title: "Read files", activeTitle: "Reading files", status: "completed" },
+            { id: "b", title: "Run tests", activeTitle: "Running tests", status },
+          ],
+        },
+      });
+    const base: Message[] = [
+      makeUserMessage({ id: 1, conversationId: PM_CONVERSATION, text: "开始" }),
+      checklistMsg(2, "in_progress"),
+      makeToolMessage({ id: 3, conversationId: PM_CONVERSATION, text: "Read: a.ts" }),
+      checklistMsg(4, "completed"),
+      makeToolMessage({ id: 5, conversationId: PM_CONVERSATION, text: "Bash: pnpm test" }),
+      makeMessage({ id: 6, conversationId: PM_CONVERSATION, text: "好了" }),
+    ];
+
+    const grouped = groupMessages(base);
+    expect(groupMessages(base)).toBe(grouped);
+    const turn = grouped.find((item) => item.kind === "turn")!;
+    expect(turn.checklists.map((m) => m.id)).toEqual([2, 4]);
+    expect(turn.work.map((m) => m.id)).toEqual([3, 5]);
+
+    const nextMessages = [...base, checklistMsg(7, "completed")];
+    const nextGrouped = groupMessages(nextMessages);
+    expect(nextGrouped).not.toBe(grouped);
+    expect(groupMessages(nextMessages)).toBe(nextGrouped);
+
+    const model = turnProgress(turn.work, turn.checklists);
+    expect(turnProgress(turn.work, turn.checklists)).toBe(model);
+    expect(turnProgress([...turn.work], [...turn.checklists])).toBe(model);
+    expect(turnProgress(turn.work, [...turn.checklists, checklistMsg(8, "completed")])).not.toBe(model);
+    expect(turnProgress([...turn.work, makeToolMessage({ id: 9, conversationId: PM_CONVERSATION })], turn.checklists)).not.toBe(model);
+
+    const onlyChecklist = turnProgress([], [checklistMsg(10, "in_progress")]);
+    expect(turnProgress([], [onlyChecklist.steps ? checklistMsg(10, "in_progress") : checklistMsg(10, "in_progress")])).not.toBe(onlyChecklist);
+    const anchor = [checklistMsg(11, "in_progress")];
+    const stableChecklistOnly = turnProgress([], anchor);
+    expect(turnProgress([], [...anchor])).toBe(stableChecklistOnly);
+
+    const bigWork = Array.from({ length: 300 }, (_, i) => makeToolMessage({ id: 100 + i * 2, conversationId: PM_CONVERSATION }));
+    const bigChecklists = Array.from({ length: 200 }, (_, i) => checklistMsg(101 + i * 2, i % 2 === 0 ? "in_progress" : "completed"));
+    expect(medianMs(21, () => void turnProgress([...bigWork], [...bigChecklists]))).toBeLessThan(5);
   });
 });
