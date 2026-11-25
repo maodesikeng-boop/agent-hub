@@ -101,10 +101,10 @@ describe("zone palette and contrast (styles.css, docs/ui-standard.md sections 2.
   const frameLightest = mix(sheen[1]!, Number(sheen[2]) * 100, token("wood-top"));
   const railHoverLightest = mix("#fff4e4", 10, frameLightest);
   const ringsLightest = mix("#fff0dc", 7, token("rings-top"));
-  const translucent = (name: string) => {
+  const translucent = (name: string, base = token("rings-top")) => {
     const [, r, g, b, alpha] = new RegExp(`\\n  --${name}: rgb\\((\\d+) (\\d+) (\\d+) / ([0-9.]+)\\);`).exec(css)!;
     const hex = `#${[r, g, b].map((v) => Number(v).toString(16).padStart(2, "0")).join("")}`;
-    return mix(hex, Number(alpha) * 100, token("rings-top"));
+    return mix(hex, Number(alpha) * 100, base);
   };
 
   it("已删除水果混底和果冻选中底，只保留分区色板", () => {
@@ -138,6 +138,17 @@ describe("zone palette and contrast (styles.css, docs/ui-standard.md sections 2.
     // `.wood-rings` points the placeholder color (--muted-foreground) at the soft ink, so the field's fill sits under it.
     expect(css).toMatch(/\.wood-rings \{[^}]*--muted-foreground: var\(--list-ink-soft\);/);
     for (const fill of ["list-field", "list-hover"]) expect(contrastRatio(token("list-ink-soft"), translucent(fill)), fill).toBeGreaterThanOrEqual(4.6);
+  });
+
+  it("keeps the top-bar Router input readable on the frame wood at rest and on hover, and solid while focused", () => {
+    for (const fill of ["topbar-field", "topbar-field-hover"]) {
+      const surface = translucent(fill, frameLightest);
+      expect(contrastRatio(token("list-ink-soft"), surface), fill).toBeGreaterThanOrEqual(4.6);
+      expect(contrastRatio(token("rail-ink"), surface), fill).toBeGreaterThanOrEqual(5.5);
+    }
+    expect(css).toMatch(/\.topbar-router input::placeholder \{\s*color: var\(--list-ink-soft\);/);
+    expect(css).toMatch(/\.topbar-router:focus-within \{[^}]*background-color: var\(--background\);[^}]*color: var\(--foreground\);/);
+    expect(contrastRatio(token("muted-foreground"), token("background"))).toBeGreaterThanOrEqual(4.5);
   });
 
   it("keeps the hourglass sand, warning, and full colors readable on the frame wood", () => {

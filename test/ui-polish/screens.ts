@@ -187,6 +187,14 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("router.model-picker-vendor", "总助：模型面板，选了厂商，Model & effort 展开", D, "normal", "standard", "同上，补丁 router-vendor-agy，点开 Model & effort", "浮层"),
   s("router.model-picker-long", "总助：模型面板，超长模型名", D, "long", "standard", "同上，补丁 models-long-names", "浮层"),
   s("router.model-drawer-mobile", "总助：手机模型抽屉", M, "normal", "standard", "手机上点模型入口", "抽屉"),
+  s("router.quick-rest", "顶栏 Router 输入框：静止时半透明融在木头里", ["desktop", "narrow", "slim"], "normal", "standard", "#/c/1，看顶栏正中的 Message Router 输入框", "顶栏"),
+  s("router.quick-hover", "顶栏 Router 输入框：悬停", D, "normal", "standard", "#/c/1，鼠标悬停在顶栏输入框上", "顶栏"),
+  s("router.quick-typing", "顶栏 Router 输入框：点进去打字变实底加聚焦圈", D, "normal", "standard", "#/c/1，在顶栏输入框里打一句话", "顶栏"),
+  s("router.quick-working", "顶栏 Router 小窗：发出后 Router 回复进行中", D, "busy", "standard", "#/c/1，补丁 router-quick-working，顶栏输入一句按 Enter", "回复小窗"),
+  s("router.quick-reply", "顶栏 Router 小窗：显示 Router 的回复", ["desktop", "narrow", "slim"], "normal", "standard", "#/c/1，补丁 router-quick-reply，顶栏输入一句按 Enter", "回复小窗"),
+  s("router.quick-failed", "顶栏 Router 小窗：没发出去的红色感叹号", D, "error", "standard", "#/c/1，写接口被拦，顶栏输入一句按 Enter", "回复小窗"),
+  s("router.quick-follow-up", "顶栏 Router 小窗：在小窗底部接着打字", D, "normal", "standard", "同 router.quick-reply，再在小窗底部的回复行打一句", "回复小窗"),
+  s("router.quick-scale-xl", "顶栏 Router 小窗：界面大小 XL", D, "normal", "standard", "#/c/1，localStorage 预置 XL，补丁 router-quick-reply，发一句", "回复小窗"),
   s("profile.normal", "Info 页：无框头像、名称与两段列表", DM, "normal", "standard", "#/pm/1"),
   s("profile.lower", "Info 页：头像悬停铅笔与底部操作", D, "normal", "standard", "#/pm/1 悬停头像"),
   s("profile.capabilities", "Info 子页：Capabilities 钻取页", DM, "normal", "standard", "#/pm/1 点 Capabilities"),
@@ -265,6 +273,10 @@ const openPm = (name: string): ScreenStep[] => [...ensureList, { click: pmRow(na
 const waitCharts: ScreenStep[] = [{ waitFor: ".vega-embed canvas, .vega-embed svg" }, { waitFor: 'svg[id^="chart-mermaid-"]' }];
 const stickBottom: ScreenStep = { scroll: { target: LOG, to: "bottom" } };
 const openRouter: ScreenStep[] = [{ waitFor: 'role=button[name=/^Router/]' }, { click: 'role=button[name=/^Router/]' }, { waitFor: ROUTER_LOG }];
+const QUICK_INPUT = 'role=textbox[name="Message Router"]';
+const QUICK_POPOVER = 'role=dialog[name="Router"]';
+const QUICK_ASK = "今天各项目进度怎么样？";
+const QUICK_ANSWERED = `${QUICK_POPOVER} >> [data-router-turn][data-status="answered"]`;
 const profileScope = (name: string) => `[aria-label="${name}'s settings"]`;
 const openProfile = (name: string): ScreenStep[] => [...openPm(name), { click: `role=button[name="View ${name}'s profile"]` }, { waitFor: profileScope(name) }];
 const openSettings = (tab?: string): ScreenStep[] => [{ waitFor: APP_RAIL }, { click: btn("Settings", APP_RAIL) }, { waitFor: DIALOG }, ...(tab === undefined ? [] : [{ click: `role=tab[name="${tab}"]` }])];
@@ -274,6 +286,8 @@ const openQuota = (patch: string): ScreenStep[] => [{ patch }, { waitFor: APP_RA
 /** 断线满 30 秒（src/web/devices.ts 的 OFFLINE_AFTER_MS）才从“重连中”变“离线”：截图的时间是钉住的，要拨过去。 */
 const PAST_OFFLINE: ScreenStep = { clock: 31_000 };
 const typeInComposer = (text: string): ScreenStep => ({ type: { into: COMPOSER, text } });
+/** Sends one line from the top-bar Router input on 小林's conversation and waits for the reply popover. */
+const sendQuick = (): ScreenStep[] => [...openPm("小林"), { type: { into: QUICK_INPUT, text: QUICK_ASK } }, { press: "Enter" }, { waitFor: QUICK_POPOVER }];
 const storage = (items: Record<string, string>): ScreenStep => ({ storage: items });
 
 /**
@@ -414,6 +428,20 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "router.model-picker-vendor": [{ patch: "router-vendor-agy" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { click: `${POPOVER} >> text=Model & effort` }, { crop: POPOVER }],
   "router.model-picker-long": [{ patch: "models-long-names" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: POPOVER }],
   "router.model-drawer-mobile": [{ patch: "vendors-mixed" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: DIALOG }],
+  "router.quick-rest": [...openPm("小林"), { crop: ".shell-topbar" }],
+  "router.quick-hover": [...openPm("小林"), { hover: QUICK_INPUT }, { crop: ".shell-topbar" }],
+  "router.quick-typing": [...openPm("小林"), { type: { into: QUICK_INPUT, text: QUICK_ASK } }, { crop: ".shell-topbar" }],
+  "router.quick-working": [{ patch: "router-quick-working" }, ...sendQuick(), { waitFor: `${QUICK_POPOVER} >> text=Working…` }, { crop: QUICK_POPOVER }],
+  "router.quick-reply": [{ patch: "router-quick-reply" }, ...sendQuick(), { waitFor: QUICK_ANSWERED }, { crop: QUICK_POPOVER }],
+  "router.quick-failed": [...sendQuick(), { waitFor: `${QUICK_POPOVER} >> [data-router-turn][data-status="send_failed"]` }, { crop: QUICK_POPOVER }],
+  "router.quick-follow-up": [
+    { patch: "router-quick-reply" },
+    ...sendQuick(),
+    { waitFor: QUICK_ANSWERED },
+    { type: { into: 'role=textbox[name="Reply to Router"]', text: "小林那边先定 30 分钟缓存" } },
+    { crop: QUICK_POPOVER },
+  ],
+  "router.quick-scale-xl": [storage({ "agent-hub.uiScale": "xl" }), { patch: "router-quick-reply" }, ...sendQuick(), { waitFor: QUICK_ANSWERED }, { crop: QUICK_POPOVER }],
   "profile.normal": openProfile("小林"),
   "profile.lower": [...openProfile("小林"), { hover: `${profileScope("小林")} >> role=button[name="Change look"]` }],
   "profile.capabilities": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Capabilities"]` }, { waitFor: 'role=button[name="Back to Info"]' }],

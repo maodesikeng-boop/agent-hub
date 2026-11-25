@@ -8,6 +8,7 @@ import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
 import { ProjectList } from "./components/ProjectList.tsx";
+import { RouterTopBar } from "./components/RouterTopBar.tsx";
 import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
 import { WorkPanel, WorkPanelToggle } from "./components/WorkPanel.tsx";
@@ -262,7 +263,19 @@ function DesktopWorkbench({
 
   return (
     <div ref={setShellEl} data-shell="desktop" className="wood relative flex h-full w-full min-w-0 flex-col overflow-hidden">
-      <div aria-hidden="true" data-window-drag className="shell-topbar shrink-0" />
+      <RouterTopBar
+        hidden={c.routerActive}
+        devices={fleet.devices}
+        selfId={fleet.selfId}
+        lookOf={c.routerView.lookOf}
+        working={c.routerSummary.working}
+        routerDraft={c.drafts.of(ROUTER_DRAFT_KEY)}
+        clientForDevice={c.clientForDevice}
+        storeForDevice={c.storeForDevice}
+        onExpand={c.routerSummary.onSelect}
+        onOpenConversation={c.openDeviceConversation}
+        onOpenWorker={c.openDeviceWorker}
+      />
       <div className="flex min-h-0 min-w-0 flex-1">
         <AppRail
           router={c.routerSummary}

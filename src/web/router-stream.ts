@@ -411,6 +411,11 @@ function liveTurnsOf(commands: readonly RouterCommandRecord[], selfId: string | 
   return turns;
 }
 
+/** The local Router's live command turns, cached per commands array so unrelated state changes return the same array. */
+export function routerTurnsOf(state: HubState, selfId: string | undefined): readonly RouterTurnEntry[] {
+  return state.phase === "ready" ? liveTurnsOf(commandsSliceOf(state.router).commands, selfId) : NO_TURNS;
+}
+
 const briefingsByReportsCache = new WeakMap<readonly RouterReportItem[], Map<string, readonly RouterBriefingEntry[]>>();
 
 function liveBriefingsOf(
