@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isAgentVendor,
-  isTaskNodeWaitingUser,
+  isTaskNodeUserBlocked,
+  isTaskNodeWaitingDecision,
   type ConversationId,
   type Message,
   type MessageId,
@@ -361,7 +362,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : EMPTY_ASKS), [state.conversations, state.pms, state.pending, active?.id]);
   const railProjectId = active?.project?.id ?? null;
   const railGraphs = useMemo(() => activeGraphsOf(state, railProjectId), [state.activeTaskGraphs, railProjectId]);
-  const railGraphNeedsYou = useMemo(() => railGraphs.some((g) => g.nodes.some(isTaskNodeWaitingUser)), [railGraphs]);
+  const railGraphNeedsYou = useMemo(
+    () => railGraphs.some((g) => g.nodes.some((n) => isTaskNodeWaitingDecision(n) || isTaskNodeUserBlocked(n))),
+    [railGraphs],
+  );
   const { offline, link: rawLink } = deviceNotices(current);
   const link = useMemo(
     () => (rawLink === null ? null : { readOnly: rawLink.readOnly, waiting: rawLink.waiting }),
@@ -384,6 +388,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const railAttention = railAsks.length > 0 || railGraphNeedsYou;
   const railPeeking = railPeek !== null && railPeek === railPm;
   const railOpen = railHasContent && !railClosed && (railNeedsYou || railPeeking);
+  const keepRailOpen = useCallback(() => setRailPeek(railPm), [railPm]);
   const toggleRail = useCallback(
     (forceOpen?: boolean) => {
       const closed = forceOpen === undefined ? railOpen : !forceOpen;
@@ -521,6 +526,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       railComputers,
       railGraphs,
       railHasContent,
+      keepRailOpen,
       railLoadMoreWorkers,
       railOpen,
       railProjectId,

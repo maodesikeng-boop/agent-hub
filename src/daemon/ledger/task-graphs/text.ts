@@ -57,7 +57,7 @@ export function formatGraphText(graph: TaskGraph, results = true, agentContext?:
   for (const n of graph.nodes) {
     const deps = depMap.get(n.key);
     const depNote = deps && deps.length > 0 ? ` ← [${deps.join(", ")}]` : "";
-    const cardNote = n.gateQuestion !== null && n.decision === null && n.status !== "done" ? " [拍板卡]" : "";
+    const cardNote = n.gateAskPending ? ` [拍板卡] #${n.gateAskMessageId}` : "";
     const settings = agentContext === undefined ? null : formatStepAgentConfig(n, agentContext);
     lines.push(
       `  - [${taskNodeStatusText(n, "pm")}] ${n.key}：${n.title}${cardNote}${nodeWorkerNote(n)}${depNote}`,

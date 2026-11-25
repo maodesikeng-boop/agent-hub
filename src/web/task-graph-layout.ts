@@ -58,6 +58,7 @@ export interface LayoutInputNode {
   readonly key: string;
   readonly status: LayoutNodeStatus;
   readonly waitingFor?: "user" | "pm" | null;
+  readonly activeGate?: boolean;
   readonly hasCard?: boolean;
   readonly position?: number;
   readonly optionCount?: number;
@@ -161,7 +162,7 @@ function round2(n: number): number {
 }
 
 function isWaitingGate(node: LayoutInputNode): boolean {
-  return node.status === "waiting" && node.waitingFor === "user";
+  return node.activeGate ?? (node.status === "waiting" && node.waitingFor === "user");
 }
 
 function normalizedOptionRows(node: LayoutInputNode): number {

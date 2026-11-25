@@ -7,7 +7,7 @@ import type { LedgerSessions } from "./sessions.ts";
 import { pushSlimGraphIn } from "./task-graphs/store.ts";
 import { createIn } from "./task-graphs/create.ts";
 import { enrichDeliveryNoteMessage, graphDeliveryProbeTarget, graphPrTargets } from "./task-graphs/delivery.ts";
-import { askOnStepIn, decideIn, decideNode } from "./task-graphs/gate.ts";
+import { askOnStepIn, closeStepAskIn, decideIn, decideNode } from "./task-graphs/gate.ts";
 import { cancelGraph, cancelIn, doneIn, finishIn, list, listProjectHistory, show, skipIn, skipNode } from "./task-graphs/lifecycle.ts";
 import {
   activeSnapshotGraphs,
@@ -73,6 +73,7 @@ export function createLedgerTaskGraphs(
     show: bind(show),
     list: bind(list),
     askOnStepIn: bind(askOnStepIn),
+    closeStepAskIn: bind(closeStepAskIn),
     patchIn: bind(patchIn),
     doneIn: bind(doneIn),
     decideIn: bind(decideIn),

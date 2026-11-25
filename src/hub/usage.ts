@@ -179,7 +179,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "close",
     cli: "ask close",
     usage: `  ${hub} ask close <卡编号>                                    关掉自己名下一张还在等用户的提问卡（用户在对话里打字答了、没点卡，或问题过时了）；
-                                                          卡编号见用户消息前面说明块里的 #编号`,
+                                                          普通卡编号见用户消息前面的说明；步骤拍板卡用 ${hub} ask close --message <消息编号>，编号见 ${hub} graph show`,
   },
   {
     command: "schedule.add",

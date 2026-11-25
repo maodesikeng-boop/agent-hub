@@ -345,11 +345,11 @@ export function createClient(device: DeviceId | null) {
       postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommands), body),
     postRetryRouterCommand: (id: RouterCommandId) =>
       postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), {}),
-    fetchProjectTaskGraphs: (projectId: ProjectId, options: { before?: TaskGraphId; limit?: number } = {}) => {
+    fetchProjectTaskGraphs: (projectId: ProjectId, options: { before?: TaskGraphId; limit?: number; signal?: AbortSignal } = {}) => {
       const params = new URLSearchParams({ status: "history" });
       if (options.before !== undefined) params.set("before", String(options.before));
       if (options.limit !== undefined) params.set("limit", String(options.limit));
-      return request<TaskGraphsPage>(`${at(API_PATHS.projectTaskGraphs(projectId))}?${params.toString()}`);
+      return request<TaskGraphsPage>(`${at(API_PATHS.projectTaskGraphs(projectId))}?${params.toString()}`, { signal: options.signal });
     },
     postTaskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: DecideTaskNodeRequest) =>
       postJson<DecideTaskNodeResponse>(at(API_PATHS.taskGraphDecide(graphId, nodeKey)), body),

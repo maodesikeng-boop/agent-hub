@@ -1,6 +1,7 @@
 import { notifyManager, QueryClient, QueryClientContext } from "@tanstack/react-query";
 import { useContext } from "react";
-import type { AccountStatusView } from "../shared/index.ts";
+import type { AccountStatusView, ProjectId } from "../shared/index.ts";
+import type { DeviceKey } from "./devices.ts";
 
 notifyManager.setScheduler(queueMicrotask);
 
@@ -35,6 +36,9 @@ export function resetQueryClient(): void {
 export function useHubQueryClient(): QueryClient {
   return useContext(QueryClientContext) ?? queryClient;
 }
+
+export const taskGraphHistoryKey = (device: DeviceKey, projectId: ProjectId | null) =>
+  ["project-task-graphs", device, projectId] as const;
 
 export interface QueryGeneration {
   gen: number;

@@ -160,7 +160,7 @@ export interface HubArgsMap {
     replaceItemId?: RouterItemId;
     files?: HubFileArg[];
   };
-  "ask.close": { itemId: RouterItemId };
+  "ask.close": { itemId: RouterItemId } | { messageId: MessageId };
   "schedule.add": { name: string; prompt: string; daily?: string; everyMinutes?: number };
   "schedule.list": Record<string, never>;
   "schedule.pause": { scheduleId: ScheduleId };
@@ -442,7 +442,7 @@ interface HubDataMap {
   "worker.search": { hits: WorkerSearchHit[] };
   models: { vendors: HubVendorModels[] };
   ask: { messageId: MessageId; graph?: TaskGraph; item?: RouterItem };
-  "ask.close": { item: RouterItem };
+  "ask.close": { item: RouterItem } | { messageId: MessageId };
   "schedule.add": { schedule: ScheduleRecord };
   "schedule.list": { schedules: ScheduleRecord[] };
   "schedule.pause": { schedule: ScheduleRecord };

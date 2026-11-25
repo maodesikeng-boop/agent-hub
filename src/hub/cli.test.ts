@@ -456,7 +456,10 @@ describe("hub cli", () => {
       expect((await hub(["ask", "close", "52"])).code).toBe(0);
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask.close", args: { itemId: 52 } }]);
       ledger.calls.length = 0;
-      for (const argv of [["ask", "close"], ["ask", "close", "x"], ["ask", "close", "0"], ["ask", "close", "1", "2"], ["ask", "close", "1", "--stdin"]]) {
+      expect((await hub(["ask", "close", "--message", "81"])).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask.close", args: { messageId: 81 } }]);
+      ledger.calls.length = 0;
+      for (const argv of [["ask", "close"], ["ask", "close", "x"], ["ask", "close", "0"], ["ask", "close", "1", "2"], ["ask", "close", "1", "--stdin"], ["ask", "close", "52", "--message", "81"]]) {
         expect((await hub(argv, { stdin: stdinOf("") })).code).toBe(HUB_EXIT.usage);
       }
       expect(ledger.calls).toHaveLength(0);
