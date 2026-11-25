@@ -15,6 +15,7 @@ import {
 import { ApiError } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorText, formatTime, type ErrorLike } from "../format.ts";
+import { personaQueryKey } from "../pm-persona.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
@@ -93,6 +94,7 @@ function EditMemoryFileRow({
         qc.setQueryData<PmMemoryFilesList>(listQueryKey, (prev) =>
           upsertMemoryFileInList(prev, res.file, res.totalBytes),
         );
+        void qc.invalidateQueries({ queryKey: personaQueryKey(client.device, pmId) });
         onClose();
       },
       onError: (err) => setSaveError(errorText(err)),
@@ -211,6 +213,7 @@ function MemoryFileItem({
           const files = prev.files.filter((item) => item.name !== file.name);
           return { files, totalBytes: files.reduce((sum, item) => sum + item.bytes, 0) };
         });
+        void qc.invalidateQueries({ queryKey: personaQueryKey(client.device, pmId) });
         onCancelConfirm();
       },
       onError: (err) => setError(errorText(err)),
@@ -295,6 +298,7 @@ function NewMemoryFileForm({
         qc.setQueryData<PmMemoryFilesList>(listQueryKey, (prev) =>
           upsertMemoryFileInList(prev, res.file, res.totalBytes),
         );
+        void qc.invalidateQueries({ queryKey: personaQueryKey(client.device, pmId) });
         onClose();
       },
       onError: (err) => setError(errorText(err)),

@@ -1,3 +1,4 @@
+import { CURSOR_UPDATE_TODOS_METHOD, cursorChecklistFromUpdateTodos, cursorToolNameOf } from "./checklist.ts";
 // No --model: ACP sessions ignore it and it rewrites the user's ~/.cursor/cli-config.json.
 import { mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -127,6 +128,8 @@ export const extractCursorToolUse: NonNullable<AcpDriverConfig["extractToolUse"]
 ) => {
   const base = defaultExtractAcpToolUse(toolCall, previous);
   const actions = cursorSpec.tools?.actions ?? {};
+  const toolName = cursorToolNameOf(toolCall.rawInput);
+  if (toolName !== null && actions[toolName] === "todo") return { ...base, name: toolName };
   if (Object.hasOwn(actions, base.name) || base.name.startsWith("mcp__")) {
     return base;
   }
@@ -180,7 +183,9 @@ const cursorAcpConfig: AcpDriverConfig = {
   },
   extensions: {
     onBlockingRequest: handleCursorBlockingRequest,
-    onNotification: () => {},
+  },
+  checklist: {
+    fromExtension: (method, params) => method === CURSOR_UPDATE_TODOS_METHOD ? cursorChecklistFromUpdateTodos(params) : null,
   },
   extractToolUse: extractCursorToolUse,
   readonlySandbox: {

@@ -5,6 +5,7 @@ import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RequestError, type SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import { isAlive, waitForExit } from "../../daemon/driver/process.ts";
 import { MemorySessionStore } from "../../daemon/driver/test-helpers.ts";
 import type { ReadonlySandboxInput, SpawnCommand } from "../../daemon/driver/write-scope.ts";
@@ -514,16 +515,7 @@ child.on("exit", (code, sig) => {
     const events: DriverEvent[] = [];
     driver.onEvent((_id, ev) => events.push(ev));
 
-    const logs = (): FakeAcpLogEntry[] => {
-      try {
-        return readFileSync(logFile, "utf8")
-          .split("\n")
-          .filter((l) => l.trim() !== "")
-          .map((l) => JSON.parse(l) as FakeAcpLogEntry);
-      } catch {
-        return [];
-      }
-    };
+    const logs = () => readJsonLog<FakeAcpLogEntry>(logFile);
 
     const waitForTurnEnd = async (count = 1): Promise<Extract<DriverEvent, { type: "turn.ended" }>> => {
       const deadline = Date.now() + 10_000;

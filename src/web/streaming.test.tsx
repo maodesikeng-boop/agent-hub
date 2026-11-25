@@ -9,7 +9,7 @@ import { App } from "./App.tsx";
 import * as ComposerMod from "./components/Composer.tsx";
 import * as ConversationMod from "./components/Conversation.tsx";
 import * as MessagesMod from "./components/Messages.tsx";
-import * as RightRailMod from "./components/RightRail.tsx";
+import * as ActiveTabMod from "./components/ActiveTab.tsx";
 import * as ProjectListMod from "./components/ProjectList.tsx";
 import { applyChange, initialState, reducer, type HubState } from "./state.ts";
 import {
@@ -192,7 +192,7 @@ describe("网页流式文字渲染与无重影衔接", () => {
     const composerSpy = vi.spyOn(ComposerMod.DraftComposer as unknown as MemoTarget, "type");
     const turnSpy = vi.spyOn(MessagesMod.TurnView as unknown as MemoTarget, "type");
     const sidebarSpy = vi.spyOn(ProjectListMod.ProjectList as unknown as MemoTarget, "type");
-    const rightRailSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
+    const rightRailSpy = vi.spyOn(ActiveTabMod.ActiveTab as unknown as MemoTarget, "type");
 
     const { ws } = await bootApp(snapshot);
     composerSpy.mockClear();
@@ -252,7 +252,7 @@ describe("网页流式文字渲染与无重影衔接", () => {
     const composerSpy = vi.spyOn(ComposerMod.DraftComposer as unknown as MemoTarget, "type");
     const convSpy = vi.spyOn(ConversationMod.Conversation as unknown as MemoTarget, "type");
     const sidebarSpy = vi.spyOn(ProjectListMod.ProjectList as unknown as MemoTarget, "type");
-    const rightRailSpy = vi.spyOn(RightRailMod.RailGroups as unknown as MemoTarget, "type");
+    const rightRailSpy = vi.spyOn(ActiveTabMod.ActiveTab as unknown as MemoTarget, "type");
 
     const { ws } = await bootApp(snapshot);
     composerSpy.mockClear();

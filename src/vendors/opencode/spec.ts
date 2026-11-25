@@ -108,6 +108,8 @@ export default defineVendor({
       todowrite: "todo",
     },
   },
+  // todowrite is hidden from the model unless the todo flag is set (opencode 2.4.1).
+  checklist: { sources: ["todo_tool"], enable: { env: { OPENCODE_FLAGS: { appendToList: "todo" } } } },
   skillSignals: {
     // ACP content blocks carry the read output as numbered lines ("N: text" or "N|text").
     outputField: "content",

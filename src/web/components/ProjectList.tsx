@@ -148,15 +148,18 @@ const ProjectRow = memo(function ProjectRow({
         )}
       </button>
 
-      {!pageLayout && pm !== null && (
-        <div className="row-shortcuts shrink-0 items-center gap-0.5">
+      {pm !== null && (!pageLayout || archivedAt === null) && (
+        <div className={cn("shrink-0 items-center", pageLayout ? "flex" : "row-shortcuts")}>
           <button
             type="button"
             aria-label={pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
             title={pinned ? "Unpin" : "Pin"}
             disabled={readOnly || archivedAt !== null}
             onClick={() => onTogglePin(pm.id, !pinned)}
-            className="grid size-7 cursor-pointer place-items-center text-list-ink-soft transition-colors outline-none hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-40"
+            className={cn(
+              "grid cursor-pointer place-items-center text-list-ink-soft transition-colors outline-none hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-40",
+              pageLayout ? "size-11 rounded-sm" : "size-7",
+            )}
           >
             {pinned ? <PinFilled className="size-pixel-sm" /> : <Pin className="size-pixel-sm" />}
           </button>
@@ -169,7 +172,7 @@ const ProjectRow = memo(function ProjectRow({
 /**
  * Postcondition: renders the header, search, and the Pinned, Project managers, and collapsed Archived groups from
  * projectListOf; the strip shows avatars only, pinned ones above a divider; row shortcuts appear on hover and keyboard
- * focus on hover-capable pointers and never on touch screens.
+ * focus on hover-capable pointers. On the phone page, the pin button stays visible.
  */
 export const ProjectList = memo(function ProjectList({
   layout,

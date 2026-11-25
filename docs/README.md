@@ -7,7 +7,8 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [UI standard](ui-standard.md): Spacing, border radius, type scale, slime accent palette, controls, focus states, responsive shells, Markdown, Task Graph tracks, Router workbench, and deliverables.
 - [UI polish baseline style brief](ui-polish/baseline/style-brief.md): Visual DNA and `S1`–`S6` baseline rules for `pnpm ui:polish` screenshot reviews.
 - [Plan and code-skeleton standard](plan-standard.md): Structure for design documents, typed code skeletons, `it.todo` specs, and implementation handoffs.
-- [Workbench shell design](workbench-shell-design.md): Honey rail, cream Project Manager column with pins, resizable columns, warm-gray side panel for Pieces, Workers, and PM settings, narrow-window tiers, phone tab bar, and a visual language that keeps pixel art for characters while controls use smooth lines.
+- [Work panel design](work-panel-design.md): The wide right panel with `Active`, `Completed`, and `Info` tabs and Worker detail, the paged Completed feed, per-graph switch to a vertical list, and what replaces the old side panel and PM settings panel.
+- [Workbench shell design](workbench-shell-design.md): Rail, Project Manager column with pins, resizable columns, work panel integration, narrow-window tiers, phone tab bar, and a visual language that keeps pixel art for characters while controls use smooth lines.
 
 ## Architecture and security
 
@@ -25,6 +26,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Resource lifecycle](resource-lifecycle-design.md): Canonical resource registry, database slimming and dual-bounded retention, detached grandchild and temp-directory reaping, squash-merge branch cleanup, and the Resources self-check panel.
 - [Ledger database](ledger-database.md): Exclusive SQLite file lock, the `migrations/manifest.sha256` completeness check, and upgrade tests on ledgers written by released versions.
 - [Reliable turn completion](turn-completion-design.md): SQLite turn-outcome receipts, ordered per-session settlement, bounded retries after write failures, send holds, and receipt-aware restart recovery.
+- [In-chat progress checklist](progress-checklist-design.md): Normalized vendor checklists, launch switches for hidden todo tools, append-only checklist messages, per-step process grouping, and live action timing in the `Worked for` slot.
 - [Worker state accuracy and operations](worker-ops-fix-design.md): Worktree branch reconciliation, shared Worker list/show states, cross-vendor context-token preservation, stale Worker PM notice suppression, Task Graph step agent display, live `hub models` quota tracking, and background command inspection.
 
 ## Desktop and distribution

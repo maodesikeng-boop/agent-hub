@@ -21,7 +21,6 @@ import {
   type ConversationId,
   type ConversationSnapshot,
   type ConversationsLookup,
-  type EndedWorkersPage,
   type HealthEntry,
   type Message,
   type MessageId,
@@ -63,6 +62,7 @@ export interface ConversationView {
   messages: Message[];
   hasMore: boolean;
   workerLine?: ConversationSnapshot["workerLine"];
+  workerBranch?: string | null;
   outsideRev?: number;
 }
 
@@ -91,7 +91,6 @@ export interface HubState {
   router: RouterSlice;
   pendingSandboxCards?: readonly PendingSandboxCard[];
   activeTaskGraphs: TaskGraph[];
-  olderEndedWorkers: Record<PmId, ConversationId | undefined>;
   lookups: Record<ConversationId, "loading" | "missing" | undefined>;
   server: ServerInfo;
   pending: PendingMessage[];
@@ -118,7 +117,6 @@ export const initialState: HubState = {
   schedules: [],
   router: emptyRouterSlice(),
   activeTaskGraphs: [],
-  olderEndedWorkers: {},
   lookups: {},
   server: serverInfoFor("darwin"),
   pending: [],
@@ -142,7 +140,6 @@ export type HubAction =
   | { type: "lookupStart"; ids: readonly ConversationId[] }
   | { type: "lookupDone"; ids: readonly ConversationId[]; lookup: ConversationsLookup }
   | { type: "lookupFailed"; ids: readonly ConversationId[] }
-  | { type: "endedWorkersLoaded"; pmId: PmId; before: ConversationId; page: EndedWorkersPage }
   | { type: "retryStart"; messageId: MessageId }
   | { type: "retryFailed"; messageId: MessageId };
 
@@ -502,6 +499,7 @@ function mergeLoaded(state: HubState, lookup: ConversationsLookup): Pick<HubStat
       messages: c.messages,
       hasMore: c.hasMore,
       ...(c.workerLine !== undefined ? { workerLine: c.workerLine } : {}),
+      ...(c.workerBranch !== undefined ? { workerBranch: c.workerBranch } : {}),
     };
   }
   const known = new Set(state.sessions.map((s) => s.sessionId));
@@ -560,9 +558,10 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     const keepLoaded =
       c.messages.length === 0 && c.hasMore && prev !== undefined && prev.messages.length > 0 && endedBefore(state, c.conversation.id);
     const workerLine = c.workerLine !== undefined ? { workerLine: c.workerLine } : {};
+    const workerBranch = c.workerBranch !== undefined ? { workerBranch: c.workerBranch } : {};
     conversations[c.conversation.id] = keepLoaded
-      ? { conversation: c.conversation, messages: prev.messages, hasMore: prev.hasMore, ...workerLine }
-      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore, ...workerLine };
+      ? { conversation: c.conversation, messages: prev.messages, hasMore: prev.hasMore, ...workerLine, ...workerBranch }
+      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore, ...workerLine, ...workerBranch };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
   const base = withoutLoadError(state);
@@ -583,7 +582,6 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
       id: approval.id, conversationId: approval.conversationId, text: formatSandboxApprovalCardText(approval),
     })),
     activeTaskGraphs: normalizeTaskGraphs(snapshot.activeTaskGraphs),
-    olderEndedWorkers: snapshot.olderEndedWorkers ?? {},
     lookups: {},
     server: snapshot.server,
     pending: dropConfirmed(state.pending, all),
@@ -644,14 +642,6 @@ export function reducer(state: HubState, action: HubAction): HubState {
       const found = action.ids.filter((id) => merged.conversations[id] !== undefined);
       const missing = action.ids.filter((id) => merged.conversations[id] === undefined);
       return { ...state, ...merged, lookups: withLookups(withLookups(state.lookups, found, undefined), missing, "missing") };
-    }
-    case "endedWorkersLoaded": {
-      // A resync reset the cursor while this request was in flight; drop the stale page.
-      if (state.olderEndedWorkers[action.pmId] !== action.before) return state;
-      const merged = mergeLoaded(state, action.page);
-      const { [action.pmId]: _done, ...rest } = state.olderEndedWorkers;
-      const olderEndedWorkers = action.page.nextBefore === null ? rest : { ...rest, [action.pmId]: action.page.nextBefore };
-      return { ...state, ...merged, olderEndedWorkers };
     }
     case "pendingAdd":
       return {

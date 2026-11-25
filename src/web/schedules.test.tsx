@@ -33,8 +33,9 @@ async function openProfile(schedules = [makeSchedule()]) {
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "View 小林\'s profile" }));
   const page = screen.getByRole("complementary", { name: "小林's settings" });
+  const nav = await within(page).findByRole("navigation", { name: "Project manager settings pages" });
+  await user.click(within(nav).getByRole("button", { name: /^Schedules/ }));
   const group = await within(page).findByRole("region", { name: "Schedules" });
-  await user.click(within(group).getByRole("button", { name: schedules.some((s) => s.pmId === 1) ? "Edit" : "New" }));
   return { user, group };
 }
 

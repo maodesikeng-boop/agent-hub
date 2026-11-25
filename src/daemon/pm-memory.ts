@@ -246,18 +246,22 @@ export function writePmMemoryIndex(pmMemoryDir: string, pmId: PmId, content: str
   }
 }
 
-function scanSubfilesInRealDir(realDir: string): PmMemoryFilesList {
-  const files: PmMemoryFileSummary[] = [];
+function* scanMemoryDir(realDir: string) {
   const dir = opendirSync(realDir);
   try {
     for (let scanned = 0; scanned < PM_MEMORY_MAX_DIR_SCAN; scanned++) {
       const entry = dir.readSync();
       if (entry === null) break;
-      collectSubfile(realDir, entry.name, files);
+      yield entry;
     }
   } finally {
     dir.closeSync();
   }
+}
+
+function scanSubfilesInRealDir(realDir: string): PmMemoryFilesList {
+  const files: PmMemoryFileSummary[] = [];
+  for (const entry of scanMemoryDir(realDir)) collectSubfile(realDir, entry.name, files);
   files.sort((a, b) => a.name.localeCompare(b.name));
   const totalBytes = files.reduce((sum, f) => sum + f.bytes, 0);
   return { files, totalBytes };
@@ -272,6 +276,20 @@ function collectSubfile(realDir: string, name: string, files: PmMemoryFileSummar
     if (normalizePathForComparison(realpathSync.native(full)) !== normalizePathForComparison(full)) return;
     files.push({ name, bytes: st.size, updatedAt: Math.trunc(st.mtimeMs) });
   } catch {
+  }
+}
+
+export function countPmMemoryFiles(pmMemoryDir: string, pmId: PmId): number | null {
+  try {
+    const realDir = resolveSafePmDir(pmMemoryDir, pmId, { create: false });
+    if (realDir === null) return 0;
+    let count = 0;
+    for (const entry of scanMemoryDir(realDir)) {
+      if (entry.isFile() && checkPmMemoryFileName(entry.name) === null) count++;
+    }
+    return count;
+  } catch {
+    return null;
   }
 }
 

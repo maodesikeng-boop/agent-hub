@@ -60,7 +60,7 @@ export function canTransitionMessage(from: MessageStatus, to: MessageStatus): bo
 export const MESSAGE_SENDERS = ["user", "agent", "system", "pm"] as const;
 export type MessageSender = (typeof MESSAGE_SENDERS)[number];
 
-export const MESSAGE_KINDS = ["text", "tool", "worker"] as const;
+export const MESSAGE_KINDS = ["text", "tool", "worker", "checklist"] as const;
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 export const WORKER_MESSAGE_KIND = "worker" satisfies MessageKind;
 
@@ -500,6 +500,10 @@ export type WorkerMessageMeta = {
   status: WorkerLineStatus | null;
   summary: string | null;
   directChatSummary?: string;
+  /** The PR field of a report line, when the report named one. */
+  prUrl?: string;
+  /** The Worker's git branch when running in a worktree. */
+  branch?: string;
 };
 
 export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMessageMeta | null {
@@ -680,6 +684,8 @@ export interface SessionState {
   model?: string | null;
   effort?: string | null;
   step?: AgentStep | null;
+  /** Epoch ms when the shown step started; null while the shown tool is only proposed. Never derived from lastEventAt. */
+  stepStartedAt?: number | null;
   streamingText?: string | null;
   lastEventAt: number | null;
 }

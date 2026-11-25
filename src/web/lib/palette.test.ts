@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JELLY_COLOR_IDS, jellyColorOf } from "../../shared/slimes.ts";
-import { accentStyleOf, avatarTileFillOf, CHART_CATEGORY_COLORS, contrastRatio, fruitTrackVars, ROUTER_SEND_COLORS, sendColorsOf } from "./palette.ts";
+import { accentStyleOf, avatarTileFillOf, CHART_CATEGORY_COLORS, contrastRatio, ROUTER_SEND_COLORS, sendColorsOf } from "./palette.ts";
 
 const WHITE = "#ffffff";
 
@@ -26,7 +26,7 @@ describe("颜色表", () => {
     expect(a["--primary-foreground"]).toBe(jellyColorOf("grapefruit").accentForeground);
     expect(b["--primary"]).toBe(jellyColorOf("sky").accent);
     expect([a["--send"], a["--send-hover"], a["--send-press"], a["--send-ink"]]).toEqual(Object.values(sendColorsOf("grapefruit")));
-    for (const fn of [accentStyleOf, fruitTrackVars, sendColorsOf]) expect(fn("teal")).toBe(fn("teal"));
+    for (const fn of [accentStyleOf, sendColorsOf]) expect(fn("teal")).toBe(fn("teal"));
   });
 
   it.each(PALETTE.map((c) => [c.name, c] as const))("%s: the pastel send button steps darker on hover and press, and its arrow keeps 7:1 on the pressed fill", (_name, c) => {
@@ -42,12 +42,6 @@ describe("颜色表", () => {
     expect(sendColorsOf("grapefruit")).toEqual({ rest: "#fdb9a9", hover: "#f6ac9b", press: "#eea190", ink: "#4f1409" });
     expect(sendColorsOf("sky").rest).toBe("#95d6fa");
     expect(sendColorsOf("lemon").rest).toBe("#f2dd83");
-  });
-
-  it("fruitTrackVars：果冻管道的三层和珠子的暗面取这个颜色的描边、身体、浅色、暗面", () => {
-    const vars = fruitTrackVars("sakura");
-    const { roles } = jellyColorOf("sakura");
-    expect([vars["--tube-line"], vars["--tube-core"], vars["--tube-glint"], vars["--tube-shade"]]).toEqual([roles.outline, roles.body, roles.light, roles.shade]);
   });
 
   it("avatarTileFillOf: every tile stands at least 4:1 above the year rings and stays darker than the cream selected band; the same color returns the same value", () => {
@@ -116,11 +110,6 @@ describe("zone palette and contrast (styles.css, docs/ui-standard.md sections 2.
   it("已删除水果混底和果冻选中底，只保留分区色板", () => {
     expect(css).not.toMatch(/--mix-(chat|sidebar|line)|--color-(surface-chat|surface-sidebar|line|jelly)/);
     expect(css).not.toContain(".tint-fade");
-  });
-
-  it.each(JELLY_COLOR_IDS)("%s：已完成步骤角标与前景色字的对比度 ≥ 4.5:1", (id) => {
-    const vars = fruitTrackVars(id);
-    expect(contrastRatio(foreground, vars["--step-done-bg"])).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each(PALETTE.map((c) => [c.name, c] as const))("%s：用户气泡浅底上，前景色字对比度 ≥ 4.5:1", (_name, c) => {

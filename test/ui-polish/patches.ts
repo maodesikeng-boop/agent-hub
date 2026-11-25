@@ -34,6 +34,8 @@ export const PATCH_NAMES = [
   "health-driver",
   "session-working",
   "session-streaming",
+  "progress-running",
+  "progress-done",
   "workers-busy",
   "blocker-checking",
   "vendors-mixed",
@@ -276,15 +278,173 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
   "session-working": (page) =>
     editState(page, (state) => {
       const target = latestSessions(state, (s) => s.conversationId === firstPmConversation(state) || s.pmId === null);
-      return working(state, target, () => ({ step: { type: "tool_use", name: "Bash", input: {} }, currentTool: "Bash" }));
+      return working(state, target, () => ({ step: { type: "tool_use", name: "Bash", input: {} }, currentTool: "Bash", stepStartedAt: NOW - 16_000 }));
     }),
   "session-streaming": (page) =>
     editState(page, (state) =>
       working(state, latestSessions(state, (s) => s.conversationId === firstPmConversation(state)), () => ({
         step: { type: "text" },
+        stepStartedAt: NOW - 4_000,
         streamingText: "我看了一下超时的那几次：都是 MCP 服务第一次握手超过 30 秒，失败结果被当成正常结果缓存了 10 分钟，所以后面几次",
       })),
     ),
+  "progress-running": (page) =>
+    editState(page, (state) => {
+      const pmConvId = firstPmConversation(state);
+      const target = latestSessions(state, (s) => s.conversationId === pmConvId);
+      const sessionId = [...target][0] ?? 1;
+      const next = working(state, target, () => ({
+        step: { type: "tool_use", name: "Bash", input: {} },
+        currentTool: "Bash",
+        stepStartedAt: NOW - 16_000,
+      }));
+      return {
+        ...next,
+        conversations: next.conversations.map((conv) => {
+          if (conv.conversation.id !== pmConvId) return conv;
+          const baseId = (conv.messages.at(-1)?.id ?? 100) + 10;
+          const mk = (offset: number, over: Partial<StateSnapshot["conversations"][number]["messages"][number]>) => ({
+            id: baseId + offset,
+            conversationId: pmConvId,
+            sessionId,
+            workerId: null,
+            sender: "agent" as const,
+            kind: "text" as const,
+            text: "",
+            meta: null,
+            collapsed: false,
+            dedupeKey: `patch-progress-run:${baseId + offset}`,
+            status: null,
+            failureReason: null,
+            createdAt: NOW - 30_000 + offset * 2_000,
+            updatedAt: NOW - 30_000 + offset * 2_000,
+            ...over,
+          });
+          return {
+            ...conv,
+            messages: [
+              ...conv.messages,
+              mk(1, { sender: "user", text: "汇总上次发布以来的提交、PR 和 CI 状态", status: "processing" }),
+              mk(2, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "in_progress" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "pending" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "pending" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(3, { kind: "tool", collapsed: true, text: "Read: docs/ui-standard.md" }),
+              mk(4, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "completed" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "in_progress" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "pending" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(5, { kind: "tool", collapsed: true, text: "Bash: git log --oneline 4b1fb2e2..HEAD" }),
+            ],
+          };
+        }),
+      };
+    }),
+  "progress-done": (page) =>
+    editState(page, (state) => {
+      const pmConvId = firstPmConversation(state);
+      const sessionId = state.sessions.find((s) => s.conversationId === pmConvId)?.sessionId ?? 1;
+      return {
+        ...state,
+        conversations: state.conversations.map((conv) => {
+          if (conv.conversation.id !== pmConvId) return conv;
+          const baseId = (conv.messages.at(-1)?.id ?? 100) + 20;
+          const mk = (offset: number, over: Partial<StateSnapshot["conversations"][number]["messages"][number]>) => ({
+            id: baseId + offset,
+            conversationId: pmConvId,
+            sessionId,
+            workerId: null,
+            sender: "agent" as const,
+            kind: "text" as const,
+            text: "",
+            meta: null,
+            collapsed: false,
+            dedupeKey: `patch-progress-done:${baseId + offset}`,
+            status: null,
+            failureReason: null,
+            createdAt: NOW - 200_000 + offset * 20_000,
+            updatedAt: NOW - 200_000 + offset * 20_000,
+            ...over,
+          });
+          return {
+            ...conv,
+            messages: [
+              ...conv.messages,
+              mk(1, { sender: "user", text: "把上次以来的改动整理一份摘要", status: "replied" }),
+              mk(2, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "in_progress" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "pending" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "pending" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(3, { kind: "tool", collapsed: true, text: "Read: docs/ui-standard.md" }),
+              mk(4, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "completed" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "in_progress" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "pending" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(5, { kind: "tool", collapsed: true, text: "Bash: git log --oneline 4b1fb2e2..HEAD" }),
+              mk(6, { kind: "tool", collapsed: true, text: "Bash: gh pr list --state merged --limit 10" }),
+              mk(7, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "completed" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "completed" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "in_progress" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(8, { kind: "tool", collapsed: true, text: "Read: src/web/components/TurnProgress.tsx" }),
+              mk(9, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "completed" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "completed" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "completed" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "completed" },
+                  ],
+                },
+              }),
+              mk(10, { text: "已核对完 4b1fb2e2 之后的提交与发布，主要变化集中在木头外壳与实时进度清单。" }),
+            ],
+          };
+        }),
+      };
+    }),
   "workers-busy": (page) =>
     editState(page, (state) => {
       const workerConversations = new Set(state.conversations.filter((c) => c.conversation.kind === "worker").map((c) => c.conversation.id));

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJsonLog } from "../../../test/append-log.ts";
 import type {
   AgentSessionPatch,
   AgentSessionRow,
@@ -158,13 +159,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       check();
     });
 
-  const log = () =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .split("\n")
-          .filter(Boolean)
-          .map((l) => JSON.parse(l) as FakeLogEntry)
-      : [];
+  const log = () => readJsonLog<FakeLogEntry>(logFile);
 
   const stdinBlocks = () =>
     log().flatMap((e) => {

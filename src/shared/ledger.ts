@@ -7,7 +7,8 @@ import type {
   ConversationsLookup,
   DecideTaskNodeRequest,
   DecideTaskNodeResponse,
-  EndedWorkersPage,
+  CompletedCursor,
+  CompletedWorkPage,
   LedgerSnapshot,
   MessagesPage,
   ResolveRouterItemRequest,
@@ -15,7 +16,6 @@ import type {
   RouterItemsPage,
   SkipTaskNodeRequest,
   SkipTaskNodeResponse,
-  TaskGraphsPage,
   UpdateRouterSettingsRequest,
 } from "./api.ts";
 import type { Attachment } from "./attachments.ts";
@@ -153,6 +153,7 @@ export interface PersonaView {
   model: string | null;
   effort: string | null;
   switchingToVendor?: AgentVendor | null;
+  memoryFileCount?: number | null;
   changes: PersonaChange[];
   revertableChangeId: PersonaChangeId | null;
 }
@@ -241,12 +242,13 @@ export interface Ledger extends LedgerHandoverWork {
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
   composerTarget(conversationId: ConversationId): ComposerTarget;
   requestStop(conversationId: ConversationId): void;
+  endWorkerConversation(conversationId: ConversationId): void;
   rewindLastUserMessage(conversationId: ConversationId): Message | null;
   snapshot(): LedgerSnapshot;
   messagesAfter(conversationId: ConversationId, after: MessageId, limit: number): Message[];
   messagesBefore(conversationId: ConversationId, before: MessageId): MessagesPage;
   lookupConversations(query: { ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }): ConversationsLookup;
-  endedWorkersPage(pmId: PmId, before: ConversationId | null): EndedWorkersPage;
+  completedWork(pmId: PmId, cursor: CompletedCursor | null, limit: number): CompletedWorkPage;
   changesSince(seq: number): ChangesSince;
   onChange(listener: (change: Change) => void): Unsubscribe;
 
@@ -356,7 +358,6 @@ export interface Ledger extends LedgerHandoverWork {
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
   listRouterCommands?(beforeCursor?: string, limit?: number): import("./api.ts").RouterCommandsPage;
   getRouterCommand?(id: import("./domain.ts").RouterCommandId): import("./router.ts").RouterCommandRecord | null;
-  listProjectTaskGraphs(projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage;
   decideTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: DecideTaskNodeRequest): DecideTaskNodeResponse;
   skipTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: SkipTaskNodeRequest): SkipTaskNodeResponse;
   cancelTaskGraph(graphId: TaskGraphId, input: CancelTaskGraphRequest): CancelTaskGraphResponse;

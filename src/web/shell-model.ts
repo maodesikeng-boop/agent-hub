@@ -33,7 +33,7 @@ import { totalRunningWorkers } from "../shared/reminders.ts";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
 import { mobileBack } from "./mobile/back.ts";
-import { routeHash, useRoute, type ProfilePage } from "./route.ts";
+import { routeHash, useRoute, type InfoPage } from "./route.ts";
 import { desktopSectionOf, useSettingsNav } from "./settings-nav.ts";
 import {
   accountSettingsTarget,
@@ -46,6 +46,7 @@ import {
 } from "./shell-actions.ts";
 import { defaultLookOf } from "../shared/slimes.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
+import type { WorkPanelTab } from "./work-panel-model.ts";
 
 const NO_LOOK = defaultLookOf(0);
 export const ROUTER_DRAFT_KEY = "router";
@@ -65,7 +66,24 @@ declare global {
 }
 
 const RIGHT_RAIL_KEY = "agent-hub.rightRail";
+const WORK_TAB_KEY = "agent-hub.workPanel.tab";
 export const PROVIDERS_GUIDED_KEY = "agent-hub.providersGuided";
+
+type RememberedWorkTab = Exclude<WorkPanelTab, "info">;
+
+const loadWorkTab = (): RememberedWorkTab => {
+  try {
+    return localStorage.getItem(WORK_TAB_KEY) === "completed" ? "completed" : "active";
+  } catch {
+    return "active";
+  }
+};
+const saveWorkTab = (tab: RememberedWorkTab) => {
+  try {
+    localStorage.setItem(WORK_TAB_KEY, tab);
+  } catch {
+  }
+};
 
 const loadProvidersGuided = () => {
   try {
@@ -143,6 +161,11 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const [providersGuided, setProvidersGuided] = useState(loadProvidersGuided);
   const [railClosed, setRailClosed] = useState(loadRailClosed);
   const [railPeek, setRailPeek] = useState<PmId | null>(null);
+  const [workTab, setWorkTabState] = useState<RememberedWorkTab>(loadWorkTab);
+  const setWorkTab = useCallback((tab: RememberedWorkTab) => {
+    setWorkTabState(tab);
+    saveWorkTab(tab);
+  }, []);
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
 
   const clearFocus = useCallback(() => setFocus(null), []);
@@ -344,7 +367,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const handleLoadOlder = useCallback((id: ConversationId) => void hub.loadOlder(id), [hub]);
   const openProfile = useCallback(
-    (pmId: PmId, page?: ProfilePage) => navigate({ view: "profile", pmId, ...(page === undefined ? {} : { page }), ...here }),
+    (pmId: PmId, page?: InfoPage) => navigate({ view: "profile", pmId, ...(page === undefined ? {} : { page }), ...here }),
     [navigate, here],
   );
   const health = useMemo(() => failingHealth(state), [state.health]);
@@ -352,11 +375,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const workerLine = useMemo(() => (openWorker === null ? null : workerLineOf(state, openWorker)), [state.conversations, openWorker]);
   const railPm = active?.pm?.id ?? null;
   const railWorkers = useMemo(() => (railPm === null ? EMPTY_WORKERS : workersOf(state, railPm)), [state.conversations, state.sessions, railPm]);
-  const railHasOlderWorkers = railPm !== null && state.olderEndedWorkers[railPm] !== undefined;
-  const railLoadMoreWorkers = useMemo(
-    () => (railPm !== null && railHasOlderWorkers ? () => hub.loadEndedWorkers(railPm) : undefined),
-    [hub, railPm, railHasOlderWorkers],
-  );
   const ensureWorkers = useCallback((ids: WorkerId[]) => hub.ensureWorkers(ids), [hub]);
   const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : EMPTY_ASKS), [state.conversations, state.pms, state.pending, active?.id]);
   const railProjectId = active?.project?.id ?? null;
@@ -382,20 +400,18 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     [select],
   );
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
-  const railHasContent = railWorkers.length > 0 || railAsks.length > 0 || railGraphs.length > 0;
-  const railNeedsYou = railAsks.length > 0 || railGraphs.length > 0 || railWorkers.some((w) => !w.ended);
+  const railNeedsYou = railGraphs.length > 0 || railWorkers.some((w) => !w.ended);
   const railAttention = railAsks.length > 0 || railGraphNeedsYou;
   const railPeeking = railPeek !== null && railPeek === railPm;
-  const railOpen = railHasContent && !railClosed && (railNeedsYou || railPeeking);
-  const keepRailOpen = useCallback(() => setRailPeek(railPm), [railPm]);
+  const railOpen = active !== null && !railClosed && (railNeedsYou || railPeeking);
   const toggleRail = useCallback(
     (forceOpen?: boolean) => {
       const closed = forceOpen === undefined ? railOpen : !forceOpen;
       setRailClosed(closed);
       saveRailClosed(closed);
-      setRailPeek(closed || railNeedsYou ? null : railPm);
+      setRailPeek(closed ? null : railPm);
     },
-    [railOpen, railNeedsYou, railPm],
+    [railOpen, railPm],
   );
   const openAsk = useCallback(
     (messageId: MessageId) => {
@@ -524,9 +540,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       railAttention,
       railComputers,
       railGraphs,
-      railHasContent,
-      keepRailOpen,
-      railLoadMoreWorkers,
       railOpen,
       railProjectId,
       railWorkers,
@@ -546,6 +559,8 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       staging,
       togglePin,
       toggleRail,
+      workTab,
+      setWorkTab,
       view,
       workerLine,
       workerLoading: workerLookup === "loading" || (missingWorker !== null && workerLookup === undefined),

@@ -88,6 +88,8 @@ export default defineVendor({
       collabToolCall: "subagent",
     },
   },
+  // update_plan is off by default in app-server (codex-cli 0.169.0).
+  checklist: { sources: ["plan_update"], enable: { args: ["-c", "tools.update_plan.enabled=true"] } },
   skillSignals: {
     // commandExecution output is in item.aggregatedOutput.
     outputField: "aggregatedOutput",

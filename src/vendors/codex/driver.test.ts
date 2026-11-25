@@ -1,9 +1,10 @@
 // OpenAI Codex App-Server 驱动层测试：覆盖握手、流式事件、恢复回退、打断与 Worker 记忆保护审批。
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import {
   EMPTY_TOKEN_USAGE,
   buildReadonlyPolicy,
@@ -665,13 +666,7 @@ function makeCodexHarness(
       check();
     });
 
-  const log = (): FakeCodexLogEntry[] =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .split("\n")
-          .filter(Boolean)
-          .map((l) => JSON.parse(l) as FakeCodexLogEntry)
-      : [];
+  const log = () => readJsonLog<FakeCodexLogEntry>(logFile);
 
   const addSession = (patch: Partial<AgentSessionRow> = {}): AgentSessionRow => {
     const id = nextSessionId++;
@@ -771,7 +766,7 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
 
     // 1. 检查启动命令参数
     const argvEntry = t.log().find((e) => e.kind === "argv");
-    expect(argvEntry?.argv).toEqual(["app-server", "--listen", "stdio://"]);
+    expect(argvEntry?.argv).toEqual(["-c", "tools.update_plan.enabled=true", "app-server", "--listen", "stdio://"]);
 
     // 2. 检查握手与请求顺序
     const rpcs = t.rpcIn();

@@ -1,3 +1,4 @@
+import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
 // Handover runs in the background on a fork of the PM session and swaps sessions between two turns, so the user keeps chatting throughout.
 import { agentTextOf } from "../../shared/attachments.ts";
 import { waitingAsksSection } from "../../shared/waiting-asks.ts";
@@ -190,7 +191,7 @@ function* generationMessagesNewestFirstOf(db: Db, conversationId: ConversationId
   for (;;) {
     const page = db.all<MessageDbRow>(
       `SELECT * FROM messages
-        WHERE conversation_id = ? AND id > ? AND id < ? AND kind != 'tool'
+        WHERE conversation_id = ? AND id > ? AND id < ? AND kind NOT IN ${PROCESS_MESSAGE_KINDS_SQL}
         ORDER BY id DESC
         LIMIT ?`,
       conversationId,

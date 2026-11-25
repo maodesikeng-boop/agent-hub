@@ -16,11 +16,11 @@ export {
   isWorkerBound,
   pendingDecisionsOf,
   sortActiveGraphs,
-  taskGraphPriority,
   unboundWorkersOf,
   workersByWorkerId,
 } from "./task-graph-selectors.ts";
 import {
+  CHECKLIST_MESSAGE_KIND,
   VENDOR_LIST,
   DEFAULT_AGENT_VENDOR,
   QUOTA_WINDOWS,
@@ -522,6 +522,7 @@ export interface WorkerEntry {
   vendor?: string;
   model?: string | null;
   effort?: string | null;
+  branch?: string | null;
   usage: TokenUsage;
   tone: WorkerTone;
 }
@@ -570,6 +571,7 @@ function sameWorkerEntry(a: WorkerEntry, b: WorkerEntry): boolean {
     a.vendor === b.vendor &&
     a.model === b.model &&
     a.effort === b.effort &&
+    a.branch === b.branch &&
     a.tone === b.tone &&
     sameUsage(a.usage ?? EMPTY_TOKEN_USAGE, b.usage ?? EMPTY_TOKEN_USAGE)
   );
@@ -638,10 +640,11 @@ function workerConvsForPm(conversations: HubState["conversations"], pmId: PmId):
 function computeWorkers(state: HubState, pmId: PmId): WorkerEntry[] {
   const { latest, endedAt: endedLines } = workerLinesOf(state, pmId);
   return workerConvsForPm(state.conversations, pmId)
-    .map(({ conversation, messages }) => {
+    .map(({ conversation, messages, workerBranch }) => {
       const session = sessionOf(state, conversation.id);
       const latestEntry = latest.get(conversation.id);
       const workerId = latestEntry?.line.workerId ?? messages[0]?.workerId ?? undefined;
+      const branch = workerBranch ?? latestEntry?.line.branch ?? null;
       return {
         conversationId: conversation.id,
         ...(workerId !== undefined ? { workerId } : {}),
@@ -651,6 +654,7 @@ function computeWorkers(state: HubState, pmId: PmId): WorkerEntry[] {
         vendor: session?.vendor,
         model: session?.model,
         effort: session?.effort,
+        ...(branch !== null ? { branch } : {}),
         usage: session?.usage ?? EMPTY_TOKEN_USAGE,
         tone: toneOf(latestEntry),
       };
@@ -702,7 +706,7 @@ export function isRenewing(state: HubState, conversationId: ConversationId): boo
   return renewingIn(state.conversations[conversationId]?.messages ?? []);
 }
 
-// Routine Worker start and end lines carry no status or summary; Pieces and the Task Graph show that state instead.
+// Routine Worker start and end lines carry no status or summary; the work panel shows that state instead.
 function hiddenFromChat(message: Message): boolean {
   if (isSilentTriggerMessage(message)) return true;
   const event = workerEventOf(message)?.event;
@@ -721,7 +725,7 @@ export function failingHealth(state: HubState): HealthEntry[] {
 
 export type RenderItem =
   | { kind: "message"; message: Message }
-  | { kind: "turn"; key: string; work: Message[]; parts: Message[]; startedAt: number; endedAt: number };
+  | { kind: "turn"; key: string; work: Message[]; checklists: Message[]; parts: Message[]; startedAt: number; endedAt: number };
 
 type FlowRole =
   | "input"
@@ -765,7 +769,16 @@ function placeHandovers(all: Message[]): Message[] {
   return rest;
 }
 
-export function groupMessages(all: Message[]): RenderItem[] {
+interface GroupedMessages {
+  items: RenderItem[];
+  tailTurnKey: string | null;
+}
+
+const groupMessagesCache = new WeakMap<readonly Message[], GroupedMessages>();
+
+export function groupMessages(all: Message[]): GroupedMessages {
+  const hit = groupMessagesCache.get(all);
+  if (hit !== undefined) return hit;
   const messages = placeHandovers(all);
   const items: RenderItem[] = [];
   let turn: Extract<RenderItem, { kind: "turn" }> | null = null;
@@ -800,7 +813,7 @@ export function groupMessages(all: Message[]): RenderItem[] {
     }
     if (role === "agent" && turn === null) {
       const starts = [lastInputAt, lastAgentAt].filter((t): t is number => t !== null);
-      turn = { kind: "turn", key: `turn-${message.id}`, work: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt };
+      turn = { kind: "turn", key: `turn-${message.id}`, work: [], checklists: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt };
       items.push(turn);
     }
     if (turn === null) {
@@ -811,13 +824,16 @@ export function groupMessages(all: Message[]): RenderItem[] {
       turn.parts.push(message);
       continue;
     }
-    if (message.kind === "tool" || role === "work") turn.work.push(message);
+    if (message.kind === CHECKLIST_MESSAGE_KIND) turn.checklists.push(message);
+    else if (message.kind === "tool" || role === "work") turn.work.push(message);
     else turn.parts.push(message);
     turn.endedAt = message.createdAt;
     lastAgentAt = message.createdAt;
   }
+  const grouped = { items, tailTurnKey: turn?.key ?? null };
   close();
-  return items;
+  groupMessagesCache.set(all, grouped);
+  return grouped;
 }
 
 export interface DeviceRouterView {

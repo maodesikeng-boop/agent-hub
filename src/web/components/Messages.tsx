@@ -23,12 +23,12 @@ import {
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { describeFailure } from "../../shared/errors.ts";
-import { errorLine, errorTitle, formatTime, pieceLineParts } from "../format.ts";
+import { errorLine, errorTitle, formatTime, workerLineParts } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
-import { workedFor } from "../step-labels.ts";
 import { describeSystemEvent, type EventFamily, type EventIconName } from "../system-events.ts";
+import { turnProgress } from "../turn-progress.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { AskCard } from "./AskCard.tsx";
@@ -37,11 +37,14 @@ import { Avatar } from "./Avatar.tsx";
 import type { SlimeLook } from "../../shared/slimes.ts";
 import { DeliverableFiles } from "./Deliverables.tsx";
 import { ThreadCard } from "./ThreadCard.tsx";
+import { TurnProgress } from "./TurnProgress.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { SandboxApprovalCard } from "./SandboxApprovalCard.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
+import { WorkerReportText } from "./WorkerReportText.tsx";
+import { leanReportOf } from "../worker-report-view.ts";
 
 export interface AgentIdentity {
   name: string;
@@ -115,10 +118,12 @@ export const AgentText = memo(function AgentText({
   message,
   highlighted,
   onAnswerAsk,
+  leanReports = false,
 }: {
   message: Message;
   highlighted: boolean;
   onAnswerAsk?: MessageActions["onAnswerAsk"];
+  leanReports?: boolean;
 }) {
   const deliverables = useMemo(() => askOf(message)?.deliverables ?? NO_DELIVERABLES, [message.sender, message.meta]);
   const files = useMemo(() => {
@@ -130,6 +135,7 @@ export const AgentText = memo(function AgentText({
   }, [message.meta, deliverables]);
   const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
   const blocker = askCard === null ? askOf(message) : null;
+  const leanReport = useMemo(() => (leanReports && blocker?.blockerRef === undefined && askCard === null ? leanReportOf(message.text) : null), [leanReports, blocker, askCard, message.text]);
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "outline-2 outline-offset-4 outline-border-focus")}
@@ -155,6 +161,8 @@ export const AgentText = memo(function AgentText({
         />
       ) : askCard ? (
         <AskCard card={askCard} files={files} deliverables={deliverables} messageId={message.id} onAnswerAsk={onAnswerAsk} />
+      ) : leanReport !== null ? (
+        <WorkerReportText report={leanReport} message={message} />
       ) : (
         <div className="w-full min-w-0 text-body leading-relaxed">
           <Markdown text={displayText(message.text)} files={files} messageId={message.id} />
@@ -164,61 +172,6 @@ export const AgentText = memo(function AgentText({
     </article>
   );
 });
-
-function PieceLineButton({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
-  const { title, state, detail } = pieceLineParts(line);
-  return (
-    <button
-      type="button"
-      aria-label={[title, state, detail].filter((part) => part !== "").join(" ")}
-      className={cn(TEXT_BUTTON, "inline-flex flex-wrap gap-x-2 text-left [overflow-wrap:anywhere]")}
-      onClick={() => onOpen(line.workerConversationId)}
-    >
-      <span className="text-foreground">{title}</span>
-      <span>{state}</span>
-      {detail !== "" && <span>{detail}</span>}
-    </button>
-  );
-}
-
-function WorkStep({ message, onOpenWorker }: { message: Message; onOpenWorker: MessageActions["onOpenWorker"] }) {
-  const line = workerEventOf(message);
-  if (line) {
-    return (
-      <li>
-        <PieceLineButton line={line} onOpen={onOpenWorker} />
-      </li>
-    );
-  }
-  if (message.sender === "system") return <li className="[overflow-wrap:anywhere]">{systemNoticeText(message)}</li>;
-  return <li className="font-mono [overflow-wrap:anywhere]">{message.text}</li>;
-}
-
-function WorkLine({ label, work, onOpenWorker }: { label: React.ReactNode; work: Message[]; onOpenWorker: MessageActions["onOpenWorker"] }) {
-  const [open, setOpen] = useState(false);
-  if (work.length === 0) {
-    return (
-      <div className={SECONDARY} data-work-line>
-        {label}
-      </div>
-    );
-  }
-  return (
-    <Collapsible open={open} onOpenChange={setOpen} data-work-line>
-      <CollapsibleTrigger className={cn("group inline-flex items-center gap-1", TEXT_BUTTON, SECONDARY)}>
-        {label}
-        <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <ul className="mt-1.5 mb-1 space-y-1 border-l border-border pl-3 text-xs leading-relaxed text-muted-foreground">
-          {work.map((m) => (
-            <WorkStep key={m.id} message={m} onOpenWorker={onOpenWorker} />
-          ))}
-        </ul>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
 
 export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -277,32 +230,45 @@ export const TurnView = memo(
     turn,
     identity,
     status,
+    stepStartedAt = null,
     streamingText,
     actions,
     highlightId,
     revertedChanges,
+    leanReports = false,
   }: {
-    turn: Pick<Turn, "work" | "parts" | "startedAt" | "endedAt">;
+    turn: Pick<Turn, "work" | "checklists" | "parts" | "startedAt" | "endedAt">;
     identity: AgentIdentity;
     status?: React.ReactNode;
+    stepStartedAt?: number | null;
     streamingText?: string | null;
     actions: MessageActions;
     highlightId?: MessageId | null;
     revertedChanges?: ReadonlySet<PersonaChangeId>;
+    leanReports?: boolean;
   }) {
     const liveText = streamingText ? displayText(streamingText) : "";
     const running = status != null || liveText !== "";
     const texts = turn.parts.filter((m) => m.sender === "agent");
     const lastText = texts.at(-1);
     const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
+    const progress = turnProgress(turn.work, turn.checklists);
     return (
       <div className="mt-6 flex flex-col [[data-list-head]>&]:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
         <AgentHead identity={identity} working={running} />
         <div className="flex flex-col gap-2.5">
-          {!running && turn.work.length > 0 && <WorkLine label={workedFor(turn.endedAt - turn.startedAt)} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
+          {(!running || status != null) && (
+            <TurnProgress
+              progress={progress}
+              status={status ?? null}
+              stepStartedAt={stepStartedAt}
+              workedForMs={turn.endedAt - turn.startedAt}
+              onOpenWorker={actions.onOpenWorker}
+            />
+          )}
           {turn.parts.map((m) =>
             m.sender === "agent" ? (
-              <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} />
+              <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} leanReports={leanReports} />
             ) : (
               <SystemNotice key={m.id} message={m} actions={actions} revertedChanges={reverted} inTurn />
             ),
@@ -314,7 +280,6 @@ export const TurnView = memo(
               </div>
             </article>
           )}
-          {running && status != null && <WorkLine label={status} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
           {!running && lastText && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
               <CopyButton text={texts.map((m) => m.text).join("\n\n")} />
@@ -329,13 +294,16 @@ export const TurnView = memo(
     prev.turn.startedAt === next.turn.startedAt &&
     prev.turn.endedAt === next.turn.endedAt &&
     sameList(prev.turn.work, next.turn.work) &&
+    sameList(prev.turn.checklists, next.turn.checklists) &&
     sameList(prev.turn.parts, next.turn.parts) &&
     sameIdentity(prev.identity, next.identity) &&
     prev.status === next.status &&
+    prev.stepStartedAt === next.stepStartedAt &&
     prev.streamingText === next.streamingText &&
     prev.actions === next.actions &&
     prev.highlightId === next.highlightId &&
-    prev.revertedChanges === next.revertedChanges,
+    prev.revertedChanges === next.revertedChanges &&
+    prev.leanReports === next.leanReports,
 );
 
 type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
@@ -545,7 +513,7 @@ function SystemNoticeRow({
 }
 
 function WorkerNoticeRow({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
-  const { title, state, detail } = pieceLineParts(line);
+  const { title, state, detail } = workerLineParts(line);
   const icon = WORKER_NOTICE_ICONS[line.event] ?? Info;
   return (
     <div data-side="left" data-notice>
@@ -693,7 +661,8 @@ function LongBrief({ children }: { children: React.ReactNode }) {
       const style = getComputedStyle(box);
       const lineHeight = Number.parseFloat(style.lineHeight) || 1.65 * (Number.parseFloat(style.fontSize) || 16);
       const lines = Number.parseInt(style.getPropertyValue("--brief-lines"), 10) || BRIEF_FALLBACK_LINES;
-      setOverflowing(box.scrollHeight > (lines + BRIEF_SLACK_LINES) * lineHeight);
+      const slack = lines <= 2 ? 0.5 : BRIEF_SLACK_LINES;
+      setOverflowing(box.scrollHeight > (lines + slack) * lineHeight);
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;

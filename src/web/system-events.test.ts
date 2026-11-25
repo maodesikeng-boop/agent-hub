@@ -59,7 +59,7 @@ describe("system-events", () => {
       makeWorkerLine({ id: 5, line: { event: "ended", title: "修样式" } }),
       makeUserMessage({ id: 6, text: "继续" }),
       makeMessage({ id: 7, text: "好的" }),
-    ]);
+    ]).items;
 
     const first = groupMessageRows(items);
     expect(groupMessageRows(items)).toBe(first);

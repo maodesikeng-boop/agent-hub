@@ -8,20 +8,6 @@ function cachedBy<T>(build: (id: JellyColorId) => T): (id: JellyColorId) => T {
   return (id) => table.get(id)!;
 }
 
-type FruitTrackVars = CSSProperties & Record<"--tube-line" | "--tube-core" | "--tube-glint" | "--tube-shade" | "--peel" | "--step-done-bg", string>;
-
-export const fruitTrackVars = cachedBy((id): FruitTrackVars => {
-  const { roles, blob, backdrop } = jellyColorOf(id);
-  return {
-    "--tube-line": roles.outline,
-    "--tube-core": roles.body,
-    "--tube-glint": roles.light,
-    "--tube-shade": roles.shade,
-    "--peel": blob,
-    "--step-done-bg": backdrop,
-  };
-});
-
 const AVATAR_TILE_LIGHTNESS = 0.8;
 const AVATAR_TILE_CHROMA = 0.1;
 

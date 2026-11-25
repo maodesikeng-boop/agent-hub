@@ -1,4 +1,4 @@
-import type { MessageId, PmId, WorkerId } from "../../../shared/domain.ts";
+import type { ConversationId, MessageId, PmId, WorkerId } from "../../../shared/domain.ts";
 import type { HubArgs, HubResult } from "../../../shared/hub.ts";
 import { DEFAULT_WORKER_MAX_TIME_MS, WORKTREE_RETENTION_DAYS } from "../../../shared/limits.ts";
 import { formatDurationShort } from "../../../shared/schedule.ts";
@@ -6,6 +6,7 @@ import { userBlockerResumeText, type UserBlocker } from "../../../shared/user-bl
 import { composerBaseOf } from "../../vendors/index.ts";
 import { fail } from "../context.ts";
 import type { Pending } from "../context.ts";
+import { recordWorkerEnded } from "../completed-work.ts";
 import { toWorkerRecord } from "../rows.ts";
 import type { WorkerDbRow } from "../rows.ts";
 import { idle } from "../sessions.ts";
@@ -26,7 +27,9 @@ export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts
   const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
   w.awaitingBackground.take(session.id);
   p.after.push(() => { w.turnStarts.delete(session.id); });
-  w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", w.now(), worker.id);
+  const t = w.now();
+  w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
+  recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
   w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
   const ended = workerRow(w, worker.id)!;
   w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
@@ -170,6 +173,17 @@ export function endIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArgs
   };
 }
 
+export function endWorkerConversationIn(w: WorkersCtx, p: Pending, conversationId: ConversationId): void {
+  const worker = w.db.get<WorkerDbRow>("SELECT * FROM workers WHERE worker_conversation_id = ?", conversationId);
+  if (worker === undefined) throw fail("not_found", `没有编号 ${conversationId} 的 Worker 对话`);
+  w.persona.assertPmNotArchived(worker.pm_id);
+  if (worker.status === "ended") {
+    clearMaxTime(w, conversationId);
+    return;
+  }
+  endWorkerIn(w, p, worker, { notifyGraph: true });
+}
+
 export function endOpenWorkersIn(w: WorkersCtx, p: Pending, pmId: PmId): void {
   const openWorkers = w.db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id", pmId);
   const t = w.now();
@@ -185,6 +199,7 @@ export function endOpenWorkersIn(w: WorkersCtx, p: Pending, pmId: PmId): void {
     w.awaitingBackground.take(session.id);
     p.after.push(() => { w.turnStarts.delete(session.id); });
     w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
+    recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
     w.db.run("UPDATE agent_sessions SET status = 'ended', updated_at = ? WHERE id = ? AND status != 'ended'", t, session.id);
     w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
     const ended = workerRow(w, worker.id)!;

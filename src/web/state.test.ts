@@ -175,25 +175,6 @@ describe("不在快照里的早收工 Worker", () => {
   const worker = (id: number) =>
     makeConvSnapshot([], { conversation: { id, kind: "worker", pmId: 1, title: `W${id}` }, hasMore: true });
 
-  it("快照的翻页起点记下来；拉一页并进对话和会话，起点换成下一页的，拉完删掉", () => {
-    const s0 = loaded({ olderEndedWorkers: { 1: 40 } });
-    expect(s0.olderEndedWorkers).toEqual({ 1: 40 });
-    const s1 = reducer(s0, {
-      type: "endedWorkersLoaded",
-      pmId: 1,
-      before: 40,
-      page: { conversations: [worker(39), worker(38)], sessions: [makeSession({ sessionId: 390, conversationId: 39, status: "ended" })], nextBefore: 38 },
-    });
-    expect(Object.keys(s1.conversations).map(Number)).toEqual(expect.arrayContaining([38, 39]));
-    expect(s1.sessions.map((x) => x.sessionId)).toContain(390);
-    expect(s1.olderEndedWorkers).toEqual({ 1: 38 });
-    const s2 = reducer(s1, { type: "endedWorkersLoaded", pmId: 1, before: 38, page: { conversations: [worker(37)], sessions: [], nextBefore: null } });
-    expect(s2.olderEndedWorkers).toEqual({});
-    // 请求发出后翻页起点已经变了（resync 重置、别处已经翻过）：迟到的页整页丢掉
-    const stale = reducer(s1, { type: "endedWorkersLoaded", pmId: 1, before: 40, page: { conversations: [worker(36)], sessions: [], nextBefore: 20 } });
-    expect(stale).toBe(s1);
-  });
-
   it("按编号单拉：在拉记 loading，拉到删掉，没有、没拉成都记 missing；重拉快照清空（再拉一次）", () => {
     const s0 = loaded();
     const loading = reducer(s0, { type: "lookupStart", ids: [30, 31] });
@@ -254,7 +235,7 @@ describe("groupMessages：一轮一轮", () => {
       makeMessage({ id: 4 }),
       makeToolMessage({ id: 5 }),
       makeMessage({ id: 6 }),
-    ]);
+    ]).items;
     expect(items.map((i) => i.kind)).toEqual(["message", "turn"]);
     const turn = items[1]!;
     if (turn.kind !== "turn") throw new Error("not a turn");
@@ -271,7 +252,7 @@ describe("groupMessages：一轮一轮", () => {
       makeMessage({ id: 3 }),
       makeSystemMessage({ id: 4, event: { event: "schedule.run", scheduleId: 1, name: "日报", scheduledAt: 0, catchUp: false } }),
       makeToolMessage({ id: 5 }),
-    ]);
+    ]).items;
     expect(items.map((i) => i.kind)).toEqual(["turn", "message", "turn", "message", "turn"]);
     const first = items[0]!;
     expect(first.kind === "turn" && first.endedAt - first.startedAt).toBe(0);
@@ -284,7 +265,7 @@ describe("groupMessages：一轮一轮", () => {
       makeSystemMessage({ id: 3 }),
       makeMessage({ id: 4 }),
       makeSystemMessage({ id: 5 }),
-    ]);
+    ]).items;
     expect(items.map((i) => (i.kind === "turn" ? `turn:${i.parts.map((m) => m.id).join(",")}` : `message:${i.message.id}`))).toEqual([
       "message:1",
       "turn:2,3,4",
@@ -293,7 +274,7 @@ describe("groupMessages：一轮一轮", () => {
   });
 
   it("换新会话：交接请求排队时就来了、压到换代才交给新会话的 Worker 汇报，显示在分隔线下面；旧会话处理的留在上面（审查 #113 第 8 条）", () => {
-    const shown = (items: ReturnType<typeof groupMessages>) => items.map((i) => (i.kind === "turn" ? `turn:${i.parts.map((m) => m.id).join(",")}` : `message:${i.message.id}`));
+    const shown = (items: ReturnType<typeof groupMessages>["items"]) => items.map((i) => (i.kind === "turn" ? `turn:${i.parts.map((m) => m.id).join(",")}` : `message:${i.message.id}`));
     const items = groupMessages([
       // 用户点开新会话时项目经理在忙（1、2 那一轮，旧会话）；交接请求 3 排着，这时来了 Worker 汇报 4（压着）
       makeUserMessage({ id: 1, sessionId: 1, status: "replied" }),
@@ -304,7 +285,7 @@ describe("groupMessages：一轮一轮", () => {
       makeMessage({ id: 6, sessionId: 1, meta: { handover: true } }),
       makeSystemMessage({ id: 7, text: "交接", event: { event: "session.renewed", sessionId: 2, fromSessionId: 1, turnStartId: 5 } }),
       makeMessage({ id: 8, sessionId: 2 }),
-    ]);
+    ]).items;
     expect(shown(items)).toEqual(["message:1", "turn:5", "message:7", "message:4", "turn:8"]);
   });
 });

@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import {
   DriverError,
@@ -25,7 +26,7 @@ import { AGY_DENIED_CONTINUE_MAX } from "./limits.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./driver.ts";
 import { describeStep } from "../../shared/step-labels.ts";
 import { dataDirReadScope } from "../../shared/write-scope.ts";
-import { toolFinished, toolStarted, working, type LiveSession } from "../../daemon/ledger/sessions.ts";
+import { toolStarted, working, type LiveSession } from "../../daemon/ledger/sessions.ts";
 import { stepOfTool } from "../../daemon/ledger/tool-summary.ts";
 import type { AgyConnectorCatalog } from "./readonly.ts";
 import { makePersonaFixture, type PersonaFixture } from "../../daemon/driver/persona-fixture.ts";
@@ -558,13 +559,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
       check();
     });
 
-  const log = (): FakeAgyLogEntry[] =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .split("\n")
-          .filter(Boolean)
-          .map((l) => JSON.parse(l) as FakeAgyLogEntry)
-      : [];
+  const log = () => readJsonLog<FakeAgyLogEntry>(logFile);
 
   const stdinBlocks = () =>
     log().flatMap((e) => {
@@ -2024,13 +2019,14 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
     const trace: Array<{ eventType: DriverEvent["type"]; label: string; openToolIds: string[] }> = [];
     for (const ev of events) {
       if (ev.type === "message.processing" || ev.type === "turn.started" || ev.type === "agent.thinking") {
-        working(null)(live);
+        working(ev.at, null)(live);
       } else if (ev.type === "agent.tool") {
-        toolStarted(ev.name, ev.toolUseId, stepOfTool(ev.name, ev.input))(live);
+        toolStarted(ev.toolUseId, stepOfTool(ev.name, ev.input), ev.at)(live);
       } else if (ev.type === "agent.tool_result") {
-        toolFinished(eventToolIds(ev))(live);
+        live.openTools = live.openTools?.filter(({ toolUseId }) => !ev.toolUseIds.includes(toolUseId));
+        working(ev.at, null, live.openTools?.at(-1)?.step ?? { type: "thinking" })(live);
       } else if (ev.type === "agent.text") {
-        working(null, { type: "text" })(live);
+        working(ev.at, null, { type: "text" })(live);
       } else {
         continue;
       }
@@ -2041,10 +2037,6 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
       });
     }
     return { live, trace };
-  }
-
-  function eventToolIds(ev: Extract<DriverEvent, { type: "agent.tool_result" }>): string[] {
-    return ev.toolUseIds;
   }
 
   it("失败工具 A → 成功工具 B → B 结束回到 Thinking（不回显残留的 Reading SKILL.md）", async () => {

@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { RequestError, type SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import { MemorySessionStore } from "../../daemon/driver/test-helpers.ts";
 import type { ReadonlySandboxInput } from "../../daemon/driver/write-scope.ts";
 import { EMPTY_TOKEN_USAGE, MAX_COMMANDS, type AgentSessionRow, type DriverEvent, type Driver, type LaunchFiles } from "../../shared/index.ts";
@@ -410,7 +411,7 @@ child.on("exit", (code) => process.exit(code ?? 0));
     drivers.push(driver);
     const events: DriverEvent[] = [];
     driver.onEvent((_id, ev) => events.push(ev));
-    const logs = (): FakeAcpLogEntry[] => readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as FakeAcpLogEntry);
+    const logs = () => readJsonLog<FakeAcpLogEntry>(logFile);
     const turnEnded = async () => {
       const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {

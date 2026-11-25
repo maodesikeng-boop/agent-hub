@@ -1,3 +1,5 @@
+import { withChecklistEnv } from "../../vendors/_common/checklist.ts";
+import { vendorSpec } from "../../shared/vendors.ts";
 // Shared session state machine for vendor drivers in src/vendors/<vendor>/driver.ts.
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -845,7 +847,7 @@ export abstract class BaseSessionDriver<
       const resolvedDriverEnv = typeof this.opts.env === "function" ? this.opts.env() : this.opts.env;
       spawned = spawnOwnedProcess(command, args, {
         cwd,
-        env: buildChildEnv(process.env, { ...resolvedDriverEnv, ...extraEnv }),
+        env: withChecklistEnv(vendorSpec(this.vendor), buildChildEnv(process.env, { ...resolvedDriverEnv, ...extraEnv })),
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {

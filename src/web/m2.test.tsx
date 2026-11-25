@@ -78,7 +78,7 @@ async function openSettingsPage(user: ReturnType<typeof userEvent.setup>, page: 
   await user.click(within(pagesNav).getByRole("button", { name }));
 }
 async function backToSettingsSummary(user: ReturnType<typeof userEvent.setup>, page: HTMLElement) {
-  await user.click(within(page).getByRole("button", { name: "Back to settings summary" }));
+  await user.click(within(page).getByRole("button", { name: "Back to Info" }));
 }
 
 /** 性格设定那一组的“保存”（改了才有）。 */
@@ -469,6 +469,7 @@ describe("对话顶栏", () => {
     expect(header).not.toHaveTextContent("/work/foo");
     await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
     const profile = screen.getByRole("complementary", { name: "小林's settings" });
+    await openSettingsPage(user, profile, /^Folders/);
     const folders = await within(groupIn(profile, "Folders")).findAllByRole("listitem");
     expect(folders[0]).toHaveTextContent("/work/foo");
     expect(folders[1]).toHaveTextContent("/work/docs");
@@ -618,9 +619,11 @@ describe("资料页", () => {
     const page = await pmChat(user);
     expect(within(page).getByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
     // 项目名只在头部出现一次
-    expect(within(page).getByText("foo", { selector: "header p" })).toBeInTheDocument();
-    await within(page).findByRole("region", { name: "Mode" });
-    expect(groupIn(page, "Mode")).toHaveTextContent("Hands-on");
+    expect(within(page).getByText("foo", { selector: "p" })).toBeInTheDocument();
+    await openSettingsPage(user, page, /^Mode(?:,|$)/);
+    expect(within(groupIn(page, "Mode")).getByRole("radio", { name: "Hands-on" })).toBeChecked();
+    await backToSettingsSummary(user, page);
+    await openSettingsPage(user, page, /^Folders/);
     // 文件夹一组：一个文件夹一行，名字 + 路径（悬停看全），主文件夹在前、标出来
     const folders = within(groupIn(page, "Folders")).getAllByRole("listitem");
     expect(folders.map((f) => f.getAttribute("title"))).toEqual(["/work/foo", "/work/docs"]);
@@ -628,6 +631,7 @@ describe("资料页", () => {
     expect(folders[0]).toHaveTextContent("Main folder");
     expect(folders[1]).not.toHaveTextContent("Main folder");
     // 摘要页下方列出设置子页入口，History 默认摘要计数 1，点开才列记录
+    await backToSettingsSummary(user, page);
     const historyEntry = within(settingsPagesNav(page)).getByRole("button", { name: /^History/ });
     expect(historyEntry).toHaveTextContent("1");
     expect(within(page).queryByRole("list", { name: "History" })).not.toBeInTheDocument();
@@ -641,25 +645,22 @@ describe("资料页", () => {
     expect(api.callsTo("GET", /^\/api\/pms\/1\/persona$/)).toHaveLength(1);
   });
 
-  it("摘要分段为 Model / Mode / Folders / Schedules，下方导航进各子页；没有大的“保存”按钮", async () => {
+  it("摘要分组列出各设置入口，每个入口打开对应页面；没有大的“保存”按钮", async () => {
     const user = userEvent.setup();
     await boot();
     const page = await pmChat(user);
-    await within(page).findByRole("region", { name: "Model" });
-    const groups = ["Model", "Mode", "Folders", "Schedules"];
-    expect(within(page).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(groups);
-    for (const title of groups) expect(within(groupIn(page, title)).getByRole("heading", { name: title })).toBeInTheDocument();
-    expect(
-      within(settingsPagesNav(page))
-        .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual([
-      expect.stringContaining("Capabilities"),
-      expect.stringContaining("Persona"),
-      expect.stringContaining("Memory files"),
-      expect.stringContaining("Worktree setup"),
-      expect.stringContaining("History"),
+    const nav = await within(page).findByRole("navigation", { name: "Project manager settings pages" });
+    const rowGroups = Array.from(nav.querySelectorAll<HTMLElement>("[data-info-group]"));
+    expect(rowGroups.map((group) => within(group).getAllByRole("button").map((button) => button.getAttribute("aria-label")?.split(",")[0]))).toEqual([
+      ["Model", "Mode", "Folders"],
+      ["Schedules", "Capabilities", "Persona", "Memory files", "Worktree setup", "History"],
     ]);
+    for (const title of ["Model", "Mode", "Folders", "Schedules"]) {
+      await openSettingsPage(user, page, new RegExp(`^${title}(?:,|$)`));
+      expect(within(page).getByRole("heading", { name: title })).toBeInTheDocument();
+      expect(groupIn(page, title)).toBeInTheDocument();
+      await backToSettingsSummary(user, page);
+    }
     expect(within(page).queryByText("Agent")).not.toBeInTheDocument();
     expect(within(page).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     await openSettingsPage(user, page, /^Persona/);
@@ -728,8 +729,7 @@ describe("资料页", () => {
     await boot();
     api.putPersona = (_id, body) => ({ status: 200, body: { changed: true, persona: makePersonaView({ pmId: 1, mode: body.mode ?? "manage_only" }) } });
     const page = await pmChat(user);
-    await within(page).findByRole("region", { name: "Mode" });
-    await user.click(within(groupIn(page, "Mode")).getByRole("button", { name: "Edit" }));
+    await openSettingsPage(user, page, /^Mode(?:,|$)/);
     await user.click(within(page).getByRole("radio", { name: "Hands-on" }));
     expect(within(page).getByRole("radio", { name: "Hands-on" })).toBeChecked();
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
@@ -742,11 +742,12 @@ describe("资料页", () => {
     await boot();
     api.putPersona = () => ({ status: 409, body: { error: "有 Worker 在跑，不能改", code: "conflict" } });
     const page = await pmChat(user);
-    await within(page).findByRole("region", { name: "Mode" });
-    await user.click(within(groupIn(page, "Mode")).getByRole("button", { name: "Edit" }));
+    await openSettingsPage(user, page, /^Mode(?:,|$)/);
     await user.click(within(page).getByRole("radio", { name: "Hands-on" }));
     expect(await within(groupIn(page, "Mode")).findByRole("alert")).toHaveTextContent("有 Worker 在跑，不能改");
     expect(within(page).getByRole("radio", { name: "Orchestrate" })).toBeChecked();
+    await backToSettingsSummary(user, page);
+    await openSettingsPage(user, page, /^Model/);
     expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -836,12 +837,14 @@ describe("资料页", () => {
     await boot();
     await user.click(screen.getByRole("button", { name: "View 阿周's profile" }));
     const page = screen.getByRole("complementary", { name: "阿周's settings" });
+    await openSettingsPage(user, page, /^Folders/);
     const folders = await within(page).findByRole("region", { name: "Folders" });
     expect(within(folders).getByText("No folders")).toBeInTheDocument();
     expect(within(folders).queryByRole("list")).not.toBeInTheDocument();
+    await backToSettingsSummary(user, page);
     expect(within(settingsPagesNav(page)).queryByRole("button", { name: /Worktree setup/ })).not.toBeInTheDocument();
     expect(within(page).queryByText("还没有")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Close settings" }));
+    await user.click(screen.getByRole("button", { name: "Close work panel" }));
     expect(screen.queryByRole("complementary", { name: "阿周's settings" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
   });
@@ -878,8 +881,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await user.click(inNav(/小林/));
     await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
     const page = screen.getByRole("complementary", { name: "小林's settings" });
-    const modelGroup = await within(page).findByRole("region", { name: "Model" });
-    await user.click(within(modelGroup).getByRole("button", { name: "Edit" }));
+    await openSettingsPage(user, page, /^Model/);
     return page;
   };
   /** 假后端：PUT 按请求体改，返回改完的样子和一条修改记录。 */
@@ -1064,6 +1066,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(combo(page, "Model")).toHaveTextContent("Fable 5.1");
     expect(combo(page, "Effort")).toHaveTextContent("Low");
     expect(modelSave(page)).not.toBeInTheDocument();
+    await backToSettingsSummary(user, page);
     await openSettingsPage(user, page, /^History/);
     const log = await within(page).findByRole("list", { name: "History" });
     await waitFor(() => expect(within(log).getAllByRole("listitem")).toHaveLength(1));
@@ -1104,7 +1107,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
 
     const alert = await within(groupIn(page, "Model")).findByRole("alert");
     expect(alert).toHaveTextContent("思考程度只能是 low、medium、high、xhigh、max");
-    expect(within(groupIn(page, "Mode")).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(page).getAllByRole("alert")).toEqual([alert]);
     expect(combo(page, "Model")).toHaveTextContent("Opus");
     expect(combo(page, "Effort")).toHaveTextContent("Max");
     expect(modelSave(page)).toBeEnabled();
@@ -1143,6 +1146,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument();
     expect(combo(page, "Effort")).toHaveTextContent("Max");
     expect(modelSave(page)).not.toBeInTheDocument();
+    await backToSettingsSummary(user, page);
+    await openSettingsPage(user, page, /^Mode(?:,|$)/);
+    expect(within(groupIn(page, "Mode")).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("Custom: 选了之后多一行模型名（光标在里面），不发请求；没填或字符不对时 Save 禁用；填对后点 Save 或回车提交完整模型名", async () => {
@@ -1248,18 +1254,21 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(await within(agent).findByText("Switching to Codex…")).toBeInTheDocument();
     expect(combo(page, "Provider")).toBeDisabled();
     expect(combo(page, "Model")).toBeEnabled();
-    expect(within(page).getByRole("button", { name: "New session..." })).toBeDisabled();
+    await backToSettingsSummary(user, page);
+    expect(within(page).getByRole("button", { name: "New session" })).toBeDisabled();
     expect(within(page).queryByRole("button", { name: "Handing off…" })).not.toBeInTheDocument();
+    await openSettingsPage(user, page, /^Model/);
 
     // 换厂商失败回退：服务端推 pm.updated，重新拉 persona 回到 claude 且 switchingToVendor 为 null
     view = makePersonaView({ pmId: 1, vendor: "claude", model: "opus", effort: "high", switchingToVendor: null });
     push(ws, changeOf(11, "pm.updated", { pm: makePm({ id: 1, name: "小林", vendor: "claude" }) }));
-    await waitFor(() => expect(within(agent).queryByText("Switching to Codex…")).not.toBeInTheDocument());
+    await waitFor(() => expect(within(groupIn(page, "Model")).queryByText("Switching to Codex…")).not.toBeInTheDocument());
     expect(combo(page, "Provider")).toHaveTextContent("Claude Code");
     expect(combo(page, "Model")).toHaveTextContent("Opus");
     expect(combo(page, "Effort")).toHaveTextContent("High");
     expect(combo(page, "Provider")).toBeEnabled();
-    expect(within(page).getByRole("button", { name: "New session..." })).toBeEnabled();
+    await backToSettingsSummary(user, page);
+    expect(within(page).getByRole("button", { name: "New session" })).toBeEnabled();
   });
 
   it("状态同步边界：同 PM 在 !dirty 时自动同步外部更新、dirty 时保留草稿；切换查看不同 PM 时无条件重置草稿与错误", async () => {
@@ -1279,16 +1288,19 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await pickOption(user, combo(page1, "Model"), "Opus");
     pm1View = makePersonaView({ pmId: 1, vendor: "claude", model: "sonnet", effort: "max", text: "外部改的" });
     push(ws, changeOf(12, "pm.updated", { pm: makePm({ id: 1, name: "小林" }) }));
-    await waitFor(() => expect(within(settingsPagesNav(page1)).getByRole("button", { name: /Persona/ })).toHaveTextContent("Set"));
+    await waitFor(() => expect(api.callsTo("GET", /persona$/)).toHaveLength(3));
     expect(combo(page1, "Model")).toHaveTextContent("Opus");
     expect(modelSave(page1)).toBeEnabled();
 
     await user.click(modelSave(page1)!);
     expect(await within(groupIn(page1, "Model")).findByRole("alert")).toBeInTheDocument();
+    await backToSettingsSummary(user, page1);
+    expect(within(settingsPagesNav(page1)).getByRole("button", { name: /Persona/ })).toHaveTextContent("Set");
 
     await user.click(inNav(/阿周/));
     await user.click(screen.getByRole("button", { name: "View 阿周's profile" }));
     const page2 = screen.getByRole("complementary", { name: "阿周's settings" });
+    await openSettingsPage(user, page2, /^Model/);
     const model2 = await within(page2).findByRole("region", { name: "Model" });
     expect(model2).toHaveTextContent("Codex");
     expect(model2).toHaveTextContent("GPT-6-Luna");
@@ -1310,12 +1322,12 @@ describe("资料页：开新会话", () => {
     const user = userEvent.setup();
     const ws = await boot();
     const page = await openProfile(user);
-    await user.click(within(page).getByRole("button", { name: "New session..." }));
+    await user.click(within(page).getByRole("button", { name: "New session" }));
     const dialog = screen.getByRole("dialog", { name: "Start a new session?" });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(api.callsTo("POST", /renew-session$/)).toHaveLength(0);
 
-    await user.click(within(page).getByRole("button", { name: "New session..." }));
+    await user.click(within(page).getByRole("button", { name: "New session" }));
     await user.click(within(screen.getByRole("dialog", { name: "Start a new session?" })).getByRole("button", { name: "New session" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms\/1\/renew-session$/)).toHaveLength(1));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -1324,7 +1336,7 @@ describe("资料页：开新会话", () => {
     expect(within(page).getByRole("button", { name: "Handing off…" })).toBeDisabled();
     // 回完了（换代）：又能点
     push(ws, messageChange(12, "message.updated", request("replied")));
-    expect(within(page).getByRole("button", { name: "New session..." })).toBeEnabled();
+    expect(within(page).getByRole("button", { name: "New session" })).toBeEnabled();
   });
 
   it("接口失败：头部下方写原因，按钮还能点", async () => {
@@ -1332,10 +1344,10 @@ describe("资料页：开新会话", () => {
     await boot();
     api.renewSession = () => ({ status: 404, body: { error: "没有编号 1 的项目经理", code: "not_found" } });
     const page = await openProfile(user);
-    await user.click(within(page).getByRole("button", { name: "New session..." }));
+    await user.click(within(page).getByRole("button", { name: "New session" }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "New session" }));
     expect(await within(page).findByRole("alert")).toHaveTextContent("没有编号 1 的项目经理");
-    expect(within(page).getByRole("button", { name: "New session..." })).toBeEnabled();
+    expect(within(page).getByRole("button", { name: "New session" })).toBeEnabled();
   });
 
   /** 写交接那一轮 agent 的话（账本记了 meta.handover）。 */
@@ -1606,8 +1618,8 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     await user.click(inNav(/小林/));
     await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
     const page = screen.getByRole("complementary", { name: "小林's settings" });
+    await openSettingsPage(user, page, /^Model/);
     const modelGroup = await within(page).findByRole("region", { name: "Model" });
-    await user.click(within(modelGroup).getByRole("button", { name: "Edit" }));
     const model = within(modelGroup).getByRole("combobox", { name: "Model" });
     await waitFor(() => expect(model).toHaveTextContent("Opus 5.5 (default)"));
     expect((await readOptions(user, model))[0]).toBe("Opus 5.5 (default)");
@@ -1867,8 +1879,7 @@ describe("归档与恢复项目经理（左栏已归档分组、聊天页归档�
     await user.click(inNav(/小林/));
     await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
     const page = await screen.findByRole("complementary", { name: "小林's settings" });
-    await user.click(await within(page).findByRole("button", { name: "More actions" }));
-    await user.click(await screen.findByRole("button", { name: "Archive..." }));
+    await user.click(await within(page).findByRole("button", { name: "Archive" }));
 
     const dialog = screen.getByRole("dialog", { name: "Archive project manager?" });
     expect(dialog).toHaveTextContent("Your project folder stays untouched");
@@ -1885,7 +1896,7 @@ describe("归档与恢复项目经理（左栏已归档分组、聊天页归档�
     await waitFor(() => expect(screen.queryByRole("complementary", { name: "小林's settings" })).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
     const archivedPage = await screen.findByRole("complementary", { name: "小林's settings" });
-    expect(within(archivedPage).queryByRole("button", { name: "New session..." })).not.toBeInTheDocument();
+    expect(within(archivedPage).queryByRole("button", { name: "New session" })).not.toBeInTheDocument();
     const archiveStatusGroup = within(archivedPage).getByRole("region", { name: "Archive status" });
     expect(archiveStatusGroup).toHaveTextContent("Deletes in 7d");
 
@@ -1896,6 +1907,6 @@ describe("归档与恢复项目经理（左栏已归档分组、聊天页归档�
     };
     await user.click(within(archiveStatusGroup).getByRole("button", { name: "Restore" }));
     expect(api.callsTo("POST", /^\/api\/pms\/1\/unarchive$/)).toHaveLength(1);
-    expect(await within(archivedPage).findByRole("button", { name: "New session..." })).toBeInTheDocument();
+    expect(await within(archivedPage).findByRole("button", { name: "New session" })).toBeInTheDocument();
   });
 });

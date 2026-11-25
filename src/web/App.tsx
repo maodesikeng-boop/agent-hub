@@ -1,19 +1,24 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Activity, useCallback, useEffect, useMemo, useState } from "react";
-import { pickableVendorCatalogs, type Pm } from "../shared/index.ts";
+import { Activity, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { pickableVendorCatalogs } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 import { AppRail } from "./components/AppRail.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
-import { ProfilePanel } from "./components/ProfilePanel.tsx";
 import { ProjectList } from "./components/ProjectList.tsx";
-import { PieceMeta, PiecesSlot, RailGroups } from "./components/RightRail.tsx";
 import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
-import { SidePanel } from "./components/SidePanel.tsx";
-import { WorkerConversation } from "./components/WorkerConversation.tsx";
+import { WorkPanel, WorkPanelToggle } from "./components/WorkPanel.tsx";
+import {
+  DesktopWorkPanel,
+  MobileWorkPanel,
+  WorkerHeaderSlot,
+  WorkerPane,
+  type ShellContent,
+  type ShellModel,
+} from "./components/WorkPanelShell.tsx";
 import { DeviceScope } from "./device-scope.tsx";
 import { LOCAL_DEVICE, isReadOnly, routeDeviceOf } from "./devices.ts";
 import { errorTitle } from "./format.ts";
@@ -21,7 +26,6 @@ import { AccentScope } from "./lib/accent-scope.tsx";
 import { SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
 import { mobileBack } from "./mobile/back.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
-import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
 import { TabBar, mobileTabOf, type MobileTab } from "./mobile/TabBar.tsx";
 import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
 import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
@@ -29,12 +33,11 @@ import { usePaneWidths } from "./pane-widths.ts";
 import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
-import type { ProfilePage } from "./route.ts";
-import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerOutcomesOf, workerPhaseOf } from "./selectors.ts";
+import { pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
 import { useShellTier } from "./shell-layout.ts";
 import { railComputerKeyOrFallback } from "./shell-actions.ts";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
-import { panelExitsOf, sidePanelOf, type SidePanelContent } from "./side-panel.ts";
+import { workPanelOf } from "./side-panel.ts";
 import { Button } from "./ui/button.tsx";
 import { ArrowLeft, Loader2 } from "./ui/icons.ts";
 import { Pane, PaneGroup, PaneHandle } from "./ui/resizable.tsx";
@@ -44,17 +47,6 @@ import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 
 const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
 const SIGN_IN_ON_PHONE = "On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer";
-
-const PROFILE_PAGE_TITLES: Readonly<Record<ProfilePage, string>> = {
-  capabilities: "Capabilities",
-  persona: "Persona",
-  memory: "Memory files",
-  worktree: "Worktree setup",
-  history: "History",
-};
-
-type ShellModel = ReturnType<typeof useShellModel>;
-type ShellContent = NonNullable<ShellModel["content"]>;
 
 function FullPage({
   title,
@@ -135,194 +127,6 @@ function DeviceWaiting({ connecting, name }: { connecting: boolean; name: string
   );
 }
 
-function WorkerPane({
-  model: { state, hub, current },
-  content: c,
-  mobile,
-  leading,
-  toolbar,
-  top,
-  notices,
-  workerId,
-}: {
-  model: ShellModel;
-  content: ShellContent;
-  mobile: boolean;
-  leading?: React.ReactNode;
-  toolbar?: React.ReactNode;
-  top?: React.ReactNode;
-  notices: React.ReactNode;
-  workerId: number;
-}) {
-  return (
-    <WorkerConversation
-      mobile={mobile}
-      leading={leading}
-      key={c.keyOf(workerId)}
-      title={c.workerLine?.title ?? c.workerView?.conversation.title ?? "Piece"}
-      readonly={c.workerLine?.readonly ?? false}
-      phase={workerPhaseOf(state, workerId)}
-      pm={{ name: c.workerPmEntry?.name ?? "Project manager", look: c.workerPmEntry?.look ?? c.look }}
-      meta={c.railWorkers.find((w) => w.conversationId === workerId)}
-      outcomes={workerOutcomesOf(state, workerId)}
-      view={c.workerView}
-      loading={c.workerLoading}
-      pending={pendingOf(state, workerId)}
-      session={sessionOf(state, workerId)}
-      older={state.older[workerId]}
-      draft={c.drafts.of(c.keyOf(workerId))}
-      staging={c.staging.of(c.keyOf(workerId))}
-      toolbar={toolbar}
-      top={top}
-      notices={notices}
-      onSend={c.send}
-      onRetry={hub.retrySend}
-      onStop={hub.stop}
-      onRewind={hub.rewind}
-      onLoadOlder={c.handleLoadOlder}
-      actions={c.actions}
-      link={c.link}
-    />
-  );
-}
-
-function railProps(c: ShellContent) {
-  return {
-    asks: c.railAsks,
-    workers: c.railWorkers,
-    activeGraphs: c.railGraphs,
-    projectId: c.railProjectId,
-    openWorkerId: c.openWorker,
-    look: c.look,
-    onOpenAsk: c.openAsk,
-    onOpenWorker: c.openWorkerConversation,
-    onLoadMoreWorkers: c.railLoadMoreWorkers,
-    onNeedWorkers: c.ensureWorkers,
-  };
-}
-
-function renderProfilePanel(
-  model: ShellModel,
-  c: ShellContent,
-  variant: "panel" | "page",
-  pm: Pm,
-  onClose: () => void,
-) {
-  const { state, current } = model;
-  const entry = c.profileEntry;
-  return (
-    <ProfilePanel
-      key={c.keyOf(pm.id)}
-      variant={variant}
-      pm={pm}
-      project={entry?.project ?? null}
-      folders={entry?.folders ?? []}
-      schedules={state.schedules.filter((x) => x.pmId === pm.id)}
-      rev={state.personaRev[pm.id] ?? 0}
-      renewing={entry !== undefined && isRenewing(state, entry.id)}
-      page={c.profilePage}
-      readOnly={isReadOnly(current.status)}
-      onNavigate={(page) => c.openProfile(pm.id, page ?? undefined)}
-      onClose={onClose}
-      onTogglePin={(pinned) => c.togglePin(pm.id, pinned)}
-      onManageProviders={() => c.openManageProviders(current.key)}
-      onEditDefaults={() => c.openSettingsSection("capabilities")}
-    />
-  );
-}
-
-function DesktopSidePanel({
-  model,
-  content: c,
-  panelContent,
-  layout,
-  notices,
-}: {
-  model: ShellModel;
-  content: ShellContent;
-  panelContent: SidePanelContent;
-  layout: "side" | "stack";
-  notices: React.ReactNode;
-}) {
-  const { navigate, current } = model;
-  const convRoute = useMemo(
-    () => (c.active ? { view: "conversation" as const, id: c.active.id, ...routeDeviceOf(current.key) } : null),
-    [c.active, current.key],
-  );
-  const exits = useMemo(
-    () => (convRoute ? panelExitsOf(panelContent, convRoute) : { close: { view: "conversation" as const, id: 1 }, back: null, backOpensPieces: false }),
-    [panelContent, convRoute],
-  );
-
-  if (panelContent.kind === "pieces") {
-    return (
-      <SidePanel
-        layout={layout}
-        label="Pieces"
-        title={<span className="truncate px-1 text-title font-semibold text-foreground">Pieces</span>}
-        onClose={() => c.toggleRail()}
-        closeLabel="Close Pieces"
-      >
-        <RailGroups {...railProps(c)} onShowHistory={c.keepRailOpen} className="pb-3" />
-      </SidePanel>
-    );
-  }
-
-  if (panelContent.kind === "worker") {
-    const meta = c.railWorkers.find((w) => w.conversationId === panelContent.workerId);
-    const title = c.workerLine?.title ?? c.workerView?.conversation.title ?? "Piece";
-    const readonly = c.workerLine?.readonly ?? false;
-    return (
-      <SidePanel
-        layout={layout}
-        label={title}
-        title={
-          <div className="flex min-w-0 items-center gap-2">
-            <span title={title} className="min-w-0 truncate text-body font-semibold text-foreground">
-              {title}
-            </span>
-            {readonly && <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Read-only</span>}
-            {meta && <PieceMeta worker={meta} />}
-          </div>
-        }
-        onBack={() => {
-          if (exits.backOpensPieces) c.toggleRail(true);
-          if (exits.back) navigate(exits.back);
-        }}
-        backLabel={c.workerPmEntry ? `Back to ${c.workerPmEntry.name}` : "Back"}
-        onClose={() => {
-          if (convRoute) navigate(exits.close);
-          else c.routerSummary.onSelect();
-        }}
-        closeLabel="Close Piece"
-      >
-        <WorkerPane model={model} content={c} mobile={false} notices={notices} workerId={panelContent.workerId} />
-      </SidePanel>
-    );
-  }
-
-  const profile = c.profile;
-  if (!profile) return null;
-  const headerTitle = panelContent.page !== null ? PROFILE_PAGE_TITLES[panelContent.page] : "Settings";
-  return (
-    <SidePanel
-      layout={layout}
-      label={`${profile.name}'s settings`}
-      title={<span className="truncate px-1 text-title font-semibold text-foreground">{headerTitle}</span>}
-      {...(exits.back !== null ? { onBack: () => navigate(exits.back!), backLabel: "Back to settings summary" } : {})}
-      onClose={() => {
-        if (convRoute) navigate(exits.close);
-        else c.routerSummary.onSelect();
-      }}
-      closeLabel="Close settings"
-    >
-      {renderProfilePanel(model, c, "panel", profile, () => {
-        if (convRoute) navigate(exits.close);
-      })}
-    </SidePanel>
-  );
-}
-
 function ConversationPane({
   model,
   content: c,
@@ -399,8 +203,8 @@ function DesktopWorkbench({
   const { widths, commit, reset } = usePaneWidths((s) => s);
   const { fleet, state, current, route } = model;
 
-  const panelRaw = c.routerActive ? null : sidePanelOf({ route, piecesOpen: c.railOpen, piecesHasContent: c.railHasContent });
-  const panelContent = panelRaw !== null && panelRaw.kind === "profile" && c.profile === null ? null : panelRaw;
+  const panelRaw = c.routerActive ? null : workPanelOf({ route, open: c.railOpen, tab: c.workTab });
+  const panelContent = panelRaw !== null && panelRaw.kind === "info" && c.profile === null ? null : panelRaw;
   const panelVisible = panelContent !== null && !c.routerActive && state.phase === "ready";
   const tier = useShellTier(shellEl, panelVisible);
   const stackPanel = tier === "stack" && panelVisible;
@@ -417,28 +221,22 @@ function DesktopWorkbench({
   const tintColor = c.routerActive ? null : (c.active?.look.color ?? null);
 
   const routeView = route?.view;
-  const togglePieces = useCallback(() => {
+  const toggleWorkPanel = useCallback(() => {
     if (activeId === null) return;
-    if (routeView === "worker" || routeView === "profile") {
-      toggleRail(true);
+    if (panelVisible && (routeView === "worker" || routeView === "profile")) {
+      toggleRail(false);
       select({ device: current.key, id: activeId });
     } else {
       toggleRail();
     }
-  }, [activeId, routeView, toggleRail, select, current.key]);
+  }, [activeId, panelVisible, routeView, toggleRail, select, current.key]);
 
-  const piecesOpen = panelContent?.kind === "pieces";
   const toolbar = useMemo(
-    () => (
-      <PiecesSlot
-        visible={c.railHasContent}
-        open={piecesOpen}
-        attention={c.railAttention}
-        look={c.look}
-        onToggle={togglePieces}
-      />
-    ),
-    [c.railHasContent, piecesOpen, c.railAttention, c.look, togglePieces],
+    () =>
+      c.active === null ? null : (
+        <WorkPanelToggle open={panelVisible} attention={c.railAttention} look={c.look} onToggle={toggleWorkPanel} />
+      ),
+    [c.active, panelVisible, c.railAttention, c.look, toggleWorkPanel],
   );
 
   const listNode = (layout: "column" | "strip") => (
@@ -555,7 +353,7 @@ function DesktopWorkbench({
                         })}
                   >
                     <AccentScope color={tintColor}>
-                      <DesktopSidePanel
+                      <DesktopWorkPanel
                         model={model}
                         content={c}
                         panelContent={panelContent}
@@ -602,10 +400,15 @@ function MobileWorkbench({
   onManageLocalProviders: () => void;
   onManageCurrentProviders: () => void;
 }) {
-  const { fleet, state, current, route, replace, navigate } = model;
+  const { fleet, state, current, route, replace, navigate, hub } = model;
+  const keepPanelOpenRef = useRef(false);
   useEffect(() => {
+    if (keepPanelOpenRef.current) {
+      keepPanelOpenRef.current = false;
+      return;
+    }
     setDrawerOpen(false);
-  }, [route, current.key, c.railHasContent, setDrawerOpen]);
+  }, [route, current.key, setDrawerOpen]);
   const updateWaiting = useUpdateReminder() !== null;
   const resources = useResourcesAttention();
   const settingsAttention = updateWaiting || resources.attention;
@@ -641,18 +444,14 @@ function MobileWorkbench({
     ),
     [back],
   );
-  const toggleMobileDrawer = useCallback(() => setDrawerOpen((open) => !open), [setDrawerOpen]);
+  const toggleMobilePanel = useCallback(() => setDrawerOpen((open) => !open), [setDrawerOpen]);
+  const closeMobilePanel = useCallback(() => setDrawerOpen(false), [setDrawerOpen]);
   const mobileToolbar = useMemo(
-    () => (
-      <PiecesSlot
-        visible={c.railHasContent}
-        open={drawerOpen}
-        attention={c.railAttention}
-        look={c.look}
-        onToggle={toggleMobileDrawer}
-      />
-    ),
-    [c.railHasContent, drawerOpen, c.railAttention, c.look, toggleMobileDrawer],
+    () =>
+      c.active === null ? null : (
+        <WorkPanelToggle open={drawerOpen} attention={c.railAttention} look={c.look} onToggle={toggleMobilePanel} />
+      ),
+    [c.active, drawerOpen, c.railAttention, c.look, toggleMobilePanel],
   );
 
   const selectMobileTab = (tab: MobileTab) => {
@@ -722,30 +521,67 @@ function MobileWorkbench({
         <DeviceWaiting connecting={current.status === "connecting"} name={current.info.name} />
       </main>
     );
-  } else if (route?.view === "profile" && c.profile !== null) {
-    body = renderProfilePanel(model, c, "page", c.profile, back);
-  } else if (c.openWorker !== null) {
+  } else if ((route?.view === "profile" && c.profile !== null) || (drawerOpen && c.openWorker === null)) {
     body = (
-      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-        <WorkerPane model={model} content={c} mobile leading={leading} toolbar={null} notices={notices} workerId={c.openWorker} />
-      </main>
+      <MobileWorkPanel
+        model={model}
+        content={c}
+        profile={c.profile}
+        onBack={back}
+        onClose={closeMobilePanel}
+        onSwitchTab={(tab) => {
+          c.setWorkTab(tab);
+          keepPanelOpenRef.current = true;
+          setDrawerOpen(true);
+          if (c.active !== null) navigate({ view: "conversation", id: c.active.id, ...routeDeviceOf(current.key) });
+        }}
+      />
+    );
+  } else if (c.openWorker !== null) {
+    const workerId = c.openWorker;
+    const meta = c.railWorkers.find((w) => w.conversationId === workerId);
+    const session = sessionOf(state, workerId);
+    const title = c.workerLine?.title ?? c.workerView?.conversation.title ?? "Worker";
+    const ended = workerPhaseOf(state, workerId) === "ended";
+    const branch = c.workerView?.workerBranch ?? meta?.branch ?? c.workerLine?.branch ?? null;
+    body = (
+      <WorkPanel
+        layout="page"
+        label={title}
+        header={
+          <WorkerHeaderSlot
+            title={title}
+            meta={meta}
+            session={session}
+            ended={ended}
+            createdAt={c.workerView?.conversation.createdAt ?? null}
+            endedAt={c.workerView?.workerLine?.endedAt ?? null}
+            branch={branch}
+            workerReadonly={c.workerLine?.readonly ?? false}
+            readOnly={readOnly}
+            backLabel="Back"
+            onBack={back}
+            onStop={() => void hub.stop(workerId)}
+            onEnd={() => void hub.client.postEndWorker(workerId).catch(() => {})}
+          />
+        }
+      >
+        <WorkerPane model={model} content={c} mobile notices={notices} workerId={workerId} />
+      </WorkPanel>
     );
   } else {
     body = (
-      <>
-        <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-          <ConversationPane
-            model={model}
-            content={c}
-            mobile
-            leading={leading}
-            toolbar={mobileToolbar}
-            notices={notices}
-            onManageCurrentProviders={onManageCurrentProviders}
-          />
-        </main>
-        <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} {...railProps(c)} />
-      </>
+      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        <ConversationPane
+          model={model}
+          content={c}
+          mobile
+          leading={leading}
+          toolbar={mobileToolbar}
+          notices={notices}
+          onManageCurrentProviders={onManageCurrentProviders}
+        />
+      </main>
     );
   }
 

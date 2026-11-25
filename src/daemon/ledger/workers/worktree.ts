@@ -5,6 +5,7 @@ import { DEFAULT_WORKER_MAX_TIME_MS } from "../../../shared/limits.ts";
 import { parseReviewTarget, reviewTakeoverWorkspaceNote, reviewVerifyErrorProblem, reviewWorkspaceLines, type ReviewSnapshot, type ReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
 import { setupNote } from "../../prompt.ts";
 import type { Pending } from "../context.ts";
+import { recordWorkerEnded } from "../completed-work.ts";
 import { toMessage } from "../rows.ts";
 import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
 import { idle } from "../sessions.ts";
@@ -182,7 +183,9 @@ function worktreeCreateFailedIn(w: WorkersCtx, p: Pending, workerId: WorkerId, e
   const worker = workerRow(w, workerId);
   if (worker === null || worker.status === "ended") return;
   clearMaxTime(w, worker.worker_conversation_id);
-  w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", w.now(), worker.id);
+  const t = w.now();
+  w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
+  recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
   w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
   const session = workerSession(w, worker.id);
   w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });

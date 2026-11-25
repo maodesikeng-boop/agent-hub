@@ -10,7 +10,7 @@ import { useStickToBottom } from "../useStickToBottom.ts";
 import { useFocusMessage, useVirtualRows } from "../useVirtualRows.ts";
 import { EmptyConversation, EventGroupView, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
-const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
+const EMPTY_TURN = { work: [], checklists: [], parts: [], startedAt: 0, endedAt: 0 };
 
 interface RowContext {
   items: readonly DisplayRow[];
@@ -20,27 +20,30 @@ interface RowContext {
   actions: MessageActions;
   highlightId: MessageId | null;
   revertedChanges: ReadonlySet<PersonaChangeId>;
-  lastTurnStatus: { status: React.ReactNode; streamingText: string | null | undefined } | null;
+  liveTurn: { key: string; status: React.ReactNode; stepStartedAt: number | null; streamingText: string | null | undefined } | null;
+  leanReports: boolean;
 }
 
-function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus }: RowContext): React.ReactNode {
+function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, liveTurn, leanReports }: RowContext): React.ReactNode {
   const item = items[index];
   if (item === undefined) return <PendingBubble pending={pending[index - items.length]!} onRetry={onRetry} />;
   if (item.kind === "event_group") {
     return <EventGroupView family={item.family} messages={item.messages} actions={actions} revertedChanges={revertedChanges} />;
   }
   if (item.kind === "turn") {
-    const first = item.work[0] ?? item.parts[0]!;
-    const live = index === items.length - 1 ? lastTurnStatus : null;
+    const first = item.work[0] ?? item.checklists[0] ?? item.parts[0]!;
+    const live = item.key === liveTurn?.key ? liveTurn : null;
     return (
       <TurnView
         turn={item}
         identity={agentOf(first)}
         status={live?.status}
+        stepStartedAt={live?.stepStartedAt ?? null}
         streamingText={live?.streamingText}
         actions={actions}
         highlightId={highlightId}
         revertedChanges={revertedChanges}
+        leanReports={leanReports}
       />
     );
   }
@@ -71,9 +74,11 @@ export const MessageList = memo(function MessageList({
   focus,
   onFocusDone,
   status,
+  stepStartedAt = null,
   statusAgent,
   streamingText,
   footer,
+  leanReports = false,
 }: {
   messages: Message[];
   pending: PendingMessage[];
@@ -86,11 +91,14 @@ export const MessageList = memo(function MessageList({
   focus?: { id: MessageId; n: number } | null;
   onFocusDone?: () => void;
   status?: React.ReactNode;
+  stepStartedAt?: number | null;
   statusAgent?: AgentIdentity;
   streamingText?: string | null;
   footer?: React.ReactNode;
+  leanReports?: boolean;
 }) {
-  const items = useMemo(() => groupMessageRows(groupMessages(messages)), [messages]);
+  const grouped = groupMessages(messages);
+  const items = groupMessageRows(grouped.items);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null || Boolean(streamingText);
   const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}:${footer != null}`;
@@ -118,7 +126,7 @@ export const MessageList = memo(function MessageList({
     (id: MessageId) =>
       items.findLastIndex((item) =>
         item.kind === "turn"
-          ? [...item.work, ...item.parts].some((m) => m.id === id)
+          ? [...item.work, ...item.checklists, ...item.parts].some((m) => m.id === id)
           : item.kind === "event_group"
             ? item.messages.some((m) => m.id === id)
             : item.message.id === id,
@@ -133,9 +141,10 @@ export const MessageList = memo(function MessageList({
     }
   }, [messages.length, hasMore, older, onLoadOlder]);
 
-  const lastItem = items.at(-1);
-  const rideOnTurn = busy && pending.length === 0 && lastItem?.kind === "turn";
-  const typing = busy && !rideOnTurn && statusAgent !== undefined;
+  const liveTurn = busy && pending.length === 0 && grouped.tailTurnKey !== null
+    ? { key: grouped.tailTurnKey, status, stepStartedAt, streamingText }
+    : null;
+  const typing = busy && liveTurn === null && statusAgent !== undefined;
   const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore && footer == null;
 
   const enterItemAt = (index: number): EnterItem => {
@@ -154,7 +163,7 @@ export const MessageList = memo(function MessageList({
   });
   useMessageEnter(enterRows, count, enterItemAt, typing, empty);
 
-  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus: rideOnTurn ? { status, streamingText } : null };
+  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, liveTurn, leanReports };
   const scrollMargin = virtualizer.options.scrollMargin;
 
   return (
@@ -188,7 +197,7 @@ export const MessageList = memo(function MessageList({
           </div>
           {typing && statusAgent && (
             <div ref={typingRef} className="flex flex-col" data-list-head={count === 0 && !hasMore ? "" : undefined}>
-              <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} streamingText={streamingText} actions={actions} />
+              <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} stepStartedAt={stepStartedAt} streamingText={streamingText} actions={actions} />
             </div>
           )}
           {footer}

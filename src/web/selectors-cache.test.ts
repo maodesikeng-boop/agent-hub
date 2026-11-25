@@ -44,8 +44,11 @@ import {
   workersOf,
 } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
+import { turnProgress } from "./turn-progress.ts";
 import { downloadOfferOf, updateReminderOf } from "./update-model.ts";
 import { describeResourcesSummary, partitionHeldResources } from "./resources-model.ts";
+import { graphFlowOf, horizontalLayoutOf, verticalRowsOf, type MeasureStepText } from "./graph-flow.ts";
+import { activeWorkOf, completedDaysOf } from "./work-panel-model.ts";
 import { changeOf, makeCapabilitiesView, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
 const WORKERS = 300;
@@ -195,7 +198,7 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
       all.push(makeSystemMessage({ id: id++, event: { event: "session.renewed", sessionId: g + 2, fromSessionId: g + 1, turnStartId } }));
     }
     expect(medianMs(7, () => void groupMessages([...all]))).toBeLessThan(50);
-    const flat = groupMessages(all).flatMap((item) => (item.kind === "message" ? [item.message] : [...item.work, ...item.parts]));
+    const flat = groupMessages(all).items.flatMap((item) => (item.kind === "message" ? [item.message] : [...item.work, ...item.parts]));
     const first = flat.findIndex((m) => m.sender === "system");
     expect(flat.slice(first, first + 4).map((m) => [m.sender, m.sessionId])).toEqual([
       ["system", null],
@@ -1132,5 +1135,136 @@ describe("shell list and rail selectors", () => {
     expect(after).toHaveLength(2);
     expect(after.at(-1)?.line.summary).toBe("disk full");
     expect(workerOutcomesOf(failed, targetWorker)).toBe(after);
+  });
+
+  it("groupMessages with checklists and turnProgress keep stable references and invalidate immediately on changes", () => {
+    const checklistMsg = (id: number, status: "in_progress" | "completed") =>
+      makeMessage({
+        id,
+        conversationId: PM_CONVERSATION,
+        kind: "checklist",
+        text: "",
+        collapsed: true,
+        meta: {
+          checklist: [
+            { id: "a", title: "Read files", activeTitle: "Reading files", status: "completed" },
+            { id: "b", title: "Run tests", activeTitle: "Running tests", status },
+          ],
+        },
+      });
+    const base: Message[] = [
+      makeUserMessage({ id: 1, conversationId: PM_CONVERSATION, text: "开始" }),
+      checklistMsg(2, "in_progress"),
+      makeToolMessage({ id: 3, conversationId: PM_CONVERSATION, text: "Read: a.ts" }),
+      checklistMsg(4, "completed"),
+      makeToolMessage({ id: 5, conversationId: PM_CONVERSATION, text: "Bash: pnpm test" }),
+      makeMessage({ id: 6, conversationId: PM_CONVERSATION, text: "好了" }),
+    ];
+
+    const grouped = groupMessages(base);
+    expect(groupMessages(base)).toBe(grouped);
+    const turn = grouped.items.find((item) => item.kind === "turn")!;
+    expect(turn.checklists.map((m) => m.id)).toEqual([2, 4]);
+    expect(turn.work.map((m) => m.id)).toEqual([3, 5]);
+
+    const nextMessages = [...base, checklistMsg(7, "completed")];
+    const nextGrouped = groupMessages(nextMessages);
+    expect(nextGrouped).not.toBe(grouped);
+    expect(groupMessages(nextMessages)).toBe(nextGrouped);
+
+    const model = turnProgress(turn.work, turn.checklists);
+    expect(turnProgress(turn.work, turn.checklists)).toBe(model);
+    expect(turnProgress([...turn.work], [...turn.checklists])).toBe(model);
+    expect(turnProgress(turn.work, [...turn.checklists, checklistMsg(8, "completed")])).not.toBe(model);
+    expect(turnProgress([...turn.work, makeToolMessage({ id: 9, conversationId: PM_CONVERSATION })], turn.checklists)).not.toBe(model);
+
+    const onlyChecklist = turnProgress([], [checklistMsg(10, "in_progress")]);
+    expect(turnProgress([], [onlyChecklist.steps ? checklistMsg(10, "in_progress") : checklistMsg(10, "in_progress")])).not.toBe(onlyChecklist);
+    const anchor = [checklistMsg(11, "in_progress")];
+    const stableChecklistOnly = turnProgress([], anchor);
+    expect(turnProgress([], [...anchor])).toBe(stableChecklistOnly);
+
+    const bigWork = Array.from({ length: 300 }, (_, i) => makeToolMessage({ id: 100 + i * 2, conversationId: PM_CONVERSATION }));
+    const bigChecklists = Array.from({ length: 200 }, (_, i) => checklistMsg(101 + i * 2, i % 2 === 0 ? "in_progress" : "completed"));
+    expect(medianMs(21, () => void turnProgress([...bigWork], [...bigChecklists]))).toBeLessThan(5);
+  });
+
+  it("work panel selectors (activeWorkOf, graphFlowOf, horizontalLayoutOf, verticalRowsOf, completedDaysOf) keep stable references and stay fast at 1-month scale", () => {
+    const state = monthState();
+    const workers = workersOf(state, 1);
+    const makeStep = (key: string, sortOrder: number, status: TaskNode["status"]): TaskNode => ({
+      key,
+      title: `Step ${key}`,
+      status,
+      waitingFor: null,
+      skipped: false,
+      sortOrder,
+      activeWorkerId: null,
+      workerIds: [],
+      artifact: null,
+      gateQuestion: null,
+      gateOptions: [],
+      gateSummaryMd: null,
+      gateRecommended: null,
+      gateAskMessageId: null,
+      decision: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const graphs: TaskGraph[] = Array.from({ length: 4 }, (_, i) => ({
+      id: i + 1,
+      projectId: 1,
+      pmId: 1,
+      conversationId: PM_CONVERSATION,
+      title: `Graph ${i + 1}`,
+      status: "active",
+      originMsgId: null,
+      nodes: [
+        makeStep("a", 0, "done"),
+        makeStep("b", 1, "running"),
+        makeStep("c", 2, "running"),
+        makeStep("d", 3, "pending"),
+      ],
+      edges: [
+        { fromKey: "a", toKey: "b" },
+        { fromKey: "a", toKey: "c" },
+        { fromKey: "b", toKey: "d" },
+        { fromKey: "c", toKey: "d" },
+      ],
+      createdAt: 1000,
+      updatedAt: 1000 + i,
+      completedAt: null,
+    }));
+
+    const work0 = activeWorkOf(graphs, workers);
+    expect(activeWorkOf(graphs, workers)).toBe(work0);
+    const measure: MeasureStepText = (t) => t.length * 8;
+    const flow0 = graphFlowOf(graphs[0]!);
+    expect(graphFlowOf(graphs[0]!)).toBe(flow0);
+    const layout0 = horizontalLayoutOf(flow0, measure);
+    expect(horizontalLayoutOf(flow0, measure)).toBe(layout0);
+    expect(verticalRowsOf(flow0)).toBe(verticalRowsOf(flow0));
+
+    const now = new Date(2026, 10, 25, 16, 0, 0).getTime();
+    const pages = Array.from({ length: 8 }, (_, p) => ({
+      total: 400,
+      next: null,
+      items: Array.from({ length: 50 }, (_, i) => {
+        const idx = p * 50 + i + 1;
+        return {
+          kind: "worker" as const,
+          conversationId: idx,
+          workerId: idx,
+          title: `Done ${idx}`,
+          outcome: "done" as const,
+          finishedAt: now - idx * 3_600_000,
+          prUrl: null,
+        };
+      }),
+    }));
+    const days0 = completedDaysOf(pages, now);
+    expect(completedDaysOf(pages, now)).toBe(days0);
+    expect(days0.reduce((sum, d) => sum + d.items.length, 0)).toBe(400);
+    expect(medianMs(21, () => void completedDaysOf([...pages], now))).toBeLessThan(15);
   });
 });

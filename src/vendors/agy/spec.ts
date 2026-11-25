@@ -114,6 +114,7 @@ export default defineVendor({
       read_resource: "connector_resource",
     },
   },
+  checklist: { sources: [] },
   skillSignals: {
     outputField: "output",
     // read_file output has no body ('14 lines, 310 bytes'), so match on the Path argument.

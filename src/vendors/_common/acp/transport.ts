@@ -11,7 +11,7 @@ import {
   type Stream,
 } from "@agentclientprotocol/sdk/unstable";
 import { scanSecretGlobs, type ReadonlySandboxInput } from "../../../daemon/driver/write-scope.ts";
-import { MAX_MESSAGE_BYTES, PRODUCT_NAME, type ReadonlyPolicy } from "../../../shared/index.ts";
+import { MAX_MESSAGE_BYTES, PRODUCT_NAME, vendorSpec, type ChecklistUpdate, type ReadonlyPolicy } from "../../../shared/index.ts";
 import { realpathOrSelf, type AcpProc } from "./driver-state.ts";
 import { decideAcpPermission } from "./protocol.ts";
 import type { AcpDriverConfig, AcpLaunchContext } from "./types.ts";
@@ -120,9 +120,11 @@ export function createAcpClientApp(
     proc(): AcpProc;
     isShuttingDown(): boolean;
     onSessionUpdate(params: SessionNotification): void;
+    onChecklist(update: ChecklistUpdate): void;
   },
 ): ReturnType<typeof client> {
   const clientInfo = config.clientInfo ?? { name: PRODUCT_NAME, version: "0.0.0" };
+  const fromExtension = vendorSpec(config.vendor).checklist.sources.includes("extension") ? config.checklist?.fromExtension : undefined;
   return client({ name: clientInfo.name })
     .onRequest(methods.client.session.requestPermission, async (ctx) => {
       const proc = deps.proc();
@@ -144,6 +146,11 @@ export function createAcpClientApp(
       return { action: "decline" };
     })
     .onRequest("*", async (ctx) => {
+      const checklist = fromExtension?.(ctx.method, ctx.params);
+      if (checklist) {
+        if (!ctx.signal.aborted) deps.onChecklist(checklist);
+        return {};
+      }
       if (config.extensions?.onBlockingRequest) {
         const proc = deps.proc();
         const result = await config.extensions.onBlockingRequest({
@@ -163,6 +170,11 @@ export function createAcpClientApp(
       deps.onSessionUpdate(ctx.params);
     })
     .onNotification("*", (ctx) => {
+      const checklist = fromExtension?.(ctx.method, ctx.params);
+      if (checklist) {
+        deps.onChecklist(checklist);
+        return;
+      }
       config.extensions?.onNotification?.({
         method: ctx.method,
         params: ctx.params,

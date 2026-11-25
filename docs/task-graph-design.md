@@ -9,7 +9,7 @@ Bellwood models multi-step project work as a persistent directed acyclic Task Gr
 Every node (`TaskGraphNode` in `src/shared/domain.ts`) uses one node shape and transitions across four states:
 
 1. **`pending`**: Waiting for upstream dependencies (`task_graph_edges`) to reach `done`.
-2. **`running`**: Dispatched to an active Worker (`Piece`) in an isolated `git worktree` (or the main folder when `--no-worktree` is set).
+2. **`running`**: Dispatched to an active Worker in an isolated `git worktree` (or the main folder when `--no-worktree` is set).
 3. **`waiting`**: Paused on a human or PM gate (`waitingFor: "user"` or `waitingFor: "pm"`):
    - `waitingFor: "user"`: A `confirm: true` user checkpoint, a `hub graph ask` decision card, or a system-generated `UserBlocker` card (for example when the target vendor CLI is signed out or uninstalled on that computer).
    - `waitingFor: "pm"`: A Worker reported `状态: 有问题` or `放弃了`, reported a non-empty `偏离` (scope deviation), failed its review check, or hit an unexpected process error.

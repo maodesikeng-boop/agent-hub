@@ -9,7 +9,7 @@ The approved implementation follows the choices below.
 ### Files to review
 
 - Design document: `docs/worker-no-outer-sandbox-design.md` (this file)
-- Database migration: `migrations/0051_worker_sandbox_approvals.sql` and `migrations/manifest.sha256`
+- Database migration: `migrations/0053_worker_sandbox_approvals.sql` and `migrations/manifest.sha256`
 - Shared types and validation contracts: `src/shared/sandbox-approval.ts`, `src/vendors/types.ts`, `src/shared/driver.ts`, `src/shared/domain.ts`, `src/shared/hub.ts`, `src/shared/api.ts`, `src/shared/ledger.ts`, `src/shared/limits.ts`, `src/shared/resource-registry.ts`
 - Ledger, UI server, and Web UI skeletons: `src/daemon/ledger/sandbox-approvals.ts`, `src/daemon/ui-server/routes-sandbox-approvals.ts`, `src/web/components/SandboxApprovalCard.tsx`
 - Planned test suites (`it.todo`): `src/shared/sandbox-approval.test.ts`, `src/daemon/ledger/sandbox-approvals.test.ts`, `src/daemon/ui-server/routes-sandbox-approvals.test.ts`, `src/daemon/sandbox-bypass-launch.test.ts`, `src/web/components/SandboxApprovalCard.test.tsx`
@@ -166,7 +166,7 @@ All other Workers continue running inside Bellwood's outer OS sandbox unchanged.
 
 ### 4. Performance and bounds
 
-- **New SQLite tables (`migrations/0051_worker_sandbox_approvals.sql`)**:
+- **New SQLite tables (`migrations/0053_worker_sandbox_approvals.sql`)**:
   - `worker_sandbox_approvals` (`STRICT`): at most 1 row per Worker that requests no-outer-sandbox (`UNIQUE(worker_id)`). For a 1-month workload of 300 Workers, even if every Worker requested Computer Use, table size stays at most 300 rows (under 150 KB).
   - `task_graph_step_sandbox` (`STRICT`): side table matching `task_graph_step_capabilities` (`migrations/0044_capability_scopes.sql`), storing `no_outer_sandbox` only for steps that opt in (`ON DELETE CASCADE` from `task_graph_steps`). Zero row overhead for normal Task Graph steps.
 - **Bounded retention and `RESOURCE_REGISTRY`**:
@@ -233,7 +233,7 @@ In the implementation PR (Step 2/3), update or delete every conflicting old clai
 
 | File | Role | Key exported contracts | Test file (`it.todo`) |
 | --- | --- | --- | --- |
-| `migrations/0051_worker_sandbox_approvals.sql` & `migrations/manifest.sha256` | Schema for per-Worker approval records and Task Graph step opt-in | Tables `worker_sandbox_approvals`, `task_graph_step_sandbox` | `test/migration.test.ts`, `src/daemon/resources/registry.test.ts` |
+| `migrations/0053_worker_sandbox_approvals.sql` & `migrations/manifest.sha256` | Schema for per-Worker approval records and Task Graph step opt-in | Tables `worker_sandbox_approvals`, `task_graph_step_sandbox` | `test/migration.test.ts`, `src/daemon/resources/registry.test.ts` |
 | `src/shared/sandbox-approval.ts` | Shared types, validation rules, launch-mode resolver, card copy builders | `SandboxApprovalRecord`, `SandboxApprovalSummary`, `NoOuterSandboxValidationResult`, `eligibleComputerUseCapabilities`, `validateNoOuterSandboxRequest`, `resolveOuterSandboxLaunchMode`, `formatSandboxApprovalCardText`, `formatSandboxApprovalRejectedNotice` | `src/shared/sandbox-approval.test.ts` |
 | `src/vendors/types.ts` | Vendor built-in sandbox capability metadata | `VendorBuiltInSandboxSpec`, `VendorCapabilities.builtInSandbox` | `src/shared/sandbox-approval.test.ts` |
 | `src/shared/driver.ts` | Launch descriptor extension | `LaunchFilesBase.outerSandbox?: WorkerOuterSandboxMode` | `src/daemon/sandbox-bypass-launch.test.ts` |
@@ -244,7 +244,7 @@ In the implementation PR (Step 2/3), update or delete every conflicting old clai
 | `src/shared/limits.ts` & `src/shared/resource-registry.ts` | Retention limits and canonical resource tracking | `SANDBOX_APPROVAL_TASK_SUMMARY_MAX_CHARS`, `SANDBOX_APPROVALS_RETENTION_DAYS`, `SANDBOX_APPROVALS_TERMINAL_MAX_ROWS`, `PENDING_SANDBOX_APPROVALS_SNAPSHOT_MAX` | `src/daemon/resources/registry.test.ts` |
 | `src/daemon/ledger/sandbox-approvals.ts` | SQLite persistence, pending hold, human decision, revocation, pruning | `createSandboxApprovalStore`, `SandboxApprovalStore`, `readStepNoOuterSandbox`, `writeStepNoOuterSandbox` | `src/daemon/ledger/sandbox-approvals.test.ts` |
 | `src/daemon/ui-server/routes-sandbox-approvals.ts` | Authenticated human-only HTTP endpoint | `decideSandboxApprovalBodySchema`, `registerSandboxApprovalRoutes` | `src/daemon/ui-server/routes-sandbox-approvals.test.ts` |
-| `src/web/components/SandboxApprovalCard.tsx` | Inline PM chat, RightRail, and Router confirmation card | `SandboxApprovalCard`, `SandboxApprovalCardProps` | `src/web/components/SandboxApprovalCard.test.tsx` |
+| `src/web/components/SandboxApprovalCard.tsx` | Confirmation card in PM chat, the Task Graph dialog, and Router | `SandboxApprovalCard`, `SandboxApprovalCardProps` | `src/web/components/SandboxApprovalCard.test.tsx` |
 
 #### Code-hygiene constraint for Step 2/3
 

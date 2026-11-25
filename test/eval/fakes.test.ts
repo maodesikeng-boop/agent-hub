@@ -8,7 +8,8 @@ import { shortTmp } from "../e2e/harness.ts";
 import { openDatabase } from "../../src/daemon/store/db.ts";
 import { migrate } from "../../src/daemon/store/migrate.ts";
 import { createLedger } from "../../src/daemon/ledger/index.ts";
-import { readFacts, readJsonl } from "./facts.ts";
+import { readJsonLog } from "../append-log.ts";
+import { readFacts } from "./facts.ts";
 import { route, settingsWithoutOwnSandbox, type RouterConfig } from "./fakes/claude-router.ts";
 import { RECORD_ONLY_TOOLS, claudeEnvScript, isolationEnv, pmSandboxProfile, realGitPath, scrubbedEnvNames, writeShims } from "./isolation.ts";
 import { REPLAY_DIR, SCENARIOS, scenarioById } from "./scenarios.ts";
@@ -25,7 +26,7 @@ function setup(scenarioId: ScenarioId) {
   writeGhReplay(paths.ghDir, scenarioById(scenarioId));
   const env = { ...process.env, PATH: `${paths.binDir}:${process.env.PATH}`, EVAL_GH_DIR: paths.ghDir, EVAL_RECORD_FILE: paths.recordFile };
   const run = (cmd: string, args: string[], cwd = dir) => spawnSync(cmd, args, { cwd, env, encoding: "utf8" });
-  return { dir, paths, run, ghCalls: () => readJsonl<GhCall>(join(paths.ghDir, "calls.jsonl")), recorded: () => readJsonl<RecordedCall>(paths.recordFile) };
+  return { dir, paths, run, ghCalls: () => readJsonLog<GhCall>(join(paths.ghDir, "calls.jsonl")), recorded: () => readJsonLog<RecordedCall>(paths.recordFile) };
 }
 
 describe("gh 替身", () => {

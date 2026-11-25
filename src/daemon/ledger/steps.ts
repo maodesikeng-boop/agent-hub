@@ -96,7 +96,7 @@ export function createLedgerSteps(ctx: LedgerContext) {
     );
   };
 
-  const afterDriverEvent = (session: AgentSessionRow, event: DriverEvent) => {
+  const afterDriverEvent = (session: AgentSessionRow, event: DriverEvent, openTools?: readonly { toolUseId: string }[]) => {
     if (session.role !== "worker") return;
     const sessionId = session.id;
     switch (event.type) {
@@ -131,7 +131,9 @@ export function createLedgerSteps(ctx: LedgerContext) {
         return;
       case "agent.tool_result":
         if (event.parentToolUseId !== undefined) return;
-        for (const toolUseId of event.toolUseIds) insert(sessionId, { kind: "tool_result", toolUseId });
+        for (const { toolUseId } of openTools ?? []) {
+          if (event.toolUseIds.includes(toolUseId)) insert(sessionId, { kind: "tool_result", toolUseId });
+        }
         return;
       case "turn.ended": {
         const outcome: TurnOutcome = event.interrupted ? "interrupted" : event.ok ? "ok" : "failed";

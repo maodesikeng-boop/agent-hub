@@ -2,6 +2,7 @@ export * from "./actions.ts";
 export * from "./api.ts";
 export * from "./attachments.ts";
 export * from "./card-text.ts";
+export * from "./checklist.ts";
 export * from "./decisions.ts";
 export * from "./deliverables.ts";
 export * from "./domain.ts";
