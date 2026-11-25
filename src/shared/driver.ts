@@ -2,6 +2,7 @@ import type { ComposerCommand } from "./api.ts";
 import type { AgentSessionRow, AgentStep, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionCapabilities } from "./pm-capabilities.ts";
 import type { ReadonlyPolicy } from "./readonly-policy.ts";
+import type { WorkerOuterSandboxMode } from "./sandbox-approval.ts";
 import type { SessionStore } from "./store.ts";
 import type { WriteScope } from "./write-scope.ts";
 import { HUB_COMMAND } from "./names.ts";
@@ -274,6 +275,7 @@ interface LaunchFilesBase {
   fingerprint: string;
   backgroundHoldMaxMs?: number;
   writeScope?: WriteScope;
+  outerSandbox?: WorkerOuterSandboxMode;
   capabilities?: SessionCapabilities;
   capabilityCheck?: LaunchCapabilityCheck;
   personaRevision?: number;

@@ -140,6 +140,7 @@ export interface HubArgsMap {
     caps?: WorkerCapabilityMode;
     allow?: string[];
     noWorktree?: boolean;
+    noOuterSandbox?: boolean;
     node?: TaskNodeKey;
     graphId?: TaskGraphId;
   };
@@ -226,6 +227,7 @@ export interface CreateTaskGraphNodeInput {
   effort?: string;
   maxTime?: string | number;
   readonly?: boolean;
+  noOuterSandbox?: boolean;
   caps?: WorkerCapabilityMode;
   allow?: string[];
   confirm?: boolean;
@@ -263,6 +265,7 @@ export interface PatchTaskGraphNodeInput {
   effort?: string | null;
   maxTime?: string | number | null;
   readonly?: boolean;
+  noOuterSandbox?: boolean;
   caps?: WorkerCapabilityMode | null;
   allow?: string[];
   confirm?: boolean;

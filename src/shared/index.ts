@@ -18,6 +18,7 @@ export * from "./pm-capabilities.ts";
 export * from "./providers.ts";
 export * from "./router-model.ts";
 export * from "./router.ts";
+export * from "./sandbox-approval.ts";
 export * from "./schedule.ts";
 export * from "./secret-paths.ts";
 export * from "./server-info.ts";

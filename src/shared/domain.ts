@@ -9,6 +9,7 @@ import {
 } from "./limits.ts";
 import { deliverablesOf, type Deliverable } from "./deliverables.ts";
 import type { ReviewTarget, StoredReviewVerdict } from "./review.ts";
+import type { SandboxApprovalRef } from "./sandbox-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
@@ -291,6 +292,7 @@ export type AskMeta = {
   recommended?: string;
   gateRef?: GateRef;
   blockerRef?: BlockerRef;
+  sandboxApprovalRef?: SandboxApprovalRef;
   chosenOption?: string;
   answerNote?: string;
   closed?: true;

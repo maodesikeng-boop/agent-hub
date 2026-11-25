@@ -42,6 +42,8 @@ import {
   ROUTER_COMMANDS_RETENTION_MAX,
   ROUTER_ITEMS_TERMINAL_MAX_ROWS,
   ROUTER_ITEM_RETENTION_DAYS,
+  SANDBOX_APPROVALS_RETENTION_DAYS,
+  SANDBOX_APPROVALS_TERMINAL_MAX_ROWS,
   SENT_FILES_DISK_MAX_BYTES,
   SENT_FILES_RETENTION_DAYS,
   SESSION_MAX_AGE_MS,
@@ -173,6 +175,11 @@ const USER_BLOCKER_LIMITS: readonly ResourceLimitRef[] = [
   limit("USER_BLOCKERS_RESOLVED_KEEP", USER_BLOCKERS_RESOLVED_KEEP, "rows"),
 ];
 
+const SANDBOX_APPROVAL_LIMITS: readonly ResourceLimitRef[] = [
+  limit("SANDBOX_APPROVALS_RETENTION_DAYS", SANDBOX_APPROVALS_RETENTION_DAYS, "days"),
+  limit("SANDBOX_APPROVALS_TERMINAL_MAX_ROWS", SANDBOX_APPROVALS_TERMINAL_MAX_ROWS, "rows"),
+];
+
 const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("messages", "growing", "src/daemon/ledger/messages.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/db-table-retention.ts", "automatic", [
     ...WORKER_RETENTION_LIMITS,
@@ -214,6 +221,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("task_graph_steps", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_edges", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_step_capabilities", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
+  table("task_graph_step_sandbox", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("feishu_posts", "growing", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "automatic", [
     limit("FEISHU_POST_RETENTION_DAYS", FEISHU_POST_RETENTION_DAYS, "days"),
     limit("FEISHU_POSTS_MAX_ROWS", FEISHU_POSTS_MAX_ROWS, "rows"),
@@ -238,6 +246,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("user_blocker_cards", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
   table("user_blocker_steps", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
   table("user_blocker_workers", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
+  table("worker_sandbox_approvals", "growing", "src/daemon/ledger/sandbox-approvals.ts", "src/daemon/ledger/sandbox-approvals.ts, src/daemon/ledger/worker-retention.ts", "automatic", SANDBOX_APPROVAL_LIMITS),
   table("loaded_skills", "growing", "src/daemon/ledger/loaded-skills.ts", "src/daemon/ledger/loaded-skills.ts", "automatic", [
     limit("SKILL_CARRYOVER_RECORDS_MAX", SKILL_CARRYOVER_RECORDS_MAX, "rows"),
   ]),
