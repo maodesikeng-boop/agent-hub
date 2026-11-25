@@ -32,6 +32,8 @@ export interface HandlerDeps {
   ledger: Pick<
     Ledger,
     | "getMessage"
+    | "isWorkerPmNoticeActionable"
+    | "reconcileWorktreeBranches"
     | "onActionFailed"
     | "refreshSessionState"
     | "stopMessage"
@@ -86,11 +88,25 @@ function canSendTo(message: Message | null, sessionId: number): message is Messa
     (message.status === "queued" || message.status === "delivered" || message.status === "processing");
 }
 
+function stopStaleNotice(deps: HandlerDeps, message: Message): boolean {
+  if (message.sender !== "system" || message.workerId === null || deps.ledger.isWorkerPmNoticeActionable?.(message.id) !== false) return false;
+  deps.ledger.stopMessage(message.id, message.sessionId ?? undefined);
+  return true;
+}
+
+export function canDeliverSystemMessage(
+  ledger: Pick<HandlerDeps["ledger"], "getMessage" | "isWorkerPmNoticeActionable">, sessionId: number, messageId: number,
+): boolean {
+  const message = ledger.getMessage(messageId);
+  return canSendTo(message, sessionId) && (message.workerId === null || ledger.isWorkerPmNoticeActionable?.(messageId) !== false);
+}
+
 export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"session.send"> {
   return async (action): Promise<ActionResult> => {
     const { sessionId, messageId, source, resend, recovery } = action.params;
     let message = deps.ledger.getMessage(messageId);
     if (!canSendTo(message, sessionId)) return { kind: "done" };
+    if (stopStaleNotice(deps, message)) return { kind: "done" };
     if (deps.ledger.waitsForTurnCompletion(sessionId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "turn_completion" };
     // Hold until the Worker has started and its brief is written, so the session does not start early.
     if (deps.ledger.waitsForFirstTurn(sessionId, messageId)) return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" };
@@ -100,7 +116,16 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       const wait = rateLimitWaitMs(deps, sessionId);
       if (wait !== null) return { kind: "later", delayMs: Math.min(wait + RATE_LIMIT_RECHECK_PAD_MS, RATE_LIMIT_RECHECK_MAX_MS), reason: "rate_limited" };
     }
-    const probeTarget = deps.ledger.graphDeliveryProbeTarget?.(messageId) ?? null;
+    let probeTarget = deps.ledger.graphDeliveryProbeTarget?.(messageId) ?? null;
+    if (probeTarget !== null && deps.ledger.reconcileWorktreeBranches) {
+      await deps.ledger.reconcileWorktreeBranches({ graphId: probeTarget.graphId });
+      probeTarget = deps.ledger.graphDeliveryProbeTarget?.(messageId) ?? null;
+      const refreshed = deps.ledger.getMessage(messageId);
+      if (!canSendTo(refreshed, sessionId)) return { kind: "done" };
+      if (deps.ledger.waitsForTurnCompletion(sessionId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "turn_completion" };
+      if (deps.ledger.waitsForHandover(messageId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "handover" };
+      message = refreshed;
+    }
     if (probeTarget !== null && (deps.probeDiffNumstat || deps.probePr)) {
       const fileMap = new Map<string, DiffFileStat>();
       let probedAnyDiff = false;
@@ -143,6 +168,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       if (deps.ledger.waitsForHandover(messageId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "handover" };
       message = refreshed;
     }
+    if (stopStaleNotice(deps, message)) return { kind: "done" };
     let result;
     const { prefixes, text } = deps.ledger.deliveryOf(message);
     try {
@@ -215,7 +241,7 @@ export function createReviewObserver(deps: {
 }
 
 export interface WorktreeHandlerDeps {
-  ledger: Pick<Ledger, "getWorktreeTask" | "onSetupStarted" | "onWorktreeCreated" | "recordReviewSnapshot">;
+  ledger: Pick<Ledger, "reconcileWorkerGraph" | "getWorktreeTask" | "onSetupStarted" | "onWorktreeCreated" | "recordReviewSnapshot">;
   observeReview: ObserveReview;
   addWorktree: (options: AddWorktreeOptions) => Promise<AddWorktreeResult>;
   setup: Pick<SetupRunner, "start">;
@@ -236,6 +262,7 @@ export interface WorktreeHandlerDeps {
 export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHandler<"worktree.create"> {
   return async (action) => {
     const { workerId } = action.params;
+    await deps.ledger.reconcileWorkerGraph?.(workerId);
     const task = deps.ledger.getWorktreeTask(workerId);
     if (task === null || task.status === "ended") return { kind: "done" };
     const placement = deps.resolveWorktreePlacement

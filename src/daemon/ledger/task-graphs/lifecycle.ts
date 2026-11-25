@@ -35,7 +35,7 @@ import { emptyProgress, type PmCaller, type ProgressResult, type TaskGraphCtx, t
 export function show(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.show">): HubResult<"graph.show"> {
   const row = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: false });
   const graph = loadGraph(g, row.id)!;
-  return { text: formatGraphText(graph), data: { graph } };
+  return { text: formatGraphText(graph, true, { ...g, pmVendor: caller.vendor }), data: { graph } };
 }
 
 export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.list">): HubResult<"graph.list"> {
@@ -55,11 +55,11 @@ export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.lis
             caller.pmId,
             MAX_ACTIVE_GRAPHS_PER_PROJECT,
           );
-  const graphs = hydrateGraphs(g, rows);
+  const graphs = hydrateGraphs(g, rows, true);
   if (graphs.length === 0) {
     return { text: filtered ? "还没有符合条件的任务图。" : "当前没有活跃的任务图。", data: { graphs: [] } };
   }
-  return { text: graphs.map((graph) => formatGraphText(graph, false)).join("\n\n"), data: { graphs } };
+  return { text: graphs.map((graph) => formatGraphText(graph, false, { ...g, pmVendor: caller.vendor })).join("\n\n"), data: { graphs } };
 }
 
 export function listProjectHistory(g: TaskGraphCtx, projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage {
@@ -187,7 +187,7 @@ export function skipIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
   const nodeKey = validateNodeKey(args.nodeKey);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: true });
   const { graph, progress } = skipNodeInternalIn(g, p, graphRow, nodeKey, args.reason, false, caller, context);
-  return { text: `已跳过节点「${nodeKey}」${unlockedNoteOf(progress, graph)}\n${formatGraphText(graph)}`, data: { graph } };
+  return { text: `已跳过节点「${nodeKey}」${unlockedNoteOf(progress, graph)}\n${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}`, data: { graph } };
 }
 
 export function skipNode(g: TaskGraphCtx, graphId: TaskGraphId, rawNodeKey: TaskNodeKey, input: SkipTaskNodeRequest): SkipTaskNodeResponse {

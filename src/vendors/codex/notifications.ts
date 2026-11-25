@@ -1,3 +1,4 @@
+import { positiveContextTokens, preservePositiveContext } from "../../daemon/driver/usage.ts";
 import { lineUuid } from "../../daemon/driver/protocol.ts";
 import { toolResultOutputs } from "../_common/tool-output.ts";
 import {
@@ -218,8 +219,8 @@ function onTokenUsageUpdated(host: CodexDriverHost, st: SessionState, proc: Proc
   st.lastTurnResultUsage = parsed.nextState.turnResultUsage;
   st.turnUsageStepSeq = parsed.nextState.stepSeq;
   if (parsed.duplicate) return;
-  st.lastTurnContext = parsed.context;
+  st.lastTurnContext = positiveContextTokens(parsed.context) ?? st.lastTurnContext;
   const row = host.row(st);
   const live = row ? st.turnUsage.observe(parsed.observeObj, row.usage) : null;
-  if (live) host.pushUsage(st, { ...live, context: parsed.context });
+  if (live) host.pushUsage(st, { ...live, context: preservePositiveContext(st.lastTurnContext, live.context) });
 }

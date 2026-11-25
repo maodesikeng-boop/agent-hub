@@ -17,6 +17,23 @@ import { workerWorkspaceSection } from "../prompt.ts";
 
 const charLen = (s: string): number => [...s].length;
 const SAFE_UPSTREAM_STEP_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const UPSTREAM_HANDOFF_HEADING = /^(?:## 上一步交给你的话（原样转交）|#{2,3} (?:追溯最近未跳过上游)?「[^\n]+交给你的话)$/u;
+
+function handoffBranchLine(branch: string): string {
+  return `- 分支：${branch}`;
+}
+
+export function refreshHandoffBranch(text: string, previous: string, branch: string): string {
+  return text.split(/(?=^#{2,3} (?:上一步交给你的话|(?:追溯最近未跳过上游)?「|用户拍板|项目经理的补充))/mu).map((section) => {
+    const lines = section.split("\n");
+    if (!UPSTREAM_HANDOFF_HEADING.test(lines[0] ?? "")) return section;
+    const metadataIndex = lines.findLastIndex((line) => line === handoffBranchLine(previous));
+    if (metadataIndex < 0 || lines.slice(metadataIndex + 1).some((line) =>
+      line !== "" && !line.startsWith("- 完整汇报：") && !line.endsWith("的交棒见上文）"))) return section;
+    lines[metadataIndex] = handoffBranchLine(branch);
+    return lines.join("\n");
+  }).join("");
+}
 
 export function renderGraphStepTask(input: {
   goal: string | null;
@@ -157,8 +174,8 @@ function formatSourceBlock(
     const inherited = opts.inheritedFromWorkerId !== null && source.workerId === opts.inheritedFromWorkerId;
     metaLines.push(
       inherited
-        ? `- 分支：${source.branch}（你已经在这个工作目录和分支上）`
-        : `- 分支：${source.branch}`,
+        ? `${handoffBranchLine(source.branch)}（你已经在这个工作目录和分支上）`
+        : handoffBranchLine(source.branch),
     );
   }
   if (reportFile !== null) {

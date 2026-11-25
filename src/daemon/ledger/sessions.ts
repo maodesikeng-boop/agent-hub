@@ -18,6 +18,7 @@ import {
   MIN_TOOL_STEP_VISIBLE_MS,
   STREAMING_TEXT_THROTTLE_MS,
 } from "../../shared/limits.ts";
+import type { BackgroundTaskInfo } from "../../shared/driver.ts";
 import { deleteLegacyPendingSessionSend } from "../actions/index.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow } from "../store/index.ts";
@@ -34,6 +35,7 @@ export interface LiveSession {
   step?: AgentStep | null;
   openTools?: Array<{ toolUseId: string; step: AgentStep }>;
   backgroundTasks?: number;
+  backgroundTaskList?: readonly BackgroundTaskInfo[];
   streamingText?: string;
   /** Cached code point count so each delta does not re-count the whole string. */
   streamingChars?: number;

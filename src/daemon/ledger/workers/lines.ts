@@ -15,9 +15,10 @@ export type WorkerLine = {
   turnMessageId: MessageId | null;
   deliver: string | null;
   wakePm?: boolean;
+  completedStep?: true;
 };
 
-export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line: WorkerLine): void {
+export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line: WorkerLine): MessageId | undefined {
   const meta: WorkerMessageMeta = {
     workerId: worker.id,
     workerConversationId: worker.worker_conversation_id,
@@ -26,6 +27,7 @@ export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line:
     event: line.event,
     status: line.status,
     summary: line.summary,
+    ...(line.completedStep ? { completedStep: true } : {}),
   };
   const shouldWakePm = line.wakePm ?? (line.deliver !== null);
   const pmSession = shouldWakePm ? w.sessions.currentSession(worker.pm_conversation_id) : null;
@@ -57,6 +59,7 @@ export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line:
   }
   p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   if (pmSession !== null) w.enqueue(p, { type: "session.send", params: { sessionId: pmSession.id, messageId: row.id, source: "system" } });
+  return row.id;
 }
 
 export function insertPmMessage(w: WorkersCtx, p: Pending, worker: WorkerDbRow, session: AgentSessionRow, text: string, dedupeKey: string): MessageDbRow {

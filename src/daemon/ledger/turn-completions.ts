@@ -23,7 +23,6 @@ export interface TurnCompletionFacts {
   readonly worker: {
     readonly turnStart: MessageId;
     readonly waitingForBackground: boolean;
-    readonly endingAfterStop: boolean;
   } | null;
 }
 

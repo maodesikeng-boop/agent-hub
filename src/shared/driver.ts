@@ -50,9 +50,16 @@ interface CommandsChangedEvent extends DriverEventBase {
   commands: ComposerCommand[];
 }
 
-interface BackgroundChangedEvent extends DriverEventBase {
+export interface BackgroundTaskInfo {
+  id: string;
+  label: string;
+  startedAt: number;
+}
+
+export interface BackgroundChangedEvent extends DriverEventBase {
   type: "background.changed";
   count: number;
+  tasks?: readonly BackgroundTaskInfo[];
 }
 
 interface ContextCompactedEvent extends DriverEventBase {
@@ -300,6 +307,7 @@ export interface DriverOptions {
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   personaNote?: (sessionId: SessionId, sinceRevision: number) => PersonaNote | null;
   sessionPreamble?: (sessionId: SessionId) => string | null;
+  canDeliverSystemMessage?: (sessionId: SessionId, messageId: MessageId) => boolean;
   /** Called when a session finishes an in-progress startup, delivery, or turn and becomes idle in the driver. */
   onSessionQuiescent?: (sessionId: SessionId) => void;
   env?: Record<string, string> | (() => Record<string, string>);

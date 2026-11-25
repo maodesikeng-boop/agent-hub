@@ -49,7 +49,7 @@ import type {
 } from "./domain.ts";
 import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
-import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
+import type { HubArgs, HubCommand, HubResult, HubVendorQuota, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { CapabilitiesPatch, CapabilityPolicy, CapabilityScope, PmCapabilitiesStart, ScopeCapabilities, WorkerCapabilities } from "./pm-capabilities.ts";
 import type { PmLookSetting, SlimeLook } from "./slimes.ts";
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
@@ -221,6 +221,7 @@ export interface HubCallContext {
   prError?: string | null;
   transcript?: string | null;
   modelCatalogs?: readonly ModelCatalog[];
+  vendorQuotas?: Readonly<Partial<Record<AgentVendor, HubVendorQuota>>>;
   graphPrs?: Readonly<Record<string, WorkerPr>>;
   selfReload?: SelfReloadStatus;
   sharedFiles?: readonly SentFile[];
@@ -273,6 +274,12 @@ export interface Ledger extends LedgerHandoverWork {
   workerStartFolder(sessionId: SessionId): string | null;
   workerPrTarget(sessionId: SessionId, workerId: WorkerId): { cwd: string; branch: string } | null;
   workerTranscriptTarget(sessionId: SessionId, workerId: WorkerId): { vendor: string; vendorSessionId: string; cwd: string } | null;
+  listWorktreeBranchTargets?(scope?: { pmId?: PmId; workerId?: WorkerId; graphId?: TaskGraphId }): Array<{ worktreePath: string; branch: string | null }>;
+  syncWorktreeBranch?(worktreePath: string, branch: string): { updatedWorkerIds: WorkerId[]; updatedGraphIds: TaskGraphId[] };
+  isWorkerPmNoticeActionable?(messageId: MessageId): boolean;
+  reconcileWorktreeBranches?(scope: { graphId?: TaskGraphId; workerId?: WorkerId }): Promise<void> | null;
+  reconcileWorkerGraph?(workerId: WorkerId): Promise<void> | null;
+  reconcileHubBranches?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<void> | null;
   graphPrTargets?(sessionId: SessionId, graphId?: TaskGraphId): GraphPrTarget[];
   graphAutoDispatchVendors?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): AgentVendor[];
   graphDeliveryProbeTarget?(messageId: MessageId): {

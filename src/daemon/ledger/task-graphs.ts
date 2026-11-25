@@ -4,6 +4,7 @@ import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import { pushSlimGraphIn } from "./task-graphs/store.ts";
 import { createIn } from "./task-graphs/create.ts";
 import { enrichDeliveryNoteMessage, graphDeliveryProbeTarget, graphPrTargets } from "./task-graphs/delivery.ts";
 import { askOnStepIn, closeStepAskIn, decideIn, decideNode } from "./task-graphs/gate.ts";
@@ -27,8 +28,8 @@ import {
   onWorkerUserBlockedIn,
   prepareWorkerBind,
   releaseUserBlockedStepsIn,
-  workerGraphForkBase,
   workerGraphStatus,
+  workerGraphWorkspacePlan,
 } from "./task-graphs/worker-hooks.ts";
 
 export type { StepWorkspacePlan, TaskGraphWorkersBridge, WorkerBindTarget } from "./task-graphs/types.ts";
@@ -50,6 +51,7 @@ export function createLedgerTaskGraphs(
     write: ctx.write,
     enqueue: ctx.enqueue,
     modelCatalog: ctx.modelCatalog,
+    modelShortLabel: ctx.modelShortLabel,
     sessions,
     messages,
     persona,
@@ -66,6 +68,7 @@ export function createLedgerTaskGraphs(
     (...args: A): R =>
       fn(g.db, ...args);
   return {
+    publishBranchChange: bind(pushSlimGraphIn),
     createIn: bind(createIn),
     show: bind(show),
     list: bind(list),
@@ -94,7 +97,7 @@ export function createLedgerTaskGraphs(
     notifyUserBlockedStepsIn: bind(notifyUserBlockedStepsIn),
     onWorkerResumedIn: bind(onWorkerResumedIn),
     onWorkerEndedIn: bind(onWorkerEndedIn),
-    workerGraphForkBase: bind(workerGraphForkBase),
+    workerGraphWorkspacePlan: bind(workerGraphWorkspacePlan),
     workerGraphStatus: bind(workerGraphStatus),
     activeSnapshotGraphs: bind(activeSnapshotGraphs),
     pmStatusGraphs: bind(pmStatusGraphs),

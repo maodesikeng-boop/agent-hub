@@ -8,7 +8,7 @@ import type { LedgerMessages } from "../messages.ts";
 import type { LedgerPersona } from "../persona.ts";
 import type { LedgerProjects } from "../projects.ts";
 import type { LedgerSessions } from "../sessions.ts";
-import type { WorkerBindTarget } from "../task-graphs.ts";
+import type { StepWorkspacePlan, WorkerBindTarget } from "../task-graphs.ts";
 import type { LedgerTakeover } from "../takeover.ts";
 import type { LedgerUserBlockers } from "../user-blockers.ts";
 
@@ -41,7 +41,7 @@ export interface LedgerWorkersTaskGraphHooks {
   onWorkerUserBlockedIn: (p: Pending, workerId: WorkerId, blocker: UserBlocker) => string | null;
   onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
-  workerGraphForkBase: (workerId: WorkerId) => string | undefined;
+  workerGraphWorkspacePlan: (workerId: WorkerId) => StepWorkspacePlan | undefined;
   workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;
 }
 
@@ -78,7 +78,6 @@ export interface WorkersCtx {
   /** Max message id at turn start, in memory only, so a PM message sent mid-turn cannot make the last reply look older than the previous turn's text. */
   turnStarts: Map<SessionId, MessageId>;
   /** Turns interrupted by endIn are not reported back because the PM stopped them itself. */
-  endInterrupted: Set<SessionId>;
   /** Only the timers live in memory; duration, deadline and reminder state persist in worker_turn_timeouts for restart recovery. */
   maxTimeTimers: Map<ConversationId, MaxTimeTimer>;
   /** A turn that ends with background commands still running is not reported yet, otherwise the PM would get a premature "done". */
