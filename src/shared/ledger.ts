@@ -59,6 +59,7 @@ import type {
   SandboxApprovalId,
   SandboxApprovalRecord,
 } from "./sandbox-approval.ts";
+import type { AppApprovalId, DecideAppApprovalRequest, DecideAppApprovalResponse } from "./app-approval.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
@@ -353,6 +354,12 @@ export interface Ledger extends LedgerHandoverWork {
    */
   decideSandboxApproval?(id: SandboxApprovalId, input: DecideSandboxApprovalRequest): DecideSandboxApprovalResponse;
   getSandboxApproval?(id: SandboxApprovalId): SandboxApprovalRecord | null;
+  /**
+   * Precondition: called only from authenticated human UI routes (never from agent-api); id names a pending app approval.
+   * Postcondition: allow records a grant for that Worker run and app id and settles every live native request for it;
+   * deny records a denial for the same scope. Throws conflict when the card already ended or the Worker is no longer open.
+   */
+  decideAppApproval?(id: AppApprovalId, input: DecideAppApprovalRequest): DecideAppApprovalResponse;
   deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string };
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
