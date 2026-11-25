@@ -1589,6 +1589,13 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
 import { fileURLToPath } from "node:url";
 import { wrapScriptAsPlatformCli } from "../../../../test/fake-cli-shim.ts";
 
-describe("ACP daemon shutdown keeps every in-flight message", () => {
-  it.todo("reports every in-flight batch in the shutdown turn.ended or session.exited event and emits no message.cancelled");
+it.each(["deepseek", "cursor", "kimi", "opencode"] as const)("keeps the in-flight brief when %s shuts down", async (vendor) => {
+  const h = track(makeAcpHarness({ config: { vendor }, script: { turns: [{ waitForCancel: true, textChunks: ["Working"] }] } }));
+  const row = h.addSession({ vendor });
+  await h.driver.send(row.id, { messageIds: [1], source: "user", text: "Start" });
+  await h.waitFor("message.processing");
+  await h.driver.shutdown();
+  expect(h.of("message.cancelled")).toEqual([]);
+  expect([...h.of("turn.ended").filter((e) => e.shutdown), ...h.of("session.exited").filter((e) => e.reason === "shutdown")]
+    .flatMap((e) => e.messageIds)).toContain(1);
 });

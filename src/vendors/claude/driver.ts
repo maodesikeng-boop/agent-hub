@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { claudeChecklistFromToolResult, claudeChecklistFromToolUse, createClaudeChecklistState } from "./checklist.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
@@ -569,7 +570,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   #cancelBatches(st: SessionState, proc: Proc, batches: Batch[], at: number): void {
     if (batches.length === 0) return;
     st.inFlight = st.inFlight.filter((b) => !batches.includes(b));
-    this.releaseOnStop(st, batches, at);
+    this.releaseUntaken(st, batches, untakenReleaseCause(proc.closing, true), at);
     if (!this.busy(st)) {
       this.afterTurn(st, proc);
       this.settled(st);
@@ -700,7 +701,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         st.crashNote = true;
         this.forgetWritten(st, taken);
       }
-      const stopped = reason === "interrupt" || st.stopRequested;
+      const cause = untakenReleaseCause(reason, st.stopRequested);
       st.interruptRequestId = null;
       st.stopRequested = false;
       this.emit(st.id, {
@@ -712,7 +713,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.releaseUntaken(st, untaken, stopped, at);
+      this.releaseUntaken(st, untaken, cause, at);
     } finally {
       for (const query of [...st.commandQueries.values()]) query(null);
       this.resolveInterrupt(st);

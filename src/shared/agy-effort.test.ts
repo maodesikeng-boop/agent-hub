@@ -132,10 +132,33 @@ describe("老数据和右栏的显示：模型 + 档位", () => {
 });
 
 describe("per-model effort support", () => {
-  it.todo("rejects gemini-4-neon with xhigh when the live agy catalog lists neon with low, medium, and high, naming those options");
-  it.todo("accepts a known model with an effort it lists, and a full ID whose suffix it lists");
-  it.todo("rejects a full ID whose suffix the base model does not list");
-  it.todo("passes a model neither the catalog nor the bundled list knows");
-  it.todo("applies the same per-model check to vendors that pass effort as a separate flag");
-  it.todo("rejects the unsupported pair at worker start, graph step validation, and PM default settings");
+  const catalog = {
+    ...bundledModelCatalog("agy"),
+    source: "vendor" as const,
+    models: [{ id: "gemini-4-neon", label: "Gemini 4 Neon", description: null, efforts: ["low", "medium", "high"] }],
+  };
+
+  it.each([
+    ["gemini-4-neon", "xhigh"],
+    ["gemini-4-neon-xhigh", null],
+    ["gemini-4-argon", "xhigh"],
+  ])("rejects an unsupported pair: %s with %s", (model, effort) => {
+    expect(checkAgentSetting({ vendor: "agy", model, effort }, catalog) ?? "").toMatch(/gemini-4-(neon|argon).*xhigh.*low、medium、high/);
+  });
+
+  it.each([
+    ["gemini-4-neon", "high"],
+    ["gemini-4-neon-medium", null],
+    ["unlisted-model", "xhigh"],
+  ])("accepts supported or unknown pairs: %s with %s", (model, effort) => {
+    expect(checkAgentSetting({ vendor: "agy", model, effort }, catalog)).toBeNull();
+  });
+
+  it("also checks vendors that pass effort as a separate flag", () => {
+    const codex = {
+      ...bundledModelCatalog("codex"),
+      models: [{ id: "new-codex", label: "Codex", description: null, efforts: ["low", "high"] }],
+    };
+    expect(checkAgentSetting({ vendor: "codex", model: "new-codex", effort: "xhigh" }, codex) ?? "").toMatch(/new-codex.*low、high/);
+  });
 });

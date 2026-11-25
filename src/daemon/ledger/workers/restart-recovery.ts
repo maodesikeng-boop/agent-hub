@@ -1,20 +1,32 @@
-// Invariant: after restart recovery, every open Worker whose last turn daemon shutdown interrupted either has a
-// message on its way to the vendor or has a turn_failed notice queued for its PM.
-import type { WorkerId } from "../../../shared/domain.ts";
+import type { MessageId } from "../../../shared/domain.ts";
 import type { Pending } from "../context.ts";
+import { SHUTDOWN_INTERRUPTED_REASON } from "../steps.ts";
+import { workerSession } from "./ctx.ts";
+import { insertTurnFailed } from "./reports.ts";
 import type { WorkersCtx } from "./types.ts";
+import type { WorkerDbRow } from "../rows.ts";
 
-/** Reason the PM reads when a Worker turn interrupted by shutdown cannot be resent after restart. */
-export const SHUTDOWN_TURN_NOT_RESENT = "守护进程重启打断了这一轮，重启后没能自动重发";
+const SHUTDOWN_TURN_NOT_RESENT = "守护进程重启打断了这一轮，重启后没能自动重发";
 
-/**
- * Runs after the session recovery query has enqueued its resends in the same transaction.
- * Precondition: the latest turn_ended step of each candidate Worker session carries SHUTDOWN_INTERRUPTED_REASON.
- * Postcondition: for each open Worker whose prepared workspace has no queued, delivered, or processing message and no
- * pending sandbox approval, queues one turn_failed PM notice with SHUTDOWN_TURN_NOT_RESENT (moving its Task Graph
- * step to waiting:pm through the usual failure path) and returns that Worker's ID. Workers with a message on its way
- * are left alone, and a second call in the same restart adds no duplicate notice.
- */
-export function noticeUnresentShutdownTurnsIn(_w: WorkersCtx, _p: Pending): WorkerId[] {
-  throw new Error("Not implemented");
+export function noticeUnresentShutdownTurnsIn(w: WorkersCtx, p: Pending): void {
+  const workers = w.db.all<WorkerDbRow>(
+    `SELECT w.* FROM workers w WHERE w.status = 'open'
+      AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM pm_archives a WHERE a.pm_id = w.pm_id)
+      AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.worker_id = w.id AND a.status = 'pending')`,
+  );
+  for (const worker of workers) {
+    const session = workerSession(w, worker);
+    const turn = w.db.get<{ id: number; kind: string; summary: string | null }>(
+      "SELECT id, kind, summary FROM session_steps WHERE session_id = ? AND kind IN ('turn_ended', 'turn_started') ORDER BY id DESC LIMIT 1",
+      session.id,
+    );
+    if (turn?.kind !== "turn_ended" || turn.summary !== SHUTDOWN_INTERRUPTED_REASON) continue;
+    if (w.db.get("SELECT 1 FROM messages WHERE session_id = ? AND status IN ('queued', 'delivered', 'processing') LIMIT 1", session.id)) continue;
+    const messageId = w.db.get<{ id: MessageId }>(
+      "SELECT id FROM messages WHERE session_id = ? AND sender IN ('pm', 'user') ORDER BY id DESC LIMIT 1", session.id,
+    )?.id;
+    insertTurnFailed(w, p, worker, messageId ?? null, [], SHUTDOWN_TURN_NOT_RESENT);
+    w.db.run("UPDATE session_steps SET summary = ? WHERE id = ?", SHUTDOWN_TURN_NOT_RESENT, turn.id);
+  }
 }

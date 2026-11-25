@@ -49,7 +49,7 @@ type Takeover = ReturnType<typeof planTakeover>;
 type ReviewPlan = Extract<StepWorkspacePlan, { kind: "review" }>;
 type UpstreamInherit = Extract<StepWorkspacePlan, { kind: "inherit" }>;
 type StartTask = { title: string; task: string; pmNote: string | null; stepHasBrief: boolean };
-type StartAgent = { vendor: AgentVendor; model: string | null; effort: string | null; readonly: boolean; capabilities: WorkerCapabilities };
+type StartAgent = { vendor: AgentVendor; model: string | null; effort: string | null; inherited: { model: string | null; effort: string | null }; readonly: boolean; capabilities: WorkerCapabilities };
 type StartWorkspace = {
   reviewPlan: ReviewPlan | null;
   inherit: WorkerDbRow | null;
@@ -130,9 +130,11 @@ function resolveStartAgent(w: WorkersCtx, caller: PmCaller, args: StartArgs, bin
   const reuseStepModel = bindTarget !== undefined && args.vendor === undefined && bindTarget.vendor === vendor;
   const givenModel = typeof args.model === "string" ? args.model.trim() || null : reuseStepModel ? bindTarget.model : null;
   const givenEffort = typeof args.effort === "string" ? args.effort.trim() || null : reuseStepModel ? bindTarget.effort : null;
-  const { model, effort } = checkedModelEffort(w, vendor, givenModel, givenEffort);
+  const inherited =
+    vendor === caller.vendor ? splitModelEffort(vendor, caller.model, caller.effort, w.ctx.modelCatalog(vendor)) : { model: null, effort: null };
+  const { model, effort } = checkedModelEffort(w, vendor, givenModel, givenEffort, inherited);
   const readonly = args.readonly !== undefined ? args.readonly === true : (bindTarget?.readonly ?? false);
-  return { vendor, model, effort, readonly, capabilities: resolveStartCapabilities(args, bindTarget) };
+  return { vendor, model, effort, inherited, readonly, capabilities: resolveStartCapabilities(args, bindTarget) };
 }
 
 function resolveStartCapabilities(args: StartArgs, bindTarget: WorkerBindTarget | undefined): WorkerCapabilities {
@@ -362,9 +364,7 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
     review: space.reviewPlan !== null,
     reviewJson: space.reviewPlan === null ? null : newReviewJson(space.reviewPlan),
   });
-  const inherited =
-    agent.vendor === caller.vendor ? splitModelEffort(agent.vendor, caller.model, caller.effort, w.ctx.modelCatalog(agent.vendor)) : { model: null, effort: null };
-  const session = insertWorkerSessionIn(w, p, worker, card, agent, inherited);
+  const session = insertWorkerSessionIn(w, p, worker, card, agent, agent.inherited);
   const start = { worker, session, card, args, agent, brief, space };
   const firstMessageText = firstMessageOf(w, start, bindTarget, takeover, predecessors);
   kickOffWorkerIn(w, p, {

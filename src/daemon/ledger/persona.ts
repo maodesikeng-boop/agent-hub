@@ -131,14 +131,15 @@ function nextAgent(current: AgentSetting, input: EditPersonaInput, catalogOf?: (
         : { model: current.model, effort: current.effort };
   const model = input.model === undefined ? from.model : optionalSetting(input.model, "模型");
   const effort = input.effort === undefined ? from.effort : normalizeEffortInput(vendor, optionalSetting(input.effort, "思考程度"), catalog);
+  const next = input.model !== undefined && input.effort === undefined
+    ? splitModelEffort(vendor, model, effort, catalog)
+    : { model, effort };
   const problem =
     (input.model !== undefined ? checkModel(vendor, model) : null) ??
     (input.effort !== undefined ? checkEffort(vendor, effort, catalog) : null) ??
-    (input.model !== undefined && input.effort !== undefined ? checkModelEffort(vendor, model, effort, catalog) : null);
+    (touched ? checkModelEffort(vendor, next.model, next.effort, catalog) : null);
   if (problem !== null) throw fail("invalid", problem);
-  return input.model !== undefined && input.effort === undefined
-    ? { vendor, ...splitModelEffort(vendor, model, effort, catalog) }
-    : { vendor, model, effort };
+  return { vendor, ...next };
 }
 export type LedgerPersona = ReturnType<typeof createLedgerPersona>;
 

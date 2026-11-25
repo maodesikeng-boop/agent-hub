@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readJsonLog } from "../../../test/append-log.ts";
 import {
   EMPTY_TOKEN_USAGE,
@@ -46,6 +46,7 @@ class MemorySessionStore implements SessionStore {
 }
 
 export interface FakeCodexTurnScript {
+  interruptOnSigint?: boolean;
   /** 收到 turn/start 后如果为 true 则等待 turn/interrupt 才发 turn/completed(interrupted)。 */
   waitForInterrupt?: boolean;
   /** 如果为 true，收到 turn/interrupt 也不回 turn/completed（测超时强杀）。 */
@@ -186,7 +187,11 @@ function send(obj) {
 
 process.on("SIGINT", () => {
   appendLog({ kind: "signal", signal: "SIGINT" });
-  process.exit(0);
+  if (currentTurn?.turnScript.interruptOnSigint) {
+    currentTurn.aborted = true;
+    completeTurn(currentTurn.threadId, currentTurn.turnId, "interrupted");
+  }
+  process.stdout.write("", () => process.exit(0));
 });
 
 let turnIndex = 0;
@@ -1715,6 +1720,43 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
     expect((starts[1]!.params as { input: Array<{ text: string }> }).input).toEqual([{ type: "text", text: "插一句" }]);
   });
 
+  it("checks a system delivery note before steering into an active turn", async () => {
+    const t = makeCodexHarness({ driver: { canDeliverSystemMessage: () => false } });
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [holdTurn(t.dir)] }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("agent.tool");
+    await t.driver.send(s.id, { messageIds: [2], source: "system", text: "Outdated delivery note" });
+    expect(methods(t)).not.toContain("turn/steer");
+    release(t.dir);
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1] });
+  });
+
+  it.each(["confirmed", "pending", "silent close"])("preserves a %s Codex steer on daemon shutdown", async (kind) => {
+    const t = steerHarness((dir) => [holdTurn(dir, {
+      interruptOnSigint: kind !== "silent close",
+      ...(kind === "pending" ? { deferSteerReply: "error" } : {}),
+    })]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("agent.tool");
+    const sending = t.driver.send(s.id, user(2, "Follow up")).catch((error: unknown) => error);
+    if (kind === "pending") await vi.waitFor(() => expect(methods(t)).toContain("turn/steer"), { timeout: 10_000 });
+    else expect(await sending).toEqual({ kind: "written", midTurn: true });
+    await t.driver.shutdown();
+    if (kind === "silent close") {
+      expect(t.of("session.exited")).toContainEqual(expect.objectContaining({ reason: "shutdown", messageIds: [1] }));
+    } else {
+      expect(t.of("turn.ended")).toContainEqual(expect.objectContaining({ shutdown: true, messageIds: [1] }));
+    }
+    expect(t.of("message.cancelled")).toEqual([]);
+    if (kind !== "pending") {
+      expect(t.of("message.requeued")).toContainEqual(expect.objectContaining({ messageIds: [2] }));
+    } else {
+      expect(await sending).toMatchObject({ code: "spawn_failed", retryable: true });
+    }
+  });
+
   it("停止：turn/completed interrupted 时 steer 了没读到的标已取消（message.cancelled stop），不重发", async () => {
     const t = steerHarness((dir) => [holdTurn(dir), { messageDeltas: ["不该跑"] }]);
     const s = t.addSession();
@@ -2567,8 +2609,3 @@ describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
   });
 });
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
-
-describe("CodexDriver daemon shutdown is not a user stop", () => {
-  it.todo("requeues mid-turn user messages that codex did not echo when the shutdown turn completes as interrupted");
-  it.todo("does not cancel unacknowledged mid-turn user messages whose write fails during shutdown");
-});

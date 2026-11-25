@@ -32,7 +32,8 @@ export interface HandlerDeps {
   ledger: Pick<
     Ledger,
     | "getMessage"
-    | "isWorkerPmNoticeActionable"
+    | "isSystemMessageCurrent"
+    | "retireStaleSystemMessage"
     | "reconcileWorktreeBranches"
     | "onActionFailed"
     | "refreshSessionState"
@@ -88,17 +89,19 @@ function canSendTo(message: Message | null, sessionId: number): message is Messa
     (message.status === "queued" || message.status === "delivered" || message.status === "processing");
 }
 
-function stopStaleNotice(deps: HandlerDeps, message: Message): boolean {
-  if (message.sender !== "system" || message.workerId === null || deps.ledger.isWorkerPmNoticeActionable?.(message.id) !== false) return false;
-  deps.ledger.stopMessage(message.id, message.sessionId ?? undefined);
+type NoticeLedger = Pick<HandlerDeps["ledger"], "isSystemMessageCurrent" | "retireStaleSystemMessage">;
+
+function stopStaleNotice(ledger: NoticeLedger, message: Message): boolean {
+  if (message.sender !== "system" || ledger.isSystemMessageCurrent?.(message.id) !== false) return false;
+  ledger.retireStaleSystemMessage?.(message.id);
   return true;
 }
 
 export function canDeliverSystemMessage(
-  ledger: Pick<HandlerDeps["ledger"], "getMessage" | "isWorkerPmNoticeActionable">, sessionId: number, messageId: number,
+  ledger: Pick<HandlerDeps["ledger"], "getMessage"> & NoticeLedger, sessionId: number, messageId: number,
 ): boolean {
   const message = ledger.getMessage(messageId);
-  return canSendTo(message, sessionId) && (message.workerId === null || ledger.isWorkerPmNoticeActionable?.(messageId) !== false);
+  return canSendTo(message, sessionId) && !stopStaleNotice(ledger, message);
 }
 
 export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"session.send"> {
@@ -106,7 +109,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     const { sessionId, messageId, source, resend, recovery } = action.params;
     let message = deps.ledger.getMessage(messageId);
     if (!canSendTo(message, sessionId)) return { kind: "done" };
-    if (stopStaleNotice(deps, message)) return { kind: "done" };
+    if (stopStaleNotice(deps.ledger, message)) return { kind: "done" };
     if (deps.ledger.waitsForTurnCompletion(sessionId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "turn_completion" };
     // Hold until the Worker has started and its brief is written, so the session does not start early.
     if (deps.ledger.waitsForFirstTurn(sessionId, messageId)) return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" };
@@ -168,7 +171,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       if (deps.ledger.waitsForHandover(messageId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "handover" };
       message = refreshed;
     }
-    if (stopStaleNotice(deps, message)) return { kind: "done" };
+    if (stopStaleNotice(deps.ledger, message)) return { kind: "done" };
     let result;
     const { prefixes, text } = deps.ledger.deliveryOf(message);
     try {

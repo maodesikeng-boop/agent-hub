@@ -208,6 +208,19 @@ describe("审查步骤只查不修", () => {
     expect(msg).toContain("复现：pnpm vitest run a.test.ts，第 2 页重复");
   });
 
+  it("ends the parked reviewer when the PM releases a FAIL verdict", async () => {
+    const { graph, wReview, sha } = await startReview();
+    await reportTurn(wReview, report({ status: "有问题", summary: "Cursor error", verdict: "FAIL", sha, questions: "What next?" }));
+    const review = graphNow(graph.id).nodes[1]!;
+    expect(stateOf(review)).toBe("waiting:pm");
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: review.key, note: "Release approved" });
+    const released = graphNow(graph.id);
+    expect(released.nodes.map(stateOf)).toEqual(["done", "done", "running"]);
+    expect(workerRow(wReview).status).toBe("ended");
+    expect(ledger.isWorkerCleanable(wReview)).toBe(true);
+    expect(db.get("SELECT pm_note FROM task_graph_steps WHERE graph_id = ? AND node_key = ?", graph.id, review.key)).toEqual({ pm_note: "Release approved" });
+  });
+
   it("判 PASS：先登记收尾核对，步骤保持在干；被审分支没变才完成，下游接手实现的目录和分支", async () => {
     const { graph, wReview, impl, sha } = await startReview();
     await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
@@ -418,10 +431,4 @@ describe("审查步骤只查不修", () => {
     expect(docs.branch).toBe(impl.branch);
     expect(docs.review_json).toBeNull();
   });
-});
-
-describe("manual graph done after a FAIL verdict", () => {
-  it.todo("ends the review Worker parked by FAIL when the PM releases the step with graph done");
-  it.todo("keeps the PM's done note and unlocks downstream steps as before");
-  it.todo("queues no stale PM notice from the ended review Worker");
 });

@@ -1,3 +1,4 @@
+import type { UntakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import {
   BaseSessionDriver,
   type BaseBatch,
@@ -41,8 +42,7 @@ export interface SessionDriverHost<
   markDelivered(st: TState, batch: TBatch): void;
   dropBatch(st: TState, batch: TBatch): void;
   forgetWritten(st: TState, batches: Iterable<TBatch | null | undefined>): void;
-  releaseUntaken(st: TState, batches: TBatch[], stopped: boolean, at: number): void;
-  releaseOnStop(st: TState, batches: TBatch[], at: number): void;
+  releaseUntaken(st: TState, batches: TBatch[], cause: UntakenReleaseCause, at: number): void;
   onBackgroundTasksChanged(st: TState, proc: TProc, rawTasks: unknown): void;
   markHealthy(sessionId: SessionId): void;
   setPersonaSeen(st: TState, revision: number | null): void;
@@ -79,8 +79,7 @@ export abstract class VendorSessionDriver<
       markDelivered: (st, batch) => this.markDelivered(st, batch),
       dropBatch: (st, batch) => this.dropBatch(st, batch),
       forgetWritten: (st, batches) => this.forgetWritten(st, batches),
-      releaseUntaken: (st, batches, stopped, at) => this.releaseUntaken(st, batches, stopped, at),
-      releaseOnStop: (st, batches, at) => this.releaseOnStop(st, batches, at),
+      releaseUntaken: (st, batches, cause, at) => this.releaseUntaken(st, batches, cause, at),
       onBackgroundTasksChanged: (st, proc, rawTasks) => this.onBackgroundTasksChanged(st, proc, rawTasks),
       markHealthy: (sessionId) => this.markHealthy(sessionId),
       setPersonaSeen: (st, revision) => this.setPersonaSeen(st, revision),

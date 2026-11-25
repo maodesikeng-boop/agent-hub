@@ -65,13 +65,16 @@ export const assertAgentVendor = (vendor: string): void => {
   if (!isAgentVendor(vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
 };
 
-/** agy encodes effort in the model id, so both spellings are normalized to model plus effort. */
-export function checkedModelEffort(w: WorkersCtx, vendor: AgentVendor, model: string | null, effort: string | null) {
+type ModelEffort = { model: string | null; effort: string | null };
+export function checkedModelEffort(w: WorkersCtx, vendor: AgentVendor, model: string | null, effort: string | null, inherited: ModelEffort) {
   const catalog = w.ctx.modelCatalog(vendor);
   const normalizedEffort = normalizeEffortInput(vendor, effort, catalog);
   const badSetting = checkModel(vendor, model) ?? checkEffort(vendor, normalizedEffort, catalog) ?? checkModelEffort(vendor, model, normalizedEffort, catalog);
   if (badSetting !== null) throw fail("invalid", badSetting);
-  return splitModelEffort(vendor, model, normalizedEffort, catalog);
+  const setting = splitModelEffort(vendor, model, normalizedEffort, catalog);
+  const problem = checkModelEffort(vendor, setting.model ?? inherited.model, setting.effort ?? inherited.effort, catalog);
+  if (problem !== null) throw fail("invalid", problem);
+  return setting;
 }
 
 export type NewWorkerRows = {

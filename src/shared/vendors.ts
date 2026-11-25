@@ -107,32 +107,27 @@ export function splitEffortSuffix(id: string, efforts: readonly string[]): { bas
   return efforts.includes(effort) ? { base: id.slice(0, dash), effort } : null;
 }
 
-/**
- * Thinking levels the vendor accepts for one model.
- * Postcondition: returns the model's effort list from the catalog when it lists the model, else from the vendor's
- * bundled list; for vendors that encode effort in the model ID, a full ID such as `gemini-4-argon-high` is looked up
- * by its base model. Returns null when neither list knows the model or the entry has no effort list, so callers
- * cannot reject what they cannot verify.
- */
-export function modelEffortsOf(_vendor: AgentVendor, _model: string | null, _catalog?: ModelCatalog | null): readonly string[] | null {
-  throw new Error("Not implemented");
+function modelEffortsOf(vendor: AgentVendor, model: string, catalog?: ModelCatalog | null): readonly string[] | null {
+  const listed = catalog?.models.find((entry) => entry.id === model);
+  if (listed !== undefined) return listed.efforts;
+  return SPECS[vendor].models.bundled.find((entry) => entry.id === model)?.efforts ?? null;
 }
 
-/**
- * Postcondition: returns null when effort is null or compatible with model. Rejects an effort that differs from the
- * one already encoded in the model ID, and an effort missing from `modelEffortsOf` for a known model; the rejection
- * names the model and lists the efforts it accepts. Models `modelEffortsOf` does not know pass unchanged.
- */
 export function checkModelEffort(
   vendor: AgentVendor,
   model: string | null,
   effort: string | null,
   catalog?: ModelCatalog | null,
 ): string | null {
-  if (effort === null) return null;
-  const split = splitModelEffort(vendor, model, null, catalog);
-  if (split.effort === null || split.effort === effort) return null;
-  return `模型 ${model} 已经带了思考程度 ${split.effort}，和 ${effort} 对不上；请用不带档位的 ${split.model} 再选思考程度，或者去掉思考程度`;
+  const split = splitModelEffort(vendor, model, effort, catalog);
+  if (effort !== null && split.effort !== effort) {
+    return `模型 ${model} 已经带了思考程度 ${split.effort}，和 ${effort} 对不上；请用不带档位的 ${split.model} 再选思考程度，或者去掉思考程度`;
+  }
+  if (split.model === null || split.effort === null) return null;
+  const allowed = modelEffortsOf(vendor, split.model, catalog);
+  if (allowed === null || allowed.includes(split.effort)) return null;
+  const options = allowed.length > 0 ? `可选：${allowed.join("、")}` : "请选择默认思考程度";
+  return `模型 ${split.model} 不支持思考程度 ${split.effort}，${options}`;
 }
 
 export function checkAgentSetting(

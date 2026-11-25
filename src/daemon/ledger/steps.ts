@@ -139,14 +139,14 @@ export function createLedgerSteps(ctx: LedgerContext) {
         return;
       case "turn.ended": {
         const outcome: TurnOutcome = event.interrupted ? "interrupted" : event.ok ? "ok" : "failed";
-        const reason = outcome === "failed" ? (event.error === undefined ? TURN_FAILED_REASON : turnFailureReason(event.error)) : null;
+        const reason = event.shutdown ? SHUTDOWN_INTERRUPTED_REASON : outcome === "failed" ? (event.error === undefined ? TURN_FAILED_REASON : turnFailureReason(event.error)) : null;
         endTurn(sessionId, outcome, reason, event.durationMs);
         return;
       }
       case "session.exited": {
         if (event.reason === "idle" || openTurn(sessionId) === null) return;
         const crashed = event.reason === "crash" || event.reason === "startup_failed";
-        endTurn(sessionId, crashed ? "failed" : "interrupted", crashed ? exitFailureReason(event) : null, null);
+        endTurn(sessionId, crashed ? "failed" : "interrupted", crashed ? exitFailureReason(event) : event.reason === "shutdown" ? SHUTDOWN_INTERRUPTED_REASON : null, null);
         return;
       }
       default:
@@ -154,13 +154,10 @@ export function createLedgerSteps(ctx: LedgerContext) {
     }
   };
 
-  /**
-   * Records a turn that failed before the vendor opened it, such as a launch the vendor CLI rejected.
-   * Postcondition: the session's latest turn_ended row is "failed" with the given reason; an open turn is ended
-   * with that reason instead of starting a new one. Non-Worker sessions are ignored.
-   */
-  const recordFailedStart = (_session: AgentSessionRow, _reason: string): void => {
-    throw new Error("Not implemented");
+  const recordFailedStart = (session: AgentSessionRow, reason: string): void => {
+    if (session.role !== "worker") return;
+    ensureTurn(session.id);
+    endTurn(session.id, "failed", reason, null);
   };
 
   const rows = (sessionId: SessionId): StepRow[] =>

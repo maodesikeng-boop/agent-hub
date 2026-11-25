@@ -25,7 +25,7 @@ import { fail, type Pending } from "../context.ts";
 import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { collectGraphBranches, collectGraphPrUrls, stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
-import { isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
+import { isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, lastWorkerIdOf, workerIdsOf } from "./rows.ts";
 import { charLen, validateNodeKey } from "./spec.ts";
 import { getGraphRow, hydrateGraphs, hydrateNodes, isGraphAllSettled, listStepRows, loadGraph, publishGraphIn, requireStepRow, resolveGraphForPm } from "./store.ts";
 import { collapseOneLine, formatGraphText, unlockedNoteOf, workerIdList } from "./text.ts";
@@ -90,16 +90,6 @@ function assertNotRunning(node: TaskNodeDbRow, nodeKey: TaskNodeKey, graphId: Ta
   );
 }
 
-/**
- * Workers that `graph done` must end so a manual release matches an automatic step completion.
- * Postcondition: returns the step's latest Worker when it is still open and not running (for example a reviewer
- * parked by a FAIL verdict, or an implementer parked by a deviation report); returns an empty list otherwise.
- * Earlier Workers on the step and Workers already ended are never returned.
- */
-export function parkedStepWorkersOf(_db: Db, _node: Pick<TaskNodeDbRow, "worker_ids_json" | "status">): WorkerId[] {
-  throw new Error("Not implemented");
-}
-
 export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubArgs<"graph.done">, context?: HubCallContext): HubResult<"graph.done"> {
   g.persona.assertPmNotArchived(caller.pmId);
   const nodeKey = validateNodeKey(args.nodeKey);
@@ -111,6 +101,12 @@ export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
   assertNotRunning(node, nodeKey, graphRow.id);
   if (sandboxApprovalPendingForStep(g.db, node.id)) {
     throw fail("conflict", `步骤「${nodeKey}」在等用户确认 Worker 沙箱。请等用户确认，或先收工这个 Worker`);
+  }
+  const latest = lastWorkerIdOf(node);
+  const workers = g.options.workers?.();
+  const openWorker = latest !== null && g.db.get("SELECT 1 FROM workers WHERE id = ? AND status = 'open'", latest) !== undefined ? latest : null;
+  if (openWorker !== null && workers?.isWorkerInFlight(openWorker)) {
+    assertNotRunning({ ...node, status: "running", active_worker_id: openWorker }, nodeKey, graphRow.id);
   }
   const { artifact, note } = doneArtifact(args, node);
   const nextPmNote = note && note !== "" ? note : node.pm_note;
@@ -131,6 +127,7 @@ export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
     t,
     node.id,
   );
+  if (openWorker !== null) workers?.stopWorkersIn(p, [openWorker]);
   const progress: ProgressResult = active
     ? recomputeGraphProgressIn(g, p, graphRow, caller, context, { retractBlockedWaiting: false })
     : emptyProgress();
