@@ -1,6 +1,7 @@
 import type {
   TaskArtifact,
   TaskDecision,
+  MessageId,
   TaskNode,
   TaskNodeStatus,
   TaskNodeWaitingFor,
@@ -54,12 +55,8 @@ export function serializeArtifact(artifact: TaskArtifact | null | undefined, che
 export const artifactWithoutCheckpoint = (row: Pick<TaskNodeDbRow, "artifact_json">): string | null =>
   serializeArtifact(readStoredArtifact(row.artifact_json).artifact, false);
 
-export function isStoredCheckpoint(node: Pick<TaskNodeDbRow, "status" | "waiting_for" | "artifact_json">): boolean {
-  return (
-    node.status === "waiting" &&
-    node.waiting_for === "user" &&
-    readStoredArtifact(node.artifact_json).checkpointPending
-  );
+export function isStoredCheckpoint(node: Pick<TaskNodeDbRow, "artifact_json">): boolean {
+  return readStoredArtifact(node.artifact_json).checkpointPending;
 }
 
 /** Slim snapshots keep deliverables only on steps waiting for a user decision, to bound snapshot size. */
@@ -69,10 +66,19 @@ function artifactForView(artifact: TaskArtifact | null, waitingDecision: boolean
   return Object.keys(rest).length > 0 ? rest : null;
 }
 
-export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?: ReadonlyMap<number, UserBlocker>): TaskNode {
+export function toTaskNode(
+  row: TaskNodeDbRow,
+  includeDetails = false,
+  blockers?: ReadonlyMap<number, UserBlocker>,
+  pendingAsks?: ReadonlySet<MessageId>,
+): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
   const waitingUser = row.status === "waiting" && row.waiting_for === "user";
   const userBlocker = blockers?.get(row.id) ?? null;
+  const gateAskPending = pendingAsks !== undefined && row.gate_ask_message_id !== null
+    ? pendingAsks.has(row.gate_ask_message_id)
+    : undefined;
+  const waitingDecision = gateAskPending ?? (waitingUser && userBlocker === null);
   const base: TaskNode = {
     key: row.node_key,
     title: row.title,
@@ -82,13 +88,14 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?
     sortOrder: row.sort_order,
     activeWorkerId: row.active_worker_id,
     workerIds: workerIdsOf(row),
-    artifact: artifactForView(artifact, waitingUser && userBlocker === null, includeDetails),
+    artifact: artifactForView(artifact, waitingDecision, includeDetails),
     gateQuestion: row.gate_question,
     gateOptions: gateOptionsOf(row),
     gateSummaryMd: row.gate_summary_md,
     gateRecommended: row.gate_recommended,
     gateAskMessageId: row.gate_ask_message_id,
-    ...(waitingUser && checkpointPending ? { gateCheckpoint: true } : {}),
+    ...(gateAskPending !== undefined ? { gateAskPending } : {}),
+    ...(waitingDecision && checkpointPending ? { gateCheckpoint: true } : {}),
     userBlocker,
     decision: decisionOf(row),
     createdAt: row.created_at,

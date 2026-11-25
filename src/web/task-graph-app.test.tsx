@@ -200,8 +200,7 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
         makeNode({
           key: "gate",
           title: "方案检查点",
-          status: "waiting",
-          waitingFor: "user",
+          status: "running",
           sortOrder: 0,
           activeWorkerId: 3,
           workerIds: [3],
@@ -210,6 +209,7 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
           gateRecommended: "通过",
           gateSummaryMd: "**摘要**：已完成方案初稿\n\n**交棒要点**：\n见 `docs/plan.md`",
           gateAskMessageId: 105,
+          gateAskPending: true,
           gateCheckpoint: true,
         }),
       ],
@@ -260,6 +260,7 @@ describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
 
     await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(1));
     expect(api.callsTo("POST", DECIDE_PATH)[0]!.body).toMatchObject({
+      askMessageId: 105,
       choice: "打回",
       note: "把缓存淘汰改成 lru-cache",
     });

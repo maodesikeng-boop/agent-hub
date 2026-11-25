@@ -134,7 +134,11 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
 
 export function parseAskCommand({ group, action, rest, positionals, values, env, cwd }: GroupArgs): Parsed | undefined {
   if (group === "ask" && action === "close") {
-    allowOnly(values, [], "ask close");
+    allowOnly(values, ["message"], "ask close");
+    if (values.message !== undefined) {
+      expectPositionals(rest, 0, "ask close");
+      return { command: "ask.close", body: { messageId: idOf(values.message, "ask close", "消息") }, textSource: null };
+    }
     expectPositionals(rest, 1, "ask close");
     return { command: "ask.close", body: { itemId: idOf(rest[0], "ask close", "卡") }, textSource: null };
   }

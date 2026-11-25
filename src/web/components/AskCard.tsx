@@ -48,7 +48,7 @@ export const AskCard = memo(function AskCard({
         clientIdRef.current ??= newClientId();
         const body = { clientId: clientIdRef.current, choice: vars.choice, ...(vars.note !== null ? { note: vars.note } : {}) };
         if (gateRef === undefined) return onAnswerAsk?.(messageId, body);
-        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, body);
+        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, { ...body, askMessageId: messageId });
       },
       onMutate: () => setErr(null),
       onSuccess: (_data, vars) => {

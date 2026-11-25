@@ -9,7 +9,8 @@ import {
   agentEffortOf,
   effortLabel,
   isAgentVendor,
-  isTaskNodeWaitingUser,
+  isTaskNodeUserBlocked,
+  isTaskNodeWaitingDecision,
   modelShortLabel,
 } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, TaskNode, UserBlockerId, WorkerId } from "../../shared/index.ts";
@@ -419,8 +420,9 @@ export const RailGroups = memo(function RailGroups({
     (graph: TaskGraph, node: TaskNode) => {
       const ask = asksRef.current.find((m) => {
         const meta = askOf(m);
-        if (node.userBlocker != null) return meta?.blockerRef?.blockerId === node.userBlocker.id;
-        return m.id === node.gateAskMessageId || (meta?.gateRef?.graphId === graph.id && meta.gateRef.nodeKey === node.key);
+        if (node.userBlocker != null && isTaskNodeUserBlocked(node)) return meta?.blockerRef?.blockerId === node.userBlocker.id;
+        if (node.gateAskMessageId !== null) return m.id === node.gateAskMessageId;
+        return meta?.gateRef?.graphId === graph.id && meta.gateRef.nodeKey === node.key;
       });
       if (ask !== undefined) onOpenAsk(ask.id);
       else zoomGraph(graph);
@@ -433,13 +435,15 @@ export const RailGroups = memo(function RailGroups({
     const stepBlockerIds = new Set<UserBlockerId>();
     for (const graph of activeGraphs ?? []) {
       for (const node of graph.nodes) {
-        if (node.gateAskMessageId !== null) gateMsgIds.add(node.gateAskMessageId);
+        if (node.gateAskMessageId !== null && isTaskNodeWaitingDecision(node) && !isTaskNodeUserBlocked(node)) {
+          gateMsgIds.add(node.gateAskMessageId);
+        }
         if (node.userBlocker !== null && node.userBlocker !== undefined) stepBlockerIds.add(node.userBlocker.id);
       }
     }
     return asks.filter((ask) => {
       const meta = askOf(ask);
-      if (meta?.gateRef !== undefined || gateMsgIds.has(ask.id)) return false;
+      if (gateMsgIds.has(ask.id)) return false;
       return meta?.blockerRef === undefined || !stepBlockerIds.has(meta.blockerRef.blockerId);
     });
   }, [asks, activeGraphs]);
@@ -470,7 +474,7 @@ export const RailGroups = memo(function RailGroups({
   const hasLive = live.length > 0;
   const hasCompleted = ended.length > 0 || (completedGraphCount ?? 0) > 0;
   const graphNeedsYou = useMemo(
-    () => activeGraphs?.some((g) => g.nodes.some(isTaskNodeWaitingUser)) ?? false,
+    () => activeGraphs?.some((g) => g.nodes.some((n) => isTaskNodeWaitingDecision(n) || isTaskNodeUserBlocked(n))) ?? false,
     [activeGraphs],
   );
 

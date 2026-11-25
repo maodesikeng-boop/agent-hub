@@ -462,7 +462,7 @@ describe("复制好了、写完了（handoverForked / handoverWritten）", () =>
     expect(row).toMatchObject({ status: "switched", to_session_id: g2!.id, text: "交接：暗号是 蓝鲸", usage: JSON.stringify(USAGE) });
     const preamble = ledger.sessionPreamble(g2!.id)!;
     // 存下来的开场说明是换代时定稿的；对话里实时的部分（在等用户的提问卡、未完结的任务图）读的时候才从账本拼在后面
-    expect(preamble).toBe(`${row.preamble}${WAITING_ASKS_HEADING}无：账本里没有在等用户回答的提问卡；上面交接正文里提到的卡，用户那边已经没有了。`);
+    expect(preamble).toBe(`${row.preamble}${WAITING_ASKS_HEADING}无：账本里没有在等用户回答的普通提问卡。步骤拍板卡见任务图。`);
     expect(preamble).toMatch(/^【系统】这是新会话/);
     for (const part of [
       "系统自动给你换了这个新会话",
@@ -1623,13 +1623,12 @@ describe("给已有项目经理换厂商", () => {
       expect(preamble).toContain(heading);
       expect(preamble.slice(preamble.indexOf(heading) + heading.length)).toBe(
         [
-          "账本里现在还在等用户回答的提问卡，一共 2 张，用户那边就这几张；上面交接正文里提到、但不在这里的卡，用户那边已经没有了：",
+          "账本里现在还在等用户回答的普通提问卡有 2 张。步骤拍板卡见任务图：",
           `- #${pstack}「pstack 要不要升级？」`,
           `- #${split}「#330 怎么拆？」`,
         ].join("\n"),
       );
       expect(preamble.slice(preamble.indexOf(heading))).not.toContain("PR #305 要不要合？");
-      expect(preamble).toContain("一共 2 张");
     });
 
     it("账本里没有在等用户的提问卡：写“无”", () => {
@@ -1638,7 +1637,7 @@ describe("给已有项目经理换厂商", () => {
       const { g2 } = renewNow("交接正文：在等用户拍板的有 #305");
       const preamble = ledger.sessionPreamble(g2)!;
       expect(preamble.slice(preamble.indexOf(WAITING_ASKS_HEADING))).toBe(
-        `${WAITING_ASKS_HEADING}无：账本里没有在等用户回答的提问卡；上面交接正文里提到的卡，用户那边已经没有了。`,
+        `${WAITING_ASKS_HEADING}无：账本里没有在等用户回答的普通提问卡。步骤拍板卡见任务图。`,
       );
     });
 
