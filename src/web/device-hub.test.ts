@@ -1,10 +1,11 @@
+import { QueryClient } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, localClient, type HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
 import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, PRODUCT_NAME, WAITING_SETTLE_MS, WS_BURST_FRAME_LIMIT, WS_FRAME_BUDGET_MS, type DeviceInfo, type StateSnapshot } from "../shared/index.ts";
 import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
-import { ACCOUNT_QUERY_KEY, queryClient } from "./query-client.ts";
+import { ACCOUNT_QUERY_KEY, queryClient, taskGraphHistoryKey } from "./query-client.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
 import { useDeviceReminders } from "./notify.ts";
 import {
@@ -352,6 +353,43 @@ describe("DeviceHub 按需拉取", () => {
 });
 
 describe("DevicesStore（zustand store 驱动）", () => {
+  it.each(["routed", "discovered"] as const)("invalidates only the updated project on a %s device", async (source) => {
+    const remote: DeviceInfo = { id: REMOTE, name: "Remote", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
+    installFakeWebSocket();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) =>
+      Response.json(String(input) === "/api/devices" ? { devices: [remote] } : makeSnapshot({ seq: 10 })),
+    ));
+    const qc = new QueryClient();
+    const remoteHistory = taskGraphHistoryKey(REMOTE, 1);
+    const otherProject = taskGraphHistoryKey(REMOTE, 2);
+    const localHistory = taskGraphHistoryKey(LOCAL_DEVICE, 1);
+    for (const key of [remoteHistory, otherProject, localHistory]) qc.setQueryData(key, { graphs: [], hasMore: false });
+
+    const store = new DevicesStore(undefined, source === "routed" ? REMOTE : undefined, undefined, qc);
+    try {
+      store.start();
+      await vi.waitFor(() => expect(socketsFor(REMOTE)).toHaveLength(1));
+      const socket = socketsFor(REMOTE)[0]!;
+      socket.open();
+      socket.push({
+        seq: 11,
+        type: "task_graph.updated",
+        data: {
+          graph: {
+            id: 7, projectId: 1, pmId: 1, conversationId: 1, title: "Release", status: "completed",
+            nodes: [], edges: [], originMsgId: null, createdAt: 1, updatedAt: 3, completedAt: 2,
+          },
+        },
+      });
+      expect(qc.getQueryState(remoteHistory)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(otherProject)?.isInvalidated).toBe(false);
+      expect(qc.getQueryState(localHistory)?.isInvalidated).toBe(false);
+    } finally {
+      store.dispose();
+      qc.clear();
+    }
+  });
+
   it("管理本机与远端设备列表，setDevices 增删远端 DeviceHub 并通过 zustand store 推送快照", () => {
     const store = new DevicesStore((key) => (key === LOCAL_DEVICE ? localClient : createClient(key)));
     const snapshots: number[] = [];

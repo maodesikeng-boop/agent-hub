@@ -22,6 +22,7 @@ import {
   makeUserMessage,
   makeWorkerConversation,
   makeWorkerLine,
+  messageChange,
   sessionChange,
 } from "./test-utils.ts";
 
@@ -137,6 +138,12 @@ async function bootSingle(snapshot: StateSnapshot) {
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.last.open());
   return { api, ws: FakeWebSocket.last };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
@@ -496,6 +503,115 @@ describe("手机抽屉：流式帧", () => {
   });
 });
 
+function historyFixture(status: "completed" | "cancelled") {
+  const message = makeMessage({
+    id: 99,
+    text: "Keep the notes?",
+    dedupeKey: "ask:1:99",
+    meta: { needsUser: true, options: ["Keep", "Discard"], gateRef: { graphId: GRAPH_ID, nodeKey: "gate" } },
+  });
+  const gate = makeNode({
+    key: "gate", title: "Review notes", status: status === "completed" ? "done" : "waiting",
+    waitingFor: status === "completed" ? null : "user", gateAskPending: true, gateAskMessageId: message.id,
+    gateOptions: ["Keep", "Discard"],
+  });
+  const pending: TaskGraph = { ...graph(), title: "Release history", status, completedAt: 2_000, nodes: [gate], edges: [] };
+  const settled: TaskGraph = {
+    ...pending,
+    nodes: [{ ...gate, waitingFor: status === "completed" ? null : "pm", gateAskPending: false }],
+  };
+  const snapshot = makeSnapshot({
+    pms: [makePm()],
+    projects: [makeProject({ conversationId: 1 })],
+    conversations: [
+      makeConvSnapshot([makeUserMessage({ id: 1 }), makeWorkerLine({ id: 10, line: { event: "ended" } }), message]),
+      makeConvSnapshot([], { conversation: makeWorkerConversation() }),
+    ],
+  });
+  return { pending, settled, snapshot, message };
+}
+
+async function openHistory(user: ReturnType<typeof userEvent.setup>) {
+  const completed = within(sidePanel()).getByRole("region", { name: "Completed" });
+  await user.click(within(completed).getByRole("button", { name: "Completed" }));
+  const row = await within(completed).findByRole("button", { name: "Release history" });
+  const progress = row.querySelector("[data-slot='task-progress']")!;
+  await user.click(row);
+  const dialog = await screen.findByRole("dialog", { name: "Release history" });
+  expect(within(dialog).getByText("Waiting on you")).toBeInTheDocument();
+  return { dialog, progress };
+}
+
+describe("Settling a card in task graph history", () => {
+  it.each([
+    ["chat", "completed"],
+    ["dialog", "completed"],
+    ["dialog", "cancelled"],
+  ] as const)("refreshes the Completed row and open dialog after a %s answer on a %s graph", async (source, status) => {
+    const user = userEvent.setup();
+    const { pending, settled, snapshot, message } = historyFixture(status);
+    const { api, ws } = await bootSingle(snapshot);
+    const response = deferred();
+    let historyGraph = pending;
+    api.projectTaskGraphs = () => ({ status: 200, body: { graphs: [historyGraph], hasMore: false } });
+    api.decideTaskNode = async () => {
+      await response.promise;
+      return { status: 200, body: { graph: settled, messageId: null } };
+    };
+
+    if (source === "chat") {
+      const options = await screen.findByRole("group", { name: "Options" });
+      const chatOption = within(options).getByRole("button", { name: /Keep/ });
+      await user.click(chatOption);
+    }
+    const { dialog, progress } = await openHistory(user);
+    const pendingIcon = progress.innerHTML;
+    if (source === "dialog") await user.click(within(dialog).getByRole("button", { name: "Keep" }));
+    await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)[0]?.body).toMatchObject({ askMessageId: message.id, choice: "Keep" }));
+
+    historyGraph = settled;
+    await act(async () => {
+      ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, answered: true, chosenOption: "Keep" } }));
+      ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
+      response.resolve();
+    });
+
+    await waitFor(() => expect(api.callsTo("GET", /task-graphs/)).toHaveLength(2));
+    await waitFor(() => {
+      expect(dialog).toBeInTheDocument();
+      expect(within(dialog).queryByText("Waiting on you")).toBeNull();
+    });
+    expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull();
+    expect(progress.innerHTML).not.toBe(pendingIcon);
+    await user.keyboard("{Escape}");
+    await user.click(within(sidePanel()).getByRole("button", { name: "Release history" }));
+    expect(within(await screen.findByRole("dialog", { name: "Release history" })).queryByTestId("peel-gate-card")).toBeNull();
+  });
+
+  it("discards a pending first history read when the PM closes the card", async () => {
+    const user = userEvent.setup();
+    const { pending, settled, snapshot, message } = historyFixture("cancelled");
+    const { api, ws } = await bootSingle(snapshot);
+    const firstRead = deferred();
+    const historyPage = (graph: TaskGraph) => ({ status: 200, body: { graphs: [graph], hasMore: false } });
+    api.projectTaskGraphs = vi.fn<FakeApi["projectTaskGraphs"]>(() => historyPage(settled)).mockImplementationOnce(async () => {
+      await firstRead.promise;
+      return historyPage(pending);
+    });
+
+    await user.click(within(sidePanel()).getByRole("button", { name: "Completed" }));
+    await waitFor(() => expect(api.callsTo("GET", /task-graphs/)).toHaveLength(1));
+    act(() => {
+      ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, closed: true } }));
+      ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
+    });
+    const row = await within(sidePanel()).findByRole("button", { name: "Release history" });
+    await act(async () => firstRead.resolve());
+    await user.click(row);
+    expect(within(await screen.findByRole("dialog", { name: "Release history" })).queryByText("Waiting on you")).toBeNull();
+  });
+});
+
 describe("跨设备：右栏的请求走当前设备的接口", () => {
   const MAC = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
   const TOKYO = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
@@ -504,9 +620,9 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
     { id: TOKYO, name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null },
   ];
 
-  async function bootFleet() {
+  async function bootFleet(remoteSnapshot = graphSnapshot("东京经理")) {
     const local = new FakeApi(plainSnapshot("本机经理"));
-    const remote = new FakeApi(graphSnapshot("东京经理"));
+    const remote = new FakeApi(remoteSnapshot);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -525,8 +641,29 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
     act(() => sockets(false)[0]!.open());
     await waitFor(() => expect(sockets(true)).toHaveLength(1));
     act(() => sockets(true)[0]!.open());
-    return { local, remote };
+    return { local, remote, ws: sockets(true)[0]! };
   }
+
+  it("refreshes the open history dialog on the remote device when its PM closes the card", async () => {
+    const user = userEvent.setup();
+    const { pending, settled, snapshot, message } = historyFixture("cancelled");
+    const { local, remote, ws } = await bootFleet(snapshot);
+    let historyGraph = pending;
+    remote.projectTaskGraphs = () => ({ status: 200, body: { graphs: [historyGraph], hasMore: false } });
+    const { dialog, progress } = await openHistory(user);
+    const pendingIcon = progress.innerHTML;
+
+    historyGraph = settled;
+    act(() => {
+      ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, closed: true } }));
+      ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
+    });
+
+    await waitFor(() => expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull());
+    expect(dialog).toBeInTheDocument();
+    expect(progress.innerHTML).not.toBe(pendingIcon);
+    expect(local.callsTo("GET", /task-graphs/)).toHaveLength(0);
+  });
 
   it("看东京的项目经理：门禁拍板、Cancel graph 都发到东京（/d/<东京>/...），本机一条都不收", async () => {
     const user = userEvent.setup();

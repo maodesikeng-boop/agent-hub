@@ -388,6 +388,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const railAttention = railAsks.length > 0 || railGraphNeedsYou;
   const railPeeking = railPeek !== null && railPeek === railPm;
   const railOpen = railHasContent && !railClosed && (railNeedsYou || railPeeking);
+  const keepRailOpen = useCallback(() => setRailPeek(railPm), [railPm]);
   const toggleRail = useCallback(
     (forceOpen?: boolean) => {
       const closed = forceOpen === undefined ? railOpen : !forceOpen;
@@ -527,6 +528,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       railCount,
       railGraphs,
       railHasContent,
+      keepRailOpen,
       railLoadMoreWorkers,
       railOpen,
       railProjectId,

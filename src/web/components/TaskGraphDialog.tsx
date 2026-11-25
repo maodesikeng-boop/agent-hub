@@ -103,7 +103,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   graph,
   open,
   onOpenChange,
-  onDecided,
   workers,
   color = PM_FRUITS[0]!,
   onOpenWorker,
@@ -111,7 +110,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   graph: TaskGraph | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onDecided?: (graph: TaskGraph) => void;
   workers: readonly WorkerEntry[];
   color?: JellyColorId;
   onOpenWorker: (id: ConversationId) => void;
@@ -226,7 +224,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       },
       onMutate: () => setActionError(null),
       onSuccess: () => {
-        void qc.invalidateQueries({ queryKey: ["project-task-graphs"] });
         setConfirmingCancel(false);
         onOpenChange(false);
       },
@@ -356,7 +353,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                     {node.userBlocker != null && isTaskNodeUserBlocked(node) ? (
                       <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} />
                     ) : (
-                      <GateDecisionCard key={node.gateAskMessageId ?? node.key} graphId={graph.id} node={node} client={client} onDecided={onDecided} />
+                      <GateDecisionCard key={node.gateAskMessageId ?? node.key} graphId={graph.id} node={node} client={client} />
                     )}
                   </div>
                 );

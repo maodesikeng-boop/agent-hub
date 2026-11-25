@@ -261,7 +261,7 @@ function DesktopSidePanel({
         onClose={() => c.toggleRail()}
         closeLabel="Close Pieces"
       >
-        <RailGroups {...railProps(c)} className="py-3" />
+        <RailGroups {...railProps(c)} onShowHistory={c.keepRailOpen} className="py-3" />
       </SidePanel>
     );
   }
