@@ -19,6 +19,7 @@ import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
 import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
 import { verifyComposerLayout } from "./verify-composer-layout.ts";
 import { verifyProjectListHeader } from "./verify-list-header.ts";
+import { verifyProjectListMinimum } from "./verify-list-width.ts";
 import { verifyTopBarUnderSettings } from "./verify-window-drag.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -219,6 +220,9 @@ async function runOnce(outDir: string, checkComposer: boolean): Promise<RunResul
 
     await verifyProjectListHeader(browser, loginUrl, origin);
     phase("左栏长电脑名与新建按钮不重合");
+
+    await verifyProjectListMinimum(browser, loginUrl, origin);
+    phase("PM column minimum at every scale");
 
     if (checkComposer) {
       const id = stateBody.conversations[0]?.conversation.id;

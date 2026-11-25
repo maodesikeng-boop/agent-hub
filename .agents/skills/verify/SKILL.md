@@ -42,8 +42,9 @@ The check writes `composer-layout.txt` and interaction screenshots under the sam
 4. Call `GET /api/health` and `GET /api/state` with that cookie.
 5. Open the workbench in headless Chromium and wait for the composer. Any `console.error` or `pageerror` fails the run.
 6. Open Settings and press the middle of the top bar (`scripts/verify-window-drag.ts`). The point must hit a `data-window-drag` region, a click and a double-click must reach a recorded `windowDrag` bridge as a drag and a zoom with Settings still open, and a click on the rail must then close Settings.
-7. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
-8. Delete the temporary directory and check that it is gone.
+7. At every interface scale, close the work panel and narrow the window to the `860px` desktop minimum and to `700px` (`scripts/verify-list-width.ts`). The PM column must stay at least its `13.75rem` minimum, and the page must not scroll sideways.
+8. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
+9. Delete the temporary directory and check that it is gone.
 
 ## When to use it
 

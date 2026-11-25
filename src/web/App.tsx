@@ -23,7 +23,7 @@ import { DeviceScope } from "./device-scope.tsx";
 import { LOCAL_DEVICE, isReadOnly, routeDeviceOf } from "./devices.ts";
 import { errorTitle } from "./format.ts";
 import { AccentScope } from "./lib/accent-scope.tsx";
-import { SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
+import { SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
 import { mobileBack } from "./mobile/back.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
 import { TabBar, mobileTabOf, type MobileTab } from "./mobile/TabBar.tsx";
@@ -34,7 +34,7 @@ import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
 import { pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
-import { useShellTier } from "./shell-layout.ts";
+import { useShellFit } from "./shell-layout.ts";
 import { railComputerKeyOrFallback } from "./shell-actions.ts";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
 import { workPanelOf } from "./side-panel.ts";
@@ -206,7 +206,7 @@ function DesktopWorkbench({
   const panelRaw = c.routerActive ? null : workPanelOf({ route, open: c.railOpen, tab: c.workTab });
   const panelContent = panelRaw !== null && panelRaw.kind === "info" && c.profile === null ? null : panelRaw;
   const panelVisible = panelContent !== null && !c.routerActive && state.phase === "ready";
-  const tier = useShellTier(shellEl, panelVisible);
+  const { tier, chatMinRem } = useShellFit(shellEl, panelVisible);
   const stackPanel = tier === "stack" && panelVisible;
   const meter = useMemo(() => quotaMeterOf(quota), [quota]);
   const computer = useMemo(() => railComputerKeyOrFallback(current.key, fleet.devices), [current.key, fleet.devices]);
@@ -313,7 +313,7 @@ function DesktopWorkbench({
                   key="chat"
                   id="chat"
                   className="shell-sheet shell-sheet-joined"
-                  {...(stackPanel ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" } : { minRem: SHELL_CHAT_MIN_REM })}
+                  {...(stackPanel ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" } : { minRem: chatMinRem })}
                 >
                   <Activity mode={stackPanel ? "hidden" : "visible"}>
                     <AccentScope color={tintColor}>

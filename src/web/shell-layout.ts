@@ -1,8 +1,10 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import { SHELL_CHAT_MIN_REM, SHELL_FRAME_PX, SHELL_GAP_PX, SHELL_LIST_REM, SHELL_PANEL_REM, SHELL_RAIL_REM } from "./limits.ts";
 import { DEFAULT_UI_SCALE, subscribeUiScale, UI_SCALE_ROOT_PX, type UiScale } from "./ui-scale.ts";
 
-// Invariant: every returned width is CSS px at the given root font size; the SHELL_* constants stay the single source of limits.
+// Invariant: widths are CSS px at the given root font size, except the conversation minimum, which its pane takes in rem; the
+// SHELL_* constants stay the single source of limits.
 
 /** How the desktop columns are arranged: all side by side, or the side panel covering the conversation. */
 export type ShellTier = "wide" | "stack";
@@ -22,6 +24,12 @@ export interface ShellLimitsPx {
   gap: number;
 }
 
+/** The desktop columns' arrangement and the conversation pane's minimum for one shell width. */
+export interface ShellFit {
+  tier: ShellTier;
+  chatMinRem: number;
+}
+
 export interface ShellFitInput {
   /** Measured width of the whole desktop shell, rail included. */
   shellWidthPx: number;
@@ -33,6 +41,8 @@ export interface ShellFitInput {
 
 // jsdom does not apply styles.css, so its computed root size stays at the browser default whatever the scale.
 const BROWSER_DEFAULT_PX = 16;
+
+const safeRemPx = (remPx: number) => (remPx > 0 ? remPx : UI_SCALE_ROOT_PX[DEFAULT_UI_SCALE]);
 
 export function readRootRemPx(): number {
   const fallback = UI_SCALE_ROOT_PX[DEFAULT_UI_SCALE];
@@ -58,7 +68,7 @@ function measureShellWidth(el: HTMLElement | null): number | null {
  * Postcondition: returns the SHELL_* rem limits multiplied by remPx; frame and gap stay in px.
  */
 export function shellLimitsPx(remPx: number): ShellLimitsPx {
-  const safeRem = remPx > 0 ? remPx : UI_SCALE_ROOT_PX[DEFAULT_UI_SCALE];
+  const safeRem = safeRemPx(remPx);
   return {
     rail: SHELL_RAIL_REM * safeRem,
     list: {
@@ -91,11 +101,27 @@ export function shellTierOf({ shellWidthPx, remPx, panelOpen }: ShellFitInput): 
 }
 
 /**
- * Precondition: called in a component; shell is the element that spans the whole desktop shell, or null before mount.
- * Postcondition: returns shellTierOf for the element's current width and the root font size, and updates when the element
- * resizes or the interface scale changes; returns "wide" while shell is null.
+ * Precondition: shellWidthPx >= 0 and remPx > 0.
+ * Postcondition: returns SHELL_CHAT_MIN_REM when the conversation at that minimum fits beside the rail, the frame's right inset,
+ * and the PM column at its minimum; otherwise the whole px left there, in rem and never below 0. With this as the
+ * conversation's minimum, the PM column keeps its own minimum at every width and scale and the conversation narrows instead.
  */
-export function useShellTier(shell: HTMLElement | null, panelOpen: boolean): ShellTier {
+export function chatMinRemOf({ shellWidthPx, remPx }: Pick<ShellFitInput, "shellWidthPx" | "remPx">): number {
+  const rem = safeRemPx(remPx);
+  const limits = shellLimitsPx(rem);
+  const leftPx = shellWidthPx - limits.rail - limits.frame - limits.list.min;
+  if (leftPx >= limits.chatMin) return SHELL_CHAT_MIN_REM;
+  // Whole px leave room for the resize library's rounded percentages, so the two minimums never sum past the group.
+  return Math.max(0, Math.floor(leftPx)) / rem;
+}
+
+/**
+ * Precondition: called in a component; shell is the element that spans the whole desktop shell, or null before mount.
+ * Postcondition: returns shellTierOf and chatMinRemOf for the element's current width and the root font size, updated when the
+ * element resizes or the interface scale changes, as the same object while both values hold; while shell is null, the
+ * wide tier and SHELL_CHAT_MIN_REM.
+ */
+export function useShellFit(shell: HTMLElement | null, panelOpen: boolean): ShellFit {
   const [remPx, setRemPx] = useState<number>(() => readRootRemPx());
   const [widthPx, setWidthPx] = useState<number | null>(() => measureShellWidth(shell));
 
@@ -106,7 +132,8 @@ export function useShellTier(shell: HTMLElement | null, panelOpen: boolean): She
       const entry = entries[entries.length - 1];
       if (!entry) return;
       const w = entry.contentRect.width;
-      setWidthPx(w > 0 ? w : measureShellWidth(shell));
+      // The resize library has already laid out this frame with the old conversation minimum; commit before it paints.
+      flushSync(() => setWidthPx(w > 0 ? w : measureShellWidth(shell)));
     });
     ro.observe(shell);
     return () => ro.disconnect();
@@ -124,6 +151,7 @@ export function useShellTier(shell: HTMLElement | null, panelOpen: boolean): She
     };
   }, []);
 
-  if (widthPx === null) return "wide";
-  return shellTierOf({ shellWidthPx: widthPx, remPx, panelOpen });
+  const tier = widthPx === null ? "wide" : shellTierOf({ shellWidthPx: widthPx, remPx, panelOpen });
+  const chatMinRem = widthPx === null ? SHELL_CHAT_MIN_REM : chatMinRemOf({ shellWidthPx: widthPx, remPx });
+  return useMemo(() => ({ tier, chatMinRem }), [tier, chatMinRem]);
 }
