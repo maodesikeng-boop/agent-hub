@@ -525,84 +525,68 @@ function historyFixture(status: "completed" | "cancelled") {
   return { pending, settled, snapshot, message };
 }
 
-async function openHistory(user: ReturnType<typeof userEvent.setup>) {
-  const completed = within(sidePanel()).getByRole("region", { name: "Completed" });
-  await user.click(within(completed).getByRole("button", { name: "Completed" }));
-  const row = await within(completed).findByRole("button", { name: "Release history" });
-  const progress = row.querySelector("[data-slot='task-progress']")!;
-  await user.click(row);
-  const dialog = await screen.findByRole("dialog", { name: "Release history" });
-  expect(within(dialog).getByText("Waiting on you")).toBeInTheDocument();
-  return { dialog, progress };
+function completedPageFor(title: string, outcome: "done" | "cancelled") {
+  return {
+    status: 200,
+    body: {
+      items: [
+        {
+          kind: "graph" as const,
+          graphId: GRAPH_ID,
+          title,
+          outcome,
+          finishedAt: 2_000,
+          prUrl: null,
+          steps: [{ key: "gate", title: "Review notes", skipped: false, done: outcome === "done" }],
+          edges: [],
+        },
+      ],
+      total: 1,
+      next: null,
+    },
+  };
 }
 
 describe("Settling a card in task graph history", () => {
-  it.each([
-    ["chat", "completed"],
-    ["dialog", "completed"],
-    ["dialog", "cancelled"],
-  ] as const)("refreshes the Completed row and open dialog after a %s answer on a %s graph", async (source, status) => {
+  it("keeps a pending card open in TaskGraphDialog on a completed graph and sends askMessageId when decided", async () => {
     const user = userEvent.setup();
-    const { pending, settled, snapshot, message } = historyFixture(status);
-    const { api, ws } = await bootSingle(snapshot);
-    const response = deferred();
-    let historyGraph = pending;
-    api.projectTaskGraphs = () => ({ status: 200, body: { graphs: [historyGraph], hasMore: false } });
-    api.decideTaskNode = async () => {
-      await response.promise;
-      return { status: 200, body: { graph: settled, messageId: null } };
-    };
-
-    if (source === "chat") {
-      const options = await screen.findByRole("group", { name: "Options" });
-      const chatOption = within(options).getByRole("button", { name: /Keep/ });
-      await user.click(chatOption);
-    }
-    const { dialog, progress } = await openHistory(user);
-    const pendingIcon = progress.innerHTML;
-    if (source === "dialog") await user.click(within(dialog).getByRole("button", { name: "Keep" }));
+    const { pending, settled, message } = historyFixture("completed");
+    const api = new FakeApi(makeSnapshot());
+    api.install();
+    const { rerender } = render(
+      <TaskGraphDialog open graph={pending} workers={[]} onOpenChange={() => {}} onOpenWorker={() => {}} />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Release history" });
+    expect(within(dialog).getByText("Waiting on you")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Keep" }));
     await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)[0]?.body).toMatchObject({ askMessageId: message.id, choice: "Keep" }));
 
-    historyGraph = settled;
-    await act(async () => {
-      ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, answered: true, chosenOption: "Keep" } }));
-      ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
-      response.resolve();
-    });
-
-    await waitFor(() => expect(api.callsTo("GET", /task-graphs/)).toHaveLength(2));
-    await waitFor(() => {
-      expect(dialog).toBeInTheDocument();
-      expect(within(dialog).queryByText("Waiting on you")).toBeNull();
-    });
+    rerender(<TaskGraphDialog open graph={settled} workers={[]} onOpenChange={() => {}} onOpenWorker={() => {}} />);
+    expect(within(dialog).queryByText("Waiting on you")).toBeNull();
     expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull();
-    expect(progress.innerHTML).not.toBe(pendingIcon);
-    await user.keyboard("{Escape}");
-    await user.click(within(sidePanel()).getByRole("button", { name: "Release history" }));
-    expect(within(await screen.findByRole("dialog", { name: "Release history" })).queryByTestId("peel-gate-card")).toBeNull();
   });
 
-  it("discards a pending first history read when the PM closes the card", async () => {
+  it("refreshes the Completed feed when a graph settles after an in-flight first read", async () => {
     const user = userEvent.setup();
-    const { pending, settled, snapshot, message } = historyFixture("cancelled");
+    const { settled, snapshot, message } = historyFixture("cancelled");
     const { api, ws } = await bootSingle(snapshot);
     const firstRead = deferred();
-    const historyPage = (graph: TaskGraph) => ({ status: 200, body: { graphs: [graph], hasMore: false } });
-    api.projectTaskGraphs = vi.fn<FakeApi["projectTaskGraphs"]>(() => historyPage(settled)).mockImplementationOnce(async () => {
-      await firstRead.promise;
-      return historyPage(pending);
-    });
+    api.completedWork = vi
+      .fn<FakeApi["completedWork"]>(() => completedPageFor("Release history settled", "cancelled"))
+      .mockImplementationOnce(async () => {
+        await firstRead.promise;
+        return completedPageFor("Release history stale", "cancelled");
+      });
 
-    await user.click(within(sidePanel()).getByRole("button", { name: "Completed" }));
-    await waitFor(() => expect(api.callsTo("GET", /task-graphs/)).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: /Show work panel/ }));
+    await user.click(within(sidePanel()).getByRole("tab", { name: /^Completed/ }));
+    await waitFor(() => expect(api.callsTo("GET", /\/completed$/)).toHaveLength(1));
     act(() => {
       ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, closed: true } }));
       ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
     });
-    const row = await within(sidePanel()).findByRole("button", { name: "Release history" });
     await act(async () => firstRead.resolve());
-    await user.click(row);
-    expect(within(await screen.findByRole("dialog", { name: "Release history" })).queryByText("Waiting on you")).toBeNull();
+    expect(await within(sidePanel()).findByRole("button", { name: /Release history settled/ })).toBeInTheDocument();
   });
 });
 
@@ -638,25 +622,24 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
     return { local, remote, ws: sockets(true)[0]! };
   }
 
-  it("refreshes the open history dialog on the remote device when its PM closes the card", async () => {
+  it("refreshes the Completed feed on the remote device when its PM closes a graph card", async () => {
     const user = userEvent.setup();
-    const { pending, settled, snapshot, message } = historyFixture("cancelled");
+    const { settled, snapshot, message } = historyFixture("cancelled");
     const { local, remote, ws } = await bootFleet(snapshot);
-    let historyGraph = pending;
-    remote.projectTaskGraphs = () => ({ status: 200, body: { graphs: [historyGraph], hasMore: false } });
-    const { dialog, progress } = await openHistory(user);
-    const pendingIcon = progress.innerHTML;
+    let title = "Release history";
+    remote.completedWork = () => completedPageFor(title, "cancelled");
+    await user.click(screen.getByRole("button", { name: /Show work panel/ }));
+    await user.click(within(sidePanel()).getByRole("tab", { name: /^Completed/ }));
+    expect(await within(sidePanel()).findByRole("button", { name: /Release history/ })).toBeInTheDocument();
 
-    historyGraph = settled;
+    title = "Release history updated";
     act(() => {
       ws.push(messageChange(30, "message.updated", { ...message, meta: { ...message.meta, closed: true } }));
       ws.push({ seq: 31, type: "task_graph.updated", data: { graph: settled } });
     });
 
-    await waitFor(() => expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull());
-    expect(dialog).toBeInTheDocument();
-    expect(progress.innerHTML).not.toBe(pendingIcon);
-    expect(local.callsTo("GET", /task-graphs/)).toHaveLength(0);
+    expect(await within(sidePanel()).findByRole("button", { name: /Release history updated/ })).toBeInTheDocument();
+    expect(local.callsTo("GET", /\/completed$/)).toHaveLength(0);
   });
 
   it("看东京的项目经理：门禁拍板、Cancel graph 都发到东京（/d/<东京>/...），本机一条都不收", async () => {
