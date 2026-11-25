@@ -7,6 +7,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSyn
 import { dirname, join } from "node:path";
 import { isQuotaExhausted, askOf, extractAskCard, type Message, type RateLimitInfo } from "../../src/shared/domain.ts";
 import { API_PATHS, type PersonaView } from "../../src/shared/index.ts";
+import { readCompleteLogLines, readJsonLog } from "../append-log.ts";
 import type { FakeScript, FakeSessionScript, FakeStep, FakeTurn } from "../fake-claude/fake-claude.ts";
 import { Client, makeEnv, messagesOf, sleep, type RunningDaemon } from "../e2e/harness.ts";
 import { removeOwnClaudeProjects, removeOwnVendorRecords } from "../smoke/kit.ts";
@@ -17,7 +18,7 @@ import type { RouterConfig } from "./fakes/claude-router.ts";
 import { type PmSandboxInput, pmSandboxInput, pmSandboxProfile, preflight, FAKE_CLAUDE, ROUTER, isolationEnv, realGitPath, whichFirst, writeShims } from "./isolation.ts";
 import { EVAL_EVIDENCE_MAX_CHARS, EVAL_GH_LOG_MAX_BYTES, EVAL_MAX_PM_TURNS, EVAL_TRANSCRIPT_MAX_CHARS, EVAL_WORKER_OVERRUN_DELAY_MS } from "./limits.ts";
 import { NEUTRAL_PERSONA, REPLAY_DIR } from "./scenarios.ts";
-import type { Facts, Scenario, ScenarioContext, TrialResult } from "./types.ts";
+import type { Facts, RecordedCall, Scenario, ScenarioContext, TrialResult } from "./types.ts";
 
 export interface TrialTimings {
   trialMs: number;
@@ -169,12 +170,8 @@ function followUpDue(scenario: Scenario, msgs: Message[], recordFile: string, in
   if (followUp === undefined || injected.some((e) => e.detail.includes(followUp.text))) return false;
   if (msgs.some((m) => m.kind === "worker" && (m.meta as { event?: string } | null)?.event === "report")) return true;
   const after = followUp.afterTool;
-  if (after === undefined || !existsSync(recordFile)) return false;
-  return readFileSync(recordFile, "utf8").split("\n").some((line) => {
-    if (line === "") return false;
-    const call = JSON.parse(line) as { tool: string; argv: string[] };
-    return call.tool === after.tool && call.argv.join(" ").includes(after.match);
-  });
+  if (after === undefined) return false;
+  return readJsonLog<RecordedCall>(recordFile).some((call) => call.tool === after.tool && call.argv.join(" ").includes(after.match));
 }
 
 function copyShots(scenario: Scenario, ctx: ScenarioContext): void {
@@ -309,7 +306,7 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
   const pidFile = join(plan.resultDir, "process-groups");
   const cleanup = (releaseMarkers = false) => {
     if (daemon?.child.pid) killGroup(daemon.child.pid);
-    if (existsSync(pidFile)) for (const line of readFileSync(pidFile, "utf8").split("\n")) {
+    for (const line of readCompleteLogLines(pidFile)) {
       const pid = Number(line);
       if (Number.isSafeInteger(pid) && pid > 1) killGroup(pid);
     }

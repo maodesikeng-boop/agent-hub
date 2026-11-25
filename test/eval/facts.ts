@@ -1,7 +1,7 @@
 // 从一次试跑的账本（只读打开）、gh 替身记录、只记录替身的记录里取事实（设计 4.1）。检查只看这里出来的 Facts。
 // 图的形状经这一个函数读：以后第 4 步改表结构，只改这里。
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, readFileSync } from "node:fs";
+import { readJsonLog } from "../append-log.ts";
 import type { Facts, FactGraph, FactMessage, FactWorker, GhCall, RecordedCall, TrialMetrics } from "./types.ts";
 
 const parse = <T>(text: string | null | undefined, fallback: T): T => {
@@ -12,20 +12,6 @@ const parse = <T>(text: string | null | undefined, fallback: T): T => {
     return fallback;
   }
 };
-
-export function readJsonl<T>(file: string): T[] {
-  if (!existsSync(file)) return [];
-  return readFileSync(file, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .flatMap((l) => {
-      try {
-        return [JSON.parse(l) as T];
-      } catch {
-        return [];
-      }
-    });
-}
 
 export interface FactsInput {
   dbFile: string;
@@ -141,8 +127,8 @@ export function readFacts(input: FactsInput): Facts {
       graphs,
       tools,
       messages,
-      gh: readJsonl<GhCall>(input.ghCallsFile),
-      recorded: readJsonl<RecordedCall>(input.recordFile),
+      gh: readJsonLog<GhCall>(input.ghCallsFile),
+      recorded: readJsonLog<RecordedCall>(input.recordFile),
       personaChanges,
       personaSeen,
       injected: input.injected,
