@@ -21,7 +21,6 @@ import {
   makeSession,
   makeSnapshot,
   makeUserMessage,
-  messageChange,
 } from "./test-utils.ts";
 
 const MAC = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
@@ -634,7 +633,7 @@ it("手机直达远端：清单及目标快照未到不误清路由，到达后�
   await waitFor(() => expect(location.hash).toBe(""));
 });
 
-it("桌面点 0-PM 或连接中的电脑，随后新来 PM 时自动写入对话路由并恢复 Pieces 展开与切换", async () => {
+it("桌面点 0-PM 或连接中的电脑，随后新来 PM 时自动写入对话路由并恢复工作面板展开与切换", async () => {
   const user = userEvent.setup();
   const empty = makeSnapshot({ pms: [], conversations: [], sessions: [] });
   const fleet = new Fleet(empty, onePm("东京"), null);
@@ -649,26 +648,31 @@ it("桌面点 0-PM 或连接中的电脑，随后新来 PM 时自动写入对话
       changeOf(12, "conversation.created", { conversation: makeConversation({ id: 1, pmId: 1, title: "新经理" }) }),
     );
     lastSocket("local").push(
-      messageChange(13, "message.created", makeMessage({ id: 9, conversationId: 1, text: "要发布吗？", meta: { needsUser: true } })),
+      changeOf(13, "conversation.created", { conversation: { id: 30, kind: "worker", pmId: 1, projectId: null, title: "部署检查", createdAt: 2_000 } }),
     );
   });
 
   await waitFor(() => expect(location.hash).toBe("#/c/1"));
-  expect(await screen.findByRole("complementary", { name: "Pieces" })).toBeInTheDocument();
+  expect(await screen.findByRole("complementary", { name: "Work panel" })).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "Close Pieces" }));
-  expect(screen.queryByRole("complementary", { name: "Pieces" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Close work panel" }));
+  expect(screen.queryByRole("complementary", { name: "Work panel" })).toBeNull();
 
-  await user.click(screen.getByRole("button", { name: /Show Pieces/ }));
-  expect(screen.getByRole("complementary", { name: "Pieces" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /Show work panel/ }));
+  expect(screen.getByRole("complementary", { name: "Work panel" })).toBeInTheDocument();
 });
 
-it("桌面点连接中的远端电脑，加载完成出现 PM 后自动写入远端对话路由并支持 Show Pieces", async () => {
+it("桌面点连接中的远端电脑，加载完成出现 PM 后自动写入远端对话路由并支持 Show work panel", async () => {
   const user = userEvent.setup();
   let finishRemote!: (reply: { status: number; body: StateSnapshot }) => void;
-  const remoteSnapshot = onePm("东京经理", [
-    makeMessage({ id: 9, conversationId: 1, text: "要部署吗？", meta: { needsUser: true } }),
-  ]);
+  const baseRemote = onePm("东京经理");
+  const remoteSnapshot: StateSnapshot = {
+    ...baseRemote,
+    conversations: [
+      ...baseRemote.conversations,
+      makeConvSnapshot([], { conversation: { id: 30, kind: "worker", pmId: 1, projectId: null, title: "部署检查", createdAt: 2_000 } }),
+    ],
+  };
   const fleet = new Fleet(onePm("本机经理"), remoteSnapshot, [mac, tokyo]);
   fleet.remote.state = () => new Promise((resolve) => { finishRemote = resolve; });
   await boot(fleet, { connect: false });
@@ -678,5 +682,5 @@ it("桌面点连接中的远端电脑，加载完成出现 PM 后自动写入远
 
   await act(async () => finishRemote({ status: 200, body: remoteSnapshot }));
   await waitFor(() => expect(location.hash).toBe(`#/d/${TOKYO}/c/1`));
-  expect(await screen.findByRole("complementary", { name: "Pieces" })).toBeInTheDocument();
+  expect(await screen.findByRole("complementary", { name: "Work panel" })).toBeInTheDocument();
 });

@@ -335,8 +335,6 @@ describe("初始快照的上限（一个月的量）", () => {
     expect(workers).toHaveLength(SNAPSHOT_ENDED_WORKERS_PER_PM);
     expect(workers.every((c) => c.messages.length === 0 && c.hasMore && c.workerLine?.line.event === "ended" && c.workerLine.endedAt !== null)).toBe(true);
     expect(snap.sessions.filter((s) => s.status === "ended")).toHaveLength(SNAPSHOT_ENDED_WORKERS_PER_PM);
-    const pmId = snap.pms[0]!.id;
-    expect(snap.olderEndedWorkers).toEqual({ [pmId]: Math.min(...workers.map((c) => c.conversation.id)) });
     expect(snap.conversations.find((c) => c.conversation.id === pmConversation)!.messages).toHaveLength(SNAPSHOT_RECENT_MESSAGES);
     expect(snap.activeTaskGraphs).toHaveLength(ACTIVE_GRAPHS);
     // 没有待拍板项；简报不分已读未读取最近 30 条（15 条未读 + 15 条最近读过的）

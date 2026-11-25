@@ -51,20 +51,15 @@ export const YOUR_TURN = "Your turn";
 
 export const NO_DATA = "—";
 
-const PIECE_TITLE_PREFIX = /^(?:界面|修复|功能|素材|排查|设计|重构|测试|清理|优化|文档)\s*[:：]\s*/;
+const WORKER_TITLE_PREFIX = /^(?:界面|修复|功能|素材|排查|设计|重构|测试|清理|优化|文档)\s*[:：]\s*/;
 
-export function cleanPieceTitle(title: string): string {
-  const cleaned = title.replace(PIECE_TITLE_PREFIX, "");
+export function cleanWorkerTitle(title: string): string {
+  const cleaned = title.replace(WORKER_TITLE_PREFIX, "");
   return cleaned === "" ? title : cleaned;
 }
 
 export function formatContext(usage: TokenUsage): string {
   return usage.context > 0 ? `${formatCount(usage.context)} context` : NO_DATA;
-}
-
-export function formatTokenDetail(usage: TokenUsage): string {
-  const n = (v: number) => `${v.toLocaleString("en-US")} tokens`;
-  return [`Context ${n(usage.context)}`, "Cumulative so far", `Input ${n(usage.input)}`, `Cache read ${n(usage.cacheRead)}`, `Cache write ${n(usage.cacheWrite)}`, `Output ${n(usage.output)}`].join("\n");
 }
 
 const utf8Encoder = new TextEncoder();
@@ -95,26 +90,26 @@ export function shortPath(path: string): string {
   return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 }
 
-const PIECE_EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {
+const WORKER_EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {
   started: "Started",
   ended: "Ended",
   user_message: "You said",
   turn_failed: "Turn failed",
   worktree_failed: "Couldn't create worktree",
 };
-const PIECE_REPORT_LABELS: Readonly<Record<WorkerLineStatus, string>> = {
+const WORKER_REPORT_LABELS: Readonly<Record<WorkerLineStatus, string>> = {
   done: "Done",
   problem: "Problem",
   gave_up: "Gave up",
   unformatted: "Reported",
 };
 
-export function pieceLineParts(line: { title: string; event: WorkerEvent; status: WorkerLineStatus | null; summary: string | null; readonly: boolean }): {
+export function workerLineParts(line: { title: string; event: WorkerEvent; status: WorkerLineStatus | null; summary: string | null; readonly: boolean }): {
   title: string;
   state: string;
   detail: string;
 } {
-  const state = line.event === "report" ? PIECE_REPORT_LABELS[line.status ?? "unformatted"] : PIECE_EVENT_LABELS[line.event];
+  const state = line.event === "report" ? WORKER_REPORT_LABELS[line.status ?? "unformatted"] : WORKER_EVENT_LABELS[line.event];
   const detail = line.summary === null ? "" : truncateChars(line.summary.replace(/\s+/g, " ").trim(), WORKER_LINE_SUMMARY_CHARS);
   return { title: line.title, state: line.event === "started" && line.readonly ? `${state} read-only` : state, detail };
 }
@@ -125,8 +120,8 @@ export const MODE_LABELS: Readonly<Record<PmMode, string>> = {
 };
 
 export const MODE_OPTION_DETAILS: Readonly<Record<PmMode, string>> = {
-  manage_only: "Breaks work into Pieces and reviews the results",
-  hands_on: "Makes small edits directly, sends bigger work to Pieces",
+  manage_only: "Breaks work into Workers and reviews the results",
+  hands_on: "Makes small edits directly, sends bigger work to Workers",
 };
 
 export interface ErrorInfo {

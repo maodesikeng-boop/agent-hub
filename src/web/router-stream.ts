@@ -155,7 +155,7 @@ function buildDestinations(command: RouterCommandRecord, selfId: string | undefi
     const deviceKey = deviceKeyOf(d.deviceId, selfId ?? null);
     const self = deviceKey === "";
     const name = worker
-      ? (d.title ?? d.pmName ?? `Piece #${d.workerId ?? conversationId}`)
+      ? (d.title ?? d.pmName ?? `Worker #${d.workerId ?? conversationId}`)
       : (d.pmName ?? `#${d.pmId}`);
     out.push({
       key: `${deviceKey || "local"}:${worker ? "w" : "c"}:${conversationId}:${i}`,

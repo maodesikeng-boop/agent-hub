@@ -17,7 +17,7 @@ export interface TabBarProps {
 
 /**
  * Postcondition: maps the empty route to projects, the Router route to router, and the Settings home to settings;
- * returns null for pushed pages (conversations, Pieces, PM settings, and settings sections), where the tab bar hides.
+ * returns null for pushed pages (conversations, Workers, PM settings, and settings sections), where the tab bar hides.
  */
 export function mobileTabOf(route: Route | null): MobileTab | null {
   if (route === null) return "projects";

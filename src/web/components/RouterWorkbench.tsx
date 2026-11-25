@@ -52,11 +52,12 @@ import { DraftComposer } from "./Composer.tsx";
 import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { RouterAvatar } from "./RouterAvatar.tsx";
-import { RIGHT_RAIL_VISIBLE_ROWS } from "./RightRail.tsx";
 import { RouterDecisionCard } from "./RouterDecisionCard.tsx";
 import { RouterModelPicker } from "./RouterModelPicker.tsx";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { RouterStream } from "./RouterStream.tsx";
+
+const ROUTER_TRAY_VISIBLE_ROWS = 3;
 
 const ROUTER_COMMAND_MUTATION_KEY = ["router-command"] as const;
 
@@ -213,9 +214,9 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
 
   const otherEntries =
     expandedEntry === null ? decisions : decisions.filter((d) => d.decision.key !== expandedEntry.decision.key);
-  const hasMoreRows = otherEntries.length > RIGHT_RAIL_VISIBLE_ROWS;
+  const hasMoreRows = otherEntries.length > ROUTER_TRAY_VISIBLE_ROWS;
   const shownRows =
-    hasMoreRows && !rowsExpanded ? otherEntries.slice(0, RIGHT_RAIL_VISIBLE_ROWS) : otherEntries;
+    hasMoreRows && !rowsExpanded ? otherEntries.slice(0, ROUTER_TRAY_VISIBLE_ROWS) : otherEntries;
 
   return (
     <Collapsible asChild open={!collapsed} onOpenChange={(open) => setCollapsed(!open)}>

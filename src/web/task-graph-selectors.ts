@@ -30,7 +30,7 @@ function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxSize: number):
   map.set(key, value);
 }
 
-export function taskGraphPriority(graph: TaskGraph): number {
+function taskGraphPriority(graph: TaskGraph): number {
   let hasWaitingPm = false;
   for (const node of graph.nodes) {
     if (isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node)) return 0;

@@ -5,7 +5,7 @@ import { createClient, localClient, type HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
 import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, PRODUCT_NAME, WAITING_SETTLE_MS, WS_BURST_FRAME_LIMIT, WS_FRAME_BUDGET_MS, type DeviceInfo, type StateSnapshot } from "../shared/index.ts";
 import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
-import { ACCOUNT_QUERY_KEY, queryClient, taskGraphHistoryKey } from "./query-client.ts";
+import { ACCOUNT_QUERY_KEY, completedWorkKey, queryClient } from "./query-client.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
 import { useDeviceReminders } from "./notify.ts";
 import {
@@ -117,9 +117,9 @@ describe("DeviceHub change stream recovery", () => {
   it("refreshes a pending history read and invalidates cached history only for the resynced device", async () => {
     installFakeWebSocket();
     const qc = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-    const remoteHistory = taskGraphHistoryKey(REMOTE, 1);
-    const cachedHistory = taskGraphHistoryKey(REMOTE, 2);
-    const localHistory = taskGraphHistoryKey(LOCAL_DEVICE, 1);
+    const remoteHistory = completedWorkKey(REMOTE, 1);
+    const cachedHistory = completedWorkKey(REMOTE, 2);
+    const localHistory = completedWorkKey(LOCAL_DEVICE, 1);
     for (const key of [cachedHistory, localHistory]) qc.setQueryData(key, []);
 
     const { hub, requests } = await readyHub(REMOTE, makeSnapshot({ seq: 10, bootId: BOOT_A }), qc);
@@ -364,27 +364,6 @@ describe("DeviceHub 按需拉取", () => {
     expect(api.calls.filter((c) => c.path === "/api/conversations/lookup")).toHaveLength(2);
     hub.dispose();
   });
-
-  it("loadEndedWorkers：请求在途时 resync 重置了翻页起点，迟到的旧页不并进状态、不跳过中间页", async () => {
-    const worker = (id: number) => makeConvSnapshot([], { conversation: { id, kind: "worker", pmId: 1, title: `W${id}` } });
-    const { api, hub } = await bootHub({ olderEndedWorkers: { 1: 40 } });
-    let release!: () => void;
-    api.endedWorkers = () =>
-      new Promise((resolve) => {
-        release = () => resolve({ status: 200, body: { conversations: [worker(39)], sessions: [], nextBefore: 20 } });
-      });
-    const loading = hub.loadEndedWorkers(1);
-    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
-    api.state = () => ({ status: 200, body: makeSnapshot({ seq: 5, pms: [makePm({ id: 1 })], olderEndedWorkers: { 1: 45 } }) });
-    FakeWebSocket.last.open();
-    FakeWebSocket.last.push({ type: "resync" });
-    await vi.waitFor(() => expect(hub.state.olderEndedWorkers).toEqual({ 1: 45 }));
-    release();
-    await loading;
-    expect(hub.state.olderEndedWorkers).toEqual({ 1: 45 });
-    expect(hub.state.conversations[39]).toBeUndefined();
-    hub.dispose();
-  });
 });
 
 describe("DevicesStore（zustand store 驱动）", () => {
@@ -395,9 +374,9 @@ describe("DevicesStore（zustand store 驱动）", () => {
       Response.json(String(input) === "/api/devices" ? { devices: [remote] } : makeSnapshot({ seq: 10 })),
     ));
     const qc = new QueryClient();
-    const remoteHistory = taskGraphHistoryKey(REMOTE, 1);
-    const otherProject = taskGraphHistoryKey(REMOTE, 2);
-    const localHistory = taskGraphHistoryKey(LOCAL_DEVICE, 1);
+    const remoteHistory = completedWorkKey(REMOTE, 1);
+    const otherProject = completedWorkKey(REMOTE, 2);
+    const localHistory = completedWorkKey(LOCAL_DEVICE, 1);
     for (const key of [remoteHistory, otherProject, localHistory]) qc.setQueryData(key, { graphs: [], hasMore: false });
 
     const store = new DevicesStore(undefined, source === "routed" ? REMOTE : undefined, undefined, qc);

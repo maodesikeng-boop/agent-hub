@@ -787,10 +787,10 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(finished.reportItem).toMatchObject({ kind: "report", summary: "多路构建已合并发布（PR #200）" });
     expect(ledger.snapshot().activeTaskGraphs).toEqual([]);
 
-    const history = ledger.listProjectTaskGraphs(lin.projectId);
-    expect(history.graphs).toHaveLength(1);
-    expect(history.graphs[0]?.id).toBe(graph.id);
-    expect(history.hasMore).toBe(false);
+    const completed = ledger.completedWork(lin.pmId, null, 20);
+    expect(completed.items).toHaveLength(1);
+    expect(completed.items[0]).toMatchObject({ kind: "graph", graphId: graph.id, outcome: "done" });
+    expect(completed.next).toBeNull();
   });
 
   it("第 2 步验收场景：最后节点完成后保持待交付、自动发交付单（防重复轰炸）、支持补挂审查节点与打回重派、PR 未合并默认拦截与 --unmerged-ok 放行", () => {

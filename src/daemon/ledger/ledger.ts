@@ -42,6 +42,7 @@ import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
+import { completedWorkPage } from "./completed-work.ts";
 import { createLedgerSnapshotQueries } from "./snapshot.ts";
 import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
@@ -165,6 +166,14 @@ function reconcileTurnWorktree(
   if (probe === undefined) return null;
   const workerId = getAgentSession(db, id)?.workerId;
   return workerId == null ? null : branches.reconcileWorkerGraph(workerId, signal);
+}
+
+function sessionRoleOf(db: Db, sessionId: SessionId): SqliteLedger["sessionRole"] extends (id: SessionId) => infer R ? R : never {
+  const s = getAgentSession(db, sessionId);
+  if (s === null) return null;
+  if (s.role === "pm" && s.pmId === null) return null;
+  if (s.role === "worker" && s.workerId === null) return null;
+  return s.role;
 }
 
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
@@ -372,6 +381,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       workers.clearMaxTime(conversationId);
       messages.requestStop(conversationId);
     },
+    endWorkerConversation(conversationId) {
+      write((p) => workers.endWorkerConversationIn(p, conversationId));
+    },
     rewindLastUserMessage(conversationId) {
       const rewound = messages.rewindLastUserMessage(conversationId);
       if (rewound !== null) workers.clearMaxTime(conversationId);
@@ -382,7 +394,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
     snapshot(): LedgerSnapshot {
       const activeTaskGraphs = taskGraphs.activeSnapshotGraphs();
-      const { conversations, sessions, olderEndedWorkers } = snapshotQueries.snapshotConversations(activeTaskGraphs);
+      const { conversations, sessions } = snapshotQueries.snapshotConversations(activeTaskGraphs);
       return {
         seq: log.seq,
         pms: db.all<PmDbRow>(`${PM_SELECT} ORDER BY p.id`).map(toPm),
@@ -399,14 +411,13 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         schedules: schedules.all(),
         router: router.snapshotSlice(),
         activeTaskGraphs,
-        ...(Object.keys(olderEndedWorkers).length > 0 ? { olderEndedWorkers } : {}),
       };
     },
 
     messagesBefore: messages.messagesBefore,
     messagesAfter: messages.messagesAfter,
     lookupConversations: snapshotQueries.lookupConversations,
-    endedWorkersPage: snapshotQueries.endedWorkersPage,
+    completedWork: (pmId, cursor, limit) => completedWorkPage(db, pmId, cursor, limit),
 
     changesSince: (seq) => log.since(seq),
     onChange: (listener) => subscribe(changeListeners, listener),
@@ -509,13 +520,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     uncleanedHandovers: handover.uncleanedHandovers,
 
     hubCall: hub.hubCall,
-    sessionRole: (sessionId) => {
-      const s = getAgentSession(db, sessionId);
-      if (s === null) return null;
-      if (s.role === "pm" && s.pmId === null) return null;
-      if (s.role === "worker" && s.workerId === null) return null;
-      return s.role;
-    },
+    sessionRole: (sessionId) => sessionRoleOf(db, sessionId),
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),
@@ -580,7 +585,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       detailOf: projectCatalog.detailOf,
       hasQueued: projectCatalog.hasQueued,
     },
-    listProjectTaskGraphs: taskGraphs.listProjectHistory,
     decideTaskNode: taskGraphs.decideNode,
     skipTaskNode: taskGraphs.skipNode,
     cancelTaskGraph: taskGraphs.cancelGraph,

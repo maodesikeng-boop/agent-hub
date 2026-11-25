@@ -50,10 +50,11 @@ describe("资料页 → Worktree setup：准备命令查看、编辑、清空", 
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.last.open());
     const page = await screen.findByRole("complementary", { name: "小林's settings" });
-    const folders = await within(page).findByRole("region", { name: "Folders" });
-    const nav = within(page).getByRole("navigation", { name: "Project manager settings pages" });
-    expect(folders.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    await userEvent.setup().click(within(nav).getByRole("button", { name: /Worktree setup/ }));
+    const nav = await within(page).findByRole("navigation", { name: "Project manager settings pages" });
+    const folders = within(nav).getByRole("button", { name: /^Folders/ });
+    const worktree = within(nav).getByRole("button", { name: /^Worktree setup/ });
+    expect(folders.compareDocumentPosition(worktree) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.setup().click(worktree);
     const group = await within(page).findByRole("region", { name: "Worktree setup" });
     const box = within(group).getByRole("textbox", { name: "Worktree setup" });
     expect(box).toHaveValue(SAVED);

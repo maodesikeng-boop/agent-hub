@@ -311,10 +311,13 @@ function invalidateOtherViews(qc: QueryClient, except: CapabilityScopeKey, onlyP
   void qc.invalidateQueries({ predicate: (query) => isScopeView(query, except, onlyProjects) });
 }
 
-export function useCapabilitiesView(scope: CapabilityScope) {
+export function useCapabilitiesView(scope: CapabilityScope, enabled = true) {
   const qc = useHubQueryClient();
   const queryKey = capabilitiesQueryKey(scope);
-  return useQuery({ queryKey, queryFn: guardedQueryFn(qc, capabilityScopeKey(scope), queryKey, () => localClient.fetchCapabilities(scope)) }, qc);
+  return useQuery(
+    { queryKey, queryFn: guardedQueryFn(qc, capabilityScopeKey(scope), queryKey, () => localClient.fetchCapabilities(scope)), enabled },
+    qc,
+  );
 }
 
 export function useCustomizedCapabilityPms(): readonly PmId[] | undefined {

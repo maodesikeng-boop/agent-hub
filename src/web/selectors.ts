@@ -16,7 +16,6 @@ export {
   isWorkerBound,
   pendingDecisionsOf,
   sortActiveGraphs,
-  taskGraphPriority,
   unboundWorkersOf,
   workersByWorkerId,
 } from "./task-graph-selectors.ts";
@@ -522,6 +521,7 @@ export interface WorkerEntry {
   vendor?: string;
   model?: string | null;
   effort?: string | null;
+  branch?: string | null;
   usage: TokenUsage;
   tone: WorkerTone;
 }
@@ -570,6 +570,7 @@ function sameWorkerEntry(a: WorkerEntry, b: WorkerEntry): boolean {
     a.vendor === b.vendor &&
     a.model === b.model &&
     a.effort === b.effort &&
+    a.branch === b.branch &&
     a.tone === b.tone &&
     sameUsage(a.usage ?? EMPTY_TOKEN_USAGE, b.usage ?? EMPTY_TOKEN_USAGE)
   );
@@ -638,10 +639,11 @@ function workerConvsForPm(conversations: HubState["conversations"], pmId: PmId):
 function computeWorkers(state: HubState, pmId: PmId): WorkerEntry[] {
   const { latest, endedAt: endedLines } = workerLinesOf(state, pmId);
   return workerConvsForPm(state.conversations, pmId)
-    .map(({ conversation, messages }) => {
+    .map(({ conversation, messages, workerBranch }) => {
       const session = sessionOf(state, conversation.id);
       const latestEntry = latest.get(conversation.id);
       const workerId = latestEntry?.line.workerId ?? messages[0]?.workerId ?? undefined;
+      const branch = workerBranch ?? latestEntry?.line.branch ?? null;
       return {
         conversationId: conversation.id,
         ...(workerId !== undefined ? { workerId } : {}),
@@ -651,6 +653,7 @@ function computeWorkers(state: HubState, pmId: PmId): WorkerEntry[] {
         vendor: session?.vendor,
         model: session?.model,
         effort: session?.effort,
+        ...(branch !== null ? { branch } : {}),
         usage: session?.usage ?? EMPTY_TOKEN_USAGE,
         tone: toneOf(latestEntry),
       };
@@ -702,7 +705,7 @@ export function isRenewing(state: HubState, conversationId: ConversationId): boo
   return renewingIn(state.conversations[conversationId]?.messages ?? []);
 }
 
-// Routine Worker start and end lines carry no status or summary; Pieces and the Task Graph show that state instead.
+// Routine Worker start and end lines carry no status or summary; the work panel shows that state instead.
 function hiddenFromChat(message: Message): boolean {
   if (isSilentTriggerMessage(message)) return true;
   const event = workerEventOf(message)?.event;

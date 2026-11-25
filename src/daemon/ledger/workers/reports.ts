@@ -4,7 +4,7 @@ import { HUB_COMMAND } from "../../../shared/names.ts";
 import { parseReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
 import { userBlockerKindOfFailure } from "../../../shared/user-blockers.ts";
 import { isAgentVendor } from "../../../shared/vendors.ts";
-import { parseWorkerReport } from "../../../shared/worker.ts";
+import { extractReportPrUrl, parseWorkerReport } from "../../../shared/worker.ts";
 import type { Pending } from "../context.ts";
 import { exitFailureReason } from "../messages.ts";
 import type { WorkerDbRow } from "../rows.ts";
@@ -92,7 +92,8 @@ export function insertReport(
   const body = text.trim() === "" ? NO_REPLY_TEXT : text;
   const status: WorkerLineStatus = parsed.kind === "ok" ? parsed.report.status : "unformatted";
   const summary = parsed.kind === "ok" ? parsed.report.summary : parsed.summary;
-  const report = { event: "report" as const, status, summary, turnMessageId };
+  const prUrl = parsed.kind === "ok" ? extractReportPrUrl(parsed.report.pr) : null;
+  const report = { event: "report" as const, status, summary, turnMessageId, ...(prUrl !== null ? { prUrl } : {}) };
   const review = parseReviewTarget(worker.review_json);
   const graphHandling = w.options.taskGraphs?.onWorkerTurnReportIn(
     p,

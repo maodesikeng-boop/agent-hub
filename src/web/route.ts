@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { isDeviceId, type ConversationId, type DeviceId, type PmId } from "../shared/index.ts";
+import { INFO_PAGES, isInfoPage, type InfoPage } from "./info-rows.ts";
 
-/** Drill-down pages inside PM settings; the settings summary itself has no page. */
-export const PROFILE_PAGES = ["capabilities", "persona", "memory", "worktree", "history"] as const;
-export type ProfilePage = (typeof PROFILE_PAGES)[number];
-const isProfilePage = (value: string): value is ProfilePage => (PROFILE_PAGES as readonly string[]).includes(value);
+export { INFO_PAGES, type InfoPage };
 
 export type ScopedRoute = (
   | { view: "conversation"; id: ConversationId }
   | { view: "worker"; id: ConversationId }
-  | { view: "profile"; pmId: PmId; page?: ProfilePage }
+  | { view: "profile"; pmId: PmId; page?: InfoPage }
 ) & { device?: DeviceId };
 
 export const SETTINGS_SECTIONS = [
@@ -58,7 +56,7 @@ export function parseRoute(hash: string): Route | null {
   const rawPage = match[4];
   if (match[2] === "pm") {
     if (rawPage === undefined) return { view: "profile", pmId: n, ...on };
-    if (!isProfilePage(rawPage)) return null;
+    if (!isInfoPage(rawPage)) return null;
     return { view: "profile", pmId: n, page: rawPage, ...on };
   }
   if (rawPage !== undefined) return null;

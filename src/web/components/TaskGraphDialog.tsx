@@ -1,86 +1,40 @@
 import { useMutation } from "@tanstack/react-query";
-import { Loader2 } from "../ui/icons.ts";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
-  isTaskNodeWaitingPm,
   isTaskNodeUserBlocked,
   isTaskNodeWaitingDecision,
+  isTaskNodeWaitingPm,
   userBlockerCardText,
   type ConversationId,
   type TaskGraph,
-  type TaskGraphId,
   type TaskNode,
+  type TaskNodeKey,
 } from "../../shared/index.ts";
+import type { JellyColorId } from "../../shared/slimes.ts";
 import { clearDecisionDraft, gateDecisionDraftKey, useDecisionDraft } from "../decision-drafts.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
-import { cn } from "../lib/utils.ts";
+import { graphFlowOf } from "../graph-flow.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { workersByWorkerId, type WorkerEntry } from "../selectors.ts";
-import { computeTaskGraphLayout, DEFAULT_ROOT_FONT_SIZE_PX } from "../task-graph-layout.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter, ZOOM_DIALOG } from "../ui/dialog.tsx";
-import { PM_FRUITS } from "../../shared/fruits.ts";
-import type { JellyColorId } from "../../shared/slimes.ts";
-import { fruitTrackVars } from "../lib/palette.ts";
-import type { StepBead } from "../pixel-path.ts";
-import { GRAPH_TUBE_CELL_PX } from "../task-graph-layout.ts";
+import { Loader2 } from "../ui/icons.ts";
+import { nodeWorkStatusOf } from "../work-status.ts";
 import { UnsentDraftBanner } from "./Deliverables.tsx";
-import { GateMark } from "./GateMark.tsx";
+import { GateDecisionCard, resolveBoundWorker } from "./GateDecisionCard.tsx";
+import { GraphCanvas } from "./GraphCanvas.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
-import { GateDecisionCard, JellyBead, resolveBoundWorker, TubeLayer } from "./PeelTrack.tsx";
-import { ShimmerOverlay } from "./StatusShimmer.tsx";
-import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
+import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
-function readRootFontSizePx(): number {
-  if (typeof document === "undefined" || typeof getComputedStyle !== "function") {
-    return DEFAULT_ROOT_FONT_SIZE_PX;
-  }
-  const parsed = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ROOT_FONT_SIZE_PX;
+function showUserCard(node: TaskNode, status: TaskGraph["status"]): boolean {
+  return status !== "cancelled" && (node.gateAskPending === true ||
+    (status === "active" && (isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node))));
 }
 
-function readCoarsePointer(): boolean {
-  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
-}
-
-function measureKeyOf(graphId: TaskGraphId, nodeKey: string, waitingGate: boolean): string {
-  return `${graphId}:${nodeKey}:${waitingGate ? "gate" : "node"}`;
-}
-
-function showUserCard(node: TaskNode, graphActive: boolean): boolean {
-  return node.gateAskPending === true ||
-    (graphActive && (isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node)));
-}
-
-function beadOf(node: TaskNode): StepBead {
-  if (node.status === "done") return node.skipped ? "pending" : "done";
-  if (node.status === "running") return "running";
-  if (isTaskNodeWaitingPm(node)) return "waitingPm";
-  return "pending";
-}
-
-const STEP_TAG: Readonly<Record<"done" | "running" | "gate" | "other", string>> = {
-  done: "bg-[var(--step-done-bg)] text-foreground",
-  running: "bg-background text-foreground shadow-[inset_0_0_0_1px_var(--peel)]",
-  gate: "bg-primary text-primary-foreground",
-  other: "bg-accent text-muted-foreground",
-};
-
-function StepTag({ n, tone }: { n: number; tone: keyof typeof STEP_TAG }) {
-  return <span className={cn("absolute top-0 left-0 px-1 text-xs leading-4 tabular-nums", STEP_TAG[tone])}>{String(n).padStart(2, "0")}</span>;
-}
-
-function BeadIcon({ bead }: { bead: StepBead }) {
-  return (
-    <svg viewBox="0 0 14 14" shapeRendering="crispEdges" aria-hidden="true" className="size-3.5 shrink-0">
-      <JellyBead bead={bead} center={{ x: 7, y: 7 }} cell={GRAPH_TUBE_CELL_PX} />
-    </svg>
-  );
-}
-
-function statusLabelOf(node: TaskNode): string {
+function statusLabelOf(node: TaskNode, graphStatus: TaskGraph["status"]): string {
+  if (graphStatus === "cancelled" && node.status !== "done") return "Cancelled";
   switch (node.status) {
     case "done":
       return node.skipped ? "Skipped" : "Done";
@@ -89,7 +43,7 @@ function statusLabelOf(node: TaskNode): string {
     case "waiting":
       return node.waitingFor === "user" ? "Waiting on you" : "Waiting on PM";
     case "pending":
-      return "Blocked";
+      return "Pending";
   }
 }
 
@@ -104,8 +58,9 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   open,
   onOpenChange,
   workers,
-  color = PM_FRUITS[0]!,
   onOpenWorker,
+  decisionKey,
+  terminal,
 }: {
   graph: TaskGraph | null;
   open: boolean;
@@ -113,95 +68,35 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   workers: readonly WorkerEntry[];
   color?: JellyColorId;
   onOpenWorker: (id: ConversationId) => void;
+  decisionKey?: TaskNodeKey | undefined;
+  terminal?: { title: string; outcome: "done" | "cancelled" | undefined } | undefined;
 }) {
   const client = useClient();
   const qc = useHubQueryClient();
-  const [measuredHeights, setMeasuredHeights] = useState<Readonly<Record<string, number>>>({});
-  const observerRef = useRef<ResizeObserver | null>(null);
-  const measureCard = useCallback((el: HTMLDivElement | null) => {
-    if (el === null || typeof ResizeObserver === "undefined") return;
-    observerRef.current ??= new ResizeObserver((entries) => {
-      setMeasuredHeights((prev) => {
-        let next = prev;
-        for (const entry of entries) {
-          const key = (entry.target as HTMLElement).dataset.measureKey;
-          const height = Math.ceil((entry.target as HTMLElement).offsetHeight);
-          if (key !== undefined && height > 0 && next[key] !== height) next = { ...next, [key]: height };
-        }
-        return next;
-      });
-    });
-    observerRef.current.observe(el);
-    return () => {
-      observerRef.current?.unobserve(el);
-      const key = el.dataset.measureKey;
-      if (key === undefined) return;
-      setMeasuredHeights((prev) => {
-        if (!(key in prev)) return prev;
-        const { [key]: _gone, ...rest } = prev;
-        return rest;
-      });
-    };
-  }, []);
   const [actionError, setActionError] = useState<ErrorLike | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const seenGateDraftKeyRef = useRef(new Map<string, string>());
-
-  const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
   const inFlightRef = useRef(false);
   const releaseLock = () => {
     inFlightRef.current = false;
   };
 
-  const nodeByKey = useMemo(() => {
-    const map = new Map<string, TaskNode>();
-    for (const n of graph?.nodes ?? []) map.set(n.key, n);
-    return map;
-  }, [graph]);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const focusDecision = useCallback((key: TaskNodeKey) => {
+    const card = Array.from(contentRef.current?.querySelectorAll<HTMLElement>("[data-decision-key]") ?? [])
+      .find((element) => element.dataset.decisionKey === key);
+    if (card === undefined) return false;
+    card.focus();
+    return true;
+  }, []);
 
-  const rootFontSizePx = open ? readRootFontSizePx() : DEFAULT_ROOT_FONT_SIZE_PX;
-  const coarsePointer = open && readCoarsePointer();
-
-  const layout = useMemo(() => {
-    if (graph === null) return null;
-    const isActive = graph.status === "active";
-    return computeTaskGraphLayout({
-      graphId: graph.id,
-      nodes: graph.nodes.map((n) => {
-        const activeWaitingUser = showUserCard(n, isActive);
-        const measured = measuredHeights[measureKeyOf(graph.id, n.key, activeWaitingUser)];
-        return {
-          key: n.key,
-          status: n.status,
-          activeGate: activeWaitingUser,
-          hasCard: n.gateQuestion !== null || n.decision !== null,
-          position: n.sortOrder,
-          optionCount: n.gateOptions.length,
-          hasSummary: Boolean(n.gateSummaryMd || n.artifact?.summary || n.decision),
-          hasQuestion: n.gateQuestion !== null && n.gateQuestion.trim() !== "" && n.gateQuestion !== n.title,
-          noteExpanded: activeWaitingUser,
-          ...(activeWaitingUser && n.userBlocker == null && n.artifact?.deliverables !== undefined
-            ? { deliverables: n.artifact.deliverables }
-            : {}),
-          ...(measured !== undefined ? { measuredHeightPx: measured } : {}),
-        };
-      }),
-      edges: graph.edges.map((e) => ({ from: e.fromKey, to: e.toKey })),
-      viewportMode: "dialog",
-      rootFontSizePx,
-      coarsePointer,
-    });
-  }, [graph, measuredHeights, rootFontSizePx, coarsePointer]);
-
-  const { emptyTubes, filledTubes } = useMemo(() => {
-    const edges = layout?.edges ?? [];
-    const tubesOf = (solid: boolean) => edges.filter((e) => e.solid === solid).map((e) => ({ center: e.d, highlight: e.highlightD }));
-    return { emptyTubes: tubesOf(false), filledTubes: tubesOf(true) };
-  }, [layout]);
-  const stepNumberOf = useMemo(() => {
-    const order = new Map((graph?.nodes ?? []).toSorted((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key)).map((n, i) => [n.key, i + 1]));
-    return (key: string) => order.get(key) ?? 0;
-  }, [graph]);
+  const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
+  const flow = useMemo(() => (graph === null ? null : graphFlowOf(graph)), [graph]);
+  const orderedNodes = useMemo(
+    () => (graph === null ? [] : graph.nodes.toSorted((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key))),
+    [graph],
+  );
+  const nodeByKey = useMemo(() => new Map(orderedNodes.map((n) => [n.key, n])), [orderedNodes]);
 
   const skipMutation = useMutation(
     {
@@ -224,6 +119,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       },
       onMutate: () => setActionError(null),
       onSuccess: () => {
+        void qc.invalidateQueries({ queryKey: ["completed-work"] });
         setConfirmingCancel(false);
         onOpenChange(false);
       },
@@ -242,16 +138,63 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
     run();
   };
 
-  if (graph === null || layout === null) return null;
+  const stepInteractive = useCallback(
+    (key: TaskNodeKey): boolean => {
+      const node = nodeByKey.get(key);
+      if (node === undefined) return false;
+      return (graph !== null && showUserCard(node, graph.status)) || resolveBoundWorker(node, workerByKey).worker !== null;
+    },
+    [graph, nodeByKey, workerByKey],
+  );
+
+  const handleOpenStep = useCallback(
+    (key: TaskNodeKey) => {
+      const node = nodeByKey.get(key);
+      if (node === undefined || focusDecision(key)) return;
+      const { worker } = resolveBoundWorker(node, workerByKey);
+      if (worker === null) return;
+      onOpenChange(false);
+      onOpenWorker(worker.conversationId);
+    },
+    [nodeByKey, workerByKey, focusDecision, onOpenChange, onOpenWorker],
+  );
+
+  if (graph === null || flow === null) {
+    if (terminal === undefined) return null;
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent title={terminal.title} className="max-w-110">
+          <p role="status" className="text-minor text-muted-foreground">
+            {terminal.outcome === "cancelled" ? "Cancelled" : terminal.outcome === "done" ? "Completed" : "This task graph is no longer active."}
+          </p>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  const doneCount = graph.nodes.filter((n) => n.status === "done").length;
   const graphStateLabel =
-    graph.status === "completed" ? "Completed" : graph.status === "cancelled" ? "Cancelled" : isTaskGraphReadyToFinish(graph) ? "Ready to finish" : null;
+    graph.status === "completed"
+      ? "Completed"
+      : graph.status === "cancelled"
+        ? "Cancelled"
+        : isTaskGraphReadyToFinish(graph)
+          ? "Ready to finish"
+          : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title={graph.title} className={ZOOM_DIALOG}>
+      <DialogContent
+        ref={contentRef}
+        title={graph.title}
+        className={ZOOM_DIALOG}
+        onOpenAutoFocus={(event) => {
+          if (decisionKey !== undefined && focusDecision(decisionKey)) event.preventDefault();
+        }}
+      >
         <div className="flex min-h-8 shrink-0 items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 text-minor text-muted-foreground">
-            <TaskProgressIcon graph={graph} color={color} size={20} />
+            <span className="tabular-nums">{`${doneCount}/${graph.nodes.length}`}</span>
             {graphStateLabel !== null && <span>{graphStateLabel}</span>}
           </div>
           {graph.status === "active" && (
@@ -267,13 +210,13 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
             </Button>
           )}
           <Dialog
-            open={confirmingCancel}
+            open={graph.status === "active" && confirmingCancel}
             onOpenChange={(next) => {
               if (!cancelMutation.isPending) setConfirmingCancel(next);
             }}
           >
             <DialogContent title="Cancel this task graph?" className="max-w-110">
-              <p>Unfinished steps in “{graph.title}” won't run. The project manager is told to wrap up any Pieces still working. This can't be undone.</p>
+              <p>Unfinished steps in “{graph.title}” won't run. The project manager is told to wrap up any Workers still working. This can't be undone.</p>
               <DialogFooter>
                 <DialogClose asChild>
                   <Button variant="outline" disabled={cancelMutation.isPending}>
@@ -293,64 +236,45 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
             {errorLine(actionError)}
           </p>
         )}
-        <DialogBody className="mx-0 block overflow-auto px-0">
-          <div
-            data-rankdir={layout.rankdir}
-            style={{ ...fruitTrackVars(color), width: `${layout.width}px`, minHeight: `${layout.height}px` }}
-            className="graph-canvas relative"
-          >
-            <svg
-              aria-hidden="true"
-              width={layout.width}
-              height={layout.height}
-              viewBox={`0 0 ${layout.width} ${layout.height}`}
-              shapeRendering="crispEdges"
-              className="pointer-events-none absolute inset-0"
-            >
-              <TubeLayer state="empty" segments={emptyTubes} cell={GRAPH_TUBE_CELL_PX} />
-              <TubeLayer state="filled" segments={filledTubes} cell={GRAPH_TUBE_CELL_PX} />
-              {layout.edges.map((edge) => (
-                <g key={edge.id} data-arrow={edge.solid ? "filled" : "empty"}>
-                  <path d={edge.arrowOutlineD} fill={edge.solid ? "var(--tube-line)" : "var(--tube-empty-line)"} />
-                  <path d={edge.arrowFillD} fill={edge.solid ? "var(--tube-core)" : "var(--tube-empty-core)"} />
-                </g>
-              ))}
-            </svg>
-            {layout.nodes.map((box) => {
-              if (box.boxKind !== "node") return null;
-              const node = nodeByKey.get(box.nodeKey);
-              if (!node) return null;
+        <DialogBody className="mx-0 flex flex-col gap-4 overflow-auto px-0">
+          <div className="shrink-0 overflow-x-auto rounded-sm">
+            <GraphCanvas
+              flow={flow}
+              orientation="horizontal"
+              paper
+              onOpenStep={handleOpenStep}
+              stepInteractive={stepInteractive}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-2.5">
+            {orderedNodes.map((node) => {
               const { workerId, worker } = resolveBoundWorker(node, workerByKey);
-              const isWaitingGate = showUserCard(node, graph.status === "active");
+              const isWaitingGate = showUserCard(node, graph.status);
               const isPending = node.status === "pending";
-              const isSkipped = node.status === "done" && node.skipped;
-              const isDone = node.status === "done" && !node.skipped;
-              const isRunning = node.status === "running";
               const isWaitingPm = isTaskNodeWaitingPm(node);
               const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
-              const measureKey = measureKeyOf(graph.id, node.key, isWaitingGate);
-
               const nodeRefKey = `${graph.id}:${node.key}`;
               const activeDraftKey = gateDecisionDraftKey(client.device, graph.id, node.key, node.gateAskMessageId);
               if (isWaitingGate) seenGateDraftKeyRef.current.set(nodeRefKey, activeDraftKey);
               if (isWaitingGate) {
                 return (
                   <div
-                    key={measureKey}
-                    ref={measureCard}
-                    data-measure-key={measureKey}
-                    style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
-                    className="absolute"
+                    key={node.key}
+                    data-step="waiting"
+                    data-decision-key={node.key}
+                    tabIndex={-1}
+                    className="grid scroll-mt-2 grid-cols-1 gap-1.5 rounded-sm focus-visible:outline-2 focus-visible:outline-border-focus"
                   >
-                    <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
-                      <span className="flex min-w-0 items-center gap-2 text-minor font-semibold text-primary">
-                        <span className="bg-primary px-1 text-xs leading-4 font-normal text-primary-foreground tabular-nums">{String(stepNumberOf(node.key)).padStart(2, "0")}</span>
-                        <GateMark size={16} />
-                        <span className="truncate" title={node.title}>{node.title}</span>
+                    <div className="flex items-center justify-between gap-2 px-1">
+                      <span className="flex min-w-0 items-center gap-2 text-minor font-semibold text-foreground">
+                        <WorkStatusIcon status="waiting" />
+                        <span className="truncate" title={node.title}>
+                          {node.title}
+                        </span>
                       </span>
-                      <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
+                      <span className="shrink-0 text-xs font-medium text-brand-ink">Waiting on you</span>
                     </div>
-                    {node.userBlocker != null && isTaskNodeUserBlocked(node) ? (
+                    {node.userBlocker != null ? (
                       <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} />
                     ) : (
                       <GateDecisionCard key={node.gateAskMessageId ?? node.key} graphId={graph.id} node={node} client={client} />
@@ -358,38 +282,25 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   </div>
                 );
               }
-
+              const stepStatus = nodeWorkStatusOf(node, graph.status);
               const decisionLabel = node.decision?.choice ?? node.decision?.note ?? null;
               const summaryText = node.artifact?.summary ?? null;
               const settledDraftKey =
                 node.gateAskMessageId !== null ? activeDraftKey : (seenGateDraftKeyRef.current.get(nodeRefKey) ?? activeDraftKey);
-
               return (
                 <div
-                  key={measureKey}
-                  ref={measureCard}
-                  data-measure-key={measureKey}
-                  // Height comes from content only; writing the measured height back would pin the card when it shrinks.
-                  style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
-                  data-step={beadOf(node)}
-                  className="pixel-card absolute flex"
+                  key={node.key}
+                  data-step={node.status === "done" && node.skipped ? "pending" : node.status}
+                  className="flex flex-col gap-1.5 rounded-sm border border-border bg-background px-3.5 py-2.5"
                 >
-                  <div className="pixel-card-body relative flex min-h-17 w-full flex-col justify-between gap-1.5 px-3 pt-5 pb-2.5">
-                    <StepTag n={stepNumberOf(node.key)} tone={isDone ? "done" : isRunning ? "running" : "other"} />
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="flex min-w-0 items-start gap-1.5 [&>svg]:mt-0.75">
-                        <BeadIcon bead={beadOf(node)} />
-                        <span
-                          title={node.title}
-                          className={cn(
-                            "line-clamp-2 min-w-0 text-minor font-medium wrap-anywhere",
-                            isRunning && "status-shimmer",
-                            (isPending || isSkipped) && "text-muted-foreground",
-                          )}
-                        >
-                          {node.title}{isRunning && <ShimmerOverlay text={node.title} />}
-                        </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <WorkStatusIcon status={stepStatus} />
+                      <span title={node.title} className="min-w-0 truncate text-minor font-medium text-foreground">
+                        {node.title}
                       </span>
+                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
                       {workerId !== null ? (
                         worker !== null ? (
                           <button
@@ -398,37 +309,35 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                               onOpenChange(false);
                               onOpenWorker(worker.conversationId);
                             }}
-                            className="shrink-0 cursor-pointer px-1.5 py-0.5 text-xs font-medium text-primary transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus tabular-nums"
+                            className="touch-target cursor-pointer rounded-xs px-1.5 py-0.5 text-xs font-medium text-brand-ink transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus tabular-nums"
                           >
                             #{workerId}
                           </button>
                         ) : (
-                          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{workerId}</span>
+                          <span className="text-xs text-muted-foreground tabular-nums">#{workerId}</span>
                         )
                       ) : (
-                        <span className="shrink-0 text-xs text-muted-foreground">{statusLabelOf(node)}</span>
+                        <span className="text-xs text-muted-foreground">{statusLabelOf(node, graph.status)}</span>
                       )}
-                    </div>
-                    {decisionLabel !== null && (
-                      <p className="truncate text-xs font-medium text-foreground">{decisionLabel}</p>
-                    )}
-                    {summaryText !== null && (
-                      <p className="line-clamp-2 text-xs text-muted-foreground">{summaryText}</p>
-                    )}
-                    <SettledGateDraft draftKey={settledDraftKey} settledNote={node.decision?.note ?? null} />
-                    {canSkip && (
-                      <div className="flex justify-end">
+                      {canSkip && (
                         <button
                           type="button"
                           disabled={skipMutation.isPending || cancelMutation.isPending}
                           onClick={() => runExclusive(() => skipMutation.mutate(node.key))}
-                          className="pointer-coarse:min-h-11 cursor-pointer px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
+                          className="touch-target cursor-pointer rounded-xs px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
                         >
                           Skip step
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
+                  {decisionLabel !== null && (
+                    <p title={decisionLabel} className="truncate text-xs font-medium text-foreground">
+                      {decisionLabel}
+                    </p>
+                  )}
+                  {summaryText !== null && <p className="line-clamp-2 text-xs text-muted-foreground">{summaryText}</p>}
+                  <SettledGateDraft draftKey={settledDraftKey} settledNote={node.decision?.note ?? null} />
                 </div>
               );
             })}
