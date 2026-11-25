@@ -17,20 +17,7 @@
 
 ### Decisions needed
 
-1. **Activity outside a step.** Tools can run before the first checklist update, between two steps, after every step is done, or under a step the model later renamed or removed.
-   - A. Attach it to the nearest step: before any step to the first step, otherwise to the step most recently in progress. The expanded list stays identical to the approved renders. **Recommended.**
-   - B. Add one muted "Other activity" row at the end of the expanded list that opens this work.
-   - C. Add a leading "Before the checklist" row for early work and attach the rest to the previous step.
-2. **Checklist across turns.** Some vendors keep one list for the whole session.
-   - A. Show a checklist only in turns where the AI changed it, using the full list after that change. **Recommended.**
-   - B. Keep showing the session's latest list in every later turn until all its steps are done.
-3. **Chevrons while running.** The approved running render shows no chevrons on step rows and one on the action line.
-   - A. Step rows have no chevron while running. The action-line chevron opens the in-progress step's process below the action line, or the whole process when the turn has no checklist. **Recommended.**
-   - B. The action-line chevron opens the whole turn's process so far, as it does today.
-   - C. Step rows are expandable while running, as they are after the turn ends.
-4. **Unfinished steps after a turn ends.** A stopped or interrupted turn, or a model that forgets a final update, leaves steps pending or in progress.
-   - A. Show the statuses as the AI last reported them. **Recommended.**
-   - B. Show any in-progress step as pending once the turn has ended.
+None. All four open items were decided by the user (option A for each) and are folded into Section 3 below.
 
 ## For Workers and reviewers
 
@@ -63,8 +50,8 @@ While a Project Manager or Worker turn runs, the slot that holds `Worked for` sh
 
 | Approach | Tradeoff |
 | --- | --- |
-| Append a `checklist` message per change; group process by message order in the web model | Reuses message pagination, change events, retention, and per-conversation delivery. History stays intact, so attribution is a pure function of ordered rows and can follow any of the options in decision 1. Needs one new message kind that text-only consumers already skip. |
-| One `checklist` message per turn updated in place, with each tool row tagged by the active step id at write time | Fewer rows, but the ledger needs a turn key it does not have today, and attribution is frozen at write time. Changing the decision-1 rule later would need a data migration. |
+| Append a `checklist` message per change; group process by message order in the web model | Reuses message pagination, change events, retention, and per-conversation delivery. History stays intact, so attribution is a pure function of ordered rows and can change without migrating stored messages. Needs one new message kind that text-only consumers already skip. |
+| One `checklist` message per turn updated in place, with each tool row tagged by the active step id at write time | Fewer rows, but the ledger needs a turn key it does not have today, and attribution is frozen at write time. Changing the step-attribution rule later would need a data migration. |
 | New `turn_checklists` table plus a new change type and API field | Clean separation, but adds a migration, a new snapshot and change path, and pagination glue that messages already have. |
 | Keep the checklist only in live session state | Smallest change, but an ended turn could not expand its checklist, and a reload would lose it. Fails the approved renders. |
 
@@ -88,7 +75,11 @@ Use the append-only `checklist` message. Drivers emit checklist changes; the led
 4. **Tool names.** Implementation adds `TaskCreate`, `TaskUpdate`, `TaskList`, and `TaskGet` (Claude), `TodoList` (Kimi), and `updateTodos` (Cursor, read from `rawInput._toolName`) to the vendors' `tools.actions` as `todo`. Every `todo` tool stops being an action: the ledger stores no tool row, no session step, and no live step for it. The checklist message replaces it.
 5. **Ledger.** `createLedgerChecklist().apply` applies the update to the session's latest stored snapshot and inserts a collapsed `checklist` message with sender `agent`, empty text, and meta `{ checklist }`, only when the snapshot changed. The latest snapshot comes from the database, so a daemon restart or vendor relaunch keeps merges correct.
 6. **Action timing.** `agent.tool` carries `pending` when the vendor only proposed the call, and an optional vendor `startedAt`. `agent.tool_running` marks when a pending call starts executing (ACP `pending` to `in_progress`). The live session tracks a start time per open tool and publishes `SessionState.stepStartedAt` for the shown step. A change to a thinking or text step starts a new clock. `lastEventAt` never feeds it.
-7. **Web.** `groupMessages` routes `checklist` messages into `turn.checklists`. `turnProgress(work, checklists)` builds the step list from the newest snapshot and groups work under steps by message order. `TurnProgress` replaces both `WorkLine` uses in `TurnView` and is the only progress block in a turn, above the reply text: rows and the action line while running, a single `Worked for` line once ended, the list below that line when opened, and each step's process when a step is opened. The action line uses the existing `AgentStatus` text plus `ActionElapsed`.
+7. **Web.** `groupMessages` routes `checklist` messages into `turn.checklists`. `turnProgress(work, checklists)` builds the step list from the newest snapshot and groups work under steps by message order. `TurnProgress` replaces both `WorkLine` uses in `TurnView` and is the only progress block in a turn, above the reply text: rows and the action line while running, a single `Worked for` line once ended, the list below that line when opened, and each step's process when a step is opened. The action line uses the existing `AgentStatus` text plus `ActionElapsed`. Four product rules are fixed by user decision:
+   - **Activity outside a step.** Attach it to the nearest step: before any step started to the first step, otherwise to the step most recently in progress (falling back the same way if a step is renamed or removed).
+   - **Checklist across turns.** Show a checklist only in turns where the AI changed it, displaying the full snapshot after that change.
+   - **Chevrons while running.** Step rows have no chevron while running. The action-line chevron opens the in-progress step's process below the action line, or the whole turn's process when the turn has no checklist.
+   - **Unfinished steps after a turn ends.** Keep the statuses as the AI last reported them, including `in_progress` if a turn stopped early or omitted a final update.
 
 ### 4. Performance and bounds
 

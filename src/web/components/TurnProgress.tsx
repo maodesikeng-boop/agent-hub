@@ -16,9 +16,11 @@ export interface TurnProgressProps {
 }
 
 /**
- * Running: the checklist rows (when steps exist) joined by a rail, then one action line with the live time.
- * Ended: one `Worked for` line; activating it opens the checklist below the line, and each step row opens its own process.
- * A turn without steps opens the flat process log instead, as before.
+ * Running: the checklist rows (when steps exist, with no row chevrons) joined by a rail, then one action line with the
+ * live time; the action-line chevron opens the in-progress step's process below the action line (or all work when the
+ * turn has no steps).
+ * Ended: one `Worked for` line; activating it opens the checklist below the line with each step's last reported status
+ * verbatim, and each step row opens its own process. A turn without steps opens the flat process log instead, as before.
  */
 export const TurnProgress = memo(function TurnProgress(_props: TurnProgressProps): React.ReactNode {
   throw new Error("Not implemented");
