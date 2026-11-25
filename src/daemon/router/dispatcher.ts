@@ -42,6 +42,7 @@ import {
   type PromptReceiptAction,
   type PromptRecentReceipt,
 } from "./prompt.ts";
+import { planBaseOf, planBaseOfRequest, type PlanBase } from "./plan-base.ts";
 import type { RouterSandboxGuard } from "./sandbox.ts";
 import type { RouterTurnResult, RouterTurnRunner } from "./single-turn.ts";
 import {
@@ -463,16 +464,6 @@ function cleanReply(chunks: readonly string[]): Pick<RouterAgentPlan, "reply" | 
   const chars = [...joined];
   if (chars.length <= ROUTER_REPLY_MAX_CHARS) return { reply: joined };
   return { reply: chars.slice(0, ROUTER_REPLY_MAX_CHARS).join(""), replyTruncated: true };
-}
-
-type PlanBase = Pick<RouterAgentPlan, "attachmentIds" | "attachments" | "target">;
-
-function planBaseOf(plan: RouterAgentPlan | null): PlanBase {
-  return {
-    ...(plan?.attachmentIds !== undefined && plan.attachmentIds.length > 0 ? { attachmentIds: plan.attachmentIds } : {}),
-    ...(plan?.attachments !== undefined && plan.attachments.length > 0 ? { attachments: plan.attachments } : {}),
-    ...(plan?.target !== undefined ? { target: plan.target } : {}),
-  };
 }
 
 function agentTimeoutMessage(timeoutMs: number): string {
@@ -977,7 +968,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     }
 
     let preloadedFleet: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }> | undefined;
-    if (/^\s*@/.test(params.text)) {
+    if (params.planBase.routerOnly !== true && /^\s*@/.test(params.text)) {
       preloadedFleet = await targetRegistry.listAllDigests();
       const atRes = resolveAtMention(params.text, preloadedFleet);
       if (atRes.kind === "matched") {
@@ -1056,20 +1047,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       const attachments = attachmentIds
         .map((id) => resolveAttachment(id))
         .filter((a): a is RouterCommandAttachment => a !== null);
-      const target = input.target;
-      const planBase: PlanBase = {
-        ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
-        ...(attachments.length > 0 ? { attachments } : {}),
-        ...(target !== undefined
-          ? {
-              target: {
-                ...(target.deviceId !== undefined ? { deviceId: target.deviceId } : {}),
-                ...(target.pmId !== undefined ? { pmId: target.pmId } : {}),
-                ...(target.projectId !== undefined ? { projectId: target.projectId } : {}),
-              },
-            }
-          : {}),
-      };
+      const planBase = planBaseOfRequest(input, attachmentIds, attachments);
 
       const initialVendor = ledger.getRouterSettings().vendor ?? DEFAULT_AGENT_VENDOR;
       const { command, deduplicated } = ledger.createRouterCommand({

@@ -100,7 +100,7 @@ function QuickRouter({
       if (check.reason === "too_long") setInvalid(field);
       return false;
     }
-    const clientId = commands.send({ text: check.trimmed });
+    const clientId = commands.send({ text: check.trimmed, routerOnly: true });
     setSession((current) => recordQuickTurn(current, clientId));
     return true;
   };

@@ -206,6 +206,7 @@ export const postRouterCommandBodySchema = z
       })
       .strict()
       .optional(),
+    routerOnly: z.boolean().optional(),
   })
   .strict();
 

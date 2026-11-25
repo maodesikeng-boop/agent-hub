@@ -170,7 +170,7 @@ describe("RouterTopBar", () => {
     await sendFromTopBar("今天各项目进度怎么样？");
     expect(window.location.hash).toBe("#/c/1");
     expect(screen.getByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
-    expect(sentBodies()).toEqual([{ clientId: expect.any(String), text: "今天各项目进度怎么样？" }]);
+    expect(sentBodies()).toEqual([{ clientId: expect.any(String), text: "今天各项目进度怎么样？", routerOnly: true }]);
     expect(screen.getByRole("textbox", { name: "Message Router" })).toHaveValue("");
     const log = within(popover()).getByRole("log", { name: "Router replies" });
     expect(within(log).getByText("今天各项目进度怎么样？")).toBeInTheDocument();
@@ -252,6 +252,19 @@ describe("RouterTopBar", () => {
     });
     await user.click(within(failed).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/router\/commands\/500\/retry$/)).toHaveLength(1));
+  });
+
+  it("hands a typed or pasted @name to Router itself instead of forwarding it straight to that PM", async () => {
+    await boot();
+    const user = await sendFromTopBar("@小林 顶栏定向转发");
+    await user.click(replyBox());
+    await user.paste("@老马 追问一句");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(sentBodies()).toHaveLength(2));
+    expect(sentBodies()).toEqual([
+      { clientId: expect.any(String), text: "@小林 顶栏定向转发", routerOnly: true },
+      { clientId: expect.any(String), text: "@老马 追问一句", routerOnly: true },
+    ]);
   });
 
   it("keeps one shared retry running across Expand, so the full Router page shows it in progress and cannot send it twice", async () => {

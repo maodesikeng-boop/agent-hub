@@ -22,6 +22,7 @@ export interface RouterCommandVariables {
   attachments: Attachment[];
   attachmentIds: string[];
   target?: PostRouterCommandTarget;
+  routerOnly?: true;
   createdAt: number;
 }
 
@@ -55,6 +56,8 @@ export interface SendRouterCommandInput {
   text: string;
   attachments?: Attachment[];
   target?: PostRouterCommandTarget;
+  /** Router itself plans the text, so a leading `@name` is not a direct-forward shortcut. */
+  routerOnly?: boolean;
 }
 
 export interface RouterCommandsState extends RouterRetryState {
@@ -281,6 +284,7 @@ export function useRouterCommands(liveTurns: readonly RouterTurnEntry[], selfId:
           text: vars.text,
           ...(vars.attachmentIds.length > 0 ? { attachmentIds: vars.attachmentIds } : {}),
           ...(vars.target !== undefined ? { target: vars.target } : {}),
+          ...(vars.routerOnly === true ? { routerOnly: true } : {}),
         }),
     },
     qc,
@@ -302,7 +306,7 @@ export function useRouterCommands(liveTurns: readonly RouterTurnEntry[], selfId:
   }, [rawMutations.length, liveTurns, qc]);
 
   const send = useCallback(
-    ({ text, attachments = NO_ATTACHMENTS, target }: SendRouterCommandInput) => {
+    ({ text, attachments = NO_ATTACHMENTS, target, routerOnly = false }: SendRouterCommandInput) => {
       const clientId = newClientId();
       mutate({
         clientId,
@@ -310,6 +314,7 @@ export function useRouterCommands(liveTurns: readonly RouterTurnEntry[], selfId:
         attachments,
         attachmentIds: attachments.map((a) => a.id),
         ...(target !== undefined ? { target } : {}),
+        ...(routerOnly ? { routerOnly: true } : {}),
         createdAt: Date.now(),
       });
       return clientId;

@@ -2606,6 +2606,15 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       expect(postLocalTargetRes.statusCode).toBe(200);
       expect(submitted).toContainEqual({ clientId: "cmd-43", text: "直转本机", target: { pmId: 1 } });
 
+      const postRouterOnlyRes = await customApp.inject({
+        method: "POST",
+        url: "/api/router/commands",
+        headers: browserHeaders,
+        payload: { clientId: "cmd-44", text: "@self/agent-hub 交给总助", routerOnly: true },
+      });
+      expect(postRouterOnlyRes.statusCode).toBe(200);
+      expect(submitted).toContainEqual({ clientId: "cmd-44", text: "@self/agent-hub 交给总助", routerOnly: true });
+
       // 2. Browser GET /api/router/commands?cursor=200:10&limit=15 -> 200
       const getCmdsRes = await customApp.inject({
         method: "GET",

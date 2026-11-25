@@ -586,6 +586,8 @@ export interface PostRouterCommandRequest {
   text: string;
   attachmentIds?: string[];
   target?: PostRouterCommandTarget;
+  /** Router itself plans the text: a leading `@name` is not forwarded straight to that project, and `target` is not allowed. */
+  routerOnly?: boolean;
 }
 
 export interface PostRouterCommandResponse {

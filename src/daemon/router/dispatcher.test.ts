@@ -1003,6 +1003,30 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       }
     });
 
+    it("routerOnly hands a leading @project to the Router turn instead of Track A, keeps it on retry, and refuses an explicit target", async () => {
+      const userMessages = () => ledger.messagesBefore(pm1ConvId, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "user").length;
+      const delivered = userMessages();
+      driver.onTurn = async ({ emit, input }) => {
+        emit({ type: "turn.ended", ok: false, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now(), error: { subtype: "error_during_execution", message: "boom" } });
+      };
+      const failed = await dispatcher.submitCommand({ clientId: "cid-router-only", text: "@agent-hub 检查一下构建脚本", routerOnly: true });
+      expect(driver.started).toHaveLength(1);
+      expect(failed.status).toBe("failed");
+      expect(failed.plan).toMatchObject({ track: "B", routerOnly: true });
+
+      driver.onTurn = answerTurn("构建脚本没问题");
+      const retried = await dispatcher.retryCommand(failed.id);
+      expect(driver.started).toHaveLength(2);
+      expect(retried.status).toBe("answered");
+      expect(retried.plan).toMatchObject({ track: "B", routerOnly: true });
+      expect(userMessages()).toBe(delivered);
+
+      await expect(
+        dispatcher.submitCommand({ clientId: "cid-router-only-target", text: "直转", routerOnly: true, target: { pmId: pm1Id } }),
+      ).rejects.toMatchObject({ code: "invalid" });
+      expect(driver.started).toHaveLength(2);
+    });
+
     it("带附件的指令：plan.attachments 有编号、文件名、类型、大小，轨道 B 收尾和重试后都还在", async () => {
       const att = await saveUpload(uploadsDir, "spec.md", Buffer.from("# Design"));
       const expected = [{ id: att.id, name: "spec.md", mime: att.mime, size: 8 }];
