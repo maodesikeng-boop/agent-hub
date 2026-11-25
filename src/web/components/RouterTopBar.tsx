@@ -14,6 +14,7 @@ import {
   handoffQuickDraft,
   recordQuickTurn,
   selectQuickRouterTurns,
+  tabbablesIn,
   type TopBarRouterSession,
 } from "../router-topbar-model.ts";
 import { Button } from "../ui/button.tsx";
@@ -82,6 +83,7 @@ function QuickRouter({
   onOpenWorker,
 }: QuickRouterProps) {
   const anchorRef = useRef<HTMLLabelElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState("");
   const [replyDraft, setReplyDraft] = useState("");
   const [invalid, setInvalid] = useState<Field | null>(null);
@@ -140,11 +142,20 @@ function QuickRouter({
       event.currentTarget.blur();
     }
   };
+  // The popover is portaled to the end of the page, so Tab from the field would leave it and dismiss it.
+  const onFieldKeyDown = (event: KeyboardEvent<HTMLLabelElement>) => {
+    if (!session.open || event.key !== "Tab" || event.shiftKey) return;
+    if (tabbablesIn(event.currentTarget).at(-1) !== event.target) return;
+    const first = tabbablesIn(popoverRef.current)[0];
+    if (first === undefined) return;
+    event.preventDefault();
+    first.focus();
+  };
 
   return (
     <Popover open={session.open} onOpenChange={(open) => !open && close()} modal={false}>
       <PopoverAnchor asChild>
-        <label ref={anchorRef} data-no-drag className="topbar-router">
+        <label ref={anchorRef} data-no-drag className="topbar-router" onKeyDown={onFieldKeyDown}>
           <RouterAvatar size={18} working={working} />
           <input
             type="text"
@@ -179,6 +190,7 @@ function QuickRouter({
       </PopoverAnchor>
       <RouterTopBarPopover
         anchorRef={anchorRef}
+        contentRef={popoverRef}
         turns={turns}
         multiDevice={devices.length > 1}
         working={working}

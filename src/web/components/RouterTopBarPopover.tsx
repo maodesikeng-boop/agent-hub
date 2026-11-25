@@ -8,7 +8,7 @@ import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { TOPBAR_ROUTER_POPOVER_MAX_HEIGHT_REM } from "../limits.ts";
 import { retryStateOf } from "../router-commands.ts";
 import type { RouterTurnEntry } from "../router-stream.ts";
-import { shouldDismissOnTopBarOutsidePress } from "../router-topbar-model.ts";
+import { shouldDismissOnTopBarOutsidePress, tabbablesIn } from "../router-topbar-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Maximize2, X } from "../ui/icons.ts";
 import { PopoverContent } from "../ui/popover.tsx";
@@ -22,6 +22,7 @@ const noop = () => {};
 
 export interface RouterTopBarPopoverProps {
   anchorRef: RefObject<HTMLElement | null>;
+  contentRef: RefObject<HTMLDivElement | null>;
   turns: readonly RouterTurnEntry[];
   multiDevice: boolean;
   working: boolean;
@@ -80,10 +81,11 @@ const QuickTimeline = memo(function QuickTimeline({ turns, multiDevice, retrying
 
 /**
  * Precondition: mounted inside a Radix Popover root whose PopoverAnchor wraps anchorRef.
- * Postcondition: renders the header (RouterAvatar, title, Expand, Close), a stick-to-bottom .router-timeline turn list, and a full-bleed bottom reply row that takes focus when the popover opens.
+ * Postcondition: renders the header (RouterAvatar, title, Expand, Close), a stick-to-bottom .router-timeline turn list, and a full-bleed bottom reply row that takes focus when the popover opens; Escape or Close returns focus to the anchor's input, and Shift+Tab from the first control goes back to the anchor.
  */
 export function RouterTopBarPopover({
   anchorRef,
+  contentRef,
   working,
   replyDraft,
   replyInvalid,
@@ -95,7 +97,11 @@ export function RouterTopBarPopover({
   onClose,
   ...timeline
 }: RouterTopBarPopoverProps) {
-  const contentRef = useRef<HTMLDivElement>(null);
+  const refocusAnchorRef = useRef(false);
+  const closeToAnchor = () => {
+    refocusAnchorRef.current = true;
+    onClose();
+  };
   return (
     <PopoverContent
       ref={contentRef}
@@ -110,10 +116,24 @@ export function RouterTopBarPopover({
         event.preventDefault();
         contentRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
       }}
-      onCloseAutoFocus={(event) => event.preventDefault()}
+      onEscapeKeyDown={() => {
+        refocusAnchorRef.current = true;
+      }}
+      onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        if (refocusAnchorRef.current) tabbablesIn(anchorRef.current)[0]?.focus({ preventScroll: true });
+        refocusAnchorRef.current = false;
+      }}
       onInteractOutside={(event) => {
         const target = event.detail.originalEvent.target;
         if (!shouldDismissOnTopBarOutsidePress(target instanceof Element ? target : null, anchorRef.current)) event.preventDefault();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Tab" || !event.shiftKey || tabbablesIn(event.currentTarget)[0] !== event.target) return;
+        const back = tabbablesIn(anchorRef.current).at(-1);
+        if (back === undefined) return;
+        event.preventDefault();
+        back.focus();
       }}
     >
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-3">
@@ -122,7 +142,7 @@ export function RouterTopBarPopover({
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Expand" title="Open Router" onClick={onExpand}>
           <Maximize2 className="size-pixel-sm" aria-hidden="true" />
         </Button>
-        <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Close" title="Close" onClick={onClose}>
+        <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Close" title="Close" onClick={closeToAnchor}>
           <X className="size-pixel-sm" aria-hidden="true" />
         </Button>
       </header>

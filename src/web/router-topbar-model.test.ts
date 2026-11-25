@@ -8,6 +8,7 @@ import {
   recordQuickTurn,
   selectQuickRouterTurns,
   shouldDismissOnTopBarOutsidePress,
+  tabbablesIn,
 } from "./router-topbar-model.ts";
 import { turnEntryOfCommand, type RouterTurnEntry } from "./router-stream.ts";
 
@@ -130,5 +131,23 @@ describe("router-topbar-model", () => {
     expect(shouldDismissOnTopBarOutsidePress(document.getElementById("outside"), document.getElementById("anchor"))).toBe(true);
     expect(shouldDismissOnTopBarOutsidePress(document.getElementById("outside"), null)).toBe(true);
     expect(shouldDismissOnTopBarOutsidePress(null, null)).toBe(true);
+  });
+
+  it("tabbablesIn lists keyboard-reachable controls in DOM order and skips disabled, negative tabindex, hidden, and inert ones", () => {
+    document.body.innerHTML = `
+      <div id="root">
+        <input id="field" />
+        <input type="hidden" />
+        <button id="send">Send</button>
+        <button disabled>Off</button>
+        <a href="#x" id="link">Open</a>
+        <a>No href</a>
+        <span tabindex="-1">Skipped</span>
+        <div hidden><button>Hidden</button></div>
+        <div inert><button>Inert</button></div>
+        <textarea id="reply"></textarea>
+      </div>`;
+    expect(tabbablesIn(document.getElementById("root")).map((el) => el.id)).toEqual(["field", "send", "link", "reply"]);
+    expect(tabbablesIn(null)).toEqual([]);
   });
 });

@@ -336,6 +336,40 @@ describe("RouterTopBar", () => {
     expect(api.calls.filter((c) => c.method !== "GET" && c.path.startsWith("/api/router/") && c.path !== "/api/router/commands")).toEqual([]);
   });
 
+  it("returns focus to the top-bar input after Escape or Close", async () => {
+    const input = await boot();
+    const user = await sendFromTopBar("一");
+    await waitFor(() => expect(replyBox()).toHaveFocus());
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Router" })).toBeNull();
+    await waitFor(() => expect(input).toHaveFocus());
+
+    await sendFromTopBar("二");
+    await waitFor(() => expect(replyBox()).toHaveFocus());
+    await user.click(within(popover()).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Router" })).toBeNull();
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
+  it("moves Tab from the top bar into the open popover and Shift+Tab back without closing it", async () => {
+    const input = await boot();
+    const user = await sendFromTopBar("一");
+    await user.click(input);
+    await user.tab();
+    expect(within(popover()).getByRole("button", { name: "Expand" })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(input).toHaveFocus();
+
+    await user.type(input, "草稿");
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Send to Router" })).toHaveFocus();
+    await user.tab();
+    expect(within(popover()).getByRole("button", { name: "Expand" })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "Send to Router" })).toHaveFocus();
+    expect(popover()).toBeInTheDocument();
+  });
+
   it("keeps the popover open when clicking inside the top-bar input", async () => {
     await boot();
     const user = await sendFromTopBar("一");

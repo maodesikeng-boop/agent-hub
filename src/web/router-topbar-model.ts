@@ -79,6 +79,19 @@ export function canSubmitQuickMessage(text: string): QuickMessageValidation {
   return { ok: true, trimmed };
 }
 
+const TABBABLE_SELECTOR = 'a[href], button, input:not([type="hidden"]), select, textarea, [tabindex]';
+
+/**
+ * Precondition: root is a rendered element or null.
+ * Postcondition: returns root's keyboard-focusable descendants in DOM order, skipping disabled controls, negative tabindex, and hidden or inert subtrees.
+ */
+export function tabbablesIn(root: Element | null): HTMLElement[] {
+  if (root === null) return [];
+  return [...root.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)].filter(
+    (el) => el.tabIndex >= 0 && !el.matches(":disabled") && el.closest("[hidden], [inert]") === null,
+  );
+}
+
 /**
  * Precondition: target is the event target of a pointer-down outside the reply popover content; anchor is the top-bar input wrapper element or null.
  * Postcondition: returns false when target lies inside anchor or inside an open dialog overlay or dialog content (such as FilePreview), and true otherwise.
