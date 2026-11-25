@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import {
+  DriverError,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   ENV_SESSION_OWNER_TAG,
@@ -13,6 +14,7 @@ import {
   buildReadonlyPolicy,
   dataDirReadScope,
   isAgentVendor,
+  resolveOuterSandboxLaunchMode,
   resolveSessionCapabilities,
   reviewPushGuardEnv,
   taskGraphSkillCatalogEntry,
@@ -66,6 +68,7 @@ export interface LaunchPreparerOptions {
   routerPurposeOf?: (sessionId: SessionId) => RouterTurnPurpose;
   capabilityPolicies?: Pick<Ledger, "getPmCapabilityPolicy" | "getRouterCapabilityPolicy">;
   capabilityInventory?: Pick<CapabilityInventoryService, "get">;
+  workerPlatform?: NodeJS.Platform;
   prepareOsSandbox?: (input: OsSandboxLaunchPrep) => Promise<void>;
   sessionTmp: Pick<SessionTmpStore, "allocate">;
   sessionTagNonce?: string;
@@ -90,7 +93,7 @@ async function sessionCapabilities(
   vendor: string,
   readPolicy: () => CapabilityPolicy | undefined,
   projectDir: string | null,
-): Promise<{ capabilities?: SessionCapabilities; capabilityFingerprint?: string }> {
+): Promise<{ capabilities?: SessionCapabilities; capabilityFingerprint?: string; inventory?: CapabilityInventory }> {
   if (inventory === undefined || !isAgentVendor(vendor)) return {};
   const snapshot = await inventory.get({ projectDir });
   const policy = readPolicy();
@@ -99,7 +102,7 @@ async function sessionCapabilities(
   const launch = capabilities === undefined ? undefined : VENDOR_DAEMONS[vendor].capabilityLaunch?.(capabilities);
   const external = inventoryFingerprint(snapshot, vendor);
   const capabilityFingerprint = external === undefined && launch === undefined ? undefined : hash([external, launch]);
-  return { capabilities, capabilityFingerprint };
+  return { capabilities, capabilityFingerprint, inventory: snapshot };
 }
 
 const inventoryFingerprints = new WeakMap<CapabilityInventory, Map<AgentVendor, string | undefined>>();
@@ -218,7 +221,19 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     // Vendors that enforce readonly through settings (claude's own sandbox) are not wrapped in the outer sandbox, because sandboxes cannot nest.
     const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
     const readCapabilities = agentCapabilityReader(options, vendor, ctx);
-    const { capabilities, capabilityFingerprint } = (await readCapabilities?.()) ?? {};
+    const { capabilities, capabilityFingerprint, inventory } = (await readCapabilities?.()) ?? {};
+    const getOuterMode = (latest: LaunchContext, caps?: SessionCapabilities, scanned?: CapabilityInventory) => {
+      const approval = latest.outerSandboxApproval ?? null;
+      if (approval === null) return "enforced";
+      if (vendor === null || latest.worker === null || approval.workerId !== latest.worker.id) throw new DriverError("spawn_failed", "沙箱批准与 Worker 不匹配");
+      const mode = resolveOuterSandboxLaunchMode({
+        vendor, platform: options.workerPlatform ?? process.platform, workerStatus: latest.worker.status,
+        readonly: latest.worker.readonly, approval, sessionCapabilities: caps, inventory: scanned,
+      });
+      if (mode.mode === "block") throw new DriverError("spawn_failed", mode.reason);
+      return mode.mode;
+    };
+    const outerSandbox = ctx.outerSandboxApproval == null ? "enforced" : getOuterMode(getLaunchContext(session.id), capabilities, inventory);
     const nativeReadonly = readonlyPolicy !== undefined && vendor !== null && vendorSpec(vendor).capabilities.readonly === "settings";
     const buildVendorFiles = vendor === null ? undefined : VENDOR_DAEMONS[vendor].launchFiles;
     const vendorInput = {
@@ -226,7 +241,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       readonly: nativeReadonly ? { policy: readonlyPolicy, denyWrite: [session.cwd, ...session.addDirs].map(realpathOr) } : undefined,
       hubSock,
       stateDir,
-      osSandboxed,
+      osSandboxed: outerSandbox === "enforced" && osSandboxed,
     };
     const vendorFiles = buildVendorFiles?.({ ...vendorInput, capabilities });
     const settings = vendorFiles?.settings;
@@ -264,7 +279,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
           addDirs: sessionReadable.extraReadable,
           launchDir: sessionReadable.launchDir,
         });
-    await prepareOsSandbox({ dataDir, stateDir, writeScope, readonly: readonlyPolicy });
+    if (outerSandbox === "enforced") await prepareOsSandbox({ dataDir, stateDir, writeScope, readonly: readonlyPolicy });
     return {
       promptFile,
       ...(settingsFile === undefined ? {} : { settingsFile }),
@@ -288,6 +303,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),
+      ...(outerSandbox === "vendor_only" ? { outerSandbox } : {}),
       ...(readonlyPolicy === undefined
         ? tmpDir === undefined ? {} : { tmpDir }
         : { readonly: readonlyPolicy, tmpDir: tmpDir ?? options.sessionTmp.allocate(session.id) }),
@@ -295,7 +311,11 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       ...(readCapabilities === undefined ? {} : {
         capabilityCheck: {
           fingerprint: capabilityFingerprint,
-          currentFingerprint: async () => (await readCapabilities()).capabilityFingerprint,
+          currentFingerprint: async () => {
+            const current = await readCapabilities();
+            if (outerSandbox === "vendor_only") getOuterMode(getLaunchContext(session.id), current.capabilities, current.inventory);
+            return current.capabilityFingerprint;
+          },
         },
       }),
       // The Worker background hold is shorter than the PM's wait so the PM is not left waiting.

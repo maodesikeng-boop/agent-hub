@@ -1,3 +1,4 @@
+import { readStepNoOuterSandbox, sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { DEFAULT_AGENT_VENDOR, type AgentVendor } from "../../../shared/vendors.ts";
 import { userMessageDedupeKey } from "../../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, TaskNodeKey } from "../../../shared/domain.ts";
@@ -110,6 +111,7 @@ function dispatchWorkerIn(
     readonly: node.readonly === 1,
     capabilities: readWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: node.id }),
     maxTimeMs: node.max_time_ms,
+    sandboxStepId: readStepNoOuterSandbox(g.db, node.id) ? node.id : undefined,
     workspacePlan,
     buildFirstMessage: (sessionId, inheritedFromWorkerId, workerRecord, projectCard) =>
       buildStepFirstMessage({
@@ -131,20 +133,23 @@ function dispatchWorkerIn(
 function markDispatched(g: TaskGraphCtx, run: ProgressRun, node: TaskNodeDbRow, workerId: number): void {
   const prevIds = workerIdsOf(node);
   const nextIds = prevIds.includes(workerId) ? prevIds : [...prevIds, workerId];
-  node.status = "running";
-  node.waiting_for = null;
+  const sandboxPending = sandboxApprovalPendingForStep(g.db, node.id);
+  node.status = sandboxPending ? "waiting" : "running";
+  node.waiting_for = sandboxPending ? "user" : null;
   node.skipped = 0;
   node.active_worker_id = workerId;
   node.worker_ids_json = JSON.stringify(nextIds);
   g.db.run(
     `UPDATE task_graph_steps
-        SET status = 'running',
-            waiting_for = NULL,
+        SET status = ?,
+            waiting_for = ?,
             skipped = 0,
             active_worker_id = ?,
             worker_ids_json = ?,
             updated_at = ?
       WHERE id = ?`,
+    node.status,
+    node.waiting_for,
     workerId,
     node.worker_ids_json,
     run.t,

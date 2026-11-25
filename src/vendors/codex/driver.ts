@@ -375,7 +375,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     this.assertRunning();
     this.assertNotEnded(st);
     // macOS sandboxes cannot nest; read-only codex relies on its own readOnly sandbox instead.
-    const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
+    const wrapScope = launchConfig.readonly || files.outerSandbox === "vendor_only" ? null : (files.writeScope ?? null);
     const exePath = this.#resolveCodexPath();
     const baseSpawn: SpawnCommand = { command: exePath, args: buildCodexArgs(files.capabilities) };
     const launch = this.#writeScopeSpawn

@@ -1,6 +1,7 @@
-import { askOf, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
+import { askOf, type AskMeta, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
 import type { FeishuChatId, FeishuMessageId } from "../../shared/feishu.ts";
 import type { RouterItem } from "../../shared/router.ts";
+import { formatSandboxApprovalCardText } from "../../shared/sandbox-approval.ts";
 import { postCardEntity, unlessRejected, updateCard } from "./api.ts";
 import { attachmentSlots, attachmentViews, followUpAttachments, prepareAttachments } from "./attachments.ts";
 import {
@@ -53,18 +54,24 @@ function pmChatOfMessage(ctx: FeishuContext, message: Message) {
   return { pmId, pmChatId: (pmId === null ? null : liveChatOfPm(ctx, pmId))?.chatId ?? null };
 }
 
+function localizeSandboxApproval(ctx: FeishuContext, message: Message, ask: AskMeta): Message {
+  const ref = ask.sandboxApprovalRef;
+  const approval = ref === undefined ? null : ctx.ledger.getSandboxApproval?.(ref.approvalId);
+  return approval == null ? message : { ...message, text: formatSandboxApprovalCardText(approval, "zh") };
+}
+
 function routerAskCard(ctx: FeishuContext, message: Message, state: FeishuCardState, slots: readonly AttachmentSlot[]): FeishuCardJson | null {
   const ask = askOf(message);
   if (ask === null) return null;
   const { pmId, pmChatId } = pmChatOfMessage(ctx, message);
-  return renderRouterAskCard(message, ask, state, pmChatId, attachmentViews(slots), originOf(ctx, pmId));
+  return renderRouterAskCard(localizeSandboxApproval(ctx, message, ask), ask, state, pmChatId, attachmentViews(slots), originOf(ctx, pmId));
 }
 
 function pmHostCard(ctx: FeishuContext, message: Message): FeishuCardJson {
   const views = attachmentViews(attachmentSlots(ctx, message, false, "pm"));
   const ask = message.sender === "agent" ? askOf(message) : null;
   const lastChunk = splitFeishuMarkdown(message.sender === "user" ? mirrorText(message) : message.text).at(-1) ?? "";
-  if (ask !== null) return renderAskCard(message, ask, askStateOf(ctx, message), views);
+  if (ask !== null) return renderAskCard(localizeSandboxApproval(ctx, message, ask), ask, askStateOf(ctx, message), views);
   if (message.sender === "user") return renderTextCard({ title: MIRROR_TITLE, text: lastChunk, template: "grey", attachments: views });
   return renderReplyCard({ conversationId: message.conversationId, text: lastChunk, streaming: false, withStop: false, attachments: views });
 }
@@ -104,8 +111,9 @@ export async function postAskCard(ctx: FeishuContext, chatId: FeishuChatId, mess
       ctx.store.advanceWatermark(chatId, { messageId: message.id }, ctx.now());
       return;
     }
+    const localized = localizeSandboxApproval(ctx, message, ask);
     slots = await prepareAttachments(ctx, message);
-    const card = renderAskCard(message, ask, askStateOf(ctx, message), attachmentViews(slots));
+    const card = renderAskCard(localized, ask, askStateOf(ctx, message), attachmentViews(slots));
     const posted = await postCardEntity(ctx, chatId, card, `fusa-a-${message.id}`);
     if (chatOfConversation(ctx, message.conversationId)?.chatId !== chatId) return;
     ctx.store.savePost({ ref, chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: "card_pending" }, ctx.now());
@@ -136,7 +144,7 @@ export async function settleAskCard(ctx: FeishuContext, messageId: MessageId) {
   if (ask === null) return closeMissingCard(ctx, post);
   const state = askStateOf(ctx, message);
   if (state.kind === "pending") return;
-  await settlePost(ctx, post, renderAskCard(message, ask, state, attachmentViews(attachmentSlots(ctx, message))));
+  await settlePost(ctx, post, renderAskCard(localizeSandboxApproval(ctx, message, ask), ask, state, attachmentViews(attachmentSlots(ctx, message))));
 }
 
 export async function postRouterAskCard(ctx: FeishuContext, message: Message) {
@@ -150,8 +158,9 @@ export async function postRouterAskCard(ctx: FeishuContext, message: Message) {
   const pmChatId = liveChatOfPm(ctx, pmId)?.chatId ?? null;
   if (existing === null) {
     if (askStateOf(ctx, message).kind !== "pending") return;
+    const localized = localizeSandboxApproval(ctx, message, ask);
     const slots = await prepareAttachments(ctx, message, "router");
-    const card = renderRouterAskCard(message, ask, askStateOf(ctx, message), pmChatId, attachmentViews(slots), originOf(ctx, pmId));
+    const card = renderRouterAskCard(localized, ask, askStateOf(ctx, message), pmChatId, attachmentViews(slots), originOf(ctx, pmId));
     const posted = await postCardEntity(ctx, chat.chatId, card, devicePostUuid(ctx, "ra", message.id));
     if (routerChat(ctx)?.chatId !== chat.chatId) return;
     ctx.store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: "card_pending" }, ctx.now());
@@ -183,7 +192,7 @@ export async function refreshPendingAskCard(ctx: FeishuContext, messageId: Messa
   const ask = message === null ? null : askOf(message);
   if (message === null || ask === null || askStateOf(ctx, message).kind !== "pending") return;
   const slots = attachmentSlots(ctx, message, false, scope);
-  const card = scope === "router" ? routerAskCard(ctx, message, { kind: "pending" }, slots)! : renderAskCard(message, ask, { kind: "pending" }, attachmentViews(slots));
+  const card = scope === "router" ? routerAskCard(ctx, message, { kind: "pending" }, slots)! : renderAskCard(localizeSandboxApproval(ctx, message, ask), ask, { kind: "pending" }, attachmentViews(slots));
   const nextSeq = post.sequence + 1;
   await unlessRejected(ctx, () => updateCard(ctx, post.cardId!, nextSeq, card));
   if (ctx.store.chatById(post.chatId) !== null) ctx.store.savePost({ ...post, sequence: nextSeq }, ctx.now());

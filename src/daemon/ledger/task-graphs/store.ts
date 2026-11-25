@@ -1,3 +1,4 @@
+import { writeStepNoOuterSandbox } from "../sandbox-approvals.ts";
 import type { PmId, ProjectId, TaskEdge, TaskGraph, TaskGraphId, TaskGraphStatus, TaskNode, TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
@@ -188,6 +189,7 @@ export function insertStepRow(db: Db, graphId: TaskGraphId, n: NewStep, sortOrde
     t,
   ).lastInsertRowid;
   writeWorkerCapabilities(db, { table: "task_graph_step_capabilities", stepId }, n.capabilities);
+  if (n.noOuterSandbox) writeStepNoOuterSandbox(db, stepId, true);
 }
 
 export const insertEdgeRow = (db: Db, graphId: TaskGraphId, e: TaskEdge): void => {

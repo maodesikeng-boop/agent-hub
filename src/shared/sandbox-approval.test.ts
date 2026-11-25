@@ -1,36 +1,71 @@
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { COMPUTER_USE, COMPUTER_USE_CAPS, COMPUTER_USE_INVENTORY, SANDBOX_APPROVAL } from "../../test/sandbox-approval-fixture.ts";
+import { defaultCapabilityPolicy, resolveSessionCapabilities, workerCapabilityPolicy } from "./pm-capabilities.ts";
+import {
+  eligibleComputerUseCapabilities, formatSandboxApprovalCardText, formatSandboxApprovalRejectedNotice, resolveOuterSandboxLaunchMode,
+  validateNoOuterSandboxRequest, type NoOuterSandboxValidationInput, type OuterSandboxLaunchCheckInput,
+} from "./sandbox-approval.ts";
 
-describe("sandbox-approval shared validation", () => {
-  describe("eligibleComputerUseCapabilities", () => {
-    it.todo("returns Codex static Computer Use capability keys and matching plugin MCP items from inventory");
-    it.todo("returns an empty list for vendors without a built-in sandbox (pi, opencode, kimi)");
-    it.todo("returns an empty list for vendors with a built-in sandbox that declare no Computer Use capability yet");
+const policy = defaultCapabilityPolicy("pm");
+const eligible: NoOuterSandboxValidationInput = {
+  vendor: "codex", platform: "darwin", review: false, readonly: false, workerCapabilities: COMPUTER_USE_CAPS,
+  pmPolicy: policy, inventory: COMPUTER_USE_INVENTORY,
+};
+
+const launch: OuterSandboxLaunchCheckInput = {
+  vendor: "codex", platform: "darwin", workerStatus: "open", readonly: false, approval: SANDBOX_APPROVAL,
+  inventory: COMPUTER_USE_INVENTORY, sessionCapabilities: resolveSessionCapabilities(workerCapabilityPolicy(policy, COMPUTER_USE_CAPS), COMPUTER_USE_INVENTORY, "codex")!,
+};
+
+describe("Computer Use sandbox eligibility", () => {
+  it("recognizes the installed plugin and rejects a service with the same name outside that plugin", () => {
+    expect(eligibleComputerUseCapabilities("codex")).toEqual([COMPUTER_USE]);
+    expect(validateNoOuterSandboxRequest(eligible)).toEqual({ ok: true, matchedCapabilities: [COMPUTER_USE] });
+    const inventory = { ...COMPUTER_USE_INVENTORY, items: [{ ...COMPUTER_USE_INVENTORY.items[0]!, plugins: {} }] };
+    expect(validateNoOuterSandboxRequest({ ...eligible, inventory })).toMatchObject({ code: "computer_use_not_installed" });
   });
 
-  describe("validateNoOuterSandboxRequest (Hard Condition 1)", () => {
-    it.todo("accepts Codex on macOS when caps is custom with mcp:cua_repl and PM policy allows it");
-    it.todo("rejects with computer_use_not_mounted when WorkerCapabilities mode is inherit");
-    it.todo("rejects with computer_use_not_mounted when WorkerCapabilities mode is none");
-    it.todo("rejects with computer_use_not_mounted when custom allow list omits Computer Use keys");
-    it.todo("rejects with computer_use_disabled_by_policy when project policy disables mcp:cua_repl");
-    it.todo("rejects with computer_use_not_installed when inventory does not contain the Computer Use capability");
-    it.todo("rejects with readonly_incompatible when readonly is true");
-    it.todo("rejects with review_incompatible when review is true");
-    it.todo("rejects with vendor_no_builtin_sandbox for pi, opencode, and kimi");
-    it.todo("rejects with platform_unsupported on linux and win32");
+  it.each([
+    [{ workerCapabilities: { mode: "inherit" } }, "computer_use_not_mounted"],
+    [{ workerCapabilities: { mode: "none" } }, "computer_use_not_mounted"],
+    [{ workerCapabilities: { mode: "custom", allow: ["mcp:other"] } }, "computer_use_not_mounted"],
+    [{ pmPolicy: { ...policy, overrides: { [COMPUTER_USE]: false } } }, "computer_use_disabled_by_policy"],
+    [{ readonly: true }, "readonly_incompatible"],
+    [{ review: true }, "review_incompatible"],
+    [{ vendor: "pi" }, "vendor_no_builtin_sandbox"],
+    [{ vendor: "opencode" }, "vendor_no_builtin_sandbox"],
+    [{ vendor: "kimi" }, "vendor_no_builtin_sandbox"],
+    [{ vendor: "claude" }, "computer_use_not_mounted"],
+    [{ platform: "linux" }, "platform_unsupported"],
+    [{ platform: "win32" }, "platform_unsupported"],
+  ] satisfies [Partial<NoOuterSandboxValidationInput>, string][])("rejects an ineligible request %#", (overrides, code) => {
+    expect(validateNoOuterSandboxRequest({ ...eligible, ...overrides })).toMatchObject({ ok: false, code });
   });
 
-  describe("resolveOuterSandboxLaunchMode (launch-time defense in depth)", () => {
-    it.todo("returns enforced when no approval record exists for the Worker");
-    it.todo("returns vendor_only only when approval is approved, worker is open, platform and vendor match, and Computer Use stays enabled");
-    it.todo("returns block when approval status is pending, rejected, or revoked");
-    it.todo("returns block when worker status is ended even if approval row is stale");
-    it.todo("returns block when Computer Use capability was disabled after approval");
-    it.todo("returns block when readonly is true");
+  it("chooses vendor sandbox only for an approved open Worker with the installed service enabled", () => {
+    expect(resolveOuterSandboxLaunchMode({ ...launch, approval: null })).toEqual({ mode: "enforced" });
+    expect(resolveOuterSandboxLaunchMode(launch)).toEqual({ mode: "vendor_only", approvalId: SANDBOX_APPROVAL.id });
   });
 
-  describe("card and rejection copy", () => {
-    it.todo("includes Worker ID, title, task summary, dropped Bellwood data-dir/credential protection, vendor whole-disk read warning, and single-run expiry");
-    it.todo("formats rejection notice naming the Worker for the Project Manager");
+  it.each([
+    { approval: { ...SANDBOX_APPROVAL, status: "pending" } },
+    { approval: { ...SANDBOX_APPROVAL, status: "rejected" } },
+    { approval: { ...SANDBOX_APPROVAL, status: "revoked" } },
+    { approval: { ...SANDBOX_APPROVAL, decidedBy: "system" } },
+    { workerStatus: "ended" },
+    { sessionCapabilities: undefined },
+    { inventory: undefined },
+    { readonly: true },
+    { vendor: "pi" },
+  ] satisfies Partial<OuterSandboxLaunchCheckInput>[])("blocks launch when the approval or capability no longer applies %#", (overrides) => {
+    expect(resolveOuterSandboxLaunchMode({ ...launch, ...overrides }).mode).toBe("block");
+  });
+
+  it("identifies the Worker, task, lost protection, and expiry in approval and rejection messages", () => {
+    const text = formatSandboxApprovalCardText(SANDBOX_APPROVAL);
+    for (const part of ["Worker #5", "Inspect the desktop", "Inspect a Calculator window", "state/", "credentials", "until it ends"]) {
+      expect(text).toContain(part);
+    }
+    expect(formatSandboxApprovalRejectedNotice(SANDBOX_APPROVAL)).toContain("Worker #5");
   });
 });

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS worker_sandbox_approvals (
   vendor             TEXT    NOT NULL,
   capabilities_json  TEXT    NOT NULL,
   task_summary       TEXT    NOT NULL,
+  max_time_ms        INTEGER NOT NULL,
   status             TEXT    NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'revoked')),
   decided_by         TEXT    CHECK (decided_by IS NULL OR decided_by IN ('user', 'system')),
   decision_client_id TEXT,

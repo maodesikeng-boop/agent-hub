@@ -2,6 +2,8 @@
 
 > Snapshot: 2026-11-25 (commit `646574c5`)
 
+The approved implementation follows the choices below.
+
 ## For the user
 
 ### Files to review
@@ -12,9 +14,9 @@
 - Ledger, UI server, and Web UI skeletons: `src/daemon/ledger/sandbox-approvals.ts`, `src/daemon/ui-server/routes-sandbox-approvals.ts`, `src/web/components/SandboxApprovalCard.tsx`
 - Planned test suites (`it.todo`): `src/shared/sandbox-approval.test.ts`, `src/daemon/ledger/sandbox-approvals.test.ts`, `src/daemon/ui-server/routes-sandbox-approvals.test.ts`, `src/daemon/sandbox-bypass-launch.test.ts`, `src/web/components/SandboxApprovalCard.test.tsx`
 
-### Decisions needed
+### Decisions
 
-Four product choices remain open before implementation begins. Each item lists the concrete options and our recommendation.
+The approved choices are the vendor contract with Codex enabled on macOS, approval for one open Worker, and confirmation in the Web workbench. Feishu displays the card without approval controls. Linux and Windows keep their existing mandatory outer sandboxes.
 
 #### 1. Vendor scope: vendor-neutral switch vs Codex-only
 
@@ -63,11 +65,11 @@ User request (verbatim): "不能给worker一个无沙箱模式吗？但是必须
 Workers running Computer Use plugins need to run without Bellwood's outer OS sandbox so the vendor's built-in sandbox and Computer Use's inner sandbox can apply normally without hitting macOS nested Seatbelt failure (`sandbox_apply: Operation not permitted`, exit 71). Two invariants must be enforced in system code rather than prompts:
 
 1. **Computer Use eligibility**: Only a Worker that explicitly mounts a Computer Use capability (and is allowed to use it by project policy) can request no-outer-sandbox mode. Any request without an explicit Computer Use capability is rejected immediately.
-2. **Human-only single-run confirmation**: The mode never takes effect until the human user clicks Approve on a confirmation card. Neither the Project Manager nor any Worker can approve or bypass it. The card names the Worker, describes what it will do, and states which protection layer is dropped (Bellwood's outer sandbox blocks reading `~/.agent-hub/state/` and credentials; vendor built-in sandboxes default to whole-disk read). Approval applies strictly to that single Worker's run and is revoked when that Worker ends.
+2. **Web confirmation for one Worker run**: The mode never takes effect until the human user clicks Approve on a confirmation card. The agent API and `hub` have no approval operation. Approval uses the existing Web workbench authentication boundary. The card names the Worker, describes what it will do, and states which protection layer is dropped (Bellwood's outer sandbox blocks reading `~/.agent-hub/state/` and credentials; vendor built-in sandboxes default to whole-disk read). Approval applies strictly to that single Worker's run and is revoked when that Worker ends.
 
 All other Workers continue running inside Bellwood's outer OS sandbox unchanged.
 
-### 2. Current state
+### 2. Baseline before implementation
 
 - **Worker outer sandbox wiring** `[Measured, read src/daemon/launch.ts:192-267 and src/daemon/driver/write-scope.ts:1031-1093]`:
   - `createLaunchPreparer` computes `writeScope = nativeReadonly ? null : workerWriteScope(...)` and calls `prepareOsSandbox({ dataDir, stateDir, writeScope, readonly })`.
@@ -86,7 +88,7 @@ All other Workers continue running inside Bellwood's outer OS sandbox unchanged.
   - `WorkerCapabilities` supports `{ mode: "inherit" }`, `{ mode: "none" }`, and `{ mode: "custom", allow: readonly CapabilityKey[] }`.
   - Under `mode: "inherit"`, a Worker inherits every capability enabled on the PM. Treating `inherit` as "explicitly using Computer Use" would allow any Worker on an open project to request no-outer-sandbox mode without opting into Computer Use.
 - **Trust boundary between `agent-api` and `ui-server`** `[Measured, read src/shared/hub.ts:77-111, src/daemon/ledger/user-blockers.ts, src/daemon/ledger/task-graphs/decision.ts, and src/daemon/ui-server/server.ts]`:
-  - PM and Worker processes communicate only over `run/hub.sock` (`agent-api`) with a per-session `HUB_TOKEN`. They cannot read `state/ui-token` or authenticate to `ui-server`.
+  - PM and Worker processes communicate only over `run/hub.sock` (`agent-api`) with a per-session `HUB_TOKEN`. Ordinary Workers cannot read `state/ui-token`. An approved Worker running with the vendor sandbox can read that file, so the Web login credential no longer proves who is interacting with the approval card.
   - Ordinary `router_items` can be closed by PM via `hub ask close`, and ordinary Task Graph gates can be settled by PM via `hub graph decide`.
   - `user_blockers` already establishes the pattern for human-only resolution: a dedicated SQLite table, a dedicated `AskMeta` ref (`blockerRef`), a guard in `decideTaskNode` (`isUserBlocked`), and a UI-only endpoint on `ui-server` with no corresponding `hub` command.
 - **Other vendors' built-in sandboxes** `[Measured, read src/vendors/*/spec.ts, src/vendors/claude/settings.ts:35,76-80, src/vendors/deepseek/daemon.ts:15, and src/vendors/_common/acp/driver.ts:462-470]`:
@@ -105,6 +107,8 @@ All other Workers continue running inside Bellwood's outer OS sandbox unchanged.
 | Pre-approval side effects | Zero: no worktree created, no `setupCommand` run, no CLI process spawned until the user clicks Approve. | Same only if deferred start is added anyway. | Runs immediately without waiting for confirmation. |
 
 **Selected approach: Approach A.**
+
+**Web authentication boundary:** A valid Web workbench session can confirm in one click. A process that obtains a Web credential can act as that session. An approved Worker may be able to read that credential and other Bellwood state. The selected product boundary accepts this risk and does not ask for Touch ID or an OS password. The confirmation card discloses the loss of the filesystem read boundary before the user clicks.
 
 #### Detailed request, hold, approval, launch, and revocation flow
 
@@ -195,7 +199,7 @@ export interface VendorBuiltInSandboxSpec {
 
 | Vendor | Built-in OS sandbox | `builtInSandbox.platforms` | Computer Use capabilities (this round) | Driver behavior when `outerSandbox === "vendor_only"` |
 | --- | --- | --- | --- | --- |
-| `codex` | Seatbelt (`workspaceWrite` on macOS), bwrap+Landlock+seccomp (Linux), Windows sandbox | `["darwin", "linux", "win32"]` | `["mcp:cua_repl"]`, plugins `["unified-computer-use@openai-bundled", "computer-use@openai-bundled"]` | Implemented & real-machine verified: skips `spawnInWriteScope` wrapper, retains `proc.writeScope`, sends `sandboxPolicy: { type: "workspaceWrite", networkAccess: true, writableRoots }`. |
+| `codex` | Seatbelt (`workspaceWrite` on macOS), bwrap+Landlock+seccomp (Linux), Windows sandbox | `["darwin", "linux", "win32"]` | `["mcp:cua_repl"]`, plugins `["unified-computer-use@openai-bundled", "computer-use@openai-bundled"]` | Skips `spawnInWriteScope` wrapper, retains `proc.writeScope`, sends `sandboxPolicy: { type: "workspaceWrite", networkAccess: true, writableRoots }`. |
 | `claude` | `sandbox.enabled` (Seatbelt on macOS, bwrap+socat on Linux; none on Windows) | `["darwin", "linux"]` | `[]` (rejected on Condition 1 until a Computer Use capability is declared) | When enabled in future: `buildSessionSettings` sets `sandbox.enabled = true` when `outerSandbox === "vendor_only"` instead of `false`. |
 | `agy` | Terminal Seatbelt (`enableTerminalSandbox`) | `["darwin"]` | `[]` | When enabled in future: omits `ownSandboxOffArgs` and passes `ownSandboxOnArgs` (`--settings {"enableTerminalSandbox":true}`). |
 | `cursor` | `--sandbox` | `["darwin"]` | `[]` | When enabled in future: omits `ownSandboxOffArgs` (`--sandbox disabled`) and passes `ownSandboxOnArgs` (`--sandbox enabled`). |

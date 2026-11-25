@@ -332,6 +332,11 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     rawBlockerRef !== null && typeof rawBlockerRef === "object" && typeof rawBlockerRef.blockerId === "number"
       ? { blockerId: rawBlockerRef.blockerId }
       : undefined;
+  const sandbox = message.meta.sandboxApprovalRef;
+  const sandboxApprovalRef = sandbox !== null && typeof sandbox === "object" &&
+    "approvalId" in sandbox && typeof sandbox.approvalId === "number" && "workerId" in sandbox && typeof sandbox.workerId === "number"
+    ? { approvalId: sandbox.approvalId, workerId: sandbox.workerId }
+    : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
   const answerNote = typeof message.meta.answerNote === "string" && message.meta.answerNote !== "" ? message.meta.answerNote : undefined;
   const deliverables = deliverablesOf(message.meta.deliverables);
@@ -342,6 +347,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(recommended !== undefined ? { recommended } : {}),
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(blockerRef !== undefined ? { blockerRef } : {}),
+    ...(sandboxApprovalRef !== undefined ? { sandboxApprovalRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
     ...(answerNote !== undefined ? { answerNote } : {}),
     ...(message.meta.closed === true ? { closed: true } : {}),
@@ -429,7 +435,7 @@ export function extractAskCard(
   message: Pick<Message, "sender" | "meta" | "text">,
 ): ExtractedAskCard | null {
   const ask = askOf(message);
-  if (ask === null || ask.blockerRef !== undefined) return null;
+  if (ask === null || ask.blockerRef !== undefined || ask.sandboxApprovalRef !== undefined) return null;
   const answered = ask.answered === true;
   const extras = {
     ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),

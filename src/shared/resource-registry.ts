@@ -246,7 +246,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("user_blocker_cards", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
   table("user_blocker_steps", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
   table("user_blocker_workers", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
-  table("worker_sandbox_approvals", "growing", "src/daemon/ledger/sandbox-approvals.ts", "src/daemon/ledger/sandbox-approvals.ts, src/daemon/ledger/worker-retention.ts", "automatic", SANDBOX_APPROVAL_LIMITS),
+  table("worker_sandbox_approvals", "growing", "src/daemon/ledger/sandbox-approvals.ts", "src/daemon/ledger/sandbox-approvals.ts, src/daemon/ledger/db-table-retention.ts", "automatic", SANDBOX_APPROVAL_LIMITS),
   table("loaded_skills", "growing", "src/daemon/ledger/loaded-skills.ts", "src/daemon/ledger/loaded-skills.ts", "automatic", [
     limit("SKILL_CARRYOVER_RECORDS_MAX", SKILL_CARRYOVER_RECORDS_MAX, "rows"),
   ]),

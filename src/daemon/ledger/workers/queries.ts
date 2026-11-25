@@ -23,7 +23,8 @@ export function list(w: WorkersCtx, caller: PmCaller): HubResult<"worker.list"> 
   const lines = rows.map((x) => {
     const session = workerSession(w, x);
     const where = x.workspace === "worktree" ? worktreeLabel(x) : "主文件夹";
-    const state = x.status === "ended" ? "已收工" : w.sessions.liveOf(session.id).activity === "preparing" ? "准备中" : "进行中";
+    const state = x.status === "ended" ? "已收工" : w.sandboxApprovals.isPendingForWorker(x.id) ? "等待沙箱确认"
+      : w.sessions.liveOf(session.id).activity === "preparing" ? "准备中" : "进行中";
     const shown = agentSettingOf(w.ctx, session);
     const setting = `模型 ${shown.model} · 思考程度 ${shown.effort}`;
     return `#${x.id} ${x.title} · ${state} · ${where} · ${setting}${x.readonly === 1 ? " · 只读" : ""}`;
@@ -121,6 +122,7 @@ export function launchContextFor(w: WorkersCtx, session: AgentSessionRow): Launc
   const worker = workerRow(w, session.workerId);
   if (worker === null) return null;
   const pm = w.persona.pmRow(worker.pm_id)!;
+  const approval = w.sandboxApprovals.getByWorkerId(worker.id);
   return {
     sessionId: session.id,
     role: "worker",
@@ -128,6 +130,7 @@ export function launchContextFor(w: WorkersCtx, session: AgentSessionRow): Launc
     pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: pm.persona ?? "" },
     project: w.projects.projectCard(projectRow(w, worker.project_id)),
     worker: withTakeoverOf(w, worker),
+    ...(approval === null ? {} : { outerSandboxApproval: approval }),
     ...workerCapabilitiesOfRow(w, worker.id),
     ...(isAgentVendor(session.vendor) ? { vendor: session.vendor } : {}),
   };

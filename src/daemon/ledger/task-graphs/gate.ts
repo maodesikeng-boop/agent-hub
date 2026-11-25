@@ -1,3 +1,4 @@
+import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import type { DecideTaskNodeRequest, DecideTaskNodeResponse } from "../../../shared/api.ts";
 import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, askOf, taskNodeStatusText } from "../../../shared/domain.ts";
 import type { TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
@@ -204,7 +205,7 @@ export function decideNode(
     if (replay !== null) return replay;
     if (node.status === "done") throw fail("conflict", `步骤「${nodeKey}」已经完了`);
     if (graphRow.status !== "active") throw fail("conflict", `任务图 #${graphId} 已结束（${graphRow.status}）`);
-    if (node.status !== "waiting" || isUserBlocked(g.db, node.id) || (node.waiting_for !== "user" && node.active_worker_id !== null)) {
+    if (node.status !== "waiting" || sandboxApprovalPendingForStep(g.db, node.id) || isUserBlocked(g.db, node.id) || (node.waiting_for !== "user" && node.active_worker_id !== null)) {
       throw fail("conflict", `步骤「${nodeKey}」${taskNodeStatusText(toTaskNode(node), "user")}，现在不能拍板`);
     }
     g.persona.assertPmNotArchived(graphRow.pm_id);

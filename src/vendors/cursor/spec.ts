@@ -136,6 +136,10 @@ export default defineVendor({
     outputField: "rawOutput",
   },
   capabilities: {
+    builtInSandbox: {
+      platforms: ["darwin"],
+      computerUseCapabilities: [],
+    },
     backgroundWake: false,
     readonly: "os_sandbox",
     // cursor-agent's own sandbox cannot nest inside the OS sandbox (exit 71).

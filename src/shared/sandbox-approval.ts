@@ -1,4 +1,5 @@
 import type { ConversationId, MessageId, PmId, WorkerId, WorkerStatus, WorkerWorkspace } from "./domain.ts";
+import { capabilityEnabled } from "./pm-capabilities.ts";
 import type {
   CapabilityInventory,
   CapabilityKey,
@@ -6,7 +7,7 @@ import type {
   SessionCapabilities,
   WorkerCapabilities,
 } from "./pm-capabilities.ts";
-import type { AgentVendor } from "./vendors.ts";
+import { vendorSpec, type AgentVendor } from "./vendors.ts";
 
 export type SandboxApprovalId = number;
 
@@ -19,8 +20,7 @@ export type SandboxApprovalStatus = (typeof SANDBOX_APPROVAL_STATUSES)[number];
 export const SANDBOX_APPROVAL_DECISIONS = ["approve", "reject"] as const;
 export type SandboxApprovalDecision = (typeof SANDBOX_APPROVAL_DECISIONS)[number];
 
-export const SANDBOX_APPROVAL_DECIDERS = ["user", "system"] as const;
-export type SandboxApprovalDecider = (typeof SANDBOX_APPROVAL_DECIDERS)[number];
+export type SandboxApprovalDecider = "user" | "system";
 
 export const SANDBOX_PLATFORMS = ["darwin", "linux", "win32"] as const;
 export type SandboxPlatform = (typeof SANDBOX_PLATFORMS)[number];
@@ -114,6 +114,7 @@ export interface OuterSandboxLaunchCheckInput {
   readonly: boolean;
   approval: SandboxApprovalRecord | null;
   sessionCapabilities?: SessionCapabilities;
+  inventory?: CapabilityInventory;
 }
 
 export type OuterSandboxLaunchDecision =
@@ -126,51 +127,75 @@ export type SandboxApprovalCardInput = Pick<
   "workerId" | "workerTitle" | "vendor" | "model" | "workspace" | "branch" | "capabilities" | "taskSummary"
 >;
 
-/**
- * Precondition: vendor is a registered AgentVendor; inventory is optional live discovery state.
- * Postcondition: returns the deduplicated Computer Use capability keys eligible for no-outer-sandbox mode on vendor, combining static spec keys and matching plugin items in inventory.
- */
-export function eligibleComputerUseCapabilities(
-  _vendor: AgentVendor,
-  _inventory?: CapabilityInventory,
-): readonly CapabilityKey[] {
-  throw new Error("Not implemented");
+function sandboxSupportsPlatform(vendor: AgentVendor, platform: string): boolean {
+  return vendorSpec(vendor).capabilities.builtInSandbox?.platforms.some((entry) => entry === platform) === true;
 }
 
-/**
- * Precondition: input carries the target vendor, host platform, readonly/review flags, explicit WorkerCapabilities, and effective PM CapabilityPolicy.
- * Postcondition: returns ok only when the platform and vendor support built-in sandboxing, readonly and review are false, WorkerCapabilities is custom with an eligible Computer Use key allowed by pmPolicy (and present in inventory when supplied).
- */
-export function validateNoOuterSandboxRequest(
-  _input: NoOuterSandboxValidationInput,
-): NoOuterSandboxValidationResult {
-  throw new Error("Not implemented");
+export function eligibleComputerUseCapabilities(vendor: AgentVendor, inventory?: CapabilityInventory): readonly CapabilityKey[] {
+  const spec = vendorSpec(vendor).capabilities.builtInSandbox;
+  if (spec === undefined) return [];
+  if (inventory === undefined) return spec.computerUseCapabilities;
+  return [...new Set(inventory.items.filter((item) => {
+    const plugin = item.plugins?.[vendor];
+    return item.kind === "mcp" && item.vendors.includes(vendor) &&
+      (spec.computerUsePlugins === undefined
+        ? spec.computerUseCapabilities.includes(item.key)
+        : plugin !== undefined && spec.computerUsePlugins.includes(plugin));
+  }).map((item) => item.key))];
 }
 
-/**
- * Precondition: called on every Worker launch preparation with the current SQLite approval record (or null) and resolved session capabilities.
- * Postcondition: returns enforced when approval is null; returns vendor_only only when approval is approved, worker is open, platform and vendor support built-in sandboxing, and Computer Use remains enabled; otherwise returns block to fail closed.
- */
-export function resolveOuterSandboxLaunchMode(
-  _input: OuterSandboxLaunchCheckInput,
-): OuterSandboxLaunchDecision {
-  throw new Error("Not implemented");
+export function validateNoOuterSandboxRequest(input: NoOuterSandboxValidationInput): NoOuterSandboxValidationResult {
+  const reject = (code: NoOuterSandboxRejectCode, message: string): NoOuterSandboxValidationResult => ({ ok: false, code, message });
+  if (input.readonly) return reject("readonly_incompatible", "只读 Worker 不能申请取消外层沙箱");
+  if (input.review) return reject("review_incompatible", "审查 Worker 不能申请取消外层沙箱");
+  if (!NO_OUTER_SANDBOX_SUPPORTED_PLATFORMS.some((entry) => entry === input.platform)) {
+    return reject("platform_unsupported", "只有 macOS 支持为 Computer Use 申请取消外层沙箱");
+  }
+  if (!sandboxSupportsPlatform(input.vendor, input.platform)) return reject("vendor_no_builtin_sandbox", "该厂商在此平台没有可用的内置沙箱");
+  const { workerCapabilities, pmPolicy, vendor, inventory } = input;
+  const known = new Set([...eligibleComputerUseCapabilities(vendor), ...eligibleComputerUseCapabilities(vendor, inventory)]);
+  const mounted = workerCapabilities.mode === "custom" ? workerCapabilities.allow.filter((key) => known.has(key)) : [];
+  if (mounted.length === 0) return reject("computer_use_not_mounted", "申请取消外层沙箱必须明确挂载 Computer Use 能力");
+  const enabled = mounted.filter((key) => capabilityEnabled(pmPolicy, key));
+  if (enabled.length === 0) return reject("computer_use_disabled_by_policy", "项目没有启用该 Worker 挂载的 Computer Use 能力");
+  const installed = inventory === undefined ? enabled : enabled.filter((key) => eligibleComputerUseCapabilities(vendor, inventory).includes(key));
+  if (installed.length === 0) return reject("computer_use_not_installed", "该厂商没有安装所挂载的 Computer Use 能力");
+  return { ok: true, matchedCapabilities: installed };
 }
 
-/**
- * Precondition: approval contains the Worker identity, mounted Computer Use capabilities, and truncated task summary.
- * Postcondition: returns the chat card body naming the Worker, task, dropped Bellwood outer-sandbox protection (data directory and credentials vs vendor whole-disk read), and single-run expiry scope.
- */
-export function formatSandboxApprovalCardText(_approval: SandboxApprovalCardInput): string {
-  throw new Error("Not implemented");
+export function resolveOuterSandboxLaunchMode(input: OuterSandboxLaunchCheckInput): OuterSandboxLaunchDecision {
+  const { approval, vendor, platform, sessionCapabilities, inventory } = input;
+  if (approval === null) return { mode: "enforced" };
+  if (approval.status !== "approved" || approval.decidedBy !== "user" || input.workerStatus !== "open") {
+    return { mode: "block", reason: "Worker 没有有效的用户批准，不能取消外层沙箱" };
+  }
+  const installed = inventory === undefined ? [] : eligibleComputerUseCapabilities(vendor, inventory);
+  const mounted = approval.capabilities.some((key) => {
+    const name = key.slice("mcp:".length);
+    return installed.includes(key) && sessionCapabilities?.allow.mcp.includes(name) === true;
+  });
+  if (input.readonly || vendor !== approval.vendor || !NO_OUTER_SANDBOX_SUPPORTED_PLATFORMS.some((entry) => entry === platform) ||
+      !sandboxSupportsPlatform(vendor, platform) || !mounted) {
+    return { mode: "block", reason: "已批准的 Computer Use 能力当前不可用，Worker 无法启动" };
+  }
+  return { mode: "vendor_only", approvalId: approval.id };
 }
 
-/**
- * Precondition: approval names a Worker whose no-outer-sandbox confirmation was rejected by the user.
- * Postcondition: returns the PM-facing notice explaining that the user declined and the Worker was ended.
- */
-export function formatSandboxApprovalRejectedNotice(
-  _approval: Pick<SandboxApprovalRecord, "workerId" | "workerTitle">,
-): string {
-  throw new Error("Not implemented");
+export function formatSandboxApprovalCardText(approval: SandboxApprovalCardInput, locale: "en" | "zh" = "en"): string {
+  if (locale === "zh") return [
+    `Worker #${approval.workerId} · ${approval.workerTitle}`,
+    `任务：${approval.taskSummary}`,
+    "取消 Bellwood 外层沙箱后，厂商的内置沙箱仍可读取磁盘上的文件，包括 Bellwood 的 state/ 目录和凭据。",
+    "批准只对这一个 Worker 有效，收工即作废。",
+  ].join("\n\n");
+  return [
+    `Worker #${approval.workerId} · ${approval.workerTitle}`,
+    `Task: ${approval.taskSummary}`,
+    "Without Bellwood’s outer sandbox, the provider’s sandbox can read files across your disk, including Bellwood’s state/ directory and credentials.",
+    "Approval applies to this Worker until it ends.",
+  ].join("\n\n");
+}
+
+export function formatSandboxApprovalRejectedNotice(approval: Pick<SandboxApprovalRecord, "workerId" | "workerTitle">): string {
+  return `用户拒绝取消 Worker #${approval.workerId}“${approval.workerTitle}”的外层沙箱，Worker 已收工。`;
 }

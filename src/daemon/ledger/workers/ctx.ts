@@ -6,6 +6,7 @@ import type { LedgerPersona } from "../persona.ts";
 import type { LedgerProjects } from "../projects.ts";
 import type { ProjectDbRow, WorkerDbRow } from "../rows.ts";
 import type { LedgerSessions } from "../sessions.ts";
+import { createWorkerSandboxApprovals } from "./sandbox.ts";
 import type { AwaitingBackground, BackgroundWait, LedgerWorkersOptions, WorkersCtx } from "./types.ts";
 
 function createAwaitingBackground(db: LedgerContext["db"], now: LedgerContext["now"]): AwaitingBackground {
@@ -48,7 +49,7 @@ export function createWorkersCtx(
   projects: LedgerProjects,
   options: LedgerWorkersOptions,
 ): WorkersCtx {
-  return {
+  const w: WorkersCtx = {
     ctx,
     db: ctx.db,
     now: ctx.now,
@@ -59,11 +60,13 @@ export function createWorkersCtx(
     persona,
     projects,
     options,
+    sandboxApprovals: createWorkerSandboxApprovals(() => w, ctx),
     turnStarts: new Map(),
     endInterrupted: new Set(),
     maxTimeTimers: new Map(),
     awaitingBackground: createAwaitingBackground(ctx.db, ctx.now),
   };
+  return w;
 }
 
 export const workerRow = (w: WorkersCtx, id: WorkerId): WorkerDbRow | null => w.db.get<WorkerDbRow>("SELECT * FROM workers WHERE id = ?", id) ?? null;

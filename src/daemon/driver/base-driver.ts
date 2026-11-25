@@ -565,13 +565,21 @@ export abstract class BaseSessionDriver<
       try {
         files = await this.opts.prepareLaunch(this.store(st));
       } catch (error) {
-        this.internalError(
-          st.id,
-          `prepareLaunch before writing failed, keeping the running process: ${errorMessage(error)}`,
-        );
+        if (proc.outerSandbox !== "vendor_only") {
+          this.internalError(st.id, `prepareLaunch before writing failed, keeping the running process: ${errorMessage(error)}`);
+        }
       }
       this.assertRunning();
       if (st.ended || st.proc !== proc || proc.closing || this.busy(st)) return;
+      if (proc.outerSandbox === "vendor_only" && files?.outerSandbox !== "vendor_only") {
+        this.closeStdin(st, proc, "idle");
+        await proc.exited;
+        this.assertRunning();
+        if (st.ended) return;
+        const batch = this.takeBatch(st);
+        if (batch) await this.startup(st, batch, null, files);
+        return;
+      }
       const row = files ? this.row(st) : null;
       const settingsChanged = files !== null && row !== null && launchChanged(proc.launched, row, files.fingerprint);
       const capabilitiesChanged = files?.capabilityCheck?.fingerprint !== proc.capabilityCheck?.fingerprint;
@@ -865,6 +873,7 @@ export abstract class BaseSessionDriver<
       child,
       resume,
       capabilityCheck: files.capabilityCheck,
+      outerSandbox: files.outerSandbox,
       launched: {
         fingerprint: files.fingerprint,
         cwd: row.cwd,

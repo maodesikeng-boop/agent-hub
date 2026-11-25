@@ -348,6 +348,7 @@ describe("deepseek 声明（spec.ts）与路径/凭据边界（paths.ts）", () 
       loginCommand: "dsh",
     });
     expect(deepseekSpec.capabilities).toEqual({
+      builtInSandbox: { platforms: ["darwin", "linux"], computerUseCapabilities: [] },
       backgroundWake: false,
       readonly: "os_sandbox",
       // 提示词走 --patch 的 system-prompt.personaSuffix（system 消息，压缩不裁）

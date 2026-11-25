@@ -114,6 +114,10 @@ export default defineVendor({
     toolNameKeys: ["name"],
   },
   capabilities: {
+    builtInSandbox: {
+      platforms: ["darwin", "linux"],
+      computerUseCapabilities: [],
+    },
     backgroundWake: false,
     readonly: "os_sandbox",
     systemPrompt: "resident",

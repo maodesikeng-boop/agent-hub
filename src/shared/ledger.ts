@@ -223,6 +223,7 @@ export type WorkspaceProbe =
   | { kind: "failed"; error: string };
 
 export interface HubCallContext {
+  capabilityInventory?: import("./pm-capabilities.ts").CapabilityInventory;
   workspace?: WorkspaceProbe;
   pr?: WorkerPrProbeResult;
   prError?: string | null;
@@ -342,6 +343,7 @@ export interface Ledger extends LedgerHandoverWork {
    * Postcondition: approve transitions status to approved and enqueues the deferred Worker launch; reject transitions to rejected, ends the Worker, and notifies the PM.
    */
   decideSandboxApproval?(id: SandboxApprovalId, input: DecideSandboxApprovalRequest): DecideSandboxApprovalResponse;
+  getSandboxApproval?(id: SandboxApprovalId): SandboxApprovalRecord | null;
   deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string };
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;

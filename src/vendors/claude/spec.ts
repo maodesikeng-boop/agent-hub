@@ -111,6 +111,10 @@ export default defineVendor({
     toolNameKeys: ["skill"],
   },
   capabilities: {
+    builtInSandbox: {
+      platforms: ["darwin", "linux"],
+      computerUseCapabilities: [],
+    },
     // A finished run_in_background command pushes task_notification and wakes the agent.
     backgroundWake: true,
     readonly: "settings",

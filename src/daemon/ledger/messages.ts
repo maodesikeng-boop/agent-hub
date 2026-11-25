@@ -135,6 +135,7 @@ export function createLedgerMessages(
     extra?: {
       gateRef?: GateRef;
       blockerRef?: BlockerRef;
+      sandboxApprovalRef?: AskMeta["sandboxApprovalRef"];
       recommended?: string;
       skipRouterBridge?: boolean;
       fileArgs?: { args: readonly HubFileArg[]; files: readonly SentFile[] };
@@ -148,6 +149,7 @@ export function createLedgerMessages(
       ...(extra?.recommended !== undefined ? { recommended: extra.recommended } : {}),
       ...(extra?.gateRef !== undefined ? { gateRef: extra.gateRef } : {}),
       ...(extra?.blockerRef !== undefined ? { blockerRef: extra.blockerRef } : {}),
+      ...(extra?.sandboxApprovalRef !== undefined ? { sandboxApprovalRef: extra.sandboxApprovalRef } : {}),
       ...(extra?.fileArgs !== undefined && extra.fileArgs.files.length > 0 ? { files: [...extra.fileArgs.files] } : {}),
     };
     let row = db.get<MessageDbRow>(
@@ -170,7 +172,7 @@ export function createLedgerMessages(
     }
     const message = toMessage(row);
     p.changes.push({ type: "message.created", data: { message } });
-    if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined) {
+    if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined && extra?.sandboxApprovalRef === undefined) {
       onIndependentAskCreated(p, session, message, askOptions);
     }
     return message;

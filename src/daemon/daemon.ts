@@ -426,6 +426,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const sandboxGuard = createRouterSandboxGuard();
     parts.sandboxGuard = sandboxGuard;
     const routerTurnPurposes = createRouterTurnPurposes();
+    const capabilityInventory = createCapabilityInventory({ ctx: { userHome: options.userHome ?? homedir(), env } });
     const agentApi = await startAgentApi({
       ledger,
       tokens,
@@ -433,7 +434,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       hubSock: paths.hubSock,
       log,
       models,
-      refreshVendor: (vendor) => models.ensureUsable(vendor),
+      refreshVendor: (vendor) => models.ensureUsable(vendor), capabilityInventory,
       sandboxGuard,
       ...(options.onSelfReload
         ? {
@@ -452,9 +453,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     parts.agentApi = agentApi;
     installHubShim({ binDir: paths.hubBinDir });
-    const capabilityInventory = createCapabilityInventory({
-      ctx: { userHome: options.userHome ?? homedir(), env },
-    });
     const prepareLaunch = createLaunchPreparer({
       launchDir: paths.launchDir,
       dataDir,

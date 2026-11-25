@@ -23,7 +23,7 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
   if (group === "worker" && action === "start") {
     allowOnly(
       values,
-      ["title", "vendor", "model", "effort", "max-time", "readonly", "caps", "allow", "no-worktree", "node", "graph", "stdin"],
+      ["title", "vendor", "model", "effort", "max-time", "readonly", "caps", "allow", "no-outer-sandbox", "no-worktree", "node", "graph", "stdin"],
       "worker start",
     );
     expectPositionals(rest, 0, "worker start");
@@ -48,6 +48,7 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
       body.caps = caps.mode;
       if (caps.mode === "custom") body.allow = caps.allow;
     }
+    if (values["no-outer-sandbox"] === true) body.noOuterSandbox = true;
     if (values["no-worktree"] === true) body.noWorktree = true;
     if (values.node !== undefined) {
       if (values.node.trim() === "") throw new UsageError("--node 不能是空的");

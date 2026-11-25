@@ -1,3 +1,4 @@
+import { assertStepSandboxRequest } from "./sandbox.ts";
 import type { TaskEdge, TaskNodeKey } from "../../../shared/domain.ts";
 import type { CreateTaskGraphNodeInput, CreateTaskGraphSpecInput, HubArgs, HubResult } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
@@ -103,6 +104,7 @@ export function createIn(
   const goal = validateGraphGoal(spec.goal);
   assertActiveGraphQuota(g, project.id);
   const steps = list.map((n, index) => normalizeNewStep(n, index, list, sequential, caller.vendor as AgentVendor, g.modelCatalog));
+  for (const step of steps) assertStepSandboxRequest(g, caller.pmId, caller.vendor as AgentVendor, step);
   const edges = edgesOf(steps, spec.edges);
   const topoOrder = validateDagAndOrder(
     steps.map((n) => n.key),

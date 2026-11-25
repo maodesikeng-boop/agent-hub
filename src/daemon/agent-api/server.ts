@@ -75,6 +75,7 @@ export interface AgentApiOptions {
   >;
   /** Probe git outside the ledger transaction so a hung git call cannot stall the daemon. */
   probeWorkspace?: (folder: string) => Promise<WorkspaceProbe>;
+  capabilityInventory?: Pick<import("../pm-capabilities/inventory.ts").CapabilityInventoryService, "get">;
   probePr?: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
   probePrByUrl?: (cwd: string, url: string) => Promise<WorkerPrProbeResult>;
   findTranscript?: (ref: TranscriptRef) => string | null;
@@ -162,6 +163,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       readonly: { type: "boolean" },
       caps: { type: "string", enum: [...WORKER_CAPABILITY_MODES] },
       allow: { type: "array", items: { type: "string", minLength: 1, maxLength: 512 } },
+      noOuterSandbox: { type: "boolean" },
       noWorktree: { type: "boolean" },
       node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
       graphId: workerIdField,
@@ -469,6 +471,24 @@ function fail(reply: FastifyReply, code: HubErrorCode, message: string): Fastify
 
 const UNAUTHORIZED_MESSAGE = "令牌不对或已作废：这个会话不能再用 hub";
 
+async function prepareWorkerStart(
+  opts: AgentApiOptions,
+  probeWorkspace: NonNullable<AgentApiOptions["probeWorkspace"]>,
+  sessionId: SessionId,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<HubCallContext> {
+  const context: HubCallContext = {};
+  if (opts.refreshVendor && isAgentVendor(body.vendor)) await opts.refreshVendor(body.vendor);
+  if (signal.aborted || (body.noWorktree === true && body.noOuterSandbox !== true)) return context;
+  const folder = opts.ledger.workerStartFolder(sessionId);
+  if (body.noOuterSandbox === true && opts.capabilityInventory !== undefined) {
+    context.capabilityInventory = await opts.capabilityInventory.get({ projectDir: folder });
+  }
+  if (!signal.aborted && body.noWorktree !== true && folder !== null) context.workspace = await probeWorkspace(folder);
+  return context;
+}
+
 export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const { ledger, tokens } = opts;
   const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
@@ -535,13 +555,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       }
       return context;
     }
-    if (command !== "worker.start") return {};
-    const context: HubCallContext = {};
-    if (opts.refreshVendor && isAgentVendor(body.vendor)) await opts.refreshVendor(body.vendor);
-    if (signal.aborted || body.noWorktree === true) return context;
-    const folder = ledger.workerStartFolder(sessionId);
-    if (folder !== null) context.workspace = await probeWorkspace(folder);
-    return context;
+    return command === "worker.start" ? prepareWorkerStart(opts, probeWorkspace, sessionId, body, signal) : {};
   };
   const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({

@@ -91,6 +91,7 @@ export interface LedgerOptions {
   initialSeq?: number;
   changeBufferSize?: number;
   osSandboxed?: LedgerContextOptions["osSandboxed"];
+  workerPlatform?: NodeJS.Platform;
   pmHomeRoot: string;
   personasDir?: string;
   pmMemoryDir?: string;
@@ -202,14 +203,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     resumeWorkerIn: workers.resumeUserBlockedWorkerIn,
   }));
   const taskGraphs = createLedgerTaskGraphs(ctx, sessions, messages, persona, projects, router, {
-    launchDir: effectiveLaunchDir,
+    launchDir: effectiveLaunchDir, workerPlatform: options.workerPlatform,
     workers: () => workers,
     userBlockers,
     onGraphFinishedIn: (p, projectId) => projectCatalog.markForcedIn(p, projectId, "graph_finished"),
   });
   const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
-    worktreesDir: files.worktreesDir,
+    worktreesDir: files.worktreesDir, platform: options.workerPlatform,
     ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     taskGraphs,
     userBlockers,
@@ -368,7 +369,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       messages.composerTarget(conversationId, files.worktreesDir, files.extraWorktreeRoots?.()),
 
     snapshot(): LedgerSnapshot {
-      const activeTaskGraphs = taskGraphs.activeSnapshotGraphs();
+      const activeTaskGraphs = taskGraphs.activeSnapshotGraphs(), pendingSandboxApprovals = workers.listPendingSummaries();
       const { conversations, sessions, olderEndedWorkers } = snapshotQueries.snapshotConversations(activeTaskGraphs);
       return {
         seq: log.seq,
@@ -385,7 +386,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         health: db.all<HealthDbRow>("SELECT * FROM health ORDER BY module").map(toHealth),
         schedules: schedules.all(),
         router: router.snapshotSlice(),
-        activeTaskGraphs,
+        activeTaskGraphs, ...(pendingSandboxApprovals.length > 0 ? { pendingSandboxApprovals } : {}),
         ...(Object.keys(olderEndedWorkers).length > 0 ? { olderEndedWorkers } : {}),
       };
     },
@@ -536,7 +537,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     listRouterItems: router.listItems,
     resolveRouterItem: router.resolveItem,
     answerAsk: router.answerAsk,
-    recheckUserBlocker: userBlockers.recheck,
+    recheckUserBlocker: userBlockers.recheck, decideSandboxApproval: workers.decide, getSandboxApproval: workers.getById,
     userBlockerVendor: userBlockers.vendorOf,
     deliveryOf: (message) => {
       const parts = deliveryParts(message);

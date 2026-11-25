@@ -3,6 +3,9 @@ import {
   MAX_REWOUND_PENDING_KEYS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_STREAM_LIVE_MAX,
+  PENDING_SANDBOX_APPROVALS_SNAPSHOT_MAX,
+  askOf,
+  formatSandboxApprovalCardText,
   clearRateLimitRejection,
   emptyRouterSlice,
   isLedgerWakeup,
@@ -65,6 +68,12 @@ export interface ConversationView {
 
 type Phase = "loading" | "ready" | "error" | "unauthorized";
 
+interface PendingSandboxCard {
+  id: number;
+  conversationId: ConversationId;
+  text: string;
+}
+
 export interface HubState {
   phase: Phase;
   loadError?: ErrorInfo;
@@ -80,6 +89,7 @@ export interface HubState {
   health: HealthEntry[];
   schedules: ScheduleRecord[];
   router: RouterSlice;
+  pendingSandboxCards?: readonly PendingSandboxCard[];
   activeTaskGraphs: TaskGraph[];
   olderEndedWorkers: Record<PmId, ConversationId | undefined>;
   lookups: Record<ConversationId, "loading" | "missing" | undefined>;
@@ -235,6 +245,18 @@ function clearConversationStreaming(sessions: SessionState[], conversationId: Co
   });
 }
 
+function withSandboxCard(state: HubState, message: Message): HubState {
+  if (message.meta?.needsUser !== true || !("sandboxApprovalRef" in message.meta)) return state;
+  const ask = askOf(message);
+  const id = ask?.sandboxApprovalRef?.approvalId;
+  if (id === undefined) return state;
+  const cards = state.pendingSandboxCards ?? [];
+  const remaining = cards.filter((card) => card.id !== id);
+  if (ask?.answered === true) return remaining.length === cards.length ? state : { ...state, pendingSandboxCards: remaining };
+  const card = { id, conversationId: message.conversationId, text: message.text };
+  return { ...state, pendingSandboxCards: [card, ...remaining].slice(0, PENDING_SANDBOX_APPROVALS_SNAPSHOT_MAX) };
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
@@ -244,7 +266,8 @@ export function applyChange(state: HubState, change: Change): HubState {
       const raw = change.data.message;
       const wasRewoundPending = state.rewoundKeys?.includes(raw.dedupeKey) === true;
       const message = wasRewoundPending ? withRewoundMeta(raw) : raw;
-      const nextBase = wasRewoundPending ? { ...next, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) } : next;
+      const prepared = withSandboxCard(next, message);
+      const nextBase = wasRewoundPending ? { ...prepared, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) } : prepared;
       const afterStreaming =
         change.type === "message.created" &&
         message.sender === "agent" &&
@@ -556,6 +579,9 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     health: snapshot.health,
     schedules: snapshot.schedules,
     router: normalizeRouterSlice(snapshot.router),
+    pendingSandboxCards: snapshot.pendingSandboxApprovals?.map((approval) => ({
+      id: approval.id, conversationId: approval.conversationId, text: formatSandboxApprovalCardText(approval),
+    })),
     activeTaskGraphs: normalizeTaskGraphs(snapshot.activeTaskGraphs),
     olderEndedWorkers: snapshot.olderEndedWorkers ?? {},
     lookups: {},

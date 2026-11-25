@@ -1,3 +1,5 @@
+import { readStepNoOuterSandbox, writeStepNoOuterSandbox } from "../sandbox-approvals.ts";
+import { assertStepSandboxRequest } from "./sandbox.ts";
 import { taskNodeStatusText } from "../../../shared/domain.ts";
 import type { TaskEdge, TaskNodeKey } from "../../../shared/domain.ts";
 import type {
@@ -11,7 +13,7 @@ import type { HubCallContext } from "../../../shared/ledger.ts";
 import { MAX_GRAPH_SPEC_BYTES } from "../../../shared/limits.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
 import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
-import { writeWorkerCapabilities } from "../capability-rows.ts";
+import { readWorkerCapabilities, writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import { syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
@@ -58,6 +60,7 @@ interface PreparedUpdate {
   nextMaxTimeMs: number | null;
   nextBase: string | null;
   nextReadonly: number;
+  nextNoOuterSandbox: boolean;
   nextCapabilities: WorkerCapabilities | null;
   nextConfirm: number;
   nextReview: number;
@@ -155,7 +158,7 @@ function patchedEdges(
   return [...edgeSet.values()];
 }
 
-function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNodeDbRow, vendor: AgentVendor): PreparedUpdate {
+function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNodeDbRow, vendor: AgentVendor, pmId: number): PreparedUpdate {
   const nextTitle = u.title !== undefined ? validateNodeTitle(u.title) : cur.title;
   const nextBrief = u.brief !== undefined ? validateStepBrief(u.brief) : cur.brief;
   const vendorChanged = u.vendor !== undefined && (u.vendor?.trim() || null) !== cur.vendor;
@@ -171,6 +174,7 @@ function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNod
   const nextMaxTimeMs = u.maxTime !== undefined ? validateStepMaxTime(u.maxTime) : cur.max_time_ms;
   const nextReadonly = u.readonly !== undefined ? (u.readonly ? 1 : 0) : cur.readonly;
   const nextCapabilities = u.caps !== undefined || u.allow !== undefined ? validateStepCapabilities(u.caps, u.allow) : null;
+  const nextNoOuterSandbox = u.noOuterSandbox ?? readStepNoOuterSandbox(g.db, cur.id);
   const nextConfirm = u.confirm !== undefined ? (u.confirm ? 1 : 0) : cur.confirm;
   const nextReview = u.review !== undefined ? (u.review ? 1 : 0) : cur.review;
   const nextBase = validateStepBase(u.base !== undefined ? u.base : cur.base, nextReview === 1);
@@ -183,7 +187,11 @@ function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNod
         recommended: u.recommended ?? cur.gate_recommended ?? undefined,
       })
     : null;
-  return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextCapabilities, nextConfirm, nextReview, gate };
+  assertStepSandboxRequest(g, pmId, vendor, {
+    noOuterSandbox: nextNoOuterSandbox, vendor: agent.vendor, readonly: nextReadonly, review: nextReview,
+    capabilities: nextCapabilities ?? readWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: cur.id }),
+  });
+  return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextNoOuterSandbox, nextCapabilities, nextConfirm, nextReview, gate };
 }
 
 function writeUpdateIn(g: TaskGraphCtx, p: Pending, u: PreparedUpdate, t: number): void {
@@ -222,6 +230,7 @@ function writeUpdateIn(g: TaskGraphCtx, p: Pending, u: PreparedUpdate, t: number
     t,
     cur.id,
   );
+  writeStepNoOuterSandbox(g.db, cur.id, u.nextNoOuterSandbox);
   if (u.nextCapabilities !== null) writeWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: cur.id }, u.nextCapabilities);
 }
 
@@ -259,11 +268,12 @@ function planPatch(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.patch
   const removeKeySet = takeRemovals(nodesByKey, lists.remove);
   const vendor = caller.vendor as AgentVendor;
   const added = normalizeAdded(g, lists, nodesByKey, vendor);
+  for (const step of added) assertStepSandboxRequest(g, caller.pmId, vendor, step);
   const finalEdges = patchedEdges(existingEdges, removeKeySet, patch, added, lists.update, nodesByKey);
   const topoOrder = validateDagAndOrder([...nodesByKey.keys(), ...added.map((a) => a.key)], finalEdges);
   const rankOf = new Map<TaskNodeKey, number>(topoOrder.map((k, idx) => [k, idx]));
   const nextGoal = patch.goal !== undefined ? validateGraphGoal(patch.goal) : undefined;
-  const updates = lists.update.map((u) => prepareUpdate(g, u, nodesByKey.get(validateNodeKey(u.key))!, vendor));
+  const updates = lists.update.map((u) => prepareUpdate(g, u, nodesByKey.get(validateNodeKey(u.key))!, vendor, caller.pmId));
   const updatedByKey = new Map(updates.map((u) => [u.cur.node_key, u]));
   assertReviewStepsHaveTarget(
     [
