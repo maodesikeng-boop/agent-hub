@@ -484,3 +484,10 @@ describe("空闲、只剩后台任务时停止：关掉进程（后台任务一�
     expect(t.driver.isRunning(s.id)).toBe(true);
   });
 });
+
+describe("normalizeBackgroundTasks and background.changed metadata", () => {
+  it.todo("preserves first-seen startedAt for unchanged task_ids across subsequent background_tasks_changed updates");
+  it.todo("prefers vendor-provided started_at when finite and valid, and falls back to observation timestamp otherwise");
+  it.todo("extracts command or description label, clips to BACKGROUND_TASK_LABEL_MAX_CHARS, and caps task count at MAX_BACKGROUND_TASKS_TRACKED");
+  it.todo("emits tasks metadata on background.changed from BaseSessionDriver for Claude and Agy background commands");
+});

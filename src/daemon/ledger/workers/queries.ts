@@ -1,5 +1,5 @@
 import type { AgentSessionRow, PmMode, WorkerId, WorkerRecord } from "../../../shared/domain.ts";
-import type { HubResult, WorkerHubStatus } from "../../../shared/hub.ts";
+import type { HubArgs, HubResult, WorkerHubStatus } from "../../../shared/hub.ts";
 import type { LaunchContext } from "../../../shared/ledger.ts";
 import { WORKER_LIST_RECENT_ENDED } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
@@ -14,7 +14,7 @@ import { describeWorkspace, worktreeLabel } from "./text.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
 /** Ended Workers are capped at WORKER_LIST_RECENT_ENDED so hundreds of entries do not flood the PM context; recency uses updated_at, not id. */
-export function list(w: WorkersCtx, caller: PmCaller): HubResult<"worker.list"> {
+export function list(w: WorkersCtx, caller: PmCaller, _args?: HubArgs<"worker.list">): HubResult<"worker.list"> {
   const all = w.db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? ORDER BY id", caller.pmId);
   if (all.length === 0) return { text: "你还没有派过 Worker。", data: { workers: [] } };
   const endedLatestFirst = all.filter((x) => x.status === "ended").sort((a, b) => b.updated_at - a.updated_at || b.id - a.id);

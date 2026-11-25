@@ -1,6 +1,24 @@
 import type { TokenUsage } from "../../shared/index.ts";
 import { assistantContext, parseUsage } from "./protocol.ts";
 
+// Invariant: once a session has recorded a positive context token count, an error or zero-usage turn never overwrites it with 0.
+
+/**
+ * Precondition: value is an unvalidated vendor context token field.
+ * Postcondition: returns the floored positive integer when value is a finite number > 0; returns null for 0, negative, or non-numeric values.
+ */
+export function positiveContextTokens(_value: unknown): number | null {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: previousContext is a non-negative integer token count from the session before this update.
+ * Postcondition: returns positiveContextTokens(measured) when positive, otherwise preserves previousContext unchanged.
+ */
+export function preservePositiveContext(_measured: number | null | undefined, _previousContext: number): number {
+  throw new Error("Not implemented");
+}
+
 type RequestUsage = Omit<TokenUsage, "context">;
 
 export class TurnUsage {

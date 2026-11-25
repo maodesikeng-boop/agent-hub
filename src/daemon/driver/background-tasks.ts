@@ -1,3 +1,19 @@
+import type { BackgroundTaskInfo } from "../../shared/driver.ts";
+
+// Invariant: tracked background tasks per session are bounded by MAX_BACKGROUND_TASKS_TRACKED, labels are clipped to BACKGROUND_TASK_LABEL_MAX_CHARS, and first-seen startedAt is preserved across list updates.
+
+/**
+ * Precondition: rawTasks is the vendor-supplied background task array (or arbitrary malformed payload); previous holds the previously tracked tasks for this session; at is epoch ms.
+ * Postcondition: returns null when rawTasks is not an array; otherwise returns a new map excluding ambient and invalid entries, bounded by MAX_BACKGROUND_TASKS_TRACKED, preserving previous startedAt (or using valid vendor started_at) and clipping labels to BACKGROUND_TASK_LABEL_MAX_CHARS.
+ */
+export function normalizeBackgroundTasks(
+  _rawTasks: unknown,
+  _previous: ReadonlyMap<string, BackgroundTaskInfo>,
+  _at: number,
+): Map<string, BackgroundTaskInfo> | null {
+  throw new Error("Not implemented");
+}
+
 export class BackgroundTasks {
   #tasks = new Map<string, string>();
 

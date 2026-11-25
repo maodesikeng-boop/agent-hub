@@ -50,9 +50,16 @@ interface CommandsChangedEvent extends DriverEventBase {
   commands: ComposerCommand[];
 }
 
-interface BackgroundChangedEvent extends DriverEventBase {
+export interface BackgroundTaskInfo {
+  id: string;
+  label: string;
+  startedAt: number;
+}
+
+export interface BackgroundChangedEvent extends DriverEventBase {
   type: "background.changed";
   count: number;
+  tasks?: readonly BackgroundTaskInfo[];
 }
 
 interface ContextCompactedEvent extends DriverEventBase {

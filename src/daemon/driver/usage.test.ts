@@ -65,3 +65,13 @@ describe("TurnUsage（实时 token 累计）", () => {
     expect(t.finish(live, usage(1, 1, 1, 1))).toEqual({ input: 3, cacheRead: 501, cacheWrite: 6, output: 4, context: live.context });
   });
 });
+
+describe("preservePositiveContext and cross-vendor zero-usage protection", () => {
+  it.todo("positiveContextTokens returns null for 0, negative, NaN, and non-numeric inputs and floors positive integers");
+  it.todo("preservePositiveContext keeps previous positive context when measured is 0 or null and updates when measured is positive");
+  it.todo("TurnUsage.observe and TurnUsage.finish preserve historical context when an error assistant message reports all-zero tokens (claude, agy)");
+  it.todo("Codex token usage notifications and turn settlement preserve historical context when reported context is 0");
+  it.todo("Pi live usage and session stats preserve historical context when contextUsage.tokens is 0");
+  it.todo("ACP usage_update and prompt usage merge preserve historical context when used or inferred input tokens are 0 (cursor, deepseek, kimi, opencode)");
+  it.todo("compaction still lowers historical context to a smaller positive token count");
+});
