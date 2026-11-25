@@ -254,7 +254,8 @@ export function createClient(device: DeviceId | null) {
       request<MessagesPage>(`${at(API_PATHS.messages(conversationId))}?before=${before}`),
     fetchConversationsLookup: (query: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
       request<ConversationsLookup>(at(API_PATHS.conversationsLookup(query))),
-    fetchCompletedWork: (pmId: PmId, cursor: CompletedCursor | null) => request<CompletedWorkPage>(at(API_PATHS.completedWork(pmId, cursor))),
+    fetchCompletedWork: (pmId: PmId, cursor: CompletedCursor | null, signal?: AbortSignal) =>
+      request<CompletedWorkPage>(at(API_PATHS.completedWork(pmId, cursor)), signal ? { signal } : undefined),
     fetchTurnReply: (messageId: MessageId) => request<TurnReplyView>(at(API_PATHS.messageTurnReply(messageId))),
     postMessage: (conversationId: ConversationId, body: PostMessageRequest) => postJson<PostMessageResponse>(at(API_PATHS.messages(conversationId)), body),
     postUpload: async (file: Blob, name: string): Promise<Attachment> => {

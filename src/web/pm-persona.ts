@@ -39,11 +39,13 @@ export function useAliveRef(): AliveRef {
   return aliveRef;
 }
 
+export const personaQueryKey = (device: string | null, pmId: number) => ["persona", device ?? "", pmId] as const;
+
 export function usePersona(pmId: number, rev: number) {
   const client = useClient();
   const qc = useHubQueryClient();
   const genId = `persona:${client.device ?? ""}:${pmId}`;
-  const queryKey = useMemo(() => ["persona", client.device ?? "", pmId] as const, [client.device, pmId]);
+  const queryKey = useMemo(() => personaQueryKey(client.device, pmId), [client.device, pmId]);
   const { data: persona, error, isFetching, refetch } = useQuery(
     {
       queryKey,

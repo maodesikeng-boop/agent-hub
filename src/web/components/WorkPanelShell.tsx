@@ -7,13 +7,12 @@ import { useModelCatalog } from "../models.tsx";
 import { isRenewing, pendingOf, sessionOf, workerOutcomesOf, workerPhaseOf, type WorkerEntry } from "../selectors.ts";
 import type { useShellModel } from "../shell-model.ts";
 import { workPanelExitsOf, type WorkPanelContent } from "../side-panel.ts";
-import { useCompletedWork } from "../useCompletedWork.ts";
-import { activeWorkOf, type WorkPanelTab } from "../work-panel-model.ts";
+import type { WorkPanelTab } from "../work-panel-model.ts";
 import { workerWorkStatusOf } from "../work-status.ts";
 import { InfoTab } from "./InfoTab.tsx";
 import { WorkerConversation } from "./WorkerConversation.tsx";
 import { WorkerDetailHeader, workerMenuFactsOf } from "./WorkerDetail.tsx";
-import { WorkPanel, WorkPanelDetailHeader, WorkPanelHeader, WorkPanelTabsSheet, finishSignalOf } from "./WorkPanel.tsx";
+import { WorkPanel, WorkPanelDetailHeader, WorkPanelTabsSheet } from "./WorkPanel.tsx";
 
 export type ShellModel = ReturnType<typeof useShellModel>;
 export type ShellContent = NonNullable<ShellModel["content"]>;
@@ -137,6 +136,7 @@ function renderInfoTab(model: ShellModel, c: ShellContent, pm: Pm, onArchived: (
       readOnly={isReadOnly(current.status)}
       onNavigate={(page) => c.openProfile(pm.id, page ?? undefined)}
       onArchived={onArchived}
+      onTogglePin={(pinned) => c.togglePin(pm.id, pinned)}
       onManageProviders={() => c.openManageProviders(current.key)}
       onEditDefaults={() => c.openSettingsSection("capabilities")}
     />
@@ -157,11 +157,8 @@ export function DesktopWorkPanel({
   notices: React.ReactNode;
 }) {
   const { navigate, current, route, state, hub } = model;
+  const { openAsk: focusAsk, toggleRail } = c;
   const pmId = c.active?.pm?.id ?? c.profile?.id ?? null;
-  const activeWork = useMemo(() => activeWorkOf(c.railGraphs, c.railWorkers), [c.railGraphs, c.railWorkers]);
-  const finishSignal = useMemo(() => finishSignalOf(c.railGraphs, c.railWorkers), [c.railGraphs, c.railWorkers]);
-  const infoSummaryCompleted = useCompletedWork(pmId, panelContent.kind === "info" && panelContent.page === null, finishSignal);
-
   const convRoute = useMemo(
     () => (c.active ? { view: "conversation" as const, id: c.active.id, ...routeDeviceOf(current.key) } : null),
     [c.active, current.key],
@@ -192,24 +189,11 @@ export function DesktopWorkPanel({
     [c, pmId, route?.view, convRoute, navigate],
   );
 
-  if (panelContent.kind === "tab") {
-    return (
-      <WorkPanelTabsSheet
-        layout={layout}
-        tab={panelContent.tab}
-        pmId={pmId}
-        graphs={c.railGraphs}
-        workers={c.railWorkers}
-        asks={c.railAsks}
-        look={c.look}
-        onSelectTab={selectTab}
-        onClose={closePanel}
-        onOpenWorker={c.openWorkerConversation}
-        onOpenAsk={c.openAsk}
-        onNeedWorkers={c.ensureWorkers}
-      />
-    );
-  }
+  const openAsk = useCallback((id: number) => {
+    if (layout === "stack") toggleRail(false);
+    focusAsk(id);
+  }, [layout, toggleRail, focusAsk]);
+  const keepPanelOpen = useCallback(() => toggleRail(true), [toggleRail]);
 
   if (panelContent.kind === "worker") {
     const workerId = panelContent.workerId;
@@ -249,94 +233,72 @@ export function DesktopWorkPanel({
     );
   }
 
-  const profile = c.profile;
-  if (!profile) return null;
-  const header =
-    panelContent.page !== null ? (
+  const profile = panelContent.kind === "info" ? c.profile : null;
+  const page = panelContent.kind === "info" && !(profile?.archivedAt != null && panelContent.page === "capabilities") ? panelContent.page : null;
+  const info = profile === null ? undefined : {
+    label: `${profile.name}'s settings`,
+    body: renderInfoTab(model, c, profile, closePanel),
+    detailHeader: page === null ? undefined : (
       <WorkPanelDetailHeader
-        title={<h1 className="truncate px-1 text-minor font-semibold text-foreground">{infoPageTitle(panelContent.page)}</h1>}
+        title={<h1 className="truncate px-1 text-minor font-semibold text-foreground">{infoPageTitle(page)}</h1>}
         backLabel="Back to Info"
         onBack={() => {
           if (exits.back) navigate(exits.back);
         }}
         onClose={closePanel}
       />
-    ) : (
-      <WorkPanelHeader
-        tab="info"
-        activeCount={activeWork.count}
-        completedCount={infoSummaryCompleted.total}
-        onSelectTab={selectTab}
-        onClose={closePanel}
-      />
-    );
+    ),
+  };
   return (
-    <WorkPanel layout={layout} label={panelContent.page !== null ? infoPageTitle(panelContent.page) : `${profile.name}'s settings`} header={header}>
-      {renderInfoTab(model, c, profile, closePanel)}
-    </WorkPanel>
+    <WorkPanelTabsSheet
+      key={`${current.key}:${pmId}`}
+      layout={layout}
+      tab={panelContent.kind === "tab" ? panelContent.tab : "info"}
+      pmId={pmId}
+      graphs={c.railGraphs}
+      workers={c.railWorkers}
+      asks={c.railAsks}
+      look={c.look}
+      onSelectTab={selectTab}
+      onClose={closePanel}
+      onOpenWorker={c.openWorkerConversation}
+      onOpenAsk={openAsk}
+      onNeedWorkers={c.ensureWorkers}
+      onExpand={keepPanelOpen}
+      subscribeTaskGraphs={hub.subscribeTaskGraphs}
+      info={info}
+    />
   );
 }
 
-export function MobileInfoPanel({
+export function MobileWorkPanel({
   model,
   content: c,
-  pm,
+  profile: pm,
   onBack,
+  onClose,
   onSwitchTab,
 }: {
   model: ShellModel;
   content: ShellContent;
-  pm: Pm;
+  profile: Pm | null;
   onBack: () => void;
+  onClose: () => void;
   onSwitchTab: (tab: Exclude<WorkPanelTab, "info">) => void;
 }) {
-  const activeWork = useMemo(() => activeWorkOf(c.railGraphs, c.railWorkers), [c.railGraphs, c.railWorkers]);
-  const finishSignal = useMemo(() => finishSignalOf(c.railGraphs, c.railWorkers), [c.railGraphs, c.railWorkers]);
-  const completed = useCompletedWork(pm.id, c.profilePage === null, finishSignal);
-  const selectTab = useCallback(
-    (next: WorkPanelTab) => {
-      if (next === "info") return;
-      onSwitchTab(next);
-    },
-    [onSwitchTab],
-  );
-  const header =
-    c.profilePage !== null ? (
-      <WorkPanelDetailHeader
-        title={<h1 className="truncate px-1 text-minor font-semibold text-foreground">{infoPageTitle(c.profilePage)}</h1>}
-        backLabel="Back to Info"
-        onBack={() => c.openProfile(pm.id)}
-      />
-    ) : (
-      <WorkPanelHeader
-        tab="info"
-        activeCount={activeWork.count}
-        completedCount={completed.total}
-        onSelectTab={selectTab}
-        onClose={onBack}
-        onBack={onBack}
-        backLabel="Back to conversation"
-      />
-    );
-  return (
-    <WorkPanel layout="page" label={c.profilePage !== null ? infoPageTitle(c.profilePage) : `${pm.name}'s settings`} header={header}>
-      {renderInfoTab(model, c, pm, onBack)}
-    </WorkPanel>
-  );
-}
-
-export function MobileWorkPanel({ content: c, onClose }: { content: ShellContent; onClose: () => void }) {
-  const pmId = c.active?.pm?.id ?? null;
-  const { openProfile, setWorkTab, openAsk } = c;
+  const pmId = pm?.id ?? c.active?.pm?.id ?? null;
+  const { openProfile, openAsk, setWorkTab } = c;
   const selectTab = useCallback(
     (next: WorkPanelTab) => {
       if (next === "info") {
-        if (pmId !== null) openProfile(pmId);
-        return;
+        if (pm === null && pmId !== null) openProfile(pmId);
+      } else if (pm !== null) {
+        onSwitchTab(next);
+      } else {
+        setWorkTab(next);
       }
-      setWorkTab(next);
     },
-    [openProfile, setWorkTab, pmId],
+    [openProfile, pm, pmId, onSwitchTab, setWorkTab],
   );
   const openAskAndClose = useCallback(
     (id: number) => {
@@ -345,10 +307,23 @@ export function MobileWorkPanel({ content: c, onClose }: { content: ShellContent
     },
     [openAsk, onClose],
   );
+  const page = pm?.archivedAt != null && c.profilePage === "capabilities" ? null : c.profilePage;
+  const info = pm === null ? undefined : {
+    label: `${pm.name}'s settings`,
+    body: renderInfoTab(model, c, pm, onBack),
+    detailHeader: page === null ? undefined : (
+      <WorkPanelDetailHeader
+        title={<h1 className="truncate px-1 text-minor font-semibold text-foreground">{infoPageTitle(page)}</h1>}
+        backLabel="Back to Info"
+        onBack={() => openProfile(pm.id)}
+      />
+    ),
+  };
   return (
     <WorkPanelTabsSheet
+      key={`${model.current.key}:${pmId}`}
       layout="page"
-      tab={c.workTab}
+      tab={pm === null ? c.workTab : "info"}
       pmId={pmId}
       graphs={c.railGraphs}
       workers={c.railWorkers}
@@ -356,11 +331,13 @@ export function MobileWorkPanel({ content: c, onClose }: { content: ShellContent
       look={c.look}
       onSelectTab={selectTab}
       onClose={onClose}
-      onBack={onClose}
+      onBack={pm === null ? onClose : onBack}
       backLabel="Back to conversation"
       onOpenWorker={c.openWorkerConversation}
       onOpenAsk={openAskAndClose}
       onNeedWorkers={c.ensureWorkers}
+      subscribeTaskGraphs={model.hub.subscribeTaskGraphs}
+      info={info}
     />
   );
 }

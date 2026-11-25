@@ -410,9 +410,9 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       const closed = forceOpen === undefined ? railOpen : !forceOpen;
       setRailClosed(closed);
       saveRailClosed(closed);
-      setRailPeek(closed || railNeedsYou ? null : railPm);
+      setRailPeek(closed ? null : railPm);
     },
-    [railOpen, railNeedsYou, railPm],
+    [railOpen, railPm],
   );
   const openAsk = useCallback(
     (messageId: MessageId) => {

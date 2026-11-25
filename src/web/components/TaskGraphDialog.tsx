@@ -28,9 +28,9 @@ import { GraphCanvas } from "./GraphCanvas.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
-function showUserCard(node: TaskNode, graphActive: boolean): boolean {
-  return node.gateAskPending === true ||
-    (graphActive && (isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node)));
+function showUserCard(node: TaskNode, status: TaskGraph["status"]): boolean {
+  return status !== "cancelled" && (node.gateAskPending === true ||
+    (status === "active" && (isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node))));
 }
 
 function statusLabelOf(node: TaskNode, graphStatus: TaskGraph["status"]): string {
@@ -59,6 +59,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   onOpenChange,
   workers,
   onOpenWorker,
+  decisionKey,
+  terminal,
 }: {
   graph: TaskGraph | null;
   open: boolean;
@@ -66,6 +68,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   workers: readonly WorkerEntry[];
   color?: JellyColorId;
   onOpenWorker: (id: ConversationId) => void;
+  decisionKey?: TaskNodeKey | undefined;
+  terminal?: { title: string; outcome: "done" | "cancelled" | undefined } | undefined;
 }) {
   const client = useClient();
   const qc = useHubQueryClient();
@@ -76,6 +80,15 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   const releaseLock = () => {
     inFlightRef.current = false;
   };
+
+  const contentRef = useRef<HTMLDivElement>(null);
+  const focusDecision = useCallback((key: TaskNodeKey) => {
+    const card = Array.from(contentRef.current?.querySelectorAll<HTMLElement>("[data-decision-key]") ?? [])
+      .find((element) => element.dataset.decisionKey === key);
+    if (card === undefined) return false;
+    card.focus();
+    return true;
+  }, []);
 
   const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
   const flow = useMemo(() => (graph === null ? null : graphFlowOf(graph)), [graph]);
@@ -129,24 +142,35 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
     (key: TaskNodeKey): boolean => {
       const node = nodeByKey.get(key);
       if (node === undefined) return false;
-      return resolveBoundWorker(node, workerByKey).worker !== null;
+      return (graph !== null && showUserCard(node, graph.status)) || resolveBoundWorker(node, workerByKey).worker !== null;
     },
-    [nodeByKey, workerByKey],
+    [graph, nodeByKey, workerByKey],
   );
 
   const handleOpenStep = useCallback(
     (key: TaskNodeKey) => {
       const node = nodeByKey.get(key);
-      if (node === undefined) return;
+      if (node === undefined || focusDecision(key)) return;
       const { worker } = resolveBoundWorker(node, workerByKey);
       if (worker === null) return;
       onOpenChange(false);
       onOpenWorker(worker.conversationId);
     },
-    [nodeByKey, workerByKey, onOpenChange, onOpenWorker],
+    [nodeByKey, workerByKey, focusDecision, onOpenChange, onOpenWorker],
   );
 
-  if (graph === null || flow === null) return null;
+  if (graph === null || flow === null) {
+    if (terminal === undefined) return null;
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent title={terminal.title} className="max-w-110">
+          <p role="status" className="text-minor text-muted-foreground">
+            {terminal.outcome === "cancelled" ? "Cancelled" : terminal.outcome === "done" ? "Completed" : "This task graph is no longer active."}
+          </p>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   const doneCount = graph.nodes.filter((n) => n.status === "done").length;
   const graphStateLabel =
@@ -160,7 +184,14 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title={graph.title} className={ZOOM_DIALOG}>
+      <DialogContent
+        ref={contentRef}
+        title={graph.title}
+        className={ZOOM_DIALOG}
+        onOpenAutoFocus={(event) => {
+          if (decisionKey !== undefined && focusDecision(decisionKey)) event.preventDefault();
+        }}
+      >
         <div className="flex min-h-8 shrink-0 items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 text-minor text-muted-foreground">
             <span className="tabular-nums">{`${doneCount}/${graph.nodes.length}`}</span>
@@ -179,7 +210,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
             </Button>
           )}
           <Dialog
-            open={confirmingCancel}
+            open={graph.status === "active" && confirmingCancel}
             onOpenChange={(next) => {
               if (!cancelMutation.isPending) setConfirmingCancel(next);
             }}
@@ -218,7 +249,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
           <div className="grid grid-cols-1 gap-2.5">
             {orderedNodes.map((node) => {
               const { workerId, worker } = resolveBoundWorker(node, workerByKey);
-              const isWaitingGate = showUserCard(node, graph.status === "active");
+              const isWaitingGate = showUserCard(node, graph.status);
               const isPending = node.status === "pending";
               const isWaitingPm = isTaskNodeWaitingPm(node);
               const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
@@ -227,7 +258,13 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               if (isWaitingGate) seenGateDraftKeyRef.current.set(nodeRefKey, activeDraftKey);
               if (isWaitingGate) {
                 return (
-                  <div key={node.key} data-step="waiting" className="grid grid-cols-1 gap-1.5">
+                  <div
+                    key={node.key}
+                    data-step="waiting"
+                    data-decision-key={node.key}
+                    tabIndex={-1}
+                    className="grid scroll-mt-2 grid-cols-1 gap-1.5 rounded-sm focus-visible:outline-2 focus-visible:outline-border-focus"
+                  >
                     <div className="flex items-center justify-between gap-2 px-1">
                       <span className="flex min-w-0 items-center gap-2 text-minor font-semibold text-foreground">
                         <WorkStatusIcon status="waiting" />
@@ -245,7 +282,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   </div>
                 );
               }
-              const stepStatus = graph.status === "cancelled" && node.status !== "done" ? "cancelled" : nodeWorkStatusOf(node);
+              const stepStatus = nodeWorkStatusOf(node, graph.status);
               const decisionLabel = node.decision?.choice ?? node.decision?.note ?? null;
               const summaryText = node.artifact?.summary ?? null;
               const settledDraftKey =

@@ -5,12 +5,24 @@ import type { WorkerEntry } from "./selectors.ts";
 
 export type WorkStatus = "done" | "running" | "waiting" | "pending" | "cancelled";
 
+export const WORK_STATUS_LABEL: Readonly<Record<WorkStatus, string>> = {
+  done: "done",
+  running: "running",
+  waiting: "waiting on you",
+  pending: "not started",
+  cancelled: "cancelled",
+};
+
 export interface GraphProgress {
   done: number;
   total: number;
 }
 
-export function nodeWorkStatusOf(node: Pick<TaskNode, "status" | "waitingFor"> & { gateAskPending?: boolean }): WorkStatus {
+export function nodeWorkStatusOf(
+  node: Pick<TaskNode, "status" | "waitingFor"> & { gateAskPending?: boolean },
+  graphStatus: TaskGraph["status"] = "active",
+): WorkStatus {
+  if (graphStatus === "cancelled") return node.status === "done" ? "done" : "cancelled";
   if (node.gateAskPending === true) return "waiting";
   switch (node.status) {
     case "done":

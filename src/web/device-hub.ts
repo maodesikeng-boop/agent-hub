@@ -9,12 +9,16 @@ import {
   MAX_MESSAGE_BYTES,
   MAX_REWOUND_PENDING_KEYS,
   findRewindableMessage,
+  isWorkerEndLine,
+  workerEventOf,
   type Attachment,
   type Change,
   type ConversationId,
   type DeviceInfo,
   type MessageId,
   type PostMessageRequest,
+  type PmId,
+  type TaskGraph,
   type StateSnapshot,
   type WsServerMessage,
   type WorkerId,
@@ -84,6 +88,7 @@ export class DeviceHub {
   private readonly requestedWorkers = new Set<WorkerId>();
   private readonly inFlightPosts = new Map<string, { conversationId: ConversationId; after: "none" | "stop" | "rewind" }>();
   private readonly rewindBarriers = new Map<ConversationId, number>();
+  private readonly taskGraphListeners = new Set<(graph: TaskGraph) => void>();
   private readonly stopRequests = new Map<ConversationId, Promise<void>>();
   private alive = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -132,6 +137,11 @@ export class DeviceHub {
   }
 
   subscribe = (listener: (state: HubState, prevState: HubState) => void): (() => void) => this.store.subscribe(listener);
+
+  subscribeTaskGraphs = (listener: (graph: TaskGraph) => void): (() => void) => {
+    this.taskGraphListeners.add(listener);
+    return () => this.taskGraphListeners.delete(listener);
+  };
 
   private get remote(): boolean {
     return this.key !== LOCAL_DEVICE;
@@ -254,6 +264,7 @@ export class DeviceHub {
     this.loading = null;
     this.inFlightPosts.clear();
     this.stopRequests.clear();
+    this.taskGraphListeners.clear();
     this.rewindBarriers.clear();
     this.offUnauthorized?.();
     this.offUnauthorized = null;
@@ -269,13 +280,24 @@ export class DeviceHub {
   private applyChange(change: Change): void {
     if (!this.cursor || change.seq <= this.cursor.seq) return;
     this.cursor = { bootId: this.cursor.bootId, seq: change.seq };
+    const pmId = this.completedWorkPmOf(change);
     this.dispatch({ type: "change", change });
-    if (change.type === "task_graph.updated" && change.data.graph.status !== "active") {
-      const queryKey = completedWorkKey(this.key, change.data.graph.pmId);
+    if (change.type === "task_graph.updated") for (const listener of this.taskGraphListeners) listener(change.data.graph);
+    if (pmId !== null) {
+      const queryKey = completedWorkKey(this.key, pmId);
       // Invalidation alone leaves a fetch with no cached data running.
-      void this.qc.cancelQueries({ queryKey });
-      void this.qc.invalidateQueries({ queryKey });
+      void this.qc.cancelQueries({ queryKey, exact: true });
+      void this.qc.invalidateQueries({ queryKey, exact: true });
     }
+  }
+
+  private completedWorkPmOf(change: Change): PmId | null {
+    if (change.type === "task_graph.updated" && change.data.graph.status !== "active") return change.data.graph.pmId;
+    if (change.type !== "message.created") return null;
+    const { message } = change.data;
+    const line = workerEventOf(message);
+    if (line === null || !isWorkerEndLine(line)) return null;
+    return this.state.conversations[message.conversationId]?.conversation.pmId ?? null;
   }
 
   private installSnapshot(snapshot: StateSnapshot, cursor: ChangeCursor): void {

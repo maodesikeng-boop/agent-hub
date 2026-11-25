@@ -277,7 +277,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "shell.loading": [{ patch: "state-pending" }, { waitFor: "text=Loading…" }],
   "shell.signed-out": [{ signOut: true }],
   "shell.load-error": [{ patch: "state-500" }, { waitFor: btn("Retry") }],
-  "shell.stack": [...ensureList, { waitFor: RAIL }, { click: `${RAIL} >> role=button[name=/排查只读 Worker 超时/]` }, { waitFor: 'role=button[name="Back to 小林"]' }],
+  "shell.stack": [...ensureList, { waitFor: RAIL }, { click: btn("Close work panel", RAIL) }, { click: `${LOG} >> button:has-text("排查只读 Worker 超时")` }, { waitFor: 'role=button[name="Back to 小林"]' }],
   "shell.work-closed": [storage({ "agent-hub.rightRail": "closed" }), ...openPm("小林")],
   "shell.resize-min": [storage({ "agent-hub.paneWidths": '{"list":5,"panel":5}' }), ...openPm("小林")],
   "shell.resize-max": [storage({ "agent-hub.rightRail": "closed", "agent-hub.paneWidths": '{"list":99,"panel":99}' }), ...openPm("小林")],
@@ -388,7 +388,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "profile.lower": [...openProfile("小林"), { hover: `${profileScope("小林")} >> role=button[name="Change look"]` }],
   "profile.capabilities": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Capabilities"]` }, { waitFor: 'role=button[name="Back to Info"]' }],
   // 名字要超过 40 个字（MAX_SCHEDULE_NAME_CHARS）才会出校验提示
-  "profile.schedule-form": [...openProfile("阿青"), { click: `${profileScope("阿青")} >> role=button[name^="Schedules"]` }, { click: btn("New", 'role=complementary[name="Schedules"]') }, { type: { into: 'role=complementary[name="Schedules"] >> role=textbox >> nth=0', text: "一个特别特别长的定时任务名字用来测试表单校验会不会提示太长了再长一点再长一点再长一点" } }, { crop: 'role=complementary[name="Schedules"]' }],
+  "profile.schedule-form": [...openProfile("阿青"), { click: `${profileScope("阿青")} >> role=button[name^="Schedules"]` }, { click: btn("New", 'role=region[name="Schedules"]') }, { type: { into: 'role=region[name="Schedules"] >> role=textbox >> nth=0', text: "一个特别特别长的定时任务名字用来测试表单校验会不会提示太长了再长一点再长一点再长一点" } }, { crop: 'role=region[name="Schedules"]' }],
   "profile.memory-open": [{ patch: "memory-files" }, ...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Memory files"]` }, { click: 'role=button[name="Edit conventions.md"]' }, { waitFor: 'role=region[name="Memory files"] >> role=textbox' }, { crop: 'role=region[name="Memory files"]' }],
   "profile.history": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
   "profile.history-empty": [...openProfile("项目经理"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],

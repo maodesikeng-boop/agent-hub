@@ -20,6 +20,7 @@ import { WorkerDetailHeader } from "./components/WorkerDetail.tsx";
 import { WorkerReportText } from "./components/WorkerReportText.tsx";
 import { WorkPanel, WorkPanelHeader } from "./components/WorkPanel.tsx";
 import { DeviceScope } from "./device-scope.tsx";
+import { Tabs } from "./ui/tabs.tsx";
 import { cleanWorkerTitle } from "./format.ts";
 import { COMPLETED_WORK_MAX_PAGES } from "./limits.ts";
 import { ModelCatalogProvider } from "./models.tsx";
@@ -98,13 +99,9 @@ describe("WorkPanelHeader", () => {
     const onSelectTab = vi.fn();
     const onClose = vi.fn();
     render(
-      <WorkPanelHeader
-        tab="active"
-        activeCount={4}
-        completedCount={12}
-        onSelectTab={onSelectTab}
-        onClose={onClose}
-      />,
+      <Tabs value="active" onValueChange={onSelectTab}>
+        <WorkPanelHeader activeCount={4} completedCount={12} onClose={onClose} />
+      </Tabs>,
     );
 
     const activeTab = screen.getByRole("tab", { name: /Active\s*4/ });
@@ -132,12 +129,11 @@ describe("WorkPanelHeader", () => {
       <WorkPanel
         layout="side"
         label="Work panel"
+        tabs={{ value: "active", onSelect: vi.fn() }}
         header={
           <WorkPanelHeader
-            tab="active"
             activeCount={work.count}
             completedCount={null}
-            onSelectTab={vi.fn()}
             onClose={vi.fn()}
           />
         }
@@ -345,6 +341,7 @@ describe("ActiveTab", () => {
       <ActiveTab
         work={activeWorkOf([g], workers)}
         workers={workers}
+        asks={[makeMessage({ id: 88, meta: { needsUser: true } })]}
         onOpenWorker={onOpenWorker}
         onOpenAsk={onOpenAsk}
         onExpandGraph={vi.fn()}
@@ -542,7 +539,7 @@ describe("InfoTab", () => {
   const PM = makePm({ id: 3, name: "API Helper", mode: "manage_only", pinnedAt: 500 });
   const PROJECT = makeProject({ id: 10, pmId: 3, conversationId: 30, name: "payments-api", setupCommand: "pnpm install" });
   const FOLDERS = [makeFolder({ id: 1, projectId: 10, path: "/Users/me/code/payments-api", isMain: true })];
-  const PERSONA = makePersonaView({ pmId: 3, text: "Keep endpoints small.", mode: "manage_only", vendor: "claude", model: "sonnet", effort: "high" });
+  const PERSONA = makePersonaView({ pmId: 3, text: "Keep endpoints small.", memoryFileCount: 1, mode: "manage_only", vendor: "claude", model: "sonnet", effort: "high" });
 
   function makeInfoClient(overrides: Partial<HubClient> = {}): HubClient {
     return {
@@ -568,6 +565,7 @@ describe("InfoTab", () => {
       readOnly: false,
       onNavigate: vi.fn(),
       onArchived: vi.fn(),
+      onTogglePin: vi.fn(),
       ...overrides,
     };
     const wrap = (next: InfoTabProps) => (
@@ -589,7 +587,7 @@ describe("InfoTab", () => {
   }
 
   it("shows the frameless avatar, name, project, and the two row groups", async () => {
-    renderInfo();
+    const { client } = renderInfo();
     const lookBtn = screen.getByRole("button", { name: "Change look" });
     expect(lookBtn).toHaveClass("work-info-avatar");
     expect(lookBtn.querySelector(".avatar-tile")).toBeNull();
@@ -603,6 +601,7 @@ describe("InfoTab", () => {
     expect(screen.getByRole("button", { name: /^Schedules\b/ })).toHaveTextContent("0");
     expect(screen.getByRole("button", { name: /^Persona\b/ })).toHaveTextContent("Set");
     expect(await screen.findByRole("button", { name: /^Memory files\b/ })).toHaveTextContent("1");
+    expect(client.fetchPmMemoryFiles).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /^Worktree setup\b/ })).toHaveTextContent("Configured");
     expect(screen.getByRole("button", { name: /^History\b/ })).toBeInTheDocument();
   });

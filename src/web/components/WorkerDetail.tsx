@@ -6,7 +6,7 @@ import type { WorkerEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { MoreHorizontal } from "../ui/icons.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
-import type { WorkStatus } from "../work-status.ts";
+import { WORK_STATUS_LABEL, type WorkStatus } from "../work-status.ts";
 import { formatModelSummary } from "./InfoTab.tsx";
 import { WorkPanelDetailHeader } from "./WorkPanel.tsx";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
@@ -108,6 +108,7 @@ export function WorkerDetailHeader({
           <h1 title={title} className="min-w-0 truncate text-minor font-semibold text-foreground">
             {title}
           </h1>
+          <span className="sr-only">{WORK_STATUS_LABEL[status]}</span>
         </div>
       }
       backLabel={backLabel}

@@ -113,7 +113,7 @@ function layersOfOrderedSteps(steps: readonly FlowStep[], edges: readonly TaskEd
     .map(([, list]) => list.toSorted((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0)));
 }
 
-export function graphFlowOf(graph: Pick<TaskGraph, "nodes" | "edges">): GraphFlow {
+export function graphFlowOf(graph: Pick<TaskGraph, "nodes" | "edges"> & Partial<Pick<TaskGraph, "status">>): GraphFlow {
   const hit = graphFlowCache.get(graph);
   if (hit !== undefined) return hit;
   const rawLayers = computeGraphLayers(graph);
@@ -121,7 +121,7 @@ export function graphFlowOf(graph: Pick<TaskGraph, "nodes" | "edges">): GraphFlo
     layer.map((node) => ({
       key: node.key,
       title: node.title,
-      status: nodeWorkStatusOf(node),
+      status: nodeWorkStatusOf(node, graph.status),
     })),
   );
   const flow: GraphFlow = { layers, edges: graph.edges };

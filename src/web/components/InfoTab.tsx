@@ -1,5 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
 import {
   DEFAULT_AGENT_VENDOR,
@@ -33,11 +32,10 @@ import {
   usePersona,
   usePersonaText,
 } from "../pm-persona.ts";
-import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
-import { ChevronRight, Loader2, Pencil } from "../ui/icons.ts";
+import { ChevronRight, Loader2, Pencil, Pin, PinFilled } from "../ui/icons.ts";
 import { Textarea } from "../ui/input.tsx";
 import { AgentRows } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -63,6 +61,7 @@ export interface InfoTabProps {
   onNavigate: (page: InfoPage | null) => void;
   /** After Archive succeeds. */
   onArchived: () => void;
+  onTogglePin: (pinned: boolean) => void;
   onManageProviders?: () => void;
   onEditDefaults?: () => void;
 }
@@ -282,24 +281,11 @@ function InfoSummaryRows({
   persona: PersonaView;
   onNavigate: (page: InfoPage) => void;
 }) {
-  const client = useClient();
-  const qc = useHubQueryClient();
   const catalog = useModelCatalog(persona.vendor);
   const archived = pm.archivedAt != null;
   const { data: capsView } = useCapabilitiesView({ kind: "pm", pmId: pm.id }, !archived);
-  const memoryQueryKey = useMemo(() => ["pm-memory-files", client.device ?? "", pm.id] as const, [client.device, pm.id]);
-  const { data: memoryList } = useQuery(
-    {
-      queryKey: memoryQueryKey,
-      queryFn: () => client.fetchPmMemoryFiles(pm.id),
-      staleTime: 0,
-    },
-    qc,
-  );
-
   const modelText = formatModelSummary(persona, catalog);
   const capabilities = capsView === undefined ? null : capabilityTotals(capabilitySections(capsView));
-  const memoryFiles = memoryList === undefined ? null : memoryList.files.length;
   const groups = infoRowsOf({
     pm,
     persona,
@@ -307,7 +293,7 @@ function InfoSummaryRows({
     folders,
     schedules,
     capabilities,
-    memoryFiles,
+    memoryFiles: persona.memoryFileCount ?? null,
     hasProject: project !== null,
     setupCommand: project?.setupCommand ?? null,
   });
@@ -601,12 +587,15 @@ export function InfoTab({
   readOnly,
   onNavigate,
   onArchived,
+  onTogglePin,
   onManageProviders,
   onEditDefaults,
 }: InfoTabProps): React.ReactElement {
   const { load, retry, set } = usePersona(pm.id, rev);
   const archived = pm.archivedAt != null;
   const activePage = archived && page === "capabilities" ? null : page;
+  const pinned = pm.pinnedAt != null;
+  const pinLabel = pinned ? "Unpin project" : "Pin project";
 
   if (activePage !== null) {
     return (
@@ -661,6 +650,19 @@ export function InfoTab({
             </p>
           )}
         </div>
+        {!archived && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0"
+            aria-label={pinLabel}
+            title={pinLabel}
+            disabled={readOnly}
+            onClick={() => onTogglePin(!pinned)}
+          >
+            {pinned ? <PinFilled aria-hidden="true" /> : <Pin aria-hidden="true" />}
+          </Button>
+        )}
       </div>
 
       {load.phase === "loading" && (

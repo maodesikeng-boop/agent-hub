@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import type { CompletedCursor, CompletedWorkPage, PmId } from "../shared/index.ts";
 import { useClient } from "./device-scope.tsx";
 import { LOCAL_DEVICE } from "./devices.ts";
@@ -22,12 +22,22 @@ export interface CompletedWorkQuery {
 const EMPTY_DAYS: readonly CompletedDay[] = [];
 const EMPTY_PAGES: readonly CompletedWorkPage[] = [];
 const NOOP = () => {};
+const NO_COMPLETED_WORK: CompletedWorkQuery = {
+  days: EMPTY_DAYS,
+  total: null,
+  status: "ready",
+  error: null,
+  hasMore: false,
+  loadingMore: false,
+  loadMore: NOOP,
+  retry: NOOP,
+};
 
 export function completedWorkQueryKey(device: string | null, pmId: PmId | null) {
   return completedWorkKey(device ?? LOCAL_DEVICE, pmId);
 }
 
-export function useCompletedWork(pmId: PmId | null, enabled: boolean, finishSignal?: string): CompletedWorkQuery {
+export function useCompletedWork(pmId: PmId | null, enabled: boolean): CompletedWorkQuery {
   const client = useClient();
   const qc = useHubQueryClient();
   const queryKey = useMemo(() => completedWorkQueryKey(client.device, pmId), [client.device, pmId]);
@@ -35,7 +45,7 @@ export function useCompletedWork(pmId: PmId | null, enabled: boolean, finishSign
   const query = useInfiniteQuery(
     {
       queryKey,
-      queryFn: ({ pageParam }) => client.fetchCompletedWork(pmId!, pageParam),
+      queryFn: ({ pageParam, signal }) => client.fetchCompletedWork(pmId!, pageParam, signal),
       initialPageParam: null as CompletedCursor | null,
       getNextPageParam: (lastPage, allPages) =>
         lastPage.next !== null && allPages.length < COMPLETED_WORK_MAX_PAGES ? lastPage.next : undefined,
@@ -44,21 +54,6 @@ export function useCompletedWork(pmId: PmId | null, enabled: boolean, finishSign
     },
     qc,
   );
-
-  // Refetch from the first page when an active graph or Worker of this PM finishes.
-  const prevSignalRef = useRef<{ pmId: PmId | null; device: string | null; signal: string | undefined }>({
-    pmId,
-    device: client.device,
-    signal: finishSignal,
-  });
-  useEffect(() => {
-    const prev = prevSignalRef.current;
-    prevSignalRef.current = { pmId, device: client.device, signal: finishSignal };
-    if (pmId === null || !enabled) return;
-    if (prev.pmId !== pmId || prev.device !== client.device) return;
-    if (finishSignal === undefined || prev.signal === undefined || prev.signal === finishSignal) return;
-    void qc.invalidateQueries({ queryKey, exact: true });
-  }, [pmId, client.device, enabled, finishSignal, qc, queryKey]);
 
   const pages = query.data?.pages ?? EMPTY_PAGES;
   const days = useMemo(() => (pages.length === 0 ? EMPTY_DAYS : completedDaysOf(pages, Date.now())), [pages]);
@@ -80,30 +75,14 @@ export function useCompletedWork(pmId: PmId | null, enabled: boolean, finishSign
     void refetch();
   }, [pmId, pages.length, isFetchNextPageError, fetchNextPage, refetch]);
 
-  if (pmId === null) {
-    return {
-      days: EMPTY_DAYS,
-      total: null,
-      status: "ready",
-      error: null,
-      hasMore: false,
-      loadingMore: false,
-      loadMore: NOOP,
-      retry: NOOP,
-    };
-  }
-
   const status: CompletedWorkQuery["status"] =
     pages.length > 0 ? "ready" : query.isError ? "error" : query.isPending ? "loading" : "ready";
+  const error = query.error ?? null;
 
-  return {
-    days,
-    total,
-    status,
-    error: query.error ?? null,
-    hasMore,
-    loadingMore: isFetchingNextPage,
-    loadMore,
-    retry,
-  };
+  return useMemo(
+    () => pmId === null ? NO_COMPLETED_WORK : {
+      days, total, status, error, hasMore, loadingMore: isFetchingNextPage, loadMore, retry,
+    },
+    [pmId, days, total, status, error, hasMore, isFetchingNextPage, loadMore, retry],
+  );
 }

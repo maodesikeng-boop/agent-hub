@@ -147,6 +147,7 @@ export interface PersonaView {
   model: string | null;
   effort: string | null;
   switchingToVendor?: AgentVendor | null;
+  memoryFileCount?: number | null;
   changes: PersonaChange[];
   revertableChangeId: PersonaChangeId | null;
 }

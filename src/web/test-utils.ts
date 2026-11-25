@@ -431,6 +431,10 @@ export class FakeApi {
     status: 200,
     body: { pm: makePm({ id: pmId, avatarFruit: body.fruit, avatarColor: body.color }) },
   });
+  putPmPin: (pmId: number, body: { pinned: boolean }) => Reply | Promise<Reply> = (pmId, body) => ({
+    status: 200,
+    body: { pm: makePm({ id: pmId, pinnedAt: body.pinned ? 1_000 : null }) },
+  });
   revertPersona: (changeId: number) => Reply | Promise<Reply> = () => ({
     status: 200,
     body: { changed: true, persona: makePersonaView() },
@@ -1126,6 +1130,8 @@ export class FakeApi {
     if (persona && method === "PUT") return jsonResponse(await this.putPersona(Number(persona[1]), body));
     const look = /^\/api\/pms\/(\d+)\/look$/.exec(url.pathname);
     if (look && method === "PUT") return jsonResponse(await this.putPmLook(Number(look[1]), body));
+    const pin = /^\/api\/pms\/(\d+)\/pin$/.exec(url.pathname);
+    if (pin && method === "PUT") return jsonResponse(await this.putPmPin(Number(pin[1]), body));
     const revert = /^\/api\/persona-changes\/(\d+)\/revert$/.exec(url.pathname);
     if (revert && method === "POST") return jsonResponse(await this.revertPersona(Number(revert[1])));
     const memFiles = /^\/api\/pms\/(\d+)\/memory-files$/.exec(url.pathname);

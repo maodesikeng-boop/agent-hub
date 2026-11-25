@@ -268,12 +268,12 @@ describe("资料页的能力入口：直接进当前项目的能力页", () => {
     const { api, user } = await boot("#/pm/1");
     const page = await screen.findByRole("complementary", { name: "小林's settings" });
     const entry = await within(within(page).getByRole("navigation", { name: "Project manager settings pages" })).findByRole("button", { name: /Capabilities/ });
-    await waitFor(() => expect(entry).toHaveTextContent("10 of 10"));
+    await waitFor(() => expect(entry).toHaveTextContent("10/10"));
     await user.click(entry);
     const caps = await screen.findByRole("complementary", { name: "小林's settings" });
     expect(window.location.hash).toBe("#/pm/1/capabilities");
     expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument();
-    expect(caps).toHaveTextContent("Capabilities");
+    expect(within(caps).getByRole("heading", { name: "Capabilities", level: 1 })).toBeInTheDocument();
     expect(within(caps).queryByRole("radiogroup", { name: "Scope" })).not.toBeInTheDocument();
     await within(caps).findByRole("region", { name: "This project" });
     expect(within(caps).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Inheritance", "This project", "Shared", lead, other]);

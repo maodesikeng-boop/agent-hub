@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type * as React from "react";
-import type { ConversationId, Message, MessageId, PmId, TaskGraph, TaskGraphId, WorkerId } from "../../shared/index.ts";
+import type { ConversationId, Message, MessageId, PmId, TaskGraph, TaskGraphId, TaskNodeKey, WorkerId } from "../../shared/index.ts";
 import type { SlimeLook } from "../../shared/slimes.ts";
 import { cn } from "../lib/utils.ts";
 import { boundWorkerIdsOf, workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { ArrowLeft, X } from "../ui/icons.ts";
-import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { useCompletedWork } from "../useCompletedWork.ts";
 import { activeWorkOf, type WorkPanelTab } from "../work-panel-model.ts";
 import { ActiveTab } from "./ActiveTab.tsx";
@@ -15,11 +15,9 @@ import { CompletedTab } from "./CompletedTab.tsx";
 import { TaskGraphDialog } from "./TaskGraphDialog.tsx";
 
 export interface WorkPanelHeaderProps {
-  tab: WorkPanelTab;
   activeCount: number;
   /** null hides the count while the first Completed page loads. */
   completedCount: number | null;
-  onSelectTab: (tab: WorkPanelTab) => void;
   onClose: () => void;
   /** Shown on phone full-page panels in place of Close. */
   onBack?: () => void;
@@ -27,10 +25,8 @@ export interface WorkPanelHeaderProps {
 }
 
 export function WorkPanelHeader({
-  tab,
   activeCount,
   completedCount,
-  onSelectTab,
   onClose,
   onBack,
   backLabel = "Back",
@@ -46,21 +42,19 @@ export function WorkPanelHeader({
             <ArrowLeft aria-hidden="true" />
           </Button>
         )}
-        <Tabs value={tab} onValueChange={(next) => onSelectTab(next as WorkPanelTab)} className="h-full">
-          <TabsList aria-label="Work panel tabs" className="flex h-full items-stretch gap-5">
-            <TabsTrigger value="active" className="work-panel-tab touch-target">
-              <span>Active</span>
-              <span className="work-panel-tab-count tabular-nums">{activeCount}</span>
-            </TabsTrigger>
-            <TabsTrigger value="completed" className="work-panel-tab touch-target">
-              <span>Completed</span>
-              {completedCount !== null && <span className="work-panel-tab-count tabular-nums">{completedCount}</span>}
-            </TabsTrigger>
-            <TabsTrigger value="info" className="work-panel-tab touch-target">
-              <span>Info</span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <TabsList aria-label="Work panel tabs" className="flex h-full items-stretch gap-5">
+          <TabsTrigger value="active" aria-label={`Active ${activeCount}`} className="work-panel-tab touch-target">
+            <span>Active</span>
+            <span className="work-panel-tab-count tabular-nums">{activeCount}</span>
+          </TabsTrigger>
+          <TabsTrigger value="completed" aria-label={completedCount === null ? "Completed" : `Completed ${completedCount}`} className="work-panel-tab touch-target">
+            <span>Completed</span>
+            {completedCount !== null && <span className="work-panel-tab-count tabular-nums">{completedCount}</span>}
+          </TabsTrigger>
+          <TabsTrigger value="info" className="work-panel-tab touch-target">
+            <span>Info</span>
+          </TabsTrigger>
+        </TabsList>
       </div>
       {onBack === undefined && (
         <Button
@@ -124,10 +118,11 @@ export interface WorkPanelProps {
   label: string;
   header: React.ReactNode;
   children: React.ReactNode;
+  tabs?: { value: WorkPanelTab; onSelect: (tab: WorkPanelTab) => void };
 }
 
-export function WorkPanel({ layout, label, header, children }: WorkPanelProps): React.ReactElement {
-  return (
+export function WorkPanel({ layout, label, header, children, tabs }: WorkPanelProps): React.ReactElement {
+  const panel = (
     <aside
       aria-label={label}
       data-layout={layout}
@@ -136,6 +131,13 @@ export function WorkPanel({ layout, label, header, children }: WorkPanelProps): 
       {header}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
     </aside>
+  );
+  return tabs === undefined ? panel : (
+    <Tabs asChild value={tabs.value} onValueChange={(value) => {
+      if (value === "active" || value === "completed" || value === "info") tabs.onSelect(value);
+    }}>
+      {panel}
+    </Tabs>
   );
 }
 
@@ -173,12 +175,6 @@ export function WorkPanelToggle({
   );
 }
 
-export function finishSignalOf(graphs: readonly TaskGraph[], workers: readonly WorkerEntry[]): string {
-  const graphIds = graphs.map((g) => g.id).join(",");
-  const endedIds = workers.filter((w) => w.ended).map((w) => w.conversationId).join(",");
-  return `${graphIds}|${endedIds}`;
-}
-
 export function WorkPanelTabsSheet({
   layout,
   tab,
@@ -194,9 +190,12 @@ export function WorkPanelTabsSheet({
   onOpenWorker,
   onOpenAsk,
   onNeedWorkers,
+  onExpand,
+  subscribeTaskGraphs,
+  info,
 }: {
   layout: "side" | "stack" | "page";
-  tab: Exclude<WorkPanelTab, "info">;
+  tab: WorkPanelTab;
   pmId: PmId | null;
   graphs: readonly TaskGraph[];
   workers: readonly WorkerEntry[];
@@ -209,16 +208,30 @@ export function WorkPanelTabsSheet({
   onOpenWorker: (id: ConversationId) => void;
   onOpenAsk: (id: MessageId) => void;
   onNeedWorkers: (ids: WorkerId[]) => void;
+  onExpand?: () => void;
+  subscribeTaskGraphs: (listener: (graph: TaskGraph) => void) => () => void;
+  info?: { label: string; body: React.ReactNode; detailHeader?: React.ReactNode } | undefined;
 }): React.ReactElement {
   const activeWork = useMemo(() => activeWorkOf(graphs, workers), [graphs, workers]);
-  const finishSignal = useMemo(() => finishSignalOf(graphs, workers), [graphs, workers]);
-  const completedQuery = useCompletedWork(pmId, true, finishSignal);
-  const [zoomedState, setZoomedState] = useState<{ id: TaskGraphId; fallback: TaskGraph } | null>(null);
-  const expandGraph = useCallback((g: TaskGraph) => setZoomedState({ id: g.id, fallback: g }), []);
-  const zoomedGraph = useMemo(
-    () => (zoomedState === null ? null : (graphs.find((g) => g.id === zoomedState.id) ?? zoomedState.fallback)),
-    [zoomedState, graphs],
-  );
+  const completedQuery = useCompletedWork(pmId, info?.detailHeader === undefined);
+  const [zoomed, setZoomed] = useState<{ id: TaskGraphId; title: string; terminal: TaskGraph | null; decisionKey?: TaskNodeKey } | null>(null);
+  const expandGraph = useCallback((graph: TaskGraph, decisionKey?: TaskNodeKey) => {
+    onExpand?.();
+    setZoomed({ id: graph.id, title: graph.title, terminal: null, ...(decisionKey !== undefined ? { decisionKey } : {}) });
+  }, [onExpand]);
+  useEffect(() => subscribeTaskGraphs((graph) => {
+    setZoomed((current) => current?.id === graph.id
+      ? { ...current, terminal: graph.status === "active" ? null : graph }
+      : current);
+  }), [subscribeTaskGraphs]);
+  const zoomedGraph = zoomed === null ? null : graphs.find((g) => g.id === zoomed.id) ?? zoomed.terminal;
+  const dismissedGraph = zoomedGraph === null ? zoomed : null;
+  const outcome = dismissedGraph === null ? undefined : completedQuery.days
+    .flatMap((day) => day.items)
+    .find((item) => item.kind === "graph" && item.graphId === dismissedGraph.id)?.outcome;
+  const closeDialog = (open: boolean) => {
+    if (!open) setZoomed(null);
+  };
   useEffect(() => {
     if (zoomedGraph === null) return;
     const have = workersByWorkerId(workers);
@@ -226,24 +239,26 @@ export function WorkPanelTabsSheet({
     if (missing.length > 0) onNeedWorkers(missing);
   }, [zoomedGraph, workers, onNeedWorkers]);
 
+  const infoDetail = info?.detailHeader !== undefined;
+  const header = info?.detailHeader ?? (
+    <WorkPanelHeader
+      activeCount={activeWork.count}
+      completedCount={completedQuery.total}
+      onClose={onClose}
+      {...(onBack !== undefined ? { onBack } : {})}
+      {...(backLabel !== undefined ? { backLabel } : {})}
+    />
+  );
+
   return (
     <>
       <WorkPanel
         layout={layout}
-        label="Work panel"
-        header={
-          <WorkPanelHeader
-            tab={tab}
-            activeCount={activeWork.count}
-            completedCount={completedQuery.total}
-            onSelectTab={onSelectTab}
-            onClose={onClose}
-            {...(onBack !== undefined ? { onBack } : {})}
-            {...(backLabel !== undefined ? { backLabel } : {})}
-          />
-        }
+        label={info?.label ?? "Work panel"}
+        header={header}
+        tabs={{ value: tab, onSelect: onSelectTab }}
       >
-        {tab === "active" ? (
+        <TabsContent value="active" className="min-h-0 flex-1 flex-col data-[state=active]:flex">
           <ActiveTab
             work={activeWork}
             workers={workers}
@@ -252,20 +267,28 @@ export function WorkPanelTabsSheet({
             onOpenAsk={onOpenAsk}
             onExpandGraph={expandGraph}
           />
-        ) : (
+        </TabsContent>
+        <TabsContent value="completed" className="min-h-0 flex-1 flex-col data-[state=active]:flex">
           <CompletedTab query={completedQuery} onOpenWorker={onOpenWorker} />
-        )}
+        </TabsContent>
+        <TabsContent
+          value="info"
+          className="min-h-0 flex-1 flex-col data-[state=active]:flex"
+          {...(infoDetail && { role: "presentation", "aria-labelledby": undefined, tabIndex: undefined })}
+        >
+          {info?.body}
+        </TabsContent>
       </WorkPanel>
-      {zoomedGraph !== null && (
+      {zoomed !== null && (
         <TaskGraphDialog
           graph={zoomedGraph}
           open
-          onOpenChange={(open) => {
-            if (!open) setZoomedState(null);
-          }}
+          onOpenChange={closeDialog}
           workers={workers}
           color={look.color}
           onOpenWorker={onOpenWorker}
+          decisionKey={zoomed.decisionKey}
+          terminal={dismissedGraph === null ? undefined : { title: dismissedGraph.title, outcome }}
         />
       )}
     </>

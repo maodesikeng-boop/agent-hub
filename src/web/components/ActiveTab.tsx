@@ -6,7 +6,7 @@ import { graphFlowOf } from "../graph-flow.ts";
 import type { WorkerEntry } from "../selectors.ts";
 import { ChevronRight, Maximize2 } from "../ui/icons.ts";
 import { stepTargetOf, type ActiveWork } from "../work-panel-model.ts";
-import { graphProgressOf, workerWorkStatusOf, type WorkStatus } from "../work-status.ts";
+import { graphProgressOf, workerWorkStatusOf, WORK_STATUS_LABEL } from "../work-status.ts";
 import { GraphCanvas } from "./GraphCanvas.tsx";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
@@ -19,16 +19,8 @@ export interface ActiveTabProps {
   onOpenWorker: (id: ConversationId) => void;
   onOpenAsk: (id: MessageId) => void;
   /** The expand icon on a graph section. */
-  onExpandGraph: (graph: TaskGraph) => void;
+  onExpandGraph: (graph: TaskGraph, decisionKey?: TaskNodeKey) => void;
 }
-
-const WORKER_STATUS_LABEL: Readonly<Record<WorkStatus, string>> = {
-  done: "done",
-  running: "running",
-  waiting: "waiting on you",
-  pending: "not started",
-  cancelled: "cancelled",
-};
 
 const GraphSection = memo(function GraphSection({
   graph,
@@ -43,7 +35,7 @@ const GraphSection = memo(function GraphSection({
   asks?: readonly Message[];
   onOpenWorker: (id: ConversationId) => void;
   onOpenAsk: (id: MessageId) => void;
-  onExpandGraph: (graph: TaskGraph) => void;
+  onExpandGraph: (graph: TaskGraph, decisionKey?: TaskNodeKey) => void;
 }) {
   const flow = useMemo(() => graphFlowOf(graph), [graph]);
   const progress = useMemo(() => graphProgressOf(graph), [graph]);
@@ -63,9 +55,10 @@ const GraphSection = memo(function GraphSection({
       const target = targetByKey.get(key);
       if (target === undefined || target.kind === "none") return;
       if (target.kind === "worker") onOpenWorker(target.conversationId);
-      else onOpenAsk(target.messageId);
+      else if (target.kind === "ask") onOpenAsk(target.messageId);
+      else onExpandGraph(graph, key);
     },
-    [targetByKey, onOpenWorker, onOpenAsk],
+    [targetByKey, onOpenWorker, onOpenAsk, onExpandGraph, graph],
   );
 
   return (
@@ -137,7 +130,7 @@ export const ActiveTab = memo(function ActiveTab({
                 <li key={worker.conversationId}>
                   <button
                     type="button"
-                    aria-label={`${title}, ${WORKER_STATUS_LABEL[status]}`}
+                    aria-label={`${title}, ${WORK_STATUS_LABEL[status]}`}
                     title={worker.title}
                     onClick={() => onOpenWorker(worker.conversationId)}
                     className="work-worker-row h-6.5 pointer-coarse:min-h-11"

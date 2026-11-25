@@ -439,6 +439,7 @@ describe("各处入口", () => {
       <ActiveTab
         work={activeWorkOf([graph], [])}
         workers={[]}
+        asks={[makeMessage({ id: 77, meta: { needsUser: true } })]}
         onOpenAsk={onOpenAsk}
         onOpenWorker={() => {}}
         onExpandGraph={() => {}}

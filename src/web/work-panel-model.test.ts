@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { COMPLETED_WORK_PAGE_SIZE, EMPTY_TOKEN_USAGE, type CompletedWorkItem, type CompletedWorkPage, type TaskGraph, type TaskNode } from "../shared/index.ts";
 import { COMPLETED_WORK_MAX_PAGES } from "./limits.ts";
+import { makeMessage } from "./test-utils.ts";
 import type { WorkerEntry } from "./selectors.ts";
 import { activeWorkOf, completedDaysOf, completedKeyOf, prLabelOf, stepTargetOf } from "./work-panel-model.ts";
 
@@ -249,6 +250,7 @@ describe("stepTargetOf", () => {
       stepTargetOf(
         { activeWorkerId: null, workerIds: [], gateAskMessageId: 77, status: "waiting", waitingFor: "user" },
         workers,
+        [makeMessage({ id: 77, meta: { needsUser: true } })],
       ),
     ).toEqual({ kind: "ask", messageId: 77 });
   });

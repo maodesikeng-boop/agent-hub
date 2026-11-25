@@ -13,7 +13,6 @@ import { SettingsDialog } from "./components/SettingsDialog.tsx";
 import { WorkPanel, WorkPanelToggle } from "./components/WorkPanel.tsx";
 import {
   DesktopWorkPanel,
-  MobileInfoPanel,
   MobileWorkPanel,
   WorkerHeaderSlot,
   WorkerPane,
@@ -522,13 +521,14 @@ function MobileWorkbench({
         <DeviceWaiting connecting={current.status === "connecting"} name={current.info.name} />
       </main>
     );
-  } else if (route?.view === "profile" && c.profile !== null) {
+  } else if ((route?.view === "profile" && c.profile !== null) || (drawerOpen && c.openWorker === null)) {
     body = (
-      <MobileInfoPanel
+      <MobileWorkPanel
         model={model}
         content={c}
-        pm={c.profile}
+        profile={c.profile}
         onBack={back}
+        onClose={closeMobilePanel}
         onSwitchTab={(tab) => {
           c.setWorkTab(tab);
           keepPanelOpenRef.current = true;
@@ -569,8 +569,6 @@ function MobileWorkbench({
         <WorkerPane model={model} content={c} mobile notices={notices} workerId={workerId} />
       </WorkPanel>
     );
-  } else if (drawerOpen) {
-    body = <MobileWorkPanel content={c} onClose={closeMobilePanel} />;
   } else {
     body = (
       <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">

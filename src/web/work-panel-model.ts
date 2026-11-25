@@ -1,6 +1,8 @@
 import {
   COMPLETED_WORK_PAGE_SIZE,
   askOf,
+  isTaskNodeUserBlocked,
+  isTaskNodeWaitingDecision,
   type CompletedWorkItem,
   type CompletedWorkPage,
   type ConversationId,
@@ -38,6 +40,7 @@ export interface CompletedDay {
 export type StepTarget =
   | { kind: "worker"; conversationId: ConversationId }
   | { kind: "ask"; messageId: MessageId }
+  | { kind: "graph" }
   | { kind: "none" };
 
 const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
@@ -154,6 +157,15 @@ export function stepTargetOf(
   asks?: readonly Message[],
   graphId?: TaskGraphId,
 ): StepTarget {
+  if (isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node)) {
+    const match = asks?.find((message) => {
+      const meta = askOf(message);
+      if (isTaskNodeUserBlocked(node)) return meta?.blockerRef?.blockerId === node.userBlocker?.id;
+      if (node.gateAskMessageId !== null) return message.id === node.gateAskMessageId;
+      return graphId !== undefined && node.key !== undefined && meta?.gateRef?.graphId === graphId && meta.gateRef.nodeKey === node.key;
+    });
+    return match === undefined ? { kind: "graph" } : { kind: "ask", messageId: match.id };
+  }
   const byId = workersByWorkerId(workers);
   if (node.activeWorkerId !== null) {
     const active = byId.get(node.activeWorkerId);
@@ -162,17 +174,6 @@ export function stepTargetOf(
   for (let i = node.workerIds.length - 1; i >= 0; i--) {
     const worker = byId.get(node.workerIds[i]!);
     if (worker !== undefined) return { kind: "worker", conversationId: worker.conversationId };
-  }
-  if (node.gateAskPending === true || (node.status === "waiting" && node.waitingFor === "user")) {
-    if (node.gateAskMessageId !== null) return { kind: "ask", messageId: node.gateAskMessageId };
-    if (asks !== undefined) {
-      const match = asks.find((m) => {
-        const meta = askOf(m);
-        if (node.userBlocker != null) return meta?.blockerRef?.blockerId === node.userBlocker.id;
-        return graphId !== undefined && node.key !== undefined && meta?.gateRef?.graphId === graphId && meta.gateRef.nodeKey === node.key;
-      });
-      if (match !== undefined) return { kind: "ask", messageId: match.id };
-    }
   }
   return { kind: "none" };
 }

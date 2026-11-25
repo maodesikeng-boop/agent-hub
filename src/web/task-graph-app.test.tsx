@@ -10,6 +10,7 @@ import * as ActiveTabMod from "./components/ActiveTab.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import {
   FakeApi,
+  changeOf,
   FakeWebSocket,
   installFakeWebSocket,
   makeConvSnapshot,
@@ -128,9 +129,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function bootSingle(snapshot: StateSnapshot) {
+async function bootSingle(snapshot: StateSnapshot, configure?: (api: FakeApi) => void) {
   window.history.replaceState(null, "", "/#/c/1");
   const api = new FakeApi(snapshot);
+  configure?.(api);
   api.install();
   installFakeWebSocket();
   render(<App />);
@@ -164,6 +166,128 @@ describe("桌面右栏：App 接通工作面板任务图画布", () => {
 
     await user.click(within(graphSection).getByRole("button", { name: /构建产物/ }));
     await waitFor(() => expect(window.location.hash).toBe("#/w/30"));
+  });
+
+  it("keeps keyboard focus across the Info route and exposes a panel for every tab", async () => {
+    const user = userEvent.setup();
+    await bootSingle(graphSnapshot());
+    const active = await within(sidePanel()).findByRole("tab", { name: /^Active/ });
+    active.focus();
+    await user.keyboard("{End}");
+    const info = await screen.findByRole("tab", { name: "Info", selected: true });
+    expect(info).toHaveFocus();
+    expect(window.location.hash).toBe("#/pm/1");
+    for (const tab of screen.getAllByRole("tab")) {
+      const target = document.getElementById(tab.getAttribute("aria-controls") ?? "");
+      expect(target).toHaveAttribute("role", "tabpanel");
+      expect(target).toHaveAttribute("aria-labelledby", tab.id);
+      expect(target?.hidden).toBe(tab !== info);
+    }
+    await user.keyboard("{Home}");
+    await waitFor(() => expect(active).toHaveAttribute("aria-selected", "true"));
+    expect(active).toHaveFocus();
+    expect(window.location.hash).toBe("#/c/1");
+  });
+
+  it("opens the decision card ahead of a bound Worker, with the dialog as a fallback", async () => {
+    const user = userEvent.setup();
+    const snapshot = graphSnapshot();
+    const waiting = graph();
+    waiting.nodes = waiting.nodes.map((node) => node.key === "gate"
+      ? { ...node, activeWorkerId: 3, workerIds: [3], gateAskPending: true }
+      : { ...node, activeWorkerId: null, workerIds: [] });
+    snapshot.activeTaskGraphs = [waiting];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn();
+    const { ws } = await bootSingle(snapshot);
+    const step = await within(sidePanel()).findByRole("button", { name: /确认上线/ });
+    await user.click(step);
+    const message = document.querySelector('[data-message-id="99"]');
+    await waitFor(() => expect(message).toHaveAttribute("data-highlighted", "true"));
+    expect(window.location.hash).toBe("#/c/1");
+
+    const closed = snapshot.conversations[0]?.messages.find((item) => item.id === 99);
+    if (closed === undefined) throw new Error("Missing gate message");
+    act(() => ws.push(messageChange(11, "message.updated", { ...closed, meta: { ...closed.meta, answered: true } })));
+    await user.click(step);
+    const dialog = await screen.findByRole("dialog", { name: waiting.title });
+    expect(within(dialog).getByTestId("peel-gate-card")).toBeInTheDocument();
+    expect(within(dialog).getByText("Waiting on you").closest("[data-decision-key]")).toHaveFocus();
+    expect(window.location.hash).toBe("#/c/1");
+    Element.prototype.scrollIntoView = original;
+  });
+
+  it("updates an open graph and dismisses its cancel confirmation when another window cancels it", async () => {
+    const user = userEvent.setup();
+    const { ws } = await bootSingle(graphSnapshot());
+    await user.click(within(sidePanel()).getByRole("button", { name: "Expand 发布流水线" }));
+    const dialog = await screen.findByRole("dialog", { name: "发布流水线" });
+    expect(within(dialog).getByText("Waiting on you")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel graph" }));
+    expect(screen.getByRole("dialog", { name: "Cancel this task graph?" })).toBeInTheDocument();
+    act(() => ws.push(changeOf(11, "task_graph.updated", { graph: { ...graph(), status: "cancelled", completedAt: 4_000 } })));
+    expect(await screen.findByRole("dialog", { name: "发布流水线" })).toBe(dialog);
+    expect(within(dialog).getAllByText("Cancelled").length).toBeGreaterThan(0);
+    expect(within(dialog).queryByText("Waiting on you")).not.toBeInTheDocument();
+    expect(dialog.querySelector('[data-step-key="gate"]')).toHaveAttribute("data-status", "cancelled");
+    expect(within(dialog).queryByRole("button", { name: "Cancel graph" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Cancel this task graph?" })).not.toBeInTheDocument();
+  });
+
+  it("refreshes the count and row after a standalone Worker ends while Completed is unmounted", async () => {
+    const user = userEvent.setup();
+    let ended = false;
+    const { api, ws } = await bootSingle(graphSnapshot(), (api) => {
+      api.completedWork = () => ({ status: 200, body: {
+        items: ended ? [{ kind: "worker", workerId: 4, conversationId: 31, title: "零散的活", outcome: "done", finishedAt: Date.now(), prUrl: null }] : [],
+        total: ended ? 1 : 0,
+        next: null,
+      } });
+    });
+    await user.click(await within(sidePanel()).findByRole("tab", { name: "Completed 0" }));
+    expect(await within(sidePanel()).findByText("Nothing completed yet")).toBeInTheDocument();
+    await user.click(within(sidePanel()).getByRole("tab", { name: /^Active/ }));
+    await user.click(within(sidePanel()).getByRole("button", { name: /零散的活/ }));
+    await user.click(await screen.findByRole("button", { name: "More worker actions" }));
+    await user.click(screen.getByRole("button", { name: "End" }));
+    expect(api.callsTo("POST", /^\/api\/conversations\/31\/end$/)).toHaveLength(1);
+    ended = true;
+    act(() => ws.push(messageChange(11, "message.created", makeWorkerLine({
+      id: 101, line: { workerId: 4, workerConversationId: 31, title: "零散的活", event: "ended" },
+    }))));
+    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
+    await user.click(await within(sidePanel()).findByRole("tab", { name: "Completed 1" }));
+    expect(await within(sidePanel()).findByRole("button", { name: /零散的活/ })).toBeInTheDocument();
+    expect(api.callsTo("GET", /\/completed$/)).toHaveLength(2);
+  });
+
+  it("does not let an in-flight first page overwrite a Worker finish", async () => {
+    const user = userEvent.setup();
+    const firstRead = deferred();
+    const { ws, api } = await bootSingle(graphSnapshot(), (api) => {
+      api.completedWork = vi
+        .fn<FakeApi["completedWork"]>(() => ({
+          status: 200,
+          body: {
+            items: [{ kind: "worker", workerId: 4, conversationId: 31, title: "零散的活", outcome: "done", finishedAt: Date.now(), prUrl: null }],
+            total: 1,
+            next: null,
+          },
+        }))
+        .mockImplementationOnce(async () => {
+          await firstRead.promise;
+          return { status: 200, body: { items: [], total: 0, next: null } };
+        });
+    });
+    await user.click(await within(sidePanel()).findByRole("tab", { name: "Completed" }));
+    await waitFor(() => expect(api.callsTo("GET", /\/completed$/)).toHaveLength(1));
+    act(() => ws.push(messageChange(11, "message.created", makeWorkerLine({
+      id: 101, line: { workerId: 4, workerConversationId: 31, title: "零散的活", event: "ended" },
+    }))));
+    expect(await within(sidePanel()).findByRole("tab", { name: "Completed 1" })).toBeInTheDocument();
+    await act(async () => firstRead.resolve());
+    expect(within(sidePanel()).getByRole("tab", { name: "Completed 1" })).toBeInTheDocument();
+    expect(within(sidePanel()).getByRole("button", { name: /零散的活/ })).toBeInTheDocument();
   });
 
   it("点右栏里等你拍板的步骤：对话滚到那张拍板卡并高亮，不发请求；点放大按钮打开弹窗才 POST /decide", async () => {

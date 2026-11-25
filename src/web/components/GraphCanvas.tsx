@@ -5,7 +5,7 @@ import { horizontalLayoutOf, verticalRowsOf, type FlowStep, type GraphFlow, type
 import { cn } from "../lib/utils.ts";
 import { WORK_GRAPH_PX } from "../limits.ts";
 import { useGraphOrientation, useStepTextMeasure } from "../useGraphOrientation.ts";
-import type { WorkStatus } from "../work-status.ts";
+import { WORK_STATUS_LABEL } from "../work-status.ts";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
 export interface GraphCanvasProps {
@@ -19,16 +19,8 @@ export interface GraphCanvasProps {
   stepInteractive?: (key: TaskNodeKey) => boolean;
 }
 
-const STATUS_ACCESSIBLE_LABEL: Readonly<Record<WorkStatus, string>> = {
-  done: "done",
-  running: "running",
-  waiting: "waiting on you",
-  pending: "not started",
-  cancelled: "cancelled",
-};
-
 function stepAccessibleName(step: FlowStep): string {
-  return `${step.title}, ${STATUS_ACCESSIBLE_LABEL[step.status]}`;
+  return `${step.title}, ${WORK_STATUS_LABEL[step.status]}`;
 }
 
 function HorizontalGraph({
@@ -119,6 +111,7 @@ function HorizontalGraph({
             className="work-step-box"
           >
             {content}
+            <span className="sr-only">{WORK_STATUS_LABEL[step.status]}</span>
           </div>
         );
       })}
@@ -193,6 +186,7 @@ function VerticalStepRow({
       className={rowClass}
     >
       {body}
+      <span className="sr-only">{WORK_STATUS_LABEL[row.status]}</span>
     </div>
   );
 }
