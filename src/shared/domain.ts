@@ -494,6 +494,8 @@ export type WorkerMessageMeta = {
   directChatSummary?: string;
   /** The PR field of a report line, when the report named one. */
   prUrl?: string;
+  /** The Worker's git branch when running in a worktree. */
+  branch?: string;
 };
 
 export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMessageMeta | null {

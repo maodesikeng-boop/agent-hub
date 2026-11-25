@@ -3,15 +3,13 @@ import type {
   CancelTaskGraphResponse,
   SkipTaskNodeRequest,
   SkipTaskNodeResponse,
-  TaskGraphsPage,
 } from "../../../shared/api.ts";
 import { taskNodeStatusText, truncateChars, userMessageDedupeKey, utf8Bytes } from "../../../shared/domain.ts";
-import type { AgentSessionRow, MessageId, ProjectId, TaskArtifact, TaskGraph, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
+import type { AgentSessionRow, MessageId, TaskArtifact, TaskGraph, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
 import { graphDeliverables } from "../../../shared/deliverables.ts";
 import type { HubArgs, HubResult, WorkerPr } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import {
-  GRAPH_HISTORY_PAGE_SIZE,
   HUB_GRAPH_LIST_LIMIT,
   MAX_ACTIVE_GRAPHS_PER_PROJECT,
   MAX_NODE_ARTIFACT_SUMMARY_CHARS,
@@ -60,24 +58,6 @@ export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.lis
     return { text: filtered ? "还没有符合条件的任务图。" : "当前没有活跃的任务图。", data: { graphs: [] } };
   }
   return { text: graphs.map((graph) => formatGraphText(graph, false, { ...g, pmVendor: caller.vendor })).join("\n\n"), data: { graphs } };
-}
-
-export function listProjectHistory(g: TaskGraphCtx, projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage {
-  const take = Math.max(1, Math.min(limit ?? GRAPH_HISTORY_PAGE_SIZE, 50));
-  const rows =
-    beforeId === undefined
-      ? g.db.all<TaskGraphDbRow>(
-          "SELECT * FROM task_graphs WHERE project_id = ? AND status != 'active' ORDER BY id DESC LIMIT ?",
-          projectId,
-          take + 1,
-        )
-      : g.db.all<TaskGraphDbRow>(
-          "SELECT * FROM task_graphs WHERE project_id = ? AND status != 'active' AND id < ? ORDER BY id DESC LIMIT ?",
-          projectId,
-          beforeId,
-          take + 1,
-        );
-  return { graphs: hydrateGraphs(g, rows.slice(0, take)), hasMore: rows.length > take };
 }
 
 function doneArtifact(args: HubArgs<"graph.done">, node: TaskNodeDbRow): { artifact: TaskArtifact; note: string | undefined } {

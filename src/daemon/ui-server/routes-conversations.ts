@@ -10,7 +10,6 @@ import {
   type CompletedCursor,
   type CompletedWorkPage,
   type ConversationsLookup,
-  type EndedWorkersPage,
   type FileAction,
   type FileActionResponse,
   type FilesResponse,
@@ -105,12 +104,6 @@ export function registerConversationRoutes(routes: FastifyInstance, c: UiCtx): v
     return ledger.lookupConversations({ ids: parseIdList(ids, "ids"), workerIds: parseIdList(workerIds, "workerIds") });
   });
 
-  routes.get("/api/pms/:id/ended-workers", async (req): Promise<EndedWorkersPage> => {
-    const pmId = idParam(req.params, "pm id");
-    const { before } = req.query as { before?: unknown };
-    return ledger.endedWorkersPage(pmId, parseOptionalPositiveInt(before, "before") ?? null);
-  });
-
   routes.get("/api/pms/:id/completed", async (req): Promise<CompletedWorkPage> => {
     const pmId = idParam(req.params, "pm id");
     const { cursor, limit } = req.query as { cursor?: unknown; limit?: unknown };
@@ -146,6 +139,11 @@ export function registerConversationRoutes(routes: FastifyInstance, c: UiCtx): v
 
   routes.post("/api/conversations/:id/stop", async (req, reply) => {
     ledger.requestStop(idParam(req.params, "conversation id"));
+    return reply.code(202).send();
+  });
+
+  routes.post("/api/conversations/:id/end", async (req, reply) => {
+    ledger.endWorkerConversation(idParam(req.params, "conversation id"));
     return reply.code(202).send();
   });
 

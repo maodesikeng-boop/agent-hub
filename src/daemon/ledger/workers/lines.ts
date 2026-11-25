@@ -30,6 +30,7 @@ export function insertLine(w: WorkersCtx, p: Pending, worker: WorkerDbRow, line:
     summary: line.summary,
     ...(line.completedStep ? { completedStep: true } : {}),
     ...(line.prUrl ? { prUrl: line.prUrl } : {}),
+    ...(worker.branch ? { branch: worker.branch } : {}),
   };
   const shouldWakePm = line.wakePm ?? (line.deliver !== null);
   const pmSession = shouldWakePm ? w.sessions.currentSession(worker.pm_conversation_id) : null;

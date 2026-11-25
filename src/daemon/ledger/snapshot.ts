@@ -1,10 +1,9 @@
-import type { ConversationSnapshot, ConversationsLookup, EndedWorkersPage } from "../../shared/api.ts";
+import type { ConversationSnapshot, ConversationsLookup } from "../../shared/api.ts";
 import type { AgentSessionRow, ConversationId, MessageKind, PmId, SessionState, TaskGraph, WorkerId } from "../../shared/domain.ts";
-import { CONVERSATION_LOOKUP_MAX_IDS, ENDED_WORKERS_PAGE_SIZE, MESSAGE_PAGE_SIZE, SNAPSHOT_ENDED_WORKERS_PER_PM } from "../../shared/limits.ts";
+import { CONVERSATION_LOOKUP_MAX_IDS, MESSAGE_PAGE_SIZE, SNAPSHOT_ENDED_WORKERS_PER_PM } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
 import { toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
-import { fail } from "./context.ts";
 import { MESSAGE_SHAPE_COLUMNS, WEB_MESSAGE_COLUMNS, parseMessageMeta, toConversation, toMessage } from "./rows.ts";
 import type { ConversationDbRow, MessageDbRow } from "./rows.ts";
 
@@ -47,6 +46,16 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
             )
             .map((r) => ({ id: r.id, kind: r.kind as MessageKind, meta: parseMessageMeta(r.kind, r.meta), createdAt: r.created_at })),
     );
+    const workerBranches = new Map(
+      workerConvIds.length === 0
+        ? []
+        : db
+            .all<{ id: number; branch: string | null }>(
+              `SELECT worker_conversation_id AS id, branch FROM workers WHERE worker_conversation_id ${IN_IDS}`,
+              idList(workerConvIds),
+            )
+            .map((r) => [r.id, r.branch]),
+    );
     const endedWithMessages = new Set(
       ended.size === 0
         ? []
@@ -60,7 +69,11 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
     return rows.map((row) => {
       const conversation = toConversation(row);
       const workerLine = row.kind === "worker" ? workerLines.get(row.id) : undefined;
-      const summary = workerLine !== undefined ? { workerLine } : {};
+      const workerBranch = row.kind === "worker" ? workerBranches.get(row.id) : undefined;
+      const summary = {
+        ...(workerLine !== undefined ? { workerLine } : {}),
+        ...(workerBranch !== undefined ? { workerBranch } : {}),
+      };
       if (ended.has(row.id)) {
         return { conversation, messages: [], hasMore: row.purged_at == null && endedWithMessages.has(row.id), ...summary };
       }
@@ -108,23 +121,16 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
     const bound = boundWorkerIds(activeGraphs);
     const keep = new Set<ConversationId>(db.all<{ id: number }>("SELECT id FROM conversations WHERE kind NOT IN ('worker', 'project_group')").map((r) => r.id));
     const endedKept = new Map<PmId | null, number>();
-    const oldestKept = new Map<PmId, ConversationId>();
-    const hasOlder = new Set<PmId>();
     for (const w of workers) {
       if (w.ended === 0 || (w.worker_id !== null && bound.has(w.worker_id))) {
         keep.add(w.id);
         continue;
       }
       const kept = endedKept.get(w.pm_id) ?? 0;
-      if (kept >= SNAPSHOT_ENDED_WORKERS_PER_PM) {
-        if (w.pm_id !== null) hasOlder.add(w.pm_id);
-        continue;
-      }
+      if (kept >= SNAPSHOT_ENDED_WORKERS_PER_PM) continue;
       endedKept.set(w.pm_id, kept + 1);
       keep.add(w.id);
-      if (w.pm_id !== null) oldestKept.set(w.pm_id, w.id);
     }
-    const olderEndedWorkers: Record<PmId, ConversationId> = Object.fromEntries([...hasOlder].map((pmId) => [pmId, oldestKept.get(pmId)!]));
     const conversations = entriesOf(conversationRows(keep));
     const extra = db.all<AgentSessionDbRow>(
       `SELECT s.* FROM agent_sessions s WHERE s.role != 'assistant' AND ${NOT_GROUP_SESSION} AND (
@@ -137,7 +143,7 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
     const have = new Set(sessions.map((s) => s.sessionId));
     for (const row of extra) if (!have.has(row.id)) sessions.push(deps.sessionState(toAgentSessionRow(row)));
     sessions.sort((a, b) => a.sessionId - b.sessionId);
-    return { conversations, sessions, olderEndedWorkers };
+    return { conversations, sessions };
   };
 
   const lookupConversations = (query: { ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }): ConversationsLookup => {
@@ -151,24 +157,5 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
     return { conversations: entriesOf(rows), sessions: sessionsOf(rows.map((r) => r.id)) };
   };
 
-  const endedWorkersPage = (pmId: PmId, before: ConversationId | null): EndedWorkersPage => {
-    if (db.get("SELECT 1 FROM pms WHERE id = ?", pmId) === undefined) throw fail("not_found", `没有编号 ${pmId} 的项目经理`);
-    const page = db
-      .all<{ id: number }>(
-        `SELECT c.id FROM conversations c WHERE c.kind = 'worker' AND c.pm_id = ? AND c.id < ? AND ${ENDED_WORKER} ORDER BY c.id DESC LIMIT ?`,
-        pmId,
-        before ?? Number.MAX_SAFE_INTEGER,
-        ENDED_WORKERS_PAGE_SIZE + 1,
-      )
-      .map((r) => r.id);
-    const shown = page.slice(0, ENDED_WORKERS_PAGE_SIZE);
-    const rows = conversationRows(shown);
-    return {
-      conversations: entriesOf(rows),
-      sessions: sessionsOf(shown),
-      nextBefore: page.length > ENDED_WORKERS_PAGE_SIZE ? shown.at(-1)! : null,
-    };
-  };
-
-  return { snapshotConversations, lookupConversations, endedWorkersPage };
+  return { snapshotConversations, lookupConversations };
 }

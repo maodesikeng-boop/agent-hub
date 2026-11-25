@@ -50,10 +50,9 @@ export const API_PATHS = {
   conversationsLookup: (q: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
     `/api/conversations/lookup?ids=${(q.ids ?? []).join(",")}&workerIds=${(q.workerIds ?? []).join(",")}`,
   stop: (conversationId: ConversationId) => `/api/conversations/${conversationId}/stop`,
+  endWorker: (conversationId: ConversationId) => `/api/conversations/${conversationId}/end`,
   rewind: (conversationId: ConversationId) => `/api/conversations/${conversationId}/rewind`,
   pms: "/api/pms",
-  endedWorkers: (pmId: PmId, before: ConversationId | null) =>
-    `/api/pms/${pmId}/ended-workers${before === null ? "" : `?before=${before}`}`,
   completedWork: (pmId: PmId, cursor: CompletedCursor | null) =>
     `/api/pms/${pmId}/completed${cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`}`,
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
@@ -104,7 +103,6 @@ export const API_PATHS = {
   routerCommands: "/api/router/commands",
   routerCommandRetry: (id: RouterCommandId) => `/api/router/commands/${id}/retry`,
   routerTargetOps: "/api/router/target-ops",
-  projectTaskGraphs: (projectId: ProjectId) => `/api/projects/${projectId}/task-graphs`,
   taskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey) =>
     `/api/task-graphs/${graphId}/nodes/${encodeURIComponent(nodeKey)}/decide`,
   taskGraphSkip: (graphId: TaskGraphId, nodeKey: TaskNodeKey) =>
@@ -168,6 +166,7 @@ export interface ConversationSnapshot {
   messages: Message[];
   hasMore: boolean;
   workerLine?: WorkerLineSummary;
+  workerBranch?: string | null;
 }
 
 export interface StateSnapshot {
@@ -181,7 +180,6 @@ export interface StateSnapshot {
   schedules: ScheduleRecord[];
   router: RouterSlice;
   activeTaskGraphs: TaskGraph[];
-  olderEndedWorkers?: Record<PmId, ConversationId>;
   server: ServerInfo;
   bootId?: string;
 }
@@ -191,10 +189,6 @@ export type LedgerSnapshot = Omit<StateSnapshot, "server" | "bootId">;
 export interface ConversationsLookup {
   conversations: ConversationSnapshot[];
   sessions: SessionState[];
-}
-
-export interface EndedWorkersPage extends ConversationsLookup {
-  nextBefore: ConversationId | null;
 }
 
 export interface MessagesPage {
@@ -633,11 +627,6 @@ export interface CompletedWorkPage {
   /** Finished graphs plus finished standalone Workers for this PM, counted when the page was read. */
   total: number;
   next: CompletedCursor | null;
-}
-
-export interface TaskGraphsPage {
-  graphs: TaskGraph[];
-  hasMore: boolean;
 }
 
 export interface DecideTaskNodeRequest {

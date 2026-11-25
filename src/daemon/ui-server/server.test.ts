@@ -513,16 +513,10 @@ describe("GET /api/state 和 /messages?before=", () => {
     expect(ledger.lookupCalls).toHaveLength(1);
   });
 
-  it("项目经理更早的已收工 Worker 一页：before 可不带；项目经理不存在 404", async () => {
-    ledger.snapshotValue = {
-      ...ledger.snapshotValue,
-      pms: [{ id: 1, name: "小林", mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1, archivedAt: null }],
-    };
-    expect((await call("GET", API_PATHS.endedWorkers(1, null))).json()).toEqual({ conversations: [], sessions: [], nextBefore: null });
-    expect((await call("GET", API_PATHS.endedWorkers(1, 40))).statusCode).toBe(200);
-    expect(ledger.endedWorkersCalls).toEqual([{ pmId: 1, before: null }, { pmId: 1, before: 40 }]);
-    expect((await call("GET", "/api/pms/1/ended-workers?before=abc")).statusCode).toBe(400);
-    expect((await call("GET", API_PATHS.endedWorkers(99, null))).statusCode).toBe(404);
+  it("POST /api/conversations/:id/end ends an open Worker conversation and returns 404 for unknown conversations", async () => {
+    expect((await call("POST", API_PATHS.endWorker(1))).statusCode).toBe(202);
+    expect(ledger.endedWorkerConversations).toEqual([1]);
+    expect((await call("POST", API_PATHS.endWorker(999))).statusCode).toBe(404);
   });
 
   it("completed work feed route parses cursor and limit and returns 404 for unknown PM", async () => {
@@ -2434,11 +2428,7 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
     });
   });
 
-  it("TaskGraph 历史分页、decide、skip、cancel 校验并转发", async () => {
-    const hist = await call("GET", "/api/projects/3/task-graphs?before=9&limit=15");
-    expect(hist.statusCode).toBe(200);
-    expect(hist.json()).toEqual({ graphs: [], hasMore: false });
-
+  it("TaskGraph decide、skip、cancel 与结束 Worker 校验并转发", async () => {
     const dec = await call("POST", "/api/task-graphs/7/nodes/gate.1/decide", {
       origin: ORIGIN,
       body: { clientId: "c-gate-1", choice: "方案 A", note: "加缓存" },
@@ -2461,7 +2451,6 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
     expect(can.json()).toMatchObject({ graph: { id: 7, status: "cancelled" }, messageId: 103 });
 
     expect(ledger.taskGraphCalls).toEqual([
-      { call: "listHistory", args: [3, 9, 15] },
       { call: "decideNode", args: [7, "gate.1", { clientId: "c-gate-1", choice: "方案 A", note: "加缓存" }] },
       { call: "skipNode", args: [7, "step_2", { reason: "暂缓" }] },
       { call: "cancelGraph", args: [7, { reason: "重拆" }] },

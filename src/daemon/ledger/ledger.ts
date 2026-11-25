@@ -373,6 +373,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       workers.clearMaxTime(conversationId);
       messages.requestStop(conversationId);
     },
+    endWorkerConversation(conversationId) {
+      write((p) => workers.endWorkerConversationIn(p, conversationId));
+    },
     rewindLastUserMessage(conversationId) {
       const rewound = messages.rewindLastUserMessage(conversationId);
       if (rewound !== null) workers.clearMaxTime(conversationId);
@@ -383,7 +386,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
     snapshot(): LedgerSnapshot {
       const activeTaskGraphs = taskGraphs.activeSnapshotGraphs();
-      const { conversations, sessions, olderEndedWorkers } = snapshotQueries.snapshotConversations(activeTaskGraphs);
+      const { conversations, sessions } = snapshotQueries.snapshotConversations(activeTaskGraphs);
       return {
         seq: log.seq,
         pms: db.all<PmDbRow>(`${PM_SELECT} ORDER BY p.id`).map(toPm),
@@ -400,14 +403,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         schedules: schedules.all(),
         router: router.snapshotSlice(),
         activeTaskGraphs,
-        ...(Object.keys(olderEndedWorkers).length > 0 ? { olderEndedWorkers } : {}),
       };
     },
 
     messagesBefore: messages.messagesBefore,
     messagesAfter: messages.messagesAfter,
     lookupConversations: snapshotQueries.lookupConversations,
-    endedWorkersPage: snapshotQueries.endedWorkersPage,
     completedWork: (pmId, cursor, limit) => completedWorkPage(db, pmId, cursor, limit),
 
     changesSince: (seq) => log.since(seq),
@@ -582,7 +583,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       detailOf: projectCatalog.detailOf,
       hasQueued: projectCatalog.hasQueued,
     },
-    listProjectTaskGraphs: taskGraphs.listProjectHistory,
     decideTaskNode: taskGraphs.decideNode,
     skipTaskNode: taskGraphs.skipNode,
     cancelTaskGraph: taskGraphs.cancelGraph,

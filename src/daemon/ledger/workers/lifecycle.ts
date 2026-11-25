@@ -1,4 +1,4 @@
-import type { MessageId, PmId, WorkerId } from "../../../shared/domain.ts";
+import type { ConversationId, MessageId, PmId, WorkerId } from "../../../shared/domain.ts";
 import type { HubArgs, HubResult } from "../../../shared/hub.ts";
 import { DEFAULT_WORKER_MAX_TIME_MS, WORKTREE_RETENTION_DAYS } from "../../../shared/limits.ts";
 import { formatDurationShort } from "../../../shared/schedule.ts";
@@ -168,6 +168,17 @@ export function endIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArgs
     text: `Worker #${ended.id}“${ended.title}”已收工。${interruptNote}${nodeNote === null ? "" : ` ${nodeNote}`}${cleanup}`,
     data: { worker: toWorkerRecord(ended) },
   };
+}
+
+export function endWorkerConversationIn(w: WorkersCtx, p: Pending, conversationId: ConversationId): void {
+  const worker = w.db.get<WorkerDbRow>("SELECT * FROM workers WHERE worker_conversation_id = ?", conversationId);
+  if (worker === undefined) throw fail("not_found", `没有编号 ${conversationId} 的 Worker 对话`);
+  w.persona.assertPmNotArchived(worker.pm_id);
+  if (worker.status === "ended") {
+    clearMaxTime(w, conversationId);
+    return;
+  }
+  endWorkerIn(w, p, worker, { notifyGraph: true });
 }
 
 export function endOpenWorkersIn(w: WorkersCtx, p: Pending, pmId: PmId): void {

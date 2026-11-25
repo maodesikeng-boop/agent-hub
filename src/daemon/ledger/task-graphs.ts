@@ -8,7 +8,7 @@ import { pushSlimGraphIn } from "./task-graphs/store.ts";
 import { createIn } from "./task-graphs/create.ts";
 import { enrichDeliveryNoteMessage, graphDeliveryProbeTarget, graphPrTargets } from "./task-graphs/delivery.ts";
 import { askOnStepIn, closeStepAskIn, decideIn, decideNode } from "./task-graphs/gate.ts";
-import { cancelGraph, cancelIn, doneIn, finishIn, list, listProjectHistory, show, skipIn, skipNode } from "./task-graphs/lifecycle.ts";
+import { cancelGraph, cancelIn, doneIn, finishIn, list, show, skipIn, skipNode } from "./task-graphs/lifecycle.ts";
 import {
   activeSnapshotGraphs,
   graphAutoDispatchVendors,
@@ -87,7 +87,6 @@ export function createLedgerTaskGraphs(
     decideNode: bind(decideNode),
     skipNode: bind(skipNode),
     cancelGraph: bind(cancelGraph),
-    listProjectHistory: bind(listProjectHistory),
     prepareWorkerBind: bind(prepareWorkerBind),
     bindWorkerStartedIn: bind(bindWorkerStartedIn),
     onWorkerTurnReportIn: bind(onWorkerTurnReportIn),
