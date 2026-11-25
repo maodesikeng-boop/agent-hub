@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useStore } from "zustand";
 import {
   ROUTER_STREAM_LIVE_MAX,
   defaultRouterSettings,
@@ -563,7 +564,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
     handleDecisionSubmit,
   } = useRouterDecisions(view.decisions, clientForDevice);
 
-  const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
+  const selectedTargetKey = useStore(draft.target);
 
   const stream = useMemo<FleetRouterStream>(() => {
     const inputs: RouterStreamDeviceInput[] = devices.map((d) => ({
@@ -741,15 +742,14 @@ export const RouterWorkbench = memo(function RouterWorkbench({
     [view.targets, view.multiDevice],
   );
 
-  const handleSelectTarget = useCallback((targetKey: string) => {
-    setSelectedTargetKey(targetKey);
-  }, []);
+  const handleSelectTarget = useCallback((targetKey: string) => draft.setTarget(targetKey), [draft]);
 
   const handleComposerSend = useCallback(
     (text: string, files: File[]): void | Promise<void> => {
       const trimmed = text.trim();
       if (trimmed === "" && files.length === 0) return;
 
+      const targetKey = selectedTargetKey;
       const targetSnap = selectedTarget;
       let targetPayload: PostRouterCommandTarget | undefined;
       if (targetSnap !== null) {
@@ -774,19 +774,19 @@ export const RouterWorkbench = memo(function RouterWorkbench({
 
       if (files.length === 0) {
         draft.set("");
-        if (targetSnap !== null) setSelectedTargetKey(null);
+        draft.clearTargetIfMatch(targetKey);
         dispatchCommand([]);
         return;
       }
 
       return uploadFiles(files, localClient).then((uploaded) => {
         draft.clearIfMatch(trimmed);
+        draft.clearTargetIfMatch(targetKey);
         staging.removeSent(files);
-        if (targetSnap !== null) setSelectedTargetKey(null);
         dispatchCommand(uploaded);
       });
     },
-    [selectedTarget, draft, staging, mutateSend],
+    [selectedTargetKey, selectedTarget, draft, staging, mutateSend],
   );
 
   const targetChip = useMemo(
@@ -796,10 +796,10 @@ export const RouterWorkbench = memo(function RouterWorkbench({
           label={selectedTarget.label}
           deviceName={view.multiDevice || !selectedTarget.self ? selectedTarget.deviceName : null}
           look={selectedTarget.look}
-          onRemove={() => setSelectedTargetKey(null)}
+          onRemove={() => draft.setTarget(null)}
         />
       ) : null,
-    [selectedTarget, view.multiDevice],
+    [selectedTarget, view.multiDevice, draft],
   );
 
   return (
