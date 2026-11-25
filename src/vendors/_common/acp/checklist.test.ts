@@ -1,22 +1,45 @@
-import { describe, it } from "vitest";
+import type { SessionNotification, ToolCall, ToolCallUpdate } from "@agentclientprotocol/sdk/unstable";
+import { describe, expect, it } from "vitest";
+import { progressFrame, progressFrames } from "../../../../test/fixtures/progress/load.ts";
+import { acpChecklistFromSessionUpdate, acpChecklistFromToolUpdate } from "./checklist.ts";
 
-describe("acpChecklistFromSessionUpdate", () => {
-  it.todo("turns the Kimi plan fixture into a replace update with completed for done entries");
-  it.todo("ignores plan updates from vendors that do not declare plan_update");
-  it.todo("returns null for non-plan session updates");
-});
+type Frame = { method: string; params: SessionNotification };
+const toolOf = (frame: Frame): ToolCall | ToolCallUpdate => {
+  const { update } = frame.params;
+  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") throw new Error("Expected a tool frame");
+  return update;
+};
 
-describe("acpChecklistFromToolUpdate", () => {
-  it.todo("reads rawInput.todos from the DeepSeek todo_write fixture");
-  it.todo("returns null for the empty pending OpenCode todowrite frame and reads the in_progress frame");
-  it.todo("reads rawOutput.metadata.todos from the completed OpenCode frame");
-  it.todo("reads the Kimi TodoList tool frame and treats an empty todos array as a clear");
-  it.todo("ignores Cursor rawInput todos because Cursor declares only the extension source");
-});
+describe("ACP checklists", () => {
+  it("reads Kimi plan entries only when the vendor declares plans", () => {
+    const { params } = progressFrame<Frame>("kimi-plan.source-derived.json");
+    expect(acpChecklistFromSessionUpdate("kimi", params.update)).toEqual({ kind: "replace", items: [
+      { id: null, title: "Read probe", status: "in_progress" },
+      { id: null, title: "Confirm marker", status: "pending" },
+    ] });
+    expect(acpChecklistFromSessionUpdate("cursor", params.update)).toBeNull();
+  });
 
-describe("ACP turn stream", () => {
-  it.todo("emits agent.checklist from a plan update and from a todo tool frame");
-  it.todo("emits agent.tool with pending for a pending first frame and agent.tool_running on the first in_progress frame");
-  it.todo("emits agent.tool without pending when the first frame is already in_progress");
-  it.todo("routes an extension method parsed by config.checklist.fromExtension to agent.checklist and answers a request with an empty result");
+  it("reads DeepSeek tool input", () => {
+    const frame = progressFrame<Frame>("deepseek-todo.source-derived.json");
+    expect(acpChecklistFromToolUpdate("deepseek", "todo_write", toolOf(frame))).toMatchObject({
+      kind: "replace", items: [{ title: "Read probe", status: "in_progress" }, { title: "Confirm marker", status: "pending" }],
+    });
+  });
+
+  it("reads OpenCode input after pending and prefers the confirmed list on completion", () => {
+    const [pending, running, completed] = progressFrames<Frame>("opencode-todo.live.jsonl");
+    expect(acpChecklistFromToolUpdate("opencode", "todowrite", toolOf(pending!))).toBeNull();
+    const update = acpChecklistFromToolUpdate("opencode", "todowrite", toolOf(running!));
+    expect(update).toMatchObject({ kind: "replace", items: [{ title: "Read probe" }, { title: "Confirm marker" }, { title: "Reply" }] });
+    expect(acpChecklistFromToolUpdate("opencode", "todowrite", { ...toolOf(completed!), rawInput: { todos: [] } })).toEqual(update);
+  });
+
+  it("uses Kimi's tool frames for a clear and has a single source for nonempty snapshots", () => {
+    const tool = toolOf(progressFrame<Frame>("kimi-tool.source-derived.json"));
+    expect(acpChecklistFromToolUpdate("kimi", "Updating todo list", tool)).toBeNull();
+    expect(acpChecklistFromToolUpdate("kimi", "Updating todo list", { ...tool, rawInput: { todos: [] } }))
+      .toEqual({ kind: "replace", items: [] });
+    expect(acpChecklistFromToolUpdate("cursor", "updateTodos", tool)).toBeNull();
+  });
 });

@@ -1,3 +1,4 @@
+import { isChecklistToolCall } from "./checklist.ts";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LedgerSnapshot } from "../../shared/api.ts";
@@ -257,10 +258,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
   const closing = new AbortController();
   const applyDriverEventNow = (sessionId: SessionId, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null) => {
+    if ((event.type === "agent.tool_preview" || event.type === "agent.tool") && isChecklistToolCall(event.name)) return;
     if (event.type === "agent.text_delta") {
       if (event.parentToolUseId !== undefined) return;
       const session = getAgentSession(db, sessionId);
-      if (session !== null && session.role !== "assistant") sessions.applyStreamingDelta(session, event.delta, event.reset);
+      if (session !== null && session.role !== "assistant") sessions.applyStreamingDelta(session, event);
       return;
     }
     if (event.type === "agent.tool_preview") {
@@ -274,9 +276,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     write((p) => {
       const scoped = scopeDriverEvent(session.id, event, messages.getMessage);
       if (scoped === null) return;
+      const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
       messages.applyEvent(p, session, scoped, textMeta);
       turnReplies.afterDriverEvent(p, session, scoped);
-      steps.afterDriverEvent(session, scoped);
+      steps.afterDriverEvent(session, scoped, openTools);
       loadedSkills.afterDriverEvent(session, scoped);
       workers.afterDriverEvent(p, session, scoped);
       handover.afterDriverEvent(p, session, scoped);

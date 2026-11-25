@@ -188,6 +188,7 @@ export interface AcpTrackedToolCall {
   input: unknown;
   kind?: ToolKind | null;
   resultEmitted: boolean;
+  pending?: boolean;
 }
 
 export interface AcpDriverConfig {

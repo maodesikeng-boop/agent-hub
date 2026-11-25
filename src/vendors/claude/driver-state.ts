@@ -1,3 +1,4 @@
+import type { ClaudeChecklistState } from "./checklist.ts";
 import type {
   BaseBatch,
   BaseProc,
@@ -28,6 +29,7 @@ export interface Proc extends BaseProc<ClaudeStartupOutcome> {
   readonlyGate: ClaudeReadonlyGate | null;
   capabilities: Set<string>;
   toolPreviews: StreamingToolPreviewTracker;
+  checklist: ClaudeChecklistState;
 }
 
 export interface SessionState extends BaseSessionState<Proc, Batch> {

@@ -1,12 +1,53 @@
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { progressFrames } from "../../../test/fixtures/progress/load.ts";
+import { CHECKLIST_PENDING_CALLS_MAX } from "../../shared/limits.ts";
+import { claudeChecklistFromToolResult, claudeChecklistFromToolUse, createClaudeChecklistState } from "./checklist.ts";
+import { parseAssistant, parseToolResults } from "./protocol.ts";
+
+type Frame = Record<string, unknown>;
 
 describe("Claude checklist", () => {
-  it.todo("TodoWrite tool_use yields a replace update with activeForm as activeTitle");
-  it.todo("TodoWrite tool_use_result newTodos yields the confirmed replace update");
-  it.todo("TaskCreate waits for tool_use_result.task.id, then merges a pending item with the subject");
-  it.todo("TaskUpdate merges the status change for taskId and a deleted status removes the item");
-  it.todo("pending TaskCreate records stay within CHECKLIST_PENDING_CREATES_MAX");
-  it.todo("subagent tool_use blocks yield no checklist update");
-  it.todo("the driver replays claude-task-tools.live.jsonl into agent.checklist events and timed agent.tool events");
-  it.todo("the launch environment sets CLAUDE_CODE_ENABLE_TODO_TOOLS=1");
+  it("replays the requested and confirmed TodoWrite lists", () => {
+    const state = createClaudeChecklistState();
+    const frames = progressFrames<Frame>("claude-todowrite.live.jsonl");
+    const updates = frames.flatMap((frame) => {
+      if (frame.type === "assistant") {
+        return parseAssistant(frame, "", 0).flatMap((event) => event.type === "agent.tool" ? [claudeChecklistFromToolUse(state, event)] : []);
+      }
+      const result = parseToolResults(frame, 0);
+      return result?.toolUseIds.map((id) => claudeChecklistFromToolResult(state, id, frame.tool_use_result)) ?? [];
+    }).filter((update) => update !== null);
+    expect(updates).toHaveLength(6);
+    expect(updates[0]).toMatchObject({
+      kind: "replace",
+      items: expect.arrayContaining([expect.objectContaining({ title: "Read probe", activeTitle: "Reading probe", status: "in_progress" })]),
+    });
+    expect(updates[1]).toEqual(updates[0]);
+    expect(updates[5]).toEqual(updates[4]);
+    expect(claudeChecklistFromToolResult(state, "unknown", { newTodos: [{ content: "Other tool", status: "pending" }] })).toBeNull();
+  });
+
+  it("uses the confirmed task id, applies partial changes, and removes deleted tasks", () => {
+    const state = createClaudeChecklistState();
+    const create = { name: "TaskCreate", input: { subject: "Read", activeForm: "Reading" }, toolUseId: "call" };
+    expect(claudeChecklistFromToolUse(state, create)).toBeNull();
+    expect(claudeChecklistFromToolResult(state, "different", { task: { id: "7" } })).toBeNull();
+    expect(claudeChecklistFromToolResult(state, "call", { task: { id: "1" } })).toEqual({
+      kind: "merge", items: [{ id: "1", title: "Read", activeTitle: "Reading", status: "pending" }],
+    });
+    expect(state.pending.size).toBe(0);
+    const update = { name: "TaskUpdate", toolUseId: "update", input: { taskId: "1", status: "in_progress" } };
+    expect(claudeChecklistFromToolUse(state, update)).toEqual({ kind: "merge", items: [{ id: "1", status: "in_progress" }] });
+    expect(claudeChecklistFromToolUse(state, { ...update, input: { ...update.input, status: "deleted" } }))
+      .toEqual({ kind: "remove", ids: ["1"] });
+  });
+
+  it("forgets the oldest unresolved create when the limit is reached", () => {
+    const state = createClaudeChecklistState();
+    for (let i = 0; i <= CHECKLIST_PENDING_CALLS_MAX; i++) {
+      claudeChecklistFromToolUse(state, { name: "TaskCreate", toolUseId: String(i), input: { subject: "Read" } });
+    }
+    expect(state.pending.size).toBe(CHECKLIST_PENDING_CALLS_MAX);
+    expect(claudeChecklistFromToolResult(state, "0", { task: { id: "lost" } })).toBeNull();
+  });
 });

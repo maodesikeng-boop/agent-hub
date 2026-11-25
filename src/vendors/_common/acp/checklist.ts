@@ -1,27 +1,27 @@
 import type { SessionNotification, ToolCall, ToolCallUpdate } from "@agentclientprotocol/sdk/unstable";
-import type { AgentVendor, ChecklistUpdate } from "../../../shared/index.ts";
-
-// Invariant: a vendor's checklist frames are read only from the sources its spec declares, so one list never has two writers.
+import { vendorSpec, type AgentVendor, type ChecklistUpdate } from "../../../shared/index.ts";
+import { checklistFromTodoList, isChecklistTool } from "../checklist.ts";
 
 export interface AcpChecklistConfig {
-  // Parses a vendor extension method (request or notification) that carries a checklist change; null means not a checklist method.
   fromExtension?: (method: string, params: unknown) => ChecklistUpdate | null;
 }
 
-/**
- * Postcondition: for a `plan` session update from a vendor declaring `plan_update`, a `replace` update built from
- * `entries[].content` and `entries[].status`; null for any other update or vendor.
- */
-export function acpChecklistFromSessionUpdate(_vendor: AgentVendor, _update: SessionNotification["update"]): ChecklistUpdate | null {
-  throw new Error("Not implemented");
+export function acpChecklistFromSessionUpdate(vendor: AgentVendor, update: SessionNotification["update"]): ChecklistUpdate | null {
+  if (update.sessionUpdate !== "plan" || !vendorSpec(vendor).checklist.sources.includes("plan_update")) return null;
+  return checklistFromTodoList({ todos: update.entries });
 }
 
-/**
- * Precondition: name is the tool name the driver resolved for this tool call.
- * Postcondition: for a tool the vendor classifies as a checklist tool, the list from `rawInput.todos`, or on a
- * `completed` frame from `rawOutput.metadata.todos`; null when the frame carries no list (for example a `pending` frame
- * with empty `rawInput`) or the tool is not a checklist tool.
- */
-export function acpChecklistFromToolUpdate(_vendor: AgentVendor, _name: string, _toolCall: ToolCall | ToolCallUpdate): ChecklistUpdate | null {
-  throw new Error("Not implemented");
+export function acpChecklistFromToolUpdate(vendor: AgentVendor, name: string, toolCall: ToolCall | ToolCallUpdate): ChecklistUpdate | null {
+  const spec = vendorSpec(vendor);
+  if (!isChecklistTool(spec, name)) return null;
+  const { rawInput, rawOutput } = toolCall;
+  if (toolCall.status === "failed" || toolCall.status === "pending") return null;
+  const confirmed = toolCall.status === "completed" && rawOutput && typeof rawOutput === "object" && "metadata" in rawOutput
+    ? checklistFromTodoList(rawOutput.metadata) : null;
+  const requested = checklistFromTodoList(rawInput);
+  if (spec.checklist.sources.includes("plan_update")) {
+    // ACP plan omits clears. Ignore nonempty tool lists when plan supplies the same data.
+    return confirmed?.items.length === 0 ? confirmed : requested?.items.length === 0 ? requested : null;
+  }
+  return confirmed ?? requested;
 }

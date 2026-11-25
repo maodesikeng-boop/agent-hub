@@ -1,3 +1,5 @@
+import { checklistLaunchArgs } from "../_common/checklist.ts";
+import codexSpec from "./spec.ts";
 import {
   DriverError,
   type AgentSessionRow,
@@ -377,7 +379,8 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     // macOS sandboxes cannot nest; read-only codex relies on its own readOnly sandbox instead.
     const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
     const exePath = this.#resolveCodexPath();
-    const baseSpawn: SpawnCommand = { command: exePath, args: buildCodexArgs(files.capabilities) };
+    const args = [...checklistLaunchArgs(codexSpec), ...buildCodexArgs(files.capabilities)];
+    const baseSpawn: SpawnCommand = { command: exePath, args };
     const launch = this.#writeScopeSpawn
       ? this.#writeScopeSpawn(baseSpawn, wrapScope)
       : spawnInWriteScope("codex", baseSpawn, wrapScope, this.opts.log, `session ${st.id}`, this.#platform);

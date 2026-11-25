@@ -1,3 +1,4 @@
+import { codexItemStartedAt } from "./checklist.ts";
 import { existsSync, readFileSync } from "node:fs";
 import {
   connectorToolAllowed,
@@ -386,8 +387,10 @@ export function parseCodexToolStarted(
   if (!isCodexToolItemType(item.type)) return null;
   const id = typeof item.id === "string" && item.id !== "" ? item.id : null;
   if (!id) return null;
+  const startedAt = codexItemStartedAt(item);
   return {
     type: "agent.tool",
+    ...(startedAt === undefined ? {} : { startedAt }),
     uuid: uuid ?? id,
     toolUseId: id,
     name: item.type,

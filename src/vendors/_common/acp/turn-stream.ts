@@ -1,6 +1,7 @@
+import { acpChecklistFromSessionUpdate, acpChecklistFromToolUpdate } from "./checklist.ts";
 import type { SessionNotification, ToolCall, ToolCallUpdate } from "@agentclientprotocol/sdk/unstable";
 import { pickStepInput, toolStepSignature } from "../../../daemon/driver/protocol.ts";
-import { MAX_MESSAGE_BYTES, SESSION_STEPS_KEEP } from "../../../shared/index.ts";
+import { MAX_MESSAGE_BYTES, SESSION_STEPS_KEEP, type ChecklistUpdate } from "../../../shared/index.ts";
 import { toolResultOutputs } from "../tool-output.ts";
 import { ZERO_USAGE, type AcpDriverHost, type AcpProc, type AcpSessionState } from "./driver-state.ts";
 import {
@@ -28,6 +29,11 @@ export function resetTurnBuffers(st: AcpSessionState, proc: AcpProc): void {
 function scopedUuid(proc: AcpProc, suffix: string): string {
   const sid = proc.acpSessionId ?? "acp";
   return `acp:${sid}:${proc.processScope}:t${proc.turnSeq}:${suffix}`;
+}
+
+export function emitAcpChecklist(host: AcpDriverHost, st: AcpSessionState, proc: AcpProc, update: ChecklistUpdate, at: number): void {
+  flushTextBuffer(host, st, proc, at);
+  host.emit(st.id, { type: "agent.checklist", uuid: scopedUuid(proc, `checklist:${++proc.checklistSeq}`), update, at });
 }
 
 export function flushTextBuffer(host: AcpDriverHost, st: AcpSessionState, proc: AcpProc, at: number): void {
@@ -122,6 +128,9 @@ function handleToolUpdate(
   const extractor = host.config.extractToolUse ?? defaultExtractAcpToolUse;
   const { name, input } = extractor(toolCall, existing);
 
+  const checklist = acpChecklistFromToolUpdate(host.vendor, name, toolCall);
+  if (checklist) emitAcpChecklist(host, st, proc, checklist, at);
+
   let tracked = existing;
   if (!tracked) {
     tracked = {
@@ -130,6 +139,7 @@ function handleToolUpdate(
       input,
       kind: toolCall.kind ?? null,
       resultEmitted: false,
+      pending: toolCall.status === "pending",
     };
     trackToolBounded(proc, tracked);
     host.emit(st.id, {
@@ -138,6 +148,7 @@ function handleToolUpdate(
       toolUseId: toolCallId,
       name,
       input,
+      ...(tracked.pending ? { pending: true } : {}),
       at,
     });
   } else {
@@ -155,6 +166,11 @@ function handleToolUpdate(
         at,
       });
     }
+  }
+
+  if (tracked.pending && !tracked.resultEmitted && toolCall.status === "in_progress") {
+    tracked.pending = false;
+    host.emit(st.id, { type: "agent.tool_running", toolUseId: toolCallId, at });
   }
 
   if (
@@ -233,6 +249,11 @@ export function handleSessionUpdate(
       if (update.content.type === "text") {
         appendTextDelta(host, st, proc, update.content.text, update.messageId ?? null, at);
       }
+      return;
+    }
+    case "plan": {
+      const checklist = acpChecklistFromSessionUpdate(host.vendor, update);
+      if (checklist) emitAcpChecklist(host, st, proc, checklist, at);
       return;
     }
     case "tool_call":

@@ -1,3 +1,4 @@
+import { createLedgerChecklist } from "./checklist.ts";
 import type { TurnCompletionFacts, TurnEndedEvent } from "./turn-completions.ts";
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
@@ -18,7 +19,7 @@ import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { WEB_MESSAGE_COLUMNS, toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
-import { clearStreaming, idle, toolStarted, working } from "./sessions.ts";
+import { clearStreaming, idle, toolRunning, toolStarted, working } from "./sessions.ts";
 import { isPathInsideOrEqual } from "../platform/index.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { LedgerSessions } from "./sessions.ts";
@@ -48,6 +49,40 @@ export interface LedgerMessagesOptions {
   assertUserCanPost?: (conversationId: ConversationId) => void;
   afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
   onIndependentAskCreated?: (p: Pending, session: AgentSessionRow, message: Message, options?: string[]) => void;
+}
+
+function insertAgentMessage(
+  { db, now }: Pick<LedgerContext, "db" | "now">,
+  p: Pending,
+  session: AgentSessionRow,
+  fields: { kind: "text" | "tool" | "checklist"; text: string; meta: Record<string, unknown> | null; dedupeKey: string },
+): void {
+  if (session.conversationId === null) return;
+  const t = now();
+  const handoverTurn =
+    session.role === "pm" &&
+    db.get(
+      `SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'system' AND kind = 'text'
+         AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.writing') = 1 LIMIT 1`,
+      session.id,
+    ) !== undefined;
+  const meta = handoverTurn ? { ...fields.meta, handover: true } : fields.meta;
+  const row = db.get<MessageDbRow>(
+    `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, collapsed, dedupe_key, status, created_at, updated_at)
+     VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, NULL, ?, ?)
+     ON CONFLICT (dedupe_key) DO NOTHING RETURNING *`,
+    session.conversationId,
+    session.id,
+    session.workerId,
+    fields.kind,
+    fields.text,
+    meta === null ? null : JSON.stringify(meta),
+    fields.kind === "text" ? 0 : 1,
+    fields.dedupeKey,
+    t,
+    t,
+  );
+  if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
 }
 
 export function createLedgerMessages(
@@ -92,39 +127,6 @@ export function createLedgerMessages(
       id,
     );
     p.changes.push({ type: "message.updated", data: { message: getMessage(id)! } });
-  };
-
-  const insertAgentMessage = (
-    p: Pending,
-    session: AgentSessionRow,
-    fields: { kind: "text" | "tool"; text: string; meta: Record<string, unknown> | null; dedupeKey: string },
-  ) => {
-    if (session.conversationId === null) return;
-    const t = now();
-    const handoverTurn =
-      session.role === "pm" &&
-      db.get(
-        `SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'system' AND kind = 'text'
-           AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.writing') = 1 LIMIT 1`,
-        session.id,
-      ) !== undefined;
-    const meta = handoverTurn ? { ...fields.meta, handover: true } : fields.meta;
-    const row = db.get<MessageDbRow>(
-      `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, collapsed, dedupe_key, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, NULL, ?, ?)
-       ON CONFLICT (dedupe_key) DO NOTHING RETURNING *`,
-      session.conversationId,
-      session.id,
-      session.workerId,
-      fields.kind,
-      fields.text,
-      meta === null ? null : JSON.stringify(meta),
-      fields.kind === "tool" ? 1 : 0,
-      fields.dedupeKey,
-      t,
-      t,
-    );
-    if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   };
 
   const insertAskMessage = (
@@ -243,6 +245,8 @@ export function createLedgerMessages(
     return message;
   };
 
+  const checklist = createLedgerChecklist(ctx, (p, session, fields) => insertAgentMessage(ctx, p, session, fields));
+
   const keptAfterShutdown = (session: AgentSessionRow, id: MessageId) => {
     const row = db.get<Pick<MessageDbRow, "sender">>("SELECT sender FROM messages WHERE id = ?", id);
     return row !== undefined && resumesAfterShutdown(session, row);
@@ -282,14 +286,14 @@ export function createLedgerMessages(
         const to = event.type === "message.delivered" ? "delivered" : "processing";
         for (const id of event.messageIds) transition(p, id, to, null, sessionId);
         dropCarriedRateLimit(p, sessionId);
-        updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
+        updateLive(p, sessionId, working(event.at, liveOf(sessionId).currentTool));
         return;
       }
       case "turn.started":
         dropCarriedRateLimit(p, sessionId);
         updateLive(p, sessionId, (l) => {
           clearStreaming(l);
-          working(null)(l);
+          working(event.at, null, { type: "thinking" })(l);
         });
         return;
       case "agent.thinking":
@@ -302,7 +306,7 @@ export function createLedgerMessages(
           } else {
             updateLive(p, sessionId, (l) => {
               clearStreaming(l);
-              working(liveOf(sessionId).currentTool, { type: "thinking" })(l);
+              working(event.at, liveOf(sessionId).currentTool, { type: "thinking" })(l);
             });
           }
         }
@@ -310,24 +314,32 @@ export function createLedgerMessages(
       case "agent.text_delta":
       case "agent.tool_preview":
         return;
+      case "agent.checklist":
+        checklist.apply(p, session, event);
+        return;
+      case "agent.tool_running":
+        if (event.parentToolUseId === undefined) {
+          updateLive(p, sessionId, toolRunning(event.toolUseId, event.startedAt ?? event.at));
+        }
+        return;
       case "agent.tool_result":
         if (event.parentToolUseId === undefined) {
-          sessions.finishTools(p, sessionId, event.toolUseIds);
+          sessions.finishTools(p, sessionId, event.toolUseIds, event.at);
         }
         return;
       case "agent.text": {
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
         const meta = replayed || session.conversationId === null ? null : textMeta;
-        insertAgentMessage(p, session, { kind: "text", text: event.text, meta, dedupeKey });
+        insertAgentMessage(ctx, p, session, { kind: "text", text: event.text, meta, dedupeKey });
         updateLive(p, sessionId, (l) => {
           if (event.parentToolUseId === undefined) clearStreaming(l);
-          working(null, event.parentToolUseId === undefined ? { type: "text" } : undefined)(l);
+          working(event.at, null, event.parentToolUseId === undefined ? { type: "text" } : undefined)(l);
         });
         return;
       }
       case "agent.tool":
-        insertAgentMessage(p, session, {
+        insertAgentMessage(ctx, p, session, {
           kind: "tool",
           text: summarizeToolCall(event.name, event.input),
           meta: { toolUseId: event.toolUseId, name: event.name },
@@ -336,9 +348,9 @@ export function createLedgerMessages(
         updateLive(p, sessionId, (l) => {
           if (event.parentToolUseId === undefined) {
             clearStreaming(l);
-            toolStarted(event.name, event.toolUseId, stepOfTool(event.name, event.input))(l);
+            toolStarted(event.toolUseId, stepOfTool(event.name, event.input), event.pending ? null : event.startedAt ?? event.at)(l);
           } else {
-            working(event.name)(l);
+            working(event.at, event.name)(l);
           }
         });
         return;

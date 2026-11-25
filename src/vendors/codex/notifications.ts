@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { codexChecklistFromPlanUpdated, codexItemStartedAt } from "./checklist.ts";
 import { lineUuid } from "../../daemon/driver/protocol.ts";
 import { toolResultOutputs } from "../_common/tool-output.ts";
 import {
@@ -43,6 +45,13 @@ export function onNotification(
     case "turn/started":
       onTurnStarted(host, st, proc, params, at);
       return;
+    case "turn/plan/updated": {
+      if (typeof params.threadId === "string" && params.threadId !== proc.threadId) return;
+      if (typeof params.turnId === "string" && params.turnId !== st.activeTurnId) return;
+      const update = codexChecklistFromPlanUpdated(params);
+      if (update) host.emit(st.id, { type: "agent.checklist", uuid: randomUUID(), update, at });
+      return;
+    }
     case "item/started":
       onItemStarted(host, st, proc, params, rawLine, at);
       return;
@@ -130,7 +139,11 @@ function onItemStarted(
   }
   if (item.type === "agentMessage") {
     const itemId = nonEmptyString(item.id) ?? "agent-msg";
-    if (!st.agentMessageBuffers.has(itemId)) st.agentMessageBuffers.set(itemId, "");
+    if (!st.agentMessageBuffers.has(itemId)) {
+      st.agentMessageBuffers.set(itemId, "");
+      const startedAt = codexItemStartedAt(item);
+      if (startedAt !== undefined) host.emit(st.id, { type: "agent.text_delta", delta: "", reset: true, startedAt, at });
+    }
     return;
   }
   if (isCodexToolItemType(item.type)) {

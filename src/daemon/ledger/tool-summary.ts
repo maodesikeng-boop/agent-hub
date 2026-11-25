@@ -40,6 +40,6 @@ export function summarizeToolCall(name: string, input: unknown): string {
   return chars.length > MAX_SUMMARY_CHARS ? `${chars.slice(0, MAX_SUMMARY_CHARS - 1).join("")}…` : summary;
 }
 
-export function stepOfTool(name: string, input: unknown): AgentStep {
+export function stepOfTool(name: string, input: unknown): Extract<AgentStep, { type: "tool_use" }> {
   return { type: "tool_use", name, input: pickStepInput(input) };
 }

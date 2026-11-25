@@ -1,34 +1,63 @@
-import type { ChecklistUpdate } from "../../shared/index.ts";
+import { z } from "zod";
+import { clipChecklistTitle, normalizeChecklistStatus, type ChecklistUpdate } from "../../shared/index.ts";
+import { CHECKLIST_PENDING_CALLS_MAX } from "../../shared/limits.ts";
+import { checklistFromTodoList } from "../_common/checklist.ts";
 
-// Invariant: pending TaskCreate calls are kept per driver session and capped at CHECKLIST_PENDING_CREATES_MAX, oldest dropped first.
+type PendingChecklistCall = { kind: "create"; title: string; activeTitle: string | null } | { kind: "replace" };
 
 export interface ClaudeChecklistState {
-  pendingCreates: Map<string, { title: string; activeTitle: string | null }>;
+  pending: Map<string, PendingChecklistCall>;
 }
 
 export function createClaudeChecklistState(): ClaudeChecklistState {
-  throw new Error("Not implemented");
+  return { pending: new Map() };
 }
 
-/**
- * Precondition: block is a main-agent `tool_use` content block from an `assistant` frame.
- * Postcondition:
- * - TodoWrite: a `replace` update from `input.todos`.
- * - TaskUpdate: a `merge` patch for `input.taskId` (`status: "deleted"` yields a `remove` update instead).
- * - TaskCreate: records the subject and activeForm under the tool_use id and returns null; the id arrives with the result.
- * - Any other tool: null.
- */
-export function claudeChecklistFromToolUse(_state: ClaudeChecklistState, _block: { id: string; name: string; input: unknown }): ChecklistUpdate | null {
-  throw new Error("Not implemented");
+const taskInput = z.object({ taskId: z.unknown().optional(), subject: z.unknown().optional(), activeForm: z.unknown().optional(), status: z.unknown().optional() });
+const taskResult = z.object({ task: z.object({ id: z.string().min(1) }).optional(), newTodos: z.unknown().optional() });
+
+function rememberCall(state: ClaudeChecklistState, id: string, call: PendingChecklistCall): void {
+  if (state.pending.size >= CHECKLIST_PENDING_CALLS_MAX && !state.pending.has(id)) {
+    const oldest = state.pending.keys().next().value;
+    if (oldest !== undefined) state.pending.delete(oldest);
+  }
+  state.pending.set(id, call);
 }
 
-/**
- * Precondition: toolUseResult is the top-level `tool_use_result` of a `user` frame answering toolUseId.
- * Postcondition:
- * - For a recorded TaskCreate: a `merge` adding `{ id: task.id, status: "pending" }` with the recorded titles, and the record is dropped.
- * - For TodoWrite: a `replace` update from `newTodos`, so the confirmed list wins over the requested one.
- * - Otherwise null.
- */
-export function claudeChecklistFromToolResult(_state: ClaudeChecklistState, _toolUseId: string, _toolUseResult: unknown): ChecklistUpdate | null {
-  throw new Error("Not implemented");
+export function claudeChecklistFromToolUse(state: ClaudeChecklistState, block: { toolUseId: string; name: string; input: unknown }): ChecklistUpdate | null {
+  if (block.name === "TodoWrite") {
+    rememberCall(state, block.toolUseId, { kind: "replace" });
+    return checklistFromTodoList(block.input);
+  }
+  if (block.name !== "TaskCreate" && block.name !== "TaskUpdate") return null;
+
+  const input = taskInput.safeParse(block.input).data;
+  if (!input) return null;
+  const activeTitle = typeof input.activeForm === "string" ? clipChecklistTitle(input.activeForm) || null : undefined;
+  if (block.name === "TaskCreate") {
+    if (typeof input.subject !== "string" || input.subject.trim() === "") return null;
+    rememberCall(state, block.toolUseId, { kind: "create", title: clipChecklistTitle(input.subject), activeTitle: activeTitle ?? null });
+    return null;
+  }
+
+  if (typeof input.taskId !== "string" || input.taskId === "") return null;
+  if (input.status === "deleted") return { kind: "remove", ids: [input.taskId] };
+  const status = normalizeChecklistStatus(input.status);
+  return { kind: "merge", items: [{
+    id: input.taskId,
+    ...(typeof input.subject === "string" ? { title: input.subject } : {}),
+    ...(activeTitle !== undefined ? { activeTitle } : {}),
+    ...(status !== null ? { status } : {}),
+  }] };
+}
+
+export function claudeChecklistFromToolResult(state: ClaudeChecklistState, toolUseId: string, toolUseResult: unknown): ChecklistUpdate | null {
+  const pending = state.pending.get(toolUseId);
+  state.pending.delete(toolUseId);
+  if (!pending) return null;
+  const result = taskResult.safeParse(toolUseResult).data;
+  if (!result) return null;
+  if (pending.kind === "replace") return checklistFromTodoList({ todos: result.newTodos });
+  if (!result.task) return null;
+  return { kind: "merge", items: [{ id: result.task.id, title: pending.title, activeTitle: pending.activeTitle, status: "pending" }] };
 }

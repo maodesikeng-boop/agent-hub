@@ -112,6 +112,7 @@ export interface AgentTextDeltaEvent extends DriverEventBase, SubtaskField {
   type: "agent.text_delta";
   delta: string;
   reset?: boolean;
+  startedAt?: number;
 }
 
 export interface AgentThinkingEvent extends DriverEventBase, SubtaskField {

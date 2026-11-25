@@ -34,7 +34,7 @@ export const MAX_STREAMING_TOOL_BLOCKS = 32;
 export const MAX_STEP_ARG_CHARS = 300;
 export const CHECKLIST_MAX_ITEMS = 50;
 export const CHECKLIST_TITLE_MAX_CHARS = 200;
-export const CHECKLIST_PENDING_CREATES_MAX = 64;
+export const CHECKLIST_PENDING_CALLS_MAX = 64;
 export const CHANGE_BUFFER_SIZE = 1000;
 
 export const MAX_NAME_CHARS = 40;

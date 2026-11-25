@@ -1,3 +1,4 @@
+import { checklistLaunchArgs } from "../checklist.ts";
 import { randomUUID } from "node:crypto";
 import { methods, type AnyMessage, type ClientCapabilities } from "@agentclientprotocol/sdk/unstable";
 import {
@@ -55,7 +56,7 @@ import {
 } from "./protocol.ts";
 import { buildAcpReadonlySandboxInput, createAcpClientApp, createAcpStdioStream, guardAcpFrameSize } from "./transport.ts";
 import { runAcpPromptTurn } from "./turn.ts";
-import { flushTextBuffer, handleSessionUpdate, resetTurnBuffers } from "./turn-stream.ts";
+import { emitAcpChecklist, flushTextBuffer, handleSessionUpdate, resetTurnBuffers } from "./turn-stream.ts";
 import type { AcpDriverConfig, AcpDriverOptions, AcpLaunchContext } from "./types.ts";
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -508,7 +509,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       typeof this.#config.launchArgs === "function"
         ? [...this.#config.launchArgs(launchCtx)]
         : [...this.#config.launchArgs];
-    const { spawnCmd, spawnArgs, extraEnv } = await this.#wrapLaunch(st, launchCtx, rawLaunchArgs);
+    const { spawnCmd, spawnArgs, extraEnv } = await this.#wrapLaunch(st, launchCtx, [...checklistLaunchArgs(vendorSpec(this.vendor)), ...rawLaunchArgs]);
     this.assertRunning();
     this.assertNotEnded(st);
 
@@ -533,6 +534,11 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       proc: () => proc,
       isShuttingDown: () => this.shuttingDown,
       onSessionUpdate: (params) => handleSessionUpdate(this.#host, st, proc, params, Date.now()),
+      onChecklist: (update) => {
+        if (st.proc === proc && !proc.streamEnded && !proc.swallowingReplay) {
+          emitAcpChecklist(this.#host, st, proc, update, Date.now());
+        }
+      },
     });
     const acpConn = app.connect(stream);
 
@@ -555,6 +561,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       turnSeq: 0,
       textSegmentSeq: 0,
       thinkingSeq: 0,
+      checklistSeq: 0,
       textBuffer: "",
       textBufferBytes: 0,
       textMessageId: null,

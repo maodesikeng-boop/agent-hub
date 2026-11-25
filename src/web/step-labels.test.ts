@@ -17,7 +17,6 @@ describe("describeStep：状态词（英文）", () => {
     expect(describeStep(tool("WebSearch"))).toBe("Searching the web");
     expect(describeStep(tool("WebFetch"))).toBe("Reading web page");
     expect(describeStep(tool("Agent"))).toBe("Running subagent");
-    expect(describeStep(tool("TodoWrite"))).toBe("Updating todos");
     expect(describeStep(tool("ToolSearch"))).toBe("Finding tools");
     expect(describeStep(tool("Skill", { skill: "frontend-rules" }))).toBe("Loading skill frontend-rules");
     expect(describeStep(tool("Skill"))).toBe("Loading skill");

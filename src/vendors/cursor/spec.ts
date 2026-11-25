@@ -129,6 +129,7 @@ export default defineVendor({
       Task: "subagent",
       TodoWrite: "todo",
       update_todos: "todo",
+      updateTodos: "todo",
     },
   },
   checklist: { sources: ["extension"] },

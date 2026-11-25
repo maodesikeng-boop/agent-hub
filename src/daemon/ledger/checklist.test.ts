@@ -1,22 +1,150 @@
-import { describe, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { checklistOf, MIN_TOOL_STEP_VISIBLE_MS, type ChecklistUpdate, type Change, type DriverEvent } from "../../shared/index.ts";
+import { createSessionStore, type Db } from "../store/index.ts";
+import { insertTestSession, openTestDb } from "../store/test-helpers.ts";
+import { createLedger, type SqliteLedger } from "./index.ts";
 
-describe("ledger checklist", () => {
-  it.todo("agent.checklist inserts a collapsed checklist message with the full snapshot and pushes message.created");
-  it.todo("a merge update applies to the session's latest stored snapshot from an earlier turn");
-  it.todo("an unchanged snapshot inserts nothing");
-  it.todo("a replayed uuid inserts nothing");
-  it.todo("subtask events and sessions without a conversation insert nothing");
-  it.todo("todo-classified tool calls store no tool message, no session step, and leave the live step unchanged");
-  it.todo("PM tool message retention also prunes checklist messages");
-  it.todo("handover and vendor-switch context skip checklist messages");
+let db: Db;
+let ledger: SqliteLedger;
+let dir: string;
+let now: number;
+let pm: ReturnType<SqliteLedger["createPm"]>;
+let changes: Change[];
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  dir = mkdtempSync(join(tmpdir(), "bellwood-checklist-"));
+  db = openTestDb();
+  now = 10_000;
+  changes = [];
+  ledger = createLedger(db, { now: () => now, pmHomeRoot: join(dir, "state", "pm-home"), dataHome: join(dir, "state"), userHome: dir });
+  pm = ledger.createPm({ name: "Checklist test", mode: "manage_only", persona: "" });
+  ledger.onChange((change) => changes.push(change));
 });
 
-describe("live step start time", () => {
-  it.todo("agent.tool without pending sets stepStartedAt to startedAt or the event time");
-  it.todo("agent.tool with pending publishes stepStartedAt null until agent.tool_running");
-  it.todo("thinking and text steps start their own clock when the shown step changes");
-  it.todo("finishing one of two parallel tools shows the other tool with its own start time");
-  it.todo("the tool hold below MIN_TOOL_STEP_VISIBLE_MS keeps the held step's start time");
-  it.todo("idle clears stepStartedAt");
-  it.todo("stepStartedAt never follows lastEventAt");
+afterEach(() => {
+  ledger.close();
+  db.close();
+  rmSync(dir, { recursive: true, force: true });
+  vi.useRealTimers();
+});
+
+const advance = (ms: number) => {
+  now += ms;
+  vi.advanceTimersByTime(ms);
+};
+const emit = (event: DriverEvent) => ledger.applyDriverEvent(pm.sessionId, event);
+const setChecklist = (uuid: string, update: ChecklistUpdate) => emit({ type: "agent.checklist", uuid, update, at: now });
+const checklistRows = () => ledger.messagesBefore(pm.conversation.id, Number.MAX_SAFE_INTEGER).messages.filter((message) => message.kind === "checklist");
+const live = () => ledger.snapshot().sessions.find((row) => row.sessionId === pm.sessionId);
+const tool = (toolUseId: string, timing: { pending?: true; startedAt?: number } = {}, name = "Read") =>
+  ({ type: "agent.tool", at: now, uuid: toolUseId, name, toolUseId, input: {}, ...timing }) satisfies DriverEvent;
+
+const first: ChecklistUpdate = {
+  kind: "replace",
+  items: [{ id: "step", title: "Read probe", status: "in_progress" }],
+};
+
+describe("ledger checklists", () => {
+  it("stores immutable snapshots, deduplicates updates and ignores subagent checklists", () => {
+    setChecklist("first", first);
+    setChecklist("same", first);
+    emit({ type: "agent.checklist", parentToolUseId: "sub", uuid: "sub", update: { kind: "replace", items: [] }, at: now });
+    const detached = insertTestSession(db);
+    ledger.applyDriverEvent(detached, { type: "agent.checklist", uuid: "detached", update: first, at: now });
+    expect(db.get<{ count: number }>("SELECT count(*) AS count FROM messages WHERE kind = 'checklist'")?.count).toBe(1);
+    expect(checklistRows()).toHaveLength(1);
+    const row = checklistRows()[0]!;
+    expect(row).toMatchObject({ sender: "agent", collapsed: true, text: "", meta: {
+      checklist: [{ id: "step", title: "Read probe", status: "in_progress", activeTitle: null }],
+    } });
+    expect(changes).toContainEqual(expect.objectContaining({ type: "message.created", data: { message: row } }));
+    setChecklist("clear", { kind: "replace", items: [] });
+    setChecklist("first", first);
+    expect(checklistRows().map(checklistOf)).toEqual([checklistOf(row), []]);
+  });
+
+  it("restores a merge baseline across turns and a ledger restart", () => {
+    setChecklist("first", first);
+    emit({ type: "turn.ended", at: now, messageIds: [], ok: true, interrupted: false, durationMs: 1 });
+    ledger.close();
+    ledger = createLedger(db, { now: () => now, pmHomeRoot: join(dir, "state", "pm-home"), dataHome: join(dir, "state"), userHome: dir });
+    setChecklist("finish", { kind: "merge", items: [{ id: "step", status: "completed" }] });
+    expect(checklistRows().map(checklistOf)).toMatchObject([
+      [{ title: "Read probe", status: "in_progress" }],
+      [{ title: "Read probe", status: "completed" }],
+    ]);
+  });
+
+  it("does not log a todo tool, preview, or result as Worker process", () => {
+    const folder = join(dir, "project");
+    mkdirSync(folder);
+    ledger.hubCall(pm.sessionId, "project.create", { folder });
+    const { worker } = ledger.hubCall(pm.sessionId, "worker.start", {
+      title: "Read probe", task: "Check the probe.", vendor: "claude", noWorktree: true,
+    }).data;
+    const workerSession = db.get<{ id: number; conversation_id: number }>("SELECT id, conversation_id FROM agent_sessions WHERE worker_id = ?", worker.id)!;
+    const send = (event: DriverEvent) => ledger.applyDriverEvent(workerSession.id, event);
+    send({ type: "turn.started", at: now });
+    send({ type: "agent.tool_preview", name: "TaskUpdate", at: now });
+    send(tool("todo", { pending: true }, "TaskUpdate"));
+    send({ type: "agent.tool_running", toolUseId: "todo", at: now });
+    send({ type: "agent.tool_result", toolUseIds: ["todo"], at: now });
+    expect(ledger.snapshot().sessions.find(({ sessionId }) => sessionId === workerSession.id)?.step).toEqual({ type: "thinking" });
+
+    send({ type: "agent.checklist", uuid: "worker-list", update: first, at: now });
+    send(tool("real"));
+    send({ type: "agent.tool_result", toolUseIds: ["todo", "real"], at: now });
+    expect(ledger.messagesBefore(workerSession.conversation_id, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "agent")
+      .map(({ kind }) => kind)).toEqual(["checklist", "tool"]);
+    expect(db.all<{ tool_use_id: string }>("SELECT tool_use_id FROM session_steps WHERE session_id = ? AND tool_use_id IS NOT NULL ORDER BY id", workerSession.id))
+      .toEqual([{ tool_use_id: "real" }, { tool_use_id: "real" }]);
+  });
+});
+
+describe("live action timing", () => {
+  it("orients the clock to execution and keeps the other tool's time after a parallel result", () => {
+    emit(tool("first", { startedAt: now - 400 }, "Bash"));
+    expect(live()?.stepStartedAt).toBe(now - 400);
+    const firstStart = now - 400;
+    advance(100);
+    emit(tool("second", { pending: true }));
+    expect(live()).toMatchObject({ step: { name: "Bash" }, stepStartedAt: firstStart });
+    advance(100);
+    emit({ type: "agent.tool_running", toolUseId: "second", at: now });
+    expect(live()).toMatchObject({ step: { name: "Read" }, stepStartedAt: now });
+    advance(100);
+    emit({ type: "agent.tool_result", toolUseIds: ["second"], at: now });
+    expect(live()).toMatchObject({ step: { name: "Bash" }, stepStartedAt: firstStart });
+  });
+
+  it("resets clocks by action, preserves the held clock, and ignores lastEventAt", () => {
+    emit({ type: "turn.started", at: now });
+    const thinkingAt = now;
+    advance(10);
+    emit({ type: "agent.thinking", uuid: "thinking", at: now });
+    expect(live()?.stepStartedAt).toBe(thinkingAt);
+    emit({ type: "agent.text_delta", delta: "I will check.", at: now });
+    expect(live()?.stepStartedAt).toBe(now);
+
+    advance(10);
+    emit(tool("waiting", { pending: true }));
+    expect(live()?.stepStartedAt).toBeNull();
+    advance(10);
+    emit({ type: "agent.tool_running", toolUseId: "waiting", at: now });
+    const executionAt = now;
+    createSessionStore(db).update(pm.sessionId, { lastEventAt: now + 1_000 });
+    expect(live()?.stepStartedAt).toBe(executionAt);
+
+    advance(10);
+    emit({ type: "agent.tool_result", toolUseIds: ["waiting"], at: now });
+    expect(live()?.stepStartedAt).toBe(executionAt);
+    advance(MIN_TOOL_STEP_VISIBLE_MS);
+    expect(live()).toMatchObject({ step: { type: "thinking" }, stepStartedAt: now });
+    emit({ type: "turn.ended", at: now, messageIds: [], ok: true, interrupted: false, durationMs: 1 });
+    expect(live()).toMatchObject({ activity: "idle", step: null, stepStartedAt: null });
+  });
 });

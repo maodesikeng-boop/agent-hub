@@ -1,29 +1,47 @@
+import { CHECKLIST_MESSAGE_KIND, applyChecklistUpdate, checklistOf, sameChecklist, type ChecklistMessageMeta } from "../../shared/checklist.ts";
+import type { AgentSessionRow, SessionId } from "../../shared/domain.ts";
 import type { AgentChecklistEvent } from "../../shared/driver.ts";
-import type { AgentSessionRow, ChecklistItem, SessionId } from "../../shared/index.ts";
+import { toolAction } from "../../shared/step-labels.ts";
 import type { LedgerContext, Pending } from "./context.ts";
+import { parseMessageMeta } from "./rows.ts";
 
-// Invariant: a session's checklist history is the ordered list of its `checklist` messages; consecutive rows of one session never hold the same snapshot.
+export const PROCESS_MESSAGE_KINDS_SQL = `('tool', '${CHECKLIST_MESSAGE_KIND}')`;
 
-export interface LedgerChecklist {
-  /**
-   * Postcondition: applies event.update to the session's latest stored snapshot (empty when none) and, when the result
-   * differs, inserts one `checklist` message (sender `agent`, collapsed, empty text, meta `{ checklist }`) in the session's
-   * conversation and pushes `message.created`. No-op for subtask events, sessions without a conversation, an unchanged
-   * snapshot, or a uuid already stored for this session.
-   */
-  apply(p: Pending, session: AgentSessionRow, event: AgentChecklistEvent): void;
-  /** Postcondition: the snapshot of the session's newest `checklist` message, or an empty list. */
-  latest(sessionId: SessionId): ChecklistItem[];
+interface ChecklistMessageFields {
+  kind: typeof CHECKLIST_MESSAGE_KIND;
+  text: string;
+  meta: ChecklistMessageMeta;
+  dedupeKey: string;
 }
 
-export function createLedgerChecklist(_ctx: LedgerContext): LedgerChecklist {
-  throw new Error("Not implemented");
+type InsertChecklist = (p: Pending, session: AgentSessionRow, fields: ChecklistMessageFields) => void;
+
+export function createLedgerChecklist({ db }: LedgerContext, insert: InsertChecklist) {
+  const latest = (sessionId: SessionId) => {
+    const row = db.get<{ meta: string | null }>(
+      "SELECT meta FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = ? ORDER BY id DESC LIMIT 1",
+      sessionId,
+      CHECKLIST_MESSAGE_KIND,
+    );
+    return row ? checklistOf({ kind: CHECKLIST_MESSAGE_KIND, meta: parseMessageMeta(CHECKLIST_MESSAGE_KIND, row.meta) }) ?? [] : [];
+  };
+
+  const apply = (p: Pending, session: AgentSessionRow, event: AgentChecklistEvent) => {
+    if (session.conversationId === null || event.parentToolUseId !== undefined) return;
+    const prev = latest(session.id);
+    const checklist = applyChecklistUpdate(prev, event.update);
+    if (sameChecklist(prev, checklist)) return;
+    insert(p, session, {
+      kind: CHECKLIST_MESSAGE_KIND,
+      text: "",
+      meta: { checklist },
+      dedupeKey: `checklist:${session.id}:${event.uuid}`,
+    });
+  };
+
+  return { apply };
 }
 
-/**
- * Postcondition: true for every tool name that any registered vendor classifies as `todo`. The ledger stores no tool
- * message, session step, or live step for these calls; the checklist message replaces them.
- */
-export function isChecklistToolCall(_name: string): boolean {
-  throw new Error("Not implemented");
+export function isChecklistToolCall(name: string): boolean {
+  return toolAction(name) === "todo";
 }
