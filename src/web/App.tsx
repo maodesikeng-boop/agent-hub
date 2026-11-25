@@ -433,12 +433,11 @@ function DesktopWorkbench({
         visible={c.railHasContent}
         open={piecesOpen}
         attention={c.railAttention}
-        count={c.railCount}
         look={c.look}
         onToggle={togglePieces}
       />
     ),
-    [c.railHasContent, piecesOpen, c.railAttention, c.railCount, c.look, togglePieces],
+    [c.railHasContent, piecesOpen, c.railAttention, c.look, togglePieces],
   );
 
   const listNode = (layout: "column" | "strip") => (
@@ -643,12 +642,11 @@ function MobileWorkbench({
         visible={c.railHasContent}
         open={drawerOpen}
         attention={c.railAttention}
-        count={c.railCount}
         look={c.look}
         onToggle={toggleMobileDrawer}
       />
     ),
-    [c.railHasContent, drawerOpen, c.railAttention, c.railCount, c.look, toggleMobileDrawer],
+    [c.railHasContent, drawerOpen, c.railAttention, c.look, toggleMobileDrawer],
   );
 
   const selectMobileTab = (tab: MobileTab) => {

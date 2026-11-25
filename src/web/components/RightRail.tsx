@@ -596,14 +596,12 @@ export function PiecesSlot({
   visible,
   open,
   attention,
-  count,
   look,
   onToggle,
 }: {
   visible: boolean;
   open: boolean;
   attention: boolean;
-  count: number;
   look: SlimeLook;
   onToggle: () => void;
 }) {
@@ -611,25 +609,15 @@ export function PiecesSlot({
   const label = open ? "Hide Pieces" : attention ? "Show Pieces (needs you)" : "Show Pieces";
   return (
     <Button
-      variant="slot"
-      size="default"
+      variant="ghost"
+      size="icon"
       aria-label={label}
       aria-expanded={open}
+      title={label}
       onClick={onToggle}
-      className="relative shrink-0 gap-1.5 px-2.5"
+      className="shrink-0"
     >
-      <Avatar look={look} size={20} neutral />
-      <span className="text-minor font-medium text-foreground">Pieces</span>
-      {count > 0 && (
-        <span
-          key={count}
-          aria-hidden="true"
-          className="badge-pop grid h-4.5 min-w-4.5 place-items-center rounded-xs bg-rail-ink px-1 text-xs leading-none font-semibold text-primary-foreground tabular-nums"
-        >
-          {count > 99 ? "99+" : count}
-        </span>
-      )}
-      {attention && !open && <span aria-hidden="true" className="absolute -top-1 -right-1 size-2 rounded-full bg-primary shadow-[0_0_0_2px_var(--background)]" />}
+      <Avatar look={look} size={28} neutral />
     </Button>
   );
 }
