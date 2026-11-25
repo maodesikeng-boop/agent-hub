@@ -21,12 +21,12 @@ import { errorText, nameError, errorLine, errorTitle, type ErrorLike } from "../
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog, useModelCatalogs } from "../models.tsx";
 import { useServerInfo } from "../server-info.tsx";
+import { useMobileShell } from "../shell-layout.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogForm } from "../ui/dialog.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
-import { useIsMobile } from "../useMediaQuery.ts";
 import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { ModeRows } from "./ModeRows.tsx";
@@ -248,7 +248,7 @@ export function NewPmDialog({
   onCreated: (device: DeviceKey, conversationId: ConversationId) => void;
   onManageProviders?: (device: DeviceKey) => void;
 }) {
-  const mobile = useIsMobile();
+  const mobile = useMobileShell();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent

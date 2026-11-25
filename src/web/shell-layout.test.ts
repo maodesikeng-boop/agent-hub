@@ -1,9 +1,19 @@
 import { act, renderHook } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SHELL_CHAT_MIN_REM } from "./limits.ts";
-import { chatMinRemOf, readRootRemPx, shellLimitsPx, shellTierOf, useShellFit } from "./shell-layout.ts";
+import { SHELL_CHAT_MIN_REM, SHELL_CHAT_USABLE_REM } from "./limits.ts";
+import {
+  chatMinRemOf,
+  narrowShellQueryOf,
+  readRootRemPx,
+  shellLimitsPx,
+  shellTierOf,
+  sideBySideMinPx,
+  useMobileShell,
+  useShellFit,
+} from "./shell-layout.ts";
 import { applyUiScale, DEFAULT_UI_SCALE, saveUiScale, UI_SCALE_ROOT_PX, UI_SCALES } from "./ui-scale.ts";
+import { MOBILE_SHELL_QUERY } from "./useMediaQuery.ts";
 
 describe("shellLimitsPx", () => {
   it("multiplies the rem limits by the root font size at the Compact and Default scales", () => {
@@ -100,6 +110,32 @@ describe("chatMinRemOf", () => {
   });
 });
 
+describe("sideBySideMinPx", () => {
+  it("fits the rail, the frame inset, the PM column at its minimum, and a 20rem conversation at each scale", () => {
+    expect(sideBySideMinPx(16)).toBe(618);
+    expect(sideBySideMinPx(17.5)).toBe(675.375);
+    expect(sideBySideMinPx(19)).toBe(732.75);
+    expect(sideBySideMinPx(20.5)).toBe(790.125);
+  });
+
+  it("leaves the conversation at least its usable width wherever the columns sit side by side", () => {
+    for (const scale of UI_SCALES) {
+      const remPx = UI_SCALE_ROOT_PX[scale];
+      const sideBySide = Math.ceil(sideBySideMinPx(remPx));
+      for (const width of [sideBySide, ...WIDTHS_PX.filter((w) => w >= sideBySide)]) {
+        expect(chatMinRemOf({ shellWidthPx: width, remPx })).toBeGreaterThanOrEqual(SHELL_CHAT_USABLE_REM);
+      }
+    }
+  });
+
+  it("matches whole-px viewports under the minimum", () => {
+    expect(narrowShellQueryOf(16)).toBe("(max-width: 617px)");
+    expect(narrowShellQueryOf(17.5)).toBe("(max-width: 675px)");
+    expect(narrowShellQueryOf(19)).toBe("(max-width: 732px)");
+    expect(narrowShellQueryOf(20.5)).toBe("(max-width: 790px)");
+  });
+});
+
 describe("desktop window minimum", () => {
   const minWidthOf = (path: string, pattern: RegExp) => Number(pattern.exec(readFileSync(path, "utf8"))?.[1]);
   const macos = minWidthOf("apps/macos/MainWindowController.swift", /window\.minSize = NSSize\(width: (\d+)/);
@@ -125,6 +161,71 @@ describe("desktop window minimum", () => {
     }
     expect(chatMinRemOf({ shellWidthPx: macos, remPx: UI_SCALE_ROOT_PX.sm })).toBe(SHELL_CHAT_MIN_REM);
     expect(chatMinRemOf({ shellWidthPx: macos, remPx: UI_SCALE_ROOT_PX.md })).toBe(SHELL_CHAT_MIN_REM);
+  });
+
+  it("keeps the columns side by side at every scale, so the desktop apps never show the single-column shell", () => {
+    for (const scale of UI_SCALES) expect(macos).toBeGreaterThanOrEqual(sideBySideMinPx(UI_SCALE_ROOT_PX[scale]));
+  });
+});
+
+describe("useMobileShell", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.uiScale;
+    localStorage.removeItem("agent-hub.uiScale");
+    vi.unstubAllGlobals();
+  });
+
+  const stubViewport = (initial: { width: number; height: number; coarse: boolean }) => {
+    const view = { ...initial };
+    const listeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() {
+        if (query === MOBILE_SHELL_QUERY) return view.coarse && Math.min(view.width, view.height) < 600;
+        const max = /^\(max-width: (\d+)px\)$/.exec(query);
+        if (max === null) throw new Error(`unexpected query ${query}`);
+        return view.width <= Number(max[1]);
+      },
+      addEventListener: (_: string, cb: () => void) => listeners.add(cb),
+      removeEventListener: (_: string, cb: () => void) => listeners.delete(cb),
+    }));
+    const resize = (width: number) => {
+      view.width = width;
+      act(() => listeners.forEach((cb) => cb()));
+    };
+    return { resize };
+  };
+
+  it("switches a mouse window to one column below the side-by-side minimum and back when it widens", () => {
+    applyUiScale("md");
+    const { resize } = stubViewport({ width: 1280, height: 800, coarse: false });
+    const { result } = renderHook(() => useMobileShell());
+    expect(result.current).toBe(false);
+    resize(676);
+    expect(result.current).toBe(false);
+    resize(675);
+    expect(result.current).toBe(true);
+    resize(375);
+    expect(result.current).toBe(true);
+    resize(1280);
+    expect(result.current).toBe(false);
+  });
+
+  it("keeps the touch rule: a phone uses one column, a wide tablet keeps the columns", () => {
+    stubViewport({ width: 390, height: 844, coarse: true });
+    expect(renderHook(() => useMobileShell()).result.current).toBe(true);
+    stubViewport({ width: 1024, height: 768, coarse: true });
+    expect(renderHook(() => useMobileShell()).result.current).toBe(false);
+  });
+
+  it("re-evaluates when the interface scale changes", () => {
+    applyUiScale("md");
+    stubViewport({ width: 760, height: 800, coarse: false });
+    const { result } = renderHook(() => useMobileShell());
+    expect(result.current).toBe(false);
+    act(() => saveUiScale("xl"));
+    expect(result.current).toBe(true);
+    act(() => saveUiScale("sm"));
+    expect(result.current).toBe(false);
   });
 });
 

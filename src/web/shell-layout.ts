@@ -1,7 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
-import { SHELL_CHAT_MIN_REM, SHELL_FRAME_PX, SHELL_GAP_PX, SHELL_LIST_REM, SHELL_PANEL_REM, SHELL_RAIL_REM } from "./limits.ts";
+import {
+  SHELL_CHAT_MIN_REM,
+  SHELL_CHAT_USABLE_REM,
+  SHELL_FRAME_PX,
+  SHELL_GAP_PX,
+  SHELL_LIST_REM,
+  SHELL_PANEL_REM,
+  SHELL_RAIL_REM,
+} from "./limits.ts";
 import { DEFAULT_UI_SCALE, subscribeUiScale, UI_SCALE_ROOT_PX, type UiScale } from "./ui-scale.ts";
+import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 
 // Invariant: widths are CSS px at the given root font size, except the conversation minimum, which its pane takes in rem; the
 // SHELL_* constants stay the single source of limits.
@@ -104,7 +113,8 @@ export function shellTierOf({ shellWidthPx, remPx, panelOpen }: ShellFitInput): 
  * Precondition: shellWidthPx >= 0 and remPx > 0.
  * Postcondition: returns SHELL_CHAT_MIN_REM when the conversation at that minimum fits beside the rail, the frame's right inset,
  * and the PM column at its minimum; otherwise the whole px left there, in rem and never below 0. With this as the
- * conversation's minimum, the PM column keeps its own minimum at every width and scale and the conversation narrows instead.
+ * conversation's minimum, the PM column keeps its own minimum at every width and scale and the conversation narrows instead,
+ * down to SHELL_CHAT_USABLE_REM at sideBySideMinPx(), below which the workbench uses the single-column shell.
  */
 export function chatMinRemOf({ shellWidthPx, remPx }: Pick<ShellFitInput, "shellWidthPx" | "remPx">): number {
   const rem = safeRemPx(remPx);
@@ -116,13 +126,57 @@ export function chatMinRemOf({ shellWidthPx, remPx }: Pick<ShellFitInput, "shell
 }
 
 /**
+ * Precondition: remPx > 0.
+ * Postcondition: returns the narrowest window, in px, that fits the rail, the frame's right inset, the PM column at its minimum,
+ * and the conversation at SHELL_CHAT_USABLE_REM side by side.
+ */
+export function sideBySideMinPx(remPx: number): number {
+  const limits = shellLimitsPx(remPx);
+  return limits.rail + limits.frame + limits.list.min + SHELL_CHAT_USABLE_REM * safeRemPx(remPx);
+}
+
+/** Postcondition: returns a media query that matches viewports narrower than sideBySideMinPx(remPx), in whole px. */
+export function narrowShellQueryOf(remPx: number): string {
+  return `(max-width: ${Math.ceil(sideBySideMinPx(remPx)) - 1}px)`;
+}
+
+/** Postcondition: returns the root font size in px, updated when the interface scale changes. */
+function useRootRemPx(): number {
+  const [remPx, setRemPx] = useState<number>(() => readRootRemPx());
+  useEffect(() => {
+    const syncScale = () => setRemPx(readRootRemPx());
+    syncScale();
+    const unsub = subscribeUiScale(syncScale);
+    const mo = new MutationObserver(syncScale);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-ui-scale", "style"] });
+    return () => {
+      unsub();
+      mo.disconnect();
+    };
+  }, []);
+  return remPx;
+}
+
+/**
+ * Precondition: called in a component.
+ * Postcondition: returns true while the workbench uses the single-column shell: on a touch screen whose short edge is under
+ * 600px, or in any window narrower than sideBySideMinPx() at the current interface scale.
+ */
+export function useMobileShell(): boolean {
+  const remPx = useRootRemPx();
+  const touch = useMediaQuery(MOBILE_SHELL_QUERY);
+  const narrow = useMediaQuery(narrowShellQueryOf(remPx));
+  return touch || narrow;
+}
+
+/**
  * Precondition: called in a component; shell is the element that spans the whole desktop shell, or null before mount.
  * Postcondition: returns shellTierOf and chatMinRemOf for the element's current width and the root font size, updated when the
  * element resizes or the interface scale changes, as the same object while both values hold; while shell is null, the
  * wide tier and SHELL_CHAT_MIN_REM.
  */
 export function useShellFit(shell: HTMLElement | null, panelOpen: boolean): ShellFit {
-  const [remPx, setRemPx] = useState<number>(() => readRootRemPx());
+  const remPx = useRootRemPx();
   const [widthPx, setWidthPx] = useState<number | null>(() => measureShellWidth(shell));
 
   useLayoutEffect(() => {
@@ -138,18 +192,6 @@ export function useShellFit(shell: HTMLElement | null, panelOpen: boolean): Shel
     ro.observe(shell);
     return () => ro.disconnect();
   }, [shell]);
-
-  useEffect(() => {
-    const syncScale = () => setRemPx(readRootRemPx());
-    syncScale();
-    const unsub = subscribeUiScale(syncScale);
-    const mo = new MutationObserver(syncScale);
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-ui-scale", "style"] });
-    return () => {
-      unsub();
-      mo.disconnect();
-    };
-  }, []);
 
   const tier = widthPx === null ? "wide" : shellTierOf({ shellWidthPx: widthPx, remPx, panelOpen });
   const chatMinRem = widthPx === null ? SHELL_CHAT_MIN_REM : chatMinRemOf({ shellWidthPx: widthPx, remPx });

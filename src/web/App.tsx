@@ -34,7 +34,7 @@ import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
 import { pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
-import { useShellFit } from "./shell-layout.ts";
+import { useMobileShell, useShellFit } from "./shell-layout.ts";
 import { railComputerKeyOrFallback } from "./shell-actions.ts";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
 import { workPanelOf } from "./side-panel.ts";
@@ -43,7 +43,6 @@ import { ArrowLeft, Loader2 } from "./ui/icons.ts";
 import { Pane, PaneGroup, PaneHandle } from "./ui/resizable.tsx";
 import { useUpdateReminder } from "./update-model.ts";
 import { useAutoHideScrollbars } from "./useAutoHideScrollbars.ts";
-import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 
 const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
 const SIGN_IN_ON_PHONE = "On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer";
@@ -598,7 +597,7 @@ function FirstRunProviderCheck({ client, onDone }: { client: HubClient; onDone: 
 
 export function App() {
   useAutoHideScrollbars();
-  const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
+  const mobile = useMobileShell();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const model = useShellModel({ autoSelect: !mobile });
   const { qc, fleet, current, hub, state, content } = model;

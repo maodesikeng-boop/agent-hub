@@ -199,14 +199,27 @@ How it is wired:
 
 Recommendation: `shellTierOf()` in `src/web/shell-layout.ts`, fed by a `ResizeObserver` on the shell. It replaces `NARROW_QUERY` and `COMPACT_QUERY` in the shell. The settings dialog keeps its own `720px` breakpoint.
 
-Columns give way in this order. The conversation narrows to its `30rem` minimum first, then the PM column and then the side panel shrink to theirs. The PM column never collapses below its minimum or to avatars. When rail, PM column, conversation, and panel still do not fit, the tier is `stack`: the side panel covers the conversation until it closes. Its back button returns to Pieces and its close button returns to the conversation, which stays mounted inside a hidden `<Activity>` so the draft and scroll position survive. With the panel closed, below the widths in the table's last column, `chatMinRemOf()` lowers the conversation's minimum to the whole px left beside the PM column at its minimum, so the conversation keeps narrowing and the PM column holds at every scale. At `Large` and `XL` this already happens at the `860px` desktop window minimum on macOS and Windows.
+Columns give way in this order. The conversation narrows to its `30rem` minimum first, then the PM column and then the side panel shrink to theirs. The PM column never collapses below its minimum or to avatars. When rail, PM column, conversation, and panel still do not fit, the tier is `stack`: the side panel covers the conversation until it closes. Its back button returns to Pieces and its close button returns to the conversation, which stays mounted inside a hidden `<Activity>` so the draft and scroll position survive. With the panel closed, below the widths in the table's third column, `chatMinRemOf()` lowers the conversation's minimum to the whole px left beside the PM column at its minimum, so the conversation keeps narrowing and the PM column holds at every scale. At `Large` and `XL` this already happens at the `860px` desktop window minimum on macOS and Windows.
 
-| Interface scale | Four columns side by side | Panel covers conversation | Conversation at its minimum with the panel closed |
-| --- | --- | --- | --- |
-| `Compact` (`16px` root) | 1142px and wider | below 1142px | 778px and wider |
-| `Default` (`17.5px` root), the default | 1249px and wider | below 1249px | 851px and wider |
-| `Large` (`19px` root) | 1355px and wider | below 1355px | 923px and wider |
-| `XL` (`20.5px` root) | 1461px and wider | below 1461px | 996px and wider |
+The conversation narrows no further than `20rem` (`SHELL_CHAT_USABLE_REM`). At the widths in the table's last column, where the rail, the PM column at its minimum, and a `20rem` conversation no longer fit (`sideBySideMinPx()`), `useMobileShell()` switches the workbench to the phone's single-column shell with a mouse as with touch: the project list and the conversation take turns filling the window instead of the conversation shrinking to nothing. Widening the window past that width brings the columns back on the same route, with drafts intact. The `860px` desktop window minimum is wider than every scale's threshold, so only browser windows reach the single column.
+
+| Interface scale | Four columns side by side | Panel covers conversation | Conversation at its minimum with the panel closed | One column |
+| --- | --- | --- | --- | --- |
+| `Compact` (`16px` root) | 1142px and wider | below 1142px | 778px and wider | below 618px |
+| `Default` (`17.5px` root), the default | 1249px and wider | below 1249px | 851px and wider | below 676px |
+| `Large` (`19px` root) | 1355px and wider | below 1355px | 923px and wider | below 733px |
+| `XL` (`20.5px` root) | 1461px and wider | below 1461px | 996px and wider | below 791px |
+
+The `20rem` floor is measured. In Chromium, with the ui-polish `standard` seed and the panel closed, the conversation keeps every control on screen down to `10rem` at every scale, but its content degrades below `20rem`. Characters per composer line are the same at every scale, because the composer and its text are both in `rem`.
+
+| Conversation width | Composer characters per line | What still fits |
+| --- | --- | --- |
+| `30rem` | 68 | Everything |
+| `20rem` | 42 | Worker report titles, ask-card options with their `Recommended` chip, and the `Reply or add a note…` placeholder |
+| `16rem` | 32 | Worker report titles truncate |
+| `14rem` | 26 to 27 | The ask card's reply placeholder is cut off |
+
+A `20rem` conversation is about as wide as the conversation on a phone: a `375px` phone at `Default` holds 41 characters per composer line.
 
 #### Side panel and routes
 

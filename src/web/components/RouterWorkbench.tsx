@@ -44,7 +44,7 @@ import type {
   FleetRouterView,
   RouterTargetCandidate,
 } from "../selectors.ts";
-import { MOBILE_SHELL_QUERY, useMediaQuery } from "../useMediaQuery.ts";
+import { useMobileShell } from "../shell-layout.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { uploadFiles, type DraftSlot, type StagedFiles } from "../upload.ts";
 import { Avatar } from "./Avatar.tsx";
@@ -534,7 +534,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
   onManageProviders?: () => void;
 }) {
   const qc = useHubQueryClient();
-  const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
+  const mobile = useMobileShell();
   const resolvedSelfId = selfId ?? undefined;
   const localSettings = useMemo(() => {
     const localDevice = devices.find((d) => d.key === LOCAL_DEVICE) ?? devices[0];
