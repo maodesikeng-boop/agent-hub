@@ -46,7 +46,7 @@ describe("QuotaPopover", () => {
     expect(within(alpha).getByText("84%")).toBeVisible();
     expect(within(alpha).getAllByText(/^Resets /)).toHaveLength(2);
     const bar5h = within(alpha).getByRole("progressbar", { name: "5h usage" });
-    expect(bar5h.firstElementChild).toHaveClass("bg-rail-ink");
+    expect(bar5h.firstElementChild).toHaveClass("bg-brand-ink");
     const bar7d = within(alpha).getByRole("progressbar", { name: "7d usage" });
     expect(bar7d.firstElementChild).toHaveClass("bg-caution");
 

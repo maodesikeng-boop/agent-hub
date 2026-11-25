@@ -984,7 +984,7 @@ export const RouterStream = memo(function RouterStream({
       {away && (
         <div className="messages pointer-events-none absolute inset-x-0 bottom-9 flex justify-center" data-back-to-bottom>
           <Button
-            variant="secondary"
+            variant="outline"
             size="icon-sm"
             className="pointer-events-auto"
             aria-label="Scroll to bottom"

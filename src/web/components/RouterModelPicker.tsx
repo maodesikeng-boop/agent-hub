@@ -449,7 +449,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
       {saveError !== null && <RowError error={saveError} />}
 
       {showAddProvider && (
-        <div className="border-t-2 border-border pt-2">
+        <div className="border-t border-border pt-2">
           <button
             type="button"
             onClick={() => {
@@ -458,7 +458,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
             }}
             className={cn(
               ROW_INTERACTIVE_CLASS,
-              "justify-between text-minor font-medium text-rail-ink hover:text-foreground",
+              "justify-between text-minor font-medium text-brand-ink hover:text-foreground",
             )}
           >
             <span>{ADD_PROVIDER_LABEL}</span>

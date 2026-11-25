@@ -3,8 +3,6 @@ import type { QuotaVendor } from "./selectors.ts";
 
 // Invariant: rail data is derived only from the device list, the asking set, and quota usage; results are cached per input.
 
-export const RAIL_QUOTA_CELLS = 5;
-
 const EMPTY_RAIL_COMPUTERS: readonly RailComputer[] = [];
 const railComputersCache = new WeakMap<readonly RailComputerInput[], WeakMap<ReadonlySet<string>, readonly RailComputer[]>>();
 const quotaMeterCache = new WeakMap<readonly QuotaVendor[], QuotaMeter | null>();
@@ -25,8 +23,6 @@ export interface QuotaMeter {
   vendorName: string;
   windowShort: string;
   percent: number;
-  /** Filled cells out of RAIL_QUOTA_CELLS. */
-  cells: number;
   warning: boolean;
   full: boolean;
 }
@@ -64,9 +60,9 @@ export function railComputersOf(computers: readonly RailComputerInput[], asking:
 }
 
 /**
- * Postcondition: picks the window with the highest percent across vendors, keeping vendor order on ties, fills
- * ceil(percent / 20) cells, warns at 80% or when the window warns, marks full at 100%, and returns null when no window
- * reports usage; returns the same object for the same quota array.
+ * Postcondition: picks the window with the highest percent across vendors, keeping vendor order on ties, warns at 80% or
+ * when the window warns, marks full at 100%, and returns null when no window reports usage; returns the same object for
+ * the same quota array.
  */
 export function quotaMeterOf(quota: readonly QuotaVendor[]): QuotaMeter | null {
   if (quotaMeterCache.has(quota)) return quotaMeterCache.get(quota)!;
@@ -81,7 +77,6 @@ export function quotaMeterOf(quota: readonly QuotaVendor[]): QuotaMeter | null {
           vendorName: vendor.name,
           windowShort: win.short,
           percent,
-          cells: Math.min(RAIL_QUOTA_CELLS, Math.ceil(percent / 20)),
           warning: win.warning || percent >= 80,
           full,
         };

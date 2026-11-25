@@ -351,12 +351,13 @@ describe("跨设备的等你确定", () => {
     expect(window.location.hash).toBe(`#/d/${TOKYO}/c/1`);
   });
 
-  it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行自身绿点照常显示", async () => {
+  it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行照常给读屏标出 Needs You", async () => {
     const fleet = new Fleet(onePm("小林", [ask(5, "本机要确定")]), onePm("阿青"), [mac]);
     await boot(fleet);
-    await waitFor(() => expect(within(rail()).getByTestId("rail-device-badge-local")).toHaveTextContent("1"));
+    await waitFor(() => expect(railDevice("Mac")).toHaveAccessibleName(/1 waiting/));
+    expect(within(rail()).queryByTestId("rail-device-badge-local")).toBeNull();
     await userEvent.click(railDevice("Mac"));
-    await within(nav()).findByLabelText("Needs You");
+    await within(nav()).findByText("Needs You");
     expect(within(nav()).queryByRole("region", { name: "Needs You" })).toBeNull();
   });
 
@@ -424,13 +425,13 @@ describe("设置 → 设备", () => {
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
     const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
-    // 照 Grok Bot：框外小灰字组标题 + 白底 1px 浅边框圆角框，不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
+    // 设置是一页：小灰字组标题 + 细线分开的行，组不画白框、不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
     const mine = within(devices).getByRole("region", { name: "This computer" });
     const others = within(devices).getByRole("region", { name: "Your computers" });
     for (const group of [mine, others]) {
       expect(within(group).getByRole("heading")).toHaveClass("text-minor", "text-muted-foreground");
-      expect(group.lastElementChild).toHaveClass("border-2", "border-border", "bg-background");
-      expect(group.lastElementChild?.className).not.toMatch(/rounded-|bg-sidebar/);
+      expect(group.lastElementChild).toHaveClass("divide-y", "divide-border");
+      expect(group.lastElementChild?.className).not.toMatch(/(^|\s)(border|rounded-\S+|bg-\S+)(\s|$)/);
     }
     expect(within(mine).getByTestId("device-row")).toHaveTextContent("Mac");
     expect(within(others).getByTestId("device-row")).toHaveTextContent("东京");

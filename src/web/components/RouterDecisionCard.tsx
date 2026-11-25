@@ -8,7 +8,7 @@ import type { FleetDecisionEntry } from "../selectors.ts";
 import { DeviceScopeOf } from "../device-scope.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { CardBody, CardNoteForm } from "./Deliverables.tsx";
-import { OptionRow } from "./OptionRow.tsx";
+import { OPTION_LIST, OptionRow } from "./OptionRow.tsx";
 import { RowError } from "./SettingsList.tsx";
 
 export interface RouterDecisionCardProps {
@@ -44,7 +44,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
   return (
     <article
       aria-label={decision.question}
-      className={cn("border-2 border-border-strong bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
+      className={cn("overflow-hidden rounded-sm border border-border bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
     >
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
@@ -58,7 +58,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         {showProject && <span className="truncate text-muted-foreground">{decision.projectName}</span>}
         {showDevice && <span className="truncate text-xs text-muted-foreground">{entry.deviceName}</span>}
         {!online && (
-          <span className="border border-border bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Offline</span>
+          <span className="rounded-xs bg-panel px-2 py-0.5 text-xs font-medium text-muted-foreground">Offline</span>
         )}
         <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(decision.createdAt)}</span>
       </div>
@@ -83,7 +83,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
       </DeviceScopeOf>
 
       {decision.options.length > 0 && (
-        <div className="mt-3 space-y-2">
+        <div className={OPTION_LIST} role="group" aria-label="Options">
           {decision.options.map((rawOption, idx) => {
             const label = cleanOptionLabel(rawOption);
             const isRecommended = idx === recommendedIdx;
@@ -102,21 +102,23 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         </div>
       )}
 
+      {error && (
+        <div className="my-2">
+          <RowError error={error} />
+        </div>
+      )}
+
       <CardNoteForm
         key={draftKey}
+        variant="row"
         value={note}
         onFocus={() => onNoteFocus(decision.key)}
         onChange={(next) => onNoteChange(decision.key, draftKey, next)}
         disabled={disabled}
         pending={busy}
         onSubmitNote={(raw) => onSubmit(entry, null, raw)}
+        className={error || decision.options.length > 0 ? undefined : "mt-3"}
       />
-
-      {error && (
-        <div className="mt-2">
-          <RowError error={error} />
-        </div>
-      )}
     </article>
   );
 });

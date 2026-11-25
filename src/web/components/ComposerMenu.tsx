@@ -34,7 +34,7 @@ export function ComposerMenu({
   }, [menu.activeIndex, menu.items]);
 
   return (
-    <div className="mb-2 border-2 border-border-strong bg-background p-1.5">
+    <div className="mb-2 rounded-sm border border-border bg-background p-1.5 shadow-[var(--shadow-overlay)]">
       {menu.items.length === 0 ? (
         <p className="flex h-9 items-center px-3 text-minor text-muted-foreground">{text.empty}</p>
       ) : (
@@ -50,7 +50,7 @@ export function ComposerMenu({
                 aria-disabled={item.disabled || undefined}
                 className={cn(
                   "flex h-9 cursor-pointer items-center gap-3 px-3 pointer-coarse:min-h-11",
-                  isAction && index > 0 && "mt-1 border-t-2 border-border",
+                  isAction && index > 0 && "mt-1 border-t border-border",
                   index === menu.activeIndex && "bg-hover",
                   item.disabled && "cursor-default",
                 )}
@@ -66,7 +66,7 @@ export function ComposerMenu({
                   className={cn(
                     "min-w-0 truncate font-medium",
                     isAction
-                      ? "flex-1 text-minor text-rail-ink"
+                      ? "flex-1 text-minor text-brand-ink"
                       : menu.kind === "file"
                         ? "max-w-[60%] shrink-0"
                         : "max-w-[45%] shrink-0",
@@ -76,7 +76,7 @@ export function ComposerMenu({
                   {item.label}
                 </span>
                 {item.detail !== "" && <span title={item.detail} className="min-w-0 flex-1 truncate text-minor text-muted-foreground">{item.detail}</span>}
-                {isAction && <ChevronRight className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />}
+                {isAction && <ChevronRight className="size-pixel-sm shrink-0 text-brand-ink" aria-hidden="true" />}
               </li>
             );
           })}

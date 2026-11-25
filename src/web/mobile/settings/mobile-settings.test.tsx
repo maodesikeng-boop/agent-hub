@@ -129,7 +129,7 @@ describe("App 路由接入（手机外壳）", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.getByRole("button", { name: /Interface scale/ })).toHaveTextContent("Large");
+    expect(screen.getByRole("button", { name: /Interface scale/ })).toHaveTextContent("Default");
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent("Off");
     expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Providers/ })).toBeInTheDocument();
@@ -567,7 +567,7 @@ describe("子页", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     await waitFor(() => expect(location.hash).toBe("#/settings"));
     expect(screen.getByRole("button", { name: /^Providers/ })).toHaveTextContent("Attention");
-    expect(screen.getByTestId("providers-attention")).toHaveClass("bg-caution");
+    expect(screen.getByTestId("providers-attention")).toHaveClass("bg-danger");
 
     // 离开子页后进行中任务的轮询已自动停止
     const getCountOnHome = api.callsTo("GET", /^\/api\/providers$/).length;

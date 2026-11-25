@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JELLY_COLOR_IDS, jellyColorOf } from "../../shared/slimes.ts";
-import { accentStyleOf, CHART_CATEGORY_COLORS, contrastRatio, fruitTrackVars } from "./palette.ts";
+import { accentStyleOf, avatarTileFillOf, CHART_CATEGORY_COLORS, contrastRatio, fruitTrackVars, ROUTER_SEND_COLORS, sendColorsOf } from "./palette.ts";
 
 const WHITE = "#ffffff";
 
@@ -25,13 +25,44 @@ describe("颜色表", () => {
     expect(a["--primary"]).toBe(jellyColorOf("grapefruit").accent);
     expect(a["--primary-foreground"]).toBe(jellyColorOf("grapefruit").accentForeground);
     expect(b["--primary"]).toBe(jellyColorOf("sky").accent);
-    for (const fn of [accentStyleOf, fruitTrackVars]) expect(fn("teal")).toBe(fn("teal"));
+    expect([a["--send"], a["--send-hover"], a["--send-press"], a["--send-ink"]]).toEqual(Object.values(sendColorsOf("grapefruit")));
+    for (const fn of [accentStyleOf, fruitTrackVars, sendColorsOf]) expect(fn("teal")).toBe(fn("teal"));
+  });
+
+  it.each(PALETTE.map((c) => [c.name, c] as const))("%s: the pastel send button steps darker on hover and press, and its arrow keeps 7:1 on the pressed fill", (_name, c) => {
+    const send = sendColorsOf(c.id);
+    const toBlack = (hex: string) => contrastRatio(hex, "#000000");
+    expect(toBlack(send.rest)).toBeGreaterThan(toBlack(send.hover));
+    expect(toBlack(send.hover)).toBeGreaterThan(toBlack(send.press));
+    expect(contrastRatio(send.ink, send.press)).toBeGreaterThanOrEqual(7);
+    expect(contrastRatio(send.ink, send.rest)).toBeGreaterThanOrEqual(8);
+  });
+
+  it("matches the reviewed pastels: grapefruit and sky, and lemon lifted out of mustard", () => {
+    expect(sendColorsOf("grapefruit")).toEqual({ rest: "#fdb9a9", hover: "#f6ac9b", press: "#eea190", ink: "#4f1409" });
+    expect(sendColorsOf("sky").rest).toBe("#95d6fa");
+    expect(sendColorsOf("lemon").rest).toBe("#f2dd83");
   });
 
   it("fruitTrackVars：果冻管道的三层和珠子的暗面取这个颜色的描边、身体、浅色、暗面", () => {
     const vars = fruitTrackVars("sakura");
     const { roles } = jellyColorOf("sakura");
     expect([vars["--tube-line"], vars["--tube-core"], vars["--tube-glint"], vars["--tube-shade"]]).toEqual([roles.outline, roles.body, roles.light, roles.shade]);
+  });
+
+  it("avatarTileFillOf: every tile stands at least 4:1 above the year rings and stays darker than the cream selected band; the same color returns the same value", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    const rings = /\n {2}--rings-top: (#[0-9a-f]{6});/.exec(css)![1]!;
+    const band = /\n {2}--row-selected: (#[0-9a-f]{6});/.exec(css)![1]!;
+    const darker = (a: string, b: string) => contrastRatio(a, "#000000") < contrastRatio(b, "#000000");
+    for (const id of JELLY_COLOR_IDS) {
+      const fill = avatarTileFillOf(id);
+      expect(fill, id).toMatch(/^#[0-9a-f]{6}$/);
+      expect(contrastRatio(fill, rings), id).toBeGreaterThanOrEqual(4);
+      expect(darker(fill, band), id).toBe(true);
+      expect(contrastRatio(fill, band), id).toBeGreaterThanOrEqual(1.5);
+    }
+    expect(avatarTileFillOf("lemon")).toBe(avatarTileFillOf("lemon"));
   });
 
   it("图表分类色：颜色表 accent 里的 6 种，互不重复", () => {
@@ -64,13 +95,23 @@ function mix(hex: string, percent: number, base: string): string {
   return `#${out.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
-describe("分区色板与对比度（styles.css，docs/ui-standard.md 第 4 条）", () => {
+describe("zone palette and contrast (styles.css, docs/ui-standard.md sections 2.4 and 4)", () => {
   const css = readFileSync("src/web/styles.css", "utf8");
   const token = (name: string) => new RegExp(`\\n  --${name}: (#[0-9a-f]{6});`).exec(css)![1]!;
   const mixOf = (name: string) => Number(new RegExp(`--mix-${name}: ([0-9.]+)%;`).exec(css)?.[1]);
   const foreground = token("foreground");
-  const surfaces = (): Array<[string, string]> =>
-    (["background", "panel", "hover", "open", "list", "list-hover", "list-field", "send-disabled"] as const).map((name) => [name, token(name)]);
+  const sheets = (): Array<[string, string]> => (["background", "panel", "hover", "open", "send-disabled"] as const).map((name) => [name, token(name)]);
+  const grain = readFileSync("src/web/assets/wood-grain.svg", "utf8");
+  const sheen = /stroke="(#[0-9a-f]{6})"[^>]*stroke-opacity="([0-9.]+)"/.exec(grain)!;
+  // The lightest wood a text sits on: the frame under the grain's light sheen, the rings under a row's hover fill.
+  const frameLightest = mix(sheen[1]!, Number(sheen[2]) * 100, token("wood-top"));
+  const railHoverLightest = mix("#fff4e4", 10, frameLightest);
+  const ringsLightest = mix("#fff0dc", 7, token("rings-top"));
+  const translucent = (name: string) => {
+    const [, r, g, b, alpha] = new RegExp(`\\n  --${name}: rgb\\((\\d+) (\\d+) (\\d+) / ([0-9.]+)\\);`).exec(css)!;
+    const hex = `#${[r, g, b].map((v) => Number(v).toString(16).padStart(2, "0")).join("")}`;
+    return mix(hex, Number(alpha) * 100, token("rings-top"));
+  };
 
   it("已删除水果混底和果冻选中底，只保留分区色板", () => {
     expect(css).not.toMatch(/--mix-(chat|sidebar|line)|--color-(surface-chat|surface-sidebar|line|jelly)/);
@@ -86,21 +127,42 @@ describe("分区色板与对比度（styles.css，docs/ui-standard.md 第 4 条�
     expect(contrastRatio(foreground, mix(c.accent, mixOf("bubble-me"), WHITE))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it.each(surfaces())("次要文字压在 %s 上 ≥ 4.5:1", (_name, surface) => {
+  it.each(sheets())("secondary text on %s stays at 4.5:1 or more", (_name, surface) => {
     expect(contrastRatio(token("muted-foreground"), surface)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it.each(surfaces())("琥珀色的状态字（Waiting on PM）压在 %s 上 ≥ 4.5:1", (_name, surface) => {
+  it.each(sheets())("amber status words on %s stay at 4.5:1 or more", (_name, surface) => {
     expect(contrastRatio(token("warn-foreground"), surface)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("蜜黄 rail 与奶油 list 区域文字对比度 ≥ 4.5:1", () => {
-    expect(contrastRatio(token("rail-ink"), token("rail"))).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(token("rail-ink"), token("rail-hover"))).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(token("rail-ink-soft"), token("rail"))).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(token("list-ink"), token("list"))).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(token("list-ink-soft"), token("list"))).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(token("list-ink-soft"), token("list-hover"))).toBeGreaterThanOrEqual(4.5);
+  it("keeps the wood text at or above the reviewed contrast at the lightest point of each texture", () => {
+    expect(contrastRatio(token("rail-ink"), frameLightest)).toBeGreaterThanOrEqual(8.72);
+    expect(contrastRatio(token("rail-ink"), railHoverLightest)).toBeGreaterThanOrEqual(6.5);
+    expect(contrastRatio(token("rail-ink-soft"), frameLightest)).toBeGreaterThanOrEqual(4.6);
+    expect(contrastRatio(token("list-ink"), ringsLightest)).toBeGreaterThanOrEqual(5.95);
+    expect(contrastRatio(token("list-ink-soft"), ringsLightest)).toBeGreaterThanOrEqual(4.63);
+    expect(contrastRatio(token("row-selected-ink"), token("row-selected"))).toBeGreaterThanOrEqual(7);
+    expect(contrastRatio(token("row-selected-ink-soft"), token("row-selected"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("keeps the soft ink at 4.6:1 or more on the translucent fills under text on the year rings, the search field's placeholder included", () => {
+    // `.wood-rings` points the placeholder color (--muted-foreground) at the soft ink, so the field's fill sits under it.
+    expect(css).toMatch(/\.wood-rings \{[^}]*--muted-foreground: var\(--list-ink-soft\);/);
+    for (const fill of ["list-field", "list-hover"]) expect(contrastRatio(token("list-ink-soft"), translucent(fill)), fill).toBeGreaterThanOrEqual(4.6);
+  });
+
+  it("keeps the hourglass sand, warning, and full colors readable on the frame wood", () => {
+    for (const name of ["sand", "rail-warn", "rail-danger"]) expect(contrastRatio(token(name), frameLightest), name).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("keeps a 1.34:1 step from the frame to the year rings, as reviewed", () => {
+    expect(contrastRatio(token("rings-top"), token("wood-top"))).toBeCloseTo(1.34, 1);
+  });
+
+  it("sets the send colors outside a PM from the Router bell's honey", () => {
+    const rootSend = ["send", "send-hover", "send-press", "send-ink"].map(token);
+    expect(rootSend).toEqual([ROUTER_SEND_COLORS.rest, ROUTER_SEND_COLORS.hover, ROUTER_SEND_COLORS.press, ROUTER_SEND_COLORS.ink]);
+    expect(contrastRatio(token("brand-ink"), WHITE)).toBeGreaterThanOrEqual(7);
   });
 
   it("琥珀色的填充色（--caution）对白底不到 3:1，只能当方块指示和用量条颜色，组件里不拿它当字色", () => {

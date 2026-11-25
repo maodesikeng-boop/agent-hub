@@ -65,7 +65,7 @@ function JobLogDisclosure({ job, open }: { job: ProviderJobSnapshot | null; open
   return (
     <pre
       data-testid="provider-job-log"
-      className="mt-2.5 max-h-48 overflow-auto border border-border-strong bg-panel p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
+      className="mt-2.5 max-h-48 overflow-auto rounded-sm bg-panel p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
     >
       {job.logTail}
     </pre>
@@ -94,7 +94,7 @@ function GitEnvironmentGroup({ model }: { model: ProvidersSettingModel }) {
             <span
               aria-hidden="true"
               className={cn(
-                "mt-2 size-2 shrink-0",
+                "mt-2 size-2 shrink-0 rounded-full",
                 running ? "bg-caution" : "bg-muted-foreground/40",
               )}
             />
@@ -187,7 +187,7 @@ function ProviderItemRow({
           <span
             aria-hidden="true"
             data-tone={tone}
-            className={cn("mt-2 size-2 shrink-0", DOT_CLASS[tone])}
+            className={cn("mt-2 size-2 shrink-0 rounded-full", DOT_CLASS[tone])}
           />
           <div className="min-w-0 flex-1 break-words">
             <div title={item.label} className="line-clamp-2 text-body">
@@ -807,7 +807,7 @@ function DeviceCodePanel(props: SignInPanelProps & { codeCopy: CopyFeedback }) {
   return (
     <div className="grid grid-cols-1 gap-4">
       {userCode ? (
-        <div className="flex items-center justify-between gap-3 border-2 border-border-strong bg-panel px-4 py-3">
+        <div className="flex items-center justify-between gap-3 rounded-sm bg-panel px-4 py-3">
           <code data-testid="device-user-code" className="font-mono text-title font-semibold tracking-wider select-all">
             {userCode}
           </code>
@@ -897,7 +897,7 @@ export function ProviderAccountBody({
         <div data-slot="settings-row" className="px-4 py-3">
           <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2">
             <div className="flex min-w-32 flex-1 items-start gap-3">
-              <span aria-hidden="true" className="mt-2 size-2 shrink-0 bg-success" />
+              <span aria-hidden="true" className="mt-2 size-2 rounded-full shrink-0 bg-success" />
               <div className="min-w-0 flex-1 break-words">
                 <div className="text-body">{item.accountSummary ?? "Signed in"}</div>
                 {item.version && (

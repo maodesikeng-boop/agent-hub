@@ -1,10 +1,15 @@
 import { createElement } from "react";
 import {
   DeviceAndroid,
+  DeviceAndroidSolid,
   DeviceIphone,
+  DeviceIphoneSolid,
   DeviceLinux,
+  DeviceLinuxSolid,
   DeviceMacos,
+  DeviceMacosSolid,
   DeviceWindows,
+  DeviceWindowsSolid,
   Monitor,
   Smartphone,
   Tablet,
@@ -18,7 +23,7 @@ export function StatusDot({ status }: { status: DeviceStatus }) {
   return (
     <span
       aria-hidden="true"
-      className={cn("size-2 shrink-0", status === "online" ? "bg-success" : status === "reconnecting" ? "bg-caution" : "bg-muted-foreground/40")}
+      className={cn("size-2 shrink-0 rounded-full", status === "online" ? "bg-success" : status === "reconnecting" ? "bg-caution" : "bg-muted-foreground/40")}
     />
   );
 }
@@ -49,9 +54,21 @@ const PLATFORM_ICONS: Readonly<Record<string, Icon>> = {
   phone: Smartphone,
 };
 
-export function PlatformIcon({ platform, className, size = "sm" }: { platform: string; className?: string; size?: "sm" | "inherit" }) {
-  return createElement(PLATFORM_ICONS[platform.toLowerCase()] ?? Monitor, {
+const SOLID_ICONS = new Map<Icon, Icon>([
+  [DeviceMacos, DeviceMacosSolid],
+  [DeviceWindows, DeviceWindowsSolid],
+  [DeviceLinux, DeviceLinuxSolid],
+  [DeviceIphone, DeviceIphoneSolid],
+  [DeviceAndroid, DeviceAndroidSolid],
+]);
+
+/** solid: the filled form a selected computer shows on the rail; generic devices fill their outline. */
+export function PlatformIcon({ platform, className, size = "sm", solid = false }: { platform: string; className?: string; size?: "sm" | "inherit"; solid?: boolean }) {
+  const line = PLATFORM_ICONS[platform.toLowerCase()] ?? Monitor;
+  const filled = SOLID_ICONS.get(line);
+  return createElement(solid && filled ? filled : line, {
     className: cn(size === "sm" && "size-pixel-sm shrink-0", className),
     "aria-hidden": true,
+    ...(solid && !filled ? { fill: "currentColor" } : {}),
   });
 }

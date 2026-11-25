@@ -136,7 +136,7 @@ export function AgentRows({
                 {onManageProviders !== undefined && (
                   <>
                     <SelectSeparator />
-                    <SelectItem value={ADD_PROVIDER_VALUE} className="font-medium text-rail-ink">
+                    <SelectItem value={ADD_PROVIDER_VALUE} className="font-medium text-brand-ink">
                       {ADD_PROVIDER_LABEL}
                     </SelectItem>
                   </>

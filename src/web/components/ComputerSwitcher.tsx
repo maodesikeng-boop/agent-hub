@@ -60,9 +60,9 @@ function SwitcherList({
                 onClose();
               }}
               className={cn(
-                "flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
+                "flex w-full cursor-pointer items-center gap-3 rounded-xs px-3 py-2 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
                 variant === "drawer" && "min-h-12",
-                current ? "border-2 border-select-line bg-open text-foreground" : "border-2 border-transparent hover:bg-hover",
+                current ? "tile-open text-foreground" : "hover:bg-hover",
                 offline && !current && "text-muted-foreground",
               )}
             >
@@ -77,11 +77,11 @@ function SwitcherList({
                 <div className="text-xs text-muted-foreground">{CONNECTION_TEXT[c.status]}</div>
               </div>
               {c.badge > 0 && (
-                <span className="shrink-0 bg-rail-ink px-1.5 py-0.5 text-xs font-semibold text-primary-foreground tabular-nums">
+                <span className="shrink-0 bg-brand-ink px-1.5 py-0.5 text-xs font-semibold text-primary-foreground tabular-nums">
                   {c.badge}
                 </span>
               )}
-              {current && <Check className="size-pixel-sm shrink-0 text-rail-ink" aria-hidden="true" />}
+              {current && <Check className="size-pixel-sm shrink-0 text-brand-ink" aria-hidden="true" />}
             </button>
           );
         })}
@@ -94,7 +94,7 @@ function SwitcherList({
             onManage();
           }}
           className={cn(
-            "flex w-full cursor-pointer items-center px-3 py-2 text-left text-minor font-medium text-foreground transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus",
+            "flex w-full cursor-pointer items-center rounded-xs px-3 py-2 text-left text-minor font-medium text-foreground transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus",
             variant === "drawer" && "min-h-11",
           )}
         >

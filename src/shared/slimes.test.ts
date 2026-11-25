@@ -16,6 +16,7 @@ import {
   parseLookKey,
   pickNewPmLook,
   resolvePmLook,
+  silhouetteLiftOf,
   routerBellPaths,
   routerBellSvg,
   SLIME_GRID,
@@ -223,6 +224,16 @@ describe("画史莱姆", () => {
     expect(opticalLiftOf("strawberry", "main")).toBe(opticalLiftOf("lemon", "main"));
     expect(opticalLiftOf("pineapple", "main")).toBe(1.5);
     expect(["pomelo", "lime", "pear"].map((f) => opticalLiftOf(f as PmFruit, "main"))).toEqual([1, 1, 1]);
+  });
+
+  it("silhouetteLiftOf：挪过之后，连耳朵、叶子在内的整个轮廓上下留白相等；每个造型左右本来就对称", () => {
+    for (const fruit of PM_FRUITS) {
+      const { x, y } = coordsOf(slimePaths({ fruit, color: fruit }, "main"));
+      const lift = silhouetteLiftOf(fruit);
+      expect(Math.min(...y) - lift, fruit).toBe(SLIME_GRID - (Math.max(...y) - lift));
+      expect(Math.min(...x), fruit).toBe(SLIME_GRID - Math.max(...x));
+    }
+    expect(silhouetteLiftOf("grapefruit")).toBeLessThan(opticalLiftOf("grapefruit", "main"));
   });
 
   it("slimeSvg：viewBox 12×12、crispEdges、透明底，没有 id、渐变、滤镜和位图", () => {
