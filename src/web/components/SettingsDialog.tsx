@@ -131,7 +131,7 @@ export function SettingsDialog({
           className="flex min-h-0 flex-1 flex-col min-[720px]:flex-row"
         >
           <div className="flex shrink-0 flex-col pt-1.5 min-[720px]:w-66">
-            <div aria-hidden="true" data-window-drag className="flex h-14 shrink-0 items-center border-b border-border pl-4 text-title font-semibold text-list-ink max-[719px]:hidden">
+            <div aria-hidden="true" data-window-drag className="flex h-11 shrink-0 items-center border-b border-border pl-4 text-title font-semibold text-list-ink max-[719px]:hidden">
               Settings
             </div>
             <TabsList
@@ -155,7 +155,7 @@ export function SettingsDialog({
           </div>
           {sections.map(({ id, label }) => (
             <TabsContent key={id} value={id} className="shell-sheet ml-1.5 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none">
-              <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b border-border pr-3 pl-6">
+              <header data-window-drag className="flex h-11 shrink-0 items-center gap-2 border-b border-border pr-3 pl-6">
                 <h2 className="min-w-0 flex-1 truncate text-title font-semibold">{label}</h2>
                 <DialogClose asChild>
                   <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close">

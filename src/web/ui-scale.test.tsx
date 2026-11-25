@@ -55,10 +55,10 @@ describe("Interface scale", () => {
     for (const token of ["display", "title", "body", "minor"]) expect(css).toMatch(new RegExp(`--text-${token}: [0-9.]+rem;`));
   });
 
-  it("字号合成 4 档（12 / 13.5 / 15 / 17，docs/ui-standard.md 第 3 条）：没有 14px 的 text-label，旧名 text-small 已删", () => {
+  it("keeps four type sizes (12, 13.5, 15, 16 at Default) with no 14px label size and no old text-small name", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const rem = (token: string) => Number(new RegExp(`--text-${token}: ([0-9.]+)rem;`).exec(css)?.[1]) * 16;
-    expect([rem("minor"), rem("body"), rem("title")]).toEqual([13.5, 15, 17]);
+    expect([rem("minor"), rem("body"), rem("title")]).toEqual([13.5, 15, 16]);
     expect(css).not.toMatch(/--text-small:/);
     expect(css).not.toMatch(/--text-label:/);
     for (const dir of ["src/web/components", "src/web/ui"]) {

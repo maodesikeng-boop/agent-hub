@@ -464,12 +464,13 @@ describe("右栏：每组可以收起", () => {
 });
 
 describe("PiecesSlot: Piece 纸片分身图标", () => {
-  it("开关只有当前项目经理那只小动物的纸片分身（Avatar neutral 28px，按根字号缩放），没有文字", () => {
+  it("shows only the PM's note sprite (Avatar neutral 22px, scaled with the root size) in a 32px button, with no text", () => {
     render(<PiecesSlot visible open={false} attention={false} look={defaultLookOf(3)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "Show Pieces" });
     const avatar = button.querySelector("[data-neutral='true']");
     expect(avatar).toBeInTheDocument();
-    expect((avatar as HTMLElement).style.width).toBe("1.75rem");
+    expect((avatar as HTMLElement).style.width).toBe("1.375rem");
+    expect(button.className).toContain("size-8");
     expect(button).toHaveTextContent("");
   });
 

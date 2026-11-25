@@ -68,7 +68,7 @@
 
 @theme {
   --text-display: 1.375rem;
-  --text-title: 1.0625rem;
+  --text-title: 1rem;
   --text-body: 0.9375rem;
   --text-minor: 0.84375rem;
   --radius-*: initial;

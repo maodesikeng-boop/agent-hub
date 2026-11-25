@@ -199,8 +199,8 @@ export const ProjectList = memo(function ProjectList({
     const stripExtras = filtered.archived.filter(isSelected);
     return (
       <section aria-label={computer.name} className="flex h-full w-18 shrink-0 flex-col bg-list text-list-ink">
-        <div className="flex h-14 shrink-0 items-center justify-center border-b border-border">
-          <Button variant="slot" size="icon" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
+        <div className="flex h-11 shrink-0 items-center justify-center border-b border-border">
+          <Button variant="slot" size="icon" className="size-7" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
             <Plus aria-hidden="true" />
           </Button>
         </div>
@@ -264,7 +264,7 @@ export const ProjectList = memo(function ProjectList({
       aria-label={computer.name}
       className={cn("flex min-h-0 min-w-0 flex-col bg-list text-list-ink", isPage ? "flex-1 pt-[var(--safe-top)]" : "h-full")}
     >
-      <header data-window-drag className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border pr-3 pl-4">
+      <header data-window-drag className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border pr-3 pl-4">
         <div className="min-w-0 flex-1">
           {switchable ? (
             computers !== undefined && onSelectComputer !== undefined ? (
@@ -287,7 +287,7 @@ export const ProjectList = memo(function ProjectList({
             </h1>
           )}
         </div>
-        <Button variant="slot" size="icon" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
+        <Button variant="slot" size="icon" className="size-7" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
           <Plus aria-hidden="true" />
         </Button>
       </header>

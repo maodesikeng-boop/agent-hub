@@ -807,11 +807,11 @@ export const RouterWorkbench = memo(function RouterWorkbench({
       <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
         <header
           data-window-drag
-          className="flex h-14 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-border pr-3 pl-4"
+          className="flex h-11 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-border pr-3 pl-4"
         >
           <div className="flex min-w-0 shrink-0 items-center gap-2.5">
             {leading}
-            <RouterAvatar size={28} working={stream.turns.some((entry) => entry.status === "planning")} />
+            <RouterAvatar size={24} working={stream.turns.some((entry) => entry.status === "planning")} />
             <h1 className="truncate text-title font-semibold text-foreground">Router</h1>
           </div>
           <div className="flex min-w-0 items-center gap-2">

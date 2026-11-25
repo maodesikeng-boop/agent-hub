@@ -125,7 +125,7 @@ function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boo
 function DeviceWaiting({ connecting, name }: { connecting: boolean; name: string }) {
   return (
     <>
-      <header data-window-drag className="flex h-14 shrink-0 items-center px-3" />
+      <header data-window-drag className="flex h-11 shrink-0 items-center px-3" />
       {connecting ? (
         <FullPage busy title="Loading…" />
       ) : (

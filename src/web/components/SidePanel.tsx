@@ -18,7 +18,7 @@ export interface SidePanelProps {
 }
 
 /**
- * Postcondition: renders the warm-gray panel with a 3.5rem header holding the optional back arrow, the title, and the
+ * Postcondition: renders the warm-gray panel with a 2.75rem header holding the optional back arrow, the title, and the
  * close button, and a body that scrolls on its own. Escape keeps its chat meaning inside a Worker, so it never closes the panel.
  */
 export function SidePanel({
@@ -37,7 +37,7 @@ export function SidePanel({
       data-layout={layout}
       className="shell-sheet flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden text-foreground"
     >
-      <header data-window-drag className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
+      <header data-window-drag className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         {onBack !== undefined && (
           <Button variant="ghost" size="icon" className="shrink-0" aria-label={backLabel} onClick={onBack}>
             <ArrowLeft aria-hidden="true" />

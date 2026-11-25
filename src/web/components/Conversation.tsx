@@ -1,6 +1,7 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { HUB_COMPOSER_COMMANDS, type ConversationId, type MessageId, type PmId, type WorkerPick } from "../../shared/index.ts";
 import { errorText, formatArchiveRemaining, type ErrorLike } from "../format.ts";
+import { cn } from "../lib/utils.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
@@ -132,6 +133,7 @@ export const Conversation = memo(function Conversation({
   const handleLoadOlder = useCallback(() => onLoadOlder(id), [onLoadOlder, id]);
   const handleSend = useCallback((text: string, files: File[]) => onSend(id, text, files), [onSend, id]);
   const statusNode = useAgentStatusNode(session);
+  const avatarSize = mobile ? 34 : 24;
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
       <header
@@ -139,7 +141,7 @@ export const Conversation = memo(function Conversation({
         className={
           mobile
             ? "flex min-h-14 min-w-0 shrink-0 items-center justify-between gap-2 overflow-hidden border-b border-border pt-[var(--safe-top)] pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
-            : "flex h-14 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-border pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+            : "flex h-11 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-border pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
         }
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -148,18 +150,21 @@ export const Conversation = memo(function Conversation({
             <button
               type="button"
               aria-label={`View ${entry.pm.name}'s profile`}
-              className="-ml-1.5 flex h-11 min-w-0 max-w-full cursor-pointer items-center gap-2.5 pr-2 pl-1.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+              className={cn(
+                "-ml-1.5 flex min-w-0 max-w-full cursor-pointer items-center pr-2 pl-1.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus",
+                mobile ? "h-11 gap-2.5" : "h-8 gap-2",
+              )}
               onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
             >
-              <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} className="shrink-0" />
+              <Avatar look={entry.look} size={avatarSize} working={hasAgentStatus(session)} className="shrink-0" />
               <h1 title={entry.name} className="min-w-0 truncate text-title leading-snug font-semibold text-foreground">
                 {entry.name}
               </h1>
               <ChevronDown className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
             </button>
           ) : (
-            <div className="flex min-w-0 items-center gap-2.5">
-              <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} className="shrink-0" />
+            <div className={cn("flex min-w-0 items-center", mobile ? "gap-2.5" : "gap-2")}>
+              <Avatar look={entry.look} size={avatarSize} working={hasAgentStatus(session)} className="shrink-0" />
               <h1 title={entry.name} className="min-w-0 truncate text-title leading-snug font-semibold text-foreground">
                 {entry.name}
               </h1>

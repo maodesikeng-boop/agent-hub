@@ -610,14 +610,14 @@ export function PiecesSlot({
   return (
     <Button
       variant="ghost"
-      size="icon"
+      size="icon-sm"
       aria-label={label}
       aria-expanded={open}
       title={label}
       onClick={onToggle}
       className="shrink-0"
     >
-      <Avatar look={look} size={28} neutral />
+      <Avatar look={look} size={22} neutral />
     </Button>
   );
 }

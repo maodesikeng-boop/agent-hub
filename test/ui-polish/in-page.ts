@@ -165,7 +165,7 @@ export function measureInPage(options: { touch: boolean }): RawHit[] {
   }
 
   const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize);
-  const tiers = [0.75, 0.84375, 0.9375, 1.0625, 1.375].map((rem) => rem * rootPx);
+  const tiers = [0.75, 0.84375, 0.9375, 1, 1.375].map((rem) => rem * rootPx);
   for (const el of all) {
     if (!ownText(el) || content(el)) continue;
     const style = getComputedStyle(el);
