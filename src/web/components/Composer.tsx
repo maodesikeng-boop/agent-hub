@@ -1,19 +1,18 @@
 import { CircleAlert, FileText, Info, Plus, Send, Square, Video, X } from "../ui/icons.ts";
-import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
+import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES, previewKindOf, sentFileMime, type WorkerPick } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
 import { WORKER_COMMAND } from "../composer-trigger.ts";
-import { fitsBetweenButtons, fitsSingleRowWidth, isWrapped } from "../composer-layout.ts";
+import { NATIVE_MULTILINE_SIZING, useComposerSoftWrap } from "../composer-layout.ts";
 import { byteLength, errorLine, errorTitle } from "../format.ts";
 import { cn } from "../lib/utils.ts";
+import { COMPOSER_MAX_HEIGHT_PX } from "../limits.ts";
 import { formatBytes, readDropped, useNoticeAutoHide, type ComposerNotice, type DraftSlot, type StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import type { StopControl } from "../useStop.ts";
 import { ComposerMenu, optionId } from "./ComposerMenu.tsx";
 import { useWorkerPickLabels, WorkerPickParts } from "./WorkerPickTag.tsx";
-
-const MAX_HEIGHT_PX = 180;
 
 const POINTER_FINE = "(pointer: fine)";
 const POINTER_COARSE = "(pointer: coarse)";
@@ -45,14 +44,20 @@ function isOtherEditable(target: EventTarget | null, ownTextarea: HTMLTextAreaEl
 
 const FRAME_CLASS = "composer-frame bg-background";
 
-const ROW_CLASS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
+const ROW_CLASS = "relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
 const ROW_MULTI_CLASS = "pb-2";
+const TEXT_TYPE = "px-3 text-body leading-6";
+const TEXT_METRICS = `block min-h-9 w-full min-w-0 py-1.5 pointer-coarse:py-2.5 ${TEXT_TYPE}`;
 const TEXTAREA_CLASS =
-  "block min-h-9 w-full min-w-0 resize-none bg-transparent px-3 py-1.5 pointer-coarse:py-2.5 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50";
-const TEXT_CLASSES = [
-  `${TEXTAREA_CLASS} col-start-2 row-start-1`,
-  `${TEXTAREA_CLASS} col-span-3 col-start-1 row-start-1`,
+  `${TEXT_METRICS} resize-none bg-transparent outline-none placeholder:text-muted-foreground disabled:opacity-50`;
+const MIRROR_CLASS = `composer-text-measure ${TEXT_METRICS} invisible overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word]`;
+const TEXT_LIMIT = { maxHeight: COMPOSER_MAX_HEIGHT_PX };
+const PROBE_CLASS = `composer-text-measure invisible absolute inset-x-0 top-0 h-[1em] ${TEXT_TYPE}`;
+const TEXT_CELL = [
+  "col-start-2 col-end-3 row-start-1 row-end-2",
+  "col-start-1 col-end-4 row-start-1 row-end-2",
 ] as const;
+const SINGLE_ROW_HEIGHT_CLASS = "h-9 pointer-coarse:h-11";
 const ATTACH_CLASSES = [
   "col-start-1 row-start-1",
   "col-start-1 row-start-2",
@@ -163,67 +168,6 @@ export interface ComposerLink {
   waiting: boolean;
 }
 
-function useElementClientWidth(ref: RefObject<HTMLElement | null>): RefObject<number> {
-  const widthRef = useRef(0);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    widthRef.current = el.clientWidth;
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => {
-      widthRef.current = el.clientWidth;
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [ref]);
-  return widthRef;
-}
-
-function syncComposerHeightAndWrap(params: {
-  el: HTMLTextAreaElement;
-  value: string;
-  prev: string | null;
-  multiline: boolean;
-  layoutChanged: boolean;
-  lastHeightPx: number | null;
-  clientWidthPx: number;
-  settledValue: string | null;
-  obstacleEls: (HTMLElement | null)[];
-}): { heightPx: number; wrapped: boolean; settled: string | null } {
-  const { el, value, prev, multiline, layoutChanged, lastHeightPx, clientWidthPx, settledValue, obstacleEls } = params;
-  const atMaxHeight = !layoutChanged && multiline && lastHeightPx !== null && lastHeightPx >= MAX_HEIGHT_PX && prev !== null && value.startsWith(prev);
-  if (atMaxHeight) {
-    return { heightPx: lastHeightPx, wrapped: true, settled: settledValue };
-  }
-  const singleRowKnownFit =
-    !multiline &&
-    !layoutChanged &&
-    value !== "" &&
-    !value.includes("\n") &&
-    prev !== null &&
-    clientWidthPx > 0 &&
-    lastHeightPx !== null &&
-    fitsSingleRowWidth(el, value, clientWidthPx);
-  if (singleRowKnownFit) {
-    return { heightPx: lastHeightPx, wrapped: false, settled: settledValue };
-  }
-  // Single-line mode is already at 1-row height, and appending in multiline mode only grows content, so skip height:auto reset there.
-  if (prev === null || value === "" || layoutChanged || (multiline && !value.startsWith(prev))) {
-    el.style.height = "auto";
-  }
-  const contentHeight = el.scrollHeight;
-  const heightPx = Math.min(contentHeight, MAX_HEIGHT_PX);
-  const nextHeight = `${heightPx}px`;
-  if (el.style.height !== nextHeight) el.style.height = nextHeight;
-  if (value === "") return { heightPx, wrapped: false, settled: settledValue };
-  if (isWrapped(el, contentHeight)) {
-    return { heightPx, wrapped: true, settled: layoutChanged && !multiline ? value : settledValue };
-  }
-  if (!multiline) return { heightPx, wrapped: false, settled: settledValue };
-  const wrapped = value.includes("\n") || settledValue === value || !fitsBetweenButtons(el, value, obstacleEls);
-  return { heightPx, wrapped, settled: settledValue };
-}
-
 export const Composer = memo(function Composer({
   value,
   placeholder: placeholderProp,
@@ -268,7 +212,6 @@ export const Composer = memo(function Composer({
   const placeholder = readOnly ?? placeholderProp;
   const stop = readOnly === null ? stopProp : undefined;
   const ref = useRef<HTMLTextAreaElement>(null);
-  const clientWidthRef = useElementClientWidth(ref);
   const picker = useRef<HTMLInputElement>(null);
   const { files, busy, notice } = staging;
   useNoticeAutoHide(staging);
@@ -276,7 +219,6 @@ export const Composer = memo(function Composer({
   const hasContent = value.trim() !== "" || files.length > 0;
   const canSend = !disabled && !link?.waiting && hasContent && !tooLong && !busy;
   const showStop = stop !== undefined && stop.busy && !hasContent;
-
   const [bounce, setBounce] = useState(false);
   const hadContent = useRef(hasContent);
   useEffect(() => {
@@ -284,15 +226,15 @@ export const Composer = memo(function Composer({
     else if (!hasContent) setBounce(false);
     hadContent.current = hasContent;
   }, [hasContent]);
-
-  const [wrapped, setWrapped] = useState(false);
+  const probe = useRef<HTMLDivElement>(null);
+  const [composing, setComposing] = useState<{ value: string; multiline: boolean; height: number | null } | null>(null);
+  const sizingValue = (composing?.value ?? value).slice(0, MAX_MESSAGE_BYTES);
+  const hasNewline = sizingValue.includes("\n");
   const hasLeadingChip = leadingChip !== null && leadingChip !== undefined && leadingChip !== false;
-  const multiline = wrapped || files.length > 0 || workerPick !== null || hasLeadingChip;
-  const layoutWas = useRef(multiline);
-  const settledValue = useRef<string | null>(null);
-  const attachRef = useRef<HTMLButtonElement>(null);
-  const actionsRef = useRef<HTMLDivElement>(null);
-
+  const hasChips = files.length > 0 || workerPick !== null || hasLeadingChip;
+  const softWrapped = useComposerSoftWrap(probe, hasChips || hasNewline || composing !== null ? "" : sizingValue);
+  const multiline = composing?.multiline ?? (hasChips || hasNewline || softWrapped);
+  const nativeSizing = multiline && NATIVE_MULTILINE_SIZING;
   const [cursor, setCursor] = useState(0);
   const pendingCursor = useRef<number | null>(null);
   const repickCaret = useRef<number | null>(null);
@@ -349,11 +291,10 @@ export const Composer = memo(function Composer({
   useEffect(() => {
     if (autoFocus && !disabled && pointerMatches(POINTER_FINE, true)) ref.current?.focus({ preventScroll: true });
   }, []);
-
   const handleGlobalKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (disabled) return;
     if (e.key !== "Escape" || e.defaultPrevented || e.repeat) return;
-    if (e.isComposing || e.keyCode === 229) return;
+    if (composing !== null || e.isComposing || e.keyCode === 229) return;
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     if (e.target instanceof Node && !document.contains(e.target)) return;
     if (hasOpenOverlay() || isOtherEditable(e.target, ref.current)) return;
@@ -376,32 +317,11 @@ export const Composer = memo(function Composer({
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, []);
-
-  const prevValue = useRef<string | null>(null);
   const prevFocusRev = useRef(focusRev);
-  const lastHeightPx = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const prev = prevValue.current;
-    prevValue.current = value;
-    const layoutChanged = layoutWas.current !== multiline;
-    layoutWas.current = multiline;
     const focusChanged = focusRev !== prevFocusRev.current;
-    const { heightPx, wrapped: nextWrapped, settled } = syncComposerHeightAndWrap({
-      el,
-      value,
-      prev,
-      multiline,
-      layoutChanged,
-      lastHeightPx: lastHeightPx.current,
-      clientWidthPx: clientWidthRef.current,
-      settledValue: settledValue.current,
-      obstacleEls: [attachRef.current, actionsRef.current],
-    });
-    lastHeightPx.current = heightPx;
-    settledValue.current = settled;
-    setWrapped(nextWrapped);
     if (focusChanged) {
       prevFocusRev.current = focusRev;
       if (!disabled) {
@@ -416,8 +336,18 @@ export const Composer = memo(function Composer({
       el.setSelectionRange(pendingCursor.current, pendingCursor.current);
       pendingCursor.current = null;
     }
-  }, [value, multiline, focusRev, disabled, clientWidthRef]);
-
+  }, [value, focusRev, disabled]);
+  const changeInput = (el: HTMLTextAreaElement) => {
+    if (!el.value.startsWith(`/${WORKER_COMMAND}`)) repickCaret.current = null;
+    setCursor(el.selectionStart);
+    onChange(el.value);
+    if (notice !== null) staging.dismissNotice();
+  };
+  const finishComposition = (el: HTMLTextAreaElement) => {
+    if (composing === null) return;
+    if (el.value !== value) changeInput(el);
+    setComposing(null);
+  };
   const submit = () => {
     if (!canSend) return;
     staging.track(
@@ -435,7 +365,7 @@ export const Composer = memo(function Composer({
       {menu && <ComposerMenu id={menuId} menu={menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
       {notice !== null && <NoticeBar notice={notice} onDismiss={staging.dismissNotice} />}
       <div data-multiline={multiline} className={FRAME_CLASS}>
-        {(files.length > 0 || workerPick !== null || hasLeadingChip) && (
+        {hasChips && (
           <ComposerChips
             leadingChip={leadingChip}
             workerPick={onWorkerPick ? workerPick : null}
@@ -463,7 +393,6 @@ export const Composer = memo(function Composer({
             }}
           />
           <Button
-            ref={attachRef}
             variant="ghost"
             size="icon"
             aria-label="Add files"
@@ -473,6 +402,12 @@ export const Composer = memo(function Composer({
           >
             <Plus className="size-5" aria-hidden="true" />
           </Button>
+          {multiline && !nativeSizing && (
+            <div aria-hidden="true" className={`${MIRROR_CLASS} ${TEXT_CELL[1]}`} style={TEXT_LIMIT}>
+              {sizingValue}{"\u200b"}
+            </div>
+          )}
+          <div aria-hidden="true" ref={probe} className={`${PROBE_CLASS} ${TEXT_CELL[0]}`} />
           <textarea
             ref={ref}
             rows={1}
@@ -483,17 +418,20 @@ export const Composer = memo(function Composer({
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
-            className={TEXT_CLASSES[+multiline]}
+            className={`${TEXTAREA_CLASS} ${TEXT_CELL[+multiline]} ${!multiline ? SINGLE_ROW_HEIGHT_CLASS : nativeSizing ? "" : "absolute inset-0 h-full"}`}
+            style={nativeSizing ? { ...TEXT_LIMIT, fieldSizing: "content", height: composing?.height ?? undefined } : undefined}
             value={value}
             aria-autocomplete={source ? "list" : undefined}
             aria-controls={menu ? menuId : undefined}
             aria-activedescendant={menu && menu.items.length > 0 && menu.activeIndex >= 0 ? optionId(menuId, menu.activeIndex) : undefined}
-            onChange={(e) => {
-              if (!e.target.value.startsWith(`/${WORKER_COMMAND}`)) repickCaret.current = null;
-              setCursor(e.target.selectionStart);
-              onChange(e.target.value);
-              if (notice !== null) staging.dismissNotice();
-            }}
+            onChange={(e) => changeInput(e.currentTarget)}
+            onCompositionStart={(e) => setComposing({
+              value: e.currentTarget.value,
+              multiline,
+              height: nativeSizing ? e.currentTarget.getBoundingClientRect().height : null,
+            })}
+            onCompositionEnd={(e) => finishComposition(e.currentTarget)}
+            onBlur={(e) => finishComposition(e.currentTarget)}
             onSelect={(e) => setCursor(e.currentTarget.selectionStart)}
             onPaste={(e) => {
               if (e.clipboardData.files.length === 0) return;
@@ -501,18 +439,19 @@ export const Composer = memo(function Composer({
               readDropped(e.clipboardData, staging.add);
             }}
             onKeyDown={(e) => {
+              // Enter may confirm an IME candidate even when WebKit reports isComposing as false.
+              if (composing !== null || e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (suggest.handleKey(e)) {
                 e.preventDefault();
                 return;
               }
-              // Enter during IME composition confirms a candidate; some browsers report keyCode 229 there.
-              if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key !== "Enter" || e.shiftKey) return;
               if (pointerMatches(POINTER_COARSE, false)) return;
               e.preventDefault();
               submit();
             }}
           />
-          <div ref={actionsRef} className={ACTIONS_CLASSES[+multiline]}>
+          <div className={ACTIONS_CLASSES[+multiline]}>
             {tooLong && <span className="text-minor text-danger">Message too long</span>}
             {stop?.failed && showStop && <span className="text-minor text-danger">Couldn't stop</span>}
             {showStop ? (

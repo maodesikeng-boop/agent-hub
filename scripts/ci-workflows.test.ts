@@ -115,6 +115,8 @@ describe(".github/workflows", () => {
     expect(verifyJob).toBeDefined();
     expect(verifyJob!.if).toBeUndefined();
     expect(verifyJob!.steps?.some((step) => step.run?.startsWith("pnpm verify"))).toBe(true);
+    expect(verifyJob!.steps?.some((step) => /playwright install .*\bwebkit\b/.test(step.run ?? ""))).toBe(true);
+    expect(verifyJob!.steps?.some((step) => /^pnpm verify .*--composer-layout\b/.test(step.run ?? ""))).toBe(true);
     const verifyArtifacts = (verifyJob!.steps ?? [])
       .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
       .map((step) => step.with?.name);

@@ -324,7 +324,6 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(rightRail).not.toContain("[contain:strict]");
     expect(readFileSync("src/web/components/Avatar.tsx", "utf8")).toContain("[contain:size_layout]");
     expect(readFileSync("src/web/components/RouterAvatar.tsx", "utf8")).toContain("[contain:size_layout]");
-    expect(readFileSync("src/web/components/Composer.tsx", "utf8")).not.toContain("field-sizing");
   });
 
   it("自动隐藏滚动条委托：捕获滚动事件标 data-scrolling，停滚后按 SCROLLBAR_IDLE_HIDE_MS 自动摘掉，卸载清定时器", () => {
