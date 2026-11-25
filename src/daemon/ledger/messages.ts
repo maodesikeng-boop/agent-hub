@@ -56,8 +56,8 @@ function insertAgentMessage(
   p: Pending,
   session: AgentSessionRow,
   fields: { kind: "text" | "tool" | "checklist"; text: string; meta: Record<string, unknown> | null; dedupeKey: string },
-): void {
-  if (session.conversationId === null) return;
+): boolean {
+  if (session.conversationId === null) return false;
   const t = now();
   const handoverTurn =
     session.role === "pm" &&
@@ -82,7 +82,9 @@ function insertAgentMessage(
     t,
     t,
   );
-  if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
+  if (row === undefined) return false;
+  p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
+  return true;
 }
 
 export function createLedgerMessages(

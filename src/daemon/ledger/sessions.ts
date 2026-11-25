@@ -12,7 +12,7 @@ import type {
   SessionState,
   WorkerId,
 } from "../../shared/domain.ts";
-import type { AgentTextDeltaEvent } from "../../shared/driver.ts";
+import type { AgentTextDeltaEvent, BackgroundTaskInfo } from "../../shared/driver.ts";
 import { clearRateLimitRejection, isQuotaExhausted } from "../../shared/domain.ts";
 import {
   MAX_STREAMING_TEXT_CHARS,
@@ -20,7 +20,6 @@ import {
   STREAMING_TEXT_THROTTLE_MS,
   SESSION_STEPS_KEEP,
 } from "../../shared/limits.ts";
-import type { BackgroundTaskInfo } from "../../shared/driver.ts";
 import { deleteLegacyPendingSessionSend } from "../actions/index.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow } from "../store/index.ts";

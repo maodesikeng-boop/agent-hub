@@ -14,29 +14,34 @@ interface ChecklistMessageFields {
   dedupeKey: string;
 }
 
-type InsertChecklist = (p: Pending, session: AgentSessionRow, fields: ChecklistMessageFields) => void;
+type InsertChecklist = (p: Pending, session: AgentSessionRow, fields: ChecklistMessageFields) => boolean;
 
 export function createLedgerChecklist({ db }: LedgerContext, insert: InsertChecklist) {
   const latest = (sessionId: SessionId) => {
-    const row = db.get<{ meta: string | null }>(
-      "SELECT meta FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = ? ORDER BY id DESC LIMIT 1",
-      sessionId,
-      CHECKLIST_MESSAGE_KIND,
-    );
-    return row ? checklistOf({ kind: CHECKLIST_MESSAGE_KIND, meta: parseMessageMeta(CHECKLIST_MESSAGE_KIND, row.meta) }) ?? [] : [];
+    const row = db.get<{ snapshot: string }>("SELECT snapshot FROM session_checklists WHERE session_id = ?", sessionId);
+    return row ? checklistOf({ kind: CHECKLIST_MESSAGE_KIND, meta: parseMessageMeta(CHECKLIST_MESSAGE_KIND, row.snapshot) }) ?? [] : [];
   };
 
   const apply = (p: Pending, session: AgentSessionRow, event: AgentChecklistEvent) => {
-    if (session.conversationId === null || event.parentToolUseId !== undefined) return;
+    if (session.conversationId === null || session.status === "ended" || event.parentToolUseId !== undefined) return;
     const prev = latest(session.id);
     const checklist = applyChecklistUpdate(prev, event.update);
     if (sameChecklist(prev, checklist)) return;
-    insert(p, session, {
+    const meta = { checklist };
+    const inserted = insert(p, session, {
       kind: CHECKLIST_MESSAGE_KIND,
       text: "",
-      meta: { checklist },
+      meta,
       dedupeKey: `checklist:${session.id}:${event.uuid}`,
     });
+    if (inserted) {
+      db.run(
+        `INSERT INTO session_checklists (session_id, snapshot) VALUES (?, ?)
+         ON CONFLICT (session_id) DO UPDATE SET snapshot = excluded.snapshot`,
+        session.id,
+        JSON.stringify(meta),
+      );
+    }
   };
 
   return { apply };

@@ -2,9 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checklistOf, MIN_TOOL_STEP_VISIBLE_MS, type ChecklistUpdate, type Change, type DriverEvent } from "../../shared/index.ts";
+import { checklistOf, MIN_TOOL_STEP_VISIBLE_MS, PM_ARCHIVE_RETENTION_MS, PM_TOOL_MESSAGE_RETENTION_MS, PM_TOOL_MESSAGES_MAX_PER_CONV, type ChecklistUpdate, type Change, type DriverEvent } from "../../shared/index.ts";
+import { claudeChecklistFromToolResult, claudeChecklistFromToolUse, createClaudeChecklistState } from "../../vendors/claude/checklist.ts";
 import { createSessionStore, type Db } from "../store/index.ts";
 import { insertTestSession, openTestDb } from "../store/test-helpers.ts";
+import { createLedgerContext } from "./context.ts";
+import { createDbTableRetention } from "./db-table-retention.ts";
 import { createLedger, type SqliteLedger } from "./index.ts";
 
 let db: Db;
@@ -64,6 +67,7 @@ describe("ledger checklists", () => {
     expect(changes).toContainEqual(expect.objectContaining({ type: "message.created", data: { message: row } }));
     setChecklist("clear", { kind: "replace", items: [] });
     setChecklist("first", first);
+    setChecklist("finish", { kind: "merge", items: [{ id: "step", status: "completed" }] });
     expect(checklistRows().map(checklistOf)).toEqual([checklistOf(row), []]);
   });
 
@@ -77,6 +81,47 @@ describe("ledger checklists", () => {
       [{ title: "Read probe", status: "in_progress" }],
       [{ title: "Read probe", status: "completed" }],
     ]);
+  });
+
+  it.each(["age", "count"])("applies a status-only update after PM history is pruned by %s", (limit) => {
+    const retention = createDbTableRetention(createLedgerContext(db, { now: () => now }));
+    const claude = createClaudeChecklistState();
+    claudeChecklistFromToolUse(claude, { toolUseId: "create", name: "TaskCreate", input: { subject: "Read probe" } });
+    const created = claudeChecklistFromToolResult(claude, "create", { task: { id: "1" } });
+    if (created === null) throw new Error("Missing TaskCreate update");
+    setChecklist("create", created);
+    expect(checklistRows().map(checklistOf)).toMatchObject([[{ id: "1", title: "Read probe", status: "pending" }]]);
+
+    if (limit === "age") {
+      now += PM_TOOL_MESSAGE_RETENTION_MS + 1;
+    } else {
+      for (let i = 0; i < PM_TOOL_MESSAGES_MAX_PER_CONV; i++) emit(tool(`read-${i}`));
+    }
+    expect(retention.purgePmToolMessagesBatch(now, 10)).toEqual({ rows: 1, more: false });
+    expect(checklistRows()).toEqual([]);
+
+    const started = claudeChecklistFromToolUse(claude, { toolUseId: "start", name: "TaskUpdate", input: { taskId: "1", status: "in_progress" } });
+    if (started === null) throw new Error("Missing TaskUpdate update");
+    setChecklist("start", started);
+    expect(checklistRows().map(checklistOf)).toMatchObject([[{ id: "1", title: "Read probe", status: "in_progress" }]]);
+  });
+
+  it("keeps one baseline per session and deletes it when the archived PM is purged", () => {
+    setChecklist("first", first);
+    setChecklist("finish", { kind: "merge", items: [{ id: "step", status: "completed" }] });
+    expect(db.all("SELECT session_id FROM session_checklists")).toEqual([{ session_id: pm.sessionId }]);
+
+    ledger.archivePm(pm.pm.id);
+    expect(ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS)).toEqual([pm.pm.id]);
+    expect(db.all("SELECT session_id FROM session_checklists")).toEqual([]);
+  });
+
+  it("clears the baseline when a session ends and keeps its history", () => {
+    setChecklist("first", first);
+    createSessionStore(db).update(pm.sessionId, { status: "ended" });
+    setChecklist("late", first);
+    expect(db.all("SELECT session_id FROM session_checklists")).toEqual([]);
+    expect(checklistRows().map(checklistOf)).toMatchObject([[{ title: "Read probe", status: "in_progress" }]]);
   });
 
   it("does not log a todo tool, preview, or result as Worker process", () => {

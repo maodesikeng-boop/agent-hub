@@ -272,16 +272,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const branches = createLedgerBranchSync(ctx, taskGraphs.publishBranchChange, closing.signal, options.worktreeBranchProbe);
   const applyDriverEventNow = (sessionId: SessionId, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null) => {
     if ((event.type === "agent.tool_preview" || event.type === "agent.tool") && isChecklistToolCall(event.name)) return;
-    if (event.type === "agent.text_delta") {
+    if (event.type === "agent.text_delta" || event.type === "agent.tool_preview") {
       if (event.parentToolUseId !== undefined) return;
       const session = getAgentSession(db, sessionId);
-      if (session !== null && session.role !== "assistant") sessions.applyStreamingDelta(session, event);
-      return;
-    }
-    if (event.type === "agent.tool_preview") {
-      if (event.parentToolUseId !== undefined) return;
-      const session = getAgentSession(db, sessionId);
-      if (session !== null) sessions.applyToolPreview(session, event);
+      if (session === null) return;
+      if (event.type === "agent.tool_preview") sessions.applyToolPreview(session, event);
+      else if (session.role !== "assistant") sessions.applyStreamingDelta(session, event);
       return;
     }
     const session = getAgentSession(db, sessionId);
