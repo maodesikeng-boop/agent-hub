@@ -39,7 +39,6 @@ import type {
   HealthEntry,
   Message,
   ConversationsLookup,
-  EndedWorkersPage,
   MessagesPage,
   PersonaChange,
   PersonaView,
@@ -289,9 +288,14 @@ export function makeHealth(over: Partial<HealthEntry> = {}): HealthEntry {
 
 export function makeConvSnapshot(
   messages: Message[],
-  over: { conversation?: Partial<Conversation>; hasMore?: boolean } = {},
+  over: { conversation?: Partial<Conversation>; hasMore?: boolean; workerBranch?: string | null } = {},
 ): ConversationSnapshot {
-  return { conversation: makeConversation(over.conversation), messages, hasMore: over.hasMore ?? false };
+  return {
+    conversation: makeConversation(over.conversation),
+    messages,
+    hasMore: over.hasMore ?? false,
+    ...(over.workerBranch !== undefined ? { workerBranch: over.workerBranch } : {}),
+  };
 }
 
 export const TEST_BOOT_ID = "00000000-0000-4000-8000-000000000001";
@@ -398,6 +402,7 @@ export class FakeApi {
     body: { messageId: 999 },
   });
   stop: (conversationId: number) => Reply | Promise<Reply> = () => ({ status: 202 });
+  endWorker: (conversationId: number) => Reply | Promise<Reply> = () => ({ status: 202 });
   rewind: (conversationId: number) => Reply | Promise<Reply> = () => ({ status: 200, body: { message: null } });
   older: (conversationId: number, before: number) => Reply | Promise<Reply> = () => ({
     status: 200,
@@ -407,11 +412,6 @@ export class FakeApi {
   lookup: (query: URLSearchParams) => Reply | Promise<Reply> = () => ({
     status: 200,
     body: { conversations: [], sessions: [] } satisfies ConversationsLookup,
-  });
-  /** GET /api/pms/:id/ended-workers。默认：没有更早的。 */
-  endedWorkers: (pmId: number, before: number | null) => Reply | Promise<Reply> = () => ({
-    status: 200,
-    body: { conversations: [], sessions: [], nextBefore: null } satisfies EndedWorkersPage,
   });
   /** GET /api/pms/:id/completed. Defaults to an empty page. */
   completedWork: (pmId: number, query: URLSearchParams) => Reply | Promise<Reply> = () => ({
@@ -1051,16 +1051,11 @@ export class FakeApi {
       if (sub === "cleanup" && method === "POST") return jsonResponse(await this.resourceCleanup(device));
     }
     if (method === "GET" && url.pathname === "/api/conversations/lookup") return jsonResponse(await this.lookup(url.searchParams));
-    const ended = /^\/api\/pms\/(\d+)\/ended-workers$/.exec(url.pathname);
-    if (method === "GET" && ended) {
-      const before = url.searchParams.get("before");
-      return jsonResponse(await this.endedWorkers(Number(ended[1]), before === null ? null : Number(before)));
-    }
     const completed = /^\/api\/pms\/(\d+)\/completed$/.exec(url.pathname);
     if (method === "GET" && completed) {
       return jsonResponse(await this.completedWork(Number(completed[1]), url.searchParams));
     }
-    const m = /^\/api\/conversations\/(\d+)\/(messages|stop|rewind)$/.exec(url.pathname);
+    const m = /^\/api\/conversations\/(\d+)\/(messages|stop|end|rewind)$/.exec(url.pathname);
     if (m) {
       const id = Number(m[1]);
       if (m[2] === "messages" && method === "POST") return jsonResponse(await this.postMessage(id, body));
@@ -1068,6 +1063,7 @@ export class FakeApi {
         return jsonResponse(await this.older(id, Number(url.searchParams.get("before"))));
       }
       if (m[2] === "stop" && method === "POST") return jsonResponse(await this.stop(id));
+      if (m[2] === "end" && method === "POST") return jsonResponse(await this.endWorker(id));
       if (m[2] === "rewind" && method === "POST") return jsonResponse(await this.rewind(id));
     }
     if (method === "GET" && url.pathname === API_PATHS.authStatus) return jsonResponse(await this.authStatus());

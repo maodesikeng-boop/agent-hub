@@ -96,7 +96,7 @@ describe("URL", () => {
     window.history.replaceState(null, "", "/#/w/30");
     await boot();
     const panel = screen.getByRole("complementary", { name: "修 X" });
-    expect(within(panel).getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();
+    expect(within(panel).getByRole("region", { name: "Worker 修 X" })).toBeInTheDocument();
     // 对话与左栏仍停在派它的项目经理上
     expect(title()).toBe("小林");
     expect(row("小林")).toHaveAttribute("aria-current", "page");
@@ -259,13 +259,13 @@ describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", (
     expect(value(column, "padding-right")).toBeUndefined();
   });
 
-  it("chat text (section 3): the desktop conversations of a PM, the Router, and a Worker set their body one step down; Settings and Pieces keep 15px", async () => {
+  it("chat text (section 3): the desktop conversations of a PM, the Router, and a Worker set their body one step down; Settings keeps 15px", async () => {
     expect(value(body('\\[data-shell="desktop"\\] \\.chat-text'), "--text-body")).toBe("var(--text-minor)");
     const user = userEvent.setup();
     await boot();
     expect(screen.getByRole("region", { name: "小林" })).toHaveClass("chat-text");
     window.location.hash = "#/w/30";
-    expect(await screen.findByRole("region", { name: "Piece 修 X" })).toHaveClass("chat-text");
+    expect(await screen.findByRole("region", { name: "Worker 修 X" })).toHaveClass("chat-text");
     expect(screen.getByRole("complementary", { name: "修 X" }).querySelectorAll(".chat-text")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect((await screen.findByRole("dialog", { name: "Settings" })).closest(".chat-text")).toBeNull();

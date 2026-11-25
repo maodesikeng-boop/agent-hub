@@ -21,9 +21,10 @@ interface RowContext {
   highlightId: MessageId | null;
   revertedChanges: ReadonlySet<PersonaChangeId>;
   lastTurnStatus: { status: React.ReactNode; streamingText: string | null | undefined } | null;
+  leanReports: boolean;
 }
 
-function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus }: RowContext): React.ReactNode {
+function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus, leanReports }: RowContext): React.ReactNode {
   const item = items[index];
   if (item === undefined) return <PendingBubble pending={pending[index - items.length]!} onRetry={onRetry} />;
   if (item.kind === "event_group") {
@@ -41,6 +42,7 @@ function rowContent(index: number, { items, pending, agentOf, onRetry, actions, 
         actions={actions}
         highlightId={highlightId}
         revertedChanges={revertedChanges}
+        leanReports={leanReports}
       />
     );
   }
@@ -74,6 +76,7 @@ export const MessageList = memo(function MessageList({
   statusAgent,
   streamingText,
   footer,
+  leanReports = false,
 }: {
   messages: Message[];
   pending: PendingMessage[];
@@ -89,6 +92,7 @@ export const MessageList = memo(function MessageList({
   statusAgent?: AgentIdentity;
   streamingText?: string | null;
   footer?: React.ReactNode;
+  leanReports?: boolean;
 }) {
   const items = useMemo(() => groupMessageRows(groupMessages(messages)), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
@@ -154,7 +158,7 @@ export const MessageList = memo(function MessageList({
   });
   useMessageEnter(enterRows, count, enterItemAt, typing, empty);
 
-  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus: rideOnTurn ? { status, streamingText } : null };
+  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus: rideOnTurn ? { status, streamingText } : null, leanReports };
   const scrollMargin = virtualizer.options.scrollMargin;
 
   return (

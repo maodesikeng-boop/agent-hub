@@ -10,7 +10,8 @@ export interface GraphProgress {
   total: number;
 }
 
-export function nodeWorkStatusOf(node: Pick<TaskNode, "status" | "waitingFor">): WorkStatus {
+export function nodeWorkStatusOf(node: Pick<TaskNode, "status" | "waitingFor"> & { gateAskPending?: boolean }): WorkStatus {
+  if (node.gateAskPending === true) return "waiting";
   switch (node.status) {
     case "done":
       return "done";

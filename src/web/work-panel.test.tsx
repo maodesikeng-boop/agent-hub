@@ -1,22 +1,42 @@
 import { readFileSync } from "node:fs";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COMPLETED_WORK_PAGE_SIZE,
   EMPTY_TOKEN_USAGE,
+  serverInfoFor,
+  type AgentVendor,
   type CompletedWorkItem,
   type TaskGraph,
   type TaskNode,
 } from "../shared/index.ts";
+import { createClient, localClient, type HubClient } from "./client.ts";
 import { ActiveTab } from "./components/ActiveTab.tsx";
 import { CompletedTab } from "./components/CompletedTab.tsx";
+import { InfoTab, type InfoTabProps } from "./components/InfoTab.tsx";
+import { WorkerDetailHeader } from "./components/WorkerDetail.tsx";
+import { WorkerReportText } from "./components/WorkerReportText.tsx";
 import { WorkPanel, WorkPanelHeader } from "./components/WorkPanel.tsx";
+import { DeviceScope } from "./device-scope.tsx";
+import { cleanWorkerTitle } from "./format.ts";
 import { COMPLETED_WORK_MAX_PAGES } from "./limits.ts";
+import { ModelCatalogProvider } from "./models.tsx";
 import type { WorkerEntry } from "./selectors.ts";
 import { workPanelExitsOf, workPanelOf } from "./side-panel.ts";
+import {
+  makeCapabilitiesView,
+  makeFolder,
+  makeMessage,
+  makePersonaChange,
+  makePersonaView,
+  makePm,
+  makeProject,
+} from "./test-utils.ts";
 import type { CompletedWorkQuery } from "./useCompletedWork.ts";
 import { activeWorkOf, completedDaysOf } from "./work-panel-model.ts";
+import { leanReportOf } from "./worker-report-view.ts";
 
 function makeNode(overrides: Partial<TaskNode> & { key: string }): TaskNode {
   return {
@@ -518,18 +538,279 @@ describe("CompletedTab", () => {
 });
 
 describe("InfoTab", () => {
-  it.todo("shows the frameless avatar, name, project, and the two row groups");
-  it.todo("opens the look picker from the avatar and shows the pencil badge on hover");
-  it.todo("opens each row's existing editor with a back arrow");
-  it.todo("shows New session and a red Archive, and the archive status group for an archived PM");
+  const TEST_SERVER = serverInfoFor("darwin");
+  const PM = makePm({ id: 3, name: "API Helper", mode: "manage_only", pinnedAt: 500 });
+  const PROJECT = makeProject({ id: 10, pmId: 3, conversationId: 30, name: "payments-api", setupCommand: "pnpm install" });
+  const FOLDERS = [makeFolder({ id: 1, projectId: 10, path: "/Users/me/code/payments-api", isMain: true })];
+  const PERSONA = makePersonaView({ pmId: 3, text: "Keep endpoints small.", mode: "manage_only", vendor: "claude", model: "sonnet", effort: "high" });
+
+  function makeInfoClient(overrides: Partial<HubClient> = {}): HubClient {
+    return {
+      ...createClient(null),
+      fetchPersona: vi.fn().mockResolvedValue(PERSONA),
+      fetchCapabilities: vi.fn().mockResolvedValue(makeCapabilitiesView({ kind: "pm", pmId: 3 })),
+      fetchPmMemoryFiles: vi.fn().mockResolvedValue({ files: [{ name: "notes.md", sizeBytes: 120, updatedAt: 1 }], totalBytes: 120 }),
+      ...overrides,
+    };
+  }
+
+  function renderInfo(overrides: Partial<InfoTabProps> = {}, clientOverrides: Partial<HubClient> = {}) {
+    const client = makeInfoClient(clientOverrides);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const props: InfoTabProps = {
+      pm: PM,
+      project: PROJECT,
+      folders: FOLDERS,
+      schedules: [],
+      rev: 0,
+      renewing: false,
+      page: null,
+      readOnly: false,
+      onNavigate: vi.fn(),
+      onArchived: vi.fn(),
+      ...overrides,
+    };
+    const wrap = (next: InfoTabProps) => (
+      <QueryClientProvider client={qc}>
+        <DeviceScope client={client} server={TEST_SERVER}>
+          <ModelCatalogProvider>
+            <InfoTab {...next} />
+          </ModelCatalogProvider>
+        </DeviceScope>
+      </QueryClientProvider>
+    );
+    const rendered = render(wrap(props));
+    return {
+      client,
+      props,
+      ...rendered,
+      rerenderInfo: (next: Partial<InfoTabProps>) => rendered.rerender(wrap({ ...props, ...next })),
+    };
+  }
+
+  it("shows the frameless avatar, name, project, and the two row groups", async () => {
+    renderInfo();
+    const lookBtn = screen.getByRole("button", { name: "Change look" });
+    expect(lookBtn).toHaveClass("work-info-avatar");
+    expect(lookBtn.querySelector(".avatar-tile")).toBeNull();
+    expect(screen.getByRole("heading", { name: "API Helper" })).toBeInTheDocument();
+    expect(screen.getByText("payments-api")).toBeInTheDocument();
+
+    const modelBtn = await screen.findByRole("button", { name: /^Model\b/ });
+    expect(modelBtn).toHaveTextContent("Sonnet High");
+    expect(screen.getByRole("button", { name: /^Mode\b/ })).toHaveTextContent("Orchestrate");
+    expect(screen.getByRole("button", { name: /^Folders\b/ })).toHaveTextContent("payments-api");
+    expect(screen.getByRole("button", { name: /^Schedules\b/ })).toHaveTextContent("0");
+    expect(screen.getByRole("button", { name: /^Persona\b/ })).toHaveTextContent("Set");
+    expect(await screen.findByRole("button", { name: /^Memory files\b/ })).toHaveTextContent("1");
+    expect(screen.getByRole("button", { name: /^Worktree setup\b/ })).toHaveTextContent("Configured");
+    expect(screen.getByRole("button", { name: /^History\b/ })).toBeInTheDocument();
+  });
+
+  it("opens the look picker from the avatar and shows the pencil badge on hover", async () => {
+    const user = userEvent.setup();
+    renderInfo();
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toContain(".work-info-avatar:not(:disabled):hover .work-info-avatar-pen");
+    const lookBtn = screen.getByRole("button", { name: "Change look" });
+    expect(lookBtn.querySelector(".work-info-avatar-pen")).not.toBeNull();
+
+    await user.click(lookBtn);
+    expect(await screen.findByRole("dialog", { name: "Change look" })).toBeInTheDocument();
+  });
+
+  it("opens each row's existing editor with a back arrow", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    const { rerenderInfo } = renderInfo({ onNavigate });
+    await screen.findByRole("button", { name: /^Model\b/ });
+
+    for (const [label, expected] of [
+      ["Model", "model"],
+      ["Mode", "mode"],
+      ["Folders", "folders"],
+      ["Schedules", "schedules"],
+      ["Capabilities", "capabilities"],
+      ["Persona", "persona"],
+      ["Memory files", "memory"],
+      ["Worktree setup", "worktree"],
+      ["History", "history"],
+    ] as const) {
+      await user.click(screen.getByRole("button", { name: new RegExp(`^${label}\\b`) }));
+      expect(onNavigate).toHaveBeenLastCalledWith(expected);
+    }
+
+    rerenderInfo({ page: "mode" });
+    expect(await screen.findByRole("radiogroup", { name: "Mode" })).toBeInTheDocument();
+    rerenderInfo({ page: "persona" });
+    expect(await screen.findByRole("textbox", { name: "Persona" })).toBeInTheDocument();
+  });
+
+  it("shows New session and a red Archive, and the archive status group for an archived PM", async () => {
+    const { rerenderInfo } = renderInfo();
+    await screen.findByRole("button", { name: /Model/ });
+    expect(screen.getByRole("button", { name: "New session" })).toBeInTheDocument();
+    const archiveBtn = screen.getByRole("button", { name: "Archive" });
+    expect(archiveBtn).toHaveClass("text-danger");
+
+    rerenderInfo({ pm: { ...PM, archivedAt: Date.now() - 10_000 } });
+    expect(screen.queryByRole("button", { name: "New session" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Archive status" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
+  });
+
+  it("handles unknown vendor names in History and disables editing when readOnly", async () => {
+    const user = userEvent.setup();
+    const futureVendor = "future-vendor" as AgentVendor;
+    const persona = makePersonaView({
+      pmId: 3,
+      vendor: futureVendor,
+      changes: [
+        makePersonaChange({ id: 5, vendorAfter: futureVendor, textBefore: "Old rules", textAfter: "New rules", reason: "Shorten" }),
+      ],
+    });
+    const { rerenderInfo } = renderInfo({ page: "history" }, { fetchPersona: vi.fn().mockResolvedValue(persona) });
+    const history = await screen.findByRole("region", { name: "History" });
+    await user.click(within(history).getByRole("button", { name: "View changes" }));
+    expect(within(history).getByText("Old rules")).toBeInTheDocument();
+    expect(within(history).getByText("New rules")).toBeInTheDocument();
+
+    const capsSpy = vi.spyOn(localClient, "fetchCapabilities").mockResolvedValue(makeCapabilitiesView({ kind: "pm", pmId: 3 }));
+    rerenderInfo({ page: "persona", readOnly: true });
+    expect(await screen.findByRole("textbox", { name: "Persona" })).toBeDisabled();
+    rerenderInfo({ page: "mode", readOnly: true });
+    for (const radio of within(await screen.findByRole("radiogroup", { name: "Mode" })).getAllByRole("radio")) {
+      expect(radio).toBeDisabled();
+    }
+    capsSpy.mockRestore();
+  });
 });
 
 describe("WorkerDetailHeader", () => {
-  it.todo("shows back, status icon, title, the ⋯ menu, and Close with no meta line");
-  it.todo("lists model and effort, duration, branch, Stop, and End inside the ⋯ menu");
-  it.todo("hides Stop when nothing runs and End when the Worker already ended");
+  it("shows back, status icon, title, the ⋯ menu, and Close with no meta line", () => {
+    const onBack = vi.fn();
+    const onClose = vi.fn();
+    const { container } = render(
+      <WorkerDetailHeader
+        title="Investigate readonly timeout"
+        status="running"
+        facts={{ model: "Opus 5.5 Max", duration: "12m", branch: "hub/fix-timeout" }}
+        onStop={vi.fn()}
+        onEnd={vi.fn()}
+        onBack={onBack}
+        backLabel="Back to Lin"
+        onClose={onClose}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Back to Lin" })).toBeInTheDocument();
+    expect(container.querySelector('[data-status="running"]')).not.toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "Investigate readonly timeout" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More worker actions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close work panel" })).toBeInTheDocument();
+    expect(screen.queryByTestId("piece-meta")).toBeNull();
+    expect(screen.queryByText("Opus 5.5 Max")).toBeNull();
+    expect(screen.queryByText("hub/fix-timeout")).toBeNull();
+  });
+
+  it("lists model and effort, duration, branch, Stop, and End inside the ⋯ menu", async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    const onEnd = vi.fn();
+    render(
+      <WorkerDetailHeader
+        title="Investigate readonly timeout"
+        status="waiting"
+        facts={{ model: "GPT-6.2 Sol Extra high", duration: "4m", branch: "hub/1002-timeout" }}
+        onStop={onStop}
+        onEnd={onEnd}
+        onBack={vi.fn()}
+        backLabel="Back"
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "More worker actions" }));
+    expect(await screen.findByText("GPT-6.2 Sol Extra high")).toBeInTheDocument();
+    expect(screen.getByText("4m")).toBeInTheDocument();
+    expect(screen.getByText("hub/1002-timeout")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "More worker actions" }));
+    await user.click(await screen.findByRole("button", { name: "End" }));
+    expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Stop when nothing runs and End when the Worker already ended", async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkerDetailHeader
+        title="Completed fix"
+        status="done"
+        facts={{ model: "Sonnet High", duration: "8m", branch: null }}
+        onStop={null}
+        onEnd={null}
+        onBack={vi.fn()}
+        backLabel="Back"
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "More worker actions" }));
+    expect(await screen.findByText("Sonnet High")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "End" })).toBeNull();
+  });
 });
 
 describe("WorkerReportText", () => {
-  it.todo("renders the summary, a bold question, and file chips with no field labels");
+  it("renders the summary, a bold question, and file chips with no field labels", () => {
+    const raw = [
+      "=== 汇报 ===",
+      "状态: 有问题",
+      "摘要: Failed handshake responses were cached for 10 minutes.",
+      "测试: 14 passed",
+      "偏离: 无",
+      "文件: [repro.log](/tmp/repro.log)",
+      "问题: Cache failed lookups for 60s or 5m?",
+      "=== 汇报结束 ===",
+    ].join("\n");
+    const report = leanReportOf(raw)!;
+    const message = makeMessage({
+      id: 42,
+      conversationId: 30,
+      text: raw,
+      meta: {
+        files: [
+          {
+            id: "f1",
+            name: "repro.log",
+            href: "/tmp/repro.log",
+            path: "/tmp/repro.log",
+            mime: "text/plain",
+            size: 128,
+            status: "saved",
+          },
+        ],
+      },
+    });
+    const { container } = render(
+      <DeviceScope client={createClient(null)} server={serverInfoFor("darwin")}>
+        <WorkerReportText report={report} message={message} />
+      </DeviceScope>,
+    );
+    expect(screen.getByText(/Failed handshake responses were cached/)).toBeInTheDocument();
+    const question = container.querySelector("[data-worker-report-question]")!;
+    expect(question).toHaveTextContent("Cache failed lookups for 60s or 5m?");
+    expect(question).toHaveClass("font-semibold");
+    expect(screen.getByRole("button", { name: "repro.log" })).toHaveAttribute("data-file-chip");
+    expect(container.textContent).not.toMatch(/摘要|问题|测试|Needs your call|Question|Files/);
+  });
+
+  it("strips category prefixes via cleanWorkerTitle", () => {
+    expect(cleanWorkerTitle("修复：Fix timeout")).toBe("Fix timeout");
+    expect(cleanWorkerTitle("Fix timeout")).toBe("Fix timeout");
+  });
 });

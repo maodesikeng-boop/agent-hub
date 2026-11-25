@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo } from "react";
 import type * as React from "react";
 import type { ConversationId, Message, MessageId, TaskGraph, TaskNodeKey } from "../../shared/index.ts";
-import { cleanPieceTitle } from "../format.ts";
+import { cleanWorkerTitle } from "../format.ts";
 import { graphFlowOf } from "../graph-flow.ts";
 import type { WorkerEntry } from "../selectors.ts";
 import { ChevronRight, Maximize2 } from "../ui/icons.ts";
@@ -131,7 +131,7 @@ export const ActiveTab = memo(function ActiveTab({
           </div>
           <ul>
             {work.workers.map((worker) => {
-              const title = cleanPieceTitle(worker.title);
+              const title = cleanWorkerTitle(worker.title);
               const status = workerWorkStatusOf(worker);
               return (
                 <li key={worker.conversationId}>

@@ -167,7 +167,7 @@ describe("那一行", () => {
     const line = within(log()).getByRole("button", { name: "修 X You said 顺便改 README" });
     expect(within(log()).queryByText(/Worker 已收到/)).not.toBeInTheDocument();
     await user.click(line);
-    expect(screen.getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Worker 修 X" })).toBeInTheDocument();
   });
 
   it("各种事件：有问题、放弃了、没按格式、这一轮没做完、建 worktree 失败各一行，已收工不显示", async () => {
@@ -241,8 +241,9 @@ describe("点开 Worker", () => {
     const user = userEvent.setup();
     await boot();
     await user.click(within(log()).getByRole("button", { name: /Done/ }));
-    const section = screen.getByRole("region", { name: "Piece 修 X" });
-    expect(within(section).getByRole("heading", { name: "修 X" })).toBeInTheDocument();
+    const panel = screen.getByRole("complementary", { name: "修 X" });
+    const section = screen.getByRole("region", { name: "Worker 修 X" });
+    expect(within(panel).getByRole("heading", { name: "修 X" })).toBeInTheDocument();
     expect(within(section).getByText("任务：修 X")).toBeInTheDocument();
     expect(within(section).getByText("已经修好了")).toBeInTheDocument();
     await user.click(within(section).getByRole("button", { name: /Worked for/ }));
@@ -250,7 +251,7 @@ describe("点开 Worker", () => {
     expect(within(section).getByText("Edit: src/x.ts")).toBeInTheDocument();
     // 桌面端：项目经理会话仍在主区，Worker 在右侧面板打开，左栏停在项目经理上
     expect(screen.getByRole("region", { name: "小林" })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "修 X" })).toContainElement(section);
+    expect(panel).toContainElement(section);
     expect(navRow(/小林/)).toHaveAttribute("aria-current", "page");
   });
 
@@ -271,7 +272,7 @@ describe("点开 Worker", () => {
       }),
     );
     await showWorker();
-    const section = screen.getByRole("region", { name: "Piece 修 X" });
+    const section = screen.getByRole("region", { name: "Worker 修 X" });
     const task = within(section).getByText("任务：修 X").closest("[data-head]") as HTMLElement;
     expect(task).toHaveAttribute("data-side", "left");
     expect(task).toHaveAttribute("data-head", "true");
@@ -357,7 +358,7 @@ describe("点开 Worker", () => {
     const ws = await boot();
     await showWorker();
     push(ws, messageChange(11, "message.created", makeMessage({ id: 14, conversationId: 30, workerId: 3, text: "再补一句" })));
-    expect(within(screen.getByRole("region", { name: "Piece 修 X" })).getByText("再补一句")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Worker 修 X" })).getByText("再补一句")).toBeInTheDocument();
   });
 
   it("翻页：有更早的就显示“加载更早的消息”，点了按 GET /messages?before= 取", async () => {
@@ -392,7 +393,7 @@ describe("点开 Worker", () => {
       }),
     );
     await showWorker();
-    expect(within(screen.getByRole("region", { name: "Piece 修 X" })).getByText("No messages yet")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Worker 修 X" })).getByText("No messages yet")).toBeInTheDocument();
   });
 
   it("对话被保留期清理过（conversation.purgedAt）：写清 14 天和 300 个两条保留规则，不显示“No messages yet”和输入框；实时收到 conversation.purged 同样", async () => {
@@ -405,10 +406,10 @@ describe("点开 Worker", () => {
       }),
     );
     await showWorker();
-    const region = screen.getByRole("region", { name: "Piece 修 X" });
+    const region = screen.getByRole("region", { name: "Worker 修 X" });
     expect(within(region).getByText("还在的话")).toBeInTheDocument();
     push(ws, changeOf(11, "conversation.purged", { conversationId: 30, purgedAt: 5 }));
-    await waitFor(() => expect(within(region).getByRole("status")).toHaveTextContent("Conversation cleared. Finished Pieces keep their conversations for up to 14 days, and only the latest 300."));
+    await waitFor(() => expect(within(region).getByRole("status")).toHaveTextContent("Conversation cleared. Finished Workers keep their conversations for up to 14 days, and only the latest 300."));
     expect(within(region).queryByText("还在的话")).not.toBeInTheDocument();
     expect(within(region).queryByText("No messages yet")).not.toBeInTheDocument();
   });
@@ -443,9 +444,9 @@ describe("点开 Worker", () => {
     expect(row).not.toHaveTextContent(summary);
     await user.click(row);
 
-    const region = screen.getByRole("region", { name: "Piece 按厂商配置换会话阈值" });
+    const region = screen.getByRole("region", { name: "Worker 按厂商配置换会话阈值" });
     expect(within(region).getByRole("status")).toHaveTextContent(
-      "Conversation cleared. Finished Pieces keep their conversations for up to 14 days, and only the latest 300.",
+      "Conversation cleared. Finished Workers keep their conversations for up to 14 days, and only the latest 300.",
     );
     expect(within(region).getByText(new RegExp(summary))).toBeInTheDocument();
     expect(within(region).getByText(/pull\/142/)).toBeInTheDocument();
@@ -465,7 +466,7 @@ describe("点开 Worker", () => {
       }),
     );
     await showWorker();
-    const region = screen.getByRole("region", { name: "Piece 修 X" });
+    const region = screen.getByRole("region", { name: "Worker 修 X" });
     push(ws, changeOf(11, "conversation.purged", { conversationId: 30, purgedAt: 5 }));
     await waitFor(() => expect(within(region).getByRole("status")).toHaveTextContent("Conversation cleared."));
     expect(within(region).getByText("改好了，测试通过")).toBeInTheDocument();
@@ -502,7 +503,7 @@ describe("点开 Worker", () => {
     expect(row).not.toHaveTextContent(reason);
     await user.click(row);
 
-    const region = screen.getByRole("region", { name: "Piece Review fixture: worktree failure" });
+    const region = screen.getByRole("region", { name: "Worker Review fixture: worktree failure" });
     expect(within(region).getByText("任务：建 worktree")).toBeInTheDocument();
     const alert = within(region).getByRole("alert");
     expect(alert).toHaveTextContent("Couldn't create worktree");
@@ -530,7 +531,7 @@ describe("点开 Worker", () => {
     );
 
     await user.click(within(log()).getByRole("button", { name: "修 X, Error, Claude 服务繁忙，稍后重试" }));
-    const region = screen.getByRole("region", { name: "Piece 修 X" });
+    const region = screen.getByRole("region", { name: "Worker 修 X" });
     const alert = within(region).getByRole("alert");
     expect(alert).toHaveTextContent("Turn failed");
     expect(alert).toHaveTextContent("Claude 服务繁忙，稍后重试");
@@ -573,7 +574,7 @@ describe("点开 Worker", () => {
       }),
     );
     await showWorker();
-    const region = screen.getByRole("region", { name: "Piece 修 X" });
+    const region = screen.getByRole("region", { name: "Worker 修 X" });
     expect(within(region).getByRole("alert")).toHaveTextContent(`Couldn't create worktree ${reason}`);
     expect(within(region).queryByText("Completed")).not.toBeInTheDocument();
   });
@@ -584,7 +585,7 @@ describe("点开 Worker", () => {
     await boot({ ...full, conversations: full.conversations.filter((c) => c.conversation.id !== 30) });
     api.lookup = (query) => ({ status: 200, body: { conversations: query.get("ids") === "30" ? [worker] : [], sessions: [] } });
     await showWorker();
-    const region = await screen.findByRole("region", { name: "Piece 修 X" });
+    const region = await screen.findByRole("region", { name: "Worker 修 X" });
     expect(await within(region).findByText("已经修好了")).toBeInTheDocument();
     expect(api.calls.filter((c) => c.path === "/api/conversations/lookup")).toHaveLength(1);
   });
@@ -597,7 +598,7 @@ describe("点开 Worker", () => {
       }),
     );
     await showWorker();
-    expect(await screen.findByText("Piece not found")).toBeInTheDocument();
+    expect(await screen.findByText("Worker not found")).toBeInTheDocument();
     expect(api.calls.filter((c) => c.path === "/api/conversations/lookup").map((c) => c.query.get("ids"))).toEqual(["30"]);
     await user.click(screen.getByRole("button", { name: "Close work panel" }));
     expect(screen.queryByRole("complementary", { name: "修 X" })).toBeNull();
@@ -613,7 +614,8 @@ describe("点开 Worker", () => {
     expect(screen.getByRole("region", { name: "小林" })).toBeInTheDocument();
   });
 
-  it("Worker 的标题栏显示只读（取自项目经理会话里的“已派出”那一行）", async () => {
+  it("Worker 的标题栏 ⋯ 菜单显示只读（取自项目经理会话里的“已派出”那一行）", async () => {
+    const user = userEvent.setup();
     await boot(
       withWorker({
         conversations: [
@@ -623,7 +625,9 @@ describe("点开 Worker", () => {
       }),
     );
     await showWorker();
-    expect(within(screen.getByRole("complementary", { name: "修 X" })).getByText("Read-only")).toBeInTheDocument();
+    const panel = screen.getByRole("complementary", { name: "修 X" });
+    await user.click(within(panel).getByRole("button", { name: "More worker actions" }));
+    expect(await screen.findByText("Read-only")).toBeInTheDocument();
   });
 });
 
@@ -1126,7 +1130,7 @@ describe("右栏工作面板（Active、Completed、Info 与 Worker 详情，推
     await boot(crowd());
     window.location.hash = "#/w/32";
     const panel = await screen.findByRole("complementary", { name: "查日志" });
-    expect(within(panel).getByRole("region", { name: "Piece 查日志" })).toBeInTheDocument();
+    expect(within(panel).getByRole("region", { name: "Worker 查日志" })).toBeInTheDocument();
     await user.click(within(panel).getByRole("button", { name: "Back to 小林" }));
     expect(rail()).toBeInTheDocument();
   });
@@ -1170,19 +1174,18 @@ describe("右栏工作面板（Active、Completed、Info 与 Worker 详情，推
         ],
       });
 
-    it("点进 Worker 详情：顶栏显示模型、思考程度、对话长度；悬停 context 看明细", async () => {
+    it("点进 Worker 详情：顶栏无 meta 行，⋯ 菜单显示模型与思考程度", async () => {
+      const user = userEvent.setup();
       await boot(withAgent({ vendor: "claude", model: "sonnet", effort: "high", usage }));
-      await userEvent.setup().click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
-      const meta = within(screen.getByRole("complementary", { name: "修 X" })).getByTestId("piece-meta");
-      expect([...meta.children].map((c) => c.textContent)).toEqual(["Sonnet", "High", "117K context"]);
-      expect(meta).toHaveClass("text-xs", "text-muted-foreground", "gap-3");
-      expect(within(meta).getByText("117K context")).toHaveAttribute(
-        "title",
-        ["Context 117,000 tokens", "Cumulative so far", "Input 392 tokens", "Cache read 47,000,000 tokens", "Cache write 448,354 tokens", "Output 154,408 tokens"].join("\n"),
-      );
+      await user.click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
+      const panel = screen.getByRole("complementary", { name: "修 X" });
+      expect(within(panel).queryByTestId("piece-meta")).toBeNull();
+      await user.click(within(panel).getByRole("button", { name: "More worker actions" }));
+      expect(await screen.findByText("Sonnet High")).toBeInTheDocument();
     });
 
-    it("默认模型：厂商的模型名单说了实际是哪个（defaultModel），详情栏就写它", async () => {
+    it("默认模型：厂商的模型名单说了实际是哪个（defaultModel），⋯ 菜单就写它", async () => {
+      const user = userEvent.setup();
       const snap = withAgent({ vendor: "claude", model: null, effort: null, usage });
       openFirstConversation(snap);
       const fake = new FakeApi(snap);
@@ -1192,11 +1195,10 @@ describe("右栏工作面板（Active、Completed、Info 与 Worker 详情，推
       render(<App />);
       await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
       act(() => FakeWebSocket.last.open());
-      await userEvent.setup().click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
-      await waitFor(() => {
-        const meta = within(screen.getByRole("complementary", { name: "修 X" })).getByTestId("piece-meta");
-        expect([...meta.children].map((c) => c.textContent)).toEqual(["Opus 5.5", "117K context"]);
-      });
+      await user.click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
+      const panel = screen.getByRole("complementary", { name: "修 X" });
+      await user.click(within(panel).getByRole("button", { name: "More worker actions" }));
+      expect(await screen.findByText("Opus 5.5")).toBeInTheDocument();
     });
 
     it("标题超长时截断，不撑破", async () => {
@@ -1211,13 +1213,13 @@ describe("右栏工作面板（Active、Completed、Info 与 Worker 详情，推
     await boot(crowd());
     const row = (name: RegExp) => within(workerGroup()).getByRole("button", { name });
     await user.click(row(/修 X/));
-    expect(screen.getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Worker 修 X" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/w/30");
     await user.click(screen.getByRole("button", { name: "Back to 小林" }));
     expect(rail()).toBeInTheDocument();
     expect(window.location.hash).toBe("#/c/1");
     await user.click(row(/写文档/));
-    expect(screen.getByRole("region", { name: "Piece 写文档" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Worker 写文档" })).toBeInTheDocument();
     await user.click(navRow(/小林/));
     expect(window.location.hash).toBe("#/c/1");
   });
@@ -1749,7 +1751,7 @@ describe("在 Worker 页面直接对它说话", () => {
     const user = userEvent.setup();
     const ws = await boot(snapshot);
     await showWorker();
-    const section = screen.getByRole("region", { name: "Piece 修 X" });
+    const section = screen.getByRole("region", { name: "Worker 修 X" });
     return { user, ws, section, box: () => within(section).getByRole("textbox", { name: "Message" }) };
   }
 
@@ -1873,7 +1875,7 @@ describe("在 Worker 页面直接对它说话", () => {
     await user.click(screen.getByRole("button", { name: "Close work panel" }));
     expect(within(screen.getByRole("region", { name: "小林" })).queryByRole("list", { name: "Files to send" })).not.toBeInTheDocument();
     await showWorker();
-    const again = screen.getByRole("region", { name: "Piece 修 X" });
+    const again = screen.getByRole("region", { name: "Worker 修 X" });
     await user.click(within(again).getByRole("button", { name: "Send" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
     const call = api.callsTo("POST", /messages$/)[0]!;
@@ -1900,7 +1902,7 @@ describe("在 Worker 页面直接对它说话", () => {
     expect(api.uploads).toHaveLength(1);
     // 再回 Worker：输入框和待发列表是空的
     await showWorker();
-    const again = screen.getByRole("region", { name: "Piece 修 X" });
+    const again = screen.getByRole("region", { name: "Worker 修 X" });
     expect(within(again).getByRole("textbox", { name: "Message" })).toHaveValue("");
     expect(within(again).queryByRole("list", { name: "Files to send" })).not.toBeInTheDocument();
   });
@@ -1968,7 +1970,7 @@ describe("在 Worker 页面直接对它说话", () => {
       };
     };
     await showWorker();
-    const section = screen.getByRole("region", { name: "Piece 修 X" });
+    const section = screen.getByRole("region", { name: "Worker 修 X" });
     expect(await within(section).findByText("任务：压缩状态快照")).toBeInTheDocument();
     expect(within(section).getByText("已完成快照瘦身与 gzip 压缩")).toBeInTheDocument();
     expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();

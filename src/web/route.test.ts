@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 // 联机 P3：网址带设备（docs/multi-device-design.md 第 4.1 节）。老网址（不带 #/d/）是入口本机。
 import { describe, expect, it } from "vitest";
-import { SETTINGS_SECTIONS, parseRoute, routeHash, useRoute, type Route } from "./route.ts";
+import { INFO_PAGES, SETTINGS_SECTIONS, parseRoute, routeHash, useRoute, type Route } from "./route.ts";
 
 const TOKYO = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 
@@ -112,8 +112,8 @@ describe("设置网址（docs/mobile-settings-design.md 第 2.2 节）", () => {
 });
 
 describe("PM settings drill-down pages", () => {
-  it("round-trips #/pm/<id>/<page> for capabilities, persona, memory, worktree, and history, with and without a device", () => {
-    for (const page of ["capabilities", "persona", "memory", "worktree", "history"] as const) {
+  it("round-trips #/pm/<id>/<page> for every Info page, with and without a device", () => {
+    for (const page of INFO_PAGES) {
       const localRoute: Route = { view: "profile", pmId: 5, page };
       expect(routeHash(localRoute)).toBe(`#/pm/5/${page}`);
       expect(parseRoute(`#/pm/5/${page}`)).toEqual(localRoute);
@@ -124,7 +124,7 @@ describe("PM settings drill-down pages", () => {
     }
   });
 
-  it("rejects unknown pages and page suffixes on conversation and Piece routes", () => {
+  it("rejects unknown pages and page suffixes on conversation and Worker routes", () => {
     for (const bad of [
       "#/pm/5/unknown",
       "#/pm/5/__proto__",

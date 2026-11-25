@@ -9,7 +9,6 @@
     "src/daemon/ledger/handover.ts": 1105,
     "src/daemon/ledger/router.ts": 1374,
     "src/daemon/router/dispatcher.ts": 1374,
-    "src/web/components/PeelTrack.tsx": 1102,
     "src/web/components/ProvidersSettings.tsx": 1176,
     "src/web/components/RouterStream.tsx": 1005,
     "src/web/selectors.ts": 1237,
@@ -38,8 +37,6 @@
     "src/web/components/RouterModelPicker.tsx#RouterModelPicker": 423,
     "src/web/components/RouterStream.tsx#RouterStream": 426,
     "src/web/components/RouterWorkbench.tsx#RouterWorkbench": 431,
-    "src/web/components/TaskGraphDialog.tsx#TaskGraphDialog": 345,
-    "src/web/shell-model.ts#useShellModel": 474,
-    "src/web/task-graph-layout.ts#computeTaskGraphLayoutUncached": 390
+    "src/web/shell-model.ts#useShellModel": 474
   }
 }

@@ -14,7 +14,6 @@ import {
   type ConversationId,
   type DeviceInfo,
   type MessageId,
-  type PmId,
   type PostMessageRequest,
   type StateSnapshot,
   type WsServerMessage,
@@ -32,7 +31,7 @@ import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type
 import { openChangeStream, planSnapshotRecovery, reconnectDelay, type ChangeStreamConnection } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, sameDeviceInfo, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
 import { ErrorNotice, errorText, newClientId } from "./format.ts";
-import { invalidateAccount, queryClient, taskGraphHistoryKey, useHubQueryClient } from "./query-client.ts";
+import { completedWorkKey, invalidateAccount, queryClient, useHubQueryClient } from "./query-client.ts";
 import { parseRoute } from "./route.ts";
 import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer, type HubState } from "./state.ts";
@@ -83,7 +82,6 @@ export class DeviceHub {
   private loading: AbortController | null = null;
   private readonly olderInFlight = new Set<ConversationId>();
   private readonly requestedWorkers = new Set<WorkerId>();
-  private readonly endedWorkersInFlight = new Set<PmId>();
   private readonly inFlightPosts = new Map<string, { conversationId: ConversationId; after: "none" | "stop" | "rewind" }>();
   private readonly rewindBarriers = new Map<ConversationId, number>();
   private readonly stopRequests = new Map<ConversationId, Promise<void>>();
@@ -273,7 +271,7 @@ export class DeviceHub {
     this.cursor = { bootId: this.cursor.bootId, seq: change.seq };
     this.dispatch({ type: "change", change });
     if (change.type === "task_graph.updated" && change.data.graph.status !== "active") {
-      const queryKey = taskGraphHistoryKey(this.key, change.data.graph.projectId);
+      const queryKey = completedWorkKey(this.key, change.data.graph.pmId);
       // Invalidation alone leaves a fetch with no cached data running.
       void this.qc.cancelQueries({ queryKey });
       void this.qc.invalidateQueries({ queryKey });
@@ -285,7 +283,7 @@ export class DeviceHub {
     this.cursor = cursor;
     this.dispatch({ type: "loaded", snapshot });
     if (replacing) {
-      const queryKey = ["project-task-graphs", this.key];
+      const queryKey = ["completed-work", this.key];
       void this.qc.cancelQueries({ queryKey });
       void this.qc.invalidateQueries({ queryKey });
     }
@@ -555,18 +553,6 @@ export class DeviceHub {
       for (const id of workerIds) this.requestedWorkers.delete(id);
     }
   }
-
-  loadEndedWorkers = async (pmId: PmId): Promise<void> => {
-    const before = this.state.olderEndedWorkers[pmId];
-    if (before === undefined || this.endedWorkersInFlight.has(pmId)) return;
-    this.endedWorkersInFlight.add(pmId);
-    try {
-      const page = await this.client.fetchEndedWorkers(pmId, before);
-      if (this.alive) this.dispatch({ type: "endedWorkersLoaded", pmId, before, page });
-    } finally {
-      this.endedWorkersInFlight.delete(pmId);
-    }
-  };
 
   loadOlder = async (conversationId: ConversationId): Promise<void> => {
     const view = this.state.conversations[conversationId];

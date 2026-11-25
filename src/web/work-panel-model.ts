@@ -146,6 +146,7 @@ export function prLabelOf(prUrl: string | null): string | null {
 
 export function stepTargetOf(
   node: Pick<TaskNode, "activeWorkerId" | "workerIds" | "gateAskMessageId" | "status" | "waitingFor"> & {
+    gateAskPending?: boolean;
     userBlocker?: TaskNode["userBlocker"];
     key?: TaskNode["key"];
   },
@@ -162,7 +163,7 @@ export function stepTargetOf(
     const worker = byId.get(node.workerIds[i]!);
     if (worker !== undefined) return { kind: "worker", conversationId: worker.conversationId };
   }
-  if (node.status === "waiting" && node.waitingFor === "user") {
+  if (node.gateAskPending === true || (node.status === "waiting" && node.waitingFor === "user")) {
     if (node.gateAskMessageId !== null) return { kind: "ask", messageId: node.gateAskMessageId };
     if (asks !== undefined) {
       const match = asks.find((m) => {

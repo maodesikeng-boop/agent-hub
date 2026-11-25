@@ -2,7 +2,7 @@ import { defaultRangeExtractor, observeElementRect, useVirtualizer, type Range }
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
 import type { CompletedWorkItem, ConversationId } from "../../shared/index.ts";
-import { cleanPieceTitle, errorLine, errorText, errorTitle } from "../format.ts";
+import { cleanWorkerTitle, errorLine, errorText, errorTitle } from "../format.ts";
 import { completedFlowOf } from "../graph-flow.ts";
 import { cn } from "../lib/utils.ts";
 import { Loader2 } from "../ui/icons.ts";
@@ -63,7 +63,7 @@ const CompletedItemRow = memo(function CompletedItemRow({
   const key = completedKeyOf(item);
   const status = completedWorkStatusOf(item);
   const cancelled = status === "cancelled";
-  const displayTitle = item.kind === "worker" ? cleanPieceTitle(item.title) : item.title;
+  const displayTitle = item.kind === "worker" ? cleanWorkerTitle(item.title) : item.title;
   const prLabel = prLabelOf(item.prUrl);
   const clockTime = formatClockTime(item.finishedAt);
   const expandedFlow = useMemo(

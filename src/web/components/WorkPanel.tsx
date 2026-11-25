@@ -82,7 +82,8 @@ export interface WorkPanelDetailHeaderProps {
   title: React.ReactNode;
   backLabel: string;
   onBack: () => void;
-  onClose: () => void;
+  /** Omitted on full-screen phone pages where Back is the sole exit. */
+  onClose?: () => void;
   /** Extra controls before Close, such as the Worker `⋯` menu. */
   actions?: React.ReactNode;
 }
@@ -101,16 +102,18 @@ export function WorkPanelDetailHeader({
       </Button>
       <div className="min-w-0 flex-1">{title}</div>
       {actions}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="work-panel-close shrink-0"
-        aria-label="Close work panel"
-        title="Close work panel"
-        onClick={onClose}
-      >
-        <X className="size-4" aria-hidden="true" />
-      </Button>
+      {onClose !== undefined && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="work-panel-close shrink-0"
+          aria-label="Close work panel"
+          title="Close work panel"
+          onClick={onClose}
+        >
+          <X className="size-4" aria-hidden="true" />
+        </Button>
+      )}
     </header>
   );
 }

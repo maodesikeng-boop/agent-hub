@@ -2,8 +2,9 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { CompletedCursor, CompletedWorkPage, PmId } from "../shared/index.ts";
 import { useClient } from "./device-scope.tsx";
+import { LOCAL_DEVICE } from "./devices.ts";
 import { COMPLETED_WORK_MAX_PAGES } from "./limits.ts";
-import { useHubQueryClient } from "./query-client.ts";
+import { completedWorkKey, useHubQueryClient } from "./query-client.ts";
 import { completedDaysOf, type CompletedDay } from "./work-panel-model.ts";
 
 export interface CompletedWorkQuery {
@@ -23,7 +24,7 @@ const EMPTY_PAGES: readonly CompletedWorkPage[] = [];
 const NOOP = () => {};
 
 export function completedWorkQueryKey(device: string | null, pmId: PmId | null) {
-  return ["completed-work", device, pmId] as const;
+  return completedWorkKey(device ?? LOCAL_DEVICE, pmId);
 }
 
 export function useCompletedWork(pmId: PmId | null, enabled: boolean, finishSignal?: string): CompletedWorkQuery {

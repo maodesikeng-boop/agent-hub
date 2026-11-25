@@ -10,9 +10,9 @@ import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
 export interface GraphCanvasProps {
   flow: GraphFlow;
-  /** auto: horizontal when it fits the paper, vertical otherwise; vertical: always the list (Completed rows). */
-  orientation: "auto" | "vertical";
-  /** The canvas sits on warm paper (Active) or directly on the panel (Completed expansion). */
+  /** auto: horizontal when it fits the paper, vertical otherwise; horizontal: always wide; vertical: always the list. */
+  orientation: "auto" | "horizontal" | "vertical";
+  /** The canvas sits on warm paper (Active / dialog) or directly on the panel (Completed expansion). */
   paper: boolean;
   onOpenStep?: (key: TaskNodeKey) => void;
   /** When set, only steps returning true render as clickable buttons. */
@@ -207,11 +207,11 @@ export const GraphCanvas = memo(function GraphCanvas({
   const [box, setBox] = useState<HTMLDivElement | null>(null);
   const measure = useStepTextMeasure(box);
   const horizontal = useMemo(
-    () => (orientation === "auto" ? horizontalLayoutOf(flow, measure) : null),
+    () => (orientation !== "vertical" ? horizontalLayoutOf(flow, measure) : null),
     [flow, measure, orientation],
   );
   const autoOrientation = useGraphOrientation(orientation === "auto" ? box : null, horizontal?.width ?? 0);
-  const resolved = orientation === "vertical" ? "vertical" : autoOrientation;
+  const resolved = orientation === "vertical" ? "vertical" : orientation === "horizontal" ? "horizontal" : autoOrientation;
   const rows = useMemo(() => (resolved === "vertical" ? verticalRowsOf(flow) : null), [flow, resolved]);
 
   return (
@@ -219,7 +219,7 @@ export const GraphCanvas = memo(function GraphCanvas({
       ref={setBox}
       data-graph-canvas
       data-orientation={resolved}
-      className={cn(paper ? "work-graph-paper" : "min-w-0", "text-minor")}
+      className={cn(paper ? "work-graph-paper" : "min-w-0", orientation === "horizontal" && "w-fit min-w-full", "text-minor")}
     >
       {resolved === "horizontal" && horizontal !== null ? (
         <HorizontalGraph flow={flow} layout={horizontal} onOpenStep={onOpenStep} stepInteractive={stepInteractive} />
