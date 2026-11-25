@@ -28,16 +28,15 @@
 - **Option A (Recommended): Deny holds for the rest of the Worker run.** Later requests for that app are declined without a new card, so a looping model cannot flood the chat. To change your mind, end the Worker and start a new one.
 - **Option B: Deny answers this card only.** The next request for the app opens a new card, up to `APP_APPROVAL_CARDS_PER_WORKER_MAX` (20) cards per Worker.
 
-#### 3. Who can confirm
-
-- **Option A (Recommended): any signed-in workbench session (browser cookie or a paired device over mutual TLS), the same rule as the outer-sandbox card.** The project manager, Workers, `hub`, and Feishu cannot confirm. See "Who can click the card" below for why a stronger check here would not stop a hostile Worker.
-- **Option B: also require Touch ID or the macOS login password for each app card, through the macOS desktop shell.** This only adds protection after Bellwood closes the other routes from a Worker with no outer sandbox to host actions, such as reading the Web login token and changing the project setup command. That work needs its own design.
-
-#### 4. Feishu
+#### 3. Feishu
 
 - **Option A (Recommended): a read-only notice in the project group naming the Worker and the app, telling you to confirm on the computer.** This matches the outer-sandbox card. Computer Use drives the local screen, so you are expected to be at the Mac.
 - **Option B: no Feishu message for app cards.**
-- **Option C: let the project owner confirm on Feishu** (the same owner-only check as `src/daemon/feishu/mesh-approvals.ts`).
+- **Option C: let the project owner confirm on Feishu** (the same owner-only check as `src/daemon/feishu/mesh-approvals.ts`). This adds Feishu as a second place to click, next to the workbench.
+
+### Decided
+
+- **Who can confirm: the user's click in a signed-in workbench session (browser cookie or a paired device over mutual TLS), the same rule as the outer-sandbox card.** The project manager, Workers, `hub`, and the Task Graph cannot confirm. There is no Touch ID or other OS-level check that the user is present. The user decided this earlier: 「我觉得只要用户同意就行，点击了就行」. See "Who can click the card" below.
 
 Linux and Windows need no decision. No-outer-sandbox mode is macOS-only (`NO_OUTER_SANDBOX_SUPPORTED_PLATFORMS`), so app cards can only occur on macOS. The shared parts do not depend on the platform.
 
@@ -111,7 +110,7 @@ A follows the merged pattern of `user_blockers` and `worker_sandbox_approvals`: 
 
 #### Who can click the card
 
-Conclusion: a signed-in workbench session only (browser cookie, or a paired device's mutual TLS session through `ui-server`). There is no route on `agent-api`, no `hub` command, and no Task Graph decision that changes these rows, and Feishu shows a notice only.
+Decided by the user (「我觉得只要用户同意就行，点击了就行」): a signed-in workbench session only (browser cookie, or a paired device's mutual TLS session through `ui-server`). There is no route on `agent-api`, no `hub` command, and no Task Graph decision that changes these rows. Feishu shows a notice only, unless the Feishu decision above picks Option C.
 
 Reasons:
 
