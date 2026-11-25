@@ -1306,8 +1306,10 @@ input[type="search"]::-webkit-search-cancel-button {
       linear-gradient(180deg, var(--rings-top), var(--rings-bottom));
     color: var(--list-ink);
   }
+  /* A modal dialog sets pointer-events: none on body; the top bar stays window chrome above the Settings page. */
   .shell-topbar {
     height: var(--topbar-height);
+    pointer-events: auto;
   }
   /* Panels sit one inset in from the frame's top, right, and bottom, so the list and the sheets share both edges. */
   .shell-frame {

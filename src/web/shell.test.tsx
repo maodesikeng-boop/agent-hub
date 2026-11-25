@@ -1,7 +1,7 @@
 // 网页外壳（docs/ui-standard.md 第 6、16 条）：每个对话的网址、刷新回到原来那个、前进后退，打开对话时焦点进输入框，
 // 左栏的在忙、行高一致，左下角的按钮，“重连中”提示条。接口、WebSocket 都是假的。
 import { readFileSync } from "node:fs";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateSnapshot, WsServerMessage } from "../shared/index.ts";
@@ -407,6 +407,36 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
       });
     }
     expect(postWindowDrag).toHaveBeenCalledTimes(2);
+  });
+
+  it("Settings 打开时木头顶栏照样拖窗、双击缩放，按在顶栏上不算点了外面，Esc 照样关", async () => {
+    const user = userEvent.setup();
+    const postWindowDrag = vi.fn();
+    window.webkit = { messageHandlers: { windowDrag: { postMessage: postWindowDrag } } };
+    await boot();
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog", { name: "Settings" });
+    expect(document.querySelector("[data-slot='dialog-overlay']")).toHaveClass("top-[var(--topbar-height)]");
+    expect(document.querySelector("[data-slot='dialog-overlay']")).not.toHaveClass("inset-0");
+    // Radix starts listening for outside presses one tick after the page mounts.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    const topBar = document.querySelector(".shell-topbar[data-window-drag]")!;
+    for (const detail of [1, 2]) {
+      act(() => {
+        fireEvent.pointerDown(topBar, { button: 0, pointerType: "mouse" });
+        fireEvent.mouseDown(topBar, { button: 0, detail });
+        fireEvent.pointerUp(topBar, { button: 0, pointerType: "mouse" });
+        fireEvent.mouseUp(topBar, { button: 0, detail });
+        fireEvent.click(topBar, { button: 0, detail });
+      });
+    }
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(postWindowDrag.mock.calls).toEqual([[{ doubleClick: false }], [{ doubleClick: true }]]);
+    expect(settings).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument());
   });
 });
 

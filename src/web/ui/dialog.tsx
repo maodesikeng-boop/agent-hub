@@ -10,6 +10,14 @@ export const Dialog = DialogPrimitive.Root;
 export const ZOOM_DIALOG = "h-auto max-h-[90dvh] w-fit max-w-[min(96vw,1400px)] min-w-[min(96vw,26rem)]";
 export const DialogClose = DialogPrimitive.Close;
 
+type PointerDownOutside = NonNullable<React.ComponentProps<typeof DialogPrimitive.Content>["onPointerDownOutside"]>;
+
+// A press on window chrome drags or zooms the native window, so it never dismisses a page.
+const keepWindowChrome: PointerDownOutside = (event) => {
+  const target = event.detail.originalEvent.target;
+  if (target instanceof Element && target.closest("[data-window-drag]")) event.preventDefault();
+};
+
 export function DialogContent({
   className,
   children,
@@ -17,24 +25,36 @@ export function DialogContent({
   titleClassName,
   fullScreen = false,
   page = false,
+  onPointerDownOutside,
   ...props
 }: Omit<React.ComponentProps<typeof DialogPrimitive.Content>, "title"> & {
   title: string;
   titleClassName?: string;
   fullScreen?: boolean;
   /** Covers the workspace beside the rail and below the top bar as a page of the workbench: the frame wood with no scrim,
-   * outline, or shadow. The page draws its own close button in its header. */
+   * outline, or shadow. The page draws its own close button in its header, and the top bar keeps dragging the window. */
   page?: boolean;
 }) {
   const accent = useAccentColor();
   const content = (
     <>
-      <DialogPrimitive.Overlay data-slot="dialog-overlay" className={cn("fixed inset-0 z-50", page ? "bg-transparent" : "bg-[rgb(28_25_23_/_0.3)]")} />
+      <DialogPrimitive.Overlay
+        data-slot="dialog-overlay"
+        className={cn("fixed z-50", page ? "inset-x-0 top-[var(--topbar-height)] bottom-0 bg-transparent" : "inset-0 bg-[rgb(28_25_23_/_0.3)]")}
+      />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         data-fullscreen={fullScreen || undefined}
         data-page={page || undefined}
         aria-describedby={undefined}
+        onPointerDownOutside={
+          page
+            ? (event) => {
+                onPointerDownOutside?.(event);
+                keepWindowChrome(event);
+              }
+            : onPointerDownOutside
+        }
         className={cn(
           fullScreen
             ? "fixed inset-0 z-50 flex flex-col overflow-hidden bg-panel pt-[var(--safe-top)] pb-[max(var(--safe-bottom),var(--kb-inset))] outline-none"
