@@ -6,6 +6,7 @@ import { COMPUTER_USE, COMPUTER_USE_INVENTORY } from "../../../test/sandbox-appr
 import { askOf, hubPath, isTaskNodeWaitingDecision, SANDBOX_APPROVALS_RETENTION_MS, SANDBOX_APPROVALS_TERMINAL_MAX_ROWS, type CapabilityInventory, type HubArgs } from "../../shared/index.ts";
 import { createAgentApi } from "../agent-api/server.ts";
 import { createSessionTokens } from "../agent-api/tokens.ts";
+import { canDeliverSystemMessage } from "../handlers.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createUiServer } from "../ui-server/server.ts";
 import { loginCookie } from "../ui-server/test-login.ts";
@@ -145,6 +146,48 @@ describe("Worker sandbox approval", () => {
     expect(askOf(f.ledger.getMessage(pending.messageId!)!)).toMatchObject({ answered: true, closed: true });
   });
 
+  it("shows sandbox confirmation in worker list and show until the user approves", () => {
+    const worker = f.dispatch({ noWorktree: false });
+    const normal = f.dispatch({ noWorktree: false, noOuterSandbox: false });
+    const list = () => f.ledger.hubCall(f.pm.sessionId, "worker.list", { vendor: "codex" }).text;
+    const show = () => f.ledger.hubCall(f.pm.sessionId, "worker.show", { workerId: worker.id }).text;
+    expect(list()).toContain(`#${worker.id} ${worker.title} · 等待沙箱确认`);
+    expect(list()).toContain(`#${normal.id} ${normal.title} · 准备中`);
+    expect(show()).toContain("等待沙箱确认");
+    expect(show()).not.toContain("现在：worktree 还没建好");
+
+    f.ledger.decideSandboxApproval!(approvalOf(worker.id)!.id, APPROVE);
+    expect(list()).toContain(`#${worker.id} ${worker.title} · 准备中`);
+    expect(show()).toContain("现在：worktree 还没建好");
+    f.ledger.hubCall(f.pm.sessionId, "worker.end", { workerId: worker.id });
+    expect(list()).toContain(`#${worker.id} ${worker.title} · 已收工`);
+  });
+
+  it("keeps the rejection notice deliverable until the PM replaces the Worker", () => {
+    const graph = createSandboxGraph();
+    const workerId = graph.nodes[0]!.activeWorkerId!;
+    const approval = approvalOf(workerId)!;
+    const sent: number[] = [];
+    const unsubscribe = f.ledger.onActionEnqueued(({ type, params }) => {
+      if (type === "session.send" && params.sessionId === f.pm.sessionId) sent.push(params.messageId);
+    });
+    try {
+      f.ledger.decideSandboxApproval!(approval.id, { ...APPROVE, decision: "reject" });
+      expect(sent).toHaveLength(1);
+      const [messageId] = sent;
+      expect(f.ledger.getMessage(messageId!)?.text).toContain(`用户拒绝取消 Worker #${workerId}`);
+      expect(canDeliverSystemMessage(f.ledger, f.pm.sessionId, messageId!)).toBe(true);
+      expect(f.ledger.hubCall(f.pm.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes[0]).toMatchObject({
+        status: "waiting", waitingFor: "pm", activeWorkerId: null,
+      });
+
+      const replacement = f.dispatch({ node: "run", graphId: graph.id });
+      expect(approvalOf(replacement.id)?.status).toBe("pending");
+      expect(f.ledger.getMessage(messageId!)?.status).toBe("stopped");
+      expect(canDeliverSystemMessage(f.ledger, f.pm.sessionId, messageId!)).toBe(false);
+    } finally { unsubscribe(); }
+  });
+
   it("rejects an approval if project policy changed while the card was pending", () => {
     const pending = approvalOf(f.dispatch().id)!;
     f.ledger.patchCapabilities({ kind: "pm", pmId: f.pm.pm.id }, { set: { [COMPUTER_USE]: false } });
@@ -221,6 +264,56 @@ describe("Worker sandbox approval", () => {
       title: "Review", steps: [{ key: "check", title: "Check the plan", question: "Use the current plan?" }],
     }) });
     expect(count()).toBe(1);
+  });
+
+  it("lists the step agent settings alongside sandbox approval without adding them to the slim snapshot", () => {
+    const graph = createSandboxGraph();
+    const approval = approvalOf(graph.nodes[0]!.activeWorkerId!)!;
+    const show = f.ledger.hubCall(f.pm.sessionId, "graph.show", { graphId: graph.id });
+    const list = f.ledger.hubCall(f.pm.sessionId, "graph.list", {});
+    for (const view of [show, list]) {
+      expect(view.text).toContain("[等用户确认 Worker 沙箱] run：Read window");
+      expect(view.text).toMatch(/厂商 .*Codex.* · 模型 .* · 思考程度 /);
+    }
+    const pending = { vendor: "codex", model: graph.nodes[0]!.model, effort: graph.nodes[0]!.effort, sandboxApproval: { id: approval.id } };
+    expect(show.data.graph.nodes[0]).toMatchObject(pending);
+    expect(list.data.graphs[0]?.nodes[0]).toMatchObject(pending);
+    const slim = f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0];
+    expect(slim).toMatchObject({ sandboxApproval: { id: approval.id } });
+    expect(slim?.vendor).toBeUndefined();
+  });
+
+  it("holds a fork until approval and uses the renamed upstream branch when it creates the worktree", () => {
+    const workspace = { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } as const;
+    const graph = f.ledger.hubCall(f.pm.sessionId, "graph.create", { specJson: JSON.stringify({
+      title: "Desktop fork",
+      steps: [
+        { key: "prepare", title: "Prepare" },
+        { key: "inspect", title: "Inspect", deps: ["prepare"], vendor: "codex", brief: "Inspect the window",
+          noOuterSandbox: true, caps: "custom", allow: [COMPUTER_USE] },
+        { key: "other", title: "Other", deps: ["prepare"] },
+      ],
+    }) }, { workspace }).data.graph;
+    const upstream = f.dispatch({ graphId: graph.id, node: "prepare", noWorktree: false, noOuterSandbox: false });
+    f.ledger.onWorktreeCreated(upstream.id, "base");
+    f.ledger.hubCall(f.pm.sessionId, "worker.end", { workerId: upstream.id });
+    const opened = f.ledger.hubCall(f.pm.sessionId, "graph.done", { graphId: graph.id, nodeKey: "prepare", branch: upstream.branch! }, { workspace }).data.graph;
+    const workerId = opened.nodes.find((node) => node.key === "inspect")!.activeWorkerId!;
+    const approval = approvalOf(workerId)!;
+    expect(actionsOf(workerId)).toEqual([]);
+    expect(f.ledger.getWorktreeTask(workerId)).toBeNull();
+
+    expect(f.ledger.syncWorktreeBranch!(upstream.worktreePath!, "feature/renamed")).toMatchObject({
+      updatedWorkerIds: [upstream.id], updatedGraphIds: [graph.id],
+    });
+    const current = f.ledger.hubCall(f.pm.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(current.nodes.find((node) => node.key === "prepare")?.artifact?.branch).toBe("feature/renamed");
+    expect(current.nodes.find((node) => node.key === "inspect")?.sandboxApproval?.id).toBe(approval.id);
+    expect(f.ledger.getWorktreeTask(workerId)).toBeNull();
+
+    f.ledger.decideSandboxApproval!(approval.id, APPROVE);
+    expect(actionsOf(workerId)).toEqual(["worktree.create"]);
+    expect(f.ledger.getWorktreeTask(workerId)?.checkout).toMatchObject({ kind: "branch", base: "feature/renamed" });
   });
 
   it("keeps the step waiting for sandbox approval when the PM closes its older gate card", () => {

@@ -308,6 +308,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const problem = checkPiTurnText(batch.combinedText);
     if (problem) {
       st.inFlight = st.inFlight.filter((b) => b !== batch);

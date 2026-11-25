@@ -238,7 +238,10 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
   it.each(["send", "problem report", "confirmation report"])("keeps the step card pending after a Worker %s", async (event) => {
     const { graph } = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
-        title: "Export", steps: [{ key: "export", title: "Export", brief: "Add export", confirm: event === "confirmation report" }],
+        title: "Export", steps: [{
+          key: "export", title: "Export", brief: "Add export", confirm: event === "confirmation report",
+          vendor: "claude", model: "claude-haiku-5-5", effort: "low",
+        }],
       }),
     }).data;
     const workerId = graph.nodes[0]!.activeWorkerId!;
@@ -253,7 +256,11 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
 
     expect(askOf(ledger.getMessage(messageId)!)?.answered).toBeUndefined();
     const shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id });
-    expect(shown.text).toContain("[拍板卡]");
+    const list = () => ledger.hubCall(lin.sessionId, "graph.list", {}).text;
+    for (const text of [shown.text, list()]) {
+      expect(text).toContain(`[拍板卡] #${messageId}`);
+      expect(text).toContain("厂商 Claude Code · 模型 Haiku 5.5 · 思考程度 Low");
+    }
     expect(shown.data.graph.nodes[0]!.gateAskMessageId).toBe(messageId);
     expect(pendingDecisionsOf(ledger.snapshot()).map((d) => d.askMessageId)).toEqual([messageId]);
     expect(ledger.getRouterDigest().pms.find((pm) => pm.pmId === lin.pmId)?.pendingDecisionCount).toBe(1);
@@ -263,6 +270,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     expect(latestWorkerInputOf(workerId).text).toContain("定案：CSV");
     expect(askOf(ledger.getMessage(messageId)!)).toMatchObject({ answered: true, chosenOption: "CSV" });
     expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).not.toContain("[拍板卡]");
+    expect(list()).not.toContain("[拍板卡]");
   });
 
   it("hub ask --node 三处可见、闲聊不误关卡片、用户点选定案直送活跃 Worker（全程不叫醒 PM），且定案记入 graph show 与交付单", async () => {

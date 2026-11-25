@@ -1,3 +1,4 @@
+import { preservePositiveContext } from "../../daemon/driver/usage.ts";
 import {
   EMPTY_TOKEN_USAGE,
   type AgentSessionPatch,
@@ -33,7 +34,7 @@ function settleTurnUsage(
   const patch: AgentSessionPatch = {};
   if (st.lastTurnResultUsage) {
     const finished = st.turnUsage.finish(row?.usage ?? EMPTY_TOKEN_USAGE, st.lastTurnResultUsage);
-    if (st.lastTurnContext !== null) finished.context = st.lastTurnContext;
+    finished.context = preservePositiveContext(st.lastTurnContext, finished.context);
     patch.usage = finished;
     st.lastTurnResultUsage = null;
     st.lastTurnContext = null;

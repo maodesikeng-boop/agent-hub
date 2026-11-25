@@ -62,7 +62,6 @@ export function createWorkersCtx(
     options,
     sandboxApprovals: createWorkerSandboxApprovals(() => w, ctx),
     turnStarts: new Map(),
-    endInterrupted: new Set(),
     maxTimeTimers: new Map(),
     awaitingBackground: createAwaitingBackground(ctx.db, ctx.now),
   };

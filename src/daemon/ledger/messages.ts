@@ -21,7 +21,7 @@ import type { MessageDbRow } from "./rows.ts";
 import { clearStreaming, idle, toolStarted, working } from "./sessions.ts";
 import { isPathInsideOrEqual } from "../platform/index.ts";
 import { getAgentSession } from "../store/index.ts";
-import type { LedgerSessions } from "./sessions.ts";
+import type { LedgerSessions, LiveSession } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
 export type AskSettlement = { by: "answer"; chosenOption?: string; note?: string } | { by: "close" };
@@ -43,6 +43,11 @@ function resumesAfterShutdown(session: AgentSessionRow, message: Pick<MessageDbR
 }
 
 export type LedgerMessages = ReturnType<typeof createLedgerMessages>;
+
+function clearBackgroundTasks(live: LiveSession): void {
+  live.backgroundTasks = undefined;
+  live.backgroundTaskList = undefined;
+}
 
 export interface LedgerMessagesOptions {
   assertUserCanPost?: (conversationId: ConversationId) => void;
@@ -261,8 +266,7 @@ export function createLedgerMessages(
       case "session.started":
         updateLive(p, sessionId, (l) => {
           if (l.activity === "stopping") idle(l);
-          // Background tasks and stale streaming previews belong to the old process.
-          l.backgroundTasks = undefined;
+          clearBackgroundTasks(l);
           clearStreaming(l);
         });
         return;
@@ -347,6 +351,7 @@ export function createLedgerMessages(
       case "background.changed":
         updateLive(p, sessionId, (l) => {
           l.backgroundTasks = event.count;
+          l.backgroundTaskList = event.tasks;
         });
         return;
       case "rate_limit":
@@ -368,7 +373,7 @@ export function createLedgerMessages(
         }
         updateLive(p, sessionId, (l) => {
           idle(l);
-          l.backgroundTasks = undefined;
+          clearBackgroundTasks(l);
           l.rateLimitReported = false;
         });
         return;

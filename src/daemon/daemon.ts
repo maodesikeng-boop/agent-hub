@@ -80,6 +80,8 @@ import {
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveCommit } from "./git/index.ts";
+import { createWorktreeBranchProbe } from "./git/worktree-branch.ts";
+import { createObservedQuotaStore, observeDriverQuota } from "./quota/observed-quota.ts";
 import { createProviderQuota } from "./quota/provider-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
@@ -89,6 +91,7 @@ import {
   createSessionStartHandler,
   createReviewObserver,
   createReviewVerifyHandler,
+  canDeliverSystemMessage,
   createWorktreeCreateHandler,
   endedOnRevokedTokens,
 } from "./handlers.ts";
@@ -379,17 +382,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     parts.models = models;
     const quota = createProviderQuota(vendorRuntime);
+    const observedQuota = createObservedQuotaStore();
     parts.quota = quota;
     const providerManager = createProviderManager({
       runtime: vendorRuntime,
       models,
-      onVendorChanged: quota.refresh,
+      onVendorChanged: (vendor) => { observedQuota.clearVendor(vendor); quota.refresh(vendor); },
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
     parts.providerManager = providerManager;
     const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
     const ledger = createLedger(db, {
-      models,
+      models, worktreeBranchProbe: createWorktreeBranchProbe(),
       deviceName: () => device.name,
       knownCommands: (session) => parts.commands?.cached(session) ?? null,
       pmHomeRoot: paths.pmHomeDir,
@@ -433,8 +437,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       runDir: paths.runDir,
       hubSock: paths.hubSock,
       log,
-      models,
-      refreshVendor: (vendor) => models.ensureUsable(vendor), capabilityInventory,
+      models, quota: { observed: observedQuota, get: quota.get },
+      refreshVendor: (vendor) => models.ensureUsable(vendor),
+      capabilityInventory,
       sandboxGuard,
       ...(options.onSelfReload
         ? {
@@ -472,7 +477,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sessionTmp: sessionScope.tmp, sessionTagNonce: sessionScope.tagNonce, parentSessionTag: sessionScope.parentTag,
     });
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
-    const launch = { store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId), onSessionQuiescent: (sessionId: number) => ledger.onSessionQuiescent?.(sessionId) };
+    const launch = { canDeliverSystemMessage: canDeliverSystemMessage.bind(null, ledger), store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId), onSessionQuiescent: (sessionId: number) => ledger.onSessionQuiescent?.(sessionId) };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: createVendorDrivers(
@@ -520,6 +525,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       driver.onEvent((sessionId, event) => {
         const vendor = sessions.get(sessionId)?.vendor;
         if (!isAgentVendor(vendor)) return;
+        observeDriverQuota(observedQuota, vendor, event);
         if (event.type === "session.started") models.report(vendor, "available");
         else if (event.type === "turn.ended" && !event.ok && event.error && vendorFailureOf(event.error.message, vendor)?.kind === "auth") {
           models.report(vendor, "signed_out");

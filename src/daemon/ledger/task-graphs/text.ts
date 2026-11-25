@@ -2,6 +2,7 @@ import { isTaskGraphReadyToFinish, taskNodeStatusText, truncateChars } from "../
 import type { TaskGraph, TaskNode } from "../../../shared/domain.ts";
 import { GRAPH_TEXT_NODE_NOTE_CHARS, GRAPH_TEXT_NODE_WORKERS_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
+import { formatStepAgentConfig, type StepAgentFormatContext } from "./step-agent-label.ts";
 import { parseJsonOr } from "./rows.ts";
 import type { ProgressResult, TurnedStep } from "./types.ts";
 
@@ -42,7 +43,7 @@ function graphStatusLabel(graph: Pick<TaskGraph, "status" | "nodes">): string {
   return isTaskGraphReadyToFinish(graph) ? "active · 待交付" : graph.status;
 }
 
-export function formatGraphText(graph: TaskGraph, results = true): string {
+export function formatGraphText(graph: TaskGraph, results = true, agentContext?: StepAgentFormatContext): string {
   const depMap = new Map<string, string[]>();
   for (const e of graph.edges) {
     let list = depMap.get(e.toKey);
@@ -57,8 +58,10 @@ export function formatGraphText(graph: TaskGraph, results = true): string {
     const deps = depMap.get(n.key);
     const depNote = deps && deps.length > 0 ? ` ← [${deps.join(", ")}]` : "";
     const cardNote = n.gateAskPending ? ` [拍板卡] #${n.gateAskMessageId}` : "";
+    const settings = agentContext === undefined ? null : formatStepAgentConfig(n, agentContext);
     lines.push(
       `  - [${taskNodeStatusText(n, "pm")}] ${n.key}：${n.title}${cardNote}${nodeWorkerNote(n)}${depNote}`,
+      ...(settings === null ? [] : [`      ${settings}`]),
       ...(results ? nodeResultLines(n) : []),
     );
   }

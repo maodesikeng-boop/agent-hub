@@ -326,6 +326,20 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     });
   });
 
+  it("retains Pi context when a turn reports empty usage and zero session stats", async () => {
+    const h = makePiHarness({ script: { turns: [
+      { textDeltas: ["First reply"], usage: { input: 100, output: 20 }, contextTokens: 120 },
+      { textDeltas: [""], usage: { input: 0, output: 0 }, contextTokens: 0 },
+      { textDeltas: ["After compaction"], usage: { input: 30, output: 5 }, contextTokens: 40 },
+    ] } });
+    const row = h.addSession();
+    for (const [index, expected] of [120, 120, 40].entries()) {
+      await h.driver.send(row.id, { messageIds: [index + 1], source: "user", text: "Continue" });
+      await h.waitFor("turn.ended", () => true, index + 1);
+      expect(h.store.get(row.id)?.usage.context).toBe(expected);
+    }
+  });
+
   it("queues a message after capabilities change and sends it on the resumed session", async () => {
     let fingerprint = "before";
     const h = makePiHarness({ capabilityFingerprint: async () => fingerprint });

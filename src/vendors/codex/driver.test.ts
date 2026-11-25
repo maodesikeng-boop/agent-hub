@@ -2149,6 +2149,24 @@ describe("CodexDriver 流式补丁文件路径早捕获", () => {
 });
 
 describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
+  it("preserves a previous context after a quota failure with zero token usage", async () => {
+    const total = { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 500 };
+    const t = makeCodexHarness({ script: { turns: [
+      { messageDeltas: ["Working"], tokenUsage: { last: total, total } },
+      { status: "failed", errorMessage: "HTTP 429 quota exceeded", tokenUsage: {
+        last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 1 },
+        total: { ...total, outputTokens: 501 },
+      } },
+    ] } });
+    const row = t.addSession();
+    await t.driver.send(row.id, user(101, "Start"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(row.id)?.usage.context).toBe(118_111);
+    await t.driver.send(row.id, user(102, "Continue"));
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ ok: false });
+    expect(t.store.get(row.id)?.usage.context).toBe(118_111);
+  });
+
   it("含大额缓存命中时 context 等于真实 inputTokens（118111），绝不把 cachedInputTokens 再加一遍", async () => {
     const t = makeCodexHarness({
       script: {

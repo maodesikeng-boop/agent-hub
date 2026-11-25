@@ -247,6 +247,13 @@ describe("hub cli", () => {
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "worker.send", args: { workerId: 3, text: "再改一下" } }]);
     });
 
+    it("passes a Worker vendor filter and rejects unknown vendors", async () => {
+      expect((await hub(["worker", "list", "--vendor", "claude"])).code).toBe(HUB_EXIT.ok);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "worker.list", args: { vendor: "claude" } }]);
+      expect((await hub(["worker", "list", "--vendor", "not-a-vendor"])).code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(1);
+    });
+
     it("worker start / send --max-time and worker max-time parse human durations and reject invalid ones", async () => {
       expect(
         (await hub(["worker", "start", "--title", "修 X", "--max-time", "15m", "--stdin"], { stdin: stdinOf("任务") })).code,

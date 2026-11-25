@@ -185,7 +185,7 @@ export interface TaskGraphOptions {
   onGraphFinishedIn?: (p: Pending, projectId: ProjectId) => void;
 }
 
-export interface TaskGraphCtx extends Pick<LedgerContext, "db" | "now" | "write" | "enqueue" | "modelCatalog"> {
+export interface TaskGraphCtx extends Pick<LedgerContext, "db" | "now" | "write" | "enqueue" | "modelCatalog" | "modelShortLabel"> {
   sessions: LedgerSessions;
   messages: LedgerMessages;
   persona: LedgerPersona;

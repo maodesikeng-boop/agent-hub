@@ -147,7 +147,7 @@ export interface HubArgsMap {
   "worker.send": { workerId: WorkerId; text: string; maxTimeMs?: number };
   "worker.max-time": { workerId: WorkerId; maxTimeMs: number };
   "worker.end": { workerId: WorkerId };
-  "worker.list": Record<string, never>;
+  "worker.list": { vendor?: AgentVendor };
   "worker.show": { workerId: WorkerId; task?: boolean; report?: number | "latest" };
   "worker.search": { keywords: string[]; limit?: number };
   "worker.log": { workerId: WorkerId; last?: number; stats?: boolean };
@@ -396,11 +396,28 @@ interface HubModelEntry {
   efforts: string[];
 }
 
+export interface HubVendorQuotaWindow {
+  id: string;
+  label: string;
+  utilization: number;
+  resetsAt: number | null;
+}
+
+export interface HubVendorQuota {
+  status: "ok" | "limited";
+  source: "observed" | "fetched" | "rate_limit";
+  resetsAt: number | null;
+  observedAt: number;
+  reason: string | null;
+  windows?: readonly HubVendorQuotaWindow[];
+}
+
 export interface HubVendorModels {
   vendor: AgentVendor;
   label: string;
   source: "vendor" | "bundled";
   availability: VendorAvailability;
+  quota?: HubVendorQuota;
   defaultModel: string | null;
   defaultModelId: string | null;
   defaultEffort: string | null;

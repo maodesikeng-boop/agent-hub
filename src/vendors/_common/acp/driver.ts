@@ -385,6 +385,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
   }
 
   protected async writeBatch(st: AcpSessionState, proc: AcpProc, batch: AcpBatch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const problem = checkAcpUserBlocks(batch.userBlocks);
     if (problem) {
       this.dropBatch(st, batch);

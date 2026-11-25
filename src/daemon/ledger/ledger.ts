@@ -1,3 +1,6 @@
+import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
+import { createLedgerBranchSync } from "./workers/branch-sync.ts";
+import { isWorkerPmNoticeActionable } from "./workers/stale-notices.ts";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LedgerSnapshot } from "../../shared/api.ts";
@@ -83,6 +86,7 @@ export interface SqliteLedger extends Ledger {
 }
 
 export interface LedgerOptions {
+  worktreeBranchProbe?: WorktreeBranchProbe;
   now?: () => number;
   deviceName?: () => string;
   models?: LedgerContextOptions["models"];
@@ -154,6 +158,14 @@ function scopeDriverEvent(
     default:
       return event;
   }
+}
+
+function reconcileTurnWorktree(
+  db: Db, id: SessionId, probe: WorktreeBranchProbe | undefined, branches: ReturnType<typeof createLedgerBranchSync>, signal: AbortSignal,
+) {
+  if (probe === undefined) return null;
+  const workerId = getAgentSession(db, id)?.workerId;
+  return workerId == null ? null : branches.reconcileWorkerGraph(workerId, signal);
 }
 
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
@@ -257,6 +269,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     });
 
   const closing = new AbortController();
+  const branches = createLedgerBranchSync(ctx, taskGraphs.publishBranchChange, closing.signal, options.worktreeBranchProbe);
   const applyDriverEventNow = (sessionId: SessionId, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null) => {
     if (event.type === "agent.text_delta") {
       if (event.parentToolUseId !== undefined) return;
@@ -341,6 +354,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   });
   const driverEvents = createDriverEventDrain({
     completions,
+    beforeTurn: (id, signal) => reconcileTurnWorktree(db, id, options.worktreeBranchProbe, branches, signal),
     factsFor(sessionId, event) {
       const session = getAgentSession(db, sessionId)!;
       return { ...turnReplies.factsOf(session, event.messageIds), worker: workers.turnFactsOf(session, event) };
@@ -353,7 +367,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       if (!closing.signal.aborted) handover.onSessionQuiescent(sessionId);
     },
   });
-
   return {
     postUserMessage: messages.postUserMessage,
     requestStop(conversationId) {
@@ -507,6 +520,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),
+    ...branches,
+    isWorkerPmNoticeActionable: (id) => isWorkerPmNoticeActionable(db, id),
     graphPrTargets: (sessionId, graphId) => taskGraphs.graphPrTargets(getAgentSession(db, sessionId), graphId),
     graphAutoDispatchVendors: (sessionId, command, body) =>
       taskGraphs.graphAutoDispatchVendors(getAgentSession(db, sessionId), command, body),

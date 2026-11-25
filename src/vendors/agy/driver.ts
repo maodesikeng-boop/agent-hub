@@ -234,6 +234,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const line = this.#buildLineForProc(batch);
     const problem = checkAgyUserLine(line);
     if (problem) {
@@ -280,6 +281,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         for (let attempt = 0; ; attempt++) {
           if (!proc) proc = await this.#spawn(st, resume, files);
           this.abortIfStopped(st, proc);
+          if (this.discardStaleSystemBatch(st, proc, batch)) return;
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
           const line = this.#buildLineForProc(batch);
