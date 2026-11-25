@@ -223,7 +223,12 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       files: fileArgsField,
     },
   },
-  "ask.close": { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: workerIdField } },
+  "ask.close": {
+    type: "object",
+    additionalProperties: false,
+    properties: { itemId: workerIdField, messageId: workerIdField },
+    oneOf: [{ required: ["itemId"] }, { required: ["messageId"] }],
+  },
   "schedule.add": {
     type: "object",
     additionalProperties: false,

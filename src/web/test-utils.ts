@@ -69,6 +69,7 @@ import type {
   SessionState,
   StateSnapshot,
   SystemMessageMeta,
+  TaskGraphsPage,
   UpdateRouterSettingsRequest,
   AnswerApprovalRequest,
   SetCenterPriorityRequest,
@@ -608,6 +609,10 @@ export class FakeApi {
   putRouterSettings: (body: UpdateRouterSettingsRequest) => Reply | Promise<Reply> = (body) => ({
     status: 200,
     body: { settings: { vendor: body.vendor, model: body.model, effort: body.effort, updatedAt: Date.now() } },
+  });
+  projectTaskGraphs: (projectId: number) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { graphs: [], hasMore: false } satisfies TaskGraphsPage,
   });
   /** POST /api/task-graphs/:id/cancel。默认：回一张已取消的空图。 */
   cancelTaskGraph: (graphId: number, body: CancelTaskGraphRequest) => Reply | Promise<Reply> = (graphId) => ({
@@ -1158,6 +1163,8 @@ export class FakeApi {
     if (answerAsk && method === "POST") return jsonResponse(await this.answerAsk(Number(answerAsk[1]), body));
     const retryCmd = /^\/api\/router\/commands\/(\d+)\/retry$/.exec(url.pathname);
     if (retryCmd && method === "POST") return jsonResponse(await this.retryRouterCommand(Number(retryCmd[1])));
+    const graphHistory = /^\/api\/projects\/(\d+)\/task-graphs$/.exec(url.pathname);
+    if (graphHistory && method === "GET") return jsonResponse(await this.projectTaskGraphs(Number(graphHistory[1])));
     const cancelGraph = /^\/api\/task-graphs\/(\d+)\/cancel$/.exec(url.pathname);
     if (cancelGraph && method === "POST") return jsonResponse(await this.cancelTaskGraph(Number(cancelGraph[1]), body));
     const decideNode = /^\/api\/task-graphs\/(\d+)\/nodes\/([^/]+)\/decide$/.exec(url.pathname);

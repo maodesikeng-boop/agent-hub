@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { skipToken, useInfiniteQuery } from "@tanstack/react-query";
 import { ChevronRight, Loader2, MessageCircleQuestionMark } from "../ui/icons.ts";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -9,7 +9,8 @@ import {
   agentEffortOf,
   effortLabel,
   isAgentVendor,
-  isTaskNodeWaitingUser,
+  isTaskNodeUserBlocked,
+  isTaskNodeWaitingDecision,
   modelShortLabel,
 } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, TaskNode, UserBlockerId, WorkerId } from "../../shared/index.ts";
@@ -17,8 +18,9 @@ import { cleanPieceTitle, errorText, formatContext, formatTokenDetail, NEEDS_YOU
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
-import { useHubQueryClient } from "../query-client.ts";
+import { taskGraphHistoryKey, useHubQueryClient } from "../query-client.ts";
 import { useClient } from "../device-scope.tsx";
+import { LOCAL_DEVICE } from "../devices.ts";
 import { boundWorkerIdsOf, isWorkerBound, workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { normalizeTaskGraphs } from "../task-graph-compat.ts";
 import type { WorkerTone } from "../worker-status.ts";
@@ -253,11 +255,36 @@ function ShowMore({ limited, expanded, onToggle }: { limited: boolean; expanded:
   );
 }
 
+function useGraphHistory(projectId: ProjectId | null, enabled: boolean) {
+  const qc = useHubQueryClient();
+  const client = useClient();
+  return useInfiniteQuery(
+    {
+      queryKey: taskGraphHistoryKey(client.device ?? LOCAL_DEVICE, projectId),
+      queryFn: projectId === null ? skipToken : async ({ pageParam, signal }: { pageParam: TaskGraphId | undefined; signal: AbortSignal }) => {
+        const page = await client.fetchProjectTaskGraphs(projectId, {
+          ...(pageParam !== undefined && { before: pageParam }),
+          limit: GRAPH_HISTORY_PAGE_SIZE,
+          signal,
+        });
+        return { ...page, graphs: normalizeTaskGraphs(page.graphs) };
+      },
+      initialPageParam: undefined,
+      getNextPageParam: (lastPage, allPages) =>
+        lastPage.hasMore && allPages.length < MAX_COMPLETED_GRAPH_PAGES ? lastPage.graphs.at(-1)?.id : undefined,
+      maxPages: MAX_COMPLETED_GRAPH_PAGES,
+      enabled: projectId !== null && enabled,
+    },
+    qc,
+  );
+}
+
 function CompletedGroup({
   workers,
-  projectId,
-  completedGraphCount,
-  activeGraphIdsKey,
+  open,
+  onToggle,
+  historyQuery,
+  completedGraphs,
   look = NO_LOOK,
   openWorkerId,
   onOpenWorker,
@@ -266,9 +293,10 @@ function CompletedGroup({
   trailing,
 }: {
   workers: WorkerEntry[];
-  projectId?: ProjectId | null;
-  completedGraphCount?: number;
-  activeGraphIdsKey: string;
+  open: boolean;
+  onToggle: () => void;
+  historyQuery: ReturnType<typeof useGraphHistory>;
+  completedGraphs: TaskGraph[];
   look?: SlimeLook;
   openWorkerId: ConversationId | null;
   onOpenWorker: (id: ConversationId) => void;
@@ -276,7 +304,6 @@ function CompletedGroup({
   onLoadMoreWorkers?: () => Promise<void>;
   trailing?: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
   const [workersMore, setWorkersMore] = useState<{ loading: boolean; error: unknown }>({ loading: false, error: null });
   const loadMore = () => {
     if (historyQuery.hasNextPage && !historyQuery.isFetchingNextPage) void historyQuery.fetchNextPage();
@@ -287,38 +314,6 @@ function CompletedGroup({
       (error: unknown) => setWorkersMore({ loading: false, error }),
     );
   };
-  const activeEnded = workers.some((w) => w.conversationId === openWorkerId);
-  useEffect(() => {
-    if (activeEnded) setOpen(true);
-  }, [activeEnded, openWorkerId]);
-
-  const qc = useHubQueryClient();
-  const client = useClient();
-  const canQueryHistory = projectId !== undefined && projectId !== null;
-
-  const historyQuery = useInfiniteQuery(
-    {
-      queryKey: ["project-task-graphs", client.device, projectId ?? null, completedGraphCount ?? null, activeGraphIdsKey] as const,
-      queryFn: async ({ pageParam }) => {
-        const page = await client.fetchProjectTaskGraphs(
-          projectId!,
-          pageParam !== undefined ? { before: pageParam, limit: GRAPH_HISTORY_PAGE_SIZE } : { limit: GRAPH_HISTORY_PAGE_SIZE },
-        );
-        return { ...page, graphs: normalizeTaskGraphs(page.graphs) };
-      },
-      initialPageParam: undefined as TaskGraphId | undefined,
-      getNextPageParam: (lastPage, allPages) =>
-        lastPage.hasMore && allPages.length < MAX_COMPLETED_GRAPH_PAGES ? lastPage.graphs.at(-1)?.id : undefined,
-      maxPages: MAX_COMPLETED_GRAPH_PAGES,
-      enabled: open && canQueryHistory,
-    },
-    qc,
-  );
-
-  const completedGraphs = useMemo(
-    () => historyQuery.data?.pages.flatMap((page) => page.graphs) ?? [],
-    [historyQuery.data],
-  );
   const histBoundIds = useMemo(() => boundWorkerIdsOf(completedGraphs), [completedGraphs]);
   const shownWorkers = useMemo(
     () =>
@@ -332,7 +327,7 @@ function CompletedGroup({
 
   return (
     <section aria-labelledby="rail-completed" className="min-w-0 py-3">
-      <GroupTitle id="rail-completed" bodyId="rail-completed-body" collapsed={!open} onToggle={() => setOpen((v) => !v)} trailing={trailing}>
+      <GroupTitle id="rail-completed" bodyId="rail-completed-body" collapsed={!open} onToggle={onToggle} trailing={trailing}>
         Completed
       </GroupTitle>
       {open && (
@@ -397,6 +392,7 @@ export const RailGroups = memo(function RailGroups({
   onOpenWorker,
   onLoadMoreWorkers,
   onNeedWorkers,
+  onShowHistory,
 }: {
   asks: Message[];
   workers: WorkerEntry[];
@@ -411,8 +407,10 @@ export const RailGroups = memo(function RailGroups({
   onOpenWorker: (conversationId: ConversationId) => void;
   onLoadMoreWorkers?: () => Promise<void>;
   onNeedWorkers?: (workerIds: WorkerId[]) => void;
+  onShowHistory?: () => void;
 }) {
   const [zoomedState, setZoomedState] = useState<{ id: TaskGraphId; fallback: TaskGraph } | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   // Stable callback keeps the memoized PeelTrackList from rerendering.
   const zoomGraph = useCallback((g: TaskGraph) => setZoomedState({ id: g.id, fallback: g }), []);
 
@@ -422,8 +420,9 @@ export const RailGroups = memo(function RailGroups({
     (graph: TaskGraph, node: TaskNode) => {
       const ask = asksRef.current.find((m) => {
         const meta = askOf(m);
-        if (node.userBlocker != null) return meta?.blockerRef?.blockerId === node.userBlocker.id;
-        return m.id === node.gateAskMessageId || (meta?.gateRef?.graphId === graph.id && meta.gateRef.nodeKey === node.key);
+        if (node.userBlocker != null && isTaskNodeUserBlocked(node)) return meta?.blockerRef?.blockerId === node.userBlocker.id;
+        if (node.gateAskMessageId !== null) return m.id === node.gateAskMessageId;
+        return meta?.gateRef?.graphId === graph.id && meta.gateRef.nodeKey === node.key;
       });
       if (ask !== undefined) onOpenAsk(ask.id);
       else zoomGraph(graph);
@@ -436,13 +435,15 @@ export const RailGroups = memo(function RailGroups({
     const stepBlockerIds = new Set<UserBlockerId>();
     for (const graph of activeGraphs ?? []) {
       for (const node of graph.nodes) {
-        if (node.gateAskMessageId !== null) gateMsgIds.add(node.gateAskMessageId);
+        if (node.gateAskMessageId !== null && isTaskNodeWaitingDecision(node) && !isTaskNodeUserBlocked(node)) {
+          gateMsgIds.add(node.gateAskMessageId);
+        }
         if (node.userBlocker !== null && node.userBlocker !== undefined) stepBlockerIds.add(node.userBlocker.id);
       }
     }
     return asks.filter((ask) => {
       const meta = askOf(ask);
-      if (meta?.gateRef !== undefined || gateMsgIds.has(ask.id)) return false;
+      if (gateMsgIds.has(ask.id)) return false;
       return meta?.blockerRef === undefined || !stepBlockerIds.has(meta.blockerRef.blockerId);
     });
   }, [asks, activeGraphs]);
@@ -473,14 +474,21 @@ export const RailGroups = memo(function RailGroups({
   const hasLive = live.length > 0;
   const hasCompleted = ended.length > 0 || (completedGraphCount ?? 0) > 0;
   const graphNeedsYou = useMemo(
-    () => activeGraphs?.some((g) => g.nodes.some(isTaskNodeWaitingUser)) ?? false,
+    () => activeGraphs?.some((g) => g.nodes.some((n) => isTaskNodeWaitingDecision(n) || isTaskNodeUserBlocked(n))) ?? false,
     [activeGraphs],
   );
 
-  const zoomedGraph = useMemo(() => {
-    if (zoomedState === null) return null;
-    return activeGraphs?.find((g) => g.id === zoomedState.id) ?? zoomedState.fallback;
-  }, [zoomedState, activeGraphs]);
+  const activeEnded = ended.some((w) => w.conversationId === openWorkerId);
+  useEffect(() => {
+    if (!hasCompleted) setHistoryOpen(false);
+    else if (activeEnded) setHistoryOpen(true);
+  }, [activeEnded, hasCompleted, openWorkerId]);
+
+  const activeZoomed = activeGraphs?.find((g) => g.id === zoomedState?.id);
+  const historyQuery = useGraphHistory(projectId ?? null, (hasCompleted && historyOpen) || (zoomedState !== null && activeZoomed === undefined));
+  const completedGraphs = useMemo(() => historyQuery.data?.pages.flatMap((page) => page.graphs) ?? [], [historyQuery.data]);
+  const zoomedGraph = zoomedState === null ? null :
+    activeZoomed ?? completedGraphs.find((g) => g.id === zoomedState.id) ?? zoomedState.fallback;
   useEffect(() => {
     if (zoomedGraph === null || onNeedWorkers === undefined) return;
     const have = workersByWorkerId(workers);
@@ -564,13 +572,20 @@ export const RailGroups = memo(function RailGroups({
         {hasCompleted && (
           <CompletedGroup
             workers={ended}
-            projectId={projectId}
-            completedGraphCount={completedGraphCount}
-            activeGraphIdsKey={(activeGraphs ?? []).map((g) => g.id).join(",")}
+            open={historyOpen}
+            onToggle={() => {
+              if (!historyOpen) onShowHistory?.();
+              setHistoryOpen(!historyOpen);
+            }}
+            historyQuery={historyQuery}
+            completedGraphs={completedGraphs}
             look={look}
             openWorkerId={openWorkerId}
             onOpenWorker={onOpenWorker}
-            onZoomGraph={zoomGraph}
+            onZoomGraph={(graph) => {
+              onShowHistory?.();
+              zoomGraph(graph);
+            }}
             {...(onLoadMoreWorkers !== undefined ? { onLoadMoreWorkers } : {})}
             trailing={!hasAsks && !hasGraphs && !hasLive ? toggle : undefined}
           />

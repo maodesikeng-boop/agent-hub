@@ -1180,7 +1180,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(stateOf(released.data.graph, "s2")).toBe("waiting:pm");
   });
 
-  it("hub graph patch 拍板卡与依赖联动：给 waiting:pm 补问题立即出卡，加未完前置自动收起旧卡退回 pending，全员跳过回执提示待交付", () => {
+  it("preserves the step card when a dependency is added or the step is skipped", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "动态改卡与改边",
@@ -1201,7 +1201,6 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(firstMsgId).toBeTypeOf("number");
     expect(askOf(ledger.getMessage(firstMsgId)!)).toMatchObject({ needsUser: true });
 
-    // 2) 通过 patch 在 approve 前插入未完成前置 prep -> 旧卡片自动标已答收起，approve 退回 pending
     const withPrep = ledger.hubCall(lin.sessionId, "graph.patch", {
       graphId: graph.id,
       specJson: JSON.stringify({
@@ -1211,15 +1210,13 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     }).data.graph;
     expect(stateOf(withPrep, "prep")).toBe("waiting:pm");
     expect(stateOf(withPrep, "approve")).toBe("pending");
-    expect(withPrep.nodes.find((n) => n.key === "approve")?.gateAskMessageId).toBeNull();
-    expect(askOf(ledger.getMessage(firstMsgId)!)).toMatchObject({ answered: true });
+    expect(withPrep.nodes.find((n) => n.key === "approve")?.gateAskMessageId).toBe(firstMsgId);
+    expect(askOf(ledger.getMessage(firstMsgId)!)?.answered).toBeUndefined();
 
-    // 3) prep 完成后，approve 重新出新拍板卡；再用 patch skipNodes 跳过 approve 时回执提示待交付
     ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "prep" });
     const rearmed = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(stateOf(rearmed, "approve")).toBe("waiting:user");
-    const secondMsgId = rearmed.nodes.find((n) => n.key === "approve")!.gateAskMessageId!;
-    expect(secondMsgId).not.toBe(firstMsgId);
+    expect(rearmed.nodes.find((n) => n.key === "approve")?.gateAskMessageId).toBe(firstMsgId);
 
     const allSettledPatch = ledger.hubCall(lin.sessionId, "graph.patch", {
       graphId: graph.id,
@@ -1227,7 +1224,32 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     });
     expect(allSettledPatch.text).toContain("全部节点已完成（待交付），验收交付后用 hub graph finish 结束任务图");
     expect(isTaskGraphReadyToFinish(allSettledPatch.data.graph)).toBe(true);
-    expect(askOf(ledger.getMessage(secondMsgId)!)).toMatchObject({ answered: true });
+    expect(askOf(ledger.getMessage(firstMsgId)!)?.answered).toBeUndefined();
+    ledger.hubCall(lin.sessionId, "ask.close", { messageId: firstMsgId });
+    expect(askOf(ledger.getMessage(firstMsgId)!)).toMatchObject({ answered: true, closed: true });
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).not.toContain("[拍板卡]");
+  });
+
+  it("can close or replace a step card explicitly and answer a card after its step is removed", () => {
+    const { graph } = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "Export", nodes: [{ key: "approve", title: "Approve" }, { key: "keep", title: "Keep" }] }),
+    }).data;
+    const ask = (text: string) => ledger.hubCall(lin.sessionId, "ask", { node: "approve", graphId: graph.id, text }).data.messageId;
+    const old = ask("Ship on Monday?");
+    const next = ask("Ship on Friday?");
+    expect(askOf(ledger.getMessage(old)!)?.closed).toBe(true);
+    expect(() => ledger.decideTaskNode(graph.id, "approve", { clientId: "old", askMessageId: old, note: "Yes" })).toThrow(/已经被处理/);
+    expect(askOf(ledger.getMessage(next)!)?.answered).toBeUndefined();
+
+    ledger.hubCall(lin.sessionId, "ask.close", { messageId: next });
+    expect(askOf(ledger.getMessage(next)!)?.closed).toBe(true);
+    expect(stateOf(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph, "approve")).toBe("waiting:pm");
+    const detached = ask("Ship this month?");
+    ledger.hubCall(lin.sessionId, "graph.patch", { graphId: graph.id, specJson: JSON.stringify({ removeNodes: ["approve"] }) });
+    expect(askOf(ledger.getMessage(detached)!)?.answered).toBeUndefined();
+    const answered = ledger.decideTaskNode(graph.id, "approve", { clientId: "detached", askMessageId: detached, note: "Yes" });
+    expect(answered.graph.nodes.map((node) => node.key)).toEqual(["keep"]);
+    expect(askOf(ledger.getMessage(detached)!)?.answerNote).toBe("Yes");
   });
 });
 

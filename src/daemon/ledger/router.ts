@@ -77,6 +77,7 @@ import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { PmDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import { pendingStepAskCounts } from "./task-graphs/store.ts";
 
 interface RouterItemDbRow {
   id: number;
@@ -414,7 +415,7 @@ export function createLedgerRouter(
     return resolveItem(row.id, input, onDecisionWritten);
   };
 
-  const closeAskIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"ask.close">): HubResult<"ask.close"> => {
+  const closeAskIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: Extract<HubArgs<"ask.close">, { itemId: RouterItemId }>): HubResult<"ask.close"> => {
     const row = getItemRow(args.itemId);
     if (row === undefined || row.kind !== "decision") throw fail("not_found", `没有编号 ${args.itemId} 的卡`);
     if (row.pm_id !== caller.pmId) throw fail("forbidden", `卡 #${row.id} 不是你的卡`);
@@ -871,13 +872,7 @@ export function createLedgerRouter(
         ORDER BY p.id`,
     );
     const pendingItemsByPm = countByPm("SELECT pm_id, count(*) AS n FROM router_items WHERE kind = 'decision' AND status = 'pending' GROUP BY pm_id");
-    const waitingGatesByPm = countByPm(
-      `SELECT g.pm_id AS pm_id, count(*) AS n
-         FROM task_graph_steps n
-         JOIN task_graphs g ON g.id = n.graph_id
-        WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user' AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
-        GROUP BY g.pm_id`,
-    );
+    const waitingGatesByPm = pendingStepAskCounts(db);
 
     const entries = activePms.map((pm) => digestEntryOf(pm, (pendingItemsByPm.get(pm.id) ?? 0) + (waitingGatesByPm.get(pm.id) ?? 0)));
     const digest = fitRouterDigest({ generatedAt: now(), pms: entries });
