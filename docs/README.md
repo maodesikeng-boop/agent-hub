@@ -8,6 +8,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [UI polish baseline style brief](ui-polish/baseline/style-brief.md): Visual DNA and `S1`–`S6` baseline rules for `pnpm ui:polish` screenshot reviews.
 - [Plan and code-skeleton standard](plan-standard.md): Structure for design documents, typed code skeletons, `it.todo` specs, and implementation handoffs.
 - [Work panel design](work-panel-design.md): The wide right panel with `Active`, `Completed`, and `Info` tabs and Worker detail, the paged Completed feed, per-graph switch to a vertical list, and what replaces the old side panel and PM settings panel.
+- [Top-bar Router input and reply popover](router-topbar-design.md): Centered translucent-to-solid quick Router input in the `40px` desktop wood top bar, non-modal reply popover with follow-up chat and `Expand` handoff, shared Router command dispatch and turn rendering, and cross-platform window-drag boundaries.
 - [Workbench shell design](workbench-shell-design.md): Rail, Project Manager column with pins, resizable columns, work panel integration, narrow-window tiers, phone tab bar, and a visual language that keeps pixel art for characters while controls use smooth lines.
 
 ## Architecture and security
