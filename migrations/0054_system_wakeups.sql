@@ -15,9 +15,9 @@ END;
 
 UPDATE actions
    SET params = json_set(params, '$.source', 'system')
- WHERE type = 'session.send'
+ WHERE type = 'session.send' AND json_valid(params)
    AND json_extract(params, '$.messageId') IN (
-     SELECT id FROM messages WHERE sender = 'user' AND json_extract(meta, '$.wakeup') = 1
+     SELECT id FROM messages WHERE sender = 'user' AND json_valid(meta) AND json_extract(meta, '$.wakeup') = 1
    );
 
 UPDATE messages
@@ -27,4 +27,4 @@ UPDATE messages
          'source', CASE WHEN text LIKE '【Router%' THEN 'router' ELSE 'task_graph' END,
          'ref', dedupe_key
        )
- WHERE sender = 'user' AND json_extract(meta, '$.wakeup') = 1;
+ WHERE sender = 'user' AND json_valid(meta) AND json_extract(meta, '$.wakeup') = 1;
