@@ -64,7 +64,7 @@ The workbench ends up with one visual language and the layout the user approved 
 Settled before this plan, by the user or by accepting the PM's recommendation:
 
 - Option A colors. Rail `#ffcb3d`, the Router bell's yellow. PM column pale cream, conversation white, side panel light warm gray. The working area is one white sheet split by 2px solid lines.
-- Widths at the `Default` interface scale. Rail fixed at 72px. PM column 264px by default, draggable from 220 to 400. Side panel 440px by default, draggable from 360 to 720. The conversation keeps at least 480. Double-clicking a handle restores the default. Widths are remembered per device.
+- Widths at a 16px root, the `Compact` scale. Rail fixed at 72px. PM column 264px by default, draggable from 220 to 400. Side panel 440px by default, draggable from 360 to 720. The conversation keeps at least 480. Double-clicking a handle restores the default. Widths are remembered per device.
 - Worker reports in the conversation become thread cards with a title, a status, and the latest line. Clicking one opens the full Worker conversation in the side panel.
 - The send key is a pixel paper plane in the PM's own color. The blue `Edit` and `New` links in the settings panel become dark brown. A pin icon is drawn, because pixelarticons has none.
 - Pins are scoped to one computer and ordered by when they were pinned. Drag reordering is out of scope for this version.
@@ -199,12 +199,14 @@ How it is wired:
 
 Recommendation: `shellTierOf()` in `src/web/shell-layout.ts`, fed by a `ResizeObserver` on the shell. It replaces `NARROW_QUERY` and `COMPACT_QUERY` in the shell. The settings dialog keeps its own `720px` breakpoint.
 
-Columns give way in this order. First the PM column and the side panel shrink toward their minimums. When rail, PM column, conversation, and panel still do not fit, the tier is `strip`: the PM column collapses to a `4.5rem` avatar strip with New PM on top and pinned PMs above a divider, and it stops being resizable. When even the strip does not fit, the tier is `stack`: the side panel covers the conversation until it closes. Its back button returns to Pieces and its close button returns to the conversation, which stays mounted inside a hidden `<Activity>` so the draft and scroll position survive. The conversation's `30rem` minimum holds until the stack tier.
+Columns give way in this order. First the PM column and the side panel shrink toward their minimums. The PM column never collapses below its minimum or to avatars. When rail, PM column, conversation, and panel still do not fit, the tier is `stack`: the side panel covers the conversation until it closes. Its back button returns to Pieces and its close button returns to the conversation, which stays mounted inside a hidden `<Activity>` so the draft and scroll position survive. The conversation's `30rem` minimum holds at every width the desktop window allows (`860px` minimum on macOS and Windows).
 
-| Interface scale | Four columns side by side | Strip and panel | Panel covers conversation | PM column full width with the panel closed |
-| --- | --- | --- | --- | --- |
-| `Default`, the default | 1142px and wider | 994 to 1141px | below 994px | 778px and wider |
-| `Large` | 1249px and wider | 1087 to 1248px | below 1087px | 851px and wider |
+| Interface scale | Four columns side by side | Panel covers conversation | Conversation at its minimum with the panel closed |
+| --- | --- | --- | --- |
+| `Compact` (`16px` root) | 1142px and wider | below 1142px | 778px and wider |
+| `Default` (`17.5px` root), the default | 1249px and wider | below 1249px | 851px and wider |
+| `Large` (`19px` root) | 1355px and wider | below 1355px | 923px and wider |
+| `XL` (`20.5px` root) | 1461px and wider | below 1461px | 996px and wider |
 
 #### Side panel and routes
 
@@ -269,7 +271,7 @@ Each implementation step edits its sections of `docs/ui-standard.md` before touc
 | 13. Fonts, numbers, and list rows | `3.25rem` PM rows with `2.25rem` avatars and `text-body` names | 3 |
 | 14. Interaction states and motion | Drop `.tint-fade` and `--motion-focus` | 2 |
 | 15. Markdown, code blocks, and charts | Code blocks, charts, and images drop `rounded-xl` for plain 2px borders and square corners | 2 |
-| 16. Shell layout | Rail, sheet, PM column or strip, conversation, side panel, resize handles, tiers, macOS traffic lights in the top bar | 3 |
+| 16. Shell layout | Rail, sheet, PM column, conversation, side panel, resize handles, tiers, macOS traffic lights in the top bar | 3 |
 | 17. Message stream | `ThreadCard` replaces Worker speech bubbles. Plain 2px ask cards and user bubbles | 2 |
 | 19. Touch screens and safe areas | The hover-shortcut amendment | 3 |
 | 20. Mobile shell | Tab bar, computer switcher drawer, usage in Settings, profile drill-down pages | 3 |
@@ -288,8 +290,7 @@ New constants in `src/web/limits.ts` (only the web workbench reads them) are lay
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
-| `SHELL_RAIL_REM` | `4.5` | Rail width, 72px at `Default` |
-| `SHELL_STRIP_REM` | `4.5` | PM column collapsed to avatars |
+| `SHELL_RAIL_REM` | `4.5` | Rail width, 72px at a 16px root |
 | `SHELL_LIST_REM` | `{ min: 13.75, default: 16.5, max: 25 }` | PM column, 220, 264, and 400px |
 | `SHELL_PANEL_REM` | `{ min: 22.5, default: 27.5, max: 45 }` | Side panel, 360, 440, and 720px |
 | `SHELL_CHAT_MIN_REM` | `30` | Conversation minimum, 480px |
@@ -344,7 +345,7 @@ Shared and daemon:
 
 Web state:
 
-- `src/web/shell-layout.ts` picks the `wide`, `strip`, or `stack` tier and turns the `rem` limits into pixels.
+- `src/web/shell-layout.ts` picks the `wide` or `stack` tier and turns the `rem` limits into pixels.
 - `src/web/pane-widths.ts` keeps the remembered widths in a small `zustand` store backed by `localStorage`.
 - `src/web/project-list.ts` splits a computer's conversations into pinned, active, and archived sections.
 - `src/web/side-panel.ts` resolves the side panel's content from the route and the Pieces state, and where its close and back buttons go.
@@ -355,7 +356,7 @@ Web components:
 
 - `src/web/ui/resizable.tsx` wraps the resize library as `PaneGroup`, `Pane`, and `PaneHandle`.
 - `src/web/components/AppRail.tsx` is the honey rail.
-- `src/web/components/ProjectList.tsx` is the PM column in its column, strip, and page layouts.
+- `src/web/components/ProjectList.tsx` is the PM column in its column and page layouts.
 - `src/web/components/ComputerSwitcher.tsx` is the computer list behind the PM column header.
 - `src/web/components/SidePanel.tsx` is the warm-gray panel and its header.
 - `src/web/components/ProfilePanel.tsx` is the PM settings summary with its drill-down pages.
@@ -387,7 +388,7 @@ Guards that change and must pass: `src/web/web-guard.test.ts` for every `rounded
 
 Real artifacts:
 
-- `pnpm ui:polish shots` before and after, with machine checks at 0, for `chat.normal`, `chat.worker-speech` (renamed for thread cards), `composer.focus`, `worker.normal`, `profile.normal`, `router.normal`, `settings.general`, `settings.providers`, `settings.computers-multi`, `new-pm.default`, `quota.normal`, `m-settings.home`, `sidebar.list-mobile`, and `rail.drawer-mobile` on every viewport they list. Step 3 adds screens for the pinned group, a hovered row, the side panel with a Worker and with PM settings, a profile drill-down page, the `strip` and `stack` tiers on the `narrow` and `slim` viewports, widths seeded past their limits, and the phone tab bar and computer switcher.
+- `pnpm ui:polish shots` before and after, with machine checks at 0, for `chat.normal`, `chat.worker-speech` (renamed for thread cards), `composer.focus`, `worker.normal`, `profile.normal`, `router.normal`, `settings.general`, `settings.providers`, `settings.computers-multi`, `new-pm.default`, `quota.normal`, `m-settings.home`, `sidebar.list-mobile`, and `rail.drawer-mobile` on every viewport they list. Step 3 adds screens for the pinned group, a hovered row, the side panel with a Worker and with PM settings, a profile drill-down page, the `stack` tier on the `narrow` and `slim` viewports, widths seeded past their limits, and the phone tab bar and computer switcher.
 - `scripts/verify-smoke.ts` gains a real-browser check. It drags the PM column handle 600px to the right and expects `25rem`, double-clicks the handle and expects `16.5rem`, then drags again, reloads, and expects the dragged width to survive.
 - `pnpm typecheck`, `pnpm test:related`, and `pnpm verify` pass. The PR records `pnpm build` chunk sizes and `scripts/bench-message-list.ts` before and after.
 - Side-by-side before and after images for the three main screens against prototype v1, and for the Router page, settings dialog, narrow tiers, and phone screens against prototype v2.

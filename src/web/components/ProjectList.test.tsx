@@ -279,28 +279,6 @@ describe("ProjectList", () => {
     unmount();
   });
 
-  it("renders the strip with New PM on top and pinned avatars above the divider", async () => {
-    const user = userEvent.setup();
-    const onNewPm = vi.fn();
-    renderList({
-      layout: "strip",
-      entries: [entry(1, { name: "Pinned", pinnedAt: 10 }), entry(2, { name: "Unpinned" })],
-      onNewPm,
-    });
-    expect(screen.queryByRole("searchbox")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "New project manager" }));
-    expect(onNewPm).toHaveBeenCalledTimes(1);
-
-    const divider = screen.getByTestId("strip-pin-divider");
-    const buttons = screen.getAllByRole("button");
-    const labels = buttons.map((b) => b.getAttribute("aria-label"));
-    expect(labels[0]).toBe("New project manager");
-    expect(labels[1]).toBe("Pinned");
-    expect(labels[2]).toBe("Unpinned");
-    expect(Boolean(buttons[1]!.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
-    expect(Boolean(divider.compareDocumentPosition(buttons[2]!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
-  });
-
   it("filters by PM or project name and shows No matching conversations when nothing matches", async () => {
     const user = userEvent.setup();
     renderList({

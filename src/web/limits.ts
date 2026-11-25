@@ -9,7 +9,6 @@ export const ACTION_ELAPSED_TICK_MS = 1_000;
 
 // Workbench column widths are rem so they follow the interface scale.
 export const SHELL_RAIL_REM = 4.5;
-export const SHELL_STRIP_REM = 4.5;
 export const SHELL_LIST_REM = { min: 13.75, default: 16.5, max: 25 } as const;
 export const SHELL_PANEL_REM = { min: 22.5, default: 40, max: 50 } as const;
 export const SHELL_CHAT_MIN_REM = 30;

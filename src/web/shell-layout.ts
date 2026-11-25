@@ -1,19 +1,11 @@
 import { useEffect, useLayoutEffect, useState } from "react";
-import {
-  SHELL_CHAT_MIN_REM,
-  SHELL_FRAME_PX,
-  SHELL_GAP_PX,
-  SHELL_LIST_REM,
-  SHELL_PANEL_REM,
-  SHELL_RAIL_REM,
-  SHELL_STRIP_REM,
-} from "./limits.ts";
-import { subscribeUiScale, type UiScale } from "./ui-scale.ts";
+import { SHELL_CHAT_MIN_REM, SHELL_FRAME_PX, SHELL_GAP_PX, SHELL_LIST_REM, SHELL_PANEL_REM, SHELL_RAIL_REM } from "./limits.ts";
+import { DEFAULT_UI_SCALE, subscribeUiScale, UI_SCALE_ROOT_PX, type UiScale } from "./ui-scale.ts";
 
 // Invariant: every returned width is CSS px at the given root font size; the SHELL_* constants stay the single source of limits.
 
-/** How the desktop columns are arranged: all side by side, PM column collapsed to avatars, or the side panel covering the conversation. */
-export type ShellTier = "wide" | "strip" | "stack";
+/** How the desktop columns are arranged: all side by side, or the side panel covering the conversation. */
+export type ShellTier = "wide" | "stack";
 
 export interface PaneLimitsPx {
   min: number;
@@ -23,7 +15,6 @@ export interface PaneLimitsPx {
 
 export interface ShellLimitsPx {
   rail: number;
-  strip: number;
   list: PaneLimitsPx;
   panel: PaneLimitsPx;
   chatMin: number;
@@ -34,32 +25,26 @@ export interface ShellLimitsPx {
 export interface ShellFitInput {
   /** Measured width of the whole desktop shell, rail included. */
   shellWidthPx: number;
-  /** Root font size: 16 at the Default interface scale, 17.5 at Large. */
+  /** Root font size: 17.5 at the Default interface scale, 19 at Large. */
   remPx: number;
   /** Whether the side panel currently has content. */
   panelOpen: boolean;
 }
 
-const SCALE_REM_PX: Readonly<Record<UiScale, number>> = {
-  sm: 14.5,
-  md: 16,
-  lg: 17.5,
-  xl: 19,
-};
+// jsdom does not apply styles.css, so its computed root size stays at the browser default whatever the scale.
+const BROWSER_DEFAULT_PX = 16;
 
 export function readRootRemPx(): number {
-  if (typeof document === "undefined") return 16;
+  const fallback = UI_SCALE_ROOT_PX[DEFAULT_UI_SCALE];
+  if (typeof document === "undefined") return fallback;
   const root = document.documentElement;
   const inline = Number.parseFloat(root.style.fontSize);
   if (Number.isFinite(inline) && inline > 0) return inline;
+  const scale = root.dataset.uiScale;
+  const mapped = scale !== undefined && scale in UI_SCALE_ROOT_PX ? UI_SCALE_ROOT_PX[scale as UiScale] : fallback;
   const computed = Number.parseFloat(getComputedStyle(root).fontSize);
-  const scale = root.dataset.uiScale as UiScale | undefined;
-  // jsdom does not evaluate styles.css rules on data-ui-scale, so fall back to the mapped scale size when computed is default/empty.
-  if (Number.isFinite(computed) && computed > 0 && (computed !== 16 || scale === undefined || scale === "md")) {
-    return computed;
-  }
-  if (scale !== undefined && scale in SCALE_REM_PX) return SCALE_REM_PX[scale];
-  return Number.isFinite(computed) && computed > 0 ? computed : 16;
+  if (Number.isFinite(computed) && computed > 0 && (computed !== BROWSER_DEFAULT_PX || mapped === BROWSER_DEFAULT_PX)) return computed;
+  return mapped;
 }
 
 function measureShellWidth(el: HTMLElement | null): number | null {
@@ -73,10 +58,9 @@ function measureShellWidth(el: HTMLElement | null): number | null {
  * Postcondition: returns the SHELL_* rem limits multiplied by remPx; frame and gap stay in px.
  */
 export function shellLimitsPx(remPx: number): ShellLimitsPx {
-  const safeRem = remPx > 0 ? remPx : 16;
+  const safeRem = remPx > 0 ? remPx : UI_SCALE_ROOT_PX[DEFAULT_UI_SCALE];
   return {
     rail: SHELL_RAIL_REM * safeRem,
-    strip: SHELL_STRIP_REM * safeRem,
     list: {
       min: SHELL_LIST_REM.min * safeRem,
       default: SHELL_LIST_REM.default * safeRem,
@@ -95,18 +79,15 @@ export function shellLimitsPx(remPx: number): ShellLimitsPx {
 
 /**
  * Precondition: shellWidthPx >= 0 and remPx > 0.
- * Postcondition: returns "wide" when the rail, the frame's right inset, the PM column at its minimum joined to the
- * conversation at its minimum, and, when panelOpen, the gap and the side panel at its minimum fit side by side.
- * Otherwise returns "strip" when the same fits with the PM column collapsed to the strip.
- * Otherwise returns "stack" when panelOpen and "strip" when not; a closed panel never yields "stack".
+ * Postcondition: returns "stack" when panelOpen and the rail, the frame's right inset, the PM column at its minimum joined to
+ * the conversation at its minimum, the gap, and the side panel at its minimum do not fit side by side; otherwise "wide".
+ * The PM column never collapses; when even the closed-panel columns do not fit, the conversation narrows instead.
  */
 export function shellTierOf({ shellWidthPx, remPx, panelOpen }: ShellFitInput): ShellTier {
+  if (!panelOpen) return "wide";
   const limits = shellLimitsPx(remPx);
-  const panelNeed = panelOpen ? limits.gap + limits.panel.min : 0;
-  const fixed = limits.rail + limits.frame + limits.chatMin + panelNeed;
-  if (shellWidthPx >= fixed + limits.list.min) return "wide";
-  if (!panelOpen || shellWidthPx >= fixed + limits.strip) return "strip";
-  return "stack";
+  const need = limits.rail + limits.frame + limits.list.min + limits.chatMin + limits.gap + limits.panel.min;
+  return shellWidthPx >= need ? "wide" : "stack";
 }
 
 /**

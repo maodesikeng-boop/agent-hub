@@ -1,4 +1,4 @@
-// ProjectList 的三档布局：column（桌面可调列）、strip（72px 头像条）、page（手机整屏：铺满、不标选中）。
+// ProjectList 的两种布局：column（桌面可调列，任何宽度都保留头像和名字）、page（手机整屏：铺满、不标选中）。
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProjectList, type ProjectListLayout } from "./components/ProjectList.tsx";
@@ -35,12 +35,6 @@ describe("ProjectList layout", () => {
     expect(region).toHaveClass("h-full");
     expect(screen.getByRole("button", { name: /小林/ })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: /小林/ }).closest(".project-row")).toHaveClass("row-selected");
-  });
-
-  it("strip：72px 头像窄条", () => {
-    const region = listRegion("strip");
-    expect(region).toHaveClass("w-18", "shrink-0");
-    expect(screen.getByRole("button", { name: "小林" })).toHaveAttribute("aria-current", "page");
   });
 
   it("page：整屏宽，带搜索框，不显示选中（没有选中底色、没有 aria-current）", () => {

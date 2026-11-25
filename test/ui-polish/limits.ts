@@ -5,9 +5,9 @@
 export const VIEWPORTS = {
   /** 三栏宽屏。 */
   desktop: { width: 1440, height: 900, touch: false },
-  /** 994–1141px (the default Default scale): the PM list collapses to the 72px avatar strip and the side panel stays (strip tier). */
-  narrow: { width: 1140, height: 800, touch: false },
-  /** Below 994px and 720px: with a side panel the stack tier covers the conversation; Settings puts its categories on top. */
+  /** The desktop window minimum: the PM list at its minimum keeps avatars and names, and a side panel covers the conversation (stack tier). */
+  narrow: { width: 860, height: 800, touch: false },
+  /** Below the desktop window minimum and 720px, reachable in a browser: the conversation narrows past its minimum; Settings puts its categories on top. */
   slim: { width: 700, height: 800, touch: false },
   /** 手机外壳（第 19、20 条）。 */
   mobile: { width: 390, height: 844, touch: true },

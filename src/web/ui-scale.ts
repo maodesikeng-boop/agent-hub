@@ -5,6 +5,9 @@ export const UI_SCALE_LABELS: Readonly<Record<UiScale, string>> = { sm: "Compact
 
 export const DEFAULT_UI_SCALE: UiScale = "md";
 
+/** Root font size of each scale at a 16px browser default; styles.css sets the same sizes as percentages. */
+export const UI_SCALE_ROOT_PX: Readonly<Record<UiScale, number>> = { sm: 16, md: 17.5, lg: 19, xl: 20.5 };
+
 export const UI_SCALE_KEY = "agent-hub.uiScale";
 
 const isUiScale = (value: unknown): value is UiScale => typeof value === "string" && (UI_SCALES as readonly string[]).includes(value);

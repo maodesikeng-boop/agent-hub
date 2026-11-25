@@ -29,7 +29,7 @@ The check types into the real composer and uses the WebKit timeline to count lay
 It covers stable single-line typing and edits in the middle of a multiline draft.
 It also checks that single-line edits lay out only the textarea. These checks do not depend on machine speed. jsdom cannot measure browser layout.
 Chromium and WebKit also check that typing across the wrap boundary, deleting back to one row, pasting text, and composing text preserve the draft. The composition test uses browser events and does not start an OS input method.
-WebKit checks the wrap boundary again with a coarse pointer at the Compact and Default scales, where the textarea's 16px font floor applies.
+WebKit checks the wrap boundary again with a coarse pointer at the Compact scale, the one scale where the textarea's 16px font floor applies.
 The check writes `composer-layout.txt` and interaction screenshots under the same output directory.
 
 ## What one run checks

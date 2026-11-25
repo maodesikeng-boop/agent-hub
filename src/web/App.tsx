@@ -239,9 +239,9 @@ function DesktopWorkbench({
     [c.active, panelVisible, c.railAttention, c.look, toggleWorkPanel],
   );
 
-  const listNode = (layout: "column" | "strip") => (
+  const listNode = (
     <ProjectList
-      layout={layout}
+      layout="column"
       computer={listComputer}
       switchable={switchable}
       computers={c.allDevices}
@@ -296,23 +296,18 @@ function DesktopWorkbench({
             </main>
           ) : (
             <div className="shell-group flex min-h-0 min-w-0 flex-1">
-              {tier !== "wide" && listNode("strip")}
               <PaneGroup id="shell-panes">
-                {tier === "wide" && (
-                  <>
-                    <Pane
-                      key="list"
-                      id="list"
-                      defaultRem={widths.list}
-                      minRem={SHELL_LIST_REM.min}
-                      maxRem={SHELL_LIST_REM.max}
-                      onCommit={(rem) => commit("list", rem)}
-                    >
-                      {listNode("column")}
-                    </Pane>
-                    <PaneHandle seam="joint" label="Resize project list" onReset={() => reset("list")} />
-                  </>
-                )}
+                <Pane
+                  key="list"
+                  id="list"
+                  defaultRem={widths.list}
+                  minRem={SHELL_LIST_REM.min}
+                  maxRem={SHELL_LIST_REM.max}
+                  onCommit={(rem) => commit("list", rem)}
+                >
+                  {listNode}
+                </Pane>
+                <PaneHandle seam="joint" label="Resize project list" onReset={() => reset("list")} />
 
                 <Pane
                   key="chat"
