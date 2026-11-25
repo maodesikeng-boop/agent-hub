@@ -602,6 +602,7 @@ export interface CompletedStep {
   key: TaskNodeKey;
   title: string;
   skipped: boolean;
+  done?: boolean;
 }
 
 /** A finished Task Graph or a finished Worker that no Task Graph step owns. */

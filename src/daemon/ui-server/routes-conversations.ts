@@ -1,11 +1,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   ATTACHMENTS_MISSING_MESSAGE,
+  COMPLETED_WORK_PAGE_SIZE,
   FILE_ACTIONS,
   LedgerRequestError,
   isLoopbackAddress,
   sentFilesOf,
   type CommandsResponse,
+  type CompletedCursor,
+  type CompletedWorkPage,
   type ConversationsLookup,
   type EndedWorkersPage,
   type FileAction,
@@ -106,6 +109,17 @@ export function registerConversationRoutes(routes: FastifyInstance, c: UiCtx): v
     const pmId = idParam(req.params, "pm id");
     const { before } = req.query as { before?: unknown };
     return ledger.endedWorkersPage(pmId, parseOptionalPositiveInt(before, "before") ?? null);
+  });
+
+  routes.get("/api/pms/:id/completed", async (req): Promise<CompletedWorkPage> => {
+    const pmId = idParam(req.params, "pm id");
+    const { cursor, limit } = req.query as { cursor?: unknown; limit?: unknown };
+    if (cursor !== undefined && typeof cursor !== "string") {
+      throw new LedgerRequestError("invalid", "cursor must be a string");
+    }
+    const parsedCursor = cursor === undefined || cursor === "" ? null : (cursor as CompletedCursor);
+    const parsedLimit = parseOptionalPositiveInt(limit, "limit") ?? COMPLETED_WORK_PAGE_SIZE;
+    return ledger.completedWork(pmId, parsedCursor, parsedLimit);
   });
 
   routes.get("/api/conversations/:id/messages", async (req) => {

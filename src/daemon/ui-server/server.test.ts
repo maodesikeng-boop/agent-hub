@@ -525,6 +525,21 @@ describe("GET /api/state 和 /messages?before=", () => {
     expect((await call("GET", API_PATHS.endedWorkers(99, null))).statusCode).toBe(404);
   });
 
+  it("completed work feed route parses cursor and limit and returns 404 for unknown PM", async () => {
+    ledger.snapshotValue = {
+      ...ledger.snapshotValue,
+      pms: [{ id: 1, name: "Lin", mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1, archivedAt: null }],
+    };
+    expect((await call("GET", API_PATHS.completedWork(1, null))).json()).toEqual({ items: [], total: 0, next: null });
+    expect((await call("GET", "/api/pms/1/completed?cursor=tok1&limit=10")).statusCode).toBe(200);
+    expect(ledger.completedWorkCalls).toEqual([
+      { pmId: 1, cursor: null, limit: 50 },
+      { pmId: 1, cursor: "tok1", limit: 10 },
+    ]);
+    expect((await call("GET", "/api/pms/1/completed?limit=abc")).statusCode).toBe(400);
+    expect((await call("GET", API_PATHS.completedWork(99, null))).statusCode).toBe(404);
+  });
+
   it("对话编号不是正整数：400", async () => {
     expect((await call("GET", "/api/conversations/abc/messages?before=3")).statusCode).toBe(400);
     expect((await call("GET", "/api/conversations/0/messages?before=3")).statusCode).toBe(400);

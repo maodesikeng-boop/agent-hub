@@ -21,6 +21,8 @@ import {
   type Change,
   type ChangeDataMap,
   type ChangesSince,
+  type CompletedCursor,
+  type CompletedWorkPage,
   type ConversationId,
   type ConversationsLookup,
   type EndedWorkersPage,
@@ -157,6 +159,8 @@ export class FakeLedger {
   readonly messagesBeforeCalls: Array<{ conversationId: ConversationId; before: MessageId }> = [];
   readonly lookupCalls: Array<{ ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }> = [];
   readonly endedWorkersCalls: Array<{ pmId: PmId; before: ConversationId | null }> = [];
+  readonly completedWorkCalls: Array<{ pmId: PmId; cursor: CompletedCursor | null; limit: number }> = [];
+  completedWorkPageValue: CompletedWorkPage = { items: [], total: 0, next: null };
   readonly changesSinceCalls: number[] = [];
   readonly createdPms: CreatePmInput[] = [];
   readonly personaReads: PmId[] = [];
@@ -476,6 +480,13 @@ export class FakeLedger {
     return { conversations: [], sessions: [], nextBefore: null };
   }
 
+  completedWork(pmId: PmId, cursor: CompletedCursor | null, limit: number): CompletedWorkPage {
+    this.check();
+    this.completedWorkCalls.push({ pmId, cursor, limit });
+    if (!this.snapshotValue.pms.some((p) => p.id === pmId)) throw new LedgerRequestError("not_found", `Unknown project manager ${pmId}`);
+    return this.completedWorkPageValue;
+  }
+
   changesSince(seq: number): ChangesSince {
     this.check();
     this.changesSinceCalls.push(seq);
@@ -642,7 +653,7 @@ export class FakeLedger {
       messagesAfter: unused("messagesAfter"),
       lookupConversations: (q) => this.lookupConversations(q),
       endedWorkersPage: (p, b) => this.endedWorkersPage(p, b),
-      completedWork: unused("completedWork"),
+      completedWork: (p, c, l) => this.completedWork(p, c, l),
       changesSince: (s) => this.changesSince(s),
       onChange: (l) => this.onChange(l),
       onStopRequested: unused("onStopRequested"),
