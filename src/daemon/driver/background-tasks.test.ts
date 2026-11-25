@@ -509,7 +509,14 @@ describe("background command metadata", () => {
     }));
     const stored = normalizeBackgroundTasks(tasks, new Map(), 9000)!;
     expect(stored.size).toBe(MAX_BACKGROUND_TASKS_TRACKED);
-    expect(stored.get("0")?.label).toBe("run " + "x".repeat(BACKGROUND_TASK_LABEL_MAX_CHARS - 4));
+    expect(stored.get("0")?.label).toBe("run " + "x".repeat(BACKGROUND_TASK_LABEL_MAX_CHARS - 5) + "…");
+  });
+
+  it("keeps an astral character whole at the command label limit", () => {
+    const prefix = "x".repeat(BACKGROUND_TASK_LABEL_MAX_CHARS - 2);
+    const tasks = [{ task_id: "unicode", command: `${prefix}🚀 yz` }];
+    const stored = normalizeBackgroundTasks(tasks, new Map(), 9000);
+    expect(stored?.get("unicode")?.label).toBe(`${prefix}🚀…`);
   });
 
   it("emits command metadata and removal from a Claude process", async () => {

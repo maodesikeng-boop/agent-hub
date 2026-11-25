@@ -1,6 +1,7 @@
-import { redactSecrets } from "../ledger/redact.ts";
+import { truncateChars } from "../../shared/domain.ts";
 import type { BackgroundTaskInfo } from "../../shared/driver.ts";
 import { BACKGROUND_TASK_ID_MAX_CHARS, BACKGROUND_TASK_LABEL_MAX_CHARS, MAX_BACKGROUND_TASKS_TRACKED } from "../../shared/limits.ts";
+import { redactSecrets } from "../ledger/redact.ts";
 
 export function normalizeBackgroundTasks(
   rawTasks: unknown,
@@ -20,7 +21,7 @@ export function normalizeBackgroundTasks(
     const startedAt = typeof rawStart === "number" && Number.isFinite(rawStart) && rawStart > 0 && rawStart <= at ? rawStart : at;
     next.set(id, {
       id,
-      label: redactSecrets(command || description).replace(/\s+/g, " ").slice(0, BACKGROUND_TASK_LABEL_MAX_CHARS) || previous.get(id)?.label || "",
+      label: truncateChars(redactSecrets(command || description).replace(/\s+/g, " "), BACKGROUND_TASK_LABEL_MAX_CHARS) || previous.get(id)?.label || "",
       startedAt: previous.get(id)?.startedAt ?? startedAt,
     });
     if (next.size === MAX_BACKGROUND_TASKS_TRACKED) break;
