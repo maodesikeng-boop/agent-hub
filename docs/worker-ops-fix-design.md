@@ -18,19 +18,14 @@
 
 ### Decisions needed
 
-**Should observed vendor quota exhaustion affect Task Graph automatic step dispatch?**
+None (resolved on 2026-11-25: **Option A selected**).
 
-When a session hits a vendor rate limit (for example, Claude's 5-hour cap), `ObservedQuotaStore` records that vendor as limited until `resetsAt` or `OBSERVED_QUOTA_FALLBACK_TTL_MS` (15 minutes). Today, `checkTargetVendorUsable` (`src/daemon/ledger/workers/create.ts:58-61`) only blocks `not_installed` and `signed_out` vendors; auto-dispatch still starts a Worker on a rate-limited vendor, which fails on turn 1 and sets the step to `waiting_pm`.
+**Resolved decision: Should observed vendor quota exhaustion affect Task Graph automatic step dispatch?**
 
-- **Option A (Recommended): Annotate `hub models` and failure output only; keep Task Graph auto-dispatch unchanged.**
-  - Pros: Quota observations can be noisy across model tiers, extra-usage top-ups, or account switches. Allowing dispatch to run acts as a self-healing probe that clears the limit immediately if quota recovered, and avoids stalling a graph on a stale or partial-tier error.
-  - Cons: A step that auto-dispatches during a confirmed account-wide outage creates one failed Worker and worktree before settling into `waiting_pm`.
-- **Option B: Soft-pause Task Graph auto-dispatch when the target vendor has an active `limited` observation with a confirmed future `resetsAt`.**
-  - Behavior: `autoDispatchIn` transitions the step straight to `waiting_pm` with the reset time and a `hub worker start --node <key> --vendor <other>` hint, without creating a Worker or worktree. Explicit `hub worker start` and `hub worker send` still bypass the pause to probe recovery.
-  - Pros: Prevents wasted Workers and worktrees when an upstream step finishes while the downstream vendor is known to be locked out.
-  - Cons: If a limit applies to only one model tier or the user upgrades/tops up quota externally, auto-dispatch pauses until `resetsAt` or manual intervention.
-- **Option C: Hard-block both auto-dispatch and manual `hub worker start` until `resetsAt` passes.**
-  - Not recommended: blocks manual recovery when the user switches accounts or adds credits before `resetsAt`.
+- **Selected (Option A): Annotate `hub models` and failure output only; keep Task Graph auto-dispatch unchanged.**
+  - Rationale: Quota observations can be noisy across model tiers, extra-usage top-ups, or account switches. Allowing dispatch to run acts as a self-healing probe that clears the limit immediately if quota recovered, and avoids stalling a graph on a stale or partial-tier error.
+- **Rejected (Option B):** Soft-pause Task Graph auto-dispatch on confirmed future `resetsAt` while allowing manual `hub worker start` to bypass.
+- **Rejected (Option C):** Hard-block both auto-dispatch and manual `hub worker start` until `resetsAt` passes.
 
 ## For Workers and reviewers
 
