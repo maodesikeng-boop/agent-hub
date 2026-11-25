@@ -1,0 +1,26 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "illustrative-session",
+    "update": {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "illustrative-call",
+      "title": "todo_write",
+      "kind": "other",
+      "status": "in_progress",
+      "rawInput": {
+        "todos": [
+          {
+            "content": "Read probe",
+            "status": "in_progress"
+          },
+          {
+            "content": "Confirm marker",
+            "status": "pending"
+          }
+        ]
+      }
+    }
+  }
+}
