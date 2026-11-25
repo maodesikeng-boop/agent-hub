@@ -1,9 +1,9 @@
 import {
   TASK_GRAPH_SELECTOR_CACHE_MAX,
   askOf,
+  isTaskNodeAwaitingUserAction,
   isTaskNodeWaitingDecision,
   isTaskNodeWaitingPm,
-  isTaskNodeWaitingUser,
   type ConversationId,
   type Message,
   type MessageId,
@@ -33,7 +33,7 @@ function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxSize: number):
 export function taskGraphPriority(graph: TaskGraph): number {
   let hasWaitingPm = false;
   for (const node of graph.nodes) {
-    if (isTaskNodeWaitingUser(node)) return 0;
+    if (isTaskNodeAwaitingUserAction(node)) return 0;
     if (isTaskNodeWaitingPm(node)) hasWaitingPm = true;
   }
   return hasWaitingPm ? 1 : 2;

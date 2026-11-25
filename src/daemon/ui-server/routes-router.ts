@@ -162,11 +162,7 @@ function registerTaskGraphRoutes(routes: FastifyInstance, c: UiCtx): void {
     const graphId = parseId(params.graphId, "graphId");
     const nodeKey = parseNodeKeyParam(params.nodeKey);
     const raw = parseWithSchema(decideTaskNodeBodySchema, req.body);
-    return ledger.decideTaskNode(graphId, nodeKey, {
-      clientId: raw.clientId,
-      ...(raw.choice !== undefined ? { choice: raw.choice } : {}),
-      ...(raw.note !== undefined ? { note: raw.note } : {}),
-    });
+    return ledger.decideTaskNode(graphId, nodeKey, raw);
   });
 
   routes.post("/api/task-graphs/:graphId/nodes/:nodeKey/skip", async (req): Promise<SkipTaskNodeResponse> => {

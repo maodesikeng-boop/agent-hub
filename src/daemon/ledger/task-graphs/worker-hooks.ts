@@ -15,11 +15,10 @@ import {
 import { userBlockedPmNote } from "../user-blockers.ts";
 import { stopQueuedDeliveryNotesIn } from "./delivery.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
-import { artifactWithoutCheckpoint, decisionOf, isStoredCheckpoint, toTaskNode, workerIdsOf } from "./rows.ts";
+import { decisionOf, toTaskNode, workerIdsOf } from "./rows.ts";
 import { validateNodeKey } from "./spec.ts";
 import {
   buildGraphMaps,
-  closeUnansweredAskIn,
   getGraphRow,
   getStepRow,
   isUserBlocked,
@@ -132,8 +131,6 @@ export function bindWorkerStartedIn(
   const prevIds = workerIdsOf(node);
   const nextIds = prevIds.includes(workerId) ? prevIds : [...prevIds, workerId];
   const t = g.now();
-  const cp = isStoredCheckpoint(node) ? 1 : 0;
-  closeUnansweredAskIn(g, p, node);
   const setAgent = agent !== undefined ? 1 : 0;
   const sandboxPending = sandboxApprovalPendingForStep(g.db, node.id);
   g.db.run(
@@ -143,12 +140,6 @@ export function bindWorkerStartedIn(
             skipped = 0,
             active_worker_id = ?,
             worker_ids_json = ?,
-            artifact_json = ?,
-            gate_question = CASE WHEN ? = 1 THEN NULL ELSE gate_question END,
-            gate_options_json = CASE WHEN ? = 1 THEN NULL ELSE gate_options_json END,
-            gate_summary_md = CASE WHEN ? = 1 THEN NULL ELSE gate_summary_md END,
-            gate_recommended = CASE WHEN ? = 1 THEN NULL ELSE gate_recommended END,
-            gate_ask_message_id = CASE WHEN decision_json IS NULL THEN NULL ELSE gate_ask_message_id END,
             vendor = COALESCE(?, vendor),
             model = CASE WHEN ? = 1 THEN ? ELSE model END,
             effort = CASE WHEN ? = 1 THEN ? ELSE effort END,
@@ -158,11 +149,6 @@ export function bindWorkerStartedIn(
     sandboxPending ? "user" : null,
     workerId,
     JSON.stringify(nextIds),
-    artifactWithoutCheckpoint(node),
-    cp,
-    cp,
-    cp,
-    cp,
     agent?.vendor ?? null,
     setAgent,
     agent?.model ?? null,
@@ -193,14 +179,12 @@ export function onWorkerFailedIn(
   const pos = stepPosition(g.db, graphRow.id, node.node_key);
   const t = g.now();
   leaveStepIn(
-    g,
-    p,
+    g.db,
     node,
     {
       status: "waiting",
       waitingFor: "pm",
       activeWorkerId: opts.clearActiveWorker ? null : undefined,
-      artifactJson: artifactWithoutCheckpoint(node),
     },
     t,
   );
@@ -299,7 +283,7 @@ export function onWorkerResumedIn(g: TaskGraphCtx, p: Pending, workerId: WorkerI
   const graphRow = getGraphRow(g.db, attnNode.graph_id);
   if (graphRow === undefined || graphRow.status !== "active") return;
   const t = g.now();
-  leaveStepIn(g, p, attnNode, { status: "running", waitingFor: null, artifactJson: artifactWithoutCheckpoint(attnNode) }, t);
+  leaveStepIn(g.db, attnNode, { status: "running", waitingFor: null }, t);
   touchGraph(g.db, graphRow.id, t);
   pushSlimGraphIn(g, p, graphRow.id);
 }
@@ -313,7 +297,7 @@ export function onWorkerEndedIn(g: TaskGraphCtx, p: Pending, workerId: WorkerId)
     g.db.run("UPDATE task_graph_steps SET active_worker_id = NULL, updated_at = ? WHERE id = ?", t, node.id);
     return null;
   }
-  leaveStepIn(g, p, node, { status: "waiting", waitingFor: "pm", activeWorkerId: null, artifactJson: artifactWithoutCheckpoint(node) }, t);
+  leaveStepIn(g.db, node, { status: "waiting", waitingFor: "pm", activeWorkerId: null }, t);
   touchGraph(g.db, graphRow.id, t);
   const flags = `--node ${node.node_key} --graph ${graphRow.id}`;
   const note =

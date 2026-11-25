@@ -17,7 +17,7 @@ import {
 import { userBlockedPmNote } from "../user-blockers.ts";
 import { decisionOf, gateOptionsOf, hasText, workerIdsOf } from "./rows.ts";
 import { validateDagAndOrder } from "./spec.ts";
-import { buildGraphMaps, touchGraph } from "./store.ts";
+import { buildGraphMaps, hasPendingStepAsk, touchGraph } from "./store.ts";
 import { gateChatMessageText } from "./text.ts";
 import { collectDirectUpstreams } from "./upstream.ts";
 import { resolveWorkspacePlan } from "./workspace.ts";
@@ -54,16 +54,14 @@ function setStepState(g: TaskGraphCtx, run: ProgressRun, node: TaskNodeDbRow, st
   g.db.run("UPDATE task_graph_steps SET status = ?, waiting_for = ?, updated_at = ? WHERE id = ?", status, waitingFor, run.t, node.id);
 }
 
-function retractIfUpstreamReopenedIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: TaskNodeDbRow): boolean {
+function retractIfUpstreamReopened(g: TaskGraphCtx, run: ProgressRun, node: TaskNodeDbRow): boolean {
   if (node.status !== "waiting" || node.active_worker_id !== null || workerIdsOf(node).length > 0 || node.decision_json !== null) {
     return false;
   }
-  if (node.gate_ask_message_id !== null) g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
   node.status = "pending";
   node.waiting_for = null;
-  node.gate_ask_message_id = null;
   g.db.run(
-    "UPDATE task_graph_steps SET status = 'pending', waiting_for = NULL, gate_ask_message_id = NULL, updated_at = ? WHERE id = ?",
+    "UPDATE task_graph_steps SET status = 'pending', waiting_for = NULL, updated_at = ? WHERE id = ?",
     run.t,
     node.id,
   );
@@ -247,7 +245,8 @@ function openGateCardIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: Tas
 }
 
 function advanceReadyStepIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: TaskNodeDbRow, orderIdx: number): void {
-  if (hasText(node.gate_question) && node.decision_json === null) {
+  if (hasText(node.gate_question) && node.decision_json === null &&
+      (node.gate_ask_message_id === null || hasPendingStepAsk(g, node))) {
     openGateCardIn(g, p, run, node);
     return;
   }
@@ -299,7 +298,7 @@ export function recomputeGraphProgressIn(
     const key = order[idx]!;
     const node = maps.byKey.get(key)!;
     const upsDone = (maps.incoming.get(key) ?? []).every((u) => maps.byKey.get(u)?.status === "done");
-    if (retractBlockedWaiting && !upsDone && retractIfUpstreamReopenedIn(g, p, run, node)) continue;
+    if (retractBlockedWaiting && !upsDone && retractIfUpstreamReopened(g, run, node)) continue;
     if (node.status !== "pending" || !upsDone) continue;
     advanceReadyStepIn(g, p, run, node, idx);
   }

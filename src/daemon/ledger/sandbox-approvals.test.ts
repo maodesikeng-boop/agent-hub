@@ -75,6 +75,17 @@ function createSandboxGraph(isRepoWithCommit = false) {
   }) }, { workspace: { kind: "ok", isRepoWithCommit, hasUncommittedChanges: false } }).data.graph;
 }
 
+function requestTakeoverWithOpenGate() {
+  const graph = createSandboxGraph();
+  const initial = approvalOf(graph.nodes[0]!.activeWorkerId!)!;
+  f.ledger.decideSandboxApproval!(initial.id, APPROVE);
+  const { messageId } = f.ledger.hubCall(f.pm.sessionId, "ask", {
+    graphId: graph.id, node: "run", text: "Which window should we inspect?", options: ["Calculator", "Clock"],
+  }).data;
+  const worker = f.dispatch({ node: "run", graphId: graph.id });
+  return { graph, messageId, worker, approval: approvalOf(worker.id)! };
+}
+
 describe("Worker sandbox approval", () => {
   it("rejects an implicit request without creating a Worker", () => {
     expect(() => f.dispatch({ caps: "inherit", allow: undefined })).toThrow(/Computer Use/);
@@ -185,10 +196,12 @@ describe("Worker sandbox approval", () => {
     expect(step).toMatchObject(pendingStep);
     expect(f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0]).toMatchObject(pendingStep);
     expect(isTaskNodeWaitingDecision(step)).toBe(false);
-    const status = f.ledger.hubCall(f.pm.sessionId, "status", {}).text;
-    expect(status).toContain("等用户确认 Worker 沙箱：run");
-    expect(status).not.toContain("等用户拍板：run");
+    const status = f.ledger.hubCall(f.pm.sessionId, "status", {});
+    expect(status.text).toContain("等用户确认 Worker 沙箱：run");
+    expect(status.text).not.toContain("等用户拍板：run");
+    expect(status.data).toMatchObject({ activeTaskGraphs: [{ id: graph.id, waitingUserCount: 1 }] });
     expect(() => f.ledger.hubCall(f.pm.sessionId, "graph.done", { graphId: graph.id, nodeKey: "run" })).toThrow(/等用户确认 Worker 沙箱/);
+    expect(() => f.ledger.hubCall(f.pm.sessionId, "graph.finish", { graphId: graph.id, summary: "Done" })).toThrow(/run \[等用户确认 Worker 沙箱\]/);
     expect(() => f.ledger.hubCall(f.pm.sessionId, "ask", { graphId: graph.id, node: "run", text: "Pick one", options: ["A", "B"] })).toThrow(/等用户确认 Worker 沙箱/);
     expect(() => f.ledger.hubCall(f.pm.sessionId, "graph.decide", { graphId: graph.id, nodeKey: "run", choice: "approve" })).toThrow(/工作台确认/);
     expect(() => f.ledger.decideTaskNode(graph.id, "run", { clientId: "regular-gate", note: "approve" })).toThrow(/工作台确认/);
@@ -198,6 +211,49 @@ describe("Worker sandbox approval", () => {
     const resumed = f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0];
     expect(resumed).toMatchObject({ status: "running", waitingFor: null, gateAskMessageId: null });
     expect(resumed?.sandboxApproval).toBeUndefined();
+  });
+
+  it("counts ordinary step decisions without counting sandbox approval in the Router digest", () => {
+    createSandboxGraph();
+    const count = () => f.ledger.getRouterDigest().pms.find((pm) => pm.pmId === f.pm.pm.id)?.pendingDecisionCount;
+    expect(count()).toBe(0);
+    f.ledger.hubCall(f.pm.sessionId, "graph.create", { specJson: JSON.stringify({
+      title: "Review", steps: [{ key: "check", title: "Check the plan", question: "Use the current plan?" }],
+    }) });
+    expect(count()).toBe(1);
+  });
+
+  it("keeps the step waiting for sandbox approval when the PM closes its older gate card", () => {
+    const { graph, messageId, worker, approval } = requestTakeoverWithOpenGate();
+    expect(() => f.ledger.decideTaskNode(graph.id, "run", { clientId: "old-gate", askMessageId: messageId, choice: "Invalid option" }))
+      .toThrow(/工作台确认/);
+    expect(askOf(f.ledger.getMessage(messageId)!)?.answered).toBeUndefined();
+
+    f.ledger.hubCall(f.pm.sessionId, "ask.close", { messageId });
+    expect(askOf(f.ledger.getMessage(messageId)!)?.closed).toBe(true);
+    expect(f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0]).toMatchObject({
+      status: "waiting", waitingFor: "user", gateAskPending: false, sandboxApproval: { id: approval.id },
+    });
+    expect(actionsOf(worker.id)).toEqual([]);
+
+    f.ledger.decideSandboxApproval!(approval.id, APPROVE);
+    expect(f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0]).toMatchObject({ status: "running", waitingFor: null });
+  });
+
+  it("does not expose a sandbox wait as a gate checkpoint while an older decision card is still open", () => {
+    const { graph, messageId, worker, approval } = requestTakeoverWithOpenGate();
+    f.db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE active_worker_id = ?",
+      JSON.stringify({ checkpointPending: true }), worker.id);
+    const node = f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0];
+    expect(node).toMatchObject({ gateAskMessageId: messageId, gateAskPending: true, sandboxApproval: { id: approval.id } });
+    expect(node?.gateCheckpoint).toBeUndefined();
+    expect(isTaskNodeWaitingDecision(node!)).toBe(false);
+    expect(f.ledger.getRouterDigest().pms.find((pm) => pm.pmId === f.pm.pm.id)?.pendingDecisionCount).toBe(1);
+
+    f.ledger.decideSandboxApproval!(approval.id, APPROVE);
+    const resumed = f.ledger.hubCall(f.pm.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes[0]!;
+    expect(resumed).toMatchObject({ status: "running", gateAskMessageId: messageId, gateAskPending: true, gateCheckpoint: true });
+    expect(isTaskNodeWaitingDecision(resumed)).toBe(true);
   });
 
   it("checks current inventory and requires a fresh approval for a takeover on the same graph step", async () => {

@@ -4,7 +4,8 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
-  isTaskNodeWaitingUser,
+  isTaskNodeAwaitingUserAction,
+  isTaskNodeWaitingDecision,
   type ConversationId,
   type TaskGraph,
   type TaskGraphId,
@@ -191,6 +192,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
         clientIdRef.current ??= makeClientId();
         return client.postTaskGraphDecide(graphId, node.key, {
           clientId: clientIdRef.current,
+          ...(node.gateAskMessageId !== null ? { askMessageId: node.gateAskMessageId } : {}),
           choice: vars.choice,
           ...(vars.note !== null ? { note: vars.note } : {}),
         });
@@ -302,7 +304,7 @@ function PeelStageRow({
   onOpenWorker: (id: ConversationId) => void;
   onOpenStepAsk: (node: TaskNode) => void;
 }) {
-  if (isTaskNodeWaitingUser(node)) {
+  if (isTaskNodeAwaitingUserAction(node)) {
     return (
       <button
         type="button"
@@ -785,7 +787,8 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
   const [nextExpanded, setNextExpanded] = useState(false);
 
   let rawPrefixEnd = 0;
-  while (rawPrefixEnd < orderedNodes.length - 1 && isNodeSettled(orderedNodes[rawPrefixEnd]!)) {
+  while (rawPrefixEnd < orderedNodes.length - 1 && isNodeSettled(orderedNodes[rawPrefixEnd]!) &&
+    !isTaskNodeWaitingDecision(orderedNodes[rawPrefixEnd]!)) {
     rawPrefixEnd++;
   }
   while (
@@ -815,7 +818,8 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
   while (
     suffixStart - 1 > visibleStart &&
     suffixStart - 1 > 0 &&
-    orderedNodes[suffixStart - 1]!.status === "pending"
+    orderedNodes[suffixStart - 1]!.status === "pending" &&
+    !isTaskNodeWaitingDecision(orderedNodes[suffixStart - 1]!)
   ) {
     suffixStart--;
   }
@@ -840,7 +844,7 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
       const node = orderedNodes[i]!;
       mappedKey.set(node.key, node.key);
       items.push({
-        itemKind: isTaskNodeWaitingUser(node) ? "gate" : "node",
+        itemKind: isTaskNodeAwaitingUserAction(node) ? "gate" : "node",
         key: node.key,
         node,
         walked: walkedByKey.get(node.key) ?? false,

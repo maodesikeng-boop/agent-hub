@@ -1,9 +1,9 @@
 import {
   isTaskGraphReadyToFinish,
+  isTaskNodeAwaitingUserAction,
   isTaskNodeUserBlocked,
   isTaskNodeWaitingDecision,
   isTaskNodeWaitingPm,
-  isTaskNodeWaitingUser,
 } from "../../../shared/domain.ts";
 import type { AgentSessionRow, PmId, TaskGraph } from "../../../shared/domain.ts";
 import type { HubCommand, PmActiveGraphSummary } from "../../../shared/hub.ts";
@@ -36,7 +36,7 @@ function graphSummary(graph: TaskGraph): PmActiveGraphSummary {
     doneCount: graph.nodes.filter((n) => n.status === "done").length,
     runningCount: graph.nodes.filter((n) => n.status === "running").length,
     waitingPmCount: graph.nodes.filter(isTaskNodeWaitingPm).length,
-    waitingUserCount: graph.nodes.filter(isTaskNodeWaitingUser).length,
+    waitingUserCount: graph.nodes.filter(isTaskNodeAwaitingUserAction).length,
     readyToFinish: isTaskGraphReadyToFinish(graph),
   };
 }

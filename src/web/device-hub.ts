@@ -32,7 +32,7 @@ import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type
 import { openChangeStream, planSnapshotRecovery, reconnectDelay, type ChangeStreamConnection } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, sameDeviceInfo, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
 import { ErrorNotice, errorText, newClientId } from "./format.ts";
-import { invalidateAccount, queryClient, useHubQueryClient } from "./query-client.ts";
+import { invalidateAccount, queryClient, taskGraphHistoryKey, useHubQueryClient } from "./query-client.ts";
 import { parseRoute } from "./route.ts";
 import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer, type HubState } from "./state.ts";
@@ -111,10 +111,10 @@ export class DeviceHub {
     key: DeviceKey,
     client: HubClient,
     onChange: () => void,
+    qc: QueryClient = queryClient,
     onResync?: () => void,
     onBoot?: (bootId: string) => void,
     onAccountUpdated?: () => void,
-    qc: QueryClient = queryClient,
   ) {
     this.key = key;
     this.client = client;
@@ -272,11 +272,23 @@ export class DeviceHub {
     if (!this.cursor || change.seq <= this.cursor.seq) return;
     this.cursor = { bootId: this.cursor.bootId, seq: change.seq };
     this.dispatch({ type: "change", change });
+    if (change.type === "task_graph.updated" && change.data.graph.status !== "active") {
+      const queryKey = taskGraphHistoryKey(this.key, change.data.graph.projectId);
+      // Invalidation alone leaves a fetch with no cached data running.
+      void this.qc.cancelQueries({ queryKey });
+      void this.qc.invalidateQueries({ queryKey });
+    }
   }
 
   private installSnapshot(snapshot: StateSnapshot, cursor: ChangeCursor): void {
+    const replacing = this.cursor !== null;
     this.cursor = cursor;
     this.dispatch({ type: "loaded", snapshot });
+    if (replacing) {
+      const queryKey = ["project-task-graphs", this.key];
+      void this.qc.cancelQueries({ queryKey });
+      void this.qc.invalidateQueries({ queryKey });
+    }
     this.onBoot?.(cursor.bootId);
   }
 
@@ -595,9 +607,11 @@ export class DevicesStore {
 
   private readonly clientFor: (key: DeviceKey) => HubClient;
   private readonly autoReload: AutoReloader;
+  private readonly qc: QueryClient;
 
   constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey, autoReloadEnv?: Partial<AutoReloadEnv>, qc: QueryClient = queryClient) {
     this.clientFor = clientFor;
+    this.qc = qc;
     this.autoReload = createAutoReloader({
       isStreaming: () => [...this.hubs.values()].some((hub) => hub.state.sessions.some((s) => s.streamingText != null)),
       ...autoReloadEnv,
@@ -611,13 +625,15 @@ export class DevicesStore {
         LOCAL_DEVICE,
         this.clientFor(LOCAL_DEVICE),
         this.changed,
+        qc,
         refreshIfRunning,
         (bootId) => this.autoReload.observeBoot(bootId),
         refreshIfRunning,
-        qc,
       ),
     );
-    if (routed !== undefined && routed !== LOCAL_DEVICE) this.hubs.set(routed, new DeviceHub(routed, this.clientFor(routed), this.changed));
+    if (routed !== undefined && routed !== LOCAL_DEVICE) {
+      this.hubs.set(routed, new DeviceHub(routed, this.clientFor(routed), this.changed, qc));
+    }
     this.store = createStore<DevicesSnapshot>(() => this.build());
   }
 
@@ -734,7 +750,7 @@ export class DevicesStore {
         }
         continue;
       }
-      const hub = new DeviceHub(info.id, this.clientFor(info.id), this.changed);
+      const hub = new DeviceHub(info.id, this.clientFor(info.id), this.changed, this.qc);
       this.hubs.set(info.id, hub);
       if (this.running) hub.start();
     }

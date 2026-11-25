@@ -50,6 +50,7 @@ export type Options = {
   question?: string;
   context?: string;
   replace?: string;
+  message?: string;
   summary?: string;
   pr?: string;
   worker?: string;
@@ -114,6 +115,7 @@ export const HUB_ARG_OPTIONS = {
   question: { type: "string" },
   context: { type: "string" },
   replace: { type: "string" },
+  message: { type: "string" },
   summary: { type: "string" },
   pr: { type: "string" },
   worker: { type: "string" },

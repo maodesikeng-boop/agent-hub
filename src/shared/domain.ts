@@ -752,8 +752,12 @@ export function isTaskNodeUserBlocked(node: Pick<TaskNode, "status" | "waitingFo
   return isTaskNodeWaitingUser(node) && node.userBlocker != null;
 }
 
-export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker" | "sandboxApproval">): boolean {
-  return isTaskNodeWaitingUser(node) && node.userBlocker == null && node.sandboxApproval == null;
+export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker" | "gateAskPending" | "sandboxApproval">): boolean {
+  return node.sandboxApproval == null && (node.gateAskPending ?? (isTaskNodeWaitingUser(node) && node.userBlocker == null));
+}
+
+export function isTaskNodeAwaitingUserAction(node: Parameters<typeof isTaskNodeWaitingDecision>[0]): boolean {
+  return node.sandboxApproval !== undefined || isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node);
 }
 
 export function isTaskNodeWaitingPm(node: Pick<TaskNode, "status" | "waitingFor">): boolean {
@@ -807,6 +811,7 @@ export interface TaskNode {
   gateSummaryMd: string | null;
   gateRecommended: string | null;
   gateAskMessageId: MessageId | null;
+  gateAskPending?: boolean;
   gateCheckpoint?: boolean;
   userBlocker?: UserBlocker | null;
   sandboxApproval?: { id: SandboxApprovalId; text: string };

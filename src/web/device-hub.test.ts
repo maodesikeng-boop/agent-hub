@@ -1,10 +1,11 @@
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, localClient, type HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
 import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, PRODUCT_NAME, WAITING_SETTLE_MS, WS_BURST_FRAME_LIMIT, WS_FRAME_BUDGET_MS, type DeviceInfo, type StateSnapshot } from "../shared/index.ts";
 import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
-import { ACCOUNT_QUERY_KEY, queryClient } from "./query-client.ts";
+import { ACCOUNT_QUERY_KEY, queryClient, taskGraphHistoryKey } from "./query-client.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
 import { useDeviceReminders } from "./notify.ts";
 import {
@@ -62,9 +63,9 @@ function scriptedClient(device: string | null) {
 const socketsFor = (device: string | null) =>
   FakeWebSocket.instances.filter((ws) => new URL(ws.url).pathname.startsWith("/d/") === (device !== null));
 
-async function readyHub(device: string | null, snapshot: StateSnapshot) {
+async function readyHub(device: string | null, snapshot: StateSnapshot, qc?: QueryClient) {
   const scripted = scriptedClient(device);
-  const hub = new DeviceHub(device ?? LOCAL_DEVICE, scripted.client, () => {});
+  const hub = new DeviceHub(device ?? LOCAL_DEVICE, scripted.client, () => {}, qc);
   hub.start();
   scripted.requests[0]!.resolve(snapshot);
   await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
@@ -111,6 +112,41 @@ describe("DeviceHub change stream recovery", () => {
     next.push(healthChange(4, makeHealth()));
     expect(hub.state.seq).toBe(4);
     hub.dispose();
+  });
+
+  it("refreshes a pending history read and invalidates cached history only for the resynced device", async () => {
+    installFakeWebSocket();
+    const qc = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    const remoteHistory = taskGraphHistoryKey(REMOTE, 1);
+    const cachedHistory = taskGraphHistoryKey(REMOTE, 2);
+    const localHistory = taskGraphHistoryKey(LOCAL_DEVICE, 1);
+    for (const key of [cachedHistory, localHistory]) qc.setQueryData(key, []);
+
+    const { hub, requests } = await readyHub(REMOTE, makeSnapshot({ seq: 10, bootId: BOOT_A }), qc);
+    const queryFn = vi.fn<({ signal }: { signal: AbortSignal }) => Promise<number[]>>()
+      .mockImplementationOnce(({ signal }) => new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve([7]), { once: true });
+      }))
+      .mockResolvedValue([8]);
+    const observer = new QueryObserver(qc, { queryKey: remoteHistory, queryFn });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      expect(observer.getCurrentResult().isLoading).toBe(true);
+      expect(qc.getQueryState(cachedHistory)?.isInvalidated).toBe(false);
+      const socket = socketsFor(REMOTE).at(-1)!;
+      socket.open();
+      socket.push({ type: "resync" });
+      await vi.waitFor(() => expect(requests).toHaveLength(2));
+      requests[1]!.resolve(makeSnapshot({ seq: 20, bootId: BOOT_A }));
+
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual([8]));
+      expect(qc.getQueryState(cachedHistory)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(localHistory)?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+      hub.dispose();
+      qc.clear();
+    }
   });
 
   it("discards old socket frames and a late snapshot when a second restart races a resync", async () => {
@@ -352,6 +388,43 @@ describe("DeviceHub 按需拉取", () => {
 });
 
 describe("DevicesStore（zustand store 驱动）", () => {
+  it.each(["routed", "discovered"] as const)("invalidates only the updated project on a %s device", async (source) => {
+    const remote: DeviceInfo = { id: REMOTE, name: "Remote", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
+    installFakeWebSocket();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) =>
+      Response.json(String(input) === "/api/devices" ? { devices: [remote] } : makeSnapshot({ seq: 10 })),
+    ));
+    const qc = new QueryClient();
+    const remoteHistory = taskGraphHistoryKey(REMOTE, 1);
+    const otherProject = taskGraphHistoryKey(REMOTE, 2);
+    const localHistory = taskGraphHistoryKey(LOCAL_DEVICE, 1);
+    for (const key of [remoteHistory, otherProject, localHistory]) qc.setQueryData(key, { graphs: [], hasMore: false });
+
+    const store = new DevicesStore(undefined, source === "routed" ? REMOTE : undefined, undefined, qc);
+    try {
+      store.start();
+      await vi.waitFor(() => expect(socketsFor(REMOTE)).toHaveLength(1));
+      const socket = socketsFor(REMOTE)[0]!;
+      socket.open();
+      socket.push({
+        seq: 11,
+        type: "task_graph.updated",
+        data: {
+          graph: {
+            id: 7, projectId: 1, pmId: 1, conversationId: 1, title: "Release", status: "completed",
+            nodes: [], edges: [], originMsgId: null, createdAt: 1, updatedAt: 3, completedAt: 2,
+          },
+        },
+      });
+      expect(qc.getQueryState(remoteHistory)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(otherProject)?.isInvalidated).toBe(false);
+      expect(qc.getQueryState(localHistory)?.isInvalidated).toBe(false);
+    } finally {
+      store.dispose();
+      qc.clear();
+    }
+  });
+
   it("管理本机与远端设备列表，setDevices 增删远端 DeviceHub 并通过 zustand store 推送快照", () => {
     const store = new DevicesStore((key) => (key === LOCAL_DEVICE ? localClient : createClient(key)));
     const snapshots: number[] = [];

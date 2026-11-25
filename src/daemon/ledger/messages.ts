@@ -183,7 +183,7 @@ export function createLedgerMessages(
     if (message === null || message.meta === null || typeof message.meta !== "object") return;
     const current = message.meta as unknown as Record<string, unknown>;
     if (current.needsUser !== true) return;
-    if (current.answered === true && settlement.by === "close") return;
+    if (current.answered === true || current.closed === true || current.dismissed === true) return;
     const nextMeta =
       settlement.by === "close"
         ? { ...current, answered: true, closed: true }

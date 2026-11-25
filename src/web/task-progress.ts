@@ -1,4 +1,4 @@
-import type { TaskGraph, TaskNode } from "../shared/index.ts";
+import { isTaskNodeAwaitingUserAction, type TaskGraph, type TaskNode } from "../shared/index.ts";
 import { pixelArtPaths, type JellyColor, type SlimePath } from "../shared/slimes.ts";
 import { computeGraphComponents, computeGraphLayers } from "./task-graph-layout.ts";
 
@@ -15,9 +15,10 @@ const LEAF_CHAR: Readonly<Record<LeafState, string>> = { done: "D", running: "R"
 const PRIORITY: readonly LeafState[] = ["user", "pm", "running", "done", "bud"];
 
 function leafStateOf(node: TaskNode): LeafState {
+  if (isTaskNodeAwaitingUserAction(node)) return "user";
   if (node.status === "done") return node.skipped ? "bud" : "done";
   if (node.status === "running") return "running";
-  if (node.status === "waiting") return node.waitingFor === "user" ? "user" : "pm";
+  if (node.status === "waiting") return "pm";
   return "bud";
 }
 

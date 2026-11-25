@@ -602,6 +602,7 @@ export interface TaskGraphsPage {
 
 export interface DecideTaskNodeRequest {
   clientId: string;
+  askMessageId?: MessageId;
   choice?: string | null;
   note?: string | null;
 }

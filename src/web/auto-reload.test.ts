@@ -291,6 +291,7 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
       fakeClient("/d/peer-device", () => makeSnapshot({ seq: 1, bootId: snapBoot })),
       () => {},
       undefined,
+      undefined,
       (bootId) => reloader.observeBoot(bootId),
     );
     hub.start();

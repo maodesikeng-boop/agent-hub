@@ -1,11 +1,12 @@
 import { pendingSandboxCardsForSteps, writeStepNoOuterSandbox } from "../sandbox-approvals.ts";
-import type { PmId, ProjectId, TaskEdge, TaskGraph, TaskGraphId, TaskGraphStatus, TaskNode, TaskNodeKey } from "../../../shared/domain.ts";
+import { askOf, type AskMeta, type MessageId, type PmId, type ProjectId, type TaskEdge, type TaskGraph, type TaskGraphId, type TaskGraphStatus, type TaskNode, type TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { Db } from "../../store/index.ts";
 import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
-import { isStoredCheckpoint, toTaskNode } from "./rows.ts";
+import type { MessageDbRow } from "../rows.ts";
+import { parseJsonOr, toTaskNode } from "./rows.ts";
 import { gateOptionsJsonOf, type NewStep } from "./spec.ts";
 import type { GraphMaps, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
@@ -26,6 +27,43 @@ export const stepOfActiveWorker = (db: Db, workerId: number): TaskNodeDbRow | un
 
 export const listStepRows = (db: Db, graphId: TaskGraphId): TaskNodeDbRow[] =>
   db.all<TaskNodeDbRow>("SELECT * FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order ASC, id ASC", graphId);
+
+function pendingAsk(ask: AskMeta | null): boolean {
+  return ask?.gateRef !== undefined && ask.answered !== true && ask.closed !== true;
+}
+
+export function hasPendingStepAsk(g: TaskGraphCtx, node: TaskNodeDbRow): boolean {
+  const message = node.gate_ask_message_id === null ? null : g.messages.getMessage(node.gate_ask_message_id);
+  return message !== null && pendingAsk(askOf(message));
+}
+
+function pendingStepAskIds(db: Db, rows: readonly Pick<TaskNodeDbRow, "gate_ask_message_id">[]): ReadonlySet<MessageId> {
+  const ids = rows.flatMap((row) => row.gate_ask_message_id === null ? [] : [row.gate_ask_message_id]);
+  if (ids.length === 0) return new Set();
+  const messages = db.all<Pick<MessageDbRow, "id" | "sender" | "meta">>(
+    "SELECT id, sender, meta FROM messages WHERE id IN (SELECT value FROM json_each(?))",
+    JSON.stringify(ids),
+  );
+  return new Set(messages.filter(({ sender, meta }) => sender === "agent" && pendingAsk(askOf({ sender, meta: parseJsonOr(meta, null) }))).map((m) => m.id));
+}
+
+export function pendingStepAskCounts(db: Db): ReadonlyMap<PmId, number> {
+  const rows = db.all<{ pm_id: PmId; gate_ask_message_id: MessageId | null }>(
+    `SELECT g.pm_id, n.gate_ask_message_id
+       FROM task_graph_steps n JOIN task_graphs g ON g.id = n.graph_id
+      WHERE g.status = 'active' AND (
+        n.gate_ask_message_id IS NOT NULL OR (n.status = 'waiting' AND n.waiting_for = 'user'
+          AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
+          AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.step_id = n.id AND a.status = 'pending'))
+      )`,
+  );
+  const ids = pendingStepAskIds(db, rows);
+  const counts = new Map<PmId, number>();
+  for (const { pm_id, gate_ask_message_id } of rows) {
+    if (gate_ask_message_id === null || ids.has(gate_ask_message_id)) counts.set(pm_id, (counts.get(pm_id) ?? 0) + 1);
+  }
+  return counts;
+}
 
 export const mainFolderOf = (db: Db, projectId: ProjectId): string | null =>
   db.get<{ path: string }>(
@@ -81,13 +119,15 @@ const graphOfRow = (row: TaskGraphDbRow, nodes: TaskNode[], edges: TaskEdge[], g
   completedAt: row.completed_at,
 });
 
-function hydrateNodes(g: TaskGraphCtx, rows: readonly TaskNodeDbRow[], includeDetails: boolean): TaskNode[] {
+export function hydrateNodes(g: TaskGraphCtx, rows: readonly TaskNodeDbRow[], includeDetails: boolean): TaskNode[] {
   const blockers = blockersOf(g, rows);
   const waitingIds = rows.filter((n) => n.status === "waiting" && n.waiting_for === "user" && n.active_worker_id !== null).map((n) => n.id);
   const approvals = pendingSandboxCardsForSteps(g.db, waitingIds);
+  const pendingAsks = pendingStepAskIds(g.db, rows);
   return rows.map((n) => toTaskNode(n, includeDetails, {
     userBlocker: blockers.get(n.id),
     sandboxApproval: approvals.get(n.id),
+    ...(n.gate_ask_message_id !== null ? { gateAskPending: pendingAsks.has(n.gate_ask_message_id) } : {}),
   }));
 }
 
@@ -205,44 +245,27 @@ export const insertEdgeRow = (db: Db, graphId: TaskGraphId, e: TaskEdge): void =
   db.run("INSERT INTO task_graph_edges (graph_id, from_key, to_key) VALUES (?, ?, ?)", graphId, e.fromKey, e.toKey);
 };
 
-export function closeUnansweredAskIn(g: TaskGraphCtx, p: Pending, node: TaskNodeDbRow): void {
-  if (node.gate_ask_message_id !== null && node.decision_json === null) {
-    g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
-  }
-}
-
 /** `activeWorkerId: undefined` keeps the bound worker. */
 export function leaveStepIn(
-  g: TaskGraphCtx,
-  p: Pending,
+  db: Db,
   node: TaskNodeDbRow,
-  next: { status: "running" | "waiting"; waitingFor: "pm" | null; activeWorkerId?: number | null; artifactJson: string | null },
+  next: { status: "running" | "waiting"; waitingFor: "pm" | null; activeWorkerId?: number | null; artifactJson?: string | null },
   t: number,
 ): void {
-  const cp = isStoredCheckpoint(node) ? 1 : 0;
-  closeUnansweredAskIn(g, p, node);
   const setWorker = next.activeWorkerId !== undefined;
-  g.db.run(
+  const artifactJson = next.artifactJson === undefined ? node.artifact_json : next.artifactJson;
+  db.run(
     `UPDATE task_graph_steps
         SET status = ?,
             waiting_for = ?,
             ${setWorker ? "active_worker_id = ?," : ""}
             artifact_json = ?,
-            gate_question = CASE WHEN ? = 1 THEN NULL ELSE gate_question END,
-            gate_options_json = CASE WHEN ? = 1 THEN NULL ELSE gate_options_json END,
-            gate_summary_md = CASE WHEN ? = 1 THEN NULL ELSE gate_summary_md END,
-            gate_recommended = CASE WHEN ? = 1 THEN NULL ELSE gate_recommended END,
-            gate_ask_message_id = CASE WHEN decision_json IS NULL THEN NULL ELSE gate_ask_message_id END,
             updated_at = ?
       WHERE id = ?`,
     next.status,
     next.waitingFor,
     ...(setWorker ? [next.activeWorkerId ?? null] : []),
-    next.artifactJson,
-    cp,
-    cp,
-    cp,
-    cp,
+    artifactJson,
     t,
     node.id,
   );

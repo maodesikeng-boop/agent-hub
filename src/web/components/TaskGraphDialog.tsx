@@ -3,9 +3,10 @@ import { Loader2 } from "../ui/icons.ts";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
-  isTaskNodeWaitingDecision,
+  isTaskNodeAwaitingUserAction,
   isTaskNodeWaitingPm,
-  isTaskNodeWaitingUser,
+  isTaskNodeUserBlocked,
+  isTaskNodeWaitingDecision,
   userBlockerCardText,
   type ConversationId,
   type TaskGraph,
@@ -48,6 +49,10 @@ function readCoarsePointer(): boolean {
 
 function measureKeyOf(graphId: TaskGraphId, nodeKey: string, waitingGate: boolean): string {
   return `${graphId}:${nodeKey}:${waitingGate ? "gate" : "node"}`;
+}
+
+function showUserCard(node: TaskNode, graphActive: boolean): boolean {
+  return node.gateAskPending === true || (graphActive && isTaskNodeAwaitingUserAction(node));
 }
 
 function beadOf(node: TaskNode): StepBead {
@@ -109,7 +114,7 @@ function WaitingStepCard({ graphId, node, stepNumber }: { graphId: TaskGraphId; 
       </div>
       {node.sandboxApproval !== undefined ? (
         <SandboxApprovalCard key={node.sandboxApproval.id} approvalId={node.sandboxApproval.id} text={node.sandboxApproval.text} />
-      ) : node.userBlocker != null ? (
+      ) : node.userBlocker != null && isTaskNodeUserBlocked(node) ? (
         <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} />
       ) : (
         <GateDecisionCard key={node.gateAskMessageId ?? node.key} graphId={graphId} node={node} client={client} />
@@ -187,12 +192,12 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
     return computeTaskGraphLayout({
       graphId: graph.id,
       nodes: graph.nodes.map((n) => {
-        const activeWaitingUser = isActive && isTaskNodeWaitingUser(n);
+        const activeWaitingUser = showUserCard(n, isActive);
         const measured = measuredHeights[measureKeyOf(graph.id, n.key, activeWaitingUser)];
         return {
           key: n.key,
           status: n.status,
-          waitingFor: isActive ? n.waitingFor : null,
+          activeGate: activeWaitingUser,
           hasCard: n.gateQuestion !== null || n.decision !== null,
           position: n.sortOrder,
           optionCount: n.gateOptions.length,
@@ -243,7 +248,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       },
       onMutate: () => setActionError(null),
       onSuccess: () => {
-        void qc.invalidateQueries({ queryKey: ["project-task-graphs"] });
         setConfirmingCancel(false);
         onOpenChange(false);
       },
@@ -341,7 +345,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const node = nodeByKey.get(box.nodeKey);
               if (!node) return null;
               const { workerId, worker } = resolveBoundWorker(node, workerByKey);
-              const isWaitingGate = graph.status === "active" && isTaskNodeWaitingUser(node);
+              const isWaitingGate = showUserCard(node, graph.status === "active");
               const isPending = node.status === "pending";
               const isSkipped = node.status === "done" && node.skipped;
               const isDone = node.status === "done" && !node.skipped;

@@ -319,7 +319,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     expect(within(dialog).getByTestId("peel-gate-card")).toBeInTheDocument();
   });
 
-  it("opens the graph step's sandbox card without a second Needs You row or a generic decision", async () => {
+  it("marks the task graph for sandbox approval and links to its chat card without a duplicate Needs You row", async () => {
     const user = userEvent.setup();
     const sandboxApproval = { id: 8, text: "Inspect Calculator in this run." };
     const graph = makeGraph({ id: 7, title: "Desktop check", nodes: [
@@ -330,13 +330,25 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     });
     const onOpenAsk = vi.fn();
     const rail = { workers: [], activeGraphs: [graph], openWorkerId: null, onOpenAsk, onOpenWorker: vi.fn() };
-    const { rerender } = render(<RailGroups {...rail} asks={[ask]} />);
+    render(<RailGroups {...rail} asks={[ask]} />);
+    const heading = screen.getByRole("button", { name: "Task Graph" });
+    expect(heading.querySelector('span[aria-hidden="true"]')).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Needs You" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Inspect Calculator" }));
     expect(onOpenAsk).toHaveBeenCalledWith(ask.id);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
 
-    rerender(<RailGroups {...rail} asks={[]} />);
+  it("opens the sandbox card in the task graph dialog when the old gate card is closed", async () => {
+    const user = userEvent.setup();
+    const sandboxApproval = { id: 8, text: "Inspect Calculator in this run." };
+    const graph = makeGraph({ id: 7, title: "Desktop check", nodes: [
+      makeNode({
+        key: "run", title: "Inspect Calculator", status: "waiting", waitingFor: "user",
+        gateAskMessageId: 99, gateAskPending: false, sandboxApproval,
+      }),
+    ] });
+    render(<RailGroups asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} onOpenAsk={vi.fn()} onOpenWorker={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Inspect Calculator" }));
     const dialog = await screen.findByRole("dialog", { name: "Desktop check" });
     expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull();
