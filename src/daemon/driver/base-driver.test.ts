@@ -202,7 +202,7 @@ class DummyDriver extends BaseSessionDriver<DummyProc, DummyBatch, DummyState> {
     this.dropBatch(this.state(id), batch);
   }
   exposeReleaseUntaken(id: SessionId, batches: DummyBatch[], stopped: boolean, at: number): void {
-    this.releaseUntaken(this.state(id), batches, stopped, at);
+    this.releaseUntaken(this.state(id), batches, stopped ? "user_stop" : "turn_end", at);
   }
   exposePushUsage(id: SessionId, input: number): void {
     this.pushUsage(this.state(id), { ...EMPTY_TOKEN_USAGE, input });

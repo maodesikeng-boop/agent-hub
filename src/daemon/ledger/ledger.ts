@@ -1,7 +1,7 @@
 import { isChecklistToolCall } from "./checklist.ts";
 import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
 import { createLedgerBranchSync } from "./workers/branch-sync.ts";
-import { isWorkerPmNoticeActionable } from "./workers/stale-notices.ts";
+import { isSystemMessageCurrent } from "./notice-currency.ts";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LedgerSnapshot } from "../../shared/api.ts";
@@ -442,7 +442,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     refreshSessionState: sessions.refreshSessionState,
     recoverAfterRestart() {
       completions.recover();
-      const recovered = sessions.recoverAfterRestart();
+      const recovered = sessions.recoverAfterRestart(workers.noticeUnresentShutdownTurnsIn);
       workers.recoverWorktrees();
       workers.recoverBackgroundWaits();
       workers.recoverTurnTimeouts();
@@ -472,7 +472,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     onActionFailed(action, error) {
       write((p) => {
-        messages.actionFailedIn(p, action, error);
+        const failedSession = messages.actionFailedIn(p, action, error);
+        if (failedSession !== null) steps.recordFailedStart(failedSession, error);
         workers.actionFailedIn(p, action, error);
         handover.actionFailedIn(p, action);
         schedules.actionFailedIn(p, action);
@@ -527,7 +528,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),
     ...branches,
-    isWorkerPmNoticeActionable: (id) => isWorkerPmNoticeActionable(db, id),
+    isSystemMessageCurrent: (id) => isSystemMessageCurrent(db, id, ctx.now(), workers.isWorkerInFlight),
+    retireStaleSystemMessage: messages.retireStaleSystemMessage,
     graphPrTargets: (sessionId, graphId) => taskGraphs.graphPrTargets(getAgentSession(db, sessionId), graphId),
     graphAutoDispatchVendors: (sessionId, command, body) =>
       taskGraphs.graphAutoDispatchVendors(getAgentSession(db, sessionId), command, body),

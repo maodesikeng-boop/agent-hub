@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { EMPTY_TOKEN_USAGE, STDERR_TAIL_CHARS, type AgentSessionPatch, type DriverEvent } from "../../shared/index.ts";
 import { AGY_DENIED_CONTINUE_MAX } from "./limits.ts";
 import {
@@ -171,7 +172,7 @@ export function onResult(host: AgyDriverHost, st: SessionState, proc: Proc, obj:
 
   host.clearTimer(st, "interruptTimer");
   host.emit(st.id, event);
-  if (untaken !== null) host.releaseOnStop(st, [untaken], at);
+  if (untaken !== null) host.releaseUntaken(st, [untaken], untakenReleaseCause(proc.closing, rawInterrupted), at);
   host.resolveInterrupt(st);
   host.afterTurn(st, proc);
   host.settled(st);

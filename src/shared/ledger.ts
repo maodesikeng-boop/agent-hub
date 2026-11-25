@@ -286,7 +286,10 @@ export interface Ledger extends LedgerHandoverWork {
   workerTranscriptTarget(sessionId: SessionId, workerId: WorkerId): { vendor: string; vendorSessionId: string; cwd: string } | null;
   listWorktreeBranchTargets?(scope?: { pmId?: PmId; workerId?: WorkerId; graphId?: TaskGraphId }): Array<{ worktreePath: string; branch: string | null }>;
   syncWorktreeBranch?(worktreePath: string, branch: string): { updatedWorkerIds: WorkerId[]; updatedGraphIds: TaskGraphId[] };
-  isWorkerPmNoticeActionable?(messageId: MessageId): boolean;
+  /** Whether the business state behind a system message still holds, so it may be written to a driver. */
+  isSystemMessageCurrent?(messageId: MessageId): boolean;
+  /** Postcondition: a queued, delivered, or processing message becomes stopped; other statuses are left unchanged. */
+  retireStaleSystemMessage?(messageId: MessageId): void;
   reconcileWorktreeBranches?(scope: { graphId?: TaskGraphId; workerId?: WorkerId }): Promise<void> | null;
   reconcileWorkerGraph?(workerId: WorkerId): Promise<void> | null;
   reconcileHubBranches?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<void> | null;

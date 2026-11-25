@@ -973,12 +973,14 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
       .not.toContain("checkpointPending");
 
     if (status === "done") {
-      ledger.hubCall(lin.sessionId, "worker.send", { workerId, text: "Please follow up" });
+      expect(() => ledger.hubCall(lin.sessionId, "worker.send", { workerId, text: "Please follow up" })).toThrow(/已经收工/);
+      const next = ledger.hubCall(lin.sessionId, "worker.start", { graphId: graph.id, node: "impl", task: "Please follow up" }).data.worker;
       const { graph: decided } = ledger.hubCall(lin.sessionId, "graph.decide", {
         graphId: graph.id, nodeKey: "impl", choice: "Continue",
       }).data;
-      expect(decided.nodes[0]).toMatchObject({ status: "running", activeWorkerId: workerId, decision: { choice: "Continue" } });
-      expect(latestWorkerInputOf(workerId).text).toContain("Continue");
+      expect(next.id).not.toBe(workerId);
+      expect(decided.nodes[0]).toMatchObject({ status: "running", activeWorkerId: next.id, decision: { choice: "Continue" } });
+      expect(latestWorkerInputOf(next.id).text).toContain("Continue");
     }
   });
 

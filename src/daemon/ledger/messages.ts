@@ -133,7 +133,9 @@ export function createLedgerMessages(
       to,
       id,
     );
-    p.changes.push({ type: "message.updated", data: { message: getMessage(id)! } });
+    const updated = getMessage(id)!;
+    p.changes.push({ type: "message.updated", data: { message: updated } });
+    return updated;
   };
 
   const insertAskMessage = (
@@ -582,7 +584,10 @@ export function createLedgerMessages(
   };
 
   const actionFailedIn = (p: Pending, action: AnyActionRow, error: string) => {
-    if (action.type === "session.send") transition(p, action.params.messageId, "failed", error, action.params.sessionId);
+    if (action.type !== "session.send") return null;
+    const { messageId, sessionId } = action.params;
+    const failed = transition(p, messageId, "failed", error, sessionId);
+    return failed?.sender === "pm" ? getAgentSession(db, sessionId) : null;
   };
 
   const stopMessage = (messageId: MessageId, sessionId?: SessionId) => {
@@ -590,6 +595,10 @@ export function createLedgerMessages(
       const status = getMessage(messageId)?.status;
       if (status === "delivered" || status === "processing") transition(p, messageId, "stopped", null, sessionId);
     });
+  };
+
+  const retireStaleSystemMessage = (id: MessageId): void => {
+    if (getMessage(id)?.sender === "system") write((p) => transition(p, id, "stopped"));
   };
 
   const retryMessage = (messageId: MessageId): { messageId: MessageId } => {
@@ -634,6 +643,7 @@ export function createLedgerMessages(
     messagesAfter,
     actionFailedIn,
     stopMessage,
+    retireStaleSystemMessage,
     retryMessage,
   };
 }

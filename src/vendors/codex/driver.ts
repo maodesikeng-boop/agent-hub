@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { checklistLaunchArgs } from "../_common/checklist.ts";
 import codexSpec from "./spec.ts";
 import {
@@ -563,7 +564,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
         st.crashNote = true;
         this.forgetWritten(st, taken);
       }
-      const stopped = reason === "interrupt" || st.stopRequested;
+      const cause = untakenReleaseCause(reason, st.stopRequested);
       st.interruptRequestId = null;
       st.stopRequested = false;
       this.emit(st.id, {
@@ -575,7 +576,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.releaseUntaken(st, missed, stopped, at);
+      this.releaseUntaken(st, missed, cause, at);
     } finally {
       this.resolveInterrupt(st);
       resolveExited();

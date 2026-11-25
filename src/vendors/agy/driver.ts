@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import {
@@ -584,7 +585,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         messageIds: taken?.messageIds ?? [],
         at,
       });
-      if (untaken !== null) this.releaseOnStop(st, [untaken], at);
+      if (untaken !== null) this.releaseUntaken(st, [untaken], untakenReleaseCause(reason, false), at);
     } finally {
       this.resolveInterrupt(st);
       resolveExited();

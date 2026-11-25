@@ -3,7 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readJsonLog } from "../../../test/append-log.ts";
 import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import {
@@ -24,6 +24,8 @@ import {
 } from "../../shared/index.ts";
 import { AGY_DENIED_CONTINUE_MAX } from "./limits.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./driver.ts";
+import { listActions, setActionStatus } from "../../daemon/actions/queue.ts";
+import { workerOpsFixture } from "../../daemon/ledger/test-helpers.ts";
 import { describeStep } from "../../shared/step-labels.ts";
 import { dataDirReadScope } from "../../shared/write-scope.ts";
 import { toolStarted, working, type LiveSession } from "../../daemon/ledger/sessions.ts";
@@ -90,6 +92,7 @@ class MemorySessionStore implements SessionStore {
 interface FakeAgyTurn {
   /** 等这个文件出现才出 user_input（模拟写进去了、agy 还没取走）。 */
   holdUserInput?: string;
+  holdInit?: boolean;
   steps?: Array<
     | { type: "text"; stepId?: number; deltas: string[]; usage?: Record<string, number>; omitDone?: boolean }
     | {
@@ -214,6 +217,10 @@ async function runTurn(userObj) {
     steps: [{ type: "text", deltas: ["默认回复"] }],
   };
 
+  if (turn.holdInit) {
+    while (!interrupted) await sleep(20);
+    return;
+  }
   if (!initSent) {
     initSent = true;
     emit({
@@ -393,13 +400,15 @@ process.on("SIGINT", () => {
   if (busy && !script.silentSigint) {
     emit({
       event: "result",
-      conversation_id: conversationId,
       result: {
+        conversation_id: initSent ? conversationId : "",
         status: "ERROR",
         finished_reason: "interrupted",
         response: "",
-        usage: { input_tokens: 5, output_tokens: 2, thinking_tokens: 0, cache_read_tokens: 0 },
-        error: "interrupted by user",
+        error: "context canceled",
+        duration_seconds: 0,
+        num_turns: 0,
+        usage: { input_tokens: 0, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0 },
       },
     });
   }
@@ -2384,3 +2393,47 @@ it("冷启动 prepareLaunch 期间 isBusy 为真；end() 介入后抛 session_en
   expect(t.argvs()).toHaveLength(0);
 });
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
+
+it("handles the recorded Agy interrupt result before init without cancelling the brief", async () => {
+  const t = makeAgyHarness({ script: { turns: [{ holdInit: true }] } });
+  const s = t.addSession();
+  const sending = t.driver.send(s.id, user(1, "Reply OK")).catch((error: unknown) => error);
+  await vi.waitFor(() => expect(t.stdinBlocks()).toHaveLength(1), { timeout: 10_000 });
+  await t.driver.shutdown();
+  expect(await sending).toMatchObject({ code: "spawn_failed", retryable: true });
+  expect(t.of("message.delivered")).toEqual([]);
+  expect(t.of("message.cancelled")).toEqual([]);
+  expect(t.of("session.exited")).toContainEqual(expect.objectContaining({ reason: "shutdown" }));
+});
+
+it.each(["shutdown", "stop"])("keeps the first Worker brief recoverable only for %s", async (reason) => {
+  const f = workerOpsFixture();
+  const t = makeAgyHarness();
+  try {
+    const { id: workerId } = f.hub("worker.start", { vendor: "agy", title: "Worker", task: "Inspect", noWorktree: true }).data.worker;
+    const id = f.messageOf(workerId);
+    const s = t.addSession();
+    t.driver.onEvent((_sessionId, event) => f.emit(workerId, event));
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [{ holdUserInput: join(t.dir, "never") }] }));
+    const action = listActions(f.db).find((item) => item.type === "session.send" && item.params.messageId === id)!;
+    await t.driver.send(s.id, user(id, "Inspect"));
+    await t.waitFor("message.delivered");
+    setActionStatus(f.db, action.id, { status: "done" }, f.now());
+    if (reason === "stop") await Promise.all([t.driver.interrupt(s.id), t.driver.shutdown()]);
+    else await t.driver.shutdown();
+    await f.ledger.settleDriverEvents();
+    const recovered = f.ledger.recoverAfterRestart();
+    const sends = listActions(f.db).filter((item) => item.type === "session.send" && item.status === "pending" && item.params.messageId === id);
+    if (reason === "shutdown") {
+      expect(f.ledger.getMessage(id)?.status).toMatch(/queued|delivered|processing/);
+      expect(sends).toHaveLength(1);
+      expect(t.of("message.cancelled")).toEqual([]);
+    } else {
+      expect(f.ledger.getMessage(id)?.status).toBe("cancelled");
+      expect(recovered.resentMessageIds).toEqual([]);
+    }
+  } finally {
+    await t.driver.shutdown();
+    await f.close();
+  }
+});
