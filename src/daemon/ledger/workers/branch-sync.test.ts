@@ -26,8 +26,8 @@ describe("linked worktree branch reconciliation", () => {
     git(f.folder, "init", "-q", "-b", "main");
     git(f.folder, "commit", "--allow-empty", "-qm", "Initial");
   };
-  const start = (title: string, graphId?: number, node?: string) => f.ledger.hubCall(f.pm.sessionId, "worker.start", {
-    title, task: "Change app", graphId, node,
+  const start = (title: string, graphId?: number, node?: string, task = "Change app") => f.ledger.hubCall(f.pm.sessionId, "worker.start", {
+    title, task, graphId, node,
   }, { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } }).data.worker;
 
   const checkout = async (workerId: number) => {
@@ -127,7 +127,7 @@ describe("linked worktree branch reconciliation", () => {
     expect(f.ledger.listWorktreeBranchTargets?.({ workerId: main.id })).toEqual([]);
   });
 
-  it.each(["manual start", "user decision", "user skip", "background exit"])(
+  it.each(["manual start", "takeover", "user decision", "user skip", "background exit"])(
     "checks out the renamed upstream branch after %s",
     async (trigger) => {
       prepareRepo();
@@ -139,7 +139,7 @@ describe("linked worktree branch reconciliation", () => {
           {
             key: "review", title: "Review", vendor: "codex", review: true,
             deps: [trigger === "user skip" ? "optional" : "impl"],
-            ...(trigger === "manual start" ? {} : { brief: "Review the changes" }),
+            ...(trigger === "manual start" || trigger === "takeover" ? {} : { brief: "Review the changes" }),
           },
         ],
       }) }).data.graph;
@@ -147,7 +147,11 @@ describe("linked worktree branch reconciliation", () => {
       await checkout(impl.id);
       if (trigger === "background exit") f.emit(impl.id, { type: "background.changed", count: 1, at: f.now() });
       await complete(impl);
-      const manual = trigger === "manual start" ? start("Review", graphId, "review") : null;
+      if (trigger === "takeover") start("First review", graphId, "review");
+      const originalBranchNote = `Keep this historical branch reference:\n- 分支：${impl.branch}`;
+      const manual = trigger === "manual start" || trigger === "takeover"
+        ? start("Review", graphId, "review", originalBranchNote)
+        : null;
       git(impl.worktreePath!, "branch", "-m", "feature/renamed-before-review");
       if (trigger === "user decision") {
         f.ledger.decideTaskNode(graphId, "impl", { choice: CONFIRM_PASS_OPTION, clientId: "approve" });
@@ -172,7 +176,13 @@ describe("linked worktree branch reconciliation", () => {
       expect(f.hub("worker.show", { workerId: reviewId }).data.worker.review).toMatchObject({
         branch: "feature/renamed-before-review", snapshot: { sha },
       });
-      expect(f.ledger.getMessage(f.messageOf(reviewId))?.text).toContain("detached 在被审分支 feature/renamed-before-review 的提交上");
+      const firstMessage = f.ledger.getMessage(f.messageOf(reviewId))?.text;
+      expect(firstMessage).toContain(trigger === "takeover"
+        ? "detached 在被审分支 feature/renamed-before-review 上"
+        : "detached 在被审分支 feature/renamed-before-review 的提交上");
+      expect(firstMessage?.split("\n")).toContain("- 分支：feature/renamed-before-review");
+      if (manual !== null) expect(firstMessage).toContain(originalBranchNote);
+      else expect(firstMessage?.split("\n")).not.toContain(`- 分支：${impl.branch}`);
       git(impl.worktreePath!, "branch", "-m", "feature/renamed-after-review");
       await f.ledger.reconcileWorkerGraph?.(reviewId);
       expect(f.ledger.getWorktreeTask(reviewId)?.checkout).toEqual({ kind: "review", branch: "feature/renamed-before-review" });

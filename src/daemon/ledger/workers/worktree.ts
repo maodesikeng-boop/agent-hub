@@ -2,12 +2,13 @@ import type { AnyActionRow, ReviewVerifyParams } from "../../../shared/actions.t
 import type { MessageId, SessionId, WorkerId } from "../../../shared/domain.ts";
 import type { SetupOutcome, WorktreeTask } from "../../../shared/ledger.ts";
 import { DEFAULT_WORKER_MAX_TIME_MS } from "../../../shared/limits.ts";
-import { parseReviewTarget, reviewVerifyErrorProblem, reviewWorkspaceLines, type ReviewSnapshot, type ReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
+import { parseReviewTarget, reviewTakeoverWorkspaceNote, reviewVerifyErrorProblem, reviewWorkspaceLines, type ReviewSnapshot, type ReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
 import { setupNote } from "../../prompt.ts";
 import type { Pending } from "../context.ts";
 import { toMessage } from "../rows.ts";
 import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
 import { idle } from "../sessions.ts";
+import { refreshHandoffBranch } from "../task-graph-handoff.ts";
 import { mainFolderOf, projectRow, workerRow, workerSession } from "./ctx.ts";
 import { enqueueFirstTurn, insertLine } from "./lines.ts";
 import { insertReport, insertTurnFailed } from "./reports.ts";
@@ -27,7 +28,10 @@ function refreshPendingReviewBranch(w: WorkersCtx, workerId: WorkerId, path: str
       taskDedupeKey(workerId),
     );
     if (task === undefined) return;
-    const text = task.text.replace(reviewWorkspaceLines(path, previous).join("\n"), () => reviewWorkspaceLines(path, branch).join("\n"));
+    const workspace = task.text
+      .replace(reviewWorkspaceLines(path, previous).join("\n"), () => reviewWorkspaceLines(path, branch).join("\n"))
+      .replace(reviewTakeoverWorkspaceNote(path, previous), () => reviewTakeoverWorkspaceNote(path, branch));
+    const text = refreshHandoffBranch(workspace, previous, branch);
     if (text === task.text) return;
     const updated = w.db.get<MessageDbRow>(
       "UPDATE messages SET text = ?, updated_at = ? WHERE id = ? RETURNING *",

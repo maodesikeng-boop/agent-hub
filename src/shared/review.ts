@@ -117,6 +117,10 @@ export function reviewWorkspaceLines(worktreePath: string, branch: string): stri
   ];
 }
 
+export function reviewTakeoverWorkspaceNote(worktreePath: string, branch: string): string {
+  return `你在新开的审查目录 ${worktreePath} 里，detached 在被审分支 ${branch} 上；前任的审查目录不接手，它的结论和复现看下面的记录。`;
+}
+
 export const REVIEW_CHECKLIST = [
   "这一步是独立审查：只查不修，你不是作者。",
   "- 对照上面的目标、代码改动和项目自身的说明或规矩找真实缺陷；发现问题不修，写清复现方式、文件和行号，由项目经理另派 Worker 处理。",
