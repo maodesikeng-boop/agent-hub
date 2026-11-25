@@ -51,11 +51,12 @@ import { listenOnRunSocket } from "../run-socket.ts";
 import { unlessAborted } from "../sent-files.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
-import type { SelfReloadStatus } from "../../shared/api.ts";
+import type { QuotaResponse, SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
-import { HUB_FILE_ARGS_MAX, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
-import { isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
+import { HUB_FILE_ARGS_MAX, HUB_MODELS_QUOTA_WAIT_MS, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
+import { mergeVendorQuota, type ObservedQuotaStore } from "../quota/observed-quota.ts";
+import { AGENT_VENDORS, isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
@@ -64,6 +65,7 @@ export interface AgentApiOptions {
   ledger: Pick<
     Ledger,
     | "hubCall"
+    | "reconcileHubBranches"
     | "sessionRole"
     | "reportHealth"
     | "workerStartFolder"
@@ -80,6 +82,7 @@ export interface AgentApiOptions {
   findTranscript?: (ref: TranscriptRef) => string | null;
   refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
+  quota?: { observed: ObservedQuotaStore; get(): Promise<QuotaResponse>; now?: () => number };
   sandboxGuard?: RouterSandboxGuard;
   onRouterDispatch?: (
     sessionId: SessionId,
@@ -185,7 +188,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     required: ["workerId"],
     properties: { workerId: workerIdField },
   },
-  "worker.list": noArgs,
+  "worker.list": { type: "object", additionalProperties: false, properties: { vendor: { type: "string", enum: [...AGENT_VENDORS] } } },
   "worker.show": {
     type: "object",
     additionalProperties: false,
@@ -469,16 +472,38 @@ function fail(reply: FastifyReply, code: HubErrorCode, message: string): Fastify
 
 const UNAUTHORIZED_MESSAGE = "令牌不对或已作废：这个会话不能再用 hub";
 
-export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
-  const { ledger, tokens } = opts;
+async function modelQuotas(quota: AgentApiOptions["quota"], vendor: AgentVendor | undefined, signal: AbortSignal) {
+  if (quota === undefined) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const fetched = await unlessAborted(Promise.race([
+      quota.get().catch(() => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), HUB_MODELS_QUOTA_WAIT_MS); }),
+    ]), signal, () => null);
+    const at = (quota.now ?? Date.now)();
+    const observed = quota.observed.snapshot(at);
+    return Object.fromEntries((vendor === undefined ? AGENT_VENDORS : [vendor]).flatMap((v) => {
+      const entry = mergeVendorQuota(v, observed[v] ?? null, fetched ?? null, at);
+      return entry === undefined ? [] : [[v, entry]];
+    }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function createPreparation(opts: AgentApiOptions) {
+  const { ledger } = opts;
   const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
   const probePr = opts.probePr ?? ((cwd: string, branch: string) => defaultProbePr(cwd, branch));
   const probePrByUrl = opts.probePrByUrl ?? ((cwd: string, url: string) => defaultProbePrByUrl(cwd, url));
   const findTranscript = opts.findTranscript ?? ((ref: TranscriptRef) => vendorTranscriptPath(ref));
 
-  const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<HubCallContext> => {
+  return async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<HubCallContext> => {
     const role = ledger.sessionRole(sessionId);
     if (role === null || !hubCommandAllowed(role, command)) return {};
+    const reconcile = ledger.reconcileHubBranches?.(sessionId, command, body, signal);
+    if (reconcile != null) await reconcile;
+    if (signal.aborted) return {};
     if (command === "ask" || command === "router.report") {
       const files = body.files as HubFileArg[] | undefined;
       if (files === undefined || files.length === 0 || files.length > HUB_FILE_ARGS_MAX) return {};
@@ -489,10 +514,13 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       return selfReload === undefined ? {} : { selfReload };
     }
     if (command === "models") {
-      if (!opts.models) return {};
       const vendor = isAgentVendor(body.vendor) ? body.vendor : undefined;
       if (body.vendor !== undefined && vendor === undefined) return {};
-      return { modelCatalogs: await opts.models.list({ refresh: body.refresh === true, ...(vendor ? { vendor } : {}) }) };
+      const [modelCatalogs, vendorQuotas] = await Promise.all([
+        opts.models?.list({ refresh: body.refresh === true, ...(vendor ? { vendor } : {}) }),
+        modelQuotas(opts.quota, vendor, signal),
+      ]);
+      return { modelCatalogs, vendorQuotas };
     }
     if (command === "worker.show") {
       const target = ledger.workerPrTarget(sessionId, body.workerId as number);
@@ -543,6 +571,11 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     if (folder !== null) context.workspace = await probeWorkspace(folder);
     return context;
   };
+}
+
+export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
+  const { ledger, tokens } = opts;
+  const prepare = createPreparation(opts);
   const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({
     logger: opts.logger ?? false,

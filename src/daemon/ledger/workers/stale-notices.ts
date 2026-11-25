@@ -1,4 +1,3 @@
-// Invariant: an ended or replaced Worker never delivers stale queued PM failure, timeout, or report notices, while a completed step's report with questions remains deliverable.
 import type { MessageId } from "../../../shared/domain.ts";
 import type { Db } from "../../store/index.ts";
 import type { Pending } from "../context.ts";
@@ -9,23 +8,42 @@ export interface CancelWorkerPmNoticesOptions {
   excludeMessageIds?: ReadonlySet<MessageId>;
 }
 
-/**
- * Precondition: worker identifies a Worker whose queued PM system notices are being superseded (ended, replaced, or resumed).
- * Postcondition: transitions still-queued system messages in worker.pm_conversation_id referencing worker.id (except ids in excludeMessageIds) to stopped via messages.transition, and returns the cancelled message ids.
- */
 export function cancelQueuedWorkerPmNoticesIn(
-  _w: WorkersCtx,
-  _p: Pending,
-  _worker: Pick<WorkerDbRow, "id" | "pm_conversation_id">,
-  _options?: CancelWorkerPmNoticesOptions,
+  w: WorkersCtx,
+  p: Pending,
+  worker: Pick<WorkerDbRow, "id" | "pm_conversation_id">,
+  options?: CancelWorkerPmNoticesOptions,
 ): MessageId[] {
-  throw new Error("Not implemented");
+  const rows = w.db.all<{ id: MessageId }>(
+    "SELECT id FROM messages WHERE conversation_id = ? AND worker_id = ? AND sender = 'system' AND status = 'queued'",
+    worker.pm_conversation_id, worker.id,
+  );
+  return rows.flatMap(({ id }) => {
+    if (options?.excludeMessageIds?.has(id)) return [];
+    w.messages.transition(p, id, "stopped");
+    return [id];
+  });
 }
 
-/**
- * Precondition: messageId names a queued message about to be delivered by session.send.
- * Postcondition: returns false when the message is a PM system notice tied to an ended Worker (other than a completed-step report) or a Worker replaced on its Task Graph step; returns true otherwise.
- */
-export function isWorkerPmNoticeActionable(_db: Db, _messageId: MessageId): boolean {
-  throw new Error("Not implemented");
+export function isWorkerPmNoticeActionable(db: Db, messageId: MessageId): boolean {
+  const notice = db.get<{ worker_id: number; status: string; event: string | null; completed: number }>(
+    `SELECT w.id AS worker_id, w.status, json_extract(m.meta, '$.event') AS event, coalesce(json_extract(m.meta, '$.completedStep'), 0) AS completed
+       FROM messages m JOIN workers w ON w.id = m.worker_id AND w.pm_conversation_id = m.conversation_id
+      WHERE m.id = ? AND m.sender = 'system'`, messageId,
+  );
+  if (notice === undefined) return true;
+  const launchFailed = notice.event === "worktree_failed";
+  if (notice.status === "ended" && notice.completed !== 1 && !launchFailed) return false;
+  // A completed report is still useful while this Worker owns the finished result.
+  const step = db.get<{ status: string; waiting_for: string | null; graph_status: string; latest: number | null }>(
+    `SELECT s.status, s.waiting_for, g.status AS graph_status, json_extract(s.worker_ids_json, '$[#-1]') AS latest
+       FROM task_graph_steps s JOIN task_graphs g ON g.id = s.graph_id
+       JOIN workers w ON w.pm_id = g.pm_id
+      WHERE w.id = ? AND EXISTS (SELECT 1 FROM json_each(s.worker_ids_json) WHERE value = w.id)
+      ORDER BY s.id DESC LIMIT 1`, notice.worker_id,
+  );
+  if (step === undefined) return notice.status !== "ended" || launchFailed;
+  if (step.latest !== notice.worker_id) return false;
+  if (launchFailed) return step.graph_status === "active" && step.status === "waiting" && step.waiting_for === "pm";
+  return notice.completed !== 1 || step.status === "done";
 }

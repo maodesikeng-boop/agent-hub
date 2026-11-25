@@ -38,6 +38,7 @@ import {
 } from "./create.ts";
 import { endOpenUpstreamIn, endWorkerIn, type EndedWorker } from "./lifecycle.ts";
 import { isWorkerInFlight } from "./lines.ts";
+import { cancelQueuedWorkerPmNoticesIn } from "./stale-notices.ts";
 import { WORKTREE_DIRTY_NOTE, describeWorkspace, newReviewJson, notStarted, validMaxTimeMs, validTask } from "./text.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
@@ -183,6 +184,8 @@ function endPredecessorsIn(w: WorkersCtx, p: Pending, takeover: Takeover | null,
           : "换人时它还开着（没在跑），后台已按“没做完”把它收工（节点不标完成）。"
         : "它已经收工了。",
     }));
+    const latest = takeover.predecessors[0];
+    if (latest?.status === "ended") cancelQueuedWorkerPmNoticesIn(w, p, latest);
     for (const old of takeover.openOld) {
       endedOld.push(endWorkerIn(w, p, old, { notifyGraph: false }));
     }

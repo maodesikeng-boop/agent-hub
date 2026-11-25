@@ -1744,6 +1744,7 @@ describe("7. 后台任务跟踪与 background.changed 事件", () => {
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "跑后台任务"));
     const ended = await t.waitFor("turn.ended");
+    expect(t.of("background.changed")[0]).toMatchObject({ tasks: [{ id: "bg1", label: "sleep 30", startedAt: expect.any(Number) }] });
     await realSleep(IDLE * 2);
     expect(t.of("session.exited")).toEqual([]);
     expect(t.driver.isRunning(s.id)).toBe(true);

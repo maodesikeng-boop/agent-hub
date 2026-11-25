@@ -1,33 +1,77 @@
-// Invariant: worktree branch reads resolve local git HEAD files outside SQLite transactions without spawning git subprocesses; detached HEAD returns null so callers retain the last known branch.
+import { readFile, stat } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
+import { LRUCache } from "lru-cache";
+import { MAX_PATH_BYTES, WORKTREE_BRANCH_CACHE_MAX, WORKTREE_BRANCH_PROBE_TIMEOUT_MS } from "../../shared/limits.ts";
 
 export interface WorktreeBranchProbeOptions {
   maxEntries?: number;
 }
 
 export interface WorktreeBranchProbe {
-  /**
-   * Precondition: worktreePath is an absolute filesystem path to a git worktree or checkout.
-   * Postcondition: returns the checked-out local branch name under refs/heads/ (using a HEAD-file stat cache bounded by WORKTREE_BRANCH_CACHE_MAX), or null if detached, missing, or unreadable.
-   */
   readBranch(worktreePath: string): Promise<string | null>;
-  /**
-   * Postcondition: evicts worktreePath from the HEAD cache, or clears all cached entries when omitted.
-   */
   invalidate(worktreePath?: string): void;
 }
 
-/**
- * Precondition: worktreePath is an absolute filesystem path.
- * Postcondition: parses <gitdir>/HEAD resolved through .git (file or directory) and returns the local branch name without refs/heads/, or null on detached HEAD, missing directory, or invalid metadata.
- */
-export async function readWorktreeBranch(_worktreePath: string): Promise<string | null> {
-  throw new Error("Not implemented");
+async function headPath(worktreePath: string, signal: AbortSignal): Promise<string | null> {
+  const dotGit = join(worktreePath, ".git");
+  const info = await stat(dotGit);
+  if (info.isDirectory()) return join(dotGit, "HEAD");
+  if (!info.isFile() || info.size > MAX_PATH_BYTES) return null;
+  const pointer = /^gitdir: (.+)$/u.exec((await readFile(dotGit, { encoding: "utf8", signal })).trim())?.[1];
+  return pointer ? resolve(worktreePath, pointer.replaceAll("\\", sep), "HEAD") : null;
 }
 
-/**
- * Precondition: options.maxEntries, when provided, is a positive integer; defaults to WORKTREE_BRANCH_CACHE_MAX.
- * Postcondition: returns a bounded stat-validated probe backed by LRUCache so unchanged HEAD files skip re-reads and branch renames are observed on the next probe.
- */
-export function createWorktreeBranchProbe(_options?: WorktreeBranchProbeOptions): WorktreeBranchProbe {
-  throw new Error("Not implemented");
+type CachedBranch = { fingerprint: string; branch: string };
+
+export async function readWorktreeBranch(worktreePath: string): Promise<string | null> {
+  return createWorktreeBranchProbe().readBranch(worktreePath);
+}
+
+export function createWorktreeBranchProbe({ maxEntries = WORKTREE_BRANCH_CACHE_MAX }: WorktreeBranchProbeOptions = {}): WorktreeBranchProbe {
+  const cache = new LRUCache<string, CachedBranch>({ max: maxEntries });
+  const read = async (worktreePath: string, signal: AbortSignal): Promise<string | null> => {
+    try {
+      const head = await headPath(worktreePath, signal);
+      if (signal.aborted) return null;
+      if (head === null) {
+        cache.delete(worktreePath);
+        return null;
+      }
+      const info = await stat(head, { bigint: true });
+      if (signal.aborted) return null;
+      if (!info.isFile() || info.size > MAX_PATH_BYTES) {
+        cache.delete(worktreePath);
+        return null;
+      }
+      const fingerprint = `${head}:${info.ino}:${info.mtimeNs}:${info.ctimeNs}:${info.size}`;
+      const cached = cache.get(worktreePath);
+      if (cached?.fingerprint === fingerprint) return cached.branch;
+      cache.delete(worktreePath);
+      const branch = /^ref: refs\/heads\/(\S[^\r\n]*)$/u.exec((await readFile(head, { encoding: "utf8", signal })).trim())?.[1];
+      if (branch === undefined || signal.aborted) return null;
+      cache.set(worktreePath, { fingerprint, branch });
+      return branch;
+    } catch {
+      if (!signal.aborted) cache.delete(worktreePath);
+      return null;
+    }
+  };
+  return {
+    async readBranch(path) {
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          read(path, controller.signal),
+          new Promise<null>((done) => { timer = setTimeout(() => { controller.abort(); done(null); }, WORKTREE_BRANCH_PROBE_TIMEOUT_MS); }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    invalidate(path) {
+      if (path === undefined) cache.clear();
+      else cache.delete(path);
+    },
+  };
 }

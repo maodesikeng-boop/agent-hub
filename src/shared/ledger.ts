@@ -277,6 +277,9 @@ export interface Ledger extends LedgerHandoverWork {
   listWorktreeBranchTargets?(scope?: { pmId?: PmId; workerId?: WorkerId; graphId?: TaskGraphId }): Array<{ worktreePath: string; branch: string | null }>;
   syncWorktreeBranch?(worktreePath: string, branch: string): { updatedWorkerIds: WorkerId[]; updatedGraphIds: TaskGraphId[] };
   isWorkerPmNoticeActionable?(messageId: MessageId): boolean;
+  reconcileWorktreeBranches?(scope: { graphId?: TaskGraphId; workerId?: WorkerId }): Promise<void> | null;
+  reconcileWorkerGraph?(workerId: WorkerId): Promise<void> | null;
+  reconcileHubBranches?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<void> | null;
   graphPrTargets?(sessionId: SessionId, graphId?: TaskGraphId): GraphPrTarget[];
   graphAutoDispatchVendors?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): AgentVendor[];
   graphDeliveryProbeTarget?(messageId: MessageId): {

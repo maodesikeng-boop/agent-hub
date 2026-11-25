@@ -13,11 +13,11 @@ import {
 } from "./turn-completions.ts";
 
 type OrdinaryEvent = Exclude<DriverEvent, TurnEndedEvent>;
-type QueueItem = { event: OrdinaryEvent; links: LocalLink[] } | { receipt: TurnCompletionReceipt; facts: TurnCompletionFacts | null };
+type QueueItem = { event: OrdinaryEvent; links: LocalLink[] } | { receipt: TurnCompletionReceipt; facts: TurnCompletionFacts | null; prepared: boolean };
 
 interface Queue {
   items: QueueItem[];
-  copy: AbortController | null;
+  preparing: AbortController | null;
   applying: boolean;
   waiting: boolean;
   offline: boolean;
@@ -28,6 +28,7 @@ interface Queue {
 
 interface DriverEventDrainOptions {
   completions: ReturnType<typeof createTurnCompletionLedger>;
+  beforeTurn?(sessionId: SessionId, signal: AbortSignal): Promise<void> | null;
   factsFor(sessionId: SessionId, event: TurnEndedEvent): TurnCompletionFacts;
   apply(sessionId: SessionId, event: OrdinaryEvent, meta: AgentTextMeta | null): void;
   localLinks(text: string): LocalLink[];
@@ -74,7 +75,7 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
 
   function copyReply(sessionId: SessionId, queue: Queue, item: Extract<QueueItem, { event: OrdinaryEvent }>): void {
     const copy = new AbortController();
-    queue.copy = copy;
+    queue.preparing = copy;
     void options.textMetaFor(sessionId, item.event, item.links, copy.signal).catch((error) => {
       log(sessionId, item.event.type, error);
       return null;
@@ -87,17 +88,40 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
       } finally {
         queue.applying = false;
       }
-      queue.copy = null;
+      queue.preparing = null;
       drain(sessionId, queue, isHandoverTrigger(item));
     }).catch((error) => log(sessionId, item.event.type, error));
   }
 
+  function prepareTurn(sessionId: SessionId, queue: Queue): boolean {
+    if (options.beforeTurn === undefined) return false;
+    const pending = new AbortController();
+    try {
+      const prepare = options.beforeTurn(sessionId, pending.signal);
+      if (prepare === null) return false;
+      queue.preparing = pending;
+      void prepare.catch((error) => log(sessionId, "turn.ended", error)).then(() => {
+        if (pending.signal.aborted) return;
+        queue.preparing = null;
+        drain(sessionId, queue);
+      }).catch((error) => log(sessionId, "turn.ended", error));
+      return true;
+    } catch (error) {
+      log(sessionId, "turn.ended", error);
+      return false;
+    }
+  }
+
   function drain(sessionId: SessionId, queue: Queue, lastTrigger = false): void {
-    if (queue.copy !== null || queue.waiting) return;
+    if (queue.preparing !== null || queue.waiting) return;
     let lastWasTrigger = lastTrigger;
     while (queue.items.length > 0) {
       const item = queue.items[0]!;
       if ("receipt" in item) {
+        if (!item.prepared && !queue.plainLinks) {
+          item.prepared = true;
+          if (prepareTurn(sessionId, queue)) return;
+        }
         item.facts ??= factsFor(sessionId, item.receipt.event);
         queue.waiting = true;
         queue.applying = true;
@@ -135,8 +159,8 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
   }
 
   function flush(sessionId: SessionId, queue: Queue): void {
-    queue.copy?.abort();
-    queue.copy = null;
+    queue.preparing?.abort();
+    queue.preparing = null;
     queue.plainLinks = true;
     drain(sessionId, queue);
   }
@@ -165,14 +189,14 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
     }
     const facts = queue === undefined && event.type === "turn.ended" ? factsFor(sessionId, event) : null;
     const item = event.type === "turn.ended"
-      ? { receipt: completions.receive(sessionId, event, facts), facts }
+      ? { receipt: completions.receive(sessionId, event, facts), facts, prepared: false }
       : { event, links };
     if (queue === undefined) {
       let finish = () => {};
       const done = new Promise<void>((resolve) => {
         finish = resolve;
       });
-      queue = { items: [], copy: null, applying: false, waiting: false, offline: false, plainLinks: false, done, finish };
+      queue = { items: [], preparing: null, applying: false, waiting: false, offline: false, plainLinks: false, done, finish };
       queues.set(sessionId, queue);
     }
     queue.items.push(item);
@@ -184,7 +208,7 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
     hasPending(sessionId: SessionId): boolean {
       const queue = queues.get(sessionId);
       if (queue === undefined) return false;
-      if (queue.applying) return queue.items.length > (queue.copy !== null ? 0 : 1);
+      if (queue.applying) return queue.items.length > (queue.preparing !== null ? 0 : 1);
       return queue.items.length > 0;
     },
     onSettled(receipt: TurnCompletionReceipt) {

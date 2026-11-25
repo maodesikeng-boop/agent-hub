@@ -319,7 +319,7 @@ export function patchIn(
   const progressNote = unlockedNoteOf(progress, graph).replace(/^；/u, "");
   const reviewHint = sameVendorReviewHint(g.db, graphRow.id, caller.vendor);
   return {
-    text: `已更新${formatGraphText(graph)}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
+    text: `已更新${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
     data: { graph },
   };
 }

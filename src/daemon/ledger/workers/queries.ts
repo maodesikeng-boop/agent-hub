@@ -3,33 +3,54 @@ import type { HubArgs, HubResult, WorkerHubStatus } from "../../../shared/hub.ts
 import type { LaunchContext } from "../../../shared/ledger.ts";
 import { WORKER_LIST_RECENT_ENDED } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
-import { isAgentVendor } from "../../../shared/vendors.ts";
+import { isAgentVendor, vendorLabel } from "../../../shared/vendors.ts";
 import { readWorkerCapabilities } from "../capability-rows.ts";
+import { fail } from "../context.ts";
+import { formatWorkerState, lastTurnOutcomesBySession } from "../worker-state.ts";
 import { toWorkerRecord } from "../rows.ts";
 import type { WorkerDbRow } from "../rows.ts";
 import { agentSettingOf } from "../worker-view.ts";
 import { isWorktreeCleaned } from "./cleanup.ts";
 import { mainFolderOf, projectRow, workerRow, workerSession } from "./ctx.ts";
-import { describeWorkspace, worktreeLabel } from "./text.ts";
+import { describeWorkspace, notStarted, worktreeLabel } from "./text.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
 /** Ended Workers are capped at WORKER_LIST_RECENT_ENDED so hundreds of entries do not flood the PM context; recency uses updated_at, not id. */
-export function list(w: WorkersCtx, caller: PmCaller, _args?: HubArgs<"worker.list">): HubResult<"worker.list"> {
-  const all = w.db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? ORDER BY id", caller.pmId);
-  if (all.length === 0) return { text: "你还没有派过 Worker。", data: { workers: [] } };
-  const endedLatestFirst = all.filter((x) => x.status === "ended").sort((a, b) => b.updated_at - a.updated_at || b.id - a.id);
-  const hidden = new Set(endedLatestFirst.slice(WORKER_LIST_RECENT_ENDED));
-  const rows = hidden.size === 0 ? all : all.filter((x) => !hidden.has(x));
-  const lines = rows.map((x) => {
-    const session = workerSession(w, x);
+export function list(w: WorkersCtx, caller: PmCaller, args?: HubArgs<"worker.list">): HubResult<"worker.list"> {
+  const vendor = args?.vendor;
+  if (vendor !== undefined && !isAgentVendor(vendor)) throw fail("invalid", "厂商名称无效");
+  const filter = vendor === undefined ? "" : `AND ? = (
+    SELECT vendor FROM agent_sessions WHERE conversation_id = workers.worker_conversation_id ORDER BY generation DESC LIMIT 1
+  )`;
+  const params = vendor === undefined ? [caller.pmId] : [caller.pmId, vendor];
+  const all = w.db.all<WorkerDbRow>(
+    `SELECT * FROM workers WHERE pm_id = ? AND status <> 'ended' ${filter} ORDER BY id`, ...params,
+  );
+  const ended = w.db.all<WorkerDbRow>(
+    `SELECT * FROM workers WHERE pm_id = ? AND status = 'ended' ${filter} ORDER BY updated_at DESC, id DESC LIMIT ?`,
+    ...params, WORKER_LIST_RECENT_ENDED,
+  );
+  const hidden = (w.db.get<{ count: number }>(
+    `SELECT count(*) AS count FROM workers WHERE pm_id = ? AND status = 'ended' ${filter}`, ...params,
+  )?.count ?? 0) - ended.length;
+  const rows = [...all, ...ended].sort((a, b) => a.id - b.id);
+  if (rows.length === 0) return { text: vendor === undefined ? "你还没有派过 Worker。" : `没有 ${vendorLabel(vendor)} 的 Worker。`, data: { workers: [] } };
+  const sessions = rows.map((worker) => workerSession(w, worker));
+  const outcomes = lastTurnOutcomesBySession(w.db, sessions.flatMap((session, i) => rows[i]?.status === "ended" ? [] : [session.id]));
+  const now = w.now();
+  const lines = rows.map((x, index) => {
+    const session = sessions[index]!;
     const where = x.workspace === "worktree" ? worktreeLabel(x) : "主文件夹";
-    const state = x.status === "ended" ? "已收工" : w.sessions.liveOf(session.id).activity === "preparing" ? "准备中" : "进行中";
+    const state = formatWorkerState({
+      status: x.status, notStarted: notStarted(x), live: w.sessions.liveOf(session.id),
+      lastTurnOutcome: outcomes.get(session.id) ?? null, lastEventAt: session.lastEventAt, now,
+    }, { includeIdleDuration: true });
     const shown = agentSettingOf(w.ctx, session);
-    const setting = `模型 ${shown.model} · 思考程度 ${shown.effort}`;
+    const setting = `厂商 ${vendorLabel(session.vendor)} · 模型 ${shown.model} · 思考程度 ${shown.effort}`;
     return `#${x.id} ${x.title} · ${state} · ${where} · ${setting}${x.readonly === 1 ? " · 只读" : ""}`;
   });
-  if (hidden.size > 0) {
-    lines.push(`（另有 ${hidden.size} 个更早收工的 Worker 没列出：用 \`${HUB_COMMAND} worker search <关键词>\` 搜，或 \`${HUB_COMMAND} worker show <编号>\` 看）`);
+  if (hidden > 0) {
+    lines.push(`（另有 ${hidden} 个更早收工的 Worker 没列出：用 \`${HUB_COMMAND} worker search <关键词>\` 搜，或 \`${HUB_COMMAND} worker show <编号>\` 看）`);
   }
   return { text: `你派出的 Worker：\n${lines.join("\n")}`, data: { workers: rows.map(toWorkerRecord) } };
 }

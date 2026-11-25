@@ -14,7 +14,7 @@ import {
   maxMessageId,
   onlyManualCompact,
 } from "./reports.ts";
-import { TURN_STOPPED, backgroundKilledNote, notStarted, turnOutcome, type TurnOutcome } from "./text.ts";
+import { backgroundKilledNote, notStarted, turnOutcome, type TurnOutcome } from "./text.ts";
 import { clearMaxTime, clearMaxTimeIn, ensureTurnMaxTime } from "./timers.ts";
 import type { WorkersCtx } from "./types.ts";
 
@@ -36,7 +36,6 @@ export function turnFactsOf(w: WorkersCtx, session: AgentSessionRow, event: Turn
   return {
     turnStart: turnStart ?? Math.max(...event.messageIds),
     waitingForBackground: (w.sessions.liveOf(session.id).backgroundTasks ?? 0) > 0,
-    endingAfterStop: w.endInterrupted.has(session.id),
   };
 }
 
@@ -53,6 +52,10 @@ function onTurnOutcome(
 ): void {
   const worker = workerRow(w, workerId);
   if (worker === null || (outcome.turnMessageId === null && facts === null)) return;
+  if (worker.status === "ended") {
+    p.after.push(() => { w.turnStarts.delete(session.id); });
+    return;
+  }
   const waiting = w.awaitingBackground.get(session.id);
   const ids = event.messageIds ?? [];
   const directInput = isDirectChat(w, worker.worker_conversation_id, ids);
@@ -64,13 +67,7 @@ function onTurnOutcome(
   if (quiet && event.type === "driver.error") return;
   p.after.push(() => {
     w.turnStarts.delete(session.id);
-    w.endInterrupted.delete(session.id);
   });
-  if (facts?.endingAfterStop && outcome.event === "turn_failed" && outcome.reason === TURN_STOPPED) {
-    w.awaitingBackground.take(session.id);
-    clearMaxTimeIn(w, p, worker.worker_conversation_id);
-    return;
-  }
   if (quiet && directInput && waiting !== undefined) {
     if (event.type === "session.exited") {
       w.awaitingBackground.take(session.id);
@@ -168,6 +165,6 @@ export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessio
     return;
   }
   const turnStart = w.turnStarts.get(session.id) ?? outcome.turnMessageId;
-  const facts = turnStart === null ? null : { turnStart, waitingForBackground: false, endingAfterStop: w.endInterrupted.has(session.id) };
+  const facts = turnStart === null ? null : { turnStart, waitingForBackground: false };
   onTurnOutcome(w, p, session, workerId, event, outcome, facts);
 }

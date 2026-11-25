@@ -97,7 +97,7 @@ export function loadGraph(g: TaskGraphCtx, id: TaskGraphId, includeDetails = tru
   );
 }
 
-export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[]): TaskGraph[] {
+export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[], includeAgentSettings = false): TaskGraph[] {
   if (rows.length === 0) return [];
   const byId = new Map<number, { nodes: TaskNode[]; edges: TaskEdge[] }>(rows.map((r) => [r.id, { nodes: [], edges: [] }]));
   const idsJson = JSON.stringify(rows.map((r) => r.id));
@@ -108,7 +108,10 @@ export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[]):
     idsJson,
   );
   const blockers = blockersOf(g, nodeRows);
-  for (const n of nodeRows) byId.get(n.graph_id)?.nodes.push(toTaskNode(n, false, blockers));
+  for (const n of nodeRows) {
+    const node = toTaskNode(n, false, blockers);
+    byId.get(n.graph_id)?.nodes.push(includeAgentSettings ? { ...node, vendor: n.vendor, model: n.model, effort: n.effort } : node);
+  }
   const edgeRows = g.db.all<TaskEdgeDbRow>(
     `SELECT e.* FROM task_graph_edges e
       WHERE e.graph_id IN (SELECT value FROM json_each(?))

@@ -1,3 +1,4 @@
+import type { BackgroundTaskInfo } from "../../shared/driver.ts";
 import type { BaseBatch, BaseProc, BaseSessionState, StartupOutcome } from "../../daemon/driver/base-driver.ts";
 import { DriverError, type ReadonlyPolicy, type TokenUsage, type WriteScope } from "../../shared/index.ts";
 import type { SessionDriverHost } from "../_common/session-driver.ts";
@@ -25,6 +26,7 @@ interface TrackedToolStep {
   task_id: string;
   description: string;
   promoted: boolean;
+  started_at: number;
 }
 
 export interface SessionState extends BaseSessionState<Proc, Batch> {
@@ -36,7 +38,7 @@ export interface SessionState extends BaseSessionState<Proc, Batch> {
   seenToolSteps: Set<string>;
   previewedToolSteps: Map<string, string>;
   completedToolSteps: Set<string>;
-  reportedTasks: Map<string, { task_id: string; description: string }>;
+  reportedTasks: Map<string, BackgroundTaskInfo>;
   activeToolSteps: Map<string, TrackedToolStep>;
   seenThinkingSteps: Set<string>;
   hasTextSinceLastTool: boolean;

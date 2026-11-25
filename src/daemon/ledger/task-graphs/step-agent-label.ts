@@ -1,20 +1,20 @@
-// Invariant: Task Graph step text formatting displays effective vendor, model, and effort consistently with hub worker list and hub worker show, without failing on slim snapshot nodes.
 import type { TaskNode } from "../../../shared/domain.ts";
-import type { AgentVendor, ModelCatalog } from "../../../shared/vendors.ts";
+import { isAgentVendor, vendorLabel, type AgentVendor, type ModelCatalog } from "../../../shared/vendors.ts";
+import { agentSettingOf } from "../worker-view.ts";
 
 export interface StepAgentFormatContext {
-  pmVendor: AgentVendor;
+  pmVendor: string;
   modelCatalog: (vendor: AgentVendor) => ModelCatalog | null;
   modelShortLabel: (vendor: AgentVendor, model: string | null) => string;
 }
 
-/**
- * Precondition: node comes from loadGraph(..., true) when details are present, or from a slim snapshot when vendor is undefined.
- * Postcondition: returns a single-line agent config summary naming vendor (marking inherited PM default when node.vendor is null), model, and effort; returns null when node.vendor is undefined.
- */
 export function formatStepAgentConfig(
-  _node: Pick<TaskNode, "vendor" | "model" | "effort">,
-  _ctx: StepAgentFormatContext,
+  node: Pick<TaskNode, "vendor" | "model" | "effort">,
+  ctx: StepAgentFormatContext,
 ): string | null {
-  throw new Error("Not implemented");
+  if (node.vendor === undefined) return null;
+  const vendor = node.vendor ?? ctx.pmVendor;
+  if (!isAgentVendor(vendor)) return null;
+  const { model, effort } = agentSettingOf(ctx, { vendor, model: node.model ?? null, effort: node.effort ?? null });
+  return `厂商 ${vendorLabel(vendor)}${node.vendor === null ? "（跟项目经理）" : ""} · 模型 ${model} · 思考程度 ${effort}`;
 }

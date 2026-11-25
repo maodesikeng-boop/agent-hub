@@ -1,3 +1,4 @@
+import { BACKGROUND_TASK_LABEL_MAX_CHARS, MAX_BACKGROUND_TASKS_TRACKED } from "../../shared/limits.ts";
 // 会话里有后台任务时不算闲着（background-tasks.ts + src/vendors/claude/driver.ts 的 #armIdle、#onBackgroundTasksChanged）：
 // 用假 claude 发 system/background_tasks_changed。事件的真实形状见 docs/m0-report.md“后台任务事件”。
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_TASKS_HOLD_MAX_MS, IDLE_CLOSE_MS, RELAUNCH_NOTE, backgroundTasksKilledNote } from "../../shared/index.ts";
 import type { FakeTurn } from "../../../test/fake-claude/fake-claude.ts";
-import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
+import { BackgroundTasks, idleDelayMs, normalizeBackgroundTasks } from "./background-tasks.ts";
 import { makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
 let h: Harness | undefined;
@@ -485,9 +486,41 @@ describe("空闲、只剩后台任务时停止：关掉进程（后台任务一�
   });
 });
 
-describe("normalizeBackgroundTasks and background.changed metadata", () => {
-  it.todo("preserves first-seen startedAt for unchanged task_ids across subsequent background_tasks_changed updates");
-  it.todo("prefers vendor-provided started_at when finite and valid, and falls back to observation timestamp otherwise");
-  it.todo("extracts command or description label, clips to BACKGROUND_TASK_LABEL_MAX_CHARS, and caps task count at MAX_BACKGROUND_TASKS_TRACKED");
-  it.todo("emits tasks metadata on background.changed from BaseSessionDriver for Claude and Agy background commands");
+describe("background command metadata", () => {
+  it("keeps first-seen time with a stable task id and uses a vendor timestamp for new tasks", () => {
+    const previous = normalizeBackgroundTasks([
+      { task_id: "one", description: "Build", started_at: 1000 },
+      { task_id: "invalid-time", started_at: Number.NaN },
+      { task_id: "future", started_at: 6000 },
+      { task_id: "ambient", ambient: true },
+    ], new Map(), 4000)!;
+    expect([...previous.values()]).toEqual([
+      { id: "one", label: "Build", startedAt: 1000 },
+      { id: "invalid-time", label: "", startedAt: 4000 },
+      { id: "future", label: "", startedAt: 4000 },
+    ]);
+    const next = normalizeBackgroundTasks([{ task_id: "one", command: "build app", started_at: 5000 }], previous, 8000)!;
+    expect([...next.values()]).toEqual([{ id: "one", label: "build app", startedAt: 1000 }]);
+  });
+
+  it("prefers command text, normalizes line breaks, and bounds label and array size", () => {
+    const tasks = Array.from({ length: MAX_BACKGROUND_TASKS_TRACKED + 2 }, (_, i) => ({
+      task_id: String(i), command: "run\n" + "x".repeat(300), description: "fallback",
+    }));
+    const stored = normalizeBackgroundTasks(tasks, new Map(), 9000)!;
+    expect(stored.size).toBe(MAX_BACKGROUND_TASKS_TRACKED);
+    expect(stored.get("0")?.label).toBe("run " + "x".repeat(BACKGROUND_TASK_LABEL_MAX_CHARS - 4));
+  });
+
+  it("emits command metadata and removal from a Claude process", async () => {
+    const t = harness([turnWith([{ afterMs: 25, tasks: [] }], {
+      steps: [{ backgroundTasks: [{ task_id: "test", command: "run tests", description: "Tests", started_at: 1 }] }, { text: "Running" }],
+    })]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Test"));
+    expect(await t.waitFor("background.changed")).toMatchObject({
+      count: 1, tasks: [{ id: "test", label: "run tests", startedAt: 1 }],
+    });
+    expect(await t.waitFor("background.changed", (event) => event.count === 0)).toMatchObject({ count: 0, tasks: [] });
+  });
 });

@@ -1,3 +1,4 @@
+import { formatVendorQuotaStatus } from "../quota/observed-quota.ts";
 import { z } from "zod";
 import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
@@ -12,7 +13,7 @@ import { deliverablesOfFileArgs, fileArgsProblem } from "../deliverables.ts";
 import { HUB_COMMAND, LOG_PREFIX } from "../../shared/names.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
 import { AGENT_VENDORS, bundledModelCatalog, effortLabel, effortsFor, isAgentVendor } from "../../shared/vendors.ts";
-import type { AgentVendor, ModelCatalog, VendorAvailability } from "../../shared/vendors.ts";
+import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -66,14 +67,7 @@ function describeSetup(card: ProjectCard | null, setupCommand: string | null): s
 
 const commandLine = (command: HubCommand) => `${HUB_COMMAND} ${command.replace(".", " ")}`;
 
-const VENDOR_AVAILABILITY_TEXT: Readonly<Record<VendorAvailability, string>> = {
-  available: "可用",
-  unknown: "可用",
-  signed_out: "未登录",
-  not_installed: "未安装",
-};
-
-function toHubVendorModels(catalog: ModelCatalog): HubVendorModels {
+function toHubVendorModels(catalog: ModelCatalog, quota: HubVendorModels["quota"]): HubVendorModels {
   const keys = new Set<string>([
     ...catalog.efforts,
     ...(catalog.defaultEfforts ?? []),
@@ -85,6 +79,7 @@ function toHubVendorModels(catalog: ModelCatalog): HubVendorModels {
     label: catalog.label,
     source: catalog.source,
     availability: catalog.availability,
+    ...(quota === undefined ? {} : { quota }),
     defaultModel: catalog.defaultModel,
     defaultModelId: catalog.defaultModelId,
     defaultEffort: catalog.defaultEffort ?? null,
@@ -111,8 +106,8 @@ function formatDefaultModelText(entry: HubVendorModels): string {
   return entry.defaultModelId ?? entry.defaultModel ?? "默认";
 }
 
-function formatVendorModelsBlock(entry: HubVendorModels): string {
-  const status = VENDOR_AVAILABILITY_TEXT[entry.availability] ?? "可用";
+function formatVendorModelsBlock(entry: HubVendorModels, now: number): string {
+  const status = formatVendorQuotaStatus(entry.availability, entry.quota, now);
   const defaultModel = formatDefaultModelText(entry);
   const defaultEffort = entry.defaultEffort === null ? "默认" : formatVendorEffort(entry.vendor, entry.defaultEffort, entry.effortLabels);
   const header = `${entry.vendor}（${entry.label}）· 状态: ${status} · 默认模型: ${defaultModel} · 默认思考程度: ${defaultEffort}`;
@@ -245,7 +240,7 @@ export function createLedgerHubCommands(
       case "worker.end":
         return workers.endIn(p, caller, args as HubArgs<"worker.end">);
       case "worker.list":
-        return workers.list(caller);
+        return workers.list(caller, args as HubArgs<"worker.list">);
       case "worker.show":
         return workerView.show(caller, args as HubArgs<"worker.show">, context);
       case "worker.log":
@@ -262,10 +257,10 @@ export function createLedgerHubCommands(
         const vendors = targetVendors.map((vendor) => {
           const catalog =
             context.modelCatalogs?.find((c) => c.vendor === vendor) ?? ctx.modelCatalog(vendor) ?? bundledModelCatalog(vendor);
-          return toHubVendorModels(catalog);
+          return toHubVendorModels(catalog, context.vendorQuotas?.[vendor]);
         });
         return {
-          text: vendors.map(formatVendorModelsBlock).join("\n\n"),
+          text: vendors.map((entry) => formatVendorModelsBlock(entry, ctx.now())).join("\n\n"),
           data: { vendors },
         };
       }

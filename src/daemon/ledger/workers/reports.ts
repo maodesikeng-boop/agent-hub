@@ -111,8 +111,8 @@ export function insertReport(
     return;
   }
   if (graphHandling.outcome === "completed") {
-    insertLine(w, p, worker, { ...report, deliver: body, wakePm: graphHandling.wakePmWithReport });
-    endWorkerIn(w, p, worker, { notifyGraph: false });
+    const id = insertLine(w, p, worker, { ...report, deliver: body, wakePm: graphHandling.wakePmWithReport, completedStep: true });
+    endWorkerIn(w, p, worker, { notifyGraph: false, ...(id === undefined ? {} : { excludeMessageIds: new Set([id]) }) });
     graphHandling.completeStep();
     return;
   }
@@ -124,7 +124,6 @@ export function insertReport(
 }
 
 export function flushAwaiting(w: WorkersCtx, p: Pending, session: AgentSessionRow, event: Extract<DriverEvent, { type: "session.exited" }>, awaiting: BackgroundWait): void {
-  w.endInterrupted.delete(session.id);
   const worker = workerRow(w, session.workerId!);
   if (worker === null) return;
   clearMaxTime(w, worker.worker_conversation_id);

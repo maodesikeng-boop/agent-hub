@@ -483,6 +483,7 @@ export type WorkerEvent = (typeof WORKER_EVENTS)[number];
 export type WorkerLineStatus = WorkerReportStatus | "unformatted";
 
 export type WorkerMessageMeta = {
+  completedStep?: true;
   workerId: WorkerId;
   workerConversationId: ConversationId;
   title: string;

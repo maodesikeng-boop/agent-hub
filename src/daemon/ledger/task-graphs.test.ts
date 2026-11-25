@@ -374,8 +374,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       }),
     }).data.graph;
     const bare = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
-    // 还没有结果的节点只有一行，和以前一样
-    expect(bare.split("\n")).toEqual([
+    expect(bare.split("\n").filter((line) => !line.startsWith("      厂商 "))).toEqual([
       `任务图 #${graph.id}「导出」（状态：active）`,
       "  - [等你处理] impl：实现",
       "  - [没轮到] ok：确认方案 ← [impl]",
@@ -397,7 +396,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     ledger.hubCall(lin.sessionId, "graph.decide", { graphId: graph.id, nodeKey: "ok", choice: "方案 A", note: "先不做分页" });
 
     const text = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
-    const lines = text.split("\n");
+    const lines = text.split("\n").filter((line) => !line.startsWith("      厂商 "));
     expect(lines[1]).toBe(`  - [完了] impl：实现 · 经手 Worker #${w.id}`);
     expect(lines[2]).toBe("      分支 hub/7-导出 · 提交 abc1234 · PR https://example.test/pr/7");
     expect(lines[3]!.startsWith("      摘要：导出接口已实现 很长的说明")).toBe(true);
@@ -408,9 +407,8 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(lines[6]).toBe("  - [等你处理] ship：发布 ← [ok]");
     expect(lines).toHaveLength(7);
 
-    // 交接摘要用的是同一份文本
     const preamble = liveGraphsSection();
-    expect(preamble).toBe(text);
+    expect(preamble).toBe(lines.join("\n"));
   });
 
   it("交接摘要里未完结的任务图有总字数上限：最近动过的给全文，放不下的只列节点状态，还放不下的只留一行进度和怎么查", () => {
@@ -472,20 +470,21 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "边界", nodes: Array.from({ length: MAX_GRAPH_NODES }, (_, i) => ({ key: `n${i}`, title: "步骤" })) }),
     }).data.graph;
+    const showResults = () => ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text.replace(/^      厂商 .*\n/gm, "");
     const artifact = (size: number) => JSON.stringify({ summary: "摘".repeat(GRAPH_TEXT_NODE_NOTE_CHARS), branch: "b".repeat(size) });
     let size = 1;
     let full = "";
     for (; size < GRAPH_TEXT_NODE_NOTE_CHARS; size++) {
       db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
-      full = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+      full = showResults();
       if ([...full].length > HANDOVER_GRAPHS_MAX_CHARS) break;
     }
     size--;
     db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
-    full = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+    full = showResults();
     const extra = HANDOVER_GRAPHS_MAX_CHARS - [...full].length;
     db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra), graph.id);
-    const exact = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+    const exact = showResults();
     expect([...exact]).toHaveLength(HANDOVER_GRAPHS_MAX_CHARS);
     expect(liveGraphsSection()).toBe(exact);
     db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra + 1), graph.id);

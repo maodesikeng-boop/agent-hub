@@ -11,6 +11,7 @@ import { idle } from "../sessions.ts";
 import { mainFolderOf, projectRow, workerRow, workerSession } from "./ctx.ts";
 import { enqueueFirstTurn, insertLine } from "./lines.ts";
 import { insertReport, insertTurnFailed } from "./reports.ts";
+import { cancelQueuedWorkerPmNoticesIn } from "./stale-notices.ts";
 import { notStarted, taskDedupeKey, toReportMessage } from "./text.ts";
 import { clearMaxTime, startMaxTime, turnTimeoutOf } from "./timers.ts";
 import type { ReportMessageRow, WorkersCtx } from "./types.ts";
@@ -143,13 +144,12 @@ export const onReviewVerified = (w: WorkersCtx, params: ReviewVerifyParams, resu
 
 function worktreeCreateFailedIn(w: WorkersCtx, p: Pending, workerId: WorkerId, error: string): void {
   const worker = workerRow(w, workerId);
-  if (worker === null) return;
+  if (worker === null || worker.status === "ended") return;
   clearMaxTime(w, worker.worker_conversation_id);
-  if (worker.status !== "ended") {
-    w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", w.now(), worker.id);
-    const session = workerSession(w, worker.id);
-    w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
-  }
+  w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", w.now(), worker.id);
+  const session = workerSession(w, worker.id);
+  w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
+  cancelQueuedWorkerPmNoticesIn(w, p, worker);
   const deliver = `建 worktree 失败，这个 Worker 没能开工，已经收工：${error}。要的话修好问题后重新派一个。`;
   const graphDeliver =
     w.options.taskGraphs?.onWorkerFailedIn(p, worker.id, {

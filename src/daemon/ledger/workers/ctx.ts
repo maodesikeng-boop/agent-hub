@@ -60,7 +60,6 @@ export function createWorkersCtx(
     projects,
     options,
     turnStarts: new Map(),
-    endInterrupted: new Set(),
     maxTimeTimers: new Map(),
     awaitingBackground: createAwaitingBackground(ctx.db, ctx.now),
   };

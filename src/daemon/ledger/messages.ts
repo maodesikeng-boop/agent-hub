@@ -259,8 +259,8 @@ export function createLedgerMessages(
       case "session.started":
         updateLive(p, sessionId, (l) => {
           if (l.activity === "stopping") idle(l);
-          // Background tasks and stale streaming previews belong to the old process.
           l.backgroundTasks = undefined;
+          l.backgroundTaskList = undefined;
           clearStreaming(l);
         });
         return;
@@ -345,6 +345,7 @@ export function createLedgerMessages(
       case "background.changed":
         updateLive(p, sessionId, (l) => {
           l.backgroundTasks = event.count;
+          l.backgroundTaskList = event.tasks;
         });
         return;
       case "rate_limit":
@@ -367,6 +368,7 @@ export function createLedgerMessages(
         updateLive(p, sessionId, (l) => {
           idle(l);
           l.backgroundTasks = undefined;
+          l.backgroundTaskList = undefined;
           l.rateLimitReported = false;
         });
         return;

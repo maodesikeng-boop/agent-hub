@@ -82,9 +82,11 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
     return { command: "worker.end", body, textSource: null };
   }
   if (group === "worker" && action === "list") {
-    allowOnly(values, [], "worker list");
+    allowOnly(values, ["vendor"], "worker list");
     expectPositionals(rest, 0, "worker list");
-    return { command: "worker.list", body: {}, textSource: null };
+    const { vendor } = values;
+    if (vendor !== undefined && !isAgentVendor(vendor)) throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
+    return { command: "worker.list", body: vendor === undefined ? {} : { vendor }, textSource: null };
   }
   if (group === "worker" && action === "show") {
     allowOnly(values, ["task", "report"], "worker show");
