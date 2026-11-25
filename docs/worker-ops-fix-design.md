@@ -119,10 +119,12 @@ Every finding below was `[Measured]` by inspecting source files in commit `64657
 All new caches and collections follow the four rules in `AGENTS.md` ("Caches and state bounds") for one month of continuous use (300 finished Workers, 30,000 messages, 50,000 step logs):
 
 1. **Invalidation.**
-   - `createWorktreeBranchProbe`: checks the HEAD path, inode, modification and change times, and size on every read; any `git branch -m` or checkout rewrites `HEAD` and invalidates the cached branch immediately. Explicit `invalidate(path?)` clears entries after cleanup or deletion. Failed lookups (missing directory or unreadable file) are not cached.
+   - `createWorktreeBranchProbe`: checks the HEAD path, device, inode, modification and change times, and size on every read. A branch rename or checkout rewrites `HEAD` and invalidates the cached branch. Explicit `invalidate(path?)` clears entries after cleanup or deletion. Failed lookups are not cached.
    - `ObservedQuotaStore`: evicts expired entries lazily on `getActive` / `snapshot` once `now >= resetsAt * 1000` (or `now >= observedAt + OBSERVED_QUOTA_FALLBACK_TTL_MS` when no reset timestamp was parseable). Clears immediately on any successful, uninterrupted `turn.ended`, any `rate_limit` with `status !== "rejected"`, or `providerManager`'s `onVendorChanged` callback.
    - `LiveSession.backgroundTaskList`: replaced wholesale on every `background.changed` event and cleared to `undefined` on `session.exited` and `forgetSession`.
 2. **Upper bounds.** Every new cap lives in `src/shared/limits.ts`:
+
+   PM-wide reconciliation probes up to `WORKTREE_BRANCH_CACHE_MAX` distinct paths. It selects open Workers first, then Workers in active graphs, then the latest `WORKER_LIST_RECENT_ENDED` ended Workers. A request for a specific Worker or graph probes the paths for that scope.
 
 | Constant | Value | One-month sizing rationale |
 | --- | --- | --- |

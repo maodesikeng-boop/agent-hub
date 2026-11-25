@@ -50,6 +50,21 @@ describe("worktree branch probes", () => {
     await expect(probe.readBranch(linked)).resolves.toBeNull();
   });
 
+  it("rereads HEAD when only the filesystem device changes", async () => {
+    const path = plainRepo("old");
+    const gitdir = join(path, ".git");
+    const head = join(gitdir, "HEAD");
+    const dirInfo = await fs.stat(gitdir, { bigint: true });
+    const headInfo = await fs.stat(head, { bigint: true });
+    const probe = createWorktreeBranchProbe();
+    await expect(probe.readBranch(path)).resolves.toBe("old");
+
+    writeFileSync(head, "ref: refs/heads/new\n");
+    headInfo.dev += 1n;
+    vi.mocked(fs.stat).mockResolvedValueOnce(dirInfo).mockResolvedValueOnce(headInfo);
+    await expect(probe.readBranch(path)).resolves.toBe("new");
+  });
+
   it("returns no branch for missing, non-Git, or malformed worktrees", async () => {
     await expect(readWorktreeBranch(join(root, "missing"))).resolves.toBeNull();
     await expect(readWorktreeBranch(root)).resolves.toBeNull();

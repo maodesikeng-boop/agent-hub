@@ -43,7 +43,7 @@ export function createWorktreeBranchProbe({ maxEntries = WORKTREE_BRANCH_CACHE_M
         cache.delete(worktreePath);
         return null;
       }
-      const fingerprint = `${head}:${info.ino}:${info.mtimeNs}:${info.ctimeNs}:${info.size}`;
+      const fingerprint = `${head}:${info.dev}:${info.ino}:${info.mtimeNs}:${info.ctimeNs}:${info.size}`;
       const cached = cache.get(worktreePath);
       if (cached?.fingerprint === fingerprint) return cached.branch;
       cache.delete(worktreePath);

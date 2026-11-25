@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionRow } from "../../../shared/actions.ts";
-import type { TaskGraph, WorkerRecord } from "../../../shared/domain.ts";
+import { CONFIRM_PASS_OPTION, type TaskGraph, type WorkerRecord } from "../../../shared/domain.ts";
+import { WORKER_LIST_RECENT_ENDED, WORKTREE_BRANCH_CACHE_MAX } from "../../../shared/limits.ts";
 import { REPORT_END, REPORT_START } from "../../../shared/worker.ts";
 import { addWorktree } from "../../git/index.ts";
 import { createWorktreeBranchProbe } from "../../git/worktree-branch.ts";
@@ -11,7 +12,11 @@ import { workerOpsFixture } from "../test-helpers.ts";
 
 describe("linked worktree branch reconciliation", () => {
   let f: ReturnType<typeof workerOpsFixture>;
-  beforeEach(() => { f = workerOpsFixture({ worktreeBranchProbe: createWorktreeBranchProbe() }); });
+  let probe: ReturnType<typeof createWorktreeBranchProbe>;
+  beforeEach(() => {
+    probe = createWorktreeBranchProbe();
+    f = workerOpsFixture({ worktreeBranchProbe: probe });
+  });
   afterEach(() => f.close());
 
   const git = (cwd: string, ...args: string[]) =>
@@ -21,6 +26,9 @@ describe("linked worktree branch reconciliation", () => {
     git(f.folder, "init", "-q", "-b", "main");
     git(f.folder, "commit", "--allow-empty", "-qm", "Initial");
   };
+  const start = (title: string, graphId?: number, node?: string) => f.ledger.hubCall(f.pm.sessionId, "worker.start", {
+    title, task: "Change app", graphId, node,
+  }, { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } }).data.worker;
 
   const checkout = async (workerId: number) => {
     const action: ActionRow<"worktree.create"> = {
@@ -117,5 +125,139 @@ describe("linked worktree branch reconciliation", () => {
     expect(f.hub("graph.show", { graphId }).data.graph.nodes[0]?.artifact?.branch).toBe("feature/settled");
     expect(f.hub("worker.show", { workerId: separate.id }).data.worker.branch).toBe(separate.branch);
     expect(f.ledger.listWorktreeBranchTargets?.({ workerId: main.id })).toEqual([]);
+  });
+
+  it.each(["manual start", "user decision", "user skip", "background exit"])(
+    "checks out the renamed upstream branch after %s",
+    async (trigger) => {
+      prepareRepo();
+      const { id: graphId } = f.hub("graph.create", { specJson: JSON.stringify({
+        title: "Review after rename",
+        nodes: [
+          { key: "impl", title: "Implement", confirm: trigger === "user decision" },
+          ...(trigger === "user skip" ? [{ key: "optional", title: "Optional", deps: ["impl"] }] : []),
+          {
+            key: "review", title: "Review", vendor: "codex", review: true,
+            deps: [trigger === "user skip" ? "optional" : "impl"],
+            ...(trigger === "manual start" ? {} : { brief: "Review the changes" }),
+          },
+        ],
+      }) }).data.graph;
+      const impl = start("Implementation", graphId, "impl");
+      await checkout(impl.id);
+      if (trigger === "background exit") f.emit(impl.id, { type: "background.changed", count: 1, at: f.now() });
+      await complete(impl);
+      const manual = trigger === "manual start" ? start("Review", graphId, "review") : null;
+      git(impl.worktreePath!, "branch", "-m", "feature/renamed-before-review");
+      if (trigger === "user decision") {
+        f.ledger.decideTaskNode(graphId, "impl", { choice: CONFIRM_PASS_OPTION, clientId: "approve" });
+      } else if (trigger === "user skip") {
+        f.ledger.skipTaskNode(graphId, "optional", { reason: "Skip optional work" });
+      } else if (trigger === "background exit") {
+        f.emit(impl.id, { type: "background.changed", count: 0, at: f.now() });
+        f.emit(impl.id, {
+          type: "session.exited", reason: "idle", exitCode: 0, signal: null, hadResult: true, messageIds: [], at: f.now(),
+        });
+        await f.ledger.settleDriverEvents();
+      }
+      const reviewId = f.hub("graph.show", { graphId }).data.graph.nodes.find((n) => n.key === "review")?.activeWorkerId;
+      if (reviewId == null) throw new Error("Review was not dispatched");
+      if (manual !== null) expect(reviewId).toBe(manual.id);
+      const reviewer = f.hub("worker.show", { workerId: reviewId }).data.worker;
+      expect(reviewer.review?.snapshot).toBeNull();
+      await checkout(reviewId);
+      const sha = git(impl.worktreePath!, "rev-parse", "HEAD");
+      expect(git(reviewer.worktreePath!, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+      expect(git(reviewer.worktreePath!, "rev-parse", "HEAD")).toBe(sha);
+      expect(f.hub("worker.show", { workerId: reviewId }).data.worker.review).toMatchObject({
+        branch: "feature/renamed-before-review", snapshot: { sha },
+      });
+      expect(f.ledger.getMessage(f.messageOf(reviewId))?.text).toContain("detached 在被审分支 feature/renamed-before-review 的提交上");
+      git(impl.worktreePath!, "branch", "-m", "feature/renamed-after-review");
+      await f.ledger.reconcileWorkerGraph?.(reviewId);
+      expect(f.ledger.getWorktreeTask(reviewId)?.checkout).toEqual({ kind: "review", branch: "feature/renamed-before-review" });
+    },
+  );
+
+  it("keeps an explicit review base when the upstream branch is renamed", async () => {
+    prepareRepo();
+    const { id: graphId } = f.hub("graph.create", { specJson: JSON.stringify({
+      title: "Explicit base",
+      nodes: [
+        { key: "impl", title: "Implement" },
+        { key: "review", title: "Review", vendor: "codex", review: true, base: "pinned", deps: ["impl"] },
+      ],
+    }) }).data.graph;
+    git(f.folder, "branch", "pinned");
+    const impl = start("Implementation", graphId, "impl");
+    await checkout(impl.id);
+    git(impl.worktreePath!, "commit", "--allow-empty", "-qm", "Implementation");
+    await complete(impl);
+    const review = start("Review", graphId, "review");
+    git(impl.worktreePath!, "branch", "-m", "feature/renamed");
+    await checkout(review.id);
+    const sha = git(f.folder, "rev-parse", "pinned");
+    expect(git(review.worktreePath!, "rev-parse", "HEAD")).toBe(sha);
+    expect(f.hub("worker.show", { workerId: review.id }).data.worker.review).toMatchObject({ branch: "pinned", snapshot: { sha } });
+  });
+
+  it("refreshes only open, active graph, and recent worktrees, while finding an older Worker by ID", async () => {
+    const { id: graphId } = f.hub("graph.create", { specJson: '{"title":"Active graph","nodes":[{"key":"impl","title":"Implement"}]}' }).data.graph;
+    const seed = (title: string, graph?: number, node?: string) => {
+      const worker = start(title, graph, node);
+      f.ledger.onWorktreeCreated(worker.id, "base");
+      return worker;
+    };
+    const upstream = seed("Upstream", graphId, "impl");
+    await complete(upstream);
+    const old = seed("Old");
+    f.hub("worker.end", { workerId: old.id });
+    const ended = Array.from({ length: 300 }, (_, i) => {
+      f.advance(1);
+      const worker = seed(`Worker ${i}`);
+      f.hub("worker.end", { workerId: worker.id });
+      return worker;
+    });
+    const open = seed("Open");
+    const read = vi.spyOn(probe, "readBranch").mockResolvedValue("feature/current");
+    const api = f.api();
+    expect((await api("worker.list", {})).statusCode).toBe(200);
+    expect(read.mock.calls.map(([path]) => path)).toHaveLength(WORKER_LIST_RECENT_ENDED + 2);
+    expect(new Set(read.mock.calls.map(([path]) => path))).toEqual(new Set(
+      [open, upstream, ...ended.slice(-WORKER_LIST_RECENT_ENDED)].map((worker) => worker.worktreePath),
+    ));
+    read.mockClear();
+    expect((await api("worker.show", { workerId: old.id })).json().data.worker.branch).toBe("feature/current");
+    expect(read.mock.calls).toEqual([[old.worktreePath]]);
+  });
+
+  it("caps a PM-wide probe and prioritizes open worktrees over ended ones", async () => {
+    const open = Array.from({ length: WORKTREE_BRANCH_CACHE_MAX + 1 }, (_, i) => {
+      const worker = start(`Open ${i}`);
+      f.ledger.onWorktreeCreated(worker.id, "base");
+      return worker;
+    });
+    const ended = start("Recently ended");
+    f.ledger.onWorktreeCreated(ended.id, "base");
+    f.hub("worker.end", { workerId: ended.id });
+    const read = vi.spyOn(probe, "readBranch").mockResolvedValue(null);
+    await f.ledger.reconcileHubBranches?.(f.pm.sessionId, "graph.list", {}, new AbortController().signal);
+    expect(read).toHaveBeenCalledTimes(WORKTREE_BRANCH_CACHE_MAX);
+    expect(new Set(read.mock.calls.map(([path]) => path))).toEqual(new Set(open.slice(1).map((worker) => worker.worktreePath)));
+  });
+
+  it("does not touch the database when a pending probe returns after ledger shutdown", async () => {
+    const worker = start("Closing");
+    f.ledger.onWorktreeCreated(worker.id, "base");
+    let resolve!: (branch: string) => void;
+    const pending = new Promise<string>((done) => { resolve = done; });
+    vi.spyOn(probe, "readBranch").mockReturnValue(pending);
+    const reconciliation = f.ledger.reconcileWorkerGraph?.(worker.id);
+    expect(reconciliation).toBeInstanceOf(Promise);
+    f.ledger.close();
+    const get = vi.spyOn(f.db, "get");
+    resolve("feature/after-shutdown");
+    await reconciliation;
+    expect(get).not.toHaveBeenCalled();
   });
 });

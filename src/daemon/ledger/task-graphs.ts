@@ -28,8 +28,8 @@ import {
   onWorkerUserBlockedIn,
   prepareWorkerBind,
   releaseUserBlockedStepsIn,
-  workerGraphForkBase,
   workerGraphStatus,
+  workerGraphWorkspacePlan,
 } from "./task-graphs/worker-hooks.ts";
 
 export type { StepWorkspacePlan, TaskGraphWorkersBridge, WorkerBindTarget } from "./task-graphs/types.ts";
@@ -96,7 +96,7 @@ export function createLedgerTaskGraphs(
     notifyUserBlockedStepsIn: bind(notifyUserBlockedStepsIn),
     onWorkerResumedIn: bind(onWorkerResumedIn),
     onWorkerEndedIn: bind(onWorkerEndedIn),
-    workerGraphForkBase: bind(workerGraphForkBase),
+    workerGraphWorkspacePlan: bind(workerGraphWorkspacePlan),
     workerGraphStatus: bind(workerGraphStatus),
     activeSnapshotGraphs: bind(activeSnapshotGraphs),
     pmStatusGraphs: bind(pmStatusGraphs),

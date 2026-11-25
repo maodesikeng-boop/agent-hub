@@ -8,7 +8,7 @@ import type { LedgerMessages } from "../messages.ts";
 import type { LedgerPersona } from "../persona.ts";
 import type { LedgerProjects } from "../projects.ts";
 import type { LedgerSessions } from "../sessions.ts";
-import type { WorkerBindTarget } from "../task-graphs.ts";
+import type { StepWorkspacePlan, WorkerBindTarget } from "../task-graphs.ts";
 import type { LedgerTakeover } from "../takeover.ts";
 import type { LedgerUserBlockers } from "../user-blockers.ts";
 
@@ -41,7 +41,7 @@ export interface LedgerWorkersTaskGraphHooks {
   onWorkerUserBlockedIn: (p: Pending, workerId: WorkerId, blocker: UserBlocker) => string | null;
   onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
-  workerGraphForkBase: (workerId: WorkerId) => string | undefined;
+  workerGraphWorkspacePlan: (workerId: WorkerId) => StepWorkspacePlan | undefined;
   workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;
 }
 

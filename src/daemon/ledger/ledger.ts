@@ -267,8 +267,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       return { ...created, project };
     });
 
-  const branches = createLedgerBranchSync(ctx, taskGraphs.publishBranchChange, options.worktreeBranchProbe);
   const closing = new AbortController();
+  const branches = createLedgerBranchSync(ctx, taskGraphs.publishBranchChange, closing.signal, options.worktreeBranchProbe);
   const applyDriverEventNow = (sessionId: SessionId, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null) => {
     if (event.type === "agent.text_delta") {
       if (event.parentToolUseId !== undefined) return;
