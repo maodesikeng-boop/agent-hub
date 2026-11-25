@@ -10,12 +10,12 @@ import type { RailComputer } from "../rail-model.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { ChevronDown, ChevronRight, MessageSquare, Pin, PinFilled, Plus } from "../ui/icons.ts";
-import { Avatar, AvatarTile } from "./Avatar.tsx";
+import { AvatarTile } from "./Avatar.tsx";
 import { ComputerSwitcher } from "./ComputerSwitcher.tsx";
 import { SearchField } from "./SearchField.tsx";
 
-/** column: the resizable desktop column; strip: the 4.5rem avatar strip; page: the phone's Projects tab. */
-export type ProjectListLayout = "column" | "strip" | "page";
+/** column: the resizable desktop column; page: the phone's Projects tab. */
+export type ProjectListLayout = "column" | "page";
 
 export interface ProjectListComputer {
   key: DeviceKey;
@@ -36,6 +36,9 @@ export interface ProjectListProps {
   readOnly: boolean;
   /** Optional list of linked computers to display inline in ComputerSwitcher. */
   computers?: readonly RailComputer[];
+  /** Search text, kept by the workbench so it outlives the list's own mounts. */
+  query: string;
+  onQueryChange: (query: string) => void;
   onSelect: (ref: ConversationRef) => void;
   onNewPm: () => void;
   onTogglePin: (pmId: PmId, pinned: boolean) => void;
@@ -50,50 +53,6 @@ const GROUP_ICON = "size-3.5 shrink-0";
 function GroupGroove() {
   return <div aria-hidden="true" data-testid="group-groove" className="groove" />;
 }
-
-const StripItem = memo(function StripItem({
-  deviceKey,
-  entry,
-  active,
-  waiting,
-  asking,
-  readOnly,
-  onSelect,
-}: {
-  deviceKey: DeviceKey;
-  entry: ConversationEntry;
-  active: boolean;
-  waiting: boolean;
-  asking: boolean;
-  readOnly: boolean;
-  onSelect: (ref: ConversationRef) => void;
-}) {
-  const stateLabel = asking ? NEEDS_YOU : waiting ? YOUR_TURN : "";
-  const ariaLabel = stateLabel ? `${entry.name} (${stateLabel})` : entry.name;
-  return (
-    <button
-      type="button"
-      title={entry.name}
-      aria-label={ariaLabel}
-      aria-current={active ? "page" : undefined}
-      onClick={() => onSelect({ device: deviceKey, id: entry.id })}
-      className={cn(
-        "relative grid size-13 shrink-0 cursor-pointer place-items-center rounded-sm transition-[background-color] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus motion-reduce:transition-none",
-        active ? "row-selected" : "hover:bg-list-hover",
-      )}
-    >
-      <Avatar look={entry.look} size={36} className={readOnly ? "opacity-60" : undefined} />
-      {(asking || waiting) && (
-        <span
-          role="img"
-          aria-label={asking ? NEEDS_YOU : YOUR_TURN}
-          data-testid={asking ? "asking-indicator" : "waiting-indicator"}
-          className={cn("absolute right-1 bottom-1 size-2 rounded-full bg-status-active ring-2", active ? "ring-[var(--row-selected)]" : "ring-list")}
-        />
-      )}
-    </button>
-  );
-});
 
 const ProjectRow = memo(function ProjectRow({
   deviceKey,
@@ -171,8 +130,7 @@ const ProjectRow = memo(function ProjectRow({
 
 /**
  * Postcondition: renders the header, search, and the Pinned, Project managers, and collapsed Archived groups from
- * projectListOf; the strip shows avatars only, pinned ones above a divider; row shortcuts appear on hover and keyboard
- * focus on hover-capable pointers. On the phone page, the pin button stays visible.
+ * projectListOf; row shortcuts appear on hover and keyboard focus on hover-capable pointers. On the phone page, the pin button stays visible.
  */
 export const ProjectList = memo(function ProjectList({
   layout,
@@ -184,13 +142,14 @@ export const ProjectList = memo(function ProjectList({
   asking,
   readOnly,
   computers,
+  query,
+  onQueryChange,
   onSelect,
   onNewPm,
   onTogglePin,
   onOpenComputers,
   onSelectComputer,
 }: ProjectListProps): React.ReactElement {
-  const [query, setQuery] = useState("");
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
@@ -201,54 +160,6 @@ export const ProjectList = memo(function ProjectList({
   const isSelected = (entry: ConversationEntry) => !isPage && active !== null && active.device === computer.key && active.id === entry.id;
   const activeInArchived = filtered.archived.some(isSelected);
   const showArchived = archivedOpen || query.trim() !== "" || activeInArchived;
-
-  if (layout === "strip") {
-    const stripExtras = filtered.archived.filter(isSelected);
-    return (
-      <section aria-label={computer.name} className="wood-rings shell-list flex h-full w-18 shrink-0 flex-col text-list-ink">
-        <div className="groove-bottom flex h-11 shrink-0 items-center justify-center">
-          <Button variant="slot" size="icon" className="size-7" aria-label="New project manager" title="New project manager" onClick={onNewPm}>
-            <Plus aria-hidden="true" />
-          </Button>
-        </div>
-        <div className="sidebar-list flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 py-2.5">
-          {sections.pinned.map((entry) => {
-            const key = conversationKey(computer.key, entry.id);
-            return (
-              <StripItem
-                key={entry.id}
-                deviceKey={computer.key}
-                entry={entry}
-                active={isSelected(entry)}
-                waiting={waiting.has(key)}
-                asking={asking.has(key)}
-                readOnly={readOnly}
-                onSelect={onSelect}
-              />
-            );
-          })}
-          {sections.pinned.length > 0 && (sections.active.length > 0 || stripExtras.length > 0) && (
-            <div aria-hidden="true" data-testid="strip-pin-divider" className="groove my-0.5 w-8 shrink-0" />
-          )}
-          {[...sections.active, ...stripExtras].map((entry) => {
-            const key = conversationKey(computer.key, entry.id);
-            return (
-              <StripItem
-                key={entry.id}
-                deviceKey={computer.key}
-                entry={entry}
-                active={isSelected(entry)}
-                waiting={waiting.has(key)}
-                asking={asking.has(key)}
-                readOnly={readOnly}
-                onSelect={onSelect}
-              />
-            );
-          })}
-        </div>
-      </section>
-    );
-  }
 
   const headerTrigger = (
     <button
@@ -300,7 +211,7 @@ export const ProjectList = memo(function ProjectList({
       </header>
 
       <div className="shrink-0 px-2 pt-3 pb-1">
-        <SearchField label="Search conversations" tone="list" value={query} onChange={setQuery} />
+        <SearchField label="Search conversations" tone="list" value={query} onChange={onQueryChange} />
       </div>
 
       <div className="sidebar-list page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-2 pt-2 pb-4">

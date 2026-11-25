@@ -115,19 +115,19 @@
   }
 }
 
-/* Percentages respect the browser's default font size. */
+/* Percentages respect the browser's default font size; the scales step by 1.5px at a 16px browser default. */
 html,
 html[data-ui-scale="md"] {
-  font-size: 100%;
-}
-html[data-ui-scale="sm"] {
-  font-size: 90.625%;
-}
-html[data-ui-scale="lg"] {
   font-size: 109.375%;
 }
-html[data-ui-scale="xl"] {
+html[data-ui-scale="sm"] {
+  font-size: 100%;
+}
+html[data-ui-scale="lg"] {
   font-size: 118.75%;
+}
+html[data-ui-scale="xl"] {
+  font-size: 128.125%;
 }
 
 :root {
@@ -1906,8 +1906,8 @@ input[type="search"]::-webkit-search-cancel-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: 2.75rem;
+  height: 2.75rem;
   padding: 0;
   border: none;
   border-radius: 6px;

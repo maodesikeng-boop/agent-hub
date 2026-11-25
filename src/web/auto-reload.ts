@@ -15,6 +15,7 @@ const OPEN_DIALOG_SELECTOR = '[role="dialog"]:not([data-state="closed"]), [role=
 export interface DraftValue {
   text: string;
   pick: WorkerPick | null;
+  target: string | null;
 }
 
 interface StoredDraft extends DraftValue {
@@ -56,6 +57,8 @@ function validPick(raw: unknown): WorkerPick | null | undefined {
   return { vendor, model, effort };
 }
 
+const isEmptyDraft = ({ text, pick, target }: DraftValue) => text === "" && pick === null && target === null;
+
 function loadRestored(now: number): Map<string, StoredDraft> {
   const map = new Map<string, StoredDraft>();
   const store = storage();
@@ -70,12 +73,14 @@ function loadRestored(now: number): Map<string, StoredDraft> {
       if (typeof item !== "object" || item === null) continue;
       const { key, text, savedAt } = item;
       const pick = validPick(item.pick);
+      const target = item.target ?? null;
       if (typeof key !== "string" || typeof text !== "string" || typeof savedAt !== "number" || pick === undefined) continue;
-      if (now - savedAt > AUTO_RELOAD_DRAFT_TTL_MS || (text === "" && pick === null)) continue;
-      const size = byteLength(JSON.stringify({ key, text, pick, savedAt }));
+      if (target !== null && typeof target !== "string") continue;
+      if (now - savedAt > AUTO_RELOAD_DRAFT_TTL_MS || isEmptyDraft({ text, pick, target })) continue;
+      const size = byteLength(JSON.stringify({ key, text, pick, target, savedAt }));
       if (bytes + size > AUTO_RELOAD_MAX_DRAFT_BYTES) continue;
       bytes += size;
-      map.set(key, { key, text, pick, savedAt });
+      map.set(key, { key, text, pick, target, savedAt });
     }
     writeDrafts(store, [...map.values()]);
   } catch {
@@ -101,7 +106,7 @@ export function takeRestoredDraft(key: string): DraftValue | null {
   if (found === undefined) return null;
   map.delete(key);
   if (Date.now() - found.savedAt > AUTO_RELOAD_DRAFT_TTL_MS) return null;
-  return { text: found.text, pick: found.pick };
+  return { text: found.text, pick: found.pick, target: found.target };
 }
 
 export function registerDraftSource(source: DraftSource): () => void {
@@ -118,8 +123,8 @@ export function saveDrafts(now = Date.now()): void {
   }
   for (const source of sources) {
     for (const [key, value] of source()) {
-      if (value.text === "" && value.pick === null) byKey.delete(key);
-      else byKey.set(key, { key, text: value.text, pick: value.pick, savedAt: now });
+      if (isEmptyDraft(value)) byKey.delete(key);
+      else byKey.set(key, { key, text: value.text, pick: value.pick, target: value.target, savedAt: now });
     }
   }
   const kept: StoredDraft[] = [];

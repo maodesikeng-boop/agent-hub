@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useStore } from "zustand";
 import {
   ROUTER_STREAM_LIVE_MAX,
   defaultRouterSettings,
@@ -44,7 +45,8 @@ import type {
   FleetRouterView,
   RouterTargetCandidate,
 } from "../selectors.ts";
-import { MOBILE_SHELL_QUERY, useMediaQuery } from "../useMediaQuery.ts";
+import { useShellCarry } from "../shell-carry.tsx";
+import { useMobileShell } from "../shell-layout.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { uploadFiles, type DraftSlot, type StagedFiles } from "../upload.ts";
 import { Avatar } from "./Avatar.tsx";
@@ -389,8 +391,8 @@ function useRouterDecisions(
 ) {
   const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
   const [decisionErrors, setDecisionErrors] = useState<Readonly<Record<string, ErrorLike>>>({});
-  const [selectedDecisionKey, setSelectedDecisionKey] = useState<string | null>(null);
-  const [closedDraft, setClosedDraft] = useState<ClosedRouterDraft | null>(null);
+  const [selectedDecisionKey, setSelectedDecisionKey] = useShellCarry<string | null>("router:decision", null);
+  const [closedDraft, setClosedDraft] = useShellCarry<ClosedRouterDraft | null>("router:closed-draft", null);
   const [trackedExpanded, setTrackedExpanded] = useState<FleetDecisionEntry | null>(null);
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
@@ -458,24 +460,33 @@ function useRouterDecisions(
     });
   }, [decisions]);
 
-  const handleNoteFocus = useCallback((decisionKey: string) => {
-    setSelectedDecisionKey(decisionKey);
-  }, []);
+  const handleNoteFocus = useCallback(
+    (decisionKey: string) => {
+      setSelectedDecisionKey(decisionKey);
+    },
+    [setSelectedDecisionKey],
+  );
 
-  const handleNoteChange = useCallback((decisionKey: string, draftKey: string, value: string) => {
-    setSelectedDecisionKey(decisionKey);
-    setDecisionDraft(draftKey, value);
-    setDecisionErrors((prev) => {
-      if (prev[decisionKey] === undefined) return prev;
-      const { [decisionKey]: _removed, ...rest } = prev;
-      return rest;
-    });
-  }, []);
+  const handleNoteChange = useCallback(
+    (decisionKey: string, draftKey: string, value: string) => {
+      setSelectedDecisionKey(decisionKey);
+      setDecisionDraft(draftKey, value);
+      setDecisionErrors((prev) => {
+        if (prev[decisionKey] === undefined) return prev;
+        const { [decisionKey]: _removed, ...rest } = prev;
+        return rest;
+      });
+    },
+    [setSelectedDecisionKey],
+  );
 
-  const handleSelectKey = useCallback((key: string) => {
-    setClosedDraft(null);
-    setSelectedDecisionKey(key);
-  }, []);
+  const handleSelectKey = useCallback(
+    (key: string) => {
+      setClosedDraft(null);
+      setSelectedDecisionKey(key);
+    },
+    [setClosedDraft, setSelectedDecisionKey],
+  );
 
   const handleDismissClosedDraft = useCallback(() => {
     setClosedDraft((prev) => {
@@ -483,7 +494,7 @@ function useRouterDecisions(
       return null;
     });
     setSelectedDecisionKey(null);
-  }, []);
+  }, [setClosedDraft, setSelectedDecisionKey]);
 
   const inflightDecisions = useRef(new Set<string>());
   const handleDecisionSubmit = useCallback(
@@ -519,7 +530,7 @@ function useRouterDecisions(
         inflightDecisions.current.delete(key);
       }
     },
-    [clientForDevice],
+    [clientForDevice, setClosedDraft, setSelectedDecisionKey],
   );
 
   return {
@@ -565,7 +576,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
   onManageProviders?: () => void;
 }) {
   const qc = useHubQueryClient();
-  const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
+  const mobile = useMobileShell();
   const resolvedSelfId = selfId ?? undefined;
   const localSettings = useMemo(() => {
     const localDevice = devices.find((d) => d.key === LOCAL_DEVICE) ?? devices[0];
@@ -596,7 +607,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
 
   const sandboxCards = useFleetSandboxCards(devices, view.multiDevice);
 
-  const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
+  const selectedTargetKey = useStore(draft.target);
 
   const stream = useMemo<FleetRouterStream>(() => {
     const inputs: RouterStreamDeviceInput[] = devices.map((d) => ({
@@ -774,15 +785,14 @@ export const RouterWorkbench = memo(function RouterWorkbench({
     [view.targets, view.multiDevice],
   );
 
-  const handleSelectTarget = useCallback((targetKey: string) => {
-    setSelectedTargetKey(targetKey);
-  }, []);
+  const handleSelectTarget = useCallback((targetKey: string) => draft.setTarget(targetKey), [draft]);
 
   const handleComposerSend = useCallback(
     (text: string, files: File[]): void | Promise<void> => {
       const trimmed = text.trim();
       if (trimmed === "" && files.length === 0) return;
 
+      const targetKey = selectedTargetKey;
       const targetSnap = selectedTarget;
       let targetPayload: PostRouterCommandTarget | undefined;
       if (targetSnap !== null) {
@@ -807,19 +817,19 @@ export const RouterWorkbench = memo(function RouterWorkbench({
 
       if (files.length === 0) {
         draft.set("");
-        if (targetSnap !== null) setSelectedTargetKey(null);
+        draft.clearTargetIfMatch(targetKey);
         dispatchCommand([]);
         return;
       }
 
       return uploadFiles(files, localClient).then((uploaded) => {
         draft.clearIfMatch(trimmed);
+        draft.clearTargetIfMatch(targetKey);
         staging.removeSent(files);
-        if (targetSnap !== null) setSelectedTargetKey(null);
         dispatchCommand(uploaded);
       });
     },
-    [selectedTarget, draft, staging, mutateSend],
+    [selectedTargetKey, selectedTarget, draft, staging, mutateSend],
   );
 
   const targetChip = useMemo(
@@ -829,10 +839,10 @@ export const RouterWorkbench = memo(function RouterWorkbench({
           label={selectedTarget.label}
           deviceName={view.multiDevice || !selectedTarget.self ? selectedTarget.deviceName : null}
           look={selectedTarget.look}
-          onRemove={() => setSelectedTargetKey(null)}
+          onRemove={() => draft.setTarget(null)}
         />
       ) : null,
-    [selectedTarget, view.multiDevice],
+    [selectedTarget, view.multiDevice, draft],
   );
 
   return (

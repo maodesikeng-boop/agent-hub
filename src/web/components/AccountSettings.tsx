@@ -1,8 +1,8 @@
 import { ArrowDown, ArrowUp, ExternalLink, Loader2 } from "../ui/icons.ts";
-import { useState } from "react";
 import type { DeviceId, MeshApprovalView, MeshDeviceView, RelayConnectionState } from "../../shared/index.ts";
 import { platformLabel } from "../devices.ts";
 import { movePriority, useAccount } from "../settings-model.ts";
+import { useShellCarry } from "../shell-carry.tsx";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { PlatformIcon } from "./DeviceBadges.tsx";
@@ -58,8 +58,8 @@ function ApprovalRow({ account, approval, joining }: { account: Account; approva
 }
 
 function SignInRow({ account, lastError }: { account: Account; lastError: string | null }) {
-  const [relayUrl, setRelayUrl] = useState("");
-  const [custom, setCustom] = useState(false);
+  const [relayUrl, setRelayUrl] = useShellCarry("settings:relay-url", "");
+  const [custom, setCustom] = useShellCarry("settings:relay-custom", false);
   return (
     <>
       <SettingsRow label="GitHub" error={account.error ?? lastError}>

@@ -18,6 +18,8 @@ export interface ThreadCardProps {
   /** Message creation timestamp in epoch ms when available. */
   createdAt?: number;
   vendor?: AgentVendor;
+  /** The row directly follows another report row, so a hairline parts the two instead of the gap before a run. */
+  joined?: boolean;
   onOpen: (workerConversationId: ConversationId) => void;
 }
 
@@ -28,11 +30,12 @@ const TONE_SQUARE: Record<Exclude<WorkerTone, "neutral">, string> = {
 };
 
 /**
- * Postcondition: renders one compact row with the note sprite and its status dot in the agent header's avatar column, the
- * cleaned Worker title, the report time, and a right chevron; the accessible name adds the status word and the first report
+ * Postcondition: renders one row the size of a ProjectList row with the note sprite at the list's avatar size and its status
+ * dot in the agent header's avatar column, the cleaned Worker title, the report time, and a right chevron; a joined row sits
+ * under a hairline, any other row opens a run after a gap; the accessible name adds the status word and the first report
  * line (describeFailure text for failures); the open row takes the open fill.
  */
-export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: ThreadCardProps): React.ReactElement {
+export function ThreadCard({ line, look, open, createdAt, vendor, joined = false, onOpen }: ThreadCardProps): React.ReactElement {
   const { tone, label } = workerStatusOf(line);
   const failed = line.event !== "report";
   const summary = line.summary?.trim() ?? "";
@@ -43,24 +46,31 @@ export function ThreadCard({ line, look, open, createdAt, vendor, onOpen }: Thre
   const ariaLabel = [cleanTitle, label, firstLine].filter(Boolean).join(", ");
 
   return (
-    <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone} data-open={open ? "" : undefined}>
+    <article
+      className={cn("flex flex-col items-start", joined ? "border-t border-border" : "mt-4")}
+      data-side="left"
+      data-worker-report
+      data-joined={joined ? "" : undefined}
+      data-tone={tone}
+      data-open={open ? "" : undefined}
+    >
       <button
         type="button"
         data-bubble
         aria-label={ariaLabel}
         className={cn(
-          "group touch-target flex w-full cursor-pointer items-center gap-2 rounded-sm py-1 pr-3.5 text-left text-minor transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 motion-reduce:transition-none pointer-coarse:min-h-11",
+          "group touch-target flex h-6.5 w-full cursor-pointer items-center gap-2 rounded-sm pr-3.5 text-left text-minor transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 motion-reduce:transition-none pointer-coarse:h-11",
           open ? "bg-open" : "hover:bg-hover",
         )}
         onClick={() => onOpen(line.workerConversationId)}
       >
         <span className="relative flex shrink-0">
-          <Avatar look={look} neutral size={26} />
+          <Avatar look={look} neutral size={21} />
           {tone !== "neutral" && (
             <span
               data-dot={tone}
               aria-hidden="true"
-              className={cn("absolute -right-1 -bottom-0.5 size-2.5 rounded-full", open ? "shadow-[0_0_0_2px_var(--open)]" : "shadow-[0_0_0_2px_var(--background)] group-hover:shadow-[0_0_0_2px_var(--hover)]", TONE_SQUARE[tone])}
+              className={cn("absolute -right-0.5 -bottom-0.5 size-2 rounded-full", open ? "shadow-[0_0_0_2px_var(--open)]" : "shadow-[0_0_0_2px_var(--background)] group-hover:shadow-[0_0_0_2px_var(--hover)]", TONE_SQUARE[tone])}
             />
           )}
         </span>

@@ -117,7 +117,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = false
         window.backgroundColor = NSColor.white
-        window.minSize = NSSize(width: 480, height: 560)
+        window.minSize = NSSize(width: 860, height: 560)
         window.delegate = self
         window.contentView = webView
         if !window.setFrameUsingName("AgentHubMainWindow") {
