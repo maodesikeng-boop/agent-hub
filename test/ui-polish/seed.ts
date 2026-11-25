@@ -475,7 +475,7 @@ function standard(s: Story): void {
   s.ledger.setPmPinned(qing.pmId, true);
 }
 
-/** 超长、超多：20 多个项目经理、长名字、长消息、Markdown、图表、300 条历史、多张图、十几个 Piece。 */
+/** 超长、超多：20 多个项目经理、长名字、长消息、Markdown、图表、300 条历史、多张图、十几个 Worker。 */
 function stress(s: Story): void {
   const long = s.pm("long", "一个名字特别特别长的项目经理用来测试左栏和顶栏会不会被撑开", s.repo("a-project-folder-with-an-unusually-long-name-for-layout-testing"));
   s.turn(long, "x".repeat(0) + "请把下面这段需求整理成一份清单：" + "用户反馈左栏名字太长时会把时间挤掉，右栏任务标题太长时会换三行。".repeat(6), ["好的，整理如下。" + "这是一段很长的回复，用来看消息气泡在长文本下的换行和行宽。".repeat(12)]);
@@ -506,13 +506,13 @@ function stress(s: Story): void {
   s.ids["graph.big"] = big.data.graph.id;
   s.ledger.hubCall(lin.sessionId, "graph.done", { graphId: big.data.graph.id, nodeKey: "a", summary: "需求齐了" });
   const qing = { pmId: s.ids["pm.qing"]!, conversationId: s.ids["c.qing"]!, sessionId: s.sessionOf(s.ids["c.qing"]!) };
-  // 历史任务图挂在阿青那边：右栏 Completed 组只在有收工 Piece 时出现（RightRail 的 completedGraphCount 在 App.tsx 里未传入）
+  // Historical graph and finished Workers under 阿青 so Completed tab has mixed items.
   const done = s.ledger.hubCall(qing.sessionId, "graph.create", { specJson: JSON.stringify({ title: "上周的发布", steps: [{ key: "ship", title: "发布 1.4" }] }) });
   s.ids["graph.done"] = done.data.graph.id;
   s.ledger.hubCall(qing.sessionId, "graph.done", { graphId: done.data.graph.id, nodeKey: "ship", summary: "发布完成" });
   s.ledger.hubCall(qing.sessionId, "graph.finish", { graphId: done.data.graph.id, summary: "1.4 发布完成", unmergedOk: true });
   for (let i = 1; i <= 13; i++) {
-    const w = s.worker(qing, undefined, `抓取任务 ${i}：一个比较长的 Piece 标题，用来看右栏会不会换行`, `处理第 ${i} 批站点。`, `第 ${i} 批做完了。`);
+    const w = s.worker(qing, undefined, `抓取任务 ${i}：一个比较长的 Worker 标题，用来看右栏会不会换行`, `处理第 ${i} 批站点。`, `第 ${i} 批做完了。`);
     if (i <= 4) s.ledger.hubCall(qing.sessionId, "worker.end", { workerId: w.id });
   }
   for (let i = 0; i < 3; i++) s.ledger.hubCall(qing.sessionId, "router.report", { summary: `第 ${i + 1} 批抓取完成，失败率 ${(0.5 + i * 0.2).toFixed(1)}%，详见报告。` });
