@@ -2,7 +2,9 @@
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
+import type { FakeLogEntry } from "../../../test/fake-claude/fake-claude.ts";
 import { AGENT_VENDORS, MAX_COMMAND_DESCRIPTION_CHARS, type ComposerCommand } from "../../shared/index.ts";
 import claudeSpec from "./spec.ts";
 import { queryClaudeInitialize } from "./catalog.ts";
@@ -160,16 +162,15 @@ describe("会话没在跑时另起进程问（假 claude）", () => {
       const composer = createClaudeComposer({ executablePath: FAKE_CLAUDE, queryInitialize: queryClaudeInitialize, env: { ...process.env, FAKE_CLAUDE_SCRIPT: script, FAKE_CLAUDE_LOG: log } });
       const commands = await composer.queryCommands({ cwd: dir, addDirs: ["/tmp"] }, new AbortController().signal);
       expect(commands).toEqual([{ name: "x", description: "d", argumentHint: "w" }]);
-      const argv = readFileSync(log, "utf8")
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => JSON.parse(l))
-        .find((e) => e.kind === "argv");
+      const argv = readJsonLog<FakeLogEntry>(log).find((e) => e.kind === "argv");
+      assert.isDefined(argv);
       expect(argv.argv).toEqual(expect.arrayContaining(["--add-dir", "/tmp", "--no-session-persistence"]));
       // 工作目录是项目目录，但不跑钩子、不连 MCP（docs/composer-commands.md 的 T10）
       expect(argv.cwd).toBe(realpathSync(dir));
       const settingsAt = argv.argv.indexOf("--settings");
-      expect(JSON.parse(argv.argv[settingsAt + 1])).toEqual({ disableAllHooks: true });
+      const settings = argv.argv[settingsAt + 1];
+      assert.isDefined(settings);
+      expect(JSON.parse(settings)).toEqual({ disableAllHooks: true });
       expect(argv.argv).toContain("--strict-mcp-config");
       expect(argv.argv).not.toContain("--mcp-config");
     } finally {

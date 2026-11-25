@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import { isAlive, waitForExit } from "../../daemon/driver/process.ts";
 import { createModelCatalogs } from "../../daemon/driver/model-catalog.ts";
 import { MemorySessionStore, realSleep } from "../../daemon/driver/test-helpers.ts";
@@ -248,13 +249,7 @@ function makeDeepSeekHarness(options: {
     }
   };
 
-  const logs = (): FakeAcpLogEntry[] => {
-    if (!existsSync(logFile)) return [];
-    return readFileSync(logFile, "utf8")
-      .split("\n")
-      .filter((l) => l.trim() !== "")
-      .map((l) => JSON.parse(l) as FakeAcpLogEntry);
-  };
+  const logs = () => readJsonLog<FakeAcpLogEntry>(logFile);
 
   const addSession = (patch: Partial<AgentSessionRow> = {}): AgentSessionRow => {
     const id = (nextSessionId += 1) as SessionId;

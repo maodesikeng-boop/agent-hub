@@ -1,9 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RequestPermissionRequest, SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import { MemorySessionStore } from "../../daemon/driver/test-helpers.ts";
 import type { ReadonlySandboxInput } from "../../daemon/driver/write-scope.ts";
 import { EMPTY_TOKEN_USAGE, buildReadonlyPolicy, type AgentSessionRow, type Driver, type DriverEvent, type ReadonlyPolicy } from "../../shared/index.ts";
@@ -242,8 +243,7 @@ child.on("exit", (code) => process.exit(code ?? 0));
     drivers.push(driver);
     const events: DriverEvent[] = [];
     driver.onEvent((_id, ev) => events.push(ev));
-    const logs = (): FakeAcpLogEntry[] =>
-      existsSync(logFile) ? readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as FakeAcpLogEntry) : [];
+    const logs = () => readJsonLog<FakeAcpLogEntry>(logFile);
     const turnEnded = async () => {
       const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {
