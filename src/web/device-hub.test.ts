@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, localClient, type HubClient } from "./client.ts";
@@ -63,9 +63,9 @@ function scriptedClient(device: string | null) {
 const socketsFor = (device: string | null) =>
   FakeWebSocket.instances.filter((ws) => new URL(ws.url).pathname.startsWith("/d/") === (device !== null));
 
-async function readyHub(device: string | null, snapshot: StateSnapshot) {
+async function readyHub(device: string | null, snapshot: StateSnapshot, qc?: QueryClient) {
   const scripted = scriptedClient(device);
-  const hub = new DeviceHub(device ?? LOCAL_DEVICE, scripted.client, () => {});
+  const hub = new DeviceHub(device ?? LOCAL_DEVICE, scripted.client, () => {}, qc);
   hub.start();
   scripted.requests[0]!.resolve(snapshot);
   await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
@@ -112,6 +112,41 @@ describe("DeviceHub change stream recovery", () => {
     next.push(healthChange(4, makeHealth()));
     expect(hub.state.seq).toBe(4);
     hub.dispose();
+  });
+
+  it("refreshes a pending history read and invalidates cached history only for the resynced device", async () => {
+    installFakeWebSocket();
+    const qc = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    const remoteHistory = taskGraphHistoryKey(REMOTE, 1);
+    const cachedHistory = taskGraphHistoryKey(REMOTE, 2);
+    const localHistory = taskGraphHistoryKey(LOCAL_DEVICE, 1);
+    for (const key of [cachedHistory, localHistory]) qc.setQueryData(key, []);
+
+    const { hub, requests } = await readyHub(REMOTE, makeSnapshot({ seq: 10, bootId: BOOT_A }), qc);
+    const queryFn = vi.fn<({ signal }: { signal: AbortSignal }) => Promise<number[]>>()
+      .mockImplementationOnce(({ signal }) => new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve([7]), { once: true });
+      }))
+      .mockResolvedValue([8]);
+    const observer = new QueryObserver(qc, { queryKey: remoteHistory, queryFn });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      expect(observer.getCurrentResult().isLoading).toBe(true);
+      expect(qc.getQueryState(cachedHistory)?.isInvalidated).toBe(false);
+      const socket = socketsFor(REMOTE).at(-1)!;
+      socket.open();
+      socket.push({ type: "resync" });
+      await vi.waitFor(() => expect(requests).toHaveLength(2));
+      requests[1]!.resolve(makeSnapshot({ seq: 20, bootId: BOOT_A }));
+
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual([8]));
+      expect(qc.getQueryState(cachedHistory)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(localHistory)?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+      hub.dispose();
+      qc.clear();
+    }
   });
 
   it("discards old socket frames and a late snapshot when a second restart races a resync", async () => {

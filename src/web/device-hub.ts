@@ -281,8 +281,14 @@ export class DeviceHub {
   }
 
   private installSnapshot(snapshot: StateSnapshot, cursor: ChangeCursor): void {
+    const replacing = this.cursor !== null;
     this.cursor = cursor;
     this.dispatch({ type: "loaded", snapshot });
+    if (replacing) {
+      const queryKey = ["project-task-graphs", this.key];
+      void this.qc.cancelQueries({ queryKey });
+      void this.qc.invalidateQueries({ queryKey });
+    }
     this.onBoot?.(cursor.bootId);
   }
 
