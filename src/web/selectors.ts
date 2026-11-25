@@ -36,7 +36,10 @@ import {
   isQuotaExhausted,
   pendingDecisionsOf as devicePendingDecisionsOf,
   systemEventOf,
+  unwrapWorkerReportText,
   workerEventOf,
+  workerLineText,
+  workerReportHeader,
   isWorkerEndLine,
   type AgentVendor,
   type ConversationId,
@@ -381,6 +384,23 @@ export function quotaResetTimes(state: HubState): number[] {
 
 export type WorkerPhase = "preparing" | "open" | "ended";
 
+export interface WorkerOutcome {
+  id: MessageId;
+  at: number;
+  line: WorkerMessageMeta;
+  reportBody: string | null;
+}
+
+const OUTCOME_WORKER_EVENTS: ReadonlySet<WorkerMessageMeta["event"]> = new Set(["report", "turn_failed", "worktree_failed"]);
+
+function extractWorkerReportBody(line: WorkerMessageMeta, text: string): string | null {
+  if (line.event !== "report") return null;
+  const trimmed = text.trim();
+  if (trimmed === "" || trimmed === workerReportHeader(line.workerId, line.title) || trimmed === workerLineText(line)) return null;
+  const unwrapped = unwrapWorkerReportText({ id: line.workerId, title: line.title }, text).trim();
+  return unwrapped === "" ? null : unwrapped;
+}
+
 interface WorkerLine {
   id: MessageId;
   at: number;
@@ -390,6 +410,7 @@ interface WorkerLine {
 interface WorkerLineIndex {
   latest: ReadonlyMap<ConversationId, WorkerLine>;
   endedAt: ReadonlyMap<ConversationId, number>;
+  outcomes: ReadonlyMap<ConversationId, readonly WorkerOutcome[]>;
 }
 
 const pmWorkerIndexCache = new WeakMap<readonly Message[], WorkerLineIndex>();
@@ -399,18 +420,38 @@ function pmWorkerIndexOf(messages: readonly Message[]): WorkerLineIndex {
   if (cached !== undefined) return cached;
   const latest = new Map<ConversationId, WorkerLine>();
   const endedAt = new Map<ConversationId, number>();
+  const outcomes = new Map<ConversationId, WorkerOutcome[]>();
   for (const message of messages) {
     const line = workerEventOf(message);
     if (!line) continue;
     latest.set(line.workerConversationId, { id: message.id, at: message.createdAt, line });
     if (isWorkerEndLine(line)) endedAt.set(line.workerConversationId, Math.max(endedAt.get(line.workerConversationId) ?? 0, message.createdAt));
+    if (OUTCOME_WORKER_EVENTS.has(line.event)) {
+      let list = outcomes.get(line.workerConversationId);
+      if (list === undefined) {
+        list = [];
+        outcomes.set(line.workerConversationId, list);
+      }
+      list.push({ id: message.id, at: message.createdAt, line, reportBody: extractWorkerReportBody(line, message.text) });
+    }
   }
-  cached = { latest, endedAt };
+  cached = { latest, endedAt, outcomes };
   pmWorkerIndexCache.set(messages, cached);
   return cached;
 }
 
 const workerLinesCache = new WeakMap<HubState["conversations"], Map<PmId, WorkerLineIndex>>();
+
+function mergeOutcomes(
+  existing: readonly WorkerOutcome[] | undefined,
+  extra: readonly WorkerOutcome[],
+): readonly WorkerOutcome[] {
+  if (existing === undefined) return extra;
+  const seen = new Set(existing.map((o) => o.id));
+  const added = extra.filter((o) => !seen.has(o.id));
+  if (added.length === 0) return existing;
+  return [...existing, ...added].toSorted((a, b) => a.id - b.id);
+}
 
 function workerLinesOf(state: HubState, pmId: PmId): WorkerLineIndex {
   let byPm = workerLinesCache.get(state.conversations);
@@ -422,11 +463,16 @@ function workerLinesOf(state: HubState, pmId: PmId): WorkerLineIndex {
   if (hit !== undefined) return hit;
   const latest = new Map<ConversationId, WorkerLine>();
   const endedAt = new Map<ConversationId, number>();
+  const outcomes = new Map<ConversationId, readonly WorkerOutcome[]>();
+  const snapshotOutcomes = new Map<ConversationId, WorkerOutcome>();
   const views = Object.values(state.conversations).filter((v) => v.conversation.pmId === pmId);
   for (const { conversation, workerLine } of views) {
     if (conversation.kind !== "worker" || workerLine === undefined) continue;
     latest.set(conversation.id, { id: workerLine.messageId, at: workerLine.at, line: workerLine.line });
     if (workerLine.endedAt !== null) endedAt.set(conversation.id, workerLine.endedAt);
+    if (OUTCOME_WORKER_EVENTS.has(workerLine.line.event)) {
+      snapshotOutcomes.set(conversation.id, { id: workerLine.messageId, at: workerLine.at, line: workerLine.line, reportBody: null });
+    }
   }
   for (const { conversation, messages } of views) {
     if (conversation.kind === "worker") continue;
@@ -435,8 +481,12 @@ function workerLinesOf(state: HubState, pmId: PmId): WorkerLineIndex {
       if ((latest.get(id)?.id ?? -1) <= line.id) latest.set(id, line);
     }
     for (const [id, at] of index.endedAt) endedAt.set(id, Math.max(endedAt.get(id) ?? 0, at));
+    for (const [id, list] of index.outcomes) outcomes.set(id, mergeOutcomes(outcomes.get(id), list));
   }
-  const result = { latest, endedAt };
+  for (const [id, fallback] of snapshotOutcomes) {
+    outcomes.set(id, mergeOutcomes(outcomes.get(id), [fallback]));
+  }
+  const result = { latest, endedAt, outcomes };
   byPm.set(pmId, result);
   return result;
 }
@@ -620,6 +670,14 @@ export function workerLineOf(state: HubState, workerConversationId: Conversation
   const pmId = state.conversations[workerConversationId]?.conversation.pmId;
   if (pmId == null) return null;
   return workerLinesOf(state, pmId).latest.get(workerConversationId)?.line ?? null;
+}
+
+const NO_WORKER_OUTCOMES: readonly WorkerOutcome[] = [];
+
+export function workerOutcomesOf(state: HubState, workerConversationId: ConversationId): readonly WorkerOutcome[] {
+  const pmId = state.conversations[workerConversationId]?.conversation.pmId;
+  if (pmId == null) return NO_WORKER_OUTCOMES;
+  return workerLinesOf(state, pmId).outcomes.get(workerConversationId) ?? NO_WORKER_OUTCOMES;
 }
 
 const NO_PENDING: PendingMessage[] = [];

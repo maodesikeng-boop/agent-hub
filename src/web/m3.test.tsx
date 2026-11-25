@@ -412,6 +412,171 @@ describe("点开 Worker", () => {
     expect(within(region).queryByText("No messages yet")).not.toBeInTheDocument();
   });
 
+  it("clicking a one-row report for a cleared Worker keeps the row compact and renders the retained PM report body in the panel", async () => {
+    const user = userEvent.setup();
+    const summary = "阈值挪进 VENDOR_SPECS，32 条测试通过，PR #142。";
+    const reportBody = `=== 汇报 ===\n状态: 做完了\n摘要: ${summary}\nPR: https://github.com/example/agent-hub/pull/142\n=== 汇报结束 ===`;
+    await boot(
+      withWorker({
+        conversations: [
+          makeConvSnapshot(
+            [
+              makeWorkerLine({ id: 2, conversationId: 1, line: { event: "started", title: "按厂商配置换会话阈值" } }),
+              makeWorkerLine({
+                id: 3,
+                conversationId: 1,
+                line: { event: "report", status: "done", title: "按厂商配置换会话阈值", summary },
+                text: `【Worker #3 · 按厂商配置换会话阈值 的汇报】\n\n${reportBody}`,
+              }),
+              makeWorkerLine({ id: 4, conversationId: 1, line: { event: "ended", title: "按厂商配置换会话阈值" } }),
+            ],
+            { conversation: { id: 1, pmId: 1, title: "小林" } },
+          ),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ title: "按厂商配置换会话阈值", purgedAt: 50_000 }) }),
+        ],
+        sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 2, conversationId: 30, status: "ended" })],
+      }),
+    );
+
+    const row = within(log()).getByRole("button", { name: `按厂商配置换会话阈值, Done, ${summary}` });
+    expect(row).not.toHaveTextContent(summary);
+    await user.click(row);
+
+    const region = screen.getByRole("region", { name: "Piece 按厂商配置换会话阈值" });
+    expect(within(region).getByRole("status")).toHaveTextContent(
+      "Conversation cleared. Finished Pieces keep their conversations for up to 14 days, and only the latest 300.",
+    );
+    expect(within(region).getByText(new RegExp(summary))).toBeInTheDocument();
+    expect(within(region).getByText(/pull\/142/)).toBeInTheDocument();
+    expect(within(region).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("shows the PM report summary when a cleared Worker receives conversation.purged live and only the summary is stored", async () => {
+    const ws = await boot(
+      withWorker({
+        conversations: [
+          makeConvSnapshot(
+            [makeWorkerLine({ id: 3, conversationId: 1, line: { event: "report", status: "done", summary: "改好了，测试通过" } })],
+            { conversation: { id: 1, pmId: 1, title: "小林" } },
+          ),
+          makeConvSnapshot([makeMessage({ id: 10, conversationId: 30, workerId: 3, text: "还在的话" })], { conversation: makeWorkerConversation() }),
+        ],
+      }),
+    );
+    await showWorker();
+    const region = screen.getByRole("region", { name: "Piece 修 X" });
+    push(ws, changeOf(11, "conversation.purged", { conversationId: 30, purgedAt: 5 }));
+    await waitFor(() => expect(within(region).getByRole("status")).toHaveTextContent("Conversation cleared."));
+    expect(within(region).getByText("改好了，测试通过")).toBeInTheDocument();
+  });
+
+  it("clicking a red-dot worktree_failed row shows the PM failure reason in the panel instead of Completed", async () => {
+    const user = userEvent.setup();
+    const reason = "git worktree add failed: fixture disk full";
+    await boot(
+      withWorker({
+        conversations: [
+          makeConvSnapshot(
+            [
+              makeWorkerLine({ id: 2, conversationId: 1, line: { event: "started", title: "Review fixture: worktree failure" } }),
+              makeWorkerLine({
+                id: 3,
+                conversationId: 1,
+                line: { event: "worktree_failed", title: "Review fixture: worktree failure", summary: reason },
+                text: `【Worker #3 · Review fixture: worktree failure 的汇报】\n\n建 worktree 失败：${reason}`,
+              }),
+            ],
+            { conversation: { id: 1, pmId: 1, title: "小林" } },
+          ),
+          makeConvSnapshot(
+            [makeMessage({ id: 10, conversationId: 30, sender: "pm", sessionId: null, status: "failed", failureReason: reason, text: "任务：建 worktree" })],
+            { conversation: makeWorkerConversation({ title: "Review fixture: worktree failure" }) },
+          ),
+        ],
+        sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 2, conversationId: 30, status: "ended" })],
+      }),
+    );
+
+    const row = within(log()).getByRole("button", { name: `Review fixture: worktree failure, Error, ${reason}` });
+    expect(row).not.toHaveTextContent(reason);
+    await user.click(row);
+
+    const region = screen.getByRole("region", { name: "Piece Review fixture: worktree failure" });
+    expect(within(region).getByText("任务：建 worktree")).toBeInTheDocument();
+    const alert = within(region).getByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't create worktree");
+    expect(alert).toHaveTextContent(reason);
+    expect(within(region).queryByText("Completed")).not.toBeInTheDocument();
+    expect(within(region).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("shows a turn_failed reason with raw tooltip when opening a failed Worker and clears it once a new report arrives", async () => {
+    const user = userEvent.setup();
+    const raw = "error_during_execution: API Error: 529 Overloaded";
+    const ws = await boot(
+      withWorker({
+        conversations: [
+          makeConvSnapshot(
+            [makeWorkerLine({ id: 3, conversationId: 1, line: { event: "turn_failed", summary: raw } })],
+            { conversation: { id: 1, pmId: 1, title: "小林" } },
+          ),
+          makeConvSnapshot(
+            [makeMessage({ id: 10, conversationId: 30, sender: "pm", sessionId: null, status: "failed", failureReason: raw, text: "任务：修 X" })],
+            { conversation: makeWorkerConversation() },
+          ),
+        ],
+      }),
+    );
+
+    await user.click(within(log()).getByRole("button", { name: "修 X, Error, Claude 服务繁忙，稍后重试" }));
+    const region = screen.getByRole("region", { name: "Piece 修 X" });
+    const alert = within(region).getByRole("alert");
+    expect(alert).toHaveTextContent("Turn failed");
+    expect(alert).toHaveTextContent("Claude 服务繁忙，稍后重试");
+    expect(alert.querySelector("[title]")).toHaveAttribute("title", raw);
+    expect(within(region).getByRole("textbox")).toBeInTheDocument();
+
+    push(ws, messageChange(11, "message.created", makeWorkerLine({ id: 4, conversationId: 1, line: { event: "report", status: "done", summary: "重试后修好了" } })));
+    await waitFor(() => expect(within(region).queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("keeps the worktree failure reason visible from a slimmed snapshot workerLine when PM messages were truncated", async () => {
+    const reason = "git worktree add failed: no space left";
+    const workerLine = {
+      messageId: 9,
+      at: 20_000,
+      endedAt: 20_000,
+      line: {
+        workerId: 3,
+        workerConversationId: 30,
+        title: "修 X",
+        readonly: false,
+        event: "worktree_failed" as const,
+        status: null,
+        summary: reason,
+      },
+    };
+    await boot(
+      withWorker({
+        conversations: [
+          makeConvSnapshot([makeMessage({ id: 100, conversationId: 1, text: "后来的消息" })], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          {
+            ...makeConvSnapshot(
+              [makeMessage({ id: 10, conversationId: 30, sender: "pm", sessionId: null, status: "failed", failureReason: reason, text: "任务：修 X" })],
+              { conversation: makeWorkerConversation() },
+            ),
+            workerLine,
+          },
+        ],
+        sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 2, conversationId: 30, status: "ended" })],
+      }),
+    );
+    await showWorker();
+    const region = screen.getByRole("region", { name: "Piece 修 X" });
+    expect(within(region).getByRole("alert")).toHaveTextContent(`Couldn't create worktree ${reason}`);
+    expect(within(region).queryByText("Completed")).not.toBeInTheDocument();
+  });
+
   it("快照里没有的早收工 Worker：点开先单拉一次，拉到就显示它的对话", async () => {
     const full = withWorker();
     const worker = full.conversations.find((c) => c.conversation.id === 30)!;
@@ -1740,10 +1905,13 @@ describe("在 Worker 页面直接对它说话", () => {
     expect(within(aside).getByRole("button", { name: "Completed" })).toBeInTheDocument();
   });
 
-  it("建 worktree 失败（worktree_failed 那一行）：不显示输入框", async () => {
+  it("建 worktree 失败（worktree_failed 那一行）：不显示输入框，显示失败原因而非 Completed", async () => {
     const { ws, section } = await openWorker();
     push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 20, conversationId: 1, line: { event: "worktree_failed", summary: "目录被占用" } })));
     expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(section).getByRole("alert")).toHaveTextContent("Couldn't create worktree");
+    expect(within(section).getByRole("alert")).toHaveTextContent("目录被占用");
+    expect(within(section).queryByText("Completed")).not.toBeInTheDocument();
   });
 
   it("还在准备（任务说明还在排队，worktree 没建好）：输入框不可用；任务说明送达后能用", async () => {

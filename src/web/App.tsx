@@ -30,7 +30,7 @@ import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
 import type { ProfilePage } from "./route.ts";
-import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
+import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerOutcomesOf, workerPhaseOf } from "./selectors.ts";
 import { useShellTier } from "./shell-layout.ts";
 import { railComputerKeyOrFallback } from "./shell-actions.ts";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
@@ -164,6 +164,7 @@ function WorkerPane({
       phase={workerPhaseOf(state, workerId)}
       pm={{ name: c.workerPmEntry?.name ?? "Project manager", look: c.workerPmEntry?.look ?? c.look }}
       meta={c.railWorkers.find((w) => w.conversationId === workerId)}
+      outcomes={workerOutcomesOf(state, workerId)}
       view={c.workerView}
       loading={c.workerLoading}
       pending={pendingOf(state, workerId)}

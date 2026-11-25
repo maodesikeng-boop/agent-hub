@@ -73,6 +73,7 @@ export const MessageList = memo(function MessageList({
   status,
   statusAgent,
   streamingText,
+  footer,
 }: {
   messages: Message[];
   pending: PendingMessage[];
@@ -87,11 +88,12 @@ export const MessageList = memo(function MessageList({
   status?: React.ReactNode;
   statusAgent?: AgentIdentity;
   streamingText?: string | null;
+  footer?: React.ReactNode;
 }) {
   const items = useMemo(() => groupMessageRows(groupMessages(messages)), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null || Boolean(streamingText);
-  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}`;
+  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}:${footer != null}`;
 
   const { ref, contentRef, away, scrollToBottom, loadOlder, onScroll } = useStickToBottom({
     lastKey,
@@ -134,7 +136,7 @@ export const MessageList = memo(function MessageList({
   const lastItem = items.at(-1);
   const rideOnTurn = busy && pending.length === 0 && lastItem?.kind === "turn";
   const typing = busy && !rideOnTurn && statusAgent !== undefined;
-  const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore;
+  const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore && footer == null;
 
   const enterItemAt = (index: number): EnterItem => {
     if (index >= items.length) {
@@ -189,6 +191,7 @@ export const MessageList = memo(function MessageList({
               <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} streamingText={streamingText} actions={actions} />
             </div>
           )}
+          {footer}
         </div>
       </div>
       {away && (

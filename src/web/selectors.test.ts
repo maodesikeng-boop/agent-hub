@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupMessages, listConversations, previewText, visibleMessages } from "./selectors.ts";
+import { groupMessages, listConversations, previewText, visibleMessages, workerOutcomesOf } from "./selectors.ts";
 import { initialState, type HubState } from "./state.ts";
 import {
   makeAttachment,
@@ -137,5 +137,86 @@ describe("previewText：通知正文用的对话预览", () => {
     ]);
     expect(previewText(entry)).toBe("小林在");
     expect(entry.lastAt).toBe(1_000);
+  });
+});
+
+describe("workerOutcomesOf: PM-retained reports and failures", () => {
+  function stateWith(pmMessages: Message[], workerLine?: HubState["conversations"][number]["workerLine"]): HubState {
+    return {
+      ...initialState,
+      phase: "ready",
+      pms: [makePm({ id: 1, name: "小林" })],
+      conversations: {
+        1: { conversation: makeConversation({ id: 1, pmId: 1, title: "小林" }), messages: pmMessages, hasMore: false },
+        30: {
+          conversation: makeConversation({ id: 30, kind: "worker", pmId: 1, projectId: 1, title: "修 X" }),
+          messages: [],
+          hasMore: false,
+          ...(workerLine === undefined ? {} : { workerLine }),
+        },
+      },
+    };
+  }
+
+  it("collects reports and failures in order, unwraps PM report bodies, and ignores routine start and end lines", () => {
+    const reportBody = "=== 汇报 ===\n状态: 做完了\n摘要: 阈值挪进 VENDOR_SPECS\n=== 汇报结束 ===";
+    const graphWrapped = [
+      "【Worker #3 · 修 X 的汇报】",
+      "",
+      "【任务图 #2「换会话阈值」第 2/5 步「修 X」等你处理】Worker #3：汇报有问题",
+      "",
+      "卡在超时阈值",
+      "",
+      "回答或打回：hub worker send 3 --stdin；换人：hub worker start --node x。",
+    ].join("\n");
+    const state = stateWith([
+      makeWorkerLine({ id: 1, conversationId: 1, line: { event: "started" } }),
+      makeWorkerLine({
+        id: 2,
+        conversationId: 1,
+        line: { event: "report", status: "done", summary: "阈值挪进 VENDOR_SPECS" },
+        text: `【Worker #3 · 修 X 的汇报】\n\n${reportBody}`,
+      }),
+      makeWorkerLine({
+        id: 3,
+        conversationId: 1,
+        line: { event: "report", status: "problem", summary: "卡在超时阈值" },
+        text: graphWrapped,
+      }),
+      makeWorkerLine({
+        id: 4,
+        conversationId: 1,
+        line: { event: "report", status: "done", summary: "仅有摘要" },
+      }),
+      makeWorkerLine({
+        id: 5,
+        conversationId: 1,
+        line: { event: "worktree_failed", summary: "git worktree add failed: disk full" },
+        text: "【Worker #3 · 修 X 的汇报】\n\n建 worktree 失败，这个 Worker 没能开工",
+      }),
+      makeWorkerLine({ id: 6, conversationId: 1, line: { event: "ended" } }),
+    ]);
+
+    const outcomes = workerOutcomesOf(state, 30);
+    expect(outcomes.map((o) => [o.id, o.line.event, o.reportBody])).toEqual([
+      [2, "report", reportBody],
+      [3, "report", "卡在超时阈值"],
+      [4, "report", null],
+      [5, "worktree_failed", null],
+    ]);
+  });
+
+  it("falls back to the slimmed snapshot workerLine when PM messages no longer include that failure", () => {
+    const line = {
+      workerId: 3,
+      workerConversationId: 30,
+      title: "修 X",
+      readonly: false,
+      event: "worktree_failed" as const,
+      status: null,
+      summary: "git worktree add failed: disk full",
+    };
+    const state = stateWith([], { messageId: 9, at: 50_000, line, endedAt: 50_000 });
+    expect(workerOutcomesOf(state, 30)).toEqual([{ id: 9, at: 50_000, line, reportBody: null }]);
   });
 });
