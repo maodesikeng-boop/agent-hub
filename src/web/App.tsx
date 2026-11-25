@@ -9,11 +9,19 @@ import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
 import { ProfilePanel } from "./components/ProfilePanel.tsx";
 import { ProjectList } from "./components/ProjectList.tsx";
-import { PieceMeta, PiecesSlot, RailGroups } from "./components/RightRail.tsx";
+import { PieceMeta } from "./components/RightRail.tsx";
 import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
-import { SidePanel } from "./components/SidePanel.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
+import {
+  WorkPanel,
+  WorkPanelDetailHeader,
+  WorkPanelHeader,
+  WorkPanelTabsSheet,
+  WorkPanelToggle,
+  finishSignalOf,
+} from "./components/WorkPanel.tsx";
+import { WorkStatusIcon } from "./components/WorkStatusIcon.tsx";
 import { DeviceScope } from "./device-scope.tsx";
 import { LOCAL_DEVICE, isReadOnly, routeDeviceOf } from "./devices.ts";
 import { errorTitle } from "./format.ts";
@@ -21,7 +29,6 @@ import { AccentScope } from "./lib/accent-scope.tsx";
 import { SHELL_CHAT_MIN_REM, SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
 import { mobileBack } from "./mobile/back.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
-import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
 import { TabBar, mobileTabOf, type MobileTab } from "./mobile/TabBar.tsx";
 import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
 import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
@@ -29,23 +36,30 @@ import { usePaneWidths } from "./pane-widths.ts";
 import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
-import type { ProfilePage } from "./route.ts";
+import type { InfoPage } from "./info-rows.ts";
 import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerOutcomesOf, workerPhaseOf } from "./selectors.ts";
 import { useShellTier } from "./shell-layout.ts";
 import { railComputerKeyOrFallback } from "./shell-actions.ts";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
-import { panelExitsOf, sidePanelOf, type SidePanelContent } from "./side-panel.ts";
+import { workPanelExitsOf, workPanelOf, type WorkPanelContent } from "./side-panel.ts";
 import { Button } from "./ui/button.tsx";
 import { ArrowLeft, Loader2 } from "./ui/icons.ts";
 import { Pane, PaneGroup, PaneHandle } from "./ui/resizable.tsx";
 import { useUpdateReminder } from "./update-model.ts";
 import { useAutoHideScrollbars } from "./useAutoHideScrollbars.ts";
+import { useCompletedWork } from "./useCompletedWork.ts";
 import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
+import { activeWorkOf, type WorkPanelTab } from "./work-panel-model.ts";
+import { workerWorkStatusOf } from "./work-status.ts";
 
 const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
 const SIGN_IN_ON_PHONE = "On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer";
 
-const PROFILE_PAGE_TITLES: Readonly<Record<ProfilePage, string>> = {
+const PROFILE_PAGE_TITLES: Readonly<Record<InfoPage, string>> = {
+  model: "Model",
+  mode: "Mode",
+  folders: "Folders",
+  schedules: "Schedules",
   capabilities: "Capabilities",
   persona: "Persona",
   memory: "Memory files",
@@ -186,21 +200,6 @@ function WorkerPane({
   );
 }
 
-function railProps(c: ShellContent) {
-  return {
-    asks: c.railAsks,
-    workers: c.railWorkers,
-    activeGraphs: c.railGraphs,
-    projectId: c.railProjectId,
-    openWorkerId: c.openWorker,
-    look: c.look,
-    onOpenAsk: c.openAsk,
-    onOpenWorker: c.openWorkerConversation,
-    onLoadMoreWorkers: c.railLoadMoreWorkers,
-    onNeedWorkers: c.ensureWorkers,
-  };
-}
-
 function renderProfilePanel(
   model: ShellModel,
   c: ShellContent,
@@ -231,7 +230,7 @@ function renderProfilePanel(
   );
 }
 
-function DesktopSidePanel({
+function DesktopWorkPanel({
   model,
   content: c,
   panelContent,
@@ -240,86 +239,165 @@ function DesktopSidePanel({
 }: {
   model: ShellModel;
   content: ShellContent;
-  panelContent: SidePanelContent;
+  panelContent: WorkPanelContent;
   layout: "side" | "stack";
   notices: React.ReactNode;
 }) {
-  const { navigate, current } = model;
+  const { navigate, current, route } = model;
+  const pmId = c.active?.pm?.id ?? c.profile?.id ?? null;
+  const activeWork = useMemo(() => activeWorkOf(c.railGraphs, c.railWorkers), [c.railGraphs, c.railWorkers]);
+  const finishSignal = useMemo(() => finishSignalOf(c.railGraphs, c.railWorkers), [c.railGraphs, c.railWorkers]);
+  const infoSummaryCompleted = useCompletedWork(pmId, panelContent.kind === "info" && panelContent.page === null, finishSignal);
+
   const convRoute = useMemo(
     () => (c.active ? { view: "conversation" as const, id: c.active.id, ...routeDeviceOf(current.key) } : null),
     [c.active, current.key],
   );
   const exits = useMemo(
-    () => (convRoute ? panelExitsOf(panelContent, convRoute) : { close: { view: "conversation" as const, id: 1 }, back: null, backOpensPieces: false }),
+    () => (convRoute ? workPanelExitsOf(panelContent, convRoute) : { close: { view: "conversation" as const, id: 1 }, back: null }),
     [panelContent, convRoute],
   );
 
-  if (panelContent.kind === "pieces") {
+  const closePanel = useCallback(() => {
+    c.toggleRail(false);
+    if (route?.view !== "conversation") {
+      if (convRoute) navigate(exits.close);
+      else c.routerSummary.onSelect();
+    }
+  }, [c, route?.view, convRoute, navigate, exits.close]);
+
+  const selectTab = useCallback(
+    (next: WorkPanelTab) => {
+      if (next === "info") {
+        if (pmId !== null) c.openProfile(pmId);
+        return;
+      }
+      c.setWorkTab(next);
+      c.toggleRail(true);
+      if (route?.view !== "conversation" && convRoute !== null) navigate(convRoute);
+    },
+    [c, pmId, route?.view, convRoute, navigate],
+  );
+
+  if (panelContent.kind === "tab") {
     return (
-      <SidePanel
+      <WorkPanelTabsSheet
         layout={layout}
-        label="Pieces"
-        title={<span className="truncate px-1 text-title font-semibold text-foreground">Pieces</span>}
-        onClose={() => c.toggleRail()}
-        closeLabel="Close Pieces"
-      >
-        <RailGroups {...railProps(c)} onShowHistory={c.keepRailOpen} className="pb-3" />
-      </SidePanel>
+        tab={panelContent.tab}
+        pmId={pmId}
+        graphs={c.railGraphs}
+        workers={c.railWorkers}
+        asks={c.railAsks}
+        look={c.look}
+        onSelectTab={selectTab}
+        onClose={closePanel}
+        onOpenWorker={c.openWorkerConversation}
+        onOpenAsk={c.openAsk}
+        onNeedWorkers={c.ensureWorkers}
+      />
     );
   }
 
   if (panelContent.kind === "worker") {
     const meta = c.railWorkers.find((w) => w.conversationId === panelContent.workerId);
-    const title = c.workerLine?.title ?? c.workerView?.conversation.title ?? "Piece";
+    const title = c.workerLine?.title ?? c.workerView?.conversation.title ?? "Worker";
     const readonly = c.workerLine?.readonly ?? false;
+    const status = meta !== undefined ? workerWorkStatusOf(meta) : "running";
     return (
-      <SidePanel
+      <WorkPanel
         layout={layout}
         label={title}
-        title={
-          <div className="flex min-w-0 items-center gap-2">
-            <span title={title} className="min-w-0 truncate text-body font-semibold text-foreground">
-              {title}
-            </span>
-            {readonly && <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Read-only</span>}
-            {meta && <PieceMeta worker={meta} />}
-          </div>
+        header={
+          <WorkPanelDetailHeader
+            title={
+              <div className="flex min-w-0 items-center gap-2">
+                <WorkStatusIcon status={status} />
+                <span title={title} className="min-w-0 truncate text-minor font-semibold text-foreground">
+                  {title}
+                </span>
+                {readonly && <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Read-only</span>}
+                {meta && <PieceMeta worker={meta} />}
+              </div>
+            }
+            backLabel={c.workerPmEntry ? `Back to ${c.workerPmEntry.name}` : "Back"}
+            onBack={() => {
+              c.toggleRail(true);
+              if (exits.back) navigate(exits.back);
+            }}
+            onClose={closePanel}
+          />
         }
-        onBack={() => {
-          if (exits.backOpensPieces) c.toggleRail(true);
-          if (exits.back) navigate(exits.back);
-        }}
-        backLabel={c.workerPmEntry ? `Back to ${c.workerPmEntry.name}` : "Back"}
-        onClose={() => {
-          if (convRoute) navigate(exits.close);
-          else c.routerSummary.onSelect();
-        }}
-        closeLabel="Close Piece"
       >
         <WorkerPane model={model} content={c} mobile={false} notices={notices} workerId={panelContent.workerId} />
-      </SidePanel>
+      </WorkPanel>
     );
   }
 
   const profile = c.profile;
   if (!profile) return null;
-  const headerTitle = panelContent.page !== null ? PROFILE_PAGE_TITLES[panelContent.page] : "Settings";
+  const header =
+    panelContent.page !== null ? (
+      <WorkPanelDetailHeader
+        title={<span className="truncate px-1 text-title font-semibold text-foreground">{PROFILE_PAGE_TITLES[panelContent.page]}</span>}
+        backLabel="Back to Info"
+        onBack={() => {
+          if (exits.back) navigate(exits.back);
+        }}
+        onClose={closePanel}
+      />
+    ) : (
+      <WorkPanelHeader
+        tab="info"
+        activeCount={activeWork.count}
+        completedCount={infoSummaryCompleted.total}
+        onSelectTab={selectTab}
+        onClose={closePanel}
+      />
+    );
   return (
-    <SidePanel
-      layout={layout}
-      label={`${profile.name}'s settings`}
-      title={<span className="truncate px-1 text-title font-semibold text-foreground">{headerTitle}</span>}
-      {...(exits.back !== null ? { onBack: () => navigate(exits.back!), backLabel: "Back to settings summary" } : {})}
-      onClose={() => {
-        if (convRoute) navigate(exits.close);
-        else c.routerSummary.onSelect();
-      }}
-      closeLabel="Close settings"
-    >
-      {renderProfilePanel(model, c, "panel", profile, () => {
-        if (convRoute) navigate(exits.close);
-      })}
-    </SidePanel>
+    <WorkPanel layout={layout} label={`${profile.name}'s settings`} header={header}>
+      {renderProfilePanel(model, c, "panel", profile, closePanel)}
+    </WorkPanel>
+  );
+}
+
+function MobileWorkPanel({ content: c, onClose }: { content: ShellContent; onClose: () => void }) {
+  const pmId = c.active?.pm?.id ?? null;
+  const { openProfile, setWorkTab, openAsk } = c;
+  const selectTab = useCallback(
+    (next: WorkPanelTab) => {
+      if (next === "info") {
+        if (pmId !== null) openProfile(pmId);
+        return;
+      }
+      setWorkTab(next);
+    },
+    [openProfile, setWorkTab, pmId],
+  );
+  const openAskAndClose = useCallback(
+    (id: number) => {
+      onClose();
+      openAsk(id);
+    },
+    [openAsk, onClose],
+  );
+  return (
+    <WorkPanelTabsSheet
+      layout="page"
+      tab={c.workTab}
+      pmId={pmId}
+      graphs={c.railGraphs}
+      workers={c.railWorkers}
+      asks={c.railAsks}
+      look={c.look}
+      onSelectTab={selectTab}
+      onClose={onClose}
+      onBack={onClose}
+      backLabel="Back to conversation"
+      onOpenWorker={c.openWorkerConversation}
+      onOpenAsk={openAskAndClose}
+      onNeedWorkers={c.ensureWorkers}
+    />
   );
 }
 
@@ -399,8 +477,8 @@ function DesktopWorkbench({
   const { widths, commit, reset } = usePaneWidths((s) => s);
   const { fleet, state, current, route } = model;
 
-  const panelRaw = c.routerActive ? null : sidePanelOf({ route, piecesOpen: c.railOpen, piecesHasContent: c.railHasContent });
-  const panelContent = panelRaw !== null && panelRaw.kind === "profile" && c.profile === null ? null : panelRaw;
+  const panelRaw = c.routerActive ? null : workPanelOf({ route, open: c.railOpen, tab: c.workTab });
+  const panelContent = panelRaw !== null && panelRaw.kind === "info" && c.profile === null ? null : panelRaw;
   const panelVisible = panelContent !== null && !c.routerActive && state.phase === "ready";
   const tier = useShellTier(shellEl, panelVisible);
   const stackPanel = tier === "stack" && panelVisible;
@@ -417,28 +495,22 @@ function DesktopWorkbench({
   const tintColor = c.routerActive ? null : (c.active?.look.color ?? null);
 
   const routeView = route?.view;
-  const togglePieces = useCallback(() => {
+  const toggleWorkPanel = useCallback(() => {
     if (activeId === null) return;
-    if (routeView === "worker" || routeView === "profile") {
-      toggleRail(true);
+    if (panelVisible && (routeView === "worker" || routeView === "profile")) {
+      toggleRail(false);
       select({ device: current.key, id: activeId });
     } else {
       toggleRail();
     }
-  }, [activeId, routeView, toggleRail, select, current.key]);
+  }, [activeId, panelVisible, routeView, toggleRail, select, current.key]);
 
-  const piecesOpen = panelContent?.kind === "pieces";
   const toolbar = useMemo(
-    () => (
-      <PiecesSlot
-        visible={c.railHasContent}
-        open={piecesOpen}
-        attention={c.railAttention}
-        look={c.look}
-        onToggle={togglePieces}
-      />
-    ),
-    [c.railHasContent, piecesOpen, c.railAttention, c.look, togglePieces],
+    () =>
+      c.active === null ? null : (
+        <WorkPanelToggle open={panelVisible} attention={c.railAttention} look={c.look} onToggle={toggleWorkPanel} />
+      ),
+    [c.active, panelVisible, c.railAttention, c.look, toggleWorkPanel],
   );
 
   const listNode = (layout: "column" | "strip") => (
@@ -555,7 +627,7 @@ function DesktopWorkbench({
                         })}
                   >
                     <AccentScope color={tintColor}>
-                      <DesktopSidePanel
+                      <DesktopWorkPanel
                         model={model}
                         content={c}
                         panelContent={panelContent}
@@ -605,7 +677,7 @@ function MobileWorkbench({
   const { fleet, state, current, route, replace, navigate } = model;
   useEffect(() => {
     setDrawerOpen(false);
-  }, [route, current.key, c.railHasContent, setDrawerOpen]);
+  }, [route, current.key, setDrawerOpen]);
   const updateWaiting = useUpdateReminder() !== null;
   const resources = useResourcesAttention();
   const settingsAttention = updateWaiting || resources.attention;
@@ -641,18 +713,14 @@ function MobileWorkbench({
     ),
     [back],
   );
-  const toggleMobileDrawer = useCallback(() => setDrawerOpen((open) => !open), [setDrawerOpen]);
+  const toggleMobilePanel = useCallback(() => setDrawerOpen((open) => !open), [setDrawerOpen]);
+  const closeMobilePanel = useCallback(() => setDrawerOpen(false), [setDrawerOpen]);
   const mobileToolbar = useMemo(
-    () => (
-      <PiecesSlot
-        visible={c.railHasContent}
-        open={drawerOpen}
-        attention={c.railAttention}
-        look={c.look}
-        onToggle={toggleMobileDrawer}
-      />
-    ),
-    [c.railHasContent, drawerOpen, c.railAttention, c.look, toggleMobileDrawer],
+    () =>
+      c.active === null ? null : (
+        <WorkPanelToggle open={drawerOpen} attention={c.railAttention} look={c.look} onToggle={toggleMobilePanel} />
+      ),
+    [c.active, drawerOpen, c.railAttention, c.look, toggleMobilePanel],
   );
 
   const selectMobileTab = (tab: MobileTab) => {
@@ -730,22 +798,21 @@ function MobileWorkbench({
         <WorkerPane model={model} content={c} mobile leading={leading} toolbar={null} notices={notices} workerId={c.openWorker} />
       </main>
     );
+  } else if (drawerOpen) {
+    body = <MobileWorkPanel content={c} onClose={closeMobilePanel} />;
   } else {
     body = (
-      <>
-        <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-          <ConversationPane
-            model={model}
-            content={c}
-            mobile
-            leading={leading}
-            toolbar={mobileToolbar}
-            notices={notices}
-            onManageCurrentProviders={onManageCurrentProviders}
-          />
-        </main>
-        <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} {...railProps(c)} />
-      </>
+      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        <ConversationPane
+          model={model}
+          content={c}
+          mobile
+          leading={leading}
+          toolbar={mobileToolbar}
+          notices={notices}
+          onManageCurrentProviders={onManageCurrentProviders}
+        />
+      </main>
     );
   }
 

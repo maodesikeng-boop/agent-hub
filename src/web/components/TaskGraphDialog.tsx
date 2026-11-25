@@ -149,9 +149,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
 
   const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
   const inFlightRef = useRef(false);
-  const releaseLock = () => {
-    inFlightRef.current = false;
-  };
+  const releaseLock = () => { inFlightRef.current = false; };
 
   const nodeByKey = useMemo(() => {
     const map = new Map<string, TaskNode>();
@@ -224,6 +222,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       },
       onMutate: () => setActionError(null),
       onSuccess: () => {
+        void qc.invalidateQueries({ queryKey: ["project-task-graphs"] });
+        void qc.invalidateQueries({ queryKey: ["completed-work"] });
         setConfirmingCancel(false);
         onOpenChange(false);
       },

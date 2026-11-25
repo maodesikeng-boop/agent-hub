@@ -14,7 +14,6 @@ import * as RightRailMod from "./components/RightRail.tsx";
 import { RailGroups } from "./components/RightRail.tsx";
 import { TaskProgressIcon } from "./components/TaskProgressIcon.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
-import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
 import { taskProgressPaths } from "./task-progress.ts";
 import { resetQueryClient } from "./query-client.ts";
 import { activeGraphsOf, pendingAsks, pendingDecisionsOf, unboundWorkersOf, workersOf, type WorkerEntry } from "./selectors.ts";
@@ -607,36 +606,6 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
   beforeAll(() => {
     Element.prototype.setPointerCapture ??= () => {};
     Element.prototype.releasePointerCapture ??= () => {};
-  });
-
-  it("PiecesDrawer 透传新可选 props 时正常渲染果皮轨并在点击 Piece 时自动收起抽屉", async () => {
-    const user = userEvent.setup();
-    const onOpenChange = vi.fn();
-    const onOpenWorker = vi.fn();
-    const graph = makeGraph({
-      id: 70,
-      title: "移动端抽屉任务",
-      nodes: [makeNode({ key: "m1", title: "抽屉步骤", status: "running", activeWorkerId: 15, workerIds: [15] })],
-    });
-
-    render(
-      <PiecesDrawer
-        open
-        onOpenChange={onOpenChange}
-        asks={[]}
-        workers={[makeWorker(35, { workerId: 15 })]}
-        activeGraphs={[graph]}
-        openWorkerId={null}
-        look={defaultLookOf(0)}
-        onOpenAsk={() => {}}
-        onOpenWorker={onOpenWorker}
-      />,
-    );
-
-    expect(await screen.findByText("移动端抽屉任务")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /抽屉步骤/ }));
-    expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(onOpenWorker).toHaveBeenCalledWith(35);
   });
 
   it("流式打字爆炸半径守卫：挂载 activeGraphs 后连续 8 帧 streamingText 更新，RightRail 重渲染次数严格为 0", () => {

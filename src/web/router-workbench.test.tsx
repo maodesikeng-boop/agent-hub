@@ -306,7 +306,7 @@ describe("Router 第 2 波：路由与默认落地页", () => {
 
     // 什么都没有：没有气泡、没有右栏；没有待拍板项时托盘整块不渲染，不留标题
     expect(container.querySelector("[class*='bubble-']")).toBeNull();
-    expect(screen.queryByRole("complementary", { name: "Pieces" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Work panel" })).toBeNull();
     expect(screen.queryByText("Needs You")).toBeNull();
     expect(screen.queryByRole("region", { name: "Needs You" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Load earlier" })).toBeNull();

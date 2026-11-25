@@ -40,14 +40,15 @@ it("无效路由 replace 到列表", async () => {
   await waitFor(() => expect(location.hash).toBe(""));
 });
 
-it("抽屉点 Piece 先关闭再进整屏页面", async () => {
+it("手机工作面板点 Worker 先关闭再进整屏页面", async () => {
   history.replaceState(null, "", "/#/c/1");
   boot();
-  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
-  const drawer = await screen.findByRole("dialog");
-  fireEvent.click(within(drawer).getByRole("button", { name: "修 X" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show work panel/ }));
+  const panel = await screen.findByRole("complementary", { name: "Work panel" });
+  expect(panel).toHaveAttribute("data-layout", "page");
+  fireEvent.click(within(panel).getByRole("button", { name: /修 X/ }));
   await waitFor(() => expect(location.hash).toBe("#/w/30"));
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("complementary", { name: "Work panel" })).toBeNull();
   expect(screen.getByRole("heading", { name: "修 X" })).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Message" })).not.toHaveFocus();
 });
@@ -77,37 +78,35 @@ it("新建 HTTP 先于 WS 时保留新对话，WS 到达后显示它", async () 
   expect(await screen.findByRole("heading", { name: /^新经理$/ })).toBeInTheDocument();
 });
 
-it("打开抽屉后浏览器回列表，再进聊天不重开抽屉", async () => {
+it("打开手机工作面板后浏览器回列表，再进聊天不重开面板", async () => {
   history.replaceState(null, "", "/#/c/1");
   boot();
-  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
-  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: /Show work panel/ }));
+  expect(await screen.findByRole("complementary", { name: "Work panel" })).toBeInTheDocument();
   act(() => { history.replaceState(null, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
   fireEvent.click(within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ }));
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("complementary", { name: "Work panel" })).toBeNull();
 });
 
-it("同 PM 切 Piece 替换当前层，抽屉提问返回 PM，浏览器后退到列表", async () => {
+it("同 PM 切 Worker 替换当前层，面板返回 PM，浏览器后退到列表", async () => {
   Element.prototype.scrollIntoView = vi.fn();
   boot();
   fireEvent.click(within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
-  fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "修 X" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show work panel/ }));
+  fireEvent.click(within(await screen.findByRole("complementary", { name: "Work panel" })).getByRole("button", { name: /修 X/ }));
   const length = history.length;
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() => expect(location.hash).toBe("#/c/1"));
-  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
-  fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "修 Y" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Show work panel/ }));
+  fireEvent.click(within(await screen.findByRole("complementary", { name: "Work panel" })).getByRole("button", { name: /修 Y/ }));
   expect(location.hash).toBe("#/w/31");
   expect(history.length).toBeGreaterThanOrEqual(length);
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() => expect(location.hash).toBe("#/c/1"));
-  fireEvent.click(screen.getByRole("button", { name: /Show Pieces/ }));
-  fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "修 X" }));
-  fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
-  fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: /确认发布/ }));
-  await waitFor(() => expect(location.hash).toBe("#/c/1"));
+  fireEvent.click(screen.getByRole("button", { name: /Show work panel/ }));
+  fireEvent.click(within(await screen.findByRole("complementary", { name: "Work panel" })).getByRole("button", { name: "Back to conversation" }));
+  expect(screen.queryByRole("complementary", { name: "Work panel" })).toBeNull();
+  expect(location.hash).toBe("#/c/1");
   act(() => history.back());
   await waitFor(() => expect(location.hash).toBe(""));
 });
@@ -124,14 +123,16 @@ it("手机断点切换保留当前会话与输入框草稿", async () => {
   expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("跨断点草稿");
 });
 
-it("跨 PM 跳转关闭抽屉，无 Piece 聊天不出现空抽屉，返回列表不循环", async () => {
+it("跨 PM 跳转关闭手机工作面板，空 PM 仍可打开面板看到空态，返回列表不循环", async () => {
   boot();
   fireEvent.click(within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /小林/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Show Pieces/ }));
-  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: /Show work panel/ }));
+  expect(await screen.findByRole("complementary", { name: "Work panel" })).toBeInTheDocument();
   act(() => { history.replaceState(history.state, "", "/#/c/2"); dispatchEvent(new PopStateEvent("popstate")); });
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.queryByRole("button", { name: /Show Pieces/ })).toBeNull();
+  expect(screen.queryByRole("complementary", { name: "Work panel" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show work panel" }));
+  expect(within(await screen.findByRole("complementary", { name: "Work panel" })).getByText("Nothing running")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }));
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() => expect(location.hash).toBe(""));
 });

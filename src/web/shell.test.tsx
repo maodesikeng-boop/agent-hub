@@ -481,7 +481,7 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
     const listScroller = nav().closest(".page-fade") as HTMLElement;
     expect(listScroller).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
 
-    const rightRail = screen.getByRole("complementary", { name: "Pieces" });
+    const rightRail = screen.getByRole("complementary", { name: "Work panel" });
     const rightRailScroller = rightRail.querySelector(".overflow-y-auto") as HTMLElement;
     expect(rightRailScroller).toHaveClass("overflow-x-hidden", "overscroll-y-contain");
 

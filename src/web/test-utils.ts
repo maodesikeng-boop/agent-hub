@@ -27,6 +27,7 @@ import type {
   CapabilityScope,
   ScheduleRecord,
   Change,
+  CompletedWorkPage,
   Conversation,
   ConversationSnapshot,
   CreatePmRequest,
@@ -411,6 +412,11 @@ export class FakeApi {
   endedWorkers: (pmId: number, before: number | null) => Reply | Promise<Reply> = () => ({
     status: 200,
     body: { conversations: [], sessions: [], nextBefore: null } satisfies EndedWorkersPage,
+  });
+  /** GET /api/pms/:id/completed. Defaults to an empty page. */
+  completedWork: (pmId: number, query: URLSearchParams) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { items: [], total: 0, next: null } satisfies CompletedWorkPage,
   });
   createPm: (body: CreatePmRequest) => Reply | Promise<Reply> = () => ({
     status: 201,
@@ -1049,6 +1055,10 @@ export class FakeApi {
     if (method === "GET" && ended) {
       const before = url.searchParams.get("before");
       return jsonResponse(await this.endedWorkers(Number(ended[1]), before === null ? null : Number(before)));
+    }
+    const completed = /^\/api\/pms\/(\d+)\/completed$/.exec(url.pathname);
+    if (method === "GET" && completed) {
+      return jsonResponse(await this.completedWork(Number(completed[1]), url.searchParams));
     }
     const m = /^\/api\/conversations\/(\d+)\/(messages|stop|rewind)$/.exec(url.pathname);
     if (m) {
