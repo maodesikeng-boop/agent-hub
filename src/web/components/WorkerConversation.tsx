@@ -95,7 +95,7 @@ export const WorkerConversation = memo(function WorkerConversation({
   const handleSend = useCallback((text: string, files: File[]) => (id === undefined ? undefined : onSend(id, text, files)), [onSend, id]);
   const statusNode = useAgentStatusNode(session);
   return (
-    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
+    <FileDropZone className="chat-text flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
       {mobile && (
         <header data-window-drag className="flex min-h-14 min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b border-border pt-[var(--safe-top)] pr-3 pl-3">
           {leading}

@@ -258,6 +258,10 @@ code {
   padding-top: var(--safe-top);
   padding-bottom: var(--safe-bottom);
 }
+/* A desktop conversation reads at the size of a Worker thread; the phone keeps the 15px body. */
+[data-shell="desktop"] .chat-text {
+  --text-body: var(--text-minor);
+}
 .messages {
   overflow-x: hidden;
   overscroll-behavior-y: contain;

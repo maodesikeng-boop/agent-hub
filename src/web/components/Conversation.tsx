@@ -135,7 +135,7 @@ export const Conversation = memo(function Conversation({
   const statusNode = useAgentStatusNode(session);
   const avatarSize = mobile ? 34 : 24;
   return (
-    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
+    <FileDropZone className="chat-text flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
       <header
         data-window-drag
         className={

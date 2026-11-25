@@ -804,7 +804,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
   return (
     <FleetDeviceScopes lookup={deviceScopeLookup}>
       <FleetLooks lookOf={view.lookOf}>
-      <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
+      <FileDropZone className="chat-text flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
         <header
           data-window-drag
           className="flex h-11 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-border pr-3 pl-4"

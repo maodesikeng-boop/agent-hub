@@ -259,6 +259,21 @@ describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", (
     expect(value(column, "padding-right")).toBeUndefined();
   });
 
+  it("chat text (section 3): the desktop conversations of a PM, the Router, and a Worker set their body one step down; Settings and Pieces keep 15px", async () => {
+    expect(value(body('\\[data-shell="desktop"\\] \\.chat-text'), "--text-body")).toBe("var(--text-minor)");
+    const user = userEvent.setup();
+    await boot();
+    expect(screen.getByRole("region", { name: "小林" })).toHaveClass("chat-text");
+    window.location.hash = "#/w/30";
+    expect(await screen.findByRole("region", { name: "Piece 修 X" })).toHaveClass("chat-text");
+    expect(screen.getByRole("complementary", { name: "修 X" }).querySelectorAll(".chat-text")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect((await screen.findByRole("dialog", { name: "Settings" })).closest(".chat-text")).toBeNull();
+    await user.keyboard("{Escape}");
+    window.location.hash = "#/router";
+    expect((await screen.findByRole("log", { name: "Router timeline" })).closest(".chat-text")).not.toBeNull();
+  });
+
   it("主区套 chat-main；顶栏不跟着列居中：标题在左上、按钮在右上，边距是顶栏自己的 gutter；底部输入框外层向上叠盖 26px 避免顶部圆角外侧水平硬切", async () => {
     await boot();
     const main = screen.getByRole("main");

@@ -115,8 +115,10 @@ All panes and dialogs share **four UI type sizes** defined in `src/web/styles.cs
 | --- | --- | --- | --- |
 | Micro metadata | `text-xs` | `12` | Timestamps, counts (`tabular-nums`), `Recommended`, rail labels (`500`), badge numerals |
 | Secondary text, buttons, and every section heading | `text-minor` | `13.5` | Button labels (`500`), segmented controls, all section and group headings (`500` muted: `Pinned`, `Project managers`, `Archived`, `Needs You`, `Task Graph`, `Pieces`, `Completed`, settings groups), row descriptions (`leading-snug`), sidebar previews, event strips, `Show more`, inline errors (`text-danger`) |
-| Body copy and row titles | `text-body` | `15` | Message prose, row titles, `ProjectList` PM names (`400`), inputs, selects, ask card questions (`500`), option text (`400`), side-panel row titles |
+| Body copy and row titles | `text-body` | `15` (`13.5` in a desktop conversation) | Message prose, row titles, `ProjectList` PM names (`400`), inputs, selects, ask card questions (`500`), option text (`400`), side-panel row titles |
 | Pane and dialog titles | `text-title` | `16` | Conversation header name, side panel header, dialog titles (`600`), one step above body text |
+
+**Chat text.** On the desktop, a conversation reads at the size of a Worker thread: `.chat-text` on a PM's conversation, the Router page, and a Worker thread in the side panel points `--text-body` at `--text-minor`, so their messages, Markdown, cards, and composer text set at `13.5px`. Their line heights are unitless and Markdown spacing is in `em`, so both follow the smaller text; paddings and row heights keep their `rem` values. Settings, Pieces, profile pages, dialogs, and the phone keep the `15px` body.
 
 The sole exception is the profile header name (`text-display`, `22px`, `600`, `tracking-tight`). Never use `13px` or `14px`. Markdown headings and code blocks follow section 15.
 
@@ -267,9 +269,9 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 
 ## 15. Markdown, code blocks, and charts
 
-`src/web/components/Markdown.tsx` and `.markdown` (`15px`, `1.65` line height, `remark-gfm`, `remark-breaks`, `remark-cjk-friendly`, `remark-cjk-friendly-gfm-strikethrough`):
+`src/web/components/Markdown.tsx` and `.markdown` (the surrounding body size, `15px` or `13.5px` in a desktop conversation, `1.65` line height, `remark-gfm`, `remark-breaks`, `remark-cjk-friendly`, `remark-cjk-friendly-gfm-strikethrough`):
 
-- **Headings, code, links, and tables**: Headings use weight `600` (`20px` `h1`, `17px` `h2`, `15px` `h3`, `15px` `500` muted `h4` to `h6`). Inline code uses `--muted` fill with `box-decoration-break: clone`. Links use `#2563eb` (`--link`, >= 4.5:1 on white). Inline code is a flat `--muted` fill with the small radius and no outline. Fenced code blocks (`rounded-sm border border-border`, `--panel` / `--muted`, `13.5px` mono) highlight lazily with Shiki (`github-light`, `120ms` streaming debounce) and provide a raw-copy icon button. Tables scroll horizontally inside a wrapper when needed, follow Markdown column alignment (left by default), and apply `tabular-nums`.
+- **Headings, code, links, and tables**: Headings use weight `600` and scale from the body (`1.333em` `h1`, `1.133em` `h2`, `1em` `h3`, `1em` `500` muted `h4` to `h6`: `20`, `17`, and `15px` on the `15px` body). Inline code uses `--muted` fill with `box-decoration-break: clone`. Links use `#2563eb` (`--link`, >= 4.5:1 on white). Inline code is a flat `--muted` fill with the small radius and no outline. Fenced code blocks (`rounded-sm border border-border`, `--panel` / `--muted`, `13.5px` mono) highlight lazily with Shiki (`github-light`, `120ms` streaming debounce) and provide a raw-copy icon button. Tables scroll horizontally inside a wrapper when needed, follow Markdown column alignment (left by default), and apply `tabular-nums`.
 - **Inline media and file links**: Saved `![]()` images reserve a fixed `240px` height (`h-60 max-w-xs rounded-sm border border-border object-contain`) so streams never jump on load, switching to an expired-file card on HTTP 404. Local `[label](path)` links render inline as `[data-file-link]` opening `FilePreview` (or plain text if unsaved).
 - **Charts (`mermaid` and `vega-lite` in `src/web/charts/`)**: Render after the fence closes inside a `.md-code` shell (`160px` min loading height, `480px` max inline height, scaling down no further than `12px` `CHART_MIN_INLINE_FONT_PX` before scrolling horizontally, sanitized with `dompurify`), with toolbar toggles for source, `Zoom` (`ZOOM_DIALOG` up to `2.5x`), and copy, styled from CSS variables and `CHART_CATEGORY_COLORS`.
 
