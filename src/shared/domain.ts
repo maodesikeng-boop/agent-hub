@@ -9,7 +9,7 @@ import {
 } from "./limits.ts";
 import { deliverablesOf, type Deliverable } from "./deliverables.ts";
 import type { ReviewTarget, StoredReviewVerdict } from "./review.ts";
-import type { SandboxApprovalRef } from "./sandbox-approval.ts";
+import type { SandboxApprovalId, SandboxApprovalRef } from "./sandbox-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
@@ -726,7 +726,7 @@ export function taskNodeStateFromLegacy(status: string): TaskNodeState {
 }
 
 export function taskNodeStatusText(
-  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker">,
+  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker" | "sandboxApproval">,
   viewer: "pm" | "user",
 ): string {
   switch (node.status) {
@@ -735,6 +735,7 @@ export function taskNodeStatusText(
     case "running":
       return "在干";
     case "waiting":
+      if (node.sandboxApproval != null) return viewer === "user" ? "等你确认 Worker 沙箱" : "等用户确认 Worker 沙箱";
       if (isTaskNodeUserBlocked(node)) return viewer === "user" ? "等你动手" : "等用户动手";
       if (node.waitingFor === "user") return viewer === "user" ? "等你拍板" : "等用户拍板";
       return viewer === "user" ? "等项目经理" : "等你处理";
@@ -751,8 +752,8 @@ export function isTaskNodeUserBlocked(node: Pick<TaskNode, "status" | "waitingFo
   return isTaskNodeWaitingUser(node) && node.userBlocker != null;
 }
 
-export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker">): boolean {
-  return isTaskNodeWaitingUser(node) && node.userBlocker == null;
+export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker" | "sandboxApproval">): boolean {
+  return isTaskNodeWaitingUser(node) && node.userBlocker == null && node.sandboxApproval == null;
 }
 
 export function isTaskNodeWaitingPm(node: Pick<TaskNode, "status" | "waitingFor">): boolean {
@@ -808,6 +809,7 @@ export interface TaskNode {
   gateAskMessageId: MessageId | null;
   gateCheckpoint?: boolean;
   userBlocker?: UserBlocker | null;
+  sandboxApproval?: { id: SandboxApprovalId; text: string };
   decision: TaskDecision | null;
   createdAt: number;
   updatedAt: number;

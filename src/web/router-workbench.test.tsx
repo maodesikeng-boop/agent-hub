@@ -5,6 +5,7 @@ import { createElement } from "react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { SANDBOX_APPROVAL } from "../../test/sandbox-approval-fixture.ts";
 import {
   DEFAULT_AGENT_VENDOR,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
@@ -15,6 +16,7 @@ import {
   effortLabel,
   effortsFor,
   emptyRouterSlice,
+  formatSandboxApprovalCardText,
   modelShortLabel,
   type DeviceInfo,
   type ModelCatalog,
@@ -415,6 +417,34 @@ describe("最左栏嫩芽铃入口与项目列表去重", () => {
 });
 
 describe("Needs You 托盘", () => {
+  it("shows one sandbox approval for a waiting graph step and no generic decision", async () => {
+    const approval = {
+      ...SANDBOX_APPROVAL, conversationId: 1, status: "pending", decidedBy: null, decisionClientId: null, decidedAt: null,
+    } as const;
+    const graph: TaskGraph = {
+      id: 7, projectId: 10, pmId: 1, conversationId: 1, title: "Desktop check", status: "active",
+      originMsgId: null, edges: [], createdAt: 1, updatedAt: 1, completedAt: null,
+      nodes: [{
+        key: "run", title: "Inspect Calculator", status: "waiting", waitingFor: "user", skipped: false, sortOrder: 0,
+        activeWorkerId: approval.workerId, workerIds: [approval.workerId], artifact: null, decision: null,
+        gateQuestion: null, gateOptions: [], gateSummaryMd: null, gateRecommended: null, gateAskMessageId: null,
+        sandboxApproval: { id: approval.id, text: formatSandboxApprovalCardText(approval) }, createdAt: 1, updatedAt: 1,
+      }],
+    };
+    installFleet({ local: makeSnapshot({
+      pms: [makePm({ id: 1 })],
+      projects: [makeProject({ id: 10, pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10 } })],
+      activeTaskGraphs: [graph],
+      pendingSandboxApprovals: [approval],
+    }) });
+    await openRouter();
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    expect(within(tray).getAllByRole("article")).toHaveLength(1);
+    expect(within(tray).getByRole("article", { name: "Worker sandbox approval" })).toBeInTheDocument();
+    expect(within(tray).getByRole("button", { name: /^Needs You\s*1$/ })).toBeInTheDocument();
+  });
+
   it("第一张完整展开、其余收成一行；三合一拍板、失败回滚保留草稿、拍掉一张下一张自动展开、点一行换它展开、离线设备灰态禁用，不用拼接符", async () => {
     const now = Date.now();
     const d1 = makeDecisionItem({ id: 101, question: "接口节流窗口设多少？", options: ["(Recommended) 70ms", "150ms"], createdAt: now - 60_000 });

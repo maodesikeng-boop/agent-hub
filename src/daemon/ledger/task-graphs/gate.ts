@@ -43,6 +43,9 @@ function askGateOf(args: AskOnStepArgs): GateFields {
 function askTargetStep(g: TaskGraphCtx, graphRow: TaskGraphDbRow, nodeKey: TaskNodeKey): TaskNodeDbRow {
   const node = requireStepRow(g.db, graphRow.id, nodeKey);
   if (node.status === "done") throw fail("conflict", `步骤「${nodeKey}」已经完了，不能再挂拍板卡`);
+  if (sandboxApprovalPendingForStep(g.db, node.id)) {
+    throw fail("conflict", `步骤「${nodeKey}」在等用户确认 Worker 沙箱，不能另挂步骤拍板卡。要问别的事，用不带 --node 的 ${HUB_COMMAND} ask`);
+  }
   const blocker = blockersOf(g, [node]).get(node.id);
   if (blocker !== undefined) {
     throw fail(
@@ -205,7 +208,8 @@ export function decideNode(
     if (replay !== null) return replay;
     if (node.status === "done") throw fail("conflict", `步骤「${nodeKey}」已经完了`);
     if (graphRow.status !== "active") throw fail("conflict", `任务图 #${graphId} 已结束（${graphRow.status}）`);
-    if (node.status !== "waiting" || sandboxApprovalPendingForStep(g.db, node.id) || isUserBlocked(g.db, node.id) || (node.waiting_for !== "user" && node.active_worker_id !== null)) {
+    if (sandboxApprovalPendingForStep(g.db, node.id)) throw fail("conflict", "只能由用户在工作台确认 Worker 沙箱");
+    if (node.status !== "waiting" || isUserBlocked(g.db, node.id) || (node.waiting_for !== "user" && node.active_worker_id !== null)) {
       throw fail("conflict", `步骤「${nodeKey}」${taskNodeStatusText(toTaskNode(node), "user")}，现在不能拍板`);
     }
     g.persona.assertPmNotArchived(graphRow.pm_id);

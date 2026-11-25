@@ -6,6 +6,7 @@ import { toMessage } from "../rows.ts";
 import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
 import { workerSession } from "./ctx.ts";
 import { directChatSummary } from "./direct-chat.ts";
+import { taskDedupeKey } from "./text.ts";
 import type { WorkersCtx } from "./types.ts";
 
 export type WorkerLine = {
@@ -80,6 +81,12 @@ export function stopQueued(w: WorkersCtx, p: Pending, worker: WorkerDbRow): void
   for (const row of w.db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued'", worker.worker_conversation_id)) {
     w.messages.transition(p, row.id, "stopped");
   }
+}
+
+export function enqueueWorkerTask(w: WorkersCtx, p: Pending, worker: WorkerDbRow): void {
+  const session = workerSession(w, worker);
+  const first = w.db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id))!;
+  w.enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: first.id, source: "user" } });
 }
 
 export function enqueueFirstTurn(w: WorkersCtx, p: Pending, worker: WorkerDbRow): void {

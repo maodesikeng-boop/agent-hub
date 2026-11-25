@@ -12,7 +12,7 @@ import {
   isTaskNodeWaitingUser,
   modelShortLabel,
 } from "../../shared/index.ts";
-import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, TaskNode, UserBlockerId, WorkerId } from "../../shared/index.ts";
+import type { ConversationId, Message, MessageId, ProjectId, SandboxApprovalId, TaskGraph, TaskGraphId, TaskNode, UserBlockerId, WorkerId } from "../../shared/index.ts";
 import { cleanPieceTitle, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
@@ -422,6 +422,7 @@ export const RailGroups = memo(function RailGroups({
     (graph: TaskGraph, node: TaskNode) => {
       const ask = asksRef.current.find((m) => {
         const meta = askOf(m);
+        if (node.sandboxApproval !== undefined) return meta?.sandboxApprovalRef?.approvalId === node.sandboxApproval.id;
         if (node.userBlocker != null) return meta?.blockerRef?.blockerId === node.userBlocker.id;
         return m.id === node.gateAskMessageId || (meta?.gateRef?.graphId === graph.id && meta.gateRef.nodeKey === node.key);
       });
@@ -434,15 +435,18 @@ export const RailGroups = memo(function RailGroups({
   const visibleAsks = useMemo(() => {
     const gateMsgIds = new Set<MessageId>();
     const stepBlockerIds = new Set<UserBlockerId>();
+    const stepApprovalIds = new Set<SandboxApprovalId>();
     for (const graph of activeGraphs ?? []) {
       for (const node of graph.nodes) {
         if (node.gateAskMessageId !== null) gateMsgIds.add(node.gateAskMessageId);
         if (node.userBlocker !== null && node.userBlocker !== undefined) stepBlockerIds.add(node.userBlocker.id);
+        if (node.sandboxApproval !== undefined) stepApprovalIds.add(node.sandboxApproval.id);
       }
     }
     return asks.filter((ask) => {
       const meta = askOf(ask);
       if (meta?.gateRef !== undefined || gateMsgIds.has(ask.id)) return false;
+      if (meta?.sandboxApprovalRef !== undefined && stepApprovalIds.has(meta.sandboxApprovalRef.approvalId)) return false;
       return meta?.blockerRef === undefined || !stepBlockerIds.has(meta.blockerRef.blockerId);
     });
   }, [asks, activeGraphs]);

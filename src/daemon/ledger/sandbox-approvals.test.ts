@@ -1,9 +1,9 @@
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COMPUTER_USE, COMPUTER_USE_INVENTORY } from "../../../test/sandbox-approval-fixture.ts";
-import { askOf, SANDBOX_APPROVALS_RETENTION_MS, type HubArgs } from "../../shared/index.ts";
+import { askOf, hubPath, isTaskNodeWaitingDecision, SANDBOX_APPROVALS_RETENTION_MS, SANDBOX_APPROVALS_TERMINAL_MAX_ROWS, type CapabilityInventory, type HubArgs } from "../../shared/index.ts";
 import { createAgentApi } from "../agent-api/server.ts";
 import { createSessionTokens } from "../agent-api/tokens.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -21,20 +21,24 @@ function fixture() {
   const workspace = join(root, "project");
   mkdirSync(workspace);
   const db = openTestDb();
-  const create = () => createLedger(db, { pmHomeRoot: join(root, "data", "pm-home"), osSandboxed: () => true, workerPlatform: "darwin" });
+  const create = () => createLedger(db, {
+    pmHomeRoot: join(root, "data", "pm-home"), worktreesDir: join(root, "worktrees"),
+    osSandboxed: () => true, workerPlatform: "darwin",
+  });
   let ledger = create();
   const pm = ledger.createPm({ name: "Example", mode: "manage_only", vendor: "codex", persona: "", defaultModel: null });
   ledger.hubCall(pm.sessionId, "project.create", { folder: workspace });
   const tokens = createSessionTokens();
   const hubToken = tokens.issue(pm.sessionId);
-  const agent = createAgentApi({ ledger, tokens });
+  const getInventory = vi.fn<() => Promise<CapabilityInventory>>().mockResolvedValue(COMPUTER_USE_INVENTORY);
+  const agent = createAgentApi({ ledger, tokens, capabilityInventory: { get: getInventory } });
   const ui = createUiServer({ ledger, db, token: TOKEN, port: PORT, staticDir: root, uploadsDir: root, sentFilesDir: root });
   const dispatch = (overrides: Partial<HubArgs<"worker.start">> = {}) => ledger.hubCall(pm.sessionId, "worker.start", {
     title: "Inspect Calculator", task: "Read the Calculator window", vendor: "codex", noWorktree: true,
     noOuterSandbox: true, caps: "custom", allow: [COMPUTER_USE], ...overrides,
   }, { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false }, capabilityInventory: COMPUTER_USE_INVENTORY }).data.worker;
   return {
-    root, db, pm, agent, hubToken, ui, dispatch, get ledger() { return ledger; },
+    root, db, pm, agent, hubToken, ui, dispatch, getInventory, get ledger() { return ledger; },
     restart() { ledger.close(); ledger = create(); return ledger.recoverAfterRestart(); },
     async close() { await Promise.all([agent.close(), ui.close()]); ledger.close(); db.close(); rmSync(root, { recursive: true, force: true }); },
   };
@@ -62,6 +66,13 @@ function request(id: number | string, payload: unknown, cookie?: string) {
     host: HOST, origin: `http://${HOST}`, "content-type": "application/json", ...(cookie === undefined ? {} : { cookie }),
   }, payload: JSON.stringify(payload),
   });
+}
+
+function createSandboxGraph(isRepoWithCommit = false) {
+  return f.ledger.hubCall(f.pm.sessionId, "graph.create", { specJson: JSON.stringify({
+    title: "Desktop",
+    steps: [{ key: "run", title: "Read window", vendor: "codex", brief: "Read the Calculator window", noOuterSandbox: true, caps: "custom", allow: [COMPUTER_USE] }],
+  }) }, { workspace: { kind: "ok", isRepoWithCommit, hasUncommittedChanges: false } }).data.graph;
 }
 
 describe("Worker sandbox approval", () => {
@@ -166,20 +177,84 @@ describe("Worker sandbox approval", () => {
     expect(f.ledger.getSandboxApproval!(pending.id)?.status).toBe("pending");
   });
 
-  it("requires fresh approval for a takeover on the same graph step", () => {
-    const graph = f.ledger.hubCall(f.pm.sessionId, "graph.create", { specJson: JSON.stringify({
-      title: "Desktop", steps: [{ key: "run", title: "Read window", vendor: "codex", brief: "Read the Calculator window", noOuterSandbox: true, caps: "custom", allow: [COMPUTER_USE] }],
-    }) }, { workspace: { kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false } }).data.graph;
+  it("keeps only the sandbox approval open and blocks graph completion and decisions while it is pending", () => {
+    const graph = createSandboxGraph();
     const step = graph.nodes[0]!;
-    expect(step).toMatchObject({ status: "waiting", waitingFor: "user" });
+    const approval = approvalOf(step.activeWorkerId!)!;
+    const pendingStep = { status: "waiting", waitingFor: "user", sandboxApproval: { id: approval.id, text: expect.stringContaining("Read the Calculator window") } };
+    expect(step).toMatchObject(pendingStep);
+    expect(f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0]).toMatchObject(pendingStep);
+    expect(isTaskNodeWaitingDecision(step)).toBe(false);
+    const status = f.ledger.hubCall(f.pm.sessionId, "status", {}).text;
+    expect(status).toContain("等用户确认 Worker 沙箱：run");
+    expect(status).not.toContain("等用户拍板：run");
+    expect(() => f.ledger.hubCall(f.pm.sessionId, "graph.done", { graphId: graph.id, nodeKey: "run" })).toThrow(/等用户确认 Worker 沙箱/);
+    expect(() => f.ledger.hubCall(f.pm.sessionId, "ask", { graphId: graph.id, node: "run", text: "Pick one", options: ["A", "B"] })).toThrow(/等用户确认 Worker 沙箱/);
     expect(() => f.ledger.hubCall(f.pm.sessionId, "graph.decide", { graphId: graph.id, nodeKey: "run", choice: "approve" })).toThrow(/工作台确认/);
+    expect(() => f.ledger.decideTaskNode(graph.id, "run", { clientId: "regular-gate", note: "approve" })).toThrow(/工作台确认/);
+    expect(actionsOf(approval.workerId)).toEqual([]);
+    expect(f.ledger.snapshot().pendingSandboxApprovals?.map((a) => a.id)).toEqual([approval.id]);
+    f.ledger.decideSandboxApproval!(approval.id, APPROVE);
+    const resumed = f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0];
+    expect(resumed).toMatchObject({ status: "running", waitingFor: null, gateAskMessageId: null });
+    expect(resumed?.sandboxApproval).toBeUndefined();
+  });
+
+  it("checks current inventory and requires a fresh approval for a takeover on the same graph step", async () => {
+    const graph = createSandboxGraph();
+    const step = graph.nodes[0]!;
     const initial = approvalOf(step.activeWorkerId!)!;
     f.ledger.decideSandboxApproval!(initial.id, APPROVE);
-    expect(f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0]?.status).toBe("running");
-    f.ledger.hubCall(f.pm.sessionId, "worker.end", { workerId: initial.workerId });
-    const takeover = f.dispatch({ node: "run", graphId: graph.id, noOuterSandbox: undefined, caps: undefined, allow: undefined });
-    expect(takeover.id).not.toBe(initial.workerId);
-    expect(approvalOf(takeover.id)?.status).toBe("pending");
+    const start = () => f.agent.inject({
+      method: "POST", url: hubPath("worker.start"), headers: { authorization: `Bearer ${f.hubToken}` },
+      payload: { node: "run", graphId: graph.id, noWorktree: true },
+    });
+    f.getInventory.mockResolvedValueOnce({ ...COMPUTER_USE_INVENTORY, items: [] });
+    const denied = await start();
+    expect(denied.statusCode).toBe(400);
+    expect(denied.body).toContain("没有安装");
+    expect(f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0]?.activeWorkerId).toBe(initial.workerId);
+    const accepted = await start();
+    expect(accepted.statusCode).toBe(200);
+    const takeover = f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0];
+    expect(takeover?.activeWorkerId).not.toBe(initial.workerId);
+    expect(takeover?.sandboxApproval?.id).toBe(approvalOf(takeover!.activeWorkerId!)?.id);
+    expect(actionsOf(takeover!.activeWorkerId!)).toEqual([]);
+    expect(f.ledger.getSandboxApproval!(initial.id)?.status).toBe("revoked");
+  });
+
+  it("queues only the inherited worktree task and holds it until the predecessor process exits", () => {
+    const graph = createSandboxGraph(true);
+    const initial = approvalOf(graph.nodes[0]!.activeWorkerId!)!;
+    f.ledger.decideSandboxApproval!(initial.id, APPROVE);
+    const path = f.db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", initial.workerId)!.worktree_path;
+    mkdirSync(path, { recursive: true });
+    f.ledger.onWorktreeCreated(initial.workerId, "base");
+    const oldSession = sessionIdOf(initial.workerId);
+    f.db.run("UPDATE agent_sessions SET pid = 4242 WHERE id = ?", oldSession);
+    const takeover = f.dispatch({ node: "run", graphId: graph.id, noWorktree: false, noOuterSandbox: undefined, caps: undefined, allow: undefined });
+    expect(takeover).toMatchObject({ workspace: "worktree", worktreePath: path, baseCommit: "base" });
     expect(actionsOf(takeover.id)).toEqual([]);
+    f.ledger.decideSandboxApproval!(approvalOf(takeover.id)!.id, APPROVE);
+    expect(actionsOf(takeover.id)).toEqual(["session.send"]);
+    const newSession = sessionIdOf(takeover.id);
+    const first = f.db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued'", takeover.workerConversationId)!.id;
+    expect(f.ledger.waitsForFirstTurn(newSession, first)).toBe(true);
+    f.db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE id = ?", oldSession);
+    expect(f.ledger.waitsForFirstTurn(newSession, first)).toBe(false);
+  });
+
+  it("prunes the oldest terminal approval when the count cap is exceeded", () => {
+    const approvals = Array.from({ length: SANDBOX_APPROVALS_TERMINAL_MAX_ROWS + 1 }, () => {
+      const approval = approvalOf(f.dispatch().id)!;
+      f.ledger.hubCall(f.pm.sessionId, "worker.end", { workerId: approval.workerId });
+      return approval;
+    });
+    const [oldest, ...retained] = approvals;
+    const now = 1_000;
+    f.db.run("UPDATE worker_sandbox_approvals SET updated_at = ?", now);
+    f.ledger.purgeGrowingTables(now);
+    expect(f.ledger.getSandboxApproval!(oldest!.id)).toBeNull();
+    expect(retained.every((approval) => f.ledger.getSandboxApproval!(approval.id)?.status === "revoked")).toBe(true);
   });
 });

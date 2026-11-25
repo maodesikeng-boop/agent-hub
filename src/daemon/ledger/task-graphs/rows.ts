@@ -69,10 +69,14 @@ function artifactForView(artifact: TaskArtifact | null, waitingDecision: boolean
   return Object.keys(rest).length > 0 ? rest : null;
 }
 
-export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?: ReadonlyMap<number, UserBlocker>): TaskNode {
+export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?: {
+  userBlocker?: UserBlocker;
+  sandboxApproval?: TaskNode["sandboxApproval"];
+}): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
   const waitingUser = row.status === "waiting" && row.waiting_for === "user";
-  const userBlocker = blockers?.get(row.id) ?? null;
+  const userBlocker = waiting?.userBlocker ?? null;
+  const sandboxApproval = waiting?.sandboxApproval;
   const base: TaskNode = {
     key: row.node_key,
     title: row.title,
@@ -82,7 +86,7 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?
     sortOrder: row.sort_order,
     activeWorkerId: row.active_worker_id,
     workerIds: workerIdsOf(row),
-    artifact: artifactForView(artifact, waitingUser && userBlocker === null, includeDetails),
+    artifact: artifactForView(artifact, waitingUser && userBlocker === null && sandboxApproval === undefined, includeDetails),
     gateQuestion: row.gate_question,
     gateOptions: gateOptionsOf(row),
     gateSummaryMd: row.gate_summary_md,
@@ -90,6 +94,7 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?
     gateAskMessageId: row.gate_ask_message_id,
     ...(waitingUser && checkpointPending ? { gateCheckpoint: true } : {}),
     userBlocker,
+    ...(sandboxApproval !== undefined ? { sandboxApproval } : {}),
     decision: decisionOf(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

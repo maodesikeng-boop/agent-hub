@@ -480,10 +480,13 @@ async function prepareWorkerStart(
 ): Promise<HubCallContext> {
   const context: HubCallContext = {};
   if (opts.refreshVendor && isAgentVendor(body.vendor)) await opts.refreshVendor(body.vendor);
-  if (signal.aborted || (body.noWorktree === true && body.noOuterSandbox !== true)) return context;
+  const { capabilityInventory } = opts;
+  const needsInventory = capabilityInventory !== undefined &&
+    (body.noOuterSandbox === true || (typeof body.node === "string" && body.node.trim() !== ""));
+  if (signal.aborted || (body.noWorktree === true && !needsInventory)) return context;
   const folder = opts.ledger.workerStartFolder(sessionId);
-  if (body.noOuterSandbox === true && opts.capabilityInventory !== undefined) {
-    context.capabilityInventory = await opts.capabilityInventory.get({ projectDir: folder });
+  if (needsInventory) {
+    context.capabilityInventory = await capabilityInventory.get({ projectDir: folder });
   }
   if (!signal.aborted && body.noWorktree !== true && folder !== null) context.workspace = await probeWorkspace(folder);
   return context;

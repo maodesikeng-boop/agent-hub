@@ -68,14 +68,30 @@ const NO_SANDBOX_CARDS: readonly ReactNode[] = [];
 const NO_PENDING_TURNS: readonly RouterTurnEntry[] = [];
 const DEFAULT_ROUTER_SETTINGS = defaultRouterSettings();
 
-function fleetSandboxCards(devices: readonly DeviceView[], multiDevice: boolean): readonly ReactNode[] {
-  const cards = devices.flatMap((device) => (device.state.pendingSandboxCards ?? []).map((card) => (
-    <DeviceScopeOf key={`${device.key}:${card.id}`} deviceKey={device.key}>
-      <SandboxApprovalCard approvalId={card.id} text={card.text} disabled={isReadOnly(device.status)}
-        deviceName={multiDevice || device.key !== LOCAL_DEVICE ? device.info.name : undefined} />
+function useFleetSandboxCards(devices: readonly DeviceView[], multiDevice: boolean): readonly ReactNode[] {
+  const inputs = devices.flatMap((device) => {
+    const cards = device.state.pendingSandboxCards;
+    return cards === undefined || cards.length === 0 ? [] : [{
+      key: device.key,
+      cards,
+      disabled: isReadOnly(device.status),
+      name: multiDevice || device.key !== LOCAL_DEVICE ? device.info.name : undefined,
+    }];
+  });
+  const cache = useRef<{ inputs: typeof inputs; cards: readonly ReactNode[] } | null>(null);
+  const prev = cache.current;
+  if (prev !== null && inputs.length === prev.inputs.length && inputs.every((input, i) => {
+    const old = prev.inputs[i];
+    return old?.key === input.key && old.cards === input.cards && old.disabled === input.disabled && old.name === input.name;
+  })) return prev.cards;
+
+  const cards = inputs.length === 0 ? NO_SANDBOX_CARDS : inputs.flatMap(({ key, cards, disabled, name }) => cards.map((card) => (
+    <DeviceScopeOf key={`${key}:${card.id}`} deviceKey={key}>
+      <SandboxApprovalCard approvalId={card.id} text={card.text} disabled={disabled} deviceName={name} />
     </DeviceScopeOf>
   )));
-  return cards.length === 0 ? NO_SANDBOX_CARDS : cards;
+  cache.current = { inputs, cards };
+  return cards;
 }
 
 interface RouterCommandVariables {
@@ -577,7 +593,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
     handleDecisionSubmit,
   } = useRouterDecisions(view.decisions, clientForDevice);
 
-  const sandboxCards = useMemo(() => fleetSandboxCards(devices, view.multiDevice), [devices, view.multiDevice]);
+  const sandboxCards = useFleetSandboxCards(devices, view.multiDevice);
 
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
 

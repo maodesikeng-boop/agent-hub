@@ -39,15 +39,15 @@ export function SandboxApprovalCard({
   const settled = closed || answered || sent !== null;
   const status = closed ? "Closed" : chosenOption ?? (sent === "approve" ? "Approved" : sent === "reject" ? "Rejected" : null);
   return (
-    <article aria-label="Worker sandbox approval" className={cn("border-2 px-3.5 py-3", settled ? "border-border-strong bg-background" : "border-open-line bg-open", className)}>
+    <article aria-label="Worker sandbox approval" className={cn("rounded-sm border px-3.5 py-3", settled ? "border-border bg-background" : "border-select-line bg-open", className)}>
       <h3 className="text-body font-semibold">Run without Bellwood’s outer sandbox{deviceName === undefined ? "" : ` · ${deviceName}`}</h3>
-      <div className="mt-2 space-y-2 whitespace-pre-wrap break-words text-minor leading-relaxed">
+      <div className="mt-2 space-y-2 whitespace-pre-wrap wrap-anywhere text-minor leading-relaxed">
         {text.split("\n\n").map((paragraph, index) => <p key={index}>{paragraph}</p>)}
       </div>
       {settled ? (
         <p className="mt-2 text-minor font-medium" role="status">{status}</p>
       ) : (
-        <div className="mt-3 flex justify-end gap-2">
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
           <Button size="sm" variant="outline" disabled={disabled || decision.isPending} onClick={() => submit("reject")}>Reject</Button>
           <Button size="sm" disabled={disabled || decision.isPending} onClick={() => submit("approve")}>Approve this run</Button>
         </div>

@@ -319,6 +319,32 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     expect(within(dialog).getByTestId("peel-gate-card")).toBeInTheDocument();
   });
 
+  it("opens the graph step's sandbox card without a second Needs You row or a generic decision", async () => {
+    const user = userEvent.setup();
+    const sandboxApproval = { id: 8, text: "Inspect Calculator in this run." };
+    const graph = makeGraph({ id: 7, title: "Desktop check", nodes: [
+      makeNode({ key: "run", title: "Inspect Calculator", status: "waiting", waitingFor: "user", sandboxApproval }),
+    ] });
+    const ask = makeMessage({
+      id: 11, text: sandboxApproval.text, meta: { needsUser: true, sandboxApprovalRef: { approvalId: sandboxApproval.id, workerId: 3 } },
+    });
+    const onOpenAsk = vi.fn();
+    const rail = { workers: [], activeGraphs: [graph], openWorkerId: null, onOpenAsk, onOpenWorker: vi.fn() };
+    const { rerender } = render(<RailGroups {...rail} asks={[ask]} />);
+    expect(screen.queryByRole("region", { name: "Needs You" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Inspect Calculator" }));
+    expect(onOpenAsk).toHaveBeenCalledWith(ask.id);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    rerender(<RailGroups {...rail} asks={[]} />);
+    await user.click(screen.getByRole("button", { name: "Inspect Calculator" }));
+    const dialog = await screen.findByRole("dialog", { name: "Desktop check" });
+    expect(within(dialog).queryByTestId("peel-gate-card")).toBeNull();
+    const card = within(dialog).getByRole("article", { name: "Worker sandbox approval" });
+    expect(card).toHaveTextContent(sandboxApproval.text);
+    expect(within(card).getByRole("button", { name: "Approve this run" })).toBeEnabled();
+  });
+
   it("全览弹窗里的果冻拍板卡：支持一键点选、选项+备注、纯备注提交", async () => {
     const user = userEvent.setup();
     const calls: { url: string; body: DecideTaskNodeRequest }[] = [];

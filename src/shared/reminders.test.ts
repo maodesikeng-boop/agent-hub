@@ -52,6 +52,14 @@ function snapshot(over: { pm1?: Message[]; sessions?: SessionState[] } = {}): St
 let seq = 100;
 const change = (c: Omit<Change, "seq">): Change => ({ ...c, seq: ++seq }) as Change;
 
+it("counts sandbox approvals across devices and shows their reminder when no ordinary decision is waiting", () => {
+  const state = reminderStateFrom(snapshot());
+  expect(routerReminderSummary([
+    { deviceId: "local", state: { ...state, pendingSandboxCards: [{ id: 1 }] } },
+    { deviceId: DEVICE, state: { ...state, pendingSandboxCards: [{ id: 1 }, { id: 2 }] } },
+  ])).toEqual({ pendingCount: 3, unreadReportCount: 0, subtitle: "Worker sandbox approval" });
+});
+
 describe("规则（从 web/selectors.ts 搬来，行为不变）", () => {
   it("等你：项目经理停下、最后一条是它说的、上次看之后有新消息", () => {
     const state = reminderStateFrom(snapshot());

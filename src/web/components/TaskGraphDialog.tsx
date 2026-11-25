@@ -3,6 +3,7 @@ import { Loader2 } from "../ui/icons.ts";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
+  isTaskNodeWaitingDecision,
   isTaskNodeWaitingPm,
   isTaskNodeWaitingUser,
   userBlockerCardText,
@@ -27,6 +28,7 @@ import type { StepBead } from "../pixel-path.ts";
 import { GRAPH_TUBE_CELL_PX } from "../task-graph-layout.ts";
 import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { GateMark } from "./GateMark.tsx";
+import { SandboxApprovalCard } from "./SandboxApprovalCard.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { GateDecisionCard, JellyBead, resolveBoundWorker, TubeLayer } from "./PeelTrack.tsx";
 import { ShimmerOverlay } from "./StatusShimmer.tsx";
@@ -91,6 +93,29 @@ function SettledGateDraft({ draftKey, settledNote }: { draftKey: string; settled
   const draft = useDecisionDraft(draftKey);
   if (draft.trim() === "" || (settledNote !== null && settledNote.trim() === draft.trim())) return null;
   return <UnsentDraftBanner draft={draft} compact onDismiss={() => clearDecisionDraft(draftKey)} />;
+}
+
+function WaitingStepCard({ graphId, node, stepNumber }: { graphId: TaskGraphId; node: TaskNode; stepNumber: number }) {
+  const client = useClient();
+  return (
+    <>
+      <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
+        <span className="flex min-w-0 items-center gap-2 text-minor font-semibold text-primary">
+          <span className="bg-primary px-1 text-xs leading-4 font-normal text-primary-foreground tabular-nums">{String(stepNumber).padStart(2, "0")}</span>
+          <GateMark size={16} />
+          <span className="truncate" title={node.title}>{node.title}</span>
+        </span>
+        <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
+      </div>
+      {node.sandboxApproval !== undefined ? (
+        <SandboxApprovalCard key={node.sandboxApproval.id} approvalId={node.sandboxApproval.id} text={node.sandboxApproval.text} />
+      ) : node.userBlocker != null ? (
+        <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} />
+      ) : (
+        <GateDecisionCard key={node.gateAskMessageId ?? node.key} graphId={graphId} node={node} client={client} />
+      )}
+    </>
+  );
 }
 
 export const TaskGraphDialog = memo(function TaskGraphDialog({
@@ -174,7 +199,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
           hasSummary: Boolean(n.gateSummaryMd || n.artifact?.summary || n.decision),
           hasQuestion: n.gateQuestion !== null && n.gateQuestion.trim() !== "" && n.gateQuestion !== n.title,
           noteExpanded: activeWaitingUser,
-          ...(activeWaitingUser && n.userBlocker == null && n.artifact?.deliverables !== undefined
+          ...(activeWaitingUser && isTaskNodeWaitingDecision(n) && n.artifact?.deliverables !== undefined
             ? { deliverables: n.artifact.deliverables }
             : {}),
           ...(measured !== undefined ? { measuredHeightPx: measured } : {}),
@@ -327,7 +352,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
 
               const nodeRefKey = `${graph.id}:${node.key}`;
               const activeDraftKey = gateDecisionDraftKey(client.device, graph.id, node.key, node.gateAskMessageId);
-              if (isWaitingGate) seenGateDraftKeyRef.current.set(nodeRefKey, activeDraftKey);
+              if (isWaitingGate && isTaskNodeWaitingDecision(node)) seenGateDraftKeyRef.current.set(nodeRefKey, activeDraftKey);
               if (isWaitingGate) {
                 return (
                   <div
@@ -337,24 +362,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                     style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
                     className="absolute"
                   >
-                    <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
-                      <span className="flex min-w-0 items-center gap-2 text-minor font-semibold text-primary">
-                        <span className="bg-primary px-1 text-xs leading-4 font-normal text-primary-foreground tabular-nums">{String(stepNumberOf(node.key)).padStart(2, "0")}</span>
-                        <GateMark size={16} />
-                        <span className="truncate" title={node.title}>{node.title}</span>
-                      </span>
-                      <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
-                    </div>
-                    {node.userBlocker != null ? (
-                      <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} />
-                    ) : (
-                      <GateDecisionCard
-                        key={node.gateAskMessageId ?? node.key}
-                        graphId={graph.id}
-                        node={node}
-                        client={client}
-                      />
-                    )}
+                    <WaitingStepCard graphId={graph.id} node={node} stepNumber={stepNumberOf(node.key)} />
                   </div>
                 );
               }

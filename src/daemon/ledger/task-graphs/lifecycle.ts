@@ -24,6 +24,7 @@ import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { RouterReportLink } from "../../../shared/router.ts";
 import type { Db } from "../../store/index.ts";
 import { fail, type Pending } from "../context.ts";
+import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { collectGraphBranches, collectGraphPrUrls, stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
 import { artifactWithoutCheckpoint, isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
@@ -118,6 +119,9 @@ export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
     throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
   }
   assertNotRunning(node, nodeKey, graphRow.id);
+  if (sandboxApprovalPendingForStep(g.db, node.id)) {
+    throw fail("conflict", `步骤「${nodeKey}」在等用户确认 Worker 沙箱。请等用户确认，或先收工这个 Worker`);
+  }
   const { artifact, note } = doneArtifact(args, node);
   const nextPmNote = note && note !== "" ? note : node.pm_note;
   const active = graphRow.status === "active";

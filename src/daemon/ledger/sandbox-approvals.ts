@@ -9,6 +9,7 @@ import type {
   SandboxApprovalId,
   SandboxApprovalRecord,
   SandboxApprovalSummary,
+  TaskNode,
   WorkerId,
   WorkerStatus,
 } from "../../shared/index.ts";
@@ -203,6 +204,18 @@ export function sandboxApprovalPending(db: Db, workerId: WorkerId): boolean {
 
 export function sandboxApprovalPendingForStep(db: Db, stepId: number): boolean {
   return db.get("SELECT id FROM worker_sandbox_approvals WHERE step_id = ? AND status = 'pending'", stepId) !== undefined;
+}
+
+export function pendingSandboxCardsForSteps(db: Db, stepIds: readonly number[]): ReadonlyMap<number, NonNullable<TaskNode["sandboxApproval"]>> {
+  if (stepIds.length === 0) return new Map();
+  const rows = db.all<ApprovalRow>(`${APPROVAL_SELECT}
+    JOIN task_graph_steps n ON n.id = a.step_id AND n.active_worker_id = a.worker_id
+    WHERE a.status = 'pending' AND a.step_id IN (SELECT value FROM json_each(?))`, JSON.stringify(stepIds));
+  const cards = new Map<number, NonNullable<TaskNode["sandboxApproval"]>>();
+  for (const row of rows) {
+    if (row.stepId !== null) cards.set(row.stepId, { id: row.id, text: formatSandboxApprovalCardText(toApproval(row)) });
+  }
+  return cards;
 }
 
 export function readStepNoOuterSandbox(db: Db, stepId: number): boolean {

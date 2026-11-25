@@ -503,6 +503,12 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(afterResolve.decisions).toHaveLength(0);
     expect(fleetRouterView(makeDevices(resolved))).toBe(afterResolve);
 
+    const withApproval = { ...resolved, pendingSandboxCards: [{ id: 3, conversationId: PM_CONVERSATION, text: "Inspect Calculator" }] };
+    const afterApproval = fleetRouterView(makeDevices(withApproval));
+    expect(afterApproval.summary.pendingCount).toBe(1);
+    expect(fleetRouterView(makeDevices({ ...withApproval, seq: withApproval.seq + 1 }))).toBe(afterApproval);
+    expect(fleetRouterView(makeDevices({ ...withApproval, pendingSandboxCards: [] })).summary.pendingCount).toBe(0);
+
     // 还没连上的远端设备（phase 不是 ready）不许击穿缓存：它的空视图每次都是同一份引用
     const withLoading = (local: HubState) => [...makeDevices(local), { id: "osaka-id", name: "Osaka", self: false, online: false, state: initialState }];
     const loadingFleet = fleetRouterView(withLoading(resolved));

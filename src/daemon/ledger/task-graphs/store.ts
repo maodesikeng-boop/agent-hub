@@ -1,4 +1,4 @@
-import { writeStepNoOuterSandbox } from "../sandbox-approvals.ts";
+import { pendingSandboxCardsForSteps, writeStepNoOuterSandbox } from "../sandbox-approvals.ts";
 import type { PmId, ProjectId, TaskEdge, TaskGraph, TaskGraphId, TaskGraphStatus, TaskNode, TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
@@ -81,6 +81,16 @@ const graphOfRow = (row: TaskGraphDbRow, nodes: TaskNode[], edges: TaskEdge[], g
   completedAt: row.completed_at,
 });
 
+function hydrateNodes(g: TaskGraphCtx, rows: readonly TaskNodeDbRow[], includeDetails: boolean): TaskNode[] {
+  const blockers = blockersOf(g, rows);
+  const waitingIds = rows.filter((n) => n.status === "waiting" && n.waiting_for === "user" && n.active_worker_id !== null).map((n) => n.id);
+  const approvals = pendingSandboxCardsForSteps(g.db, waitingIds);
+  return rows.map((n) => toTaskNode(n, includeDetails, {
+    userBlocker: blockers.get(n.id),
+    sandboxApproval: approvals.get(n.id),
+  }));
+}
+
 export function loadGraph(g: TaskGraphCtx, id: TaskGraphId, includeDetails = true): TaskGraph | null {
   const row = getGraphRow(g.db, id);
   if (row === undefined) return null;
@@ -89,10 +99,9 @@ export function loadGraph(g: TaskGraphCtx, id: TaskGraphId, includeDetails = tru
     "SELECT * FROM task_graph_edges WHERE graph_id = ? ORDER BY from_key ASC, to_key ASC",
     id,
   );
-  const blockers = blockersOf(g, nodeRows);
   return graphOfRow(
     row,
-    nodeRows.map((n) => toTaskNode(n, includeDetails, blockers)),
+    hydrateNodes(g, nodeRows, includeDetails),
     edgeRows.map((e) => ({ fromKey: e.from_key, toKey: e.to_key })),
     includeDetails ? { goal: row.goal } : undefined,
   );
@@ -108,8 +117,8 @@ export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[]):
       ORDER BY n.graph_id ASC, n.sort_order ASC, n.id ASC`,
     idsJson,
   );
-  const blockers = blockersOf(g, nodeRows);
-  for (const n of nodeRows) byId.get(n.graph_id)?.nodes.push(toTaskNode(n, false, blockers));
+  const nodes = hydrateNodes(g, nodeRows, false);
+  for (const [i, node] of nodes.entries()) byId.get(nodeRows[i]!.graph_id)?.nodes.push(node);
   const edgeRows = g.db.all<TaskEdgeDbRow>(
     `SELECT e.* FROM task_graph_edges e
       WHERE e.graph_id IN (SELECT value FROM json_each(?))
