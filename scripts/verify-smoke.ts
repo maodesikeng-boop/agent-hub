@@ -18,6 +18,7 @@ import { resolveHubPaths } from "../src/shared/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
 import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
 import { verifyComposerLayout } from "./verify-composer-layout.ts";
+import { verifyProjectListHeader } from "./verify-list-header.ts";
 import { verifyTopBarUnderSettings } from "./verify-window-drag.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -215,6 +216,9 @@ async function runOnce(outDir: string, checkComposer: boolean): Promise<RunResul
     await verifyTopBarUnderSettings(page);
     if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
     phase("设置页打开时顶栏照样拖窗");
+
+    await verifyProjectListHeader(browser, loginUrl, origin);
+    phase("左栏长电脑名与新建按钮不重合");
 
     if (checkComposer) {
       const id = stateBody.conversations[0]?.conversation.id;

@@ -232,6 +232,53 @@ describe("ProjectList", () => {
     expect(onOpenComputers).toHaveBeenCalledTimes(1);
   });
 
+  it("constrains a long computer name in the header so it truncates before the shrink-0 New PM button in both switchable and single-device modes", () => {
+    const longName = "Yuxin Zhang's MacBook Pro";
+    const computers = [
+      { key: LOCAL_DEVICE, name: longName, platform: "darwin", status: "online" as const, badge: 0, self: true },
+      { key: "peer-1", name: "Tokyo Mini", platform: "darwin", status: "online" as const, badge: 0, self: false },
+    ];
+    for (const layout of ["column", "page"] as const) {
+      const { unmount } = renderList({
+        layout,
+        computer: { key: LOCAL_DEVICE, name: longName, status: "online" },
+        switchable: true,
+        computers,
+        onSelectComputer: vi.fn(),
+      });
+      const trigger = screen.getByRole("button", { name: `Switch computer (${longName})` });
+      const header = trigger.closest("header")!;
+      const wrapper = trigger.parentElement!;
+      const label = within(trigger).getByText(longName);
+      const chevron = trigger.querySelector("svg")!;
+      const newPm = within(header).getByRole("button", { name: "New project manager" });
+
+      expect(header).toHaveClass("flex", "min-w-0", "items-center", "justify-between");
+      expect(wrapper).toHaveClass("flex", "min-w-0", "flex-1", "items-center", "-ml-1.5");
+      expect(trigger).toHaveClass("flex", "max-w-full", "min-w-0", "touch-target");
+      expect(trigger).not.toHaveClass("-mx-1.5");
+      expect(label).toHaveClass("min-w-0", "truncate");
+      expect(label).toHaveAttribute("title", longName);
+      expect(chevron).toHaveClass("shrink-0");
+      expect(newPm).toHaveClass("shrink-0");
+      unmount();
+    }
+
+    const { unmount } = renderList({
+      layout: "column",
+      computer: { key: LOCAL_DEVICE, name: longName, status: "online" },
+      switchable: false,
+    });
+    const heading = screen.getByRole("heading", { name: longName });
+    const header = heading.closest("header")!;
+    expect(heading.parentElement).toHaveClass("flex", "min-w-0", "flex-1", "items-center");
+    expect(heading.parentElement).not.toHaveClass("-ml-1.5");
+    expect(heading).toHaveClass("min-w-0", "truncate");
+    expect(heading).toHaveAttribute("title", longName);
+    expect(within(header).getByRole("button", { name: "New project manager" })).toHaveClass("shrink-0");
+    unmount();
+  });
+
   it("renders the strip with New PM on top and pinned avatars above the divider", async () => {
     const user = userEvent.setup();
     const onNewPm = vi.fn();
