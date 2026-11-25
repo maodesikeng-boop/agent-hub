@@ -45,6 +45,7 @@ import type {
   FleetRouterView,
   RouterTargetCandidate,
 } from "../selectors.ts";
+import { useShellCarry } from "../shell-carry.tsx";
 import { useMobileShell } from "../shell-layout.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { uploadFiles, type DraftSlot, type StagedFiles } from "../upload.ts";
@@ -359,8 +360,8 @@ function useRouterDecisions(
 ) {
   const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
   const [decisionErrors, setDecisionErrors] = useState<Readonly<Record<string, ErrorLike>>>({});
-  const [selectedDecisionKey, setSelectedDecisionKey] = useState<string | null>(null);
-  const [closedDraft, setClosedDraft] = useState<ClosedRouterDraft | null>(null);
+  const [selectedDecisionKey, setSelectedDecisionKey] = useShellCarry<string | null>("router:decision", null);
+  const [closedDraft, setClosedDraft] = useShellCarry<ClosedRouterDraft | null>("router:closed-draft", null);
   const [trackedExpanded, setTrackedExpanded] = useState<FleetDecisionEntry | null>(null);
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
@@ -428,24 +429,33 @@ function useRouterDecisions(
     });
   }, [decisions]);
 
-  const handleNoteFocus = useCallback((decisionKey: string) => {
-    setSelectedDecisionKey(decisionKey);
-  }, []);
+  const handleNoteFocus = useCallback(
+    (decisionKey: string) => {
+      setSelectedDecisionKey(decisionKey);
+    },
+    [setSelectedDecisionKey],
+  );
 
-  const handleNoteChange = useCallback((decisionKey: string, draftKey: string, value: string) => {
-    setSelectedDecisionKey(decisionKey);
-    setDecisionDraft(draftKey, value);
-    setDecisionErrors((prev) => {
-      if (prev[decisionKey] === undefined) return prev;
-      const { [decisionKey]: _removed, ...rest } = prev;
-      return rest;
-    });
-  }, []);
+  const handleNoteChange = useCallback(
+    (decisionKey: string, draftKey: string, value: string) => {
+      setSelectedDecisionKey(decisionKey);
+      setDecisionDraft(draftKey, value);
+      setDecisionErrors((prev) => {
+        if (prev[decisionKey] === undefined) return prev;
+        const { [decisionKey]: _removed, ...rest } = prev;
+        return rest;
+      });
+    },
+    [setSelectedDecisionKey],
+  );
 
-  const handleSelectKey = useCallback((key: string) => {
-    setClosedDraft(null);
-    setSelectedDecisionKey(key);
-  }, []);
+  const handleSelectKey = useCallback(
+    (key: string) => {
+      setClosedDraft(null);
+      setSelectedDecisionKey(key);
+    },
+    [setClosedDraft, setSelectedDecisionKey],
+  );
 
   const handleDismissClosedDraft = useCallback(() => {
     setClosedDraft((prev) => {
@@ -453,7 +463,7 @@ function useRouterDecisions(
       return null;
     });
     setSelectedDecisionKey(null);
-  }, []);
+  }, [setClosedDraft, setSelectedDecisionKey]);
 
   const inflightDecisions = useRef(new Set<string>());
   const handleDecisionSubmit = useCallback(
@@ -489,7 +499,7 @@ function useRouterDecisions(
         inflightDecisions.current.delete(key);
       }
     },
-    [clientForDevice],
+    [clientForDevice, setClosedDraft, setSelectedDecisionKey],
   );
 
   return {

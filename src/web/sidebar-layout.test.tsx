@@ -18,6 +18,8 @@ const baseProps = {
   waiting: new Set<string>(),
   asking: new Set<string>(),
   readOnly: false,
+  query: "",
+  onQueryChange: () => {},
   onSelect: () => {},
   onNewPm: () => {},
   onTogglePin: () => {},

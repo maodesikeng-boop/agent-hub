@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { type Pm } from "../../shared/index.ts";
 import { defaultLookOf } from "../../shared/slimes.ts";
@@ -40,8 +41,15 @@ function entry(
   };
 }
 
-function renderList(overrides: Partial<ProjectListProps> = {}) {
-  const props: ProjectListProps = {
+type ListProps = Omit<ProjectListProps, "query" | "onQueryChange">;
+
+function SearchableList(props: ListProps) {
+  const [query, setQuery] = useState("");
+  return <ProjectList {...props} query={query} onQueryChange={setQuery} />;
+}
+
+function renderList(overrides: Partial<ListProps> = {}) {
+  const props: ListProps = {
     layout: "column",
     computer: { key: LOCAL_DEVICE, name: "MacBook Pro", status: "online" },
     switchable: false,
@@ -56,7 +64,7 @@ function renderList(overrides: Partial<ProjectListProps> = {}) {
     onOpenComputers: vi.fn(),
     ...overrides,
   };
-  return { ...render(<ProjectList {...props} />), props };
+  return { ...render(<SearchableList {...props} />), props };
 }
 
 describe("ProjectList", () => {
@@ -66,7 +74,7 @@ describe("ProjectList", () => {
     expect(screen.getByRole("region", { name: "Project managers" })).toBeInTheDocument();
 
     rerender(
-      <ProjectList
+      <SearchableList
         layout="column"
         computer={{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "online" }}
         switchable={false}
@@ -123,7 +131,7 @@ describe("ProjectList", () => {
     expect(screen.queryByRole("button", { name: /^Old Work(?:\s+Deletes|\s*$)/ })).toBeNull();
 
     rerender(
-      <ProjectList
+      <SearchableList
         layout="column"
         computer={{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "online" }}
         switchable={false}
@@ -169,7 +177,7 @@ describe("ProjectList", () => {
     expect(onTogglePin).toHaveBeenCalledWith(5, true);
 
     rerender(
-      <ProjectList
+      <SearchableList
         layout="column"
         computer={{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "offline" }}
         switchable={false}
@@ -213,7 +221,7 @@ describe("ProjectList", () => {
     expect(screen.getByRole("heading", { name: "MacBook Pro" })).toBeInTheDocument();
 
     rerender(
-      <ProjectList
+      <SearchableList
         layout="column"
         computer={{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "online" }}
         switchable={true}

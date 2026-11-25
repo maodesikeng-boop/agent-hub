@@ -42,6 +42,7 @@ const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: Icon 
 export function SettingsDialog({
   open,
   onOpenChange,
+  onSectionChange,
   notify,
   devices = null,
   defaultSection,
@@ -49,6 +50,7 @@ export function SettingsDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSectionChange?: (section: SettingsDialogSection) => void;
   notify: NotifySettings;
   devices?: DeviceSettings | null;
   defaultSection?: SettingsDialogSection;
@@ -126,7 +128,10 @@ export function SettingsDialog({
       <DialogContent title="Settings" page>
         <Tabs
           value={effectiveSection}
-          onValueChange={(val) => setActiveSection(val as SettingsDialogSection)}
+          onValueChange={(val) => {
+            setActiveSection(val as SettingsDialogSection);
+            onSectionChange?.(val as SettingsDialogSection);
+          }}
           orientation="vertical"
           className="shell-group flex min-h-0 flex-1 flex-col min-[720px]:flex-row"
         >

@@ -35,7 +35,7 @@ import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
 import { mobileBack } from "./mobile/back.ts";
 import { routeHash, useRoute, type InfoPage } from "./route.ts";
-import { desktopSectionOf, useSettingsNav } from "./settings-nav.ts";
+import { dialogTargetOf, useSettingsNav } from "./settings-nav.ts";
 import {
   accountSettingsTarget,
   newPmDevicesOf,
@@ -168,6 +168,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     saveWorkTab(tab);
   }, []);
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
+  const [listQuery, setListQuery] = useState("");
 
   const clearFocus = useCallback(() => setFocus(null), []);
 
@@ -269,7 +270,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       return;
     }
     if (route.view === "settings") {
-      nav.setDesktop(route.section === undefined ? { open: true } : { open: true, section: desktopSectionOf(route.section, fleet.managed) });
+      nav.setDesktop(dialogTargetOf(route, fleet.managed));
       replace({ view: "router" });
     }
   }, [autoSelect, shellReady, route, pickedDevice, active, current.key, fleet.managed, replace, nav.setDesktop]);
@@ -510,8 +511,8 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       created,
       creating,
       defaultProviderDevice: nav.defaultProviderDevice,
-      desktopSettingsOpen: nav.desktop.open,
-      desktopSettingsSection: nav.desktop.section,
+      desktopSettingsOpen: nav.dialog.open,
+      desktopSettingsSection: nav.dialog.section,
       deviceSettings,
       drafts,
       focus,
@@ -520,9 +521,12 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       keyOf,
       link,
       listEntries,
+      listQuery,
+      setListQuery,
       newPmDevices,
       offline,
       onSettingsOpenChange: nav.onSettingsOpenChange,
+      onSettingsSectionChange: nav.onSettingsSectionChange,
       openAsk,
       openDeviceConversation,
       openDeviceWorker,
@@ -555,6 +559,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       send,
       setCreating,
       settingsBack: nav.settingsBack,
+      settingsPage: nav.page,
       sidebarActive,
       sidebarActiveRef,
       staging,

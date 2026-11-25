@@ -34,6 +34,7 @@ import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
 import { pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
+import { ShellCarryScope } from "./shell-carry.tsx";
 import { useMobileShell, useShellFit } from "./shell-layout.ts";
 import { railComputerKeyOrFallback } from "./shell-actions.ts";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
@@ -245,6 +246,8 @@ function DesktopWorkbench({
       switchable={switchable}
       computers={c.allDevices}
       entries={c.listEntries}
+      query={c.listQuery}
+      onQueryChange={c.setListQuery}
       active={c.sidebarActiveRef}
       waiting={c.reminders.waiting}
       asking={c.reminders.asking}
@@ -366,6 +369,7 @@ function DesktopWorkbench({
       <SettingsDialog
         open={c.desktopSettingsOpen}
         onOpenChange={c.onSettingsOpenChange}
+        onSectionChange={c.onSettingsSectionChange}
         {...(c.desktopSettingsSection !== undefined ? { defaultSection: c.desktopSettingsSection } : {})}
         {...(c.defaultProviderDevice !== undefined ? { defaultProviderDevice: c.defaultProviderDevice } : {})}
         notify={c.reminders.notify}
@@ -407,7 +411,7 @@ function MobileWorkbench({
   const resources = useResourcesAttention();
   const settingsAttention = updateWaiting || resources.attention;
 
-  const mobileTab = mobileTabOf(route);
+  const mobileTab = mobileTabOf(c.settingsPage ?? route);
   const computer = useMemo(() => railComputerKeyOrFallback(current.key, fleet.devices), [current.key, fleet.devices]);
   const listComputer = useMemo(
     () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
@@ -417,7 +421,7 @@ function MobileWorkbench({
   const openComputers = useCallback(() => navigate({ view: "settings", section: "computers" }), [navigate]);
   const switchable = fleet.devices.length >= 2;
   const readOnly = isReadOnly(current.status);
-  const tintColor = route?.view === "router" || route?.view === "settings" ? null : (c.active?.look.color ?? null);
+  const tintColor = route?.view === "router" || c.settingsPage !== null ? null : (c.active?.look.color ?? null);
 
   const routeView = route?.view;
   const back = useCallback(
@@ -461,6 +465,8 @@ function MobileWorkbench({
       switchable={switchable}
       computers={c.allDevices}
       entries={c.listEntries}
+      query={c.listQuery}
+      onQueryChange={c.setListQuery}
       active={c.sidebarActiveRef}
       waiting={c.reminders.waiting}
       asking={c.reminders.asking}
@@ -478,10 +484,10 @@ function MobileWorkbench({
   ) : undefined;
 
   let body: React.ReactNode = null;
-  if (route?.view === "settings") {
+  if (c.settingsPage !== null) {
     body = (
       <MobileSettings
-        section={route.section}
+        section={c.settingsPage.section}
         notify={c.reminders.notify}
         devices={c.deviceSettings}
         quota={quota}
@@ -632,27 +638,29 @@ export function App() {
         <ModelCatalogProvider>
           <CapabilityProjects pms={model.local.state.pms}>
             <div className="relative flex h-full">
-              {mobile ? (
-                <MobileWorkbench
-                  model={model}
-                  content={content}
-                  notices={notices}
-                  quota={quota}
-                  drawerOpen={drawerOpen}
-                  setDrawerOpen={setDrawerOpen}
-                  onManageLocalProviders={openLocalProviders}
-                  onManageCurrentProviders={openCurrentProviders}
-                />
-              ) : (
-                <DesktopWorkbench
-                  model={model}
-                  content={content}
-                  notices={notices}
-                  quota={quota}
-                  onManageLocalProviders={openLocalProviders}
-                  onManageCurrentProviders={openCurrentProviders}
-                />
-              )}
+              <ShellCarryScope key={mobile ? "mobile" : "desktop"}>
+                {mobile ? (
+                  <MobileWorkbench
+                    model={model}
+                    content={content}
+                    notices={notices}
+                    quota={quota}
+                    drawerOpen={drawerOpen}
+                    setDrawerOpen={setDrawerOpen}
+                    onManageLocalProviders={openLocalProviders}
+                    onManageCurrentProviders={openCurrentProviders}
+                  />
+                ) : (
+                  <DesktopWorkbench
+                    model={model}
+                    content={content}
+                    notices={notices}
+                    quota={quota}
+                    onManageLocalProviders={openLocalProviders}
+                    onManageCurrentProviders={openCurrentProviders}
+                  />
+                )}
+              </ShellCarryScope>
               <NewPmDialog
                 open={content.creating}
                 devices={content.newPmDevices}

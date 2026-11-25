@@ -32,6 +32,7 @@ import {
   usePersona,
   usePersonaText,
 } from "../pm-persona.ts";
+import { useShellCarry } from "../shell-carry.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
@@ -382,10 +383,10 @@ function ChangeRow({
   );
 }
 
-function PersonaEditor({ persona, readOnly }: { persona: ReturnType<typeof usePersonaText>; readOnly: boolean }) {
+function PersonaEditor({ pmId, persona, readOnly }: { pmId: number; persona: ReturnType<typeof usePersonaText>; readOnly: boolean }) {
   const { savedText, syncKey, textError, busy, save } = persona;
   const [trackedSyncKey, setTrackedSyncKey] = useState(syncKey);
-  const [draftText, setDraftText] = useState<string | null>(null);
+  const [draftText, setDraftText] = useShellCarry<string | null>(`pm:${pmId}:persona`, null);
   if (trackedSyncKey !== syncKey) {
     setTrackedSyncKey(syncKey);
     setDraftText(null);
@@ -538,7 +539,7 @@ function InfoDetailPage({
       />
     );
   }
-  if (page === "persona") return <PersonaEditor persona={text} readOnly={locked} />;
+  if (page === "persona") return <PersonaEditor pmId={pm.id} persona={text} readOnly={locked} />;
   if (page === "memory") return <PmMemoryFilesGroup key={pm.id} pmId={pm.id} archived={locked} titled={false} />;
   if (page === "worktree") {
     return project !== null ? <WorktreeSetupGroup project={project} readOnly={locked} titled={false} /> : null;

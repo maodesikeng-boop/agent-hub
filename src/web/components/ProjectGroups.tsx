@@ -5,6 +5,7 @@ import { useClient } from "../device-scope.tsx";
 import { errorText } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
+import { useShellCarry } from "../shell-carry.tsx";
 import { Button } from "../ui/button.tsx";
 import { Loader2 } from "../ui/icons.ts";
 import { Textarea } from "../ui/input.tsx";
@@ -27,7 +28,7 @@ function useSetupCommandEditor(project: Project) {
   const client = useClient();
   const qc = useHubQueryClient();
   const [confirmed, setConfirmed] = useState<Project | null>(null);
-  const [draft, setDraft] = useState<string | null>(null);
+  const [draft, setDraft] = useShellCarry<string | null>(`project:${project.id}:setup-command`, null);
   const mutation = useMutation(
     {
       mutationFn: async (command: string | null) => (await client.putProjectSetupCommand(project.id, command)).project,
