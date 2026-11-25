@@ -190,3 +190,11 @@ describe("progress pipeline from vendor frames to the API", () => {
     }, 10_000);
   }
 });
+
+describe("progress pipeline across two turns", () => {
+  it.todo("claude: a two-turn recording with TaskCreate/TaskUpdate shows only the second turn's tasks plus unfinished first-turn tasks in the second checklist message");
+  it.todo("codex: a two-turn recording with update_plan shows only the second turn's plan items");
+  it.todo("cursor: a two-turn recording with update_todos (merge true) drops first-turn completed todos from the second message");
+  it.todo("opencode, deepseek, kimi: replaying the recorded single-turn frames as two turns drops completed first-turn items (not recorded live on this machine)");
+  it.todo("agy, pi: two turns produce no checklist messages and only action timing");
+});

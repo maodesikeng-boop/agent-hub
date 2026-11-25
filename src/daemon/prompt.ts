@@ -257,6 +257,15 @@ function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
   return `${WORKER_RULES_COMMON}\n${spec.capabilities.backgroundWake ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE}`;
 }
 
+/**
+ * Postcondition: for a vendor whose spec reports checklist events, returns one rule line (Chinese, project-agnostic)
+ * telling the agent to list a turn of three or more steps with `checklist.promptTool` and tick each step off as it
+ * finishes. Returns null for vendors with no checklist source. Both the PM and Worker prompts include it.
+ */
+export function checklistRuleNote(_vendor: string): string | null {
+  throw new Error("Not implemented");
+}
+
 export const WORKER_READONLY_NOTE = "- 这次只读：只看、只查，不改文件，也不跑会改东西的命令；要批准的操作会被系统直接拒绝。结论写进汇报。";
 
 function workerRoleSection(ctx: LaunchContext): string {

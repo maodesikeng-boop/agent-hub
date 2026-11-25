@@ -193,3 +193,14 @@ describe("live action timing", () => {
     expect(live()).toMatchObject({ activity: "idle", step: null, stepStartedAt: null });
   });
 });
+
+describe("checklist messages per turn", () => {
+  it.todo("second turn's checklist message omits items the first turn completed when both turns list steps (investigation repro: old completed item carried into the next turn)");
+  it.todo("second turn's checklist message keeps a first-turn item left pending or in_progress");
+  it.todo("an item carried over and ticked off in the second turn shows as completed in the second turn only");
+  it.todo("the session snapshot still holds every item so id-only merges in later turns keep their titles");
+  it.todo("an interrupted or failed turn end also moves the turn baseline");
+  it.todo("a turn that does not touch the checklist writes no checklist message");
+  it.todo("a renewed session starts with an empty baseline");
+  it.todo("the baseline is removed with the session row when the session ends");
+});

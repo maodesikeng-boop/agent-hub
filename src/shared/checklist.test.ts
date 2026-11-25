@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeChecklistItemId, applyChecklistUpdate, checklistOf, normalizeChecklistStatus, sameChecklist } from "./checklist.ts";
+import { activeChecklistItemId, applyChecklistUpdate, checklistOf, normalizeChecklistStatus, sameChecklist, turnChecklist } from "./checklist.ts";
 import { CHECKLIST_MAX_ITEMS, CHECKLIST_TITLE_MAX_CHARS } from "./limits.ts";
 
 const input = (title: string, id: string | null = null) => ({ id, title, status: "pending" as const });
@@ -54,4 +54,15 @@ describe("checklist snapshots", () => {
       expect(checklistOf({ kind: "checklist", meta: { checklist } })).toBeNull();
     }
   });
+});
+
+describe(turnChecklist.name, () => {
+  it.todo("returns the current list unchanged when the baseline is empty (first turn)");
+  it.todo("drops items completed in an earlier turn that this turn did not touch");
+  it.todo("drops items cancelled in an earlier turn that this turn did not touch");
+  it.todo("keeps unchanged pending and in_progress items carried over from an earlier turn");
+  it.todo("keeps an earlier item this turn ticked off, shown as completed");
+  it.todo("keeps items added this turn and items whose title or active title changed");
+  it.todo("keeps the order of the current list");
+  it.todo("treats a whole-list replace that repeats old completed items as unchanged for those items");
 });

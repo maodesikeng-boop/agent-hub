@@ -40,6 +40,7 @@ import {
   WORKER_BLOCKING_WAIT_NOTE,
   buildFingerprintPrompt,
   buildLaunchPrompt,
+  checklistRuleNote,
   buildPmModePrompt,
   personaUpdateNote,
   buildWorkerFirstMessage,
@@ -1140,4 +1141,10 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
     for (const gone of [`${hub} graph`, TASK_GRAPH_SKILL_NAME, "SKILL.md", "任务图手册"]) expect(workerPrompt, gone).not.toContain(gone);
   });
 
+});
+
+describe(checklistRuleNote.name, () => {
+  it.todo("PM and Worker prompts of every vendor with checklist sources include the three-step checklist rule naming that vendor's promptTool");
+  it.todo("vendors without checklist sources (agy, pi) get no checklist rule in either prompt");
+  it.todo("the rule names no build tool, shell, code host, or repository path");
 });

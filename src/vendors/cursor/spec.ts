@@ -132,7 +132,7 @@ export default defineVendor({
       updateTodos: "todo",
     },
   },
-  checklist: { sources: ["extension"] },
+  checklist: { sources: ["extension"], promptTool: "`TodoWrite`" },
   skillSignals: {
     // rawOutput: read is {content}, shell is {exitCode, stdout, stderr}.
     outputField: "rawOutput",

@@ -89,7 +89,7 @@ export default defineVendor({
     },
   },
   // update_plan is off by default in app-server (codex-cli 0.169.0).
-  checklist: { sources: ["plan_update"], enable: { args: ["-c", "tools.update_plan.enabled=true"] } },
+  checklist: { sources: ["plan_update"], enable: { args: ["-c", "tools.update_plan.enabled=true"] }, promptTool: "`update_plan`" },
   skillSignals: {
     // commandExecution output is in item.aggregatedOutput.
     outputField: "aggregatedOutput",

@@ -59,3 +59,7 @@ describe("VENDOR_LIST routerDefault 快模型预设契约守卫", () => {
     expect(validateRouterDefaultSpec({ ...base, routerDefault: { model: "custom-fast", effort: "ultra" } })).toMatch(/不在厂商通用 efforts/);
   });
 });
+
+describe("checklist prompt tool", () => {
+  it.todo("every vendor with checklist sources names a promptTool, and no vendor without sources does");
+});

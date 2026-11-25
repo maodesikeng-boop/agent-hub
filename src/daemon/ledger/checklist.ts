@@ -16,6 +16,8 @@ interface ChecklistMessageFields {
 
 type InsertChecklist = (p: Pending, session: AgentSessionRow, fields: ChecklistMessageFields) => boolean;
 
+// Invariant: `session_checklists.snapshot` is the session's full checklist for merges; each checklist message shows only
+// the current turn's slice of it, measured against `session_checklist_turns.baseline`.
 export function createLedgerChecklist({ db }: LedgerContext, insert: InsertChecklist) {
   const latest = (sessionId: SessionId) => {
     const row = db.get<{ snapshot: string }>("SELECT snapshot FROM session_checklists WHERE session_id = ?", sessionId);
@@ -44,7 +46,15 @@ export function createLedgerChecklist({ db }: LedgerContext, insert: InsertCheck
     }
   };
 
-  return { apply };
+  /**
+   * Postcondition: the session's next checklist message is measured against the snapshot as it stands now, so items
+   * the finished turn completed and the next turn leaves untouched are not shown again. A session with no checklist is a no-op.
+   */
+  const endTurn = (_sessionId: SessionId): void => {
+    throw new Error("Not implemented");
+  };
+
+  return { apply, endTurn };
 }
 
 export function isChecklistToolCall(name: string): boolean {
