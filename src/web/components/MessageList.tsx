@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId, type PersonaChangeId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
-import { groupMessageRows, type DisplayRow } from "../system-events.ts";
+import { groupMessageRows, isWorkerCard, type DisplayRow } from "../system-events.ts";
 import { Button } from "../ui/button.tsx";
 import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
@@ -49,7 +49,10 @@ function rowContent(index: number, { items, pending, agentOf, onRetry, actions, 
   }
   const { message } = item;
   const previous = items[index - 1];
-  const head = !(previous?.kind === "message" && previous.message.sender === message.sender);
+  const previousMessage = previous?.kind === "message" ? previous.message : null;
+  const head = isWorkerCard(message)
+    ? previousMessage === null || !isWorkerCard(previousMessage)
+    : previousMessage?.sender !== message.sender;
   return (
     <MessageBubble
       message={message}

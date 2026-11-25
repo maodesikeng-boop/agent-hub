@@ -164,6 +164,16 @@ describe("MessageList：状态在这一轮上面（Worked for 位置）", () => 
   });
 });
 
+describe("Worker report rows", () => {
+  it("joins consecutive report rows under a hairline, and an agent message between them starts a new run", () => {
+    const report = (id: number) => makeWorkerLine({ id, conversationId: 1, line: { workerId: id, workerConversationId: 30 + id, title: `Step ${id}`, event: "report", status: "done", summary: "ok" } });
+    const { container } = list([report(1), report(2), makeMessage({ id: 3, text: "下一步" }), report(4)], { status: null });
+    const rows = [...container.querySelectorAll("article[data-worker-report]")];
+    expect(rows.map((row) => row.hasAttribute("data-joined"))).toEqual([false, true, false]);
+    expect(rows[1]).toHaveClass("border-t", "border-border");
+  });
+});
+
 const staging = (over: Partial<StagedFiles> = {}): StagedFiles => ({
   files: [],
   busy: false,
