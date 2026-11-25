@@ -1,5 +1,17 @@
-import type { CompletedWorkItem, CompletedWorkPage, ConversationId, MessageId, TaskGraph, TaskNode } from "../shared/index.ts";
-import type { WorkerEntry } from "./selectors.ts";
+import {
+  COMPLETED_WORK_PAGE_SIZE,
+  askOf,
+  type CompletedWorkItem,
+  type CompletedWorkPage,
+  type ConversationId,
+  type Message,
+  type MessageId,
+  type TaskGraph,
+  type TaskGraphId,
+  type TaskNode,
+} from "../shared/index.ts";
+import { COMPLETED_WORK_MAX_PAGES } from "./limits.ts";
+import { boundWorkerIdsOf, isWorkerBound, sortActiveGraphs, workersByWorkerId, type WorkerEntry } from "./selectors.ts";
 
 // Invariant: selectors here return the same object for the same input objects so memoized tab bodies skip rerenders.
 
@@ -28,41 +40,138 @@ export type StepTarget =
   | { kind: "ask"; messageId: MessageId }
   | { kind: "none" };
 
-/**
- * Precondition: graphs are the project's active graphs; workers are the PM's Workers from workersOf.
- * Postcondition: drops ended Workers and Workers bound to any active graph step, keeps graph order from
- * sortActiveGraphs, and returns the same ActiveWork for the same two arrays.
- */
-export function activeWorkOf(_graphs: readonly TaskGraph[], _workers: readonly WorkerEntry[]): ActiveWork {
-  throw new Error("Not implemented");
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+const MAX_COMPLETED_ITEMS = COMPLETED_WORK_MAX_PAGES * COMPLETED_WORK_PAGE_SIZE;
+const IDLE_ACTIVITIES: ReadonlySet<string> = new Set(["idle", "stopping"]);
+
+const activeWorkCache = new WeakMap<readonly TaskGraph[], WeakMap<readonly WorkerEntry[], ActiveWork>>();
+const completedDaysCache = new WeakMap<readonly CompletedWorkPage[], { nowDayStart: number; days: readonly CompletedDay[] }>();
+
+function isRunningWorker(worker: WorkerEntry): boolean {
+  return !worker.ended && !IDLE_ACTIVITIES.has(worker.activity);
 }
 
-/**
- * Precondition: pages are in fetch order and each page's items are newest first.
- * Postcondition: flattens the pages into day groups, newest day first, keeping item order; an item whose key already
- * appeared on an earlier page is dropped; returns the same array for the same pages array and the same `now` day.
- */
-export function completedDaysOf(_pages: readonly CompletedWorkPage[], _now: number): readonly CompletedDay[] {
-  throw new Error("Not implemented");
+export function activeWorkOf(graphs: readonly TaskGraph[], workers: readonly WorkerEntry[]): ActiveWork {
+  let byWorkers = activeWorkCache.get(graphs);
+  if (byWorkers === undefined) {
+    byWorkers = new WeakMap();
+    activeWorkCache.set(graphs, byWorkers);
+  }
+  const hit = byWorkers.get(workers);
+  if (hit !== undefined) return hit;
+
+  const sortedGraphs = sortActiveGraphs(graphs);
+  const boundIds = sortedGraphs.length > 0 ? boundWorkerIdsOf(sortedGraphs) : null;
+  const liveStandalone = workers
+    .filter((w) => !w.ended && (boundIds === null || !isWorkerBound(w, boundIds)))
+    .toSorted((a, b) => Number(isRunningWorker(b)) - Number(isRunningWorker(a)));
+
+  const result: ActiveWork = {
+    graphs: sortedGraphs,
+    workers: liveStandalone,
+    count: sortedGraphs.length + liveStandalone.length,
+  };
+  byWorkers.set(workers, result);
+  return result;
 }
 
-/** Postcondition: `graph:<id>` or `worker:<conversationId>`, unique across both kinds. */
-export function completedKeyOf(_item: CompletedWorkItem): string {
-  throw new Error("Not implemented");
+function localMidnight(ms: number): number {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-/** Postcondition: `#437` for a GitHub-style pull request URL ending in a number, otherwise null. */
-export function prLabelOf(_prUrl: string | null): string | null {
-  throw new Error("Not implemented");
+function dayLabelOf(dayStart: number, todayStart: number, yesterdayStart: number): string {
+  if (dayStart === todayStart) return "Today";
+  if (dayStart === yesterdayStart) return "Yesterday";
+  const d = new Date(dayStart);
+  return `${SHORT_MONTHS[d.getMonth()]!} ${d.getDate()}`;
 }
 
-/**
- * Postcondition: a step with a live or most recent Worker opens that Worker; a step waiting on the user without a Worker
- * opens its ask card in the chat; any other step has no target.
- */
+export function completedKeyOf(item: CompletedWorkItem): string {
+  return item.kind === "graph" ? `graph:${item.graphId}` : `worker:${item.conversationId}`;
+}
+
+export function completedDaysOf(pages: readonly CompletedWorkPage[], now: number): readonly CompletedDay[] {
+  const nowDate = new Date(now);
+  const todayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
+  const hit = completedDaysCache.get(pages);
+  if (hit !== undefined && hit.nowDayStart === todayStart) return hit.days;
+
+  const yesterdayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - 1).getTime();
+  const seen = new Set<string>();
+  const groups = new Map<number, CompletedWorkItem[]>();
+  let totalKept = 0;
+
+  for (const page of pages) {
+    for (const item of page.items) {
+      if (totalKept >= MAX_COMPLETED_ITEMS) break;
+      const key = completedKeyOf(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      totalKept += 1;
+      const dayStart = localMidnight(item.finishedAt);
+      const list = groups.get(dayStart);
+      if (list !== undefined) list.push(item);
+      else groups.set(dayStart, [item]);
+    }
+    if (totalKept >= MAX_COMPLETED_ITEMS) break;
+  }
+
+  const days: CompletedDay[] = [...groups.entries()]
+    .toSorted(([a], [b]) => b - a)
+    .map(([dayStart, items]) => ({
+      label: dayLabelOf(dayStart, todayStart, yesterdayStart),
+      dayStart,
+      items,
+    }));
+
+  completedDaysCache.set(pages, { nowDayStart: todayStart, days });
+  return days;
+}
+
+const TRAILING_PR_NUMBER = /\/(\d+)\/?$/;
+
+export function prLabelOf(prUrl: string | null): string | null {
+  if (prUrl === null) return null;
+  let url: URL;
+  try {
+    url = new URL(prUrl);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const match = TRAILING_PR_NUMBER.exec(url.pathname);
+  return match === null ? null : `#${match[1]!}`;
+}
+
 export function stepTargetOf(
-  _node: Pick<TaskNode, "activeWorkerId" | "workerIds" | "gateAskMessageId" | "status" | "waitingFor">,
-  _workers: readonly WorkerEntry[],
+  node: Pick<TaskNode, "activeWorkerId" | "workerIds" | "gateAskMessageId" | "status" | "waitingFor"> & {
+    userBlocker?: TaskNode["userBlocker"];
+    key?: TaskNode["key"];
+  },
+  workers: readonly WorkerEntry[],
+  asks?: readonly Message[],
+  graphId?: TaskGraphId,
 ): StepTarget {
-  throw new Error("Not implemented");
+  const byId = workersByWorkerId(workers);
+  if (node.activeWorkerId !== null) {
+    const active = byId.get(node.activeWorkerId);
+    if (active !== undefined) return { kind: "worker", conversationId: active.conversationId };
+  }
+  for (let i = node.workerIds.length - 1; i >= 0; i--) {
+    const worker = byId.get(node.workerIds[i]!);
+    if (worker !== undefined) return { kind: "worker", conversationId: worker.conversationId };
+  }
+  if (node.status === "waiting" && node.waitingFor === "user") {
+    if (node.gateAskMessageId !== null) return { kind: "ask", messageId: node.gateAskMessageId };
+    if (asks !== undefined) {
+      const match = asks.find((m) => {
+        const meta = askOf(m);
+        if (node.userBlocker != null) return meta?.blockerRef?.blockerId === node.userBlocker.id;
+        return graphId !== undefined && node.key !== undefined && meta?.gateRef?.graphId === graphId && meta.gateRef.nodeKey === node.key;
+      });
+      if (match !== undefined) return { kind: "ask", messageId: match.id };
+    }
+  }
+  return { kind: "none" };
 }

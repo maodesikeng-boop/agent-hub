@@ -10,28 +10,33 @@ export interface GraphProgress {
   total: number;
 }
 
-/**
- * Postcondition: done (skipped included) gives "done", running gives "running", waiting on the user gives "waiting",
- * waiting on the PM gives "running" because the PM is still working on it, and pending gives "pending".
- */
-export function nodeWorkStatusOf(_node: Pick<TaskNode, "status" | "waitingFor">): WorkStatus {
-  throw new Error("Not implemented");
+export function nodeWorkStatusOf(node: Pick<TaskNode, "status" | "waitingFor">): WorkStatus {
+  switch (node.status) {
+    case "done":
+      return "done";
+    case "running":
+      return "running";
+    case "waiting":
+      return node.waitingFor === "user" ? "waiting" : "running";
+    case "pending":
+      return "pending";
+  }
 }
 
-/**
- * Postcondition: an ended Worker gives "done"; a live Worker that is idle after a report with status problem gives
- * "waiting"; any other live Worker gives "running".
- */
-export function workerWorkStatusOf(_worker: Pick<WorkerEntry, "ended" | "tone" | "activity">): WorkStatus {
-  throw new Error("Not implemented");
+export function workerWorkStatusOf(worker: Pick<WorkerEntry, "ended" | "tone" | "activity">): WorkStatus {
+  if (worker.ended) return "done";
+  if (worker.activity === "idle" && worker.tone === "warn") return "waiting";
+  return "running";
 }
 
-/** Postcondition: a cancelled outcome gives "cancelled" and a done outcome gives "done". */
-export function completedWorkStatusOf(_item: Pick<CompletedWorkItem, "outcome">): WorkStatus {
-  throw new Error("Not implemented");
+export function completedWorkStatusOf(item: Pick<CompletedWorkItem, "outcome">): WorkStatus {
+  return item.outcome === "cancelled" ? "cancelled" : "done";
 }
 
-/** Postcondition: total is the node count and done counts done nodes, skipped ones included; 0/0 for an empty graph. */
-export function graphProgressOf(_graph: Pick<TaskGraph, "nodes">): GraphProgress {
-  throw new Error("Not implemented");
+export function graphProgressOf(graph: Pick<TaskGraph, "nodes">): GraphProgress {
+  let done = 0;
+  for (const node of graph.nodes) {
+    if (node.status === "done") done += 1;
+  }
+  return { done, total: graph.nodes.length };
 }

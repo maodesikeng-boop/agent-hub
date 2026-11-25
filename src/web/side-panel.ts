@@ -72,12 +72,11 @@ export interface WorkPanelInput {
   tab: Exclude<WorkPanelTab, "info">;
 }
 
-/**
- * Postcondition: a worker route gives that Worker, a profile route gives Info with its page, a conversation route gives
- * the remembered tab when open and null when closed, and the Router, settings, or no route give null.
- */
-export function workPanelOf(_props: WorkPanelInput): WorkPanelContent | null {
-  throw new Error("Not implemented");
+export function workPanelOf({ route, open, tab }: WorkPanelInput): WorkPanelContent | null {
+  if (route === null || route.view === "router" || route.view === "settings") return null;
+  if (route.view === "worker") return { kind: "worker", workerId: route.id };
+  if (route.view === "profile") return { kind: "info", pmId: route.pmId, page: route.page ?? null };
+  return open ? { kind: "tab", tab } : null;
 }
 
 export interface WorkPanelExits {
@@ -86,14 +85,16 @@ export interface WorkPanelExits {
   back: ScopedRoute | null;
 }
 
-/**
- * Precondition: conversation is the active PM conversation on the same computer as the panel content.
- * Postcondition: close is the conversation route and also closes the panel. back is null for a tab and for the Info
- * summary, the conversation route (panel open on the remembered tab) for a Worker, and the Info summary for an Info page.
- */
 export function workPanelExitsOf(
-  _content: WorkPanelContent,
-  _conversation: Extract<ScopedRoute, { view: "conversation" }>,
+  content: WorkPanelContent,
+  conversation: Extract<ScopedRoute, { view: "conversation" }>,
 ): WorkPanelExits {
-  throw new Error("Not implemented");
+  const onDevice = conversation.device === undefined ? {} : { device: conversation.device };
+  if (content.kind === "worker") {
+    return { close: conversation, back: conversation };
+  }
+  if (content.kind === "info" && content.page !== null) {
+    return { close: conversation, back: { view: "profile", pmId: content.pmId, ...onDevice } };
+  }
+  return { close: conversation, back: null };
 }

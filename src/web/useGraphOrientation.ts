@@ -1,20 +1,123 @@
-import type { GraphOrientation, MeasureStepText } from "./graph-flow.ts";
+import { LRUCache } from "lru-cache";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { orientationOf, type GraphOrientation, type MeasureStepText } from "./graph-flow.ts";
+import { GRAPH_TEXT_WIDTH_CACHE_MAX } from "./limits.ts";
+import { subscribeUiScale } from "./ui-scale.ts";
 
-/**
- * Precondition: called in a component; probe is any element styled with the step label font, or null before mount.
- * Postcondition: returns a measure function backed by one canvas and a GRAPH_TEXT_WIDTH_CACHE_MAX-entry LRU keyed by font
- * and text; the cache clears when web fonts finish loading or the interface scale changes, and the returned function
- * keeps its identity until then.
- */
-export function useStepTextMeasure(_probe: HTMLElement | null): MeasureStepText {
-  throw new Error("Not implemented");
+const DEFAULT_STEP_FONT_SIZE = "13.5px";
+const DEFAULT_STEP_FONT_FAMILY = "sans-serif";
+const FALLBACK_CHAR_WIDTH_PX = 8;
+
+const textWidthCache = new LRUCache<string, number>({ max: GRAPH_TEXT_WIDTH_CACHE_MAX });
+let sharedContext: CanvasRenderingContext2D | null | undefined;
+
+function canvasContext(): CanvasRenderingContext2D | null {
+  if (sharedContext !== undefined) return sharedContext;
+  if (typeof document === "undefined") {
+    sharedContext = null;
+    return null;
+  }
+  try {
+    sharedContext = document.createElement("canvas").getContext("2d");
+  } catch {
+    sharedContext = null;
+  }
+  return sharedContext;
 }
 
-/**
- * Precondition: called in a component; box is the element whose content width the graph may use, or null before mount.
- * Postcondition: returns orientationOf(requiredPx, box content width), read before the first paint so a narrow panel
- * never flashes the horizontal canvas, and updates when the box resizes.
- */
-export function useGraphOrientation(_box: HTMLElement | null, _requiredPx: number): GraphOrientation {
-  throw new Error("Not implemented");
+function readProbeFont(probe: HTMLElement | null): { fontSize: string; fontFamily: string } {
+  if (typeof window === "undefined" || typeof getComputedStyle !== "function") {
+    return { fontSize: DEFAULT_STEP_FONT_SIZE, fontFamily: DEFAULT_STEP_FONT_FAMILY };
+  }
+  const target = probe ?? document.body;
+  if (target === null) return { fontSize: DEFAULT_STEP_FONT_SIZE, fontFamily: DEFAULT_STEP_FONT_FAMILY };
+  const style = getComputedStyle(target);
+  return {
+    fontSize: style.fontSize || DEFAULT_STEP_FONT_SIZE,
+    fontFamily: style.fontFamily || DEFAULT_STEP_FONT_FAMILY,
+  };
+}
+
+function measureWidth(title: string, font: string, epoch: number): number {
+  const key = `${epoch}\0${font}\0${title}`;
+  const cached = textWidthCache.get(key);
+  if (cached !== undefined) return cached;
+  const ctx = canvasContext();
+  let width: number;
+  if (ctx !== null) {
+    ctx.font = font;
+    width = ctx.measureText(title).width;
+  } else {
+    width = [...title].length * FALLBACK_CHAR_WIDTH_PX;
+  }
+  textWidthCache.set(key, width);
+  return width;
+}
+
+function createMeasure(probe: HTMLElement | null, epoch: number): MeasureStepText {
+  const { fontSize, fontFamily } = readProbeFont(probe);
+  const normalFont = `400 ${fontSize} ${fontFamily}`;
+  const emphasisFont = `500 ${fontSize} ${fontFamily}`;
+  return (title: string, emphasis: boolean) => measureWidth(title, emphasis ? emphasisFont : normalFont, epoch);
+}
+
+export function useStepTextMeasure(probe: HTMLElement | null): MeasureStepText {
+  const [epoch, setEpoch] = useState(0);
+
+  useEffect(() => {
+    const invalidate = () => {
+      textWidthCache.clear();
+      setEpoch((v) => v + 1);
+    };
+    const unsubscribeScale = subscribeUiScale(invalidate);
+    const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+    const onFontsDone = () => invalidate();
+    fonts?.addEventListener?.("loadingdone", onFontsDone);
+    let cancelled = false;
+    if (fonts?.status === "loading" && fonts.ready !== undefined) {
+      void fonts.ready.then(() => {
+        if (!cancelled) invalidate();
+      });
+    }
+    return () => {
+      cancelled = true;
+      unsubscribeScale();
+      fonts?.removeEventListener?.("loadingdone", onFontsDone);
+    };
+  }, []);
+
+  return useMemo(() => createMeasure(probe, epoch), [probe, epoch]);
+}
+
+function readBoxWidth(box: HTMLElement | null): number {
+  if (box === null) return 0;
+  const width = box.clientWidth || box.getBoundingClientRect().width;
+  return Number.isFinite(width) && width > 0 ? width : 0;
+}
+
+export function useGraphOrientation(box: HTMLElement | null, requiredPx: number): GraphOrientation {
+  const [availablePx, setAvailablePx] = useState<number>(() => readBoxWidth(box));
+
+  useLayoutEffect(() => {
+    if (box === null) {
+      setAvailablePx(0);
+      return;
+    }
+    const update = (next: number) => {
+      const safe = Number.isFinite(next) && next > 0 ? next : 0;
+      setAvailablePx((prev) => (Math.abs(prev - safe) < 0.5 ? prev : safe));
+    };
+    update(readBoxWidth(box));
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.at(-1);
+      if (entry === undefined) return;
+      const w = entry.contentRect.width || readBoxWidth(box);
+      update(w);
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [box]);
+
+  return orientationOf(requiredPx, availablePx);
 }
