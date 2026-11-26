@@ -6,6 +6,7 @@ Frames that drive the checklist and action timing tests. Each probe ran in a thr
 | --- | --- |
 | `claude-turn-1.live.jsonl`, `claude-turn-2.live.jsonl` | One Claude Code session with six tasks. The second turn adds tasks 4–6. |
 | `codex-turn-1.live.jsonl`, `codex-turn-2.live.jsonl` | One Codex app-server thread. The second turn repeats three completed steps and adds three new ones. |
+| `codex-repeat-1.live.jsonl`, `codex-repeat-2.live.jsonl` | One Codex app-server thread with `tools.update_plan.enabled=true`. The second turn redoes "Run tests" and keeps "Read logs" completed. |
 | `cursor-turn-1.live.jsonl`, `cursor-turn-2.live.jsonl` | One Cursor ACP session. The second turn merges new items into the first turn’s list. |
 | `claude-task-tools.live.jsonl` | Claude Code 2.1.330 with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`: `TaskCreate`, `TaskUpdate`, a file read, top-level `tool_use_result`, and the turn result |
 | `claude-todowrite.live.jsonl` | Same version with `TodoWrite`: three whole lists and `oldTodos`/`newTodos` |

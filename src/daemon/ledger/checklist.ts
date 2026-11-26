@@ -25,10 +25,11 @@ export function createLedgerChecklist({ db }: LedgerContext, insert: InsertCheck
     const checklist = applyChecklistUpdate(prev, event.update);
     if (sameChecklist(prev, checklist)) return;
     const baseline = itemsOf(db.get<{ baseline: string }>("SELECT baseline FROM session_checklist_turns WHERE session_id = ?", session.id)?.baseline ?? null);
+    const { visible, unchanged } = turnChecklist(baseline, checklist);
     const inserted = insert(p, session, {
       kind: CHECKLIST_MESSAGE_KIND,
       text: "",
-      meta: { checklist: turnChecklist(baseline, checklist) },
+      meta: { checklist: visible },
       dedupeKey: `checklist:${session.id}:${event.uuid}`,
     });
     if (inserted) {
@@ -38,6 +39,9 @@ export function createLedgerChecklist({ db }: LedgerContext, insert: InsertCheck
         session.id,
         JSON.stringify({ checklist }),
       );
+      if (unchanged !== baseline) {
+        db.run("UPDATE session_checklist_turns SET baseline = ? WHERE session_id = ?", JSON.stringify({ checklist: unchanged }), session.id);
+      }
     }
   };
 

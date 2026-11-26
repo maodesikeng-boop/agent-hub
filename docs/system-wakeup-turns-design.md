@@ -72,17 +72,17 @@ Checklist events per vendor (`src/vendors/*/spec.ts`, `checklist.sources`), with
 | **Store wakeups as `system` notices (`pm.wakeup`) and record where the agent read each system-queued input** | Fixes the author at the source; existing system-notice paths (rate-limit wait, Feishu filtering, stale checks) already treat them right. One placement rule covers wakeups, Worker reports, and scheduled runs. Needs one migration and one stamp per input. |
 | Add a turn id to every message | Exact grouping, but every vendor would have to report turn starts the same way, and history would need a backfill it cannot get. |
 
-Recommendation: the second design. The stamp reuses a conversation message ID and the time the driver reports processing. The ledger stores both with the driver’s mid-turn flag in `meta.taken`.
+Recommendation: the second design. The stamp reuses a conversation message ID and the time the driver reports processing. The ledger stores both with the driver’s mid-turn flag in `meta.taken`. Claude uses its start receipt to classify processing: a wakeup can reach stdin during one turn and start the next turn.
 
 **Per-turn checklists.**
 
 | Design | Result |
 |---|---|
-| **Ledger keeps the full session snapshot for merges, stores the snapshot at each turn end as the next turn's baseline, and writes each checklist message as `turnChecklist(baseline, current)`** | The stored messages already hold the per-turn slice, so the web, Feishu, and history need no change. Works for whole-list and merge vendors alike. |
+| **Ledger keeps the full session snapshot for merges and compares each update with the unchanged items from the previous turn** | The stored messages already hold the per-turn slice, so the web, Feishu, and history need no change. Works for whole-list and merge vendors alike. |
 | Web diffs the previous turn's last checklist message against the current one | No backend change, but the previous turn may not be loaded (paging), and web turn grouping is exactly what is broken. |
 | Clear the session snapshot at each turn end | Simple, but id-only updates in later turns (Claude `TaskUpdate`) would lose their titles. |
 
-Recommendation: the first design.
+Recommendation: the first design. At turn end the full snapshot becomes the next baseline. The ledger removes an item from the baseline when it first becomes visible in the new turn. A repeated title stays visible when its status returns to completed.
 
 **Prompt rule.** One rule line built from each vendor's `checklist.promptTool`, added to both the PM and Worker prompts only when the vendor reports checklist events. A single generic sentence for every vendor would tell Agy and Pi agents to use a tool they do not have.
 
@@ -93,7 +93,7 @@ None of the four cache rules gains a new in-memory collection.
 - **Invalidation.** `session_checklist_turns` rows are removed by a trigger when the session ends and by `ON DELETE CASCADE` with the session, as `session_checklists` is today.
 - **Upper bounds.** One baseline row per live session, capped at `CHECKLIST_MAX_ITEMS` items like the snapshot. One `meta.taken` stamp per system-queued input. No new `src/shared/limits.ts` constant.
 - **Stable references.** `placeSystemInputs` caches per input array and returns the input array itself when nothing moves, so `groupMessages`' `WeakMap` cache and `TurnView` memo boundaries hold. `src/web/selectors-cache.test.ts` gains a case for it.
-- **Measured verification.** The extra work per write is one primary-key read and write on turn end and one metadata update per visible system input taken in. Not wide-impact enough for the benchmark checklist; the implementation step records `pnpm ui:polish shots` for the affected chat targets.
+- **Measured verification.** The ledger writes the baseline at turn end and when it removes items from the baseline. It updates message metadata once per visible system input. The implementation step records `pnpm ui:polish shots` for the affected chat targets.
 
 ### 5. Cross-vendor and cross-platform unification
 
@@ -118,7 +118,7 @@ None of the four cache rules gains a new in-memory collection.
 - `src/shared/taken-input.ts`: `TakenInput` and `takenInputOf`, the stamp shape shared by ledger and web.
 - `src/daemon/ledger/taken-inputs.ts`: writes the stamp before the ledger publishes the message’s processing status.
 - `src/shared/checklist.ts`: `turnChecklist`, the per-turn slice.
-- `src/daemon/ledger/checklist.ts`: `endTurn`, called from `messages.settleTurn` (`src/daemon/ledger/ledger.ts:352`); `apply` writes `turnChecklist(baseline, next)`.
+- `src/daemon/ledger/checklist.ts`: `endTurn` resets the baseline. `apply` stores the visible items in the message and saves the reduced baseline for the next update.
 - `src/web/turn-boundaries.ts`: `systemInputPlacement` and `placeSystemInputs`, applied by `groupMessages` before grouping. `TurnView` renders in-turn Worker lines with the same component they use outside a turn.
 - `src/web/components/Messages.tsx`: `pm.wakeup` renders through the existing `CollapsibleEvent`, like `ScheduleRun` (Decision 1, Option A).
 - `src/vendors/types.ts` and the six checklist vendors' `spec.ts`: `checklist.promptTool`. The implementation confirms each name against a recording.

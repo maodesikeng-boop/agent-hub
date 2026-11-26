@@ -69,9 +69,18 @@ describe(turnChecklist.name, () => {
       { id: "d", status: "completed" },
       { id: "f", title: "New", status: "completed" },
     ] });
-    expect(turnChecklist([], current)).toBe(current);
-    expect(turnChecklist(previous, current)).toEqual(current.slice(2));
+    expect(turnChecklist([], current).visible).toBe(current);
+    expect(turnChecklist(previous, current).visible).toEqual(current.slice(2));
     const renamed = current.map((item) => item.id === "a" ? { ...item, title: "Renamed" } : item);
-    expect(turnChecklist(previous, renamed).map((item) => item.id)).toEqual(["a", "c", "d", "e", "f"]);
+    expect(turnChecklist(previous, renamed).visible.map((item) => item.id)).toEqual(["a", "c", "d", "e", "f"]);
+  });
+
+  it("keeps a changed item visible if it later matches the baseline again", () => {
+    const done = { ...input("Run tests"), status: "completed" as const };
+    const baseline = replace(done, { ...done, title: "Read logs" });
+    const started = turnChecklist(baseline, replace(input("Run tests"), { ...done, title: "Read logs" }));
+    expect(started.visible.map(({ title }) => title)).toEqual(["Run tests"]);
+    expect(turnChecklist(started.unchanged, baseline).visible.map(({ title, status }) => [title, status]))
+      .toEqual([["Run tests", "completed"]]);
   });
 });

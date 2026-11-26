@@ -198,6 +198,33 @@ describe("live action timing", () => {
 });
 
 describe("checklist messages per turn", () => {
+  it("keeps a repeated title checked off until the turn ends, even across a ledger restart", () => {
+    const setSteps = (uuid: string, status: "pending" | "completed", extraTitle?: string) => setChecklist(uuid, {
+      kind: "replace",
+      items: [
+        { id: null, title: "Run tests", status },
+        { id: null, title: "Read logs", status: "completed" },
+        ...(extraTitle ? [{ id: null, title: extraTitle, status: "completed" as const }] : []),
+      ],
+    });
+    const end = () => emit({ type: "turn.ended", messageIds: [], at: now, ok: true, interrupted: false, durationMs: 1 });
+    const latest = () => checklistOf(checklistRows().at(-1)!)?.map(({ title, status }) => [title, status]);
+
+    setSteps("first", "completed");
+    end();
+    setSteps("repeat", "pending");
+    expect(latest()).toEqual([["Run tests", "pending"]]);
+
+    ledger.close();
+    ledger = createLedger(db, { now: () => now, pmHomeRoot: join(dir, "state", "pm-home"), dataHome: join(dir, "state"), userHome: dir });
+    setSteps("complete", "completed");
+    expect(latest()).toEqual([["Run tests", "completed"]]);
+
+    end();
+    setSteps("third", "completed", "Review results");
+    expect(latest()).toEqual([["Review results", "completed"]]);
+  });
+
   it.each([
     { unfinished: false, interrupted: false },
     { unfinished: true, interrupted: false },

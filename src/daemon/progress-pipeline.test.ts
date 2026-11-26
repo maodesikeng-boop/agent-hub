@@ -209,6 +209,18 @@ describe("progress pipeline across two turns", () => {
     expect(steps(page.messages.slice(start))).toEqual(["Check symbol", "Confirm symbol", "Report symbol"].map((title) => [title, "completed"]));
   }, 10_000);
 
+  it("codex: a repeated checklist title remains visible after completion", async () => {
+    const frames = progressFrames<unknown>("codex-repeat-1.live.jsonl");
+    const next = progressFrames<unknown>("codex-repeat-2.live.jsonl");
+    const { page } = await replayVendor("codex", { ...cases.codex, frames }, next);
+    const start = page.messages.findLastIndex((message) => message.sender === "user");
+    const snapshots = page.messages.slice(start).map(checklistOf).filter((items) => items !== null);
+    expect(snapshots.map((items) => items.map(({ title, status }) => [title, status]))).toEqual([
+      [["Run tests", "in_progress"], ["Review results", "pending"]],
+      [["Run tests", "completed"], ["Review results", "completed"]],
+    ]);
+  }, 10_000);
+
   it.each(["opencode", "deepseek", "kimi"] as const)("%s: replays a second plan using the same wire format", async (vendor) => {
     const fixture = cases[vendor];
     const next: unknown[] = JSON.parse(JSON.stringify(fixture.frames)
