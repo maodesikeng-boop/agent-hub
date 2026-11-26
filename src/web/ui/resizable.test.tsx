@@ -1,15 +1,26 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { computePreservedLayout, Pane, PaneGroup, PaneHandle } from "./resizable.tsx";
+import { computePaneLayout, Pane, PaneGroup, PaneHandle } from "./resizable.tsx";
 
 function mockHorizontalLayout(groupWidth = 1400, sepWidth = 2, rootPx = 16) {
   document.documentElement.style.fontSize = `${rootPx}px`;
   let currentGroupWidth = groupWidth;
+  const observers = new Map<ResizeObserver, { callback: ResizeObserverCallback; targets: Set<Element> }>();
+  class MockResizeObserver implements ResizeObserver {
+    private targets = new Set<Element>();
+    constructor(callback: ResizeObserverCallback) {
+      observers.set(this, { callback, targets: this.targets });
+    }
+    observe(target: Element) { this.targets.add(target); }
+    unobserve(target: Element) { this.targets.delete(target); }
+    disconnect() { observers.delete(this); }
+  }
+  vi.stubGlobal("ResizeObserver", MockResizeObserver);
   const widths = new WeakMap<HTMLElement, number>();
   const offsetDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
-    if (this.dataset.group !== undefined) return currentGroupWidth;
+    if (this.dataset.group !== undefined) return Math.round(currentGroupWidth);
     if (this.dataset.separator !== undefined) return this.dataset.seam === "joint" ? 0 : sepWidth;
     if (this.dataset.panel !== undefined) {
       const explicit = widths.get(this);
@@ -45,7 +56,7 @@ function mockHorizontalLayout(groupWidth = 1400, sepWidth = 2, rootPx = 16) {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     const el = this as HTMLElement;
-    const width = el.offsetWidth || currentGroupWidth;
+    const width = el.dataset.group !== undefined ? currentGroupWidth : el.offsetWidth || currentGroupWidth;
     const left = el.offsetLeft;
     return { width, height: 800, top: 0, left, right: left + width, bottom: 800, x: left, y: 0, toJSON: () => ({}) };
   });
@@ -54,6 +65,21 @@ function mockHorizontalLayout(groupWidth = 1400, sepWidth = 2, rootPx = 16) {
     setGroupWidth: (px: number) => {
       currentGroupWidth = px;
     },
+    resizeGroup: (group: HTMLElement, px: number) => {
+      currentGroupWidth = px;
+      act(() => {
+        for (const [observer, { callback, targets }] of [...observers]) {
+          if (!targets.has(group)) continue;
+          callback([{
+            target: group,
+            contentRect: group.getBoundingClientRect(),
+            borderBoxSize: [{ inlineSize: px, blockSize: 800 }],
+            contentBoxSize: [{ inlineSize: px, blockSize: 800 }],
+            devicePixelContentBoxSize: [{ inlineSize: px, blockSize: 800 }],
+          }], observer);
+        }
+      });
+    },
   };
 }
 
@@ -61,6 +87,7 @@ describe("PaneHandle", () => {
   afterEach(() => {
     document.documentElement.style.fontSize = "";
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("renders a separator with the given accessible name and its pane's min, max, and current values", () => {
@@ -174,6 +201,7 @@ describe("Pane", () => {
   afterEach(() => {
     document.documentElement.style.fontSize = "";
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("calls onCommit once with the rem width when a keyboard resize ends", () => {
@@ -239,13 +267,14 @@ describe("Pane", () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
-  it("keeps the PM column width continuous when switching from wide (1249px) to stack (1248px) and back", () => {
+  it("keeps the PM column continuous at the stack threshold and restores both preferred widths in a wide window", async () => {
     const rootPx = 17.5;
-    const layout = mockHorizontalLayout(1164.25, 4, rootPx);
+    const layout = mockHorizontalLayout(1715.25, 4, rootPx);
     const onCommitList = vi.fn();
-    const renderShell = (stack: boolean, listDefault = 16.5) => (
+    const onCommitPanel = vi.fn();
+    const renderShell = (stack: boolean) => (
       <PaneGroup id="test-stack-continuity">
-        <Pane id="list" defaultRem={listDefault} minRem={13.75} maxRem={25} onCommit={onCommitList}>
+        <Pane id="list" defaultRem={16.5} minRem={13.75} maxRem={25} preserveWidth={stack} onCommit={onCommitList}>
           <div>list</div>
         </Pane>
         <PaneHandle seam="joint" label="Resize project list" onReset={vi.fn()} />
@@ -257,34 +286,42 @@ describe("Pane", () => {
         {!stack && <PaneHandle seam="gap" label="Resize side panel" onReset={vi.fn()} />}
         <Pane
           id="panel"
-          {...(stack ? {} : { defaultRem: 40, minRem: 22.5, maxRem: 50 })}
+          {...(stack ? {} : { defaultRem: 49.99, minRem: 22.5, maxRem: 50, onCommit: onCommitPanel })}
         >
           <div>panel</div>
         </Pane>
       </PaneGroup>
     );
 
-    const listWidthPx = (container: HTMLElement) => {
-      const el = container.querySelector<HTMLElement>('[data-panel][id="list"]')!;
-      return el.offsetWidth;
-    };
+    const { container, rerender } = render(renderShell(false));
+    const group = container.querySelector<HTMLElement>("[data-group]")!;
+    const widthOf = (id: string) => group.querySelector<HTMLElement>(`[data-panel][id="${id}"]`)!.offsetWidth;
+    expect(widthOf("list")).toBeCloseTo(16.5 * rootPx, 0);
+    expect(widthOf("panel")).toBeCloseTo(49.99 * rootPx, 0);
 
-    const { container, rerender } = render(renderShell(false, 22));
-    const beforeStackPx = listWidthPx(container);
+    layout.resizeGroup(group, 1164.25);
+    const beforeStackPx = widthOf("list");
     expect(Math.abs(beforeStackPx - 13.75 * rootPx)).toBeLessThanOrEqual(2);
 
     layout.setGroupWidth(1163.25);
-    rerender(renderShell(true, 22));
-    const inStackPx = listWidthPx(container);
-    expect(Math.abs(inStackPx - beforeStackPx)).toBeLessThanOrEqual(2);
+    await act(async () => { rerender(renderShell(true)); });
+    const inStackPx = widthOf("list");
+    expect(Math.abs(inStackPx - beforeStackPx)).toBeLessThanOrEqual(0.1);
     expect(inStackPx).toBeLessThan(20 * rootPx);
     expect(onCommitList).not.toHaveBeenCalled();
 
     layout.setGroupWidth(1164.25);
-    rerender(renderShell(false, 22));
-    const backWidePx = listWidthPx(container);
-    expect(Math.abs(backWidePx - inStackPx)).toBeLessThanOrEqual(2);
+    await act(async () => { rerender(renderShell(false)); });
+    const backWidePx = widthOf("list");
+    expect(Math.abs(backWidePx - inStackPx)).toBeLessThanOrEqual(0.1);
+
+    layout.resizeGroup(group, 1715.25);
+    expect([widthOf("list"), widthOf("panel")]).toEqual([
+      expect.closeTo(16.5 * rootPx, 0),
+      expect.closeTo(49.99 * rootPx, 0),
+    ]);
     expect(onCommitList).not.toHaveBeenCalled();
+    expect(onCommitPanel).not.toHaveBeenCalled();
   });
 
   it("keeps the PM column width continuous when opening and closing the side panel at 1400px", () => {
@@ -330,7 +367,7 @@ describe("Pane", () => {
     const onCommitList = vi.fn();
     const renderShell = (stack: boolean, listDefault: number) => (
       <PaneGroup id="test-drag-stack-return">
-        <Pane id="list" defaultRem={listDefault} minRem={13.75} maxRem={25} onCommit={onCommitList}>
+        <Pane id="list" defaultRem={listDefault} minRem={13.75} maxRem={25} preserveWidth={stack} onCommit={onCommitList}>
           <div>list</div>
         </Pane>
         <PaneHandle seam="joint" label="Resize project list" onReset={vi.fn()} />
@@ -367,11 +404,11 @@ describe("Pane", () => {
   });
 });
 
-describe("computePreservedLayout", () => {
+describe("computePaneLayout", () => {
   it("keeps continuing fixed panes unchanged and allocates freed space to flexible panes", () => {
-    const layout = computePreservedLayout(
+    const layout = computePaneLayout(
       [
-        { id: "list", defaultRem: 22, minRem: 13.75, maxRem: 25, continuingPx: 240.625 },
+        { id: "list", defaultRem: 22, minRem: 13.75, maxRem: 25, liveRem: 13.75 },
         { id: "panel" },
       ],
       1163.25,
@@ -382,10 +419,10 @@ describe("computePreservedLayout", () => {
     expect((layout!.panel! / 100) * 1163.25).toBeCloseTo(922.625, 2);
   });
 
-  it("trims newly fixed panes before shrinking continuing fixed panes when entering three-pane layout", () => {
-    const layout = computePreservedLayout(
+  it("reserves all minimums before allocating extra width from left to right", () => {
+    const layout = computePaneLayout(
       [
-        { id: "list", defaultRem: 16.5, minRem: 13.75, maxRem: 25, continuingPx: 288.75 },
+        { id: "list", defaultRem: 16.5, minRem: 13.75, maxRem: 25 },
         { id: "chat", minRem: 30 },
         { id: "panel", defaultRem: 40, minRem: 22.5, maxRem: 50 },
       ],
@@ -399,8 +436,8 @@ describe("computePreservedLayout", () => {
   });
 
   it("returns null for non-positive dimensions or empty panes", () => {
-    expect(computePreservedLayout([], 1000, 17.5)).toBeNull();
-    expect(computePreservedLayout([{ id: "list" }], 0, 17.5)).toBeNull();
-    expect(computePreservedLayout([{ id: "list" }], 1000, 0)).toBeNull();
+    expect(computePaneLayout([], 1000, 17.5)).toBeNull();
+    expect(computePaneLayout([{ id: "list" }], 0, 17.5)).toBeNull();
+    expect(computePaneLayout([{ id: "list" }], 1000, 0)).toBeNull();
   });
 });

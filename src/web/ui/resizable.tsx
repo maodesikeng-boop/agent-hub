@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef } from "react";
-import { Group, Panel, Separator, useGroupRef, usePanelRef, type Layout, type LayoutChangedMeta } from "react-resizable-panels";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Group, Panel, Separator, useGroupRef, type Layout, type LayoutChangedMeta } from "react-resizable-panels";
 import { SHELL_GAP_PX } from "../limits.ts";
 import { cn } from "../lib/utils.ts";
 import { readRootRemPx } from "../shell-layout.ts";
@@ -15,8 +15,10 @@ export interface PaneGroupProps {
 
 export interface PaneProps {
   id: string;
-  /** Width on mount, usually the remembered width. Omitted on the flexible conversation pane. */
+  /** Preferred width, usually the remembered width. Omitted on flexible panes. */
   defaultRem?: number;
+  /** Use the last rendered width while the pane is beside the stacked work panel. */
+  preserveWidth?: boolean;
   minRem?: number;
   maxRem?: number;
   /** Called once when a user drag or keyboard resize ends, with the new width in rem. */
@@ -28,8 +30,6 @@ export interface PaneProps {
 /** joint: the boundary of two joined panes, taking no width; gap: a strip of frame between two sheets. */
 export type PaneSeam = "joint" | "gap";
 
-const SEAM_PX: Readonly<Record<PaneSeam, number>> = { joint: 0, gap: SHELL_GAP_PX };
-
 export interface PaneHandleProps {
   seam: PaneSeam;
   /** Accessible name of the separator. */
@@ -40,15 +40,17 @@ export interface PaneHandleProps {
 
 type CommitListener = (layout: Layout, availablePx: number) => void;
 
-interface PaneSpec {
-  id: string;
-  defaultRem?: number;
-  minRem?: number;
-  maxRem?: number;
+type PaneSpec = Pick<PaneProps, "id" | "defaultRem" | "minRem" | "maxRem" | "preserveWidth">;
+
+interface PaneLayoutInput extends PaneSpec {
+  liveRem?: number;
 }
 
-export interface PreservedPaneInput extends PaneSpec {
-  continuingPx?: number;
+interface PaneGeometry {
+  panes: readonly PaneSpec[];
+  availablePx: number;
+  remPx: number;
+  layout: Layout;
 }
 
 const PaneGroupContext = createContext<{
@@ -58,21 +60,18 @@ const PaneGroupContext = createContext<{
 
 function measureAvailableAxisPx(groupEl: HTMLElement | null): number {
   if (!groupEl) return 0;
-  const totalWidth = groupEl.offsetWidth > 0 ? groupEl.offsetWidth : groupEl.getBoundingClientRect().width;
-  if (!(totalWidth > 0)) return 0;
-  let seams = 0;
-  for (const sep of groupEl.querySelectorAll<HTMLElement>("[data-separator]")) {
-    seams += SEAM_PX[(sep.dataset.seam as PaneSeam | undefined) ?? "gap"];
-  }
-  return Math.max(0, totalWidth - seams);
+  const totalWidth = groupEl.getBoundingClientRect().width || groupEl.offsetWidth;
+  const gaps = groupEl.querySelectorAll(':scope > [data-separator][data-seam="gap"]').length;
+  return Math.max(0, totalWidth - gaps * SHELL_GAP_PX);
 }
 
-function samePaneSet(prev: readonly string[], next: readonly string[]): boolean {
-  if (prev.length !== next.length) return false;
-  for (let i = 0; i < prev.length; i++) {
-    if (prev[i] !== next[i]) return false;
-  }
-  return true;
+function sameGeometry(previous: PaneGeometry, panes: readonly PaneSpec[], availablePx: number, remPx: number): boolean {
+  return previous.availablePx === availablePx && previous.remPx === remPx && previous.panes.length === panes.length &&
+    panes.every((pane, i) => {
+      const old = previous.panes[i];
+      return old?.id === pane.id && old.defaultRem === pane.defaultRem && old.minRem === pane.minRem &&
+        old.maxRem === pane.maxRem && old.preserveWidth === pane.preserveWidth;
+    });
 }
 
 function layoutsClose(a: Layout, b: Layout): boolean {
@@ -84,83 +83,34 @@ function layoutsClose(a: Layout, b: Layout): boolean {
   return true;
 }
 
-/**
- * Computes percentage sizes after panes mount or unmount while keeping every continuing fixed pane at its previous pixel width.
- * Newly fixed panes absorb overflow before continuing fixed panes, and flexible panes take any remaining space.
- */
-export function computePreservedLayout(panes: readonly PreservedPaneInput[], availablePx: number, remPx: number): Layout | null {
-  if (!(availablePx > 0) || !(remPx > 0) || panes.length === 0) return null;
-  const mins = panes.map((p) => (p.minRem !== undefined ? Math.max(0, p.minRem * remPx) : 0));
-  const maxs = panes.map((p, i) => (p.maxRem !== undefined ? Math.max(mins[i]!, p.maxRem * remPx) : availablePx));
-  const isFixed = panes.map((p) => p.maxRem !== undefined);
-  const isContinuing = panes.map((p, i) => isFixed[i]! && p.continuingPx !== undefined);
-
-  const px = panes.map((p, i) => {
-    const raw = isContinuing[i] ? p.continuingPx! : p.defaultRem !== undefined ? p.defaultRem * remPx : mins[i]!;
-    return Math.min(maxs[i]!, Math.max(mins[i]!, raw));
-  });
-
-  const newlyFixedIdx = panes.map((_, i) => i).filter((i) => isFixed[i] && !isContinuing[i]);
-  const continuingIdx = panes.map((_, i) => i).filter((i) => isContinuing[i]);
-  const flexIdx = panes.map((_, i) => i).filter((i) => !isFixed[i]);
-
-  let diff = availablePx - px.reduce((sum, v) => sum + v, 0);
-  if (diff < 0) {
-    let excess = -diff;
-    for (const group of [newlyFixedIdx, continuingIdx, flexIdx]) {
-      for (const i of group) {
-        if (excess <= 0) break;
-        const room = px[i]! - mins[i]!;
-        if (room <= 0) continue;
-        const take = Math.min(room, excess);
-        px[i] = px[i]! - take;
-        excess -= take;
-      }
-    }
-    diff = availablePx - px.reduce((sum, v) => sum + v, 0);
+// Reserve every minimum, then give bounded panes their preferred width in display order.
+export function computePaneLayout(panes: readonly PaneLayoutInput[], availablePx: number, remPx: number): Layout | null {
+  if (!(availablePx > 0) || !(remPx > 0)) return null;
+  let remainingPx = availablePx - panes.reduce((sum, pane) => sum + (pane.minRem ?? 0) * remPx, 0);
+  const flexibleCount = panes.filter((pane) => pane.maxRem === undefined).length;
+  if (remainingPx < 0 || flexibleCount === 0) return null;
+  const boundedPx = new Map<string, number>();
+  for (const pane of panes) {
+    if (pane.maxRem === undefined) continue;
+    const minRem = pane.minRem ?? 0;
+    const preferredRem = Math.min(pane.maxRem, Math.max(minRem, pane.liveRem ?? pane.defaultRem ?? minRem));
+    const extraPx = Math.min(remainingPx, (preferredRem - minRem) * remPx);
+    boundedPx.set(pane.id, minRem * remPx + extraPx);
+    remainingPx -= extraPx;
   }
-
-  if (diff > 0) {
-    let surplus = diff;
-    for (const group of [flexIdx, newlyFixedIdx, continuingIdx]) {
-      let open = group.filter((i) => maxs[i]! - px[i]! > 0);
-      while (surplus > 1e-6 && open.length > 0) {
-        const share = surplus / open.length;
-        let given = 0;
-        const next: number[] = [];
-        for (const i of open) {
-          const room = maxs[i]! - px[i]!;
-          const add = Math.min(room, share);
-          px[i] = px[i]! + add;
-          given += add;
-          if (maxs[i]! - px[i]! > 1e-6) next.push(i);
-        }
-        if (given <= 1e-9) break;
-        surplus -= given;
-        open = next;
-      }
-    }
-  }
-
-  const total = px.reduce((sum, v) => sum + v, 0);
-  if (!(total > 0)) return null;
-  const out: Layout = {};
-  for (let i = 0; i < panes.length; i++) {
-    out[panes[i]!.id] = (px[i]! / total) * 100;
-  }
-  return out;
+  return Object.fromEntries(panes.map((pane) => {
+    const widthPx = boundedPx.get(pane.id) ?? (pane.minRem ?? 0) * remPx + remainingPx / flexibleCount;
+    return [pane.id, widthPx / availablePx * 100];
+  }));
 }
 
-/** Postcondition: lays its panes out side by side; panes with limits keep their pixel width when the window resizes or sibling panes mount and unmount. */
 export function PaneGroup({ id, className, children }: PaneGroupProps): React.ReactElement {
   const groupElRef = useRef<HTMLDivElement>(null);
   const groupRef = useGroupRef();
   const listenersRef = useRef(new Map<string, CommitListener>());
   const specsRef = useRef(new Map<string, PaneSpec>());
   const settledLayoutRef = useRef<Layout | null>(null);
-  const prevPaneIdsRef = useRef<string[] | null>(null);
-  const prevFixedIdsRef = useRef(new Set<string>());
-  const liveFixedPxRef = useRef(new Map<string, number>());
+  const geometryRef = useRef<PaneGeometry | null>(null);
 
   const registerCommit = useCallback((paneId: string, listener: CommitListener) => {
     listenersRef.current.set(paneId, listener);
@@ -178,51 +128,48 @@ export function PaneGroup({ id, className, children }: PaneGroupProps): React.Re
     };
   }, []);
 
-  const recordLiveState = useCallback((layout: Layout, paneIds: string[], availablePx: number) => {
-    prevPaneIdsRef.current = paneIds;
-    const nextFixed = new Set<string>();
-    const nextPx = new Map<string, number>();
-    for (const paneId of paneIds) {
-      const spec = specsRef.current.get(paneId);
-      if (spec?.maxRem === undefined) continue;
-      nextFixed.add(paneId);
-      const pct = layout[paneId];
-      if (pct !== undefined && availablePx > 0) {
-        nextPx.set(paneId, (pct / 100) * availablePx);
-      }
+  const reconcile = useCallback((layout: Layout) => {
+    const group = groupRef.current;
+    const availablePx = measureAvailableAxisPx(groupElRef.current);
+    if (!group || !(availablePx > 0)) return;
+    const paneIds = Object.keys(layout);
+    const panes = paneIds.flatMap((paneId) => specsRef.current.get(paneId) ?? []);
+    if (panes.length === 0 || panes.length !== paneIds.length) return;
+    const remPx = readRootRemPx();
+    const previous = geometryRef.current;
+    if (previous && sameGeometry(previous, panes, availablePx, remPx)) {
+      previous.layout = layout;
+      return;
     }
-    prevFixedIdsRef.current = nextFixed;
-    liveFixedPxRef.current = nextPx;
-  }, []);
 
-  const handleLayoutChange = useCallback(
-    (layout: Layout) => {
-      settledLayoutRef.current ??= layout;
-      const paneIds = Object.keys(layout);
-      const availablePx = measureAvailableAxisPx(groupElRef.current);
-      const prevIds = prevPaneIdsRef.current;
+    const target = computePaneLayout(panes.map((pane) => {
+      if (!pane.preserveWidth || !previous) return pane;
+      const old = previous.panes.find((spec) => spec.id === pane.id);
+      const pct = previous.layout[pane.id];
+      if (!old || old.defaultRem !== pane.defaultRem || pct === undefined) return pane;
+      return { ...pane, liveRem: pct / 100 * previous.availablePx / previous.remPx };
+    }), availablePx, remPx);
+    if (!target) return;
+    const next = { panes, availablePx, remPx, layout };
+    geometryRef.current = next;
+    if (!layoutsClose(layout, target)) next.layout = group.setLayout(target);
+  }, [groupRef]);
 
-      // react-resizable-panels restores cached or default layouts per panel-id set; override immediately before paint so continuing fixed panes never jump.
-      if (prevIds !== null && !samePaneSet(prevIds, paneIds) && availablePx > 0) {
-        const inputs: PreservedPaneInput[] = paneIds.map((paneId) => {
-          const spec = specsRef.current.get(paneId) ?? { id: paneId };
-          const continuingPx =
-            spec.maxRem !== undefined && prevFixedIdsRef.current.has(paneId) ? liveFixedPxRef.current.get(paneId) : undefined;
-          return { ...spec, continuingPx };
-        });
-        const preserved = computePreservedLayout(inputs, availablePx, readRootRemPx());
-        if (preserved !== null && !layoutsClose(layout, preserved)) {
-          recordLiveState(preserved, paneIds, availablePx);
-          const applied = groupRef.current?.setLayout(preserved) ?? preserved;
-          settledLayoutRef.current = applied;
-          return;
-        }
-      }
+  const syncGeometry = useCallback(() => {
+    const layout = groupRef.current?.getLayout();
+    if (layout) reconcile(layout);
+  }, [groupRef, reconcile]);
 
-      recordLiveState(layout, paneIds, availablePx);
-    },
-    [groupRef, recordLiveState],
-  );
+  useLayoutEffect(syncGeometry);
+  useLayoutEffect(() => {
+    const element = groupElRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(syncGeometry);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [syncGeometry]);
+
+  const context = useMemo(() => ({ registerCommit, registerSpec }), [registerCommit, registerSpec]);
 
   const handleLayoutChanged = useCallback((layout: Layout, meta: LayoutChangedMeta) => {
     const prev = settledLayoutRef.current;
@@ -239,14 +186,14 @@ export function PaneGroup({ id, className, children }: PaneGroupProps): React.Re
   }, []);
 
   return (
-    <PaneGroupContext.Provider value={{ registerCommit, registerSpec }}>
+    <PaneGroupContext.Provider value={context}>
       <Group
         id={id}
         elementRef={groupElRef}
         groupRef={groupRef}
         orientation="horizontal"
         className={cn("min-h-0 min-w-0 flex-1", className)}
-        onLayoutChange={handleLayoutChange}
+        onLayoutChange={reconcile}
         onLayoutChanged={handleLayoutChanged}
       >
         {children}
@@ -256,17 +203,14 @@ export function PaneGroup({ id, className, children }: PaneGroupProps): React.Re
 }
 
 /** Postcondition: renders a resizable pane that never leaves [minRem, maxRem]. */
-export function Pane({ id, defaultRem, minRem, maxRem, onCommit, className, children }: PaneProps): React.ReactElement {
+export function Pane({ id, defaultRem, minRem, maxRem, preserveWidth, onCommit, className, children }: PaneProps): React.ReactElement {
   const ctx = useContext(PaneGroupContext);
-  const panelRef = usePanelRef();
-  const committedRemRef = useRef<number | null>(null);
-  const prevDefaultRemRef = useRef<number | undefined>(defaultRem);
   const latestPxRef = useRef<number>(0);
 
   useLayoutEffect(() => {
     if (!ctx) return;
-    return ctx.registerSpec({ id, defaultRem, minRem, maxRem });
-  }, [ctx, id, defaultRem, minRem, maxRem]);
+    return ctx.registerSpec({ id, defaultRem, minRem, maxRem, preserveWidth });
+  }, [ctx, id, defaultRem, minRem, maxRem, preserveWidth]);
 
   useEffect(() => {
     if (!ctx || !onCommit) return;
@@ -279,31 +223,13 @@ export function Pane({ id, defaultRem, minRem, maxRem, onCommit, className, chil
       let rem = Math.round((rawPx / remPx) * 100) / 100;
       if (minRem !== undefined) rem = Math.max(minRem, rem);
       if (maxRem !== undefined) rem = Math.min(maxRem, rem);
-      committedRemRef.current = rem;
       onCommit(rem);
     });
   }, [ctx, id, maxRem, minRem, onCommit]);
 
-  useEffect(() => {
-    if (defaultRem === undefined) {
-      prevDefaultRemRef.current = undefined;
-      return;
-    }
-    const prev = prevDefaultRemRef.current;
-    if (prev !== defaultRem) {
-      const wasCommitted = committedRemRef.current === defaultRem;
-      prevDefaultRemRef.current = defaultRem;
-      if (prev !== undefined && !wasCommitted) {
-        panelRef.current?.resize(`${defaultRem}rem`);
-      }
-    }
-    committedRemRef.current = null;
-  }, [defaultRem, panelRef]);
-
   return (
     <Panel
       id={id}
-      panelRef={panelRef}
       defaultSize={defaultRem !== undefined ? `${defaultRem}rem` : undefined}
       minSize={minRem !== undefined ? `${minRem}rem` : undefined}
       maxSize={maxRem !== undefined ? `${maxRem}rem` : undefined}

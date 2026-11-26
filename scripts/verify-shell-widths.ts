@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Browser, Page } from "playwright";
 import { VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
-import { SHELL_CHAT_USABLE_REM, SHELL_LIST_REM } from "../src/web/limits.ts";
+import { SHELL_CHAT_USABLE_REM, SHELL_LIST_REM, SHELL_PANEL_REM } from "../src/web/limits.ts";
 
 // Copies of UI_SCALES and UI_SCALE_KEY: src/web/ui-scale.ts needs the DOM lib, which scripts/ compile without.
 const SCALES = ["sm", "md", "lg", "xl"] as const;
@@ -22,6 +22,7 @@ interface ShellWidths {
   rootPx: number;
   listPx: number | null;
   chatPx: number | null;
+  panelPx: number | null;
   scrollPx: number;
 }
 
@@ -36,7 +37,7 @@ interface BrowserGlobal {
     elementFromPoint(x: number, y: number): unknown;
   };
   getComputedStyle(el: unknown): { fontSize: string; outlineStyle: string; outlineWidth: string };
-  localStorage: { setItem(key: string, value: string): void; removeItem(key: string): void };
+  localStorage: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void };
   requestAnimationFrame(cb: () => void): void;
 }
 
@@ -58,6 +59,7 @@ async function settledWidths(page: Page): Promise<ShellWidths> {
         rootPx: Number.parseFloat(g.getComputedStyle(g.document.documentElement).fontSize),
         listPx: width('[data-panel][id="list"]'),
         chatPx: width('[data-panel][id="chat"]'),
+        panelPx: width('[data-panel][id="panel"]'),
         scrollPx: g.document.documentElement.scrollWidth,
       };
       return JSON.stringify(m);
@@ -96,6 +98,44 @@ async function openProjectAndType(page: Page, label: string): Promise<void> {
   await draft.fill("");
   await page.keyboard.type(DRAFT);
   assert.equal(await draft.inputValue(), DRAFT, `${label}: typing did not reach the composer`);
+}
+
+async function verifyWorkPanelRoundTrip(page: Page): Promise<void> {
+  const atWidth = async (width: number) => {
+    await page.setViewportSize({ width, height: HEIGHT_PX });
+    const widths = await settledWidths(page);
+    assert.ok(widths.scrollPx <= width, `Work panel at ${width}px: page scrolls sideways (${widths.scrollPx}px)`);
+    return widths;
+  };
+  const readSaved = () => page.evaluate(() => (globalThis as unknown as BrowserGlobal).localStorage.getItem("agent-hub.paneWidths"));
+
+  await page.setViewportSize({ width: 1800, height: HEIGHT_PX });
+  await page.locator('#chat header button[aria-label^="Show work panel"]').click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+  const grip = page.getByRole("separator", { name: "Resize side panel" });
+  await grip.focus({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+  for (let i = 0; i < 6; i++) await grip.press("ArrowLeft");
+  const initial = await settledWidths(page);
+  const saved = await readSaved();
+  assert.ok(initial.panelPx !== null && initial.panelPx > SHELL_PANEL_REM.default * initial.rootPx, "Keyboard resize did not widen the work panel");
+  assert.ok(saved !== null, "Keyboard resize did not save a width");
+
+  const narrow = await atWidth(1249);
+  const stacked = await atWidth(1248);
+  const unstacked = await atWidth(1249);
+  const restored = await atWidth(1800);
+  assert.ok(narrow.chatPx !== null && stacked.chatPx === null && unstacked.chatPx !== null, "Expected three columns before and after the stack tier");
+  for (const widths of [narrow, unstacked]) {
+    assert.ok(
+      widths.listPx !== null && stacked.listPx !== null && Math.abs(widths.listPx - stacked.listPx) <= 0.1,
+      `PM column jumped between 1249px (${widths.listPx}px) and 1248px (${stacked.listPx}px)`,
+    );
+  }
+  assert.ok(
+    restored.listPx !== null && initial.listPx !== null && Math.abs(restored.listPx - initial.listPx) <= 0.25 &&
+      restored.panelPx !== null && Math.abs(restored.panelPx - initial.panelPx) <= 0.25,
+    `1800px round trip did not restore the panes: list ${initial.listPx}px → ${restored.listPx}px, work panel ${initial.panelPx}px → ${restored.panelPx}px`,
+  );
+  assert.equal(await readSaved(), saved, "Resizing the window changed the saved pane widths");
 }
 
 /**
@@ -144,17 +184,7 @@ export async function verifyShellWidths(browser: Browser, loginUrl: string, orig
       await draft.fill("");
 
       if (scale === "md") {
-        // With the work panel open, narrowing across the wide -> stack threshold keeps the PM column width continuous.
-        await page.locator('#chat header button[aria-label^="Show work panel"]').click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-        await page.locator('[data-panel][id="panel"]').waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-        await page.setViewportSize({ width: 1249, height: HEIGHT_PX });
-        const widePanel = await settledWidths(page);
-        await page.setViewportSize({ width: 1248, height: HEIGHT_PX });
-        const stackPanel = await settledWidths(page);
-        assert.ok(
-          widePanel.listPx !== null && stackPanel.listPx !== null && Math.abs(stackPanel.listPx - widePanel.listPx) <= 2,
-          `1249px -> 1248px with work panel open jumped PM column from ${widePanel.listPx}px to ${stackPanel.listPx}px`,
-        );
+        await verifyWorkPanelRoundTrip(page);
 
         // Keyboard Tab focus onto a standard Button renders a visible 2px solid focus outline.
         await page.setViewportSize({ width: WIDE_PX, height: HEIGHT_PX });

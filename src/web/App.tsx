@@ -119,6 +119,7 @@ function DesktopWorkbench({
                   defaultRem={widths.list}
                   minRem={SHELL_LIST_REM.min}
                   maxRem={SHELL_LIST_REM.max}
+                  preserveWidth={stackPanel}
                   onCommit={(rem) => commit("list", rem)}
                 >
                   <SurfaceOutlet id="list" />
