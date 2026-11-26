@@ -33,6 +33,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Worker state accuracy and operations](worker-ops-fix-design.md): Worktree branch reconciliation, shared Worker list/show states, cross-vendor context-token preservation, stale Worker PM notice suppression, Task Graph step agent display, live `hub models` quota tracking, and background command inspection.
 - [System wakeups and per-turn checklists](system-wakeup-turns-design.md): PM wakeups stored as system notices, placing system inputs where the agent read them, per-turn checklist slices, and the vendor checklist prompt rule.
 - [Lost Worker briefs and stale notices](lost-brief-stale-notice-design.md): Daemon shutdown never cancels unread messages in any vendor driver, restart resends interrupted turns or tells the PM, failed first launches show their error, one pre-write currency check for delivery notes and timeout reminders, `graph done` ending the parked Worker, and per-model effort validation.
+- [Project Manager awareness of finished work (design A)](pm-awareness-design-a.md): Independent draft for Task Graph #148: root causes of missed finished work, a ledger-computed list of what waits for the PM shown in `hub status`, handover preambles, and user-message notes, daemon-owned `hub watch` waits, per-project step slots, and a delivery row on finished graphs.
 
 ## Desktop and distribution
 
