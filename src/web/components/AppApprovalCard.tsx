@@ -37,15 +37,15 @@ export function AppApprovalCardView({
   const pending = status === "pending";
   return (
     <article aria-label="Computer Use app approval" className={cn("rounded-sm border px-3.5 py-3", pending ? "border-select-line bg-open" : "border-border bg-background", className)}>
-      <h3 className="text-body font-semibold">Let Computer Use control {appName}{deviceName === undefined ? "" : ` · ${deviceName}`}</h3>
+      <h3 className="wrap-anywhere text-body font-semibold">Let Computer Use control {appName}{deviceName === undefined ? "" : ` · ${deviceName}`}</h3>
       <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-minor">
         <span className="wrap-anywhere">{appId}</span>
         {riskLevel !== null && (
           <span className={cn("rounded-xs bg-panel px-1.5 text-xs font-medium", riskLevel === "high" && "text-danger")}>{RISK_LABEL[riskLevel]}</span>
         )}
       </div>
-      <p className="mt-2 text-minor">Worker #{workerId}{workerTitle === "" ? "" : ` · ${workerTitle}`}</p>
-      {warning !== null && <p className="mt-1 text-minor">{warning}</p>}
+      <p className="mt-2 wrap-anywhere text-minor">Worker #{workerId}{workerTitle === "" ? "" : ` · ${workerTitle}`}</p>
+      {warning !== null && <p className="mt-1 wrap-anywhere text-minor">{warning}</p>}
       {pending ? (
         <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
           {remainingMs !== null && (
@@ -53,8 +53,8 @@ export function AppApprovalCardView({
               <Clock className="size-3.5" aria-hidden />{formatRemaining(remainingMs)}
             </span>
           )}
-          <Button size="sm" variant="outline" disabled={busy || disabled} onClick={() => onDecide?.("deny")}>Deny</Button>
-          <Button size="sm" disabled={busy || disabled} onClick={() => onDecide?.("allow")}>Allow for this run</Button>
+          <Button size="sm" variant="outline" className="focus-visible:outline-solid" disabled={busy || disabled} onClick={() => onDecide?.("deny")}>Deny</Button>
+          <Button size="sm" className="focus-visible:outline-solid" disabled={busy || disabled} onClick={() => onDecide?.("allow")}>Allow for this run</Button>
         </div>
       ) : (
         <p className="mt-2 text-minor font-medium" role="status">{APP_APPROVAL_SETTLED_LABELS[status]}</p>
