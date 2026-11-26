@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// 界面打磨循环的命令入口（docs/ui-polish-loop-design.md 第 3.8 节），`pnpm ui:polish <命令>`：
-//   inventory                                  打印界面清单（Markdown）
-//   shots [--round <id>] [--only <id|区域>…] [--verify] [--engine chromium|webkit]   截全部界面；--verify 截两遍，有一张字节不同就失败；webkit 的图放在 <轮次>/webkit/
-//   calibrate-shots [--round <id>]             截校准用的图：基准图、几张真实界面、每个弄坏各一张，另加凑满一批用的真实界面
-//   brief --round <id> --judge <厂商/模型> --batch <n> [--batch-size <n>] [--run <n>]   打印这一批的评委任务说明
-//   check-cards --round <id> --judge <厂商/模型>    评委自查：评分卡格式对不对、图齐不齐
-//   score --round <id> [--dismissals <文件>]      合分，写这一轮的记录，打印下一步
-//   calibration --round <id>                   每档批大小各算一份校准报告，选出正式评审用的批大小，写记录
-//   report --round <id> [--previous <id>]      生成给用户看的 HTML
-// 截图和评分卡默认放 ROUND_OUTPUT_DIR/<轮次>/，记录写进仓库的 RECORD_DIR。
+// Entry point of the UI polish loop (docs/ui-polish-loop-design.md section 3.8), `pnpm ui:polish <command>`:
+//   inventory                                  print the screen inventory (Markdown)
+//   shots [--round <id>] [--only <id|area>…] [--verify] [--engine chromium|webkit]   capture every screen; --verify captures twice and fails if any image differs; WebKit images go under <round>/webkit/
+//   calibrate-shots [--round <id>]             capture calibration images: the baseline, a few real screens, one per breakage, plus real screens to fill a batch
+//   brief --round <id> --judge <vendor/model> --batch <n> [--batch-size <n>] [--run <n>]   print the judge brief for this batch
+//   check-cards --round <id> --judge <vendor/model>    judge self-check: scorecard format and image coverage
+//   score --round <id> [--dismissals <file>]   merge scores, write this round's record, print the next step
+//   calibration --round <id>                   write one calibration report per batch size, pick the batch size for real reviews, write the record
+//   report --round <id> [--previous <id>]      build the HTML report for the user
+// Screenshots and scorecards default to ROUND_OUTPUT_DIR/<round>/; records go to the repository's RECORD_DIR.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";

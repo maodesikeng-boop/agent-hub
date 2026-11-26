@@ -82,6 +82,15 @@ export type ScreenStep =
   | { storage: Record<string, string> }
   /** 等这个选择器出现才往下走。 */
   | { waitFor: string }
+  /** Waits until nothing matching this selector is visible; proves which layout branch rendered. */
+  | { hidden: string }
+  /**
+   * Presses the browser's next-control key (Tab; Alt+Tab in WebKit, whose Tab skips buttons) until this element has focus,
+   * and fails unless it shows a visible focus mark (scripts/verify-settings-keyboard.ts focusMarkVisible).
+   */
+  | { tabTo: string }
+  /** As tabTo, moving backward (Shift+Tab). WebKit's Alt+Tab does not wrap inside a dialog's focus trap. */
+  | { tabBackTo: string }
   /** 把浏览器钉住的时间拨到“固定时间 + 这么多毫秒”（界面按时间差判断的状态，比如断线满 30 秒才算离线）；之后要有一次重画才看得到。 */
   | { clock: number }
   /** 局部图裁哪个元素（清单里写了 focus 的界面才用）。 */
@@ -107,6 +116,62 @@ const D = ["desktop"] as const;
 const M = ["mobile"] as const;
 const DM = ["desktop", "mobile"] as const;
 const DNM = ["desktop", "narrow", "mobile"] as const;
+
+/** Settings categories checked at the Compact and XL scales at 860px and 700px (docs/info-style-rollout-design.md scenario 7). */
+const WIDTH_CATEGORIES = [
+  { id: "general", tab: "General" },
+  { id: "providers", tab: "Providers" },
+  { id: "capabilities", tab: "Capabilities" },
+  { id: "resources", tab: "Resources" },
+  { id: "computers", tab: "Computers" },
+  { id: "security", tab: "Security & Access" },
+] as const;
+/** At XL a 700px window takes the phone shell, so Settings there is the phone page and its sub-pages. */
+const WIDTH_PHONE_PAGES = [
+  { id: "home", row: undefined },
+  { id: "scale", row: "Interface scale" },
+  { id: "notifications", row: "Notifications" },
+  { id: "updates", row: "Updates" },
+  { id: "providers", row: "Providers" },
+  { id: "vendor-sync", row: "Vendor sync" },
+  { id: "capabilities", row: "Capabilities" },
+  { id: "resources", row: "Resources" },
+  { id: "computers", row: "Computers" },
+  { id: "sign-in", row: "Sign in on another device" },
+  { id: "browsers", row: "Signed-in browsers" },
+] as const;
+const WIDTH_DIALOG_CASES = [
+  { key: "w860-sm", scale: "sm", viewport: "narrow", layout: "side", label: "Compact at 860px, categories beside" },
+  { key: "w860-xl", scale: "xl", viewport: "narrow", layout: "side", label: "XL at 860px, categories beside" },
+  { key: "w700-sm", scale: "sm", viewport: "slim", layout: "top", label: "Compact at 700px, categories on top" },
+] as const;
+/** Every stop of the expanded New PM form with two computers and a valid name, in Tab order; Look is one step back from Name. */
+const NEW_PM_KEYBOARD_STOPS = [
+  { id: "look", role: "button", name: "Change look" },
+  { id: "name", role: "textbox", name: "Name" },
+  { id: "device", role: "combobox", name: "Device" },
+  { id: "folder", role: "textbox", name: "Main folder" },
+  { id: "mode", role: "combobox", name: "Mode" },
+  { id: "more", role: "button", name: "More settings" },
+  { id: "provider", role: "combobox", name: "Provider" },
+  { id: "model", role: "combobox", name: "Model" },
+  { id: "effort", role: "combobox", name: "Effort" },
+  { id: "persona", role: "textbox", name: "Persona" },
+  { id: "create", role: "button", name: "Create" },
+  { id: "close", role: "button", name: "Close" },
+] as const;
+
+const WIDTH_SHOTS: readonly ScreenSpec[] = [
+  ...WIDTH_DIALOG_CASES.flatMap((c) =>
+    WIDTH_CATEGORIES.map((cat) => s(`settings.${c.key}-${cat.id}`, `Settings: ${cat.tab}, ${c.label}`, [c.viewport], "normal", "standard", `localStorage presets ${c.scale}, open ${cat.tab}`, "弹窗")),
+  ),
+  ...WIDTH_PHONE_PAGES.map((page) =>
+    s(`m-settings.w700-xl-${page.id}`, `Phone settings at XL in a 700px window: ${page.row ?? "home"}`, ["slim"], "normal", page.id === "computers" ? "two-devices" : "standard", `localStorage presets xl, Settings, ${page.row ?? "home"}`),
+  ),
+  ...NEW_PM_KEYBOARD_STOPS.map((stop, i) =>
+    s(`new-pm.kb-${String(i + 1).padStart(2, "0")}-${stop.id}`, `New PM keyboard: ${stop.name} focused`, D, "normal", "two-devices", `Click +, type a name, expand More settings, Shift+Tab from Name to Change look, then Tab to ${stop.name}`, "弹窗"),
+  ),
+];
 
 export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("shell.loading", "整页加载中", DM, "loading", "standard", "打开首页，补丁 state-pending 让 /api/state 不回"),
@@ -274,6 +339,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("quota.max", "额度浮层：用满、偏高、Antigravity 两个模型族", D, "long", "standard", "同上，补丁 quota-max", "浮层"),
   s("quota.short-window", "额度浮层：窗口矮时在浮层里滚动", ["slim"], "long", "standard", "同上，补丁 quota-max", "浮层"),
   s("quota.rail", "额度浮层：在窄屏打开", ["narrow"], "normal", "standard", "点最左栏额度沙漏，补丁 quota-normal", "浮层"),
+  ...WIDTH_SHOTS,
 ];
 
 const APP_RAIL = 'role=navigation[name="Workspace"]';
@@ -310,6 +376,8 @@ const QUICK_ASK = "今天各项目进度怎么样？";
 const QUICK_ANSWERED = `${QUICK_POPOVER} >> [data-router-turn][data-status="answered"]`;
 const profileScope = (name: string) => `[aria-label="${name}'s settings"]`;
 const openProfile = (name: string): ScreenStep[] => [...openPm(name), { click: `role=button[name="View ${name}'s profile"]` }, { waitFor: profileScope(name) }];
+/** The year-ring column title shows only while the categories sit beside the sheet (720px and wider). */
+const SETTINGS_SIDE_TITLE = `${DIALOG} >> div[data-window-drag]:text-is("Settings")`;
 const openSettings = (tab?: string): ScreenStep[] => [{ waitFor: APP_RAIL }, { click: btn("Settings", APP_RAIL) }, { waitFor: DIALOG }, ...(tab === undefined ? [] : [{ click: `role=tab[name="${tab}"]` }])];
 /** 手机设置：底部 TabBar 点 Settings，再点一行。 */
 const openMobileSettings = (row?: string): ScreenStep[] => [{ click: btn("Settings") }, { waitFor: 'role=heading[name="Settings"]' }, ...(row === undefined ? [] : [{ click: btn(row, "role=main") }])];
@@ -584,7 +652,67 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "quota.max": openQuota("quota-max"),
   "quota.short-window": openQuota("quota-max"),
   "quota.rail": openQuota("quota-normal"),
+  ...widthSteps(),
+  ...newPmKeyboardSteps(),
 };
+
+function widthSteps(): Record<string, ScreenStep[]> {
+  const ready: Partial<Record<string, ScreenStep[]>> = {
+    providers: [{ waitFor: `${DIALOG} >> role=button[name^="Sign in to"]` }],
+    capabilities: [{ waitFor: `${DIALOG} >> role=searchbox[name="Search capabilities"]` }],
+    resources: [{ waitFor: `${DIALOG} >> text=#42 Fix auth flow` }],
+  };
+  const patches: Partial<Record<string, ScreenStep[]>> = {
+    providers: [{ patch: "vendors-mixed" }],
+    "vendor-sync": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }],
+    resources: [{ patch: "resources-attention" }],
+    browsers: [{ patch: "browsers-multi" }],
+  };
+  const dialog = WIDTH_DIALOG_CASES.flatMap((c) =>
+    WIDTH_CATEGORIES.map((cat): [string, ScreenStep[]] => [
+      `settings.${c.key}-${cat.id}`,
+      [
+        storage({ "agent-hub.uiScale": c.scale }),
+        ...(patches[cat.id] ?? []),
+        ...openSettings(cat.tab),
+        c.layout === "side" ? { waitFor: SETTINGS_SIDE_TITLE } : { hidden: SETTINGS_SIDE_TITLE },
+        ...(ready[cat.id] ?? []),
+        { crop: DIALOG },
+      ],
+    ]),
+  );
+  const phone = WIDTH_PHONE_PAGES.map((page): [string, ScreenStep[]] => [
+    `m-settings.w700-xl-${page.id}`,
+    [
+      storage({ "agent-hub.uiScale": "xl" }),
+      ...(patches[page.id] ?? []),
+      ...openMobileSettings(page.row),
+      { hidden: 'role=tablist[name="Settings categories"]' },
+      ...(page.id === "capabilities" ? [{ waitFor: 'role=searchbox[name="Search capabilities"]' }] : []),
+      ...(page.id === "resources" ? [{ waitFor: "text=#42 Fix auth flow" }] : []),
+    ],
+  ]);
+  return Object.fromEntries([...dialog, ...phone]);
+}
+
+function newPmKeyboardSteps(): Record<string, ScreenStep[]> {
+  const NEW_PM = 'role=dialog[name="New project manager"]';
+  const open: ScreenStep[] = [
+    ...ensureList,
+    { click: btn("New project manager", LIST) },
+    { type: { into: `${NEW_PM} >> role=textbox[name="Name"]`, text: "Keyboard" } },
+    { click: btn("More settings", NEW_PM) },
+    { waitFor: `${NEW_PM} >> role=textbox[name="Persona"]` },
+    { focus: `${NEW_PM} >> role=textbox[name="Name"]` },
+    { tabBackTo: `${NEW_PM} >> role=button[name="Change look"]` },
+  ];
+  return Object.fromEntries(
+    NEW_PM_KEYBOARD_STOPS.map((stop, i): [string, ScreenStep[]] => [
+      `new-pm.kb-${String(i + 1).padStart(2, "0")}-${stop.id}`,
+      [...open, ...(stop.id === "look" ? [] : [{ tabTo: `${NEW_PM} >> role=${stop.role}[name="${stop.name}"]` }]), { crop: NEW_PM }],
+    ]),
+  );
+}
 
 /** 一张要截的图：一个界面配一个视口。 */
 export interface Shot {

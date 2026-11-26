@@ -16,6 +16,7 @@ import {
   SHOT_STABLE_POLL_MS,
   SHOT_TIMEZONE,
   SHOT_WORK_DIR,
+  TAB_TO_MAX_PRESSES,
   VIEWPORTS,
   type ViewportName,
 } from "./limits.ts";
@@ -26,6 +27,7 @@ import { applyMutation } from "./mutations.ts";
 import { applyPatch, blockWrites, heldRequests } from "./patches.ts";
 import { SCREEN_INVENTORY, SCREEN_STEPS, expandShots, type Scenario, type ScreenStep, type Shot } from "./screens.ts";
 import { startNodeRelay } from "../../src/relay/node/server.ts";
+import { readFocus } from "../../scripts/verify-settings-keyboard.ts";
 import { startFakeGithub } from "../e2e/fake-github.ts";
 import { peerHomeOf, seedScenario, startIsolatedDaemon, type IsolatedDaemon, type SeedResult } from "./seed.ts";
 
@@ -308,6 +310,9 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
   }
   else if ("scroll" in step) await page.locator(step.scroll.target).first().evaluate(inPage.scrollToPosition, step.scroll.to); else if ("drag" in step) await page.evaluate(inPage.dragFiles, { selector: step.drag.over, names: step.drag.files, ...(step.drag.drop === undefined ? {} : { drop: step.drag.drop }) });
   else if ("waitFor" in step) await page.waitForSelector(step.waitFor, { timeout });
+  else if ("hidden" in step) await page.locator(step.hidden).first().waitFor({ state: "hidden", timeout });
+  else if ("tabTo" in step) await tabTo(page, step.tabTo, false);
+  else if ("tabBackTo" in step) await tabTo(page, step.tabBackTo, true);
   else if ("clock" in step) await page.clock.setFixedTime(new Date(Date.parse(BROWSER_NOW_ISO) + step.clock));
   else if ("signOut" in step) {
     await page.context().clearCookies();
@@ -317,6 +322,23 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
     return step.crop;
   }
   return undefined;
+}
+
+async function tabTo(page: Page, selector: string, backward: boolean): Promise<void> {
+  const key = `${backward ? "Shift+" : ""}${page.context().browser()?.browserType().name() === "webkit" ? "Alt+Tab" : "Tab"}`;
+  const target = page.locator(selector).first();
+  await target.waitFor({ timeout: SHOT_READY_TIMEOUT_MS });
+  const passed: string[] = [];
+  for (let i = 0; i < TAB_TO_MAX_PRESSES; i++) {
+    await page.keyboard.press(key);
+    const stop = await readFocus(page);
+    if (await target.evaluate((el: unknown) => el === (globalThis as unknown as { document: { activeElement: unknown } }).document.activeElement)) {
+      if (!stop.focusVisible || !stop.ring) throw new Error(`${selector}: keyboard focus shows no visible mark (outline ${stop.outline}, shadow ${stop.boxShadow})`);
+      return;
+    }
+    passed.push(stop.name);
+  }
+  throw new Error(`${selector}: ${key} never reached it (passed ${passed.join(", ")})`);
 }
 
 /**
