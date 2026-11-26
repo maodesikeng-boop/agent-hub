@@ -240,6 +240,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("task_graphs", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_steps", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_step_states", "growing", "migrations/0057_pm_agenda.sql", "src/daemon/ledger/pm-agenda.ts", "automatic", GRAPH_RETENTION_LIMITS),
+  table("task_graph_step_slots", "growing", "src/daemon/ledger/task-graphs/slots.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_edges", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_step_capabilities", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_step_sandbox", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),

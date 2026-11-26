@@ -850,6 +850,10 @@ export interface TaskNode {
   confirm?: boolean;
   review?: boolean;
   base?: string | null;
+  /** Name of the resource on this computer the step queues for; null or absent when it needs none. */
+  slot?: string | null;
+  /** Present while the step waits for its slot: first-in, first-out position and the current holder. */
+  slotQueue?: { position: number; holder: { graphId: TaskGraphId; nodeKey: TaskNodeKey; workerId: WorkerId | null } };
   status: TaskNodeStatus;
   waitingFor: TaskNodeWaitingFor | null;
   skipped: boolean;
