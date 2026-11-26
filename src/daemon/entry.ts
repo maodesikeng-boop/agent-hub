@@ -178,9 +178,9 @@ export async function runDaemonProcess(options: DaemonOptions): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  console.log(`${PRODUCT_NAME} 已启动，数据目录 ${daemon.paths.home}`);
-  console.log(`在浏览器里打开：${daemon.url}`);
-
+  // Callers treat the login link as readiness and may signal right away; without a listener Node's default action kills the process.
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  console.log(`${PRODUCT_NAME} 已启动，数据目录 ${daemon.paths.home}`);
+  console.log(`在浏览器里打开：${daemon.url}`);
 }

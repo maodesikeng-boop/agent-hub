@@ -239,6 +239,40 @@ describe("守护进程启动失败：终端上的输出", () => {
     expect(result.stderr.match(/先正常关机再退出/g)).toHaveLength(1);
   });
 
+  it.skipIf(process.platform === "win32")("installs SIGINT and SIGTERM handlers before printing the login link, so a SIGTERM sent on readiness shuts down cleanly", async () => {
+    const script = `
+      import { runDaemonProcess } from "./src/daemon/entry.ts";
+      const log = console.log;
+      console.log = (...args) => {
+        if (args.join(" ").includes("/auth?token=")) {
+          log("signal-listeners:" + process.listenerCount("SIGTERM") + "," + process.listenerCount("SIGINT"));
+        }
+        log(...args);
+      };
+      await runDaemonProcess({ userHome: ${JSON.stringify(userHome)} });
+    `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), env: envOf("sub-ready-signal", "0"), stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+      child.on("exit", (code, signal) => resolve({ code, signal })),
+    );
+    await new Promise<void>((resolve, reject) => {
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+        if (child.signalCode === null && !child.killed && /\/auth\?token=/.test(stdout)) {
+          child.kill("SIGTERM");
+          resolve();
+        }
+      });
+      void exited.then(() => reject(new Error(`daemon exited before printing the login link: ${stderr}`)));
+    });
+
+    expect(/signal-listeners:(\d+),(\d+)/.exec(stdout)?.slice(1).map(Number)).toEqual([1, 1]);
+    expect(await exited).toEqual({ code: 0, signal: null });
+  }, 30_000);
+
   it("热重启全链路：有外壳监管时经 POST /api/self-reload 登记，全库空闲静默后正常关机、以 reloadExitCode 退出；没有监管回 409", async () => {
     const run = async (name: string, supervised: boolean) => {
       const env = envOf(name, "0");
