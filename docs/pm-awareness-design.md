@@ -76,8 +76,8 @@ The PM can overturn any of these without asking the user.
 | **PR-3 (revised) One decision chain** | `confirm: true` pauses for the PM; escalation through `hub ask --node`; authored step questions removed from create and patch; friction PR-3's `doneSteps` and text-limit table unchanged; Task Graph manual and plan sequencing updated; vendor switches retain `pm.wakeup` | None. The friction plan's `checkpoint` column and migration are dropped | None |
 | **PR-4 PM notice entry** (friction plan) | Unchanged | None | Rebase after PR-3 |
 | **PR-6 Status list** | `pmAgendaOf` and its text; `hub status`; agenda sections in both preamble builders; the footer on every PM wake (snapshot plus changes, per-session cursor) with the busy line; the handover notice; the delivery note on PR-4's entry; the delivery row in `hub graph show` and in the web (D-A2 option 1) | `migrations/**` (`0057`) needs a stamp | PR-4, PR-1 (#463) |
-| **PR-7 Step slots** | `slot` on steps, admission at one boundary, release by invariant, queue position in text and web, Task Graph manual | `migrations/**` (`0058`) needs a stamp | PR-6 for the status lines |
-| **PR-8 Watches** | `hub watch add`, `list`, and `close`; the sandboxed runner; settle notices; restart recovery; retention | `migrations/**` (`0059`); `src/daemon/platform/**` or `write-scope.ts` if the runner needs a new entry point. Windows workflow runs | PR-6 |
+| **PR-7 Step slots** | `slot` on steps, admission at one boundary, release by invariant, queue position in text and web, Task Graph manual | `migrations/**` (`0059`) needs a stamp | PR-6 for the status lines |
+| **PR-8 Watches** | `hub watch add`, `list`, and `close`; the sandboxed runner; settle notices; restart recovery; retention | `migrations/**` (`0060`); `src/daemon/platform/**` or `write-scope.ts` if the runner needs a new entry point. Windows workflow runs | PR-6 |
 | **PR-9 Reminders** | Idle reminders, D-A1 option 1 | None | PR-6, PR-8 |
 
 Each PR rechecks its migration number against `main` and open PRs before it merges (`node scripts/wait-checks.ts` does this). PR #459 still claims `0055`, which `main` already uses; the PM resolves that when the friction PRs are cut.
@@ -605,14 +605,14 @@ PR-6, status list:
 
 PR-7, slots:
 
-- `migrations/0058_step_slots.sql`: the `task_graph_step_slots` side table and its index, registered in `src/shared/resource-registry.ts`.
+- `migrations/0059_step_slots.sql`: the `task_graph_step_slots` side table and its index, registered in `src/shared/resource-registry.ts`.
 - `src/shared/domain.ts`: `TaskNode.slot` and `TaskNode.slotQueue`; `src/shared/hub.ts`: the spec field.
 - `src/daemon/ledger/task-graphs/slots.ts`: `slotHolderOf`, `admitStepIn`, and `drainSlotsIn`. `spec.ts`, `progress.ts`, and `worker-hooks.ts` call them in PR-7.
 - `src/daemon/ledger/task-graph-slots.test.ts` (S7).
 
 PR-8, watches:
 
-- `migrations/0059_pm_watches.sql` and `src/daemon/ledger/pm-watches.ts` (add, list, close, settle, open rows for recovery), with the `pm_watches` entry in `src/shared/resource-registry.ts`. PR-8 adds `src/daemon/watches/runner.ts`, `src/hub/watch.ts`, the `watch.*` entries in `src/shared/hub.ts` and `src/daemon/agent-api/server.ts`, and the `RESOURCE_REGISTRY` entry.
+- `migrations/0060_pm_watches.sql` and `src/daemon/ledger/pm-watches.ts` (add, list, close, settle, open rows for recovery), with the `pm_watches` entry in `src/shared/resource-registry.ts`. PR-8 adds `src/daemon/watches/runner.ts`, `src/hub/watch.ts`, the `watch.*` entries in `src/shared/hub.ts` and `src/daemon/agent-api/server.ts`, and the `RESOURCE_REGISTRY` entry.
 - `src/daemon/ledger/pm-watches.test.ts` (S5). Runner tests per platform are written with the runner in PR-8.
 
 PR-9, reminders:

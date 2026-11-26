@@ -1,3 +1,5 @@
+import type { TurnId } from "../../shared/turn.ts";
+import type { RecoveryResend } from "./turns.ts";
 import { randomUUID } from "node:crypto";
 import type {
   AgentSessionRow,
@@ -55,7 +57,7 @@ type ToolStep = Extract<AgentStep, { type: "tool_use" }>;
 
 const THINKING: AgentStep = { type: "thinking" };
 
-const RECOVER_MESSAGES_SQL = `
+const RECOVER_UNTAKEN_MESSAGES_SQL = `
 SELECT m.id, m.session_id, m.sender, m.status, ${CHECKLIST_REMINDER_SQL} AS rider FROM messages m
 JOIN agent_sessions s ON s.id = m.session_id
 LEFT JOIN workers w ON w.id = s.worker_id
@@ -64,6 +66,7 @@ WHERE pa.pm_id IS NULL
   AND (s.status != 'ended' OR NOT ${CHECKLIST_REMINDER_SQL})
   AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.worker_id = w.id AND a.status = 'pending')
   AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
+  AND (m.status != 'processing' OR NOT EXISTS (SELECT 1 FROM turn_inputs i WHERE i.message_id = m.id AND i.taken_at IS NOT NULL))
   AND NOT EXISTS (
     SELECT 1 FROM turn_completions c, json_each(c.event, '$.messageIds') ids
     WHERE c.session_id = m.session_id AND ids.value = m.id
@@ -159,7 +162,7 @@ function stampToolStep(prev: LiveSession, next: LiveSession, hadHold: boolean, n
   return holdsTool && !hasOpenTools;
 }
 
-export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: SessionId) => void) {
+export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: SessionId) => void, activeTurnIdOf?: (id: SessionId) => TurnId | null) {
   const { db, now, write, emitChange, enqueue, pushed } = ctx;
   const live = new Map<SessionId, LiveSession>();
   const streamThrottles = new Map<SessionId, { lastFlushedAt: number; timer: ReturnType<typeof setTimeout> | null }>();
@@ -237,6 +240,7 @@ export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: Session
       rateLimit: l.rateLimit !== undefined ? l.rateLimit : row.rateLimit,
       apiRetry: l.apiRetry ?? null,
       usage: row.usage,
+      ...(activeTurnIdOf ? { activeTurnId: activeTurnIdOf(row.id) } : {}),
       vendor: row.vendor,
       model: row.model,
       effort: row.effort,
@@ -513,8 +517,15 @@ export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: Session
     return row;
   };
 
-  const recoverAfterRestart = (afterResends: (p: Pending) => void) => write((p) => {
-    const rows = db.all<{ id: number; session_id: number; sender: string; status: string; rider: number }>(RECOVER_MESSAGES_SQL);
+  const recoverAfterRestart = (recoverTurns: (p: Pending) => RecoveryResend[], afterResends: (p: Pending) => void) => write((p) => {
+    type Recoverable = { id: MessageId; session_id: SessionId; sender: string; status: string; rider: number };
+    const taken = recoverTurns(p).flatMap(({ messageId }) => {
+      const row = db.get<Recoverable>(
+        `SELECT id, session_id, sender, status, ${CHECKLIST_REMINDER_SQL} AS rider FROM messages WHERE id = ?`, messageId,
+      );
+      return row === undefined ? [] : [row];
+    });
+    const rows = [...taken, ...db.all<Recoverable>(RECOVER_UNTAKEN_MESSAGES_SQL)].sort((a, b) => a.id - b.id);
     const resentMessageIds: MessageId[] = [];
     const requeuedMessageIds: MessageId[] = [];
     // Resume the oldest interrupted message first.

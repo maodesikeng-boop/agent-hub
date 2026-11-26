@@ -1347,11 +1347,11 @@ describe("0014_worker_background_waits：从 0013 的库升级", () => {
     migrate(db, migrationsUpTo(13));
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 13, to: LATEST_VERSION });
+    expect(migrate(db, migrationsUpTo(14))).toMatchObject({ from: 13, to: 14 });
     for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(db.all("SELECT * FROM worker_background_waits")).toEqual([]);
     db.exec("PRAGMA user_version = 13");
-    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(() => migrate(db, migrationsUpTo(14))).not.toThrow();
     const id = dump.agent_sessions![0]!.id as number;
     db.run("INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 7, 1, 0)", id);
     expect(db.all("SELECT * FROM worker_background_waits")).toEqual([{ session_id: id, turn_start: 7, background: 1, created_at: 0 }]);
@@ -1368,11 +1368,11 @@ describe("0015_browser_sessions：从 0014 的库升级", () => {
     migrate(db, migrationsUpTo(14));
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 14, to: LATEST_VERSION });
+    expect(migrate(db, migrationsUpTo(15))).toMatchObject({ from: 14, to: 15 });
     for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(db.all("SELECT * FROM browser_sessions")).toEqual([]);
     db.exec("PRAGMA user_version = 14");
-    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(() => migrate(db, migrationsUpTo(15))).not.toThrow();
     const insert = (id: string, hash: string) =>
       db.run("INSERT INTO browser_sessions (id, token_hash, user_agent, entry, created_at, last_seen_at) VALUES (?, ?, 'ua', '127.0.0.1:4317', 0, 0)", id, hash);
     insert("a", "h1");
@@ -2622,5 +2622,36 @@ describe("0047_resource_lifecycle", () => {
     expect(() => migrate(db, migrationsDir)).not.toThrow();
     expect(userVersion(db)).toBe(LATEST_VERSION);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});
+
+describe("turn state migration", () => {
+  it("imports the held draft inside the old wait bounds and drops both source tables", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(56));
+    for (const [id, text] of [[100, "old turn"], [101, "held draft"], [102, "later chat"]] as const) {
+      db.run(`INSERT INTO messages (id, conversation_id, session_id, sender, kind, text, dedupe_key, created_at, updated_at)
+              VALUES (?, 10, 10, 'agent', 'text', ?, ?, 1000, 1000)`, id, text, `upgrade:reply:${id}`);
+    }
+    db.run("INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (10, 100, 0, 2000)");
+    db.run("INSERT INTO worker_background_wait_details (session_id, turn_end, direct_chat) VALUES (10, 101, 1)");
+    const messages = db.all("SELECT id, text FROM messages ORDER BY id");
+
+    const check = () => {
+      expect(tableNames(db)).not.toContain("worker_background_waits");
+      expect(tableNames(db)).not.toContain("worker_background_wait_details");
+      expect(db.all(`SELECT b.session_id, b.draft_message_id, b.direct_chat, b.active_count, b.drained_at, t.status, t.reply_message_id
+        FROM turn_background_waits b JOIN turns t ON t.id = b.turn_id`)).toEqual([{
+        session_id: 10, draft_message_id: 101, direct_chat: 1, active_count: 0, drained_at: 2000, status: "ended", reply_message_id: 101,
+      }]);
+      expect(db.all("SELECT id, text FROM messages ORDER BY id")).toEqual(messages);
+      expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    };
+
+    migrate(db, migrationsDir);
+    check();
+    db.exec("PRAGMA user_version = 56");
+    migrate(db, migrationsDir);
+    check();
   });
 });

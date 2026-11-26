@@ -20,7 +20,6 @@ import {
 } from "./workers/lifecycle.ts";
 import { launchContextFor, list, status, workerPrTarget, workerStartFolder, workerTranscriptTarget } from "./workers/queries.ts";
 import { noticeUnresentShutdownTurnsIn } from "./workers/restart-recovery.ts";
-import { recoverBackgroundWaits } from "./workers/reports.ts";
 import { startIn } from "./workers/start.ts";
 import { clearAllMaxTime, clearMaxTime, recoverTurnTimeouts, turnMaxTimeOf } from "./workers/timers.ts";
 import type { LedgerWorkersOptions, WorkersCtx } from "./workers/types.ts";
@@ -69,7 +68,7 @@ export function createLedgerWorkers(
     recoverLifecycles() {
       w.appApprovals.store.endAllAtStartup();
       recoverWorktrees(w);
-      recoverBackgroundWaits(w);
+      w.backgroundWaits.recover();
       recoverTurnTimeouts(w);
     },
     closeLifecycles() {
@@ -96,6 +95,7 @@ export function createLedgerWorkers(
     afterDriverEvent: bind(afterDriverEvent),
     settleTurn: bind(settleTurn),
     turnFactsOf: bind(turnFactsOf),
+    backgroundWaits: w.backgroundWaits,
     getWorktreeTask: bind(getWorktreeTask),
     onSetupStarted: bind(onSetupStarted),
     waitsForFirstTurn: bind(waitsForFirstTurn),

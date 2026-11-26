@@ -87,7 +87,7 @@ function tick(ms = TURN_COMPLETION_RETRY_MAX_MS): void {
 const statusOf = (id: MessageId) => ledger.getMessage(id)?.status;
 const receipts = (sid = sessionId) => db.get<{ n: number }>("SELECT count(*) AS n FROM turn_completions WHERE session_id = ?", sid)!.n;
 const turnEnds = (sid = sessionId) =>
-  db.all<{ outcome: string }>("SELECT outcome FROM session_steps WHERE session_id = ? AND kind = 'turn_ended' ORDER BY id", sid).map((r) => r.outcome);
+  db.all<{ outcome: string }>("SELECT outcome FROM turns WHERE session_id = ? AND status = 'ended' ORDER BY id", sid).map((r) => r.outcome);
 const storeError = () => db.get<{ last_error: string | null }>("SELECT last_error FROM health WHERE module = 'store'")?.last_error ?? null;
 const sendsFor = (id: MessageId) =>
   listActions(db).filter((a): a is Extract<AnyActionRow, { type: "session.send" }> => a.type === "session.send" && a.params.messageId === id);
@@ -349,6 +349,18 @@ describe("turn completion receipts", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("settles a delivery failure without recording that the model took the input", () => {
+    const id = post("Not taken");
+    ev({ type: "message.delivered", messageIds: [id], at: now });
+    ev({ type: "turn.started", at: now });
+    say("unrelated", "Reply before the input was taken");
+    end([id], FAILED);
+    expect(statusOf(id)).toBe("failed");
+    expect(replyIdOf(ledger.getMessage(id)!)).toBeNull();
+    expect(db.get("SELECT taken_at, outcome FROM turn_inputs WHERE message_id = ?", id))
+      .toEqual({ taken_at: null, outcome: "failed" });
+  });
+
   it("settles tool-only, failed, stopped, and message-free turns from the recorded outcome", () => {
     const toolOnly = post("工具");
     startTurn(toolOnly);
@@ -366,12 +378,12 @@ describe("turn completion receipts", () => {
     expect(receipts()).toBe(0);
   });
 
-  it("writes turn_ended steps for Worker sessions inside the settlement transaction and none for PM sessions", () => {
+  it("ends PM and Worker turns in the settlement transaction", () => {
     const pmTurn = post("问题");
     startTurn(pmTurn);
     end([pmTurn]);
     expect(statusOf(pmTurn)).toBe("replied");
-    expect(turnEnds()).toEqual([]);
+    expect(turnEnds()).toEqual(["ok"]);
 
     const folder = realpathSync.native(mkdtempSync(join(home, "project-")));
     ledger.hubCall(sessionId, "project.create", { folder });
@@ -379,14 +391,19 @@ describe("turn completion receipts", () => {
     const wsid = db.get<{ id: SessionId }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!.id;
     const task = db.get<{ id: MessageId }>("SELECT id FROM messages WHERE session_id = ? ORDER BY id LIMIT 1", wsid)!.id;
     startTurn(task, wsid);
+    ev({ type: "agent.tool", uuid: "tool-start", toolUseId: "tool-start", name: "Bash", input: { command: "echo ready" }, at: now }, wsid);
+    const tool = () => db.get("SELECT status FROM turn_tools WHERE tool_use_id = 'tool-start'");
     say("w1", "做完了", wsid);
     failOn("fail_watermark", "BEFORE INSERT ON turn_completion_watermarks");
     end([task], {}, wsid);
     expect(turnEnds(wsid)).toEqual([]);
+    expect(tool()).toEqual({ status: "running" });
 
     drop("fail_watermark");
     tick();
     expect(turnEnds(wsid)).toEqual(["ok"]);
+    expect(tool()).toEqual({ status: "unconfirmed" });
+    ev({ type: "turn.started", at: now }, wsid);
     end([], FAILED, wsid);
     expect(turnEnds(wsid)).toEqual(["ok", "failed"]);
   });
@@ -424,9 +441,12 @@ describe("turn completion receipts", () => {
   });
 
   it("recovers a receipt without attachment facts without linking a different turn's reply", () => {
+    const previous = post("上一轮的问题");
+    startTurn(previous);
+    say("r1", "上一轮的答复");
+    end([previous]);
     const id = post("问题");
     startTurn(id);
-    say("r1", "上一轮的答复");
     ledger.close();
     const event = JSON.stringify({ type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 1, at: now });
     db.run("INSERT INTO turn_completions (session_id, event, facts, next_attempt_at) VALUES (?, ?, NULL, 0)", sessionId, event);
@@ -436,6 +456,22 @@ describe("turn completion receipts", () => {
     expect(replyIdOf(ledger.getMessage(id)!)).toBeNull();
     expect(receipts()).toBe(0);
     expect(sendsFor(id)).toHaveLength(1);
+  });
+
+  it("settles a pre-upgrade receipt before deciding whether to resend its input", () => {
+    const id = post("Old daemon input");
+    db.run("UPDATE messages SET status = 'processing' WHERE id = ?", id);
+    say("old-reply", "Reply persisted before the upgrade");
+    const replyId = agentReply();
+    const receipt = { type: "turn.ended", ok: false, interrupted: false, messageIds: [id], durationMs: null, at: now };
+    const facts = { reply: { messageId: replyId, requestIds: [id] }, finishedWithText: [id], worker: null };
+    db.run("INSERT INTO turn_completions (session_id, event, facts, next_attempt_at) VALUES (?, ?, ?, 0)",
+      sessionId, JSON.stringify(receipt), JSON.stringify(facts));
+    restart();
+    expect(statusOf(id)).toBe("replied");
+    expect(replyIdOf(ledger.getMessage(id)!)).toBe(replyId);
+    expect(sendsFor(id)).toHaveLength(1);
+    expect(sendsFor(id)[0]!.params).not.toHaveProperty("resend");
   });
 
   it("settles receipts from more sessions than one retry batch during a single startup recovery", () => {

@@ -2,7 +2,8 @@ import { formatCount } from "../../shared/count-format.ts";
 import { WORKER_STATS_TOP } from "../../shared/limits.ts";
 import { formatDuration, toolCategory } from "../../shared/step-labels.ts";
 import type { ToolCategory } from "../../shared/step-labels.ts";
-import type { StepRow } from "./steps.ts";
+import type { TurnOutcome } from "../../shared/turn.ts";
+import { collapseThinking, type WorkerActivity } from "./worker-activity.ts";
 
 const CATEGORY_LABELS: Readonly<Record<ToolCategory, string>> = {
   read: "读文件",
@@ -26,7 +27,7 @@ function top(counts: Map<string, number>, minCount: number): string[] {
     .slice(0, WORKER_STATS_TOP)
     .map(([key, n]) => `${key} ×${n}`);
 }
-const bump = (counts: Map<string, number>, key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
+const bump = <T extends string>(counts: Map<T, number>, key: T) => counts.set(key, (counts.get(key) ?? 0) + 1);
 
 type WaitInterval = { start: number; end: number };
 
@@ -41,9 +42,9 @@ function toolWaitWallTime(waits: WaitInterval[]): number {
   return total;
 }
 
-export function workerStatsLines(sessions: StepRow[][]): string[] {
+export function workerStatsLines(sessions: WorkerActivity[]): string[] {
   let steps = 0;
-  const outcomes = { ok: 0, interrupted: 0, failed: 0 };
+  const outcomes = { ok: 0, interrupted: 0, failed: 0, empty_recovery: 0 };
   let running = 0;
   const byCategory = new Map<ToolCategory, number>();
   const unknown = new Map<string, number>();
@@ -53,59 +54,29 @@ export function workerStatsLines(sessions: StepRow[][]): string[] {
   let thinkingTimed = 0;
   const waits: WaitInterval[] = [];
 
-  for (const rows of sessions) {
-    const resultsByUseId = new Map<string | null, Array<{ row: StepRow; index: number }>>();
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i]!;
-      if (r.kind === "tool_result") {
-        let list = resultsByUseId.get(r.tool_use_id);
-        if (list === undefined) {
-          list = [];
-          resultsByUseId.set(r.tool_use_id, list);
-        }
-        list.push({ row: r, index: i });
+  for (const session of sessions) {
+    for (const turn of session.turns) {
+      if (turn.outcome === null) running++;
+      else outcomes[turn.outcome]++;
+    }
+    for (const event of collapseThinking(session.events)) {
+      if (event.kind === "thinking" && event.until !== null) {
+        thinkingMs += event.until - event.at;
+        thinkingTimed++;
       }
     }
-    let open = false;
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i]!;
-      switch (row.kind) {
-        case "turn_started":
-          open = true;
-          break;
-        case "turn_ended":
-          open = false;
-          if (row.outcome !== null) outcomes[row.outcome]++;
-          break;
-        case "thinking": {
-          let j = i;
-          while (j + 1 < rows.length && rows[j + 1]!.kind === "thinking") j++;
-          const next = rows[j + 1];
-          if (next !== undefined) {
-            thinkingMs += next.at - row.at;
-            thinkingTimed++;
-          }
-          i = j;
-          break;
-        }
-        case "tool": {
-          steps++;
-          const name = row.name ?? "";
-          const category = toolCategory(name);
-          if (category === null) bump(unknown, name === "" ? "(无名)" : name);
-          else byCategory.set(category, (byCategory.get(category) ?? 0) + 1);
-          const summary = row.summary ?? "";
-          if (category === "read" && summary.startsWith(READ_PREFIX) && fileOf(summary) !== NO_FILE_NAME) bump(files, fileOf(summary));
-          if (category === "command" && summary.startsWith(COMMAND_PREFIX)) bump(commands, summary.slice(COMMAND_PREFIX.length));
-          const back = resultsByUseId.get(row.tool_use_id)?.find((m) => m.index > i)?.row;
-          if (back !== undefined && back.at >= row.at) waits.push({ start: row.at, end: back.at });
-          break;
-        }
-        default:
-          break;
+    for (const tool of session.tools) {
+      steps++;
+      const category = toolCategory(tool.name);
+      if (category === null) bump(unknown, tool.name || "(无名)");
+      else bump(byCategory, category);
+      const summary = tool.summary ?? "";
+      if (category === "read" && summary.startsWith(READ_PREFIX) && fileOf(summary) !== NO_FILE_NAME) bump(files, fileOf(summary));
+      if (category === "command" && summary.startsWith(COMMAND_PREFIX)) bump(commands, summary.slice(COMMAND_PREFIX.length));
+      if (tool.status === "done" && tool.startedAt !== null && tool.endedAt !== null && tool.endedAt >= tool.startedAt) {
+        waits.push({ start: tool.startedAt, end: tool.endedAt });
       }
     }
-    if (open) running++;
   }
   const waitMs = toolWaitWallTime(waits);
   return renderStats({ steps, outcomes, running, byCategory, unknown, files, commands, thinkingMs, thinkingTimed, waitMs, waitTimed: waits.length });
@@ -113,7 +84,7 @@ export function workerStatsLines(sessions: StepRow[][]): string[] {
 
 interface Totals {
   steps: number;
-  outcomes: { ok: number; interrupted: number; failed: number };
+  outcomes: Record<TurnOutcome, number>;
   running: number;
   byCategory: Map<ToolCategory, number>;
   unknown: Map<string, number>;
@@ -126,8 +97,9 @@ interface Totals {
 }
 
 function renderStats(t: Totals): string[] {
-  const turns = t.outcomes.ok + t.outcomes.interrupted + t.outcomes.failed + t.running;
-  const ended = `ok ${t.outcomes.ok} / interrupted ${t.outcomes.interrupted} / failed ${t.outcomes.failed}`;
+  const turns = Object.values(t.outcomes).reduce((sum, n) => sum + n, t.running);
+  const empty = t.outcomes.empty_recovery > 0 ? ` / empty recovery ${t.outcomes.empty_recovery}` : "";
+  const ended = `ok ${t.outcomes.ok} / interrupted ${t.outcomes.interrupted} / failed ${t.outcomes.failed}${empty}`;
   const lines = [`共 ${formatCount(t.steps)} 步，${turns} 轮：${ended}${t.running > 0 ? ` / running ${t.running}` : ""}`];
   lines.push(
     (Object.keys(CATEGORY_LABELS) as ToolCategory[]).map((c) => `${CATEGORY_LABELS[c]} ${t.byCategory.get(c) ?? 0}`).join("，"),

@@ -74,6 +74,7 @@ export const SYSTEM_EVENT_IN_SWITCH_LOG: Readonly<Record<SystemMessageMeta["even
   "schedule.failed": true,
   "context.compacted": false,
   "worker.max_time_exceeded": true,
+  "worker.background_wait": true,
   "task_graph.ready_to_finish": true,
   "pm.wakeup": true,
 };

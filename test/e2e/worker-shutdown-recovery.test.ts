@@ -84,6 +84,16 @@ it.each(["resend", "notify"] as const)(
       });
       expect(recovered.indexOf(task)).toBeLessThan(recovered.indexOf(followup));
       await waitForStatus(restarted, followupId, "replied");
+      const recoveredTurns = withDb(e, (db) => db.all<{ id: number; cause: string; outcome: string; stop_source: string | null; parent_turn_id: number | null }>(
+        `SELECT t.id, t.cause, t.outcome, t.stop_source, t.parent_turn_id FROM turns t
+         JOIN turn_inputs i ON t.id = i.turn_id WHERE i.message_id = ? ORDER BY t.id`, worker.id,
+      ));
+      expect(recoveredTurns).toEqual([
+        { id: expect.any(Number), cause: "input", outcome: "interrupted", stop_source: "shutdown", parent_turn_id: null },
+        { id: expect.any(Number), cause: "recovery", outcome: "ok", stop_source: null, parent_turn_id: recoveredTurns[0]!.id },
+      ]);
+      const process = e.procsOf(worker.session_id)[1]!;
+      expect(e.stdinTextsOf(process.pid).filter((text) => text.includes(task))).toHaveLength(1);
     } else {
       const notice = await waitUntil("failure notice written to the PM", () => {
         const process = e.procsOf(pmSessionId)[1];

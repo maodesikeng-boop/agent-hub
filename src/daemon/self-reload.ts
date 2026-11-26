@@ -14,7 +14,7 @@ import {
 } from "../shared/index.ts";
 import type { SelfReloadState, SelfReloadStatus } from "../shared/api.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
-import { formatClock } from "./ledger/worker-view.ts";
+import { formatClock } from "./ledger/worker-activity.ts";
 import { runSetupCommand } from "./setup/setup.ts";
 
 export type BuildOutcome = { ok: true } | { ok: false; reason: string };

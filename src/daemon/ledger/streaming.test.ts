@@ -232,7 +232,7 @@ describe("ledger 流式文字（agent.text_delta）", () => {
 });
 
 describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪没驻留（MIN_TOOL_STEP_VISIBLE_MS）", () => {
-  it("6 家厂商早期工具预览零 SQLite 写入（Reading file → Reading foo.ts），正式 agent.tool 只入库一次且不重复插行；仅 Worker 写 session_steps", () => {
+  it("persists one tool call per vendor and never persists a tool preview", () => {
     const workerConvId = Number(
       db.run("INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('worker', 1, 'W', ?)", now).lastInsertRowid,
     );
@@ -258,6 +258,7 @@ describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪
       wEv({ type: "turn.started", at: (now += 1) });
       const msgBefore = count("messages");
       const stepsBefore = count("session_steps");
+      const toolsBefore = count("turn_tools");
       changes.length = 0;
 
       // 1) 流式工具起点（仅有工具名，尚无路径）
@@ -282,7 +283,9 @@ describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪
       expect(count("messages"), `${vendor} preview messages`).toBe(msgBefore);
       expect(count("session_steps"), `${vendor} preview steps`).toBe(stepsBefore);
 
-      // 3) 完整工具调用到达：仅入库 1 条 tool message 与 1 条 tool step
+      expect(count("turn_tools"), `${vendor} preview tools`).toBe(toolsBefore);
+
+      // The formal call creates one message and one tool record.
       wEv({
         type: "agent.tool",
         uuid: `uuid-${vendor}`,
@@ -292,12 +295,13 @@ describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪
         at: (now += 10),
       });
       expect(count("messages") - msgBefore, `${vendor} tool message once`).toBe(1);
-      const toolSteps = db.all<{ id: number }>(
-        "SELECT id FROM session_steps WHERE session_id = ? AND kind = 'tool' AND tool_use_id = ?",
+      const toolRows = db.all(
+        "SELECT tt.status FROM turn_tools tt JOIN turns t ON t.id = tt.turn_id WHERE t.session_id = ? AND tt.tool_use_id = ?",
         workerSid,
         `tu-${vendor}`,
       );
-      expect(toolSteps, `${vendor} session_steps once`).toHaveLength(1);
+      expect(toolRows, `${vendor} turn tool once`).toEqual([{ status: "running" }]);
+      expect(count("session_steps"), `${vendor} diagnostic steps`).toBe(stepsBefore);
 
       now += MIN_TOOL_STEP_VISIBLE_MS + 10;
       wEv({ type: "agent.tool_result", toolUseIds: [`tu-${vendor}`], at: now });

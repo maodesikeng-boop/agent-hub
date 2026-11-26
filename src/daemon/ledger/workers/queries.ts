@@ -6,7 +6,7 @@ import { HUB_COMMAND } from "../../../shared/names.ts";
 import { isAgentVendor, vendorLabel } from "../../../shared/vendors.ts";
 import { readWorkerCapabilities } from "../capability-rows.ts";
 import { fail } from "../context.ts";
-import { formatWorkerState, lastTurnOutcomesBySession } from "../worker-state.ts";
+import { formatWorkerState, latestTurnsBySession } from "../worker-state.ts";
 import { toWorkerRecord } from "../rows.ts";
 import type { WorkerDbRow } from "../rows.ts";
 import { agentSettingOf } from "../worker-view.ts";
@@ -36,7 +36,7 @@ export function list(w: WorkersCtx, caller: PmCaller, args?: HubArgs<"worker.lis
   const rows = [...all, ...ended].sort((a, b) => a.id - b.id);
   if (rows.length === 0) return { text: vendor === undefined ? "你还没有派过 Worker。" : `没有 ${vendorLabel(vendor)} 的 Worker。`, data: { workers: [] } };
   const sessions = rows.map((worker) => workerSession(w, worker));
-  const outcomes = lastTurnOutcomesBySession(w.db, sessions.flatMap((session, i) => rows[i]?.status === "ended" ? [] : [session.id]));
+  const turns = latestTurnsBySession(w.db, sessions.flatMap((session, i) => rows[i]?.status === "ended" ? [] : [session.id]));
   const now = w.now();
   const lines = rows.map((x, index) => {
     const session = sessions[index]!;
@@ -44,7 +44,7 @@ export function list(w: WorkersCtx, caller: PmCaller, args?: HubArgs<"worker.lis
     const state = formatWorkerState({
       status: x.status, notStarted: notStarted(x), live: w.sessions.liveOf(session.id),
       sandboxApprovalPending: x.status !== "ended" && w.sandboxApprovals.isPendingForWorker(x.id),
-      lastTurnOutcome: outcomes.get(session.id) ?? null, lastEventAt: session.lastEventAt, now,
+      lastTurnOutcome: turns.get(session.id)?.outcome ?? null, runningTurn: turns.get(session.id)?.status === "running", lastEventAt: session.lastEventAt, now,
     }, { includeIdleDuration: true });
     const shown = agentSettingOf(w.ctx, session);
     const setting = `厂商 ${vendorLabel(session.vendor)} · 模型 ${shown.model} · 思考程度 ${shown.effort}`;

@@ -29,7 +29,8 @@ export interface TurnProgressProps {
   status: React.ReactNode | null;
   /** Start of the shown action in epoch ms; null hides the live time. */
   stepStartedAt: number | null;
-  workedForMs: number;
+  workedForMs: number | null;
+  showDuration?: boolean;
   onOpenWorker: MessageActions["onOpenWorker"];
 }
 
@@ -170,18 +171,18 @@ function Checklist({
  * Ended: one `Worked for` line; activating it opens the checklist below the line with each step's last reported status
  * verbatim, and each step row opens its own process. A turn without steps opens the flat process log instead, as before.
  */
-export const TurnProgress = memo(function TurnProgress({ progress, status, stepStartedAt, workedForMs, onOpenWorker }: TurnProgressProps): React.ReactNode {
+export const TurnProgress = memo(function TurnProgress({ progress, status, stepStartedAt, workedForMs, showDuration, onOpenWorker }: TurnProgressProps): React.ReactNode {
   const [actionOpen, setActionOpen] = useState(false);
   const [endedOpen, setEndedOpen] = useState(false);
   const steps = progress.steps;
   const hasSteps = steps !== null && steps.length > 0;
 
-  if (status !== null) {
+  if (workedForMs === null || status !== null) {
     const runningProcess = hasSteps ? (steps.find((s) => s.item.status === "in_progress")?.process ?? []) : progress.unassigned;
     return (
       <div className="flex flex-col" data-turn-progress="running">
         {hasSteps && <Checklist steps={steps} running onOpenWorker={onOpenWorker} className="mb-1.5" />}
-        {runningProcess.length > 0 ? (
+        {status === null ? null : runningProcess.length > 0 ? (
           <Collapsible open={actionOpen} onOpenChange={setActionOpen} className={SECONDARY} data-work-line>
             <CollapsibleTrigger className={cn("group inline-flex max-w-full items-center gap-2 text-left", TEXT_BUTTON, SECONDARY)}>
               <span className="min-w-0 [overflow-wrap:anywhere]">{status}</span>
@@ -202,7 +203,9 @@ export const TurnProgress = memo(function TurnProgress({ progress, status, stepS
     );
   }
 
-  if (!hasSteps && progress.unassigned.length === 0) return null;
+  if (!hasSteps && progress.unassigned.length === 0) {
+    return showDuration ? <div className={cn(SECONDARY, "tabular-nums")} data-turn-progress="ended">{workedFor(workedForMs)}</div> : null;
+  }
 
   return (
     <div className="flex flex-col" data-turn-progress="ended">

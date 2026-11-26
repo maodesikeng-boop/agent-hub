@@ -1,15 +1,16 @@
-import type { MessageId } from "../../../shared/domain.ts";
+import { workerMessageDedupeKey, type MessageId } from "../../../shared/domain.ts";
+import { isRecoveryStop } from "../../../shared/turn.ts";
 import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 import type { Pending } from "../context.ts";
-import { SHUTDOWN_INTERRUPTED_REASON } from "../steps.ts";
+import type { WorkerDbRow } from "../rows.ts";
+import { SHUTDOWN_INTERRUPTED_REASON, type LedgerTurns } from "../turns.ts";
 import { workerSession } from "./ctx.ts";
 import { insertTurnFailed } from "./reports.ts";
 import type { WorkersCtx } from "./types.ts";
-import type { WorkerDbRow } from "../rows.ts";
 
 const SHUTDOWN_TURN_NOT_RESENT = "守护进程重启打断了这一轮，重启后没能自动重发";
 
-export function noticeUnresentShutdownTurnsIn(w: WorkersCtx, p: Pending): void {
+export function noticeUnresentShutdownTurnsIn(w: WorkersCtx, p: Pending, turns: LedgerTurns): void {
   const workers = w.db.all<WorkerDbRow>(
     `SELECT w.* FROM workers w WHERE w.status = 'open'
       AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)
@@ -18,16 +19,22 @@ export function noticeUnresentShutdownTurnsIn(w: WorkersCtx, p: Pending): void {
   );
   for (const worker of workers) {
     const session = workerSession(w, worker);
-    const turn = w.db.get<{ id: number; kind: string; summary: string | null }>(
+    if (turns.runningTurnOf(session.id) !== null) continue;
+    const turn = turns.lastEndedTurnOf(session.id);
+    const legacy = turn === null && w.db.get<{ id: number; kind: string; summary: string | null }>(
       "SELECT id, kind, summary FROM session_steps WHERE session_id = ? AND kind IN ('turn_ended', 'turn_started') ORDER BY id DESC LIMIT 1",
       session.id,
     );
-    if (turn?.kind !== "turn_ended" || turn.summary !== SHUTDOWN_INTERRUPTED_REASON) continue;
+    if (turn === null ? !legacy || legacy.kind !== "turn_ended" || legacy.summary !== SHUTDOWN_INTERRUPTED_REASON
+      : turn.outcome !== "interrupted" || !isRecoveryStop(turn.stopSource)) continue;
     if (w.db.get(`SELECT 1 FROM messages WHERE session_id = ? AND status IN ('queued', 'delivered', 'processing') AND NOT ${CHECKLIST_REMINDER_SQL} LIMIT 1`, session.id)) continue;
-    const messageId = w.db.get<{ id: MessageId }>(
-      "SELECT id FROM messages WHERE session_id = ? AND sender IN ('pm', 'user') ORDER BY id DESC LIMIT 1", session.id,
-    )?.id;
-    insertTurnFailed(w, p, worker, messageId ?? null, [], SHUTDOWN_TURN_NOT_RESENT);
-    w.db.run("UPDATE session_steps SET summary = ? WHERE id = ?", SHUTDOWN_TURN_NOT_RESENT, turn.id);
+    const messageId = (turn === null
+      ? w.db.get<{ id: MessageId }>("SELECT id FROM messages WHERE session_id = ? AND sender IN ('pm', 'user') ORDER BY id DESC LIMIT 1", session.id)
+      : w.db.get<{ id: MessageId }>(
+        `SELECT m.id FROM turn_inputs i JOIN messages m ON m.id = i.message_id WHERE i.turn_id = ?
+         AND m.sender IN ('pm', 'user') ORDER BY i.message_id DESC LIMIT 1`, turn.id,
+      ))?.id ?? null;
+    if (w.db.get("SELECT 1 FROM messages WHERE dedupe_key = ?", workerMessageDedupeKey(worker.id, "turn_failed", messageId))) continue;
+    insertTurnFailed(w, p, worker, messageId, [], SHUTDOWN_TURN_NOT_RESENT);
   }
 }

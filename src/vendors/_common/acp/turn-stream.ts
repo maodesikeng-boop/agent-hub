@@ -97,7 +97,7 @@ export function closeOpenTools(host: AcpDriverHost, st: AcpSessionState, proc: A
   for (const tool of proc.activeTools.values()) {
     if (!tool.resultEmitted) {
       tool.resultEmitted = true;
-      unclosed.push(tool.toolCallId);
+      unclosed.push(scopedUuid(proc, `tool:${tool.toolCallId}`));
     }
   }
   proc.activeTools.clear();
@@ -125,6 +125,7 @@ function handleToolUpdate(
   proc.inThinkingRun = false;
 
   const toolCallId = toolCall.toolCallId;
+  const toolUseId = scopedUuid(proc, `tool:${toolCallId}`);
   const existing = proc.activeTools.get(toolCallId);
   const extractor = host.config.extractToolUse ?? defaultExtractAcpToolUse;
   const { name, input } = extractor(toolCall, existing);
@@ -145,8 +146,8 @@ function handleToolUpdate(
     trackToolBounded(proc, tracked);
     host.emit(st.id, {
       type: "agent.tool",
-      uuid: scopedUuid(proc, `tool:${toolCallId}`),
-      toolUseId: toolCallId,
+      uuid: toolUseId,
+      toolUseId,
       name,
       input,
       ...(tracked.pending ? { pending: true } : {}),
@@ -161,7 +162,7 @@ function handleToolUpdate(
     if (!tracked.resultEmitted && !isTerminal && toolStepSignature(name, input) !== prevSig) {
       host.emit(st.id, {
         type: "agent.tool_preview",
-        toolUseId: toolCallId,
+        toolUseId,
         name,
         input: pickStepInput(input),
         at,
@@ -171,7 +172,7 @@ function handleToolUpdate(
 
   if (tracked.pending && !tracked.resultEmitted && toolCall.status === "in_progress") {
     tracked.pending = false;
-    host.emit(st.id, { type: "agent.tool_running", toolUseId: toolCallId, at });
+    host.emit(st.id, { type: "agent.tool_running", toolUseId, at });
   }
 
   if (
@@ -181,8 +182,8 @@ function handleToolUpdate(
     tracked.resultEmitted = true;
     host.emit(st.id, {
       type: "agent.tool_result",
-      toolUseIds: [toolCallId],
-      ...toolResultOutputs(host.vendor, [[toolCallId, toolCall]]),
+      toolUseIds: [toolUseId],
+      ...toolResultOutputs(host.vendor, [[toolUseId, toolCall]]),
       at,
     });
   }

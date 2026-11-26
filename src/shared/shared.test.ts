@@ -400,6 +400,7 @@ describe("M2：系统消息", () => {
       "context.compacted",
       "driver.warning",
       "worker.max_time_exceeded",
+      "worker.background_wait",
       "task_graph.ready_to_finish",
       "pm.wakeup",
       "checklist.reminder",
@@ -491,6 +492,7 @@ describe("M2：界面接口", () => {
       "router.command.updated",
       "task_graph.created",
       "task_graph.updated",
+      "turn.updated",
     ]);
   });
 

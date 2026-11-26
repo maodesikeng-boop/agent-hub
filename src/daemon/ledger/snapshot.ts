@@ -2,6 +2,7 @@ import type { ConversationSnapshot, ConversationsLookup } from "../../shared/api
 import type { AgentSessionRow, ConversationId, MessageKind, PmId, SessionState, TaskGraph, WorkerId } from "../../shared/domain.ts";
 import { CONVERSATION_LOOKUP_MAX_IDS, MESSAGE_PAGE_SIZE, SNAPSHOT_ENDED_WORKERS_PER_PM } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
+import type { LedgerTurns } from "./turns.ts";
 import { toAgentSessionRow } from "../store/index.ts";
 import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
@@ -27,7 +28,10 @@ function boundWorkerIds(graphs: readonly TaskGraph[]): Set<WorkerId> {
   return ids;
 }
 
-export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: AgentSessionRow) => SessionState }) {
+export function createLedgerSnapshotQueries(db: Db, deps: {
+  sessionState: (row: AgentSessionRow) => SessionState;
+  turnsFor: LedgerTurns["summariesFor"];
+}) {
   const entriesOf = (rows: readonly ConversationDbRow[]): ConversationSnapshot[] => {
     if (rows.length === 0) return [];
     const workerConvIds = rows.filter((r) => r.kind === "worker").map((r) => r.id);
@@ -85,7 +89,7 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
         );
       const pageHasMore = shape.length > MESSAGE_PAGE_SIZE;
       const recent = shape.slice(0, MESSAGE_PAGE_SIZE).reverse().map(toMessage);
-      if (recent.length === 0) return { conversation, messages: [], hasMore: false, ...summary };
+      if (recent.length === 0) return { conversation, messages: [], hasMore: false, turns: deps.turnsFor(row.id, []), ...summary };
       const start = snapshotWindowStart(recent);
       const messages = db
         .all<MessageDbRow>(
@@ -95,7 +99,7 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
           recent.at(-1)!.id,
         )
         .map(toMessage);
-      return { conversation, messages, hasMore: pageHasMore || start > 0, ...summary };
+      return { conversation, messages, hasMore: pageHasMore || start > 0, turns: deps.turnsFor(row.id, messages), ...summary };
     });
   };
 

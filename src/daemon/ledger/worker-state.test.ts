@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WORKER_LIST_IDLE_HINT_MIN_MS, WORKER_SHOW_BACKGROUND_TASKS_MAX } from "../../shared/limits.ts";
-import { formatBackgroundTasksSummary, formatWorkerState, lastTurnOutcomesBySession, type WorkerStateInput } from "./worker-state.ts";
+import { formatBackgroundTasksSummary, formatWorkerState, latestTurnsBySession, type WorkerStateInput } from "./worker-state.ts";
 import { workerOpsFixture } from "./test-helpers.ts";
 
 const baseline: WorkerStateInput = {
@@ -53,7 +53,10 @@ describe("Worker inventory from the ledger", () => {
     f.hub("worker.send", { workerId: a, text: "Continue" });
     f.begin(a); f.end(a, { ok: false, interrupted: true });
     f.begin(b); f.end(b);
-    expect(lastTurnOutcomesBySession(f.db, [a, b, c].map(f.sessionOf))).toEqual(new Map([[f.sessionOf(a), "interrupted"], [f.sessionOf(b), "ok"]]));
+    const latest = latestTurnsBySession(f.db, [a, b, c].map(f.sessionOf));
+    expect(latest.get(f.sessionOf(a))).toMatchObject({ status: "ended", outcome: "interrupted" });
+    expect(latest.get(f.sessionOf(b))).toMatchObject({ status: "ended", outcome: "ok" });
+    expect(latest.has(f.sessionOf(c))).toBe(false);
   });
 
   it("lists distinct states with vendor and agent settings and filters before returning rows", async () => {

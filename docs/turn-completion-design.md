@@ -1,5 +1,7 @@
 # Reliable turn completion
 
+The receipt and watermark described here still order completion. [Turn state foundation](turn-state-foundation-design.md) defines the current settlement, status projection, reply links, and restart recovery rules.
+
 > Snapshot: 2026-11-21 (commit `6883b2f4`)
 
 ## For the user

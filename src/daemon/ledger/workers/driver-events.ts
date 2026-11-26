@@ -2,20 +2,24 @@ import type { AgentSessionRow, SessionId, WorkerId } from "../../../shared/domai
 import type { DriverEvent } from "../../../shared/driver.ts";
 import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 import type { Pending } from "../context.ts";
+import { exitFailureReason } from "../messages.ts";
+import type { BackgroundAtReply, WaitRelease } from "../turn-background-waits.ts";
+import type { SettledTurn } from "../turns.ts";
+import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { TurnCompletionFacts, TurnEndedEvent } from "../turn-completions.ts";
 import { workerRow } from "./ctx.ts";
 import { isDirectChat, shouldDeliverDirectChatReport } from "./direct-chat.ts";
 import { isWorkerInFlight } from "./lines.ts";
 import {
-  flushAwaiting,
   insertReport,
   insertTurnFailed,
   lastAgentMessageId,
   lastAgentTextMessage,
   maxMessageId,
   onlyManualCompact,
+  reportMessageOf,
 } from "./reports.ts";
-import { backgroundKilledNote, notStarted, turnOutcome, type TurnOutcome } from "./text.ts";
+import { backgroundKilledNote, notStarted, TURN_STOPPED, turnOutcome, type TurnOutcome } from "./text.ts";
 import { clearMaxTime, clearMaxTimeIn, ensureTurnMaxTime } from "./timers.ts";
 import type { WorkersCtx } from "./types.ts";
 
@@ -40,12 +44,14 @@ function withoutChecklistInputs<E extends DriverEvent>(w: WorkersCtx, event: E):
 export function turnFactsOf(w: WorkersCtx, session: AgentSessionRow, input: TurnEndedEvent): TurnCompletionFacts["worker"] {
   if (session.role !== "worker") return null;
   const event = withoutChecklistInputs(w, input);
-  const waiting = event.messageIds.length === 0 ? w.awaitingBackground.get(session.id) : undefined;
-  const turnStart = w.turnStarts.get(session.id) ?? waiting?.turnEnd ?? waiting?.turnStart;
+  const turnStart = w.turnStarts.get(session.id);
   if (turnStart === undefined && event.messageIds.length === 0) return null;
+  const live = w.sessions.liveOf(session.id);
+  const activeCount = live.backgroundTasks ?? 0;
   return {
     turnStart: turnStart ?? Math.max(...event.messageIds),
-    waitingForBackground: (w.sessions.liveOf(session.id).backgroundTasks ?? 0) > 0,
+    waitingForBackground: activeCount > 0,
+    background: { activeCount, tasks: live.backgroundTaskList ?? [] },
   };
 }
 
@@ -58,83 +64,89 @@ function markBackground(w: WorkersCtx, p: Pending, sessionId: SessionId): void {
 function onTurnOutcome(
   w: WorkersCtx, p: Pending, session: AgentSessionRow, workerId: WorkerId,
   event: Extract<DriverEvent, { type: "turn.ended" | "session.exited" | "driver.error" }>, outcome: TurnOutcome,
-  facts: TurnCompletionFacts["worker"], note: string | null = null,
+  facts: TurnCompletionFacts["worker"], settlement?: { settled: SettledTurn; previousRun: boolean },
 ): void {
   const worker = workerRow(w, workerId);
-  if (worker === null || (outcome.turnMessageId === null && facts === null)) return;
+  if (worker === null) return;
   if (worker.status === "ended") {
     p.after.push(() => { w.turnStarts.delete(session.id); });
     return;
   }
-  const waiting = w.awaitingBackground.get(session.id);
+  const turn = settlement?.settled.turn;
+  const waiting = w.backgroundWaits.waitOf(session.id);
   const ids = event.messageIds ?? [];
   const directInput = isDirectChat(w, worker.worker_conversation_id, ids);
-  const continued = ids.length === 0 ? waiting : undefined;
-  const directChat = directInput || continued?.directChat === true;
-  const ownReply = facts === null || outcome.event !== "report" ? null : lastAgentTextMessage(w, session.id, facts.turnStart);
-  const reply = ownReply ?? (continued === undefined ? null : lastAgentTextMessage(w, session.id, continued.turnStart, continued.turnEnd));
+  const directChat = directInput || (ids.length === 0 && waiting?.directChat === true);
+  const reply = outcome.event === "report"
+    ? reportMessageOf(w, turn?.replyMessageId ?? null) ??
+      (settlement?.previousRun && facts != null ? lastAgentTextMessage(w, session.id, facts.turnStart) : null)
+    : null;
   const quiet = directChat && (outcome.event === "turn_failed" || !shouldDeliverDirectChatReport(reply?.text ?? ""));
   if (quiet && event.type === "driver.error") return;
-  p.after.push(() => {
-    w.turnStarts.delete(session.id);
-  });
-  if (quiet && directInput && waiting !== undefined) {
-    if (event.type === "session.exited") {
-      w.awaitingBackground.take(session.id);
-      flushAwaiting(w, p, session, event, waiting);
-    } else {
-      markBackground(w, p, session.id);
-    }
-    return;
-  }
-  w.awaitingBackground.take(session.id);
-  if (outcome.event === "report" && facts?.waitingForBackground) {
-    const turn = ownReply === null && continued !== undefined
-      ? continued
-      : { turnStart: facts.turnStart, turnEnd: maxMessageId(w), directChat };
-    w.awaitingBackground.set(session.id, turn);
-    markBackground(w, p, session.id);
-    return;
-  }
+  p.after.push(() => { w.turnStarts.delete(session.id); });
+
   const completedUpToId = outcome.turnMessageId;
-  const hasPendingFollowup =
-    event.type === "turn.ended" &&
-    completedUpToId !== null &&
-    w.db.get(
-      `SELECT 1 AS x FROM messages
-        WHERE conversation_id = ? AND id > ? AND sender = 'pm'
-          AND status IN ('queued', 'delivered', 'processing')
-        LIMIT 1`,
-      worker.worker_conversation_id,
-      completedUpToId,
-    ) !== undefined;
+  const hasPendingFollowup = event.type === "turn.ended" && w.db.get(
+    `SELECT 1 FROM messages WHERE conversation_id = ? AND id > ? AND sender = 'pm'
+      AND status IN ('queued', 'delivered', 'processing') LIMIT 1`,
+    worker.worker_conversation_id, completedUpToId ?? 0,
+  ) !== undefined;
   if (!hasPendingFollowup) clearMaxTimeIn(w, p, worker.worker_conversation_id);
-  if (quiet) return;
-  const turnMessageId = outcome.turnMessageId ?? reply?.id ??
+
+  const turnMessageId = completedUpToId ?? reply?.id ?? turn?.lastOutputId ?? waiting?.draftMessageId ??
     (facts === null ? null : lastAgentMessageId(w, session.id, facts.turnStart));
-  if (turnMessageId === null) return;
   if (outcome.event === "turn_failed") {
-    insertTurnFailed(w, p, worker, turnMessageId, outcome.messageIds, outcome.reason);
+    if (quiet && directInput && waiting !== null && event.type !== "session.exited") {
+      markBackground(w, p, session.id);
+      return;
+    }
+    if (waiting !== null && turn !== undefined) {
+      w.backgroundWaits.releaseIn(p, session.id, { kind: "continued" });
+    }
+    if (!quiet && turnMessageId !== null) insertTurnFailed(w, p, worker, turnMessageId, outcome.messageIds, outcome.reason);
     return;
   }
-  if (outcome.turnMessageId === null && (reply?.text ?? "").trim() === "") return;
+
+  if (turn === undefined || turn.outcome !== "ok" || settlement === undefined) return;
   if (facts !== null && onlyManualCompact(w, session, facts.turnStart)) return;
-  insertReport(w, p, worker, turnMessageId, reply, note, { hasPendingFollowup });
+  const background: BackgroundAtReply = facts?.background ?? { activeCount: facts?.waitingForBackground ? 1 : 0, tasks: [] };
+  const disposition = w.backgroundWaits.settleReplyIn(p, {
+    turn, vendor: session.vendor, draftMessageId: reply?.id ?? null,
+    directChat, ownReply: (reply?.text ?? "").trim() !== "", quiet, previousRun: settlement.previousRun, ...background,
+  });
+  if (disposition.kind === "held") markBackground(w, p, session.id);
+  if (disposition.kind !== "deliver" || quiet || turnMessageId === null) return;
+  if (completedUpToId === null && (reply?.text ?? "").trim() === "") return;
+  const note = settlement.previousRun && background.activeCount > 0 ? backgroundKilledNote("restart") : null;
+  insertReport(w, p, worker, turnMessageId, reply, note, {
+    hasPendingFollowup,
+    ...(disposition.infoNote === undefined ? {} : { infoNote: disposition.infoNote }),
+  });
+}
+
+function reportEmptyRecovery(w: WorkersCtx, p: Pending, session: AgentSessionRow, workerId: WorkerId, settled: SettledTurn) {
+  const worker = workerRow(w, workerId);
+  if (worker === null || worker.status !== "open") return;
+  const lastInputId = settled.inputs.at(-1)?.messageId ?? 0;
+  p.after.push(() => { w.turnStarts.delete(session.id); });
+  if (w.db.get(
+    `SELECT 1 FROM messages WHERE conversation_id = ? AND id > ? AND sender = 'pm'
+       AND status IN ('queued', 'delivered', 'processing') LIMIT 1`, worker.worker_conversation_id, lastInputId,
+  )) return;
+  clearMaxTimeIn(w, p, worker.worker_conversation_id);
+  insertTurnFailed(w, p, worker, lastInputId || null, [], "重启后重发的这一轮没有产出",
+    `守护进程重启后重发了上一轮的任务，但这一轮没有调用工具也没有文字产出（不是汇报格式错误）。请用 ${HUB_COMMAND} worker show ${workerId} 看现场，再用 ${HUB_COMMAND} worker send ${workerId} 说明下一步。`);
 }
 
 export function settleTurn(
-  w: WorkersCtx, p: Pending, session: AgentSessionRow, input: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean,
+  w: WorkersCtx, p: Pending, session: AgentSessionRow, input: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean, settled: SettledTurn,
 ): void {
   if (session.role !== "worker" || session.workerId === null || session.conversationId === null) return;
+  if (settled.turn.outcome === "empty_recovery") return reportEmptyRecovery(w, p, session, session.workerId, settled);
   const event = withoutChecklistInputs(w, input);
   const outcome = turnOutcome(event);
   if (outcome === null) return;
-  // No background.changed or session.exited will arrive for a process that died before this daemon started, so waiting would strand the report.
-  if (previousRun && facts?.waitingForBackground === true) {
-    onTurnOutcome(w, p, session, session.workerId, event, outcome, { ...facts, waitingForBackground: false }, backgroundKilledNote("restart"));
-    return;
-  }
-  onTurnOutcome(w, p, session, session.workerId, event, outcome, facts);
+  onTurnOutcome(w, p, session, session.workerId, event, outcome, facts, { settled, previousRun });
 }
 
 export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessionRow, input: Exclude<DriverEvent, TurnEndedEvent>): void {
@@ -143,12 +155,8 @@ export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessio
   const conversationId = session.conversationId;
   const event = withoutChecklistInputs(w, input);
   if (event.type === "background.changed") {
-    w.awaitingBackground.setBackground(session.id, event.count > 0);
+    w.backgroundWaits.onBackgroundChangedIn(p, session.id, event);
     return;
-  }
-  if (event.type === "session.exited" && event.messageIds.length === 0) {
-    const awaiting = w.awaitingBackground.take(session.id);
-    if (awaiting !== undefined) return flushAwaiting(w, p, session, event, awaiting);
   }
   if (event.type === "message.delivered") {
     // Messages delivered mid-turn do not start a new turn, because earlier text in this turn still belongs to the report.
@@ -166,11 +174,23 @@ export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessio
     return;
   }
   if (event.type === "turn.started") {
-    markTurnStart(w, session, workerId, w.awaitingBackground.get(session.id)?.directChat === true);
+    markTurnStart(w, session, workerId, w.backgroundWaits.waitOf(session.id)?.directChat === true);
     return;
   }
   if (event.type !== "session.exited" && event.type !== "driver.error") return;
   const outcome = turnOutcome(event);
+  if (event.type === "session.exited" && event.reason !== "shutdown") {
+    const { reason } = event;
+    const followupNotifiesPm = outcome?.event === "turn_failed" && !isDirectChat(w, conversationId, event.messageIds);
+    const release: WaitRelease = followupNotifiesPm ? { kind: "continued" }
+      : reason === "idle" ? { kind: "process_exited", reason }
+      : { kind: "process_exited", reason, failureReason: reason === "interrupt" ? TURN_STOPPED : exitFailureReason(event) };
+    const wait = w.backgroundWaits.releaseIn(p, session.id, release);
+    if (wait !== null && event.messageIds.length === 0) {
+      p.after.push(() => { w.turnStarts.delete(session.id); });
+      return;
+    }
+  }
   if (outcome === null) {
     if (event.type === "session.exited" && event.reason !== "shutdown") {
       w.turnStarts.delete(session.id);

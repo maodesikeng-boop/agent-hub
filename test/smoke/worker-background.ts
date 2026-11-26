@@ -1,4 +1,4 @@
-// Worker 有后台命令时这一轮不算汇报（ledger/workers.ts 的 awaitingBackground）：真账本 + 真 claude 驱动 + 网页服务，不起守护进程
+// Exercise held Worker reports with a real ledger, Claude driver, and web server without starting the daemon.
 // （和 S26 一样直接用驱动层：守护进程的 Worker 会话要包 sandbox-exec，在已经被 OS 沙箱包着的 Worker 里跑冒烟时套不上；
 // 要整条路走守护进程的是 m3.ts 的 S21、S21b）。Worker 的提示词用真的（buildLaunchPrompt，含“长命令放后台”那条）。
 // S33 任务里放一个后台 sleep 90：第一轮结束时还有后台命令，不出汇报、会话显示在等后台命令（网页同时开着，可以截图）；

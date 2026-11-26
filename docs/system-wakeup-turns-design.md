@@ -1,5 +1,7 @@
 # System wakeups and per-turn checklists
 
+[Turn state foundation](turn-state-foundation-design.md) now defines turn boundaries and owns system input placement through `TurnSummary.inputs`. The `meta.taken` stamp described here is read only for older history. The system notice and checklist rules still apply.
+
 > Snapshot: 2026-11-26 (commit `f6ab7798`)
 
 ## Approved behavior

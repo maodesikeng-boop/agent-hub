@@ -72,6 +72,7 @@ export interface FakeCodexTurnScript {
   }>;
   /** 工具条目的 item/completed 等反向 RPC 请求都回了再发（真 codex 的审批在条目开始和结束之间）。默认开始后马上结束。 */
   toolsCompleteAfterRequests?: boolean;
+  replayToolFromTurnId?: string;
   /** 反向 RPC 请求列表（在完成本轮前发给客户端并等待响应）。 */
   serverRequests?: Array<{
     id: number | string;
@@ -279,11 +280,11 @@ function runTurn(turnId, threadId, turnScript, input) {
       if (!turnScript.toolsCompleteAfterRequests) completeTool(tool);
     }
   };
-  const completeTool = (tool) =>
+  const completeTool = (tool, completedTurnId = turnId) =>
     send({
       jsonrpc: "2.0",
       method: "item/completed",
-      params: { threadId, turnId, item: { ...tool, status: "completed" } },
+      params: { threadId, turnId: completedTurnId, item: { ...tool, status: "completed" } },
     });
 
   const finishTurn = () => {
@@ -356,6 +357,9 @@ function runTurn(turnId, threadId, turnScript, input) {
 
   const afterHold = () => {
     stepTools();
+    if (turnScript.replayToolFromTurnId) {
+      for (const tool of turnScript.tools || []) completeTool(tool, turnScript.replayToolFromTurnId);
+    }
     const reqs = [...(turnScript.serverRequests || [])];
     const sendNextReq = () => {
       if (me.aborted) return;
@@ -726,6 +730,23 @@ function makeCodexHarness(
   return harness;
 }
 
+it("uses the original turn for a replayed result after the item ID was reused", async () => {
+  const tool = { id: "reused", type: "commandExecution" as const, command: "pwd" };
+  const t = makeCodexHarness({ script: { turns: [
+    { tools: [tool] },
+    { tools: [tool], toolsCompleteAfterRequests: true, replayToolFromTurnId: "turn-1" },
+  ] } });
+  const s = t.addSession();
+  await t.driver.send(s.id, user(1, "First"));
+  await t.waitFor("turn.ended");
+  await t.driver.send(s.id, user(2, "Second"));
+  await t.waitFor("turn.ended", undefined, 2);
+
+  const ids = t.of("agent.tool").map((tool) => tool.toolUseId);
+  expect(new Set(ids).size).toBe(2);
+  expect(t.of("agent.tool_result").map((result) => result.toolUseIds)).toEqual([[ids[0]], [ids[0]], [ids[1]]]);
+});
+
 const user = (id: number, text: string, extra: Partial<{ prefixes: string[]; resend: boolean; recovery: boolean }> = {}) => ({
   messageIds: [id],
   source: "user" as const,
@@ -844,28 +865,28 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
     const tools = t.of("agent.tool");
     expect(tools).toHaveLength(3);
     expect(tools[0]).toMatchObject({
-      uuid: "turn-1:1:call-cmd-1",
-      toolUseId: "call-cmd-1",
+      uuid: expect.stringMatching(/"call-cmd-1"\]$/u),
+      toolUseId: expect.stringMatching(/"call-cmd-1"\]$/u),
       name: "commandExecution",
       input: { command: "pnpm typecheck", cwd: "/tmp/work" },
     });
     expect(tools[1]).toMatchObject({
-      uuid: "turn-1:1:call-file-1",
-      toolUseId: "call-file-1",
+      uuid: expect.stringMatching(/"call-file-1"\]$/u),
+      toolUseId: expect.stringMatching(/"call-file-1"\]$/u),
       name: "fileChange",
       input: expect.objectContaining({ file_path: "src/index.ts" }),
     });
     expect(tools[2]).toMatchObject({
-      uuid: "turn-1:1:call-web-1",
-      toolUseId: "call-web-1",
+      uuid: expect.stringMatching(/"call-web-1"\]$/u),
+      toolUseId: expect.stringMatching(/"call-web-1"\]$/u),
       name: "webSearch",
       input: { query: "codex jsonrpc" },
     });
 
     const toolResults = t.of("agent.tool_result");
-    expect(toolResults.map((r) => r.toolUseIds)).toEqual([["call-cmd-1"], ["call-file-1"], ["call-web-1"]]);
+    expect(toolResults.map((r) => r.toolUseIds)).toEqual(tools.map((tool) => [tool.toolUseId]));
     // 返回原文：commandExecution 的 aggregatedOutput（spec 的 outputField）；没有的不带
-    expect(toolResults.map((r) => r.outputs)).toEqual([{ "call-cmd-1": "tsc 通过\n" }, undefined, undefined]);
+    expect(toolResults.map((r) => r.outputs)).toEqual([{ [tools[0]!.toolUseId]: "tsc 通过\n" }, undefined, undefined]);
 
     // 6. agentMessage delta 实时发出 agent.text_delta，并在 item/completed 发出完整的一条 agent.text
     expect(t.of("agent.text_delta").map((e) => ({ delta: e.delta, reset: e.reset }))).toEqual([
@@ -1323,7 +1344,7 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
       .filter((r) => r.id !== undefined && r.method === undefined)
       .map((r) => ({ id: r.id, result: r.result }));
     expect(decisions).toEqual([{ id: 971, result: { decision: "decline" } }]);
-    expect(t.of("agent.tool_preview")).toEqual([expect.objectContaining({ toolUseId: "fc-stream", input: { file_path: join(worker.cwd, "ok.txt") } })]);
+    expect(t.of("agent.tool_preview")).toEqual([expect.objectContaining({ toolUseId: expect.stringMatching(/"fc-stream"\]$/u), input: { file_path: join(worker.cwd, "ok.txt") } })]);
   });
 
   it("改名的目标（kind.move_path，*** Move to:）也判断；grantRoot 在范围外就拒；条目结束后记下的路径删掉", async () => {
@@ -2185,7 +2206,7 @@ describe("CodexDriver 流式补丁文件路径早捕获", () => {
     expect(t.of("agent.tool")).toHaveLength(1);
     expect(t.of("agent.tool_preview")).toEqual([
       expect.objectContaining({
-        toolUseId: "fc-stream-1",
+        toolUseId: expect.stringMatching(/"fc-stream-1"\]$/u),
         name: "fileChange",
         input: { file_path: "src/codex-early.ts" },
       }),
@@ -2292,7 +2313,7 @@ describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
     );
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "多步执行"));
-    await t.waitFor("agent.tool", (e) => e.toolUseId === "hold-turn-1");
+    await t.waitFor("agent.tool", (e) => e.toolUseId.endsWith('"hold-turn-1"]'));
 
     const deadline = Date.now() + 2_500;
     while (t.store.get(s.id)!.usage.context !== 65_000 && Date.now() < deadline) {
@@ -2498,7 +2519,7 @@ describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
       usage: { input: 45_000, cacheRead: 240_000, cacheWrite: 0, output: 1_500, context: 110_000 },
     });
     await t.driver.send(s.id, user(1, "继续"));
-    await t.waitFor("agent.tool", (e) => e.toolUseId === "hold-turn-1");
+    await t.waitFor("agent.tool", (e) => e.toolUseId.endsWith('"hold-turn-1"]'));
 
     const expected = { input: 50_000, cacheRead: 350_000, cacheWrite: 0, output: 1_800, context: 115_000 };
     const deadline = Date.now() + 2_500;
@@ -2604,7 +2625,7 @@ describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
     );
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "开始"));
-    await t.waitFor("agent.tool", (e) => e.toolUseId === "hold-turn-1");
+    await t.waitFor("agent.tool", (e) => e.toolUseId.endsWith('"hold-turn-1"]'));
     writeFileSync(holdFile, "go");
     await t.waitFor("turn.ended");
     expect(t.store.get(s.id)!.usage).toEqual({ input: 15_000, cacheRead: 110_000, cacheWrite: 0, output: 500, context: 65_000 });

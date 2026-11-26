@@ -4,7 +4,7 @@ import { WORKER_LIST_IDLE_HINT_MIN_MS, WORKER_SHOW_BACKGROUND_TASKS_MAX } from "
 import { formatDuration } from "../../shared/step-labels.ts";
 import type { Db } from "../store/index.ts";
 import type { LiveSession } from "./sessions.ts";
-import type { TurnOutcome } from "./steps.ts";
+import type { TurnOutcome } from "../../shared/turn.ts";
 
 export interface WorkerStateInput {
   status: string;
@@ -12,6 +12,7 @@ export interface WorkerStateInput {
   notStarted: boolean;
   live: Pick<LiveSession, "activity">;
   lastTurnOutcome: TurnOutcome | null;
+  runningTurn?: boolean;
   lastEventAt: number | null;
   now: number;
 }
@@ -21,13 +22,13 @@ export interface FormatWorkerStateOptions {
 }
 
 export function formatWorkerState(input: WorkerStateInput, options?: FormatWorkerStateOptions): string {
-  const { status, sandboxApprovalPending, notStarted, live, lastTurnOutcome, lastEventAt, now } = input;
+  const { status, sandboxApprovalPending, notStarted, live, runningTurn, lastTurnOutcome, lastEventAt, now } = input;
   if (status === "ended") return "已收工";
   if (sandboxApprovalPending) return "等待沙箱确认";
   if (live.activity === "preparing" || notStarted) return "准备中";
   if (live.activity === "background") return "在等后台命令";
-  if (live.activity !== "idle") return "在干活";
-  const labels = { ok: "空闲，等验收", interrupted: "空闲，上一轮被打断了", failed: "空闲，上一轮出错了" };
+  if (runningTurn || live.activity !== "idle") return "在干活";
+  const labels = { ok: "空闲，等验收", interrupted: "空闲，上一轮被打断了", failed: "空闲，上一轮出错了", empty_recovery: "空闲，重启后重发的这一轮没有产出" };
   const label = lastTurnOutcome === null ? "空闲，还没开始第一轮" : labels[lastTurnOutcome];
   const elapsed = lastEventAt === null ? 0 : now - lastEventAt;
   return options?.includeIdleDuration && elapsed >= WORKER_LIST_IDLE_HINT_MIN_MS
@@ -35,16 +36,20 @@ export function formatWorkerState(input: WorkerStateInput, options?: FormatWorke
     : label;
 }
 
-export function lastTurnOutcomesBySession(db: Db, sessionIds: readonly SessionId[]): ReadonlyMap<SessionId, TurnOutcome> {
+type LatestTurn = { session_id: SessionId } & (
+  { status: "running"; outcome: null } | { status: "ended"; outcome: TurnOutcome }
+);
+
+export function latestTurnsBySession(db: Db, sessionIds: readonly SessionId[]): ReadonlyMap<SessionId, LatestTurn> {
   if (sessionIds.length === 0) return new Map();
-  const rows = db.all<{ session_id: SessionId; outcome: TurnOutcome }>(
-    `SELECT session_id, outcome FROM session_steps WHERE id IN (
-      SELECT (SELECT id FROM session_steps WHERE session_id = ids.value AND kind = 'turn_ended' ORDER BY id DESC LIMIT 1)
+  const rows = db.all<LatestTurn>(
+    `SELECT session_id, status, outcome FROM turns WHERE id IN (
+      SELECT (SELECT id FROM turns WHERE session_id = ids.value ORDER BY id DESC LIMIT 1)
       FROM json_each(?) ids
     )`,
     JSON.stringify(sessionIds),
   );
-  return new Map(rows.map(({ session_id, outcome }) => [session_id, outcome]));
+  return new Map(rows.map((turn) => [turn.session_id, turn]));
 }
 
 export function formatBackgroundTasksSummary(

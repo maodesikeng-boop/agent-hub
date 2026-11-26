@@ -10,8 +10,7 @@ import { UNFORMATTED_LABEL, WORKER_REPORT_STATUS_LABELS, unwrapWorkerReportText 
 import type { WorkerReportStatus } from "../../shared/worker.ts";
 import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
-import type { LedgerSteps } from "./steps.ts";
-import { formatClock, formatLogSteps } from "./worker-view.ts";
+import { formatClock, formatLogSteps, type createWorkerActivity } from "./worker-activity.ts";
 
 export const TAKEOVER_TAG = "【系统 · 接手】";
 
@@ -56,8 +55,8 @@ const oneLineSummary = (text: string): string => keepHead(text.replace(/\s+/g, "
 
 const STATUS_LABELS: Readonly<Record<string, string>> = { ...WORKER_REPORT_STATUS_LABELS, unformatted: UNFORMATTED_LABEL };
 
-export function createLedgerTakeover(ctx: Pick<LedgerContext, "db" | "now">, steps: Pick<LedgerSteps, "rows">, options: { findTranscript?: FindTranscript } = {}) {
-  const { db, now } = ctx;
+export function createLedgerTakeover(ctx: Pick<LedgerContext, "db">, activityOf: ReturnType<typeof createWorkerActivity>, options: { findTranscript?: FindTranscript } = {}) {
+  const { db } = ctx;
   const findTranscript = options.findTranscript ?? (() => null);
 
   const outcomeLines = (w: WorkerDbRow, events: readonly string[], limit: number) =>
@@ -133,7 +132,7 @@ export function createLedgerTakeover(ctx: Pick<LedgerContext, "db" | "now">, ste
   };
 
   const stepsOf = (p: TakeoverPredecessor): { count: number; text: string } => {
-    const shown = formatLogSteps(steps.rows(p.session.id), false, now()).slice(-TAKEOVER_STEPS_MAX);
+    const shown = formatLogSteps(activityOf(p.session.id), null).slice(-TAKEOVER_STEPS_MAX);
     if (shown.length === 0) return { count: 0, text: "（没有记录到操作）" };
     return { count: shown.length, text: shown.map((s) => `${formatClock(s.at)} ${s.text}`).join("\n") };
   };

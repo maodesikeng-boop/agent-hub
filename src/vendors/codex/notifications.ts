@@ -126,6 +126,12 @@ function onUserMessage(host: CodexDriverHost, st: SessionState, item: Record<str
   if (batch.midTurn) host.markProcessing(st, batch, at);
 }
 
+function codexToolUseId(params: Record<string, unknown>, itemId: string): string | null {
+  const threadId = nonEmptyString(params.threadId);
+  const turnId = nonEmptyString(params.turnId);
+  return threadId && turnId ? JSON.stringify([threadId, turnId, itemId]) : null;
+}
+
 function onItemStarted(
   host: CodexDriverHost,
   st: SessionState,
@@ -160,8 +166,9 @@ function onItemStarted(
       proc.fileChangePaths.set(rawId, paths);
       if (paths[0] !== undefined) rememberPreviewPath(proc, rawId, paths[0]);
     }
-    const toolEv = rawId ? parseCodexToolStarted(item, at, scopedUuid(st, rawId)) : null;
-    if (toolEv) host.emit(st.id, toolEv);
+    const toolUseId = rawId ? codexToolUseId(params, rawId) : null;
+    const toolEv = toolUseId ? parseCodexToolStarted(item, at) : null;
+    if (toolEv && toolUseId) host.emit(st.id, { ...toolEv, uuid: toolUseId, toolUseId });
   }
 }
 
@@ -183,13 +190,14 @@ function onAgentMessageDelta(host: CodexDriverHost, st: SessionState, params: Re
 // Streamed patch paths are partial; approvals must use the complete list from item/started.
 function onPatchUpdated(host: CodexDriverHost, st: SessionState, proc: Proc, params: Record<string, unknown>, at: number): void {
   const itemId = nonEmptyString(params.itemId);
-  if (!itemId || !Array.isArray(params.changes)) return;
+  const toolUseId = itemId ? codexToolUseId(params, itemId) : null;
+  if (!itemId || !toolUseId || !Array.isArray(params.changes)) return;
   const firstPath = extractFileChangePaths({ changes: params.changes })[0];
   if (firstPath === undefined || proc.fileChangePreviewPaths.get(itemId) === firstPath) return;
   rememberPreviewPath(proc, itemId, firstPath);
   host.emit(st.id, {
     type: "agent.tool_preview",
-    toolUseId: itemId,
+    toolUseId,
     name: "fileChange",
     input: { file_path: firstPath },
     at,
@@ -199,7 +207,7 @@ function onPatchUpdated(host: CodexDriverHost, st: SessionState, proc: Proc, par
 function onItemCompleted(host: CodexDriverHost, st: SessionState, proc: Proc, params: Record<string, unknown>, at: number): void {
   const item = asObject(params.item);
   if (!item) return;
-  if (item.type === "fileChange" && typeof item.id === "string") {
+  if (item.type === "fileChange" && params.turnId === st.activeTurnId && typeof item.id === "string") {
     proc.fileChangePaths.delete(item.id);
     proc.fileChangePreviewPaths.delete(item.id);
   }
@@ -216,7 +224,8 @@ function onItemCompleted(host: CodexDriverHost, st: SessionState, proc: Proc, pa
   }
   if (isCodexToolItemType(item.type)) {
     const id = nonEmptyString(item.id);
-    if (id) host.emit(st.id, { type: "agent.tool_result", toolUseIds: [id], ...toolResultOutputs(host.vendor, [[id, item]]), at });
+    const toolUseId = id ? codexToolUseId(params, id) : null;
+    if (toolUseId) host.emit(st.id, { type: "agent.tool_result", toolUseIds: [toolUseId], ...toolResultOutputs(host.vendor, [[toolUseId, item]]), at });
   }
 }
 
