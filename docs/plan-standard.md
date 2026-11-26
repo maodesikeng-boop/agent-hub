@@ -1,6 +1,6 @@
 # Plan and code-skeleton standard
 
-Follow this standard whenever a task asks for a design plan. A planning step commits a design document in `docs/<topic>-design.md`, a compiling TypeScript code skeleton in the target files, and runnable acceptance tests. Before implementation, tests for new or changed behavior must fail, and regression tests confirming unchanged existing rules must pass. Later implementation steps fill in the function bodies until every acceptance test passes.
+Follow this standard whenever a task asks for a design plan. A planning step commits a design document in `docs/<topic>-design.md`, a compiling TypeScript code skeleton in the target files, and runnable acceptance tests. Before implementation, confirm and record that every test for new or changed behavior fails and that every regression test confirming an unchanged existing rule passes. Later implementation steps fill in the function bodies until every acceptance test passes.
 
 ## Design document
 
@@ -45,7 +45,7 @@ Write the skeleton and acceptance tests directly in the target production and te
 - **Acceptance tests.** Write real runnable tests with assertions in the matching `*.test.ts` and `*.test.tsx` files so every acceptance scenario in Section 8 and every contract clause maps to at least one executable test. Do not use `it.todo` placeholders for acceptance scenarios. Automated tests may run against fake CLIs for fast cloud checks, while vendor CLI scenarios still require a local run against the real CLI before merge.
 - **Existing callers.** When changing an existing signature, update call sites so `pnpm typecheck` passes without altering runtime behavior yet.
 
-Before you commit the plan, run `pnpm typecheck` and confirm it exits 0. Then run the new acceptance test files (`pnpm exec vitest run <test-files>`) with no syntax or type errors. Confirm that every test for new or changed behavior fails against the skeleton or current code, and that every regression test confirming an unchanged existing rule passes. Record the command and test output in your Worker report so downstream Workers and reviewers can verify both the pre-implementation failures and the passing regression baseline.
+Before you commit the plan, run `pnpm typecheck` and confirm it exits 0. Then run every acceptance test file (`pnpm exec vitest run <test-files>`) with no syntax or type errors. Confirm that every test for new or changed behavior fails against the skeleton or current code, and that every regression test confirming an unchanged existing rule runs and passes. Record the command and test output in your Worker report or PR body so downstream Workers and reviewers can verify both the pre-implementation failure record for every test of new or changed behavior and the pre-implementation passing record for every regression test confirming an unchanged existing rule.
 
 Example skeleton and acceptance tests:
 
@@ -86,7 +86,7 @@ describe("applyCoupon", () => {
 Implementation starts only after the user approves the plan's checkpoint card and any open decisions. Build directly on the committed skeleton and acceptance tests:
 
 1. Read the design document, the code skeleton, and the committed acceptance tests. Treat them as the specification.
-2. Run the committed acceptance tests before editing production code. Confirm that tests for new or changed behavior still fail on the current branch and that regression tests confirming unchanged existing rules already pass.
+2. Run the committed acceptance tests before editing production code, and record the command and test output in your Worker report or PR body. Confirm that every test for new or changed behavior still fails on the current branch and that every regression test confirming an unchanged existing rule runs and passes before implementation. If any test for new or changed behavior already passes or any regression test fails before implementation, stop and report the mismatch before editing production code.
 3. Fill in the function bodies until every acceptance test passes, including both the tests for new or changed behavior and the regression tests for unchanged existing rules. Do not modify, delete, skip, or weaken the acceptance tests written in the planning step. You may add extra unit tests for internal edge cases in separate test blocks or files.
 4. If implementation shows that a signature, type, contract, or acceptance test must change, stop instead of rewriting the test. Report the conflict and your recommendation in the `偏离` and `问题` fields of your Worker report so the Project Manager can decide whether to revise the plan.
 5. Do not create parallel modules or duplicate function names alongside the skeleton.
@@ -96,6 +96,6 @@ Implementation starts only after the user approves the plan's checkpoint card an
 Before you report done, confirm all four checks:
 
 - The finished code matches the skeleton's public types and contracts.
-- Every acceptance scenario in Section 8 has a passing test. Tests for new or changed behavior failed before implementation, and regression tests confirming unchanged existing rules passed both before and after implementation.
+- Every acceptance scenario in Section 8 has a passing test on HEAD. Your Worker report or PR body includes a recorded pre-implementation run showing that every test for new or changed behavior failed before implementation and that every regression test confirming an unchanged existing rule ran and passed before implementation.
 - Implementation commits did not delete, skip, or weaken any acceptance test from the planning step.
 - You saved every command output, local real-CLI run output, and real-browser screenshot listed in Section 8, and updated any fake CLI that disagreed with the real CLI.

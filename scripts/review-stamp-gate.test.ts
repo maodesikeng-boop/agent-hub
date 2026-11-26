@@ -62,6 +62,29 @@ describe("matchStampPaths", () => {
   it("返回命中的文件，顺序跟输入一致", () => {
     expect(matchStampPaths(["migrations/b.sql", "docs/a.md", "migrations/a.sql"], ["migrations/**"])).toEqual(["migrations/b.sql", "migrations/a.sql"]);
   });
+
+  it("matches root configs, dotfiles, source files, and design docs for the planned acceptance scenarios rule in REVIEW.md", () => {
+    const lines = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8").split(/\r?\n/u);
+    const heading = lines.findIndex((line) => line.trim() === "### Planned acceptance scenarios cover every requirement and pass real tests");
+    expect(heading).toBeGreaterThan(-1);
+    const triggerLine = lines.slice(heading + 1).find((line) => line.startsWith("Trigger:"));
+    expect(triggerLine).toBeDefined();
+    const globs = [...triggerLine!.matchAll(/`([^`]+)`/gu)].map((m) => m[1]!);
+    expect(globs.length).toBeGreaterThan(0);
+
+    const samplePaths = [
+      "wrangler.toml",
+      "package.json",
+      ".oxlintrc.json",
+      ".github/workflows/check.yml",
+      ".agents/skills/verify/SKILL.md",
+      "apps/windows/.gitignore",
+      "src/web/turn-progress.ts",
+      "apps/macos/App.swift",
+      "docs/work-panel-design.md",
+    ];
+    expect(matchStampPaths(samplePaths, globs)).toEqual(samplePaths);
+  });
 });
 
 describe("decideGateStatus", () => {
