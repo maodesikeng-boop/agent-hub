@@ -9,6 +9,8 @@ export const LINT_BASELINE = ".oxlint-baseline.json";
 export const LINT_TARGETS = ["src", "scripts", "test", "vite.config.ts", "vitest.config.ts", "vitest.eval.config.ts"] as const;
 
 const OXLINT_BIN = ["node_modules", "oxlint", "bin", "oxlint"] as const;
+const KNIP_BIN = ["node_modules", "knip", "bin", "knip.js"] as const;
+const KNIP_ARGS = ["--treat-config-hints-as-errors"] as const;
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const UNBASELINABLE_CODES = new Set(["typescript(tsconfig-error)", "parse"]);
 
@@ -181,12 +183,29 @@ export function runOxlint(
   };
 }
 
+export function runKnip(repoRoot: string): number {
+  const knipBin = join(repoRoot, ...KNIP_BIN);
+  if (!existsSync(knipBin)) {
+    throw new Error(`Missing knip binary at ${knipBin} (run 'pnpm install' first)`);
+  }
+  const run = spawnSync(process.execPath, [knipBin, ...KNIP_ARGS], { cwd: repoRoot, stdio: "inherit" });
+  if (run.error) throw run.error;
+  return run.status ?? 1;
+}
+
+export interface LintRunners {
+  oxlint: (repoRoot: string, targets: readonly string[]) => { report: LintReport; stderr: string };
+  knip: (repoRoot: string) => number;
+}
+
+const DEFAULT_RUNNERS: LintRunners = { oxlint: (root, targets) => runOxlint(root, targets), knip: runKnip };
+
 export function readBaseline(baselinePath: string): LintBaseline {
   if (!existsSync(baselinePath)) return {};
   return JSON.parse(readFileSync(baselinePath, "utf8")) as LintBaseline;
 }
 
-export function main(argv: readonly string[], repoRoot: string = REPO_ROOT): number {
+export function main(argv: readonly string[], repoRoot: string = REPO_ROOT, runners: LintRunners = DEFAULT_RUNNERS): number {
   const updateBaseline = argv.includes("--update-baseline");
   const targets = argv.filter((arg) => !arg.startsWith("-"));
   if (updateBaseline && targets.length > 0) {
@@ -194,7 +213,7 @@ export function main(argv: readonly string[], repoRoot: string = REPO_ROOT): num
     return 2;
   }
   const selectedTargets = targets.length > 0 ? targets : LINT_TARGETS;
-  const { report, stderr } = runOxlint(repoRoot, selectedTargets);
+  const { report, stderr } = runners.oxlint(repoRoot, selectedTargets);
   if (stderr) console.error(stderr);
   const baselinePath = join(repoRoot, LINT_BASELINE);
 
@@ -207,12 +226,14 @@ export function main(argv: readonly string[], repoRoot: string = REPO_ROOT): num
 
   const baseline = readBaseline(baselinePath);
   const evaluation = evaluateLintDiagnostics(report.diagnostics, baseline, repoRoot);
-  if (evaluation.unbaselinable.length > 0 || evaluation.violations.length > 0) {
-    console.error(formatLintFailure(evaluation, repoRoot));
-    return 1;
-  }
+  const oxlintFailed = evaluation.unbaselinable.length > 0 || evaluation.violations.length > 0;
+  if (oxlintFailed) console.error(formatLintFailure(evaluation, repoRoot));
+  // Knip looks at the whole module graph, so a partial lint of explicit targets cannot run it.
+  const knipFailed = targets.length === 0 && runners.knip(repoRoot) !== 0;
+  if (knipFailed) console.error("lint: knip found unused files, exports, or dependencies (see above)");
+  if (oxlintFailed || knipFailed) return 1;
   console.log(
-    `lint: passed (${report.number_of_files ?? "?"} files, ${report.number_of_rules ?? "?"} rules, ${report.diagnostics.length} baselined diagnostics)`,
+    `lint: passed (${report.number_of_files ?? "?"} files, ${report.number_of_rules ?? "?"} rules, ${report.diagnostics.length} baselined diagnostics${targets.length === 0 ? ", knip clean" : ""})`,
   );
   return 0;
 }

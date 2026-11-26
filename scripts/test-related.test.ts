@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
-import { ALWAYS_RUN_TESTS, findReferencingFiles, listChangedFiles, referenceNeedles, selectRelatedTargets } from "./test-related.ts";
+import { ALWAYS_RUN_TESTS, findReferencingFiles, listChangedFiles, referenceNeedles, sandboxSkipReport, selectRelatedTargets } from "./test-related.ts";
 
 describe("scripts/test-related.ts", () => {
   const dirs: string[] = [];
@@ -118,5 +118,16 @@ describe("scripts/test-related.ts", () => {
 
   it("always runs guard tests that exist", () => {
     for (const file of ALWAYS_RUN_TESTS) expect(existsSync(join(REPO_ROOT, file)), file).toBe(true);
+  });
+
+  it("lists each sandbox-skipped test file once and asks to wait for CI before handoff", () => {
+    expect(sandboxSkipReport("")).toBeUndefined();
+    const report = sandboxSkipReport("test/e2e/m3.test.ts\ntest/eval/selftest.test.ts\ntest/e2e/m3.test.ts\n");
+    expect(report?.split("\n")).toEqual([
+      "test:related: the sandbox refused ps or a nested sandbox, so 2 test file(s) skipped tests that CI still runs:",
+      "  test/e2e/m3.test.ts",
+      "  test/eval/selftest.test.ts",
+      "test:related: after you push, wait for the cloud checks with `node scripts/wait-checks.ts` before you hand off.",
+    ]);
   });
 });

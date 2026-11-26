@@ -1,10 +1,12 @@
 // Runs every test affected by this branch's changes. Vitest's import graph covers code; a path search links
 // files loaded at runtime (SQL migrations, workflow YAML, fixtures) to the tests and modules that read them.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { GIT_MAX_BUFFER_BYTES } from "../src/shared/limits.ts";
+import { SANDBOX_SKIP_LOG_ENV } from "../test/sandbox-probes.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 
 /** Guards that scan the whole tree instead of importing what they check, so no import graph reaches them. */
@@ -23,6 +25,7 @@ export const ALWAYS_RUN_TESTS = [
   "src/wall-clock-guard.test.ts",
   "src/web/query-write-guard.test.ts",
   "src/web/web-guard.test.ts",
+  "test/sandbox-probes.test.ts",
   "test/smoke/ledger-access.test.ts",
 ] as const;
 
@@ -112,6 +115,36 @@ export function selectRelatedTargets(
   return { linked, targets };
 }
 
+/** The closing note when the sandbox made tests skip: CI still runs them, so this run cannot vouch for them. */
+export function sandboxSkipReport(logText: string): string | undefined {
+  const files = [...new Set(logText.split("\n").filter(Boolean))].sort();
+  if (files.length === 0) return undefined;
+  return [
+    `test:related: the sandbox refused ps or a nested sandbox, so ${files.length} test file(s) skipped tests that CI still runs:`,
+    ...files.map((file) => `  ${file}`),
+    "test:related: after you push, wait for the cloud checks with `node scripts/wait-checks.ts` before you hand off.",
+  ].join("\n");
+}
+
+function runVitest(args: readonly string[]): number {
+  const vitest = join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "test-related-"));
+  const log = join(dir, "sandbox-skips.txt");
+  try {
+    const run = spawnSync(process.execPath, [vitest, ...args], {
+      cwd: REPO_ROOT,
+      stdio: "inherit",
+      env: { ...process.env, [SANDBOX_SKIP_LOG_ENV]: log },
+    });
+    if (run.error) throw run.error;
+    const report = sandboxSkipReport(existsSync(log) ? readFileSync(log, "utf8") : "");
+    if (report) console.log(report);
+    return run.status ?? 1;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function main(argv: string[]): number {
   const { base, vitestArgs } = splitArgs(argv);
   let changed: string[];
@@ -128,13 +161,7 @@ function main(argv: string[]): number {
   const sources = changed.some((file) => referenceNeedles(file).length > 0) ? readCodeSources(REPO_ROOT) : new Map<string, string>();
   const { linked, targets } = selectRelatedTargets(changed, sources);
   console.log(`test:related: ${changed.length} changed since ${base}, ${linked.length} linked by path, ${ALWAYS_RUN_TESTS.length} guards`);
-  const vitest = join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
-  const run = spawnSync(process.execPath, [vitest, "related", "--run", "--passWithNoTests", ...vitestArgs, ...targets], {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-  });
-  if (run.error) throw run.error;
-  return run.status ?? 1;
+  return runVitest(["related", "--run", "--passWithNoTests", ...vitestArgs, ...targets]);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

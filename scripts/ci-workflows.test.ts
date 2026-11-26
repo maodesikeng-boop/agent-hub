@@ -109,7 +109,7 @@ describe(".github/workflows", () => {
     expect(pr?.["paths-ignore"]).toBeUndefined();
   });
 
-  it("run pnpm verify and knip in check.yml on every pull request without artifact collisions in release.yml", () => {
+  it("run pnpm verify in check.yml on every pull request without artifact collisions in release.yml", () => {
     const check = workflow("check.yml");
     const verifyJob = check.jobs["verify-smoke"];
     expect(verifyJob).toBeDefined();
@@ -124,8 +124,6 @@ describe(".github/workflows", () => {
       .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
       .map((step) => step.with?.name);
     for (const name of verifyArtifacts) expect(releaseSmokeArtifacts).not.toContain(name);
-    const knipRuns = Object.values(check.jobs).flatMap((job) => (job.steps ?? []).filter((step) => step.run?.startsWith("pnpm exec knip")));
-    expect(knipRuns.length).toBeGreaterThan(0);
   });
 
   it("run TypeScript lint in check.yml and Rust fmt + clippy across the workspace in windows.yml", () => {

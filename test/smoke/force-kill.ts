@@ -72,7 +72,7 @@ export async function runForceKill(outcomes: Outcome[], only: (name: string) => 
       const t0 = Date.now();
       const exit = await smoke.terminate();
       const took = ((Date.now() - t0) / 1000).toFixed(1);
-      expect(exit.code === 0, `关机退出码 ${exit.code}`);
+      expect(exit.code === 0 && exit.signal === null, `关机退出码 ${exit.code}（信号 ${exit.signal}）`);
       const claudeGone = await goneWithin(tree.claudePid, 3_000);
       const sleepGone = await goneWithin(tree.sleepPid, 3_000);
       expect(claudeGone, `关机后 claude ${tree.claudePid} 还在`);

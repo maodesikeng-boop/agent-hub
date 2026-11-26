@@ -1,5 +1,4 @@
 // 多厂商守护进程集成单测：验证 startDaemon 组装 claude / agy / codex 三家模型目录、驱动分发、PM 对话与跨厂商派 Worker。
-import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,19 +17,13 @@ import {
 } from "../shared/index.ts";
 import { Client, agentTexts, messagesOf, waitForStatus, waitUntil } from "../../test/e2e/harness.ts";
 import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
-import { SANDBOX_EXEC, osSandboxAvailable } from "./driver/write-scope.ts";
+import { osSandboxAvailable } from "./driver/write-scope.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
+import { sandboxAllowsNestedSandbox } from "../../test/sandbox-probes.ts";
 
 const canNestOsSandbox =
   process.platform === "darwin"
-    ? (() => {
-        try {
-          execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
-          return true;
-        } catch {
-          return false;
-        }
-      })()
+    ? sandboxAllowsNestedSandbox()
     : osSandboxAvailable();
 
 /** 只有 Worker 的提示词里有的一句（daemon/prompt.ts 的 buildWorkerPrompt）：假 agy、codex 靠它认出自己是 Worker。 */

@@ -85,7 +85,7 @@ describe("upgrading ledgers written by released versions", { timeout: 30_000 }, 
     const pm = await client.createPm({ name: "Created after the upgrade", mode: "manage_only", persona: "" });
     await waitForStatus(client, await client.post(pm.conversationId, "hello after the upgrade"), "replied");
     expect(agentTexts(await client.state(), pm.conversationId)).toEqual(["after the upgrade"]);
-    expect((await daemon.terminate()).code).toBe(0);
+    expect(await daemon.terminate()).toEqual({ code: 0, signal: null });
 
     inspect(dbFile, (db) => {
       expect(userVersionOf(db)).toBe(LATEST);
