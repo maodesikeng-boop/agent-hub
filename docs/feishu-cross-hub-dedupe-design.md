@@ -67,7 +67,7 @@ Changed paths fall under `src/daemon/feishu/**`, `src/daemon/mesh/**`, `src/daem
 | `REVIEW.md` rule from `origin/main` | Trigger match | Design compliance |
 | --- | --- | --- |
 | **Async work stops touching the ledger after shutdown starts** | `src/daemon/feishu/**`, `src/daemon/daemon.ts` | `hydrate()`, `flush()`, and `waitForClaimSync()` take an `AbortSignal` / check `ctx.life.closed` after every `await` before mutating local state or SQLite cursors. `close()` aborts in-flight sync HTTP calls, performs a bounded final flush while transport is still disconnecting, and awaits settled background promises before daemon shutdown closes SQLite. Every background publish catches and logs errors. |
-| **Restart recovery finishes what the last run left** | `src/daemon/daemon.ts` | Claimed/handled receipts and cursors persist synchronously in `state/feishu-inbound.json` before `router.submitCommand` or side-effecting replies run. On restart, startup loads the persisted state, or seeds it from the legacy SQLite cursors on first upgrade, and hydrates from Relay and peers before catch-up scans Feishu history. |
+| **Restart recovery finishes what the last run left** | `src/daemon/daemon.ts` | The daemon persists a claim before running the handler. On restart it loads local state (or seeds it from the legacy SQLite cursors on first upgrade) and hydrates from the relay and peers before catch-up. The original device can retry its unfinished claims; other devices still skip them. |
 | **Caches key on identity, have a limit, and retry failures soon** | `src/shared/paths.ts`, `src/shared/limits.ts` | Local receipts and cursors are keyed by `(appId, messageId)` and `(appId, chatId)`, cleared on `appId` change or disconnect. Peer `404` unsupported responses cache only for `FEISHU_INBOUND_PEER_UNSUPPORTED_TTL_MS` (5 minutes), and relay `404` unsupported status resets automatically on every new relay WebSocket session. Every map and cache uses a cap in `src/shared/limits.ts`. |
 | **Growing data has a cap in `limits.ts`** | `src/daemon/feishu/**`, `src/shared/limits.ts` | Local receipts, local cursors, local file bytes, wire checkpoint receipts, wire checkpoint cursors, plaintext bytes, encrypted relay payload bytes, and relay HTTP body bytes all have named caps in `src/shared/limits.ts`. Relay and peer HTTP readers reject payloads exceeding byte limits before JSON parsing. |
 | **The relay trusts only `CF-Connecting-IP` and resists flushing** | `src/relay/**` | Cloudflare Worker routes `GET`/`PUT /v1/accounts/:account/leases/:name/checkpoint` through a dedicated `createIpRateLimiter` (`src/relay/guards.ts`) keyed on `clientKeyOf(clientIpOf(request))` (`CF-Connecting-IP` only, never `X-Forwarded-For`), with `RELAY_CHECKPOINT_PER_IP_PER_MINUTE = 120` and the same flood-resistant `fresh`/`counting`/`blocked` table caps. Node relay uses the identical limiter helper via `req.ip`. |
@@ -91,7 +91,7 @@ Changed paths fall under `src/daemon/feishu/**`, `src/daemon/mesh/**`, `src/daem
 
 Introduce one domain concept: **Account-wide Feishu Inbound State** (`FeishuInboundStateSnapshot` = per-chat monotonic cursors + bounded message receipts with monotonic phase lattice `held_offline < claimed < handled`).
 
-- **Local persistence (`state/feishu-inbound.json`)**: Synchronously updated via `write-file-atomic` before any side-effecting handler runs (`tryClaim`) and on completion (`markHandled`, `advanceCursor`, `tryHoldOffline`). The SQLite table `feishu_inbound_cursors` is read only to seed the file on first upgrade.
+- **Local persistence (`state/feishu-inbound.json`)**: Persist claims atomically before sending replies or delivering to the ledger. Batch completed receipts and cursors into the next claim write or the next scheduled flush. Ignore and context routes only affect log or memory state, so they can go straight to completion without a separate disk write. Offline holds are persisted before sending a notice. The SQLite table `feishu_inbound_cursors` seeds the file on first upgrade.
 - **Relay E2EE checkpoint (`GET`/`PUT /v1/accounts/:account/leases/:name/checkpoint`)**: The same coordinator that already owns `CenterLease` epochs stores one opaque AES-256-GCM ciphertext per `(accountId, leaseName)` in `RelayAccountRecord.leaseCheckpoints`, encrypted with a key derived via HKDF-SHA256 from `(accountId, appId, appSecret)` (which only trusted devices hold) and bound via AAD to `(accountId, leaseName, epoch, seq)`. Relay enforces holder + `(epoch, seq)` fencing (`409 stale_epoch` / `409 stale_seq`).
 - **Peer mTLS mirror (`GET`/`PUT /api/peer/feishu/inbound-state`)**: Online peers also receive best-effort state pushes and answer pull requests during takeover hydration.
 - **Takeover & yield protocol**: On `lease.yield` / disconnect, the outgoing hub flushes its state to Relay and online peers before releasing the lease. On takeover `onConnected`, the incoming hub hydrates from Relay and online peers (CRDT merge) **before** `inbound-catchup` scans Feishu history.
@@ -117,7 +117,7 @@ Skip cross-device state sync and infer whether a user message was already handle
 | --- | --- | --- | --- |
 | Online-overlap takeover (Tokyo -> Mac -> Tokyo) | **Fixed** (Relay + Peer) | Fixed (if mTLS succeeds) | Partial (races on in-flight turns) |
 | Disjoint uptime (Laptop A sleeps, Desktop B wakes) | **Fixed** (Relay holds fenced E2EE checkpoint) | **Broken** (no online peer to query) | Partial (fails non-reply & in-flight) |
-| Mid-turn yield / crash deduplication | **Fixed** (`claimed` receipt persisted + pushed before LLM start) | Broken on crash/timeout | **Broken** (no bot reply exists yet) |
+| Mid-turn yield / crash deduplication | **Protected once mirrored** (a foreign `claimed` receipt blocks replay) | Broken on crash/timeout | **Broken** (no bot reply exists yet) |
 | Non-deliver routes (`/settings`, `reject`, `hint`, `held_offline`) | **Fixed** (all claim a receipt) | Fixed only when peers overlap | **Broken** (no reliable Feishu marker) |
 | False 15-minute gap reminder after takeover | **Fixed** (hydrated cursor + receipt check) | Broken on disjoint uptime | Broken unless scanning all gap replies |
 | Works before Relay production deploy | **Yes** (degrades to Peer mTLS on `404`) | Yes | Yes |
@@ -145,7 +145,8 @@ Screened against `.agents/skills/architect/references/design-red-flags.md`:
 | **Old Daemon + New Relay** (after relay deploy) | Relay sends zero new WS frames and keeps `RELAY_PROTOCOL_VERSION = 1`. Old daemons never call the new HTTP route and see zero changes. |
 | **New Daemon + Old Peer** (mixed device versions) | `GET`/`PUT /api/peer/feishu/inbound-state` returns `404` on the old peer. Caller caches unsupported status for `FEISHU_INBOUND_PEER_UNSUPPORTED_TTL_MS` (5 min) and relies on the Relay checkpoint and other upgraded peers. |
 | **Relay unreachable / `orphan_holder`** | `CenterLease` enters `orphan_holder` only after `MESH_LEASE_ORPHAN_MS` (60 s) and confirming no LAN peer holds the lease. Before catch-up, the orphan holder still hydrates over LAN mTLS from reachable peers, records receipts with `epoch = 0`, and mirrors over LAN. When the relay reconnects, `CenterLease` disconnects `orphan_holder`, obtains a fenced `epoch`, hydrates from Relay + peers, CRDT-merges both states, and publishes. |
-| **Hard crash mid-claim (residual edge)** | `tryClaim` writes locally first (`write-file-atomic`) and `deliverToRouter` waits up to `FEISHU_INBOUND_CLAIM_SYNC_WAIT_MS` (500 ms) for the single-flight publish before starting the LLM turn. Only instant process kill before that publish reaches any remote target leaves the receipt local-only. |
+| **Hard crash mid-claim (residual edge)** | The daemon saves its own claim before handling and waits up to `FEISHU_INBOUND_CLAIM_SYNC_WAIT_MS` (500 ms) for publication. A crash or network failure can still leave the claim local only. That device can retry in the normal catch-up window, including when a newer message moved the cursor. The ledger deduplicates Router and PM delivery by message ID. A reply sent before the completion reaches disk may repeat on the original device. A different device that sees the claim leaves it to the original device, so it cannot recover a claim if that device never returns. |
+| **Relay snapshot replacement (residual edge)** | The relay replaces the encrypted snapshot as a whole. If the incoming hub times out during hydration, or starts publishing after a peer push before hydration completes, it can replace a checkpoint before merging it. Receipts missing from the replacement can then be lost on a later takeover unless a trusted device still has them. Lease fencing stops the old hub from overwriting the new checkpoint; it does not enforce a read and merge before the new hub writes. |
 
 ### Module boundaries, state model, and protocols
 
@@ -153,7 +154,7 @@ Screened against `.agents/skills/architect/references/design-red-flags.md`:
 
 Receipt phase rank is strictly monotonic:
 - `"held_offline"` (rank `1`): Held in a hub's `feishu_offline_inbox` for an offline PM device. Suppresses duplicate offline holds/notices on any other non-owning hub and suppresses false 15-minute gap reminders in `settleWindowGap`. Does **not** advance the chat cursor and does **not** block the owning device from executing the message once.
-- `"claimed"` (rank `2`): Claimed for execution by the handling device (Router hub or PM owning device) before side effects start. Suppresses execution on all devices. Does **not** advance the chat cursor (`REVIEW.md` rule: cursor advances only after handling succeeds).
+- `"claimed"` (rank `2`): Reserved by the handling device (Router hub or PM owning device). A foreign or actively running claim blocks execution. The original device may retry an inactive claim after failure or restart. A claim does not advance the chat cursor.
 - `"handled"` (rank `3`): Handling completed. Suppresses execution on all devices and permits advancing `cursors[chatId]` (subject to existing `cursorHold` and `gateEpochs` guards).
 
 Merge laws (`mergeFeishuInboundState(local, remote, now)`):
@@ -191,7 +192,7 @@ sequenceDiagram
   participant B as Hub B (Mac, epoch E+1)
 
   User->>A: DM M1 (oc_p2p)
-  A->>A: tryClaim(M1) -> persist state/feishu-inbound.json (claimed)
+  A->>A: tryClaim(M1) -> waitForClaimSync() persists the claim
   A-->>Relay: PUT checkpoint (epoch E, seq s, AEAD ciphertext)
   A-->>B: PUT /api/peer/feishu/inbound-state (best effort)
   A->>A: router.submitCommand(M1) -> markHandled(M1), advanceCursor(oc_p2p)
@@ -237,7 +238,13 @@ All four repository cache and state-bound rules are satisfied:
 | `RELAY_CHECKPOINT_PER_IP_PER_MINUTE` | `120` | Matches `RELAY_UPGRADES_PER_IP_PER_MINUTE`; allows 2 checkpoint ops/sec per IP while blocking abuse. |
 
 3. **Stable front-end references**: Not applicable; this change adds no web UI selectors or components.
-4. **Performance**: Single-flight coalesced publishing ensures bursts of incoming Feishu messages never spawn concurrent HTTP floods to Relay or peers. Local atomic writes occur only on distinct user messages (at most ~4/s per chat) on a <=256 KiB file (<1 ms on SSD).
+4. **Performance**: A single publish can cover several local updates. The daemon checks local count, byte, and expiry limits as entries change and prunes the snapshot when it reaches a limit. Claim writes absorb pending completions; a scheduled flush saves the last batch when there is no later claim.
+
+### Catch-up benchmark
+
+On arm64 macOS 26.6.2 with Node 24.21.0, the existing three-reconnect service test processed the same 1,050 events and delivered all three commands in both versions. Across five alternating runs, the median fell from **18.51 s to 0.52 s** (ranges: 17.86–20.80 s and 0.49–0.56 s). The service test uses a fake transport and measures local recovery; it does not include Feishu or relay latency.
+
+In a separate checkpoint test where all 200 messages required a durable claim before handling, the median fell from 3.22 s to 1.34 s (ranges: 2.79–4.17 s and 1.31–1.54 s, five alternating runs). The same 200 completed receipts and final cursor were read back in each run. There were 400 `fsync` calls before and 201 after; the baseline spent a median of 2.00 s in `fsync` alone.
 
 ## 5. Cross-vendor and cross-platform compatibility
 

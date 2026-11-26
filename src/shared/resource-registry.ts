@@ -311,7 +311,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("router_capability_overrides", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),
   table("feishu_app", "bounded_config", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "overwrite"),
   table("feishu_chats", "bounded_config", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "on_archive_or_delete"),
-  table("feishu_inbound_cursors", "bounded_config", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "on_archive_or_delete"),
+  table("feishu_inbound_cursors", "bounded_config", "migrations/0041_feishu_router_asks_and_inbound_cursor.sql", "src/daemon/feishu/store.ts", "on_archive_or_delete"),
   table("feishu_avatars", "bounded_config", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "overwrite"),
 ];
 

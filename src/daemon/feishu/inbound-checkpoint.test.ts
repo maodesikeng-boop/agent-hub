@@ -569,7 +569,6 @@ describe("FeishuInboundSync coordinator degradation, shutdown, and isolation", (
     const now = 1_764_136_000_000;
     const dir = tempDir("feishu-sync-shutdown-");
     const stateFile = join(dir, "feishu-inbound.json");
-    const onCursorAdvanced = vi.fn();
 
     let releaseFetch!: () => void;
     const lateSnap = createEmptyFeishuInboundState(APP_A);
@@ -589,7 +588,6 @@ describe("FeishuInboundSync coordinator degradation, shutdown, and isolation", (
           }),
         pushPeerState: async () => ({ kind: "ok" }),
       },
-      onCursorAdvanced,
       now: () => now,
       log: () => {},
     });
@@ -598,7 +596,8 @@ describe("FeishuInboundSync coordinator degradation, shutdown, and isolation", (
     await sync.close();
     releaseFetch();
     await hydratePromise;
-    expect(onCursorAdvanced).not.toHaveBeenCalled();
+    expect(sync.cursorOf(ROUTER_CHAT)).toBeNull();
+    expect(readFeishuInboundStateFile(stateFile, APP_A, now)).toBeNull();
   });
 
   it("matches receipts by immutable messageId even with identical timestamps and clears on app switch (S4, S5)", () => {
@@ -626,6 +625,58 @@ describe("FeishuInboundSync coordinator degradation, shutdown, and isolation", (
     sync.resetForApp(APP_B);
     expect(sync.isAlreadyExecuted(m1)).toBe(false);
     expect(sync.snapshot()?.appId).toBe(APP_B);
+  });
+
+  it("resumes a durable unfinished claim only on its original device", async () => {
+    const now = 1_764_136_000_000;
+    const stateFile = join(tempDir("feishu-claim-restart-"), "feishu-inbound.json");
+    const options = {
+      stateFile, initialAppId: APP_A, appCredentials: () => null, leaseEpoch: () => 1, now: () => now, log: () => {},
+    };
+    const messageId = "om_unfinished" as FeishuMessageId;
+    const message = { messageId, chatId: ROUTER_CHAT, messageAt: now, isOwnerOfChat: true };
+    const first = createFeishuInboundSync({ ...options, selfId: TOKYO });
+    expect(first.tryClaim(message).kind).toBe("claimed");
+    await first.waitForClaimSync();
+    expect(readFeishuInboundStateFile(stateFile, APP_A, now)?.receipts[messageId]?.phase).toBe("claimed");
+    await first.close();
+
+    const peer = createFeishuInboundSync({ ...options, selfId: MAC });
+    expect(peer.isAlreadyExecuted(messageId)).toBe(true);
+    expect(peer.tryClaim(message).kind).toBe("duplicate");
+    await peer.close();
+
+    const restarted = createFeishuInboundSync({ ...options, selfId: TOKYO });
+    expect(restarted.isAlreadyExecuted(messageId)).toBe(false);
+    expect(restarted.tryClaim(message).kind).toBe("claimed");
+    restarted.markHandled({ ...message, advanceCursor: true });
+    await restarted.close();
+
+    const finished = createFeishuInboundSync({ ...options, selfId: TOKYO });
+    expect(finished.tryClaim(message).kind).toBe("duplicate");
+    expect(finished.cursorOf(ROUTER_CHAT)?.lastMessageId).toBe(messageId);
+    await finished.close();
+  });
+
+  it("writes completed receipts and cursors together at the next durability boundary", async () => {
+    const now = 1_764_136_000_000;
+    const stateFile = join(tempDir("feishu-coalesced-writes-"), "feishu-inbound.json");
+    const sync = createFeishuInboundSync({
+      selfId: TOKYO, stateFile, initialAppId: APP_A, appCredentials: () => null, leaseEpoch: () => 1, now: () => now, log: () => {},
+    });
+    cleanups.push(() => sync.close());
+    const first = { messageId: "om_first" as FeishuMessageId, chatId: ROUTER_CHAT, messageAt: now, isOwnerOfChat: true };
+    const second = { ...first, messageId: "om_second" as FeishuMessageId };
+    sync.tryClaim(first);
+    await sync.waitForClaimSync();
+    sync.markHandled({ ...first, advanceCursor: true });
+    expect(readFeishuInboundStateFile(stateFile, APP_A, now)?.receipts[first.messageId]?.phase).toBe("claimed");
+    sync.tryClaim(second);
+    await sync.waitForClaimSync();
+    const checkpoint = readFeishuInboundStateFile(stateFile, APP_A, now);
+    expect(checkpoint?.receipts[first.messageId]?.phase).toBe("handled");
+    expect(checkpoint?.cursors[ROUTER_CHAT]?.lastMessageId).toBe(first.messageId);
+    expect(checkpoint?.receipts[second.messageId]?.phase).toBe("claimed");
   });
 });
 

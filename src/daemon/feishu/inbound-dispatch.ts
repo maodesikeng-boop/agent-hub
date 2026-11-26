@@ -1,6 +1,6 @@
 import type { Attachment } from "../../shared/attachments.ts";
 import { userMessageDedupeKey, type PmId } from "../../shared/domain.ts";
-import { feishuDisplayName, type FeishuChatId, type FeishuChatTarget, type FeishuOpenId } from "../../shared/feishu.ts";
+import { feishuDisplayName, type FeishuChatId, type FeishuChatMode, type FeishuChatTarget, type FeishuOpenId } from "../../shared/feishu.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../../shared/ledger.ts";
 import { MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
 import { sendText } from "./api.ts";
@@ -102,7 +102,6 @@ function recordHandled(ctx: FeishuContext, message: InboundMessage) {
   const advanceCursor = message.at > 0 && !catchUp.gateEpochs.has(message.chatId) &&
     (holdAt === undefined || message.at < holdAt) && ctx.store.chatById(message.chatId) !== null;
   ctx.inboundSync.markHandled({ messageId: message.messageId, chatId: message.chatId, messageAt: message.at, advanceCursor });
-  void ctx.inboundSync.flush();
 }
 
 const isBindCode = (ctx: FeishuContext, text: string) => {
@@ -135,8 +134,21 @@ async function handleMessage(ctx: FeishuContext, message: InboundMessage, queued
     messageId: message.messageId, chatId: message.chatId, messageAt: message.at, isOwnerOfChat: group || message.chatType === "p2p",
   });
   if (claim.kind === "duplicate") return;
-  await ctx.inboundSync.waitForClaimSync(message.messageId);
-  if (!sameApp()) return;
+  try {
+    await dispatchClaimedMessage(ctx, scene, { mode, speakerName }, () =>
+      sameApp() && ctx.inboundSync.ownsClaim(claim.receipt));
+  } finally {
+    ctx.inboundSync.releaseClaim(claim.receipt);
+  }
+}
+
+async function dispatchClaimedMessage(
+  ctx: FeishuContext,
+  scene: MessageScene,
+  { mode, speakerName }: { mode: FeishuChatMode; speakerName: string },
+  canExecute: () => boolean,
+) {
+  const { message, chat, target, owner: o, t } = scene;
   if (message.chatType === "p2p" && message.senderOpenId === o && target?.kind !== "router") {
     logIgnoredMention(ctx, message, "inactive-router");
     recordHandled(ctx, message);
@@ -144,7 +156,7 @@ async function handleMessage(ctx: FeishuContext, message: InboundMessage, queued
   }
   const route = routeFeishuMessage(message, {
     ownerOpenId: o,
-    binding: group ? { target, archived: false } : null,
+    binding: message.chatType === "group" && target?.kind === "pm" ? { target, archived: false } : null,
     mode,
     triggerMode: chat?.triggerMode ?? "auto",
     guestTier: chat?.guestTier ?? "chat_only",
@@ -154,8 +166,17 @@ async function handleMessage(ctx: FeishuContext, message: InboundMessage, queued
     pendingFiles: ctx.contexts.peekFiles(message.chatId, t),
     isBindCode: (text) => isBindCode(ctx, text),
   });
-  await applyMessageRoute(ctx, scene, route);
-  if (sameApp()) recordHandled(ctx, message);
+  if (route.kind === "ignore") {
+    logIgnoredMention(ctx, message, target === null ? "inactive-chat" : message.inThread ? "topic" : "no-route");
+  } else if (route.kind === "context") {
+    logIgnoredMention(ctx, message, "context-only");
+    ctx.contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
+  } else {
+    await ctx.inboundSync.waitForClaimSync();
+    if (!canExecute() || (message.chatType === "p2p" && !isCenter(ctx))) return;
+    await applyMessageRoute(ctx, scene, route, canExecute);
+  }
+  if (canExecute()) recordHandled(ctx, message);
 }
 
 async function bindOwner(ctx: FeishuContext, message: InboundMessage, openId: FeishuOpenId, t: number) {
@@ -167,12 +188,14 @@ async function bindOwner(ctx: FeishuContext, message: InboundMessage, openId: Fe
   requestControl(ctx, "sync");
 }
 
-async function applyMessageRoute(ctx: FeishuContext, scene: MessageScene, route: FeishuMessageRoute) {
+async function applyMessageRoute(
+  ctx: FeishuContext,
+  scene: MessageScene,
+  route: Exclude<FeishuMessageRoute, { kind: "ignore" | "context" }>,
+  canExecute: () => boolean,
+) {
   const { message, chat, target } = scene;
   switch (route.kind) {
-    case "ignore":
-      logIgnoredMention(ctx, message, target === null ? "inactive-chat" : message.inThread ? "topic" : "no-route");
-      return;
     case "hint": {
       const at = message.senderOpenId === scene.owner ? "" : `<at user_id="${message.senderOpenId}"></at> `;
       await sendText(ctx, { chatId: message.chatId }, at + route.text);
@@ -192,12 +215,8 @@ async function applyMessageRoute(ctx: FeishuContext, scene: MessageScene, route:
         refreshCatalogsInBackground(ctx, target);
       }
       return;
-    case "context":
-      logIgnoredMention(ctx, message, "context-only");
-      ctx.contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
-      return;
     case "deliver":
-      return deliver(ctx, scene, route);
+      return deliver(ctx, scene, route, canExecute);
   }
 }
 
@@ -207,22 +226,21 @@ function alreadyDelivered(ctx: FeishuContext, route: DeliverRoute, clientId: str
   return conversationId !== null && ctx.db.get("SELECT 1 FROM messages WHERE dedupe_key = ?", userMessageDedupeKey(conversationId, clientId)) !== undefined;
 }
 
-async function receiveFiles(ctx: FeishuContext, scene: MessageScene, route: DeliverRoute): Promise<Attachment[]> {
+async function receiveFiles(ctx: FeishuContext, scene: MessageScene, route: DeliverRoute, canExecute: () => boolean): Promise<Attachment[]> {
   const { message } = scene;
   const attachments: Attachment[] = [];
   const missed: string[] = [];
   for (const { messageId, file } of route.files) {
     const saved = await ctx.link.files?.receive(messageId, file);
+    if (!canExecute()) return [];
     if (saved) attachments.push(saved);
     else missed.push(file.fileName ?? (file.type === "image" ? "图片" : "文件"));
   }
-  const handled = new Set(route.files.map(({ messageId }) => messageId));
-  ctx.contexts.dropFiles(message.chatId, (file) => handled.has(file.messageId) || (route.droppedFiles > 0 && file.speaker === message.senderOpenId));
   const at = message.chatType === "group" && message.senderOpenId !== scene.owner ? `<at user_id="${message.senderOpenId}"></at> ` : "";
   if (missed.length > 0) await sendText(ctx, { chatId: message.chatId }, `${at}${missedFilesText(missed)}`);
-  if (route.droppedFiles > 0) {
+  if (route.droppedFiles > 0 && canExecute()) {
     await sendText(ctx, { chatId: message.chatId }, `${at}${GUEST_NO_FILES}`);
-    await offerPolicyCard(ctx, message.chatId);
+    if (canExecute()) await offerPolicyCard(ctx, message.chatId);
   }
   return attachments;
 }
@@ -262,16 +280,19 @@ async function deliverToPm(ctx: FeishuContext, scene: MessageScene, pmId: PmId, 
   }
 }
 
-async function deliver(ctx: FeishuContext, scene: MessageScene, route: DeliverRoute) {
+async function deliver(ctx: FeishuContext, scene: MessageScene, route: DeliverRoute, canExecute: () => boolean) {
   const clientId = `${FEISHU_CLIENT_PREFIX}${scene.message.messageId}`;
   if (alreadyDelivered(ctx, route, clientId)) {
     return;
   }
-  const attachments = await receiveFiles(ctx, scene, route);
-  if (ctx.life.closed || (route.text === "" && attachments.length === 0)) {
-    return;
+  const attachments = await receiveFiles(ctx, scene, route, canExecute);
+  if (!canExecute()) return;
+  if (route.text !== "" || attachments.length > 0) {
+    const delivery = { clientId, text: deliveredText(route.text, scene.queuedAt), attachments };
+    if (route.target.kind === "router") await deliverToRouter(ctx, scene, delivery);
+    else await deliverToPm(ctx, scene, route.target.pmId, route.origin, delivery);
   }
-  const delivery = { clientId, text: deliveredText(route.text, scene.queuedAt), attachments };
-  if (route.target.kind === "router") return deliverToRouter(ctx, scene, delivery);
-  return deliverToPm(ctx, scene, route.target.pmId, route.origin, delivery);
+  if (!canExecute()) return;
+  const handled = new Set(route.files.map(({ messageId }) => messageId));
+  ctx.contexts.dropFiles(scene.message.chatId, (file) => handled.has(file.messageId) || (route.droppedFiles > 0 && file.speaker === scene.message.senderOpenId));
 }

@@ -242,13 +242,16 @@ async function catchUpInboundChat(ctx: FeishuContext, chat: FeishuChatBinding, i
   const catchUpNow = ctx.now();
   const cursor = ctx.inboundSync.cursorOf(chat.chatId);
   const anchor = cursor?.lastInboundAt ?? chat.createdAt;
+  const retryAt = ctx.inboundSync.retryFrom(chat.chatId, Math.max(1, catchUpNow - FEISHU_INBOUND_CATCHUP_WINDOW_MS));
+  const rewind = retryAt !== null && retryAt <= anchor;
+  const skipId = rewind ? null : cursor?.lastMessageId ?? null;
   const win = catchUpWindow(chat, target, app.botOpenId, {
     chatCreatedAt: target.kind === "router" ? Math.min(chat.createdAt, anchor) : chat.createdAt,
-    lastInboundAt: anchor,
+    lastInboundAt: rewind ? retryAt : anchor,
   }, includeOverlap, catchUpNow);
-  const held = await settleWindowGap(ctx, transport, chat, win, cursor?.lastMessageId ?? null, runEpoch);
+  const held = await settleWindowGap(ctx, transport, chat, win, skipId, runEpoch);
   if (held === null) return;
-  const fetched = await fetchMissedMessages(ctx, transport, win, includeOverlap ? null : cursor?.lastMessageId ?? null, runEpoch);
+  const fetched = await fetchMissedMessages(ctx, transport, win, includeOverlap ? null : skipId, runEpoch);
   if (fetched === null) return;
   queueMissedMessages(ctx, chat, [...held, ...fetched.messages], fetched.unfetchedFrom);
 }

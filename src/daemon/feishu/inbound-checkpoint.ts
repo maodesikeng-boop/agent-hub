@@ -124,7 +124,6 @@ export interface FeishuInboundSyncOptions {
   leaseEpoch: () => number | null;
   relay?: FeishuInboundRelayPort;
   peers?: FeishuInboundPeerPort;
-  onCursorAdvanced?: (entry: FeishuInboundCursorEntry) => void;
   now?: () => number;
   log: (line: string) => void;
 }
@@ -134,17 +133,19 @@ export interface FeishuInboundSync {
   exportForWire(): FeishuInboundStateSnapshot | null;
   cursorOf(chatId: FeishuChatId): FeishuInboundCursorEntry | null;
   receiptOf(messageId: FeishuMessageId): FeishuInboundReceipt | null;
-  hasAccountedReceipt(messageId: FeishuMessageId): boolean;
   isAlreadyExecuted(messageId: FeishuMessageId): boolean;
+  retryFrom(chatId: FeishuChatId, sinceMs: number): number | null;
   seedLocalCursor(chatId: FeishuChatId, cursor: { lastInboundAt: number; lastMessageId: FeishuMessageId | null }): void;
   tryClaim(input: { messageId: FeishuMessageId; chatId: FeishuChatId; messageAt: number; isOwnerOfChat: boolean }): FeishuInboundClaimDecision;
+  ownsClaim(receipt: FeishuInboundReceipt): boolean;
+  releaseClaim(receipt: FeishuInboundReceipt): void;
   markHandled(input: { messageId: FeishuMessageId; chatId: FeishuChatId; messageAt: number; advanceCursor: boolean }): void;
   tryHoldOffline(input: { messageId: FeishuMessageId; chatId: FeishuChatId; messageAt: number }): FeishuInboundHoldDecision;
   advanceCursor(chatId: FeishuChatId, cursor: { lastInboundAt: number; lastMessageId: FeishuMessageId | null }): void;
   mergeRemote(remote: FeishuInboundStateSnapshot): boolean;
   hydrate(options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<boolean>;
   flush(options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void>;
-  waitForClaimSync(messageId: FeishuMessageId, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void>;
+  waitForClaimSync(options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void>;
   resetForApp(appId: FeishuAppId | null): void;
   close(): Promise<void>;
 }
@@ -196,6 +197,18 @@ const compareText = (a: string, b: string) => a === b ? 0 : a > b ? 1 : -1;
 const receiptAgeAnchor = (receipt: FeishuInboundReceipt) => Math.max(receipt.updatedAt, receipt.messageAt);
 const phaseRank = (phase: FeishuInboundReceiptPhase) => FEISHU_INBOUND_RECEIPT_PHASES.indexOf(phase);
 
+type StateEntry = FeishuInboundCursorEntry | FeishuInboundReceipt;
+const entrySizes = new WeakMap<StateEntry, { id: string; bytes: number }>();
+
+function entryBytes(id: string, entry: StateEntry): number {
+  const cached = entrySizes.get(entry);
+  if (cached?.id === id) return cached.bytes;
+  // Allow one comma per entry, including the last entry in each record.
+  const size = Buffer.byteLength(JSON.stringify({ [id]: entry })) - 1;
+  entrySizes.set(entry, { id, bytes: size });
+  return size;
+}
+
 function compareCursor(a: FeishuInboundCursorEntry, b: FeishuInboundCursorEntry): number {
   return a.lastInboundAt - b.lastInboundAt || a.updatedAt - b.updatedAt || compareText(a.lastMessageId ?? "", b.lastMessageId ?? "");
 }
@@ -223,9 +236,9 @@ export function pruneFeishuInboundState(
 ): FeishuInboundStateSnapshot {
   const state = { ...createEmptyFeishuInboundState(snapshot.appId), seq: snapshot.seq };
   let bytesLeft = maxBytes - Buffer.byteLength(JSON.stringify(state));
-  const take = <T>(entries: [string, T][], out: Record<string, T>) => {
+  const take = <T extends StateEntry>(entries: [string, T][], out: Record<string, T>) => {
     for (const [id, entry] of entries) {
-      const cost = Buffer.byteLength(JSON.stringify({ [id]: entry })) - 1;
+      const cost = entryBytes(id, entry);
       if (cost > bytesLeft) continue;
       out[id] = entry;
       bytesLeft -= cost;
@@ -348,8 +361,41 @@ function untilAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T | undef
   });
 }
 
+class StateBudget {
+  private bytes = 0;
+  private cursors = 0;
+  private receipts = 0;
+  private expireAfter = Infinity;
+
+  constructor(state: FeishuInboundStateSnapshot | null) {
+    for (const cursor of Object.values(state?.cursors ?? {})) this.replaceCursor(undefined, cursor);
+    for (const receipt of Object.values(state?.receipts ?? {})) this.replaceReceipt(undefined, receipt);
+  }
+
+  replaceCursor(previous: FeishuInboundCursorEntry | undefined, next: FeishuInboundCursorEntry) {
+    this.bytes += entryBytes(next.chatId, next) - (previous === undefined ? 0 : entryBytes(next.chatId, previous));
+    if (previous === undefined) this.cursors++;
+  }
+
+  replaceReceipt(previous: FeishuInboundReceipt | undefined, next: FeishuInboundReceipt) {
+    this.bytes += entryBytes(next.messageId, next) - (previous === undefined ? 0 : entryBytes(next.messageId, previous));
+    if (previous === undefined) this.receipts++;
+    this.expireAfter = Math.min(this.expireAfter, receiptAgeAnchor(next) + FEISHU_INBOUND_RECEIPTS_TTL_MS);
+  }
+
+  needsPrune(state: FeishuInboundStateSnapshot, now: number) {
+    const header = { ...createEmptyFeishuInboundState(state.appId), seq: state.seq };
+    return this.cursors > FEISHU_INBOUND_CURSORS_MAX || this.receipts > FEISHU_INBOUND_RECEIPTS_MAX ||
+      now > this.expireAfter || this.bytes + Buffer.byteLength(JSON.stringify(header)) > FEISHU_INBOUND_STATE_MAX_BYTES;
+  }
+}
+
 class InboundSync implements FeishuInboundSync {
   private state: FeishuInboundStateSnapshot | null;
+  private budget: StateBudget;
+  private active = new WeakSet<FeishuInboundReceipt>();
+  private persisted: FeishuInboundStateSnapshot | null;
+  private flushPending: ReturnType<typeof setImmediate> | null = null;
   private lifetime = new AbortController();
   private readonly unsupportedPeers = new Map<DeviceId, number>();
   private publishing: Promise<void> | null = null;
@@ -366,10 +412,13 @@ class InboundSync implements FeishuInboundSync {
     const appId = opts.initialAppId === undefined ? opts.appCredentials()?.appId ?? null : opts.initialAppId;
     const stored = opts.stateFile === null ? null : readFeishuInboundStateFile(opts.stateFile, appId, this.now());
     this.state = appId === null ? null : stored ?? createEmptyFeishuInboundState(appId);
+    this.budget = new StateBudget(this.state);
+    this.persisted = this.state;
     if (stored === null && this.state !== null && opts.legacyCursors !== undefined &&
       opts.stateFile !== null && !existsSync(opts.stateFile)) {
       const cursors = Object.fromEntries(opts.legacyCursors().map((entry) => [entry.chatId, entry]));
-      this.save(pruneFeishuInboundState({ ...this.state, cursors, seq: Number(Object.keys(cursors).length > 0) }, this.now()));
+      this.replaceState(pruneFeishuInboundState({ ...this.state, cursors, seq: Number(Object.keys(cursors).length > 0) }, this.now()));
+      this.persist();
     }
   }
 
@@ -386,33 +435,75 @@ class InboundSync implements FeishuInboundSync {
     return receipt !== undefined && this.now() - receiptAgeAnchor(receipt) <= FEISHU_INBOUND_RECEIPTS_TTL_MS ? receipt : null;
   }
 
-  hasAccountedReceipt(id: FeishuMessageId) { return this.receiptOf(id) !== null; }
+  private canRetry(receipt: FeishuInboundReceipt) {
+    return receipt.phase === "claimed" && receipt.claimedBy === this.opts.selfId && !this.active.has(receipt);
+  }
 
   isAlreadyExecuted(id: FeishuMessageId) {
     const receipt = this.receiptOf(id);
-    return receipt !== null && receipt.phase !== "held_offline";
+    return receipt !== null && receipt.phase !== "held_offline" && !this.canRetry(receipt);
   }
 
-  private save(next: FeishuInboundStateSnapshot) {
-    if (this.closed) return;
-    const previous = this.state;
-    const file = this.opts.stateFile;
-    if (file !== null) writeFeishuInboundStateFile(file, next);
-    this.state = next;
-    for (const entry of Object.values(next.cursors)) {
-      if (entry.lastInboundAt > (previous?.cursors[entry.chatId]?.lastInboundAt ?? -1)) this.opts.onCursorAdvanced?.(entry);
+  retryFrom(chatId: FeishuChatId, sinceMs: number): number | null {
+    if (this.state === null) return null;
+    let earliest = Infinity;
+    const cutoff = this.now() - FEISHU_INBOUND_RECEIPTS_TTL_MS;
+    for (const receipt of Object.values(this.state.receipts)) {
+      if (receipt.chatId === chatId && receipt.messageAt >= sinceMs && receiptAgeAnchor(receipt) >= cutoff && this.canRetry(receipt)) {
+        earliest = Math.min(earliest, receipt.messageAt);
+      }
     }
+    return Number.isFinite(earliest) ? earliest : null;
+  }
+
+  private replaceState(next: FeishuInboundStateSnapshot | null) {
+    this.state = next;
+    this.budget = new StateBudget(next);
+  }
+
+  private persist(state = this.state) {
+    if (this.closed || state === this.persisted) return;
+    const file = this.opts.stateFile;
+    if (file !== null && state !== null) writeFeishuInboundStateFile(file, state);
+    this.persisted = state;
+  }
+
+  private persistBestEffort() {
+    try {
+      this.persist();
+    } catch (error: unknown) {
+      this.logError(error);
+    }
+  }
+
+  private cancelScheduledFlush() {
+    if (this.flushPending === null) return;
+    clearImmediate(this.flushPending);
+    this.flushPending = null;
+  }
+
+  private scheduleFlush() {
+    if (this.closed || this.flushPending !== null) return;
+    this.flushPending = setImmediate(() => {
+      this.flushPending = null;
+      void this.flush();
+    });
   }
 
   private update(cursor: FeishuInboundCursorEntry | null, receipt: FeishuInboundReceipt | null) {
     const state = this.state;
     if (this.closed || state === null) return;
-    this.save(pruneFeishuInboundState({
+    if (cursor !== null) this.budget.replaceCursor(state.cursors[cursor.chatId], cursor);
+    if (receipt !== null) this.budget.replaceReceipt(state.receipts[receipt.messageId], receipt);
+    const next = {
       ...state,
       seq: state.seq + 1,
       cursors: cursor === null ? state.cursors : { ...state.cursors, [cursor.chatId]: cursor },
       receipts: receipt === null ? state.receipts : { ...state.receipts, [receipt.messageId]: receipt },
-    }, this.now()));
+    };
+    const now = this.now();
+    if (this.budget.needsPrune(next, now)) this.replaceState(pruneFeishuInboundState(next, now));
+    else this.state = next;
   }
 
   private cursorEntry(chatId: FeishuChatId, cursor: CursorInput): FeishuInboundCursorEntry | null {
@@ -428,7 +519,9 @@ class InboundSync implements FeishuInboundSync {
 
   advanceCursor(chatId: FeishuChatId, cursor: CursorInput) {
     const next = this.cursorEntry(chatId, cursor);
-    if (next !== null) this.update(next, null);
+    if (next === null) return;
+    this.update(next, null);
+    this.scheduleFlush();
   }
 
   private makeReceipt(input: MessageInput, phase: FeishuInboundReceiptPhase): FeishuInboundReceipt {
@@ -440,10 +533,25 @@ class InboundSync implements FeishuInboundSync {
 
   tryClaim(input: MessageInput & { isOwnerOfChat: boolean }): FeishuInboundClaimDecision {
     const existing = this.receiptOf(input.messageId);
-    if (existing !== null && (existing.phase !== "held_offline" || !input.isOwnerOfChat)) return { kind: "duplicate", existing };
+    if (existing !== null) {
+      if (this.canRetry(existing)) {
+        this.active.add(existing);
+        return { kind: "claimed", receipt: existing };
+      }
+      if (existing.phase !== "held_offline" || !input.isOwnerOfChat) return { kind: "duplicate", existing };
+    }
     const receipt = this.makeReceipt(input, "claimed");
     this.update(null, receipt);
+    this.active.add(receipt);
     return { kind: "claimed", receipt };
+  }
+
+  ownsClaim(receipt: FeishuInboundReceipt) {
+    return !this.closed && this.active.has(receipt) && this.receiptOf(receipt.messageId) === receipt;
+  }
+
+  releaseClaim(receipt: FeishuInboundReceipt) {
+    this.active.delete(receipt);
   }
 
   markHandled(input: MessageInput & { advanceCursor: boolean }) {
@@ -451,21 +559,34 @@ class InboundSync implements FeishuInboundSync {
     const handled = previous === null ? this.makeReceipt(input, "handled") : { ...previous, phase: "handled" as const, updatedAt: this.now() };
     const cursor = input.advanceCursor ? this.cursorEntry(input.chatId, { lastInboundAt: input.messageAt, lastMessageId: input.messageId }) : null;
     this.update(cursor, handled);
+    this.scheduleFlush();
   }
 
   tryHoldOffline(input: MessageInput): FeishuInboundHoldDecision {
     const existing = this.receiptOf(input.messageId);
     if (existing !== null) return { kind: "duplicate", existing };
     const receipt = this.makeReceipt(input, "held_offline");
+    const previous = this.state;
     this.update(null, receipt);
+    try {
+      this.persist();
+    } catch (error: unknown) {
+      this.replaceState(previous);
+      throw error;
+    }
     return { kind: "held", receipt };
   }
 
   mergeRemote(remote: FeishuInboundStateSnapshot) {
     if (this.closed || this.state === null || remote.appId !== this.state.appId) return false;
-    const next = mergeFeishuInboundState(this.state, remote, this.now());
-    if (JSON.stringify(next) === JSON.stringify(this.state)) return false;
-    this.save({ ...next, seq: Math.max(next.seq, this.state.seq + 1) });
+    const merged = mergeFeishuInboundState(this.state, remote, this.now());
+    if (JSON.stringify(merged) === JSON.stringify(this.state)) {
+      this.persist();
+      return false;
+    }
+    const next = { ...merged, seq: Math.max(merged.seq, this.state.seq + 1) };
+    this.persist(next);
+    this.replaceState(next);
     return true;
   }
 
@@ -543,8 +664,8 @@ class InboundSync implements FeishuInboundSync {
     while (!signal.aborted) {
       const state = this.state;
       const epoch = this.opts.leaseEpoch();
-      const wire = this.exportForWire();
-      if (state === null || wire === null || state.seq === 0 || (this.published === state && this.publishedEpoch === epoch)) return;
+      if (state === null || state.seq === 0 || (this.published === state && this.publishedEpoch === epoch)) return;
+      const wire = pruneFeishuInboundState(state, this.now(), wireLimits);
       let mirrored = false;
       const [stored] = await Promise.all([
         epoch === null || epoch === 0 ? false : this.pushRelay(wire, epoch, signal).catch((error: unknown) => { this.logError(error); return false; }),
@@ -566,8 +687,11 @@ class InboundSync implements FeishuInboundSync {
 
   async flush(options: SyncWait = {}) {
     if (this.closed) return;
+    this.cancelScheduledFlush();
+    this.persistBestEffort();
     const signal = this.signal(options, FEISHU_INBOUND_FLUSH_TIMEOUT_MS);
     if (signal.aborted) return;
+    if (this.opts.relay === undefined && this.opts.peers === undefined) return;
     if (this.publishing === null) {
       const lifetime = this.signal({}, FEISHU_INBOUND_FLUSH_TIMEOUT_MS);
       const task = untilAbort(this.publish(lifetime), lifetime).catch((error: unknown) => this.logError(error));
@@ -579,25 +703,33 @@ class InboundSync implements FeishuInboundSync {
     await untilAbort(this.publishing, signal);
   }
 
-  async waitForClaimSync(_messageId: FeishuMessageId, options: SyncWait = {}) {
+  async waitForClaimSync(options: SyncWait = {}) {
+    this.persist();
     await this.flush({ ...options, timeoutMs: options.timeoutMs ?? FEISHU_INBOUND_CLAIM_SYNC_WAIT_MS });
   }
 
   resetForApp(appId: FeishuAppId | null) {
     if (this.closed || appId === (this.state?.appId ?? null)) return;
+    this.cancelScheduledFlush();
+    this.active = new WeakSet();
     this.lifetime.abort();
     this.lifetime = new AbortController();
     this.publishing = null;
     this.published = null;
     if (appId === null) {
       if (this.opts.stateFile !== null) rmSync(this.opts.stateFile, { force: true });
-      this.state = null;
+      this.replaceState(null);
+      this.persisted = null;
     } else {
-      this.save(createEmptyFeishuInboundState(appId));
+      const next = createEmptyFeishuInboundState(appId);
+      this.persist(next);
+      this.replaceState(next);
     }
   }
 
   async close() {
+    this.cancelScheduledFlush();
+    this.persistBestEffort();
     this.closed = true;
     this.lifetime.abort();
     await this.publishing;
