@@ -106,6 +106,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           skill:<名>、mcp:<名>、connector:<厂商>:<编号>（项目里关掉的点名了也挂不上）；读写文件、终端和 hub 永远都在；
                                                           --node 绑到任务图里的节点上，不带就是不绑图的临时 Worker）；
                                                           独立审查请建单步审查图（审查步骤，写被审分支），不要派普通 Worker 审
+  --clear-effort：不继承思考程度，不能与 --effort 同时用。
   --no-outer-sandbox：仅明确挂载 Computer Use 时可申请，Worker 等用户在工作台确认后才开工。Computer Use 控制每个应用前都要等用户在工作台确认；用户拒绝时，换个办法或汇报。
   ${hub} worker start --node <节点> [--graph <图编号>] [--vendor …] [--model …] [--stdin]
                                                           换人接手：节点上已经有经手过的 Worker 时，--title 和正文都可以不给（正文给了是补充说明）；

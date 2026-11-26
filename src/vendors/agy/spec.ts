@@ -24,7 +24,7 @@ export default defineVendor({
   home: {
     dirs: [".gemini"],
     readonlySecrets: [".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"],
-    catalogWatchPaths: [AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL, ".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"],
+    catalogWatchPaths: [AGY_CLI_HOME_REL, `${AGY_CLI_HOME_REL}/settings.json`, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL, ".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"],
   },
   models: {
     bundled: [
