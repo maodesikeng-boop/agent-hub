@@ -213,6 +213,7 @@ function snapshotOfAuthFlow(
 export function createProviderManager(options: ProviderManagerOptions): ProviderManager {
   const { runtime, models } = options;
   const versionCache = options.versionCache ?? createVendorVersionCache();
+  const statusController = new AbortController();
   const recipeRunner = options.recipeRunner ?? DEFAULT_RECIPE_RUNNER;
   const forwardLoopback = options.forwardLoopback ?? forwardValidatedLoopbackCallback;
   const execPath = options.execPath ?? process.execPath;
@@ -238,22 +239,33 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
     }
   };
 
-  const buildSetupContext = (vendor: AgentVendor): VendorSetupContext => ({
+  const buildSetupContext = (vendor: AgentVendor, availability = models.availability(vendor)): VendorSetupContext => ({
     platform: runtime.platform,
     userHome: runtime.userHome,
-    availability: models.availability(vendor),
+    availability,
     executablePath: () => runtime.resolveExecutablePath(vendor),
     installed: () => runtime.installed(vendor),
     env: () => runtime.resolveVendorEnv(vendor),
     secrets: runtime.secrets,
   });
 
+  const probeVersion = (vendor: AgentVendor) => {
+    const binaryPath = runtime.locateBinary(vendor);
+    if (binaryPath === null) return;
+    return versionCache.probe(vendor, binaryPath, {
+      args: adapterOf(vendor)?.versionArgs,
+      cwd: runtime.userHome,
+      env: runtime.resolveVendorEnv(vendor),
+      signal: statusController.signal,
+    });
+  };
+
   const buildVendorItem = async (vendor: AgentVendor, viewerOwnerKey: string): Promise<ProviderStatusItem> => {
     const slot = slots.get(vendor)!;
     const adapter = adapterOf(vendor);
     const binaryPath = runtime.locateBinary(vendor);
     const installed = binaryPath !== null;
-    const catalogAvailability = models.availability(vendor);
+    const availability = installed ? models.availability(vendor) : "not_installed";
     const version = installed ? versionCache.peek(vendor, binaryPath) : null;
 
     if (!adapter) {
@@ -262,7 +274,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
         label: vendorSpec(vendor).label,
         installed,
         version,
-        availability: installed ? catalogAvailability : "not_installed",
+        availability,
         accountSummary: null,
         canInstall: false,
         canUpdate: false,
@@ -273,20 +285,15 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
       };
     }
 
-    const authInfo = await adapter.inspectAuth(buildSetupContext(vendor));
+    const authInfo = await adapter.inspectAuth(buildSetupContext(vendor, availability));
     const jobRunning = slot.job?.phase === "running";
-    const effectiveAvailability = !installed
-      ? "not_installed"
-      : catalogAvailability === "available" || authInfo.accountSummary !== null
-        ? "available"
-        : catalogAvailability;
 
     return {
       vendor,
       label: vendorSpec(vendor).label,
       installed,
       version,
-      availability: effectiveAvailability,
+      availability,
       accountSummary: installed ? authInfo.accountSummary : null,
       canInstall: !installed && !jobRunning,
       canUpdate: installed && !jobRunning,
@@ -303,15 +310,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
     if (!closed) options.onVendorChanged?.(vendor);
     if (probeVer) {
       versionCache.invalidate(vendor);
-      const binaryPath = runtime.locateBinary(vendor);
-      if (binaryPath !== null && !closed) {
-        const adapter = adapterOf(vendor);
-        await versionCache.probe(vendor, binaryPath, {
-          args: adapter?.versionArgs,
-          cwd: runtime.userHome,
-          env: runtime.resolveVendorEnv(vendor),
-        });
-      }
+      if (!closed) await probeVersion(vendor);
     }
     if (!closed && runtime.installed(vendor)) {
       await models.list({ vendor, refresh: true }).catch(() => undefined);
@@ -419,20 +418,14 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
 
   return {
     async getStatus({ refresh = false, ownerKey }) {
-      if (refresh && !closed) {
-        runtime.refreshSystemPath();
-        versionCache.invalidate();
+      if (!closed) {
+        if (refresh) {
+          runtime.refreshSystemPath();
+          versionCache.invalidate();
+        }
         await Promise.all([
-          models.list({ refresh: true }).catch(() => undefined),
-          ...AGENT_VENDORS.map(async (vendor) => {
-            const bin = runtime.locateBinary(vendor);
-            if (!bin) return;
-            await versionCache.probe(vendor, bin, {
-              args: adapterOf(vendor)?.versionArgs,
-              cwd: runtime.userHome,
-              env: runtime.resolveVendorEnv(vendor),
-            });
-          }),
+          models.list({ refresh }).catch(() => undefined),
+          ...AGENT_VENDORS.map(probeVersion),
         ]);
       }
 
@@ -785,6 +778,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
     async close() {
       if (closed) return;
       closed = true;
+      statusController.abort();
       const pending: Promise<unknown>[] = [];
       if (gitJob?.phase === "running") {
         gitJob.cancelledByUser = true;

@@ -10,6 +10,8 @@ import {
   PROVIDER_JOB_LOG_MAX_BYTES,
   PROVIDER_JOB_LOG_MAX_LINES,
   uiCookieName,
+  vendorSpec,
+  type AgentVendor,
   type ProvidersStatusResponse,
 } from "../../shared/index.ts";
 import { resolveHubPaths } from "../../shared/paths.ts";
@@ -51,6 +53,11 @@ import {
 
 function makeTempDir(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+function isolatedVendorPaths(home: string, ...allowed: AgentVendor[]): NodeJS.ProcessEnv {
+  return Object.fromEntries(AGENT_VENDORS.filter((vendor) => !allowed.includes(vendor))
+    .map((vendor) => [vendorSpec(vendor).cli.envVar, join(home, "missing", vendor)]));
 }
 
 function writeExecutable(filePath: string, body: string): string {
@@ -448,7 +455,7 @@ describe("provider-manager：受管密钥库、各家凭据落盘与回环回调
   });
 });
 
-describe("provider-manager + ui-server：0 子进程读取、免重启安装/登录闭环、BROWSER 拦截、任务取消与跨窗口隔离", () => {
+describe("provider-manager and ui-server: install, sign-in, cancellation, and client isolation", () => {
   const tempDirs: string[] = [];
   afterEach(() => {
     vi.restoreAllMocks();
@@ -457,7 +464,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     }
   });
 
-  it("GET /api/providers 严格 0 子进程拉起，一键安装 + BROWSER 登录免重启立即刷新 VendorRuntimeResolver 与 ModelCatalogs，且隔离跨窗口会话", async () => {
+  it("skips probes for missing CLIs and refreshes versions and catalogs after install and sign-in", async () => {
     const root = makeTempDir("fusa-providers-e2e-");
     tempDirs.push(root);
     const userHome = join(root, "home");
@@ -465,6 +472,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     mkdirSync(userHome, { recursive: true });
 
     const baseEnv: Record<string, string | undefined> = {
+      ...isolatedVendorPaths(userHome, "claude"),
       HOME: userHome,
       PATH: "/usr/bin:/bin",
     };
@@ -475,6 +483,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
       userHome,
       baseEnv,
       platform: "darwin",
+      execPath: "",
       secrets,
     });
 
@@ -526,7 +535,6 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
             `const claudeJson = ${JSON.stringify(claudeJson)};`,
             `const claudeDir = ${JSON.stringify(join(userHome, ".claude"))};`,
             "const args = process.argv.slice(2);",
-            'if (args[0] === "--version") { console.log("2.1.323 (Claude Code)"); process.exit(0); }',
             'if (args[0] === "auth" && args[1] === "status") {',
             "  console.log(JSON.stringify({ loggedIn: existsSync(authMarker) }));",
             "  process.exit(0);",
@@ -563,7 +571,13 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
           ].join("\n");
           mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
           writeFileSync(jsPath, fakeClaudeJs, { mode: 0o600 });
-          writeExecutable(binPath, `#!/bin/sh\nexec "${process.execPath}" "${jsPath}" "$@"\n`);
+          writeExecutable(binPath, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\\n' '2.1.323 (Claude Code)'
+  exit 0
+fi
+exec "${process.execPath}" "${jsPath}" "$@"
+`);
         },
         async update() {},
         async installGit() {},
@@ -588,8 +602,6 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     try {
       const clientA = testLogin(db, port);
       const clientB = testLogin(db, port);
-      // 2. 默认 GET /api/providers 严格 0 子进程拉起，且体积轻量
-      // Lightness is asserted as zero child processes rather than wall time, which varies with runner load.
       const spawnSpy = vi.spyOn(win32Platform, "spawnOwnedProcess");
       const initialRes = await app.inject({
         method: "GET",
@@ -750,7 +762,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     const winHome = "C:\\Users\\alice";
     let regPaths: string[] = [];
 
-    const paths = resolveHubPaths({}, winHome, { platform: "win32" });
+    const paths = resolveHubPaths(isolatedVendorPaths(winHome), winHome, { platform: "win32" });
     const secrets = createManagedProviderSecrets(join(root, "provider-secrets.json"), { platform: "win32" });
     const baseEnv: Record<string, string | undefined> = {
       Path: "C:\\Windows\\System32",
@@ -814,18 +826,16 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     }
   });
 
-  it("冷启动未探测模型目录时：无凭据已装厂商不伪装 available，已配凭据厂商报 available，且 submitAuth 报错后恢复 waiting_browser 支持重试", async () => {
+  it("loads catalog availability on first read and lets a failed sign-in callback retry", async () => {
     const root = makeTempDir("fusa-coldstart-retry-");
     tempDirs.push(root);
     const userHome = join(root, "home");
     const hubHome = join(userHome, ".agent-hub");
     mkdirSync(userHome, { recursive: true });
 
-    // 预装 codex、opencode 与 deepseek 假可执行文件，但不触发 models.list()（模拟冷启动 models.availability === "unknown"）
     writeExecutable(join(userHome, ".local", "bin", "codex"), "#!/bin/sh\nexit 0\n");
     writeExecutable(join(userHome, ".opencode", "bin", "opencode"), "#!/bin/sh\nexit 0\n");
     writeExecutable(join(hubHome, "tools", "npm", "bin", "dsh"), "#!/bin/sh\nexit 0\n");
-    // 预置 OpenCode 空库（模拟探测或运行后落盘但未登录的 opencode.db）
     const opencodeDataDir = join(userHome, ".local", "share", "opencode");
     mkdirSync(opencodeDataDir, { recursive: true });
     const { DatabaseSync } = await import("node:sqlite");
@@ -833,13 +843,16 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     ocDb.exec("CREATE TABLE credential (id TEXT PRIMARY KEY); CREATE TABLE account (id TEXT PRIMARY KEY); CREATE TABLE control_account (email TEXT PRIMARY KEY);");
     ocDb.close();
 
-    const paths = resolveHubPaths({}, userHome, { home: hubHome, platform: "darwin" });
+    const paths = resolveHubPaths(
+      isolatedVendorPaths(userHome, "codex", "opencode", "deepseek"), userHome, { home: hubHome, platform: "darwin" },
+    );
     const secrets = createManagedProviderSecrets(paths.providerSecretsFile, { platform: "darwin" });
     const runtime = createVendorRuntimeResolver({
       paths,
       userHome,
       baseEnv: { PATH: "/usr/bin:/bin" },
       platform: "darwin",
+      execPath: "",
       secrets,
     });
     const sources = createVendorCatalogSources(
@@ -921,7 +934,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
       const opencodeCold = coldStatus.providers.find((p) => p.vendor === "opencode")!;
       const dsCold = coldStatus.providers.find((p) => p.vendor === "deepseek")!;
       expect(codexCold.installed).toBe(true);
-      expect(codexCold.availability).toBe("unknown");
+      expect(codexCold.availability).toBe("signed_out");
       expect(codexCold.accountSummary).toBeNull();
       expect(opencodeCold.installed).toBe(true);
       expect(opencodeCold.availability).toBe("unknown");
@@ -968,13 +981,14 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     mkdirSync(tokyoHome, { recursive: true });
     writeExecutable(join(tokyoHome, ".local", "bin", "cursor-agent"), "#!/bin/sh\nexit 0\n");
 
-    const tokyoPaths = resolveHubPaths({}, tokyoHome, { platform: "linux" });
+    const tokyoPaths = resolveHubPaths(isolatedVendorPaths(tokyoHome, "cursor"), tokyoHome, { platform: "linux" });
     const tokyoSecrets = createManagedProviderSecrets(tokyoPaths.providerSecretsFile, { platform: "linux" });
     const tokyoRuntime = createVendorRuntimeResolver({
       paths: tokyoPaths,
       userHome: tokyoHome,
       baseEnv: { PATH: "/usr/bin:/bin" },
       platform: "linux",
+      execPath: "",
       secrets: tokyoSecrets,
     });
     const tokyoModels = createModelCatalogs({ sources: {} });
@@ -1080,7 +1094,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
         ? join(userHome, "AppData", "Roaming", "npm", "opencode")
         : join(userHome, ".opencode", "bin", "opencode");
     const ocDbPath = join(userHome, ".local", "share", "opencode", "opencode.db");
-    writeExecutableNodeScript(
+    const opencodePath = writeExecutableNodeScript(
       shimBase,
       `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -1105,12 +1119,15 @@ process.exit(1);
 `,
     );
 
-    const paths = resolveHubPaths({}, userHome, { platform: process.platform });
+    const paths = resolveHubPaths({
+      ...isolatedVendorPaths(userHome),
+      [vendorSpec("opencode").cli.envVar]: opencodePath,
+    }, userHome, { platform: process.platform });
     const secrets = createManagedProviderSecrets(paths.providerSecretsFile, { platform: process.platform });
     const runtime = createVendorRuntimeResolver({
       paths,
       userHome,
-      baseEnv: { PATH: dirname(process.execPath) },
+      baseEnv: { HOME: userHome, USERPROFILE: userHome, PATH: dirname(process.execPath) },
       platform: process.platform,
       secrets,
     });
@@ -1189,7 +1206,12 @@ process.exit(1);
     writeFileSync(fakeClaudeJs, scriptBody, { mode: 0o600 });
     writeExecutable(binPath, `#!/bin/sh\nexec "${process.execPath}" "${fakeClaudeJs}" "$@"\n`);
 
-    const baseEnv: Record<string, string | undefined> = { HOME: userHome, PATH: "/usr/bin:/bin" };
+    const baseEnv: Record<string, string | undefined> = {
+      ...isolatedVendorPaths(userHome),
+      [vendorSpec("claude").cli.envVar]: binPath,
+      HOME: userHome,
+      PATH: "/usr/bin:/bin",
+    };
     const paths = resolveHubPaths(baseEnv, userHome);
     const secrets = createManagedProviderSecrets(paths.providerSecretsFile);
     const runtime = createVendorRuntimeResolver({
