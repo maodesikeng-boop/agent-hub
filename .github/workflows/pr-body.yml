@@ -1,0 +1,31 @@
+name: pr-body
+
+on:
+  push:
+    tags: ["pr-body/*"]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-body-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event.deleted == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Sync the pull request description
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/pr-body-sync.ts
