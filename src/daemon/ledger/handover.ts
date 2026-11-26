@@ -1,4 +1,5 @@
 import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
+import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 // Handover runs in the background on a fork of the PM session and swaps sessions between two turns, so the user keeps chatting throughout.
 import { agentTextOf } from "../../shared/attachments.ts";
 import { pendingAsksSection } from "../../shared/pending-asks.ts";
@@ -456,6 +457,7 @@ export function createLedgerHandover(
       );
     }
     // Held messages move to the new session; the driver prepends the opening brief to the first one.
+    messages.stopChecklistReminderIn(p, old.id);
     const held = db.all<MessageDbRow>("SELECT * FROM messages WHERE conversation_id = ? AND session_id = ? AND status = 'queued' ORDER BY id", conversationId, old.id);
     for (const message of held) {
       deletePendingSessionSend(db, old.id, message.id);
@@ -1026,7 +1028,7 @@ export function createLedgerHandover(
         if (!isQuiescent(session)) continue;
         if (row.auto === 1) {
           if (t - Math.max(row.updated_at, session.lastEventAt ?? 0) < idleMs) continue;
-          if (db.get("SELECT 1 AS x FROM messages WHERE conversation_id = ? AND status IN ('queued', 'delivered', 'processing') LIMIT 1", conversationId) !== undefined) continue;
+          if (db.get(`SELECT 1 AS x FROM messages WHERE conversation_id = ? AND status IN ('queued', 'delivered', 'processing') AND NOT ${CHECKLIST_REMINDER_SQL} LIMIT 1`, conversationId) !== undefined) continue;
         }
         write((p) => requestIn(p, session, row));
         continue;

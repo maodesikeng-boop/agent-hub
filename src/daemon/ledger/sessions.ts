@@ -26,6 +26,7 @@ import type { AgentSessionDbRow } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { stepOfTool } from "./tool-summary.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
+import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 
 export interface LiveSession {
   activity: SessionActivity;
@@ -55,11 +56,12 @@ type ToolStep = Extract<AgentStep, { type: "tool_use" }>;
 const THINKING: AgentStep = { type: "thinking" };
 
 const RECOVER_MESSAGES_SQL = `
-SELECT m.id, m.session_id, m.sender, m.status FROM messages m
+SELECT m.id, m.session_id, m.sender, m.status, ${CHECKLIST_REMINDER_SQL} AS rider FROM messages m
 JOIN agent_sessions s ON s.id = m.session_id
 LEFT JOIN workers w ON w.id = s.worker_id
 LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
 WHERE pa.pm_id IS NULL
+  AND (s.status != 'ended' OR NOT ${CHECKLIST_REMINDER_SQL})
   AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.worker_id = w.id AND a.status = 'pending')
   AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
   AND NOT EXISTS (
@@ -157,7 +159,7 @@ function stampToolStep(prev: LiveSession, next: LiveSession, hadHold: boolean, n
   return holdsTool && !hasOpenTools;
 }
 
-export function createLedgerSessions(ctx: LedgerContext) {
+export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: SessionId) => void) {
   const { db, now, write, emitChange, enqueue, pushed } = ctx;
   const live = new Map<SessionId, LiveSession>();
   const streamThrottles = new Map<SessionId, { lastFlushedAt: number; timer: ReturnType<typeof setTimeout> | null }>();
@@ -194,6 +196,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
     cancelToolHoldTimer(sessionId);
     live.delete(sessionId);
     pushed.delete(sessionId);
+    onForget?.(sessionId);
   };
 
   const clearAllStreaming = () => {
@@ -510,12 +513,8 @@ export function createLedgerSessions(ctx: LedgerContext) {
     return row;
   };
 
-  const refreshSessionState = (sessionId: SessionId) => {
-    write((p) => updateLive(p, sessionId, idle));
-  };
-
   const recoverAfterRestart = (afterResends: (p: Pending) => void) => write((p) => {
-    const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(RECOVER_MESSAGES_SQL);
+    const rows = db.all<{ id: number; session_id: number; sender: string; status: string; rider: number }>(RECOVER_MESSAGES_SQL);
     const resentMessageIds: MessageId[] = [];
     const requeuedMessageIds: MessageId[] = [];
     // Resume the oldest interrupted message first.
@@ -523,13 +522,16 @@ export function createLedgerSessions(ctx: LedgerContext) {
     for (const row of rows) {
       const resend = row.status !== "queued";
       (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
-      const recovery = resend && !recoveredSessionIds.includes(row.session_id);
+      const recovery = resend && row.rider === 0 && !recoveredSessionIds.includes(row.session_id);
       if (recovery) recoveredSessionIds.push(row.session_id);
       const source = row.sender === "system" ? "system" : "user";
       if (resend) deleteLegacyPendingSessionSend(db, row.session_id, row.id);
       enqueue(p, {
         type: "session.send",
-        params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },
+        params: {
+          sessionId: row.session_id, messageId: row.id, source,
+          ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}), ...(row.rider ? { rider: true } : {}),
+        },
       });
     }
     afterResends(p);
@@ -552,7 +554,6 @@ export function createLedgerSessions(ctx: LedgerContext) {
     clearAllStreaming,
     forgetSession,
     insertSession,
-    refreshSessionState,
     recoverAfterRestart,
   };
 }

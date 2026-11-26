@@ -124,7 +124,7 @@ describe("abnormal and ignored events", () => {
   it("ignores subagent tools and subagent checklists", () => {
     const events = [processing(), tool(EDIT, { parentToolUseId: "sub" }), tool(COMMAND, { parentToolUseId: "sub" }), tool(COMMAND, { parentToolUseId: "sub" })];
     expect(run(events).reminders).toEqual([]);
-    expect(run([processing(), listed({ parentToolUseId: "sub" }), tool(EDIT)]).reminders).toEqual([1]);
+    expect(run([processing(), listed({ parentToolUseId: "sub" }), tool(EDIT)]).reminders).toEqual([2]);
   });
 
   it("ignores unknown tool names and todo tools", () => {

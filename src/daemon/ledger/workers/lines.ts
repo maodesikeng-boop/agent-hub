@@ -1,6 +1,7 @@
 import { workerMessageDedupeKey } from "../../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, WorkerEvent, WorkerLineStatus, WorkerMessageMeta } from "../../../shared/domain.ts";
 import { workerLineText, workerReportHeader } from "../../../shared/worker.ts";
+import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 import type { Pending } from "../context.ts";
 import { toMessage } from "../rows.ts";
 import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
@@ -116,7 +117,7 @@ export function isWorkerInFlight(w: WorkersCtx, worker: WorkerDbRow): boolean {
   }
   return (
     w.db.get(
-      "SELECT 1 AS x FROM messages WHERE conversation_id = ? AND status IN ('queued', 'delivered', 'processing') LIMIT 1",
+      `SELECT 1 AS x FROM messages WHERE conversation_id = ? AND status IN ('queued', 'delivered', 'processing') AND NOT ${CHECKLIST_REMINDER_SQL} LIMIT 1`,
       worker.worker_conversation_id,
     ) !== undefined
   );

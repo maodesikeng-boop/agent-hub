@@ -163,7 +163,7 @@ None. B fixes the root cause (nothing states or checks the obligation) at the bo
 ### 4. Performance and bounds
 
 - **Invalidation.** A session's watch resets on each turn boundary and is deleted on `session.exited` and when the ledger forgets the session. A queued rider is dropped with its session.
-- **Upper bounds.** One watch per live session, holding four small fields (two counters and two flags); live sessions are already bounded by the Worker cap. At most one reminder per turn and one undelivered reminder per session. A reminder row is about 200 bytes. If every Worker turn missed the rule for a month (300 finished Workers, well under 30,000 turns), that adds under 6 MB before retention; reminder rows follow the same system-message retention as other `system` events. `hub checklist set` reuses `CHECKLIST_MAX_ITEMS` and `CHECKLIST_TITLE_MAX_CHARS`.
+- **Upper bounds.** Each live session holds one watch with two counters and two flags. Each turn creates at most one reminder, and each session holds at most one undelivered reminder. The ledger prunes terminal reminders after 30 days or above 30,000 rows. It keeps queued and active reminders until they settle. `hub checklist set` reuses `CHECKLIST_MAX_ITEMS` and `CHECKLIST_TITLE_MAX_CHARS`.
 - **Stable references.** No web selector changes. If Decision 3 B is chosen, the collapsed row reuses the existing system-row path in `groupMessages` and its `WeakMap` cache.
 - **Measured verification.** The watch adds one map lookup and a switch per driver event, with no database read. No benchmark is needed; the real-environment review records reminder counts per vendor instead.
 
@@ -222,7 +222,7 @@ Suggested implementation split: step 2 starts with the headless `update_steps` p
 | S10 | An agent runs `hub checklist done 9` on a three-step list, `hub checklist set` with no steps, or a 300-character title. | — | A Chinese error with usage for the first two; the title is clipped to 200 characters. | Category 6 | `hub-checklist.test.ts` |
 | S11 | Abnormal vendor events: an unknown tool name, a subagent's edits, a todo tool call, a tool event after `turn.ended`. | — | Unknown and subagent tools never count; todo tools never count as commands; an event after the turn closed opens a fresh implicit turn. | Category 6 | `turn-checklist.test.ts` |
 | S12 | Every vendor in the registry. | Build PM and Worker prompts twice. | Same bytes both times; the section is the same text for PM and Worker; the reminder names the same tool as the section. | Category 7 (cache) | `prompt-checklist.test.ts`; real `cacheRead` comparison |
-| S13 | One month of use. | Every Worker turn misses the rule. | At most one reminder per turn and one pending per session; reminder rows age out with system rows. | Category 5 | `turn-checklist.test.ts` (one remind per turn); implementation adds a retention test |
+| S13 | One month of use. | Every Worker turn misses the rule. | At most one reminder per turn and one pending per session. Terminal reminder rows age out. | Category 5 | `turn-checklist.test.ts`, `checklist-reminders.test.ts` |
 | S14 | Windows PowerShell or cmd. | The agent runs `hub checklist set "读配置" "改解析"`. | Same list as on macOS and Linux. | Category 8 | `hub-checklist.test.ts` (parsing takes argv only); `prompt-portability.test.ts` |
 | S15 | The user follows the PM in a narrow web window, on Feishu, and from a second computer. | A multi-step turn runs. | Web wide and narrow: the existing card. Feishu: unchanged (Feishu does not show checklists today). Second computer: the same card through the peer proxy. `hub checklist` works from any Worker shell. | Category 9 | Existing `TurnProgress` tests; real browser at wide and narrow widths |
 
@@ -238,7 +238,7 @@ Category 4, existing rules that the change touches (from `REVIEW.md` on `main`):
 - **Child processes are tracked** and **Detached child processes stay inside the session boundary** (`src/daemon/driver/**`). No process is started.
 - **Tests wait for events, not for time** (new tests). The reducer and batch tests are pure; the rider driver test waits on driver events.
 - **Hub error codes change on both sides** (`src/shared/hub.ts`, `src/hub/**`). `hub checklist` usage errors reuse the existing invalid-argument code; no new code.
-- **Persisted fields have a reader and dual retention bounds** (`src/daemon/ledger/**`). The reminder row's readers are the driver delivery and the review count; it joins the existing system-message retention.
+- **Persisted fields have a reader and dual retention bounds** (`src/daemon/ledger/**`). The send handler reads reminders from the ledger. The age and count limits in Section 4 apply to terminal reminders.
 - **Planned acceptance scenarios cover every requirement** (`**`). This section.
 - **A result is matched to its request by an id both carry** (`src/daemon/**`). The rider's message id is the one the driver echoes in `message.delivered`.
 

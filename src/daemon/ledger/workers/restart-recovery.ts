@@ -1,4 +1,5 @@
 import type { MessageId } from "../../../shared/domain.ts";
+import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 import type { Pending } from "../context.ts";
 import { SHUTDOWN_INTERRUPTED_REASON } from "../steps.ts";
 import { workerSession } from "./ctx.ts";
@@ -22,7 +23,7 @@ export function noticeUnresentShutdownTurnsIn(w: WorkersCtx, p: Pending): void {
       session.id,
     );
     if (turn?.kind !== "turn_ended" || turn.summary !== SHUTDOWN_INTERRUPTED_REASON) continue;
-    if (w.db.get("SELECT 1 FROM messages WHERE session_id = ? AND status IN ('queued', 'delivered', 'processing') LIMIT 1", session.id)) continue;
+    if (w.db.get(`SELECT 1 FROM messages WHERE session_id = ? AND status IN ('queued', 'delivered', 'processing') AND NOT ${CHECKLIST_REMINDER_SQL} LIMIT 1`, session.id)) continue;
     const messageId = w.db.get<{ id: MessageId }>(
       "SELECT id FROM messages WHERE session_id = ? AND sender IN ('pm', 'user') ORDER BY id DESC LIMIT 1", session.id,
     )?.id;

@@ -1,7 +1,6 @@
 import type { DriverEvent } from "./driver.ts";
-
-// One trigger rule shared by the prompt wording and the daemon reminder: a turn that edits a file or runs a
-// second command must update its checklist. Only top-level events count; subagent events never do.
+import { TURN_CHECKLIST_COMMANDS_TRIGGER, TURN_CHECKLIST_EDITS_TRIGGER } from "./limits.ts";
+import { toolAction } from "./step-labels.ts";
 
 export interface TurnChecklistWatch {
   edits: number;
@@ -10,29 +9,36 @@ export interface TurnChecklistWatch {
   reminded: boolean;
 }
 
-/** Postcondition: a fresh, mutable watch with zero counts and both flags false. */
 export function newTurnWatch(): TurnChecklistWatch {
-  throw new Error("Not implemented");
+  return { edits: 0, commands: 0, listed: false, reminded: false };
 }
 
-/**
- * Feeds one driver event to the watch of a session. `watch` is null when no turn is open.
- *
- * Postconditions:
- * - `turn.started`, and `message.processing` without `midTurn`, return a fresh watch.
- * - `turn.ended` and `session.exited` return a null watch.
- * - A top-level `agent.tool` whose action is `edit` or `write` counts as an edit, and `command` as a command;
- *   every other action, an unknown tool name, and any event with `parentToolUseId` leave the counts unchanged.
- * - A top-level `agent.checklist` marks the turn as listed.
- * - A counted event (tool or checklist) with a null watch first opens a fresh watch, so a turn that was already
- *   running when the daemon started is still judged.
- * - `remind` is true exactly once per turn: on the first event after which edits reach
- *   `TURN_CHECKLIST_EDITS_TRIGGER` or commands reach `TURN_CHECKLIST_COMMANDS_TRIGGER` while the turn is not listed.
- * - Never throws on any `DriverEvent`.
- */
 export function turnWatchStep(
-  _watch: TurnChecklistWatch | null,
-  _event: DriverEvent,
+  watch: TurnChecklistWatch | null,
+  event: DriverEvent,
 ): { watch: TurnChecklistWatch | null; remind: boolean } {
-  throw new Error("Not implemented");
+  switch (event.type) {
+    case "turn.started":
+      return { watch: newTurnWatch(), remind: false };
+    case "message.processing":
+      return { watch: event.midTurn ? watch : newTurnWatch(), remind: false };
+    case "turn.ended":
+    case "session.exited":
+      return { watch: null, remind: false };
+    case "agent.checklist":
+      return { watch: event.parentToolUseId === undefined ? { ...(watch ?? newTurnWatch()), listed: true } : watch, remind: false };
+    case "agent.tool": {
+      if (event.parentToolUseId !== undefined) break;
+      const action = toolAction(event.name);
+      if (action !== "edit" && action !== "write" && action !== "command") break;
+      const next = { ...(watch ?? newTurnWatch()) };
+      if (action === "command") next.commands++;
+      else next.edits++;
+      const remind = !next.listed && !next.reminded &&
+        (next.edits >= TURN_CHECKLIST_EDITS_TRIGGER || next.commands >= TURN_CHECKLIST_COMMANDS_TRIGGER);
+      if (remind) next.reminded = true;
+      return { watch: next, remind };
+    }
+  }
+  return { watch, remind: false };
 }

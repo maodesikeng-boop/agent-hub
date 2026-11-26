@@ -1,5 +1,6 @@
 import { createLedgerTakenInputs } from "./taken-inputs.ts";
 import { isChecklistToolCall } from "./checklist.ts";
+import { createChecklistReminders } from "./checklist-reminders.ts";
 import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
 import { createLedgerBranchSync } from "./workers/branch-sync.ts";
 import { isSystemMessageCurrent } from "./notice-currency.ts";
@@ -44,7 +45,7 @@ import { createLedgerRouter } from "./router.ts";
 import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
-import { createLedgerSessions } from "./sessions.ts";
+import { createLedgerSessions, idle } from "./sessions.ts";
 import { completedWorkPage } from "./completed-work.ts";
 import { createLedgerSnapshotQueries } from "./snapshot.ts";
 import { createLedgerSteps } from "./steps.ts";
@@ -184,6 +185,27 @@ function sessionRoleOf(db: Db, sessionId: SessionId): SqliteLedger["sessionRole"
   return s.role;
 }
 
+function recordsTurnCompletion(db: Db, sessionId: SessionId): boolean {
+  try {
+    const session = getAgentSession(db, sessionId);
+    return session !== null && session.role !== "assistant" && session.conversationId !== null;
+  } catch (error) {
+    // Settlement checks the session again once SQLite answers.
+    console.error(`${LOG_PREFIX} turn.ended (session ${sessionId}): session lookup failed, recording the outcome anyway:`, error);
+    return true;
+  }
+}
+
+async function driverTextMeta(
+  db: Db, sentFiles: ReturnType<typeof createLedgerSentFiles>, sessionId: SessionId, event: DriverEvent, links: readonly LocalLink[], signal: AbortSignal,
+) {
+  if (event.type !== "agent.text" || links.length === 0) return null;
+  const session = getAgentSession(db, sessionId);
+  if (session === null || session.role === "assistant" || session.conversationId === null) return null;
+  if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", agentMessageDedupeKey(sessionId, event.uuid)) !== undefined) return null;
+  return sentFiles.metaFor(session, links, signal);
+}
+
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const ctx = createLedgerContext(db, options);
   const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
@@ -191,7 +213,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const dataHome = options.dataHome ?? dirname(options.pmHomeRoot);
   const files = buildLedgerFiles(options, userHome, dataHome);
   const taskGraphManual = (sessionId: SessionId) => taskGraphManualNote(files.launchDir, sessionId);
-  const sessions = createLedgerSessions(ctx);
+  const reminders = createChecklistReminders(ctx);
+  const sessions = createLedgerSessions(ctx, reminders.forget);
   const { sessionState } = sessions;
   const snapshotQueries = createLedgerSnapshotQueries(db, { sessionState });
   const sentFiles = createLedgerSentFiles(db, {
@@ -210,6 +233,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
+    onHubChecklist: reminders.observe,
   });
   const turnReplies = createLedgerTurnReplies(ctx);
   const takenInputs = createLedgerTakenInputs(ctx);
@@ -303,23 +327,16 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       if (scoped === null) return;
       const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
       takenInputs.beforeDriverEvent(session, scoped);
-      messages.applyEvent(p, session, scoped, textMeta);
+      const result = messages.applyEvent(p, session, scoped, textMeta);
       turnReplies.afterDriverEvent(p, session, scoped);
       steps.afterDriverEvent(session, scoped, openTools);
+      if (result !== "duplicate_tool") reminders.observe(p, session, scoped);
       loadedSkills.afterDriverEvent(session, scoped);
       workers.afterDriverEvent(p, session, scoped);
       handover.afterDriverEvent(p, session, scoped);
       schedules.afterDriverEvent(p, session, scoped);
       projectCatalog.afterDriverEvent(p, session, scoped);
     });
-  };
-
-  const textMetaFor = async (sessionId: SessionId, event: DriverEvent, links: readonly LocalLink[], signal: AbortSignal) => {
-    if (event.type !== "agent.text" || links.length === 0) return null;
-    const session = getAgentSession(db, sessionId);
-    if (session === null || session.role === "assistant" || session.conversationId === null) return null;
-    if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", agentMessageDedupeKey(sessionId, event.uuid)) !== undefined) return null;
-    return sentFiles.metaFor(session, links, signal);
   };
 
   const onOverflow = (sessionId: SessionId) => {
@@ -333,16 +350,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       });
     } catch (failure) {
       console.error(`${LOG_PREFIX} ${error}:`, failure);
-    }
-  };
-  const recordsTurnCompletion = (sessionId: SessionId): boolean => {
-    try {
-      const session = getAgentSession(db, sessionId);
-      return session !== null && session.role !== "assistant" && session.conversationId !== null;
-    } catch (error) {
-      // Dropping the outcome here would strand its messages; settlement checks the session again once SQLite answers.
-      console.error(`${LOG_PREFIX} turn.ended (session ${sessionId}): session lookup failed, recording the outcome anyway:`, error);
-      return true;
     }
   };
   const completions = createTurnCompletionLedger(ctx, {
@@ -359,6 +366,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       messages.settleTurn(p, session, event, facts);
       turnReplies.settle(p, session, receipt.event.messageIds, facts.reply);
       steps.afterDriverEvent(session, event);
+      reminders.observe(p, session, event);
       if (receipt.event.messageIds.length === 0 || event.messageIds.length > 0) workers.settleTurn(p, session, event, facts.worker, previousRun);
       handover.afterDriverEvent(p, session, event);
       schedules.afterDriverEvent(p, session, event);
@@ -376,7 +384,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     apply: applyDriverEventNow,
     localLinks: sentFiles.localLinks,
-    textMetaFor,
+    textMetaFor: (id, event, links, signal) => driverTextMeta(db, sentFiles, id, event, links, signal),
     onOverflow,
     onSessionDrained: (sessionId) => {
       if (!closing.signal.aborted) handover.onSessionQuiescent(sessionId);
@@ -438,7 +446,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}) after ledger close: dropped`);
         return;
       }
-      if (event.type === "turn.ended" && !recordsTurnCompletion(sessionId)) return;
+      if (event.type === "turn.ended" && !recordsTurnCompletion(db, sessionId)) return;
       driverEvents.push(sessionId, event);
     },
     settleDriverEvents: driverEvents.wait,
@@ -446,7 +454,13 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       const session = getAgentSession(db, sessionId);
       return session === null ? [] : sentFiles.filesForArgs(session, args, signal === undefined ? closing.signal : AbortSignal.any([closing.signal, signal]));
     },
-    refreshSessionState: sessions.refreshSessionState,
+    refreshSessionState: (id) => write((p) => {
+      if (getAgentSession(db, id)?.status === "ended") {
+        messages.stopChecklistReminderIn(p, id);
+        p.after.push(() => reminders.forget(id));
+      }
+      sessions.updateLive(p, id, idle);
+    }),
     recoverAfterRestart() {
       completions.recover();
       const recovered = sessions.recoverAfterRestart(workers.noticeUnresentShutdownTurnsIn);
@@ -606,6 +620,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       closing.abort();
       driverEvents.close();
       completions.close();
+      reminders.close();
       workers.closeLifecycles();
     },
   };
