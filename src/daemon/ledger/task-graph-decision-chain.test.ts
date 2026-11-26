@@ -120,6 +120,26 @@ describe("S9: one decision chain from Worker to PM to user", () => {
     expect(artifact).not.toHaveProperty("checkpointPending");
   });
 
+  it("keeps the checkpoint marker when the PM marks the step done while its user card is pending", async () => {
+    const graph = planThenImpl("项目经理放行但用户卡仍可作答");
+    await finishPlan(graph.id);
+    const asked = f.ledger.hubCall(f.lin.sessionId, "ask", { node: "plan", graphId: graph.id, text: "方案可以通过吗？" });
+    const artifact = (): unknown => {
+      const row = f.db.get<{ artifact_json: string }>(
+        "SELECT artifact_json FROM task_graph_steps WHERE graph_id = ? AND node_key = 'plan'", graph.id,
+      );
+      return JSON.parse(row?.artifact_json ?? "null");
+    };
+
+    f.ledger.hubCall(f.lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "plan" });
+    expect(artifact()).toMatchObject({ checkpointPending: true });
+    expect(askOf(f.ledger.getMessage(asked.data.messageId)!)).toMatchObject({ gateRef: { checkpoint: true } });
+
+    f.ledger.decideTaskNode(graph.id, "plan", { clientId: "late-pass", choice: CONFIRM_PASS_OPTION, askMessageId: asked.data.messageId });
+    expect(askOf(f.ledger.getMessage(asked.data.messageId)!)?.chosenOption).toBe(CONFIRM_PASS_OPTION);
+    expect(artifact()).not.toHaveProperty("checkpointPending");
+  });
+
   it("U6 (regression): a clean report on a step without confirm hands off to the next step and wakes nobody", async () => {
     const graph = f.createGraph({
       title: "顺利交棒",

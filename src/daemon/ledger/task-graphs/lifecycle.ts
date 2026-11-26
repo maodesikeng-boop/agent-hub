@@ -28,7 +28,7 @@ import { collectGraphBranches, collectGraphPrUrls, stopQueuedDeliveryNotesIn, sy
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
 import { isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, lastWorkerIdOf, workerIdsOf } from "./rows.ts";
 import { charLen, validateNodeKey } from "./spec.ts";
-import { getGraphRow, hydrateGraphs, hydrateNodes, isGraphAllSettled, listStepRows, loadGraph, publishGraphIn, requireStepRow, resolveGraphForPm } from "./store.ts";
+import { getGraphRow, hasPendingStepAsk, hydrateGraphs, hydrateNodes, isGraphAllSettled, listStepRows, loadGraph, publishGraphIn, requireStepRow, resolveGraphForPm } from "./store.ts";
 import { collapseOneLine, formatGraphText, unlockedNoteOf, workerIdList } from "./text.ts";
 import { emptyProgress, type PmCaller, type ProgressResult, type TaskGraphCtx, type TaskGraphDbRow, type TaskNodeDbRow } from "./types.ts";
 
@@ -113,7 +113,7 @@ export function markStepDoneIn(g: TaskGraphCtx, p: Pending, node: TaskNodeDbRow,
             pm_note = ?,
             updated_at = ?
       WHERE id = ?`,
-    serializeArtifact(artifact, false),
+    serializeArtifact(artifact, isStoredCheckpoint(node) && hasPendingStepAsk(g, node)),
     nextPmNote,
     t,
     node.id,
@@ -165,7 +165,7 @@ function skipNodeInternalIn(
   const artifact: TaskArtifact | null = trimmedReason ? { summary: `已跳过：${trimmedReason}` } : readStoredArtifact(node.artifact_json).artifact;
   g.db.run(
     "UPDATE task_graph_steps SET status = 'done', waiting_for = NULL, skipped = 1, artifact_json = ?, updated_at = ? WHERE id = ?",
-    serializeArtifact(artifact, isStoredCheckpoint(node)),
+    serializeArtifact(artifact, isStoredCheckpoint(node) && hasPendingStepAsk(g, node)),
     t,
     node.id,
   );
