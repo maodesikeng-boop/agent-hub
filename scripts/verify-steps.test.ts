@@ -77,7 +77,8 @@ function fakePage(onSend: () => void, replyVisible: () => boolean): FakeUi {
   });
   const page = {
     getByRole: (role: string, options: { name: string }) => {
-      if (role === "navigation") return { getByRole: () => ({ filter: ({ hasText }: { hasText: string }) => ({ first: () => clickable(`pm ${hasText}`) }) }) };
+      if (role === "navigation" && options.name === "Workspace") return { locator: () => ({ first: () => clickable("computer") }) };
+      if (role === "region" && options.name === "Project managers") return { getByRole: (_role: string, button: { name: string }) => clickable(`pm ${button.name}`) };
       if (role === "textbox") return { fill: async (text: string) => void actions.push(`fill ${text}`) };
       return clickable(options.name, onSend);
     },
@@ -109,7 +110,7 @@ describe("sendAndAwaitReply", () => {
     const ui = fakePage(() => (sent = true), () => true);
     const trip = await sendAndAwaitReply(ui.page, { origin: "http://127.0.0.1:1", cookie: "c=1", text: "verify", timeoutMs: 5_000 });
     expect(trip).toMatchObject({ conversationId: 1, userMessageId: 10, replyMessageId: 11 });
-    expect(ui.actions).toEqual(["click pm Bench PM", "fill verify", "click Send", 'wait [data-message-id="11"]']);
+    expect(ui.actions).toEqual(["click computer", "click pm Bench PM", "fill verify", "click Send", 'wait [data-message-id="11"]']);
   });
 
   it("rejects naming the step that timed out", async () => {

@@ -72,7 +72,8 @@ export async function sendAndAwaitReply(page: Page, input: { origin: string; coo
   const clock: StepClock = { deadline: Date.now() + input.timeoutMs, timeoutMs: input.timeoutMs };
   const pm = firstPm(await fetchState(input.origin, input.cookie));
   await withStep("open the project manager", clock, async (timeout) => {
-    await page.getByRole("navigation", { name: "Conversations" }).getByRole("button").filter({ hasText: pm.name }).first().click({ timeout });
+    await page.getByRole("navigation", { name: "Workspace" }).locator('button:has([data-testid^="rail-device-dot-"])').first().click({ timeout });
+    await page.getByRole("region", { name: "Project managers" }).getByRole("button", { name: pm.name, exact: true }).click({ timeout: remaining(clock, "open the project manager") });
   });
   const sentAt = await withStep("send the message", clock, async (timeout) => {
     await page.getByRole("textbox", { name: "Message" }).fill(input.text, { timeout });
