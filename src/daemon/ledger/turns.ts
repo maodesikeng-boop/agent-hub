@@ -129,12 +129,18 @@ function summariesFor(db: LedgerContext["db"], conversationId: ConversationId, m
   const first = messages[0]?.id ?? null;
   const last = messages.at(-1)?.id ?? null;
   const turns = db.all<TurnRecord>(
-    `SELECT ${TURN_COLUMNS} FROM turns t WHERE t.conversation_id = ? AND (
-       t.status = 'running' OR (t.first_output_id <= ? AND t.last_output_id >= ?) OR EXISTS (
-         SELECT 1 FROM turn_inputs i WHERE i.turn_id = t.id AND i.message_id IN (SELECT value FROM json_each(?))
-       )
-     ) ORDER BY (t.status = 'running') DESC, t.id DESC LIMIT ?`,
-    conversationId, last, first, JSON.stringify(messages.map((message) => message.id)), TURN_SUMMARIES_PER_PAGE_MAX,
+    `WITH matching(id, running) AS (
+       SELECT id, 1 FROM turns WHERE conversation_id = ? AND status = 'running'
+       UNION
+       SELECT id, 0 FROM turns WHERE conversation_id = ? AND status = 'ended' AND last_output_id >= ? AND first_output_id <= ?
+       UNION
+       SELECT t.id, t.status = 'running' FROM turn_inputs i
+       CROSS JOIN turns t ON t.id = i.turn_id
+       WHERE i.message_id IN (SELECT value FROM json_each(?)) AND t.conversation_id = ?
+       ORDER BY 2 DESC, 1 DESC LIMIT ?
+     )
+     SELECT ${TURN_COLUMNS} FROM matching JOIN turns t ON t.id = matching.id`,
+    conversationId, conversationId, first, last, JSON.stringify(messages.map((message) => message.id)), conversationId, TURN_SUMMARIES_PER_PAGE_MAX,
   );
   return summarizeTurns(db, turns);
 }
@@ -229,6 +235,16 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       WHERE i.message_id = ? ORDER BY i.turn_id DESC LIMIT 1`, id,
   ) ?? null;
 
+  function publishTurnIn(p: Pending, turnId: TurnId): void {
+    const turn = turnOf(turnId);
+    const summary = turn === null ? undefined : summarizeTurns(db, [turn])[0];
+    if (summary === undefined) return;
+    const index = p.changes.findIndex((change) => change.type === "turn.updated" && change.data.turn.id === turnId);
+    const change = { type: "turn.updated", data: { turn: summary } } satisfies Pending["changes"][number];
+    if (index === -1) p.changes.push(change);
+    else p.changes[index] = change;
+  }
+
   const open = (session: AgentSessionRow, cause: TurnCause, at: number, parent: TurnId | null) => openTurn(db, session, cause, at, parent);
 
   function takeableInputs(sessionId: SessionId, ids: readonly MessageId[]): TakeableInput[] {
@@ -265,6 +281,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       );
       deps.projectInputStatus(p, input.id, "processing", null);
     }
+    publishTurnIn(p, turnId);
   }
 
   function recordOutputIn(p: Pending, session: AgentSessionRow, event: DriverEvent) {
@@ -273,11 +290,12 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
     if (change?.type !== "message.created") return;
     const msg = change.data.message;
     const reply = event.type === "agent.text" && event.parentToolUseId === undefined && msg.meta?.["handover"] !== true ? msg.id : null;
-    db.run(
+    const updated = db.get<{ id: TurnId }>(
       `UPDATE turns SET first_output_id = coalesce(first_output_id, ?), last_output_id = ?,
          reply_message_id = coalesce(?, reply_message_id), updated_at = ?
-       WHERE session_id = ? AND status = 'running'`, msg.id, msg.id, reply, event.at, session.id,
+       WHERE session_id = ? AND status = 'running' RETURNING id`, msg.id, msg.id, reply, event.at, session.id,
     );
+    if (updated !== undefined) publishTurnIn(p, updated.id);
   }
 
   function finish(p: Pending, session: AgentSessionRow, turn: TurnRecord, end: End, legacy?: LegacyTurnReplyFacts): SettledTurn {
@@ -313,6 +331,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
         && reply !== null && (legacy === undefined ? reply > after : legacy.reply?.requestIds.includes(row.messageId) === true) ? reply : undefined;
       deps.projectInputStatus(p, row.messageId, outcome, reason, replyId);
     }
+    publishTurnIn(p, turn.id);
     return { turn: { ...turn, status: "ended", endedAt, durationMs: endedAt - turn.startedAt, outcome: end.outcome,
       stopSource, failureReason: reason, replyMessageId: reply }, inputs, empty: turn.firstOutputId === null };
   }
@@ -436,7 +455,10 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
     afterDriverEvent(p, session, event) {
       if (event.type === "message.processing") take(p, session, event.messageIds, event.at);
       else if (event.type === "turn.started") {
-        if (runningTurnOf(session.id) === null) open(session, "self", event.at, null);
+        if (runningTurnOf(session.id) === null) {
+          const turnId = open(session, "self", event.at, null);
+          if (turnId !== null) publishTurnIn(p, turnId);
+        }
       } else if (event.type === "session.started") {
         const turn = runningTurnOf(session.id);
         if (turn !== null) finish(p, session, turn, { outcome: "interrupted", at: event.at,
@@ -444,11 +466,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       } else recordOutputIn(p, session, event);
     },
     settle, settleExit, recordOutputIn, recordFailedStartIn, runningTurnOf, lastEndedTurnOf, turnOf, turnTakingInput, summariesFor: (id, messages) => summariesFor(db, id, messages), recoverAfterRestartIn,
-    publishTurnIn(p, turnId) {
-      const turn = turnOf(turnId);
-      const summary = turn === null ? undefined : summarizeTurns(db, [turn])[0];
-      if (summary !== undefined) p.changes.push({ type: "turn.updated", data: { turn: summary } });
-    },
+    publishTurnIn,
     sessionTurns: (id) => db.all<TurnRecord>(
       `SELECT ${TURN_COLUMNS} FROM turns t WHERE t.session_id = ? ORDER BY t.id DESC LIMIT ?`, id, TURN_HISTORY_MAX_PER_CONV,
     ).reverse(),

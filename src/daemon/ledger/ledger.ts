@@ -264,7 +264,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const reminders = createChecklistReminders(ctx);
   const sessions = createLedgerSessions(ctx, reminders.forget, (id) => turns.runningTurnOf(id)?.id ?? null);
   const { sessionState } = sessions;
-  const snapshotQueries = createLedgerSnapshotQueries(db, { sessionState });
   const sentFiles = createLedgerSentFiles(db, {
     sentFilesDir: options.sentFilesDir ?? join(dataHome, "sent-files"),
     uploadsDir: options.uploadsDir ?? join(dataHome, "uploads"),
@@ -302,6 +301,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     projectInputStatus: messages.projectInputStatus,
     failureReasonOfTurn: (session, event) => handover.failureReasonOfTurn(session, event),
   });
+  const snapshotQueries = createLedgerSnapshotQueries(db, { sessionState, turnsFor: turns.summariesFor });
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
     switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
     clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),

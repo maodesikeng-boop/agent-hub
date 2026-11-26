@@ -25,7 +25,11 @@ CREATE TABLE IF NOT EXISTS turns (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_one_running_per_session ON turns(session_id) WHERE status = 'running';
 CREATE INDEX IF NOT EXISTS idx_turns_conversation ON turns(conversation_id, id);
+CREATE INDEX IF NOT EXISTS idx_turns_conversation_running ON turns(conversation_id, id) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_turns_conversation_output ON turns(conversation_id, last_output_id, first_output_id) WHERE status = 'ended';
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_turns_parent ON turns(parent_turn_id) WHERE parent_turn_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_turns_reply_message ON turns(reply_message_id) WHERE reply_message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS turn_inputs (
   turn_id          INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,

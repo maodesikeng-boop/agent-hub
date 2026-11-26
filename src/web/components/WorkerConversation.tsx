@@ -217,6 +217,8 @@ export const WorkerConversation = memo(function WorkerConversation({
             <div className="relative min-h-0 flex-1">
               <MessageList
                 messages={view.messages}
+                turns={view.turns}
+                activeTurnId={session?.activeTurnId}
                 pending={pending}
                 agentOf={agentOf}
                 hasMore={view.hasMore}

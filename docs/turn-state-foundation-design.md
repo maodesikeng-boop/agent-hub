@@ -36,7 +36,7 @@ Architecture choices (also settled as recommended):
 
 ### Migration number
 
-`node scripts/migration-claims.ts --next` prints `0060` because PR #467 claims `0057` to `0059`. `loadMigrations()` refuses a gap, so a `0060` file stops every database test until #467 merges. The plan branch keeps `0057_turn_state.sql` so the baseline below runs. Before review, the implementation step rebases on `main` and renames the file to the next free number. The `migration-claims` check stays red until then.
+`main` ends at `0056`. PR #467 claims `0057` to `0059`, so `node scripts/migration-claims.ts --next` returns `0060`. The implementation branch keeps `0057_turn_state.sql` while those claims are open because the migration loader requires contiguous versions. Once the earlier claims land or are released, update from `main`, recheck the claims, and use the first available contiguous version. The `migration-claims` check fails while the duplicate claim remains.
 
 ### Task Graph sequencing note
 

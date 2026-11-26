@@ -1,6 +1,6 @@
 import { placeSystemInputs, systemInputPlacement } from "./turn-boundaries.ts";
 import { takenInputOf } from "../shared/taken-input.ts";
-import type { TurnId, TurnSummary } from "../shared/turn.ts";
+import type { TurnId, TurnInputSummary, TurnSummary } from "../shared/turn.ts";
 export { listConversations, previewText, type ConversationEntry } from "./conversation-list.ts";
 export {
   allPendingAsks,
@@ -755,10 +755,10 @@ type FlowRole =
 
 const WORK_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.created", "schedule.removed"]);
 
-function flowRole(message: Message): FlowRole {
+function flowRole(message: Message, input?: TurnInputSummary): FlowRole {
   if (isSilentTriggerMessage(message) || (isRewoundMessage(message) && attachmentsOf(message).length === 0)) return "silent_input";
   const line = workerEventOf(message);
-  const placement = systemInputPlacement(message);
+  const placement = systemInputPlacement(message, input);
   if (placement === "waiting") return "waiting";
   if (placement === "in_turn") return "in_turn";
   if (placement === "starts_turn" || (placement === "as_written" && message.status === "replied")) return "input";
@@ -795,27 +795,66 @@ export interface GroupedMessages {
   tailTurnKey: string | null;
 }
 
-const groupMessagesCache = new WeakMap<readonly Message[], GroupedMessages>();
+const groupMessagesCache = new WeakMap<readonly Message[], WeakMap<readonly TurnSummary[], GroupedMessages>>();
 const NO_TURNS: readonly TurnSummary[] = [];
 
-/**
- * Groups a conversation's loaded messages into render items. A turn card takes its identity, boundaries, and duration from
- * the matching summary in `turns`; a mid-turn input listed in a summary stays inside that card.
- * Postcondition: the same `all` and `turns` references return the same object.
- */
-export function groupMessages(all: Message[], _turns: readonly TurnSummary[] = NO_TURNS): GroupedMessages {
-  const hit = groupMessagesCache.get(all);
+type OutputRange = { first: number; last: number; turn: TurnSummary };
+
+function turnMembership(turns: readonly TurnSummary[]) {
+  const ranges = new Map<number, OutputRange[]>();
+  const owners = new Map<number, TurnSummary>();
+  const inputs = new Map<number, TurnInputSummary>();
+  for (const turn of turns) {
+    for (const input of turn.inputs) {
+      if ((owners.get(input.messageId)?.id ?? 0) >= turn.id) continue;
+      owners.set(input.messageId, turn);
+      inputs.set(input.messageId, input);
+    }
+    if (turn.firstOutputId === null || turn.lastOutputId === null) continue;
+    const range = { first: turn.firstOutputId, last: turn.lastOutputId, turn };
+    const session = ranges.get(turn.sessionId);
+    if (session === undefined) ranges.set(turn.sessionId, [range]);
+    else session.push(range);
+  }
+  for (const session of ranges.values()) session.sort((a, b) => a.first - b.first);
+  return { ranges, owners, inputs };
+}
+
+function outputTurn(ranges: readonly OutputRange[] | undefined, id: number): TurnSummary | undefined {
+  if (ranges === undefined) return undefined;
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    const range = ranges[mid]!;
+    if (id < range.first) high = mid;
+    else if (id > range.last) low = mid + 1;
+    else return range.turn;
+  }
+  return undefined;
+}
+
+export function groupMessages(all: Message[], turns: readonly TurnSummary[] = NO_TURNS): GroupedMessages {
+  let byTurns = groupMessagesCache.get(all);
+  if (byTurns === undefined) {
+    byTurns = new WeakMap();
+    groupMessagesCache.set(all, byTurns);
+  }
+  const hit = byTurns.get(turns);
   if (hit !== undefined) return hit;
-  const messages = placeHandovers(placeSystemInputs(all));
+  const { ranges, owners, inputs } = turnMembership(turns);
+  const messages = placeHandovers(placeSystemInputs(all, inputs.size > 0 ? inputs : undefined));
+  const tracked = new Map<TurnId, TurnItem>();
   const items: RenderItem[] = [];
-  let turn: Extract<RenderItem, { kind: "turn" }> | null = null;
+  let turn: TurnItem | null = null;
   let lastInputAt: number | null = null;
   let lastAgentAt: number | null = null;
 
   const close = () => {
     if (turn === null) return;
     const trailing: Message[] = [];
-    for (let last = turn.parts.at(-1); last !== undefined && last.sender !== "agent" && systemInputPlacement(last) !== "in_turn"; last = turn.parts.at(-1)) {
+    for (let last = turn.parts.at(-1); last !== undefined && last.sender !== "agent" &&
+         inputs.get(last.id)?.role !== "mid_turn" && systemInputPlacement(last) !== "in_turn"; last = turn.parts.at(-1)) {
       trailing.unshift(turn.parts.pop()!);
     }
     for (const message of trailing) items.push({ kind: "message", message });
@@ -823,10 +862,32 @@ export function groupMessages(all: Message[], _turns: readonly TurnSummary[] = N
   };
 
   for (const message of messages) {
-    const role = flowRole(message);
+    const input = inputs.get(message.id);
+    const role = flowRole(message, input);
     if (role === "silent_input") {
       close();
       lastInputAt = message.createdAt;
+      continue;
+    }
+    const summary = input?.role === "mid_turn" ? owners.get(message.id)
+      : role === "agent" && message.sessionId !== null ? outputTurn(ranges.get(message.sessionId), message.id) : undefined;
+    if (summary !== undefined) {
+      const existing = tracked.get(summary.id);
+      if (turn !== existing) {
+        close();
+        turn = existing ?? {
+          kind: "turn", key: `ledger-turn-${summary.id}`, work: [], checklists: [], parts: [],
+          startedAt: summary.startedAt, endedAt: summary.endedAt ?? summary.startedAt,
+          turnId: summary.id, durationMs: summary.durationMs,
+        };
+        if (existing === undefined) {
+          tracked.set(summary.id, turn);
+          items.push(turn);
+        }
+      }
+    }
+    if (input?.role === "mid_turn" && turn !== null) {
+      turn.parts.push(message);
       continue;
     }
     if (role === "waiting") {
@@ -844,6 +905,7 @@ export function groupMessages(all: Message[], _turns: readonly TurnSummary[] = N
       lastInputAt = takenInputOf(message)?.at ?? message.createdAt;
       continue;
     }
+    if (role === "agent" && summary === undefined && turn?.turnId != null) close();
     if (role === "agent" && turn === null) {
       const starts = [lastInputAt, lastAgentAt].filter((t): t is number => t !== null);
       turn = { kind: "turn", key: `turn-${message.id}`, work: [], checklists: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt, turnId: null, durationMs: null };
@@ -860,26 +922,28 @@ export function groupMessages(all: Message[], _turns: readonly TurnSummary[] = N
     if (message.kind === CHECKLIST_MESSAGE_KIND) turn.checklists.push(message);
     else if (message.kind === "tool" || role === "work") turn.work.push(message);
     else turn.parts.push(message);
-    turn.endedAt = message.createdAt;
-    lastAgentAt = message.createdAt;
+    if (turn.turnId === null) {
+      turn.endedAt = message.createdAt;
+      lastAgentAt = message.createdAt;
+    } else if (role === "agent") {
+      lastAgentAt = summary?.endedAt ?? message.createdAt;
+    }
   }
-  const grouped = { items, tailTurnKey: turn?.key ?? null };
+  const grouped = { items, tailTurnKey: turn?.turnId === null ? turn.key : null };
   close();
-  groupMessagesCache.set(all, grouped);
+  byTurns.set(turns, grouped);
   return grouped;
 }
 
-/**
- * Postcondition: the daemon duration of an ended turn, null while that turn runs, and endedAt - startedAt for a card written
- * before the turn ledger (turnId null).
- */
-export function workedForMsOf(_turn: Pick<TurnItem, "turnId" | "durationMs" | "startedAt" | "endedAt">): number | null {
-  throw new Error("Not implemented");
+export function workedForMsOf(turn: Pick<TurnItem, "startedAt" | "endedAt"> & Partial<Pick<TurnItem, "turnId" | "durationMs">>): number | null {
+  return turn.turnId == null ? turn.endedAt - turn.startedAt : turn.durationMs ?? null;
 }
 
-/** Postcondition: the key of the card showing the running turn, or null when the session has no running turn on this page. */
-export function liveTurnKeyOf(_grouped: GroupedMessages, _activeTurnId: TurnId | null | undefined): string | null {
-  throw new Error("Not implemented");
+export function liveTurnKeyOf(grouped: GroupedMessages, activeTurnId: TurnId | null | undefined): string | null {
+  if (activeTurnId === undefined) return grouped.tailTurnKey;
+  if (activeTurnId === null) return null;
+  const item = grouped.items.find((entry) => entry.kind === "turn" && entry.turnId === activeTurnId && entry.durationMs === null);
+  return item?.kind === "turn" ? item.key : null;
 }
 
 export interface DeviceRouterView {

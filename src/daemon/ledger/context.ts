@@ -49,7 +49,7 @@ const CHANGE_RANK: Readonly<Record<ChangeType, number>> = {
   "router.reports.archived_all": 6,
   "router.command.created": 6,
   "router.command.updated": 6,
-  "turn.updated": 6,
+  "turn.updated": 4,
   "session.status": 7,
   "health.updated": 8,
   "schedule.updated": 9,

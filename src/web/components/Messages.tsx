@@ -26,7 +26,7 @@ import { ApiError } from "../client.ts";
 import { describeFailure } from "../../shared/errors.ts";
 import { errorLine, errorTitle, formatTime, workerLineParts } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import type { RenderItem } from "../selectors.ts";
+import { workedForMsOf, type TurnItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
 import { describeSystemEvent, type EventFamily, type EventIconName } from "../system-events.ts";
 import { turnProgress } from "../turn-progress.ts";
@@ -204,7 +204,7 @@ export function CopyButton({ text }: { text: string }) {
   );
 }
 
-type Turn = Extract<RenderItem, { kind: "turn" }>;
+type Turn = Pick<TurnItem, "work" | "checklists" | "parts" | "startedAt" | "endedAt"> & Partial<Pick<TurnItem, "turnId" | "durationMs">>;
 
 const EMPTY_REVERTED: ReadonlySet<PersonaChangeId> = new Set();
 
@@ -248,7 +248,7 @@ export const TurnView = memo(
     revertedChanges,
     leanReports = false,
   }: {
-    turn: Pick<Turn, "work" | "checklists" | "parts" | "startedAt" | "endedAt"> & Partial<Pick<Turn, "turnId" | "durationMs">>;
+    turn: Turn;
     identity: AgentIdentity;
     status?: React.ReactNode;
     stepStartedAt?: number | null;
@@ -259,7 +259,9 @@ export const TurnView = memo(
     leanReports?: boolean;
   }) {
     const liveText = streamingText ? displayText(streamingText) : "";
-    const running = status != null || liveText !== "";
+    const duration = workedForMsOf(turn);
+    const tracked = turn.turnId != null;
+    const running = tracked ? duration === null : status != null || liveText !== "";
     const texts = turn.parts.filter((m) => m.sender === "agent");
     const lastText = texts.at(-1);
     const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
@@ -268,12 +270,13 @@ export const TurnView = memo(
       <div className="mt-6 flex flex-col [[data-list-head]>&]:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
         <AgentHead identity={identity} working={running} />
         <div className="flex flex-col gap-2.5">
-          {(!running || status != null) && (
+          {(!running || status != null || (tracked && liveText === "")) && (
             <TurnProgress
               progress={progress}
               status={status ?? null}
               stepStartedAt={stepStartedAt}
-              workedForMs={turn.endedAt - turn.startedAt}
+              workedForMs={running ? null : duration}
+              showDuration={tracked}
               onOpenWorker={actions.onOpenWorker}
             />
           )}
@@ -304,6 +307,8 @@ export const TurnView = memo(
   (prev, next) =>
     prev.turn.startedAt === next.turn.startedAt &&
     prev.turn.endedAt === next.turn.endedAt &&
+    prev.turn.turnId === next.turn.turnId &&
+    prev.turn.durationMs === next.turn.durationMs &&
     sameList(prev.turn.work, next.turn.work) &&
     sameList(prev.turn.checklists, next.turn.checklists) &&
     sameList(prev.turn.parts, next.turn.parts) &&
@@ -652,6 +657,8 @@ function TurnNotice({ message, identity, actions, revertedChanges }: {
   actions: MessageActions;
   revertedChanges: ReadonlySet<PersonaChangeId>;
 }) {
+  if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
+  if (message.sender === "pm") return <LongBrief><AgentText message={message} highlighted={false} /></LongBrief>;
   const line = workerEventOf(message);
   return line === null
     ? <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} inTurn />

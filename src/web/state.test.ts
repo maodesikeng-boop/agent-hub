@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseServerMessage, reconnectDelay } from "./connection.ts";
+import type { TurnSummary } from "../shared/turn.ts";
 import { formatArchiveRemaining, formatTime } from "./format.ts";
 import {
   CHANGE_TYPES,
@@ -211,6 +212,24 @@ describe("不在快照里的早收工 Worker", () => {
 });
 
 describe("olderDone", () => {
+  it("keeps a completed turn when an in-flight page returns its running summary", () => {
+    const running: TurnSummary = {
+      id: 5, sessionId: 1, conversationId: 1, cause: "input", status: "running", outcome: null, stopSource: null,
+      parentTurnId: null, startedAt: 0, endedAt: null, durationMs: null, firstOutputId: 3, lastOutputId: 3,
+      inputs: [{ messageId: 2, role: "opening", afterMessageId: null }], background: null,
+    };
+    const active = loaded({
+      conversations: [{ ...makeConvSnapshot([makeMessage({ id: 3 })], { hasMore: true }), turns: [running] }],
+    });
+    const loading = reducer(active, { type: "olderStart", conversationId: 1 });
+    const ended: TurnSummary = { ...running, status: "ended", outcome: "ok", endedAt: 45_000, durationMs: 45_000 };
+    const settled = applyChange(loading, changeOf(loading.seq + 1, "turn.updated", { turn: ended }));
+    const done = reducer(settled, { type: "olderDone", conversationId: 1, messages: [makeUserMessage({ id: 2 })], hasMore: false, turns: [running] });
+    expect(done.conversations[1]?.turns).toBe(settled.conversations[1]?.turns);
+    expect(done.conversations[1]?.messages.map((m) => m.id)).toEqual([2, 3]);
+    expect(groupMessages(done.conversations[1]!.messages, done.conversations[1]?.turns).items.at(-1)).toMatchObject({ turnId: 5, durationMs: 45_000 });
+  });
+
   it("已经有的不重复加，按编号排好", () => {
     const s0 = loaded({
       conversations: [makeConvSnapshot([makeMessage({ id: 5 }), makeMessage({ id: 6 })], { hasMore: true })],

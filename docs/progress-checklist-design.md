@@ -1,5 +1,7 @@
 # In-chat progress checklist
 
+[Turn state foundation](turn-state-foundation-design.md) defines when the progress card is live and supplies the finished duration. The checklist layout and live action timer described here still apply. Only history without a ledger turn estimates the duration from message times.
+
 > Snapshot: 2026-11-25 (commit `646574c5`)
 
 ## For the user
