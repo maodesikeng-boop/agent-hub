@@ -31,7 +31,7 @@ Include all eight sections below in order for downstream Workers and reviewers:
      - A restart in the middle of the operation.
      - A state or configuration change while work or a notice waits in a queue.
      - Existing rules or boundaries that the change touches or uncovers.
-   - **Real CLI recordings.** For any scenario that depends on vendor CLI output or protocol behavior, replay a recording from the real CLI (such as `test/fixtures/progress/*.live.jsonl`). If no recording exists, capture one with the local CLI. If local capture is blocked, mark the scenario `not verified against live CLI` and state why.
+   - **Real CLI verification.** For any scenario that depends on vendor CLI behavior, run it locally against the real vendor CLI before merge and save the output as evidence. A scenario that passes only against a fake CLI counts as not verified against the real CLI, not as passing. Keep fake CLIs for fast cloud checks. If the real CLI disagrees with a fake CLI, update the fake CLI and add a test in the same PR. If a vendor CLI is not installed or not logged in locally, mark the scenario as not verified against the real CLI and state why.
    - **Commands and visual checks.** Name the exact acceptance test files, `pnpm verify`, real-browser screenshots for UI changes, and command outputs to capture during implementation.
 
 ## Code skeleton and failing acceptance tests
@@ -42,7 +42,7 @@ Write the skeleton and acceptance tests directly in the target production and te
 - **Module boundaries.** Create target modules and export their public functions and types. Skip unexported private helpers.
 - **Function signatures.** Write full parameter and return types without `any`. Use a single-line body: `throw new Error("Not implemented");`.
 - **Contracts.** Document caller-observable preconditions and postconditions on exported functions with concise `/** */` doc comments. State module-wide invariants once at the top of the file. Do not prescribe internal data structures or step-by-step control flow. Public API contract comments remain after implementation per `.agents/skills/no-comments/references/comment-sicko.md`.
-- **Acceptance tests.** Write real runnable tests with assertions in the matching `*.test.ts` and `*.test.tsx` files so every acceptance scenario in Section 8 and every contract clause maps to at least one executable test. Do not use `it.todo` placeholders for acceptance scenarios. Use real CLI recordings for vendor protocol scenarios, or note why live capture was blocked.
+- **Acceptance tests.** Write real runnable tests with assertions in the matching `*.test.ts` and `*.test.tsx` files so every acceptance scenario in Section 8 and every contract clause maps to at least one executable test. Do not use `it.todo` placeholders for acceptance scenarios. Automated tests may run against fake CLIs for fast cloud checks, while vendor CLI scenarios still require a local run against the real CLI before merge.
 - **Existing callers.** When changing an existing signature, update call sites so `pnpm typecheck` passes without altering runtime behavior yet.
 
 Before you commit the plan, run `pnpm typecheck` and confirm it exits 0. Then run the new acceptance test files (`pnpm exec vitest run <test-files>`) and confirm that tests for new or changed behavior fail against the skeleton or current code, with no syntax or type errors. Record the command and failing output in your Worker report so downstream Workers and reviewers can verify the pre-implementation failures.
@@ -97,5 +97,5 @@ Before you report done, confirm all four checks:
 
 - The finished code matches the skeleton's public types and contracts.
 - Every acceptance scenario in Section 8 has a passing test, and every test for new or changed behavior failed before implementation.
-- None of the planning step's acceptance tests were deleted, skipped, or weakened during implementation.
-- Every command output, real CLI recording, and real-browser screenshot listed in Section 8 is captured.
+- Implementation commits did not delete, skip, or weaken any acceptance test from the planning step.
+- You saved every command output, local real-CLI run output, and real-browser screenshot listed in Section 8, and updated any fake CLI that disagreed with the real CLI.
