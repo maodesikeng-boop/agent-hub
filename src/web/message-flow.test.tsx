@@ -2,6 +2,8 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import type { Message } from "../shared/index.ts";
 import { AgentStatus } from "./components/AgentStatus.tsx";
 import { MessageList } from "./components/MessageList.tsx";
@@ -586,9 +588,13 @@ describe("system inputs and progress across turns", () => {
     }
   });
 
-  it("S3: when read as a new turn, the notice is between the old and new cards; elapsed time starts at the read", () => {
+  it("S3: a wakeup Claude takes in the next turn separates the cards and their clocks", () => {
+    const probe = resolve("test/fake-claude/late-wakeup.ts");
+    const stamp = execFileSync(process.execPath, [probe], { encoding: "utf8", timeout: 10_000 }).trim();
+    expect(["false", "true"]).toContain(stamp);
+    const midTurn = stamp === "true";
     const { container } = list([
-      ...initial(), wake(3, "replied", "task_graph", { afterId: 4, midTurn: false, at: 60_000 }),
+      ...initial(), wake(3, "replied", "task_graph", { afterId: 4, midTurn, at: 60_000 }),
       makeMessage({ id: 4, createdAt: 40_000, text: "First turn reply" }),
       makeToolMessage({ id: 5, createdAt: 64_000 }),
     ]);
@@ -599,6 +605,7 @@ describe("system inputs and progress across turns", () => {
     expect(notice.compareDocumentPosition(first!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     expect(notice.compareDocumentPosition(second!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(second).toHaveTextContent("Worked for 4s");
+    expect(container.querySelectorAll("article[data-side='right']")).toHaveLength(1);
   });
 
   it("S4: when read mid-turn, the event stays inside the running card even before a text reply", () => {

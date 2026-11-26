@@ -560,8 +560,9 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const batch = event ? st.inFlight.find((b) => b.uuid === event.uuid) : undefined;
     if (!event || !batch) return;
     if (event.state === "started") {
+      const midTurn = batch.midTurn && (st.selfTurn || st.inFlight.some((other) => other !== batch && other.started));
       batch.started = true;
-      if (proc.initSeen) this.markProcessing(st, batch, at);
+      if (proc.initSeen) this.markProcessing(st, batch, at, midTurn);
     } else if (event.state === "cancelled" && !batch.started) {
       this.#cancelBatches(st, proc, [batch], at);
     }
