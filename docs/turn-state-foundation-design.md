@@ -17,7 +17,9 @@ Check three things before implementation starts. Every quoted sentence in Sectio
 
 ### Decisions needed
 
-Four rules change what the user and the PM see, so they go to the user on one decision card. The PM decides the three architecture choices that follow them.
+**Settled on 2026-11-26.** The user approved the plan on the PM's decision card and chose the recommended option for every item: rules D1 to D4 below and the three architecture choices that follow them. Implementation follows these rules; changing one needs a new decision.
+
+Four rules change what the user and the PM see:
 
 | # | Recommended rule and what the user sees | Alternative |
 |---|---|---|
@@ -26,7 +28,7 @@ Four rules change what the user and the PM see, so they go to the user on one de
 | D3 | **`hub worker show` clocks.** The current turn and the work budget become two lines: `这一轮跑了 2m，走了 0 步（守护进程重启后重发）` and `时间预算：最大时间 1h，剩余 32m（从派活时起算，重启不重置）`. | Keep one combined line, or reset the budget on restart (a crash loop would then extend a stuck Worker forever). |
 | D4 | **`Worked for` in the web.** A finished turn shows the daemon's own duration: the probe turn that ran 45s shows `Worked for 45s`, not `27s`. The card stays live until the daemon ends the turn, and a system notice the agent read mid-turn stays inside it. Conversations written before this change keep today's estimate from message times. | Omit `Worked for` for history that has no turn record. |
 
-Architecture choices for the PM:
+Architecture choices (also settled as recommended):
 
 1. **One PR.** Recommended: one runtime PR, implemented by several steps on this branch in this order: turns and inputs with recovery; tools; background waits; API and web. Old and new writers never ship together. The alternative is four PRs (one per seam), each deleting its old path; it reviews in smaller pieces but needs a migration per PR and three intermediate states on `main`.
 2. **`messages.status` stays as a column.** Once a turn takes an input, only `turns.ts` writes that input's status, through a callback the messages module supplies. Rebuilding `messages` without the column would touch Feishu, Router, schedules, and old web clients for no extra fix.
@@ -38,7 +40,12 @@ Architecture choices for the PM:
 
 ### Task Graph sequencing note
 
-Implementation steps start only after the PM approves this plan and the user answers the D1 to D4 card.
+The plan is approved and the draft PR is #480. Four implementation steps follow on this branch, in order, each making its own acceptance tests pass without editing them:
+
+1. Turns and inputs: `turns.ts`, settlement, stop causes, restart recovery, empty recovery, the `worker show` clocks, and page summaries (`turns.test.ts`, the e2e test).
+2. Tools: `turn-tools.ts` and the `worker show` and `worker log` reads (`turn-tools.test.ts`).
+3. Background waits: `turn-background-waits.ts`, the capability gate, reminders, and the import and drop of the old wait tables (`turn-background-waits.test.ts`).
+4. API and web: `turn.updated`, `activeTurnId`, turn cards, and `Worked for` (`turn-duration.test.tsx`), plus the Section 6 deletions that remain and the migration renumbering.
 
 ## 1. User goal
 
