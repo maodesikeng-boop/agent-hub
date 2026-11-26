@@ -1074,7 +1074,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     const { graph: cancelledGraph } = ledger.decideTaskNode(graph.id, "s2", { clientId: "late", askMessageId: chkMsg2, choice: CONFIRM_PASS_OPTION });
     expect(cancelledGraph.status).toBe("cancelled");
     expect(askOf(ledger.getMessage(chkMsg2)!)?.chosenOption).toBe(CONFIRM_PASS_OPTION);
-    expect(cancelledGraph.nodes[1]).toMatchObject({ status: "waiting", waitingFor: "pm", gateAskPending: false, activeWorkerId: null });
+    expect(cancelledGraph.nodes[1]).toMatchObject({ status: "cancelled", waitingFor: null, gateAskPending: false, activeWorkerId: null });
     const shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id });
     expect(shown.text).not.toContain("[拍板卡]");
     expect(shown.text).not.toContain("[等用户拍板]");

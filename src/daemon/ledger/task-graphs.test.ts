@@ -519,7 +519,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const after = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(after.status).toBe("cancelled");
     expect(stateOf(after, "b")).toBe("skipped");
-    expect(after.nodes.find((n) => n.key === "a")?.status).not.toBe("done");
+    expect(after.nodes.find((n) => n.key === "a")).toMatchObject({ status: "cancelled", activeWorkerId: null, workerIds: [w.id] });
   });
 
   it("最后一个 Worker 收工后图处于待交付、finish 后图变 completed，两者均可给 done 节点补记产物，但取消图不能补记", () => {
