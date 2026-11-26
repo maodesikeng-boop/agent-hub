@@ -72,6 +72,8 @@ export type ScreenStep =
   | { focus: string }
   | { type: { into: string; text: string } }
   | { press: string }
+  /** Moves the pointer onto the element and holds the button down, for the pressed state on touch screens. */
+  | { hold: string }
   | { scroll: { target: string; to: "top" | "bottom" | number } }
   | { drag: { files: readonly string[]; over: string; drop?: boolean } }
   /** 套一个命名补丁（patches.ts）：真守护进程撑不住的瞬时状态。 */
@@ -209,6 +211,8 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("profile.schedule-form", "Info 子页：新建定时任务表单和校验错误", D, "error", "standard", "点 Schedules 再点 New，名字填超长", "定时任务子页"),
   s("profile.memory-open", "Info 子页：记忆文件钻取子页与编辑态", D, "normal", "stress", "补丁 memory-files，点开 Memory files，点一个文件的编辑", "记忆文件子页"),
   s("profile.history", "Info 子页：修改记录钻取子页", D, "normal", "standard", "点开 History", "修改记录子页"),
+  s("profile.mode", "Info sub-page: Mode", D, "normal", "standard", "Open Info, click Mode"),
+  s("profile.folders", "Info sub-page: Folders", D, "normal", "standard", "Open Info, click Folders"),
   s("profile.history-hover", "Info sub-page: hovered Undo text action in History", D, "normal", "standard", "Open History, hover Undo", "修改记录子页"),
   s("profile.history-empty", "Info 子页：修改记录是空的", D, "empty", "fresh", "#/pm/1，点开 History", "修改记录子页"),
   s("profile.new-session-confirm", "Info 页：开新会话的确认弹窗", D, "normal", "standard", "点 New session", "确认弹窗"),
@@ -249,12 +253,17 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("settings.capabilities-tab-hover", "Settings: hovered Capabilities scope tab", D, "normal", "standard", "Capabilities, hover Router", "弹窗"),
   s("settings.resources-expanded", "Settings: Storage breakdown expanded", D, "normal", "standard", "Resources, expand Storage breakdown", "弹窗"),
   s("settings.focus", "Settings: keyboard focus on a row control", D, "normal", "standard", "General, Tab from Interface scale to the next control (Check for updates while notifications are blocked)", "弹窗"),
+  s("settings.scale-compact", "Settings: General at the Compact interface scale", D, "normal", "standard", "localStorage presets agent-hub.uiScale, open General", "弹窗"),
+  s("settings.scale-xl", "Settings: General at the XL interface scale", D, "normal", "standard", "localStorage presets agent-hub.uiScale, open General", "弹窗"),
+  s("settings.resources-delete", "Settings: delete confirmation for a kept item", D, "normal", "standard", "Resources, patch resources-attention, click Delete…", "确认弹窗"),
   s("m-settings.home", "手机设置：一级主页（顶部含额度概览）", M, "normal", "standard", "#/settings"),
   s("m-settings.scale", "手机设置：界面大小", M, "normal", "standard", "#/settings/scale"),
   s("m-settings.notifications", "手机设置：通知", M, "normal", "standard", "#/settings/notifications"),
   s("m-settings.providers", "手机设置：厂商", M, "normal", "standard", "#/settings/providers，补丁 vendors-mixed"),
   s("m-settings.vendor-sync", "手机设置：跨厂商同步", M, "long", "standard", "#/settings/vendor-sync，补丁 vendor-sync-preview"),
   s("m-settings.capabilities", "手机设置：能力权限", M, "normal", "standard", "#/settings/capabilities"),
+  s("m-settings.capabilities-long-xl", "Phone settings: Capabilities for a long-named project at XL", M, "long", "stress", "localStorage presets XL, Capabilities, Project tab, pick the long-named project"),
+  s("m-settings.row-press", "Phone settings: a row held down", M, "normal", "standard", "#/settings, press and hold Notifications"),
   s("m-settings.resources", "手机设置：资源与存储", M, "normal", "standard", "#/settings/resources，补丁 resources-attention"),
   s("m-settings.computers", "手机设置：电脑", M, "normal", "two-devices", "#/settings/computers"),
   s("m-settings.sign-in", "手机设置：在其他设备上登录", M, "normal", "standard", "#/settings/sign-in"),
@@ -486,6 +495,8 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "profile.schedule-form": [...openProfile("阿青"), { click: `${profileScope("阿青")} >> role=button[name^="Schedules"]` }, { click: btn("New", 'role=region[name="Schedules"]') }, { type: { into: 'role=region[name="Schedules"] >> role=textbox >> nth=0', text: "一个特别特别长的定时任务名字用来测试表单校验会不会提示太长了再长一点再长一点再长一点" } }, { crop: 'role=region[name="Schedules"]' }],
   "profile.memory-open": [{ patch: "memory-files" }, ...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Memory files"]` }, { click: 'role=button[name="Edit conventions.md"]' }, { waitFor: 'role=region[name="Memory files"] >> role=textbox' }, { crop: 'role=region[name="Memory files"]' }],
   "profile.history": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
+  "profile.mode": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Mode"]` }, { waitFor: 'role=button[name="Back to Info"]' }],
+  "profile.folders": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Folders"]` }, { waitFor: 'role=button[name="Back to Info"]' }],
   "profile.history-hover": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { hover: 'role=region[name="History"] >> role=button[name="Undo"]' }, { crop: 'role=region[name="History"]' }],
   "profile.history-empty": [...openProfile("项目经理"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
   "profile.new-session-confirm": [...openProfile("小林"), { click: 'role=button[name="New session"]' }, { crop: TOP_DIALOG }],
@@ -545,7 +556,19 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "settings.capabilities-tab-hover": [...openSettings("Capabilities"), { waitFor: `${DIALOG} >> role=searchbox[name="Search capabilities"]` }, { hover: `${DIALOG} >> role=tab[name="Router"]` }, { crop: DIALOG }],
   "settings.resources-expanded": [{ patch: "resources-attention" }, ...openSettings("Resources"), { waitFor: `${DIALOG} >> text=#42 Fix auth flow` }, { click: `${DIALOG} >> role=button[name^="Storage breakdown"]` }, { crop: DIALOG }],
   "settings.focus": [...openSettings("General"), { focus: 'role=combobox[name="Interface scale"]' }, { press: "Tab" }, { crop: DIALOG }],
-  "m-settings.home": openMobileSettings(),
+  "settings.scale-compact": [storage({ "agent-hub.uiScale": "sm" }), ...openSettings("General"), { crop: DIALOG }],
+  "settings.scale-xl": [storage({ "agent-hub.uiScale": "xl" }), ...openSettings("General"), { crop: DIALOG }],
+  "settings.resources-delete": [{ patch: "resources-attention" }, ...openSettings("Resources"), { waitFor: `${DIALOG} >> text=#42 Fix auth flow` }, { click: `${DIALOG} >> text=Delete…` }, { crop: TOP_DIALOG }],
+  "m-settings.home": [{ patch: "quota-normal" }, ...openMobileSettings()],
+  "m-settings.capabilities-long-xl": [
+    storage({ "agent-hub.uiScale": "xl" }),
+    ...openMobileSettings("Capabilities"),
+    { click: 'role=tab[name="Project"]' },
+    { click: 'role=button[name^="Project: "]' },
+    { click: 'role=radio[name^="一个名字特别特别长"]' },
+    { waitFor: 'role=searchbox[name="Search capabilities"]' },
+  ],
+  "m-settings.row-press": [...openMobileSettings(), { hold: 'role=main >> role=button[name^="Notifications"]' }],
   "m-settings.scale": openMobileSettings("Interface scale"),
   "m-settings.notifications": openMobileSettings("Notifications"),
   "m-settings.providers": [{ patch: "vendors-mixed" }, ...openMobileSettings("Providers")],

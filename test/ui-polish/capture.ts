@@ -237,7 +237,7 @@ async function captureOne(browser: Browser, backend: Backend, shot: Shot, mutati
     if (!steps.some((s) => "goto" in s)) await page.waitForSelector("#root > *", { timeout: SHOT_READY_TIMEOUT_MS });
     for (const step of steps) crop = (await runStep(page, step, backend.daemon.origin)) ?? crop;
     await page.evaluate(inPage.fontsReady);
-    if (!steps.some((s) => "hover" in s)) await page.mouse.move(view.width - 1, view.height - 1);
+    if (!steps.some((s) => "hover" in s || "hold" in s)) await page.mouse.move(view.width - 1, view.height - 1);
     if (mutation !== undefined) await applyMutation(page, mutation);
     const key = `${shot.key}${mutation === undefined ? "" : `!${mutation}`}`;
     await network.quiet();
@@ -300,6 +300,12 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
     await input.focus({ timeout });
     await input.pressSequentially(step.type.text);
   } else if ("press" in step) await page.keyboard.press(step.press);
+  else if ("hold" in step) {
+    const box = await page.locator(step.hold).first().boundingBox({ timeout });
+    if (box === null) throw new Error(`Nothing visible to hold at ${step.hold}`);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+  }
   else if ("scroll" in step) await page.locator(step.scroll.target).first().evaluate(inPage.scrollToPosition, step.scroll.to); else if ("drag" in step) await page.evaluate(inPage.dragFiles, { selector: step.drag.over, names: step.drag.files, ...(step.drag.drop === undefined ? {} : { drop: step.drag.drop }) });
   else if ("waitFor" in step) await page.waitForSelector(step.waitFor, { timeout });
   else if ("clock" in step) await page.clock.setFixedTime(new Date(Date.parse(BROWSER_NOW_ISO) + step.clock));
