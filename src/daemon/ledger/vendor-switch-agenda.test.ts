@@ -36,7 +36,8 @@ describe("S4: the graph is done, accept it, meets a handover", () => {
     const ready = systemMessage(11, { event: "task_graph.ready_to_finish", graphId: 141, seq: 1 }, "【任务图 #141「取消残留」全部步骤做完，等你交付】");
     expect(formatGenerationMessage(ready, 2)).toContain("#141");
     expect(SYSTEM_EVENT_IN_SWITCH_LOG["schedule.run"]).toBe(true);
-    expect(Object.keys(SYSTEM_EVENT_IN_SWITCH_LOG).length).toBe(17);
+    expect(SYSTEM_EVENT_IN_SWITCH_LOG["worker.background_wait"]).toBe(true);
+    expect(Object.keys(SYSTEM_EVENT_IN_SWITCH_LOG).length).toBe(18);
   });
 
   describe("with a ledger", () => {
