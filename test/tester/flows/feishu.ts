@@ -228,4 +228,3 @@ export const feishuRunners: Readonly<Record<string, FlowRunner>> = {
   "feishu.hub-failover": hubFailover,
   "feishu.desktop-answer-syncs-card": desktopAnswerSyncsCard,
 };
-

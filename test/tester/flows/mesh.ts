@@ -129,6 +129,8 @@ async function watchStream(ctx: FlowContext): Promise<StreamWatch> {
 
 const crossDeviceChat = runner(async (ctx, obs) => {
   const remote = ctx.bench.remote();
+  const reachable = await waitFor(async () => (await remote.health()).ok ? true : undefined, COLD_DIAL_TIMEOUT_MS, ctx.signal, 250);
+  if (reachable === null) throw new ExternalServiceError("relay", "the remote test daemon was not reachable before opening the chat");
   const pm = await ensureBenchPm(remote, vendorPm("claude", "remote"));
   const stream = await watchStream(ctx);
   try {
