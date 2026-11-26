@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, readlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, readlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -240,6 +240,8 @@ describe("空闲排空热重启（createSelfReload）", () => {
     h.reload.request({ build: true, by: "pm" });
     h.reload.close();
     expect(signals[0]?.aborted).toBe(true);
+    expect(h.lines.join("\n")).toContain("热重启已取消：守护进程在网页构建完成前被关停，新网页没换上");
+    expect(h.reload.status().lastFailure).toContain("新网页没换上");
     expect(h.listeners.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(10 * SELF_RELOAD_RECHECK_MS);
@@ -253,6 +255,33 @@ describe("空闲排空热重启（createSelfReload）", () => {
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(SELF_RELOAD_QUIET_MS);
     expect(idle.restart).not.toHaveBeenCalled();
+  });
+
+  it("shutdown while waiting with a verified build leaves it for the next startup and says so", async () => {
+    const applyBuild = vi.fn();
+    const h = harness({ build: async () => ({ ok: true }), applyBuild });
+    h.setBusy(["1 个会话还在跑"]);
+    h.reload.request({ build: true, by: "pm" });
+    await vi.waitFor(() => expect(h.reload.status().state).toBe("draining"));
+    h.reload.close();
+    vi.advanceTimersByTime(SELF_RELOAD_DRAIN_MAX_MS);
+    expect(h.restart).not.toHaveBeenCalled();
+    expect(applyBuild).not.toHaveBeenCalled();
+    expect(h.lines.at(-1)).toContain("等全库空闲时守护进程被关停，已构建通过的网页下次启动时换上");
+
+    const plain = harness();
+    plain.setBusy(["1 个会话还在跑"]);
+    plain.reload.request({ build: false, by: "pm" });
+    plain.reload.close();
+    expect(plain.lines.at(-1)).toContain("等全库空闲时守护进程被关停，下次启动即运行新代码");
+  });
+
+  it("a startup failure stays visible in status and in the description after the reload went idle", () => {
+    const h = harness({ initialFailure: "上次带构建的热重启没换上新网页" });
+    expect(h.reload.status()).toMatchObject({ state: "idle", lastFailure: "上次带构建的热重启没换上新网页" });
+    expect(describeSelfReload(h.reload.status())).toBe("热重启：上次没成功——上次带构建的热重启没换上新网页");
+    h.reload.request({ build: false, by: "pm" });
+    expect(h.reload.status().lastFailure).toBeNull();
   });
 });
 
@@ -272,19 +301,22 @@ describe("正在干活的会话（createBusySessions）", () => {
 
 describe("暂存构建网页（createStagedWebBuild）", () => {
   let root: string;
+  const log = vi.fn();
   beforeEach(() => {
+    log.mockClear();
     root = realpathSync(mkdtempSync(join(tmpdir(), "hub-self-reload-")));
     mkdirSync(join(root, "dist", "web"), { recursive: true });
     writeFileSync(join(root, "dist", "web", "index.html"), "old");
     writeFileSync(join(root, "package.json"), "{}");
-    // 假的构建命令：读 --outDir，成功时写 index.html，FAIL 时退出码 1
+    // 假的构建命令：读 --outDir 写 index.html；FAIL 时随后退出码 1，HANG 时不退出
     writeFileSync(
       join(root, "fake-build.mjs"),
       `import { mkdirSync, writeFileSync } from "node:fs";
 const out = process.argv[process.argv.indexOf("--outDir") + 1];
-if (process.argv.includes("FAIL")) { console.error("boom"); process.exit(1); }
 mkdirSync(out, { recursive: true });
-writeFileSync(out + "/index.html", "new");`,
+writeFileSync(out + "/index.html", "new");
+if (process.argv.includes("HANG")) setInterval(() => {}, 1000);
+if (process.argv.includes("FAIL")) { console.error("boom"); process.exit(1); }`,
     );
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -295,6 +327,7 @@ writeFileSync(out + "/index.html", "new");`,
       staticDir: join(root, "dist", "web"),
       logPath: join(root, "logs", "build.log"),
       command: `${JSON.stringify(process.execPath)} fake-build.mjs ${extra}`,
+      log,
     });
 
   it("没有 package.json 返回 null（不支持 --build）", () => {
@@ -344,7 +377,70 @@ writeFileSync(out + "/index.html", "new");`,
     build.apply();
     expect(readFileSync(join(root, "dist", "web", "index.html"), "utf8")).toBe("new");
     expect(existsSync(join(root, "dist", ".web-reload-next"))).toBe(false);
+    expect(existsSync(join(root, "dist", ".web-reload-ready"))).toBe(false);
     expect(existsSync(join(root, "dist", ".web-reload-prev"))).toBe(false);
+  });
+
+  it("a verified build left unapplied by a shutdown is swapped in by the next daemon's startup", async () => {
+    const dist = join(root, "dist");
+    expect(await make()!.build(new AbortController().signal)).toEqual({ ok: true });
+    expect(readFileSync(join(dist, "web", "index.html"), "utf8")).toBe("old");
+
+    expect(make()!.recover()).toBeNull();
+    expect(readFileSync(join(dist, "web", "index.html"), "utf8")).toBe("new");
+    expect(readdirSync(dist)).toEqual(["web"]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("启动时换上了上次构建通过、还没来得及换上的网页"));
+  });
+
+  it("resumes a swap interrupted after the old web directory moved aside", async () => {
+    const dist = join(root, "dist");
+    const live = join(dist, "web");
+    expect(await make()!.build(new AbortController().signal)).toEqual({ ok: true });
+    renameSync(live, join(dist, ".web-reload-prev"));
+
+    expect(make()!.recover()).toBeNull();
+    expect(readFileSync(join(live, "index.html"), "utf8")).toBe("new");
+    expect(readdirSync(dist)).toEqual(["web"]);
+  });
+
+  it("a build cut off by shutdown is reported once at the next startup and the old web stays", async () => {
+    const dist = join(root, "dist");
+    const controller = new AbortController();
+    const pending = make("HANG")!.build(controller.signal);
+    await vi.waitFor(() => expect(existsSync(join(dist, ".web-reload-next", "index.html"))).toBe(true));
+    controller.abort();
+    expect(await pending).toMatchObject({ ok: false });
+
+    const failure = make()!.recover();
+    expect(failure).toContain("在网页构建完成前被打断，新网页没换上");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(failure!));
+    expect(readFileSync(join(dist, "web", "index.html"), "utf8")).toBe("old");
+    expect(readdirSync(dist)).toEqual(["web"]);
+    expect(make()!.recover()).toBeNull();
+  });
+
+  it("drops a staged build that is older than the web build already in place", async () => {
+    const dist = join(root, "dist");
+    expect(await make()!.build(new AbortController().signal)).toEqual({ ok: true });
+    const later = new Date(Date.now() + 60_000);
+    writeFileSync(join(dist, "web", "index.html"), "manual");
+    utimesSync(join(dist, "web", "index.html"), later, later);
+
+    expect(make()!.recover()).toBeNull();
+    expect(readFileSync(join(dist, "web", "index.html"), "utf8")).toBe("manual");
+    expect(readdirSync(dist)).toEqual(["web"]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("比正在用的网页旧，已丢弃"));
+  });
+
+  it("restores the old web build and reports a damaged staged build", () => {
+    const dist = join(root, "dist");
+    const live = join(dist, "web");
+    renameSync(live, join(dist, ".web-reload-prev"));
+    mkdirSync(join(dist, ".web-reload-ready"));
+
+    expect(make()!.recover()).toContain("启动时换上暂存网页失败");
+    expect(readFileSync(join(live, "index.html"), "utf8")).toBe("old");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("暂存目录没有构建产物"));
   });
 
   it("原目录不存在时可首次部署", async () => {
@@ -391,5 +487,7 @@ writeFileSync(out + "/index.html", "new");`,
     expect(readFileSync(join(root, "dist", "web", "index.html"), "utf8")).toBe("old");
     expect(() => build.apply()).toThrow(/没有构建产物/);
     expect(readFileSync(join(root, "dist", "web", "index.html"), "utf8")).toBe("old");
+    expect(readdirSync(join(root, "dist"))).toEqual(["web"]);
+    expect(make()!.recover()).toBeNull();
   });
 });
