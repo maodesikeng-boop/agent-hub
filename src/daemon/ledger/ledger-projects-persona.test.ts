@@ -455,12 +455,12 @@ describe("性格设定", () => {
     expect(changes).toEqual([]);
     const shown = hub(lin.sessionId, "persona.show", {} as never);
     expect(shown.data).toEqual({ text: "以后回复都用列表", mode: "hands_on" });
-    expect(shown.text).toBe("模式：自己也干活\n\n以后回复都用列表");
+    expect(shown.text).toBe("以后回复都用列表");
     // 性格设定为空时：persona.show 正常显示，data.text 是空串
     const emptyPm = ledger.createPm({ name: "阿空", mode: "manage_only", persona: "" });
     const emptyShown = hub(emptyPm.sessionId, "persona.show", {} as never);
     expect(emptyShown.data).toEqual({ text: "", mode: "manage_only" });
-    expect(emptyShown.text).toBe("模式：只管理\n\n（还没有性格设定）");
+    expect(emptyShown.text).toBe("");
   });
 
   it("界面改性格设定：系统消息发在项目经理的对话里；text、mode 都没给、太长 → invalid；不存在 → not_found；会话改别人的 → forbidden", () => {
