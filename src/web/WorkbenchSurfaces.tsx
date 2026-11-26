@@ -6,6 +6,7 @@ import { ProjectList } from "./components/ProjectList.tsx";
 import { ResourcesSettings } from "./components/ResourcesSettings.tsx";
 import { FlatSettingsGroups } from "./components/SettingsList.tsx";
 import { PmWorkPanel, WorkerWorkPanel, type ShellContent, type ShellModel } from "./components/WorkPanelShell.tsx";
+import { RouterTopBar } from "./components/RouterTopBar.tsx";
 import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
 import { isReadOnly } from "./devices.ts";
 import { AccentScope } from "./lib/accent-scope.tsx";
@@ -166,6 +167,21 @@ export function WorkbenchSurfaces({ model, content: c, mobile, chrome, notices, 
   const openComputers = useCallback(() => openSettingsSection("computers"), [openSettingsSection]);
   return (
     <>
+      <Surface id="topbar">
+        <RouterTopBar
+          hidden={c.routerActive}
+          devices={fleet.devices}
+          selfId={fleet.selfId}
+          lookOf={c.routerView.lookOf}
+          working={c.routerSummary.working}
+          routerDraft={c.drafts.of(ROUTER_DRAFT_KEY)}
+          clientForDevice={c.clientForDevice}
+          storeForDevice={c.storeForDevice}
+          onExpand={c.routerSummary.onSelect}
+          onOpenConversation={c.openDeviceConversation}
+          onOpenWorker={c.openDeviceWorker}
+        />
+      </Surface>
       <Surface id="list">
         <ProjectList
           layout={mobile ? "page" : "column"}

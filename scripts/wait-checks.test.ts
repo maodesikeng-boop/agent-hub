@@ -58,6 +58,7 @@ function mainRequiredGreen(): RollupItem[] {
     checkRun("check (ubuntu 3/4)", "COMPLETED", "SUCCESS"),
     checkRun("check (ubuntu 4/4)", "COMPLETED", "SUCCESS"),
     checkRun("review-stamp gate", "COMPLETED", "SUCCESS"),
+    checkRun("migration-claims", "COMPLETED", "SUCCESS"),
   ];
 }
 
@@ -146,9 +147,9 @@ describe("parseWaitChecksArgs", () => {
 });
 
 describe("workflow consistency", () => {
-  it("keeps REQUIRED_MAIN_CHECKS aligned with check.yml shards and review-stamp.yml job", () => {
+  it("keeps REQUIRED_MAIN_CHECKS aligned with the shards, review stamp, and migration claim jobs", () => {
     const checkWf = parseYaml(readFileSync(join(REPO_ROOT, ".github/workflows/check.yml"), "utf8")) as {
-      jobs: { check: { name: string; strategy: { matrix: { shard: string[] } } } };
+      jobs: { check: { name: string; strategy: { matrix: { shard: string[] } } }; "migration-claims": { name: string } };
     };
     const stampWf = parseYaml(readFileSync(join(REPO_ROOT, ".github/workflows/review-stamp.yml"), "utf8")) as {
       jobs: { gate: { name: string } };
@@ -156,6 +157,7 @@ describe("workflow consistency", () => {
     const expected = [
       ...checkWf.jobs.check.strategy.matrix.shard.map((s) => checkWf.jobs.check.name.replace("${{ matrix.shard }}", s)),
       stampWf.jobs.gate.name,
+      checkWf.jobs["migration-claims"].name,
     ];
     expect([...REQUIRED_MAIN_CHECKS]).toEqual(expected);
   });
@@ -195,7 +197,7 @@ describe("evaluatePullRequest", () => {
     const verdict = evaluatePullRequest(pr, baseCtx);
     expect(verdict.kind).toBe("pass");
     if (verdict.kind === "pass") {
-      expect(verdict.passed).toHaveLength(5);
+      expect(verdict.passed).toHaveLength(6);
       expect(verdict.exempt.map((e) => e.name)).toEqual([REVIEW_STATUS_CONTEXT]);
       expect(verdict.message).toContain("bellwood/review");
     }
@@ -242,6 +244,7 @@ describe("evaluatePullRequest", () => {
         checkRun("check (ubuntu 3/4)", "COMPLETED", "SUCCESS"),
         checkRun("check (ubuntu 4/4)", "COMPLETED", "SUCCESS"),
         checkRun("review-stamp gate", "COMPLETED", "SUCCESS"),
+        checkRun("migration-claims", "COMPLETED", "SUCCESS"),
       ],
     });
     const verdict = evaluatePullRequest(pr, baseCtx);
@@ -260,14 +263,14 @@ describe("evaluatePullRequest", () => {
     expect(early.kind).toBe("wait");
     if (early.kind === "wait") {
       expect(early.reason).toBe("startup-grace");
-      expect(early.missingRequired).toHaveLength(4);
+      expect(early.missingRequired).toHaveLength(5);
     }
 
     const late = evaluatePullRequest(pr, { ...baseCtx, elapsedMs: 90_000, startupGraceMs: 90_000 });
     expect(late.kind).toBe("fail");
     if (late.kind === "fail") {
       expect(late.reason).toBe("missing-required-checks");
-      expect(late.missingRequired).toHaveLength(4);
+      expect(late.missingRequired).toHaveLength(5);
     }
   });
 
@@ -301,6 +304,7 @@ describe("waitForChecks", () => {
         checkRun("check (ubuntu 3/4)", "COMPLETED", "SUCCESS"),
         checkRun("check (ubuntu 4/4)", "COMPLETED", "SUCCESS"),
         checkRun("review-stamp gate", "COMPLETED", "SUCCESS"),
+        checkRun("migration-claims", "COMPLETED", "SUCCESS"),
         statusCtx(REVIEW_STATUS_CONTEXT, "PENDING"),
       ],
     });
@@ -347,6 +351,7 @@ describe("waitForChecks", () => {
         checkRun("check (ubuntu 3/4)", "COMPLETED", "SUCCESS"),
         checkRun("check (ubuntu 4/4)", "COMPLETED", "SUCCESS"),
         checkRun("review-stamp gate", "COMPLETED", "SUCCESS"),
+        checkRun("migration-claims", "COMPLETED", "SUCCESS"),
       ],
     });
     const h = fakeHarness([{ kind: "ok", pr: pendingPr }]);
@@ -379,6 +384,7 @@ describe("waitForChecks", () => {
         checkRun("check (ubuntu 3/4)", "COMPLETED", "SUCCESS"),
         checkRun("check (ubuntu 4/4)", "COMPLETED", "SUCCESS"),
         checkRun("review-stamp gate", "COMPLETED", "SUCCESS"),
+        checkRun("migration-claims", "COMPLETED", "SUCCESS"),
       ],
     });
     const h = fakeHarness([{ kind: "ok", pr: pendingPr }]);

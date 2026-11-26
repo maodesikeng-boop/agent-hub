@@ -1,9 +1,10 @@
 // This repository's merge gate for review stamps, run by .github/workflows/review-stamp.yml under pull_request_target.
-// Invariant: it reads the path list from the base commit and the PR only through the GitHub API; it never checks out or runs PR code.
+// The gate reads REVIEW.md on the base commit and verifies PR heads without checking out or running PR code.
 // Branch protection requires REVIEW_STATUS_CONTEXT. This gate posts success for PRs that touch no listed path, and pending otherwise,
 // until the Bellwood daemon posts success after an independent review PASS on the PR's head commit.
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { matchesGlob, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** Must equal the daemon's REVIEW_STATUS_CONTEXT in src/shared/review.ts; kept literal so the gate imports no module outside the stamp paths. */
@@ -33,6 +34,8 @@ export const GATE_STATUS_CREATOR = "github-actions[bot]";
 
 const GITHUB_DESCRIPTION_MAX = 140;
 const PER_PAGE = 100;
+const COMPARE_FILES_API_MAX = 300;
+const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 
 const clip = (text: string): string => (text.length <= GITHUB_DESCRIPTION_MAX ? text : `${text.slice(0, GITHUB_DESCRIPTION_MAX - 1)}…`);
 
@@ -55,24 +58,74 @@ export function parseStampPaths(reviewMd: string): string[] {
   return globs;
 }
 
+function matchSegment(segment: string, pattern: string): boolean {
+  if (segment.length === 0) return pattern.length === 0;
+  if (pattern === "*") return true;
+  const parts = pattern.split("*");
+  if (parts.length === 1) return segment === pattern;
+  if (!segment.startsWith(parts[0]!) || !segment.endsWith(parts.at(-1)!)) return false;
+  let cursor = parts[0]!.length;
+  const end = segment.length - parts.at(-1)!.length;
+  if (cursor > end) return false;
+  for (let i = 1; i < parts.length - 1; i++) {
+    const idx = segment.indexOf(parts[i]!, cursor);
+    if (idx === -1 || idx + parts[i]!.length > end) return false;
+    cursor = idx + parts[i]!.length;
+  }
+  return true;
+}
+
+function matchReviewGlob(file: string, glob: string): boolean {
+  if (file.length === 0) return false;
+  const fSegs = file.split("/");
+  if (fSegs.some((seg) => seg.length === 0)) return false;
+  const gSegs: string[] = [];
+  for (const seg of glob.split("/")) {
+    if (seg === "**" && gSegs.at(-1) === "**") continue;
+    gSegs.push(seg);
+  }
+  if (gSegs.length === 1 && gSegs[0] === "**") return true;
+  const m = fSegs.length;
+  const n = gSegs.length;
+  // node:path.matchesGlob skips leading-dot segments with `*` and `**`, so we match segments directly to include hidden files and nested hidden directories.
+  let prev = Array<boolean>(m + 1).fill(false);
+  prev[0] = true;
+  for (let j = 1; j <= n; j++) {
+    const pat = gSegs[j - 1]!;
+    const curr = Array<boolean>(m + 1).fill(false);
+    if (pat === "**") {
+      if (j === n) {
+        for (let i = 1; i <= m; i++) curr[i] = prev[i - 1]! || curr[i - 1]!;
+      } else {
+        for (let i = 0; i <= m; i++) curr[i] = prev[i]! || (i > 0 && curr[i - 1]!);
+      }
+    } else {
+      for (let i = 1; i <= m; i++) curr[i] = prev[i - 1]! && matchSegment(fSegs[i - 1]!, pat);
+    }
+    prev = curr;
+  }
+  return prev[m]!;
+}
+
 /**
  * Postcondition: returns the changed files that match at least one glob, with REVIEW.md semantics
- * (`*` inside one segment, `**` across directories), in input order.
+ * (`*` inside one segment including dotfiles, `**` across directories including hidden directories), in input order.
  */
 export function matchStampPaths(files: readonly string[], globs: readonly string[]): string[] {
-  return files.filter((file) => globs.some((glob) => matchesGlob(file, glob)));
+  return files.filter((file) => globs.some((glob) => matchReviewGlob(file, glob)));
 }
 
 /**
  * Decides what the gate posts on the PR head commit, given the latest REVIEW_STATUS_CONTEXT status there.
  * - A status posted by anyone other than this gate is a review verdict: keep it, whatever the paths.
+ * - A success this gate posted with a CARRIED_STAMP_PREFIX description is a carried verdict: keep it.
  * - No listed path and the file list is complete: post success ("no high-risk paths").
  * - A listed path, or a truncated file list: post pending naming the first matched path.
  * Postcondition: descriptions are at most 140 characters.
  */
 export function decideGateStatus(input: { matched: readonly string[]; filesTruncated: boolean; current: CommitStatus | null }): GateDecision {
   const { matched, filesTruncated, current } = input;
-  if (current !== null && current.creator !== GATE_STATUS_CREATOR) {
+  if (current !== null && (current.creator !== GATE_STATUS_CREATOR || isCarriedStamp(current))) {
     return { kind: "keep", reason: `${current.state} from ${current.creator ?? "an unknown account"}: ${current.description ?? ""}`.trim() };
   }
   if (matched.length === 0 && !filesTruncated) {
@@ -82,9 +135,65 @@ export function decideGateStatus(input: { matched: readonly string[]; filesTrunc
   return { kind: "post", state: "pending", description: clip(`Needs an independent review PASS on this commit: ${why}`) };
 }
 
+/** Description prefix of a success the gate carried from a stamped head across an update that only merged the base branch. */
+export const CARRIED_STAMP_PREFIX = "Review stamp carried from ";
+
+/** One file of a PR diff as the compare API returns it; patch is null when GitHub omitted it for size. */
+export interface PrDiffFile {
+  filename: string;
+  status: string;
+  previousFilename: string | null;
+  patch: string | null;
+}
+
+export type CarryDecision = { kind: "carry"; description: string } | { kind: "no-carry"; reason: string };
+
+/**
+ * Decides whether the stamp on the previous PR head carries to the new head after a push.
+ * Carries only when all of these hold:
+ * - previousStamp is a success posted by a reviewer, or a success this gate carried earlier;
+ * - neither diff is truncated and every file has a patch;
+ * - both diffs list the same files with the same status and previous name, and each file's added and removed lines are
+ *   identical in order, ignoring hunk headers and context lines.
+ * Postcondition: a carry description starts with CARRIED_STAMP_PREFIX, names the previous head's short SHA, and is at most 140 characters.
+ */
+export function decideStampCarry(input: {
+  previousSha: string;
+  previousStamp: CommitStatus | null;
+  previousDiff: readonly PrDiffFile[];
+  currentDiff: readonly PrDiffFile[];
+  diffTruncated: boolean;
+}): CarryDecision {
+  const { previousSha, previousStamp, previousDiff, currentDiff, diffTruncated } = input;
+  if (!isReviewSuccess(previousStamp)) return { kind: "no-carry", reason: "No independent review success on the previous head" };
+  if (diffTruncated) return { kind: "no-carry", reason: "The compare API truncated a diff" };
+  const previous = diffSignature(previousDiff);
+  if (previous === null || previous !== diffSignature(currentDiff)) return { kind: "no-carry", reason: "The PR patch changed or is incomplete" };
+  return { kind: "carry", description: `${CARRIED_STAMP_PREFIX}${previousSha.slice(0, 7)}` };
+}
+
+function isCarriedStamp(stamp: CommitStatus): boolean {
+  return stamp.creator === GATE_STATUS_CREATOR && stamp.state === "success" && stamp.description?.startsWith(CARRIED_STAMP_PREFIX) === true;
+}
+
+function isReviewSuccess(stamp: CommitStatus | null): boolean {
+  return stamp?.state === "success" && stamp.creator !== null && (stamp.creator !== GATE_STATUS_CREATOR || isCarriedStamp(stamp));
+}
+
+function diffSignature(files: readonly PrDiffFile[]): string | null {
+  if (files.some(({ patch }) => patch === null)) return null;
+  return JSON.stringify([...files].sort((a, b) => a.filename < b.filename ? -1 : Number(a.filename !== b.filename)).map((file) => [
+    file.filename,
+    file.status,
+    file.previousFilename,
+    file.patch?.split("\n").filter((line) => /^[+\-\\]/u.test(line)),
+  ]));
+}
+
 export interface GateDeps {
   fetch: typeof fetch;
   readReviewMd: () => string;
+  isCleanBaseMerge?: (commits: MergeCommits) => boolean;
   log: (line: string) => void;
 }
 
@@ -95,6 +204,8 @@ interface GateEnv {
   token: string;
   api: string;
   runUrl: string | null;
+  before: string | null;
+  base: string | null;
 }
 
 function gateEnvOf(env: Readonly<Record<string, string | undefined>>): GateEnv | string {
@@ -102,9 +213,15 @@ function gateEnvOf(env: Readonly<Record<string, string | undefined>>): GateEnv |
   if (missing.length > 0) return `missing ${missing.join(", ")}`;
   const pr = Number(env.PR_NUMBER);
   if (!Number.isInteger(pr) || pr <= 0) return `PR_NUMBER is not a PR number: ${env.PR_NUMBER}`;
-  if (!/^[0-9a-f]{40}$/u.test(env.HEAD_SHA!)) return `HEAD_SHA is not a full commit SHA: ${env.HEAD_SHA}`;
+  if (!COMMIT_SHA.test(env.HEAD_SHA!)) return `HEAD_SHA is not a full commit SHA: ${env.HEAD_SHA}`;
   const runUrl = env.GITHUB_SERVER_URL && env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : null;
-  return { repo: env.GITHUB_REPOSITORY!, pr, sha: env.HEAD_SHA!, token: env.GH_TOKEN!, api: env.GITHUB_API_URL || "https://api.github.com", runUrl };
+  const before = env.BEFORE_SHA;
+  const base = env.GITHUB_SHA;
+  return {
+    repo: env.GITHUB_REPOSITORY!, pr, sha: env.HEAD_SHA!, token: env.GH_TOKEN!, api: env.GITHUB_API_URL || "https://api.github.com", runUrl,
+    before: before && COMMIT_SHA.test(before) && !/^0+$/u.test(before) ? before : null,
+    base: base && COMMIT_SHA.test(base) ? base : null,
+  };
 }
 
 async function github<T>(g: GateEnv, deps: GateDeps, path: string, init?: { method: "POST"; body: unknown }): Promise<T> {
@@ -138,19 +255,78 @@ async function headSha(g: GateEnv, deps: GateDeps): Promise<string> {
   return (await github<{ head: { sha: string } }>(g, deps, `/repos/${g.repo}/pulls/${g.pr}`)).head.sha;
 }
 
-async function currentStatus(g: GateEnv, deps: GateDeps): Promise<CommitStatus | null> {
+async function currentStatus(g: GateEnv, deps: GateDeps, sha = g.sha): Promise<CommitStatus | null> {
   const statuses = await github<Array<{ context: string; state: CommitStatusState; description: string | null; creator: { login: string } | null }>>(
     g,
     deps,
-    `/repos/${g.repo}/commits/${g.sha}/statuses?per_page=${PER_PAGE}`,
+    `/repos/${g.repo}/commits/${sha}/statuses?per_page=${PER_PAGE}`,
   );
   const latest = statuses.find((s) => s.context === REVIEW_STATUS_CONTEXT);
   return latest === undefined ? null : { state: latest.state, description: latest.description, creator: latest.creator?.login ?? null };
 }
 
+interface MergeCommits {
+  previous: string;
+  base: string;
+  head: string;
+}
+
+function isCleanBaseMerge({ previous, base, head }: MergeCommits): boolean {
+  const git = (...args: string[]) => execFileSync("git", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60_000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  }).trim();
+
+  try {
+    const onDiskBase = git("rev-parse", "HEAD");
+    if (onDiskBase !== base) return false;
+    const shallow = git("rev-parse", "--is-shallow-repository") === "true";
+    git("fetch", "--no-tags", "--no-recurse-submodules", ...(shallow ? ["--unshallow"] : []), "origin", base, head);
+    const parents = git("show", "-s", "--format=%P", head);
+    if (parents !== `${previous} ${base}`) return false;
+    // The merge tree detects conflict resolutions and edits that leave the same added and removed lines.
+    return git("merge-tree", "--write-tree", previous, base) === git("rev-parse", `${head}^{tree}`);
+  } catch {
+    return false;
+  }
+}
+
+async function compareDiff(g: GateEnv, deps: GateDeps, base: string, head: string): Promise<PrDiffFile[]> {
+  const result = await github<{ files?: Array<{ filename: string; status: string; previous_filename?: string; patch?: string }> }>(
+    g, deps, `/repos/${g.repo}/compare/${base}...${head}?per_page=1`,
+  );
+  if (!Array.isArray(result.files)) throw new Error("GitHub compare did not return a file list");
+  return result.files.map(({ filename, status, previous_filename, patch }) => ({
+    filename, status, previousFilename: previous_filename ?? null, patch: patch ?? null,
+  }));
+}
+
+async function carryOnBaseMerge(g: GateEnv, deps: GateDeps): Promise<CarryDecision> {
+  const { before, base, sha } = g;
+  if (before === null || base === null || before === sha) return { kind: "no-carry", reason: "No prior head or base commit" };
+  try {
+    const previousStamp = await currentStatus(g, deps, before);
+    if (!isReviewSuccess(previousStamp)) return { kind: "no-carry", reason: "No independent review success on the previous head" };
+    if (!deps.isCleanBaseMerge?.({ previous: before, base, head: sha })) return { kind: "no-carry", reason: "Head is not a verified clean merge of the base" };
+    const [previousDiff, currentDiff] = await Promise.all([compareDiff(g, deps, base, before), compareDiff(g, deps, base, sha)]);
+    return decideStampCarry({
+      previousSha: before,
+      previousStamp,
+      previousDiff,
+      currentDiff,
+      diffTruncated: previousDiff.length >= COMPARE_FILES_API_MAX || currentDiff.length >= COMPARE_FILES_API_MAX,
+    });
+  } catch {
+    return { kind: "no-carry", reason: "The base merge could not be verified" };
+  }
+}
+
 const defaultDeps: GateDeps = {
   fetch: (...args) => fetch(...args),
   readReviewMd: () => readFileSync("REVIEW.md", "utf8"),
+  isCleanBaseMerge,
   log: (line) => console.log(line),
 };
 
@@ -176,8 +352,12 @@ export async function main(argv: readonly string[], env: Readonly<Record<string,
       return 0;
     }
     const matched = matchStampPaths(files, globs);
-    const decision = decideGateStatus({ matched, filesTruncated: truncated, current: await currentStatus(g, deps) });
-    deps.log(JSON.stringify({ pr: g.pr, sha: g.sha, matched: matched.slice(0, 10), filesTruncated: truncated, decision, dryRun }));
+    let decision = decideGateStatus({ matched, filesTruncated: truncated, current: await currentStatus(g, deps) });
+    const carry = decision.kind === "post" && decision.state === "pending" && !truncated && g.before !== null
+      ? await carryOnBaseMerge(g, deps)
+      : null;
+    if (carry?.kind === "carry") decision = { kind: "post", state: "success", description: carry.description };
+    deps.log(JSON.stringify({ pr: g.pr, sha: g.sha, matched: matched.slice(0, 10), filesTruncated: truncated, decision, dryRun, ...(carry ? { carry } : {}) }));
     if (decision.kind === "keep" || dryRun) return 0;
     await github(g, deps, `/repos/${g.repo}/statuses/${g.sha}`, {
       method: "POST",

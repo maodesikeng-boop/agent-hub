@@ -8,7 +8,7 @@ import {
 } from "../agent-api/tokens.ts";
 import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
-import type { Db } from "../store/db.ts";
+import { migrate, openDatabase, type Db } from "../store/index.ts";
 import {
   DriverError,
   bundledModelCatalog,
@@ -19,9 +19,11 @@ import {
   type DriverSendInput,
   type DriverSendResult,
   type ModelCatalog,
+  ROUTER_COMMAND_MAX_RETRIES,
   ROUTER_PROJECT_SHOW_MAX_BYTES,
   ROUTER_PROJECT_SHOW_PER_TURN_MAX,
   ROUTER_REPLY_MAX_CHARS,
+  type RetryRouterCommandRequest,
   type RouterCommandAttachment,
   type RouterCommandRecord,
   type SessionId,
@@ -154,6 +156,8 @@ const AVAILABLE_CLAUDE_CATALOG: ModelCatalog = {
     { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", description: null, efforts: ["low", "medium", "high"] },
   ],
 };
+
+const firstRetry = (retryId: string): RetryRouterCommandRequest => ({ retryId, fromRetryId: null });
 
 describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only fast planning)", () => {
   let rootDir: string;
@@ -420,7 +424,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
     expect(offlineCmd.error).toContain("离线");
 
     remoteOnline = true;
-    const retried = await dispatcher.retryCommand(offlineCmd.id);
+    const retried = await dispatcher.retryCommand(offlineCmd.id, firstRetry("retry-offline"));
     expect(driver.started).toHaveLength(0);
     expect(retried.status).toBe("dispatched");
     expect(remoteOps.at(-1)).toMatchObject({
@@ -671,7 +675,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
 
     // Bring LinuxBox online and retry: local PM must STILL have only 1 user message, while remote receives its 1 op!
     remoteOnline = true;
-    const afterRetry = await dispatcher.retryCommand(partialCmd.id);
+    const afterRetry = await dispatcher.retryCommand(partialCmd.id, firstRetry("retry-partial"));
     expect(afterRetry.status).toBe("dispatched");
     expect(afterRetry.dispatched).toHaveLength(2);
     expect(
@@ -751,7 +755,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       const userMsgs = () =>
         ledger.messagesBefore(pm1ConvId, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "user");
       expect(userMsgs()).toHaveLength(1);
-      await expect(dispatcher.retryCommand(cmd.id)).rejects.toThrow(/只有失败状态/);
+      await expect(dispatcher.retryCommand(cmd.id, firstRetry("retry-delivered"))).rejects.toThrow(/只有失败状态/);
       expect(userMsgs()).toHaveLength(1);
       expect(ledger.getRouterCommand(cmd.id)?.status).toBe("dispatched");
       expectAssistantRowsSettled(db);
@@ -857,10 +861,11 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
             emit({ type: "agent.text", uuid: "u-r", text: "答复", at: Date.now() });
             emit({ type: "turn.ended", ok: true, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
           };
-          const accepted = await returnsPromptly(d.retryCommand(failed.id, { background: true }));
-          expect(accepted.status).toBe("planning");
+          const accepted = await returnsPromptly(d.retryCommand(failed.id, firstRetry("retry-bg"), { background: true }));
+          expect(accepted).toMatchObject({ status: "planning", plan: { retryId: "retry-bg" } });
           await vi.advanceTimersByTimeAsync(45_000);
           await vi.waitFor(() => expect(ledger.getRouterCommand(failed.id)?.status).toBe("answered"));
+          expect(ledger.getRouterCommand(failed.id)?.plan?.retryId).toBe("retry-bg");
         } finally {
           await d.close();
         }
@@ -982,7 +987,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       expect(failed.plan?.retryOps ?? []).toHaveLength(0);
 
       remoteRegistered = true;
-      const retried = await dispatcher.retryCommand(failed.id);
+      const retried = await dispatcher.retryCommand(failed.id, firstRetry("retry-target"));
       expect(driver.started).toHaveLength(0);
       expect(retried.status).toBe("dispatched");
       expect(retried.plan?.track).toBe("A");
@@ -1003,6 +1008,30 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       }
     });
 
+    it("routerOnly hands a leading @project to the Router turn instead of Track A, keeps it on retry, and refuses an explicit target", async () => {
+      const userMessages = () => ledger.messagesBefore(pm1ConvId, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "user").length;
+      const delivered = userMessages();
+      driver.onTurn = async ({ emit, input }) => {
+        emit({ type: "turn.ended", ok: false, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now(), error: { subtype: "error_during_execution", message: "boom" } });
+      };
+      const failed = await dispatcher.submitCommand({ clientId: "cid-router-only", text: "@agent-hub 检查一下构建脚本", routerOnly: true });
+      expect(driver.started).toHaveLength(1);
+      expect(failed.status).toBe("failed");
+      expect(failed.plan).toMatchObject({ track: "B", routerOnly: true });
+
+      driver.onTurn = answerTurn("构建脚本没问题");
+      const retried = await dispatcher.retryCommand(failed.id, firstRetry("retry-router-only"));
+      expect(driver.started).toHaveLength(2);
+      expect(retried.status).toBe("answered");
+      expect(retried.plan).toMatchObject({ track: "B", routerOnly: true });
+      expect(userMessages()).toBe(delivered);
+
+      await expect(
+        dispatcher.submitCommand({ clientId: "cid-router-only-target", text: "直转", routerOnly: true, target: { pmId: pm1Id } }),
+      ).rejects.toMatchObject({ code: "invalid" });
+      expect(driver.started).toHaveLength(2);
+    });
+
     it("带附件的指令：plan.attachments 有编号、文件名、类型、大小，轨道 B 收尾和重试后都还在", async () => {
       const att = await saveUpload(uploadsDir, "spec.md", Buffer.from("# Design"));
       const expected = [{ id: att.id, name: "spec.md", mime: att.mime, size: 8 }];
@@ -1015,7 +1044,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       expect(failed.plan?.attachmentIds).toEqual([att.id]);
 
       driver.onTurn = answerTurn("文件收到了");
-      const retried = await dispatcher.retryCommand(failed.id);
+      const retried = await dispatcher.retryCommand(failed.id, firstRetry("retry-attachments"));
       expect(retried.status).toBe("answered");
       expect(retried.plan?.attachments).toEqual(expected);
     });
@@ -1046,6 +1075,213 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       expect(cmd.status).toBe("failed");
       expect(cmd.plan?.errorRaw).toBe("error_during_execution: TypeError: Cannot read properties of undefined");
       expect(cmd.error).not.toContain("TypeError");
+    });
+  });
+  describe("重试编号：一个编号只跑一轮，只接得上指令最新的那一轮", () => {
+    const failTurn = async ({ input, emit }: { input: DriverSendInput; emit: (event: DriverEvent) => void }) => {
+      emit({ type: "turn.ended", ok: false, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now(), error: { subtype: "error_during_execution", message: "boom" } });
+    };
+
+    it("编号记进新一轮的 plan.retryId；这一轮又失败后同一编号再来直接拒绝，模型不多跑", async () => {
+      driver.onTurn = failTurn;
+      const failed = await dispatcher.submitCommand({ clientId: "cid-retry-once", text: "一直失败" });
+      expect(failed.status).toBe("failed");
+      expect(failed.plan?.retryId).toBeUndefined();
+
+      const retried = await dispatcher.retryCommand(failed.id, firstRetry("retry-1"));
+      expect(retried).toMatchObject({ status: "failed", plan: { retryId: "retry-1" } });
+      expect(driver.started).toHaveLength(2);
+
+      for (const again of [firstRetry("retry-1"), { retryId: "retry-1", fromRetryId: "retry-1" }]) {
+        await expect(dispatcher.retryCommand(failed.id, again)).rejects.toMatchObject({ code: "conflict" });
+      }
+      expect(driver.started).toHaveLength(2);
+      expect(ledger.getRouterCommand(failed.id)).toMatchObject({ status: "failed", plan: { retryId: "retry-1" } });
+    });
+
+    it("拿旧一轮的失败来重试被拒：fromRetryId 对不上指令现在这一轮就不跑，对上了才跑", async () => {
+      driver.onTurn = failTurn;
+      const failed = await dispatcher.submitCommand({ clientId: "cid-retry-stale", text: "旧页面上点重试" });
+      await dispatcher.retryCommand(failed.id, firstRetry("retry-a"));
+      for (const stale of [firstRetry("retry-b"), { retryId: "retry-b", fromRetryId: "retry-x" }]) {
+        await expect(dispatcher.retryCommand(failed.id, stale)).rejects.toMatchObject({ code: "conflict" });
+      }
+      expect(driver.started).toHaveLength(2);
+
+      driver.onTurn = answerTurn("这次好了");
+      const next = await dispatcher.retryCommand(failed.id, { retryId: "retry-b", fromRetryId: "retry-a" });
+      expect(next).toMatchObject({ status: "answered", plan: { retryId: "retry-b" } });
+      expect(driver.started).toHaveLength(3);
+    });
+
+    it("只补投失败目标的重试也记编号：同一编号再来，目标不会被再投一遍", async () => {
+      remoteOnline = false;
+      const failed = await dispatcher.submitCommand({ clientId: "cid-retry-ops", text: "跑基准", target: { deviceId: "dev-linux", pmId: 20 } });
+      expect(failed.plan?.retryOps).toHaveLength(1);
+      const retried = await dispatcher.retryCommand(failed.id, firstRetry("retry-ops"));
+      expect(retried).toMatchObject({ status: "failed", plan: { retryId: "retry-ops" } });
+      expect(retried.plan?.retryOps).toHaveLength(1);
+
+      remoteOnline = true;
+      await expect(dispatcher.retryCommand(failed.id, firstRetry("retry-ops"))).rejects.toMatchObject({ code: "conflict" });
+      expect(remoteOps).toHaveLength(0);
+      const next = await dispatcher.retryCommand(failed.id, { retryId: "retry-ops-2", fromRetryId: "retry-ops" });
+      expect(next).toMatchObject({ status: "dispatched", plan: { retryId: "retry-ops-2" } });
+      expect(remoteOps).toHaveLength(1);
+    });
+
+    it("cross-round reuse (A, B) is rejected after A and B fail, while a fresh (C, B) succeeds", async () => {
+      driver.onTurn = failTurn;
+      const failed = await dispatcher.submitCommand({ clientId: "cid-retry-cross-round", text: "跨轮复用旧编号" });
+      expect(failed.status).toBe("failed");
+
+      const runA = await dispatcher.retryCommand(failed.id, firstRetry("retry-A"));
+      expect(runA).toMatchObject({ status: "failed", plan: { retryId: "retry-A" } });
+      const runB = await dispatcher.retryCommand(failed.id, { retryId: "retry-B", fromRetryId: "retry-A" });
+      expect(runB).toMatchObject({ status: "failed", plan: { retryId: "retry-B" } });
+      expect(driver.started).toHaveLength(3);
+
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "retry-A", fromRetryId: "retry-B" })).rejects.toMatchObject({ code: "conflict" });
+      expect(driver.started).toHaveLength(3);
+      expect(ledger.getRouterCommand(failed.id)).toMatchObject({ status: "failed", plan: { retryId: "retry-B" } });
+
+      driver.onTurn = answerTurn("新编号成功");
+      const runC = await dispatcher.retryCommand(failed.id, { retryId: "retry-C", fromRetryId: "retry-B" });
+      expect(runC).toMatchObject({ status: "answered", plan: { retryId: "retry-C" } });
+      expect(driver.started).toHaveLength(4);
+    });
+
+    it("original request replay (B, A) stays rejected after attempting (A, B) and across daemon restart", async () => {
+      const dbFile = join(rootDir, "restart-retry.sqlite");
+      const dataHome = join(rootDir, "restart-data");
+      const restartPersonas = join(dataHome, "personas");
+      const restartPmHome = join(dataHome, "state", "pm-home");
+      mkdirSync(restartPersonas, { recursive: true });
+      mkdirSync(restartPmHome, { recursive: true });
+
+      const makeRestartStack = () => {
+        const restartDb = openDatabase(dbFile);
+        migrate(restartDb);
+        const restartLedger = createLedger(restartDb, {
+          personasDir: restartPersonas,
+          pmHomeRoot: restartPmHome,
+          dataHome,
+          uploadsDir,
+        });
+        const restartDriver = new FakeRouterDriver();
+        const restartGuard = createRouterSandboxGuard();
+        const restartLocalPort = createLocalTargetPort({
+          ledger: restartLedger,
+          deviceId: "dev-local",
+          deviceName: "MacStudio",
+          uploadsDir,
+          probeWorkspace: async () => ({ kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false }),
+        });
+        const restartDispatcher = createRouterDispatcher({
+          ledger: restartLedger,
+          runTurn: createRouterTurnRunner({
+            ledger: restartLedger,
+            driver: restartDriver,
+            tokens: createSessionTokens(),
+            purposes: createRouterTurnPurposes(),
+            stateDir,
+            launchDir,
+            cleanupGraceMs: 50,
+          }),
+          sandboxGuard: restartGuard,
+          targetRegistry: {
+            selfDeviceId: () => "dev-local",
+            getPort: (id: string) => (id === "self" || id === "dev-local" ? restartLocalPort : null),
+            listPorts: () => [restartLocalPort],
+            listAllDigests: async () => [{ port: restartLocalPort, result: await restartLocalPort.getDigest() }],
+          },
+          models: { list: async () => catalogs },
+          resolveAttachment: (id: string) => attachmentMetaOf(uploadsDir, id),
+          agentTimeoutMs: 1_000,
+        });
+        return { restartDb, restartLedger, restartDriver, restartDispatcher };
+      };
+
+      const boot1 = makeRestartStack();
+      let commandId: number;
+      try {
+        boot1.restartDriver.onTurn = failTurn;
+        const failed = await boot1.restartDispatcher.submitCommand({ clientId: "cid-replay-ba", text: "重启后仍拒绝旧编号与重放" });
+        commandId = failed.id;
+        await boot1.restartDispatcher.retryCommand(commandId, firstRetry("retry-A"));
+        await boot1.restartDispatcher.retryCommand(commandId, { retryId: "retry-B", fromRetryId: "retry-A" });
+        expect(boot1.restartDriver.started).toHaveLength(3);
+
+        const reusedA = await boot1.restartDispatcher
+          .retryCommand(commandId, { retryId: "retry-A", fromRetryId: "retry-B" })
+          .catch((err: unknown) => err);
+        const replayB = await boot1.restartDispatcher
+          .retryCommand(commandId, { retryId: "retry-B", fromRetryId: "retry-A" })
+          .catch((err: unknown) => err);
+        expect(replayB).toMatchObject({ code: "conflict" });
+        expect(reusedA).toMatchObject({ code: "conflict" });
+        expect(boot1.restartDriver.started).toHaveLength(3);
+        expect(boot1.restartLedger.getRouterCommand(commandId)).toMatchObject({ status: "failed", plan: { retryId: "retry-B" } });
+      } finally {
+        await boot1.restartDispatcher.close();
+        boot1.restartLedger.close();
+        boot1.restartDb.close();
+      }
+
+      const boot2 = makeRestartStack();
+      try {
+        boot2.restartLedger.recoverAfterRestart();
+        boot2.restartDriver.onTurn = failTurn;
+        await expect(boot2.restartDispatcher.retryCommand(commandId, { retryId: "retry-A", fromRetryId: "retry-B" })).rejects.toMatchObject({ code: "conflict" });
+        await expect(boot2.restartDispatcher.retryCommand(commandId, { retryId: "retry-B", fromRetryId: "retry-A" })).rejects.toMatchObject({ code: "conflict" });
+        expect(boot2.restartDriver.started).toHaveLength(0);
+        expect(boot2.restartLedger.getRouterCommand(commandId)).toMatchObject({ status: "failed", plan: { retryId: "retry-B" } });
+
+        boot2.restartDriver.onTurn = answerTurn("重启后用新编号成功");
+        const runC = await boot2.restartDispatcher.retryCommand(commandId, { retryId: "retry-C", fromRetryId: "retry-B" });
+        expect(runC).toMatchObject({ status: "answered", plan: { retryId: "retry-C" } });
+        expect(boot2.restartDriver.started).toHaveLength(1);
+      } finally {
+        await boot2.restartDispatcher.close();
+        boot2.restartLedger.close();
+        boot2.restartDb.close();
+      }
+    });
+
+    it("retryOps cross-round reuse (A, B) and replay (B, A) reject without re-sending target ops", async () => {
+      remoteOnline = false;
+      const failed = await dispatcher.submitCommand({
+        clientId: "cid-retry-ops-cross",
+        text: "跑基准",
+        target: { deviceId: "dev-linux", pmId: 20 },
+      });
+      await dispatcher.retryCommand(failed.id, firstRetry("ops-A"));
+      await dispatcher.retryCommand(failed.id, { retryId: "ops-B", fromRetryId: "ops-A" });
+
+      remoteOnline = true;
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "ops-A", fromRetryId: "ops-B" })).rejects.toMatchObject({ code: "conflict" });
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "ops-B", fromRetryId: "ops-A" })).rejects.toMatchObject({ code: "conflict" });
+      expect(remoteOps).toHaveLength(0);
+
+      const ok = await dispatcher.retryCommand(failed.id, { retryId: "ops-C", fromRetryId: "ops-B" });
+      expect(ok).toMatchObject({ status: "dispatched", plan: { retryId: "ops-C" } });
+      expect(remoteOps).toHaveLength(1);
+    });
+
+    it("rejects both reused and fresh retry ids once ROUTER_COMMAND_MAX_RETRIES is reached", async () => {
+      driver.onTurn = failTurn;
+      const failed = await dispatcher.submitCommand({ clientId: "cid-retry-cap", text: "触达重试上限" });
+      let prev: string | null = null;
+      for (let i = 1; i <= ROUTER_COMMAND_MAX_RETRIES; i++) {
+        const id = `cap-${i}`;
+        const run = await dispatcher.retryCommand(failed.id, { retryId: id, fromRetryId: prev });
+        expect(run).toMatchObject({ status: "failed", plan: { retryId: id } });
+        prev = id;
+      }
+      const startedBefore = driver.started.length;
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "cap-1", fromRetryId: prev })).rejects.toMatchObject({ code: "conflict" });
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "cap-over", fromRetryId: prev })).rejects.toMatchObject({ code: "conflict" });
+      expect(driver.started).toHaveLength(startedBefore);
     });
   });
   describe("hub dispatch project-show（docs/router-project-catalog-design.md）", () => {

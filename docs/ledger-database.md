@@ -24,11 +24,12 @@ Before `migrate()` runs anything, `loadMigrations()` checks the whole directory 
 
 To add a migration:
 
-1. Write `migrations/<next version>_<name>.sql`.
-2. From `migrations/`, run `shasum -a 256 <file> >> manifest.sha256`. If you skip this step, the startup error prints the exact line to append.
-3. If you edit the migration again before it merges, replace its line with a new checksum.
+1. Run `node scripts/migration-claims.ts --next` from the repository root.
+2. Write `migrations/<next version>_<name>.sql` with the printed number.
+3. From `migrations/`, run `shasum -a 256 <file> >> manifest.sha256`. If you skip this step, the startup error prints the exact line to append.
+4. If you edit the migration again before it merges, replace its line with a new checksum.
 
-Two pull requests that both take the next number append different lines to the end of `manifest.sha256`, so the second one to merge has a Git conflict. Resolve it by renumbering your migration. Never edit, rename, or renumber a migration that is already on `main`: ledgers that ran the old file never run it again. Add a new migration instead.
+If two open PRs claim the same version, the `migration-claims` check fails on the PR with the higher PR number. It names the other PR and the next free version. Renumber the migration and update its manifest entry. If a lower migration number is still waiting to merge, the manifest check requires that migration to land first. Never edit, rename, or renumber a migration that is already on `main`: ledgers that ran the old file never run it again. Add a new migration instead.
 
 ## Upgrade tests with released ledgers
 

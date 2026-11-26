@@ -9,6 +9,7 @@ import { REPO_ROOT } from "./stage-runtime-common.ts";
 
 /** Guards that scan the whole tree instead of importing what they check, so no import graph reaches them. */
 export const ALWAYS_RUN_TESTS = [
+  "scripts/ci-friction.test.ts",
   "scripts/ci-workflows.test.ts",
   "src/code-hygiene.test.ts",
   "src/daemon/resources/registry.test.ts",

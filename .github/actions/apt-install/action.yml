@@ -1,0 +1,85 @@
+name: Install Ubuntu apt packages
+description: Restore cached debs, then try the runner mirror and the Ubuntu archive.
+inputs:
+  cache-id:
+    description: Identifies the package set, including a dependency hash if the set changes with the lockfile.
+    required: true
+  probe:
+    description: Shell command that succeeds when all packages are installed.
+    required: true
+  install:
+    description: Shell command that installs the packages as root.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Read the runner image version
+      id: image
+      shell: bash
+      run: echo "version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - name: Cache apt packages
+      id: cache
+      if: steps.image.outputs.version != 'unknown'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/apt-debs-${{ inputs.cache-id }}
+        key: apt-debs-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.version }}-${{ inputs.cache-id }}
+
+    - name: Install from cache or apt
+      shell: bash
+      env:
+        DEBS: ${{ runner.temp }}/apt-debs-${{ inputs.cache-id }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        PROBE: ${{ inputs.probe }}
+        INSTALL: ${{ inputs.install }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        if timeout 15 bash -c "$PROBE"; then
+          echo "Required packages are already installed"
+          exit 0
+        fi
+
+        debs=("$DEBS"/*.deb)
+        if [[ "$CACHE_HIT" == true && ${#debs[@]} -gt 0 ]]; then
+          if sudo timeout --kill-after=5s 60 dpkg -i "${debs[@]}" && timeout 15 bash -c "$PROBE"; then
+            echo "Installed packages from cached debs"
+            exit 0
+          fi
+          echo "::warning::Cached debs did not install all packages; trying apt"
+        fi
+
+        apt_config="$(mktemp)"
+        trap 'rm -f "$apt_config"' EXIT
+        cat > "$apt_config" <<APT
+        Acquire::Retries "1";
+        Acquire::http::Timeout "15";
+        Acquire::https::Timeout "15";
+        APT::Keep-Downloaded-Packages "true";
+        APT
+        install_packages() {
+          sudo timeout --kill-after=5s 120 env "PATH=$PATH" APT_CONFIG="$apt_config" DEBIAN_FRONTEND=noninteractive bash -e -c "$INSTALL"
+        }
+
+        if ! install_packages; then
+          echo "::warning::Runner apt mirror failed; retrying with archive.ubuntu.com"
+          sources=(/etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list)
+          if [[ -f /etc/apt/sources.list ]]; then
+            sources+=(/etc/apt/sources.list)
+          fi
+          sudo sed -i -E \
+            -e 's#mirror\+file:/etc/apt/apt-mirrors\.txt#http://archive.ubuntu.com/ubuntu/#g' \
+            -e 's#https?://azure\.archive\.ubuntu\.com/ubuntu/?#http://archive.ubuntu.com/ubuntu/#g' \
+            "${sources[@]}"
+          install_packages
+        fi
+
+        timeout 15 bash -c "$PROBE"
+        archives=(/var/cache/apt/archives/*.deb)
+        if (( ${#archives[@]} > 0 )); then
+          mkdir -p "$DEBS"
+          cp "${archives[@]}" "$DEBS"/
+          echo "Saved ${#archives[@]} debs for the next run"
+        fi

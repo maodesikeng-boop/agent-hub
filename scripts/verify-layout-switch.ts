@@ -43,6 +43,9 @@ interface LayoutSwitchOptions extends Source {
 }
 
 const ROUTER_DRAFT = "Review this project after resizing";
+const TOP_BAR_ASK = "Where is the cache review?";
+const TOP_BAR_DRAFT = "Unsent top-bar draft";
+const TOP_BAR_FOLLOW_UP = "Unsent follow-up";
 const PERSONA_DRAFT = "Keep this draft behind Settings";
 const LOCAL: DeviceInfo = { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Office Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
 const REMOTE: DeviceInfo = { ...LOCAL, id: "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f", name: "Tokyo", self: false, link: "relay" };
@@ -90,6 +93,34 @@ async function routerTarget(ctx: CaseContext, sendNarrow = false) {
   const sent = requests.find((request) => request.path === "/api/router/commands")?.body;
   assert.deepEqual(sent, { ...sent as object, text: ROUTER_DRAFT, target: { pmId: 1, projectId: 1 } });
   await screenshot("sent");
+}
+
+async function topBarRouter({ page, open, rounds, requests }: CaseContext) {
+  await applyPatch(page, "router-quick-reply");
+  await open("#/c/1");
+  const input = page.getByRole("textbox", { name: "Message Router", exact: true });
+  await input.fill(TOP_BAR_ASK);
+  await input.press("Enter");
+  const popover = page.getByRole("dialog", { name: "Router", exact: true });
+  await popover.getByText(TOP_BAR_ASK, { exact: true }).waitFor();
+  await input.fill(TOP_BAR_DRAFT);
+  const reply = popover.getByRole("textbox", { name: "Reply to Router", exact: true });
+  await reply.fill(TOP_BAR_FOLLOW_UP);
+  const sameInput = await remember(input);
+  const sameReply = await remember(reply);
+  await rounds(async (narrow) => {
+    if (narrow) {
+      await input.waitFor({ state: "detached" });
+      await popover.waitFor({ state: "hidden" });
+      return;
+    }
+    assert.equal(await input.inputValue(), TOP_BAR_DRAFT);
+    await popover.getByText(TOP_BAR_ASK, { exact: true }).waitFor();
+    assert.equal(await reply.inputValue(), TOP_BAR_FOLLOW_UP);
+    await sameInput();
+    await sameReply();
+  });
+  assert.deepEqual(requests.filter((request) => request.path === "/api/router/commands").map((request) => (request.body as { text: string }).text), [TOP_BAR_ASK]);
 }
 
 async function personaBehind(ctx: CaseContext, closeNarrow = false) {
@@ -493,6 +524,7 @@ async function navigation({ page, open, rounds }: CaseContext) {
 const cases: Record<string, (context: CaseContext) => Promise<void>> = {
   "router-target": routerTarget,
   "router-target-mobile": (ctx) => routerTarget(ctx, true),
+  "topbar-router": topBarRouter,
   "persona-behind-settings": personaBehind,
   "persona-back-mobile": (ctx) => personaBehind(ctx, true),
   "router-tray": routerTray,
