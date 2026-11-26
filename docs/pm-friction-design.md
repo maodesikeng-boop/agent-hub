@@ -424,6 +424,7 @@ In a folder that is not a git repository, with Windows PowerShell, the help, err
 | Hub error codes change on both sides | No new error code. A `worker wait` timeout exits 0 and prints the state. |
 | Text shipped to agents holds in any project | S9 and `src/prompt-portability.test.ts`. |
 | Tests wait for events, not for time | `worker wait` tests use fake timers and ledger events. |
+| A result is matched to its request by an id both carry | The completed turn records the reply message ID on the schedule run it processed. The history reads that ID in the same session and conversation. |
 | Front-end selectors return stable references; interface changes come with a real-browser render | D1 option 2 shows card age; the age is computed in the leaf component from a clock, not in a selector, and ships with wide and narrow screenshots. |
 | Feishu code goes through `transport.ts` | The D1 digest uses the existing outbound queue. |
 
