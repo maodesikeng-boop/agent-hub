@@ -33,24 +33,34 @@ export const gateOptionsOf = (row: Pick<TaskNodeDbRow, "gate_options_json">): st
 
 export const hasText = (s: string | null | undefined): s is string => s !== null && s !== undefined && s.trim() !== "";
 
-type StoredTaskArtifact = TaskArtifact & { checkpointPending?: boolean; reviewStamp?: unknown };
+type StoredTaskArtifact = TaskArtifact & { checkpointPending?: boolean; checkpointRejectionClientId?: string; reviewStamp?: unknown };
 
-export function readStoredArtifact(raw: string | null): { artifact: TaskArtifact | null; checkpointPending: boolean } {
+export function readStoredArtifact(raw: string | null): {
+  artifact: TaskArtifact | null;
+  checkpointPending: boolean;
+  checkpointRejectionClientId?: string;
+} {
   const parsed = parseJsonOr<StoredTaskArtifact | null>(raw, null);
   if (parsed === null) return { artifact: null, checkpointPending: false };
-  const { checkpointPending, reviewStamp: _legacyReviewStamp, ...rest } = parsed;
+  const { checkpointPending, checkpointRejectionClientId, reviewStamp: _legacyReviewStamp, ...rest } = parsed;
   return {
     artifact: Object.keys(rest).length > 0 ? rest : null,
     checkpointPending: checkpointPending === true,
+    ...(checkpointRejectionClientId !== undefined ? { checkpointRejectionClientId } : {}),
   };
 }
 
-export function serializeArtifact(artifact: TaskArtifact | null | undefined, checkpointPending: boolean): string | null {
+export function serializeArtifact(artifact: TaskArtifact | null | undefined, checkpointPending: boolean, checkpointRejectionClientId?: string): string | null {
   const clean: StoredTaskArtifact = { ...(artifact ?? {}) };
   delete clean.checkpointPending;
+  delete clean.checkpointRejectionClientId;
   if (checkpointPending) clean.checkpointPending = true;
+  if (checkpointRejectionClientId !== undefined) clean.checkpointRejectionClientId = checkpointRejectionClientId;
   return Object.keys(clean).length > 0 ? JSON.stringify(clean) : null;
 }
+
+export const decisionWakeupClientIdOf = (row: Pick<TaskNodeDbRow, "decision_json" | "artifact_json">): string | undefined =>
+  decisionOf(row)?.clientId ?? readStoredArtifact(row.artifact_json).checkpointRejectionClientId;
 
 export const artifactWithoutCheckpoint = (row: Pick<TaskNodeDbRow, "artifact_json">): string | null =>
   serializeArtifact(readStoredArtifact(row.artifact_json).artifact, false);
