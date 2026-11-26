@@ -1,5 +1,6 @@
 import { memo } from "react";
-import { opticalLiftOf, SLIME_GRID, slimePaths, type SlimeLook, type SlimePath } from "../../shared/slimes.ts";
+import { lookKey, opticalLiftOf, silhouetteLiftOf, SLIME_GRID, slimePaths, type SlimeLook, type SlimePath } from "../../shared/slimes.ts";
+import { avatarTileFillOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
 import { Avatar as AvatarRoot } from "../ui/avatar.tsx";
 import { useSyncedLoop } from "../useSyncedLoop.ts";
@@ -28,7 +29,7 @@ export const Avatar = memo(function Avatar({
   return (
     <AvatarRoot
       style={{ width: rem, height: rem }}
-      className={cn("overflow-visible rounded-none", className)}
+      className={cn("overflow-visible [contain:size_layout]", className)}
       aria-hidden="true"
       data-neutral={neutral ? "true" : undefined}
       data-look={`${look.fruit}:${look.color}`}
@@ -44,5 +45,26 @@ export const Avatar = memo(function Avatar({
         <PixelPaths paths={slimePaths(look, kind)} />
       </svg>
     </AvatarRoot>
+  );
+});
+
+export const AvatarTile = memo(function AvatarTile({ look, className }: { look: SlimeLook; className?: string }) {
+  const lift = silhouetteLiftOf(look.fruit);
+  return (
+    <span
+      aria-hidden="true"
+      data-look={lookKey(look)}
+      className={cn("avatar-tile grid shrink-0 place-items-center rounded-sm", className)}
+      style={{ backgroundColor: avatarTileFillOf(look.color) }}
+    >
+      <svg
+        viewBox={`0 ${lift} ${SLIME_GRID} ${SLIME_GRID}`}
+        shapeRendering="crispEdges"
+        style={lift === 0 ? undefined : { transformOrigin: `50% ${((SLIME_GRID - lift) / SLIME_GRID) * 100}%` }}
+        className="slime-pet select-none"
+      >
+        <PixelPaths paths={slimePaths(look, "main")} />
+      </svg>
+    </span>
   );
 });

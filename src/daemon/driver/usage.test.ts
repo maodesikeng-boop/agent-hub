@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
-import { TurnUsage } from "./usage.ts";
+import { applyAcpUsageUpdate, mergeAcpPromptUsage } from "../../vendors/_common/acp/protocol.ts";
+import { finishAgyUsage, observeAgyUsage } from "../../vendors/agy/protocol.ts";
+import { TurnUsage, positiveContextTokens, preservePositiveContext } from "./usage.ts";
 
 const usage = (input: number, cacheRead: number, cacheWrite: number, output: number) => ({
   input_tokens: input,
@@ -63,5 +65,44 @@ describe("TurnUsage（实时 token 累计）", () => {
     const live = t.observe(assistant("m1", usage(2, 500, 5, 3)), EMPTY_TOKEN_USAGE)!;
     t.reset();
     expect(t.finish(live, usage(1, 1, 1, 1))).toEqual({ input: 3, cacheRead: 501, cacheWrite: 6, output: 4, context: live.context });
+  });
+});
+
+describe("historical context across empty and compacted turns", () => {
+  const previous = { ...EMPTY_TOKEN_USAGE, input: 25, context: 661_000 };
+
+  it("accepts only finite positive context token counts and keeps the previous count on missing measurements", () => {
+    for (const missing of [0, -1, Number.NaN, Infinity, "16", null, undefined, 0.2]) {
+      expect(positiveContextTokens(missing)).toBeNull();
+    }
+    expect(positiveContextTokens(16.7)).toBe(16);
+    expect(preservePositiveContext(0, 661_000)).toBe(661_000);
+    expect(preservePositiveContext(null, 661_000)).toBe(661_000);
+    expect(preservePositiveContext(800, 661_000)).toBe(800);
+  });
+
+  it("keeps previous context through zero and missing Claude error usage and accepts a smaller real count", () => {
+    const turn = new TurnUsage();
+    expect(turn.observe(assistant("error", usage(0, 0, 0, 0)), previous)).toBeNull();
+    expect(turn.finish(previous, undefined)).toEqual(previous);
+    const live = turn.observe(assistant("compacted", usage(2, 300, 0, 1)), previous)!;
+    expect(live.context).toBe(302);
+    expect(turn.observe(assistant("error", usage(0, 0, 0, 0)), live)).toBeNull();
+    expect(turn.finish(previous, usage(2, 300, 0, 1)).context).toBe(302);
+  });
+
+  it("keeps Agy historical context when both step and result usage carry zeros", () => {
+    const turn = new TurnUsage();
+    const empty = { input_tokens: 0, output_tokens: 0 };
+    const live = observeAgyUsage(turn, "failed", empty, previous);
+    expect(live).toBeNull();
+    expect(finishAgyUsage(turn, previous, empty, live)).toEqual(previous);
+  });
+
+  it("keeps ACP historical context through zero live and prompt measurements", () => {
+    expect(applyAcpUsageUpdate(previous, { used: 0, size: 900_000 })).toBeNull();
+    expect(mergeAcpPromptUsage(previous, previous, null, 0)).toBeNull();
+    expect(mergeAcpPromptUsage(previous, previous, { inputTokens: 0, outputTokens: 1, totalTokens: 1 }, 0)).toEqual({ ...previous, output: 1 });
+    expect(applyAcpUsageUpdate(previous, { used: 20_000, size: 900_000 })?.context).toBe(20_000);
   });
 });

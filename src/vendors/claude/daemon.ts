@@ -4,6 +4,7 @@ import { claudeCatalogProbe, createClaudeCatalogSource, queryClaudeInitialize } 
 import { claudeComposerBase, createClaudeComposer } from "./composer.ts";
 import { createClaudeDriver } from "./driver.ts";
 import { CLAUDE_FORKERS } from "./handover.ts";
+import { claudeQuotaScope, queryClaudeQuota } from "./quota.ts";
 import { buildSessionSettings, sessionEnv } from "./settings.ts";
 import { claudeSetupAdapter } from "./setup.ts";
 import { claudeSyncAdapter } from "./sync.ts";
@@ -19,4 +20,6 @@ export default defineVendorDaemon({
   launchFiles: (input) => ({ settings: JSON.stringify(buildSessionSettings(input), null, 2) + "\n", env: sessionEnv(input.role) }),
   sync: claudeSyncAdapter,
   setup: claudeSetupAdapter,
+  quotaScope: claudeQuotaScope,
+  queryQuota: queryClaudeQuota,
 });

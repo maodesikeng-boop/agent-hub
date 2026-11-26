@@ -4,10 +4,11 @@ import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import { pushSlimGraphIn } from "./task-graphs/store.ts";
 import { createIn } from "./task-graphs/create.ts";
 import { enrichDeliveryNoteMessage, graphDeliveryProbeTarget, graphPrTargets } from "./task-graphs/delivery.ts";
-import { askOnStepIn, decideIn, decideNode } from "./task-graphs/gate.ts";
-import { cancelGraph, cancelIn, doneIn, finishIn, list, listProjectHistory, show, skipIn, skipNode } from "./task-graphs/lifecycle.ts";
+import { askOnStepIn, closeStepAskIn, decideIn, decideNode } from "./task-graphs/gate.ts";
+import { cancelGraph, cancelIn, doneIn, finishIn, list, show, skipIn, skipNode } from "./task-graphs/lifecycle.ts";
 import {
   activeSnapshotGraphs,
   graphAutoDispatchVendors,
@@ -16,7 +17,6 @@ import {
   purgeExpiredBatch,
 } from "./task-graphs/overview.ts";
 import { patchIn } from "./task-graphs/patch.ts";
-import { isLatestStepWorker, recordReviewStampIn } from "./task-graphs/review-stamp.ts";
 import { onWorkerTurnReportIn } from "./task-graphs/turn-report.ts";
 import type { TaskGraphCtx, TaskGraphOptions } from "./task-graphs/types.ts";
 import {
@@ -28,8 +28,8 @@ import {
   onWorkerUserBlockedIn,
   prepareWorkerBind,
   releaseUserBlockedStepsIn,
-  workerGraphForkBase,
   workerGraphStatus,
+  workerGraphWorkspacePlan,
 } from "./task-graphs/worker-hooks.ts";
 
 export type { StepWorkspacePlan, TaskGraphWorkersBridge, WorkerBindTarget } from "./task-graphs/types.ts";
@@ -51,6 +51,7 @@ export function createLedgerTaskGraphs(
     write: ctx.write,
     enqueue: ctx.enqueue,
     modelCatalog: ctx.modelCatalog,
+    modelShortLabel: ctx.modelShortLabel,
     sessions,
     messages,
     persona,
@@ -67,10 +68,12 @@ export function createLedgerTaskGraphs(
     (...args: A): R =>
       fn(g.db, ...args);
   return {
+    publishBranchChange: bind(pushSlimGraphIn),
     createIn: bind(createIn),
     show: bind(show),
     list: bind(list),
     askOnStepIn: bind(askOnStepIn),
+    closeStepAskIn: bind(closeStepAskIn),
     patchIn: bind(patchIn),
     doneIn: bind(doneIn),
     decideIn: bind(decideIn),
@@ -84,7 +87,6 @@ export function createLedgerTaskGraphs(
     decideNode: bind(decideNode),
     skipNode: bind(skipNode),
     cancelGraph: bind(cancelGraph),
-    listProjectHistory: bind(listProjectHistory),
     prepareWorkerBind: bind(prepareWorkerBind),
     bindWorkerStartedIn: bind(bindWorkerStartedIn),
     onWorkerTurnReportIn: bind(onWorkerTurnReportIn),
@@ -94,10 +96,8 @@ export function createLedgerTaskGraphs(
     notifyUserBlockedStepsIn: bind(notifyUserBlockedStepsIn),
     onWorkerResumedIn: bind(onWorkerResumedIn),
     onWorkerEndedIn: bind(onWorkerEndedIn),
-    workerGraphForkBase: bind(workerGraphForkBase),
+    workerGraphWorkspacePlan: bind(workerGraphWorkspacePlan),
     workerGraphStatus: bind(workerGraphStatus),
-    recordReviewStampIn: bind(recordReviewStampIn),
-    isLatestStepWorker: bind(isLatestStepWorker),
     activeSnapshotGraphs: bind(activeSnapshotGraphs),
     pmStatusGraphs: bind(pmStatusGraphs),
     liveHandoverSection: bind(liveHandoverSection),

@@ -19,7 +19,7 @@ import type { DeviceSettings } from "../settings-model.ts";
 import { PROVIDERS_GUIDED_KEY } from "../shell-model.ts";
 import { initialState } from "../state.ts";
 import { FakeApi, installFakeWebSocket, makeSnapshot } from "../test-utils.ts";
-import { SettingsDialog } from "./SettingsDialog.tsx";
+import { SettingsDialogFixture } from "./settings-dialog-fixture.tsx";
 
 const notify: NotifySettings = { permission: "granted", enabled: false, setEnabled: vi.fn(async () => {}) };
 
@@ -209,7 +209,7 @@ describe("桌面端 Settings → Providers", () => {
     api.providersStatus = () => ({ status: 200, body: mixed });
     api.install();
 
-    render(<SettingsDialog open defaultSection="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const panel = await screen.findByRole("tabpanel", { name: "Providers" });
     await within(panel).findByText("alice@example.com");
 
@@ -262,7 +262,7 @@ describe("桌面端 Settings → Providers", () => {
     };
     api.install();
 
-    render(<SettingsDialog open defaultSection="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const row = await screen.findByTestId(`provider-row-${targetVendor}`);
 
     // 初始静止态不轮询
@@ -350,7 +350,22 @@ describe("桌面端 Settings → Providers", () => {
   it("多设备 Computer 切换至远端 Tokyo：自动走 /d/<tokyo>/api/providers/*，远端默认选中 Device code，也支持 Browser 回环回调粘贴与多子模型商 API Key", async () => {
     const user = userEvent.setup();
     const api = new FakeApi(makeSnapshot({}));
-    const mixed = makeMixedProviders();
+    let mixed = makeMixedProviders();
+    const recordProvider = (item: ProviderStatusItem) => {
+      mixed = { ...mixed, providers: mixed.providers.map((p) => p.vendor === item.vendor ? { ...p, authFlow: item.authFlow } : p) };
+    };
+    const start = api.providerAuthStart;
+    const cancel = api.providerAuthCancel;
+    api.providerAuthStart = async (...args) => {
+      const reply = await start(...args);
+      recordProvider(reply.body as ProviderStatusItem);
+      return reply;
+    };
+    api.providerAuthCancel = async (...args) => {
+      const reply = await cancel(...args);
+      recordProvider(reply.body as ProviderStatusItem);
+      return reply;
+    };
     api.providersStatus = () => ({ status: 200, body: mixed });
     api.install();
     vi.spyOn(window, "open").mockImplementation(() => null);
@@ -361,9 +376,9 @@ describe("桌面端 Settings → Providers", () => {
     };
 
     render(
-      <SettingsDialog
+      <SettingsDialogFixture
         open
-        defaultSection="providers"
+        section="providers"
         defaultProviderDevice={TOKYO_ID}
         onOpenChange={() => {}}
         notify={notify}
@@ -375,7 +390,7 @@ describe("桌面端 Settings → Providers", () => {
       expect(api.callsTo("GET", new RegExp(`^/d/${TOKYO_ID}/api/providers$`))).toHaveLength(1),
     );
     const computerSelect = within(panel).getByRole("combobox", { name: "Computer" });
-    expect(computerSelect).toHaveDisplayValue("Tokyo");
+    expect(computerSelect).toHaveTextContent("Tokyo");
 
     // 1. 远端打开 preferDeviceCodeWhenRemote 的厂商（v2）→ 默认选中 Device code
     const v2 = AGENT_VENDORS[2]!;
@@ -411,10 +426,13 @@ describe("桌面端 Settings → Providers", () => {
     await user.click(within(within(panel).getByTestId(`provider-row-${v3}`)).getByRole("button", { name: /Sign in/ }));
     dialog = await screen.findByRole("dialog", { name: `Sign in to ${vendorLabel(v3)}` });
     const subSelect = within(dialog).getByRole("combobox", { name: "Model provider" });
-    expect(within(subSelect).getAllByRole("option").map((o) => o.textContent)).toEqual([
+    await user.click(subSelect);
+    const subListbox = await screen.findByRole("listbox");
+    expect(within(subListbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "DeepSeek",
       "OpenAI Codex (Configured)",
     ]);
+    await user.keyboard("{Escape}");
     await user.type(within(dialog).getByPlaceholderText("sk-..."), "sk-live-secret-key");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
@@ -438,7 +456,7 @@ describe("桌面端 Settings → Providers", () => {
     api.providersStatus = () => ({ status: 200, body: winMissingGit });
     api.install();
 
-    render(<SettingsDialog open defaultSection="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const panel = await screen.findByRole("tabpanel", { name: "Providers" });
     const envRegion = await within(panel).findByRole("region", { name: "Environment" });
     expect(within(envRegion).getByText("Git")).toBeVisible();
@@ -448,9 +466,9 @@ describe("桌面端 Settings → Providers", () => {
     // 重新渲染测试 Account… 登出
     api.providersStatus = () => ({ status: 200, body: makeMixedProviders() });
     resetQueryClient();
-    const { unmount } = render(<SettingsDialog open defaultSection="providers" onOpenChange={() => {}} notify={notify} />);
+    const { unmount } = render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     unmount();
-    render(<SettingsDialog open defaultSection="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const panel2 = await screen.findByRole("tabpanel", { name: "Providers" });
     const v0 = AGENT_VENDORS[0]!;
     await user.click(within(within(panel2).getByTestId(`provider-row-${v0}`)).getByRole("button", { name: /Account/ }));
@@ -483,14 +501,16 @@ describe("桌面端 Settings → Providers", () => {
     expect(within(tablist).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
     expect(localStorage.getItem(PROVIDERS_GUIDED_KEY)).toBe("1");
 
-    // 关掉设置弹窗，打开 New project manager：0 家可用时自动展开 More settings 展示 Manage providers…
+    // 关掉设置弹窗，在单机常驻的本机格子切出工作区，打开 New project manager：0 家可用时自动展开 More settings，厂商下拉末尾带 Add provider…
     await user.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("tablist", { name: "Settings categories" })).toBeNull());
 
+    await user.click(screen.getByRole("button", { name: /^This computer/ }));
     await user.click(screen.getByRole("button", { name: "New project manager" }));
     const newPmDialog = await screen.findByRole("dialog", { name: "New project manager" });
-    const manageBtn = await within(newPmDialog).findByRole("button", { name: "Manage providers…" });
-    await user.click(manageBtn);
+    const providerSelect = await within(newPmDialog).findByRole("combobox", { name: "Provider" });
+    await user.click(providerSelect);
+    await user.click(await screen.findByRole("option", { name: "Add provider…" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "New project manager" })).toBeNull());
     const reopenedTablist = await screen.findByRole("tablist", { name: "Settings categories" });
@@ -518,7 +538,7 @@ describe("桌面端 Settings → Providers", () => {
     api.providersStatus = () => ({ status: 200, body });
     api.install();
 
-    render(<SettingsDialog open defaultSection="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const panel = await screen.findByRole("tabpanel", { name: "Providers" });
     const row = await within(panel).findByTestId(`provider-row-${v0}`);
     expect(row.querySelector("[data-tone='caution']")).not.toBeNull();

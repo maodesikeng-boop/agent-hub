@@ -41,14 +41,20 @@ function source(entries: Record<string, DraftValue>) {
 
 describe("草稿存进 sessionStorage、刷新后认领回来", () => {
   it("存所有非空草稿（含 /hub:worker 标签），刷新后按键认领一次；空草稿盖掉同键旧存档", () => {
-    source({ "local:1": { text: "写了一半", pick: null }, "local:router": { text: "", pick: PICK }, "local:2": { text: "", pick: null } });
+    source({
+      "local:1": { text: "写了一半", pick: null, target: null },
+      "local:router": { text: "", pick: PICK, target: null },
+      router: { text: "", pick: null, target: "local:1" },
+      "local:2": { text: "", pick: null, target: null },
+    });
     saveDrafts();
-    expect(stored()?.drafts.map((d) => d.key).sort()).toEqual(["local:1", "local:router"]);
+    expect(stored()?.drafts.map((d) => d.key).sort()).toEqual(["local:1", "local:router", "router"]);
 
     resetAutoReloadForTests(); // 模拟刷新：内存清空，sessionStorage 还在
-    expect(takeRestoredDraft("local:1")).toEqual({ text: "写了一半", pick: null });
+    expect(takeRestoredDraft("local:1")).toEqual({ text: "写了一半", pick: null, target: null });
     expect(takeRestoredDraft("local:1")).toBeNull();
-    expect(takeRestoredDraft("local:router")).toEqual({ text: "", pick: PICK });
+    expect(takeRestoredDraft("local:router")).toEqual({ text: "", pick: PICK, target: null });
+    expect(takeRestoredDraft("router")).toEqual({ text: "", pick: null, target: "local:1" });
 
     // 没认领的旧存档下次存的时候保留；被清空的键盖掉
     window.sessionStorage.setItem(
@@ -56,7 +62,7 @@ describe("草稿存进 sessionStorage、刷新后认领回来", () => {
       JSON.stringify({ drafts: [{ key: "local:9", text: "没打开过的对话", pick: null, savedAt: Date.now() }, { key: "local:3", text: "旧", pick: null, savedAt: Date.now() }] }),
     );
     resetAutoReloadForTests();
-    source({ "local:3": { text: "", pick: null } });
+    source({ "local:3": { text: "", pick: null, target: null } });
     saveDrafts();
     expect(stored()?.drafts.map((d) => d.key)).toEqual(["local:9"]);
   });
@@ -70,12 +76,14 @@ describe("草稿存进 sessionStorage、刷新后认领回来", () => {
           { key: "old", text: "过期", pick: null, savedAt: now - AUTO_RELOAD_DRAFT_TTL_MS - 1 },
           { key: "bad", text: 3, pick: null, savedAt: now },
           { key: "badpick", text: "x", pick: { vendor: "nope" }, savedAt: now },
+          { key: "badtarget", text: "x", pick: null, target: 5, savedAt: now },
           { key: "ok", text: "留着", pick: null, savedAt: now },
         ],
       }),
     );
     expect(takeRestoredDraft("old")).toBeNull();
     expect(stored()?.drafts.map((d) => d.key)).toEqual(["ok"]);
+    expect(takeRestoredDraft("ok")).toEqual({ text: "留着", pick: null, target: null });
     window.sessionStorage.setItem(DRAFTS_STORAGE_KEY, "{坏的");
     resetAutoReloadForTests();
     expect(takeRestoredDraft("ok")).toBeNull();
@@ -84,7 +92,7 @@ describe("草稿存进 sessionStorage、刷新后认领回来", () => {
 
   it("未认领草稿在页面长期开着后过期，不再恢复", () => {
     vi.useFakeTimers();
-    source({ a: { text: "a", pick: null }, b: { text: "b", pick: null } });
+    source({ a: { text: "a", pick: null, target: null }, b: { text: "b", pick: null, target: null } });
     saveDrafts();
     resetAutoReloadForTests();
     expect(takeRestoredDraft("a")?.text).toBe("a");
@@ -94,7 +102,7 @@ describe("草稿存进 sessionStorage、刷新后认领回来", () => {
 
   it("条数、字节有上限：最近的优先", () => {
     const many: Record<string, DraftValue> = {};
-    for (let i = 0; i < AUTO_RELOAD_MAX_DRAFTS + 10; i++) many[`k${i}`] = { text: `草稿 ${i}`, pick: null };
+    for (let i = 0; i < AUTO_RELOAD_MAX_DRAFTS + 10; i++) many[`k${i}`] = { text: `草稿 ${i}`, pick: null, target: null };
     const off = source(many);
     saveDrafts();
     expect(stored()?.drafts).toHaveLength(AUTO_RELOAD_MAX_DRAFTS);
@@ -103,7 +111,7 @@ describe("草稿存进 sessionStorage、刷新后认领回来", () => {
     resetAutoReloadForTests();
     window.sessionStorage.clear();
     const big = "长".repeat(Math.ceil(AUTO_RELOAD_MAX_DRAFT_BYTES / 3 / 3));
-    source({ a: { text: big, pick: null }, b: { text: big, pick: null }, c: { text: big, pick: null } });
+    source({ a: { text: big, pick: null, target: null }, b: { text: big, pick: null, target: null }, c: { text: big, pick: null, target: null } });
     saveDrafts();
     const raw = window.sessionStorage.getItem(DRAFTS_STORAGE_KEY) ?? "";
     expect(stored()?.drafts).toHaveLength(2);
@@ -116,6 +124,7 @@ describe("草稿存进 sessionStorage、刷新后认领回来", () => {
       const slot = first.result.current.of("local:7");
       slot.set("刷新前没发出去的");
       slot.setPick(PICK);
+      first.result.current.of("router").setTarget("local:7");
     });
     saveDrafts();
     first.unmount();
@@ -125,6 +134,7 @@ describe("草稿存进 sessionStorage、刷新后认领回来", () => {
     const slot = second.result.current.of("local:7");
     expect(slot.get()).toBe("刷新前没发出去的");
     expect(slot.getPick()).toEqual(PICK);
+    expect(second.result.current.of("router").getTarget()).toBe("local:7");
     expect(second.result.current.of("local:8").get()).toBe("");
     second.unmount();
   });
@@ -216,7 +226,7 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
       undefined,
       { reload, recheckMs: 10 },
     );
-    source({ "local:1": { text: "重启时正在写的", pick: null } });
+    source({ "local:1": { text: "重启时正在写的", pick: null, target: null } });
     store.start();
     await vi.waitFor(() => expect(store.hub(LOCAL_DEVICE).state.phase).toBe("ready"));
     FakeWebSocket.last.open();
@@ -290,6 +300,7 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
       "peer-device",
       fakeClient("/d/peer-device", () => makeSnapshot({ seq: 1, bootId: snapBoot })),
       () => {},
+      undefined,
       undefined,
       (bootId) => reloader.observeBoot(bootId),
     );

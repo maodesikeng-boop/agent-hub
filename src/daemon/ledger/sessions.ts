@@ -12,12 +12,15 @@ import type {
   SessionState,
   WorkerId,
 } from "../../shared/domain.ts";
+import type { AgentTextDeltaEvent, BackgroundTaskInfo } from "../../shared/driver.ts";
 import { clearRateLimitRejection, isQuotaExhausted } from "../../shared/domain.ts";
 import {
   MAX_STREAMING_TEXT_CHARS,
   MIN_TOOL_STEP_VISIBLE_MS,
   STREAMING_TEXT_THROTTLE_MS,
+  SESSION_STEPS_KEEP,
 } from "../../shared/limits.ts";
+import { deleteLegacyPendingSessionSend } from "../actions/index.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -31,15 +34,51 @@ export interface LiveSession {
   rateLimitReported?: boolean;
   apiRetry?: ApiRetryInfo | null;
   step?: AgentStep | null;
-  openTools?: Array<{ toolUseId: string; step: AgentStep }>;
+  stepStartedAt?: number | null;
+  openTools?: LiveTool[];
   backgroundTasks?: number;
+  backgroundTaskList?: readonly BackgroundTaskInfo[];
   streamingText?: string;
   /** Cached code point count so each delta does not re-count the whole string. */
   streamingChars?: number;
   toolStepAt?: number;
 }
 
+interface LiveTool {
+  toolUseId: string;
+  step: ToolStep;
+  startedAt: number | null;
+}
+
+type ToolStep = Extract<AgentStep, { type: "tool_use" }>;
+
 const THINKING: AgentStep = { type: "thinking" };
+
+const RECOVER_MESSAGES_SQL = `
+SELECT m.id, m.session_id, m.sender, m.status FROM messages m
+JOIN agent_sessions s ON s.id = m.session_id
+LEFT JOIN workers w ON w.id = s.worker_id
+LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
+WHERE pa.pm_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.worker_id = w.id AND a.status = 'pending')
+  AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
+  AND NOT EXISTS (
+    SELECT 1 FROM turn_completions c, json_each(c.event, '$.messageIds') ids
+    WHERE c.session_id = m.session_id AND ids.value = m.id
+      AND NOT (COALESCE(json_extract(c.event, '$.shutdown'), 0) = 1 AND (s.role = 'worker' OR m.sender = 'system'))
+  )
+  AND (
+    m.status IN ('delivered', 'processing')
+    OR (m.status = 'queued' AND NOT EXISTS (
+      SELECT 1 FROM actions a
+      WHERE a.type = 'session.send' AND a.status IN ('pending', 'running')
+        AND (
+          a.dedupe_key = (CAST(m.session_id AS TEXT) || ':' || CAST(m.id AS TEXT))
+          OR (a.dedupe_key = CAST(m.id AS TEXT) AND json_extract(a.params, '$.sessionId') = m.session_id)
+        )
+    ))
+  )
+ORDER BY m.id`;
 
 function sameToolStep(a: AgentStep | null | undefined, b: AgentStep | null | undefined): boolean {
   if (a?.type !== "tool_use" || b?.type !== "tool_use" || a.name !== b.name) return false;
@@ -50,21 +89,34 @@ function sameToolStep(a: AgentStep | null | undefined, b: AgentStep | null | und
 }
 
 /** Stopping and preparing states are never overwritten. */
-export const working = (currentTool: string | null, step?: AgentStep) => (l: LiveSession) => {
+export const working = (at: number | null, currentTool: string | null, step?: AgentStep) => (l: LiveSession) => {
   if (l.activity !== "stopping" && l.activity !== "preparing") l.activity = "working";
   l.currentTool = currentTool;
   l.apiRetry = null;
-  l.step = step ?? l.step ?? THINKING;
+  const next = step ?? l.step ?? THINKING;
+  if (l.step?.type !== next.type || l.stepStartedAt === undefined) l.stepStartedAt = at;
+  l.step = next;
 };
 
-export const toolStarted = (currentTool: string, toolUseId: string, step: AgentStep) => (l: LiveSession) => {
-  working(currentTool, step)(l);
-  l.openTools = [...(l.openTools ?? []).filter((t) => t.toolUseId !== toolUseId), { toolUseId, step }];
+function shownTool(tools: readonly LiveTool[] | undefined): LiveTool | undefined {
+  return tools?.findLast((tool) => tool.startedAt !== null) ?? tools?.at(-1);
+}
+
+const showTool = (l: LiveSession, tool: LiveTool) => {
+  working(tool.startedAt, tool.step.name, tool.step)(l);
+  l.stepStartedAt = tool.startedAt;
 };
 
-export const toolFinished = (toolUseIds: string[]) => (l: LiveSession) => {
-  l.openTools = (l.openTools ?? []).filter((t) => !toolUseIds.includes(t.toolUseId));
-  working(l.currentTool, l.openTools.at(-1)?.step ?? THINKING)(l);
+export const toolStarted = (toolUseId: string, step: ToolStep, startedAt: number | null) => (l: LiveSession) => {
+  const tool = { toolUseId, step, startedAt };
+  l.openTools = [...(l.openTools ?? []).filter((t) => t.toolUseId !== toolUseId), tool].slice(-SESSION_STEPS_KEEP);
+  showTool(l, shownTool(l.openTools) ?? tool);
+};
+
+export const toolRunning = (toolUseId: string, startedAt: number) => (l: LiveSession): void => {
+  const tool = l.openTools?.find((t) => t.toolUseId === toolUseId);
+  if (!tool || tool.startedAt !== null) return;
+  toolStarted(toolUseId, tool.step, startedAt)(l);
 };
 
 export const clearStreaming = (l: LiveSession) => {
@@ -77,6 +129,7 @@ export const idle = (l: LiveSession) => {
   l.currentTool = null;
   l.apiRetry = null;
   l.step = null;
+  l.stepStartedAt = null;
   l.openTools = [];
   l.toolStepAt = undefined;
   clearStreaming(l);
@@ -185,6 +238,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
       model: row.model,
       effort: row.effort,
       step: l.step ?? null,
+      stepStartedAt: l.stepStartedAt ?? null,
       lastEventAt: row.lastEventAt,
       ...(l.streamingText ? { streamingText: l.streamingText } : {}),
     };
@@ -265,10 +319,11 @@ export function createLedgerSessions(ctx: LedgerContext) {
 
     if (preview.toolUseId !== undefined && next.openTools?.some((t) => t.toolUseId === preview.toolUseId)) {
       next.openTools = next.openTools.map((t) => (t.toolUseId === preview.toolUseId ? { ...t, step } : t));
-      const latest = next.openTools.at(-1)!;
-      working(latest.step.type === "tool_use" ? latest.step.name : preview.name, latest.step)(next);
+      const tool = shownTool(next.openTools);
+      if (tool) showTool(next, tool);
     } else {
-      working(preview.name, step)(next);
+      working(now(), preview.name, step)(next);
+      next.stepStartedAt = null;
     }
 
     if (!sameToolStep(prev.step, next.step) || next.toolStepAt === undefined) {
@@ -278,14 +333,17 @@ export function createLedgerSessions(ctx: LedgerContext) {
     flushSessionStatusNow(sessionId, session);
   };
 
-  const finishTools = (p: Pending, sessionId: SessionId, toolUseIds: string[]) => {
+  const finishTools = (p: Pending, sessionId: SessionId, toolUseIds: string[], at: number) => {
     const prev = liveOf(sessionId);
-    const remaining = (prev.openTools ?? []).filter((t) => !toolUseIds.includes(t.toolUseId));
-    if (remaining.length > 0) {
+    const open = prev.openTools ?? [];
+    const remaining = open.filter((t) => !toolUseIds.includes(t.toolUseId));
+    if (remaining.length === open.length) return;
+    const tool = shownTool(remaining);
+    if (tool) {
       updateLive(p, sessionId, (l) => {
         clearStreaming(l);
         l.openTools = remaining;
-        working(l.currentTool, remaining.at(-1)!.step)(l);
+        showTool(l, tool);
       });
       return;
     }
@@ -298,7 +356,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
       updateLive(p, sessionId, (l) => {
         clearStreaming(l);
         l.openTools = [];
-        working(l.currentTool, heldStep)(l);
+        working(at, l.currentTool, heldStep)(l);
         l.toolStepAt = shownAt;
       });
       cancelToolHoldTimer(sessionId);
@@ -320,7 +378,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
           const row = safeGetSession(sessionId);
           if (row === null) return;
           // A dwell timer is not a new event, so other states such as apiRetry stay untouched.
-          live.set(sessionId, { ...cur, step: THINKING, toolStepAt: undefined });
+          live.set(sessionId, { ...cur, step: THINKING, stepStartedAt: now(), toolStepAt: undefined });
           flushSessionStatusNow(sessionId, row);
         }, delay),
       );
@@ -330,13 +388,13 @@ export function createLedgerSessions(ctx: LedgerContext) {
     updateLive(p, sessionId, (l) => {
       clearStreaming(l);
       l.openTools = [];
-      working(l.currentTool, THINKING)(l);
+      working(at, l.currentTool, THINKING)(l);
     });
   };
 
   /** Streaming text deltas are throttled broadcasts of in-memory state and never write to SQLite. */
-  const applyStreamingDelta = (session: AgentSessionRow, delta: string, reset?: boolean) => {
-    if (delta === "" && !reset) return;
+  const applyStreamingDelta = (session: AgentSessionRow, { delta, reset, startedAt, at }: AgentTextDeltaEvent) => {
+    if (delta === "" && !reset && startedAt === undefined) return;
     const sessionId = session.id;
     if (isHiddenStreamingSession(session)) {
       return;
@@ -364,14 +422,16 @@ export function createLedgerSessions(ctx: LedgerContext) {
     }
 
     const next: LiveSession = { ...prev };
-    if (combined === "") {
-      clearStreaming(next);
-    } else {
+    if (combined === "") clearStreaming(next);
+    if (combined !== "" || startedAt !== undefined) {
       cancelToolHoldTimer(sessionId);
       next.toolStepAt = undefined;
-      working(null, { type: "text" })(next);
-      next.streamingText = combined;
-      next.streamingChars = nextChars;
+      working(at, null, { type: "text" })(next);
+      if (startedAt !== undefined) next.stepStartedAt = startedAt;
+      if (combined !== "") {
+        next.streamingText = combined;
+        next.streamingChars = nextChars;
+      }
     }
     live.set(sessionId, next);
 
@@ -454,48 +514,27 @@ export function createLedgerSessions(ctx: LedgerContext) {
     write((p) => updateLive(p, sessionId, idle));
   };
 
-  const recoverAfterRestart = () => {
-    return write((p) => {
-      const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(
-        `SELECT m.id, m.session_id, m.sender, m.status FROM messages m
-         JOIN agent_sessions s ON s.id = m.session_id
-         LEFT JOIN workers w ON w.id = s.worker_id
-         LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
-         WHERE pa.pm_id IS NULL
-           AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
-           AND NOT EXISTS (
-             SELECT 1 FROM turn_completions c, json_each(c.event, '$.messageIds') ids
-             WHERE c.session_id = m.session_id AND ids.value = m.id
-               AND NOT (COALESCE(json_extract(c.event, '$.shutdown'), 0) = 1 AND (s.role = 'worker' OR m.sender = 'system'))
-           )
-           AND (
-             m.status IN ('delivered', 'processing')
-             -- 排队中的已有活动动作就不用管；已送达、处理中的总要再登记一次，把参数改成 resend
-             OR (m.status = 'queued' AND NOT EXISTS (
-               SELECT 1 FROM actions a
-               WHERE a.type = 'session.send' AND a.dedupe_key = CAST(m.id AS TEXT) AND a.status IN ('pending', 'running')
-             ))
-           )
-         ORDER BY m.id`,
-      );
-      const resentMessageIds: MessageId[] = [];
-      const requeuedMessageIds: MessageId[] = [];
-      // Resume the oldest interrupted message first.
-      const recoveredSessionIds: SessionId[] = [];
-      for (const row of rows) {
-        const resend = row.status !== "queued";
-        (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
-        const recovery = resend && !recoveredSessionIds.includes(row.session_id);
-        if (recovery) recoveredSessionIds.push(row.session_id);
-        const source = row.sender === "system" ? "system" : "user";
-        enqueue(p, {
-          type: "session.send",
-          params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },
-        });
-      }
-      return { resentMessageIds, requeuedMessageIds, recoveredSessionIds };
-    });
-  };
+  const recoverAfterRestart = (afterResends: (p: Pending) => void) => write((p) => {
+    const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(RECOVER_MESSAGES_SQL);
+    const resentMessageIds: MessageId[] = [];
+    const requeuedMessageIds: MessageId[] = [];
+    // Resume the oldest interrupted message first.
+    const recoveredSessionIds: SessionId[] = [];
+    for (const row of rows) {
+      const resend = row.status !== "queued";
+      (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
+      const recovery = resend && !recoveredSessionIds.includes(row.session_id);
+      if (recovery) recoveredSessionIds.push(row.session_id);
+      const source = row.sender === "system" ? "system" : "user";
+      if (resend) deleteLegacyPendingSessionSend(db, row.session_id, row.id);
+      enqueue(p, {
+        type: "session.send",
+        params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },
+      });
+    }
+    afterResends(p);
+    return { resentMessageIds, requeuedMessageIds, recoveredSessionIds };
+  });
 
   return {
     currentSession,

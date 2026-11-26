@@ -519,6 +519,7 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     const route = routeAccountInbound(owner, mesh.selfId, (id) => mesh.isOnline(id));
     switch (route.kind) {
       case "ignore":
+        logDroppedMention(event, "unknown-chat-owner");
         return;
       case "local":
         local.handleEvent(event, null);
@@ -531,8 +532,13 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     }
   };
 
+  function logDroppedMention(event: FeishuRawEvent, reason: string) {
+    if (isUserMessage(event) && event.mentionedBot) {
+      log(`飞书中心：未处理机器人提及 chatId=${event.chatId} messageId=${event.messageId} reason=${reason}`);
+    }
+  }
+
   const enqueueChatTask = (chatId: FeishuChatId, run: () => Promise<void>) => {
-    if (closed || queuedTasks >= FEISHU_INBOUND_QUEUE_MAX) return;
     let lane = lanes.get(chatId);
     if (lane === undefined) {
       lane = { tasks: [], running: false };
@@ -622,6 +628,10 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
     onEvent(event) {
       const chatId = parseFeishuChatId(event.chatId);
       if (chatId === null || closed) return;
+      if (queuedTasks >= FEISHU_INBOUND_QUEUE_MAX) {
+        logDroppedMention(event, "queue-full");
+        return;
+      }
       const receivedAt = now();
       enqueueChatTask(chatId, () => processEvent(chatId, event, receivedAt));
     },

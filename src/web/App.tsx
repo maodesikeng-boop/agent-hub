@@ -1,65 +1,56 @@
-import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
-import { MobileShell } from "./mobile/MobileShell.tsx";
-import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
-import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
-import { mobileBack } from "./mobile/back.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Loader2 } from "./ui/icons.ts";
-import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { pickableVendorCatalogs } from "../shared/index.ts";
+import type { HubClient } from "./client.ts";
+import { AppRail } from "./components/AppRail.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
-import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
-import { RightRail, RightRailToggle } from "./components/RightRail.tsx";
-import { QuotaPopover } from "./components/QuotaPopover.tsx";
-import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
-import { WorkerConversation } from "./components/WorkerConversation.tsx";
-import { PmProfile } from "./components/PmProfile.tsx";
-import { ProjectCapabilitiesPage } from "./components/ProjectCapabilitiesPage.tsx";
-import { Sidebar } from "./components/Sidebar.tsx";
+import { SettingsDialog } from "./components/SettingsDialog.tsx";
+import { WorkPanelToggle } from "./components/WorkPanel.tsx";
+import type { ShellContent, ShellModel } from "./components/WorkPanelShell.tsx";
+import { useComputerRename, type ComputerRenameApi } from "./settings-drafts.ts";
+import { SurfaceOutlet, SurfaceScope } from "./shell-surfaces.tsx";
+import { settingsBodies, WorkbenchSettings } from "./WorkbenchSettings.tsx";
+import { FullPage, WorkbenchSurfaces } from "./WorkbenchSurfaces.tsx";
+import { dialogTabOf, sectionForDialogTab } from "./workbench-nav.ts";
 import { DeviceScope } from "./device-scope.tsx";
-import { errorTitle } from "./format.ts";
 import { LOCAL_DEVICE, routeDeviceOf } from "./devices.ts";
-import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
+import { errorTitle } from "./format.ts";
+import { SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
+import { mobileBack } from "./mobile/back.ts";
+import { MobileShell } from "./mobile/MobileShell.tsx";
+import { TabBar, mobileTabOf, type MobileTab } from "./mobile/TabBar.tsx";
+import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
+import { usePaneWidths } from "./pane-widths.ts";
+import { useCurrentQuota } from "./quota.ts";
+import { quotaMeterOf } from "./rail-model.ts";
+import { useResourcesAttention } from "./resources-model.ts";
+import { quotaUsage } from "./selectors.ts";
+import { useMobileShell, useShellFit } from "./shell-layout.ts";
+import { workPanelOf } from "./side-panel.ts";
+import { useShellModel } from "./shell-model.ts";
 import { Button } from "./ui/button.tsx";
-import { ModelCatalogProvider } from "./models.tsx";
-import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
-import type { Pm } from "../shared/index.ts";
-
-function FullPage({ title, lines = [], titleTip, busy = false, action, testId }: { title: string; lines?: readonly string[]; titleTip?: string; busy?: boolean; action?: React.ReactNode; testId?: string }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center px-6 text-center" data-testid={testId}>
-      <div className="flex max-w-88 flex-col items-center gap-2">
-        {busy ? (
-          <>
-            <Loader2 className="size-pixel text-muted-foreground" aria-hidden="true" />
-            <p className="text-minor text-muted-foreground">{title}</p>
-          </>
-        ) : (
-          <h1 title={titleTip} className="text-title leading-snug font-semibold">{title}</h1>
-        )}
-        {lines.map((line) => (
-          <p key={line} className="text-minor leading-relaxed text-muted-foreground">{line}</p>
-        ))}
-        {action && <div className="mt-2">{action}</div>}
-      </div>
-    </div>
-  );
-}
+import { ArrowLeft } from "./ui/icons.ts";
+import { Pane, PaneGroup, PaneHandle } from "./ui/resizable.tsx";
+import { useUpdateReminder } from "./update-model.ts";
+import { useAutoHideScrollbars } from "./useAutoHideScrollbars.ts";
 
 const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
 const SIGN_IN_ON_PHONE = "On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer";
-
-type ShellModel = ReturnType<typeof useShellModel>;
-type ShellContent = NonNullable<ShellModel["content"]>;
 
 function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boolean): React.ReactNode {
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
     return <FullPage busy title="Loading…" />;
   }
   if (local.state.phase === "unauthorized") {
-    return <FullPage testId="unauthenticated" title="Not signed in" lines={mobile ? [SIGN_IN_ON_PHONE, SIGN_IN_ON_COMPUTER] : [SIGN_IN_ON_COMPUTER, SIGN_IN_ON_PHONE]} />;
+    return (
+      <FullPage
+        testId="unauthenticated"
+        title="Not signed in"
+        lines={mobile ? [SIGN_IN_ON_PHONE, SIGN_IN_ON_COMPUTER] : [SIGN_IN_ON_COMPUTER, SIGN_IN_ON_PHONE]}
+      />
+    );
   }
   if (local.state.phase === "error") {
     const error = local.state.loadError;
@@ -75,298 +66,325 @@ function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boo
   return null;
 }
 
-function DeviceWaiting({ connecting, name }: { connecting: boolean; name: string }) {
-  return (
-    <>
-      <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
-      {connecting ? (
-        <FullPage busy title="Loading…" />
-      ) : (
-        <FullPage title="Not connected to this computer yet" lines={[`Check that the daemon is running on ${name}`]} />
-      )}
-    </>
-  );
-}
-
-interface PaneProps {
+interface LayoutProps {
   model: ShellModel;
   content: ShellContent;
-  mobile: boolean;
-  leading: React.ReactNode;
-  toolbar: React.ReactNode;
-  top: React.ReactNode;
-  notices: React.ReactNode;
-  back: () => void;
+  quota: ReturnType<typeof quotaUsage>;
+  panel: "panel" | "worker" | null;
+  rename: ComputerRenameApi;
 }
 
-function WorkerPane({ model: { state, hub, current }, content: c, mobile, leading, toolbar, top, notices, workerId }: PaneProps & { workerId: number }) {
+function DesktopWorkbench({
+  model: { current, state, navigation },
+  content: c,
+  quota,
+  panel,
+  rename,
+  setShellElement,
+  chatMinRem,
+  stackPanel,
+}: LayoutProps & { setShellElement: (element: HTMLElement | null) => void; chatMinRem: number; stackPanel: boolean }) {
+  const { widths, commit, reset } = usePaneWidths((s) => s);
+  const meter = useMemo(() => quotaMeterOf(quota), [quota]);
+  const settings = navigation.nav.settings;
+  const tab = dialogTabOf(settings?.section, c.deviceSettings !== null);
   return (
-    <WorkerConversation
-      mobile={mobile}
-      leading={leading}
-      key={c.keyOf(workerId)}
-      title={c.workerLine?.title ?? c.workerView?.conversation.title ?? "Piece"}
-      readonly={c.workerLine?.readonly ?? false}
-      phase={workerPhaseOf(state, workerId)}
-      pm={{ name: c.workerPmEntry?.name ?? "Project manager", look: c.workerPmEntry?.look ?? c.look }}
-      meta={c.railWorkers.find((w) => w.conversationId === workerId)}
-      view={c.workerView}
-      loading={c.workerLoading}
-      pending={pendingOf(state, workerId)}
-      session={sessionOf(state, workerId)}
-      older={state.older[workerId]}
-      draft={c.drafts.of(c.keyOf(workerId))}
-      staging={c.staging.of(c.keyOf(workerId))}
-      toolbar={toolbar}
-      top={top}
-      notices={notices}
-      onBack={() => c.workerPmEntry && c.select({ device: current.key, id: c.workerPmEntry.id })}
-      onSend={c.send}
-      onRetry={hub.retrySend}
-      onStop={hub.stop}
-      onRewind={hub.rewind}
-      onLoadOlder={c.handleLoadOlder}
-      actions={c.actions}
-      link={c.link}
-    />
-  );
-}
-
-function ProfilePane({ model, content: c, mobile, back, profile }: PaneProps & { profile: Pm }) {
-  const { state, current, route, navigate, replace } = model;
-  const entry = c.profileEntry;
-  const here = routeDeviceOf(current.key);
-  const local = current.key === LOCAL_DEVICE;
-  if (local && route?.view === "profile" && route.page === "capabilities" && profile.archivedAt == null) {
-    return (
-      <ProjectCapabilitiesPage
-        key={c.keyOf(profile.id)}
-        pm={profile}
-        onBack={() => mobileBack({ view: "profile", pmId: profile.id, ...here }, replace)}
-        onEditDefaults={() => c.openSettingsSection("capabilities")}
+    <div ref={setShellElement} data-shell="desktop" className="wood relative flex h-full w-full min-w-0 flex-col overflow-hidden">
+      <div aria-hidden="true" data-window-drag className="shell-topbar shrink-0" />
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <AppRail
+          router={c.routerSummary}
+          computers={c.railComputers}
+          selectedComputer={c.routerActive ? null : current.key}
+          meter={meter}
+          quota={quota}
+          quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
+          onSelectComputer={c.selectComputer}
+          onOpenSettings={() => c.openSettingsSection("scale")}
+          settingsOpen={settings !== null}
+          onOpenUpdates={() => c.openSettingsSection("updates")}
+          onOpenAccount={() => c.openSettingsSection(c.accountTarget)}
+        />
+        <div className="shell-frame flex min-h-0 min-w-0 flex-1">
+          {c.routerActive ? (
+            <main className="shell-group chat-main flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+              <SurfaceOutlet id="router" />
+            </main>
+          ) : (
+            <div className="shell-group flex min-h-0 min-w-0 flex-1">
+              <PaneGroup id="shell-panes">
+                <Pane
+                  key="list"
+                  id="list"
+                  defaultRem={widths.list}
+                  minRem={SHELL_LIST_REM.min}
+                  maxRem={SHELL_LIST_REM.max}
+                  onCommit={(rem) => commit("list", rem)}
+                >
+                  <SurfaceOutlet id="list" />
+                </Pane>
+                <PaneHandle seam="joint" label="Resize project list" onReset={() => reset("list")} />
+                <Pane
+                  key="chat"
+                  id="chat"
+                  {...(stackPanel
+                    ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" }
+                    : { minRem: chatMinRem, className: "shell-sheet shell-sheet-joined" })}
+                >
+                  <SurfaceOutlet id="conversation" />
+                </Pane>
+                {panel !== null && !stackPanel && <PaneHandle seam="gap" label="Resize side panel" onReset={() => reset("panel")} />}
+                {panel !== null && (
+                  <Pane
+                    key="panel"
+                    id="panel"
+                    {...(stackPanel
+                      ? { className: "shell-sheet shell-sheet-joined min-w-0 flex-1" }
+                      : {
+                          className: "shell-sheet",
+                          defaultRem: widths.panel,
+                          minRem: SHELL_PANEL_REM.min,
+                          maxRem: SHELL_PANEL_REM.max,
+                          onCommit: (rem: number) => commit("panel", rem),
+                        })}
+                  >
+                    <SurfaceOutlet id={panel} />
+                  </Pane>
+                )}
+              </PaneGroup>
+            </div>
+          )}
+        </div>
+      </div>
+      <SettingsDialog
+        open={settings !== null}
+        onOpenChange={(open) => { if (!open) navigation.closeSettings(); }}
+        onSectionChange={(next) => navigation.showSettingsSection(sectionForDialogTab(next, settings?.section, c.deviceSettings !== null))}
+        {...(tab === undefined ? {} : { section: tab })}
+        notify={c.reminders.notify}
+        devices={c.deviceSettings}
+        rename={rename}
+        bodies={settingsBodies}
       />
-    );
-  }
-  return (
-    <PmProfile
-      key={c.keyOf(profile.id)}
-      pm={profile}
-      project={entry?.project ?? null}
-      folders={entry?.folders ?? []}
-      schedules={state.schedules.filter((x) => x.pmId === profile.id)}
-      rev={state.personaRev[profile.id] ?? 0}
-      renewing={entry !== undefined && isRenewing(state, entry.id)}
-      onBack={mobile ? back : () => entry && c.select({ device: current.key, id: entry.id })}
-      onManageProviders={() => c.openManageProviders(current.key)}
-      {...(local ? { onOpenCapabilities: () => navigate({ view: "profile", pmId: profile.id, page: "capabilities", ...here }) } : {})}
-    />
+    </div>
   );
 }
 
-function ChatPane(props: PaneProps & { quotaSlot: React.ReactNode; onManageLocalProviders: () => void }) {
-  const { model, content: c, mobile, leading, toolbar, top, notices, back } = props;
-  const { fleet, state, hub, current } = model;
-  if (c.routerActive) {
-    return (
-      <RouterWorkbench
-        leading={leading}
-        toolbar={props.quotaSlot}
-        notices={notices}
-        view={c.routerView}
-        devices={fleet.devices}
-        selfId={fleet.selfId}
-        draft={c.drafts.of(ROUTER_DRAFT_KEY)}
-        staging={c.staging.of(ROUTER_DRAFT_KEY)}
-        clientForDevice={c.clientForDevice}
-        storeForDevice={c.storeForDevice}
-        onOpenConversation={c.openDeviceConversation}
-        onOpenWorker={c.openDeviceWorker}
-        onManageProviders={props.onManageLocalProviders}
-      />
-    );
-  }
-  if (state.phase !== "ready") return <DeviceWaiting connecting={current.status === "connecting"} name={current.info.name} />;
-  const { profile, active, view } = c;
-  if (profile) return <ProfilePane {...props} profile={profile} />;
-  if (c.openWorker !== null) return <WorkerPane {...props} workerId={c.openWorker} />;
-  if (active && view) {
-    return (
-      <Conversation
-        mobile={mobile}
-        leading={leading}
-        key={c.keyOf(active.id)}
-        entry={active}
-        view={view}
-        pending={pendingOf(state, active.id)}
-        session={visibleSessionOf(state, active.id)}
-        older={state.older[active.id]}
-        draft={c.drafts.of(c.keyOf(active.id))}
-        staging={c.staging.of(c.keyOf(active.id))}
-        toolbar={toolbar}
-        top={top}
-        notices={notices}
-        onSend={c.send}
-        onRetry={hub.retrySend}
-        onStop={hub.stop}
-        onRewind={hub.rewind}
-        onLoadOlder={c.handleLoadOlder}
-        actions={c.actions}
-        focus={c.focus}
-        onFocusDone={c.clearFocus}
-        onOpenProfile={c.openProfile}
-        link={c.link}
-      />
-    );
-  }
-  return (
-    <>
-      {notices}
-      <div className="flex flex-1 items-center justify-center text-minor text-muted-foreground">No conversations yet</div>
-    </>
-  );
-}
+function MobileWorkbench({ model, content: c, panel }: Omit<LayoutProps, "quota" | "rename">) {
+  const { route, navigation, replace } = model;
+  const settings = navigation.nav.settings;
+  const tab = settings === null ? mobileTabOf(route) : settings.section === undefined ? "settings" : null;
+  const updateWaiting = useUpdateReminder() !== null;
+  const resources = useResourcesAttention();
 
-function ShellSidebar({ content: c, mobile, quota, quotaInHeader }: { content: ShellContent; mobile: boolean; quota: ReturnType<typeof quotaUsage>; quotaInHeader: boolean }) {
-  return (
-    <Sidebar
-      groups={c.groups}
-      active={c.sidebarActiveRef}
-      router={c.sidebarRouter}
-      waiting={c.reminders.waiting}
-      asking={c.reminders.asking}
-      notify={c.reminders.notify}
-      devices={c.deviceSettings}
-      quota={quotaInHeader && !mobile ? undefined : quota}
-      quotaFetchable={!quotaInHeader || mobile ? c.quotaFetchable : false}
-      layout={mobile ? "page" : c.narrow ? "rail" : "wide"}
-      settingsOpen={c.desktopSettingsOpen}
-      {...(c.desktopSettingsSection !== undefined ? { defaultSettingsSection: c.desktopSettingsSection } : {})}
-      defaultProviderDevice={c.defaultProviderDevice}
-      onSettingsOpenChange={c.onSettingsOpenChange}
-      onOpenSettings={c.openSettings}
-      onOpenSettingsSection={c.openSettingsSection}
-      onSelect={c.select}
-      onNewPm={c.openNewPm}
-    />
-  );
-}
-
-function railProps(c: ShellContent) {
-  return {
-    asks: c.railAsks,
-    workers: c.railWorkers,
-    activeGraphs: c.railGraphs,
-    projectId: c.railProjectId,
-    openWorkerId: c.openWorker,
-    look: c.look,
-    onOpenAsk: c.openAsk,
-    onOpenWorker: c.openWorkerConversation,
-    onLoadMoreWorkers: c.railLoadMoreWorkers,
-    onNeedWorkers: c.ensureWorkers,
+  const selectTab = (next: MobileTab) => {
+    if (next === "projects") replace(null);
+    else if (next === "router") c.routerSummary.onSelect();
+    else c.openSettings();
   };
+
+  let body: React.ReactNode;
+  if (settings !== null) {
+    body = <SurfaceOutlet id="settings:mobile" />;
+  } else if (panel !== null) {
+    body = <SurfaceOutlet id={panel} />;
+  } else if (route?.view === "router") {
+    body = (
+      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        <SurfaceOutlet id="router" />
+      </main>
+    );
+  } else {
+    body = <SurfaceOutlet id="conversation" />;
+  }
+  return (
+    <MobileShell
+      tabBar={tab === null ? undefined : (
+        <TabBar active={tab} routerBadge={c.routerSummary.pendingCount} settingsAttention={updateWaiting || resources.attention} onSelect={selectTab} />
+      )}
+    >
+      {settings === null && route === null ? <SurfaceOutlet id="list" /> : body}
+    </MobileShell>
+  );
+}
+
+function Workbench({
+  model,
+  content: c,
+  mobile,
+  quota,
+  notices,
+  openLocalProviders,
+  openCurrentProviders,
+}: Omit<LayoutProps, "panel" | "rename"> & {
+  mobile: boolean;
+  notices: React.ReactNode;
+  openLocalProviders: () => void;
+  openCurrentProviders: () => void;
+}) {
+  const { route, current, state, replace, navigate } = model;
+  const rename = useComputerRename();
+  const settings = model.navigation.nav.settings;
+  const computersOpen = c.deviceSettings !== null && settings !== null && (settings.section === undefined || settings.section === "computers");
+  useEffect(() => {
+    if (!computersOpen || (rename.rename !== null && !c.deviceSettings?.devices.some((device) => device.key === rename.rename?.deviceKey))) rename.finish();
+  }, [computersOpen, rename, c.deviceSettings]);
+  const [shellElement, setShellElement] = useState<HTMLElement | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const keepPanelOpen = useRef(false);
+  useEffect(() => {
+    if (keepPanelOpen.current) keepPanelOpen.current = false;
+    else setDrawerOpen(false);
+  }, [route, current.key]);
+  const panelContent = workPanelOf({ route, open: c.railOpen, tab: c.workTab });
+  const desktopPanel = !c.routerActive && state.phase === "ready" && panelContent !== null &&
+    (panelContent.kind !== "info" || c.profile !== null);
+  const mobilePanel = !c.routerActive && state.phase === "ready" && (
+    route?.view === "profile" ? c.profile !== null : c.openWorker !== null || drawerOpen
+  );
+  const panel = (mobile ? mobilePanel : desktopPanel) ? c.openWorker === null ? "panel" : "worker" : null;
+  const { tier, chatMinRem } = useShellFit(shellElement, desktopPanel);
+  const stackPanel = tier === "stack" && desktopPanel;
+
+  const back = useCallback(() => {
+    mobileBack(
+      route?.view !== "conversation" && c.activeId !== null
+        ? { view: "conversation", id: c.activeId, ...routeDeviceOf(current.key) } : null,
+      replace,
+    );
+  }, [route?.view, c.activeId, current.key, replace]);
+
+  const toggleWorkPanel = useCallback(() => {
+    if (mobile) {
+      setDrawerOpen((open) => !open);
+    } else if (c.activeId !== null && desktopPanel && (route?.view === "worker" || route?.view === "profile")) {
+      c.toggleRail(false);
+      c.select({ device: current.key, id: c.activeId });
+    } else {
+      c.toggleRail();
+    }
+  }, [mobile, c.activeId, c.toggleRail, c.select, desktopPanel, route?.view, current.key]);
+
+  const leading = useMemo(() => mobile ? (
+    <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}>
+      <ArrowLeft aria-hidden="true" />
+    </Button>
+  ) : null, [mobile, back]);
+  const closeMobilePanel = useCallback(() => setDrawerOpen(false), []);
+  const panelOpen = mobile ? drawerOpen : desktopPanel;
+  const toolbar = useMemo(() => c.activeId === null ? null : (
+    <WorkPanelToggle open={panelOpen} attention={c.railAttention} look={c.look} onToggle={toggleWorkPanel} />
+  ), [c.activeId, panelOpen, c.railAttention, c.look, toggleWorkPanel]);
+
+  return (
+    <SurfaceScope>
+      {mobile
+        ? <MobileWorkbench model={model} content={c} panel={panel} />
+        : <DesktopWorkbench model={model} content={c} quota={quota} panel={panel} rename={rename} setShellElement={setShellElement} chatMinRem={chatMinRem} stackPanel={stackPanel} />}
+      {settings !== null && (
+        <WorkbenchSettings
+          mobile={mobile}
+          section={settings.section}
+          notify={c.reminders.notify}
+          devices={c.deviceSettings}
+          quota={quota}
+          defaultProviderDevice={c.defaultProviderDevice}
+          onOpen={c.openSettingsSection}
+          onBack={model.navigation.settingsBack}
+          rename={rename}
+        />
+      )}
+      <WorkbenchSurfaces
+        model={model}
+        content={c}
+        mobile={mobile}
+        notices={notices}
+        onManageLocalProviders={openLocalProviders}
+        onManageCurrentProviders={openCurrentProviders}
+        chrome={{
+          leading,
+          toolbar,
+          panelLayout: mobile ? "page" : stackPanel ? "stack" : "side",
+          onBack: back,
+          onCloseMobile: closeMobilePanel,
+          onSwitchMobileTab: (tab) => {
+            c.setWorkTab(tab);
+            keepPanelOpen.current = true;
+            setDrawerOpen(true);
+            if (c.active !== null) navigate({ view: "conversation", id: c.active.id, ...routeDeviceOf(current.key) });
+          },
+        }}
+      />
+    </SurfaceScope>
+  );
+}
+
+function FirstRunProviderCheck({ client, onDone }: { client: HubClient; onDone: (openProviders: boolean) => void }) {
+  const catalogs = useServerModelCatalogs({ enabled: true, client });
+  useEffect(() => {
+    if (catalogs === undefined || catalogs.length === 0) return;
+    onDone(pickableVendorCatalogs(catalogs).length === 0);
+  }, [catalogs, onDone]);
+  return null;
 }
 
 export function App() {
-  const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const model = useShellModel({ autoSelect: !mobile });
-  const { replace, qc, fleet, route, current, hub, state, content } = model;
-  useEffect(() => {
-    setDrawerOpen(false);
-  }, [route, current.key, content?.railHasContent, mobile]);
+  useAutoHideScrollbars();
+  const mobile = useMobileShell();
+  const model = useShellModel({ mobile });
+  const { qc, fleet, current, hub, state, content } = model;
+  const settings = model.navigation.nav.settings;
+  const mobileUsageVisible = mobile && settings !== null && settings.section === undefined;
+  const currentQuota = useCurrentQuota(qc, hub.client, {
+    enabled: state.phase === "ready" && state.server.currentQuota === true && (!mobile || mobileUsageVisible),
+    visible: mobileUsageVisible,
+  });
+  const hasContent = content !== null;
   const openManageProvidersRef = content?.openManageProviders;
   const openCurrentProviders = useCallback(() => openManageProvidersRef?.(current.key), [openManageProvidersRef, current.key]);
+  const openLocalProviders = useCallback(() => openManageProvidersRef?.(LOCAL_DEVICE), [openManageProvidersRef]);
+  const health = content?.health;
+  const reconnecting = content?.reconnecting;
+  const offline = content?.offline;
   const notices = useMemo(
     () =>
-      content === null ? null : (
-        <Notices health={content.health} reconnecting={content.reconnecting} offline={content.offline} listFailed={fleet.listFailed} onManageProviders={openCurrentProviders} />
+      !hasContent ? null : (
+        <Notices health={health!} reconnecting={reconnecting!} offline={offline!} listFailed={fleet.listFailed} onManageProviders={openCurrentProviders} />
       ),
-    [content?.health, content?.reconnecting, content?.offline, fleet.listFailed, openCurrentProviders],
-  );
-  const railAttention = content?.railAttention ?? false;
-  const railToggle = useMemo(
-    () =>
-      content === null ? null : (
-        <RightRailToggle
-          visible={content.railHasContent}
-          open={content.railOpen}
-          attention={railAttention}
-          look={content.look}
-          onToggle={content.toggleRail}
-        />
-      ),
-    [content === null, content?.railHasContent, content?.railOpen, railAttention, content?.look, content?.toggleRail],
-  );
-  const openLocalProviders = useCallback(
-    () => openManageProvidersRef?.(LOCAL_DEVICE),
-    [openManageProvidersRef],
+    [hasContent, health, reconnecting, offline, fleet.listFailed, openCurrentProviders],
   );
   const gate = gatePage(model, mobile);
   if (gate !== null) return gate;
   if (content === null) return null;
 
-  const { active, look, compact, profile, openWorker, railOpen, routerActive, view } = content;
-  const mobileToggle = <RightRailToggle visible={content.railHasContent} open={drawerOpen} attention={railAttention} look={look} onToggle={() => setDrawerOpen(!drawerOpen)} />;
-  const quota = quotaUsage(state);
-  const quotaInHeader = routerActive || (state.phase === "ready" && !profile && (openWorker !== null || (active && view)));
-  const quotaSlot = quotaInHeader ? <QuotaPopover quota={quota} fetchable={content.quotaFetchable} placement="header" /> : null;
-  const railControl = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
-  const toolbar = <>{quotaSlot}{railControl}</>;
-  const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
-  const leading = mobile ? <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
-  const rail = !routerActive && railOpen ? <RightRail {...railProps(content)} layout={compact ? "top" : "side"} toggle={railToggle} /> : null;
-  const settingsRoute = mobile && route?.view === "settings" ? route : null;
-  const tintColor = routerActive || settingsRoute !== null ? null : (active?.look.color ?? null);
-  const chat = (
-    <AccentScope color={tintColor}>
-      {settingsRoute !== null ? (
-        <MobileSettings
-          section={settingsRoute.section}
-          notify={content.reminders.notify}
-          devices={content.deviceSettings}
-          defaultProviderDevice={content.defaultProviderDevice}
-          onOpen={content.openSettingsSection}
-          onBack={content.settingsBack}
-        />
-      ) : (
-        <>
-          <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-chat">
-            <ChatPane
-              model={model}
-              content={content}
-              mobile={mobile}
-              leading={leading}
-              toolbar={toolbar}
-              top={!mobile && compact ? rail : null}
-              notices={notices}
-              back={back}
-              quotaSlot={quotaSlot}
-              onManageLocalProviders={openLocalProviders}
-            />
-          </main>
-          {!mobile && !compact && rail}
-          {!routerActive && mobile && <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} {...railProps(content)} />}
-        </>
-      )}
-    </AccentScope>
-  );
+  const quota = state.server.currentQuota ? currentQuota : quotaUsage(state);
+
   return (
     <QueryClientProvider client={qc}>
       <DeviceScope client={hub.client} server={state.server}>
         <ModelCatalogProvider>
           <CapabilityProjects pms={model.local.state.pms}>
             <div className="relative flex h-full">
-              <FruitTint color={tintColor}>
-                <MobileShell mobile={mobile} list={route === null} sidebar={<ShellSidebar content={content} mobile={mobile} quota={quota} quotaInHeader={Boolean(quotaInHeader)} />}>{chat}</MobileShell>
-                <NewPmDialog
-                  open={content.creating}
-                  devices={content.newPmDevices}
-                  defaultDevice={current.key}
-                  onOpenChange={content.setCreating}
-                  onCreated={content.created}
-                  onManageProviders={content.openManageProviders}
-                />
-              </FruitTint>
+              <Workbench
+                model={model}
+                content={content}
+                mobile={mobile}
+                notices={notices}
+                quota={quota}
+                openLocalProviders={openLocalProviders}
+                openCurrentProviders={openCurrentProviders}
+              />
+              <NewPmDialog
+                open={content.creating}
+                devices={content.newPmDevices}
+                defaultDevice={current.key}
+                onOpenChange={content.setCreating}
+                onCreated={content.created}
+                onManageProviders={content.openManageProviders}
+              />
+              {content.firstRunCheck !== null && (
+                <FirstRunProviderCheck client={content.firstRunCheck.client} onDone={content.firstRunCheck.onDone} />
+              )}
             </div>
           </CapabilityProjects>
         </ModelCatalogProvider>

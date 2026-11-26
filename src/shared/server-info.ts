@@ -3,6 +3,7 @@ export interface ServerInfo {
   folderPicker: boolean;
   fileActions: boolean;
   repoDir?: string;
+  currentQuota?: true;
 }
 
 export function serverInfoFor(platform: string, options?: { supervised?: boolean }): ServerInfo {

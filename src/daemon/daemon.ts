@@ -25,7 +25,6 @@ import {
   MESH_GITHUB_CLIENT_ID,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
-  VENDOR_LIST,
   AUTO_RENEW_TICK_MS,
   checkModel,
   type ActionExecutor,
@@ -80,9 +79,9 @@ import {
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveCommit } from "./git/index.ts";
-import { execGh } from "./git/gh.ts";
-import { postReviewStatus } from "./git/review-status.ts";
-import { createFetchedQuota, mergeFetchedQuotas, queryFetchedQuota } from "./quota/fetched-quota.ts";
+import { createWorktreeBranchProbe } from "./git/worktree-branch.ts";
+import { createObservedQuotaStore, observeDriverQuota } from "./quota/observed-quota.ts";
+import { createProviderQuota } from "./quota/provider-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
 import {
@@ -90,8 +89,8 @@ import {
   createSessionSendHandler,
   createSessionStartHandler,
   createReviewObserver,
-  createReviewStampHandler,
   createReviewVerifyHandler,
+  canDeliverSystemMessage,
   createWorktreeCreateHandler,
   endedOnRevokedTokens,
 } from "./handlers.ts";
@@ -229,6 +228,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     sleepInhibitor?: SleepInhibitor;
     selfReload?: SelfReloadController;
     unsubscribe: Unsubscribe[];
+    quota?: ReturnType<typeof createProviderQuota>;
   } = { unsubscribe: [] };
   const step = async (what: string, fn: () => unknown) => {
     try {
@@ -240,6 +240,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const shutdown = async () => {
     const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, mesh, admin, agentApi, db, lock } = parts;
     parts.selfReload?.close();
+    parts.quota?.close();
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
     if (archiveCleanup) clearInterval(archiveCleanup);
@@ -380,15 +381,19 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log,
     });
     parts.models = models;
+    const quota = createProviderQuota(vendorRuntime);
+    const observedQuota = createObservedQuotaStore();
+    parts.quota = quota;
     const providerManager = createProviderManager({
       runtime: vendorRuntime,
       models,
+      onVendorChanged: (vendor) => { observedQuota.clearVendor(vendor); quota.refresh(vendor); },
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
     parts.providerManager = providerManager;
     const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
     const ledger = createLedger(db, {
-      models,
+      models, worktreeBranchProbe: createWorktreeBranchProbe(),
       deviceName: () => device.name,
       knownCommands: (session) => parts.commands?.cached(session) ?? null,
       pmHomeRoot: paths.pmHomeDir,
@@ -406,6 +411,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       ...(options.autoRenew ? { autoRenew: options.autoRenew } : {}),
       onHandoverClaimable: () => parts.handoverRunner?.wake(),
       onCatalogClaimable: () => parts.catalogRunner?.wake(),
+      isSessionBusy: (id) => parts.driver?.isBusy?.(id) ?? false,
       log,
     });
     parts.ledger = ledger;
@@ -424,14 +430,16 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const sandboxGuard = createRouterSandboxGuard();
     parts.sandboxGuard = sandboxGuard;
     const routerTurnPurposes = createRouterTurnPurposes();
+    const capabilityInventory = createCapabilityInventory({ ctx: { userHome: options.userHome ?? homedir(), env } });
     const agentApi = await startAgentApi({
       ledger,
       tokens,
       runDir: paths.runDir,
       hubSock: paths.hubSock,
       log,
-      models,
+      models, quota: { observed: observedQuota, get: quota.get },
       refreshVendor: (vendor) => models.ensureUsable(vendor),
+      capabilityInventory,
       sandboxGuard,
       ...(options.onSelfReload
         ? {
@@ -450,9 +458,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     parts.agentApi = agentApi;
     installHubShim({ binDir: paths.hubBinDir });
-    const capabilityInventory = createCapabilityInventory({
-      ctx: { userHome: options.userHome ?? homedir(), env },
-    });
     const prepareLaunch = createLaunchPreparer({
       launchDir: paths.launchDir,
       dataDir,
@@ -472,12 +477,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sessionTmp: sessionScope.tmp, sessionTagNonce: sessionScope.tagNonce, parentSessionTag: sessionScope.parentTag,
     });
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
-    const launch = { store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
+    const launch = { appApprovals: ledger.appApprovals, canDeliverSystemMessage: canDeliverSystemMessage.bind(null, ledger), store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId), onSessionQuiescent: (sessionId: number) => ledger.onSessionQuiescent?.(sessionId) };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: createVendorDrivers(
         Object.fromEntries(
-          AGENT_VENDORS.map((vendor) => [
+          AGENT_VENDORS.map((vendor): [AgentVendor, VendorDriverDeps] => [
             vendor,
             {
               executablePath: () => vendorRuntime.resolveExecutablePath(vendor),
@@ -520,6 +525,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       driver.onEvent((sessionId, event) => {
         const vendor = sessions.get(sessionId)?.vendor;
         if (!isAgentVendor(vendor)) return;
+        observeDriverQuota(observedQuota, vendor, event);
         if (event.type === "session.started") models.report(vendor, "available");
         else if (event.type === "turn.ended" && !event.ok && event.error && vendorFailureOf(event.error.message, vendor)?.kind === "auth") {
           models.report(vendor, "signed_out");
@@ -556,7 +562,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     executor.register("session.end", createSessionEndHandler(deps));
     const observeReview = createReviewObserver({ resolveCommit, remoteBranchHead, probePr });
     executor.register("review.verify", createReviewVerifyHandler({ ledger, observeReview }));
-    executor.register("review.stamp", createReviewStampHandler({ ledger, postReviewStatus: (input) => postReviewStatus(input, { execGh, now: Date.now }) }));
     executor.register("worktree.create", createWorktreeCreateHandler({
         ledger, observeReview, addWorktree, setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
@@ -602,7 +607,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }),
     );
     parts.unsubscribe.push(
-      ledger.onActionEnqueued(() => executor.wake()),
+      ledger.onActionEnqueued((action) => {
+        if (action.type === "session.end") driver.markEnding?.(action.params.sessionId);
+        executor.wake();
+      }),
       ledger.onStopRequested(({ sessionId }) => {
         setup.cancel(sessionId);
         driver.interrupt(sessionId).catch((error: unknown) => log(`${LOG_PREFIX} 停止失败：${String(error)}`));
@@ -686,24 +694,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           )
           .map((row) => ({ path: row.path, projectName: row.project_name })),
     });
-    const quota = mergeFetchedQuotas(
-      VENDOR_LIST.flatMap(({ id, quota: spec }) => {
-        const fetched = spec?.fetched;
-        if (fetched === undefined) return [];
-        return [
-          createFetchedQuota({
-            query: () =>
-              queryFetchedQuota({
-                vendor: id,
-                path: vendorRuntime.resolveExecutablePath(id),
-                env: vendorRuntime.resolveVendorEnv(id),
-                spec: fetched,
-                cwd: options.userHome,
-              }),
-          }),
-        ];
-      }),
-    );
     const rotateToken = () => {
       const next = rotateUiToken(paths.uiTokenFile);
       log(`${LOG_PREFIX} 已全部退出，新的登录链接：${loginUrl(parts.ui?.port ?? port, next)}`);
@@ -1030,6 +1020,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       ...(options.folderPicker ? { folderPicker: options.folderPicker } : {}),
     });
 
+    void quota.get();
     let stopping: Promise<void> | undefined;
     return {
       paths,

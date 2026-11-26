@@ -12,7 +12,7 @@ export function PopoverContent({ className, sideOffset = 8, collisionPadding = 1
         data-slot="popover-content"
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
-        className={cn("z-50 w-max min-w-70 max-w-[min(22.5rem,var(--radix-popover-content-available-width))] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain rounded-2xl border border-border bg-background p-4 outline-none", className)}
+        className={cn("z-50 w-max min-w-70 max-w-[min(22.5rem,var(--radix-popover-content-available-width))] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain rounded-sm border border-border bg-background p-4 shadow-[var(--shadow-overlay)] outline-none", className)}
         {...props}
       />
     </PopoverPrimitive.Portal>

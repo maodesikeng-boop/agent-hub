@@ -80,7 +80,6 @@ import type {
   WorkerMessageMeta,
   WorktreeCreateParams,
   WorktreeTask,
-  ReviewStampParams,
   ReviewVerifyParams,
   SetupOutcome,
 } from "./index.ts";
@@ -120,18 +119,19 @@ import {
 } from "./paths.ts";
 
 describe("动作", () => {
-  it("去重键：启动按（会话，第几代），发消息按消息编号", () => {
+  it("去重键：启动按（会话，第几代），发消息按（会话，消息编号）", () => {
     expect(actionDedupeKey({ type: "session.start", params: { sessionId: 7, generation: 2 } })).toBe("7:2");
-    expect(actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user" } })).toBe("42");
+    expect(actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user" } })).toBe("7:42");
+    expect(actionDedupeKey({ type: "session.send", params: { sessionId: 8, messageId: 42, source: "user" } })).toBe("8:42");
   });
 
-  it("恢复和重发的标记不进去重键：同一个动作重新登记会重置那一行", () => {
+  it("恢复和重发的标记不进去重键：同一会话下重新登记会重置那一行", () => {
     expect(
       actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user", resend: true, recovery: true } }),
-    ).toBe("42");
+    ).toBe("7:42");
     expect(
       actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user", resend: true } }),
-    ).toBe("42");
+    ).toBe("7:42");
   });
 
   it("启动动作：5 秒起翻倍，封顶 5 分钟，共试 3 次", () => {
@@ -159,10 +159,6 @@ describe("动作", () => {
       if (row.type === "review.verify") {
         expectTypeOf(row.params).toEqualTypeOf<ReviewVerifyParams>();
         return row.params.reportMessageId;
-      }
-      if (row.type === "review.stamp") {
-        expectTypeOf(row.params).toEqualTypeOf<ReviewStampParams>();
-        return row.params.workerId;
       }
       expectTypeOf(row.params).toEqualTypeOf<SessionSendParams>();
       return row.params.messageId;
@@ -405,6 +401,7 @@ describe("M2：系统消息", () => {
       "driver.warning",
       "worker.max_time_exceeded",
       "task_graph.ready_to_finish",
+      "pm.wakeup",
     ]);
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();
   });
@@ -510,7 +507,6 @@ describe("M2：agent 接口", () => {
       "project.attach",
       "project.detach",
       "project.setup",
-      "project.review-status",
       "persona.show",
       "persona.edit",
       "worker.start",
@@ -673,7 +669,7 @@ describe("M2：socket 路径长度", () => {
 describe("M3：对话和消息", () => {
   it("对话多一种 worker；消息多一种 kind worker、发送方多一种 pm", () => {
     expect(CONVERSATION_KINDS).toEqual(["assistant", "pm", "project_group", "worker"]);
-    expect(MESSAGE_KINDS).toEqual(["text", "tool", "worker"]);
+    expect(MESSAGE_KINDS).toEqual(["text", "tool", "worker", "checklist"]);
     expect(WORKER_MESSAGE_KIND).toBe("worker");
     expect(MESSAGE_SENDERS).toEqual(["user", "agent", "system", "pm"]);
   });
@@ -708,9 +704,6 @@ describe("M3：对话和消息", () => {
     expect(workerMessageDedupeKey(3, "report", 41)).not.toBe(workerMessageDedupeKey(3, "turn_failed", 41));
     expect(workerMessageDedupeKey(3, "report", 42)).not.toBe(workerMessageDedupeKey(3, "report", 41));
     expect(() => workerMessageDedupeKey(3, "report", null)).toThrow();
-    // 用户直接对 Worker 说的话：每条用户消息一行
-    expect(workerMessageDedupeKey(3, "user_message", 43)).toBe("worker:3:user_message:43");
-    expect(() => workerMessageDedupeKey(3, "user_message", null)).toThrow();
   });
 });
 
@@ -805,7 +798,6 @@ describe("M3：hub 命令按角色放行", () => {
       "project.attach": ["pm"],
       "project.detach": ["pm"],
       "project.setup": ["pm"],
-      "project.review-status": ["pm"],
       "persona.show": ["pm"],
       "persona.edit": ["pm"],
       "worker.start": ["pm"],

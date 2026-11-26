@@ -1,7 +1,6 @@
 import { Loader2 } from "../ui/icons.ts";
 import type { VendorSyncVendorBadge } from "../../shared/index.ts";
-import type { HubClient } from "../client.ts";
-import { VENDOR_STATUS_LABELS, useVendorSyncSetting, visibleMcpVendorBadges } from "../settings-model.ts";
+import { VENDOR_STATUS_LABELS, visibleMcpVendorBadges, type VendorSyncModel } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Switch } from "../ui/switch.tsx";
@@ -15,9 +14,9 @@ function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) 
       {badges.map((badge) => (
         <span
           key={badge.vendor}
-          className="inline-flex items-center gap-1.5 rounded-full bg-sidebar px-2.5 py-0.5 text-xs text-muted-foreground"
+          className="inline-flex items-center gap-1.5 rounded-xs bg-panel px-2.5 py-0.5 text-xs text-muted-foreground"
         >
-          <span className="font-medium text-foreground/80">{badge.label}</span>
+          <span className="font-medium text-foreground">{badge.label}</span>
           <span>{VENDOR_STATUS_LABELS[badge.status]}</span>
         </span>
       ))}
@@ -25,7 +24,7 @@ function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) 
   );
 }
 
-export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
+export function VendorSyncSettings({ vendor, showScan }: { vendor: VendorSyncModel; showScan: boolean }) {
   const {
     preview,
     checkedMcp,
@@ -42,17 +41,18 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
     toggleMcp,
     toggleSkill,
     closePreview,
-  } = useVendorSyncSetting(client);
+  } = vendor;
 
   return (
     <>
-      <SettingsGroup title="Integrations">
+      {showScan && <SettingsGroup title="Integrations">
         <SettingsRow label="Vendor sync" detail={summary} error={scanError}>
           {(id) => (
             <Button
               id={id}
               variant="outline"
               size="sm"
+              className="min-w-24"
               aria-label={scanning ? "Scanning…" : "Scan…"}
               disabled={scanning}
               onClick={previewVendorSync}
@@ -62,9 +62,11 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
             </Button>
           )}
         </SettingsRow>
-      </SettingsGroup>
+      </SettingsGroup>}
 
+      {/* Radix must register the preview after the Settings dialog when columns return. */}
       <Dialog
+        key={showScan ? "desktop" : "mobile"}
         open={preview !== null}
         onOpenChange={(open) => {
           if (!open) closePreview();
@@ -83,7 +85,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                   const detail = (
                     <div className="flex flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-sidebar px-2 py-0.5 font-mono text-xs text-muted-foreground">
+                        <span className="rounded-xs bg-panel px-2 py-0.5 font-mono text-xs text-muted-foreground">
                           {item.transport}
                         </span>
                         <span className="font-mono text-xs break-all">{item.maskedTarget}</span>
@@ -93,7 +95,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                           {item.maskedAuth.map((entry) => (
                             <span
                               key={entry}
-                              className="rounded-xl bg-sidebar px-2 py-0.5 font-mono text-xs text-muted-foreground"
+                              className="rounded-xs bg-panel px-2 py-0.5 font-mono text-xs text-muted-foreground"
                             >
                               {entry}
                             </span>
@@ -129,7 +131,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                   const detail = (
                     <div className="flex flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-sidebar px-2 py-0.5 text-xs text-muted-foreground">
+                        <span className="rounded-xs bg-panel px-2 py-0.5 text-xs text-muted-foreground">
                           {item.scope === "global" ? "Global" : (item.projectLabel ?? "Project")}
                         </span>
                         <span className="font-mono text-xs break-all">{item.sourcePath}</span>
@@ -160,7 +162,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                 {preview.nonSyncable.map((item) => {
                   const detail = (
                     <div className="flex flex-col gap-1">
-                      <span className="inline-flex w-fit items-center rounded-full bg-sidebar px-2.5 py-0.5 text-xs font-medium text-foreground/80">
+                      <span className="inline-flex w-fit items-center rounded-xs bg-panel px-2.5 py-0.5 text-xs font-medium text-foreground">
                         {item.vendorLabel}
                       </span>
                       <span>{item.reason}</span>

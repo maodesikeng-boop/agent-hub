@@ -19,7 +19,7 @@ describe("登记动作", () => {
     expect(enqueued).toBe(true);
     expect(row).toMatchObject({
       type: "session.send",
-      dedupeKey: "7",
+      dedupeKey: "1:7",
       params: { sessionId: 1, messageId: 7, source: "user" },
       status: "pending",
       attempts: 0,
@@ -75,10 +75,9 @@ describe("登记动作", () => {
 
   it("不同类型、同样的去重键是两行", () => {
     enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 1, source: "user" } }, 1);
-    // session.start 的键是 "1:1"，换个能撞上的：直接比较类型分开
     enqueueAction(db, { type: "session.start", params: { sessionId: 1, generation: 1 } }, 1);
     expect(listActions(db).map((a) => [a.type, a.dedupeKey])).toEqual([
-      ["session.send", "1"],
+      ["session.send", "1:1"],
       ["session.start", "1:1"],
     ]);
   });

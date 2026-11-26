@@ -127,6 +127,7 @@ describe("submitDecision：三合一拍板提交", () => {
     );
     expect(postTaskGraphDecide).toHaveBeenCalledWith(7, "pick-db", {
       clientId: "cid-4",
+      askMessageId: 200,
       choice: "开启 WAL",
       note: "同步加上 busy_timeout",
     });
@@ -138,6 +139,7 @@ describe("submitDecision：三合一拍板提交", () => {
     );
     expect(postTaskGraphDecide).toHaveBeenLastCalledWith(7, "pick-db", {
       clientId: "cid-5",
+      askMessageId: 200,
       choice: null,
       note: "先只读压测一轮",
     });

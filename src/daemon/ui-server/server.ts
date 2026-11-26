@@ -15,6 +15,8 @@ import { registerIntegrationRoutes } from "./routes-integrations.ts";
 import { registerPmRoutes } from "./routes-pms.ts";
 import { registerResourceRoutes } from "./routes-resources.ts";
 import { registerRouterRoutes } from "./routes-router.ts";
+import { registerAppApprovalRoutes } from "./routes-app-approvals.ts";
+import { registerSandboxApprovalRoutes } from "./routes-sandbox-approvals.ts";
 import { registerSessionRoutes } from "./routes-session.ts";
 import { registerUpdateRoutes } from "./routes-update.ts";
 import { registerWsRoute } from "./routes-ws.ts";
@@ -57,6 +59,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     registerPmRoutes(routes, c);
     registerCapabilityRoutes(routes, c);
     registerRouterRoutes(routes, c);
+    registerSandboxApprovalRoutes(routes, c);
+    registerAppApprovalRoutes(routes, c);
     registerIntegrationRoutes(routes, c);
     registerResourceRoutes(routes, c);
     registerUpdateRoutes(routes, c);

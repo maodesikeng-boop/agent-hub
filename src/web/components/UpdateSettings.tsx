@@ -14,7 +14,7 @@ import {
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 const INLINE_ACTION =
-  "touch-target inline-flex cursor-pointer items-center gap-1 font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50";
+  "touch-target inline-flex cursor-pointer items-center gap-1 font-medium text-brand-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus";
 
 function InlineLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -94,7 +94,7 @@ export function UpdateSettings({ titled = true }: { titled?: boolean }) {
         }
       >
         {() => (
-          <Button variant="ghost" size="sm" className="-mr-3" disabled={checking} onClick={() => check.mutate()}>
+          <Button variant="outline" size="sm" disabled={checking} onClick={() => check.mutate()}>
             {checking && <Loader2 aria-hidden="true" />}
             Check for updates
           </Button>

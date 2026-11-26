@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execGh, type GhRunResult } from "../src/daemon/git/gh.ts";
-import { REVIEW_STATUS_CONTEXT } from "../src/shared/review.ts";
+import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 
 export const DEFAULT_POLL_INTERVAL_SECONDS = 15;
 export const DEFAULT_TIMEOUT_SECONDS = 40 * 60;

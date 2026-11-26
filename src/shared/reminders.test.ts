@@ -21,6 +21,7 @@ import {
   reminderStateFrom,
   routerReminderSummary,
   unreadRouterReports,
+  visibleSessionOf,
   waitingConversations,
   type ReminderState,
 } from "./reminders.ts";
@@ -51,6 +52,14 @@ function snapshot(over: { pm1?: Message[]; sessions?: SessionState[] } = {}): St
 
 let seq = 100;
 const change = (c: Omit<Change, "seq">): Change => ({ ...c, seq: ++seq }) as Change;
+
+it("counts sandbox approvals across devices and shows their reminder when no ordinary decision is waiting", () => {
+  const state = reminderStateFrom(snapshot());
+  expect(routerReminderSummary([
+    { deviceId: "local", state: { ...state, pendingSandboxCards: [{ id: 1 }] } },
+    { deviceId: DEVICE, state: { ...state, pendingSandboxCards: [{ id: 1 }, { id: 2 }] } },
+  ])).toEqual({ pendingCount: 3, unreadReportCount: 0, subtitle: "Worker sandbox approval" });
+});
 
 describe("规则（从 web/selectors.ts 搬来，行为不变）", () => {
   it("等你：项目经理停下、最后一条是它说的、上次看之后有新消息", () => {
@@ -469,5 +478,39 @@ describe("Router 跨设备汇总：PendingDecision 与未读 Router 汇报", () 
       unreadReportCount: 0,
       subtitle: "远端旧门禁要不要放行？",
     });
+  });
+});
+
+describe("visibleSessionOf during handover", () => {
+  it("clears stepStartedAt when hiding handover activity", () => {
+    const handoverReq = makeMessage({
+      id: 1,
+      conversationId: 1,
+      sessionId: 10,
+      sender: "system",
+      status: "processing",
+      text: "Handover requested",
+      meta: { event: "handover.requested", sessionId: 10, auto: true },
+    });
+    const session = makeSession({
+      sessionId: 10,
+      conversationId: 1,
+      pmId: 1,
+      status: "running",
+      activity: "working",
+      currentTool: "Read",
+      step: { type: "tool_use", name: "Read", input: {} },
+      stepStartedAt: T0 - 5_000,
+    });
+    const idleState = reminderStateFrom(snapshot({ pm1: [handoverReq], sessions: [session] }));
+    expect(visibleSessionOf(idleState, 1)).toMatchObject({ activity: "idle", step: null, stepStartedAt: null, currentTool: null });
+
+    const waitingState = reminderStateFrom(
+      snapshot({
+        pm1: [handoverReq, makeUserMessage({ id: 2, conversationId: 1, status: "queued", text: "继续" })],
+        sessions: [session],
+      }),
+    );
+    expect(visibleSessionOf(waitingState, 1)).toMatchObject({ activity: "working", step: { type: "thinking" }, stepStartedAt: null, currentTool: null });
   });
 });

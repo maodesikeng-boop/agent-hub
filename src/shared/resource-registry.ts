@@ -4,6 +4,7 @@ import {
   ACTIONS_TERMINAL_RETENTION_DAYS,
   BRANCH_MERGED_RETENTION_DAYS,
   BRANCH_UNMERGED_HOLD_DAYS,
+  CHECKLIST_MAX_ITEMS,
   COMPLETED_GRAPHS_MAX_ROWS,
   COMPLETED_GRAPH_RETENTION_DAYS,
   DAEMON_LOG_MAX_BYTES,
@@ -42,6 +43,10 @@ import {
   ROUTER_COMMANDS_RETENTION_MAX,
   ROUTER_ITEMS_TERMINAL_MAX_ROWS,
   ROUTER_ITEM_RETENTION_DAYS,
+  SANDBOX_APPROVALS_RETENTION_DAYS,
+  APP_APPROVALS_RETENTION_DAYS,
+  APP_APPROVALS_TERMINAL_MAX_ROWS,
+  SANDBOX_APPROVALS_TERMINAL_MAX_ROWS,
   SENT_FILES_DISK_MAX_BYTES,
   SENT_FILES_RETENTION_DAYS,
   SESSION_MAX_AGE_MS,
@@ -173,6 +178,16 @@ const USER_BLOCKER_LIMITS: readonly ResourceLimitRef[] = [
   limit("USER_BLOCKERS_RESOLVED_KEEP", USER_BLOCKERS_RESOLVED_KEEP, "rows"),
 ];
 
+const SANDBOX_APPROVAL_LIMITS: readonly ResourceLimitRef[] = [
+  limit("SANDBOX_APPROVALS_RETENTION_DAYS", SANDBOX_APPROVALS_RETENTION_DAYS, "days"),
+  limit("SANDBOX_APPROVALS_TERMINAL_MAX_ROWS", SANDBOX_APPROVALS_TERMINAL_MAX_ROWS, "rows"),
+];
+
+const APP_APPROVAL_LIMITS: readonly ResourceLimitRef[] = [
+  limit("APP_APPROVALS_RETENTION_DAYS", APP_APPROVALS_RETENTION_DAYS, "days"),
+  limit("APP_APPROVALS_TERMINAL_MAX_ROWS", APP_APPROVALS_TERMINAL_MAX_ROWS, "rows"),
+];
+
 const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("messages", "growing", "src/daemon/ledger/messages.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/db-table-retention.ts", "automatic", [
     ...WORKER_RETENTION_LIMITS,
@@ -214,6 +229,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("task_graph_steps", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_edges", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_step_capabilities", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
+  table("task_graph_step_sandbox", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("feishu_posts", "growing", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "automatic", [
     limit("FEISHU_POST_RETENTION_DAYS", FEISHU_POST_RETENTION_DAYS, "days"),
     limit("FEISHU_POSTS_MAX_ROWS", FEISHU_POSTS_MAX_ROWS, "rows"),
@@ -238,6 +254,8 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("user_blocker_cards", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
   table("user_blocker_steps", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
   table("user_blocker_workers", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
+  table("worker_sandbox_approvals", "growing", "src/daemon/ledger/sandbox-approvals.ts", "src/daemon/ledger/sandbox-approvals.ts, src/daemon/ledger/db-table-retention.ts", "automatic", SANDBOX_APPROVAL_LIMITS),
+  table("worker_app_approvals", "growing", "src/daemon/ledger/app-approvals.ts", "src/daemon/ledger/app-approvals.ts", "automatic", APP_APPROVAL_LIMITS),
   table("loaded_skills", "growing", "src/daemon/ledger/loaded-skills.ts", "src/daemon/ledger/loaded-skills.ts", "automatic", [
     limit("SKILL_CARRYOVER_RECORDS_MAX", SKILL_CARRYOVER_RECORDS_MAX, "rows"),
   ]),
@@ -245,6 +263,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
     limit("RESOURCE_DECISIONS_MAX_ROWS", RESOURCE_DECISIONS_MAX_ROWS, "rows"),
   ]),
   table("worker_background_waits", "growing", "src/daemon/ledger/workers.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
+  table("worker_background_wait_details", "growing", "src/daemon/ledger/workers/ctx.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("worker_turn_timeouts", "growing", "src/daemon/ledger/workers.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_persona_seen", "growing", "src/daemon/ledger/persona.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/router.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_preamble_seen", "growing", "src/daemon/ledger/handover.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
@@ -255,13 +274,22 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("pms", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("pm_archives", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("pm_looks", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("pm_pins", "retained_metadata", "src/daemon/ledger/pm-pins.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("projects", "retained_metadata", "src/daemon/ledger/projects.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("project_folders", "retained_metadata", "src/daemon/ledger/projects.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("project_catalogs", "retained_metadata", "src/daemon/ledger/project-catalog.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("conversations", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("conversation_purges", "retained_metadata", "src/daemon/ledger/worker-retention.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("agent_sessions", "retained_metadata", "src/daemon/ledger/sessions.ts", "src/daemon/ledger/persona.ts, src/daemon/ledger/router.ts", "on_archive_or_delete"),
+  table("session_checklists", "retained_metadata", "src/daemon/ledger/checklist.ts", "migrations/0052_session_checklists.sql", "automatic", [
+    limit("CHECKLIST_MAX_ITEMS", CHECKLIST_MAX_ITEMS, "entries"),
+  ]),
+  table("session_checklist_turns", "retained_metadata", "src/daemon/ledger/checklist.ts", "migrations/0054_system_wakeups.sql", "automatic", [
+    limit("CHECKLIST_MAX_ITEMS", CHECKLIST_MAX_ITEMS, "entries"),
+  ]),
   table("workers", "retained_metadata", "src/daemon/ledger/workers.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("worker_endings", "retained_metadata", "src/daemon/ledger/completed-work.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("worker_direct_chat_receipts", "retained_metadata", "src/daemon/ledger/workers/direct-chat.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("worker_capabilities", "retained_metadata", "src/daemon/ledger/workers.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("router_worker_origins", "retained_metadata", "src/daemon/ledger/router.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("schedules", "retained_metadata", "src/daemon/ledger/schedules.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
@@ -271,7 +299,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("default_capability_policies", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),
   table("default_capability_overrides", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),
   table("pm_capability_policies", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
-  table("project_review_status", "bounded_config", "src/daemon/ledger/projects.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("project_review_status", "bounded_config", "migrations/0048_project_review_status.sql", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("pm_capability_overrides", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("router_capability_policies", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),
   table("router_capability_overrides", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),

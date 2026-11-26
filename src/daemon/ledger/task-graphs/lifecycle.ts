@@ -3,15 +3,13 @@ import type {
   CancelTaskGraphResponse,
   SkipTaskNodeRequest,
   SkipTaskNodeResponse,
-  TaskGraphsPage,
 } from "../../../shared/api.ts";
-import { taskNodeStatusText, truncateChars, userMessageDedupeKey, utf8Bytes } from "../../../shared/domain.ts";
-import type { AgentSessionRow, MessageId, ProjectId, TaskArtifact, TaskGraph, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
+import { taskNodeStatusText, truncateChars, utf8Bytes } from "../../../shared/domain.ts";
+import type { AgentSessionRow, MessageId, TaskArtifact, TaskGraph, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
 import { graphDeliverables } from "../../../shared/deliverables.ts";
 import type { HubArgs, HubResult, WorkerPr } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import {
-  GRAPH_HISTORY_PAGE_SIZE,
   HUB_GRAPH_LIST_LIMIT,
   MAX_ACTIVE_GRAPHS_PER_PROJECT,
   MAX_NODE_ARTIFACT_SUMMARY_CHARS,
@@ -24,18 +22,19 @@ import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { RouterReportLink } from "../../../shared/router.ts";
 import type { Db } from "../../store/index.ts";
 import { fail, type Pending } from "../context.ts";
+import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { collectGraphBranches, collectGraphPrUrls, stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
-import { artifactWithoutCheckpoint, isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
+import { isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, lastWorkerIdOf, workerIdsOf } from "./rows.ts";
 import { charLen, validateNodeKey } from "./spec.ts";
-import { getGraphRow, hydrateGraphs, isGraphAllSettled, listStepRows, loadGraph, publishGraphIn, requireStepRow, resolveGraphForPm } from "./store.ts";
+import { getGraphRow, hydrateGraphs, hydrateNodes, isGraphAllSettled, listStepRows, loadGraph, publishGraphIn, requireStepRow, resolveGraphForPm } from "./store.ts";
 import { collapseOneLine, formatGraphText, unlockedNoteOf, workerIdList } from "./text.ts";
 import { emptyProgress, type PmCaller, type ProgressResult, type TaskGraphCtx, type TaskGraphDbRow, type TaskNodeDbRow } from "./types.ts";
 
 export function show(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.show">): HubResult<"graph.show"> {
   const row = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: false });
   const graph = loadGraph(g, row.id)!;
-  return { text: formatGraphText(graph), data: { graph } };
+  return { text: formatGraphText(graph, true, { ...g, pmVendor: caller.vendor }), data: { graph } };
 }
 
 export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.list">): HubResult<"graph.list"> {
@@ -55,29 +54,11 @@ export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.lis
             caller.pmId,
             MAX_ACTIVE_GRAPHS_PER_PROJECT,
           );
-  const graphs = hydrateGraphs(g, rows);
+  const graphs = hydrateGraphs(g, rows, true);
   if (graphs.length === 0) {
     return { text: filtered ? "还没有符合条件的任务图。" : "当前没有活跃的任务图。", data: { graphs: [] } };
   }
-  return { text: graphs.map((graph) => formatGraphText(graph, false)).join("\n\n"), data: { graphs } };
-}
-
-export function listProjectHistory(g: TaskGraphCtx, projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage {
-  const take = Math.max(1, Math.min(limit ?? GRAPH_HISTORY_PAGE_SIZE, 50));
-  const rows =
-    beforeId === undefined
-      ? g.db.all<TaskGraphDbRow>(
-          "SELECT * FROM task_graphs WHERE project_id = ? AND status != 'active' ORDER BY id DESC LIMIT ?",
-          projectId,
-          take + 1,
-        )
-      : g.db.all<TaskGraphDbRow>(
-          "SELECT * FROM task_graphs WHERE project_id = ? AND status != 'active' AND id < ? ORDER BY id DESC LIMIT ?",
-          projectId,
-          beforeId,
-          take + 1,
-        );
-  return { graphs: hydrateGraphs(g, rows.slice(0, take)), hasMore: rows.length > take };
+  return { text: graphs.map((graph) => formatGraphText(graph, false, { ...g, pmVendor: caller.vendor })).join("\n\n"), data: { graphs } };
 }
 
 function doneArtifact(args: HubArgs<"graph.done">, node: TaskNodeDbRow): { artifact: TaskArtifact; note: string | undefined } {
@@ -118,39 +99,35 @@ export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
     throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
   }
   assertNotRunning(node, nodeKey, graphRow.id);
+  if (sandboxApprovalPendingForStep(g.db, node.id)) {
+    throw fail("conflict", `步骤「${nodeKey}」在等用户确认 Worker 沙箱。请等用户确认，或先收工这个 Worker`);
+  }
+  const latest = lastWorkerIdOf(node);
+  const workers = g.options.workers?.();
+  const openWorker = latest !== null && g.db.get("SELECT 1 FROM workers WHERE id = ? AND status = 'open'", latest) !== undefined ? latest : null;
+  if (openWorker !== null && workers?.isWorkerInFlight(openWorker)) {
+    assertNotRunning({ ...node, status: "running", active_worker_id: openWorker }, nodeKey, graphRow.id);
+  }
   const { artifact, note } = doneArtifact(args, node);
   const nextPmNote = note && note !== "" ? note : node.pm_note;
   const active = graphRow.status === "active";
   const wasAllSettled = active && isGraphAllSettled(g.db, graphRow.id);
   const t = g.now();
-  const cp = isStoredCheckpoint(node) ? 1 : 0;
-  if (node.status !== "done" && node.gate_ask_message_id !== null && node.decision_json === null) {
-    g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
-  }
   g.db.run(
     `UPDATE task_graph_steps
         SET status = 'done',
             waiting_for = NULL,
             active_worker_id = NULL,
             artifact_json = ?,
-            gate_question = CASE WHEN ? = 1 THEN NULL ELSE gate_question END,
-            gate_options_json = CASE WHEN ? = 1 THEN NULL ELSE gate_options_json END,
-            gate_summary_md = CASE WHEN ? = 1 THEN NULL ELSE gate_summary_md END,
-            gate_recommended = CASE WHEN ? = 1 THEN NULL ELSE gate_recommended END,
-            gate_ask_message_id = CASE WHEN ? = 1 THEN NULL ELSE gate_ask_message_id END,
             pm_note = ?,
             updated_at = ?
       WHERE id = ?`,
-    serializeArtifact(artifact, false),
-    cp,
-    cp,
-    cp,
-    cp,
-    cp,
+    serializeArtifact(artifact, isStoredCheckpoint(node)),
     nextPmNote,
     t,
     node.id,
   );
+  if (openWorker !== null) workers?.stopWorkersIn(p, [openWorker]);
   const progress: ProgressResult = active
     ? recomputeGraphProgressIn(g, p, graphRow, caller, context, { retractBlockedWaiting: false })
     : emptyProgress();
@@ -184,11 +161,10 @@ function skipNodeInternalIn(
   const artifact: TaskArtifact | null = trimmedReason ? { summary: `已跳过：${trimmedReason}` } : readStoredArtifact(node.artifact_json).artifact;
   g.db.run(
     "UPDATE task_graph_steps SET status = 'done', waiting_for = NULL, skipped = 1, artifact_json = ?, updated_at = ? WHERE id = ?",
-    serializeArtifact(artifact, false),
+    serializeArtifact(artifact, isStoredCheckpoint(node)),
     t,
     node.id,
   );
-  if (node.gate_ask_message_id !== null) g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
   const progress = recomputeGraphProgressIn(g, p, graphRow, callerSession, context, { retractBlockedWaiting: false });
   syncDeliveryNoteAfterProgressIn(g, p, graphRow, wasAllSettled);
   const lead = `用户在网页上跳过了步骤「${nodeKey}（${node.title}）」${trimmedReason ? `（说明：${trimmedReason}）` : ""}，`;
@@ -202,7 +178,7 @@ export function skipIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
   const nodeKey = validateNodeKey(args.nodeKey);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: true });
   const { graph, progress } = skipNodeInternalIn(g, p, graphRow, nodeKey, args.reason, false, caller, context);
-  return { text: `已跳过节点「${nodeKey}」${unlockedNoteOf(progress, graph)}\n${formatGraphText(graph)}`, data: { graph } };
+  return { text: `已跳过节点「${nodeKey}」${unlockedNoteOf(progress, graph)}\n${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}`, data: { graph } };
 }
 
 export function skipNode(g: TaskGraphCtx, graphId: TaskGraphId, rawNodeKey: TaskNodeKey, input: SkipTaskNodeRequest): SkipTaskNodeResponse {
@@ -234,19 +210,6 @@ function releaseGraphRowsIn(g: TaskGraphCtx, graphId: TaskGraphId, status: "canc
   g.db.run("UPDATE task_graphs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?", status, t, t, graphId);
 }
 
-function closeGraphCardsIn(g: TaskGraphCtx, p: Pending, graphId: TaskGraphId, t: number): void {
-  const nodes = g.db.all<TaskNodeDbRow>(
-    "SELECT * FROM task_graph_steps WHERE graph_id = ? AND (gate_ask_message_id IS NOT NULL OR artifact_json IS NOT NULL)",
-    graphId,
-  );
-  for (const n of nodes) {
-    if (n.gate_ask_message_id !== null) g.messages.settleAskIn(p, n.gate_ask_message_id, { by: "close" });
-    if (isStoredCheckpoint(n)) {
-      g.db.run("UPDATE task_graph_steps SET artifact_json = ?, updated_at = ? WHERE id = ?", artifactWithoutCheckpoint(n), t, n.id);
-    }
-  }
-}
-
 function cancelGraphInternalIn(
   g: TaskGraphCtx,
   p: Pending,
@@ -263,7 +226,6 @@ function cancelGraphInternalIn(
       graphRow.id,
     ),
   );
-  closeGraphCardsIn(g, p, graphRow.id, t);
   releaseGraphRowsIn(g, graphRow.id, "cancelled", t);
   const stoppedWorkerIds = candidates.size > 0 ? (g.options.workers?.()?.stopWorkersIn(p, [...candidates]) ?? []) : [];
   stopQueuedDeliveryNotesIn(g, p, graphRow.conversation_id, graphRow.id);
@@ -272,9 +234,10 @@ function cancelGraphInternalIn(
   if (wakePm) {
     const trimmedReason = reason?.trim();
     const stoppedNote = stoppedWorkerIds.length > 0 ? `已自动停掉在跑的 Worker ${workerIdList(stoppedWorkerIds)}。` : "";
-    messageId = g.messages.enqueueWakeupUserMessageIn(p, {
+    messageId = g.messages.enqueueWakeupIn(p, {
       conversationId: graph.conversationId,
-      dedupeKey: userMessageDedupeKey(graph.conversationId, `graph-cancel:${graph.id}:${t}`),
+      source: "task_graph",
+      ref: `graph-cancel:${graph.id}:${t}`,
       text: `【任务图 #${graph.id} · ${graph.title}】用户取消了整张任务图${trimmedReason ? `（说明：${trimmedReason}）` : ""}。${stoppedNote}`.trim(),
     }).id;
   }
@@ -339,10 +302,10 @@ function reportLinks(branches: GraphBranches, graphPrs: Readonly<Record<string, 
   return links;
 }
 
-function assertAllSettled(graphRow: TaskGraphDbRow, nodeRows: readonly TaskNodeDbRow[]): void {
+function assertAllSettled(g: TaskGraphCtx, graphRow: TaskGraphDbRow, nodeRows: readonly TaskNodeDbRow[]): void {
   const unsettled = nodeRows.filter((n) => n.status !== "done");
   if (nodeRows.length > 0 && unsettled.length === 0) return;
-  const listText = unsettled.map((n) => `${n.node_key} [${taskNodeStatusText(toTaskNode(n), "pm")}]`).join("、");
+  const listText = hydrateNodes(g, unsettled, false).map((n) => `${n.key} [${taskNodeStatusText(n, "pm")}]`).join("、");
   throw fail(
     "conflict",
     `任务图 #${graphRow.id} 还有未完成的节点：${listText}。所有节点完成后才能 ${HUB_COMMAND} graph finish；若要中途放弃整张图，请用 ${HUB_COMMAND} graph cancel ${graphRow.id}`,
@@ -355,7 +318,7 @@ export function finishIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: Hu
   if (summary === "") throw fail("invalid", "交付摘要不能是空的（用 --stdin 传入交付摘要）");
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: true });
   const nodeRows = listStepRows(g.db, graphRow.id);
-  assertAllSettled(graphRow, nodeRows);
+  assertAllSettled(g, graphRow, nodeRows);
   const branches = collectGraphBranches(g.db, graphRow);
   const graphPrs = context?.graphPrs;
   if (args.unmergedOk !== true && graphPrs !== undefined) assertNoOpenPrs(g.db, graphRow, branches, graphPrs);

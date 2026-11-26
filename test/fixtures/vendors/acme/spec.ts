@@ -40,6 +40,7 @@ export default defineVendor({
     serviceName: "Acme",
     rawHint: /^acme_not_found\b|\bacme\b/i,
   },
+  checklist: { sources: [] },
   skillSignals: { outputField: "output" },
   capabilities: {
     backgroundWake: false,

@@ -1,7 +1,9 @@
 // 消息流：一轮回复一个头像、操作合成一行 Worked for、Worker 的发言、系统行、消息状态、复制、空对话、老数据。
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import type { Message } from "../shared/index.ts";
 import { AgentStatus } from "./components/AgentStatus.tsx";
 import { MessageList } from "./components/MessageList.tsx";
@@ -25,11 +27,11 @@ const running = (step: Parameters<typeof makeSession>[0] = {}) => (
   <AgentStatus session={makeSession({ status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} }, ...step })} />
 );
 
-function list(
+function listView(
   messages: Message[],
-  over: { status?: React.ReactNode; pending?: PendingMessage[]; actions?: MessageActions; agentOf?: (m: Message) => AgentIdentity; hasMore?: boolean } = {},
+  over: { status?: React.ReactNode; stepStartedAt?: number; pending?: PendingMessage[]; actions?: MessageActions; agentOf?: (m: Message) => AgentIdentity; hasMore?: boolean } = {},
 ) {
-  return render(
+  return (
     <MessageList
       messages={messages}
       pending={over.pending ?? []}
@@ -40,10 +42,13 @@ function list(
       onRetry={() => {}}
       actions={over.actions ?? actions()}
       status={over.status ?? null}
+      stepStartedAt={over.stepStartedAt}
       statusAgent={pm}
-    />,
+    />
   );
 }
+
+const list = (...args: Parameters<typeof listView>) => render(listView(...args));
 
 const heads = (c: HTMLElement) => Array.from(c.querySelectorAll("[data-slot='agent-head']")) as HTMLElement[];
 const workLines = (c: HTMLElement) => Array.from(c.querySelectorAll("[data-work-line]")) as HTMLElement[];
@@ -124,15 +129,49 @@ describe("一轮回复只出一次头像", () => {
 });
 
 describe("正在跑和跑完", () => {
-  it("正在跑：这一轮最下面一行英文状态，可点开看明细；没有 Worked for、没有复制", async () => {
+  it("keeps the live checklist and clock on the same turn through trailing notices", async () => {
+    const messages = [
+      makeUserMessage({ id: 1, status: "processing" }),
+      makeMessage({ id: 2, kind: "checklist", text: "", meta: {
+        checklist: [{ id: "read", title: "Read files", activeTitle: "Reading files", status: "in_progress" }],
+      } }),
+      makeToolMessage({ id: 3, text: "Read: probe.ts" }),
+    ];
+    const notices = [
+      makeSystemMessage({ id: 4, text: "Persona updated", event: { event: "persona.changed", pmId: 1, personaChangeId: 1, revertOf: null } }),
+      makeSystemMessage({ id: 5, text: "Folder attached", event: { event: "folder.attached", projectId: 1, folderId: 1, path: "/probe" } }),
+    ];
+    const live = { status: running(), stepStartedAt: Date.now() - 16_000 };
+    const { container, rerender } = list(messages, live);
+    const turn = screen.getByText("Reading files").closest("[data-turn]")!;
+    rerender(listView([...messages, ...notices], live));
+    expect(screen.getByText("Persona updated")).toBeInTheDocument();
+    expect(screen.getByText("Folder attached")).toBeInTheDocument();
+    expect(screen.getByText("Reading files").closest("[data-turn]")).toBe(turn);
+    expect(workLines(container)).toHaveLength(1);
+    expect(workLines(container)[0]).toHaveTextContent(/Running command\.\.\.\d+s/);
+    expect(workLines(container)[0]?.closest("[data-turn]")).toBe(turn);
+    expect(screen.queryByText(/Worked for/)).not.toBeInTheDocument();
+    await userEvent.click(within(workLines(container)[0]!).getByRole("button"));
+    expect(screen.getByText("Read: probe.ts")).toBeInTheDocument();
+
+    rerender(listView([...messages, ...notices]));
+    expect(workLines(container)).toHaveLength(1);
+    expect(screen.queryByText("Read files")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Worked for/ }));
+    expect(screen.getByRole("button", { name: "Read files, In progress" })).toBeInTheDocument();
+  });
+
+  it("正在跑：这一轮正文上方一行英文状态，可点开看明细；没有 Worked for、没有复制", async () => {
     const { container } = list(turn(), { status: running() });
     const lines = workLines(container);
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toHaveTextContent("Worked for");
     const status = within(lines[0]!).getByRole("status", { name: "Status" });
     expect(status).toHaveTextContent("Running command...");
-    // 在最后一段文字下面
-    expect(screen.getByText("派好了").compareDocumentPosition(lines[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 在名字下面、正文上面（与 Worked for 共用同一个位置）
+    expect(heads(container)[0]!.compareDocumentPosition(lines[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(lines[0]!.compareDocumentPosition(screen.getByText("派好了")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
     await userEvent.click(within(lines[0]!).getByRole("button"));
     expect(container).toHaveTextContent("Bash: hub worker start");
@@ -150,11 +189,17 @@ describe("正在跑和跑完", () => {
   });
 
   it("最后是 Worker 的汇报：项目经理的新一轮单独出头像和状态", () => {
-    const { container } = list([makeMessage({ id: 1, text: "派好了" }), makeWorkerLine({ id: 2, line: { event: "report", status: "done", summary: "改好了" } })], {
+    const { container } = list([
+      makeToolMessage({ id: 1 }),
+      makeMessage({ id: 2, text: "派好了" }),
+      makeWorkerLine({ id: 3, status: "replied", line: { event: "report", status: "done", summary: "改好了" } }),
+    ], {
       status: running({ step: { type: "text" } }),
     });
     const all = heads(container);
+    expect(all).toHaveLength(2);
     expect(all.at(-1)).toHaveTextContent("小林");
+    expect(workLines(container)[0]).toHaveTextContent("Worked for");
     expect(workLines(container).at(-1)).toHaveTextContent("Writing...");
   });
 
@@ -165,36 +210,31 @@ describe("正在跑和跑完", () => {
   });
 });
 
-describe("Worker 的发言", () => {
+describe("Worker 线程卡（ThreadCard）", () => {
   const report = (over: Parameters<typeof makeWorkerLine>[0]["line"] = {}) =>
     makeWorkerLine({ id: 5, line: { event: "report", status: "done", summary: "按钮统一成 36px，开了 PR #128", ...over } });
 
-  it("头像和标题在气泡上面，摘要在靠左的气泡里，整个气泡点开 Worker 的对话", async () => {
+  it("汇报是一行：纸片小灵头像、标题、时间和箭头，状态词和第一行摘要只给读屏，没有常驻边框，整行可点开 Worker 对话", async () => {
     const onOpenWorker = vi.fn();
     const { container } = list([report()], { actions: actions({ onOpenWorker }) });
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
     expect(row).toHaveAttribute("data-side", "left");
-    expect(row.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
-    expect(within(row).getByText("修 X")).toBeInTheDocument();
-    const bubble = within(row).getByRole("button");
+    const bubble = within(row).getByRole("button", { name: "修 X, Done, 按钮统一成 36px，开了 PR #128" });
     expect(bubble).toHaveAttribute("data-bubble");
-    expect(bubble).toHaveTextContent("按钮统一成 36px，开了 PR #128");
-    // 头像和标题在气泡外面、气泡前面
-    expect(bubble).not.toContainElement(row.querySelector("[data-slot='avatar']"));
-    expect(bubble).not.toHaveTextContent("修 X");
-    // 圆角、内边距和用户气泡同一套，悬停有反馈
-    const user = list([makeUserMessage({ id: 1 })]).container.querySelector("[data-bubble]") as HTMLElement;
-    for (const cls of ["rounded-[22px]", "px-4", "py-2.5"]) {
-      expect(bubble.className).toContain(cls);
-      expect(user.className).toContain(cls);
-    }
-    expect(bubble.className).toContain("hover:");
+    expect(bubble.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
+    expect(bubble).toHaveTextContent("修 X");
+    expect(bubble).not.toHaveTextContent("Done");
+    expect(bubble).not.toHaveTextContent("按钮统一成 36px");
+    const userBubble = list([makeUserMessage({ id: 1 })]).container.querySelector("[data-bubble]") as HTMLElement;
+    expect(bubble).toHaveClass("rounded-sm", "text-minor", "hover:bg-hover");
+    expect(bubble).not.toHaveClass("border", "bg-background");
+    expect(userBubble.className).not.toMatch(/rounded-(?!sm\b)/);
     expect(row.innerHTML).not.toContain("Piece「");
     await userEvent.click(bubble);
     expect(onOpenWorker).toHaveBeenCalledWith(30);
   });
 
-  it("状态不写字：做完了、有问题、放弃了、出错各一种颜色，字放在 title 和 aria-label", () => {
+  it("状态词 Done / Problem / Gave up / Error 和写成人话的失败原因只在读屏名字里，行内只看得到标题", () => {
     const { container } = list([
       report(),
       report({ status: "problem", summary: "缺一个 key" }),
@@ -205,41 +245,37 @@ describe("Worker 的发言", () => {
     const rows = Array.from(container.querySelectorAll("[data-worker-report]")) as HTMLElement[];
     expect(rows.map((r) => r.getAttribute("data-tone"))).toEqual(["success", "warn", "danger", "danger", "danger"]);
     const buttons = rows.map((r) => within(r).getByRole("button"));
-    expect(buttons.map((b) => b.getAttribute("title"))).toEqual(["做完了", "有问题", "放弃了", "Error", "Error"]);
+    for (const [i, label] of ["Done", "Problem", "Gave up", "Error", "Error"].entries()) {
+      expect(buttons[i]!).not.toHaveTextContent(label);
+    }
     expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
-      "修 X, 做完了: 按钮统一成 36px，开了 PR #128",
-      "修 X, 有问题: 缺一个 key",
-      "修 X, 放弃了: 做不了",
-      "修 X, Error: Claude 服务繁忙，稍后重试",
-      "修 X, Error: 被停止了",
+      "修 X, Done, 按钮统一成 36px，开了 PR #128",
+      "修 X, Problem, 缺一个 key",
+      "修 X, Gave up, 做不了",
+      "修 X, Error, Claude 服务繁忙，稍后重试",
+      "修 X, Error, 被停止了",
     ]);
-    // 界面上不再有状态的字
-    for (const word of ["做完了", "有问题", "放弃了"]) expect(container).not.toHaveTextContent(word);
-    expect(container.querySelector("[data-tag]")).toBeNull();
-    // 出错的原因写成人话，原文在正文的 title
-    expect(within(rows[3]!).getByText("Claude 服务繁忙，稍后重试")).toHaveAttribute("title", "error_during_execution: API Error: 529 Overloaded");
+    expect(rows[3]).not.toHaveTextContent("Claude 服务繁忙");
   });
 
-  it("气泡永远是中性浅灰，状态是头像右下角的色点；中性的没有点", () => {
+  it("卡片内部状态方块按 tone 着色（bg-success / bg-caution / bg-danger），无状态时无方块", () => {
     const { container } = list([report({ status: "problem" })]);
-    const bubble = container.querySelector("[data-bubble]") as HTMLElement;
-    expect(bubble.className).toContain("bg-bubble-agent");
     const dot = container.querySelector("[data-dot]") as HTMLElement;
     expect(dot).toHaveAttribute("data-dot", "warn");
     expect(dot).toHaveAttribute("aria-hidden", "true");
     expect(dot.className).toContain("bg-caution");
-    expect(dot.closest("[data-slot='agent-head']")).not.toBeNull();
+    expect(dot.className).toContain("rounded-full");
+    expect(dot.closest("[data-bubble]")).not.toBeNull();
     const dots = list([report(), report({ status: "gave_up" }), report({ status: "unformatted" })]).container.querySelectorAll("[data-dot]");
     expect(Array.from(dots).map((d) => d.getAttribute("data-dot"))).toEqual(["success", "danger"]);
   });
 
-  it("没按格式：中性灰、没有 title，正文是第一行", () => {
+  it("没按格式：没有状态点，读屏名字是标题加第一行", () => {
     const { container } = list([report({ status: "unformatted", summary: "我改完了" })]);
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
     expect(row).toHaveAttribute("data-tone", "neutral");
-    const bubble = within(row).getByRole("button");
-    expect(bubble).not.toHaveAttribute("title");
-    expect(bubble).toHaveTextContent("我改完了");
+    expect(row.querySelector("[data-dot]")).toBeNull();
+    expect(within(row).getByRole("button")).toHaveAccessibleName("修 X, 我改完了");
   });
 
   it("老数据：meta 里没有 summary、status 也能显示", () => {
@@ -250,8 +286,9 @@ describe("Worker 的发言", () => {
   });
 
   it("汇报后面项目经理的回复另起一轮（新头像）", () => {
-    const { container } = list([makeMessage({ id: 1, text: "派好了" }), report(), makeMessage({ id: 6, text: "收到" })]);
-    expect(heads(container)).toHaveLength(3);
+    const { container } = list([makeMessage({ id: 1, text: "派好了" }), { ...report(), status: "replied" }, makeMessage({ id: 6, text: "收到" })]);
+    expect(heads(container)).toHaveLength(2);
+    expect(container.querySelectorAll("[data-worker-report]")).toHaveLength(1);
   });
 
   it("Worker 对话里：项目经理的话是项目经理的水果小动物头像 + 名字，Worker 自己是同一只小动物的纸片分身头像", () => {
@@ -278,14 +315,27 @@ describe("Worker 的发言", () => {
 });
 
 describe("系统行", () => {
-  it("建项目、挂文件夹：靠左很淡的一行（12px、灰），不居中、没有底色", () => {
-    const { container } = list([makeSystemMessage({ id: 1, text: "项目已建好" })]);
+  it("建项目、挂文件夹：结构化活动条靠左展示（带标签，纸色底、4px 圆角、没有框），不居中、没有灰气泡", () => {
+    const { container } = list([makeSystemMessage({ id: 1, text: "项目已建好", event: { event: "project.created", projectId: 1 } })]);
     const notice = screen.getByText("项目已建好").closest("[data-notice]") as HTMLElement;
     expect(notice).toHaveAttribute("data-side", "left");
-    expect(notice.className).toContain("text-xs");
-    expect(notice.className).toContain("text-muted-foreground");
-    expect(container.innerHTML).not.toContain("justify-center");
+    expect(within(notice).getByText("Project")).toBeInTheDocument();
+    expect(notice.parentElement).toHaveClass("rounded-sm", "bg-panel");
+    expect(notice.parentElement?.className).not.toMatch(/(^|\s)border(-|\s|$)/);
+    expect(notice.className).not.toContain("justify-center");
     expect(container.innerHTML).not.toContain("bg-muted");
+  });
+
+  it("连续同族系统事件合并在同一个活动条容器里，不重复画外边框", () => {
+    const { container } = list([
+      makeSystemMessage({ id: 1, text: "挂上了文件夹：/repo", event: { event: "folder.attached", projectId: 1, folderId: 1, path: "/repo" } }),
+      makeSystemMessage({ id: 2, text: "项目经理改了性格设定", event: { event: "persona.changed", pmId: 1, personaChangeId: 1, revertOf: null } }),
+    ]);
+    const groups = container.querySelectorAll("[data-event-group]");
+    expect(groups).toHaveLength(1);
+    expect(within(groups[0] as HTMLElement).getByText("Folder")).toBeInTheDocument();
+    expect(within(groups[0] as HTMLElement).getByText("Persona")).toBeInTheDocument();
+    expect(within(groups[0] as HTMLElement).getByRole("button", { name: "Undo" })).toBeInTheDocument();
   });
 
   it("不在一轮里的派出、收工：很淡的一行，点开 Worker", async () => {
@@ -395,7 +445,8 @@ describe("消息状态（照微信）：不写字，只有没发出去左边一�
     const row = mark.parentElement as HTMLElement;
     expect(row).toHaveClass("flex", "items-center", "justify-end");
     expect(row.firstElementChild).toBe(mark);
-    expect(mark.querySelector("span")).toHaveClass("size-5", "rounded-full", "bg-danger", "text-white");
+    expect(mark.querySelector("span")).toHaveClass("size-5", "bg-danger", "text-white");
+    expect(mark.querySelector("span")!.className).not.toMatch(/rounded-/);
     fireEvent.click(mark);
     expect(onRetryMessage).toHaveBeenCalledWith(1);
   });
@@ -480,5 +531,120 @@ describe("送达与执行失败分开显示", () => {
     const { container } = list([makeUserMessage({ id: 1, status: "failed", failureReason: "spawn_failed: rejected" })]);
     expect(container.querySelector("[data-unsent]")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
+  });
+});
+
+describe("system inputs and progress across turns", () => {
+  const item = (id: string, status: "pending" | "in_progress" | "completed") => ({ id, title: id, activeTitle: null, status });
+  const checklist = (id: number, ...items: ReturnType<typeof item>[]) =>
+    makeMessage({ id, kind: "checklist", collapsed: true, meta: { checklist: items } });
+  const wake = (id: number, status: Message["status"], source = "task_graph", taken?: { afterId: number; at: number; midTurn: boolean }) =>
+    makeSystemMessage({ id, status, text: "【Step ready】\nDispatch the next step.", meta: { event: "pm.wakeup", source, ref: "step-ready", taken } });
+  const initial = () => [
+    makeUserMessage({ id: 1, createdAt: 10_000 }),
+    checklist(2, item("Check current work", "in_progress")),
+  ];
+
+  it.each([false, true])("S1/S2: displays each turn's own list (unfinished work: %s)", async (unfinished) => {
+    const first = [item("First check", "completed"), item("Second check", "completed"), item("Third check", unfinished ? "pending" : "completed")];
+    const { container } = list([
+      makeUserMessage({ id: 1 }),
+      checklist(2, ...first),
+      makeUserMessage({ id: 3 }),
+      checklist(4, ...(unfinished ? [item("Third check", "completed")] : []), item("New check", "completed"), item("Final check", "completed")),
+    ]);
+    const [firstTurn, secondTurn] = Array.from(container.querySelectorAll<HTMLElement>("[data-turn]"));
+    for (const turn of [firstTurn!, secondTurn!]) await userEvent.click(within(turn).getByRole("button", { name: /Worked for/ }));
+    expect(firstTurn).toHaveTextContent("First check");
+    expect(firstTurn).toHaveTextContent("Second check");
+    expect(firstTurn).toHaveTextContent("Third check");
+    expect(secondTurn).not.toHaveTextContent("First check");
+    expect(secondTurn).not.toHaveTextContent("Second check");
+    expect(secondTurn).toHaveTextContent("New check");
+    expect(secondTurn).toHaveTextContent("Final check");
+    expect(secondTurn!.textContent?.includes("Third check")).toBe(unfinished);
+  });
+
+  it.each(["Task graph", "Worker report", "Scheduled task"])("S3/S6: %s waits below the running turn without resetting its timer", async (event) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(37_000);
+    try {
+      const notice = event === "Task graph" ? wake(3, "queued") : event === "Worker report"
+        ? makeWorkerLine({ id: 3, status: "queued", line: { event: "report", summary: "Done" } })
+        : makeSystemMessage({ id: 3, status: "queued", text: "Scheduled task", event: { event: "schedule.run", scheduleId: 1, name: "Scheduled task", scheduledAt: 0, catchUp: false } });
+      const { container, rerender } = list(initial(), { status: running(), stepStartedAt: 10_000 });
+      const turn = container.querySelector("[data-turn][data-running='true']")!;
+      expect(turn).toHaveTextContent("27s");
+      rerender(listView([...initial(), notice, makeToolMessage({ id: 4 })], { status: running(), stepStartedAt: 10_000 }));
+      expect(container.querySelectorAll("[data-turn]")).toHaveLength(1);
+      expect(turn).toHaveTextContent("27s");
+      await act(async () => { vi.advanceTimersByTime(2_000); });
+      expect(turn).toHaveTextContent("29s");
+      expect(container.querySelectorAll("article[data-side='right']")).toHaveLength(1);
+      expect(turn.parentElement?.nextElementSibling).toHaveTextContent(event === "Worker report" ? "修 X" : event);
+      expect(container).not.toHaveTextContent("Worked for");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("S3: a wakeup Claude takes in the next turn separates the cards and their clocks", () => {
+    const probe = resolve("test/fake-claude/late-wakeup.ts");
+    const stamp = execFileSync(process.execPath, [probe], { encoding: "utf8", timeout: 10_000 }).trim();
+    expect(["false", "true"]).toContain(stamp);
+    const midTurn = stamp === "true";
+    const { container } = list([
+      ...initial(), wake(3, "replied", "task_graph", { afterId: 4, midTurn, at: 60_000 }),
+      makeMessage({ id: 4, createdAt: 40_000, text: "First turn reply" }),
+      makeToolMessage({ id: 5, createdAt: 64_000 }),
+    ]);
+    expect(heads(container)).toHaveLength(2);
+    const notice = screen.getByRole("button", { name: "Step ready" });
+    const [first, second] = workLines(container);
+    expect(first).toHaveTextContent("Worked for 30s");
+    expect(notice.compareDocumentPosition(first!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(notice.compareDocumentPosition(second!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(second).toHaveTextContent("Worked for 4s");
+    expect(container.querySelectorAll("article[data-side='right']")).toHaveLength(1);
+  });
+
+  it("S4: when read mid-turn, the event stays inside the running card even before a text reply", () => {
+    const { container } = list([
+      ...initial(), wake(3, "processing", "task_graph", { afterId: 4, midTurn: true, at: 30_000 }),
+      makeToolMessage({ id: 4 }), makeToolMessage({ id: 5 }),
+    ], { status: running(), stepStartedAt: 10_000 });
+    const turn = container.querySelector<HTMLElement>("[data-turn][data-running='true']")!;
+    expect(within(turn).getByRole("button", { name: "Step ready" })).toBeInTheDocument();
+    expect(container.querySelectorAll("[data-turn]")).toHaveLength(1);
+    expect(turn).not.toHaveTextContent("Worked for");
+  });
+
+  it.each([["task_graph", "Task graph"], ["router", "Router"]])("S5: %s history shows a collapsed event and expands its body", async (source, label) => {
+    const view = list([wake(1, "replied", source), makeMessage({ id: 2, text: "Started" })]);
+    expect(view.container.querySelector("article[data-side='right']")).toBeNull();
+    const trigger = screen.getByRole("button", { name: "Step ready" });
+    expect(trigger).toHaveTextContent(label);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Dispatch the next step.")).not.toBeInTheDocument();
+    await userEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Dispatch the next step.")).toBeInTheDocument();
+  });
+
+  it("S7: without checklist frames, only action timing and Worked for appear", () => {
+    const messages = [makeUserMessage({ id: 1 }), makeToolMessage({ id: 2 })];
+    const view = list(messages, { status: running(), stepStartedAt: 10_000 });
+    expect(view.container.querySelector("[data-checklist]")).toBeNull();
+    expect(screen.getByRole("status", { name: "Status" })).toBeInTheDocument();
+    view.rerender(listView(messages));
+    expect(view.container.querySelector("[data-checklist]")).toBeNull();
+    expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
+  });
+
+  it("S9: typed text keeps its right-aligned bubble and starts a new turn", () => {
+    const { container } = list([...initial(), makeUserMessage({ id: 3, text: "Continue" })], { status: running() });
+    expect(screen.getByText("Continue").closest("article")).toHaveAttribute("data-side", "right");
+    expect(container.querySelectorAll("[data-turn]")).toHaveLength(2);
+    expect(workLines(container)[0]).toHaveTextContent("Worked for");
   });
 });

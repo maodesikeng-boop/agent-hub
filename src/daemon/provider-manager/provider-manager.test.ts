@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_VENDORS,
@@ -32,6 +32,7 @@ import { approveNode, loginNode, startTestRelay } from "../mesh/test-helpers.ts"
 import { startTestDevice } from "../peers/test-helpers.ts";
 import * as win32Platform from "../platform/win32/process-tree.ts";
 import { openTestDb } from "../store/test-helpers.ts";
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import { FakeLedger } from "../ui-server/fake-ledger.ts";
 import { createUiServer } from "../ui-server/server.ts";
 import { createBrowserSessions } from "../ui-server/sessions.ts";
@@ -820,9 +821,17 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     const hubHome = join(userHome, ".agent-hub");
     mkdirSync(userHome, { recursive: true });
 
-    // 预装 codex 与 deepseek 假可执行文件，但不触发 models.list()（模拟冷启动 models.availability === "unknown"）
+    // 预装 codex、opencode 与 deepseek 假可执行文件，但不触发 models.list()（模拟冷启动 models.availability === "unknown"）
     writeExecutable(join(userHome, ".local", "bin", "codex"), "#!/bin/sh\nexit 0\n");
+    writeExecutable(join(userHome, ".opencode", "bin", "opencode"), "#!/bin/sh\nexit 0\n");
     writeExecutable(join(hubHome, "tools", "npm", "bin", "dsh"), "#!/bin/sh\nexit 0\n");
+    // 预置 OpenCode 空库（模拟探测或运行后落盘但未登录的 opencode.db）
+    const opencodeDataDir = join(userHome, ".local", "share", "opencode");
+    mkdirSync(opencodeDataDir, { recursive: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const ocDb = new DatabaseSync(join(opencodeDataDir, "opencode.db"));
+    ocDb.exec("CREATE TABLE credential (id TEXT PRIMARY KEY); CREATE TABLE account (id TEXT PRIMARY KEY); CREATE TABLE control_account (email TEXT PRIMARY KEY);");
+    ocDb.close();
 
     const paths = resolveHubPaths({}, userHome, { home: hubHome, platform: "darwin" });
     const secrets = createManagedProviderSecrets(paths.providerSecretsFile, { platform: "darwin" });
@@ -876,9 +885,11 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     const callbackDone = new Promise<void>((r) => {
       resolveCallbackDone = r;
     });
+    const onVendorChanged = vi.fn();
     const manager = createProviderManager({
       runtime,
       models,
+      onVendorChanged,
       adapters: {
         codex: {
           ...VENDOR_DAEMONS.codex.setup!,
@@ -907,10 +918,14 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     try {
       const coldStatus = await manager.getStatus({ ownerKey: "session:1" });
       const codexCold = coldStatus.providers.find((p) => p.vendor === "codex")!;
+      const opencodeCold = coldStatus.providers.find((p) => p.vendor === "opencode")!;
       const dsCold = coldStatus.providers.find((p) => p.vendor === "deepseek")!;
       expect(codexCold.installed).toBe(true);
       expect(codexCold.availability).toBe("unknown");
       expect(codexCold.accountSummary).toBeNull();
+      expect(opencodeCold.installed).toBe(true);
+      expect(opencodeCold.availability).toBe("unknown");
+      expect(opencodeCold.accountSummary).toBeNull();
       expect(dsCold.installed).toBe(true);
       expect(dsCold.availability).toBe("available");
       expect(dsCold.accountSummary).toBe("API key configured");
@@ -926,6 +941,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
 
       const afterFail = await manager.getStatus({ ownerKey: "session:1" });
       expect(afterFail.providers.find((p) => p.vendor === "codex")?.authFlow?.phase).toBe("waiting_browser");
+      expect(onVendorChanged).not.toHaveBeenCalled();
 
       const retried = await manager.submitAuth(
         "codex",
@@ -937,6 +953,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
         const st = await manager.getStatus({ ownerKey: "session:1" });
         return st.providers.find((p) => p.vendor === "codex")?.authFlow?.phase === "succeeded";
       });
+      expect(onVendorChanged).toHaveBeenCalledExactlyOnceWith("codex");
     } finally {
       resolveCallbackDone();
       await manager.close();
@@ -1049,6 +1066,193 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
       releaseAuth();
       await tokyoManager.close();
       await tokyoModels.close();
+    }
+  });
+
+  it("OpenCode 未登录探测回归：--standalone 返回免费模型且 auth list=[]（哪怕落盘空 opencode.db），/api/providers 仍报 signed_out 且 accountSummary=null", async () => {
+    const root = makeTempDir("fusa-opencode-signedout-");
+    tempDirs.push(root);
+    const userHome = join(root, "home");
+    mkdirSync(userHome, { recursive: true });
+
+    const shimBase =
+      process.platform === "win32"
+        ? join(userHome, "AppData", "Roaming", "npm", "opencode")
+        : join(userHome, ".opencode", "bin", "opencode");
+    const ocDbPath = join(userHome, ".local", "share", "opencode", "opencode.db");
+    writeExecutableNodeScript(
+      shimBase,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
+const args = process.argv.slice(2);
+try {
+  fs.mkdirSync(path.dirname(${JSON.stringify(ocDbPath)}), { recursive: true });
+  const db = new DatabaseSync(${JSON.stringify(ocDbPath)});
+  db.exec("PRAGMA busy_timeout = 5000; CREATE TABLE IF NOT EXISTS credential (id TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS account (id TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS control_account (email TEXT PRIMARY KEY);");
+  db.close();
+} catch {}
+if (args[0] === "models" && args[1] === "--standalone") {
+  process.stdout.write("opencode/big-pickle\\nopencode/beam-free\\n");
+  process.exit(0);
+}
+if (args[0] === "auth" && args[1] === "list" && args[2] === "--standalone") {
+  process.stdout.write("[]");
+  process.exit(0);
+}
+process.exit(1);
+`,
+    );
+
+    const paths = resolveHubPaths({}, userHome, { platform: process.platform });
+    const secrets = createManagedProviderSecrets(paths.providerSecretsFile, { platform: process.platform });
+    const runtime = createVendorRuntimeResolver({
+      paths,
+      userHome,
+      baseEnv: { PATH: dirname(process.execPath) },
+      platform: process.platform,
+      secrets,
+    });
+    const sources = createVendorCatalogSources(
+      Object.fromEntries(
+        AGENT_VENDORS.map((vendor) => [
+          vendor,
+          {
+            path: () => runtime.resolveExecutablePath(vendor),
+            cwd: userHome,
+            env: () => runtime.resolveVendorEnv(vendor),
+            installed: () => runtime.installed(vendor),
+            fingerprint: () => runtime.catalogFingerprint(vendor),
+          },
+        ]),
+      ) as Parameters<typeof createVendorCatalogSources>[0],
+    );
+    const models = createModelCatalogs({ sources });
+    const manager = createProviderManager({ runtime, models });
+
+    try {
+      const status = await manager.getStatus({ refresh: true, ownerKey: "session:1" });
+      const opencode = status.providers.find((p) => p.vendor === "opencode")!;
+      expect(opencode.installed).toBe(true);
+      expect(opencode.availability).toBe("signed_out");
+      expect(opencode.accountSummary).toBeNull();
+    } finally {
+      await manager.close();
+      await models.close();
+    }
+  });
+
+  it("keeps Claude signed_out when claude auth login writes .claude.json before failing to save keychain credentials", async () => {
+    const root = makeTempDir("fusa-claude-keychain-fail-");
+    tempDirs.push(root);
+    const userHome = join(root, "home");
+    mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
+
+    const claudeJson = join(userHome, ".claude.json");
+    const fakeClaudeJs = join(userHome, ".local", "bin", "fake-claude-fail.cjs");
+    const binPath = join(userHome, ".local", "bin", "claude");
+    const scriptBody = [
+      'const { spawnSync } = require("node:child_process");',
+      'const { writeFileSync } = require("node:fs");',
+      'const { createInterface } = require("node:readline");',
+      `const claudeJson = ${JSON.stringify(claudeJson)};`,
+      "const args = process.argv.slice(2);",
+      'if (args[0] === "--version") { console.log("2.1.323 (Claude Code)"); process.exit(0); }',
+      'if (args[0] === "auth" && args[1] === "status") {',
+      '  console.log(JSON.stringify({ loggedIn: false, authMethod: "none" }));',
+      "  process.exit(1);",
+      "}",
+      'if (args[0] === "auth" && args[1] === "login") {',
+      '  const url = "https://claude.ai/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A55668%2Fcallback&state=st_fail_1";',
+      "  if (process.env.BROWSER) spawnSync(process.env.BROWSER, [url], { stdio: 'ignore' });",
+      "  createInterface({ input: process.stdin }).once('line', () => {",
+      '    writeFileSync(claudeJson, JSON.stringify({ oauthAccount: { emailAddress: "dev@fusa.app" } }), { mode: 0o600 });',
+      '    console.error("Couldn\'t log in: Couldn\'t save your login. If your Mac\'s keychain is locked, unlock it and log in again.");',
+      "    process.exit(1);",
+      "  });",
+      "} else {",
+      "  createInterface({ input: process.stdin }).once('line', (line) => {",
+      "    const req = JSON.parse(line);",
+      "    console.log(JSON.stringify({",
+      '      type: "control_response",',
+      "      response: {",
+      '        subtype: "success",',
+      "        request_id: req.request_id,",
+      '        response: { models: [{ value: "claude-sonnet-5-5", displayName: "Claude Sonnet 5.5" }], account: { email: "dev@fusa.app" } },',
+      "      },",
+      "    }));",
+      "    process.exit(0);",
+      "  });",
+      "}",
+    ].join("\n");
+    writeFileSync(fakeClaudeJs, scriptBody, { mode: 0o600 });
+    writeExecutable(binPath, `#!/bin/sh\nexec "${process.execPath}" "${fakeClaudeJs}" "$@"\n`);
+
+    const baseEnv: Record<string, string | undefined> = { HOME: userHome, PATH: "/usr/bin:/bin" };
+    const paths = resolveHubPaths(baseEnv, userHome);
+    const secrets = createManagedProviderSecrets(paths.providerSecretsFile);
+    const runtime = createVendorRuntimeResolver({
+      paths,
+      userHome,
+      baseEnv,
+      platform: "darwin",
+      secrets,
+    });
+    const models = createModelCatalogs({
+      sources: createVendorCatalogSources(
+        Object.fromEntries(
+          AGENT_VENDORS.map((vendor) => [
+            vendor,
+            {
+              path: () => runtime.resolveExecutablePath(vendor),
+              cwd: userHome,
+              env: () => runtime.resolveVendorEnv(vendor),
+              installed: () => runtime.installed(vendor),
+              fingerprint: () => runtime.catalogFingerprint(vendor),
+            },
+          ]),
+        ) as Parameters<typeof createVendorCatalogSources>[0],
+      ),
+    });
+    const manager = createProviderManager({ runtime, models });
+
+    try {
+      const started = await manager.startAuth("claude", { methodId: "browser", variantId: "claudeai" }, "session:1");
+      await waitForCondition(async () => {
+        const st = await manager.getStatus({ ownerKey: "session:1" });
+        return st.providers.find((p) => p.vendor === "claude")?.authFlow?.phase === "waiting_browser";
+      });
+
+      const submitted = await manager.submitAuth(
+        "claude",
+        { flowId: started.authFlow!.flowId, input: "auth-code-keychain-locked" },
+        "session:1",
+      );
+      let failedItem = submitted;
+      if (failedItem.authFlow?.phase !== "failed") {
+        await waitForCondition(async () => {
+          const st = await manager.getStatus({ ownerKey: "session:1" });
+          failedItem = st.providers.find((p) => p.vendor === "claude")!;
+          return failedItem.authFlow?.phase === "failed";
+        });
+      }
+
+      expect(failedItem.authFlow?.error).toContain("Couldn't save your login");
+      expect(existsSync(claudeJson)).toBe(true);
+      expect(failedItem.availability).toBe("signed_out");
+      expect(failedItem.accountSummary).toBeNull();
+      expect(failedItem.canSignOut).toBe(false);
+
+      const refreshed = await manager.getStatus({ refresh: true, ownerKey: "session:1" });
+      const claudeRefreshed = refreshed.providers.find((p) => p.vendor === "claude")!;
+      expect(claudeRefreshed.availability).toBe("signed_out");
+      expect(claudeRefreshed.accountSummary).toBeNull();
+      expect(claudeRefreshed.canSignOut).toBe(false);
+      expect((await models.list({ vendor: "claude" }))[0]?.availability).toBe("signed_out");
+    } finally {
+      await manager.close();
+      await models.close();
     }
   });
 });

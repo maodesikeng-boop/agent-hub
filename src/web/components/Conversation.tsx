@@ -1,10 +1,12 @@
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { HUB_COMPOSER_COMMANDS, type ConversationId, type MessageId, type PmId, type WorkerPick } from "../../shared/index.ts";
 import { errorText, formatArchiveRemaining, type ErrorLike } from "../format.ts";
+import { cn } from "../lib/utils.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
 import { Button } from "../ui/button.tsx";
+import { ChevronDown } from "../ui/icons.ts";
 import { Avatar } from "./Avatar.tsx";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
 import { conversationSource } from "../composer-suggest.ts";
@@ -15,7 +17,7 @@ import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { RowError } from "./SettingsList.tsx";
 import { useStop } from "../useStop.ts";
-import { hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
+import { actionStartedAt, hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 
 function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }) {
   const client = useClient();
@@ -33,7 +35,7 @@ function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }
     }
   };
   return (
-    <div className="rounded-2xl bg-sidebar px-4 py-3">
+    <div className="rounded-sm border border-border bg-panel px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 text-body">
           <span>Archived</span>
@@ -52,7 +54,7 @@ function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }
   );
 }
 
-export function Conversation({
+export const Conversation = memo(function Conversation({
   entry,
   view,
   pending,
@@ -75,6 +77,7 @@ export function Conversation({
   focus,
   onFocusDone,
   onOpenProfile,
+  onManageProviders,
 }: {
   entry: ConversationEntry;
   view: ConversationView;
@@ -98,6 +101,7 @@ export function Conversation({
   focus: { id: MessageId; n: number } | null;
   onFocusDone: () => void;
   onOpenProfile: (pmId: PmId) => void;
+  onManageProviders?: () => void;
 }) {
   const id = view.conversation.id;
   const hasQueuedUser = useMemo(
@@ -129,26 +133,43 @@ export function Conversation({
   const handleLoadOlder = useCallback(() => onLoadOlder(id), [onLoadOlder, id]);
   const handleSend = useCallback((text: string, files: File[]) => onSend(id, text, files), [onSend, id]);
   const statusNode = useAgentStatusNode(session);
+  const avatarSize = mobile ? 34 : 24;
   return (
-    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
-      <header data-window-drag className="flex min-h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
-        {leading}
-        {entry.pm ? (
-          <button
-            type="button"
-            aria-label={`View ${entry.pm.name}'s profile`}
-            className="touch-target shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
-          >
-            <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} />
-          </button>
-        ) : (
-          <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} />
-        )}
-        <div className="min-w-0 flex-1">
-          <h1 title={entry.name} className="w-fit max-w-full truncate text-title leading-snug font-semibold">
-            {entry.name}
-          </h1>
+    <FileDropZone className="chat-text flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
+      <header
+        data-window-drag
+        className={
+          mobile
+            ? "flex min-h-14 min-w-0 shrink-0 items-center justify-between gap-2 overflow-hidden border-b border-border pt-[var(--safe-top)] pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+            : "flex h-11 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-border pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+        }
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {leading}
+          {entry.pm ? (
+            <button
+              type="button"
+              aria-label={`View ${entry.pm.name}'s profile`}
+              className={cn(
+                "-ml-1.5 flex min-w-0 max-w-full cursor-pointer items-center pr-2 pl-1.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus",
+                mobile ? "h-11 gap-2.5" : "h-8 gap-2",
+              )}
+              onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
+            >
+              <Avatar look={entry.look} size={avatarSize} working={hasAgentStatus(session)} className="shrink-0" />
+              <h1 title={entry.name} className="min-w-0 truncate text-title leading-snug font-semibold text-foreground">
+                {entry.name}
+              </h1>
+              <ChevronDown className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+          ) : (
+            <div className={cn("flex min-w-0 items-center", mobile ? "gap-2.5" : "gap-2")}>
+              <Avatar look={entry.look} size={avatarSize} working={hasAgentStatus(session)} className="shrink-0" />
+              <h1 title={entry.name} className="min-w-0 truncate text-title leading-snug font-semibold text-foreground">
+                {entry.name}
+              </h1>
+            </div>
+          )}
         </div>
         {toolbar}
       </header>
@@ -167,6 +188,7 @@ export function Conversation({
           focus={focus}
           onFocusDone={onFocusDone}
           status={statusNode}
+          stepStartedAt={actionStartedAt(session)}
           statusAgent={agent}
           streamingText={session?.streamingText ?? null}
         />
@@ -184,10 +206,11 @@ export function Conversation({
             onRewind={onRewind ? handleRewind : undefined}
             link={link}
             source={source}
+            onManageProviders={onManageProviders}
             onSend={handleSend}
           />
         )}
       </div>
     </FileDropZone>
   );
-}
+});

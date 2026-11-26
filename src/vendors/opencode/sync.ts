@@ -7,10 +7,14 @@ import { isPlainObject, readJsoncObjectFile, type JsoncDocument } from "../_comm
 import { OAUTH_NON_SYNCABLE_REASON, cleanStringArray, cleanStringMap, materializeMcpForVendor } from "../_common/sync/mcp.ts";
 import { OPENCODE_CONFIG_REL } from "./spec.ts";
 
-function resolveOpenCodeConfigPath(ctx: VendorSyncContext): string {
+function openCodeConfigPaths(ctx: VendorSyncContext): readonly [string, string] {
   const dir = join(ctx.userHome, ...OPENCODE_CONFIG_REL.split("/"));
-  const jsonc = join(dir, "opencode.jsonc");
-  return existsSync(jsonc) ? jsonc : join(dir, "opencode.json");
+  return [join(dir, "opencode.jsonc"), join(dir, "opencode.json")];
+}
+
+function resolveOpenCodeConfigPath(ctx: VendorSyncContext): string {
+  const [jsonc, json] = openCodeConfigPaths(ctx);
+  return existsSync(jsonc) ? jsonc : json;
 }
 
 function isV1Entry(value: unknown): boolean {
@@ -62,6 +66,7 @@ function serializeOpenCodeMcpEntry(server: CanonicalMcpServer): Record<string, u
 }
 
 export const opencodeSyncAdapter: VendorSyncAdapter = {
+  mcpConfigPaths: openCodeConfigPaths,
   supportsSseMcp: false,
 
   scanMcp(ctx) {

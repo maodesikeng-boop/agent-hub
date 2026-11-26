@@ -109,6 +109,8 @@ export type StepWorkspacePlan =
   | { kind: "review"; branch: string; implWorktreePath: string | null };
 
 export interface WorkerBindTarget {
+  stepId?: number;
+  noOuterSandbox?: boolean;
   graphId: TaskGraphId;
   nodeKey: TaskNodeKey;
   graphTitle: string;
@@ -156,6 +158,7 @@ export interface TaskGraphWorkersBridge {
       effort: string | null;
       readonly: boolean;
       capabilities: WorkerCapabilities;
+      sandboxStepId?: number;
       maxTimeMs: number | null;
       workspacePlan: StepWorkspacePlan;
       buildFirstMessage: (
@@ -168,6 +171,7 @@ export interface TaskGraphWorkersBridge {
     },
   ): WorkerRecord;
   stopWorkersIn(p: Pending, workerIds: readonly WorkerId[]): WorkerId[];
+  isWorkerInFlight(workerId: WorkerId): boolean;
   deliverToWorkerIn(
     p: Pending,
     input: { workerId: WorkerId; text: string; dedupeKey: string; maxTimeMs?: number | null },
@@ -176,12 +180,13 @@ export interface TaskGraphWorkersBridge {
 
 export interface TaskGraphOptions {
   launchDir: string;
+  workerPlatform?: NodeJS.Platform;
   workers?: () => TaskGraphWorkersBridge | undefined;
   userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "blockStep" | "ofSteps">;
   onGraphFinishedIn?: (p: Pending, projectId: ProjectId) => void;
 }
 
-export interface TaskGraphCtx extends Pick<LedgerContext, "db" | "now" | "write" | "enqueue" | "modelCatalog"> {
+export interface TaskGraphCtx extends Pick<LedgerContext, "db" | "now" | "write" | "enqueue" | "modelCatalog" | "modelShortLabel"> {
   sessions: LedgerSessions;
   messages: LedgerMessages;
   persona: LedgerPersona;

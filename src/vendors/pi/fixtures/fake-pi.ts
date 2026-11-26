@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readJsonLog } from "../../../../test/append-log.ts";
 import { writeExecutableNodeScript } from "../../../../test/fake-cli-shim.ts";
 
 interface FakePiToolCall {
@@ -19,6 +20,7 @@ interface FakePiTurnScript {
   tools?: FakePiToolCall[];
   holdFile?: string;
   waitForAbort?: boolean;
+  abortOnSigint?: boolean;
   ignoreAbort?: boolean;
   blockingUiMethod?: "select" | "confirm" | "input" | "editor";
   autoRetry?: { attempt: number; maxAttempts: number; delayMs: number; errorMessage: string };
@@ -123,7 +125,8 @@ if (typeof script.exitBeforeReadyCode === "number") {
 
 process.on("SIGINT", () => {
   appendLog({ kind: "signal", signal: "SIGINT" });
-  process.exit(0);
+  if (currentTurn?.turnScript.abortOnSigint) abortCurrentTurn();
+  process.stdout.write("", () => process.exit(0));
 });
 
 function argValue(flag) {
@@ -581,14 +584,7 @@ export function writeFakePiBinary(dir: string, initialScript: FakePiScript = {})
       writeFileSync(scriptPath, JSON.stringify(next));
     },
     readLogs(): FakePiLogEntry[] {
-      try {
-        return readFileSync(logPath, "utf8")
-          .split("\n")
-          .filter((line) => line.trim() !== "")
-          .map((line) => JSON.parse(line) as FakePiLogEntry);
-      } catch {
-        return [];
-      }
+      return readJsonLog<FakePiLogEntry>(logPath);
     },
   };
 }

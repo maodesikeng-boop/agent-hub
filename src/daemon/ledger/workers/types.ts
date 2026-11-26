@@ -1,14 +1,16 @@
+import type { createWorkerAppApprovals } from "./app-approvals.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, WorkerId } from "../../../shared/domain.ts";
 import type { WorkerHubStatus } from "../../../shared/hub.ts";
-import type { ReviewStampOutcome, ReviewTarget, ReviewVerifyResult } from "../../../shared/review.ts";
+import type { ReviewTarget, ReviewVerifyResult } from "../../../shared/review.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { ParsedWorkerReport } from "../../../shared/worker.ts";
 import type { LedgerContext, Pending } from "../context.ts";
 import type { LedgerMessages } from "../messages.ts";
 import type { LedgerPersona } from "../persona.ts";
 import type { LedgerProjects } from "../projects.ts";
+import type { SandboxApprovalStore } from "../sandbox-approvals.ts";
 import type { LedgerSessions } from "../sessions.ts";
-import type { WorkerBindTarget } from "../task-graphs.ts";
+import type { StepWorkspacePlan, WorkerBindTarget } from "../task-graphs.ts";
 import type { LedgerTakeover } from "../takeover.ts";
 import type { LedgerUserBlockers } from "../user-blockers.ts";
 
@@ -41,25 +43,24 @@ export interface LedgerWorkersTaskGraphHooks {
   onWorkerUserBlockedIn: (p: Pending, workerId: WorkerId, blocker: UserBlocker) => string | null;
   onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
-  workerGraphForkBase: (workerId: WorkerId) => string | undefined;
-  recordReviewStampIn: (p: Pending, workerId: WorkerId, outcome: ReviewStampOutcome) => void;
-  isLatestStepWorker: (workerId: WorkerId) => boolean;
+  workerGraphWorkspacePlan: (workerId: WorkerId) => StepWorkspacePlan | undefined;
   workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;
 }
 
 export interface LedgerWorkersOptions {
   worktreesDir: string;
+  platform?: NodeJS.Platform;
   extraWorktreeRoots?: () => readonly string[];
   taskGraphs?: LedgerWorkersTaskGraphHooks;
   userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "attachWorkerIn">;
   takeover?: LedgerTakeover;
 }
 
-export type BackgroundWait = { turnStart: MessageId; background: boolean };
+export type BackgroundWait = { turnStart: MessageId; turnEnd: MessageId | null; directChat: boolean; background: boolean };
 
 export interface AwaitingBackground {
   get: (sessionId: SessionId) => BackgroundWait | undefined;
-  set: (sessionId: SessionId, turnStart: MessageId) => void;
+  set: (sessionId: SessionId, turn: Omit<BackgroundWait, "background">) => void;
   setBackground: (sessionId: SessionId, background: boolean) => void;
   take: (sessionId: SessionId) => BackgroundWait | undefined;
 }
@@ -77,12 +78,11 @@ export interface WorkersCtx {
   persona: LedgerPersona;
   projects: LedgerProjects;
   options: LedgerWorkersOptions;
+  sandboxApprovals: SandboxApprovalStore;
+  appApprovals: ReturnType<typeof createWorkerAppApprovals>;
   /** Max message id at turn start, in memory only, so a PM message sent mid-turn cannot make the last reply look older than the previous turn's text. */
   turnStarts: Map<SessionId, MessageId>;
-  /** Mid-turn deliveries count only once the Worker reads them, because a stop before that cancels them. */
-  midTurnWaiting: Set<MessageId>;
   /** Turns interrupted by endIn are not reported back because the PM stopped them itself. */
-  endInterrupted: Set<SessionId>;
   /** Only the timers live in memory; duration, deadline and reminder state persist in worker_turn_timeouts for restart recovery. */
   maxTimeTimers: Map<ConversationId, MaxTimeTimer>;
   /** A turn that ends with background commands still running is not reported yet, otherwise the PM would get a premature "done". */

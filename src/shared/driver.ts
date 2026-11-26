@@ -1,7 +1,10 @@
 import type { ComposerCommand } from "./api.ts";
+import type { ChecklistUpdate } from "./checklist.ts";
 import type { AgentSessionRow, AgentStep, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionCapabilities } from "./pm-capabilities.ts";
 import type { ReadonlyPolicy } from "./readonly-policy.ts";
+import type { WorkerOuterSandboxMode } from "./sandbox-approval.ts";
+import type { AppApprovalGate } from "./app-approval.ts";
 import type { SessionStore } from "./store.ts";
 import type { WriteScope } from "./write-scope.ts";
 import { HUB_COMMAND } from "./names.ts";
@@ -26,6 +29,7 @@ export const RESTART_RECOVERY_NOTE = "【系统】守护进程重启，你上一
 export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发给过你。如果你已经处理过这条，忽略它。";
 // Never point at the system prompt: claude --resume keeps the original one, which may list stale projects.
 export const RELAUNCH_NOTE = `【系统】你的设置（文件夹、管着的项目、模型或思考程度）刚更新过，已经按新设置重新启动。系统提示词里的项目和文件夹可能是旧的，最新的以 \`${HUB_COMMAND} status\`、\`${HUB_COMMAND} persona show\` 为准。`;
+export const CAPABILITY_RELAUNCH_NOTE = "【系统】可用的 Skill 或 MCP 有更新，会话已按最新能力设置续接。";
 const KILLED_NOTE_MAX_TASKS = 5;
 const KILLED_NOTE_MAX_DESC_CHARS = 80;
 export function backgroundTasksKilledNote(reason: "relaunch" | "hold_max" | "stopped", descriptions: string[]): string {
@@ -49,9 +53,16 @@ interface CommandsChangedEvent extends DriverEventBase {
   commands: ComposerCommand[];
 }
 
-interface BackgroundChangedEvent extends DriverEventBase {
+export interface BackgroundTaskInfo {
+  id: string;
+  label: string;
+  startedAt: number;
+}
+
+export interface BackgroundChangedEvent extends DriverEventBase {
   type: "background.changed";
   count: number;
+  tasks?: readonly BackgroundTaskInfo[];
 }
 
 interface ContextCompactedEvent extends DriverEventBase {
@@ -78,6 +89,7 @@ interface MessageDeliveredEvent extends DriverEventBase {
 interface MessageProcessingEvent extends DriverEventBase {
   type: "message.processing";
   messageIds: MessageId[];
+  midTurn?: true;
   preamble?: true;
 }
 
@@ -110,6 +122,7 @@ export interface AgentTextDeltaEvent extends DriverEventBase, SubtaskField {
   type: "agent.text_delta";
   delta: string;
   reset?: boolean;
+  startedAt?: number;
 }
 
 export interface AgentThinkingEvent extends DriverEventBase, SubtaskField {
@@ -129,6 +142,23 @@ export interface AgentToolEvent extends DriverEventBase, SubtaskField {
   toolUseId: string;
   name: string;
   input: unknown;
+  /** Set when the vendor reports the call only as proposed; agent.tool_running later marks when it starts executing. */
+  pending?: true;
+  /** Vendor-reported start time in epoch ms; absent means the call started when the event was received (`at`). */
+  startedAt?: number;
+}
+
+export interface AgentToolRunningEvent extends DriverEventBase, SubtaskField {
+  type: "agent.tool_running";
+  toolUseId: string;
+  startedAt?: number;
+}
+
+/** Carries the vendor's own checklist change; the ledger applies it to the session's last stored snapshot. */
+export interface AgentChecklistEvent extends DriverEventBase, SubtaskField {
+  type: "agent.checklist";
+  uuid: string;
+  update: ChecklistUpdate;
 }
 
 export interface AgentToolPreviewEvent extends DriverEventBase, SubtaskField {
@@ -234,6 +264,8 @@ export type DriverEvent =
   | AgentTextDeltaEvent
   | AgentThinkingEvent
   | AgentToolEvent
+  | AgentToolRunningEvent
+  | AgentChecklistEvent
   | AgentToolPreviewEvent
   | AgentToolResultEvent
   | TurnEndedEvent
@@ -257,6 +289,10 @@ export interface Driver {
   cleanupStale(): Promise<void>;
   queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null>;
   isRunning?(sessionId: SessionId): boolean;
+  /** True while the driver has an active turn or an in-progress startup or delivery for the session. */
+  isBusy?(sessionId: SessionId): boolean;
+  /** Synchronously marks the session ending so queued follow-up batches are dropped before session.end runs. */
+  markEnding?(sessionId: SessionId): void;
   onEvent(listener: DriverEventListener): Unsubscribe;
 }
 
@@ -265,12 +301,20 @@ interface LaunchFilesBase {
   settingsFile?: string;
   skillsDir?: string;
   env: Record<string, string>;
+  /** If capabilityCheck is set, this fingerprint excludes capability-dependent options. */
   fingerprint: string;
   backgroundHoldMaxMs?: number;
   writeScope?: WriteScope;
+  outerSandbox?: WorkerOuterSandboxMode;
   capabilities?: SessionCapabilities;
+  capabilityCheck?: LaunchCapabilityCheck;
   personaRevision?: number;
   ownerTag?: string;
+}
+
+export interface LaunchCapabilityCheck {
+  fingerprint: string | undefined;
+  currentFingerprint: () => Promise<string | undefined>;
 }
 
 // Read-only sandboxes deny every write outside the session temp dir, so a read-only launch cannot exist without one.
@@ -288,6 +332,11 @@ export interface DriverOptions {
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   personaNote?: (sessionId: SessionId, sinceRevision: number) => PersonaNote | null;
   sessionPreamble?: (sessionId: SessionId) => string | null;
+  canDeliverSystemMessage?: (sessionId: SessionId, messageId: MessageId) => boolean;
+  /** Called when a session finishes an in-progress startup, delivery, or turn and becomes idle in the driver. */
+  onSessionQuiescent?: (sessionId: SessionId) => void;
+  /** Receives vendor app-permission requests from processes launched with outerSandbox "vendor_only"; absent means decline. */
+  appApprovals?: AppApprovalGate;
   env?: Record<string, string> | (() => Record<string, string>);
   pmMemoryDir?: string;
   log?: (line: string) => void;

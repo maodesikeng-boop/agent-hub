@@ -13,7 +13,6 @@ import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   HUB_COMMAND,
-  HUB_COMMAND_ROLES,
   HUB_EXIT,
   HUB_FILE_ARGS_MAX,
   LedgerRequestError,
@@ -248,6 +247,13 @@ describe("hub cli", () => {
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "worker.send", args: { workerId: 3, text: "再改一下" } }]);
     });
 
+    it("passes a Worker vendor filter and rejects unknown vendors", async () => {
+      expect((await hub(["worker", "list", "--vendor", "claude"])).code).toBe(HUB_EXIT.ok);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "worker.list", args: { vendor: "claude" } }]);
+      expect((await hub(["worker", "list", "--vendor", "not-a-vendor"])).code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(1);
+    });
+
     it("worker start / send --max-time and worker max-time parse human durations and reject invalid ones", async () => {
       expect(
         (await hub(["worker", "start", "--title", "修 X", "--max-time", "15m", "--stdin"], { stdin: stdinOf("任务") })).code,
@@ -450,7 +456,10 @@ describe("hub cli", () => {
       expect((await hub(["ask", "close", "52"])).code).toBe(0);
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask.close", args: { itemId: 52 } }]);
       ledger.calls.length = 0;
-      for (const argv of [["ask", "close"], ["ask", "close", "x"], ["ask", "close", "0"], ["ask", "close", "1", "2"], ["ask", "close", "1", "--stdin"]]) {
+      expect((await hub(["ask", "close", "--message", "81"])).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask.close", args: { messageId: 81 } }]);
+      ledger.calls.length = 0;
+      for (const argv of [["ask", "close"], ["ask", "close", "x"], ["ask", "close", "0"], ["ask", "close", "1", "2"], ["ask", "close", "1", "--stdin"], ["ask", "close", "52", "--message", "81"]]) {
         expect((await hub(argv, { stdin: stdinOf("") })).code).toBe(HUB_EXIT.usage);
       }
       expect(ledger.calls).toHaveLength(0);
@@ -851,35 +860,6 @@ describe("hub cli", () => {
     it("用法里有这条命令", async () => {
       const r = await hub(["--help"]);
       expect(r.stdout).toContain(`${cmd} project setup --stdin | --clear`);
-    });
-  });
-
-  describe("hub project review-status", () => {
-    it("--account <登录名> 设置、--clear 清除，只有项目经理能调", async () => {
-      expect((await hub(["project", "review-status", "--account", "octo-cat"])).code).toBe(0);
-      expect((await hub(["project", "review-status", "--clear"])).code).toBe(0);
-      expect(ledger.calls).toEqual([
-        { sessionId: 42, command: "project.review-status", args: { account: "octo-cat" } },
-        { sessionId: 42, command: "project.review-status", args: { account: null } },
-      ]);
-      expect(HUB_COMMAND_ROLES["project.review-status"]).toEqual(["pm"]);
-    });
-
-    it.each([
-      [["project", "review-status"]],
-      [["project", "review-status", "--account", "a", "--clear"]],
-      [["project", "review-status", "--clear", "x"]],
-      [["project", "review-status", "--stdin"]],
-    ])("usage error: hub %j", async (argv) => {
-      const r = await hub([...argv]);
-      expect(r.code).toBe(HUB_EXIT.usage);
-      expect(ledger.calls).toHaveLength(0);
-    });
-
-    it("用法里有这条命令，写明只存登录名、令牌由 gh 现取", async () => {
-      const r = await hub(["--help"]);
-      expect(r.stdout).toContain(`${cmd} project review-status --account <登录名> | --clear`);
-      expect(r.stdout).toContain("只存登录名，令牌每次现从 gh 取");
     });
   });
 

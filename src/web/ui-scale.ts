@@ -3,7 +3,10 @@ export type UiScale = (typeof UI_SCALES)[number];
 
 export const UI_SCALE_LABELS: Readonly<Record<UiScale, string>> = { sm: "Compact", md: "Default", lg: "Large", xl: "XL" };
 
-export const DEFAULT_UI_SCALE: UiScale = "lg";
+export const DEFAULT_UI_SCALE: UiScale = "md";
+
+/** Root font size of each scale at a 16px browser default; styles.css sets the same sizes as percentages. */
+export const UI_SCALE_ROOT_PX: Readonly<Record<UiScale, number>> = { sm: 16, md: 17.5, lg: 19, xl: 20.5 };
 
 export const UI_SCALE_KEY = "agent-hub.uiScale";
 

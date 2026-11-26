@@ -129,13 +129,19 @@ export default defineVendor({
       Task: "subagent",
       TodoWrite: "todo",
       update_todos: "todo",
+      updateTodos: "todo",
     },
   },
+  checklist: { sources: ["extension"], promptTool: "`TodoWrite`" },
   skillSignals: {
     // rawOutput: read is {content}, shell is {exitCode, stdout, stderr}.
     outputField: "rawOutput",
   },
   capabilities: {
+    builtInSandbox: {
+      platforms: ["darwin"],
+      computerUseCapabilities: [],
+    },
     backgroundWake: false,
     readonly: "os_sandbox",
     // cursor-agent's own sandbox cannot nest inside the OS sandbox (exit 71).

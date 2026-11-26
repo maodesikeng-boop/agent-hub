@@ -11,7 +11,6 @@ import {
   SELF_RELOAD_DRAIN_MAX_MS,
   PM_MODES,
   PM_MODE_LABELS,
-  PM_REVIEW_REDLINES_BRIEF,
   PRODUCT_NAME,
   TASK_GRAPH_SKILL_NAME,
   VENDOR_LIST,
@@ -19,7 +18,6 @@ import {
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
   WORKER_REPORT_FORMAT,
-  userToWorkerHeader,
   workerReportHeader,
   type AgentVendor,
   type SetupOutcome,
@@ -42,6 +40,7 @@ import {
   WORKER_BLOCKING_WAIT_NOTE,
   buildFingerprintPrompt,
   buildLaunchPrompt,
+  checklistRuleNote,
   buildPmModePrompt,
   personaUpdateNote,
   buildWorkerFirstMessage,
@@ -143,7 +142,7 @@ describe("提示词：有项目", () => {
     expect(HUB_USAGE_PROMPT).toContain("--stdin <<'EOF'");
     expect(HUB_USAGE_PROMPT).toContain("`echo $?`");
     // 项目、性格设定这两组在提示词里各缩成一行，完整参数在 hub help（HUB_USAGE）里
-    for (const sub of [`${hub} status`, `${hub} project create|attach|detach|setup|review-status`, `${hub} persona show|edit`, `${hub} help`]) {
+    for (const sub of [`${hub} status`, `${hub} project create|attach|detach|setup`, `${hub} persona show|edit`, `${hub} help`]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);
     }
     for (const sub of [`${hub} project create --folder`, `${hub} project attach <文件夹>`, `${hub} project detach <文件夹>`, `${hub} persona show`, `${hub} persona edit`]) {
@@ -505,13 +504,15 @@ describe("提示词：数值和事实以代码为准", () => {
     for (const mode of PM_MODES) expect(PM_MODE_PROMPTS[mode]).toContain(`对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手`);
   });
 
-  it("消息写法和驱动层、账本发的一致：汇报标题、连发合并；用户直接对 Worker 说的话不用在提示词里再讲（通知的标题自己写明了 Worker 已收到）", () => {
+  it("消息写法和驱动层、账本发的一致：汇报标题、用户直聊例外、连发合并", () => {
     const report = workerReportHeader(3, "修 X");
-    for (const mode of PM_MODES) expect(PM_MODE_PROMPTS[mode]).toContain(report.replace("#3", "#编号").replace("修 X", "标题"));
-    expect(userToWorkerHeader(3, "修 X")).toContain("Worker 已收到");
+    for (const mode of PM_MODES) {
+      const prompt = PM_MODE_PROMPTS[mode];
+      expect(prompt).toContain(report.replace("#3", "#编号").replace("修 X", "标题"));
+      expect(prompt).toContain("普通消息和回复留在 Worker 对话。Worker 做完交办的任务，或在汇报的“问题”栏明确请你处理时，按原流程处理。");
+      expect(prompt).toContain("指示冲突时，以用户最后一条相关指示为准");
+    }
     const prompt = buildLaunchPrompt(projectContext(), dir);
-    expect(prompt).not.toContain("无需转告");
-    expect(prompt).not.toContain("用户直接对 Worker");
     expect(mergeUserTexts(["甲", "乙"]).prefixes).toEqual(["【用户连发了 2 条】", "1. 甲"]);
     expect(prompt).toContain("`【用户连发了 N 条】` 加编号，请逐条回应");
   });
@@ -585,7 +586,7 @@ describe("提示词：项目经理（M3）", () => {
         "**验收只看证据**：看汇报（或任务图交付单）、PR 改动文件名单和检查结果、截图或实测输出。",
         "不读代码 diff，代码质量由审查负责。",
         `证据不够就打回让 Worker 补（\`${hub} worker send\`）`,
-        `**该审查而没审查的，交付前补上**：改动碰了任务图手册里列出的四类高风险改动（${PM_REVIEW_REDLINES_BRIEF}），就按手册里的做法补一个审查。`,
+        "**按项目规矩或用户要求安排审查**：项目要求审查或改动风险较高而还没审查的，交付前按任务图手册补一个独立审查步骤。",
         "合并、发布这类收尾动作按项目自己的约定和用户要求做，没要求的不做。",
         "**同时向对话和总助汇报交付**：",
         "1. **只讲结论，说人话**：开头说清用户原本要做什么、现在做成了什么、何时生效",
@@ -696,7 +697,7 @@ describe("提示词：项目经理（M3）", () => {
   it("hub 用法有任务图、提问、Worker 的命令，和 shared/hub.ts、hub/cli.ts 的 HUB_COMMAND_SPECS 及关键参数对得上", () => {
     for (const sub of [
       `\`${hub} models [--vendor <vendors>] [--refresh]\`：查看各厂商可用模型与支持的思考程度`,
-      `${hub} worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin`,
+      `${hub} worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] [--no-outer-sandbox] --stdin`,
       `${hub} worker send <编号> [--max-time <时长>] --stdin`,
       `${hub} worker max-time <编号> <时长>`,
       `${hub} worker end <编号>\`：收工`,
@@ -731,7 +732,7 @@ describe("提示词：项目经理（M3）", () => {
     for (const [group, actions] of compressed) {
       for (const action of actions) expect(HUB_COMMANDS as readonly string[], `${group} ${action}`).toContain(`${group}.${action}`);
     }
-    for (const flag of ["--stdin", "--title", "--vendor", "--refresh", "--model", "--effort", "--readonly", "--no-worktree", "--task", "--report", "--limit", "--last", "--stats", "--option", "--recommended"]) {
+    for (const flag of ["--stdin", "--title", "--vendor", "--refresh", "--model", "--effort", "--readonly", "--no-worktree", "--no-outer-sandbox", "--task", "--report", "--limit", "--last", "--stats", "--option", "--recommended"]) {
       expect(HUB_USAGE, flag).toContain(flag);
       expect(HUB_USAGE_PROMPT, flag).toContain(flag);
     }
@@ -749,7 +750,7 @@ describe("提示词：项目经理（M3）", () => {
     expect(HUB_USAGE_PROMPT).toContain(`- **其他**（不常用，详细参数跑 \`${hub} help\` 看）`);
     for (const line of [
       `\`${hub} status\`：看我是谁、我的项目、文件夹和活跃任务图`,
-      `\`${hub} project create|attach|detach|setup|review-status\`：建项目、增删附加文件夹、设新 worktree 准备脚本、设审查盖章用的 gh 账号`,
+      `\`${hub} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本`,
       `\`${hub} persona show|edit\`：查看、修改性格设定和干活模式`,
       `\`${hub} schedule add|list|pause|resume|remove\`：定时任务（用户要定期做某件事时才建，如日报、周期巡检）`,
       `\`${hub} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`,
@@ -854,7 +855,7 @@ describe("提示词：Worker（M3）", () => {
       expect(prompt).toContain(field);
     }
     expect(prompt).toContain("偏离: 无");
-    expect(prompt).toContain("踩刹车交给项目经理，不擅自扩范围");
+    expect(prompt).toContain("并在“问题”栏写明要项目经理决定什么；先暂停，不擅自扩范围");
     expect(prompt).toContain("**交棒**：给下一步接手的人看的关键结论");
     expect(prompt).toContain(`忘了目标或上游背景时随时跑 \`${hub} status\` 查看`);
     expect(prompt).toContain(WORKER_HUB_USAGE_PROMPT);
@@ -875,11 +876,17 @@ describe("提示词：Worker（M3）", () => {
     expect(firstMsg).not.toContain("只读");
   });
 
-  it("用户直接对它说的话带【用户直接对你说】，照做、照样汇报给项目经理；连发时每条开头的标签说明是谁说的", () => {
+  it("用户直接对它说的话带【用户直接对你说】，普通回复留在 Worker 对话，完成或明确提问时汇报；连发时每条开头的标签说明是谁说的", () => {
     const prompt = buildWorkerPrompt(workerContext(), dir);
-    expect(prompt).toContain(`带 \`${USER_TO_WORKER_TAG}\` 的是**用户**在网页上直接对你说的话，照着做，本轮汇报照常交给项目经理`);
+    expect(prompt).toContain(`带 \`${USER_TO_WORKER_TAG}\` 的是**用户**直接对你说的话，照着做，直接回复用户`);
     // 重启等情况下前面可能先有【系统】说明，所以不说“开头”
     expect(prompt).not.toContain(`以“${USER_TO_WORKER_TAG}”开头`);
+    for (const vendor of AGENT_VENDORS) {
+      const prompt = buildWorkerPrompt({ ...workerContext(), vendor }, dir);
+      expect(prompt).toContain("只有做完交办的任务，或确实需要项目经理处理时，才在回复末尾加正式汇报");
+      expect(prompt).toContain("必须在“问题”栏写清要项目经理回答什么或采取什么行动");
+      expect(prompt).toContain("卡住了写“有问题”，做不了写“放弃了”。在“问题”栏写明原因和需要项目经理处理的事");
+    }
     expect(prompt).toContain("不带标签的消息来自**项目经理**");
     expect(prompt).toContain("【用户连发了 N 条】");
     expect(prompt).not.toContain("发给你的消息都来自项目经理");
@@ -900,6 +907,7 @@ describe("提示词：Worker（M3）", () => {
     for (const tool of ["`Agent`", "`Task`", "`invoke_subagent`", "`spawn_agent`"]) expect(prompt).toContain(tool);
     expect(prompt).toContain("确需并行拆步的，在“问题”栏建议项目经理加 Worker 或加步骤");
     expect(prompt).toContain("**等别人时直接结束本轮**");
+    expect(prompt).toContain("按上面的汇报规则结束本轮");
     expect(prompt).toContain("不要设定时器，也不要 `sleep` 轮询");
     expect(prompt).toContain("轮到你时项目经理会叫醒你");
     // 等 CI 的写法只在长命令那一条里，不在“等别人”那条里重复
@@ -1133,4 +1141,19 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
     for (const gone of [`${hub} graph`, TASK_GRAPH_SKILL_NAME, "SKILL.md", "任务图手册"]) expect(workerPrompt, gone).not.toContain(gone);
   });
 
+});
+
+describe(checklistRuleNote.name, () => {
+  it.each(VENDOR_LIST)("uses $id's checklist capability in PM and Worker prompts", ({ id, checklist }) => {
+    const pm = noProjectContext();
+    const pmPrompt = buildLaunchPrompt({ ...pm, pm: { ...pm.pm, vendor: id } }, dir);
+    const workerPrompt = buildLaunchPrompt({ ...workerContext(), vendor: id }, dir);
+    for (const prompt of [pmPrompt, workerPrompt]) {
+      if (checklist.promptTool === undefined) {
+        expect(prompt).not.toContain("**进度清单**");
+      } else {
+        expect(prompt).toContain(`**进度清单**：一轮要做 3 步或更多时，用 ${checklist.promptTool} 列出步骤，每完成一项就标记为完成。`);
+      }
+    }
+  });
 });

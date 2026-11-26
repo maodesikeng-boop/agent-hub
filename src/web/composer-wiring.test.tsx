@@ -1,6 +1,6 @@
 // 输入框接上真接口：弹出列表走 API_PATHS，手打被拦的命令（发消息 400 + code invalid）原因显示在输入框上方、原文留着。
 // 接口和 WebSocket 都是假的（和 m2.test.tsx 一样）。
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_PATHS } from "../shared/index.ts";
@@ -134,7 +134,11 @@ describe("打开对话时聚焦输入框：只在用鼠标的设备（pointer: f
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.last.open());
-    await screen.findByRole("textbox", { name: "Message" });
+    await waitFor(() => expect(screen.getAllByRole("textbox", { name: "Message" }).length).toBeGreaterThan(0));
+  };
+  const targetBox = (hash: string) => {
+    const scope = hash.startsWith("#/w/") ? screen.getByRole("complementary", { name: "写文档" }) : screen.getByRole("main");
+    return within(scope).getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
   };
   afterEach(() => {
     window.location.hash = "";
@@ -142,12 +146,12 @@ describe("打开对话时聚焦输入框：只在用鼠标的设备（pointer: f
 
   it.each([["#/c/1", "项目经理的对话"], ["#/w/31", "Piece 的对话"]])("%s（%s）：鼠标设备焦点在输入框", async (hash) => {
     await open(hash, "fine");
-    expect(box()).toHaveFocus();
+    expect(targetBox(hash)).toHaveFocus();
   });
 
   it.each([["#/c/1", "项目经理的对话"], ["#/w/31", "Piece 的对话"]])("%s（%s）：触屏设备焦点不在输入框（不弹键盘）", async (hash) => {
     await open(hash, "coarse");
-    expect(box()).not.toHaveFocus();
+    expect(targetBox(hash)).not.toHaveFocus();
   });
 });
 

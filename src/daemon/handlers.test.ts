@@ -10,13 +10,10 @@ import {
   type DriverSendResult,
   type Message,
   type RateLimitInfo,
-  type ReviewStampOutcome,
   type SetupOutcome,
   type WorktreeTask,
 } from "../shared/index.ts";
-import { ReviewStatusRetryableError, type PostReviewStatusInput } from "./git/review-status.ts";
 import {
-  createReviewStampHandler,
   createSessionEndHandler,
   createSessionSendHandler,
   createSessionStartHandler,
@@ -205,7 +202,7 @@ describe("session.send 处理函数", () => {
     await expect(createSessionSendHandler(d)(sendAction())).rejects.toBeInstanceOf(DriverError);
   });
 
-  it("真人主动发消息（!isLedgerWakeup）与项目经理 worker.send（sender pm）：即使旧 resetsAt 未到期也直接调 driver.send，不压着", async () => {
+  it("真人主动发消息与项目经理 worker.send（sender pm）：即使旧 resetsAt 未到期也直接调 driver.send，不压着", async () => {
     const rateLimit = { status: "rejected", resetsAt: NOW / 1000 + 3600, windows: {} };
     for (const m of [
       message({ sender: "user", meta: null, text: "继续" }),
@@ -219,12 +216,12 @@ describe("session.send 处理函数", () => {
     }
   });
 
-  it("系统消息、账本代发唤醒（isLedgerWakeup）、重启恢复与退避重试：额度用完时 later 到恢复之后，不调 driver", async () => {
+  it("系统消息、账本代发唤醒、重启恢复与退避重试：额度用完时 later 到恢复之后，不调 driver", async () => {
     const resetsAt = NOW / 1000 + 60;
     const rateLimit = { status: "rejected", resetsAt, windows: {} };
     for (const [m, act] of [
       [message({ sender: "system", meta: { event: "schedule.run", scheduleId: 1, name: "早报" } }), action("session.send", { sessionId: 1, messageId: 7, source: "system" })],
-      [message({ sender: "user", meta: { wakeup: true } }), sendAction()],
+      [message({ sender: "system", meta: { event: "pm.wakeup", source: "task_graph", ref: "test" } }), sendAction()],
       [message({ status: "processing" }), sendAction({ resend: true })],
       [message({ status: "processing" }), action("session.send", { sessionId: 1, messageId: 7, source: "user", resend: true, recovery: true })],
       [message(), { ...sendAction(), attempts: 1 }],
@@ -237,7 +234,7 @@ describe("session.send 处理函数", () => {
 
   it("自动唤醒在额度很久以后才恢复时：最多推迟 5 分钟再看", async () => {
     const { d } = deps({
-      message: message({ sender: "user", meta: { wakeup: true } }),
+      message: message({ sender: "system", meta: { event: "pm.wakeup", source: "task_graph", ref: "test" } }),
       rateLimit: { status: "rejected", resetsAt: NOW / 1000 + 3600, windows: {} },
     });
     expect(await createSessionSendHandler(d)(sendAction())).toMatchObject({ kind: "later", delayMs: 300_000, reason: "rate_limited" });
@@ -282,7 +279,7 @@ describe("session.send 处理函数：撞上 session_ended（会话已经结束�
     for (const status of ["delivered", "processing"] as const) {
       const { d, onActionFailed, stopMessage } = deps({ send: new DriverError("session_ended", "session 1 has been ended"), message: message({ sessionId: 1, status }) });
       expect(await createSessionSendHandler(d)(sendAction({ resend: true }))).toEqual({ kind: "done" });
-      expect(stopMessage).toHaveBeenCalledWith(7);
+      expect(stopMessage).toHaveBeenCalledWith(7, 1);
       expect(onActionFailed).not.toHaveBeenCalled();
     }
   });
@@ -598,54 +595,5 @@ describe("session.send 处理函数：任务图交付单发送前异步补齐 di
       source: "system",
       text: "【任务图 #3 · 改造 待交付】\n原始正文\n文件数=1 PR=42",
     });
-  });
-});
-
-describe("review.stamp 处理函数", () => {
-  const SHA = "a".repeat(40);
-  const params = { workerId: 3, reportMessageId: 9, sha: SHA, verdict: "PASS" as const };
-  const stampAction: ActionRow<"review.stamp"> = { id: 1, type: "review.stamp", dedupeKey: "3:9", params, status: "running", attempts: 0, nextAttemptAt: 0, lastError: null, createdAt: 0, updatedAt: 0 };
-  const task = { repo: "/repo", pr: { number: 4, state: "OPEN", url: "https://github.com/o/r/pull/4" }, account: "octo" };
-
-  function stampDeps(found: typeof task | null, post: () => Promise<ReviewStampOutcome>) {
-    const onReviewStamped = vi.fn();
-    const postReviewStatus = vi.fn((_input: PostReviewStatusInput) => post());
-    return { onReviewStamped, postReviewStatus, handler: createReviewStampHandler({ ledger: { getReviewStampTask: () => found, onReviewStamped }, postReviewStatus }) };
-  }
-
-  it("取到任务就调 postReviewStatus，并把结果交给 onReviewStamped", async () => {
-    const outcome: ReviewStampOutcome = { kind: "posted", sha: SHA, state: "success", account: "octo", at: 1 };
-    const d = stampDeps(task, async () => outcome);
-    await expect(d.handler(stampAction)).resolves.toEqual({ kind: "done" });
-    expect(d.postReviewStatus).toHaveBeenCalledWith({ cwd: "/repo", request: { sha: SHA, verdict: "PASS", state: "success" }, pr: task.pr, account: "octo" });
-    expect(d.onReviewStamped).toHaveBeenCalledWith(params, outcome);
-  });
-
-  it("FAIL 结论挂 failure", async () => {
-    const d = stampDeps(task, async () => ({ kind: "posted", sha: SHA, state: "failure", account: "octo", at: 1 }));
-    await d.handler({ ...stampAction, params: { ...params, verdict: "FAIL" } });
-    expect(d.postReviewStatus.mock.calls[0]![0].request.state).toBe("failure");
-  });
-
-  it("取不到任务（Worker 没了、快照对不上 sha）时直接 done，不调 gh、不写账本", async () => {
-    const d = stampDeps(null, async () => ({ kind: "skipped", sha: SHA, reason: "x", at: 1 }));
-    await expect(d.handler(stampAction)).resolves.toEqual({ kind: "done" });
-    expect(d.postReviewStatus).not.toHaveBeenCalled();
-    expect(d.onReviewStamped).not.toHaveBeenCalled();
-  });
-
-  it("postReviewStatus 抛 ReviewStatusRetryableError 时往外抛，交给执行器退避重试", async () => {
-    const d = stampDeps(task, async () => {
-      throw new ReviewStatusRetryableError("gh 超时");
-    });
-    await expect(d.handler(stampAction)).rejects.toThrow(ReviewStatusRetryableError);
-    expect(d.onReviewStamped).not.toHaveBeenCalled();
-  });
-
-  it("跳过的结果照样记进账本，处理函数返回 done", async () => {
-    const outcome: ReviewStampOutcome = { kind: "skipped", sha: SHA, reason: "本机没装 gh", at: 1 };
-    const d = stampDeps(task, async () => outcome);
-    await expect(d.handler(stampAction)).resolves.toEqual({ kind: "done" });
-    expect(d.onReviewStamped).toHaveBeenCalledWith(params, outcome);
   });
 });

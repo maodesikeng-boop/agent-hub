@@ -1,34 +1,31 @@
-// Slack that keeps text near the edge from flipping between layouts.
-const SINGLE_ROW_SLACK_PX = 4;
+import { useEffect, useState, type RefObject } from "react";
+import { COMPOSER_SINGLE_ROW_SLACK_PX, COMPOSER_WRAP_PROBE_CHARS } from "./limits.ts";
 
-let measureContext: CanvasRenderingContext2D | null = null;
+export const NATIVE_MULTILINE_SIZING = typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content");
 
-function getMeasureContext(): CanvasRenderingContext2D | null {
-  if (!measureContext) {
-    try {
-      measureContext = document.createElement("canvas").getContext("2d");
-    } catch {
-      return null;
-    }
-  }
-  return measureContext;
+interface LineMeasure {
+  width: number;
+  measure(value: string): number;
 }
 
-export function isWrapped(textarea: HTMLTextAreaElement, scrollHeight: number): boolean {
-  const cs = getComputedStyle(textarea);
-  const lineHeight = parseFloat(cs.lineHeight) || 0;
-  const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-  return scrollHeight > lineHeight + padY + 1;
-}
-
-export function fitsBetweenButtons(textarea: HTMLTextAreaElement, text: string, buttons: Array<HTMLElement | null>): boolean {
-  const ctx = getMeasureContext();
-  if (!ctx) return false;
-  const cs = getComputedStyle(textarea);
-  ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-  const gap = parseFloat(getComputedStyle(textarea.parentElement ?? textarea).columnGap) || 0;
-  const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
-  const sides = buttons.reduce((sum, el) => sum + (el ? el.offsetWidth + gap : 0), 0);
-  const room = textarea.clientWidth - sides - padX - SINGLE_ROW_SLACK_PX;
-  return ctx.measureText(text).width <= room;
+export function useComposerSoftWrap(probe: RefObject<HTMLDivElement | null>, value: string): boolean {
+  const [line, setLine] = useState<LineMeasure | null>(null);
+  useEffect(() => {
+    const node = probe.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    let context: CanvasRenderingContext2D | null = null;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry || entry.contentRect.width <= 0) return;
+      const canvas = context ??= document.createElement("canvas").getContext("2d");
+      if (!canvas) return;
+      const { fontStyle, fontWeight, fontSize, fontFamily } = getComputedStyle(node);
+      canvas.font = `${fontStyle} ${fontWeight} ${fontSize} ${fontFamily}`;
+      setLine({ width: entry.contentRect.width - COMPOSER_SINGLE_ROW_SLACK_PX, measure: (text) => canvas.measureText(text).width });
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [probe]);
+  if (line === null || value === "") return false;
+  if (value.length > COMPOSER_WRAP_PROBE_CHARS && line.measure(value.slice(0, COMPOSER_WRAP_PROBE_CHARS)) > line.width) return true;
+  return line.measure(value) > line.width;
 }

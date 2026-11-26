@@ -1,3 +1,4 @@
+import { positiveContextTokens } from "../../daemon/driver/usage.ts";
 import {
   MAX_API_RETRY_ERROR_CHARS,
   agentLaunchArgs,
@@ -196,7 +197,7 @@ export function parsePiSessionStats(data: unknown): ParsedSessionStats {
       ? (d.contextUsage as Record<string, unknown>)
       : null;
   const rawCtx = cu?.tokens;
-  const contextTokens = typeof rawCtx === "number" && Number.isFinite(rawCtx) && rawCtx >= 0 ? rawCtx : null;
+  const contextTokens = positiveContextTokens(rawCtx);
   return { tokens, contextTokens };
 }
 

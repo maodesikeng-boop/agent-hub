@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, vendorSpec, type QuotaResponse } from "../../shared/index.ts";
+import { queryClaudeQuota } from "../../vendors/claude/quota.ts";
+import { queryCodexQuota } from "../../vendors/codex/quota.ts";
+import type { VendorQuotaQuery } from "../../vendors/daemon-types.ts";
 import { createFetchedQuota, mergeFetchedQuotas, parseFetchedQuota, queryFetchedQuota } from "./fetched-quota.ts";
 
 const spec = vendorSpec("agy").quota!.fetched!;
@@ -50,7 +57,7 @@ describe("parseFetchedQuota", () => {
 });
 
 describe("createFetchedQuota（缓存）", () => {
-  const sample: QuotaResponse = { groups: [{ vendor: "agy", id: "gemini", windows: {} }] };
+  const sample: QuotaResponse = { groups: [{ vendor: "agy", id: "gemini", windows: { five_hour: { utilization: 0.4, resetsAt: 0, status: "allowed" } } }] };
 
   function setup(results: Array<QuotaResponse | Error>) {
     let time = 1_000;
@@ -66,7 +73,7 @@ describe("createFetchedQuota（缓存）", () => {
     return { quota, calls: () => calls, advance: (ms: number) => (time += ms) };
   }
 
-  it("5 分钟内再要用缓存，不再问；过了再问一次", async () => {
+  it("caches a successful result until the freshness limit", async () => {
     const t = setup([sample]);
     expect(await t.quota.get()).toEqual(sample);
     t.advance(FETCHED_QUOTA_FRESH_MS - 1);
@@ -83,7 +90,7 @@ describe("createFetchedQuota（缓存）", () => {
     expect(t.calls()).toBe(1);
   });
 
-  it("查失败：回空（不显示那一块），不抛；只记 FETCHED_QUOTA_RETRY_MS，不当结果缓存 5 分钟；过了再问，问到了照常缓存", async () => {
+  it("returns no groups on failure and retries before the success cache would expire", async () => {
     const t = setup([new Error("偶发超时"), sample]);
     expect(await t.quota.get()).toEqual({ groups: [] });
     await t.quota.get();
@@ -110,6 +117,49 @@ describe("createFetchedQuota（缓存）", () => {
   it("没配查询（没装 agy）：回空", async () => {
     expect(await createFetchedQuota({ query: undefined }).get()).toEqual({ groups: [] });
   });
+
+  it("does not probe again after a provider confirms it has no quota until the login changes", async () => {
+    let now = 1_000;
+    let account = "api-key";
+    const query = vi.fn(async () => account === "api-key" ? null : sample);
+    const quota = createFetchedQuota({ query, now: () => now, fingerprint: () => account });
+    expect(await quota.get()).toEqual({ groups: [] });
+    for (let i = 0; i < 10; i++) {
+      now += FETCHED_QUOTA_FRESH_MS;
+      expect(await quota.get()).toEqual({ groups: [] });
+    }
+    expect(query).toHaveBeenCalledTimes(1);
+    account = "subscription";
+    expect(await quota.get()).toEqual(sample);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops an old account's in-flight result after credentials change", async () => {
+    let account = "old";
+    let finishOld!: (result: QuotaResponse) => void;
+    const old = new Promise<QuotaResponse>((resolve) => { finishOld = resolve; });
+    const query = vi.fn(() => account === "old" ? old : Promise.resolve({ groups: [] }));
+    const quota = createFetchedQuota({ query, fingerprint: () => account });
+    const pending = quota.get();
+    account = "new";
+    const current = quota.get();
+    finishOld(sample);
+    expect(await current).toEqual({ groups: [] });
+    expect(await pending).toEqual({ groups: [] });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes before the cache TTL when a window resets and omits the expired window", async () => {
+    let now = 1_000;
+    const query = vi.fn(async (): Promise<QuotaResponse> => ({
+      groups: [{ vendor: "agy", id: "gemini", windows: { five_hour: { utilization: 0.4, resetsAt: 2, status: "allowed" } } }],
+    }));
+    const quota = createFetchedQuota({ query, now: () => now });
+    expect((await quota.get()).groups).toHaveLength(1);
+    now = 2_000;
+    expect(await quota.get()).toEqual({ groups: [] });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("queryFetchedQuota", () => {
@@ -118,8 +168,70 @@ describe("queryFetchedQuota", () => {
   });
 });
 
+describe("provider responses without quota", () => {
+  const codexError = (code: number, message: string) => `
+    require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+      const request = JSON.parse(line);
+      if (request.method === "account/rateLimits/read") {
+        console.log(JSON.stringify({ id: request.id, error: { code: ${code}, message: ${JSON.stringify(message)} } }));
+      }
+    });
+  `;
+
+  const probes = [
+    {
+      provider: "Claude",
+      script: `
+        require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+          const request = JSON.parse(line);
+          console.log(JSON.stringify({
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: request.request_id,
+              response: { rate_limits_available: false, rate_limits: null },
+            },
+          }));
+        });
+      `,
+      query: queryClaudeQuota,
+    },
+    {
+      provider: "Codex",
+      script: codexError(-32600, "chatgpt authentication required to read rate limits"),
+      query: queryCodexQuota,
+    },
+    {
+      provider: "Antigravity",
+      script: "process.exit(0);",
+      query: (options: VendorQuotaQuery) => queryFetchedQuota({ ...options, vendor: "agy", spec }),
+    },
+  ];
+
+  const usingFixture = async (script: string, run: (options: VendorQuotaQuery) => Promise<void>) => {
+    const cwd = mkdtempSync(join(tmpdir(), "quota-probe-"));
+    try {
+      const path = writeExecutableNodeScript(join(cwd, "fixture"), script);
+      await run({ cwd, path, env: process.env, signal: new AbortController().signal, timeoutMs: 5_000 });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  };
+
+  it.each(probes)("$provider reports no subscription quota", async ({ script, query }) => {
+    await usingFixture(script, async (options) => expect(await query(options)).toBeNull());
+  });
+
+  it("keeps a failed Codex usage request retryable", async () => {
+    await usingFixture(codexError(-32603, "usage endpoint timed out"), async (options) => {
+      await expect(queryCodexQuota(options)).rejects.toThrow("usage endpoint timed out");
+    });
+  });
+});
+
 describe("mergeFetchedQuotas（几家合成一个响应）", () => {
-  const groupOf = (vendor: "agy" | "codex", id: string): QuotaResponse["groups"][number] => ({ vendor, id, windows: {} });
+  const groupOf = (vendor: "agy" | "codex", id: string): QuotaResponse["groups"][number] =>
+    ({ vendor, id, windows: { five_hour: { utilization: 0, resetsAt: 0, status: "allowed" } } });
 
   it("几家都问、各自缓存：按给的顺序拼起来，一次 get 每家只问一次；一家失败只少它那几块", async () => {
     const calls = { agy: 0, codex: 0 };
@@ -135,5 +247,17 @@ describe("mergeFetchedQuotas（几家合成一个响应）", () => {
 
   it("没有要按需查的厂商：回空", async () => {
     expect(await mergeFetchedQuotas([]).get()).toEqual({ groups: [] });
+  });
+
+  it("omits a result invalidated while the response is waiting for another provider", async () => {
+    const current = { groups: [groupOf("agy", "gemini")] };
+    const agy = createFetchedQuota({ query: async () => current });
+    await agy.get();
+    let finish!: (result: QuotaResponse) => void;
+    const codex = createFetchedQuota({ query: () => new Promise((resolve) => { finish = resolve; }) });
+    const pending = mergeFetchedQuotas([agy, codex]).get();
+    agy.invalidate();
+    finish({ groups: [groupOf("codex", "codex")] });
+    expect(await pending).toEqual({ groups: [groupOf("codex", "codex")] });
   });
 });

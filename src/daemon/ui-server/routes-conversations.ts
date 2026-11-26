@@ -1,13 +1,15 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   ATTACHMENTS_MISSING_MESSAGE,
+  COMPLETED_WORK_PAGE_SIZE,
   FILE_ACTIONS,
   LedgerRequestError,
   isLoopbackAddress,
   sentFilesOf,
   type CommandsResponse,
+  type CompletedCursor,
+  type CompletedWorkPage,
   type ConversationsLookup,
-  type EndedWorkersPage,
   type FileAction,
   type FileActionResponse,
   type FilesResponse,
@@ -102,10 +104,15 @@ export function registerConversationRoutes(routes: FastifyInstance, c: UiCtx): v
     return ledger.lookupConversations({ ids: parseIdList(ids, "ids"), workerIds: parseIdList(workerIds, "workerIds") });
   });
 
-  routes.get("/api/pms/:id/ended-workers", async (req): Promise<EndedWorkersPage> => {
+  routes.get("/api/pms/:id/completed", async (req): Promise<CompletedWorkPage> => {
     const pmId = idParam(req.params, "pm id");
-    const { before } = req.query as { before?: unknown };
-    return ledger.endedWorkersPage(pmId, parseOptionalPositiveInt(before, "before") ?? null);
+    const { cursor, limit } = req.query as { cursor?: unknown; limit?: unknown };
+    if (cursor !== undefined && typeof cursor !== "string") {
+      throw new LedgerRequestError("invalid", "cursor must be a string");
+    }
+    const parsedCursor = cursor === undefined || cursor === "" ? null : (cursor as CompletedCursor);
+    const parsedLimit = parseOptionalPositiveInt(limit, "limit") ?? COMPLETED_WORK_PAGE_SIZE;
+    return ledger.completedWork(pmId, parsedCursor, parsedLimit);
   });
 
   routes.get("/api/conversations/:id/messages", async (req) => {
@@ -132,6 +139,11 @@ export function registerConversationRoutes(routes: FastifyInstance, c: UiCtx): v
 
   routes.post("/api/conversations/:id/stop", async (req, reply) => {
     ledger.requestStop(idParam(req.params, "conversation id"));
+    return reply.code(202).send();
+  });
+
+  routes.post("/api/conversations/:id/end", async (req, reply) => {
+    ledger.endWorkerConversation(idParam(req.params, "conversation id"));
     return reply.code(202).send();
   });
 

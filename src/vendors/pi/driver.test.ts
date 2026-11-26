@@ -82,6 +82,7 @@ function makePiHarness(
   options: {
     script?: FakePiScript;
     driver?: Partial<PiDriverOptions>;
+    capabilityFingerprint?: () => Promise<string>;
   } = {},
 ): PiTestHarness {
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "agent-hub-pi-driver-")));
@@ -117,6 +118,12 @@ function makePiHarness(
         },
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
+      if (options.capabilityFingerprint) {
+        files.capabilityCheck = {
+          fingerprint: await options.capabilityFingerprint(),
+          currentFingerprint: options.capabilityFingerprint,
+        };
+      }
       const writeScope = workerWriteScope({ role: session.role, dataDir: dir, cwd: session.cwd });
       if (writeScope !== null) files.writeScope = writeScope;
       return readonly ? { ...files, readonly: buildReadonlyPolicy({ homeDir: dir, stateDir }), tmpDir: sessionTmpDir } : files;
@@ -317,6 +324,45 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
       output: 45,
       context: 295,
     });
+  });
+
+  it("retains Pi context when a turn reports empty usage and zero session stats", async () => {
+    const h = makePiHarness({ script: { turns: [
+      { textDeltas: ["First reply"], usage: { input: 100, output: 20 }, contextTokens: 120 },
+      { textDeltas: [""], usage: { input: 0, output: 0 }, contextTokens: 0 },
+      { textDeltas: ["After compaction"], usage: { input: 30, output: 5 }, contextTokens: 40 },
+    ] } });
+    const row = h.addSession();
+    for (const [index, expected] of [120, 120, 40].entries()) {
+      await h.driver.send(row.id, { messageIds: [index + 1], source: "user", text: "Continue" });
+      await h.waitFor("turn.ended", () => true, index + 1);
+      expect(h.store.get(row.id)?.usage.context).toBe(expected);
+    }
+  });
+
+  it("queues a message after capabilities change and sends it on the resumed session", async () => {
+    let fingerprint = "before";
+    const h = makePiHarness({ capabilityFingerprint: async () => fingerprint });
+    const hold = join(h.dir, "hold");
+    h.fake.updateScript({
+      turns: [{ holdFile: hold, tools: [{ id: "bash", name: "bash", arguments: { command: "echo" } }] }],
+    });
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [1], source: "user", text: "Start" });
+    await h.waitFor("agent.tool");
+
+    fingerprint = "after";
+    await expect(h.driver.send(row.id, { messageIds: [2], source: "user", text: "Use the new capability" }))
+      .resolves.toEqual({ kind: "queued" });
+    expect(h.of("message.delivered").map((event) => event.messageIds)).toEqual([[1]]);
+
+    writeFileSync(hold, "");
+    expect(await h.waitFor("turn.ended")).toMatchObject({ messageIds: [1], ok: true });
+    expect(await h.waitFor("turn.ended", undefined, 2)).toMatchObject({ messageIds: [2], ok: true });
+    const procs = h.log().filter((entry) => entry.kind === "argv");
+    expect(procs).toHaveLength(2);
+    expect(procs[1]?.argv).toContain("--session");
+    expect(h.rpcIn().some((rpc) => rpc.type === "prompt" && rpc.streamingBehavior === "steer")).toBe(false);
   });
 
   it("steer 中途插话：忙时走 streamingBehavior: steer 同一轮消费；若轮末未取走则自动排入下一轮", async () => {
@@ -599,4 +645,50 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
       input: { path: "/repo/src/app.ts", oldText: "a", newText: "b" },
     });
   });
+
+  it("冷启动 prepareLaunch 期间 isBusy 为真；end() 介入后抛 session_ended 且不再写 prompt", async () => {
+    let releasePrepare!: () => void;
+    let enteredPrepare!: () => void;
+    const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+    const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+
+    const h = makePiHarness({
+      driver: {
+        prepareLaunch: async (session) => {
+          enteredPrepare();
+          await prepareGate;
+          const promptFile = join(h.stateDir, `prompt-${session.id}.md`);
+          writeFileSync(promptFile, "hi");
+          return { promptFile, env: {}, fingerprint: "fp-pi-race" };
+        },
+      },
+    });
+    const row = h.addSession();
+    const sendPromise = h.driver.send(row.id, { messageIds: [90], source: "user", text: "hello" });
+    await prepareEntered;
+    expect(h.driver.isBusy(row.id)).toBe(true);
+
+    const endPromise = h.driver.end(row.id);
+    releasePrepare();
+    await expect(sendPromise).rejects.toSatisfy((err: unknown) => err instanceof DriverError && err.code === "session_ended");
+    await endPromise;
+    expect(h.driver.isBusy(row.id)).toBe(false);
+    expect(h.rpcIn().filter((m) => m.type === "prompt")).toHaveLength(0);
+  });
+});
+
+it.each(["aborted event", "silent close"])("preserves a Pi steer on daemon shutdown (%s)", async (mode) => {
+  const h = makePiHarness({ script: { turns: [{ waitForAbort: true, abortOnSigint: mode === "aborted event" }] } });
+  const row = h.addSession();
+  await h.driver.send(row.id, { messageIds: [1], source: "user", text: "Start" });
+  await h.waitFor("message.processing");
+  await expect(h.driver.send(row.id, { messageIds: [2], source: "user", text: "Follow up" })).resolves.toEqual({ kind: "written", midTurn: true });
+  await h.driver.shutdown();
+  if (mode === "silent close") {
+    expect(h.of("session.exited")).toContainEqual(expect.objectContaining({ reason: "shutdown", messageIds: [1] }));
+  } else {
+    expect(h.of("turn.ended")).toContainEqual(expect.objectContaining({ shutdown: true, messageIds: [1] }));
+  }
+  expect(h.of("message.requeued")).toContainEqual(expect.objectContaining({ messageIds: [2] }));
+  expect(h.of("message.cancelled")).toEqual([]);
 });

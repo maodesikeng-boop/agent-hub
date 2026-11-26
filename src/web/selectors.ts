@@ -1,4 +1,8 @@
+import { placeSystemInputs, systemInputPlacement } from "./turn-boundaries.ts";
+import { takenInputOf } from "../shared/taken-input.ts";
+export { listConversations, previewText, type ConversationEntry } from "./conversation-list.ts";
 export {
+  allPendingAsks,
   askingConversations,
   pendingAsks,
   runningWorkerCount,
@@ -8,14 +12,22 @@ export {
   type LastSeen,
   type RouterReminderSummary,
 } from "../shared/reminders.ts";
+export {
+  activeGraphsOf,
+  boundWorkerIdsOf,
+  isWorkerBound,
+  pendingDecisionsOf,
+  sortActiveGraphs,
+  unboundWorkersOf,
+  workersByWorkerId,
+} from "./task-graph-selectors.ts";
 import {
+  CHECKLIST_MESSAGE_KIND,
   VENDOR_LIST,
-  askOf,
   DEFAULT_AGENT_VENDOR,
   QUOTA_WINDOWS,
   VENDOR_FAILURE_SIGNS,
   EMPTY_TOKEN_USAGE,
-  TASK_GRAPH_SELECTOR_CACHE_MAX,
   attachmentsOf,
   exhaustRateLimitInfo,
   isHandoverTraffic,
@@ -25,12 +37,11 @@ import {
   vendorSpec,
   isQuotaExhausted,
   pendingDecisionsOf as devicePendingDecisionsOf,
-  isTaskNodeWaitingPm,
-  isTaskNodeWaitingDecision,
-  isTaskNodeWaitingUser,
   systemEventOf,
-  systemNoticeText,
+  unwrapWorkerReportText,
   workerEventOf,
+  workerLineText,
+  workerReportHeader,
   isWorkerEndLine,
   type AgentVendor,
   type ConversationId,
@@ -46,103 +57,20 @@ import {
   type ProjectId,
   type QuotaResponse,
   type QuotaWindowKey,
-  type RateLimitInfo,
   type RateLimitWindow,
-  type ProjectFolder,
-  type SessionId,
   type SessionState,
-  type TaskGraph,
   type WorkerId,
   type WorkerMessageMeta,
 } from "../shared/index.ts";
 import { defaultLookOf, resolvePmLook, type SlimeLook } from "../shared/slimes.ts";
-import { computeGateImpact } from "../shared/decisions.ts";
 import {
-  isQuietMessage,
   renewingIn,
   routerReminderSummary,
-  runningWorkerCount,
   sessionOf,
   type RouterReminderSummary,
 } from "../shared/reminders.ts";
-import { stripMarkdown } from "./plainText.ts";
 import { workerStatusOf, type WorkerTone } from "./worker-status.ts";
 import type { HubState, PendingMessage } from "./state.ts";
-
-export interface ConversationEntry {
-  id: ConversationId;
-  name: string;
-  look: SlimeLook;
-  lastMessage: Message | null;
-  lastAt: number;
-  pm: Pm | null;
-  project: Project | null;
-  folders: ProjectFolder[];
-}
-
-function previewMessage(messages: Message[]): Message | null {
-  let fallback: Message | null = null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if (isQuietMessage(m)) continue;
-    fallback ??= m;
-    if (m.kind === "text") return m;
-  }
-  return fallback;
-}
-
-const conversationListCache = new WeakMap<
-  HubState["conversations"],
-  { pms: HubState["pms"]; projects: HubState["projects"]; folders: HubState["folders"]; entries: ConversationEntry[] }
->();
-
-export function listConversations(state: HubState): ConversationEntry[] {
-  const hit = conversationListCache.get(state.conversations);
-  if (hit !== undefined && hit.pms === state.pms && hit.projects === state.projects && hit.folders === state.folders) return hit.entries;
-  const entries = computeConversationList(state);
-  conversationListCache.set(state.conversations, { pms: state.pms, projects: state.projects, folders: state.folders, entries });
-  return entries;
-}
-
-function computeConversationList(state: HubState): ConversationEntry[] {
-  return Object.values(state.conversations)
-    .filter((view) => view.conversation.kind !== "worker")
-    .map((view): ConversationEntry => {
-      const { conversation } = view;
-      const last = view.messages.findLast((m) => !isQuietMessage(m));
-      const pm = conversation.pmId === null ? null : (state.pms.find((p) => p.id === conversation.pmId) ?? null);
-      const project = state.projects.find((p) => p.conversationId === conversation.id) ?? null;
-      return {
-        id: conversation.id,
-        name: pm?.name ?? conversation.title,
-        look: pm !== null ? resolvePmLook(pm) : defaultLookOf(conversation.id),
-        lastMessage: previewMessage(view.messages),
-        lastAt: last?.createdAt ?? conversation.createdAt,
-        pm,
-        project,
-        folders: project
-          ? state.folders.filter((f) => f.projectId === project.id).toSorted((a, b) => Number(b.isMain) - Number(a.isMain) || a.id - b.id)
-          : [],
-      };
-    })
-    .toSorted((a, b) => b.lastAt - a.lastAt || a.id - b.id);
-}
-
-const previewTextCache = new WeakMap<Message, string>();
-
-export function previewText(entry: ConversationEntry): string {
-  const last = entry.lastMessage;
-  if (!last) return "";
-  const cached = previewTextCache.get(last);
-  if (cached !== undefined) return cached;
-  const files = attachmentsOf(last);
-  let result: string;
-  if ((last.text.trim() === "" || isRewoundMessage(last)) && files.length > 0) result = `[File] ${files.map((f) => f.name).join(", ")}`;
-  else if (last.sender === "system") result = systemNoticeText(last);
-  else result = last.sender === "agent" ? stripMarkdown(last.text) : last.text;
-  previewTextCache.set(last, result);
-  return result;
-}
 
 export function isWaitingForQuota(session: SessionState | null, now: number = Date.now()): boolean {
   return isQuotaExhausted(session?.rateLimit, now);
@@ -278,15 +206,70 @@ const quotaUsageCache = new WeakMap<
 >();
 // Keep the last result so unrelated session updates return the same array reference.
 let lastQuotaUsage: { json: string; value: QuotaVendor[] } | null = null;
+const NO_QUOTA_VENDORS: QuotaVendor[] = [];
+const sessionsWithQuotaCache = new WeakMap<HubState["sessions"], SessionState[]>();
+
+function quotaSessionsOf(sessions: HubState["sessions"]): SessionState[] {
+  let list = sessionsWithQuotaCache.get(sessions);
+  if (list === undefined) {
+    list = [];
+    for (const s of sessions) if (s.rateLimit !== null) list.push(s);
+    sessionsWithQuotaCache.set(sessions, list);
+  }
+  return list;
+}
+
+let lastQuotaFast: {
+  conversations: HubState["conversations"];
+  quotaSessions: SessionState[];
+  minNowMs: number;
+  maxNowMs: number;
+  value: QuotaVendor[];
+} | null = null;
 
 export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVendor[] {
+  const quotaSessions = quotaSessionsOf(state.sessions);
+  if (quotaSessions.length === 0) return NO_QUOTA_VENDORS;
+  if (
+    lastQuotaFast !== null &&
+    lastQuotaFast.conversations === state.conversations &&
+    lastQuotaFast.quotaSessions.length === quotaSessions.length &&
+    quotaSessions.every((s, i) => s === lastQuotaFast!.quotaSessions[i]) &&
+    now >= lastQuotaFast.minNowMs &&
+    now < lastQuotaFast.maxNowMs
+  ) {
+    return lastQuotaFast.value;
+  }
+  let minNowMs = Number.NEGATIVE_INFINITY;
+  let maxNowMs = Number.POSITIVE_INFINITY;
+  const boundNowMs = (thresholdMs: number) => {
+    if (thresholdMs <= now) minNowMs = Math.max(minNowMs, thresholdMs);
+    else maxNowMs = Math.min(maxNowMs, thresholdMs);
+  };
   const vendors: QuotaVendor[] = [];
   for (const spec of QUOTA_VENDORS) {
     const windows: QuotaWindowUsage[] = [];
     const pickedRawWindows: RateLimitWindow[] = [];
-    const sessions = state.sessions
+    const sessions = quotaSessions
       .filter((s) => (s.vendor ?? DEFAULT_AGENT_VENDOR) === spec.id)
-      .map((s) => sanitizeSessionWindows(s, spec.windows, now));
+      .map((s) => {
+        if (s.rateLimit !== null) {
+          if (s.rateLimit.resetsAt !== null && Number.isFinite(s.rateLimit.resetsAt) && s.rateLimit.resetsAt > 0) {
+            boundNowMs(s.rateLimit.resetsAt * 1000);
+          }
+          for (const key of spec.windows) {
+            const w = s.rateLimit.windows[key];
+            if (w === undefined || !Number.isFinite(w.utilization) || !Number.isFinite(w.resetsAt)) continue;
+            if (w.resetsAt > 0) boundNowMs(w.resetsAt * 1000);
+            if (w.resetsAt >= REAL_EPOCH_SEC) {
+              const maxSpanSec = QUOTA_WINDOWS[key].durationMins * 60 + WINDOW_DURATION_TOLERANCE_SEC;
+              boundNowMs(REAL_EPOCH_SEC * 1000);
+              boundNowMs((w.resetsAt - maxSpanSec) * 1000);
+            }
+          }
+        }
+        return sanitizeSessionWindows(s, spec.windows, now);
+      });
     let latestIdx = -1;
     let latestWithWindows: SessionState | null = null;
     for (let i = 0; i < sessions.length; i++) {
@@ -325,10 +308,14 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
     quotaUsageCache.set(state.conversations, bySessions);
   }
   const prev = bySessions.get(state.sessions);
-  if (prev !== undefined && prev.json === json) return prev.value;
+  if (prev !== undefined && prev.json === json) {
+    lastQuotaFast = { conversations: state.conversations, quotaSessions, minNowMs, maxNowMs, value: prev.value };
+    return prev.value;
+  }
   const value = lastQuotaUsage !== null && lastQuotaUsage.json === json ? lastQuotaUsage.value : vendors;
   lastQuotaUsage = { json, value };
   bySessions.set(state.sessions, lastQuotaUsage);
+  lastQuotaFast = { conversations: state.conversations, quotaSessions, minNowMs, maxNowMs, value };
   return value;
 }
 
@@ -337,26 +324,36 @@ function legacyFetchedQuota(id: string): (typeof QUOTA_VENDORS)[number] | undefi
   return owners.length === 1 ? owners[0] : undefined;
 }
 
-export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()): QuotaVendor[] {
+export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now(), current = false): QuotaVendor[] {
   const blocks: QuotaVendor[] = [];
   for (const group of res.groups) {
     const quota = group.vendor === undefined ? legacyFetchedQuota(group.id) : isAgentVendor(group.vendor) ? vendorSpec(group.vendor).quota : undefined;
-    const spec = quota?.fetched?.groups.find((g) => g.key === group.id);
-    if (quota === undefined || spec === undefined) continue;
-    const windows = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).flatMap((key) => {
+    const name = quota?.fetched?.groups.find((g) => g.key === group.id)?.name;
+    if (quota === undefined || (name === undefined && !(current && group.id === group.vendor && quota.fetched === undefined))) continue;
+    let exhausted = false;
+    const windows = quota.windows.flatMap((key) => {
       const window = group.windows[key];
-      return window === undefined || !Number.isFinite(window.utilization) ? [] : [windowUsage(key, window, now, undefined)];
+      if (window === undefined || !Number.isFinite(window.utilization) || (current && isReset(window.resetsAt, now))) return [];
+      const usage = windowUsage(key, window, now, quota.warningStatus);
+      exhausted ||= usage.percent >= 100 || (current && window.status === "rejected");
+      return [usage];
     });
-    if (windows.length > 0) blocks.push({ id: group.id, name: quota.name, group: spec.name, windows, exhausted: windows.some((w) => w.percent >= 100) });
+    if (windows.length > 0) blocks.push({ id: group.id, name: quota.name, group: name, windows, exhausted });
   }
   return blocks;
 }
 
+const fetchedQuotaSessionCache = new WeakMap<HubState["sessions"], boolean>();
+
 export function hasFetchedQuotaSession(state: HubState): boolean {
-  return state.sessions.some((s) => {
+  const cached = fetchedQuotaSessionCache.get(state.sessions);
+  if (cached !== undefined) return cached;
+  const result = state.sessions.some((s) => {
     const vendor = s.vendor ?? DEFAULT_AGENT_VENDOR;
     return isAgentVendor(vendor) && vendorSpec(vendor).quota?.fetched !== undefined;
   });
+  fetchedQuotaSessionCache.set(state.sessions, result);
+  return result;
 }
 
 const quotaResetTimesCache = new WeakMap<HubState["sessions"], number[]>();
@@ -366,8 +363,13 @@ let lastQuotaResetTimes: number[] = NO_RESET_TIMES;
 export function quotaResetTimes(state: HubState): number[] {
   const hit = quotaResetTimesCache.get(state.sessions);
   if (hit !== undefined) return hit;
+  const quotaSessions = quotaSessionsOf(state.sessions);
+  if (quotaSessions.length === 0) {
+    quotaResetTimesCache.set(state.sessions, NO_RESET_TIMES);
+    return NO_RESET_TIMES;
+  }
   const times = new Set<number>();
-  for (const { rateLimit } of state.sessions) {
+  for (const { rateLimit } of quotaSessions) {
     if (rateLimit === null) continue;
     for (const w of Object.values(rateLimit.windows)) if (Number.isFinite(w.resetsAt) && w.resetsAt > 0) times.add(w.resetsAt * 1000);
     if (rateLimit.resetsAt !== null && Number.isFinite(rateLimit.resetsAt) && rateLimit.resetsAt > 0) times.add(rateLimit.resetsAt * 1000);
@@ -384,6 +386,23 @@ export function quotaResetTimes(state: HubState): number[] {
 
 export type WorkerPhase = "preparing" | "open" | "ended";
 
+export interface WorkerOutcome {
+  id: MessageId;
+  at: number;
+  line: WorkerMessageMeta;
+  reportBody: string | null;
+}
+
+const OUTCOME_WORKER_EVENTS: ReadonlySet<WorkerMessageMeta["event"]> = new Set(["report", "turn_failed", "worktree_failed"]);
+
+function extractWorkerReportBody(line: WorkerMessageMeta, text: string): string | null {
+  if (line.event !== "report") return null;
+  const trimmed = text.trim();
+  if (trimmed === "" || trimmed === workerReportHeader(line.workerId, line.title) || trimmed === workerLineText(line)) return null;
+  const unwrapped = unwrapWorkerReportText({ id: line.workerId, title: line.title }, text).trim();
+  return unwrapped === "" ? null : unwrapped;
+}
+
 interface WorkerLine {
   id: MessageId;
   at: number;
@@ -393,6 +412,7 @@ interface WorkerLine {
 interface WorkerLineIndex {
   latest: ReadonlyMap<ConversationId, WorkerLine>;
   endedAt: ReadonlyMap<ConversationId, number>;
+  outcomes: ReadonlyMap<ConversationId, readonly WorkerOutcome[]>;
 }
 
 const pmWorkerIndexCache = new WeakMap<readonly Message[], WorkerLineIndex>();
@@ -402,18 +422,38 @@ function pmWorkerIndexOf(messages: readonly Message[]): WorkerLineIndex {
   if (cached !== undefined) return cached;
   const latest = new Map<ConversationId, WorkerLine>();
   const endedAt = new Map<ConversationId, number>();
+  const outcomes = new Map<ConversationId, WorkerOutcome[]>();
   for (const message of messages) {
     const line = workerEventOf(message);
     if (!line) continue;
     latest.set(line.workerConversationId, { id: message.id, at: message.createdAt, line });
     if (isWorkerEndLine(line)) endedAt.set(line.workerConversationId, Math.max(endedAt.get(line.workerConversationId) ?? 0, message.createdAt));
+    if (OUTCOME_WORKER_EVENTS.has(line.event)) {
+      let list = outcomes.get(line.workerConversationId);
+      if (list === undefined) {
+        list = [];
+        outcomes.set(line.workerConversationId, list);
+      }
+      list.push({ id: message.id, at: message.createdAt, line, reportBody: extractWorkerReportBody(line, message.text) });
+    }
   }
-  cached = { latest, endedAt };
+  cached = { latest, endedAt, outcomes };
   pmWorkerIndexCache.set(messages, cached);
   return cached;
 }
 
 const workerLinesCache = new WeakMap<HubState["conversations"], Map<PmId, WorkerLineIndex>>();
+
+function mergeOutcomes(
+  existing: readonly WorkerOutcome[] | undefined,
+  extra: readonly WorkerOutcome[],
+): readonly WorkerOutcome[] {
+  if (existing === undefined) return extra;
+  const seen = new Set(existing.map((o) => o.id));
+  const added = extra.filter((o) => !seen.has(o.id));
+  if (added.length === 0) return existing;
+  return [...existing, ...added].toSorted((a, b) => a.id - b.id);
+}
 
 function workerLinesOf(state: HubState, pmId: PmId): WorkerLineIndex {
   let byPm = workerLinesCache.get(state.conversations);
@@ -425,11 +465,16 @@ function workerLinesOf(state: HubState, pmId: PmId): WorkerLineIndex {
   if (hit !== undefined) return hit;
   const latest = new Map<ConversationId, WorkerLine>();
   const endedAt = new Map<ConversationId, number>();
+  const outcomes = new Map<ConversationId, readonly WorkerOutcome[]>();
+  const snapshotOutcomes = new Map<ConversationId, WorkerOutcome>();
   const views = Object.values(state.conversations).filter((v) => v.conversation.pmId === pmId);
   for (const { conversation, workerLine } of views) {
     if (conversation.kind !== "worker" || workerLine === undefined) continue;
     latest.set(conversation.id, { id: workerLine.messageId, at: workerLine.at, line: workerLine.line });
     if (workerLine.endedAt !== null) endedAt.set(conversation.id, workerLine.endedAt);
+    if (OUTCOME_WORKER_EVENTS.has(workerLine.line.event)) {
+      snapshotOutcomes.set(conversation.id, { id: workerLine.messageId, at: workerLine.at, line: workerLine.line, reportBody: null });
+    }
   }
   for (const { conversation, messages } of views) {
     if (conversation.kind === "worker") continue;
@@ -438,8 +483,12 @@ function workerLinesOf(state: HubState, pmId: PmId): WorkerLineIndex {
       if ((latest.get(id)?.id ?? -1) <= line.id) latest.set(id, line);
     }
     for (const [id, at] of index.endedAt) endedAt.set(id, Math.max(endedAt.get(id) ?? 0, at));
+    for (const [id, list] of index.outcomes) outcomes.set(id, mergeOutcomes(outcomes.get(id), list));
   }
-  const result = { latest, endedAt };
+  for (const [id, fallback] of snapshotOutcomes) {
+    outcomes.set(id, mergeOutcomes(outcomes.get(id), [fallback]));
+  }
+  const result = { latest, endedAt, outcomes };
   byPm.set(pmId, result);
   return result;
 }
@@ -475,13 +524,44 @@ export interface WorkerEntry {
   vendor?: string;
   model?: string | null;
   effort?: string | null;
+  branch?: string | null;
   usage: TokenUsage;
   tone: WorkerTone;
 }
 
+interface CachedPmWorkers {
+  conversations: HubState["conversations"];
+  sessionsByWorker: (SessionState | null)[];
+  entries: WorkerEntry[];
+}
+
 const workersCache = new WeakMap<HubState["conversations"], WeakMap<HubState["sessions"], Map<PmId, WorkerEntry[]>>>();
 const MAX_CACHED_PM_WORKERS = 64;
-const lastWorkersByPm = new Map<PmId, WorkerEntry[]>();
+const lastWorkersByPm = new Map<PmId, CachedPmWorkers>();
+
+function sameUsage(a: TokenUsage, b: TokenUsage): boolean {
+  return (
+    a === b ||
+    (a.input === b.input &&
+      a.output === b.output &&
+      a.cacheRead === b.cacheRead &&
+      a.cacheWrite === b.cacheWrite &&
+      a.context === b.context)
+  );
+}
+
+function sameWorkerSessionFields(a: SessionState | null, b: SessionState | null): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.status === b.status &&
+    a.activity === b.activity &&
+    a.vendor === b.vendor &&
+    a.model === b.model &&
+    a.effort === b.effort &&
+    sameUsage(a.usage ?? EMPTY_TOKEN_USAGE, b.usage ?? EMPTY_TOKEN_USAGE)
+  );
+}
 
 function sameWorkerEntry(a: WorkerEntry, b: WorkerEntry): boolean {
   return (
@@ -493,12 +573,9 @@ function sameWorkerEntry(a: WorkerEntry, b: WorkerEntry): boolean {
     a.vendor === b.vendor &&
     a.model === b.model &&
     a.effort === b.effort &&
+    a.branch === b.branch &&
     a.tone === b.tone &&
-    a.usage.input === b.usage.input &&
-    a.usage.output === b.usage.output &&
-    a.usage.cacheRead === b.usage.cacheRead &&
-    a.usage.cacheWrite === b.usage.cacheWrite &&
-    a.usage.context === b.usage.context
+    sameUsage(a.usage ?? EMPTY_TOKEN_USAGE, b.usage ?? EMPTY_TOKEN_USAGE)
   );
 }
 
@@ -515,31 +592,61 @@ export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
   }
   let entries = byPm.get(pmId);
   if (entries === undefined) {
-    const computed = computeWorkers(state, pmId);
+    const workerConvs = workerConvsForPm(state.conversations, pmId);
+    const sessionsByWorker = workerConvs.map((v) => sessionOf(state, v.conversation.id));
     const prev = lastWorkersByPm.get(pmId);
-    if (prev !== undefined && prev.length === computed.length && computed.every((w, i) => sameWorkerEntry(w, prev[i]!))) {
-      entries = prev;
-    } else {
-      entries = computed;
-      if (!lastWorkersByPm.has(pmId) && lastWorkersByPm.size >= MAX_CACHED_PM_WORKERS) {
-        const oldest = lastWorkersByPm.keys().next().value;
-        if (oldest !== undefined) lastWorkersByPm.delete(oldest);
-      }
-      lastWorkersByPm.set(pmId, entries);
+    if (
+      prev !== undefined &&
+      prev.conversations === state.conversations &&
+      prev.sessionsByWorker.length === sessionsByWorker.length &&
+      sessionsByWorker.every((s, i) => sameWorkerSessionFields(s, prev.sessionsByWorker[i]!))
+    ) {
+      entries = prev.entries;
+      byPm.set(pmId, entries);
+      return entries;
     }
+    const computed = computeWorkers(state, pmId);
+    entries = prev !== undefined && prev.entries.length === computed.length && computed.every((w, i) => sameWorkerEntry(w, prev.entries[i]!))
+      ? prev.entries
+      : computed;
+    if (!lastWorkersByPm.has(pmId) && lastWorkersByPm.size >= MAX_CACHED_PM_WORKERS) {
+      const oldest = lastWorkersByPm.keys().next().value;
+      if (oldest !== undefined) lastWorkersByPm.delete(oldest);
+    }
+    lastWorkersByPm.set(pmId, { conversations: state.conversations, sessionsByWorker, entries });
     byPm.set(pmId, entries);
   }
   return entries;
 }
 
+const workerConvsByPmCache = new WeakMap<HubState["conversations"], Map<PmId, HubState["conversations"][ConversationId][]>>();
+
+function workerConvsForPm(conversations: HubState["conversations"], pmId: PmId): HubState["conversations"][ConversationId][] {
+  let byPm = workerConvsByPmCache.get(conversations);
+  if (byPm === undefined) {
+    byPm = new Map();
+    for (const view of Object.values(conversations)) {
+      if (view.conversation.kind !== "worker" || view.conversation.pmId === null) continue;
+      let list = byPm.get(view.conversation.pmId);
+      if (list === undefined) {
+        list = [];
+        byPm.set(view.conversation.pmId, list);
+      }
+      list.push(view);
+    }
+    workerConvsByPmCache.set(conversations, byPm);
+  }
+  return byPm.get(pmId) ?? [];
+}
+
 function computeWorkers(state: HubState, pmId: PmId): WorkerEntry[] {
   const { latest, endedAt: endedLines } = workerLinesOf(state, pmId);
-  return Object.values(state.conversations)
-    .filter(({ conversation }) => conversation.kind === "worker" && conversation.pmId === pmId)
-    .map(({ conversation, messages }) => {
+  return workerConvsForPm(state.conversations, pmId)
+    .map(({ conversation, messages, workerBranch }) => {
       const session = sessionOf(state, conversation.id);
       const latestEntry = latest.get(conversation.id);
       const workerId = latestEntry?.line.workerId ?? messages[0]?.workerId ?? undefined;
+      const branch = workerBranch ?? latestEntry?.line.branch ?? null;
       return {
         conversationId: conversation.id,
         ...(workerId !== undefined ? { workerId } : {}),
@@ -549,6 +656,7 @@ function computeWorkers(state: HubState, pmId: PmId): WorkerEntry[] {
         vendor: session?.vendor,
         model: session?.model,
         effort: session?.effort,
+        ...(branch !== null ? { branch } : {}),
         usage: session?.usage ?? EMPTY_TOKEN_USAGE,
         tone: toneOf(latestEntry),
       };
@@ -568,6 +676,14 @@ export function workerLineOf(state: HubState, workerConversationId: Conversation
   const pmId = state.conversations[workerConversationId]?.conversation.pmId;
   if (pmId == null) return null;
   return workerLinesOf(state, pmId).latest.get(workerConversationId)?.line ?? null;
+}
+
+const NO_WORKER_OUTCOMES: readonly WorkerOutcome[] = [];
+
+export function workerOutcomesOf(state: HubState, workerConversationId: ConversationId): readonly WorkerOutcome[] {
+  const pmId = state.conversations[workerConversationId]?.conversation.pmId;
+  if (pmId == null) return NO_WORKER_OUTCOMES;
+  return workerLinesOf(state, pmId).outcomes.get(workerConversationId) ?? NO_WORKER_OUTCOMES;
 }
 
 const NO_PENDING: PendingMessage[] = [];
@@ -592,8 +708,15 @@ export function isRenewing(state: HubState, conversationId: ConversationId): boo
   return renewingIn(state.conversations[conversationId]?.messages ?? []);
 }
 
+// Routine Worker start and end lines carry no status or summary; the work panel shows that state instead.
+function hiddenFromChat(message: Message): boolean {
+  if (isSilentTriggerMessage(message)) return true;
+  const event = workerEventOf(message)?.event;
+  return event === "started" || event === "ended";
+}
+
 export function visibleMessages(messages: Message[]): Message[] {
-  const filtered = messages.some(isSilentTriggerMessage) ? messages.filter((m) => !isSilentTriggerMessage(m)) : messages;
+  const filtered = messages.some(hiddenFromChat) ? messages.filter((m) => !hiddenFromChat(m)) : messages;
   if (!renewingIn(filtered)) return filtered;
   return filtered.map((m) => (m.sender === "user" && m.status === "queued" ? { ...m, status: "delivered" } : m));
 }
@@ -604,9 +727,11 @@ export function failingHealth(state: HubState): HealthEntry[] {
 
 export type RenderItem =
   | { kind: "message"; message: Message }
-  | { kind: "turn"; key: string; work: Message[]; parts: Message[]; startedAt: number; endedAt: number };
+  | { kind: "turn"; key: string; work: Message[]; checklists: Message[]; parts: Message[]; startedAt: number; endedAt: number };
 
 type FlowRole =
+  | "waiting"
+  | "in_turn"
   | "input"
   | "silent_input"
   | "divider"
@@ -614,24 +739,27 @@ type FlowRole =
   | "work"
   | "notice";
 
-const INPUT_WORKER_EVENTS: ReadonlySet<WorkerMessageMeta["event"]> = new Set(["report", "turn_failed", "worktree_failed", "user_message"]);
-const INPUT_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.run"]);
 const WORK_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.created", "schedule.removed"]);
 
 function flowRole(message: Message): FlowRole {
   if (isSilentTriggerMessage(message) || (isRewoundMessage(message) && attachmentsOf(message).length === 0)) return "silent_input";
   const line = workerEventOf(message);
-  if (line) return INPUT_WORKER_EVENTS.has(line.event) ? "input" : "work";
+  const placement = systemInputPlacement(message);
+  if (placement === "waiting") return "waiting";
+  if (placement === "in_turn") return "in_turn";
+  if (placement === "starts_turn" || (placement === "as_written" && message.status === "replied")) return "input";
+  if (placement === "as_written") return "notice";
+  if (line?.event === "user_message") return "input";
+  if (line) return OUTCOME_WORKER_EVENTS.has(line.event) ? "notice" : "work";
   if (message.sender === "user" || message.sender === "pm") return "input";
   if (message.sender === "agent") return "agent";
   const event = systemEventOf(message)?.event;
   if (event === "session.renewed") return "divider";
-  if (event !== undefined && INPUT_SYSTEM_EVENTS.has(event)) return "input";
   if (event !== undefined && WORK_SYSTEM_EVENTS.has(event)) return "work";
   return "notice";
 }
 
-function placeHandovers(all: Message[]): Message[] {
+function placeHandovers(all: readonly Message[]): Message[] {
   const shown = all.filter((m) => !isHandoverTraffic(m));
   const dividers = shown.filter((m) => systemEventOf(m)?.event === "session.renewed");
   if (dividers.length === 0) return shown;
@@ -648,8 +776,17 @@ function placeHandovers(all: Message[]): Message[] {
   return rest;
 }
 
-export function groupMessages(all: Message[]): RenderItem[] {
-  const messages = placeHandovers(all);
+interface GroupedMessages {
+  items: RenderItem[];
+  tailTurnKey: string | null;
+}
+
+const groupMessagesCache = new WeakMap<readonly Message[], GroupedMessages>();
+
+export function groupMessages(all: Message[]): GroupedMessages {
+  const hit = groupMessagesCache.get(all);
+  if (hit !== undefined) return hit;
+  const messages = placeHandovers(placeSystemInputs(all));
   const items: RenderItem[] = [];
   let turn: Extract<RenderItem, { kind: "turn" }> | null = null;
   let lastInputAt: number | null = null;
@@ -658,7 +795,9 @@ export function groupMessages(all: Message[]): RenderItem[] {
   const close = () => {
     if (turn === null) return;
     const trailing: Message[] = [];
-    while (turn.parts.length > 0 && turn.parts.at(-1)!.sender !== "agent") trailing.unshift(turn.parts.pop()!);
+    for (let last = turn.parts.at(-1); last !== undefined && last.sender !== "agent" && systemInputPlacement(last) !== "in_turn"; last = turn.parts.at(-1)) {
+      trailing.unshift(turn.parts.pop()!);
+    }
     for (const message of trailing) items.push({ kind: "message", message });
     turn = null;
   };
@@ -670,6 +809,10 @@ export function groupMessages(all: Message[]): RenderItem[] {
       lastInputAt = message.createdAt;
       continue;
     }
+    if (role === "waiting") {
+      items.push({ kind: "message", message });
+      continue;
+    }
     if (role === "divider") {
       close();
       items.push({ kind: "message", message });
@@ -678,29 +821,32 @@ export function groupMessages(all: Message[]): RenderItem[] {
     if (role === "input") {
       close();
       items.push({ kind: "message", message });
-      lastInputAt = message.createdAt;
+      lastInputAt = takenInputOf(message)?.at ?? message.createdAt;
       continue;
     }
     if (role === "agent" && turn === null) {
       const starts = [lastInputAt, lastAgentAt].filter((t): t is number => t !== null);
-      turn = { kind: "turn", key: `turn-${message.id}`, work: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt };
+      turn = { kind: "turn", key: `turn-${message.id}`, work: [], checklists: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt };
       items.push(turn);
     }
     if (turn === null) {
       items.push({ kind: "message", message });
       continue;
     }
-    if (role === "notice") {
+    if (role === "notice" || role === "in_turn") {
       turn.parts.push(message);
       continue;
     }
-    if (message.kind === "tool" || role === "work") turn.work.push(message);
+    if (message.kind === CHECKLIST_MESSAGE_KIND) turn.checklists.push(message);
+    else if (message.kind === "tool" || role === "work") turn.work.push(message);
     else turn.parts.push(message);
     turn.endedAt = message.createdAt;
     lastAgentAt = message.createdAt;
   }
+  const grouped = { items, tailTurnKey: turn?.key ?? null };
   close();
-  return items;
+  groupMessagesCache.set(all, grouped);
+  return grouped;
 }
 
 export interface DeviceRouterView {
@@ -788,6 +934,8 @@ interface FleetDeviceFingerprint {
   phase: HubState["phase"];
   decisions: readonly PendingDecision[];
   items: HubState["router"]["items"];
+  pendingAppCards: HubState["pendingAppCards"];
+  pendingSandboxCards: HubState["pendingSandboxCards"];
   pms: readonly Pm[];
   projects: readonly Project[];
   pmConvSig: string;
@@ -808,6 +956,8 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
       phase: d.state.phase,
       decisions: view.decisions,
       items: d.state.router.items,
+      pendingAppCards: d.state.pendingAppCards,
+      pendingSandboxCards: d.state.pendingSandboxCards,
       pms: d.state.pms,
       projects: d.state.projects,
       pmConvSig: pmConversationSignature(d.state.conversations),
@@ -828,6 +978,8 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
         prev.phase === cur.phase &&
         prev.decisions === cur.decisions &&
         prev.items === cur.items &&
+        prev.pendingAppCards === cur.pendingAppCards &&
+        prev.pendingSandboxCards === cur.pendingSandboxCards &&
         prev.pms === cur.pms &&
         prev.projects === cur.projects &&
         prev.pmConvSig === cur.pmConvSig
@@ -906,330 +1058,3 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
 }
 
 const lookOfPm = (pm: Pm | undefined, pmId: PmId): SlimeLook => (pm === undefined ? defaultLookOf(pmId) : resolvePmLook(pm));
-
-const NO_TASK_GRAPHS: TaskGraph[] = [];
-const NO_WORKERS: WorkerEntry[] = [];
-const NO_DECISIONS: PendingDecision[] = [];
-const NO_CONV_MESSAGES: readonly Message[] = [];
-
-function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxSize: number): void {
-  if (!map.has(key) && map.size >= maxSize) {
-    const oldest = map.keys().next().value;
-    if (oldest !== undefined) map.delete(oldest);
-  }
-  map.set(key, value);
-}
-
-export function taskGraphPriority(graph: TaskGraph): number {
-  let hasWaitingPm = false;
-  for (const node of graph.nodes) {
-    if (isTaskNodeWaitingUser(node)) return 0;
-    if (isTaskNodeWaitingPm(node)) hasWaitingPm = true;
-  }
-  return hasWaitingPm ? 1 : 2;
-}
-
-export function sortActiveGraphs(graphs: readonly TaskGraph[]): TaskGraph[] {
-  if (graphs.length === 0) return NO_TASK_GRAPHS;
-  return graphs.toSorted((a, b) => {
-    const pa = taskGraphPriority(a);
-    const pb = taskGraphPriority(b);
-    if (pa !== pb) return pa - pb;
-    return b.updatedAt - a.updatedAt || b.id - a.id;
-  });
-}
-
-const activeGraphsCache = new WeakMap<HubState["activeTaskGraphs"], Map<ProjectId, TaskGraph[]>>();
-const lastActiveGraphsByProject = new Map<ProjectId, TaskGraph[]>();
-
-export function activeGraphsOf(state: HubState, projectId: ProjectId | null): TaskGraph[] {
-  if (projectId === null) return NO_TASK_GRAPHS;
-  let byProject = activeGraphsCache.get(state.activeTaskGraphs);
-  if (byProject === undefined) {
-    byProject = new Map();
-    activeGraphsCache.set(state.activeTaskGraphs, byProject);
-  }
-  const hit = byProject.get(projectId);
-  if (hit !== undefined) return hit;
-
-  const filtered = state.activeTaskGraphs.filter((g) => g.projectId === projectId && g.status === "active");
-  if (filtered.length === 0) {
-    byProject.set(projectId, NO_TASK_GRAPHS);
-    return NO_TASK_GRAPHS;
-  }
-  const sorted = sortActiveGraphs(filtered);
-  const prev = lastActiveGraphsByProject.get(projectId);
-  const resolved =
-    prev !== undefined && prev.length === sorted.length && sorted.every((g, i) => g === prev[i]) ? prev : sorted;
-  if (resolved !== prev) setBoundedMap(lastActiveGraphsByProject, projectId, resolved, TASK_GRAPH_SELECTOR_CACHE_MAX);
-  byProject.set(projectId, resolved);
-  return resolved;
-}
-
-const boundWorkerIdsCache = new WeakMap<readonly TaskGraph[], ReadonlySet<WorkerId>>();
-
-export function isWorkerBound(worker: WorkerEntry, boundIds: ReadonlySet<WorkerId>): boolean {
-  return worker.workerId !== undefined && boundIds.has(worker.workerId);
-}
-
-export function workersByWorkerId(workers: readonly WorkerEntry[]): ReadonlyMap<WorkerId, WorkerEntry> {
-  const map = new Map<WorkerId, WorkerEntry>();
-  for (const w of workers) {
-    if (w.workerId !== undefined) map.set(w.workerId, w);
-  }
-  return map;
-}
-
-export function boundWorkerIdsOf(graphs: readonly TaskGraph[]): ReadonlySet<WorkerId> {
-  const hit = boundWorkerIdsCache.get(graphs);
-  if (hit !== undefined) return hit;
-  const ids = new Set<WorkerId>();
-  for (const graph of graphs) {
-    for (const node of graph.nodes) {
-      if (node.activeWorkerId !== null) ids.add(node.activeWorkerId);
-      for (const wid of node.workerIds) ids.add(wid);
-    }
-  }
-  boundWorkerIdsCache.set(graphs, ids);
-  return ids;
-}
-
-const unboundWorkersCache = new WeakMap<readonly WorkerEntry[], WeakMap<readonly TaskGraph[], WorkerEntry[]>>();
-const lastUnboundByProject = new Map<ProjectId, WorkerEntry[]>();
-
-export function unboundWorkersOf(state: HubState, projectId: ProjectId | null): WorkerEntry[] {
-  if (projectId === null) return NO_WORKERS;
-  const project = state.projects.find((p) => p.id === projectId);
-  if (project === undefined) return NO_WORKERS;
-  const allWorkers = workersOf(state, project.pmId);
-  const graphs = activeGraphsOf(state, projectId);
-  if (graphs.length === 0 || allWorkers.length === 0) return allWorkers;
-
-  let byGraphs = unboundWorkersCache.get(allWorkers);
-  if (byGraphs === undefined) {
-    byGraphs = new WeakMap();
-    unboundWorkersCache.set(allWorkers, byGraphs);
-  }
-  const hit = byGraphs.get(graphs);
-  if (hit !== undefined) return hit;
-
-  const boundIds = boundWorkerIdsOf(graphs);
-  if (boundIds.size === 0) {
-    byGraphs.set(graphs, allWorkers);
-    return allWorkers;
-  }
-  const filtered = allWorkers.filter((w) => !isWorkerBound(w, boundIds));
-  if (filtered.length === 0) {
-    byGraphs.set(graphs, NO_WORKERS);
-    return NO_WORKERS;
-  }
-  const prev = lastUnboundByProject.get(projectId);
-  const resolved =
-    prev !== undefined && prev.length === filtered.length && filtered.every((w, i) => w === prev[i]) ? prev : filtered;
-  if (resolved !== prev) setBoundedMap(lastUnboundByProject, projectId, resolved, TASK_GRAPH_SELECTOR_CACHE_MAX);
-  byGraphs.set(graphs, resolved);
-  return resolved;
-}
-
-const gateMessageIdsByMessages = new WeakMap<readonly Message[], ReadonlySet<MessageId>>();
-
-function gateMessageIdsIn(messages: readonly Message[]): ReadonlySet<MessageId> {
-  const hit = gateMessageIdsByMessages.get(messages);
-  if (hit !== undefined) return hit;
-  const set = new Set<MessageId>();
-  for (const msg of messages) {
-    if (askOf(msg)?.gateRef !== undefined) set.add(msg.id);
-  }
-  gateMessageIdsByMessages.set(messages, set);
-  return set;
-}
-
-function sameStringList(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((x, i) => x === b[i]);
-}
-
-function samePendingDecision(a: PendingDecision, b: PendingDecision): boolean {
-  if (
-    a.key !== b.key ||
-    a.pmId !== b.pmId ||
-    a.pmName !== b.pmName ||
-    a.projectId !== b.projectId ||
-    a.projectName !== b.projectName ||
-    a.conversationId !== b.conversationId ||
-    a.question !== b.question ||
-    a.context !== b.context ||
-    a.askMessageId !== b.askMessageId ||
-    a.createdAt !== b.createdAt ||
-    a.updatedAt !== b.updatedAt ||
-    !sameStringList(a.options, b.options) ||
-    a.source.kind !== b.source.kind
-  ) {
-    return false;
-  }
-  if (a.source.kind === "gate" && b.source.kind === "gate") {
-    return (
-      a.source.graphId === b.source.graphId &&
-      a.source.graphTitle === b.source.graphTitle &&
-      a.source.nodeKey === b.source.nodeKey &&
-      a.source.nodeTitle === b.source.nodeTitle &&
-      a.source.blockedNodeCount === b.source.blockedNodeCount &&
-      a.source.recommended === b.source.recommended &&
-      Boolean(a.source.checkpoint) === Boolean(b.source.checkpoint) &&
-      sameStringList(a.source.nextNodeTitles, b.source.nextNodeTitles)
-    );
-  }
-  return (
-    a.source.kind === "router_item" &&
-    b.source.kind === "router_item" &&
-    a.source.itemId === b.source.itemId &&
-    (a.source.recommended ?? null) === (b.source.recommended ?? null)
-  );
-}
-
-interface DecisionCacheValue {
-  messages: readonly Message[];
-  pms: HubState["pms"];
-  projects: HubState["projects"];
-  list: PendingDecision[];
-}
-
-const convDecisionsCache = new WeakMap<
-  HubState["activeTaskGraphs"],
-  WeakMap<HubState["router"]["items"], Map<string, DecisionCacheValue>>
->();
-const lastDecisionsByScope = new Map<string, PendingDecision[]>();
-
-function decisionScopeCache(state: HubState): Map<string, DecisionCacheValue> {
-  let byRouterItems = convDecisionsCache.get(state.activeTaskGraphs);
-  if (byRouterItems === undefined) {
-    byRouterItems = new WeakMap();
-    convDecisionsCache.set(state.activeTaskGraphs, byRouterItems);
-  }
-  let byScope = byRouterItems.get(state.router.items);
-  if (byScope === undefined) {
-    byScope = new Map();
-    byRouterItems.set(state.router.items, byScope);
-  }
-  return byScope;
-}
-
-function decisionNames(state: HubState) {
-  return {
-    pm: (pmId: PmId) => state.pms.find((p) => p.id === pmId)?.name ?? `#${pmId}`,
-    project: (projectId: ProjectId | null) =>
-      projectId === null ? null : (state.projects.find((p) => p.id === projectId)?.name ?? null),
-  };
-}
-
-function gateDecisionsOf(state: HubState, conversationId: ConversationId, deviceId: string, names: ReturnType<typeof decisionNames>) {
-  const graphGateIds = new Set<MessageId>();
-  const decisions: PendingDecision[] = [];
-  for (const graph of state.activeTaskGraphs) {
-    if (graph.status !== "active" || graph.conversationId !== conversationId) continue;
-    for (const node of graph.nodes) {
-      if (node.gateAskMessageId !== null) graphGateIds.add(node.gateAskMessageId);
-      if (!isTaskNodeWaitingDecision(node)) continue;
-      const { blockedNodeCount, nextNodeTitles } = computeGateImpact(graph, node.key);
-      decisions.push({
-        key: `gate:${deviceId}:${graph.id}:${node.key}`,
-        deviceId,
-        pmId: graph.pmId,
-        pmName: names.pm(graph.pmId),
-        projectId: graph.projectId,
-        projectName: names.project(graph.projectId),
-        conversationId: graph.conversationId,
-        question: node.gateQuestion ?? node.title,
-        context: node.gateSummaryMd ?? "",
-        options: node.gateOptions,
-        askMessageId: node.gateAskMessageId,
-        createdAt: node.createdAt,
-        updatedAt: node.updatedAt,
-        source: {
-          kind: "gate",
-          graphId: graph.id,
-          graphTitle: graph.title,
-          nodeKey: node.key,
-          nodeTitle: node.title,
-          blockedNodeCount,
-          nextNodeTitles,
-          recommended: node.gateRecommended,
-          ...(node.gateCheckpoint ? { checkpoint: true } : {}),
-        },
-      });
-    }
-  }
-  return { decisions, graphGateIds };
-}
-
-function routerItemDecisionsOf(
-  state: HubState,
-  conversationId: ConversationId,
-  deviceId: string,
-  convMessages: readonly Message[],
-  coveredAskIds: (id: MessageId) => boolean,
-  names: ReturnType<typeof decisionNames>,
-): PendingDecision[] {
-  const decisions: PendingDecision[] = [];
-  for (const item of state.router.items) {
-    if (item.conversationId !== conversationId || item.kind !== "decision" || item.status !== "pending") continue;
-    if (item.askMessageId !== null && coveredAskIds(item.askMessageId)) continue;
-    const targetMsg = item.askMessageId !== null ? convMessages.find((m) => m.id === item.askMessageId) : undefined;
-    const recommended = targetMsg !== undefined ? askOf(targetMsg)?.recommended : undefined;
-    decisions.push({
-      key: `item:${deviceId}:${item.id}`,
-      deviceId,
-      pmId: item.pmId,
-      pmName: names.pm(item.pmId),
-      projectId: item.projectId,
-      projectName: names.project(item.projectId),
-      conversationId: item.conversationId,
-      question: item.question,
-      context: item.context,
-      options: item.options,
-      askMessageId: item.askMessageId,
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
-      source: {
-        kind: "router_item",
-        itemId: item.id,
-        ...(recommended !== undefined ? { recommended } : {}),
-      },
-    });
-  }
-  return decisions;
-}
-
-function stableDecisionList(scopeKey: string, result: PendingDecision[]): PendingDecision[] {
-  if (result.length === 0) return NO_DECISIONS;
-  result.sort((a, b) => b.createdAt - a.createdAt || a.key.localeCompare(b.key));
-  const prev = lastDecisionsByScope.get(scopeKey);
-  const resolved =
-    prev !== undefined && prev.length === result.length && result.every((d, i) => samePendingDecision(d, prev[i]!))
-      ? prev
-      : result;
-  if (resolved !== prev) setBoundedMap(lastDecisionsByScope, scopeKey, resolved, TASK_GRAPH_SELECTOR_CACHE_MAX);
-  return resolved;
-}
-
-export function pendingDecisionsOf(
-  state: HubState,
-  conversationId: ConversationId,
-  deviceId = "local",
-): PendingDecision[] {
-  const scopeKey = `${deviceId}:${conversationId}`;
-  const convMessages = state.conversations[conversationId]?.messages ?? NO_CONV_MESSAGES;
-  const byScope = decisionScopeCache(state);
-  const hit = byScope.get(scopeKey);
-  if (hit !== undefined && hit.messages === convMessages && hit.pms === state.pms && hit.projects === state.projects) {
-    return hit.list;
-  }
-
-  const names = decisionNames(state);
-  const msgGateIds = gateMessageIdsIn(convMessages);
-  const gates = gateDecisionsOf(state, conversationId, deviceId, names);
-  const covered = (id: MessageId) => msgGateIds.has(id) || gates.graphGateIds.has(id);
-  const items = routerItemDecisionsOf(state, conversationId, deviceId, convMessages, covered, names);
-  const list = stableDecisionList(scopeKey, [...gates.decisions, ...items]);
-  byScope.set(scopeKey, { messages: convMessages, pms: state.pms, projects: state.projects, list });
-  return list;
-}

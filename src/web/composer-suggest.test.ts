@@ -31,12 +31,20 @@ function source(over: Partial<ComposerSource> = {}): ComposerSource {
   return { commands: vi.fn(async () => VENDOR_COMMANDS), files: vi.fn(async () => ({ entries: [], truncated: false })), hubCommands: HUB_COMPOSER_COMMANDS, ...over };
 }
 
-function setup(src: ComposerSource, initial: string, wrapper?: (props: { children: ReactNode }) => ReactNode) {
+function setup(
+  src: ComposerSource,
+  initial: string,
+  wrapper?: (props: { children: ReactNode }) => ReactNode,
+  onManageProviders?: () => void,
+) {
   const onReplace = vi.fn();
-  const hook = renderHook(({ value }) => useComposerSuggest({ source: src, value, cursor: value.length, enabled: true, onReplace }), {
-    initialProps: { value: initial },
-    wrapper,
-  });
+  const hook = renderHook(
+    ({ value }) => useComposerSuggest({ source: src, value, cursor: value.length, enabled: true, onReplace, onManageProviders }),
+    {
+      initialProps: { value: initial },
+      wrapper,
+    },
+  );
   return { hook, onReplace, menu: () => hook.result.current.menu };
 }
 
@@ -90,8 +98,8 @@ describe("/hub:worker 的三级列表", () => {
     queryClient.setQueryData(["models", ""], CATALOGS);
     const { hook, menu, onReplace } = setup(source(), "/hub:worker ");
     expect(menu()?.kind).toBe("vendor");
-    expect(menu()?.items.map((i) => i.label)).toEqual(["Antigravity", "Claude Code"]);
-    act(() => hook.result.current.select(menu()!.items[1]!));
+    expect(menu()?.items.map((i) => i.label)).toEqual(["Claude Code"]);
+    act(() => hook.result.current.select(menu()!.items[0]!));
     expect(onReplace).toHaveBeenLastCalledWith("/hub:worker claude ", 19);
 
     hook.rerender({ value: "/hub:worker claude " });
@@ -109,24 +117,20 @@ describe("/hub:worker 的三级列表", () => {
     expect(menu()).toBeNull();
   });
 
-  it("没登录的厂商：高亮默认跳过它，↑↓ 也跳过；点了不选，Enter 吞掉（不发送也不插入）", () => {
+  it("没登录的厂商不出现在列表里；提供管理入口时末尾固定显示 Add provider… 并可触发跳转", () => {
     queryClient.setQueryData(["models", ""], CATALOGS);
-    const { hook, menu, onReplace } = setup(source(), "/hub:worker ");
-    expect(menu()?.items[0]?.disabled).toBe(true);
-    expect(menu()?.activeIndex).toBe(1);
+    const onManageProviders = vi.fn();
+    const { hook, menu, onReplace } = setup(source(), "/hub:worker ", undefined, onManageProviders);
+    expect(menu()?.items.map((i) => i.label)).toEqual(["Claude Code", "Add provider…"]);
+    expect(menu()?.activeIndex).toBe(0);
     act(() => void hook.result.current.handleKey(key("ArrowDown")));
     expect(menu()?.activeIndex).toBe(1);
-    act(() => hook.result.current.select(menu()!.items[0]!));
-    expect(onReplace).not.toHaveBeenCalled();
+    act(() => hook.result.current.select(menu()!.items[1]!));
+    expect(onManageProviders).toHaveBeenCalledTimes(1);
+    expect(onReplace).toHaveBeenLastCalledWith("", 0);
 
-    // 只剩不能选的那一行：Enter 也算处理了（不让它把半截命令发出去）
     hook.rerender({ value: "/hub:worker anti" });
-    expect(menu()?.items.map((i) => i.label)).toEqual(["Antigravity"]);
-    expect(menu()?.activeIndex).toBe(-1);
-    let handled = false;
-    act(() => void (handled = hook.result.current.handleKey(key("Enter"))));
-    expect(handled).toBe(true);
-    expect(onReplace).not.toHaveBeenCalled();
+    expect(menu()?.items.map((i) => i.label)).toEqual(["Add provider…"]);
   });
 
   it("没有匹配：空列表（界面写 No matching …），Enter 不拦", () => {

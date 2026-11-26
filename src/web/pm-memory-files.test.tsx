@@ -41,13 +41,13 @@ async function openProfile(api: FakeApi, snapshot: StateSnapshot) {
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.last.open());
   await user.click(await screen.findByRole("button", { name: "View 小林's profile" }));
-  const page = await screen.findByRole("region", { name: "小林's profile" });
-  await within(page).findByRole("textbox", { name: "Persona" });
-  return { user, page };
+  const page = await screen.findByRole("complementary", { name: "小林's settings" });
+  const nav = await within(page).findByRole("navigation", { name: "Project manager settings pages" });
+  return { user, page, nav };
 }
 
 describe("PmProfile 记忆子文件折叠管理（Memory files）", () => {
-  it("默认收起且不提前请求接口；平时不挂配额数字，严禁用 · 中点拼接；展开后按需查看、编辑、新建、删除子文件", async () => {
+  it("进入 Memory files 页前不提前请求接口；平时不挂配额数字，严禁用 · 中点拼接；进入后查看、编辑、新建、删除子文件", async () => {
     const snapshot = singlePmSnapshot();
     const api = new FakeApi(snapshot);
     const store = new Map<string, PmMemoryFileDetail>([
@@ -85,24 +85,19 @@ describe("PmProfile 记忆子文件折叠管理（Memory files）", () => {
       return { status: 204 };
     };
 
-    const { user, page } = await openProfile(api, snapshot);
+    const { user, page, nav } = await openProfile(api, snapshot);
 
-    // 1. 位于 Persona 下方、History 上方，默认收起，且未展开前绝不拉取 /memory-files
-    const personaGroup = within(page).getByRole("region", { name: "Persona" });
-    const memoryGroup = within(page).getByRole("region", { name: "Memory files" });
-    const historyGroup = within(page).getByRole("region", { name: "History" });
-    expect(personaGroup.compareDocumentPosition(memoryGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(memoryGroup.compareDocumentPosition(historyGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-    const trigger = within(memoryGroup).getByRole("button", { name: /Memory files/ });
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    // 1. 摘要页里位于 Persona 下方、History 上方，打开记忆子文件页前绝不拉取 /memory-files
+    const personaRow = within(nav).getByRole("button", { name: /Persona/ });
+    const memoryRow = within(nav).getByRole("button", { name: /Memory files/ });
+    const historyRow = within(nav).getByRole("button", { name: /History/ });
+    expect(personaRow.compareDocumentPosition(memoryRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(memoryRow.compareDocumentPosition(historyRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(api.callsTo("GET", /\/api\/pms\/1\/memory-files$/)).toHaveLength(0);
-    // 平时不挂配额数字，也不含中点 ·
-    expect(personaGroup.textContent).not.toMatch(/200|25\s*KB/);
-    expect(memoryGroup.textContent).not.toContain("·");
 
-    // 2. 展开后通过 react-query 按需拉取列表，仍不显示 50 / 1 MB 配额分母且无 · 中点
-    await user.click(trigger);
+    // 2. 点开 Memory files 页后按需拉取列表，不显示 50 / 1 MB 配额分母且无 · 中点
+    await user.click(memoryRow);
+    const memoryGroup = await within(page).findByRole("region", { name: "Memory files" });
     expect(await within(memoryGroup).findByText("architecture.md")).toBeInTheDocument();
     expect(api.callsTo("GET", /\/api\/pms\/1\/memory-files$/)).toHaveLength(1);
     expect(memoryGroup.textContent).not.toContain("·");
@@ -160,12 +155,15 @@ describe("PmProfile 记忆子文件折叠管理（Memory files）", () => {
     }));
     api.getPmMemoryFiles = () => ({ status: 200, body: { files: fiftyFiles, totalBytes: fiftyFiles.length * 128 } });
 
-    const { user, page } = await openProfile(api, snapshot);
-    const personaGroup = within(page).getByRole("region", { name: "Persona" });
+    const { user, page, nav } = await openProfile(api, snapshot);
+    await user.click(within(nav).getByRole("button", { name: /Persona/ }));
+    const personaGroup = await within(page).findByRole("region", { name: "Persona" });
     expect(personaGroup.textContent).toMatch(/200 lines/i);
 
-    const memoryGroup = within(page).getByRole("region", { name: "Memory files" });
-    await user.click(within(memoryGroup).getByRole("button", { name: /Memory files/ }));
+    await user.click(within(page).getByRole("button", { name: "Back to Info" }));
+    const summaryNav = await within(page).findByRole("navigation", { name: "Project manager settings pages" });
+    await user.click(within(summaryNav).getByRole("button", { name: /Memory files/ }));
+    const memoryGroup = await within(page).findByRole("region", { name: "Memory files" });
     expect(await within(memoryGroup).findByText("topic-1.md")).toBeInTheDocument();
     const newBtn = within(memoryGroup).getByRole("button", { name: /New/ });
     expect(newBtn).toBeDisabled();

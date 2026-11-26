@@ -101,7 +101,7 @@ function CsvView({ rows }: { rows: string[][] }) {
         <thead>
           <tr>
             {head.map((cell, i) => (
-              <th key={i} className="sticky top-0 border-b border-border bg-sidebar px-3 py-2 font-medium whitespace-nowrap">
+              <th key={i} className="sticky top-0 border-b border-border bg-panel px-3 py-2 font-medium whitespace-nowrap">
                 {cell}
               </th>
             ))}
@@ -310,7 +310,7 @@ function PreviewContent({ file, kind }: { file: PreviewFile; kind: PreviewKind }
           {result !== null ? <span className={result.error ? "text-danger" : undefined} title={errorTitle(result.text)}>{errorLine(result.text)}</span> : note}
         </span>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border">{content}</div>
+      <div className="min-h-0 flex-1 overflow-auto rounded-sm border border-border">{content}</div>
     </>
   );
 }

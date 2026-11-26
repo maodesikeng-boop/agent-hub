@@ -1,4 +1,20 @@
-import { Laptop, Monitor, Server } from "../ui/icons.ts";
+import { createElement } from "react";
+import {
+  DeviceAndroid,
+  DeviceAndroidSolid,
+  DeviceIphone,
+  DeviceIphoneSolid,
+  DeviceLinux,
+  DeviceLinuxSolid,
+  DeviceMacos,
+  DeviceMacosSolid,
+  DeviceWindows,
+  DeviceWindowsSolid,
+  Monitor,
+  Smartphone,
+  Tablet,
+  type Icon,
+} from "../ui/icons.ts";
 import type { DeviceStatus } from "../devices.ts";
 import { formatAgo } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -24,7 +40,35 @@ export function StatusText({ status, lastOnlineAt, online = false }: { status: D
   );
 }
 
-export function PlatformIcon({ platform, className }: { platform: string; className?: string }) {
-  const Icon = platform === "darwin" ? Laptop : platform === "linux" ? Server : Monitor;
-  return <Icon className={cn("size-pixel-sm shrink-0", className)} aria-hidden="true" />;
+const PLATFORM_ICONS: Readonly<Record<string, Icon>> = {
+  darwin: DeviceMacos,
+  macos: DeviceMacos,
+  win32: DeviceWindows,
+  windows: DeviceWindows,
+  linux: DeviceLinux,
+  iphone: DeviceIphone,
+  ios: DeviceIphone,
+  android: DeviceAndroid,
+  tablet: Tablet,
+  ipad: Tablet,
+  phone: Smartphone,
+};
+
+const SOLID_ICONS = new Map<Icon, Icon>([
+  [DeviceMacos, DeviceMacosSolid],
+  [DeviceWindows, DeviceWindowsSolid],
+  [DeviceLinux, DeviceLinuxSolid],
+  [DeviceIphone, DeviceIphoneSolid],
+  [DeviceAndroid, DeviceAndroidSolid],
+]);
+
+/** solid: the filled form a selected computer shows on the rail; generic devices fill their outline. */
+export function PlatformIcon({ platform, className, size = "sm", solid = false }: { platform: string; className?: string; size?: "sm" | "inherit"; solid?: boolean }) {
+  const line = PLATFORM_ICONS[platform.toLowerCase()] ?? Monitor;
+  const filled = SOLID_ICONS.get(line);
+  return createElement(solid && filled ? filled : line, {
+    className: cn(size === "sm" && "size-pixel-sm shrink-0", className),
+    "aria-hidden": true,
+    ...(solid && !filled ? { fill: "currentColor" } : {}),
+  });
 }

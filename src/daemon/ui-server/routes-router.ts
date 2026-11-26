@@ -13,7 +13,6 @@ import {
   type RouterCommandsPage,
   type RouterItemsPage,
   type SkipTaskNodeResponse,
-  type TaskGraphsPage,
   type UpdateRouterSettingsResponse,
 } from "../../shared/index.ts";
 import { routerTargetOpSchema } from "../router/index.ts";
@@ -149,24 +148,12 @@ function registerRouterCommandRoutes(routes: FastifyInstance, c: UiCtx): void {
 
 function registerTaskGraphRoutes(routes: FastifyInstance, c: UiCtx): void {
   const { ledger } = c;
-  routes.get("/api/projects/:id/task-graphs", async (req): Promise<TaskGraphsPage> => {
-    const projectId = idParam(req.params, "project id");
-    const query = req.query as { before?: unknown; limit?: unknown };
-    const beforeId = parseOptionalPositiveInt(query.before, "before");
-    const limit = parseOptionalPositiveInt(query.limit, "limit");
-    return ledger.listProjectTaskGraphs(projectId, beforeId, limit);
-  });
-
   routes.post("/api/task-graphs/:graphId/nodes/:nodeKey/decide", async (req): Promise<DecideTaskNodeResponse> => {
     const params = req.params as { graphId?: unknown; nodeKey?: unknown };
     const graphId = parseId(params.graphId, "graphId");
     const nodeKey = parseNodeKeyParam(params.nodeKey);
     const raw = parseWithSchema(decideTaskNodeBodySchema, req.body);
-    return ledger.decideTaskNode(graphId, nodeKey, {
-      clientId: raw.clientId,
-      ...(raw.choice !== undefined ? { choice: raw.choice } : {}),
-      ...(raw.note !== undefined ? { note: raw.note } : {}),
-    });
+    return ledger.decideTaskNode(graphId, nodeKey, raw);
   });
 
   routes.post("/api/task-graphs/:graphId/nodes/:nodeKey/skip", async (req): Promise<SkipTaskNodeResponse> => {

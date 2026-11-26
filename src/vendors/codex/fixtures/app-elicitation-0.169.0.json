@@ -1,0 +1,28 @@
+{
+  "request": {
+    "id": 9,
+    "method": "mcpServer/elicitation/request",
+    "params": {
+      "threadId": "thread-new-1",
+      "turnId": "turn_1",
+      "serverName": "cua_repl",
+      "mode": "form",
+      "message": "Allow Computer Use to use \"Calculator\"?",
+      "requestedSchema": { "type": "object", "properties": {} },
+      "_meta": {
+        "codex_approval_kind": "mcp_tool_call",
+        "connector_id": "computer-use",
+        "connector_name": "Computer Use",
+        "persist": ["session", "always"],
+        "riskLevel": "low",
+        "tool_name": "get_app_state",
+        "tool_params": { "app": "com.apple.calculator" },
+        "tool_params_display": [{ "name": "app", "display_name": "App", "value": "Calculator" }]
+      }
+    }
+  },
+  "resolved": {
+    "method": "serverRequest/resolved",
+    "params": { "threadId": "thread-new-1", "requestId": 9 }
+  }
+}

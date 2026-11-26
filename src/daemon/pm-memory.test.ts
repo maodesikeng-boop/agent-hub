@@ -22,6 +22,7 @@ import { createPersonaNoter } from "./launch.ts";
 import { createLedger, type SqliteLedger } from "./ledger/index.ts";
 import {
   PM_MEMORY_TRUNCATION_HINT,
+  countPmMemoryFiles,
   deletePmMemoryFile,
   listPmMemoryFiles,
   readPmMemoryFile,
@@ -140,6 +141,7 @@ describe("pm-memory 子文件管理：配额、路径穿越与符号链接逃逸
 
   it("增删改查扁平 <topic>.md 子文件，且列表自动跳过 MEMORY.md 与隐藏临时文件", () => {
     expect(listPmMemoryFiles(pmMemoryDir, 1)).toEqual({ files: [], totalBytes: 0 });
+    expect(countPmMemoryFiles(pmMemoryDir, 1)).toBe(0);
     const dir = pmMemoryDirPath(pmMemoryDir, 1);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "MEMORY.md"), "# 主索引");
@@ -152,8 +154,10 @@ describe("pm-memory 子文件管理：配额、路径穿越与符号链接逃逸
 
     expect(readPmMemoryFile(pmMemoryDir, 1, "api.md").content).toBe("# API 约定\n");
     expect(listPmMemoryFiles(pmMemoryDir, 1).files.map((f) => f.name)).toEqual(["api.md"]);
+    expect(countPmMemoryFiles(pmMemoryDir, 1)).toBe(1);
 
     deletePmMemoryFile(pmMemoryDir, 1, "api.md");
+    expect(countPmMemoryFiles(pmMemoryDir, 1)).toBe(0);
     expect(listPmMemoryFiles(pmMemoryDir, 1)).toEqual({ files: [], totalBytes: 0 });
     expect(() => readPmMemoryFile(pmMemoryDir, 1, "api.md")).toThrow(LedgerRequestError);
   });
@@ -174,6 +178,7 @@ describe("pm-memory 子文件管理：配额、路径穿越与符号链接逃逸
     symlinkSync(outside, join(pmDir, "escape.md"));
 
     expect(listPmMemoryFiles(pmMemoryDir, 1).files).toEqual([]);
+    expect(countPmMemoryFiles(pmMemoryDir, 1)).toBe(0);
     expect(() => readPmMemoryFile(pmMemoryDir, 1, "escape.md")).toThrow(LedgerRequestError);
     expect(() => writePmMemoryFile(pmMemoryDir, 1, "escape.md", "OVERWRITTEN")).toThrow(LedgerRequestError);
     expect(() => deletePmMemoryFile(pmMemoryDir, 1, "escape.md")).toThrow(LedgerRequestError);

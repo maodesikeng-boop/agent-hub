@@ -180,7 +180,7 @@ describe("按键冲突优先级守卫（不误触）", () => {
 });
 
 describe("第二次 Esc 回退内容到输入框", () => {
-  it("带文字与 workerPick 的消息：第一次 Esc 暂停，停下后第二次 Esc 恢复文字与 workerPick 标签、聚焦光标到末尾，气泡收起且左栏预览还原", async () => {
+  it("带文字与 workerPick 的消息：第一次 Esc 暂停，停下后第二次 Esc 恢复文字与 workerPick 标签、聚焦光标到末尾，气泡收起", async () => {
     const user = userEvent.setup();
     const pick: WorkerPick = { vendor: "codex", model: "gpt-5.4", effort: "high" };
     const ws = await boot();
@@ -195,8 +195,6 @@ describe("第二次 Esc 回退内容到输入框", () => {
       ),
     );
     push(ws, sessionChange(12, makeSession({ status: "running", activity: "working" })));
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    expect(within(nav).getByRole("button", { name: /小林/ })).toHaveTextContent("把鉴权逻辑抽成中间件");
 
     // 焦点故意离开输入框，验证第二次 Esc 会主动聚焦回输入框并把光标放到末尾
     box().blur();
@@ -214,7 +212,7 @@ describe("第二次 Esc 回退内容到输入框", () => {
     );
     push(ws, sessionChange(14, makeSession({ status: "running", activity: "idle" })));
 
-    // 第二次 Esc：文字和 workerPick 都回到输入框，光标在末尾，气泡消失，左栏预览回到上一句
+    // 第二次 Esc：文字和 workerPick 都回到输入框，光标在末尾，气泡消失
     await user.keyboard("{Escape}");
     expect(box().value).toBe("把鉴权逻辑抽成中间件");
     expect(document.activeElement).toBe(box());
@@ -223,7 +221,6 @@ describe("第二次 Esc 回退内容到输入框", () => {
     expect(screen.getByRole("button", { name: /^Worker model:/ })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Worker model" })).not.toBeInTheDocument();
     expect(within(log()).queryByText("把鉴权逻辑抽成中间件")).not.toBeInTheDocument();
-    expect(within(nav).getByRole("button", { name: /小林/ })).toHaveTextContent("早，要做什么？");
     await waitFor(() => expect(api.callsTo("POST", /\/conversations\/1\/rewind$/)).toHaveLength(1));
   });
 
@@ -419,7 +416,7 @@ describe("跨项目经理（6 家厂商）与 Worker 对话一致生效", () => 
       makeSnapshot({
         pms: [makePm({ id: 1, name: "小林" })],
         conversations: [
-          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1, line: { workerId: 3, workerConversationId: 30, title: "修表格", event: "started" } })], {
+          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1, line: { workerId: 3, workerConversationId: 30, title: "修表格", event: "report", status: "problem", summary: "窄屏表格折行" } })], {
             conversation: { id: 1, pmId: 1, title: "小林" },
           }),
           makeConvSnapshot(
@@ -452,8 +449,8 @@ describe("跨项目经理（6 家厂商）与 Worker 对话一致生效", () => 
     expect(workerBox.selectionStart).toBe("顺便检查窄屏折行".length);
     await waitFor(() => expect(api.callsTo("POST", /\/conversations\/30\/rewind$/)).toHaveLength(1));
 
-    // 返回项目经理对话，项目经理自己的草稿完好无损
-    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
+    // 关闭 Worker 侧栏回到项目经理对话，项目经理自己的草稿完好无损
+    await user.click(screen.getByRole("button", { name: "Close work panel" }));
     expect(box().value).toBe("给项目经理留的话");
   });
 });

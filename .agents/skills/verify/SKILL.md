@@ -13,6 +13,7 @@ description: "Run the local end-to-end smoke check for Bellwood: build the web a
 pnpm verify              # one run
 pnpm verify --runs 3     # three runs, with median and range
 pnpm verify --out <dir>  # write the screenshot and timing log somewhere else
+pnpm verify --composer-layout # also check composer layout and interactions
 ```
 
 The command exits 0 only if every run passes. It writes two files to `/tmp/bellwood-verify-smoke/` by default:
@@ -21,6 +22,15 @@ The command exits 0 only if every run passes. It writes two files to `/tmp/bellw
 - `smoke-runs.txt`: the time of each phase in each run, the median, and the range.
 
 Look at the screenshot. A passing run with a wrong-looking screen is still a failure.
+
+The pull request smoke job installs WebKit and runs the composer check.
+For local runs, install the browser with `pnpm exec playwright install webkit`.
+The check types into the real composer and uses the WebKit timeline to count layout events.
+It covers stable single-line typing and edits in the middle of a multiline draft.
+It also checks that single-line edits lay out only the textarea. These checks do not depend on machine speed. jsdom cannot measure browser layout.
+Chromium and WebKit also check that typing across the wrap boundary, deleting back to one row, pasting text, and composing text preserve the draft. The composition test uses browser events and does not start an OS input method.
+WebKit checks the wrap boundary again with a coarse pointer at the Compact scale, the one scale where the textarea's 16px font floor applies.
+The check writes `composer-layout.txt` and interaction screenshots under the same output directory.
 
 ## What one run checks
 
@@ -31,10 +41,12 @@ Look at the screenshot. A passing run with a wrong-looking screen is still a fai
 3. Open the passwordless login link and expect a 302 with a session cookie.
 4. Call `GET /api/health` and `GET /api/state` with that cookie.
 5. Open the workbench in headless Chromium and wait for the composer. Any `console.error` or `pageerror` fails the run.
-6. Open the first Project Manager in the sidebar, send one message in the composer, wait until the fake claude's reply renders in the message list and the message is stored as `replied`, then capture `workbench-smoke.png`.
-7. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
-8. Start a second daemon on the same `AGENT_HUB_HOME`, verify the conversation and both messages survived unchanged, and stop it cleanly.
-9. Delete the temporary directory and check that it is gone.
+6. Open Settings and press the middle of the top bar (`scripts/verify-window-drag.ts`). The point must hit a `data-window-drag` region, a click and a double-click must reach a recorded `windowDrag` bridge as a drag and a zoom with Settings still open, and a click on the rail must then close Settings.
+7. At every interface scale, close the work panel and resize the window (`scripts/verify-shell-widths.ts`). At the `860px` desktop minimum the PM column must keep its `13.75rem` minimum beside a conversation of at least `20rem`. At `700px` that must hold too, or the single-column shell must show. At `400px` and `375px` with a mouse, the single-column shell must show, a project must open from the list, and its composer must take typing. Back at `1280px`, the columns must return with the typed draft. The page must never scroll sideways.
+8. Open the first Project Manager in the sidebar, send one message in the composer, wait for the fake Claude reply to render and the message to be stored as `replied`, then capture `workbench-smoke.png`.
+9. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
+10. Start a second daemon on the same `AGENT_HUB_HOME`, verify the conversation and both messages survived unchanged, and stop it cleanly.
+11. Delete the temporary directory and check that it is gone.
 
 ## When to use it
 

@@ -22,7 +22,6 @@ import {
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_SETUP_COMMAND_BYTES,
-  MAX_REVIEW_STATUS_ACCOUNT_CHARS,
   MAX_MODEL_CHARS,
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
@@ -52,11 +51,12 @@ import { listenOnRunSocket } from "../run-socket.ts";
 import { unlessAborted } from "../sent-files.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
-import type { SelfReloadStatus } from "../../shared/api.ts";
+import type { QuotaResponse, SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
-import { HUB_FILE_ARGS_MAX, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
-import { isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
+import { HUB_FILE_ARGS_MAX, HUB_MODELS_QUOTA_WAIT_MS, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
+import { mergeVendorQuota, type ObservedQuotaStore } from "../quota/observed-quota.ts";
+import { AGENT_VENDORS, isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
@@ -65,6 +65,7 @@ export interface AgentApiOptions {
   ledger: Pick<
     Ledger,
     | "hubCall"
+    | "reconcileHubBranches"
     | "sessionRole"
     | "reportHealth"
     | "workerStartFolder"
@@ -76,11 +77,13 @@ export interface AgentApiOptions {
   >;
   /** Probe git outside the ledger transaction so a hung git call cannot stall the daemon. */
   probeWorkspace?: (folder: string) => Promise<WorkspaceProbe>;
+  capabilityInventory?: Pick<import("../pm-capabilities/inventory.ts").CapabilityInventoryService, "get">;
   probePr?: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
   probePrByUrl?: (cwd: string, url: string) => Promise<WorkerPrProbeResult>;
   findTranscript?: (ref: TranscriptRef) => string | null;
   refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
+  quota?: { observed: ObservedQuotaStore; get(): Promise<QuotaResponse>; now?: () => number };
   sandboxGuard?: RouterSandboxGuard;
   onRouterDispatch?: (
     sessionId: SessionId,
@@ -138,12 +141,6 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     required: ["command"],
     properties: { command: { type: ["string", "null"], maxLength: MAX_SETUP_COMMAND_BYTES } },
   },
-  "project.review-status": {
-    type: "object",
-    additionalProperties: false,
-    required: ["account"],
-    properties: { account: { type: ["string", "null"], maxLength: MAX_REVIEW_STATUS_ACCOUNT_CHARS } },
-  },
   "persona.show": noArgs,
   "persona.edit": {
     type: "object",
@@ -169,6 +166,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       readonly: { type: "boolean" },
       caps: { type: "string", enum: [...WORKER_CAPABILITY_MODES] },
       allow: { type: "array", items: { type: "string", minLength: 1, maxLength: 512 } },
+      noOuterSandbox: { type: "boolean" },
       noWorktree: { type: "boolean" },
       node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
       graphId: workerIdField,
@@ -192,7 +190,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     required: ["workerId"],
     properties: { workerId: workerIdField },
   },
-  "worker.list": noArgs,
+  "worker.list": { type: "object", additionalProperties: false, properties: { vendor: { type: "string", enum: [...AGENT_VENDORS] } } },
   "worker.show": {
     type: "object",
     additionalProperties: false,
@@ -230,7 +228,12 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       files: fileArgsField,
     },
   },
-  "ask.close": { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: workerIdField } },
+  "ask.close": {
+    type: "object",
+    additionalProperties: false,
+    properties: { itemId: workerIdField, messageId: workerIdField },
+    oneOf: [{ required: ["itemId"] }, { required: ["messageId"] }],
+  },
   "schedule.add": {
     type: "object",
     additionalProperties: false,
@@ -367,7 +370,6 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "project.attach": { folder: MAX_PATH_BYTES },
   "project.detach": { folder: MAX_PATH_BYTES },
   "project.setup": { command: MAX_SETUP_COMMAND_BYTES },
-  "project.review-status": { account: MAX_REVIEW_STATUS_ACCOUNT_CHARS },
   "persona.edit": { text: MAX_PERSONA_BYTES },
   "worker.start": { task: MAX_TASK_BYTES },
   "worker.send": { text: MAX_TASK_BYTES },
@@ -477,16 +479,59 @@ function fail(reply: FastifyReply, code: HubErrorCode, message: string): Fastify
 
 const UNAUTHORIZED_MESSAGE = "令牌不对或已作废：这个会话不能再用 hub";
 
-export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
-  const { ledger, tokens } = opts;
+async function prepareWorkerStart(
+  opts: AgentApiOptions,
+  probeWorkspace: NonNullable<AgentApiOptions["probeWorkspace"]>,
+  sessionId: SessionId,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<HubCallContext> {
+  const context: HubCallContext = {};
+  if (opts.refreshVendor && isAgentVendor(body.vendor)) await opts.refreshVendor(body.vendor);
+  const { capabilityInventory } = opts;
+  const needsInventory = capabilityInventory !== undefined &&
+    (body.noOuterSandbox === true || (typeof body.node === "string" && body.node.trim() !== ""));
+  if (signal.aborted || (body.noWorktree === true && !needsInventory)) return context;
+  const folder = opts.ledger.workerStartFolder(sessionId);
+  if (needsInventory) {
+    context.capabilityInventory = await capabilityInventory.get({ projectDir: folder });
+  }
+  if (!signal.aborted && body.noWorktree !== true && folder !== null) context.workspace = await probeWorkspace(folder);
+  return context;
+}
+
+async function modelQuotas(quota: AgentApiOptions["quota"], vendor: AgentVendor | undefined, signal: AbortSignal) {
+  if (quota === undefined) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const fetched = await unlessAborted(Promise.race([
+      quota.get().catch(() => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), HUB_MODELS_QUOTA_WAIT_MS); }),
+    ]), signal, () => null);
+    const at = (quota.now ?? Date.now)();
+    const observed = quota.observed.snapshot(at);
+    return Object.fromEntries((vendor === undefined ? AGENT_VENDORS : [vendor]).flatMap((v) => {
+      const entry = mergeVendorQuota(v, observed[v] ?? null, fetched ?? null, at);
+      return entry === undefined ? [] : [[v, entry]];
+    }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function createPreparation(opts: AgentApiOptions) {
+  const { ledger } = opts;
   const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
   const probePr = opts.probePr ?? ((cwd: string, branch: string) => defaultProbePr(cwd, branch));
   const probePrByUrl = opts.probePrByUrl ?? ((cwd: string, url: string) => defaultProbePrByUrl(cwd, url));
   const findTranscript = opts.findTranscript ?? ((ref: TranscriptRef) => vendorTranscriptPath(ref));
 
-  const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<HubCallContext> => {
+  return async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<HubCallContext> => {
     const role = ledger.sessionRole(sessionId);
     if (role === null || !hubCommandAllowed(role, command)) return {};
+    const reconcile = ledger.reconcileHubBranches?.(sessionId, command, body, signal);
+    if (reconcile != null) await reconcile;
+    if (signal.aborted) return {};
     if (command === "ask" || command === "router.report") {
       const files = body.files as HubFileArg[] | undefined;
       if (files === undefined || files.length === 0 || files.length > HUB_FILE_ARGS_MAX) return {};
@@ -497,10 +542,13 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       return selfReload === undefined ? {} : { selfReload };
     }
     if (command === "models") {
-      if (!opts.models) return {};
       const vendor = isAgentVendor(body.vendor) ? body.vendor : undefined;
       if (body.vendor !== undefined && vendor === undefined) return {};
-      return { modelCatalogs: await opts.models.list({ refresh: body.refresh === true, ...(vendor ? { vendor } : {}) }) };
+      const [modelCatalogs, vendorQuotas] = await Promise.all([
+        opts.models?.list({ refresh: body.refresh === true, ...(vendor ? { vendor } : {}) }),
+        modelQuotas(opts.quota, vendor, signal),
+      ]);
+      return { modelCatalogs, vendorQuotas };
     }
     if (command === "worker.show") {
       const target = ledger.workerPrTarget(sessionId, body.workerId as number);
@@ -543,14 +591,13 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       }
       return context;
     }
-    if (command !== "worker.start") return {};
-    const context: HubCallContext = {};
-    if (opts.refreshVendor && isAgentVendor(body.vendor)) await opts.refreshVendor(body.vendor);
-    if (signal.aborted || body.noWorktree === true) return context;
-    const folder = ledger.workerStartFolder(sessionId);
-    if (folder !== null) context.workspace = await probeWorkspace(folder);
-    return context;
+    return command === "worker.start" ? prepareWorkerStart(opts, probeWorkspace, sessionId, body, signal) : {};
   };
+}
+
+export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
+  const { ledger, tokens } = opts;
+  const prepare = createPreparation(opts);
   const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({
     logger: opts.logger ?? false,

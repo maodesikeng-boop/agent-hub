@@ -147,9 +147,10 @@ describe("待发文件", () => {
     });
     await boot(snapshot);
     await user.upload(picker(), file("留着.txt"));
-    await user.click(screen.getByRole("button", { name: /老马/ }));
+    const pmBtn = (name: RegExp) => screen.getAllByRole("button", { name }).find((b) => !b.closest(".row-shortcuts"))!;
+    await user.click(pmBtn(/老马/));
     expect(pendingList()).toBeNull();
-    await user.click(screen.getByRole("button", { name: /小林/ }));
+    await user.click(pmBtn(/小林/));
     expect(within(pendingList() as HTMLElement).getByText("留着.txt")).toBeInTheDocument();
   });
 });
@@ -509,10 +510,11 @@ describe("上传没完时切走对话再切回来", () => {
     await user.click(sendButton());
     await waitFor(() => expect(api.uploads).toHaveLength(1));
 
-    await user.click(screen.getByRole("button", { name: /老马/ }));
+    const pmBtn = (name: RegExp) => screen.getAllByRole("button", { name }).find((b) => !b.closest(".row-shortcuts"))!;
+    await user.click(pmBtn(/老马/));
     await user.type(box(), "给老马的话");
     expect(sendButton()).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: /小林/ }));
+    await user.click(pmBtn(/小林/));
 
     expect(sendButton()).toBeDisabled();
     expect(box()).toHaveAttribute("readonly");
@@ -528,7 +530,7 @@ describe("上传没完时切走对话再切回来", () => {
     expect(pendingList()).toBeNull();
     expect(api.uploads).toHaveLength(1);
     expect(posts()).toHaveLength(1);
-    await user.click(screen.getByRole("button", { name: /老马/ }));
+    await user.click(pmBtn(/老马/));
     expect(box()).toHaveValue("给老马的话");
   });
 
@@ -540,8 +542,9 @@ describe("上传没完时切走对话再切回来", () => {
     await user.upload(picker(), file("a.txt"));
     await user.click(sendButton());
     await waitFor(() => expect(api.uploads).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: /老马/ }));
-    await user.click(screen.getByRole("button", { name: /小林/ }));
+    const pmBtn = (name: RegExp) => screen.getAllByRole("button", { name }).find((b) => !b.closest(".row-shortcuts"))!;
+    await user.click(pmBtn(/老马/));
+    await user.click(pmBtn(/小林/));
     fireEvent.change(box(), { target: { value: "第一句，后来补的" } }); // 程序改的（readonly 拦的是用户键盘）
     finish();
     await waitFor(() => expect(posts()).toHaveLength(1));
@@ -562,31 +565,15 @@ describe("上传没完时切走对话再切回来", () => {
     await user.upload(picker(), file("a.txt"));
     await user.click(sendButton());
     await waitFor(() => expect(api.uploads).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: /老马/ }));
-    await user.click(screen.getByRole("button", { name: /小林/ }));
+    const pmBtn = (name: RegExp) => screen.getAllByRole("button", { name }).find((b) => !b.closest(".row-shortcuts"))!;
+    await user.click(pmBtn(/老马/));
+    await user.click(pmBtn(/小林/));
     fail();
     expect(await screen.findByRole("alert")).toHaveTextContent("failed to upload");
     expect(box()).toHaveValue("别丢");
     expect(sendButton()).toBeEnabled();
     expect(within(pendingList() as HTMLElement).getByText("a.txt")).toBeInTheDocument();
     expect(posts()).toHaveLength(0);
-  });
-});
-
-describe("只发文件的消息在左栏和通知里的预览", () => {
-  it("预览写“[文件] 名字”（多个用顿号），有文字的还是文字", async () => {
-    await boot(
-      makeSnapshot({
-        pms: [makePm({ id: 1, name: "小林" })],
-        conversations: [
-          makeConvSnapshot(
-            [makeUserMessage({ id: 1, text: "", meta: { attachments: [makeAttachment({ name: "报告.pdf" }), makeAttachment({ id: "1111111111111111", name: "图.png" })] } })],
-            { conversation: { id: 1, pmId: 1, title: "小林" } },
-          ),
-        ],
-      }),
-    );
-    expect(screen.getByText("[File] 报告.pdf, 图.png")).toBeInTheDocument();
   });
 });
 

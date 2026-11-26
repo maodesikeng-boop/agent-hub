@@ -1,3 +1,5 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
+import { claudeChecklistFromToolResult, claudeChecklistFromToolUse, createClaudeChecklistState } from "./checklist.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -127,14 +129,21 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       if (input.recovery) st.recoveryNote = true;
       const proc = st.proc;
       if (proc && this.#canWriteMidTurn(st, proc, entry)) {
-        const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
-        batch.midTurn = true;
-        const outcome = await this.#writeMidTurn(st, proc, batch);
+        const outcome = await this.steerWithCurrentCapabilities(st, proc, entry, () => this.#canWriteMidTurn(st, proc, entry), async () => {
+          const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
+          batch.midTurn = true;
+          const result = await this.#writeMidTurn(st, proc, batch);
+          if (result === "retry") {
+            this.dropBatch(st, batch);
+            if (!st.ended) st.pending.unshift(entry);
+          }
+          return result;
+        });
         if (outcome === "written") return { kind: "written", midTurn: true };
         if (outcome === "cancelled") return { kind: "cancelled" };
-        this.dropBatch(st, batch);
+      } else {
+        st.pending.push(entry);
       }
-      st.pending.push(entry);
     }
     await this.pump(st);
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
@@ -269,6 +278,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const problem = checkUserLine(batch.line);
     if (problem) {
       this.invalidInput(st, problem, batch.messageIds);
@@ -304,10 +314,9 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       try {
         let resume = proc?.resume ?? this.resumeFor(st);
         for (let attempt = 0; ; attempt++) {
-          if (!proc) {
-            proc = await this.#spawn(st, resume, files);
-            this.abortIfStopped(st, proc);
-          }
+          if (!proc) proc = await this.#spawn(st, resume, files);
+          this.abortIfStopped(st, proc);
+          if (this.discardStaleSystemBatch(st, proc, batch)) return;
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
           proc.child.stdin.write(batch.line + "\n");
@@ -315,6 +324,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           const outcome = await proc.ready;
           if (outcome.kind === "ok") return;
           if (outcome.kind === "closed") {
+            if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
             if (outcome.reason === "interrupt") return;
             throw new DriverError(
               "spawn_failed",
@@ -397,6 +407,8 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         this.#platform,
       );
     }
+    this.assertRunning();
+    this.assertNotEnded(st);
     const child = await this.spawnDetachedChild(
       this.#resolveClaudePath(),
       launch.command,
@@ -412,6 +424,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         : null,
       capabilities: new Set(),
       toolPreviews: new StreamingToolPreviewTracker(),
+      checklist: createClaudeChecklistState(),
     };
     this.attachChildProcess(st, proc, resolveExited, () => {
       proc.readonlyGate?.dispose();
@@ -451,7 +464,16 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           if (!proc.capabilities.has("msg_lifecycle_v1") && first) this.markProcessing(st, first, at);
         } else {
           const result = parseToolResults(obj, at);
-          if (result) this.emit(st.id, result);
+          if (result) {
+            if (result.parentToolUseId === undefined) {
+              const toolUseResult = result.toolUseIds.length === 1 ? obj.tool_use_result : undefined;
+              for (const toolUseId of result.toolUseIds) {
+                const update = claudeChecklistFromToolResult(proc.checklist, toolUseId, toolUseResult);
+                if (update) this.emit(st.id, { type: "agent.checklist", uuid: `${lineUuid(obj, line)}:${toolUseId}`, update, at });
+              }
+            }
+            this.emit(st.id, result);
+          }
         }
         return;
       case "stream_event": {
@@ -464,7 +486,13 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         const row = this.row(st);
         const live = row ? st.turnUsage.observe(obj, row.usage) : null;
         if (live) this.pushUsage(st, live);
-        for (const ev of parseAssistant(obj, line, at)) this.emit(st.id, ev);
+        for (const ev of parseAssistant(obj, line, at)) {
+          if (ev.type === "agent.tool" && ev.parentToolUseId === undefined) {
+            const update = claudeChecklistFromToolUse(proc.checklist, ev);
+            if (update) this.emit(st.id, { type: "agent.checklist", uuid: `${ev.uuid}:${ev.toolUseId}`, update, at });
+          }
+          this.emit(st.id, ev);
+        }
         return;
       }
       case "rate_limit_event": {
@@ -496,6 +524,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         return;
       }
       case "result":
+        proc.checklist.pending.clear();
         this.#onResult(st, proc, obj, at);
         return;
     }
@@ -531,8 +560,9 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const batch = event ? st.inFlight.find((b) => b.uuid === event.uuid) : undefined;
     if (!event || !batch) return;
     if (event.state === "started") {
+      const midTurn = batch.midTurn && (st.selfTurn || st.inFlight.some((other) => other !== batch && other.started));
       batch.started = true;
-      if (proc.initSeen) this.markProcessing(st, batch, at);
+      if (proc.initSeen) this.markProcessing(st, batch, at, midTurn);
     } else if (event.state === "cancelled" && !batch.started) {
       this.#cancelBatches(st, proc, [batch], at);
     }
@@ -541,7 +571,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   #cancelBatches(st: SessionState, proc: Proc, batches: Batch[], at: number): void {
     if (batches.length === 0) return;
     st.inFlight = st.inFlight.filter((b) => !batches.includes(b));
-    this.releaseOnStop(st, batches, at);
+    this.releaseUntaken(st, batches, untakenReleaseCause(proc.closing, true), at);
     if (!this.busy(st)) {
       this.afterTurn(st, proc);
       this.settled(st);
@@ -672,7 +702,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         st.crashNote = true;
         this.forgetWritten(st, taken);
       }
-      const stopped = reason === "interrupt" || st.stopRequested;
+      const cause = untakenReleaseCause(reason, st.stopRequested);
       st.interruptRequestId = null;
       st.stopRequested = false;
       this.emit(st.id, {
@@ -684,7 +714,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.releaseUntaken(st, untaken, stopped, at);
+      this.releaseUntaken(st, untaken, cause, at);
     } finally {
       for (const query of [...st.commandQueries.values()]) query(null);
       this.resolveInterrupt(st);

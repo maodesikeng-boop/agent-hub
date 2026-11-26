@@ -1,3 +1,4 @@
+import { positiveContextTokens, preservePositiveContext } from "../../../daemon/driver/usage.ts";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import {
@@ -504,7 +505,7 @@ export function defaultExtractAcpToolUse(
 const safeTokens = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 
 export function applyAcpUsageUpdate(current: TokenUsage, update: UsageUpdate): TokenUsage | null {
-  const used = safeTokens(update.used);
+  const used = preservePositiveContext(update.used, current.context);
   if (used === current.context) return null;
   return { ...current, context: used };
 }
@@ -516,16 +517,13 @@ export function mergeAcpPromptUsage(
   latestContextUsed: number | null,
   mode: "turn" | "cumulative" = "turn",
 ): TokenUsage | null {
-  if (!usage && latestContextUsed === null) return null;
-  if (!usage) {
-    if (latestContextUsed === null || latestContextUsed === current.context) return null;
-    return { ...current, context: latestContextUsed };
-  }
+  const measured = positiveContextTokens(latestContextUsed);
+  if (!usage) return measured === null || measured === current.context ? null : { ...current, context: measured };
   const input = safeTokens(usage.inputTokens);
   const cacheRead = safeTokens(usage.cachedReadTokens);
   const cacheWrite = safeTokens(usage.cachedWriteTokens);
   const output = safeTokens(usage.outputTokens) + safeTokens(usage.thoughtTokens);
-  const inferredContext = latestContextUsed ?? (input + cacheRead + cacheWrite || current.context);
+  const inferredContext = preservePositiveContext(measured ?? input + cacheRead + cacheWrite, current.context);
 
   if (mode === "cumulative") {
     return {

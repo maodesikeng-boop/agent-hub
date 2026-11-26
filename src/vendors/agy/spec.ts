@@ -114,12 +114,17 @@ export default defineVendor({
       read_resource: "connector_resource",
     },
   },
+  checklist: { sources: [] },
   skillSignals: {
     outputField: "output",
     // read_file output has no body ('14 lines, 310 bytes'), so match on the Path argument.
     readByPath: { read_file: { ok: /^\d+ lines?, \d+ bytes?$/u, fromStart: { StartLine: 1, ByteOffset: 0 } } },
   },
   capabilities: {
+    builtInSandbox: {
+      platforms: ["darwin"],
+      computerUseCapabilities: [],
+    },
     // Finished background commands do not wake the agent, and results are lost once the idle process exits.
     backgroundWake: false,
     readonly: "os_sandbox",

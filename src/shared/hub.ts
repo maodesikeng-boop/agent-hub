@@ -43,7 +43,6 @@ export const HUB_COMMANDS = [
   "project.attach",
   "project.detach",
   "project.setup",
-  "project.review-status",
   "persona.show",
   "persona.edit",
   "worker.start",
@@ -81,7 +80,6 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "project.attach": ["pm"],
   "project.detach": ["pm"],
   "project.setup": ["pm"],
-  "project.review-status": ["pm"],
   "persona.show": ["pm"],
   "persona.edit": ["pm"],
   "worker.start": ["pm"],
@@ -129,7 +127,6 @@ export interface HubArgsMap {
   "project.attach": { folder: string };
   "project.detach": { folder: string };
   "project.setup": { command: string | null };
-  "project.review-status": { account: string | null };
   "persona.show": Record<string, never>;
   "persona.edit": { text?: string; mode?: PmMode; reason?: string };
   "worker.start": {
@@ -143,13 +140,14 @@ export interface HubArgsMap {
     caps?: WorkerCapabilityMode;
     allow?: string[];
     noWorktree?: boolean;
+    noOuterSandbox?: boolean;
     node?: TaskNodeKey;
     graphId?: TaskGraphId;
   };
   "worker.send": { workerId: WorkerId; text: string; maxTimeMs?: number };
   "worker.max-time": { workerId: WorkerId; maxTimeMs: number };
   "worker.end": { workerId: WorkerId };
-  "worker.list": Record<string, never>;
+  "worker.list": { vendor?: AgentVendor };
   "worker.show": { workerId: WorkerId; task?: boolean; report?: number | "latest" };
   "worker.search": { keywords: string[]; limit?: number };
   "worker.log": { workerId: WorkerId; last?: number; stats?: boolean };
@@ -163,7 +161,7 @@ export interface HubArgsMap {
     replaceItemId?: RouterItemId;
     files?: HubFileArg[];
   };
-  "ask.close": { itemId: RouterItemId };
+  "ask.close": { itemId: RouterItemId } | { messageId: MessageId };
   "schedule.add": { name: string; prompt: string; daily?: string; everyMinutes?: number };
   "schedule.list": Record<string, never>;
   "schedule.pause": { scheduleId: ScheduleId };
@@ -229,6 +227,7 @@ export interface CreateTaskGraphNodeInput {
   effort?: string;
   maxTime?: string | number;
   readonly?: boolean;
+  noOuterSandbox?: boolean;
   caps?: WorkerCapabilityMode;
   allow?: string[];
   confirm?: boolean;
@@ -266,6 +265,7 @@ export interface PatchTaskGraphNodeInput {
   effort?: string | null;
   maxTime?: string | number | null;
   readonly?: boolean;
+  noOuterSandbox?: boolean;
   caps?: WorkerCapabilityMode | null;
   allow?: string[];
   confirm?: boolean;
@@ -333,7 +333,6 @@ interface PmHubStatus {
   conversationId: ConversationId;
   project: ProjectCard | null;
   setupCommand: string | null;
-  reviewStatusAccount: string | null;
   activeTaskGraphs?: PmActiveGraphSummary[];
   selfReload?: SelfReloadStatus;
 }
@@ -397,11 +396,28 @@ interface HubModelEntry {
   efforts: string[];
 }
 
+export interface HubVendorQuotaWindow {
+  id: string;
+  label: string;
+  utilization: number;
+  resetsAt: number | null;
+}
+
+export interface HubVendorQuota {
+  status: "ok" | "limited";
+  source: "observed" | "fetched" | "rate_limit";
+  resetsAt: number | null;
+  observedAt: number;
+  reason: string | null;
+  windows?: readonly HubVendorQuotaWindow[];
+}
+
 export interface HubVendorModels {
   vendor: AgentVendor;
   label: string;
   source: "vendor" | "bundled";
   availability: VendorAvailability;
+  quota?: HubVendorQuota;
   defaultModel: string | null;
   defaultModelId: string | null;
   defaultEffort: string | null;
@@ -417,7 +433,6 @@ interface HubDataMap {
   "project.attach": { project: Project; folder: ProjectFolder };
   "project.detach": { project: Project; folder: ProjectFolder };
   "project.setup": { project: Project; setupCommand: string | null };
-  "project.review-status": { project: Project; account: string | null };
   "persona.show": { text: string; mode: PmMode };
   "persona.edit": { change: PersonaChange | null };
   "worker.start": { worker: WorkerRecord };
@@ -430,7 +445,7 @@ interface HubDataMap {
   "worker.search": { hits: WorkerSearchHit[] };
   models: { vendors: HubVendorModels[] };
   ask: { messageId: MessageId; graph?: TaskGraph; item?: RouterItem };
-  "ask.close": { item: RouterItem };
+  "ask.close": { item: RouterItem } | { messageId: MessageId };
   "schedule.add": { schedule: ScheduleRecord };
   "schedule.list": { schedules: ScheduleRecord[] };
   "schedule.pause": { schedule: ScheduleRecord };

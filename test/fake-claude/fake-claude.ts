@@ -112,6 +112,7 @@ export interface FakeScript {
    * 见 docs/composer-commands.md 的 T1）。不给就不带 commands。
    */
   commands?: unknown[];
+  subscriptionQuota?: Record<string, { utilization: number; resets_at: string }>;
   /** 标准输入关掉也不退出（测空闲关闭的升级）。 */
   ignoreStdinEnd?: boolean;
   /** 回显推迟到第一个不是 sleepMs、waitFile 的步骤之前。 */
@@ -120,6 +121,7 @@ export interface FakeScript {
   ignoreSigint?: boolean;
   /** 收到 SIGINT 不写 result 直接退出（测一轮中途被停止、驱动层还算它在忙时就退了）。 */
   sigintNoResult?: boolean;
+  cancelQueuedOnSigint?: boolean;
   /** 不管会话在不在，--session-id 一律报 “already in use”，--resume 一律报 “No conversation found”。 */
   rejectSessionArgs?: boolean;
   /** 一起来就起一个子进程（同 spawnChild 步骤；配合 noInit 测启动超时按进程组强制结束）。 */
@@ -775,6 +777,13 @@ function onLine(line: string): void {
   if (msg.type === "control_response") return;
   if (msg.type === "control_request") {
     if (script.ignoreControl) return;
+    if (msg.request?.subtype === "get_usage") {
+      emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {
+        rate_limits_available: script.subscriptionQuota !== undefined,
+        rate_limits: script.subscriptionQuota ?? null,
+      } } });
+      return;
+    }
     const handle = () => {
       if (script.control === "error") {
         emit({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "cannot interrupt now" } });
@@ -824,6 +833,7 @@ function onLine(line: string): void {
 process.on("SIGINT", () => {
   log({ kind: "signal", pid: myPid, signal: "SIGINT" });
   if (script.ignoreSigint) return;
+  if (script.cancelQueuedOnSigint) for (const entry of inbox.splice(0)) emitLifecycle(entry.uuid, "cancelled");
   if (busy && !script.sigintNoResult) {
     turnSeq++;
     interruptedMarker();

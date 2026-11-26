@@ -1,8 +1,13 @@
+import { createLedgerTakenInputs } from "./taken-inputs.ts";
+import { isChecklistToolCall } from "./checklist.ts";
+import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
+import { createLedgerBranchSync } from "./workers/branch-sync.ts";
+import { isSystemMessageCurrent } from "./notice-currency.ts";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LedgerSnapshot } from "../../shared/api.ts";
 import { agentMessageDedupeKey } from "../../shared/domain.ts";
-import type { Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
+import type { Message, MessageId, Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { deliveryParts } from "../../shared/worker.ts";
@@ -28,6 +33,7 @@ import { createDriverEventDrain } from "./driver-events.ts";
 import { createTurnCompletionLedger, type TurnEndedEvent } from "./turn-completions.ts";
 import { createLedgerPersona } from "./persona.ts";
 import { createLedgerPmCapabilities } from "./pm-capabilities.ts";
+import { createLedgerPmPins } from "./pm-pins.ts";
 import { createLedgerProjectCatalog } from "./project-catalog.ts";
 import type { LedgerProjectCatalog, ProjectCatalogLedgerOptions } from "./project-catalog.ts";
 import { createLedgerProjects } from "./projects.ts";
@@ -38,6 +44,7 @@ import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
+import { completedWorkPage } from "./completed-work.ts";
 import { createLedgerSnapshotQueries } from "./snapshot.ts";
 import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
@@ -52,6 +59,7 @@ import { assertWorkerOpenForUser, createLedgerWorkers, notStarted } from "./work
 import type { EndedWorktreeCandidate } from "./workers.ts";
 
 export interface SqliteLedger extends Ledger {
+  readonly appApprovals: ReturnType<typeof createLedgerWorkers>["appApprovals"];
   archivePm(pmId: PmId): Pm;
   unarchivePm(pmId: PmId): Pm;
   purgeExpiredArchivedPms(nowMs?: number): PmId[];
@@ -82,6 +90,7 @@ export interface SqliteLedger extends Ledger {
 }
 
 export interface LedgerOptions {
+  worktreeBranchProbe?: WorktreeBranchProbe;
   now?: () => number;
   deviceName?: () => string;
   models?: LedgerContextOptions["models"];
@@ -90,6 +99,7 @@ export interface LedgerOptions {
   initialSeq?: number;
   changeBufferSize?: number;
   osSandboxed?: LedgerContextOptions["osSandboxed"];
+  workerPlatform?: NodeJS.Platform;
   pmHomeRoot: string;
   personasDir?: string;
   pmMemoryDir?: string;
@@ -110,14 +120,11 @@ export interface LedgerOptions {
   skillFiles?: SkillFiles;
   onHandoverClaimable?: HandoverOptions["onHandoverClaimable"];
   onCatalogClaimable?: ProjectCatalogLedgerOptions["onCatalogClaimable"];
+  isSessionBusy?: HandoverOptions["isSessionBusy"];
 }
 
-export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
-  const ctx = createLedgerContext(db, options);
-  const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
-  const userHome = options.userHome ?? homedir();
-  const dataHome = options.dataHome ?? dirname(options.pmHomeRoot);
-  const files: LedgerFiles = {
+function buildLedgerFiles(options: LedgerOptions, userHome: string, dataHome: string): LedgerFiles {
+  return {
     pmHomeRoot: options.pmHomeRoot,
     personasDir: options.personasDir,
     pmMemoryDir: options.pmMemoryDir ?? (options.dataHome !== undefined ? join(options.dataHome, "state", "pm-memory") : undefined),
@@ -130,6 +137,55 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     resolveFolder: options.resolveFolder ?? createResolveFolder({ dataHome, userHome }),
     writeFile: options.writeFileAtomic ?? defaultWriteFileAtomic,
   };
+}
+
+function scopeDriverEvent(
+  sessionId: SessionId,
+  event: Exclude<DriverEvent, TurnEndedEvent>,
+  getMessage: (id: MessageId) => Message | null,
+): Exclude<DriverEvent, TurnEndedEvent> | null {
+  switch (event.type) {
+    case "message.delivered":
+    case "message.processing":
+    case "message.cancelled":
+    case "message.requeued": {
+      if (event.messageIds.length === 0) return event;
+      const owned = event.messageIds.filter((id) => getMessage(id)?.sessionId === sessionId);
+      return owned.length === 0 ? null : { ...event, messageIds: owned };
+    }
+    case "session.exited":
+      return { ...event, messageIds: event.messageIds.filter((id) => getMessage(id)?.sessionId === sessionId) };
+    case "driver.error":
+      return event.messageIds === undefined
+        ? event
+        : { ...event, messageIds: event.messageIds.filter((id) => getMessage(id)?.sessionId === sessionId) };
+    default:
+      return event;
+  }
+}
+
+function reconcileTurnWorktree(
+  db: Db, id: SessionId, probe: WorktreeBranchProbe | undefined, branches: ReturnType<typeof createLedgerBranchSync>, signal: AbortSignal,
+) {
+  if (probe === undefined) return null;
+  const workerId = getAgentSession(db, id)?.workerId;
+  return workerId == null ? null : branches.reconcileWorkerGraph(workerId, signal);
+}
+
+function sessionRoleOf(db: Db, sessionId: SessionId): SqliteLedger["sessionRole"] extends (id: SessionId) => infer R ? R : never {
+  const s = getAgentSession(db, sessionId);
+  if (s === null) return null;
+  if (s.role === "pm" && s.pmId === null) return null;
+  if (s.role === "worker" && s.workerId === null) return null;
+  return s.role;
+}
+
+export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
+  const ctx = createLedgerContext(db, options);
+  const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
+  const userHome = options.userHome ?? homedir();
+  const dataHome = options.dataHome ?? dirname(options.pmHomeRoot);
+  const files = buildLedgerFiles(options, userHome, dataHome);
   const taskGraphManual = (sessionId: SessionId) => taskGraphManualNote(files.launchDir, sessionId);
   const sessions = createLedgerSessions(ctx);
   const { sessionState } = sessions;
@@ -152,6 +208,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
   });
   const turnReplies = createLedgerTurnReplies(ctx);
+  const takenInputs = createLedgerTakenInputs(ctx);
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
     switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
     clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),
@@ -171,14 +228,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     resumeWorkerIn: workers.resumeUserBlockedWorkerIn,
   }));
   const taskGraphs = createLedgerTaskGraphs(ctx, sessions, messages, persona, projects, router, {
-    launchDir: effectiveLaunchDir,
+    launchDir: effectiveLaunchDir, workerPlatform: options.workerPlatform,
     workers: () => workers,
     userBlockers,
     onGraphFinishedIn: (p, projectId) => projectCatalog.markForcedIn(p, projectId, "graph_finished"),
   });
   const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
-    worktreesDir: files.worktreesDir,
+    worktreesDir: files.worktreesDir, platform: options.workerPlatform,
     ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     taskGraphs,
     userBlockers,
@@ -190,6 +247,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     autoRenew: options.autoRenew,
     log: options.log,
     onHandoverClaimable: options.onHandoverClaimable,
+    isSessionBusy: options.isSessionBusy,
+    hasPendingDriverEvents: (sessionId) => driverEvents.hasPending(sessionId),
+    hasPendingTurnCompletions: (sessionId) => completions.blocksSend(sessionId),
     waitingAsks: router.waitingAsksOf,
     liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
     onRenewedIn: (p, conversationId) => {
@@ -222,30 +282,32 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     });
 
   const closing = new AbortController();
+  const branches = createLedgerBranchSync(ctx, taskGraphs.publishBranchChange, closing.signal, options.worktreeBranchProbe);
   const applyDriverEventNow = (sessionId: SessionId, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null) => {
-    if (event.type === "agent.text_delta") {
+    if ((event.type === "agent.tool_preview" || event.type === "agent.tool") && isChecklistToolCall(event.name)) return;
+    if (event.type === "agent.text_delta" || event.type === "agent.tool_preview") {
       if (event.parentToolUseId !== undefined) return;
       const session = getAgentSession(db, sessionId);
-      if (session !== null && session.role !== "assistant") sessions.applyStreamingDelta(session, event.delta, event.reset);
-      return;
-    }
-    if (event.type === "agent.tool_preview") {
-      if (event.parentToolUseId !== undefined) return;
-      const session = getAgentSession(db, sessionId);
-      if (session !== null) sessions.applyToolPreview(session, event);
+      if (session === null) return;
+      if (event.type === "agent.tool_preview") sessions.applyToolPreview(session, event);
+      else if (session.role !== "assistant") sessions.applyStreamingDelta(session, event);
       return;
     }
     const session = getAgentSession(db, sessionId);
     if (session === null || session.role === "assistant") return;
     write((p) => {
-      messages.applyEvent(p, session, event, textMeta);
-      turnReplies.afterDriverEvent(p, session, event);
-      steps.afterDriverEvent(session, event);
-      loadedSkills.afterDriverEvent(session, event);
-      workers.afterDriverEvent(p, session, event);
-      handover.afterDriverEvent(p, session, event);
-      schedules.afterDriverEvent(p, event);
-      projectCatalog.afterDriverEvent(p, session, event);
+      const scoped = scopeDriverEvent(session.id, event, messages.getMessage);
+      if (scoped === null) return;
+      const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
+      takenInputs.beforeDriverEvent(session, scoped);
+      messages.applyEvent(p, session, scoped, textMeta);
+      turnReplies.afterDriverEvent(p, session, scoped);
+      steps.afterDriverEvent(session, scoped, openTools);
+      loadedSkills.afterDriverEvent(session, scoped);
+      workers.afterDriverEvent(p, session, scoped);
+      handover.afterDriverEvent(p, session, scoped);
+      schedules.afterDriverEvent(p, session, scoped);
+      projectCatalog.afterDriverEvent(p, session, scoped);
     });
   };
 
@@ -296,7 +358,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       steps.afterDriverEvent(session, event);
       if (receipt.event.messageIds.length === 0 || event.messageIds.length > 0) workers.settleTurn(p, session, event, facts.worker, previousRun);
       handover.afterDriverEvent(p, session, event);
-      schedules.afterDriverEvent(p, event);
+      schedules.afterDriverEvent(p, session, event);
       projectCatalog.afterDriverEvent(p, session, event);
     },
     onSettled: (receipt) => driverEvents.onSettled(receipt),
@@ -304,6 +366,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   });
   const driverEvents = createDriverEventDrain({
     completions,
+    beforeTurn: (id, signal) => reconcileTurnWorktree(db, id, options.worktreeBranchProbe, branches, signal),
     factsFor(sessionId, event) {
       const session = getAgentSession(db, sessionId)!;
       return { ...turnReplies.factsOf(session, event.messageIds), worker: workers.turnFactsOf(session, event) };
@@ -312,13 +375,18 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     localLinks: sentFiles.localLinks,
     textMetaFor,
     onOverflow,
+    onSessionDrained: (sessionId) => {
+      if (!closing.signal.aborted) handover.onSessionQuiescent(sessionId);
+    },
   });
-
   return {
     postUserMessage: messages.postUserMessage,
     requestStop(conversationId) {
       workers.clearMaxTime(conversationId);
       messages.requestStop(conversationId);
+    },
+    endWorkerConversation(conversationId) {
+      write((p) => workers.endWorkerConversationIn(p, conversationId));
     },
     rewindLastUserMessage(conversationId) {
       const rewound = messages.rewindLastUserMessage(conversationId);
@@ -330,7 +398,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
     snapshot(): LedgerSnapshot {
       const activeTaskGraphs = taskGraphs.activeSnapshotGraphs();
-      const { conversations, sessions, olderEndedWorkers } = snapshotQueries.snapshotConversations(activeTaskGraphs);
+      const { conversations, sessions } = snapshotQueries.snapshotConversations(activeTaskGraphs);
       return {
         seq: log.seq,
         pms: db.all<PmDbRow>(`${PM_SELECT} ORDER BY p.id`).map(toPm),
@@ -347,14 +415,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         schedules: schedules.all(),
         router: router.snapshotSlice(),
         activeTaskGraphs,
-        ...(Object.keys(olderEndedWorkers).length > 0 ? { olderEndedWorkers } : {}),
+        ...workers.approvalSnapshot(),
       };
     },
 
     messagesBefore: messages.messagesBefore,
     messagesAfter: messages.messagesAfter,
     lookupConversations: snapshotQueries.lookupConversations,
-    endedWorkersPage: snapshotQueries.endedWorkersPage,
+    completedWork: (pmId, cursor, limit) => completedWorkPage(db, pmId, cursor, limit),
 
     changesSince: (seq) => log.since(seq),
     onChange: (listener) => subscribe(changeListeners, listener),
@@ -377,10 +445,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     refreshSessionState: sessions.refreshSessionState,
     recoverAfterRestart() {
       completions.recover();
-      const recovered = sessions.recoverAfterRestart();
-      workers.recoverWorktrees();
-      workers.recoverBackgroundWaits();
-      workers.recoverTurnTimeouts();
+      const recovered = sessions.recoverAfterRestart(workers.noticeUnresentShutdownTurnsIn);
+      workers.recoverLifecycles();
       handover.recoverAfterRestart();
       router.recoverAfterRestart();
       return recovered;
@@ -407,11 +473,15 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     onActionFailed(action, error) {
       write((p) => {
-        messages.actionFailedIn(p, action, error);
+        const failedSession = messages.actionFailedIn(p, action, error);
+        if (failedSession !== null) steps.recordFailedStart(failedSession, error);
         workers.actionFailedIn(p, action, error);
         handover.actionFailedIn(p, action);
         schedules.actionFailedIn(p, action);
       });
+    },
+    onSessionQuiescent(sessionId) {
+      if (!closing.signal.aborted) handover.onSessionQuiescent(sessionId);
     },
     stopMessage: messages.stopMessage,
     turnsLostOnShutdown: messages.turnsLostOnShutdown,
@@ -428,6 +498,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     ...capabilities,
     setProjectSetupCommand: (projectId, command) => write((p) => projects.setSetupCommandIn(p, projectId, command)),
     setPmLook: persona.setPmLook,
+    ...createLedgerPmPins(ctx, persona),
     pmProjectMainFolder(pmId) {
       persona.requirePm(pmId);
       const proj = projects.activeProjectOf(pmId);
@@ -453,16 +524,13 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     uncleanedHandovers: handover.uncleanedHandovers,
 
     hubCall: hub.hubCall,
-    sessionRole: (sessionId) => {
-      const s = getAgentSession(db, sessionId);
-      if (s === null) return null;
-      if (s.role === "pm" && s.pmId === null) return null;
-      if (s.role === "worker" && s.workerId === null) return null;
-      return s.role;
-    },
+    sessionRole: (sessionId) => sessionRoleOf(db, sessionId),
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),
+    ...branches,
+    isSystemMessageCurrent: (id) => isSystemMessageCurrent(db, id, ctx.now(), workers.isWorkerInFlight),
+    retireStaleSystemMessage: messages.retireStaleSystemMessage,
     graphPrTargets: (sessionId, graphId) => taskGraphs.graphPrTargets(getAgentSession(db, sessionId), graphId),
     graphAutoDispatchVendors: (sessionId, command, body) =>
       taskGraphs.graphAutoDispatchVendors(getAgentSession(db, sessionId), command, body),
@@ -484,8 +552,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     recordReviewSnapshot: workers.recordReviewSnapshot,
     getReviewVerifyTask: workers.getReviewVerifyTask,
     onReviewVerified: workers.onReviewVerified,
-    getReviewStampTask: workers.getReviewStampTask,
-    onReviewStamped: workers.onReviewStamped,
 
     syncPersonaFiles: persona.syncPersonaFiles,
     listEndedWorktreeWorkers: workers.listEndedWorktreeWorkers,
@@ -495,8 +561,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     listRouterItems: router.listItems,
     resolveRouterItem: router.resolveItem,
     answerAsk: router.answerAsk,
-    recheckUserBlocker: userBlockers.recheck,
-    userBlockerVendor: userBlockers.vendorOf,
+    recheckUserBlocker: userBlockers.recheck, decideSandboxApproval: workers.decide, getSandboxApproval: workers.getById,
+    appApprovals: workers.appApprovals, decideAppApproval: workers.decideAppApproval, userBlockerVendor: userBlockers.vendorOf,
     deliveryOf: (message) => {
       const parts = deliveryParts(message);
       const waiting = message.sender === "user" && message.workerId === null ? waitingAsksNote(router.waitingAsksOf(message.conversationId)) : null;
@@ -524,7 +590,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       detailOf: projectCatalog.detailOf,
       hasQueued: projectCatalog.hasQueued,
     },
-    listProjectTaskGraphs: taskGraphs.listProjectHistory,
     decideTaskNode: taskGraphs.decideNode,
     skipTaskNode: taskGraphs.skipNode,
     cancelTaskGraph: taskGraphs.cancelGraph,
@@ -532,8 +597,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       closing.abort();
       driverEvents.close();
       completions.close();
-      workers.clearAllMaxTime();
-      sessions.clearAllStreaming();
+      workers.closeLifecycles();
     },
   };
 }

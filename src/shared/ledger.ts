@@ -7,7 +7,8 @@ import type {
   ConversationsLookup,
   DecideTaskNodeRequest,
   DecideTaskNodeResponse,
-  EndedWorkersPage,
+  CompletedCursor,
+  CompletedWorkPage,
   LedgerSnapshot,
   MessagesPage,
   ResolveRouterItemRequest,
@@ -15,13 +16,12 @@ import type {
   RouterItemsPage,
   SkipTaskNodeRequest,
   SkipTaskNodeResponse,
-  TaskGraphsPage,
   UpdateRouterSettingsRequest,
 } from "./api.ts";
 import type { Attachment } from "./attachments.ts";
 import type { FeishuMessageOrigin } from "./feishu.ts";
 import type { DriverEvent } from "./driver.ts";
-import type { AnyActionRow, ReviewStampParams, ReviewVerifyParams } from "./actions.ts";
+import type { AnyActionRow, ReviewVerifyParams } from "./actions.ts";
 import type {
   AgentRole,
   Conversation,
@@ -49,10 +49,17 @@ import type {
 } from "./domain.ts";
 import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
-import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
+import type { HubArgs, HubCommand, HubResult, HubVendorQuota, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { CapabilitiesPatch, CapabilityPolicy, CapabilityScope, PmCapabilitiesStart, ScopeCapabilities, WorkerCapabilities } from "./pm-capabilities.ts";
 import type { PmLookSetting, SlimeLook } from "./slimes.ts";
-import type { ReviewSnapshot, ReviewStampOutcome, ReviewVerifyResult } from "./review.ts";
+import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
+import type {
+  DecideSandboxApprovalRequest,
+  DecideSandboxApprovalResponse,
+  SandboxApprovalId,
+  SandboxApprovalRecord,
+} from "./sandbox-approval.ts";
+import type { AppApprovalId, DecideAppApprovalRequest, DecideAppApprovalResponse } from "./app-approval.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
@@ -147,6 +154,7 @@ export interface PersonaView {
   model: string | null;
   effort: string | null;
   switchingToVendor?: AgentVendor | null;
+  memoryFileCount?: number | null;
   changes: PersonaChange[];
   revertableChangeId: PersonaChangeId | null;
 }
@@ -178,6 +186,7 @@ export interface LaunchContext {
   project: ProjectCard | null;
   worker: WorkerRecord | null;
   workerCapabilities?: WorkerCapabilities;
+  outerSandboxApproval?: SandboxApprovalRecord | null;
   vendor?: AgentVendor;
 }
 
@@ -198,13 +207,6 @@ export interface WorktreeTask {
   setupCommand: string | null;
 }
 
-/** What the daemon needs to post one review stamp; `repo` is the project's main folder, used as the gh working directory. */
-export interface ReviewStampTask {
-  repo: string;
-  pr: WorkerPr | null;
-  account: string | null;
-}
-
 export interface SetupOutcome {
   kind: "ok" | "failed" | "timeout" | "stopped";
   command: string;
@@ -223,11 +225,13 @@ export type WorkspaceProbe =
   | { kind: "failed"; error: string };
 
 export interface HubCallContext {
+  capabilityInventory?: import("./pm-capabilities.ts").CapabilityInventory;
   workspace?: WorkspaceProbe;
   pr?: WorkerPrProbeResult;
   prError?: string | null;
   transcript?: string | null;
   modelCatalogs?: readonly ModelCatalog[];
+  vendorQuotas?: Readonly<Partial<Record<AgentVendor, HubVendorQuota>>>;
   graphPrs?: Readonly<Record<string, WorkerPr>>;
   selfReload?: SelfReloadStatus;
   sharedFiles?: readonly SentFile[];
@@ -239,12 +243,13 @@ export interface Ledger extends LedgerHandoverWork {
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
   composerTarget(conversationId: ConversationId): ComposerTarget;
   requestStop(conversationId: ConversationId): void;
+  endWorkerConversation(conversationId: ConversationId): void;
   rewindLastUserMessage(conversationId: ConversationId): Message | null;
   snapshot(): LedgerSnapshot;
   messagesAfter(conversationId: ConversationId, after: MessageId, limit: number): Message[];
   messagesBefore(conversationId: ConversationId, before: MessageId): MessagesPage;
   lookupConversations(query: { ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }): ConversationsLookup;
-  endedWorkersPage(pmId: PmId, before: ConversationId | null): EndedWorkersPage;
+  completedWork(pmId: PmId, cursor: CompletedCursor | null, limit: number): CompletedWorkPage;
   changesSince(seq: number): ChangesSince;
   onChange(listener: (change: Change) => void): Unsubscribe;
 
@@ -261,6 +266,11 @@ export interface Ledger extends LedgerHandoverWork {
   customizedCapabilityPms(): PmId[];
   setProjectSetupCommand(projectId: ProjectId, command: string | null): Project;
   setPmLook(pmId: PmId, look: PmLookSetting): Pm;
+  /**
+   * Precondition: pmId names an unarchived PM on this computer; otherwise throws LedgerRequestError not_found or conflict.
+   * Postcondition: pinned=true keeps an existing pinnedAt or records now(); pinned=false clears it; returns the PM and emits pm.updated only when the pin changed.
+   */
+  setPmPinned(pmId: PmId, pinned: boolean): Pm;
   pmProjectMainFolder(pmId: PmId): string | null;
   editPersona(pmId: PmId, input: EditPersonaInput, actor: LedgerActor): EditPersonaResult;
   revertPersonaChange(changeId: PersonaChangeId): EditPersonaResult;
@@ -275,6 +285,15 @@ export interface Ledger extends LedgerHandoverWork {
   workerStartFolder(sessionId: SessionId): string | null;
   workerPrTarget(sessionId: SessionId, workerId: WorkerId): { cwd: string; branch: string } | null;
   workerTranscriptTarget(sessionId: SessionId, workerId: WorkerId): { vendor: string; vendorSessionId: string; cwd: string } | null;
+  listWorktreeBranchTargets?(scope?: { pmId?: PmId; workerId?: WorkerId; graphId?: TaskGraphId }): Array<{ worktreePath: string; branch: string | null }>;
+  syncWorktreeBranch?(worktreePath: string, branch: string): { updatedWorkerIds: WorkerId[]; updatedGraphIds: TaskGraphId[] };
+  /** Whether the business state behind a system message still holds, so it may be written to a driver. */
+  isSystemMessageCurrent?(messageId: MessageId): boolean;
+  /** Postcondition: a queued, delivered, or processing message becomes stopped; other statuses are left unchanged. */
+  retireStaleSystemMessage?(messageId: MessageId): void;
+  reconcileWorktreeBranches?(scope: { graphId?: TaskGraphId; workerId?: WorkerId }): Promise<void> | null;
+  reconcileWorkerGraph?(workerId: WorkerId): Promise<void> | null;
+  reconcileHubBranches?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<void> | null;
   graphPrTargets?(sessionId: SessionId, graphId?: TaskGraphId): GraphPrTarget[];
   graphAutoDispatchVendors?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): AgentVendor[];
   graphDeliveryProbeTarget?(messageId: MessageId): {
@@ -301,8 +320,6 @@ export interface Ledger extends LedgerHandoverWork {
 
   getReviewVerifyTask(workerId: WorkerId): { repo: string; branch: string; snapshot: ReviewSnapshot } | null;
   onReviewVerified(params: ReviewVerifyParams, result: ReviewVerifyResult): void;
-  getReviewStampTask(params: ReviewStampParams): ReviewStampTask | null;
-  onReviewStamped(params: ReviewStampParams, outcome: ReviewStampOutcome): void;
 
   syncPersonaFiles(): SyncPersonaFilesResult;
   onStopRequested(listener: (event: { conversationId: ConversationId; sessionId: SessionId }) => void): Unsubscribe;
@@ -325,7 +342,8 @@ export interface Ledger extends LedgerHandoverWork {
   sentFileAllows(sessionId: SessionId, realPath: string): boolean;
   shareHubFiles(sessionId: SessionId, args: readonly HubFileArg[], signal?: AbortSignal): Promise<SentFile[]>;
   onActionFailed(action: AnyActionRow, error: string): void;
-  stopMessage(messageId: MessageId): void;
+  onSessionQuiescent?(sessionId: SessionId): void;
+  stopMessage(messageId: MessageId, sessionId?: SessionId): void;
   reportHealth(module: HealthModule, error: string | null): void;
   getRouterDigest(): DeviceRouterDigest;
   listRouterItems(beforeCursor?: string, limit?: number, kind?: import("./api.ts").RouterItemsKind): RouterItemsPage;
@@ -333,12 +351,23 @@ export interface Ledger extends LedgerHandoverWork {
   answerAsk(askMessageId: MessageId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
   recheckUserBlocker(id: UserBlockerId): RecheckUserBlockerResponse;
   userBlockerVendor(id: UserBlockerId): AgentVendor | null;
+  /**
+   * Precondition: called only from authenticated human UI routes (never from agent-api); id names a pending approval for an open Worker.
+   * Postcondition: approve transitions status to approved and enqueues the deferred Worker launch; reject transitions to rejected, ends the Worker, and notifies the PM.
+   */
+  decideSandboxApproval?(id: SandboxApprovalId, input: DecideSandboxApprovalRequest): DecideSandboxApprovalResponse;
+  getSandboxApproval?(id: SandboxApprovalId): SandboxApprovalRecord | null;
+  /**
+   * Precondition: called only from authenticated human UI routes (never from agent-api); id names a pending app approval.
+   * Postcondition: allow records a grant for that Worker run and app id and settles every live native request for it;
+   * deny records a denial for the same scope. Throws conflict when the card already ended or the Worker is no longer open.
+   */
+  decideAppApproval?(id: AppApprovalId, input: DecideAppApprovalRequest): DecideAppApprovalResponse;
   deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string };
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
   listRouterCommands?(beforeCursor?: string, limit?: number): import("./api.ts").RouterCommandsPage;
   getRouterCommand?(id: import("./domain.ts").RouterCommandId): import("./router.ts").RouterCommandRecord | null;
-  listProjectTaskGraphs(projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage;
   decideTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: DecideTaskNodeRequest): DecideTaskNodeResponse;
   skipTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: SkipTaskNodeRequest): SkipTaskNodeResponse;
   cancelTaskGraph(graphId: TaskGraphId, input: CancelTaskGraphRequest): CancelTaskGraphResponse;

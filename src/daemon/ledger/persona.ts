@@ -52,6 +52,7 @@ import { LOG_PREFIX } from "../../shared/names.ts";
 import { isJellyColorId, isPmFruit, pickNewPmLook, resolvePmLook, type PmLookSetting, type SlimeLook } from "../../shared/slimes.ts";
 import {
   deletePmMemoryFile as deleteMemorySubfile,
+  countPmMemoryFiles,
   listPmMemoryFiles as listMemorySubfiles,
   quarantinePmMemoryIndex,
   readPmMemoryFile as readMemorySubfile,
@@ -130,14 +131,15 @@ function nextAgent(current: AgentSetting, input: EditPersonaInput, catalogOf?: (
         : { model: current.model, effort: current.effort };
   const model = input.model === undefined ? from.model : optionalSetting(input.model, "模型");
   const effort = input.effort === undefined ? from.effort : normalizeEffortInput(vendor, optionalSetting(input.effort, "思考程度"), catalog);
+  const next = input.model !== undefined && input.effort === undefined
+    ? splitModelEffort(vendor, model, effort, catalog)
+    : { model, effort };
   const problem =
     (input.model !== undefined ? checkModel(vendor, model) : null) ??
     (input.effort !== undefined ? checkEffort(vendor, effort, catalog) : null) ??
-    (input.model !== undefined && input.effort !== undefined ? checkModelEffort(vendor, model, effort, catalog) : null);
+    (touched ? checkModelEffort(vendor, next.model, next.effort, catalog) : null);
   if (problem !== null) throw fail("invalid", problem);
-  return input.model !== undefined && input.effort === undefined
-    ? { vendor, ...splitModelEffort(vendor, model, effort, catalog) }
-    : { vendor, model, effort };
+  return { vendor, ...next };
 }
 export type LedgerPersona = ReturnType<typeof createLedgerPersona>;
 
@@ -170,8 +172,7 @@ export function createLedgerPersona(
     return ok;
   };
 
-  const pmRow = (id: PmId): PmDbRow | null =>
-    db.get<PmDbRow>(`${PM_SELECT} WHERE p.id = ?`, id) ?? null;
+  const pmRow = (id: PmId) => db.get<PmDbRow>(`${PM_SELECT} WHERE p.id = ?`, id) ?? null;
 
   const isPmArchived = (pmId: PmId): boolean =>
     db.get("SELECT 1 AS x FROM pm_archives WHERE pm_id = ?", pmId) !== undefined;
@@ -247,6 +248,7 @@ export function createLedgerPersona(
       switchingToVendor: active !== null ? (active.to_vendor as AgentVendor) : null,
       changes,
       revertableChangeId: changes[0]?.id ?? null,
+      memoryFileCount: countPmMemoryFiles(subfilesRoot, pmId),
     };
   };
 

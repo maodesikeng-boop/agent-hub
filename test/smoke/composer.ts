@@ -3,7 +3,7 @@
 // 每次随机、消息里从没出现过的标记；回复里有标记 = claude 展开了命令。
 // S24 项目经理的长期会话：命令列表（没在跑时另起进程问、在跑时问它本身）去掉了隐藏的；连续两轮 /命令 都展开；
 //     手打 /clear 被拦（400 带原因、不存不发）；@文件（含带空格的 @"a b.md"）被读进来；/compact 记一行“已压缩上下文”。
-// S25 Worker 对话里用户发 /命令：“【用户直接对你说】”标签在前一块，命令照样展开，汇报回到项目经理。
+// S25 Worker 对话里用户发 /命令：“【用户直接对你说】”标签在前一块，命令照样展开，普通回复留在 Worker 对话。
 import { randomInt } from "node:crypto";
 import { API_PATHS, HUB_COMMAND, type CommandsResponse, type FilesResponse } from "../../src/shared/index.ts";
 import { messagesOf, waitForStatus } from "../e2e/harness.ts";

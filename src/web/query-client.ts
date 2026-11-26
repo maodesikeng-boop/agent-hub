@@ -1,5 +1,7 @@
 import { notifyManager, QueryClient, QueryClientContext } from "@tanstack/react-query";
 import { useContext } from "react";
+import type { AccountStatusView, PmId } from "../shared/index.ts";
+import type { DeviceKey } from "./devices.ts";
 
 notifyManager.setScheduler(queueMicrotask);
 
@@ -25,6 +27,7 @@ function createHubQueryClient(): QueryClient {
 export const queryClient: QueryClient = createHubQueryClient();
 
 export const ACCOUNT_QUERY_KEY = ["account"] as const;
+const ACCOUNT_GENERATION_ID = "account";
 
 export function resetQueryClient(): void {
   queryClient.clear();
@@ -33,6 +36,9 @@ export function resetQueryClient(): void {
 export function useHubQueryClient(): QueryClient {
   return useContext(QueryClientContext) ?? queryClient;
 }
+
+export const completedWorkKey = (device: DeviceKey, pmId: PmId | null) =>
+  ["completed-work", device, pmId] as const;
 
 export interface QueryGeneration {
   gen: number;
@@ -54,6 +60,46 @@ export function queryGenerationOf(qc: QueryClient, id: string): QueryGeneration 
     byId.set(id, state);
   }
   return state;
+}
+
+function advanceAccountGeneration(state: QueryGeneration): void {
+  const next = Math.max(state.gen, state.latest) + 1;
+  state.gen = next;
+  state.latest = next;
+}
+
+export function claimAccountTicket(qc: QueryClient): number {
+  const state = queryGenerationOf(qc, ACCOUNT_GENERATION_ID);
+  const next = Math.max(state.gen, state.latest) + 1;
+  state.latest = next;
+  return next;
+}
+
+export function commitAccountStatus(qc: QueryClient, ticket: number, next: AccountStatusView): void {
+  const state = queryGenerationOf(qc, ACCOUNT_GENERATION_ID);
+  if (ticket !== state.latest) return;
+  advanceAccountGeneration(state);
+  qc.setQueryData<AccountStatusView>(ACCOUNT_QUERY_KEY, next);
+}
+
+export function invalidateAccount(qc: QueryClient): Promise<void> {
+  advanceAccountGeneration(queryGenerationOf(qc, ACCOUNT_GENERATION_ID));
+  return qc.invalidateQueries({ queryKey: ACCOUNT_QUERY_KEY });
+}
+
+// Re-fetches inside the active promise when an invalidation arrives before the first response lands (data === undefined).
+export function accountQueryFn(qc: QueryClient, fetcher: (signal?: AbortSignal) => Promise<AccountStatusView>) {
+  return async ({ signal }: { signal?: AbortSignal } = {}): Promise<AccountStatusView> => {
+    const state = queryGenerationOf(qc, ACCOUNT_GENERATION_ID);
+    for (;;) {
+      const genAtStart = state.gen;
+      const fetched = await fetcher(signal);
+      if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      if (genAtStart === state.gen) return fetched;
+      const cached = qc.getQueryData<AccountStatusView>(ACCOUNT_QUERY_KEY);
+      if (cached !== undefined) return cached;
+    }
+  };
 }
 
 // An automatic GET that overlapped a newer write yields to the cached value instead of replacing it.

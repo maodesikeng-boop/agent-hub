@@ -1,9 +1,12 @@
 import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UPDATE_CHECK_RETRY_MS, UPDATE_CHECK_TTL_MS, type UpdateStatus } from "../shared/index.ts";
+import { UPDATE_CHECK_RETRY_MS, UPDATE_CHECK_TTL_MS, serverInfoFor, type UpdateStatus } from "../shared/index.ts";
 import { App } from "./App.tsx";
-import { SidebarTools } from "./components/SidebarTools.tsx";
+import { createClient } from "./client.ts";
+import { AppRail } from "./components/AppRail.tsx";
+import { LOCAL_DEVICE } from "./devices.ts";
+import { DeviceScope } from "./device-scope.tsx";
 import { UpdateSettings } from "./components/UpdateSettings.tsx";
 import { queryClient } from "./query-client.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makePm, makeSnapshot } from "./test-utils.ts";
@@ -40,8 +43,23 @@ function serve(status: UpdateStatus | null, checked?: UpdateStatus): FakeApi {
 
 const group = () => screen.getByRole("region", { name: "Updates" });
 
-function renderTools(onOpenUpdates = vi.fn(), narrow = false) {
-  render(<SidebarTools narrow={narrow} quota={undefined} quotaFetchable={false} onNewPm={() => {}} onOpenSettings={() => {}} onOpenUpdates={onOpenUpdates} />);
+function renderRailTools(onOpenUpdates = vi.fn()) {
+  render(
+    <DeviceScope client={createClient(null)} server={serverInfoFor("darwin")}>
+      <AppRail
+        router={{ active: false, pendingCount: 0, working: false, onSelect: () => {} }}
+        computers={[]}
+        selectedComputer={LOCAL_DEVICE}
+        meter={null}
+        quota={[]}
+        quotaFetchable={false}
+        onSelectComputer={() => {}}
+        onOpenSettings={() => {}}
+        onOpenUpdates={onOpenUpdates}
+        onOpenAccount={() => {}}
+      />
+    </DeviceScope>,
+  );
   return onOpenUpdates;
 }
 
@@ -192,24 +210,16 @@ describe("Updates settings group", () => {
 });
 
 describe("sidebar update badge", () => {
-  it("appears beside Settings for a bundled install with a newer release and opens the Updates section", async () => {
+  it("appears above Settings on AppRail for a bundled install with a newer release and opens the Updates section", async () => {
     serve(bundledUpdate());
-    const onOpenUpdates = renderTools();
+    const onOpenUpdates = renderRailTools();
     const badge = await screen.findByRole("button", { name: "Update to v0.3.0" });
-    expect(badge).toHaveClass("tool-slot", "ml-auto");
-    expect(badge).toHaveTextContent("Update");
-    expect(badge.nextElementSibling).toBe(screen.getByRole("button", { name: "Settings" }));
-    expect(screen.getByRole("button", { name: "Settings" })).not.toHaveClass("ml-auto");
+    // Update shares the footer tile recipe with Settings, so the two stack as one family.
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(badge.firstElementChild!.className).toBe(settings.firstElementChild!.className);
+    expect(badge.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await userEvent.click(badge);
     expect(onOpenUpdates).toHaveBeenCalledTimes(1);
-  });
-
-  it("is an icon-only slot on the narrow rail", async () => {
-    serve(bundledUpdate());
-    renderTools(vi.fn(), true);
-    const badge = await screen.findByRole("button", { name: "Update to v0.3.0" });
-    expect(badge.textContent).toBe("");
-    expect(badge).not.toHaveClass("ml-auto");
   });
 
   it.each([
@@ -219,11 +229,11 @@ describe("sidebar update badge", () => {
   ])("stays hidden for %s", async (_name, status, skipped) => {
     if (skipped !== null) localStorage.setItem(UPDATE_DISMISSED_KEY, skipped);
     const api = serve(status);
-    renderTools();
+    renderRailTools();
     await waitFor(() => expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(1));
     await act(() => Promise.resolve());
     expect(screen.queryByRole("button", { name: /^Update to/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "Settings" })).toHaveClass("ml-auto");
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });
 });
 

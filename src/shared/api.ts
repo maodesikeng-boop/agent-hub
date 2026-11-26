@@ -18,6 +18,7 @@ import type {
   RouterItemId,
   SessionState,
   TaskGraph,
+  TaskEdge,
   TaskGraphId,
   TaskNodeKey,
   WorkerId,
@@ -32,6 +33,8 @@ import type {
 } from "./router.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { PmCapabilitiesStart } from "./pm-capabilities.ts";
+import type { SandboxApprovalId, SandboxApprovalSummary } from "./sandbox-approval.ts";
+import type { AppApprovalId, AppApprovalSummary } from "./app-approval.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { PmLookSetting } from "./slimes.ts";
 import type { WorkerLineSummary } from "./snapshot.ts";
@@ -49,12 +52,14 @@ export const API_PATHS = {
   conversationsLookup: (q: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
     `/api/conversations/lookup?ids=${(q.ids ?? []).join(",")}&workerIds=${(q.workerIds ?? []).join(",")}`,
   stop: (conversationId: ConversationId) => `/api/conversations/${conversationId}/stop`,
+  endWorker: (conversationId: ConversationId) => `/api/conversations/${conversationId}/end`,
   rewind: (conversationId: ConversationId) => `/api/conversations/${conversationId}/rewind`,
   pms: "/api/pms",
-  endedWorkers: (pmId: PmId, before: ConversationId | null) =>
-    `/api/pms/${pmId}/ended-workers${before === null ? "" : `?before=${before}`}`,
+  completedWork: (pmId: PmId, cursor: CompletedCursor | null) =>
+    `/api/pms/${pmId}/completed${cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`}`,
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
   pmLook: (pmId: PmId) => `/api/pms/${pmId}/look`,
+  pmPin: (pmId: PmId) => `/api/pms/${pmId}/pin`,
   pmCapabilities: (pmId: PmId) => `/api/pms/${pmId}/capabilities`,
   routerCapabilities: "/api/router/capabilities",
   defaultCapabilities: "/api/defaults/capabilities",
@@ -69,6 +74,8 @@ export const API_PATHS = {
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
   messageTurnReply: (messageId: MessageId) => `/api/messages/${messageId}/turn-reply`,
   recheckUserBlocker: (id: UserBlockerId) => `/api/user-blockers/${id}/recheck`,
+  decideSandboxApproval: (id: SandboxApprovalId) => `/api/sandbox-approvals/${id}/decide`,
+  decideAppApproval: (id: AppApprovalId) => `/api/app-approvals/${id}/decide`,
   uploads: "/api/uploads",
   upload: (id: string, name: string) => `/api/uploads/${id}/${encodeURIComponent(name)}`,
   sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
@@ -100,7 +107,6 @@ export const API_PATHS = {
   routerCommands: "/api/router/commands",
   routerCommandRetry: (id: RouterCommandId) => `/api/router/commands/${id}/retry`,
   routerTargetOps: "/api/router/target-ops",
-  projectTaskGraphs: (projectId: ProjectId) => `/api/projects/${projectId}/task-graphs`,
   taskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey) =>
     `/api/task-graphs/${graphId}/nodes/${encodeURIComponent(nodeKey)}/decide`,
   taskGraphSkip: (graphId: TaskGraphId, nodeKey: TaskNodeKey) =>
@@ -164,6 +170,7 @@ export interface ConversationSnapshot {
   messages: Message[];
   hasMore: boolean;
   workerLine?: WorkerLineSummary;
+  workerBranch?: string | null;
 }
 
 export interface StateSnapshot {
@@ -177,7 +184,8 @@ export interface StateSnapshot {
   schedules: ScheduleRecord[];
   router: RouterSlice;
   activeTaskGraphs: TaskGraph[];
-  olderEndedWorkers?: Record<PmId, ConversationId>;
+  pendingSandboxApprovals?: SandboxApprovalSummary[];
+  pendingAppApprovals?: AppApprovalSummary[];
   server: ServerInfo;
   bootId?: string;
 }
@@ -187,10 +195,6 @@ export type LedgerSnapshot = Omit<StateSnapshot, "server" | "bootId">;
 export interface ConversationsLookup {
   conversations: ConversationSnapshot[];
   sessions: SessionState[];
-}
-
-export interface EndedWorkersPage extends ConversationsLookup {
-  nextBefore: ConversationId | null;
 }
 
 export interface MessagesPage {
@@ -246,6 +250,14 @@ export interface EditPersonaRequest {
 export type PmLookRequest = PmLookSetting;
 
 export interface PmLookResponse {
+  pm: Pm;
+}
+
+export interface PmPinRequest {
+  pinned: boolean;
+}
+
+export interface PmPinResponse {
   pm: Pm;
 }
 
@@ -583,13 +595,49 @@ export interface PostRouterCommandResponse {
   command: RouterCommandRecord;
 }
 
-export interface TaskGraphsPage {
-  graphs: TaskGraph[];
-  hasMore: boolean;
+/** Opaque paging token from a CompletedWorkPage; clients pass it back unchanged. */
+export type CompletedCursor = string & { readonly __brand: "CompletedCursor" };
+
+export interface CompletedStep {
+  key: TaskNodeKey;
+  title: string;
+  skipped: boolean;
+  done?: boolean;
+}
+
+/** A finished Task Graph or a finished Worker that no Task Graph step owns. */
+export type CompletedWorkItem =
+  | {
+      kind: "graph";
+      graphId: TaskGraphId;
+      title: string;
+      outcome: "done" | "cancelled";
+      finishedAt: number;
+      prUrl: string | null;
+      steps: CompletedStep[];
+      edges: TaskEdge[];
+    }
+  | {
+      kind: "worker";
+      conversationId: ConversationId;
+      workerId: WorkerId;
+      title: string;
+      outcome: "done" | "cancelled";
+      finishedAt: number;
+      prUrl: string | null;
+    };
+
+export interface CompletedWorkPage {
+  /** Newest finishedAt first; ties break by kind then id, descending, so pages never overlap or skip. */
+  items: CompletedWorkItem[];
+  /** Finished graphs plus finished standalone Workers for this PM, counted when the page was read. */
+  total: number;
+  next: CompletedCursor | null;
 }
 
 export interface DecideTaskNodeRequest {
   clientId: string;
+  askMessageId?: MessageId;
   choice?: string | null;
   note?: string | null;
 }

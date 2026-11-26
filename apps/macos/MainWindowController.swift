@@ -12,6 +12,8 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
     private var didAttemptTokenAuth = false
     private(set) var isShowingErrorPage = false
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
+    // The page draws a wood top bar of this height under the transparent title bar (--topbar-height in src/web/styles.css).
+    static let webTopBarHeight: CGFloat = 40
 
     init(
         supervisor: DaemonSupervisor,
@@ -115,7 +117,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = false
         window.backgroundColor = NSColor.white
-        window.minSize = NSSize(width: 480, height: 560)
+        window.minSize = NSSize(width: 860, height: 560)
         window.delegate = self
         window.contentView = webView
         if !window.setFrameUsingName("AgentHubMainWindow") {
@@ -125,11 +127,39 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        centerTrafficLights()
     }
 
     func showWindow() {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        centerTrafficLights()
+    }
+
+    /// The y origin, in the title bar view's own coordinates, that centers a button of this height on the page's top bar.
+    static func trafficLightOriginY(barHeight: CGFloat, barIsFlipped: Bool, buttonHeight: CGFloat) -> CGFloat {
+        let fromTop = (webTopBarHeight - buttonHeight) / 2
+        return barIsFlipped ? fromTop : barHeight - fromTop - buttonHeight
+    }
+
+    // AppKit puts the traffic lights back at their default height whenever it lays out the title bar, so this runs again
+    // after every resize and full-screen change.
+    func centerTrafficLights() {
+        for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            guard let button = window.standardWindowButton(type), let bar = button.superview else { continue }
+            let y = Self.trafficLightOriginY(barHeight: bar.bounds.height, barIsFlipped: bar.isFlipped, buttonHeight: button.frame.height)
+            if button.frame.origin.y != y {
+                button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: y))
+            }
+        }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        centerTrafficLights()
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        centerTrafficLights()
     }
 
     func reload() {

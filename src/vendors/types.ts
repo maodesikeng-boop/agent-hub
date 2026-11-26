@@ -1,4 +1,5 @@
-import type { CapabilityIsolationMap } from "../shared/pm-capabilities.ts";
+import type { CapabilityIsolationMap, CapabilityKey } from "../shared/pm-capabilities.ts";
+import type { SandboxPlatform } from "../shared/sandbox-approval.ts";
 import type { QuotaWindowKey } from "../shared/vendors.ts";
 
 export interface FetchedQuotaSpec {
@@ -48,6 +49,13 @@ export interface VendorModelsSpec {
   shortName?: (model: string) => string | null;
 }
 
+export interface VendorBuiltInSandboxSpec {
+  readonly platforms: readonly SandboxPlatform[];
+  readonly computerUseCapabilities: readonly CapabilityKey[];
+  readonly computerUsePlugins?: readonly string[];
+  readonly ownSandboxOnArgs?: readonly string[];
+}
+
 interface VendorCapabilities {
   backgroundWake: boolean;
   readonly: "settings" | "driver" | "os_sandbox";
@@ -59,6 +67,19 @@ interface VendorCapabilities {
   explicitDefaultModel?: boolean;
   // macOS sandboxes cannot nest, so the vendor's own sandbox is disabled inside the OS sandbox.
   ownSandboxOffArgs?: readonly string[];
+  builtInSandbox?: VendorBuiltInSandboxSpec;
+}
+
+export type ChecklistSource = "todo_tool" | "plan_update" | "extension";
+
+export interface VendorChecklistSpec {
+  // An empty list means the vendor reports no checklist and the chat shows only the action line.
+  sources: readonly ChecklistSource[];
+  // Switches that turn on a checklist tool the CLI hides by default; the vendor's launch builder applies them.
+  // An appendToList value joins a comma-separated variable the user may already set.
+  enable?: { args?: readonly string[]; env?: Readonly<Record<string, string | { appendToList: string }>> };
+  // The tool name the prompt tells the agent to keep its list in; set exactly when `sources` is non-empty.
+  promptTool?: string;
 }
 
 export interface VendorSpec<Id extends string = string> {
@@ -97,6 +118,7 @@ export interface VendorSpec<Id extends string = string> {
   };
   // Names are merged across vendors, so one name must map to one action everywhere.
   tools?: { actions: Readonly<Record<string, ToolAction>> };
+  checklist: VendorChecklistSpec;
   skillSignals: SkillSignals;
   capabilities: VendorCapabilities;
 }

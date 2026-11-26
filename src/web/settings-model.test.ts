@@ -100,12 +100,12 @@ afterEach(() => {
 });
 
 describe("useUiScaleSetting", () => {
-  it("默认读取 lg（Large），切换时立即更新 data-ui-scale 与 localStorage，并在多个挂载实例间同步且保持引用稳定", () => {
+  it("reads md (Default) by default, applies and saves a change at once, and keeps mounted copies in sync with stable references", () => {
     const first = renderHook(() => useUiScaleSetting());
     const second = renderHook(() => useUiScaleSetting());
 
-    expect(first.result.current.scale).toBe("lg");
-    expect(first.result.current.label).toBe("Large");
+    expect(first.result.current.scale).toBe("md");
+    expect(first.result.current.label).toBe("Default");
     expect(first.result.current.options.map((o) => o.label)).toEqual(["Compact", "Default", "Large", "XL"]);
 
     const initialRef = first.result.current;
@@ -276,6 +276,222 @@ describe("设备与账号 hooks", () => {
       await account.result.current.setPriority([TOKYO_ID, MAC_ID]);
     });
     expect(calls.find((c) => c.path === API_PATHS.accountPriority)?.body).toEqual({ priority: [TOKYO_ID, MAC_ID] });
+  });
+
+  it("useAccount 避免初始或过时 GET /api/account 覆盖较新的 account.updated 与变更结果", async () => {
+    let accountRequests = 0;
+    let resolveFirstGet!: (value: Response) => void;
+    let resolveThirdGet!: (value: Response) => void;
+    let resolveLogin!: (value: Response) => void;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://127.0.0.1:1");
+        const method = init?.method ?? "GET";
+        if (method === "GET" && url.pathname === API_PATHS.account) {
+          accountRequests += 1;
+          if (accountRequests === 1) return new Promise<Response>((resolve) => (resolveFirstGet = resolve));
+          if (accountRequests === 2) {
+            return Promise.resolve(
+              Response.json({
+                state: "signing_in",
+                userCode: "WDJB-MJHT",
+                verificationUri: "https://github.com/login/device",
+                expiresAt: Date.now() + 60_000,
+              }),
+            );
+          }
+          return new Promise<Response>((resolve) => (resolveThirdGet = resolve));
+        }
+        if (method === "POST" && url.pathname === API_PATHS.accountLogin) {
+          return new Promise<Response>((resolve) => (resolveLogin = resolve));
+        }
+        return Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
+      }),
+    );
+
+    const { qc, wrapper } = makeWrapper();
+    const { invalidateAccount } = await import("./query-client.ts");
+    const account = renderHook(() => useAccount(), { wrapper });
+    await waitFor(() => expect(accountRequests).toBe(1));
+
+    // Invalidate while initial GET #1 is still in flight (data === undefined): must re-fetch GET #2 automatically.
+    void invalidateAccount(qc);
+    resolveFirstGet(Response.json({ state: "signed_out", lastError: null }));
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ state: "signing_in", userCode: "WDJB-MJHT" }));
+    expect(accountRequests).toBe(2);
+
+    // Start GET #3, then complete a newer mutation before GET #3 resolves: stale GET #3 must not overwrite the mutation result.
+    void invalidateAccount(qc);
+    await waitFor(() => expect(accountRequests).toBe(3));
+    let signInPromise!: Promise<boolean>;
+    act(() => {
+      signInPromise = account.result.current.signIn();
+    });
+    await waitFor(() => expect(typeof resolveLogin).toBe("function"));
+    resolveLogin(
+      Response.json({
+        state: "awaiting_approval",
+        login: { provider: "github", userId: "1", login: "alice" },
+        relay: "connected",
+        approval: null,
+      }),
+    );
+    await act(async () => {
+      expect(await signInPromise).toBe(true);
+    });
+    expect(account.result.current.status).toMatchObject({ state: "awaiting_approval" });
+
+    resolveThirdGet(Response.json({ state: "signed_out", lastError: "stale" }));
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ state: "awaiting_approval" }));
+  });
+
+  it("在途 setPriority 期间收到 invalidateAccount 时无论 GET 与旧 PUT 谁先返回都保留最新状态", async () => {
+    const signedIn = (centerPriority: string[]) =>
+      Response.json({
+        state: "signed_in",
+        login: { provider: "github", userId: "1", login: "alice" },
+        relay: "connected",
+        selfId: MAC_ID,
+        centerPriority,
+        devices: [],
+        pendingApprovals: [],
+      });
+
+    const getResolvers: Array<(value: Response) => void> = [];
+    const putResolvers: Array<(value: Response) => void> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://127.0.0.1:1");
+        const method = init?.method ?? "GET";
+        if (method === "GET" && url.pathname === API_PATHS.account) {
+          return new Promise<Response>((resolve) => getResolvers.push(resolve));
+        }
+        if (method === "PUT" && url.pathname === API_PATHS.accountPriority) {
+          return new Promise<Response>((resolve) => putResolvers.push(resolve));
+        }
+        return Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
+      }),
+    );
+
+    const { qc, wrapper } = makeWrapper();
+    const { invalidateAccount } = await import("./query-client.ts");
+    const account = renderHook(() => useAccount(), { wrapper });
+    await waitFor(() => expect(getResolvers).toHaveLength(1));
+    getResolvers[0]!(signedIn([MAC_ID, TOKYO_ID]));
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ centerPriority: [MAC_ID, TOKYO_ID] }));
+
+    // Order 1: GET from invalidateAccount resolves before the older in-flight PUT settles.
+    let firstPut!: Promise<boolean>;
+    act(() => {
+      firstPut = account.result.current.setPriority([TOKYO_ID, MAC_ID]);
+    });
+    await waitFor(() => expect(putResolvers).toHaveLength(1));
+
+    const firstInvalidate = invalidateAccount(qc);
+    await waitFor(() => expect(getResolvers).toHaveLength(2));
+    getResolvers[1]!(signedIn([TOKYO_ID, MAC_ID]));
+    await firstInvalidate;
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ centerPriority: [TOKYO_ID, MAC_ID] }));
+
+    putResolvers[0]!(signedIn([MAC_ID, TOKYO_ID]));
+    await act(async () => {
+      expect(await firstPut).toBe(true);
+    });
+    expect(account.result.current.status).toMatchObject({ centerPriority: [TOKYO_ID, MAC_ID] });
+
+    // Order 2: older in-flight PUT settles before the GET triggered by invalidateAccount resolves.
+    let secondPut!: Promise<boolean>;
+    act(() => {
+      secondPut = account.result.current.setPriority([HOME_ID, MAC_ID]);
+    });
+    await waitFor(() => expect(putResolvers).toHaveLength(2));
+
+    const secondInvalidate = invalidateAccount(qc);
+    await waitFor(() => expect(getResolvers).toHaveLength(3));
+
+    putResolvers[1]!(signedIn([MAC_ID, TOKYO_ID]));
+    await act(async () => {
+      expect(await secondPut).toBe(true);
+    });
+    expect(account.result.current.status).toMatchObject({ centerPriority: [TOKYO_ID, MAC_ID] });
+
+    getResolvers[2]!(signedIn([HOME_ID, MAC_ID]));
+    await secondInvalidate;
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ centerPriority: [HOME_ID, MAC_ID] }));
+  });
+
+  it("连续失败变更后 ticket 与 invalidateAccount 水位仍保持严格单调不回退", async () => {
+    const signedIn = (centerPriority: string[]) =>
+      Response.json({
+        state: "signed_in",
+        login: { provider: "github", userId: "1", login: "alice" },
+        relay: "connected",
+        selfId: MAC_ID,
+        centerPriority,
+        devices: [],
+        pendingApprovals: [],
+      });
+
+    let putAttempt = 0;
+    let resolveThirdPut!: (value: Response) => void;
+    let resolveSecondGet!: (value: Response) => void;
+    let getAttempt = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://127.0.0.1:1");
+        const method = init?.method ?? "GET";
+        if (method === "GET" && url.pathname === API_PATHS.account) {
+          getAttempt += 1;
+          if (getAttempt === 1) return Promise.resolve(signedIn([MAC_ID, TOKYO_ID]));
+          return new Promise<Response>((resolve) => (resolveSecondGet = resolve));
+        }
+        if (method === "PUT" && url.pathname === API_PATHS.accountPriority) {
+          putAttempt += 1;
+          if (putAttempt <= 2) return Promise.resolve(Response.json({ error: "temporary_failure" }, { status: 500 }));
+          return new Promise<Response>((resolve) => (resolveThirdPut = resolve));
+        }
+        return Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
+      }),
+    );
+
+    const { qc, wrapper } = makeWrapper();
+    const { invalidateAccount } = await import("./query-client.ts");
+    const account = renderHook(() => useAccount(), { wrapper });
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ centerPriority: [MAC_ID, TOKYO_ID] }));
+
+    // Two consecutive failed mutations advance latest without advancing gen.
+    await act(async () => {
+      expect(await account.result.current.setPriority([TOKYO_ID, MAC_ID])).toBe(false);
+    });
+    await act(async () => {
+      expect(await account.result.current.setPriority([HOME_ID, MAC_ID])).toBe(false);
+    });
+    expect(account.result.current.error).not.toBeNull();
+
+    // A third mutation claims ticket > previous failures, then invalidateAccount must advance strictly above that ticket.
+    let thirdPut!: Promise<boolean>;
+    act(() => {
+      thirdPut = account.result.current.setPriority([TOKYO_ID, MAC_ID]);
+    });
+    await waitFor(() => expect(typeof resolveThirdPut).toBe("function"));
+
+    const invalidation = invalidateAccount(qc);
+    await waitFor(() => expect(typeof resolveSecondGet).toBe("function"));
+    resolveSecondGet(signedIn([TOKYO_ID, MAC_ID]));
+    await invalidation;
+    await waitFor(() => expect(account.result.current.status).toMatchObject({ centerPriority: [TOKYO_ID, MAC_ID] }));
+
+    resolveThirdPut(signedIn([MAC_ID, TOKYO_ID]));
+    await act(async () => {
+      expect(await thirdPut).toBe(true);
+    });
+    expect(account.result.current.status).toMatchObject({ centerPriority: [TOKYO_ID, MAC_ID] });
   });
 });
 
@@ -841,7 +1057,7 @@ describe("ChoiceRows、ModeRows 与 Button destructive", () => {
     render(createElement(Button, { variant: "destructive" }, "Remove"));
     const btn = screen.getByRole("button", { name: "Remove" });
     expect(btn.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["bg-danger", "text-primary-foreground", "hover:brightness-90", "disabled:bg-sidebar-active", "disabled:text-muted-foreground"]),
+      expect.arrayContaining(["btn-solid", "bg-danger", "text-primary-foreground", "disabled:bg-send-disabled", "disabled:text-muted-foreground"]),
     );
   });
 
@@ -868,7 +1084,7 @@ describe("shell-model deviceSettings 引用稳定", () => {
     );
     installFakeWebSocket();
 
-    const { result } = renderHook(() => useShellModel({ autoSelect: true }));
+    const { result } = renderHook(() => useShellModel({ mobile: false }));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.instances[0]!.open());
     await waitFor(() => expect(result.current.content?.deviceSettings).not.toBeNull());
@@ -905,7 +1121,7 @@ describe("shell-model 手机路由回退", () => {
     );
     api.install();
     installFakeWebSocket();
-    const rendered = renderHook(() => useShellModel({ autoSelect: false }));
+    const rendered = renderHook(() => useShellModel({ mobile: true }));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.instances[0]!.open());
     return { api, ...rendered };

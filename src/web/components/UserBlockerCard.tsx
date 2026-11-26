@@ -42,8 +42,8 @@ export function UserBlockerCard({
     <div
       data-testid="user-blocker-card"
       className={cn(
-        "rounded-2xl border px-3.5 py-3",
-        answered ? "border-border bg-background" : "border-primary bg-jelly",
+        "border px-3.5 py-3",
+        answered ? "border-border bg-background" : "border-select-line bg-open",
         className,
       )}
     >

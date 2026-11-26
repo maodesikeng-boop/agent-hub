@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { REVIEW_STATUS_CONTEXT } from "../src/shared/review.ts";
+import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 import {
   DEFAULT_POLL_INTERVAL_SECONDS,

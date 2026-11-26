@@ -23,7 +23,6 @@ export interface TurnCompletionFacts {
   readonly worker: {
     readonly turnStart: MessageId;
     readonly waitingForBackground: boolean;
-    readonly endingAfterStop: boolean;
   } | null;
 }
 
@@ -137,13 +136,13 @@ export function createTurnCompletionLedger(ctx: LedgerContext, effects: TurnComp
       const applied = write((p) => {
         if (!db.get("SELECT 1 FROM turn_completions WHERE sequence = ? AND session_id = ?", receipt.sequence, receipt.sessionId)) return false;
         const settled = db.get("SELECT 1 FROM turn_completion_watermarks WHERE session_id = ? AND sequence >= ?", receipt.sessionId, receipt.sequence);
-        if (!settled) effects.apply(p, receipt, facts, receipt.sequence <= startupSequence);
         db.run(
           `INSERT INTO turn_completion_watermarks (session_id, sequence) VALUES (?, ?)
            ON CONFLICT (session_id) DO UPDATE SET sequence = max(sequence, excluded.sequence)`,
           receipt.sessionId, receipt.sequence,
         );
         db.run("DELETE FROM turn_completions WHERE sequence = ?", receipt.sequence);
+        if (!settled) effects.apply(p, receipt, facts, receipt.sequence <= startupSequence);
         return !settled;
       });
       return { kind: applied ? "settled" : "already_settled" };

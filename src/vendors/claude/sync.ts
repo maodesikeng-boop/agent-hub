@@ -27,15 +27,15 @@ function resolveClaudeConfigDir(ctx: VendorSyncContext): string {
   return fromEnv ? fromEnv : join(ctx.userHome, ".claude");
 }
 
-export function resolveClaudeMcpConfigPath(ctx: VendorSyncContext): string {
+function claudeMcpConfigPaths(ctx: VendorSyncContext): readonly [string, ...string[]] {
   const envDir = ctx.env.CLAUDE_CONFIG_DIR?.trim();
-  if (envDir) {
-    const inEnvDir = join(envDir, ".claude.json");
-    if (existsSync(inEnvDir) || !existsSync(join(ctx.userHome, ".claude.json"))) {
-      return inEnvDir;
-    }
-  }
-  return join(ctx.userHome, ".claude.json");
+  const fallback = join(ctx.userHome, ".claude.json");
+  return envDir ? [fallback, join(envDir, ".claude.json")] : [fallback];
+}
+
+export function resolveClaudeMcpConfigPath(ctx: VendorSyncContext): string {
+  const [fallback, preferred] = claudeMcpConfigPaths(ctx);
+  return preferred && (existsSync(preferred) || !existsSync(fallback)) ? preferred : fallback;
 }
 
 function normalizeOAuthConnectorKey(rawKey: string): string {
@@ -201,6 +201,7 @@ function scanClaudePlugins(configDir: string, out: VendorCapabilityScan): void {
 }
 
 export const claudeSyncAdapter: VendorSyncAdapter = {
+  mcpConfigPaths: claudeMcpConfigPaths,
   supportsSseMcp: true,
 
   scanMcp(ctx) {

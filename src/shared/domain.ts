@@ -8,7 +8,9 @@ import {
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
 import { deliverablesOf, type Deliverable } from "./deliverables.ts";
-import type { ReviewStampOutcome, ReviewTarget, ReviewVerdict } from "./review.ts";
+import type { ReviewTarget, StoredReviewVerdict } from "./review.ts";
+import type { SandboxApprovalId, SandboxApprovalRef } from "./sandbox-approval.ts";
+import { APP_APPROVAL_RISK_LEVELS, type AppApprovalRef } from "./app-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
@@ -59,7 +61,7 @@ export function canTransitionMessage(from: MessageStatus, to: MessageStatus): bo
 export const MESSAGE_SENDERS = ["user", "agent", "system", "pm"] as const;
 export type MessageSender = (typeof MESSAGE_SENDERS)[number];
 
-export const MESSAGE_KINDS = ["text", "tool", "worker"] as const;
+export const MESSAGE_KINDS = ["text", "tool", "worker", "checklist"] as const;
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 export const WORKER_MESSAGE_KIND = "worker" satisfies MessageKind;
 
@@ -91,6 +93,8 @@ export interface Pm {
   personaFile: string | null;
   createdAt: number;
   archivedAt?: number | null;
+  /** When the PM was pinned on its computer; null or missing means not pinned. Older daemons omit it. */
+  pinnedAt?: number | null;
 }
 
 export interface Conversation {
@@ -232,6 +236,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return `${meta.workerId}:${meta.maxTimeMs}`;
       case "task_graph.ready_to_finish":
         return `${meta.graphId}:${meta.seq}`;
+      case "pm.wakeup":
+        return meta.ref;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -253,6 +259,7 @@ export const SYSTEM_EVENTS = [
   "driver.warning",
   "worker.max_time_exceeded",
   "task_graph.ready_to_finish",
+  "pm.wakeup",
 ] as const;
 
 export type SystemMessageMeta =
@@ -269,8 +276,12 @@ export type SystemMessageMeta =
   | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }
   | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
-  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number }
-  | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean };
+  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number; deadlineAt?: number }
+  | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean }
+  | { event: "pm.wakeup"; source: PmWakeupSource; ref: string };
+
+export const PM_WAKEUP_SOURCES = ["task_graph", "router", "app_approval"] as const;
+export type PmWakeupSource = (typeof PM_WAKEUP_SOURCES)[number];
 
 export interface GateRef {
   graphId: TaskGraphId;
@@ -289,6 +300,8 @@ export type AskMeta = {
   recommended?: string;
   gateRef?: GateRef;
   blockerRef?: BlockerRef;
+  sandboxApprovalRef?: SandboxApprovalRef;
+  appApprovalRef?: AppApprovalRef;
   chosenOption?: string;
   answerNote?: string;
   closed?: true;
@@ -328,6 +341,26 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     rawBlockerRef !== null && typeof rawBlockerRef === "object" && typeof rawBlockerRef.blockerId === "number"
       ? { blockerId: rawBlockerRef.blockerId }
       : undefined;
+  const sandbox = message.meta.sandboxApprovalRef;
+  const sandboxApprovalRef = sandbox !== null && typeof sandbox === "object" &&
+    "approvalId" in sandbox && typeof sandbox.approvalId === "number" && "workerId" in sandbox && typeof sandbox.workerId === "number"
+    ? { approvalId: sandbox.approvalId, workerId: sandbox.workerId }
+    : undefined;
+  const rawApp = message.meta.appApprovalRef;
+  const appApprovalRef: AppApprovalRef | undefined =
+    rawApp !== null && typeof rawApp === "object" &&
+    "approvalId" in rawApp && typeof rawApp.approvalId === "number" &&
+    "workerId" in rawApp && typeof rawApp.workerId === "number" &&
+    "appId" in rawApp && typeof rawApp.appId === "string" &&
+    "appName" in rawApp && typeof rawApp.appName === "string"
+      ? {
+          approvalId: rawApp.approvalId, workerId: rawApp.workerId, appId: rawApp.appId, appName: rawApp.appName,
+          riskLevel: APP_APPROVAL_RISK_LEVELS.find((risk) => "riskLevel" in rawApp && risk === rawApp.riskLevel) ?? null,
+          ...("workerTitle" in rawApp && typeof rawApp.workerTitle === "string" ? { workerTitle: rawApp.workerTitle } : {}),
+          ...("warning" in rawApp && typeof rawApp.warning === "string" ? { warning: rawApp.warning } : {}),
+          ...("expiresAt" in rawApp && typeof rawApp.expiresAt === "number" ? { expiresAt: rawApp.expiresAt } : {}),
+        }
+      : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
   const answerNote = typeof message.meta.answerNote === "string" && message.meta.answerNote !== "" ? message.meta.answerNote : undefined;
   const deliverables = deliverablesOf(message.meta.deliverables);
@@ -338,6 +371,8 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(recommended !== undefined ? { recommended } : {}),
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(blockerRef !== undefined ? { blockerRef } : {}),
+    ...(sandboxApprovalRef !== undefined ? { sandboxApprovalRef } : {}),
+    ...(appApprovalRef !== undefined ? { appApprovalRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
     ...(answerNote !== undefined ? { answerNote } : {}),
     ...(message.meta.closed === true ? { closed: true } : {}),
@@ -425,7 +460,7 @@ export function extractAskCard(
   message: Pick<Message, "sender" | "meta" | "text">,
 ): ExtractedAskCard | null {
   const ask = askOf(message);
-  if (ask === null || ask.blockerRef !== undefined) return null;
+  if (ask === null || ask.blockerRef !== undefined || ask.sandboxApprovalRef !== undefined || ask.appApprovalRef !== undefined) return null;
   const answered = ask.answered === true;
   const extras = {
     ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
@@ -481,6 +516,7 @@ export type WorkerEvent = (typeof WORKER_EVENTS)[number];
 export type WorkerLineStatus = WorkerReportStatus | "unformatted";
 
 export type WorkerMessageMeta = {
+  completedStep?: true;
   workerId: WorkerId;
   workerConversationId: ConversationId;
   title: string;
@@ -488,6 +524,11 @@ export type WorkerMessageMeta = {
   event: WorkerEvent;
   status: WorkerLineStatus | null;
   summary: string | null;
+  directChatSummary?: string;
+  /** The PR field of a report line, when the report named one. */
+  prUrl?: string;
+  /** The Worker's git branch when running in a worktree. */
+  branch?: string;
 };
 
 export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMessageMeta | null {
@@ -495,8 +536,8 @@ export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMe
   return isOneOf(WORKER_EVENTS, message.meta.event) ? (message.meta as WorkerMessageMeta) : null;
 }
 
-export function workerMessageDedupeKey(workerId: WorkerId, event: WorkerEvent, turnMessageId: MessageId | null): string {
-  if (event === "report" || event === "turn_failed" || event === "user_message") {
+export function workerMessageDedupeKey(workerId: WorkerId, event: Exclude<WorkerEvent, "user_message">, turnMessageId: MessageId | null): string {
+  if (event === "report" || event === "turn_failed") {
     if (turnMessageId === null) throw new Error(`workerMessageDedupeKey: ${event} needs the turn's message id`);
     return `worker:${workerId}:${event}:${turnMessageId}`;
   }
@@ -668,6 +709,8 @@ export interface SessionState {
   model?: string | null;
   effort?: string | null;
   step?: AgentStep | null;
+  /** Epoch ms when the shown step started; null while the shown tool is only proposed. Never derived from lastEventAt. */
+  stepStartedAt?: number | null;
   streamingText?: string | null;
   lastEventAt: number | null;
 }
@@ -715,7 +758,7 @@ export function taskNodeStateFromLegacy(status: string): TaskNodeState {
 }
 
 export function taskNodeStatusText(
-  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker">,
+  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker" | "sandboxApproval">,
   viewer: "pm" | "user",
 ): string {
   switch (node.status) {
@@ -724,6 +767,7 @@ export function taskNodeStatusText(
     case "running":
       return "在干";
     case "waiting":
+      if (node.sandboxApproval != null) return viewer === "user" ? "等你确认 Worker 沙箱" : "等用户确认 Worker 沙箱";
       if (isTaskNodeUserBlocked(node)) return viewer === "user" ? "等你动手" : "等用户动手";
       if (node.waitingFor === "user") return viewer === "user" ? "等你拍板" : "等用户拍板";
       return viewer === "user" ? "等项目经理" : "等你处理";
@@ -740,8 +784,12 @@ export function isTaskNodeUserBlocked(node: Pick<TaskNode, "status" | "waitingFo
   return isTaskNodeWaitingUser(node) && node.userBlocker != null;
 }
 
-export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker">): boolean {
-  return isTaskNodeWaitingUser(node) && node.userBlocker == null;
+export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker" | "gateAskPending" | "sandboxApproval">): boolean {
+  return node.sandboxApproval == null && (node.gateAskPending ?? (isTaskNodeWaitingUser(node) && node.userBlocker == null));
+}
+
+export function isTaskNodeAwaitingUserAction(node: Parameters<typeof isTaskNodeWaitingDecision>[0]): boolean {
+  return node.sandboxApproval !== undefined || isTaskNodeWaitingDecision(node) || isTaskNodeUserBlocked(node);
 }
 
 export function isTaskNodeWaitingPm(node: Pick<TaskNode, "status" | "waitingFor">): boolean {
@@ -754,9 +802,8 @@ export interface TaskArtifact {
   branch?: string;
   summary?: string;
   deliverables?: Deliverable[];
-  reviewVerdict?: ReviewVerdict;
+  reviewVerdict?: StoredReviewVerdict;
   verifiedCommit?: string;
-  reviewStamp?: ReviewStampOutcome;
 }
 
 export interface TaskDecision {
@@ -796,8 +843,10 @@ export interface TaskNode {
   gateSummaryMd: string | null;
   gateRecommended: string | null;
   gateAskMessageId: MessageId | null;
+  gateAskPending?: boolean;
   gateCheckpoint?: boolean;
   userBlocker?: UserBlocker | null;
+  sandboxApproval?: { id: SandboxApprovalId; text: string };
   decision: TaskDecision | null;
   createdAt: number;
   updatedAt: number;

@@ -11,7 +11,6 @@ import {
   MAX_SENT_FILE_BYTES,
   PM_MODES,
   PM_MODE_LABELS,
-  PM_REVIEW_REDLINES_BRIEF,
   reviewWorkspaceLines,
   PRODUCT_NAME,
   SETUP_TIMEOUT_MS,
@@ -89,7 +88,8 @@ ${doItYourself}
 - 建图时填好总目标与每步职责，就绪步骤会自动开工并按顺序交棒（见任务图手册）。
 
 ## 4. 跟进反馈
-不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
+除下面的直聊例外，不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`。建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
+- **用户与 Worker 直聊**：普通消息和回复留在 Worker 对话。Worker 做完交办的任务，或在汇报的“问题”栏明确请你处理时，按原流程处理。你下次给 Worker 发消息，或收到它的正式汇报时，留意附带的直聊摘要。摘要按发送顺序排列，最后一条最新；指示冲突时，以用户最后一条相关指示为准。指示有截断、意思不清时，先核对再行动。
 - **平时不播报过程**：只在三种时候找用户：交付要验收的结果、有事要用户拍板或亲自动手、用户直接问你。续时、换人、打回重做、等检查这类后台调度自己静默处理，回复最多一行，不写过程流水账。
 - **要用户拍板或动手必挂卡**：凡是要用户做选择，或需要用户本人在终端跑命令、登录授权、开启系统权限、开盖插电等操作，一律用 \`${HUB} ask\` 挂卡（写上选项、标出 \`--recommended\` 推荐项，要看的文件用 \`--file\` 挂上，卡片会自动同步到总助），并在回复里说“卡在上面，直接点选”，不要只在文字里问一句干等。
 - **Worker 做完了**：不建图的按第 5 步验收，通过就 \`${HUB} worker end <编号>\` 收工；建图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
@@ -98,7 +98,7 @@ ${doItYourself}
 
 ## 5. 交付与汇报
 - **验收只看证据**：看汇报（或任务图交付单）、PR 改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
-- **该审查而没审查的，交付前补上**：改动碰了任务图手册里列出的四类高风险改动（${PM_REVIEW_REDLINES_BRIEF}），就按手册里的做法补一个审查。
+- **按项目规矩或用户要求安排审查**：项目要求审查或改动风险较高而还没审查的，交付前按任务图手册补一个独立审查步骤。
 - 合并、发布这类收尾动作按项目自己的约定和用户要求做，没要求的不做。
 - **同时向对话和总助汇报交付**：
   1. **只讲结论，说人话**：开头说清用户原本要做什么、现在做成了什么、何时生效，跟用户用同一种语言简洁直接地回答，不抄 Worker 的排查过程。
@@ -156,9 +156,9 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - **任务图**：\`${HUB} graph ${TASK_GRAPH_ACTIONS.join("|")}\`，用法见任务图手册（也可跑 \`${HUB} help graph\`）
 - **向用户提问**
   - \`${HUB} ask [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：向用户挂拍板卡或提醒卡；可点选项传 \`--option\`（至少 2 个），推荐项传 \`--recommended\`，要用户看的文件（方案、验收结论、截图、录屏）传 \`--file\`（可多个），不把路径写进问题标题里
-  - \`${HUB} ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
+  - \`${HUB} ask close <卡编号>\`：关掉自己名下还在等用户的卡（用户在对话里打字答了，或问题过时了）。普通卡编号见用户消息前面的系统说明。步骤拍板卡用 \`${HUB} ask close --message <消息编号>\`，编号和用法见任务图手册
 - **Worker**
-  - \`${HUB} worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干
+  - \`${HUB} worker start --title <标题> [--vendor <vendors>] [--model <模型>] [--effort <efforts>] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] [--no-outer-sandbox] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是单轮时长上限（如 \`15m\`、\`1h\`，默认 \`30m\`），超了只提醒你，不打断它。\`--caps\` 管外接能力（MCP、Skill、连接器，占上下文）：默认 \`inherit\` 照项目能力设置挂；只改代码、跑命令的活用 \`none\` 更快更省；要特定工具用 \`custom\` 加 \`--allow mcp:<名>\`、\`--allow skill:<名>\`（项目里关掉的挂不上）。读写文件、终端和 hub 永远都在。Git 仓库里默认自动建独立 worktree 和分支，加 \`--no-worktree\` 则直接在主文件夹干。只有明确挂载 Computer Use 才能用 \`--no-outer-sandbox\` 申请关闭 Bellwood 外层沙箱，用户在工作台确认后才开工。Computer Use 控制每个应用前都要等用户在工作台确认；用户拒绝时，换个办法或汇报。
   - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：回答问题或打回重做，原 Worker 接着干
   - \`${HUB} worker end <编号>\`：收工（停掉这个 Worker，worktree 和分支先留着；图里未完成的步骤会停下等你处理）
   - \`${HUB} worker max-time <编号> <时长>\`：给正在跑的这一轮重新计时续时
@@ -166,7 +166,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} models [--vendor <vendors>] [--refresh]\`：查看各厂商可用模型与支持的思考程度
 - **其他**（不常用，详细参数跑 \`${HUB} help\` 看）
   - \`${HUB} status\`：看我是谁、我的项目、文件夹和活跃任务图
-  - \`${HUB} project create|attach|detach|setup|review-status\`：建项目、增删附加文件夹、设新 worktree 准备脚本、设审查盖章用的 gh 账号
+  - \`${HUB} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`${HUB} persona show|edit\`：查看、修改性格设定和干活模式
   - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务（用户要定期做某件事时才建，如日报、周期巡检）
   - \`${HUB} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`;
@@ -242,7 +242,7 @@ const WORKER_RULES_COMMON = `# 你的规矩
 
 - **拿不准写进“问题”交给项目经理**：你不能直接挂卡问用户。碰到产品取舍、撤不回来的操作或范围疑问，状态写“有问题”，在“问题”栏写清选项和推荐交给项目经理；自己跑一下就能验证的技术事实，自己试。
 - **不用厂商自带的子代理**：不要调用 ${formatSubagentTools()} 这类内置子代理工具，自己一个会话做完；确需并行拆步的，在“问题”栏建议项目经理加 Worker 或加步骤。
-- **等别人时直接结束本轮**：等别的 PR 合并、等项目经理或用户答复时，直接结束本轮并汇报，不要设定时器，也不要 \`sleep\` 轮询；轮到你时项目经理会叫醒你。`;
+- **等别人时直接结束本轮**：等别的 PR 合并、等项目经理或用户答复时，按上面的汇报规则结束本轮，不要设定时器，也不要 \`sleep\` 轮询；轮到你时项目经理会叫醒你。`;
 
 function buildWorkerBackgroundCommandNote(tool: string = specOf(DEFAULT_AGENT_VENDOR).prompt.backgroundCommandTool): string {
   return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 ${tool}），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理、也不算汇报）。不要 \`sleep\` 后反复查状态；几秒钟的命令照常在前台跑。`;
@@ -254,7 +254,18 @@ export const WORKER_BLOCKING_WAIT_NOTE =
 
 function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
   const spec = specOf(vendor);
-  return `${WORKER_RULES_COMMON}\n${spec.capabilities.backgroundWake ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE}`;
+  return [WORKER_RULES_COMMON, checklistRuleNote(vendor), spec.capabilities.backgroundWake
+    ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE].filter(Boolean).join("\n");
+}
+
+/**
+ * Postcondition: for a vendor whose spec reports checklist events, returns one rule line (Chinese, project-agnostic)
+ * telling the agent to list a turn of three or more steps with `checklist.promptTool` and tick each step off as it
+ * finishes. Returns null for vendors with no checklist source. Both the PM and Worker prompts include it.
+ */
+export function checklistRuleNote(vendor: string): string | null {
+  const tool = specOf(vendor).checklist.promptTool;
+  return tool === undefined ? null : `- **进度清单**：一轮要做 3 步或更多时，用 ${tool} 列出步骤，每完成一项就标记为完成。`;
 }
 
 export const WORKER_READONLY_NOTE = "- 这次只读：只看、只查，不改文件，也不跑会改东西的命令；要批准的操作会被系统直接拒绝。结论写进汇报。";
@@ -267,7 +278,7 @@ function workerRoleSection(ctx: LaunchContext): string {
 - **第一条消息**是开工通知，包含你的编号与标题、工作目录与分支、任务说明（以及上游交棒或前任接手记录）。
 - **消息来源区分**：
   - 不带标签的消息来自**项目经理**（开工说明、打回意见或答复）。
-  - 带 \`${USER_TO_WORKER_TAG}\` 的是**用户**在网页上直接对你说的话，照着做，本轮汇报照常交给项目经理。
+  - 带 \`${USER_TO_WORKER_TAG}\` 的是**用户**直接对你说的话，照着做，直接回复用户。
   - 其他以 \`【…】\` 开头的是**系统消息**（如准备命令输出、交棒/接手记录、拍板定案，或忙时合并的 \`【用户连发了 N 条】\`，连发消息请逐条回应）。
 ${SHARE_FILES_NOTE}
 - 跟用户用同一种语言回复（看任务说明和用户直接对你说的话），简洁直接；汇报格式里的栏名和固定取值（如“状态”“做完了”“无”）后台按原文解析，照原样写、不翻译。`;
@@ -330,14 +341,17 @@ export function buildWorkerFirstMessage(input: {
 function workerReportSection(): string {
   return `# 汇报
 
-你每一轮最后一条回复都要以下面这段九栏格式结尾（“状态”三选一，其余照实写）。后台按它决定下一步：
+每轮最后一条回复都用下面的九栏格式结尾，但只有用户直达消息的一轮例外：直接回复用户，只有做完交办的任务，或确实需要项目经理处理时，才在回复末尾加正式汇报。需要项目经理处理时，必须在“问题”栏写清要项目经理回答什么或采取什么行动。普通进度、闲聊和给用户的答复不用写进“问题”。
+
+正式汇报的“状态”三选一，其余照实写。后台按汇报决定下一步：
 - 状态写“做完了”且“偏离”写“无”：本步自动完成，“交棒”原样转给下一步 Worker（没有下一步就交给项目经理）。
 - 其余情况（报了“偏离”、状态写“有问题”或“放弃了”）：停下来交给项目经理处理。
 
 ${WORKER_REPORT_FORMAT}
 
-- **做完了**：本步职责全部完成、已亲自验证、没有等别人答复的事；要求提 PR 的按任务说明和项目约定提好（要求等 CI 的等检查通过）。卡住了写“有问题”，做不了写“放弃了”，原因写进“问题”。
-- **偏离**：实际要改的范围、设计与任务说明不符，或碰到预期外风险时，如实写清“偏离”踩刹车交给项目经理，不擅自扩范围；完全按计划做写 \`偏离: 无\`（局部实现细节调整不算偏离）。
+- **做完了**：本步职责全部完成、已亲自验证、没有等别人答复的事；要求提 PR 的按任务说明和项目约定提好（要求等 CI 的等检查通过）。
+- **有问题或放弃了**：交办的任务卡住了写“有问题”，做不了写“放弃了”。在“问题”栏写明原因和需要项目经理处理的事。
+- **偏离**：实际要改的范围、设计与任务说明不符，或碰到预期外风险时，如实写清“偏离”，并在“问题”栏写明要项目经理决定什么；先暂停，不擅自扩范围。完全按计划做写 \`偏离: 无\`（局部实现细节调整不算偏离）。
 - **交棒**：给下一步接手的人看的关键结论、改了哪些文件、分支/目录状态与注意事项（不重复粘贴长内容）；没有写 \`无\`。
 - **文件**：要给用户看的方案、验收结论、截图、录屏，一行一个 \`[标签](绝对路径)\`，放在 worktree、项目文件夹或系统临时目录里；录屏交 mp4（H.264），单个不超过 ${MAX_SENT_FILE_BYTES / 1024 / 1024} MB。系统收工时会自动提取展示给项目经理和用户。没有写 \`无\`。`;
 }
@@ -374,7 +388,7 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string, options: PmPr
   const parts = [
     roleSection(ctx),
     projectSection(ctx.project),
-    `${buildPmModePrompt(ctx.pm.mode, vendor, options.taskGraphSkillFile)}\n${PM_COMMON_RULES}`,
+    [buildPmModePrompt(ctx.pm.mode, vendor, options.taskGraphSkillFile), PM_COMMON_RULES, checklistRuleNote(vendor)].filter(Boolean).join("\n"),
     PM_MEMORY_PROMPT,
     HUB_USAGE_PROMPT,
   ];

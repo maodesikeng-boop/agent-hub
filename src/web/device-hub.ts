@@ -1,3 +1,4 @@
+import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
@@ -8,17 +9,22 @@ import {
   MAX_MESSAGE_BYTES,
   MAX_REWOUND_PENDING_KEYS,
   findRewindableMessage,
+  isWorkerEndLine,
+  workerEventOf,
   type Attachment,
   type Change,
   type ConversationId,
   type DeviceInfo,
   type MessageId,
-  type PmId,
   type PostMessageRequest,
+  type PmId,
+  type TaskGraph,
   type StateSnapshot,
   type WsServerMessage,
   type WorkerId,
   type WorkerPick,
+  WS_BURST_FRAME_LIMIT,
+  WS_FRAME_BUDGET_MS,
   userMessageDedupeKey,
   workerPickOf,
 } from "../shared/index.ts";
@@ -29,7 +35,7 @@ import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type
 import { openChangeStream, planSnapshotRecovery, reconnectDelay, type ChangeStreamConnection } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, sameDeviceInfo, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
 import { ErrorNotice, errorText, newClientId } from "./format.ts";
-import { ACCOUNT_QUERY_KEY, queryClient } from "./query-client.ts";
+import { completedWorkKey, invalidateAccount, queryClient, useHubQueryClient } from "./query-client.ts";
 import { parseRoute } from "./route.ts";
 import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer, type HubState } from "./state.ts";
@@ -67,6 +73,10 @@ function waitForRecoveryRetry(signal: AbortSignal): Promise<void> {
   });
 }
 
+function isDocumentHidden(): boolean {
+  return typeof document === "object" && document.visibilityState === "hidden";
+}
+
 export class DeviceHub {
   readonly store: StoreApi<HubState> = createStore<HubState>(() => initialState);
   readonly link: LinkHistory = { lastOnlineAt: null, disconnectedAt: null };
@@ -76,29 +86,46 @@ export class DeviceHub {
   private loading: AbortController | null = null;
   private readonly olderInFlight = new Set<ConversationId>();
   private readonly requestedWorkers = new Set<WorkerId>();
-  private readonly endedWorkersInFlight = new Set<PmId>();
   private readonly inFlightPosts = new Map<string, { conversationId: ConversationId; after: "none" | "stop" | "rewind" }>();
   private readonly rewindBarriers = new Map<ConversationId, number>();
+  private readonly taskGraphListeners = new Set<(graph: TaskGraph) => void>();
   private readonly stopRequests = new Map<ConversationId, Promise<void>>();
   private alive = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private offlineTimer: ReturnType<typeof setTimeout> | undefined;
+  private notifyRaf: number | undefined;
+  private frameResetRaf: number | undefined;
+  private frameChangeCount = 0;
+  private frameRenderMs = 0;
   private closeStream: (() => void) | null = null;
   private loadAttempt = 0;
   private offUnauthorized: (() => void) | null = null;
+  private offVisibility: (() => void) | null = null;
 
   readonly key: DeviceKey;
   readonly client: HubClient;
   private readonly onChange: () => void;
   private readonly onResync: (() => void) | undefined;
   private readonly onBoot: ((bootId: string) => void) | undefined;
+  private readonly onAccountUpdated: (() => void) | undefined;
+  private readonly qc: QueryClient;
 
-  constructor(key: DeviceKey, client: HubClient, onChange: () => void, onResync?: () => void, onBoot?: (bootId: string) => void) {
+  constructor(
+    key: DeviceKey,
+    client: HubClient,
+    onChange: () => void,
+    qc: QueryClient = queryClient,
+    onResync?: () => void,
+    onBoot?: (bootId: string) => void,
+    onAccountUpdated?: () => void,
+  ) {
     this.key = key;
     this.client = client;
     this.onChange = onChange;
     this.onResync = onResync;
     this.onBoot = key === LOCAL_DEVICE ? onBoot : undefined;
+    this.onAccountUpdated = key === LOCAL_DEVICE ? onAccountUpdated : undefined;
+    this.qc = qc;
   }
 
   get state(): HubState {
@@ -110,6 +137,11 @@ export class DeviceHub {
   }
 
   subscribe = (listener: (state: HubState, prevState: HubState) => void): (() => void) => this.store.subscribe(listener);
+
+  subscribeTaskGraphs = (listener: (graph: TaskGraph) => void): (() => void) => {
+    this.taskGraphListeners.add(listener);
+    return () => this.taskGraphListeners.delete(listener);
+  };
 
   private get remote(): boolean {
     return this.key !== LOCAL_DEVICE;
@@ -124,7 +156,68 @@ export class DeviceHub {
       if (!this.state.conversations[id] || this.state.conversations[id]?.conversation.purgedAt !== undefined) this.rewindBarriers.delete(id);
     }
     this.trackLink();
+    if (action.type === "change") {
+      this.scheduleChangeNotify();
+      return;
+    }
+    this.flushPendingNotify();
     this.onChange();
+  }
+
+  private scheduleFrameReset(): void {
+    if (this.frameResetRaf !== undefined || typeof requestAnimationFrame !== "function") return;
+    this.frameResetRaf = requestAnimationFrame(() => {
+      this.frameResetRaf = undefined;
+      this.frameChangeCount = 0;
+      this.frameRenderMs = 0;
+    });
+  }
+
+  private clearFrameResetRaf(): void {
+    this.frameChangeCount = 0;
+    this.frameRenderMs = 0;
+    if (this.frameResetRaf !== undefined) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.frameResetRaf);
+      this.frameResetRaf = undefined;
+    }
+  }
+
+  private flushPendingNotify(): boolean {
+    this.clearFrameResetRaf();
+    if (this.notifyRaf === undefined) return false;
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.notifyRaf);
+    this.notifyRaf = undefined;
+    return true;
+  }
+
+  private handleVisibilityChange = (): void => {
+    const hadPending = this.flushPendingNotify();
+    if (hadPending && (this.alive || this.cursor !== null)) this.onChange();
+  };
+
+  private scheduleChangeNotify(): void {
+    // Browsers and WKWebView suspend rAF while hidden, which would stall background notifications.
+    if (isDocumentHidden() || typeof requestAnimationFrame !== "function") {
+      this.flushPendingNotify();
+      if (this.alive || this.cursor !== null) this.onChange();
+      return;
+    }
+    this.frameChangeCount++;
+    this.scheduleFrameReset();
+    const coalesce = this.frameChangeCount > WS_BURST_FRAME_LIMIT || this.frameRenderMs >= WS_FRAME_BUDGET_MS;
+    if (coalesce) {
+      if (this.notifyRaf !== undefined) return;
+      this.notifyRaf = requestAnimationFrame(() => {
+        this.notifyRaf = undefined;
+        this.clearFrameResetRaf();
+        if (this.alive || this.cursor !== null) this.onChange();
+      });
+      return;
+    }
+    if (this.notifyRaf !== undefined) return;
+    const t0 = typeof performance === "object" ? performance.now() : 0;
+    if (this.alive || this.cursor !== null) this.onChange();
+    if (typeof performance === "object") this.frameRenderMs += performance.now() - t0;
   }
 
   private trackLink(): void {
@@ -132,18 +225,29 @@ export class DeviceHub {
     if (online) {
       this.link.lastOnlineAt = Date.now();
       this.link.disconnectedAt = null;
-      clearTimeout(this.offlineTimer);
+      if (this.offlineTimer !== undefined) {
+        clearTimeout(this.offlineTimer);
+        this.offlineTimer = undefined;
+      }
       return;
     }
     if (this.state.phase === "ready" && this.state.connection === "reconnecting" && this.link.disconnectedAt === null) {
       this.link.disconnectedAt = Date.now();
-      clearTimeout(this.offlineTimer);
-      this.offlineTimer = setTimeout(() => this.alive && this.onChange(), OFFLINE_AFTER_MS);
+      if (this.offlineTimer !== undefined) clearTimeout(this.offlineTimer);
+      this.offlineTimer = setTimeout(() => {
+        this.offlineTimer = undefined;
+        if (this.alive) this.onChange();
+      }, OFFLINE_AFTER_MS);
     }
   }
 
   start(): void {
     this.alive = true;
+    this.offVisibility?.();
+    if (typeof document === "object" && typeof document.addEventListener === "function") {
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      this.offVisibility = () => document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    }
     if (!this.remote) {
       this.offUnauthorized = onUnauthorized(() => {
         if (!this.alive) return;
@@ -160,23 +264,51 @@ export class DeviceHub {
     this.loading = null;
     this.inFlightPosts.clear();
     this.stopRequests.clear();
+    this.taskGraphListeners.clear();
     this.rewindBarriers.clear();
     this.offUnauthorized?.();
     this.offUnauthorized = null;
+    this.offVisibility?.();
+    this.offVisibility = null;
     clearTimeout(this.timer);
     clearTimeout(this.offlineTimer);
+    this.offlineTimer = undefined;
+    this.flushPendingNotify();
     this.stopStream();
   }
 
   private applyChange(change: Change): void {
     if (!this.cursor || change.seq <= this.cursor.seq) return;
     this.cursor = { bootId: this.cursor.bootId, seq: change.seq };
+    const pmId = this.completedWorkPmOf(change);
     this.dispatch({ type: "change", change });
+    if (change.type === "task_graph.updated") for (const listener of this.taskGraphListeners) listener(change.data.graph);
+    if (pmId !== null) {
+      const queryKey = completedWorkKey(this.key, pmId);
+      // Invalidation alone leaves a fetch with no cached data running.
+      void this.qc.cancelQueries({ queryKey, exact: true });
+      void this.qc.invalidateQueries({ queryKey, exact: true });
+    }
+  }
+
+  private completedWorkPmOf(change: Change): PmId | null {
+    if (change.type === "task_graph.updated" && change.data.graph.status !== "active") return change.data.graph.pmId;
+    if (change.type !== "message.created") return null;
+    const { message } = change.data;
+    const line = workerEventOf(message);
+    if (line === null || !isWorkerEndLine(line)) return null;
+    return this.state.conversations[message.conversationId]?.conversation.pmId ?? null;
   }
 
   private installSnapshot(snapshot: StateSnapshot, cursor: ChangeCursor): void {
+    const replacing = this.cursor !== null;
     this.cursor = cursor;
     this.dispatch({ type: "loaded", snapshot });
+    if (replacing) {
+      const queryKey = ["completed-work", this.key];
+      void this.qc.cancelQueries({ queryKey });
+      void this.qc.invalidateQueries({ queryKey });
+    }
     this.onBoot?.(cursor.bootId);
   }
 
@@ -251,8 +383,12 @@ export class DeviceHub {
 
   private receive(message: WsServerMessage, connection: ChangeStreamConnection): void {
     if (message.type === "account.updated") {
-      void queryClient.invalidateQueries({ queryKey: ACCOUNT_QUERY_KEY });
+      if (!this.remote) {
+        void invalidateAccount(this.qc);
+        this.onAccountUpdated?.();
+      }
     } else if (message.type === "resync") {
+      if (!this.remote) void invalidateAccount(this.qc);
       void this.resync(connection);
     } else if (this.recovery?.connection === connection) {
       const buffered = this.recovery.buffered;
@@ -272,9 +408,14 @@ export class DeviceHub {
       reportPresence: !this.remote,
       getCursor: () => this.cursor!,
       onStatus: (status, connection) => {
+        const reconnected = !this.remote && status === "open" && this.state.phase === "ready" && this.state.connection === "reconnecting";
         this.connection = connection;
         this.recovery = null;
         this.dispatch({ type: "connection", status });
+        if (reconnected) {
+          void invalidateAccount(this.qc);
+          this.onAccountUpdated?.();
+        }
       },
       onMessage: (message, connection) => this.receive(message, connection),
     });
@@ -435,18 +576,6 @@ export class DeviceHub {
     }
   }
 
-  loadEndedWorkers = async (pmId: PmId): Promise<void> => {
-    const before = this.state.olderEndedWorkers[pmId];
-    if (before === undefined || this.endedWorkersInFlight.has(pmId)) return;
-    this.endedWorkersInFlight.add(pmId);
-    try {
-      const page = await this.client.fetchEndedWorkers(pmId, before);
-      if (this.alive) this.dispatch({ type: "endedWorkersLoaded", pmId, before, page });
-    } finally {
-      this.endedWorkersInFlight.delete(pmId);
-    }
-  };
-
   loadOlder = async (conversationId: ConversationId): Promise<void> => {
     const view = this.state.conversations[conversationId];
     if (!view?.hasMore || this.olderInFlight.has(conversationId)) return;
@@ -481,29 +610,38 @@ export class DevicesStore {
   private running = false;
   private listTimer: ReturnType<typeof setTimeout> | undefined;
   private listAttempt = 0;
+  private listGen = 0;
+  private listController: AbortController | null = null;
 
   private readonly clientFor: (key: DeviceKey) => HubClient;
   private readonly autoReload: AutoReloader;
+  private readonly qc: QueryClient;
 
-  constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey, autoReloadEnv?: Partial<AutoReloadEnv>) {
+  constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey, autoReloadEnv?: Partial<AutoReloadEnv>, qc: QueryClient = queryClient) {
     this.clientFor = clientFor;
+    this.qc = qc;
     this.autoReload = createAutoReloader({
       isStreaming: () => [...this.hubs.values()].some((hub) => hub.state.sessions.some((s) => s.streamingText != null)),
       ...autoReloadEnv,
     });
+    const refreshIfRunning = () => {
+      if (this.running) void this.refresh();
+    };
     this.hubs.set(
       LOCAL_DEVICE,
       new DeviceHub(
         LOCAL_DEVICE,
         this.clientFor(LOCAL_DEVICE),
         this.changed,
-        () => {
-          if (this.running) void this.refresh();
-        },
+        qc,
+        refreshIfRunning,
         (bootId) => this.autoReload.observeBoot(bootId),
+        refreshIfRunning,
       ),
     );
-    if (routed !== undefined && routed !== LOCAL_DEVICE) this.hubs.set(routed, new DeviceHub(routed, this.clientFor(routed), this.changed));
+    if (routed !== undefined && routed !== LOCAL_DEVICE) {
+      this.hubs.set(routed, new DeviceHub(routed, this.clientFor(routed), this.changed, qc));
+    }
     this.store = createStore<DevicesSnapshot>(() => this.build());
   }
 
@@ -560,18 +698,26 @@ export class DevicesStore {
 
   dispose(): void {
     this.running = false;
+    this.listGen++;
+    this.listController?.abort();
+    this.listController = null;
     clearTimeout(this.listTimer);
     this.autoReload.dispose();
     for (const hub of this.hubs.values()) hub.dispose();
   }
 
   refresh = async (): Promise<void> => {
+    if (!this.running) return;
     clearTimeout(this.listTimer);
+    this.listController?.abort();
+    const controller = new AbortController();
+    this.listController = controller;
+    const gen = ++this.listGen;
     let infos: readonly DeviceInfo[];
     try {
-      infos = (await fetchDevices()).devices;
+      infos = (await fetchDevices(controller.signal)).devices;
     } catch (err) {
-      if (!this.running) return;
+      if (!this.running || gen !== this.listGen) return;
       if (err instanceof ApiError && err.status === 404) {
         this.listAttempt = 0;
         this.managed = false;
@@ -581,8 +727,10 @@ export class DevicesStore {
       this.listTimer = setTimeout(() => void this.refresh(), reconnectDelay(this.listAttempt++));
       this.changed();
       return;
+    } finally {
+      if (this.listController === controller) this.listController = null;
     }
-    if (!this.running) return;
+    if (!this.running || gen !== this.listGen) return;
     this.listAttempt = 0;
     this.managed = true;
     this.setDevices(infos);
@@ -601,10 +749,17 @@ export class DevicesStore {
         this.hubs.delete(key);
       }
     }
-    for (const id of wanted) {
-      if (this.hubs.has(id)) continue;
-      const hub = new DeviceHub(id, this.clientFor(id), this.changed);
-      this.hubs.set(id, hub);
+    for (const info of infos) {
+      if (info.self) continue;
+      const existing = this.hubs.get(info.id);
+      if (existing !== undefined) {
+        if (!prevById.get(info.id)?.online && info.online && existing.state.phase === "error" && this.running) {
+          void existing.reload();
+        }
+        continue;
+      }
+      const hub = new DeviceHub(info.id, this.clientFor(info.id), this.changed, this.qc);
+      this.hubs.set(info.id, hub);
       if (this.running) hub.start();
     }
     this.changed();
@@ -616,7 +771,8 @@ function defaultClientFor(key: DeviceKey): HubClient {
 }
 
 export function useDevices() {
-  const [store] = useState(() => new DevicesStore(defaultClientFor, parseRoute(window.location.hash)?.device));
+  const qc = useHubQueryClient();
+  const [store] = useState(() => new DevicesStore(defaultClientFor, parseRoute(window.location.hash)?.device, undefined, qc));
   useEffect(() => {
     store.start();
     return () => store.dispose();

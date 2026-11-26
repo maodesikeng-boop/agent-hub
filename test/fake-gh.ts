@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { readJsonLog } from "./append-log.ts";
 import { writeExecutableNodeScript } from "./fake-cli-shim.ts";
 
 export interface FakeGhCall {
@@ -28,14 +28,5 @@ ${body}
 }
 
 export function readFakeGhCalls(root: string): FakeGhCall[] {
-  let text = "";
-  try {
-    text = readFileSync(join(root, "gh-calls.jsonl"), "utf8");
-  } catch {
-    return [];
-  }
-  return text
-    .split("\n")
-    .filter((line) => line !== "")
-    .map((line) => JSON.parse(line) as FakeGhCall);
+  return readJsonLog<FakeGhCall>(join(root, "gh-calls.jsonl"));
 }

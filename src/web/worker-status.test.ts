@@ -14,10 +14,10 @@ const line = (over: Partial<WorkerMessageMeta>): WorkerMessageMeta => ({
 });
 
 describe("workerStatusOf", () => {
-  it("做完了偏绿、有问题偏黄、放弃了偏红", () => {
-    expect(workerStatusOf(line({ status: "done" }))).toEqual({ tone: "success", label: "做完了" });
-    expect(workerStatusOf(line({ status: "problem" }))).toEqual({ tone: "warn", label: "有问题" });
-    expect(workerStatusOf(line({ status: "gave_up" }))).toEqual({ tone: "danger", label: "放弃了" });
+  it("done 偏绿、problem 偏黄、gave_up 偏红，使用英文 UI 标签", () => {
+    expect(workerStatusOf(line({ status: "done" }))).toEqual({ tone: "success", label: "Done" });
+    expect(workerStatusOf(line({ status: "problem" }))).toEqual({ tone: "warn", label: "Problem" });
+    expect(workerStatusOf(line({ status: "gave_up" }))).toEqual({ tone: "danger", label: "Gave up" });
   });
 
   it("这一轮出错、建 worktree 失败偏红，不看 status", () => {

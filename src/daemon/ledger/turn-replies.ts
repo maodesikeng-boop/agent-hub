@@ -54,8 +54,11 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
         }
         continue;
       }
-      const row = db.get<{ sender: string; conversation_id: ConversationId }>("SELECT sender, conversation_id FROM messages WHERE id = ?", id);
-      if (row?.sender !== "user" || row.conversation_id !== session.conversationId) continue;
+      const row = db.get<{ sender: string; conversation_id: ConversationId; session_id: SessionId | null }>(
+        "SELECT sender, conversation_id, session_id FROM messages WHERE id = ?",
+        id,
+      );
+      if (row?.sender !== "user" || row.conversation_id !== session.conversationId || row.session_id !== session.id) continue;
       const midTurn = event.type === "message.delivered" && event.midTurn === true;
       stateOf(session.id).deliveredAt.set(id, { mark: maxMessageId(), awaitingProcessing: midTurn });
     }

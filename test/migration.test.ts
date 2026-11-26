@@ -697,7 +697,7 @@ describe("0003_pm_conversation：从 M2 开发时的库升级", () => {
 
     const { messageId } = ledger.postUserMessage({ conversationId: 1, clientId: "c1", text: "在吗" });
     expect(db.get("SELECT session_id, status FROM messages WHERE id = ?", messageId)).toEqual({ session_id: 1, status: "queued" });
-    expect(db.get("SELECT params FROM actions WHERE type = 'session.send' AND dedupe_key = ?", String(messageId))).toEqual({
+    expect(db.get("SELECT params FROM actions WHERE type = 'session.send' AND dedupe_key = ?", `1:${messageId}`)).toEqual({
       params: JSON.stringify({ sessionId: 1, messageId, source: "user" }),
     });
 

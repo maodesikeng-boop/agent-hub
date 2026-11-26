@@ -1,12 +1,11 @@
 import { Loader2 } from "../ui/icons.ts";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   isSelectable,
   type AgentVendor,
   type ProviderJobSnapshot,
   type ProviderStatusItem,
 } from "../../shared/index.ts";
-import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import { errorText, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import {
@@ -20,17 +19,18 @@ import {
   extractProviderAuthTargets,
   isProviderAuthFlowActive,
   useCopyFeedback,
-  useProvidersSetting,
   visibleAuthMethodsForTarget,
-  type DeviceSettings,
   type ProvidersSettingModel,
 } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
-import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
-import { Input, Select } from "../ui/input.tsx";
+import { DialogFooter } from "../ui/dialog.tsx";
+import { Input } from "../ui/input.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Segmented } from "../ui/segmented.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
-import { VendorSyncSettings } from "./VendorSyncSettings.tsx";
+import { StatusShimmer } from "./StatusShimmer.tsx";
+import { useProviderSheet } from "../settings-drafts.ts";
+import { ProviderSheetChrome } from "./ProviderSheetChrome.tsx";
 
 function openExternalBrowserPage(url: string): void {
   try {
@@ -63,7 +63,7 @@ function JobLogDisclosure({ job, open }: { job: ProviderJobSnapshot | null; open
   return (
     <pre
       data-testid="provider-job-log"
-      className="mt-2.5 max-h-48 overflow-auto rounded-xl bg-sidebar p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
+      className="mt-2.5 max-h-48 overflow-auto rounded-sm bg-panel p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
     >
       {job.logTail}
     </pre>
@@ -100,7 +100,7 @@ function GitEnvironmentGroup({ model }: { model: ProvidersSettingModel }) {
               <div className="line-clamp-2 text-body">Git</div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-minor leading-snug text-muted-foreground">
                 {running ? (
-                  <span className="status-shimmer">{gitJob.progressLine ?? "Installing…"}</span>
+                  <StatusShimmer text={gitJob.progressLine ?? "Installing…"} />
                 ) : (
                   <span>Not installed</span>
                 )}
@@ -193,9 +193,7 @@ function ProviderItemRow({
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-minor leading-snug text-muted-foreground">
               {jobRunning ? (
-                <span className="status-shimmer">
-                  {job.progressLine ?? (job.kind === "update" ? "Updating…" : "Installing…")}
-                </span>
+                <StatusShimmer text={job.progressLine ?? (job.kind === "update" ? "Updating…" : "Installing…")} />
               ) : !item.installed ? (
                 <span>Not installed</span>
               ) : authenticated ? (
@@ -245,6 +243,7 @@ function ProviderItemRow({
               type="button"
               variant="outline"
               size="sm"
+              className="min-w-24"
               aria-label={`${jobFailed ? "Retry" : "Install"} ${item.label}`}
               disabled={!item.canInstall || busyKey === `install:${item.vendor}`}
               onClick={onInstall}
@@ -270,6 +269,7 @@ function ProviderItemRow({
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-w-24"
                 aria-label={`Account for ${item.label}`}
                 onClick={onOpenAccount}
               >
@@ -281,6 +281,7 @@ function ProviderItemRow({
               type="button"
               variant="outline"
               size="sm"
+              className="min-w-24"
               aria-label={`Sign in to ${item.label}`}
               onClick={onOpenSignIn}
             >
@@ -457,7 +458,7 @@ export function ProviderSignInBody({
     await runSubmit(async () => {
       const updated = await model.submitAuth(item.vendor, { flowId: activeFlow.flowId, input: manualInput.trim() });
       setManualInput("");
-      if (updated?.authFlow?.phase === "succeeded" || (updated && isSelectable(updated.availability))) onDone();
+      if (updated?.authFlow?.phase === "succeeded" || (updated && updated.authFlow?.phase !== "failed" && updated.authFlow?.phase !== "expired" && updated.availability === "available")) onDone();
     });
   };
 
@@ -569,18 +570,17 @@ function AuthTargetPicker({
   onChange: (targetId: string) => void;
 }) {
   const select = (id: string) => (
-    <Select
-      id={id}
-      {...(mobile ? { className: TOUCH_INPUT } : { variant: "plain" as const })}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {targets.map((t) => (
-        <option key={t.id} value={t.id}>
-          {t.configured ? `${t.label} (Configured)` : t.label}
-        </option>
-      ))}
+    <Select value={value} disabled={disabled} onValueChange={onChange}>
+      <SelectTrigger id={id} aria-label="Model provider" {...(mobile ? { className: TOUCH_INPUT } : { variant: "plain" as const })}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {targets.map((t) => (
+          <SelectItem key={t.id} value={t.id}>
+            {t.configured ? `${t.label} (Configured)` : t.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
     </Select>
   );
   if (mobile) {
@@ -659,7 +659,7 @@ function WaitingForBrowser() {
   return (
     <div className="flex items-center gap-2 text-minor text-muted-foreground">
       <Loader2 className="size-pixel shrink-0" aria-hidden="true" />
-      <span className="status-shimmer">Waiting for browser…</span>
+      <StatusShimmer text="Waiting for browser…" />
     </div>
   );
 }
@@ -805,7 +805,7 @@ function DeviceCodePanel(props: SignInPanelProps & { codeCopy: CopyFeedback }) {
   return (
     <div className="grid grid-cols-1 gap-4">
       {userCode ? (
-        <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-sidebar px-4 py-3">
+        <div className="flex items-center justify-between gap-3 rounded-sm bg-panel px-4 py-3">
           <code data-testid="device-user-code" className="font-mono text-title font-semibold tracking-wider select-all">
             {userCode}
           </code>
@@ -895,7 +895,7 @@ export function ProviderAccountBody({
         <div data-slot="settings-row" className="px-4 py-3">
           <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2">
             <div className="flex min-w-32 flex-1 items-start gap-3">
-              <span aria-hidden="true" className="mt-2 size-2 shrink-0 rounded-full bg-success" />
+              <span aria-hidden="true" className="mt-2 size-2 rounded-full shrink-0 bg-success" />
               <div className="min-w-0 flex-1 break-words">
                 <div className="text-body">{item.accountSummary ?? "Signed in"}</div>
                 {item.version && (
@@ -1028,17 +1028,17 @@ export function ProvidersListSection({
         <SettingsGroup label="Computer">
           <SettingsRow label="Computer">
             {(id) => (
-              <Select
-                id={id}
-                variant="plain"
-                value={model.deviceKey}
-                onChange={(e) => model.selectDevice(e.target.value)}
-              >
-                {model.selectableComputers.map((d) => (
-                  <option key={d.key} value={d.key}>
-                    {d.info.self ? "This computer" : d.info.name}
-                  </option>
-                ))}
+              <Select value={model.deviceKey} onValueChange={(next) => model.selectDevice(next)}>
+                <SelectTrigger id={id} aria-label="Computer" variant="plain">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {model.selectableComputers.map((d) => (
+                    <SelectItem key={d.key} value={d.key}>
+                      {d.info.self ? "This computer" : d.info.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             )}
           </SettingsRow>
@@ -1050,18 +1050,10 @@ export function ProvidersListSection({
       <SettingsGroup
         {...(hasExtraTopGroup ? { title: "Providers" } : readyCount === null ? { label: "Providers" } : { title: `${readyCount} ready`, label: "Providers" })}
         action={
-          <span className="-mr-3 ml-auto flex items-center">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={model.loading || model.refreshing}
-              onClick={() => void model.refresh()}
-            >
-              {model.refreshing && <Loader2 aria-hidden="true" />}
-              Refresh
-            </Button>
-          </span>
+          <Button type="button" variant="outline" size="sm" className="min-w-24" disabled={model.loading || model.refreshing} onClick={() => void model.refresh()}>
+            {model.refreshing && <Loader2 aria-hidden="true" />}
+            Refresh
+          </Button>
         }
       >
         {model.loading && !model.status ? (
@@ -1093,84 +1085,38 @@ export function ProvidersListSection({
   );
 }
 
-type ModalState =
-  | { mode: "signin"; vendor: AgentVendor }
-  | { mode: "account"; vendor: AgentVendor }
-  | null;
-
-export function ProvidersSettings({
-  active = true,
-  devices = null,
-  defaultDeviceKey = LOCAL_DEVICE,
-}: {
-  active?: boolean;
-  devices?: DeviceSettings | null;
-  defaultDeviceKey?: DeviceKey;
+export function ProvidersSettings({ mobile, model, vendorSync }: {
+  mobile: boolean;
+  model: ProvidersSettingModel;
+  vendorSync: ReactNode;
 }) {
-  const model = useProvidersSetting({
-    enabled: active,
-    devices: devices?.devices ?? null,
-    defaultDeviceKey,
-  });
-  const [modal, setModal] = useState<ModalState>(null);
-
-  const modalItem = useMemo(
-    () => (modal === null ? null : (model.status?.providers.find((p) => p.vendor === modal.vendor) ?? null)),
-    [modal, model.status],
-  );
-
-  const handleDialogOpenChange = useCallback(
-    (open: boolean) => {
-      if (open) return;
-      if (
-        modal?.mode === "signin" &&
-        modalItem?.authFlow &&
-        isProviderAuthFlowActive(modalItem.authFlow.phase) &&
-        !modalItem.authFlow.ownedByOtherClient
-      ) {
-        void model.cancelAuth(modalItem.vendor, { flowId: modalItem.authFlow.flowId });
-      }
-      setModal(null);
-    },
-    [modal, modalItem, model],
-  );
-
+  const { sheet, open, close, setMode } = useProviderSheet();
+  const item = sheet !== null && sheet.deviceKey === model.deviceKey
+    ? model.status?.providers.find((provider) => provider.vendor === sheet.vendor) : undefined;
+  const closeByUser = () => {
+    const flow = item?.authFlow;
+    if (sheet?.mode === "signin" && item && flow && isProviderAuthFlowActive(flow.phase) && !flow.ownedByOtherClient) {
+      void model.cancelAuth(item.vendor, { flowId: flow.flowId }).catch(() => null);
+    }
+    close();
+  };
   return (
     <>
       <ProvidersListSection
         model={model}
-        onOpenSignIn={(vendor) => setModal({ mode: "signin", vendor })}
-        onOpenAccount={(vendor) => setModal({ mode: "account", vendor })}
+        onOpenSignIn={(vendor) => open({ mode: "signin", vendor, deviceKey: model.deviceKey })}
+        onOpenAccount={(vendor) => open({ mode: "account", vendor, deviceKey: model.deviceKey })}
       />
-
-      <VendorSyncSettings client={model.targetClient} />
-
-      <Dialog open={modal !== null && modalItem !== null} onOpenChange={handleDialogOpenChange}>
-        {modal !== null && modalItem !== null && (
-          <DialogContent
-            title={modal.mode === "signin" ? `Sign in to ${modalItem.label}` : modalItem.label}
-            className="max-w-110"
-          >
-            {modal.mode === "signin" ? (
-              <ProviderSignInBody
-                key={`${modalItem.vendor}:${model.deviceKey}`}
-                item={modalItem}
-                model={model}
-                onDone={() => setModal(null)}
-                onCancel={() => setModal(null)}
-              />
-            ) : (
-              <ProviderAccountBody
-                key={`account:${modalItem.vendor}:${model.deviceKey}`}
-                item={modalItem}
-                model={model}
-                onSwitchAccount={() => setModal({ mode: "signin", vendor: modalItem.vendor })}
-                onClose={() => setModal(null)}
-              />
-            )}
-          </DialogContent>
-        )}
-      </Dialog>
+      {vendorSync}
+      {sheet !== null && item !== undefined && (
+        <ProviderSheetChrome mobile={mobile} title={sheet.mode === "signin" ? `Sign in to ${item.label}` : item.label} onClose={closeByUser}>
+          {sheet.mode === "signin" ? (
+            <ProviderSignInBody key={`${item.vendor}:${model.deviceKey}`} item={item} model={model} mobile={mobile} onDone={close} onCancel={close} />
+          ) : (
+            <ProviderAccountBody key={`${item.vendor}:${model.deviceKey}`} item={item} model={model} mobile={mobile} onSwitchAccount={() => setMode("signin")} onClose={close} />
+          )}
+        </ProviderSheetChrome>
+      )}
     </>
   );
 }

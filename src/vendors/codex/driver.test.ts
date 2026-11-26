@@ -1,9 +1,10 @@
 // OpenAI Codex App-Server 驱动层测试：覆盖握手、流式事件、恢复回退、打断与 Worker 记忆保护审批。
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import {
   EMPTY_TOKEN_USAGE,
   buildReadonlyPolicy,
@@ -45,6 +46,7 @@ class MemorySessionStore implements SessionStore {
 }
 
 export interface FakeCodexTurnScript {
+  interruptOnSigint?: boolean;
   /** 收到 turn/start 后如果为 true 则等待 turn/interrupt 才发 turn/completed(interrupted)。 */
   waitForInterrupt?: boolean;
   /** 如果为 true，收到 turn/interrupt 也不回 turn/completed（测超时强杀）。 */
@@ -185,7 +187,11 @@ function send(obj) {
 
 process.on("SIGINT", () => {
   appendLog({ kind: "signal", signal: "SIGINT" });
-  process.exit(0);
+  if (currentTurn?.turnScript.interruptOnSigint) {
+    currentTurn.aborted = true;
+    completeTurn(currentTurn.threadId, currentTurn.turnId, "interrupted");
+  }
+  process.stdout.write("", () => process.exit(0));
 });
 
 let turnIndex = 0;
@@ -575,6 +581,8 @@ function makeCodexHarness(
     script?: FakeCodexScript;
     driver?: Partial<CodexDriverOptions>;
     personaRevision?: () => number;
+    capabilityFingerprint?: () => Promise<string>;
+    sandboxMode?: () => LaunchFiles["outerSandbox"];
     /** 数据目录放在临时目录下的这个子目录里（默认就是临时目录本身）：真包 OS 沙箱时，假 codex 的日志、剧本得在数据目录外。 */
     dataDirName?: string;
     /** 假 codex 启动时试着往数据目录里写这个文件（FAKE_CODEX_PROBE），结果记进日志。 */
@@ -616,7 +624,14 @@ function makeCodexHarness(
         },
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
+      if (options.sandboxMode) files.outerSandbox = options.sandboxMode();
       if (options.personaRevision) files.personaRevision = options.personaRevision();
+      if (options.capabilityFingerprint) {
+        files.capabilityCheck = {
+          fingerprint: await options.capabilityFingerprint(),
+          currentFingerprint: options.capabilityFingerprint,
+        };
+      }
       if (options.skills && session.role === "pm") files.skillsDir = join(launchDir, "skills");
       // 数据目录默认是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
       const writeScope = workerWriteScope({ role: session.role, dataDir, cwd: session.cwd });
@@ -656,13 +671,7 @@ function makeCodexHarness(
       check();
     });
 
-  const log = (): FakeCodexLogEntry[] =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .split("\n")
-          .filter(Boolean)
-          .map((l) => JSON.parse(l) as FakeCodexLogEntry)
-      : [];
+  const log = () => readJsonLog<FakeCodexLogEntry>(logFile);
 
   const addSession = (patch: Partial<AgentSessionRow> = {}): AgentSessionRow => {
     const id = nextSessionId++;
@@ -762,7 +771,7 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
 
     // 1. 检查启动命令参数
     const argvEntry = t.log().find((e) => e.kind === "argv");
-    expect(argvEntry?.argv).toEqual(["app-server", "--listen", "stdio://"]);
+    expect(argvEntry?.argv).toEqual(["-c", "tools.update_plan.enabled=true", "app-server", "--listen", "stdio://"]);
 
     // 2. 检查握手与请求顺序
     const rpcs = t.rpcIn();
@@ -1424,6 +1433,33 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
     expect(policies[2]).toBeUndefined();
   });
 
+  it("starts an approved Worker without the outer wrapper and preserves the native sandbox and driver checks", async () => {
+    const scopes: (LaunchFiles["writeScope"] | null)[] = [];
+    const t = makeCodexHarness({
+      sandboxMode: () => "vendor_only",
+      driver: {
+        platform: "darwin",
+        writeScopeSpawn: (base, scope) => {
+          scopes.push(scope);
+          return { ...base, osSandboxed: scope !== null };
+        },
+      },
+    });
+    const worker = t.addSession({ role: "worker", workerId: 3, addDirs: [join(t.dir, "state")] });
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [{
+      serverRequests: [{ id: 7, method: "item/commandExecution/requestApproval", params: {
+        itemId: "command-1", command: `touch ${join(t.dir, "state", "protected")}`, cwd: worker.cwd,
+      } }],
+    }] } satisfies FakeCodexScript));
+    await t.driver.send(worker.id, user(1, "Check the window"));
+    await t.waitFor("turn.ended");
+    expect(scopes).toEqual([null]);
+    expect(t.rpcIn().find((rpc) => rpc.method === "turn/start")?.params).toMatchObject({
+      sandboxPolicy: { type: "workspaceWrite", networkAccess: true, writableRoots: [worker.cwd] },
+    });
+    expect(t.rpcIn().find((rpc) => rpc.id === 7 && rpc.method === undefined)?.result).toEqual({ decision: "decline" });
+  });
+
   it("Worker 的 turn/start 沙箱：writableRoots 只留自己的目录和数据目录外的附加目录", async () => {
     const t = makeCodexHarness();
     const outside = mkdtempSync(join(tmpdir(), "agent-hub-codex-outside-"));
@@ -1622,6 +1658,26 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
     expect(methods(t).filter((m) => m === "turn/start")).toHaveLength(1);
   });
 
+  it("queues a message after capabilities change and sends it on the resumed thread", async () => {
+    let fingerprint = "before";
+    const t = makeCodexHarness({ capabilityFingerprint: async () => fingerprint });
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [holdTurn(t.dir)] }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("agent.tool");
+
+    fingerprint = "after";
+    await expect(t.driver.send(s.id, user(2, "Use the new capability"))).resolves.toEqual({ kind: "queued" });
+    expect(methods(t)).not.toContain("turn/steer");
+    expect(t.of("message.delivered").map((event) => event.messageIds)).toEqual([[1]]);
+
+    release(t.dir);
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1], ok: true });
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ messageIds: [2], ok: true });
+    expect(methods(t)).toContain("thread/resume");
+    expect(methods(t)).not.toContain("turn/steer");
+  });
+
   it("连发两条：各一个 turn/steer，不拼成一条，同一轮都取走", async () => {
     const t = steerHarness((dir) => [holdTurn(dir)]);
     const s = t.addSession();
@@ -1662,6 +1718,43 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
     expect(await t.waitFor("turn.ended", () => true, 2)).toMatchObject({ messageIds: [2] });
     const starts = t.rpcIn().filter((r) => r.method === "turn/start");
     expect((starts[1]!.params as { input: Array<{ text: string }> }).input).toEqual([{ type: "text", text: "插一句" }]);
+  });
+
+  it("checks a system delivery note before steering into an active turn", async () => {
+    const t = makeCodexHarness({ driver: { canDeliverSystemMessage: () => false } });
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [holdTurn(t.dir)] }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("agent.tool");
+    await t.driver.send(s.id, { messageIds: [2], source: "system", text: "Outdated delivery note" });
+    expect(methods(t)).not.toContain("turn/steer");
+    release(t.dir);
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1] });
+  });
+
+  it.each(["confirmed", "pending", "silent close"])("preserves a %s Codex steer on daemon shutdown", async (kind) => {
+    const t = steerHarness((dir) => [holdTurn(dir, {
+      interruptOnSigint: kind !== "silent close",
+      ...(kind === "pending" ? { deferSteerReply: "error" } : {}),
+    })]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("agent.tool");
+    const sending = t.driver.send(s.id, user(2, "Follow up")).catch((error: unknown) => error);
+    if (kind === "pending") await vi.waitFor(() => expect(methods(t)).toContain("turn/steer"), { timeout: 10_000 });
+    else expect(await sending).toEqual({ kind: "written", midTurn: true });
+    await t.driver.shutdown();
+    if (kind === "silent close") {
+      expect(t.of("session.exited")).toContainEqual(expect.objectContaining({ reason: "shutdown", messageIds: [1] }));
+    } else {
+      expect(t.of("turn.ended")).toContainEqual(expect.objectContaining({ shutdown: true, messageIds: [1] }));
+    }
+    expect(t.of("message.cancelled")).toEqual([]);
+    if (kind !== "pending") {
+      expect(t.of("message.requeued")).toContainEqual(expect.objectContaining({ messageIds: [2] }));
+    } else {
+      expect(await sending).toMatchObject({ code: "spawn_failed", retryable: true });
+    }
   });
 
   it("停止：turn/completed interrupted 时 steer 了没读到的标已取消（message.cancelled stop），不重发", async () => {
@@ -2093,6 +2186,24 @@ describe("CodexDriver 流式补丁文件路径早捕获", () => {
 });
 
 describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
+  it("preserves a previous context after a quota failure with zero token usage", async () => {
+    const total = { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 500 };
+    const t = makeCodexHarness({ script: { turns: [
+      { messageDeltas: ["Working"], tokenUsage: { last: total, total } },
+      { status: "failed", errorMessage: "HTTP 429 quota exceeded", tokenUsage: {
+        last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 1 },
+        total: { ...total, outputTokens: 501 },
+      } },
+    ] } });
+    const row = t.addSession();
+    await t.driver.send(row.id, user(101, "Start"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(row.id)?.usage.context).toBe(118_111);
+    await t.driver.send(row.id, user(102, "Continue"));
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ ok: false });
+    expect(t.store.get(row.id)?.usage.context).toBe(118_111);
+  });
+
   it("含大额缓存命中时 context 等于真实 inputTokens（118111），绝不把 cachedInputTokens 再加一遍", async () => {
     const t = makeCodexHarness({
       script: {
@@ -2465,6 +2576,36 @@ describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
     writeFileSync(holdFile, "go");
     await t.waitFor("turn.ended");
     expect(t.store.get(s.id)!.usage).toEqual({ input: 15_000, cacheRead: 110_000, cacheWrite: 0, output: 500, context: 65_000 });
+  });
+
+  it("冷启动 prepareLaunch 期间 isBusy 为真；end() 介入后抛 session_ended 且不发 turn/start", async () => {
+    let releasePrepare!: () => void;
+    let enteredPrepare!: () => void;
+    const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+    const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+
+    const t = makeCodexHarness({
+      driver: {
+        prepareLaunch: async (session) => {
+          enteredPrepare();
+          await prepareGate;
+          const promptFile = join(t.dir, `prompt-${session.id}.md`);
+          writeFileSync(promptFile, "hi");
+          return { promptFile, env: {}, fingerprint: "fp-codex-race" };
+        },
+      },
+    });
+    const s = t.addSession();
+    const sendPromise = t.driver.send(s.id, user(1, "hello"));
+    await prepareEntered;
+    expect(t.driver.isBusy(s.id)).toBe(true);
+
+    const endPromise = t.driver.end(s.id);
+    releasePrepare();
+    await expect(sendPromise).rejects.toThrow(/session_ended/);
+    await endPromise;
+    expect(t.driver.isBusy(s.id)).toBe(false);
+    expect(t.rpcIn().filter((r) => r.method === "turn/start")).toHaveLength(0);
   });
 });
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

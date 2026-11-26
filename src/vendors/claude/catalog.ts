@@ -88,6 +88,10 @@ export async function queryClaudeModels(options: ClaudeModelQueryOptions): Promi
 }
 
 export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise<Record<string, unknown>> {
+  return queryClaudeControl(options);
+}
+
+export function queryClaudeControl(options: ClaudeModelQueryOptions, afterInitialize?: "get_usage"): Promise<Record<string, unknown>> {
   const { claudePath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   const args = [...INITIALIZE_QUERY_ARGS];
   for (const dir of options.addDirs ?? []) args.push("--add-dir", dir);
@@ -104,8 +108,8 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
       return reject(err);
     }
     const { child, detached } = spawned;
-    trackChild(child, "probe:claude-initialize", { detached });
-    const requestId = `initialize-${randomUUID()}`;
+    trackChild(child, afterInitialize === "get_usage" ? "probe:claude-quota" : "probe:claude-initialize", { detached });
+    let requestId = `initialize-${randomUUID()}`;
     let stderr = "";
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
@@ -152,8 +156,14 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
       const o = obj as { type?: unknown; response?: { subtype?: unknown; request_id?: unknown; error?: unknown; response?: unknown } };
       if (o?.type !== "control_response" || o.response?.request_id !== requestId) return;
       const body = o.response.response;
-      if (o.response.subtype === "success") finish(null, typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {});
-      else finish(new Error(`claude 回了错误：${typeof o.response.error === "string" ? o.response.error : JSON.stringify(o.response)}`));
+      if (o.response.subtype !== "success") {
+        finish(new Error(`claude 回了错误：${typeof o.response.error === "string" ? o.response.error : JSON.stringify(o.response)}`));
+      } else if (afterInitialize && requestId.startsWith("initialize-")) {
+        requestId = afterInitialize;
+        child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: afterInitialize } })}\n`);
+      } else {
+        finish(null, typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {});
+      }
     });
     child.stdin.write(`${buildInitializeLine(requestId)}\n`);
   });
@@ -207,24 +217,34 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
   });
 }
 
+const CLAUDE_MANAGED_KEY_ENVS: readonly string[] = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
+
+function hasClaudeKeyEnv(env: Record<string, string | undefined> | undefined): boolean {
+  if (!env) return false;
+  return CLAUDE_MANAGED_KEY_ENVS.some((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.trim() !== "";
+  });
+}
+
 export const claudeCatalogProbe: VendorCatalogProbe = {
   parse: (raw) => parseInitializeModels((raw as { models?: unknown } | null)?.models),
-  availabilityOf(raw) {
-    const account = (raw as { account?: { email?: unknown; organization?: unknown } } | null)?.account;
-    // Signed-out accounts may still carry apiProvider, so check identity fields only.
-    const identity = [account?.email, account?.organization].some((v) => typeof v === "string" && v.trim() !== "");
-    return identity ? "available" : "unknown";
+  availabilityOf() {
+    // initialize reads oauthAccount from .claude.json even when credentials are missing or failed to save.
+    return "unknown";
   },
 };
 
 export function createClaudeCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
+  const resolveEnv = () => (typeof options.env === "function" ? options.env() : options.env);
   const resolveOpts = () => {
     const claudePath = typeof options.path === "function" ? options.path() : options.path;
-    const env = typeof options.env === "function" ? options.env() : options.env;
+    const env = resolveEnv();
     return { claudePath, cwd: options.cwd, ...(env ? { env } : {}) };
   };
   return {
     ...claudeCatalogProbe,
+    availabilityOf: () => (hasClaudeKeyEnv(resolveEnv()) ? "available" : "unknown"),
     query: (signal) => queryClaudeInitialize({ ...resolveOpts(), signal }),
     confirm: (signal) => queryClaudeAuthStatus({ ...resolveOpts(), signal }),
     installed: options.installed,

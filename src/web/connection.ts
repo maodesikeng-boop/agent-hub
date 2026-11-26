@@ -63,6 +63,7 @@ export function parseServerMessage(data: unknown): WsServerMessage | null {
   if (typeof value !== "object" || value === null) return null;
   const { type, seq } = value as { type?: unknown; seq?: unknown };
   if (type === "resync") return { type: "resync" };
+  if (type === "account.updated") return { type: "account.updated" };
   if (!isChangeSequence(seq) || !(CHANGE_TYPES as readonly unknown[]).includes(type)) return null;
   return value as WsServerMessage;
 }

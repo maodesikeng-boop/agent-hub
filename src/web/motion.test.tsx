@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../shared/index.ts";
 import { MessageList } from "./components/MessageList.tsx";
 import type { MessageActions } from "./components/Messages.tsx";
-import { useRoute } from "./route.ts";
+import { useWorkbenchNav } from "./workbench-nav.ts";
 import type { PendingMessage } from "./state.ts";
 import { makeMessage, makeUserMessage } from "./test-utils.ts";
 
@@ -92,10 +92,10 @@ describe("新消息淡入", () => {
     expect(entering()).toHaveLength(0);
   });
 
-  it("保留的动效变量与样式：.message-enter 淡入、--motion-tint 换人底色过渡、.status-shimmer 流光", () => {
+  it("保留的动效变量与样式：.message-enter 淡入、.status-shimmer 流光", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).toMatch(/--motion-enter: 120ms;/);
-    expect(css).toMatch(/--motion-tint: 300ms;/);
+    expect(css).not.toContain("--motion-tint");
     expect(css).toMatch(/@keyframes message-enter \{\s*from \{\s*opacity: 0;\s*transform: translateY\(4px\);/);
     expect(css).toMatch(/\.message-enter \{\s*animation: message-enter var\(--motion-enter\) ease-out;\s*\}/);
     expect(css).toMatch(/\.status-shimmer/);
@@ -108,13 +108,13 @@ describe("切换对话：零过渡动效", () => {
     const start = vi.fn((cb: () => void) => cb());
     Object.defineProperty(document, "startViewTransition", { configurable: true, value: start });
     try {
-      const { result } = renderHook(() => useRoute());
-      act(() => result.current.replace({ view: "conversation", id: 1 }));
-      act(() => result.current.navigate({ view: "conversation", id: 2 }));
-      act(() => result.current.navigate({ view: "worker", id: 3 }));
-      act(() => result.current.navigate({ view: "profile", pmId: 1 }));
+      const { result } = renderHook(() => useWorkbenchNav());
+      act(() => result.current.replacePage({ view: "conversation", id: 1 }));
+      act(() => result.current.openPage({ view: "conversation", id: 2 }));
+      act(() => result.current.openPage({ view: "worker", id: 3 }));
+      act(() => result.current.openPage({ view: "profile", pmId: 1 }));
       expect(start).not.toHaveBeenCalled();
-      expect(result.current.route).toEqual({ view: "profile", pmId: 1 });
+      expect(result.current.nav.page).toEqual({ view: "profile", pmId: 1 });
     } finally {
       delete (document as { startViewTransition?: unknown }).startViewTransition;
     }

@@ -25,8 +25,8 @@ A PR that edits `REVIEW.md` cannot change the rules it is reviewed against. If `
 Start each finding in the report's "问题" field with one tag:
 
 - `[Important]`: a real crash, a security or sandbox escape, data loss or corruption, or a broken contract between two components. Only an `[Important]` finding can make the verdict `FAIL`.
-- `[Nit]`: naming, style, or a small detail. The verdict is `PASS+NOTES`, never `FAIL`.
-- `[Pre-existing]`: the problem is already on `main` and this PR did not add it. It never blocks the PR.
+- `[Nit]`: naming, style, or a small detail. Note it in the report's "问题" field and judge `PASS`, never `FAIL`.
+- `[Pre-existing]`: the problem is already on `main` and this PR did not add it. Note it in the report's "问题" field and judge `PASS`, never `FAIL`.
 
 A follow-up review (round 2 or later) checks the open `[Important]` findings from the last round and the diff since the last reviewed commit. It does not review untouched files again. After 3 rounds with an open `[Important]`, stop and hand the decision to a person.
 
@@ -38,13 +38,13 @@ A follow-up review (round 2 or later) checks the open `[Important]` findings fro
 
 ## Paths that require a review stamp
 
-A PR that changes any path below merges into `main` only after an independent review step judges `PASS` or `PASS+NOTES` on its head commit. The Bellwood daemon then posts the `bellwood/review` commit status, and branch protection requires that status. `.github/workflows/review-stamp.yml` reads this list from `main` and posts `bellwood/review` as success itself when a PR touches none of these paths. A new push changes the head commit, so it needs a new review. Patterns match like `Trigger:` patterns.
+A PR that changes any path below merges into `main` only after an independent review step judges `PASS` on its head commit. After that review passes, the Project Manager posts the `bellwood/review` `success` commit status on the head commit with `node scripts/post-review-stamp.ts <PR> --sha <HEAD_SHA> [--account <login>]`, and branch protection requires that status. `.github/workflows/review-stamp.yml` reads this list from `main` and posts `bellwood/review` as `success` itself when a PR touches none of these paths. A new push changes the head commit, so it needs a new review. Patterns match like `Trigger:` patterns.
 
 - Sandboxes and write scopes: `src/daemon/driver/write-scope.ts`, `src/shared/write-scope.ts`, `src/shared/readonly-policy.ts`, `src/daemon/platform/**`, `apps/windows/crates/fusa-win-helper/**`, `scripts/linux-sandbox-setup.sh`
 - Vendor launch arguments: `src/vendors/*/protocol.ts`, `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/*/capabilities.ts`, `src/vendors/_common/acp/**`
 - Ledger storage and schema: `src/daemon/store/**`, `migrations/**`
 - Device trust, relay, and Feishu: `src/daemon/mesh/**`, `src/relay/**`, `src/daemon/feishu/**`
-- Review mechanism and its gate: `src/shared/review.ts`, `REVIEW.md`, `.github/**`, `scripts/review-stamp-gate.ts`, `src/daemon/git/review-status.ts`, `src/daemon/ledger/workers/review-stamp.ts`, `src/daemon/ledger/task-graphs/review-stamp.ts`
+- Review mechanism and its gate: `src/shared/review.ts`, `REVIEW.md`, `.github/**`, `scripts/review-stamp-gate.ts`, `scripts/post-review-stamp.ts`
 - Release and packaging: `scripts/stage-*.ts`, `scripts/build-*.sh`, `scripts/release*.ts`
 
 ## Rules
@@ -107,27 +107,27 @@ Seen in: `43d70fad`, `18e2fa2b`/`7df95c32`, `8023745a`/`edcac7bb`, `50ac3399`
 
 ### Growing data has a cap in limits.ts
 
-Trigger: `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/ui-server/**`, `src/daemon/*checker*.ts`, `src/shared/snapshot.ts`, `src/shared/limits.ts`
+Trigger: `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/ui-server/**`, `src/daemon/*checker*.ts`, `src/shared/snapshot.ts`, `src/shared/limits.ts`, `src/web/limits.ts`, `vitest.config.ts`, `vite.config.ts`
 
-Check: Queues, in-memory collections, API responses, and command output that grow over time have a cap from `src/shared/limits.ts`. Size the cap for one month of use (300 finished Workers, 30,000 messages, 50,000 step logs). Large responses use compression. An external HTTP body is read as a stream and cancelled once it passes its byte cap, since `Content-Length` can be missing.
+Check: Queues, in-memory collections, API responses, and command output that grow over time have a cap from `src/shared/limits.ts`. Size the cap for one month of use (300 finished Workers, 30,000 messages, 50,000 step logs). Large responses use compression. An external HTTP body is read as a stream and cancelled once it passes its byte cap, since `Content-Length` can be missing. Keep backend and cross-layer caps in `src/shared/limits.ts`, put web-only UI constants in `src/web/limits.ts`, and never import `src/shared/limits.ts` from `vitest.config.ts` or `vite.config.ts`.
 
 Seen in: `2bdf6ff9`, `eb0386bd`, `4ba0f65d`, `50b3d57a`
 
 ### Front-end selectors return stable references
 
-Trigger: `src/web/selectors.ts`, `src/web/shell-model.ts`, `src/web/device-hub.ts`, `src/web/**/use*.ts`, `src/web/**/use*.tsx`
+Trigger: `src/web/App.tsx`, `src/web/selectors.ts`, `src/web/shell-model.ts`, `src/web/device-hub.ts`, `src/web/**/use*.ts`, `src/web/**/use*.tsx`
 
-Check: A selector or hook returns the same reference while its input is unchanged, for example through a `WeakMap` keyed on the input object, so it does not break `memo` in child components. A new selector has a case in `src/web/selectors-cache.test.ts`.
+Check: A selector or hook returns the same reference while its input is unchanged, for example through a `WeakMap` keyed on the input object, so it does not break `memo` in child components. Parent shell components (such as `App.tsx`) memoize JSX slots (`toolbar`, `leading`, `notices`), objects, and callbacks passed to `memo` children (`Conversation`, `DraftComposer`, `ProjectList`, `RailGroups`) directly or through pane wrappers; `src/web/streaming.test.tsx` asserts zero re-renders on background Worker pulses, and a new selector has a case in `src/web/selectors-cache.test.ts`.
 
-Seen in: `43d70fad`, `473db164`, `0fc0e181`
+Seen in: `43d70fad`, `473db164`, `0fc0e181`, `f52e5e95`, `9dd20f40`
 
 ### Stale in-flight queries never overwrite fresh mutations
 
-Trigger: `src/web/**`, `src/daemon/actions/**`, `src/daemon/ledger/workers/review-stamp.ts`, `src/daemon/ledger/task-graphs/review-stamp.ts`
+Trigger: `src/web/**`, `src/daemon/actions/**`
 
-Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them, but it cannot tell whether every write path advances the generation. On the daemon, a queued or retried action that publishes a result (a review verdict, a commit status) checks when it runs that its source is still the latest (same Worker, same report, no newer action) and drops itself otherwise, and actions that write the same target run on one lane.
+Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; whenever a mutation claims a ticket (`latest`) without advancing `gen`, advance both counters from `Math.max(gen, latest) + 1` so an invalidation cannot collide with or regress past an in-flight ticket. `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them or mixes decoupled `.latest` writes with `.latest = .gen` or direct increments, though it cannot tell whether every write path advances the generation. On the daemon, a queued or retried action that publishes a result checks when it runs that its source is still the latest (same Worker, same report, no newer action) and drops itself otherwise, and actions that write the same target run on one lane.
 
-Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`, `9f2269fa`
+Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`, `9f2269fa`, `c8241fe9`
 
 ### Interface changes come with a real-browser render
 
@@ -136,6 +136,14 @@ Trigger: `src/web/components/**`, `src/web/ui/**`, `src/web/styles.css`, `src/we
 Check: The PR shows the changed screen rendered in a real browser (`pnpm verify`, `pnpm ui:polish`, or a Playwright screenshot), not only jsdom tests. Spacing, radius, type size, color, and focus states follow `docs/ui-standard.md`.
 
 Seen in: `0fc0e181`, `a55ca6f0`
+
+### A rewrite keeps what the old code guaranteed
+
+Trigger: `src/web/**`
+
+Check: When a PR replaces, moves, or rebuilds a component, hook, or layout path, every guarantee of the old version survives or the PR body names it as intentionally dropped: fallbacks for unknown values (such as an unknown vendor), read-only and archived states, actions (such as a diff view), and the performance limits its guards enforced. Every test case or guard the diff deletes is replaced by an equivalent check in the same PR. Bringing back a technique that a guard banned comes with before and after numbers showing that the regression the guard blocked does not return.
+
+Seen in: `9dd20f40`, #436
 
 ### The relay trusts only CF-Connecting-IP and resists flushing
 

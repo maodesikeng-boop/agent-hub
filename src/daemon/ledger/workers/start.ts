@@ -4,6 +4,7 @@ import type { HubArgs, HubResult, ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { MAX_TASK_BYTES, TAKEOVER_PREDECESSORS_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
+import { reviewTakeoverWorkspaceNote } from "../../../shared/review.ts";
 import { splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
 import { SETUP_RECEIPT_NOTE, WORKER_READONLY_NOTE, buildWorkerFirstMessage } from "../../prompt.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../../driver/write-scope.ts";
@@ -38,7 +39,9 @@ import {
 } from "./create.ts";
 import { endOpenUpstreamIn, endWorkerIn, type EndedWorker } from "./lifecycle.ts";
 import { isWorkerInFlight } from "./lines.ts";
+import { cancelQueuedWorkerPmNoticesIn } from "./stale-notices.ts";
 import { WORKTREE_DIRTY_NOTE, describeWorkspace, newReviewJson, notStarted, validMaxTimeMs, validTask } from "./text.ts";
+import { requireSandboxRequest } from "./sandbox.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
 type StartArgs = HubArgs<"worker.start">;
@@ -46,7 +49,7 @@ type Takeover = ReturnType<typeof planTakeover>;
 type ReviewPlan = Extract<StepWorkspacePlan, { kind: "review" }>;
 type UpstreamInherit = Extract<StepWorkspacePlan, { kind: "inherit" }>;
 type StartTask = { title: string; task: string; pmNote: string | null; stepHasBrief: boolean };
-type StartAgent = { vendor: AgentVendor; model: string | null; effort: string | null; readonly: boolean; capabilities: WorkerCapabilities };
+type StartAgent = { vendor: AgentVendor; model: string | null; effort: string | null; inherited: { model: string | null; effort: string | null }; readonly: boolean; capabilities: WorkerCapabilities };
 type StartWorkspace = {
   reviewPlan: ReviewPlan | null;
   inherit: WorkerDbRow | null;
@@ -127,9 +130,11 @@ function resolveStartAgent(w: WorkersCtx, caller: PmCaller, args: StartArgs, bin
   const reuseStepModel = bindTarget !== undefined && args.vendor === undefined && bindTarget.vendor === vendor;
   const givenModel = typeof args.model === "string" ? args.model.trim() || null : reuseStepModel ? bindTarget.model : null;
   const givenEffort = typeof args.effort === "string" ? args.effort.trim() || null : reuseStepModel ? bindTarget.effort : null;
-  const { model, effort } = checkedModelEffort(w, vendor, givenModel, givenEffort);
+  const inherited =
+    vendor === caller.vendor ? splitModelEffort(vendor, caller.model, caller.effort, w.ctx.modelCatalog(vendor)) : { model: null, effort: null };
+  const { model, effort } = checkedModelEffort(w, vendor, givenModel, givenEffort, inherited);
   const readonly = args.readonly !== undefined ? args.readonly === true : (bindTarget?.readonly ?? false);
-  return { vendor, model, effort, readonly, capabilities: resolveStartCapabilities(args, bindTarget) };
+  return { vendor, model, effort, inherited, readonly, capabilities: resolveStartCapabilities(args, bindTarget) };
 }
 
 function resolveStartCapabilities(args: StartArgs, bindTarget: WorkerBindTarget | undefined): WorkerCapabilities {
@@ -183,6 +188,8 @@ function endPredecessorsIn(w: WorkersCtx, p: Pending, takeover: Takeover | null,
           : "换人时它还开着（没在跑），后台已按“没做完”把它收工（节点不标完成）。"
         : "它已经收工了。",
     }));
+    const latest = takeover.predecessors[0];
+    if (latest?.status === "ended") cancelQueuedWorkerPmNoticesIn(w, p, latest);
     for (const old of takeover.openOld) {
       endedOld.push(endWorkerIn(w, p, old, { notifyGraph: false }));
     }
@@ -202,7 +209,7 @@ function takeoverWorkspaceNote(
   const branches = [...new Set(takeover.predecessors.map((x) => x.branch).filter((b): b is string => b !== null && b !== ""))];
   const branchNote = branches.length === 0 ? "" : `前任的分支 ${branches.join("、")} 还在，要的话自己合进来。`;
   if (reviewPlan !== null) {
-    return `你在新开的审查目录 ${worker.worktree_path} 里，detached 在被审分支 ${reviewPlan.branch} 上；前任的审查目录不接手，它的结论和复现看下面的记录。`;
+    return reviewTakeoverWorkspaceNote(worker.worktree_path!, reviewPlan.branch);
   }
   if (inherit !== null) {
     return `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`;
@@ -292,7 +299,7 @@ function startReceipt(
   if (space.workspace === "main" && args.noWorktree !== true) notes.push("（主文件夹不是有提交的 git 仓库，所以没建 worktree）");
   if (agent.readonly) notes.push("。它是只读的，只看不改");
   notes.push(capabilitiesReceiptNote(agent.capabilities, readPmCapabilityPolicy(w.db, worker.pm_id)));
-  notes.push(`。它每做完一轮，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
+  notes.push(`。你交办的一轮结束后，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
   const freshWorktree = space.workspace === "worktree" && space.effectiveInherit === null;
   if (freshWorktree && project.setup_command !== null) notes.push(SETUP_RECEIPT_NOTE);
   if (freshWorktree && space.probe.hasUncommittedChanges) notes.push(WORKTREE_DIRTY_NOTE);
@@ -331,8 +338,9 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
   const brief = resolveStartTask(args, bindTarget, takeover);
   const maxTimeMs = validMaxTimeMs(args.maxTimeMs ?? bindTarget?.maxTimeMs ?? undefined);
   const agent = resolveStartAgent(w, caller, args, bindTarget);
-  // Every Worker requires a working OS sandbox; there is no rule-based fallback.
-  if (!w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+  const sandboxRequest = args.noOuterSandbox === true || bindTarget?.noOuterSandbox === true;
+  if (!sandboxRequest && !w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+  const computerUse = sandboxRequest ? requireSandboxRequest(w, caller.pmId, { ...agent, review: bindTarget?.review === true, inventory: context.capabilityInventory }) : null;
   const card = w.projects.projectCard(project);
   const space = resolveStartWorkspace(w, project, card, args, context, bindTarget, takeover);
   const { predecessors, endedOld } = endPredecessorsIn(w, p, takeover, bindTarget);
@@ -356,9 +364,7 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
     review: space.reviewPlan !== null,
     reviewJson: space.reviewPlan === null ? null : newReviewJson(space.reviewPlan),
   });
-  const inherited =
-    agent.vendor === caller.vendor ? splitModelEffort(agent.vendor, caller.model, caller.effort, w.ctx.modelCatalog(agent.vendor)) : { model: null, effort: null };
-  const session = insertWorkerSessionIn(w, p, worker, card, agent, inherited);
+  const session = insertWorkerSessionIn(w, p, worker, card, agent, agent.inherited);
   const start = { worker, session, card, args, agent, brief, space };
   const firstMessageText = firstMessageOf(w, start, bindTarget, takeover, predecessors);
   kickOffWorkerIn(w, p, {
@@ -368,10 +374,12 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
     firstMessageText,
     inherited: space.effectiveInherit !== null,
     maxTimeMs,
+    sandbox: computerUse === null ? undefined : { capabilities: computerUse, stepId: bindTarget?.stepId ?? null },
     afterStartedLine:
       bindTarget === undefined
         ? undefined
         : () => w.options.taskGraphs?.bindWorkerStartedIn(p, bindTarget, worker.id, { vendor: agent.vendor, model: session.model, effort: session.effort }),
   });
-  return { text: startReceipt(w, worker, project, card, args, { agent, brief, space }, { bindTarget, takeover, endedOld }), data: { worker: toWorkerRecord(worker) } };
+  const text = startReceipt(w, worker, project, card, args, { agent, brief, space }, { bindTarget, takeover, endedOld });
+  return { text: computerUse === null ? text : `Worker #${worker.id}“${worker.title}”正在等用户确认取消外层沙箱，批准后才开工。`, data: { worker: toWorkerRecord(worker) } };
 }

@@ -1,19 +1,18 @@
-import { CircleAlert, ComposerAdd, ComposerFile, ComposerRemove, ComposerSend, ComposerStop, ComposerVideo, Info, X } from "../ui/icons.ts";
+import { ArrowUp, CircleAlert, FileText, Info, Plus, Square, Video, X } from "../ui/icons.ts";
 import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES, previewKindOf, sentFileMime, type WorkerPick } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
 import { WORKER_COMMAND } from "../composer-trigger.ts";
-import { fitsBetweenButtons, isWrapped } from "../composer-layout.ts";
+import { NATIVE_MULTILINE_SIZING, useComposerSoftWrap } from "../composer-layout.ts";
 import { byteLength, errorLine, errorTitle } from "../format.ts";
 import { cn } from "../lib/utils.ts";
+import { COMPOSER_MAX_HEIGHT_PX } from "../limits.ts";
 import { formatBytes, readDropped, useNoticeAutoHide, type ComposerNotice, type DraftSlot, type StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import type { StopControl } from "../useStop.ts";
 import { ComposerMenu, optionId } from "./ComposerMenu.tsx";
 import { useWorkerPickLabels, WorkerPickParts } from "./WorkerPickTag.tsx";
-
-const MAX_HEIGHT_PX = 180;
 
 const POINTER_FINE = "(pointer: fine)";
 const POINTER_COARSE = "(pointer: coarse)";
@@ -43,39 +42,88 @@ function isOtherEditable(target: EventTarget | null, ownTextarea: HTMLTextAreaEl
   return false;
 }
 
-const FRAME_CLASS = "composer-frame rounded-xl border border-border bg-background";
-const SQUARE_BUTTON = "rounded-[10px]";
+const FRAME_CLASS = "composer-frame bg-background";
 
-const ROW_CLASS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
-const ROW_MULTI_CLASS = "pb-2";
+// The draft always spans the top row; + sits under its first letter and Send or Stop at the end of the row below. Only the
+// sizing differs once the draft wraps: one fixed line, then the browser's own content sizing up to the height cap.
+const ROW_CLASS = "relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-y-0.5 px-1.5 pt-1 pb-1.5";
+const TEXT_TYPE = "px-2.5 text-body leading-6";
+const TEXT_METRICS = `block min-h-10 w-full min-w-0 pt-2.5 pb-1.5 pointer-coarse:pt-3 pointer-coarse:pb-2 ${TEXT_TYPE}`;
 const TEXTAREA_CLASS =
-  "block min-h-9 w-full min-w-0 resize-none bg-transparent px-3 py-1.5 pointer-coarse:py-2.5 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50 [field-sizing:content]";
-const ATTACH_CLASS = ["col-start-1 row-start-1", "col-start-1 row-start-2"] as const;
-const TEXT_CLASS = ["col-start-2 row-start-1", "col-span-3 col-start-1 row-start-1"] as const;
-const ACTIONS_CLASS = ["col-start-3 row-start-1", "col-start-3 row-start-2"] as const;
+  `${TEXT_METRICS} resize-none bg-transparent outline-none placeholder:text-muted-foreground disabled:opacity-50`;
+const MIRROR_CLASS = `composer-text-measure ${TEXT_METRICS} invisible overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word]`;
+const TEXT_LIMIT = { maxHeight: COMPOSER_MAX_HEIGHT_PX };
+const PROBE_CLASS = `composer-text-measure invisible absolute inset-x-0 top-0 h-[1em] ${TEXT_TYPE}`;
+const TEXT_CELL = "col-start-1 col-end-4 row-start-1 row-end-2";
+const SINGLE_ROW_HEIGHT_CLASS = "h-10 pointer-coarse:h-11";
+const ATTACH_CLASS = "col-start-1 row-start-2 size-7.5 text-foreground";
+const ACTIONS_CLASS = "flex items-center gap-2 justify-self-end col-start-3 row-start-2";
+const SEND_SIZE = "size-7.5";
 
 function StopButton({ stop }: { stop: StopControl }) {
   return (
-    <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className={SQUARE_BUTTON}>
-      <ComposerStop className="size-3.5" aria-hidden="true" />
+    <Button variant="send" size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className={SEND_SIZE}>
+      <Square className="size-3 fill-current" aria-hidden="true" />
     </Button>
   );
 }
 
+function ComposerChips({
+  leadingChip,
+  workerPick,
+  files,
+  disabled,
+  busy,
+  onEditPick,
+  onRemovePick,
+  onRemoveFile,
+}: {
+  leadingChip: React.ReactNode;
+  workerPick: WorkerPick | null;
+  files: StagedFiles["files"];
+  disabled: boolean;
+  busy: boolean;
+  onEditPick: () => void;
+  onRemovePick: () => void;
+  onRemoveFile: (key: string) => void;
+}) {
+  return (
+    <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-4 pt-3">
+      {leadingChip}
+      {workerPick !== null && (
+        <WorkerPickChip pick={workerPick} disabled={busy || disabled} onEdit={onEditPick} onRemove={onRemovePick} />
+      )}
+      {files.map(({ key, file }) => {
+        const FileIcon = previewKindOf(file.name, sentFileMime(file.name)) === "video" ? Video : FileText;
+        return (
+          <li key={key} className="flex max-w-full items-center gap-2 rounded-xs bg-panel py-1 pr-1 pl-3 text-minor">
+            <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="min-w-0 truncate">{file.name}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
+            <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => onRemoveFile(key)}>
+              <X className="size-3.5" aria-hidden="true" />
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 const CHIP_CLOSE_CLASS =
-  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-sidebar-active hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50";
+  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:opacity-50";
 
 const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 
 function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick; disabled: boolean; onEdit: () => void; onRemove: () => void }) {
   const labels = useWorkerPickLabels(pick);
   return (
-    <li className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
+    <li className="flex max-w-full items-center gap-2 rounded-xs bg-panel py-1 pr-1 pl-3 text-minor">
       <button
         type="button"
         aria-label={`Worker model: ${labels.join(" ")}`}
         disabled={disabled}
-        className="touch-target flex min-w-0 cursor-pointer items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default"
+        className="touch-target flex min-w-0 cursor-pointer items-center gap-2 outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default"
         onPointerDown={keepFocus}
         onMouseDown={keepFocus}
         onClick={onEdit}
@@ -83,7 +131,7 @@ function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick
         <WorkerPickParts labels={labels} inComposer />
       </button>
       <button type="button" aria-label="Remove" disabled={disabled} className={CHIP_CLOSE_CLASS} onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={onRemove}>
-        <ComposerRemove className="size-3.5" aria-hidden="true" />
+        <X className="size-3.5" aria-hidden="true" />
       </button>
     </li>
   );
@@ -112,7 +160,7 @@ export interface ComposerLink {
   waiting: boolean;
 }
 
-export function Composer({
+export const Composer = memo(function Composer({
   value,
   placeholder: placeholderProp,
   staging,
@@ -120,6 +168,7 @@ export function Composer({
   onWorkerPick,
   leadingChip = null,
   onSelectTarget,
+  onManageProviders,
   stop: stopProp,
   onRewind,
   focusRev = 0,
@@ -137,6 +186,7 @@ export function Composer({
   onWorkerPick?: (pick: WorkerPick | null) => void;
   leadingChip?: React.ReactNode;
   onSelectTarget?: (targetKey: string, text: string) => void;
+  onManageProviders?: () => void;
   disabled?: boolean;
   stop?: StopControl;
   onRewind?: (stopping: boolean) => boolean;
@@ -159,7 +209,6 @@ export function Composer({
   const hasContent = value.trim() !== "" || files.length > 0;
   const canSend = !disabled && !link?.waiting && hasContent && !tooLong && !busy;
   const showStop = stop !== undefined && stop.busy && !hasContent;
-
   const [bounce, setBounce] = useState(false);
   const hadContent = useRef(hasContent);
   useEffect(() => {
@@ -167,15 +216,15 @@ export function Composer({
     else if (!hasContent) setBounce(false);
     hadContent.current = hasContent;
   }, [hasContent]);
-
-  const [wrapped, setWrapped] = useState(false);
+  const probe = useRef<HTMLDivElement>(null);
+  const [composing, setComposing] = useState<{ value: string; multiline: boolean; height: number | null } | null>(null);
+  const sizingValue = (composing?.value ?? value).slice(0, MAX_MESSAGE_BYTES);
+  const hasNewline = sizingValue.includes("\n");
   const hasLeadingChip = leadingChip !== null && leadingChip !== undefined && leadingChip !== false;
-  const multiline = wrapped || files.length > 0 || workerPick !== null || hasLeadingChip;
-  const layoutWas = useRef(multiline);
-  const settledValue = useRef<string | null>(null);
-  const attachRef = useRef<HTMLButtonElement>(null);
-  const actionsRef = useRef<HTMLDivElement>(null);
-
+  const hasChips = files.length > 0 || workerPick !== null || hasLeadingChip;
+  const softWrapped = useComposerSoftWrap(probe, hasChips || hasNewline || composing !== null ? "" : sizingValue);
+  const multiline = composing?.multiline ?? (hasChips || hasNewline || softWrapped);
+  const nativeSizing = multiline && NATIVE_MULTILINE_SIZING;
   const [cursor, setCursor] = useState(0);
   const pendingCursor = useRef<number | null>(null);
   const repickCaret = useRef<number | null>(null);
@@ -208,6 +257,7 @@ export function Composer({
         setCursor(at);
         onChange(rest);
       }),
+    onManageProviders,
   });
 
   const repick = () => {
@@ -231,11 +281,10 @@ export function Composer({
   useEffect(() => {
     if (autoFocus && !disabled && pointerMatches(POINTER_FINE, true)) ref.current?.focus({ preventScroll: true });
   }, []);
-
   const handleGlobalKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (disabled) return;
     if (e.key !== "Escape" || e.defaultPrevented || e.repeat) return;
-    if (e.isComposing || e.keyCode === 229) return;
+    if (composing !== null || e.isComposing || e.keyCode === 229) return;
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     if (e.target instanceof Node && !document.contains(e.target)) return;
     if (hasOpenOverlay() || isOtherEditable(e.target, ref.current)) return;
@@ -258,24 +307,12 @@ export function Composer({
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, []);
-
-  const prevValue = useRef<string | null>(null);
   const prevFocusRev = useRef(focusRev);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const prev = prevValue.current;
-    prevValue.current = value;
-    const layoutChanged = layoutWas.current !== multiline;
-    layoutWas.current = multiline;
-    // Appending only grows the content, so read scrollHeight directly and skip the height:auto reset that forces a sync reflow per keystroke.
-    if (prev === null || value === "" || !value.startsWith(prev) || layoutChanged) {
-      el.style.height = "auto";
-    }
-    const contentHeight = el.scrollHeight;
-    const nextHeight = `${Math.min(contentHeight, MAX_HEIGHT_PX)}px`;
-    if (el.style.height !== nextHeight) el.style.height = nextHeight;
-    if (focusRev !== prevFocusRev.current) {
+    const focusChanged = focusRev !== prevFocusRev.current;
+    if (focusChanged) {
       prevFocusRev.current = focusRev;
       if (!disabled) {
         el.focus({ preventScroll: true });
@@ -289,20 +326,18 @@ export function Composer({
       el.setSelectionRange(pendingCursor.current, pendingCursor.current);
       pendingCursor.current = null;
     }
-    let nextWrapped: boolean;
-    if (value === "") {
-      nextWrapped = false;
-    } else if (isWrapped(el, contentHeight)) {
-      nextWrapped = true;
-      if (layoutChanged && !multiline) settledValue.current = value;
-    } else if (!multiline) {
-      nextWrapped = false;
-    } else {
-      nextWrapped = value.includes("\n") || settledValue.current === value || !fitsBetweenButtons(el, value, [attachRef.current, actionsRef.current]);
-    }
-    setWrapped(nextWrapped);
-  }, [value, multiline, focusRev, disabled]);
-
+  }, [value, focusRev, disabled]);
+  const changeInput = (el: HTMLTextAreaElement) => {
+    if (!el.value.startsWith(`/${WORKER_COMMAND}`)) repickCaret.current = null;
+    setCursor(el.selectionStart);
+    onChange(el.value);
+    if (notice !== null) staging.dismissNotice();
+  };
+  const finishComposition = (el: HTMLTextAreaElement) => {
+    if (composing === null) return;
+    if (el.value !== value) changeInput(el);
+    setComposing(null);
+  };
   const submit = () => {
     if (!canSend) return;
     staging.track(
@@ -320,36 +355,71 @@ export function Composer({
       {menu && <ComposerMenu id={menuId} menu={menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
       {notice !== null && <NoticeBar notice={notice} onDismiss={staging.dismissNotice} />}
       <div data-multiline={multiline} className={FRAME_CLASS}>
-        {(files.length > 0 || workerPick !== null || hasLeadingChip) && (
-          <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
-            {leadingChip}
-            {workerPick !== null && onWorkerPick && (
-              <WorkerPickChip
-                pick={workerPick}
-                disabled={busy || disabled}
-                onEdit={repick}
-                onRemove={() => {
-                  repickCaret.current = null;
-                  onWorkerPick(null);
-                }}
-              />
-            )}
-            {files.map(({ key, file }) => {
-              const FileIcon = previewKindOf(file.name, sentFileMime(file.name)) === "video" ? ComposerVideo : ComposerFile;
-              return (
-                <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
-                  <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <span className="min-w-0 truncate">{file.name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
-                  <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => staging.remove(key)}>
-                    <ComposerRemove className="size-3.5" aria-hidden="true" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+        {hasChips && (
+          <ComposerChips
+            leadingChip={leadingChip}
+            workerPick={onWorkerPick ? workerPick : null}
+            files={files}
+            disabled={disabled}
+            busy={busy}
+            onEditPick={repick}
+            onRemovePick={() => {
+              repickCaret.current = null;
+              onWorkerPick?.(null);
+            }}
+            onRemoveFile={staging.remove}
+          />
         )}
-        <div className={cn(ROW_CLASS, multiline && ROW_MULTI_CLASS)}>
+        <div className={ROW_CLASS}>
+          {multiline && !nativeSizing && (
+            <div aria-hidden="true" className={`${MIRROR_CLASS} ${TEXT_CELL}`} style={TEXT_LIMIT}>
+              {sizingValue}{"\u200b"}
+            </div>
+          )}
+          <div aria-hidden="true" ref={probe} className={`${PROBE_CLASS} ${TEXT_CELL}`} />
+          <textarea
+            ref={ref}
+            rows={1}
+            aria-label="Message"
+            placeholder={placeholder}
+            readOnly={busy}
+            disabled={disabled}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            className={`${TEXTAREA_CLASS} ${TEXT_CELL} ${!multiline ? SINGLE_ROW_HEIGHT_CLASS : nativeSizing ? "" : "absolute inset-0 h-full"}`}
+            style={nativeSizing ? { ...TEXT_LIMIT, fieldSizing: "content", height: composing?.height ?? undefined } : undefined}
+            value={value}
+            aria-autocomplete={source ? "list" : undefined}
+            aria-controls={menu ? menuId : undefined}
+            aria-activedescendant={menu && menu.items.length > 0 && menu.activeIndex >= 0 ? optionId(menuId, menu.activeIndex) : undefined}
+            onChange={(e) => changeInput(e.currentTarget)}
+            onCompositionStart={(e) => setComposing({
+              value: e.currentTarget.value,
+              multiline,
+              height: nativeSizing ? e.currentTarget.getBoundingClientRect().height : null,
+            })}
+            onCompositionEnd={(e) => finishComposition(e.currentTarget)}
+            onBlur={(e) => finishComposition(e.currentTarget)}
+            onSelect={(e) => setCursor(e.currentTarget.selectionStart)}
+            onPaste={(e) => {
+              if (e.clipboardData.files.length === 0) return;
+              e.preventDefault();
+              readDropped(e.clipboardData, staging.add);
+            }}
+            onKeyDown={(e) => {
+              // Enter may confirm an IME candidate even when WebKit reports isComposing as false.
+              if (composing !== null || e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (suggest.handleKey(e)) {
+                e.preventDefault();
+                return;
+              }
+              if (e.key !== "Enter" || e.shiftKey) return;
+              if (pointerMatches(POINTER_COARSE, false)) return;
+              e.preventDefault();
+              submit();
+            }}
+          />
           <input
             ref={picker}
             type="file"
@@ -362,63 +432,30 @@ export function Composer({
             }}
           />
           <Button
-            ref={attachRef}
             variant="ghost"
             size="icon"
             aria-label="Add files"
             disabled={busy || disabled}
             onClick={() => picker.current?.click()}
-            className={cn(SQUARE_BUTTON, ATTACH_CLASS[+multiline])}
+            className={ATTACH_CLASS}
           >
-            <ComposerAdd className="size-5" aria-hidden="true" />
+            <Plus className="size-4.5" strokeWidth={1.5} aria-hidden="true" />
           </Button>
-          <textarea
-            ref={ref}
-            rows={1}
-            aria-label="Message"
-            placeholder={placeholder}
-            readOnly={busy}
-            disabled={disabled}
-            spellCheck={false}
-            autoCorrect="off"
-            autoCapitalize="off"
-            className={cn(TEXTAREA_CLASS, TEXT_CLASS[+multiline])}
-            value={value}
-            aria-autocomplete={source ? "list" : undefined}
-            aria-controls={menu ? menuId : undefined}
-            aria-activedescendant={menu && menu.items.length > 0 && menu.activeIndex >= 0 ? optionId(menuId, menu.activeIndex) : undefined}
-            onChange={(e) => {
-              if (!e.target.value.startsWith(`/${WORKER_COMMAND}`)) repickCaret.current = null;
-              setCursor(e.target.selectionStart);
-              onChange(e.target.value);
-              if (notice !== null) staging.dismissNotice();
-            }}
-            onSelect={(e) => setCursor(e.currentTarget.selectionStart)}
-            onPaste={(e) => {
-              if (e.clipboardData.files.length === 0) return;
-              e.preventDefault();
-              readDropped(e.clipboardData, staging.add);
-            }}
-            onKeyDown={(e) => {
-              if (suggest.handleKey(e)) {
-                e.preventDefault();
-                return;
-              }
-              // Enter during IME composition confirms a candidate; some browsers report keyCode 229 there.
-              if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-              if (pointerMatches(POINTER_COARSE, false)) return;
-              e.preventDefault();
-              submit();
-            }}
-          />
-          <div ref={actionsRef} className={cn("flex items-center gap-2 justify-self-end", ACTIONS_CLASS[+multiline])}>
+          <div className={ACTIONS_CLASS}>
             {tooLong && <span className="text-minor text-danger">Message too long</span>}
             {stop?.failed && showStop && <span className="text-minor text-danger">Couldn't stop</span>}
             {showStop ? (
               <StopButton stop={stop} />
             ) : (
-              <Button size="icon" aria-label="Send" disabled={!canSend || picking} onClick={submit} className={cn(SQUARE_BUTTON, bounce && "composer-send-bounce")}>
-                <ComposerSend className="size-5" aria-hidden="true" />
+              <Button
+                variant="send"
+                size="icon"
+                aria-label="Send"
+                disabled={!canSend || picking}
+                onClick={submit}
+                className={cn(SEND_SIZE, bounce && "composer-send-bounce")}
+              >
+                <ArrowUp className="size-4" strokeWidth={1.75} aria-hidden="true" />
               </Button>
             )}
           </div>
@@ -426,7 +463,7 @@ export function Composer({
       </div>
     </>
   );
-}
+});
 
 export const DraftComposer = memo(function DraftComposer({
   draft,

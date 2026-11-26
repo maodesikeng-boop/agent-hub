@@ -1,7 +1,6 @@
 import type { ActionId, MessageId, SessionId, WorkerId } from "./domain.ts";
-import type { ReviewVerdict } from "./review.ts";
 
-export const ACTION_TYPES = ["session.start", "session.send", "session.end", "worktree.create", "review.verify", "review.stamp"] as const;
+export const ACTION_TYPES = ["session.start", "session.send", "session.end", "worktree.create", "review.verify"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 export const ACTION_STATUSES = ["pending", "running", "done", "failed", "abandoned"] as const;
@@ -35,20 +34,12 @@ export interface ReviewVerifyParams {
   reportMessageId: MessageId;
 }
 
-export interface ReviewStampParams {
-  workerId: WorkerId;
-  reportMessageId: MessageId;
-  sha: string;
-  verdict: ReviewVerdict;
-}
-
 interface ActionParamsMap {
   "session.start": SessionStartParams;
   "session.send": SessionSendParams;
   "session.end": SessionEndParams;
   "worktree.create": WorktreeCreateParams;
   "review.verify": ReviewVerifyParams;
-  "review.stamp": ReviewStampParams;
 }
 
 export interface ActionRow<T extends ActionType = ActionType> {
@@ -75,14 +66,12 @@ export function actionDedupeKey(action: NewAction): string {
     case "session.start":
       return `${action.params.sessionId}:${action.params.generation}`;
     case "session.send":
-      return String(action.params.messageId);
+      return `${action.params.sessionId}:${action.params.messageId}`;
     case "session.end":
       return `${action.params.sessionId}:${action.params.generation}`;
     case "worktree.create":
       return String(action.params.workerId);
     case "review.verify":
-      return `${action.params.workerId}:${action.params.reportMessageId}`;
-    case "review.stamp":
       return `${action.params.workerId}:${action.params.reportMessageId}`;
   }
 }
@@ -103,7 +92,6 @@ export const ACTION_RETRY: Record<ActionType, RetryPolicy> = {
   "session.end": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
   "worktree.create": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
   "review.verify": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
-  "review.stamp": { baseMs: 30_000, maxMs: 300_000, maxAttempts: 3 },
 };
 
 export function retryDelayMs(policy: RetryPolicy, attempt: number): number {

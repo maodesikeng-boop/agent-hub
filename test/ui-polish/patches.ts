@@ -19,11 +19,13 @@ import {
   type PmMemoryFilesList,
   type QuotaResponse,
   type RateLimitInfo,
+  type ResourcesSnapshot,
   type StateSnapshot,
   type VendorAvailability,
 } from "../../src/shared/index.ts";
 import type { ProviderStatusItem, ProvidersStatusResponse } from "../../src/shared/providers.ts";
 import type { VendorSyncPreviewResponse } from "../../src/shared/vendor-sync.ts";
+import { progressScenarioMessages } from "./progress-scenarios.ts";
 import { BROWSER_NOW_ISO } from "./limits.ts";
 
 export const PATCH_NAMES = [
@@ -33,6 +35,12 @@ export const PATCH_NAMES = [
   "health-driver",
   "session-working",
   "session-streaming",
+  "progress-running",
+  "progress-two-turns",
+  "progress-unfinished",
+  "progress-wakeup-waiting",
+  "progress-wakeup-idle",
+  "progress-done",
   "workers-busy",
   "blocker-checking",
   "vendors-mixed",
@@ -53,6 +61,7 @@ export const PATCH_NAMES = [
   "browsers-multi",
   "account-approvals",
   "account-long-name",
+  "resources-attention",
 ] as const;
 export type PatchName = (typeof PATCH_NAMES)[number];
 
@@ -262,7 +271,31 @@ const SYNC_PREVIEW: VendorSyncPreviewResponse = {
   nonSyncable: [{ key: "drive", name: "Google Drive", vendor: "claude", vendorLabel: "Claude Code", kind: "cloud_connector", reason: "Cloud connectors stay with the provider that owns them" }],
 };
 
+function progressScenario(page: Page, scenario: Parameters<typeof progressScenarioMessages>[0]["scenario"]) {
+  return editState(page, (state) => {
+    const conversationId = firstPmConversation(state);
+    if (conversationId === undefined) return state;
+    const target = latestSessions(state, (session) => session.conversationId === conversationId);
+    const sessionId = [...target][0];
+    if (sessionId === undefined) return state;
+    const next = scenario === "waiting" ? working(state, target, () => ({
+      step: { type: "tool_use", name: "Read", input: {} }, currentTool: "Read", stepStartedAt: NOW - 35_000,
+    })) : state;
+    return {
+      ...next,
+      conversations: next.conversations.map((conv) => conv.conversation.id !== conversationId ? conv : {
+        ...conv,
+        messages: progressScenarioMessages({ scenario, baseId: (conv.messages.at(-1)?.id ?? 100) + 10, conversationId, sessionId, now: NOW }),
+      }),
+    };
+  });
+}
+
 const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
+  "progress-two-turns": (page) => progressScenario(page, "two-turns"),
+  "progress-unfinished": (page) => progressScenario(page, "unfinished"),
+  "progress-wakeup-waiting": (page) => progressScenario(page, "waiting"),
+  "progress-wakeup-idle": (page) => progressScenario(page, "idle"),
   "state-pending": (page) => hang(page, localOnly(API_PATHS.state)),
   "state-500": (page) => fixedJson(page, localOnly(API_PATHS.state), { error: "数据库打不开：database is locked", } satisfies ApiErrorBody, { status: 500 }),
   "ws-reconnecting": (page) => page.routeWebSocket(localOnly(API_PATHS.ws), (ws) => ws.close({ code: 1006, reason: "" }).catch(() => {})),
@@ -274,15 +307,173 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
   "session-working": (page) =>
     editState(page, (state) => {
       const target = latestSessions(state, (s) => s.conversationId === firstPmConversation(state) || s.pmId === null);
-      return working(state, target, () => ({ step: { type: "tool_use", name: "Bash", input: {} }, currentTool: "Bash" }));
+      return working(state, target, () => ({ step: { type: "tool_use", name: "Bash", input: {} }, currentTool: "Bash", stepStartedAt: NOW - 16_000 }));
     }),
   "session-streaming": (page) =>
     editState(page, (state) =>
       working(state, latestSessions(state, (s) => s.conversationId === firstPmConversation(state)), () => ({
         step: { type: "text" },
+        stepStartedAt: NOW - 4_000,
         streamingText: "我看了一下超时的那几次：都是 MCP 服务第一次握手超过 30 秒，失败结果被当成正常结果缓存了 10 分钟，所以后面几次",
       })),
     ),
+  "progress-running": (page) =>
+    editState(page, (state) => {
+      const pmConvId = firstPmConversation(state);
+      const target = latestSessions(state, (s) => s.conversationId === pmConvId);
+      const sessionId = [...target][0] ?? 1;
+      const next = working(state, target, () => ({
+        step: { type: "tool_use", name: "Bash", input: {} },
+        currentTool: "Bash",
+        stepStartedAt: NOW - 16_000,
+      }));
+      return {
+        ...next,
+        conversations: next.conversations.map((conv) => {
+          if (conv.conversation.id !== pmConvId) return conv;
+          const baseId = (conv.messages.at(-1)?.id ?? 100) + 10;
+          const mk = (offset: number, over: Partial<StateSnapshot["conversations"][number]["messages"][number]>) => ({
+            id: baseId + offset,
+            conversationId: pmConvId,
+            sessionId,
+            workerId: null,
+            sender: "agent" as const,
+            kind: "text" as const,
+            text: "",
+            meta: null,
+            collapsed: false,
+            dedupeKey: `patch-progress-run:${baseId + offset}`,
+            status: null,
+            failureReason: null,
+            createdAt: NOW - 30_000 + offset * 2_000,
+            updatedAt: NOW - 30_000 + offset * 2_000,
+            ...over,
+          });
+          return {
+            ...conv,
+            messages: [
+              ...conv.messages,
+              mk(1, { sender: "user", text: "汇总上次发布以来的提交、PR 和 CI 状态", status: "processing" }),
+              mk(2, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "in_progress" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "pending" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "pending" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(3, { kind: "tool", collapsed: true, text: "Read: docs/ui-standard.md" }),
+              mk(4, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "completed" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "in_progress" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "pending" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(5, { kind: "tool", collapsed: true, text: "Bash: git log --oneline 4b1fb2e2..HEAD" }),
+            ],
+          };
+        }),
+      };
+    }),
+  "progress-done": (page) =>
+    editState(page, (state) => {
+      const pmConvId = firstPmConversation(state);
+      const sessionId = state.sessions.find((s) => s.conversationId === pmConvId)?.sessionId ?? 1;
+      return {
+        ...state,
+        conversations: state.conversations.map((conv) => {
+          if (conv.conversation.id !== pmConvId) return conv;
+          const baseId = (conv.messages.at(-1)?.id ?? 100) + 20;
+          const mk = (offset: number, over: Partial<StateSnapshot["conversations"][number]["messages"][number]>) => ({
+            id: baseId + offset,
+            conversationId: pmConvId,
+            sessionId,
+            workerId: null,
+            sender: "agent" as const,
+            kind: "text" as const,
+            text: "",
+            meta: null,
+            collapsed: false,
+            dedupeKey: `patch-progress-done:${baseId + offset}`,
+            status: null,
+            failureReason: null,
+            createdAt: NOW - 200_000 + offset * 20_000,
+            updatedAt: NOW - 200_000 + offset * 20_000,
+            ...over,
+          });
+          return {
+            ...conv,
+            messages: [
+              ...conv.messages,
+              mk(1, { sender: "user", text: "把上次以来的改动整理一份摘要", status: "replied" }),
+              mk(2, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "in_progress" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "pending" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "pending" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(3, { kind: "tool", collapsed: true, text: "Read: docs/ui-standard.md" }),
+              mk(4, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "completed" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "in_progress" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "pending" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(5, { kind: "tool", collapsed: true, text: "Bash: git log --oneline 4b1fb2e2..HEAD" }),
+              mk(6, { kind: "tool", collapsed: true, text: "Bash: gh pr list --state merged --limit 10" }),
+              mk(7, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "completed" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "completed" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "in_progress" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "pending" },
+                  ],
+                },
+              }),
+              mk(8, { kind: "tool", collapsed: true, text: "Read: src/web/components/TurnProgress.tsx" }),
+              mk(9, {
+                kind: "checklist",
+                collapsed: true,
+                meta: {
+                  checklist: [
+                    { id: "s1", title: "读完右栏规格和原型", activeTitle: null, status: "completed" },
+                    { id: "s2", title: "查看 4b1fb2e2 之后的提交、PR 和发布", activeTitle: null, status: "completed" },
+                    { id: "s3", title: "拉新快照核对遗留问题和新增内容", activeTitle: null, status: "completed" },
+                    { id: "s4", title: "汇总变化", activeTitle: null, status: "completed" },
+                  ],
+                },
+              }),
+              mk(10, { text: "已核对完 4b1fb2e2 之后的提交与发布，主要变化集中在木头外壳与实时进度清单。" }),
+            ],
+          };
+        }),
+      };
+    }),
   "workers-busy": (page) =>
     editState(page, (state) => {
       const workerConversations = new Set(state.conversations.filter((c) => c.conversation.kind === "worker").map((c) => c.conversation.id));
@@ -415,6 +606,67 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
       state: "signed_out",
       lastError: null,
     } satisfies AccountStatusView),
+  "resources-attention": (page) =>
+    fixedJson(page, anyDevice(API_PATHS.resources), {
+      scannedAt: NOW - 30_000,
+      database: {
+        fileBytes: 18 * 1024 * 1024,
+        walBytes: 420 * 1024,
+        freelistBytes: 2 * 1024 * 1024,
+        dbstatAvailable: true,
+        tables: [
+          { table: "messages", bytes: 10 * 1024 * 1024, rows: 12_400, rowLimit: null, warning: false },
+          { table: "step_logs", bytes: 5 * 1024 * 1024, rows: 28_900, rowLimit: 50_000, warning: false },
+          { table: "router_items", bytes: 1_200 * 1024, rows: 420, rowLimit: null, warning: false },
+          { table: "task_graphs", bytes: 420 * 1024, rows: 38, rowLimit: null, warning: false },
+        ],
+      },
+      directories: [
+        { id: "worktrees", label: "Worktrees", bytes: 12 * 1024 * 1024, fileCount: 42, maxBytes: null, maxFiles: null, truncated: false, warning: false },
+        { id: "sentFiles", label: "Delivered files", bytes: 4 * 1024 * 1024, fileCount: 15, maxBytes: 256 * 1024 * 1024, maxFiles: null, truncated: false, warning: false },
+        { id: "uploads", label: "Uploads", bytes: 3 * 1024 * 1024, fileCount: 8, maxBytes: 256 * 1024 * 1024, maxFiles: null, truncated: false, warning: false },
+        { id: "logs", label: "Logs", bytes: 1_800 * 1024, fileCount: 12, maxBytes: null, maxFiles: null, truncated: false, warning: false },
+      ],
+      branches: [{ projectId: 1, projectName: "agent-hub", repoFolder: "/tmp/fusa-ui-shots/projects/agent-hub", activeCount: 1, mergedCleanableCount: 3, unmergedHeldCount: 1 }],
+      processes: { trackedCount: 2, leakedCount: 1 },
+      held: [
+        {
+          kind: "worktree",
+          targetKey: "42",
+          reason: "uncommitted_changes",
+          label: "#42 Fix auth flow",
+          projectId: 1,
+          projectName: "agent-hub",
+          bytes: 12 * 1024 * 1024,
+          detectedAt: NOW - 2 * HOUR,
+          samplePaths: ["src/auth.ts", "src/auth.test.ts"],
+          keptAt: null,
+          workerId: 42,
+          branch: "hub/42-fix-auth",
+          worktreePath: "/Users/demo/.agent-hub/worktrees/1/42",
+          dirtyCount: 2,
+        },
+        {
+          kind: "git_branch",
+          targetKey: "1:hub/31-experiment",
+          reason: "unmerged_ended_branch",
+          label: "hub/31-experiment",
+          projectId: 1,
+          projectName: "agent-hub",
+          bytes: null,
+          detectedAt: NOW - 5 * HOUR,
+          samplePaths: [],
+          keptAt: NOW - 3 * HOUR,
+          workerId: 31,
+          branch: "hub/31-experiment",
+          repoFolder: "/tmp/fusa-ui-shots/projects/agent-hub",
+          commitsAhead: 2,
+        },
+      ],
+      heldTruncated: false,
+      totalDiskBytes: 40 * 1024 * 1024,
+      attentionCount: 1,
+    } satisfies ResourcesSnapshot),
 };
 
 /**

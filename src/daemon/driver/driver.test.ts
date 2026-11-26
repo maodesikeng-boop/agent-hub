@@ -1191,6 +1191,22 @@ describe("token 用量", () => {
     output_tokens: output,
   });
 
+  it("retains Claude context after a quota failure emits an all-zero assistant usage frame", async () => {
+    const zero = usage(0, 0, 0, 0);
+    const error = "You've hit your 5-hour limit · resets 7:10pm (Asia/Shanghai)";
+    const t = harness({ script: { turns: [
+      { steps: [{ text: "Working", usage: usage(1_000, 660_000, 0, 2) }], usage: usage(1_000, 660_000, 0, 4) },
+      { steps: [{ text: error, usage: zero }], usage: zero, result: { isError: true, result: error } },
+    ] } });
+    const session = t.addSession();
+    await t.driver.send(session.id, user(101, "Start"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(session.id)?.usage.context).toBe(661_000);
+    await t.driver.send(session.id, user(102, "Continue"));
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ ok: false, error: { message: error } });
+    expect(t.store.get(session.id)?.usage.context).toBe(661_000);
+  });
+
   it("一轮结束：累计用 result 的 usage；同一条消息分几个事件推出来不重复算；上下文取最近一条消息的 input + 缓存读 + 缓存写", async () => {
     const t = harness({
       script: {

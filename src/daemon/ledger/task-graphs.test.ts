@@ -374,8 +374,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       }),
     }).data.graph;
     const bare = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
-    // 还没有结果的节点只有一行，和以前一样
-    expect(bare.split("\n")).toEqual([
+    expect(bare.split("\n").filter((line) => !line.startsWith("      厂商 "))).toEqual([
       `任务图 #${graph.id}「导出」（状态：active）`,
       "  - [等你处理] impl：实现",
       "  - [没轮到] ok：确认方案 ← [impl]",
@@ -397,7 +396,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     ledger.hubCall(lin.sessionId, "graph.decide", { graphId: graph.id, nodeKey: "ok", choice: "方案 A", note: "先不做分页" });
 
     const text = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
-    const lines = text.split("\n");
+    const lines = text.split("\n").filter((line) => !line.startsWith("      厂商 "));
     expect(lines[1]).toBe(`  - [完了] impl：实现 · 经手 Worker #${w.id}`);
     expect(lines[2]).toBe("      分支 hub/7-导出 · 提交 abc1234 · PR https://example.test/pr/7");
     expect(lines[3]!.startsWith("      摘要：导出接口已实现 很长的说明")).toBe(true);
@@ -408,9 +407,8 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(lines[6]).toBe("  - [等你处理] ship：发布 ← [ok]");
     expect(lines).toHaveLength(7);
 
-    // 交接摘要用的是同一份文本
     const preamble = liveGraphsSection();
-    expect(preamble).toBe(text);
+    expect(preamble).toBe(lines.join("\n"));
   });
 
   it("交接摘要里未完结的任务图有总字数上限：最近动过的给全文，放不下的只列节点状态，还放不下的只留一行进度和怎么查", () => {
@@ -472,20 +470,21 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "边界", nodes: Array.from({ length: MAX_GRAPH_NODES }, (_, i) => ({ key: `n${i}`, title: "步骤" })) }),
     }).data.graph;
+    const showResults = () => ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text.replace(/^      厂商 .*\n/gm, "");
     const artifact = (size: number) => JSON.stringify({ summary: "摘".repeat(GRAPH_TEXT_NODE_NOTE_CHARS), branch: "b".repeat(size) });
     let size = 1;
     let full = "";
     for (; size < GRAPH_TEXT_NODE_NOTE_CHARS; size++) {
       db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
-      full = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+      full = showResults();
       if ([...full].length > HANDOVER_GRAPHS_MAX_CHARS) break;
     }
     size--;
     db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
-    full = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+    full = showResults();
     const extra = HANDOVER_GRAPHS_MAX_CHARS - [...full].length;
     db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra), graph.id);
-    const exact = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+    const exact = showResults();
     expect([...exact]).toHaveLength(HANDOVER_GRAPHS_MAX_CHARS);
     expect(liveGraphsSection()).toBe(exact);
     db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra + 1), graph.id);
@@ -758,7 +757,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const afterSkip = skipped.graph;
     expect(skipped.messageId).toBeTypeOf("number");
     const skipWake = ledger.getMessage(skipped.messageId!)!;
-    expect(skipWake).toMatchObject({ sender: "user", status: "queued" });
+    expect(skipWake).toMatchObject({ sender: "system", status: "queued", meta: { event: "pm.wakeup", source: "task_graph" } });
     expect(skipWake.text).toContain("用户在网页上跳过了步骤「opt-branch（可选实验分支）」（说明：中间步骤跳过，直接进入下游）");
     expect(skipWake.text).toContain("轮到了：join-release（汇总发版）、opt-leaf（后续子任务），等你处理");
     expect(afterSkip.nodes.find((n) => n.key === "opt-branch")).toMatchObject({ status: "done", skipped: true, waitingFor: null });
@@ -788,10 +787,10 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(finished.reportItem).toMatchObject({ kind: "report", summary: "多路构建已合并发布（PR #200）" });
     expect(ledger.snapshot().activeTaskGraphs).toEqual([]);
 
-    const history = ledger.listProjectTaskGraphs(lin.projectId);
-    expect(history.graphs).toHaveLength(1);
-    expect(history.graphs[0]?.id).toBe(graph.id);
-    expect(history.hasMore).toBe(false);
+    const completed = ledger.completedWork(lin.pmId, null, 20);
+    expect(completed.items).toHaveLength(1);
+    expect(completed.items[0]).toMatchObject({ kind: "graph", graphId: graph.id, outcome: "done" });
+    expect(completed.next).toBeNull();
   });
 
   it("第 2 步验收场景：最后节点完成后保持待交付、自动发交付单（防重复轰炸）、支持补挂审查节点与打回重派、PR 未合并默认拦截与 --unmerged-ok 放行", () => {
@@ -1180,7 +1179,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(stateOf(released.data.graph, "s2")).toBe("waiting:pm");
   });
 
-  it("hub graph patch 拍板卡与依赖联动：给 waiting:pm 补问题立即出卡，加未完前置自动收起旧卡退回 pending，全员跳过回执提示待交付", () => {
+  it("preserves the step card when a dependency is added or the step is skipped", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "动态改卡与改边",
@@ -1201,7 +1200,6 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(firstMsgId).toBeTypeOf("number");
     expect(askOf(ledger.getMessage(firstMsgId)!)).toMatchObject({ needsUser: true });
 
-    // 2) 通过 patch 在 approve 前插入未完成前置 prep -> 旧卡片自动标已答收起，approve 退回 pending
     const withPrep = ledger.hubCall(lin.sessionId, "graph.patch", {
       graphId: graph.id,
       specJson: JSON.stringify({
@@ -1211,15 +1209,13 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     }).data.graph;
     expect(stateOf(withPrep, "prep")).toBe("waiting:pm");
     expect(stateOf(withPrep, "approve")).toBe("pending");
-    expect(withPrep.nodes.find((n) => n.key === "approve")?.gateAskMessageId).toBeNull();
-    expect(askOf(ledger.getMessage(firstMsgId)!)).toMatchObject({ answered: true });
+    expect(withPrep.nodes.find((n) => n.key === "approve")?.gateAskMessageId).toBe(firstMsgId);
+    expect(askOf(ledger.getMessage(firstMsgId)!)?.answered).toBeUndefined();
 
-    // 3) prep 完成后，approve 重新出新拍板卡；再用 patch skipNodes 跳过 approve 时回执提示待交付
     ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "prep" });
     const rearmed = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(stateOf(rearmed, "approve")).toBe("waiting:user");
-    const secondMsgId = rearmed.nodes.find((n) => n.key === "approve")!.gateAskMessageId!;
-    expect(secondMsgId).not.toBe(firstMsgId);
+    expect(rearmed.nodes.find((n) => n.key === "approve")?.gateAskMessageId).toBe(firstMsgId);
 
     const allSettledPatch = ledger.hubCall(lin.sessionId, "graph.patch", {
       graphId: graph.id,
@@ -1227,7 +1223,32 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     });
     expect(allSettledPatch.text).toContain("全部节点已完成（待交付），验收交付后用 hub graph finish 结束任务图");
     expect(isTaskGraphReadyToFinish(allSettledPatch.data.graph)).toBe(true);
-    expect(askOf(ledger.getMessage(secondMsgId)!)).toMatchObject({ answered: true });
+    expect(askOf(ledger.getMessage(firstMsgId)!)?.answered).toBeUndefined();
+    ledger.hubCall(lin.sessionId, "ask.close", { messageId: firstMsgId });
+    expect(askOf(ledger.getMessage(firstMsgId)!)).toMatchObject({ answered: true, closed: true });
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).not.toContain("[拍板卡]");
+  });
+
+  it("can close or replace a step card explicitly and answer a card after its step is removed", () => {
+    const { graph } = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "Export", nodes: [{ key: "approve", title: "Approve" }, { key: "keep", title: "Keep" }] }),
+    }).data;
+    const ask = (text: string) => ledger.hubCall(lin.sessionId, "ask", { node: "approve", graphId: graph.id, text }).data.messageId;
+    const old = ask("Ship on Monday?");
+    const next = ask("Ship on Friday?");
+    expect(askOf(ledger.getMessage(old)!)?.closed).toBe(true);
+    expect(() => ledger.decideTaskNode(graph.id, "approve", { clientId: "old", askMessageId: old, note: "Yes" })).toThrow(/已经被处理/);
+    expect(askOf(ledger.getMessage(next)!)?.answered).toBeUndefined();
+
+    ledger.hubCall(lin.sessionId, "ask.close", { messageId: next });
+    expect(askOf(ledger.getMessage(next)!)?.closed).toBe(true);
+    expect(stateOf(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph, "approve")).toBe("waiting:pm");
+    const detached = ask("Ship this month?");
+    ledger.hubCall(lin.sessionId, "graph.patch", { graphId: graph.id, specJson: JSON.stringify({ removeNodes: ["approve"] }) });
+    expect(askOf(ledger.getMessage(detached)!)?.answered).toBeUndefined();
+    const answered = ledger.decideTaskNode(graph.id, "approve", { clientId: "detached", askMessageId: detached, note: "Yes" });
+    expect(answered.graph.nodes.map((node) => node.key)).toEqual(["keep"]);
+    expect(askOf(ledger.getMessage(detached)!)?.answerNote).toBe("Yes");
   });
 });
 

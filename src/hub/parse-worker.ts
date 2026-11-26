@@ -23,7 +23,7 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
   if (group === "worker" && action === "start") {
     allowOnly(
       values,
-      ["title", "vendor", "model", "effort", "max-time", "readonly", "caps", "allow", "no-worktree", "node", "graph", "stdin"],
+      ["title", "vendor", "model", "effort", "max-time", "readonly", "caps", "allow", "no-outer-sandbox", "no-worktree", "node", "graph", "stdin"],
       "worker start",
     );
     expectPositionals(rest, 0, "worker start");
@@ -48,6 +48,7 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
       body.caps = caps.mode;
       if (caps.mode === "custom") body.allow = caps.allow;
     }
+    if (values["no-outer-sandbox"] === true) body.noOuterSandbox = true;
     if (values["no-worktree"] === true) body.noWorktree = true;
     if (values.node !== undefined) {
       if (values.node.trim() === "") throw new UsageError("--node 不能是空的");
@@ -82,9 +83,11 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
     return { command: "worker.end", body, textSource: null };
   }
   if (group === "worker" && action === "list") {
-    allowOnly(values, [], "worker list");
+    allowOnly(values, ["vendor"], "worker list");
     expectPositionals(rest, 0, "worker list");
-    return { command: "worker.list", body: {}, textSource: null };
+    const { vendor } = values;
+    if (vendor !== undefined && !isAgentVendor(vendor)) throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
+    return { command: "worker.list", body: vendor === undefined ? {} : { vendor }, textSource: null };
   }
   if (group === "worker" && action === "show") {
     allowOnly(values, ["task", "report"], "worker show");
@@ -134,7 +137,11 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
 
 export function parseAskCommand({ group, action, rest, positionals, values, env, cwd }: GroupArgs): Parsed | undefined {
   if (group === "ask" && action === "close") {
-    allowOnly(values, [], "ask close");
+    allowOnly(values, ["message"], "ask close");
+    if (values.message !== undefined) {
+      expectPositionals(rest, 0, "ask close");
+      return { command: "ask.close", body: { messageId: idOf(values.message, "ask close", "消息") }, textSource: null };
+    }
     expectPositionals(rest, 1, "ask close");
     return { command: "ask.close", body: { itemId: idOf(rest[0], "ask close", "卡") }, textSource: null };
   }

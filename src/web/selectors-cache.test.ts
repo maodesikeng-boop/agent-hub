@@ -24,23 +24,31 @@ import {
 import { runningWorkerCount, totalRunningWorkers, waitingConversations } from "../shared/reminders.ts";
 import { capabilityProjectOptions, capabilitySections, capabilityTotals, filterCapabilitySections, patchedView } from "./capabilities-model.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
+import { LOCAL_DEVICE } from "./devices.ts";
+import { filterProjectList, projectListOf } from "./project-list.ts";
+import { quotaMeterOf, railComputersOf, type RailComputerInput } from "./rail-model.ts";
 import { fleetRouterStream, mergeRouterStream, routerStreamOf, type RouterStreamDeviceInput } from "./router-stream.ts";
 import {
   activeGraphsOf,
   deviceRouterView,
   fleetRouterView,
   groupMessages,
+  hasFetchedQuotaSession,
   listConversations,
   pendingDecisionsOf,
   previewText,
   quotaResetTimes,
   quotaUsage,
   unboundWorkersOf,
+  workerOutcomesOf,
   workersOf,
 } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
+import { turnProgress } from "./turn-progress.ts";
 import { downloadOfferOf, updateReminderOf } from "./update-model.ts";
 import { describeResourcesSummary, partitionHeldResources } from "./resources-model.ts";
+import { graphFlowOf, horizontalLayoutOf, verticalRowsOf, type MeasureStepText } from "./graph-flow.ts";
+import { activeWorkOf, completedDaysOf } from "./work-panel-model.ts";
 import { changeOf, makeCapabilitiesView, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
 const WORKERS = 300;
@@ -190,7 +198,7 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
       all.push(makeSystemMessage({ id: id++, event: { event: "session.renewed", sessionId: g + 2, fromSessionId: g + 1, turnStartId } }));
     }
     expect(medianMs(7, () => void groupMessages([...all]))).toBeLessThan(50);
-    const flat = groupMessages(all).flatMap((item) => (item.kind === "message" ? [item.message] : [...item.work, ...item.parts]));
+    const flat = groupMessages(all).items.flatMap((item) => (item.kind === "message" ? [item.message] : [...item.work, ...item.parts]));
     const first = flat.findIndex((m) => m.sender === "system");
     expect(flat.slice(first, first + 4).map((m) => [m.sender, m.sessionId])).toEqual([
       ["system", null],
@@ -233,6 +241,88 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(listConversations(next)).toBe(entriesBefore);
     expect(quotaUsage(next, 0)).toBe(quotaBefore);
     expect(quotaResetTimes(next)).toBe(resetsBefore);
+
+    // 无关 Worker status 更新（仅改 currentTool / lastEventAt）不重算 workersOf，也不穿透 quotaUsage / hasFetchedQuotaSession
+    let rated = applyChange(
+      state,
+      sessionChange(
+        state.seq + 1,
+        makeSession({
+          sessionId: 88_888,
+          conversationId: PM_CONVERSATION,
+          vendor: "claude",
+          rateLimit: {
+            status: "allowed",
+            resetsAt: 2_000,
+            windows: { five_hour: { utilization: 0.42, resetsAt: 2_000, status: "allowed" } },
+          },
+        }),
+      ),
+    );
+    rated = applyChange(
+      rated,
+      sessionChange(
+        rated.seq + 1,
+        makeSession({
+          sessionId: workerSessionOf(0),
+          conversationId: workerConversationOf(0),
+          status: "running",
+          activity: "working",
+        }),
+      ),
+    );
+    const ratedWorkersBefore = workersOf(rated, 1);
+    const ratedQuotaBefore = quotaUsage(rated, 1_500_000);
+    const fetchedBefore = hasFetchedQuotaSession(rated);
+    const workerNoise = applyChange(
+      rated,
+      sessionChange(
+        rated.seq + 1,
+        makeSession({
+          sessionId: workerSessionOf(0),
+          conversationId: workerConversationOf(0),
+          status: "running",
+          activity: "working",
+          currentTool: "vitest",
+          lastEventAt: 9_999,
+        }),
+      ),
+    );
+    expect(workersOf(workerNoise, 1)).toBe(ratedWorkersBefore);
+    expect(quotaUsage(workerNoise, 1_500_000)).toBe(ratedQuotaBefore);
+    expect(hasFetchedQuotaSession(workerNoise)).toBe(fetchedBefore);
+    // 到 reset 时刻即时失效
+    expect(quotaUsage(workerNoise, 2_000_000)).not.toBe(ratedQuotaBefore);
+    expect(quotaUsage(workerNoise, 2_000_000)[0]?.windows[0]?.percent).toBe(0);
+
+    // 真实时间戳窗口的 [minNowMs, maxNowMs) 边界：同一 now 命中快速缓存，跨过 REAL_EPOCH_SEC*1000 或 (resetsAt - maxSpanSec)*1000 即时失效
+    const futureResetsAt = 1_700_000_000;
+    const spanStartMs = (futureResetsAt - (5 * 60 * 60 + 3600)) * 1000;
+    const realEpochMs = 1_000_000_000 * 1000;
+    const farFutureState = applyChange(
+      state,
+      sessionChange(
+        state.seq + 1,
+        makeSession({
+          sessionId: 77_777,
+          conversationId: PM_CONVERSATION,
+          vendor: "claude",
+          rateLimit: {
+            status: "allowed",
+            resetsAt: futureResetsAt,
+            windows: { five_hour: { utilization: 0.55, resetsAt: futureResetsAt, status: "allowed" } },
+          },
+        }),
+      ),
+    );
+    const farNow = realEpochMs + 1_000;
+    const rejectedFirst = quotaUsage(farFutureState, farNow);
+    expect(rejectedFirst).toEqual([]);
+    expect(quotaUsage(farFutureState, farNow)).toBe(rejectedFirst);
+    const validAtSpanStart = quotaUsage(farFutureState, spanStartMs);
+    expect(validAtSpanStart[0]?.windows[0]?.percent).toBe(55);
+    expect(quotaUsage(farFutureState, spanStartMs)).toBe(validAtSpanStart);
+    expect(quotaUsage(farFutureState, realEpochMs - 1)[0]?.windows[0]?.percent).toBe(55);
   });
 
   it("在跑的 Worker 个数：所有项目经理一次算完、按 conversations + sessions 缓存；“等你”按项目经理问个数不再每个对话扫一遍全部 Worker", () => {
@@ -415,6 +505,12 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(afterResolve).not.toBe(firstFleet);
     expect(afterResolve.decisions).toHaveLength(0);
     expect(fleetRouterView(makeDevices(resolved))).toBe(afterResolve);
+
+    const withApproval = { ...resolved, pendingSandboxCards: [{ id: 3, conversationId: PM_CONVERSATION, text: "Inspect Calculator" }] };
+    const afterApproval = fleetRouterView(makeDevices(withApproval));
+    expect(afterApproval.summary.pendingCount).toBe(1);
+    expect(fleetRouterView(makeDevices({ ...withApproval, seq: withApproval.seq + 1 }))).toBe(afterApproval);
+    expect(fleetRouterView(makeDevices({ ...withApproval, pendingSandboxCards: [] })).summary.pendingCount).toBe(0);
 
     // 还没连上的远端设备（phase 不是 ready）不许击穿缓存：它的空视图每次都是同一份引用
     const withLoading = (local: HubState) => [...makeDevices(local), { id: "osaka-id", name: "Osaka", self: false, online: false, state: initialState }];
@@ -892,7 +988,7 @@ describe("resources selectors", () => {
     };
     const summary = describeResourcesSummary(snapshot);
     expect(describeResourcesSummary(snapshot)).toBe(summary);
-    expect(summary).toEqual({ summary: "1 held", attention: true, heldCount: 1 });
+    expect(summary).toEqual({ summary: "1 to review", attention: true, heldCount: 1 });
     expect(describeResourcesSummary({ ...snapshot, held: [held[1]!], attentionCount: 0 })).toEqual({
       summary: "8.0 KB",
       attention: false,
@@ -902,5 +998,273 @@ describe("resources selectors", () => {
     expect(partitionHeldResources(held)).toBe(partitioned);
     expect(partitioned.needsDecision).toHaveLength(1);
     expect(partitioned.kept).toHaveLength(1);
+  });
+});
+
+describe("shell list and rail selectors", () => {
+  it("caches projectListOf, railComputersOf, and quotaMeterOf per input reference and invalidates immediately on change", () => {
+    let state = monthState();
+    const pms = Array.from({ length: 40 }, (_, i) =>
+      makePm({
+        id: i + 1,
+        name: `PM ${i + 1}`,
+        pinnedAt: i < 5 ? 1_000 + (5 - i) : null,
+        archivedAt: i >= 35 ? 2_000 + i : null,
+      }),
+    );
+    const conversations = { ...state.conversations };
+    for (let i = 1; i < 40; i++) {
+      const id = i + 1;
+      conversations[id] = { conversation: makeConversation({ id, pmId: id, title: `PM ${id}` }), messages: [], hasMore: false };
+    }
+    state = { ...state, pms, conversations };
+
+    const entries = listConversations(state);
+    const sections = projectListOf(entries);
+    expect(projectListOf(entries)).toBe(sections);
+    expect(filterProjectList(sections, "  ")).toBe(sections);
+    expect(sections.pinned).toHaveLength(5);
+    expect(sections.archived).toHaveLength(5);
+    expect(sections.active).toHaveLength(30);
+
+    // Streaming updates on a session keep listConversations and projectListOf references stable.
+    const streamed = applyChange(
+      state,
+      sessionChange(
+        state.seq + 1,
+        makeSession({ sessionId: 77_001, conversationId: PM_CONVERSATION, pmId: 1, status: "running", activity: "working", streamingText: "chunk" }),
+      ),
+    );
+    expect(projectListOf(listConversations(streamed))).toBe(sections);
+
+    // Pinning an unpinned PM invalidates listConversations and projectListOf immediately.
+    const pinned = applyChange(streamed, changeOf(streamed.seq + 1, "pm.updated", { pm: { ...pms[10]!, pinnedAt: 9_000 } }));
+    const nextSections = projectListOf(listConversations(pinned));
+    expect(nextSections).not.toBe(sections);
+    expect(nextSections.pinned).toHaveLength(6);
+    expect(projectListOf(listConversations(pinned))).toBe(nextSections);
+
+    const computers: readonly RailComputerInput[] = [
+      { key: LOCAL_DEVICE, name: "Mac", platform: "darwin", status: "online" },
+      { key: "tokyo", name: "Tokyo", platform: "linux", status: "online" },
+    ];
+    const asking = new Set<string>(["1", "tokyo/2", "tokyo/3"]);
+    const rail0 = railComputersOf(computers, asking);
+    expect(railComputersOf(computers, asking)).toBe(rail0);
+    expect(rail0.map((c) => c.badge)).toEqual([1, 2]);
+    const rail1 = railComputersOf(computers, new Set<string>(["1"]));
+    expect(rail1).not.toBe(rail0);
+    expect(rail1.map((c) => c.badge)).toEqual([1, 0]);
+    expect(railComputersOf(computers, new Set<string>(["1"]))).not.toBe(rail1);
+
+    const withRate = applyChange(
+      streamed,
+      sessionChange(
+        streamed.seq + 1,
+        makeSession({
+          sessionId: 77_002,
+          conversationId: PM_CONVERSATION,
+          vendor: "claude",
+          rateLimit: {
+            status: "allowed",
+            resetsAt: 2_000,
+            windows: { five_hour: { utilization: 0.62, resetsAt: 2_000, status: "allowed" } },
+          },
+        }),
+      ),
+    );
+    const quota0 = quotaUsage(withRate, 1_500_000);
+    const meter0 = quotaMeterOf(quota0);
+    expect(quotaMeterOf(quota0)).toBe(meter0);
+    expect(meter0).toMatchObject({ percent: 62, warning: false, full: false });
+
+    const quotaReset = quotaUsage(withRate, 2_000_000);
+    const meter1 = quotaMeterOf(quotaReset);
+    expect(meter1).not.toBe(meter0);
+    expect(meter1).toMatchObject({ percent: 0, warning: false });
+    expect(quotaMeterOf(quotaReset)).toBe(meter1);
+  });
+
+  it("workerOutcomesOf: returns a stable reference across streaming pulses and invalidates when a new outcome arrives", () => {
+    let state = monthState();
+    const targetWorker = workerConversationOf(WORKERS - 1);
+    const first = workerOutcomesOf(state, targetWorker);
+    expect(first).toHaveLength(1);
+    expect(workerOutcomesOf(state, targetWorker)).toBe(first);
+
+    const streamed = applyChange(
+      state,
+      sessionChange(
+        state.seq + 1,
+        makeSession({
+          sessionId: 99_998,
+          conversationId: PM_CONVERSATION,
+          pmId: 1,
+          status: "running",
+          activity: "working",
+          streamingText: "streaming chunk",
+        }),
+      ),
+    );
+    expect(workerOutcomesOf(streamed, targetWorker)).toBe(first);
+
+    const otherWorkerMsg = applyChange(
+      streamed,
+      messageChange(
+        streamed.seq + 1,
+        "message.created",
+        makeMessage({ id: 2_000_001, conversationId: workerConversationOf(0), sessionId: workerSessionOf(0) }),
+      ),
+    );
+    expect(workerOutcomesOf(otherWorkerMsg, targetWorker)).toBe(first);
+
+    const failed = applyChange(
+      otherWorkerMsg,
+      messageChange(
+        otherWorkerMsg.seq + 1,
+        "message.created",
+        makeWorkerLine({
+          id: 2_000_002,
+          conversationId: PM_CONVERSATION,
+          line: { workerId: WORKERS - 1, workerConversationId: targetWorker, title: `W${WORKERS - 1}`, event: "turn_failed", summary: "disk full" },
+        }),
+      ),
+    );
+    const after = workerOutcomesOf(failed, targetWorker);
+    expect(after).not.toBe(first);
+    expect(after).toHaveLength(2);
+    expect(after.at(-1)?.line.summary).toBe("disk full");
+    expect(workerOutcomesOf(failed, targetWorker)).toBe(after);
+  });
+
+  it("groupMessages with checklists and turnProgress keep stable references and invalidate immediately on changes", () => {
+    const checklistMsg = (id: number, status: "in_progress" | "completed") =>
+      makeMessage({
+        id,
+        conversationId: PM_CONVERSATION,
+        kind: "checklist",
+        text: "",
+        collapsed: true,
+        meta: {
+          checklist: [
+            { id: "a", title: "Read files", activeTitle: "Reading files", status: "completed" },
+            { id: "b", title: "Run tests", activeTitle: "Running tests", status },
+          ],
+        },
+      });
+    const base: Message[] = [
+      makeUserMessage({ id: 1, conversationId: PM_CONVERSATION, text: "开始" }),
+      checklistMsg(2, "in_progress"),
+      makeToolMessage({ id: 3, conversationId: PM_CONVERSATION, text: "Read: a.ts" }),
+      checklistMsg(4, "completed"),
+      makeToolMessage({ id: 5, conversationId: PM_CONVERSATION, text: "Bash: pnpm test" }),
+      makeMessage({ id: 6, conversationId: PM_CONVERSATION, text: "好了" }),
+    ];
+
+    const grouped = groupMessages(base);
+    expect(groupMessages(base)).toBe(grouped);
+    const turn = grouped.items.find((item) => item.kind === "turn")!;
+    expect(turn.checklists.map((m) => m.id)).toEqual([2, 4]);
+    expect(turn.work.map((m) => m.id)).toEqual([3, 5]);
+
+    const nextMessages = [...base, checklistMsg(7, "completed")];
+    const nextGrouped = groupMessages(nextMessages);
+    expect(nextGrouped).not.toBe(grouped);
+    expect(groupMessages(nextMessages)).toBe(nextGrouped);
+
+    const model = turnProgress(turn.work, turn.checklists);
+    expect(turnProgress(turn.work, turn.checklists)).toBe(model);
+    expect(turnProgress([...turn.work], [...turn.checklists])).toBe(model);
+    expect(turnProgress(turn.work, [...turn.checklists, checklistMsg(8, "completed")])).not.toBe(model);
+    expect(turnProgress([...turn.work, makeToolMessage({ id: 9, conversationId: PM_CONVERSATION })], turn.checklists)).not.toBe(model);
+
+    const onlyChecklist = turnProgress([], [checklistMsg(10, "in_progress")]);
+    expect(turnProgress([], [onlyChecklist.steps ? checklistMsg(10, "in_progress") : checklistMsg(10, "in_progress")])).not.toBe(onlyChecklist);
+    const anchor = [checklistMsg(11, "in_progress")];
+    const stableChecklistOnly = turnProgress([], anchor);
+    expect(turnProgress([], [...anchor])).toBe(stableChecklistOnly);
+
+    const bigWork = Array.from({ length: 300 }, (_, i) => makeToolMessage({ id: 100 + i * 2, conversationId: PM_CONVERSATION }));
+    const bigChecklists = Array.from({ length: 200 }, (_, i) => checklistMsg(101 + i * 2, i % 2 === 0 ? "in_progress" : "completed"));
+    expect(medianMs(21, () => void turnProgress([...bigWork], [...bigChecklists]))).toBeLessThan(5);
+  });
+
+  it("work panel selectors (activeWorkOf, graphFlowOf, horizontalLayoutOf, verticalRowsOf, completedDaysOf) keep stable references and stay fast at 1-month scale", () => {
+    const state = monthState();
+    const workers = workersOf(state, 1);
+    const makeStep = (key: string, sortOrder: number, status: TaskNode["status"]): TaskNode => ({
+      key,
+      title: `Step ${key}`,
+      status,
+      waitingFor: null,
+      skipped: false,
+      sortOrder,
+      activeWorkerId: null,
+      workerIds: [],
+      artifact: null,
+      gateQuestion: null,
+      gateOptions: [],
+      gateSummaryMd: null,
+      gateRecommended: null,
+      gateAskMessageId: null,
+      decision: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const graphs: TaskGraph[] = Array.from({ length: 4 }, (_, i) => ({
+      id: i + 1,
+      projectId: 1,
+      pmId: 1,
+      conversationId: PM_CONVERSATION,
+      title: `Graph ${i + 1}`,
+      status: "active",
+      originMsgId: null,
+      nodes: [
+        makeStep("a", 0, "done"),
+        makeStep("b", 1, "running"),
+        makeStep("c", 2, "running"),
+        makeStep("d", 3, "pending"),
+      ],
+      edges: [
+        { fromKey: "a", toKey: "b" },
+        { fromKey: "a", toKey: "c" },
+        { fromKey: "b", toKey: "d" },
+        { fromKey: "c", toKey: "d" },
+      ],
+      createdAt: 1000,
+      updatedAt: 1000 + i,
+      completedAt: null,
+    }));
+
+    const work0 = activeWorkOf(graphs, workers);
+    expect(activeWorkOf(graphs, workers)).toBe(work0);
+    const measure: MeasureStepText = (t) => t.length * 8;
+    const flow0 = graphFlowOf(graphs[0]!);
+    expect(graphFlowOf(graphs[0]!)).toBe(flow0);
+    const layout0 = horizontalLayoutOf(flow0, measure);
+    expect(horizontalLayoutOf(flow0, measure)).toBe(layout0);
+    expect(verticalRowsOf(flow0)).toBe(verticalRowsOf(flow0));
+
+    const now = new Date(2026, 10, 25, 16, 0, 0).getTime();
+    const pages = Array.from({ length: 8 }, (_, p) => ({
+      total: 400,
+      next: null,
+      items: Array.from({ length: 50 }, (_, i) => {
+        const idx = p * 50 + i + 1;
+        return {
+          kind: "worker" as const,
+          conversationId: idx,
+          workerId: idx,
+          title: `Done ${idx}`,
+          outcome: "done" as const,
+          finishedAt: now - idx * 3_600_000,
+          prUrl: null,
+        };
+      }),
+    }));
+    const days0 = completedDaysOf(pages, now);
+    expect(completedDaysOf(pages, now)).toBe(days0);
+    expect(days0.reduce((sum, d) => sum + d.items.length, 0)).toBe(400);
+    expect(medianMs(21, () => void completedDaysOf([...pages], now))).toBeLessThan(15);
   });
 });

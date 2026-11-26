@@ -1,3 +1,5 @@
+import type { AppApprovalId, DecideAppApprovalRequest, DecideAppApprovalResponse } from "../shared/app-approval.ts";
+import type { DecideSandboxApprovalRequest, DecideSandboxApprovalResponse, SandboxApprovalId } from "../shared/index.ts";
 import {
   API_PATHS,
   API_REQUEST_TIMEOUT_MS,
@@ -38,11 +40,14 @@ import {
   type EditPersonaResponse,
   type PmLookRequest,
   type PmLookResponse,
+  type PmPinRequest,
+  type PmPinResponse,
   type FileAction,
   type FileActionResponse,
   type MessageId,
   type ConversationsLookup,
-  type EndedWorkersPage,
+  type CompletedCursor,
+  type CompletedWorkPage,
   type MessagesPage,
   type WorkerId,
   type ModelsResponse,
@@ -91,7 +96,6 @@ import {
   type SkipTaskNodeResponse,
   type StateSnapshot,
   type TaskGraphId,
-  type TaskGraphsPage,
   type TaskNodeKey,
   type UpdateRouterSettingsRequest,
   type UpdateRouterSettingsResponse,
@@ -252,7 +256,8 @@ export function createClient(device: DeviceId | null) {
       request<MessagesPage>(`${at(API_PATHS.messages(conversationId))}?before=${before}`),
     fetchConversationsLookup: (query: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
       request<ConversationsLookup>(at(API_PATHS.conversationsLookup(query))),
-    fetchEndedWorkers: (pmId: PmId, before: ConversationId | null) => request<EndedWorkersPage>(at(API_PATHS.endedWorkers(pmId, before))),
+    fetchCompletedWork: (pmId: PmId, cursor: CompletedCursor | null, signal?: AbortSignal) =>
+      request<CompletedWorkPage>(at(API_PATHS.completedWork(pmId, cursor)), signal ? { signal } : undefined),
     fetchTurnReply: (messageId: MessageId) => request<TurnReplyView>(at(API_PATHS.messageTurnReply(messageId))),
     postMessage: (conversationId: ConversationId, body: PostMessageRequest) => postJson<PostMessageResponse>(at(API_PATHS.messages(conversationId)), body),
     postUpload: async (file: Blob, name: string): Promise<Attachment> => {
@@ -272,12 +277,14 @@ export function createClient(device: DeviceId | null) {
       }
     },
     postStop: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.stop(conversationId))),
+    postEndWorker: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.endWorker(conversationId))),
     postRewind: (conversationId: ConversationId) => postJson<RewindMessageResponse>(at(API_PATHS.rewind(conversationId))),
     postCreatePm: (body: CreatePmRequest) => postJson<CreatePmResponse>(at(API_PATHS.pms), body),
     postPickFolder: (body: PickFolderRequest) => postJson<PickFolderResponse>(at(API_PATHS.pickFolder), body, null),
     fetchPersona: (pmId: PmId) => request<PersonaResponse>(at(API_PATHS.persona(pmId))),
     putPersona: (pmId: PmId, body: EditPersonaRequest) => putJson<EditPersonaResponse>(at(API_PATHS.persona(pmId)), body),
     putPmLook: (pmId: PmId, body: PmLookRequest) => putJson<PmLookResponse>(at(API_PATHS.pmLook(pmId)), body),
+    putPmPin: (pmId: PmId, body: PmPinRequest) => putJson<PmPinResponse>(at(API_PATHS.pmPin(pmId)), body),
     postRevertPersonaChange: (changeId: PersonaChangeId) => postJson<EditPersonaResponse>(at(API_PATHS.revertPersonaChange(changeId))),
     fetchPmMemoryFiles: (pmId: PmId) => request<PmMemoryFilesResponse>(at(API_PATHS.pmMemoryFiles(pmId))),
     fetchPmMemoryFile: (pmId: PmId, name: string) => request<PmMemoryFileResponse>(at(API_PATHS.pmMemoryFile(pmId, name))),
@@ -291,7 +298,7 @@ export function createClient(device: DeviceId | null) {
     deleteSchedule: (scheduleId: ScheduleId) => request<void>(at(API_PATHS.schedule(scheduleId)), { method: "DELETE" }),
     fetchModels: (options: { refresh?: typeof REFRESH_UNUSABLE } = {}) =>
       request<ModelsResponse>(at(options.refresh ? `${API_PATHS.models}?refresh=${options.refresh}` : API_PATHS.models), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
-    fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
+    fetchQuota: (signal?: AbortSignal) => request<QuotaResponse>(at(API_PATHS.quota), signal ? { signal } : undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     fetchResources: (options: { refresh?: boolean } = {}) =>
       request<ResourcesSnapshot>(
         at(options.refresh ? `${API_PATHS.resources}?refresh=1` : API_PATHS.resources),
@@ -309,6 +316,10 @@ export function createClient(device: DeviceId | null) {
     postArchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.archivePm(pmId))),
     postUnarchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.unarchivePm(pmId))),
     postRetryMessage: (messageId: MessageId) => postJson<RetryMessageResponse>(at(API_PATHS.retryMessage(messageId))),
+    postDecideAppApproval: (id: AppApprovalId, body: DecideAppApprovalRequest) =>
+      postJson<DecideAppApprovalResponse>(at(API_PATHS.decideAppApproval(id)), body),
+    postDecideSandboxApproval: (id: SandboxApprovalId, body: DecideSandboxApprovalRequest) =>
+      postJson<DecideSandboxApprovalResponse>(at(API_PATHS.decideSandboxApproval(id)), body),
     postRecheckUserBlocker: (id: UserBlockerId) => postJson<RecheckUserBlockerResponse>(at(API_PATHS.recheckUserBlocker(id))),
     postFileAction: (target: FileActionTarget, action: FileAction) => {
       const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);
@@ -342,12 +353,6 @@ export function createClient(device: DeviceId | null) {
       postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommands), body),
     postRetryRouterCommand: (id: RouterCommandId) =>
       postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), {}),
-    fetchProjectTaskGraphs: (projectId: ProjectId, options: { before?: TaskGraphId; limit?: number } = {}) => {
-      const params = new URLSearchParams({ status: "history" });
-      if (options.before !== undefined) params.set("before", String(options.before));
-      if (options.limit !== undefined) params.set("limit", String(options.limit));
-      return request<TaskGraphsPage>(`${at(API_PATHS.projectTaskGraphs(projectId))}?${params.toString()}`);
-    },
     postTaskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: DecideTaskNodeRequest) =>
       postJson<DecideTaskNodeResponse>(at(API_PATHS.taskGraphDecide(graphId, nodeKey)), body),
     postTaskGraphSkip: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: SkipTaskNodeRequest = {}) =>
@@ -367,11 +372,11 @@ export const localClient: HubClient = createClient(null);
 
 export const { fetchState, postMessage, postUpload, fetchVendorSyncPreview, postVendorSyncApply } = localClient;
 
-export const fetchDevices = () => request<DevicesResponse>(API_PATHS.devices);
+export const fetchDevices = (signal?: AbortSignal) => request<DevicesResponse>(API_PATHS.devices, signal ? { signal } : undefined);
 export const patchDevice = (id: DeviceId, body: RenameDeviceRequest) => sendJson<DeviceInfo>("PATCH", API_PATHS.device(id), body);
 export const deleteDevice = (id: DeviceId) => request<void>(API_PATHS.device(id), { method: "DELETE" });
 
-export const fetchAccount = () => request<AccountStatusView>(API_PATHS.account);
+export const fetchAccount = (signal?: AbortSignal) => request<AccountStatusView>(API_PATHS.account, signal ? { signal } : undefined);
 export const postAccountLogin = (body: StartLoginRequest = {}) => postJson<AccountStatusView>(API_PATHS.accountLogin, body);
 export const cancelAccountLogin = () => request<AccountStatusView>(API_PATHS.accountLogin, { method: "DELETE" });
 export const postAccountLogout = () => postJson<AccountStatusView>(API_PATHS.accountLogout, {});

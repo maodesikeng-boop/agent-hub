@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { forceKill, isAlive, signalChild, waitForExit } from "../../src/daemon/driver/process.ts";
 import { removeTreeWithRetry, spawnOwnedProcess } from "../../src/daemon/platform/index.ts";
+import { readCompleteLogLines } from "../append-log.ts";
 import { writeExecutableNodeScript } from "../fake-cli-shim.ts";
 import { writeDiagLog } from "./diag-helper.ts";
 
@@ -24,13 +25,8 @@ afterEach(async () => {
 async function waitForFileLines(file: string, minLines: number, timeoutMs = 8_000): Promise<string[]> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync(file)) {
-      const lines = readFileSync(file, "utf8")
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (lines.length >= minLines) return lines;
-    }
+    const lines = readCompleteLogLines(file).map((line) => line.trim()).filter(Boolean);
+    if (lines.length >= minLines) return lines;
     await new Promise((r) => setTimeout(r, 30));
   }
   throw new Error(`Timed out waiting for ${minLines} lines in ${file}`);

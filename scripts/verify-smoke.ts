@@ -1,7 +1,3 @@
-// Local end-to-end smoke check: build the web app, start a real daemon on a throwaway data directory, log in, render the
-// workbench in headless Chromium, send one message and wait for the fake claude's reply, shut down cleanly, restart on the
-// same data directory and check the conversation survived, then delete the directory.
-// Usage: node scripts/verify-smoke.ts [--runs <n>] [--out <dir>]; writes workbench-smoke.png and smoke-runs.txt to --out.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
@@ -9,13 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 import { readLedgerFile } from "../src/daemon/process-ledger.ts";
 import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST, type StateSnapshot } from "../src/shared/index.ts";
 import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import { resolveHubPaths } from "../src/shared/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
 import { digestOf, lostAfterRestart, sendAndAwaitReply, type RoundTrip } from "./verify-steps.ts";
+import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
+import { verifyComposerLayout } from "./verify-composer-layout.ts";
+import { verifyProjectListHeader } from "./verify-list-header.ts";
+import { verifyShellWidths } from "./verify-shell-widths.ts";
+import { verifyTopBarUnderSettings } from "./verify-window-drag.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const FAKE_CLAUDE = fileURLToPath(new URL("../test/fake-claude/fake-claude.ts", import.meta.url));
@@ -35,7 +36,7 @@ interface RunResult {
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null };
 
-/** admin.sock 的路径有长度上限（macOS 104 字节），macOS 的 tmpdir() 太长时用 /tmp。 */
+// macOS limits Unix socket paths to 104 bytes.
 function shortTmp(): string {
   const base = tmpdir();
   return base.length <= 40 || !existsSync("/tmp") ? base : "/tmp";
@@ -49,7 +50,6 @@ function withTimeout<T>(what: string, promise: Promise<T>, ms = VERIFY_SMOKE_STE
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** 守护进程看到的环境只给这几项：用户主目录换成临时目录（各家配置同步只落在这里），默认厂商用假 claude，别家指到不存在的路径。 */
 function daemonEnv(home: string, scratch: string): Record<string, string> {
   const userHome = join(scratch, "user-home");
   mkdirSync(userHome, { recursive: true });
@@ -69,7 +69,6 @@ function daemonEnv(home: string, scratch: string): Record<string, string> {
   };
 }
 
-/** 正常关机：POSIX 发 SIGTERM，Windows 经 admin 命名管道发 /admin/shutdown（和桌面外壳一样）。 */
 function requestShutdown(child: ChildProcess, home: string, uiToken: string): void {
   if (process.platform !== "win32") {
     child.kill("SIGTERM");
@@ -148,7 +147,57 @@ async function stopDaemon(daemon: LaunchedDaemon, home: string): Promise<void> {
   if (leftovers.length > 0) throw new Error(`关机后还有子进程没退出：${leftovers.map((e) => `${e.pid}（${e.purpose}）`).join("、")}`);
 }
 
-async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir: string, phase: (name: string) => void): Promise<RoundTrip> {
+async function verifySavedProjectListWidth(page: Page): Promise<void> {
+  const openLocalList = async () => {
+    await page.locator('nav[aria-label="Workspace"] button:has([data-testid^="rail-device-dot-"])').first().click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+  };
+  await openLocalList();
+  const handle = page.getByRole("separator", { name: "Resize project list" });
+  await handle.waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+  const remPx = await page.evaluate(() => {
+    const g = globalThis as unknown as { document: { documentElement: unknown }; getComputedStyle(el: unknown): { fontSize: string } };
+    return Number.parseFloat(g.getComputedStyle(g.document.documentElement).fontSize) || 17.5;
+  });
+  const listBoxWidth = async () => (await page.locator("#list").boundingBox())?.width ?? null;
+  const waitForListWidth = async (wantPx: number, label: string) => {
+    await withTimeout(
+      label,
+      (async () => {
+        const deadline = Date.now() + VERIFY_SMOKE_STEP_TIMEOUT_MS;
+        for (;;) {
+          const width = await listBoxWidth();
+          if (width !== null && Math.abs(width - wantPx) <= 2) return;
+          if (Date.now() > deadline) throw new Error(`list width ${width}px did not reach ${wantPx}px`);
+          await page.waitForTimeout(50);
+        }
+      })(),
+    );
+  };
+  const box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 600, box.y + box.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await waitForListWidth(25 * remPx, "等左栏拖到 25rem 上限");
+
+  await handle.dblclick();
+  await waitForListWidth(16.5 * remPx, "等双击把手恢复 16.5rem 默认宽");
+
+  const box2 = (await handle.boundingBox())!;
+  await page.mouse.move(box2.x + box2.width / 2, box2.y + box2.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box2.x + box2.width / 2 + 100, box2.y + box2.height / 2, { steps: 8 });
+  await page.mouse.up();
+  const draggedPx = (await listBoxWidth()) ?? 0;
+  if (draggedPx <= 16.5 * remPx + 20) throw new Error(`拖动后左栏未变宽：${draggedPx}px`);
+
+  await page.reload();
+  await openLocalList();
+  await handle.waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+  await waitForListWidth(draggedPx, "等刷新后保持记住的左栏宽度");
+}
+
+async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir: string, phase: (name: string) => void, state: StateSnapshot, checkComposer: boolean): Promise<RoundTrip> {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -159,13 +208,34 @@ async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir
     page.on("pageerror", (e) => pageErrors.push(`pageerror: ${e.message}`));
     await page.goto(daemon.loginUrl);
     await page.waitForURL(`${daemon.origin}/`, { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-    // 输入框出来了说明快照已经拉到、主界面画完，不只是挂上了加载页
     await page.locator("#root textarea").first().waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
     await page.waitForLoadState("networkidle", { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await verifySavedProjectListWidth(page);
     const rootText = (await page.locator("#root").innerText()).trim();
     if (rootText === "") throw new Error("工作台渲染出来是空的");
     if (pageErrors.length > 0) throw new Error(`页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
     phase("浏览器渲染工作台");
+
+    await verifyTopBarUnderSettings(page);
+    if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
+    phase("设置页打开时顶栏照样拖窗");
+
+    await verifyProjectListHeader(browser, daemon.loginUrl, daemon.origin);
+    phase("左栏长电脑名与新建按钮不重合");
+
+    await verifyShellWidths(browser, daemon.loginUrl, daemon.origin);
+    phase("Columns and single column at every scale");
+
+    if (checkComposer) {
+      const id = state.conversations[0]?.conversation.id;
+      if (id === undefined) throw new Error("Composer layout check requires a conversation");
+      await verifyComposerLayout(daemon.loginUrl, id, outDir);
+      phase("WebKit composer layout");
+      await page.goto(new URL(`/#/c/${id}`, daemon.loginUrl).href);
+      await verifyComposerInteractions(page, "Chromium", outDir);
+      if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
+      phase("Chromium composer interactions");
+    }
 
     const trip = await sendAndAwaitReply(page, { origin: daemon.origin, cookie, text: ROUND_TRIP_TEXT, timeoutMs: VERIFY_SMOKE_STEP_TIMEOUT_MS });
     await page.screenshot({ path: join(outDir, SCREENSHOT) });
@@ -177,7 +247,7 @@ async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir
   }
 }
 
-async function runOnce(outDir: string): Promise<RunResult> {
+async function runOnce(outDir: string, checkComposer: boolean): Promise<RunResult> {
   const started = performance.now();
   const phases: Array<[string, number]> = [];
   let mark = started;
@@ -204,10 +274,10 @@ async function runOnce(outDir: string): Promise<RunResult> {
     const health = await fetch(`${daemon.origin}${API_PATHS.health}`, { headers });
     const healthBody = (await health.json()) as { ok?: boolean };
     if (health.status !== 200 || healthBody.ok !== true) throw new Error(`健康检查不对：HTTP ${health.status} ${JSON.stringify(healthBody)}`);
-    await fetchState(daemon, cookie);
+    const state = await fetchState(daemon, cookie);
     phase("登录、健康检查、/api/state");
 
-    const trip = await renderAndRoundTrip(daemon, cookie, outDir, phase);
+    const trip = await renderAndRoundTrip(daemon, cookie, outDir, phase, state, checkComposer);
     const before = digestOf(await fetchState(daemon, cookie), [trip.conversationId]);
 
     await stopDaemon(daemon, home);
@@ -249,7 +319,7 @@ function describeRun(i: number, r: RunResult): string {
 }
 
 async function main(): Promise<number> {
-  const { values } = parseArgs({ options: { runs: { type: "string", default: "1" }, out: { type: "string", default: join(shortTmp(), "bellwood-verify-smoke") } } });
+  const { values } = parseArgs({ options: { runs: { type: "string", default: "1" }, out: { type: "string", default: join(shortTmp(), "bellwood-verify-smoke") }, "composer-layout": { type: "boolean" } } });
   const runs = Number.parseInt(values.runs, 10);
   if (!Number.isInteger(runs) || runs < 1) throw new Error(`--runs 要是正整数：${values.runs}`);
   const outDir = values.out;
@@ -258,7 +328,7 @@ async function main(): Promise<number> {
   const lines: string[] = [`verify 冒烟 ${new Date().toISOString()}，${process.platform}/${process.arch}，Node ${process.version}`];
   const results: RunResult[] = [];
   for (let i = 1; i <= runs; i++) {
-    const r = await runOnce(outDir);
+    const r = await runOnce(outDir, values["composer-layout"] ?? false);
     results.push(r);
     const line = describeRun(i, r);
     lines.push(line);

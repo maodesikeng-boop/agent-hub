@@ -4,6 +4,7 @@ import type {
   Driver,
   DriverOptions,
   ProviderAuthMethodDescriptor,
+  QuotaResponse,
   ReadonlyPolicy,
   SessionRole,
   VendorAvailability,
@@ -24,15 +25,27 @@ export interface VendorComposerDeps {
   timeoutMs?: number;
 }
 
+export interface VendorQuotaQuery {
+  path: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
+  timeoutMs: number;
+}
+
 export interface VendorDaemon {
   createDriver(deps: VendorDriverDeps): Driver;
   composer?: { base: VendorComposerBase; create(deps: VendorComposerDeps): VendorComposer };
   // Must not open a session, connect MCP, or run hooks.
   catalog?: { probe: VendorCatalogProbe; source(options: VendorCatalogSourceOptions): VendorCatalogSource };
+  /** Null means the current login does not provide subscription quota. */
+  queryQuota?(options: VendorQuotaQuery): Promise<QuotaResponse | null>;
+  quotaScope?(home: string, env: NodeJS.ProcessEnv): string;
   forkers?: readonly SessionForker[];
   transcriptPath?(ref: TranscriptRef, roots: TranscriptRoots): string | null;
   sessionFiles?(ref: TranscriptRef, roots: TranscriptRoots): string[];
   launchFiles?(input: VendorLaunchInput): VendorLaunchFiles;
+  /** Represents every launch option that changes with the capability policy. */
   capabilityLaunch?(caps: SessionCapabilities): unknown;
   sync?: VendorSyncAdapter;
   setup?: VendorSetupAdapter;
@@ -176,6 +189,7 @@ export interface VendorSyncAdapter {
     },
   ): VendorMcpPatchPlan;
   skillTarget(ctx: VendorSyncContext, scope: { kind: "global" } | { kind: "project"; projectDir: string }): VendorSkillTarget;
+  mcpConfigPaths?(ctx: VendorSyncContext): readonly string[];
   scanCapabilities?(ctx: VendorSyncContext, scope: { projectDir: string | null }): Promise<VendorCapabilityScan>;
 }
 

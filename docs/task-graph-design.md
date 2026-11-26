@@ -1,6 +1,6 @@
 # Task Graph orchestration
 
-> Snapshot: 2026-11-22 (commit `540c9189`)
+> Snapshot: 2026-11-23 (commit `e71aaac8`)
 
 Bellwood models multi-step project work as a persistent directed acyclic Task Graph (`task_graphs`, `task_graph_nodes`, and `task_graph_edges` in SQLite). Once a Project Manager creates a graph via `hub graph create --stdin`, the daemon advances steps automatically in the background without waking the PM between clean steps.
 
@@ -9,7 +9,7 @@ Bellwood models multi-step project work as a persistent directed acyclic Task Gr
 Every node (`TaskGraphNode` in `src/shared/domain.ts`) uses one node shape and transitions across four states:
 
 1. **`pending`**: Waiting for upstream dependencies (`task_graph_edges`) to reach `done`.
-2. **`running`**: Dispatched to an active Worker (`Piece`) in an isolated `git worktree` (or the main folder when `--no-worktree` is set).
+2. **`running`**: Dispatched to an active Worker in an isolated `git worktree` (or the main folder when `--no-worktree` is set).
 3. **`waiting`**: Paused on a human or PM gate (`waitingFor: "user"` or `waitingFor: "pm"`):
    - `waitingFor: "user"`: A `confirm: true` user checkpoint, a `hub graph ask` decision card, or a system-generated `UserBlocker` card (for example when the target vendor CLI is signed out or uninstalled on that computer).
    - `waitingFor: "pm"`: A Worker reported `状态: 有问题` or `放弃了`, reported a non-empty `偏离` (scope deviation), failed its review check, or hit an unexpected process error.
@@ -35,7 +35,7 @@ To keep the base PM system prompt short (`src/daemon/prompt.ts`) and avoid over-
 
 ## Decisions, user blockers, and deliverables
 
-- **Unified decision source**: A node waiting on the user (`waitingFor: "user"`) surfaces simultaneously in the project conversation (`hub ask` card), the right-rail `PeelTrack` (`GateMark` bell), `TaskGraphDialog`, Router's `Needs You` tray, and the Feishu project group. Answering from any surface calls `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`, settles the card everywhere, injects the user's choice into downstream prompts, and resumes execution.
+- **Unified decision source**: The ask message records whether a decision card is pending. Worker and step state changes leave the card open. The user can answer to settle the card and send the decision to the step's active Worker. The project manager can record a reply from chat with `hub graph decide`, replace the card with a new one, or close it with `hub ask close --message <messageId>`. Use `hub graph show` to find the message ID of a pending step card.
 - **System `UserBlocker` cards (`src/shared/user-blockers.ts`)**: When automatic dispatch hits an unauthenticated or missing vendor CLI, the daemon posts a `UserBlockerCard` directly instead of stalling on `Waiting on PM`. Clicking `Done` (`POST /api/user-blockers/:id/recheck`) re-probes `ModelCatalogs` outside the SQLite transaction and dispatches every unblocked step and Worker automatically.
 - **Deliverables (`src/shared/deliverables.ts`)**: Files listed in a Worker's `文件:` report field (or `--file label=path` on `hub ask` / `hub router report`) are copied asynchronously outside SQLite transactions into `sent-files/` (`src/daemon/sent-files.ts`, bounded by `SENT_FILES_*` limits and `DataDirReadScope`) and rendered inline via `<CardBody>` (`docs/ui-standard.md` section 22).
 
@@ -44,11 +44,8 @@ To keep the base PM system prompt short (`src/daemon/prompt.ts`) and avoid over-
 Steps declared with `review: true` enforce read-only verification in code so a reviewer can never silently commit fixes to the branch under review:
 
 1. **Detached review worktree and read-only sandbox**: The daemon resolves `ReviewTarget` (`branch` plus a `ReviewSnapshot` recording local `sha`, `origin/<branch>` `sha`, and PR state) and checks out a separate detached-HEAD worktree under the read-only Worker policy ([Read-only Worker design](readonly-worker-design.md)). A `pre-push` git hook injected via environment configuration blocks `git push` inside the review session.
-2. **Two-layer checklist and three-tier grading**:
-   - Layer 1 (`src/shared/review.ts`) checks correctness, security boundaries, async lifecycle and shutdown cancellation, bounded caches/collections, and real-browser verification.
-   - Layer 2 (`REVIEW.md` read from the project's trunk, which is the remote default branch or the branch the project's docs name, never from the candidate branch) runs only the rules whose `Trigger:` globs match changed paths. The checklist never names a branch, remote, toolchain, or code host, so it holds in any project.
-   - Every finding in `问题:` starts with `[Important]`, `[Nit]`, or `[Pre-existing]`. Only `[Important]` can produce a `FAIL` verdict (`结论: PASS | PASS+NOTES | FAIL`, plus `验证提交: <sha>`). Follow-up rounds verify prior `[Important]` items and incremental diffs, stopping for human escalation after `REVIEW_MAX_ROUNDS` (3) failed rounds.
-3. **Post-review tamper check (`review.verify`)**: Before accepting `PASS` or `PASS+NOTES`, the daemon re-probes local `refs/heads/<branch>`, `origin/<branch>`, and the PR head (`ReviewObservation`). If the reviewed commit does not match `验证提交` or the target branch moved during review, the step transitions to `waitingFor: "pm"` instead of `done`.
+2. **Minimal project-agnostic protocol**: `REVIEW_CHECKLIST` in `src/shared/review.ts` keeps the product protocol minimal (verify-only, check code changes against the goal and the project's own rules, focus follow-up rounds on unresolved items and incremental diffs, avoid forcing full local test suites when cloud CI exists) and asks only for `结论: PASS | FAIL` plus `验证提交: <sha>`. Finding severity tiers and project-specific rules live in each project's own documentation (such as `REVIEW.md` in this repository). Historical artifacts holding `PASS+NOTES` remain readable for display.
+3. **Post-review tamper check (`review.verify`)**: Before accepting `PASS`, the daemon re-probes local `refs/heads/<branch>`, `origin/<branch>`, and the PR head (`ReviewObservation`). If the reviewed commit does not match `验证提交` or the target branch moved during review, the step transitions to `waitingFor: "pm"` instead of `done`.
 
 ## `hub graph` commands (PM only)
 
@@ -57,7 +54,7 @@ hub graph create --stdin                          # create a DAG of steps and ed
 hub graph show [<graphId>]                        # inspect active or historical graph state
 hub graph patch <graphId> --stdin                 # add, rewire, or prune pending/waiting nodes (cycle-checked)
 hub graph ask --node <key> --option "..." --stdin # attach options and summary to a waiting gate
-hub graph decide --node <key> --choice "..."      # record an explicit user decision from chat
+hub graph decide <key> --choice "..."             # record an explicit user decision from chat
 hub graph skip --node <key>                       # skip a step and unblock dependents
 hub graph finish <graphId>                        # close an all-done graph after final acceptance
 hub graph cancel <graphId>                        # cancel an active graph

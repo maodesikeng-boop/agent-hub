@@ -75,15 +75,6 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           别把密钥写进命令：原文会出现在日志和失败附注里`,
   },
   {
-    command: "project.review-status",
-    group: "project",
-    action: "review-status",
-    cli: "project review-status",
-    usage: `  ${hub} project review-status --account <登录名> | --clear   设置或清除审查盖章用的 gh 账号：项目在 GitHub 上时，审查判完后
-                                                          守护进程用这个账号给被审提交挂提交状态（没配就用 gh 当前登录的账号）。
-                                                          只存登录名，令牌每次现从 gh 取（gh auth token --user <登录名>），不落盘、不进日志`,
-  },
-  {
     command: "persona.show",
     group: "persona",
     action: "show",
@@ -109,12 +100,13 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "start",
     cli: "worker start",
-    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
+    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-outer-sandbox] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
                                                           派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m，超了叫醒项目经理、不打断 Worker；
                                                           --caps 外接能力：inherit 照项目能力设置挂（默认），none 一个不带，custom 只挂 --allow 点名的
                                                           skill:<名>、mcp:<名>、connector:<厂商>:<编号>（项目里关掉的点名了也挂不上）；读写文件、终端和 hub 永远都在；
                                                           --node 绑到任务图里的节点上，不带就是不绑图的临时 Worker）；
                                                           独立审查请建单步审查图（审查步骤，写被审分支），不要派普通 Worker 审
+  --no-outer-sandbox：仅明确挂载 Computer Use 时可申请，Worker 等用户在工作台确认后才开工。Computer Use 控制每个应用前都要等用户在工作台确认；用户拒绝时，换个办法或汇报。
   ${hub} worker start --node <节点> [--graph <图编号>] [--vendor …] [--model …] [--stdin]
                                                           换人接手：节点上已经有经手过的 Worker 时，--title 和正文都可以不给（正文给了是补充说明）；
                                                           节点上还挂着没收工的旧 Worker 会先按“没做完”收工，新 Worker 接着用前任的 worktree 和分支，
@@ -146,7 +138,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "list",
     cli: "worker list",
-    usage: `  ${hub} worker list                                         我派出去的 Worker（进行中的和最近收工的）：状态、在哪干活、模型和思考程度`,
+    usage: `  ${hub} worker list [--vendor <厂商>]                         我派出去的 Worker（未收工的和最近收工的）：状态、在哪干活、厂商、模型和思考程度`,
   },
   {
     command: "worker.show",
@@ -188,7 +180,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "close",
     cli: "ask close",
     usage: `  ${hub} ask close <卡编号>                                    关掉自己名下一张还在等用户的提问卡（用户在对话里打字答了、没点卡，或问题过时了）；
-                                                          卡编号见用户消息前面说明块里的 #编号`,
+                                                          普通卡编号见用户消息前面的说明；步骤拍板卡用 ${hub} ask close --message <消息编号>，编号见 ${hub} graph show`,
   },
   {
     command: "schedule.add",
@@ -249,7 +241,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "show",
     cli: "graph show",
-    usage: `  ${hub} graph show [<图编号>]                                查看当前活跃任务图或指定编号任务图：每个节点的状态、Worker 和结果（分支、提交、PR、摘要、定案）`,
+    usage: `  ${hub} graph show [<图编号>]                                查看当前活跃任务图或指定编号任务图：每个节点的状态、厂商、模型、思考程度、Worker 和结果（分支、提交、PR、摘要、定案）`,
   },
   {
     command: "graph.list",
@@ -257,7 +249,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "list",
     cli: "graph list",
     usage: `  ${hub} graph list [--all | --status active|completed|cancelled]
-                                                          列出当前项目的任务图`,
+                                                          列出当前项目的任务图与步骤的厂商、模型和思考程度`,
   },
   {
     command: "graph.patch",

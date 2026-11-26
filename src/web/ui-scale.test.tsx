@@ -4,9 +4,9 @@ import { userEvent } from "@testing-library/user-event";
 import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { Avatar } from "./components/Avatar.tsx";
-import { SettingsDialog } from "./components/SettingsDialog.tsx";
+import { SettingsDialogFixture } from "./components/settings-dialog-fixture.tsx";
 import { cn } from "./lib/utils.ts";
-import { DEFAULT_UI_SCALE, readUiScale, UI_SCALE_KEY } from "./ui-scale.ts";
+import { DEFAULT_UI_SCALE, readUiScale, UI_SCALE_KEY, UI_SCALE_ROOT_PX, UI_SCALES } from "./ui-scale.ts";
 
 import { defaultLookOf } from "../shared/slimes.ts";
 const notify = { permission: "granted" as const, enabled: false, setEnabled: async () => {} };
@@ -17,22 +17,24 @@ afterEach(() => {
 });
 
 describe("Interface scale", () => {
-  it("没存过、存坏了都按默认的“大”", () => {
-    expect(DEFAULT_UI_SCALE).toBe("lg");
-    expect(readUiScale()).toBe("lg");
+  it("falls back to Default when nothing or a broken value is stored, and keeps a saved choice", () => {
+    expect(DEFAULT_UI_SCALE).toBe("md");
+    expect(readUiScale()).toBe("md");
     localStorage.setItem(UI_SCALE_KEY, "huge");
+    expect(readUiScale()).toBe("md");
+    localStorage.setItem(UI_SCALE_KEY, "lg");
     expect(readUiScale()).toBe("lg");
     localStorage.setItem(UI_SCALE_KEY, "sm");
     expect(readUiScale()).toBe("sm");
   });
 
-  it("设置 → 通用 → 外观：紧凑 / 标准 / 大 / 特大，默认选“大”；点了马上改根字号档位并记住", async () => {
+  it("Settings offers Compact, Default, Large, and XL with Default checked, and a click applies and saves the scale", async () => {
     const user = userEvent.setup();
-    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open onOpenChange={() => {}} notify={notify} />);
     const group = screen.getByRole("radiogroup", { name: "Interface scale" });
     const options = within(group).getAllByRole("radio");
     expect(options.map((o) => o.textContent)).toEqual(["Compact", "Default", "Large", "XL"]);
-    expect(within(group).getByRole("radio", { name: "Large" })).toHaveAttribute("aria-checked", "true");
+    expect(within(group).getByRole("radio", { name: "Default" })).toHaveAttribute("aria-checked", "true");
 
     await user.click(within(group).getByRole("radio", { name: "XL" }));
     expect(document.documentElement.dataset.uiScale).toBe("xl");
@@ -44,19 +46,21 @@ describe("Interface scale", () => {
     expect(localStorage.getItem(UI_SCALE_KEY)).toBe("sm");
   });
 
-  it("各档根字号在 styles.css 一处，用百分比；没设时是“大”", () => {
+  it("sets Default to 17.5px with the other scales 1.5px apart, as percentages in styles.css, and an unset scale renders as Default", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toMatch(/html,\s*html\[data-ui-scale="lg"\]\s*\{\s*font-size:\s*109\.375%/);
-    expect(css).toMatch(/html\[data-ui-scale="sm"\]\s*\{\s*font-size:\s*90\.625%/);
-    expect(css).toMatch(/html\[data-ui-scale="md"\]\s*\{\s*font-size:\s*100%/);
-    expect(css).toMatch(/html\[data-ui-scale="xl"\]\s*\{\s*font-size:\s*118\.75%/);
+    expect(UI_SCALES.map((scale) => UI_SCALE_ROOT_PX[scale])).toEqual([16, 17.5, 19, 20.5]);
+    expect(css).toMatch(/html,\s*html\[data-ui-scale="md"\]\s*\{/);
+    for (const scale of UI_SCALES) {
+      const percent = new RegExp(`html\\[data-ui-scale="${scale}"\\]\\s*\\{\\s*font-size:\\s*([0-9.]+)%`).exec(css)?.[1];
+      expect(Number(percent), scale).toBe((UI_SCALE_ROOT_PX[scale] / 16) * 100);
+    }
     for (const token of ["display", "title", "body", "minor"]) expect(css).toMatch(new RegExp(`--text-${token}: [0-9.]+rem;`));
   });
 
-  it("字号合成 4 档（12 / 13.5 / 15 / 17，docs/ui-standard.md 第 3 条）：没有 14px 的 text-label，旧名 text-small 已删", () => {
+  it("keeps four type sizes (12, 13.5, 15, 16 at a 16px root) with no 14px label size and no old text-small name", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const rem = (token: string) => Number(new RegExp(`--text-${token}: ([0-9.]+)rem;`).exec(css)?.[1]) * 16;
-    expect([rem("minor"), rem("body"), rem("title")]).toEqual([13.5, 15, 17]);
+    expect([rem("minor"), rem("body"), rem("title")]).toEqual([13.5, 15, 16]);
     expect(css).not.toMatch(/--text-small:/);
     expect(css).not.toMatch(/--text-label:/);
     for (const dir of ["src/web/components", "src/web/ui"]) {

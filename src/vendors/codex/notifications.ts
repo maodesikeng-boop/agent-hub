@@ -1,3 +1,7 @@
+import { onCodexServerRequestResolved } from "./app-approval.ts";
+import { randomUUID } from "node:crypto";
+import { codexChecklistFromPlanUpdated, codexItemStartedAt } from "./checklist.ts";
+import { positiveContextTokens, preservePositiveContext } from "../../daemon/driver/usage.ts";
 import { lineUuid } from "../../daemon/driver/protocol.ts";
 import { toolResultOutputs } from "../_common/tool-output.ts";
 import {
@@ -32,6 +36,11 @@ export function onNotification(
   const params = asObject(rawParams) ?? {};
 
   switch (method) {
+    case "serverRequest/resolved":
+      if (proc.appApprovals !== null && proc.threadId !== null && params.threadId === proc.threadId) {
+        onCodexServerRequestResolved(proc.appApprovals.state, params);
+      }
+      return;
     case "thread/started": {
       const threadId = nonEmptyString(asObject(params.thread)?.id);
       if (threadId) {
@@ -43,6 +52,13 @@ export function onNotification(
     case "turn/started":
       onTurnStarted(host, st, proc, params, at);
       return;
+    case "turn/plan/updated": {
+      if (typeof params.threadId === "string" && params.threadId !== proc.threadId) return;
+      if (typeof params.turnId === "string" && params.turnId !== st.activeTurnId) return;
+      const update = codexChecklistFromPlanUpdated(params);
+      if (update) host.emit(st.id, { type: "agent.checklist", uuid: randomUUID(), update, at });
+      return;
+    }
     case "item/started":
       onItemStarted(host, st, proc, params, rawLine, at);
       return;
@@ -130,7 +146,11 @@ function onItemStarted(
   }
   if (item.type === "agentMessage") {
     const itemId = nonEmptyString(item.id) ?? "agent-msg";
-    if (!st.agentMessageBuffers.has(itemId)) st.agentMessageBuffers.set(itemId, "");
+    if (!st.agentMessageBuffers.has(itemId)) {
+      st.agentMessageBuffers.set(itemId, "");
+      const startedAt = codexItemStartedAt(item);
+      if (startedAt !== undefined) host.emit(st.id, { type: "agent.text_delta", delta: "", reset: true, startedAt, at });
+    }
     return;
   }
   if (isCodexToolItemType(item.type)) {
@@ -218,8 +238,8 @@ function onTokenUsageUpdated(host: CodexDriverHost, st: SessionState, proc: Proc
   st.lastTurnResultUsage = parsed.nextState.turnResultUsage;
   st.turnUsageStepSeq = parsed.nextState.stepSeq;
   if (parsed.duplicate) return;
-  st.lastTurnContext = parsed.context;
+  st.lastTurnContext = positiveContextTokens(parsed.context) ?? st.lastTurnContext;
   const row = host.row(st);
   const live = row ? st.turnUsage.observe(parsed.observeObj, row.usage) : null;
-  if (live) host.pushUsage(st, { ...live, context: parsed.context });
+  if (live) host.pushUsage(st, { ...live, context: preservePositiveContext(st.lastTurnContext, live.context) });
 }

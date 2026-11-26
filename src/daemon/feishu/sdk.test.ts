@@ -6,7 +6,7 @@ import type { Duplex } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { FEISHU_WS_HANDSHAKE_TIMEOUT_MS, FEISHU_WS_PING_TIMEOUT_S } from "../../shared/limits.ts";
-import { createFeishuSdkTransport } from "./sdk.ts";
+import { createFeishuSdkTransport, type normalizeFeishuMessageEvent } from "./sdk.ts";
 import type { FeishuTransport } from "./transport.ts";
 
 type Cleanup = (fn: () => Promise<void> | void) => void;
@@ -53,6 +53,55 @@ function transportFor(cleanup: Cleanup, domain: string, lines: string[]): Feishu
   cleanup(() => transport.stop());
   return transport;
 }
+
+function protoBytes(field: number, bytes: Buffer): Buffer {
+  const header = [field * 8 + 2];
+  let length = bytes.length;
+  while (length >= 128) {
+    header.push((length & 127) | 128);
+    length >>>= 7;
+  }
+  header.push(length);
+  return Buffer.concat([Buffer.from(header), bytes]);
+}
+
+function liveMessageFrame(event: Parameters<typeof normalizeFeishuMessageEvent>[0]): Buffer {
+  const headers = Object.entries({ type: "event", message_id: event.message.message_id, sum: "1", seq: "0", trace_id: "test" });
+  return Buffer.concat([
+    Buffer.from([8, 1, 16, 0, 24, 1, 32, 1]),
+    ...headers.map(([key, value]) => protoBytes(5, Buffer.concat([protoBytes(1, Buffer.from(key)), protoBytes(2, Buffer.from(value))]))),
+    protoBytes(8, Buffer.from(JSON.stringify({ schema: "2.0", header: { event_type: "im.message.receive_v1" }, event }))),
+  ]);
+}
+
+it("emits an explicit mention with empty content from live WebSocket text frames", async ({ onTestFinished }) => {
+  const wss = new WebSocketServer({ noServer: true });
+  onTestFinished(() => { for (const socket of wss.clients) socket.terminate(); wss.close(); });
+  const domain = await fakeFeishu(onTestFinished, (req, socket, head) => wss.handleUpgrade(req, socket, head, () => {}));
+  const onEvent = vi.fn();
+  const onConnected = vi.fn();
+  await transportFor(onTestFinished, domain, []).start({ onEvent, onCardAction: () => ({}), onConnected, onDisconnected: () => {} });
+  await vi.waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
+  const socket = [...wss.clients][0]!;
+  for (const [index, text] of ["@_user_1", "  @_user_1  "].entries()) {
+    const messageId = `om_bare${index}`;
+    socket.send(liveMessageFrame({
+      sender: { sender_id: { open_id: "ou_owner" }, sender_type: "user" },
+      message: {
+        message_id: messageId,
+        chat_id: "oc_g1",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text }),
+        mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }],
+        create_time: "1795424207628",
+      },
+    }));
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "im.message.receive_v1", messageId, content: "", mentionedBot: true, resources: [],
+    })));
+  }
+});
 
 describe("飞书长连接半死检测", () => {
   it.concurrent("连上后服务端不再回帧（半开假活）：心跳超时后断开重连，并通知断线", async ({ onTestFinished }) => {

@@ -129,6 +129,7 @@ export interface ProviderManagerOptions {
   authStartWaitMs?: number;
   now?: () => number;
   log?: (line: string) => void;
+  onVendorChanged?: (vendor: AgentVendor) => void;
 }
 
 export interface ProviderManager {
@@ -152,6 +153,27 @@ function isFlowInProgress(phase: ProviderAuthFlowPhase): boolean {
     phase === "waiting_device_code" ||
     phase === "verifying"
   );
+}
+
+async function settleAuthFlowFailure(
+  flow: ActiveAuthFlowSlot,
+  err: unknown,
+  isClosed: () => boolean,
+  refresh: () => Promise<void>,
+): Promise<void> {
+  if (flow.cancelledByUser || isClosed()) {
+    flow.phase = "cancelled";
+    flow.error = null;
+    return;
+  }
+  if (flow.expiredByTimer) {
+    flow.phase = "expired";
+    flow.error = "Sign-in session expired after 5 minutes";
+    return;
+  }
+  await refresh().catch(() => undefined);
+  flow.phase = isClosed() ? "cancelled" : "failed";
+  flow.error = isClosed() ? null : redactProviderLog(err instanceof Error ? err.message : String(err)).slice(0, 300);
 }
 
 function snapshotOfJob(job: ActiveJobSlot | null): ProviderJobSnapshot | null {
@@ -278,6 +300,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
   const refreshVendorAfterChange = async (vendor: AgentVendor, probeVer: boolean): Promise<void> => {
     runtime.refreshSystemPath();
     runtime.invalidate(vendor);
+    if (!closed) options.onVendorChanged?.(vendor);
     if (probeVer) {
       versionCache.invalidate(vendor);
       const binaryPath = runtime.locateBinary(vendor);
@@ -612,16 +635,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
           flow.phase = "succeeded";
           flow.error = null;
         } catch (err) {
-          if (flow.cancelledByUser || closed) {
-            flow.phase = "cancelled";
-            flow.error = null;
-          } else if (flow.expiredByTimer) {
-            flow.phase = "expired";
-            flow.error = "Sign-in session expired after 5 minutes";
-          } else {
-            flow.phase = "failed";
-            flow.error = redactProviderLog(err instanceof Error ? err.message : String(err)).slice(0, 300);
-          }
+          await settleAuthFlowFailure(flow, err, () => closed, () => refreshVendorAfterChange(vendor, false));
         } finally {
           clearTimeout(expiryTimer);
           readySignalResolve();

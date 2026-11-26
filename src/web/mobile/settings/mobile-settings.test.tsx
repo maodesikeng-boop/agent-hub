@@ -14,16 +14,20 @@ import {
   type VendorSyncPreviewResponse,
 } from "../../../shared/index.ts";
 import { App } from "../../App.tsx";
-import type { DeviceView } from "../../devices.ts";
+import { AccountSettings } from "../../components/AccountSettings.tsx";
+import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx";
+import { ResourcesSettings } from "../../components/ResourcesSettings.tsx";
+import { LOCAL_DEVICE, type DeviceView } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
-import { useRoute } from "../../route.ts";
+import { useWorkbenchNav } from "../../workbench-nav.ts";
 import { SESSIONS_POLL_MS, type DeviceSettings } from "../../settings-model.ts";
 import { initialState } from "../../state.ts";
+import { useComputerRename } from "../../settings-drafts.ts";
+import { Surface, SurfaceOutlet, SurfaceScope } from "../../shell-surfaces.tsx";
 import { queryClient } from "../../query-client.ts";
 import { FakeApi, installFakeWebSocket, makeConvSnapshot, makePm, makeSnapshot } from "../../test-utils.ts";
 import { UPDATE_DISMISSED_KEY, UPDATE_QUERY_KEY } from "../../update-model.ts";
-import { mobileBack, settingsParent } from "../back.ts";
-import { MobileSettings } from "./MobileSettings.tsx";
+import { WorkbenchSettings } from "../../WorkbenchSettings.tsx";
 
 const MAC_ID = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
 const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
@@ -56,19 +60,29 @@ afterEach(() => {
   delete document.documentElement.dataset.uiScale;
 });
 
-/** 只渲染设置页：网址用真的 useRoute，返回走 mobileBack（和 App 里一样）。 */
+/** 只渲染设置页：网址用真的 useWorkbenchNav（和 App 里一样）。 */
 function Harness({ notify, devices, onSignedOut }: { notify: NotifySettings; devices: DeviceSettings | null; onSignedOut?: () => void }) {
-  const { route, navigate, replace } = useRoute();
-  if (route?.view !== "settings") return <p>List page</p>;
+  const { nav: { settings }, showSettingsSection, settingsBack } = useWorkbenchNav();
+  const rename = useComputerRename();
+  if (settings === null) return <p>List page</p>;
   return (
-    <MobileSettings
-      section={route.section}
-      notify={notify}
-      devices={devices}
-      onOpen={(section) => navigate({ view: "settings", section })}
-      onBack={() => mobileBack(settingsParent(route), replace)}
-      {...(onSignedOut !== undefined ? { onSignedOut } : {})}
-    />
+    <SurfaceScope>
+      <SurfaceOutlet id="settings:mobile" />
+      <WorkbenchSettings
+        mobile
+        section={settings.section}
+        notify={notify}
+        devices={devices}
+        defaultProviderDevice={LOCAL_DEVICE}
+        rename={rename}
+        onOpen={showSettingsSection}
+        onBack={settingsBack}
+        {...(onSignedOut !== undefined ? { onSignedOut } : {})}
+      />
+      {settings.section === "computers" && <Surface id="settings:account"><AccountSettings /></Surface>}
+      {settings.section === "capabilities" && <Surface id="settings:capabilities"><CapabilitiesSettings /></Surface>}
+      {settings.section === "resources" && <Surface id="settings:resources"><ResourcesSettings devices={devices} /></Surface>}
+    </SurfaceScope>
   );
 }
 
@@ -116,7 +130,7 @@ describe("App 路由接入（手机外壳）", () => {
     render(<App />);
     return { api, media };
   }
-  const listNav = () => screen.findByRole("navigation", { name: "Conversations" });
+  const listNav = () => screen.findByRole("region", { name: "Project managers" });
   const settled = () => act(() => new Promise((resolve) => setTimeout(resolve, 30)));
 
   it("列表点齿轮进 #/settings：整屏一级主页（无弹窗、无横排分类），打开时 0 次 HTTP 请求", async () => {
@@ -129,7 +143,7 @@ describe("App 路由接入（手机外壳）", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.getByRole("button", { name: /Interface scale/ })).toHaveTextContent("Large");
+    expect(screen.getByRole("button", { name: /Interface scale/ })).toHaveTextContent("Default");
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent("Off");
     expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Providers/ })).toBeInTheDocument();
@@ -144,7 +158,7 @@ describe("App 路由接入（手机外壳）", () => {
   });
 
 
-  it("一级 → 子页 → 逐级返回都走 history.back，一级主页节点保活，最后回到列表", async () => {
+  it("一级 → 子页 → history.back 返回一级设置，一级主页节点保活，点底栏 Projects 回到列表", async () => {
     bootMobile();
     await listNav();
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -157,20 +171,19 @@ describe("App 路由接入（手机外壳）", () => {
     expect(historyBack).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(location.hash).toBe("#/settings"));
     expect(await screen.findByRole("button", { name: /Interface scale/ })).toBe(row);
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(historyBack).toHaveBeenCalledTimes(2);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Mobile navigation" })).getByRole("button", { name: "Projects" }));
     await waitFor(() => expect(location.hash).toBe(""));
     expect(await listNav()).toBeInTheDocument();
   });
 
-  it("新标签直达子页：连点两次返回依次退到 #/settings 与列表，不调 history.back、历史不增殖", async () => {
+  it("新标签直达子页：点返回退到 #/settings，再点底栏 Projects 回到列表，不调 history.back、历史不增殖", async () => {
     history.replaceState(null, "", "/#/settings/browsers");
     const length = history.length;
     bootMobile();
     const historyBack = vi.spyOn(history, "back");
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     await waitFor(() => expect(location.hash).toBe("#/settings"));
-    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Mobile navigation" })).getByRole("button", { name: "Projects" }));
     await waitFor(() => expect(location.hash).toBe(""));
     expect(await listNav()).toBeInTheDocument();
     expect(historyBack).not.toHaveBeenCalled();
@@ -190,7 +203,7 @@ describe("App 路由接入（手机外壳）", () => {
     await waitFor(() => expect(location.hash).toBe("#/settings"));
   });
 
-  it("跨断点：在 #/settings* 把窗口切回桌面外壳，网址回首页并打开桌面双栏 SettingsDialog 对应分类", async () => {
+  it("keeps the settings URL while showing its corresponding desktop tab", async () => {
     history.replaceState(null, "", "/#/settings/vendor-sync");
     const { media } = bootMobile();
     expect(await screen.findByRole("heading", { level: 1, name: "Vendor sync" })).toBeInTheDocument();
@@ -200,7 +213,7 @@ describe("App 路由接入（手机外壳）", () => {
     });
     const tablist = await screen.findByRole("tablist", { name: "Settings categories" });
     expect(within(tablist).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
-    await waitFor(() => expect(location.hash).toBe("#/router"));
+    expect(location.hash).toBe("#/settings/vendor-sync");
   });
 });
 
@@ -224,7 +237,7 @@ describe("一级设置主页", () => {
     expect(main.textContent).not.toMatch(/[·|]/);
     for (const row of within(main).getAllByRole("button").filter((b) => b.dataset.slot === "settings-nav-row")) {
       expect(row.className).toContain("min-h-12");
-      expect(row.querySelector(":scope > svg[data-icon='pixel']:last-child")).toBeInTheDocument();
+      expect(row.querySelector(":scope > svg[data-icon='line']:last-child")).toBeInTheDocument();
     }
   });
   beforeEach(() => new FakeApi(makeSnapshot({})).install());
@@ -568,7 +581,7 @@ describe("子页", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     await waitFor(() => expect(location.hash).toBe("#/settings"));
     expect(screen.getByRole("button", { name: /^Providers/ })).toHaveTextContent("Attention");
-    expect(screen.getByTestId("providers-attention")).toHaveClass("bg-caution");
+    expect(screen.getByTestId("providers-attention")).toHaveClass("bg-danger");
 
     // 离开子页后进行中任务的轮询已自动停止
     const getCountOnHome = api.callsTo("GET", /^\/api\/providers$/).length;
@@ -687,13 +700,13 @@ describe("Updates page", () => {
     queryClient.setQueryData(["resources", ""], resourcesSnap);
     renderSettings("#/settings");
     const row = within(screen.getByRole("region", { name: "Resources" })).getByRole("button", { name: /^Resources/ });
-    expect(row).toHaveTextContent("1 held");
+    expect(row).toHaveTextContent("1 to review");
     expect(screen.getByTestId("resources-attention")).toBeInTheDocument();
     expect(api.calls).toEqual([]);
 
     fireEvent.click(row);
     expect(location.hash).toBe("#/settings/resources");
     expect(await screen.findByRole("heading", { level: 1, name: "Resources" })).toBeInTheDocument();
-    expect(await screen.findByRole("region", { name: "Needs attention" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Needs review" })).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
+import { readStepNoOuterSandbox, sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { DEFAULT_AGENT_VENDOR, type AgentVendor } from "../../../shared/vendors.ts";
-import { userMessageDedupeKey } from "../../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, TaskNodeKey } from "../../../shared/domain.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
@@ -16,7 +16,7 @@ import {
 import { userBlockedPmNote } from "../user-blockers.ts";
 import { decisionOf, gateOptionsOf, hasText, workerIdsOf } from "./rows.ts";
 import { validateDagAndOrder } from "./spec.ts";
-import { buildGraphMaps, touchGraph } from "./store.ts";
+import { buildGraphMaps, hasPendingStepAsk, touchGraph } from "./store.ts";
 import { gateChatMessageText } from "./text.ts";
 import { collectDirectUpstreams } from "./upstream.ts";
 import { resolveWorkspacePlan } from "./workspace.ts";
@@ -53,16 +53,14 @@ function setStepState(g: TaskGraphCtx, run: ProgressRun, node: TaskNodeDbRow, st
   g.db.run("UPDATE task_graph_steps SET status = ?, waiting_for = ?, updated_at = ? WHERE id = ?", status, waitingFor, run.t, node.id);
 }
 
-function retractIfUpstreamReopenedIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: TaskNodeDbRow): boolean {
+function retractIfUpstreamReopened(g: TaskGraphCtx, run: ProgressRun, node: TaskNodeDbRow): boolean {
   if (node.status !== "waiting" || node.active_worker_id !== null || workerIdsOf(node).length > 0 || node.decision_json !== null) {
     return false;
   }
-  if (node.gate_ask_message_id !== null) g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
   node.status = "pending";
   node.waiting_for = null;
-  node.gate_ask_message_id = null;
   g.db.run(
-    "UPDATE task_graph_steps SET status = 'pending', waiting_for = NULL, gate_ask_message_id = NULL, updated_at = ? WHERE id = ?",
+    "UPDATE task_graph_steps SET status = 'pending', waiting_for = NULL, updated_at = ? WHERE id = ?",
     run.t,
     node.id,
   );
@@ -110,6 +108,7 @@ function dispatchWorkerIn(
     readonly: node.readonly === 1,
     capabilities: readWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: node.id }),
     maxTimeMs: node.max_time_ms,
+    sandboxStepId: readStepNoOuterSandbox(g.db, node.id) ? node.id : undefined,
     workspacePlan,
     buildFirstMessage: (sessionId, inheritedFromWorkerId, workerRecord, projectCard) =>
       buildStepFirstMessage({
@@ -131,20 +130,23 @@ function dispatchWorkerIn(
 function markDispatched(g: TaskGraphCtx, run: ProgressRun, node: TaskNodeDbRow, workerId: number): void {
   const prevIds = workerIdsOf(node);
   const nextIds = prevIds.includes(workerId) ? prevIds : [...prevIds, workerId];
-  node.status = "running";
-  node.waiting_for = null;
+  const sandboxPending = sandboxApprovalPendingForStep(g.db, node.id);
+  node.status = sandboxPending ? "waiting" : "running";
+  node.waiting_for = sandboxPending ? "user" : null;
   node.skipped = 0;
   node.active_worker_id = workerId;
   node.worker_ids_json = JSON.stringify(nextIds);
   g.db.run(
     `UPDATE task_graph_steps
-        SET status = 'running',
-            waiting_for = NULL,
+        SET status = ?,
+            waiting_for = ?,
             skipped = 0,
             active_worker_id = ?,
             worker_ids_json = ?,
             updated_at = ?
       WHERE id = ?`,
+    node.status,
+    node.waiting_for,
     workerId,
     node.worker_ids_json,
     run.t,
@@ -165,9 +167,10 @@ function onDispatchErrorIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: 
     const note = userBlockedPmNote(blocker);
     run.result.userBlocked.push({ key: node.node_key, note });
     if (run.callerSession == null) {
-      g.messages.enqueueWakeupUserMessageIn(p, {
+      g.messages.enqueueWakeupIn(p, {
         conversationId: graphRow.conversation_id,
-        dedupeKey: userMessageDedupeKey(graphRow.conversation_id, `graph-user-blocked:${graphRow.id}:${node.node_key}:${blocker.id}`),
+        source: "task_graph",
+        ref: `graph-user-blocked:${graphRow.id}:${node.node_key}:${blocker.id}`,
         text: formatStepUserBlockedMessage({ graph, step, note }),
       });
     }
@@ -177,9 +180,10 @@ function onDispatchErrorIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: 
   setStepState(g, run, node, "waiting", "pm");
   run.result.dispatchFailed.push({ key: node.node_key, title: node.title, index: pos.index, total: pos.total, reason });
   if (run.callerSession == null) {
-    g.messages.enqueueWakeupUserMessageIn(p, {
+    g.messages.enqueueWakeupIn(p, {
       conversationId: graphRow.conversation_id,
-      dedupeKey: userMessageDedupeKey(graphRow.conversation_id, `graph-autodispatch-failed:${graphRow.id}:${node.node_key}:${t}`),
+      source: "task_graph",
+      ref: `graph-autodispatch-failed:${graphRow.id}:${node.node_key}:${t}`,
       text: formatStepWaitingPmMessage({ graph, step, workerId: null, reasonLabel: "自动开工未成功", detailBody: reason }),
     });
   }
@@ -242,7 +246,8 @@ function openGateCardIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: Tas
 }
 
 function advanceReadyStepIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: TaskNodeDbRow, orderIdx: number): void {
-  if (hasText(node.gate_question) && node.decision_json === null) {
+  if (hasText(node.gate_question) && node.decision_json === null &&
+      (node.gate_ask_message_id === null || hasPendingStepAsk(g, node))) {
     openGateCardIn(g, p, run, node);
     return;
   }
@@ -294,7 +299,7 @@ export function recomputeGraphProgressIn(
     const key = order[idx]!;
     const node = maps.byKey.get(key)!;
     const upsDone = (maps.incoming.get(key) ?? []).every((u) => maps.byKey.get(u)?.status === "done");
-    if (retractBlockedWaiting && !upsDone && retractIfUpstreamReopenedIn(g, p, run, node)) continue;
+    if (retractBlockedWaiting && !upsDone && retractIfUpstreamReopened(g, run, node)) continue;
     if (node.status !== "pending" || !upsDone) continue;
     advanceReadyStepIn(g, p, run, node, idx);
   }
@@ -313,9 +318,10 @@ export function wakePmForTurnedIn(
   const forPm = turned.filter((u) => u.waitingFor === "pm");
   if (forPm.length === 0) return null;
   const first: TaskNodeKey = forPm[0]!.key;
-  const wake = g.messages.enqueueWakeupUserMessageIn(p, {
+  const wake = g.messages.enqueueWakeupIn(p, {
     conversationId: graphRow.conversation_id,
-    dedupeKey: userMessageDedupeKey(graphRow.conversation_id, `graph-turned:${graphRow.id}:${dedupeRef}`),
+    source: "task_graph",
+    ref: `graph-turned:${graphRow.id}:${dedupeRef}`,
     text:
       `【任务图 #${graphRow.id}「${graphRow.title}」】${lead}轮到了：${forPm.map((u) => `${u.key}（${u.title}）`).join("、")}，等你处理。` +
       `给它派 Worker 用 ${HUB_COMMAND} worker start --node ${first} --graph ${graphRow.id}，不需要了用 ${HUB_COMMAND} graph skip ${first} --graph ${graphRow.id}。`,

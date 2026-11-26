@@ -262,7 +262,7 @@ pub fn run() {
             )
             .title("Bellwood")
             .inner_size(1180.0, 780.0)
-            .min_inner_size(800.0, 560.0)
+            .min_inner_size(860.0, 560.0)
             .center()
             .on_navigation(move |target_url| {
                 match classify_navigation_url(target_url, daemon_port) {

@@ -1,3 +1,6 @@
+import { pruneAppApprovalsIn } from "./app-approvals.ts";
+import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
+import { pruneSandboxApprovalsIn } from "./sandbox-approvals.ts";
 // Invariant: every table retention batch deletes at most maxRows rows in a single synchronous SQLite transaction and never deletes active-session state or user/PM text history.
 import type { SessionId } from "../../shared/domain.ts";
 import {
@@ -29,7 +32,7 @@ export interface TableRetentionBatch {
 export interface DbTableRetention {
   /**
    * Precondition: maxRows >= 1.
-   * Postcondition: deletes PM conversation kind='tool' messages older than PM_TOOL_MESSAGE_RETENTION_MS or beyond the newest PM_TOOL_MESSAGES_MAX_PER_CONV per conversation, never deleting non-tool rows.
+   * Postcondition: deletes PM conversation tool and checklist messages older than PM_TOOL_MESSAGE_RETENTION_MS or beyond the newest PM_TOOL_MESSAGES_MAX_PER_CONV per conversation, preserving all other message kinds.
    */
   purgePmToolMessagesBatch(nowMs: number, maxRows: number): TableRetentionBatch;
 
@@ -183,7 +186,7 @@ function purgePmToolMessagesIn(db: Db, nowMs: number, budget: number): TableRete
   let hasMore = false;
   for (const { id: convId } of pmConvs) {
     const threshold = db.get<{ id: number }>(
-      "SELECT id FROM messages WHERE conversation_id = ? AND kind = 'tool' ORDER BY id DESC LIMIT 1 OFFSET ?",
+      `SELECT id FROM messages WHERE conversation_id = ? AND kind IN ${PROCESS_MESSAGE_KINDS_SQL} ORDER BY id DESC LIMIT 1 OFFSET ?`,
       convId,
       PM_TOOL_MESSAGES_MAX_PER_CONV,
     );
@@ -191,7 +194,7 @@ function purgePmToolMessagesIn(db: Db, nowMs: number, budget: number): TableRete
     const remaining = budget - deleted;
     if (remaining <= 0) {
       const extra = db.get<{ id: number }>(
-        "SELECT id FROM messages WHERE conversation_id = ? AND kind = 'tool' AND (created_at <= ? OR id <= ?) LIMIT 1",
+        `SELECT id FROM messages WHERE conversation_id = ? AND kind IN ${PROCESS_MESSAGE_KINDS_SQL} AND (created_at <= ? OR id <= ?) LIMIT 1`,
         convId,
         cutoff,
         maxKeepId,
@@ -204,7 +207,7 @@ function purgePmToolMessagesIn(db: Db, nowMs: number, budget: number): TableRete
     }
     const rows = db.all<{ id: number }>(
       `SELECT id FROM messages
-        WHERE conversation_id = ? AND kind = 'tool' AND (created_at <= ? OR id <= ?)
+        WHERE conversation_id = ? AND kind IN ${PROCESS_MESSAGE_KINDS_SQL} AND (created_at <= ? OR id <= ?)
         ORDER BY id ASC LIMIT ?`,
       convId,
       cutoff,
@@ -418,6 +421,14 @@ export function createDbTableRetention(ctx: LedgerContext): DbTableRetention {
       (rem) => purgeTerminalActionsBatch(nowMs, rem),
       (rem) => purgeHubCallsBatch(nowMs, rem),
       (rem) => purgeHandoversBatch(nowMs, rem),
+      (rem) => write(() => {
+        const rows = pruneSandboxApprovalsIn(db, nowMs, rem);
+        return { rows, more: rows >= rem };
+      }),
+      (rem) => write(() => {
+        const rows = pruneAppApprovalsIn(db, nowMs, rem);
+        return { rows, more: rows >= rem };
+      }),
       (rem) => prunePersonaChangesBatch(rem),
       (rem) => write(() => trimOversizedEndedWorkerStepsIn(db, rem)),
     ];

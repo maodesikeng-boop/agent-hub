@@ -1,5 +1,4 @@
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
-import { Check } from "../ui/icons.ts";
 import { useId, type ReactNode } from "react";
 import { cn } from "../lib/utils.ts";
 
@@ -14,11 +13,11 @@ export function RadioMark({ checked }: { checked: boolean }) {
     <span
       aria-hidden="true"
       className={cn(
-        "flex size-5 shrink-0 items-center justify-center rounded-full transition-colors motion-reduce:transition-none",
-        checked ? "bg-primary text-primary-foreground" : "border-[1.5px] border-muted-foreground/75 bg-background",
+        "flex size-4.5 shrink-0 items-center justify-center rounded-full border transition-colors motion-reduce:transition-none",
+        checked ? "border-primary bg-primary" : "border-border-strong bg-background",
       )}
     >
-      {checked && <Check className="size-pixel-sm" strokeWidth={3.5} />}
+      {checked && <span className="size-1.5 rounded-full bg-primary-foreground" />}
     </span>
   );
 }
@@ -54,7 +53,7 @@ export function ChoiceRows<T extends string>({
             aria-labelledby={`${id}-label`}
             aria-describedby={hasDetail ? `${id}-detail` : undefined}
             className={cn(
-              "flex w-full cursor-pointer items-center gap-4 px-4 text-left outline-none transition-colors hover:bg-sidebar-hover active:bg-sidebar-hover focus-visible:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-default disabled:opacity-50",
+              "flex w-full cursor-pointer items-center gap-4 rounded-none px-4 text-left outline-none transition-colors hover:bg-hover active:bg-hover focus-visible:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:opacity-50",
               hasDetail ? "py-3" : "min-h-12 py-2.5",
               idx > 0 && "border-t border-border",
             )}

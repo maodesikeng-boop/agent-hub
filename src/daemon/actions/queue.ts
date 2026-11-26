@@ -1,7 +1,7 @@
 import { ACTION_STATUSES, ACTION_TYPES, actionDedupeKey } from "../../shared/actions.ts";
 import type { ActionStatus, AnyActionRow, NewAction } from "../../shared/actions.ts";
 import { isOneOf } from "../../shared/domain.ts";
-import type { ActionId } from "../../shared/domain.ts";
+import type { ActionId, MessageId, SessionId } from "../../shared/domain.ts";
 import type { Db, SqlValue } from "../store/index.ts";
 
 export interface ActionDbRow {
@@ -92,4 +92,37 @@ export function setActionStatus(db: Db, id: ActionId, patch: ActionStatusPatch, 
     values.push(patch.lastError);
   }
   db.run(`UPDATE actions SET ${sets.join(", ")} WHERE id = ?`, ...values, id);
+}
+
+export function hasRunningSessionAction(db: Db, sessionId: SessionId): boolean {
+  return (
+    db.get(
+      `SELECT 1 AS x FROM actions
+       WHERE status = 'running' AND type IN ('session.send', 'session.start')
+         AND json_extract(params, '$.sessionId') = ?
+       LIMIT 1`,
+      sessionId,
+    ) !== undefined
+  );
+}
+
+export function deletePendingSessionSend(db: Db, sessionId: SessionId, messageId: MessageId): void {
+  db.run(
+    `DELETE FROM actions
+     WHERE type = 'session.send' AND status = 'pending'
+       AND (dedupe_key = ? OR (dedupe_key = ? AND json_extract(params, '$.sessionId') = ?))`,
+    `${sessionId}:${messageId}`,
+    String(messageId),
+    sessionId,
+  );
+}
+
+export function deleteLegacyPendingSessionSend(db: Db, sessionId: SessionId, messageId: MessageId): void {
+  db.run(
+    `DELETE FROM actions
+     WHERE type = 'session.send' AND status = 'pending'
+       AND dedupe_key = ? AND json_extract(params, '$.sessionId') = ?`,
+    String(messageId),
+    sessionId,
+  );
 }

@@ -5,9 +5,9 @@
 export const VIEWPORTS = {
   /** 三栏宽屏。 */
   desktop: { width: 1440, height: 900, touch: false },
-  /** 1100px 以下：左栏收成 72px 头像窄栏（ui-standard 第 16 条）。 */
-  narrow: { width: 1000, height: 800, touch: false },
-  /** 720px 以下：右栏挪到顶栏下面，设置弹窗的分类变成顶上一排（第 10、12 条）。 */
+  /** The desktop window minimum: the PM list at its minimum keeps avatars and names, and a side panel covers the conversation (stack tier). */
+  narrow: { width: 860, height: 800, touch: false },
+  /** Below the desktop window minimum and 720px, reachable in a browser: the conversation narrows past its minimum; Settings puts its categories on top. */
   slim: { width: 700, height: 800, touch: false },
   /** 手机外壳（第 19、20 条）。 */
   mobile: { width: 390, height: 844, touch: true },
@@ -82,3 +82,9 @@ export const CONTRAST_SEVERITY_LINES = { P0_BELOW: 3, P1_BELOW: 4.5 } as const;
 export const MAX_FINDINGS_PER_CARD = 20;
 /** 每条发现“哪里不对”“怎么改”各最多多少字。 */
 export const FINDING_TEXT_MAX_CHARS = 300;
+/** Structure checks: a line wider than LINE_MAX_PX is not a hairline (docs/ui-standard.md lines are 1px). */
+export const LINE_MAX_PX = 1.5;
+/** Two row starts in one column closer than this band are a near miss, not an intended indent. */
+export const EDGE_NEAR_MISS_PX = { min: 1.5, max: 8 } as const;
+/** Structure checks: two resting composers side by side share one row; more than this between their edges is a misalignment. */
+export const COMPOSER_ROW_TOLERANCE_PX = 0.5;

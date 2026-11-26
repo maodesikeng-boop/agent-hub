@@ -19,10 +19,11 @@ import {
 } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { createClient } from "./client.ts";
+import { ActiveTab } from "./components/ActiveTab.tsx";
 import { DeliverableFiles } from "./components/Deliverables.tsx";
-import { RightRail } from "./components/RightRail.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import { DeviceScope } from "./device-scope.tsx";
+import { activeWorkOf } from "./work-panel-model.ts";
 import { resetQueryClient } from "./query-client.ts";
 import {
   FakeApi,
@@ -220,53 +221,62 @@ const renderGateDialog = (graph: TaskGraph) =>
 const LONG_DETAILS = "**交棒要点**：\n" + "改了卡片的顺序，".repeat(40) + "\n\n提交 `22f68fed` · PR https://github.com/o/r/pull/333";
 const CHECKPOINT_TEXT = `**摘要**：做完了\n\n${LONG_DETAILS}`;
 
-/** 细节默认收起：只看得到摘要和文件；Show more 展开后细节排在文件后面，Show less 收回。 */
-async function expectLeadFilesThenDetails(card: HTMLElement) {
+/** 拍板卡与简报正文始终完整展示（不折叠、无 Show more/Show less），未提及的交付物排在正文后面。 */
+function expectFullBodyThenTrailingFiles(card: HTMLElement) {
   const files = card.querySelector<HTMLElement>("[data-deliverables]")!;
   expect(files).not.toBeNull();
   const lead = within(card).getByText(/做完了/);
-  expect(lead.compareDocumentPosition(files) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(within(card).queryByText(/交棒要点/)).toBeNull();
-  expect(within(card).queryByText(/22f68fed/)).toBeNull();
-  const more = within(card).getByRole("button", { name: "Show more" });
-  expect(more).toHaveAttribute("aria-expanded", "false");
-  await user.click(more);
   const details = within(card).getByText(/交棒要点/);
-  expect(files.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(within(card).getByText(/22f68fed/)).toBeInTheDocument();
-  await user.click(within(card).getByRole("button", { name: "Show less" }));
-  expect(within(card).queryByText(/交棒要点/)).toBeNull();
+  expect(lead.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(details.compareDocumentPosition(files) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(card).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
 }
 
-/** jsdom 不排版：细节框按文字算高度，每 40 字一行、一行 22px（15px 字），比两行矮就是“一行放得下”。 */
-function layoutDetailsByText() {
-  const original = HTMLElement.prototype.getBoundingClientRect;
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    if (!this.hasAttribute("data-card-details")) return original.call(this);
-    const height = Math.ceil((this.textContent ?? "").length / 40) * 22;
-    return { x: 0, y: 0, top: 0, left: 0, right: 600, bottom: height, width: 600, height, toJSON: () => ({}) } as DOMRect;
-  });
-}
-
-describe("细节只占一行时直接显示，不收起（各处同一个规则）", () => {
-  beforeEach(() => layoutDetailsByText());
-
-  it("全览弹窗的门禁卡：细节只有一行提交号，直接显示、不出 Show more", () => {
+describe("拍板卡与简报正文完整展开且文件嵌在相关段落旁", () => {
+  it("全览弹窗的门禁卡：短细节与长细节都直接展示，无 Show more/Show less", () => {
     const graph = gateGraph();
     graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: "**摘要**：做完了\n\n提交 `22f68fed`" };
     renderGateDialog(graph);
     const card = screen.getByTestId("peel-gate-card");
     const files = card.querySelector<HTMLElement>("[data-deliverables]")!;
     const details = within(card).getByText(/22f68fed/);
-    expect(files.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(details.compareDocumentPosition(files) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(card).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
   });
 
-  it("全览弹窗的门禁卡：细节超过一行照旧收起", async () => {
+  it("全览弹窗的门禁卡：长正文同样完整展示不折叠", () => {
     const graph = gateGraph();
     graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
     renderGateDialog(graph);
-    await expectLeadFilesThenDetails(screen.getByTestId("peel-gate-card"));
+    expectFullBodyThenTrailingFiles(screen.getByTestId("peel-gate-card"));
+  });
+
+  it("正文按段落/列表项提及文件名或标签时，文件与截图直接嵌在对应文字下方，不堆到卡片末尾", async () => {
+    const ask = askMessage({
+      id: 58,
+      text: "确认两块改动\n\n1. 架构见 plan.md。\n2. 效果见 desktop.png。\n\n还有一份通用附件。",
+      meta: { needsUser: true, options: ["通过", "打回"], deliverables: [plan, shot, verdict] },
+    });
+    const snapshot = makeSnapshot({ conversations: [makeConvSnapshot([ask])] });
+    openFirstConversation(snapshot);
+    await bootApp(snapshot);
+    const card = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>("[data-ask-card]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    const item1 = within(card).getByText(/架构见 plan\.md/);
+    const planLink = within(card).getByRole("button", { name: "方案" });
+    const item2 = within(card).getByText(/效果见 desktop\.png/);
+    const shotThumb = within(card).getByRole("button", { name: "桌面截图" });
+    const tail = within(card).getByText(/还有一份通用附件/);
+    const verdictLink = within(card).getByRole("button", { name: "验收结论" });
+    expect(item1.compareDocumentPosition(planLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(planLink.compareDocumentPosition(item2) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(item2.compareDocumentPosition(shotThumb) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(shotThumb.compareDocumentPosition(tail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tail.compareDocumentPosition(verdictLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
@@ -294,7 +304,7 @@ describe("各处入口", () => {
     expect(files.compareDocumentPosition(options) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("对话里的提问卡：摘要 → 文件 → 细节，交棒、提交、PR 默认收起", async () => {
+  it("对话里的提问卡：长正文完整展示不折叠，未提及的文件排在正文后面", async () => {
     const ask = askMessage({
       id: 53,
       text: `请确认步骤「实现」的结果\n\n${CHECKPOINT_TEXT}`,
@@ -308,10 +318,10 @@ describe("各处入口", () => {
       expect(el).not.toBeNull();
       return el!;
     });
-    await expectLeadFilesThenDetails(card);
+    expectFullBodyThenTrailingFiles(card);
   });
 
-  it("对话里的提问卡：正文里写了同一个本机链接时，链接也能点开预览", async () => {
+  it("对话里的提问卡：正文里写了同一个本机链接时，链接能点开预览且下方不重复列同一文件", async () => {
     const ask = askMessage({
       id: 51,
       text: `请看[方案](${plan.href})再拍板`,
@@ -328,6 +338,7 @@ describe("各处入口", () => {
     const titleLinks = [...card.querySelectorAll<HTMLElement>("[data-file-link]")].filter((el) => !el.closest("[data-deliverables]"));
     expect(titleLinks.map((el) => el.textContent)).toEqual(["方案"]);
     expect(card.querySelector(`a[href="${plan.href}"]`)).toBeNull();
+    expect(card.querySelector("[data-deliverables]")).toBeNull();
   });
 
   describe("带文件的提问卡什么时候了结", () => {
@@ -345,8 +356,9 @@ describe("各处入口", () => {
       openFirstConversation(snapshot);
       const api = await bootApp(snapshot);
       await waitFor(() => expect(cardOf(60)).not.toBeNull());
-      fireEvent.change(screen.getByRole("textbox"), { target: { value: "先看看再说" } });
-      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+      const composer = screen.getByRole("textbox", { name: "Message" });
+      fireEvent.change(composer, { target: { value: "先看看再说" } });
+      fireEvent.keyDown(composer, { key: "Enter" });
       await waitFor(() => expect(api.calls.some((c) => c.path === "/api/conversations/1/messages")).toBe(true));
       for (const b of optionsOf(cardOf(60))) expect(b).not.toBeDisabled();
       await expectPlanOpens(cardOf(60));
@@ -420,32 +432,31 @@ describe("各处入口", () => {
     expectBodyFileLinks(screen.getByTestId("peel-gate-card"), ["验收结论"]);
   });
 
-  it("右栏 Needs You 的提问行只有一行：不展开、不列交付物（文件在对话里那张卡上看），点了交给 onOpenAsk", async () => {
-    const ask = askMessage({ id: 52, text: `方案好了，请验收\n\n${CHECKPOINT_TEXT}`, meta: { needsUser: true, deliverables: [plan, rec] } });
+  it("ActiveTab 里等拍板的步骤只有一步：不列交付物、不出选项，点了交给 onOpenAsk", async () => {
+    const graph = gateGraph();
     const onOpenAsk = vi.fn();
     render(
-      <RightRail asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} layout="side" look={defaultLookOf(1)} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
+      <ActiveTab
+        work={activeWorkOf([graph], [])}
+        workers={[]}
+        asks={[makeMessage({ id: 77, meta: { needsUser: true } })]}
+        onOpenAsk={onOpenAsk}
+        onOpenWorker={() => {}}
+        onExpandGraph={() => {}}
+      />,
     );
-    await user.click(screen.getByRole("button", { name: /方案好了，请验收/ }));
-    expect(onOpenAsk).toHaveBeenCalledWith(52);
+    await user.click(screen.getByRole("button", { name: /^实现, waiting on you$/ }));
+    expect(onOpenAsk).toHaveBeenCalledWith(77);
+    expect(screen.queryByTestId("peel-gate-card")).toBeNull();
     expect(document.querySelector("[data-deliverables]")).toBeNull();
     expect(screen.queryByText(/做完了/)).toBeNull();
   });
 
-  it("右栏果皮轨里等拍板的步骤只有一行：不列交付物、不出选项", () => {
-    render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[gateGraph()]} openWorkerId={null} layout="side" look={defaultLookOf(1)} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
-    expect(screen.getByTestId("peel-gate-row")).toBeInTheDocument();
-    expect(screen.queryByTestId("peel-gate-card")).toBeNull();
-    expect(document.querySelector("[data-deliverables]")).toBeNull();
-  });
-
-  it("全览弹窗的门禁卡：摘要 → 文件 → 细节", async () => {
+  it("全览弹窗的门禁卡：长正文完整展示不折叠", () => {
     const graph = gateGraph();
     graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
     renderGateDialog(graph);
-    await expectLeadFilesThenDetails(screen.getByTestId("peel-gate-card"));
+    expectFullBodyThenTrailingFiles(screen.getByTestId("peel-gate-card"));
   });
 
   it("全览弹窗的门禁卡列出该步 artifact.deliverables", () => {
@@ -580,23 +591,25 @@ describe("各处入口", () => {
       expect(within(gateCard.querySelector<HTMLElement>("[data-deliverables]")!).getByRole("button", { name: "录屏" })).toBeInTheDocument();
     });
 
-    it("总助拍板卡、简报：正文里写了交付物的同一个本机链接，链接也能点开预览", async () => {
-      layoutDetailsByText();
+    it("总助拍板卡、简报：正文里写了交付物的同一个本机链接，链接能点开预览且下方不重复列", async () => {
       const item = decisionItem({ context: `请看[方案](${plan.href})`, deliverables: [plan] });
       const report = reportItem({ summary: `做完了，结论见[验收结论](${verdict.href})`, deliverables: [verdict] });
       installFleet(snapshotWith({ router: { ...emptyRouterSlice(), items: [item, report] } }));
       await openRouter();
       const tray = await screen.findByRole("region", { name: "Needs You" });
-      expectBodyFileLinks(await within(tray).findByRole("article", { name: "方案标准改好了，请验收" }), ["方案"]);
+      const card = await within(tray).findByRole("article", { name: "方案标准改好了，请验收" });
+      expectBodyFileLinks(card, ["方案"]);
+      expect(card.querySelector("[data-deliverables]")).toBeNull();
       const briefing = await waitFor(() => {
         const el = document.querySelector<HTMLElement>("[data-router-briefing]");
         expect(el).not.toBeNull();
         return el!;
       });
       expectBodyFileLinks(briefing, ["验收结论"]);
+      expect(briefing.querySelector("[data-deliverables]")).toBeNull();
     });
 
-    it("总助简报：deliverables 列在正文下面，链接行只剩网址、Worker、对话", async () => {
+    it("总助简报：deliverables 与 PR 链接直接展示，不折叠", async () => {
       installFleet(snapshotWith({ router: { ...emptyRouterSlice(), items: [reportItem({ deliverables: [plan, rec] })] } }));
       await openRouter();
       const briefing = await waitFor(() => {
@@ -607,11 +620,11 @@ describe("各处入口", () => {
       const files = briefing.querySelector<HTMLElement>("[data-deliverables]")!;
       expect(within(files).getByRole("button", { name: "方案" })).toBeInTheDocument();
       expect(within(files).getByRole("button", { name: "录屏" })).toBeInTheDocument();
-      await user.click(within(briefing).getByRole("button", { name: "Show more" }));
       expect(within(briefing).getByRole("link", { name: /PR #333/ })).toBeInTheDocument();
+      expect(within(briefing).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
     });
 
-    it("总助拍板卡：摘要 → 文件 → 细节，“downstream step waiting”也收在细节里", async () => {
+    it("总助拍板卡：长正文完整展示，downstream step waiting 直接显示在下方", async () => {
       const graph = gateGraph();
       graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
       graph.nodes.push(makeNode({ key: "verify", title: "验收" }));
@@ -620,13 +633,11 @@ describe("各处入口", () => {
       await openRouter();
       const tray = await screen.findByRole("region", { name: "Needs You" });
       const card = await within(tray).findByRole("article", { name: "请确认步骤「实现」的结果" });
-      expect(within(card).queryByText(/downstream step/)).toBeNull();
-      await expectLeadFilesThenDetails(card);
-      await user.click(within(card).getByRole("button", { name: "Show more" }));
+      expectFullBodyThenTrailingFiles(card);
       expect(within(card).getByText("1 downstream step waiting")).toBeInTheDocument();
     });
 
-    it("总助简报：摘要 → 文件 → 细节，链接行也收在细节里", async () => {
+    it("总助简报：长正文与链接直接展示，不折叠", async () => {
       installFleet(snapshotWith({ router: { ...emptyRouterSlice(), items: [reportItem({ summary: CHECKPOINT_TEXT, deliverables: [plan, rec] })] } }));
       await openRouter();
       const briefing = await waitFor(() => {
@@ -634,14 +645,11 @@ describe("各处入口", () => {
         expect(el).not.toBeNull();
         return el!;
       });
-      expect(within(briefing).queryByRole("link", { name: /PR #333/ })).toBeNull();
-      await expectLeadFilesThenDetails(briefing);
-      await user.click(within(briefing).getByRole("button", { name: "Show more" }));
+      expectFullBodyThenTrailingFiles(briefing);
       expect(within(briefing).getByRole("link", { name: /PR #333/ })).toBeInTheDocument();
     });
 
-    it("总助简报：细节只有一个 PR 链接时直接显示，不收起", async () => {
-      layoutDetailsByText();
+    it("总助简报：单行摘要与 PR 链接直接显示，不出 Show more", async () => {
       installFleet(snapshotWith({ router: { ...emptyRouterSlice(), items: [reportItem({ summary: "任务图 #22 做完了", deliverables: [plan] })] } }));
       await openRouter();
       const briefing = await waitFor(() => {

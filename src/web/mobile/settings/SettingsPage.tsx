@@ -12,29 +12,31 @@ export function SettingsPage({
 }: {
   title: string;
   home?: boolean;
-  onBack: () => void;
+  onBack?: () => void;
   footer?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col bg-surface-sidebar pt-[var(--safe-top)]">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col bg-panel pt-[var(--safe-top)]">
       <header
         className={cn(
-          "h-16 shrink-0 items-center gap-1 px-2",
-          home ? "flex" : "grid grid-cols-[1fr_minmax(0,auto)_1fr]",
+          "h-14 shrink-0 items-center gap-1 border-b border-border px-4",
+          home ? "flex" : "grid grid-cols-[1fr_minmax(0,auto)_1fr] px-2",
         )}
       >
         {home ? (
           <>
-            <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={onBack}>
-              <ArrowLeft aria-hidden="true" />
-            </Button>
+            {onBack !== undefined && (
+              <Button variant="slot" size="icon" className="mr-1 shrink-0" aria-label="Back" onClick={onBack}>
+                <ArrowLeft aria-hidden="true" />
+              </Button>
+            )}
             <h1 className="min-w-0 truncate text-title font-semibold">{title}</h1>
           </>
         ) : (
           <>
             <div className="justify-self-start">
-              <BackToSettings onClick={onBack} />
+              <BackToSettings onClick={onBack ?? (() => {})} />
             </div>
             <h1 className="min-w-0 truncate text-center text-title font-semibold">{title}</h1>
             <div aria-hidden="true" />

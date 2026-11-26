@@ -77,13 +77,13 @@ describe("agent 消息布局", () => {
     expect(css).toMatch(/\.markdown \.md-code-body,[^{]*\{[^}]*overflow-x:\s*auto/);
   });
 
-  it("用户消息的气泡样式不变", () => {
+  it("用户消息气泡用直角与 bg-bubble-me", () => {
     const { container } = render(
       <MessageBubble message={makeUserMessage({ id: 2, text: "你好" })} identity={identity} head actions={actions} />,
     );
     const bubble = container.querySelector("article[data-side='right'] > div") as HTMLElement;
     expect(bubble.className).toContain("bg-bubble-me");
-    expect(bubble.className).toContain("rounded-[22px]");
+    expect(bubble.className).not.toMatch(/rounded-/);
     expect(bubble.className).toContain("max-w-[80%]");
   });
 });

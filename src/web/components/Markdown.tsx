@@ -94,7 +94,7 @@ function InlineSentImage({ alt, file, preview }: { alt: string; file: SentFile; 
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} data-sent-image className="my-2 block w-fit max-w-full cursor-zoom-in">
-        <img src={preview.url} alt={alt} loading="lazy" onError={markExpired} className="block h-60 w-auto max-w-xs rounded-xl object-contain object-left" />
+        <img src={preview.url} alt={alt} loading="lazy" onError={markExpired} className="block h-60 w-auto max-w-xs rounded-sm border border-border object-contain object-left" />
       </button>
       <FilePreview file={preview} open={open} onOpenChange={setOpen} />
     </>

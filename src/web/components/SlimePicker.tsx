@@ -2,7 +2,6 @@ import { useRef, type KeyboardEvent, type ReactElement, type ReactNode } from "r
 import { PM_FRUITS } from "../../shared/fruits.ts";
 import { JELLY_COLOR_IDS, jellyColorOf, SLIME_SHAPE_LABELS, slimeLookOf, type SlimeLook } from "../../shared/slimes.ts";
 import { errorLine, errorTitle, type ErrorLike } from "../format.ts";
-import { jellyStyleOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -42,7 +41,6 @@ export function SlimePicker({
       <PopoverContent
         aria-label="Change look"
         className="flex flex-col gap-4"
-        style={jellyStyleOf(look.color)}
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           fruitsRef.current?.querySelector<HTMLButtonElement>("[aria-checked=true]")?.focus();
@@ -73,8 +71,8 @@ export function SlimePicker({
                   tabIndex={checked ? 0 : -1}
                   onClick={() => onChange(candidate)}
                   className={cn(
-                    "flex size-12 cursor-pointer items-center justify-center rounded-xl transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                    checked ? "bg-jelly" : "hover:bg-jelly-hover",
+                    "flex size-12 cursor-pointer items-center justify-center rounded-sm transition-[background-color,box-shadow] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none",
+                    checked ? "tile-open" : "hover:bg-hover",
                   )}
                 >
                   <Avatar look={candidate} size={34} />
@@ -102,11 +100,11 @@ export function SlimePicker({
                   tabIndex={checked ? 0 : -1}
                   onClick={() => onChange(slimeLookOf(look.fruit, id))}
                   className={cn(
-                    "flex size-8 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                    checked && "ring-2 ring-ring",
+                    "flex size-8 cursor-pointer items-center justify-center rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
+                    checked ? "tile-open" : "hover:bg-hover",
                   )}
                 >
-                  <span aria-hidden="true" style={{ backgroundColor: color.blob }} className="size-6 rounded-full" />
+                  <span aria-hidden="true" style={{ backgroundColor: color.blob }} className="size-6 rounded-xs shadow-[inset_0_0_0_1px_rgb(0_0_0_/_0.12)]" />
                 </button>
               );
             })}

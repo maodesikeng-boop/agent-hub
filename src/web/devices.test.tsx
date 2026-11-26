@@ -4,16 +4,18 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "../shared/names.ts";
-import { bundledModelCatalog, emptyRouterSlice, type DeviceInfo, type Message, type RouterDecisionItem, type StateSnapshot } from "../shared/index.ts";
+import { bundledModelCatalog, emptyRouterSlice, type AccountStatusView, type DeviceFingerprint, type DeviceInfo, type Message, type RouterDecisionItem, type StateSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { OFFLINE_AFTER_MS, deviceStatus } from "./devices.ts";
 import {
   FakeApi,
   FakeWebSocket,
   TEST_BOOT_ID,
+  changeOf,
   installFakeNotification,
   installFakeWebSocket,
   makeConvSnapshot,
+  makeConversation,
   makeMessage,
   makePm,
   makeSession,
@@ -85,8 +87,10 @@ async function boot(fleet: Fleet, { connect = true }: { connect?: boolean } = {}
   }
 }
 
-const nav = () => screen.getByRole("navigation", { name: "Conversations" });
-const groupHeader = (name: string) => within(nav()).getByRole("button", { name: new RegExp(`^${name}`) });
+const rail = () => screen.getByRole("navigation", { name: "Workspace" });
+const railDevice = (name: string) => within(rail()).getByRole("button", { name: new RegExp(`^${name}(?:,|$)`) });
+const nav = () => screen.getByRole("region", { name: "Project managers" });
+const pmRow = (name: string) => within(nav()).getAllByRole("button", { name: new RegExp(name) }).find((b) => !b.closest(".row-shortcuts"))!;
 const title = () => screen.getByRole("main").querySelector("h1")?.textContent;
 const composer = () => screen.getByRole("textbox", { name: "Message" });
 
@@ -102,29 +106,34 @@ afterEach(() => {
 });
 
 describe("只有一台", () => {
-  it("守护进程还没有联机（GET /api/devices 404）：和现在一样，没有设备分组，桌面默认落到 #/router", async () => {
+  it("守护进程还没有联机（GET /api/devices 404）：桌面默认展示 Router，最左栏常驻显示本机图标，点本机进列表且无设备切换器", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), null);
     await boot(fleet);
-    expect(await within(nav()).findByRole("button", { name: /小林/ })).toBeInTheDocument();
-    expect(within(nav()).getAllByRole("button")).toHaveLength(1);
-    expect(screen.queryByText("Mac")).toBeNull();
-    expect(window.location.hash).toBe("#/router");
+    expect(window.location.hash).toBe("");
+    expect(railDevice("This computer")).toBeInTheDocument();
+    expect(within(rail()).queryByRole("button", { name: /^东京/ })).toBeNull();
+    await userEvent.click(railDevice("This computer"));
+    await waitFor(() => expect(pmRow("小林")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /Switch computer/ })).toBeNull();
   });
 
-  it("清单里只有本机：也不分组，设置里有“电脑”分类", async () => {
+  it("清单里只有本机：最左栏显示本机格子，设置里有“电脑”分类", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), [mac]);
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
-    expect(within(nav()).getAllByRole("button")).toHaveLength(1);
+    expect(await within(rail()).findByRole("button", { name: /^Mac/ })).toBeInTheDocument();
+    await userEvent.click(railDevice("Mac"));
+    await waitFor(() => expect(pmRow("小林")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const devices = await screen.findByRole("tabpanel", { name: "Computers" });
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
+    const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
     expect(within(devices).getByText("Mac")).toBeInTheDocument();
   });
 
   it("入口本机收到 resync 时自动重新拉 GET /api/devices，把新配对的设备加进界面并连上", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), [mac]);
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
+    expect(await within(rail()).findByRole("button", { name: /^Mac/ })).toBeInTheDocument();
     expect(sockets("tokyo")).toHaveLength(0);
 
     fleet.devices = [mac, tokyo];
@@ -132,26 +141,28 @@ describe("只有一台", () => {
 
     await waitFor(() => expect(sockets("tokyo")).toHaveLength(1));
     act(() => lastSocket("tokyo").open());
-    expect(await within(nav()).findByRole("button", { name: /阿青/ })).toBeInTheDocument();
-    expect(groupHeader("Mac")).toBeInTheDocument();
-    expect(groupHeader("东京")).toBeInTheDocument();
+    expect(await within(rail()).findByRole("button", { name: /^东京/ })).toBeInTheDocument();
+    expect(railDevice("Mac")).toBeInTheDocument();
   });
 });
 
 describe("两台", () => {
-  it("左栏按设备分组；同一个对话编号互不串；网址带设备", async () => {
+  it("最左栏放设备格子，项目列表只列当前设备；同一个对话编号互不串；网址带设备", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    expect(await within(nav()).findByRole("button", { name: /阿青/ })).toBeInTheDocument();
-    expect(groupHeader("Mac")).toBeInTheDocument();
-    expect(groupHeader("东京")).toBeInTheDocument();
+    expect(await within(rail()).findByRole("button", { name: /^东京/ })).toBeInTheDocument();
+    expect(railDevice("Mac")).toBeInTheDocument();
     expect(title()).toBe("Router");
 
-    await userEvent.click(within(nav()).getByRole("button", { name: /小林/ }));
+    await userEvent.click(railDevice("Mac"));
+    expect(within(nav()).queryByRole("button", { name: /阿青/ })).toBeNull();
+    await userEvent.click(pmRow("小林"));
     expect(window.location.hash).toBe("#/c/1");
     expect(title()).toBe("小林");
 
-    await userEvent.click(within(nav()).getByRole("button", { name: /阿青/ }));
+    await userEvent.click(railDevice("东京"));
+    await waitFor(() => expect(pmRow("阿青")).toBeInTheDocument());
+    expect(within(nav()).queryByRole("button", { name: /小林/ })).toBeNull();
     expect(window.location.hash).toBe(`#/d/${TOKYO}/c/1`);
     expect(title()).toBe("阿青");
 
@@ -171,19 +182,22 @@ describe("两台", () => {
     await waitFor(() => expect(title()).toBe("小林"));
   });
 
-  it("组头可以折叠", async () => {
+  it("点列表顶部的设备切换器也能在设备之间切换", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
-    await userEvent.click(groupHeader("东京"));
-    expect(groupHeader("东京")).toHaveAttribute("aria-expanded", "false");
-    expect(within(nav()).queryByRole("button", { name: /阿青/ })).toBeNull();
+    await within(rail()).findByRole("button", { name: /^东京/ });
+    await userEvent.click(railDevice("Mac"));
+    await userEvent.click(screen.getByRole("button", { name: "Switch computer (Mac)" }));
+    const list = await screen.findByRole("list", { name: "Linked computers" });
+    await userEvent.click(within(list).getByRole("button", { name: /东京/ }));
+    await waitFor(() => expect(title()).toBe("阿青"));
+    expect(within(nav()).queryByRole("button", { name: /小林/ })).toBeNull();
   });
 
   it("一台断线只补那一台：带它自己的 seq 重连，本机的连接不动", async () => {
     const fleet = new Fleet(onePm("小林"), { ...onePm("阿青"), seq: 77 });
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     act(() => lastSocket("tokyo").drop());
     act(() => void vi.advanceTimersByTime(1_000));
@@ -195,7 +209,7 @@ describe("两台", () => {
 });
 
 describe("Offline", () => {
-  it("断了不到 30 秒是重连中：能打字，发送等连上；更久是离线：组头变灰、提示几分钟前的内容、输入框禁用", async () => {
+  it("断了不到 30 秒是重连中：能打字，发送等连上；更久是离线：状态点变灰、提示几分钟前的内容、输入框禁用", async () => {
     window.history.replaceState(null, "", `/#/d/${TOKYO}/c/1`);
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
@@ -204,7 +218,8 @@ describe("Offline", () => {
     fleet.offline = true;
     act(() => lastSocket("tokyo").drop());
 
-    expect(within(groupHeader("东京")).getByText("Reconnecting")).toBeInTheDocument();
+    expect(railDevice("东京")).toHaveAccessibleName(/reconnecting/i);
+    expect(within(rail()).getByTestId(`rail-device-dot-${TOKYO}`)).toHaveAttribute("data-status", "reconnecting");
     expect(composer()).toBeEnabled();
     act(() => {
       composer().focus();
@@ -212,15 +227,15 @@ describe("Offline", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
     act(() => void vi.advanceTimersByTime(OFFLINE_AFTER_MS + 3 * 60_000));
-    expect(within(groupHeader("东京")).getByText("Offline")).toBeInTheDocument();
-    expect(groupHeader("东京").closest("[data-device-status]")).toHaveAttribute("data-device-status", "offline");
+    expect(railDevice("东京")).toHaveAccessibleName(/offline/i);
+    expect(within(rail()).getByTestId(`rail-device-dot-${TOKYO}`)).toHaveAttribute("data-status", "offline");
     expect(screen.getByRole("status")).toHaveTextContent("东京 is offline. Showing content from 3m ago");
     expect(composer()).toBeDisabled();
     expect(composer()).toHaveAttribute("placeholder", "东京 is offline. Can\'t send messages right now");
     // 消息照常显示
     expect(within(screen.getByRole("main")).getByText("阿青你好")).toBeInTheDocument();
     // 别的设备不受影响
-    expect(within(groupHeader("Mac")).queryByText("Offline")).toBeNull();
+    expect(within(rail()).getByTestId("rail-device-dot-local")).toHaveAttribute("data-status", "online");
   });
 
   it("离线设备在 Router 工作台 Needs You 托盘里变灰标 Offline（展开的卡和收起的单行都是），在线的不变", async () => {
@@ -271,11 +286,12 @@ describe("Offline", () => {
     expectStates();
   });
 
-  it("从没连上过：组头写离线，进去是“还没连上这台设备”", async () => {
+  it("从没连上过：最左栏标离线，进去是“还没连上这台设备”", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     fleet.offline = true;
     await boot(fleet);
-    await waitFor(() => expect(within(groupHeader("东京")).getByText("Offline")).toBeInTheDocument());
+    await waitFor(() => expect(railDevice("东京")).toHaveAccessibleName(/offline/i));
+    expect(["offline", "unreachable"]).toContain(within(rail()).getByTestId(`rail-device-dot-${TOKYO}`).getAttribute("data-status"));
     act(() => {
       window.location.hash = `#/d/${TOKYO}/c/1`;
     });
@@ -323,20 +339,24 @@ describe("跨设备的等你确定", () => {
     };
     const fleet = new Fleet(localSnap, remoteSnap);
     await boot(fleet);
-    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
-    const routerRow = await within(sidebar).findByRole("button", { name: /Router/ });
+    const routerRow = await within(rail()).findByRole("button", { name: /Router/ });
     await waitFor(() => expect(within(routerRow).getByText("2")).toBeInTheDocument());
+    await userEvent.click(railDevice("Mac"));
     expect(within(nav()).queryByRole("region", { name: "Needs You" })).toBeNull();
     expect(document.title).toBe(`(2) ${PRODUCT_NAME}`);
+    await userEvent.click(routerRow);
     const needsSection = await screen.findByRole("region", { name: "Needs You" });
     await userEvent.click(within(needsSection).getByRole("button", { name: /阿青/ }));
     expect(window.location.hash).toBe(`#/d/${TOKYO}/c/1`);
   });
 
-  it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行自身绿点照常显示", async () => {
+  it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行照常给读屏标出 Needs You", async () => {
     const fleet = new Fleet(onePm("小林", [ask(5, "本机要确定")]), onePm("阿青"), [mac]);
     await boot(fleet);
-    await within(nav()).findByLabelText("Needs You");
+    await waitFor(() => expect(railDevice("Mac")).toHaveAccessibleName(/1 waiting/));
+    expect(within(rail()).queryByTestId("rail-device-badge-local")).toBeNull();
+    await userEvent.click(railDevice("Mac"));
+    await within(nav()).findByText("Needs You");
     expect(within(nav()).queryByRole("region", { name: "Needs You" })).toBeNull();
   });
 
@@ -345,7 +365,7 @@ describe("跨设备的等你确定", () => {
     installFakeNotification("granted");
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
     act(() => lastSocket("tokyo").push({ seq: 11, type: "message.created", data: { message: ask(6, "东京要确定") } }));
     await waitFor(() => expect(FakeNotification.instances.map((n) => n.title)).toEqual(["东京 · 阿青: Needs You"]));
   });
@@ -359,21 +379,24 @@ describe("新建项目经理选设备", () => {
       body: { catalogs: [{ ...bundledModelCatalog("claude"), availability: "not_installed" }, bundledModelCatalog("agy"), { ...bundledModelCatalog("codex"), availability: "not_installed" }].reverse() },
     });
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
+    await userEvent.click(railDevice("Mac"));
     await userEvent.click(screen.getByRole("button", { name: "New project manager" }));
     const dialog = await screen.findByRole("dialog");
     const device = within(dialog).getByRole("combobox", { name: "Device" });
-    expect(device).toHaveValue("");
-    await userEvent.selectOptions(device, TOKYO);
+    expect(device).toHaveTextContent("Mac");
+    await userEvent.click(device);
+    await userEvent.click(await screen.findByRole("option", { name: /东京/ }));
     await userEvent.click(within(dialog).getByRole("button", { name: /More settings/ }));
     // 东京没装 claude、codex：选着的 claude 不悄悄换掉，标状态词，“创建”是灰的；没装的 codex 不列
     const vendor = await within(dialog).findByRole("combobox", { name: "Provider" });
-    await waitFor(() => expect(vendor).toHaveDisplayValue("Claude Code (Not installed)"));
-    expect(within(vendor).getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Claude Code (Not installed)"]);
+    await waitFor(() => expect(vendor).toHaveTextContent("Claude Code (Not installed)"));
     expect(fleet.remote.callsTo("GET", /^\/api\/models$/).length).toBeGreaterThan(0);
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "东京新人");
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
-    await userEvent.selectOptions(vendor, "Antigravity");
+    await userEvent.click(vendor);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Claude Code (Not installed)", "Add provider…"]);
+    await userEvent.click(screen.getByRole("option", { name: "Antigravity" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
     expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)[0]!.body).toMatchObject({ name: "东京新人", vendor: "agy" });
@@ -384,7 +407,8 @@ describe("新建项目经理选设备", () => {
   it("只有一台时没有“设备”这一行", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), null);
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
+    await userEvent.click(railDevice("This computer"));
+    await waitFor(() => expect(pmRow("小林")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "New project manager" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByRole("combobox", { name: "Device" })).toBeNull();
@@ -395,21 +419,22 @@ describe("设置 → 设备", () => {
   it("列出每台的名字、系统、在线状态；本机标出来", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
     const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
-    // 照 Grok Bot：框外小灰字组标题 + 白底 1px 浅边框圆角框，不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
+    // 设置是一页：小灰字组标题 + 细线分开的行，组不画白框、不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
     const mine = within(devices).getByRole("region", { name: "This computer" });
     const others = within(devices).getByRole("region", { name: "Your computers" });
     for (const group of [mine, others]) {
       expect(within(group).getByRole("heading")).toHaveClass("text-minor", "text-muted-foreground");
-      expect(group.lastElementChild).toHaveClass("rounded-2xl", "border", "border-border", "bg-background");
-      expect(group.lastElementChild).not.toHaveClass("bg-sidebar");
+      expect(group.lastElementChild).toHaveClass("divide-y", "divide-border");
+      expect(group.lastElementChild?.className).not.toMatch(/(^|\s)(border|rounded-\S+|bg-\S+)(\s|$)/);
     }
     expect(within(mine).getByTestId("device-row")).toHaveTextContent("Mac");
     expect(within(others).getByTestId("device-row")).toHaveTextContent("东京");
-    expect(within(others).getByTestId("device-row").querySelector("svg[data-icon='pixel']")).toBeInTheDocument();
+    expect(within(others).getByTestId("device-row").querySelector("svg[data-icon='line']")).toBeInTheDocument();
     expect(within(others).getByTestId("device-row").querySelector(".bg-success")).not.toBeNull();
     const rows = within(devices).getAllByTestId("device-row");
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Mac"), expect.stringContaining("东京")]);
@@ -423,7 +448,7 @@ describe("设置 → 设备", () => {
   it("老守护进程（没有 /api/devices）：设置里没有“电脑”分类，默认打开“通用”", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), null);
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
+    await within(rail()).findByRole("button", { name: /Router/ });
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     await screen.findByRole("dialog");
     expect(screen.queryByRole("tab", { name: "Computers" })).toBeNull();
@@ -434,7 +459,7 @@ describe("设置 → 设备", () => {
   it("改名：PATCH 入口的 /api/devices/<编号>，再拉一次清单", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
+    await within(rail()).findByRole("button", { name: /^东京/ });
     const fetchMock = vi.mocked(fetch);
     const inner = fetchMock.getMockImplementation()!;
     const patched: unknown[] = [];
@@ -447,7 +472,9 @@ describe("设置 → 设备", () => {
       return inner(input, init);
     });
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const devices = await screen.findByRole("tabpanel", { name: "Computers" });
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
+    const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
     await userEvent.click(within(devices).getByRole("button", { name: "Rename 东京" }));
     const input = within(devices).getByRole("textbox", { name: "Device name" });
     await userEvent.clear(input);
@@ -455,16 +482,135 @@ describe("设置 → 设备", () => {
     await waitFor(() => expect(patched).toEqual([{ name: "东京服务器" }]));
     expect(await within(devices).findByText("东京服务器")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
-    expect(await within(nav()).findByRole("button", { name: /^东京服务器/ })).toBeInTheDocument();
+    expect(await within(rail()).findByRole("button", { name: /^东京服务器/ })).toBeInTheDocument();
   });
 
+  it("account.updated 全链路自动刷新：设备码登录完成切到待批准 → 对端发起核对弹出 6 位码 → 配对完成刷新设备列表、中心顺序及后续改名移除（零手动刷新）", async () => {
+    const FP = "a".repeat(64) as DeviceFingerprint;
+    const login = { provider: "github" as const, userId: "1", login: "alice" };
+    const fleet = new Fleet(onePm("小林"), onePm("阿青"), [mac]);
+    let accountState: AccountStatusView = { state: "signed_out", lastError: null };
+    fleet.local.account = () => ({ status: 200, body: accountState });
+    fleet.local.accountLogin = () => {
+      accountState = {
+        state: "signing_in",
+        userCode: "WDJB-MJHT",
+        verificationUri: "https://github.com/login/device",
+        expiresAt: Date.now() + 900_000,
+      };
+      return { status: 200, body: accountState };
+    };
+    fleet.local.accountApprovalAnswer = () => {
+      accountState = {
+        state: "signed_in",
+        login,
+        accountId: "acct_abcdefghijklmnopqrstuvwxyz" as Extract<AccountStatusView, { state: "signed_in" }>["accountId"],
+        relayUrl: "https://relay.test",
+        relay: "connected",
+        devices: [
+          { id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null },
+          { id: TOKYO, name: "东京", platform: "linux", fingerprint: FP, self: false, online: true, link: "relay", lastSeenAt: null },
+        ],
+        approvals: [],
+        centerPriority: [MAC, TOKYO],
+        feishuHolder: MAC,
+      };
+      fleet.devices = [mac, tokyo];
+      return { status: 200, body: accountState };
+    };
 
+    await boot(fleet);
+    await within(rail()).findByRole("button", { name: /^Mac/ });
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
+    const panel = await within(dialog).findByRole("tabpanel", { name: "Computers" });
+    expect(within(within(panel).getByRole("region", { name: "Your computers" })).getByText("No other computers")).toBeInTheDocument();
 
+    // 1) Start GitHub device code sign-in
+    await userEvent.click(within(panel).getByRole("button", { name: "Sign in with GitHub" }));
+    expect(await within(panel).findByText("Enter WDJB-MJHT on GitHub")).toBeInTheDocument();
 
+    // 2) Device code completes on daemon -> WS pushes raw account.updated -> automatically transitions to awaiting_approval
+    accountState = { state: "awaiting_approval", login, relay: "connected", approval: null };
+    act(() => lastSocket("local").push({ type: "account.updated" }));
+    expect(await within(panel).findByText("Waiting for approval")).toBeInTheDocument();
+    expect(within(panel).getByText("alice")).toBeInTheDocument();
 
+    // 3) Peer initiates SAS approval -> WS pushes account.updated -> 6-digit SAS code pops up automatically
+    accountState = {
+      state: "awaiting_approval",
+      login,
+      relay: "connected",
+      approval: {
+        requestId: TOKYO,
+        device: { id: TOKYO, name: "东京", platform: "linux", fingerprint: FP },
+        requestedAt: 1,
+        expiresAt: Date.now() + 600_000,
+        sas: "042917",
+      },
+    };
+    act(() => lastSocket("local").push({ type: "account.updated" }));
+    expect(await within(panel).findByTestId("sas-code")).toHaveTextContent("042 917");
 
+    // 4) Pairing completes (peer finishes and server pushes account.updated without resync) -> Hub order + Your computers refresh automatically
+    accountState = {
+      state: "signed_in",
+      login,
+      accountId: "acct_abcdefghijklmnopqrstuvwxyz" as Extract<AccountStatusView, { state: "signed_in" }>["accountId"],
+      relayUrl: "https://relay.test",
+      relay: "connected",
+      devices: [
+        { id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null },
+        { id: TOKYO, name: "东京", platform: "linux", fingerprint: FP, self: false, online: true, link: "relay", lastSeenAt: null },
+      ],
+      approvals: [],
+      centerPriority: [MAC, TOKYO],
+      feishuHolder: MAC,
+    };
+    fleet.devices = [mac, tokyo];
+    act(() => lastSocket("local").push({ type: "account.updated" }));
 
+    const order = await within(panel).findByRole("region", { name: "Hub order" });
+    expect(within(order).getByText("1. Mac")).toBeInTheDocument();
+    expect(within(order).getByText("2. 东京")).toBeInTheDocument();
 
+    await waitFor(() => expect(sockets("tokyo")).toHaveLength(1));
+    act(() => lastSocket("tokyo").open());
+    const others = within(panel).getByRole("region", { name: "Your computers" });
+    expect(await within(others).findByText("东京")).toBeInTheDocument();
+    expect(await within(others).findByText("Online")).toBeInTheDocument();
+
+    // 5) Remote rename & priority update pushed via account.updated -> both Your computers and Hub order refresh automatically
+    accountState = {
+      ...accountState,
+      devices: [
+        { id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null },
+        { id: TOKYO, name: "东京新机", platform: "linux", fingerprint: FP, self: false, online: true, link: "lan", lastSeenAt: null },
+      ],
+      centerPriority: [TOKYO, MAC],
+      feishuHolder: TOKYO,
+    };
+    fleet.devices = [mac, { ...tokyo, name: "东京新机", link: "lan" }];
+    act(() => lastSocket("local").push({ type: "account.updated" }));
+
+    expect(await within(others).findByText("东京新机")).toBeInTheDocument();
+    expect(await within(others).findByText("Same network")).toBeInTheDocument();
+    await waitFor(() => expect(within(order).getByText("1. 东京新机")).toBeInTheDocument());
+
+    // 6) Remote removal pushed via account.updated -> Your computers drops it automatically
+    accountState = {
+      ...accountState,
+      devices: [{ id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null }],
+      centerPriority: [MAC],
+      feishuHolder: MAC,
+    };
+    fleet.devices = [mac];
+    act(() => lastSocket("local").push({ type: "account.updated" }));
+
+    expect(await within(others).findByText("No other computers")).toBeInTheDocument();
+    await waitFor(() => expect(within(order).getByText("1. Mac")).toBeInTheDocument());
+  });
 });
 
 it("手机直达远端：清单及目标快照未到不误清路由，到达后仍清理真实无效编号", async () => {
@@ -485,4 +631,56 @@ it("手机直达远端：清单及目标快照未到不误清路由，到达后�
   expect(location.hash).toBe(`#/d/${TOKYO}/c/999`);
   await act(async () => finishState({ status: 200, body: onePm("东京") }));
   await waitFor(() => expect(location.hash).toBe(""));
+});
+
+it("桌面点 0-PM 或连接中的电脑，随后新来 PM 时自动写入对话路由并恢复工作面板展开与切换", async () => {
+  const user = userEvent.setup();
+  const empty = makeSnapshot({ pms: [], conversations: [], sessions: [] });
+  const fleet = new Fleet(empty, onePm("东京"), null);
+  await boot(fleet);
+
+  await user.click(railDevice("This computer"));
+  expect(location.hash).toBe("");
+
+  act(() => {
+    lastSocket("local").push(changeOf(11, "pm.created", { pm: makePm({ id: 1, name: "新经理" }) }));
+    lastSocket("local").push(
+      changeOf(12, "conversation.created", { conversation: makeConversation({ id: 1, pmId: 1, title: "新经理" }) }),
+    );
+    lastSocket("local").push(
+      changeOf(13, "conversation.created", { conversation: { id: 30, kind: "worker", pmId: 1, projectId: null, title: "部署检查", createdAt: 2_000 } }),
+    );
+  });
+
+  await waitFor(() => expect(location.hash).toBe("#/c/1"));
+  expect(await screen.findByRole("complementary", { name: "Work panel" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Close work panel" }));
+  expect(screen.queryByRole("complementary", { name: "Work panel" })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: /Show work panel/ }));
+  expect(screen.getByRole("complementary", { name: "Work panel" })).toBeInTheDocument();
+});
+
+it("桌面点连接中的远端电脑，加载完成出现 PM 后自动写入远端对话路由并支持 Show work panel", async () => {
+  const user = userEvent.setup();
+  let finishRemote!: (reply: { status: number; body: StateSnapshot }) => void;
+  const baseRemote = onePm("东京经理");
+  const remoteSnapshot: StateSnapshot = {
+    ...baseRemote,
+    conversations: [
+      ...baseRemote.conversations,
+      makeConvSnapshot([], { conversation: { id: 30, kind: "worker", pmId: 1, projectId: null, title: "部署检查", createdAt: 2_000 } }),
+    ],
+  };
+  const fleet = new Fleet(onePm("本机经理"), remoteSnapshot, [mac, tokyo]);
+  fleet.remote.state = () => new Promise((resolve) => { finishRemote = resolve; });
+  await boot(fleet, { connect: false });
+
+  await user.click(railDevice("东京"));
+  expect(location.hash).toBe("");
+
+  await act(async () => finishRemote({ status: 200, body: remoteSnapshot }));
+  await waitFor(() => expect(location.hash).toBe(`#/d/${TOKYO}/c/1`));
+  expect(await screen.findByRole("complementary", { name: "Work panel" })).toBeInTheDocument();
 });

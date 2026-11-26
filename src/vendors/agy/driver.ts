@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import {
@@ -234,6 +235,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const line = this.#buildLineForProc(batch);
     const problem = checkAgyUserLine(line);
     if (problem) {
@@ -278,10 +280,9 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       try {
         let resume = proc?.resume ?? this.resumeFor(st);
         for (let attempt = 0; ; attempt++) {
-          if (!proc) {
-            proc = await this.#spawn(st, resume, files);
-            this.abortIfStopped(st, proc);
-          }
+          if (!proc) proc = await this.#spawn(st, resume, files);
+          this.abortIfStopped(st, proc);
+          if (this.discardStaleSystemBatch(st, proc, batch)) return;
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
           const line = this.#buildLineForProc(batch);
@@ -290,6 +291,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
           const outcome = await proc.ready;
           if (outcome.kind === "ok") return;
           if (outcome.kind === "closed") {
+            if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
             if (outcome.reason === "interrupt") return;
             throw new DriverError(
               "spawn_failed",
@@ -363,6 +365,8 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
           };
     const effectiveFiles: LaunchFiles = files.readonly === undefined || readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
     const catalog = readonlyPolicy === undefined ? null : await this.#catalogFor(readonlyPolicy);
+    this.assertRunning();
+    this.assertNotEnded(st);
     const args = buildAgyArgs(
       row,
       effectiveFiles,
@@ -581,7 +585,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         messageIds: taken?.messageIds ?? [],
         at,
       });
-      if (untaken !== null) this.releaseOnStop(st, [untaken], at);
+      if (untaken !== null) this.releaseUntaken(st, [untaken], untakenReleaseCause(reason, false), at);
     } finally {
       this.resolveInterrupt(st);
       resolveExited();

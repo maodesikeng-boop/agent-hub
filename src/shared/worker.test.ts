@@ -12,7 +12,6 @@ import {
   parseWorkerReport,
   workerPickNote,
   workerPickOf,
-  userToWorkerHeader,
   workerBranchName,
   workerLineText,
   workerReportHeader,
@@ -273,10 +272,11 @@ describe("parseWorkerReport", () => {
 });
 
 describe("审查步骤的两栏", () => {
-  it("结论、验证提交：大小写和 + 两边的空格不计较，加粗、列表写法也认；没写是 null，写错的结论是 null", () => {
-    const parsed = parseWorkerReport(report("- 状态: 做完了\n- 摘要: 可以合\n- **结论**: pass + notes\n- 验证提交: 1a2b3c4d\n- 问题: 命名再统一"));
-    expect(parsed).toMatchObject({ kind: "ok", report: { verdict: "PASS+NOTES", verifiedCommit: "1a2b3c4d", questions: "命名再统一" } });
+  it("结论只认 PASS 和 FAIL，大小写与加粗、列表写法不计较；PASS+NOTES、没写或写错是 null", () => {
+    const parsed = parseWorkerReport(report("- 状态: 做完了\n- 摘要: 可以合\n- **结论**: pass\n- 验证提交: 1a2b3c4d\n- 问题: 命名再统一"));
+    expect(parsed).toMatchObject({ kind: "ok", report: { verdict: "PASS", verifiedCommit: "1a2b3c4d", questions: "命名再统一" } });
     expect(parseWorkerReport(report("状态: 有问题\n摘要: 不能合\n结论: FAIL。\n验证提交: abc"))).toMatchObject({ kind: "ok", report: { verdict: "FAIL" } });
+    expect(parseWorkerReport(report("状态: 做完了\n摘要: 可以合\n结论: PASS+NOTES\n验证提交: 1a2b3c4d"))).toMatchObject({ kind: "ok", report: { verdict: null, verifiedCommit: "1a2b3c4d" } });
     expect(parseWorkerReport(report("状态: 做完了\n摘要: 看完了\n结论: 通过"))).toMatchObject({ kind: "ok", report: { verdict: null, verifiedCommit: null } });
   });
 
@@ -313,12 +313,11 @@ describe("回到项目经理那一行", () => {
     );
   });
 
-  it("用户直接对 Worker 说的话：交给项目经理的开头；写给 Worker 时带【用户直接对你说】标签（单独一块），项目经理的话和别的对话里的没有标签", () => {
-    expect(userToWorkerHeader(3, "修 X")).toBe("【用户直接对 Worker #3 · 修 X 说的话（Worker 已收到）】");
+  it("用户直接对 Worker 说的话：写给 Worker 时带【用户直接对你说】标签（单独一块），项目经理的话和别的对话里的没有标签", () => {
     expect(deliveryParts({ workerId: 3, sender: "user", text: "改 README", meta: null })).toEqual({ prefixes: ["【用户直接对你说】"], text: "改 README" });
     expect(deliveryParts({ workerId: 3, sender: "pm", text: "改 README", meta: null })).toEqual({ prefixes: [], text: "改 README" });
     expect(deliveryParts({ workerId: null, sender: "user", text: "改 README", meta: null })).toEqual({ prefixes: [], text: "改 README" });
-    // 带附件：原文和附件路径在 text 里（和项目经理收到的一样，见 agentTextOf），标签另放
+    // 带附件：原文和附件路径在 text 里，标签另放
     const withFile = { workerId: 3, sender: "user" as const, text: "看这张图", meta: { attachments: [ATTACHMENT] } };
     expect(deliveryParts(withFile)).toEqual({ prefixes: ["【用户直接对你说】"], text: agentTextOf(withFile) });
     expect(agentTextOf(withFile)).toContain(ATTACHMENT.path);

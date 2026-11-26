@@ -2,7 +2,7 @@
 // 假 claude 按会话选剧本（sessions 里 role: "pm" / "worker"），剧本里的 bash 步骤真的跑 run/bin/hub 和 git。
 // 派活到汇报（worktree、主文件夹两种）、越权、打回、收工后令牌作废、连派 10 个、建 worktree 失败、
 // 重启（worktree 还没建好、Worker 正在跑）、关机不发“这一轮没做完”、Worker 的对话能翻页、能停；
-// 用户在网页上直接对 Worker 说话（Worker 收到带标签的原文、项目经理收到通知和汇报、收工后 409）。
+// 用户在网页上直接对 Worker 说话（带标签，普通回复留在 Worker 对话，收工后 409）。
 import { execFileSync } from "node:child_process";
 import { request } from "node:http";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -517,33 +517,34 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     ]);
     await terminate(daemon);
   });
-  it.skipIf(!sandboxAllowsNestedSandbox())("用户直接对 Worker 说：Worker 收到带【用户直接对你说】的原文，项目经理收到通知和这一轮的汇报；收工后再发 409", { timeout: 30_000 }, async () => {
+  it.skipIf(!sandboxAllowsNestedSandbox())("keeps direct chat with the Worker until the PM contacts it again", { timeout: 30_000 }, async () => {
     env = makeEnv();
     const dir = repo("direct");
     env.setScript(
       scripts(
         { turns: [{ steps: [{ bash: startCmd("写笔记", "写一个 notes.txt") }, { text: "派了" }] }], defaultTurn: say("知道了") },
-        { turns: [{ steps: [{ text: report("写好了") }] }], defaultTurn: { steps: [{ bash: "printf 'readme\\n' >> notes.txt" }, { text: report("README 也改了") }] } },
+        { turns: [say(report("写好了")), say("README 目前只有一行。")], defaultTurn: say(report("复查完了")) },
       ),
     );
     const { daemon, client } = await boot();
     const pm = await pmWithProject(client, dir);
     await client.post(pm.conversationId, "派个 Worker 写笔记");
     await waitLines(client, pm.conversationId, "report", 1);
+    const pmBefore = await waitUntil("PM finished reading the first report", async () => {
+      const messages = messagesOf(await client.state(), pm.conversationId);
+      return messages.at(-1)?.text === "知道了" ? messages : undefined;
+    });
     const worker = workerRows()[0]!;
-    // 用户在 Worker 页面说一句：走同一个 POST /messages
-    const id = await client.post(worker.worker_conversation_id, "顺便把 README 也改了");
-    const [line] = await waitLines(client, pm.conversationId, "user_message", 1);
-    expect(line).toMatchObject({ workerId: worker.id, summary: "顺便把 README 也改了" });
-    const reports = await waitLines(client, pm.conversationId, "report", 2);
-    expect(reports[1]!.summary).toBe("README 也改了");
+    const said = "README 现在有几行？";
+    const id = await client.post(worker.worker_conversation_id, said);
+    await waitForStatus(client, id, "replied");
+    const after = await client.state();
+    expect(messagesOf(after, pm.conversationId).map((m) => m.id)).toEqual(pmBefore.map((m) => m.id));
+    expect(messagesOf(after, worker.worker_conversation_id).at(-1)?.text).toBe("README 目前只有一行。");
     const workerSession = sessionOf(await client.state(), worker.worker_conversation_id).sessionId;
     const workerTexts = env.procsOf(workerSession).flatMap((p) => env.stdinTextsOf(p.pid));
     // 标签一块、原文单独放最后一块（stdinTextsOf 把块之间空一行连起来）
-    expect(workerTexts).toContain("【用户直接对你说】\n\n顺便把 README 也改了");
-    await waitUntil("pm got the notice", () =>
-      env.stdinTexts().some((t) => t.includes("【用户直接对 Worker #1 · 写笔记 说的话（Worker 已收到）】\n\n顺便把 README 也改了")) ? true : undefined,
-    );
+    expect(workerTexts).toContain(`【用户直接对你说】\n\n${said}`);
     expect(query<{ worker_id: number; status: string }>("SELECT worker_id, status FROM messages WHERE id = ?", id)).toEqual([
       { worker_id: worker.id, status: "replied" },
     ]);
@@ -554,6 +555,10 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(clear.code).toBe(1);
     expect(clear.stderr).toMatch(/\/clear：.*会话/);
     expect(query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", worker.worker_conversation_id)[0]!.n).toBe(pmMessagesBefore);
+    const sent = await env.runHub(env.procsOf(pmSession)[0]!.pid, ["worker", "send", String(worker.id), "--stdin"], { stdin: "复查一下" });
+    expect(sent.code).toBe(0);
+    expect(sent.stdout).toContain(said);
+    await waitLines(client, pm.conversationId, "report", 2);
     // 项目经理让它收工以后再发：409
     const ended = await env.runHub(env.procsOf(pmSession)[0]!.pid, ["worker", "end", String(worker.id)]);
     expect(ended.code).toBe(0);

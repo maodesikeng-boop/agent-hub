@@ -2,8 +2,10 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { LRUCache } from "lru-cache";
 import {
+  MAX_VENDOR_SYNC_SKILL_ITEMS,
   PM_CAPABILITY_INVENTORY_MAX_ITEMS,
   PM_CAPABILITY_INVENTORY_RETRY_MS,
+  PM_CAPABILITY_INVENTORY_SCOPE_CACHE_MAX,
   PM_CAPABILITY_INVENTORY_TTL_MS,
 } from "../../shared/limits.ts";
 import {
@@ -36,8 +38,6 @@ export interface CapabilityInventoryService {
   invalidate(): void;
 }
 
-const INVENTORY_SCOPE_CACHE_MAX = 32;
-
 function cmpStr(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -47,7 +47,12 @@ interface CachedInventoryEntry {
   cachedAt: number;
   ttlMs: number;
   stamp: string;
-  watchPaths: readonly string[];
+  watchPaths: WatchPaths;
+}
+
+interface WatchPaths {
+  paths: string[];
+  skillRoots: string[];
 }
 
 function singlePathStamp(target: string): string {
@@ -62,14 +67,27 @@ function singlePathStamp(target: string): string {
       }
       return `d:${st.mtimeMs}:${count}`;
     }
-    return `f:${st.mtimeMs}:${st.size}`;
+    return `f:${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
   } catch {
     return "missing";
   }
 }
 
-function computeStamp(paths: readonly string[]): string {
-  return paths.map((p) => `${p}=${singlePathStamp(p)}`).join("|");
+function skillRootStamp(root: string): ReadonlyArray<readonly [string, string]> {
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith(".") && (entry.isDirectory() || entry.isSymbolicLink()))
+      .map((entry) => entry.name)
+      .sort(cmpStr)
+      .slice(0, MAX_VENDOR_SYNC_SKILL_ITEMS)
+      .map((name) => [name, singlePathStamp(join(root, name, "SKILL.md"))]);
+  } catch {
+    return [];
+  }
+}
+
+function computeStamp({ paths, skillRoots }: WatchPaths): string {
+  return JSON.stringify([paths.map(singlePathStamp), skillRoots.map(skillRootStamp)]);
 }
 
 function groupIdFor(kind: CapabilityKind, source: CapabilitySource): string {
@@ -118,7 +136,7 @@ interface MutableItem {
 export function createCapabilityInventory(options: CapabilityInventoryOptions): CapabilityInventoryService {
   const { ctx } = options;
   const now = options.now ?? Date.now;
-  const cache = new LRUCache<string, CachedInventoryEntry>({ max: INVENTORY_SCOPE_CACHE_MAX });
+  const cache = new LRUCache<string, CachedInventoryEntry>({ max: PM_CAPABILITY_INVENTORY_SCOPE_CACHE_MAX });
   const inflight = new Map<string, Promise<CapabilityInventory>>();
   let generation = 0;
 
@@ -134,13 +152,12 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
   function collectWatchPaths(
     adapters: ReadonlyArray<{ vendor: AgentVendor; adapter: VendorSyncAdapter }>,
     projectDir: string | null,
-  ): string[] {
+  ): WatchPaths {
     const set = new Set<string>();
-    set.add(join(ctx.userHome, ".agents", "skills"));
+    const skillRoots = new Set([join(ctx.userHome, ".agents", "skills"), join(ctx.userHome, ".codex", "skills", ".system")]);
     set.add(join(ctx.userHome, ".claude", "settings.json"));
     set.add(join(ctx.userHome, ".claude", "plugins", "installed_plugins.json"));
     set.add(join(ctx.userHome, ".claude", "plugins", "synced"));
-    set.add(join(ctx.userHome, ".codex", "skills", ".system"));
     set.add(join(ctx.userHome, ".codex", "plugins", "cache"));
     const codexAppsToolsDir = join(ctx.userHome, ".codex", "cache", "codex_apps_tools");
     set.add(codexAppsToolsDir);
@@ -152,28 +169,26 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
 
     for (const { adapter } of adapters) {
       try {
-        const mcpRes = adapter.scanMcp(ctx);
-        if (mcpRes.configPath) set.add(mcpRes.configPath);
+        const paths = adapter.mcpConfigPaths?.(ctx) ?? [adapter.scanMcp(ctx).configPath];
+        for (const path of paths) if (path) set.add(path);
       } catch {}
       const globalTarget = adapter.skillTarget(ctx, { kind: "global" });
-      if (globalTarget.mode === "symlink") set.add(globalTarget.targetDir);
+      if (globalTarget.mode === "symlink") skillRoots.add(globalTarget.targetDir);
       if (projectDir !== null) {
         const projTarget = adapter.skillTarget(ctx, { kind: "project", projectDir });
-        if (projTarget.mode === "symlink") set.add(projTarget.targetDir);
+        if (projTarget.mode === "symlink") skillRoots.add(projTarget.targetDir);
       }
     }
     if (projectDir !== null) {
-      set.add(join(projectDir, ".agents", "skills"));
+      skillRoots.add(join(projectDir, ".agents", "skills"));
     }
-    return [...set].sort(cmpStr);
+    return { paths: [...set].sort(cmpStr), skillRoots: [...skillRoots].sort(cmpStr) };
   }
 
-  async function buildInventory(projectDir: string | null): Promise<{
+  async function buildInventory(projectDir: string | null, adapters: ReturnType<typeof resolveAdapters>): Promise<{
     inventory: CapabilityInventory;
     hadError: boolean;
-    watchPaths: string[];
   }> {
-    const adapters = resolveAdapters();
     const scannedAt = now();
     let hadError = false;
     let truncated = false;
@@ -390,7 +405,6 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
     }
 
     const groups: CapabilityGroup[] = [...groupsById.values()].sort((a, b) => cmpStr(a.id, b.id));
-    const watchPaths = collectWatchPaths(adapters, projectDir);
     return {
       inventory: {
         scannedAt,
@@ -399,8 +413,26 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
         truncated,
       },
       hadError,
-      watchPaths,
     };
+  }
+
+  async function scanAndCache(cacheKey: string, projectDir: string | null, retry: boolean): Promise<CapabilityInventory> {
+    const genAtStart = generation;
+    const adapters = resolveAdapters();
+    const watchPaths = collectWatchPaths(adapters, projectDir);
+    const stamp = computeStamp(watchPaths);
+    const { inventory, hadError } = await buildInventory(projectDir, adapters);
+    if (generation !== genAtStart || computeStamp(watchPaths) !== stamp) {
+      return retry ? scanAndCache(cacheKey, projectDir, false) : inventory;
+    }
+    cache.set(cacheKey, {
+      inventory,
+      cachedAt: now(),
+      ttlMs: hadError ? PM_CAPABILITY_INVENTORY_RETRY_MS : PM_CAPABILITY_INVENTORY_TTL_MS,
+      stamp,
+      watchPaths,
+    });
+    return inventory;
   }
 
   return {
@@ -420,24 +452,9 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
       const existingPromise = inflight.get(cacheKey);
       if (existingPromise !== undefined) return existingPromise;
 
-      const genAtStart = generation;
-      const promise = (async () => {
-        try {
-          const { inventory, hadError, watchPaths } = await buildInventory(scope.projectDir);
-          if (generation === genAtStart) {
-            cache.set(cacheKey, {
-              inventory,
-              cachedAt: now(),
-              ttlMs: hadError ? PM_CAPABILITY_INVENTORY_RETRY_MS : PM_CAPABILITY_INVENTORY_TTL_MS,
-              stamp: computeStamp(watchPaths),
-              watchPaths,
-            });
-          }
-          return inventory;
-        } finally {
-          inflight.delete(cacheKey);
-        }
-      })();
+      const promise = scanAndCache(cacheKey, normalizedProject, true).finally(() => {
+        inflight.delete(cacheKey);
+      });
       inflight.set(cacheKey, promise);
       return promise;
     },

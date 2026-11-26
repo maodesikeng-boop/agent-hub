@@ -1,3 +1,4 @@
+import { sandboxApprovalPending } from "../sandbox-approvals.ts";
 import { randomUUID } from "node:crypto";
 import { utf8Bytes, type ConversationId, type MessageId, type WorkerId } from "../../../shared/domain.ts";
 import { turnFailureReason, type DriverEvent } from "../../../shared/driver.ts";
@@ -15,7 +16,6 @@ import type { ReportMessage, ReportMessageRow } from "./types.ts";
 export const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改动，Worker 是从最后一次提交开始的，看不到这些改动。";
 export const TURN_STOPPED = "被停止了";
 const TURN_FAILED = "这一轮出错了";
-export const RECEIVED_STATUSES: ReadonlySet<string> = new Set(["delivered", "processing", "replied"]);
 export const NO_REPLY_TEXT = "（这一轮没有文字回复）";
 
 export function backgroundKilledNote(reason: "idle" | "shutdown" | "restart"): string {
@@ -70,6 +70,7 @@ export function assertWorkerOpenForUser(db: Db, conversationId: ConversationId):
   );
   if (worker === undefined) return;
   if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，不能再给它发消息`);
+  if (sandboxApprovalPending(db, worker.id)) throw fail("conflict", "Worker 还在等用户确认沙箱，不能发消息");
   if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
 }
 

@@ -1,10 +1,15 @@
-// 共用组件守着 docs/ui-standard.md 的几条硬规则：聚焦不用主色、控件统一高度、不能点的主按钮是中性灰。
-import { render, screen } from "@testing-library/react";
+// Shared primitives guard docs/ui-standard.md: one 4px radius, 1px warm-ink lines, neutral focus, one control height, warm disabled primary, custom dropdowns.
+import { act, render, renderHook, screen } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { useState } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { SCROLLBAR_IDLE_HIDE_MS } from "../limits.ts";
+import { useAutoHideScrollbars } from "../useAutoHideScrollbars.ts";
 import { Button } from "./button.tsx";
 import { Drawer, DrawerContent, DrawerTitle } from "./drawer.tsx";
-import { Input, Select, Textarea } from "./input.tsx";
+import { Input, Textarea } from "./input.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select.tsx";
 import { Switch } from "./switch.tsx";
 import { Avatar } from "../components/Avatar.tsx";
 
@@ -12,26 +17,73 @@ import { defaultLookOf, slimePaths } from "../../shared/slimes.ts";
 const classOf = (el: HTMLElement) => el.className.split(/\s+/);
 
 describe("界面标准：共用组件", () => {
-  it("输入框、多行输入、下拉：聚焦时样子不变（边框不加深、没有光圈），靠光标表示；圆角 rounded-xl；输入框和下拉高 36px", () => {
+  it("输入框、多行输入、自建下拉：4px 小圆角、1px border-border-strong 控件线，聚焦只加深到 --border-focus，输入框和下拉高 36px", () => {
     render(
       <>
         <Input aria-label="输入框" />
         <Textarea aria-label="多行" />
-        <Select aria-label="下拉">
-          <option>一</option>
+        <Select value="a" onValueChange={() => {}}>
+          <SelectTrigger aria-label="下拉">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="a">一</SelectItem>
+          </SelectContent>
         </Select>
       </>,
     );
     for (const el of [screen.getByRole("textbox", { name: "输入框" }), screen.getByRole("textbox", { name: "多行" }), screen.getByRole("combobox", { name: "下拉" })]) {
       const cls = classOf(el);
-      expect(cls).toContain("rounded-xl");
-      expect(el.className).not.toMatch(/primary|focus|ring/);
+      // The select trigger is a <button>, so it takes the 4px radius from the base layer like every control.
+      expect(cls).toEqual(expect.arrayContaining(["border", "border-border-strong"]));
+      expect(cls.some((c) => /^focus(-visible)?:field-focus$/.test(c))).toBe(true);
+      expect(el.className).not.toMatch(/border-2|rounded-(?!sm\b)|primary|ring/);
     }
+    for (const name of ["输入框", "多行"]) expect(classOf(screen.getByRole("textbox", { name }))).toContain("rounded-sm");
     expect(classOf(screen.getByRole("textbox", { name: "输入框" }))).toContain("h-9");
     expect(classOf(screen.getByRole("combobox", { name: "下拉" }))).toContain("h-9");
   });
 
-  it("抽屉（第 10 条）：DrawerContent 是 rounded-t-2xl、border-t border-line、bg-surface-chat、最高 85dvh、底部垫安全区，遮罩 bg-black/30；顶上拖动条 36×4、纯装饰", () => {
+  it("自建 Radix 下拉（SelectContent / SelectItem）：展开 4px 圆角、1px 结构线加浮层阴影的面板，支持空值往返并禁用原始 <select>", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    function Harness() {
+      const [val, setVal] = useState("");
+      return (
+        <Select
+          value={val}
+          onValueChange={(next) => {
+            setVal(next);
+            onChange(next);
+          }}
+        >
+          <SelectTrigger aria-label="展开测试">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">默认</SelectItem>
+            <SelectItem value="codex">Codex</SelectItem>
+          </SelectContent>
+        </Select>
+      );
+    }
+    render(<Harness />);
+    const trigger = screen.getByRole("combobox", { name: "展开测试" });
+    expect(document.querySelector("select")).toBeNull();
+    expect(trigger).toHaveTextContent("默认");
+    await user.click(trigger);
+    const listbox = await screen.findByRole("listbox");
+    const panel = classOf(listbox.closest<HTMLElement>("[data-slot='select-content']")!);
+    expect(panel).toEqual(expect.arrayContaining(["rounded-sm", "border", "border-border", "shadow-[var(--shadow-overlay)]"]));
+    expect(panel).not.toContain("border-2");
+    await user.click(screen.getByRole("option", { name: "Codex" }));
+    expect(onChange).toHaveBeenCalledWith("codex");
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: "默认" }));
+    expect(onChange).toHaveBeenLastCalledWith("");
+  });
+
+  it("抽屉（第 10 条）：DrawerContent 顶上 4px 圆角、1px 结构线 bg-background、最高 85dvh、底部垫安全区，遮罩暖暗色；顶上拖动条 36×4 圆头", () => {
     render(
       <Drawer open>
         <DrawerContent>
@@ -40,15 +92,16 @@ describe("界面标准：共用组件", () => {
       </Drawer>,
     );
     const cls = classOf(screen.getByRole("dialog"));
-    for (const c of ["rounded-t-2xl", "border-t", "border-line", "bg-surface-chat", "max-h-[85dvh]", "pb-[var(--safe-bottom)]"]) expect(cls).toContain(c);
-    expect(classOf(document.querySelector<HTMLElement>('[data-slot="drawer-overlay"]')!)).toContain("bg-black/30");
+    for (const c of ["rounded-t-sm", "border-t", "border-border", "bg-background", "max-h-[85dvh]", "pb-[var(--safe-bottom)]"]) expect(cls).toContain(c);
+    expect(cls).not.toContain("border-t-2");
+    expect(classOf(document.querySelector<HTMLElement>('[data-slot="drawer-overlay"]')!)).toContain("bg-[rgb(28_25_23_/_0.3)]");
     const handle = screen.getByRole("dialog").querySelector<HTMLElement>('[aria-hidden="true"]')!;
-    for (const c of ["h-1", "w-9", "rounded-full", "bg-border", "my-2"]) expect(classOf(handle)).toContain(c);
+    for (const c of ["h-1", "w-9", "bg-border-strong", "my-2", "rounded-full"]) expect(classOf(handle)).toContain(c);
     // 进出动画是 vaul 自带的，仓库没装 tw-animate-css
     expect(readFileSync("src/web/ui/drawer.tsx", "utf8")).not.toMatch(/animate-in|animate-out|fade-in|fade-out/);
   });
 
-  it("聊天输入框（Composer）：聚焦时只多出强调色的纯模糊光晕（.composer-frame，边框不变，没有实心的圈和黑影，不内联 <style>），空输入时发送键不可点，回弹动画在 styles.css，空/单行同一行、多行落到下一行", () => {
+  it("聊天输入框（Composer）：.composer-frame 是 1px 控件线、4px 圆角、聚焦加深到 --border-focus 且不起模糊光晕、空输入发送键不可点、回弹动画在 styles.css", () => {
     const composerSrc = readFileSync("src/web/components/Composer.tsx", "utf8");
     expect(composerSrc).toContain("composer-frame");
     expect(composerSrc).not.toContain("focus-within:");
@@ -60,44 +113,37 @@ describe("界面标准：共用组件", () => {
     expect(css).toMatch(/\.composer-send-bounce\s*\{\s*animation: composer-send-bounce 150ms/);
     expect(css).toMatch(/@keyframes composer-send-bounce/);
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-send-bounce\s*\{\s*animation: none/);
+    expect(css).not.toContain("--motion-focus");
 
-    // 聚焦态：只动 box-shadow（边框颜色、粗细都不变，不引起布局跳动），光晕只用 --primary 掺透明
-    expect(css).toMatch(/--motion-focus: 180ms;/);
     const rest = /\.composer-frame \{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(rest).toMatch(/box-shadow: 0 2px 10px rgba\(0, 0, 0, 0\.05\);/);
-    expect(rest).toMatch(/transition: box-shadow var\(--motion-focus\) ease-out;/);
+    expect(rest).toMatch(/border: 1px solid var\(--composer-line\);/);
+    expect(rest).toMatch(/border-radius: var\(--radius-sm\);/);
+    expect(rest).toMatch(/box-shadow: var\(--shadow-composer\);/);
     const focus = /\.composer-frame:focus-within \{([^}]*)\}/.exec(css)?.[1] ?? "";
-    const declared = [...focus.matchAll(/^\s*([a-z-]+):/gm)].map((m) => m[1]);
-    expect(declared).toEqual(["box-shadow"]);
-    // 光晕每一层：偏移 0、模糊半径 ≥ 12px、没有 spread（不是硬圈）、颜色是 --primary 掺透明，不是黑色
-    const shadow = /box-shadow:([^;]*);/.exec(focus)?.[1] ?? "";
-    const layers = shadow
-      .replace(/\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\)/g, (fn) => fn.replaceAll(",", ";")) // 括号里的逗号不算分层
-      .split(",")
-      .map((l) => l.trim());
-    expect(layers).toHaveLength(2);
-    for (const layer of layers) {
-      const m = /^0 0 (\d+)px (color-mix\(.*\))$/.exec(layer);
-      expect(Number(m?.[1])).toBeGreaterThanOrEqual(12);
-      expect(m?.[2]).toContain("var(--primary)");
-    }
-    expect(shadow).not.toMatch(/#000|black|rgba?\(/);
+    expect(focus).toMatch(/border-color: var\(--composer-line-focus\);/);
+    // Focus deepens the light line and adds a faint 1px ring; the edge itself never blurs.
+    expect(focus).toMatch(/box-shadow: var\(--shadow-composer-focus\);/);
+    expect(css).toMatch(/--shadow-composer-focus: 0 0 0 1px rgb\(60 40 20 \/ 0\.1\)/);
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-frame\s*\{\s*transition: none/);
   });
 
-  it("下拉 plain（分组行里改了马上存的）：没有边框和底色，悬停、聚焦浅灰底，高 36px，不用主色", () => {
+  it("下拉 plain（分组行里改了马上存的）：透明底无实线框，悬停和打开时 bg-hover，高 36px，不用主色", () => {
     render(
-      <Select aria-label="行里的下拉" variant="plain">
-        <option>一</option>
+      <Select value="a" onValueChange={() => {}}>
+        <SelectTrigger aria-label="行里的下拉" variant="plain">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="a">一</SelectItem>
+        </SelectContent>
       </Select>,
     );
     const cls = classOf(screen.getByRole("combobox", { name: "行里的下拉" }));
-    expect(cls).toEqual(expect.arrayContaining(["h-9", "rounded-xl", "bg-transparent", "hover:bg-sidebar-hover", "focus-visible:bg-sidebar-hover"]));
-    expect(cls).not.toContain("border");
-    expect(cls.join(" ")).not.toMatch(/primary/);
+    expect(cls).toEqual(expect.arrayContaining(["h-9", "bg-transparent", "border-transparent", "hover:bg-hover", "data-[state=open]:bg-hover"]));
+    expect(cls.join(" ")).not.toMatch(/rounded-|primary/);
   });
 
-  it("按钮：默认 36px、sm 32px，图标按钮同两档；键盘焦点是中性的 ring-ring；不能点的主按钮换中性灰", () => {
+  it("按钮：默认 36px、sm 32px，图标按钮同两档；键盘焦点是中性深棕描边，禁用主按钮用 --send-disabled", () => {
     render(
       <>
         <Button>默认</Button>
@@ -106,17 +152,21 @@ describe("界面标准：共用组件", () => {
         <Button size="icon-sm" aria-label="小图标" />
       </>,
     );
-    expect(classOf(screen.getByRole("button", { name: "默认" }))).toEqual(expect.arrayContaining(["h-9", "focus-visible:ring-ring/50", "disabled:bg-sidebar-active"]));
+    expect(classOf(screen.getByRole("button", { name: "默认" }))).toEqual(
+      expect.arrayContaining(["h-9", "rounded-sm", "btn-solid", "focus-visible:outline-border-focus", "disabled:bg-send-disabled"]),
+    );
+    expect(screen.getByRole("button", { name: "默认" }).className).not.toContain("border-2");
     expect(classOf(screen.getByRole("button", { name: "小" }))).toContain("h-8");
     expect(classOf(screen.getByRole("button", { name: "图标" }))).toContain("size-9");
     expect(classOf(screen.getByRole("button", { name: "小图标" }))).toContain("size-8");
   });
 
-  it("开关：精致尺寸 h-5 w-9（滑块 size-4），带 touch-target 与中性键盘焦点圈", () => {
+  it("开关：4px 圆角 1px 控件线（h-5.5 w-10），2px 圆角滑块 size-4，带 touch-target 与 focus-visible:outline-border-focus", () => {
     render(<Switch aria-label="Notifications" checked={false} onCheckedChange={() => {}} />);
     const sw = screen.getByRole("switch", { name: "Notifications" });
-    expect(classOf(sw)).toEqual(expect.arrayContaining(["h-5", "w-9", "touch-target", "focus-visible:ring-ring/50"]));
-    expect(sw.firstElementChild).toHaveClass("size-4");
+    expect(classOf(sw)).toEqual(expect.arrayContaining(["h-5.5", "w-10", "rounded-sm", "border", "border-border-strong", "touch-target", "focus-visible:outline-border-focus"]));
+    expect(sw.className).not.toContain("border-2");
+    expect(sw.firstElementChild).toHaveClass("size-4", "rounded-xs");
   });
 
   it("头像（第 17 条）：项目经理渲染史莱姆小动物（main），Worker（neutral）渲染同色的便签小灵（piece）", () => {
@@ -135,22 +185,41 @@ describe("界面标准：共用组件", () => {
     expect(fills(avatars[1]!)).toEqual(slimePaths(defaultLookOf(0), "piece").map((p) => p.fill));
   });
 
-  it("--ring 是中性灰，不是主色", () => {
+  it("--ring 是暖深棕焦点色，不是主色", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).toMatch(/--color-ring: var\(--ring\);/);
-    expect(css).toMatch(/--ring: #a1a1aa;/);
+    expect(css).toMatch(/--ring: var\(--border-focus\);/);
+    expect(css).toMatch(/--border-focus: #4a4038;/);
   });
 
-  it("界面字体（第 13 条）：英文和数字是打包进来的 Geist，系统英文字体兜底，中文字体在最后；只在 styles.css 引一次，不用像素字", () => {
+  it("界面字体（第 13 条）：英文和数字是打包进来、未改动的 Lato 2.015 三个字重，系统英文字体兜底，中文字体在后；构建出的首页预载这三个文件", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const stack = /--font-ui:\s*([^;]+);/.exec(css)![1]!;
-    expect(stack).not.toMatch(/Inter|Pixel|Tiny5|Silkscreen/);
-    const order = ['"Geist Variable"', "-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"PingFang SC"', '"Microsoft YaHei"', "sans-serif"].map((f) => stack.indexOf(f));
+    expect(stack).not.toMatch(/Inter|Pixel|Tiny5|Silkscreen|Geist/);
+    const order = ['"Lato"', "-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"PingFang SC"', '"Microsoft YaHei"', "sans-serif"].map((f) => stack.indexOf(f));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect(order).toEqual(order.toSorted((a, b) => a - b));
-    expect(css.match(/@import "@fontsource-variable\/geist";/g)).toHaveLength(1);
-    expect(readFileSync("src/web/main.tsx", "utf8")).not.toMatch(/fontsource/);
-    expect(JSON.parse(readFileSync("package.json", "utf8")).dependencies).toHaveProperty("@fontsource-variable/geist");
+    const faces = [...css.matchAll(/@font-face \{([^}]*)\}/g)].map(([, body]) => ({
+      family: /font-family: ([^;]+);/.exec(body!)?.[1],
+      weight: /font-weight: (\d+);/.exec(body!)?.[1],
+      display: /font-display: (\w+);/.exec(body!)?.[1],
+      src: /src: url\("([^"]+)"\) format\("woff2"\);/.exec(body!)?.[1],
+    }));
+    expect(faces).toEqual([
+      { family: '"Lato"', weight: "400", display: "swap", src: "lato-font/fonts/lato-normal/lato-normal.woff2" },
+      { family: '"Lato"', weight: "500", display: "swap", src: "lato-font/fonts/lato-medium/lato-medium.woff2" },
+      { family: '"Lato"', weight: "600", display: "swap", src: "lato-font/fonts/lato-semibold/lato-semibold.woff2" },
+    ]);
+    expect(css).not.toMatch(/fontsource/);
+    expect(readFileSync("src/web/main.tsx", "utf8")).not.toMatch(/fontsource|lato-font/);
+    const deps = JSON.parse(readFileSync("package.json", "utf8")).dependencies;
+    expect(deps).toHaveProperty("lato-font");
+    expect(deps).not.toHaveProperty("@fontsource-variable/geist");
+    const vite = readFileSync("vite.config.ts", "utf8");
+    expect(vite).toMatch(/rel: "preload", href: `\/\$\{file\.fileName\}`, as: "font", type: "font\/woff2", crossorigin: true/);
+    expect(vite).toMatch(/plugins: \[[^\]]*\bpreloadFonts\b[^\]]*\]/);
+    const latoFile = new RegExp(/const LATO_FILE = \/(.+)\/;/.exec(vite)![1]!);
+    for (const face of faces) expect(latoFile.test(`/repo/node_modules/${face.src}`), face.src).toBe(true);
   });
 });
 
@@ -186,19 +255,18 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(css).toMatch(/--safe-top:\s*env\(safe-area-inset-top, 0px\)/);
     expect(css).toMatch(/--safe-bottom:\s*env\(safe-area-inset-bottom, 0px\)/);
     expect(css).toMatch(/\.chat-main\s*\{[^}]*padding-top:\s*var\(--safe-top\)[^}]*padding-bottom:\s*var\(--safe-bottom\)/s);
-    expect(readFileSync("src/web/components/Sidebar.tsx", "utf8")).toMatch(
-      /pt-\[calc\(var\(--safe-top\)\+var\(--macos-traffic-lights-height\)\)\][^"]*pb-\[var\(--safe-bottom\)\]|pb-\[var\(--safe-bottom\)\][^"]*pt-\[calc\(var\(--safe-top\)\+var\(--macos-traffic-lights-height\)\)\]/,
-    );
-    for (const file of ["Sidebar", "Conversation", "WorkerConversation", "PmProfile", "Composer", "RouterWorkbench", "RouterDecisionCard"]) {
+    expect(readFileSync("src/web/components/AppRail.tsx", "utf8")).toMatch(/pb-\[var\(--safe-bottom\)\]/);
+    for (const file of ["AppRail", "ProjectList", "WorkPanel", "ActiveTab", "CompletedTab", "InfoTab", "WorkerDetail", "Conversation", "WorkerConversation", "Composer", "RouterWorkbench", "RouterDecisionCard"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8"), `${file} 不直接写 env(`).not.toContain("env(");
     }
   });
 
-  it("Mac 桌面应用（第 16 条）：红黄绿交通灯安全区变量在 styles.css 集中定义，左栏常驻避让红黄绿，顶栏无需额外让出 72px", () => {
-    expect(css).toMatch(/--macos-traffic-lights-width:\s*0px;/);
-    expect(css).toMatch(/--macos-traffic-lights-height:\s*0px;/);
-    expect(css).toMatch(/html\[data-macos-app="true"\]\s*\{[^}]*--macos-traffic-lights-width:\s*72px;[^}]*--macos-traffic-lights-height:\s*28px;/s);
-    expect(css).not.toMatch(/@media \(max-width: 1100px\)\s*\{[^}]*html\[data-macos-app="true"\]/s);
+  it("Mac app (section 16): one 40px wood top bar holds the traffic lights for every platform, and the native shell centers them on it", () => {
+    expect(css).not.toMatch(/--macos-traffic-lights/);
+    expect(css).toMatch(/--topbar-height: 40px;/);
+    expect(css).toMatch(/\.shell-topbar \{\s*height: var\(--topbar-height\);/);
+    const swift = readFileSync("apps/macos/MainWindowController.swift", "utf8");
+    expect(swift).toMatch(/static let webTopBarHeight: CGFloat = 40\b/);
   });
 
   it("触屏（pointer: coarse）下 input / textarea / select 一律 16px，防 iOS 聚焦放大；电脑上仍是组件自己的 15px", () => {
@@ -228,25 +296,110 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(classOf(screen.getByRole("button", { name: "小图标" }))).toContain("size-8");
     const composerSrc = readFileSync("src/web/components/Composer.tsx", "utf8");
     expect(composerSrc).toMatch(/const CHIP_CLOSE_CLASS =\s*"touch-target [^"]*";/);
-    expect(composerSrc).toMatch(/className=\{CHIP_CLOSE_CLASS\}\s+onClick=\{\(\) => staging\.remove/);
+    expect(composerSrc).toMatch(/className=\{CHIP_CLOSE_CLASS\}\s+onClick=\{\(\) => onRemoveFile/);
   });
 
   it("右栏的行（一行挨一行）触屏下本身 44px 高，不用撑开的办法", () => {
-    expect(readFileSync("src/web/components/RightRail.tsx", "utf8")).toContain("pointer-coarse:min-h-11");
+    for (const file of ["ActiveTab", "CompletedTab", "InfoTab"]) {
+      expect(readFileSync(`src/web/components/${file}.tsx`, "utf8"), file).toContain("pointer-coarse:min-h-11");
+    }
   });
 
-  it("没有悬停才出现的操作", () => {
-    for (const file of ["Messages", "RightRail", "Sidebar", "Composer", "Conversation", "RouterWorkbench", "RouterDecisionCard"]) {
+  it("没有悬停才出现的操作（仅项目列表行的快捷按键按媒体悬停规范显隐）", () => {
+    for (const file of ["Messages", "WorkPanel", "ActiveTab", "CompletedTab", "InfoTab", "WorkerDetail", "AppRail", "ProjectList", "Composer", "Conversation", "RouterWorkbench", "RouterDecisionCard"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8")).not.toMatch(/group-hover:(opacity|visible)|opacity-0/);
     }
   });
 
-  it("在忙的状态词流光：只用字本身的颜色，减少动态效果时不动", () => {
+  it("在忙的状态词流光：用合成层双反向位移扫过文字本身，无矩形底框，减少动态效果时停用并隐藏", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
-    const rule = css.match(/\.status-shimmer \{[^}]*\}/)?.[0] ?? "";
-    expect(rule).toMatch(/background-clip: text/);
-    expect(rule).toMatch(/animation: status-shimmer/);
-    expect(rule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer \{\s*animation: none;/);
+    const trackRule = css.match(/\.status-shimmer-track \{[^}]*\}/)?.[0] ?? "";
+    const maskRule = css.match(/\.status-shimmer-mask \{[^}]*\}/)?.[0] ?? "";
+    const beamRule = css.match(/\.status-shimmer-beam \{[^}]*\}/)?.[0] ?? "";
+    expect(trackRule).toMatch(/text-overflow:\s*inherit/);
+    expect(maskRule).toMatch(/text-overflow:\s*inherit/);
+    expect(maskRule).toMatch(/mask-image:\s*linear-gradient\(/);
+    expect(maskRule).toMatch(/animation:\s*status-shimmer\b/);
+    expect(maskRule).toMatch(/will-change:\s*transform/);
+    expect(beamRule).toMatch(/text-overflow:\s*inherit/);
+    expect(beamRule).toMatch(/animation:\s*status-shimmer-counter\b/);
+    expect(beamRule).toMatch(/will-change:\s*transform/);
+    expect(beamRule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
+    const kfSlide = css.match(/@keyframes status-shimmer \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const kfCounter = css.match(/@keyframes status-shimmer-counter \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(kfSlide).toContain("transform");
+    expect(kfSlide).not.toContain("background-position");
+    expect(kfSlide).not.toContain("opacity");
+    expect(kfCounter).toContain("transform");
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer-mask,\s*\.status-shimmer-beam \{\s*animation: none;\s*\}\s*\.status-shimmer-track \{\s*display: none;\s*\}\s*\}/);
+  });
+
+  it("排版隔离与滚动条守卫：滚动容器用 layout style 隔离，静止全透明无底槽，滚动/悬停时浮现细圆角滑块", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/\.messages\[role="log"\]\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).toMatch(/\.sidebar-list\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).not.toMatch(/contain:\s*strict/);
+    expect(css).toMatch(/\.composer-dock\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).toMatch(/\.router-timeline\s*\{[^}]*contain:\s*layout style;/);
+    expect(css).toMatch(/\.messages,\s*\.sidebar-list,\s*\.right-rail-scroll,\s*\.router-tray-scroll,\s*\.router-timeline,\s*\.page-fade,\s*\.dialog-body-fade\s*\{[^}]*scrollbar-width:\s*thin;[^}]*scrollbar-color:\s*transparent transparent;/);
+    expect(css).toMatch(/\.messages\[data-scrolling\],[\s\S]*?\.dialog-body-fade\[data-scrolling\]\s*\{[^}]*scrollbar-color:\s*color-mix\(in srgb, var\(--foreground\) 26%, transparent\) transparent;/);
+    expect(css).toMatch(/\.messages::-webkit-scrollbar,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar\s*\{[^}]*width:\s*6px;[^}]*background:\s*transparent;/);
+    expect(css).toMatch(/\.messages::-webkit-scrollbar-thumb,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar-thumb\s*\{[^}]*background:\s*transparent;[^}]*border-radius:\s*9999px;/);
+    expect(css).toMatch(/\.messages\[data-scrolling\]::-webkit-scrollbar-thumb,[\s\S]*?\.dialog-body-fade::-webkit-scrollbar-thumb:active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--foreground\) 26%, transparent\);/);
+    for (const file of ["ActiveTab", "CompletedTab", "InfoTab"]) {
+      const src = readFileSync(`src/web/components/${file}.tsx`, "utf8");
+      expect(src, file).toContain("right-rail-scroll");
+      expect(src, file).toContain("[contain:layout_style]");
+      expect(src, file).not.toContain("[contain:strict]");
+    }
+    expect(readFileSync("src/web/components/Avatar.tsx", "utf8")).toContain("[contain:size_layout]");
+    expect(readFileSync("src/web/components/RouterAvatar.tsx", "utf8")).toContain("[contain:size_layout]");
+  });
+
+  it("自动隐藏滚动条委托：捕获滚动事件标 data-scrolling，停滚后按 SCROLLBAR_IDLE_HIDE_MS 自动摘掉，卸载清定时器", () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = renderHook(() => useAutoHideScrollbars());
+      const scroller = document.createElement("div");
+      scroller.className = "sidebar-list";
+      const ignored = document.createElement("div");
+      document.body.append(scroller, ignored);
+
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll"));
+        ignored.dispatchEvent(new Event("scroll"));
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(true);
+      expect(ignored.hasAttribute("data-scrolling")).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(SCROLLBAR_IDLE_HIDE_MS - 100);
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(true);
+
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      act(() => {
+        vi.advanceTimersByTime(SCROLLBAR_IDLE_HIDE_MS - 100);
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(false);
+
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      expect(scroller.hasAttribute("data-scrolling")).toBe(true);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      scroller.remove();
+      ignored.remove();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

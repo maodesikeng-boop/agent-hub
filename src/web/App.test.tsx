@@ -99,12 +99,13 @@ beforeEach(() => {
 });
 
 describe("首屏", () => {
-  it("左栏有项目经理和最后一条消息；点开看到消息，用户的靠右，agent 的靠左带名字", async () => {
+  it("左栏每个项目经理一行，只有名字不带最后一条消息；点开看到消息，用户的靠右，agent 的靠左带名字", async () => {
     const user = userEvent.setup();
     await boot();
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    const item = within(nav).getByRole("button", { name: /小林/ });
-    expect(item).toHaveTextContent("我在，有什么要做的？");
+    const nav = screen.getByRole("region", { name: "Project managers" });
+    const item = within(nav).getAllByRole("button", { name: /小林/ }).find((b) => !b.closest(".row-shortcuts"))!;
+    expect(item).toHaveTextContent("小林");
+    expect(item).not.toHaveTextContent("我在，有什么要做的？");
     await user.click(item);
     const [mine, theirs] = bubbles() as [HTMLElement, HTMLElement];
     expect(mine).toHaveTextContent("你好");
@@ -374,10 +375,10 @@ describe("Send", () => {
       }),
     );
     await user.type(box(), "写到一半");
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    await user.click(within(nav).getByRole("button", { name: /阿周/ }));
+    const nav = screen.getByRole("region", { name: "Project managers" });
+    await user.click(within(nav).getAllByRole("button", { name: /阿周/ }).find((b) => !b.closest(".row-shortcuts"))!);
     expect(box()).toHaveValue("");
-    await user.click(within(nav).getByRole("button", { name: /小林/ }));
+    await user.click(within(nav).getAllByRole("button", { name: /小林/ }).find((b) => !b.closest(".row-shortcuts"))!);
     expect(box()).toHaveValue("写到一半");
   });
 });
@@ -438,12 +439,14 @@ describe("消息状态", () => {
     expect(bubbles()).toHaveLength(3);
   });
 
-  it("系统消息是靠左很淡的一行，不是气泡；schedule.failed 和 handover.failed 的 meta.rawReason 在 [data-notice] 的 title 上", async () => {
+  it("系统消息是靠左结构化活动条，不是气泡；schedule.failed 和 handover.failed 的 meta.rawReason 在 [data-notice] 的 title 上", async () => {
     const ws = await boot();
     push(ws, messageChange(11, "message.created", makeMessage({ id: 3, sender: "system", text: "已建工单" })));
     const notice = within(log()).getByText("已建工单").closest("[data-notice]");
     expect(notice).toHaveAttribute("data-side", "left");
-    expect(notice).toHaveClass("text-xs", "text-muted-foreground");
+    expect(within(notice as HTMLElement).getByText("System")).toBeInTheDocument();
+    expect(notice!.parentElement).toHaveClass("rounded-sm", "bg-panel");
+    expect(notice!.parentElement!.className).not.toMatch(/(^|\s)border(-|\s|$)/);
 
     push(
       ws,
@@ -481,7 +484,7 @@ describe("消息状态", () => {
     );
   });
 
-  it("别的对话的消息不出现在当前对话，但更新左栏预览", async () => {
+  it("别的对话的消息不出现在当前对话，但把那个项目经理顶到左栏最上面", async () => {
     const ws = await boot(
       makeSnapshot({
         pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "阿周" })],
@@ -495,10 +498,13 @@ describe("消息状态", () => {
         ],
       }),
     );
-    push(ws, messageChange(11, "message.created", makeMessage({ id: 3, conversationId: 2, text: "阿周的新消息" })));
+    const nav = screen.getByRole("region", { name: "Project managers" });
+    const names = () => within(nav).getAllByRole("button").filter((b) => !b.closest(".row-shortcuts")).map((b) => b.textContent);
+    expect(names()).toEqual([expect.stringContaining("小林"), expect.stringContaining("阿周")]);
+    push(ws, messageChange(11, "message.created", makeMessage({ id: 3, conversationId: 2, text: "阿周的新消息", createdAt: 10_000 })));
     expect(within(log()).queryByText("阿周的新消息")).not.toBeInTheDocument();
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    expect(within(nav).getByRole("button", { name: /阿周/ })).toHaveTextContent("阿周的新消息");
+    expect(names()).toEqual([expect.stringContaining("阿周"), expect.stringContaining("小林")]);
+    expect(within(nav).queryByText("阿周的新消息")).not.toBeInTheDocument();
   });
 });
 
@@ -971,8 +977,8 @@ describe("补不齐", () => {
       }),
     });
     push(ws, messageChange(11, "message.created", makeMessage({ id: 9, conversationId: 2 })));
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    expect(await within(nav).findByRole("button", { name: /阿周/ })).toBeInTheDocument();
+    const nav = screen.getByRole("region", { name: "Project managers" });
+    await waitFor(() => expect(within(nav).getAllByRole("button", { name: /阿周/ }).find((b) => !b.closest(".row-shortcuts"))).toBeDefined());
   });
 
   it("忽略坏的 WebSocket 消息", async () => {
@@ -1194,27 +1200,14 @@ describe("多个对话", () => {
         ],
       }),
     );
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    const items = within(nav).getAllByRole("button");
+    const nav = screen.getByRole("region", { name: "Project managers" });
+    const items = within(nav).getAllByRole("button").filter((b) => !b.closest(".row-shortcuts"));
     expect(items[0]).toHaveTextContent("阿周");
     expect(items[1]).toHaveTextContent("小林");
     expect(within(log()).getByText("阿周的消息")).toBeInTheDocument();
     await user.click(items[1] as HTMLElement);
     expect(within(log()).getByText("小林的消息")).toBeInTheDocument();
     expect(within(log()).queryByText("阿周的消息")).not.toBeInTheDocument();
-  });
-
-  it("对话列表预览跳过工具调用，显示最后一条文字", async () => {
-    await boot(
-      makeSnapshot({
-        conversations: [
-          makeConvSnapshot([makeMessage({ id: 1, text: "最后的话" }), makeToolMessage({ id: 2, text: "Bash: ls" })]),
-        ],
-      }),
-    );
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    expect(within(nav).getByRole("button")).toHaveTextContent("最后的话");
-    expect(within(nav).getByRole("button")).not.toHaveTextContent("Bash: ls");
   });
 
   it("没有对应项目经理的对话用对话标题", async () => {
@@ -1224,7 +1217,7 @@ describe("多个对话", () => {
         conversations: [makeConvSnapshot([], { conversation: { id: 3, kind: "assistant", pmId: null, title: "总助" } })],
       }),
     );
-    const nav = screen.getByRole("navigation", { name: "Conversations" });
-    expect(within(nav).getByRole("button")).toHaveTextContent("总助");
+    const nav = screen.getByRole("region", { name: "Project managers" });
+    expect(within(nav).getAllByRole("button").find((b) => !b.closest(".row-shortcuts"))!).toHaveTextContent("总助");
   });
 });

@@ -120,6 +120,7 @@ export default defineVendor({
       tool_search: "tool_search",
     },
   },
+  checklist: { sources: [] },
   skillSignals: {
     // read output has no line numbers.
     outputField: "result",

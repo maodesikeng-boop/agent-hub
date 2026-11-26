@@ -52,9 +52,10 @@ import { COPIED_RESET_MS, copyText } from "./components/CodeBlock.tsx";
 import { useClient } from "./device-scope.tsx";
 import { LOCAL_DEVICE, isReadOnly, type DeviceKey, type DeviceView } from "./devices.ts";
 import { errorText, nameError, type ErrorLike } from "./format.ts";
-import { modelsQueryKey, refreshDeviceModels } from "./models.tsx";
+import { modelsQueryKey } from "./models.tsx";
 import type { NotifySettings } from "./notify.ts";
-import { ACCOUNT_QUERY_KEY, useHubQueryClient } from "./query-client.ts";
+import { ACCOUNT_QUERY_KEY, accountQueryFn, claimAccountTicket, commitAccountStatus, useHubQueryClient } from "./query-client.ts";
+import { refreshProviderData } from "./quota.ts";
 
 export { ACCOUNT_QUERY_KEY };
 import {
@@ -169,8 +170,9 @@ export function useCopyFeedback(resetMs: number = COPIED_RESET_MS): {
   return useMemo(() => ({ copied, copy }), [copied, copy]);
 }
 
-export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: () => void) {
-  const [name, setName] = useState(device.info.name);
+export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: () => void, draft?: { name: string; setName: (name: string) => void }) {
+  const [localName, setLocalName] = useState(device.info.name);
+  const { name = localName, setName = setLocalName } = draft ?? {};
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorLike | null>(null);
   const prevIdRef = useRef(device.info.id);
@@ -182,11 +184,6 @@ export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: ()
   }
   const clean = normalizeName(name);
   const problem = nameError(name);
-  const reset = useCallback(() => {
-    setName(device.info.name);
-    setBusy(false);
-    setError(null);
-  }, [device.info.name]);
   const save = useCallback(async (): Promise<"saved" | "unchanged" | false> => {
     if (clean === null || busy) return false;
     if (clean === device.info.name) return "unchanged";
@@ -203,7 +200,7 @@ export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: ()
       return false;
     }
   }, [busy, clean, device.info.id, device.info.name, onChanged]);
-  return { name, setName, clean, problem, busy, error, save, reset };
+  return { name, setName, clean, problem, busy, error, save };
 }
 
 export function useDeviceRemove(device: Pick<DeviceView, "info">, onChanged?: () => void) {
@@ -230,24 +227,23 @@ export function useDeviceRemove(device: Pick<DeviceView, "info">, onChanged?: ()
 
 export function useAccount() {
   const qc = useHubQueryClient();
-  const query = useQuery({ queryKey: ACCOUNT_QUERY_KEY, queryFn: fetchAccount, staleTime: Infinity }, qc);
+  const query = useQuery({ queryKey: ACCOUNT_QUERY_KEY, queryFn: accountQueryFn(qc, fetchAccount), staleTime: Infinity }, qc);
   const [error, setError] = useState<ErrorLike | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
+    return () => { mountedRef.current = false; };
   }, []);
   const run = useCallback(
     async (key: string, action: () => Promise<AccountStatusView | void>): Promise<boolean> => {
       if (busy !== null) return false;
+      const ticket = claimAccountTicket(qc);
       setBusy(key);
       setError(null);
       try {
         const next = await action();
-        if (mountedRef.current && next !== undefined) qc.setQueryData(ACCOUNT_QUERY_KEY, next);
+        if (mountedRef.current && next !== undefined) commitAccountStatus(qc, ticket, next);
         return true;
       } catch (err) {
         if (mountedRef.current) setError(errorText(err));
@@ -705,6 +701,8 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
   };
 }
 
+export type VendorSyncModel = ReturnType<typeof useVendorSyncSetting>;
+
 export const PROVIDERS_QUERY_KEY = (deviceKey: string) => ["providers", deviceKey] as const;
 
 export interface ProvidersSummary {
@@ -861,9 +859,10 @@ export interface UseProvidersSettingOptions {
   enabled?: boolean;
   devices?: readonly DeviceView[] | null;
   defaultDeviceKey?: DeviceKey;
+  selectionPage?: "providers" | "vendor-sync";
 }
 
-function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceKey: DeviceKey) {
+function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceKey: DeviceKey, selectionPage: UseProvidersSettingOptions["selectionPage"]) {
   const contextClient = useClient();
   const selectableComputers = useMemo(() => resolveSelectableProviderComputers(devices), [devices]);
 
@@ -876,9 +875,9 @@ function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceK
   );
 
   const [selectedDeviceKey, setSelectedDeviceKey] = useState<DeviceKey>(() => pickValidDeviceKey(defaultDeviceKey));
-  const prevDefaultRef = useRef(defaultDeviceKey);
-  if (prevDefaultRef.current !== defaultDeviceKey) {
-    prevDefaultRef.current = defaultDeviceKey;
+  const [selectionDefault, setSelectionDefault] = useState({ defaultDeviceKey, selectionPage });
+  if (selectionDefault.defaultDeviceKey !== defaultDeviceKey || selectionDefault.selectionPage !== selectionPage) {
+    setSelectionDefault({ defaultDeviceKey, selectionPage });
     const nextKey = pickValidDeviceKey(defaultDeviceKey);
     if (nextKey !== selectedDeviceKey) setSelectedDeviceKey(nextKey);
   }
@@ -918,13 +917,13 @@ function scanProviderWork(status: ProvidersStatusResponse, previous: ActiveProvi
   return { next, justSucceeded };
 }
 
-function useRefreshModelsWhenWorkFinishes(qc: QueryClient, status: ProvidersStatusResponse | undefined, targetClient: HubClient) {
+function useRefreshProviderDataWhenWorkFinishes(qc: QueryClient, status: ProvidersStatusResponse | undefined, targetClient: HubClient) {
   const trackedActiveRef = useRef<ActiveProviderWork>({ jobs: new Set(), flows: new Set() });
   useEffect(() => {
     if (!status) return;
     const { next, justSucceeded } = scanProviderWork(status, trackedActiveRef.current);
     trackedActiveRef.current = next;
-    if (justSucceeded) refreshDeviceModels(qc, targetClient);
+    if (justSucceeded) refreshProviderData(qc, targetClient);
   }, [qc, status, targetClient]);
 }
 
@@ -967,7 +966,7 @@ function useVendorActionRunner(qc: QueryClient, queryKey: readonly unknown[], ta
       try {
         const item = await fn();
         upsertItem(item);
-        if (options.syncModelsImmediately) refreshDeviceModels(qc, targetClient);
+        if (options.syncModelsImmediately || item.authFlow?.phase === "succeeded") refreshProviderData(qc, targetClient);
         return item;
       } catch (err) {
         if (options.rethrow) throw err;
@@ -1013,7 +1012,7 @@ function useStatusActions(qc: QueryClient, queryKey: readonly unknown[], targetC
     try {
       const next = await targetClient.fetchProviders({ refresh: true });
       qc.setQueryData<ProvidersStatusResponse>(queryKey, next);
-      refreshDeviceModels(qc, targetClient);
+      refreshProviderData(qc, targetClient);
     } catch {
       // A failed manual refresh keeps the last status.
     } finally {
@@ -1043,12 +1042,11 @@ export function useProvidersSetting({
   enabled = true,
   devices = null,
   defaultDeviceKey = LOCAL_DEVICE,
+  selectionPage,
 }: UseProvidersSettingOptions = {}) {
   const qc = useHubQueryClient();
-  const { selectableComputers, effectiveDeviceKey, setSelectedDeviceKey, targetClient, isRemoteTarget } = useProviderTarget(
-    devices,
-    defaultDeviceKey,
-  );
+  const { selectableComputers, effectiveDeviceKey, setSelectedDeviceKey, targetClient, isRemoteTarget } =
+    useProviderTarget(devices, defaultDeviceKey, selectionPage);
   const pageVisible = useSyncExternalStore(subscribePageVisibility, getPageVisibilitySnapshot, () => true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const queryKey = useMemo(() => PROVIDERS_QUERY_KEY(effectiveDeviceKey), [effectiveDeviceKey]);
@@ -1068,7 +1066,7 @@ export function useProvidersSetting({
     },
     qc,
   );
-  useRefreshModelsWhenWorkFinishes(qc, status, targetClient);
+  useRefreshProviderDataWhenWorkFinishes(qc, status, targetClient);
 
   const { rowErrors, setRowErrors, run } = useVendorActionRunner(qc, queryKey, targetClient, setBusyKey);
   const vendorActions = useVendorActions(run, targetClient);

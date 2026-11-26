@@ -34,6 +34,7 @@ export interface ReminderState {
   sessions: SessionState[];
   router?: RouterSlice;
   activeTaskGraphs?: TaskGraph[];
+  pendingSandboxCards?: readonly { id: number }[];
   pending: readonly { conversationId: ConversationId; phase: "sending" | "failed" }[];
 }
 
@@ -104,25 +105,71 @@ function pendingIn(state: Pick<ReminderState, "pending">, conversationId: Conver
   return state.pending.filter((p) => p.conversationId === conversationId);
 }
 
+const archivedPmIdsCache = new WeakMap<readonly Pm[], ReadonlySet<PmId>>();
+
+function archivedPmIdsOf(pms: readonly Pm[]): ReadonlySet<PmId> {
+  let cached = archivedPmIdsCache.get(pms);
+  if (cached === undefined) {
+    const set = new Set<PmId>();
+    for (const pm of pms) if (pm.archivedAt != null) set.add(pm.id);
+    cached = set;
+    archivedPmIdsCache.set(pms, set);
+  }
+  return cached;
+}
+
 function isPmArchived(state: Pick<ReminderState, "pms">, pmId: PmId | null): boolean {
-  if (pmId === null) return false;
-  const pm = state.pms.find((p) => p.id === pmId);
-  return pm?.archivedAt != null;
+  return pmId !== null && archivedPmIdsOf(state.pms).has(pmId);
+}
+
+const messageScanCache = new WeakMap<
+  readonly Message[],
+  {
+    length: number;
+    last: Message | undefined;
+    hasInFlight: boolean;
+    renewing: boolean;
+    handoverLastSessions: ReadonlySet<SessionId | null>;
+  }
+>();
+
+function scanMessages(messages: readonly Message[]) {
+  let cached = messageScanCache.get(messages);
+  if (cached === undefined || cached.length !== messages.length) {
+    let last: Message | undefined;
+    let hasInFlight = false;
+    let renewing = false;
+    const seenSessionStatus = new Set<SessionId | null>();
+    const handoverLastSessions = new Set<SessionId | null>();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]!;
+      if (last === undefined && !isQuietMessage(m)) last = m;
+      if (!hasInFlight && isInFlight(m) && !isHandoverTraffic(m)) hasInFlight = true;
+      const isHandoverRequested = systemEventOf(m)?.event === "handover.requested";
+      if (!renewing && isHandoverRequested && isInFlight(m)) renewing = true;
+      if (m.status !== null && !seenSessionStatus.has(m.sessionId)) {
+        seenSessionStatus.add(m.sessionId);
+        if (isHandoverRequested) handoverLastSessions.add(m.sessionId);
+      }
+    }
+    cached = { length: messages.length, last, hasInFlight, renewing, handoverLastSessions };
+    messageScanCache.set(messages, cached);
+  }
+  return cached;
 }
 
 export function waitingConversations(state: ReminderState, lastSeen: LastSeen): ConversationId[] {
-  return Object.values(state.conversations)
-    .filter(({ conversation, messages }) => {
-      if (conversation.kind === "worker") return false;
-      if (isPmArchived(state, conversation.pmId)) return false;
-      const last = messages.findLast((m) => !isQuietMessage(m));
-      if (!last || last.sender === "user" || last.createdAt <= (lastSeen[conversation.id] ?? 0)) return false;
-      if (messages.some((m) => isInFlight(m) && !isHandoverTraffic(m))) return false;
-      if (pendingIn(state, conversation.id).some((p) => p.phase === "sending")) return false;
-      if ((visibleSessionOf(state, conversation.id)?.activity ?? "idle") !== "idle") return false;
-      return conversation.pmId === null || runningWorkerCount(state, conversation.pmId) === 0;
-    })
-    .map(({ conversation }) => conversation.id);
+  const out: ConversationId[] = [];
+  for (const { conversation, messages } of Object.values(state.conversations)) {
+    if (conversation.kind === "worker" || isPmArchived(state, conversation.pmId)) continue;
+    const { last, hasInFlight } = scanMessages(messages);
+    if (!last || last.sender === "user" || last.createdAt <= (lastSeen[conversation.id] ?? 0)) continue;
+    if (hasInFlight) continue;
+    if (pendingIn(state, conversation.id).some((p) => p.phase === "sending")) continue;
+    if ((visibleSessionOf(state, conversation.id)?.activity ?? "idle") !== "idle") continue;
+    if (conversation.pmId === null || runningWorkerCount(state, conversation.pmId) === 0) out.push(conversation.id);
+  }
+  return out;
 }
 
 const unansweredAsksCache = new WeakMap<readonly Message[], Message[]>();
@@ -155,14 +202,28 @@ export function pendingAsks(state: ReminderState, conversationId: ConversationId
   return all.length === 0 ? NO_MESSAGES : all;
 }
 
+const allPendingAsksCache = new WeakMap<
+  ReminderState["conversations"],
+  WeakMap<readonly Pm[], { conversationId: ConversationId; message: Message }[]>
+>();
+
 export function allPendingAsks(state: ReminderState): { conversationId: ConversationId; message: Message }[] {
+  let byPms = allPendingAsksCache.get(state.conversations);
+  if (byPms === undefined) {
+    byPms = new WeakMap();
+    allPendingAsksCache.set(state.conversations, byPms);
+  }
+  const hit = byPms.get(state.pms);
+  if (hit !== undefined) return hit;
+  const archived = archivedPmIdsOf(state.pms);
   const out: { conversationId: ConversationId; message: Message }[] = [];
-  for (const { conversation } of Object.values(state.conversations)) {
-    if (conversation.kind === "worker") continue;
-    for (const message of pendingAsks(state, conversation.id)) {
+  for (const { conversation, messages } of Object.values(state.conversations)) {
+    if (conversation.kind === "worker" || (conversation.pmId !== null && archived.has(conversation.pmId))) continue;
+    for (const message of unansweredAsksIn(messages)) {
       out.push({ conversationId: conversation.id, message });
     }
   }
+  byPms.set(state.pms, out);
   return out;
 }
 
@@ -213,6 +274,7 @@ export function routerReminderSummary(
   devices: readonly { deviceId: string; state: ReminderState }[],
 ): RouterReminderSummary {
   let pendingCount = 0;
+  let sandboxCount = 0;
   let unreadReportCount = 0;
   let topDecision: PendingDecision | null = null;
   let topReport: RouterReportItem | null = null;
@@ -220,6 +282,7 @@ export function routerReminderSummary(
   for (const { deviceId, state } of devices) {
     const decisions = pendingDecisionsOf(state, deviceId);
     pendingCount += decisions.length;
+    sandboxCount += state.pendingSandboxCards?.length ?? 0;
     const firstDec = decisions[0];
     if (
       firstDec !== undefined &&
@@ -243,12 +306,12 @@ export function routerReminderSummary(
     }
   }
 
-  const subtitle = topDecision?.question ?? topReport?.summary ?? "All clear";
-  return { pendingCount, unreadReportCount, subtitle };
+  const subtitle = topDecision?.question ?? (sandboxCount > 0 ? "Worker sandbox approval" : topReport?.summary ?? "All clear");
+  return { pendingCount: pendingCount + sandboxCount, unreadReportCount, subtitle };
 }
 
 export function renewingIn(messages: Message[]): boolean {
-  return messages.some((m) => systemEventOf(m)?.event === "handover.requested" && isInFlight(m));
+  return scanMessages(messages).renewing;
 }
 
 export function visibleSessionOf(state: Pick<ReminderState, "sessions" | "conversations" | "pending">, conversationId: ConversationId): SessionState | null {
@@ -256,14 +319,13 @@ export function visibleSessionOf(state: Pick<ReminderState, "sessions" | "conver
   const messages = state.conversations[conversationId]?.messages ?? [];
   if (session === null || !inHandoverTurn(messages, session.sessionId)) return session;
   const waiting = messages.some((m) => m.status === "queued" && !isHandoverTraffic(m)) || pendingIn(state, conversationId).some((p) => p.phase === "sending");
-  const quiet = { currentTool: null, apiRetry: null, streamingText: undefined };
+  const quiet = { currentTool: null, apiRetry: null, stepStartedAt: null, streamingText: undefined };
   return waiting ? { ...session, ...quiet, activity: "working", step: { type: "thinking" } } : { ...session, ...quiet, activity: "idle", step: null };
 }
 
 function inHandoverTurn(messages: Message[], sessionId: SessionId): boolean {
-  if (renewingIn(messages)) return true;
-  const last = messages.findLast((m) => m.sessionId === sessionId && m.status !== null);
-  return last !== undefined && systemEventOf(last)?.event === "handover.requested";
+  const scan = scanMessages(messages);
+  return scan.renewing || scan.handoverLastSessions.has(sessionId);
 }
 
 export function notificationTag(pmId: PmId | null, conversationId: ConversationId): string {

@@ -16,7 +16,7 @@ import type { Db } from "../store/index.ts";
 import { setActionStatus, toActionRow } from "./queue.ts";
 import type { ActionDbRow } from "./queue.ts";
 
-export type ActionExecutorDeps = Pick<Ledger, "reportHealth" | "onActionFailed">;
+export type ActionExecutorDeps = Pick<Ledger, "reportHealth" | "onActionFailed" | "onSessionQuiescent">;
 
 interface ActionExecutorOptions {
   now?: () => number;
@@ -28,7 +28,11 @@ interface ActionExecutorOptions {
 const DUE_SQL = `
 SELECT * FROM actions
 WHERE status = 'pending' AND next_attempt_at <= ?
-ORDER BY CASE type WHEN 'session.start' THEN 0 ELSE 1 END, next_attempt_at, id`;
+ORDER BY CASE
+  WHEN type = 'session.start' THEN 0
+  WHEN type = 'session.send' AND (CASE WHEN json_valid(params) THEN json_extract(params, '$.recovery') END) = 1 THEN 1
+  ELSE 2
+END, next_attempt_at, id`;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -58,10 +62,10 @@ function parseSend(raw: ActionDbRow): AnyActionRow | null {
   } as AnyActionRow;
 }
 
-/** Actions sharing a lane run one at a time: one lane per session, and one for all review stamps. */
+const RETIRED_ACTION_TYPES: ReadonlySet<string> = new Set(["review.stamp"]);
+
+/** Actions sharing a session lane run one at a time. */
 function laneKey(row: AnyActionRow): string | null {
-  // GitHub keeps the last status posted, so two stamps in flight could land out of order and leave a stale verdict.
-  if (row.type === "review.stamp") return "review.stamp";
   const id = (row.params as { sessionId?: unknown }).sessionId;
   return typeof id === "number" ? `session:${id}` : null;
 }
@@ -109,19 +113,43 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     timer = setTimeout(tick, Math.max(0, delayMs));
   };
 
+  const notifySessionSettled = (row: AnyActionRow) => {
+    if (stopping) return;
+    if (row.type === "session.send" || row.type === "session.start") {
+      safely(() => deps.onSessionQuiescent?.(row.params.sessionId));
+    }
+  };
+
   const abandon = (id: ActionId, error: string, send: AnyActionRow | null) => {
     setActionStatus(db, id, { status: "abandoned", lastError: error }, now());
     report("actions", error);
     if (send !== null) {
       const abandoned: AnyActionRow = { ...send, status: "abandoned", lastError: error };
       safely(() => deps.onActionFailed(abandoned, `放弃：${error}`));
+      notifySessionSettled(send);
     }
   };
 
   const laterDelay = (delayMs: number) => (Number.isFinite(delayMs) ? Math.max(0, Math.ceil(delayMs)) : pollIntervalMs);
 
-  const finish = (row: AnyActionRow, result: ActionResult) => {
+  const reclaimIfSuperseded = (id: ActionId, startedParams: string, t: number): "deleted" | "superseded" | "same" => {
+    const current = db.get<{ params: string }>("SELECT params FROM actions WHERE id = ?", id);
+    if (current === undefined) return "deleted";
+    if (current.params !== startedParams) {
+      // Action params changed while running; re-queue with fresh attempts instead of marking the new payload done or failed.
+      setActionStatus(db, id, { status: "pending", attempts: 0, lastError: null, nextAttemptAt: t }, t);
+      return "superseded";
+    }
+    return "same";
+  };
+
+  const finish = (row: AnyActionRow, startedParams: string, result: ActionResult) => {
     const t = now();
+    const state = reclaimIfSuperseded(row.id, startedParams, t);
+    if (state !== "same") {
+      notifySessionSettled(row);
+      return;
+    }
     if (result.kind === "done") {
       setActionStatus(db, row.id, { status: "done", lastError: null }, t);
       report("driver", null);
@@ -129,13 +157,19 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     } else {
       setActionStatus(db, row.id, { status: "pending", nextAttemptAt: t + laterDelay(result.delayMs) }, t);
     }
+    notifySessionSettled(row);
   };
 
-  const fail = (row: AnyActionRow, error: unknown) => {
+  const fail = (row: AnyActionRow, startedParams: string, error: unknown) => {
+    const t = now();
+    const state = reclaimIfSuperseded(row.id, startedParams, t);
+    if (state !== "same") {
+      notifySessionSettled(row);
+      return;
+    }
     const message = errorMessage(error);
     const attempts = row.attempts + 1;
     const policy = retry[row.type];
-    const t = now();
     const exhausted = attempts >= policy.maxAttempts;
     if (exhausted) {
       setActionStatus(db, row.id, { status: "failed", attempts, lastError: message }, t);
@@ -147,17 +181,18 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
       const failed: AnyActionRow = { ...row, status: "failed", attempts, lastError: message, updatedAt: t };
       safely(() => deps.onActionFailed(failed, message));
     }
+    notifySessionSettled(row);
   };
 
-  const execute = async (row: AnyActionRow, handler: ActionHandler): Promise<void> => {
+  const execute = async (row: AnyActionRow, startedParams: string, handler: ActionHandler): Promise<void> => {
     let result: ActionResult;
     try {
       result = await handler(row);
     } catch (error) {
-      safely(() => fail(row, error));
+      safely(() => fail(row, startedParams, error));
       return;
     }
-    safely(() => finish(row, result));
+    safely(() => finish(row, startedParams, result));
   };
 
   function tick() {
@@ -173,6 +208,10 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
       }
       for (const raw of db.all<ActionDbRow>(DUE_SQL, t)) {
         if (inFlight.size >= concurrency) break;
+        if (RETIRED_ACTION_TYPES.has(raw.type)) {
+          setActionStatus(db, raw.id, { status: "abandoned", lastError: "retired action type" }, t);
+          continue;
+        }
         let row: AnyActionRow;
         try {
           row = toActionRow(raw);
@@ -189,7 +228,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
         }
         setActionStatus(db, row.id, { status: "running" }, t);
         if (key !== null) busyLanes.add(key);
-        const job = execute({ ...row, status: "running", updatedAt: t }, handler).finally(() => {
+        const job = execute({ ...row, status: "running", updatedAt: t }, raw.params, handler).finally(() => {
           inFlight.delete(row.id);
           if (key !== null) busyLanes.delete(key);
           schedule(0);
@@ -216,7 +255,9 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     start() {
       if (started) return;
       started = true;
-      db.run("UPDATE actions SET status = 'pending', updated_at = ? WHERE status = 'running'", now());
+      const t = now();
+      db.run("UPDATE actions SET status = 'abandoned', last_error = 'retired action type', updated_at = ? WHERE type = 'review.stamp' AND status IN ('pending', 'running')", t);
+      db.run("UPDATE actions SET status = 'pending', updated_at = ? WHERE status = 'running'", t);
       schedule(0);
     },
     wake() {

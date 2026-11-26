@@ -107,6 +107,7 @@ export default defineVendor({
       web_fetch: "web_fetch",
     },
   },
+  checklist: { sources: ["todo_tool"], promptTool: "`todo_write`" },
   skillSignals: {
     // read output lines are 'N: <text>'.
     outputField: "content",
@@ -114,6 +115,10 @@ export default defineVendor({
     toolNameKeys: ["name"],
   },
   capabilities: {
+    builtInSandbox: {
+      platforms: ["darwin", "linux"],
+      computerUseCapabilities: [],
+    },
     backgroundWake: false,
     readonly: "os_sandbox",
     systemPrompt: "resident",

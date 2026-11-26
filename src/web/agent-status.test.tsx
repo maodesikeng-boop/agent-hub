@@ -93,7 +93,7 @@ function list(messages: ReturnType<typeof makeMessage>[], over: { pending?: Pend
 const heads = (container: HTMLElement) => Array.from(container.querySelectorAll("[data-slot='agent-head']")) as HTMLElement[];
 const statusLine = () => screen.getByRole("status", { name: "Status" }).closest("[data-work-line]") as HTMLElement;
 
-describe("MessageList：状态在这一轮最下面", () => {
+describe("MessageList：状态在这一轮上面（Worked for 位置）", () => {
   it("这一轮还没出回复（最后一条是用户的消息）：底部先出一轮“头像 名字”，下面一行状态", () => {
     const { container } = list([makeUserMessage({ id: 1, text: "做点事", status: "processing" })]);
     const [head] = heads(container);
@@ -112,11 +112,13 @@ describe("MessageList：状态在这一轮最下面", () => {
     expect(statusLine().closest("[data-turn]")).toBe(heads(container)[1]!.closest("[data-turn]"));
   });
 
-  it("回复出来后：状态在这一轮最下面，不再单独出一轮", () => {
+  it("回复出来后：状态留在这一轮正文上方，不再单独出一轮，也不在下面重复显示", () => {
     const { container } = list([makeUserMessage({ id: 1, text: "做点事" }), makeMessage({ id: 2, text: "好的" })]);
     expect(heads(container)).toHaveLength(1);
-    expect(statusLine().closest("[data-turn]")).toHaveTextContent("好的");
-    expect(screen.getByText("好的").compareDocumentPosition(statusLine()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const turn = statusLine().closest("[data-turn]") as HTMLElement;
+    expect(turn).toHaveTextContent("好的");
+    expect(turn.querySelectorAll("[data-work-line]")).toHaveLength(1);
+    expect(statusLine().compareDocumentPosition(screen.getByText("好的")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("一串操作和回复：一个头像，状态那一行能点开看操作", () => {
@@ -150,15 +152,30 @@ describe("MessageList：状态在这一轮最下面", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("最后一条是 Worker 的汇报、你对 Worker 说的话：状态在底部新的一轮", () => {
-    const { container } = list([makeMessage({ id: 1, text: "旧回复" }), makeWorkerLine({ id: 2, conversationId: 1, line: { event: "report", status: "done", summary: "好了" } })]);
+  it("a Worker report read as a new turn starts a fresh status card", () => {
+    const { container } = list([makeMessage({ id: 1, text: "旧回复" }), makeWorkerLine({ id: 2, conversationId: 1, status: "replied", line: { event: "report", status: "done", summary: "好了" } })]);
     expect(statusLine().closest("[data-turn]")).not.toHaveTextContent("旧回复");
     expect(heads(container).at(-1)).toHaveTextContent(/^项目经理$/);
+  });
+
+  it("keeps the status separate after the user messages a Worker directly", () => {
+    list([makeMessage({ id: 1, text: "旧回复" }), makeWorkerLine({ id: 2, line: { event: "user_message", summary: "Check this too" } })]);
+    expect(statusLine().closest("[data-turn]")).not.toHaveTextContent("旧回复");
   });
 
   it("状态文字是 13.5px 次要色", () => {
     list([makeUserMessage({ id: 1, text: "做点事" })]);
     expect(statusLine()).toHaveClass("text-minor", "text-muted-foreground");
+  });
+});
+
+describe("Worker report rows", () => {
+  it("joins consecutive report rows under a hairline, and an agent message between them starts a new run", () => {
+    const report = (id: number) => makeWorkerLine({ id, conversationId: 1, line: { workerId: id, workerConversationId: 30 + id, title: `Step ${id}`, event: "report", status: "done", summary: "ok" } });
+    const { container } = list([report(1), report(2), makeMessage({ id: 3, text: "下一步" }), report(4)], { status: null });
+    const rows = [...container.querySelectorAll("article[data-worker-report]")];
+    expect(rows.map((row) => row.hasAttribute("data-joined"))).toEqual([false, true, false]);
+    expect(rows[1]).toHaveClass("border-t", "border-border");
   });
 });
 
@@ -184,9 +201,9 @@ describe("Composer：发送键和停止键", () => {
     expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
     const button = screen.getByRole("button", { name: "Stop" });
     expect(button).toBeEnabled();
-    expect(button).toHaveClass("size-9", "rounded-[10px]");
+    expect(button).toHaveClass("size-7.5", "rounded-sm", "send-button");
     expect(button.parentElement).toHaveClass("col-start-3", "justify-self-end");
-    expect(button.querySelector("svg")).toHaveAttribute("fill", "currentColor");
+    expect(button.querySelector("svg")).toHaveClass("fill-current");
     await userEvent.click(button);
     expect(stop.onStop).toHaveBeenCalledTimes(1);
   });

@@ -1,8 +1,11 @@
+import { withChecklistEnv } from "../../vendors/_common/checklist.ts";
+import { vendorSpec } from "../../shared/vendors.ts";
 // Shared session state machine for vendor drivers in src/vendors/<vendor>/driver.ts.
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   BACKGROUND_TASKS_HOLD_MAX_MS,
+  CAPABILITY_RELAUNCH_NOTE,
   CRASH_RECOVERY_NOTE,
   DriverError,
   IDLE_CLOSE_MS,
@@ -10,7 +13,6 @@ import {
   KILL_WAIT_MS,
   LAST_EVENT_WRITE_MS,
   RELAUNCH_NOTE,
-  RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
   RUNNING_COMMANDS_TIMEOUT_MS,
   SHUTDOWN_GRACE_MS,
@@ -33,7 +35,6 @@ import {
   type DriverSendResult,
   type LaunchFiles,
   type MessageId,
-  type MessageSource,
   type SessionId,
   type TokenUsage,
   type Unsubscribe,
@@ -53,91 +54,50 @@ import {
   termGroupAfterExit,
   waitForExit,
 } from "./process.ts";
-import { buildChildEnv, mergeUserTexts } from "./protocol.ts";
+import { buildChildEnv } from "./protocol.ts";
 import { spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
-import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
+import { dropUserEntries, untakenReleaseEvents, type UntakenReleaseCause } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
+import {
+  clearKillTimer,
+  errorMessage,
+  launchChanged,
+  takePendingBatch,
+  within,
+  type BaseBatch,
+  type BaseProc,
+  type BatchNotes,
+  type ClosingReason,
+  type DriverHealthSnapshot,
+  type PendingBatchParts,
+  type PendingEntry,
+  type StartupOutcome,
+} from "./driver-helpers.ts";
+
+export {
+  NO_NOTES,
+  clearKillTimer,
+  entryParts,
+  errorMessage,
+  flatEntryText,
+  launchChanged,
+  takePendingBatch,
+  within,
+} from "./driver-helpers.ts";
+export type {
+  BaseBatch,
+  BaseProc,
+  BatchNotes,
+  ClosingReason,
+  DriverHealthSnapshot,
+  PendingBatchParts,
+  PendingEntry,
+  StartupOutcome,
+} from "./driver-helpers.ts";
 
 export const USAGE_THROTTLE_MS = USAGE_PUSH_MS;
-
-export interface PendingEntry {
-  messageIds: MessageId[];
-  source: MessageSource;
-  text: string;
-  prefixes: string[];
-  resend: boolean;
-}
-
-export interface BatchNotes {
-  recovery: boolean;
-  crash: boolean;
-  relaunch: boolean;
-  killed: string | null;
-  persona: PersonaNoteTaken | null;
-  preamble: PreambleTaken | null;
-}
-
-export const NO_NOTES: BatchNotes = {
-  recovery: false,
-  crash: false,
-  relaunch: false,
-  killed: null,
-  persona: null,
-  preamble: null,
-};
-
-export type ClosingReason = "idle" | "interrupt" | "shutdown";
-
-export type StartupOutcome<TConflict = string | null> =
-  | { kind: "ok" }
-  | {
-      kind: "failed";
-      exitCode: number | null;
-      signal: string | null;
-      stderr: string;
-      conflict?: TConflict;
-      timedOut: boolean;
-      errorMessage?: string;
-    }
-  | { kind: "closed"; reason: ClosingReason };
-
-export interface LaunchSnapshot {
-  fingerprint: string;
-  cwd: string;
-  addDirs: string[];
-  model: string | null;
-  effort: string | null;
-}
-
-export interface BaseBatch {
-  messageIds: MessageId[];
-  notes: BatchNotes;
-  delivered: boolean;
-  processing: boolean;
-  midTurn?: boolean;
-  source: MessageSource;
-  stopped?: boolean;
-  released?: "cancelled" | "requeued" | null;
-}
-
-export interface BaseProc<TOutcome = StartupOutcome> {
-  child: ChildProcessWithoutNullStreams;
-  resume: boolean;
-  launched: LaunchSnapshot;
-  personaLaunched: number | null;
-  backgroundHoldMaxMs: number;
-  initSeen: boolean;
-  stderr: string;
-  closing: ClosingReason | null;
-  startTimedOut: boolean;
-  /** Escalation when the CLI ignores a closed stdin: SIGINT first, then SIGKILL. */
-  killTimer: NodeJS.Timeout | null;
-  ready: Promise<TOutcome>;
-  resolveReady: (o: TOutcome) => void;
-  exited: Promise<void>;
-}
 
 export interface BaseSessionState<TProc extends BaseProc<any>, TBatch extends BaseBatch> {
   id: SessionId;
@@ -155,7 +115,7 @@ export interface BaseSessionState<TProc extends BaseProc<any>, TBatch extends Ba
   preambleTaken: boolean;
   recoveryNote: boolean;
   crashNote: boolean;
-  relaunchNote: boolean;
+  relaunchNote: string | null;
   killedNote: string | null;
   ended: boolean;
   ending: Promise<void> | null;
@@ -163,6 +123,8 @@ export interface BaseSessionState<TProc extends BaseProc<any>, TBatch extends Ba
   /** Persist resume versus fresh only after a successful start, in case the chosen launch args were wrong. */
   resumeHint: boolean | null;
   starting: Promise<void> | null;
+  /** Active pump/deliverNext/runStartup calls, so handover sees in-progress delivery before stdin is written. */
+  deliveringCount: number;
   startTimer: NodeJS.Timeout | null;
   idleTimer: NodeJS.Timeout | null;
   interruptTimer: NodeJS.Timeout | null;
@@ -192,18 +154,6 @@ export type ResolvedBaseDriverOptions = Required<
 > &
   Omit<BaseDriverOptions, "composer">;
 
-export interface PendingBatchParts {
-  body: { prefixes: string[]; text: string };
-  messageIds: MessageId[];
-  command: boolean;
-  source: MessageSource;
-}
-
-export interface DriverHealthSnapshot {
-  healthy: boolean;
-  lastError: Extract<DriverEvent, { type: "driver.error" }> | null;
-}
-
 export function createBaseSessionState<TProc extends BaseProc<any>, TBatch extends BaseBatch>(
   id: SessionId,
 ): BaseSessionState<TProc, TBatch> {
@@ -221,13 +171,14 @@ export function createBaseSessionState<TProc extends BaseProc<any>, TBatch exten
     preambleTaken: false,
     recoveryNote: false,
     crashNote: false,
-    relaunchNote: false,
+    relaunchNote: null,
     killedNote: null,
     ended: false,
     ending: null,
     settleWaiters: [],
     resumeHint: null,
     starting: null,
+    deliveringCount: 0,
     startTimer: null,
     idleTimer: null,
     interruptTimer: null,
@@ -238,82 +189,6 @@ export function createBaseSessionState<TProc extends BaseProc<any>, TBatch exten
     usagePushedAt: 0,
     usageTimer: null,
   };
-}
-
-export function entryParts(entry: PendingEntry): { prefixes: string[]; text: string } {
-  return { prefixes: entry.resend ? [RESEND_NOTE, ...entry.prefixes] : entry.prefixes, text: entry.text };
-}
-
-export function flatEntryText(entry: PendingEntry): string {
-  const text = [...entry.prefixes, entry.text].join("\n");
-  return entry.resend ? `${RESEND_NOTE}\n\n${text}` : text;
-}
-
-/** Queued user messages merge into one batch, but never across a command so ordering is preserved. */
-export function takePendingBatch(
-  pending: PendingEntry[],
-  isCommand: (text: string) => boolean,
-): { remaining: PendingEntry[]; taken: PendingBatchParts } | null {
-  let body: { prefixes: string[]; text: string } | null = null;
-  let messageIds: MessageId[] = [];
-  let command = false;
-  let remaining = pending;
-  const users = pending.filter((e) => e.source === "user");
-  if (users.length > 0) {
-    const firstCommand = users.findIndex((e) => isCommand(e.text));
-    command = firstCommand === 0;
-    const take = command ? users.slice(0, 1) : firstCommand === -1 ? users : users.slice(0, firstCommand);
-    remaining = pending.filter((e) => !take.includes(e));
-    body = take.length === 1 ? entryParts(take[0]!) : mergeUserTexts(take.map(flatEntryText));
-    messageIds = take.flatMap((e) => e.messageIds);
-  } else if (pending.length > 0) {
-    const [entry, ...rest] = pending;
-    remaining = rest;
-    body = entryParts(entry!);
-    messageIds = entry!.messageIds;
-  }
-  if (body === null) return null;
-  return {
-    remaining,
-    taken: {
-      body,
-      messageIds,
-      command,
-      source: users.length > 0 ? "user" : "system",
-    },
-  };
-}
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function clearKillTimer(proc: { killTimer: NodeJS.Timeout | null }): void {
-  if (proc.killTimer) clearTimeout(proc.killTimer);
-  proc.killTimer = null;
-}
-
-export async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "timeout"> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), ms);
-  });
-  try {
-    return await Promise.race([promise.then(() => "done" as const), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerprint: string): boolean {
-  return (
-    launched.fingerprint !== fingerprint ||
-    launched.cwd !== row.cwd ||
-    launched.model !== row.model ||
-    launched.effort !== row.effort ||
-    launched.addDirs.length !== row.addDirs.length ||
-    launched.addDirs.some((d, i) => d !== row.addDirs[i])
-  );
 }
 
 export abstract class BaseSessionDriver<
@@ -389,6 +264,23 @@ export abstract class BaseSessionDriver<
     return Boolean(proc && !proc.closing);
   }
 
+  isBusy(sessionId: SessionId): boolean {
+    const st = this.sessions.get(sessionId);
+    if (!st) return false;
+    return st.deliveringCount > 0 || st.starting !== null || this.busy(st);
+  }
+
+  markEnding(sessionId: SessionId): void {
+    const st = this.state(sessionId);
+    st.ended = true;
+    st.pending = [];
+    st.recoveryNote = false;
+    st.crashNote = false;
+    st.relaunchNote = null;
+    st.killedNote = null;
+    this.clearTimer(st, "idleTimer");
+  }
+
   async start(sessionId: SessionId): Promise<void> {
     this.assertRunning();
     const st = this.state(sessionId);
@@ -416,6 +308,7 @@ export abstract class BaseSessionDriver<
         })
         .finally(() => {
           if (st.starting === promise) st.starting = null;
+          this.#notifyIfQuiescent(st);
         });
       st.starting = promise;
       return promise;
@@ -425,13 +318,7 @@ export abstract class BaseSessionDriver<
   end(sessionId: SessionId): Promise<void> {
     const st = this.state(sessionId);
     if (st.ending) return st.ending;
-    st.ended = true;
-    st.pending = [];
-    st.recoveryNote = false;
-    st.crashNote = false;
-    st.relaunchNote = false;
-    st.killedNote = null;
-    this.clearTimer(st, "idleTimer");
+    this.markEnding(sessionId);
     st.ending = this.#finishEnd(st);
     return st.ending;
   }
@@ -539,10 +426,23 @@ export abstract class BaseSessionDriver<
   }
 
   protected takePendingEntryBatch(st: TState): PendingBatchParts | null {
+    st.pending = st.pending.filter((entry) => this.systemBatchCurrent(st, entry));
     const res = takePendingBatch(st.pending, (text) => this.composer.isCommand(text));
     if (!res) return null;
     st.pending = res.remaining;
     return res.taken;
+  }
+
+  private systemBatchCurrent(st: TState, batch: Pick<BaseBatch, "source" | "messageIds">): boolean {
+    const validate = this.opts.canDeliverSystemMessage;
+    return batch.source !== "system" || validate === undefined || batch.messageIds.every((id) => validate(st.id, id));
+  }
+
+  protected discardStaleSystemBatch(st: TState, proc: TProc, batch: TBatch): boolean {
+    if (this.systemBatchCurrent(st, batch)) return false;
+    this.dropBatch(st, batch);
+    this.afterTurn(st, proc);
+    return true;
   }
 
   protected takeNotesPrefixes(
@@ -566,13 +466,13 @@ export abstract class BaseSessionDriver<
       preamble?.note ?? null,
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
-      notes.relaunch ? RELAUNCH_NOTE : null,
+      notes.relaunch,
       notes.killed,
       persona?.note ?? null,
     ].filter((p): p is string => p !== null);
     st.recoveryNote = false;
     st.crashNote = false;
-    st.relaunchNote = false;
+    st.relaunchNote = null;
     st.killedNote = null;
     return { notes, prefixes };
   }
@@ -590,7 +490,7 @@ export abstract class BaseSessionDriver<
     st.inFlight = st.inFlight.filter((b) => b !== batch);
     if (batch.notes.recovery) st.recoveryNote = true;
     if (batch.notes.crash) st.crashNote = true;
-    if (batch.notes.relaunch) st.relaunchNote = true;
+    if (batch.notes.relaunch !== null) st.relaunchNote = batch.notes.relaunch;
     if (batch.notes.killed !== null) st.killedNote = batch.notes.killed;
     batch.notes.persona?.restore();
     batch.notes.preamble?.restore();
@@ -621,44 +521,85 @@ export abstract class BaseSessionDriver<
     this.update(st, { personaRevision: revision });
   }
 
+  protected async steerWithCurrentCapabilities<T>(
+    st: TState,
+    proc: TProc,
+    entry: PendingEntry,
+    canSteer: () => boolean,
+    send: () => Promise<T>,
+  ): Promise<T | null> {
+    const check = proc.capabilityCheck;
+    if (!check) return this.systemBatchCurrent(st, entry) ? send() : null;
+    st.pending.push(entry);
+    try {
+      if (await check.currentFingerprint() !== check.fingerprint) return null;
+    } catch (error) {
+      this.internalError(st.id, `could not check capabilities before steering: ${errorMessage(error)}`);
+      return null;
+    }
+    if (st.ended || st.proc !== proc || st.pending.length !== 1 || st.pending[0] !== entry) return null;
+    st.pending.shift();
+    if (!this.systemBatchCurrent(st, entry)) return null;
+    if (canSteer()) return send();
+    st.pending.unshift(entry);
+    return null;
+  }
+
   protected async pump(st: TState): Promise<void> {
-    for (;;) {
-      this.assertRunning();
-      this.assertNotEnded(st);
-      if (st.starting) return;
-      const proc = st.proc;
-      if (proc?.closing) {
-        await proc.exited;
-        continue;
+    st.deliveringCount++;
+    try {
+      for (;;) {
+        this.assertRunning();
+        this.assertNotEnded(st);
+        if (st.starting) return;
+        const proc = st.proc;
+        if (proc?.closing) {
+          await proc.exited;
+          continue;
+        }
+        if (proc && this.busy(st)) return;
+        if (st.pending.length === 0) return;
+        if (proc) {
+          await this.deliverNext(st, proc);
+          continue;
+        }
+        const batch = this.takeBatch(st);
+        if (!batch) return;
+        return await this.runStartup(st, batch, null);
       }
-      if (proc && this.busy(st)) return;
-      if (st.pending.length === 0) return;
-      if (proc) {
-        await this.deliverNext(st, proc);
-        continue;
-      }
-      const batch = this.takeBatch(st);
-      if (!batch) return;
-      return this.runStartup(st, batch, null);
+    } finally {
+      st.deliveringCount--;
+      this.#notifyIfQuiescent(st);
     }
   }
 
   protected deliverNext(st: TState, proc: TProc): Promise<void> {
+    st.deliveringCount++;
     const run = async () => {
       this.clearTimer(st, "idleTimer");
       let files: LaunchFiles | null = null;
       try {
         files = await this.opts.prepareLaunch(this.store(st));
       } catch (error) {
-        this.internalError(
-          st.id,
-          `prepareLaunch before writing failed, keeping the running process: ${errorMessage(error)}`,
-        );
+        if (proc.outerSandbox !== "vendor_only") {
+          this.internalError(st.id, `prepareLaunch before writing failed, keeping the running process: ${errorMessage(error)}`);
+        }
       }
       this.assertRunning();
       if (st.ended || st.proc !== proc || proc.closing || this.busy(st)) return;
+      if (proc.outerSandbox === "vendor_only" && files?.outerSandbox !== "vendor_only") {
+        this.closeStdin(st, proc, "idle");
+        await proc.exited;
+        this.assertRunning();
+        if (st.ended) return;
+        const batch = this.takeBatch(st);
+        if (batch) await this.startup(st, batch, null, files);
+        return;
+      }
       const row = files ? this.row(st) : null;
-      if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
+      const settingsChanged = files !== null && row !== null && launchChanged(proc.launched, row, files.fingerprint);
+      const capabilitiesChanged = files?.capabilityCheck?.fingerprint !== proc.capabilityCheck?.fingerprint;
+      if (files && row && (settingsChanged || (capabilitiesChanged && !st.background.active))) {
         if (st.background.active) {
           st.killedNote = backgroundTasksKilledNote("relaunch", st.background.descriptions());
         }
@@ -666,26 +607,31 @@ export abstract class BaseSessionDriver<
         await proc.exited;
         this.assertRunning();
         if (st.ended) return;
-        st.relaunchNote = true;
+        st.relaunchNote = settingsChanged ? RELAUNCH_NOTE : CAPABILITY_RELAUNCH_NOTE;
         const batch = this.takeBatch(st);
         if (batch) await this.startup(st, batch, null, files);
         return;
       }
       const batch = this.takeBatch(st);
-      if (!batch) return;
+      if (!batch) return this.armIdle(st, proc);
       if (proc.initSeen) await this.writeBatch(st, proc, batch);
       else await this.startup(st, batch, proc, null);
     };
     const promise: Promise<void> = run().finally(() => {
+      st.deliveringCount--;
       if (st.starting === promise) st.starting = null;
+      this.#notifyIfQuiescent(st);
     });
     st.starting = promise;
     return promise;
   }
 
   protected runStartup(st: TState, batch: TBatch, existing: TProc | null): Promise<void> {
+    st.deliveringCount++;
     const promise: Promise<void> = this.startup(st, batch, existing, null).finally(() => {
+      st.deliveringCount--;
       if (st.starting === promise) st.starting = null;
+      this.#notifyIfQuiescent(st);
     });
     st.starting = promise;
     return promise;
@@ -704,13 +650,14 @@ export abstract class BaseSessionDriver<
     });
   }
 
-  protected markProcessing(st: TState, batch: TBatch, at: number): void {
+  protected markProcessing(st: TState, batch: TBatch, at: number, midTurn = batch.midTurn): void {
     this.markDelivered(st, batch);
     if (batch.processing || batch.messageIds.length === 0) return;
     batch.processing = true;
     this.emit(st.id, {
       type: "message.processing",
       messageIds: batch.messageIds,
+      ...(midTurn ? { midTurn: true as const } : {}),
       ...(batch.notes.preamble ? { preamble: true as const } : {}),
       at,
     });
@@ -725,31 +672,18 @@ export abstract class BaseSessionDriver<
     }
   }
 
-  protected releaseOnStop(st: TState, batches: TBatch[], at: number): void {
-    if (batches.length === 0) return;
-    for (const b of batches) {
-      b.released = b.source === "user" ? "cancelled" : "requeued";
-      b.notes.persona?.restore();
-      b.notes.preamble?.restore();
+  protected releaseUntaken(st: TState, batches: TBatch[], cause: UntakenReleaseCause, at: number): void {
+    for (const batch of batches) {
+      const cancelled = cause === "user_stop" && batch.source === "user";
+      batch.released = cancelled ? "cancelled" : "requeued";
+      if (cancelled) {
+        batch.notes.persona?.restore();
+        batch.notes.preamble?.restore();
+      } else {
+        this.forgetWritten(st, [batch]);
+      }
     }
-    this.forgetWritten(
-      st,
-      batches.filter((b) => b.source === "system"),
-    );
-    for (const event of untakenOnStopEvents(batches, at)) this.emit(st.id, event);
-  }
-
-  /** Untaken batches after a user stop are cancelled; otherwise (crash, shutdown, normal end) user messages are re-queued. */
-  protected releaseUntaken(st: TState, batches: TBatch[], stopped: boolean, at: number): void {
-    const messageIds = batches.flatMap((b) => b.messageIds);
-    if (messageIds.length === 0) return;
-    if (stopped) {
-      this.releaseOnStop(st, batches, at);
-      return;
-    }
-    for (const b of batches) b.released = "requeued";
-    this.forgetWritten(st, batches);
-    this.emit(st.id, { type: "message.requeued", messageIds, at });
+    for (const event of untakenReleaseEvents(batches, cause, at)) this.emit(st.id, event);
   }
 
   protected afterTurn(st: TState, proc: TProc): void {
@@ -764,18 +698,28 @@ export abstract class BaseSessionDriver<
 
   protected settled(st: TState): void {
     for (const w of st.settleWaiters.splice(0)) w();
+    this.#notifyIfQuiescent(st);
+  }
+
+  #notifyIfQuiescent(st: TState): void {
+    if (this.shuttingDown || st.ended || this.isBusy(st.id)) return;
+    try {
+      this.opts.onSessionQuiescent?.(st.id);
+    } catch (error) {
+      this.internalError(st.id, `onSessionQuiescent failed: ${errorMessage(error)}`);
+    }
   }
 
   protected onBackgroundTasksChanged(st: TState, proc: TProc, rawTasks: unknown): void {
     if (st.proc !== proc) return;
     const wasActive = st.background.active;
-    if (!st.background.replace(rawTasks)) return;
-    this.emit(st.id, { type: "background.changed", count: st.background.count, at: Date.now() });
+    const at = Date.now();
+    if (!st.background.replace(rawTasks, at)) return;
+    this.emit(st.id, { type: "background.changed", count: st.background.count, tasks: st.background.snapshot(), at });
     if (st.background.active === wasActive || st.idleTimer === null) return;
     if (!proc.closing && !this.busy(st) && !st.ended) this.armIdle(st, proc);
   }
 
-  /** Interrupting while only background tasks remain closes the process and stops them too. */
   protected stopIdleBackgroundTasks(st: TState, proc: TProc): Promise<void> | null {
     if (this.busy(st) || !st.background.active) return null;
     this.logSession(st.id, `停止时只剩 ${st.background.count} 个后台任务，关掉进程把它们一起停掉`);
@@ -891,7 +835,7 @@ export abstract class BaseSessionDriver<
       const resolvedDriverEnv = typeof this.opts.env === "function" ? this.opts.env() : this.opts.env;
       spawned = spawnOwnedProcess(command, args, {
         cwd,
-        env: buildChildEnv(process.env, { ...resolvedDriverEnv, ...extraEnv }),
+        env: withChecklistEnv(vendorSpec(this.vendor), buildChildEnv(process.env, { ...resolvedDriverEnv, ...extraEnv })),
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
@@ -932,6 +876,8 @@ export abstract class BaseSessionDriver<
     const baseProc: BaseProc<TOutcome> = {
       child,
       resume,
+      capabilityCheck: files.capabilityCheck,
+      outerSandbox: files.outerSandbox,
       launched: {
         fingerprint: files.fingerprint,
         cwd: row.cwd,

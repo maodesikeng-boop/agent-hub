@@ -83,8 +83,11 @@ export default defineVendor({
       Agent: "subagent",
       Skill: "skill",
       SetTodoList: "todo",
+      TodoList: "todo",
+      "Updating todo list": "todo",
     },
   },
+  checklist: { sources: ["plan_update", "todo_tool"], promptTool: "`SetTodoList`" },
   skillSignals: {
     outputField: "content",
     outputLinePrefix: /^\s*\d+(?:\t|[:|] ?)/u,

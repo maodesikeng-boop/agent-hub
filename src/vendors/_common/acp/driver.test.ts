@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../../test/append-log.ts";
 import { isAlive, waitForExit } from "../../../daemon/driver/process.ts";
 import { MemorySessionStore, realSleep } from "../../../daemon/driver/test-helpers.ts";
 import {
@@ -171,13 +172,7 @@ function makeAcpHarness(options: {
     }
   };
 
-  const logs = (): FakeAcpLogEntry[] => {
-    if (!existsSync(logFile)) return [];
-    return readFileSync(logFile, "utf8")
-      .split("\n")
-      .filter((l) => l.trim() !== "")
-      .map((l) => JSON.parse(l) as FakeAcpLogEntry);
-  };
+  const logs = () => readJsonLog<FakeAcpLogEntry>(logFile);
 
   const addSession = (patch: Partial<AgentSessionRow> = {}): AgentSessionRow => {
     const id = (nextSessionId += 1) as SessionId;
@@ -285,6 +280,7 @@ describe("VendorSpec models.flags 可选适配", () => {
       failure: {
         serviceName: "ACP Demo",
       },
+      checklist: { sources: [] },
       skillSignals: { outputField: "content" },
       capabilities: {
         backgroundWake: false,
@@ -1561,6 +1557,45 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
     });
     expect(h.of("agent.tool_result")).toHaveLength(1);
   });
+
+  it("冷启动期间 isBusy 为真且 end() 中断启动抛 session_ended；markEnding 同步清空缓存命令", async () => {
+    let releasePrepare!: () => void;
+    let enteredPrepare!: () => void;
+    const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+    const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+
+    const h = makeAcpHarness({
+      driverOptions: {
+        prepareLaunch: async () => {
+          enteredPrepare();
+          await prepareGate;
+          return { promptFile: h.promptFile, env: {}, fingerprint: "fp-acp-race" };
+        },
+      },
+    });
+    const row = h.addSession();
+    const sendPromise = h.driver.send(row.id, { messageIds: [402 as never], source: "user", text: "hi" });
+    await prepareEntered;
+    expect(h.driver.isBusy(row.id)).toBe(true);
+
+    const endPromise = h.driver.end(row.id);
+    releasePrepare();
+    await expect(sendPromise).rejects.toSatisfy((err: unknown) => err instanceof DriverError && err.code === "session_ended");
+    await endPromise;
+    expect(h.driver.isBusy(row.id)).toBe(false);
+    expect(h.logs().filter((e) => e.event === "prompt")).toHaveLength(0);
+  });
 });
 import { fileURLToPath } from "node:url";
 import { wrapScriptAsPlatformCli } from "../../../../test/fake-cli-shim.ts";
+
+it.each(["deepseek", "cursor", "kimi", "opencode"] as const)("keeps the in-flight brief when %s shuts down", async (vendor) => {
+  const h = track(makeAcpHarness({ config: { vendor }, script: { turns: [{ waitForCancel: true, textChunks: ["Working"] }] } }));
+  const row = h.addSession({ vendor });
+  await h.driver.send(row.id, { messageIds: [1], source: "user", text: "Start" });
+  await h.waitFor("message.processing");
+  await h.driver.shutdown();
+  expect(h.of("message.cancelled")).toEqual([]);
+  expect([...h.of("turn.ended").filter((e) => e.shutdown), ...h.of("session.exited").filter((e) => e.reason === "shutdown")]
+    .flatMap((e) => e.messageIds)).toContain(1);
+});

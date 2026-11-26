@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { API_PATHS, SLOW_API_REQUEST_TIMEOUT_MS, type CommandsResponse, type ComposerCommand, type FileEntry, type FilesResponse, type WorkerPick } from "../shared/index.ts";
 import type { KeyboardEvent } from "react";
 import { detectComposerTrigger, insertSelection, rankCommands, removeLeadingCommand, splitPath } from "./composer-trigger.ts";
-import { useModelCatalogs } from "./models.tsx";
+import { ADD_PROVIDER_LABEL, useModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
 import type { SlimeLook } from "../shared/slimes.ts";
 import { type WorkerPickLevel, workerPickFromArgs, workerPickRows } from "./worker-pick.ts";
@@ -47,6 +47,8 @@ export function conversationSource(
   };
 }
 
+export const WORKER_ADD_PROVIDER_ID = "worker:vendor:__add_provider__";
+
 export interface MenuItem {
   id: string;
   label: string;
@@ -55,6 +57,7 @@ export interface MenuItem {
   disabled?: boolean;
   look?: SlimeLook;
   targetKey?: string;
+  action?: "add_provider";
 }
 
 export type MenuKind = "command" | "file" | "target" | WorkerPickLevel;
@@ -93,6 +96,7 @@ export function useComposerSuggest({
   onReplace,
   onPick,
   onSelectTarget,
+  onManageProviders,
 }: {
   source: ComposerSource | undefined;
   value: string;
@@ -101,6 +105,7 @@ export function useComposerSuggest({
   onReplace: (text: string, cursor: number) => void;
   onPick?: ((pick: WorkerPick, text: string) => void) | undefined;
   onSelectTarget?: ((targetKey: string, text: string, cursor: number) => void) | undefined;
+  onManageProviders?: (() => void) | undefined;
 }): ComposerSuggest {
   const qc = useHubQueryClient();
   const srcKey = sourceKeyOf(source);
@@ -189,7 +194,17 @@ export function useComposerSuggest({
     if (trigger.kind === "worker") {
       if (!hasHub) return null;
       const rows = workerPickRows(catalogs, trigger.args, trigger.query);
-      return rows === null ? null : { kind: rows.level, items: rows.items };
+      if (rows === null) return null;
+      if (rows.level === "vendor" && onManageProviders !== undefined) {
+        return {
+          kind: rows.level,
+          items: [
+            ...rows.items,
+            { id: WORKER_ADD_PROVIDER_ID, label: ADD_PROVIDER_LABEL, detail: "", insert: "", action: "add_provider" },
+          ],
+        };
+      }
+      return { kind: rows.level, items: rows.items };
     }
     if (source.targets !== undefined) {
       return { kind: "target", items: source.targets(trigger.query) };
@@ -197,7 +212,7 @@ export function useComposerSuggest({
     if (files === null || files.source !== source) return null;
     if (files.entries.length === 0 && files.query !== trigger.query) return null;
     return { kind: "file", items: fileItems(files.entries) };
-  }, [trigger, source, allCommands, hasHub, catalogs, files]);
+  }, [trigger, source, allCommands, hasHub, catalogs, files, onManageProviders]);
 
   const menuKey = trigger === null ? "" : `${trigger.kind}:${trigger.start}:${trigger.query}`;
   const [picked, setPicked] = useState({ key: "", index: 0 });
@@ -218,6 +233,12 @@ export function useComposerSuggest({
 
   const select = (item: MenuItem) => {
     if (trigger === null || item.disabled) return;
+    if (item.action === "add_provider") {
+      const rest = removeLeadingCommand(value, trigger.end);
+      onReplace(rest, 0);
+      onManageProviders?.();
+      return;
+    }
     if (trigger.kind === "file" && item.targetKey !== undefined && onSelectTarget) {
       const before = value.slice(0, trigger.start);
       const after = value.slice(trigger.end);

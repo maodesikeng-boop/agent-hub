@@ -1,9 +1,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { RequestError, type SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readJsonLog } from "../../../test/append-log.ts";
 import { MemorySessionStore } from "../../daemon/driver/test-helpers.ts";
 import type { ReadonlySandboxInput } from "../../daemon/driver/write-scope.ts";
 import { EMPTY_TOKEN_USAGE, MAX_COMMANDS, type AgentSessionRow, type DriverEvent, type Driver, type LaunchFiles } from "../../shared/index.ts";
@@ -11,7 +13,7 @@ import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import type { FakeAcpLogEntry, FakeAcpScript } from "../_common/acp/fixtures/fake-acp-agent.ts";
 import type { AcpDriverOptions } from "../_common/acp/index.ts";
 import { VENDOR_LIST } from "../registry.ts";
-import { countOpenCodeAccounts, opencodeCatalogProbe, parseOpenCodeModelsText } from "./catalog.ts";
+import { countOpenCodeAccounts, createOpenCodeCatalogSource, opencodeCatalogProbe, parseOpenCodeModelsText } from "./catalog.ts";
 import { collectOpenCodeCommands } from "./composer.ts";
 import opencodeDaemon from "./daemon.ts";
 import {
@@ -165,13 +167,106 @@ describe("opencode catalog probe", () => {
     expect(parseOpenCodeModelsText("garbage")).toBeNull();
   });
 
-  it("derives availability from accounts, free Zen models, and errors", () => {
+  it("derives availability strictly from authenticated accounts and errors, not free Zen models alone", () => {
     expect(countOpenCodeAccounts([{ id: 1 }])).toBe(1);
+    expect(countOpenCodeAccounts([{ id: "anthropic", connections: [] }])).toBe(0);
+    expect(countOpenCodeAccounts([{ id: "anthropic", connections: [{ type: "credential", id: "c1" }] }])).toBe(1);
     expect(countOpenCodeAccounts({ accounts: [] })).toBe(0);
     expect(opencodeCatalogProbe.availabilityOf({ modelsText: null, authJson: [{ provider: "anthropic" }], error: null })).toBe("available");
-    expect(opencodeCatalogProbe.availabilityOf({ modelsText: "opencode/big-pickle\n", authJson: [], error: null })).toBe("available");
+    expect(opencodeCatalogProbe.availabilityOf({ modelsText: "opencode/big-pickle\n", authJson: [], error: null })).toBe("signed_out");
+    expect(opencodeCatalogProbe.availabilityOf({ modelsText: "opencode/big-pickle\n", authJson: null, error: "auth failed" })).toBe("unknown");
     expect(opencodeCatalogProbe.availabilityOf({ modelsText: null, authJson: [], error: null })).toBe("signed_out");
     expect(opencodeCatalogProbe.availabilityOf({ modelsText: null, authJson: null, error: "spawn opencode ENOENT" })).toBe("not_installed");
+  });
+
+  it("queries opencode with --standalone so v2.3.2 never hangs on opencode serve, and reports signed_out when auth list is []", async () => {
+    const argvLog = join(dir, "opencode-argv.jsonl");
+    const dbPath = join(dir, ".local", "share", "opencode", "opencode.db");
+    const fakeOpenCode = writeExecutableNodeScript(
+      join(dir, "opencode"),
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + "\\n");
+
+// Simulate opencode v2.3.2 creating an empty opencode.db on every invocation and hanging without --standalone.
+try {
+  fs.mkdirSync(path.dirname(${JSON.stringify(dbPath)}), { recursive: true });
+  const db = new DatabaseSync(${JSON.stringify(dbPath)});
+  db.exec("PRAGMA busy_timeout = 5000; CREATE TABLE IF NOT EXISTS credential (id TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS account (id TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS control_account (email TEXT PRIMARY KEY);");
+  db.close();
+} catch {}
+
+if (!args.includes("--standalone")) {
+  setInterval(() => {}, 1000);
+  return;
+}
+if (args[0] === "models") {
+  process.stdout.write("opencode/beam-free\\nopencode/big-pickle\\n");
+  process.exit(0);
+}
+if (args[0] === "auth" && args[1] === "list") {
+  if (process.env.OPENCODE_API_KEY) {
+    process.stdout.write(JSON.stringify([{ id: "opencode-go", connections: [{ type: "env", name: "OPENCODE_API_KEY" }] }]));
+  } else {
+    process.stdout.write("[]");
+  }
+  process.exit(0);
+}
+process.exit(1);
+`,
+    );
+
+    let envMap: Record<string, string | undefined> = { HOME: dir };
+    const source = createOpenCodeCatalogSource({
+      path: fakeOpenCode,
+      cwd: dir,
+      env: () => envMap,
+      installed: () => true,
+    });
+
+    const signedOutRaw = await source.query(AbortSignal.timeout(5_000));
+    expect(opencodeCatalogProbe.parse(signedOutRaw)?.models.map((m) => m.id)).toEqual([
+      "opencode/big-pickle",
+      "opencode/beam-free",
+    ]);
+    expect(opencodeCatalogProbe.availabilityOf!(signedOutRaw)).toBe("signed_out");
+
+    const invoked = readFileSync(argvLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as string[]);
+    expect(invoked).toEqual([
+      ["models", "--standalone"],
+      ["auth", "list", "--standalone", "--format", "json"],
+    ]);
+
+    // Even after opencode.db exists with empty tables, inspectAuth must stay signed out (null).
+    const emptySecrets = {
+      keys: () => [],
+      has: () => false,
+      getEnv: () => ({}),
+      set: () => {},
+      remove: () => {},
+      fingerprint: () => "0",
+    };
+    const inspectedSignedOut = await opencodeSetupAdapter.inspectAuth({
+      platform: process.platform,
+      userHome: dir,
+      availability: "signed_out",
+      executablePath: () => fakeOpenCode,
+      installed: () => true,
+      env: () => envMap,
+      secrets: emptySecrets,
+    });
+    expect(inspectedSignedOut.accountSummary).toBeNull();
+
+    // With OPENCODE_API_KEY set, auth list reports an active connection -> available.
+    envMap = { HOME: dir, OPENCODE_API_KEY: "sk-zen-live" };
+    const signedInRaw = await source.query(AbortSignal.timeout(5_000));
+    expect(opencodeCatalogProbe.availabilityOf!(signedInRaw)).toBe("available");
   });
 });
 
@@ -236,6 +331,30 @@ describe("opencode composer and setup", () => {
     expect((await opencodeSetupAdapter.inspectAuth(setupCtx)).accountSummary).toBe("API key configured");
     await opencodeSetupAdapter.signOut(setupCtx);
     expect((await opencodeSetupAdapter.inspectAuth(setupCtx)).accountSummary).toBeNull();
+
+    // Empty opencode.db or empty auth.json must not report Signed in.
+    const dataDir = join(dir, ".local", "share", "opencode");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, "auth.json"), "{}");
+    const db = new DatabaseSync(join(dataDir, "opencode.db"));
+    db.exec(
+      "CREATE TABLE credential (id TEXT PRIMARY KEY); CREATE TABLE account (id TEXT PRIMARY KEY); CREATE TABLE control_account (email TEXT PRIMARY KEY);",
+    );
+    db.close();
+    expect((await opencodeSetupAdapter.inspectAuth(setupCtx)).accountSummary).toBeNull();
+
+    // Actual credential row in opencode.db reports Signed in.
+    const db2 = new DatabaseSync(join(dataDir, "opencode.db"));
+    db2.exec("INSERT INTO credential (id) VALUES ('cred_1');");
+    db2.close();
+    expect((await opencodeSetupAdapter.inspectAuth(setupCtx)).accountSummary).toBe("Signed in");
+
+    // Non-empty V1 auth.json also reports Signed in when DB has no rows.
+    const db3 = new DatabaseSync(join(dataDir, "opencode.db"));
+    db3.exec("DELETE FROM credential;");
+    db3.close();
+    writeFileSync(join(dataDir, "auth.json"), JSON.stringify({ anthropic: { type: "api", key: "sk-1" } }));
+    expect((await opencodeSetupAdapter.inspectAuth(setupCtx)).accountSummary).toBe("Signed in");
   });
 
   it("disables auto-update for every launch", () => {
@@ -292,7 +411,7 @@ child.on("exit", (code) => process.exit(code ?? 0));
     drivers.push(driver);
     const events: DriverEvent[] = [];
     driver.onEvent((_id, ev) => events.push(ev));
-    const logs = (): FakeAcpLogEntry[] => readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as FakeAcpLogEntry);
+    const logs = () => readJsonLog<FakeAcpLogEntry>(logFile);
     const turnEnded = async () => {
       const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {

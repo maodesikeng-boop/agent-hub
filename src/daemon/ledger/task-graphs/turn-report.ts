@@ -15,7 +15,7 @@ import type { ReportMessage } from "../workers.ts";
 import { syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
 import { isStoredCheckpoint, readStoredArtifact, serializeArtifact } from "./rows.ts";
-import { getGraphRow, isGraphAllSettled, leaveStepIn, pushSlimGraphIn, stepOfActiveWorker, stepPosition, touchGraph } from "./store.ts";
+import { getGraphRow, hasPendingStepAsk, isGraphAllSettled, leaveStepIn, pushSlimGraphIn, stepOfActiveWorker, stepPosition, touchGraph } from "./store.ts";
 import { gateChatMessageText } from "./text.ts";
 import type { TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
@@ -53,7 +53,6 @@ function mergeReportArtifact(node: TaskNodeDbRow, worker: ReportWorker, parsed: 
     ...(parsed.kind === "ok" ? { summary: truncateChars(parsed.report.summary, MAX_NODE_ARTIFACT_SUMMARY_CHARS) } : {}),
     ...(worker.review !== null && parsed.kind === "ok"
       ? {
-          reviewStamp: undefined,
           reviewVerdict: parsed.report.verdict ?? undefined,
           verifiedCommit:
             parsed.report.verifiedCommit === null ? undefined : truncateChars(parsed.report.verifiedCommit, MAX_NODE_ARTIFACT_COMMIT_CHARS),
@@ -62,9 +61,10 @@ function mergeReportArtifact(node: TaskNodeDbRow, worker: ReportWorker, parsed: 
   };
 }
 
-function saveArtifactOnlyIn(g: TaskGraphCtx, p: Pending, run: TurnRun): TurnReportOutcome {
+function saveArtifactOnlyIn(g: TaskGraphCtx, p: Pending, run: TurnRun, waitForCard = false): TurnReportOutcome {
   const t = g.now();
-  g.db.run("UPDATE task_graph_steps SET artifact_json = ?, updated_at = ? WHERE id = ?", run.artifactJson, t, run.node.id);
+  const wait = waitForCard ? "status = 'waiting', waiting_for = 'user'," : "";
+  g.db.run(`UPDATE task_graph_steps SET ${wait} artifact_json = ?, updated_at = ? WHERE id = ?`, run.artifactJson, t, run.node.id);
   touchGraph(g.db, run.graphRow.id, t);
   pushSlimGraphIn(g, p, run.graphRow.id);
   return { handled: true, outcome: "waiting_user" };
@@ -97,7 +97,6 @@ function checkpointSummaryMd(report: OkReport, prUrl: string | null): string | n
 function openCheckpointCardIn(g: TaskGraphCtx, p: Pending, run: TurnRun, report: OkReport): TurnReportOutcome {
   const { node, graphRow, mergedArtifact } = run;
   const t = g.now();
-  if (node.gate_ask_message_id !== null) g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
   const gateQuestion = truncateChars(`请确认步骤「${node.title}」的结果`, MAX_GATE_QUESTION_CHARS);
   const gateOptions = [...CONFIRM_CHECKPOINT_OPTIONS];
   const gateOptionsJson = JSON.stringify(gateOptions);
@@ -157,8 +156,7 @@ function completeStepIn(g: TaskGraphCtx, p: Pending, run: TurnRun): void {
 
 function cleanDoneIn(g: TaskGraphCtx, p: Pending, run: TurnRun, report: OkReport): TurnReportOutcome {
   const { node } = run;
-  const waitingOnAskCard = node.status === "waiting" && node.waiting_for === "user" && !isStoredCheckpoint(node);
-  if (waitingOnAskCard) return saveArtifactOnlyIn(g, p, run);
+  if (hasPendingStepAsk(g, node)) return saveArtifactOnlyIn(g, p, run, true);
   if (node.confirm === 1) return openCheckpointCardIn(g, p, run, report);
   return {
     handled: true,
@@ -188,7 +186,7 @@ function brakeToPmIn(
   const { node, graphRow } = run;
   const pos = stepPosition(g.db, graphRow.id, node.node_key);
   const t = g.now();
-  leaveStepIn(g, p, node, { status: "waiting", waitingFor: "pm", artifactJson: run.artifactJson }, t);
+  leaveStepIn(g.db, node, { status: "waiting", waitingFor: "pm", artifactJson: run.artifactJson }, t);
   touchGraph(g.db, graphRow.id, t);
   pushSlimGraphIn(g, p, graphRow.id);
   const note = body.forcedNote ?? body.reviewStop?.detail ?? null;
@@ -220,7 +218,7 @@ export function onWorkerTurnReportIn(
   if (graphRow === undefined || graphRow.status !== "active") return { handled: false };
   const prUrl = parsed.kind === "ok" ? extractReportPrUrl(parsed.report.pr) : null;
   const mergedArtifact = mergeReportArtifact(node, worker, parsed, opts, prUrl);
-  const run: TurnRun = { node, graphRow, mergedArtifact, artifactJson: serializeArtifact(mergedArtifact, false), prUrl };
+  const run: TurnRun = { node, graphRow, mergedArtifact, artifactJson: serializeArtifact(mergedArtifact, isStoredCheckpoint(node)), prUrl };
   if (opts?.hasPendingFollowup === true) return saveArtifactOnlyIn(g, p, run);
   const reviewStop = reviewStopOf(worker, parsed, forcedNote, opts);
   if (reviewStop === null && forcedNote === null && parsed.kind === "ok" && parsed.report.status === "done" && parsed.report.deviation === null) {

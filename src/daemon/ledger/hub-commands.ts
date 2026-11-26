@@ -1,3 +1,4 @@
+import { formatVendorQuotaStatus } from "../quota/observed-quota.ts";
 import { z } from "zod";
 import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
@@ -12,14 +13,14 @@ import { deliverablesOfFileArgs, fileArgsProblem } from "../deliverables.ts";
 import { HUB_COMMAND, LOG_PREFIX } from "../../shared/names.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
 import { AGENT_VENDORS, bundledModelCatalog, effortLabel, effortsFor, isAgentVendor } from "../../shared/vendors.ts";
-import type { AgentVendor, ModelCatalog, VendorAvailability } from "../../shared/vendors.ts";
+import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
-import { reviewStatusAccountOf, type LedgerProjects } from "./projects.ts";
+import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import type { LedgerSchedules } from "./schedules.ts";
 import type { LedgerTaskGraphs } from "./task-graphs.ts";
@@ -64,23 +65,9 @@ function describeSetup(card: ProjectCard | null, setupCommand: string | null): s
     : `\n准备命令（建好 worktree 后先跑它，跑完 Worker 再开工）：\n${setupCommand}`;
 }
 
-function describeReviewStatus(card: ProjectCard | null, account: string | null): string {
-  if (card === null) return "";
-  return account === null
-    ? `\n审查盖章账号：没配，项目在 GitHub 上时用 gh 当前登录的账号给被审提交挂状态（要换用 ${HUB_COMMAND} project review-status --account <登录名>）。`
-    : `\n审查盖章账号：${account}（项目在 GitHub 上时，用 gh 里这个账号的登录给被审提交挂状态）。`;
-}
-
 const commandLine = (command: HubCommand) => `${HUB_COMMAND} ${command.replace(".", " ")}`;
 
-const VENDOR_AVAILABILITY_TEXT: Readonly<Record<VendorAvailability, string>> = {
-  available: "可用",
-  unknown: "可用",
-  signed_out: "未登录",
-  not_installed: "未安装",
-};
-
-function toHubVendorModels(catalog: ModelCatalog): HubVendorModels {
+function toHubVendorModels(catalog: ModelCatalog, quota: HubVendorModels["quota"]): HubVendorModels {
   const keys = new Set<string>([
     ...catalog.efforts,
     ...(catalog.defaultEfforts ?? []),
@@ -92,6 +79,7 @@ function toHubVendorModels(catalog: ModelCatalog): HubVendorModels {
     label: catalog.label,
     source: catalog.source,
     availability: catalog.availability,
+    ...(quota === undefined ? {} : { quota }),
     defaultModel: catalog.defaultModel,
     defaultModelId: catalog.defaultModelId,
     defaultEffort: catalog.defaultEffort ?? null,
@@ -118,8 +106,8 @@ function formatDefaultModelText(entry: HubVendorModels): string {
   return entry.defaultModelId ?? entry.defaultModel ?? "默认";
 }
 
-function formatVendorModelsBlock(entry: HubVendorModels): string {
-  const status = VENDOR_AVAILABILITY_TEXT[entry.availability] ?? "可用";
+function formatVendorModelsBlock(entry: HubVendorModels, now: number): string {
+  const status = formatVendorQuotaStatus(entry.availability, entry.quota, now);
   const defaultModel = formatDefaultModelText(entry);
   const defaultEffort = entry.defaultEffort === null ? "默认" : formatVendorEffort(entry.vendor, entry.defaultEffort, entry.effortLabels);
   const header = `${entry.vendor}（${entry.label}）· 状态: ${status} · 默认模型: ${defaultModel} · 默认思考程度: ${defaultEffort}`;
@@ -132,7 +120,6 @@ function formatVendorModelsBlock(entry: HubVendorModels): string {
 }
 
 interface PmStatusDeps {
-  db: LedgerContext["db"];
   persona: Pick<LedgerPersona, "pmRow">;
   projects: Pick<LedgerProjects, "activeProjectOf" | "projectCard">;
   taskGraphs: Pick<LedgerTaskGraphs, "pmStatusGraphs">;
@@ -144,13 +131,12 @@ function pmStatusIn(deps: PmStatusDeps, caller: AgentSessionRow & { pmId: PmId }
   const row = deps.projects.activeProjectOf(pm.id);
   const project = row === null ? null : deps.projects.projectCard(row);
   const setupCommand = row?.setup_command ?? null;
-  const reviewStatusAccount = row === null ? null : reviewStatusAccountOf(deps.db, row.id);
   const { summaries, textBlock } = deps.taskGraphs.pmStatusGraphs(pm.id);
   const manual = summaries.length > 0 ? deps.taskGraphManual(caller.id) : "";
   const selfReload = context.selfReload !== undefined && context.selfReload.state !== "idle" ? context.selfReload : undefined;
   const reloadNote = selfReload === undefined ? "" : `\n${describeSelfReload(selfReload)}`;
   return {
-    text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${describeReviewStatus(project, reviewStatusAccount)}${textBlock}${manual === "" ? "" : `\n${manual}`}${reloadNote}`,
+    text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}${manual === "" ? "" : `\n${manual}`}${reloadNote}`,
     data: {
       role: "pm",
       pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
@@ -158,7 +144,6 @@ function pmStatusIn(deps: PmStatusDeps, caller: AgentSessionRow & { pmId: PmId }
       conversationId: caller.conversationId ?? -1,
       project,
       setupCommand,
-      reviewStatusAccount,
       ...(summaries.length > 0 ? { activeTaskGraphs: summaries } : {}),
       ...(selfReload !== undefined ? { selfReload } : {}),
     },
@@ -204,7 +189,7 @@ export function createLedgerHubCommands(
     return { args, files: [...files] };
   };
   const { pmSession, getPersona, editPersonaChecked, assertPmNotArchived } = persona;
-  const { createProjectIn, attachIn, detachIn, setupIn, reviewStatusIn } = projects;
+  const { createProjectIn, attachIn, detachIn, setupIn } = projects;
 
   const runHub = (
     p: Pending,
@@ -215,7 +200,7 @@ export function createLedgerHubCommands(
   ): HubResult<HubCommand> => {
     switch (command) {
       case "status":
-        return pmStatusIn({ db, persona, projects, taskGraphs, taskGraphManual }, caller, context);
+        return pmStatusIn({ persona, projects, taskGraphs, taskGraphManual }, caller, context);
       case "project.create": {
         const a = projectCreateArgsSchema.parse(args);
         const { project, mainFolder } = createProjectIn(p, {
@@ -235,8 +220,6 @@ export function createLedgerHubCommands(
         return detachIn(p, caller, args as HubArgs<"project.detach">);
       case "project.setup":
         return setupIn(p, caller, args as HubArgs<"project.setup">);
-      case "project.review-status":
-        return reviewStatusIn(caller, args as HubArgs<"project.review-status">);
       case "persona.show": {
         const view = getPersona(caller.pmId, p);
         const body = view.text.trim() === "" ? "（还没有性格设定）" : view.text;
@@ -257,7 +240,7 @@ export function createLedgerHubCommands(
       case "worker.end":
         return workers.endIn(p, caller, args as HubArgs<"worker.end">);
       case "worker.list":
-        return workers.list(caller);
+        return workers.list(caller, args as HubArgs<"worker.list">);
       case "worker.show":
         return workerView.show(caller, args as HubArgs<"worker.show">, context);
       case "worker.log":
@@ -274,10 +257,10 @@ export function createLedgerHubCommands(
         const vendors = targetVendors.map((vendor) => {
           const catalog =
             context.modelCatalogs?.find((c) => c.vendor === vendor) ?? ctx.modelCatalog(vendor) ?? bundledModelCatalog(vendor);
-          return toHubVendorModels(catalog);
+          return toHubVendorModels(catalog, context.vendorQuotas?.[vendor]);
         });
         return {
-          text: vendors.map(formatVendorModelsBlock).join("\n\n"),
+          text: vendors.map((entry) => formatVendorModelsBlock(entry, ctx.now())).join("\n\n"),
           data: { vendors },
         };
       }
@@ -335,8 +318,10 @@ export function createLedgerHubCommands(
           data: { messageId: message.id, ...(item !== null ? { item } : {}) },
         };
       }
-      case "ask.close":
-        return router.closeAskIn(p, caller, args as HubArgs<"ask.close">);
+      case "ask.close": {
+        const a = args as HubArgs<"ask.close">;
+        return "messageId" in a ? taskGraphs.closeStepAskIn(p, caller, a.messageId) : router.closeAskIn(p, caller, a);
+      }
       case "schedule.add":
         return schedules.addIn(p, caller, args as HubArgs<"schedule.add">);
       case "schedule.list":

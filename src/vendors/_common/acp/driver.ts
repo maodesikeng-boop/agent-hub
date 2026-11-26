@@ -1,3 +1,4 @@
+import { checklistLaunchArgs } from "../checklist.ts";
 import { randomUUID } from "node:crypto";
 import { methods, type AnyMessage, type ClientCapabilities } from "@agentclientprotocol/sdk/unstable";
 import {
@@ -55,7 +56,7 @@ import {
 } from "./protocol.ts";
 import { buildAcpReadonlySandboxInput, createAcpClientApp, createAcpStdioStream, guardAcpFrameSize } from "./transport.ts";
 import { runAcpPromptTurn } from "./turn.ts";
-import { flushTextBuffer, handleSessionUpdate, resetTurnBuffers } from "./turn-stream.ts";
+import { emitAcpChecklist, flushTextBuffer, handleSessionUpdate, resetTurnBuffers } from "./turn-stream.ts";
 import type { AcpDriverConfig, AcpDriverOptions, AcpLaunchContext } from "./types.ts";
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -141,10 +142,10 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     };
   }
 
-  override end(sessionId: SessionId): Promise<void> {
+  override markEnding(sessionId: SessionId): void {
     const st = this.sessions.get(sessionId);
     if (st) st.cachedCommands = null;
-    return super.end(sessionId);
+    super.markEnding(sessionId);
   }
 
   override queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null> {
@@ -340,18 +341,16 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     existing: AcpProc | null,
     files: LaunchFiles | null,
   ): Promise<void> {
+    if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     let proc = existing;
-    if (!proc) {
-      try {
-        proc = await this.#spawn(st, this.resumeFor(st), files);
-        this.abortIfStopped(st, proc);
-      } catch (error) {
-        this.dropBatch(st, batch);
-        throw error;
-      }
+    try {
+      if (!proc) proc = await this.#spawn(st, this.resumeFor(st), files);
+      this.abortIfStopped(st, proc);
+    } catch (error) {
+      this.dropBatch(st, batch);
+      throw error;
     }
     this.clearTimer(st, "idleTimer");
-    if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     this.armStartTimer(st, proc);
 
     const outcome = await proc.ready;
@@ -387,6 +386,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
   }
 
   protected async writeBatch(st: AcpSessionState, proc: AcpProc, batch: AcpBatch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const problem = checkAcpUserBlocks(batch.userBlocks);
     if (problem) {
       this.dropBatch(st, batch);
@@ -510,7 +510,9 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       typeof this.#config.launchArgs === "function"
         ? [...this.#config.launchArgs(launchCtx)]
         : [...this.#config.launchArgs];
-    const { spawnCmd, spawnArgs, extraEnv } = await this.#wrapLaunch(st, launchCtx, rawLaunchArgs);
+    const { spawnCmd, spawnArgs, extraEnv } = await this.#wrapLaunch(st, launchCtx, [...checklistLaunchArgs(vendorSpec(this.vendor)), ...rawLaunchArgs]);
+    this.assertRunning();
+    this.assertNotEnded(st);
 
     const child = await this.spawnDetachedChild(
       exePath,
@@ -533,6 +535,11 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       proc: () => proc,
       isShuttingDown: () => this.shuttingDown,
       onSessionUpdate: (params) => handleSessionUpdate(this.#host, st, proc, params, Date.now()),
+      onChecklist: (update) => {
+        if (st.proc === proc && !proc.streamEnded && !proc.swallowingReplay) {
+          emitAcpChecklist(this.#host, st, proc, update, Date.now());
+        }
+      },
     });
     const acpConn = app.connect(stream);
 
@@ -555,6 +562,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       turnSeq: 0,
       textSegmentSeq: 0,
       thinkingSeq: 0,
+      checklistSeq: 0,
       textBuffer: "",
       textBufferBytes: 0,
       textMessageId: null,

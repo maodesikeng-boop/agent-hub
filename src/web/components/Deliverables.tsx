@@ -1,15 +1,18 @@
-import { FileText, Play } from "../ui/icons.ts";
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, splitLead, type Deliverable, type SentFile } from "../../shared/index.ts";
+import { ArrowUp, Check, Copy, FileText, Loader2, PencilLine, Play } from "../ui/icons.ts";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, type Deliverable, type SentFile } from "../../shared/index.ts";
 import { DELIVERABLE_MEDIA_HEIGHT_REM } from "../deliverable-size.ts";
+import { layoutCardDeliverables } from "../deliverables-layout.ts";
 import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
+import { Button } from "../ui/button.tsx";
 import { FileCard, useFileExpired } from "./Attachments.tsx";
+import { COPIED_RESET_MS, copyText } from "./CodeBlock.tsx";
 import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 export const INLINE_LINK_CLASS =
-  "touch-target inline-flex cursor-pointer items-center gap-1 rounded-xl text-link underline decoration-link/40 transition-colors outline-none hover:decoration-link focus-visible:ring-2 focus-visible:ring-ring/50";
+  "touch-target inline-flex cursor-pointer items-center gap-1 text-link underline decoration-link/40 transition-colors outline-none hover:decoration-link focus-visible:outline-2 focus-visible:outline-border-focus";
 
 function usePreview(item: Deliverable): PreviewFile {
   const client = useClient();
@@ -49,7 +52,7 @@ function MediaThumb({ item }: { item: Deliverable }) {
         aria-label={item.label}
         onClick={() => setOpen(true)}
         className={cn(
-          "relative h-(--deliverable-media-height) shrink-0 overflow-hidden rounded-xl border border-border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          "relative box-content h-(--deliverable-media-height) shrink-0 overflow-hidden rounded-sm border border-border bg-panel outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
           video ? "cursor-pointer" : "cursor-zoom-in",
         )}
       >
@@ -60,7 +63,7 @@ function MediaThumb({ item }: { item: Deliverable }) {
           <img src={preview.url} alt={item.label} loading="lazy" onError={markExpired} className="block h-(--deliverable-media-height) w-auto max-w-40 object-cover" />
         )}
         {video && (
-          <span data-play-badge className="absolute inset-0 m-auto flex size-9 items-center justify-center rounded-full bg-black/55 text-white">
+          <span data-play-badge className="absolute inset-0 m-auto flex size-9 items-center justify-center bg-black/55 text-white">
             <Play className="size-pixel translate-x-px fill-current" aria-hidden="true" />
           </span>
         )}
@@ -87,7 +90,7 @@ export const DeliverableFiles = memo(function DeliverableFiles({ deliverables, c
         </div>
       )}
       {media.length > 0 && (
-        <div data-deliverable-media className="flex gap-2 overflow-x-auto">
+        <div data-deliverable-media className="flex flex-wrap gap-2">
           {media.map((item) => (
             <MediaThumb key={item.id} item={item} />
           ))}
@@ -98,13 +101,10 @@ export const DeliverableFiles = memo(function DeliverableFiles({ deliverables, c
 });
 
 const NO_DELIVERABLES: readonly Deliverable[] = [];
-const DETAILS_ONE_LINE_MAX_EM = 2.4;
-const LEAD_LINE_HEIGHT_EM = 1.65;
-const LEAD_FALLBACK_LINES = 3;
-const FALLBACK_FONT_PX = 16;
 
 export const CardBody = memo(function CardBody({
   text,
+  titleText = "",
   deliverables = NO_DELIVERABLES,
   extra,
   files = sentFilesOfDeliverables(deliverables),
@@ -113,6 +113,7 @@ export const CardBody = memo(function CardBody({
   textClassName,
 }: {
   text: string;
+  titleText?: string;
   deliverables?: readonly Deliverable[] | undefined;
   extra?: ReactNode;
   files?: SentFile[];
@@ -120,84 +121,182 @@ export const CardBody = memo(function CardBody({
   className?: string;
   textClassName?: string;
 }) {
-  const { lead, details } = useMemo(() => splitLead(text), [text]);
+  const layout = useMemo(
+    () => layoutCardDeliverables(text, deliverables, titleText),
+    [text, deliverables, titleText],
+  );
   const hasExtra = extra !== undefined && extra !== null && extra !== false;
-  const hasDetails = details !== "" || hasExtra;
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const [width, setWidth] = useState(0);
-  const [fit, setFit] = useState<{ key: string; oneLine: boolean } | null>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const leadRef = useRef<HTMLDivElement>(null);
-  const detailsRef = useRef<HTMLDivElement>(null);
-  const id = useId();
-  const fitKey = `${width}\u0000${hasExtra}\u0000${details}`;
-  const oneLine = fit?.key === fitKey ? fit.oneLine : null;
-  const showDetails = hasDetails && (expanded || oneLine !== false);
+  if (layout.segments.length === 0 && layout.trailing.length === 0 && !hasExtra) return null;
 
-  useLayoutEffect(() => {
-    const box = leadRef.current;
-    if (box === null || expanded) return;
-    const measure = () => {
-      const style = getComputedStyle(box);
-      const lineHeight = LEAD_LINE_HEIGHT_EM * (Number.parseFloat(style.fontSize) || FALLBACK_FONT_PX);
-      const lines = Number.parseInt(style.getPropertyValue("--card-lead-lines"), 10) || LEAD_FALLBACK_LINES;
-      setOverflowing(box.scrollHeight > (lines + 1) * lineHeight + 1);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(box);
-    if (box.firstElementChild !== null) observer.observe(box.firstElementChild);
-    return () => observer.disconnect();
-  }, [expanded, lead]);
-
-  useLayoutEffect(() => {
-    const box = bodyRef.current;
-    if (box === null) return;
-    const observer = new ResizeObserver(() => setWidth(Math.round(box.clientWidth)));
-    observer.observe(box);
-    return () => observer.disconnect();
-  }, []);
-
-  useLayoutEffect(() => {
-    const box = detailsRef.current;
-    if (oneLine !== null || box === null) return;
-    const height = box.getBoundingClientRect().height;
-    const fontPx = Number.parseFloat(getComputedStyle(box).fontSize) || FALLBACK_FONT_PX;
-    setFit({ key: fitKey, oneLine: height > 0 && height < DETAILS_ONE_LINE_MAX_EM * fontPx });
-  });
-
-  if (lead === "" && !hasDetails && deliverables.length === 0) return null;
   return (
-    <div ref={bodyRef} id={id} data-card-body className={cn("flex min-w-0 flex-col items-start gap-2", className)}>
-      {lead !== "" && (
-        <div
-          ref={leadRef}
-          data-card-lead
-          data-overflowing={overflowing && !expanded ? "" : undefined}
-          className={cn("w-full min-w-0", textClassName, overflowing && !expanded && "card-lead-clamp")}
-        >
-          <Markdown text={lead} files={files} messageId={messageId} />
+    <div data-card-body className={cn("flex min-w-0 flex-col items-start gap-2", className)}>
+      {layout.segments.map((segment, index) => (
+        <div key={index} className="flex w-full min-w-0 flex-col gap-1.5">
+          <div className={cn("w-full min-w-0", textClassName)}>
+            <Markdown text={segment.markdown} files={files} messageId={messageId} />
+          </div>
+          {segment.deliverables.length > 0 && (
+            <DeliverableFiles
+              deliverables={segment.deliverables}
+              className={cn("w-full", segment.isListItem && "border-l border-border pl-3")}
+            />
+          )}
         </div>
-      )}
-      <DeliverableFiles deliverables={deliverables} className="w-full" />
-      {showDetails && (
-        <div ref={detailsRef} data-card-details className={cn("flex w-full min-w-0 flex-col gap-2", textClassName)}>
-          {details !== "" && <Markdown text={details} files={files} messageId={messageId} />}
-          {extra}
-        </div>
-      )}
-      {((hasDetails && oneLine === false) || overflowing) && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={id}
-          className="touch-target inline-flex cursor-pointer items-center rounded-full text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      )}
+      ))}
+      <DeliverableFiles deliverables={layout.trailing} className="w-full" />
+      {hasExtra && <div className={cn("flex w-full min-w-0 flex-col gap-2", textClassName)}>{extra}</div>}
     </div>
   );
 });
+
+const NOTE_MAX_HEIGHT_PX = 144;
+
+export function CardNoteForm({
+  disabled,
+  pending,
+  value: controlledValue,
+  onChange: controlledOnChange,
+  onFocus,
+  onSubmitNote,
+  className,
+  inputClassName,
+  buttonSize,
+  variant = "field",
+}: {
+  disabled: boolean;
+  pending: boolean;
+  value?: string;
+  onChange?: (value: string) => void;
+  onFocus?: () => void;
+  onSubmitNote: (rawNote: string) => void;
+  className?: string;
+  inputClassName?: string;
+  buttonSize?: "sm";
+  /** `row` is the last row of a decision card's option list: no frame of its own, a pencil in the letter column. */
+  variant?: "field" | "row";
+}) {
+  const id = useId();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [localNote, setLocalNote] = useState("");
+  const note = controlledValue ?? localNote;
+  const setNote = (next: string) => {
+    if (controlledOnChange !== undefined) controlledOnChange(next);
+    else setLocalNote(next);
+  };
+
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (el === null) return;
+    if (note === "") {
+      el.style.height = "";
+      return;
+    }
+    el.style.height = "auto";
+    if (el.scrollHeight > 0) {
+      const borderY = Math.max(0, el.offsetHeight - el.clientHeight);
+      el.style.height = `${Math.min(el.scrollHeight + borderY, NOTE_MAX_HEIGHT_PX)}px`;
+    }
+  }, [note]);
+
+  const canSend = !disabled && note.trim() !== "";
+  const small = buttonSize === "sm";
+  const row = variant === "row";
+  return (
+    <div
+      data-card-reply={variant}
+      className={cn(
+        row
+          ? "-mx-4 -mb-4 flex items-end gap-3 border-t border-border py-1.5 pr-1.5 pl-4 transition-shadow focus-within:shadow-[inset_0_0_0_1px_var(--border-focus)]"
+          : "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 shadow-[var(--shadow-tile)] transition-[border-color,box-shadow] focus-within:field-focus",
+        disabled && "opacity-60",
+        className,
+      )}
+    >
+      {row && (
+        <span aria-hidden="true" className={cn("mt-1 flex w-4 shrink-0 items-center self-start text-muted-foreground", small ? "h-5" : "h-6")}>
+          <PencilLine className="size-pixel-sm" />
+        </span>
+      )}
+      <label htmlFor={id} className="sr-only">
+        Your reply
+      </label>
+      <textarea
+        ref={textareaRef}
+        id={id}
+        rows={1}
+        value={note}
+        disabled={disabled}
+        onFocus={onFocus}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Reply or add a note…"
+        className={cn(
+          "max-h-36 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-default pointer-coarse:min-h-11 pointer-coarse:py-2.5",
+          small ? "min-h-7 py-1 text-minor leading-5" : "min-h-8 py-1 text-body leading-6",
+          inputClassName,
+        )}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && canSend) {
+            e.preventDefault();
+            onSubmitNote(note);
+          }
+        }}
+      />
+      <Button type="button" variant="send" size="icon-sm" aria-label="Send" disabled={!canSend} onClick={() => onSubmitNote(note)} className={cn("shrink-0", small ? "size-7" : "size-7.5")}>
+        {pending ? <Loader2 className="size-4" aria-hidden="true" /> : <ArrowUp className="size-4" strokeWidth={1.75} aria-hidden="true" />}
+      </Button>
+    </div>
+  );
+}
+
+export function UnsentDraftBanner({
+  draft,
+  onDismiss,
+  compact = false,
+  className,
+}: {
+  draft: string;
+  onDismiss: () => void;
+  compact?: boolean;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const CopyIcon = copied ? Check : Copy;
+  return (
+    <div
+      data-unsent-draft
+      className={cn("rounded-sm bg-panel", compact ? "mt-2 p-2" : "mt-3 p-2.5", className)}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1.5 text-minor font-medium text-foreground">
+          <PencilLine className="size-pixel-sm shrink-0 text-brand-ink" aria-hidden="true" />
+          <span>Unsent reply</span>
+        </span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void copyText(draft).then(() => {
+                setCopied(true);
+                clearTimeout(timer.current);
+                timer.current = setTimeout(() => setCopied(false), COPIED_RESET_MS);
+              });
+            }}
+          >
+            <CopyIcon className="size-pixel-sm" aria-hidden="true" />
+            {copied ? "Copied" : "Copy"}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
+            Dismiss
+          </Button>
+        </div>
+      </div>
+      <p className="mt-1.5 rounded-sm border border-border bg-background px-2.5 py-1.5 text-minor whitespace-pre-wrap select-text [overflow-wrap:anywhere] text-foreground">
+        {draft}
+      </p>
+    </div>
+  );
+}

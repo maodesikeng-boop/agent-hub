@@ -40,7 +40,7 @@ export function SignInPage() {
         </div>
       ) : (
         <div className="flex flex-col items-center gap-3 px-4 pt-6 pb-4">
-          <QrCode text={link.url} label="Sign-in QR code" className="size-48 rounded-xl" />
+          <QrCode text={link.url} label="Sign-in QR code" className="size-48 rounded-sm border border-border" />
           <p className="text-body text-muted-foreground tabular-nums">{formatCountdown(signIn.remainingMs)}</p>
           <div className="mt-1 grid w-full grid-cols-1 gap-2">
             <Button className={DRAWER_BUTTON} onClick={signIn.copyLink}>

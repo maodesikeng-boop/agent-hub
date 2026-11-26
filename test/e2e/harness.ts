@@ -1,11 +1,12 @@
 // 端到端测试的零件：在临时数据目录里起真的守护进程（node src/daemon/main.ts），claude 换成假 claude；
 // 用 HTTP + cookie 登录、发消息、拉状态，用 WebSocket 收推送。
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJsonLog } from "../append-log.ts";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
 import { WORKER_ENV } from "../../src/vendors/claude/settings.ts";
@@ -199,13 +200,7 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
     return { child, exited, out: () => out, err: () => err };
   };
 
-  const log = (): FakeLogEntry[] =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .split("\n")
-          .filter(Boolean)
-          .map((l) => JSON.parse(l) as FakeLogEntry)
-      : [];
+  const log = () => readJsonLog<FakeLogEntry>(logFile);
 
   return {
     dir,

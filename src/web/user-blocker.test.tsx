@@ -77,7 +77,7 @@ async function boot(snap: StateSnapshot) {
   return api;
 }
 
-const sidePanel = () => screen.getByRole("complementary", { name: "Side panel" });
+const sidePanel = () => screen.getByRole("complementary", { name: "Work panel" });
 
 beforeEach(() => {
   localStorage.clear();
@@ -88,17 +88,17 @@ afterEach(() => {
 });
 
 describe("要用户动手的提醒卡", () => {
-  it("右栏里这一步只有一行，不出提醒卡和拍板卡；点了让对话滚到那张提醒卡并高亮，不发请求", async () => {
+  it("右栏里这一步只是一个步骤节点，不出提醒卡和拍板卡；点了让对话滚到那张提醒卡并高亮，不发请求", async () => {
     const user = userEvent.setup();
     Element.prototype.scrollIntoView = vi.fn();
     const api = await boot(snapshot());
-    const graphs = await waitFor(() => within(sidePanel()).getByRole("region", { name: /^Task Graph$/ }));
+    const graphs = await waitFor(() => within(sidePanel()).getByRole("region", { name: "卡片修复" }));
     expect(within(graphs).queryByTestId("peel-gate-card")).toBeNull();
     expect(within(graphs).queryByTestId("user-blocker-card")).toBeNull();
     expect(within(graphs).queryByText("Waiting on PM")).toBeNull();
     expect(within(sidePanel()).queryByRole("region", { name: /^Needs You$/ })).toBeNull();
 
-    await user.click(within(graphs).getByTestId("peel-gate-row"));
+    await user.click(within(graphs).getByRole("button", { name: /验收/ }));
     await waitFor(() => expect(document.querySelector('[data-message-id="120"]')).toHaveAttribute("data-highlighted", "true"));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(api.callsTo("POST", RECHECK_PATH)).toHaveLength(0);

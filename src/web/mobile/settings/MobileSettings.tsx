@@ -1,38 +1,42 @@
 import { Activity, memo, type ReactNode } from "react";
 import { ArrowLeftRight, Bell, Blocks, Cable, Download, Loader2, Monitor, QrCode, Server, Smartphone, Type } from "../../ui/icons.ts";
-import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx";
+import type { SettingsBodies } from "../../components/SettingsDialog.tsx";
+import type { ComputerRenameApi } from "../../settings-drafts.ts";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { UpdateSettings } from "../../components/UpdateSettings.tsx";
-import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
+import { formatQuotaReset } from "../../format.ts";
+import { cn } from "../../lib/utils.ts";
 import type { NotifySettings } from "../../notify.ts";
 import { useCachedResourcesSummary } from "../../resources-model.ts";
 import type { SettingsSection } from "../../route.ts";
+import type { QuotaVendor } from "../../selectors.ts";
 import {
   describeComputersSummary,
   describeNotifySummary,
   useCachedBrowserSessionsSummary,
   useCachedProvidersSummary,
   useUiScaleSetting,
-  useVendorSyncSetting,
   type DeviceSettings,
+  type VendorSyncModel,
 } from "../../settings-model.ts";
 import { updateReminderOf, useCachedUpdateStatus, useDismissedUpdate } from "../../update-model.ts";
 import { BrowsersPage } from "./BrowsersPage.tsx";
 import { ComputersPage } from "./ComputersPage.tsx";
 import { NotificationsPage } from "./NotificationsPage.tsx";
-import { ProvidersPage } from "./ProvidersPage.tsx";
-import { ResourcesPage } from "./ResourcesPage.tsx";
 import { ScalePage } from "./ScalePage.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
 import { SettingsPage } from "./SettingsPage.tsx";
 import { SignInPage } from "./SignInPage.tsx";
-import { VendorSyncFooter, VendorSyncPage, type VendorSync } from "./VendorSyncPage.tsx";
+import { VendorSyncFooter, VendorSyncPage } from "./VendorSyncPage.tsx";
 
 export interface MobileSettingsProps {
   section: SettingsSection | undefined;
   notify: NotifySettings;
   devices: DeviceSettings | null;
-  defaultProviderDevice?: DeviceKey;
+  quota?: readonly QuotaVendor[];
+  bodies: SettingsBodies;
+  rename: ComputerRenameApi;
+  vendor: VendorSyncModel;
   onOpen: (section: SettingsSection) => void;
   onBack: () => void;
   onSignedOut?: () => void;
@@ -41,8 +45,9 @@ export interface MobileSettingsProps {
 interface SubpageContext {
   notify: NotifySettings;
   devices: DeviceSettings | null;
-  defaultProviderDevice: DeviceKey;
-  vendor: VendorSync;
+  vendor: VendorSyncModel;
+  bodies: SettingsBodies;
+  rename: ComputerRenameApi;
   onSignedOut?: () => void;
 }
 
@@ -67,35 +72,77 @@ const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
   updates: { title: "Updates", render: () => <UpdateSettings titled={false} /> },
   providers: {
     title: "Providers",
-    render: (ctx) => <ProvidersPage devices={ctx.devices} defaultDeviceKey={ctx.defaultProviderDevice} />,
+    render: (ctx) => ctx.bodies.providers,
   },
   "vendor-sync": {
     title: "Vendor sync",
     render: (ctx) => <VendorSyncPage vendor={ctx.vendor} />,
     footer: (ctx) => (ctx.vendor.preview === null ? null : <VendorSyncFooter vendor={ctx.vendor} />),
   },
-  capabilities: { title: "Capabilities", render: () => <CapabilitiesSettings /> },
+  capabilities: { title: "Capabilities", render: (ctx) => ctx.bodies.capabilities },
   resources: {
     title: "Resources",
-    render: (ctx) => <ResourcesPage devices={ctx.devices} defaultDeviceKey={ctx.defaultProviderDevice} />,
+    render: (ctx) => ctx.bodies.resources,
   },
-  computers: { title: "Computers", render: (ctx) => withDevices(ctx, (devices) => <ComputersPage devices={devices} />) },
+  computers: { title: "Computers", render: (ctx) => withDevices(ctx, (devices) => <ComputersPage devices={devices} account={ctx.bodies.account} rename={ctx.rename} />) },
   "sign-in": { title: "Sign in on another device", render: () => <SignInPage /> },
   browsers: { title: "Signed-in browsers", render: (ctx) => <BrowsersPage {...(ctx.onSignedOut !== undefined ? { onSignedOut: ctx.onSignedOut } : {})} /> },
 };
 
+function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
+  const vendors = quota.filter((v) => v.windows.length > 0);
+  if (vendors.length === 0) return null;
+  return (
+    <SettingsGroup title="Usage">
+      {vendors.map((vendor) => (
+        <div key={vendor.id} className="grid gap-2.5 px-4 py-3">
+          <div className="text-minor font-semibold text-foreground">{vendor.group ? `${vendor.name} (${vendor.group})` : vendor.name}</div>
+          {vendor.windows.map((w) => {
+            const full = w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100));
+            const barClass = full ? "bg-danger" : w.warning || w.percent >= 80 ? "bg-caution" : "bg-brand-ink";
+            const fillWidth = Math.min(100, Math.max(0, w.percent));
+            return (
+              <div key={w.key} className="grid gap-1.5">
+                <div className="flex items-baseline gap-2 text-minor">
+                  <span className="shrink-0 font-medium text-foreground">{w.short}</span>
+                  {w.resetsAt !== null && (
+                    <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">Resets {formatQuotaReset(w.resetsAt)}</span>
+                  )}
+                  <span className={cn("ml-auto shrink-0 font-semibold tabular-nums", full ? "text-danger" : "text-foreground")}>{w.percent}%</span>
+                </div>
+                <div
+                  role="progressbar"
+                  aria-label={`${vendor.name} ${w.short} usage`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={w.percent}
+                  className="h-1.5 overflow-hidden rounded-xs bg-border"
+                >
+                  <div className={cn("usage-fill h-full rounded-xs", barClass)} style={{ width: `${fillWidth}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </SettingsGroup>
+  );
+}
+
 function SettingsHome({
   notify,
   devices,
+  quota,
   vendorSynced,
   onOpen,
   onBack,
 }: {
   notify: NotifySettings;
   devices: DeviceSettings | null;
+  quota: readonly QuotaVendor[];
   vendorSynced: boolean;
   onOpen: (section: SettingsSection) => void;
-  onBack: () => void;
+  onBack?: () => void;
 }) {
   const { label: scaleLabel } = useUiScaleSetting();
   const providers = useCachedProvidersSummary();
@@ -104,7 +151,8 @@ function SettingsHome({
   const update = useCachedUpdateStatus();
   const updateReminder = updateReminderOf(update, useDismissedUpdate());
   return (
-    <SettingsPage title="Settings" home onBack={onBack}>
+    <SettingsPage title="Settings" home {...(onBack !== undefined ? { onBack } : {})}>
+      <UsageGroup quota={quota} />
       <SettingsGroup title="General">
         <SettingsNavRow icon={<Type aria-hidden="true" />} label="Interface scale" summary={scaleLabel} onClick={() => onOpen("scale")} />
         <SettingsNavRow icon={<Bell aria-hidden="true" />} label="Notifications" summary={describeNotifySummary(notify)} onClick={() => onOpen("notifications")} />
@@ -164,29 +212,34 @@ function SettingsHome({
   );
 }
 
+const NO_QUOTA: readonly QuotaVendor[] = [];
+
 // App rerenders on every streaming frame; all props here are stable.
 export const MobileSettings = memo(function MobileSettings({
   section,
   notify,
   devices,
-  defaultProviderDevice = LOCAL_DEVICE,
+  quota = NO_QUOTA,
   onOpen,
   onBack,
   onSignedOut,
+  bodies,
+  rename,
+  vendor,
 }: MobileSettingsProps) {
-  const vendor = useVendorSyncSetting();
   const spec = section === undefined ? null : SUBPAGES[section];
   const ctx: SubpageContext = {
     notify,
     devices,
-    defaultProviderDevice,
     vendor,
+    bodies,
+    rename,
     ...(onSignedOut !== undefined ? { onSignedOut } : {}),
   };
   return (
     <div data-testid="mobile-settings" className="flex h-full min-w-0 flex-1 flex-col">
       <Activity mode={spec === null ? "visible" : "hidden"}>
-        <SettingsHome notify={notify} devices={devices} vendorSynced={vendor.lastSummary !== null} onOpen={onOpen} onBack={onBack} />
+        <SettingsHome notify={notify} devices={devices} quota={quota} vendorSynced={vendor.lastSummary !== null} onOpen={onOpen} />
       </Activity>
       {spec !== null && (
         <SettingsPage key={section} title={spec.title} onBack={onBack} footer={spec.footer?.(ctx)}>

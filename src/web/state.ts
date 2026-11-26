@@ -3,9 +3,14 @@ import {
   MAX_REWOUND_PENDING_KEYS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_STREAM_LIVE_MAX,
+  PENDING_SANDBOX_APPROVALS_SNAPSHOT_MAX,
+  PENDING_APP_APPROVALS_SNAPSHOT_MAX,
+  formatAppApprovalCardText,
+  type AppApprovalRef,
+  askOf,
+  formatSandboxApprovalCardText,
   clearRateLimitRejection,
   emptyRouterSlice,
-  isLedgerWakeup,
   isQuotaExhausted,
   isRewoundMessage,
   isWorkerEndLine,
@@ -18,7 +23,6 @@ import {
   type ConversationId,
   type ConversationSnapshot,
   type ConversationsLookup,
-  type EndedWorkersPage,
   type HealthEntry,
   type Message,
   type MessageId,
@@ -60,10 +64,19 @@ export interface ConversationView {
   messages: Message[];
   hasMore: boolean;
   workerLine?: ConversationSnapshot["workerLine"];
+  workerBranch?: string | null;
   outsideRev?: number;
 }
 
 type Phase = "loading" | "ready" | "error" | "unauthorized";
+
+interface PendingSandboxCard {
+  id: number;
+  conversationId: ConversationId;
+  text: string;
+}
+
+type PendingAppCard = AppApprovalRef & { conversationId: ConversationId; text: string };
 
 export interface HubState {
   phase: Phase;
@@ -80,8 +93,9 @@ export interface HubState {
   health: HealthEntry[];
   schedules: ScheduleRecord[];
   router: RouterSlice;
+  pendingAppCards?: readonly PendingAppCard[];
+  pendingSandboxCards?: readonly PendingSandboxCard[];
   activeTaskGraphs: TaskGraph[];
-  olderEndedWorkers: Record<PmId, ConversationId | undefined>;
   lookups: Record<ConversationId, "loading" | "missing" | undefined>;
   server: ServerInfo;
   pending: PendingMessage[];
@@ -108,7 +122,6 @@ export const initialState: HubState = {
   schedules: [],
   router: emptyRouterSlice(),
   activeTaskGraphs: [],
-  olderEndedWorkers: {},
   lookups: {},
   server: serverInfoFor("darwin"),
   pending: [],
@@ -132,7 +145,6 @@ export type HubAction =
   | { type: "lookupStart"; ids: readonly ConversationId[] }
   | { type: "lookupDone"; ids: readonly ConversationId[]; lookup: ConversationsLookup }
   | { type: "lookupFailed"; ids: readonly ConversationId[] }
-  | { type: "endedWorkersLoaded"; pmId: PmId; before: ConversationId; page: EndedWorkersPage }
   | { type: "retryStart"; messageId: MessageId }
   | { type: "retryFailed"; messageId: MessageId };
 
@@ -235,6 +247,36 @@ function clearConversationStreaming(sessions: SessionState[], conversationId: Co
   });
 }
 
+function withSandboxCard(state: HubState, message: Message): HubState {
+  if (message.meta?.needsUser !== true || !("sandboxApprovalRef" in message.meta)) return state;
+  const ask = askOf(message);
+  const id = ask?.sandboxApprovalRef?.approvalId;
+  if (id === undefined) return state;
+  const cards = state.pendingSandboxCards ?? [];
+  const remaining = cards.filter((card) => card.id !== id);
+  if (ask?.answered === true) return remaining.length === cards.length ? state : { ...state, pendingSandboxCards: remaining };
+  const card = { id, conversationId: message.conversationId, text: message.text };
+  return { ...state, pendingSandboxCards: [card, ...remaining].slice(0, PENDING_SANDBOX_APPROVALS_SNAPSHOT_MAX) };
+}
+
+function withAppCard(state: HubState, message: Message): HubState {
+  if (message.meta?.appApprovalRef === undefined) return state;
+  const ask = askOf(message);
+  const ref = ask?.appApprovalRef;
+  if (ask === null || ref === undefined) return state;
+  const cards = state.pendingAppCards ?? [];
+  const index = cards.findIndex((card) => card.approvalId === ref.approvalId);
+  if (ask.answered === true || ask.closed === true) {
+    return index < 0 ? state : { ...state, pendingAppCards: cards.filter((_, i) => i !== index) };
+  }
+  const old = cards[index];
+  if (old !== undefined && old.text === message.text && old.workerTitle === ref.workerTitle &&
+      (old.warning ?? null) === (ref.warning ?? null) && old.expiresAt === ref.expiresAt &&
+      old.appName === ref.appName && old.appId === ref.appId && old.riskLevel === ref.riskLevel) return state;
+  const card: PendingAppCard = { ...ref, conversationId: message.conversationId, text: message.text };
+  return { ...state, pendingAppCards: [card, ...cards.filter((_, i) => i !== index)].slice(0, PENDING_APP_APPROVALS_SNAPSHOT_MAX) };
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
@@ -244,7 +286,8 @@ export function applyChange(state: HubState, change: Change): HubState {
       const raw = change.data.message;
       const wasRewoundPending = state.rewoundKeys?.includes(raw.dedupeKey) === true;
       const message = wasRewoundPending ? withRewoundMeta(raw) : raw;
-      const nextBase = wasRewoundPending ? { ...next, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) } : next;
+      const prepared = withAppCard(withSandboxCard(next, message), message);
+      const nextBase = wasRewoundPending ? { ...prepared, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) } : prepared;
       const afterStreaming =
         change.type === "message.created" &&
         message.sender === "agent" &&
@@ -259,7 +302,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       const sessions =
         change.type === "message.created" &&
         message.status === "queued" &&
-        ((message.sender === "user" && !isLedgerWakeup(message)) || message.sender === "pm")
+        (message.sender === "user" || message.sender === "pm")
           ? dropSessionQuotaRejection(afterStreaming, message.conversationId, message.sessionId)
           : afterStreaming;
       const view = state.conversations[message.conversationId];
@@ -479,6 +522,7 @@ function mergeLoaded(state: HubState, lookup: ConversationsLookup): Pick<HubStat
       messages: c.messages,
       hasMore: c.hasMore,
       ...(c.workerLine !== undefined ? { workerLine: c.workerLine } : {}),
+      ...(c.workerBranch !== undefined ? { workerBranch: c.workerBranch } : {}),
     };
   }
   const known = new Set(state.sessions.map((s) => s.sessionId));
@@ -537,9 +581,10 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     const keepLoaded =
       c.messages.length === 0 && c.hasMore && prev !== undefined && prev.messages.length > 0 && endedBefore(state, c.conversation.id);
     const workerLine = c.workerLine !== undefined ? { workerLine: c.workerLine } : {};
+    const workerBranch = c.workerBranch !== undefined ? { workerBranch: c.workerBranch } : {};
     conversations[c.conversation.id] = keepLoaded
-      ? { conversation: c.conversation, messages: prev.messages, hasMore: prev.hasMore, ...workerLine }
-      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore, ...workerLine };
+      ? { conversation: c.conversation, messages: prev.messages, hasMore: prev.hasMore, ...workerLine, ...workerBranch }
+      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore, ...workerLine, ...workerBranch };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
   const base = withoutLoadError(state);
@@ -556,8 +601,13 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     health: snapshot.health,
     schedules: snapshot.schedules,
     router: normalizeRouterSlice(snapshot.router),
+    pendingAppCards: snapshot.pendingAppApprovals?.map((approval) => ({
+      ...approval, approvalId: approval.id, text: formatAppApprovalCardText(approval),
+    })),
+    pendingSandboxCards: snapshot.pendingSandboxApprovals?.map((approval) => ({
+      id: approval.id, conversationId: approval.conversationId, text: formatSandboxApprovalCardText(approval),
+    })),
     activeTaskGraphs: normalizeTaskGraphs(snapshot.activeTaskGraphs),
-    olderEndedWorkers: snapshot.olderEndedWorkers ?? {},
     lookups: {},
     server: snapshot.server,
     pending: dropConfirmed(state.pending, all),
@@ -619,14 +669,6 @@ export function reducer(state: HubState, action: HubAction): HubState {
       const missing = action.ids.filter((id) => merged.conversations[id] === undefined);
       return { ...state, ...merged, lookups: withLookups(withLookups(state.lookups, found, undefined), missing, "missing") };
     }
-    case "endedWorkersLoaded": {
-      // A resync reset the cursor while this request was in flight; drop the stale page.
-      if (state.olderEndedWorkers[action.pmId] !== action.before) return state;
-      const merged = mergeLoaded(state, action.page);
-      const { [action.pmId]: _done, ...rest } = state.olderEndedWorkers;
-      const olderEndedWorkers = action.page.nextBefore === null ? rest : { ...rest, [action.pmId]: action.page.nextBefore };
-      return { ...state, ...merged, olderEndedWorkers };
-    }
     case "pendingAdd":
       return {
         ...state,
@@ -638,7 +680,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
       for (const view of Object.values(state.conversations)) {
         const m = view.messages.find((x) => x.id === action.messageId);
         if (m) {
-          if (m.sender === "user" && !isLedgerWakeup(m)) retryConvId = m.conversationId;
+          if (m.sender === "user") retryConvId = m.conversationId;
           break;
         }
       }

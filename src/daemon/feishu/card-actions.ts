@@ -171,7 +171,7 @@ function answerCard(ctx: FeishuContext, route: Route<"answer">, onDecisionWritte
   if (optionIndex !== null && choice === null) throw new LedgerRequestError("invalid", "选项不在有效范围内");
   if (card.kind === "gate") {
     if (ask.answered === true || ask.closed === true) throw new LedgerRequestError("conflict", ALREADY_DECIDED);
-    ctx.ledger.decideTaskNode(card.graphId, card.nodeKey, { clientId, choice, note }, onDecisionWritten);
+    ctx.ledger.decideTaskNode(card.graphId, card.nodeKey, { clientId, choice, note, askMessageId: card.askMessageId }, onDecisionWritten);
     return;
   }
   ctx.ledger.answerAsk(card.askMessageId, { clientId, choice, ...(note !== null ? { note } : {}) }, onDecisionWritten);

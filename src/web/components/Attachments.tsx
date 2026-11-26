@@ -6,7 +6,7 @@ import { cn } from "../lib/utils.ts";
 import { formatBytes } from "../upload.ts";
 import { FilePreview, inlineUrl, type PreviewFile } from "./FilePreview.tsx";
 
-const CARD = "flex items-center gap-2.5 rounded-2xl bg-muted py-1.5 pr-3.5 pl-1.5";
+const CARD = "flex items-center gap-2.5 rounded-sm border border-border bg-panel py-1.5 pr-3.5 pl-1.5";
 
 // A 404 means the daemon's file cleanup removed it; non-image cards need a HEAD probe because the browser never fetches them.
 export function useFileExpired(url: string | undefined, probe: boolean): [boolean, () => void] {
@@ -45,16 +45,16 @@ export function FileCard({
   const body = (
     <>
       {imageUrl !== undefined ? (
-        <img src={imageUrl} alt={name} loading="lazy" onError={markExpired} className="size-10 shrink-0 rounded-xl bg-background object-cover" />
+        <img src={imageUrl} alt={name} loading="lazy" onError={markExpired} className="size-10 shrink-0 rounded-sm bg-background object-cover" />
       ) : videoUrl !== undefined ? (
-        <span className="relative size-10 shrink-0 overflow-hidden rounded-xl bg-black">
+        <span className="relative size-10 shrink-0 overflow-hidden rounded-sm bg-black">
           <video src={videoUrl} preload="metadata" muted playsInline aria-hidden="true" tabIndex={-1} className="size-full object-cover" />
-          <span data-play-badge className="absolute inset-0 m-auto flex size-5 items-center justify-center rounded-full bg-black/55 text-white">
+          <span data-play-badge className="absolute inset-0 m-auto flex size-5 items-center justify-center bg-black/55 text-white">
             <Play className="size-pixel-sm translate-x-px fill-current" aria-hidden="true" />
           </span>
         </span>
       ) : (
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-background text-muted-foreground">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-sm bg-background text-muted-foreground">
           <FileText className="size-pixel" aria-hidden="true" />
         </span>
       )}
@@ -77,7 +77,7 @@ export function FileCard({
         type="button"
         data-file-card
         onClick={() => setOpen(true)}
-        className={cn(CARD, "cursor-pointer transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50", className)}
+        className={cn(CARD, "cursor-pointer transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus", className)}
       >
         {body}
       </button>

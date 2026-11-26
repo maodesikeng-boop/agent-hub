@@ -1,3 +1,4 @@
+import { answerCodexAppApproval, parseCodexAppApprovalRequest } from "./app-approval.ts";
 import { asObject, type CodexDriverHost, type Proc, type SessionState } from "./driver-state.ts";
 import {
   buildJsonRpcResponse,
@@ -39,6 +40,19 @@ export function answerServerRequest(
       return;
     }
     case "mcpServer/elicitation/request": {
+      const approval = proc.appApprovals;
+      if (approval !== null && proc.threadId !== null && params.threadId === proc.threadId) {
+        const { state, gate, computerUseServers } = approval;
+        const request = parseCodexAppApprovalRequest(params, {
+          sessionId: st.id, requestId: id, processKey: state.processKey, computerUseServers,
+        });
+        if (request !== null) {
+          void answerCodexAppApproval({ gate, state, request, requestId: id, write: (line) => {
+            if (!proc.child.stdin.destroyed) proc.child.stdin.write(line + "\n");
+          } }).catch((error: unknown) => host.log(`App approval response failed: ${String(error)}`));
+          return;
+        }
+      }
       const answer = decideMcpElicitation(params, {
         readonly: proc.readonly,
         policy: proc.launchConfig.readonlyPolicy,

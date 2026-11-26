@@ -2,17 +2,13 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MessageBubble, type MessageActions } from "./components/Messages.tsx";
-import { Sidebar } from "./components/Sidebar.tsx";
-import type { ConversationEntry } from "./selectors.ts";
+import { previewText, type ConversationEntry } from "./selectors.ts";
 import { makeMessage, makeUserMessage } from "./test-utils.ts";
 import { stripMarkdown } from "./plainText.ts";
 
 import { defaultLookOf } from "../shared/slimes.ts";
 const identity = { name: "小林", look: defaultLookOf(1) };
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
-const sidebarProps = { waiting: new Set<string>(), asking: new Set<string>(), notify: { permission: "granted" as const, enabled: true, setEnabled: async () => {} }, quota: [], onNewPm: () => {} };
-/** 只有入口本机一台（没有设备分组）。 */
-const only = (entries: ConversationEntry[]) => [{ key: "", name: "本机", platform: "darwin", status: "online" as const, lastOnlineAt: null, entries }];
 
 function agentSays(text: string) {
   return render(<MessageBubble message={makeMessage({ id: 1, text })} identity={identity} head actions={actions} />);
@@ -138,23 +134,18 @@ describe("stripMarkdown", () => {
   });
 });
 
-describe("左栏预览", () => {
+describe("对话预览（通知正文）", () => {
   function entry(text: string): ConversationEntry {
     return { id: 1, name: "小林", look: defaultLookOf(1), lastMessage: makeMessage({ id: 9, text }), lastAt: 1, pm: null, project: null, folders: [] };
   }
 
   it("agent 的最后一条消息去掉 Markdown 符号", () => {
-    render(<Sidebar groups={only([entry("原因找到了：**ack** 发早了，见 [文档](https://x.y)")])} active={{ device: "", id: 1 }} onSelect={() => {}} {...sidebarProps} />);
-    const button = screen.getByRole("button", { name: /小林/ });
-    expect(button).toHaveTextContent("原因找到了：ack 发早了，见 文档");
-    expect(button).not.toHaveTextContent("**");
-    expect(button).not.toHaveTextContent("](");
+    expect(previewText(entry("原因找到了：**ack** 发早了，见 [文档](https://x.y)"))).toBe("原因找到了：ack 发早了，见 文档");
   });
 
   it("用户发的最后一条消息也按原文显示（不是 Markdown）", () => {
     const e = entry("我写了 **两个** 星号");
     e.lastMessage = makeUserMessage({ id: 9, text: "我写了 **两个** 星号" });
-    render(<Sidebar groups={only([e])} active={{ device: "", id: 1 }} onSelect={() => {}} {...sidebarProps} />);
-    expect(screen.getByRole("button", { name: /小林/ })).toHaveTextContent("我写了 **两个** 星号");
+    expect(previewText(e)).toBe("我写了 **两个** 星号");
   });
 });

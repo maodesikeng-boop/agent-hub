@@ -211,7 +211,7 @@ describe("统一 hub ask 与 router report / note 同源桥接", () => {
     });
 
     const wakeMsg = ledger.getMessage(first.messageId!)!;
-    expect(wakeMsg.sender).toBe("user");
+    expect(wakeMsg).toMatchObject({ sender: "system", meta: { event: "pm.wakeup", source: "router" } });
     expect(wakeMsg.text).toContain("【Router 拍板】");
     expect(wakeMsg.text).toContain("LRU");
     expect(wakeMsg.text).toContain("上限设 500");
@@ -223,7 +223,7 @@ describe("统一 hub ask 与 router report / note 同源桥接", () => {
       optionIndex: 0,
       note: "上限设 500",
     });
-    expect(second.item).toEqual(first.item);
+    expect(second).toEqual(first);
     expect(changes).toEqual([]);
   });
 

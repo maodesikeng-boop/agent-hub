@@ -1,28 +1,116 @@
-import { ArrowLeft } from "../ui/icons.ts";
-import { useCallback, useMemo } from "react";
-import { WORKER_RETENTION_DAYS, WORKER_RETENTION_MAX_ENDED, type ConversationId, type Message, type SessionState, type WorkerPick } from "../../shared/index.ts";
-import type { WorkerEntry, WorkerPhase } from "../selectors.ts";
+import { memo, useCallback, useMemo } from "react";
+import {
+  isAgentVendor,
+  REPORT_START,
+  WORKER_RETENTION_DAYS,
+  WORKER_RETENTION_MAX_ENDED,
+  type AgentVendor,
+  type ConversationId,
+  type Message,
+  type SessionState,
+  type WorkerPick,
+} from "../../shared/index.ts";
+import { describeFailure } from "../../shared/errors.ts";
+import type { WorkerOutcome, WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
-import { Button } from "../ui/button.tsx";
-import { Avatar } from "./Avatar.tsx";
+import { formatTime } from "../format.ts";
+import { workerStatusOf } from "../worker-status.ts";
 import type { SlimeLook } from "../../shared/slimes.ts";
 import { conversationSource } from "../composer-suggest.ts";
 import { useClient } from "../device-scope.tsx";
+import { CircleX, Info } from "../ui/icons.ts";
 import { DraftComposer, type ComposerLink } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { MessageList } from "./MessageList.tsx";
-import type { MessageActions } from "./Messages.tsx";
+import { AgentHead, CopyButton, displayText, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 import { useStop } from "../useStop.ts";
-import { hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
-import { PieceMeta } from "./RightRail.tsx";
+import { actionStartedAt, useAgentStatusNode } from "./AgentStatus.tsx";
 
-export function WorkerConversation({
+const NO_OUTCOMES: readonly WorkerOutcome[] = [];
+const CLEARED_NOTICE = `Conversation cleared. Finished Workers keep their conversations for up to ${WORKER_RETENTION_DAYS} days, and only the latest ${WORKER_RETENTION_MAX_ENDED}.`;
+
+function WorkerFailureStrip({ outcome, vendor }: { outcome: WorkerOutcome; vendor?: AgentVendor }) {
+  const tag = outcome.line.event === "worktree_failed" ? "Couldn't create worktree" : "Turn failed";
+  const rawSummary = outcome.line.summary?.trim() ?? "";
+  const failure = rawSummary !== "" ? describeFailure(rawSummary, { unknown: "raw", vendor }) : null;
+  const detail = failure?.text ?? "";
+  const rawTitle = failure && failure.raw !== failure.text ? failure.raw : undefined;
+  return (
+    <div role="alert" data-worker-failure={outcome.line.event} className="mt-4 w-full min-w-0 overflow-hidden rounded-sm bg-danger-soft">
+      <div className="flex w-full items-start gap-3 px-3.5 py-2.5 text-left text-minor leading-5" title={rawTitle}>
+        <CircleX className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
+        <p className="min-w-0 flex-1 text-foreground [overflow-wrap:anywhere]">
+          <span className="mr-1 font-medium">{tag}</span>
+          {detail !== "" && ` ${detail}`}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RetainedReport({ outcome, identity }: { outcome: WorkerOutcome; identity: AgentIdentity }) {
+  const body = outcome.reportBody;
+  const fallback = outcome.line.summary?.trim() || workerStatusOf(outcome.line).label || "";
+  const formatted = body !== null ? displayText(body) : null;
+  const markdown = formatted !== null && body!.trimStart().startsWith(REPORT_START) ? formatted.replace(/^---\n\n/, "") : formatted;
+  const copyText = body ?? fallback;
+  return (
+    <div className="mt-6 flex flex-col" data-retained-outcome="report">
+      <AgentHead identity={identity} />
+      <div className="flex flex-col gap-2.5">
+        {markdown !== null ? (
+          <div className="w-full min-w-0 text-body leading-relaxed">
+            <Markdown text={markdown} />
+          </div>
+        ) : (
+          fallback !== "" && <p className="w-full min-w-0 text-body leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{fallback}</p>
+        )}
+        <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+          {copyText !== "" && <CopyButton text={copyText} />}
+          <span>{formatTime(outcome.at)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PurgedWorkerHistory({
+  outcomes,
+  identity,
+  vendor,
+}: {
+  outcomes: readonly WorkerOutcome[];
+  identity: AgentIdentity;
+  vendor?: AgentVendor;
+}) {
+  return (
+    <div className="messages messages-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" data-purged-history>
+      <div className="flex min-h-full flex-col pt-8 pb-12">
+        <div role="status" className="w-full min-w-0 overflow-hidden rounded-sm bg-panel">
+          <div className="flex w-full items-start gap-3 px-3.5 py-2.5 text-left text-minor leading-5">
+            <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <p className="min-w-0 flex-1 text-muted-foreground">{CLEARED_NOTICE}</p>
+          </div>
+        </div>
+        {outcomes.map((outcome) =>
+          outcome.line.event === "report" ? (
+            <RetainedReport key={outcome.id} outcome={outcome} identity={identity} />
+          ) : (
+            <WorkerFailureStrip key={outcome.id} outcome={outcome} vendor={vendor} />
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+export const WorkerConversation = memo(function WorkerConversation({
   title,
-  readonly,
   phase,
   pm,
-  meta,
+  outcomes = NO_OUTCOMES,
   view,
   loading = false,
   pending,
@@ -31,11 +119,8 @@ export function WorkerConversation({
   draft,
   staging,
   mobile = false,
-  leading,
-  toolbar,
   top,
   notices,
-  onBack,
   onSend,
   onRetry,
   onStop,
@@ -45,10 +130,9 @@ export function WorkerConversation({
   link = null,
 }: {
   title: string;
-  readonly: boolean;
   phase: WorkerPhase;
   pm: { name: string; look: SlimeLook };
-  meta?: WorkerEntry;
+  outcomes?: readonly WorkerOutcome[];
   view: ConversationView | undefined;
   loading?: boolean;
   pending: PendingMessage[];
@@ -56,12 +140,9 @@ export function WorkerConversation({
   older: OlderState | undefined;
   draft: DraftSlot;
   staging: StagedFiles;
-  leading?: React.ReactNode;
   mobile?: boolean;
-  toolbar: React.ReactNode;
-  top: React.ReactNode;
+  top?: React.ReactNode;
   notices: React.ReactNode;
-  onBack: () => void;
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
@@ -71,6 +152,7 @@ export function WorkerConversation({
   link?: ComposerLink | null;
 }) {
   const id = view?.conversation.id;
+  const vendor = isAgentVendor(session?.vendor) ? session.vendor : undefined;
   const hasQueuedUser = useMemo(
     () => pending.some((p) => p.phase === "sending") || (view?.messages.some((m) => m.sender === "user" && m.status === "queued") ?? false),
     [pending, view?.messages],
@@ -97,37 +179,40 @@ export function WorkerConversation({
   }, [onLoadOlder, id]);
   const handleSend = useCallback((text: string, files: File[]) => (id === undefined ? undefined : onSend(id, text, files)), [onSend, id]);
   const statusNode = useAgentStatusNode(session);
+  const trailingFailure = useMemo(() => {
+    if (view === undefined || view.conversation.purgedAt !== undefined) return null;
+    const last = outcomes.at(-1);
+    if (last === undefined || last.line.event === "report") return null;
+    if (last.line.event === "worktree_failed") return last;
+    if (session?.activity === "working" || session?.activity === "preparing") return null;
+    if (view.messages.some((m) => m.sender === "agent" && m.createdAt > last.at)) return null;
+    return last;
+  }, [view, outcomes, session?.activity]);
+  const failureFooter = useMemo(
+    () => (trailingFailure === null ? null : <WorkerFailureStrip outcome={trailingFailure} vendor={vendor} />),
+    [trailingFailure, vendor],
+  );
   return (
-    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
-      <header data-window-drag className="flex min-h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
-        {leading}
-        {!mobile && (
-          <Button variant="slot" size="icon" className="shrink-0" aria-label={`Back to ${pm.name}`} onClick={onBack}>
-            <ArrowLeft aria-hidden="true" />
-          </Button>
-        )}
-        <Avatar look={identity.look} size={34} neutral working={hasAgentStatus(session)} />
-        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 overflow-hidden">
-          <div className="flex min-w-[40%] shrink-[9999] items-center gap-3 overflow-hidden">
-            <h1 title={title} className="min-w-0 truncate text-title leading-snug font-semibold">
-              {title}
-            </h1>
-            {!mobile && readonly && <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Read-only</span>}
-          </div>
-          {!mobile && meta && <PieceMeta worker={meta} />}
-        </div>
-        {toolbar}
-      </header>
+    <FileDropZone
+      data-worker-detail=""
+      className="chat-text flex min-h-0 flex-1 flex-col"
+      aria-label={`Worker ${title}`}
+      onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}
+    >
       {top}
       {notices}
       {view === undefined ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">{loading ? "Loading…" : "Piece not found"}</div>
+        <div className="flex flex-1 items-center justify-center text-muted-foreground">{loading ? "Loading…" : "Worker not found"}</div>
       ) : (
         <>
           {view.conversation.purgedAt !== undefined ? (
-            <div role="status" className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-muted-foreground">
-              Conversation cleared. Finished Pieces keep their conversations for up to {WORKER_RETENTION_DAYS} days, and only the latest {WORKER_RETENTION_MAX_ENDED}.
-            </div>
+            outcomes.length > 0 ? (
+              <PurgedWorkerHistory outcomes={outcomes} identity={identity} vendor={vendor} />
+            ) : (
+              <div role="status" className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-muted-foreground">
+                {CLEARED_NOTICE}
+              </div>
+            )
           ) : (
             <div className="relative min-h-0 flex-1">
               <MessageList
@@ -140,14 +225,17 @@ export function WorkerConversation({
                 onRetry={onRetry}
                 actions={actions}
                 status={statusNode}
+                stepStartedAt={actionStartedAt(session)}
                 statusAgent={identity}
                 streamingText={session?.streamingText ?? null}
+                footer={failureFooter}
+                leanReports
               />
             </div>
           )}
           <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
-            {phase === "ended" && view.conversation.purgedAt === undefined && (
-              <div role="status" className="rounded-2xl bg-sidebar px-4 py-3 text-body">
+            {phase === "ended" && view.conversation.purgedAt === undefined && trailingFailure?.line.event !== "worktree_failed" && (
+              <div role="status" className="rounded-sm border border-border bg-panel px-4 py-3 text-body">
                 Completed
               </div>
             )}
@@ -170,4 +258,4 @@ export function WorkerConversation({
       )}
     </FileDropZone>
   );
-}
+});

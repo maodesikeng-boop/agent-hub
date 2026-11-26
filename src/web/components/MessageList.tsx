@@ -1,48 +1,58 @@
 import { ChevronDown } from "../ui/icons.ts";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId, type PersonaChangeId } from "../../shared/index.ts";
-import { groupMessages, type RenderItem } from "../selectors.ts";
+import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
+import { groupMessageRows, isWorkerCard, type DisplayRow } from "../system-events.ts";
 import { Button } from "../ui/button.tsx";
 import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
 import { useFocusMessage, useVirtualRows } from "../useVirtualRows.ts";
-import { EmptyConversation, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
+import { EmptyConversation, EventGroupView, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
-const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
+const EMPTY_TURN = { work: [], checklists: [], parts: [], startedAt: 0, endedAt: 0 };
 
 interface RowContext {
-  items: RenderItem[];
+  items: readonly DisplayRow[];
   pending: PendingMessage[];
   agentOf: (message: Message) => AgentIdentity;
   onRetry: (clientId: string) => void;
   actions: MessageActions;
   highlightId: MessageId | null;
   revertedChanges: ReadonlySet<PersonaChangeId>;
-  lastTurnStatus: { status: React.ReactNode; streamingText: string | null | undefined } | null;
+  liveTurn: { key: string; status: React.ReactNode; stepStartedAt: number | null; streamingText: string | null | undefined } | null;
+  leanReports: boolean;
 }
 
-function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus }: RowContext): React.ReactNode {
+function rowContent(index: number, { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, liveTurn, leanReports }: RowContext): React.ReactNode {
   const item = items[index];
   if (item === undefined) return <PendingBubble pending={pending[index - items.length]!} onRetry={onRetry} />;
+  if (item.kind === "event_group") {
+    return <EventGroupView family={item.family} messages={item.messages} actions={actions} revertedChanges={revertedChanges} />;
+  }
   if (item.kind === "turn") {
-    const first = item.work[0] ?? item.parts[0]!;
-    const live = index === items.length - 1 ? lastTurnStatus : null;
+    const first = item.work[0] ?? item.checklists[0] ?? item.parts[0]!;
+    const live = item.key === liveTurn?.key ? liveTurn : null;
     return (
       <TurnView
         turn={item}
         identity={agentOf(first)}
         status={live?.status}
+        stepStartedAt={live?.stepStartedAt ?? null}
         streamingText={live?.streamingText}
         actions={actions}
         highlightId={highlightId}
         revertedChanges={revertedChanges}
+        leanReports={leanReports}
       />
     );
   }
   const { message } = item;
   const previous = items[index - 1];
-  const head = !(previous?.kind === "message" && previous.message.sender === message.sender);
+  const previousMessage = previous?.kind === "message" ? previous.message : null;
+  const head = isWorkerCard(message)
+    ? previousMessage === null || !isWorkerCard(previousMessage)
+    : previousMessage?.sender !== message.sender;
   return (
     <MessageBubble
       message={message}
@@ -67,8 +77,11 @@ export const MessageList = memo(function MessageList({
   focus,
   onFocusDone,
   status,
+  stepStartedAt = null,
   statusAgent,
   streamingText,
+  footer,
+  leanReports = false,
 }: {
   messages: Message[];
   pending: PendingMessage[];
@@ -81,13 +94,17 @@ export const MessageList = memo(function MessageList({
   focus?: { id: MessageId; n: number } | null;
   onFocusDone?: () => void;
   status?: React.ReactNode;
+  stepStartedAt?: number | null;
   statusAgent?: AgentIdentity;
   streamingText?: string | null;
+  footer?: React.ReactNode;
+  leanReports?: boolean;
 }) {
-  const items = useMemo(() => groupMessages(messages), [messages]);
+  const grouped = groupMessages(messages);
+  const items = groupMessageRows(grouped.items);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null || Boolean(streamingText);
-  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}`;
+  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}:${footer != null}`;
 
   const { ref, contentRef, away, scrollToBottom, loadOlder, onScroll } = useStickToBottom({
     lastKey,
@@ -103,13 +120,20 @@ export const MessageList = memo(function MessageList({
     (index: number) => {
       const item = items[index];
       if (item === undefined) return `pending:${pending[index - items.length]!.clientId}`;
-      return item.kind === "turn" ? item.key : `message:${item.message.id}`;
+      return item.kind === "message" ? `message:${item.message.id}` : item.key;
     },
     [items, pending],
   );
   const { virtualizer, onFocus, onBlur } = useVirtualRows({ scrollRef: ref, listRef, count, getItemKey, headLayoutKey: `${hasMore}:${older}:${items.length === 0}` });
   const indexOf = useCallback(
-    (id: MessageId) => items.findLastIndex((item) => (item.kind === "turn" ? [...item.work, ...item.parts].some((m) => m.id === id) : item.message.id === id)),
+    (id: MessageId) =>
+      items.findLastIndex((item) =>
+        item.kind === "turn"
+          ? [...item.work, ...item.checklists, ...item.parts].some((m) => m.id === id)
+          : item.kind === "event_group"
+            ? item.messages.some((m) => m.id === id)
+            : item.message.id === id,
+      ),
     [items],
   );
   const highlightId = useFocusMessage({ scrollRef: ref, virtualizer, focus, onFocusDone, indexOf });
@@ -120,10 +144,11 @@ export const MessageList = memo(function MessageList({
     }
   }, [messages.length, hasMore, older, onLoadOlder]);
 
-  const lastItem = items.at(-1);
-  const rideOnTurn = busy && pending.length === 0 && lastItem?.kind === "turn";
-  const typing = busy && !rideOnTurn && statusAgent !== undefined;
-  const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore;
+  const liveTurn = busy && pending.length === 0 && grouped.tailTurnKey !== null
+    ? { key: grouped.tailTurnKey, status, stepStartedAt, streamingText }
+    : null;
+  const typing = busy && liveTurn === null && statusAgent !== undefined;
+  const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore && footer == null;
 
   const enterItemAt = (index: number): EnterItem => {
     if (index >= items.length) {
@@ -131,7 +156,9 @@ export const MessageList = memo(function MessageList({
       return { key: userMessageDedupeKey(p.conversationId, p.clientId), turn: false };
     }
     const item = items[index]!;
-    return item.kind === "turn" ? { key: item.key, turn: true } : { key: item.message.dedupeKey, turn: false };
+    if (item.kind === "turn") return { key: item.key, turn: true };
+    if (item.kind === "event_group") return { key: item.key, turn: false };
+    return { key: item.message.dedupeKey, turn: false };
   };
   const enterRows = () => ({
     row: (index: number) => listRef.current?.querySelector(`:scope > [data-index="${index}"]`)?.firstElementChild,
@@ -139,7 +166,7 @@ export const MessageList = memo(function MessageList({
   });
   useMessageEnter(enterRows, count, enterItemAt, typing, empty);
 
-  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, lastTurnStatus: rideOnTurn ? { status, streamingText } : null };
+  const rowContext: RowContext = { items, pending, agentOf, onRetry, actions, highlightId, revertedChanges, liveTurn, leanReports };
   const scrollMargin = virtualizer.options.scrollMargin;
 
   return (
@@ -149,7 +176,7 @@ export const MessageList = memo(function MessageList({
           {hasMore && (
             <button
               type="button"
-              className="touch-target mb-2 cursor-pointer self-center rounded-full px-3 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60"
+              className="touch-target mb-2 cursor-pointer self-center px-3 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
               disabled={older === "loading"}
               onClick={loadOlder}
             >
@@ -164,7 +191,7 @@ export const MessageList = memo(function MessageList({
                 ref={virtualizer.measureElement}
                 data-index={row.index}
                 data-list-head={row.index === 0 && !hasMore ? "" : undefined}
-                className="absolute top-0 left-0 flex w-full flex-col"
+                className="absolute top-0 left-0 flex w-full flex-col [contain:layout_style]"
                 style={{ transform: `translateY(${row.start - scrollMargin}px)` }}
               >
                 {rowContent(row.index, rowContext)}
@@ -173,14 +200,15 @@ export const MessageList = memo(function MessageList({
           </div>
           {typing && statusAgent && (
             <div ref={typingRef} className="flex flex-col" data-list-head={count === 0 && !hasMore ? "" : undefined}>
-              <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} streamingText={streamingText} actions={actions} />
+              <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} stepStartedAt={stepStartedAt} streamingText={streamingText} actions={actions} />
             </div>
           )}
+          {footer}
         </div>
       </div>
       {away && (
         <div className="messages pointer-events-none absolute inset-x-0 bottom-9 flex justify-center" data-back-to-bottom>
-          <Button variant="secondary" size="icon-sm" className="pointer-events-auto" aria-label="Scroll to bottom" title="Scroll to bottom" onClick={scrollToBottom}>
+          <Button variant="outline" size="icon-sm" className="pointer-events-auto" aria-label="Scroll to bottom" title="Scroll to bottom" onClick={scrollToBottom}>
             <ChevronDown aria-hidden="true" />
           </Button>
         </div>

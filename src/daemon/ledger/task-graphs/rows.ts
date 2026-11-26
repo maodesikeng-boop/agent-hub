@@ -1,10 +1,11 @@
-import type {
-  TaskArtifact,
-  TaskDecision,
-  TaskNode,
-  TaskNodeStatus,
-  TaskNodeWaitingFor,
-  WorkerId,
+import {
+  isTaskNodeWaitingDecision,
+  type TaskArtifact,
+  type TaskDecision,
+  type TaskNode,
+  type TaskNodeStatus,
+  type TaskNodeWaitingFor,
+  type WorkerId,
 } from "../../../shared/domain.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { TaskNodeDbRow } from "./types.ts";
@@ -32,12 +33,12 @@ export const gateOptionsOf = (row: Pick<TaskNodeDbRow, "gate_options_json">): st
 
 export const hasText = (s: string | null | undefined): s is string => s !== null && s !== undefined && s.trim() !== "";
 
-type StoredTaskArtifact = TaskArtifact & { checkpointPending?: boolean };
+type StoredTaskArtifact = TaskArtifact & { checkpointPending?: boolean; reviewStamp?: unknown };
 
 export function readStoredArtifact(raw: string | null): { artifact: TaskArtifact | null; checkpointPending: boolean } {
   const parsed = parseJsonOr<StoredTaskArtifact | null>(raw, null);
   if (parsed === null) return { artifact: null, checkpointPending: false };
-  const { checkpointPending, ...rest } = parsed;
+  const { checkpointPending, reviewStamp: _legacyReviewStamp, ...rest } = parsed;
   return {
     artifact: Object.keys(rest).length > 0 ? rest : null,
     checkpointPending: checkpointPending === true,
@@ -54,12 +55,8 @@ export function serializeArtifact(artifact: TaskArtifact | null | undefined, che
 export const artifactWithoutCheckpoint = (row: Pick<TaskNodeDbRow, "artifact_json">): string | null =>
   serializeArtifact(readStoredArtifact(row.artifact_json).artifact, false);
 
-export function isStoredCheckpoint(node: Pick<TaskNodeDbRow, "status" | "waiting_for" | "artifact_json">): boolean {
-  return (
-    node.status === "waiting" &&
-    node.waiting_for === "user" &&
-    readStoredArtifact(node.artifact_json).checkpointPending
-  );
+export function isStoredCheckpoint(node: Pick<TaskNodeDbRow, "artifact_json">): boolean {
+  return readStoredArtifact(node.artifact_json).checkpointPending;
 }
 
 /** Slim snapshots keep deliverables only on steps waiting for a user decision, to bound snapshot size. */
@@ -69,27 +66,36 @@ function artifactForView(artifact: TaskArtifact | null, waitingDecision: boolean
   return Object.keys(rest).length > 0 ? rest : null;
 }
 
-export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?: ReadonlyMap<number, UserBlocker>): TaskNode {
+export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?: {
+  userBlocker?: UserBlocker;
+  sandboxApproval?: TaskNode["sandboxApproval"];
+  gateAskPending?: boolean;
+}): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
-  const waitingUser = row.status === "waiting" && row.waiting_for === "user";
-  const userBlocker = blockers?.get(row.id) ?? null;
+  const status = row.status as TaskNodeStatus;
+  const waitingFor = status === "waiting" ? ((row.waiting_for ?? "pm") as TaskNodeWaitingFor) : null;
+  const userBlocker = waiting?.userBlocker ?? null;
+  const { sandboxApproval, gateAskPending } = waiting ?? {};
+  const waitingDecision = isTaskNodeWaitingDecision({ status, waitingFor, userBlocker, sandboxApproval, gateAskPending });
   const base: TaskNode = {
     key: row.node_key,
     title: row.title,
-    status: row.status as TaskNodeStatus,
-    waitingFor: row.status === "waiting" ? ((row.waiting_for ?? "pm") as TaskNodeWaitingFor) : null,
+    status,
+    waitingFor,
     skipped: row.status === "done" && row.skipped === 1,
     sortOrder: row.sort_order,
     activeWorkerId: row.active_worker_id,
     workerIds: workerIdsOf(row),
-    artifact: artifactForView(artifact, waitingUser && userBlocker === null, includeDetails),
+    artifact: artifactForView(artifact, waitingDecision, includeDetails),
     gateQuestion: row.gate_question,
     gateOptions: gateOptionsOf(row),
     gateSummaryMd: row.gate_summary_md,
     gateRecommended: row.gate_recommended,
     gateAskMessageId: row.gate_ask_message_id,
-    ...(waitingUser && checkpointPending ? { gateCheckpoint: true } : {}),
+    ...(gateAskPending !== undefined ? { gateAskPending } : {}),
+    ...(waitingDecision && checkpointPending ? { gateCheckpoint: true } : {}),
     userBlocker,
+    ...(sandboxApproval !== undefined ? { sandboxApproval } : {}),
     decision: decisionOf(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

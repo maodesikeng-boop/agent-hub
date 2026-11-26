@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 import { openStore } from "../../src/daemon/store/index.ts";
 import { createLedger, type SqliteLedger } from "../../src/daemon/ledger/index.ts";
 import { DEFAULT_PM_NAME } from "../../src/daemon/prompt.ts";
@@ -25,6 +26,7 @@ import {
   type WorkerRecord,
   type AccountStatusView,
   type DevicesResponse,
+  type SentFile,
   type SessionId,
   type VendorAvailability,
 } from "../../src/shared/index.ts";
@@ -104,7 +106,7 @@ function seedHome(rawHome: string, projectsDir: string, scenario: Scenario | "tw
       availability: (vendor) => SEED_AVAILABILITY[vendor] ?? "not_installed",
     },
   });
-  const story = new Story(ledger, projectsDir, paths.uploadsDir, () => clock, (minutes) => (clock += minutes * 60_000));
+  const story = new Story(ledger, projectsDir, paths.uploadsDir, paths.sentFilesDir, () => clock, (minutes) => (clock += minutes * 60_000));
   try {
     SCENARIOS[scenario](story);
     story.settle();
@@ -132,13 +134,29 @@ class Story {
   readonly at: () => number;
   readonly jump: (minutes: number) => void;
   readonly uploadsDir: string;
+  readonly sentFilesDir: string;
 
-  constructor(ledger: SqliteLedger, projectsDir: string, uploadsDir: string, at: () => number, jump: (minutes: number) => void) {
+  constructor(ledger: SqliteLedger, projectsDir: string, uploadsDir: string, sentFilesDir: string, at: () => number, jump: (minutes: number) => void) {
     this.ledger = ledger;
     this.uploadsDir = uploadsDir;
+    this.sentFilesDir = sentFilesDir;
     this.projectsDir = projectsDir;
     this.at = at;
     this.jump = jump;
+  }
+
+  /** Store a deterministic sent-file copy under sentFilesDir for hub ask --file deliverables. */
+  shareDeliverable(label: string, name: string, mime: string, body: Buffer): { arg: { label: string; path: string }; file: SentFile } {
+    const id = (0x80000000 + ++this.#uuid).toString(16).padStart(16, "0");
+    const dir = join(this.sentFilesDir, id);
+    mkdirSync(dir, { recursive: true });
+    const full = join(dir, name);
+    writeFileSync(full, body);
+    const href = `/tmp/${name}`;
+    return {
+      arg: { label, path: href },
+      file: { href, path: href, status: "saved", id, name, mime, size: body.length, mtime: null },
+    };
   }
 
   /** 一个有一次提交的 git 仓库，当项目经理的主文件夹。 */
@@ -345,6 +363,7 @@ function standard(s: Story): void {
   const ask2 = s.ledger.hubCall(qing.sessionId, "ask", { text: "要不要把抓取日志同步到对象存储？" });
   s.ledger.hubCall(qing.sessionId, "ask.close", { itemId: ask2.data.item!.id });
   s.ledger.hubCall(qing.sessionId, "schedule.add", { name: "每日抓取报告", prompt: "汇总昨天的抓取量和失败率，发我一段话。", daily: "09:00" });
+  s.ledger.hubCall(qing.sessionId, "project.attach", { folder: s.repo("crawler-rules") });
   s.ledger.hubCall(qing.sessionId, "persona.edit", { text: "说话简短，数字给到小数点后一位。", reason: "用户说报告太长" });
   s.jump(5);
   s.renew(qing);
@@ -369,10 +388,34 @@ function standard(s: Story): void {
     { name: "old-notes.md", mime: "text/markdown", body: null },
   ]);
 
-  // 柚子：两张还没回答的提问（右栏 Needs You）
+  // 柚子：两张还没回答的提问（把带多段正文、文档和截图的完整拍板卡放在最后，聊天底部完整可见）
   const you = pms.you!;
-  s.ledger.hubCall(you.sessionId, "ask", { text: "证书续期要不要改成自动？\n\n现在每次都要手动跑 certbot，下次到期是明年 2 月。", options: ["改成自动", "保持手动"], recommended: "改成自动" });
   s.ledger.hubCall(you.sessionId, "ask", { text: "测试机的系统要不要顺便升级到最新？", options: ["升级", "先不升"] });
+  const certPlan = s.shareDeliverable("续期方案", "cert-plan.md", "text/markdown", Buffer.from("# 证书自动续期方案\n\n- 每天 03:00 检查到期时间\n- 剩余不足 14 天自动执行 certbot renew\n"));
+  const beforeShot = s.shareDeliverable("改前状态页", "before-ssl.png", "image/png", makePreviewPng([247, 244, 237], [221, 212, 194], [111, 104, 98]));
+  const afterShot = s.shareDeliverable("改后状态页", "after-ssl.png", "image/png", makePreviewPng([255, 246, 214], [233, 194, 90], [74, 46, 0]));
+  const checklist = s.shareDeliverable("回归核对清单", "checklist.md", "text/markdown", Buffer.from("# 核对清单\n\n- [x] 测试机演练通过\n- [x] 告警通知已验证\n"));
+  const youFiles = [certPlan, beforeShot, afterShot, checklist];
+  s.ledger.hubCall(
+    you.sessionId,
+    "ask",
+    {
+      text: [
+        "证书续期要不要改成自动？",
+        "",
+        "现在每次都要手动跑 certbot，下次到期是明年 2 月。我整理了两块变更供你一起确认：",
+        "",
+        "1. 续期任务改成每天凌晨 3 点检查，剩余 14 天内自动续期并重加载，详见 cert-plan.md。",
+        "2. 状态页补齐了剩余天数与告警色标，改前改后对照见 before-ssl.png 与 after-ssl.png。",
+        "",
+        "确认后我会直接切到自动续期，并在下次演练结束后同步一份检查记录。",
+      ].join("\n"),
+      options: ["改成自动", "保持手动"],
+      recommended: "改成自动",
+      files: youFiles.map((f) => f.arg),
+    },
+    { sharedFiles: youFiles.map((f) => f.file) },
+  );
 
   // 小林：基准图那一屏
   s.jump(20);
@@ -426,9 +469,13 @@ function standard(s: Story): void {
     { deviceId: SEED_DEVICES[0].id, pmId: you.pmId, messageId: 1, ok: true, op: "pm.forward", deviceName: SEED_DEVICES[0].name, pmName: "柚子", conversationId: you.conversationId },
   ]);
   s.routerCommand("今天哪些项目经理在忙？", "answered", { intent: "answer", reply: "小林在等你定失败结果缓存多久；小周卡在 Antigravity 没登录；其余都空闲。", actions: [] });
+
+  // 置顶两个常用项目经理：左栏置顶组与窄条分隔线都有数据
+  s.ledger.setPmPinned(lin.pmId, true);
+  s.ledger.setPmPinned(qing.pmId, true);
 }
 
-/** 超长、超多：20 多个项目经理、长名字、长消息、Markdown、图表、300 条历史、多张图、十几个 Piece。 */
+/** 超长、超多：20 多个项目经理、长名字、长消息、Markdown、图表、300 条历史、多张图、十几个 Worker。 */
 function stress(s: Story): void {
   const long = s.pm("long", "一个名字特别特别长的项目经理用来测试左栏和顶栏会不会被撑开", s.repo("a-project-folder-with-an-unusually-long-name-for-layout-testing"));
   s.turn(long, "x".repeat(0) + "请把下面这段需求整理成一份清单：" + "用户反馈左栏名字太长时会把时间挤掉，右栏任务标题太长时会换三行。".repeat(6), ["好的，整理如下。" + "这是一段很长的回复，用来看消息气泡在长文本下的换行和行宽。".repeat(12)]);
@@ -459,13 +506,13 @@ function stress(s: Story): void {
   s.ids["graph.big"] = big.data.graph.id;
   s.ledger.hubCall(lin.sessionId, "graph.done", { graphId: big.data.graph.id, nodeKey: "a", summary: "需求齐了" });
   const qing = { pmId: s.ids["pm.qing"]!, conversationId: s.ids["c.qing"]!, sessionId: s.sessionOf(s.ids["c.qing"]!) };
-  // 历史任务图挂在阿青那边：右栏 Completed 组只在有收工 Piece 时出现（RightRail 的 completedGraphCount 在 App.tsx 里未传入）
+  // Historical graph and finished Workers under 阿青 so Completed tab has mixed items.
   const done = s.ledger.hubCall(qing.sessionId, "graph.create", { specJson: JSON.stringify({ title: "上周的发布", steps: [{ key: "ship", title: "发布 1.4" }] }) });
   s.ids["graph.done"] = done.data.graph.id;
   s.ledger.hubCall(qing.sessionId, "graph.done", { graphId: done.data.graph.id, nodeKey: "ship", summary: "发布完成" });
   s.ledger.hubCall(qing.sessionId, "graph.finish", { graphId: done.data.graph.id, summary: "1.4 发布完成", unmergedOk: true });
   for (let i = 1; i <= 13; i++) {
-    const w = s.worker(qing, undefined, `抓取任务 ${i}：一个比较长的 Piece 标题，用来看右栏会不会换行`, `处理第 ${i} 批站点。`, `第 ${i} 批做完了。`);
+    const w = s.worker(qing, undefined, `抓取任务 ${i}：一个比较长的 Worker 标题，用来看右栏会不会换行`, `处理第 ${i} 批站点。`, `第 ${i} 批做完了。`);
     if (i <= 4) s.ledger.hubCall(qing.sessionId, "worker.end", { workerId: w.id });
   }
   for (let i = 0; i < 3; i++) s.ledger.hubCall(qing.sessionId, "router.report", { summary: `第 ${i + 1} 批抓取完成，失败率 ${(0.5 + i * 0.2).toFixed(1)}%，详见报告。` });
@@ -599,6 +646,55 @@ async function pair(entry: IsolatedDaemon, peer: IsolatedDaemon): Promise<void> 
 
 /** 1×1 的灰色 PNG：附件里的“图片”。 */
 const TINY_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN8+P9/PQAJYwPhHnLkSgAAAABJRU5ErkJggg==", "base64");
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i]!;
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 4, "ascii");
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])), 0);
+  return Buffer.concat([head, data, crc]);
+}
+
+function makePreviewPng(bg: readonly [number, number, number], border: readonly [number, number, number], bar: readonly [number, number, number]): Buffer {
+  const w = 160;
+  const h = 96;
+  const raw = Buffer.alloc(h * (1 + w * 3));
+  for (let y = 0; y < h; y++) {
+    const row = y * (1 + w * 3);
+    raw[row] = 0;
+    for (let x = 0; x < w; x++) {
+      const edge = x < 4 || x >= w - 4 || y < 4 || y >= h - 4;
+      const header = !edge && y >= 14 && y < 26 && x >= 16 && x < 92;
+      const card = !edge && y >= 36 && y < 74 && x >= 16 && x < 144 && (y < 42 || y >= 68 || x < 22 || x >= 138);
+      const color = edge || card ? border : header ? bar : bg;
+      const idx = row + 1 + x * 3;
+      raw[idx] = color[0];
+      raw[idx + 1] = color[1];
+      raw[idx + 2] = color[2];
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 const MARKDOWN_SAMPLE = `## 1.5 发布说明
 

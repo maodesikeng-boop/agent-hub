@@ -1,3 +1,7 @@
+import { createCodexAppApprovalState } from "./app-approval.ts";
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
+import { checklistLaunchArgs } from "../_common/checklist.ts";
+import codexSpec from "./spec.ts";
 import {
   DriverError,
   type AgentSessionRow,
@@ -122,9 +126,11 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       if (input.recovery) st.recoveryNote = true;
       const proc = st.proc;
       if (proc && this.#canSteer(st, proc, entry)) {
-        const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
-        batch.midTurn = true;
-        const outcome = await this.#steer(st, proc, batch, entry);
+        const outcome = await this.steerWithCurrentCapabilities(st, proc, entry, () => this.#canSteer(st, proc, entry), () => {
+          const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
+          batch.midTurn = true;
+          return this.#steer(st, proc, batch, entry);
+        });
         if (outcome === "written") return { kind: "written", midTurn: true };
         if (outcome === "cancelled") return { kind: "cancelled" };
       } else {
@@ -239,8 +245,10 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const problem = checkCodexTurnText(batch.combinedText);
     if (problem) {
+      st.inFlight = st.inFlight.filter((b) => b !== batch);
       this.invalidInput(st, problem, batch.messageIds);
       this.afterTurn(st, proc);
       return;
@@ -248,6 +256,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     const row = this.row(st);
     const threadId = proc.threadId ?? row?.vendorSessionId;
     if (!threadId) {
+      st.inFlight = st.inFlight.filter((b) => b !== batch);
       this.invalidInput(st, "缺少 threadId", batch.messageIds);
       this.afterTurn(st, proc);
       return;
@@ -325,10 +334,16 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
         this.armStartTimer(st, proc);
         const outcome = await proc.ready;
         if (outcome.kind === "ok") {
+          if (st.ended || proc.closing || st.proc !== proc) {
+            this.dropBatch(st, batch);
+            if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
+            return;
+          }
           await this.writeBatch(st, proc, batch);
           return;
         }
         if (outcome.kind === "closed") {
+          if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
           if (outcome.reason === "interrupt") return;
           throw new DriverError(
             "spawn_failed",
@@ -365,9 +380,10 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     this.assertRunning();
     this.assertNotEnded(st);
     // macOS sandboxes cannot nest; read-only codex relies on its own readOnly sandbox instead.
-    const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
+    const wrapScope = launchConfig.readonly || files.outerSandbox === "vendor_only" ? null : (files.writeScope ?? null);
     const exePath = this.#resolveCodexPath();
-    const baseSpawn: SpawnCommand = { command: exePath, args: buildCodexArgs(files.capabilities) };
+    const args = [...checklistLaunchArgs(codexSpec), ...buildCodexArgs(files.capabilities)];
+    const baseSpawn: SpawnCommand = { command: exePath, args };
     const launch = this.#writeScopeSpawn
       ? this.#writeScopeSpawn(baseSpawn, wrapScope)
       : spawnInWriteScope("codex", baseSpawn, wrapScope, this.opts.log, `session ${st.id}`, this.#platform);
@@ -379,7 +395,12 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       files.env,
     );
     const { baseProc, resolveExited } = this.createBaseProc<StartupOutcome>(child, resume, row, files);
+    const gate = this.opts.appApprovals;
+    const computerUseServers = row.role === "worker" && !launchConfig.readonly && files.outerSandbox === "vendor_only" && gate !== undefined
+      ? (files.capabilities?.allow.mcp ?? []).filter((name) => codexSpec.capabilities.builtInSandbox?.computerUseCapabilities.includes(`mcp:${name}`))
+      : [];
     const proc: Proc = {
+      appApprovals: gate !== undefined && computerUseServers.length > 0 ? { gate, computerUseServers, state: createCodexAppApprovalState() } : null,
       ...baseProc,
       launchConfig,
       defaultModel,
@@ -503,6 +524,11 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
   ): void {
     try {
       const at = this.beginProcessClose(st, proc);
+      if (proc.appApprovals !== null) {
+        const { gate, state } = proc.appApprovals;
+        for (const wait of state.waits.values()) wait.abort();
+        gate.processEnded(st.id, state.processKey);
+      }
       st.turnUsageStepSeq = 0;
       st.lastTurnResultUsage = null;
       st.lastTurnContext = null;
@@ -549,7 +575,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
         st.crashNote = true;
         this.forgetWritten(st, taken);
       }
-      const stopped = reason === "interrupt" || st.stopRequested;
+      const cause = untakenReleaseCause(reason, st.stopRequested);
       st.interruptRequestId = null;
       st.stopRequested = false;
       this.emit(st.id, {
@@ -561,7 +587,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.releaseUntaken(st, missed, stopped, at);
+      this.releaseUntaken(st, missed, cause, at);
     } finally {
       this.resolveInterrupt(st);
       resolveExited();

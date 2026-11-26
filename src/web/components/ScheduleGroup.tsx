@@ -13,11 +13,12 @@ import {
 import { useClient } from "../device-scope.tsx";
 import { errorText, formatSchedule, nameError, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
-import { Input, Select, Textarea } from "../ui/input.tsx";
+import { Input, Textarea } from "../ui/input.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
+function ScheduleItem({ schedule, disabled }: { schedule: ScheduleRecord; disabled: boolean }) {
   const client = useClient();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -34,6 +35,7 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
     }
   };
   const now = Date.now();
+  const locked = busy || disabled;
   return (
     <SettingsRow
       label={schedule.name}
@@ -53,18 +55,18 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
       {(id) =>
         confirming ? (
           <>
-            <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
+            <Button variant="outline" size="sm" disabled={locked} onClick={() => setConfirming(false)}>
               Cancel
             </Button>
-            <Button size="sm" disabled={busy} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
+            <Button size="sm" disabled={locked} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
               {busy && <Loader2 aria-hidden="true" />}
               Delete
             </Button>
           </>
         ) : (
           <>
-            <Switch id={id} aria-label={`${schedule.name} enabled`} checked={schedule.enabled} disabled={busy} onCheckedChange={(on) => void run(() => client.putScheduleEnabled(schedule.id, on))} />
-            <Button variant="ghost" size="icon-sm" aria-label={`Delete ${schedule.name}`} disabled={busy} onClick={() => setConfirming(true)}>
+            <Switch id={id} aria-label={`${schedule.name} enabled`} checked={schedule.enabled} disabled={locked} onCheckedChange={(on) => void run(() => client.putScheduleEnabled(schedule.id, on))} />
+            <Button variant="ghost" size="icon-sm" aria-label={`Delete ${schedule.name}`} disabled={locked} onClick={() => setConfirming(true)}>
               <Trash2 aria-hidden="true" />
             </Button>
           </>
@@ -122,18 +124,28 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
       <SettingsRow label="Repeat" error={freqProblem}>
         {(id) => (
           <>
-            <Select id={id} aria-label="Repeat" value={kind} onChange={(e) => setKind(e.target.value as "daily" | "interval")}>
-              <option value="daily">Daily at</option>
-              <option value="interval">Every</option>
+            <Select value={kind} onValueChange={(next) => setKind(next as "daily" | "interval")}>
+              <SelectTrigger id={id} aria-label="Repeat" className="w-auto">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="daily">Daily at</SelectItem>
+                <SelectItem value="interval">Every</SelectItem>
+              </SelectContent>
             </Select>
             {kind === "daily" ? (
               <Input aria-label="Time" className="w-24 tabular-nums" placeholder="09:00" value={time} aria-invalid={freqProblem !== null} onChange={(e) => setTime(e.target.value)} />
             ) : (
               <>
                 <Input aria-label="Interval" inputMode="numeric" className="w-20 tabular-nums" value={every} aria-invalid={freqProblem !== null} onChange={(e) => setEvery(e.target.value)} />
-                <Select aria-label="Unit" value={unit} onChange={(e) => setUnit(e.target.value as Unit)}>
-                  <option value="minutes">minutes</option>
-                  <option value="hours">hours</option>
+                <Select value={unit} onValueChange={(next) => setUnit(next as Unit)}>
+                  <SelectTrigger aria-label="Unit" className="w-auto">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="minutes">minutes</SelectItem>
+                    <SelectItem value="hours">hours</SelectItem>
+                  </SelectContent>
                 </Select>
               </>
             )}
@@ -145,7 +157,7 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
           aria-label="Task"
           placeholder="Task"
           rows={3}
-          className="block max-h-[40vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 field-sizing-content focus-visible:ring-0"
+          className="block max-h-[40vh] min-h-24 resize-none border-0 bg-transparent px-4 py-3 field-sizing-content focus-visible:outline-none"
           value={prompt}
           aria-invalid={promptProblem !== null}
           onChange={(e) => setPrompt(e.target.value)}
@@ -172,25 +184,25 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
   );
 }
 
-export function ScheduleGroup({ pmId, schedules }: { pmId: number; schedules: ScheduleRecord[] }) {
+export function ScheduleGroup({ pmId, schedules, disabled = false }: { pmId: number; schedules: ScheduleRecord[]; disabled?: boolean }) {
   const [adding, setAdding] = useState(false);
   const full = schedules.length >= MAX_SCHEDULES_PER_PM;
   return (
-    <SettingsGroup title="Schedules">
+    <SettingsGroup label="Schedules">
       {schedules.map((s) => (
-        <ScheduleItem key={s.id} schedule={s} />
+        <ScheduleItem key={s.id} schedule={s} disabled={disabled} />
       ))}
-      {adding ? (
+      {adding && !disabled ? (
         <NewScheduleForm pmId={pmId} onClose={() => setAdding(false)} />
       ) : (
         <button
           type="button"
-          disabled={full}
-          className="flex min-h-13 w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-default disabled:hover:bg-transparent"
+          disabled={disabled || full}
+          className="flex min-h-13 w-full cursor-pointer items-center gap-2 rounded-none px-4 py-2 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
           onClick={() => setAdding(true)}
         >
           <Plus className="size-pixel text-muted-foreground" aria-hidden="true" />
-          <span className={full ? "text-muted-foreground" : undefined}>New</span>
+          <span className={disabled || full ? "text-muted-foreground" : undefined}>New</span>
           {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`${MAX_SCHEDULES_PER_PM} max`}</span>}
         </button>
       )}

@@ -1,0 +1,199 @@
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
+import {
+  SHELL_CHAT_MIN_REM,
+  SHELL_CHAT_USABLE_REM,
+  SHELL_FRAME_PX,
+  SHELL_GAP_PX,
+  SHELL_LIST_REM,
+  SHELL_PANEL_REM,
+  SHELL_RAIL_REM,
+} from "./limits.ts";
+import { DEFAULT_UI_SCALE, subscribeUiScale, UI_SCALE_ROOT_PX, type UiScale } from "./ui-scale.ts";
+import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
+
+// Invariant: widths are CSS px at the given root font size, except the conversation minimum, which its pane takes in rem; the
+// SHELL_* constants stay the single source of limits.
+
+/** How the desktop columns are arranged: all side by side, or the side panel covering the conversation. */
+export type ShellTier = "wide" | "stack";
+
+export interface PaneLimitsPx {
+  min: number;
+  default: number;
+  max: number;
+}
+
+export interface ShellLimitsPx {
+  rail: number;
+  list: PaneLimitsPx;
+  panel: PaneLimitsPx;
+  chatMin: number;
+  frame: number;
+  gap: number;
+}
+
+/** The desktop columns' arrangement and the conversation pane's minimum for one shell width. */
+export interface ShellFit {
+  tier: ShellTier;
+  chatMinRem: number;
+}
+
+export interface ShellFitInput {
+  /** Measured width of the whole desktop shell, rail included. */
+  shellWidthPx: number;
+  /** Root font size: 17.5 at the Default interface scale, 19 at Large. */
+  remPx: number;
+  /** Whether the side panel currently has content. */
+  panelOpen: boolean;
+}
+
+// jsdom does not apply styles.css, so its computed root size stays at the browser default whatever the scale.
+const BROWSER_DEFAULT_PX = 16;
+
+const safeRemPx = (remPx: number) => (remPx > 0 ? remPx : UI_SCALE_ROOT_PX[DEFAULT_UI_SCALE]);
+
+export function readRootRemPx(): number {
+  const fallback = UI_SCALE_ROOT_PX[DEFAULT_UI_SCALE];
+  if (typeof document === "undefined") return fallback;
+  const root = document.documentElement;
+  const inline = Number.parseFloat(root.style.fontSize);
+  if (Number.isFinite(inline) && inline > 0) return inline;
+  const scale = root.dataset.uiScale;
+  const mapped = scale !== undefined && scale in UI_SCALE_ROOT_PX ? UI_SCALE_ROOT_PX[scale as UiScale] : fallback;
+  const computed = Number.parseFloat(getComputedStyle(root).fontSize);
+  if (Number.isFinite(computed) && computed > 0 && (computed !== BROWSER_DEFAULT_PX || mapped === BROWSER_DEFAULT_PX)) return computed;
+  return mapped;
+}
+
+function measureShellWidth(el: HTMLElement | null): number | null {
+  if (!el) return null;
+  const width = el.getBoundingClientRect().width || el.clientWidth;
+  return width > 0 ? width : null;
+}
+
+/**
+ * Precondition: remPx > 0.
+ * Postcondition: returns the SHELL_* rem limits multiplied by remPx; frame and gap stay in px.
+ */
+export function shellLimitsPx(remPx: number): ShellLimitsPx {
+  const safeRem = safeRemPx(remPx);
+  return {
+    rail: SHELL_RAIL_REM * safeRem,
+    list: {
+      min: SHELL_LIST_REM.min * safeRem,
+      default: SHELL_LIST_REM.default * safeRem,
+      max: SHELL_LIST_REM.max * safeRem,
+    },
+    panel: {
+      min: SHELL_PANEL_REM.min * safeRem,
+      default: SHELL_PANEL_REM.default * safeRem,
+      max: SHELL_PANEL_REM.max * safeRem,
+    },
+    chatMin: SHELL_CHAT_MIN_REM * safeRem,
+    frame: SHELL_FRAME_PX,
+    gap: SHELL_GAP_PX,
+  };
+}
+
+/**
+ * Precondition: shellWidthPx >= 0 and remPx > 0.
+ * Postcondition: returns "stack" when panelOpen and the rail, the frame's right inset, the PM column at its minimum joined to
+ * the conversation at its minimum, the gap, and the side panel at its minimum do not fit side by side; otherwise "wide".
+ * The PM column never collapses; when even the closed-panel columns do not fit, the conversation narrows instead.
+ */
+export function shellTierOf({ shellWidthPx, remPx, panelOpen }: ShellFitInput): ShellTier {
+  if (!panelOpen) return "wide";
+  const limits = shellLimitsPx(remPx);
+  const need = limits.rail + limits.frame + limits.list.min + limits.chatMin + limits.gap + limits.panel.min;
+  return shellWidthPx >= need ? "wide" : "stack";
+}
+
+/**
+ * Precondition: shellWidthPx >= 0 and remPx > 0.
+ * Postcondition: returns SHELL_CHAT_MIN_REM when the conversation at that minimum fits beside the rail, the frame's right inset,
+ * and the PM column at its minimum; otherwise the whole px left there, in rem and never below 0. With this as the
+ * conversation's minimum, the PM column keeps its own minimum at every width and scale and the conversation narrows instead,
+ * down to SHELL_CHAT_USABLE_REM at sideBySideMinPx(), below which the workbench uses the single-column shell.
+ */
+export function chatMinRemOf({ shellWidthPx, remPx }: Pick<ShellFitInput, "shellWidthPx" | "remPx">): number {
+  const rem = safeRemPx(remPx);
+  const limits = shellLimitsPx(rem);
+  const leftPx = shellWidthPx - limits.rail - limits.frame - limits.list.min;
+  if (leftPx >= limits.chatMin) return SHELL_CHAT_MIN_REM;
+  // Whole px leave room for the resize library's rounded percentages, so the two minimums never sum past the group.
+  return Math.max(0, Math.floor(leftPx)) / rem;
+}
+
+/**
+ * Precondition: remPx > 0.
+ * Postcondition: returns the narrowest window, in px, that fits the rail, the frame's right inset, the PM column at its minimum,
+ * and the conversation at SHELL_CHAT_USABLE_REM side by side.
+ */
+export function sideBySideMinPx(remPx: number): number {
+  const limits = shellLimitsPx(remPx);
+  return limits.rail + limits.frame + limits.list.min + SHELL_CHAT_USABLE_REM * safeRemPx(remPx);
+}
+
+/** Postcondition: returns a media query that matches viewports narrower than sideBySideMinPx(remPx), in whole px. */
+export function narrowShellQueryOf(remPx: number): string {
+  return `(max-width: ${Math.ceil(sideBySideMinPx(remPx)) - 1}px)`;
+}
+
+/** Postcondition: returns the root font size in px, updated when the interface scale changes. */
+function useRootRemPx(): number {
+  const [remPx, setRemPx] = useState<number>(() => readRootRemPx());
+  useEffect(() => {
+    const syncScale = () => setRemPx(readRootRemPx());
+    syncScale();
+    const unsub = subscribeUiScale(syncScale);
+    const mo = new MutationObserver(syncScale);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-ui-scale", "style"] });
+    return () => {
+      unsub();
+      mo.disconnect();
+    };
+  }, []);
+  return remPx;
+}
+
+/**
+ * Precondition: called in a component.
+ * Postcondition: returns true while the workbench uses the single-column shell: on a touch screen whose short edge is under
+ * 600px, or in any window narrower than sideBySideMinPx() at the current interface scale.
+ */
+export function useMobileShell(): boolean {
+  const remPx = useRootRemPx();
+  const touch = useMediaQuery(MOBILE_SHELL_QUERY);
+  const narrow = useMediaQuery(narrowShellQueryOf(remPx));
+  return touch || narrow;
+}
+
+/**
+ * Precondition: called in a component; shell is the element that spans the whole desktop shell, or null before mount.
+ * Postcondition: returns shellTierOf and chatMinRemOf for the element's current width and the root font size, updated when the
+ * element resizes or the interface scale changes, as the same object while both values hold; while shell is null, the
+ * wide tier and SHELL_CHAT_MIN_REM.
+ */
+export function useShellFit(shell: HTMLElement | null, panelOpen: boolean): ShellFit {
+  const remPx = useRootRemPx();
+  const [widthPx, setWidthPx] = useState<number | null>(() => measureShellWidth(shell));
+
+  useLayoutEffect(() => {
+    setWidthPx(measureShellWidth(shell));
+    if (!shell || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (!entry) return;
+      const w = entry.contentRect.width;
+      // The resize library has already laid out this frame with the old conversation minimum; commit before it paints.
+      flushSync(() => setWidthPx(w > 0 ? w : measureShellWidth(shell)));
+    });
+    ro.observe(shell);
+    return () => ro.disconnect();
+  }, [shell]);
+
+  const tier = widthPx === null ? "wide" : shellTierOf({ shellWidthPx: widthPx, remPx, panelOpen });
+  const chatMinRem = widthPx === null ? SHELL_CHAT_MIN_REM : chatMinRemOf({ shellWidthPx: widthPx, remPx });
+  return useMemo(() => ({ tier, chatMinRem }), [tier, chatMinRem]);
+}

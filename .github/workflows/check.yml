@@ -189,18 +189,18 @@ jobs:
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: pnpm install --frozen-lockfile
 
-      - name: Cache Playwright Chromium
+      - name: Cache Playwright browsers
         id: cache-playwright
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-chromium-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-browsers-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Run pnpm verify
-        run: pnpm verify --out "$RUNNER_TEMP/verify-smoke"
+        run: pnpm verify --composer-layout --out "$RUNNER_TEMP/verify-smoke"
 
       - uses: actions/upload-artifact@v4
         if: always()

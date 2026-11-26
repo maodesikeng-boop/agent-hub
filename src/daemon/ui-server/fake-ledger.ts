@@ -21,9 +21,10 @@ import {
   type Change,
   type ChangeDataMap,
   type ChangesSince,
+  type CompletedCursor,
+  type CompletedWorkPage,
   type ConversationId,
   type ConversationsLookup,
-  type EndedWorkersPage,
   type WorkerId,
   type CreatePmInput,
   type CreatePmResult,
@@ -65,7 +66,6 @@ import {
   type LedgerSnapshot,
   type TaskGraph,
   type TaskGraphId,
-  type TaskGraphsPage,
   type TurnReplyView,
   type TaskNodeKey,
   type Unsubscribe,
@@ -153,10 +153,12 @@ export class FakeLedger {
   messages: Message[] = [];
   readonly posted: PostUserMessageInput[] = [];
   readonly stopped: ConversationId[] = [];
+  readonly endedWorkerConversations: ConversationId[] = [];
   readonly rewoundConversations: ConversationId[] = [];
   readonly messagesBeforeCalls: Array<{ conversationId: ConversationId; before: MessageId }> = [];
   readonly lookupCalls: Array<{ ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }> = [];
-  readonly endedWorkersCalls: Array<{ pmId: PmId; before: ConversationId | null }> = [];
+  readonly completedWorkCalls: Array<{ pmId: PmId; cursor: CompletedCursor | null; limit: number }> = [];
+  completedWorkPageValue: CompletedWorkPage = { items: [], total: 0, next: null };
   readonly changesSinceCalls: number[] = [];
   readonly createdPms: CreatePmInput[] = [];
   readonly personaReads: PmId[] = [];
@@ -170,6 +172,8 @@ export class FakeLedger {
   readonly archived: PmId[] = [];
   readonly unarchived: PmId[] = [];
   readonly lookCalls: Array<{ pmId: PmId; look: PmLookSetting }> = [];
+  readonly pinCalls: Array<{ pmId: PmId; pinned: boolean }> = [];
+  nextPinTimestamp = 1_000;
   readonly capabilityReads: CapabilityScope[] = [];
   readonly capabilityPatches: Array<{ scope: CapabilityScope; patch: CapabilitiesPatch }> = [];
   readonly capabilityResets: PmId[] = [];
@@ -193,7 +197,6 @@ export class FakeLedger {
   };
   routerDigestValue: DeviceRouterDigest = { generatedAt: 1, pms: [] };
   routerItemsPageValue: RouterItemsPage = { items: [], nextCursor: null, hasMore: false };
-  taskGraphsPageValue: TaskGraphsPage = { graphs: [], hasMore: false };
   readonly storedMessages = new Map<MessageId, Message>();
   readonly turnReplies = new Map<MessageId, TurnReplyView>();
   sentFileAllows: (sessionId: SessionId, realPath: string) => boolean = () => true;
@@ -259,6 +262,12 @@ export class FakeLedger {
     this.check();
     this.requireConversation(conversationId);
     this.stopped.push(conversationId);
+  }
+
+  endWorkerConversation(conversationId: ConversationId): void {
+    this.check();
+    this.requireConversation(conversationId);
+    this.endedWorkerConversations.push(conversationId);
   }
 
   rewindLastUserMessage(conversationId: ConversationId): Message | null {
@@ -413,6 +422,24 @@ export class FakeLedger {
     return pm;
   }
 
+  setPmPinned(pmId: PmId, pinned: boolean): Pm {
+    this.check();
+    this.pinCalls.push({ pmId, pinned });
+    const index = this.snapshotValue.pms.findIndex((p) => p.id === pmId);
+    if (index === -1) throw new LedgerRequestError("not_found", `没有编号 ${pmId} 的项目经理`);
+    const existing = this.snapshotValue.pms[index]!;
+    if (existing.archivedAt != null) throw new LedgerRequestError("conflict", "这个项目经理已归档，请先恢复");
+    const currentPinned = existing.pinnedAt ?? null;
+    const nextPinnedAt = pinned ? (currentPinned ?? this.nextPinTimestamp++) : null;
+    const changed = currentPinned !== nextPinnedAt;
+    const pm: Pm = { ...existing, pinnedAt: nextPinnedAt };
+    if (changed) {
+      this.snapshotValue = { ...this.snapshotValue, pms: this.snapshotValue.pms.with(index, pm) };
+      this.emitChange("pm.updated", { pm });
+    }
+    return pm;
+  }
+
   unarchivePm(pmId: PmId): Pm {
     this.check();
     this.unarchived.push(pmId);
@@ -449,11 +476,11 @@ export class FakeLedger {
     return { conversations: this.snapshotValue.conversations.filter((c) => ids.has(c.conversation.id)), sessions: [] };
   }
 
-  endedWorkersPage(pmId: PmId, before: ConversationId | null): EndedWorkersPage {
+  completedWork(pmId: PmId, cursor: CompletedCursor | null, limit: number): CompletedWorkPage {
     this.check();
-    this.endedWorkersCalls.push({ pmId, before });
-    if (!this.snapshotValue.pms.some((p) => p.id === pmId)) throw new LedgerRequestError("not_found", `没有编号 ${pmId} 的项目经理`);
-    return { conversations: [], sessions: [], nextBefore: null };
+    this.completedWorkCalls.push({ pmId, cursor, limit });
+    if (!this.snapshotValue.pms.some((p) => p.id === pmId)) throw new LedgerRequestError("not_found", `Unknown project manager ${pmId}`);
+    return this.completedWorkPageValue;
   }
 
   changesSince(seq: number): ChangesSince {
@@ -567,12 +594,6 @@ export class FakeLedger {
     return { commands: [], nextCursor: null, hasMore: false };
   }
 
-  listProjectTaskGraphs(projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage {
-    this.check();
-    this.taskGraphCalls.push({ call: "listHistory", args: [projectId, beforeId, limit] });
-    return this.taskGraphsPageValue;
-  }
-
   private makeTaskGraph(graphId: TaskGraphId, status: TaskGraph["status"] = "active"): TaskGraph {
     return {
       id: graphId,
@@ -615,13 +636,14 @@ export class FakeLedger {
     return {
       postUserMessage: (i) => this.postUserMessage(i),
       requestStop: (c) => this.requestStop(c),
+      endWorkerConversation: (c) => this.endWorkerConversation(c),
       rewindLastUserMessage: (c) => this.rewindLastUserMessage(c),
       composerTarget: unused("composerTarget"),
       snapshot: () => this.snapshot(),
       messagesBefore: (c, b) => this.messagesBefore(c, b),
       messagesAfter: unused("messagesAfter"),
       lookupConversations: (q) => this.lookupConversations(q),
-      endedWorkersPage: (p, b) => this.endedWorkersPage(p, b),
+      completedWork: (p, c, l) => this.completedWork(p, c, l),
       changesSince: (s) => this.changesSince(s),
       onChange: (l) => this.onChange(l),
       onStopRequested: unused("onStopRequested"),
@@ -657,6 +679,7 @@ export class FakeLedger {
       customizedCapabilityPms: () => this.customizedCapabilityPms(),
       setProjectSetupCommand: (id, command) => this.setProjectSetupCommand(id, command),
       setPmLook: (p, look) => this.setPmLook(p, look),
+      setPmPinned: (p, pinned) => this.setPmPinned(p, pinned),
       pmProjectMainFolder: (p) => this.pmProjectMainFolder(p),
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),
@@ -694,7 +717,6 @@ export class FakeLedger {
       archiveAllRouterReports: () => this.archiveAllRouterReports(),
       updateRouterSettings: (i) => this.updateRouterSettings(i),
       listRouterCommands: (c, l) => this.listRouterCommands(c, l),
-      listProjectTaskGraphs: (p, b, l) => this.listProjectTaskGraphs(p, b, l),
       decideTaskNode: (g, k, i) => this.decideTaskNode(g, k, i),
       skipTaskNode: (g, k, i) => this.skipTaskNode(g, k, i),
       cancelTaskGraph: (g, i) => this.cancelTaskGraph(g, i),
@@ -713,8 +735,6 @@ export class FakeLedger {
       recordReviewSnapshot: unused("recordReviewSnapshot"),
       getReviewVerifyTask: unused("getReviewVerifyTask"),
       onReviewVerified: unused("onReviewVerified"),
-      getReviewStampTask: unused("getReviewStampTask"),
-      onReviewStamped: unused("onReviewStamped"),
       syncPersonaFiles: unused("syncPersonaFiles"),
     };
   }

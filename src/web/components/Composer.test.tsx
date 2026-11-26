@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as shared from "../../shared/index.ts";
 import { App } from "../App.tsx";
 import * as composerSuggest from "../composer-suggest.ts";
@@ -39,30 +39,23 @@ const staging = (over: Partial<StagedFiles> = {}): StagedFiles => ({
 const setup = (over: Partial<StagedFiles> = {}) =>
   render(<Composer value="第一行\n第二行" placeholder="发消息" staging={staging(over)} onChange={() => {}} onSend={() => {}} />);
 
-// jsdom 没有 canvas：给量文字宽度的 getContext 一个假的（每个字 8px）
-const savedGetContext = HTMLCanvasElement.prototype.getContext;
-beforeEach(() => {
-  HTMLCanvasElement.prototype.getContext = (() => ({ font: "", measureText: (t: string) => ({ width: t.length * 8 }) })) as never;
-});
-afterEach(() => {
-  HTMLCanvasElement.prototype.getContext = savedGetContext;
-});
-
 describe("Composer 布局", () => {
-  it("“+”和发送键同尺寸、同圆角（36px、圆角 10px 的方块）；“+”是不带底色的 ghost 图标按钮（悬停才有浅底）；框是 rounded-xl 的方框", () => {
+  it("keeps + and Send the same 30px size: + is a ghost icon button in the body color with an 18px thin plus, Send a flat pastel square with a thin arrow", () => {
     setup();
     const attach = screen.getByRole("button", { name: "Add files" });
     const send = screen.getByRole("button", { name: "Send" });
-    expect(attach).toHaveClass("text-muted-foreground", "hover:bg-accent");
+    expect(attach).toHaveClass("text-foreground", "hover:bg-hover");
     expect(attach.className).not.toMatch(/(^|\s)bg-/);
-    for (const cls of ["size-9", "rounded-[10px]"]) {
-      expect(attach).toHaveClass(cls);
-      expect(send).toHaveClass(cls);
-    }
-    expect(attach.closest(".composer-frame")).toHaveClass("rounded-xl");
+    for (const el of [attach, send]) expect(el).toHaveClass("size-7.5", "rounded-sm");
+    expect(attach.querySelector("svg")).toHaveClass("size-4.5");
+    expect(attach.querySelector("svg")).toHaveAttribute("stroke-width", "1.5");
+    expect(send).toHaveClass("send-button");
+    expect(send.className).not.toMatch(/btn-solid|btn-honey/);
+    expect(send.querySelector("svg")).toHaveAttribute("stroke-width", "1.75");
+    expect(attach.closest(".composer-frame")).not.toBeNull();
   });
 
-  it("空输入框是单行：回形针、文字区、发送键在同一个网格行，从左到右排开", () => {
+  it("puts the empty draft on the top row across the frame, with + and Send on the row below", () => {
     const { container } = render(<Composer value="" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
     const frame = container.firstElementChild as HTMLElement;
     expect(frame).toHaveAttribute("data-multiline", "false");
@@ -71,13 +64,11 @@ describe("Composer 布局", () => {
     const send = screen.getByRole("button", { name: "Send" });
     expect(attach.parentElement).toBe(box.parentElement);
     expect(send.parentElement?.parentElement).toBe(box.parentElement);
-    for (const el of [attach, box, send.parentElement as HTMLElement]) expect(el).toHaveClass("row-start-1");
-    expect(attach).toHaveClass("col-start-1");
-    expect(box).toHaveClass("col-start-2");
-    expect(send.parentElement).toHaveClass("col-start-3");
-    expect(box).toHaveClass("min-h-9"); // 文字区 36px，和按钮同高，整条约 48px
-    expect(attach.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(box.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(box).toHaveClass("col-start-1", "col-end-4", "row-start-1", "h-10");
+    expect(attach).toHaveClass("col-start-1", "row-start-2");
+    expect(send.parentElement).toHaveClass("col-start-3", "row-start-2", "justify-self-end");
+    expect(box.compareDocumentPosition(attach) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(attach.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("有待发文件时按多行布局：文字区占满一行，回形针在左、发送在右落到下一行；文件小条在文字上方", () => {
@@ -86,7 +77,7 @@ describe("Composer 布局", () => {
     const box = screen.getByRole("textbox", { name: "Message" });
     const attach = screen.getByRole("button", { name: "Add files" });
     const send = screen.getByRole("button", { name: "Send" });
-    expect(box).toHaveClass("w-full", "col-span-3", "col-start-1", "row-start-1");
+    expect(box).toHaveClass("w-full", "col-end-4", "col-start-1", "row-start-1");
     expect(attach).toHaveClass("col-start-1", "row-start-2");
     expect(send.parentElement).toHaveClass("col-start-3", "row-start-2", "justify-self-end");
     const list = screen.getByRole("list", { name: "Files to send" });
@@ -100,88 +91,50 @@ describe("Composer 布局", () => {
     expect(icons[2]).not.toBe(icons[0]);
   });
 
-  it("待发文件列表和文字的左边距一致（文件条 20px，多行时文字区 12px + 外层 8px）", () => {
+  it("starts the pending files on the draft's text edge (files 16px, text 10px inside a 6px row inset)", () => {
     setup({ files: [{ key: "a", file: new File(["x"], "a.txt") }] });
-    expect(screen.getByRole("list", { name: "Files to send" })).toHaveClass("px-5");
+    expect(screen.getByRole("list", { name: "Files to send" })).toHaveClass("px-4");
     const box = screen.getByRole("textbox", { name: "Message" });
-    expect(box).toHaveClass("px-3");
-    expect(box.parentElement).toHaveClass("px-2");
+    expect(box).toHaveClass("px-2.5");
+    expect(box.parentElement).toHaveClass("px-1.5");
   });
 
-  describe("单行 ⇄ 多行切换（按 scrollHeight 判断，jsdom 里用假的排版数据）", () => {
-    let style: HTMLStyleElement;
-    const proto = HTMLTextAreaElement.prototype;
-    beforeEach(() => {
-      style = document.createElement("style");
-      style.textContent = "textarea { line-height: 24px; padding-top: 6px; padding-bottom: 6px; }";
-      document.head.append(style);
-      // 一行 36px（24 + 上下内边距）；有换行符或超过 40 个字符就算多行（模拟窄栏里自动换行）
-      Object.defineProperty(proto, "scrollHeight", {
-        configurable: true,
-        get(this: HTMLTextAreaElement) {
-          const text = this.value;
-          return text.includes("\n") ? 60 : text.length > 40 ? 60 : 36;
-        },
-      });
-      Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 600 });
-    });
-    afterEach(() => {
-      style.remove();
-      delete (proto as { scrollHeight?: number }).scrollHeight;
-      delete (proto as { clientWidth?: number }).clientWidth;
-    });
-    const view = (value: string) => <Composer value={value} placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />;
+  it("keeps the same textarea and its focus when a newline moves the controls down", () => {
+    const view = (value: string) => <Composer value={value} placeholder="Message" staging={staging()} onChange={() => {}} onSend={() => {}} />;
+    const { container, rerender } = render(view("One line"));
+    const box = screen.getByRole("textbox");
+    box.focus();
+    rerender(view("First line\nSecond line"));
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "true");
+    expect(screen.getByRole("textbox")).toBe(box);
+    expect(box).toHaveFocus();
+    expect(box).toHaveClass("col-start-1", "col-end-4");
+    expect(screen.getByRole("button", { name: "Add files" })).toHaveClass("row-start-2");
+    rerender(view("One line"));
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "false");
+    expect(box).toHaveFocus();
+  });
 
-    it("一行字仍是单行；有换行符或自动换行变多行，文字区占满一行、回形针和发送键落到下一行", () => {
-      const { container, rerender } = render(view("一行字"));
-      const frame = container.firstElementChild as HTMLElement;
-      const box = screen.getByRole("textbox", { name: "Message" });
-      expect(frame).toHaveAttribute("data-multiline", "false");
-      rerender(view("第一行\n第二行"));
-      expect(frame).toHaveAttribute("data-multiline", "true");
-      expect(box).toHaveClass("col-span-3", "row-start-1");
-      expect(screen.getByRole("button", { name: "Add files" })).toHaveClass("row-start-2");
-      expect(screen.getByRole("button", { name: "Send" }).parentElement).toHaveClass("row-start-2");
-      rerender(view("一".repeat(45)));
-      expect(frame).toHaveAttribute("data-multiline", "true");
-    });
-
-    it("切换时是同一个文字区节点（不重建，光标和焦点不丢）", () => {
-      const { rerender } = render(view("一行字"));
-      const box = screen.getByRole("textbox", { name: "Message" });
-      box.focus();
-      rerender(view("第一行\n第二行"));
-      expect(screen.getByRole("textbox", { name: "Message" })).toBe(box);
-      expect(box).toHaveFocus();
-    });
-
-    it("多行删回一行、放得进回形针和发送键中间时退回单行；清空也回单行", () => {
-      const { container, rerender } = render(view("第一行\n第二行"));
-      const frame = container.firstElementChild as HTMLElement;
-      expect(frame).toHaveAttribute("data-multiline", "true");
-      rerender(view("短"));
-      expect(frame).toHaveAttribute("data-multiline", "false");
-      rerender(view("第一行\n第二行"));
-      expect(frame).toHaveAttribute("data-multiline", "true");
-      rerender(view(""));
-      expect(frame).toHaveAttribute("data-multiline", "false");
-    });
-
-    it("宽度够一行、但放不进回形针和发送键中间的文字，留在多行（不来回切）", () => {
-      const { container, rerender } = render(view("第一行\n第二行"));
-      Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 100 });
-      rerender(view("一".repeat(30))); // 30 × 8 = 240 > 100
-      expect(container.firstElementChild).toHaveAttribute("data-multiline", "true");
-    });
-
-    it("切换布局时先把 height 重置成 auto 再量，不沿用旧布局的高度", () => {
-      const { rerender } = render(view("一行字"));
-      const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
-      rerender(view("第一行\n第二行"));
-      expect(box.style.height).toBe("60px");
-      rerender(view("短"));
-      expect(box.style.height).toBe("36px");
-    });
+  it("keeps the controls in place until composition ends and keeps the committed text", () => {
+    const onChange = vi.fn();
+    const onSend = vi.fn();
+    const staged = staging();
+    const view = (value: string) => <Composer value={value} placeholder="Message" staging={staged} onChange={onChange} onSend={onSend} />;
+    const { container, rerender } = render(view("草稿"));
+    const box = screen.getByRole("textbox");
+    box.focus();
+    fireEvent.compositionStart(box);
+    fireEvent.input(box, { target: { value: "草稿\n输入法" }, inputType: "insertCompositionText", isComposing: true });
+    expect(onChange).toHaveBeenLastCalledWith("草稿\n输入法");
+    rerender(view("草稿\n输入法"));
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box).toHaveValue("草稿\n输入法");
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "false");
+    fireEvent.compositionEnd(box, { data: "输入法" });
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "true");
+    expect(box).toHaveValue("草稿\n输入法");
+    expect(box).toHaveFocus();
   });
 
   it("停止键和发送键在同一个位置、同样大小（单行和多行都在按钮组里）", () => {
@@ -192,8 +145,8 @@ describe("Composer 布局", () => {
       );
       const btn = screen.queryByRole("button", { name: "Stop" });
       if (files.length === 0) {
-        expect(btn).toHaveClass("size-9", "rounded-[10px]");
-        expect(btn?.parentElement).toHaveClass("col-start-3", "row-start-1");
+        expect(btn).toHaveClass("size-7.5", "rounded-sm", "send-button");
+        expect(btn?.parentElement).toHaveClass("col-start-3", "row-start-2");
       } else {
         expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(); // 有待发文件：不是停止
       }
@@ -201,11 +154,11 @@ describe("Composer 布局", () => {
     }
   });
 
-  it("聚焦态写在 styles.css 的 .composer-frame（只多一团水果色模糊光晕，边框不变，不套圈）：外框不带 ring / 实心描边类，边框粗细不变，文字框自身无 focus ring，不用内联 <style>", () => {
+  it("聚焦态写在 styles.css 的 .composer-frame（Plain 2px 框聚焦只加深到 --border-focus，无光晕无套圈）：外框不带 ring / focus-within:，文字框自身无 focus ring，不用内联 <style>", () => {
     const { container } = setup();
     const frame = container.firstElementChild as HTMLElement;
-    expect(frame).toHaveClass("composer-frame", "border", "border-border");
-    expect(frame.className).not.toMatch(/border-primary|border-2|ring|focus-within:|0_0_0_3px/);
+    expect(frame).toHaveClass("composer-frame", "bg-background");
+    expect(frame.className).not.toMatch(/border-primary|border-2|ring|focus-within:|rounded-|0_0_0_3px/);
     expect(screen.getByRole("textbox", { name: "Message" }).className).not.toMatch(/ring/);
     expect(container.querySelector("style")).toBeNull();
   });
@@ -248,22 +201,6 @@ describe("Composer 布局", () => {
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute("readonly");
     expect(screen.getByRole("button", { name: "Add files" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-  });
-
-  it("继续往后打字时不把 height 先重置成 auto（避免多行时每次按键触发整页同步回流），删字或清空时才重置", () => {
-    const files = [{ key: "a", file: new File(["x"], "a.txt") }]; // 有待发文件：始终多行布局，布局切换不会插进来
-    const view = (value: string) => <Composer value={value} placeholder="发消息" staging={staging({ files })} onChange={() => {}} onSend={() => {}} />;
-    const { rerender } = render(view("第一行"));
-    const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
-    box.style.height = "80px";
-    Object.defineProperty(box, "scrollHeight", {
-      configurable: true,
-      get: () => (box.style.height === "auto" ? 36 : 80),
-    });
-    rerender(view("第一行继续打字"));
-    expect(box.style.height).toBe("80px");
-    rerender(view("第一"));
-    expect(box.style.height).toBe("36px");
   });
 
   it("文字框关闭系统自动拼写检查、自动纠错与自动大写（防 macOS AppleSpell 同步扫描卡顿）", () => {
@@ -480,23 +417,23 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.last.open());
-    const box = (await screen.findByRole("textbox", { name: "Message" })) as HTMLTextAreaElement;
+    const scope = hash?.startsWith("#/w/") ? await screen.findByRole("region", { name: /Worker / }) : await screen.findByRole("main");
+    const box = (await within(scope).findByRole("textbox", { name: "Message" })) as HTMLTextAreaElement;
     return { api, box, user: userEvent.setup() };
   };
   const labels = () => screen.queryAllByRole("option").map((o) => o.firstElementChild?.textContent);
   const posts = (api: FakeApi) => api.callsTo("POST", /\/messages$/);
 
-  it("Enter、Tab 一级一级选（不发送），没登录的厂商灰掉写 Not signed in，没装的不列；选完命令从文字里拿掉、变成标签", async () => {
+  it("Enter、Tab 一级一级选（不发送），只列可用厂商且末尾带 Add provider…；未登录与未安装不列；选完命令从文字里拿掉、变成标签", async () => {
     const { api, box, user } = await boot();
     await user.type(box, "/hub");
     expect(await screen.findByRole("option", { name: /\/hub:worker/ })).toBeInTheDocument();
     await user.keyboard("{Enter}");
     expect(box.value).toBe("/hub:worker ");
-    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     expect(screen.getByRole("listbox", { name: "Providers" })).toBeInTheDocument();
-    const signedOut = screen.getByRole("option", { name: /Antigravity/ });
-    expect(signedOut).toHaveAttribute("aria-disabled", "true");
-    expect(signedOut).toHaveTextContent("Not signed in");
+    expect(screen.queryByRole("option", { name: /Antigravity/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Codex/ })).toBeNull();
 
     await user.keyboard("{Tab}");
     expect(box.value).toBe("/hub:worker claude ");
@@ -513,6 +450,16 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(tag()).toHaveTextContent("Claude CodeOpusHigh");
     expect(posts(api)).toHaveLength(0);
+  });
+
+  it("在 /hub:worker 厂商列表点 Add provider…：清掉斜杠命令并打开 Settings → Providers", async () => {
+    const { box, user } = await boot();
+    await user.type(box, "/hub:worker ");
+    const addOpt = await screen.findByRole("option", { name: "Add provider…" });
+    await user.click(addOpt);
+    expect(box.value).toBe("");
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    expect(within(dialog).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
   });
 
   /** 打完整命令，最后一级 Enter 选中。 */
@@ -539,7 +486,9 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(chip.querySelector("svg")).toHaveClass("size-4", "text-muted-foreground");
     expect(chip.querySelector("svg")).toHaveAttribute("data-icon", "line");
     const li = chip.closest("li")!;
-    expect(li).toHaveClass("rounded-full", "bg-muted", "py-1", "pr-1", "pl-3", "text-minor");
+    // A chip is a flat paper fill with the chip radius: no outline inside the composer's frame.
+    expect(li).toHaveClass("rounded-xs", "bg-panel", "py-1", "pr-1", "pl-3", "text-minor");
+    expect(li.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     expect(li.parentElement).toHaveAccessibleName("Files to send");
     expect(li.parentElement!.firstElementChild).toBe(li);
     expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("touch-target", "size-6");
@@ -564,7 +513,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.click(tag());
     expect(box).toHaveFocus();
     expect(box.value.startsWith("/hub:worker ")).toBe(true);
-    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     await user.keyboard("{Enter}");
     await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
     await user.keyboard("{Enter}{Enter}"); // Default 模型、Default 档位
@@ -579,7 +528,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.type(box, "修一下登录");
     box.setSelectionRange(2, 2);
     await user.click(tag());
-    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     await user.keyboard("{Enter}"); // 选到模型级：/hub:worker claude \n修一下登录
     await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
     await user.keyboard("{Enter}"); // 选到档位级：/hub:worker claude default \n修一下登录
@@ -589,7 +538,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     // 再点标签：清掉 claude default，重新打开厂商列表
     await user.click(tag());
     expect(box.value).toBe("/hub:worker \n修一下登录");
-    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     await user.keyboard("{Enter}{Enter}{Enter}");
     expect(box.value).toBe("修一下登录");
     expect(box.selectionStart).toBe(2);
@@ -713,7 +662,8 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     const chips = await screen.findAllByRole("group", { name: "Worker model" });
     expect(chips).toHaveLength(1);
     expect(chips[0]!.textContent).toBe("Claude CodeHigh");
-    expect(chips[0]).toHaveClass("rounded-full", "bg-muted", "text-minor", "gap-2", "mb-1.5");
+    expect(chips[0]).toHaveClass("rounded-xs", "bg-panel", "text-minor", "gap-2", "mb-1.5");
+    expect(chips[0]!.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/);
     const bubble = screen.getByText("派人做");
     expect(chips[0]!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -723,25 +673,24 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.type(box, "/hub:worker claude ");
     await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
     await user.keyboard("{Backspace}");
-    expect(labels()).toEqual(["Claude Code"]);
+    expect(labels()).toEqual(["Claude Code", "Add provider…"]);
   });
 
   it("Esc 关列表，文字不动；不发送", async () => {
     const { api, box, user } = await boot();
     await user.type(box, "/hub:worker cl");
-    await waitFor(() => expect(labels()).toEqual(["Claude Code"]));
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Add provider…"]));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(box.value).toBe("/hub:worker cl");
     expect(posts(api)).toHaveLength(0);
   });
 
-  it("点不能选的厂商：不选、焦点留在输入框", async () => {
+  it("未登录与未安装的厂商不出现在 /hub:worker 列表里，搜索未登录厂商只保留 Add provider…", async () => {
     const { box, user } = await boot();
-    await user.type(box, "/hub:worker ");
-    const signedOut = await screen.findByRole("option", { name: /Antigravity/ });
-    await user.click(signedOut);
-    expect(box.value).toBe("/hub:worker ");
+    await user.type(box, "/hub:worker anti");
+    await waitFor(() => expect(labels()).toEqual(["Add provider…"]));
+    expect(screen.queryByRole("option", { name: /Antigravity/ })).toBeNull();
     expect(box).toHaveFocus();
   });
 
@@ -751,4 +700,17 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await act(async () => {});
     expect(screen.queryByRole("option", { name: /hub:worker|Claude Code/ })).toBeNull();
   });
+});
+
+it("does not read textarea height when editing or replacing a multiline draft", () => {
+  const staged = staging();
+  const view = (value: string) => <Composer value={value} placeholder="Message" staging={staged} onChange={() => {}} onSend={() => {}} />;
+  const { rerender } = render(view("First line\nSecond line\nThird line"));
+  const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+  const measure = vi.fn(() => 100);
+  Object.defineProperty(box, "scrollHeight", { get: measure });
+  rerender(view("First change\nSecond line\nThird line"));
+  rerender(view("One short line"));
+  expect(measure).not.toHaveBeenCalled();
+  expect(box.style.height).toBe("");
 });

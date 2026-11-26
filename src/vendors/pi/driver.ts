@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 // Lines split on \n only, so U+2028/U+2029 in JSONL never truncate a frame.
 import { randomUUID } from "node:crypto";
 import {
@@ -147,7 +148,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       if (input.recovery) st.recoveryNote = true;
       const proc = st.proc;
       if (proc && this.#canSteer(st, proc, entry)) {
-        const result = await this.#sendSteer(st, proc, entry);
+        const result = await this.steerWithCurrentCapabilities(st, proc, entry, () => this.#canSteer(st, proc, entry), () => this.#sendSteer(st, proc, entry));
         if (result === "written") return { kind: "written", midTurn: true };
         if (result === "cancelled") return { kind: "cancelled" };
       } else {
@@ -308,8 +309,10 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
+    if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const problem = checkPiTurnText(batch.combinedText);
     if (problem) {
+      st.inFlight = st.inFlight.filter((b) => b !== batch);
       this.invalidInput(st, problem, batch.messageIds);
       this.afterTurn(st, proc);
       return;
@@ -382,10 +385,16 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         this.armStartTimer(st, proc);
         const outcome = await proc.ready;
         if (outcome.kind === "ok") {
+          if (st.ended || proc.closing || st.proc !== proc) {
+            this.dropBatch(st, batch);
+            if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
+            return;
+          }
           await this.writeBatch(st, proc, batch);
           return;
         }
         if (outcome.kind === "closed") {
+          if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
           if (outcome.reason === "interrupt") return;
           throw new DriverError(
             "spawn_failed",
@@ -412,6 +421,8 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       log: this.opts.log,
       sessionLabel: `session ${st.id}`,
     });
+    this.assertRunning();
+    this.assertNotEnded(st);
     if (launch.readonlyFallbackWarning) {
       this.log(launch.readonlyFallbackWarning);
       this.emit(st.id, {
@@ -690,7 +701,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         st.crashNote = true;
         this.forgetWritten(st, taken);
       }
-      const stopped = reason === "interrupt" || st.stopRequested;
+      const cause = untakenReleaseCause(reason, st.stopRequested);
       st.stopRequested = false;
       st.turnInterrupted = false;
       this.emit(st.id, {
@@ -702,7 +713,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.releaseUntaken(st, untaken, stopped, at);
+      this.releaseUntaken(st, untaken, cause, at);
     } finally {
       this.resolveInterrupt(st);
       resolveExited();

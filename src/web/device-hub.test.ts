@@ -1,29 +1,40 @@
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, localClient, type HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
-import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, type StateSnapshot } from "../shared/index.ts";
+import { CHANGE_BUFFER_SIZE, CONVERSATION_LOOKUP_MAX_IDS, PRODUCT_NAME, WAITING_SETTLE_MS, WS_BURST_FRAME_LIMIT, WS_FRAME_BUDGET_MS, type DeviceInfo, type StateSnapshot } from "../shared/index.ts";
 import { encodeChangeStreamQuery, type ChangeCursor } from "../shared/change-stream.ts";
+import { ACCOUNT_QUERY_KEY, completedWorkKey, queryClient } from "./query-client.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
+import { useDeviceReminders } from "./notify.ts";
 import {
   FakeApi,
+  FakeNotification,
   FakeWebSocket,
   OTHER_BOOT_ID,
   TEST_BOOT_ID,
   healthChange,
+  installFakeNotification,
   installFakeWebSocket,
   makeConvSnapshot,
   makeHealth,
   makeMessage,
   makePm,
+  makeSession,
   makeSnapshot,
   makeUserMessage,
+  makeWorkerConversation,
   messageChange,
+  sessionChange,
+  setForeground,
 } from "./test-utils.ts";
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  Reflect.deleteProperty(document, "visibilityState");
 });
 
 const REMOTE = "0f0e0d0c-0b0a-4908-8706-050403020100";
@@ -52,9 +63,9 @@ function scriptedClient(device: string | null) {
 const socketsFor = (device: string | null) =>
   FakeWebSocket.instances.filter((ws) => new URL(ws.url).pathname.startsWith("/d/") === (device !== null));
 
-async function readyHub(device: string | null, snapshot: StateSnapshot) {
+async function readyHub(device: string | null, snapshot: StateSnapshot, qc?: QueryClient) {
   const scripted = scriptedClient(device);
-  const hub = new DeviceHub(device ?? LOCAL_DEVICE, scripted.client, () => {});
+  const hub = new DeviceHub(device ?? LOCAL_DEVICE, scripted.client, () => {}, qc);
   hub.start();
   scripted.requests[0]!.resolve(snapshot);
   await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
@@ -101,6 +112,41 @@ describe("DeviceHub change stream recovery", () => {
     next.push(healthChange(4, makeHealth()));
     expect(hub.state.seq).toBe(4);
     hub.dispose();
+  });
+
+  it("refreshes a pending history read and invalidates cached history only for the resynced device", async () => {
+    installFakeWebSocket();
+    const qc = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    const remoteHistory = completedWorkKey(REMOTE, 1);
+    const cachedHistory = completedWorkKey(REMOTE, 2);
+    const localHistory = completedWorkKey(LOCAL_DEVICE, 1);
+    for (const key of [cachedHistory, localHistory]) qc.setQueryData(key, []);
+
+    const { hub, requests } = await readyHub(REMOTE, makeSnapshot({ seq: 10, bootId: BOOT_A }), qc);
+    const queryFn = vi.fn<({ signal }: { signal: AbortSignal }) => Promise<number[]>>()
+      .mockImplementationOnce(({ signal }) => new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve([7]), { once: true });
+      }))
+      .mockResolvedValue([8]);
+    const observer = new QueryObserver(qc, { queryKey: remoteHistory, queryFn });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      expect(observer.getCurrentResult().isLoading).toBe(true);
+      expect(qc.getQueryState(cachedHistory)?.isInvalidated).toBe(false);
+      const socket = socketsFor(REMOTE).at(-1)!;
+      socket.open();
+      socket.push({ type: "resync" });
+      await vi.waitFor(() => expect(requests).toHaveLength(2));
+      requests[1]!.resolve(makeSnapshot({ seq: 20, bootId: BOOT_A }));
+
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual([8]));
+      expect(qc.getQueryState(cachedHistory)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(localHistory)?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+      hub.dispose();
+      qc.clear();
+    }
   });
 
   it("discards old socket frames and a late snapshot when a second restart races a resync", async () => {
@@ -318,30 +364,46 @@ describe("DeviceHub 按需拉取", () => {
     expect(api.calls.filter((c) => c.path === "/api/conversations/lookup")).toHaveLength(2);
     hub.dispose();
   });
-
-  it("loadEndedWorkers：请求在途时 resync 重置了翻页起点，迟到的旧页不并进状态、不跳过中间页", async () => {
-    const worker = (id: number) => makeConvSnapshot([], { conversation: { id, kind: "worker", pmId: 1, title: `W${id}` } });
-    const { api, hub } = await bootHub({ olderEndedWorkers: { 1: 40 } });
-    let release!: () => void;
-    api.endedWorkers = () =>
-      new Promise((resolve) => {
-        release = () => resolve({ status: 200, body: { conversations: [worker(39)], sessions: [], nextBefore: 20 } });
-      });
-    const loading = hub.loadEndedWorkers(1);
-    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
-    api.state = () => ({ status: 200, body: makeSnapshot({ seq: 5, pms: [makePm({ id: 1 })], olderEndedWorkers: { 1: 45 } }) });
-    FakeWebSocket.last.open();
-    FakeWebSocket.last.push({ type: "resync" });
-    await vi.waitFor(() => expect(hub.state.olderEndedWorkers).toEqual({ 1: 45 }));
-    release();
-    await loading;
-    expect(hub.state.olderEndedWorkers).toEqual({ 1: 45 });
-    expect(hub.state.conversations[39]).toBeUndefined();
-    hub.dispose();
-  });
 });
 
 describe("DevicesStore（zustand store 驱动）", () => {
+  it.each(["routed", "discovered"] as const)("invalidates only the updated project on a %s device", async (source) => {
+    const remote: DeviceInfo = { id: REMOTE, name: "Remote", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
+    installFakeWebSocket();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) =>
+      Response.json(String(input) === "/api/devices" ? { devices: [remote] } : makeSnapshot({ seq: 10 })),
+    ));
+    const qc = new QueryClient();
+    const remoteHistory = completedWorkKey(REMOTE, 1);
+    const otherProject = completedWorkKey(REMOTE, 2);
+    const localHistory = completedWorkKey(LOCAL_DEVICE, 1);
+    for (const key of [remoteHistory, otherProject, localHistory]) qc.setQueryData(key, { graphs: [], hasMore: false });
+
+    const store = new DevicesStore(undefined, source === "routed" ? REMOTE : undefined, undefined, qc);
+    try {
+      store.start();
+      await vi.waitFor(() => expect(socketsFor(REMOTE)).toHaveLength(1));
+      const socket = socketsFor(REMOTE)[0]!;
+      socket.open();
+      socket.push({
+        seq: 11,
+        type: "task_graph.updated",
+        data: {
+          graph: {
+            id: 7, projectId: 1, pmId: 1, conversationId: 1, title: "Release", status: "completed",
+            nodes: [], edges: [], originMsgId: null, createdAt: 1, updatedAt: 3, completedAt: 2,
+          },
+        },
+      });
+      expect(qc.getQueryState(remoteHistory)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(otherProject)?.isInvalidated).toBe(false);
+      expect(qc.getQueryState(localHistory)?.isInvalidated).toBe(false);
+    } finally {
+      store.dispose();
+      qc.clear();
+    }
+  });
+
   it("管理本机与远端设备列表，setDevices 增删远端 DeviceHub 并通过 zustand store 推送快照", () => {
     const store = new DevicesStore((key) => (key === LOCAL_DEVICE ? localClient : createClient(key)));
     const snapshots: number[] = [];
@@ -446,5 +508,245 @@ describe("DevicesStore（zustand store 驱动）", () => {
     expect(third.devices[1]!.info.link).toBe("lan");
 
     store.dispose();
+  });
+
+  it("account.updated 穿过 parseServerMessage 刷新本地账号查询与 DevicesStore 设备清单，并丢弃乱序的旧列表响应", async () => {
+    installFakeWebSocket();
+    const mac: DeviceInfo = { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
+    const tokyo: DeviceInfo = { id: REMOTE, name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
+    let devicesList: DeviceInfo[] = [mac];
+    let pendingList: ((devices: typeof devicesList) => void) | null = null;
+    let holdNextDevices = false;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = new URL(String(input), "http://127.0.0.1:1").pathname;
+        if (path === "/api/devices") {
+          if (holdNextDevices) {
+            holdNextDevices = false;
+            return new Promise<Response>((resolve) => {
+              pendingList = (devices) => resolve(Response.json({ devices }));
+            });
+          }
+          return Response.json({ devices: devicesList });
+        }
+        if (path.endsWith("/api/state")) return Response.json(makeSnapshot({ seq: 5, bootId: BOOT_A }));
+        return Response.json({ error: "not found" }, { status: 404 });
+      }),
+    );
+
+    queryClient.setQueryData(ACCOUNT_QUERY_KEY, { state: "signed_out", lastError: null });
+    const store = new DevicesStore();
+    store.start();
+    await vi.waitFor(() => expect(store.getSnapshot().listed).toBe(true));
+    await vi.waitFor(() => expect(socketsFor(null)).toHaveLength(1));
+    socketsFor(null).at(-1)!.open();
+
+    // 1) Hold an older refresh in flight, then push account.updated so a newer refresh starts and wins.
+    holdNextDevices = true;
+    const staleRefresh = store.refresh();
+    await vi.waitFor(() => expect(pendingList).not.toBeNull());
+    devicesList = [mac, tokyo];
+    socketsFor(null).at(-1)!.push({ type: "account.updated" });
+    await vi.waitFor(() => expect(store.getSnapshot().devices.map((d) => d.key)).toEqual([LOCAL_DEVICE, REMOTE]));
+    expect(queryClient.getQueryState(ACCOUNT_QUERY_KEY)?.isInvalidated).toBe(true);
+
+    // Resolving the older in-flight /api/devices response must not revert the newer device list.
+    pendingList!([mac]);
+    await staleRefresh;
+    expect(store.getSnapshot().devices.map((d) => d.key)).toEqual([LOCAL_DEVICE, REMOTE]);
+
+    // 2) Reconnecting the local stream also invalidates account and refreshes devices in case an account.updated frame was missed while offline.
+    await vi.waitFor(() => expect(socketsFor(REMOTE)).toHaveLength(1));
+    socketsFor(REMOTE).at(-1)!.open();
+    queryClient.setQueryData(ACCOUNT_QUERY_KEY, { state: "signed_out", lastError: null });
+    devicesList = [mac, { ...tokyo, name: "东京新机" }];
+    socketsFor(null).at(-1)!.drop();
+    window.dispatchEvent(new Event("online"));
+    await vi.waitFor(() => expect(socketsFor(null)).toHaveLength(2));
+    socketsFor(null).at(-1)!.open();
+    await vi.waitFor(() => expect(store.getSnapshot().devices[1]?.info.name).toBe("东京新机"));
+    expect(queryClient.getQueryState(ACCOUNT_QUERY_KEY)?.isInvalidated).toBe(true);
+
+    store.dispose();
+  });
+
+  it("DeviceHub 按帧合并 WebSocket 突发变更：单帧超过次数/预算后延后到下一 rAF 一次通知", async () => {
+    installFakeWebSocket();
+    const rafQueue: Array<() => void> = [];
+    let rafId = 1;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafQueue.push(() => cb(0));
+      return rafId++;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+
+    const scripted = scriptedClient(null);
+    const onChange = vi.fn();
+    const hub = new DeviceHub(LOCAL_DEVICE, scripted.client, onChange);
+    hub.start();
+    scripted.requests[0]!.resolve(makeSnapshot({ seq: 1, bootId: BOOT_A }));
+    await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+    socketsFor(null).at(-1)!.open();
+
+    // Flush frameResetRaf queued by start/snapshot if any before counting burst calls
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    onChange.mockClear();
+
+    const ws = socketsFor(null).at(-1)!;
+    const total = WS_BURST_FRAME_LIMIT + 6;
+    for (let i = 1; i <= total; i++) {
+      ws.push(healthChange(1 + i, makeHealth({ lastError: `err-${i}` })));
+    }
+    expect(onChange.mock.calls.length).toBeLessThanOrEqual(WS_BURST_FRAME_LIMIT);
+    expect(hub.state.health.at(-1)?.lastError).toBe(`err-${total}`);
+
+    const beforeFlush = onChange.mock.calls.length;
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    expect(onChange.mock.calls.length).toBeGreaterThan(beforeFlush);
+
+    // Budget exceeded on first commit coalesces remaining changes within the frame
+    let nowStep = 1000;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => nowStep);
+    onChange.mockImplementation(() => {
+      nowStep += WS_FRAME_BUDGET_MS + 2;
+    });
+    onChange.mockClear();
+    ws.push(healthChange(100, makeHealth({ lastError: "budget-1" })));
+    ws.push(healthChange(101, makeHealth({ lastError: "budget-2" })));
+    ws.push(healthChange(102, makeHealth({ lastError: "budget-3" })));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    expect(onChange).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
+    hub.dispose();
+  });
+
+  it("隐藏页面（visibilityState === 'hidden'）rAF 挂起时，连续推送超过 WS_BURST_FRAME_LIMIT 条变更仍正常触发 onChange 与后台通知", async () => {
+    const T0 = 1_000_000;
+    installFakeWebSocket();
+    installFakeNotification("granted");
+    localStorage.clear();
+    document.title = PRODUCT_NAME;
+    setForeground(false);
+
+    const rafQueue: Array<() => void> = [];
+    let rafId = 1;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafQueue.push(() => cb(0));
+      return rafId++;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+
+    const scripted = scriptedClient(null);
+    let onChangeCalls = 0;
+    let rerenderReminders: ((props: { state: DeviceHub["state"] }) => void) | null = null;
+    const hub = new DeviceHub(LOCAL_DEVICE, scripted.client, () => {
+      onChangeCalls++;
+      rerenderReminders?.({ state: hub.state });
+    });
+    hub.start();
+    scripted.requests[0]!.resolve(
+      makeSnapshot({
+        seq: 1,
+        bootId: BOOT_A,
+        pms: [makePm({ id: 1, name: "小林" })],
+        conversations: [
+          makeConvSnapshot([makeUserMessage({ id: 1, conversationId: 1, createdAt: T0 - 5_000 })], {
+            conversation: { id: 1, pmId: 1, title: "小林" },
+          }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30 }) }),
+        ],
+        sessions: [
+          makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "working" }),
+          makeSession({ sessionId: 3, conversationId: 30, activity: "working" }),
+        ],
+      }),
+    );
+    await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+    socketsFor(null).at(-1)!.open();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const { rerender } = renderHook(
+      ({ state }) => useDeviceReminders([{ key: LOCAL_DEVICE, name: "本机", state }], null, () => {}),
+      { initialProps: { state: hub.state } },
+    );
+    rerenderReminders = rerender;
+
+    onChangeCalls = 0;
+    const ws = socketsFor(null).at(-1)!;
+    const burstCount = WS_BURST_FRAME_LIMIT + 3;
+    let seq = 1;
+    for (let i = 1; i <= burstCount; i++) {
+      ws.push(
+        sessionChange(
+          ++seq,
+          makeSession({ sessionId: 3, conversationId: 30, activity: "working", currentTool: `tool-${i}`, lastEventAt: T0 + i }),
+        ),
+      );
+    }
+    ws.push(messageChange(++seq, "message.created", makeMessage({ id: 2, conversationId: 1, text: "已处理完", createdAt: T0 + 100 })));
+    ws.push(sessionChange(++seq, makeSession({ sessionId: 3, conversationId: 30, activity: "idle", lastEventAt: T0 + 101 })));
+    ws.push(sessionChange(++seq, makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "idle", lastEventAt: T0 + 102 })));
+
+    expect(rafQueue).toHaveLength(0);
+    expect(onChangeCalls).toBe(burstCount + 3);
+
+    act(() => {
+      vi.advanceTimersByTime(WAITING_SETTLE_MS);
+    });
+    expect(FakeNotification.instances).toHaveLength(1);
+    expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
+
+    hub.dispose();
+  });
+
+  it("可见态突发排队 notifyRaf 后切到隐藏态，visibilitychange 立即冲刷挂起通知并继续即时通知", async () => {
+    installFakeWebSocket();
+    setForeground(true);
+
+    const rafQueue: Array<() => void> = [];
+    let rafId = 1;
+    const cancelled = new Set<number>();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      const id = rafId++;
+      rafQueue.push(() => {
+        if (!cancelled.has(id)) cb(0);
+      });
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      cancelled.add(id);
+    });
+
+    const scripted = scriptedClient(null);
+    const onChange = vi.fn();
+    const hub = new DeviceHub(LOCAL_DEVICE, scripted.client, onChange);
+    hub.start();
+    scripted.requests[0]!.resolve(makeSnapshot({ seq: 1, bootId: BOOT_A }));
+    await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+    socketsFor(null).at(-1)!.open();
+
+    while (rafQueue.length > 0) rafQueue.shift()!();
+    onChange.mockClear();
+
+    const ws = socketsFor(null).at(-1)!;
+    for (let i = 1; i <= WS_BURST_FRAME_LIMIT + 2; i++) {
+      ws.push(healthChange(1 + i, makeHealth({ lastError: `visible-${i}` })));
+    }
+    expect(onChange).toHaveBeenCalledTimes(WS_BURST_FRAME_LIMIT);
+    expect(rafQueue.length).toBeGreaterThan(0);
+
+    setForeground(false);
+    expect(onChange).toHaveBeenCalledTimes(WS_BURST_FRAME_LIMIT + 1);
+
+    ws.push(healthChange(100, makeHealth({ lastError: "hidden-after" })));
+    expect(onChange).toHaveBeenCalledTimes(WS_BURST_FRAME_LIMIT + 2);
+    expect(hub.state.health.at(-1)?.lastError).toBe("hidden-after");
+
+    hub.dispose();
   });
 });

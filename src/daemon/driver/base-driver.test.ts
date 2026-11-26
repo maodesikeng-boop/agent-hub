@@ -202,7 +202,7 @@ class DummyDriver extends BaseSessionDriver<DummyProc, DummyBatch, DummyState> {
     this.dropBatch(this.state(id), batch);
   }
   exposeReleaseUntaken(id: SessionId, batches: DummyBatch[], stopped: boolean, at: number): void {
-    this.releaseUntaken(this.state(id), batches, stopped, at);
+    this.releaseUntaken(this.state(id), batches, stopped ? "user_stop" : "turn_end", at);
   }
   exposePushUsage(id: SessionId, input: number): void {
     this.pushUsage(this.state(id), { ...EMPTY_TOKEN_USAGE, input });
@@ -350,7 +350,7 @@ describe("BaseSessionDriver 公共状态机", () => {
     const st = driver.exposeState(1);
     st.recoveryNote = true;
     st.crashNote = true;
-    st.relaunchNote = true;
+    st.relaunchNote = RELAUNCH_NOTE;
     st.killedNote = backgroundTasksKilledNote("relaunch", ["sleep 10"]);
     st.pending.push({ messageIds: [10], source: "user", text: "干活", prefixes: ["【用户前缀】"], resend: false });
 
@@ -366,7 +366,7 @@ describe("BaseSessionDriver 公共状态机", () => {
     ]);
     expect(st.recoveryNote).toBe(false);
     expect(st.crashNote).toBe(false);
-    expect(st.relaunchNote).toBe(false);
+    expect(st.relaunchNote).toBeNull();
     expect(st.killedNote).toBeNull();
     expect(st.preambleTaken).toBe(true);
     expect(st.personaSeen).toBe(2);
@@ -386,7 +386,7 @@ describe("BaseSessionDriver 公共状态机", () => {
     driver.exposeDropBatch(1, batch);
     expect(st.recoveryNote).toBe(true);
     expect(st.crashNote).toBe(true);
-    expect(st.relaunchNote).toBe(true);
+    expect(st.relaunchNote).toBe(RELAUNCH_NOTE);
     expect(st.killedNote).toBe(backgroundTasksKilledNote("relaunch", ["sleep 10"]));
     expect(preambleRestored).toBe(true);
     expect(personaRestored).toBe(true);
@@ -503,5 +503,49 @@ describe("BaseSessionDriver 公共状态机", () => {
     });
     expect(() => driver.exposeEmit(1, { type: "turn.started", at: 123 })).not.toThrow();
     expect(events.map((e) => e.type)).toEqual(["turn.started", "driver.error"]);
+  });
+
+  it("isBusy / markEnding / onSessionQuiescent：冷启动和投递准备期间占忙，结束后回调，markEnding 立即丢弃排队消息", async () => {
+    const { store } = makeMemoryStore();
+    const quiescent: SessionId[] = [];
+    let releasePrepare!: () => void;
+    let enteredPrepare!: () => void;
+    const prepareGate = new Promise<void>((r) => (releasePrepare = r));
+    const prepareEntered = new Promise<void>((r) => (enteredPrepare = r));
+    let calls = 0;
+
+    const driver = new DummyDriver({
+      store,
+      interruptGraceMs: 30,
+      onSessionQuiescent: (id) => quiescent.push(id),
+      prepareLaunch: async () => {
+        calls++;
+        if (calls === 1) {
+          enteredPrepare();
+          await prepareGate;
+        }
+        return dummyLaunchFiles();
+      },
+    });
+
+    expect(driver.isBusy(1)).toBe(false);
+    const starting = driver.start(1);
+    await prepareEntered;
+    expect(driver.isBusy(1)).toBe(true);
+    expect(quiescent).toEqual([]);
+
+    releasePrepare();
+    await starting;
+    expect(driver.isBusy(1)).toBe(false);
+    expect(quiescent).toEqual([1]);
+
+    // markEnding synchronously marks ended and clears st.pending so later send throws session_ended.
+    const st = driver.exposeState(1);
+    st.pending.push({ messageIds: [99], source: "user", text: "queued", prefixes: [], resend: false });
+    driver.markEnding(1);
+    expect(st.ended).toBe(true);
+    expect(st.pending).toEqual([]);
+    await expect(driver.send(1, { messageIds: [100], source: "user", text: "late" })).rejects.toThrow(/session_ended/);
+    await driver.end(1);
   });
 });

@@ -9,6 +9,7 @@ import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { formatTime } from "../format.ts";
 import type { RouterTurnDestination } from "../router-stream.ts";
 import { AgentHead, AgentText, CopyButton, SECONDARY } from "./Messages.tsx";
+import { StatusShimmer } from "./StatusShimmer.tsx";
 
 export const ForwardReply = memo(function ForwardReply({
   dest,
@@ -31,7 +32,7 @@ export const ForwardReply = memo(function ForwardReply({
       <AgentHead identity={identity} onClick={() => onOpenConversation(dest.deviceKey, dest.conversationId)} />
       {state.kind === "waiting" && (
         <div className={SECONDARY}>
-          <span className="status-shimmer">Working…</span>
+          <StatusShimmer text="Working…" />
         </div>
       )}
       {state.kind === "replied" && (

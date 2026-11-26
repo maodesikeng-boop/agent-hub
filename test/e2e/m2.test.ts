@@ -586,10 +586,10 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     env = makeEnv();
     const { daemon, client, privateId } = await boot();
     await warmUp(client, privateId);
-    const [proc] = env.argvs();
-    expect((await env.runHub(proc!.pid, ["status"])).code).toBe(0);
+    const proc = lastProcOf(sessionsOf(await client.state(), privateId)[0]!.sessionId);
+    expect((await env.runHub(proc.pid, ["status"])).code).toBe(0);
     await terminate(daemon);
-    const result = await env.runHub(proc!.pid, ["status"]);
+    const result = await env.runHub(proc.pid, ["status"]);
     expect(result.code).toBe(3);
     expect(result.stderr).toContain(LOCAL_ERRORS.network.text);
   });
@@ -635,7 +635,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expectSockReplaced(sockIno);
     expect(statSync(hubSock()).mode & 0o777).toBe(0o600);
     await warmUp(client, first.privateId, "还在吗");
-    const proc = env.argvs().at(-1)!;
+    const proc = lastProcOf(sessionsOf(await client.state(), first.privateId)[0]!.sessionId);
     const result = await env.runHub(proc.pid, ["status"]);
     expect(result.code).toBe(0);
     await terminate(daemon);
@@ -645,7 +645,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     env = makeEnv();
     const { daemon, client, privateId } = await boot();
     await warmUp(client, privateId);
-    const token = tokenOf(env.argvs()[0]!.pid);
+    const token = tokenOf(lastProcOf(sessionsOf(await client.state(), privateId)[0]!.sessionId).pid);
     const socket = connect(hubSock());
     await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
     const t0 = Date.now();

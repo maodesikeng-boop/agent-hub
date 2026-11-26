@@ -1,4 +1,5 @@
-import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, userMessageDedupeKey } from "../../../shared/domain.ts";
+import { systemWakeupKey } from "../system-wakeups.ts";
+import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION } from "../../../shared/domain.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -12,12 +13,13 @@ import type {
 } from "../../../shared/domain.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
-import type { Pending } from "../context.ts";
+import { fail, type Pending } from "../context.ts";
+import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { formatStepWaitingPmMessage } from "../task-graph-handoff.ts";
 import { stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
 import { artifactWithoutCheckpoint, hasText, isStoredCheckpoint, workerIdsOf } from "./rows.ts";
-import { buildGraphMaps, isGraphAllSettled, loadGraph, publishGraphIn, stepPosition, touchGraph } from "./store.ts";
+import { buildGraphMaps, hasPendingStepAsk, isGraphAllSettled, loadGraph, publishGraphIn, stepPosition, touchGraph } from "./store.ts";
 import { formatCheckpointRejectionMessage, formatWorkerDecisionMessage, turnedListText } from "./text.ts";
 import { emptyProgress, type ProgressResult, type TaskGraphCtx, type TaskGraphDbRow, type TaskNodeDbRow } from "./types.ts";
 
@@ -25,7 +27,10 @@ export const workerDecisionDedupeKey = (workerId: WorkerId, graphId: TaskGraphId
   `pm:worker:${workerId}:gate-decide:${graphId}:${nodeKey}:${dedupeId}`;
 
 export const gateDecideWakeupKey = (conversationId: ConversationId, graphId: TaskGraphId, nodeKey: TaskNodeKey, clientId: string): string =>
-  userMessageDedupeKey(conversationId, `gate-decide:${graphId}:${nodeKey}:${clientId}`);
+  systemWakeupKey(conversationId, "task_graph", gateDecideWakeupRef(graphId, nodeKey, clientId));
+
+const gateDecideWakeupRef = (graphId: TaskGraphId, nodeKey: TaskNodeKey, clientId: string): string =>
+  `gate-decide:${graphId}:${nodeKey}:${clientId}`;
 
 interface DecisionInput {
   choice: string | null;
@@ -73,9 +78,10 @@ function settleAnsweredIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, chosenO
 function wakePmWaitingIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, reasonLabel: string, detailBody: string): MessageId | null {
   const { graphRow, node } = run;
   if (run.input.decidedBy !== "user") return null;
-  const wake = g.messages.enqueueWakeupUserMessageIn(p, {
+  const wake = g.messages.enqueueWakeupIn(p, {
     conversationId: graphRow.conversation_id,
-    dedupeKey: gateDecideWakeupKey(graphRow.conversation_id, graphRow.id, node.node_key, run.dedupeId),
+    source: "task_graph",
+    ref: gateDecideWakeupRef(graphRow.id, node.node_key, run.dedupeId),
     text: formatStepWaitingPmMessage({
       graph: { id: graphRow.id, title: graphRow.title },
       step: { key: node.node_key, title: node.title, ...stepPosition(g.db, graphRow.id, node.node_key) },
@@ -214,9 +220,10 @@ function wakePmAfterSettleIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, grap
   wakeLines.push(`轮到了：${turnedListText(progress.turned)}`);
   const forPm = progress.turned.find((u) => u.waitingFor === "pm");
   if (forPm !== undefined) wakeLines.push(`给它派 Worker 用 ${HUB_COMMAND} worker start --node ${forPm.key} --graph ${graph.id}`);
-  return g.messages.enqueueWakeupUserMessageIn(p, {
+  return g.messages.enqueueWakeupIn(p, {
     conversationId: graph.conversationId,
-    dedupeKey: gateDecideWakeupKey(graph.conversationId, graphRow.id, node.node_key, run.dedupeId),
+    source: "task_graph",
+    ref: gateDecideWakeupRef(graphRow.id, node.node_key, run.dedupeId),
     text: wakeLines.join("\n"),
   }).id;
 }
@@ -242,9 +249,10 @@ function settleStepIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, upsDone: bo
 }
 
 export function executeStepDecisionIn(g: TaskGraphCtx, p: Pending, graphRow: TaskGraphDbRow, node: TaskNodeDbRow, input: DecisionInput): DecisionResult {
+  if (sandboxApprovalPendingForStep(g.db, node.id)) throw fail("conflict", "只能由用户在工作台确认 Worker 沙箱");
   const t = g.now();
   const run: DecisionRun = { graphRow, node, input, t, dedupeId: input.clientId ?? `pm:${t}:${node.id}` };
-  if (isStoredCheckpoint(node)) {
+  if (isStoredCheckpoint(node) && hasPendingStepAsk(g, node)) {
     return input.choice === CONFIRM_PASS_OPTION ? passCheckpointIn(g, p, run) : rejectCheckpointIn(g, p, run);
   }
   const questionText = (node.gate_question ?? node.title).trim();

@@ -1,5 +1,5 @@
 import { ASK_CARD_WHERE, TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./hub.ts";
-import { REVIEW_MAX_ROUNDS, TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
+import { TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
 import { HUB_COMMAND as HUB } from "./names.ts";
 import { skillNameOf } from "./skill-names.ts";
 
@@ -12,16 +12,6 @@ export function isInternalSkillCommand(name: string): boolean {
 export const TASK_GRAPH_SKILL_DESCRIPTION =
   `Bellwood 任务图手册。要用 ${HUB} graph 建图或改图、排自动交棒步骤、加独立审查步骤、处理偏离或换人接手、挂拍板卡之前，先加载。一段就能做完的活不建图，不用加载。`;
 
-export const PM_REVIEW_REDLINES: readonly string[] = [
-  "撤不回来的副作用或安全边界：数据迁移、覆写用户配置、杀进程、沙箱、鉴权；",
-  "异步、并发、生命周期；",
-  "会随时间变多的缓存、快照、分页，或多方共用的数据格式；",
-  "本地草稿和远端状态互相覆盖的交互。",
-];
-
-export const PM_REVIEW_REDLINES_BRIEF =
-  "撤不回来的副作用或安全边界；异步、并发、生命周期；会随时间变多的缓存、快照、分页，或多方共用的数据格式；本地草稿和远端状态互相覆盖";
-
 export function taskGraphSkillBody(): string {
   return `# 任务图手册
 
@@ -29,17 +19,15 @@ export function taskGraphSkillBody(): string {
 
 ## 建图
 用 \`${HUB} graph create\` 一次写下整张图的 \`goal\`（总目标）和 \`steps\`（步骤数组），带 \`brief\` 的就绪步骤建好即自动开工。
-- **总目标（\`goal\`）要写全**：所有步骤共用同一份 \`goal\`，写清用户原话、背景、不做什么、怎么算做完（写成能核对的证据：测试命令、截图、实测输出；按项目自己的验证方式写要在本机跑的检查，有测试的写明跑所有受改动影响的测试（含间接用到被改文件的别处测试），项目要求等云端检查的写上检查全绿；要用户看的方案、验收结论、截图、录屏写进汇报的“文件”栏，会跟着步骤挂到检查点卡和总助上）；长材料存成文件给路径。
+- **总目标（\`goal\`）要写全**：所有步骤共用同一份 \`goal\`，写清用户原话、背景、不做什么、怎么算做完（写成能核对的证据：按项目自己的验证方式写清要核对的测试、截图、实测输出或云端检查；要用户看的方案、验收结论、截图、录屏写进汇报的“文件”栏，会跟着步骤挂到检查点卡和总助上）；长材料存成文件给路径。
 - **一张图只装一件事**：互不相干的几件事各建一张图。
 - **按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。写测试、改代码、截图（项目要提 PR 的连同提 PR）是同一步，一个 Worker 一口气做完。只在三种时候另起一步：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。
 - **默认一条线，同线共用工作目录和分支**：\`steps\` 里不写 \`deps\` 默认按书写顺序串成一条线；单线上下游默认接手同一个 git worktree 和同一条分支（不用重跑准备命令，未提交改动也在；要提 PR 的整条线共用一个）。互不依赖的活才并行（写 \`deps: []\` 或前置步骤的 \`key\`）：分叉步骤默认基于上游分支新开 worktree（要从主干重开传 \`"base": "main"\`）；多路合流时后台自动拼接各路交棒（总上限 12,000 字均分、单路最多 4,000 字，超长完整汇报自动落盘到启动目录 \`upstream/<stepKey>.md\` 并附路径）。
 - **每步自带职责与模型配置**：每步写 \`key\`、\`title\`、\`brief\`（一两句本步职责；上一步的交棒后台会自动原样转交，不用你手抄），按需配 \`vendor\`、\`model\`、\`effort\`、\`readonly\`、\`caps\`（外接能力：\`"inherit"\` 默认照项目设置，\`"none"\` 一个不带，\`"custom"\` 配 \`allow: ["mcp:<名>", "skill:<名>"]\` 只挂点名的；patch 时 \`caps: null\` 恢复默认）、\`maxTime\`（单轮上限，如 \`"45m"\`，默认 \`30m\`）、\`confirm: true\`、\`review: true\`、\`base\`（普通步骤只能写 \`"main"\`，从主干重开；审查步骤写被审分支）。
 - **用户明说要先看的步骤**（比如“先给我看方案”“改完先让我看效果”）：给这一步标 \`"confirm": true\`（照常写 \`brief\` 自动开工）。它的 Worker 汇报“做完了”且无偏离时，后台不会立刻收工或标完成，而是自动挂出「通过 / 打回」检查点拍板卡（展示本轮摘要与交棒；${ASK_CARD_WHERE}），全程不叫醒你：用户点「通过」（可附意见）后自动收工并把定案与意见随交棒带给下一步；点「打回」则把修改意见直接发给原 Worker 在原会话接着改，改完再出卡。别的拍板不要预先建空步骤，等干活的 Worker 撞上了再用 \`${HUB} ask --node <步骤>\` 挂卡。
-- **碰到下面任意一条，就在实现后面加一个审查步骤**（设 \`"review": true\`，能用别家模型的指定另一家 \`vendor\`，项目只用一家时同一家的新会话也行；后台自动前置内置独立审查清单；\`brief\` 里点名你最担心的地方）：
-${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
-
-  审查只查不修，由代码保证：审查 Worker 在 detached 检出被审分支的独立目录里干活，推不上去，也不能 \`--no-worktree\`。被审分支默认是唯一上一步的分支；补建的单步审查图、多路合流后的审查、上一步在主文件夹里干的，给审查步骤写 \`"base": "<被审分支>"\`，不写建图、开工时直接报错。结论只有 PASS、PASS+NOTES、FAIL，并写明验证的提交号。判 PASS 后后台核对被审分支、远端和 PR 在审查期间没被动过，没动过才往下走；项目在 GitHub 上时，后台还把结论作为提交状态挂到被审提交上（PASS 挂成功、FAIL 挂失败，挂不上只在步骤上记一句原因，不影响任务图）。判 FAIL 步骤停在 \`waiting\` 等你：在审查后面加修复步骤（它接手实现的工作目录和分支），修复同一单落实审查给的防复发落点（补防复发单测，或按项目自己的规矩沉淀），修完再加一个审查步骤。发现分 \`[Important]\`、\`[Nit]\`、\`[Pre-existing]\` 三档，只有 \`[Important]\` 判 FAIL。复审步骤的 \`brief\` 写上一轮的被审提交和未决的 \`[Important]\` 原文，复审只核验它们和之后的增量。第 ${REVIEW_MAX_ROUNDS} 轮审查还有 \`[Important]\` 就不再加轮次，用 \`${HUB} ask\` 交用户拍板。
-  审查步骤要审 git 分支；项目不是 git 仓库的，改加一个只读（\`"readonly": true\`）的普通步骤，在 \`brief\` 里写明审查要求。项目或用户没另外要求的话，纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。
+- **需要独立审查时，在实现后面加一个审查步骤**（设 \`"review": true\`，需要跨模型审查的指定另一家 \`vendor\`；后台自动前置独立审查说明，\`brief\` 里写明重点关注的区域或复审要点）：
+  审查只查不修，由代码保证：审查 Worker 在 detached 检出被审分支的独立目录里干活，推不上去，也不能 \`--no-worktree\`。被审分支默认是唯一上一步的分支；补建的单步审查图、多路合流后的审查、上一步在主文件夹里干的，给审查步骤写 \`"base": "<被审分支>"\`，不写建图、开工时直接报错。结论只有 PASS 和 FAIL，并写明验证提交号。判 PASS 后后台核对被审分支、远端和 PR 在审查期间没被动过，没动过才自动放行往下走；判 FAIL 步骤停在 \`waiting\` 等你处理（在审查后面加修复步骤接手实现的工作目录和分支，修完再加复审步骤）。
+  审查步骤要审 git 分支；项目不是 git 仓库的，改加一个只读（\`"readonly": true\`）的普通步骤，在 \`brief\` 里写明审查要求。什么时候需要审查、怎么判定严重程度，按项目自身的规矩或用户要求来。
 
 ## 跟进
 进度以 \`${HUB} graph show\` 为准。步骤只有四个状态：没轮到（\`pending\`）、在干（\`running\`）、等人（\`waiting\`，等你处理或等用户拍板）、完了（\`done\`，跳过也算完了）。
@@ -49,6 +37,7 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
   - 要用户拍板的事：用 \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\` 把拍板卡挂在该步骤上（${ASK_CARD_WHERE}）；用户点完后定案与意见直接发给该步未收工的 Worker 接着干（步骤切回 \`running\`），全程不叫醒你，定案记在步骤上。用户若在聊天里口头答复，用 \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\` 记下，效果相同；
   - 认可偏离或你已手动完成：\`${HUB} graph done <步骤> [--stdin]\` 放行（正文作为补充转交给下一步）；
   - **换人接手**（出错、额度用完、对话太长、厂商不可用或该换一家）：直接 \`${HUB} worker start --node <步骤> [--vendor …] [--model …] [--effort …] [--stdin]\`。还挂着的旧 Worker 自动收工且步骤不标完成；新 Worker 自动继承职责、审查清单、上游交棒、前任的工作目录与分支，以及最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径，并把新的厂商/模型写回步骤。
+- 若步骤明确需要 Computer Use，且厂商和系统支持，可在步骤设置 \`noOuterSandbox: true\`，同时用 \`caps: "custom"\` 和 \`allow\` 明确挂载该能力。Worker 等用户在工作台确认后才开工。Computer Use 控制每个应用前都要等用户在工作台确认；用户拒绝时，换个办法或汇报。
 - **计划变了**：随时 \`${HUB} graph patch\`（用 \`addSteps\`、\`updateSteps\`、\`removeSteps\`、\`skipSteps\` 或更新 \`goal\`；在干或已完成的步骤不能直接 \`updateSteps\`）。原本没建图、做着发现要分段或加审查的，随时补建一张图。
 - **全部步骤完成后待交付**：最后一步完成时图不会自动结束，你会收到交付单（各步结果、改动文件名单与最后一步交棒）。若缺审查或证据不够，仍可 \`${HUB} graph patch\` 补步骤或打回重做；核对证据、按项目约定和用户要求做完交付（比如合并 PR；没要求合并的不合并）后，用 \`${HUB} graph finish\` 收尾（交付摘要自动同步给总助）。
 
@@ -62,6 +51,7 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 - \`${HUB} graph finish [<图编号>] [--unmerged-ok] --stdin\`：所有步骤完成后结束这张图，正文是交付摘要（自动同步给总助）；分支上有未合并的 PR 时默认拦下提醒，确认不合并加 \`--unmerged-ok\`
 - \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：在任意未完步骤上挂拍板卡（${ASK_CARD_WHERE}），正文是问题与背景摘要，要用户看的文件用 \`--file\` 挂在卡片下面并记进该步的交付物；用户点完后定案直接交给该步挂着的 Worker 接着干（无活跃 Worker 的手动步骤则标完了推进下游），全程不叫醒你
 - \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时记下定案；该步挂着未收工 Worker 时同样直接发给它接着干，否则推进下游
+- 步骤拍板卡会一直等用户答复，给 Worker 续发消息、收汇报或改步骤状态都不会关掉它。要撤回过时的卡，用 \`${HUB} ask close --message <消息编号>\`，编号见 \`${HUB} graph show\`；再次在同一步挂卡会替换旧卡。
 - \`${HUB} worker start --node <步骤> …\`：给等你处理的步骤换人或手动派人（\`--title\` 和正文都可省略，正文作为补充说明）
 - \`${HUB} worker end <编号>\`：只停掉这个 Worker，不会把步骤标完成；未完成的步骤会停在 \`waiting\` 等你处理（顺利完成的步骤由后台自动收工）
 `;

@@ -42,6 +42,7 @@ export type Options = {
   readonly?: boolean;
   caps?: string;
   allow?: string[];
+  "no-outer-sandbox"?: boolean;
   "no-worktree"?: boolean;
   node?: string;
   graph?: string;
@@ -49,6 +50,7 @@ export type Options = {
   question?: string;
   context?: string;
   replace?: string;
+  message?: string;
   summary?: string;
   pr?: string;
   worker?: string;
@@ -62,7 +64,6 @@ export type Options = {
   choice?: string;
   note?: string;
   clear?: boolean;
-  account?: string;
   daily?: string;
   every?: string;
   last?: string;
@@ -106,6 +107,7 @@ export const HUB_ARG_OPTIONS = {
   readonly: { type: "boolean" },
   caps: { type: "string" },
   allow: { type: "string", multiple: true },
+  "no-outer-sandbox": { type: "boolean" },
   "no-worktree": { type: "boolean" },
   node: { type: "string" },
   graph: { type: "string" },
@@ -113,6 +115,7 @@ export const HUB_ARG_OPTIONS = {
   question: { type: "string" },
   context: { type: "string" },
   replace: { type: "string" },
+  message: { type: "string" },
   summary: { type: "string" },
   pr: { type: "string" },
   worker: { type: "string" },
@@ -126,7 +129,6 @@ export const HUB_ARG_OPTIONS = {
   choice: { type: "string" },
   note: { type: "string" },
   clear: { type: "boolean" },
-  account: { type: "string" },
   daily: { type: "string" },
   every: { type: "string" },
   last: { type: "string" },

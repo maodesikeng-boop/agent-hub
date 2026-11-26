@@ -3,72 +3,103 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createElement } from "react";
 import { describe, expect, it } from "vitest";
+import { PlatformIcon } from "../components/DeviceBadges.tsx";
 import * as icons from "./icons.ts";
 
-const LINE_ICONS = new Set(["ComposerAdd", "ComposerSend", "ComposerStop", "ComposerFile", "ComposerVideo", "ComposerRemove", "ComposerBot"]);
-const exported = Object.entries(icons).filter((entry): entry is [string, icons.Icon] => typeof entry[1] === "function" || typeof entry[1] === "object");
-
-function svgOf(name: string, props: Record<string, unknown> = {}): SVGSVGElement {
-  const Icon = (icons as unknown as Record<string, icons.Icon>)[name]!;
-  const { container } = render(createElement(Icon, props));
-  return container.querySelector("svg")!;
-}
-
 describe("图标出口", () => {
-  it("除输入框的 Composer* 外，每个导出都渲染成一个 crispEdges、fill=currentColor 的 <svg>，没有 stroke、渐变和 <image>", () => {
-    const pixel = exported.filter(([name]) => !LINE_ICONS.has(name));
-    expect(pixel.length).toBeGreaterThan(50);
-    for (const [name] of pixel) {
-      const svg = svgOf(name);
+  it("每个导出都渲染成一个 24x24 平滑线条 <svg data-icon=\"line\">，没有 crispEdges、渐变和 <image>", () => {
+    const entries = Object.entries(icons).filter((entry): entry is [string, icons.Icon] => typeof entry[1] === "function");
+    expect(entries.length).toBeGreaterThanOrEqual(65);
+
+    for (const [name, Icon] of entries) {
+      const { container } = render(createElement(Icon));
+      const svg = container.querySelector("svg");
       expect(svg, name).not.toBeNull();
-      expect(svg.getAttribute("shape-rendering"), name).toBe("crispEdges");
-      expect(svg.getAttribute("fill"), name).toBe("currentColor");
-      expect(svg.getAttribute("data-icon"), name).toBe("pixel");
-      expect(svg.getAttribute("viewBox"), name).toBe("0 0 24 24");
-      expect(svg.outerHTML, name).not.toMatch(/stroke=|Gradient|<image/);
+      expect(svg, name).toHaveAttribute("data-icon", "line");
+      expect(svg, name).toHaveAttribute("aria-hidden", "true");
+      expect(svg, name).toHaveAttribute("viewBox", "0 0 24 24");
+      expect(svg, name).toHaveAttribute("fill", "none");
+      expect(svg, name).toHaveAttribute("stroke", "currentColor");
+      expect(svg!.getAttribute("shape-rendering"), name).toBeNull();
+      expect(container.querySelector("image, linearGradient, radialGradient"), name).toBeNull();
     }
   });
 
-  it("Composer* 是 stroke=currentColor 的线条图标，没有 crispEdges", () => {
-    for (const name of LINE_ICONS) {
-      const svg = svgOf(name);
-      expect(svg.getAttribute("stroke"), name).toBe("currentColor");
-      expect(svg.getAttribute("shape-rendering"), name).toBeNull();
-      expect(svg.getAttribute("data-icon"), name).toBe("line");
+  it("传 aria-label 时取消 aria-hidden，并透传 className 和 strokeWidth", () => {
+    const { container } = render(createElement(icons.Pin, { "aria-label": "Pinned", className: "size-4 text-primary", strokeWidth: 1.5 }));
+    const svg = container.querySelector("svg")!;
+    expect(svg).toHaveAttribute("aria-label", "Pinned");
+    expect(svg).not.toHaveAttribute("aria-hidden");
+    expect(svg).toHaveClass("size-4", "text-primary");
+    expect(svg).toHaveAttribute("stroke-width", "1.5");
+  });
+
+  it("在忙转圈 Loader2 带 animate-spin 与减弱动效兜底，不再用 pixel-loader", () => {
+    const { container } = render(createElement(icons.Loader2, { className: "size-4" }));
+    const svg = container.querySelector("svg")!;
+    expect(svg).toHaveClass("animate-spin", "motion-reduce:animate-none", "size-4");
+    expect(svg.className.baseVal).not.toContain("pixel-loader");
+  });
+
+  it("provides the solid pin, the usage hourglass, the send arrow, more and user, and five device icons", () => {
+    const pinOutline = render(createElement(icons.Pin)).container.querySelector("svg")!;
+    const pinFilled = render(createElement(icons.PinFilled)).container.querySelector("svg")!;
+    expect(pinFilled.innerHTML).toContain('fill="currentColor"');
+    expect(pinFilled.innerHTML).not.toBe(pinOutline.innerHTML);
+
+    for (const [name, Icon] of [
+      ["Hourglass", icons.Hourglass],
+      ["ArrowUp", icons.ArrowUp],
+      ["MoreHorizontal", icons.MoreHorizontal],
+      ["User", icons.User],
+      ["Video", icons.Video],
+    ] as const) {
+      const svg = render(createElement(Icon)).container.querySelector("svg");
+      expect(svg, name).not.toBeNull();
+      expect(svg, name).toHaveAttribute("data-icon", "line");
     }
+    expect("ComposerSend" in icons).toBe(false);
+    expect("ComposerStop" in icons).toBe(false);
+
+    const deviceSvgs = [
+      icons.DeviceMacos,
+      icons.DeviceWindows,
+      icons.DeviceLinux,
+      icons.DeviceIphone,
+      icons.DeviceAndroid,
+    ].map((Icon) => render(createElement(Icon)).container.querySelector("svg")!.innerHTML);
+    expect(new Set(deviceSvgs).size).toBe(5);
   });
 
-  it("不传 aria-label 时 aria-hidden；传了 aria-label 时读屏念它", () => {
-    expect(svgOf("Settings").getAttribute("aria-hidden")).toBe("true");
-    const labelled = svgOf("Settings", { "aria-label": "Settings" });
-    expect(labelled.getAttribute("aria-hidden")).toBeNull();
-    expect(labelled.getAttribute("aria-label")).toBe("Settings");
-    expect(svgOf("ComposerSend").getAttribute("aria-hidden")).toBe("true");
-  });
-
-  it("className 原样带到 <svg> 上，传 strokeWidth 不报错也不改样子；像素图标没有写死的宽高", () => {
-    const svg = svgOf("Plus", { className: "size-pixel text-primary", strokeWidth: 3 });
-    expect(svg.getAttribute("class")).toBe("size-pixel text-primary");
-    expect(svg.getAttribute("stroke-width")).toBeNull();
-    expect([svg.getAttribute("width"), svg.getAttribute("height")]).toEqual([null, null]);
-  });
-
-  it("在忙的转圈是 8 根一根根亮，自己带 pixel-loader 动画，不靠 animate-spin 转画布", () => {
-    const svg = svgOf("Loader2", { className: "size-pixel-sm" });
-    expect(svg.getAttribute("class")).toBe("pixel-loader size-pixel-sm");
-    expect(svg.querySelectorAll("path")).toHaveLength(8);
-    const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toMatch(/\.pixel-loader > path \{[^}]*animation: pixel-loader/);
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.pixel-loader > path \{\s*animation: none;/);
-  });
-
-  it("全站只在图标出口导入 pixelarticons，已移除 lucide-react", () => {
-    const files = readdirSync("src/web", { recursive: true, encoding: "utf8" }).filter((f) => /\.(ts|tsx)$/.test(f) && f !== join("ui", "icons.ts") && !f.includes(".test."));
+  it("全站只在图标出口导入 lucide-react，已移除 pixelarticons", () => {
+    const files = readdirSync("src/web", { recursive: true, encoding: "utf8" }).filter(
+      (f) => /\.(ts|tsx)$/.test(f) && f !== join("ui", "icons.ts") && !f.includes(".test."),
+    );
     for (const file of files) {
       const text = readFileSync(join("src/web", file), "utf8");
       expect(text, file).not.toMatch(/from "lucide-react"|from "pixelarticons/);
     }
-    expect(readFileSync("src/web/ui/icons.ts", "utf8")).not.toContain('from "lucide-react"');
-    expect(readFileSync("package.json", "utf8")).not.toContain('"lucide-react"');
+    const entry = readFileSync("src/web/ui/icons.ts", "utf8");
+    expect(entry).toContain('from "lucide-react"');
+    expect(entry).not.toContain("pixelarticons");
+    expect(readFileSync("package.json", "utf8")).toContain('"lucide-react"');
+    expect(readFileSync("package.json", "utf8")).not.toContain('"pixelarticons"');
+  });
+
+  it("PlatformIcon 为五种主流设备与兜底桌面返回区分清晰的图标", () => {
+    const rendered = ["darwin", "win32", "linux", "iphone", "android", "freebsd"].map(
+      (platform) => render(createElement(PlatformIcon, { platform })).container.querySelector("svg")!.innerHTML,
+    );
+    expect(new Set(rendered).size).toBe(6);
+  });
+
+  it("gives every device a solid form for the selected computer that fills its outline and keeps the line icon's size", () => {
+    for (const platform of ["darwin", "win32", "linux", "iphone", "android", "freebsd"]) {
+      const line = render(createElement(PlatformIcon, { platform })).container.querySelector("svg")!;
+      const solid = render(createElement(PlatformIcon, { platform, solid: true })).container.querySelector("svg")!;
+      expect(solid.getAttribute("viewBox"), platform).toBe(line.getAttribute("viewBox"));
+      expect(solid.outerHTML, platform).toMatch(/fill="currentColor"/);
+      expect(solid.outerHTML, platform).not.toBe(line.outerHTML);
+    }
   });
 });
