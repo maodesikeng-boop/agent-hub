@@ -224,7 +224,7 @@ function providerRoutes(at: (path: string) => string) {
       request<ProvidersStatusResponse>(
         at(options.refresh ? `${API_PATHS.providers}?refresh=1` : API_PATHS.providers),
         undefined,
-        options.refresh ? SLOW_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS,
+        SLOW_API_REQUEST_TIMEOUT_MS,
       ),
     postProviderInstall: (vendor: AgentVendor) =>
       postJson<ProviderStatusItem>(at(API_PATHS.providerInstall(vendor)), {}),

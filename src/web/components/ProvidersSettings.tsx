@@ -42,7 +42,7 @@ function openExternalBrowserPage(url: string): void {
 type DotTone = "ready" | "caution" | "muted";
 
 export function isProviderAuthenticated(item: ProviderStatusItem): boolean {
-  return item.installed && (item.availability === "available" || item.accountSummary !== null);
+  return item.installed && item.availability === "available";
 }
 
 function resolveItemTone(item: ProviderStatusItem): DotTone {
@@ -170,7 +170,7 @@ function ProviderItemRow({
   const hasLog = (jobFailed || jobRunning) && Boolean(job?.logTail.trim());
   const tone = resolveItemTone(item);
   const authenticated = isProviderAuthenticated(item);
-  const ready = authenticated || (item.installed && item.canSignOut);
+  const canOpenAccount = authenticated || (item.installed && item.canSignOut);
   const combinedError: ErrorLike | null =
     rowError ?? (jobFailed && job?.error ? { text: job.kind === "update" ? "Update failed" : "Install failed", raw: job.error } : null);
 
@@ -251,7 +251,7 @@ function ProviderItemRow({
               {busyKey === `install:${item.vendor}` && <Loader2 aria-hidden="true" />}
               {jobFailed ? "Retry" : "Install"}
             </Button>
-          ) : ready ? (
+          ) : canOpenAccount ? (
             <>
               {jobFailed && job?.kind === "update" && (
                 <Button
@@ -895,9 +895,9 @@ export function ProviderAccountBody({
         <div data-slot="settings-row" className="px-4 py-3">
           <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2">
             <div className="flex min-w-32 flex-1 items-start gap-3">
-              <span aria-hidden="true" className="mt-2 size-2 rounded-full shrink-0 bg-success" />
+              <span aria-hidden="true" className={cn("mt-2 size-2 rounded-full shrink-0", DOT_CLASS[resolveItemTone(item)])} />
               <div className="min-w-0 flex-1 break-words">
-                <div className="text-body">{item.accountSummary ?? "Signed in"}</div>
+                <div className="text-body">{item.accountSummary ?? (isProviderAuthenticated(item) ? "Signed in" : "Not signed in")}</div>
                 {item.version && (
                   <div className="mt-0.5 text-minor text-muted-foreground tabular-nums">{item.version}</div>
                 )}

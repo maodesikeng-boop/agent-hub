@@ -14,6 +14,7 @@ import {
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
   MIN_SCHEDULE_EVERY_MINUTES,
+  ROUTER_CONTEXT_MAX_CHARS,
   SELF_RELOAD_DRAIN_MAX_MS,
   SETUP_TIMEOUT_MS,
   WORKER_LOG_DEFAULT_STEPS,
@@ -25,6 +26,7 @@ import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
 import { AGENT_VENDORS, ALL_EFFORTS } from "../shared/vendors.ts";
 
 const hub = HUB_COMMAND;
+const FILE_ARG_PATH_HINT = "标签含斜杠时，用绝对路径或以 ./ 开头的相对路径；不带标签的相对路径若含 =，可在路径前加 ./";
 
 export interface HubCommandSpec {
   command: HubCommand;
@@ -166,7 +168,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "log",
     cli: "worker log",
     usage: `  ${hub} worker log <编号> [--last N | --stats]                它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}，最多 ${WORKER_LOG_MAX_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束；
-                                                          --stats 不列步骤，只出一张汇总：步数、各类动作次数、读得最多的文件、重复最多的命令、思考和等工具的用时`,
+                                                          --stats 不列步骤，只出一张汇总：步数、各类动作次数、读得最多的文件、重复最多的命令、思考和等工具的用时；
+                                                          并发调用的重叠时间只算一次，未返回结果的调用不计时`,
   },
   {
     command: "ask",
@@ -175,6 +178,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     usage: `  ${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin
                                                           向用户挂一张提问/拍板卡，问题从标准输入读；${ASK_CARD_WHERE}；
                                                           要用户看的文件（方案、验收结论、截图、录屏）用 --file 挂在卡片下面（最多 ${HUB_FILE_ARGS_MAX} 个），不写进问题里；
+                                                          ${FILE_ARG_PATH_HINT}；
                                                           有明确选项时用 --option（至少 2 个），用 --recommended 标推荐项（选项原文或 1..N 序号）；
                                                           加 --node 挂在任务图步骤上，用户拍板后定案直接交给该步 Worker 接着干（不叫醒项目经理）`,
   },
@@ -252,7 +256,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "report",
     cli: "router report",
     usage: `  ${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file [标签=]路径...] [--link <标签=网址>...]
-                                                          向全局总助投递里程碑汇报卡（不打断对话流）；本机文件用 --file（最多 ${HUB_FILE_ARGS_MAX} 个），--link 只放网址`,
+                                                          向全局总助投递里程碑汇报卡（不打断对话流）；摘要最多 ${ROUTER_CONTEXT_MAX_CHARS} 字；
+                                                          本机文件用 --file（最多 ${HUB_FILE_ARGS_MAX} 个），--link 只放网址；${FILE_ARG_PATH_HINT}`,
   },
   {
     command: "graph.create",
