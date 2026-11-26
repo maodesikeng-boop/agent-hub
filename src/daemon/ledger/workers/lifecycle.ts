@@ -15,7 +15,7 @@ import { ownWorker, workerRow, workerSession } from "./ctx.ts";
 import { directChatSummary } from "./direct-chat.ts";
 import { insertLine, insertPmMessage, isWorkerInFlight, stopQueued } from "./lines.ts";
 import { cancelQueuedWorkerPmNoticesIn, type CancelWorkerPmNoticesOptions } from "./stale-notices.ts";
-import { notStarted, sendDedupeKey, validMaxTimeMs, validTask, worktreeLabel } from "./text.ts";
+import { notStarted, routerSendDedupeKey, sendDedupeKey, validMaxTimeMs, validTask, worktreeLabel } from "./text.ts";
 import { clearMaxTime, clearMaxTimeIn, startMaxTime } from "./timers.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
@@ -106,10 +106,15 @@ export function resumeUserBlockedWorkerIn(w: WorkersCtx, p: Pending, workerId: W
   startMaxTime(w, worker);
 }
 
-export function sendIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArgs<"worker.send">): HubResult<"worker.send"> {
+export function sendIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArgs<"worker.send">, routerDeliveryId?: string): HubResult<"worker.send"> {
   w.persona.assertPmNotArchived(caller.pmId);
   const maxTimeMs = validMaxTimeMs(args.maxTimeMs);
   const worker = ownWorker(w, caller.pmId, args.workerId);
+  const dedupeKey = routerDeliveryId === undefined ? sendDedupeKey(worker.id) : routerSendDedupeKey(worker.id, routerDeliveryId);
+  if (routerDeliveryId !== undefined) {
+    const existing = w.db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
+    if (existing !== undefined) return { text: "", data: { worker: toWorkerRecord(worker), messageId: existing.id } };
+  }
   if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，要接着做请重新派一个`);
   if (w.sandboxApprovals.isPendingForWorker(worker.id)) throw fail("conflict", "Worker 还在等用户确认沙箱，不能发消息");
   // Before work starts the first turn must be the task brief; sending now would start the session early.
@@ -122,7 +127,7 @@ export function sendIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArg
   cancelQueuedWorkerPmNoticesIn(w, p, worker);
   w.options.taskGraphs?.onWorkerResumedIn(p, worker.id);
   w.sessions.dropRateLimitRejection(p, session.id);
-  const message = insertPmMessage(w, p, worker, session, text, sendDedupeKey(worker.id));
+  const message = insertPmMessage(w, p, worker, session, text, dedupeKey);
   w.enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
   const compactOnly = composerBaseOf(session.vendor)?.isCompactCommand(text) === true;
   startMaxTime(w, worker, maxTimeMs);

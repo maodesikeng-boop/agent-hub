@@ -19,9 +19,11 @@ import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
+import { askListIn, askShowIn } from "./pending-asks.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
+import { scheduleShowIn } from "./schedule-runs.ts";
 import type { LedgerSchedules } from "./schedules.ts";
 import type { LedgerTaskGraphs } from "./task-graphs.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
@@ -233,7 +235,7 @@ export function createLedgerHubCommands(
       case "worker.start":
         return workers.startIn(p, caller, args as HubArgs<"worker.start">, context);
       case "worker.send":
-        return workers.sendIn(p, caller, args as HubArgs<"worker.send">);
+        return workers.sendIn(p, caller, args as HubArgs<"worker.send">, context.routerDeliveryId);
       case "worker.max-time":
         return workers.maxTimeIn(p, caller, args as HubArgs<"worker.max-time">);
       case "worker.end":
@@ -313,7 +315,7 @@ export function createLedgerHubCommands(
         });
         const item = router.bridgeAskIn(p, caller, message, normalizedOptions, { replaceItemId });
         return {
-          text: `已向用户提问：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。等用户回复再继续，别替用户拿主意。`,
+          text: `已向用户提问${item === null ? "" : `，卡 #${item.id}`}：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。等用户回复再继续，别替用户拿主意。`,
           data: { messageId: message.id, ...(item !== null ? { item } : {}) },
         };
       }
@@ -321,10 +323,16 @@ export function createLedgerHubCommands(
         const a = args as HubArgs<"ask.close">;
         return "messageId" in a ? taskGraphs.closeStepAskIn(p, caller, a.messageId) : router.closeAskIn(p, caller, a);
       }
+      case "ask.list":
+        return askListIn(db, caller, now());
+      case "ask.show":
+        return askShowIn(db, caller, args as HubArgs<"ask.show">, now());
       case "schedule.add":
         return schedules.addIn(p, caller, args as HubArgs<"schedule.add">);
       case "schedule.list":
         return schedules.list(caller);
+      case "schedule.show":
+        return scheduleShowIn(db, caller, args as HubArgs<"schedule.show">, now());
       case "schedule.pause":
         return schedules.pauseIn(p, caller, args as HubArgs<"schedule.pause">);
       case "schedule.resume":

@@ -128,9 +128,11 @@ describe("项目经理收到用户消息时带着账本里当前还在等的卡"
     expect(receivedBy(id)).toEqual({
       prefixes: [
         [
-          "【系统：账本里现在还在等用户回答的普通提问卡有 2 张。这条消息不一定在回答它们；用户回答了哪张，用 `" + HUB_COMMAND + " ask close <编号>` 关掉那张，没回答的留着：",
-          `- #${itemOf(a).id}「要不要发版？」`,
-          `- #${itemOf(b).id}「用 A 还是 B？」`,
+          "【系统：账本里现在还在等用户回答的卡有 2 张。这条消息不一定在回答它们；用户在对话里回答了哪张，用 `" + HUB_COMMAND + " ask close <编号>`（步骤卡用 `" + HUB_COMMAND + " ask close --message <消息编号>`）关掉那张，没回答的留着：",
+          `- #${itemOf(a).id}「要不要发版？」 · 已等 不到 1 分钟`,
+          `- #${itemOf(b).id}「用 A 还是 B？」 · 已等 不到 1 分钟`,
+          `看全部在等用户的卡：${HUB_COMMAND} ask list`,
+          `看全文：${HUB_COMMAND} ask show <编号>`,
           "】",
         ].join("\n"),
       ],
@@ -331,13 +333,23 @@ describe("持久化", () => {
 });
 
 describe("回执：提问卡出现在哪", () => {
+  it("替换提问卡的回执写新卡编号，能按该编号读到新问题", () => {
+    const previous = ask("旧问题");
+    const previousItemId = itemOf(previous).id;
+    const created = ledger.hubCall(lin.sessionId, "ask", { text: "新问题", replaceItemId: previousItemId });
+    const newItemId = itemOf(created.data.messageId).id;
+    expect(newItemId).not.toBe(previousItemId);
+    expect(created.text).toContain(`卡 #${newItemId}：`);
+    expect(ledger.hubCall(lin.sessionId, "ask.show", { itemId: newItemId }).data.ask.text).toBe("新问题");
+  });
+
   it("独立 hub ask 的回执说卡片在对话里、用户直接点选，右栏和总助只在没回答时列着，不引导用户去右栏找", () => {
-    const { text } = ledger.hubCall(lin.sessionId, "ask", {
+    const { text, data } = ledger.hubCall(lin.sessionId, "ask", {
       text: "Vendor sync 要不要改？",
       options: ["改同步", "都不动"],
       recommended: "改同步",
     });
-    expect(text).toBe(`已向用户提问：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。等用户回复再继续，别替用户拿主意。`);
+    expect(text).toBe(`已向用户提问，卡 #${itemOf(data.messageId).id}：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。等用户回复再继续，别替用户拿主意。`);
     expect(text).toContain("卡片显示在对话里，用户直接在卡上点选");
     expect(text).toContain("回答后自动移走");
     expect(text).toContain("别让用户去右栏找");

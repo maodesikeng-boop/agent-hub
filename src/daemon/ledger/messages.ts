@@ -426,12 +426,15 @@ export function createLedgerMessages(
     });
   };
 
+  const postedUserMessageId = (conversationId: ConversationId, clientId: string): MessageId | undefined =>
+    db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", userMessageDedupeKey(conversationId, clientId))?.id;
+
   const postUserMessage = (input: PostUserMessageInput): PostUserMessageResult => {
     return write((p) => {
       if (!conversationExists(input.conversationId)) throw new ConversationNotFoundError(input.conversationId);
       const dedupeKey = userMessageDedupeKey(input.conversationId, input.clientId);
-      const existing = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
-      if (existing !== undefined) return { messageId: existing.id };
+      const existing = postedUserMessageId(input.conversationId, input.clientId);
+      if (existing !== undefined) return { messageId: existing };
       if (input.workerPick !== undefined && !isPmConversation(input.conversationId)) throw fail("invalid", WORKER_PICK_ONLY_PM_MESSAGE);
       assertUserCanPost(input.conversationId);
       const session = currentSession(input.conversationId);
@@ -624,6 +627,7 @@ export function createLedgerMessages(
     settleAskIn,
     enqueueWakeupIn,
     postUserMessage,
+    postedUserMessageId,
     composerTarget,
     requestStop,
     rewindLastUserMessage,

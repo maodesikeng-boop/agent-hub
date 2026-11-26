@@ -317,13 +317,16 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
               pmId: op.pmId,
               projectId: op.projectId,
             });
-            const attachments = resolveAttachmentsOrThrow(uploadsDir, op.attachmentIds);
-            const posted = ledger.postUserMessage({
-              conversationId: target.conversationId,
-              clientId: op.clientId,
-              text: op.text,
-              ...(attachments.length > 0 ? { attachments } : {}),
-            });
+            let messageId = ledger.postedUserMessageId(target.conversationId, op.clientId);
+            if (messageId === undefined) {
+              const attachments = resolveAttachmentsOrThrow(uploadsDir, op.attachmentIds);
+              messageId = ledger.postUserMessage({
+                conversationId: target.conversationId,
+                clientId: op.clientId,
+                text: op.text,
+                ...(attachments.length > 0 ? { attachments } : {}),
+              }).messageId;
+            }
             return {
               kind: "pm.forward",
               pmId: target.pmId,
@@ -331,7 +334,7 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
               projectId: target.projectId,
               projectName: target.projectName,
               conversationId: target.conversationId,
-              messageId: posted.messageId,
+              messageId,
             };
           }
 
@@ -396,28 +399,24 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
           }
 
           case "worker.send": {
-            const dedupeKey = JSON.stringify(["worker.send", op.clientId, op.workerId]);
-            return await dedupeOnce(dedupeKey, async () => {
-              const w = ledger.resolveRouterLocalWorker(op.workerId);
-              const attachments = resolveAttachmentsOrThrow(uploadsDir, op.attachmentIds);
-              const fullText =
-                attachments.length > 0
-                  ? agentTextOf({ text: op.text, meta: { attachments } })
-                  : op.text;
-              const sent = ledger.hubCall(w.pmSessionId, "worker.send", {
-                workerId: w.workerId,
-                text: fullText,
-              }).data;
-              const res: RouterTargetOpResult = {
-                kind: "worker.send",
-                pmId: w.pmId,
-                workerId: w.workerId,
-                workerConversationId: w.workerConversationId,
-                title: w.title,
-                messageId: sent.messageId,
-              };
-              return res;
-            });
+            const w = ledger.resolveRouterLocalWorker(op.workerId);
+            const attachments = resolveAttachmentsOrThrow(uploadsDir, op.attachmentIds);
+            const fullText =
+              attachments.length > 0
+                ? agentTextOf({ text: op.text, meta: { attachments } })
+                : op.text;
+            const sent = ledger.hubCall(w.pmSessionId, "worker.send", {
+              workerId: w.workerId,
+              text: fullText,
+            }, { routerDeliveryId: op.clientId }).data;
+            return {
+              kind: "worker.send",
+              pmId: w.pmId,
+              workerId: w.workerId,
+              workerConversationId: w.workerConversationId,
+              title: w.title,
+              messageId: sent.messageId,
+            };
           }
 
           case "worker.stop": {

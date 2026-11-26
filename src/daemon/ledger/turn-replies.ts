@@ -19,8 +19,10 @@ export interface LedgerTurnReplies {
 interface TurnState {
   lastText: MessageId | null;
   lastOutput: { id: MessageId; kind: "text" | "tool" } | null;
-  deliveredAt: Map<MessageId, { mark: number; awaitingProcessing: boolean }>;
+  deliveredAt: Map<MessageId, { mark: number; awaitingProcessing: boolean; scheduleRun: boolean }>;
 }
+
+const SCHEDULE_RUN_SQL = `sender = 'system' AND CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') IS 'schedule.run' ELSE 0 END`;
 
 export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
   const { db, now } = ctx;
@@ -54,13 +56,15 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
         }
         continue;
       }
-      const row = db.get<{ sender: string; conversation_id: ConversationId; session_id: SessionId | null }>(
-        "SELECT sender, conversation_id, session_id FROM messages WHERE id = ?",
+      const row = db.get<{ sender: string; conversation_id: ConversationId; session_id: SessionId | null; schedule_run: number }>(
+        `SELECT sender, conversation_id, session_id, (${SCHEDULE_RUN_SQL}) AS schedule_run FROM messages WHERE id = ?`,
         id,
       );
-      if (row?.sender !== "user" || row.conversation_id !== session.conversationId || row.session_id !== session.id) continue;
+      if (row?.conversation_id !== session.conversationId || row.session_id !== session.id) continue;
+      const scheduleRun = session.role === "pm" && row.schedule_run === 1;
+      if (row.sender !== "user" && !scheduleRun) continue;
       const midTurn = event.type === "message.delivered" && event.midTurn === true;
-      stateOf(session.id).deliveredAt.set(id, { mark: maxMessageId(), awaitingProcessing: midTurn });
+      stateOf(session.id).deliveredAt.set(id, { mark: maxMessageId(), awaitingProcessing: midTurn, scheduleRun });
     }
   };
 
@@ -83,7 +87,9 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
     const output = state?.lastOutput;
     return {
       reply: session.role !== "pm" || text === null ? null : { messageId: text, requestIds: ids.filter((id) => followsDelivery(id, text)) },
-      finishedWithText: output?.kind === "text" ? ids.filter((id) => followsDelivery(id, output.id)) : [],
+      finishedWithText: output?.kind === "text"
+        ? ids.filter((id) => !state?.deliveredAt.get(id)?.scheduleRun && followsDelivery(id, output.id))
+        : [],
     };
   };
 
@@ -100,9 +106,17 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
     if (!db.get("SELECT 1 FROM messages WHERE id = ? AND session_id = ? AND sender = 'agent' AND kind = 'text'", reply, session.id)) return;
     for (const id of fact.requestIds) {
       if (!ids.includes(id)) continue;
-      const row = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
-      if (row === undefined || row.sender !== "user" || row.status !== "replied" || row.session_id !== session.id || row.conversation_id !== session.conversationId) continue;
-      if (replyIdOf(toMessage(row)) !== null) continue;
+      const row = db.get<{ reply_id: number | null }>(
+        `SELECT CASE WHEN json_valid(meta) THEN
+             CASE WHEN json_type(meta, '$.replyId') IN ('integer', 'real') THEN json_extract(meta, '$.replyId') END
+           END AS reply_id
+           FROM messages WHERE id = ? AND status = 'replied' AND session_id = ? AND conversation_id = ?
+          AND (sender = 'user' OR (${SCHEDULE_RUN_SQL}))
+          AND (meta IS NULL OR json_valid(meta))`,
+        id, session.id, session.conversationId,
+      );
+      if (row === undefined) continue;
+      if (row.reply_id !== null && Number.isInteger(row.reply_id) && row.reply_id > 0) continue;
       db.run("UPDATE messages SET meta = json_set(COALESCE(meta, '{}'), '$.replyId', ?), updated_at = ? WHERE id = ?", reply, now(), id);
       const updated = toMessage(db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id)!);
       // The status change already pushed a message.updated in this transaction; replace it instead of pushing two.
