@@ -2,9 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { API_PATHS } from "../../../src/shared/index.ts";
 import { FeishuApiError, FeishuReplyTimeout } from "../feishu-driver.ts";
 import { fakeBench } from "../fake-bench.ts";
-import { BENCH_ECHO_REPLY } from "../fake-script.ts";
+import { BENCH_ASK_QUESTION, BENCH_ECHO_REPLY } from "../fake-script.ts";
 import type { FeishuDriver, FeishuMessage } from "../feishu-driver.ts";
 import { feishuRunners } from "./feishu.ts";
 
@@ -67,6 +68,68 @@ async function run(id: string, cards: FeishuMessage[], options: {
   const [result] = await Promise.all([execution, vi.runAllTimersAsync()]);
   return result;
 }
+
+it.each(["missing", "poll error"])("clears both runs' Router cards when the Feishu card is %s", async (failure) => {
+  vi.useFakeTimers();
+  const root = mkdtempSync(join(tmpdir(), "tester-feishu-ask-"));
+  dirs.push(root);
+  const { bench } = fakeBench({
+    version: 1, root, sandboxProject: root, testAccount: { githubLogin: "bench-bot" },
+    guards: { dataDirs: [], uiPorts: [], meshPorts: [], feishuAppIds: [], githubLogins: [] },
+    feishu: { botAppId: "cli_test", driverAppId: "cli_driver" },
+    instances: [{ name: "mac", role: "local", dataDir: root, userHome: root, uiPort: 4417, meshPort: 4421, env: {} }],
+  });
+  const computer = bench.local();
+  let sent = 10;
+  let polling = false;
+  const pending = new Set([1]);
+  const asks = [{ id: 1, sender: "agent", text: BENCH_ASK_QUESTION, meta: { needsUser: true } }];
+  const json = vi.fn(async (_method: string, path: string) => {
+    if (path === API_PATHS.pms) return { pmId: 1, conversationId: 1 };
+    if (path.startsWith(API_PATHS.messages(1))) return { messages: asks };
+    if (path === API_PATHS.askAnswer(sent + 1)) {
+      pending.delete(sent + 1);
+      return {};
+    }
+    throw new Error(`unexpected request: ${path}`);
+  });
+  const local = {
+    ...computer,
+    state: vi.fn().mockResolvedValue({ pms: [], conversations: [] }),
+    send: async () => {
+      sent += 2;
+      pending.add(sent + 1);
+      asks.push({ id: sent + 1, sender: "agent", text: BENCH_ASK_QUESTION, meta: { needsUser: true } });
+      polling = true;
+      return sent;
+    },
+    api: { ...computer.api, json: json as typeof computer.api.json },
+  };
+  const feishu: FeishuDriver = {
+    testChats: async () => [{ chatId: "oc_group", kind: "project", deviceId: "dev_mac", pmId: 1 }],
+    listMessages: async () => {
+      if (polling && failure === "poll error") throw new FeishuApiError("upstream 503", 503, 0);
+      return [];
+    },
+    sendAsUser: async () => { throw new Error("unexpected Feishu send"); },
+    waitForBotMessage: async () => { throw new Error("unexpected Feishu wait"); },
+    ensureUserToken: async () => 0,
+  };
+
+  const pendingCounts = [pending.size];
+  for (const _run of [1, 2]) {
+    polling = false;
+    const execution = feishuRunners["feishu.desktop-answer-syncs-card"]!({
+      bench: { ...bench, local: () => local }, feishu, evidenceDir: root, instance: "local", signal: new AbortController().signal, log: () => {},
+    });
+    const [result] = await Promise.all([execution, vi.runAllTimersAsync()]);
+    if (failure === "missing") expect(result.checks).toContainEqual(expect.objectContaining({ check: "card-settled", ok: false }));
+    else expect(result.externalErrors).toEqual([{ service: "feishu", detail: "upstream 503" }]);
+    pendingCounts.push(pending.size);
+  }
+  expect(pendingCounts).toEqual([1, 1, 1]);
+  expect([...pending]).toEqual([1]);
+});
 
 describe("Feishu Router flows", () => {
   it.each(["feishu.dm-router", "feishu.reconnect-catch-up"])("fails %s on a nonempty terminal error card", async (id) => {

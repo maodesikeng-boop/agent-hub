@@ -26,7 +26,7 @@ Owner time is about 34 minutes in total: 5 for accounts, 7 for Mesh, 15 for Feis
 3. **[PM]** Write `~/.bellwood-tester/bench.json` (shape: `BenchConfig` in `test/tester/bench.ts`). Under `guards`, list the owner's real data directories, ports 4317, 4318, and 4320, the real Feishu bot's app id, and the owner's own GitHub login. This file never goes into the repository.
 4. **[PM]** Install the vendor CLIs into the bench `HOME`: `node test/tester/cli.ts vendors install`. It uses each vendor's product install command with `HOME` and the npm prefix inside `local/user-home`, so nothing lands in the owner's own tool directories.
 
-Start the Mac test daemon from a host terminal or the nightly LaunchAgent. A Bellwood Worker sandbox blocks the daemon from applying its own macOS sandbox. The tester checks this before starting a daemon; read-only preflight can still reuse a daemon that is already running.
+Start the Mac test daemon from a host terminal or the nightly LaunchAgent so the daemon can apply its own macOS sandbox. The tester checks this before startup. Read-only preflight can reuse a daemon that is already running.
 
 ## 4. Mesh
 
@@ -51,9 +51,22 @@ Use the bench `HOME` for each sign-in. On the Mac, prefix the command with `HOME
 
 | Vendor | Sign in | Time |
 | --- | --- | --- |
-| Claude Code | **[Owner]** `claude setup-token` once; **[PM]** saves the token in `secrets/claude-oauth-token`, and both computers use it as `CLAUDE_CODE_OAUTH_TOKEN` | 2 min |
+| Claude Code | **[Owner]** Run `claude setup-token`. **[PM]** Connect the bench token as described below. | 2 min |
 | Codex | **[Owner]** `codex login --device-auth` on the Mac only | 1.5 min |
 | Antigravity | **[Owner]** run `agy` and paste the code on the Mac only | 1.5 min |
+
+To connect the Claude Code token on the Mac:
+
+1. Save the bench token to `secrets/claude-oauth-token` under the bench root with mode 0600.
+2. In `bench.json`, add this entry to the local instance's `env`:
+
+   ```json
+   "CLAUDE_CODE_OAUTH_TOKEN": "@secrets/claude-oauth-token"
+   ```
+
+3. If the local bench daemon is running, restart it so it reads the new environment.
+
+On the server, set `CLAUDE_CODE_OAUTH_TOKEN` in the test daemon's service environment and restart that daemon.
 
 The remaining vendor and computer pairs require no sign-in. Install every CLI as described in sections 2 and 3. The summary lists the skipped turns as accepted gaps.
 

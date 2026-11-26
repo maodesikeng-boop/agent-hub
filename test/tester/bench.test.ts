@@ -206,15 +206,20 @@ describe("openBench", () => {
     }
   });
 
-  it("reports a denied macOS sandbox before starting the local test daemon", async () => {
+  it("reports a denied macOS sandbox before starting the local test daemon and exits run with code 2", async () => {
     const c = config(scratch());
+    const file = join(c.root, "bench.json");
+    writeFileSync(file, JSON.stringify(c));
     const probe = vi.spyOn(sandboxProbes, "sandboxAllowsNestedSandbox").mockReturnValue(false);
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      await expect(openBench(c, { codeDir: scratch(), mode: "real" })).rejects.toThrow(
-        "macOS denied sandbox-exec for the local test daemon. Run the tester from a terminal outside the Bellwood Worker sandbox.",
-      );
+      const message = "macOS denied sandbox-exec for the local test daemon. Run the tester from a host terminal outside any agent sandbox.";
+      await expect(openBench(c, { codeDir: scratch(), mode: "real" })).rejects.toThrow(message);
+      await expect(main(["run", "--flow", "feishu.desktop-answer-syncs-card", "--config", file])).resolves.toBe(2);
+      expect(out).toHaveBeenCalledWith(expect.stringContaining(message));
       expect(existsSync(local(c).dataDir)).toBe(false);
     } finally {
+      out.mockRestore();
       probe.mockRestore();
     }
   });
@@ -235,12 +240,28 @@ describe("openBench", () => {
     expect(fake[claude]).toBe("/code/test/fake-claude/fake-claude.ts");
     expect(fake.FAKE_CLAUDE_SCRIPT!.startsWith(root)).toBe(true);
   });
+
+  it("uses the Claude token file only when the local instance explicitly maps it", () => {
+    const root = scratch();
+    const c = config(root);
+    const secrets = join(root, "secrets");
+    mkdirSync(secrets);
+    writeFileSync(join(secrets, "claude-oauth-token"), "bench-only-token\n");
+    const input = { config: c, instance: local(c), codeDir: "/code", mode: "real" as const, platform: process.platform, baseEnv: { CLAUDE_CODE_OAUTH_TOKEN: "outside-token" } };
+
+    expect(localDaemonEnv(input).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    local(c).env.CLAUDE_CODE_OAUTH_TOKEN = "@secrets/claude-oauth-token";
+    expect(localDaemonEnv(input).CLAUDE_CODE_OAUTH_TOKEN).toBe("bench-only-token");
+  });
 });
 
 describe("bench configuration at command boundaries", () => {
-  it.each([["vendors", "install"], ["authorize-feishu"]] as const)(
-    "refuses guarded config before running %s %s",
-    async (...argv) => {
+  it.each([
+    { command: "vendors install", argv: ["vendors", "install"] },
+    { command: "authorize-feishu", argv: ["authorize-feishu"] },
+  ])(
+    "refuses guarded config before running $command",
+    async ({ argv }) => {
       const root = scratch();
       const c = config(root);
       local(c).uiPort = 4317;

@@ -98,6 +98,7 @@ export interface FakeScript {
   tools?: string[];
   /** 按跨进程的总轮数取（第 0 轮是 turns[0]）；超出就用 defaultTurn。 */
   turns?: FakeTurn[];
+  inputTurns?: Array<{ textPrefix: string; turn: FakeTurn }>;
   defaultTurn?: FakeTurn;
   /** 永远不发 init，收到消息也不回应（启动卡住）。 */
   noInit?: boolean;
@@ -496,7 +497,10 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids
   for (const uuid of uuids) emitLifecycle(uuid, "started");
   const aborted = () => seq !== turnSeq;
   const startedAt = (currentTurnStartedAt = Date.now());
-  const turn: FakeTurn = selfTurn ?? script.turns?.[nextTurnIndex()] ?? script.defaultTurn ?? { steps: [{ text: "ok" }] };
+  const inputTurn = content === null ? undefined : script.inputTurns?.find(
+    ({ textPrefix }) => content.some((block) => block?.type === "text" && typeof block.text === "string" && block.text.startsWith(textPrefix)),
+  )?.turn;
+  const turn = selfTurn ?? inputTurn ?? script.turns?.[nextTurnIndex()] ?? script.defaultTurn ?? { steps: [{ text: "ok" }] };
   if (newSessionId !== undefined) createSession(newSessionId);
   if (content === null) {
     emit({ type: "system", subtype: "task_notification", status: "completed", session_id: sessionId, uuid: randomUUID() });

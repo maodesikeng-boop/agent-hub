@@ -25,7 +25,8 @@ import {
   checkAgyUserLine,
   detectAgyArgsConflict,
 } from "./protocol.ts";
-import { agyRuleBudgetWarning, writeAgyPromptRules } from "./rules.ts";
+import { agyRuleBudgetWarning } from "./rules.ts";
+import { prepareAgyLaunchWorkspace } from "./launch-workspace.ts";
 import {
   NO_NOTES,
   createBaseSessionState,
@@ -341,11 +342,10 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
 
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
-    // Rules under an --add-dir land in agy's <user_rules> system prompt section and survive compaction.
-    const promptRulesDir = writeAgyPromptRules(files.promptFile, files.skillsDir);
+    const launchWorkspace = prepareAgyLaunchWorkspace(files.promptFile, files.skillsDir);
     let warning: string | null;
     try {
-      warning = agyRuleBudgetWarning(this.#homeDir ?? homedir(), [row.cwd, ...row.addDirs, ...(promptRulesDir === null ? [] : [promptRulesDir])]);
+      warning = agyRuleBudgetWarning(this.#homeDir ?? homedir(), [row.cwd, ...row.addDirs, launchWorkspace]);
     } catch (error) {
       warning = `agy 规则预算检查失败：${errorMessage(error)}。无法确认规则是否会被截断。`;
     }
@@ -372,7 +372,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       effectiveFiles,
       resume,
       readonlyPolicy === undefined || catalog === null ? undefined : agyConnectorRules(readonlyPolicy, catalog),
-      promptRulesDir,
+      launchWorkspace,
     );
     let tmpDir: string | null = null;
     let launch: ScopedSpawn;
