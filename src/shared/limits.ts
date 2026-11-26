@@ -781,3 +781,5 @@ export const WATCH_TICK_MS = 1_000;
 export const WATCH_PRUNE_EVERY_MS = 60 * 60_000;
 export const WATCHES_RETAIN_MS = 7 * 24 * 60 * 60_000;
 export const WATCHES_RETAIN_PER_PM = 500;
+export const PM_AGENDA_REMIND_AFTER_MS = 15 * 60_000;
+export const PM_AGENDA_REMINDERS_MAX = 4;
