@@ -72,6 +72,7 @@ export interface SqliteLedger extends Ledger {
   getRouterSettings: LedgerRouter["getSettings"];
   createRouterCommand: LedgerRouter["createCommand"];
   updateRouterCommand: LedgerRouter["updateCommand"];
+  claimRouterCommandRetry: LedgerRouter["claimCommandRetry"];
   getRouterCommand: LedgerRouter["getCommand"];
   getRouterItem: LedgerRouter["getItem"];
   resolveRouterItem: LedgerRouter["resolveItem"];
@@ -572,6 +573,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     updateRouterSettings: router.updateSettings,
     createRouterCommand: router.createCommand,
     updateRouterCommand: router.updateCommand,
+    claimRouterCommandRetry: router.claimCommandRetry,
     getRouterCommand: router.getCommand,
     getRouterItem: router.getItem,
     listRouterCommands: router.listCommands,

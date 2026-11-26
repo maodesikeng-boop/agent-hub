@@ -2627,7 +2627,14 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       expect(ledger.routerCalls).toContainEqual({ call: "listCommands", args: ["200:10", 15] });
 
       // 3. Browser POST /api/router/commands/42/retry: a body without this retry's id and the run it retries never reaches the dispatcher
-      for (const payload of [{}, { retryId: "r-42" }, { retryId: "", fromRetryId: null }, { retryId: "r-42", fromRetryId: null, extra: true }]) {
+      for (const payload of [
+        {},
+        { retryId: "r-42" },
+        { retryId: "", fromRetryId: null },
+        { retryId: "   ", fromRetryId: null },
+        { retryId: "r-42", fromRetryId: "   " },
+        { retryId: "r-42", fromRetryId: null, extra: true },
+      ]) {
         const rejected = await customApp.inject({ method: "POST", url: "/api/router/commands/42/retry", headers: browserHeaders, payload });
         expect(rejected.statusCode).toBe(400);
       }

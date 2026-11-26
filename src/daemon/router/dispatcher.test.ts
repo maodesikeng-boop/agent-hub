@@ -8,7 +8,7 @@ import {
 } from "../agent-api/tokens.ts";
 import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
-import type { Db } from "../store/db.ts";
+import { migrate, openDatabase, type Db } from "../store/index.ts";
 import {
   DriverError,
   bundledModelCatalog,
@@ -19,6 +19,7 @@ import {
   type DriverSendInput,
   type DriverSendResult,
   type ModelCatalog,
+  ROUTER_COMMAND_MAX_RETRIES,
   ROUTER_PROJECT_SHOW_MAX_BYTES,
   ROUTER_PROJECT_SHOW_PER_TURN_MAX,
   ROUTER_REPLY_MAX_CHARS,
@@ -1127,6 +1128,160 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       const next = await dispatcher.retryCommand(failed.id, { retryId: "retry-ops-2", fromRetryId: "retry-ops" });
       expect(next).toMatchObject({ status: "dispatched", plan: { retryId: "retry-ops-2" } });
       expect(remoteOps).toHaveLength(1);
+    });
+
+    it("cross-round reuse (A, B) is rejected after A and B fail, while a fresh (C, B) succeeds", async () => {
+      driver.onTurn = failTurn;
+      const failed = await dispatcher.submitCommand({ clientId: "cid-retry-cross-round", text: "跨轮复用旧编号" });
+      expect(failed.status).toBe("failed");
+
+      const runA = await dispatcher.retryCommand(failed.id, firstRetry("retry-A"));
+      expect(runA).toMatchObject({ status: "failed", plan: { retryId: "retry-A" } });
+      const runB = await dispatcher.retryCommand(failed.id, { retryId: "retry-B", fromRetryId: "retry-A" });
+      expect(runB).toMatchObject({ status: "failed", plan: { retryId: "retry-B" } });
+      expect(driver.started).toHaveLength(3);
+
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "retry-A", fromRetryId: "retry-B" })).rejects.toMatchObject({ code: "conflict" });
+      expect(driver.started).toHaveLength(3);
+      expect(ledger.getRouterCommand(failed.id)).toMatchObject({ status: "failed", plan: { retryId: "retry-B" } });
+
+      driver.onTurn = answerTurn("新编号成功");
+      const runC = await dispatcher.retryCommand(failed.id, { retryId: "retry-C", fromRetryId: "retry-B" });
+      expect(runC).toMatchObject({ status: "answered", plan: { retryId: "retry-C" } });
+      expect(driver.started).toHaveLength(4);
+    });
+
+    it("original request replay (B, A) stays rejected after attempting (A, B) and across daemon restart", async () => {
+      const dbFile = join(rootDir, "restart-retry.sqlite");
+      const dataHome = join(rootDir, "restart-data");
+      const restartPersonas = join(dataHome, "personas");
+      const restartPmHome = join(dataHome, "state", "pm-home");
+      mkdirSync(restartPersonas, { recursive: true });
+      mkdirSync(restartPmHome, { recursive: true });
+
+      const makeRestartStack = () => {
+        const restartDb = openDatabase(dbFile);
+        migrate(restartDb);
+        const restartLedger = createLedger(restartDb, {
+          personasDir: restartPersonas,
+          pmHomeRoot: restartPmHome,
+          dataHome,
+          uploadsDir,
+        });
+        const restartDriver = new FakeRouterDriver();
+        const restartGuard = createRouterSandboxGuard();
+        const restartLocalPort = createLocalTargetPort({
+          ledger: restartLedger,
+          deviceId: "dev-local",
+          deviceName: "MacStudio",
+          uploadsDir,
+          probeWorkspace: async () => ({ kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false }),
+        });
+        const restartDispatcher = createRouterDispatcher({
+          ledger: restartLedger,
+          runTurn: createRouterTurnRunner({
+            ledger: restartLedger,
+            driver: restartDriver,
+            tokens: createSessionTokens(),
+            purposes: createRouterTurnPurposes(),
+            stateDir,
+            launchDir,
+            cleanupGraceMs: 50,
+          }),
+          sandboxGuard: restartGuard,
+          targetRegistry: {
+            selfDeviceId: () => "dev-local",
+            getPort: (id: string) => (id === "self" || id === "dev-local" ? restartLocalPort : null),
+            listPorts: () => [restartLocalPort],
+            listAllDigests: async () => [{ port: restartLocalPort, result: await restartLocalPort.getDigest() }],
+          },
+          models: { list: async () => catalogs },
+          resolveAttachment: (id: string) => attachmentMetaOf(uploadsDir, id),
+          agentTimeoutMs: 1_000,
+        });
+        return { restartDb, restartLedger, restartDriver, restartDispatcher };
+      };
+
+      const boot1 = makeRestartStack();
+      let commandId: number;
+      try {
+        boot1.restartDriver.onTurn = failTurn;
+        const failed = await boot1.restartDispatcher.submitCommand({ clientId: "cid-replay-ba", text: "重启后仍拒绝旧编号与重放" });
+        commandId = failed.id;
+        await boot1.restartDispatcher.retryCommand(commandId, firstRetry("retry-A"));
+        await boot1.restartDispatcher.retryCommand(commandId, { retryId: "retry-B", fromRetryId: "retry-A" });
+        expect(boot1.restartDriver.started).toHaveLength(3);
+
+        const reusedA = await boot1.restartDispatcher
+          .retryCommand(commandId, { retryId: "retry-A", fromRetryId: "retry-B" })
+          .catch((err: unknown) => err);
+        const replayB = await boot1.restartDispatcher
+          .retryCommand(commandId, { retryId: "retry-B", fromRetryId: "retry-A" })
+          .catch((err: unknown) => err);
+        expect(replayB).toMatchObject({ code: "conflict" });
+        expect(reusedA).toMatchObject({ code: "conflict" });
+        expect(boot1.restartDriver.started).toHaveLength(3);
+        expect(boot1.restartLedger.getRouterCommand(commandId)).toMatchObject({ status: "failed", plan: { retryId: "retry-B" } });
+      } finally {
+        await boot1.restartDispatcher.close();
+        boot1.restartLedger.close();
+        boot1.restartDb.close();
+      }
+
+      const boot2 = makeRestartStack();
+      try {
+        boot2.restartLedger.recoverAfterRestart();
+        boot2.restartDriver.onTurn = failTurn;
+        await expect(boot2.restartDispatcher.retryCommand(commandId, { retryId: "retry-A", fromRetryId: "retry-B" })).rejects.toMatchObject({ code: "conflict" });
+        await expect(boot2.restartDispatcher.retryCommand(commandId, { retryId: "retry-B", fromRetryId: "retry-A" })).rejects.toMatchObject({ code: "conflict" });
+        expect(boot2.restartDriver.started).toHaveLength(0);
+        expect(boot2.restartLedger.getRouterCommand(commandId)).toMatchObject({ status: "failed", plan: { retryId: "retry-B" } });
+
+        boot2.restartDriver.onTurn = answerTurn("重启后用新编号成功");
+        const runC = await boot2.restartDispatcher.retryCommand(commandId, { retryId: "retry-C", fromRetryId: "retry-B" });
+        expect(runC).toMatchObject({ status: "answered", plan: { retryId: "retry-C" } });
+        expect(boot2.restartDriver.started).toHaveLength(1);
+      } finally {
+        await boot2.restartDispatcher.close();
+        boot2.restartLedger.close();
+        boot2.restartDb.close();
+      }
+    });
+
+    it("retryOps cross-round reuse (A, B) and replay (B, A) reject without re-sending target ops", async () => {
+      remoteOnline = false;
+      const failed = await dispatcher.submitCommand({
+        clientId: "cid-retry-ops-cross",
+        text: "跑基准",
+        target: { deviceId: "dev-linux", pmId: 20 },
+      });
+      await dispatcher.retryCommand(failed.id, firstRetry("ops-A"));
+      await dispatcher.retryCommand(failed.id, { retryId: "ops-B", fromRetryId: "ops-A" });
+
+      remoteOnline = true;
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "ops-A", fromRetryId: "ops-B" })).rejects.toMatchObject({ code: "conflict" });
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "ops-B", fromRetryId: "ops-A" })).rejects.toMatchObject({ code: "conflict" });
+      expect(remoteOps).toHaveLength(0);
+
+      const ok = await dispatcher.retryCommand(failed.id, { retryId: "ops-C", fromRetryId: "ops-B" });
+      expect(ok).toMatchObject({ status: "dispatched", plan: { retryId: "ops-C" } });
+      expect(remoteOps).toHaveLength(1);
+    });
+
+    it("rejects both reused and fresh retry ids once ROUTER_COMMAND_MAX_RETRIES is reached", async () => {
+      driver.onTurn = failTurn;
+      const failed = await dispatcher.submitCommand({ clientId: "cid-retry-cap", text: "触达重试上限" });
+      let prev: string | null = null;
+      for (let i = 1; i <= ROUTER_COMMAND_MAX_RETRIES; i++) {
+        const id = `cap-${i}`;
+        const run = await dispatcher.retryCommand(failed.id, { retryId: id, fromRetryId: prev });
+        expect(run).toMatchObject({ status: "failed", plan: { retryId: id } });
+        prev = id;
+      }
+      const startedBefore = driver.started.length;
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "cap-1", fromRetryId: prev })).rejects.toMatchObject({ code: "conflict" });
+      await expect(dispatcher.retryCommand(failed.id, { retryId: "cap-over", fromRetryId: prev })).rejects.toMatchObject({ code: "conflict" });
+      expect(driver.started).toHaveLength(startedBefore);
     });
   });
   describe("hub dispatch project-show（docs/router-project-catalog-design.md）", () => {

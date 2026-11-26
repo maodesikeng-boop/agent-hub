@@ -41,6 +41,7 @@ import {
   ROUTER_AUDIT_LOG_RETENTION_DAYS,
   ROUTER_COMMANDS_RETENTION_DAYS,
   ROUTER_COMMANDS_RETENTION_MAX,
+  ROUTER_COMMAND_MAX_RETRIES,
   ROUTER_ITEMS_TERMINAL_MAX_ROWS,
   ROUTER_ITEM_RETENTION_DAYS,
   SANDBOX_APPROVALS_RETENTION_DAYS,
@@ -220,6 +221,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("router_commands", "growing", "src/daemon/ledger/router.ts", "src/daemon/ledger/router.ts", "automatic", [
     limit("ROUTER_COMMANDS_RETENTION_DAYS", ROUTER_COMMANDS_RETENTION_DAYS, "days"),
     limit("ROUTER_COMMANDS_RETENTION_MAX", ROUTER_COMMANDS_RETENTION_MAX, "rows"),
+    limit("ROUTER_COMMAND_MAX_RETRIES", ROUTER_COMMAND_MAX_RETRIES, "entries"),
   ]),
   table("router_audit_log", "growing", "src/daemon/ledger/router.ts", "src/daemon/ledger/router.ts", "automatic", [
     limit("ROUTER_AUDIT_LOG_RETENTION_DAYS", ROUTER_AUDIT_LOG_RETENTION_DAYS, "days"),

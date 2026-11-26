@@ -19,6 +19,7 @@ import {
   PROVIDER_API_KEY_MAX_CHARS,
   PROVIDER_AUTH_INPUT_MAX_CHARS,
   ROUTER_COMMAND_MAX_CHARS,
+  ROUTER_COMMAND_RETRY_ID_MAX_CHARS,
   isJellyColorId,
   isPmFruit,
   isValidCapabilityKey,
@@ -193,10 +194,16 @@ export const decideRouterItemBodySchema = z
   })
   .strict();
 
+const retryIdSchema = z
+  .string()
+  .min(1)
+  .max(ROUTER_COMMAND_RETRY_ID_MAX_CHARS)
+  .refine((s) => s.trim() !== "", "retryId must not be empty");
+
 export const retryRouterCommandBodySchema = z
   .object({
-    retryId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
-    fromRetryId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH).nullable(),
+    retryId: retryIdSchema,
+    fromRetryId: retryIdSchema.nullable(),
   })
   .strict();
 
