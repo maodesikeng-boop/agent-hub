@@ -89,7 +89,7 @@ describe("step slots: every exit path frees the slot and the oldest waiter start
   it("restart recovery admits a waiter once the crashed holder's step leaves running", () => {
     const first = slotted("图甲");
     const second = slotted("图乙");
-    f.db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'pm' WHERE graph_id = ?", first.id);
+    f.db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'pm', active_worker_id = NULL WHERE graph_id = ?", first.id);
     expect(step(second.id).status).toBe("pending");
     f.ledger.recoverAfterRestart();
     expect(step(second.id).status).toBe("running");

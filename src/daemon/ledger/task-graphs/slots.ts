@@ -1,9 +1,10 @@
 import type { TaskGraphId, TaskNode, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
-import type { Db } from "../../store/index.ts";
+import { CODE_TRIGGER_PREFIX, type Db } from "../../store/index.ts";
+import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 
 // Invariant: after any committed write, each slot on this daemon has at most one holder, and no slot is free while a
-// step waits for it. The `task_graph_step_slots_admit` trigger refuses any write that puts a step into running while
-// another step holds its slot, using HOLDS_SLOT_SQL verbatim.
+// step waits for it. The SLOT_ADMIT_TRIGGER trigger refuses any write that puts a step into running while another step
+// holds its slot, and is built from HOLDS_SLOT_SQL each time the ledger opens.
 
 export interface SlotHolder {
   graphId: TaskGraphId;
@@ -22,9 +23,37 @@ interface SlotStepRow {
   active_worker_id: WorkerId | null;
 }
 
-/** The one definition of a step `n` holding its slot; ended graphs leave no step running and no Worker attached. */
+/**
+ * The one definition of a step `n` holding its slot, whatever its own status says: it runs, or its active Worker has a
+ * running turn, background commands, or work it will start without anyone resuming it (a worktree still being created,
+ * or input queued, delivered, or being processed). A Worker waiting for sandbox approval holds nothing until approved.
+ * Ended graphs leave no step running and no Worker attached.
+ */
 export const HOLDS_SLOT_SQL =
-  "(n.status = 'running' OR (n.active_worker_id IS NOT NULL AND EXISTS (SELECT 1 FROM agent_sessions a WHERE a.worker_id = n.active_worker_id AND (EXISTS (SELECT 1 FROM session_background_tasks b WHERE b.session_id = a.id) OR EXISTS (SELECT 1 FROM turns t WHERE t.session_id = a.id AND t.status = 'running')))))";
+  "(n.status = 'running' OR (n.active_worker_id IS NOT NULL AND (" +
+  "EXISTS (SELECT 1 FROM agent_sessions a WHERE a.worker_id = n.active_worker_id AND (" +
+  "EXISTS (SELECT 1 FROM session_background_tasks b WHERE b.session_id = a.id) OR EXISTS (SELECT 1 FROM turns t WHERE t.session_id = a.id AND t.status = 'running'))) " +
+  "OR EXISTS (SELECT 1 FROM workers w WHERE w.id = n.active_worker_id AND w.status = 'open' " +
+  "AND NOT EXISTS (SELECT 1 FROM worker_sandbox_approvals x WHERE x.worker_id = w.id AND x.status = 'pending') " +
+  "AND ((w.workspace = 'worktree' AND w.base_commit IS NULL) OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = w.worker_conversation_id " +
+  `AND m.status IN ('queued', 'delivered', 'processing') AND NOT ${CHECKLIST_REMINDER_SQL}))))))`;
+
+export const SLOT_ADMIT_TRIGGER = `${CODE_TRIGGER_PREFIX}task_graph_step_slots_admit`;
+
+/** Postcondition: the ledger refuses any write that moves a step into running while another step holds its slot. */
+export function installSlotAdmission(db: Db): void {
+  db.exec(`DROP TRIGGER IF EXISTS ${SLOT_ADMIT_TRIGGER};
+CREATE TRIGGER ${SLOT_ADMIT_TRIGGER}
+BEFORE UPDATE OF status ON task_graph_steps
+WHEN NEW.status = 'running' AND OLD.status IS NOT 'running' AND EXISTS (
+  SELECT 1 FROM task_graph_step_slots mine
+    JOIN task_graph_step_slots s ON s.slot = mine.slot AND s.step_id != mine.step_id
+    JOIN task_graph_steps n ON n.id = s.step_id
+   WHERE mine.step_id = NEW.id AND ${HOLDS_SLOT_SQL})
+BEGIN
+  SELECT RAISE(ABORT, 'slot_held');
+END;`);
+}
 
 // A queued step of an archived PM keeps its row for unarchive but takes no place in line.
 const LIVE_PM_SQL = "NOT EXISTS (SELECT 1 FROM pm_archives a WHERE a.pm_id = g.pm_id)";

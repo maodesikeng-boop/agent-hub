@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CONFIRM_REJECT_OPTION, type TaskGraphId, type TaskNode, type WorkerId } from "../../shared/domain.ts";
 import { pmAgendaOf } from "./pm-agenda.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture, type PmHandle } from "./pm-friction-fixture.ts";
-import { HOLDS_SLOT_SQL, slotHolderOf } from "./task-graphs/slots.ts";
-import { createSessionStore } from "../store/index.ts";
+import { HOLDS_SLOT_SQL, installSlotAdmission, SLOT_ADMIT_TRIGGER, slotHolderOf } from "./task-graphs/slots.ts";
+import { createSessionStore, migrate } from "../store/index.ts";
 
 describe("step slots: every way a step starts or its Worker resumes passes one admission", () => {
   let f: PmFrictionFixture;
@@ -53,9 +53,19 @@ describe("step slots: every way a step starts or its Worker resumes passes one a
   });
 
   it("the admission trigger checks the same holding condition the ledger reads", () => {
-    const sql = f.db.get<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'task_graph_step_slots_admit'")!.sql;
-    const squash = (text: string) => text.replace(/\s+/gu, " ");
-    expect(squash(sql)).toContain(squash(HOLDS_SLOT_SQL));
+    const sql = f.db.get<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?", SLOT_ADMIT_TRIGGER)!.sql;
+    expect(sql).toContain(HOLDS_SLOT_SQL);
+  });
+
+  it("older migrations rerun under a ledger that built the admission trigger, and the next ledger builds it again", () => {
+    slotted("图甲");
+    const second = slotted("图乙");
+    f.db.exec("PRAGMA user_version = 8");
+    expect(() => migrate(f.db)).not.toThrow();
+    expect(f.db.get("SELECT 1 AS x FROM sqlite_master WHERE type = 'trigger' AND name = ?", SLOT_ADMIT_TRIGGER)).toBeUndefined();
+    installSlotAdmission(f.db);
+    const stepId = f.db.get<{ id: number }>("SELECT id FROM task_graph_steps WHERE graph_id = ?", second.id)!.id;
+    expect(() => f.db.run("UPDATE task_graph_steps SET status = 'running' WHERE id = ?", stepId)).toThrow(/slot_held/);
   });
 
   it("hub worker send to a braked Worker whose slot is now held elsewhere is refused", async () => {
@@ -101,6 +111,55 @@ describe("step slots: every way a step starts or its Worker resumes passes one a
     f.ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "ask-1", text: "在等拍板", at: ++f.clock.now });
     f.ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [inputId], durationMs: 20, at: ++f.clock.now });
     expect(step(second.id).status).toBe("running");
+  });
+
+  it("hub ask --node while the Worker is still preparing keeps the slot until its first turn ends", async () => {
+    const first = slotted("图甲");
+    const second = slotted("图乙");
+    const wid = holderWorker(first.id);
+    f.ledger.hubCall(f.lin.sessionId, "ask", { graphId: first.id, node: "review-real", text: "要不要连生产库？", options: ["连", "不连"] });
+    expect(step(first.id).status).toBe("waiting");
+    expect(step(second.id).status).toBe("pending");
+    expect(slotHolderOf(f.db, "real-env")).toMatchObject({ graphId: first.id, workerId: wid });
+    await f.startWorktree(wid);
+    expect(step(second.id).status).toBe("pending");
+    const s = f.workerSessionOf(wid);
+    const input = f.db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND sender = 'pm' ORDER BY id DESC LIMIT 1", s.conversation_id)!;
+    createSessionStore(f.db).update(s.id, { status: "running", pid: 52_000 + wid });
+    f.ledger.applyDriverEvent(s.id, { type: "message.delivered", messageIds: [input.id], at: ++f.clock.now });
+    expect(step(second.id).status).toBe("pending");
+    f.ledger.applyDriverEvent(s.id, { type: "message.processing", messageIds: [input.id], at: ++f.clock.now });
+    f.ledger.applyDriverEvent(s.id, { type: "agent.text", uuid: "prep-1", text: "在等拍板", at: ++f.clock.now });
+    f.ledger.applyDriverEvent(s.id, { type: "turn.ended", ok: true, interrupted: false, messageIds: [input.id], durationMs: 20, at: ++f.clock.now });
+    expect(step(second.id).status).toBe("running");
+  });
+
+  it("a step whose Worker has input waiting still holds its slot whatever its own status says", async () => {
+    const first = slotted("图甲");
+    const second = slotted("图乙");
+    const wid = holderWorker(first.id);
+    await f.startWorktree(wid);
+    f.db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'pm' WHERE graph_id = ?", first.id);
+    expect(slotHolderOf(f.db, "real-env")).toMatchObject({ graphId: first.id, workerId: wid });
+    const secondStep = f.db.get<{ id: number }>("SELECT id FROM task_graph_steps WHERE graph_id = ?", second.id)!.id;
+    expect(() => f.db.run("UPDATE task_graph_steps SET status = 'running' WHERE id = ?", secondStep)).toThrow(/slot_held/);
+  });
+
+  it("a brief-less step queued by hand after its Worker handed back a decision asks the PM again instead of settling", () => {
+    const first = slotted("图甲", { brief: undefined });
+    expect(step(first.id)).toMatchObject({ status: "waiting", waitingFor: "pm" });
+    const earlier = f.ledger.hubCall(f.lin.sessionId, "worker.start", { node: "review-real", graphId: first.id, task: "真实环境跑一遍" }).data.worker!.id;
+    const second = slotted("图乙");
+    f.ledger.hubCall(f.lin.sessionId, "worker.end", { workerId: earlier });
+    expect(step(second.id).status).toBe("running");
+    const { messageId } = f.ledger.hubCall(f.lin.sessionId, "ask", { graphId: first.id, node: "review-real", text: "换环境还是等？", options: ["换", "等"] }).data;
+    f.ledger.decideTaskNode(first.id, "review-real", { clientId: "c1", askMessageId: messageId, choice: "等" });
+    expect(step(first.id)).toMatchObject({ status: "waiting", waitingFor: "pm", workerIds: [earlier] });
+    const queued = f.ledger.hubCall(f.lin.sessionId, "worker.start", { node: "review-real", graphId: first.id, task: "继续" });
+    expect(queued.text).toContain("空出来会叫你派 Worker");
+    f.ledger.hubCall(f.lin.sessionId, "worker.end", { workerId: holderWorker(second.id) });
+    expect(step(first.id)).toMatchObject({ status: "waiting", waitingFor: "pm" });
+    expect(f.pmSystemMessages().at(-1)?.text).toContain("名额「real-env」空出来了");
   });
 
   it("a Worker whose turn fails while a background command runs keeps the slot until the command ends", async () => {

@@ -1,7 +1,7 @@
 import type { HubArgs, WorkerStartQueuedResult } from "../../../shared/hub.ts";
 import { fail, type Pending } from "../context.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
-import { hasText, workerIdsOf } from "./rows.ts";
+import { readyOutcomeOf, workerIdsOf } from "./rows.ts";
 import { admitStep, freeSlotsWithWaiters, queueStep, slotConflictOf, slotHolderOf, slotWaitersOf } from "./slots.ts";
 import { getGraphRow, getStepRow, isUserBlocked, pushSlimGraphIn, touchGraph } from "./store.ts";
 import { slotHeldText } from "./text.ts";
@@ -24,7 +24,7 @@ const START_OVERRIDES: ReadonlyArray<[keyof StartArgs, string]> = [
 ];
 
 /**
- * Precondition: called in the write that follows any committed change to a graph step or a Worker's turn or background count.
+ * Precondition: called in the write that follows any committed change, since HOLDS_SLOT_SQL reads steps, Workers, turns, background counts, and messages.
  * Postcondition: starts the oldest waiting step of each free slot; leaves every held slot alone.
  */
 export function drainSlotsIn(g: TaskGraphCtx, p: Pending): void {
@@ -69,8 +69,10 @@ export function assertSlotFreeForWorkerIn(g: TaskGraphCtx, node: Pick<TaskNodeDb
 function notQueueableReasons(g: TaskGraphCtx, node: TaskNodeDbRow, args: StartArgs): string[] {
   if (node.status === "done") return ["重开已完成的步骤"];
   if (node.status === "waiting" && isUserBlocked(g.db, node.id)) return ["换掉等用户处理的步骤"];
-  // A step without a brief only asks the PM to start it again, so nothing given now is carried.
-  if (!hasText(node.brief)) return [];
+  const outcome = readyOutcomeOf(node);
+  // Asking the PM again carries nothing given now, so nothing is lost by queueing.
+  if (outcome === "pm") return [];
+  if (outcome === "settle") return ["给已拍板的步骤派 Worker（出队时会按定案直接放行）"];
   const reasons = START_OVERRIDES.filter(([key]) => args[key] !== undefined).map(([, label]) => label);
   if (workerIdsOf(node).length > 0) reasons.unshift("接手前任 Worker 的目录和记录");
   return reasons;
@@ -97,7 +99,7 @@ export function queueWorkerStartIn(g: TaskGraphCtx, p: Pending, target: WorkerBi
   pushSlimGraphIn(g, p, target.graphId);
   const { slot, position, holder } = admission;
   return {
-    text: slotHeldText(target.nodeKey, admission, { kind: hasText(node.brief) ? "start" : "pm" }),
+    text: slotHeldText(target.nodeKey, admission, { kind: readyOutcomeOf(node) === "start" ? "start" : "pm" }),
     data: { worker: null, slotQueue: { graphId: target.graphId, nodeKey: target.nodeKey, slot, position, holder } },
   };
 }

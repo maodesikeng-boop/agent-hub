@@ -31,6 +31,10 @@ To add a migration:
 
 If two open PRs claim the same version, the `migration-claims` check fails on the PR with the higher PR number. It names the other PR and the next free version. Renumber the migration and update its manifest entry. If a lower migration number is still waiting to merge, the manifest check requires that migration to land first. Never edit, rename, or renumber a migration that is already on `main`: ledgers that ran the old file never run it again. Add a new migration instead.
 
+### Triggers built from code
+
+A trigger whose condition is defined in TypeScript, such as the step slot admission built from `HOLDS_SLOT_SQL`, is installed by the ledger each time it opens and is named with the `code_` prefix (`CODE_TRIGGER_PREFIX`). Before `migrate()` applies any migration it drops every `code_*` trigger, because SQLite refuses to rebuild a table that a trigger body reads, and older migrations rebuild `messages`, `workers`, and the task graph tables. Migration files may create triggers only when the trigger body reads tables that no earlier migration rebuilds.
+
 ## Upgrade tests with released ledgers
 
 `test/fixtures/release-db/<tag>.sqlite.gz` holds a ledger that a released version really wrote. `scripts/release-db-fixture.ts` extracts the tag with `git archive` and starts that tag's daemon through that tag's e2e harness and fake vendor CLI. It then creates a project, chats with two PMs through the released API, and gzips the database the daemon leaves after a clean shutdown.
