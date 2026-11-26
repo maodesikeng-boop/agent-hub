@@ -127,7 +127,7 @@ describe("界面标准：共用组件", () => {
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-frame\s*\{\s*transition: none/);
   });
 
-  it("下拉 plain（分组行里改了马上存的）：透明底无实线框，悬停和打开时 bg-hover，高 36px，不用主色", () => {
+  it("plain Select (saves on change inside a group row): row value style, no fill or border, the info-select tint on hover and open, 30px tall, no primary color", () => {
     render(
       <Select value="a" onValueChange={() => {}}>
         <SelectTrigger aria-label="行里的下拉" variant="plain">
@@ -139,11 +139,11 @@ describe("界面标准：共用组件", () => {
       </Select>,
     );
     const cls = classOf(screen.getByRole("combobox", { name: "行里的下拉" }));
-    expect(cls).toEqual(expect.arrayContaining(["h-9", "bg-transparent", "border-transparent", "hover:bg-hover", "data-[state=open]:bg-hover"]));
+    expect(cls).toEqual(expect.arrayContaining(["info-select", "h-7.5", "bg-transparent", "border-0", "text-minor"]));
     expect(cls.join(" ")).not.toMatch(/rounded-|primary/);
   });
 
-  it("按钮：默认 36px、sm 32px，图标按钮同两档；键盘焦点是中性深棕描边，禁用主按钮用 --send-disabled", () => {
+  it("Button: 36px default and 32px sm, icon buttons at the same sizes; primary uses the send button pastel (btn-pastel) and keyboard focus draws the neutral brown outline", () => {
     render(
       <>
         <Button>默认</Button>
@@ -153,8 +153,11 @@ describe("界面标准：共用组件", () => {
       </>,
     );
     expect(classOf(screen.getByRole("button", { name: "默认" }))).toEqual(
-      expect.arrayContaining(["h-9", "rounded-sm", "btn-solid", "focus-visible:outline-2", "focus-visible:outline-border-focus", "disabled:bg-send-disabled"]),
+      expect.arrayContaining(["h-9", "rounded-sm", "btn-pastel", "focus-visible:outline-2", "focus-visible:outline-border-focus"]),
     );
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/\.btn-pastel \{[^}]*background-color: var\(--send\);[^}]*color: var\(--send-ink\);/);
+    expect(css).toMatch(/\.btn-pastel:disabled \{\s*background-color: var\(--send-disabled\);/);
     expect(classOf(screen.getByRole("button", { name: "默认" }))).not.toContain("outline-none");
     expect(screen.getByRole("button", { name: "默认" }).className).not.toContain("border-2");
     expect(classOf(screen.getByRole("button", { name: "小" }))).toContain("h-8");

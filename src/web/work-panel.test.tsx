@@ -615,7 +615,7 @@ describe("InfoTab", () => {
   it("shows the frameless avatar, name, project, and the two row groups", async () => {
     const { client } = renderInfo();
     const lookBtn = screen.getByRole("button", { name: "Change look" });
-    expect(lookBtn).toHaveClass("work-info-avatar");
+    expect(lookBtn).toHaveClass("info-avatar");
     expect(lookBtn.querySelector(".avatar-tile")).toBeNull();
     expect(screen.getByRole("heading", { name: "API Helper" })).toBeInTheDocument();
     expect(screen.getByText("payments-api")).toBeInTheDocument();
@@ -636,9 +636,9 @@ describe("InfoTab", () => {
     const user = userEvent.setup();
     renderInfo();
     const css = readFileSync("src/web/styles.css", "utf8");
-    expect(css).toContain(".work-info-avatar:not(:disabled):hover .work-info-avatar-pen");
+    expect(css).toContain(".info-avatar:not(:disabled):hover .info-avatar-pen");
     const lookBtn = screen.getByRole("button", { name: "Change look" });
-    expect(lookBtn.querySelector(".work-info-avatar-pen")).not.toBeNull();
+    expect(lookBtn.querySelector(".info-avatar-pen")).not.toBeNull();
 
     await user.click(lookBtn);
     expect(await screen.findByRole("dialog", { name: "Change look" })).toBeInTheDocument();
@@ -676,7 +676,7 @@ describe("InfoTab", () => {
     await screen.findByRole("button", { name: /Model/ });
     expect(screen.getByRole("button", { name: "New session" })).toBeInTheDocument();
     const archiveBtn = screen.getByRole("button", { name: "Archive" });
-    expect(archiveBtn).toHaveClass("text-danger");
+    expect(archiveBtn).toHaveClass("info-action-danger");
 
     rerenderInfo({ pm: { ...PM, archivedAt: Date.now() - 10_000 } });
     expect(screen.queryByRole("button", { name: "New session" })).toBeNull();

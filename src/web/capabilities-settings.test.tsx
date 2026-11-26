@@ -49,9 +49,9 @@ describe("设置 → Capabilities：Project defaults、总助、单个项目三�
     await screen.findByRole("button", { name: "Settings" });
     expect(api.callsTo("GET", /capabilities/)).toHaveLength(0);
     const panel = await openCapabilities(user);
-    const scope = within(panel).getByRole("radiogroup", { name: "Scope" });
-    expect(within(scope).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Project defaults", "Router", "Project"]);
-    expect(within(scope).getByRole("radio", { name: "Project defaults" })).toBeChecked();
+    const scope = within(panel).getByRole("tablist", { name: "Scope" });
+    expect(within(scope).getAllByRole("tab").map((r) => r.textContent)).toEqual(["Project defaults", "Router", "Project"]);
+    expect(within(scope).getByRole("tab", { name: "Project defaults" })).toHaveAttribute("aria-selected", "true");
     expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/)).toHaveLength(1);
     expect(within(panel).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Shared", lead, other]);
     expect(region(panel, "Shared")).toHaveTextContent("5 of 5");
@@ -90,7 +90,7 @@ describe("设置 → Capabilities：Project defaults、总助、单个项目三�
   it("切到总助：请求总助的选择，出厂全关；改动只发到总助", async () => {
     const { api, user } = await boot();
     const panel = await openCapabilities(user);
-    await user.click(within(panel).getByRole("radio", { name: "Router" }));
+    await user.click(within(panel).getByRole("tab", { name: "Router" }));
     await waitFor(() => expect(region(panel, "Shared")).toHaveTextContent("0 of 5"));
     await user.click(within(region(panel, "Shared")).getByRole("switch", { name: "linear" }));
     await waitFor(() => expect(patches(api, /^\/api\/router\/capabilities$/)).toEqual([{ set: { "mcp:linear": true } }]));
@@ -100,7 +100,7 @@ describe("设置 → Capabilities：Project defaults、总助、单个项目三�
   it("切到单个项目：紧凑选择器默认第一个项目；拨过的项标 Custom，一键 Reset 回到继承；选择器标出有特例的项目", async () => {
     const { api, user } = await boot();
     const panel = await openCapabilities(user);
-    await user.click(within(panel).getByRole("radio", { name: "Project" }));
+    await user.click(within(panel).getByRole("tab", { name: "Project" }));
     const picker = await within(panel).findByRole("button", { name: "Project: 小林" });
     const shared = await within(panel).findByRole("region", { name: "Shared" });
     expect(within(panel).getByRole("region", { name: "This project" })).toHaveTextContent("1 of 1");
@@ -128,7 +128,7 @@ describe("设置 → Capabilities：Project defaults、总助、单个项目三�
     const panel = await openCapabilities(user);
     await user.click(within(region(panel, "Shared")).getByRole("switch", { name: "linear" }));
     await waitFor(() => expect(patches(api, /^\/api\/defaults\/capabilities$/)).toHaveLength(1));
-    await user.click(within(panel).getByRole("radio", { name: "Project" }));
+    await user.click(within(panel).getByRole("tab", { name: "Project" }));
     const shared = await within(panel).findByRole("region", { name: "Shared" });
     await waitFor(() => expect(within(shared).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false"));
     expect(within(shared).getByText("linear").parentElement).not.toHaveTextContent("Custom");
@@ -243,9 +243,9 @@ describe("设置 → Capabilities：Project defaults、总助、单个项目三�
     };
     await user.click(within(panel).getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/).some((c) => c.query.get("refresh") === "1")).toBe(true));
-    await user.click(within(panel).getByRole("radio", { name: "Router" }));
+    await user.click(within(panel).getByRole("tab", { name: "Router" }));
     await waitFor(() => expect(within(panel).queryByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false"));
-    await user.click(within(panel).getByRole("radio", { name: "Project defaults" }));
+    await user.click(within(panel).getByRole("tab", { name: "Project defaults" }));
     const shared = await within(panel).findByRole("region", { name: "Shared" });
     await user.click(within(shared).getByRole("switch", { name: "linear" }));
     await waitFor(() => expect(patches(api, /^\/api\/defaults\/capabilities$/)).toHaveLength(1));
@@ -274,7 +274,7 @@ describe("资料页的能力入口：直接进当前项目的能力页", () => {
     expect(window.location.hash).toBe("#/pm/1/capabilities");
     expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument();
     expect(within(caps).getByRole("heading", { name: "Capabilities", level: 1 })).toBeInTheDocument();
-    expect(within(caps).queryByRole("radiogroup", { name: "Scope" })).not.toBeInTheDocument();
+    expect(within(caps).queryByRole("tablist", { name: "Scope" })).not.toBeInTheDocument();
     await within(caps).findByRole("region", { name: "This project" });
     expect(within(caps).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Inheritance", "This project", "Shared", lead, other]);
     expect(within(region(caps, other)).getByRole("button", { name: new RegExp(`^${other}`) })).toHaveAttribute("aria-expanded", "false");
@@ -290,7 +290,7 @@ describe("资料页的能力入口：直接进当前项目的能力页", () => {
     await user.click(await within(caps).findByRole("button", { name: /^Project defaults/ }));
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     expect(within(dialog).getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
-    expect(within(dialog).getByRole("radio", { name: "Project defaults" })).toBeChecked();
+    expect(within(dialog).getByRole("tab", { name: "Project defaults" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("手输已归档项目的能力页地址：回落到只读资料页，不渲染可编辑的能力页", async () => {

@@ -1,23 +1,10 @@
 import { ChevronDown } from "../ui/icons.ts";
-import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import { useId, useState, type ComponentProps, type ReactNode } from "react";
 import { errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 
-const GROUP_SHELL = "overflow-hidden rounded-sm border border-border bg-background [contain:layout_style]";
-
-const GROUP_BOX = `divide-y divide-border ${GROUP_SHELL}`;
-
-const GROUP_FLAT = "divide-y divide-border [contain:layout_style]";
-
-// A page lays its sections flat on the sheet; panels, dialogs, and phone pages keep each group in one hairline box.
-const FlatGroups = createContext(false);
-
-export function FlatSettingsGroups({ children, flat = true }: { children: ReactNode; flat?: boolean }) {
-  return <FlatGroups.Provider value={flat}>{children}</FlatGroups.Provider>;
-}
-
-const GROUP_TITLE = "text-minor font-medium text-muted-foreground";
+export const INFO_ROW = "info-row min-h-7.5 pointer-coarse:min-h-11";
 
 export function SettingsGroup({
   title,
@@ -30,16 +17,23 @@ export function SettingsGroup({
   action?: ReactNode;
   children: ReactNode;
 }) {
-  const flat = useContext(FlatGroups);
-  return (
-    <section aria-label={label ?? title} className="grid grid-cols-1 gap-2">
+  const name = label ?? title;
+  const body = (
+    <>
       {(title || action) && (
-        <div className={cn("flex min-h-8 items-center gap-3 px-4", title ? "justify-between" : "justify-end")}>
-          {title && <h2 className={GROUP_TITLE}>{title}</h2>}
+        <div className={cn("info-heading", title ? "justify-between" : "justify-end")}>
+          {title && <h2 className="min-w-0 truncate">{title}</h2>}
           {action}
         </div>
       )}
-      <div className={flat ? GROUP_FLAT : GROUP_BOX}>{children}</div>
+      {children}
+    </>
+  );
+  return name === undefined ? (
+    <div className="info-sec">{body}</div>
+  ) : (
+    <section aria-label={name} className="info-sec">
+      {body}
     </section>
   );
 }
@@ -55,7 +49,6 @@ export function CollapsibleGroup({
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const flat = useContext(FlatGroups);
   const [open, setOpen] = useState(defaultOpen);
   const [prevDefaultOpen, setPrevDefaultOpen] = useState(defaultOpen);
   if (defaultOpen !== prevDefaultOpen) {
@@ -64,18 +57,18 @@ export function CollapsibleGroup({
   }
   return (
     <section aria-label={title}>
-      <Collapsible open={open} onOpenChange={setOpen} className={flat ? "border-y border-border" : GROUP_SHELL}>
+      <Collapsible open={open} onOpenChange={setOpen}>
         <h2>
-          <CollapsibleTrigger className="group flex min-h-13 w-full cursor-pointer items-center gap-4 rounded-none px-4 py-2 text-left text-body transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]">
-            <span className="min-w-0 flex-1 truncate">{title}</span>
-            {summary !== undefined && <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{summary}</span>}
+          <CollapsibleTrigger className={cn("group", INFO_ROW, "h-7.5")}>
+            <span className="min-w-0 flex-1 truncate text-minor text-foreground">{title}</span>
+            {summary !== undefined && <span className="info-val shrink-0 text-minor tabular-nums">{summary}</span>}
             <ChevronDown
-              className="size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+              className="info-chevron size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
               aria-hidden="true"
             />
           </CollapsibleTrigger>
         </h2>
-        <CollapsibleContent className="divide-y divide-border border-t border-border">{children}</CollapsibleContent>
+        <CollapsibleContent className="pl-4">{children}</CollapsibleContent>
       </Collapsible>
     </section>
   );
@@ -102,30 +95,43 @@ export function SettingsRow({
 }) {
   const id = useId();
   const labelText = (
-    <label htmlFor={id} title={label} className="line-clamp-2 text-body">
+    <label htmlFor={id} title={label} className="truncate text-minor text-foreground">
       {label}
     </label>
   );
   return (
-    <div data-slot="settings-row" className={cn("px-4", detail || stacked ? "py-3" : "py-2")}>
-      <div className={cn("flex min-h-9 justify-between gap-x-4 gap-y-2", stacked ? "flex-col items-stretch" : cn("items-center", !wide && "flex-wrap"))}>
-        <div className={cn("flex items-center gap-3", wide ? "min-w-0 shrink-0" : "min-w-32 flex-1")}>
-          {icon && <span className="flex shrink-0 text-muted-foreground [&_svg]:size-pixel">{icon}</span>}
-          <div className="min-w-0 flex-1 break-words">
-            {badge === undefined ? labelText : <div className="flex min-w-0 items-center gap-2">{labelText}{badge}</div>}
-            {detail && <div className="text-minor leading-snug text-muted-foreground">{detail}</div>}
-          </div>
+    <div
+      data-slot="settings-row"
+      className={cn(
+        INFO_ROW,
+        "flex-wrap justify-between gap-x-4",
+        stacked ? "flex-col items-stretch gap-y-1.5 py-1.5" : detail ? "py-1" : undefined,
+      )}
+    >
+      <div className={cn("flex items-center gap-2", wide ? "min-w-0 shrink-0" : "min-w-28 flex-1")}>
+        {icon && <span className="flex shrink-0 text-muted-foreground [&_svg]:size-4">{icon}</span>}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {badge === undefined ? labelText : <div className="flex min-w-0 items-center gap-2">{labelText}{badge}</div>}
+          {detail && <div className="text-xs leading-snug text-muted-foreground">{detail}</div>}
         </div>
-        <div className={cn("flex max-w-full items-center gap-2", stacked ? "w-full" : cn("justify-end", wide ? "min-w-0" : "ml-auto shrink-0"))}>{children(id)}</div>
       </div>
-      {error && <RowError error={error} />}
+      <div className={cn("flex max-w-full items-center gap-2", stacked ? "w-full" : cn("justify-end", wide ? "min-w-0 flex-1" : "ml-auto shrink-0"))}>{children(id)}</div>
+      {error && (
+        <div className="basis-full">
+          <RowError error={error} />
+        </div>
+      )}
     </div>
   );
 }
 
+export function InfoAction({ danger = false, className, ...props }: ComponentProps<"button"> & { danger?: boolean }) {
+  return <button type="button" className={cn("info-action touch-target", danger && "info-action-danger", className)} {...props} />;
+}
+
 export function ReadonlyValue({ id, children }: { id?: string; children: ReactNode }) {
   return (
-    <span id={id} className="truncate text-body text-muted-foreground">
+    <span id={id} className="info-val truncate text-minor tabular-nums">
       {children}
     </span>
   );
@@ -133,7 +139,7 @@ export function ReadonlyValue({ id, children }: { id?: string; children: ReactNo
 
 export function RowError({ error, children }: { error?: ErrorLike; children?: ReactNode }) {
   return (
-    <p role="alert" title={error === undefined ? undefined : errorTitle(error)} className="mt-1 text-minor text-danger [overflow-wrap:anywhere]">
+    <p role="alert" title={error === undefined ? undefined : errorTitle(error)} className="mt-0.5 mb-1 text-xs text-danger [overflow-wrap:anywhere]">
       {error === undefined ? children : errorLine(error)}
     </p>
   );

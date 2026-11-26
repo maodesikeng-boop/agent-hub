@@ -12,11 +12,11 @@ import { useResourcesModel } from "../resources-model.ts";
 import type { DeviceSettings } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
-import { Loader2, RefreshCw } from "../ui/icons.ts";
+import { Loader2 } from "../ui/icons.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { formatBytes } from "../upload.ts";
-import { CollapsibleGroup, ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { CollapsibleGroup, InfoAction, ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 export interface ResourcesSettingsProps {
   readonly active?: boolean;
@@ -136,25 +136,14 @@ function HeldItemRow({
   return (
     <SettingsRow label={item.label} detail={detail}>
       {() => (
-        <span className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={kept ? onUnkeep : onKeep}
-          >
-            {busy && <Loader2 aria-hidden="true" />}
+        <span className="info-actions">
+          <InfoAction disabled={busy} onClick={kept ? onUnkeep : onKeep}>
+            {busy && <Loader2 className="size-3.5" aria-hidden="true" />}
             {kept ? "Allow cleanup" : "Keep"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            className="text-danger hover:text-danger"
-            onClick={onDiscardClick}
-          >
+          </InfoAction>
+          <InfoAction danger disabled={busy} onClick={onDiscardClick}>
             {item.kind === "process" ? "Stop…" : "Delete…"}
-          </Button>
+          </InfoAction>
         </span>
       )}
     </SettingsRow>
@@ -211,16 +200,16 @@ function OverviewGroup({
   ) : undefined;
 
   const actionBar = (
-    <div className="flex items-center gap-2">
-      <Button variant="outline" size="sm" disabled={refreshing || cleaning} onClick={onRefresh}>
-        {refreshing ? <Loader2 aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+    <span className="info-actions">
+      <InfoAction disabled={refreshing || cleaning} onClick={onRefresh}>
+        {refreshing && <Loader2 className="size-3.5" aria-hidden="true" />}
         Refresh
-      </Button>
-      <Button variant="outline" size="sm" disabled={cleaning || refreshing} onClick={onRunCleanup}>
-        {cleaning && <Loader2 aria-hidden="true" />}
+      </InfoAction>
+      <InfoAction disabled={cleaning || refreshing} onClick={onRunCleanup}>
+        {cleaning && <Loader2 className="size-3.5" aria-hidden="true" />}
         Clean up
-      </Button>
-    </div>
+      </InfoAction>
+    </span>
   );
 
   return (
@@ -260,9 +249,7 @@ function OverviewGroup({
         )}
       </SettingsRow>
       {lastCleanup !== null && (
-        <div className="px-4 py-2.5 text-minor text-muted-foreground tabular-nums">
-          {summarizeCleanup(lastCleanup)}
-        </div>
+        <div className="py-1 text-xs text-muted-foreground tabular-nums">{summarizeCleanup(lastCleanup)}</div>
       )}
     </SettingsGroup>
   );
@@ -350,7 +337,7 @@ function DiscardConfirmDialog({
         {item !== null && (
           <div className="grid grid-cols-1 gap-4">
             <div className="grid grid-cols-1 gap-1.5">
-              <p className="text-body font-medium">{item.label}</p>
+              <p className="text-minor font-medium">{item.label}</p>
               <p className="font-mono text-xs break-all text-muted-foreground">{discardTargetPath(item)}</p>
               <div className="flex flex-wrap items-center gap-x-3 text-minor text-muted-foreground tabular-nums">
                 <span>{REASON_LABELS[item.reason]}</span>
@@ -363,7 +350,7 @@ function DiscardConfirmDialog({
               )}
             </div>
             {item.kind === "worktree" && item.branch !== null && (
-              <div className="rounded-sm border border-border">
+              <div>
                 <SettingsRow label={`Also delete branch ${item.branch}`}>
                   {(id) => (
                     <Switch
@@ -378,11 +365,12 @@ function DiscardConfirmDialog({
               </div>
             )}
             <DialogFooter>
-              <Button variant="outline" disabled={busy} onClick={() => handleOpenChange(false)}>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => handleOpenChange(false)}>
                 Cancel
               </Button>
               <Button
                 variant="destructive"
+                size="sm"
                 disabled={busy}
                 onClick={() => onConfirm(item.kind === "worktree" && deleteBranch)}
               >
@@ -449,26 +437,23 @@ export function ResourcesSettings({
       )}
 
       {model.loading && (
-        <div className="flex min-h-24 items-center justify-center">
-          <Loader2 className="size-pixel text-muted-foreground" aria-label="Loading" />
+        <div className="flex items-center justify-center gap-2 py-6 text-minor text-muted-foreground">
+          <Loader2 className="size-3.5" aria-label="Loading" />
+          <span aria-hidden="true">Loading…</span>
         </div>
       )}
 
       {model.loadError !== null && (
         <SettingsGroup label="Resources error">
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <div className="flex items-center justify-center gap-4.5 py-4">
             <RowError error={model.loadError} />
-            <Button variant="outline" size="sm" onClick={model.refresh}>
-              Retry
-            </Button>
+            <InfoAction onClick={model.refresh}>Retry</InfoAction>
           </div>
         </SettingsGroup>
       )}
 
       {model.actionError !== null && (
-        <div className="px-4">
-          <RowError error={model.actionError} />
-        </div>
+        <RowError error={model.actionError} />
       )}
 
       {model.snapshot !== null && (
@@ -501,6 +486,7 @@ export function ResourcesSettings({
             onRunCleanup={model.runCleanup}
           />
 
+          <SettingsGroup>
           <StorageDetailsGroup snapshot={model.snapshot} />
 
           {model.partitioned.kept.length > 0 && (
@@ -525,6 +511,7 @@ export function ResourcesSettings({
               })}
             </CollapsibleGroup>
           )}
+          </SettingsGroup>
         </>
       )}
 

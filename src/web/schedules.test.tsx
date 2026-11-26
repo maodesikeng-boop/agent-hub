@@ -176,7 +176,7 @@ describe("新建表单", () => {
     const { user, group } = await openProfile([]);
     await fill(user, group, {});
     const prompt = within(group).getByRole("textbox", { name: "Task" });
-    expect(prompt).toHaveClass("border-0", "resize-none");
+    expect(prompt).toHaveClass("info-field", "resize-none");
     expect(prompt).toHaveAttribute("placeholder", "Task");
   });
 

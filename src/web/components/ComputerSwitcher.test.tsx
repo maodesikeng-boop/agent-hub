@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +53,18 @@ describe("ComputerSwitcher", () => {
     expect(screen.getByRole("button", { name: /MacBook Pro.*Online/ })).toHaveAttribute("aria-current", "true");
     expect(screen.getByRole("button", { name: /Office Mini.*Offline.*3/ })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: /Build Box.*Reconnecting.*1/ })).toBeInTheDocument();
+  });
+
+  it("writes each computer's status in visible words in the phone drawer", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false, media: "", onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
+    const user = userEvent.setup();
+    render(<Harness variant="drawer" initialSelected={LOCAL_DEVICE} />);
+    await user.click(screen.getByRole("button", { name: "Switch computer" }));
+    for (const [name, status] of [["MacBook Pro", "Online"], ["Office Mini", "Offline"], ["Build Box", "Reconnecting"]] as const) {
+      const word = within(await screen.findByRole("button", { name: new RegExp(name) })).getByText(status);
+      expect(word).not.toHaveClass("sr-only");
+      expect(word).toHaveClass("info-val");
+    }
   });
 
   it("selects a computer and closes", async () => {

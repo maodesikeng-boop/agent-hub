@@ -30,7 +30,7 @@ export function VendorSyncPage({ vendor }: { vendor: VendorSyncModel }) {
   return (
     <>
       <SettingsGroup label="Vendor sync">
-        <div className="grid grid-cols-1 gap-3 px-4 py-4">
+        <div className="grid grid-cols-1 gap-3 py-2">
           <p className="text-minor leading-snug text-muted-foreground">{summary}</p>
           <Button variant={preview === null ? "default" : "outline"} className={DRAWER_BUTTON} disabled={scanning || applying} onClick={previewVendorSync}>
             {scanning && <Loader2 aria-hidden="true" />}
@@ -40,7 +40,7 @@ export function VendorSyncPage({ vendor }: { vendor: VendorSyncModel }) {
         </div>
       </SettingsGroup>
 
-      {isEmptyPreview && <p className="px-4 text-minor text-muted-foreground">No MCP servers, skills, or cloud connectors found</p>}
+      {isEmptyPreview && <p className="py-3 text-center text-minor text-muted-foreground">No MCP servers, skills, or cloud connectors found</p>}
 
       {preview && preview.mcpServers.length > 0 && (
         <SettingsGroup title="MCP servers">

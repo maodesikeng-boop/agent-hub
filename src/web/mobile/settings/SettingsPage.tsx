@@ -17,7 +17,7 @@ export function SettingsPage({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col bg-panel pt-[var(--safe-top)]">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col bg-background pt-[var(--safe-top)]">
       <header
         className={cn(
           "h-14 shrink-0 items-center gap-1 border-b border-border px-4",
@@ -49,7 +49,7 @@ export function SettingsPage({
           footer ? "pb-6" : "pb-[calc(var(--bottom-inset)+2rem)]",
         )}
       >
-        <div className="grid grid-cols-1 gap-6">{children}</div>
+        <div className="info-list grid grid-cols-1">{children}</div>
       </main>
       {footer && <div className="grid shrink-0 grid-cols-1 gap-2 border-t border-border px-4 pt-3 pb-[calc(var(--bottom-inset)+0.75rem)]">{footer}</div>}
     </div>

@@ -88,3 +88,5 @@ export const LINE_MAX_PX = 1.5;
 export const EDGE_NEAR_MISS_PX = { min: 1.5, max: 8 } as const;
 /** Structure checks: two resting composers side by side share one row; more than this between their edges is a misalignment. */
 export const COMPOSER_ROW_TOLERANCE_PX = 0.5;
+/** A tabTo step gives up after this many key presses; a dialog's focus trap cycles well before it. */
+export const TAB_TO_MAX_PRESSES = 40;
