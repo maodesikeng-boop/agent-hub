@@ -8,6 +8,7 @@ import {
   type WorkerId,
 } from "../../../shared/domain.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
+import type { StepSlotView } from "./slots.ts";
 import type { TaskNodeDbRow } from "./types.ts";
 
 export function parseJsonOr<T>(raw: string | null, fallback: T): T {
@@ -80,6 +81,7 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?:
   userBlocker?: UserBlocker;
   sandboxApproval?: TaskNode["sandboxApproval"];
   gateAskPending?: boolean;
+  slot?: StepSlotView;
 }): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
   const status = row.status as TaskNodeStatus;
@@ -106,6 +108,8 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?:
     ...(waitingDecision && checkpointPending ? { gateCheckpoint: true } : {}),
     userBlocker,
     ...(sandboxApproval !== undefined ? { sandboxApproval } : {}),
+    ...(waiting?.slot === undefined ? {} : { slot: waiting.slot.slot }),
+    ...(waiting?.slot?.queue === undefined ? {} : { slotQueue: waiting.slot.queue }),
     decision: decisionOf(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

@@ -17,6 +17,7 @@ import {
 } from "../task-graph-handoff.ts";
 import { userBlockedPmNote } from "../user-blockers.ts";
 import { decisionOf, hasText, workerIdsOf } from "./rows.ts";
+import { admitStep, queueStep, unqueueSteps } from "./slots.ts";
 import { validateDagAndOrder } from "./spec.ts";
 import { buildGraphMaps, hasPendingStepAsk, touchGraph } from "./store.ts";
 import { collectDirectUpstreams } from "./upstream.ts";
@@ -221,6 +222,13 @@ function advanceReadyStepIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node:
       return;
     }
   }
+  const admission = admitStep(g.db, node.graph_id, node.node_key);
+  if (admission.kind === "queued") {
+    queueStep(g.db, node.id, run.t);
+    const { slot, position, holder } = admission;
+    run.result.queued.push({ key: node.node_key, slot, position, holder, then: hasText(node.brief) ? "start" : "pm" });
+    return;
+  }
   const hasBrief = hasText(node.brief);
   const { bridge, pm } = run;
   if (hasBrief && bridge !== undefined && pm !== null) {
@@ -265,14 +273,17 @@ export function recomputeGraphProgressIn(
     callerSession,
     context,
   };
+  const notReady: number[] = [];
   for (let idx = 0; idx < order.length; idx++) {
     const key = order[idx]!;
     const node = maps.byKey.get(key)!;
     const upsDone = (maps.incoming.get(key) ?? []).every((u) => maps.byKey.get(u)?.status === "done");
     if (retractBlockedWaiting && !upsDone && retractIfUpstreamReopened(g, run, node)) continue;
+    if (node.status === "pending" && !upsDone) notReady.push(node.id);
     if (node.status !== "pending" || !upsDone) continue;
     advanceReadyStepIn(g, p, run, node, idx);
   }
+  unqueueSteps(g.db, notReady);
   touchGraph(g.db, graphRow.id, run.t);
   return run.result;
 }

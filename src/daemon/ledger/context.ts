@@ -65,6 +65,8 @@ export interface LedgerContext {
   changeListeners: Set<(change: Change) => void>;
   actionListeners: Set<(action: AnyActionRow) => void>;
   stopListeners: Set<(event: StopEvent) => void>;
+  /** Run once after each committed write, after its changes, actions, and stops are published. */
+  commitListeners: Set<() => void>;
   pushed: Map<SessionId, string>;
   subscribe<T>(listeners: Set<T>, listener: T): () => void;
   write<T>(fn: (p: Pending) => T): T;
@@ -115,6 +117,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
   const changeListeners = new Set<(change: Change) => void>();
   const actionListeners = new Set<(action: AnyActionRow) => void>();
   const stopListeners = new Set<(event: StopEvent) => void>();
+  const commitListeners = new Set<() => void>();
   const pushed = new Map<SessionId, string>();
   let generation = 0;
   let active: Pending | null = null;
@@ -160,6 +163,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     for (const input of pending.changes) notify(changeListeners, log.append(input));
     for (const action of pending.actions) notify(actionListeners, action);
     for (const stop of pending.stops) notify(stopListeners, stop);
+    notify(commitListeners, undefined);
     return result;
   };
 
@@ -210,6 +214,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     changeListeners,
     actionListeners,
     stopListeners,
+    commitListeners,
     pushed,
     subscribe,
     write,

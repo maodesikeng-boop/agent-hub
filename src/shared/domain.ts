@@ -775,12 +775,12 @@ export function taskNodeStateFromLegacy(status: string): TaskNodeState {
 }
 
 export function taskNodeStatusText(
-  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker" | "sandboxApproval">,
+  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker" | "sandboxApproval" | "slot" | "slotQueue">,
   viewer: "pm" | "user",
 ): string {
   switch (node.status) {
     case "pending":
-      return "没轮到";
+      return node.slotQueue !== undefined && node.slot != null ? `排队等名额 ${node.slot}` : "没轮到";
     case "running":
       return "在干";
     case "waiting":

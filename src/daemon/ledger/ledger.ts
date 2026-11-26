@@ -259,6 +259,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     userBlockers,
     onGraphFinishedIn: (p, projectId) => projectCatalog.markForcedIn(p, projectId, "graph_finished"),
   });
+  subscribe(ctx.commitListeners, taskGraphs.drainSlotsAfterCommit);
   const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
     worktreesDir: files.worktreesDir, platform: options.workerPlatform,
@@ -470,6 +471,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       workers.recoverLifecycles();
       handover.recoverAfterRestart();
       router.recoverAfterRestart();
+      taskGraphs.drainSlotsAfterCommit();
       return recovered;
     },
 

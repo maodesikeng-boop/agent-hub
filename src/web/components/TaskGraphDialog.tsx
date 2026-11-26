@@ -20,7 +20,7 @@ import { workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter, ZOOM_DIALOG } from "../ui/dialog.tsx";
 import { Loader2 } from "../ui/icons.ts";
-import { graphDeliveryOf, nodeWorkStatusOf } from "../work-status.ts";
+import { graphDeliveryOf, nodeWorkStatusOf, slotQueueTextOf } from "../work-status.ts";
 import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { GateDecisionCard, resolveBoundWorker } from "./GateDecisionCard.tsx";
 import { GraphDeliveryRow } from "./GraphDeliveryRow.tsx";
@@ -44,7 +44,7 @@ function statusLabelOf(node: TaskNode, graphStatus: TaskGraph["status"]): string
     case "waiting":
       return node.waitingFor === "user" ? "Waiting on you" : "Waiting on PM";
     case "pending":
-      return "Pending";
+      return slotQueueTextOf(node) === null ? "Pending" : "Queued";
   }
 }
 
@@ -283,6 +283,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const stepStatus = nodeWorkStatusOf(node, graph.status);
               const decisionLabel = node.decision?.choice ?? node.decision?.note ?? null;
               const summaryText = node.artifact?.summary ?? null;
+              const queueText = graph.status === "active" && node.status === "pending" ? slotQueueTextOf(node) : null;
               const settledDraftKey =
                 node.gateAskMessageId !== null ? activeDraftKey : (seenGateDraftKeyRef.current.get(nodeRefKey) ?? activeDraftKey);
               return (
@@ -334,6 +335,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                       {decisionLabel}
                     </p>
                   )}
+                  {queueText !== null && <p className="truncate text-xs text-muted-foreground" title={queueText}>{queueText}</p>}
                   {summaryText !== null && <p className="line-clamp-2 text-xs text-muted-foreground">{summaryText}</p>}
                   <SettledGateDraft draftKey={settledDraftKey} settledNote={node.decision?.note ?? null} />
                 </div>

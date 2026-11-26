@@ -16,6 +16,7 @@ import { userBlockedPmNote } from "../user-blockers.ts";
 import { stopQueuedDeliveryNotesIn } from "./delivery.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
 import { artifactWithoutCheckpoint, decisionOf, toTaskNode, workerIdsOf } from "./rows.ts";
+import { stepSlotOf } from "./slots.ts";
 import { validateNodeKey } from "./spec.ts";
 import {
   buildGraphMaps,
@@ -42,10 +43,17 @@ function activeStepOfWorker(g: TaskGraphCtx, workerId: WorkerId): { node: TaskNo
   return { node, graphRow };
 }
 
+function isReadyForSlot(g: TaskGraphCtx, node: TaskNodeDbRow, maps: ReturnType<typeof buildGraphMaps>): boolean {
+  if (node.status !== "pending" || stepSlotOf(g.db, node.id) === null) return false;
+  return (maps.incoming.get(node.node_key) ?? []).every((u) => maps.byKey.get(u)?.status === "done");
+}
+
 function assertDispatchable(g: TaskGraphCtx, node: TaskNodeDbRow, nodeKey: TaskNodeKey, maps: ReturnType<typeof buildGraphMaps>): void {
   const replacing = node.active_worker_id !== null;
   const dispatchable =
-    node.status === "done" ? node.skipped === 0 : node.status === "waiting" && (node.waiting_for === "pm" || isUserBlocked(g.db, node.id));
+    node.status === "done" ? node.skipped === 0
+      : node.status === "pending" ? isReadyForSlot(g, node, maps)
+        : node.status === "waiting" && (node.waiting_for === "pm" || isUserBlocked(g.db, node.id));
   if (!replacing && !dispatchable) {
     throw fail(
       "conflict",

@@ -1,6 +1,6 @@
 import type { createWorkerAppApprovals } from "./app-approvals.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, WorkerId } from "../../../shared/domain.ts";
-import type { WorkerHubStatus } from "../../../shared/hub.ts";
+import type { WorkerHubStatus, WorkerStartQueuedResult } from "../../../shared/hub.ts";
 import type { ReviewTarget, ReviewVerifyResult } from "../../../shared/review.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { ParsedWorkerReport } from "../../../shared/worker.ts";
@@ -16,6 +16,7 @@ import type { LedgerUserBlockers } from "../user-blockers.ts";
 
 export interface LedgerWorkersTaskGraphHooks {
   prepareWorkerBind: (pmId: PmId, nodeKey: string, graphId?: number) => WorkerBindTarget;
+  queueWorkerStartIn: (p: Pending, target: WorkerBindTarget) => WorkerStartQueuedResult | null;
   bindWorkerStartedIn: (
     p: Pending,
     target: WorkerBindTarget,

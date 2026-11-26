@@ -15,6 +15,8 @@ import {
   purgeExpiredBatch,
 } from "./task-graphs/overview.ts";
 import { patchIn } from "./task-graphs/patch.ts";
+import { drainSlotsIn, queueWorkerStartIn } from "./task-graphs/slot-queue.ts";
+import { freeSlotsWithWaiters } from "./task-graphs/slots.ts";
 import { onWorkerTurnReportIn } from "./task-graphs/turn-report.ts";
 import type { TaskGraphCtx, TaskGraphOptions } from "./task-graphs/types.ts";
 import {
@@ -61,6 +63,17 @@ export function createLedgerTaskGraphs(
     <A extends unknown[], R>(fn: (g: TaskGraphCtx, ...args: A) => R) =>
     (...args: A): R =>
       fn(g, ...args);
+  let draining = false;
+  // The drain's own commit lands here again; the flag keeps that to one follow-up write per outside commit.
+  const drainSlotsAfterCommit = (): void => {
+    if (draining || freeSlotsWithWaiters(g.db).length === 0) return;
+    draining = true;
+    try {
+      ctx.write((p) => drainSlotsIn(g, p));
+    } finally {
+      draining = false;
+    }
+  };
   const bindDb =
     <A extends unknown[], R>(fn: (db: TaskGraphCtx["db"], ...args: A) => R) =>
     (...args: A): R =>
@@ -86,6 +99,8 @@ export function createLedgerTaskGraphs(
     skipNode: bind(skipNode),
     cancelGraph: bind(cancelGraph),
     prepareWorkerBind: bind(prepareWorkerBind),
+    queueWorkerStartIn: bind(queueWorkerStartIn),
+    drainSlotsAfterCommit,
     bindWorkerStartedIn: bind(bindWorkerStartedIn),
     onWorkerTurnReportIn: bind(onWorkerTurnReportIn),
     onWorkerFailedIn: bind(onWorkerFailedIn),

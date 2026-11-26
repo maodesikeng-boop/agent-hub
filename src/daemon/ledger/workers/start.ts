@@ -1,7 +1,7 @@
 import { normalizeName, normalizeWorkerTitle } from "../../../shared/domain.ts";
 import { HUB_LIMITS } from "../../../shared/hub-limits.ts";
 import type { AgentSessionRow, WorkerId } from "../../../shared/domain.ts";
-import type { HubArgs, HubResult, ProjectCard } from "../../../shared/hub.ts";
+import type { HubArgs, HubResult, ProjectCard, WorkerStartQueuedResult } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { TAKEOVER_PREDECESSORS_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
@@ -329,12 +329,16 @@ function firstMessageOf(
   });
 }
 
-export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: StartArgs, context: HubCallContext): HubResult<"worker.start"> {
+export function startIn(
+  w: WorkersCtx, p: Pending, caller: PmCaller, args: StartArgs, context: HubCallContext,
+): HubResult<"worker.start"> | WorkerStartQueuedResult {
   w.persona.assertPmNotArchived(caller.pmId);
   const project = w.projects.activeProjectOf(caller.pmId);
   if (project === null) throw fail("invalid", `你还没有项目，没法派 Worker：先用 ${HUB_COMMAND} project create --folder <主文件夹> 建一个`);
   const bindTarget =
     args.node !== undefined && args.node.trim() !== "" ? w.options.taskGraphs?.prepareWorkerBind(caller.pmId, args.node, args.graphId) : undefined;
+  const queued = bindTarget === undefined ? null : w.options.taskGraphs?.queueWorkerStartIn(p, bindTarget) ?? null;
+  if (queued !== null) return queued;
   const takeover =
     bindTarget !== undefined && bindTarget.workerIds.length > 0 ? planTakeover(w, bindTarget, project.id, args.noWorktree === true) : null;
   const brief = resolveStartTask(args, bindTarget, takeover);

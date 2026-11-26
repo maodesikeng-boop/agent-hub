@@ -56,7 +56,7 @@ export function formatGraphText(graph: TaskGraph, results = true, agentContext?:
     const cardNote = n.gateAskPending ? ` [拍板卡] #${n.gateAskMessageId}` : "";
     const settings = agentContext === undefined ? null : formatStepAgentConfig(n, agentContext);
     lines.push(
-      `  - [${taskNodeStatusText(n, "pm")}] ${n.key}：${n.title}${cardNote}${nodeWorkerNote(n)}${depNote}`,
+      `  - [${taskNodeStatusText(n, "pm")}] ${n.key}：${n.title}${cardNote}${nodeWorkerNote(n)}${nodeSlotNote(n)}${depNote}`,
       ...(settings === null ? [] : [`      ${settings}`]),
       ...(results ? nodeResultLines(n) : []),
     );
@@ -67,6 +67,27 @@ export function formatGraphText(graph: TaskGraph, results = true, agentContext?:
     lines.push(`  - [等你验收交付] 交付：图里画的步骤都做完了${age}`);
   }
   return lines.join("\n");
+}
+
+type SlotHolderRef = { graphId: number; nodeKey: string; workerId: number | null };
+
+const slotHolderText = (holder: SlotHolderRef): string =>
+  `图 #${holder.graphId} 的 ${holder.nodeKey}${holder.workerId === null ? "" : `（Worker #${holder.workerId}）`}`;
+
+/** `then` says what happens when the slot frees: the step starts by its brief, the PM is asked to start it, or nothing was queued. */
+export function slotHeldText(
+  nodeKey: string,
+  queue: { slot: string; position: number; holder: SlotHolderRef },
+  then: "start" | "pm" | "attached",
+): string {
+  const head = `步骤「${nodeKey}」要用名额「${queue.slot}」，现在被${slotHolderText(queue.holder)}占着`;
+  if (then === "attached") return `${head}；这一步还挂着 Worker，名额空出来以前不能换人，这次没有派 Worker`;
+  return `${head}；已排在第 ${queue.position} 位，空出来${then === "start" ? "自动开工" : "会叫你派 Worker"}。`;
+}
+
+function nodeSlotNote(node: TaskNode): string {
+  if (node.slotQueue !== undefined) return ` · 第 ${node.slotQueue.position} 位，前面是${slotHolderText(node.slotQueue.holder)}`;
+  return node.slot != null && node.status === "running" ? ` · 占着名额 ${node.slot}` : "";
 }
 
 export const turnedListText = (turned: readonly TurnedStep[]): string =>
@@ -85,6 +106,7 @@ export function unlockedNoteOf(progress: ProgressResult, graph: TaskGraph): stri
   for (const b of progress.userBlocked) {
     parts.push(`步骤「${b.key}」等用户动手：${b.note}（要换别家：${HUB_COMMAND} worker start --node ${b.key} --graph ${graph.id} --vendor <别家>）`);
   }
+  for (const q of progress.queued) parts.push(slotHeldText(q.key, q, q.then).replace(/。$/u, ""));
   if (progress.turned.length > 0) {
     const pmKeys = progress.turned.filter((u) => u.waitingFor === "pm").map((u) => u.key);
     const dispatch = pmKeys.length > 0 ? `（给它派 Worker：${HUB_COMMAND} worker start --node ${pmKeys[0]} --graph ${graph.id}）` : "";
