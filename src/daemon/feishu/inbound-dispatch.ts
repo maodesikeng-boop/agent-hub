@@ -6,7 +6,7 @@ import { MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
 import { sendText } from "./api.ts";
 import { applyChatGone, bindRouterChat } from "./chat-sync.ts";
 import { broadcastPeerApp } from "./connection.ts";
-import { displayOwner, isReady, owner, type FeishuContext } from "./context.ts";
+import { displayOwner, isCenter, isReady, owner, type FeishuContext } from "./context.ts";
 import { parseFeishuEvent, type FeishuInbound } from "./inbound.ts";
 import { admitInbound, requestControl } from "./lanes.ts";
 import { activeTarget, conversationOfPm } from "./projection.ts";
@@ -26,7 +26,6 @@ interface MessageScene {
   owner: FeishuOpenId | null;
   t: number;
   queuedAt: number | null;
-  recordSeen: () => void;
 }
 
 interface Delivery {
@@ -97,13 +96,13 @@ export async function handleInbound(ctx: FeishuContext, event: Exclude<FeishuInb
   }
 }
 
-function recordSeen(ctx: FeishuContext, message: InboundMessage) {
+function recordHandled(ctx: FeishuContext, message: InboundMessage) {
   const { catchUp } = ctx;
-  catchUp.seen.set(message.messageId, true);
   const holdAt = catchUp.cursorHold.get(message.chatId);
-  if (message.at > 0 && !catchUp.gateEpochs.has(message.chatId) && (holdAt === undefined || message.at < holdAt) && ctx.store.chatById(message.chatId) !== null) {
-    ctx.store.saveInboundCursor(message.chatId, { lastInboundAt: message.at, lastMessageId: message.messageId }, ctx.now());
-  }
+  const advanceCursor = message.at > 0 && !catchUp.gateEpochs.has(message.chatId) &&
+    (holdAt === undefined || message.at < holdAt) && ctx.store.chatById(message.chatId) !== null;
+  ctx.inboundSync.markHandled({ messageId: message.messageId, chatId: message.chatId, messageAt: message.at, advanceCursor });
+  void ctx.inboundSync.flush();
 }
 
 const isBindCode = (ctx: FeishuContext, text: string) => {
@@ -116,23 +115,33 @@ function logIgnoredMention(ctx: FeishuContext, message: InboundMessage, reason: 
 }
 
 async function handleMessage(ctx: FeishuContext, message: InboundMessage, queuedAt: number | null) {
-  if (ctx.catchUp.seen.has(message.messageId)) return;
+  if (ctx.life.closed || ctx.inboundSync.isAlreadyExecuted(message.messageId) || (message.chatType === "p2p" && !isCenter(ctx))) return;
+  const appId = ctx.inboundSync.snapshot()?.appId;
+  if (appId === undefined) return;
+  const sameApp = () => !ctx.life.closed && ctx.inboundSync.snapshot()?.appId === appId;
   const o = owner(ctx);
   const t = ctx.now();
   if (message.chatType === "p2p" && o !== null && message.senderOpenId === o && ctx.store.chatOfTarget({ kind: "router" }) === null) {
-    bindRouterChat(ctx, message.chatId, t);
+    bindRouterChat(ctx, message.chatId, t, null);
   }
   const chat = ctx.store.chatById(message.chatId);
   const target = activeTarget(ctx, chat);
-  const scene: MessageScene = { message, chat, target, owner: o, t, queuedAt, recordSeen: () => recordSeen(ctx, message) };
+  const scene: MessageScene = { message, chat, target, owner: o, t, queuedAt };
   const group = message.chatType === "group" && target?.kind === "pm";
   const mode = group && o !== null ? await ctx.directory.modeOf(message.chatId, o, message.senderOpenId, t) : "solo";
+  const speakerName = group ? await ctx.directory.nameOf(message.chatId, message.senderOpenId, "", t) : message.senderOpenId === o ? displayOwner(ctx) : "";
+  if (!sameApp() || (message.chatType === "p2p" && !isCenter(ctx))) return;
+  const claim = ctx.inboundSync.tryClaim({
+    messageId: message.messageId, chatId: message.chatId, messageAt: message.at, isOwnerOfChat: group || message.chatType === "p2p",
+  });
+  if (claim.kind === "duplicate") return;
+  await ctx.inboundSync.waitForClaimSync(message.messageId);
+  if (!sameApp()) return;
   if (message.chatType === "p2p" && message.senderOpenId === o && target?.kind !== "router") {
     logIgnoredMention(ctx, message, "inactive-router");
-    scene.recordSeen();
+    recordHandled(ctx, message);
     return;
   }
-  const speakerName = group ? await ctx.directory.nameOf(message.chatId, message.senderOpenId, "", t) : message.senderOpenId === o ? displayOwner(ctx) : "";
   const route = routeFeishuMessage(message, {
     ownerOpenId: o,
     binding: group ? { target, archived: false } : null,
@@ -146,13 +155,13 @@ async function handleMessage(ctx: FeishuContext, message: InboundMessage, queued
     isBindCode: (text) => isBindCode(ctx, text),
   });
   await applyMessageRoute(ctx, scene, route);
+  if (sameApp()) recordHandled(ctx, message);
 }
 
 async function bindOwner(ctx: FeishuContext, message: InboundMessage, openId: FeishuOpenId, t: number) {
   ctx.app.bindCode = null;
   ctx.store.bindOwner(openId, t);
-  bindRouterChat(ctx, message.chatId, t, { lastInboundAt: message.at > 0 ? message.at : t, lastMessageId: message.messageId });
-  ctx.catchUp.seen.set(message.messageId, true);
+  bindRouterChat(ctx, message.chatId, t, null);
   await sendText(ctx, { chatId: message.chatId }, "认好了：你是这个机器人的主人。在这里和总助说话；每个项目经理会有自己的项目群。");
   broadcastPeerApp(ctx);
   requestControl(ctx, "sync");
@@ -163,12 +172,10 @@ async function applyMessageRoute(ctx: FeishuContext, scene: MessageScene, route:
   switch (route.kind) {
     case "ignore":
       logIgnoredMention(ctx, message, target === null ? "inactive-chat" : message.inThread ? "topic" : "no-route");
-      scene.recordSeen();
       return;
     case "hint": {
       const at = message.senderOpenId === scene.owner ? "" : `<at user_id="${message.senderOpenId}"></at> `;
       await sendText(ctx, { chatId: message.chatId }, at + route.text);
-      scene.recordSeen();
       return;
     }
     case "bind_owner":
@@ -177,7 +184,6 @@ async function applyMessageRoute(ctx: FeishuContext, scene: MessageScene, route:
       await sendText(ctx, { chatId: message.chatId }, message.chatType === "p2p" ? route.reason : `<at user_id="${route.openId}"></at> ${route.reason}`);
       if (route.reason === GUEST_NO_FILES) ctx.contexts.dropFiles(message.chatId, (file) => file.speaker === route.openId);
       if (route.guestDenied === true) await offerPolicyCard(ctx, message.chatId);
-      scene.recordSeen();
       return;
     case "settings_card":
       if (chat !== null && target !== null) {
@@ -185,12 +191,10 @@ async function applyMessageRoute(ctx: FeishuContext, scene: MessageScene, route:
         else await postRouterSettingsCard(ctx, chat);
         refreshCatalogsInBackground(ctx, target);
       }
-      scene.recordSeen();
       return;
     case "context":
       logIgnoredMention(ctx, message, "context-only");
       ctx.contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
-      scene.recordSeen();
       return;
     case "deliver":
       return deliver(ctx, scene, route);
@@ -232,16 +236,13 @@ async function deliverToRouter(ctx: FeishuContext, scene: MessageScene, { client
   const chatId = scene.message.chatId;
   if (ctx.options.router === null) {
     await sendText(ctx, { chatId }, "总助没开：去网页的总助工作台选一家 agent。");
-    scene.recordSeen();
     return;
   }
   try {
     await ctx.options.router.submitCommand({ clientId, text, ...(attachments.length > 0 ? { attachmentIds: attachments.map((a) => a.id) } : {}) });
-    scene.recordSeen();
   } catch (error) {
     if (!(error instanceof LedgerRequestError)) throw error;
     await sendText(ctx, { chatId }, `没送到：${error.message}`);
-    scene.recordSeen();
   }
 }
 
@@ -250,29 +251,24 @@ async function deliverToPm(ctx: FeishuContext, scene: MessageScene, pmId: PmId, 
   const conversationId = activeTarget(ctx, ctx.store.chatById(chatId))?.kind === "pm" ? conversationOfPm(ctx, pmId) : null;
   if (conversationId === null) {
     logIgnoredMention(ctx, scene.message, "inactive-pm");
-    scene.recordSeen();
     return;
   }
   try {
     ctx.ledger.postUserMessage({ conversationId, clientId, text, ...(attachments.length > 0 ? { attachments } : {}), origin });
     ctx.contexts.clear(chatId);
-    scene.recordSeen();
   } catch (error) {
     if (!(error instanceof LedgerRequestError) && !(error instanceof ConversationNotFoundError)) throw error;
     await sendText(ctx, { chatId }, `没送到：${error.message}`);
-    scene.recordSeen();
   }
 }
 
 async function deliver(ctx: FeishuContext, scene: MessageScene, route: DeliverRoute) {
   const clientId = `${FEISHU_CLIENT_PREFIX}${scene.message.messageId}`;
   if (alreadyDelivered(ctx, route, clientId)) {
-    scene.recordSeen();
     return;
   }
   const attachments = await receiveFiles(ctx, scene, route);
-  if (route.text === "" && attachments.length === 0) {
-    scene.recordSeen();
+  if (ctx.life.closed || (route.text === "" && attachments.length === 0)) {
     return;
   }
   const delivery = { clientId, text: deliveredText(route.text, scene.queuedAt), attachments };

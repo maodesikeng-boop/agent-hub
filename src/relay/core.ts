@@ -47,11 +47,14 @@ import {
   type RelayRevocationEnvelope,
   type RelayServerFrame,
 } from "./protocol.ts";
-import type {
-  RelayLeaseCheckpointAuth,
-  RelayLeaseCheckpointPutInput,
-  RelayLeaseCheckpointReadResult,
-  RelayLeaseCheckpointWriteResult,
+import {
+  readLeaseCheckpoint,
+  writeLeaseCheckpoint,
+  type RelayLeaseCheckpointAuth,
+  type RelayLeaseCheckpointContext,
+  type RelayLeaseCheckpointPutInput,
+  type RelayLeaseCheckpointReadResult,
+  type RelayLeaseCheckpointWriteResult,
 } from "./lease-checkpoint.ts";
 
 export interface RelayDeviceRecord {
@@ -284,13 +287,32 @@ class AccountRoom implements RelayAccountRoom {
   }
 
   async getLeaseCheckpoint(auth: RelayLeaseCheckpointAuth): Promise<RelayLeaseCheckpointReadResult> {
-    void auth;
-    throw new Error("Not implemented");
+    await this.ensureLoaded();
+    return readLeaseCheckpoint(this.checkpointContext(), auth);
   }
 
   async putLeaseCheckpoint(input: RelayLeaseCheckpointPutInput): Promise<RelayLeaseCheckpointWriteResult> {
-    void input;
-    throw new Error("Not implemented");
+    await this.ensureLoaded();
+    return writeLeaseCheckpoint(this.checkpointContext(), input);
+  }
+
+  private checkpointContext(): RelayLeaseCheckpointContext {
+    return {
+      sessionOf: (id) => this.controls.get(id)?.session ?? null,
+      isActive: (id) => this.isActive(id),
+      currentHolder: (name) => {
+        const lease = this.leases.get(name);
+        return lease?.holder != null && this.now() - lease.renewedAt <= MESH_LEASE_TTL_MS ? { holder: lease.holder, epoch: lease.epoch } : null;
+      },
+      latestEpoch: (name) => this.record?.leaseEpochs[name] ?? 0,
+      storedCheckpoint: (name) => this.record?.leaseCheckpoints?.[name] ?? null,
+      storeCheckpoint: async (name, value) => {
+        if (this.record === null) throw new Error("Missing relay account");
+        (this.record.leaseCheckpoints ??= {})[name] = value;
+        await this.save();
+      },
+      now: this.now,
+    };
   }
 
   async sweep(): Promise<void> {

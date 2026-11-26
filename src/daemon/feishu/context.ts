@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+import type { DeviceId } from "../../shared/api.ts";
 import { LRUCache } from "lru-cache";
 import pLimit, { type LimitFunction } from "p-limit";
 import type { ConversationId, MessageId, PmId } from "../../shared/domain.ts";
@@ -9,7 +11,6 @@ import {
   FEISHU_INBOUND_QUEUE_MAX,
   FEISHU_MEDIA_QUEUE_MAX,
   FEISHU_OUTBOUND_QUEUE_MAX,
-  FEISHU_SEEN_MESSAGES_MAX,
   FEISHU_UPLOAD_CONCURRENCY,
   MESH_MAX_DEVICES_PER_ACCOUNT,
 } from "../../shared/limits.ts";
@@ -18,6 +19,7 @@ import { createFeishuAvatarCache, type FeishuAvatarCache } from "./avatars.ts";
 import { fetchMembers } from "./chat-sync.ts";
 import { createFeishuContextWindows, createFeishuDirectory, type FeishuContextWindows, type FeishuDirectory } from "./directory.ts";
 import type { FeishuFileService, FeishuOutboundFile, FeishuUploaded } from "./files.ts";
+import { createFeishuInboundSync, type FeishuInboundSync } from "./inbound-checkpoint.ts";
 import type { FeishuSdkOptions, registerFeishuApp } from "./sdk.ts";
 import type { FeishuSecrets } from "./secrets.ts";
 import type { FeishuLedgerPort, FeishuServiceOptions } from "./service.ts";
@@ -122,7 +124,6 @@ interface LifeState {
 }
 
 interface CatchUpState {
-  seen: LRUCache<FeishuMessageId, true>;
   gateEpochs: Map<FeishuChatId, number>;
   cursorHold: Map<FeishuChatId, number>;
   epoch: number;
@@ -170,6 +171,7 @@ export interface FeishuContext {
   app: AppState;
   life: LifeState;
   catchUp: CatchUpState;
+  inboundSync: FeishuInboundSync;
   control: ControlState;
   inbound: LaneQueue;
   outbound: LaneQueue;
@@ -186,7 +188,6 @@ export function createFeishuContext(options: FeishuServiceOptions): FeishuContex
   const now = options.now ?? Date.now;
   const store = createFeishuStore(options.db);
   const catchUp: CatchUpState = {
-    seen: new LRUCache({ max: FEISHU_SEEN_MESSAGES_MAX }),
     gateEpochs: new Map(),
     cursorHold: new Map(),
     epoch: 0,
@@ -195,6 +196,23 @@ export function createFeishuContext(options: FeishuServiceOptions): FeishuContex
     hadLiveSession: false,
   };
   const control: ControlState = { syncRequested: false, connectionRequested: false, dirty: new Set(), active: null, retry: null };
+  const initialAppId = store.app()?.appId;
+  const inboundSync = createFeishuInboundSync({
+    selfId: options.device.id as DeviceId,
+    stateFile: options.inboundStateFile ?? join(dirname(options.secretsFile), "feishu-inbound.json"),
+    initialAppId: initialAppId ?? null,
+    appCredentials: () => {
+      const secrets = ctx.link.secrets;
+      const app = store.app();
+      return app === null || secrets?.appId !== app.appId ? null : { appId: app.appId, appSecret: secrets.appSecret };
+    },
+    leaseEpoch: () => options.lease?.epoch?.() ?? null,
+    ...(options.inboundRelay === undefined ? {} : { relay: options.inboundRelay }),
+    ...(options.inboundPeers === undefined ? {} : { peers: options.inboundPeers }),
+    legacyCursors: store.legacyInboundCursors,
+    now,
+    log: options.log,
+  });
   const ctx: FeishuContext = {
     options,
     db: options.db,
@@ -247,6 +265,7 @@ export function createFeishuContext(options: FeishuServiceOptions): FeishuContex
       idleWaiters: [],
     },
     catchUp,
+    inboundSync,
     control,
     inbound: { lanes: new Map(), count: 0, limit: FEISHU_INBOUND_QUEUE_MAX, paused: (chatId) => catchUp.gateEpochs.has(chatId) },
     outbound: { lanes: new Map(), count: 0, limit: FEISHU_OUTBOUND_QUEUE_MAX, paused: () => control.active !== null },

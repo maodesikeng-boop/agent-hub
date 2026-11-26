@@ -230,6 +230,7 @@ export function createCenterLease(options: CenterLeaseOptions): CenterLease {
   return {
     holding,
     holder: effectiveHolder,
+    epoch: () => state.kind === "holder" || state.kind === "yielding" ? state.epoch : state.kind === "orphan_holder" ? 0 : null,
     refresh() {
       if (!closed) step({ kind: "eligible", eligible: options.eligible(), at: now() });
     },

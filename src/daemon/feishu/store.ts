@@ -12,14 +12,16 @@ import type {
   FeishuTriggerMode,
 } from "../../shared/feishu.ts";
 import { isOneOf } from "../../shared/domain.ts";
-import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
+import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES, parseFeishuChatId, parseFeishuMessageId } from "../../shared/feishu.ts";
 import {
   FEISHU_DECISIONS_MAX_ROWS,
+  FEISHU_INBOUND_CURSORS_MAX,
   FEISHU_PAGE_SIZE,
   FEISHU_POSTS_MAX_ROWS,
   FEISHU_ROUTER_EVENTS_MAX_ROWS,
   FEISHU_ROUTER_EVENTS_TTL_MS,
 } from "../../shared/limits.ts";
+import type { FeishuInboundCursorEntry } from "./inbound-checkpoint.ts";
 import type { FeishuCardRef } from "./cards.ts";
 import type { Db } from "../store/index.ts";
 import { lookKey, parseLookKey, type SlimeLook } from "../../shared/slimes.ts";
@@ -44,6 +46,7 @@ export interface FeishuChatBinding {
   triggerMode: FeishuTriggerMode;
   guestTier: FeishuGuestTier;
   archivedAt: number | null;
+  createdAt: number;
   lastMessageId: MessageId | null;
   lastRouterEventId: number | null;
 }
@@ -70,12 +73,6 @@ export interface FeishuPostRecord {
   state: FeishuPostState;
   mediaKey: string | null;
   updatedAt: number;
-}
-
-export interface FeishuInboundCursor {
-  chatCreatedAt: number;
-  lastInboundAt: number | null;
-  lastMessageId: FeishuMessageId | null;
 }
 
 export interface FeishuStore {
@@ -106,8 +103,7 @@ export interface FeishuStore {
     after: number,
     limit: number,
   ): { id: number; item_id: RouterItemId | null; command_id: RouterCommandId | null; ask_message_id: MessageId | null }[];
-  inboundCursor(chatId: FeishuChatId): FeishuInboundCursor | null;
-  saveInboundCursor(chatId: FeishuChatId, cursor: { lastInboundAt: number; lastMessageId: FeishuMessageId | null }, now: number): void;
+  legacyInboundCursors(): FeishuInboundCursorEntry[];
   decision(ref: FeishuCardRef): { clientId: string; name: string } | null;
   saveDecision(ref: FeishuCardRef, clientId: string, name: string, now: number): void;
 
@@ -347,34 +343,19 @@ export function createFeishuStore(db: Db): FeishuStore {
     },
     routerEventsAfter: (after, limit) =>
       db.all("SELECT id, item_id, command_id, ask_message_id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT ?", after, limit),
-    inboundCursor(chatId) {
-      const row = db.get<{ created_at: number; last_inbound_at: number | null; last_message_id: string | null }>(
-        `SELECT c.created_at, i.last_inbound_at, i.last_message_id
-         FROM feishu_chats c LEFT JOIN feishu_inbound_cursors i ON i.chat_id = c.chat_id
-         WHERE c.chat_id = ?`,
-        chatId,
-      );
-      if (row === undefined) return null;
-      return {
-        chatCreatedAt: row.created_at,
-        lastInboundAt: row.last_inbound_at,
-        lastMessageId: (row.last_message_id as FeishuMessageId | null) ?? null,
-      };
-    },
-    saveInboundCursor(chatId, cursor, now) {
-      if (chatById(chatId) === null) return;
-      db.run(
-        `INSERT INTO feishu_inbound_cursors (chat_id, last_inbound_at, last_message_id, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT (chat_id) DO UPDATE SET
-           last_message_id = CASE WHEN excluded.last_inbound_at >= feishu_inbound_cursors.last_inbound_at THEN excluded.last_message_id ELSE feishu_inbound_cursors.last_message_id END,
-           last_inbound_at = MAX(feishu_inbound_cursors.last_inbound_at, excluded.last_inbound_at),
-           updated_at = excluded.updated_at`,
-        chatId,
-        cursor.lastInboundAt,
-        cursor.lastMessageId,
-        now,
-      );
+    legacyInboundCursors() {
+      return db.all<{ chat_id: string; last_inbound_at: number; last_message_id: string | null; updated_at: number }>(
+        `SELECT i.chat_id, i.last_inbound_at, i.last_message_id, i.updated_at
+         FROM feishu_inbound_cursors i JOIN feishu_chats c ON c.chat_id = i.chat_id
+         WHERE c.archived_at IS NULL
+         ORDER BY i.last_inbound_at DESC, i.chat_id LIMIT ?`,
+        FEISHU_INBOUND_CURSORS_MAX,
+      ).flatMap((row) => {
+        const chatId = parseFeishuChatId(row.chat_id);
+        return chatId === null ? [] : [{
+          chatId, lastInboundAt: row.last_inbound_at, lastMessageId: parseFeishuMessageId(row.last_message_id), updatedAt: row.updated_at,
+        }];
+      });
     },
     decision(ref) {
       const [kind, id] = decisionKey(ref);
@@ -474,6 +455,7 @@ interface ChatRow {
   trigger_mode: string;
   guest_tier: string;
   archived_at: number | null;
+  created_at: number;
   last_message_id: number | null;
   last_router_event_id: number | null;
 }
@@ -516,6 +498,7 @@ function toChat(row: ChatRow): FeishuChatBinding {
     triggerMode: isOneOf(FEISHU_TRIGGER_MODES, row.trigger_mode) ? row.trigger_mode : "auto",
     guestTier: isOneOf(FEISHU_GUEST_TIERS, row.guest_tier) ? row.guest_tier : "chat_only",
     archivedAt: row.archived_at,
+    createdAt: row.created_at,
     lastMessageId: watermark(row.last_message_id),
     lastRouterEventId: watermark(row.last_router_event_id),
   };

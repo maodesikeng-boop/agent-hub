@@ -3028,7 +3028,7 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
       }
       fake.handlers!.onConnected();
       await settle();
-      cursors.push(store().inboundCursor(chat)!.lastInboundAt!);
+      cursors.push(svc.exportInboundState!()!.cursors[chat]!.lastInboundAt);
       expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(batches.slice(0, round).map((b) => b.task));
     }
     expect(cursors[1]).toBeGreaterThan(cursors[0]!);

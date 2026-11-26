@@ -11,7 +11,7 @@ import { api, handleError, isChatGone, sendText } from "./api.ts";
 import { onRawCardAction } from "./card-actions.ts";
 import { feishuChatMarker } from "./chats.ts";
 import { exportPeerApp, localPmChats, syncTransport } from "./connection.ts";
-import { createFeishuContext, type FeishuContext } from "./context.ts";
+import { createFeishuContext, isCenter, type FeishuContext } from "./context.ts";
 import { releaseAllInboundGates } from "./inbound-catchup.ts";
 import type { FeishuInboundPeerPort, FeishuInboundRelayPort, FeishuInboundStateSnapshot } from "./inbound-checkpoint.ts";
 import { onRawEvent } from "./inbound-dispatch.ts";
@@ -165,7 +165,6 @@ function clearQueuesAndCaches(ctx: FeishuContext) {
   ctx.catchUp.epoch++;
   ctx.catchUp.targetEpoch = 0;
   releaseAllInboundGates(ctx);
-  ctx.catchUp.seen.clear();
   ctx.catchUp.cursorHold.clear();
   ctx.activeTurns.clear();
   ctx.directory.clear();
@@ -180,6 +179,7 @@ async function shutdown(ctx: FeishuContext) {
   await drainBeforeClose(ctx);
   ctx.life.closed = true;
   await syncTransport(ctx);
+  await ctx.inboundSync.close();
   clearQueuesAndCaches(ctx);
   settleIdle(ctx);
 }
@@ -196,6 +196,12 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     syncLeaseConnection: () => syncTransport(ctx),
     exportPeerApp: () => exportPeerApp(ctx),
     applyPeerApp: (sync) => applyPeerApp(ctx, sync),
+    exportInboundState: () => ctx.life.closed ? null : ctx.inboundSync.exportForWire(),
+    applyInboundState: (state) => {
+      if (!ctx.life.closed && ctx.inboundSync.mergeRemote(state) && isCenter(ctx)) void ctx.inboundSync.flush();
+    },
+    tryHoldOffline: (input) => !ctx.life.closed && ctx.inboundSync.tryHoldOffline(input).kind === "held",
+    flushInboundState: () => ctx.inboundSync.flush(),
     localPmChats: () => localPmChats(ctx),
     handleEvent(raw, queuedAt) {
       onRawEvent(ctx, raw, queuedAt);
@@ -206,7 +212,10 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     },
     chatDescription: (chatId) => chatDescription(ctx, chatId),
     start: () => start(ctx),
-    idle: () => whenIdle(ctx, true),
+    async idle() {
+      await whenIdle(ctx, true);
+      await ctx.inboundSync.flush();
+    },
     close() {
       ctx.life.closing ??= shutdown(ctx);
       return ctx.life.closing;
