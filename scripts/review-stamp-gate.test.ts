@@ -136,10 +136,12 @@ describe("matchStampPaths", () => {
     expect(matchStampPaths(trackedFiles, globs)).toEqual(trackedFiles);
   });
 
-  it("keeps multi-step implementation baseline rules and new process criteria aligned across docs/plan-standard.md, REVIEW.md, and AGENTS.md", () => {
+  it("keeps multi-step implementation baseline rules and new process criteria aligned across docs/plan-standard.md, REVIEW.md, docs/review-and-merge.md, and AGENTS.md", () => {
     const planStandard = readFileSync(join(REPO_ROOT, "docs/plan-standard.md"), "utf8");
     const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const reviewAndMerge = readFileSync(join(REPO_ROOT, "docs/review-and-merge.md"), "utf8");
     const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
+    expect(agentsMd).toContain("docs/review-and-merge.md");
 
     const implSection = planStandard.slice(planStandard.indexOf("## Implementation"));
     expect(implSection).toMatch(/Later step of a multi-step implementation plan/iu);
@@ -159,6 +161,7 @@ describe("matchStampPaths", () => {
     for (const [label, doc] of [
       ["docs/plan-standard.md", planStandard],
       ["REVIEW.md", reviewMd],
+      ["docs/review-and-merge.md", reviewAndMerge],
       ["AGENTS.md", agentsMd],
     ] as const) {
       expect(doc, `${label} must not keep the superseded user checkpoint-card gate`).not.toMatch(/approves the plan(?:'s)? checkpoint card/u);
@@ -173,6 +176,7 @@ describe("matchStampPaths", () => {
     );
     const planEvidenceSection = planStandard.slice(planStandard.indexOf("## Verification and acceptance evidence"));
     const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const reviewAndMerge = readFileSync(join(REPO_ROOT, "docs/review-and-merge.md"), "utf8");
     const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
     const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
 
@@ -180,7 +184,7 @@ describe("matchStampPaths", () => {
       ["docs/plan-standard.md (Section 8)", planVerificationSection],
       ["docs/plan-standard.md (Evidence)", planEvidenceSection],
       ["REVIEW.md", planRule],
-      ["AGENTS.md", agentsMd],
+      ["docs/review-and-merge.md", reviewAndMerge],
     ] as const) {
       expect(doc, `${label} must state not verified does not count as verified or passing`).toMatch(/not verified.*(?:does not count|never counts) as verified or passing/iu);
       expect(doc, `${label} must scope the no-not-verified rule to web-only flows without a missing real dependency`).toMatch(/web-only flows that do not depend on a missing real dependency/iu);
@@ -189,17 +193,18 @@ describe("matchStampPaths", () => {
       );
       expect(doc, `${label} must not forbid all web flows from claiming not verified when a real dependency is missing`).not.toMatch(/\bWeb flows run locally\b[^.]*cannot claim `not verified`/iu);
     }
+    expect(agentsMd, "AGENTS.md must not forbid all web flows from claiming not verified when a real dependency is missing").not.toMatch(/\bWeb flows run locally\b[^.]*cannot claim `not verified`/iu);
     for (const [label, doc] of [
       ["docs/plan-standard.md (Evidence)", planEvidenceSection],
       ["REVIEW.md", planRule],
-      ["AGENTS.md", agentsMd],
+      ["docs/review-and-merge.md", reviewAndMerge],
     ] as const) {
       expect(doc, `${label} must fail only when neither evidence nor a listed not-verified record exists`).toMatch(/neither complete.*nor a (?:listed|valid) `not verified` record|scenario with neither fails review/iu);
     }
     for (const [label, doc] of [
       ["docs/plan-standard.md (Section 8)", planVerificationSection],
       ["REVIEW.md", planRule],
-      ["AGENTS.md", agentsMd],
+      ["docs/review-and-merge.md", reviewAndMerge],
     ] as const) {
       expect(doc, `${label} must route real-CLI runs to a testbed when local safe isolation is unverified or CLI is unavailable`).toMatch(/run (?:it|the scenario) on a dedicated testbed when available/iu);
     }
@@ -214,6 +219,7 @@ describe("matchStampPaths", () => {
     );
     const planEvidenceSection = planStandard.slice(planStandard.indexOf("## Verification and acceptance evidence"));
     const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const reviewAndMerge = readFileSync(join(REPO_ROOT, "docs/review-and-merge.md"), "utf8");
     const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
     const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
 
@@ -221,7 +227,7 @@ describe("matchStampPaths", () => {
       ["docs/plan-standard.md (Section 8)", planVerificationSection],
       ["docs/plan-standard.md (Evidence)", planEvidenceSection],
       ["REVIEW.md", planRule],
-      ["AGENTS.md", agentsMd],
+      ["docs/review-and-merge.md", reviewAndMerge],
     ] as const) {
       expect(doc, `${label} must state comparable conditions for prompt-cache checks`).toMatch(/same vendor, (?:the )?same model, (?:and )?(?:a )?comparable session and warm-up/iu);
       expect(doc, `${label} must route unavailable local prompt-cache checks to the testbed`).toMatch(/on the testbed/iu);
@@ -244,6 +250,9 @@ describe("matchStampPaths", () => {
         /escalates to the user with a decision card and receives a decision\./iu,
       );
     }
+    expect(agentsMd, "AGENTS.md must not leave user decision-card outcome unspecified").not.toMatch(
+      /escalates to the user with a decision card and receives a decision\./iu,
+    );
     for (const [label, doc] of [
       ["docs/plan-standard.md", planStandard],
       ["REVIEW.md", planRule],
@@ -252,8 +261,8 @@ describe("matchStampPaths", () => {
       expect(doc, `${label} must name shared ACP protocol parser`).toContain("src/vendors/_common/acp/protocol.ts");
       expect(doc, `${label} must name vendor protocol parsers`).toContain("src/vendors/*/protocol.ts");
     }
-    expect(agentsMd).toMatch(/receives explicit user approval, and records the decision card ID and the user's exact quote in the PR body/iu);
-    expect(agentsMd).toMatch(/measured `TokenUsage\.cacheRead` regression always fails review and blocks merge regardless of any approval/iu);
+    expect(reviewAndMerge).toMatch(/receives explicit user approval, and records the decision card ID and the user's exact quote in the PR body/iu);
+    expect(reviewAndMerge).toMatch(/measured `TokenUsage\.cacheRead` regression always fails review and blocks merge regardless of any approval/iu);
     expect(planRule).not.toMatch(/or states why real-session verification is unavailable locally/iu);
     expect(planRule).not.toMatch(/without a local-environment reason/iu);
     expect(planRule, "REVIEW.md must not keep an unconditional missing-cacheRead FAIL that overrides recorded per-vendor approval").not.toMatch(
@@ -271,28 +280,32 @@ describe("matchStampPaths", () => {
   it("requires real-environment real-CLI runs to prove vendor behavior while keeping fake CLIs for regression tests only", () => {
     const planStandard = readFileSync(join(REPO_ROOT, "docs/plan-standard.md"), "utf8");
     const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const reviewAndMerge = readFileSync(join(REPO_ROOT, "docs/review-and-merge.md"), "utf8");
     const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
     const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
 
     for (const [label, doc] of [
       ["docs/plan-standard.md", planStandard],
       ["REVIEW.md", planRule],
-      ["AGENTS.md", agentsMd],
+      ["docs/review-and-merge.md", reviewAndMerge],
     ] as const) {
       expect(doc, `${label} must state hand-written fake events and fake CLIs cannot prove vendor behavior`).toMatch(/hand-written fake events and fake CLIs serve only as automated regression tests/iu);
       expect(doc, `${label} must not require recording or replaying CLI samples`).not.toMatch(/record(?:ed|ing)? (?:real[- ]CLI )?samples?|replay recorded/iu);
     }
+    expect(agentsMd, "AGENTS.md must not require recording or replaying CLI samples").not.toMatch(/record(?:ed|ing)? (?:real[- ]CLI )?samples?|replay recorded/iu);
   });
 
   it("requires a regression test or structural guard on every Important fix and PM decision-card escalation after 3 rounds", () => {
     const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const reviewAndMerge = readFileSync(join(REPO_ROOT, "docs/review-and-merge.md"), "utf8");
     const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
     const claudeMd = readFileSync(join(REPO_ROOT, "CLAUDE.md"), "utf8");
     expect(claudeMd).toBe(agentsMd);
+    expect(agentsMd).not.toMatch(/human escalation after 3 rounds|hand the decision to a person/iu);
 
     for (const [label, doc] of [
       ["REVIEW.md", reviewMd],
-      ["AGENTS.md", agentsMd],
+      ["docs/review-and-merge.md", reviewAndMerge],
     ] as const) {
       expect(doc, `${label} must require a regression test or structural guard on every Important fix from either track`).toMatch(/fixing any `\[Important\]` finding from either logic review or real-environment review, add a reproducing regression test or structural guard in the same PR/iu);
       expect(doc, `${label} must separate the nightly review pass from per-PR Important regression fixes`).toMatch(/Nightly review pass \(00:00\)/u);
