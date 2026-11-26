@@ -89,11 +89,14 @@ function waitingReason(db: Db, row: AgendaStepRow): string {
   return "";
 }
 
-function stepLineOf(db: Db, row: AgendaStepRow, slots: ReadonlyMap<number, StepSlotView>): AgendaStepLine {
+/** Null for a pending step: one queued for a free slot starts in the drain that follows this write, so it waits on nobody. */
+function stepLineOf(db: Db, row: AgendaStepRow, slots: ReadonlyMap<number, StepSlotView>): AgendaStepLine | null {
   const base = { key: row.node_key, title: row.title, since: row.since };
   if (row.status === "running") return { ...base, state: { kind: "running", workerId: row.active_worker_id, slot: row.slot } };
-  const queue = slots.get(row.id)?.queue;
-  if (row.status === "pending" && row.slot !== null && queue !== undefined) return { ...base, state: { kind: "queued_slot", slot: row.slot, ...queue } };
+  if (row.status === "pending") {
+    const queue = slots.get(row.id)?.queue;
+    return row.slot === null || queue === undefined ? null : { ...base, state: { kind: "queued_slot", slot: row.slot, ...queue } };
+  }
   if (row.waiting_for === "pm") return { ...base, state: { kind: "waiting_pm", reason: waitingReason(db, row) } };
   const reason = row.approval ? "确认 Worker 沙箱" : row.blocker ? "动手" : "拍板";
   return { ...base, state: { kind: "waiting_user", reason } };
@@ -108,7 +111,7 @@ function graphBlockOf(db: Db, row: GraphSummaryRow): AgendaGraphBlock {
     row.id,
   );
   const slots = slotViewsOf(db, rows.filter((step) => step.status === "pending").map((step) => step.id));
-  const steps = rows.map((step) => stepLineOf(db, step, slots));
+  const steps = rows.flatMap((step) => stepLineOf(db, step, slots) ?? []);
   return {
     graphId: row.id, title: row.title, stepCount: row.steps, doneCount: row.done, pendingCount: row.pending,
     readyToFinish: ready, steps, doneKeys: parseJsonOr<string[]>(row.done_keys, []), watchId: null, needsPm: oldestNeedsPmSince !== null, oldestNeedsPmSince,

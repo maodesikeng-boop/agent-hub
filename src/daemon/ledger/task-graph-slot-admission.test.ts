@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CONFIRM_REJECT_OPTION, type TaskGraphId, type TaskNode, type WorkerId } from "../../shared/domain.ts";
 import { pmAgendaOf } from "./pm-agenda.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture, type PmHandle } from "./pm-friction-fixture.ts";
-import { slotHolderOf } from "./task-graphs/slots.ts";
+import { HOLDS_SLOT_SQL, slotHolderOf } from "./task-graphs/slots.ts";
 import { createSessionStore } from "../store/index.ts";
 
 describe("step slots: every way a step starts or its Worker resumes passes one admission", () => {
@@ -50,6 +50,12 @@ describe("step slots: every way a step starts or its Worker resumes passes one a
     const stepId = f.db.get<{ id: number }>("SELECT id FROM task_graph_steps WHERE graph_id = ?", second.id)!.id;
     expect(() => f.db.run("UPDATE task_graph_steps SET status = 'running' WHERE id = ?", stepId)).toThrow(/slot_held/);
     expect(slotHolderOf(f.db, "real-env")).toMatchObject({ graphId: first.id });
+  });
+
+  it("the admission trigger checks the same holding condition the ledger reads", () => {
+    const sql = f.db.get<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'task_graph_step_slots_admit'")!.sql;
+    const squash = (text: string) => text.replace(/\s+/gu, " ");
+    expect(squash(sql)).toContain(squash(HOLDS_SLOT_SQL));
   });
 
   it("hub worker send to a braked Worker whose slot is now held elsewhere is refused", async () => {
@@ -114,6 +120,22 @@ describe("step slots: every way a step starts or its Worker resumes passes one a
     expect(step(second.id).status).toBe("running");
   });
 
+  it("background commands recorded before a restart no longer hold the slot after it", async () => {
+    const first = slotted("图甲");
+    const second = slotted("图乙");
+    const wid = holderWorker(first.id);
+    await f.startWorktree(wid);
+    const { sessionId, inputId } = beginTurn(wid);
+    f.ledger.applyDriverEvent(sessionId, { type: "background.changed", count: 1, at: ++f.clock.now });
+    f.ledger.applyDriverEvent(sessionId, {
+      type: "turn.ended", ok: false, interrupted: false, messageIds: [inputId], durationMs: 20, at: ++f.clock.now,
+      error: { subtype: "error_during_execution", message: "boom" },
+    });
+    expect(step(second.id).status).toBe("pending");
+    f.ledger.recoverAfterRestart();
+    expect(step(second.id).status).toBe("running");
+  });
+
   it("starting a step by hand that would take over an earlier Worker is refused instead of queued without the takeover", async () => {
     const first = slotted("图甲");
     const second = slotted("图乙");
@@ -171,6 +193,21 @@ describe("step slots: every way a step starts or its Worker resumes passes one a
     f.ledger.hubCall(f.lin.sessionId, "worker.end", { workerId: holderWorker(first.id) });
     expect(step(third.id).status).toBe("running");
     expect(f.db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", wang.conversationId)!.n).toBe(wakeupsBefore);
+  });
+
+  it("a waiter leaving the line while the holder keeps running republishes every graph still queued behind it", () => {
+    const first = slotted("图甲");
+    const second = slotted("图乙");
+    const third = slotted("图丙");
+    expect(step(third.id).slotQueue?.position).toBe(2);
+    const pushed: TaskNode[] = [];
+    const stop = f.ledger.onChange((change) => {
+      if (change.type === "task_graph.updated" && change.data.graph.id === third.id) pushed.push(change.data.graph.nodes[0]!);
+    });
+    f.patchGraph({ skipSteps: ["review-real"] }, second.id);
+    stop();
+    expect(slotHolderOf(f.db, "real-env")).toMatchObject({ graphId: first.id });
+    expect(pushed.at(-1)?.slotQueue).toMatchObject({ position: 1, holder: { graphId: first.id } });
   });
 
   it("the PM status list never reports a queued step as waiting for the user while its slot is momentarily free", () => {

@@ -299,6 +299,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
     ...TURN_HISTORY_LIMITS,
     limit("TURN_TOOLS_MAX_PER_SESSION", TURN_TOOLS_MAX_PER_SESSION, "rows"),
   ]),
+  table("session_background_tasks", "transient", "src/daemon/ledger/messages.ts", "src/daemon/ledger/messages.ts, src/daemon/ledger/sessions.ts", "automatic"),
   table("turn_background_waits", "growing", "src/daemon/ledger/turn-background-waits.ts", "src/daemon/ledger/turn-background-waits.ts, src/daemon/ledger/worker-retention.ts", "automatic", [
     limit("MAX_BACKGROUND_TASKS_TRACKED", MAX_BACKGROUND_TASKS_TRACKED, "entries"),
     ...WORKER_RETENTION_LIMITS,

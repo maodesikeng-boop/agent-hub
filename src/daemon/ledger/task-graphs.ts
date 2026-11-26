@@ -15,7 +15,7 @@ import {
   purgeExpiredBatch,
 } from "./task-graphs/overview.ts";
 import { patchIn } from "./task-graphs/patch.ts";
-import { drainSlotsIn, queueWorkerStartIn } from "./task-graphs/slot-queue.ts";
+import { drainSlotsIn, graphsQueuedOn, queueWorkerStartIn, slotQueueLinesOf } from "./task-graphs/slot-queue.ts";
 import { freeSlotsWithWaiters } from "./task-graphs/slots.ts";
 import { onWorkerTurnReportIn } from "./task-graphs/turn-report.ts";
 import type { TaskGraphCtx, TaskGraphOptions } from "./task-graphs/types.ts";
@@ -28,6 +28,7 @@ import {
   onWorkerUserBlockedIn,
   prepareWorkerBind,
   releaseUserBlockedStepsIn,
+  isWorkerSlotHeldElsewhere,
   workerGraphStatus,
   workerGraphWorkspacePlan,
 } from "./task-graphs/worker-hooks.ts";
@@ -64,12 +65,28 @@ export function createLedgerTaskGraphs(
     (...args: A): R =>
       fn(g, ...args);
   let draining = false;
-  // The drain's own commit lands here again; the flag keeps that to one follow-up write per outside commit.
+  let publishedQueues = new Map<string, string>();
+  const changedQueues = (): string[] => {
+    const lines = slotQueueLinesOf(g);
+    const changed = [...new Set([...lines.keys(), ...publishedQueues.keys()])].filter((slot) => lines.get(slot) !== publishedQueues.get(slot));
+    publishedQueues = lines;
+    return changed;
+  };
+  // Commits made while draining re-enter here and return at once; the loop below rechecks after each of its writes instead.
   const drainSlotsAfterCommit = (): void => {
-    if (draining || freeSlotsWithWaiters(g.db).length === 0) return;
+    if (draining) return;
     draining = true;
     try {
-      ctx.write((p) => drainSlotsIn(g, p));
+      let drained: string | null = null;
+      for (;;) {
+        const free = freeSlotsWithWaiters(g.db).join("\n");
+        // A drain that left the same slots free made no progress, so repeating it would loop.
+        if (free === "" || free === drained) break;
+        drained = free;
+        ctx.write((p) => drainSlotsIn(g, p));
+      }
+      const graphIds = graphsQueuedOn(g, changedQueues());
+      if (graphIds.length > 0) ctx.write((p) => { for (const graphId of graphIds) pushSlimGraphIn(g, p, graphId); });
     } finally {
       draining = false;
     }
@@ -106,6 +123,7 @@ export function createLedgerTaskGraphs(
     onWorkerFailedIn: bind(onWorkerFailedIn),
     onWorkerUserBlockedIn: bind(onWorkerUserBlockedIn),
     releaseUserBlockedStepsIn: bind(releaseUserBlockedStepsIn),
+    isWorkerSlotHeldElsewhere: bind(isWorkerSlotHeldElsewhere),
     notifyUserBlockedStepsIn: bind(notifyUserBlockedStepsIn),
     onWorkerResumedIn: bind(onWorkerResumedIn),
     onWorkerEndedIn: bind(onWorkerEndedIn),

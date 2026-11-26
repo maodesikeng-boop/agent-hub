@@ -74,15 +74,29 @@ type SlotHolderRef = { graphId: number; nodeKey: string; workerId: number | null
 const slotHolderText = (holder: SlotHolderRef): string =>
   `图 #${holder.graphId} 的 ${holder.nodeKey}${holder.workerId === null ? "" : `（Worker #${holder.workerId}）`}`;
 
-/** `then` says what happens when the slot frees: the step starts by its brief, the PM is asked to start it, or nothing was queued. */
+export type SlotHeldOutcome =
+  | { kind: "start" | "pm" }
+  | { kind: "attached" }
+  | { kind: "resume"; workerId: number }
+  | { kind: "not_queued"; reasons: readonly string[] };
+
+/** The outcome says what happens when the slot frees: the step starts by its brief, the PM is asked to start it, or nothing was queued or sent. */
 export function slotHeldText(
   nodeKey: string,
-  queue: { slot: string; position: number; holder: SlotHolderRef },
-  then: "start" | "pm" | "attached",
+  queue: { slot: string; position?: number; holder: SlotHolderRef },
+  then: SlotHeldOutcome,
 ): string {
   const head = `步骤「${nodeKey}」要用名额「${queue.slot}」，现在被${slotHolderText(queue.holder)}占着`;
-  if (then === "attached") return `${head}；这一步还挂着 Worker，名额空出来以前不能换人，这次没有派 Worker`;
-  return `${head}；已排在第 ${queue.position} 位，空出来${then === "start" ? "自动开工" : "会叫你派 Worker"}。`;
+  switch (then.kind) {
+    case "attached":
+      return `${head}；这一步还挂着 Worker，名额空出来以前不能换人，这次没有派 Worker`;
+    case "resume":
+      return `${head}；名额空出来以前 Worker #${then.workerId} 不能接着做，这次没有发给它`;
+    case "not_queued":
+      return `${head}；这次带了排队时带不走的东西（${then.reasons.join("、")}），所以没有派也没有排队；名额空出来后再派，或者去掉这些让它按步骤设定排队`;
+    default:
+      return `${head}；已排在第 ${queue.position ?? 1} 位，空出来${then.kind === "start" ? "自动开工" : "会叫你派 Worker"}。`;
+  }
 }
 
 function nodeSlotNote(node: TaskNode): string {
@@ -106,7 +120,7 @@ export function unlockedNoteOf(progress: ProgressResult, graph: TaskGraph): stri
   for (const b of progress.userBlocked) {
     parts.push(`步骤「${b.key}」等用户动手：${b.note}（要换别家：${HUB_COMMAND} worker start --node ${b.key} --graph ${graph.id} --vendor <别家>）`);
   }
-  for (const q of progress.queued) parts.push(slotHeldText(q.key, q, q.then).replace(/。$/u, ""));
+  for (const q of progress.queued) parts.push(slotHeldText(q.key, q, { kind: q.then }).replace(/。$/u, ""));
   if (progress.turned.length > 0) {
     const pmKeys = progress.turned.filter((u) => u.waitingFor === "pm").map((u) => u.key);
     const dispatch = pmKeys.length > 0 ? `（给它派 Worker：${HUB_COMMAND} worker start --node ${pmKeys[0]} --graph ${graph.id}）` : "";

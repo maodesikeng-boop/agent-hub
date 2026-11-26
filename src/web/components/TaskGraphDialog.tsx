@@ -335,7 +335,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                       {decisionLabel}
                     </p>
                   )}
-                  {queueText !== null && <p className="truncate text-xs text-muted-foreground" title={queueText}>{queueText}</p>}
+                  {queueText !== null && <p className="text-xs break-words text-muted-foreground">{queueText}</p>}
                   {summaryText !== null && <p className="line-clamp-2 text-xs text-muted-foreground">{summaryText}</p>}
                   <SettledGateDraft draftKey={settledDraftKey} settledNote={node.decision?.note ?? null} />
                 </div>

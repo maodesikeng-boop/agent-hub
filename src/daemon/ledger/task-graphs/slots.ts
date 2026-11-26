@@ -2,7 +2,8 @@ import type { TaskGraphId, TaskNode, TaskNodeKey, WorkerId } from "../../../shar
 import type { Db } from "../../store/index.ts";
 
 // Invariant: after any committed write, each slot on this daemon has at most one holder, and no slot is free while a
-// step waits for it. A step holds its slot while running, or while its Worker still has a tracked background task.
+// step waits for it. The `task_graph_step_slots_admit` trigger refuses any write that puts a step into running while
+// another step holds its slot, using HOLDS_SLOT_SQL verbatim.
 
 export interface SlotHolder {
   graphId: TaskGraphId;
@@ -21,18 +22,19 @@ interface SlotStepRow {
   active_worker_id: WorkerId | null;
 }
 
-const HOLDS_SLOT_SQL = `(n.status = 'running' OR (n.active_worker_id IS NOT NULL AND EXISTS (
-    SELECT 1 FROM agent_sessions a JOIN worker_background_waits b ON b.session_id = a.id
-     WHERE a.worker_id = n.active_worker_id AND b.background = 1)))`;
+/** The one definition of a step `n` holding its slot; ended graphs leave no step running and no Worker attached. */
+export const HOLDS_SLOT_SQL =
+  "(n.status = 'running' OR (n.active_worker_id IS NOT NULL AND EXISTS (SELECT 1 FROM agent_sessions a WHERE a.worker_id = n.active_worker_id AND (EXISTS (SELECT 1 FROM session_background_tasks b WHERE b.session_id = a.id) OR EXISTS (SELECT 1 FROM turns t WHERE t.session_id = a.id AND t.status = 'running')))))";
+
+// A queued step of an archived PM keeps its row for unarchive but takes no place in line.
+const LIVE_PM_SQL = "NOT EXISTS (SELECT 1 FROM pm_archives a WHERE a.pm_id = g.pm_id)";
 
 const holderOf = (row: SlotStepRow): SlotHolder => ({ graphId: row.graph_id, nodeKey: row.node_key, workerId: row.active_worker_id });
 
 function holderRowOf(db: Db, slot: string): SlotStepRow | undefined {
   return db.get<SlotStepRow>(
-    `SELECT s.step_id, n.graph_id, n.node_key, n.active_worker_id
-       FROM task_graph_step_slots s JOIN task_graph_steps n ON n.id = s.step_id JOIN task_graphs g ON g.id = n.graph_id
-      WHERE s.slot = ? AND g.status = 'active' AND ${HOLDS_SLOT_SQL}
-      ORDER BY n.id LIMIT 1`,
+    `SELECT s.step_id, n.graph_id, n.node_key, n.active_worker_id FROM task_graph_step_slots s JOIN task_graph_steps n ON n.id = s.step_id
+      WHERE s.slot = ? AND ${HOLDS_SLOT_SQL} ORDER BY s.step_id LIMIT 1`,
     slot,
   );
 }
@@ -48,10 +50,26 @@ export function slotWaitersOf(db: Db, slot: string): SlotStepRow[] {
   return db.all<SlotStepRow>(
     `SELECT s.step_id, n.graph_id, n.node_key, n.active_worker_id
        FROM task_graph_step_slots s JOIN task_graph_steps n ON n.id = s.step_id JOIN task_graphs g ON g.id = n.graph_id
-      WHERE s.slot = ? AND s.queued_at IS NOT NULL AND n.status = 'pending' AND g.status = 'active'
+      WHERE s.slot = ? AND s.queued_at IS NOT NULL AND n.status = 'pending' AND g.status = 'active' AND ${LIVE_PM_SQL}
       ORDER BY s.queued_at, s.step_id`,
     slot,
   );
+}
+
+/**
+ * The check every path that starts a step or resumes its Worker shares, so it can refuse before any side effect.
+ * Postcondition: null when the step has no slot or nobody else holds it; otherwise the slot and its other holder.
+ */
+export function slotConflictOf(db: Db, stepId: number): { slot: string; holder: SlotHolder } | null {
+  const row = db.get<SlotStepRow & { slot: string }>(
+    `SELECT s.step_id, n.graph_id, n.node_key, n.active_worker_id, s.slot
+       FROM task_graph_step_slots mine
+       JOIN task_graph_step_slots s ON s.slot = mine.slot AND s.step_id != mine.step_id
+       JOIN task_graph_steps n ON n.id = s.step_id
+      WHERE mine.step_id = ? AND ${HOLDS_SLOT_SQL} ORDER BY s.step_id LIMIT 1`,
+    stepId,
+  );
+  return row === undefined ? null : { slot: row.slot, holder: holderOf(row) };
 }
 
 export const stepSlotOf = (db: Db, stepId: number): string | null =>

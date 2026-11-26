@@ -337,7 +337,7 @@ export function startIn(
   if (project === null) throw fail("invalid", `你还没有项目，没法派 Worker：先用 ${HUB_COMMAND} project create --folder <主文件夹> 建一个`);
   const bindTarget =
     args.node !== undefined && args.node.trim() !== "" ? w.options.taskGraphs?.prepareWorkerBind(caller.pmId, args.node, args.graphId) : undefined;
-  const queued = bindTarget === undefined ? null : w.options.taskGraphs?.queueWorkerStartIn(p, bindTarget) ?? null;
+  const queued = bindTarget === undefined ? null : w.options.taskGraphs?.queueWorkerStartIn(p, bindTarget, args) ?? null;
   if (queued !== null) return queued;
   const takeover =
     bindTarget !== undefined && bindTarget.workerIds.length > 0 ? planTakeover(w, bindTarget, project.id, args.noWorktree === true) : null;

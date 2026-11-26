@@ -80,6 +80,7 @@ describe("step slots: every exit path frees the slot and the oldest waiter start
     f.ledger.applyDriverEvent(s.id, { type: "turn.ended", ok: true, interrupted: false, messageIds: [input.id], durationMs: 20, at: ++f.clock.now });
     expect(step(second.id).status).toBe("pending");
     f.ledger.applyDriverEvent(s.id, { type: "background.changed", count: 0, at: ++f.clock.now });
+    f.ledger.applyDriverEvent(s.id, { type: "turn.started", at: ++f.clock.now });
     f.ledger.applyDriverEvent(s.id, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 20, at: ++f.clock.now });
     expect(step(first.id)).toMatchObject({ status: "waiting", waitingFor: "pm" });
     expect(step(second.id).status).toBe("running");

@@ -25,7 +25,7 @@ export const GraphSlotQueueRows = memo(function GraphSlotQueueRows({
             <WorkStatusIcon status="pending" />
             <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 text-left">
               <span className="max-w-full truncate text-minor font-medium">{row.title}</span>
-              <span className="max-w-full min-w-0 truncate text-xs text-muted-foreground">{row.text}</span>
+              <span className="max-w-full min-w-0 text-xs break-words text-muted-foreground">{row.text}</span>
             </span>
           </button>
         </li>
