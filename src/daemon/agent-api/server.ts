@@ -234,6 +234,13 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     properties: { itemId: workerIdField, messageId: workerIdField },
     oneOf: [{ required: ["itemId"] }, { required: ["messageId"] }],
   },
+  "ask.list": noArgs,
+  "ask.show": {
+    type: "object",
+    additionalProperties: false,
+    properties: { itemId: workerIdField, messageId: workerIdField },
+    oneOf: [{ required: ["itemId"] }, { required: ["messageId"] }],
+  },
   "schedule.add": {
     type: "object",
     additionalProperties: false,
@@ -246,6 +253,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     },
   },
   "schedule.list": noArgs,
+  "schedule.show": scheduleIdOnly,
   "schedule.pause": scheduleIdOnly,
   "schedule.resume": scheduleIdOnly,
   "schedule.remove": scheduleIdOnly,
