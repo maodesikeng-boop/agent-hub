@@ -27,6 +27,17 @@ export interface ScheduleRecord {
   updatedAt: number;
 }
 
+export type ScheduleRunState = "waiting" | "read" | "failed" | "cleaned";
+
+export interface ScheduleRunSummary {
+  /** Null when the run's message was removed by retention. */
+  messageId: number | null;
+  scheduledAt: number;
+  state: ScheduleRunState;
+  /** Start of the PM's last reply in the turn that read the run; null when not yet read or not known. */
+  replyPreview: string | null;
+}
+
 const DAILY_TIME = /^([01][0-9]|2[0-3]):([0-5][0-9])$/;
 const EVERY = /^([1-9][0-9]*)([mh])$/;
 const DURATION = /^(?:([1-9][0-9]*)h)?(?:([1-9][0-9]*)m)?(?:([1-9][0-9]*)s)?$/;
