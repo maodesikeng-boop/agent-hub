@@ -42,7 +42,7 @@ function openExternalBrowserPage(url: string): void {
 type DotTone = "ready" | "caution" | "muted";
 
 export function isProviderAuthenticated(item: ProviderStatusItem): boolean {
-  return item.installed && (item.availability === "available" || item.accountSummary !== null);
+  return item.installed && item.availability === "available";
 }
 
 function resolveItemTone(item: ProviderStatusItem): DotTone {
@@ -144,11 +144,11 @@ function ProviderItemRow({
   const hasLog = (jobFailed || jobRunning) && Boolean(job?.logTail.trim());
   const tone = resolveItemTone(item);
   const authenticated = isProviderAuthenticated(item);
-  const ready = authenticated || (item.installed && item.canSignOut);
+  const canOpenAccount = authenticated || (item.installed && item.canSignOut);
   const combinedError: ErrorLike | null =
     rowError ?? (jobFailed && job?.error ? { text: job.kind === "update" ? "Update failed" : "Install failed", raw: job.error } : null);
 
-  const opens = item.installed && !jobRunning ? (ready ? "account" : "signin") : null;
+  const opens = item.installed && !jobRunning ? (canOpenAccount ? "account" : "signin") : null;
   const value = jobRunning ? null : !item.installed ? "Not installed" : authenticated ? (item.accountSummary ?? "Signed in") : "Not signed in";
   const lead = (
     <>
@@ -838,8 +838,8 @@ export function ProviderAccountBody({
     <div className="grid grid-cols-1 gap-4">
       <SettingsGroup label={item.label}>
         <div data-slot="settings-row" className={cn(INFO_ROW, "h-7.5")}>
-          <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-success" />
-          <span className="min-w-0 truncate text-minor text-foreground">{item.accountSummary ?? "Signed in"}</span>
+          <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[resolveItemTone(item)])} />
+          <span className="min-w-0 truncate text-minor text-foreground">{item.accountSummary ?? (isProviderAuthenticated(item) ? "Signed in" : "Not signed in")}</span>
           {item.version && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{item.version}</span>}
           <span className="min-w-0 flex-1" />
           {item.canUpdate && (

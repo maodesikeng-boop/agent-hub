@@ -608,4 +608,24 @@ describe("桌面端 Settings → Providers", () => {
     await user.click(within(methods).getByRole("tab", { name: "API key" }));
     expect(within(controlled(within(methods).getByRole("tab", { selected: true }))).getByPlaceholderText("AIza...")).toBeInTheDocument();
   });
+
+  it("shows a signed-out provider as signed out when it has a saved key", async () => {
+    const status = makeMixedProviders();
+    const [vendor] = AGENT_VENDORS;
+    const body: ProvidersStatusResponse = {
+      ...status,
+      providers: status.providers.map((item) => item.vendor === vendor
+        ? { ...item, installed: true, availability: "signed_out", accountSummary: "API key configured", canSignOut: true }
+        : item),
+    };
+    const api = new FakeApi(makeSnapshot({}));
+    api.providersStatus = () => ({ status: 200, body });
+    api.install();
+
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
+    const row = await screen.findByTestId(`provider-row-${vendor}`);
+    expect(row.querySelector("[data-tone='caution']")).not.toBeNull();
+    expect(within(row).getByText("Not signed in")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: `Account for ${vendorLabel(vendor)}` })).toBeInTheDocument();
+  });
 });
