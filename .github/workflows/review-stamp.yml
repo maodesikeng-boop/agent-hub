@@ -1,7 +1,7 @@
 name: review-stamp
 
 # pull_request_target runs this file and the gate script as they are on main, so a PR cannot edit its own gate.
-# The job reads the PR only through the API and never checks out or runs PR code. No path filter: the required status must always report.
+# The job never checks out or runs PR code. No path filter: the required status must always report.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -35,5 +35,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/review-stamp-gate.ts
