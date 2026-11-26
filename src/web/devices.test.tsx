@@ -106,10 +106,10 @@ afterEach(() => {
 });
 
 describe("只有一台", () => {
-  it("守护进程还没有联机（GET /api/devices 404）：桌面默认落到 #/router，最左栏常驻显示本机图标，点本机进列表且无设备切换器", async () => {
+  it("守护进程还没有联机（GET /api/devices 404）：桌面默认展示 Router，最左栏常驻显示本机图标，点本机进列表且无设备切换器", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), null);
     await boot(fleet);
-    expect(window.location.hash).toBe("#/router");
+    expect(window.location.hash).toBe("");
     expect(railDevice("This computer")).toBeInTheDocument();
     expect(within(rail()).queryByRole("button", { name: /^东京/ })).toBeNull();
     await userEvent.click(railDevice("This computer"));

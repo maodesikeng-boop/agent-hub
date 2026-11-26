@@ -295,7 +295,7 @@ afterEach(() => {
 });
 
 describe("Router 第 2 波：路由与默认落地页", () => {
-  it("电脑外壳空 hash 默认 replace 到 #/router，呈现纯白碳黑中性调、无右栏，全空时居中展示 All clear、不渲染 Needs You 托盘", async () => {
+  it("电脑外壳空 hash 展示 Router，网址不变，呈现纯白碳黑中性调、无右栏，全空时居中展示 All clear、不渲染 Needs You 托盘", async () => {
     const { localApi } = installFleet({});
     const beforeLen = window.history.length;
     const { container } = renderWithQuery(<App />);
@@ -303,7 +303,7 @@ describe("Router 第 2 波：路由与默认落地页", () => {
     act(openSockets);
 
     expect(await screen.findByRole("heading", { level: 1, name: "Router" })).toBeInTheDocument();
-    await waitFor(() => expect(window.location.hash).toBe("#/router"));
+    expect(window.location.hash).toBe("");
     expect(window.history.length).toBe(beforeLen);
 
     // 什么都没有：没有气泡、没有右栏；没有待拍板项时托盘整块不渲染，不留标题

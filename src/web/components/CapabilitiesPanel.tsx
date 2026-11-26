@@ -3,7 +3,6 @@ import { vendorLabel, type AgentVendor, type CapabilitiesPatch, type CapabilityS
 import {
   CAPABILITY_KIND_TAGS,
   capabilityCustomized,
-  capabilityScopeKey,
   capabilitySections,
   capabilityTotals,
   filterCapabilitySections,
@@ -17,7 +16,6 @@ import {
 import { errorText } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { SettingsNavRow } from "../mobile/settings/SettingsNavRow.tsx";
-import { useShellCarry } from "../shell-carry.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { ChevronRight, Loader2 } from "../ui/icons.ts";
@@ -172,7 +170,7 @@ export function CapabilitiesPanel({
 }) {
   const { data: view, error, isPending, refetch } = useCapabilitiesView(scope);
   const editor = useCapabilityEditor(scope);
-  const [query, setQuery] = useShellCarry(`capabilities:${capabilityScopeKey(scope)}:query`, "");
+  const [query, setQuery] = useState("");
   if (view === undefined) return <PanelStatus pending={isPending} error={error} onRetry={() => void refetch()} />;
   const searching = query.trim() !== "";
   const all = capabilitySections(view, lead);

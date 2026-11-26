@@ -483,7 +483,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "m-settings.sign-in": openMobileSettings("Sign in on another device"),
   "m-settings.browsers": [{ patch: "browsers-multi" }, ...openMobileSettings("Signed-in browsers")],
   "m-settings.drawer-confirm": [...openMobileSettings("Signed-in browsers"), { click: btn("Sign out all browsers…") }, { crop: DIALOG }],
-  "m-settings.drawer-form": [...openMobileSettings("Computers"), { click: "role=main >> text=Tokyo Mini" }, { click: "text=Rename…" }, { crop: DIALOG }],
+  "m-settings.drawer-form": [...openMobileSettings("Computers"), { click: 'role=main >> role=button[name^="Tokyo Mini"]' }, { click: "text=Rename…" }, { crop: DIALOG }],
   "quota.normal": openQuota("quota-normal"),
   "quota.max": openQuota("quota-max"),
   "quota.short-window": openQuota("quota-max"),

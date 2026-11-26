@@ -170,8 +170,9 @@ export function useCopyFeedback(resetMs: number = COPIED_RESET_MS): {
   return useMemo(() => ({ copied, copy }), [copied, copy]);
 }
 
-export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: () => void) {
-  const [name, setName] = useState(device.info.name);
+export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: () => void, draft?: { name: string; setName: (name: string) => void }) {
+  const [localName, setLocalName] = useState(device.info.name);
+  const { name = localName, setName = setLocalName } = draft ?? {};
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorLike | null>(null);
   const prevIdRef = useRef(device.info.id);
@@ -183,11 +184,6 @@ export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: ()
   }
   const clean = normalizeName(name);
   const problem = nameError(name);
-  const reset = useCallback(() => {
-    setName(device.info.name);
-    setBusy(false);
-    setError(null);
-  }, [device.info.name]);
   const save = useCallback(async (): Promise<"saved" | "unchanged" | false> => {
     if (clean === null || busy) return false;
     if (clean === device.info.name) return "unchanged";
@@ -204,7 +200,7 @@ export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: ()
       return false;
     }
   }, [busy, clean, device.info.id, device.info.name, onChanged]);
-  return { name, setName, clean, problem, busy, error, save, reset };
+  return { name, setName, clean, problem, busy, error, save };
 }
 
 export function useDeviceRemove(device: Pick<DeviceView, "info">, onChanged?: () => void) {
@@ -705,6 +701,8 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
   };
 }
 
+export type VendorSyncModel = ReturnType<typeof useVendorSyncSetting>;
+
 export const PROVIDERS_QUERY_KEY = (deviceKey: string) => ["providers", deviceKey] as const;
 
 export interface ProvidersSummary {
@@ -861,9 +859,10 @@ export interface UseProvidersSettingOptions {
   enabled?: boolean;
   devices?: readonly DeviceView[] | null;
   defaultDeviceKey?: DeviceKey;
+  selectionPage?: "providers" | "vendor-sync";
 }
 
-function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceKey: DeviceKey) {
+function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceKey: DeviceKey, selectionPage: UseProvidersSettingOptions["selectionPage"]) {
   const contextClient = useClient();
   const selectableComputers = useMemo(() => resolveSelectableProviderComputers(devices), [devices]);
 
@@ -876,9 +875,9 @@ function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceK
   );
 
   const [selectedDeviceKey, setSelectedDeviceKey] = useState<DeviceKey>(() => pickValidDeviceKey(defaultDeviceKey));
-  const prevDefaultRef = useRef(defaultDeviceKey);
-  if (prevDefaultRef.current !== defaultDeviceKey) {
-    prevDefaultRef.current = defaultDeviceKey;
+  const [selectionDefault, setSelectionDefault] = useState({ defaultDeviceKey, selectionPage });
+  if (selectionDefault.defaultDeviceKey !== defaultDeviceKey || selectionDefault.selectionPage !== selectionPage) {
+    setSelectionDefault({ defaultDeviceKey, selectionPage });
     const nextKey = pickValidDeviceKey(defaultDeviceKey);
     if (nextKey !== selectedDeviceKey) setSelectedDeviceKey(nextKey);
   }
@@ -1043,12 +1042,11 @@ export function useProvidersSetting({
   enabled = true,
   devices = null,
   defaultDeviceKey = LOCAL_DEVICE,
+  selectionPage,
 }: UseProvidersSettingOptions = {}) {
   const qc = useHubQueryClient();
-  const { selectableComputers, effectiveDeviceKey, setSelectedDeviceKey, targetClient, isRemoteTarget } = useProviderTarget(
-    devices,
-    defaultDeviceKey,
-  );
+  const { selectableComputers, effectiveDeviceKey, setSelectedDeviceKey, targetClient, isRemoteTarget } =
+    useProviderTarget(devices, defaultDeviceKey, selectionPage);
   const pageVisible = useSyncExternalStore(subscribePageVisibility, getPageVisibilitySnapshot, () => true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const queryKey = useMemo(() => PROVIDERS_QUERY_KEY(effectiveDeviceKey), [effectiveDeviceKey]);

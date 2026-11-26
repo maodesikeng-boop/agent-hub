@@ -1,7 +1,6 @@
 import { Loader2 } from "../ui/icons.ts";
 import type { VendorSyncVendorBadge } from "../../shared/index.ts";
-import type { HubClient } from "../client.ts";
-import { VENDOR_STATUS_LABELS, useVendorSyncSetting, visibleMcpVendorBadges } from "../settings-model.ts";
+import { VENDOR_STATUS_LABELS, visibleMcpVendorBadges, type VendorSyncModel } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Switch } from "../ui/switch.tsx";
@@ -25,7 +24,7 @@ function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) 
   );
 }
 
-export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
+export function VendorSyncSettings({ vendor, showScan }: { vendor: VendorSyncModel; showScan: boolean }) {
   const {
     preview,
     checkedMcp,
@@ -42,11 +41,11 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
     toggleMcp,
     toggleSkill,
     closePreview,
-  } = useVendorSyncSetting(client);
+  } = vendor;
 
   return (
     <>
-      <SettingsGroup title="Integrations">
+      {showScan && <SettingsGroup title="Integrations">
         <SettingsRow label="Vendor sync" detail={summary} error={scanError}>
           {(id) => (
             <Button
@@ -63,9 +62,11 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
             </Button>
           )}
         </SettingsRow>
-      </SettingsGroup>
+      </SettingsGroup>}
 
+      {/* Radix must register the preview after the Settings dialog when columns return. */}
       <Dialog
+        key={showScan ? "desktop" : "mobile"}
         open={preview !== null}
         onOpenChange={(open) => {
           if (!open) closePreview();

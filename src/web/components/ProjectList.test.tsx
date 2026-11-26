@@ -1,7 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
-import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { type Pm } from "../../shared/index.ts";
 import { defaultLookOf } from "../../shared/slimes.ts";
@@ -41,11 +40,10 @@ function entry(
   };
 }
 
-type ListProps = Omit<ProjectListProps, "query" | "onQueryChange">;
+type ListProps = ProjectListProps;
 
 function SearchableList(props: ListProps) {
-  const [query, setQuery] = useState("");
-  return <ProjectList {...props} query={query} onQueryChange={setQuery} />;
+  return <ProjectList {...props} />;
 }
 
 function renderList(overrides: Partial<ListProps> = {}) {

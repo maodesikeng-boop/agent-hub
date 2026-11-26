@@ -4,7 +4,7 @@ import { userEvent } from "@testing-library/user-event";
 import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { Avatar } from "./components/Avatar.tsx";
-import { SettingsDialog } from "./components/SettingsDialog.tsx";
+import { SettingsDialogFixture } from "./components/settings-dialog-fixture.tsx";
 import { cn } from "./lib/utils.ts";
 import { DEFAULT_UI_SCALE, readUiScale, UI_SCALE_KEY, UI_SCALE_ROOT_PX, UI_SCALES } from "./ui-scale.ts";
 
@@ -30,7 +30,7 @@ describe("Interface scale", () => {
 
   it("Settings offers Compact, Default, Large, and XL with Default checked, and a click applies and saves the scale", async () => {
     const user = userEvent.setup();
-    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open onOpenChange={() => {}} notify={notify} />);
     const group = screen.getByRole("radiogroup", { name: "Interface scale" });
     const options = within(group).getAllByRole("radio");
     expect(options.map((o) => o.textContent)).toEqual(["Compact", "Default", "Large", "XL"]);

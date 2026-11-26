@@ -1,8 +1,8 @@
 import { Loader2 } from "../../ui/icons.ts";
-import { useState } from "react";
-import { AccountSettings } from "../../components/AccountSettings.tsx";
+import { useState, type ReactNode } from "react";
 import { PlatformIcon, StatusDot, StatusText } from "../../components/DeviceBadges.tsx";
 import { RowError, SettingsGroup } from "../../components/SettingsList.tsx";
+import type { ComputerRenameApi } from "../../settings-drafts.ts";
 import { LINK_LABELS, platformLabel, type DeviceView } from "../../devices.ts";
 import { useDeviceRemove, useDeviceRename, type DeviceSettings } from "../../settings-model.ts";
 import { Button } from "../../ui/button.tsx";
@@ -36,8 +36,8 @@ function DeviceNavRow({ device, onClick }: { device: DeviceView; onClick: () => 
   );
 }
 
-function RenameForm({ device, onChanged, onDone, onCancel }: { device: DeviceView; onChanged: () => void; onDone: () => void; onCancel: () => void }) {
-  const { name, setName, clean, problem, busy, error, save } = useDeviceRename(device, onChanged);
+function RenameForm({ device, onChanged, onDone, onCancel, draft }: { draft: { name: string; setName: (name: string) => void }; device: DeviceView; onChanged: () => void; onDone: () => void; onCancel: () => void }) {
+  const { name, setName, clean, problem, busy, error, save } = useDeviceRename(device, onChanged, draft);
   return (
     <form
       className="grid grid-cols-1 gap-4"
@@ -72,10 +72,9 @@ function RenameForm({ device, onChanged, onDone, onCancel }: { device: DeviceVie
   );
 }
 
-function ManageView({ device, onChanged, close }: { device: DeviceView; onChanged: () => void; close: () => void }) {
-  const [view, setView] = useState<"menu" | "rename" | "remove">("menu");
+function ManageView({ device, onChanged, close, onRename }: { device: DeviceView; onChanged: () => void; close: () => void; onRename: () => void }) {
+  const [view, setView] = useState<"menu" | "remove">("menu");
   const { busy, error, remove } = useDeviceRemove(device, onChanged);
-  if (view === "rename") return <RenameForm device={device} onChanged={onChanged} onDone={close} onCancel={() => setView("menu")} />;
   if (view === "remove") {
     return (
       <ConfirmBody
@@ -98,7 +97,7 @@ function ManageView({ device, onChanged, close }: { device: DeviceView; onChange
         <DeviceDetail device={device} />
       </p>
       <div className="grid grid-cols-1 gap-2">
-        <Button variant="outline" className={DRAWER_BUTTON} onClick={() => setView("rename")}>
+        <Button variant="outline" className={DRAWER_BUTTON} onClick={onRename}>
           Rename…
         </Button>
         <Button variant="outline" className={`${DRAWER_BUTTON} text-danger`} onClick={() => setView("remove")}>
@@ -109,18 +108,18 @@ function ManageView({ device, onChanged, close }: { device: DeviceView; onChange
   );
 }
 
-export function ComputersPage({ devices: settings }: { devices: DeviceSettings }) {
+export function ComputersPage({ devices: settings, account, rename }: { devices: DeviceSettings; account: ReactNode; rename: ComputerRenameApi }) {
   const { devices, onChanged } = settings;
-  const rename = useDrawerTarget<DeviceView>();
+  const target = rename.rename === null ? undefined : devices.find((device) => device.key === rename.rename?.deviceKey);
   const manage = useDrawerTarget<DeviceView>();
   const mine = devices.filter((d) => d.info.self);
   const others = devices.filter((d) => !d.info.self);
   return (
     <>
-      <AccountSettings />
+      {account}
       <SettingsGroup title="This computer">
         {mine.map((device) => (
-          <DeviceNavRow key={device.key} device={device} onClick={() => rename.show(device)} />
+          <DeviceNavRow key={device.key} device={device} onClick={() => rename.start(device.key, device.info.name)} />
         ))}
       </SettingsGroup>
       <SettingsGroup title="Your computers">
@@ -131,11 +130,29 @@ export function ComputersPage({ devices: settings }: { devices: DeviceSettings }
         )}
       </SettingsGroup>
 
-      <SettingsDrawer open={rename.open} onOpenChange={rename.onOpenChange} title="Rename computer">
-        {rename.target !== null && <RenameForm device={rename.target} onChanged={onChanged} onDone={rename.close} onCancel={rename.close} />}
-      </SettingsDrawer>
-      <SettingsDrawer open={manage.open} onOpenChange={manage.onOpenChange} title={manage.target?.info.name ?? ""}>
-        {manage.target !== null && <ManageView device={manage.target} onChanged={onChanged} close={manage.close} />}
+      <SettingsDrawer
+        open={target !== undefined || manage.open}
+        onOpenChange={(open) => {
+          if (!open) {
+            rename.finish();
+            manage.close();
+          }
+        }}
+        title={target?.info.self ? "Rename computer" : target?.info.name ?? manage.target?.info.name ?? ""}
+      >
+        {target !== undefined && rename.rename !== null ? (
+          <RenameForm
+            device={target}
+            onChanged={onChanged}
+            draft={{ name: rename.rename.name, setName: rename.setName }}
+            onDone={() => { rename.finish(); manage.close(); }}
+            onCancel={rename.finish}
+          />
+        ) : manage.target !== null && (
+          <ManageView device={manage.target} onChanged={onChanged} close={manage.close} onRename={() => {
+            if (manage.target !== null) rename.start(manage.target.key, manage.target.info.name);
+          }} />
+        )}
       </SettingsDrawer>
     </>
   );

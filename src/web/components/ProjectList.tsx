@@ -36,9 +36,6 @@ export interface ProjectListProps {
   readOnly: boolean;
   /** Optional list of linked computers to display inline in ComputerSwitcher. */
   computers?: readonly RailComputer[];
-  /** Search text, kept by the workbench so it outlives the list's own mounts. */
-  query: string;
-  onQueryChange: (query: string) => void;
   onSelect: (ref: ConversationRef) => void;
   onNewPm: () => void;
   onTogglePin: (pmId: PmId, pinned: boolean) => void;
@@ -142,14 +139,13 @@ export const ProjectList = memo(function ProjectList({
   asking,
   readOnly,
   computers,
-  query,
-  onQueryChange,
   onSelect,
   onNewPm,
   onTogglePin,
   onOpenComputers,
   onSelectComputer,
 }: ProjectListProps): React.ReactElement {
+  const [query, setQuery] = useState("");
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
@@ -211,7 +207,7 @@ export const ProjectList = memo(function ProjectList({
       </header>
 
       <div className="shrink-0 px-2 pt-3 pb-1">
-        <SearchField label="Search conversations" tone="list" value={query} onChange={onQueryChange} />
+        <SearchField label="Search conversations" tone="list" value={query} onChange={setQuery} />
       </div>
 
       <div className="sidebar-list page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-2 pt-2 pb-4">
