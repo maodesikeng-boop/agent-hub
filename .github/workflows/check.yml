@@ -169,6 +169,11 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-browsers-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
+      - name: TEMP simulate azure mirror outage
+        run: |
+          echo "192.0.2.1 azure.archive.ubuntu.com" | sudo tee -a /etc/hosts
+          cat /etc/apt/apt-mirrors.txt || true
+          grep -rn "URIs:" /etc/apt/sources.list.d/ || true
       - name: Install Playwright apt packages
         uses: ./.github/actions/apt-install
         timeout-minutes: 7
