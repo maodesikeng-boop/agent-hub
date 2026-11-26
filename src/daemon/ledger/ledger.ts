@@ -1,5 +1,4 @@
 import { createPmDelivery } from "./pm-delivery.ts";
-import { createLedgerTakenInputs } from "./taken-inputs.ts";
 import { isChecklistToolCall } from "./checklist.ts";
 import { createChecklistReminders } from "./checklist-reminders.ts";
 import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
@@ -20,7 +19,7 @@ import { getAgentSession } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
 import { fail } from "./context.ts";
-import type { LedgerContextOptions, LedgerFiles } from "./context.ts";
+import type { LedgerContext, LedgerContextOptions, LedgerFiles } from "./context.ts";
 import { createResolveFolder, writeFileAtomic as defaultWriteFileAtomic } from "./files.ts";
 import { createLedgerHandover } from "./handover.ts";
 import type { HandoverOptions } from "./handover.ts";
@@ -28,7 +27,10 @@ import { createLedgerHubCommands } from "./hub-commands.ts";
 import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerLoadedSkills } from "./loaded-skills.ts";
 import { createLedgerMessages } from "./messages.ts";
-import { createLedgerTurnReplies } from "./turn-replies.ts";
+import { createLedgerTurns } from "./turns.ts";
+import { createLedgerTurnTools } from "./turn-tools.ts";
+import { createWorkerActivity } from "./worker-activity.ts";
+import { createTurnReceiptSettlement, failSessionSendIn } from "./settle-turn.ts";
 import { createDriverEventDrain } from "./driver-events.ts";
 import { createTurnCompletionLedger, type TurnEndedEvent } from "./turn-completions.ts";
 import { createLedgerPersona } from "./persona.ts";
@@ -88,6 +90,11 @@ export interface SqliteLedger extends Ledger {
   projectCatalog: Omit<LedgerProjectCatalog, "afterDriverEvent" | "markForcedIn">;
   resolveRouterLocalWorker: LedgerRouter["resolveLocalWorker"];
   listRouterLocalWorkers: LedgerRouter["listLocalWorkers"];
+  /**
+   * Sends each due background-wait reminder to the owning PM and delivers held reports whose wake grace passed; the daemon
+   * calls it on its scheduler tick. Returns how many reminders were enqueued.
+   */
+  runDueBackgroundWaits(nowMs?: number): number;
   /** Call before closing the database. Pending driver events are flushed in order without attachments, and later events are dropped. */
   close(): void;
 }
@@ -204,6 +211,47 @@ async function driverTextMeta(
   return sentFiles.metaFor(session, links, signal);
 }
 
+function onTurnCompletionOverflow({ db, write, reportHealthIn }: LedgerContext, sessionId: SessionId): void {
+  const error = `Turn completion queue is full for session ${sessionId}`;
+  console.error(`${LOG_PREFIX} ${error}`);
+  try {
+    write((p) => {
+      reportHealthIn(p, "store", error);
+      const session = getAgentSession(db, sessionId);
+      if (session?.conversationId != null) p.stops.push({ sessionId, conversationId: session.conversationId });
+    });
+  } catch (failure) {
+    console.error(`${LOG_PREFIX} ${error}:`, failure);
+  }
+}
+
+function createSessionStateRefresh(
+  { db, write }: LedgerContext,
+  { messages, reminders, sessions, turns, workers }: {
+    messages: ReturnType<typeof createLedgerMessages>;
+    reminders: ReturnType<typeof createChecklistReminders>;
+    sessions: ReturnType<typeof createLedgerSessions>;
+    turns: ReturnType<typeof createLedgerTurns>;
+    workers: ReturnType<typeof createLedgerWorkers>;
+  },
+) {
+  return (id: SessionId) => write((p) => {
+    if (getAgentSession(db, id)?.status === "ended") {
+      messages.stopChecklistReminderIn(p, id);
+      p.after.push(() => reminders.forget(id));
+    }
+    const wait = workers.backgroundWaits.waitOf(id);
+    sessions.updateLive(p, id, (live) => {
+      idle(live);
+      if (wait !== null && turns.runningTurnOf(id) === null) {
+        live.activity = "background";
+        live.backgroundTasks = wait.activeCount;
+        live.backgroundTaskList = wait.tasks;
+      }
+    });
+  });
+}
+
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const ctx = createLedgerContext(db, options);
   const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
@@ -212,9 +260,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const files = buildLedgerFiles(options, userHome, dataHome);
   const taskGraphManual = (sessionId: SessionId) => taskGraphManualNote(files.launchDir, sessionId);
   const reminders = createChecklistReminders(ctx);
-  const sessions = createLedgerSessions(ctx, reminders.forget);
+  const sessions = createLedgerSessions(ctx, reminders.forget, (id) => turns.runningTurnOf(id)?.id ?? null);
   const { sessionState } = sessions;
-  const snapshotQueries = createLedgerSnapshotQueries(db, { sessionState });
   const sentFiles = createLedgerSentFiles(db, {
     sentFilesDir: options.sentFilesDir ?? join(dataHome, "sent-files"),
     uploadsDir: options.uploadsDir ?? join(dataHome, "uploads"),
@@ -231,10 +278,28 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
-    onHubChecklist: reminders.observe,
+    ownsInput: (id) => turns.ownsInput(id),
+    requestTurnStop: (p, id, source) => turns.requestStopIn(p, id, source),
+    stopTakenInput: (p, id, source) => turns.stopInputIn(p, id, source),
+    onHubChecklist: (p, session, event) => {
+      turns.recordOutputIn(p, session, event);
+      reminders.observe(p, session, event);
+    },
   });
-  const turnReplies = createLedgerTurnReplies(ctx);
-  const takenInputs = createLedgerTakenInputs(ctx);
+  const steps = createLedgerSteps(ctx);
+  const tools = createLedgerTurnTools(ctx);
+  const turns = createLedgerTurns(ctx, {
+    closeTurnActivity(session, turnId, endedAt) {
+      if (tools.count(turnId) > 0) {
+        tools.closeOpen(turnId, endedAt);
+        tools.trimSession(session.id);
+      }
+      if (session.role === "worker") steps.trim(session.id);
+    },
+    projectInputStatus: messages.projectInputStatus,
+    failureReasonOfTurn: (session, event) => handover.failureReasonOfTurn(session, event),
+  });
+  const snapshotQueries = createLedgerSnapshotQueries(db, { sessionState, turnsFor: turns.summariesFor });
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
     switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
     clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),
@@ -259,13 +324,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     userBlockers,
     onGraphFinishedIn: (p, projectId) => projectCatalog.markForcedIn(p, projectId, "graph_finished"),
   });
-  const steps = createLedgerSteps(ctx);
+  const activityOf = createWorkerActivity(steps, turns, tools);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
+    turns,
     worktreesDir: files.worktreesDir, platform: options.workerPlatform,
     ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     taskGraphs,
     userBlockers,
-    takeover: createLedgerTakeover(ctx, steps, { findTranscript: options.findTranscript }),
+    takeover: createLedgerTakeover(ctx, activityOf, { findTranscript: options.findTranscript }),
   });
   const loadedSkills = createLedgerLoadedSkills(ctx, options.skillFiles ?? createSkillFiles({ launchDir: files.launchDir, userHome }));
   const handover = createLedgerHandover(ctx, sessions, messages, persona, loadedSkills, {
@@ -289,6 +355,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerSession: workers.workerSession,
     notStarted,
     liveOf: sessions.liveOf,
+    turns, tools, activityOf,
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
@@ -327,12 +394,16 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         reminders.observe(p, session, scoped);
         return;
       }
-      const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
-      takenInputs.beforeDriverEvent(session, scoped);
+      if (scoped.type === "message.processing" || scoped.type === "turn.started" || scoped.type === "session.started") turns.afterDriverEvent(p, session, scoped);
+      if (scoped.type === "session.exited" || scoped.type === "driver.error") turns.settleExit(p, session, scoped);
       if (session.role === "pm") pmDelivery.recordEventIn(session.id, scoped);
       const result = messages.applyEvent(p, session, scoped, textMeta);
-      turnReplies.afterDriverEvent(p, session, scoped);
-      steps.afterDriverEvent(session, scoped, openTools);
+      turns.recordOutputIn(p, session, scoped);
+      if (scoped.type === "agent.thinking" || scoped.type === "agent.text") steps.afterDriverEvent(session, scoped);
+      if (scoped.type === "agent.tool_result" || scoped.type === "agent.tool_running" || (scoped.type === "agent.tool" && result !== "duplicate_tool")) {
+        const turnId = scoped.type === "agent.tool_result" ? null : turns.runningTurnOf(session.id)?.id ?? null;
+        tools.afterDriverEvent(session, turnId, scoped);
+      }
       if (result !== "duplicate_tool") reminders.observe(p, session, scoped);
       loadedSkills.afterDriverEvent(session, scoped);
       workers.afterDriverEvent(p, session, scoped);
@@ -342,53 +413,22 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     });
   };
 
-  const onOverflow = (sessionId: SessionId) => {
-    const error = `Turn completion queue is full for session ${sessionId}`;
-    console.error(`${LOG_PREFIX} ${error}`);
-    try {
-      write((p) => {
-        reportHealthIn(p, "store", error);
-        const session = getAgentSession(db, sessionId);
-        if (session?.conversationId != null) p.stops.push({ sessionId, conversationId: session.conversationId });
-      });
-    } catch (failure) {
-      console.error(`${LOG_PREFIX} ${error}:`, failure);
-    }
-  };
   const completions = createTurnCompletionLedger(ctx, {
-    apply(p, receipt, facts, previousRun) {
-      const session = getAgentSession(db, receipt.sessionId);
-      if (session === null || session.role === "assistant" || session.conversationId === null) return;
-      const event = {
-        ...receipt.event,
-        messageIds: [...new Set(receipt.event.messageIds)].filter((id) => {
-          const msg = messages.getMessage(id);
-          return msg?.sessionId === session.id && (msg.status === "delivered" || msg.status === "processing");
-        }),
-      };
-      messages.settleTurn(p, session, event, facts);
-      turnReplies.settle(p, session, receipt.event.messageIds, facts.reply);
-      steps.afterDriverEvent(session, event);
-      reminders.observe(p, session, event);
-      if (receipt.event.messageIds.length === 0 || event.messageIds.length > 0) workers.settleTurn(p, session, event, facts.worker, previousRun);
-      handover.afterDriverEvent(p, session, event);
-      schedules.afterDriverEvent(p, session, event);
-      projectCatalog.afterDriverEvent(p, session, event);
-    },
+    apply: createTurnReceiptSettlement(db, { turns, messages, reminders, workers, handover, schedules, projectCatalog }),
     onSettled: (receipt) => driverEvents.onSettled(receipt),
-    onOverflow,
+    onOverflow: (sessionId) => onTurnCompletionOverflow(ctx, sessionId),
   });
   const driverEvents = createDriverEventDrain({
     completions,
     beforeTurn: (id, signal) => reconcileTurnWorktree(db, id, options.worktreeBranchProbe, branches, signal),
     factsFor(sessionId, event) {
       const session = getAgentSession(db, sessionId)!;
-      return { ...turnReplies.factsOf(session, event.messageIds), worker: workers.turnFactsOf(session, event) };
+      return { worker: workers.turnFactsOf(session, event) };
     },
     apply: applyDriverEventNow,
     localLinks: sentFiles.localLinks,
     textMetaFor: (id, event, links, signal) => driverTextMeta(db, sentFiles, id, event, links, signal),
-    onOverflow,
+    onOverflow: (sessionId) => onTurnCompletionOverflow(ctx, sessionId),
     onSessionDrained: (sessionId) => {
       if (!closing.signal.aborted) handover.onSessionQuiescent(sessionId);
     },
@@ -434,7 +474,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       };
     },
 
-    messagesBefore: messages.messagesBefore,
+    messagesBefore(conversationId, before) {
+      const page = messages.messagesBefore(conversationId, before);
+      return { ...page, turns: turns.summariesFor(conversationId, page.messages) };
+    },
     messagesAfter: messages.messagesAfter,
     lookupConversations: snapshotQueries.lookupConversations,
     completedWork: (pmId, cursor, limit) => completedWorkPage(db, pmId, cursor, limit),
@@ -457,16 +500,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       const session = getAgentSession(db, sessionId);
       return session === null ? [] : sentFiles.filesForArgs(session, args, signal === undefined ? closing.signal : AbortSignal.any([closing.signal, signal]));
     },
-    refreshSessionState: (id) => write((p) => {
-      if (getAgentSession(db, id)?.status === "ended") {
-        messages.stopChecklistReminderIn(p, id);
-        p.after.push(() => reminders.forget(id));
-      }
-      sessions.updateLive(p, id, idle);
-    }),
+    refreshSessionState: createSessionStateRefresh(ctx, { messages, reminders, sessions, turns, workers }),
     recoverAfterRestart() {
       completions.recover();
-      const recovered = sessions.recoverAfterRestart(workers.noticeUnresentShutdownTurnsIn);
+      const recovered = sessions.recoverAfterRestart(turns.recoverAfterRestartIn, (p) => workers.noticeUnresentShutdownTurnsIn(p, turns));
       workers.recoverLifecycles();
       handover.recoverAfterRestart();
       router.recoverAfterRestart();
@@ -487,15 +524,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
 
     getMessage: messages.getMessage,
-    turnReplyOf: turnReplies.turnReplyOf,
+    turnReplyOf: messages.turnReplyOf,
     sentFileAllows(sessionId, realPath) {
       const session = getAgentSession(db, sessionId);
       return session !== null && sentFiles.allows(session, realPath);
     },
     onActionFailed(action, error) {
       write((p) => {
-        const failedSession = messages.actionFailedIn(p, action, error);
-        if (failedSession !== null) steps.recordFailedStart(failedSession, error);
+        failSessionSendIn(db, p, action, error, { turns, messages });
         workers.actionFailedIn(p, action, error);
         handover.actionFailedIn(p, action);
         schedules.actionFailedIn(p, action);
@@ -550,7 +586,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),
     ...branches,
-    isSystemMessageCurrent: (id) => isSystemMessageCurrent(db, id, ctx.now(), workers.isWorkerInFlight),
+    isSystemMessageCurrent: (id) => isSystemMessageCurrent(db, id, ctx.now(), workers.isWorkerInFlight, workers.backgroundWaits.isReminderCurrent),
     retireStaleSystemMessage: messages.retireStaleSystemMessage,
     graphPrTargets: (sessionId, graphId) => taskGraphs.graphPrTargets(getAgentSession(db, sessionId), graphId),
     graphAutoDispatchVendors: (sessionId, command, body) =>
@@ -559,6 +595,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     enrichDeliveryNoteMessage: taskGraphs.enrichDeliveryNoteMessage,
 
     runDueSchedules: schedules.runDueSchedules,
+    runDueBackgroundWaits: (nowMs = ctx.now()) => workers.backgroundWaits.runDue(nowMs),
     addSchedule: schedules.addForUser,
     setScheduleEnabled: schedules.setEnabledForUser,
     removeSchedule: schedules.removeForUser,

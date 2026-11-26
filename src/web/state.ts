@@ -1,3 +1,4 @@
+import type { TurnSummary } from "../shared/turn.ts";
 import {
   MAX_CONVERSATION_LOOKUP_STATES,
   MAX_REWOUND_PENDING_KEYS,
@@ -5,6 +6,7 @@ import {
   ROUTER_STREAM_LIVE_MAX,
   PENDING_SANDBOX_APPROVALS_SNAPSHOT_MAX,
   PENDING_APP_APPROVALS_SNAPSHOT_MAX,
+  TURN_HISTORY_MAX_PER_CONV,
   formatAppApprovalCardText,
   type AppApprovalRef,
   askOf,
@@ -66,6 +68,8 @@ export interface ConversationView {
   workerLine?: ConversationSnapshot["workerLine"];
   workerBranch?: string | null;
   outsideRev?: number;
+  /** Summaries of the turns behind the loaded messages, merged by turn id; absent when the daemon predates the turn ledger. */
+  turns?: readonly TurnSummary[];
 }
 
 type Phase = "loading" | "ready" | "error" | "unauthorized";
@@ -136,7 +140,7 @@ export type HubAction =
   | { type: "change"; change: Change }
   | { type: "connection"; status: ConnectionStatus }
   | { type: "olderStart"; conversationId: ConversationId }
-  | { type: "olderDone"; conversationId: ConversationId; messages: Message[]; hasMore: boolean }
+  | { type: "olderDone"; conversationId: ConversationId; messages: Message[]; hasMore: boolean; turns?: readonly TurnSummary[] }
   | { type: "olderFailed"; conversationId: ConversationId }
   | { type: "pendingAdd"; pending: PendingMessage }
   | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"]; failure?: PendingMessage["failure"]; reason?: ErrorInfo }
@@ -277,6 +281,68 @@ function withAppCard(state: HubState, message: Message): HubState {
   return { ...state, pendingAppCards: [card, ...cards.filter((_, i) => i !== index)].slice(0, PENDING_APP_APPROVALS_SNAPSHOT_MAX) };
 }
 
+function sameTurn(a: TurnSummary, b: TurnSummary): boolean {
+  return a === b || (
+    a.id === b.id && a.conversationId === b.conversationId && a.sessionId === b.sessionId &&
+    a.status === b.status && a.outcome === b.outcome && a.cause === b.cause &&
+    a.stopSource === b.stopSource && a.parentTurnId === b.parentTurnId &&
+    a.startedAt === b.startedAt && a.endedAt === b.endedAt && a.durationMs === b.durationMs &&
+    a.firstOutputId === b.firstOutputId && a.lastOutputId === b.lastOutputId &&
+    a.background?.activeCount === b.background?.activeCount &&
+    a.background?.waitingSince === b.background?.waitingSince &&
+    a.background?.remindersSent === b.background?.remindersSent &&
+    a.inputs.length === b.inputs.length && a.inputs.every((input, i) => {
+      const other = b.inputs[i]!;
+      return input.messageId === other.messageId && input.role === other.role && input.afterMessageId === other.afterMessageId;
+    })
+  );
+}
+
+function preferTurn(current: TurnSummary | undefined, incoming: TurnSummary, olderPage = false): TurnSummary {
+  if (current === undefined) return incoming;
+  if (current.status === "ended" && incoming.status === "running") return current;
+  if (olderPage && (current.status === "ended" || incoming.status === "running")) return current;
+  return sameTurn(current, incoming) ? current : incoming;
+}
+
+function boundTurns(turns: TurnSummary[]): readonly TurnSummary[] {
+  return turns.length > TURN_HISTORY_MAX_PER_CONV ? turns.slice(-TURN_HISTORY_MAX_PER_CONV) : turns;
+}
+
+function mergeOlderTurns(current: ConversationView["turns"], incoming: ConversationView["turns"]): ConversationView["turns"] {
+  if (incoming === undefined || incoming.length === 0) return current ?? incoming;
+  if (current === undefined || current.length === 0) return incoming;
+  const byId = new Map(current.map((turn) => [turn.id, turn]));
+  let changed = false;
+  for (const turn of incoming) {
+    const previous = byId.get(turn.id);
+    const next = preferTurn(previous, turn, true);
+    if (next === previous) continue;
+    changed = true;
+    byId.set(turn.id, next);
+  }
+  return changed ? boundTurns([...byId.values()].sort((a, b) => a.id - b.id)) : current;
+}
+
+function snapshotTurns(current: ConversationView["turns"], incoming: ConversationView["turns"]): ConversationView["turns"] {
+  if (current === undefined || incoming === undefined) return incoming;
+  const byId = new Map(current.map((turn) => [turn.id, turn]));
+  const merged = incoming.map((turn) => preferTurn(byId.get(turn.id), turn));
+  return merged.length === current.length && merged.every((turn, i) => turn === current[i]) ? current : merged;
+}
+
+export function applyTurnUpdate(state: HubState, turn: TurnSummary): HubState {
+  const view = state.conversations[turn.conversationId];
+  if (view === undefined || view.conversation.purgedAt !== undefined) return state;
+  const current = view.turns ?? [];
+  const index = current.findIndex((entry) => entry.id === turn.id);
+  const previous = current[index];
+  const next = preferTurn(previous, turn);
+  if (next === previous) return state;
+  const turns = index === -1 ? boundTurns([...current, next].sort((a, b) => a.id - b.id)) : current.with(index, next);
+  return { ...state, conversations: { ...state.conversations, [turn.conversationId]: { ...view, turns } } };
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
@@ -408,7 +474,7 @@ export function applyChange(state: HubState, change: Change): HubState {
         ...next,
         conversations: {
           ...state.conversations,
-          [conversationId]: { ...view, conversation: { ...view.conversation, purgedAt }, messages: [], hasMore: false },
+          [conversationId]: { ...view, conversation: { ...view.conversation, purgedAt }, messages: [], hasMore: false, turns: undefined },
         },
         ...(state.older[conversationId] !== undefined ? { older } : {}),
       };
@@ -488,6 +554,8 @@ export function applyChange(state: HubState, change: Change): HubState {
       if (existingIndex === -1) return next;
       return { ...next, router: { ...state.router, commands: state.router.commands.with(existingIndex, command) } };
     }
+    case "turn.updated":
+      return applyTurnUpdate(next, change.data.turn);
     case "task_graph.created":
     case "task_graph.updated": {
       const graph = normalizeTaskGraph(change.data.graph);
@@ -521,6 +589,7 @@ function mergeLoaded(state: HubState, lookup: ConversationsLookup): Pick<HubStat
       conversation: c.conversation,
       messages: c.messages,
       hasMore: c.hasMore,
+      turns: c.turns,
       ...(c.workerLine !== undefined ? { workerLine: c.workerLine } : {}),
       ...(c.workerBranch !== undefined ? { workerBranch: c.workerBranch } : {}),
     };
@@ -582,9 +651,11 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
       c.messages.length === 0 && c.hasMore && prev !== undefined && prev.messages.length > 0 && endedBefore(state, c.conversation.id);
     const workerLine = c.workerLine !== undefined ? { workerLine: c.workerLine } : {};
     const workerBranch = c.workerBranch !== undefined ? { workerBranch: c.workerBranch } : {};
-    conversations[c.conversation.id] = keepLoaded
-      ? { conversation: c.conversation, messages: prev.messages, hasMore: prev.hasMore, ...workerLine, ...workerBranch }
-      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore, ...workerLine, ...workerBranch };
+    const turns = keepLoaded ? mergeOlderTurns(prev.turns, c.turns) : snapshotTurns(prev?.turns, c.turns);
+    conversations[c.conversation.id] = {
+      conversation: c.conversation, messages: keepLoaded ? prev.messages : c.messages,
+      hasMore: keepLoaded ? prev.hasMore : c.hasMore, ...(turns === undefined ? {} : { turns }), ...workerLine, ...workerBranch,
+    };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
   const base = withoutLoadError(state);
@@ -651,8 +722,9 @@ export function reducer(state: HubState, action: HubAction): HubState {
           ...state.conversations,
           [action.conversationId]: {
             ...view,
-            messages: [...earlier, ...view.messages].toSorted((a, b) => a.id - b.id),
+            messages: earlier.length === 0 ? view.messages : [...earlier, ...view.messages].toSorted((a, b) => a.id - b.id),
             hasMore: action.hasMore,
+            turns: mergeOlderTurns(view.turns, action.turns),
           },
         },
         older: { ...state.older, [action.conversationId]: undefined },

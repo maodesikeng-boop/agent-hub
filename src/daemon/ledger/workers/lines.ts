@@ -113,7 +113,7 @@ export function isWorkerInFlight(w: WorkersCtx, worker: WorkerDbRow): boolean {
   if (session !== null) {
     const activity = w.sessions.liveOf(session.id).activity;
     if (activity === "working" || activity === "background" || activity === "preparing") return true;
-    if (w.turnStarts.has(session.id) || w.awaitingBackground.get(session.id) !== undefined) return true;
+    if (w.turnStarts.has(session.id) || w.backgroundWaits.waitOf(session.id) !== null) return true;
   }
   return (
     w.db.get(

@@ -584,7 +584,7 @@ export class DeviceHub {
     this.dispatch({ type: "olderStart", conversationId });
     try {
       const page = await this.client.fetchOlderMessages(conversationId, before);
-      if (this.alive) this.dispatch({ type: "olderDone", conversationId, messages: page.messages, hasMore: page.hasMore });
+      if (this.alive) this.dispatch({ type: "olderDone", conversationId, messages: page.messages, hasMore: page.hasMore, turns: page.turns });
     } catch {
       if (this.alive) this.dispatch({ type: "olderFailed", conversationId });
     } finally {

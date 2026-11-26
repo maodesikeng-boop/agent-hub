@@ -947,14 +947,14 @@ describe("1. 首次启动与完整流式回合", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
       uuid: "agy-tool-agy-assigned-uuid-999-1-3-2",
-      toolUseId: "tool-1-3",
+      toolUseId: expect.stringMatching(/:3$/u),
       name: "read_file",
       input: { Path: "README.md" },
     });
 
     const toolResults = t.of("agent.tool_result");
     expect(toolResults).toHaveLength(1);
-    expect(toolResults[0]!.toolUseIds).toEqual(["tool-1-3"]);
+    expect(toolResults[0]!.toolUseIds).toEqual([expect.stringMatching(/:3$/u)]);
 
     const ended = t.of("turn.ended")[0]!;
     expect(ended).toMatchObject({
@@ -1032,8 +1032,8 @@ describe("2. 长连接复用与会话恢复（--conversation）", () => {
     expect(tools[0]!.uuid).not.toBe(tools[1]!.uuid);
     expect(tools[0]!.uuid).toBe("agy-tool-agy-conv-uuid-check-1-1-1");
     expect(tools[1]!.uuid).toBe("agy-tool-agy-conv-uuid-check-2-1-3");
-    expect(tools[0]!.toolUseId).toBe("tool-1-1");
-    expect(tools[1]!.toolUseId).toBe("tool-2-1");
+    expect(tools[0]!.toolUseId).not.toBe(tools[1]!.toolUseId);
+    expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual(tools.map((e) => [e.toolUseId]));
 
     const texts = t.of("agent.text");
     expect(texts).toHaveLength(2);
@@ -1869,6 +1869,10 @@ describe("7. 后台任务跟踪与 background.changed 事件", () => {
     expect(t.of("background.changed").map((e) => e.count)).toContain(1);
     await t.waitFor("background.changed", (e) => e.count === 0, 1);
     expect(t.of("background.changed").map((e) => e.count)).toEqual([1, 0]);
+    expect(t.of("agent.tool").map((event) => event.toolUseId)).toEqual(
+      t.of("agent.tool_result").flatMap((event) => event.toolUseIds),
+    );
+    expect(t.of("agent.tool")).toHaveLength(1);
   });
 
   it("空闲但只剩后台任务时调 interrupt()：关闭进程并在下一轮消息前注入 stopped 说明；设置变更重启时注入 relaunch 说明", async () => {
@@ -2121,8 +2125,8 @@ describe("工具的返回原文（认技能加载用，spec 的 skillSignals.out
       { name: "run_command", input: { CommandLine: "cat skills/demo/SKILL.md" } },
     ]);
     const outputs = t.of("agent.tool_result").map((e) => e.outputs);
-    expect(outputs[0]).toEqual({ "tool-1-2": "14 lines, 310 bytes" });
-    expect(outputs[1]?.["tool-1-4"]).toMatch(/^Created At: .*\nCommand output:\n---\r\nname: demo\r\ndescription: sample\r\n---\r\nLine 1 of demo skill body\.\r\n/su);
+    expect(outputs[0]).toEqual({ [t.of("agent.tool")[0]!.toolUseId]: "14 lines, 310 bytes" });
+    expect(outputs[1]?.[t.of("agent.tool")[1]!.toolUseId]).toMatch(/^Created At: .*\nCommand output:\n---\r\nname: demo\r\ndescription: sample\r\n---\r\nLine 1 of demo skill body\.\r\n/su);
   });
 });
 
@@ -2190,14 +2194,14 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
     await t.driver.send(s.id, user(1, "开始排查"));
     await t.waitFor("turn.ended");
 
-    expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual([["tool-1-3"], ["tool-1-4"]]);
+    expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual([[expect.stringMatching(/:3$/u)], [expect.stringMatching(/:4$/u)]]);
 
     const { trace } = replayLiveSteps(t.events.map((e) => e.event));
     expect(trace).toEqual([
       { eventType: "message.processing", label: "Thinking", openToolIds: [] },
-      { eventType: "agent.tool", label: "Reading SKILL.md", openToolIds: ["tool-1-3"] },
+      { eventType: "agent.tool", label: "Reading SKILL.md", openToolIds: [expect.stringMatching(/:3$/u)] },
       { eventType: "agent.tool_result", label: "Thinking", openToolIds: [] },
-      { eventType: "agent.tool", label: "Running command", openToolIds: ["tool-1-4"] },
+      { eventType: "agent.tool", label: "Running command", openToolIds: [expect.stringMatching(/:4$/u)] },
       { eventType: "agent.tool_result", label: "Thinking", openToolIds: [] },
       { eventType: "agent.text", label: "Writing", openToolIds: [] },
     ]);
@@ -2232,11 +2236,11 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
     await t.waitFor("turn.ended");
 
     expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual([
-      ["tool-1-2"],
-      ["tool-1-3"],
-      ["tool-1-4"],
-      ["tool-1-5"],
-      ["tool-1-6"],
+      [expect.stringMatching(/:2$/u)],
+      [expect.stringMatching(/:3$/u)],
+      [expect.stringMatching(/:4$/u)],
+      [expect.stringMatching(/:5$/u)],
+      [expect.stringMatching(/:6$/u)],
     ]);
     // step 5 显式后台命令在 CANCELED 时也已从 activeToolSteps 移除并同步清零
     expect(t.of("background.changed").map((e) => e.count)).toEqual([1, 0]);
@@ -2335,15 +2339,15 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
     await t.driver.send(s.id, user(1, "并行乱序与重复终态"));
     await t.waitFor("turn.ended");
 
-    expect(t.of("agent.tool").map((e) => e.toolUseId)).toEqual(["tool-1-2", "tool-1-3"]);
-    expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual([["tool-1-3"], ["tool-1-2"]]);
+    expect(t.of("agent.tool").map((e) => e.toolUseId)).toEqual([expect.stringMatching(/:2$/u), expect.stringMatching(/:3$/u)]);
+    expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual([[expect.stringMatching(/:3$/u)], [expect.stringMatching(/:2$/u)]]);
 
     const { trace } = replayLiveSteps(t.events.map((e) => e.event));
     expect(trace).toEqual([
       { eventType: "message.processing", label: "Thinking", openToolIds: [] },
-      { eventType: "agent.tool", label: "Reading parallel-a.ts", openToolIds: ["tool-1-2"] },
-      { eventType: "agent.tool", label: "Reading parallel-b.ts", openToolIds: ["tool-1-2", "tool-1-3"] },
-      { eventType: "agent.tool_result", label: "Reading parallel-a.ts", openToolIds: ["tool-1-2"] },
+      { eventType: "agent.tool", label: "Reading parallel-a.ts", openToolIds: [expect.stringMatching(/:2$/u)] },
+      { eventType: "agent.tool", label: "Reading parallel-b.ts", openToolIds: [expect.stringMatching(/:2$/u), expect.stringMatching(/:3$/u)] },
+      { eventType: "agent.tool_result", label: "Reading parallel-a.ts", openToolIds: [expect.stringMatching(/:2$/u)] },
       { eventType: "agent.tool_result", label: "Thinking", openToolIds: [] },
       { eventType: "agent.text", label: "Writing", openToolIds: [] },
     ]);
@@ -2407,12 +2411,12 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
     await t.waitFor("turn.ended");
 
     expect(t.of("agent.tool_preview").map((e) => ({ toolUseId: e.toolUseId, name: e.name, input: e.input }))).toEqual([
-      { toolUseId: "tool-1-2", name: "read_file", input: {} },
+      { toolUseId: expect.stringMatching(/:2$/u), name: "read_file", input: {} },
     ]);
     // 正式入库事件绝不因早期 GENERATING 或多次 ACTIVE 重复发射
     expect(t.of("agent.tool")).toHaveLength(1);
     expect(t.of("agent.tool")[0]).toMatchObject({
-      toolUseId: "tool-1-2",
+      toolUseId: expect.stringMatching(/:2$/u),
       name: "read_file",
       input: { Path: "early-agy.ts" },
     });

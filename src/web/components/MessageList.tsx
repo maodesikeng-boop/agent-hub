@@ -1,7 +1,8 @@
 import { ChevronDown } from "../ui/icons.ts";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId, type PersonaChangeId } from "../../shared/index.ts";
-import { groupMessages } from "../selectors.ts";
+import type { TurnId, TurnSummary } from "../../shared/turn.ts";
+import { groupMessages, liveTurnKeyOf } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { groupMessageRows, isWorkerCard, type DisplayRow } from "../system-events.ts";
 import { Button } from "../ui/button.tsx";
@@ -67,6 +68,8 @@ function rowContent(index: number, { items, pending, agentOf, onRetry, actions, 
 
 export const MessageList = memo(function MessageList({
   messages,
+  turns,
+  activeTurnId,
   pending,
   agentOf,
   hasMore,
@@ -84,6 +87,8 @@ export const MessageList = memo(function MessageList({
   leanReports = false,
 }: {
   messages: Message[];
+  turns?: readonly TurnSummary[];
+  activeTurnId?: TurnId | null;
   pending: PendingMessage[];
   agentOf: (message: Message) => AgentIdentity;
   hasMore: boolean;
@@ -100,7 +105,7 @@ export const MessageList = memo(function MessageList({
   footer?: React.ReactNode;
   leanReports?: boolean;
 }) {
-  const grouped = groupMessages(messages);
+  const grouped = groupMessages(messages, turns);
   const items = groupMessageRows(grouped.items);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null || Boolean(streamingText);
@@ -144,9 +149,12 @@ export const MessageList = memo(function MessageList({
     }
   }, [messages.length, hasMore, older, onLoadOlder]);
 
-  const liveTurn = busy && pending.length === 0 && grouped.tailTurnKey !== null
-    ? { key: grouped.tailTurnKey, status, stepStartedAt, streamingText }
-    : null;
+  const liveKey = activeTurnId === undefined && (!busy || pending.length > 0)
+    ? null
+    : liveTurnKeyOf(grouped, activeTurnId);
+  const liveTurn = liveKey === null
+    ? null
+    : { key: liveKey, status, stepStartedAt, streamingText };
   const typing = busy && liveTurn === null && statusAgent !== undefined;
   const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore && footer == null;
 

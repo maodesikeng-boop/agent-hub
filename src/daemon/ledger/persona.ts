@@ -652,7 +652,7 @@ export function createLedgerPersona(
         }
         const session = sessions.currentSession(conv.id);
         if (session !== null) {
-          const stopped = messages.stopIn(p, { ...session, conversationId: conv.id });
+          const stopped = messages.stopIn(p, { ...session, conversationId: conv.id }, "session_ended");
           if (!stopped && (queued.length > 0 || session.status === "running")) {
             p.stops.push({ conversationId: conv.id, sessionId: session.id });
           }
@@ -748,7 +748,6 @@ export function createLedgerPersona(
 
         if (sessionIds.length > 0) {
           db.run(`DELETE FROM session_steps WHERE session_id IN ${inList(sessionIds)}`);
-          db.run(`DELETE FROM worker_background_waits WHERE session_id IN ${inList(sessionIds)}`);
           db.run(`DELETE FROM session_persona_seen WHERE session_id IN ${inList(sessionIds)}`);
           db.run(`DELETE FROM session_preamble_seen WHERE session_id IN ${inList(sessionIds)}`);
           db.run(`DELETE FROM hub_calls WHERE session_id IN ${inList(sessionIds)}`);

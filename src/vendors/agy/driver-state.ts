@@ -16,6 +16,7 @@ export type AgyStartupOutcome = StartupOutcome<ReturnType<typeof detectAgyArgsCo
 export interface Proc extends BaseProc<AgyStartupOutcome> {
   readonly: { policy: ReadonlyPolicy; catalog: AgyConnectorCatalog } | null;
   tmpDir: string | null;
+  toolScope: string;
   fallbackScope: WriteScope | null;
 }
 

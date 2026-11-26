@@ -103,6 +103,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       ...createBaseSessionState<Proc, Batch>(id),
       interruptSent: false,
       turnSeq: 0,
+      toolScope: randomUUID(),
       assistantMsgSeq: 0,
       eventSeq: 0,
       textBuffers: new Map(),
@@ -487,6 +488,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       case "agent_start":
         if (proc.initSeen && st.inFlight.length === 0 && !st.selfTurn && st.proc === proc) {
           st.selfTurn = true;
+          st.turnSeq += 1;
           this.clearTimer(st, "idleTimer");
           this.emit(st.id, { type: "turn.started", at });
         }

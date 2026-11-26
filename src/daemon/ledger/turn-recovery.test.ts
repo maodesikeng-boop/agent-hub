@@ -3,6 +3,9 @@ import { listActions } from "../actions/index.ts";
 import { makeHarness } from "../driver/test-helpers.ts";
 import { canDeliverSystemMessage, createSessionSendHandler } from "../handlers.ts";
 import { createSessionStore } from "../store/index.ts";
+import { join } from "node:path";
+import { TURN_RECOVERY_MAX_ATTEMPTS } from "../../shared/limits.ts";
+import { createLedger } from "./ledger.ts";
 import { workerOpsFixture } from "./test-helpers.ts";
 
 let f: ReturnType<typeof workerOpsFixture>;
@@ -43,8 +46,8 @@ it.each(["recoverable", "unrecoverable"])("accounts for a %s brief after shutdow
   const graphId = graph();
   const { id: workerId } = f.hub("worker.start", { ...task(graphId), noWorktree: true }).data.worker;
   const id = f.begin(workerId);
+  f.end(workerId, { messageIds: [id], ok: false, interrupted: true, shutdown: true });
   if (kind === "unrecoverable") f.ledger.stopMessage(id, f.sessionOf(workerId));
-  f.end(workerId, { messageIds: kind === "recoverable" ? [id] : [], ok: false, interrupted: true, shutdown: true });
 
   const recovered = f.ledger.recoverAfterRestart();
   if (kind === "recoverable") {
@@ -68,6 +71,22 @@ it("keeps a user stop stopped across restart", async () => {
   expect(f.ledger.getMessage(id)?.status).toBe("stopped");
 });
 
+it.each(["shutdown receipt", "shutdown exit", "restart after crash"])("keeps the user stop source through %s", (terminal) => {
+  const { id: workerId, workerConversationId } = f.hub("worker.start", { title: "Worker", task: "Inspect", noWorktree: true }).data.worker;
+  const id = f.begin(workerId);
+  f.ledger.requestStop(workerConversationId);
+  if (terminal === "shutdown receipt") {
+    f.end(workerId, { ok: false, interrupted: true, shutdown: true });
+  } else if (terminal === "shutdown exit") {
+    f.emit(workerId, { type: "session.exited", reason: "shutdown", exitCode: 0, signal: null, hadResult: false, messageIds: [id], at: f.now() });
+  }
+
+  expect(f.ledger.recoverAfterRestart().resentMessageIds).toEqual([]);
+  expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+  expect(f.db.get("SELECT status, stop_source FROM turns WHERE session_id = ?", f.sessionOf(workerId))).toEqual({ status: "ended", stop_source: "user" });
+  expect(failures(workerId).some(({ text }) => text.includes("没能自动重发"))).toBe(false);
+});
+
 it("shows the final launch failure after successful setup as the last turn", async () => {
   const graphId = graph();
   const { id: workerId } = f.hub("worker.start", { ...task(graphId), vendor: "agy" }).data.worker;
@@ -89,4 +108,41 @@ it("shows the final launch failure after successful setup as the last turn", asy
   expect(show).toMatch(/上一轮：.*spawn_failed: model not recognized/);
   await receiveFailure(workerId, reason);
   expect(f.hub("graph.show", { graphId }).data.graph.nodes[0]).toMatchObject({ status: "waiting", waitingFor: "pm" });
+});
+
+it("caps resends of a taken input across repeated daemon restarts", () => {
+  const { id: workerId } = f.hub("worker.start", { title: "Worker", task: "Inspect", noWorktree: true }).data.worker;
+  const id = f.begin(workerId);
+  const session = f.sessionOf(workerId);
+  const sid = [id];
+  f.ledger.close();
+
+  for (let attempt = 0; attempt <= TURN_RECOVERY_MAX_ATTEMPTS; attempt++) {
+    const ledger = createLedger(f.db, { pmHomeRoot: join(f.root, "state", "pm-home"), now: f.now });
+    try {
+      f.advance(1_000);
+      const capped = attempt === TURN_RECOVERY_MAX_ATTEMPTS;
+      expect(ledger.recoverAfterRestart().resentMessageIds).toEqual(capped ? [] : sid);
+      expect(ledger.recoverAfterRestart().resentMessageIds).toEqual([]);
+      if (capped) {
+        expect(ledger.getMessage(id)?.status).toBe("stopped");
+      } else {
+        ledger.applyDriverEvent(session, { type: "message.delivered", messageIds: sid, at: f.now() });
+        ledger.applyDriverEvent(session, { type: "message.processing", messageIds: sid, at: f.now() });
+        f.advance(1_000);
+        ledger.applyDriverEvent(session, { type: "turn.ended", messageIds: sid, at: f.now(), ok: false, interrupted: true, shutdown: true, durationMs: null });
+      }
+    } finally {
+      ledger.close();
+    }
+  }
+
+  const attempts = f.db.all<{ id: number; cause: string; parent_turn_id: number | null; stop_source: string }>(
+    "SELECT id, cause, parent_turn_id, stop_source FROM turns WHERE session_id = ? ORDER BY id", session,
+  );
+  expect(attempts).toHaveLength(TURN_RECOVERY_MAX_ATTEMPTS + 1);
+  expect(attempts[0]).toMatchObject({ cause: "input", stop_source: "crash", parent_turn_id: null });
+  for (const [index, turn] of attempts.slice(1).entries()) {
+    expect(turn).toMatchObject({ cause: "recovery", stop_source: "shutdown", parent_turn_id: attempts[index]!.id });
+  }
 });

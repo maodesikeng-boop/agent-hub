@@ -18,7 +18,10 @@ interface NoticeRow {
   subject_json: string | null;
 }
 
-export function isSystemMessageCurrent(db: Db, messageId: MessageId, now: number, isInFlight: (id: WorkerId) => boolean): boolean {
+export function isSystemMessageCurrent(
+  db: Db, messageId: MessageId, now: number,
+  isInFlight: (id: WorkerId) => boolean, isBackgroundReminderCurrent: (id: MessageId) => boolean,
+): boolean {
   const notice = db.get<NoticeRow>(
     `SELECT conversation_id, worker_id, created_at, json_extract(meta, '$.event') AS event,
             json_extract(meta, '$.graphId') AS graph_id, json_extract(meta, '$.deadlineAt') AS deadline_at,
@@ -43,6 +46,7 @@ export function isSystemMessageCurrent(db: Db, messageId: MessageId, now: number
   if (notice.event === "worker.max_time_exceeded") {
     return notice.worker_id !== null && isTimeoutCurrent(db, notice, now) && isInFlight(notice.worker_id);
   }
+  if (notice.event === "worker.background_wait") return isBackgroundReminderCurrent(messageId);
   return notice.worker_id === null || isWorkerNoticeCurrent(db, messageId);
 }
 

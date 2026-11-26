@@ -1411,6 +1411,7 @@ describe("审查后补的（PR #34）", () => {
     const sessionId = workerSessionId(worker.id);
     const first = taskMessage(worker).id;
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [first], at: now });
     ledger.applyDriverEvent(sessionId, { type: "context.compacted", uuid: "cb-auto3", trigger: "auto", preTokens: 100, postTokens: 10, at: now });
     ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [first], durationMs: 10, at: now });
     expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "report" });
@@ -2208,6 +2209,18 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["等 CI"]);
   });
 
+  it("keeps the draft held while the vendor continuation runs past the wake grace", () => {
+    firstTurnWithBackground(report("做完了", "Draft"));
+    background(0);
+    ledger.applyDriverEvent(sessionId, { type: "turn.started", at: now });
+    now += 61_000;
+    ledger.runDueBackgroundWaits(now);
+    expect(reports()).toEqual([]);
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "continued", text: report("做完了", "Continued"), at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 61_000, at: now });
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["Continued"]);
+  });
+
   it("叫醒的那一轮又放了一个后台命令：还是不汇报，等第二个也跑完", () => {
     firstTurnWithBackground();
     background(0);
@@ -2301,6 +2314,7 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
   it("这一轮出错（有后台命令也一样）：马上一行 turn_failed，不等", () => {
     const id = taskMessage(worker).id;
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
     background(1);
     ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: false, messageIds: [id], durationMs: 5, at: now, error: { subtype: "error_during_execution", message: "炸了" } });
     expect(workerEventOf(reports().at(-1)!)).toMatchObject({ event: "turn_failed" });
@@ -2354,7 +2368,7 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(deliveredText()).toContain("重启");
     expect(taskMessage(worker).status).toBe("replied");
     expect(activity()).toBe("idle");
-    expect(count("worker_background_waits")).toBe(0);
+    expect(count("turn_background_waits")).toBe(0);
   };
 
   it("这一轮结束写库失败、库在重启前恢复：重启时立刻补一次带重启说明的汇报，不停在等后台命令", () => {
@@ -2377,6 +2391,24 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expectRestartReport();
   });
 
+  it("keeps the draft held across restart while a continuation receipt still needs to settle", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    firstTurnWithBackground(report("做完了", "Draft"));
+    background(0);
+    db.exec(`CREATE TRIGGER fail_report BEFORE INSERT ON messages WHEN NEW.kind = 'worker'
+      AND json_extract(NEW.meta, '$.event') = 'report' BEGIN SELECT RAISE(ABORT, 'boom'); END`);
+    wakeTurn("continued", report("做完了", "Continued"));
+    restart();
+    expect(reports()).toEqual([]);
+    expect(count("turn_background_waits")).toBe(1);
+
+    db.exec("DROP TRIGGER fail_report");
+    now += 5_000;
+    vi.advanceTimersByTime(5_000);
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["Continued"]);
+    expect(count("turn_background_waits")).toBe(0);
+  });
+
   it("后台命令跑完了、叫醒那一轮还没来就被杀：重启后照样补一次", () => {
     firstTurnWithBackground(report("做完了", "等 CI"));
     background(0);
@@ -2393,10 +2425,13 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["CI 过了"]);
   });
 
-  it("关机时已经按 session.exited 交代过：重启后不再补", () => {
-    firstTurnWithBackground(report("做完了", "等 CI"));
+  it("releases the held draft at the next boot after an orderly shutdown", () => {
+    firstTurnWithBackground(report("做完了", "Draft"));
     ledger.applyDriverEvent(sessionId, { type: "session.exited", reason: "shutdown", exitCode: 0, signal: null, hadResult: true, messageIds: [], at: now });
-    expect(reports()).toHaveLength(1);
+    expect(reports()).toEqual([]);
+    restart();
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["Draft"]);
+    expect(deliveredText()).toContain("重启");
     restart();
     expect(reports()).toHaveLength(1);
   });

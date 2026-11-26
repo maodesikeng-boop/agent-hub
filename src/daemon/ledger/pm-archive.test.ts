@@ -378,7 +378,6 @@ describe("purgeExpiredArchivedPms（7 天到期彻底清理）", () => {
     ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "m1", text: "小林的消息" });
     ledger.postUserMessage({ conversationId: workerStarted.worker.workerConversationId, clientId: "m2", text: "Worker的消息" });
 
-    // 往 session_steps、session_persona_seen、worker_background_waits、handovers、handoffs、actions 插入关联记录以验证外键清理顺序
     db.run(
       "INSERT INTO session_steps (session_id, kind, summary, at) VALUES (?, 'tool', 'Read a.ts', ?)",
       lin.sessionId,
@@ -393,11 +392,12 @@ describe("purgeExpiredArchivedPms（7 天到期彻底清理）", () => {
       lin.sessionId,
       now,
     );
-    db.run(
-      "INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 1, 1, ?)",
-      workerSessionId,
-      now,
+    const turn = db.run(
+      `INSERT INTO turns (session_id, conversation_id, cause, status, outcome, started_at, ended_at, duration_ms, updated_at)
+       VALUES (?, ?, 'self', 'ended', 'ok', ?, ?, 0, ?)`, workerSessionId, workerStarted.worker.workerConversationId, now, now, now,
     );
+    db.run("INSERT INTO turn_background_waits (turn_id, session_id, active_count, waiting_since, updated_at) VALUES (?, ?, 1, ?, ?)",
+      Number(turn.lastInsertRowid), workerSessionId, now, now);
     db.run(
       `INSERT INTO handovers (conversation_id, from_session_id, to_session_id, auto, status, created_at, updated_at)
        VALUES (?, ?, NULL, 0, 'abandoned', ?, ?)`,
@@ -481,7 +481,7 @@ describe("purgeExpiredArchivedPms（7 天到期彻底清理）", () => {
     expect(count("session_steps", "session_id IN (?, ?)", lin.sessionId, workerSessionId)).toBe(0);
     expect(count("session_persona_seen", "session_id IN (?, ?)", lin.sessionId, workerSessionId)).toBe(0);
     expect(count("session_preamble_seen", "session_id IN (?, ?)", lin.sessionId, workerSessionId)).toBe(0);
-    expect(count("worker_background_waits", "session_id = ?", workerSessionId)).toBe(0);
+    expect(count("turn_background_waits", "session_id = ?", workerSessionId)).toBe(0);
     const remainingActions = listActions(db);
     expect(
       remainingActions.some(

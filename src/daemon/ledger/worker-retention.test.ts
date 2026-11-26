@@ -102,7 +102,12 @@ function startWorker(title: string, extraMessages = 0): WorkerId {
     now,
     now,
   );
-  db.run("INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 1, 1, ?)", sessionOf(w), now);
+  const turn = db.run(
+    `INSERT INTO turns (session_id, conversation_id, cause, status, outcome, started_at, ended_at, duration_ms, updated_at)
+     VALUES (?, ?, 'self', 'ended', 'ok', ?, ?, 0, ?)`, sessionOf(w), convOf(w), now, now, now,
+  );
+  db.run("INSERT INTO turn_background_waits (turn_id, session_id, active_count, waiting_since, updated_at) VALUES (?, ?, 1, ?, ?)",
+    Number(turn.lastInsertRowid), sessionOf(w), now, now);
   mkdirSync(sessionLaunchDir(launchDir, sessionOf(w)), { recursive: true });
   writeFileSync(join(sessionLaunchDir(launchDir, sessionOf(w)), "settings.json"), "{}");
   mkdirSync(setupLogsDir, { recursive: true });
@@ -137,6 +142,7 @@ describe("已收工 Worker 的对话保留期", () => {
     enqueueAction(db, { type: "worktree.create", params: { workerId: w } }, now);
     expect(count("messages", "conversation_id = ?", conv)).toBeGreaterThan(0);
     expect(count("session_steps", "session_id = ?", sid)).toBeGreaterThan(0);
+    expect(count("turn_tools", "turn_id IN (SELECT id FROM turns WHERE session_id = ?)", sid)).toBe(1);
     const endedAt = endWorker(w);
     changes = [];
 
@@ -147,9 +153,10 @@ describe("已收工 Worker 的对话保留期", () => {
 
     expect(count("messages", "conversation_id = ?", conv)).toBe(0);
     expect(count("session_steps", "session_id = ?", sid)).toBe(0);
+    expect(count("turn_tools", "turn_id IN (SELECT id FROM turns WHERE session_id = ?)", sid)).toBe(0);
     expect(count("hub_calls", "session_id = ?", sid)).toBe(0);
     expect(count("handovers", "conversation_id = ?", conv)).toBe(0);
-    expect(count("worker_background_waits", "session_id = ?", sid)).toBe(0);
+    expect(count("turn_background_waits", "session_id = ?", sid)).toBe(0);
     expect(listActions(db).filter((a) => JSON.stringify(a.params).includes(`"workerId":${w}`) || JSON.stringify(a.params).includes(`"sessionId":${sid}`))).toEqual([]);
     expect(existsSync(sessionLaunchDir(launchDir, sid))).toBe(false);
     expect(existsSync(workerSetupLogPath(setupLogsDir, w))).toBe(false);

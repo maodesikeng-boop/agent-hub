@@ -187,8 +187,10 @@ describe("ledger checklists", () => {
     send({ type: "agent.tool_result", toolUseIds: ["todo", "real"], at: now });
     expect(ledger.messagesBefore(workerSession.conversation_id, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "agent")
       .map(({ kind }) => kind)).toEqual(["checklist", "tool"]);
-    expect(db.all<{ tool_use_id: string }>("SELECT tool_use_id FROM session_steps WHERE session_id = ? AND tool_use_id IS NOT NULL ORDER BY id", workerSession.id))
-      .toEqual([{ tool_use_id: "real" }, { tool_use_id: "real" }]);
+    expect(db.all(
+      "SELECT tt.tool_use_id, tt.status FROM turn_tools tt JOIN turns t ON t.id = tt.turn_id WHERE t.session_id = ?",
+      workerSession.id,
+    )).toEqual([{ tool_use_id: "real", status: "done" }]);
   });
 });
 

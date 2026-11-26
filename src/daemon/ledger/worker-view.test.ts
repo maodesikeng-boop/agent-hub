@@ -18,7 +18,7 @@ import { createResolveFolder } from "./files.ts";
 import { createLedger } from "./index.ts";
 import type { SqliteLedger } from "./index.ts";
 import { snippetOf } from "./worker-search.ts";
-import { clipText, formatClock } from "./worker-view.ts";
+import { clipText, formatClock } from "./worker-activity.ts";
 
 let db: Db;
 let root: string;
@@ -181,7 +181,7 @@ describe.each(AGENT_VENDORS)("%s 的 Worker", (vendor) => {
     startTurn(w);
     runTool(vendor, w, "pnpm test");
     advance(60_000);
-    endTurn(w, { durationMs: 62_000 });
+    endTurn(w, { durationMs: 61_000 });
     const text = show(w).text;
     expect(text).toContain("：空闲，等验收");
     expect(text).toContain("现在：没在干活，等项目经理验收或发下一条");
@@ -338,7 +338,8 @@ describe.each(AGENT_VENDORS)("%s 的 Worker", (vendor) => {
     runTool(vendor, w, 'curl -H "Authorization: Bearer abcdef1234567890" https://x.test?token=hunter2hunter2', { finish: false });
     runTool(vendor, w, "GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789 gh pr list", { finish: false });
     emit(w, { type: "agent.text", uuid: "x1", text: "key is sk-abcdefghijklmnopqrstuvwxyz123456", ...at() });
-    const all = `${show(w).text}\n${log(w).text}\n${JSON.stringify(db.all("SELECT summary FROM session_steps"))}`;
+    const stored = db.all("SELECT summary FROM session_steps UNION ALL SELECT summary FROM turn_tools");
+    const all = `${show(w).text}\n${log(w).text}\n${JSON.stringify(stored)}`;
     for (const secret of ["abcdef1234567890", "hunter2hunter2", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "sk-abcdefghijklmnopqrstuvwxyz123456"]) {
       expect(all).not.toContain(secret);
     }
@@ -631,6 +632,33 @@ describe("hub worker log --stats tool wait time", () => {
   });
 });
 
+it("ignores a repeated old result and accepts the new tool result after clock rollback", () => {
+  const w = startWorker("claude");
+  startTurn(w);
+  emit(w, { type: "agent.tool", uuid: "first", toolUseId: "first", name: "Bash", input: { command: "printf first" }, ...at() });
+  advance(1_000);
+  const result: DriverEvent = { type: "agent.tool_result", toolUseIds: ["first"], ...at() };
+  emit(w, result);
+  endTurn(w);
+  advance(1_000);
+  emit(w, { type: "turn.started", ...at() });
+  emit(w, { type: "agent.tool", uuid: "second", toolUseId: "second", name: "Bash", input: { command: "printf second" }, ...at(), pending: true });
+  emit(w, { ...result, ...at() });
+  emit(w, { ...result, ...at() });
+  expect(show(w).text).toContain("现在：Running command: printf second，等待开始");
+  expect(log(w).data.steps.filter((step) => step.text.includes("printf first")).map((step) => step.text))
+    .toEqual(["Running command: printf first（用了 1s）"]);
+
+  emit(w, { type: "agent.tool_running", toolUseId: "second", ...at() });
+  const completed: DriverEvent = { type: "agent.tool_result", toolUseIds: ["second"], at: now - 5 };
+  emit(w, completed);
+  advance(2_000);
+  emit(w, { ...completed, ...at() });
+  expect(show(w).text).not.toContain("现在：Running command: printf second");
+  expect(log(w).data.steps.at(-1)?.text).toBe("Running command: printf second");
+  expect(db.get<{ ended_at: number }>("SELECT ended_at FROM turn_tools WHERE tool_use_id = 'second'")?.ended_at).toBe(completed.at);
+});
+
 describe.each(Object.keys(OTHER_TOOLS) as AgentVendor[])("%s 的 hub worker log --stats", (vendor) => {
   it("各类别计数、读得最多的文件、重复最多的命令、思考和等工具的用时、轮的结局", () => {
     const w = startWorker(vendor);
@@ -648,10 +676,10 @@ describe.each(Object.keys(OTHER_TOOLS) as AgentVendor[])("%s 的 hub worker log 
     runTool(vendor, w, "pnpm test");
     runTool(vendor, w, "ls");
     endTurn(w);
-    startTurn(w);
-    endTurn(w, { ok: false, interrupted: true });
-    startTurn(w);
-    endTurn(w, { ok: false, error: { subtype: "x", message: "boom" } });
+    for (const outcome of [{ interrupted: true }, { error: { subtype: "x", message: "boom" } }]) {
+      emit(w, { type: "turn.started", ...at() });
+      endTurn(w, { ok: false, messageIds: [], ...outcome });
+    }
     const text = stats(w).text;
     expect(text).toContain("共 9 步，3 轮：ok 1 / interrupted 1 / failed 1");
     expect(text).toContain("读文件 3，搜索 1，跑命令 3，改文件 1，上网 1，其它 0");
@@ -693,7 +721,7 @@ describe("hub worker log --stats：认不出的工具、其它、多会话、没
     const list = cols.map((c) => (c === "generation" ? "generation + 1" : c === "vendor_session_id" ? "vendor_session_id || '-gen2'" : c)).join(", ");
     db.run(`INSERT INTO agent_sessions (${cols.join(", ")}) SELECT ${list} FROM agent_sessions WHERE id = ?`, sessionOf(w));
     const second = db.get<{ id: number }>("SELECT max(id) AS id FROM agent_sessions")!.id;
-    ledger.applyDriverEvent(second, { type: "message.processing", messageIds: [], ...at() });
+    ledger.applyDriverEvent(second, { type: "turn.started", ...at() });
     ledger.applyDriverEvent(second, { type: "agent.tool", uuid: "g2", toolUseId: "g2", name: "Bash", input: { command: "pnpm test" }, ...at() });
     ledger.applyDriverEvent(second, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: null, ...at() });
     const text = stats(w).text;

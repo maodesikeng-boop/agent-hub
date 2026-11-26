@@ -27,7 +27,7 @@ it("keeps the first linked reply if a schedule run is processed again", () => {
     f.ledger.runDueSchedules(f.clock.now);
     const run = f.pmSystemMessages().find((m) => systemEventOf(m)?.event === "schedule.run")!;
     f.pmReplyTo(run.id, "原来的回复");
-    f.db.run("UPDATE messages SET status = 'processing' WHERE id = ?", run.id);
+    f.db.run("UPDATE messages SET status = 'queued' WHERE id = ?", run.id);
     f.pmReplyTo(run.id, "重放时的回复");
     const { runs } = f.ledger.hubCall(f.lin.sessionId, "schedule.show", { scheduleId: schedule.id }).data;
     expect(runs[0]).toMatchObject({ messageId: run.id, replyPreview: "原来的回复" });

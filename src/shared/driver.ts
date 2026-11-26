@@ -153,6 +153,7 @@ export interface AgentToolResultEvent extends DriverEventBase, SubtaskField {
 export interface AgentToolEvent extends DriverEventBase, SubtaskField {
   type: "agent.tool";
   uuid: string;
+  /** Invocation ID, unique within the session and shared by start and result events. */
   toolUseId: string;
   name: string;
   input: unknown;
