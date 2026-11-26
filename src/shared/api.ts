@@ -589,10 +589,19 @@ export interface PostRouterCommandRequest {
   text: string;
   attachmentIds?: string[];
   target?: PostRouterCommandTarget;
+  /** Router itself plans the text: a leading `@name` is not forwarded straight to that project, and `target` is not allowed. */
+  routerOnly?: boolean;
 }
 
 export interface PostRouterCommandResponse {
   command: RouterCommandRecord;
+}
+
+export interface RetryRouterCommandRequest {
+  /** Client-generated id of this retry; the daemon stores it as the new run's `plan.retryId`. */
+  retryId: string;
+  /** `plan.retryId` of the failed run being retried, null for the command's first run. A retry of any other run is rejected. */
+  fromRetryId: string | null;
 }
 
 /** Opaque paging token from a CompletedWorkPage; clients pass it back unchanged. */

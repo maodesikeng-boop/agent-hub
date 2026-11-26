@@ -25,6 +25,7 @@ import {
   emptyObjectBodySchema,
   postRouterCommandBodySchema,
   resolveRouterItemBodySchema,
+  retryRouterCommandBodySchema,
   skipTaskNodeBodySchema,
   updateRouterSettingsBodySchema,
 } from "./schemas.ts";
@@ -117,8 +118,8 @@ function registerRouterCommandRoutes(routes: FastifyInstance, c: UiCtx): void {
     if (peerOf(c, req) !== undefined) return fail(reply, "forbidden_peer") as never;
     if (!opts.routerDispatcher) return fail(reply, "unavailable", "当前服务未启用总助分派引擎") as never;
     const commandId = idParam(req.params, "router command id");
-    parseWithSchema(emptyObjectBodySchema, req.body ?? {});
-    const command = await opts.routerDispatcher.retryCommand(commandId, { background: true });
+    const retry = parseWithSchema(retryRouterCommandBodySchema, req.body);
+    const command = await opts.routerDispatcher.retryCommand(commandId, retry, { background: true });
     return { command };
   });
 

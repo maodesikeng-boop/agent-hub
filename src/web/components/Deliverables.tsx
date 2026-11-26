@@ -162,6 +162,9 @@ export function CardNoteForm({
   inputClassName,
   buttonSize,
   variant = "field",
+  label = "Your reply",
+  placeholder = "Reply or add a note…",
+  invalid,
 }: {
   disabled: boolean;
   pending: boolean;
@@ -174,6 +177,10 @@ export function CardNoteForm({
   buttonSize?: "sm";
   /** `row` is the last row of a decision card's option list: no frame of its own, a pencil in the letter column. */
   variant?: "field" | "row";
+  label?: string;
+  placeholder?: string;
+  /** Why the note cannot be sent as typed; blocks sending and marks the field invalid. */
+  invalid?: string;
 }) {
   const id = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -198,7 +205,7 @@ export function CardNoteForm({
     }
   }, [note]);
 
-  const canSend = !disabled && note.trim() !== "";
+  const canSend = !disabled && invalid === undefined && note.trim() !== "";
   const small = buttonSize === "sm";
   const row = variant === "row";
   return (
@@ -206,7 +213,10 @@ export function CardNoteForm({
       data-card-reply={variant}
       className={cn(
         row
-          ? "-mx-4 -mb-4 flex items-end gap-3 border-t border-border py-1.5 pr-1.5 pl-4 transition-shadow focus-within:shadow-[inset_0_0_0_1px_var(--border-focus)]"
+          ? cn(
+              "-mx-4 -mb-4 flex items-end gap-3 border-t border-border py-1.5 pr-1.5 pl-4 transition-shadow",
+              invalid === undefined ? "focus-within:shadow-[inset_0_0_0_1px_var(--border-focus)]" : "shadow-[inset_0_0_0_1px_var(--danger)]",
+            )
           : "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 shadow-[var(--shadow-tile)] transition-[border-color,box-shadow] focus-within:field-focus",
         disabled && "opacity-60",
         className,
@@ -218,7 +228,7 @@ export function CardNoteForm({
         </span>
       )}
       <label htmlFor={id} className="sr-only">
-        Your reply
+        {label}
       </label>
       <textarea
         ref={textareaRef}
@@ -228,7 +238,9 @@ export function CardNoteForm({
         disabled={disabled}
         onFocus={onFocus}
         onChange={(e) => setNote(e.target.value)}
-        placeholder="Reply or add a note…"
+        placeholder={placeholder}
+        aria-invalid={invalid === undefined ? undefined : true}
+        title={invalid}
         className={cn(
           "max-h-36 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-default pointer-coarse:min-h-11 pointer-coarse:py-2.5",
           small ? "min-h-7 py-1 text-minor leading-5" : "min-h-8 py-1 text-body leading-6",

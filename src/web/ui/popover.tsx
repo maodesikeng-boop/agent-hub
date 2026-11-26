@@ -3,6 +3,7 @@ import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
 export const Popover = PopoverPrimitive.Root;
+export const PopoverAnchor = PopoverPrimitive.Anchor;
 export const PopoverTrigger = PopoverPrimitive.Trigger;
 
 export function PopoverContent({ className, sideOffset = 8, collisionPadding = 12, ...props }: React.ComponentProps<typeof PopoverPrimitive.Content>) {

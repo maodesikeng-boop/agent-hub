@@ -2,7 +2,7 @@ import { Activity, createContext, use, useCallback, useState, useSyncExternalSto
 import { createPortal } from "react-dom";
 
 export type SettingsSurface = "capabilities" | "resources" | "account" | "providers" | "provider-sheet";
-export type SurfaceId = "list" | "router" | "conversation" | "panel" | "worker" | "settings:mobile" | `settings:${SettingsSurface}`;
+export type SurfaceId = "topbar" | "list" | "router" | "conversation" | "panel" | "worker" | "settings:mobile" | `settings:${SettingsSurface}`;
 
 function createSurface() {
   const element = document.createElement("div");

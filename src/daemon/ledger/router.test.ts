@@ -12,6 +12,8 @@ import {
   ROUTER_AUDIT_LOG_MAX_ROWS,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMAND_MAX_CHARS,
+  ROUTER_COMMAND_MAX_RETRIES,
+  ROUTER_COMMAND_RETRY_ID_MAX_CHARS,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
   ROUTER_CONTEXT_MAX_CHARS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
@@ -750,5 +752,150 @@ describe("v2 快照与简报历史（docs/router-workbench-v2-design.md 第 3.2 
     expect(page1.nextCursor).toBe(`${last.createdAt}:${last.id}`);
     const page2 = ledger.listRouterCommands(page1.nextCursor!, 30);
     expect(page2.commands[0]!.id).toBe(last.id - 1);
+  });
+});
+
+describe("claimRouterCommandRetry atomic retry-id ledger", () => {
+  it("strips internal usedRetryIds from public views and preserves them across updates and mid-retry restarts", () => {
+    const cmd = ledger.createRouterCommand({
+      clientId: "claim-cmd-1",
+      inputText: "测试原子认领",
+      vendor: "claude",
+      status: "failed",
+      error: "boom",
+    }).command;
+    changes = [];
+
+    const claimedA = ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-A", fromRetryId: null });
+    expect(claimedA).toMatchObject({ status: "planning", error: null, plan: { retryId: "r-A" } });
+    expect("usedRetryIds" in (claimedA.plan ?? {})).toBe(false);
+    expect(changes).toHaveLength(1);
+    const emitted = changes[0]!;
+    expect(emitted.type).toBe("router.command.updated");
+    if (emitted.type === "router.command.updated") {
+      expect("usedRetryIds" in (emitted.data.command.plan ?? {})).toBe(false);
+    }
+
+    // Concurrent or immediate repeat while planning is rejected.
+    expect(() => ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-B", fromRetryId: "r-A" })).toThrow(/只有失败状态/);
+
+    // Finishing run A via updateRouterCommand must keep usedRetryIds in SQLite while hiding it publicly.
+    const failedA = ledger.updateRouterCommand(cmd.id, {
+      status: "failed",
+      error: "boom A",
+      plan: { intent: "answer", reply: "", actions: [], track: "B", retryId: "r-A" },
+    });
+    expect("usedRetryIds" in (failedA.plan ?? {})).toBe(false);
+    expect("usedRetryIds" in (ledger.getRouterCommand(cmd.id)?.plan ?? {})).toBe(false);
+    expect("usedRetryIds" in (ledger.listRouterCommands(undefined, 5).commands[0]?.plan ?? {})).toBe(false);
+    expect("usedRetryIds" in (ledger.snapshot().router.commands[0]?.plan ?? {})).toBe(false);
+
+    // Claim B, then simulate daemon crash while B is still planning and recover after restart.
+    ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-B", fromRetryId: "r-A" });
+    ledger.close();
+    db.close();
+    db = openDatabase(dbFile);
+    migrate(db);
+    ledger = createLedger(db, options());
+    ledger.recoverAfterRestart();
+
+    const recovered = ledger.getRouterCommand(cmd.id);
+    expect(recovered).toMatchObject({ status: "failed", plan: { retryId: "r-B" } });
+    expect("usedRetryIds" in (recovered?.plan ?? {})).toBe(false);
+
+    expect(() => ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-A", fromRetryId: "r-B" })).toThrow(/已经重试过了/);
+    expect(() => ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-B", fromRetryId: "r-A" })).toThrow(/已经重试过了/);
+    expect(() => ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-B", fromRetryId: "r-B" })).toThrow(/已经重试过了/);
+
+    const claimedC = ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-C", fromRetryId: "r-B" });
+    expect(claimedC).toMatchObject({ status: "planning", plan: { retryId: "r-C" } });
+  });
+
+  it("remembers legacy plan.retryId without usedRetryIds and tolerates dirty usedRetryIds arrays", () => {
+    const legacy = ledger.createRouterCommand({
+      clientId: "claim-legacy",
+      inputText: "旧版本遗留数据",
+      vendor: "claude",
+      status: "failed",
+      error: "old fail",
+    }).command;
+    db.run(
+      "UPDATE router_commands SET plan_json = ? WHERE id = ?",
+      JSON.stringify({ intent: "answer", reply: "", actions: [], retryId: "legacy-A" }),
+      legacy.id,
+    );
+
+    ledger.claimRouterCommandRetry(legacy.id, { retryId: "legacy-B", fromRetryId: "legacy-A" });
+    ledger.updateRouterCommand(legacy.id, {
+      status: "failed",
+      error: "fail B",
+      plan: { intent: "answer", reply: "", actions: [], retryId: "legacy-B" },
+    });
+    expect(() => ledger.claimRouterCommandRetry(legacy.id, { retryId: "legacy-A", fromRetryId: "legacy-B" })).toThrow(/已经重试过了/);
+
+    // Dirty entries in stored usedRetryIds are sanitized without crashing or losing valid ids.
+    db.run(
+      "UPDATE router_commands SET plan_json = ? WHERE id = ?",
+      JSON.stringify({
+        intent: "answer",
+        reply: "",
+        actions: [],
+        retryId: "legacy-B",
+        usedRetryIds: [123, "", "  ", "legacy-A", "legacy-A", null, "legacy-B"],
+      }),
+      legacy.id,
+    );
+    expect(() => ledger.claimRouterCommandRetry(legacy.id, { retryId: "legacy-A", fromRetryId: "legacy-B" })).toThrow(/已经重试过了/);
+    const ok = ledger.claimRouterCommandRetry(legacy.id, { retryId: "legacy-C", fromRetryId: "legacy-B" });
+    expect(ok).toMatchObject({ status: "planning", plan: { retryId: "legacy-C" } });
+  });
+
+  it("rejects delivered commands without retryOps, invalid ids, and retries past ROUTER_COMMAND_MAX_RETRIES without mutating state", () => {
+    const delivered = ledger.createRouterCommand({
+      clientId: "claim-delivered",
+      inputText: "已投递不可整条重跑",
+      vendor: "claude",
+      status: "failed",
+      dispatched: [{ deviceId: "self", pmId: lin.pmId, messageId: 1, ok: true }],
+      error: "partial",
+    }).command;
+    expect(() => ledger.claimRouterCommandRetry(delivered.id, { retryId: "r-deliv", fromRetryId: null })).toThrow(/已有目标投递成功/);
+    expect(ledger.getRouterCommand(delivered.id)?.status).toBe("failed");
+
+    const cmd = ledger.createRouterCommand({
+      clientId: "claim-bounds",
+      inputText: "校验与上限",
+      vendor: "claude",
+      status: "failed",
+      error: "boom",
+    }).command;
+    for (const bad of [
+      { retryId: "", fromRetryId: null },
+      { retryId: "   ", fromRetryId: null },
+      { retryId: "x".repeat(ROUTER_COMMAND_RETRY_ID_MAX_CHARS + 1), fromRetryId: null },
+      { retryId: "ok", fromRetryId: "   " },
+      { retryId: "ok", fromRetryId: "y".repeat(ROUTER_COMMAND_RETRY_ID_MAX_CHARS + 1) },
+    ]) {
+      expect(() => ledger.claimRouterCommandRetry(cmd.id, bad)).toThrow(/格式不正确/);
+    }
+
+    let prev: string | null = null;
+    for (let i = 1; i <= ROUTER_COMMAND_MAX_RETRIES; i++) {
+      const id = `r-${i}`;
+      ledger.claimRouterCommandRetry(cmd.id, { retryId: id, fromRetryId: prev });
+      ledger.updateRouterCommand(cmd.id, {
+        status: "failed",
+        error: `fail ${i}`,
+        plan: { intent: "answer", reply: "", actions: [], retryId: id },
+      });
+      prev = id;
+    }
+    expect(() => ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-1", fromRetryId: prev })).toThrow(/已经重试过了/);
+    expect(() => ledger.claimRouterCommandRetry(cmd.id, { retryId: "r-overflow", fromRetryId: prev })).toThrow(/重试上限/);
+    const raw = JSON.parse(db.get<{ plan_json: string }>("SELECT plan_json FROM router_commands WHERE id = ?", cmd.id)!.plan_json) as {
+      usedRetryIds: string[];
+    };
+    expect(raw.usedRetryIds).toHaveLength(ROUTER_COMMAND_MAX_RETRIES);
+    expect(raw.usedRetryIds[0]).toBe("r-1");
   });
 });
