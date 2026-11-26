@@ -349,6 +349,18 @@ describe("turn completion receipts", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("settles a delivery failure without recording that the model took the input", () => {
+    const id = post("Not taken");
+    ev({ type: "message.delivered", messageIds: [id], at: now });
+    ev({ type: "turn.started", at: now });
+    say("unrelated", "Reply before the input was taken");
+    end([id], FAILED);
+    expect(statusOf(id)).toBe("failed");
+    expect(replyIdOf(ledger.getMessage(id)!)).toBeNull();
+    expect(db.get("SELECT taken_at, outcome FROM turn_inputs WHERE message_id = ?", id))
+      .toEqual({ taken_at: null, outcome: "failed" });
+  });
+
   it("settles tool-only, failed, stopped, and message-free turns from the recorded outcome", () => {
     const toolOnly = post("工具");
     startTurn(toolOnly);

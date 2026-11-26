@@ -173,6 +173,31 @@ function validateLegacyReply(db: LedgerContext["db"], sessionId: SessionId, fact
   return { ...facts, reply: null };
 }
 
+function openTurn(db: LedgerContext["db"], session: AgentSessionRow, cause: TurnCause, at: number, parent: TurnId | null) {
+  if (session.conversationId === null) return null;
+  return db.run(
+    `INSERT INTO turns (session_id, conversation_id, cause, status, parent_turn_id, started_at, updated_at)
+     VALUES (?, ?, ?, 'running', ?, ?, ?)`,
+    session.id, session.conversationId, cause, parent, at, at,
+  ).lastInsertRowid;
+}
+
+function attachFailedDeliveries(db: LedgerContext["db"], session: AgentSessionRow, turn: TurnRecord | null, event: TurnEndedEvent): TurnRecord | null {
+  if (event.shutdown || (event.ok && !event.interrupted) || event.messageIds.length === 0) return turn;
+  const inputs = db.all<{ id: MessageId }>(
+    `SELECT id FROM messages WHERE session_id = ? AND status = 'delivered'
+       AND id IN (SELECT value FROM json_each(?)) ORDER BY id`, session.id, JSON.stringify(event.messageIds),
+  );
+  if (inputs.length === 0) return turn;
+  const turnId = turn?.id ?? openTurn(db, session, "input", event.at, null);
+  if (turnId === null) return turn;
+  for (const { id } of inputs) {
+    db.run("INSERT OR IGNORE INTO turn_inputs (turn_id, message_id, role) VALUES (?, ?, ?)",
+      turnId, id, turn === null ? "opening" : "mid_turn");
+  }
+  return turn ?? db.get<TurnRecord>(`SELECT ${TURN_COLUMNS} FROM turns t WHERE t.id = ?`, turnId) ?? null;
+}
+
 export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTurns {
   const { db, now } = ctx;
   const recoveryBootId = randomUUID();
@@ -189,14 +214,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       WHERE i.message_id = ? ORDER BY i.turn_id DESC LIMIT 1`, id,
   ) ?? null;
 
-  const open = (session: AgentSessionRow, cause: TurnCause, at: number, parent: TurnId | null) => {
-    if (session.conversationId === null) return null;
-    return db.run(
-      `INSERT INTO turns (session_id, conversation_id, cause, status, parent_turn_id, started_at, updated_at)
-       VALUES (?, ?, ?, 'running', ?, ?, ?)`,
-      session.id, session.conversationId, cause, parent, at, at,
-    ).lastInsertRowid;
-  };
+  const open = (session: AgentSessionRow, cause: TurnCause, at: number, parent: TurnId | null) => openTurn(db, session, cause, at, parent);
 
   function takeableInputs(sessionId: SessionId, ids: readonly MessageId[]): TakeableInput[] {
     if (ids.length === 0) return [];
@@ -266,7 +284,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       const after = row.afterMessageId ?? 0;
       const resend = end.outcome === "interrupted" && end.stopRequested !== true && isRecoveryStop(stopSource) &&
         (stopSource === "crash" || session.role === "worker" || row.sender === "system");
-      const hasReply = end.outcome === "failed" && row.sender === "user" &&
+      const hasReply = end.outcome === "failed" && row.takenAt !== null && row.sender === "user" &&
         ((end.finishedWithText ?? 0) > after || legacy?.finishedWithText?.includes(row.messageId) === true);
       const outcome: InputOutcome = end.outcome === "interrupted" ? (resend ? "interrupted" : "stopped") :
         end.outcome === "failed" && !hasReply ? "failed" : "replied";
@@ -275,7 +293,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       if (row.ownerId !== session.id) continue;
       inputs.push({ ...row, outcome, stopSource: source });
       if (outcome === "interrupted") continue;
-      const replyId = outcome === "replied" && session.role === "pm" && (row.sender === "user" || row.scheduleRun === 1)
+      const replyId = outcome === "replied" && row.takenAt !== null && session.role === "pm" && (row.sender === "user" || row.scheduleRun === 1)
         && reply !== null && (legacy === undefined ? reply > after : legacy.reply?.requestIds.includes(row.messageId) === true) ? reply : undefined;
       deps.projectInputStatus(p, row.messageId, outcome, reason, replyId);
     }
@@ -289,8 +307,10 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       take(p, session, legacyInputsOf(db, session.id, event.messageIds), event.at);
       legacy = validateLegacyReply(db, session.id, storedFacts);
     }
-    const turn = runningTurnOf(session.id);
-    if (turn === null || event.at < turn.startedAt) return null;
+    const running = runningTurnOf(session.id);
+    if (running !== null && event.at < running.startedAt) return null;
+    const turn = attachFailedDeliveries(db, session, running, event);
+    if (turn === null) return null;
     if (event.messageIds.length > 0 && !db.get(
       `SELECT 1 FROM turn_inputs WHERE turn_id = ? AND message_id IN (SELECT value FROM json_each(?)) LIMIT 1`,
       turn.id, JSON.stringify(event.messageIds),
