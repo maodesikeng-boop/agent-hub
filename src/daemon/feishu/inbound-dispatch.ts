@@ -173,7 +173,8 @@ async function dispatchClaimedMessage(
     ctx.contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
   } else {
     await ctx.inboundSync.waitForClaimSync();
-    if (!canExecute() || (message.chatType === "p2p" && !isCenter(ctx))) return;
+    // A new hub skips messages claimed by this device.
+    if (!canExecute()) return;
     await applyMessageRoute(ctx, scene, route, canExecute);
   }
   if (canExecute()) recordHandled(ctx, message);

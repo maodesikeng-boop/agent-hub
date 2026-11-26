@@ -770,6 +770,38 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
     expect(mac.submitted.map((c) => c.clientId)).toEqual(["feishu:om_turn_2"]);
   });
 
+  it("finishes a claimed Router DM exactly once when the hub changes during claim sync (S3)", async () => {
+    const clockRef = { now: 1_764_136_460_000 };
+    const relay = createSharedRelayStub(() => clockRef.now);
+    const portFor = relay.portFor.bind(relay);
+    let writeGate = Promise.resolve();
+    relay.portFor = (id) => {
+      const port = portFor(id);
+      if (id !== TOKYO) return port;
+      return { ...port, putCheckpoint: (...args) => writeGate.then(() => port.putCheckpoint(...args)) };
+    };
+    const { tokyo, mac } = await bootstrapPair(clockRef, relay);
+    const write = Promise.withResolvers<void>();
+    writeGate = write.promise;
+    clockRef.now += 2_000;
+    try {
+      tokyo.fake.event(userMessage("om_lease_flip", "Message during hub handoff", clockRef.now));
+      await vi.waitFor(() => expect(mac.service.exportInboundState?.()?.receipts.om_lease_flip?.phase).toBe("claimed"));
+      expect(tokyo.submitted).toEqual([]);
+      relay.holder = MAC;
+      relay.epoch = 2;
+      tokyo.setLease(false, MAC, 1);
+      mac.setLease(true, MAC, 2);
+      await mac.service.syncLeaseConnection();
+      await mac.service.idle();
+    } finally {
+      write.resolve();
+    }
+    await tokyo.service.syncLeaseConnection();
+    await tokyo.service.idle();
+    expect([...tokyo.submitted, ...mac.submitted].map((c) => c.clientId)).toEqual(["feishu:om_lease_flip"]);
+  });
+
   it("prevents duplicate execution on mid-turn failover while still catching up subsequent messages (S3)", async () => {
     const clockRef = { now: 1_764_136_500_000 };
     const relay = createSharedRelayStub(() => clockRef.now);
