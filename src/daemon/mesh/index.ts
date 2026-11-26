@@ -21,6 +21,7 @@ import { agentFetch } from "./agent-fetch.ts";
 import { createMeshDialer, localCandidates, startMeshListener, type MeshConnection, type MeshDialer, type MeshListener } from "./dialer.ts";
 import { loadOrCreateMeshIdentity } from "./identity.ts";
 import { createCenterLease, type CenterLease } from "./lease.ts";
+import type { RelayCheckpoints } from "./relay-checkpoint.ts";
 import { createRelayClient, RelayDialError, type RelayClient, type RelayClientEvents } from "./relay-client.ts";
 import {
   acceptTrustStatement,
@@ -81,7 +82,8 @@ export interface Mesh {
   setCenterPriority(priority: DeviceId[]): Promise<void>;
   removeDevice(id: DeviceId): Promise<void>;
   isOnline(id: DeviceId): boolean;
-  request(id: DeviceId, path: string, init?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number }): Promise<Response>;
+  request(id: DeviceId, path: string, init?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; signal?: AbortSignal }): Promise<Response>;
+  relayCheckpoints: RelayCheckpoints & { accountId(): AccountFile["accountId"] | null };
   lease(name: MeshLeaseName, hooks: CenterLeaseHooks): CenterLease;
   trustStatements(): SignedTrustStatement[];
   receiveTrustStatements(from: DeviceId, body: unknown): void;
@@ -95,7 +97,7 @@ const PLATFORM_PATTERN = /^[a-z0-9]{1,32}$/;
 const LOGOUT_REMOTE_REMOVE_HINT = "已在本机退出；因未连上中继且无在线设备，请在其他设备上手动移除本机";
 
 /** Login and logout swap the relay client underneath; dialer, entry and lease always use this one. */
-function createSwitchableRelay(): RelayClient & { attach(client: RelayClient): void; detach(): Promise<void> } {
+function createSwitchableRelay(): RelayClient & { checkpoints: RelayCheckpoints; attach(client: RelayClient): void; detach(): Promise<void> } {
   let current: RelayClient | null = null;
   let offs: Array<() => void> = [];
   const listeners = new Map<keyof RelayClientEvents, Set<(...args: never[]) => void>>();
@@ -105,6 +107,10 @@ function createSwitchableRelay(): RelayClient & { attach(client: RelayClient): v
   const offline = () => new RelayDialError("offline", "没登录账号");
   return {
     state: () => current?.state() ?? "unreachable",
+    checkpoints: {
+      getCheckpoint: async (name, signal) => current?.checkpoints?.getCheckpoint(name, signal) ?? { kind: "unavailable" },
+      putCheckpoint: async (name, body, signal) => current?.checkpoints?.putCheckpoint(name, body, signal) ?? { kind: "unavailable" },
+    },
     start: () => current?.start(),
     send: (frame) => current?.send(frame) ?? false,
     refreshCandidates: () => current?.refreshCandidates(),
@@ -147,6 +153,21 @@ function approvalView(peer: RelayDeviceView, ceremony: ApprovalCeremony | undefi
     requestedAt: peer.addedAt,
     expiresAt,
     sas: ceremony?.sas() ?? null,
+  };
+}
+
+function createMeshRequest(selfId: DeviceId, trust: MeshTrust, dialer: MeshDialer): Mesh["request"] {
+  return async (id, path, init = {}) => {
+    if (id === selfId || trust.get(id) === undefined) throw new Error("不是这个账号里的可信设备");
+    const headers: Record<string, string> = { ...init.headers };
+    if (init.body !== undefined) headers["content-type"] ??= "application/json";
+    const timeout = AbortSignal.timeout(init.timeoutMs ?? MESH_REQUEST_TIMEOUT_MS);
+    return agentFetch(dialer.agentFor(id), path, {
+      method: init.method ?? "GET",
+      headers,
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      signal: init.signal === undefined ? timeout : AbortSignal.any([timeout, init.signal]),
+    });
   };
 }
 
@@ -212,17 +233,7 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
     for (const lease of leases.values()) lease.refresh();
   };
 
-  const request: Mesh["request"] = async (id, path, init = {}) => {
-    if (id === selfId || trust.get(id) === undefined) throw new Error("不是这个账号里的可信设备");
-    const headers: Record<string, string> = { ...init.headers };
-    if (init.body !== undefined) headers["content-type"] ??= "application/json";
-    return agentFetch(dialer.agentFor(id), path, {
-      method: init.method ?? "GET",
-      headers,
-      ...(init.body !== undefined ? { body: init.body } : {}),
-      signal: AbortSignal.timeout(init.timeoutMs ?? MESH_REQUEST_TIMEOUT_MS),
-    });
-  };
+  const request = createMeshRequest(selfId, trust, dialer);
   const run = (what: string, task: () => Promise<unknown>) => {
     task().catch((error: unknown) => {
       if (!closed) log(`${what}没成：${error instanceof Error ? error.message : String(error)}`);
@@ -710,6 +721,7 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
     },
     isOnline,
     request,
+    relayCheckpoints: { ...relay.checkpoints, accountId: () => signedIn()?.accountId ?? null },
     lease(name, hooks) {
       let lease = leases.get(name);
       if (lease === undefined) {
