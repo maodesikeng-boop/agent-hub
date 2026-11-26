@@ -7,7 +7,7 @@
 ### Files to review
 
 - [This design](turn-state-foundation-design.md): One ledger record per model turn, the inputs it took, the tools it ran, and the background wait it left behind, plus the reads that replace today's inferences.
-- [`migrations/0057_turn_state.sql`](../migrations/0057_turn_state.sql): The four new tables.
+- [`migrations/0058_turn_state.sql`](../migrations/0058_turn_state.sql): The four new tables.
 - [`src/shared/turn.ts`](../src/shared/turn.ts), [`src/daemon/ledger/turns.ts`](../src/daemon/ledger/turns.ts), [`turn-tools.ts`](../src/daemon/ledger/turn-tools.ts), [`turn-background-waits.ts`](../src/daemon/ledger/turn-background-waits.ts): The compiling skeleton and its contracts.
 - Acceptance tests: [`turns.test.ts`](../src/daemon/ledger/turns.test.ts), [`turn-tools.test.ts`](../src/daemon/ledger/turn-tools.test.ts), [`turn-background-waits.test.ts`](../src/daemon/ledger/turn-background-waits.test.ts), [`turn-duration.test.tsx`](../src/web/turn-duration.test.tsx), and [`test/e2e/turn-state-foundation.test.ts`](../test/e2e/turn-state-foundation.test.ts).
 
@@ -36,7 +36,7 @@ Architecture choices (also settled as recommended):
 
 ### Migration number
 
-`0057_turn_state.sql` follows `0056` on `main`. PR #467 closed and released its earlier claim on `0057`; `node scripts/migration-claims.ts --pr 480` confirms that PR #480 can keep it. The `--next` command now prints `0058` because #480 claims `0057`.
+`0058_turn_state.sql` follows `0057_pm_agenda.sql` from PR #484, which takes `0057` and merges to `main` first. `node scripts/migration-claims.ts --pr 480` confirms the claim once that PR is on `main`.
 
 ### Task Graph sequencing note
 
@@ -213,7 +213,7 @@ In the same PR:
 
 | File | Responsibility |
 |---|---|
-| `migrations/0057_turn_state.sql`, `migrations/manifest.sha256` | Four new tables with one-running-turn-per-session and status checks. Implementation adds the old-wait import and drops. |
+| `migrations/0058_turn_state.sql`, `migrations/manifest.sha256` | Four new tables with one-running-turn-per-session and status checks. Implementation adds the old-wait import and drops. |
 | `src/shared/turn.ts` | Turn ids, causes, outcomes, stop sources, and `TurnSummary`. |
 | `src/shared/api.ts`, `src/shared/domain.ts` | `turns` on `MessagesPage` and `ConversationSnapshot`, the `turn.updated` change, `SessionState.activeTurnId`, and the `worker.background_wait` notice. |
 | `src/shared/limits.ts`, `src/shared/resource-registry.ts` | Bounds from Section 4 and the registry entries. |

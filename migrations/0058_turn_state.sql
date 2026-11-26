@@ -1,4 +1,4 @@
--- 0057_turn_state: one row per model turn, the inputs it took, the tools it ran, and the background wait it left behind.
+-- 0058_turn_state: one row per model turn, the inputs it took, the tools it ran, and the background wait it left behind.
 -- These tables become the only record of turn boundaries, input settlement, tool completion, and background waits;
 -- messages keeps the transcript and a read projection of each input's status.
 CREATE TABLE IF NOT EXISTS turns (
