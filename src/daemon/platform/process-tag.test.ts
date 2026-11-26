@@ -1,8 +1,9 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import { ENV_SESSION_OWNER_TAG, SESSION_TAG_MAX_DEPTH } from "../../shared/limits.ts";
 import { isAlive, waitForExit } from "../driver/process.ts";
 import {
@@ -19,16 +20,7 @@ import {
 const spawnedPids: number[] = [];
 const tempDirs: string[] = [];
 
-const canRunPs =
-  process.platform !== "win32" &&
-  (() => {
-    try {
-      execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
+const canRunPs = process.platform !== "win32" && sandboxAllowsPs();
 
 /** Inside macOS sandbox-exec, setuid /bin/ps returns EPERM; feed real spawned PIDs to the darwin parser so real SIGSTOP/SIGKILL reaping is still verified. */
 function psOptionsForLivePid(pid: number, envTagValue: string): ListTaggedProcessesOptions {

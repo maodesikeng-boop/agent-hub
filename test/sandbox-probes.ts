@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
+import { posix, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { SANDBOX_EXEC } from "../src/daemon/driver/write-scope.ts";
+
+/** `pnpm test:related` sets this to a file that collects the test files a sandbox refusal made skip. */
+export const SANDBOX_SKIP_LOG_ENV = "BELLWOOD_SANDBOX_SKIP_LOG";
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const TEST_FRAME = /^\s*at (?:.*? \()?(.+?\.test\.tsx?):\d+:\d+\)?\s*$/;
+const WINDOWS_PATH = /^(?:file:\/\/\/)?[A-Za-z]:[\\/]/;
 
 const PERMISSION_DENIED_CODES = new Set(["EPERM", "EACCES"]);
 const PERMISSION_DENIED_TEXT = /operation not permitted|permission denied/i;
@@ -11,12 +20,30 @@ function isPermissionRefusal(command: string, error: unknown): boolean {
   return (typeof failure?.code === "string" && PERMISSION_DENIED_CODES.has(failure.code)) || PERMISSION_DENIED_TEXT.test(stderr);
 }
 
+/** The test file that called a probe, read from the stack so callers need no extra argument. */
+export function callingTestFile(stack: string | undefined, repoRoot = REPO_ROOT): string | undefined {
+  const location = stack?.split("\n").map((line) => TEST_FRAME.exec(line)?.[1]).find((file) => file !== undefined);
+  if (location === undefined) return undefined;
+  const windows = WINDOWS_PATH.test(location);
+  const path = location.startsWith("file://") ? fileURLToPath(location, { windows }) : location;
+  return (windows ? win32 : posix).relative(repoRoot, path).split("\\").join("/");
+}
+
+function recordRefusal(env: NodeJS.ProcessEnv): void {
+  const log = env[SANDBOX_SKIP_LOG_ENV];
+  if (!log) return;
+  appendFileSync(log, `${callingTestFile(new Error().stack) ?? "<unknown test file>"}\n`);
+}
+
 export function sandboxAllows(command: string, args: readonly string[], env: NodeJS.ProcessEnv = process.env): boolean {
   try {
     execFileSync(command, args, { stdio: ["ignore", "ignore", "pipe"] });
     return true;
   } catch (error) {
-    if (isPermissionRefusal(command, error)) return false;
+    if (isPermissionRefusal(command, error)) {
+      recordRefusal(env);
+      return false;
+    }
     if (env.CI) return true;
     throw error;
   }

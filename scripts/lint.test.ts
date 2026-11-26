@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LINT_BASELINE,
   LINT_CONFIG,
@@ -11,9 +11,11 @@ import {
   buildBaseline,
   evaluateLintDiagnostics,
   formatLintFailure,
+  main,
   normalizeDiagnosticPath,
   readBaseline,
   type LintDiagnostic,
+  type LintRunners,
 } from "./lint.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 
@@ -108,5 +110,31 @@ describe("scripts/lint.ts", () => {
     expect(good.status).toBe(0);
     const goodReport = JSON.parse(good.stdout) as { diagnostics: LintDiagnostic[] };
     expect(goodReport.diagnostics).toEqual([]);
+  });
+
+  it("fails a full lint when knip fails even with clean oxlint output, and skips knip for explicit targets", () => {
+    const root = mkdtempSync(join(tmpdir(), "lint-knip-"));
+    dirs.push(root);
+    const knipRuns: string[] = [];
+    const runners = (knipStatus: number): LintRunners => ({
+      oxlint: () => ({ report: { diagnostics: [] }, stderr: "" }),
+      knip: (repoRoot) => {
+        knipRuns.push(repoRoot);
+        return knipStatus;
+      },
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(main([], root, runners(1))).toBe(1);
+      expect(knipRuns).toEqual([root]);
+      expect(main([], root, runners(0))).toBe(0);
+      expect(knipRuns).toHaveLength(2);
+      expect(main(["src/web"], root, runners(1))).toBe(0);
+      expect(knipRuns).toHaveLength(2);
+    } finally {
+      errors.mockRestore();
+      logs.mockRestore();
+    }
   });
 });

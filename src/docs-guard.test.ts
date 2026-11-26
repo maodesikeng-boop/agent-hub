@@ -119,13 +119,13 @@ export function validateAgentsRuleScopes(input: {
 }): string[] {
   const problems: string[] = [];
   const { agentsMd, reviewAndMergeMd, verifySkillMd } = input;
-  const ciWaitScope = /platform code that this machine cannot test[\s\S]{0,160}no immediately following review step/iu;
+  const ciWaitScope = /platform code that this machine cannot test[\s\S]{0,160}`pnpm test:related` lists test files that the sandbox made skip[\s\S]{0,80}no immediately following review step/iu;
 
   if (!/push[\s\S]{0,40}hand off right away[\s\S]{0,160}Exception:/iu.test(agentsMd) || !ciWaitScope.test(agentsMd)) {
-    problems.push("AGENTS.md must scope CI wait exceptions to platform code this machine cannot test or PRs with no immediately following review step.");
+    problems.push("AGENTS.md must scope CI wait exceptions to platform code this machine cannot test, sandbox-skipped tests, or PRs with no immediately following review step.");
   }
   if (reviewAndMergeMd !== undefined && !ciWaitScope.test(reviewAndMergeMd)) {
-    problems.push("docs/review-and-merge.md must scope CI wait exceptions to platform code this machine cannot test or PRs with no immediately following review step.");
+    problems.push("docs/review-and-merge.md must scope CI wait exceptions to platform code this machine cannot test, sandbox-skipped tests, or PRs with no immediately following review step.");
   }
   if (
     verifySkillMd !== undefined &&
@@ -250,8 +250,8 @@ describe("AGENTS.md rule scope guards", () => {
         verifySkillMd: regressedVerifySkill,
       }),
     ).toEqual([
-      "AGENTS.md must scope CI wait exceptions to platform code this machine cannot test or PRs with no immediately following review step.",
-      "docs/review-and-merge.md must scope CI wait exceptions to platform code this machine cannot test or PRs with no immediately following review step.",
+      "AGENTS.md must scope CI wait exceptions to platform code this machine cannot test, sandbox-skipped tests, or PRs with no immediately following review step.",
+      "docs/review-and-merge.md must scope CI wait exceptions to platform code this machine cannot test, sandbox-skipped tests, or PRs with no immediately following review step.",
       ".agents/skills/verify/SKILL.md must align CI wait exceptions with AGENTS.md instead of waiting unconditionally after push.",
       "AGENTS.md must require updating docs/dependencies.md whenever dependencies change, not only when manifest files change.",
       "AGENTS.md must forbid citing doc section numbers in comments.",
