@@ -9,6 +9,7 @@ import { DESKTOP_PRODUCT } from "../../src/daemon/ui-server/types.ts";
 import { VENDOR_FALLBACK_PATHS, resolveHubPaths } from "../../src/shared/paths.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
+import { sandboxAllowsNestedSandbox } from "../sandbox-probes.ts";
 import { isInsideBench } from "./bench-paths.ts";
 import type { BenchConfig, LocalBenchInstance, LocalInstanceConfig } from "./bench.ts";
 import { benchFakeScript } from "./fake-script.ts";
@@ -272,6 +273,9 @@ export function createLocalInstance(config: BenchConfig, codeDir: string, attach
   const start = async (next: "real" | "fake") => {
     if (attachedApi !== undefined) throw new Error(`${instance.name} is managed by another process`);
     if (running !== null) throw new Error(`${instance.name} is already running`);
+    if (!sandboxAllowsNestedSandbox()) {
+      throw new Error("macOS denied sandbox-exec for the local test daemon. Run the tester from a terminal outside the Bellwood Worker sandbox.");
+    }
     for (const dir of [instance.dataDir, instance.userHome, layout.localDir]) mkdirSync(dir, { recursive: true });
     appendFileSync(layout.daemonLog, `\n--- start ${next} ${new Date().toISOString()} ${commit()}\n`);
     const daemon = await spawnDaemon(codeDir, localDaemonEnv({ config, instance, codeDir, mode: next, platform, baseEnv: process.env }), layout.daemonLog);
