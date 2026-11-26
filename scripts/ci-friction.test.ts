@@ -86,8 +86,12 @@ describe("apt packages on CI runners", () => {
     expect(action.runs.steps.some((step) => step.uses?.startsWith("actions/cache@"))).toBe(true);
     const scripts = action.runs.steps.map((step) => step.run ?? "").join("\n");
     expect(scripts).toContain("archive.ubuntu.com");
-    for (const line of scripts.split("\n").filter((l) => /\bapt-get\b/u.test(l) && !l.trimStart().startsWith("#"))) {
-      expect(line, line).toMatch(/\btimeout \d+ apt-get\b/u);
+    const installCommands = scripts.split("\n").map((line) => line.trim()).filter(
+      (line) => !line.startsWith("#") && /\$(?:INSTALL\b|\{INSTALL\})/u.test(line),
+    );
+    expect(installCommands.length, "the action must execute its install input").toBeGreaterThan(0);
+    for (const command of installCommands) {
+      expect(command).toMatch(/^sudo timeout(?: --kill-after=\d+s)? \d+ (?:env [^;&|]+ )?bash (?:-e )?-c "\$INSTALL"$/u);
     }
   });
 
