@@ -27,6 +27,7 @@ export interface AppRailProps {
   meter: QuotaMeter | null;
   quota: readonly QuotaVendor[];
   quotaFetchable: boolean;
+  quotaLoading?: boolean;
   onSelectComputer: (key: DeviceKey) => void;
   onOpenSettings: () => void;
   /** Settings is open as a page; its tile keeps the selected fill like a tile whose popover is open. */
@@ -147,6 +148,7 @@ export function AppRail({
   meter,
   quota,
   quotaFetchable,
+  quotaLoading = false,
   onSelectComputer,
   onOpenSettings,
   settingsOpen = false,
@@ -200,7 +202,7 @@ export function AppRail({
         )}
 
         {(meter !== null || quotaFetchable) && (
-          <QuotaPopover quota={quota} fetchable={quotaFetchable} side="right" align="end" trigger={<UsageTrigger meter={meter} />} />
+          <QuotaPopover quota={quota} loading={quotaLoading} side="right" align="end" trigger={<UsageTrigger meter={meter} />} />
         )}
 
         <FooterButton

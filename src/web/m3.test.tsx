@@ -1,8 +1,9 @@
 // M3 网页（W4）：项目经理会话里的 Worker 汇报那一行、点开看 Worker 的过程、顶栏的额度、顶栏的 Worker 列表面板。接口和 WebSocket 都是假的。
+import { focusManager } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledModelCatalog, FETCHED_QUOTA_FRESH_MS, vendorSpec } from "../shared/index.ts";
+import { bundledModelCatalog, FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, vendorSpec } from "../shared/index.ts";
 import type { AgentVendor, Message, QuotaResponse, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { formatContext, formatCount, formatQuotaReset, formatTokens } from "./format.ts";
 import { App } from "./App.tsx";
@@ -645,6 +646,14 @@ describe("最左栏的额度", () => {
   const currentQuotaServer = { platform: "darwin", folderPicker: true, fileActions: true, currentQuota: true } as const;
   beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"], now: T_BEFORE_RESET }));
   afterEach(() => void vi.useRealTimers());
+  const currentQuotaTimers = () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({
+      toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
+      shouldAdvanceTime: true,
+      now: T_BEFORE_RESET,
+    });
+  };
 
   it("uses the current Codex account instead of the 30-day window from ledger session 201", async () => {
     vi.setSystemTime(new Date("2026-11-24T05:47:00Z"));
@@ -683,37 +692,63 @@ describe("最左栏的额度", () => {
     expect(within(screen.getByRole("group", { name: "Gemini" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
   });
 
-  it("requests current quota while Usage is open and stops after it closes", async () => {
-    vi.useRealTimers();
-    vi.useFakeTimers({
-      toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
-      shouldAdvanceTime: true,
-      now: T_BEFORE_RESET,
-    });
+  it("reopens Usage with the last reading while the next reading is pending", async () => {
+    currentQuotaTimers();
     const user = userEvent.setup();
-    let utilization = 0.25;
-    const readQuota = vi.fn(() => ({ status: 200, body: {
-      groups: [{ vendor: "codex", id: "codex", windows: { five_hour: win(utilization) } }],
-    } }));
+    const quotaReply = (utilization: number) => ({ status: 200, body: {
+      groups: [{ vendor: "codex", id: "codex", windows: {
+        five_hour: win(utilization),
+        seven_day: win(0.2, { resetsAt: (T_BEFORE_RESET + FETCHED_QUOTA_RETRY_MS) / 1000 }),
+      } }],
+    } });
+    const refresh = deferred<ReturnType<typeof quotaReply>>();
+    const readQuota = vi.fn<FakeApi["quota"]>(() => refresh.promise).mockReturnValueOnce(quotaReply(0.25));
     await boot(withWorker({ server: currentQuotaServer, sessions: [] }), (fake) => { fake.quota = readQuota; });
     await within(railNav()).findByRole("button", { name: /5h usage 25%/ });
-    await act(() => vi.advanceTimersByTimeAsync(10 * FETCHED_QUOTA_FRESH_MS));
-    expect(readQuota).toHaveBeenCalledTimes(1);
-    expect(badge()).toHaveAccessibleName("Usage");
-
-    utilization = 0.5;
     await user.click(badge());
-    expect(await screen.findByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "50");
-    expect(readQuota).toHaveBeenCalledTimes(2);
-    await act(() => vi.advanceTimersByTimeAsync(FETCHED_QUOTA_FRESH_MS));
-    expect(readQuota).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
+    expect(screen.getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "20");
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
-    await act(() => vi.advanceTimersByTimeAsync(10 * FETCHED_QUOTA_FRESH_MS));
-    expect(readQuota).toHaveBeenCalledTimes(3);
+    await act(() => vi.advanceTimersByTimeAsync(FETCHED_QUOTA_FRESH_MS + 1_000));
+    const requestsBeforeReopening = readQuota.mock.calls.length;
+
+    await user.click(badge());
+    expect(screen.getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
+    expect(screen.queryByRole("progressbar", { name: "7d usage" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(requestsBeforeReopening).toBe(2);
+    expect(readQuota).toHaveBeenCalledTimes(2);
+    refresh.resolve(quotaReply(0.5));
+    await waitFor(() => expect(screen.getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "50"));
   });
 
-  describe("按需查的额度（agy）", () => {
+  it.each([200, 503])("retries an empty or failed refresh (HTTP %i) when the workbench is visible", async (status) => {
+    currentQuotaTimers();
+    const user = userEvent.setup();
+    const reading = { status: 200, body: { groups: [{ vendor: "codex", id: "codex", windows: { five_hour: win(0.25) } }] } };
+    const readQuota = vi.fn<FakeApi["quota"]>(() => reading)
+      .mockReturnValueOnce(reading)
+      .mockReturnValueOnce({ status, body: { groups: [] } });
+    await boot(withWorker({ server: currentQuotaServer, sessions: [] }), (fake) => { fake.quota = readQuota; });
+    await within(railNav()).findByRole("button", { name: /5h usage 25%/ });
+    await user.click(badge());
+    await act(() => vi.advanceTimersByTimeAsync(FETCHED_QUOTA_FRESH_MS + 250));
+    expect(screen.getByText("No usage reported yet")).toBeVisible();
+    expect(readQuota).toHaveBeenCalledTimes(2);
+
+    act(() => focusManager.setFocused(false));
+    try {
+      await act(() => vi.advanceTimersByTimeAsync(FETCHED_QUOTA_RETRY_MS + 250));
+      expect(readQuota).toHaveBeenCalledTimes(2);
+      act(() => focusManager.setFocused(true));
+      expect(await screen.findByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
+      expect(readQuota).toHaveBeenCalledTimes(3);
+    } finally {
+      act(() => focusManager.setFocused(undefined));
+    }
+  });
+
+  describe("Fetched Antigravity quota on legacy daemons", () => {
     const agySession = () => makeSession({ sessionId: 9, conversationId: 30, vendor: "agy", lastEventAt: 5 });
     const agyWorker = () => withWorker({ sessions: [agySession()] });
     const claudeAndAgy = () =>
@@ -726,13 +761,12 @@ describe("最左栏的额度", () => {
     };
     const ask = () => api.calls.filter((c) => c.path === "/api/quota").length;
 
-    it("打开面板才问；问到的每一组一块，窗口各一行；不改最左栏仪表", async () => {
+    it("prefetches each Antigravity group before opening Usage and keeps the legacy rail meter", async () => {
       const user = userEvent.setup();
-      await boot(claudeAndAgy());
-      api.quota = () => ({ status: 200, body: reply });
-      expect(ask()).toBe(0);
+      await boot(claudeAndAgy(), (fake) => { fake.quota = () => ({ status: 200, body: reply }); });
+      await waitFor(() => expect(ask()).toBe(1));
       await user.click(badge());
-      const gemini = await screen.findByRole("group", { name: "Gemini" });
+      const gemini = screen.getByRole("group", { name: "Gemini" });
       expect(within(gemini).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
       expect(within(gemini).getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "50");
       expect(within(screen.getByRole("group", { name: "Claude and GPT" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "90");
@@ -742,11 +776,10 @@ describe("最左栏的额度", () => {
 
     it("没有别家的事件额度、有 agy 会话：按钮也在（沙漏图标），打开后先显示 Loading…，拉到后显示 agy 的", async () => {
       const user = userEvent.setup();
-      await boot(agyWorker());
+      const gate = deferred<{ status: number; body: unknown }>();
+      await boot(agyWorker(), (fake) => { fake.quota = () => gate.promise; });
       expect(badge()).toHaveAccessibleName("Usage");
       expect(badge().querySelector("svg")).toHaveAttribute("data-icon", "line");
-      const gate = deferred<{ status: number; body: unknown }>();
-      api.quota = () => gate.promise;
       await user.click(badge());
       expect(await screen.findByText("Loading…")).toHaveClass("text-xs", "text-muted-foreground");
       gate.resolve({ status: 200, body: reply });
@@ -756,12 +789,10 @@ describe("最左栏的额度", () => {
 
     it("现查厂商（agy）某个窗口耗尽时面板照常显示各组窗口，最左栏仪表读本地事件占比", async () => {
       const user = userEvent.setup();
-      await boot(claudeAndAgy());
-      api.quota = () => ({
-        status: 200,
-        body: {
+      await boot(claudeAndAgy(), (fake) => {
+        fake.quota = () => ({ status: 200, body: {
           groups: [{ vendor: "agy", id: "gemini", windows: { five_hour: win(1) } }],
-        },
+        } });
       });
       await user.click(badge());
       await screen.findByRole("group", { name: "Gemini" });

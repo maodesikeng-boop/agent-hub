@@ -1,6 +1,6 @@
-import { queryOptions, useQuery, type QueryClient } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { FETCHED_QUOTA_FRESH_MS, type QuotaResponse } from "../shared/index.ts";
+import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, SLOW_API_REQUEST_TIMEOUT_MS, type QuotaResponse } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 import { refreshDeviceModels } from "./models.tsx";
 import { fetchedQuotaUsage, type QuotaVendor } from "./selectors.ts";
@@ -8,44 +8,41 @@ import { useRerenderAt } from "./useRerenderAt.ts";
 
 const EMPTY: QuotaResponse = { groups: [] };
 const NO_QUOTA: QuotaVendor[] = [];
-const currentQuotaKey = (client: HubClient) => ["current-quota", client.device ?? ""] as const;
+const quotaKey = (client: HubClient) => ["quota", client.device ?? ""] as const;
 
-export function quotaQueryOptions(client: HubClient, current: boolean) {
-  return queryOptions({
-    queryKey: current ? currentQuotaKey(client) : ["quota", client.device ?? ""],
-    queryFn: ({ signal }) => client.fetchQuota(signal).catch(() => EMPTY),
-    staleTime: 0,
-  });
+function refreshAfter(data: QuotaResponse | undefined): number {
+  return data?.groups.length ? FETCHED_QUOTA_FRESH_MS : FETCHED_QUOTA_RETRY_MS;
 }
 
 export function refreshProviderData(qc: QueryClient, client: HubClient) {
   refreshDeviceModels(qc, client);
-  const queryKey = currentQuotaKey(client);
-  if (qc.getQueryState(queryKey) === undefined) return;
-  void qc.resetQueries({ queryKey, exact: true });
+  void qc.resetQueries({ queryKey: quotaKey(client) });
 }
 
-export function useCurrentQuota(
+export function useFetchedQuota(
   qc: QueryClient,
   client: HubClient,
-  { enabled, visible }: { enabled: boolean; visible: boolean },
-): QuotaVendor[] {
-  const { data, dataUpdatedAt } = useQuery({
-    ...quotaQueryOptions(client, true),
+  { enabled, current }: { enabled: boolean; current: boolean },
+) {
+  const { data, dataUpdatedAt, isFetching } = useQuery({
+    queryKey: [...quotaKey(client), current],
+    queryFn: ({ signal }) => client.fetchQuota(signal).catch(() => EMPTY),
     enabled,
-    refetchOnWindowFocus: visible,
-    refetchOnReconnect: visible,
-    refetchInterval: visible ? FETCHED_QUOTA_FRESH_MS : false,
+    staleTime: ({ state }) => refreshAfter(state.data),
+    refetchOnWindowFocus: true,
+    refetchInterval: ({ state }) => refreshAfter(state.data),
   }, qc);
-  const expires = dataUpdatedAt + FETCHED_QUOTA_FRESH_MS;
-  const resets = useMemo(() => data?.groups.flatMap((g) => Object.values(g.windows).map((w) => w.resetsAt * 1000)) ?? [], [data]);
-  const times = useMemo(() => resets.length > 0 ? [expires, ...resets] : [], [resets, expires]);
+  const expires = dataUpdatedAt + FETCHED_QUOTA_FRESH_MS + SLOW_API_REQUEST_TIMEOUT_MS;
+  const resets = useMemo(() => current ? data?.groups.flatMap((g) => Object.values(g.windows).map((w) => w.resetsAt * 1000)) ?? [] : [], [current, data]);
+  const times = useMemo(() => enabled && data?.groups.length ? [expires, ...resets] : [], [enabled, data, resets, expires]);
   useRerenderAt(times);
   const now = Date.now();
   const expired = now >= expires;
   const asOf = resets.reduce((last, t) => t <= now ? Math.max(last, t) : last, 0);
-  return useMemo(() => {
+  const rows = useMemo(() => {
     if (!enabled || !data?.groups.length || expired) return NO_QUOTA;
-    return fetchedQuotaUsage(data, asOf, true);
-  }, [data, asOf, enabled, expired]);
+    return fetchedQuotaUsage(data, asOf, current);
+  }, [data, asOf, current, enabled, expired]);
+  const loading = isFetching && rows.length === 0;
+  return useMemo(() => ({ rows, loading }), [rows, loading]);
 }
