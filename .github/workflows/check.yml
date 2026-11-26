@@ -169,6 +169,11 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-browsers-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
+      - name: TEMP force runner apt mirror failure
+        run: |
+          echo "192.0.2.1 azure.archive.ubuntu.com" | sudo tee -a /etc/hosts
+          printf "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n" | sudo tee /etc/apt/apt-mirrors.txt
+          cat /etc/apt/apt-mirrors.txt
       - name: Install Playwright apt packages
         uses: ./.github/actions/apt-install
         timeout-minutes: 7
