@@ -78,6 +78,8 @@ export interface VendorChecklistSpec {
   // Switches that turn on a checklist tool the CLI hides by default; the vendor's launch builder applies them.
   // An appendToList value joins a comma-separated variable the user may already set.
   enable?: { args?: readonly string[]; env?: Readonly<Record<string, string | { appendToList: string }>> };
+  // The tool name the prompt tells the agent to keep its list in; set exactly when `sources` is non-empty.
+  promptTool?: string;
 }
 
 export interface VendorSpec<Id extends string = string> {

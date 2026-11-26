@@ -4,7 +4,7 @@ import type {
   SkipTaskNodeRequest,
   SkipTaskNodeResponse,
 } from "../../../shared/api.ts";
-import { taskNodeStatusText, truncateChars, userMessageDedupeKey, utf8Bytes } from "../../../shared/domain.ts";
+import { taskNodeStatusText, truncateChars, utf8Bytes } from "../../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, TaskArtifact, TaskGraph, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
 import { graphDeliverables } from "../../../shared/deliverables.ts";
 import type { HubArgs, HubResult, WorkerPr } from "../../../shared/hub.ts";
@@ -234,9 +234,10 @@ function cancelGraphInternalIn(
   if (wakePm) {
     const trimmedReason = reason?.trim();
     const stoppedNote = stoppedWorkerIds.length > 0 ? `已自动停掉在跑的 Worker ${workerIdList(stoppedWorkerIds)}。` : "";
-    messageId = g.messages.enqueueWakeupUserMessageIn(p, {
+    messageId = g.messages.enqueueWakeupIn(p, {
       conversationId: graph.conversationId,
-      dedupeKey: userMessageDedupeKey(graph.conversationId, `graph-cancel:${graph.id}:${t}`),
+      source: "task_graph",
+      ref: `graph-cancel:${graph.id}:${t}`,
       text: `【任务图 #${graph.id} · ${graph.title}】用户取消了整张任务图${trimmedReason ? `（说明：${trimmedReason}）` : ""}。${stoppedNote}`.trim(),
     }).id;
   }

@@ -182,6 +182,11 @@ const leave = (chatId: string, openId = GUEST) => {
 };
 const userMessages = (conversationId: ConversationId): Message[] =>
   db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND sender = 'user' ORDER BY id", conversationId).map((r) => ledger.getMessage(r.id)!);
+
+const systemWakeups = (conversationId: number) => db.all(
+  "SELECT id FROM messages WHERE conversation_id = ? AND sender = 'system' AND json_extract(meta, '$.event') = 'pm.wakeup'",
+  conversationId,
+);
 const ev = (sessionId: SessionId, event: DriverEvent) => ledger.applyDriverEvent(sessionId, event);
 const running = (sessionId: SessionId) => createSessionStore(db).update(sessionId, { status: "running" });
 const cardsSentTo = (chatId: string) =>
@@ -1444,7 +1449,7 @@ describe("createFeishuService：总助单聊", () => {
     const later = await click(routerChat(), postOfRouterItem(itemOfAsk(askId).id).messageId, value(1));
     expect(later.toast?.content).toBe("已经定过了");
     expect(askOf(ledger.getMessage(askId)!)?.chosenOption).toBe("A");
-    const wakeups = db.all("SELECT id FROM messages WHERE conversation_id = ? AND sender = 'user'", lin.conversationId);
+    const wakeups = systemWakeups(lin.conversationId);
     expect(wakeups).toHaveLength(1);
   });
 
@@ -2384,7 +2389,8 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
     const askId = await askInGroupFor(lin, ["A", "B"]);
     expect((await click(chat, postOfAsk(askId).messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 })).toast?.type).toBe("success");
     await settle();
-    expect(userMessages(lin.conversationId)).toHaveLength(1);
+    expect(userMessages(lin.conversationId)).toEqual([]);
+    expect(systemWakeups(lin.conversationId)).toHaveLength(1);
     running(lin.sessionId);
     ev(lin.sessionId, { type: "turn.started", at: Date.now() });
     tool(lin.sessionId, "Bash", { command: "hub worker start" });

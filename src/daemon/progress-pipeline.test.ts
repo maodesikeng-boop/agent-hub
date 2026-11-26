@@ -89,7 +89,7 @@ const cases = {
   },
 } satisfies Record<AgentVendor, ReplayCase>;
 
-async function replayVendor(vendor: AgentVendor, fixture: ReplayCase) {
+async function replayVendor(vendor: AgentVendor, fixture: ReplayCase, nextFrames?: unknown[]) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "bellwood-progress-")));
   const config = join(dir, "replay.json");
   const log = join(dir, "replay.jsonl");
@@ -97,7 +97,7 @@ async function replayVendor(vendor: AgentVendor, fixture: ReplayCase) {
   const spec = VENDOR_LIST.find((entry) => entry.id === vendor)!;
   writeFileSync(promptFile, "Check the probe.");
   writeFileSync(join(dir, "index.html"), "<title>Progress replay</title>");
-  writeFileSync(config, JSON.stringify({ vendor, frames: fixture.frames, launchEnv: Object.keys(spec.checklist.enable?.env ?? {}) }));
+  writeFileSync(config, JSON.stringify({ vendor, frames: fixture.frames, nextFrames, launchEnv: Object.keys(spec.checklist.enable?.env ?? {}) }));
   const executablePath = writeExecutableNodeScript(join(dir, "replay-cli"), readFileSync(new URL("../../test/fixtures/progress/replay-cli.cjs", import.meta.url), "utf8"));
 
   const db = openTestDb();
@@ -127,10 +127,13 @@ async function replayVendor(vendor: AgentVendor, fixture: ReplayCase) {
       onInit: (ws) => ws.on("message", (raw: Buffer) => received.push(JSON.parse(raw.toString("utf8")))),
     });
     try {
-      const { messageId } = ledger.postUserMessage({ conversationId: conversation.id, clientId: "probe", text: "Check the probe." });
-      await expect(driver.send(sessionId, { source: "user", messageIds: [messageId], text: "Check the probe." })).resolves.toMatchObject({ kind: "written" });
-      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "turn.ended", ok: true })));
-      await ledger.settleDriverEvents();
+      for (let turn = 1; turn <= (nextFrames === undefined ? 1 : 2); turn++) {
+        const text = `Check probe ${turn}.`;
+        const { messageId } = ledger.postUserMessage({ conversationId: conversation.id, clientId: `probe-${turn}`, text });
+        await expect(driver.send(sessionId, { source: "user", messageIds: [messageId], text })).resolves.toMatchObject({ kind: "written" });
+        await vi.waitFor(() => expect(events.filter((event) => event.type === "turn.ended" && event.ok)).toHaveLength(turn));
+        await ledger.settleDriverEvents();
+      }
       const response = await app.inject({ url: `/api/conversations/${conversation.id}/messages?before=${Number.MAX_SAFE_INTEGER}`, headers });
       expect(response.statusCode).toBe(200);
       const page = response.json<MessagesPage>();
@@ -189,4 +192,53 @@ describe("progress pipeline from vendor frames to the API", () => {
       }
     }, 10_000);
   }
+});
+
+describe("progress pipeline across two turns", () => {
+  it.each(["claude", "codex", "cursor"] as const)("%s: recorded checklist frames keep only this turn's work", async (vendor) => {
+    const frames = progressFrames<unknown>(`${vendor}-turn-1.live.jsonl`);
+    const next = progressFrames<unknown>(`${vendor}-turn-2.live.jsonl`);
+    const { page } = await replayVendor(vendor, { ...cases[vendor], frames }, next);
+    const start = page.messages.findLastIndex((message) => message.sender === "user");
+    expect(start).toBeGreaterThan(0);
+    const steps = (messages: MessagesPage["messages"]) => {
+      const latest = messages.findLast((message) => message.kind === "checklist");
+      return latest && checklistOf(latest)?.map(({ title, status }) => [title, status]);
+    };
+    expect(steps(page.messages.slice(0, start))).toEqual(["Read marker", "Confirm marker", "Report marker"].map((title) => [title, "completed"]));
+    expect(steps(page.messages.slice(start))).toEqual(["Check symbol", "Confirm symbol", "Report symbol"].map((title) => [title, "completed"]));
+  }, 10_000);
+
+  it("codex: a repeated checklist title remains visible after completion", async () => {
+    const frames = progressFrames<unknown>("codex-repeat-1.live.jsonl");
+    const next = progressFrames<unknown>("codex-repeat-2.live.jsonl");
+    const { page } = await replayVendor("codex", { ...cases.codex, frames }, next);
+    const start = page.messages.findLastIndex((message) => message.sender === "user");
+    const snapshots = page.messages.slice(start).map(checklistOf).filter((items) => items !== null);
+    expect(snapshots.map((items) => items.map(({ title, status }) => [title, status]))).toEqual([
+      [["Run tests", "in_progress"], ["Review results", "pending"]],
+      [["Run tests", "completed"], ["Review results", "completed"]],
+    ]);
+  }, 10_000);
+
+  it.each(["opencode", "deepseek", "kimi"] as const)("%s: replays a second plan using the same wire format", async (vendor) => {
+    const fixture = cases[vendor];
+    const next: unknown[] = JSON.parse(JSON.stringify(fixture.frames)
+      .replaceAll("Read probe", "Read next probe").replaceAll("Confirm marker", "Confirm next marker").replaceAll("Reply", "Report next probe")
+      .replaceAll("illustrative-call", "next-call").replaceAll("read-probe", "read-next-probe"));
+    const { page } = await replayVendor(vendor, fixture, next);
+    const start = page.messages.findLastIndex((message) => message.sender === "user");
+    expect(start).toBeGreaterThan(0);
+    const final = page.messages.slice(start).findLast((message) => message.kind === "checklist");
+    expect(final && checklistOf(final)?.map(({ title }) => title)).toEqual([
+      "Read next probe", "Confirm next marker", ...(vendor === "opencode" ? ["Report next probe"] : []),
+    ]);
+  }, 10_000);
+
+  it.each(["agy", "pi"] as const)("%s: two tool turns with no checklist events keep action timing only", async (vendor) => {
+    const { page, statuses } = await replayVendor(vendor, cases[vendor], cases[vendor].frames);
+    expect(page.messages.filter((message) => message.sender === "user")).toHaveLength(2);
+    expect(page.messages.some((message) => message.kind === "checklist")).toBe(false);
+    expect(statuses).toContainEqual(expect.objectContaining({ step: expect.objectContaining({ type: "tool_use" }), stepStartedAt: expect.any(Number) }));
+  }, 10_000);
 });

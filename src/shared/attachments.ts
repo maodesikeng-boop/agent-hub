@@ -19,11 +19,6 @@ export interface UserMessageMeta {
   deliveryConfirmed?: true;
   rewound?: true;
   origin?: FeishuMessageOrigin;
-  wakeup?: true;
-}
-
-export function isLedgerWakeup(message: { sender: string; meta: Record<string, unknown> | null }): boolean {
-  return message.sender === "user" && message.meta?.wakeup === true;
 }
 
 const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {

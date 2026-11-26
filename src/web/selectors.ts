@@ -1,3 +1,5 @@
+import { placeSystemInputs, systemInputPlacement } from "./turn-boundaries.ts";
+import { takenInputOf } from "../shared/taken-input.ts";
 export { listConversations, previewText, type ConversationEntry } from "./conversation-list.ts";
 export {
   allPendingAsks,
@@ -728,6 +730,8 @@ export type RenderItem =
   | { kind: "turn"; key: string; work: Message[]; checklists: Message[]; parts: Message[]; startedAt: number; endedAt: number };
 
 type FlowRole =
+  | "waiting"
+  | "in_turn"
   | "input"
   | "silent_input"
   | "divider"
@@ -735,24 +739,27 @@ type FlowRole =
   | "work"
   | "notice";
 
-const INPUT_WORKER_EVENTS: ReadonlySet<WorkerMessageMeta["event"]> = new Set(["report", "turn_failed", "worktree_failed", "user_message"]);
-const INPUT_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.run"]);
 const WORK_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.created", "schedule.removed"]);
 
 function flowRole(message: Message): FlowRole {
   if (isSilentTriggerMessage(message) || (isRewoundMessage(message) && attachmentsOf(message).length === 0)) return "silent_input";
   const line = workerEventOf(message);
-  if (line) return INPUT_WORKER_EVENTS.has(line.event) ? "input" : "work";
+  const placement = systemInputPlacement(message);
+  if (placement === "waiting") return "waiting";
+  if (placement === "in_turn") return "in_turn";
+  if (placement === "starts_turn" || (placement === "as_written" && message.status === "replied")) return "input";
+  if (placement === "as_written") return "notice";
+  if (line?.event === "user_message") return "input";
+  if (line) return OUTCOME_WORKER_EVENTS.has(line.event) ? "notice" : "work";
   if (message.sender === "user" || message.sender === "pm") return "input";
   if (message.sender === "agent") return "agent";
   const event = systemEventOf(message)?.event;
   if (event === "session.renewed") return "divider";
-  if (event !== undefined && INPUT_SYSTEM_EVENTS.has(event)) return "input";
   if (event !== undefined && WORK_SYSTEM_EVENTS.has(event)) return "work";
   return "notice";
 }
 
-function placeHandovers(all: Message[]): Message[] {
+function placeHandovers(all: readonly Message[]): Message[] {
   const shown = all.filter((m) => !isHandoverTraffic(m));
   const dividers = shown.filter((m) => systemEventOf(m)?.event === "session.renewed");
   if (dividers.length === 0) return shown;
@@ -779,7 +786,7 @@ const groupMessagesCache = new WeakMap<readonly Message[], GroupedMessages>();
 export function groupMessages(all: Message[]): GroupedMessages {
   const hit = groupMessagesCache.get(all);
   if (hit !== undefined) return hit;
-  const messages = placeHandovers(all);
+  const messages = placeHandovers(placeSystemInputs(all));
   const items: RenderItem[] = [];
   let turn: Extract<RenderItem, { kind: "turn" }> | null = null;
   let lastInputAt: number | null = null;
@@ -788,7 +795,9 @@ export function groupMessages(all: Message[]): GroupedMessages {
   const close = () => {
     if (turn === null) return;
     const trailing: Message[] = [];
-    while (turn.parts.length > 0 && turn.parts.at(-1)!.sender !== "agent") trailing.unshift(turn.parts.pop()!);
+    for (let last = turn.parts.at(-1); last !== undefined && last.sender !== "agent" && systemInputPlacement(last) !== "in_turn"; last = turn.parts.at(-1)) {
+      trailing.unshift(turn.parts.pop()!);
+    }
     for (const message of trailing) items.push({ kind: "message", message });
     turn = null;
   };
@@ -800,6 +809,10 @@ export function groupMessages(all: Message[]): GroupedMessages {
       lastInputAt = message.createdAt;
       continue;
     }
+    if (role === "waiting") {
+      items.push({ kind: "message", message });
+      continue;
+    }
     if (role === "divider") {
       close();
       items.push({ kind: "message", message });
@@ -808,7 +821,7 @@ export function groupMessages(all: Message[]): GroupedMessages {
     if (role === "input") {
       close();
       items.push({ kind: "message", message });
-      lastInputAt = message.createdAt;
+      lastInputAt = takenInputOf(message)?.at ?? message.createdAt;
       continue;
     }
     if (role === "agent" && turn === null) {
@@ -820,7 +833,7 @@ export function groupMessages(all: Message[]): GroupedMessages {
       items.push({ kind: "message", message });
       continue;
     }
-    if (role === "notice") {
+    if (role === "notice" || role === "in_turn") {
       turn.parts.push(message);
       continue;
     }

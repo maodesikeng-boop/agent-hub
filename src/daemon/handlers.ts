@@ -6,7 +6,6 @@ import {
   SessionTokenRevokedError,
   WORKER_FIRST_TURN_RECHECK_MS,
   diffReviewSnapshot,
-  isLedgerWakeup,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
@@ -76,12 +75,10 @@ function rateLimitWaitMs(deps: Pick<HandlerDeps, "sessions" | "now">, sessionId:
 
 function waitsForRateLimitReset(
   action: ActionRow<"session.send">,
-  message: Pick<Message, "sender" | "meta">,
+  message: Pick<Message, "sender">,
 ): boolean {
   const { source, resend, recovery } = action.params;
-  if (source === "system" || message.sender === "system") return true;
-  if (resend || recovery || action.attempts > 0) return true;
-  return isLedgerWakeup(message);
+  return source === "system" || message.sender === "system" || resend === true || recovery === true || action.attempts > 0;
 }
 
 function canSendTo(message: Message | null, sessionId: number): message is Message {

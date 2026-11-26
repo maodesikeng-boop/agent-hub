@@ -284,6 +284,9 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("session_checklists", "retained_metadata", "src/daemon/ledger/checklist.ts", "migrations/0052_session_checklists.sql", "automatic", [
     limit("CHECKLIST_MAX_ITEMS", CHECKLIST_MAX_ITEMS, "entries"),
   ]),
+  table("session_checklist_turns", "retained_metadata", "src/daemon/ledger/checklist.ts", "migrations/0054_system_wakeups.sql", "automatic", [
+    limit("CHECKLIST_MAX_ITEMS", CHECKLIST_MAX_ITEMS, "entries"),
+  ]),
   table("workers", "retained_metadata", "src/daemon/ledger/workers.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("worker_endings", "retained_metadata", "src/daemon/ledger/completed-work.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("worker_direct_chat_receipts", "retained_metadata", "src/daemon/ledger/workers/direct-chat.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),

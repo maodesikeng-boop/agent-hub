@@ -110,10 +110,13 @@ describe("ledger checklists", () => {
     setChecklist("first", first);
     setChecklist("finish", { kind: "merge", items: [{ id: "step", status: "completed" }] });
     expect(db.all("SELECT session_id FROM session_checklists")).toEqual([{ session_id: pm.sessionId }]);
+    emit({ type: "turn.ended", messageIds: [], at: now, ok: true, interrupted: false, durationMs: 1 });
+    expect(db.all("SELECT session_id FROM session_checklist_turns")).toEqual([{ session_id: pm.sessionId }]);
 
     ledger.archivePm(pm.pm.id);
     expect(ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS)).toEqual([pm.pm.id]);
     expect(db.all("SELECT session_id FROM session_checklists")).toEqual([]);
+    expect(db.all("SELECT session_id FROM session_checklist_turns")).toEqual([]);
   });
 
   it("clears the baseline when a session ends and keeps its history", () => {
@@ -191,5 +194,58 @@ describe("live action timing", () => {
     expect(live()).toMatchObject({ step: { type: "thinking" }, stepStartedAt: now });
     emit({ type: "turn.ended", at: now, messageIds: [], ok: true, interrupted: false, durationMs: 1 });
     expect(live()).toMatchObject({ activity: "idle", step: null, stepStartedAt: null });
+  });
+});
+
+describe("checklist messages per turn", () => {
+  it("keeps a repeated title checked off until the turn ends, even across a ledger restart", () => {
+    const setSteps = (uuid: string, status: "pending" | "completed", extraTitle?: string) => setChecklist(uuid, {
+      kind: "replace",
+      items: [
+        { id: null, title: "Run tests", status },
+        { id: null, title: "Read logs", status: "completed" },
+        ...(extraTitle ? [{ id: null, title: extraTitle, status: "completed" as const }] : []),
+      ],
+    });
+    const end = () => emit({ type: "turn.ended", messageIds: [], at: now, ok: true, interrupted: false, durationMs: 1 });
+    const latest = () => checklistOf(checklistRows().at(-1)!)?.map(({ title, status }) => [title, status]);
+
+    setSteps("first", "completed");
+    end();
+    setSteps("repeat", "pending");
+    expect(latest()).toEqual([["Run tests", "pending"]]);
+
+    ledger.close();
+    ledger = createLedger(db, { now: () => now, pmHomeRoot: join(dir, "state", "pm-home"), dataHome: join(dir, "state"), userHome: dir });
+    setSteps("complete", "completed");
+    expect(latest()).toEqual([["Run tests", "completed"]]);
+
+    end();
+    setSteps("third", "completed", "Review results");
+    expect(latest()).toEqual([["Review results", "completed"]]);
+  });
+
+  it.each([
+    { unfinished: false, interrupted: false },
+    { unfinished: true, interrupted: false },
+    { unfinished: true, interrupted: true },
+  ])("keeps unfinished work and drops old completed items ($unfinished, interrupted: $interrupted)", ({ unfinished, interrupted }) => {
+    setChecklist("first", { kind: "replace", items: [
+      { id: "a", title: "First step", status: "completed" },
+      { id: "b", title: "Second step", status: "completed" },
+      { id: "c", title: "Third step", status: unfinished ? "pending" : "completed" },
+    ] });
+    emit({ type: "turn.ended", messageIds: [], at: now, ok: !interrupted, interrupted, durationMs: 1 });
+    emit({ type: "turn.started", at: now });
+    setChecklist("second", { kind: "merge", items: [
+      ...(unfinished ? [{ id: "c", status: "completed" as const }] : []),
+      { id: "d", title: "New step", status: "in_progress" },
+    ] });
+    const [firstTurn, secondTurn] = checklistRows().map(checklistOf);
+    expect(firstTurn?.map((item) => item.id)).toEqual(["a", "b", "c"]);
+    expect(secondTurn?.map(({ id, title, status }) => ({ id, title, status }))).toEqual([
+      ...(unfinished ? [{ id: "c", title: "Third step", status: "completed" }] : []),
+      { id: "d", title: "New step", status: "in_progress" },
+    ]);
   });
 });

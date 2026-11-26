@@ -37,6 +37,7 @@ export * from "./snapshot.ts";
 export * from "./store.ts";
 export * from "./task-graph-compat.ts";
 export * from "./task-graph-skill.ts";
+export * from "./taken-input.ts";
 export * from "./turn-reply.ts";
 export * from "./update.ts";
 export * from "./user-blockers.ts";

@@ -650,13 +650,14 @@ export abstract class BaseSessionDriver<
     });
   }
 
-  protected markProcessing(st: TState, batch: TBatch, at: number): void {
+  protected markProcessing(st: TState, batch: TBatch, at: number, midTurn = batch.midTurn): void {
     this.markDelivered(st, batch);
     if (batch.processing || batch.messageIds.length === 0) return;
     batch.processing = true;
     this.emit(st.id, {
       type: "message.processing",
       messageIds: batch.messageIds,
+      ...(midTurn ? { midTurn: true as const } : {}),
       ...(batch.notes.preamble ? { preamble: true as const } : {}),
       at,
     });
