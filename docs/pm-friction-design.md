@@ -22,35 +22,33 @@ This plan fixes seven places where a Project Manager (PM) gets stuck while drivi
 - **Verification categories.** Section 8 covers all nine categories. Each omission is explained in the coverage table.
 - **Structurally distinct designs.** Section 3 compares four structures: read paths on the current model (chosen), a day-one design with a gate table and a PM inbox, a pull-only inbox, and surface patches.
 
-### Decisions needed
+### User decisions
 
 #### D1. Remind the user about cards that wait a long time (problem 4)
 
-This changes what the user sees, so it goes to the user.
+The user chose option 2 on card #393: show card age and send one daily digest at 09:00 local time.
 
 | Option | What the user sees |
 |---|---|
 | 1. No product reminder | Nothing new. The PM keeps listing open cards at the end of each reply, as the user asked on 11-26. |
-| **2. Card age plus one daily digest (recommended)** | Every card in Router "等你处理" shows its age on the right, such as `已等 3 天`. Once a day at 09:00 local time (time and on/off in Settings, never during quiet hours), if any card has waited more than a day, one push notification and one Feishu message arrive: `有 2 张卡等你超过一天：agent-hub #222「接手测试台要不要用独立数据目录」已等 3 天；#369「Computer Use 授权」已等 2 天`. No digest on days when nothing is overdue. |
+| **2. Card age plus one daily digest (chosen)** | Every card in Router "等你处理" shows its age on the right, such as `已等 3 天`. Once a day at 09:00 local time (time and on/off in Settings, never during quiet hours), if any card has waited more than a day, one push notification and one Feishu message arrive: `有 2 张卡等你超过一天：agent-hub #222「接手测试台要不要用独立数据目录」已等 3 天；#369「Computer Use 授权」已等 2 天`. No digest on days when nothing is overdue. |
 | 3. Escalate each card | Each card pushes on its own at 4 hours, 24 hours, and then daily: `【提醒】#222 已等 24 小时`. Five open cards produce about fifteen pushes in three days. |
 | 4. Let the PM remind you | When a card waits more than a day, the PM is woken and mentions it in the chat, for example `#222 已经等了 3 天，你看一下？`. This spends PM turns and is a new PM notification, so it would ship with the notification line. |
 
-Recommendation: option 2. It adds at most one message per day and puts the age in the list the user already reads. Option 3 grows linearly with the number of cards. Option 4 spends model turns on a reminder that needs no judgment. A per-card "remind me later" button (draft B) is left out of option 2. It needs two persisted fields and a new control, and the daily digest already caps the noise. The user can ask for it on top of option 2.
+The digest adds at most one message per day in each channel. Per-card snooze is outside this change.
 
 #### D2. Passing a checkpoint that has no next step (problem 2)
 
-On 11-12 the user said a clean handoff should not wake the PM ("顺利 pass 的交接真的有必要给你过一眼吗"), so passing a checkpoint wakes nobody when the next step can start by itself. When nothing comes after the step, nobody picks the work up. This changes who hears about the user's click, so it goes to the user.
+On 11-12 the user said a clean handoff should not wake the PM ("顺利 pass 的交接真的有必要给你过一眼吗"), so passing a checkpoint wakes nobody when the next step can start by itself. When nothing comes after the step, nobody picks the work up. On card #394, the user chose option 1: wake the PM within one minute and include the note the user entered.
 
 | Option | What the user sees |
 |---|---|
-| **a. Wake the PM right away (recommended)** | Within a minute of clicking `通过`, the PM conversation shows the notice `【任务图 #126「…」】你通过了「plan」，这一步后面没有步骤，图里还有 1 条线在跑。要接着做就用 hub graph patch 加步骤。` with the note the user typed, and the PM replies, for example "收到，我来补实现步骤". A new step appears in the right panel. |
-| b. Do not wake | Nothing happens after the click. The PM hears about it the next time something else wakes it. |
-
-Recommendation: a. The user clicked `通过` because they are waiting for the next step.
+| **1. Wake the PM within one minute (chosen)** | Within a minute of clicking `通过`, the PM conversation shows the notice `【任务图 #126「…」】你通过了「plan」，这一步后面没有步骤，图里还有 1 条线在跑。要接着做就用 hub graph patch 加步骤。` with the note the user typed, and the PM replies, for example "收到，我来补实现步骤". A new step appears in the right panel. |
+| 2. Do not wake | Nothing happens after the click. The PM hears about it the next time something else wakes it. |
 
 #### D3. The PM's list of open cards at the end of each reply (follows D1)
 
-If D1 is option 2, the PM can stop ending every reply with the list of open cards. Card age and the daily digest carry it, and the PM mentions a card only when it matters. Under options 1 and 4, the current rule stays. Recommendation: drop the rule once option 2 ships.
+The user decided on card #393 to drop the end-of-reply list once PR-5 ships. Until then, the current rule stays. After PR-5, the PM mentions a card when it matters to the conversation.
 
 ### Settled by the synthesis step
 
@@ -65,11 +63,11 @@ The Project Manager can overturn any of these without asking the user, because n
 
 | PR | Contents | Migration or stamp | Depends on |
 |---|---|---|---|
-| **PR-1 Read paths** | Problem 7 (`hub ask list`, `hub ask show`, the note in front of user messages lists step cards and card age), problem 3 (`hub schedule show`, `schedule list` shows the last run and a hint) | No stamp | None |
+| **PR-1 Read paths** | Problem 7 (`hub ask list`, `hub ask show`, the note in front of user messages lists step cards and card age), problem 3 (`hub schedule show`, `schedule list` shows the last run and a hint), and the new card number in the `hub ask` receipt | No stamp | None |
 | **PR-2 `hub worker wait`** | Problem 6 (start phases, chunked wait in the daemon, CLI loop, hint in the `worker start` receipt) | No stamp. Touches `src/hub/**`, so the Windows workflow runs | None |
 | **PR-3 PM checkpoint and atomic patch** | Problem 1 (`"confirm": "pm"`), problem 5 (`doneSteps` in `graph patch`, one text-limit table shown in help and errors, every violation reported at once), removal of the dead reason text at `turn-report.ts:176` | `migrations/**` needs a review stamp | None |
-| **PR-4 PM notice entry** (first PR of the notification line) | N1 (task-graph wakeups get a typed subject and a currency rule), problem 2 (the three paths where a user decision reaches nobody) | No stamp | D2. Rebase after PR-3 to avoid conflicts in `task-graphs/` |
-| **PR-5 Card reminders** | Problem 4 as decided in D1 | `src/daemon/feishu/**` needs a review stamp under option 2 or 3 | D1. Its skeleton and tests are written after D1, not on this branch |
+| **PR-4 PM notice entry** (first PR of the notification line) | N1 (task-graph wakeups get a typed subject and a currency rule), problem 2 (the three paths where a user decision reaches nobody) | No stamp | D2 is settled. Rebase after PR-3 to avoid conflicts in `task-graphs/` |
+| **PR-5 Card reminders** | Problem 4 as decided in D1 | `src/daemon/feishu/**` needs a review stamp under option 2 or 3 | D1 is settled. Its skeleton and tests are a separate change |
 
 PR-1, PR-2, and PR-3 can be built in parallel. This branch carries one skeleton commit per PR. Each implementation PR starts from `main`, cherry-picks the design-document commit and its own skeleton commit, and fills in the bodies. The HUB command list in `src/shared/hub.ts` and the limits in `src/shared/limits.ts` are touched by several of those commits, so the second PR to merge rebases those lines. The migration number `0055` is checked again right before PR-3 merges, because parallel PRs have reused numbers before.
 
@@ -225,7 +223,7 @@ New constants in `src/shared/limits.ts`:
 
 | Constant | Value | Sizing |
 |---|---|---|
-| `ASK_LIST_MAX` | 50 | A PM can have at most `ROUTER_PENDING_DECISIONS_PER_PM_MAX` (30) independent cards plus step cards on at most 20 active graphs. Fifty covers normal use; beyond it the list ends with "另有 N 张". |
+| `ASK_LIST_MAX` | 50 | The ledger reads at most 30 independent cards plus up to 32 steps on each of 20 active graphs for the PM's project. The CLI returns the first 50 cards and prints "另有 N 张" when more are waiting. |
 | `SCHEDULE_SHOW_RUNS_MAX` | 5 | A 30-minute schedule writes about 1,440 run messages a month inside 30,000 messages. The query reads the newest five through the unique `dedupe_key` index with prefix `system:<conversation>:schedule.run:<id>:`, so its cost does not grow with the month. |
 | `SCHEDULE_RUN_REPLY_PREVIEW_CHARS` | 200 | Five runs times 200 characters keeps `schedule show` under 2 KB plus the prompt. |
 | `WORKER_WAIT_DEFAULT_MS` | 90,000 | Below the 2-minute default shell timeout of the most common PM vendor. |
@@ -422,7 +420,7 @@ In a folder that is not a git repository, with Windows PowerShell, the help, err
 | Restart recovery finishes what the last run left | PM checkpoint state is `waiting:pm` in the ledger; PR-4 notices are ordinary queued messages that the currency rule checks again after restart; the D1 digest stores the last sent day. |
 | Database transactions stay synchronous | `doneSteps` and the patch run in one synchronous transaction; read commands are synchronous; the wait happens before the transaction. |
 | Growing data has a cap in `limits.ts` | Section 4. |
-| Persisted fields have a reader and dual retention bounds | `checkpoint` lives on `task_graph_steps`, which already has dual retention, and is read by the turn report. |
+| Persisted fields have a reader and dual retention bounds | `checkpoint` lives on `task_graph_steps`, which already has dual retention, and is read by the turn report. `schedule show` reads the existing `replyId` metadata field on schedule run messages, subject to message retention. |
 | Hub error codes change on both sides | No new error code. A `worker wait` timeout exits 0 and prints the state. |
 | Text shipped to agents holds in any project | S9 and `src/prompt-portability.test.ts`. |
 | Tests wait for events, not for time | `worker wait` tests use fake timers and ledger events. |

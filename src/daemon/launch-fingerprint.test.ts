@@ -9,9 +9,9 @@ import { projectContext, workerContext } from "./test-helpers.ts";
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 // Updating any pinned hash restarts live sessions and triggers a one-time full cache write per session.
-const PINNED_HUB_USAGE_PROMPT_SHA = "96c0b31df31be77752cea30fcb146739a8dad8cf834b9a0d9264c4dea53713ad";
+const PINNED_HUB_USAGE_PROMPT_SHA = "62d656ab01f08bd0dc48f95bda88787f9b8bd760979e95bb3c9e82ca29bb64b3";
 const PINNED_SKILL_CATALOG_SHA = "379bde7b4a3182276ba37d31a17c960c6a44cbaef1596d041c49fddfa83605e9";
-const PINNED_PM_FINGERPRINT_PROMPT_SHA = "21aec72504887c84847c4a6d4f48eecfb6b0044d735891cfae10fc747b3eca00";
+const PINNED_PM_FINGERPRINT_PROMPT_SHA = "2d60c6319ca605ab7ee40bfc5bf7201982bba7eaf60aace05078b4fcf1ff368d";
 const PINNED_WORKER_FINGERPRINT_PROMPT_SHA = "ec9f82da7793d7baa57ed19dfa04b7c162617c0ed3fcda543634802f75d2137e";
 
 const CACHE_REBUILD_HINT =
