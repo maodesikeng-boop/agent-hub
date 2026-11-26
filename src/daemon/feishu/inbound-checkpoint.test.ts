@@ -1,15 +1,17 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DeviceId } from "../../shared/api.ts";
 import type { FeishuAppId, FeishuChatId, FeishuMessageId } from "../../shared/feishu.ts";
 import {
+  FEISHU_CONTROL_RETRY_MS,
   FEISHU_INBOUND_CATCHUP_WINDOW_MS,
   FEISHU_INBOUND_CHECKPOINT_CURSORS_MAX,
   FEISHU_INBOUND_CHECKPOINT_PLAINTEXT_MAX_BYTES,
   FEISHU_INBOUND_CHECKPOINT_RECEIPTS_MAX,
   FEISHU_INBOUND_CURSORS_MAX,
+  FEISHU_INBOUND_HANDOFF_RETRIES,
   FEISHU_INBOUND_PEER_UNSUPPORTED_TTL_MS,
   FEISHU_INBOUND_RECEIPTS_MAX,
   FEISHU_INBOUND_RECEIPTS_TTL_MS,
@@ -22,13 +24,6 @@ import { findResourceEntry } from "../../shared/resource-registry.ts";
 import { VENDOR_LIST } from "../../vendors/registry.ts";
 import type { RelayLeaseCheckpointPutRequest, RelayLeaseCheckpointRecord } from "../../relay/protocol.ts";
 import { dataDirDenyList } from "../driver/write-scope.ts";
-import { createResolveFolder } from "../ledger/files.ts";
-import { createLedger, type SqliteLedger } from "../ledger/index.ts";
-import type { CenterLease } from "../mesh/lease.ts";
-import { openDatabase } from "../store/db.ts";
-import { type Db } from "../store/index.ts";
-import { migrate } from "../store/migrate.ts";
-import { createFeishuAccountBot, createFeishuOfflineInbox, type FeishuAccountBot, type FeishuAccountMeshPort, type FeishuForwardedEvent } from "./account-bot.ts";
 import {
   createEmptyFeishuInboundState,
   createFeishuInboundSync,
@@ -41,14 +36,10 @@ import {
   readFeishuInboundStateFile,
   writeFeishuInboundStateFile,
   type FeishuInboundPeerFetchResult,
-  type FeishuInboundPeerPort,
-  type FeishuInboundPeerPushResult,
   type FeishuInboundRelayPort,
   type FeishuInboundStateSnapshot,
 } from "./inbound-checkpoint.ts";
-import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "./scopes.ts";
-import { createFeishuService, type FeishuService } from "./service.ts";
-import { createFakeFeishu, type FakeFeishu } from "./test-helpers.ts";
+import { createHubCluster, type HubNode } from "./inbound-test-helpers.ts";
 import type { FeishuRawMessageEvent } from "./transport.ts";
 
 const ACCOUNT_ID = "github:1001" as AccountId;
@@ -68,6 +59,12 @@ const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()!();
 });
+
+function barrier() {
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => { release = resolve; });
+  return { reached, release };
+}
 
 function tempDir(prefix: string): string {
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
@@ -142,187 +139,6 @@ function createSharedRelayStub(now: () => number): SharedRelayStub {
     },
   };
   return stub;
-}
-
-interface HubNode {
-  deviceId: DeviceId;
-  name: string;
-  root: string;
-  db: Db;
-  ledger: SqliteLedger;
-  service: FeishuService;
-  bot: FeishuAccountBot;
-  fake: FakeFeishu;
-  submitted: { clientId: string; text: string }[];
-  submitDelay: (() => Promise<void>) | null;
-  lease: CenterLease;
-  setLease(holding: boolean, holder: DeviceId | null, epoch: number): void;
-  online: boolean;
-}
-
-function createHubCluster(clockRef: { now: number }, relay: SharedRelayStub) {
-  const sharedFeishu: FakeFeishu = createFakeFeishu({ clock: () => clockRef.now });
-  sharedFeishu.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
-  const nodes = new Map<DeviceId, HubNode>();
-  const onlineListeners = new Map<DeviceId, Set<(id: DeviceId) => void>>();
-
-  const makeNode = async (deviceId: DeviceId, name: string, initialHolding: boolean, initialEpoch: number): Promise<HubNode> => {
-    const root = tempDir(`feishu-hub-${name.toLowerCase()}-`);
-    const dataHome = join(root, ".agent-hub");
-    mkdirSync(join(dataHome, "state"), { recursive: true });
-    const db = openDatabase(join(root, "hub.sqlite"));
-    migrate(db);
-    const ledger = createLedger(db, {
-      pmHomeRoot: join(dataHome, "pm-home"),
-      dataHome,
-      userHome: root,
-      osSandboxed: () => true,
-      worktreesDir: join(dataHome, "worktrees"),
-      resolveFolder: createResolveFolder({ dataHome, userHome: root }),
-    });
-    const nodeFake = createFakeFeishu({ clock: () => clockRef.now });
-    nodeFake.chats = sharedFeishu.chats;
-    nodeFake.sent = sharedFeishu.sent;
-    nodeFake.history = sharedFeishu.history;
-    nodeFake.cards = sharedFeishu.cards;
-    nodeFake.granted = sharedFeishu.granted;
-
-    let holding = initialHolding;
-    let holder: DeviceId | null = initialHolding ? deviceId : relay.holder;
-    let epoch = initialEpoch;
-    const leaseListeners = new Set<(h: DeviceId | null) => void>();
-    const lease: CenterLease = {
-      holding: () => holding,
-      holder: () => holder,
-      epoch: () => (holding ? epoch : null),
-      refresh: () => {},
-      onChange: (fn) => {
-        leaseListeners.add(fn);
-        return () => leaseListeners.delete(fn);
-      },
-      close: async () => {},
-    };
-    const submitted: { clientId: string; text: string }[] = [];
-    const peerPort: FeishuInboundPeerPort = {
-      onlinePeers: () => [...nodes.values()].filter((n) => n.deviceId !== deviceId && n.online).map((n) => n.deviceId),
-      async fetchPeerState(peerId): Promise<FeishuInboundPeerFetchResult> {
-        const peer = nodes.get(peerId);
-        if (peer === undefined || !peer.online) return { kind: "unavailable" };
-        return { kind: "ok", state: peer.service.exportInboundState?.() ?? null };
-      },
-      async pushPeerState(peerId, state): Promise<FeishuInboundPeerPushResult> {
-        const peer = nodes.get(peerId);
-        if (peer === undefined || !peer.online) return { kind: "unavailable" };
-        peer.service.applyInboundState?.(state);
-        return { kind: "ok" };
-      },
-    };
-    const nodeRef: { current?: HubNode } = {};
-    const service = createFeishuService({
-      db,
-      ledger,
-      router: {
-        async submitCommand(input) {
-          if (nodeRef.current?.submitDelay !== null && nodeRef.current?.submitDelay !== undefined) {
-            await nodeRef.current.submitDelay();
-          }
-          submitted.push({ clientId: input.clientId, text: input.text });
-          return {
-            id: submitted.length,
-            clientId: input.clientId,
-            text: input.text,
-            status: "answered",
-            reply: `ok:${input.text}`,
-            error: null,
-            plan: null,
-            createdAt: clockRef.now,
-            updatedAt: clockRef.now,
-          } as never;
-        },
-      },
-      secretsFile: join(dataHome, "state", "feishu-secrets.json"),
-      inboundStateFile: join(dataHome, "state", "feishu-inbound.json"),
-      inboundRelay: relay.portFor(deviceId),
-      inboundPeers: peerPort,
-      uploadsDir: join(dataHome, "uploads"),
-      sentFilesDir: join(dataHome, "sent-files"),
-      device: { id: deviceId, name },
-      lease,
-      now: () => clockRef.now,
-      log: () => {},
-      createTransport: () => nodeFake,
-    });
-    const listeners = new Set<(id: DeviceId) => void>();
-    onlineListeners.set(deviceId, listeners);
-    const meshPort: FeishuAccountMeshPort = {
-      selfId: deviceId,
-      deviceName: (id) => nodes.get(id)?.name ?? null,
-      isOnline: (id) => nodes.get(id)?.online ?? false,
-      async post(id, _path, body) {
-        const peer = nodes.get(id);
-        if (peer === undefined || !peer.online) throw new Error("peer offline");
-        return (await peer.bot.acceptForwarded(body as FeishuForwardedEvent)) ?? {};
-      },
-      onOnline: (fn) => {
-        listeners.add(fn);
-        return () => listeners.delete(fn);
-      },
-    };
-    const bot = createFeishuAccountBot({
-      mesh: meshPort,
-      local: service,
-      inbox: createFeishuOfflineInbox(db),
-      now: () => clockRef.now,
-      log: () => {},
-    });
-    service.useAccountBot(bot);
-    await service.start();
-    const node: HubNode = {
-      deviceId,
-      name,
-      root,
-      db,
-      ledger,
-      service,
-      bot,
-      fake: nodeFake,
-      submitted,
-      submitDelay: null,
-      lease,
-      online: true,
-      setLease(nextHolding, nextHolder, nextEpoch) {
-        holding = nextHolding;
-        holder = nextHolder;
-        epoch = nextEpoch;
-        for (const fn of leaseListeners) fn(nextHolder);
-      },
-    };
-    nodeRef.current = node;
-    nodes.set(deviceId, node);
-    cleanups.push(async () => {
-      bot.close();
-      await service.close();
-      ledger.close();
-      db.close();
-    });
-    return node;
-  };
-
-  const notifyOnline = (cameOnline: DeviceId) => {
-    const target = nodes.get(cameOnline);
-    if (target !== undefined) target.online = true;
-    for (const [id, set] of onlineListeners) {
-      if (id !== cameOnline) for (const fn of set) fn(cameOnline);
-    }
-  };
-
-  const deliverLive = async (node: HubNode, event: FeishuRawMessageEvent) => {
-    node.fake.event(event);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await node.service.idle();
-  };
-
-  return { fakeFeishu: sharedFeishu, nodes, makeNode, notifyOnline, deliverLive };
 }
 
 describe("Feishu inbound state lattice, pruning, E2EE, and persistence", () => {
@@ -621,8 +437,11 @@ describe("FeishuInboundSync coordinator degradation, shutdown, and isolation", (
     // Same millisecond, distinct messageId must still be accepted.
     expect(sync.tryClaim({ messageId: m2, chatId: ROUTER_CHAT, messageAt: now, isOwnerOfChat: true }).kind).toBe("claimed");
 
+    const dispatch = sync.dispatchSignal;
     currentApp = APP_B;
     sync.resetForApp(APP_B);
+    expect(dispatch.aborted).toBe(true);
+    expect(sync.dispatchSignal.aborted).toBe(false);
     expect(sync.isAlreadyExecuted(m1)).toBe(false);
     expect(sync.snapshot()?.appId).toBe(APP_B);
   });
@@ -681,8 +500,17 @@ describe("FeishuInboundSync coordinator degradation, shutdown, and isolation", (
 });
 
 describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () => {
+  async function moveLeaseToMac(relay: SharedRelayStub, tokyo: HubNode, mac: HubNode) {
+    relay.holder = MAC;
+    relay.epoch = 2;
+    tokyo.setLease(false, MAC, 1);
+    mac.setLease(true, MAC, 2);
+    await mac.service.syncLeaseConnection();
+    await mac.service.idle();
+  }
+
   async function bootstrapPair(clockRef: { now: number }, relay: SharedRelayStub) {
-    const cluster = createHubCluster(clockRef, relay);
+    const cluster = createHubCluster(clockRef, relay, tempDir, cleanups);
     const tokyo = await cluster.makeNode(TOKYO, "Tokyo", true, 1);
     const mac = await cluster.makeNode(MAC, "MacBook Pro", false, 0);
 
@@ -699,6 +527,36 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
     return { cluster, tokyo, mac };
   }
 
+  async function failDuringHandoff(retry: () => Promise<void> = async () => {}) {
+    const clockRef = { now: 1_764_136_520_000 };
+    const relay = createSharedRelayStub(() => clockRef.now);
+    const { tokyo, mac } = await bootstrapPair(clockRef, relay);
+    const started = barrier();
+    const fail = barrier();
+    const error = new Error("injected Router submission failure");
+    const submit = vi.fn(retry).mockImplementationOnce(async () => {
+      started.release();
+      await fail.reached;
+      throw error;
+    });
+    tokyo.submitDelay = submit;
+    const messageId = "om_retry_handoff" as FeishuMessageId;
+    clockRef.now += 2_000;
+    tokyo.fake.event(userMessage(messageId, "Retry after handoff", clockRef.now));
+    try {
+      await started.reached;
+      await moveLeaseToMac(relay, tokyo, mac);
+      await tokyo.service.syncLeaseConnection();
+    } finally {
+      fail.release();
+    }
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+    return { tokyo, mac, messageId, submit };
+  }
+
   it("replays neither M1 on takeover nor M2 on bounce-back across two hubs (S1)", async () => {
     const clockRef = { now: 1_764_136_360_000 };
     const relay = createSharedRelayStub(() => clockRef.now);
@@ -713,18 +571,12 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
     // 2. Tokyo stops; Mac takes epoch 2; user sends M2 during handoff.
     clockRef.now += 14_000;
     tokyo.online = false;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
 
     clockRef.now += 3_000;
     const m2 = userMessage("om_incident_m2", "Now run on Mac", clockRef.now);
     cluster.fakeFeishu.recordMessage(m2);
 
-    relay.holder = MAC;
-    relay.epoch = 2;
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
+    await moveLeaseToMac(relay, tokyo, mac);
 
     // Mac must NOT replay M1, and must execute M2 exactly once.
     expect(mac.submitted.map((c) => c.clientId)).toEqual(["feishu:om_incident_m2"]);
@@ -753,15 +605,8 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
     await cluster.deliverLive(tokyo, userMessage("om_turn_1", "First turn", clockRef.now));
     expect(tokyo.submitted).toHaveLength(1);
 
-    // Clean yield from Tokyo to Mac.
     clockRef.now += 2_000;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
-    relay.holder = MAC;
-    relay.epoch = 2;
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
+    await moveLeaseToMac(relay, tokyo, mac);
 
     clockRef.now += 2_000;
     await cluster.deliverLive(mac, userMessage("om_turn_2", "Second turn", clockRef.now));
@@ -781,57 +626,142 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
       return { ...port, putCheckpoint: (...args) => writeGate.then(() => port.putCheckpoint(...args)) };
     };
     const { tokyo, mac } = await bootstrapPair(clockRef, relay);
-    let releaseWrite!: () => void;
-    writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const checkpointWrite = barrier();
+    const claimMirrored = barrier();
+    writeGate = checkpointWrite.reached;
+    const apply = mac.service.applyInboundState!;
+    const spy = vi.spyOn(mac.service, "applyInboundState").mockImplementation((state) => {
+      apply(state);
+      if (state.receipts.om_lease_flip?.phase === "claimed") claimMirrored.release();
+    });
     clockRef.now += 2_000;
     try {
       tokyo.fake.event(userMessage("om_lease_flip", "Message during hub handoff", clockRef.now));
-      await vi.waitFor(() => expect(mac.service.exportInboundState?.()?.receipts.om_lease_flip?.phase).toBe("claimed"));
+      await claimMirrored.reached;
       expect(tokyo.submitted).toEqual([]);
-      relay.holder = MAC;
-      relay.epoch = 2;
-      tokyo.setLease(false, MAC, 1);
-      mac.setLease(true, MAC, 2);
-      await mac.service.syncLeaseConnection();
-      await mac.service.idle();
+      const takeover = moveLeaseToMac(relay, tokyo, mac);
+      checkpointWrite.release();
+      await takeover;
     } finally {
-      releaseWrite();
+      checkpointWrite.release();
+      spy.mockRestore();
     }
     await tokyo.service.syncLeaseConnection();
     await tokyo.service.idle();
     expect([...tokyo.submitted, ...mac.submitted].map((c) => c.clientId)).toEqual(["feishu:om_lease_flip"]);
   });
 
-  it("prevents duplicate execution on mid-turn failover while still catching up subsequent messages (S3)", async () => {
+  it.each(["succeeds", "fails"] as const)("handles a claimed Router DM when the old hub %s after takeover (S3)", async (outcome) => {
     const clockRef = { now: 1_764_136_500_000 };
     const relay = createSharedRelayStub(() => clockRef.now);
     const { cluster, tokyo, mac } = await bootstrapPair(clockRef, relay);
 
-    let finishTokyoTurn!: () => void;
-    tokyo.submitDelay = () => new Promise<void>((resolve) => (finishTokyoTurn = resolve));
+    const started = barrier();
+    const finish = barrier();
+    const submit = vi.fn(async () => {}).mockImplementationOnce(async () => {
+      started.release();
+      await finish.reached;
+      if (outcome === "fails") throw new Error("injected Router submission failure");
+    });
+    tokyo.submitDelay = submit;
 
     clockRef.now += 2_000;
     tokyo.fake.event(userMessage("om_inflight_m1", "Long Router turn", clockRef.now));
-    // Wait until Tokyo's router.submitCommand has started and claimed M1.
-    await vi.waitFor(() => expect(finishTokyoTurn).toBeTypeOf("function"));
-
-    // While M1 is still running on Tokyo, M2 arrives in Feishu and lease flips to Mac.
-    clockRef.now += 2_000;
-    cluster.fakeFeishu.recordMessage(userMessage("om_after_inflight_m2", "Follow-up during failover", clockRef.now));
-
-    relay.holder = MAC;
-    relay.epoch = 2;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
-
-    finishTokyoTurn();
-    await tokyo.service.idle();
+    try {
+      await started.reached;
+      clockRef.now += 2_000;
+      cluster.fakeFeishu.recordMessage(userMessage("om_after_inflight_m2", "Follow-up during failover", clockRef.now));
+      await moveLeaseToMac(relay, tokyo, mac);
+      expect(mac.service.exportInboundState?.()?.receipts.om_inflight_m1?.phase).toBe("claimed");
+      expect(mac.submitted.map((c) => c.clientId)).toEqual(["feishu:om_after_inflight_m2"]);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      finish.release();
+      await vi.runAllTimersAsync();
+      await tokyo.service.idle();
+    } finally {
+      finish.release();
+      vi.useRealTimers();
+    }
 
     expect(tokyo.submitted.map((c) => c.clientId)).toEqual(["feishu:om_inflight_m1"]);
-    expect(mac.submitted.map((c) => c.clientId)).toEqual(["feishu:om_after_inflight_m2"]);
+    expect(submit).toHaveBeenCalledTimes(outcome === "fails" ? 2 : 1);
+    expect(mac.service.exportInboundState?.()?.receipts.om_inflight_m1?.phase).toBe("handled");
+  });
+
+  it("cancels handoff backoff as soon as the old service closes", async () => {
+    let closing: Promise<void> | undefined;
+    try {
+      const { tokyo, mac, messageId, submit } = await failDuringHandoff();
+      const read = vi.spyOn(tokyo.db, "get");
+      const write = vi.spyOn(tokyo.db, "run");
+      let closed = false;
+      closing = tokyo.service.close().then(() => { closed = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect.soft(closed).toBe(true);
+      expect.soft(vi.getTimerCount()).toBe(0);
+      await vi.runAllTimersAsync();
+      await closing;
+      expect.soft(submit).toHaveBeenCalledTimes(1);
+      expect.soft(read.mock.calls.filter(([sql]) => sql.includes("router_commands"))).toEqual([]);
+      expect.soft(write).not.toHaveBeenCalled();
+      expect(mac.service.exportInboundState?.()?.receipts[messageId]?.phase).toBe("claimed");
+    } finally {
+      if (vi.isFakeTimers()) await vi.runAllTimersAsync();
+      await closing;
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels handoff backoff when the transport is replaced for the same app", async () => {
+    try {
+      const { tokyo, submit } = await failDuringHandoff();
+      await tokyo.service.setup.saveCredentials({ brand: "feishu", appId: APP_A, appSecret: SECRET_B });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await tokyo.service.idle();
+      expect(submit).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["handled", "claimed"] as const)("drops a sleeping retry when a peer receipt supersedes the claim with %s", async (phase) => {
+    try {
+      const { tokyo, mac, messageId, submit } = await failDuringHandoff();
+      const peer = mac.service.exportInboundState!()!;
+      const receipt = peer.receipts[messageId]!;
+      tokyo.service.applyInboundState!({
+        ...peer,
+        seq: peer.seq + 1,
+        receipts: { ...peer.receipts, [messageId]: { ...receipt, phase, claimedBy: MAC, epoch: 2 } },
+      });
+      await vi.runAllTimersAsync();
+      await tokyo.service.idle();
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(tokyo.service.exportInboundState?.()?.receipts[messageId]).toMatchObject({ phase, claimedBy: MAC, epoch: 2 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops retrying a claimed DM at the handoff retry limit", async () => {
+    try {
+      const { tokyo, mac, messageId, submit } = await failDuringHandoff(async () => {
+        throw new Error("Router is still unavailable");
+      });
+      for (let attempt = 0; attempt < FEISHU_INBOUND_HANDOFF_RETRIES; attempt++) {
+        await vi.advanceTimersByTimeAsync(FEISHU_CONTROL_RETRY_MS * 2 ** attempt - 1);
+        expect(submit).toHaveBeenCalledTimes(attempt + 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(submit).toHaveBeenCalledTimes(attempt + 2);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+      await tokyo.service.idle();
+      expect(mac.service.exportInboundState?.()?.receipts[messageId]?.phase).toBe("claimed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("deduplicates non-deliver routes and suppresses false 15-minute gap reminders on takeover (S5)", async () => {
@@ -852,13 +782,7 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
     // Standby Mac had a 20-minute-old local cursor; takeover must not replay recent /settings or post a false gap reminder.
     clockRef.now += 5_000;
     const sentBeforeTakeover = cluster.fakeFeishu.sent.length;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
-    relay.holder = MAC;
-    relay.epoch = 2;
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
+    await moveLeaseToMac(relay, tokyo, mac);
 
     const newPosts = cluster.fakeFeishu.sent.slice(sentBeforeTakeover);
     expect(newPosts.some((p) => p.content.includes("离线超过"))).toBe(false);
@@ -952,7 +876,7 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
   it("seeds from legacy SQLite feishu_inbound_cursors on upgrade without state/feishu-inbound.json (S8)", async () => {
     const clockRef = { now: 1_764_137_200_000 };
     const relay = createSharedRelayStub(() => clockRef.now);
-    const cluster = createHubCluster(clockRef, relay);
+    const cluster = createHubCluster(clockRef, relay, tempDir, cleanups);
     const tokyo = await cluster.makeNode(TOKYO, "Tokyo", true, 1);
 
     await tokyo.service.setup.saveCredentials({ brand: "feishu", appId: APP_A, appSecret: SECRET_A });
@@ -987,13 +911,7 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
 
     // Hand off to Mac: none of the 8 vendor turns may replay.
     clockRef.now += 2_000;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
-    relay.holder = MAC;
-    relay.epoch = 2;
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
+    await moveLeaseToMac(relay, tokyo, mac);
     expect(mac.submitted).toEqual([]);
   });
 });
