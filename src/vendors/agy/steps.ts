@@ -16,6 +16,8 @@ import {
 } from "./driver-state.ts";
 import { checkWorkerToolViolation, observeAgyUsage } from "./protocol.ts";
 import { checkAgyConnectorCall } from "./readonly.ts";
+import { agyChecklistFromStep } from "./checklist.ts";
+import { AGY_CHECKLIST_TOOL } from "./spec.ts";
 
 export function onReportedBackgroundTasks(host: AgyDriverHost, st: SessionState, proc: Proc, rawTasks: unknown): void {
   const next = normalizeBackgroundTasks(rawTasks, st.reportedTasks, Date.now());
@@ -151,12 +153,29 @@ function toolNameOf(su: Record<string, unknown>, toolInfo: Record<string, unknow
 function onToolStep(host: AgyDriverHost, st: SessionState, proc: Proc, ctx: StepContext): void {
   const { su, stepId, turnNo, at } = ctx;
   if (ctx.inFlight) host.markProcessing(st, ctx.inFlight, at);
-  flushStepTexts(host, st, at);
-  st.hasTextSinceLastTool = false;
 
   const toolInfo = asObject(su.tool_info) ?? undefined;
   const toolName = toolNameOf(su, toolInfo);
   const parameters = toolInfo?.parameters ?? su.parameters ?? null;
+  if (toolName === AGY_CHECKLIST_TOOL) {
+    if (su.state !== "ACTIVE" && su.state !== "DONE" && su.state !== undefined) return;
+    if (st.completedToolSteps.has(stepId)) return;
+    const update = agyChecklistFromStep(toolName, parameters);
+    if (update === null) return;
+    st.completedToolSteps.add(stepId);
+    flushStepTexts(host, st, at);
+    st.hasTextSinceLastTool = false;
+    host.emit(st.id, {
+      type: "agent.checklist",
+      uuid: `agy-checklist-${conversationIdOf(host, st)}-${turnNo}-${stepId}`,
+      update,
+      at,
+    });
+    return;
+  }
+  flushStepTexts(host, st, at);
+  st.hasTextSinceLastTool = false;
+
   const toolUseId = `tool-${turnNo}-${stepId}`;
   const isTerminal = typeof su.state === "string" && AGY_TERMINAL_TOOL_STATES.has(su.state);
   const isFormalState = su.state === "ACTIVE" || isTerminal || su.state === undefined;

@@ -1990,6 +1990,33 @@ describe("7. 后台任务跟踪与 background.changed 事件", () => {
   });
 });
 
+describe("headless checklist stream", () => {
+  it("applies each recorded update_steps call once and emits no ordinary tool events", async () => {
+    const frames = readFileSync(new URL("../../../test/fixtures/progress/agy-update-steps.live.jsonl", import.meta.url), "utf8")
+      .trimEnd().split("\n").map((line) => {
+        const { conversation_id: _ignored, ...stepUpdate } = (JSON.parse(line) as { step_update: Record<string, unknown> }).step_update;
+        return { type: "rawStepUpdate" as const, stepUpdate };
+      });
+    const t = makeAgyHarness({ script: { turns: [{ steps: frames }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Update the checklist"));
+    await t.waitFor("turn.ended");
+    expect(t.of("agent.checklist").map((event) => event.update)).toEqual([
+      { kind: "replace", items: [
+        { id: null, title: "Check readiness", status: "in_progress" },
+        { id: null, title: "Close probe", status: "pending" },
+      ] },
+      { kind: "replace", items: [
+        { id: null, title: "Check readiness", status: "completed" },
+        { id: null, title: "Close probe", status: "cancelled" },
+      ] },
+    ]);
+    expect(t.of("agent.tool")).toEqual([]);
+    expect(t.of("agent.tool_preview")).toEqual([]);
+    expect(t.of("agent.tool_result")).toEqual([]);
+  });
+});
+
 describe("工具的返回原文（认技能加载用，spec 的 skillSignals.outputField）", () => {
   // agy 1.5.9 实跑抓的流（2026-11-16，--output-format stream-json）：read_file 读一个技能、run_command cat 同一个文件，只留工具的 step_update
   const LIVE = readFileSync(new URL("./fixtures/skill-read-stream.jsonl", import.meta.url), "utf8")

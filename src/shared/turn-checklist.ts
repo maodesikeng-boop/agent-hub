@@ -31,8 +31,8 @@ export function newTurnWatch(): TurnChecklistWatch {
  * - Never throws on any `DriverEvent`.
  */
 export function turnWatchStep(
-  watch: TurnChecklistWatch | null,
-  event: DriverEvent,
+  _watch: TurnChecklistWatch | null,
+  _event: DriverEvent,
 ): { watch: TurnChecklistWatch | null; remind: boolean } {
   throw new Error("Not implemented");
 }

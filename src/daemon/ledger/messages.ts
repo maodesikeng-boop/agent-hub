@@ -621,6 +621,7 @@ export function createLedgerMessages(
     page,
     transition,
     applyEvent,
+    checklistFromHub: checklist.fromHub,
     settleTurn,
     insertSystemMessage,
     insertAskMessage,

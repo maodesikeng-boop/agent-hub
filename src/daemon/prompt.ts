@@ -23,6 +23,8 @@ import {
   WORKER_SEND_MAX_TOKENS,
 } from "../shared/index.ts";
 import type { AgentVendor, LaunchContext, PersonaUpdate, PmMode, ProjectCard, SetupOutcome, VendorSpec, WorkerRecord } from "../shared/index.ts";
+import { HUB_CHECKLIST_COMMAND } from "../shared/hub-checklist.ts";
+import { checklistPromptTool } from "../vendors/_common/checklist.ts";
 import { cleanTerminalText } from "./setup/index.ts";
 
 export const DEFAULT_PM_NAME = "项目经理";
@@ -166,6 +168,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} models [--vendor <vendors>] [--refresh]\`：查看各厂商可用模型与支持的思考程度
 - **其他**（不常用，详细参数跑 \`${HUB} help\` 看）
   - \`${HUB} status\`：看我是谁、我的项目、文件夹和活跃任务图
+  - \`${HUB_CHECKLIST_COMMAND}\`：当没有专用清单工具时，更新本轮的进度清单
   - \`${HUB} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`${HUB} persona show|edit\`：查看、修改性格设定和干活模式
   - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务（用户要定期做某件事时才建，如日报、周期巡检）
@@ -236,6 +239,7 @@ export function personaUpdateNote(update: PersonaUpdate, skillFile?: string): st
 export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 
 - \`${HUB} status\`：看我是哪个 Worker、任务说明（或整张图的目标、本步职责与上游交棒背景）、在哪干活；忘了目标或上游背景时随时跑 \`${HUB} status\` 查看。直接在 shell 里敲，**不要在命令里写任何环境变量**：${HUB} 会自己读，命令里出现变量会被权限检查拒绝。
+- \`${HUB_CHECKLIST_COMMAND}\`：当没有专用清单工具时，更新本轮的进度清单，只影响自己的会话。
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
 const WORKER_RULES_COMMON = `# 你的规矩
@@ -254,39 +258,29 @@ export const WORKER_BLOCKING_WAIT_NOTE =
 
 function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
   const spec = specOf(vendor);
-  return [WORKER_RULES_COMMON, checklistRuleNote(vendor), spec.capabilities.backgroundWake
-    ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE].filter(Boolean).join("\n");
+  const wait = spec.capabilities.backgroundWake
+    ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE;
+  return `${WORKER_RULES_COMMON}\n${wait}`;
 }
 
-/**
- * Postcondition: for a vendor whose spec reports checklist events, returns one rule line (Chinese, project-agnostic)
- * telling the agent to list a turn of three or more steps with `checklist.promptTool` and tick each step off as it
- * finishes. Returns null for vendors with no checklist source. Both the PM and Worker prompts include it.
- */
-export function checklistRuleNote(vendor: string): string | null {
-  const tool = specOf(vendor).checklist.promptTool;
-  return tool === undefined ? null : `- **进度清单**：一轮要做 3 步或更多时，用 ${tool} 列出步骤，每完成一项就标记为完成。`;
-}
-
-/**
- * Postcondition: a checklist rule section titled in Chinese (project-agnostic, no dates or session data) that every vendor's PM and
- * Worker prompt carries. It names the tool from `checklistPromptTool` (with `hub checklist` usage for vendors without
- * their own tool), states the trigger from `turnWatchStep` (editing any file, or a second command in one turn), says to
- * list the whole turn before the first edit or command, to mark each step in progress and done as it goes, to finish or
- * cancel every item before the turn ends, that pure questions and read-only lookups need no list, and that the rule is
- * not optional because the user follows progress through it. Returns the same string for the same vendor every call.
- */
 export function checklistRuleSection(vendor: string): string {
-  throw new Error("Not implemented");
+  const { tool, hub } = checklistPromptTool(specOf(vendor));
+  const rule = `# 进度清单
+
+一轮里只要改文件，或要跑两条以上命令，就必须列进度清单。用第一个工具调用，通过 ${tool} 列出本轮的全部步骤，再改文件或跑命令。如果中途才发现需要列，先补清单，再改文件或跑第二条命令。
+
+开始一项就标为进行中，做完一项就标为完成。结束前，把每一项标为完成或取消。用户靠这张清单跟进，不能省略。
+
+纯问答和只用读取、搜索工具查资料不用列。用命令查资料时，命令仍计数。`;
+  if (!hub) return rule;
+  return `${rule}
+
+用 \`${HUB_CHECKLIST_COMMAND} set "步骤一" "步骤二"\` 列出整张清单，第一项自动开始。用 \`${HUB_CHECKLIST_COMMAND} start <编号>\` 开始一项，用 \`${HUB_CHECKLIST_COMMAND} done <编号>\` 完成一项，用 \`${HUB_CHECKLIST_COMMAND} cancel <编号>\` 取消一项。编号从 1 开始。`;
 }
 
-/**
- * Postcondition: the one-line system note (starting with the system tag) the daemon sends when a turn hits the trigger
- * without a checklist update. It names the same tool as `checklistRuleSection` and reads correctly whether it arrives
- * inside the turn that missed the list or ahead of the session's next message.
- */
 export function checklistReminderNote(vendor: string): string {
-  throw new Error("Not implemented");
+  const { tool } = checklistPromptTool(specOf(vendor));
+  return `【系统】刚才改文件或连续跑命令时漏列了进度清单。如果这项工作还在继续，先用 ${tool} 补上整张清单再接着做。接下来如果要改文件或跑多条命令，也先列清单。`;
 }
 
 export const WORKER_READONLY_NOTE = "- 这次只读：只看、只查，不改文件，也不跑会改东西的命令；要批准的操作会被系统直接拒绝。结论写进汇报。";
@@ -385,6 +379,7 @@ export function buildWorkerSystemPrompt(ctx: LaunchContext, cwd: string): string
     workerRoleSection(ctx),
     workerReportSection(),
     workerRulesSection(vendor),
+    checklistRuleSection(vendor),
     WORKER_HUB_USAGE_PROMPT,
     workerProjectSection(project),
   ];
@@ -409,7 +404,8 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string, options: PmPr
   const parts = [
     roleSection(ctx),
     projectSection(ctx.project),
-    [buildPmModePrompt(ctx.pm.mode, vendor, options.taskGraphSkillFile), PM_COMMON_RULES, checklistRuleNote(vendor)].filter(Boolean).join("\n"),
+    [buildPmModePrompt(ctx.pm.mode, vendor, options.taskGraphSkillFile), PM_COMMON_RULES].join("\n"),
+    checklistRuleSection(vendor),
     PM_MEMORY_PROMPT,
     HUB_USAGE_PROMPT,
   ];

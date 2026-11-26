@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeChecklistStatus, type ChecklistItemInput, type ChecklistItemPatch } from "../../shared/checklist.ts";
+import { HUB_CHECKLIST_COMMAND } from "../../shared/hub-checklist.ts";
 import { CHECKLIST_MAX_ITEMS } from "../../shared/limits.ts";
 import type { VendorSpec } from "../types.ts";
 
@@ -77,11 +78,9 @@ export function withChecklistEnv(spec: VendorSpec, env: Record<string, string>, 
   return next;
 }
 
-/**
- * Postcondition: names the tool the prompt tells this vendor's agents to keep their list in. A vendor with at least one
- * checklist source gets its own `promptTool` and `hub: false`; a vendor with none gets the `hub checklist` command
- * and `hub: true`. The result depends only on the spec, so it is identical for every session of the vendor.
- */
 export function checklistPromptTool(spec: VendorSpec): { tool: string; hub: boolean } {
-  throw new Error("Not implemented");
+  const tool = spec.checklist.promptTool;
+  return spec.checklist.sources.length > 0 && tool !== undefined
+    ? { tool, hub: false }
+    : { tool: `\`${HUB_CHECKLIST_COMMAND}\``, hub: true };
 }

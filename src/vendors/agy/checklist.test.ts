@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import { CHECKLIST_TITLE_MAX_CHARS } from "../../shared/limits.ts";
 import { agyChecklistFromStep } from "./checklist.ts";
 
-// Frame shape derived from the agent's own description of `update_steps` (statuses from the 1.5.18 binary's
-// validation message). Implementation replaces this with a recorded headless frame if the field names differ.
 const steps = (list: unknown) => ({ steps: list });
 
 describe(agyChecklistFromStep.name, () => {

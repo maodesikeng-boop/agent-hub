@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checklistOf, MIN_TOOL_STEP_VISIBLE_MS, PM_ARCHIVE_RETENTION_MS, PM_TOOL_MESSAGE_RETENTION_MS, PM_TOOL_MESSAGES_MAX_PER_CONV, type ChecklistUpdate, type Change, type DriverEvent } from "../../shared/index.ts";
 import { claudeChecklistFromToolResult, claudeChecklistFromToolUse, createClaudeChecklistState } from "../../vendors/claude/checklist.ts";
+import { createAgentApi } from "../agent-api/server.ts";
+import { createSessionTokens } from "../agent-api/tokens.ts";
 import { createSessionStore, type Db } from "../store/index.ts";
 import { insertTestSession, openTestDb } from "../store/test-helpers.ts";
 import { createLedgerContext } from "./context.ts";
@@ -52,6 +54,43 @@ const first: ChecklistUpdate = {
 };
 
 describe("ledger checklists", () => {
+  it("applies hub updates to the session selected by the PM or read-only Worker token", async () => {
+    vi.useRealTimers();
+    const folder = join(dir, "project");
+    mkdirSync(folder);
+    ledger.hubCall(pm.sessionId, "project.create", { folder });
+    const { worker } = ledger.hubCall(pm.sessionId, "worker.start", {
+      title: "Read settings", task: "Compare the settings.", vendor: "pi", readonly: true, noWorktree: true,
+    }).data;
+    const session = db.get<{ id: number; conversation_id: number }>("SELECT id, conversation_id FROM agent_sessions WHERE worker_id = ?", worker.id)!;
+    const tokens = createSessionTokens();
+    const pmToken = tokens.issue(pm.sessionId);
+    const workerToken = tokens.issue(session.id);
+    const app = createAgentApi({ ledger, tokens });
+    const post = (token: string, payload: object) =>
+      app.inject({ method: "POST", url: "/v1/checklist", headers: { authorization: `Bearer ${token}` }, payload });
+    try {
+      expect((await post(pmToken, { kind: "set", titles: ["PM work"] })).statusCode).toBe(200);
+      expect((await post(workerToken, { kind: "set", titles: ["Read", "Compare"] })).statusCode).toBe(200);
+      expect((await post(workerToken, { kind: "done", position: 1 })).statusCode).toBe(200);
+      const absent = await post(workerToken, { kind: "done", position: 3 });
+      expect(absent.statusCode).toBe(400);
+      expect(absent.json()).toMatchObject({ ok: false, code: "invalid" });
+      expect(absent.body).toContain("hub checklist done");
+      expect((await post(workerToken, { kind: "done", position: 1, sessionId: pm.sessionId })).statusCode).toBe(400);
+      expect((await post("invalid", { kind: "done", position: 1 })).statusCode).toBe(401);
+      expect(checklistRows().map(checklistOf)).toMatchObject([[{ title: "PM work", status: "in_progress" }]]);
+      const rows = ledger.messagesBefore(session.conversation_id, Number.MAX_SAFE_INTEGER).messages
+        .filter((message) => message.kind === "checklist").map(checklistOf);
+      expect(rows).toMatchObject([
+        [{ title: "Read", status: "in_progress" }, { title: "Compare", status: "pending" }],
+        [{ title: "Read", status: "completed" }, { title: "Compare", status: "in_progress" }],
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("stores immutable snapshots, deduplicates updates and ignores subagent checklists", () => {
     setChecklist("first", first);
     setChecklist("same", first);

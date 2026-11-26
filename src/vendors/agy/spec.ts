@@ -4,6 +4,7 @@ import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 export const AGY_CLI_HOME_REL = ".gemini/antigravity-cli";
 export const AGY_LEGACY_HOME_REL = ".gemini/antigravity";
 export const AGY_MCP_CONFIG_REL = ".gemini/config/mcp_config.json";
+export const AGY_CHECKLIST_TOOL = "update_steps";
 
 const STANDARD_EFFORTS: readonly string[] = ["low", "medium", "high"];
 const EFFORTS: readonly string[] = [...STANDARD_EFFORTS, "xhigh"];
@@ -94,6 +95,7 @@ export default defineVendor({
   tools: {
     actions: {
       run_command: "command",
+      [AGY_CHECKLIST_TOOL]: "todo",
       read_file: "read",
       view_file: "read",
       view_file_outline: "read",
@@ -114,7 +116,7 @@ export default defineVendor({
       read_resource: "connector_resource",
     },
   },
-  checklist: { sources: [] },
+  checklist: { sources: ["todo_tool"], promptTool: `\`${AGY_CHECKLIST_TOOL}\`` },
   skillSignals: {
     outputField: "output",
     // read_file output has no body ('14 lines, 310 bytes'), so match on the Path argument.

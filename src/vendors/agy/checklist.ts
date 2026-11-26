@@ -1,15 +1,38 @@
-import type { ChecklistUpdate } from "../../shared/checklist.ts";
+import { z } from "zod";
+import { clipChecklistTitle, type ChecklistItemInput, type ChecklistStatus, type ChecklistUpdate } from "../../shared/checklist.ts";
+import { CHECKLIST_MAX_ITEMS } from "../../shared/limits.ts";
+import { AGY_CHECKLIST_TOOL } from "./spec.ts";
 
-// Antigravity's built-in `update_steps` tool sends the whole ordered step list on every call, each step with a title
-// and one of pending, in_progress, done, skipped, or failed.
+const parametersSchema = z.object({ steps: z.unknown().optional(), Steps: z.unknown().optional() });
+const stepSchema = z.object({
+  title: z.string().optional(),
+  Title: z.string().optional(),
+  status: z.string().optional(),
+  Status: z.string().optional(),
+});
+const statusSchema = z.enum(["pending", "in_progress", "done", "skipped", "failed"]);
+const statuses: Record<z.infer<typeof statusSchema>, ChecklistStatus> = {
+  pending: "pending",
+  in_progress: "in_progress",
+  done: "completed",
+  skipped: "cancelled",
+  failed: "cancelled",
+};
 
-/**
- * Postconditions:
- * - For `update_steps` whose parameters hold a step array (`steps` or `Steps`), returns a `replace` with the steps in
- *   order, titles clipped like other vendors, ids null. `done` maps to `completed`; `skipped` and `failed` map to
- *   `cancelled`. A step without a usable title or status is skipped. An empty array returns an empty `replace`.
- * - Any other tool name, or parameters without a step array, returns null. Never throws.
- */
 export function agyChecklistFromStep(toolName: string, parameters: unknown): ChecklistUpdate | null {
-  throw new Error("Not implemented");
+  if (toolName !== AGY_CHECKLIST_TOOL) return null;
+  const payload = parametersSchema.safeParse(parameters).data;
+  const steps = payload?.steps ?? payload?.Steps;
+  if (!Array.isArray(steps)) return null;
+  const items: ChecklistItemInput[] = [];
+  for (const raw of steps) {
+    const step = stepSchema.safeParse(raw).data;
+    if (step === undefined) continue;
+    const title = clipChecklistTitle(step.title ?? step.Title ?? "");
+    const status = statusSchema.safeParse(step.status ?? step.Status).data;
+    if (title === "" || status === undefined) continue;
+    items.push({ id: null, title, status: statuses[status] });
+    if (items.length === CHECKLIST_MAX_ITEMS) break;
+  }
+  return items.length > 0 || steps.length === 0 ? { kind: "replace", items } : null;
 }

@@ -114,6 +114,18 @@ describe("hub cli", () => {
 
   const stdinOf = (text: string) => Readable.from([Buffer.from(text, "utf8")]);
 
+  it("sends checklist titles as positional text and rejects invalid positions locally", async () => {
+    ledger.defaultRole = "worker";
+    const set = await hub(["checklist", "set", "读 配置", "--status"]);
+    expect(set.code).toBe(HUB_EXIT.ok);
+    expect(ledger.calls).toEqual([{ sessionId: 42, command: "checklist", args: { kind: "set", titles: ["读 配置", "--status"] } }]);
+    const done = await hub(["checklist", "done", "0"]);
+    expect(done.code).toBe(HUB_EXIT.usage);
+    expect(done.stderr).toContain(`${cmd} checklist done`);
+    expect(done.stderr).not.toContain(`${cmd} project create`);
+    expect(ledger.calls).toHaveLength(1);
+  });
+
   describe("success", () => {
     it("project create prints text, exits 0 and sends the right body", async () => {
       const r = await hub(["project", "create", "--folder", "/x"]);

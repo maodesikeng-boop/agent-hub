@@ -44,6 +44,7 @@ function shortTempDir(): string {
 
 const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   status: {},
+  checklist: { kind: "set", titles: ["Read settings", "Compare settings"] },
   "project.create": { folder: "/x", name: "foo", description: "一个项目" },
   "project.attach": { folder: "/y" },
   "project.detach": { folder: "/y" },
