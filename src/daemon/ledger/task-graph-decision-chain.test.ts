@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, askOf, systemEventOf, type TaskGraphId, type WorkerId } from "../../shared/domain.ts";
-import { isSystemMessageCurrent } from "./notice-currency.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./pm-friction-fixture.ts";
 
 describe("S9: one decision chain from Worker to PM to user", () => {
@@ -54,7 +53,7 @@ describe("S9: one decision chain from Worker to PM to user", () => {
   it("retires a rejection notice when a replacement Worker reports at the same checkpoint", async () => {
     const { id: graphId } = planThenImpl("换人重做后再审");
     const { workerId, messageId } = await rejectAfterWorkerEnded(graphId);
-    const current = () => isSystemMessageCurrent(f.db, messageId, f.clock.now, () => false);
+    const current = () => f.ledger.isSystemMessageCurrent?.(messageId);
     expect(current()).toBe(true);
 
     const next = f.ledger.hubCall(f.lin.sessionId, "worker.start", { graphId, node: "plan", task: "补完测试再交方案" }).data.worker;
