@@ -26,7 +26,7 @@ Owner time is about 34 minutes in total: 5 for accounts, 7 for Mesh, 15 for Feis
 3. **[PM]** Write `~/.bellwood-tester/bench.json` (shape: `BenchConfig` in `test/tester/bench.ts`). Under `guards`, list the owner's real data directories, ports 4317, 4318, and 4320, the real Feishu bot's app id, and the owner's own GitHub login. This file never goes into the repository.
 4. **[PM]** Install the vendor CLIs into the bench `HOME`: `node test/tester/cli.ts vendors install`. It uses each vendor's product install command with `HOME` and the npm prefix inside `local/user-home`, so nothing lands in the owner's own tool directories.
 
-Start the Mac test daemon from a host terminal or the nightly LaunchAgent. A Bellwood Worker sandbox blocks the daemon from applying its own macOS sandbox. The tester checks this before starting a daemon; read-only preflight can still reuse a daemon that is already running.
+Start the Mac test daemon from a host terminal or the nightly LaunchAgent so the daemon can apply its own macOS sandbox. The tester checks this before startup. Read-only preflight can reuse a daemon that is already running.
 
 ## 4. Mesh
 

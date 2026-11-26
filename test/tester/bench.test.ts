@@ -206,15 +206,20 @@ describe("openBench", () => {
     }
   });
 
-  it("reports a denied macOS sandbox before starting the local test daemon", async () => {
+  it("reports a denied macOS sandbox before starting the local test daemon and exits run with code 2", async () => {
     const c = config(scratch());
+    const file = join(c.root, "bench.json");
+    writeFileSync(file, JSON.stringify(c));
     const probe = vi.spyOn(sandboxProbes, "sandboxAllowsNestedSandbox").mockReturnValue(false);
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      await expect(openBench(c, { codeDir: scratch(), mode: "real" })).rejects.toThrow(
-        "macOS denied sandbox-exec for the local test daemon. Run the tester from a terminal outside the Bellwood Worker sandbox.",
-      );
+      const message = "macOS denied sandbox-exec for the local test daemon. Run the tester from a host terminal outside any agent sandbox.";
+      await expect(openBench(c, { codeDir: scratch(), mode: "real" })).rejects.toThrow(message);
+      await expect(main(["run", "--flow", "feishu.desktop-answer-syncs-card", "--config", file])).resolves.toBe(2);
+      expect(out).toHaveBeenCalledWith(expect.stringContaining(message));
       expect(existsSync(local(c).dataDir)).toBe(false);
     } finally {
+      out.mockRestore();
       probe.mockRestore();
     }
   });
