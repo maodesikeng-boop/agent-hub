@@ -6,10 +6,12 @@ import {
   FEISHU_BRANDS,
   parseFeishuAppId,
   parseFeishuChatId,
+  parseFeishuMessageId,
   parseFeishuOpenId,
   type FeishuAppId,
   type FeishuBrandName,
   type FeishuChatId,
+  type FeishuMessageId,
   type FeishuOpenId,
 } from "../../shared/feishu.ts";
 import {
@@ -334,6 +336,8 @@ export interface FeishuLocalInbound {
   handleCardAction(action: FeishuRawCardAction): Promise<FeishuCardActionResponse>;
   say(chatId: FeishuChatId, text: string): Promise<void>;
   chatDescription(chatId: FeishuChatId): Promise<string | null>;
+  tryHoldOffline?(input: { messageId: FeishuMessageId; chatId: FeishuChatId; messageAt: number }): boolean;
+  flushInboundState?(): Promise<void>;
 }
 
 export interface FeishuAccountBotOptions {
@@ -440,7 +444,6 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
   const now = options.now ?? Date.now;
   const owners = new LRUCache<FeishuChatId, CachedOwner>({ max: FEISHU_CHAT_CACHE_MAX });
   const inFlightOwners = new Map<FeishuChatId, Promise<FeishuChatOwner>>();
-  const noticedOfflineMessages = new LRUCache<string, true>({ max: FEISHU_CHAT_CACHE_MAX });
   const lanes = new Map<FeishuChatId, { tasks: (() => Promise<void>)[]; running: boolean }>();
   const draining = new Map<DeviceId, Promise<void>>();
   const drainRetryTimers = new Map<DeviceId, ReturnType<typeof setTimeout>>();
@@ -472,20 +475,23 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
 
   const holdEvent = async (deviceId: DeviceId, chatId: FeishuChatId, event: FeishuRawEvent, receivedAt: number) => {
     if (closed || !isUserMessage(event)) return;
+    if (inbox !== null) await expireInbox();
+    if (closed) return;
+    const messageId = parseFeishuMessageId(event.messageId);
+    if (messageId === null || local.tryHoldOffline?.({ messageId, chatId, messageAt: event.createTime }) === false) return;
     const name = deviceLabel(deviceId);
     // The device still counts as online after a failed forward, so no online transition will drain the inbox for it.
     const online = mesh.isOnline(deviceId);
     if (inbox !== null) {
-      await expireInbox();
-      if (closed) return;
       const added = inbox.add(deviceId, chatId, event, receivedAt);
-      if (added === "duplicate") return;
+      await local.flushInboundState?.();
+      if (closed || added === "duplicate") return;
       if (online) scheduleDrainRetry(deviceId);
       await local.say(chatId, online ? feishuUnreachableNotice(name, added === "queued") : feishuOfflineNotice(name, added === "queued"));
       return;
     }
-    if (noticedOfflineMessages.has(event.messageId)) return;
-    noticedOfflineMessages.set(event.messageId, true);
+    await local.flushInboundState?.();
+    if (closed) return;
     await local.say(chatId, feishuOfflineNotice(name, false));
   };
 
@@ -673,7 +679,6 @@ export function createFeishuAccountBot(options: FeishuAccountBotOptions): Feishu
       lanes.clear();
       owners.clear();
       inFlightOwners.clear();
-      noticedOfflineMessages.clear();
     },
   };
 }

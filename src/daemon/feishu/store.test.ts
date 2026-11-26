@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PmId } from "../../shared/domain.ts";
+import { isDeviceId } from "../../shared/api.ts";
 import type { FeishuAppId, FeishuCardId, FeishuChatId, FeishuImageKey, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
 import {
   FEISHU_DECISIONS_MAX_ROWS,
@@ -15,6 +16,7 @@ import { createLedger } from "../ledger/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { SlimeLook } from "../../shared/slimes.ts";
+import { createFeishuInboundSync } from "./inbound-checkpoint.ts";
 
 const KIWI: SlimeLook = { fruit: "kiwi", color: "kiwi" };
 const LIME: SlimeLook = { fruit: "lime", color: "lime" };
@@ -59,7 +61,7 @@ const fill = () => {
 describe("createFeishuStore", () => {
   it("saveApp 换了 appId 时四张表在一个事务里清空，主人取入参", () => {
     fill();
-    store.saveInboundCursor(chat("a"), { lastInboundAt: 100, lastMessageId: om("in1") }, 1);
+    db.run("INSERT INTO feishu_inbound_cursors VALUES (?, ?, ?, ?)", chat("a"), 100, om("in1"), 1);
     const next = saveApp("cli_b" as FeishuAppId, null);
     expect(next).toMatchObject({ appId: "cli_b", ownerOpenId: null });
     expect([count("feishu_chats"), count("feishu_posts"), count("feishu_avatars"), count("feishu_inbound_cursors"), count("feishu_app")]).toEqual([0, 0, 0, 0, 1]);
@@ -153,14 +155,45 @@ describe("createFeishuStore", () => {
     expect([...store.pendingCards(null)].map((p) => p.ref)).toEqual([{ kind: "router_ask", messageId: 12 }]);
   });
 
-  it("inboundCursor / saveInboundCursor 记住单会话最近入站锚点，水位不倒退，换群或删群自动清掉", () => {
+  it("reads legacy inbound cursors for active chats and removes them when a chat is deleted", () => {
     fill();
-    expect(store.inboundCursor(chat("a"))).toEqual({ chatCreatedAt: 1, lastInboundAt: null, lastMessageId: null });
-    store.saveInboundCursor(chat("a"), { lastInboundAt: 2_000, lastMessageId: om("m2") }, 2);
-    store.saveInboundCursor(chat("a"), { lastInboundAt: 1_500, lastMessageId: om("m1") }, 3);
-    expect(store.inboundCursor(chat("a"))).toEqual({ chatCreatedAt: 1, lastInboundAt: 2_000, lastMessageId: om("m2") });
+    expect(store.legacyInboundCursors()).toEqual([]);
+    db.run("INSERT INTO feishu_inbound_cursors VALUES (?, ?, ?, ?)", chat("a"), 2_000, om("m2"), 2);
+    expect(store.legacyInboundCursors()).toEqual([{ chatId: chat("a"), lastInboundAt: 2_000, lastMessageId: om("m2"), updatedAt: 2 }]);
     store.removeChat(chat("a"));
-    expect(store.inboundCursor(chat("a"))).toBeNull();
+    expect(store.legacyInboundCursors()).toEqual([]);
+  });
+
+  it("seeds a missing inbound state file once and leaves legacy SQLite cursors untouched", async () => {
+    fill();
+    const chatId = chat("a");
+    const legacy = { chatId, lastInboundAt: 2_000, lastMessageId: om("m1"), updatedAt: 2 };
+    db.run("INSERT INTO feishu_inbound_cursors VALUES (?, ?, ?, ?)", chatId, legacy.lastInboundAt, legacy.lastMessageId, legacy.updatedAt);
+    const selfId = "11111111-1111-4111-8111-111111111111";
+    if (!isDeviceId(selfId)) throw new Error("Invalid fixture device ID");
+    let reads = 0;
+    const open = () => createFeishuInboundSync({
+      selfId,
+      stateFile: join(home, "feishu-inbound.json"),
+      initialAppId: APP,
+      appCredentials: () => null,
+      leaseEpoch: () => null,
+      now: () => 3_000,
+      log: () => {},
+      legacyCursors: () => {
+        reads++;
+        return store.legacyInboundCursors();
+      },
+    });
+    const upgraded = open();
+    expect(upgraded.cursorOf(chatId)).toEqual(legacy);
+    upgraded.advanceCursor(chatId, { lastInboundAt: 3_000, lastMessageId: om("m2") });
+    await upgraded.close();
+    const restarted = open();
+    expect(restarted.cursorOf(chatId)?.lastMessageId).toBe(om("m2"));
+    expect(reads).toBe(1);
+    expect(store.legacyInboundCursors()).toEqual([legacy]);
+    await restarted.close();
   });
   it("prunePosts 只删早于 before 的 final / card_settled，等拍板的不删", () => {
     fill();

@@ -13,6 +13,8 @@ import {
   type FeishuForwardedEvent,
   type FeishuPeerAppSync,
 } from "../feishu/account-bot.ts";
+import { parseFeishuInboundStateSnapshot, type FeishuInboundStateSnapshot } from "../feishu/inbound-checkpoint.ts";
+import { FEISHU_INBOUND_CHECKPOINT_PLAINTEXT_MAX_BYTES } from "../../shared/limits.ts";
 import type { FeishuCardActionResponse } from "../feishu/transport.ts";
 import type { Mesh } from "../mesh/index.ts";
 import { proxyHttp, proxyWebSocket, splitProxyUrl, type ProxyContext, type ProxyTarget } from "./proxy.ts";
@@ -23,6 +25,8 @@ export interface FeishuPeerRoutesPort {
   learnChats(from: DeviceId, chats: { chatId: FeishuChatId; pmId: PmId }[]): void;
   exportApp(): FeishuPeerAppSync | null;
   applyApp(sync: FeishuPeerAppSync): Promise<void>;
+  exportInboundState?(): FeishuInboundStateSnapshot | null;
+  applyInboundState?(state: FeishuInboundStateSnapshot): void;
 }
 
 export interface PeerRoutesOptions {
@@ -70,6 +74,24 @@ const asPeerError = async <T>(task: () => Promise<T>): Promise<T> => {
     throw new PeerError(400, error instanceof Error ? error.message : String(error), "invalid");
   }
 };
+
+function registerFeishuInboundStateRoutes(app: FastifyInstance, peer: FeishuPeerRoutesPort, requirePeer: (req: FastifyRequest) => DeviceId) {
+  const { exportInboundState, applyInboundState } = peer;
+  if (exportInboundState === undefined || applyInboundState === undefined) return;
+  app.get(API_PATHS.peerFeishuInboundState, async (req, reply) => {
+    requirePeer(req);
+    return reply.header("cache-control", "no-store").send({ state: exportInboundState() });
+  });
+  app.put(API_PATHS.peerFeishuInboundState, {
+    bodyLimit: FEISHU_INBOUND_CHECKPOINT_PLAINTEXT_MAX_BYTES,
+    onRequest: async (req) => { requirePeer(req); },
+  }, async (req, reply) => {
+    const state = parseFeishuInboundStateSnapshot(req.body);
+    if (state === null) throw new PeerError(400, "飞书入站状态不对", "invalid");
+    applyInboundState(state);
+    return reply.code(204).send();
+  });
+}
 
 export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions): Promise<void> {
   const { peers, mesh } = opts;
@@ -156,6 +178,7 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
   }
   if (opts.feishuPeer !== undefined) {
     const feishuPeer = opts.feishuPeer;
+    registerFeishuInboundStateRoutes(app, feishuPeer, requirePeer);
     app.post(API_PATHS.peerFeishuInbound, async (req) => {
       requirePeer(req);
       const body = parseOr400(feishuForwardedEventSchema, req.body);

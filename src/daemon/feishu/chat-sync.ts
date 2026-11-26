@@ -6,6 +6,7 @@ import {
   parseFeishuOpenId,
   type FeishuChatId,
   type FeishuImageKey,
+  type FeishuMessageId,
   type FeishuOpenId,
 } from "../../shared/feishu.ts";
 import { FEISHU_PAGE_SIZE } from "../../shared/limits.ts";
@@ -18,7 +19,6 @@ import type { FeishuMember } from "./directory.ts";
 import { releaseInboundGate } from "./inbound-catchup.ts";
 import { requestControl } from "./lanes.ts";
 import { conversationOfPm, latestMessageId } from "./projection.ts";
-import type { FeishuStore } from "./store.ts";
 import { dropStream } from "./stream-cards.ts";
 import { FeishuAuthError, feishuStringField, isFeishuRejection, type FeishuMethodArgs } from "./transport.ts";
 
@@ -102,14 +102,14 @@ function bindPmChat(ctx: FeishuContext, chatId: FeishuChatId, spec: ChatSpec) {
   const t = ctx.now();
   ctx.store.upsertChat({ chatId, target: { kind: "pm", pmId: spec.pmId }, name: spec.name, label: spec.label }, t);
   ctx.store.setChatAvatar(chatId, spec.look, t);
-  ctx.store.saveInboundCursor(chatId, { lastInboundAt: t, lastMessageId: null }, t);
+  ctx.inboundSync.seedLocalCursor(chatId, { lastInboundAt: t, lastMessageId: null });
   const conversationId = conversationOfPm(ctx, spec.pmId);
   ctx.store.advanceWatermark(chatId, { messageId: (conversationId === null ? null : latestMessageId(ctx, conversationId)) ?? 0 }, t);
 }
 
-export function bindRouterChat(ctx: FeishuContext, chatId: FeishuChatId, t = ctx.now(), cursor: Parameters<FeishuStore["saveInboundCursor"]>[1] = { lastInboundAt: t, lastMessageId: null }) {
+export function bindRouterChat(ctx: FeishuContext, chatId: FeishuChatId, t = ctx.now(), cursor: { lastInboundAt: number; lastMessageId: FeishuMessageId | null } | null = { lastInboundAt: t, lastMessageId: null }) {
   ctx.store.upsertChat({ chatId, target: { kind: "router" }, name: "总助", label: "总助" }, t);
-  ctx.store.saveInboundCursor(chatId, cursor, t);
+  if (cursor !== null) ctx.inboundSync.seedLocalCursor(chatId, cursor);
 }
 
 async function createPmChat(ctx: FeishuContext, op: Extract<FeishuChatOp, { kind: "create" }>, appId: string, ownerId: FeishuOpenId, avatar: string) {
@@ -195,7 +195,7 @@ export async function syncChats(ctx: FeishuContext): Promise<boolean> {
 }
 
 export function adoptRouterChat(ctx: FeishuContext, chatId: FeishuChatId) {
-  bindRouterChat(ctx, chatId);
+  bindRouterChat(ctx, chatId, ctx.now(), null);
   ackAllRouterEvents(ctx);
 }
 

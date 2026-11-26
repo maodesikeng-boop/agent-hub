@@ -29,6 +29,7 @@ import {
   type RelayRevocationEnvelope,
 } from "../../relay/protocol.ts";
 import type { MeshIdentity } from "./identity.ts";
+import { createRelayCheckpoints, type RelayCheckpoints } from "./relay-checkpoint.ts";
 
 export async function registerWithRelay(input: {
   relayUrl: string;
@@ -104,6 +105,7 @@ export interface RelayClientOptions {
 
 export interface RelayClient {
   state(): RelayConnectionState;
+  checkpoints?: RelayCheckpoints;
   start(): void;
   send(frame: RelayClientFrame): boolean;
   refreshCandidates(): void;
@@ -233,13 +235,18 @@ export function relayByteStream(ws: WebSocket): Duplex {
   return stream;
 }
 
-export function createRelayClient(options: RelayClientOptions): RelayClient {
-  const now = options.now ?? Date.now;
-  const relayOrigin = new URL(options.relayUrl).origin;
+function createRelayEvents() {
   const listeners = new Map<keyof RelayClientEvents, Set<(...args: never[]) => void>>();
   const emit = <K extends keyof RelayClientEvents>(event: K, ...args: Parameters<RelayClientEvents[K]>) => {
     for (const listener of listeners.get(event) ?? []) (listener as (...a: Parameters<RelayClientEvents[K]>) => void)(...args);
   };
+  return { listeners, emit };
+}
+
+export function createRelayClient(options: RelayClientOptions): RelayClient {
+  const now = options.now ?? Date.now;
+  const relayOrigin = new URL(options.relayUrl).origin;
+  const { listeners, emit } = createRelayEvents();
   let state: RelayConnectionState = "connecting";
   let socket: WebSocket | null = null;
   let session: string | null = null;
@@ -420,6 +427,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
 
   return {
     state: () => state,
+    checkpoints: createRelayCheckpoints(relayOrigin, options.accountId, options.identity.deviceId, () => state === "connected" ? session : null),
     start() {
       if (socket !== null || stopped) return;
       setState("connecting");

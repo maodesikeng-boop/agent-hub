@@ -27,6 +27,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Account mesh and E2EE relay](account-mesh-design.md): GitHub Device Flow login, six-digit SAS device verification, mutual TLS 1.3 over LAN and Cloudflare or Node relays, and hub lease failover.
 - [Event stream recovery](change-stream-recovery-design.md): Replay cursors tied to daemon boots, snapshot recovery, and reconnect through the Mesh proxy.
 - [Feishu integration](feishu-design.md): QR bot creation, outbound persistent WebSocket, account-wide bot lease, slime-avatar project groups, guest permission tiers, and streaming JSON 2.0 cards.
+- [Cross-hub Feishu inbound deduplication](feishu-cross-hub-dedupe-design.md): Account-wide Feishu inbound state lattice (`held_offline < claimed < handled`), Relay-fenced E2EE checkpoints, Peer mTLS mirroring, pre-execution claim persistence, and rolling-upgrade fallback.
 - [Vendor plugin architecture](vendor-plugin-design.md): Per-vendor folder contracts (`VendorSpec` and `VendorDaemon`), eight supported CLIs, ACP and RPC protocols, system-prompt channels, background session renewal, and instant vendor switching.
 - [Resource lifecycle](resource-lifecycle-design.md): Canonical resource registry, database slimming and dual-bounded retention, detached grandchild and temp-directory reaping, squash-merge branch cleanup, and the Resources self-check panel.
 - [Ledger database](ledger-database.md): Exclusive SQLite file lock, the `migrations/manifest.sha256` completeness check, and upgrade tests on ledgers written by released versions.
