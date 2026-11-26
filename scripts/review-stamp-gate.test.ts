@@ -177,6 +177,7 @@ describe("matchStampPaths", () => {
     const planEvidenceSection = planStandard.slice(planStandard.indexOf("## Verification and acceptance evidence"));
     const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
     const reviewAndMerge = readFileSync(join(REPO_ROOT, "docs/review-and-merge.md"), "utf8");
+    const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
     const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
 
     for (const [label, doc] of [
@@ -192,6 +193,7 @@ describe("matchStampPaths", () => {
       );
       expect(doc, `${label} must not forbid all web flows from claiming not verified when a real dependency is missing`).not.toMatch(/\bWeb flows run locally\b[^.]*cannot claim `not verified`/iu);
     }
+    expect(agentsMd, "AGENTS.md must not forbid all web flows from claiming not verified when a real dependency is missing").not.toMatch(/\bWeb flows run locally\b[^.]*cannot claim `not verified`/iu);
     for (const [label, doc] of [
       ["docs/plan-standard.md (Evidence)", planEvidenceSection],
       ["REVIEW.md", planRule],
@@ -218,6 +220,7 @@ describe("matchStampPaths", () => {
     const planEvidenceSection = planStandard.slice(planStandard.indexOf("## Verification and acceptance evidence"));
     const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
     const reviewAndMerge = readFileSync(join(REPO_ROOT, "docs/review-and-merge.md"), "utf8");
+    const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
     const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
 
     for (const [label, doc] of [
@@ -247,6 +250,9 @@ describe("matchStampPaths", () => {
         /escalates to the user with a decision card and receives a decision\./iu,
       );
     }
+    expect(agentsMd, "AGENTS.md must not leave user decision-card outcome unspecified").not.toMatch(
+      /escalates to the user with a decision card and receives a decision\./iu,
+    );
     for (const [label, doc] of [
       ["docs/plan-standard.md", planStandard],
       ["REVIEW.md", planRule],
@@ -275,6 +281,7 @@ describe("matchStampPaths", () => {
     const planStandard = readFileSync(join(REPO_ROOT, "docs/plan-standard.md"), "utf8");
     const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
     const reviewAndMerge = readFileSync(join(REPO_ROOT, "docs/review-and-merge.md"), "utf8");
+    const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
     const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
 
     for (const [label, doc] of [
@@ -285,6 +292,7 @@ describe("matchStampPaths", () => {
       expect(doc, `${label} must state hand-written fake events and fake CLIs cannot prove vendor behavior`).toMatch(/hand-written fake events and fake CLIs serve only as automated regression tests/iu);
       expect(doc, `${label} must not require recording or replaying CLI samples`).not.toMatch(/record(?:ed|ing)? (?:real[- ]CLI )?samples?|replay recorded/iu);
     }
+    expect(agentsMd, "AGENTS.md must not require recording or replaying CLI samples").not.toMatch(/record(?:ed|ing)? (?:real[- ]CLI )?samples?|replay recorded/iu);
   });
 
   it("requires a regression test or structural guard on every Important fix and PM decision-card escalation after 3 rounds", () => {

@@ -59,7 +59,7 @@ Keep per-PR regression fixes, second-occurrence `REVIEW.md` rules, and the night
 
 ## Updating a PR description
 
-To update a PR description from a Worker branch, write the Markdown body to `<file>` and run:
+To update a PR description, write the Markdown body to `<file>` and run:
 
 ```sh
 git fetch origin main
