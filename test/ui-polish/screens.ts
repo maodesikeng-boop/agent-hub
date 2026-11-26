@@ -151,6 +151,7 @@ const NEW_PM_KEYBOARD_STOPS = [
   { id: "name", role: "textbox", name: "Name" },
   { id: "device", role: "combobox", name: "Device" },
   { id: "folder", role: "textbox", name: "Main folder" },
+  { id: "choose", role: "button", name: "Choose…" },
   { id: "mode", role: "combobox", name: "Mode" },
   { id: "more", role: "button", name: "More settings" },
   { id: "provider", role: "combobox", name: "Provider" },
@@ -563,7 +564,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "profile.schedule-form": [...openProfile("阿青"), { click: `${profileScope("阿青")} >> role=button[name^="Schedules"]` }, { click: btn("New", 'role=region[name="Schedules"]') }, { type: { into: 'role=region[name="Schedules"] >> role=textbox >> nth=0', text: "一个特别特别长的定时任务名字用来测试表单校验会不会提示太长了再长一点再长一点再长一点" } }, { crop: 'role=region[name="Schedules"]' }],
   "profile.memory-open": [{ patch: "memory-files" }, ...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Memory files"]` }, { click: 'role=button[name="Edit conventions.md"]' }, { waitFor: 'role=region[name="Memory files"] >> role=textbox' }, { crop: 'role=region[name="Memory files"]' }],
   "profile.history": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
-  "profile.mode": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Mode"]` }, { waitFor: 'role=button[name="Back to Info"]' }],
+  "profile.mode": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Mode,"]` }, { waitFor: `${profileScope("小林")} >> role=heading[name=/^Mode$/]` }],
   "profile.folders": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Folders"]` }, { waitFor: 'role=button[name="Back to Info"]' }],
   "profile.history-hover": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { hover: 'role=region[name="History"] >> role=button[name="Undo"]' }, { crop: 'role=region[name="History"]' }],
   "profile.history-empty": [...openProfile("项目经理"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
@@ -698,6 +699,7 @@ function widthSteps(): Record<string, ScreenStep[]> {
 function newPmKeyboardSteps(): Record<string, ScreenStep[]> {
   const NEW_PM = 'role=dialog[name="New project manager"]';
   const open: ScreenStep[] = [
+    { patch: "folder-picker-available" },
     ...ensureList,
     { click: btn("New project manager", LIST) },
     { type: { into: `${NEW_PM} >> role=textbox[name="Name"]`, text: "Keyboard" } },

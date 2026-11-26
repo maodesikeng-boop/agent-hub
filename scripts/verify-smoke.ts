@@ -227,7 +227,7 @@ async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir
     await verifyShellWidths(browser, daemon.loginUrl, daemon.origin);
     phase("Columns and single column at every scale");
 
-    await verifySettingsKeyboard(browser, daemon.loginUrl, daemon.origin);
+    await verifySettingsKeyboard(browser, daemon.loginUrl, daemon.origin, state.server.folderPicker);
     phase("Settings and New PM keyboard focus at Compact and XL");
 
     if (checkComposer) {
