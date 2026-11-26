@@ -34,6 +34,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [System wakeups and per-turn checklists](system-wakeup-turns-design.md): PM wakeups stored as system notices, placing system inputs where the agent read them, per-turn checklist slices, and the vendor checklist prompt rule.
 - [Lost Worker briefs and stale notices](lost-brief-stale-notice-design.md): Daemon shutdown never cancels unread messages in any vendor driver, restart resends interrupted turns or tells the PM, failed first launches show their error, one pre-write currency check for delivery notes and timeout reminders, `graph done` ending the parked Worker, and per-model effort validation.
 - [Project Manager friction with `hub`](pm-friction-design.md): Plan reviews paused for the PM with `"confirm": "pm"`, `doneSteps` in `graph patch`, one text-limit table, `hub ask list/show`, `hub schedule show`, `hub worker wait`, the first typed PM notice entry, and help-only commands that keep the system prompt and every vendor cache unchanged.
+- [Project Manager awareness of finished work](pm-awareness-design.md): A per-graph status list computed from the ledger and delivered to the PM as a snapshot plus changes on every wake, one decision chain from Worker to PM to user for `"confirm": true`, `hub watch` for outside conditions, step slots shared on one computer, and a delivery row for finished graphs.
 
 ## Desktop and distribution
 
