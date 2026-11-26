@@ -7,7 +7,7 @@
 ### Files to review
 
 - [This design](turn-state-foundation-design.md): One ledger record per model turn, the inputs it took, the tools it ran, and the background wait it left behind, plus the reads that replace today's inferences.
-- [`migrations/0057_turn_state.sql`](../migrations/0057_turn_state.sql): The four new tables. The number is provisional; see "Migration number" below.
+- [`migrations/0057_turn_state.sql`](../migrations/0057_turn_state.sql): The four new tables.
 - [`src/shared/turn.ts`](../src/shared/turn.ts), [`src/daemon/ledger/turns.ts`](../src/daemon/ledger/turns.ts), [`turn-tools.ts`](../src/daemon/ledger/turn-tools.ts), [`turn-background-waits.ts`](../src/daemon/ledger/turn-background-waits.ts): The compiling skeleton and its contracts.
 - Acceptance tests: [`turns.test.ts`](../src/daemon/ledger/turns.test.ts), [`turn-tools.test.ts`](../src/daemon/ledger/turn-tools.test.ts), [`turn-background-waits.test.ts`](../src/daemon/ledger/turn-background-waits.test.ts), [`turn-duration.test.tsx`](../src/web/turn-duration.test.tsx), and [`test/e2e/turn-state-foundation.test.ts`](../test/e2e/turn-state-foundation.test.ts).
 
@@ -36,7 +36,7 @@ Architecture choices (also settled as recommended):
 
 ### Migration number
 
-`main` ends at `0056`. PR #467 claims `0057` to `0059`, so `node scripts/migration-claims.ts --next` returns `0060`. The implementation branch keeps `0057_turn_state.sql` while those claims are open because the migration loader requires contiguous versions. Once the earlier claims land or are released, update from `main`, recheck the claims, and use the first available contiguous version. The `migration-claims` check fails while the duplicate claim remains.
+`0057_turn_state.sql` follows `0056` on `main`. PR #467 closed and released its earlier claim on `0057`; `node scripts/migration-claims.ts --pr 480` confirms that PR #480 can keep it. The `--next` command now prints `0058` because #480 claims `0057`.
 
 ### Task Graph sequencing note
 
@@ -45,7 +45,7 @@ The plan is approved and the draft PR is #480. Four implementation steps follow 
 1. Turns and inputs: `turns.ts`, settlement, stop causes, restart recovery, empty recovery, the `worker show` clocks, and page summaries (`turns.test.ts`, the e2e test).
 2. Tools: `turn-tools.ts` and the `worker show` and `worker log` reads (`turn-tools.test.ts`).
 3. Background waits: `turn-background-waits.ts`, the capability gate, reminders, and the import and drop of the old wait tables (`turn-background-waits.test.ts`).
-4. API and web: `turn.updated`, `activeTurnId`, turn cards, and `Worked for` (`turn-duration.test.tsx`), plus the Section 6 deletions that remain and the migration renumbering.
+4. API and web: `turn.updated`, `activeTurnId`, turn cards, and `Worked for` (`turn-duration.test.tsx`), plus the remaining Section 6 deletions and the migration claim check.
 
 ## 1. User goal
 
