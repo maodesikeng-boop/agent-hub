@@ -27,11 +27,12 @@ function runState(row: ScheduleRunRow): ScheduleRunState {
 
 export function recentScheduleRuns(db: Db, conversationId: ConversationId, scheduleId: ScheduleId, limit: number): ScheduleRunSummary[] {
   const prefix = `system:${conversationId}:schedule.run:${scheduleId}:`;
+  // The unary plus keeps SQLite from choosing the index for the whole conversation.
   const rows = db.all<ScheduleRunRow>(
     `WITH runs AS (
        SELECT id, session_id, status, dedupe_key, CASE WHEN json_valid(meta) THEN meta END AS run_meta
          FROM messages
-        WHERE dedupe_key >= ? AND dedupe_key < ? AND conversation_id = ? AND sender = 'system'
+        WHERE dedupe_key >= ? AND dedupe_key < ? AND +conversation_id = ? AND sender = 'system'
         ORDER BY length(dedupe_key) DESC, dedupe_key DESC LIMIT ?
      )
      SELECT r.id, CAST(substr(r.dedupe_key, ?) AS INTEGER) AS scheduled_at,
