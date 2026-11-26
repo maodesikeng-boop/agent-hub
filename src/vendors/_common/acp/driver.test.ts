@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +6,6 @@ import { readJsonLog } from "../../../../test/append-log.ts";
 import { isAlive, waitForExit } from "../../../daemon/driver/process.ts";
 import { MemorySessionStore, realSleep } from "../../../daemon/driver/test-helpers.ts";
 import {
-  SANDBOX_EXEC,
   osSandboxAvailable,
   win32MxcReadonlyAvailable,
   type ReadonlySandboxInput,
@@ -42,6 +40,7 @@ import {
   type AcpSessionDriver,
 } from "./index.ts";
 import type { FakeAcpLogEntry, FakeAcpScript } from "./fixtures/fake-acp-agent.ts";
+import { sandboxAllowsNestedSandbox } from "../../../../test/sandbox-probes.ts";
 
 const FAKE_ACP_AGENT = fileURLToPath(new URL("./fixtures/fake-acp-agent.ts", import.meta.url));
 const TEST_VENDOR = AGENT_VENDORS[0]!;
@@ -921,16 +920,7 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
   it("只读 Worker：request_permission 放行只读/沙箱受限命令与 readOnlyHint MCP、拒绝写类工具与未标只读 MCP，且校验外层只读 OS 沙箱参数与不可用拒启", async () => {
     const canNestOsSandbox =
       process.platform === "darwin"
-        ? (() => {
-            try {
-              execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], {
-                stdio: "ignore",
-              });
-              return true;
-            } catch {
-              return false;
-            }
-          })()
+        ? sandboxAllowsNestedSandbox()
         : process.platform === "win32"
           ? win32MxcReadonlyAvailable()
           : osSandboxAvailable();

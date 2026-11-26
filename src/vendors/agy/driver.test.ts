@@ -1,11 +1,11 @@
 // AgyDriver 与 protocol.ts 单元测试（TDD：覆盖协议纯函数、首轮完整流式交互、长连接复用与恢复、SIGINT 打断、Worker 安全拦截、生命周期管理）。
-import { execFileSync, execSync, spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readJsonLog } from "../../../test/append-log.ts";
-import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
+import { sandboxAllowsNestedSandbox, sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import {
   DriverError,
   EMPTY_TOKEN_USAGE,
@@ -50,14 +50,7 @@ const realSleep = (ms: number) => new Promise<void>((resolve) => realSetTimeout(
 const canRunSandboxExec =
   process.platform === "darwin" &&
   existsSync(SANDBOX_EXEC) &&
-  (() => {
-    try {
-      execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
+  sandboxAllowsNestedSandbox();
 
 const canRunPs = process.platform !== "win32" && sandboxAllowsPs();
 

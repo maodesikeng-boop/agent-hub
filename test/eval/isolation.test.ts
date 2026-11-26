@@ -8,6 +8,7 @@ import { afterAll, expect, it } from "vitest";
 import { CLAUDE_CONFIG_STATE_DIRS, claudeEnvScript, claudeScratchRules, mainRepoRoot, pmSandboxInput, pmSandboxProfile, readDenyProbes, realOr, SANDBOX_EXEC, SHIM_NAMES, writeShims } from "./isolation.ts";
 import { boundedText, markActive } from "./lifecycle.ts";
 import { pruneFailedWork, pruneRuns } from "./report.ts";
+import { sandboxAllowsNestedSandbox } from "../sandbox-probes.ts";
 const root = mkdtempSync(join(tmpdir(), "eval-isolation-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 it("不存在的子路径仍解析软链祖先", () => {
@@ -41,7 +42,7 @@ it("整份 UTF-8 文本有字节上限并标明截断", () => {
   const text = boundedText("中😀".repeat(1000), 101);
   expect(Buffer.byteLength(text)).toBeLessThanOrEqual(101); expect(text).toContain("截断"); expect(text).not.toContain("�");
 });
-const available = process.platform === "darwin" && spawnSync(SANDBOX_EXEC, ["-p", "(version 1)(allow default)", "/usr/bin/true"]).status === 0;
+const available = process.platform === "darwin" && sandboxAllowsNestedSandbox();
 it.skipIf(!available)("真 SBPL 拒绝外写与凭据读取，专属目录可写", () => {
   const work = join(root, "allowed"); mkdirSync(work);
   writeFileSync(join(work, "router.json"), "{}");

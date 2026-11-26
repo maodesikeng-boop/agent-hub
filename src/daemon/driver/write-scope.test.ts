@@ -60,19 +60,13 @@ import {
   type MxcV1ProbeSurface,
 } from "../platform/index.ts";
 import { parseMxcRunnerCliArgs, startHubPipeLoopbackBridge } from "../platform/win32/mxc-runner.ts";
+import { sandboxAllowsNestedSandbox } from "../../../test/sandbox-probes.ts";
 
 const scope = { dataDir: "/Users/u/.agent-hub", writableDirs: ["/Users/u/.agent-hub/worktrees/1/2"], readScope: dataDirReadScope({ dataDir: "/Users/u/.agent-hub" }) };
 const base = { command: "/bin/agent", args: ["--x", "y"] };
 const canRunSandboxExec =
   process.platform === "darwin" &&
-  (() => {
-    try {
-      execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
+  sandboxAllowsNestedSandbox();
 // 文件加载期直接跑一次真 bwrap 探测，不走 osSandboxAvailable()：否则会把模块级缓存提前置成 true，污染后面注入 probe 的用例
 const canRunBwrap =
   process.platform === "linux" &&
