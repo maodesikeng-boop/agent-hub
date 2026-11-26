@@ -208,3 +208,11 @@ Trigger: `src/daemon/prompt.ts`, `src/daemon/router/prompt.ts`, `src/daemon/proj
 Check: Every changed sentence that an agent reads (prompts, the Task Graph skill, the review checklist, `hub` help and errors, system notes, handover and vendor-injected text) still holds in an unfamiliar project on an unfamiliar platform: another language and build tool, a trunk other than `main`, a remote other than `origin` or none, a code host other than GitHub or none, no CI, no git, and Windows PowerShell or cmd. This repo's habits, such as a PR for every change, a merge before a graph finishes, a second vendor for review, our verification commands, or `AGENTS.md` as the rules file, appear only as conditions or examples, never as defaults. A rule that only this repo needs moves to `AGENTS.md` or `REVIEW.md` in the same PR. `src/prompt-portability.test.ts` already fails a literal name such as `origin/main`, `pnpm`, `gh pr`, `/tmp`, or a heredoc written as an instruction, and passes it as an example or under a condition that names the trait. This check covers what it cannot judge: a habit with no literal name, whether an example is representative or the only option shown, and whether a condition really limits the instruction.
 
 Seen in: `2ede7cc6`, `7eaeea84`, #402
+
+### A result is matched to its request by an id both carry
+
+Trigger: `src/web/**`, `src/daemon/**`
+
+Check: Code that decides whether a request, retry, or round has finished, or which request or round an event, row, or snapshot belongs to, matches an id that the request carries and every result echoes: the HTTP reply, change events, and snapshots. It never infers the answer from timestamps such as `updatedAt`, from change `seq`, from versions or counters the page assigns itself, or from whether the reply or the event arrived first. A request the user can repeat carries a client-generated id that the daemon accepts once and rejects on repeat. Tests cover the result arriving before the HTTP reply, after it, and through a resync that returns unchanged data. Ordering guards on cache writes follow "Stale in-flight queries never overwrite fresh mutations" instead.
+
+Seen in: #449, #453
