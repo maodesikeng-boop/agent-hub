@@ -1,1 +1,1 @@
-SELECT 1;
+SELECT 1; -- trigger migration-claims CI check
