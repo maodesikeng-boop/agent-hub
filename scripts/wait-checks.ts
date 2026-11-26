@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execGh, type GhRunResult } from "../src/daemon/git/gh.ts";
+import { formatClaimConflict, formatClaimReport, verifyMigrationClaims, type ClaimCheckResult, type MigrationClaimConflict } from "./migration-claims.ts";
 import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 
 export const DEFAULT_POLL_INTERVAL_SECONDS = 15;
@@ -16,6 +17,7 @@ export const REQUIRED_MAIN_CHECKS = [
   "check (ubuntu 3/4)",
   "check (ubuntu 4/4)",
   "review-stamp gate",
+  "migration-claims",
 ] as const;
 
 const PR_VIEW_FIELDS = [
@@ -115,7 +117,15 @@ export type WaitVerdict =
   | {
       kind: "fail";
       pr: PullRequestSummary;
-      reason: "closed" | "conflict" | "checks-failed" | "missing-required-checks" | "head-mismatch" | "merged-stale-head";
+      reason:
+        | "closed"
+        | "conflict"
+        | "behind"
+        | "migration-claim"
+        | "checks-failed"
+        | "missing-required-checks"
+        | "head-mismatch"
+        | "merged-stale-head";
       failed: ClassifiedCheck[];
       waiting: ClassifiedCheck[];
       passed: ClassifiedCheck[];
@@ -136,6 +146,7 @@ export interface WaitChecksOptions {
 export interface WaitChecksDeps {
   cwd: string;
   queryPr: (prRef: string | null) => Promise<GhRunResult>;
+  checkMigrationClaims?: (pr: PullRequestSnapshot) => Promise<ClaimCheckResult>;
   readLocalHead: () => string | null;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -287,9 +298,20 @@ function hasMergeConflict(pr: PullRequestSnapshot): boolean {
   return pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY" || pr.mergeStateStatus === "CONFLICTING";
 }
 
+/**
+ * An open PR fails with `behind` when GitHub reports mergeStateStatus BEHIND, and with `migration-claim` when
+ * ctx.migrationConflicts, fetched fresh for this poll, is non-empty; both apply even when every check is green.
+ */
 export function evaluatePullRequest(
   snapshot: PullRequestSnapshot,
-  ctx: { elapsedMs: number; startupGraceMs: number; explicitPrArg: boolean; localHead: string | null },
+  ctx: {
+    elapsedMs: number;
+    startupGraceMs: number;
+    explicitPrArg: boolean;
+    localHead: string | null;
+    migrationConflicts?: readonly MigrationClaimConflict[];
+    migrationClaimResult?: ClaimCheckResult;
+  },
 ): WaitVerdict {
   const pr = summarizePr(snapshot);
   const state = snapshot.state.toUpperCase();
@@ -375,6 +397,42 @@ export function evaluatePullRequest(
       missingRequired,
       message: `PR #${pr.number} has merge conflicts (mergeable=${snapshot.mergeable}, mergeStateStatus=${snapshot.mergeStateStatus}); GitHub will not run pull_request workflows.`,
       nextStep: "Fetch origin/main, merge or rebase onto origin/main to resolve conflicts, run pnpm typecheck, pnpm test:related, and pnpm verify, push, and re-run node scripts/wait-checks.ts.",
+    };
+  }
+
+  if (state === "OPEN" && snapshot.mergeStateStatus === "BEHIND") {
+    return {
+      kind: "fail",
+      pr,
+      reason: "behind",
+      failed,
+      waiting,
+      passed,
+      exempt,
+      missingRequired,
+      message: `PR #${pr.number} is behind ${pr.baseRefName}.`,
+      nextStep: `On the PR branch, run git fetch origin, git merge origin/${pr.baseRefName}, and git push. Then wait for checks on the new head.`,
+    };
+  }
+
+  const claimResult = ctx.migrationClaimResult;
+  const issues = claimResult !== undefined && claimResult.kind !== "ok"
+    ? formatClaimReport(pr.number, claimResult)
+    : (ctx.migrationConflicts ?? []).map(formatClaimConflict);
+  if (state === "OPEN" && issues.length > 0) {
+    return {
+      kind: "fail",
+      pr,
+      reason: "migration-claim",
+      failed,
+      waiting,
+      passed,
+      exempt,
+      missingRequired,
+      message: issues.join("\n"),
+      nextStep: claimResult?.kind === "incomplete"
+        ? "Resolve the error in the migration claim listing, then re-run node scripts/wait-checks.ts."
+        : "Renumber the migration, update the manifest, and push. Then re-run node scripts/wait-checks.ts.",
     };
   }
 
@@ -577,7 +635,12 @@ export async function waitForChecks(options: WaitChecksOptions, deps: WaitChecks
     }
 
     const elapsedMs = deps.now() - startedAt;
-    const verdict = evaluatePullRequest(snapshot, { elapsedMs, startupGraceMs, explicitPrArg, localHead });
+    const ctx = { elapsedMs, startupGraceMs, explicitPrArg, localHead };
+    let verdict = evaluatePullRequest(snapshot, ctx);
+    if (verdict.kind === "pass" && snapshot.state === "OPEN" && snapshot.baseRefName === "main" && deps.checkMigrationClaims) {
+      const migrationClaimResult = await deps.checkMigrationClaims(snapshot);
+      if (migrationClaimResult.kind !== "ok") verdict = evaluatePullRequest(snapshot, { ...ctx, migrationClaimResult });
+    }
     if (verdict.kind === "pass") {
       for (const line of formatPassReport(verdict)) deps.log(line);
       return 0;
@@ -643,6 +706,10 @@ export async function main(argv: readonly string[], cwd: string = process.cwd())
   return waitForChecks(parsed.options, {
     cwd,
     queryPr: (prRef) => execGh(cwd, ["pr", "view", ...(prRef ? [prRef] : []), "--json", PR_VIEW_FIELDS], { timeoutMs: GH_QUERY_TIMEOUT_MS }),
+    checkMigrationClaims: (pr) => {
+      const repo = /^https?:\/\/[^/]+\/([\w.-]+\/[\w.-]+)\/pull\/\d+$/u.exec(pr.url)?.[1];
+      return verifyMigrationClaims(pr.number, { cwd, execGh, log: (line) => console.log(line) }, { ...(repo ? { repo } : {}), expectedHead: pr.headRefOid });
+    },
     readLocalHead: () => readGitHead(cwd),
     now: () => Date.now(),
     sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
