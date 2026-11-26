@@ -7,6 +7,7 @@ import {
   DEFAULT_AGENT_VENDOR,
   ALL_EFFORTS,
   HUB_COMMANDS,
+  HUB_HELP_ONLY_COMMANDS,
   MIN_SCHEDULE_EVERY_MINUTES,
   SELF_RELOAD_DRAIN_MAX_MS,
   PM_MODES,
@@ -723,10 +724,13 @@ describe("提示词：项目经理（M3）", () => {
       const [group, action] = cli.split(" ");
       return action !== undefined && (compressed.get(group!)?.includes(action) ?? false);
     };
-    for (const command of HUB_COMMANDS) expect(inPrompt(command.replace(".", " ")), command).toBe(true);
+    for (const command of HUB_COMMANDS) {
+      if (command in HUB_HELP_ONLY_COMMANDS) expect(inPrompt(command.replace(".", " ")), command).toBe(false);
+      else expect(inPrompt(command.replace(".", " ")), command).toBe(true);
+    }
     for (const spec of HUB_COMMAND_SPECS) {
       expect(HUB_USAGE).toContain(`${HUB_COMMAND} ${spec.cli}`);
-      expect(inPrompt(spec.cli), spec.cli).toBe(true);
+      expect(inPrompt(spec.cli), spec.cli).toBe(!(spec.command in HUB_HELP_ONLY_COMMANDS));
     }
     // 缩成一行的那几组里列的动作，都是命令表里真有的（不多列）
     for (const [group, actions] of compressed) {

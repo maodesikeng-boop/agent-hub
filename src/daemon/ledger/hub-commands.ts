@@ -19,9 +19,11 @@ import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
+import { askListIn, askShowIn } from "./pending-asks.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
+import { scheduleShowIn } from "./schedule-runs.ts";
 import type { LedgerSchedules } from "./schedules.ts";
 import type { LedgerTaskGraphs } from "./task-graphs.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
@@ -322,10 +324,16 @@ export function createLedgerHubCommands(
         const a = args as HubArgs<"ask.close">;
         return "messageId" in a ? taskGraphs.closeStepAskIn(p, caller, a.messageId) : router.closeAskIn(p, caller, a);
       }
+      case "ask.list":
+        return askListIn(db, caller, now());
+      case "ask.show":
+        return askShowIn(db, caller, args as HubArgs<"ask.show">, now());
       case "schedule.add":
         return schedules.addIn(p, caller, args as HubArgs<"schedule.add">);
       case "schedule.list":
         return schedules.list(caller);
+      case "schedule.show":
+        return scheduleShowIn(db, caller, args as HubArgs<"schedule.show">, now());
       case "schedule.pause":
         return schedules.pauseIn(p, caller, args as HubArgs<"schedule.pause">);
       case "schedule.resume":
