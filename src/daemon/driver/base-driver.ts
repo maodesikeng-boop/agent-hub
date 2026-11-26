@@ -443,9 +443,11 @@ export abstract class BaseSessionDriver<
   }
 
   protected discardStaleSystemBatch(st: TState, proc: TProc, batch: TBatch): boolean {
-    if (this.systemBatchCurrent(st, batch)) return false;
+    const entries = batch.entries;
+    const current = entries?.filter((entry) => this.systemBatchCurrent(st, entry));
+    if (entries === undefined ? this.systemBatchCurrent(st, batch) : current?.length === entries.length) return false;
     this.dropBatch(st, batch);
-    if (batch.riders !== undefined) st.pending.unshift(...batch.riders.filter((entry) => this.systemBatchCurrent(st, entry)));
+    if (current !== undefined) st.pending.unshift(...current);
     this.afterTurn(st, proc);
     return true;
   }

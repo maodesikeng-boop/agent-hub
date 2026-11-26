@@ -292,6 +292,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     if (!taken) return null;
     const batch = this.#batchOf(st, taken.body, taken.messageIds, taken.command, taken.source);
     batch.riders = taken.riders;
+    batch.entries = taken.entries;
     return batch;
   }
 

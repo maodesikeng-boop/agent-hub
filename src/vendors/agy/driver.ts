@@ -229,6 +229,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       processing: false,
       source: taken.source,
       riders: taken.riders,
+      entries: taken.entries,
     };
   }
 

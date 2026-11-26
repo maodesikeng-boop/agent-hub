@@ -330,6 +330,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       processing: false,
       source: taken.source,
       riders: taken.riders,
+      entries: taken.entries,
     };
   }
 

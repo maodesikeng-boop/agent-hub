@@ -1749,6 +1749,24 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
     expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1] });
   });
 
+  it("delivers the main system input when a rider becomes stale during startup", async () => {
+    let checkedRider = false;
+    const t = makeCodexHarness({ driver: { canDeliverSystemMessage: (_sessionId, id) => {
+      if (id !== 1) return true;
+      const current = !checkedRider;
+      checkedRider = true;
+      return current;
+    } } });
+    const s = t.addSession();
+    await expect(t.driver.send(s.id, { messageIds: [1], source: "system", rider: true, text: "Obsolete reminder" }))
+      .resolves.toEqual({ kind: "queued" });
+    await t.driver.send(s.id, { messageIds: [2], source: "system", text: "Delivery note" });
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [2] });
+    expect(t.rpcIn().filter((r) => r.method === "turn/start")).toEqual([
+      expect.objectContaining({ params: expect.objectContaining({ input: [{ type: "text", text: "Delivery note" }] }) }),
+    ]);
+  });
+
   it.each(["confirmed", "pending", "silent close"])("preserves a %s Codex steer on daemon shutdown", async (kind) => {
     const t = steerHarness((dir) => [holdTurn(dir, {
       interruptOnSigint: kind !== "silent close",

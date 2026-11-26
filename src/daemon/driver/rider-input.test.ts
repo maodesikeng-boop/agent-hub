@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MessageId } from "../../shared/domain.ts";
-import { takePendingBatch, type PendingEntry } from "./driver-helpers.ts";
+import { RESEND_NOTE } from "../../shared/driver.ts";
+import { entryParts, takePendingBatch, type PendingEntry } from "./driver-helpers.ts";
 import { dropUserEntries, untakenReleaseEvents } from "./stop-untaken.ts";
 
 const isCommand = (text: string) => text.startsWith("/");
@@ -33,6 +34,16 @@ describe("rider inputs", () => {
     expect(result?.taken.messageIds).toEqual([1, 2]);
     expect(result?.taken.body.prefixes).toContain(REMINDER);
     expect(result?.taken.body.text).toBe("【任务图】第 2 步完成");
+  });
+
+  it("only adds the resend note to the main input after a restart", () => {
+    const rider = { ...entry(1, "system", REMINDER, true), resend: true };
+    const main = { ...entry(2, "system", "Delivery note"), resend: true };
+    expect(takePendingBatch([rider, main], isCommand)?.taken.body).toEqual({
+      prefixes: [REMINDER, RESEND_NOTE],
+      text: "Delivery note",
+    });
+    expect(entryParts(rider)).toEqual({ prefixes: [], text: REMINDER });
   });
 
   it("wait past a command batch, which cannot carry prefixes", () => {
