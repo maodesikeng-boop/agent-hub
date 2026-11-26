@@ -72,6 +72,8 @@ import {
   TURN_TOOLS_MAX_PER_SESSION,
   UPLOADS_DISK_MAX_BYTES,
   USER_BLOCKERS_RESOLVED_KEEP,
+  WATCHES_RETAIN_MS,
+  WATCHES_RETAIN_PER_PM,
   WORKER_RETENTION_DAYS,
   WORKER_RETENTION_MAX_ENDED,
   WORKTREE_CLEANUP_BATCH_LIMIT,
@@ -289,6 +291,10 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("session_persona_seen", "growing", "src/daemon/ledger/persona.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/router.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_preamble_seen", "growing", "src/daemon/ledger/handover.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("pm_agenda_cursors", "retained_metadata", "src/daemon/ledger/pm-agenda.ts", "src/daemon/ledger/handover.ts, src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("pm_watches", "growing", "src/daemon/ledger/pm-watches.ts", "src/daemon/ledger/pm-watches.ts", "automatic", [
+    limit("WATCHES_RETAIN_MS", WATCHES_RETAIN_MS, "ms"),
+    limit("WATCHES_RETAIN_PER_PM", WATCHES_RETAIN_PER_PM, "rows"),
+  ]),
   table("turn_completions", "growing", "src/daemon/ledger/turn-completions.ts", "src/daemon/ledger/turn-completions.ts", "automatic", [
     limit("TURN_COMPLETION_UNPERSISTED_MAX", TURN_COMPLETION_UNPERSISTED_MAX, "rows"),
   ]),

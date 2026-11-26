@@ -763,3 +763,13 @@ export const PM_AGENDA_DELTA_LINES_MAX = 8;
 // A model rebuilding state from a long chain of changes drifts, so a snapshot replaces the chain this often.
 export const PM_AGENDA_DELTAS_PER_SNAPSHOT = 20;
 export const STEP_SLOT_NAME_MAX_CHARS = 32;
+export const WATCHES_OPEN_PER_PM_MAX = 20;
+export const WATCHES_RUNNING_MAX = 4;
+export const WATCH_EVERY_MIN_MS = 15_000;
+export const WATCH_EVERY_DEFAULT_MS = 60_000;
+export const WATCH_MAX_DEFAULT_MS = 2 * 60 * 60_000;
+export const WATCH_MAX_CAP_MS = 24 * 60 * 60_000;
+export const WATCH_PROBE_TIMEOUT_MS = 5 * 60_000;
+export const WATCH_OUTPUT_TAIL_BYTES = 2_048;
+export const WATCHES_RETAIN_MS = 7 * 24 * 60 * 60_000;
+export const WATCHES_RETAIN_PER_PM = 500;
