@@ -4,7 +4,7 @@
 // until the Bellwood daemon posts success after an independent review PASS on the PR's head commit.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { matchesGlob, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** Must equal the daemon's REVIEW_STATUS_CONTEXT in src/shared/review.ts; kept literal so the gate imports no module outside the stamp paths. */
@@ -58,12 +58,61 @@ export function parseStampPaths(reviewMd: string): string[] {
   return globs;
 }
 
+function matchSegment(segment: string, pattern: string): boolean {
+  if (segment.length === 0) return pattern.length === 0;
+  if (pattern === "*") return true;
+  const parts = pattern.split("*");
+  if (parts.length === 1) return segment === pattern;
+  if (!segment.startsWith(parts[0]!) || !segment.endsWith(parts.at(-1)!)) return false;
+  let cursor = parts[0]!.length;
+  const end = segment.length - parts.at(-1)!.length;
+  if (cursor > end) return false;
+  for (let i = 1; i < parts.length - 1; i++) {
+    const idx = segment.indexOf(parts[i]!, cursor);
+    if (idx === -1 || idx + parts[i]!.length > end) return false;
+    cursor = idx + parts[i]!.length;
+  }
+  return true;
+}
+
+function matchReviewGlob(file: string, glob: string): boolean {
+  if (file.length === 0) return false;
+  const fSegs = file.split("/");
+  if (fSegs.some((seg) => seg.length === 0)) return false;
+  const gSegs: string[] = [];
+  for (const seg of glob.split("/")) {
+    if (seg === "**" && gSegs.at(-1) === "**") continue;
+    gSegs.push(seg);
+  }
+  if (gSegs.length === 1 && gSegs[0] === "**") return true;
+  const m = fSegs.length;
+  const n = gSegs.length;
+  // node:path.matchesGlob skips leading-dot segments with `*` and `**`, so we match segments directly to include hidden files and nested hidden directories.
+  let prev = Array<boolean>(m + 1).fill(false);
+  prev[0] = true;
+  for (let j = 1; j <= n; j++) {
+    const pat = gSegs[j - 1]!;
+    const curr = Array<boolean>(m + 1).fill(false);
+    if (pat === "**") {
+      if (j === n) {
+        for (let i = 1; i <= m; i++) curr[i] = prev[i - 1]! || curr[i - 1]!;
+      } else {
+        for (let i = 0; i <= m; i++) curr[i] = prev[i]! || (i > 0 && curr[i - 1]!);
+      }
+    } else {
+      for (let i = 1; i <= m; i++) curr[i] = prev[i - 1]! && matchSegment(fSegs[i - 1]!, pat);
+    }
+    prev = curr;
+  }
+  return prev[m]!;
+}
+
 /**
  * Postcondition: returns the changed files that match at least one glob, with REVIEW.md semantics
- * (`*` inside one segment, `**` across directories), in input order.
+ * (`*` inside one segment including dotfiles, `**` across directories including hidden directories), in input order.
  */
 export function matchStampPaths(files: readonly string[], globs: readonly string[]): string[] {
-  return files.filter((file) => globs.some((glob) => matchesGlob(file, glob)));
+  return files.filter((file) => globs.some((glob) => matchReviewGlob(file, glob)));
 }
 
 /**
