@@ -95,7 +95,7 @@ function UsageGroup({ quota }: { quota: readonly QuotaVendor[] }) {
   return (
     <SettingsGroup title="Usage">
       {vendors.map((vendor) => (
-        <div key={vendor.id} className="grid gap-2.5 px-4 py-3">
+        <div key={vendor.id} className="grid gap-2.5 py-1.5">
           <div className="text-minor font-semibold text-foreground">{vendor.group ? `${vendor.name} (${vendor.group})` : vendor.name}</div>
           {vendor.windows.map((w) => {
             const full = w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100));
@@ -153,7 +153,7 @@ function SettingsHome({
   return (
     <SettingsPage title="Settings" home {...(onBack !== undefined ? { onBack } : {})}>
       <UsageGroup quota={quota} />
-      <SettingsGroup title="General">
+      <SettingsGroup label="General">
         <SettingsNavRow icon={<Type aria-hidden="true" />} label="Interface scale" summary={scaleLabel} onClick={() => onOpen("scale")} />
         <SettingsNavRow icon={<Bell aria-hidden="true" />} label="Notifications" summary={describeNotifySummary(notify)} onClick={() => onOpen("notifications")} />
         <SettingsNavRow
@@ -165,7 +165,7 @@ function SettingsHome({
           onClick={() => onOpen("updates")}
         />
       </SettingsGroup>
-      <SettingsGroup title="Providers">
+      <SettingsGroup label="Providers">
         <SettingsNavRow
           icon={<Blocks aria-hidden="true" />}
           label="Providers"
@@ -181,10 +181,10 @@ function SettingsHome({
           onClick={() => onOpen("vendor-sync")}
         />
       </SettingsGroup>
-      <SettingsGroup title="Capabilities">
+      <SettingsGroup label="Capabilities">
         <SettingsNavRow icon={<Cable aria-hidden="true" />} label="Capabilities" onClick={() => onOpen("capabilities")} />
       </SettingsGroup>
-      <SettingsGroup title="Resources">
+      <SettingsGroup label="Resources">
         <SettingsNavRow
           icon={<Server aria-hidden="true" />}
           label="Resources"
@@ -195,11 +195,11 @@ function SettingsHome({
         />
       </SettingsGroup>
       {devices !== null && (
-        <SettingsGroup title="Computers">
+        <SettingsGroup label="Computers">
           <SettingsNavRow icon={<Monitor aria-hidden="true" />} label="Computers" summary={describeComputersSummary(devices)} onClick={() => onOpen("computers")} />
         </SettingsGroup>
       )}
-      <SettingsGroup title="Security & Access">
+      <SettingsGroup label="Security & Access">
         <SettingsNavRow icon={<QrCode aria-hidden="true" />} label="Sign in on another device" onClick={() => onOpen("sign-in")} />
         <SettingsNavRow
           icon={<Smartphone aria-hidden="true" />}

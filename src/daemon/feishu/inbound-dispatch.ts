@@ -2,7 +2,7 @@ import type { Attachment } from "../../shared/attachments.ts";
 import { userMessageDedupeKey, type PmId } from "../../shared/domain.ts";
 import { feishuDisplayName, type FeishuChatId, type FeishuChatMode, type FeishuChatTarget, type FeishuOpenId } from "../../shared/feishu.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../../shared/ledger.ts";
-import { MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
+import { FEISHU_CONTROL_RETRY_MS, FEISHU_INBOUND_HANDOFF_RETRIES, MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
 import { sendText } from "./api.ts";
 import { applyChatGone, bindRouterChat } from "./chat-sync.ts";
 import { broadcastPeerApp } from "./connection.ts";
@@ -14,10 +14,11 @@ import { GUEST_NO_FILES, routeFeishuMessage, type FeishuMessageRoute } from "./r
 import { offerPolicyCard, postPolicyCard, postRouterSettingsCard, refreshCatalogsInBackground } from "./settings-cards.ts";
 import type { FeishuChatBinding } from "./store.ts";
 import { FEISHU_CLIENT_PREFIX } from "./text-cards.ts";
-import type { FeishuRawEvent } from "./transport.ts";
+import { FeishuAuthError, isFeishuRejection, type FeishuRawEvent } from "./transport.ts";
 
 type InboundMessage = Extract<FeishuInbound, { kind: "message" }>;
 type DeliverRoute = Extract<FeishuMessageRoute, { kind: "deliver" }>;
+type ActionRoute = Exclude<FeishuMessageRoute, { kind: "ignore" | "context" }>;
 
 interface MessageScene {
   message: InboundMessage;
@@ -51,10 +52,11 @@ function noteLiveQueueDrop(ctx: FeishuContext, chatId: FeishuChatId, at: number)
 }
 
 export function onRawEvent(ctx: FeishuContext, raw: FeishuRawEvent, queuedAt: number | null) {
+  if (ctx.life.closing !== null || ctx.life.closed) return;
   const app = ctx.store.app();
   if (app === null) return;
   const event = parseFeishuEvent(raw, app.botOpenId);
-  if (event === null || ctx.life.closed) return;
+  if (event === null) return;
   if (event.kind === "chat_gone") {
     applyChatGone(ctx, event.chatId);
     return;
@@ -74,6 +76,7 @@ export function onRawEvent(ctx: FeishuContext, raw: FeishuRawEvent, queuedAt: nu
 }
 
 export async function handleInbound(ctx: FeishuContext, event: Exclude<FeishuInbound, { kind: "chat_gone" }>, queuedAt: number | null) {
+  if (ctx.life.closing !== null || ctx.life.closed) return;
   const o = owner(ctx);
   switch (event.kind) {
     case "members_added": {
@@ -115,9 +118,8 @@ function logIgnoredMention(ctx: FeishuContext, message: InboundMessage, reason: 
 
 async function handleMessage(ctx: FeishuContext, message: InboundMessage, queuedAt: number | null) {
   if (ctx.life.closed || ctx.inboundSync.isAlreadyExecuted(message.messageId) || (message.chatType === "p2p" && !isCenter(ctx))) return;
-  const appId = ctx.inboundSync.snapshot()?.appId;
-  if (appId === undefined) return;
-  const sameApp = () => !ctx.life.closed && ctx.inboundSync.snapshot()?.appId === appId;
+  if (ctx.inboundSync.snapshot() === null) return;
+  const signal = ctx.inboundSync.dispatchSignal;
   const o = owner(ctx);
   const t = ctx.now();
   if (message.chatType === "p2p" && o !== null && message.senderOpenId === o && ctx.store.chatOfTarget({ kind: "router" }) === null) {
@@ -128,15 +130,16 @@ async function handleMessage(ctx: FeishuContext, message: InboundMessage, queued
   const scene: MessageScene = { message, chat, target, owner: o, t, queuedAt };
   const group = message.chatType === "group" && target?.kind === "pm";
   const mode = group && o !== null ? await ctx.directory.modeOf(message.chatId, o, message.senderOpenId, t) : "solo";
+  if (signal.aborted) return;
   const speakerName = group ? await ctx.directory.nameOf(message.chatId, message.senderOpenId, "", t) : message.senderOpenId === o ? displayOwner(ctx) : "";
-  if (!sameApp() || (message.chatType === "p2p" && !isCenter(ctx))) return;
+  if (signal.aborted || (message.chatType === "p2p" && !isCenter(ctx))) return;
   const claim = ctx.inboundSync.tryClaim({
     messageId: message.messageId, chatId: message.chatId, messageAt: message.at, isOwnerOfChat: group || message.chatType === "p2p",
   });
   if (claim.kind === "duplicate") return;
   try {
-    await dispatchClaimedMessage(ctx, scene, { mode, speakerName }, () =>
-      sameApp() && ctx.inboundSync.ownsClaim(claim.receipt));
+    await dispatchClaimedMessage(ctx, scene, { mode, speakerName }, signal, () =>
+      !signal.aborted && ctx.inboundSync.ownsClaim(claim.receipt));
   } finally {
     ctx.inboundSync.releaseClaim(claim.receipt);
   }
@@ -146,6 +149,7 @@ async function dispatchClaimedMessage(
   ctx: FeishuContext,
   scene: MessageScene,
   { mode, speakerName }: { mode: FeishuChatMode; speakerName: string },
+  signal: AbortSignal,
   canExecute: () => boolean,
 ) {
   const { message, chat, target, owner: o, t } = scene;
@@ -172,12 +176,42 @@ async function dispatchClaimedMessage(
     logIgnoredMention(ctx, message, "context-only");
     ctx.contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
   } else {
-    await ctx.inboundSync.waitForClaimSync();
+    await ctx.inboundSync.waitForClaimSync({ signal });
     // A new hub skips messages claimed by this device.
     if (!canExecute()) return;
-    await applyMessageRoute(ctx, scene, route, canExecute);
+    await runClaimedRoute(ctx, scene, route, signal, canExecute);
   }
   if (canExecute()) recordHandled(ctx, message);
+}
+
+function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
+async function runClaimedRoute(ctx: FeishuContext, scene: MessageScene, route: ActionRoute, signal: AbortSignal, canExecute: () => boolean) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await applyMessageRoute(ctx, scene, route, canExecute);
+      return;
+    } catch (error) {
+      // The successor cannot retry a foreign claim, and only the original device has its Router ledger.
+      if (!canExecute()) return;
+      if (scene.message.chatType !== "p2p" || isCenter(ctx) || !isReady(ctx) ||
+        error instanceof FeishuAuthError || isFeishuRejection(error) || attempt >= FEISHU_INBOUND_HANDOFF_RETRIES) throw error;
+      await waitForRetry(FEISHU_CONTROL_RETRY_MS * 2 ** attempt, signal);
+      if (!canExecute()) return;
+      if (!isReady(ctx)) throw error;
+    }
+  }
 }
 
 async function bindOwner(ctx: FeishuContext, message: InboundMessage, openId: FeishuOpenId, t: number) {
@@ -192,7 +226,7 @@ async function bindOwner(ctx: FeishuContext, message: InboundMessage, openId: Fe
 async function applyMessageRoute(
   ctx: FeishuContext,
   scene: MessageScene,
-  route: Exclude<FeishuMessageRoute, { kind: "ignore" | "context" }>,
+  route: ActionRoute,
   canExecute: () => boolean,
 ) {
   const { message, chat, target } = scene;
@@ -251,7 +285,7 @@ function deliveredText(text: string, queuedAt: number | null): string {
   return text === "" ? formatQueuedPrefix(queuedAt) : `${formatQueuedPrefix(queuedAt)}\n${text}`;
 }
 
-async function deliverToRouter(ctx: FeishuContext, scene: MessageScene, { clientId, text, attachments }: Delivery) {
+async function deliverToRouter(ctx: FeishuContext, scene: MessageScene, { clientId, text, attachments }: Delivery, canExecute: () => boolean) {
   const chatId = scene.message.chatId;
   if (ctx.options.router === null) {
     await sendText(ctx, { chatId }, "总助没开：去网页的总助工作台选一家 agent。");
@@ -261,7 +295,7 @@ async function deliverToRouter(ctx: FeishuContext, scene: MessageScene, { client
     await ctx.options.router.submitCommand({ clientId, text, ...(attachments.length > 0 ? { attachmentIds: attachments.map((a) => a.id) } : {}) });
   } catch (error) {
     if (!(error instanceof LedgerRequestError)) throw error;
-    await sendText(ctx, { chatId }, `没送到：${error.message}`);
+    if (canExecute()) await sendText(ctx, { chatId }, `没送到：${error.message}`);
   }
 }
 
@@ -290,7 +324,7 @@ async function deliver(ctx: FeishuContext, scene: MessageScene, route: DeliverRo
   if (!canExecute()) return;
   if (route.text !== "" || attachments.length > 0) {
     const delivery = { clientId, text: deliveredText(route.text, scene.queuedAt), attachments };
-    if (route.target.kind === "router") await deliverToRouter(ctx, scene, delivery);
+    if (route.target.kind === "router") await deliverToRouter(ctx, scene, delivery, canExecute);
     else await deliverToPm(ctx, scene, route.target.pmId, route.origin, delivery);
   }
   if (!canExecute()) return;

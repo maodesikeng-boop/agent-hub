@@ -11,10 +11,9 @@ import {
   useDismissedUpdate,
   useUpdateStatus,
 } from "../update-model.ts";
-import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { InfoAction, ReadonlyValue, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-const INLINE_ACTION =
-  "touch-target inline-flex cursor-pointer items-center gap-1 font-medium text-brand-ink hover:underline focus-visible:outline-2 focus-visible:outline-border-focus";
+const INLINE_ACTION = "info-action touch-target";
 
 function InlineLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -28,13 +27,13 @@ function ReleaseNotes({ href }: { href: string }) {
   return (
     <InlineLink href={href}>
       Release notes
-      <ExternalLink className="size-pixel-sm" aria-hidden="true" />
+      <ExternalLink className="size-3" aria-hidden="true" />
     </InlineLink>
   );
 }
 
 function Details({ children }: { children: ReactNode }) {
-  return <span className="flex flex-wrap items-center gap-x-3">{children}</span>;
+  return <span className="info-actions">{children}</span>;
 }
 
 function DownloadRow({ offer }: { offer: UpdateAvailable }) {
@@ -59,7 +58,7 @@ function DownloadRow({ offer }: { offer: UpdateAvailable }) {
       {() =>
         installer &&
         platform && (
-          <Button asChild size="sm">
+          <Button asChild size="sm" className="h-7">
             <a href={installer.downloadUrl} target="_blank" rel="noreferrer">
               <Download aria-hidden="true" />
               Download for {platform}
@@ -83,23 +82,19 @@ export function UpdateSettings({ titled = true }: { titled?: boolean }) {
     <SettingsGroup {...(titled ? { title: "Updates" } : { label: "Updates" })}>
       <SettingsRow
         label={status === undefined ? PRODUCT_NAME : `${PRODUCT_NAME} v${status.currentVersion}`}
-        badge={status?.installKind === "source" ? <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Source</span> : undefined}
-        detail={
-          line === undefined && notes === undefined ? undefined : (
-            <Details>
-              {line !== undefined && <span>{line}</span>}
-              {notes !== undefined && <ReleaseNotes href={notes} />}
-            </Details>
-          )
-        }
+        badge={status?.installKind === "source" ? <span className="tool-badge shrink-0 px-1.5 py-px text-xs font-medium">Source</span> : undefined}
       >
-        {() => (
-          <Button variant="outline" size="sm" disabled={checking} onClick={() => check.mutate()}>
-            {checking && <Loader2 aria-hidden="true" />}
-            Check for updates
-          </Button>
-        )}
+        {(id) => line !== undefined && <ReadonlyValue id={id}>{line}</ReadonlyValue>}
       </SettingsRow>
+      <div className="pt-1 pb-1">
+        <Details>
+          <InfoAction disabled={checking} onClick={() => check.mutate()}>
+            {checking && <Loader2 className="size-3.5" aria-hidden="true" />}
+            Check for updates
+          </InfoAction>
+          {notes !== undefined && <ReleaseNotes href={notes} />}
+        </Details>
+      </div>
       {offer && <DownloadRow offer={offer} />}
     </SettingsGroup>
   );

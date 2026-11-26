@@ -80,6 +80,7 @@ function clearRetry(ctx: FeishuContext) {
 }
 
 async function teardownTransport(ctx: FeishuContext) {
+  ctx.inboundSync.interruptDispatch();
   const { link } = ctx;
   const old = link.transport;
   const wasWs = link.wsStarted;
@@ -165,7 +166,7 @@ async function startWs(ctx: FeishuContext, transport: FeishuTransport) {
   try {
     await transport.start({
       onEvent: (raw) => {
-        if (ctx.life.closed || !ctx.link.wsStarted || !isCenter(ctx)) return;
+        if (ctx.life.closing !== null || ctx.life.closed || !ctx.link.wsStarted || !isCenter(ctx)) return;
         if (ctx.app.accountBot !== null) ctx.app.accountBot.onEvent(raw);
         else onRawEvent(ctx, raw, null);
       },

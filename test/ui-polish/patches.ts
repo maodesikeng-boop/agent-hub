@@ -34,6 +34,7 @@ import { BROWSER_NOW_ISO } from "./limits.ts";
 export const PATCH_NAMES = [
   "state-pending",
   "state-500",
+  "folder-picker-available",
   "ws-reconnecting",
   "health-driver",
   "session-working",
@@ -332,6 +333,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
   "progress-wakeup-idle": (page) => progressScenario(page, "idle"),
   "state-pending": (page) => hang(page, localOnly(API_PATHS.state)),
   "state-500": (page) => fixedJson(page, localOnly(API_PATHS.state), { error: "数据库打不开：database is locked", } satisfies ApiErrorBody, { status: 500 }),
+  "folder-picker-available": (page) => editState(page, (state) => ({ ...state, server: { ...state.server, folderPicker: true } }), localOnly(API_PATHS.state)),
   "ws-reconnecting": (page) => page.routeWebSocket(localOnly(API_PATHS.ws), (ws) => ws.close({ code: 1006, reason: "" }).catch(() => {})),
   "health-driver": (page) =>
     editState(page, (state) => ({

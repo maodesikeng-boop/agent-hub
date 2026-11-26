@@ -13,7 +13,7 @@ export function RadioMark({ checked }: { checked: boolean }) {
     <span
       aria-hidden="true"
       className={cn(
-        "flex size-4.5 shrink-0 items-center justify-center rounded-full border transition-colors motion-reduce:transition-none",
+        "flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors motion-reduce:transition-none",
         checked ? "border-primary bg-primary" : "border-border-strong bg-background",
       )}
     >
@@ -43,7 +43,7 @@ export function ChoiceRows<T extends string>({
       {...(disabled !== undefined ? { disabled } : {})}
       aria-label={label}
     >
-      {options.map((option, idx) => {
+      {options.map((option) => {
         const id = `${prefix}-${option.value}`;
         const hasDetail = option.detail !== undefined;
         return (
@@ -52,18 +52,14 @@ export function ChoiceRows<T extends string>({
             value={option.value}
             aria-labelledby={`${id}-label`}
             aria-describedby={hasDetail ? `${id}-detail` : undefined}
-            className={cn(
-              "flex w-full cursor-pointer items-center gap-4 rounded-none px-4 text-left transition-colors hover:bg-hover active:bg-hover focus-visible:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:opacity-50",
-              hasDetail ? "py-3" : "min-h-12 py-2.5",
-              idx > 0 && "border-t border-border",
-            )}
+            className={cn("info-row min-h-7.5 pointer-coarse:min-h-11 cursor-pointer gap-3 disabled:cursor-default disabled:opacity-50", hasDetail ? "py-1.5" : "h-7.5")}
           >
             <span className="min-w-0 flex-1">
-              <span id={`${id}-label`} className="block text-body">
+              <span id={`${id}-label`} className="block text-minor text-foreground">
                 {option.label}
               </span>
               {hasDetail && (
-                <span id={`${id}-detail`} className="block text-minor leading-snug text-muted-foreground">
+                <span id={`${id}-detail`} className="block text-xs leading-snug text-muted-foreground">
                   {option.detail}
                 </span>
               )}

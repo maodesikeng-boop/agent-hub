@@ -23,6 +23,7 @@ import {
   WORKER_SEARCH_MAX_LIMIT,
 } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
+import { formatGraphLimitsHelp } from "../shared/text-limits.ts";
 import { AGENT_VENDORS, ALL_EFFORTS } from "../shared/vendors.ts";
 
 const hub = HUB_COMMAND;
@@ -264,7 +265,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "create",
     cli: "graph create",
-    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（steps 不写 deps 默认串接，带 brief 自动开工）
+    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（steps 不写 deps 默认串接，带 brief 自动开工；confirm: true 完成后等项目经理审）
+                                                          ${formatGraphLimitsHelp()}
                                                           JSON：${TASK_GRAPH_CREATE_JSON_HINT}`,
   },
   {
@@ -287,7 +289,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "patch",
     cli: "graph patch",
-    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图步骤、跳过未开工步骤（在干或已完的不可直接改，已结束的图不能改）
+    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 改图；doneSteps 可在同一次改图里放行等项目经理处理的步骤
                                                           JSON：${TASK_GRAPH_PATCH_JSON_HINT}`,
   },
   {
@@ -305,7 +307,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "decide",
     cli: "graph decide",
     usage: `  ${hub} graph decide <节点> --choice <选项> [--note <说明>] [--graph <图编号>]
-                                                          记录用户在对话中的口头拍板（挂着未收工 Worker 时直接发给该 Worker 接着干，否则步骤完了推进下游）`,
+                                                          记录用户在对话中的口头拍板。检查点须已有用户拍板卡；还在等项目经理审的检查点用 graph done 放行`,
   },
   {
     command: "graph.skip",

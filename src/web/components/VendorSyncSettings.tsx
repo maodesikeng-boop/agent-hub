@@ -5,7 +5,7 @@ import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { HostBoundNote } from "./HostBoundNote.tsx";
-import { ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { InfoAction, ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) {
   if (badges.length === 0) return null;
@@ -48,18 +48,10 @@ export function VendorSyncSettings({ vendor, showScan }: { vendor: VendorSyncMod
       {showScan && <SettingsGroup title="Integrations">
         <SettingsRow label="Vendor sync" detail={summary} error={scanError}>
           {(id) => (
-            <Button
-              id={id}
-              variant="outline"
-              size="sm"
-              className="min-w-24"
-              aria-label={scanning ? "Scanning…" : "Scan…"}
-              disabled={scanning}
-              onClick={previewVendorSync}
-            >
-              {scanning && <Loader2 aria-hidden="true" />}
+            <InfoAction id={id} aria-label={scanning ? "Scanning…" : "Scan…"} disabled={scanning} onClick={previewVendorSync}>
+              {scanning && <Loader2 className="size-3.5" aria-hidden="true" />}
               {scanning ? "Scanning…" : "Scan…"}
-            </Button>
+            </InfoAction>
           )}
         </SettingsRow>
       </SettingsGroup>}
@@ -179,16 +171,14 @@ export function VendorSyncSettings({ vendor, showScan }: { vendor: VendorSyncMod
           </DialogBody>
 
           {applyError !== null && (
-            <div className="px-4">
-              <RowError error={applyError} />
-            </div>
+            <RowError error={applyError} />
           )}
 
           <DialogFooter>
-            <Button type="button" variant="ghost" disabled={applying} onClick={closePreview}>
+            <Button type="button" variant="ghost" size="sm" disabled={applying} onClick={closePreview}>
               Cancel
             </Button>
-            <Button type="button" disabled={applying || !hasSyncableItems} onClick={applyVendorSync}>
+            <Button type="button" size="sm" disabled={applying || !hasSyncableItems} onClick={applyVendorSync}>
               {applying && <Loader2 aria-hidden="true" />}
               Sync
             </Button>

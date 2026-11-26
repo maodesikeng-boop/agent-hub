@@ -16,6 +16,7 @@ import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
 import { verifyComposerLayout } from "./verify-composer-layout.ts";
 import { verifyProjectListHeader } from "./verify-list-header.ts";
 import { verifyShellWidths } from "./verify-shell-widths.ts";
+import { verifySettingsKeyboard } from "./verify-settings-keyboard.ts";
 import { verifyTopBarUnderSettings } from "./verify-window-drag.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -225,6 +226,9 @@ async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir
 
     await verifyShellWidths(browser, daemon.loginUrl, daemon.origin);
     phase("Columns and single column at every scale");
+
+    await verifySettingsKeyboard(browser, daemon.loginUrl, daemon.origin, state.server.folderPicker);
+    phase("Settings and New PM keyboard focus at Compact and XL");
 
     if (checkComposer) {
       const id = state.conversations[0]?.conversation.id;

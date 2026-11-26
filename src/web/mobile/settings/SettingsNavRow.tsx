@@ -2,10 +2,10 @@ import { ChevronRight } from "../../ui/icons.ts";
 import { useId, type ReactNode } from "react";
 import type { ErrorLike } from "../../format.ts";
 import { cn } from "../../lib/utils.ts";
-import { RowError } from "../../components/SettingsList.tsx";
+import { INFO_ROW, RowError } from "../../components/SettingsList.tsx";
 import { Switch } from "../../ui/switch.tsx";
 
-const ROW_ICON = "flex shrink-0 text-muted-foreground [&_svg]:size-pixel";
+const ROW_ICON = "flex shrink-0 text-muted-foreground [&_svg]:size-4";
 
 export function SettingsNavRow({
   icon,
@@ -38,19 +38,20 @@ export function SettingsNavRow({
       disabled={disabled}
       data-slot="settings-nav-row"
       className={cn(
-        "flex min-h-12 w-full cursor-pointer items-center gap-3 rounded-none px-4 py-3 text-left transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] active:bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
+        INFO_ROW,
+        detail ? "py-1" : "h-7.5",
         className,
       )}
       onClick={onClick}
     >
       {icon && <span className={ROW_ICON}>{icon}</span>}
       <span className="min-w-0 flex-1">
-        <span className={cn("block text-body break-words", danger && "text-danger")}>{label}</span>
-        {detail && <span className="mt-0.5 block text-minor leading-snug text-muted-foreground">{detail}</span>}
+        <span className={cn("block text-minor break-words", danger ? "text-danger" : "text-foreground")}>{label}</span>
+        {detail && <span className="block text-xs leading-snug text-muted-foreground">{detail}</span>}
       </span>
       {attention && <span data-testid={attentionTestId} aria-hidden="true" className="size-2 shrink-0 rounded-full bg-danger" />}
-      {summary !== undefined && <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{summary}</span>}
-      {chevron && <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />}
+      {summary !== undefined && <span className="info-val max-w-44 shrink-0 truncate text-minor tabular-nums">{summary}</span>}
+      {chevron && <ChevronRight className="info-chevron size-3.5 shrink-0" aria-hidden="true" />}
     </button>
   );
 }
@@ -70,12 +71,12 @@ export function SwitchRow({
 }) {
   const id = useId();
   return (
-    <div data-slot="switch-row" className="relative flex min-h-12 items-center gap-3 px-4 py-3">
+    <div data-slot="switch-row" className={cn(INFO_ROW, "relative", detail ? "py-1" : "h-7.5")}>
       <div className="min-w-0 flex-1">
-        <label htmlFor={id} className={cn("block text-body break-words after:absolute after:inset-0", disabled ? "cursor-default" : "cursor-pointer")}>
+        <label htmlFor={id} className={cn("block text-minor text-foreground break-words after:absolute after:inset-0", disabled ? "cursor-default" : "cursor-pointer")}>
           {label}
         </label>
-        {detail && <div className="mt-0.5 text-minor leading-snug text-muted-foreground">{detail}</div>}
+        {detail && <div className="text-xs leading-snug text-muted-foreground">{detail}</div>}
       </div>
       <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onCheckedChange} />
     </div>
@@ -85,8 +86,8 @@ export function SwitchRow({
 export function FieldBlock({ label, error, bare = false, children }: { label: string; error?: ErrorLike | null; bare?: boolean; children: (id: string) => ReactNode }) {
   const id = useId();
   return (
-    <div className={cn("grid grid-cols-1 gap-2", !bare && "px-4 py-3")}>
-      <label htmlFor={id} className="text-minor font-medium text-muted-foreground">
+    <div className={cn("grid grid-cols-1 gap-1.5", !bare && "py-1.5")}>
+      <label htmlFor={id} className="text-xs font-medium text-muted-foreground">
         {label}
       </label>
       {children(id)}

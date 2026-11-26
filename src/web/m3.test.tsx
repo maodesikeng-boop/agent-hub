@@ -878,7 +878,7 @@ describe("最左栏的额度", () => {
       expect(badge()).toHaveAccessibleName("Usage");
       expect(badge().querySelector("svg")).toHaveAttribute("data-icon", "line");
       await user.click(badge());
-      expect(await screen.findByText("Loading…")).toHaveClass("text-xs", "text-muted-foreground");
+      expect(await screen.findByText("Loading…")).toHaveClass("text-minor", "text-muted-foreground");
       gate.resolve({ status: 200, body: reply });
       expect(await screen.findByRole("group", { name: "Gemini" })).toBeInTheDocument();
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();

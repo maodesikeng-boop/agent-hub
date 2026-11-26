@@ -8,8 +8,7 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default:
-          "btn-solid bg-primary text-primary-foreground disabled:border-border disabled:bg-send-disabled disabled:text-muted-foreground disabled:opacity-100",
+        default: "btn-pastel disabled:opacity-100",
         destructive:
           "btn-solid bg-danger text-primary-foreground disabled:border-border disabled:bg-send-disabled disabled:text-muted-foreground disabled:opacity-100",
         outline: "btn-raised",

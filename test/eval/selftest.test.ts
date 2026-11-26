@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { SANDBOX_EXEC, osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
+import { createSpecSchema } from "../../src/daemon/ledger/task-graphs/spec.ts";
 import { shortTmp } from "../e2e/harness.ts";
 import { EVAL_SCRIPTED_POLL_MS, EVAL_SCRIPTED_QUIET_MS, EVAL_SCRIPTED_TRIAL_TIMEOUT_MS } from "./limits.ts";
 import { SCENARIOS } from "./scenarios.ts";
@@ -47,6 +48,15 @@ async function selfTrial(scenario: Scenario, kind: SelfTestKind): Promise<TrialR
 const show = (r: TrialResult) => JSON.stringify({ envError: r.envError, checks: r.checks.map((c) => `${c.id}:${c.status} ${c.reason}`), workDir: r.workDir }, null, 2);
 
 const positiveNeedsWorkerSandbox = (id: Scenario["id"]) => id !== "k2-local-config" && id !== "k3-merge";
+
+it("accepts the k1-install counterexample graph before the eval runs", () => {
+  const script = SELF_TEST_SCRIPTS["k1-install"].negative({ workDir: "", shotsDir: "", preludeShotsDir: "" });
+  const command = script.turns?.[0]?.steps?.[0];
+  const json = command && "bash" in command ? command.bash.split("\n")[1] : undefined;
+  if (json === undefined) throw new Error("The k1-install counterexample must submit a graph spec on stdin");
+  const graph = createSpecSchema.parse(JSON.parse(json));
+  expect(graph.nodes?.map((node) => node.key)).toEqual(["ok-approve", "setup", "ok-login", "ok-login2", "connect"]);
+});
 
 describe.each(SCENARIOS)("编排验证自测 $id", { timeout: EVAL_SCRIPTED_TRIAL_TIMEOUT_MS + 30_000 }, (scenario) => {
   it.skipIf(!canSpawnWorkers && positiveNeedsWorkerSandbox(scenario.id))("正例：全部检查都过", async () => {

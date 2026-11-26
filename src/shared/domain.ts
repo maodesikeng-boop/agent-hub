@@ -12,6 +12,7 @@ import type { ReviewTarget, StoredReviewVerdict } from "./review.ts";
 import type { SandboxApprovalId, SandboxApprovalRef } from "./sandbox-approval.ts";
 import { APP_APPROVAL_RISK_LEVELS, type AppApprovalRef } from "./app-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
+import { TEXT_LIMITS } from "./text-limits.ts";
 import type { TurnId } from "./turn.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
@@ -401,12 +402,13 @@ export function validateAskOptions(raw: readonly string[]): AskOptionsValidation
     return { ok: false, error: `选项最多 ${ASK_MAX_OPTIONS} 个` };
   }
   const options: string[] = [];
+  const { maxChars } = TEXT_LIMITS["ask.option"];
   for (const item of raw) {
-    const normalized = normalizeName(item, ASK_MAX_OPTION_CHARS);
+    const normalized = normalizeName(item, maxChars);
     if (normalized === null) {
       return {
         ok: false,
-        error: `选项不能为空、不能含换行或控制字符，且不超过 ${ASK_MAX_OPTION_CHARS} 个字符`,
+        error: `选项不能为空、不能含换行或控制字符，且不超过 ${maxChars} 个字符`,
       };
     }
     options.push(normalized);

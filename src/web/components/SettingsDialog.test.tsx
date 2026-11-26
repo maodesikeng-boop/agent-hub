@@ -47,8 +47,8 @@ async function openSecurity() {
 }
 
 const rowOf = (el: HTMLElement) => el.closest("[data-slot='settings-row']") as HTMLElement;
-/** 行里放控件（按钮、输入框）的那一块：SettingsRow 的第二个子块。 */
-const controlsOf = (row: HTMLElement) => row.firstElementChild!.lastElementChild as HTMLElement;
+/** The value and control part of a SettingsRow (text actions, inputs): its second child. */
+const controlsOf = (row: HTMLElement) => row.children[1] as HTMLElement;
 
 describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", () => {
   it("右栏 min-w-0、分组那一列 grid-cols-1：内容再长也撑不开右栏（长内容曾把按钮挤到弹窗外面）", async () => {
@@ -56,8 +56,8 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     expect(classOf(panel)).toContain("min-w-0");
     const scroller = panel.lastElementChild as HTMLElement;
     expect(classOf(scroller)).toContain("overflow-y-auto");
-    // 内容列限宽（max-w-180）并且 grid-cols-1，长内容撑不开
-    expect(classOf(scroller.firstElementChild as HTMLElement)).toEqual(expect.arrayContaining(["grid-cols-1", "max-w-180"]));
+    // The content column is capped at max-w-160, centered, and grid-cols-1 so long content cannot stretch it
+    expect(classOf(scroller.firstElementChild as HTMLElement)).toEqual(expect.arrayContaining(["grid-cols-1", "max-w-160", "mx-auto"]));
     for (const group of within(panel).getAllByRole("region")) {
       // 自己是 grid 的分组（带标题的）列宽也不跟内容走
       if (classOf(group).includes("grid")) expect(classOf(group)).toContain("grid-cols-1");
@@ -85,11 +85,12 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     const controls = controlsOf(row);
     expect(within(controls).getByRole("button", { name: /^Sign out/ })).toBeVisible();
     expect(classOf(controls)).toEqual(expect.arrayContaining(["ml-auto", "shrink-0", "max-w-full"]));
-    const line = row.firstElementChild as HTMLElement;
-    expect(classOf(line)).toContain("flex-wrap"); // 放不下时按钮换到下一行，不出界
-    const left = line.firstElementChild as HTMLElement;
-    expect(classOf(left)).toEqual(expect.arrayContaining(["min-w-32", "flex-1"]));
-    expect(classOf(within(row).getByText("Android Chrome"))).toContain("line-clamp-2");
+    expect(classOf(row)).toContain("flex-wrap"); // Values and actions wrap to the next line instead of overflowing
+    const left = row.firstElementChild as HTMLElement;
+    expect(classOf(left)).toEqual(expect.arrayContaining(["min-w-28", "flex-1"]));
+    const label = within(row).getByText("Android Chrome");
+    expect(classOf(label)).toContain("truncate");
+    expect(label).toHaveAttribute("title", "Android Chrome");
   });
 
   it("所有行的右边块（Sign out、Sign out all、Show QR code）都是同一套：靠右、不收缩、不比行宽", async () => {
@@ -114,7 +115,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
   it("从别处点进能力页：defaultSection 直接落在 Capabilities", async () => {
     render(<SettingsDialogFixture open onOpenChange={() => {}} notify={notify} devices={devices} section="capabilities" />);
     expect(screen.getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("radio", { name: "Project defaults" })).toBeChecked();
+    expect(screen.getByRole("tab", { name: "Project defaults" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("region", { name: "Shared" })).toBeInTheDocument();
   });
 });

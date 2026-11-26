@@ -396,8 +396,8 @@ describe("桌面端 Settings → Providers", () => {
     const v2 = AGENT_VENDORS[2]!;
     await user.click(within(within(panel).getByTestId(`provider-row-${v2}`)).getByRole("button", { name: /Sign in/ }));
     let dialog = await screen.findByRole("dialog", { name: `Sign in to ${vendorLabel(v2)}` });
-    const methodGroup = within(dialog).getByRole("radiogroup", { name: "Sign-in method" });
-    expect(within(methodGroup).getByRole("radio", { name: "Device code" })).toHaveAttribute("aria-checked", "true");
+    const methodGroup = within(dialog).getByRole("tablist", { name: "Sign-in method" });
+    expect(within(methodGroup).getByRole("tab", { name: "Device code" })).toHaveAttribute("aria-selected", "true");
 
     await user.click(within(dialog).getByRole("button", { name: "Continue in browser" }));
     expect(await within(dialog).findByTestId("device-user-code")).toHaveTextContent("WXYZ-5678");
@@ -408,7 +408,7 @@ describe("桌面端 Settings → Providers", () => {
     });
 
     // 2. 切到 Browser 方式 → 远端常驻粘贴回环回调 URL 输入框，粘贴提交后自动完成收起弹窗
-    await user.click(within(methodGroup).getByRole("radio", { name: "Browser" }));
+    await user.click(within(methodGroup).getByRole("tab", { name: "Browser" }));
     await user.click(within(dialog).getByRole("button", { name: "Open sign-in page" }));
     const pasteInput = await within(dialog).findByPlaceholderText("Paste code or redirect URL…");
     await user.type(pasteInput, "http://127.0.0.1:54321/auth/callback?code=ok_code&state=st1");
@@ -545,6 +545,68 @@ describe("桌面端 Settings → Providers", () => {
     expect(within(row).getByText("Not signed in")).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: `Sign in to ${vendorLabel(v0!)}` })).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: `Account for ${vendorLabel(v0!)}` })).toBeNull();
+  });
+
+  it("keeps Show log when an install fails after the executable is already in place", async () => {
+    const mixed = makeMixedProviders();
+    const v1 = AGENT_VENDORS[1]!;
+    const body: ProvidersStatusResponse = {
+      ...mixed,
+      providers: mixed.providers.map((item) =>
+        item.vendor === v1
+          ? {
+              ...item,
+              job: {
+                jobId: "job-partial",
+                kind: "install",
+                phase: "failed",
+                progressLine: null,
+                error: "Installer exited 1 after placing the executable",
+                logTail: "Finalizing installation\nError during cleanup",
+                startedAt: 1_000,
+                finishedAt: 2_000,
+              },
+            }
+          : item,
+      ),
+    };
+    const api = new FakeApi(makeSnapshot({}));
+    api.providersStatus = () => ({ status: 200, body });
+    api.install();
+
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
+    const panel = await screen.findByRole("tabpanel", { name: "Providers" });
+    const row = await within(panel).findByTestId(`provider-row-${v1}`);
+    expect(within(row).getByRole("alert")).toHaveTextContent(/^Install failed$/);
+    expect(within(row).getByRole("button", { name: `Sign in to ${vendorLabel(v1)}` })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: new RegExp(`Retry ${vendorLabel(v1)}`) })).toBeNull();
+    fireEvent.click(within(row).getByRole("button", { name: `Show log for ${vendorLabel(v1)}` }));
+    expect(within(row).getByTestId("provider-job-log")).toHaveTextContent("Error during cleanup");
+  });
+
+  it("puts each sign-in form inside the panel its method tab controls", async () => {
+    const user = userEvent.setup();
+    const api = new FakeApi(makeSnapshot({}));
+    api.providersStatus = () => ({ status: 200, body: makeMixedProviders() });
+    api.install();
+
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
+    const panel = await screen.findByRole("tabpanel", { name: "Providers" });
+    const v1 = AGENT_VENDORS[1]!;
+    await user.click(within(await within(panel).findByTestId(`provider-row-${v1}`)).getByRole("button", { name: /Sign in/ }));
+    const dialog = await screen.findByRole("dialog", { name: `Sign in to ${vendorLabel(v1)}` });
+    const controlled = (tab: HTMLElement) => {
+      const target = document.getElementById(tab.getAttribute("aria-controls") ?? "");
+      expect(target).toHaveAttribute("role", "tabpanel");
+      expect(target).toHaveAttribute("aria-labelledby", tab.id);
+      return target!;
+    };
+    const methods = within(dialog).getByRole("tablist", { name: "Sign-in method" });
+    const methodPanel = controlled(within(methods).getByRole("tab", { selected: true }));
+    const accounts = within(methodPanel).getByRole("tablist", { name: "Account type" });
+    expect(methodPanel).toContainElement(controlled(within(accounts).getByRole("tab", { selected: true })));
+    await user.click(within(methods).getByRole("tab", { name: "API key" }));
+    expect(within(controlled(within(methods).getByRole("tab", { selected: true }))).getByPlaceholderText("AIza...")).toBeInTheDocument();
   });
 
   it("shows a signed-out provider as signed out when it has a saved key", async () => {
