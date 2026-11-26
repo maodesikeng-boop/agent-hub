@@ -737,3 +737,5 @@ export const WATCH_PROBE_TIMEOUT_MS = 5 * 60_000;
 export const WATCH_OUTPUT_TAIL_BYTES = 2_048;
 export const WATCHES_RETAIN_MS = 7 * 24 * 60 * 60_000;
 export const WATCHES_RETAIN_PER_PM = 500;
+export const PM_AGENDA_REMIND_AFTER_MS = 15 * 60_000;
+export const PM_AGENDA_REMINDERS_MAX = 4;
