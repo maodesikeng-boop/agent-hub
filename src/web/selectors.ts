@@ -749,7 +749,8 @@ function flowRole(message: Message): FlowRole {
   if (placement === "in_turn") return "in_turn";
   if (placement === "starts_turn" || (placement === "as_written" && message.status === "replied")) return "input";
   if (placement === "as_written") return "notice";
-  if (line) return OUTCOME_WORKER_EVENTS.has(line.event) || line.event === "user_message" ? "notice" : "work";
+  if (line?.event === "user_message") return "input";
+  if (line) return OUTCOME_WORKER_EVENTS.has(line.event) ? "notice" : "work";
   if (message.sender === "user" || message.sender === "pm") return "input";
   if (message.sender === "agent") return "agent";
   const event = systemEventOf(message)?.event;
