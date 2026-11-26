@@ -59,6 +59,8 @@ export interface FlowSpec {
    * Each run needs its target computer, and a `vendor:<id>` need is judged on that computer only.
    */
   perInstance?: true;
+  /** Computer where a shared flow uses its vendor. Defaults to the local computer. */
+  vendorInstance?: InstanceRole;
 }
 
 export interface CheckResult {
@@ -123,6 +125,8 @@ export interface PreflightResult {
   /** Capabilities that answered; a flow whose needs are not all here is not_ready or env_unavailable, never dropped. */
   available: BenchCapability[];
   problems: ExternalError[];
+  /** Advisory messages; absent in older run records. */
+  warnings?: string[];
   /** One entry per vendor in VENDOR_LIST per bench computer, ready or not. */
   coverage: VendorReadiness[];
 }

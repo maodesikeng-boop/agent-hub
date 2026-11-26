@@ -134,14 +134,15 @@ describe("runTester", () => {
       codeDir: root,
       catalog,
       runners,
-      open: async (cfg) => {
+      open: async (cfg, { mode }) => {
         handles = fakeBench(cfg);
+        await handles.bench.local().start(mode);
         return handles.bench;
       },
     });
     expect(maxActive).toBe(1);
     expect(order).toEqual(["mesh.fake-a", "mesh.fake-b", "mesh.real-a", "mesh.real-b"]);
-    expect(handles!.control.filter((c) => c.startsWith("local restart"))).toEqual(["local restart real"]);
+    expect(handles!.control.filter((c) => c.startsWith("local ") && !c.startsWith("local stop"))).toEqual(["local start real", "local restart fake", "local restart real"]);
   });
 
   it("aborts a flow past its timeout and records it as product_fail with reason timeout", async () => {

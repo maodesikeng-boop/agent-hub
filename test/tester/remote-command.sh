@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Forced command for the remote test user's SSH key (authorized_keys command="/home/bellwood-test/bin/tester-remote").
-# Accepts only status, start <real|fake>, stop, restart <real|fake>, deploy <40-hex commit>, and logs <1..2000>.
+# Accepts only status [presence|router-chats], start <real|fake>, stop, restart <real|fake>, deploy <40-hex commit>, and logs <1..2000>.
 set -euo pipefail
 
 APP_DIR="${BELLWOOD_TESTER_APP_DIR:-$HOME/agent-hub}"
@@ -118,6 +118,33 @@ cmd_status() {
   done <<< "$lines"
 }
 
+cmd_status_detail() {
+  node --input-type=module - "$DATA_DIR/state/ui-token" "$PORT" "$1" <<'JS'
+import { readFileSync } from "node:fs";
+const [file, port, detail] = process.argv.slice(2);
+const path = detail === "presence" ? "/api/account" : "/api/feishu";
+const origin = "http://127.0.0.1:" + port;
+const signal = AbortSignal.timeout(5000);
+const token = readFileSync(file, "utf8").trim();
+const login = await fetch(origin + "/auth?token=" + encodeURIComponent(token), { redirect: "manual", signal });
+const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+if (login.status !== 302 || !cookie) throw new Error("test daemon login failed");
+const res = await fetch(origin + path, { headers: { cookie }, signal });
+if (!res.ok) throw new Error("test daemon request failed: HTTP " + res.status);
+const view = await res.json();
+if (detail === "presence") {
+  if (view.state !== "signed_in") throw new Error("test daemon is not signed in to Mesh");
+  for (const device of view.devices) {
+    if (!device.self && /^[0-9a-f-]{36}$/.test(device.id)) console.log("presence", device.id, device.online ? "online" : "offline");
+  }
+} else if (/^cli_[a-z0-9]+$/i.test(view.appId)) {
+  for (const chat of view.chats) {
+    if (chat.target?.kind === "router" && /^oc_[a-z0-9]+$/i.test(chat.chatId)) console.log("router-chat", view.appId, chat.chatId);
+  }
+}
+JS
+}
+
 cmd_deploy() {
   local commit="$1" deployed=""
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "deploy requires a 40-char lowercase hex commit"
@@ -146,8 +173,13 @@ cmd_deploy() {
 parse_args "$@"
 case "${ARGS[0]}" in
   status)
-    [ ${#ARGS[@]} -eq 1 ] || die "status takes no arguments"
-    cmd_status
+    if [ ${#ARGS[@]} -eq 1 ]; then
+      cmd_status
+    elif [ ${#ARGS[@]} -eq 2 ] && { [ "${ARGS[1]}" = "presence" ] || [ "${ARGS[1]}" = "router-chats" ]; }; then
+      cmd_status_detail "${ARGS[1]}"
+    else
+      die "status accepts only presence or router-chats as an optional argument"
+    fi
     ;;
   stop)
     [ ${#ARGS[@]} -eq 1 ] || die "stop takes no arguments"

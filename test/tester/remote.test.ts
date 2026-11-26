@@ -1,8 +1,9 @@
 import { execFile, spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -28,6 +29,8 @@ function scratch(): string {
 describe("remoteArgv", () => {
   it("maps each command to its words", () => {
     expect(remoteArgv({ kind: "status" })).toEqual(["status"]);
+    expect(remoteArgv({ kind: "status", detail: "presence" })).toEqual(["status", "presence"]);
+    expect(remoteArgv({ kind: "status", detail: "router-chats" })).toEqual(["status", "router-chats"]);
     expect(remoteArgv({ kind: "start", mode: "fake" })).toEqual(["start", "fake"]);
     expect(remoteArgv({ kind: "stop" })).toEqual(["stop"]);
     expect(remoteArgv({ kind: "restart", mode: "real" })).toEqual(["restart", "real"]);
@@ -198,6 +201,31 @@ describe("remote-command.sh", () => {
     expect(logs.status).toBe(0);
     expect(logs.stdout).toContain("line 1");
     expect(readFileSync(logFile, "utf8")).toContain("journalctl --user -u bellwood-tester -n 25 --no-pager");
+  });
+
+  it("only reports peer presence and Router chat IDs from the authenticated local endpoints", async () => {
+    const home = scratch();
+    const state = join(home, ".agent-hub", "state");
+    mkdirSync(state, { recursive: true });
+    writeFileSync(join(state, "ui-token"), "bench-token\n");
+    const endpoint = "2a216dae-2148-4d81-a241-23c5cdc244eb";
+    const server = createServer((req, res) => {
+      if (req.url === "/auth?token=bench-token") return res.writeHead(302, { "set-cookie": "bench=session" }).end();
+      if (req.headers.cookie !== "bench=session") return res.writeHead(401).end();
+      if (req.url === "/api/account") return res.end(JSON.stringify({ state: "signed_in", login: { login: "private-account" }, devices: [{ id: "38391113-6f18-4f36-95d0-d589ef6ed024", self: true, online: true }, { id: endpoint, self: false, online: true }] }));
+      if (req.url === "/api/feishu") return res.end(JSON.stringify({ appId: "cli_bench", ownerName: "private-owner", chats: [{ chatId: "oc_router", target: { kind: "router" } }, { chatId: "oc_project", target: { kind: "pm" } }] }));
+      return res.writeHead(404).end();
+    }).listen(0, "127.0.0.1");
+    try {
+      await once(server, "listening");
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected TCP port");
+      const env = { HOME: home, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, BELLWOOD_TESTER_PORT: String(address.port) };
+      expect((await execFileAsync("bash", [REMOTE_SCRIPT, "status", "presence"], { env })).stdout).toBe(`presence ${endpoint} online\n`);
+      expect((await execFileAsync("bash", [REMOTE_SCRIPT, "status", "router-chats"], { env })).stdout).toBe("router-chat cli_bench oc_router\n");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("authenticates /api/health via /auth?token=... against a real ui-server while rejecting unauthenticated /api/health", async () => {

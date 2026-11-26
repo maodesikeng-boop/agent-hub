@@ -4,6 +4,7 @@ import type { BenchConfig } from "./bench.ts";
 import { fakeBench, fakeComputer, providersAll } from "./fake-bench.ts";
 import type { FeishuDriver } from "./feishu-driver.ts";
 import { createApiClient, createInstanceClient } from "./instance-client.ts";
+import { TESTER_FEISHU_REAUTHORIZE_WINDOW_MS } from "./limits.ts";
 import { preflight } from "./preflight.ts";
 import type { BenchCapability } from "./types.ts";
 
@@ -36,7 +37,7 @@ function driver(over: Partial<FeishuDriver> = {}): FeishuDriver & { sent: number
     waitForBotMessage: async () => {
       throw new Error("unused");
     },
-    ensureUserToken: async () => {},
+    ensureUserToken: async () => Number.POSITIVE_INFINITY,
     ...over,
   };
   return d;
@@ -53,10 +54,20 @@ describe("preflight", () => {
 
   it("checks the remote instance through the local mesh proxy", async () => {
     const urls: string[] = [];
-    vi.stubGlobal("fetch", async (url: string) => (urls.push(url), new Response(JSON.stringify({ ok: true }))));
+    vi.stubGlobal("fetch", async (url: string) => (urls.push(url), Response.json({ generatedAt: 1, pms: [] })));
     const remote = createInstanceClient("tokyo", createApiClient({ origin: "http://127.0.0.1:4417", cookie: "c=1" }).forDevice("dev_tokyo"));
-    await remote.health();
-    expect(urls).toEqual(["http://127.0.0.1:4417/d/dev_tokyo/api/health"]);
+    expect(await remote.health()).toEqual({ ok: true });
+    expect(urls).toEqual(["http://127.0.0.1:4417/d/dev_tokyo/api/router/digest"]);
+  });
+
+  it("warns within two days of the saved refresh expiry without blocking Feishu", async () => {
+    const { bench } = fakeBench(config);
+    const now = Date.parse("2026-11-26T12:00:00Z");
+    const threshold = now + TESTER_FEISHU_REAUTHORIZE_WINDOW_MS;
+    const result = await preflight(bench, driver({ ensureUserToken: async () => threshold - 1 }), WANTED, () => now);
+    expect(result.available).toContain("feishu_driver");
+    expect(result.warnings).toEqual([expect.stringMatching(/2026-11-28T11:59:59\.999Z.*authorize-feishu/)]);
+    expect((await preflight(bench, driver({ ensureUserToken: async () => threshold }), WANTED, () => now)).warnings).toEqual([]);
   });
 
   it("retries a capability once before reporting it", async () => {
@@ -70,11 +81,12 @@ describe("preflight", () => {
   it("names the failing service in problems", async () => {
     const { bench } = fakeBench(config, { remote: fakeComputer({ health: [new Error("device_offline")] }), status: async () => Promise.reject(new Error("ssh refused")) });
     const result = await preflight(bench, driver({ testChats: async () => Promise.reject(new Error("HTTP 503")) }), WANTED);
-    expect(result.problems).toEqual([
+    expect(result.problems).toEqual(expect.arrayContaining([
       { service: "relay", detail: "remote_instance: device_offline" },
       { service: "bench", detail: "remote_control: ssh refused" },
       { service: "feishu", detail: "feishu_bot: HTTP 503" },
-    ]);
+    ]));
+    expect(result.problems).toHaveLength(3);
   });
 
   it("sends no Feishu message and starts no model turn", async () => {

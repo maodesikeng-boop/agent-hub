@@ -10,6 +10,7 @@ import type { ProviderStatusItem } from "../../src/shared/providers.ts";
 import { vendorSpec, type AgentVendor } from "../../src/shared/vendors.ts";
 import { vendorConfigHome } from "../../src/shared/paths.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
+import { AGY_CLI_HOME_REL } from "../../src/vendors/agy/spec.ts";
 import { TESTER_INSTALL_TIMEOUT_MS, TESTER_STDERR_TAIL_LINES } from "./limits.ts";
 import type { InstanceRole } from "./types.ts";
 
@@ -48,19 +49,36 @@ export type VendorBenchRecipe =
   | { coverage: "turn"; model: string | null; signIn: string }
   | { coverage: "accepted_gap"; status: Extract<ReadinessStatus, "signed_out">; reason: string; decided: string; fallbackTests: readonly string[] };
 
-const NO_TEST_ACCOUNTS = "The owner has no account for this vendor and does not open accounts for testing.";
-const fallbackTests = (vendor: AgentVendor): readonly string[] => [`src/vendors/${vendor}/${vendor}.test.ts`, "src/vendors/contract.test.ts"];
+const NO_TEST_ACCOUNTS = "The owner has no test account for this vendor.";
+const TOKYO_CLAUDE_ONLY = "The owner uses only Claude Code on the Tokyo test computer.";
 
-/** A Record over AgentVendor, so adding a vendor to VENDOR_LIST fails typecheck until the owner's coverage decision for it exists. */
-export const VENDOR_BENCH: Readonly<Record<AgentVendor, VendorBenchRecipe>> = {
-  claude: { coverage: "turn", model: "haiku", signIn: "`claude setup-token` once; both computers get CLAUDE_CODE_OAUTH_TOKEN from <root>/secrets." },
-  agy: { coverage: "turn", model: "gemini-3.8-flash", signIn: "Run `agy` and paste the code with the owner's Google account." },
-  codex: { coverage: "turn", model: null, signIn: "`codex login --device-auth` with the owner's ChatGPT plan, CODEX_HOME inside the bench HOME." },
-  pi: { coverage: "turn", model: null, signIn: "Run `pi`, then /login with one of the owner's existing subscriptions." },
-  cursor: { coverage: "accepted_gap", status: "signed_out", reason: "The owner cannot use Cursor.", decided: "2026-11-23", fallbackTests: fallbackTests("cursor") },
-  deepseek: { coverage: "accepted_gap", status: "signed_out", reason: NO_TEST_ACCOUNTS, decided: "2026-11-23", fallbackTests: fallbackTests("deepseek") },
-  opencode: { coverage: "accepted_gap", status: "signed_out", reason: NO_TEST_ACCOUNTS, decided: "2026-11-23", fallbackTests: fallbackTests("opencode") },
-  kimi: { coverage: "accepted_gap", status: "signed_out", reason: NO_TEST_ACCOUNTS, decided: "2026-11-23", fallbackTests: fallbackTests("kimi") },
+function acceptedGap(vendor: AgentVendor, reason: string, decided: string): VendorBenchRecipe {
+  const file = vendor === "agy" || vendor === "codex" || vendor === "pi" ? "driver.test.ts" : `${vendor}.test.ts`;
+  return { coverage: "accepted_gap", status: "signed_out", reason, decided, fallbackTests: [`src/vendors/${vendor}/${file}`, "src/vendors/contract.test.ts"] };
+}
+
+function onBoth(recipe: VendorBenchRecipe): Record<InstanceRole, VendorBenchRecipe> {
+  return { local: recipe, remote: recipe };
+}
+
+export const VENDOR_BENCH: Readonly<Record<AgentVendor, Readonly<Record<InstanceRole, VendorBenchRecipe>>>> = {
+  claude: onBoth({ coverage: "turn", model: "haiku", signIn: "Sign in to Claude Code in each bench HOME, or share a bench-only `claude setup-token` token." }),
+  agy: {
+    local: { coverage: "turn", model: "gemini-3.8-flash", signIn: "Run `agy` and paste the code with the owner's Google account." },
+    remote: acceptedGap("agy", TOKYO_CLAUDE_ONLY, "2026-11-26"),
+  },
+  codex: {
+    local: { coverage: "turn", model: null, signIn: "`codex login --device-auth` with the owner's ChatGPT plan, CODEX_HOME inside the bench HOME." },
+    remote: acceptedGap("codex", TOKYO_CLAUDE_ONLY, "2026-11-26"),
+  },
+  pi: {
+    local: acceptedGap("pi", "The owner does not sign in to Pi on the Mac test computer.", "2026-11-26"),
+    remote: acceptedGap("pi", TOKYO_CLAUDE_ONLY, "2026-11-26"),
+  },
+  cursor: onBoth(acceptedGap("cursor", "The owner cannot use Cursor.", "2026-11-23")),
+  deepseek: onBoth(acceptedGap("deepseek", NO_TEST_ACCOUNTS, "2026-11-23")),
+  opencode: onBoth(acceptedGap("opencode", NO_TEST_ACCOUNTS, "2026-11-23")),
+  kimi: onBoth(acceptedGap("kimi", NO_TEST_ACCOUNTS, "2026-11-23")),
 };
 
 /** Postcondition: the product's install command for `vendor` on `platform`: windowsInstallCommand on win32, else installCommand. Throws when the vendor ships none. */
@@ -158,7 +176,7 @@ export async function installVendor(vendor: AgentVendor, target: InstallTarget):
   mkdirSync(target.installDir, { recursive: true });
   const resolved = result.exitCode === 0 ? target.resolveCli() : null;
   writeFileSync(installRecordFile(target.installDir, vendor), `${JSON.stringify({ ...record, exitCode: resolved === null && result.exitCode === 0 ? -1 : result.exitCode }, null, 2)}\n`);
-  if (resolved !== null) return withRecipe({ vendor, instance: target.instance, status: "signed_out", version: null, detail: `installed at ${resolved}`, fix: loginFix(vendor, target.userHome) });
+  if (resolved !== null) return withRecipe({ vendor, instance: target.instance, status: "signed_out", version: null, detail: `installed at ${resolved}`, fix: loginFix(vendor, target.instance, target.userHome) });
   const why = result.exitCode === 0 ? "exited 0 but the CLI is not inside the bench HOME" : `exited ${result.exitCode}`;
   return withRecipe({ vendor, instance: target.instance, status: "install_failed", version: null, detail: `${command} ${why}\n${record.stderrTail}`, fix: installFix(vendor, target.platform) });
 }
@@ -167,15 +185,16 @@ function installFix(vendor: AgentVendor, platform: NodeJS.Platform): string {
   return `node test/tester/cli.ts vendors install (runs: ${installCommandFor(vendor, platform)})`;
 }
 
-function loginFix(vendor: AgentVendor, userHome: string | null): string {
-  const recipe = VENDOR_BENCH[vendor];
-  const how = recipe.coverage === "turn" ? recipe.signIn : `none needed: accepted gap (${recipe.reason})`;
+function loginFix(vendor: AgentVendor, role: InstanceRole, userHome: string | null): string {
+  const recipe = VENDOR_BENCH[vendor][role];
+  if (recipe.coverage === "accepted_gap") return `No sign-in needed: ${recipe.reason}`;
+  const how = recipe.signIn;
   return userHome === null ? `${loginCommandFor(vendor)} as the bench user; ${how}` : `HOME=${userHome} ${loginCommandFor(vendor)}; ${how}`;
 }
 
 /** Sets acceptedGap when the vendor's recipe accepts exactly this status. */
 export function withRecipe(entry: VendorReadiness): VendorReadiness {
-  const recipe = VENDOR_BENCH[entry.vendor];
+  const recipe = VENDOR_BENCH[entry.vendor][entry.instance];
   if (recipe.coverage !== "accepted_gap" || entry.status !== recipe.status) return entry;
   return { ...entry, acceptedGap: `${recipe.reason} (decided ${recipe.decided}; offline: ${recipe.fallbackTests.join(", ")})` };
 }
@@ -190,7 +209,7 @@ export function benchHoldsCredential(vendor: AgentVendor, userHome: string, env:
   const envHit = Object.keys(env).some(
     (k) => credentialEnv?.names?.includes(k) === true || credentialEnv?.prefixes?.some((p) => k.startsWith(p)) === true || credentialEnv?.pattern?.test(k) === true,
   );
-  return envHit || files.some((f) => existsSync(f));
+  return envHit || files.some((f) => existsSync(f)) || (vendor === "agy" && existsSync(join(userHome, AGY_CLI_HOME_REL, "antigravity-oauth-token")));
 }
 
 export interface ProbeTarget {
@@ -222,10 +241,10 @@ export function probeVendor(vendor: AgentVendor, target: ProbeTarget): VendorRea
     return withRecipe({ ...base, status: "not_installed", detail: "the CLI does not resolve inside the bench HOME", fix: installFix(vendor, target.platform) });
   }
   const availability = target.provider.availability;
-  if (availability === "signed_out") return withRecipe({ ...base, status: "signed_out", detail: "installed, not signed in", fix: loginFix(vendor, home) });
+  if (availability === "signed_out") return withRecipe({ ...base, status: "signed_out", detail: "installed, not signed in", fix: loginFix(vendor, target.instance, home) });
   if (availability !== "available") return withRecipe({ ...base, status: "unknown", detail: `the daemon reports ${availability}`, fix: "Open Settings, Providers on that computer and read the vendor's error." });
   if (target.local && target.platform === "darwin" && !benchHoldsCredential(vendor, target.local.userHome, target.local.env)) {
-    return withRecipe({ ...base, status: "login_blocked", detail: "signed in, but no credential lives in the bench HOME or bench env; the login comes from somewhere shared such as the keychain", fix: `Decide: accept the gap on this Mac, or let ${vendorSpec(vendor).label} use the developer's own login.` });
+    return withRecipe({ ...base, status: "login_blocked", detail: "signed in, but no credential lives in the bench HOME or bench env; the login comes from somewhere shared such as the keychain", fix: loginFix(vendor, target.instance, home) });
   }
   return withRecipe({ ...base, status: "ready", detail: target.provider.accountSummary ?? "signed in", fix: "" });
 }
@@ -237,7 +256,7 @@ export function probeVendor(vendor: AgentVendor, target: ProbeTarget): VendorRea
 export function openGaps(coverage: readonly VendorReadiness[]): VendorReadiness[] {
   return coverage.filter((entry) => {
     if (entry.status === "ready") return false;
-    const recipe = VENDOR_BENCH[entry.vendor];
+    const recipe = VENDOR_BENCH[entry.vendor][entry.instance];
     return recipe.coverage === "turn" || entry.status !== recipe.status;
   });
 }

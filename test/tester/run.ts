@@ -7,7 +7,7 @@ import { assertNotProduction, BenchConfigError, openBench, parseBenchConfig, typ
 import { createFeishuDriver, type FeishuDriver } from "./feishu-driver.ts";
 import { FLOWS, RUNNERS, selectFlows } from "./flows.ts";
 import { appendRun, HISTORY_FILE, LATEST_DIR, newRunId, pruneEvidence, readRuns } from "./history.ts";
-import { TESTER_EVIDENCE_KEEP_RUNS, TESTER_HISTORY_MAX_RUNS, TESTER_NIGHTLY_BUDGET_MS } from "./limits.ts";
+import { TESTER_EVIDENCE_KEEP_RUNS, TESTER_HISTORY_MAX_RUNS, TESTER_NIGHTLY_BUDGET_MS, TESTER_POLL_MS } from "./limits.ts";
 import { benchLayout } from "./local-instance.ts";
 import { configuredCapabilities, driverSecretsFile, preflight } from "./preflight.ts";
 import { renderSummary, summarize, type RunSummary } from "./report.ts";
@@ -43,10 +43,31 @@ export function expand(selection: readonly FlowSpec[]): Array<{ spec: FlowSpec; 
   return selection.flatMap((spec) => (spec.perInstance ? (["local", "remote"] as const).map((instance) => ({ spec, instance, id: `${spec.id}@${instance}` })) : [{ spec, instance: "local" as const, id: spec.id }]));
 }
 
-async function routerChatIds(bench: Bench): Promise<string[]> {
-  const clients = [bench.local(), ...(bench.hasRemote() ? [bench.remote()] : [])];
-  const views = await Promise.all(clients.map((c) => c.api.json<FeishuStatusView>("GET", API_PATHS.feishu).catch(() => null)));
-  return views.flatMap((v) => v?.chats.filter((c) => c.target.kind === "router").map((c) => c.chatId) ?? []);
+async function localRouterChatIds(bench: Bench, appId: string): Promise<string[]> {
+  try {
+    const view = await bench.local().api.json<FeishuStatusView>("GET", API_PATHS.feishu);
+    return view.appId === appId ? view.chats.filter((c) => c.target.kind === "router").map((c) => c.chatId) : [];
+  } catch {
+    return [];
+  }
+}
+
+function routerChatLookup(bench: Bench, appId: string): () => Promise<string[]> {
+  let cached: { ids: Promise<string[]>; expiresAt: number } | undefined;
+  const remote = async () => {
+    const chats = bench.hasRemote() ? bench.remote().routerChats : undefined;
+    const text = await chats?.().catch(() => "") ?? "";
+    return text.split("\n").flatMap((row) => {
+      const [tag, bot, chat] = row.split(" ");
+      return tag === "router-chat" && bot === appId && chat && /^oc_[\da-z]+$/i.test(chat) ? [chat] : [];
+    });
+  };
+  return async () => {
+    const local = await localRouterChatIds(bench, appId);
+    if (local.length > 0) return local;
+    if (!cached || Date.now() >= cached.expiresAt) cached = { ids: remote(), expiresAt: Date.now() + TESTER_POLL_MS };
+    return cached.ids;
+  };
 }
 
 export async function defaultDriver(config: BenchConfig, bench: Bench): Promise<FeishuDriver | null> {
@@ -57,7 +78,7 @@ export async function defaultDriver(config: BenchConfig, bench: Bench): Promise<
     driverSecretsFile: driverSecretsFile(config.root),
     testBotAppId: config.feishu.botAppId,
     botSecretsFile: resolveHubPaths({ [ENV_HOME]: local.dataDir }, local.userHome).feishuSecretsFile,
-    routerChatIds: () => routerChatIds(bench),
+    routerChatIds: routerChatLookup(bench, config.feishu.botAppId),
   });
 }
 
@@ -176,7 +197,7 @@ export async function runTester(options: RunOptions): Promise<{ record: RunRecor
   let executed: Executed;
   let bench: Bench | null = null;
   try {
-    bench = await (options.open ?? openBench)(config, { codeDir: options.codeDir, mode: entries[0] ? modeOf(entries[0].spec) : "fake" });
+    bench = await (options.open ?? openBench)(config, { codeDir: options.codeDir, mode: "real" });
     executed = await execute(bench, config, options, entries, runDir);
   } catch (error) {
     if (!(error instanceof BenchConfigError)) throw error;

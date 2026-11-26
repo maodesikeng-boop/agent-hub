@@ -43,7 +43,7 @@ async function noLeftover(client: InstanceClient, conversationId: number, signal
 function vendorTurn(vendor: AgentVendor): FlowRunner {
   return runner(async (ctx, obs) => {
     const client = clientOf(ctx);
-    const pm = await ensureBenchPm(client, vendorPm(vendor));
+    const pm = await ensureBenchPm(client, vendorPm(vendor, ctx.instance));
     const t0 = Date.now();
     const sent = await client.send(pm.conversationId, `Bench turn ${runTag()}: reply with the single word pong.`);
     const settled = await waitFor(async () => (await messagesAfter(client.api, pm.conversationId, sent - 1)).find((m) => m.id === sent && SETTLED.has(m.status ?? "")), TURN_WAIT_MS, ctx.signal, 2_000);

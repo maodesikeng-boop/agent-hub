@@ -1,7 +1,7 @@
 // Turns observations into verdicts and history into alerts. Pure functions: no I/O, no clock.
 import { TESTER_BENCH_ALERT_RUNS } from "./limits.ts";
 import type { Alert, BenchCapability, Cadence, ExternalService, FlowObservation, FlowResult, FlowSpec, InstanceRole, PreflightResult, RunRecord, Verdict } from "./types.ts";
-import { openGaps } from "./vendors.ts";
+import { openGaps, VENDOR_BENCH } from "./vendors.ts";
 
 /** An error a runner throws when a service outside Bellwood failed, so it classifies as env_unavailable. */
 export class ExternalServiceError extends Error {
@@ -12,23 +12,15 @@ export class ExternalServiceError extends Error {
   }
 }
 
-/** The computers whose vendor readiness a flow depends on. */
-function vendorInstances(spec: FlowSpec, instance: InstanceRole): InstanceRole[] {
-  if (spec.perInstance) return [instance];
-  return spec.boundaries.devices === 2 ? ["local", "remote"] : ["local"];
-}
-
 function vendorGate(spec: FlowSpec, instance: InstanceRole, preflight: PreflightResult): string | null {
+  const role = spec.perInstance ? instance : (spec.vendorInstance ?? "local");
   for (const need of spec.needs) {
     if (!need.startsWith("vendor:")) continue;
-    for (const role of vendorInstances(spec, instance)) {
-      const entry = preflight.coverage.find((c) => `vendor:${c.vendor}` === need && c.instance === role);
-      if (entry === undefined) return `${need.slice(7)} on the ${role} computer was not probed`;
-      if (entry.status !== "ready") {
-        const why = entry.acceptedGap ? `accepted gap: ${entry.acceptedGap}` : `fix: ${entry.fix}`;
-        return `${need.slice(7)} on the ${role} computer is ${entry.status} (${entry.detail.split("\n", 1)[0]}); ${why}`;
-      }
-    }
+    const entry = preflight.coverage.find((c) => `vendor:${c.vendor}` === need && c.instance === role);
+    if (entry === undefined) return `${need.slice(7)} on the ${role} computer was not probed`;
+    const recipe = VENDOR_BENCH[entry.vendor][role];
+    if (recipe.coverage === "accepted_gap") return `${need.slice(7)} on the ${role} computer: accepted gap. ${recipe.reason}`;
+    if (entry.status !== "ready") return `${need.slice(7)} on the ${role} computer is ${entry.status} (${entry.detail.split("\n", 1)[0]}); fix: ${entry.fix}`;
   }
   return null;
 }

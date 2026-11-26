@@ -42,10 +42,11 @@ function coverageTable(record: RunRecord): string[] {
   const rows = VENDOR_LIST.flatMap(({ id, label }) =>
     roles.map((role) => {
       const entry = record.preflight.coverage.find((c) => c.vendor === id && c.instance === role);
-      const recipe = VENDOR_BENCH[id];
+      const recipe = VENDOR_BENCH[id][role];
       const plan = recipe.coverage === "turn" ? "nightly turn" : "accepted gap";
       if (entry === undefined) return `| ${label} | ${role} | ${plan} | missing | | not probed | |`;
-      const note = entry.acceptedGap ? `accepted: ${safeText(entry.acceptedGap)}` : safeText(entry.detail.split("\n", 1)[0] ?? "");
+      const detail = entry.detail.split("\n", 1)[0] ?? "";
+      const note = safeText(recipe.coverage === "turn" ? detail : entry.acceptedGap ? `accepted: ${entry.acceptedGap}` : `${recipe.reason} ${detail}`);
       return `| ${label} | ${role} | ${plan} | ${entry.status} | ${entry.version ?? ""} | ${note} | ${safeText(entry.fix)} |`;
     }),
   );
@@ -65,6 +66,7 @@ export function renderSummary(summary: RunSummary, record: RunRecord, catalog: r
   out.push("## Alerts", "");
   out.push(...(summary.alerts.length === 0 ? ["None."] : summary.alerts.map((a) => `- [${a.kind}] ${a.flowId}: ${safeText(a.reason)} (runs ${a.runIds.join(", ")})`)), "");
   if (record.preflight.problems.length > 0) out.push("## Bench problems", "", ...record.preflight.problems.map((p) => `- ${p.service}: ${safeText(p.detail)}`), "");
+  if (record.preflight.warnings?.length) out.push("## Bench warnings", "", ...record.preflight.warnings.map((warning) => `- ${safeText(warning)}`), "");
   out.push(...coverageTable(record), "");
   out.push("## Flows", "", "| Flow | Verdict | Reason | Duration |", "| --- | --- | --- | --- |");
   out.push(...record.results.map((r) => `| ${r.id} | ${r.verdict} | ${safeText(r.reason)} | ${seconds(r.durationMs)} |`), "");

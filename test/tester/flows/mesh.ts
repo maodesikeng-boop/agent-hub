@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { API_PATHS, WS_HEARTBEAT_TEXT, type AccountStatusView } from "../../../src/shared/index.ts";
 import type { RemoteInstanceConfig } from "../bench.ts";
 import type { FlowContext, FlowRunner } from "../types.ts";
+import { ExternalServiceError } from "../verdict.ts";
 import { ensureBenchPm, runner, runTag, sleep, vendorPm, waitFor } from "./common.ts";
 
 const COLD_DIALS = 10;
@@ -34,6 +35,14 @@ const coldDial = runner(async (ctx, obs) => {
   const ok: number[] = [];
   for (let i = 1; i <= COLD_DIALS; i++) {
     await local.restart(mode);
+    const connected = await waitFor(async () => {
+      const view = await local.api.json<AccountStatusView>("GET", API_PATHS.account, undefined, ctx.signal);
+      return view.state === "signed_in" && view.relay === "connected" ? true : undefined;
+    }, COLD_DIAL_TIMEOUT_MS, ctx.signal, 250);
+    if (connected === null) {
+      lines.push(`${i}: the local daemon did not connect to the relay`);
+      continue;
+    }
     const started = performance.now();
     const status = await local.api
       .request("GET", path, undefined, AbortSignal.any([ctx.signal, AbortSignal.timeout(COLD_DIAL_TIMEOUT_MS)]))
@@ -51,17 +60,21 @@ const coldDial = runner(async (ctx, obs) => {
 });
 
 async function remoteSeesLocalOnline(ctx: FlowContext, localId: string | null): Promise<boolean | null> {
-  const view = await ctx.bench.remote().api.json<AccountStatusView>("GET", API_PATHS.account);
-  if (view.state !== "signed_in") return null;
-  const device = view.devices.find((d) => !d.self && (localId === null || d.id === localId));
-  return device?.online ?? null;
+  const presence = ctx.bench.remote().presence;
+  if (presence === undefined || localId === null) throw new ExternalServiceError("bench", "remote presence requires the test SSH command and a signed-in local device");
+  const output = await presence().catch((error: unknown) => {
+    throw new ExternalServiceError("bench", `remote status presence failed: ${String(error)}. Update the remote test command from the checkout.`);
+  });
+  const row = output.split("\n").find((line) => line.startsWith(`presence ${localId} `));
+  return row === undefined ? null : row === `presence ${localId} online`;
 }
 
 const routerSeesOnline = runner(async (ctx, obs) => {
   const local = ctx.bench.local();
+  const localId = (await local.account()).deviceId;
+  await remoteSeesLocalOnline(ctx, localId);
   await local.restart(local.mode ?? "fake");
   const started = Date.now();
-  const localId = (await local.account()).deviceId;
   const lines: string[] = [`local restarted ${new Date(started).toISOString()} as ${localId}`];
   const online = await waitFor(async () => ((await remoteSeesLocalOnline(ctx, localId)) === true ? true : undefined), ONLINE_WITHIN_MS * 2, ctx.signal, 500);
   const onlineMs = Date.now() - started;
@@ -116,7 +129,7 @@ async function watchStream(ctx: FlowContext): Promise<StreamWatch> {
 
 const crossDeviceChat = runner(async (ctx, obs) => {
   const remote = ctx.bench.remote();
-  const pm = await ensureBenchPm(remote, vendorPm("claude"));
+  const pm = await ensureBenchPm(remote, vendorPm("claude", "remote"));
   const stream = await watchStream(ctx);
   try {
     const t0 = Date.now();

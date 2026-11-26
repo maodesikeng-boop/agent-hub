@@ -5,7 +5,7 @@ import type { InstanceControl } from "./bench.ts";
 import { TESTER_REMOTE_LOG_MAX_LINES } from "./limits.ts";
 
 export type RemoteCommand =
-  | { kind: "status" }
+  | { kind: "status"; detail?: "presence" | "router-chats" }
   | { kind: "start"; mode: "real" | "fake" }
   | { kind: "stop" }
   | { kind: "restart"; mode: "real" | "fake" }
@@ -22,6 +22,7 @@ const COMMIT = /^[0-9a-f]{40}$/;
 export function remoteArgv(command: RemoteCommand): string[] {
   switch (command.kind) {
     case "status":
+      return command.detail === "presence" || command.detail === "router-chats" ? ["status", command.detail] : ["status"];
     case "stop":
       return [command.kind];
     case "start":
@@ -40,6 +41,8 @@ export function remoteArgv(command: RemoteCommand): string[] {
 export interface RemoteControl extends InstanceControl {
   /** Postcondition: the forced command's status output, such as the service state and the deployed commit. */
   status(): Promise<string>;
+  presence(): Promise<string>;
+  routerChats(): Promise<string>;
 }
 
 export type SshSpawn = typeof spawn;
@@ -71,6 +74,8 @@ export function createRemoteControl(options: { sshAlias: string; timeoutMs: numb
     });
   return {
     status: () => run({ kind: "status" }),
+    presence: () => run({ kind: "status", detail: "presence" }),
+    routerChats: () => run({ kind: "status", detail: "router-chats" }),
     start: async (mode) => void (await run({ kind: "start", mode })),
     stop: async () => void (await run({ kind: "stop" })),
     restart: async (mode) => void (await run({ kind: "restart", mode })),

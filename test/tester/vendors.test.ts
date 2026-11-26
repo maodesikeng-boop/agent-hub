@@ -22,25 +22,31 @@ function scratch(): string {
 describe("VENDOR_BENCH", () => {
   it("has a coverage decision for every vendor in VENDOR_LIST", () => {
     expect(Object.keys(VENDOR_BENCH).sort()).toEqual(VENDOR_LIST.map((v) => v.id).sort());
-    for (const recipe of Object.values(VENDOR_BENCH)) {
+    for (const recipe of Object.values(VENDOR_BENCH).flatMap(Object.values)) {
       if (recipe.coverage === "accepted_gap") expect(recipe.status).toBe("signed_out");
     }
   });
 
   it("names only models the vendor accepts (bundled, or custom when the vendor allows custom models)", () => {
-    for (const [vendor, recipe] of Object.entries(VENDOR_BENCH)) {
+    for (const { id: vendor } of VENDOR_LIST) for (const recipe of Object.values(VENDOR_BENCH[vendor])) {
       if (recipe.coverage !== "turn" || recipe.model === null) continue;
-      const models = vendorSpec(vendor as AgentVendor).models;
+      const models = vendorSpec(vendor).models;
       const bundled = models.bundled.some((m) => m.id === recipe.model);
       expect(bundled || models.customModel === true, `${vendor} model ${recipe.model}`).toBe(true);
     }
   });
 
   it("lists fallback test files that exist for every accepted gap", () => {
-    for (const recipe of Object.values(VENDOR_BENCH)) {
+    for (const recipe of Object.values(VENDOR_BENCH).flatMap(Object.values)) {
       if (recipe.coverage !== "accepted_gap") continue;
       for (const file of recipe.fallbackTests) expect(existsSync(join(REPO, file)), file).toBe(true);
     }
+  });
+
+  it("runs Claude Code on both computers and Codex and Antigravity only on the Mac", () => {
+    const turns = (role: "local" | "remote") => VENDOR_LIST.filter(({ id }) => VENDOR_BENCH[id][role].coverage === "turn").map(({ id }) => id);
+    expect(turns("local").sort()).toEqual(["agy", "claude", "codex"]);
+    expect(turns("remote")).toEqual(["claude"]);
   });
 });
 
@@ -123,8 +129,7 @@ describe("probeVendor", () => {
   it("reports signed_out when the CLI is installed but the daemon reports signed_out or the status command shows no account", () => {
     const root = scratch();
     const entry = probeVendor("pi", { instance: "local", provider: provider("signed_out"), local: local(root, "/b/pi"), platform: "darwin" });
-    expect(entry).toMatchObject({ status: "signed_out", fix: expect.stringContaining(`HOME=${join(root, "home")} pi`) });
-    expect(entry.acceptedGap).toBeUndefined();
+    expect(entry).toMatchObject({ status: "signed_out", fix: expect.stringContaining("No sign-in needed"), acceptedGap: expect.any(String) });
     expect(probeVendor("cursor", { instance: "remote", provider: provider("signed_out"), platform: "linux" }).acceptedGap).toMatch(/cannot use Cursor/);
     expect(probeVendor("opencode", { instance: "local", provider: provider("signed_out"), local: local(root, "/b/opencode"), platform: "darwin" })).toMatchObject({ status: "signed_out", acceptedGap: expect.any(String) });
     const opencodeUnknown = probeVendor("opencode", { instance: "local", provider: provider("unknown"), local: local(root, "/b/opencode"), platform: "darwin" });
@@ -139,6 +144,9 @@ describe("probeVendor", () => {
     expect(probeVendor("codex", { instance: "local", provider: provider("available"), local: local(root, "/b/codex"), platform: "darwin" })).toMatchObject({ status: "ready", version: "2.0", detail: "owner@example" });
     expect(probeVendor("codex", { instance: "remote", provider: provider("available"), platform: "linux" }).status).toBe("ready");
     expect(probeVendor("agy", { instance: "local", provider: provider("available"), local: local(root, "/b/agy"), platform: "darwin" }).status).toBe("login_blocked");
+    mkdirSync(join(root, "home", ".gemini", "antigravity-cli"), { recursive: true });
+    writeFileSync(join(root, "home", ".gemini", "antigravity-cli", "antigravity-oauth-token"), "");
+    expect(probeVendor("agy", { instance: "local", provider: provider("available"), local: local(root, "/b/agy"), platform: "darwin" }).status).toBe("ready");
     expect(probeVendor("codex", { instance: "local", provider: provider("unknown"), local: local(root, "/b/codex"), platform: "darwin" }).status).toBe("unknown");
   });
 

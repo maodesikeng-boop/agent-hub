@@ -1,10 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST } from "../../src/shared/index.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { API_PATHS, ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST } from "../../src/shared/index.ts";
 import { assertNotProduction, assertTestAccount, benchRoot, BenchConfigError, openBench, parseBenchConfig, ProductionGuardError, TESTER_HOME_ENV, type BenchConfig, type InstanceClient } from "./bench.ts";
 import { localDaemonEnv } from "./local-instance.ts";
+import { main } from "./cli.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -133,6 +136,56 @@ function fakeClient(githubLogin: string | null): InstanceClient {
 }
 
 describe("openBench", () => {
+  it("preflight uses the healthy bench on its configured port and leaves it running", async () => {
+    const root = scratch();
+    const c = config(root);
+    const instance = local(c);
+    const remote = { name: "tokyo", role: "remote", deviceId: "tokyo-device" } as const;
+    const account = { state: "signed_in", login: { login: c.testAccount.githubLogin }, devices: [{ id: remote.deviceId, self: false }] };
+    const remotePaths: string[] = [];
+    mkdirSync(join(instance.dataDir, "state"), { recursive: true });
+    writeFileSync(join(instance.dataDir, "state", "ui-token"), "bench-token");
+    const server = createServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === API_PATHS.authStatus) return res.end('{"product":"fusa","status":"unauthenticated"}');
+      if (req.url === `${API_PATHS.auth}?token=bench-token`) {
+        res.writeHead(302, { "set-cookie": "bench=session" });
+        return res.end();
+      }
+      if (req.headers.cookie !== "bench=session") return res.writeHead(401).end();
+      if (req.url === API_PATHS.health) return res.end('{"ok":true}');
+      if (req.url === API_PATHS.account) return res.end(JSON.stringify(account));
+      if (req.url === `${API_PATHS.providers}?refresh=1`) return res.end('{"providers":[]}');
+      if (req.url?.startsWith(`/d/${remote.deviceId}/`)) {
+        remotePaths.push(req.url);
+        if (req.url.endsWith(API_PATHS.routerDigest)) return res.end('{"pms":[]}');
+        if (req.url.endsWith(`${API_PATHS.providers}?refresh=1`)) return res.end('{"providers":[]}');
+        return res.writeHead(403).end();
+      }
+      return res.writeHead(404).end();
+    }).listen(0, "127.0.0.1");
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await once(server, "listening");
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected TCP port");
+      instance.uiPort = address.port;
+      const file = join(root, "bench.json");
+      const { feishu: _feishu, ...withoutFeishu } = c;
+      writeFileSync(file, JSON.stringify({ ...withoutFeishu, instances: [instance, remote] }));
+      await main(["preflight", "--config", file, "--code-dir", scratch()]);
+      expect(out).toHaveBeenCalledWith("available: local_instance, remote_instance");
+      expect(remotePaths).toEqual([`/d/${remote.deviceId}${API_PATHS.routerDigest}`, `/d/${remote.deviceId}${API_PATHS.providers}?refresh=1`]);
+      const health = await fetch(`http://127.0.0.1:${instance.uiPort}${API_PATHS.health}`, { headers: { cookie: "bench=session" } });
+      expect(await health.json()).toEqual({ ok: true });
+    } finally {
+      out.mockRestore();
+      err.mockRestore();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("refuses to hand out clients when an instance reports another GitHub login", async () => {
     await expect(assertTestAccount(fakeClient("Owner"), "bench-bot")).rejects.toThrow(ProductionGuardError);
     await expect(assertTestAccount(fakeClient("BENCH-BOT"), "bench-bot")).resolves.toBeUndefined();

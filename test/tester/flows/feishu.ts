@@ -36,7 +36,7 @@ export function isFinal(message: Pick<FeishuMessage, "msgType" | "content">): bo
 
 async function routerChat(driver: FeishuDriver): Promise<string> {
   const chat = (await driver.testChats()).find((c) => c.kind === "router");
-  if (chat === undefined) throw new Error("the test bot has no 1-on-1 chat with the owner; send it one message to bind the owner");
+  if (chat === undefined) throw new ExternalServiceError("bench", "the test bot's 1-on-1 chat was not found. Check the owner binding and `ssh bellwood-tester status router-chats` on the paired test computer.");
   return chat.chatId;
 }
 
@@ -119,10 +119,14 @@ const offlineInboxReplay = runner(async (ctx, obs) => {
   const mode = local.mode ?? "fake";
   await local.stop();
   const t0 = Date.now();
-  const sent = await driver.sendAsUser(chatId, `bench offline ${runTag()}`);
-  const notice = await botReply(driver, chatId, sent, botAppId, (m) => OFFLINE_NOTICE.test(visibleText(m)), 30_000);
-  obs.check("offline-notice", notice !== null, notice === null ? "no offline notice within 30 s" : `notice after ${Date.now() - t0} ms`);
-  await local.start(mode);
+  let sent: string;
+  try {
+    sent = await driver.sendAsUser(chatId, `bench offline ${runTag()}`);
+    const notice = await botReply(driver, chatId, sent, botAppId, (m) => OFFLINE_NOTICE.test(visibleText(m)), 30_000);
+    obs.check("offline-notice", notice !== null, notice === null ? "no offline notice within 30 s" : `notice after ${Date.now() - t0} ms`);
+  } finally {
+    await local.start(mode);
+  }
   const back = Date.now();
   const reply = await botReply(driver, chatId, sent, botAppId, (m) => isFinal(m) && visibleText(m).includes(BENCH_ECHO_REPLY), 90_000);
   obs.metrics.replayMs = reply === null ? -1 : Date.now() - back;
@@ -139,10 +143,14 @@ const reconnectCatchUp = runner(async (ctx, obs) => {
   const remote = ctx.bench.remote();
   if (!remote.stop || !remote.start) throw new ExternalServiceError("bench", "the bench has no remote control");
   const chatId = await routerChat(driver);
-  await remote.stop();
+  await remote.stop().catch((error: unknown) => { throw new ExternalServiceError("bench", `could not stop the remote test daemon: ${String(error)}`); });
   const t0 = Date.now();
-  const sent = await driver.sendAsUser(chatId, `Bench catch-up ${runTag()}: answer with one short line.`);
-  await remote.start("real");
+  let sent: string;
+  try {
+    sent = await driver.sendAsUser(chatId, `Bench catch-up ${runTag()}: answer with one short line.`);
+  } finally {
+    await remote.start("real").catch((error: unknown) => { throw new ExternalServiceError("bench", `could not confirm the remote test daemon restarted: ${String(error)}`); });
+  }
   const restarted = Date.now();
   const reply = await botReply(driver, chatId, sent, botAppId, (m) => isFinal(m) && visibleText(m) !== "" && !OFFLINE_NOTICE.test(visibleText(m)), 120_000);
   await new Promise((resolve) => setTimeout(resolve, 15_000));

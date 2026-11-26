@@ -236,7 +236,7 @@ export const FLOWS: readonly FlowSpec[] = [
     title: "Router sees the second computer as online",
     story: "The local computer starts. The remote computer's Router lists it as online and keeps doing so while it idles.",
     boundaries: { feishu: "none", network: "relay", model: "fake", devices: 2 },
-    needs: ["local_instance", "remote_instance"],
+    needs: ["local_instance", "remote_instance", "remote_control"],
     cadences: ["nightly", "rc", "pr"],
     triggers: MESH_PATHS,
     pass: [
@@ -255,6 +255,7 @@ export const FLOWS: readonly FlowSpec[] = [
     story: "From the local workbench the owner sends a message to a PM on the remote computer and watches the reply arrive live.",
     boundaries: { feishu: "none", network: "relay", model: "real", devices: 2 },
     needs: ["local_instance", "remote_instance", "vendor:claude"],
+    vendorInstance: "remote",
     cadences: ["nightly", "rc", "pr"],
     triggers: MESH_PATHS,
     pass: [

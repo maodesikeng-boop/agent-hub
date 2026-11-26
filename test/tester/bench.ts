@@ -5,9 +5,9 @@
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
-import type { Message, StateSnapshot } from "../../src/shared/index.ts";
+import { API_PATHS, type AccountStatusView, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { createInstanceClient, type ApiClient } from "./instance-client.ts";
-import { createLocalInstance } from "./local-instance.ts";
+import { connectResident, createLocalInstance } from "./local-instance.ts";
 import { createRemoteControl, type RemoteControl } from "./remote.ts";
 import { TESTER_REMOTE_COMMAND_TIMEOUT_MS } from "./limits.ts";
 
@@ -195,14 +195,21 @@ export interface Bench {
 
 /** The remote client checks the test account once before its first request, and again after a failed check. */
 function guardedRemote(remote: RemoteInstanceConfig, localApi: ApiClient, expected: string): InstanceClient {
-  const unguarded = createInstanceClient(remote.name, localApi.forDevice(remote.deviceId));
-  let checked: Promise<void> | null = null;
-  const before = (): Promise<void> =>
-    (checked ??= assertTestAccount(unguarded, expected).catch((error: unknown) => {
+  const remoteAccount = async () => {
+    const view = await localApi.json<AccountStatusView>("GET", API_PATHS.account);
+    if (view.state !== "signed_in") throw new BenchConfigError("the local test computer is not signed in to Mesh");
+    if (view.login.login.toLowerCase() !== expected.toLowerCase()) throw new ProductionGuardError(`the local computer is signed in as ${view.login.login}, not the test account ${expected}`);
+    if (!view.devices.some((device) => !device.self && device.id === remote.deviceId)) throw new BenchConfigError(`${remote.name} (${remote.deviceId}) is not paired with the test account`);
+    return { githubLogin: view.login.login, deviceId: remote.deviceId };
+  };
+  let checked: ReturnType<typeof remoteAccount> | null = null;
+  const account = () =>
+    (checked ??= remoteAccount().catch((error: unknown) => {
       checked = null;
       throw error;
     }));
-  return { ...createInstanceClient(remote.name, localApi.forDevice(remote.deviceId, before)), account: unguarded.account };
+  const api = localApi.forDevice(remote.deviceId, async () => { await account(); });
+  return { ...createInstanceClient(remote.name, api), account };
 }
 
 function remoteConfig(config: BenchConfig): RemoteInstanceConfig | undefined {
@@ -219,18 +226,22 @@ export async function assertTestAccount(client: InstanceClient, expected: string
 
 /**
  * Precondition: `config` passed assertNotProduction.
- * Postcondition: the local instance runs `codeDir` in `mode`, and both clients answered `account()` with config.testAccount.
+ * Starts the requested checkout and CLI mode, unless a read-only caller requests reuse of the resident daemon.
  * Throws ProductionGuardError when an instance reports another GitHub login, and BenchConfigError when the local instance is
  * unreachable. An unreachable remote is left to preflight, and its client checks the account before its first call.
  */
-export async function openBench(config: BenchConfig, options: { codeDir: string; mode: "real" | "fake" }): Promise<Bench> {
+export async function openBench(config: BenchConfig, options: { codeDir: string; mode: "real" | "fake"; reuseResident?: boolean }): Promise<Bench> {
   assertNotProduction(config);
-  const local = createLocalInstance(config, options.codeDir);
+  const instance = config.instances.find((i): i is LocalInstanceConfig => i.role === "local");
+  if (instance === undefined) throw new BenchConfigError("bench.json lists no local instance");
+  let local: LocalBenchInstance | undefined;
   try {
-    await local.start(options.mode);
+    const resident = options.reuseResident ? await connectResident(instance) : null;
+    local = createLocalInstance(config, options.codeDir, resident ?? undefined);
+    if (resident === null) await local.start(options.mode);
     await assertTestAccount(local, config.testAccount.githubLogin);
   } catch (error) {
-    await local.stop();
+    await local?.stop();
     if (error instanceof ProductionGuardError) throw error;
     throw new BenchConfigError(`local test computer did not come up: ${error instanceof Error ? error.message : String(error)}`);
   }

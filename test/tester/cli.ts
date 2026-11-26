@@ -30,7 +30,7 @@ import { configuredCapabilities, driverSecretsFile, preflight } from "./prefligh
 import { safeText } from "./report.ts";
 import { defaultDriver, loadBenchConfig, runTester } from "./run.ts";
 import type { Cadence } from "./types.ts";
-import { installVendor, openGaps, type VendorReadiness } from "./vendors.ts";
+import { installVendor, openGaps, VENDOR_BENCH, type VendorReadiness } from "./vendors.ts";
 
 const CODE_DIR = fileURLToPath(new URL("../..", import.meta.url));
 const FEISHU_REDIRECT_PORT = 47123;
@@ -51,13 +51,15 @@ function listFlows(out: Out): number {
 export function coverageLines(coverage: readonly VendorReadiness[]): string[] {
   return coverage.map((c) => {
     const label = VENDOR_LIST.find((v) => v.id === c.vendor)?.label ?? c.vendor;
-    const tail = c.status === "ready" ? (c.version ?? "") : c.acceptedGap ? `accepted gap: ${c.acceptedGap}` : `fix: ${c.fix}`;
+    const recipe = VENDOR_BENCH[c.vendor][c.instance];
+    const readiness = c.status === "ready" ? (c.version ?? "") : `fix: ${c.fix}`;
+    const tail = recipe.coverage === "turn" ? readiness : `accepted gap: ${c.acceptedGap ?? `${recipe.reason} (${readiness})`}`;
     return `${label.padEnd(12)} ${c.instance.padEnd(7)} ${c.status.padEnd(14)} ${safeText(tail, false)}`;
   });
 }
 
 async function withBench<T>(config: BenchConfig, codeDir: string, mode: "real" | "fake", fn: (bench: Awaited<ReturnType<typeof openBench>>) => Promise<T>): Promise<T> {
-  const bench = await openBench(config, { codeDir, mode });
+  const bench = await openBench(config, { codeDir, mode, reuseResident: true });
   try {
     return await fn(bench);
   } finally {
@@ -67,15 +69,18 @@ async function withBench<T>(config: BenchConfig, codeDir: string, mode: "real" |
 
 async function runPreflight(config: BenchConfig, codeDir: string, out: Out, onlyCoverage: boolean): Promise<number> {
   return withBench(config, codeDir, "real", async (bench) => {
-    const driver = await defaultDriver(config, bench).catch((error: unknown) => (out(`feishu driver: ${String(error)}`), null));
+    const problems: string[] = [];
+    const driver = await defaultDriver(config, bench).catch((error: unknown) => (problems.push(String(error)), null));
     const result = await preflight(bench, driver, configuredCapabilities(config));
     if (!onlyCoverage) {
       out(`available: ${result.available.join(", ") || "none"}`);
+      for (const problem of problems) out(`problem feishu: feishu_driver: ${safeText(problem, false)}`);
       for (const p of result.problems) out(`problem ${p.service}: ${safeText(p.detail, false)}`);
+      for (const warning of result.warnings ?? []) out(`warning: ${safeText(warning, false)}`);
     }
     out("vendor coverage:");
     for (const line of coverageLines(result.coverage)) out(`  ${line}`);
-    return result.problems.length === 0 && openGaps(result.coverage).length === 0 ? 0 : 2;
+    return problems.length === 0 && result.problems.length === 0 && openGaps(result.coverage).length === 0 ? 0 : 2;
   });
 }
 

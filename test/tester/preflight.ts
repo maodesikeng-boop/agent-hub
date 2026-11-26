@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { API_PATHS, VENDOR_LIST, type ProvidersStatusResponse } from "../../src/shared/index.ts";
 import type { Bench, BenchConfig, InstanceClient, LocalInstanceConfig } from "./bench.ts";
 import type { FeishuDriver } from "./feishu-driver.ts";
+import { TESTER_FEISHU_REAUTHORIZE_WINDOW_MS } from "./limits.ts";
 import { benchCliPath, benchLayout, resolveEnvValue } from "./local-instance.ts";
 import type { BenchCapability, ExternalError, ExternalService, InstanceRole, PreflightResult } from "./types.ts";
-import { probeVendor, type VendorReadiness } from "./vendors.ts";
+import { probeVendor, VENDOR_BENCH, type VendorReadiness } from "./vendors.ts";
 
 export const driverSecretsFile = (root: string) => join(benchLayout(root).secretsDir, "feishu-driver.json");
 
@@ -66,17 +67,18 @@ function noRemoteCoverage(): VendorReadiness[] {
 
 /**
  * Postcondition: `available` lists each capability in `wanted` that answered:
- * local_instance and remote_instance by /api/health (the remote through the mesh proxy),
+ * local_instance by /api/health and remote_instance by /api/router/digest through the mesh proxy,
  * remote_control by its status command, feishu_bot by a tenant token and the bot's chat list, and feishu_driver by a valid user token.
  * `coverage` holds probeVendor for every vendor in VENDOR_LIST on every bench computer that answered, and an `unknown`
  * entry for each vendor on a computer that did not, so the matrix is always complete.
  * Each capability is retried once; a second failure lands in `problems` with the service that failed.
  * It sends no Feishu message and starts no model turn.
  */
-export async function preflight(bench: Bench, driver: FeishuDriver | null, wanted: readonly BenchCapability[]): Promise<PreflightResult> {
+export async function preflight(bench: Bench, driver: FeishuDriver | null, wanted: readonly BenchCapability[], now = Date.now): Promise<PreflightResult> {
   const want = new Set(wanted);
   const available: BenchCapability[] = [];
   const problems: ExternalError[] = [];
+  const warnings: string[] = [];
   const check = async (cap: BenchCapability, service: ExternalService, probe: () => Promise<unknown>): Promise<boolean> => {
     try {
       await twice(probe);
@@ -91,20 +93,24 @@ export async function preflight(bench: Bench, driver: FeishuDriver | null, wante
     if (!r.ok) throw new Error("health reports not ok");
   };
   const localUp = await check("local_instance", "bench", async () => ok(await bench.local().health()));
-  const remoteUp = bench.hasRemote() && (await check("remote_instance", "relay", async () => ok(await bench.remote().health())));
   const status = bench.hasRemote() ? bench.remote().status : undefined;
   if (status) await check("remote_control", "bench", status);
   if (driver) {
     await check("feishu_bot", "feishu", () => driver.testChats());
-    await check("feishu_driver", "feishu", () => driver.ensureUserToken());
+    await check("feishu_driver", "feishu", async () => {
+      const expiresAt = await driver.ensureUserToken();
+      if (want.has("feishu_driver") && expiresAt - now() < TESTER_FEISHU_REAUTHORIZE_WINDOW_MS) {
+        warnings.push(`Feishu driver refresh token expires at ${new Date(expiresAt).toISOString()}. To renew it, run \`node test/tester/cli.ts authorize-feishu\` and approve access in the browser.`);
+      }
+    });
   }
-  const coverage = [
-    ...(await coverageOf(bench, bench.local(), "local", localUp, "the local test computer did not answer")),
-    ...(bench.hasRemote() ? await coverageOf(bench, bench.remote(), "remote", remoteUp, "the remote test computer did not answer through the relay") : noRemoteCoverage()),
-  ];
+  const localCoverage = await coverageOf(bench, bench.local(), "local", localUp, "the local test computer did not answer");
+  const remoteUp = bench.hasRemote() && (await check("remote_instance", "relay", async () => ok(await bench.remote().health())));
+  const remoteCoverage = bench.hasRemote() ? await coverageOf(bench, bench.remote(), "remote", remoteUp, "the remote test computer did not answer through the relay") : noRemoteCoverage();
+  const coverage = [...localCoverage, ...remoteCoverage];
   for (const entry of coverage) {
     const cap = `vendor:${entry.vendor}` as const;
-    if (want.has(cap) && entry.status === "ready" && entry.instance === "local" && !available.includes(cap)) available.push(cap);
+    if (want.has(cap) && entry.status === "ready" && entry.instance === "local" && VENDOR_BENCH[entry.vendor].local.coverage === "turn") available.push(cap);
   }
-  return { available, problems, coverage };
+  return { available, problems, warnings, coverage };
 }

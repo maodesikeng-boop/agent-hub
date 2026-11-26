@@ -28,9 +28,19 @@ describe("classifyFlow", () => {
   const group = flow("feishu.group-round-trip");
 
   it("gives not_ready with the status and fix when a vendor is not installed or not signed in on the target computer", () => {
-    const coverage = ready().map((c) => (c.vendor === "codex" && c.instance === "remote" ? { ...c, status: "signed_out" as const, detail: "installed, not signed in", fix: "codex login --device-auth" } : c));
-    expect(classifyFlow(turn, "remote", allPass(turn), pre({ coverage }), ALL)).toEqual({ verdict: "not_ready", reason: expect.stringMatching(/codex on the remote computer is signed_out .*fix: codex login --device-auth/) });
-    expect(classifyFlow(turn, "local", allPass(turn), pre({ coverage }), ALL).verdict).toBe("pass");
+    const coverage = ready().map((c) => (c.vendor === "codex" && c.instance === "local" ? { ...c, status: "signed_out" as const, detail: "installed, not signed in", fix: "codex login --device-auth" } : c));
+    expect(classifyFlow(turn, "local", allPass(turn), pre({ coverage }), ALL)).toEqual({ verdict: "not_ready", reason: expect.stringMatching(/codex on the local computer is signed_out .*fix: codex login --device-auth/) });
+    expect(classifyFlow(turn, "local", allPass(turn), pre(), ALL).verdict).toBe("pass");
+  });
+
+  it("skips a planned coverage gap even when the CLI reports ready", () => {
+    expect(classifyFlow(turn, "remote", allPass(turn), pre(), ALL)).toEqual({ verdict: "not_ready", reason: expect.stringMatching(/codex on the remote computer: accepted gap/) });
+  });
+
+  it("allows cross-device chat when only the remote Claude CLI is ready", () => {
+    const crossDevice = flow("mesh.cross-device-chat");
+    const coverage = ready().map((entry) => entry.vendor === "claude" && entry.instance === "local" ? { ...entry, status: "signed_out" as const } : entry);
+    expect(classifyFlow(crossDevice, "local", allPass(crossDevice), pre({ coverage }), ALL).verdict).toBe("pass");
   });
 
   it("gives not_ready when a need is not configured on the bench, and never drops the flow", () => {

@@ -7,7 +7,7 @@ import { FeishuApiError, type FeishuMessage, isRecalled } from "../feishu-driver
 import { ApiError } from "../instance-client.ts";
 import { scenarioMarker, type BenchScenario } from "../fake-script.ts";
 import { TESTER_EVIDENCE_MAX_BYTES_PER_FLOW, TESTER_POLL_MS } from "../limits.ts";
-import type { CheckResult, ExternalError, FlowContext, FlowObservation } from "../types.ts";
+import type { CheckResult, ExternalError, FlowContext, FlowObservation, InstanceRole } from "../types.ts";
 import { ExternalServiceError } from "../verdict.ts";
 import { VENDOR_BENCH } from "../vendors.ts";
 
@@ -22,8 +22,8 @@ export function scenarioPm(scenario: BenchScenario): BenchPmSpec {
   return { name: `${BENCH_PM_PREFIX}${scenario}`, request: { name: `${BENCH_PM_PREFIX}${scenario}`, mode: "manage_only", vendor: "claude", persona: `Bench PM for scripted runs. ${scenarioMarker(scenario)}` } };
 }
 
-export function vendorPm(vendor: AgentVendor): BenchPmSpec {
-  const recipe = VENDOR_BENCH[vendor];
+export function vendorPm(vendor: AgentVendor, instance: InstanceRole): BenchPmSpec {
+  const recipe = VENDOR_BENCH[vendor][instance];
   const model = recipe.coverage === "turn" ? recipe.model : null;
   return {
     name: `${BENCH_PM_PREFIX}${vendor}`,

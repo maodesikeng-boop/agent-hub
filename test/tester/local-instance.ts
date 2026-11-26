@@ -4,13 +4,14 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, statSync, closeSync, readSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST, type AgentVendor } from "../../src/shared/index.ts";
+import { API_PATHS, ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST, type AgentVendor } from "../../src/shared/index.ts";
+import { DESKTOP_PRODUCT } from "../../src/daemon/ui-server/types.ts";
 import { VENDOR_FALLBACK_PATHS, resolveHubPaths } from "../../src/shared/paths.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
 import type { BenchConfig, LocalBenchInstance, LocalInstanceConfig } from "./bench.ts";
 import { benchFakeScript } from "./fake-script.ts";
 import { createApiClient, createInstanceClient, loginCookie, type ApiClient } from "./instance-client.ts";
-import { TESTER_DAEMON_START_MS, TESTER_DAEMON_STOP_MS } from "./limits.ts";
+import { TESTER_DAEMON_START_MS, TESTER_DAEMON_STOP_MS, TESTER_RESIDENT_PROBE_MS } from "./limits.ts";
 
 const LOGIN_URL = /http:\/\/127\.0\.0\.1:(\d+)\/auth\?token=([A-Za-z0-9_-]+)/;
 const SECRET_PREFIX = "@secrets/";
@@ -215,12 +216,36 @@ export async function stopDaemon(daemon: Pick<SpawnedDaemon, "child" | "exited">
   clearTimeout(timer);
 }
 
-export function createLocalInstance(config: BenchConfig, codeDir: string, platform: NodeJS.Platform = process.platform): LocalBenchInstance {
+export async function connectResident(instance: LocalInstanceConfig): Promise<ApiClient | null> {
+  const origin = `http://127.0.0.1:${instance.uiPort}`;
+  const signal = AbortSignal.timeout(TESTER_RESIDENT_PROBE_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${origin}${API_PATHS.authStatus}`, { signal, redirect: "manual" });
+  } catch (error) {
+    const cause: unknown = error instanceof Error ? error.cause : undefined;
+    if (cause instanceof Error && "code" in cause && cause.code === "ECONNREFUSED") return null;
+    throw error;
+  }
+  const status: unknown = response.ok ? await response.json() : null;
+  if (typeof status !== "object" || status === null || !("product" in status) || status.product !== DESKTOP_PRODUCT) {
+    throw new Error(`port ${instance.uiPort} already has a listener that did not identify itself as Bellwood`);
+  }
+  const token = readFileSync(resolveHubPaths({ [ENV_HOME]: instance.dataDir }, instance.userHome).uiTokenFile, "utf8").trim();
+  const api = createApiClient({ origin, cookie: await loginCookie(origin, token, signal) });
+  const health = await api.json<{ ok: boolean }>("GET", API_PATHS.health, undefined, signal);
+  if (health.ok !== true) throw new Error(`the Bellwood daemon on port ${instance.uiPort} is unhealthy`);
+  return api;
+}
+
+export function createLocalInstance(config: BenchConfig, codeDir: string, attachedApi?: ApiClient): LocalBenchInstance {
+  const platform = process.platform;
   const instance = config.instances.find((i): i is LocalInstanceConfig => i.role === "local")!;
   const layout = benchLayout(config.root);
   let running: SpawnedDaemon | null = null;
   let mode: "real" | "fake" | null = null;
   const current = (): ApiClient => {
+    if (attachedApi !== undefined) return attachedApi;
     if (running === null) throw new Error(`${instance.name} is not running`);
     return running.api;
   };
@@ -228,6 +253,7 @@ export function createLocalInstance(config: BenchConfig, codeDir: string, platfo
   const client = createInstanceClient(instance.name, api);
 
   const start = async (next: "real" | "fake") => {
+    if (attachedApi !== undefined) throw new Error(`${instance.name} is managed by another process`);
     if (running !== null) throw new Error(`${instance.name} is already running`);
     for (const dir of [instance.dataDir, instance.userHome, layout.localDir]) mkdirSync(dir, { recursive: true });
     appendFileSync(layout.daemonLog, `\n--- start ${next} ${new Date().toISOString()} ${commit()}\n`);

@@ -1,6 +1,6 @@
 // HTTP access to one test computer: the local test daemon directly, the remote one through the local daemon's
 // /d/<deviceId>/ mesh proxy with the same session cookie, exactly as the workbench in a browser reaches it.
-import { API_PATHS, type AccountStatusView, type Message, type MessagesPage, type StateSnapshot } from "../../src/shared/index.ts";
+import { API_PATHS, type AccountStatusView, type DeviceRouterDigest, type Message, type MessagesPage, type StateSnapshot } from "../../src/shared/index.ts";
 import { TESTER_POLL_MS } from "./limits.ts";
 import type { InstanceClient } from "./bench.ts";
 
@@ -48,8 +48,8 @@ export function createApiClient(options: { origin: string; cookie: string; prefi
 }
 
 /** Postcondition: the session cookie the daemon sets for its passwordless login link. */
-export async function loginCookie(origin: string, uiToken: string): Promise<string> {
-  const res = await fetch(`${origin}${API_PATHS.auth}?token=${encodeURIComponent(uiToken)}`, { redirect: "manual" });
+export async function loginCookie(origin: string, uiToken: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch(`${origin}${API_PATHS.auth}?token=${encodeURIComponent(uiToken)}`, { redirect: "manual", ...(signal ? { signal } : {}) });
   const cookie = (res.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
   if (res.status !== 302 || cookie === "") throw new ApiError(`login at ${origin}: HTTP ${res.status}`, res.status);
   return cookie;
@@ -76,7 +76,11 @@ export function createInstanceClient(name: string, api: ApiClient): InstanceClie
   return {
     name,
     api,
-    health: () => api.json<{ ok: boolean }>("GET", API_PATHS.health),
+    async health() {
+      if (api.prefix === "") return api.json<{ ok: boolean }>("GET", API_PATHS.health);
+      const digest = await api.json<DeviceRouterDigest>("GET", API_PATHS.routerDigest);
+      return { ok: Array.isArray(digest.pms) };
+    },
     state: () => api.json<StateSnapshot>("GET", API_PATHS.state),
     async send(conversationId, text) {
       const res = await api.json<{ messageId: number }>("POST", API_PATHS.messages(conversationId), { clientId: crypto.randomUUID(), text });

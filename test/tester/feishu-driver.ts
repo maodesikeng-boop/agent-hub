@@ -87,8 +87,8 @@ export interface FeishuDriver {
   listMessages(chatId: string, sinceMs: number): Promise<FeishuMessage[]>;
   /** Postcondition: the first message from the test bot after `afterMessageId` that satisfies `done`; rejects on timeout with the messages seen so far. */
   waitForBotMessage(chatId: string, afterMessageId: string, done: (m: FeishuMessage) => boolean, timeoutMs: number): Promise<FeishuMessage>;
-  /** Postcondition: the user token is valid for at least TESTER_FEISHU_TOKEN_SKEW_MS, refreshed and saved first when needed. */
-  ensureUserToken(): Promise<void>;
+  /** Ensures access and returns the saved refresh token's expiration time in milliseconds. */
+  ensureUserToken(): Promise<number>;
 }
 
 export function openApiBase(brand: "feishu" | "lark" | undefined): string {
@@ -187,7 +187,7 @@ function toMessage(raw: RawMessage): FeishuMessage {
 /**
  * Precondition: the driver secrets file holds tokens from authorizeDriver.
  * Postcondition: a driver whose access token is valid for at least TESTER_FEISHU_TOKEN_SKEW_MS.
- * Throws FeishuApiError with code 20037 when the refresh token expired (365 days after authorization), which the caller reports as a bench problem.
+ * Throws FeishuApiError with code 20037 when the refresh token has expired or been revoked.
  */
 export async function createFeishuDriver(options: FeishuDriverOptions): Promise<FeishuDriver> {
   const doFetch = options.fetch ?? fetch;
@@ -204,27 +204,34 @@ export async function createFeishuDriver(options: FeishuDriverOptions): Promise<
     return tenant.token;
   };
 
-  const refresh = async (secrets: DriverSecrets): Promise<DriverTokens> => {
-    const tokens = secrets.tokens!;
-    if (tokens.refreshExpiresAt <= now()) throw new FeishuApiError("the Feishu driver consent expired; the owner runs `node test/tester/cli.ts authorize-feishu`", 400, FEISHU_REFRESH_EXPIRED);
+  const reauthorize = "the owner runs `node test/tester/cli.ts authorize-feishu`";
+  const requireTokens = ({ tokens }: DriverSecrets): DriverTokens => {
+    if (tokens === undefined) throw new FeishuApiError(`the Feishu driver is not authorized; ${reauthorize}`, 401, FEISHU_REFRESH_EXPIRED);
+    if (tokens.refreshExpiresAt <= now()) throw new FeishuApiError(`the Feishu driver refresh token expired; ${reauthorize}`, 400, FEISHU_REFRESH_EXPIRED);
+    return tokens;
+  };
+  const refresh = async (secrets: DriverSecrets, tokens: DriverTokens): Promise<DriverTokens> => {
     const at = now();
     const res = await call<OAuthTokenResponse>(doFetch, `${base}/open-apis/authen/v2/oauth/token`, {
       method: "POST",
       body: { grant_type: "refresh_token", client_id: options.driverAppId, client_secret: secrets.appSecret, refresh_token: tokens.refreshToken },
+    }).catch((error: unknown) => {
+      if (error instanceof FeishuApiError && error.code === FEISHU_REFRESH_EXPIRED) throw new FeishuApiError(`the Feishu driver refresh token was rejected; ${reauthorize}`, error.status, error.code);
+      throw error;
     });
     const next = tokensFrom(res, at);
     writeDriverSecrets(options.driverSecretsFile, { ...secrets, tokens: next });
     return next;
   };
 
-  const userToken = async (): Promise<string> => {
-    const fresh = (t: DriverTokens | undefined) => t !== undefined && t.accessExpiresAt - TESTER_FEISHU_TOKEN_SKEW_MS > now();
-    const current = readJson<DriverSecrets>(options.driverSecretsFile);
-    if (current.tokens === undefined) throw new FeishuApiError("the Feishu driver is not authorized; the owner runs `node test/tester/cli.ts authorize-feishu`", 401, FEISHU_REFRESH_EXPIRED);
-    if (fresh(current.tokens)) return current.tokens.accessToken;
+  const userTokens = async (): Promise<DriverTokens> => {
+    const fresh = (t: DriverTokens) => t.accessExpiresAt - TESTER_FEISHU_TOKEN_SKEW_MS > now();
+    const current = requireTokens(readJson<DriverSecrets>(options.driverSecretsFile));
+    if (fresh(current)) return current;
     return withRefreshLock(`${options.driverSecretsFile}.lock`, now, async () => {
       const latest = readJson<DriverSecrets>(options.driverSecretsFile);
-      return fresh(latest.tokens) ? latest.tokens!.accessToken : (await refresh(latest)).accessToken;
+      const tokens = requireTokens(latest);
+      return fresh(tokens) ? tokens : refresh(latest, tokens);
     });
   };
 
@@ -285,7 +292,7 @@ export async function createFeishuDriver(options: FeishuDriverOptions): Promise<
       if (!(await testChats()).some((c) => c.chatId === chatId)) throw new FeishuGuardError(`chat ${chatId} is not a chat of the test bot ${options.testBotAppId}; refusing to post as the owner`);
       const res = await call<{ message_id: string }>(doFetch, `${base}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
         method: "POST",
-        token: await userToken(),
+        token: (await userTokens()).accessToken,
         body: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) },
       });
       return res.message_id;
@@ -306,7 +313,7 @@ export async function createFeishuDriver(options: FeishuDriverOptions): Promise<
       }
     },
     async ensureUserToken() {
-      await userToken();
+      return (await userTokens()).refreshExpiresAt;
     },
   };
   await driver.ensureUserToken();
