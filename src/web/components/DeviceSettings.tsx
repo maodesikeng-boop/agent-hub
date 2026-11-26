@@ -1,17 +1,18 @@
 import { Loader2, Pencil, Trash2 } from "../ui/icons.ts";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { LINK_LABELS, platformLabel, type DeviceView } from "../devices.ts";
 import { useDeviceRemove, useDeviceRename, type DeviceSettings } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
+import { useComputerRename, type ComputerRenameApi } from "../settings-drafts.ts";
 import { AccountSettings } from "./AccountSettings.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 export type { DeviceSettings };
 
-function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: boolean) => void }) {
-  const { name, setName, clean, problem, busy, error, save } = useDeviceRename(device, () => onDone(true));
+function RenameRow({ device, draft, onDone }: { device: DeviceView; draft: { name: string; setName: (name: string) => void }; onDone: (changed: boolean) => void }) {
+  const { name, setName, clean, problem, busy, error, save } = useDeviceRename(device, () => onDone(true), draft);
   return (
     <form
       className="px-4 py-2"
@@ -51,18 +52,18 @@ function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: b
   );
 }
 
-function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () => void }) {
-  const [renaming, setRenaming] = useState(false);
+function DeviceRow({ device, onChanged, rename }: { device: DeviceView; onChanged: () => void; rename: ComputerRenameApi }) {
   const [confirming, setConfirming] = useState(false);
   const { busy, error, remove } = useDeviceRemove(device, onChanged);
   const { info } = device;
-  if (renaming) {
+  if (rename.rename?.deviceKey === device.key) {
     return (
       <div data-testid="device-row">
         <RenameRow
           device={device}
+          draft={{ name: rename.rename.name, setName: rename.setName }}
           onDone={(changed) => {
-            setRenaming(false);
+            rename.finish();
             if (changed) onChanged();
           }}
         />
@@ -108,7 +109,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
             </>
           ) : (
             <span className="flex items-center gap-1">
-              <Button variant="ghost" size="icon-sm" aria-label={`Rename ${info.name}`} onClick={() => setRenaming(true)}>
+              <Button variant="ghost" size="icon-sm" aria-label={`Rename ${info.name}`} onClick={() => rename.start(device.key, info.name)}>
                 <Pencil aria-hidden="true" />
               </Button>
               {!info.self && (
@@ -124,22 +125,24 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
   );
 }
 
-export function ComputersSection({ devices, onChanged }: DeviceSettings) {
+export function ComputersSection({ devices, onChanged, account, rename: sharedRename }: DeviceSettings & { account?: ReactNode; rename?: ComputerRenameApi }) {
+  const localRename = useComputerRename();
+  const rename = sharedRename ?? localRename;
   const mine = devices.filter((d) => d.info.self);
   const others = devices.filter((d) => !d.info.self);
   return (
     <>
-      <AccountSettings />
+      {account ?? <AccountSettings />}
       <SettingsGroup title="This computer">
         {mine.map((device) => (
-          <DeviceRow key={device.key} device={device} onChanged={onChanged} />
+          <DeviceRow key={device.key} device={device} onChanged={onChanged} rename={rename} />
         ))}
       </SettingsGroup>
       <SettingsGroup title="Your computers">
         {others.length === 0 ? (
           <p className="px-4 py-3 text-body text-muted-foreground">No other computers</p>
         ) : (
-          others.map((device) => <DeviceRow key={device.key} device={device} onChanged={onChanged} />)
+          others.map((device) => <DeviceRow key={device.key} device={device} onChanged={onChanged} rename={rename} />)
         )}
       </SettingsGroup>
     </>

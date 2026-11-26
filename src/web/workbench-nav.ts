@@ -1,71 +1,178 @@
-import type { SettingsDialogSection } from "./components/SettingsDialog.tsx";
-import type { DeviceKey } from "./devices.ts";
-import type { Route, SettingsSection } from "./route.ts";
-
-// Invariant: navigation never reads the layout. Crossing the one-column width reads WorkbenchNav and never writes it.
+import { useCallback, useEffect, useState } from "react";
+import { LOCAL_DEVICE, type DeviceKey } from "./devices.ts";
+import { parseRoute, routeHash, type Route, type SettingsSection } from "./route.ts";
+import { isDeviceId } from "../shared/index.ts";
 
 export type PageRoute = Exclude<Route, { view: "settings" }>;
 
 export interface SettingsOverlay {
-  /** Undefined: the settings home in one column, the default tab in the dialog. */
   section?: SettingsSection;
-  /** The computer Providers and Resources open on; undefined means the current computer. */
   providerDevice?: DeviceKey;
 }
 
 export interface WorkbenchNav {
-  /** The page shown, or the page behind open settings. Null: the layout's default page, resolved at render and never written. */
   page: PageRoute | null;
   settings: SettingsOverlay | null;
 }
 
-/**
- * Postcondition: a page hash gives that page with settings closed. `#/settings[/<section>]` gives settings open on that section
- * over the page whose hash is `historyState.behind`, or over null when the state is missing or names no page. Anything else
- * gives `{ page: null, settings: null }`.
- */
-export function parseNav(_hash: string, _historyState: unknown): WorkbenchNav {
-  throw new Error("Not implemented");
+interface SettingsHistory {
+  behind?: string;
+  providerDevice?: DeviceKey;
+  settingsDepth?: 1 | 2;
 }
 
-/** Postcondition: the hash for nav; open settings win over the page. parseNav(navHash(nav), state) round-trips when state.behind is the page's hash. */
-export function navHash(_nav: WorkbenchNav): string {
-  throw new Error("Not implemented");
+function settingsHistory(value: unknown): SettingsHistory {
+  if (value === null || typeof value !== "object") return {};
+  const { behind, providerDevice, settingsDepth } = value as Record<string, unknown>;
+  return {
+    ...(typeof behind === "string" ? { behind } : {}),
+    ...(providerDevice === LOCAL_DEVICE || (typeof providerDevice === "string" && isDeviceId(providerDevice)) ? { providerDevice } : {}),
+    ...(settingsDepth === 1 || settingsDepth === 2 ? { settingsDepth } : {}),
+  };
 }
 
-/**
- * Postcondition: the dialog tab that shows section; Computers falls back to General when the account is not managed.
- * Undefined section gives undefined, and the dialog picks its default tab.
- */
-export function dialogTabOf(_section: SettingsSection | undefined, _managed: boolean): SettingsDialogSection | undefined {
-  throw new Error("Not implemented");
+export function parseNav(hash: string, historyState: unknown): WorkbenchNav {
+  const route = parseRoute(hash);
+  if (route?.view !== "settings") return { page: route, settings: null };
+  const { behind, providerDevice } = settingsHistory(historyState);
+  const page = parseRoute(behind ?? "");
+  return {
+    page: page?.view === "settings" ? null : page,
+    settings: {
+      ...(route.section === undefined ? {} : { section: route.section }),
+      ...(providerDevice === undefined ? {} : { providerDevice }),
+    },
+  };
 }
 
-/** Postcondition: current when dialogTabOf(current, managed) is tab; otherwise the first section the tab shows. */
-export function sectionForDialogTab(_tab: SettingsDialogSection, _current: SettingsSection | undefined, _managed: boolean): SettingsSection {
-  throw new Error("Not implemented");
+export function navHash({ page, settings }: WorkbenchNav): string {
+  if (settings !== null) return routeHash({ view: "settings", ...(settings.section === undefined ? {} : { section: settings.section }) });
+  return page === null ? "" : routeHash(page);
+}
+
+const DIALOG_SECTIONS = {
+  general: "scale",
+  providers: "providers",
+  capabilities: "capabilities",
+  resources: "resources",
+  computers: "computers",
+  security: "browsers",
+} as const satisfies Record<string, SettingsSection>;
+
+export type SettingsDialogSection = keyof typeof DIALOG_SECTIONS;
+
+export function dialogTabOf(section: SettingsSection | undefined, managed: boolean): SettingsDialogSection | undefined {
+  switch (section) {
+    case "scale": case "notifications": case "updates": return "general";
+    case "providers": case "vendor-sync": return "providers";
+    case "sign-in": case "browsers": return "security";
+    case "computers": return managed ? "computers" : "general";
+    default: return section;
+  }
+}
+
+export function sectionForDialogTab(tab: SettingsDialogSection, current: SettingsSection | undefined, managed: boolean): SettingsSection {
+  return current !== undefined && dialogTabOf(current, managed) === tab ? current : DIALOG_SECTIONS[tab];
 }
 
 export interface WorkbenchNavApi {
-  /** The same object while the URL and the history state are unchanged. */
   nav: WorkbenchNav;
-  /** Pushes page with settings closed; sibling replaces the entry instead. */
   openPage: (page: PageRoute, sibling?: boolean) => void;
   replacePage: (page: PageRoute | null) => void;
-  /** Pushes a settings entry whose history state records the current page's hash as `behind`. */
+  repairPage: (page: PageRoute | null) => void;
   openSettings: (overlay?: SettingsOverlay) => void;
-  /** Moves open settings to section: push from the settings home, replace between sections. No-op while settings is closed. */
   showSettingsSection: (section: SettingsSection) => void;
-  /** Returns to the page behind settings: history.back() when the previous entry is that page, otherwise a replace. */
   closeSettings: () => void;
-  /** One-column Back inside settings: a section goes to the settings home, the home closes settings. */
   settingsBack: () => void;
 }
 
-/**
- * Precondition: called once, above the layout switch.
- * Postcondition: nav follows popstate and hashchange; every action updates the URL and nav in one render.
- */
+function writeHistory(hash: string, state: unknown, replace: boolean) {
+  const url = `${window.location.pathname}${window.location.search}${hash}`;
+  if (replace) window.history.replaceState(state, "", url);
+  else window.history.pushState(state, "", url);
+}
+
+function readNav() {
+  return parseNav(window.location.hash, window.history.state);
+}
+
 export function useWorkbenchNav(): WorkbenchNavApi {
-  throw new Error("Not implemented");
+  const [nav, setNav] = useState(readNav);
+  const sync = useCallback(() => {
+    const next = readNav();
+    setNav((prev) => navHash(prev) === navHash(next) &&
+      navHash({ page: prev.page, settings: null }) === navHash({ page: next.page, settings: null }) &&
+      prev.settings?.providerDevice === next.settings?.providerDevice ? prev : next);
+  }, []);
+  useEffect(() => {
+    if (nav.settings !== null && navHash(nav) !== window.location.hash) {
+      writeHistory(navHash(nav), window.history.state, true);
+    }
+  }, [nav]);
+  useEffect(() => {
+    window.addEventListener("popstate", sync);
+    window.addEventListener("hashchange", sync);
+    return () => {
+      window.removeEventListener("popstate", sync);
+      window.removeEventListener("hashchange", sync);
+    };
+  }, [sync]);
+
+  const openPage = useCallback((page: PageRoute, sibling = false) => {
+    const hash = routeHash(page);
+    if (hash === window.location.hash) return;
+    writeHistory(hash, sibling ? window.history.state : { hub: true, previous: window.location.hash }, sibling);
+    sync();
+  }, [sync]);
+
+  const replacePage = useCallback((page: PageRoute | null) => {
+    writeHistory(page === null ? "" : routeHash(page), null, true);
+    sync();
+  }, [sync]);
+
+  const repairPage = useCallback((page: PageRoute | null) => {
+    const now = readNav();
+    const behind = page === null ? "" : routeHash(page);
+    if (now.settings === null) writeHistory(behind, null, true);
+    else writeHistory(window.location.hash, { behind, providerDevice: now.settings.providerDevice }, true);
+    sync();
+  }, [sync]);
+
+  const setSettings = useCallback((overlay: SettingsOverlay) => {
+    const now = readNav();
+    const entry = settingsHistory(window.history.state);
+    const behind = now.page === null ? "" : routeHash(now.page);
+    const fromHome = now.settings !== null && now.settings.section === undefined && overlay.section !== undefined;
+    const settingsDepth = now.settings === null ? 1 : fromHome && entry.settingsDepth === 1 ? 2 : entry.settingsDepth;
+    const replace = now.settings !== null && !fromHome;
+    writeHistory(navHash({ page: now.page, settings: overlay }), { behind, providerDevice: overlay.providerDevice, settingsDepth }, replace);
+    sync();
+  }, [sync]);
+
+  const openSettings = useCallback((overlay: SettingsOverlay = {}) => setSettings(overlay), [setSettings]);
+  const showSettingsSection = useCallback((section: SettingsSection) => {
+    const { settings } = readNav();
+    if (settings !== null && settings.section !== section) setSettings({ ...settings, section });
+  }, [setSettings]);
+
+  const closeSettings = useCallback(() => {
+    const { page, settings } = readNav();
+    if (settings === null) return;
+    const { settingsDepth } = settingsHistory(window.history.state);
+    if (settingsDepth === 1) window.history.back();
+    else if (settingsDepth === 2) window.history.go(-2);
+    else {
+      writeHistory(page === null ? "" : routeHash(page), null, true);
+      sync();
+    }
+  }, [sync]);
+
+  const settingsBack = useCallback(() => {
+    const { settings } = readNav();
+    if (settings?.section === undefined) closeSettings();
+    else if (settingsHistory(window.history.state).settingsDepth === 2) window.history.back();
+    else setSettings(settings.providerDevice === undefined ? {} : { providerDevice: settings.providerDevice });
+  }, [closeSettings, setSettings]);
+
+  return { nav, openPage, replacePage, repairPage, openSettings, showSettingsSection, closeSettings, settingsBack };
 }

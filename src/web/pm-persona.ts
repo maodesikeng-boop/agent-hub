@@ -23,7 +23,6 @@ import { ACTOR_LABELS, DEFAULT_CHOICE, MODE_LABELS, errorText, formatTime, type 
 import { useModelCatalog } from "./models.tsx";
 import { draftOf, settingOf, type AgentDraft, type AgentRowKey } from "./components/AgentRows.tsx";
 import { guardedQueryFn, queryGenerationOf, useHubQueryClient } from "./query-client.ts";
-import { useShellCarry } from "./shell-carry.tsx";
 
 export type PersonaLoad = { phase: "loading" } | { phase: "error"; info: ErrorInfo } | { phase: "ready"; persona: PersonaView };
 
@@ -146,7 +145,7 @@ export function useAgentEditor(pmId: number, persona: PersonaView, onUpdate: (p:
   const savedCatalog = useModelCatalog(persona.vendor);
   const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort, savedCatalog) };
   const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
-  const [editedAgent, setEditedAgent] = useShellCarry<AgentDraft | null>(`pm:${pmId}:agent`, null);
+  const [editedAgent, setEditedAgent] = useState<AgentDraft | null>(null);
   const draftCatalog = useModelCatalog(editedAgent?.vendor ?? persona.vendor);
   const [agentError, setAgentError] = useState<ErrorInfo | null>(null);
   const [agentSaving, setAgentSaving] = useState(false);

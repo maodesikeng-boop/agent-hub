@@ -1,36 +1,78 @@
-import type { ReactNode } from "react";
+import { Activity, createContext, use, useCallback, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
-// Invariant: a surface's React tree lives under its <Surface> in the host, so mounting and unmounting outlets in any layout
-// moves the surface's element and never remounts what it renders.
+export type SettingsSurface = "capabilities" | "resources" | "account" | "providers" | "provider-sheet";
+export type SurfaceId = "list" | "router" | "conversation" | "panel" | "worker" | "computer-rename" | `settings:${SettingsSurface}`;
 
-export type SettingsSurface = "capabilities" | "resources" | "account" | "provider-sheet";
-
-export type SurfaceId = "list" | "router" | "conversation" | "panel" | "worker" | `settings:${SettingsSurface}`;
-
-/**
- * Precondition: rendered once above both layouts and above the surface host.
- * Postcondition: owns one element per SurfaceId for its lifetime and drops them when it unmounts.
- */
-export function SurfaceScope(_props: { children: ReactNode }): ReactNode {
-  throw new Error("Not implemented");
+function createSurface() {
+  const element = document.createElement("div");
+  element.className = "contents";
+  const listeners = new Set<() => void>();
+  let outlet: HTMLElement | null = null;
+  let focus: HTMLElement | null = null;
+  return {
+    element,
+    shown: () => outlet !== null,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    attach(next: HTMLElement) {
+      if (outlet !== null) throw new Error("A workbench surface cannot have two outlets");
+      outlet = next;
+      next.append(element);
+      const restore = focus;
+      focus = null;
+      if (restore !== null) {
+        queueMicrotask(() => {
+          if (element.isConnected && element.contains(restore)) restore.focus({ preventScroll: true });
+        });
+      }
+      for (const listener of listeners) listener();
+      return () => {
+        const active = document.activeElement;
+        focus = active instanceof HTMLElement && element.contains(active) ? active : null;
+        element.remove();
+        outlet = null;
+        for (const listener of listeners) listener();
+        // Only restore focus on a move within the same commit; reopening a hidden page is a separate action.
+        const previous = focus;
+        if (previous !== null) queueMicrotask(() => { if (focus === previous) focus = null; });
+      };
+    },
+  };
 }
 
-/**
- * Precondition: inside a SurfaceScope; at most one Surface per id is mounted.
- * Postcondition: renders children into the id's element. Children keep their state while this Surface stays mounted with the
- * same React key, however outlets for the id mount, unmount, or move. While no outlet shows the id, children stay mounted
- * inside a hidden <Activity>: state is kept and effects are cleaned up until an outlet shows it again.
- */
-export function Surface(_props: { id: SurfaceId; children: ReactNode }): ReactNode {
-  throw new Error("Not implemented");
+const Surfaces = createContext<((id: SurfaceId) => ReturnType<typeof createSurface>) | null>(null);
+
+export function SurfaceScope({ children }: { children: ReactNode }) {
+  const [surfaceOf] = useState(() => {
+    const surfaces = new Map<SurfaceId, ReturnType<typeof createSurface>>();
+    return (id: SurfaceId) => {
+      const existing = surfaces.get(id);
+      if (existing !== undefined) return existing;
+      const surface = createSurface();
+      surfaces.set(id, surface);
+      return surface;
+    };
+  });
+  return <Surfaces.Provider value={surfaceOf}>{children}</Surfaces.Provider>;
 }
 
-/**
- * Precondition: inside a SurfaceScope, before the surface host in tree order; at most one outlet per id is mounted after a
- * commit.
- * Postcondition: while mounted, the id's element is its only child, so the surface's layout effects see it attached. When focus
- * was inside the surface before a move, the same element has focus after it.
- */
-export function SurfaceOutlet(_props: { id: SurfaceId; className?: string }): ReactNode {
-  throw new Error("Not implemented");
+function useSurface(id: SurfaceId) {
+  const surfaceOf = use(Surfaces);
+  if (surfaceOf === null) throw new Error("Workbench surfaces require a SurfaceScope");
+  return surfaceOf(id);
+}
+
+export function Surface({ id, children, visible = true }: { id: SurfaceId; children: ReactNode; visible?: boolean }) {
+  const surface = useSurface(id);
+  const shown = useSyncExternalStore(surface.subscribe, surface.shown);
+  return createPortal(<Activity mode={shown && visible ? "visible" : "hidden"}>{children}</Activity>, surface.element);
+}
+
+export function SurfaceOutlet({ id, className = "contents" }: { id: SurfaceId; className?: string }) {
+  const surface = useSurface(id);
+  const ref = useCallback((outlet: HTMLDivElement | null) => outlet === null ? undefined : surface.attach(outlet), [surface]);
+  return <div ref={ref} className={className} />;
 }

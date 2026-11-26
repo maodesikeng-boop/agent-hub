@@ -1,5 +1,5 @@
 import { Loader2 } from "../../ui/icons.ts";
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useState, type ComponentProps, type ReactNode } from "react";
 import type { ErrorLike } from "../../format.ts";
 import { RowError } from "../../components/SettingsList.tsx";
 import { Button } from "../../ui/button.tsx";
@@ -12,15 +12,17 @@ export function SettingsDrawer({
   onOpenChange,
   title,
   children,
+  onPointerDownOutside,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   children: ReactNode;
+  onPointerDownOutside?: ComponentProps<typeof DrawerContent>["onPointerDownOutside"];
 }) {
   return (
     <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
-      <DrawerContent>
+      <DrawerContent onPointerDownOutside={onPointerDownOutside}>
         <DrawerTitle className="shrink-0 truncate px-4 pt-1 pb-3 text-center text-title font-semibold">{title}</DrawerTitle>
         <div className="grid min-h-0 grid-cols-1 gap-4 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 pb-4">{children}</div>
       </DrawerContent>

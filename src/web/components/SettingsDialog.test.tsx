@@ -1,3 +1,5 @@
+import { useState } from "react";
+import type { SettingsDialogSection } from "../workbench-nav.ts";
 // 设置弹窗右栏的宽度约束（docs/ui-standard.md 第 10 条）：任何宽度下行右边的按钮（Sign out、Show QR code、Sign in……）都完整可见。
 // jsdom 不排版，所以这里守住的是让浏览器做对的那几个类名（根因：放不下的内容把右栏撑出弹窗，按钮被 overflow 裁掉）；真实排版的截图见 PR。
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -29,9 +31,14 @@ beforeEach(() => {
   api.install();
 });
 
+function TestSettingsDialog() {
+  const [section, setSection] = useState<SettingsDialogSection>("computers");
+  return <SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} section={section} onSectionChange={setSection} />;
+}
+
 async function openSecurity() {
   const user = userEvent.setup();
-  render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} />);
+  render(<TestSettingsDialog />);
   await user.click(screen.getByRole("tab", { name: "Security & Access" }));
   const panel = screen.getByRole("tabpanel", { name: "Security & Access" });
   await user.click(within(panel).getByRole("button", { name: /Signed-in browsers/ }));
@@ -58,7 +65,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
   });
 
   it("设置是工作台里的一页：盖住最左栏右边，没有遮罩、外框和阴影；内容是白纸面，关闭在表头里，分组不画框", () => {
-    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} defaultSection="general" />);
+    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} section="general" />);
     const page = screen.getByRole("dialog", { name: "Settings" });
     expect(page).toHaveAttribute("data-page");
     expect(page).toHaveClass("shell-frame", "left-18");
@@ -95,7 +102,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
 
   it("切到别的分类（General、Capabilities、Resources、Computers）右栏同一套约束", async () => {
     const user = userEvent.setup();
-    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} />);
+    render(<TestSettingsDialog />);
     for (const name of ["General", "Capabilities", "Resources", "Computers"]) {
       await user.click(screen.getByRole("tab", { name }));
       const panel = screen.getByRole("tabpanel", { name });
@@ -105,7 +112,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
   });
 
   it("从别处点进能力页：defaultSection 直接落在 Capabilities", async () => {
-    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} defaultSection="capabilities" />);
+    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} section="capabilities" />);
     expect(screen.getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("radio", { name: "Project defaults" })).toBeChecked();
     expect(await screen.findByRole("region", { name: "Shared" })).toBeInTheDocument();

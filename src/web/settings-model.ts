@@ -170,8 +170,9 @@ export function useCopyFeedback(resetMs: number = COPIED_RESET_MS): {
   return useMemo(() => ({ copied, copy }), [copied, copy]);
 }
 
-export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: () => void) {
-  const [name, setName] = useState(device.info.name);
+export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: () => void, draft?: { name: string; setName: (name: string) => void }) {
+  const [localName, setLocalName] = useState(device.info.name);
+  const { name = localName, setName = setLocalName } = draft ?? {};
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorLike | null>(null);
   const prevIdRef = useRef(device.info.id);
@@ -183,11 +184,6 @@ export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: ()
   }
   const clean = normalizeName(name);
   const problem = nameError(name);
-  const reset = useCallback(() => {
-    setName(device.info.name);
-    setBusy(false);
-    setError(null);
-  }, [device.info.name]);
   const save = useCallback(async (): Promise<"saved" | "unchanged" | false> => {
     if (clean === null || busy) return false;
     if (clean === device.info.name) return "unchanged";
@@ -204,7 +200,7 @@ export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: ()
       return false;
     }
   }, [busy, clean, device.info.id, device.info.name, onChanged]);
-  return { name, setName, clean, problem, busy, error, save, reset };
+  return { name, setName, clean, problem, busy, error, save };
 }
 
 export function useDeviceRemove(device: Pick<DeviceView, "info">, onChanged?: () => void) {

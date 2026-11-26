@@ -1,28 +1,21 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Activity, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pickableVendorCatalogs } from "../shared/index.ts";
 import type { HubClient } from "./client.ts";
 import { AppRail } from "./components/AppRail.tsx";
 import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
-import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
-import { ProjectList } from "./components/ProjectList.tsx";
-import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
-import { WorkPanel, WorkPanelToggle } from "./components/WorkPanel.tsx";
-import {
-  DesktopWorkPanel,
-  MobileWorkPanel,
-  WorkerHeaderSlot,
-  WorkerPane,
-  type ShellContent,
-  type ShellModel,
-} from "./components/WorkPanelShell.tsx";
+import { WorkPanelToggle } from "./components/WorkPanel.tsx";
+import type { ShellContent, ShellModel } from "./components/WorkPanelShell.tsx";
+import { useComputerRename, type ComputerRenameApi } from "./settings-drafts.ts";
+import { SurfaceOutlet, SurfaceScope } from "./shell-surfaces.tsx";
+import { FullPage, WorkbenchSurfaces } from "./WorkbenchSurfaces.tsx";
+import { dialogTabOf, sectionForDialogTab } from "./workbench-nav.ts";
 import { DeviceScope } from "./device-scope.tsx";
-import { LOCAL_DEVICE, isReadOnly, routeDeviceOf } from "./devices.ts";
+import { LOCAL_DEVICE, routeDeviceOf } from "./devices.ts";
 import { errorTitle } from "./format.ts";
-import { AccentScope } from "./lib/accent-scope.tsx";
 import { SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
 import { mobileBack } from "./mobile/back.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
@@ -33,59 +26,18 @@ import { usePaneWidths } from "./pane-widths.ts";
 import { useCurrentQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
-import { pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
-import { ShellCarryScope } from "./shell-carry.tsx";
+import { quotaUsage } from "./selectors.ts";
 import { useMobileShell, useShellFit } from "./shell-layout.ts";
-import { railComputerKeyOrFallback } from "./shell-actions.ts";
-import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
 import { workPanelOf } from "./side-panel.ts";
+import { useShellModel } from "./shell-model.ts";
 import { Button } from "./ui/button.tsx";
-import { ArrowLeft, Loader2 } from "./ui/icons.ts";
+import { ArrowLeft } from "./ui/icons.ts";
 import { Pane, PaneGroup, PaneHandle } from "./ui/resizable.tsx";
 import { useUpdateReminder } from "./update-model.ts";
 import { useAutoHideScrollbars } from "./useAutoHideScrollbars.ts";
 
 const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
 const SIGN_IN_ON_PHONE = "On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer";
-
-function FullPage({
-  title,
-  lines = [],
-  titleTip,
-  busy = false,
-  action,
-  testId,
-}: {
-  title: string;
-  lines?: readonly string[];
-  titleTip?: string;
-  busy?: boolean;
-  action?: React.ReactNode;
-  testId?: string;
-}) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center px-6 text-center" data-testid={testId}>
-      <div className="flex max-w-88 flex-col items-center gap-2">
-        {busy ? (
-          <>
-            <Loader2 className="size-pixel text-muted-foreground" aria-hidden="true" />
-            <p className="text-minor text-muted-foreground">{title}</p>
-          </>
-        ) : (
-          <h1 title={titleTip} className="text-title leading-snug font-semibold">
-            {title}
-          </h1>
-        )}
-        {lines.map((line) => (
-          <p key={line} className="text-minor leading-relaxed text-muted-foreground">
-            {line}
-          </p>
-        ))}
-        {action && <div className="mt-2">{action}</div>}
-      </div>
-    </div>
-  );
-}
 
 function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boolean): React.ReactNode {
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
@@ -114,154 +66,37 @@ function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boo
   return null;
 }
 
-function DeviceWaiting({ connecting, name }: { connecting: boolean; name: string }) {
-  return (
-    <>
-      <header data-window-drag className="flex h-11 shrink-0 items-center px-3" />
-      {connecting ? (
-        <FullPage busy title="Loading…" />
-      ) : (
-        <FullPage title="Not connected to this computer yet" lines={[`Check that the daemon is running on ${name}`]} />
-      )}
-    </>
-  );
-}
+const settingsBodies = {
+  capabilities: <SurfaceOutlet id="settings:capabilities" />,
+  resources: <SurfaceOutlet id="settings:resources" />,
+  account: <SurfaceOutlet id="settings:account" />,
+  providers: <SurfaceOutlet id="settings:providers" />,
+};
 
-function ConversationPane({
-  model,
-  content: c,
-  mobile,
-  leading,
-  toolbar,
-  notices,
-  onManageCurrentProviders,
-}: {
+interface LayoutProps {
   model: ShellModel;
   content: ShellContent;
-  mobile: boolean;
-  leading?: React.ReactNode;
-  toolbar?: React.ReactNode;
-  notices: React.ReactNode;
-  onManageCurrentProviders: () => void;
-}) {
-  const { state, hub, current } = model;
-  if (state.phase !== "ready") return <DeviceWaiting connecting={current.status === "connecting"} name={current.info.name} />;
-  if (c.active && c.view) {
-    return (
-      <Conversation
-        mobile={mobile}
-        leading={leading}
-        key={c.keyOf(c.active.id)}
-        entry={c.active}
-        view={c.view}
-        pending={pendingOf(state, c.active.id)}
-        session={visibleSessionOf(state, c.active.id)}
-        older={state.older[c.active.id]}
-        draft={c.drafts.of(c.keyOf(c.active.id))}
-        staging={c.staging.of(c.keyOf(c.active.id))}
-        toolbar={toolbar}
-        top={null}
-        notices={notices}
-        onSend={c.send}
-        onRetry={hub.retrySend}
-        onStop={hub.stop}
-        onRewind={hub.rewind}
-        onLoadOlder={c.handleLoadOlder}
-        actions={c.actions}
-        focus={c.focus}
-        onFocusDone={c.clearFocus}
-        onOpenProfile={c.openProfile}
-        onManageProviders={onManageCurrentProviders}
-        link={c.link}
-      />
-    );
-  }
-  return (
-    <>
-      {notices}
-      <div className="flex flex-1 items-center justify-center text-minor text-muted-foreground">No conversations yet</div>
-    </>
-  );
+  quota: ReturnType<typeof quotaUsage>;
+  panel: "panel" | "worker" | null;
+  rename: ComputerRenameApi;
 }
 
 function DesktopWorkbench({
-  model,
+  model: { current, state, navigation },
   content: c,
-  notices,
   quota,
-  onManageLocalProviders,
-  onManageCurrentProviders,
-}: {
-  model: ShellModel;
-  content: ShellContent;
-  notices: React.ReactNode;
-  quota: ReturnType<typeof quotaUsage>;
-  onManageLocalProviders: () => void;
-  onManageCurrentProviders: () => void;
-}) {
-  const [shellEl, setShellEl] = useState<HTMLElement | null>(null);
+  panel,
+  rename,
+  setShellElement,
+  chatMinRem,
+  stackPanel,
+}: LayoutProps & { setShellElement: (element: HTMLElement | null) => void; chatMinRem: number; stackPanel: boolean }) {
   const { widths, commit, reset } = usePaneWidths((s) => s);
-  const { fleet, state, current, route } = model;
-
-  const panelRaw = c.routerActive ? null : workPanelOf({ route, open: c.railOpen, tab: c.workTab });
-  const panelContent = panelRaw !== null && panelRaw.kind === "info" && c.profile === null ? null : panelRaw;
-  const panelVisible = panelContent !== null && !c.routerActive && state.phase === "ready";
-  const { tier, chatMinRem } = useShellFit(shellEl, panelVisible);
-  const stackPanel = tier === "stack" && panelVisible;
   const meter = useMemo(() => quotaMeterOf(quota), [quota]);
-  const computer = useMemo(() => railComputerKeyOrFallback(current.key, fleet.devices), [current.key, fleet.devices]);
-  const listComputer = useMemo(
-    () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
-    [computer.key, computer.info.name, computer.status],
-  );
-  const { activeId, openSettingsSection, toggleRail, select } = c;
-  const openComputers = useCallback(() => openSettingsSection("computers"), [openSettingsSection]);
-  const switchable = fleet.devices.length >= 2;
-  const readOnly = isReadOnly(current.status);
-  const tintColor = c.routerActive ? null : (c.active?.look.color ?? null);
-
-  const routeView = route?.view;
-  const toggleWorkPanel = useCallback(() => {
-    if (activeId === null) return;
-    if (panelVisible && (routeView === "worker" || routeView === "profile")) {
-      toggleRail(false);
-      select({ device: current.key, id: activeId });
-    } else {
-      toggleRail();
-    }
-  }, [activeId, panelVisible, routeView, toggleRail, select, current.key]);
-
-  const toolbar = useMemo(
-    () =>
-      c.active === null ? null : (
-        <WorkPanelToggle open={panelVisible} attention={c.railAttention} look={c.look} onToggle={toggleWorkPanel} />
-      ),
-    [c.active, panelVisible, c.railAttention, c.look, toggleWorkPanel],
-  );
-
-  const listNode = (
-    <ProjectList
-      layout="column"
-      computer={listComputer}
-      switchable={switchable}
-      computers={c.allDevices}
-      entries={c.listEntries}
-      query={c.listQuery}
-      onQueryChange={c.setListQuery}
-      active={c.sidebarActiveRef}
-      waiting={c.reminders.waiting}
-      asking={c.reminders.asking}
-      readOnly={readOnly}
-      onSelect={c.select}
-      onNewPm={c.openNewPm}
-      onTogglePin={c.togglePin}
-      onOpenComputers={openComputers}
-      onSelectComputer={c.selectComputer}
-    />
-  );
-
+  const settings = navigation.nav.settings;
+  const tab = dialogTabOf(settings?.section, c.deviceSettings !== null);
   return (
-    <div ref={setShellEl} data-shell="desktop" className="wood relative flex h-full w-full min-w-0 flex-col overflow-hidden">
+    <div ref={setShellElement} data-shell="desktop" className="wood relative flex h-full w-full min-w-0 flex-col overflow-hidden">
       <div aria-hidden="true" data-window-drag className="shell-topbar shrink-0" />
       <div className="flex min-h-0 min-w-0 flex-1">
         <AppRail
@@ -273,28 +108,14 @@ function DesktopWorkbench({
           quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
           onSelectComputer={c.selectComputer}
           onOpenSettings={() => c.openSettingsSection("scale")}
-          settingsOpen={c.desktopSettingsOpen}
+          settingsOpen={settings !== null}
           onOpenUpdates={() => c.openSettingsSection("updates")}
           onOpenAccount={() => c.openSettingsSection(c.accountTarget)}
         />
-
         <div className="shell-frame flex min-h-0 min-w-0 flex-1">
           {c.routerActive ? (
             <main className="shell-group chat-main flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-              <RouterWorkbench
-                toolbar={null}
-                notices={notices}
-                view={c.routerView}
-                devices={fleet.devices}
-                selfId={fleet.selfId}
-                draft={c.drafts.of(ROUTER_DRAFT_KEY)}
-                staging={c.staging.of(ROUTER_DRAFT_KEY)}
-                clientForDevice={c.clientForDevice}
-                storeForDevice={c.storeForDevice}
-                onOpenConversation={c.openDeviceConversation}
-                onOpenWorker={c.openDeviceWorker}
-                onManageProviders={onManageLocalProviders}
-              />
+              <SurfaceOutlet id="router" />
             </main>
           ) : (
             <div className="shell-group flex min-h-0 min-w-0 flex-1">
@@ -307,35 +128,20 @@ function DesktopWorkbench({
                   maxRem={SHELL_LIST_REM.max}
                   onCommit={(rem) => commit("list", rem)}
                 >
-                  {listNode}
+                  <SurfaceOutlet id="list" />
                 </Pane>
                 <PaneHandle seam="joint" label="Resize project list" onReset={() => reset("list")} />
-
                 <Pane
                   key="chat"
                   id="chat"
-                  className="shell-sheet shell-sheet-joined"
-                  {...(stackPanel ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" } : { minRem: chatMinRem })}
+                  {...(stackPanel
+                    ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" }
+                    : { minRem: chatMinRem, className: "shell-sheet shell-sheet-joined" })}
                 >
-                  <Activity mode={stackPanel ? "hidden" : "visible"}>
-                    <AccentScope color={tintColor}>
-                      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                        <ConversationPane
-                          model={model}
-                          content={c}
-                          mobile={false}
-                          toolbar={toolbar}
-                          notices={notices}
-                          onManageCurrentProviders={onManageCurrentProviders}
-                        />
-                      </main>
-                    </AccentScope>
-                  </Activity>
+                  <SurfaceOutlet id="conversation" />
                 </Pane>
-
-                {panelVisible && !stackPanel && <PaneHandle seam="gap" label="Resize side panel" onReset={() => reset("panel")} />}
-
-                {panelVisible && (
+                {panel !== null && !stackPanel && <PaneHandle seam="gap" label="Resize side panel" onReset={() => reset("panel")} />}
+                {panel !== null && (
                   <Pane
                     key="panel"
                     id="panel"
@@ -349,15 +155,7 @@ function DesktopWorkbench({
                           onCommit: (rem: number) => commit("panel", rem),
                         })}
                   >
-                    <AccentScope color={tintColor}>
-                      <DesktopWorkPanel
-                        model={model}
-                        content={c}
-                        panelContent={panelContent}
-                        layout={stackPanel ? "stack" : "side"}
-                        notices={notices}
-                      />
-                    </AccentScope>
+                    <SurfaceOutlet id={panel} />
                   </Pane>
                 )}
               </PaneGroup>
@@ -365,230 +163,166 @@ function DesktopWorkbench({
           )}
         </div>
       </div>
-
       <SettingsDialog
-        open={c.desktopSettingsOpen}
-        onOpenChange={c.onSettingsOpenChange}
-        onSectionChange={c.onSettingsSectionChange}
-        {...(c.desktopSettingsSection !== undefined ? { defaultSection: c.desktopSettingsSection } : {})}
-        {...(c.defaultProviderDevice !== undefined ? { defaultProviderDevice: c.defaultProviderDevice } : {})}
+        open={settings !== null}
+        onOpenChange={(open) => { if (!open) navigation.closeSettings(); }}
+        onSectionChange={(next) => navigation.showSettingsSection(sectionForDialogTab(next, settings?.section, c.deviceSettings !== null))}
+        {...(tab === undefined ? {} : { section: tab })}
+        defaultProviderDevice={c.defaultProviderDevice}
         notify={c.reminders.notify}
         devices={c.deviceSettings}
+        rename={rename}
+        bodies={settingsBodies}
       />
     </div>
   );
 }
 
-function MobileWorkbench({
-  model,
-  content: c,
-  notices,
-  quota,
-  drawerOpen,
-  setDrawerOpen,
-  onManageLocalProviders,
-  onManageCurrentProviders,
-}: {
-  model: ShellModel;
-  content: ShellContent;
-  notices: React.ReactNode;
-  quota: ReturnType<typeof quotaUsage>;
-  drawerOpen: boolean;
-  setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  onManageLocalProviders: () => void;
-  onManageCurrentProviders: () => void;
-}) {
-  const { fleet, state, current, route, replace, navigate, hub } = model;
-  const keepPanelOpenRef = useRef(false);
-  useEffect(() => {
-    if (keepPanelOpenRef.current) {
-      keepPanelOpenRef.current = false;
-      return;
-    }
-    setDrawerOpen(false);
-  }, [route, current.key, setDrawerOpen]);
+function MobileWorkbench({ model, content: c, quota, panel, rename }: LayoutProps) {
+  const { route, navigation, replace } = model;
+  const settings = navigation.nav.settings;
+  const tab = settings === null ? mobileTabOf(route) : settings.section === undefined ? "settings" : null;
   const updateWaiting = useUpdateReminder() !== null;
   const resources = useResourcesAttention();
-  const settingsAttention = updateWaiting || resources.attention;
 
-  const mobileTab = mobileTabOf(c.settingsPage ?? route);
-  const computer = useMemo(() => railComputerKeyOrFallback(current.key, fleet.devices), [current.key, fleet.devices]);
-  const listComputer = useMemo(
-    () => ({ key: computer.key, name: computer.info.name, status: computer.status }),
-    [computer.key, computer.info.name, computer.status],
-  );
-  const { activeId } = c;
-  const openComputers = useCallback(() => navigate({ view: "settings", section: "computers" }), [navigate]);
-  const switchable = fleet.devices.length >= 2;
-  const readOnly = isReadOnly(current.status);
-  const tintColor = route?.view === "router" || c.settingsPage !== null ? null : (c.active?.look.color ?? null);
-
-  const routeView = route?.view;
-  const back = useCallback(
-    () =>
-      mobileBack(
-        routeView !== "conversation" && activeId !== null
-          ? { view: "conversation", id: activeId, ...routeDeviceOf(current.key) }
-          : null,
-        replace,
-      ),
-    [routeView, activeId, current.key, replace],
-  );
-  const leading = useMemo(
-    () => (
-      <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}>
-        <ArrowLeft aria-hidden="true" />
-      </Button>
-    ),
-    [back],
-  );
-  const toggleMobilePanel = useCallback(() => setDrawerOpen((open) => !open), [setDrawerOpen]);
-  const closeMobilePanel = useCallback(() => setDrawerOpen(false), [setDrawerOpen]);
-  const mobileToolbar = useMemo(
-    () =>
-      c.active === null ? null : (
-        <WorkPanelToggle open={drawerOpen} attention={c.railAttention} look={c.look} onToggle={toggleMobilePanel} />
-      ),
-    [c.active, drawerOpen, c.railAttention, c.look, toggleMobilePanel],
-  );
-
-  const selectMobileTab = (tab: MobileTab) => {
-    if (tab === "projects") replace(null);
-    else if (tab === "router") c.routerSummary.onSelect();
+  const selectTab = (next: MobileTab) => {
+    if (next === "projects") replace(null);
+    else if (next === "router") c.routerSummary.onSelect();
     else c.openSettings();
   };
 
-  const sidebar = (
-    <ProjectList
-      layout="page"
-      computer={listComputer}
-      switchable={switchable}
-      computers={c.allDevices}
-      entries={c.listEntries}
-      query={c.listQuery}
-      onQueryChange={c.setListQuery}
-      active={c.sidebarActiveRef}
-      waiting={c.reminders.waiting}
-      asking={c.reminders.asking}
-      readOnly={readOnly}
-      onSelect={c.select}
-      onNewPm={c.openNewPm}
-      onTogglePin={c.togglePin}
-      onOpenComputers={openComputers}
-      onSelectComputer={c.selectComputer}
-    />
-  );
-
-  const tabBar = mobileTab !== null ? (
-    <TabBar active={mobileTab} routerBadge={c.routerSummary.pendingCount} settingsAttention={settingsAttention} onSelect={selectMobileTab} />
-  ) : undefined;
-
-  let body: React.ReactNode = null;
-  if (c.settingsPage !== null) {
+  let body: React.ReactNode;
+  if (settings !== null) {
     body = (
       <MobileSettings
-        section={c.settingsPage.section}
+        section={settings.section}
         notify={c.reminders.notify}
         devices={c.deviceSettings}
         quota={quota}
         defaultProviderDevice={c.defaultProviderDevice}
         onOpen={c.openSettingsSection}
-        onBack={c.settingsBack}
+        onBack={navigation.settingsBack}
+        rename={rename}
+        bodies={settingsBodies}
       />
     );
+  } else if (panel !== null) {
+    body = <SurfaceOutlet id={panel} />;
   } else if (route?.view === "router") {
     body = (
       <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-        <RouterWorkbench
-          toolbar={null}
-          notices={notices}
-          view={c.routerView}
-          devices={fleet.devices}
-          selfId={fleet.selfId}
-          draft={c.drafts.of(ROUTER_DRAFT_KEY)}
-          staging={c.staging.of(ROUTER_DRAFT_KEY)}
-          clientForDevice={c.clientForDevice}
-          storeForDevice={c.storeForDevice}
-          onOpenConversation={c.openDeviceConversation}
-          onOpenWorker={c.openDeviceWorker}
-          onManageProviders={onManageLocalProviders}
-        />
+        <SurfaceOutlet id="router" />
       </main>
-    );
-  } else if (state.phase !== "ready") {
-    body = (
-      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-        <DeviceWaiting connecting={current.status === "connecting"} name={current.info.name} />
-      </main>
-    );
-  } else if ((route?.view === "profile" && c.profile !== null) || (drawerOpen && c.openWorker === null)) {
-    body = (
-      <MobileWorkPanel
-        model={model}
-        content={c}
-        profile={c.profile}
-        onBack={back}
-        onClose={closeMobilePanel}
-        onSwitchTab={(tab) => {
-          c.setWorkTab(tab);
-          keepPanelOpenRef.current = true;
-          setDrawerOpen(true);
-          if (c.active !== null) navigate({ view: "conversation", id: c.active.id, ...routeDeviceOf(current.key) });
-        }}
-      />
-    );
-  } else if (c.openWorker !== null) {
-    const workerId = c.openWorker;
-    const meta = c.railWorkers.find((w) => w.conversationId === workerId);
-    const session = sessionOf(state, workerId);
-    const title = c.workerLine?.title ?? c.workerView?.conversation.title ?? "Worker";
-    const ended = workerPhaseOf(state, workerId) === "ended";
-    const branch = c.workerView?.workerBranch ?? meta?.branch ?? c.workerLine?.branch ?? null;
-    body = (
-      <WorkPanel
-        layout="page"
-        label={title}
-        header={
-          <WorkerHeaderSlot
-            title={title}
-            meta={meta}
-            session={session}
-            ended={ended}
-            createdAt={c.workerView?.conversation.createdAt ?? null}
-            endedAt={c.workerView?.workerLine?.endedAt ?? null}
-            branch={branch}
-            workerReadonly={c.workerLine?.readonly ?? false}
-            readOnly={readOnly}
-            backLabel="Back"
-            onBack={back}
-            onStop={() => void hub.stop(workerId)}
-            onEnd={() => void hub.client.postEndWorker(workerId).catch(() => {})}
-          />
-        }
-      >
-        <WorkerPane model={model} content={c} mobile notices={notices} workerId={workerId} />
-      </WorkPanel>
     );
   } else {
-    body = (
-      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-        <ConversationPane
-          model={model}
-          content={c}
-          mobile
-          leading={leading}
-          toolbar={mobileToolbar}
-          notices={notices}
-          onManageCurrentProviders={onManageCurrentProviders}
-        />
-      </main>
-    );
+    body = <SurfaceOutlet id="conversation" />;
   }
+  return (
+    <MobileShell
+      tabBar={tab === null ? undefined : (
+        <TabBar active={tab} routerBadge={c.routerSummary.pendingCount} settingsAttention={updateWaiting || resources.attention} onSelect={selectTab} />
+      )}
+    >
+      {settings === null && route === null ? <SurfaceOutlet id="list" /> : body}
+    </MobileShell>
+  );
+}
+
+function Workbench({
+  model,
+  content: c,
+  mobile,
+  quota,
+  notices,
+  openLocalProviders,
+  openCurrentProviders,
+}: Omit<LayoutProps, "panel" | "rename"> & {
+  mobile: boolean;
+  notices: React.ReactNode;
+  openLocalProviders: () => void;
+  openCurrentProviders: () => void;
+}) {
+  const { route, current, state, replace, navigate } = model;
+  const rename = useComputerRename();
+  const settings = model.navigation.nav.settings;
+  const computersOpen = c.deviceSettings !== null && settings !== null && (settings.section === undefined || settings.section === "computers");
+  useEffect(() => {
+    if (!computersOpen || (rename.rename !== null && !c.deviceSettings?.devices.some((device) => device.key === rename.rename?.deviceKey))) rename.finish();
+  }, [computersOpen, rename, c.deviceSettings]);
+  const [shellElement, setShellElement] = useState<HTMLElement | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const keepPanelOpen = useRef(false);
+  useEffect(() => {
+    if (keepPanelOpen.current) keepPanelOpen.current = false;
+    else setDrawerOpen(false);
+  }, [route, current.key]);
+  const panelContent = workPanelOf({ route, open: c.railOpen, tab: c.workTab });
+  const desktopPanel = !c.routerActive && state.phase === "ready" && panelContent !== null &&
+    (panelContent.kind !== "info" || c.profile !== null);
+  const mobilePanel = !c.routerActive && state.phase === "ready" && (
+    route?.view === "profile" ? c.profile !== null : c.openWorker !== null || drawerOpen
+  );
+  const panel = (mobile ? mobilePanel : desktopPanel) ? c.openWorker === null ? "panel" : "worker" : null;
+  const { tier, chatMinRem } = useShellFit(shellElement, desktopPanel);
+  const stackPanel = tier === "stack" && desktopPanel;
+
+  const back = useCallback(() => {
+    mobileBack(
+      route?.view !== "conversation" && c.activeId !== null
+        ? { view: "conversation", id: c.activeId, ...routeDeviceOf(current.key) } : null,
+      replace,
+    );
+  }, [route?.view, c.activeId, current.key, replace]);
+
+  const toggleWorkPanel = useCallback(() => {
+    if (mobile) {
+      setDrawerOpen((open) => !open);
+    } else if (c.activeId !== null && desktopPanel && (route?.view === "worker" || route?.view === "profile")) {
+      c.toggleRail(false);
+      c.select({ device: current.key, id: c.activeId });
+    } else {
+      c.toggleRail();
+    }
+  }, [mobile, c.activeId, c.toggleRail, c.select, desktopPanel, route?.view, current.key]);
+
+  const leading = useMemo(() => mobile ? (
+    <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}>
+      <ArrowLeft aria-hidden="true" />
+    </Button>
+  ) : null, [mobile, back]);
+  const closeMobilePanel = useCallback(() => setDrawerOpen(false), []);
+  const panelOpen = mobile ? drawerOpen : desktopPanel;
+  const toolbar = useMemo(() => c.activeId === null ? null : (
+    <WorkPanelToggle open={panelOpen} attention={c.railAttention} look={c.look} onToggle={toggleWorkPanel} />
+  ), [c.activeId, panelOpen, c.railAttention, c.look, toggleWorkPanel]);
 
   return (
-    <MobileShell mobile list={route === null} sidebar={sidebar} tabBar={tabBar}>
-      <AccentScope color={tintColor}>{body}</AccentScope>
-    </MobileShell>
+    <SurfaceScope>
+      {mobile
+        ? <MobileWorkbench model={model} content={c} quota={quota} panel={panel} rename={rename} />
+        : <DesktopWorkbench model={model} content={c} quota={quota} panel={panel} rename={rename} setShellElement={setShellElement} chatMinRem={chatMinRem} stackPanel={stackPanel} />}
+      <WorkbenchSurfaces
+        model={model}
+        content={c}
+        mobile={mobile}
+        notices={notices}
+        onManageLocalProviders={openLocalProviders}
+        onManageCurrentProviders={openCurrentProviders}
+        chrome={{
+          leading,
+          toolbar,
+          panelLayout: mobile ? "page" : stackPanel ? "stack" : "side",
+          onBack: back,
+          onCloseMobile: closeMobilePanel,
+          onSwitchMobileTab: (tab) => {
+            c.setWorkTab(tab);
+            keepPanelOpen.current = true;
+            setDrawerOpen(true);
+            if (c.active !== null) navigate({ view: "conversation", id: c.active.id, ...routeDeviceOf(current.key) });
+          },
+        }}
+      />
+    </SurfaceScope>
   );
 }
 
@@ -604,10 +338,10 @@ function FirstRunProviderCheck({ client, onDone }: { client: HubClient; onDone: 
 export function App() {
   useAutoHideScrollbars();
   const mobile = useMobileShell();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const model = useShellModel({ autoSelect: !mobile });
+  const model = useShellModel({ mobile });
   const { qc, fleet, current, hub, state, content } = model;
-  const mobileUsageVisible = mobile && model.route?.view === "settings" && model.route.section === undefined;
+  const settings = model.navigation.nav.settings;
+  const mobileUsageVisible = mobile && settings !== null && settings.section === undefined;
   const currentQuota = useCurrentQuota(qc, hub.client, {
     enabled: state.phase === "ready" && state.server.currentQuota === true && (!mobile || mobileUsageVisible),
     visible: mobileUsageVisible,
@@ -638,29 +372,15 @@ export function App() {
         <ModelCatalogProvider>
           <CapabilityProjects pms={model.local.state.pms}>
             <div className="relative flex h-full">
-              <ShellCarryScope key={mobile ? "mobile" : "desktop"}>
-                {mobile ? (
-                  <MobileWorkbench
-                    model={model}
-                    content={content}
-                    notices={notices}
-                    quota={quota}
-                    drawerOpen={drawerOpen}
-                    setDrawerOpen={setDrawerOpen}
-                    onManageLocalProviders={openLocalProviders}
-                    onManageCurrentProviders={openCurrentProviders}
-                  />
-                ) : (
-                  <DesktopWorkbench
-                    model={model}
-                    content={content}
-                    notices={notices}
-                    quota={quota}
-                    onManageLocalProviders={openLocalProviders}
-                    onManageCurrentProviders={openCurrentProviders}
-                  />
-                )}
-              </ShellCarryScope>
+              <Workbench
+                model={model}
+                content={content}
+                mobile={mobile}
+                notices={notices}
+                quota={quota}
+                openLocalProviders={openLocalProviders}
+                openCurrentProviders={openCurrentProviders}
+              />
               <NewPmDialog
                 open={content.creating}
                 devices={content.newPmDevices}

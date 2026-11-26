@@ -113,17 +113,15 @@ describe("useKeyboardInset", () => {
     expect(document.documentElement.style.getPropertyValue("--kb-inset")).toBe("0px");
   });
 
-  it("activates through MobileShell only in mobile mode and declares max(--safe-bottom, --kb-inset) in styles.css", () => {
-    const { rerender } = render(
-      createElement(MobileShell, { mobile: true, list: false, sidebar: "sidebar", children: "chat" }),
-    );
+  it("sets the inset while MobileShell is visible and declares max(--safe-bottom, --kb-inset) in styles.css", () => {
+    const { unmount } = render(createElement(MobileShell, { children: "chat" }));
 
     act(() => {
       viewport.emit("resize", { height: 534, offsetTop: 0 });
     });
     expect(document.documentElement.style.getPropertyValue("--kb-inset")).toBe("310px");
 
-    rerender(createElement(MobileShell, { mobile: false, list: false, sidebar: "sidebar", children: "chat" }));
+    unmount();
     expect(document.documentElement.style.getPropertyValue("--kb-inset")).toBe("0px");
 
     const css = readFileSync("src/web/styles.css", "utf8");

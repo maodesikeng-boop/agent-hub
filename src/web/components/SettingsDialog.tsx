@@ -1,5 +1,7 @@
 import { Blocks, Cable, Monitor, Server, Settings, Shield, X, type Icon } from "../ui/icons.ts";
-import { useRef, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import type { SettingsDialogSection } from "../workbench-nav.ts";
+import type { ComputerRenameApi } from "../settings-drafts.ts";
 import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import type { NotifySettings } from "../notify.ts";
 import { useCachedResourcesSummary } from "../resources-model.ts";
@@ -28,7 +30,7 @@ function UiScaleRow() {
   );
 }
 
-export type SettingsDialogSection = "general" | "providers" | "capabilities" | "resources" | "computers" | "security";
+export type SettingsBodies = Partial<Record<"capabilities" | "resources" | "account" | "providers", ReactNode>>;
 
 const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: Icon }[] = [
   { id: "general", label: "General", icon: Settings },
@@ -45,7 +47,9 @@ export function SettingsDialog({
   onSectionChange,
   notify,
   devices = null,
-  defaultSection,
+  section,
+  bodies,
+  rename,
   defaultProviderDevice = LOCAL_DEVICE,
 }: {
   open: boolean;
@@ -53,33 +57,13 @@ export function SettingsDialog({
   onSectionChange?: (section: SettingsDialogSection) => void;
   notify: NotifySettings;
   devices?: DeviceSettings | null;
-  defaultSection?: SettingsDialogSection;
+  section?: SettingsDialogSection;
+  bodies?: SettingsBodies;
+  rename?: ComputerRenameApi;
   defaultProviderDevice?: DeviceKey;
 }) {
   const sections = SECTIONS.filter((s) => s.id !== "computers" || devices !== null);
-  const initialSection: SettingsDialogSection =
-    defaultSection !== undefined && (defaultSection !== "computers" || devices !== null)
-      ? defaultSection
-      : devices !== null
-        ? "computers"
-        : "general";
-
-  const [activeSection, setActiveSection] = useState<SettingsDialogSection>(initialSection);
-  const prevSyncRef = useRef({ open, defaultSection, hasDevices: devices !== null });
-  if (
-    prevSyncRef.current.open !== open ||
-    prevSyncRef.current.defaultSection !== defaultSection ||
-    prevSyncRef.current.hasDevices !== (devices !== null)
-  ) {
-    const reopened = !prevSyncRef.current.open && open;
-    const defaultChanged = prevSyncRef.current.defaultSection !== defaultSection && defaultSection !== undefined;
-    prevSyncRef.current = { open, defaultSection, hasDevices: devices !== null };
-    if (reopened || defaultChanged || (activeSection === "computers" && devices === null)) {
-      setActiveSection(initialSection);
-    }
-  }
-
-  const effectiveSection = activeSection === "computers" && devices === null ? initialSection : activeSection;
+  const effectiveSection = section ?? (devices === null ? "general" : "computers");
   const resourcesSummary = useCachedResourcesSummary();
 
   const content: Record<SettingsDialogSection, ReactNode> = {
@@ -102,22 +86,22 @@ export function SettingsDialog({
         <UpdateSettings />
       </>
     ),
-    providers: (
+    providers: bodies?.providers ?? (
       <ProvidersSettings
         active={open && effectiveSection === "providers"}
         devices={devices}
         defaultDeviceKey={defaultProviderDevice}
       />
     ),
-    capabilities: <CapabilitiesSettings />,
-    resources: (
+    capabilities: bodies?.capabilities ?? <CapabilitiesSettings />,
+    resources: bodies?.resources ?? (
       <ResourcesSettings
         active={open && effectiveSection === "resources"}
         devices={devices}
         defaultDeviceKey={defaultProviderDevice}
       />
     ),
-    computers: devices && <ComputersSection {...devices} />,
+    computers: devices && <ComputersSection {...devices} account={bodies?.account} {...(rename === undefined ? {} : { rename })} />,
     security: <BrowserSessionsSettings />,
   };
 
@@ -125,13 +109,18 @@ export function SettingsDialog({
   // sheet of the open category, and both header lines stay level.
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Settings" page>
+      <DialogContent
+        title="Settings"
+        page
+        onPointerDownOutside={(event) => {
+          // A surface is hosted outside the dialog's React tree, but its outlet is inside the dialog.
+          const target = event.detail.originalEvent.target;
+          if (target instanceof Element && target.closest('[data-slot="dialog-content"][data-page], [data-slot="popover-content"], [data-slot="select-content"]')) event.preventDefault();
+        }}
+      >
         <Tabs
           value={effectiveSection}
-          onValueChange={(val) => {
-            setActiveSection(val as SettingsDialogSection);
-            onSectionChange?.(val as SettingsDialogSection);
-          }}
+          onValueChange={(val) => onSectionChange?.(val as SettingsDialogSection)}
           orientation="vertical"
           className="shell-group flex min-h-0 flex-1 flex-col min-[720px]:flex-row"
         >

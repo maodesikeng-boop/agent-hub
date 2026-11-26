@@ -45,7 +45,6 @@ import type {
   FleetRouterView,
   RouterTargetCandidate,
 } from "../selectors.ts";
-import { useShellCarry } from "../shell-carry.tsx";
 import { useMobileShell } from "../shell-layout.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { uploadFiles, type DraftSlot, type StagedFiles } from "../upload.ts";
@@ -391,8 +390,8 @@ function useRouterDecisions(
 ) {
   const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
   const [decisionErrors, setDecisionErrors] = useState<Readonly<Record<string, ErrorLike>>>({});
-  const [selectedDecisionKey, setSelectedDecisionKey] = useShellCarry<string | null>("router:decision", null);
-  const [closedDraft, setClosedDraft] = useShellCarry<ClosedRouterDraft | null>("router:closed-draft", null);
+  const [selectedDecisionKey, setSelectedDecisionKey] = useState<string | null>(null);
+  const [closedDraft, setClosedDraft] = useState<ClosedRouterDraft | null>(null);
   const [trackedExpanded, setTrackedExpanded] = useState<FleetDecisionEntry | null>(null);
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;

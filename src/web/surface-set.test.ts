@@ -1,11 +1,24 @@
-import { describe, it } from "vitest";
+import { expect, it } from "vitest";
 import { surfaceSetOf } from "./surface-set.ts";
+import type { WorkbenchNav } from "./workbench-nav.ts";
 
-describe(surfaceSetOf.name, () => {
-  it.todo("renders Router for a null page and for the Router page");
-  it.todo("keeps the page's surfaces while settings is open over it");
-  it.todo("lists the shared settings body for the open section only");
-  it.todo("adds the provider sheet only while it is open on Providers");
-  it.todo("returns the same object for equal inputs");
-  it.todo("takes no layout input, so the one-column switch cannot change the set");
+const keys = { conversationKey: "pm-conversation", panelKey: "pm", workerKey: "worker", managed: true };
+
+it("keeps the keys for the page under settings", () => {
+  const page: WorkbenchNav["page"] = { view: "worker", id: 5 };
+  const bare = surfaceSetOf({ nav: { page, settings: null }, ...keys });
+  expect(bare).toEqual({ router: false, conversation: "pm-conversation", panel: "pm", worker: "worker", settings: [] });
+  expect(surfaceSetOf({ nav: { page, settings: { section: "capabilities" } }, ...keys })).toEqual({ ...bare, settings: ["capabilities"] });
+});
+
+it("keeps the Router available for its route and for the default page", () => {
+  expect(surfaceSetOf({ nav: { page: null, settings: null }, ...keys }).router).toBe(true);
+  expect(surfaceSetOf({ nav: { page: { view: "router" }, settings: { section: "resources" } }, ...keys }).router).toBe(true);
+});
+
+it("selects a single settings body for both layouts' presentations", () => {
+  for (const [section, surface] of [["capabilities", "capabilities"], ["resources", "resources"], ["computers", "account"], ["providers", "providers"], ["vendor-sync", "providers"]] as const) {
+    expect(surfaceSetOf({ nav: { page: null, settings: { section } }, ...keys }).settings).toEqual([surface]);
+  }
+  expect(surfaceSetOf({ nav: { page: null, settings: { section: "computers" } }, ...keys, managed: false }).settings).toEqual([]);
 });
