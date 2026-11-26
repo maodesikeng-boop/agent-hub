@@ -46,8 +46,8 @@ export function SlimePicker({
           fruitsRef.current?.querySelector<HTMLButtonElement>("[aria-checked=true]")?.focus();
         }}
       >
-        <section className="flex flex-col gap-2">
-          <h3 id="slime-picker-fruit" className="text-xs font-medium text-muted-foreground">
+        <section className="flex flex-col gap-1">
+          <h3 id="slime-picker-fruit" className="info-heading">
             Fruit
           </h3>
           <div
@@ -81,8 +81,8 @@ export function SlimePicker({
             })}
           </div>
         </section>
-        <section className="flex flex-col gap-2">
-          <h3 id="slime-picker-color" className="text-xs font-medium text-muted-foreground">
+        <section className="flex flex-col gap-1">
+          <h3 id="slime-picker-color" className="info-heading">
             Color
           </h3>
           <div role="radiogroup" aria-labelledby="slime-picker-color" className="grid grid-cols-8 gap-1" onKeyDown={(e) => moveFocus(e, COLOR_COLUMNS)}>

@@ -4,7 +4,6 @@ import { AccountSettings } from "./components/AccountSettings.tsx";
 import { Conversation } from "./components/Conversation.tsx";
 import { ProjectList } from "./components/ProjectList.tsx";
 import { ResourcesSettings } from "./components/ResourcesSettings.tsx";
-import { FlatSettingsGroups } from "./components/SettingsList.tsx";
 import { PmWorkPanel, WorkerWorkPanel, type ShellContent, type ShellModel } from "./components/WorkPanelShell.tsx";
 import { RouterTopBar } from "./components/RouterTopBar.tsx";
 import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
@@ -251,19 +250,17 @@ export function WorkbenchSurfaces({ model, content: c, mobile, chrome, notices, 
       )}
       {set.settings.includes("capabilities") && (
         <Surface id="settings:capabilities">
-          <FlatSettingsGroups flat={!mobile}><CapabilitiesSettings /></FlatSettingsGroups>
+          <CapabilitiesSettings />
         </Surface>
       )}
       {set.settings.includes("resources") && (
         <Surface id="settings:resources">
-          <FlatSettingsGroups flat={!mobile}>
-            <ResourcesSettings active devices={c.deviceSettings} defaultDeviceKey={c.defaultProviderDevice} />
-          </FlatSettingsGroups>
+          <ResourcesSettings active devices={c.deviceSettings} defaultDeviceKey={c.defaultProviderDevice} />
         </Surface>
       )}
       {set.settings.includes("account") && (
         <Surface id="settings:account">
-          <FlatSettingsGroups flat={!mobile}><AccountSettings /></FlatSettingsGroups>
+          <AccountSettings />
         </Surface>
       )}
     </>

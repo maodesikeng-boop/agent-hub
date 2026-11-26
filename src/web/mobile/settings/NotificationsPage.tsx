@@ -10,7 +10,7 @@ export function NotificationsPage({ notify }: { notify: NotifySettings }) {
       <SettingsGroup label="Notifications">
         <SwitchRow label="Notifications" checked={notify.enabled} disabled={isNotifyBlocked(notify)} onCheckedChange={(on) => void notify.setEnabled(on)} />
       </SettingsGroup>
-      {blocked && <p className="px-4 text-minor leading-snug text-muted-foreground">{blocked}</p>}
+      {blocked && <p className="text-xs leading-snug text-muted-foreground">{blocked}</p>}
     </div>
   );
 }

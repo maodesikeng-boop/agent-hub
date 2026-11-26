@@ -72,6 +72,8 @@ export type ScreenStep =
   | { focus: string }
   | { type: { into: string; text: string } }
   | { press: string }
+  /** Moves the pointer onto the element and holds the button down, for the pressed state on touch screens. */
+  | { hold: string }
   | { scroll: { target: string; to: "top" | "bottom" | number } }
   | { drag: { files: readonly string[]; over: string; drop?: boolean } }
   /** 套一个命名补丁（patches.ts）：真守护进程撑不住的瞬时状态。 */
@@ -80,6 +82,15 @@ export type ScreenStep =
   | { storage: Record<string, string> }
   /** 等这个选择器出现才往下走。 */
   | { waitFor: string }
+  /** Waits until nothing matching this selector is visible; proves which layout branch rendered. */
+  | { hidden: string }
+  /**
+   * Presses the browser's next-control key (Tab; Alt+Tab in WebKit, whose Tab skips buttons) until this element has focus,
+   * and fails unless it shows a visible focus mark (scripts/verify-settings-keyboard.ts focusMarkVisible).
+   */
+  | { tabTo: string }
+  /** As tabTo, moving backward (Shift+Tab). WebKit's Alt+Tab does not wrap inside a dialog's focus trap. */
+  | { tabBackTo: string }
   /** 把浏览器钉住的时间拨到“固定时间 + 这么多毫秒”（界面按时间差判断的状态，比如断线满 30 秒才算离线）；之后要有一次重画才看得到。 */
   | { clock: number }
   /** 局部图裁哪个元素（清单里写了 focus 的界面才用）。 */
@@ -106,6 +117,63 @@ const M = ["mobile"] as const;
 const DM = ["desktop", "mobile"] as const;
 const DNM = ["desktop", "narrow", "mobile"] as const;
 
+/** Settings categories checked at the Compact and XL scales at 860px and 700px (docs/info-style-rollout-design.md scenario 7). */
+const WIDTH_CATEGORIES = [
+  { id: "general", tab: "General" },
+  { id: "providers", tab: "Providers" },
+  { id: "capabilities", tab: "Capabilities" },
+  { id: "resources", tab: "Resources" },
+  { id: "computers", tab: "Computers" },
+  { id: "security", tab: "Security & Access" },
+] as const;
+/** At XL a 700px window takes the phone shell, so Settings there is the phone page and its sub-pages. */
+const WIDTH_PHONE_PAGES = [
+  { id: "home", row: undefined },
+  { id: "scale", row: "Interface scale" },
+  { id: "notifications", row: "Notifications" },
+  { id: "updates", row: "Updates" },
+  { id: "providers", row: "Providers" },
+  { id: "vendor-sync", row: "Vendor sync" },
+  { id: "capabilities", row: "Capabilities" },
+  { id: "resources", row: "Resources" },
+  { id: "computers", row: "Computers" },
+  { id: "sign-in", row: "Sign in on another device" },
+  { id: "browsers", row: "Signed-in browsers" },
+] as const;
+const WIDTH_DIALOG_CASES = [
+  { key: "w860-sm", scale: "sm", viewport: "narrow", layout: "side", label: "Compact at 860px, categories beside" },
+  { key: "w860-xl", scale: "xl", viewport: "narrow", layout: "side", label: "XL at 860px, categories beside" },
+  { key: "w700-sm", scale: "sm", viewport: "slim", layout: "top", label: "Compact at 700px, categories on top" },
+] as const;
+/** Every stop of the expanded New PM form with two computers and a valid name, in Tab order; Look is one step back from Name. */
+const NEW_PM_KEYBOARD_STOPS = [
+  { id: "look", role: "button", name: "Change look" },
+  { id: "name", role: "textbox", name: "Name" },
+  { id: "device", role: "combobox", name: "Device" },
+  { id: "folder", role: "textbox", name: "Main folder" },
+  { id: "choose", role: "button", name: "Choose…" },
+  { id: "mode", role: "combobox", name: "Mode" },
+  { id: "more", role: "button", name: "More settings" },
+  { id: "provider", role: "combobox", name: "Provider" },
+  { id: "model", role: "combobox", name: "Model" },
+  { id: "effort", role: "combobox", name: "Effort" },
+  { id: "persona", role: "textbox", name: "Persona" },
+  { id: "create", role: "button", name: "Create" },
+  { id: "close", role: "button", name: "Close" },
+] as const;
+
+const WIDTH_SHOTS: readonly ScreenSpec[] = [
+  ...WIDTH_DIALOG_CASES.flatMap((c) =>
+    WIDTH_CATEGORIES.map((cat) => s(`settings.${c.key}-${cat.id}`, `Settings: ${cat.tab}, ${c.label}`, [c.viewport], "normal", "standard", `localStorage presets ${c.scale}, open ${cat.tab}`, "弹窗")),
+  ),
+  ...WIDTH_PHONE_PAGES.map((page) =>
+    s(`m-settings.w700-xl-${page.id}`, `Phone settings at XL in a 700px window: ${page.row ?? "home"}`, ["slim"], "normal", page.id === "computers" ? "two-devices" : "standard", `localStorage presets xl, Settings, ${page.row ?? "home"}`),
+  ),
+  ...NEW_PM_KEYBOARD_STOPS.map((stop, i) =>
+    s(`new-pm.kb-${String(i + 1).padStart(2, "0")}-${stop.id}`, `New PM keyboard: ${stop.name} focused`, D, "normal", "two-devices", `Click +, type a name, expand More settings, Shift+Tab from Name to Change look, then Tab to ${stop.name}`, "弹窗"),
+  ),
+];
+
 export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("shell.loading", "整页加载中", DM, "loading", "standard", "打开首页，补丁 state-pending 让 /api/state 不回"),
   s("shell.signed-out", "没登录", DM, "error", "standard", "不带登录 cookie 打开首页"),
@@ -124,6 +192,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("sidebar.devices", "左栏：多台电脑最左栏与离线状态", D, "normal", "two-devices", "#/c/1；最左栏展示多台电脑及状态"),
   s("sidebar.row-hover", "左栏：行悬停显示置顶快捷键", D, "normal", "standard", "鼠标悬停在老马一行上", "悬停行"),
   s("sidebar.switcher", "左栏：切换电脑浮层（电脑）与抽屉（手机）", DM, "normal", "two-devices", "点左栏顶部 Studio Mac 切换器", "切换浮层"),
+  s("sidebar.switcher-hover", "Left column: hovered computer in the switcher", D, "normal", "two-devices", "Open the Studio Mac switcher, hover Tokyo Mini", "切换浮层"),
   s("sidebar.list-mobile", "手机列表页", M, "normal", "standard", "首页（网址为空）"),
   s("chat.normal", "对话：四栏主界面（含最左栏与置顶）", DM, "normal", "standard", "#/c/1；手机从列表点进去"),
   s("chat.empty", "对话：空对话", DM, "empty", "fresh", "#/c/1"),
@@ -191,6 +260,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("router.offline-card", "总助：待拍板卡所属设备离线", D, "error", "two-devices", "#/router，补丁 device-offline"),
   s("router.model-picker", "总助：模型面板，选着 Auto", D, "normal", "standard", "点顶栏右边的模型入口，补丁 vendors-mixed", "浮层"),
   s("router.model-picker-vendor", "总助：模型面板，选了厂商，Model & effort 展开", D, "normal", "standard", "同上，补丁 router-vendor-agy，点开 Model & effort", "浮层"),
+  s("router.model-picker-hover", "Router: hovered provider row in the model picker", D, "normal", "standard", "Open the model picker, hover Claude Code", "浮层"),
   s("router.model-picker-long", "总助：模型面板，超长模型名", D, "long", "standard", "同上，补丁 models-long-names", "浮层"),
   s("router.model-drawer-mobile", "总助：手机模型抽屉", M, "normal", "standard", "手机上点模型入口", "抽屉"),
   s("router.quick-rest", "顶栏 Router 输入框：静止时半透明融在木头里", ["desktop", "narrow", "slim"], "normal", "standard", "#/c/1，看顶栏正中的 Message Router 输入框", "顶栏"),
@@ -207,6 +277,9 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("profile.schedule-form", "Info 子页：新建定时任务表单和校验错误", D, "error", "standard", "点 Schedules 再点 New，名字填超长", "定时任务子页"),
   s("profile.memory-open", "Info 子页：记忆文件钻取子页与编辑态", D, "normal", "stress", "补丁 memory-files，点开 Memory files，点一个文件的编辑", "记忆文件子页"),
   s("profile.history", "Info 子页：修改记录钻取子页", D, "normal", "standard", "点开 History", "修改记录子页"),
+  s("profile.mode", "Info sub-page: Mode", D, "normal", "standard", "Open Info, click Mode"),
+  s("profile.folders", "Info sub-page: Folders", D, "normal", "standard", "Open Info, click Folders"),
+  s("profile.history-hover", "Info sub-page: hovered Undo text action in History", D, "normal", "standard", "Open History, hover Undo", "修改记录子页"),
   s("profile.history-empty", "Info 子页：修改记录是空的", D, "empty", "fresh", "#/pm/1，点开 History", "修改记录子页"),
   s("profile.new-session-confirm", "Info 页：开新会话的确认弹窗", D, "normal", "standard", "点 New session", "确认弹窗"),
   s("profile.archive-confirm", "Info 页：归档的确认弹窗", D, "normal", "standard", "点 Archive", "确认弹窗"),
@@ -218,6 +291,11 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("new-pm.select-open", "新建项目经理：自建下拉菜单展开（电脑与手机）", DM, "normal", "standard", "点 More settings 后点开 Model 下拉", "展开的下拉列表"),
   s("new-pm.invalid", "新建项目经理：名字超长", D, "error", "standard", "名字填 41 个字；一行只报一个原因，重名另算", "弹窗"),
   s("new-pm.devices", "新建项目经理：多台设备时第一行选设备", D, "normal", "two-devices", "点加号", "弹窗"),
+  s("new-pm.row-hover", "New PM: hovered Look control", D, "normal", "standard", "Click +, hover Change look", "弹窗"),
+  s("new-pm.look-open", "New PM: look picker open", D, "normal", "standard", "Click +, click Change look", "浮层"),
+  s("new-pm.device-open", "New PM: device dropdown open", D, "normal", "two-devices", "Click +, open the Device dropdown", "展开的下拉列表"),
+  s("new-pm.mode-open", "New PM: Mode menu open", D, "normal", "standard", "Click +, open the Mode menu", "展开的下拉列表"),
+  s("new-pm.more-hover", "New PM: hovered More settings row", D, "normal", "standard", "Click +, hover More settings", "弹窗"),
   s("settings.general", "设置：通用（界面大小、通知）", D, "normal", "standard", "点最左栏底部齿轮，General", "弹窗"),
   s("settings.providers", "设置：厂商，各家状态混排", D, "normal", "standard", "Providers，补丁 vendors-mixed", "弹窗"),
   s("settings.providers-busy", "设置：厂商安装中，日志展开", D, "busy", "standard", "补丁 provider-installing，点 Show log", "弹窗"),
@@ -233,12 +311,25 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("settings.security-open", "设置：已登录的浏览器展开", D, "normal", "standard", "同上，补丁 browsers-multi，点 Signed-in browsers", "弹窗"),
   s("settings.long", "设置：自定义超长中继网址不把右栏撑出弹窗", D, "long", "standard", "Computers，点 Relay…，输入长网址", "弹窗"),
   s("settings.tabs-top", "设置：窗口窄于 720px 时分类在顶上一排", ["slim"], "normal", "standard", "窄窗口打开设置", "弹窗"),
+  s("settings.nav-hover", "Settings: hovered category row", D, "normal", "standard", "Open Settings, hover Providers", "弹窗"),
+  s("settings.button-hover", "Settings: hovered row button", D, "normal", "standard", "General, hover Check for updates", "弹窗"),
+  s("settings.group-hover", "Settings: hovered collapsible group row", D, "normal", "standard", "Security & Access, hover Signed-in browsers", "弹窗"),
+  s("settings.scale-menu-open", "Settings: Interface scale menu open", D, "normal", "standard", "General, open Interface scale", "弹窗"),
+  s("settings.row-hover", "Settings: hovered provider row", D, "normal", "standard", "Providers, hover a row that opens sign-in", "弹窗"),
+  s("settings.capabilities-tab-hover", "Settings: hovered Capabilities scope tab", D, "normal", "standard", "Capabilities, hover Router", "弹窗"),
+  s("settings.resources-expanded", "Settings: Storage breakdown expanded", D, "normal", "standard", "Resources, expand Storage breakdown", "弹窗"),
+  s("settings.focus", "Settings: keyboard focus on a row control", D, "normal", "standard", "General, Tab from Interface scale to the next control (Check for updates while notifications are blocked)", "弹窗"),
+  s("settings.scale-compact", "Settings: General at the Compact interface scale", D, "normal", "standard", "localStorage presets agent-hub.uiScale, open General", "弹窗"),
+  s("settings.scale-xl", "Settings: General at the XL interface scale", D, "normal", "standard", "localStorage presets agent-hub.uiScale, open General", "弹窗"),
+  s("settings.resources-delete", "Settings: delete confirmation for a kept item", D, "normal", "standard", "Resources, patch resources-attention, click Delete…", "确认弹窗"),
   s("m-settings.home", "手机设置：一级主页（顶部含额度概览）", M, "normal", "standard", "#/settings"),
   s("m-settings.scale", "手机设置：界面大小", M, "normal", "standard", "#/settings/scale"),
   s("m-settings.notifications", "手机设置：通知", M, "normal", "standard", "#/settings/notifications"),
   s("m-settings.providers", "手机设置：厂商", M, "normal", "standard", "#/settings/providers，补丁 vendors-mixed"),
   s("m-settings.vendor-sync", "手机设置：跨厂商同步", M, "long", "standard", "#/settings/vendor-sync，补丁 vendor-sync-preview"),
   s("m-settings.capabilities", "手机设置：能力权限", M, "normal", "standard", "#/settings/capabilities"),
+  s("m-settings.capabilities-long-xl", "Phone settings: Capabilities for a long-named project at XL", M, "long", "stress", "localStorage presets XL, Capabilities, Project tab, pick the long-named project"),
+  s("m-settings.row-press", "Phone settings: a row held down", M, "normal", "standard", "#/settings, press and hold Notifications"),
   s("m-settings.resources", "手机设置：资源与存储", M, "normal", "standard", "#/settings/resources，补丁 resources-attention"),
   s("m-settings.computers", "手机设置：电脑", M, "normal", "two-devices", "#/settings/computers"),
   s("m-settings.sign-in", "手机设置：在其他设备上登录", M, "normal", "standard", "#/settings/sign-in"),
@@ -249,6 +340,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("quota.max", "额度浮层：用满、偏高、Antigravity 两个模型族", D, "long", "standard", "同上，补丁 quota-max", "浮层"),
   s("quota.short-window", "额度浮层：窗口矮时在浮层里滚动", ["slim"], "long", "standard", "同上，补丁 quota-max", "浮层"),
   s("quota.rail", "额度浮层：在窄屏打开", ["narrow"], "normal", "standard", "点最左栏额度沙漏，补丁 quota-normal", "浮层"),
+  ...WIDTH_SHOTS,
 ];
 
 const APP_RAIL = 'role=navigation[name="Workspace"]';
@@ -285,6 +377,8 @@ const QUICK_ASK = "今天各项目进度怎么样？";
 const QUICK_ANSWERED = `${QUICK_POPOVER} >> [data-router-turn][data-status="answered"]`;
 const profileScope = (name: string) => `[aria-label="${name}'s settings"]`;
 const openProfile = (name: string): ScreenStep[] => [...openPm(name), { click: `role=button[name="View ${name}'s profile"]` }, { waitFor: profileScope(name) }];
+/** The year-ring column title shows only while the categories sit beside the sheet (720px and wider). */
+const SETTINGS_SIDE_TITLE = `${DIALOG} >> div[data-window-drag]:text-is("Settings")`;
 const openSettings = (tab?: string): ScreenStep[] => [{ waitFor: APP_RAIL }, { click: btn("Settings", APP_RAIL) }, { waitFor: DIALOG }, ...(tab === undefined ? [] : [{ click: `role=tab[name="${tab}"]` }])];
 /** 手机设置：底部 TabBar 点 Settings，再点一行。 */
 const openMobileSettings = (row?: string): ScreenStep[] => [{ click: btn("Settings") }, { waitFor: 'role=heading[name="Settings"]' }, ...(row === undefined ? [] : [{ click: btn(row, "role=main") }])];
@@ -323,6 +417,14 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
     { click: 'role=button[name="Switch computer (Studio Mac)"]' },
     { waitFor: 'role=list[name="Linked computers"]' },
     { crop: '[role="dialog"]:has([aria-label="Linked computers"]), [data-radix-popper-content-wrapper]:has([aria-label="Linked computers"])' },
+  ],
+  "sidebar.switcher-hover": [
+    ...ensureList,
+    { waitFor: 'role=button[name="Switch computer (Studio Mac)"]' },
+    { click: 'role=button[name="Switch computer (Studio Mac)"]' },
+    { waitFor: 'role=list[name="Linked computers"]' },
+    { hover: 'role=list[name="Linked computers"] >> role=button[name^="Tokyo Mini"]' },
+    { crop: '[data-radix-popper-content-wrapper]:has([aria-label="Linked computers"])' },
   ],
   "sidebar.list-mobile": [{ waitFor: PM_LIST }],
   "chat.normal": openPm("小林"),
@@ -437,6 +539,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
     { waitFor: "role=main >> text=Offline" },
   ],
   "router.model-picker": [{ patch: "vendors-mixed" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: POPOVER }],
+  "router.model-picker-hover": [{ patch: "vendors-mixed" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { hover: `${POPOVER} >> role=radio[name^="Claude Code"]` }, { crop: POPOVER }],
   "router.model-picker-vendor": [{ patch: "router-vendor-agy" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { click: `${POPOVER} >> text=Model & effort` }, { crop: POPOVER }],
   "router.model-picker-long": [{ patch: "models-long-names" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: POPOVER }],
   "router.model-drawer-mobile": [{ patch: "vendors-mixed" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: DIALOG }],
@@ -461,6 +564,9 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "profile.schedule-form": [...openProfile("阿青"), { click: `${profileScope("阿青")} >> role=button[name^="Schedules"]` }, { click: btn("New", 'role=region[name="Schedules"]') }, { type: { into: 'role=region[name="Schedules"] >> role=textbox >> nth=0', text: "一个特别特别长的定时任务名字用来测试表单校验会不会提示太长了再长一点再长一点再长一点" } }, { crop: 'role=region[name="Schedules"]' }],
   "profile.memory-open": [{ patch: "memory-files" }, ...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Memory files"]` }, { click: 'role=button[name="Edit conventions.md"]' }, { waitFor: 'role=region[name="Memory files"] >> role=textbox' }, { crop: 'role=region[name="Memory files"]' }],
   "profile.history": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
+  "profile.mode": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Mode,"]` }, { waitFor: `${profileScope("小林")} >> role=heading[name=/^Mode$/]` }],
+  "profile.folders": [...openProfile("小林"), { click: `${profileScope("小林")} >> role=button[name^="Folders"]` }, { waitFor: 'role=button[name="Back to Info"]' }],
+  "profile.history-hover": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { hover: 'role=region[name="History"] >> role=button[name="Undo"]' }, { crop: 'role=region[name="History"]' }],
   "profile.history-empty": [...openProfile("项目经理"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
   "profile.new-session-confirm": [...openProfile("小林"), { click: 'role=button[name="New session"]' }, { crop: TOP_DIALOG }],
   "profile.archive-confirm": [...openProfile("小林"), { click: 'role=button[name="Archive"]' }, { crop: TOP_DIALOG }],
@@ -479,12 +585,23 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   ],
   "new-pm.invalid": [...ensureList, { click: btn("New project manager", LIST) }, { type: { into: `${DIALOG} >> role=textbox >> nth=0`, text: "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一" } }, { crop: DIALOG }],
   "new-pm.devices": [...ensureList, { click: btn("New project manager", LIST) }, { crop: DIALOG }],
+  "new-pm.row-hover": [...ensureList, { click: btn("New project manager", LIST) }, { hover: `${DIALOG} >> role=button[name="Change look"]` }, { crop: DIALOG }],
+  "new-pm.look-open": [...ensureList, { click: btn("New project manager", LIST) }, { click: `${DIALOG} >> role=button[name="Change look"]` }, { waitFor: 'role=dialog[name="Change look"]' }, { crop: POPOVER }],
+  "new-pm.mode-open": [...ensureList, { click: btn("New project manager", LIST) }, { click: 'role=combobox[name="Mode"]' }, { waitFor: '[data-slot="select-content"]' }, { crop: '[data-slot="dialog-content"] >> nth=-1' }],
+  "new-pm.more-hover": [...ensureList, { click: btn("New project manager", LIST) }, { hover: btn("More settings", DIALOG) }, { crop: DIALOG }],
+  "new-pm.device-open": [
+    ...ensureList,
+    { click: btn("New project manager", LIST) },
+    { click: 'role=combobox[name="Device"]' },
+    { waitFor: "role=listbox" },
+    { crop: '[data-slot="select-content"]' },
+  ],
   "settings.general": [...openSettings("General"), { crop: DIALOG }],
   "settings.providers": [{ patch: "vendors-mixed" }, ...openSettings("Providers"), { crop: DIALOG }],
   "settings.providers-busy": [{ patch: "provider-installing" }, ...openSettings("Providers"), { waitFor: "text=Installing package…" }, { click: `${DIALOG} >> role=button[name^="Show log"]` }, { crop: DIALOG }],
-  "settings.providers-sign-in": [{ patch: "provider-login-code" }, ...openSettings("Providers"), { click: `${DIALOG} >> role=button >> text=Sign in…` }, { crop: TOP_DIALOG }],
+  "settings.providers-sign-in": [{ patch: "provider-login-code" }, ...openSettings("Providers"), { click: `${DIALOG} >> role=button[name^="Sign in to"]` }, { crop: TOP_DIALOG }],
   "settings.providers-error": [{ patch: "provider-failed" }, ...openSettings("Providers"), { crop: DIALOG }],
-  "settings.sync-preview": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }, ...openSettings("Providers"), { waitFor: `${DIALOG} >> text=Sign in…` }, { click: btn("Scan…", DIALOG) }, { crop: TOP_DIALOG }],
+  "settings.sync-preview": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }, ...openSettings("Providers"), { waitFor: `${DIALOG} >> role=button[name^="Sign in to"]` }, { click: btn("Scan…", DIALOG) }, { crop: TOP_DIALOG }],
   "settings.capabilities": [...openSettings("Capabilities"), { waitFor: `${DIALOG} >> role=searchbox[name="Search capabilities"]` }, { crop: DIALOG }],
   "settings.resources": [{ patch: "resources-attention" }, ...openSettings("Resources"), { waitFor: `${DIALOG} >> text=#42 Fix auth flow` }, { crop: DIALOG }],
   "settings.computers": [...openSettings("Computers"), { crop: DIALOG }],
@@ -500,7 +617,27 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
     { crop: DIALOG },
   ],
   "settings.tabs-top": [...openSettings("General"), { crop: DIALOG }],
-  "m-settings.home": openMobileSettings(),
+  "settings.nav-hover": [...openSettings("General"), { hover: 'role=tab[name="Providers"]' }, { crop: DIALOG }],
+  "settings.button-hover": [...openSettings("General"), { hover: btn("Check for updates", DIALOG) }, { crop: DIALOG }],
+  "settings.group-hover": [...openSettings("Security & Access"), { hover: `${DIALOG} >> role=button[name^="Signed-in browsers"]` }, { crop: DIALOG }],
+  "settings.scale-menu-open": [...openSettings("General"), { click: 'role=combobox[name="Interface scale"]' }, { waitFor: '[data-slot="select-content"]' }, { crop: '[data-slot="dialog-content"] >> nth=-1' }],
+  "settings.row-hover": [{ patch: "vendors-mixed" }, ...openSettings("Providers"), { hover: `${DIALOG} >> role=button[name^="Sign in to"] >> nth=0` }, { crop: DIALOG }],
+  "settings.capabilities-tab-hover": [...openSettings("Capabilities"), { waitFor: `${DIALOG} >> role=searchbox[name="Search capabilities"]` }, { hover: `${DIALOG} >> role=tab[name="Router"]` }, { crop: DIALOG }],
+  "settings.resources-expanded": [{ patch: "resources-attention" }, ...openSettings("Resources"), { waitFor: `${DIALOG} >> text=#42 Fix auth flow` }, { click: `${DIALOG} >> role=button[name^="Storage breakdown"]` }, { crop: DIALOG }],
+  "settings.focus": [...openSettings("General"), { focus: 'role=combobox[name="Interface scale"]' }, { press: "Tab" }, { crop: DIALOG }],
+  "settings.scale-compact": [storage({ "agent-hub.uiScale": "sm" }), ...openSettings("General"), { crop: DIALOG }],
+  "settings.scale-xl": [storage({ "agent-hub.uiScale": "xl" }), ...openSettings("General"), { crop: DIALOG }],
+  "settings.resources-delete": [{ patch: "resources-attention" }, ...openSettings("Resources"), { waitFor: `${DIALOG} >> text=#42 Fix auth flow` }, { click: `${DIALOG} >> text=Delete…` }, { crop: TOP_DIALOG }],
+  "m-settings.home": [{ patch: "quota-normal" }, ...openMobileSettings()],
+  "m-settings.capabilities-long-xl": [
+    storage({ "agent-hub.uiScale": "xl" }),
+    ...openMobileSettings("Capabilities"),
+    { click: 'role=tab[name="Project"]' },
+    { click: 'role=button[name^="Project: "]' },
+    { click: 'role=radio[name^="一个名字特别特别长"]' },
+    { waitFor: 'role=searchbox[name="Search capabilities"]' },
+  ],
+  "m-settings.row-press": [...openMobileSettings(), { hold: 'role=main >> role=button[name^="Notifications"]' }],
   "m-settings.scale": openMobileSettings("Interface scale"),
   "m-settings.notifications": openMobileSettings("Notifications"),
   "m-settings.providers": [{ patch: "vendors-mixed" }, ...openMobileSettings("Providers")],
@@ -516,7 +653,68 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "quota.max": openQuota("quota-max"),
   "quota.short-window": openQuota("quota-max"),
   "quota.rail": openQuota("quota-normal"),
+  ...widthSteps(),
+  ...newPmKeyboardSteps(),
 };
+
+function widthSteps(): Record<string, ScreenStep[]> {
+  const ready: Partial<Record<string, ScreenStep[]>> = {
+    providers: [{ waitFor: `${DIALOG} >> role=button[name^="Sign in to"]` }],
+    capabilities: [{ waitFor: `${DIALOG} >> role=searchbox[name="Search capabilities"]` }],
+    resources: [{ waitFor: `${DIALOG} >> text=#42 Fix auth flow` }],
+  };
+  const patches: Partial<Record<string, ScreenStep[]>> = {
+    providers: [{ patch: "vendors-mixed" }],
+    "vendor-sync": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }],
+    resources: [{ patch: "resources-attention" }],
+    browsers: [{ patch: "browsers-multi" }],
+  };
+  const dialog = WIDTH_DIALOG_CASES.flatMap((c) =>
+    WIDTH_CATEGORIES.map((cat): [string, ScreenStep[]] => [
+      `settings.${c.key}-${cat.id}`,
+      [
+        storage({ "agent-hub.uiScale": c.scale }),
+        ...(patches[cat.id] ?? []),
+        ...openSettings(cat.tab),
+        c.layout === "side" ? { waitFor: SETTINGS_SIDE_TITLE } : { hidden: SETTINGS_SIDE_TITLE },
+        ...(ready[cat.id] ?? []),
+        { crop: DIALOG },
+      ],
+    ]),
+  );
+  const phone = WIDTH_PHONE_PAGES.map((page): [string, ScreenStep[]] => [
+    `m-settings.w700-xl-${page.id}`,
+    [
+      storage({ "agent-hub.uiScale": "xl" }),
+      ...(patches[page.id] ?? []),
+      ...openMobileSettings(page.row),
+      { hidden: 'role=tablist[name="Settings categories"]' },
+      ...(page.id === "capabilities" ? [{ waitFor: 'role=searchbox[name="Search capabilities"]' }] : []),
+      ...(page.id === "resources" ? [{ waitFor: "text=#42 Fix auth flow" }] : []),
+    ],
+  ]);
+  return Object.fromEntries([...dialog, ...phone]);
+}
+
+function newPmKeyboardSteps(): Record<string, ScreenStep[]> {
+  const NEW_PM = 'role=dialog[name="New project manager"]';
+  const open: ScreenStep[] = [
+    { patch: "folder-picker-available" },
+    ...ensureList,
+    { click: btn("New project manager", LIST) },
+    { type: { into: `${NEW_PM} >> role=textbox[name="Name"]`, text: "Keyboard" } },
+    { click: btn("More settings", NEW_PM) },
+    { waitFor: `${NEW_PM} >> role=textbox[name="Persona"]` },
+    { focus: `${NEW_PM} >> role=textbox[name="Name"]` },
+    { tabBackTo: `${NEW_PM} >> role=button[name="Change look"]` },
+  ];
+  return Object.fromEntries(
+    NEW_PM_KEYBOARD_STOPS.map((stop, i): [string, ScreenStep[]] => [
+      `new-pm.kb-${String(i + 1).padStart(2, "0")}-${stop.id}`,
+      [...open, ...(stop.id === "look" ? [] : [{ tabTo: `${NEW_PM} >> role=${stop.role}[name="${stop.name}"]` }]), { crop: NEW_PM }],
+    ]),
+  );
+}
 
 /** 一张要截的图：一个界面配一个视口。 */
 export interface Shot {

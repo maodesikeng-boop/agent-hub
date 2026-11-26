@@ -87,18 +87,18 @@ export const QuotaPopover = memo(function QuotaPopover({
         )}
       </PopoverTrigger>
       <PopoverContent side={side ?? (inHeader ? "bottom" : "top")} align={align ?? "end"} aria-label="Usage" className="w-80 p-0">
-        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Hourglass className="size-pixel-md shrink-0 text-brand-ink" aria-hidden="true" />
-          <h2 className="text-body font-semibold text-foreground">Usage</h2>
+        <div className="flex h-10 items-center gap-2 border-b border-border px-3">
+          <Hourglass className="size-4.5 shrink-0 text-brand-ink" aria-hidden="true" />
+          <h2 className="text-minor font-semibold text-foreground">Usage</h2>
         </div>
-        <div className="divide-y divide-border">
+        <div className="info-list">
           {groupByVendor(quota).map((section) => (
-            <section key={section.name} className="grid gap-3 px-4 py-3" aria-label={section.name}>
+            <section key={section.name} className="info-sec grid gap-2.5 px-3 py-2.5" aria-label={section.name}>
               <h3 className="text-minor font-semibold text-foreground">{section.name}</h3>
               <div className="grid gap-3">
                 {section.blocks.map((vendor) => (
                   <div key={vendor.id} role={vendor.group ? "group" : undefined} aria-label={vendor.group} className="grid gap-2.5">
-                    {vendor.group && <h4 className="text-xs font-medium text-muted-foreground">{vendor.group}</h4>}
+                    {vendor.group && <h4 className="info-heading min-h-0 py-0">{vendor.group}</h4>}
                     {vendor.windows.map((w) => (
                       <WindowRow key={w.key} window={w} exhausted={w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100))} />
                     ))}
@@ -107,8 +107,8 @@ export const QuotaPopover = memo(function QuotaPopover({
               </div>
             </section>
           ))}
-          {loading && <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>}
-          {!loading && quota.length === 0 && <p className="px-4 py-3 text-minor text-muted-foreground">No usage reported yet</p>}
+          {loading && <p className="px-3 py-2.5 text-minor text-muted-foreground">Loading…</p>}
+          {!loading && quota.length === 0 && <p className="px-3 py-2.5 text-minor text-muted-foreground">No usage reported yet</p>}
         </div>
       </PopoverContent>
     </Popover>

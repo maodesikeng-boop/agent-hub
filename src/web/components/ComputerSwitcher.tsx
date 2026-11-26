@@ -6,6 +6,7 @@ import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from "../ui/drawer.
 import { Check } from "../ui/icons.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { PlatformIcon, StatusDot } from "./DeviceBadges.tsx";
+import { INFO_ROW, InfoAction } from "./SettingsList.tsx";
 
 export interface ComputerSwitcherProps {
   /** popover on the desktop PM column header, drawer on the phone. */
@@ -45,8 +46,8 @@ function SwitcherList({
   onClose: () => void;
 }) {
   return (
-    <div className="grid gap-1">
-      <div className="grid gap-1" role="list" aria-label="Linked computers">
+    <div className="grid">
+      <div className="info-sec grid gap-0.5 pt-0 pb-1.5" role="list" aria-label="Linked computers">
         {computers.map((c) => {
           const current = c.key === selected;
           const offline = c.status === "offline" || c.status === "unreachable";
@@ -59,47 +60,39 @@ function SwitcherList({
                 onSelect(c.key);
                 onClose();
               }}
+              title={`${c.name}, ${CONNECTION_TEXT[c.status]}`}
               className={cn(
-                "flex w-full cursor-pointer items-center gap-3 rounded-xs px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-border-focus",
-                variant === "drawer" && "min-h-12",
-                current ? "tile-open text-foreground" : "hover:bg-hover",
-                offline && !current && "text-muted-foreground",
+                INFO_ROW,
+                "h-7.5 text-minor",
+                variant === "drawer" && "min-h-11",
+                current && "tile-open",
               )}
             >
-              <PlatformIcon platform={c.platform} size="inherit" className="size-pixel shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span title={c.name} className="truncate text-body font-medium text-foreground">
-                    {c.name}
-                  </span>
-                  <StatusDot status={c.status} />
-                </div>
-                <div className="text-xs text-muted-foreground">{CONNECTION_TEXT[c.status]}</div>
-              </div>
+              <PlatformIcon platform={c.platform} size="inherit" className="size-4 shrink-0 text-muted-foreground" />
+              <span className={cn("min-w-0 truncate", offline ? "text-muted-foreground" : "text-foreground")}>{c.name}</span>
+              <StatusDot status={c.status} />
+              <span className="flex-1" />
+              <span className="info-val shrink-0 text-minor">{CONNECTION_TEXT[c.status]}</span>
               {c.badge > 0 && (
-                <span className="shrink-0 bg-brand-ink px-1.5 py-0.5 text-xs font-semibold text-primary-foreground tabular-nums">
+                <span className="shrink-0 rounded-xs bg-brand-ink px-1.5 py-0.5 text-xs leading-none font-semibold text-primary-foreground tabular-nums">
                   {c.badge}
                 </span>
               )}
-              {current && <Check className="size-pixel-sm shrink-0 text-brand-ink" aria-hidden="true" />}
+              {current && <Check className="size-3.5 shrink-0 text-brand-ink" aria-hidden="true" />}
             </button>
           );
         })}
       </div>
-      <div className="mt-1 border-t border-border pt-1">
-        <button
-          type="button"
+      <div className="flex items-center pt-1.5">
+        <InfoAction
+          className={cn("h-7.5", variant === "drawer" && "min-h-11")}
           onClick={() => {
             onClose();
             onManage();
           }}
-          className={cn(
-            "flex w-full cursor-pointer items-center rounded-xs px-3 py-2 text-left text-minor font-medium text-foreground transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus",
-            variant === "drawer" && "min-h-11",
-          )}
         >
           Manage computers...
-        </button>
+        </InfoAction>
       </div>
     </div>
   );
@@ -127,7 +120,7 @@ export function ComputerSwitcher({
         <DrawerTrigger asChild>{trigger}</DrawerTrigger>
         <DrawerContent aria-label="Computers">
           <DrawerTitle className="px-4 py-2 text-title font-semibold">Computers</DrawerTitle>
-          <div className="overflow-y-auto px-3 pb-4">
+          <div className="overflow-y-auto px-4 pb-4">
             <SwitcherList
               variant="drawer"
               computers={computers}
@@ -145,7 +138,7 @@ export function ComputerSwitcher({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent side="bottom" align="start" aria-label="Computers" className="w-72 p-1.5">
+      <PopoverContent side="bottom" align="start" aria-label="Computers" className="w-72 px-3 py-1.5">
         <SwitcherList
           variant="popover"
           computers={computers}
