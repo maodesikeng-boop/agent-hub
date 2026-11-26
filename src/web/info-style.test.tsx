@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serverInfoFor, type BrowserSessionInfo, type HeldResourceItem, type ResourcesSnapshot } from "../shared/index.ts";
@@ -332,6 +333,30 @@ describe("keyboard focus on row controls", () => {
     expect(trigger).toHaveClass("info-select");
     // A utility outline-none outranks the .info-select:focus-visible outline in the components layer.
     expect(trigger).not.toHaveClass("outline-none");
+  });
+
+  it("gives the New PM Persona field a 2px outline on focus", async () => {
+    render(
+      <NewPmDialog
+        open
+        devices={[{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "online", client: createClient(null), server: serverInfoFor("darwin"), takenLooks: [] }]}
+        defaultDevice={LOCAL_DEVICE}
+        onOpenChange={() => {}}
+        onCreated={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "More settings" }));
+    const persona = screen.getByRole("textbox", { name: "Persona" });
+    expect(persona).toHaveClass("info-field");
+    expect(persona.className).not.toMatch(/(^|\s)(outline-none|focus:shadow-none|focus-visible:outline-none)(\s|$)/);
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/\.info-field:focus-visible\s*\{\s*outline: 2px solid var\(--border-focus\);\s*outline-offset: -2px;/);
+  });
+
+  it("never strips the focus mark from a text field", () => {
+    const sources = execFileSync("git", ["ls-files", "src/web/*.tsx"], { encoding: "utf8" }).split("\n").filter((f) => f !== "" && !f.endsWith(".test.tsx"));
+    const offenders = sources.filter((f) => /<Textarea\b[^>]*\b(focus:shadow-none|focus-visible:outline-none)/s.test(readFileSync(f, "utf8")));
+    expect(offenders).toEqual([]);
   });
 
   it("keeps the Settings category panel out of the Tab order", () => {

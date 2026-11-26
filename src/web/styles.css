@@ -2088,6 +2088,18 @@ input[type="search"]::-webkit-search-cancel-button {
     outline: 2px solid var(--border-focus);
     outline-offset: -2px;
   }
+  .info-field {
+    display: block;
+    width: calc(100% + 16px);
+    margin-inline: -8px;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 6px;
+  }
+  .info-field:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: -2px;
+  }
   .info-val {
     color: #6f665d;
   }

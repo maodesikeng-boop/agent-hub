@@ -167,7 +167,7 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 | Icon button | `size-9` (`size="icon"`) | `size-8` (`size="icon-sm"`) | `Button` |
 | Text input | `h-9 px-3 border` (`w-60` inside desktop settings rows) | none | `Input` |
 | Select | `h-9`, max `260px` (`variant="plain"` for auto-saving rows; Radix UI `Select`) | none | `Select` |
-| Textarea | `min-h-24` (borderless auto-sizing inside grouped boxes) | none | `Textarea` |
+| Textarea | `min-h-24` (`variant="bare"`: borderless auto-sizing editor inside Info groups) | none | `Textarea` |
 | Switch | `h-5.5 w-10 border` (`size-4` `rounded-xs` thumb) | none | `Switch` |
 
 - **Button recipes (`src/web/styles.css`)**: every button is flat, with no gradient, inner highlight, drop, or inset shade. `default` takes the pastel send colors (`--send` fill and `--send-ink` text, `--send-hover` on hover, `--send-press` while pressed, section 4), `destructive` uses `btn-solid` (solid `--danger`, `brightness(1.08)` on hover and `0.92` while pressed), `outline` uses `btn-raised` (white with a `1px` `--border-strong` line, `--hover` on hover, a step darker while pressed or open), `slot` uses `btn-honey`, and `send` uses `send-button` (section 4). `ghost` has no fill or line (`hover:bg-hover`). Disabled primary buttons use `--send-disabled`.
@@ -182,6 +182,7 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 
 - **Crisp keyboard outline**: Buttons and interactive rows show a crisp `2px` `--border-focus` (`#4a4038`) outline (`focus-visible:outline-2 focus-visible:outline-border-focus`, `1px` outside buttons, inset `-2px` on rows inside clipping boxes) on keyboard focus only, never a soft fuzzy ring.
 - **Standard inputs (`Input`, `Textarea`, `Select`, `SearchField`)**: A `1px` `--border-strong` line; focus, or an open `Select`, applies `field-focus`: the line turns `--border-focus` and gains a `1px` `--border-focus` spread, a crisp `2px` edge with no blur (`variant="plain"` hovers and focuses to `bg-hover`).
+- **Borderless editors (`Textarea variant="bare"`, `.info-field`)**: Persona, Worktree setup, memory file, and schedule task editors have no line at rest; they bleed `8px` past the column like Info rows so their text lines up with row labels, and any focus draws the row outline (`2px` `--border-focus`, inset `-2px`, `6px` radius). Never strip a text field's focus mark without drawing another.
 - **Chat composer (`.composer-frame` in `src/web/styles.css`)**:
   - Resting state: `8px` radius, a light `1px` `--composer-line` (`rgb(60 40 20 / 0.16)`), `bg-background`, and the soft `--shadow-composer` drop, the one field that floats over the stream.
   - `:focus-within`: the line deepens to `--composer-line-focus` (`0.4`) with a faint `1px` ring in `--shadow-composer-focus`, no blur on the edge.

@@ -692,7 +692,7 @@ describe("资料页", () => {
     await openSettingsPage(user, page, /^Persona/);
     const box = await within(page).findByRole("textbox", { name: "Persona" });
     expect(box).toHaveAttribute("placeholder", "No persona yet");
-    expect(box).toHaveClass("px-0");
+    expect(box).toHaveClass("info-field");
     await waitFor(() => expect(box).toHaveValue("旧"));
     expect(textSave(page)).not.toBeInTheDocument();
     await user.type(box, "了");

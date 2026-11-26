@@ -409,9 +409,10 @@ function PersonaEditor({ persona, readOnly }: { persona: ReturnType<typeof usePe
         placeholder="No persona yet"
         rows={1}
         disabled={readOnly}
+        variant="bare"
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-0 py-1.5 placeholder:font-sans placeholder:text-minor field-sizing-content focus:border-0 focus:shadow-none",
-          text === "" ? "text-minor" : "font-mono text-minor",
+          "max-h-[60vh] min-h-0",
+          text !== "" && "font-mono",
         )}
         value={text}
         onChange={(e) => {

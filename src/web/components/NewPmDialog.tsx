@@ -186,7 +186,8 @@ function NewPmForm({
                 aria-label="Persona"
                 placeholder="Persona"
                 rows={3}
-                className="mt-1 block max-h-[60vh] min-h-20 w-full resize-none border-0 bg-transparent px-0 py-1.5 font-mono text-minor placeholder:font-sans placeholder:text-minor field-sizing-content focus:border-0 focus:shadow-none"
+                variant="bare"
+                className="mt-1 max-h-[60vh] min-h-20 font-mono"
                 value={persona}
                 onChange={(e) => setPersona(e.target.value)}
               />

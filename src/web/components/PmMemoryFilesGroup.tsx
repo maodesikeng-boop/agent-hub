@@ -135,7 +135,8 @@ function EditMemoryFileRow({
             aria-label={`${file.name} content`}
             rows={4}
             readOnly={archived}
-            className="block max-h-[50vh] min-h-24 resize-none border-0 bg-transparent px-0 py-1.5 font-mono text-minor field-sizing-content focus:border-0 focus:shadow-none"
+            variant="bare"
+            className="max-h-[50vh] min-h-24 font-mono"
             value={text}
             aria-invalid={contentProblem !== null}
             onChange={(e) => setDraft(e.target.value)}
@@ -319,7 +320,8 @@ function NewMemoryFileForm({
           aria-label="Content"
           placeholder="Content"
           rows={4}
-          className="block max-h-[40vh] min-h-20 resize-none border-0 bg-transparent px-0 py-1.5 font-mono text-minor placeholder:font-sans placeholder:text-minor field-sizing-content focus:border-0 focus:shadow-none"
+          variant="bare"
+          className="max-h-[40vh] min-h-20 font-mono"
           value={content}
           aria-invalid={contentProblem !== null}
           onChange={(e) => setContent(e.target.value)}

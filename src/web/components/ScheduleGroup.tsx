@@ -160,7 +160,8 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
           aria-label="Task"
           placeholder="Task"
           rows={3}
-          className="block max-h-[40vh] min-h-20 resize-none border-0 bg-transparent px-0 py-1.5 text-minor placeholder:text-minor field-sizing-content focus-visible:outline-none"
+          variant="bare"
+          className="max-h-[40vh] min-h-20"
           value={prompt}
           aria-invalid={promptProblem !== null}
           onChange={(e) => setPrompt(e.target.value)}

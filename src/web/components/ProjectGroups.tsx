@@ -103,9 +103,10 @@ export function WorktreeSetupGroup({ project, readOnly, titled = true }: { proje
         autoCapitalize="none"
         autoCorrect="off"
         aria-invalid={setup.problem !== null || undefined}
+        variant="bare"
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-0 py-1.5 placeholder:font-sans placeholder:text-minor field-sizing-content focus:border-0 focus:shadow-none",
-          setup.text === "" ? "text-minor" : "font-mono text-minor",
+          "max-h-[60vh] min-h-0",
+          setup.text !== "" && "font-mono",
         )}
         value={setup.text}
         onChange={(e) => setup.edit(e.target.value)}
