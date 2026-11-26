@@ -1,25 +1,36 @@
-import type { ConversationId, Message, PmWakeupSource, SessionId } from "../../shared/domain.ts";
+import { systemMessageDedupeKey, type ConversationId, type Message, type PmWakeupSource, type SessionId, type SystemMessageMeta } from "../../shared/domain.ts";
 import type { LedgerContext, Pending } from "./context.ts";
+import { toMessage, type MessageDbRow } from "./rows.ts";
 
 export interface SystemWakeupInput {
   conversationId: ConversationId;
   source: PmWakeupSource;
-  /** Stable per wakeup cause; the dedupe key is built from it, so the same cause never queues twice. */
   ref: string;
   text: string;
 }
 
-/**
- * Precondition: `session` is the conversation's current agent session.
- * Postcondition: inserts one queued `system` message with meta `{ event: "pm.wakeup", source, ref }` and queues a
- * `session.send` with source `system`. A second call with the same conversation and `ref` returns the first message
- * and queues nothing. The message never counts as user input: no rate-limit reset, no Feishu echo, no reply tracking.
- */
+export function systemWakeupKey(conversationId: ConversationId, source: PmWakeupSource, ref: string): string {
+  return systemMessageDedupeKey(conversationId, { event: "pm.wakeup", source, ref });
+}
+
 export function enqueueSystemWakeupIn(
-  _ctx: Pick<LedgerContext, "db" | "now" | "enqueue">,
-  _p: Pending,
-  _session: { id: SessionId },
-  _input: SystemWakeupInput,
+  { db, now, enqueue }: Pick<LedgerContext, "db" | "now" | "enqueue">,
+  p: Pending,
+  session: { id: SessionId },
+  { conversationId, source, ref, text }: SystemWakeupInput,
 ): Message {
-  throw new Error("Not implemented");
+  const key = systemWakeupKey(conversationId, source, ref);
+  const existing = db.get<MessageDbRow>("SELECT * FROM messages WHERE dedupe_key = ?", key);
+  if (existing !== undefined) return toMessage(existing);
+  const at = now();
+  const meta = { event: "pm.wakeup", source, ref } satisfies SystemMessageMeta;
+  const row = db.get<MessageDbRow>(
+    `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+     VALUES (?, ?, 'system', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
+    conversationId, session.id, text, JSON.stringify(meta), key, at, at,
+  )!;
+  const message = toMessage(row);
+  enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "system" } });
+  p.changes.push({ type: "message.created", data: { message } });
+  return message;
 }

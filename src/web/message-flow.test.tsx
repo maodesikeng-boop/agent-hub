@@ -1,5 +1,5 @@
 // 消息流：一轮回复一个头像、操作合成一行 Worked for、Worker 的发言、系统行、消息状态、复制、空对话、老数据。
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Message } from "../shared/index.ts";
@@ -190,7 +190,7 @@ describe("正在跑和跑完", () => {
     const { container } = list([
       makeToolMessage({ id: 1 }),
       makeMessage({ id: 2, text: "派好了" }),
-      makeWorkerLine({ id: 3, line: { event: "report", status: "done", summary: "改好了" } }),
+      makeWorkerLine({ id: 3, status: "replied", line: { event: "report", status: "done", summary: "改好了" } }),
     ], {
       status: running({ step: { type: "text" } }),
     });
@@ -284,7 +284,7 @@ describe("Worker 线程卡（ThreadCard）", () => {
   });
 
   it("汇报后面项目经理的回复另起一轮（新头像）", () => {
-    const { container } = list([makeMessage({ id: 1, text: "派好了" }), report(), makeMessage({ id: 6, text: "收到" })]);
+    const { container } = list([makeMessage({ id: 1, text: "派好了" }), { ...report(), status: "replied" }, makeMessage({ id: 6, text: "收到" })]);
     expect(heads(container)).toHaveLength(2);
     expect(container.querySelectorAll("[data-worker-report]")).toHaveLength(1);
   });
@@ -529,5 +529,115 @@ describe("送达与执行失败分开显示", () => {
     const { container } = list([makeUserMessage({ id: 1, status: "failed", failureReason: "spawn_failed: rejected" })]);
     expect(container.querySelector("[data-unsent]")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
+  });
+});
+
+describe("system inputs and progress across turns", () => {
+  const item = (id: string, status: "pending" | "in_progress" | "completed") => ({ id, title: id, activeTitle: null, status });
+  const checklist = (id: number, ...items: ReturnType<typeof item>[]) =>
+    makeMessage({ id, kind: "checklist", collapsed: true, meta: { checklist: items } });
+  const wake = (id: number, status: Message["status"], source = "task_graph", taken?: { afterId: number; at: number; midTurn: boolean }) =>
+    makeSystemMessage({ id, status, text: "【Step ready】\nDispatch the next step.", meta: { event: "pm.wakeup", source, ref: "step-ready", taken } });
+  const initial = () => [
+    makeUserMessage({ id: 1, createdAt: 10_000 }),
+    checklist(2, item("Check current work", "in_progress")),
+  ];
+
+  it.each([false, true])("S1/S2: displays each turn's own list (unfinished work: %s)", async (unfinished) => {
+    const first = [item("First check", "completed"), item("Second check", "completed"), item("Third check", unfinished ? "pending" : "completed")];
+    const { container } = list([
+      makeUserMessage({ id: 1 }),
+      checklist(2, ...first),
+      makeUserMessage({ id: 3 }),
+      checklist(4, ...(unfinished ? [item("Third check", "completed")] : []), item("New check", "completed"), item("Final check", "completed")),
+    ]);
+    const [firstTurn, secondTurn] = Array.from(container.querySelectorAll<HTMLElement>("[data-turn]"));
+    for (const turn of [firstTurn!, secondTurn!]) await userEvent.click(within(turn).getByRole("button", { name: /Worked for/ }));
+    expect(firstTurn).toHaveTextContent("First check");
+    expect(firstTurn).toHaveTextContent("Second check");
+    expect(firstTurn).toHaveTextContent("Third check");
+    expect(secondTurn).not.toHaveTextContent("First check");
+    expect(secondTurn).not.toHaveTextContent("Second check");
+    expect(secondTurn).toHaveTextContent("New check");
+    expect(secondTurn).toHaveTextContent("Final check");
+    expect(secondTurn!.textContent?.includes("Third check")).toBe(unfinished);
+  });
+
+  it.each(["Task graph", "Worker report", "Scheduled task"])("S3/S6: %s waits below the running turn without resetting its timer", async (event) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(37_000);
+    try {
+      const notice = event === "Task graph" ? wake(3, "queued") : event === "Worker report"
+        ? makeWorkerLine({ id: 3, status: "queued", line: { event: "report", summary: "Done" } })
+        : makeSystemMessage({ id: 3, status: "queued", text: "Scheduled task", event: { event: "schedule.run", scheduleId: 1, name: "Scheduled task", scheduledAt: 0, catchUp: false } });
+      const { container, rerender } = list(initial(), { status: running(), stepStartedAt: 10_000 });
+      const turn = container.querySelector("[data-turn][data-running='true']")!;
+      expect(turn).toHaveTextContent("27s");
+      rerender(listView([...initial(), notice, makeToolMessage({ id: 4 })], { status: running(), stepStartedAt: 10_000 }));
+      expect(container.querySelectorAll("[data-turn]")).toHaveLength(1);
+      expect(turn).toHaveTextContent("27s");
+      await act(async () => { vi.advanceTimersByTime(2_000); });
+      expect(turn).toHaveTextContent("29s");
+      expect(container.querySelectorAll("article[data-side='right']")).toHaveLength(1);
+      expect(turn.parentElement?.nextElementSibling).toHaveTextContent(event === "Worker report" ? "修 X" : event);
+      expect(container).not.toHaveTextContent("Worked for");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("S3: when read as a new turn, the notice is between the old and new cards; elapsed time starts at the read", () => {
+    const { container } = list([
+      ...initial(), wake(3, "replied", "task_graph", { afterId: 4, midTurn: false, at: 60_000 }),
+      makeMessage({ id: 4, createdAt: 40_000, text: "First turn reply" }),
+      makeToolMessage({ id: 5, createdAt: 64_000 }),
+    ]);
+    expect(heads(container)).toHaveLength(2);
+    const notice = screen.getByRole("button", { name: "Step ready" });
+    const [first, second] = workLines(container);
+    expect(first).toHaveTextContent("Worked for 30s");
+    expect(notice.compareDocumentPosition(first!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(notice.compareDocumentPosition(second!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(second).toHaveTextContent("Worked for 4s");
+  });
+
+  it("S4: when read mid-turn, the event stays inside the running card even before a text reply", () => {
+    const { container } = list([
+      ...initial(), wake(3, "processing", "task_graph", { afterId: 4, midTurn: true, at: 30_000 }),
+      makeToolMessage({ id: 4 }), makeToolMessage({ id: 5 }),
+    ], { status: running(), stepStartedAt: 10_000 });
+    const turn = container.querySelector<HTMLElement>("[data-turn][data-running='true']")!;
+    expect(within(turn).getByRole("button", { name: "Step ready" })).toBeInTheDocument();
+    expect(container.querySelectorAll("[data-turn]")).toHaveLength(1);
+    expect(turn).not.toHaveTextContent("Worked for");
+  });
+
+  it.each([["task_graph", "Task graph"], ["router", "Router"]])("S5: %s history shows a collapsed event and expands its body", async (source, label) => {
+    const view = list([wake(1, "replied", source), makeMessage({ id: 2, text: "Started" })]);
+    expect(view.container.querySelector("article[data-side='right']")).toBeNull();
+    const trigger = screen.getByRole("button", { name: "Step ready" });
+    expect(trigger).toHaveTextContent(label);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Dispatch the next step.")).not.toBeInTheDocument();
+    await userEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Dispatch the next step.")).toBeInTheDocument();
+  });
+
+  it("S7: without checklist frames, only action timing and Worked for appear", () => {
+    const messages = [makeUserMessage({ id: 1 }), makeToolMessage({ id: 2 })];
+    const view = list(messages, { status: running(), stepStartedAt: 10_000 });
+    expect(view.container.querySelector("[data-checklist]")).toBeNull();
+    expect(screen.getByRole("status", { name: "Status" })).toBeInTheDocument();
+    view.rerender(listView(messages));
+    expect(view.container.querySelector("[data-checklist]")).toBeNull();
+    expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
+  });
+
+  it("S9: typed text keeps its right-aligned bubble and starts a new turn", () => {
+    const { container } = list([...initial(), makeUserMessage({ id: 3, text: "Continue" })], { status: running() });
+    expect(screen.getByText("Continue").closest("article")).toHaveAttribute("data-side", "right");
+    expect(container.querySelectorAll("[data-turn]")).toHaveLength(2);
+    expect(workLines(container)[0]).toHaveTextContent("Worked for");
   });
 });

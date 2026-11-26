@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { activeChecklistItemId, applyChecklistUpdate, checklistOf, normalizeChecklistStatus, sameChecklist, turnChecklist } from "./checklist.ts";
+import { activeChecklistItemId, applyChecklistUpdate, checklistOf, normalizeChecklistStatus, sameChecklist, turnChecklist, type ChecklistItemInput } from "./checklist.ts";
 import { CHECKLIST_MAX_ITEMS, CHECKLIST_TITLE_MAX_CHARS } from "./limits.ts";
 
 const input = (title: string, id: string | null = null) => ({ id, title, status: "pending" as const });
-const replace = (...items: ReturnType<typeof input>[]) => applyChecklistUpdate([], { kind: "replace", items });
+const replace = (...items: ChecklistItemInput[]) => applyChecklistUpdate([], { kind: "replace", items });
 
 describe("checklist snapshots", () => {
   it.each([
@@ -57,12 +57,21 @@ describe("checklist snapshots", () => {
 });
 
 describe(turnChecklist.name, () => {
-  it.todo("returns the current list unchanged when the baseline is empty (first turn)");
-  it.todo("drops items completed in an earlier turn that this turn did not touch");
-  it.todo("drops items cancelled in an earlier turn that this turn did not touch");
-  it.todo("keeps unchanged pending and in_progress items carried over from an earlier turn");
-  it.todo("keeps an earlier item this turn ticked off, shown as completed");
-  it.todo("keeps items added this turn and items whose title or active title changed");
-  it.todo("keeps the order of the current list");
-  it.todo("treats a whole-list replace that repeats old completed items as unchanged for those items");
+  it("keeps new, changed and unfinished items in the current list's order", () => {
+    const previous = replace(
+      { ...input("Completed", "a"), status: "completed" },
+      { ...input("Cancelled", "b"), status: "cancelled" },
+      { ...input("Continuing", "c"), status: "in_progress" },
+      input("Finishing", "d"),
+      input("Still pending", "e"),
+    );
+    const current = applyChecklistUpdate(previous, { kind: "merge", items: [
+      { id: "d", status: "completed" },
+      { id: "f", title: "New", status: "completed" },
+    ] });
+    expect(turnChecklist([], current)).toBe(current);
+    expect(turnChecklist(previous, current)).toEqual(current.slice(2));
+    const renamed = current.map((item) => item.id === "a" ? { ...item, title: "Renamed" } : item);
+    expect(turnChecklist(previous, renamed).map((item) => item.id)).toEqual(["a", "c", "d", "e", "f"]);
+  });
 });

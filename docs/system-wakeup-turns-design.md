@@ -2,35 +2,11 @@
 
 > Snapshot: 2026-11-26 (commit `f6ab7798`)
 
-## For the user
+## Approved behavior
 
-### Files to review
-
-- [system-wakeup-turns-design.md](system-wakeup-turns-design.md): Acceptance scenarios, root causes, the chosen design, vendor coverage, and the verification plan.
-- [src/shared/domain.ts](../src/shared/domain.ts) and [migrations/0054_system_wakeups.sql](../migrations/0054_system_wakeups.sql): The new `pm.wakeup` system notice, the conversion of stored wakeups, and the per-turn checklist baseline table.
-- [src/daemon/ledger/system-wakeups.ts](../src/daemon/ledger/system-wakeups.ts): Writes a PM wakeup as a system notice instead of a user message, with specs in [system-wakeups.test.ts](../src/daemon/ledger/system-wakeups.test.ts).
-- [src/shared/taken-input.ts](../src/shared/taken-input.ts) and [src/daemon/ledger/taken-inputs.ts](../src/daemon/ledger/taken-inputs.ts): Record where the agent actually read a system-queued input, with specs in [taken-input.test.ts](../src/shared/taken-input.test.ts) and [taken-inputs.test.ts](../src/daemon/ledger/taken-inputs.test.ts).
-- [src/web/turn-boundaries.ts](../src/web/turn-boundaries.ts): Places system inputs in the chat where the agent read them, so they never close a running turn, with specs in [turn-boundaries.test.ts](../src/web/turn-boundaries.test.ts) and the scenario specs in [turn-scenarios.test.tsx](../src/web/turn-scenarios.test.tsx).
-- [src/shared/checklist.ts](../src/shared/checklist.ts) and [src/daemon/ledger/checklist.ts](../src/daemon/ledger/checklist.ts): Per-turn checklist slice, with specs in [checklist.test.ts](../src/shared/checklist.test.ts), [ledger checklist.test.ts](../src/daemon/ledger/checklist.test.ts), and [progress-pipeline.test.ts](../src/daemon/progress-pipeline.test.ts).
-- [src/daemon/prompt.ts](../src/daemon/prompt.ts) and [src/vendors/types.ts](../src/vendors/types.ts): The checklist rule for PM and Worker prompts and the per-vendor checklist tool name, with specs in [prompt.test.ts](../src/daemon/prompt.test.ts) and [vendor-registry.test.ts](../src/vendors/vendor-registry.test.ts).
-- Prototype screenshots: before and after pairs for desktop, narrow, and mobile go with the plan report and the PR description. They were rendered from a throwaway patch that is not part of this branch.
-
-### Decisions needed
-
-Both decisions are pending the user's answer on the plan checkpoint. Until then, the default is the recommended option.
-
-**1. How should a system wakeup look in the chat?** Pending the user's decision; default: Option A.
-
-- **Option A (recommended): a collapsed left-aligned event row**, the same component as a scheduled-task run. One line shows a bell icon, the tag `Task graph` or `Router`, and the bracketed title; clicking it opens the full text. Users see why the PM started working without reading the command text meant for the PM.
-- **Option B:** Hide it from the chat. The PM's reply carries the context. Users lose the visible cause of a turn they did not start.
-- **Option C:** Show the full text as a muted left-aligned block. Accurate, but it shows several lines of `hub` commands meant for the PM.
-
-**2. Should Worker reports and scheduled-task runs follow the same placement rule?** Pending the user's decision; default: Option A. Measured below: a Worker report or a scheduled-task run that arrives while the PM is mid-turn also splits the running card in two and ends the first half as `Worked for`. Both are system wakeups, so the same rule fixes them.
-
-- **Option A (recommended): yes.** One rule for every system-queued input.
-- **Option B:** Only Task Graph and Router wakeups. Worker reports keep splitting running cards.
-
-Text the user types while the PM is running keeps today's behavior (a right-aligned bubble that starts a new card). That is outside this change.
+- Task Graph and Router wakeups appear as collapsed event rows with a bell, a source label, and the title. Open a row to read the message sent to the PM.
+- A queued wakeup, Worker report, or scheduled run waits below the active turn. If the agent reads it mid-turn, the event moves into that turn. If the agent reads it to start a turn, the event moves before the new turn.
+- A message typed by the user keeps its right-aligned bubble and starts a new turn.
 
 ## For Workers and reviewers
 
@@ -48,19 +24,19 @@ Outcome: a system wakeup reads as a system notice, never as the user's bubble, a
 
 #### Acceptance scenarios
 
-Each scenario has a test skeleton in the file named after it.
+The ledger tests exercise persisted inputs and checklist messages. The browser component tests render those message shapes through the chat list.
 
 | # | First | Then | Expected | Test |
 |---|---|---|---|---|
-| S1 | The user sends a message; the PM lists three steps and completes them all. | The user sends a second message; the PM lists two new steps and completes them. | The second card lists only the two new steps. The first card still opens to its three steps. | `turn-scenarios.test.tsx`, `checklist.test.ts` (ledger), `progress-pipeline.test.ts` |
+| S1 | The user sends a message; the PM lists three steps and completes them all. | The user sends a second message; the PM lists two new steps and completes them. | The second card lists only the two new steps. The first card still opens to its three steps. | `message-flow.test.tsx`, `checklist.test.ts` (ledger), `progress-pipeline.test.ts` |
 | S2 | In the first turn, the PM completes two of three steps and the turn ends with the third still `pending`. | In the second turn, the PM ticks off the third step and adds one new step. | The second card shows the third step (completed) and the new step. The two steps completed in the first turn do not appear. | same |
-| S3 | The user sends a message; the PM is running with a checklist and the action line counts 27s. | A Worker finishes a step, and the Task Graph wakes the PM while the turn is still running. | The running card stays open and live; `Worked for` is not shown and the timer keeps counting from the user's message. No right-aligned bubble appears. A `Task graph` row appears below the card. When the PM later reads it as a new turn, the row sits right before the new card, whose timer starts there. | `turn-scenarios.test.tsx`, `turn-boundaries.test.ts`, `taken-inputs.test.ts` |
+| S3 | The user sends a message; the PM is running with a checklist and the action line counts 27s. | A Worker finishes a step, and the Task Graph wakes the PM while the turn is still running. | The running card stays open and live; `Worked for` is not shown and the timer keeps counting from the user's message. No right-aligned bubble appears. A `Task graph` row appears below the card. When the PM later reads it as a new turn, the row sits right before the new card, whose timer starts there. | `message-flow.test.tsx`, `turn-boundaries.test.ts`, `taken-inputs.test.ts` |
 | S4 | Same as S3, on a vendor that injects messages into a running turn (Claude, Codex, Pi). | The vendor reads the wakeup inside the running turn. | The row shows inside the running card; the card does not close. | same |
-| S5 | The PM is idle. | A Task Graph step finishes, or the user answers a Router decision. | A collapsed `Task graph` or `Router` row on the left, which opens to the full text; then the PM's new card. Stored wakeups from before the upgrade render the same way. | `turn-scenarios.test.tsx`, `system-wakeups.test.ts` |
-| S6 | The PM is running. | A Worker report arrives (Decision 2, Option A). | Same as S3: the card stays live and the report card waits below it. | `turn-scenarios.test.tsx` |
-| S7 | A PM or Worker on Agy or Pi runs a turn with several steps. | The turn ends. | While running, only the action line with its timer; after the turn, `Worked for`. No empty list. The prompt carries no checklist rule. | `turn-scenarios.test.tsx`, `prompt.test.ts`, `progress-pipeline.test.ts` |
+| S5 | The PM is idle. | A Task Graph step finishes, or the user answers a Router decision. | A collapsed `Task graph` or `Router` row on the left, which opens to the full text; then the PM's new card. Stored wakeups from before the upgrade render the same way. | `message-flow.test.tsx`, `asks.test.ts` |
+| S6 | The PM is running. | A Worker report arrives (Decision 2, Option A). | Same as S3: the card stays live and the report card waits below it. | `message-flow.test.tsx` |
+| S7 | A PM or Worker on Agy or Pi runs a turn with several steps. | The turn ends. | While running, only the action line with its timer; after the turn, `Worked for`. No empty list. The prompt carries no checklist rule. | `message-flow.test.tsx`, `prompt.test.ts`, `progress-pipeline.test.ts` |
 | S8 | A PM or Worker on any other vendor gets a turn with three or more steps. | It starts work. | Its prompt asks it to list the steps with its own checklist tool and tick each off; the card shows the list. | `prompt.test.ts`, `vendor-registry.test.ts` |
-| S9 | The PM is running. | The user types a new message. | Unchanged: a right-aligned bubble that starts a new card. | `turn-scenarios.test.tsx` |
+| S9 | The PM is running. | The user types a new message. | Unchanged: a right-aligned bubble that starts a new card. | `message-flow.test.tsx` |
 
 ### 2. Current state
 
@@ -75,14 +51,14 @@ All line references are at `f6ab7798`.
 
 Checklist events per vendor (`src/vendors/*/spec.ts`, `checklist.sources`), with the samples in `test/fixtures/progress/`:
 
-| Vendor | Checklist source | Update shape | Sample | Two-turn evidence plan |
+| Vendor | Checklist source | Update shape | Sample | Two-turn evidence |
 |---|---|---|---|---|
-| Claude | `TaskCreate`/`TaskUpdate` (also `TodoWrite`) | merge by task id; whole list for `TodoWrite` | live | Record a two-turn session locally (CLI installed) |
-| Codex | `update_plan` | whole list per update | live | Record locally (CLI installed) |
-| Cursor | `cursor/update_todos` | whole list or merge by id | live | Record locally (CLI installed) |
-| OpenCode | `todowrite` | whole list | live, one turn | Replay recorded frames as two turns; CLI not installed here, mark not run live |
-| DeepSeek | `todo_write` | whole list | built from source | Same; not run live |
-| Kimi | ACP `plan` and `SetTodoList` | whole list | built from source | Same; not run live |
+| Claude | `TaskCreate`/`TaskUpdate` (also `TodoWrite`) | merge by task id; whole list for `TodoWrite` | live | Recorded and replayed locally |
+| Codex | `update_plan` | whole list per update | live | Recorded and replayed locally |
+| Cursor | `cursor/update_todos` | whole list or merge by id | live | Recorded and replayed locally |
+| OpenCode | `todowrite` | whole list | live, one turn | Adapted the recorded frames for a second turn; not run live |
+| DeepSeek | `todo_write` | whole list | built from source | Replayed source-derived frames; not run live |
+| Kimi | ACP `plan` and `SetTodoList` | whole list | built from source | Replayed source-derived frames; not run live |
 | Agy | none | none | docs capture | Action line and `Worked for` only |
 | Pi | none | none | live | Action line and `Worked for` only |
 
@@ -96,7 +72,7 @@ Checklist events per vendor (`src/vendors/*/spec.ts`, `checklist.sources`), with
 | **Store wakeups as `system` notices (`pm.wakeup`) and record where the agent read each system-queued input** | Fixes the author at the source; existing system-notice paths (rate-limit wait, Feishu filtering, stale checks) already treat them right. One placement rule covers wakeups, Worker reports, and scheduled runs. Needs one migration and one stamp per input. |
 | Add a turn id to every message | Exact grouping, but every vendor would have to report turn starts the same way, and history would need a backfill it cannot get. |
 
-Recommendation: the second design. The stamp reuses the mark `turn-replies.ts` already computes, stored in `meta.taken` the same way `meta.replyId` is stored today.
+Recommendation: the second design. The stamp reuses a conversation message ID and the time the driver reports processing. The ledger stores both with the driver’s mid-turn flag in `meta.taken`.
 
 **Per-turn checklists.**
 
@@ -117,11 +93,11 @@ None of the four cache rules gains a new in-memory collection.
 - **Invalidation.** `session_checklist_turns` rows are removed by a trigger when the session ends and by `ON DELETE CASCADE` with the session, as `session_checklists` is today.
 - **Upper bounds.** One baseline row per live session, capped at `CHECKLIST_MAX_ITEMS` items like the snapshot. One `meta.taken` stamp per system-queued input. No new `src/shared/limits.ts` constant.
 - **Stable references.** `placeSystemInputs` caches per input array and returns the input array itself when nothing moves, so `groupMessages`' `WeakMap` cache and `TurnView` memo boundaries hold. `src/web/selectors-cache.test.ts` gains a case for it.
-- **Measured verification.** The extra work per write is one primary-key read and write on turn end and one `json_set` per system input taken in. Not wide-impact enough for the benchmark checklist; the implementation step records `pnpm ui:polish shots` for the affected chat targets.
+- **Measured verification.** The extra work per write is one primary-key read and write on turn end and one metadata update per visible system input taken in. Not wide-impact enough for the benchmark checklist; the implementation step records `pnpm ui:polish shots` for the affected chat targets.
 
 ### 5. Cross-vendor and cross-platform unification
 
-- Wakeup storage and placement are vendor-neutral: they use `message.delivered` (with `midTurn`) and `message.processing`, which every driver emits through `BaseDriver.markDelivered` and `markProcessing` (`src/daemon/driver/base-driver.ts:640-662`). Vendors that cannot inject mid-turn never set `midTurn`, so their system inputs always start a new turn.
+- Wakeup storage and placement are vendor-neutral: each driver reports `message.processing` with the batch’s optional `midTurn` flag. Vendors that cannot inject mid-turn leave the flag unset.
 - The checklist slice runs in the ledger after each driver has normalized its events into `ChecklistUpdate`, so all six checklist vendors share it.
 - The prompt rule reads `checklist.promptTool` from `src/vendors/<vendor>/spec.ts`. A future vendor with checklist events sets `sources` and `promptTool` in that one file; `vendor-registry.test.ts` fails if one is set without the other.
 - No platform-specific code. macOS, Windows, and Linux share the ledger, the web, and the prompts.
@@ -134,25 +110,25 @@ None of the four cache rules gains a new in-memory collection.
 - The rule "Checklist across turns … displaying the full snapshot after that change" in `docs/progress-checklist-design.md` (section 3, item 7), replaced by a pointer to this design.
 - `src/daemon/ledger/checklist.test.ts`'s expectation that a checklist message carries the whole session snapshot across turns.
 
-### 7. Skeleton files
+### 7. Implementation
 
 - `src/shared/domain.ts`: `pm.wakeup` system event, `PmWakeupSource`, and its dedupe key.
-- `migrations/0054_system_wakeups.sql`: `session_checklist_turns` with its session-end trigger, and conversion of stored wakeups and their pending sends. Known conflict: draft PR #451 also adds `0054_worker_app_approvals.sql`. Before merging, check the numbers already taken on the latest `main` and move this migration to the next free number if 0054 is taken ([Ledger database](ledger-database.md#migrations-and-their-manifest)).
+- `migrations/0054_system_wakeups.sql`: `session_checklist_turns` with its session-end trigger, and conversion of stored wakeups and their pending sends. If another PR takes migration 0054 before this change merges, move this migration to the next free number ([Ledger database](ledger-database.md#migrations-and-their-manifest)).
 - `src/daemon/ledger/system-wakeups.ts`: `enqueueSystemWakeupIn`, the single writer of PM wakeups.
 - `src/shared/taken-input.ts`: `TakenInput` and `takenInputOf`, the stamp shape shared by ledger and web.
-- `src/daemon/ledger/taken-inputs.ts`: writes the stamp from driver events; wired next to `turnReplies.afterDriverEvent` in `src/daemon/ledger/ledger.ts`.
+- `src/daemon/ledger/taken-inputs.ts`: writes the stamp before the ledger publishes the message’s processing status.
 - `src/shared/checklist.ts`: `turnChecklist`, the per-turn slice.
 - `src/daemon/ledger/checklist.ts`: `endTurn`, called from `messages.settleTurn` (`src/daemon/ledger/ledger.ts:352`); `apply` writes `turnChecklist(baseline, next)`.
 - `src/web/turn-boundaries.ts`: `systemInputPlacement` and `placeSystemInputs`, applied by `groupMessages` before grouping. `TurnView` renders in-turn Worker lines with the same component they use outside a turn.
-- `src/web/components/Messages.tsx` (implementation only): `pm.wakeup` renders through the existing `CollapsibleEvent`, like `ScheduleRun` (Decision 1, Option A).
+- `src/web/components/Messages.tsx`: `pm.wakeup` renders through the existing `CollapsibleEvent`, like `ScheduleRun` (Decision 1, Option A).
 - `src/vendors/types.ts` and the six checklist vendors' `spec.ts`: `checklist.promptTool`. The implementation confirms each name against a recording.
 - `src/daemon/prompt.ts`: `checklistRuleNote`, added to `buildLaunchPrompt` and `workerRulesSection`.
-- Test skeletons: `src/shared/taken-input.test.ts`, `src/shared/checklist.test.ts`, `src/daemon/ledger/checklist.test.ts`, `src/daemon/ledger/system-wakeups.test.ts`, `src/daemon/ledger/taken-inputs.test.ts`, `src/web/turn-boundaries.test.ts`, `src/web/turn-scenarios.test.tsx`, `src/daemon/prompt.test.ts`, `src/daemon/progress-pipeline.test.ts`, `src/vendors/vendor-registry.test.ts`.
+- Tests: `src/shared/taken-input.test.ts`, `src/shared/checklist.test.ts`, `src/daemon/ledger/checklist.test.ts`, `src/daemon/ledger/system-wakeups.test.ts`, `src/daemon/ledger/taken-inputs.test.ts`, `src/web/turn-boundaries.test.ts`, `src/web/message-flow.test.tsx`, `src/daemon/prompt.test.ts`, `src/daemon/progress-pipeline.test.ts`, `src/vendors/vendor-registry.test.ts`.
 
-### 8. Verification plan
+### 8. Verification
 
-- **Fail first.** Convert every `it.todo` above into an assertion and run it on this skeleton's parent commit behavior (or with the new function bodies stubbed to the old behavior) to record a failure before the fix. The investigation cases from `/tmp/bug-roots/bug-roots-local.test.ts` ("last completed checklist item survives into the next turn", "graph wakeup is a user bubble…", "plain tool work without a vendor plan…") move into `src/daemon/ledger/checklist.test.ts`, `src/web/turn-scenarios.test.tsx`, and `src/daemon/progress-pipeline.test.ts`, asserting the correct behavior.
-- **Vendor samples.** Record two-turn sessions for Claude, Codex, and Cursor into `test/fixtures/progress/` with the existing `replay-cli.cjs` flow and list them in its `README.md`. OpenCode, DeepSeek, and Kimi replay their existing frames as two turns and are marked not run live.
-- **Migration.** `src/daemon/store/` tests and `test/e2e/release-upgrade.test.ts` pass; a seeded ledger with a stored wakeup and its pending send comes out as a `pm.wakeup` row with a source-`system` action.
-- **Screens.** Add `pnpm ui:polish` targets for S1/S2 (two turns), S3 (wakeup while running), and S5 (wakeup row collapsed and open), on desktop, narrow, and mobile. Capture each on `main` and on the branch as before and after pairs.
-- **Gate.** `pnpm lint`, `pnpm typecheck`, `pnpm exec knip --treat-config-hints-as-errors`, `pnpm test:related`, `pnpm verify`, `src/prompt-portability.test.ts`, and green cloud checks on the PR.
+- Run `src/daemon/ledger/checklist.test.ts`, `src/daemon/ledger/taken-inputs.test.ts`, `src/daemon/prompt.test.ts`, and `src/web/message-flow.test.tsx` for the reported cases. The old code fails the changed behavior. The tests for text typed by the user and for vendors without checklist tools protect existing behavior.
+- Run `src/daemon/progress-pipeline.test.ts` to replay the [vendor fixtures](../test/fixtures/progress/README.md) through real drivers and the API. Claude, Codex, and Cursor each have a recording of two turns in one session.
+- Run `src/daemon/ledger/asks.test.ts` and `test/e2e/release-upgrade.test.ts` for ledger upgrades. The old wakeup keeps its message ID. Its pending send changes to source `system`.
+- Build the web app and run `pnpm ui:polish shots --only chat.progress-two-turns,chat.progress-unfinished,chat.progress-wakeup-waiting,chat.progress-wakeup-narrow,chat.progress-wakeup-idle,chat.progress-wakeup-open` to capture the states in Chromium.
+- The local gate runs lint, typecheck, related tests, the smoke check, and Knip. Cloud checks run before handoff.

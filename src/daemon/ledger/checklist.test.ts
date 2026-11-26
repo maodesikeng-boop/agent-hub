@@ -110,10 +110,13 @@ describe("ledger checklists", () => {
     setChecklist("first", first);
     setChecklist("finish", { kind: "merge", items: [{ id: "step", status: "completed" }] });
     expect(db.all("SELECT session_id FROM session_checklists")).toEqual([{ session_id: pm.sessionId }]);
+    emit({ type: "turn.ended", messageIds: [], at: now, ok: true, interrupted: false, durationMs: 1 });
+    expect(db.all("SELECT session_id FROM session_checklist_turns")).toEqual([{ session_id: pm.sessionId }]);
 
     ledger.archivePm(pm.pm.id);
     expect(ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS)).toEqual([pm.pm.id]);
     expect(db.all("SELECT session_id FROM session_checklists")).toEqual([]);
+    expect(db.all("SELECT session_id FROM session_checklist_turns")).toEqual([]);
   });
 
   it("clears the baseline when a session ends and keeps its history", () => {
@@ -195,12 +198,27 @@ describe("live action timing", () => {
 });
 
 describe("checklist messages per turn", () => {
-  it.todo("second turn's checklist message omits items the first turn completed when both turns list steps (investigation repro: old completed item carried into the next turn)");
-  it.todo("second turn's checklist message keeps a first-turn item left pending or in_progress");
-  it.todo("an item carried over and ticked off in the second turn shows as completed in the second turn only");
-  it.todo("the session snapshot still holds every item so id-only merges in later turns keep their titles");
-  it.todo("an interrupted or failed turn end also moves the turn baseline");
-  it.todo("a turn that does not touch the checklist writes no checklist message");
-  it.todo("a renewed session starts with an empty baseline");
-  it.todo("the baseline is removed with the session row when the session ends");
+  it.each([
+    { unfinished: false, interrupted: false },
+    { unfinished: true, interrupted: false },
+    { unfinished: true, interrupted: true },
+  ])("keeps unfinished work and drops old completed items ($unfinished, interrupted: $interrupted)", ({ unfinished, interrupted }) => {
+    setChecklist("first", { kind: "replace", items: [
+      { id: "a", title: "First step", status: "completed" },
+      { id: "b", title: "Second step", status: "completed" },
+      { id: "c", title: "Third step", status: unfinished ? "pending" : "completed" },
+    ] });
+    emit({ type: "turn.ended", messageIds: [], at: now, ok: !interrupted, interrupted, durationMs: 1 });
+    emit({ type: "turn.started", at: now });
+    setChecklist("second", { kind: "merge", items: [
+      ...(unfinished ? [{ id: "c", status: "completed" as const }] : []),
+      { id: "d", title: "New step", status: "in_progress" },
+    ] });
+    const [firstTurn, secondTurn] = checklistRows().map(checklistOf);
+    expect(firstTurn?.map((item) => item.id)).toEqual(["a", "b", "c"]);
+    expect(secondTurn?.map(({ id, title, status }) => ({ id, title, status }))).toEqual([
+      ...(unfinished ? [{ id: "c", title: "Third step", status: "completed" }] : []),
+      { id: "d", title: "New step", status: "in_progress" },
+    ]);
+  });
 });

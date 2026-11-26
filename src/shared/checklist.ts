@@ -109,14 +109,14 @@ export function sameChecklist(a: readonly ChecklistItem[], b: readonly Checklist
   });
 }
 
-/**
- * Precondition: `baseline` is the session's full checklist when the current turn started; `current` is the full checklist now.
- * Postcondition: returns the items of `current`, in `current` order, that this turn shows: items added or changed since
- * `baseline` (id, title, active title, or status differs), plus unchanged items still `pending` or `in_progress`.
- * Unchanged `completed` and `cancelled` items are left out. Returns `current` itself when `baseline` is empty.
- */
-export function turnChecklist(_baseline: readonly ChecklistItem[], _current: readonly ChecklistItem[]): ChecklistItem[] {
-  throw new Error("Not implemented");
+export function turnChecklist(baseline: readonly ChecklistItem[], current: ChecklistItem[]): ChecklistItem[] {
+  if (baseline.length === 0) return current;
+  const previous = new Map(baseline.map((item) => [item.id, item]));
+  return current.filter((item) => {
+    if (item.status === "pending" || item.status === "in_progress") return true;
+    const old = previous.get(item.id);
+    return old === undefined || old.status !== item.status || old.title !== item.title || old.activeTitle !== item.activeTitle;
+  });
 }
 
 export function activeChecklistItemId(items: readonly ChecklistItem[]): string | null {

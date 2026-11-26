@@ -1,19 +1,29 @@
 import type { AgentSessionRow } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
-import type { LedgerContext, Pending } from "./context.ts";
+import { isVisibleSystemInput, takenInputOf, type TakenInput } from "../../shared/taken-input.ts";
+import type { LedgerContext } from "./context.ts";
+import { MESSAGE_SHAPE_COLUMNS, toMessage, type MessageDbRow } from "./rows.ts";
 
-// Invariant: a stamp is written at most once per message and never moves afterwards, so history renders the same after a reload.
-
-export interface LedgerTakenInputs {
-  /**
-   * Precondition: called inside the same write transaction as the driver event, after message statuses are applied.
-   * Postcondition: for each system-queued input in `message.delivered` (with `midTurn`) or `message.processing`
-   * that has no stamp yet, sets `meta.taken` to `{ afterId, midTurn }` and pushes one `message.updated` change.
-   * `afterId` is the newest message id at the moment the agent took the input in. User and PM messages are untouched.
-   */
-  afterDriverEvent(p: Pending, session: AgentSessionRow, event: DriverEvent): void;
-}
-
-export function createLedgerTakenInputs(_ctx: LedgerContext): LedgerTakenInputs {
-  throw new Error("Not implemented");
+export function createLedgerTakenInputs({ db }: LedgerContext) {
+  return {
+    beforeDriverEvent(session: AgentSessionRow, event: DriverEvent): void {
+      if (event.type !== "message.processing" || session.conversationId === null) return;
+      let taken: TakenInput | undefined;
+      for (const id of event.messageIds) {
+        const row = db.get<MessageDbRow>(
+          `SELECT ${MESSAGE_SHAPE_COLUMNS} FROM messages WHERE id = ? AND session_id = ? AND sender = 'system' AND status = 'delivered'`,
+          id, session.id,
+        );
+        if (row === undefined) continue;
+        const message = toMessage(row);
+        if (!isVisibleSystemInput(message) || takenInputOf(message) !== null) continue;
+        taken ??= {
+          afterId: db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages WHERE conversation_id = ?", message.conversationId)?.id ?? 0,
+          midTurn: event.midTurn === true,
+          at: event.at,
+        };
+        db.run("UPDATE messages SET meta = json_set(meta, '$.taken', json(?)) WHERE id = ?", JSON.stringify(taken), id);
+      }
+    },
+  };
 }

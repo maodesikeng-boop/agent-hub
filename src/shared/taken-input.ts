@@ -1,20 +1,25 @@
-import type { Message, MessageId } from "./domain.ts";
+import { systemEventOf, workerEventOf, type Message, type MessageId } from "./domain.ts";
 
-// Invariant: only messages the system queued for an agent carry `meta.taken`; text the user or a PM typed never does.
-
-/** Where the agent took in a system-queued input, stamped once by the ledger. */
 export interface TakenInput {
-  /** The newest message id in the ledger when the agent took the input in; the input belongs right after it. */
   afterId: MessageId;
-  /** True when the input joined a turn that was already running instead of starting a new one. */
   midTurn: boolean;
+  at: number;
 }
 
-/**
- * Postcondition: returns the stamp when `message` is a system-queued input (a `system` sender message that wakes
- * an agent, including Worker report lines and `pm.wakeup` notices) whose `meta.taken` is well formed, otherwise null.
- * Never returns a stamp for `user` or `pm` senders.
- */
-export function takenInputOf(_message: Pick<Message, "sender" | "meta">): TakenInput | null {
-  throw new Error("Not implemented");
+export function isVisibleSystemInput(message: Pick<Message, "sender" | "kind" | "meta" | "status">): boolean {
+  if (message.sender !== "system") return false;
+  const event = systemEventOf(message)?.event;
+  if (event === "pm.wakeup" || event === "schedule.run") return true;
+  if (message.status === null) return false;
+  const worker = workerEventOf(message)?.event;
+  return worker === "report" || worker === "turn_failed" || worker === "worktree_failed";
+}
+
+export function takenInputOf(message: Pick<Message, "sender" | "meta">): TakenInput | null {
+  const taken = message.meta?.taken;
+  if (message.sender !== "system" || taken === null || typeof taken !== "object") return null;
+  if (!("afterId" in taken) || typeof taken.afterId !== "number" || !Number.isSafeInteger(taken.afterId) || taken.afterId < 0) return null;
+  if (!("midTurn" in taken) || typeof taken.midTurn !== "boolean") return null;
+  if (!("at" in taken) || typeof taken.at !== "number" || !Number.isFinite(taken.at)) return null;
+  return { afterId: taken.afterId, midTurn: taken.midTurn, at: taken.at };
 }

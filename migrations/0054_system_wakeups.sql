@@ -13,18 +13,25 @@ BEGIN
   DELETE FROM session_checklist_turns WHERE session_id = NEW.id;
 END;
 
+INSERT OR IGNORE INTO session_checklist_turns (session_id, baseline)
+SELECT session_id, snapshot FROM session_checklists;
+
 UPDATE actions
    SET params = json_set(params, '$.source', 'system')
- WHERE type = 'session.send' AND json_valid(params)
+ WHERE type = 'session.send' AND status IN ('pending', 'running') AND json_valid(params)
    AND json_extract(params, '$.messageId') IN (
      SELECT id FROM messages WHERE sender = 'user' AND json_valid(meta) AND json_extract(meta, '$.wakeup') = 1
    );
 
 UPDATE messages
    SET sender = 'system',
-       meta = json_object(
-         'event', 'pm.wakeup',
-         'source', CASE WHEN text LIKE '【Router%' THEN 'router' ELSE 'task_graph' END,
-         'ref', dedupe_key
-       )
+       meta = json_remove(json_set(meta,
+         '$.event', 'pm.wakeup',
+         '$.source', CASE WHEN text LIKE '【Router%' THEN 'router' ELSE 'task_graph' END,
+         '$.ref', CASE WHEN dedupe_key LIKE 'client:' || conversation_id || ':%'
+                       THEN substr(dedupe_key, length('client:' || conversation_id || ':') + 1) ELSE dedupe_key END
+       ), '$.wakeup', '$.replyId'),
+       dedupe_key = 'system:' || conversation_id || ':pm.wakeup:' ||
+         CASE WHEN dedupe_key LIKE 'client:' || conversation_id || ':%'
+              THEN substr(dedupe_key, length('client:' || conversation_id || ':') + 1) ELSE dedupe_key END
  WHERE sender = 'user' AND json_valid(meta) AND json_extract(meta, '$.wakeup') = 1;

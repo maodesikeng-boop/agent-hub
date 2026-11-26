@@ -1,12 +1,17 @@
 const { readFileSync, appendFileSync } = require("node:fs");
 const { createInterface } = require("node:readline");
 
-const { frames, vendor, launchEnv } = JSON.parse(readFileSync(process.env.PROGRESS_REPLAY, "utf8"));
+const { frames, nextFrames, vendor, launchEnv } = JSON.parse(readFileSync(process.env.PROGRESS_REPLAY, "utf8"));
 const log = (entry) => appendFileSync(process.env.PROGRESS_LOG, JSON.stringify(entry) + "\n");
 log({ argv: process.argv.slice(2), env: Object.fromEntries(launchEnv.map((name) => [name, process.env[name]])) });
 
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
-const replay = () => frames.filter((frame) => frame.method || frame.type || frame.event).forEach(send);
+let turn = 0;
+const currentFrames = () => turn > 0 && nextFrames !== undefined ? nextFrames : frames;
+const replay = () => {
+  currentFrames().filter((frame) => frame.method || frame.type || frame.event).forEach(send);
+  turn++;
+};
 const acpId = frames.find((frame) => frame.method === "session/update")?.params?.sessionId;
 const codexTurn = frames.find((frame) => frame.method === "turn/started")?.params;
 const agyId = frames[0]?.step_update?.conversation_id;
@@ -38,7 +43,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (vendor === "codex") {
     if (msg.method === "thread/start") reply(msg, { thread: { id: codexTurn.threadId } });
     else if (msg.method === "turn/start") {
-      reply(msg, { turn: codexTurn.turn });
+      reply(msg, { turn: currentFrames().find((frame) => frame.method === "turn/started").params.turn });
       replay();
     } else if (msg.id !== undefined) reply(msg, {});
     return;

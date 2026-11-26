@@ -1,9 +1,15 @@
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { takenInputOf } from "./taken-input.ts";
 
 describe(takenInputOf.name, () => {
-  it.todo("returns the stamp for a pm.wakeup system message with a well-formed meta.taken");
-  it.todo("returns the stamp for a Worker report line taken in by the PM");
-  it.todo("returns null for user and pm senders even when meta.taken is present");
-  it.todo("returns null when meta.taken is missing, has a non-integer afterId, or a non-boolean midTurn");
+  const stamp = { afterId: 42, at: 100_000, midTurn: true };
+  it("reads a valid system input stamp", () => {
+    expect(takenInputOf({ sender: "system", meta: { taken: stamp } })).toEqual(stamp);
+  });
+  it.each(["user", "pm", "agent"] as const)("does not read a stamp from %s text", (sender) => {
+    expect(takenInputOf({ sender, meta: { taken: stamp } })).toBeNull();
+  });
+  it.each([undefined, null, { ...stamp, afterId: 0.5 }, { ...stamp, midTurn: 1 }, { ...stamp, at: NaN }])("rejects a malformed stamp: %o", (taken) => {
+    expect(takenInputOf({ sender: "system", meta: { taken } })).toBeNull();
+  });
 });

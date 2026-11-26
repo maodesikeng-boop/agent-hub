@@ -657,6 +657,7 @@ export abstract class BaseSessionDriver<
     this.emit(st.id, {
       type: "message.processing",
       messageIds: batch.messageIds,
+      ...(batch.midTurn ? { midTurn: true as const } : {}),
       ...(batch.notes.preamble ? { preamble: true as const } : {}),
       at,
     });

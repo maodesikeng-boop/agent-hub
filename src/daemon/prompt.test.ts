@@ -1144,7 +1144,16 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
 });
 
 describe(checklistRuleNote.name, () => {
-  it.todo("PM and Worker prompts of every vendor with checklist sources include the three-step checklist rule naming that vendor's promptTool");
-  it.todo("vendors without checklist sources (agy, pi) get no checklist rule in either prompt");
-  it.todo("the rule names no build tool, shell, code host, or repository path");
+  it.each(VENDOR_LIST)("uses $id's checklist capability in PM and Worker prompts", ({ id, checklist }) => {
+    const pm = noProjectContext();
+    const pmPrompt = buildLaunchPrompt({ ...pm, pm: { ...pm.pm, vendor: id } }, dir);
+    const workerPrompt = buildLaunchPrompt({ ...workerContext(), vendor: id }, dir);
+    for (const prompt of [pmPrompt, workerPrompt]) {
+      if (checklist.promptTool === undefined) {
+        expect(prompt).not.toContain("**进度清单**");
+      } else {
+        expect(prompt).toContain(`**进度清单**：一轮要做 3 步或更多时，用 ${checklist.promptTool} 列出步骤，每完成一项就标记为完成。`);
+      }
+    }
+  });
 });

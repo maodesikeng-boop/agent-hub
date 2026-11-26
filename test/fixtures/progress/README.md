@@ -4,6 +4,9 @@ Frames that drive the checklist and action timing tests. Each probe ran in a thr
 
 | File | Vendor and source |
 | --- | --- |
+| `claude-turn-1.live.jsonl`, `claude-turn-2.live.jsonl` | One Claude Code session with six tasks. The second turn adds tasks 4–6. |
+| `codex-turn-1.live.jsonl`, `codex-turn-2.live.jsonl` | One Codex app-server thread. The second turn repeats three completed steps and adds three new ones. |
+| `cursor-turn-1.live.jsonl`, `cursor-turn-2.live.jsonl` | One Cursor ACP session. The second turn merges new items into the first turn’s list. |
 | `claude-task-tools.live.jsonl` | Claude Code 2.1.330 with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`: `TaskCreate`, `TaskUpdate`, a file read, top-level `tool_use_result`, and the turn result |
 | `claude-todowrite.live.jsonl` | Same version with `TodoWrite`: three whole lists and `oldTodos`/`newTodos` |
 | `codex-plan.live.jsonl` | Codex 0.169.0 with `tools.update_plan.enabled=true`: three `turn/plan/updated` notifications and turn timing |
@@ -19,3 +22,5 @@ Frames that drive the checklist and action timing tests. Each probe ran in a thr
 | `kimi-tool.source-derived.json` | Same version's `TodoList` tool frame built from the published package |
 
 `live` files are real CLI output. `docs-capture` and `source-derived` files were not captured on this machine; the vendors' authentication blocked a live turn.
+
+The two-turn recordings use literal markers and no project files. The pipeline also replays an adapted second turn for OpenCode, DeepSeek, and Kimi. Those three were not run live for this change. Agy and Pi send no checklist events.

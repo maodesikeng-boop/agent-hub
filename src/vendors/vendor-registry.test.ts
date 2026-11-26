@@ -61,5 +61,7 @@ describe("VENDOR_LIST routerDefault 快模型预设契约守卫", () => {
 });
 
 describe("checklist prompt tool", () => {
-  it.todo("every vendor with checklist sources names a promptTool, and no vendor without sources does");
+  it.each(VENDOR_LIST)("$id has a prompt tool exactly when it has checklist sources", ({ checklist }) => {
+    expect(Boolean(checklist.promptTool?.trim())).toBe(checklist.sources.length !== 0);
+  });
 });
