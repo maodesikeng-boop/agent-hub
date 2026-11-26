@@ -96,7 +96,7 @@ function downgradeToOldSchema(oldStatusByKey: Record<string, string>) {
 }
 
 describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
-  it("完了、跳过、在干、ready、带问题的 gate 都按第 3.4 节换好；在干的收工后下游轮到，拍板卡照常出、用户点了往下走，手动步骤派人，一直到 hub graph finish", () => {
+  it("完了、跳过、在干、ready、带问题的 gate 都按第 3.4 节换好；在干的收工后下游轮到，旧问题先交项目经理、项目经理升级后用户点了往下走，手动步骤派人，一直到 hub graph finish", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "编排简化实现",
@@ -104,7 +104,7 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
           { key: "s1", title: "提示词按五步重排" },
           { key: "s2", title: "唯一结束出口", deps: ["s1"] },
           { key: "s3", title: "出错接手", deps: ["s2"] },
-          { key: "s4", title: "确认迁移方案", deps: ["s3"], question: "旧图迁移后要不要补发叫醒？", options: ["不补发", "补发"], recommended: "不补发" },
+          { key: "s4", title: "确认迁移方案", deps: ["s3"] },
           { key: "s5", title: "自动开工和交棒", deps: ["s4"] },
           { key: "docs", title: "补文档", deps: ["s1"] },
         ],
@@ -116,6 +116,10 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     ledger.hubCall(lin.sessionId, "graph.skip", { graphId: graph.id, nodeKey: "s2", reason: "并进第 3 步" });
     const w3 = startOn("s3", graph.id);
 
+    db.run(
+      "UPDATE task_graph_steps SET gate_question = ?, gate_options_json = ?, gate_recommended = ? WHERE graph_id = ? AND node_key = 's4'",
+      "旧图迁移后要不要补发叫醒？", JSON.stringify(["不补发", "补发"]), "不补发", graph.id,
+    );
     // 老版本守护进程留下的库：s1 done、s2 skipped、s3 running（w3 在干）、s4 是带问题还没轮到的 gate、s5 pending、docs ready（轮到了没人派）
     ledger.close();
     downgradeToOldSchema({ s1: "done", s2: "skipped", s3: "running", s4: "pending", s5: "pending", docs: "ready" });
@@ -141,13 +145,20 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     const status = ledger.hubCall(lin.sessionId, "status", {}).text;
     expect(status).toContain(`- #${graph.id}「编排简化实现」（进度 2/6；在干：s3；等你处理：docs）`);
 
-    // 在干的 s3 汇报做完了：后台自动把 s3 标完了并收工 Worker，s4 轮到了，挂着问题，出拍板卡等用户
+    // 在干的 s3 汇报做完了：后台自动把 s3 标完了并收工 Worker，s4 轮到了，旧问题交给项目经理
     finishWorkerTurn(w3.id, "接手带前任记录");
     g = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(stateOf(g, "s3")).toBe("done");
-    expect(stateOf(g, "s4")).toBe("waiting:user");
-    const card = g.nodes.find((n) => n.key === "s4")!;
-    expect(card.gateAskMessageId).toBeTypeOf("number");
+    expect(stateOf(g, "s4")).toBe("waiting:pm");
+    expect(g.nodes.find((n) => n.key === "s4")!.gateAskMessageId).toBeNull();
+    expect(() => ledger.decideTaskNode(graph.id, "s4", { clientId: "not-escalated", choice: "不补发" })).toThrow(/现在不能拍板/);
+    expect(db.get<{ text: string }>(
+      "SELECT text FROM messages WHERE dedupe_key GLOB ? ORDER BY id DESC LIMIT 1",
+      `system:${lin.conversationId}:pm.wakeup:*`,
+    )?.text).toContain("旧图迁移后要不要补发叫醒？");
+    ledger.hubCall(lin.sessionId, "ask", {
+      graphId: graph.id, node: "s4", text: "旧图迁移后要不要补发叫醒？", options: ["不补发", "补发"], recommended: "不补发",
+    });
     const snap = { ...ledger.snapshot(), server: { os: "darwin" as const, folderPicker: true, fileActions: true } };
     expect(pendingDecisionsOf(snap, "local")).toMatchObject([
       { question: "旧图迁移后要不要补发叫醒？", options: ["不补发", "补发"], source: { kind: "gate", graphId: graph.id, nodeKey: "s4", recommended: "不补发" } },
@@ -186,7 +197,7 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
         title: "编排简化实现（方案 PR 290，按 6 步）",
         nodes: [
           { key: "s1", title: "提示词重排" },
-          { key: "eval-approve", title: "拍板验证方案", question: "基准集规模？", options: ["12 个", "6 个"], recommended: "12 个" },
+          { key: "eval-approve", title: "拍板验证方案" },
           { key: "s2", title: "唯一结束出口", deps: ["s1", "eval-approve"] },
           { key: "s3", title: "出错接手", deps: ["s2"] },
           { key: "s4", title: "四个状态与迁移", deps: ["s3"] },
@@ -197,6 +208,9 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
       }),
     }).data.graph;
     ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "s1", summary: "s1 已合入" });
+    ledger.hubCall(lin.sessionId, "ask", {
+      graphId: graph.id, node: "eval-approve", text: "基准集规模？", options: ["12 个", "6 个"], recommended: "12 个",
+    });
     ledger.decideTaskNode(graph.id, "eval-approve", { clientId: "u-eval", choice: "12 个" });
     for (const k of ["s2", "s3", "s4"]) {
       ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: k, summary: `${k} 已合入` });

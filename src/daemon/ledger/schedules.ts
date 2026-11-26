@@ -4,10 +4,11 @@ import { normalizeName, systemMessageDedupeKey, utf8Bytes } from "../../shared/d
 import type { AgentSessionRow, MessageId, PmId, SystemMessageMeta } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import { HUB_HELP_ONLY_COMMANDS, type HubArgs, type HubResult } from "../../shared/hub.ts";
-import { MAX_SCHEDULE_NAME_CHARS, MAX_SCHEDULES_PER_PM, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
+import { MAX_SCHEDULES_PER_PM, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { checkEveryMinutes, nextRunAfter, parseDailyTime, reanchorDailyRun, scheduleLabel, scheduledTimeText, scheduleRunTitle } from "../../shared/schedule.ts";
 import type { ScheduleId, ScheduleRecord } from "../../shared/schedule.ts";
+import { TEXT_LIMITS } from "../../shared/text-limits.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { LedgerMessages } from "./messages.ts";
@@ -67,8 +68,9 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
 
   const addIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.add">): HubResult<"schedule.add"> => {
     assertPmNotArchived(caller.pmId);
-    const name = typeof args.name === "string" ? normalizeName(args.name, MAX_SCHEDULE_NAME_CHARS) : null;
-    if (name === null) throw fail("invalid", `定时任务的名字不能是空的，也不能带换行等控制字符，最多 ${MAX_SCHEDULE_NAME_CHARS} 个字符`);
+    const { maxChars } = TEXT_LIMITS["schedule.name"];
+    const name = typeof args.name === "string" ? normalizeName(args.name, maxChars) : null;
+    if (name === null) throw fail("invalid", `定时任务的名字不能是空的，也不能带换行等控制字符，最多 ${maxChars} 个字符`);
     if (name.includes("【") || name.includes("】")) throw fail("invalid", "定时任务的名字里不能有“【”“】”");
     if (typeof args.prompt !== "string" || args.prompt.trim() === "") throw fail("invalid", "任务说明不能是空的");
     if (utf8Bytes(args.prompt) > MAX_TASK_BYTES) throw fail("invalid", `任务说明不能超过 ${MAX_TASK_BYTES} 字节`);

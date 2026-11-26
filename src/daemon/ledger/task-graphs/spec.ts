@@ -4,20 +4,13 @@ import type { TaskEdge, TaskNodeKey } from "../../../shared/domain.ts";
 import type { CreateTaskGraphNodeInput } from "../../../shared/hub.ts";
 import {
   MAX_GATE_OPTIONS,
-  MAX_GATE_QUESTION_CHARS,
-  MAX_GATE_SUMMARY_CHARS,
   MAX_GRAPH_EDGES,
-  MAX_GRAPH_GOAL_CHARS,
   MAX_GRAPH_NODES,
   MAX_GRAPH_SPEC_BYTES,
-  MAX_GRAPH_TITLE_CHARS,
-  MAX_NODE_KEY_CHARS,
-  MAX_NODE_TITLE_CHARS,
-  MAX_STEP_BASE_CHARS,
-  MAX_STEP_BRIEF_CHARS,
 } from "../../../shared/limits.ts";
 import { workerCapabilitiesOf, type WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../../shared/schedule.ts";
+import { checkTextLimit, formatTextLimitViolations, TEXT_LIMITS, type TextLimitId } from "../../../shared/text-limits.ts";
 import {
   AGENT_VENDORS,
   checkEffort,
@@ -29,6 +22,7 @@ import {
   type AgentVendor,
   type ModelCatalog,
 } from "../../../shared/vendors.ts";
+import { HUB_COMMAND } from "../../../shared/names.ts";
 import { fail } from "../context.ts";
 
 const NODE_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
@@ -39,42 +33,45 @@ export const charLen = (s: string): number => [...s].length;
 
 export const edgeSig = (fromKey: TaskNodeKey, toKey: TaskNodeKey): string => `${fromKey}\0${toKey}`;
 
+function assertTextLimit(id: TextLimitId, text: string, target?: string): void {
+  const violation = checkTextLimit(id, text, target);
+  if (violation !== null) throw fail("invalid", formatTextLimitViolations([violation]));
+}
+
 export function validateNodeKey(raw: string): TaskNodeKey {
   const key = raw.trim();
-  if (key === "" || charLen(key) > MAX_NODE_KEY_CHARS || !NODE_KEY_RE.test(key)) {
-    throw fail(
-      "invalid",
-      `节点标识「${raw}」不合法：需由字母、数字、_、-、. 组成，以字母或数字开头，最多 ${MAX_NODE_KEY_CHARS} 个字符`,
-    );
+  assertTextLimit("step.key", key);
+  if (!NODE_KEY_RE.test(key)) {
+    throw fail("invalid", `节点标识「${raw}」不合法：需由字母、数字、_、-、. 组成，以字母或数字开头`);
   }
   return key;
 }
 
-function validateSingleLine(raw: string, max: number, message: string): string {
+function validateSingleLine(raw: string, id: "step.title" | "graph.title", message: string): string {
   const title = raw.trim();
-  if (title === "" || /[\r\n]/.test(title) || charLen(title) > max) throw fail("invalid", message);
+  if (title === "" || /[\r\n]/.test(title)) throw fail("invalid", message);
+  assertTextLimit(id, title);
   return title;
 }
 
 export const validateNodeTitle = (raw: string): string =>
-  validateSingleLine(raw, MAX_NODE_TITLE_CHARS, `节点标题不能为空或换行，且最多 ${MAX_NODE_TITLE_CHARS} 字`);
+  validateSingleLine(raw, "step.title", "节点标题不能为空或换行");
 
 export const validateGraphTitle = (raw: string): string =>
-  validateSingleLine(raw, MAX_GRAPH_TITLE_CHARS, `任务图标题不能为空或换行，且最多 ${MAX_GRAPH_TITLE_CHARS} 字`);
+  validateSingleLine(raw, "graph.title", "任务图标题不能为空或换行");
 
-function validateOptionalText(raw: string | null | undefined, max: number, message: string): string | null {
-  if (raw === undefined || raw === null) return null;
-  const text = raw.trim();
+function validateOptionalText(raw: string | null | undefined, id: "graph.goal" | "step.brief", target?: string): string | null {
+  const text = raw?.trim() ?? "";
   if (text === "") return null;
-  if (charLen(text) > max) throw fail("invalid", message);
+  assertTextLimit(id, text, target);
   return text;
 }
 
 export const validateGraphGoal = (raw: string | null | undefined): string | null =>
-  validateOptionalText(raw, MAX_GRAPH_GOAL_CHARS, `任务图目标最多 ${MAX_GRAPH_GOAL_CHARS} 字`);
+  validateOptionalText(raw, "graph.goal");
 
-export const validateStepBrief = (raw: string | null | undefined): string | null =>
-  validateOptionalText(raw, MAX_STEP_BRIEF_CHARS, `步骤职责最多 ${MAX_STEP_BRIEF_CHARS} 字`);
+export const validateStepBrief = (raw: string | null | undefined, key: TaskNodeKey): string | null =>
+  validateOptionalText(raw, "step.brief", key);
 
 export function validateStepBase(raw: string | null | undefined, review: boolean): string | null {
   const base = raw?.trim() ?? "";
@@ -83,8 +80,9 @@ export function validateStepBase(raw: string | null | undefined, review: boolean
     if (base !== "main") throw fail("invalid", '普通步骤的 base 只能是 "main"（审查步骤的 base 才写被审分支）');
     return "main";
   }
-  if (base === "main" || charLen(base) > MAX_STEP_BASE_CHARS || !BRANCH_NAME_RE.test(base)) {
-    throw fail("invalid", `审查步骤的 base 写被审分支的名字（不能是 main，最多 ${MAX_STEP_BASE_CHARS} 字），现在是 ${JSON.stringify(base)}`);
+  assertTextLimit("step.base", base);
+  if (base === "main" || !BRANCH_NAME_RE.test(base)) {
+    throw fail("invalid", `审查步骤的 base 写被审分支的名字（不能是 main），现在是 ${JSON.stringify(base)}`);
   }
   return base;
 }
@@ -153,14 +151,10 @@ export function validateGateFields(input: {
   recommended?: string;
 }): GateFields {
   const question = input.question !== undefined ? input.question.trim() : "";
-  if (question !== "" && charLen(question) > MAX_GATE_QUESTION_CHARS) {
-    throw fail("invalid", `拍板卡的问题最多 ${MAX_GATE_QUESTION_CHARS} 字`);
-  }
+  assertTextLimit("gate.question", question);
   const options = validateGateOptions(input.options);
   const summaryMd = input.summaryMd !== undefined && input.summaryMd.trim() !== "" ? input.summaryMd.trim() : null;
-  if (summaryMd !== null && charLen(summaryMd) > MAX_GATE_SUMMARY_CHARS) {
-    throw fail("invalid", `拍板卡的背景摘要最多 ${MAX_GATE_SUMMARY_CHARS} 字`);
-  }
+  if (summaryMd !== null) assertTextLimit("gate.summary", summaryMd);
   return {
     question: question === "" ? null : question,
     options,
@@ -290,7 +284,6 @@ export interface NewStep {
   review: number;
   base: string | null;
   deps: TaskNodeKey[];
-  gate: GateFields;
 }
 
 export function normalizeNewStep(
@@ -303,11 +296,10 @@ export function normalizeNewStep(
 ): NewStep {
   const key = validateNodeKey(n.key);
   const title = validateNodeTitle(n.title);
-  const brief = validateStepBrief(n.brief);
+  const brief = validateStepBrief(n.brief, key);
   const agent = validateStepAgentSetting(n, fallbackVendor, catalogOf);
   const maxTimeMs = validateStepMaxTime(n.maxTime);
   const base = validateStepBase(n.base, n.review === true);
-  const gate = validateGateFields(n);
   const rawDeps = n.deps !== undefined ? n.deps : sequentialDefault && index >= 1 ? [list[index - 1]!.key] : [];
   return {
     key,
@@ -324,25 +316,26 @@ export function normalizeNewStep(
     review: n.review === true ? 1 : 0,
     base,
     deps: rawDeps.map(validateNodeKey),
-    gate,
   };
 }
 
 export function splitAskTextForGate(rawText: string): { question: string; summaryMd: string | null } {
   const trimmed = rawText.trim();
   if (trimmed === "") throw fail("invalid", "要问用户的话不能是空的");
+  const questionMax = TEXT_LIMITS["gate.question"].maxChars;
+  const summaryMax = TEXT_LIMITS["gate.summary"].maxChars;
   const splitMatch = /^([^\r\n]+?)(?:\r?\n\s*\r?\n|\r?\n)([\s\S]+)$/u.exec(trimmed);
   if (splitMatch !== null) {
     const rest = splitMatch[2]!.trim();
     return {
-      question: truncateChars(splitMatch[1]!.trim(), MAX_GATE_QUESTION_CHARS),
-      summaryMd: rest === "" ? null : truncateChars(rest, MAX_GATE_SUMMARY_CHARS),
+      question: truncateChars(splitMatch[1]!.trim(), questionMax),
+      summaryMd: rest === "" ? null : truncateChars(rest, summaryMax),
     };
   }
-  if (charLen(trimmed) <= MAX_GATE_QUESTION_CHARS) return { question: trimmed, summaryMd: null };
+  if (charLen(trimmed) <= questionMax) return { question: trimmed, summaryMd: null };
   return {
-    question: truncateChars(trimmed, MAX_GATE_QUESTION_CHARS),
-    summaryMd: truncateChars(trimmed, MAX_GATE_SUMMARY_CHARS),
+    question: truncateChars(trimmed, questionMax),
+    summaryMd: truncateChars(trimmed, summaryMax),
   };
 }
 
@@ -363,7 +356,14 @@ export function parseSpecJson<T>(
   return parsed.data as T;
 }
 
-const createStepItemSchema = z.object({
+function withoutAuthoredDecision(raw: unknown): unknown {
+  if (typeof raw === "object" && raw !== null && ["question", "options", "summaryMd", "recommended"].some((key) => Object.hasOwn(raw, key))) {
+    throw fail("invalid", `步骤不能预先写拍板问题。要请用户拍板，用 ${HUB_COMMAND} ask --node <步骤>`);
+  }
+  return raw;
+}
+
+const createStepItemSchema = z.preprocess(withoutAuthoredDecision, z.object({
   key: z.string(),
   title: z.string(),
   brief: z.string().optional(),
@@ -380,11 +380,7 @@ const createStepItemSchema = z.object({
   base: z.string().optional(),
   draft: z.boolean().optional(),
   deps: z.array(z.string()).optional(),
-  question: z.string().optional(),
-  options: z.array(z.string()).optional(),
-  summaryMd: z.string().optional(),
-  recommended: z.string().optional(),
-});
+}));
 
 const edgeSchema = z.object({ from: z.string(), to: z.string() });
 
@@ -397,7 +393,7 @@ export const createSpecSchema = z.object({
   edges: z.array(edgeSchema).optional(),
 });
 
-const patchUpdateItemSchema = z.object({
+const patchUpdateItemSchema = z.preprocess(withoutAuthoredDecision, z.object({
   key: z.string(),
   title: z.string().optional(),
   brief: z.string().nullable().optional(),
@@ -413,11 +409,7 @@ const patchUpdateItemSchema = z.object({
   review: z.boolean().optional(),
   base: z.string().nullable().optional(),
   deps: z.array(z.string()).optional(),
-  question: z.string().optional(),
-  options: z.array(z.string()).optional(),
-  summaryMd: z.string().optional(),
-  recommended: z.string().optional(),
-});
+}));
 
 export const patchSpecSchema = z.object({
   title: z.string().optional(),
@@ -426,6 +418,7 @@ export const patchSpecSchema = z.object({
   updateSteps: z.array(patchUpdateItemSchema).optional(),
   removeSteps: z.array(z.string()).optional(),
   skipSteps: z.array(z.string()).optional(),
+  doneSteps: z.array(z.string()).optional(),
   addNodes: z.array(createStepItemSchema).optional(),
   updateNodes: z.array(patchUpdateItemSchema).optional(),
   removeNodes: z.array(z.string()).optional(),

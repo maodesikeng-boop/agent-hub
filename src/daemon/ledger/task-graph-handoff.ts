@@ -382,6 +382,7 @@ export function formatStepWaitingPmMessage(input: {
   reasonLabel: string;
   detailBody: string;
   stoppedByUser?: boolean;
+  checkpoint?: boolean;
 }): string {
   const { graph, step, workerId, reasonLabel, detailBody } = input;
   const who = workerId !== null ? `Worker #${workerId}：${reasonLabel}` : reasonLabel;
@@ -392,6 +393,7 @@ export function formatStepWaitingPmMessage(input: {
   }
   actions.push(`换人：${HUB_COMMAND} worker start --node ${step.key}`);
   actions.push(`放行：${HUB_COMMAND} graph done ${step.key}`);
+  if (input.checkpoint === true) actions.push(`需用户拍板：${HUB_COMMAND} ask --node ${step.key} --graph ${graph.id} --stdin`);
   actions.push(`改图：${HUB_COMMAND} graph patch`);
   return `${header}\n\n${detailBody.trim()}\n\n${actions.join("；")}。`;
 }
