@@ -23,6 +23,7 @@ import type { RouterReportLink } from "../../../shared/router.ts";
 import { checkTextLimit, formatTextLimitViolations } from "../../../shared/text-limits.ts";
 import type { Db } from "../../store/index.ts";
 import { fail, type Pending } from "../context.ts";
+import { wakeGraphPmIn, wakePmForSettledLeafIn } from "../pm-notices.ts";
 import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { collectGraphBranches, collectGraphPrUrls, stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
@@ -171,8 +172,16 @@ function skipNodeInternalIn(
   );
   const progress = recomputeGraphProgressIn(g, p, graphRow, callerSession, context, { retractBlockedWaiting: false });
   syncDeliveryNoteAfterProgressIn(g, p, graphRow, wasAllSettled);
-  const lead = `用户在网页上跳过了步骤「${nodeKey}（${node.title}）」${trimmedReason ? `（说明：${trimmedReason}）` : ""}，`;
-  const messageId = byUser ? wakePmForTurnedIn(g, p, graphRow, progress.turned, lead, `skip:${nodeKey}:${t}`) : null;
+  let messageId: MessageId | null = null;
+  if (byUser) {
+    const lead = `用户在网页上跳过了步骤「${nodeKey}（${node.title}）」${trimmedReason ? `（说明：${trimmedReason}）` : ""}`;
+    messageId = wakePmForTurnedIn(g, p, graphRow, progress.turned, `${lead}，`, `skip:${nodeKey}:${t}`) ??
+      wakePmForSettledLeafIn(g, p, graphRow, {
+        subject: { kind: "graph.leaf_settled", graphId: graphRow.id, nodeKey, by: "skip", decidedAt: t },
+        lead,
+        details: [],
+      });
+  }
   const graph = publishGraphIn(g, p, graphRow.id);
   return { graph, messageId, progress };
 }
@@ -243,12 +252,9 @@ function cancelGraphInternalIn(
   if (wakePm) {
     const trimmedReason = reason?.trim();
     const stoppedNote = stoppedWorkerIds.length > 0 ? `已自动停掉在跑的 Worker ${workerIdList(stoppedWorkerIds)}。` : "";
-    messageId = g.messages.enqueueWakeupIn(p, {
-      conversationId: graph.conversationId,
-      source: "task_graph",
-      ref: `graph-cancel:${graph.id}:${t}`,
-      text: `【任务图 #${graph.id} · ${graph.title}】用户取消了整张任务图${trimmedReason ? `（说明：${trimmedReason}）` : ""}。${stoppedNote}`.trim(),
-    }).id;
+    messageId = wakeGraphPmIn(g, p, graphRow, {
+      kind: "graph.cancelled", graphId: graph.id, cancelledAt: t,
+    }, `【任务图 #${graph.id} · ${graph.title}】用户取消了整张任务图${trimmedReason ? `（说明：${trimmedReason}）` : ""}。${stoppedNote}`.trim());
   }
   return { graph, messageId, stoppedWorkerIds };
 }
