@@ -1,38 +1,69 @@
 # Plan and code-skeleton standard
 
-Follow this standard whenever a task asks for a design plan. A planning step commits a design document in `docs/<topic>-design.md`, a compiling TypeScript code skeleton in the target files, and runnable acceptance tests. Before implementation, confirm and record that every test for new or changed behavior fails and that every regression test confirming an unchanged existing rule passes. Later implementation steps fill in the function bodies until every acceptance test passes.
+Follow this standard whenever a task asks for a design plan. The workflow runs in one line: design plan (or two independent designs and a synthesis step for complex work), Project Manager plan review, implementation, parallel logic and real-environment review, fix and re-review (up to 3 rounds), Project Manager merge, and delivery of the acceptance evidence to the user.
+
+A planning step commits a design document in `docs/<topic>-design.md`, a compiling TypeScript code skeleton in the target files, and runnable acceptance tests. Before implementation starts, confirm and record that every test for new or changed behavior fails and that every regression test confirming an unchanged existing rule passes. Later implementation steps fill in the function bodies until every acceptance test passes.
 
 ## Design document
 
 Write `docs/<topic>-design.md` in plain English following `.agents/skills/technical-writing/SKILL.md` and `.agents/skills/unslop/SKILL.md`. Directly under `# <Title>`, record the snapshot date and git commit (`> Snapshot: YYYY-MM-DD (commit \`<sha>\`)`) so readers can see which codebase state the document describes (`src/docs-guard.test.ts` enforces this line and `docs/README.md` indexing). Keep every section below in order. Write `None` when a section does not apply.
 
-### For the user
+### Two-agent planning for complex tasks
 
-Keep the opening section focused on what the user reviews and approves before implementation starts:
+When the Project Manager judges a task complex (no fixed threshold applies), planning splits into two phases:
+
+1. **Two independent designs.** Two Workers on different vendors each write a complete design document on their own. Do not write the code skeleton or acceptance tests during this phase.
+2. **Synthesis.** A synthesis Worker chooses one design as the base and grafts the stronger parts of the second design onto it. Record explicitly in Section 3 which design is the base, what parts came from the second design, and why. The synthesis step then delivers the final design document, the compiling code skeleton, and the runnable acceptance tests.
+
+### Plan review and decisions
+
+Keep the opening section focused on what the Project Manager checks before implementation starts, and on any decision that must escalate to the user:
 
 - **Files to review.** Link each deliverable file with one sentence on what it covers.
-- **Decisions needed.** List each open product or scope trade-off with concrete options and your recommendation. For every rule that asks for user approval, attach a concrete example or a screenshot that shows what the user will see under that rule. Write `None` when no decision is open.
-- **Checkpoint card.** Copy the plain-language acceptance scenario list from Section 8 into the plan's checkpoint card. Implementation starts only after the user approves that card and any open decisions.
+- **Project Manager plan review.** Before implementation starts, the Project Manager checks the plan against three criteria: every quoted user sentence in Section 1 maps to at least one acceptance scenario, no applicable verification category in Section 8 is missing (and every omitted category states in one sentence why it cannot apply), and the candidate designs in Section 3 are genuinely structurally distinct. If any check fails, the Project Manager sends the plan back for revision.
+- **Decisions needed.** The Project Manager decides routine design questions and notes each choice in the report. Escalate to the user with a decision card only in three cases:
+  - User-visible behavior or interface changes.
+  - Fixing the root cause requires rebuilding the foundation and multiplies the work several times over.
+  - Irreversible or external-facing operations.
+  For every rule sent to the user for approval, attach a concrete example or a screenshot showing what the user will see under that rule. Write `None` when no user decision is needed.
+- **Task Graph sequencing note.** Task Graph checkpoints currently pause only for the user, not for Project Manager review. Until Task Graph supports a Project Manager review pause, run planning as a standalone step and append the implementation and review steps only after the Project Manager approves the plan.
 
 ### For Workers and reviewers
 
 Include all eight sections below in order for downstream Workers and reviewers:
 
 1. **User goal.** Quote the user's original request first, then state the intended outcome in one or two sentences.
-2. **Current state.** Label each finding `[Measured]` or `[Inferred]` with `path:line` references. For measured claims, state how you ran the check.
-3. **Approach comparison.** Compare at least two candidate designs in a table, starting from libraries already listed in `AGENTS.md` and standard industry approaches, then state your recommendation and why.
+2. **Current state and history.** Read the code you will change by following the `/how` method (`.agents/skills/how/SKILL.md`: trace key concepts, runtime flow, ownership, and gotchas yourself without spawning subagents). Inspect earlier design documents (including deleted ones retrieved from git history) and past commits that touched this area. Record all of the following:
+   - **Design history.** State what premise the original design rested on, which later changes altered that premise, and whether the current code is a stack of patches.
+   - **Core concepts.** List what states exist, who has write authority over each state, which facts are stored in more than one place, and what concept is missing.
+   - **Verified evidence.** Label each finding `[Measured]` or `[Inferred]` with `path:line` references. For measured claims, state how you ran the check.
+3. **Reference designs and approach comparison.** Document how 2 to 3 mature products or open-source projects solve the same problem, with links. Design documents (`docs/*-design.md`) may name reference products. PR descriptions, commit messages, UI copy, and code comments must not. Then compare candidates in a table and state your recommendation:
+   - **Challenge patched foundations.** If earlier patches buried the foundation, include introducing the missing concept (or rebuilding the foundation) as a candidate design, and flag it in the `偏离` field of your Worker report so the Project Manager can weigh it.
+   - **Structurally distinct designs.** Present at least two designs with genuinely different structures, not small edits inside one structure. Start from libraries already listed in `AGENTS.md` and established patterns. One candidate must be the design you would build if you started from day one.
+   - **Design red flags.** Screen every candidate against `.agents/skills/architect/references/design-red-flags.md` and note how the chosen design avoids each applicable red flag.
+   - **Patch rationale.** If you recommend a patch instead of fixing the root cause, explain why you are not fixing the root cause and estimate how large the root-cause fix would be.
+   - **Synthesis record.** When synthesizing two independent designs for a complex task, state which design is the base, which parts you grafted from the other design, and why.
 4. **Performance and bounds.** When touching caches, snapshots, or collections that grow over time, address all four rules in `AGENTS.md` ("Caches and state bounds"). List new `src/shared/limits.ts` constants in a table with values and one-month sizing math, or write `None` and explain why.
 5. **Cross-vendor and cross-platform unification.** Show how one shared definition covers every registered vendor in `src/shared/vendors.ts` and all three platforms (`macOS`, `Windows`, and `Linux` via `src/daemon/platform/index.ts`), and name the single file a future vendor must implement.
 6. **Deletions.** List superseded code paths, docs, and prompt text to delete in the same PR so old and new logic never coexist.
 7. **Skeleton files.** List each created or modified file with one sentence on its responsibility, including the acceptance test files. Do not paste function signatures that already live in the code skeleton.
-8. **Verification plan.** Prove the change works on real artifacts. "Tests pass" alone is not enough. Include all three items below:
-   - **Acceptance scenarios.** Write plain-language scenarios from the user's quoted sentences in Section 1 and from every settled rule. Write each scenario in three concrete parts: what happens first, what happens next, and what the user should see. Map every quoted sentence and every settled rule to at least one scenario. Include at least one scenario for each of the four categories below whenever the change can reach it. If a category cannot apply, write one sentence that explains why:
+8. **Verification plan.** Prove the change works on real artifacts. Passing unit tests alone is not enough. Include all three items below:
+   - **Acceptance scenarios.** Write plain-language scenarios from the user's quoted sentences in Section 1 and from every settled rule. Write each scenario in three concrete parts: what happens first, what happens next, and what the user should see. Map every quoted sentence and every settled rule to at least one scenario. Include at least one scenario for each of the nine categories below whenever the change can reach it. If a category cannot apply, write one sentence explaining why:
      - Two consecutive turns in the same conversation.
      - A restart in the middle of the operation.
      - A state or configuration change while work or a notice waits in a queue.
-     - Existing rules or boundaries that the change touches or uncovers.
-   - **Real CLI verification.** For any scenario that depends on vendor CLI behavior, run it locally against the real vendor CLI before merge and save the output as evidence. A scenario that passes only against a fake CLI counts as not verified against the real CLI, not as passing. Keep fake CLIs for fast cloud checks. If the real CLI disagrees with a fake CLI, update the fake CLI and add a test in the same PR. If a vendor CLI is not installed or not logged in locally, mark the scenario as not verified against the real CLI and state why.
-   - **Commands and visual checks.** Name the exact acceptance test files, `pnpm verify`, real-browser screenshots for UI changes, and command outputs to capture during implementation.
+     - Existing rules or boundaries that the change touches or uncovers. Read `REVIEW.md` from `main` (`git show origin/main:REVIEW.md`), list every rule whose `Trigger:` matches a file the plan will change, and state one by one how this design satisfies each rule.
+     - Large data volume sized for one month of continuous use (300 finished Workers, 30,000 messages, 50,000 step logs).
+     - Malformed or dirty data: corrupt formats, half-written records, data left by older versions, and abnormal events from vendor CLIs.
+     - Cross-vendor coverage across every registered vendor in `src/shared/vendors.ts`.
+     - Cross-platform coverage across macOS, Windows, and Linux.
+     - Cross-entry-point and layout coverage: wide and narrow web screens, Feishu, the `hub` CLI, and multiple computers.
+   - **Real-environment and real-CLI verification.** Name where each scenario runs in a real environment and what evidence it produces:
+     - **Web flows.** Start an isolated local Bellwood instance with a separate temporary data directory and capture a Playwright screen recording or a start-to-finish screenshot sequence for each scenario.
+     - **Real CLI scenarios.** Any scenario that depends on vendor CLI behavior must run against the real vendor CLI. Confirm first how to isolate the temporary Bellwood instance so the real CLI cannot alter the user's own vendor configuration. If safe isolation is not verified, or if the vendor CLI is not installed or not logged in locally, mark the scenario as not verified against the real CLI and state why (until a dedicated testbed is available). A run that passes only against a fake CLI counts as not verified against the real CLI. Keep fake CLIs for fast cloud checks. If the real CLI disagrees with a fake CLI, update the fake CLI and add a test in the same PR.
+     - **Feishu, multi-computer mesh, and desktop app flows.** Run on the testbed or with Computer Use. When neither is available locally, mark the scenario as not verified and state why.
+     - **Local load.** Run at most one real-environment verification or review session on the local machine at a time.
+   - **Commands and visual checks.** Name the exact acceptance test files, `pnpm verify`, the real-environment video or start-to-finish screenshot sequence for each acceptance scenario, and the command outputs to capture.
 
 ## Code skeleton and acceptance tests
 
@@ -42,10 +73,10 @@ Write the skeleton and acceptance tests directly in the target production and te
 - **Module boundaries.** Create target modules and export their public functions and types. Skip unexported private helpers.
 - **Function signatures.** Write full parameter and return types without `any`. Use a single-line body: `throw new Error("Not implemented");`.
 - **Contracts.** Document caller-observable preconditions and postconditions on exported functions with concise `/** */` doc comments. State module-wide invariants once at the top of the file. Do not prescribe internal data structures or step-by-step control flow. Public API contract comments remain after implementation per `.agents/skills/no-comments/references/comment-sicko.md`.
-- **Acceptance tests.** Write real runnable tests with assertions in the matching `*.test.ts` and `*.test.tsx` files so every acceptance scenario in Section 8 and every contract clause maps to at least one executable test. Do not use `it.todo` placeholders for acceptance scenarios. Automated tests may run against fake CLIs for fast cloud checks, while vendor CLI scenarios still require a local run against the real CLI before merge.
+- **Acceptance tests.** Write real runnable tests with assertions in the matching `*.test.ts` and `*.test.tsx` files so every acceptance scenario in Section 8 and every contract clause maps to at least one executable test. Do not use `it.todo` placeholders for acceptance scenarios. Automated tests may run against fake CLIs for fast cloud checks, while vendor CLI scenarios still require real-CLI verification (or an explicit not-verified note with reason) before merge.
 - **Existing callers.** When changing an existing signature, update call sites so `pnpm typecheck` passes without altering runtime behavior yet.
 
-Before you commit the plan, run `pnpm typecheck` and confirm it exits 0. Then run every acceptance test file (`pnpm exec vitest run <test-files>`) with no syntax or type errors. Confirm that every test for new or changed behavior fails against the skeleton or current code, and that every regression test confirming an unchanged existing rule runs and passes. Record the command and test output in your Worker report or PR body so downstream Workers and reviewers can verify both the pre-implementation failure record for every test of new or changed behavior and the pre-implementation passing record for every regression test confirming an unchanged existing rule.
+Before you commit the plan, run `pnpm typecheck` and confirm it exits 0. Then run every acceptance test file (`pnpm exec vitest run <test-files>`) with no syntax or type errors. Confirm that every test for new or changed behavior fails against the skeleton or current code, and that every regression test confirming an unchanged existing rule runs and passes. Record the command and test output in your Worker report or PR body so downstream Workers and reviewers can verify this pre-implementation baseline.
 
 Example skeleton and acceptance tests:
 
@@ -83,19 +114,24 @@ describe("applyCoupon", () => {
 
 ## Implementation
 
-Implementation starts only after the user approves the plan's checkpoint card and any open decisions. Build directly on the committed skeleton and acceptance tests:
+Implementation starts once the Project Manager approves the plan (and after the user resolves any decision card when one of the three escalation cases applies). The Project Manager opens a draft PR after the plan is pushed, and every later implementation and fix step pushes to the same branch.
+
+Build directly on the committed skeleton and acceptance tests:
 
 1. Read the design document, the code skeleton, and the committed acceptance tests. Treat them as the specification.
-2. Run the committed acceptance tests before editing production code, and record the command and test output in your Worker report or PR body. Confirm that every test for new or changed behavior still fails on the current branch and that every regression test confirming an unchanged existing rule runs and passes before implementation. If any test for new or changed behavior already passes or any regression test fails before implementation, stop and report the mismatch before editing production code.
-3. Fill in the function bodies until every acceptance test passes, including both the tests for new or changed behavior and the regression tests for unchanged existing rules. Do not modify, delete, skip, or weaken the acceptance tests written in the planning step. You may add extra unit tests for internal edge cases in separate test blocks or files.
+2. Run the committed acceptance tests before editing production code, and record the command and test output in your Worker report or PR body.
+   - **Single-step implementation or first step of a multi-step plan.** Confirm that every test for new or changed behavior still fails on the current branch and that every regression test confirming an unchanged existing rule runs and passes. Stop and report a mismatch if any test for new or changed behavior already passes or any regression test fails.
+   - **Later step of a multi-step implementation plan.** Tests satisfied by earlier implementation steps on this branch are expected to pass already. Confirm that every test for the unimplemented behavior assigned to this step still fails, and that tests already completed by earlier implementation steps plus regression tests for unchanged existing rules run and pass. Stop and report a mismatch if a test for this step's unimplemented behavior already passes, or if an earlier step's completed test or an unchanged-rule regression test fails.
+3. Fill in the function bodies until every acceptance test in your step passes (and every acceptance test in the plan passes once the final implementation step finishes). Do not modify, delete, skip, or weaken the acceptance tests written in the planning step. You may add extra unit tests for internal edge cases in separate test blocks or files.
 4. If implementation shows that a signature, type, contract, or acceptance test must change, stop instead of rewriting the test. Report the conflict and your recommendation in the `偏离` and `问题` fields of your Worker report so the Project Manager can decide whether to revise the plan.
 5. Do not create parallel modules or duplicate function names alongside the skeleton.
+6. After your local verification gate passes, push to the branch and hand off right away (to the next implementation step, or to parallel logic and real-environment review alongside cloud CI). Exception: if the change touches platform code this machine cannot test (Linux `bwrap`, Windows native, or desktop packaging), wait for cloud CI checks before handing off as described in `AGENTS.md`.
 
-## Verification
+## Verification and acceptance evidence
 
-Before you report done, confirm all four checks:
+Every completed plan requires a full acceptance package before merge and delivery to the user:
 
-- The finished code matches the skeleton's public types and contracts.
-- Every acceptance scenario in Section 8 has a passing test on HEAD. Your Worker report or PR body includes a recorded pre-implementation run showing that every test for new or changed behavior failed before implementation and that every regression test confirming an unchanged existing rule ran and passed before implementation.
-- Implementation commits did not delete, skip, or weaken any acceptance test from the planning step.
-- You saved every command output, local real-CLI run output, and real-browser screenshot listed in Section 8, and updated any fake CLI that disagreed with the real CLI.
+- **Contract match.** The finished code matches the skeleton's public types and contracts, and implementation commits did not delete, skip, or weaken any acceptance test from the planning step.
+- **Test results.** Record the pre-implementation baseline (confirming that before the first implementation commit, every test for new or changed behavior failed and every regression test for an unchanged existing rule ran and passed), the post-implementation commands and full passing output on HEAD, and the cloud CI check results.
+- **Real-environment evidence.** Provide a screen recording (video) or a complete start-to-finish sequence of screenshots for each acceptance scenario in Section 8. A single static screenshot is not enough. Include local real-CLI evidence for vendor CLI scenarios (or an explicit not-verified note with reason when isolation or local login is unavailable), and update any fake CLI that disagreed with the real CLI.
+- **Merge and delivery.** Once parallel reviews pass (or logic review passes for docs and rules changes) and cloud CI is green, the Project Manager merges without waiting for user approval to merge, then delivers the test results and real-environment recordings or screenshot sequences to the conversation and Router.

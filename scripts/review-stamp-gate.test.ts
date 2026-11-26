@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +12,7 @@ import {
   parseStampPaths,
   type GateDeps,
 } from "./review-stamp-gate.ts";
+import { GIT_MAX_BUFFER_BYTES } from "../src/shared/limits.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 
 const SHA = "b".repeat(40);
@@ -63,7 +65,39 @@ describe("matchStampPaths", () => {
     expect(matchStampPaths(["migrations/b.sql", "docs/a.md", "migrations/a.sql"], ["migrations/**"])).toEqual(["migrations/b.sql", "migrations/a.sql"]);
   });
 
-  it("matches root configs, dotfiles, source files, and design docs for the planned acceptance scenarios rule in REVIEW.md", () => {
+  it("matches dotfiles and multi-level hidden directories with * and ** while preserving segment boundaries", () => {
+    expect(
+      matchStampPaths(
+        [
+          ".github/.hidden/check.yml",
+          ".github/.a/.b/c.yml",
+          "migrations/.hidden/001.sql",
+          "migrations",
+          "src/daemon/platform/.a/.b/.c/x.ts",
+          "src/web/useA.ts",
+          "src/web/.a/.b/useA.ts",
+          "foo.test.ts",
+          ".a/.b/foo.test.ts",
+          "src/vendors/.hidden/driver.ts",
+          "src/vendors//driver.ts",
+          "a/REVIEW.md",
+        ],
+        [".github/**", "migrations/**", "src/daemon/platform/**", "src/web/**/use*.ts", "**/*.test.ts", "src/vendors/*/driver.ts", "REVIEW.md"],
+      ),
+    ).toEqual([
+      ".github/.hidden/check.yml",
+      ".github/.a/.b/c.yml",
+      "migrations/.hidden/001.sql",
+      "src/daemon/platform/.a/.b/.c/x.ts",
+      "src/web/useA.ts",
+      "src/web/.a/.b/useA.ts",
+      "foo.test.ts",
+      ".a/.b/foo.test.ts",
+      "src/vendors/.hidden/driver.ts",
+    ]);
+  });
+
+  it("matches root configs, dotfiles, multi-level hidden directories, tracked files, and design docs for the planned acceptance scenarios rule in REVIEW.md", () => {
     const lines = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8").split(/\r?\n/u);
     const heading = lines.findIndex((line) => line.trim() === "### Planned acceptance scenarios cover every requirement and pass real tests");
     expect(heading).toBeGreaterThan(-1);
@@ -77,13 +111,54 @@ describe("matchStampPaths", () => {
       "package.json",
       ".oxlintrc.json",
       ".github/workflows/check.yml",
+      ".github/.hidden/.deep/check.yml",
       ".agents/skills/verify/SKILL.md",
+      ".agents/.cache/.nested/skill.md",
       "apps/windows/.gitignore",
+      ".a/.b",
+      ".a/.b/c",
+      ".a/b/.c",
+      ".a/b/.c/d",
+      "a/.b/.c",
+      "a/.b/.c/d",
+      "a/.b/c/.d/e",
+      "src/.foo/bar/.baz/.qux/file.ts",
       "src/web/turn-progress.ts",
       "apps/macos/App.swift",
       "docs/work-panel-design.md",
     ];
     expect(matchStampPaths(samplePaths, globs)).toEqual(samplePaths);
+
+    const trackedFiles = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER_BYTES })
+      .split("\0")
+      .filter(Boolean);
+    expect(trackedFiles.length).toBeGreaterThan(0);
+    expect(matchStampPaths(trackedFiles, globs)).toEqual(trackedFiles);
+  });
+
+  it("keeps multi-step implementation baseline rules and new process criteria aligned across docs/plan-standard.md, REVIEW.md, and AGENTS.md", () => {
+    const planStandard = readFileSync(join(REPO_ROOT, "docs/plan-standard.md"), "utf8");
+    const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
+
+    const implSection = planStandard.slice(planStandard.indexOf("## Implementation"));
+    expect(implSection).toMatch(/Later step of a multi-step implementation plan/iu);
+    expect(implSection).toMatch(/tests satisfied by earlier implementation steps on this branch are expected to pass already/iu);
+    expect(implSection).toMatch(/every test for the unimplemented behavior assigned to this step still fails/iu);
+
+    const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
+    expect(planRule).toMatch(/split across multiple implementation steps on the same branch/iu);
+    expect(planRule).toMatch(/do not fail a later step because tests satisfied by an earlier implementation step already pass/iu);
+    expect(planRule).toMatch(/before the first implementation commit/iu);
+    expect(planRule).toMatch(/screen recording \(video\) or a complete start-to-finish sequence of screenshots/iu);
+
+    for (const [label, doc] of [
+      ["docs/plan-standard.md", planStandard],
+      ["REVIEW.md", reviewMd],
+      ["AGENTS.md", agentsMd],
+    ] as const) {
+      expect(doc, `${label} must not keep the superseded user checkpoint-card gate`).not.toMatch(/approves the plan(?:'s)? checkpoint card/u);
+    }
   });
 });
 
