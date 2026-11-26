@@ -182,6 +182,17 @@ describe("请求超时（连接静默断了，请求挂在死连接上）", () =
     expect(timeouts.delays).toHaveLength(4);
     for (const [, init] of api.fetch.mock.calls.slice(-2)) expect(init?.signal).toBeUndefined();
   });
+
+  it.each([false, true])("uses the slow request timeout for Providers with refresh=%s", async (refresh) => {
+    const timeouts = stubRequestTimeouts();
+    const api = new FakeApi(makeSnapshot());
+    api.install();
+
+    await createClient(null).fetchProviders({ refresh });
+
+    expect(timeouts.delays).toEqual([SLOW_API_REQUEST_TIMEOUT_MS]);
+    expect(api.callsTo("GET", /^\/api\/providers$/)[0]?.query.get("refresh")).toBe(refresh ? "1" : null);
+  });
 });
 
 describe("能力开关与准备命令接口", () => {

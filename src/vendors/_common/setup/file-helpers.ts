@@ -106,6 +106,7 @@ export function runShortSubcommand(
     const { child, detached } = spawned;
     trackChild(child, purpose, { detached });
     child.once("exit", () => termGroupAfterExit(child));
+    const childClosed = new Promise<void>((resolve) => child.once("close", () => resolve()));
 
     let stdout = "";
     let stderr = "";
@@ -117,8 +118,10 @@ export function runShortSubcommand(
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (err) {
-        if (child.exitCode === null && child.signalCode === null) {
-          killThenSettle(child, () => reject(err));
+        if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+          killThenSettle(child, () => {
+            void childClosed.then(() => reject(err));
+          });
         } else {
           reject(err);
         }

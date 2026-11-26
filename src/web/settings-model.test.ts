@@ -1153,6 +1153,9 @@ describe("Providers 摘要 WeakMap 缓存与登录方法纯函数", () => {
     const r0 = describeProvidersSummary(noneReady);
     expect(r0).toEqual({ summary: "Attention", attention: true });
     expect(describeProvidersSummary(noneReady)).toBe(r0);
+    const savedKey = [{ availability: "signed_out" as const, installed: true, accountSummary: "API key configured" }];
+    expect(describeProvidersSummary(savedKey)).toEqual({ summary: "Attention", attention: true });
+    expect(describeProvidersSummary([{ availability: "unknown" }])).toEqual({ summary: "Attention", attention: true });
 
     const fourReady = [
       { availability: "available" as const },

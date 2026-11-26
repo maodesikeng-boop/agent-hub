@@ -2,7 +2,6 @@ import { useMutation, useQuery, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   PROVIDER_ACTIVE_POLL_MS,
-  isSelectable,
   normalizeName,
   type AgentVendor,
   type AccountStatusView,
@@ -715,20 +714,9 @@ const EMPTY_PROVIDERS_SUMMARY: ProvidersSummary = {
   attention: false,
 };
 
-type ProvidersSummarySourceItem = {
-  readonly availability: VendorAvailability;
-  readonly installed?: boolean;
-  readonly accountSummary?: string | null;
-};
+type ProvidersSummarySourceItem = { readonly availability: VendorAvailability };
 
 const providersSummaryCache = new WeakMap<readonly ProvidersSummarySourceItem[], ProvidersSummary>();
-
-function isProviderSummaryItemReady(item: ProvidersSummarySourceItem): boolean {
-  if ("accountSummary" in item) {
-    return Boolean(item.installed) && (item.availability === "available" || (item.accountSummary ?? null) !== null);
-  }
-  return isSelectable(item.availability);
-}
 
 export function describeProvidersSummary(
   items: readonly ProvidersSummarySourceItem[] | null | undefined,
@@ -736,7 +724,7 @@ export function describeProvidersSummary(
   if (!items || items.length === 0) return EMPTY_PROVIDERS_SUMMARY;
   const cached = providersSummaryCache.get(items);
   if (cached !== undefined) return cached;
-  const readyCount = items.filter(isProviderSummaryItemReady).length;
+  const readyCount = items.filter((item) => item.availability === "available").length;
   const computed: ProvidersSummary =
     readyCount === 0
       ? { summary: "Attention", attention: true }
