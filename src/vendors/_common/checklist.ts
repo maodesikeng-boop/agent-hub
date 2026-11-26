@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeChecklistStatus, type ChecklistItemInput, type ChecklistItemPatch } from "../../shared/checklist.ts";
+import { HUB_CHECKLIST_COMMAND } from "../../shared/hub-checklist.ts";
 import { CHECKLIST_MAX_ITEMS } from "../../shared/limits.ts";
 import type { VendorSpec } from "../types.ts";
 
@@ -75,4 +76,11 @@ export function withChecklistEnv(spec: VendorSpec, env: Record<string, string>, 
     }
   }
   return next;
+}
+
+export function checklistPromptTool(spec: VendorSpec): { tool: string; hub: boolean } {
+  const tool = spec.checklist.promptTool;
+  return spec.checklist.sources.length > 0 && tool !== undefined
+    ? { tool, hub: false }
+    : { tool: `\`${HUB_CHECKLIST_COMMAND}\``, hub: true };
 }

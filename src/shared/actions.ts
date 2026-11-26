@@ -17,6 +17,7 @@ export interface SessionSendParams {
   source: "user" | "system";
   resend?: boolean;
   recovery?: boolean;
+  rider?: true;
 }
 
 export interface SessionEndParams {

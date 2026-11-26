@@ -38,6 +38,8 @@ import {
   PM_MEMORY_MAX_TOTAL_BYTES,
   PM_TOOL_MESSAGES_MAX_PER_CONV,
   PM_TOOL_MESSAGE_RETENTION_DAYS,
+  CHECKLIST_REMINDER_RETENTION_DAYS,
+  CHECKLIST_REMINDERS_MAX_ROWS,
   PROCESS_LEDGER_MAX_ENTRIES,
   PROVIDER_SECRETS_FILE_MAX_BYTES,
   RESOURCE_DECISIONS_MAX_ROWS,
@@ -195,10 +197,12 @@ const APP_APPROVAL_LIMITS: readonly ResourceLimitRef[] = [
 ];
 
 const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
-  table("messages", "growing", "src/daemon/ledger/messages.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/db-table-retention.ts", "automatic", [
+  table("messages", "growing", "src/daemon/ledger/messages.ts, src/daemon/ledger/checklist-reminders.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/db-table-retention.ts", "automatic", [
     ...WORKER_RETENTION_LIMITS,
     limit("PM_TOOL_MESSAGE_RETENTION_DAYS", PM_TOOL_MESSAGE_RETENTION_DAYS, "days"),
     limit("PM_TOOL_MESSAGES_MAX_PER_CONV", PM_TOOL_MESSAGES_MAX_PER_CONV, "rows"),
+    limit("CHECKLIST_REMINDER_RETENTION_DAYS", CHECKLIST_REMINDER_RETENTION_DAYS, "days"),
+    limit("CHECKLIST_REMINDERS_MAX_ROWS", CHECKLIST_REMINDERS_MAX_ROWS, "rows"),
   ]),
   table("session_steps", "growing", "src/daemon/ledger/steps.ts", "src/daemon/ledger/steps.ts, src/daemon/ledger/worker-retention.ts, src/daemon/ledger/db-table-retention.ts", "automatic", [
     limit("SESSION_STEPS_KEEP", SESSION_STEPS_KEEP, "rows"),

@@ -207,6 +207,8 @@ export function agentMessageDedupeKey(sessionId: SessionId, uuid: string, toolUs
   return toolUseId === undefined ? `session:${sessionId}:${uuid}` : `session:${sessionId}:${uuid}:${toolUseId}`;
 }
 
+export const CHECKLIST_REMINDER_EVENT = "checklist.reminder";
+
 export function systemMessageDedupeKey(conversationId: ConversationId, meta: SystemMessageMeta): string {
   const ref = ((): number | string => {
     switch (meta.event) {
@@ -232,6 +234,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
       case "driver.warning":
       case "context.compacted":
         return `${meta.sessionId}:${meta.uuid}`;
+      case CHECKLIST_REMINDER_EVENT:
+        return `${meta.sessionId}:${meta.uuid}:${meta.toolUseId}`;
       case "worker.max_time_exceeded":
         return `${meta.workerId}:${meta.maxTimeMs}`;
       case "task_graph.ready_to_finish":
@@ -260,6 +264,7 @@ export const SYSTEM_EVENTS = [
   "worker.max_time_exceeded",
   "task_graph.ready_to_finish",
   "pm.wakeup",
+  CHECKLIST_REMINDER_EVENT,
 ] as const;
 
 export type SystemMessageMeta =
@@ -278,7 +283,8 @@ export type SystemMessageMeta =
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
   | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number; deadlineAt?: number }
   | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean }
-  | { event: "pm.wakeup"; source: PmWakeupSource; ref: string };
+  | { event: "pm.wakeup"; source: PmWakeupSource; ref: string }
+  | { event: typeof CHECKLIST_REMINDER_EVENT; sessionId: SessionId; uuid: string; toolUseId: string };
 
 export const PM_WAKEUP_SOURCES = ["task_graph", "router", "app_approval"] as const;
 export type PmWakeupSource = (typeof PM_WAKEUP_SOURCES)[number];
@@ -499,6 +505,10 @@ export function systemNoticeText(message: Pick<Message, "sender" | "meta" | "tex
 export function isHandoverTraffic(message: Pick<Message, "sender" | "meta">): boolean {
   if (message.sender === "agent") return message.meta?.handover === true;
   return systemEventOf(message)?.event === "handover.requested";
+}
+
+export function isChecklistReminder(message: Pick<Message, "sender" | "meta">): boolean {
+  return message.sender === "system" && message.meta?.event === CHECKLIST_REMINDER_EVENT;
 }
 
 export function isSilentTriggerMessage(message: Pick<Message, "sender" | "meta">): boolean {

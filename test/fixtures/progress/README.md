@@ -18,10 +18,11 @@ Frames that drive the checklist and action timing tests. Each probe ran in a thr
 | `opencode-default.live.jsonl` | Same version with default flags: a file read, no todo tool |
 | `pi-tools.live.jsonl` | Pi 1.5.2 RPC: `tool_execution_start` and `tool_execution_end` with `durationMs` |
 | `agy-tool.done.docs-capture.json` | Antigravity `step_update` frame published in the vendor's headless documentation |
+| `agy-update-steps.live.jsonl` | Two `update_steps` calls from Antigravity 1.5.18 with Gemini 3.8 Flash in headless stream mode, captured on 2026-11-26 in a temporary home |
 | `deepseek-todo.source-derived.json` | DeepSeek Harness 0.2.2-rc.1 ACP `todo_write` frame built from that version's source |
 | `kimi-plan.source-derived.json` | Kimi Code CLI 2.7.3 ACP `plan` update built from the published package |
 | `kimi-tool.source-derived.json` | Same version's `TodoList` tool frame built from the published package |
 
 `live` files are real CLI output. `docs-capture` and `source-derived` files were not captured on this machine; the vendors' authentication blocked a live turn.
 
-The two-turn recordings use literal markers and no project files. The pipeline also replays an adapted second turn for OpenCode, DeepSeek, and Kimi. Those three were not run live for this change. Agy and Pi send no checklist events.
+The two-turn recordings use literal markers and no project files. The pipeline also replays an adapted second turn for OpenCode, DeepSeek, and Kimi. Those three were not run live for those recordings. The older Antigravity and Pi inputs for that pipeline contain no checklist calls.

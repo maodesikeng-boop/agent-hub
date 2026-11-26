@@ -13,6 +13,7 @@ import {
   type SessionId,
 } from "../../shared/index.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
+import { HUB_CHECKLIST_COMMAND } from "../../shared/hub-checklist.ts";
 import type { SentFile } from "../../shared/sent-files.ts";
 
 export interface FakeHubCall {
@@ -49,7 +50,7 @@ export class FakeHubLedger
       throw new LedgerRequestError("forbidden", "这个会话不是项目经理或 Worker 的会话，不能用 hub");
     }
     if (!hubCommandAllowed(role, command)) {
-      throw new LedgerRequestError("forbidden", `Worker 只能用 hub status，不能用 hub ${command.replace(".", " ")}：要做的事写进汇报，交给项目经理`);
+      throw new LedgerRequestError("forbidden", `Worker 只能用 hub status 和 ${HUB_CHECKLIST_COMMAND}，不能用 hub ${command.replace(".", " ")}：要做的事写进汇报，交给项目经理`);
     }
     return { text: `已执行 ${command}（会话 ${sessionId}）`, data: { sessionId } as unknown as HubData<C> };
   }
