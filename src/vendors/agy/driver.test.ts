@@ -1,5 +1,5 @@
 // AgyDriver 与 protocol.ts 单元测试（TDD：覆盖协议纯函数、首轮完整流式交互、长连接复用与恢复、SIGINT 打断、Worker 安全拦截、生命周期管理）。
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -782,6 +782,30 @@ describe("agy-protocol 纯函数", () => {
 });
 
 describe("1. 首次启动与完整流式回合", () => {
+  it.each([
+    { readonly: false, resume: false, prompt: "test prompt" },
+    { readonly: true, resume: true, prompt: "" },
+  ])("blocks built-in timers at launch (read-only: $readonly, resume: $resume)", async ({ readonly, resume, prompt }) => {
+    const t = makeAgyHarness();
+    t.launch.readonly = readonly;
+    t.launch.prompt = prompt;
+    const s = t.addSession({ hasCompletedTurn: resume });
+    await t.driver.send(s.id, user(1, "Reply once."));
+    await t.waitFor("turn.ended");
+
+    const [args] = t.argvs();
+    expect(args).toBeDefined();
+    expect(args!.includes("--conversation")).toBe(resume);
+    const workspace = t.rulesDir(s.id);
+    expect(args!.slice(args!.lastIndexOf("--add-dir"), args!.lastIndexOf("--add-dir") + 2)).toEqual(["--add-dir", workspace]);
+    const hooks = JSON.parse(readFileSync(join(workspace, ".agents", "hooks.json"), "utf8"));
+    const [{ matcher, hooks: [hook] }] = hooks["bellwood-schedule"].PreToolUse;
+    expect(matcher).toBe("^schedule$");
+    expect(hook.type).toBe("command");
+    const result = JSON.parse(execSync(hook.command, { encoding: "utf8" }));
+    expect(result).toMatchObject({ decision: "deny", reason: expect.stringContaining("hub schedule") });
+  });
+
   it("stores the conversation usage snapshot on consecutive turns", async () => {
     const first = { input_tokens: 9644, output_tokens: 1, cache_read_tokens: 0 };
     const second = { input_tokens: 2116, output_tokens: 2, cache_read_tokens: 7600 };
