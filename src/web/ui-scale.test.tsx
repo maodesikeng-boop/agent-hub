@@ -28,20 +28,23 @@ describe("Interface scale", () => {
     expect(readUiScale()).toBe("sm");
   });
 
-  it("Settings offers Compact, Default, Large, and XL with Default checked, and a click applies and saves the scale", async () => {
+  it("Settings offers Compact, Default, Large, and XL in a menu showing Default, and a pick applies and saves the scale", async () => {
     const user = userEvent.setup();
     render(<SettingsDialogFixture open onOpenChange={() => {}} notify={notify} />);
-    const group = screen.getByRole("radiogroup", { name: "Interface scale" });
-    const options = within(group).getAllByRole("radio");
-    expect(options.map((o) => o.textContent)).toEqual(["Compact", "Default", "Large", "XL"]);
-    expect(within(group).getByRole("radio", { name: "Default" })).toHaveAttribute("aria-checked", "true");
+    const trigger = screen.getByRole("combobox", { name: "Interface scale" });
+    expect(trigger).toHaveTextContent("Default");
+    await user.click(trigger);
+    const listbox = await screen.findByRole("listbox");
+    expect(within(listbox).getAllByRole("option").map((o) => o.textContent)).toEqual(["Compact", "Default", "Large", "XL"]);
+    expect(within(listbox).getByRole("option", { name: "Default" })).toHaveAttribute("aria-selected", "true");
 
-    await user.click(within(group).getByRole("radio", { name: "XL" }));
+    await user.click(within(listbox).getByRole("option", { name: "XL" }));
     expect(document.documentElement.dataset.uiScale).toBe("xl");
     expect(localStorage.getItem(UI_SCALE_KEY)).toBe("xl");
-    expect(within(group).getByRole("radio", { name: "XL" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("combobox", { name: "Interface scale" })).toHaveTextContent("XL");
 
-    await user.click(within(group).getByRole("radio", { name: "Compact" }));
+    await user.click(screen.getByRole("combobox", { name: "Interface scale" }));
+    await user.click(within(await screen.findByRole("listbox")).getByRole("option", { name: "Compact" }));
     expect(document.documentElement.dataset.uiScale).toBe("sm");
     expect(localStorage.getItem(UI_SCALE_KEY)).toBe("sm");
   });

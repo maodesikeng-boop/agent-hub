@@ -159,8 +159,8 @@ describe("New project manager", () => {
     const ws = await boot();
     await user.click(screen.getByRole("button", { name: "New project manager" }));
     const dialog = screen.getByRole("dialog", { name: "New project manager" });
-    expect(within(dialog).getByRole("radio", { name: "Orchestrate" })).toBeChecked();
-    expect(within(dialog).getByRole("radio", { name: "Hands-on" })).not.toBeChecked();
+    expect(within(dialog).getByRole("combobox", { name: "Mode" })).toHaveTextContent("Orchestrate");
+    expect(within(dialog).getByRole("combobox", { name: "Mode" })).not.toHaveTextContent("Hands-on");
     // 名字空：不能提交
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "  阿明 ");
@@ -272,7 +272,8 @@ describe("New project manager", () => {
     await user.click(screen.getByRole("button", { name: "New project manager" }));
     const dialog = screen.getByRole("dialog");
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "阿明");
-    await user.click(within(dialog).getByRole("radio", { name: "Hands-on" }));
+    await user.click(within(dialog).getByRole("combobox", { name: "Mode" }));
+    await user.click(await screen.findByRole("option", { name: /Hands-on/ }));
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
     // 打包的名单列出名单里的每一家厂商：显示厂商下拉（默认 Claude Code）；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
     const vendor = within(dialog).getByRole("combobox", { name: "Provider" });
@@ -636,7 +637,8 @@ describe("资料页", () => {
     expect(historyEntry).toHaveTextContent("1");
     expect(within(page).queryByRole("list", { name: "History" })).not.toBeInTheDocument();
     await openSettingsPage(user, page, /^History/);
-    expect(groupIn(page, "History").lastElementChild).toHaveClass("rounded-sm", "border", "border-border", "bg-background");
+    expect(groupIn(page, "History")).toHaveClass("info-sec");
+    expect(groupIn(page, "History").className).not.toMatch(/(^|\s)(rounded-\S+|border|bg-\S+)(\s|$)/);
     expect(groupIn(page, "History").querySelector(".bg-sidebar, .bg-neutral-50")).toBeNull();
     const rows = within(within(page).getByRole("list", { name: "History" })).getAllByRole("listitem");
     expect(rows).toHaveLength(1);
@@ -664,7 +666,7 @@ describe("资料页", () => {
     expect(within(page).queryByText("Agent")).not.toBeInTheDocument();
     expect(within(page).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     await openSettingsPage(user, page, /^Persona/);
-    expect(groupIn(page, "Persona").lastElementChild).toHaveClass("rounded-sm", "border", "border-border", "bg-background");
+    expect(groupIn(page, "Persona")).toHaveClass("info-sec");
     expect(groupIn(page, "Persona").lastElementChild?.className).not.toContain("border-2");
   });
 
@@ -690,7 +692,7 @@ describe("资料页", () => {
     await openSettingsPage(user, page, /^Persona/);
     const box = await within(page).findByRole("textbox", { name: "Persona" });
     expect(box).toHaveAttribute("placeholder", "No persona yet");
-    expect(box).toHaveClass("px-4");
+    expect(box).toHaveClass("info-field");
     await waitFor(() => expect(box).toHaveValue("旧"));
     expect(textSave(page)).not.toBeInTheDocument();
     await user.type(box, "了");
@@ -1729,8 +1731,6 @@ describe("表单校验：新建项目经理", () => {
     const dialog = screen.getByRole("dialog");
     return { dialog, name: within(dialog).getByRole("textbox", { name: "Name" }), create: within(dialog).getByRole("button", { name: "Create" }) };
   };
-  const rowOf = (el: HTMLElement) => el.closest<HTMLElement>("[data-slot=settings-row]")!;
-
   it("空的：“创建”是灰的，不报错", async () => {
     const user = userEvent.setup();
     await boot();
@@ -1748,7 +1748,8 @@ describe("表单校验：新建项目经理", () => {
     const { name, create } = await open(user);
     await user.click(name);
     await user.paste("名".repeat(41));
-    const alert = within(rowOf(name)).getByRole("alert");
+    // The name field sits beside the avatar and its error line sits right under it
+    const alert = within(name.parentElement!).getByRole("alert");
     expect(alert).toHaveTextContent("Name can be at most 40 characters");
     expect(alert).not.toHaveTextContent("空");
     expect(name).toHaveAttribute("aria-invalid", "true");

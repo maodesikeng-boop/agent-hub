@@ -29,14 +29,12 @@ export function BrowsersPage({ onSignedOut }: { onSignedOut?: () => void }) {
     <>
       <SettingsGroup label="Signed-in browsers">
         {sessions === null && loadError === null && (
-          <div className="flex min-h-12 items-center justify-center">
+          <div className="flex min-h-11 items-center justify-center">
             <Loader2 className="size-pixel text-muted-foreground" aria-label="Loading" />
           </div>
         )}
         {loadError !== null && (
-          <div className="px-4 py-3">
-            <RowError error={loadError} />
-          </div>
+          <RowError error={loadError} />
         )}
         {active.map((session) => (
           <SettingsNavRow

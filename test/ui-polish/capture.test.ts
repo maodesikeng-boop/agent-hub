@@ -138,6 +138,8 @@ describe("校准用的弄坏与命令行入口", () => {
     expect(await main([])).toBe(2);
     expect(await main(["unknown"])).toBe(2);
     expect(await main(["shots", "--round", "bad"])).toBe(2);
+    expect(await main(["shots", "--engine", "firefox"])).toBe(2);
+    expect(err).toContain("--engine 只能是 chromium 或 webkit");
     expect(err).toContain("用法：pnpm ui:polish");
   });
 

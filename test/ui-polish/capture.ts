@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Browser, type Cookie, type Page, type Request } from "playwright";
+import { chromium, webkit, type Browser, type Cookie, type Page, type Request } from "playwright";
 import {
   BROWSER_NOW_ISO,
   DEVICE_SCALE_FACTOR,
@@ -16,6 +16,7 @@ import {
   SHOT_STABLE_POLL_MS,
   SHOT_TIMEZONE,
   SHOT_WORK_DIR,
+  TAB_TO_MAX_PRESSES,
   VIEWPORTS,
   type ViewportName,
 } from "./limits.ts";
@@ -26,11 +27,17 @@ import { applyMutation } from "./mutations.ts";
 import { applyPatch, blockWrites, heldRequests } from "./patches.ts";
 import { SCREEN_INVENTORY, SCREEN_STEPS, expandShots, type Scenario, type ScreenStep, type Shot } from "./screens.ts";
 import { startNodeRelay } from "../../src/relay/node/server.ts";
+import { readFocus } from "../../scripts/verify-settings-keyboard.ts";
 import { startFakeGithub } from "../e2e/fake-github.ts";
 import { peerHomeOf, seedScenario, startIsolatedDaemon, type IsolatedDaemon, type SeedResult } from "./seed.ts";
 
+export const CAPTURE_ENGINES = { chromium, webkit } as const;
+export type CaptureEngine = keyof typeof CAPTURE_ENGINES;
+
 export interface CaptureOptions {
   repoRoot: string;
+  /** Browser engine, chromium by default. Shot keys do not name the engine, so each engine needs its own outDir. */
+  engine?: CaptureEngine;
   /** 图和清单写到哪。 */
   outDir: string;
   /** 只截这些界面 id 或区域；不给就是全部。 */
@@ -97,9 +104,10 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureManife
   mkdirSync(workDir, { recursive: true });
 
   const backends = new Map<Scenario, Backend>();
+  const engine = options.engine ?? "chromium";
   let browser: Browser | null = null;
   try {
-    browser = await chromium.launch();
+    browser = await CAPTURE_ENGINES[engine].launch();
     for (const scenario of new Set(shots.map((s) => s.screen.scenario))) {
       const backend = await startBackend(scenario, options.repoRoot, workDir);
       backends.set(scenario, backend);
@@ -123,7 +131,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureManife
     const b = browser;
     await Promise.all(Array.from({ length: Math.min(SHOT_PARALLEL, jobs.length) }, () => worker(b)));
     if (failures.length > 0) throw new Error(`${failures.length} 个界面截图失败：\n${failures.sort().join("\n")}`);
-    const manifest: CaptureManifest = { commit: currentCommit(options.repoRoot), browser: `chromium ${b.version()}`, shots: results };
+    const manifest: CaptureManifest = { commit: currentCommit(options.repoRoot), browser: `${engine} ${b.version()}`, shots: results };
     writeFileSync(join(options.outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     return manifest;
   } finally {
@@ -202,6 +210,8 @@ async function captureOne(browser: Browser, backend: Backend, shot: Shot, mutati
     timezoneId: SHOT_TIMEZONE,
     colorScheme: "light",
     reducedMotion: "reduce",
+    // WebKit sends a service worker's fetches past page.route, so the request patches would not apply.
+    ...(browser.browserType().name() === "webkit" ? { serviceWorkers: "block" as const } : {}),
   });
   try {
     const page = await context.newPage();
@@ -229,7 +239,7 @@ async function captureOne(browser: Browser, backend: Backend, shot: Shot, mutati
     if (!steps.some((s) => "goto" in s)) await page.waitForSelector("#root > *", { timeout: SHOT_READY_TIMEOUT_MS });
     for (const step of steps) crop = (await runStep(page, step, backend.daemon.origin)) ?? crop;
     await page.evaluate(inPage.fontsReady);
-    if (!steps.some((s) => "hover" in s)) await page.mouse.move(view.width - 1, view.height - 1);
+    if (!steps.some((s) => "hover" in s || "hold" in s)) await page.mouse.move(view.width - 1, view.height - 1);
     if (mutation !== undefined) await applyMutation(page, mutation);
     const key = `${shot.key}${mutation === undefined ? "" : `!${mutation}`}`;
     await network.quiet();
@@ -292,8 +302,17 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
     await input.focus({ timeout });
     await input.pressSequentially(step.type.text);
   } else if ("press" in step) await page.keyboard.press(step.press);
+  else if ("hold" in step) {
+    const box = await page.locator(step.hold).first().boundingBox({ timeout });
+    if (box === null) throw new Error(`Nothing visible to hold at ${step.hold}`);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+  }
   else if ("scroll" in step) await page.locator(step.scroll.target).first().evaluate(inPage.scrollToPosition, step.scroll.to); else if ("drag" in step) await page.evaluate(inPage.dragFiles, { selector: step.drag.over, names: step.drag.files, ...(step.drag.drop === undefined ? {} : { drop: step.drag.drop }) });
   else if ("waitFor" in step) await page.waitForSelector(step.waitFor, { timeout });
+  else if ("hidden" in step) await page.locator(step.hidden).first().waitFor({ state: "hidden", timeout });
+  else if ("tabTo" in step) await tabTo(page, step.tabTo, false);
+  else if ("tabBackTo" in step) await tabTo(page, step.tabBackTo, true);
   else if ("clock" in step) await page.clock.setFixedTime(new Date(Date.parse(BROWSER_NOW_ISO) + step.clock));
   else if ("signOut" in step) {
     await page.context().clearCookies();
@@ -303,6 +322,23 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
     return step.crop;
   }
   return undefined;
+}
+
+async function tabTo(page: Page, selector: string, backward: boolean): Promise<void> {
+  const key = `${backward ? "Shift+" : ""}${page.context().browser()?.browserType().name() === "webkit" ? "Alt+Tab" : "Tab"}`;
+  const target = page.locator(selector).first();
+  await target.waitFor({ timeout: SHOT_READY_TIMEOUT_MS });
+  const passed: string[] = [];
+  for (let i = 0; i < TAB_TO_MAX_PRESSES; i++) {
+    await page.keyboard.press(key);
+    const stop = await readFocus(page);
+    if (await target.evaluate((el: unknown) => el === (globalThis as unknown as { document: { activeElement: unknown } }).document.activeElement)) {
+      if (!stop.focusVisible || !stop.ring) throw new Error(`${selector}: keyboard focus shows no visible mark (outline ${stop.outline}, shadow ${stop.boxShadow})`);
+      return;
+    }
+    passed.push(stop.name);
+  }
+  throw new Error(`${selector}: ${key} never reached it (passed ${passed.join(", ")})`);
 }
 
 /**

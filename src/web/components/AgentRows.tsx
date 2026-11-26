@@ -199,7 +199,7 @@ export function AgentRows({
                 spellCheck={false}
                 placeholder={catalog.customModelExample ?? undefined}
                 aria-invalid={customError !== null}
-                className={stacked ? "min-w-0 flex-1" : "w-60"}
+                className={stacked ? "min-w-0 flex-1" : "h-7.5 w-60 text-minor"}
                 onChange={(e) => onChange(withModel({ ...value, customModel: e.target.value }, CUSTOM_MODEL, catalog), "model")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing && onCustomSubmit) {

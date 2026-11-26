@@ -47,7 +47,7 @@ export function ConfirmBody({
 }) {
   return (
     <>
-      <p className="text-center text-body leading-snug text-muted-foreground">{description}</p>
+      <p className="text-center text-minor leading-snug text-muted-foreground">{description}</p>
       {error && <RowError error={error} />}
       <div className="grid grid-cols-1 gap-2">
         <Button variant="destructive" className={DRAWER_BUTTON} disabled={busy} onClick={onConfirm}>

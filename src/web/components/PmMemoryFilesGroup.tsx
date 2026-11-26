@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Loader2, Plus, Trash2 } from "../ui/icons.ts";
+import { Loader2, Plus } from "../ui/icons.ts";
 import { useMemo, useState } from "react";
 import {
   PM_MEMORY_MAX_SUBFILES,
@@ -19,7 +19,8 @@ import { personaQueryKey } from "../pm-persona.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
-import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { cn } from "../lib/utils.ts";
+import { INFO_ROW, InfoAction, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 const SOFT_SUBFILE_COUNT = Math.ceil(PM_MEMORY_MAX_SUBFILES * PM_MEMORY_SOFT_WARN_RATIO);
 const SOFT_SUBFILE_BYTES = Math.ceil(PM_MEMORY_MAX_SUBFILE_BYTES * PM_MEMORY_SOFT_WARN_RATIO);
@@ -104,34 +105,28 @@ function EditMemoryFileRow({
 
   return (
     <div data-slot="settings-row">
-      <div className="flex min-h-9 items-center justify-between gap-3 px-4 pt-3 pb-1">
-        <span className="truncate font-mono text-body">{file.name}</span>
+      <div className="flex h-7.5 items-center justify-between gap-3">
+        <span className="truncate text-minor text-foreground">{file.name}</span>
         {nearFileLimit && (
           <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{`${formatFileBytes(bytes)} of 64 KB`}</span>
         )}
       </div>
       {detail === undefined ? (
         loadError && !isFetching ? (
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <div className="flex items-center justify-between gap-3 py-1.5">
             <RowError error={errorText(loadError)} />
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => void refetch()}>
-                Retry
-              </Button>
-            </div>
+            <span className="info-actions">
+              <InfoAction onClick={onClose}>Cancel</InfoAction>
+              <InfoAction onClick={() => void refetch()}>Retry</InfoAction>
+            </span>
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-3 px-4 py-3 text-minor text-muted-foreground">
+          <div className="flex items-center justify-between gap-3 py-1.5 text-minor text-muted-foreground">
             <span className="flex items-center gap-2">
-              <Loader2 className="size-pixel" aria-hidden="true" />
+              <Loader2 className="size-3.5" aria-hidden="true" />
               Loading…
             </span>
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              Cancel
-            </Button>
+            <InfoAction onClick={onClose}>Cancel</InfoAction>
           </div>
         )
       ) : (
@@ -140,24 +135,22 @@ function EditMemoryFileRow({
             aria-label={`${file.name} content`}
             rows={4}
             readOnly={archived}
-            className="block max-h-[50vh] min-h-28 resize-none border-0 bg-transparent px-4 py-3 font-mono text-minor field-sizing-content focus:border-0 focus:shadow-none"
+            variant="bare"
+            className="max-h-[50vh] min-h-24 font-mono"
             value={text}
             aria-invalid={contentProblem !== null}
             onChange={(e) => setDraft(e.target.value)}
           />
-          {contentProblem && (
-            <div className="px-4 pb-2">
-              <RowError>{contentProblem}</RowError>
-            </div>
-          )}
-          <div className="px-4 py-3">
+          {contentProblem && <RowError>{contentProblem}</RowError>}
+          <div className="py-2">
             {saveError && <RowError error={saveError} />}
-            <div className={saveError ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
-              <Button variant="ghost" disabled={saveMutation.isPending} onClick={onClose}>
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="ghost" size="sm" disabled={saveMutation.isPending} onClick={onClose}>
                 Cancel
               </Button>
               {!archived && (
                 <Button
+                  size="sm"
                   disabled={contentProblem !== null || saveMutation.isPending}
                   onClick={() => saveMutation.mutate(text)}
                 >
@@ -234,32 +227,26 @@ function MemoryFileItem({
     >
       {() =>
         confirmingDelete ? (
-          <>
-            <Button variant="outline" size="sm" disabled={deleteMutation.isPending} onClick={onCancelConfirm}>
+          <span className="info-actions">
+            <InfoAction disabled={deleteMutation.isPending} onClick={onCancelConfirm}>
               Cancel
-            </Button>
-            <Button size="sm" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate()}>
-              {deleteMutation.isPending && <Loader2 aria-hidden="true" />}
+            </InfoAction>
+            <InfoAction danger disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate()}>
+              {deleteMutation.isPending && <Loader2 className="size-3.5" aria-hidden="true" />}
               Delete
-            </Button>
-          </>
+            </InfoAction>
+          </span>
         ) : (
-          <>
-            <Button variant="ghost" size="sm" aria-label={`Edit ${file.name}`} disabled={deleteMutation.isPending} onClick={onStartEdit}>
+          <span className="info-actions">
+            <InfoAction aria-label={`Edit ${file.name}`} disabled={deleteMutation.isPending} onClick={onStartEdit}>
               Edit
-            </Button>
+            </InfoAction>
             {!archived && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Delete ${file.name}`}
-                disabled={deleteMutation.isPending}
-                onClick={onConfirmDelete}
-              >
-                <Trash2 aria-hidden="true" />
-              </Button>
+              <InfoAction danger aria-label={`Delete ${file.name}`} disabled={deleteMutation.isPending} onClick={onConfirmDelete}>
+                Delete…
+              </InfoAction>
             )}
-          </>
+          </span>
         )
       }
     </SettingsRow>
@@ -319,7 +306,7 @@ function NewMemoryFileForm({
         {(id) => (
           <Input
             id={id}
-            className="w-60 font-mono"
+            className="h-7.5 w-60 font-mono text-minor"
             placeholder="topic.md"
             autoComplete="off"
             value={name}
@@ -333,27 +320,24 @@ function NewMemoryFileForm({
           aria-label="Content"
           placeholder="Content"
           rows={4}
-          className="block max-h-[40vh] min-h-24 resize-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0 focus:shadow-none"
+          variant="bare"
+          className="max-h-[40vh] min-h-20 font-mono"
           value={content}
           aria-invalid={contentProblem !== null}
           onChange={(e) => setContent(e.target.value)}
         />
         {nearFileLimit && (
-          <p className="px-4 pb-2 text-xs text-muted-foreground tabular-nums">{`${formatFileBytes(bytes)} of 64 KB`}</p>
+          <p className="pb-1 text-xs text-muted-foreground tabular-nums">{`${formatFileBytes(bytes)} of 64 KB`}</p>
         )}
-        {contentProblem && (
-          <div className="px-4 pb-3">
-            <RowError>{contentProblem}</RowError>
-          </div>
-        )}
+        {contentProblem && <RowError>{contentProblem}</RowError>}
       </div>
-      <div className="px-4 py-3">
+      <div className="py-2">
         {error && <RowError error={error} />}
-        <div className={error ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
-          <Button variant="ghost" disabled={createMutation.isPending} onClick={onClose}>
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" disabled={createMutation.isPending} onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!canSave} onClick={() => createMutation.mutate()}>
+          <Button size="sm" disabled={!canSave} onClick={() => createMutation.mutate()}>
             {createMutation.isPending && <Loader2 aria-hidden="true" />}
             Save
           </Button>
@@ -382,16 +366,14 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
   if (data === undefined) {
     if (error && !isFetching) {
       return (
-        <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <div className="flex items-center justify-center gap-3 py-6">
           <RowError error={errorText(error)} />
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Retry
-          </Button>
+          <InfoAction onClick={() => void refetch()}>Retry</InfoAction>
         </div>
       );
     }
     return (
-      <div className="flex items-center gap-2 px-4 py-3 text-minor text-muted-foreground">
+      <div className="flex items-center justify-center gap-2 py-6 text-minor text-muted-foreground">
         <Loader2 className="size-pixel" aria-hidden="true" />
         <span>Loading…</span>
       </div>
@@ -406,14 +388,14 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
   return (
     <>
       {(nearCount || nearTotalBytes) && (
-        <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">
+        <p className="py-1.5 text-xs text-muted-foreground tabular-nums">
           {nearTotalBytes
             ? `Total size ${formatFileBytes(totalBytes)} is approaching the 1 MB limit`
             : `${files.length} files stored, approaching the ${PM_MEMORY_MAX_SUBFILES} file limit`}
         </p>
       )}
       {files.length === 0 && !adding && (
-        <p className="px-4 py-3 text-body text-muted-foreground">No memory files yet</p>
+        <p className="py-6 text-center text-minor text-muted-foreground">No memory files yet</p>
       )}
       {files.map((file) =>
         editingName === file.name ? (
@@ -458,16 +440,16 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
           <button
             type="button"
             disabled={full}
-            className="flex min-h-13 w-full cursor-pointer items-center gap-2 rounded-none px-4 py-2 text-left text-body transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
+            className={cn(INFO_ROW, "h-7.5 text-minor")}
             onClick={() => {
               setEditingName(null);
               setConfirmingName(null);
               setAdding(true);
             }}
           >
-            <Plus className="size-pixel text-muted-foreground" aria-hidden="true" />
-            <span className={full ? "text-muted-foreground" : undefined}>New</span>
-            {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`${PM_MEMORY_MAX_SUBFILES} max`}</span>}
+            <Plus className="info-chevron size-3.5" aria-hidden="true" />
+            <span className="flex-1 text-foreground">New</span>
+            {full && <span className="info-val text-minor tabular-nums">{`${PM_MEMORY_MAX_SUBFILES} max`}</span>}
           </button>
         ))}
     </>
