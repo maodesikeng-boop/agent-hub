@@ -268,7 +268,7 @@ In the implementation PR (Step 2/3), update or delete every conflicting old clai
 
 1. Start Bellwood locally with a test Codex project where `mcp:cua_repl` (`unified-computer-use@openai-bundled`) is enabled.
 2. Dispatch a Codex Worker with `--no-outer-sandbox --caps custom --allow mcp:cua_repl`. Verify it holds in `pending`, no worktree or `codex` process starts, and the confirmation card renders in the Web UI with Worker identity, task, and dropped-protection warning.
-3. Click Approve in the Web UI. Verify the Worker launches without `/usr/bin/sandbox-exec` wrapping `codex app-server`, runs under Codex's own `workspaceWrite` sandbox, and calls `cua_repl` without `sandbox_apply` exit 71.
+3. Click Approve in the Web UI. Verify the Worker launches without `/usr/bin/sandbox-exec` wrapping `codex app-server`, runs under Codex's own `workspaceWrite` sandbox, and calls `cua_repl` without `sandbox_apply` exit 71. Follow the [application approval verification](computer-use-app-approval-design.md#8-verification-plan) for the second click and the Calculator result.
 4. If macOS Accessibility or Screen Recording permission is not yet granted, pause and ask the user via a card to grant the permission manually; never alter macOS TCC or system settings from code.
 5. Verify a normal Worker started in parallel on the same project still runs inside Bellwood's outer `/usr/bin/sandbox-exec`.
 6. End the Computer Use Worker (`hub worker end`) and verify `worker_sandbox_approvals.status` becomes `revoked` and cannot be reused. Record logs and evidence in the implementation PR.

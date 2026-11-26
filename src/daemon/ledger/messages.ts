@@ -1,3 +1,4 @@
+import { APP_APPROVAL_SETTLED_LABELS } from "../../shared/app-approval.ts";
 import { isVisibleSystemInput } from "../../shared/taken-input.ts";
 import { enqueueSystemWakeupIn, type SystemWakeupInput } from "./system-wakeups.ts";
 import { createLedgerChecklist } from "./checklist.ts";
@@ -148,6 +149,7 @@ export function createLedgerMessages(
     extra?: {
       gateRef?: GateRef;
       blockerRef?: BlockerRef;
+      appApprovalRef?: AskMeta["appApprovalRef"];
       sandboxApprovalRef?: AskMeta["sandboxApprovalRef"];
       recommended?: string;
       skipRouterBridge?: boolean;
@@ -162,6 +164,7 @@ export function createLedgerMessages(
       ...(extra?.recommended !== undefined ? { recommended: extra.recommended } : {}),
       ...(extra?.gateRef !== undefined ? { gateRef: extra.gateRef } : {}),
       ...(extra?.blockerRef !== undefined ? { blockerRef: extra.blockerRef } : {}),
+      ...(extra?.appApprovalRef !== undefined ? { appApprovalRef: extra.appApprovalRef } : {}),
       ...(extra?.sandboxApprovalRef !== undefined ? { sandboxApprovalRef: extra.sandboxApprovalRef } : {}),
       ...(extra?.fileArgs !== undefined && extra.fileArgs.files.length > 0 ? { files: [...extra.fileArgs.files] } : {}),
     };
@@ -185,7 +188,7 @@ export function createLedgerMessages(
     }
     const message = toMessage(row);
     p.changes.push({ type: "message.created", data: { message } });
-    if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined && extra?.sandboxApprovalRef === undefined) {
+    if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined && extra?.sandboxApprovalRef === undefined && extra?.appApprovalRef === undefined) {
       onIndependentAskCreated(p, session, message, askOptions);
     }
     return message;
@@ -196,10 +199,11 @@ export function createLedgerMessages(
     if (message === null || message.meta === null || typeof message.meta !== "object") return;
     const current = message.meta as unknown as Record<string, unknown>;
     if (current.needsUser !== true) return;
-    if (current.answered === true || current.closed === true || current.dismissed === true) return;
+    const revokeApp = current.answered === true && current.appApprovalRef !== undefined && settlement.by === "close";
+    if (!revokeApp && (current.answered === true || current.closed === true || current.dismissed === true)) return;
     const nextMeta =
       settlement.by === "close"
-        ? { ...current, answered: true, closed: true }
+        ? { ...current, answered: true, closed: true, ...(revokeApp ? { chosenOption: APP_APPROVAL_SETTLED_LABELS.revoked } : {}) }
         : {
             ...current,
             answered: true,

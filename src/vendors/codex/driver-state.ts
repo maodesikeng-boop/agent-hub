@@ -1,3 +1,5 @@
+import type { AppApprovalGate } from "../../shared/app-approval.ts";
+import type { CodexAppApprovalState } from "./app-approval.ts";
 import type {
   BaseBatch,
   BaseProc,
@@ -35,6 +37,7 @@ export interface Steer {
 type RpcPhase = "initialize" | "skills_extra_roots" | "thread_resume" | "thread_start" | "turn_start" | "turn_interrupt" | "turn_steer";
 
 export interface Proc extends BaseProc<StartupOutcome> {
+  appApprovals: { gate: AppApprovalGate; state: CodexAppApprovalState; computerUseServers: readonly string[] } | null;
   launchConfig: CodexLaunchConfig;
   defaultModel: string | null;
   readonly: boolean;

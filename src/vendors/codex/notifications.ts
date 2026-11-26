@@ -1,3 +1,4 @@
+import { onCodexServerRequestResolved } from "./app-approval.ts";
 import { randomUUID } from "node:crypto";
 import { codexChecklistFromPlanUpdated, codexItemStartedAt } from "./checklist.ts";
 import { positiveContextTokens, preservePositiveContext } from "../../daemon/driver/usage.ts";
@@ -35,6 +36,11 @@ export function onNotification(
   const params = asObject(rawParams) ?? {};
 
   switch (method) {
+    case "serverRequest/resolved":
+      if (proc.appApprovals !== null && proc.threadId !== null && params.threadId === proc.threadId) {
+        onCodexServerRequestResolved(proc.appApprovals.state, params);
+      }
+      return;
     case "thread/started": {
       const threadId = nonEmptyString(asObject(params.thread)?.id);
       if (threadId) {

@@ -15,6 +15,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 
 - [Worker write and read scope](write-scope.md): Write boundaries across protected roots and least-privilege data-directory read and socket isolation across macOS, Linux, and Windows.
 - [User-confirmed Worker mode without outer sandbox](worker-no-outer-sandbox-design.md): Computer Use eligibility checks, human-only single-run confirmation cards, vendor built-in sandbox declarations, and launch-time fail-closed enforcement.
+- [Computer Use app approval cards](computer-use-app-approval-design.md): Per-app workbench confirmation for Computer Use Workers, the vendor-neutral approval gate, Worker-run grants, and how cards end.
 - [External capabilities](pm-capabilities-design.md): Router, PM, and Worker policies for skills, MCP servers, and connectors, Worker `inherit`, `none`, and `custom` modes, vendor isolation levels, and the project setup command API.
 - [Read-only Worker design](readonly-worker-design.md): Vendor-neutral `ReadonlyPolicy`, OS-level read-only sandboxes, MCP `readOnlyHint` filtering, and credential deny lists.
 - [Linux sandbox design](linux-sandbox-design.md): Outer `bubblewrap` (`bwrap`) isolation, PID and mount namespaces, secret-glob scanning, signal routing, and Ubuntu 24.04+ AppArmor setup.

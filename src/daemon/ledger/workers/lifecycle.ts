@@ -31,6 +31,7 @@ export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts
   w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
   recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
   w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
+  w.appApprovals.store.revokeForWorkerIn(p, worker.id);
   const ended = workerRow(w, worker.id)!;
   w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
   stopQueued(w, p, ended);
@@ -202,6 +203,7 @@ export function endOpenWorkersIn(w: WorkersCtx, p: Pending, pmId: PmId): void {
     recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
     w.db.run("UPDATE agent_sessions SET status = 'ended', updated_at = ? WHERE id = ? AND status != 'ended'", t, session.id);
     w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
+    w.appApprovals.store.revokeForWorkerIn(p, worker.id);
     const ended = workerRow(w, worker.id)!;
     w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
     w.sessions.updateLive(p, session.id, idle);

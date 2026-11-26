@@ -1,3 +1,4 @@
+import { formatAppApprovalCardText } from "../../shared/app-approval.ts";
 import { z } from "zod";
 import { isDeviceId, type DeviceId } from "../../shared/api.ts";
 import { CONFIRM_CHECKPOINT_OPTIONS } from "../../shared/domain.ts";
@@ -267,6 +268,12 @@ function askCard(
   extra: Record<string, unknown>[],
   origin: FeishuRouterCardOrigin,
 ): FeishuCardJson {
+  const app = ask.appApprovalRef;
+  if (app !== undefined) {
+    const text = formatAppApprovalCardText({ ...app, workerTitle: app.workerTitle ?? "", warning: null }, "zh")
+      .replace(/[\\`*_{}[\]()<>|~]/g, "\\$&");
+    return renderTextCard({ title: "确认 Computer Use 应用", template: "orange", text: `${text}\n请在 Bellwood 工作台确认或拒绝。` });
+  }
   const base = askTitle(ask);
   const title = titled(base.title, origin.pmName);
   const { template } = base;
