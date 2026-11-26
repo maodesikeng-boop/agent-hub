@@ -30,12 +30,12 @@ import { Drawer, DrawerContent, DrawerTitle } from "../ui/drawer.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { RadioMark } from "./ChoiceRows.tsx";
-import { RowError } from "./SettingsList.tsx";
+import { INFO_ROW, RowError } from "./SettingsList.tsx";
 
 const AUTO_VALUE = "auto";
 
-const ROW_INTERACTIVE_CLASS =
-  "-mx-2.5 flex min-h-9 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-3 px-2.5 py-1.5 text-left transition-colors hover:bg-hover active:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] pointer-coarse:min-h-11";
+const ROW_INTERACTIVE_CLASS = cn(INFO_ROW, "h-7.5 gap-3 text-minor");
+const FIELD_ROW_CLASS = "flex h-7.5 items-center justify-between gap-3 pointer-coarse:min-h-11";
 
 interface RouterModelEffortFieldsProps {
   modelSelectId: string;
@@ -65,9 +65,9 @@ function RouterModelEffortFields({
   onEffortChange,
 }: RouterModelEffortFieldsProps) {
   return (
-    <CollapsibleContent className="grid gap-1 pt-1">
-      <div className="flex min-h-9 items-center justify-between gap-3 pointer-coarse:min-h-11">
-        <label htmlFor={modelSelectId} className="shrink-0 text-body text-foreground">
+    <CollapsibleContent className="grid">
+      <div className={FIELD_ROW_CLASS}>
+        <label htmlFor={modelSelectId} className="shrink-0 text-minor text-foreground">
           Model
         </label>
         <Select value={selectedChoice.model} onValueChange={onModelChange}>
@@ -89,8 +89,8 @@ function RouterModelEffortFields({
         </Select>
       </div>
       {showEffort && selectedChoice.effort !== null && (
-        <div className="flex min-h-9 items-center justify-between gap-3 pointer-coarse:min-h-11">
-          <label htmlFor={effortSelectId} className="shrink-0 text-body text-foreground">
+        <div className={FIELD_ROW_CLASS}>
+          <label htmlFor={effortSelectId} className="shrink-0 text-minor text-foreground">
             Effort
           </label>
           <Select value={selectedChoice.effort} onValueChange={onEffortChange}>
@@ -345,17 +345,17 @@ export const RouterModelPicker = memo(function RouterModelPicker({
     !selectedCatalog.models.some((m) => m.id === selectedChoice.model);
 
   const panelBody = (
-    <div className="grid grid-cols-1 gap-2">
+    <div className="info-list grid grid-cols-1">
       <RadioGroupPrimitive.Root
         aria-label="Router provider"
         value={selectedRadioValue}
         onValueChange={handleRadioChange}
-        className="grid grid-cols-1 gap-0.5"
+        className="info-sec grid grid-cols-1 gap-0.5 pt-0"
       >
         <RadioGroupPrimitive.Item value={AUTO_VALUE} className={ROW_INTERACTIVE_CLASS}>
-          <span className="shrink-0 text-body text-foreground">Auto</span>
+          <span className="shrink-0 text-foreground">Auto</span>
           {autoModelShort !== null && (
-            <span title={autoModelShort} className="ml-auto min-w-0 truncate text-minor text-muted-foreground">
+            <span title={autoModelShort} className="info-val ml-auto min-w-0 truncate tabular-nums">
               {autoModelShort}
             </span>
           )}
@@ -383,14 +383,14 @@ export const RouterModelPicker = memo(function RouterModelPicker({
               disabled={!selectable}
               className={cn(
                 ROW_INTERACTIVE_CLASS,
-                !selectable && "cursor-default hover:bg-transparent active:bg-transparent",
+                !selectable && "disabled:cursor-default disabled:opacity-100",
               )}
             >
-              <span className={cn("shrink-0 text-body", selectable ? "text-foreground" : "text-muted-foreground")}>
+              <span className={cn("shrink-0", selectable ? "text-foreground" : "text-muted-foreground")}>
                 {cat.label}
               </span>
               {secondary !== null && (
-                <span title={secondary} className="ml-auto min-w-0 truncate text-minor text-muted-foreground">
+                <span title={secondary} className="info-val ml-auto min-w-0 truncate tabular-nums">
                   {secondary}
                 </span>
               )}
@@ -408,22 +408,16 @@ export const RouterModelPicker = memo(function RouterModelPicker({
         selectedCatalog !== null &&
         selectedChoice !== null &&
         isSelectable(selectedCatalog.availability) && (
-          <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen} className="border-t border-border pt-2">
-            <CollapsibleTrigger
-              type="button"
-              className={cn(
-                ROW_INTERACTIVE_CLASS,
-                "justify-between text-minor font-medium text-muted-foreground hover:text-foreground",
-              )}
-            >
+          <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen} className="info-sec">
+            <CollapsibleTrigger type="button" className={cn(ROW_INTERACTIVE_CLASS, "justify-between text-foreground")}>
               <span>{showEffort ? "Model & effort" : "Model"}</span>
-              <span className="flex items-center gap-1.5 font-normal">
+              <span className="info-val flex items-center gap-1.5">
                 {!detailsOpen && showEffort && selectedChoice.effort !== null && (
                   <span>{effortLabel(selectedChoice.effort, selectedVendor, selectedCatalog)}</span>
                 )}
                 <ChevronDown
                   className={cn(
-                    "size-pixel-sm shrink-0 transition-transform motion-reduce:transition-none",
+                    "info-chevron size-3.5 shrink-0 transition-transform motion-reduce:transition-none",
                     detailsOpen && "rotate-180",
                   )}
                   aria-hidden="true"
@@ -449,7 +443,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
       {saveError !== null && <RowError error={saveError} />}
 
       {showAddProvider && (
-        <div className="border-t border-border pt-2">
+        <div className="info-sec pb-0">
           <button
             type="button"
             onClick={() => {
@@ -458,11 +452,11 @@ export const RouterModelPicker = memo(function RouterModelPicker({
             }}
             className={cn(
               ROW_INTERACTIVE_CLASS,
-              "justify-between text-minor font-medium text-brand-ink hover:text-foreground",
+              "justify-between font-medium text-foreground",
             )}
           >
             <span>{ADD_PROVIDER_LABEL}</span>
-            <ChevronRight className="size-pixel-sm shrink-0" aria-hidden="true" />
+            <ChevronRight className="info-chevron size-3.5 shrink-0" aria-hidden="true" />
           </button>
         </div>
       )}

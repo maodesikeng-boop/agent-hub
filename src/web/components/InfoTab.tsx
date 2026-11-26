@@ -44,7 +44,7 @@ import { ModeRows } from "./ModeRows.tsx";
 import { PmMemoryFilesGroup } from "./PmMemoryFilesGroup.tsx";
 import { WorktreeSetupGroup } from "./ProjectGroups.tsx";
 import { ScheduleGroup } from "./ScheduleGroup.tsx";
-import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { INFO_ROW, InfoAction, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { SlimePicker } from "./SlimePicker.tsx";
 
 export interface InfoTabProps {
@@ -146,18 +146,16 @@ function ArchiveStatusGroup({ pmId, archivedAt, disabled }: { pmId: number; arch
     }
   };
   return (
-    <div className="pt-4">
-      <SettingsGroup label="Archive status">
-        <SettingsRow label="Archived" detail={formatArchiveRemaining(archivedAt)} error={unarchiveError}>
-          {() => (
-            <Button disabled={disabled || unarchiving} onClick={() => void unarchive()}>
-              {unarchiving && <Loader2 aria-hidden="true" />}
-              {unarchiving ? "Restoring…" : "Restore"}
-            </Button>
-          )}
-        </SettingsRow>
-      </SettingsGroup>
-    </div>
+    <SettingsGroup label="Archive status">
+      <SettingsRow label="Archived" detail={formatArchiveRemaining(archivedAt)} error={unarchiveError}>
+        {() => (
+          <Button size="sm" disabled={disabled || unarchiving} onClick={() => void unarchive()}>
+            {unarchiving && <Loader2 aria-hidden="true" />}
+            {unarchiving ? "Restoring…" : "Restore"}
+          </Button>
+        )}
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
 
@@ -239,24 +237,24 @@ function InfoFooterActions({
 
       <Dialog open={confirmRenew} onOpenChange={setConfirmRenew}>
         <DialogContent title="Start a new session?" className="max-w-110">
-          <p>The project manager writes a handoff, then continues in a fresh session. Your chat history stays.</p>
+          <p className="text-minor">The project manager writes a handoff, then continues in a fresh session. Your chat history stays.</p>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
+              <Button variant="ghost" size="sm">Cancel</Button>
             </DialogClose>
-            <Button onClick={() => void doRenew()}>New session</Button>
+            <Button size="sm" onClick={() => void doRenew()}>New session</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={confirmArchive} onOpenChange={setConfirmArchive}>
         <DialogContent title="Archive project manager?" className="max-w-110">
-          <p>Archiving stops the current session, ends unfinished Workers and pauses schedules. You can restore it within 7 days. After that, its chat and internal data are deleted for good. Your project folder stays untouched.</p>
+          <p className="text-minor">Archiving stops the current session, ends unfinished Workers and pauses schedules. You can restore it within 7 days. After that, its chat and internal data are deleted for good. Your project folder stays untouched.</p>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
+              <Button variant="ghost" size="sm">Cancel</Button>
             </DialogClose>
-            <Button variant="destructive" onClick={() => void doArchive()}>
+            <Button variant="destructive" size="sm" onClick={() => void doArchive()}>
               Archive
             </Button>
           </DialogFooter>
@@ -345,31 +343,31 @@ function ChangeRow({
   const { actor, summary, timestamp } = formatChangeSummary(change, catalog);
   const textChanged = change.textBefore !== change.textAfter;
   return (
-    <li className="px-4 py-3">
+    <li className="py-1.5">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <div className="text-body break-words">
+          <div className="text-minor break-words">
             <span className="font-medium">{actor}</span> {summary}
             {change.reason && <span>: {change.reason}</span>}
           </div>
           <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">{timestamp}</div>
         </div>
         {revertable && (
-          <Button variant="ghost" size="sm" className="shrink-0" disabled={busy} onClick={onRevert}>
+          <InfoAction className="shrink-0" disabled={busy} onClick={onRevert}>
             Undo
-          </Button>
+          </InfoAction>
         )}
       </div>
       {textChanged && (
         <Collapsible open={open} onOpenChange={setOpen}>
-          <CollapsibleTrigger className="group mt-1.5 flex cursor-pointer items-center gap-1 text-minor text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus">
-            <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
+          <CollapsibleTrigger className="info-action group mt-1">
+            <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
             View changes
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2 grid grid-cols-1 gap-2">
             {(["Before", "After"] as const).map((label) => (
               <div key={label} className="min-w-0">
-                <div className="mb-1 text-minor font-medium text-muted-foreground">{label}</div>
+                <div className="info-heading">{label}</div>
                 <pre className="min-h-10 max-h-60 overflow-auto rounded-sm bg-panel p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {label === "Before" ? change.textBefore : change.textAfter}
                 </pre>
@@ -412,20 +410,16 @@ function PersonaEditor({ persona, readOnly }: { persona: ReturnType<typeof usePe
         rows={1}
         disabled={readOnly}
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0 focus:shadow-none",
-          text === "" ? "text-body" : "font-mono text-minor",
+          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-0 py-1.5 placeholder:font-sans placeholder:text-minor field-sizing-content focus:border-0 focus:shadow-none",
+          text === "" ? "text-minor" : "font-mono text-minor",
         )}
         value={text}
         onChange={(e) => {
           if (!readOnly) setDraftText(e.target.value);
         }}
       />
-      {hint !== null && !tooLong && <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{hint}</p>}
-      {(tooLong || textError) && (
-        <div className="px-4 py-2.5">
-          {tooLong ? <RowError>Persona is too long</RowError> : textError !== undefined && <RowError error={textError} />}
-        </div>
-      )}
+      {hint !== null && !tooLong && <p className="pb-1 text-xs text-muted-foreground tabular-nums">{hint}</p>}
+      {tooLong ? <RowError>Persona is too long</RowError> : textError !== undefined && <RowError error={textError} />}
     </SettingsGroup>
   );
 }
@@ -434,20 +428,20 @@ function FoldersPage({ folders }: { folders: ProjectFolder[] }) {
   return (
     <SettingsGroup label="Folders">
       {folders.length === 0 ? (
-        <p className="px-4 py-3 text-body text-muted-foreground">No folders</p>
+        <p className="py-6 text-center text-minor text-muted-foreground">No folders</p>
       ) : (
-        <ul className="divide-y divide-border">
+        <ul>
           {folders.map((f) => (
-            <li key={f.id} title={f.path} className="min-w-0 px-4 py-3">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-body text-foreground" title={folderBaseName(f.path)}>
-                  {folderBaseName(f.path)}
+            <li key={f.id} title={f.path} className={cn(INFO_ROW, "h-7.5 gap-4 text-minor")}>
+              <span className="min-w-0 shrink-0 truncate text-foreground" title={folderBaseName(f.path)}>
+                {folderBaseName(f.path)}
+              </span>
+              <span className="info-val ml-auto flex min-w-0 items-center gap-3 tabular-nums">
+                <span className="min-w-0 truncate" title={f.path}>
+                  {shortPath(f.path)}
                 </span>
-                {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">Main folder</span>}
-              </div>
-              <div className="mt-0.5 truncate text-minor text-muted-foreground" title={f.path}>
-                {shortPath(f.path)}
-              </div>
+                {f.isMain && <span className="shrink-0">Main folder</span>}
+              </span>
             </li>
           ))}
         </ul>
@@ -497,9 +491,9 @@ function InfoDetailPage({
           {...(onManageProviders !== undefined ? { onManageProviders } : {})}
         />
         {agent.edited && (
-          <div className="px-4 py-3">
+          <div className="py-2">
             {agent.error && <RowError error={agent.error} />}
-            <div className={agent.error ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
+            <div className="flex items-center justify-end gap-2">
               <Button type="button" variant="ghost" size="sm" disabled={agent.saving} onClick={agent.cancel}>
                 Cancel
               </Button>
@@ -518,11 +512,7 @@ function InfoDetailPage({
     return (
       <SettingsGroup label="Mode">
         <ModeRows label="Mode" value={mode} disabled={locked} onChange={(m) => modeSave.save(m, m === persona.mode ? {} : { mode: m })} />
-        {modeSave.error && (
-          <div className="px-4 py-2.5">
-            <RowError error={modeSave.error} />
-          </div>
-        )}
+        {modeSave.error && <RowError error={modeSave.error} />}
       </SettingsGroup>
     );
   }
@@ -545,15 +535,11 @@ function InfoDetailPage({
   }
   return (
     <SettingsGroup label="History">
-      {text.revertError && (
-        <div className="px-4 py-2.5">
-          <RowError error={text.revertError} />
-        </div>
-      )}
+      {text.revertError && <RowError error={text.revertError} />}
       {persona.changes.length === 0 ? (
-        <p className="px-4 py-3 text-body text-muted-foreground">No changes yet</p>
+        <p className="py-6 text-center text-minor text-muted-foreground">No changes yet</p>
       ) : (
-        <ul aria-label="History" className="divide-y divide-border">
+        <ul aria-label="History">
           {persona.changes.map((change) => (
             <ChangeRow
               key={change.id}
@@ -600,7 +586,7 @@ export function InfoTab({
   if (activePage !== null) {
     return (
       <div className="right-rail-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-5 py-4 [contain:layout_style]">
-        <div className="mx-auto grid max-w-160 grid-cols-1 gap-4">
+        <div className="info-list mx-auto grid max-w-160 grid-cols-1">
           {load.phase === "loading" && (
             <div className="flex items-center justify-center gap-2 py-8 text-minor text-muted-foreground">
               <Loader2 className="size-pixel" aria-hidden="true" />
@@ -612,9 +598,7 @@ export function InfoTab({
               <p role="alert" className="text-minor text-danger">
                 {errorLine(load.info)}
               </p>
-              <Button variant="outline" size="sm" onClick={retry}>
-                Retry
-              </Button>
+              <InfoAction onClick={retry}>Retry</InfoAction>
             </div>
           )}
           {load.phase === "ready" && (
@@ -677,9 +661,7 @@ export function InfoTab({
           <p role="alert" className="text-minor text-danger">
             {errorLine(load.info)}
           </p>
-          <Button variant="outline" size="sm" onClick={retry}>
-            Retry
-          </Button>
+          <InfoAction onClick={retry}>Retry</InfoAction>
         </div>
       )}
 

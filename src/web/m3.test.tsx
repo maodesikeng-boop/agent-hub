@@ -748,7 +748,7 @@ describe("最左栏的额度", () => {
       const gate = deferred<{ status: number; body: unknown }>();
       api.quota = () => gate.promise;
       await user.click(badge());
-      expect(await screen.findByText("Loading…")).toHaveClass("text-xs", "text-muted-foreground");
+      expect(await screen.findByText("Loading…")).toHaveClass("text-minor", "text-muted-foreground");
       gate.resolve({ status: 200, body: reply });
       expect(await screen.findByRole("group", { name: "Gemini" })).toBeInTheDocument();
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();

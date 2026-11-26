@@ -217,14 +217,14 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
             }}
           >
             <DialogContent title="Cancel this task graph?" className="max-w-110">
-              <p>Unfinished steps in “{graph.title}” won't run. The project manager is told to wrap up any Workers still working. This can't be undone.</p>
+              <p className="text-minor">Unfinished steps in “{graph.title}” won't run. The project manager is told to wrap up any Workers still working. This can't be undone.</p>
               <DialogFooter>
                 <DialogClose asChild>
-                  <Button variant="outline" disabled={cancelMutation.isPending}>
+                  <Button variant="ghost" size="sm" disabled={cancelMutation.isPending}>
                     Keep going
                   </Button>
                 </DialogClose>
-                <Button variant="destructive" disabled={cancelMutation.isPending} onClick={() => runExclusive(() => cancelMutation.mutate())}>
+                <Button variant="destructive" size="sm" disabled={cancelMutation.isPending} onClick={() => runExclusive(() => cancelMutation.mutate())}>
                   {cancelMutation.isPending && <Loader2 aria-hidden="true" />}
                   Cancel graph
                 </Button>

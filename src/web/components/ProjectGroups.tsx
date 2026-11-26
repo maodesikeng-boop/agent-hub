@@ -8,7 +8,7 @@ import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Loader2 } from "../ui/icons.ts";
 import { Textarea } from "../ui/input.tsx";
-import { RowError, SettingsGroup } from "./SettingsList.tsx";
+import { InfoAction, RowError, SettingsGroup } from "./SettingsList.tsx";
 
 function setupCommandProblem(text: string): string | null {
   if (text.includes("\0")) return "Setup command can't contain NUL characters";
@@ -85,9 +85,7 @@ function SetupActions({ setup }: { setup: ReturnType<typeof useSetupCommandEdito
   }
   if (setup.saved === null) return null;
   return (
-    <Button size="sm" variant="ghost" className="-mr-3" onClick={setup.clear}>
-      Clear
-    </Button>
+    <InfoAction onClick={setup.clear}>Clear</InfoAction>
   );
 }
 
@@ -106,17 +104,13 @@ export function WorktreeSetupGroup({ project, readOnly, titled = true }: { proje
         autoCorrect="off"
         aria-invalid={setup.problem !== null || undefined}
         className={cn(
-          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus:border-0 focus:shadow-none",
-          setup.text === "" ? "text-body" : "font-mono text-minor",
+          "block max-h-[60vh] min-h-0 resize-none border-0 bg-transparent px-0 py-1.5 placeholder:font-sans placeholder:text-minor field-sizing-content focus:border-0 focus:shadow-none",
+          setup.text === "" ? "text-minor" : "font-mono text-minor",
         )}
         value={setup.text}
         onChange={(e) => setup.edit(e.target.value)}
       />
-      {problem !== null && (
-        <div className="px-4 py-2.5">
-          <RowError error={problem} />
-        </div>
-      )}
+      {problem !== null && <RowError error={problem} />}
     </SettingsGroup>
   );
 }

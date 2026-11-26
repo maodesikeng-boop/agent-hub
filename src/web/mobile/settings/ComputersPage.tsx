@@ -27,7 +27,6 @@ function DeviceDetail({ device }: { device: DeviceView }) {
 function DeviceNavRow({ device, onClick }: { device: DeviceView; onClick: () => void }) {
   return (
     <SettingsNavRow
-      className="min-h-14"
       icon={<PlatformIcon platform={device.info.platform} />}
       label={device.info.name}
       detail={<DeviceDetail device={device} />}
@@ -124,7 +123,7 @@ export function ComputersPage({ devices: settings, account, rename }: { devices:
       </SettingsGroup>
       <SettingsGroup title="Your computers">
         {others.length === 0 ? (
-          <p className="px-4 py-3 text-body text-muted-foreground">No other computers</p>
+          <p className="py-3 text-center text-minor text-muted-foreground">No other computers</p>
         ) : (
           others.map((device) => <DeviceNavRow key={device.key} device={device} onClick={() => manage.show(device)} />)
         )}

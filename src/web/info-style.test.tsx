@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serverInfoFor, type BrowserSessionInfo, type HeldResourceItem, type ResourcesSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
@@ -254,5 +255,13 @@ describe("T9 phone settings rows", () => {
     const row = screen.getByRole("button", { name: /Notifications/ });
     expect(row).toHaveClass("info-row", "pointer-coarse:min-h-11");
     expect(row).not.toHaveClass("min-h-12", "py-3");
+  });
+});
+
+describe("group lines inside portal outlets", () => {
+  it("hides only the line under the list's last group, not under the last group of a non-final wrapper", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).not.toMatch(/\.info-list \.info-sec:last-child/);
+    expect(css).toMatch(/\.info-list > \.info-sec:last-child,\s*\.info-list > :last-child \.info-sec:last-child\s*\{[^}]*border-bottom-color:\s*transparent/);
   });
 });

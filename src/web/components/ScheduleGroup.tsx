@@ -16,7 +16,8 @@ import { Button } from "../ui/button.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Switch } from "../ui/switch.tsx";
-import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { cn } from "../lib/utils.ts";
+import { INFO_ROW, InfoAction, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 function ScheduleItem({ schedule, disabled }: { schedule: ScheduleRecord; disabled: boolean }) {
   const client = useClient();
@@ -55,18 +56,20 @@ function ScheduleItem({ schedule, disabled }: { schedule: ScheduleRecord; disabl
       {(id) =>
         confirming ? (
           <>
-            <Button variant="outline" size="sm" disabled={locked} onClick={() => setConfirming(false)}>
-              Cancel
-            </Button>
-            <Button size="sm" disabled={locked} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
-              {busy && <Loader2 aria-hidden="true" />}
-              Delete
-            </Button>
+            <span className="info-actions">
+              <InfoAction disabled={locked} onClick={() => setConfirming(false)}>
+                Cancel
+              </InfoAction>
+              <InfoAction danger disabled={locked} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
+                {busy && <Loader2 className="size-3.5" aria-hidden="true" />}
+                Delete
+              </InfoAction>
+            </span>
           </>
         ) : (
           <>
             <Switch id={id} aria-label={`${schedule.name} enabled`} checked={schedule.enabled} disabled={locked} onCheckedChange={(on) => void run(() => client.putScheduleEnabled(schedule.id, on))} />
-            <Button variant="ghost" size="icon-sm" aria-label={`Delete ${schedule.name}`} disabled={locked} onClick={() => setConfirming(true)}>
+            <Button variant="ghost" size="icon-sm" className="size-6 [&_svg]:size-3.5" aria-label={`Delete ${schedule.name}`} disabled={locked} onClick={() => setConfirming(true)}>
               <Trash2 aria-hidden="true" />
             </Button>
           </>
@@ -119,13 +122,13 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
   return (
     <>
       <SettingsRow label="Name" error={nameProblem}>
-        {(id) => <Input id={id} className="w-60" autoComplete="off" value={name} aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />}
+        {(id) => <Input id={id} className="h-7.5 w-60 text-minor" autoComplete="off" value={name} aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />}
       </SettingsRow>
       <SettingsRow label="Repeat" error={freqProblem}>
         {(id) => (
           <>
             <Select value={kind} onValueChange={(next) => setKind(next as "daily" | "interval")}>
-              <SelectTrigger id={id} aria-label="Repeat" className="w-auto">
+              <SelectTrigger id={id} aria-label="Repeat" variant="plain">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -134,12 +137,12 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
               </SelectContent>
             </Select>
             {kind === "daily" ? (
-              <Input aria-label="Time" className="w-24 tabular-nums" placeholder="09:00" value={time} aria-invalid={freqProblem !== null} onChange={(e) => setTime(e.target.value)} />
+              <Input aria-label="Time" className="h-7.5 w-20 text-minor tabular-nums" placeholder="09:00" value={time} aria-invalid={freqProblem !== null} onChange={(e) => setTime(e.target.value)} />
             ) : (
               <>
-                <Input aria-label="Interval" inputMode="numeric" className="w-20 tabular-nums" value={every} aria-invalid={freqProblem !== null} onChange={(e) => setEvery(e.target.value)} />
+                <Input aria-label="Interval" inputMode="numeric" className="h-7.5 w-16 text-minor tabular-nums" value={every} aria-invalid={freqProblem !== null} onChange={(e) => setEvery(e.target.value)} />
                 <Select value={unit} onValueChange={(next) => setUnit(next as Unit)}>
-                  <SelectTrigger aria-label="Unit" className="w-auto">
+                  <SelectTrigger aria-label="Unit" variant="plain">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -157,24 +160,20 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
           aria-label="Task"
           placeholder="Task"
           rows={3}
-          className="block max-h-[40vh] min-h-24 resize-none border-0 bg-transparent px-4 py-3 field-sizing-content focus-visible:outline-none"
+          className="block max-h-[40vh] min-h-20 resize-none border-0 bg-transparent px-0 py-1.5 text-minor placeholder:text-minor field-sizing-content focus-visible:outline-none"
           value={prompt}
           aria-invalid={promptProblem !== null}
           onChange={(e) => setPrompt(e.target.value)}
         />
-        {promptProblem && (
-          <div className="px-4 pb-3">
-            <RowError>{promptProblem}</RowError>
-          </div>
-        )}
+        {promptProblem && <RowError>{promptProblem}</RowError>}
       </div>
-      <div className="px-4 py-3">
+      <div className="py-2">
         {error && <RowError error={error} />}
-        <div className={error ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
-          <Button variant="ghost" disabled={busy} onClick={onClose}>
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" disabled={busy} onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!canSave} onClick={() => void save()}>
+          <Button size="sm" disabled={!canSave} onClick={() => void save()}>
             {busy && <Loader2 aria-hidden="true" />}
             Save
           </Button>
@@ -198,12 +197,12 @@ export function ScheduleGroup({ pmId, schedules, disabled = false }: { pmId: num
         <button
           type="button"
           disabled={disabled || full}
-          className="flex min-h-13 w-full cursor-pointer items-center gap-2 rounded-none px-4 py-2 text-left text-body transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
+          className={cn(INFO_ROW, "h-7.5 text-minor")}
           onClick={() => setAdding(true)}
         >
-          <Plus className="size-pixel text-muted-foreground" aria-hidden="true" />
-          <span className={disabled || full ? "text-muted-foreground" : undefined}>New</span>
-          {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`${MAX_SCHEDULES_PER_PM} max`}</span>}
+          <Plus className="info-chevron size-3.5" aria-hidden="true" />
+          <span className="flex-1 text-foreground">New</span>
+          {full && <span className="info-val text-minor tabular-nums">{`${MAX_SCHEDULES_PER_PM} max`}</span>}
         </button>
       )}
     </SettingsGroup>
