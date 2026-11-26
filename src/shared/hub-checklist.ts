@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { clipChecklistTitle, type ChecklistItem, type ChecklistItemPatch, type ChecklistUpdate } from "./checklist.ts";
-import { CHECKLIST_MAX_ITEMS, CHECKLIST_TITLE_MAX_CHARS } from "./limits.ts";
+import { HUB_LIMITS, checkHubLimit, formatHubLimitViolations } from "./hub-limits.ts";
 import { HUB_COMMAND } from "./names.ts";
 
 const positionKinds = z.enum(["start", "done", "cancel"]);
@@ -8,7 +8,7 @@ export const hubChecklistRequestSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("set"),
     // JavaScript strings use two code units for characters outside the BMP.
-    titles: z.array(z.string().trim().min(1).max(2 * CHECKLIST_TITLE_MAX_CHARS)).min(1).max(CHECKLIST_MAX_ITEMS),
+    titles: z.array(z.string().trim().min(1).max(2 * HUB_LIMITS["checklist.title"].max)).min(1).max(HUB_LIMITS["checklist.items"].max),
   }),
   z.strictObject({ kind: positionKinds, position: z.int().positive() }),
 ]);
@@ -40,7 +40,8 @@ function invalid(reason: string): ChecklistError {
 export function parseHubChecklistArgs(argv: readonly string[]): HubChecklistParse {
   const [kind, ...args] = argv;
   if (kind === "set") {
-    if (args.length > CHECKLIST_MAX_ITEMS) return invalid(`进度清单最多有 ${CHECKLIST_MAX_ITEMS} 项`);
+    const violation = checkHubLimit("checklist.items", args);
+    if (violation !== null) return invalid(formatHubLimitViolations([violation]));
     const titles = args.map(clipChecklistTitle).filter(Boolean);
     if (titles.length === 0) return invalid("至少写一项进度");
     return { ok: true, request: { kind, titles } };

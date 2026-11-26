@@ -21,7 +21,7 @@ import type { HubFileArg } from "./deliverables.ts";
 import type { HubChecklistRequest } from "./hub-checklist.ts";
 import type { WorkerCapabilityMode } from "./pm-capabilities.ts";
 import type { RouterItem, RouterReportLink } from "./router.ts";
-import { TEXT_LIMITS } from "./text-limits.ts";
+import { hubLimitMaximum } from "./hub-limits.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { AskDetail, PendingAsk } from "./pending-asks.ts";
 import type { ScheduleId, ScheduleRecord, ScheduleRunSummary } from "./schedule.ts";
@@ -319,7 +319,7 @@ export const ASK_CARD_WHERE = "卡片显示在对话里，用户直接在卡上�
 export const ASK_CARD_TELL_USER = "跟用户说“卡在上面，直接点选”，别让用户去右栏找";
 
 const EXAMPLE_REVIEW_VENDOR = AGENT_VENDORS.find((vendor) => vendor !== DEFAULT_AGENT_VENDOR) ?? DEFAULT_AGENT_VENDOR;
-const EXAMPLE_BRIEF = `…（最多 ${TEXT_LIMITS["step.brief"].maxChars} 字）`;
+const EXAMPLE_BRIEF = `…（最多 ${hubLimitMaximum("step.brief")}）`;
 export const TASK_GRAPH_CREATE_JSON_HINT =
   `{"title":"…","goal":"…","steps":[{"key":"impl","title":"…","brief":"${EXAMPLE_BRIEF}"},{"key":"review","title":"…","brief":"${EXAMPLE_BRIEF}","review":true,"vendor":"${EXAMPLE_REVIEW_VENDOR}"}]}`;
 

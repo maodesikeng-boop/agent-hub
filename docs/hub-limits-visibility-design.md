@@ -50,7 +50,7 @@ Nothing is posted. The PM moves the background into `plan.md`, reruns with `--fi
 
 Why Option 1: it is the rule every other `hub` field already follows (`router report`, `graph create` briefs, `graph decide` notes), it fixes the problem where the bad state starts, and it needs no migration, snapshot growth, or UI change. 
 
-**D2. Sequencing with PR #471 (Project Manager).** PR #471 is open and adds `src/shared/text-limits.ts` with 13 character limits for Task Graph fields. This plan generalizes that table to bytes and counts for every `hub` command. Two tables must not coexist. Recommended: merge #471 first, rebase this branch, then the first implementation step folds `TEXT_LIMITS` into `HUB_LIMITS` (same ids, same message wording) and deletes `text-limits.ts`.
+**D2. Sequencing with PR #471 (Project Manager).** PR #471 merged before implementation. This branch merged the updated main branch, moved the Task Graph rules into `HUB_LIMITS`, and deleted `text-limits.ts`. The Task Graph manual renders the same text.
 
 ### Settled by this plan
 
@@ -204,7 +204,7 @@ Checked against `.agents/skills/architect/references/design-red-flags.md`:
 
 ## 4. Performance and bounds
 
-No cache, snapshot, or growing collection is added. `HUB_LIMITS` is a frozen table of about 45 rules built once at module load. Help output grows by about one line per command (about 3 KB for the full `hub help`), printed only on request.
+No cache, snapshot, or growing collection is added. `HUB_LIMITS` is a fixed table built once at module load. Help output grows by one line per command with limits.
 
 New constants in `src/shared/limits.ts`, splitting one name with two meanings:
 

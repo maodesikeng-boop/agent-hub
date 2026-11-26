@@ -19,7 +19,7 @@ import {
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMAND_MAX_CHARS,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
-  ROUTER_CONTEXT_MAX_CHARS,
+  ROUTER_REPORT_SUMMARY_MAX_CHARS,
   ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
   ROUTER_REPLY_MAX_CHARS,
   ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
@@ -219,7 +219,7 @@ function seedMonth(options: { full?: boolean; deliverables?: boolean | "worst"; 
         `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, summary, links_json, created_at, updated_at)
          VALUES (?, ?, ?, 'report', ?, ?, ?, ?, ?)`,
         pm.id, projectId, conversation.id, r > FULL_BRIEFINGS - 60 ? "unread" : "archived",
-        `${r}`.padEnd(ROUTER_CONTEXT_MAX_CHARS, "报"), fullLinks(r), at, at++,
+        `${r}`.padEnd(ROUTER_REPORT_SUMMARY_MAX_CHARS, "报"), fullLinks(r), at, at++,
       );
     }
   }

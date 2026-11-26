@@ -366,11 +366,11 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     expect(start().text).toContain("Worker 是从最后一次提交开始的，看不到这些改动");
   });
 
-  it("标题去首尾空白，超长截断，不报错", () => {
+  it("trims a Worker title at the limit and rejects an overlong title", () => {
     repos.add(main);
-    const worker = start({ title: `  ${"长".repeat(MAX_WORKER_TITLE_CHARS + 20)}  ` }).data.worker;
-    expect([...worker.title]).toHaveLength(MAX_WORKER_TITLE_CHARS);
-    expect(worker.title.endsWith("…")).toBe(true);
+    const title = "长".repeat(MAX_WORKER_TITLE_CHARS);
+    expect(() => start({ title: `  ${title}长  ` })).toThrow(`Worker 标题有 ${MAX_WORKER_TITLE_CHARS + 1} 字，上限 ${MAX_WORKER_TITLE_CHARS} 字`);
+    expect(start({ title: `  ${title}  ` }).data.worker.title).toBe(title);
   });
 });
 

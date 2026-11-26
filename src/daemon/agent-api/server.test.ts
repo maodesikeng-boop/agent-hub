@@ -783,7 +783,7 @@ describe("agent api over inject", () => {
       expect(await message("persona.edit", {})).toBe("参数不对：缺 text 或 mode");
       expect(await message("status", [])).toBe("参数不对：请求体必须是对象（JSON）");
       expect(await message("project.create", { name: "n".repeat(MAX_NAME_CHARS + 1), folder: "/x" })).toBe(
-        `参数不对：name 不能超过 ${MAX_NAME_CHARS} 个字`,
+        `项目名有 ${MAX_NAME_CHARS + 1} 字，上限 ${MAX_NAME_CHARS} 字`,
       );
     });
 
@@ -848,7 +848,7 @@ describe("agent api over inject", () => {
       const payload = `${JSON.stringify({ mode: "hands_on" })}${" ".repeat(HUB_MAX_BODY_BYTES)}`;
       const res = await call("persona.edit", payload, tokenA, { "content-type": "application/json" });
       await expectInvalid(res);
-      expect(res.json().message).toContain(`请求体不能超过 ${HUB_MAX_BODY_BYTES} 字节`);
+      expect(res.json().message).toContain(`请求体上限 ${HUB_MAX_BODY_BYTES / 1024} KB`);
       // 同样的请求体不补空白就能过
       expect((await call("persona.edit", { mode: "hands_on" })).statusCode).toBe(200);
     });
@@ -911,8 +911,9 @@ describe("agent api over inject", () => {
       expect(ledger.calls).toHaveLength(3);
     });
 
-    it("hub worker：标题太长不拒（账本截断），任务说明可以多行", async () => {
-      const title = "长".repeat(MAX_WORKER_TITLE_CHARS + 10);
+    it("rejects an over-limit Worker title and accepts a multiline task", async () => {
+      await expectInvalid(await call("worker.start", { title: "长".repeat(MAX_WORKER_TITLE_CHARS + 1), task: "x" }));
+      const title = "长".repeat(MAX_WORKER_TITLE_CHARS);
       expect((await call("worker.start", { title, task: "第一行\n\t第二行" })).statusCode).toBe(200);
       expect(ledger.calls.at(-1)).toEqual({ sessionId: 11, command: "worker.start", args: { title, task: "第一行\n\t第二行" } });
     });

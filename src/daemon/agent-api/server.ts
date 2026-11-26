@@ -2,30 +2,15 @@ import { dirname, resolve } from "node:path";
 import { Readable } from "node:stream";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
-  ASK_MAX_OPTION_CHARS,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   HUB_COMMANDS,
   HUB_ERROR_HTTP_STATUS,
-  HUB_MAX_BODY_BYTES,
   HUB_REQUEST_TIMEOUT_MS,
   HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
-  MAX_DECISION_CHOICE_CHARS,
-  MAX_DECISION_NOTE_CHARS,
-  MAX_DESCRIPTION_CHARS,
-  MAX_GRAPH_SPEC_BYTES,
-  MAX_GRAPH_TITLE_CHARS,
   MAX_NAME_CHARS,
-  MAX_NODE_ARTIFACT_SUMMARY_CHARS,
-  MAX_NODE_KEY_CHARS,
-  MAX_PATH_BYTES,
-  MAX_PERSONA_BYTES,
-  MAX_SETUP_COMMAND_BYTES,
   MAX_MODEL_CHARS,
-  MAX_REASON_CHARS,
-  MAX_TASK_BYTES,
-  DELIVERABLE_LABEL_MAX_CHARS,
   PM_MODES,
   ROUTER_DISPATCH_AGENT_PATH,
   SELF_RELOAD_AGENT_PATH,
@@ -43,6 +28,7 @@ import {
   type SessionId,
   type SessionTokens,
 } from "../../shared/index.ts";
+import { HUB_LIMITS, checkHubLimit, formatHubLimitViolations, hubLimitMaximum, splitAskCardText, type HubLimitId } from "../../shared/hub-limits.ts";
 import { API_ERRORS } from "../../shared/errors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { runHubSafely } from "../../hub/cli.ts";
@@ -54,7 +40,7 @@ import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { QuotaResponse, SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
-import { HUB_FILE_ARGS_MAX, HUB_MODELS_QUOTA_WAIT_MS, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
+import { HUB_MODELS_QUOTA_WAIT_MS, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
 import { mergeVendorQuota, type ObservedQuotaStore } from "../quota/observed-quota.ts";
 import { AGENT_VENDORS, isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
@@ -102,14 +88,13 @@ export interface AgentApiOptions {
 
 const BEARER = /^Bearer ([A-Za-z0-9_-]+)$/;
 
-const nameField = { type: "string", minLength: 1, maxLength: MAX_NAME_CHARS };
-/** ajv maxLength counts characters, so byte limits are checked separately. */
-const pathField = { type: "string", minLength: 1, maxLength: MAX_PATH_BYTES };
+const nameField = { type: "string", minLength: 1 };
+const pathField = { type: "string", minLength: 1 };
 const noArgs = { type: "object", additionalProperties: false, properties: {} };
 
 const folderOnly = { type: "object", additionalProperties: false, required: ["folder"], properties: { folder: pathField } };
 const workerIdField = { type: "integer", minimum: 1 };
-const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
+const taskField = { type: "string", minLength: 1 };
 const fileArgsField = {
   type: "array",
   items: {
@@ -117,7 +102,7 @@ const fileArgsField = {
     additionalProperties: false,
     required: ["label", "path"],
     properties: {
-      label: { type: ["string", "null"], maxLength: DELIVERABLE_LABEL_MAX_CHARS * 4 },
+      label: { type: ["string", "null"] },
       path: pathField,
     },
   },
@@ -132,7 +117,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     type: "object",
     additionalProperties: false,
     required: ["folder"],
-    properties: { folder: pathField, name: nameField, description: { type: "string", maxLength: MAX_DESCRIPTION_CHARS } },
+    properties: { folder: pathField, name: nameField, description: { type: "string" } },
   },
   "project.attach": folderOnly,
   "project.detach": folderOnly,
@@ -140,7 +125,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     type: "object",
     additionalProperties: false,
     required: ["command"],
-    properties: { command: { type: ["string", "null"], maxLength: MAX_SETUP_COMMAND_BYTES } },
+    properties: { command: { type: ["string", "null"] } },
   },
   "persona.show": noArgs,
   "persona.edit": {
@@ -148,9 +133,9 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     anyOf: [{ required: ["text"] }, { required: ["mode"] }],
     properties: {
-      text: { type: "string", maxLength: MAX_PERSONA_BYTES },
+      text: { type: "string" },
       mode: { type: "string", enum: [...PM_MODES] },
-      reason: { type: "string", maxLength: MAX_REASON_CHARS },
+      reason: { type: "string" },
     },
   },
   "worker.start": {
@@ -161,15 +146,15 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       title: { type: "string", minLength: 1 },
       task: taskField,
       vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
-      model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
+      model: { type: "string", minLength: 1 },
       effort: { type: ["string", "null"], minLength: 1, maxLength: MAX_MODEL_CHARS },
       maxTimeMs: { type: "integer" },
       readonly: { type: "boolean" },
       caps: { type: "string", enum: [...WORKER_CAPABILITY_MODES] },
-      allow: { type: "array", items: { type: "string", minLength: 1, maxLength: 512 } },
+      allow: { type: "array", items: { type: "string", minLength: 1 } },
       noOuterSandbox: { type: "boolean" },
       noWorktree: { type: "boolean" },
-      node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      node: { type: "string", minLength: 1 },
       graphId: workerIdField,
     },
   },
@@ -222,8 +207,8 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     properties: {
       text: taskField,
       options: { type: "array", items: { type: "string" } },
-      recommended: { type: "string", minLength: 1, maxLength: ASK_MAX_OPTION_CHARS * 4 },
-      node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      recommended: { type: "string", minLength: 1 },
+      node: { type: "string", minLength: 1 },
       graphId: workerIdField,
       replaceItemId: workerIdField,
       files: fileArgsField,
@@ -263,7 +248,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["summary"],
     properties: {
-      summary: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
+      summary: { type: "string", minLength: 1 },
       links: {
         type: "array",
         items: {
@@ -284,8 +269,8 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["specJson"],
     properties: {
-      title: { type: "string", maxLength: MAX_GRAPH_TITLE_CHARS * 2 },
-      specJson: { type: "string", minLength: 1, maxLength: MAX_GRAPH_SPEC_BYTES },
+      title: { type: "string" },
+      specJson: { type: "string", minLength: 1 },
     },
   },
   "graph.show": {
@@ -307,7 +292,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     required: ["specJson"],
     properties: {
       graphId: workerIdField,
-      specJson: { type: "string", minLength: 1, maxLength: MAX_GRAPH_SPEC_BYTES },
+      specJson: { type: "string", minLength: 1 },
     },
   },
   "graph.done": {
@@ -315,12 +300,12 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["nodeKey"],
     properties: {
-      nodeKey: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      nodeKey: { type: "string", minLength: 1 },
       graphId: workerIdField,
       prUrl: { type: "string" },
       commit: { type: "string" },
       branch: { type: "string" },
-      summary: { type: "string", maxLength: MAX_NODE_ARTIFACT_SUMMARY_CHARS * 4 },
+      summary: { type: "string" },
       note: taskField,
     },
   },
@@ -329,10 +314,10 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["nodeKey", "choice"],
     properties: {
-      nodeKey: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      nodeKey: { type: "string", minLength: 1 },
       graphId: workerIdField,
-      choice: { type: "string", minLength: 1, maxLength: MAX_DECISION_CHOICE_CHARS * 2 },
-      note: { type: "string", maxLength: MAX_DECISION_NOTE_CHARS * 2 },
+      choice: { type: "string", minLength: 1 },
+      note: { type: "string" },
     },
   },
   "graph.skip": {
@@ -340,9 +325,9 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["nodeKey"],
     properties: {
-      nodeKey: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      nodeKey: { type: "string", minLength: 1 },
       graphId: workerIdField,
-      reason: { type: "string", maxLength: MAX_REASON_CHARS * 2 },
+      reason: { type: "string" },
     },
   },
   "graph.cancel": {
@@ -350,7 +335,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     properties: {
       graphId: workerIdField,
-      reason: { type: "string", maxLength: MAX_REASON_CHARS * 2 },
+      reason: { type: "string" },
     },
   },
   "graph.finish": {
@@ -360,7 +345,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     properties: {
       graphId: workerIdField,
       unmergedOk: { type: "boolean" },
-      summary: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
+      summary: { type: "string", minLength: 1 },
     },
   },
 };
@@ -374,20 +359,24 @@ const FIELD_KINDS: Partial<Record<HubCommand, Record<string, "path" | "name">>> 
 };
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/u;
 
-const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
-  "project.create": { folder: MAX_PATH_BYTES },
-  "project.attach": { folder: MAX_PATH_BYTES },
-  "project.detach": { folder: MAX_PATH_BYTES },
-  "project.setup": { command: MAX_SETUP_COMMAND_BYTES },
-  "persona.edit": { text: MAX_PERSONA_BYTES },
-  "worker.start": { task: MAX_TASK_BYTES },
-  "worker.send": { text: MAX_TASK_BYTES },
-  ask: { text: MAX_TASK_BYTES },
-  "schedule.add": { prompt: MAX_TASK_BYTES },
-  "graph.create": { specJson: MAX_GRAPH_SPEC_BYTES },
-  "graph.patch": { specJson: MAX_GRAPH_SPEC_BYTES },
-  "graph.done": { note: MAX_TASK_BYTES },
-  "graph.finish": { summary: MAX_TASK_BYTES },
+const STRING_LIMITS: Partial<Record<HubCommand, Readonly<Record<string, HubLimitId>>>> = {
+  "project.create": { folder: "project.folder", name: "project.name", description: "project.description" },
+  "project.attach": { folder: "project.folder" },
+  "project.detach": { folder: "project.folder" },
+  "project.setup": { command: "project.setup" },
+  "persona.edit": { text: "persona.text", reason: "persona.reason" },
+  "worker.start": { title: "worker.title", task: "worker.task", model: "worker.model", node: "step.key" },
+  "worker.send": { text: "worker.task" },
+  ask: { node: "step.key" },
+  "schedule.add": { name: "schedule.name", prompt: "schedule.prompt" },
+  "router.report": { summary: "router.reportSummary" },
+  "graph.create": { title: "graph.title", specJson: "graph.spec" },
+  "graph.patch": { specJson: "graph.spec" },
+  "graph.done": { nodeKey: "step.key", summary: "step.artifactSummary", note: "step.doneNote" },
+  "graph.decide": { nodeKey: "step.key", choice: "decide.choice", note: "decide.note" },
+  "graph.skip": { nodeKey: "step.key", reason: "graph.reason" },
+  "graph.cancel": { reason: "graph.reason" },
+  "graph.finish": { summary: "graph.finishSummary" },
 };
 
 class HubError extends Error {
@@ -399,11 +388,26 @@ class HubError extends Error {
   }
 }
 
+function checkFieldLimit(id: HubLimitId, value: string): void {
+  const violation = checkHubLimit(id, HUB_LIMITS[id].unit === "chars" ? value.trim() : value);
+  if (violation !== null) throw new HubError("invalid", formatHubLimitViolations([violation]));
+}
+
 function checkFields(command: HubCommand, body: Record<string, unknown>): void {
-  for (const [field, limit] of Object.entries(BYTE_LIMITS[command] ?? {})) {
+  for (const [field, id] of Object.entries(STRING_LIMITS[command] ?? {})) {
     const value = body[field];
-    if (typeof value === "string" && Buffer.byteLength(value, "utf8") > limit) {
-      throw new HubError("invalid", `参数不对：${field} 不能超过 ${limit} 字节`);
+    if (typeof value === "string") checkFieldLimit(id, value);
+  }
+  if (command === "ask" && typeof body.text === "string" && body.text.trim() !== "") {
+    const split = splitAskCardText(body.text, typeof body.node === "string" && body.node.trim() !== "");
+    if (!split.ok) throw new HubError("invalid", formatHubLimitViolations(split.violations));
+  }
+  if ((command === "ask" || command === "router.report") && Array.isArray(body.files)) {
+    const violation = checkHubLimit("files", body.files);
+    if (violation !== null) throw new HubError("invalid", formatHubLimitViolations([violation]));
+    for (const file of body.files as HubFileArg[]) {
+      if (typeof file.label === "string") checkFieldLimit("fileLabel", file.label);
+      checkFieldLimit("filePath", file.path);
     }
   }
   for (const [field, kind] of Object.entries(FIELD_KINDS[command] ?? {})) {
@@ -543,7 +547,7 @@ function createPreparation(opts: AgentApiOptions) {
     if (signal.aborted) return {};
     if (command === "ask" || command === "router.report") {
       const files = body.files as HubFileArg[] | undefined;
-      if (files === undefined || files.length === 0 || files.length > HUB_FILE_ARGS_MAX) return {};
+      if (files === undefined || files.length === 0) return {};
       return { sharedFiles: await ledger.shareHubFiles(sessionId, files, signal) };
     }
     if (command === "status") {
@@ -610,7 +614,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({
     logger: opts.logger ?? false,
-    bodyLimit: HUB_MAX_BODY_BYTES,
+    bodyLimit: HUB_LIMITS.request.max,
     requestTimeout: requestTimeoutMs,
     // Node swaps headersTimeout and requestTimeout when headersTimeout is larger, so both are lowered to cut half-sent requests after about 15 seconds.
     http: { headersTimeout: requestTimeoutMs, connectionsCheckingInterval: opts.timeoutCheckMs ?? HUB_TIMEOUT_CHECK_MS },
@@ -695,7 +699,8 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     if (closing.signal.aborted) return shuttingDown(reply);
     if (err instanceof HubError || err instanceof LedgerRequestError) return fail(reply, err.code, reasonOf(err));
     if ((err as FastifyError).code === "FST_ERR_CTP_BODY_TOO_LARGE") {
-      return fail(reply, "invalid", `参数不对：请求体不能超过 ${HUB_MAX_BODY_BYTES} 字节`);
+      const rule = req.routeOptions.url === "/hub/cli" ? "cliRequest" : "request";
+      return fail(reply, "invalid", `参数不对：请求体上限 ${hubLimitMaximum(rule)}`);
     }
     const validation = (err as FastifyError).validation;
     if (validation !== undefined) {
@@ -793,16 +798,10 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     }
     const commandId = opts.sandboxGuard.assertCanDispatch(auth.sessionId, role);
     const body = req.body as Record<string, unknown>;
-    if (typeof body.text === "string" && Buffer.byteLength(body.text, "utf8") > MAX_TASK_BYTES) {
-      throw new HubError("invalid", `参数不对：text 不能超过 ${MAX_TASK_BYTES} 字节`);
-    }
-    if (typeof body.task === "string" && Buffer.byteLength(body.task, "utf8") > MAX_TASK_BYTES) {
-      throw new HubError("invalid", `参数不对：task 不能超过 ${MAX_TASK_BYTES} 字节`);
-    }
+    if (typeof body.text === "string") checkFieldLimit("worker.task", body.text);
+    if (typeof body.task === "string") checkFieldLimit("worker.task", body.task);
     if (typeof body.folder === "string") {
-      if (Buffer.byteLength(body.folder, "utf8") > MAX_PATH_BYTES) {
-        throw new HubError("invalid", `参数不对：folder 不能超过 ${MAX_PATH_BYTES} 字节`);
-      }
+      checkFieldLimit("project.folder", body.folder);
       if (body.folder.includes("\0")) {
         throw new HubError("invalid", "参数不对：folder 不能含 NUL 字符");
       }
@@ -839,7 +838,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     },
   };
 
-  app.post("/hub/cli", { bodyLimit: HUB_MAX_BODY_BYTES * 4, schema: { body: hubCliPipeSchema } }, tracked(async (req, reply) => {
+  app.post("/hub/cli", { bodyLimit: HUB_LIMITS.cliRequest.max, schema: { body: hubCliPipeSchema } }, tracked(async (req, reply) => {
     const auth = authOf.get(req);
     if (auth === undefined) throw new Error("agent-api: request reached /hub/cli without a session");
     const sock = opts.boundSocketPath?.() ?? "";

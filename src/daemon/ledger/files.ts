@@ -5,8 +5,9 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { utf8Bytes } from "../../shared/domain.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { ResolveFolder } from "../../shared/ledger.ts";
-import { HUB_CALL_FIELD_MAX_BYTES, MAX_PATH_BYTES } from "../../shared/limits.ts";
+import { HUB_CALL_FIELD_MAX_BYTES } from "../../shared/limits.ts";
 import { PRODUCT_ID } from "../../shared/names.ts";
+import { assertHubLimit } from "./context.ts";
 
 function expandHome(path: string, userHome: string): string {
   if (path === "~") return userHome;
@@ -37,7 +38,7 @@ export function createResolveFolder(options: ResolveFolderOptions): ResolveFolde
   return (raw) => {
     const trimmed = raw.trim();
     if (trimmed === "") throw new LedgerRequestError("invalid", "文件夹路径是空的");
-    if (utf8Bytes(trimmed) > MAX_PATH_BYTES) throw new LedgerRequestError("invalid", `文件夹路径太长（超过 ${MAX_PATH_BYTES} 字节）`);
+    assertHubLimit("project.folder", trimmed);
     const expanded = expandHome(trimmed, userHome);
     if (!isAbsolute(expanded)) throw new LedgerRequestError("invalid", `请写绝对路径（可以用 ~ 开头）：${trimmed}`);
     const literal = resolve(expanded);

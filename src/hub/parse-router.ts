@@ -1,5 +1,5 @@
 import { validateAskOptions } from "../shared/domain.ts";
-import { ROUTER_OPTION_MAX_COUNT } from "../shared/limits.ts";
+import { ASK_MIN_OPTIONS } from "../shared/limits.ts";
 import type { RouterReportLink } from "../shared/router.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { UsageError, type Parsed, type GroupArgs, fileArgsOf, allowOnly, expectPositionals, idOf, workerIdOf } from "./args.ts";
@@ -14,13 +14,10 @@ export function parseRouterCommand({ group, action, rest, values, env, cwd }: Gr
       throw new UsageError(`${hub} router ask 要 --question <问题>`);
     }
     if (values.option === undefined) {
-      throw new UsageError(`${hub} router ask 要 --option <选项>（2 到 ${ROUTER_OPTION_MAX_COUNT} 个）`);
+      throw new UsageError(`${hub} router ask 要 --option <选项>（至少 ${ASK_MIN_OPTIONS} 个）`);
     }
-    const checked = validateAskOptions(values.option);
+    const checked = validateAskOptions(values.option, "ask.legacyRouterOptions");
     if (!checked.ok) throw new UsageError(checked.error);
-    if (checked.options.length > ROUTER_OPTION_MAX_COUNT) {
-      throw new UsageError(`选项最多 ${ROUTER_OPTION_MAX_COUNT} 个`);
-    }
     const options = [...checked.options];
     const body: Record<string, unknown> = { options };
     if (values.recommended !== undefined) {
