@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Browser, type Cookie, type Page, type Request } from "playwright";
+import { chromium, webkit, type Browser, type Cookie, type Page, type Request } from "playwright";
 import {
   BROWSER_NOW_ISO,
   DEVICE_SCALE_FACTOR,
@@ -29,8 +29,13 @@ import { startNodeRelay } from "../../src/relay/node/server.ts";
 import { startFakeGithub } from "../e2e/fake-github.ts";
 import { peerHomeOf, seedScenario, startIsolatedDaemon, type IsolatedDaemon, type SeedResult } from "./seed.ts";
 
+export const CAPTURE_ENGINES = { chromium, webkit } as const;
+export type CaptureEngine = keyof typeof CAPTURE_ENGINES;
+
 export interface CaptureOptions {
   repoRoot: string;
+  /** Browser engine, chromium by default. Shot keys do not name the engine, so each engine needs its own outDir. */
+  engine?: CaptureEngine;
   /** 图和清单写到哪。 */
   outDir: string;
   /** 只截这些界面 id 或区域；不给就是全部。 */
@@ -97,9 +102,10 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureManife
   mkdirSync(workDir, { recursive: true });
 
   const backends = new Map<Scenario, Backend>();
+  const engine = options.engine ?? "chromium";
   let browser: Browser | null = null;
   try {
-    browser = await chromium.launch();
+    browser = await CAPTURE_ENGINES[engine].launch();
     for (const scenario of new Set(shots.map((s) => s.screen.scenario))) {
       const backend = await startBackend(scenario, options.repoRoot, workDir);
       backends.set(scenario, backend);
@@ -123,7 +129,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureManife
     const b = browser;
     await Promise.all(Array.from({ length: Math.min(SHOT_PARALLEL, jobs.length) }, () => worker(b)));
     if (failures.length > 0) throw new Error(`${failures.length} 个界面截图失败：\n${failures.sort().join("\n")}`);
-    const manifest: CaptureManifest = { commit: currentCommit(options.repoRoot), browser: `chromium ${b.version()}`, shots: results };
+    const manifest: CaptureManifest = { commit: currentCommit(options.repoRoot), browser: `${engine} ${b.version()}`, shots: results };
     writeFileSync(join(options.outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     return manifest;
   } finally {
@@ -202,6 +208,8 @@ async function captureOne(browser: Browser, backend: Backend, shot: Shot, mutati
     timezoneId: SHOT_TIMEZONE,
     colorScheme: "light",
     reducedMotion: "reduce",
+    // WebKit sends a service worker's fetches past page.route, so the request patches would not apply.
+    ...(browser.browserType().name() === "webkit" ? { serviceWorkers: "block" as const } : {}),
   });
   try {
     const page = await context.newPage();

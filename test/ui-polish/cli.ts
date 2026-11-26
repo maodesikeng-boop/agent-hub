@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 界面打磨循环的命令入口（docs/ui-polish-loop-design.md 第 3.8 节），`pnpm ui:polish <命令>`：
 //   inventory                                  打印界面清单（Markdown）
-//   shots [--round <id>] [--only <id|区域>…] [--verify]   截全部界面；--verify 截两遍，有一张字节不同就失败
+//   shots [--round <id>] [--only <id|区域>…] [--verify] [--engine chromium|webkit]   截全部界面；--verify 截两遍，有一张字节不同就失败；webkit 的图放在 <轮次>/webkit/
 //   calibrate-shots [--round <id>]             截校准用的图：基准图、几张真实界面、每个弄坏各一张，另加凑满一批用的真实界面
 //   brief --round <id> --judge <厂商/模型> --batch <n> [--batch-size <n>] [--run <n>]   打印这一批的评委任务说明
 //   check-cards --round <id> --judge <厂商/模型>    评委自查：评分卡格式对不对、图齐不齐
@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { planMatches, readBlindPlan, unblindCard, writeBlindPlan, type BlindItem, type BlindPlan, type SentinelSource } from "./blind.ts";
-import { captureAll, diffManifests, type CaptureManifest } from "./capture.ts";
+import { CAPTURE_ENGINES, captureAll, diffManifests, type CaptureEngine, type CaptureManifest } from "./capture.ts";
 import { MACHINE_CHECKS } from "./checks.ts";
 import { assertIsolated } from "./isolation.ts";
 import { judgeBrief } from "./judge-prompt.ts";
@@ -39,7 +39,7 @@ const ROUND_PATTERN = /^[A-Z]\d{1,2}(?:-confirm)?$/;
 
 const USAGE = `用法：pnpm ui:polish <命令>
   inventory
-  shots [--round R01] [--only <界面或区域>[,<界面或区域>…]]… [--verify]
+  shots [--round R01] [--only <界面或区域>[,<界面或区域>…]]… [--verify] [--engine chromium|webkit]
   calibrate-shots [--round C1]
   brief --round <id> --judge <厂商/模型> --batch <n> [--batch-size <n>] [--run <n>]
   check-cards --round <id> --judge <厂商/模型> [--batch <n>] [--batch-size <n>] [--run <n>]
@@ -61,9 +61,16 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(inventoryMarkdown(SCREEN_INVENTORY));
         return 0;
       case "shots": {
-        const { values } = parse(rest, { round: { type: "string" }, only: { type: "string", multiple: true }, verify: { type: "boolean" } });
+        const { values } = parse(rest, {
+          round: { type: "string" },
+          only: { type: "string", multiple: true },
+          verify: { type: "boolean" },
+          engine: { type: "string" },
+        });
         const round = values.round ?? "R00";
-        return await shots(round, roundDir(round, round), values.only?.flatMap((v) => v.split(",")), values.verify === true);
+        const engine = requireEngine(values.engine);
+        const dir = engine === "chromium" ? roundDir(round, round) : join(roundDir(round, round), engine);
+        return await shots(round, dir, values.only?.flatMap((v) => v.split(",")), values.verify === true, engine);
       }
       case "calibrate-shots": {
         const { values } = parse(rest, { round: { type: "string" } });
@@ -174,6 +181,12 @@ function roundDir(round: string | undefined, fallback: string, outRoot = ROUND_O
   const dir = join(outRoot, id);
   assertIsolated(dir);
   return dir;
+}
+
+function requireEngine(engine: string | undefined): CaptureEngine {
+  if (engine === undefined) return "chromium";
+  if (!Object.hasOwn(CAPTURE_ENGINES, engine)) throw new UsageError(`--engine 只能是 ${Object.keys(CAPTURE_ENGINES).join(" 或 ")}`);
+  return engine as CaptureEngine;
 }
 
 function requireRound(round: string | undefined): string {
@@ -692,14 +705,14 @@ function runReport(opts: { roundId: string; previousId: string | undefined; repo
   return 0;
 }
 
-async function shots(roundId: string, outDir: string, only: readonly string[] | undefined, verify: boolean): Promise<number> {
+async function shots(roundId: string, outDir: string, only: readonly string[] | undefined, verify: boolean, engine: CaptureEngine): Promise<number> {
   const started = Date.now();
-  const first = await captureAll({ repoRoot: REPO_ROOT, outDir, ...(only === undefined ? {} : { only }) });
+  const first = await captureAll({ repoRoot: REPO_ROOT, outDir, engine, ...(only === undefined ? {} : { only }) });
   writeBlindPlan(outDir, first, hashSeed(roundId), sentinelSource(roundId, REPO_ROOT, ROUND_OUTPUT_DIR));
   report(first, outDir, started);
   if (!verify) return 0;
   const again = mkdtempSync(join(ROUND_OUTPUT_DIR, ".verify-"));
-  const second = await captureAll({ repoRoot: REPO_ROOT, outDir: again, ...(only === undefined ? {} : { only }) });
+  const second = await captureAll({ repoRoot: REPO_ROOT, outDir: again, engine, ...(only === undefined ? {} : { only }) });
   const diff = diffManifests(first, second);
   process.stdout.write(`两遍 ${diff.length} 张不同${diff.length > 0 ? `：${diff.join("、")}` : ""}，两遍共用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒\n`);
   if (diff.length === 0) {
