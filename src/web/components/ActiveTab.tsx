@@ -6,7 +6,8 @@ import { graphFlowOf } from "../graph-flow.ts";
 import type { WorkerEntry } from "../selectors.ts";
 import { ChevronRight, Maximize2 } from "../ui/icons.ts";
 import { stepTargetOf, type ActiveWork } from "../work-panel-model.ts";
-import { graphProgressOf, workerWorkStatusOf, WORK_STATUS_LABEL } from "../work-status.ts";
+import { graphDeliveryOf, workerWorkStatusOf, WORK_STATUS_LABEL } from "../work-status.ts";
+import { GraphDeliveryRow } from "./GraphDeliveryRow.tsx";
 import { GraphCanvas } from "./GraphCanvas.tsx";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
@@ -38,7 +39,7 @@ const GraphSection = memo(function GraphSection({
   onExpandGraph: (graph: TaskGraph, decisionKey?: TaskNodeKey) => void;
 }) {
   const flow = useMemo(() => graphFlowOf(graph), [graph]);
-  const progress = useMemo(() => graphProgressOf(graph), [graph]);
+  const delivery = graphDeliveryOf(graph);
   const targetByKey = useMemo(() => {
     const map = new Map<TaskNodeKey, ReturnType<typeof stepTargetOf>>();
     for (const node of graph.nodes) map.set(node.key, stepTargetOf(node, workers, asks, graph.id));
@@ -68,9 +69,7 @@ const GraphSection = memo(function GraphSection({
           {graph.title}
         </h2>
         <div className="work-graph-meta flex shrink-0 items-center gap-2.5 text-xs tabular-nums">
-          <span>
-            {progress.done}/{progress.total}
-          </span>
+          <span>{delivery.header}</span>
           <button
             type="button"
             aria-label={`Expand ${graph.title}`}
@@ -83,6 +82,7 @@ const GraphSection = memo(function GraphSection({
         </div>
       </div>
       <GraphCanvas flow={flow} orientation="auto" paper onOpenStep={handleOpenStep} stepInteractive={stepInteractive} />
+      {delivery.row !== null && <GraphDeliveryRow row={delivery.row} />}
     </section>
   );
 });

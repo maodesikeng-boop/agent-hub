@@ -1,3 +1,4 @@
+import { createPmDelivery } from "./pm-delivery.ts";
 import { createLedgerTakenInputs } from "./taken-inputs.ts";
 import { isChecklistToolCall } from "./checklist.ts";
 import { createChecklistReminders } from "./checklist-reminders.ts";
@@ -11,9 +12,6 @@ import { agentMessageDedupeKey } from "../../shared/domain.ts";
 import type { Message, MessageId, Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
-import { deliveryParts } from "../../shared/worker.ts";
-import { pendingAsksNote } from "../../shared/pending-asks.ts";
-import { pendingAsksOfPm } from "./pending-asks.ts";
 import { WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { AgentTextMeta } from "../../shared/sent-files.ts";
@@ -227,6 +225,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
   });
   const messages = createLedgerMessages(ctx, sessions, {
+    isSessionBusy: options.isSessionBusy,
     assertUserCanPost: (id) => {
       persona.assertConversationNotArchived(id);
       assertWorkerOpenForUser(db, id);
@@ -278,7 +277,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     isSessionBusy: options.isSessionBusy,
     hasPendingDriverEvents: (sessionId) => driverEvents.hasPending(sessionId),
     hasPendingTurnCompletions: (sessionId) => completions.blocksSend(sessionId),
-    liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
     onRenewedIn: (p, conversationId) => {
       const project = db.get<{ id: number }>("SELECT id FROM projects WHERE conversation_id = ? AND status = 'active'", conversationId);
       if (project !== undefined) projectCatalog.markForcedIn(p, project.id, "handover_switched");
@@ -310,6 +308,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
   const closing = new AbortController();
   const branches = createLedgerBranchSync(ctx, taskGraphs.publishBranchChange, closing.signal, options.worktreeBranchProbe);
+  const pmDelivery = createPmDelivery(ctx);
   const applyDriverEventNow = (sessionId: SessionId, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null) => {
     if (event.type === "agent.text_delta" || event.type === "agent.tool_preview") {
       if (event.parentToolUseId !== undefined) return;
@@ -331,6 +330,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       }
       const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
       takenInputs.beforeDriverEvent(session, scoped);
+      if (session.role === "pm") pmDelivery.recordEventIn(session.id, scoped);
       const result = messages.applyEvent(p, session, scoped, textMeta);
       turnReplies.afterDriverEvent(p, session, scoped);
       steps.afterDriverEvent(session, scoped, openTools);
@@ -585,14 +585,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     answerAsk: router.answerAsk,
     recheckUserBlocker: userBlockers.recheck, decideSandboxApproval: workers.decide, getSandboxApproval: workers.getById,
     appApprovals: workers.appApprovals, decideAppApproval: workers.decideAppApproval, userBlockerVendor: userBlockers.vendorOf,
-    deliveryOf: (message) => {
-      const parts = deliveryParts(message);
-      if (message.sender !== "user" || message.workerId !== null) return parts;
-      const pmId = db.get<{ pm_id: PmId | null }>("SELECT pm_id FROM conversations WHERE id = ? AND kind = 'pm'", message.conversationId)?.pm_id;
-      if (pmId == null) return parts;
-      const note = pendingAsksNote(pendingAsksOfPm(db, pmId), ctx.now());
-      return note === null ? parts : { ...parts, prefixes: [...parts.prefixes, note] };
-    },
+    deliveryOf: pmDelivery.deliveryOf,
+    deliverySuffix: pmDelivery.deliverySuffix,
     archiveAllRouterReports: router.archiveAllReports,
     updateRouterSettings: router.updateSettings,
     createRouterCommand: router.createCommand,

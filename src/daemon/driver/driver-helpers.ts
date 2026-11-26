@@ -1,3 +1,4 @@
+import type { WrittenAgendaFooter } from "../../shared/driver.ts";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   RESEND_NOTE,
@@ -64,6 +65,8 @@ interface LaunchSnapshot {
 export interface BaseBatch {
   messageIds: MessageId[];
   notes: BatchNotes;
+  includeDeliverySuffix?: true;
+  agenda?: { messageId: MessageId; footer: WrittenAgendaFooter };
   delivered: boolean;
   processing: boolean;
   midTurn?: boolean;

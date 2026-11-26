@@ -63,14 +63,23 @@ export interface GraphDelivery {
   row: { wait: GraphDeliveryWait; since: number } | null;
 }
 
-/**
- * Postcondition: for an active graph whose every step is done, `header` is `<done>/<total> steps · awaiting delivery`
- * and `row` waits for the PM, or for `watch` when one is linked; `since` is the latest `updatedAt` among its steps.
- * Otherwise `header` is `<done>/<total> steps` and `row` is null.
- */
-export function graphDeliveryOf(
-  _graph: Pick<TaskGraph, "status" | "nodes">,
-  _watch: { watchId: number; body: string } | null = null,
-): GraphDelivery {
-  throw new Error("Not implemented");
+type DeliveryGraph = Pick<TaskGraph, "status" | "nodes">;
+type DeliveryWatch = { watchId: number; body: string };
+const deliveryByGraph = new WeakMap<DeliveryGraph, { watch: DeliveryWatch | null; delivery: GraphDelivery }>();
+
+export function graphDeliveryOf(graph: DeliveryGraph, watch: DeliveryWatch | null = null): GraphDelivery {
+  const cached = deliveryByGraph.get(graph);
+  if (cached !== undefined && cached.watch?.watchId === watch?.watchId && cached.watch?.body === watch?.body) return cached.delivery;
+  const { done, total } = graphProgressOf(graph);
+  const ready = graph.status === "active" && total > 0 && done === total;
+  const header = `${done}/${total} steps${ready ? " · awaiting delivery" : ""}`;
+  const delivery: GraphDelivery = {
+    header,
+    row: ready ? {
+      wait: watch === null ? { kind: "pm" } : { kind: "watch", watchId: watch.watchId, body: watch.body },
+      since: graph.nodes.reduce((latest, node) => Math.max(latest, node.updatedAt), 0),
+    } : null,
+  };
+  deliveryByGraph.set(graph, { watch, delivery });
+  return delivery;
 }

@@ -1,3 +1,4 @@
+import { isGraphReadyNotice } from "../../shared/pm-notice.ts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { systemEventOf, type Message, type SystemMessageMeta } from "../../shared/domain.ts";
 import { PM_AGENDA_PREAMBLE_HEADING } from "../../shared/pm-agenda.ts";
@@ -35,7 +36,7 @@ describe("S4: the graph is done, accept it, meets a handover", () => {
     const ready = systemMessage(11, { event: "task_graph.ready_to_finish", graphId: 141, seq: 1 }, "【任务图 #141「取消残留」全部步骤做完，等你交付】");
     expect(formatGenerationMessage(ready, 2)).toContain("#141");
     expect(SYSTEM_EVENT_IN_SWITCH_LOG["schedule.run"]).toBe(true);
-    expect(Object.keys(SYSTEM_EVENT_IN_SWITCH_LOG).length).toBe(16);
+    expect(Object.keys(SYSTEM_EVENT_IN_SWITCH_LOG).length).toBe(17);
   });
 
   describe("with a ledger", () => {
@@ -54,7 +55,7 @@ describe("S4: the graph is done, accept it, meets a handover", () => {
       const wid = f.showGraph(graph.id).nodes[0]!.activeWorkerId!;
       await f.startWorktree(wid);
       f.workerTurn(wid, reportBlock({ status: "做完了", summary: "实现好了" }));
-      const note = f.pmSystemMessages().find((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish")!;
+      const note = f.pmSystemMessages().find(isGraphReadyNotice)!;
       f.pmReplyTo(note.id, "暂不合并，等检查通过后合并");
       return graph.id;
     }
@@ -94,14 +95,14 @@ describe("S4: the graph is done, accept it, meets a handover", () => {
       const wid = f.showGraph(graph.id).nodes[0]!.activeWorkerId!;
       await f.startWorktree(wid);
       f.workerTurn(wid, reportBlock({ status: "做完了", summary: "实现好了" }));
-      const note = f.pmSystemMessages().find((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish")!;
+      const note = f.pmSystemMessages().find(isGraphReadyNotice)!;
       expect(note.status).toBe("queued");
 
       f.ledger.editPersona(f.lin.pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
       const next = pmSessions().at(-1)!;
       const moved = f.ledger.getMessage(note.id)!;
       expect(moved).toMatchObject({ status: "queued", sessionId: next });
-      expect(f.pmSystemMessages().filter((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish")).toHaveLength(1);
+      expect(f.pmSystemMessages().filter(isGraphReadyNotice)).toHaveLength(1);
     });
   });
 });

@@ -56,6 +56,7 @@ function clearBackgroundTasks(live: LiveSession): void {
 }
 
 export interface LedgerMessagesOptions {
+  isSessionBusy?: ((id: SessionId) => boolean) | undefined;
   assertUserCanPost?: (conversationId: ConversationId) => void;
   afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
   onIndependentAskCreated?: (p: Pending, session: AgentSessionRow, message: Message, options?: string[]) => void;
@@ -96,6 +97,16 @@ function insertAgentMessage(
   if (row === undefined) return false;
   p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   return true;
+}
+
+function userMessageMetaOf(input: PostUserMessageInput, sentWhileBusy: boolean): UserMessageMeta | null {
+  const meta: UserMessageMeta = {
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    ...(input.workerPick !== undefined ? { workerPick: input.workerPick } : {}),
+    ...(input.origin !== undefined ? { origin: input.origin } : {}),
+    ...(sentWhileBusy ? { sentWhileBusy: true } : {}),
+  };
+  return Object.keys(meta).length === 0 ? null : meta;
 }
 
 export function createLedgerMessages(
@@ -461,14 +472,11 @@ export function createLedgerMessages(
       const blocked = ctx.commandBlockReason(session, input.text);
       if (blocked !== null) throw fail("invalid", blocked);
       const t = now();
-      const meta: UserMessageMeta | null =
-        input.attachments?.length || input.workerPick !== undefined || input.origin !== undefined
-          ? {
-              ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-              ...(input.workerPick !== undefined ? { workerPick: input.workerPick } : {}),
-              ...(input.origin !== undefined ? { origin: input.origin } : {}),
-            }
-          : null;
+      const sentWhileBusy = session.role === "pm" && (
+        liveOf(session.id).activity !== "idle" ||
+        (session.status === "running" && (options.isSessionBusy?.(session.id) ?? true))
+      );
+      const meta = userMessageMetaOf(input, sentWhileBusy);
       const row = db.get<MessageDbRow>(
         `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
          VALUES (?, ?, ?, 'user', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,

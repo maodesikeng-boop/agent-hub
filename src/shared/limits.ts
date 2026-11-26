@@ -404,7 +404,6 @@ export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
 export const MAX_NODE_ARTIFACT_COMMIT_CHARS = 64;
 export const GRAPH_TEXT_NODE_NOTE_CHARS = 160;
 export const GRAPH_TEXT_NODE_WORKERS_MAX = 3;
-export const HANDOVER_GRAPHS_MAX_CHARS = 8_000;
 export const DELIVERY_NOTE_MAX_CHARS = 6_000;
 export const DELIVERY_FILES_MAX = 60;
 export const TAKEOVER_PREDECESSORS_MAX = 3;
@@ -746,6 +745,8 @@ export const WS_BURST_FRAME_LIMIT = 8;
 export const WS_FRAME_BUDGET_MS = 16;
 
 export const PM_AGENDA_GRAPHS_MAX = 20;
+export const PM_AGENDA_OUTSIDE_WORKERS_MAX = 32;
+export const PM_AGENDA_LABEL_MAX_CHARS = 64;
 export const PM_AGENDA_STEP_LINES_MAX = 8;
 export const PM_AGENDA_DELTA_LINES_MAX = 8;
 // A model rebuilding state from a long chain of changes drifts, so a snapshot replaces the chain this often.

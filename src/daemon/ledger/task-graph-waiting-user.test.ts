@@ -669,7 +669,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     expect(isTaskGraphReadyToFinish(finalPass.graph)).toBe(true);
     expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wPreview)?.status).toBe("ended");
     expect(pmSendActions()).toHaveLength(1);
-    expect(ledger.getMessage(pmSendActions()[0]!.params.messageId)!.text).toContain("全部步骤做完，等你交付");
+    expect(ledger.getMessage(pmSendActions()[0]!.params.messageId)!.text).toContain("图里画的步骤都做完了，等你验收交付");
     expect(ledger.getMessage(pmSendActions()[0]!.params.messageId)!.text).toContain("按这个预览交付");
   });
 

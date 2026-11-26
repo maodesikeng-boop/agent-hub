@@ -1,3 +1,4 @@
+import { PM_AGENDA_BUSY_LINE } from "../../src/shared/pm-agenda.ts";
 // W5 端到端（m1-plan 第 4 节“W5 组装 + 端到端”）：真守护进程 + 假 claude，临时数据目录。
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
@@ -234,7 +235,7 @@ describe("W5 组装 + 端到端", () => {
     await waitForStatus(client, a, "replied");
     await waitForStatus(client, b, "replied");
     // “【用户连发了 N 条】”和每一条各占一个 text 块（docs/composer-commands.md 的 T4）
-    expect(env.stdinBlocks()).toEqual([["写一个很长的东西"], ["【用户连发了 2 条】", "1. 补充一", "2. 补充二"]]);
+    expect(env.stdinBlocks()).toEqual([["写一个很长的东西"], ["【用户连发了 2 条】", "1. 补充一", `2. 补充二\n\n${PM_AGENDA_BUSY_LINE}`]]);
     expect(agentTexts(await client.state(), conversationId)).toEqual(["第一轮", "两条补充都收到"]);
     await terminate(daemon);
   });

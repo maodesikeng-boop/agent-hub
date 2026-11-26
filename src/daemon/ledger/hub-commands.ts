@@ -1,3 +1,5 @@
+import { formatPmAgenda } from "../../shared/pm-agenda.ts";
+import { pmAgendaOf } from "./pm-agenda.ts";
 import { formatVendorQuotaStatus } from "../quota/observed-quota.ts";
 import { z } from "zod";
 import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
@@ -125,7 +127,8 @@ function formatVendorModelsBlock(entry: HubVendorModels, now: number): string {
 interface PmStatusDeps {
   persona: Pick<LedgerPersona, "pmRow">;
   projects: Pick<LedgerProjects, "activeProjectOf" | "projectCard">;
-  taskGraphs: Pick<LedgerTaskGraphs, "pmStatusGraphs">;
+  db: LedgerContext["db"];
+  now: number;
   taskGraphManual: (sessionId: SessionId) => string;
 }
 
@@ -134,12 +137,19 @@ function pmStatusIn(deps: PmStatusDeps, caller: AgentSessionRow & { pmId: PmId }
   const row = deps.projects.activeProjectOf(pm.id);
   const project = row === null ? null : deps.projects.projectCard(row);
   const setupCommand = row?.setup_command ?? null;
-  const { summaries, textBlock } = deps.taskGraphs.pmStatusGraphs(pm.id);
+  const agenda = pmAgendaOf(deps.db, pm.id, deps.now);
+  const summaries = agenda.graphs.map((graph) => ({
+    id: graph.graphId, title: graph.title, totalNodes: graph.stepCount, doneCount: graph.doneCount,
+    runningCount: graph.steps.filter((step) => step.state.kind === "running").length,
+    waitingPmCount: graph.steps.filter((step) => step.state.kind === "waiting_pm").length,
+    waitingUserCount: graph.steps.filter((step) => step.state.kind === "waiting_user").length,
+    readyToFinish: graph.readyToFinish,
+  }));
   const manual = summaries.length > 0 ? deps.taskGraphManual(caller.id) : "";
   const selfReload = context.selfReload !== undefined && context.selfReload.state !== "idle" ? context.selfReload : undefined;
   const reloadNote = selfReload === undefined ? "" : `\n${describeSelfReload(selfReload)}`;
   return {
-    text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}${manual === "" ? "" : `\n${manual}`}${reloadNote}`,
+    text: `${formatPmAgenda(agenda, deps.now)}\n\n你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${manual === "" ? "" : `\n${manual}`}${reloadNote}`,
     data: {
       role: "pm",
       pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
@@ -206,7 +216,7 @@ export function createLedgerHubCommands(
   ): HubResult<HubCommand> => {
     switch (command) {
       case "status":
-        return pmStatusIn({ persona, projects, taskGraphs, taskGraphManual }, caller, context);
+        return pmStatusIn({ persona, projects, db, now: now(), taskGraphManual }, caller, context);
       case "project.create": {
         const a = projectCreateArgsSchema.parse(args);
         const { project, mainFolder } = createProjectIn(p, {

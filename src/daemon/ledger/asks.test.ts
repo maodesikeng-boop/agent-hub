@@ -125,7 +125,8 @@ describe("项目经理收到用户消息时带着账本里当前还在等的卡"
     const a = ask("要不要发版？");
     const b = ask("用 A 还是 B？\n\nA 快，B 稳");
     const id = post(lin.conversationId, "现在的工具调用支持多工具同步调用吗");
-    expect(receivedBy(id)).toEqual({
+    const original = ledger.getMessage(id)!;
+    expect(ledger.deliveryOf(original, { deferSuffix: true })).toEqual({
       prefixes: [
         [
           "【系统：账本里现在还在等用户回答的卡有 2 张。这条消息不一定在回答它们；用户在对话里回答了哪张，用 `" + HUB_COMMAND + " ask close <编号>`（步骤卡用 `" + HUB_COMMAND + " ask close --message <消息编号>`）关掉那张，没回答的留着：",
@@ -138,6 +139,7 @@ describe("项目经理收到用户消息时带着账本里当前还在等的卡"
       ],
       text: "现在的工具调用支持多工具同步调用吗",
     });
+    expect(receivedBy(id).text).toMatch(/^现在的工具调用支持多工具同步调用吗\n\n【清单 v1/u);
   });
 
   it("没有卡在等（没问过、已回答、已关掉）：不带说明", () => {

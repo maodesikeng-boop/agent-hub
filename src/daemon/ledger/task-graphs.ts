@@ -12,8 +12,6 @@ import { cancelGraph, cancelIn, doneIn, finishIn, list, show, skipIn, skipNode }
 import {
   activeSnapshotGraphs,
   graphAutoDispatchVendors,
-  liveHandoverSection,
-  pmStatusGraphs,
   purgeExpiredBatch,
 } from "./task-graphs/overview.ts";
 import { patchIn } from "./task-graphs/patch.ts";
@@ -99,8 +97,6 @@ export function createLedgerTaskGraphs(
     workerGraphWorkspacePlan: bind(workerGraphWorkspacePlan),
     workerGraphStatus: bind(workerGraphStatus),
     activeSnapshotGraphs: bind(activeSnapshotGraphs),
-    pmStatusGraphs: bind(pmStatusGraphs),
-    liveHandoverSection: bind(liveHandoverSection),
     purgeExpiredBatch: bind(purgeExpiredBatch),
   };
 }

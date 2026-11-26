@@ -17,6 +17,7 @@ export interface UserMessageMeta {
   attachments?: Attachment[];
   workerPick?: WorkerPick;
   deliveryConfirmed?: true;
+  sentWhileBusy?: true;
   rewound?: true;
   origin?: FeishuMessageOrigin;
 }

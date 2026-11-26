@@ -1,3 +1,4 @@
+import { appendDeliverySuffix } from "../../shared/pm-agenda.ts";
 import { withChecklistEnv } from "../../vendors/_common/checklist.ts";
 import { vendorSpec } from "../../shared/vendors.ts";
 // Shared session state machine for vendor drivers in src/vendors/<vendor>/driver.ts.
@@ -644,6 +645,19 @@ export abstract class BaseSessionDriver<
     return promise;
   }
 
+  protected takeDeliverySuffix(st: TState, batch: TBatch): string {
+    const messageId = batch.messageIds.at(-1);
+    if (messageId === undefined) return "";
+    const suffix = this.opts.deliverySuffix?.(st.id, batch.messageIds);
+    if (suffix?.agenda === undefined) delete batch.agenda;
+    else batch.agenda = { messageId, footer: suffix.agenda };
+    return suffix?.text ?? "";
+  }
+
+  protected withDeliverySuffix(st: TState, batch: TBatch, text: string): string {
+    return appendDeliverySuffix(text, this.takeDeliverySuffix(st, batch));
+  }
+
   protected markDelivered(st: TState, batch: TBatch): void {
     if (batch.delivered) return;
     batch.delivered = true;
@@ -652,6 +666,7 @@ export abstract class BaseSessionDriver<
     this.emit(st.id, {
       type: "message.delivered",
       messageIds: batch.messageIds,
+      ...(batch.agenda !== undefined ? { agenda: batch.agenda } : {}),
       ...(batch.midTurn ? { midTurn: true as const } : {}),
       at: Date.now(),
     });

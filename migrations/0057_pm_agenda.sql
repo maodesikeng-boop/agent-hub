@@ -25,5 +25,8 @@ CREATE TABLE IF NOT EXISTS pm_agenda_cursors (
   lines_json            TEXT    NOT NULL,
   deltas_since_snapshot INTEGER NOT NULL DEFAULT 0 CHECK (deltas_since_snapshot >= 0),
   last_message_id       INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  compaction_id         INTEGER NOT NULL DEFAULT 0,
   delivered_at          INTEGER NOT NULL
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS workers_pm_open ON workers(pm_id, id) WHERE status = 'open';

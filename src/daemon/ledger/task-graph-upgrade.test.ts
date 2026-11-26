@@ -143,7 +143,9 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     expect(g.nodes.find((n) => n.key === "s3")).toMatchObject({ activeWorkerId: w3.id, workerIds: [w3.id] });
     // hub status 按四个状态汇总：迁移时正 ready 的步骤不补发叫醒，项目经理在这里看得到
     const status = ledger.hubCall(lin.sessionId, "status", {}).text;
-    expect(status).toContain(`- #${graph.id}「编排简化实现」（进度 2/6；在干：s3；等你处理：docs）`);
+    expect(status).toContain(`图 #${graph.id}「编排简化实现」6 个步骤 · 要你处理 1 个 · 在跑 1 个 · 完了 2 个 · 没轮到 2 个`);
+    expect(status).toContain("docs：等你处理");
+    expect(status).toContain("s3：在跑");
 
     // 在干的 s3 汇报做完了：后台自动把 s3 标完了并收工 Worker，s4 轮到了，旧问题交给项目经理
     finishWorkerTurn(w3.id, "接手带前任记录");
@@ -181,8 +183,10 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     expect(g.nodes.every((n) => n.status === "done")).toBe(true);
     expect(isTaskGraphReadyToFinish(g)).toBe(true);
     const note = db.get<{ text: string }>(
-      "SELECT text FROM messages WHERE dedupe_key GLOB ? ORDER BY id DESC LIMIT 1",
-      `system:${lin.conversationId}:task_graph.ready_to_finish:${graph.id}:*`,
+      `SELECT text FROM messages WHERE conversation_id = ? AND meta ->> '$.event' = 'pm.wakeup'
+        AND meta ->> '$.subject.kind' = 'graph.ready_to_finish' AND meta ->> '$.subject.graphId' = ?
+        ORDER BY id DESC LIMIT 1`,
+      lin.conversationId, graph.id,
     )!.text;
     expect(note).toContain("[已跳过] s2 唯一结束出口 · 已跳过：并进第 3 步");
     expect(note).toContain("拍板：「旧图迁移后要不要补发叫醒？」定案 不补发");
@@ -233,7 +237,9 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     expect(mig.applied.slice(0, 2)).toEqual([25, 26]);
     ledger = createLedger(db, options());
 
-    expect(ledger.hubCall(lin.sessionId, "status", {}).text).toContain("进度 5/8；在干：s4-review");
+    const status = ledger.hubCall(lin.sessionId, "status", {}).text;
+    expect(status).toContain("8 个步骤 · 在跑 1 个 · 完了 5 个 · 没轮到 2 个");
+    expect(status).toContain("s4-review：在跑");
 
     finishWorkerTurn(wReview.id, "审查通过并补齐回归用例");
     expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).toContain("[等你处理] s5");

@@ -6,6 +6,7 @@ export const COMPOSER_MAX_HEIGHT_PX = 180;
 export const COMPOSER_SINGLE_ROW_SLACK_PX = 4;
 export const COMPOSER_WRAP_PROBE_CHARS = 512;
 export const ACTION_ELAPSED_TICK_MS = 1_000;
+export const GRAPH_DELIVERY_AGE_TICK_MS = 60_000;
 
 // Workbench column widths are rem so they follow the interface scale.
 export const SHELL_RAIL_REM = 4.5;

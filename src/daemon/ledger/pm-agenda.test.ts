@@ -1,3 +1,4 @@
+import { isGraphReadyNotice } from "../../shared/pm-notice.ts";
 import { mkdtempSync, readdirSync, rmSync, unlinkSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,7 +99,7 @@ describe("S1 and S2: the per-graph list and the delivery row", () => {
     const ready = await readyGraph(f, "全勾了");
     const shown = f.ledger.hubCall(f.lin.sessionId, "graph.show", { graphId: ready }).text;
     expect(shown).toContain("[等你验收交付] 交付：图里画的步骤都做完了");
-    const note = f.pmSystemMessages().find((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish")!;
+    const note = f.pmSystemMessages().find(isGraphReadyNotice)!;
     expect(note.text).toContain("图里画的步骤都做完了，等你验收交付");
     expect(note.text).toContain("hub graph patch");
     expect(note.text).toContain("hub watch add");
