@@ -16,6 +16,7 @@ This is the synthesis of two independent designs: design A (Worker #1342, branch
 - Skeleton for slots: [`src/daemon/ledger/task-graphs/slots.ts`](../src/daemon/ledger/task-graphs/slots.ts) and [`migrations/0058_step_slots.sql`](../migrations/0058_step_slots.sql).
 - Skeleton for waits: [`src/shared/pm-watch.ts`](../src/shared/pm-watch.ts), [`src/daemon/ledger/pm-watches.ts`](../src/daemon/ledger/pm-watches.ts), and [`migrations/0059_pm_watches.sql`](../migrations/0059_pm_watches.sql).
 - Skeleton for reminders: [`src/daemon/ledger/pm-agenda-reminders.ts`](../src/daemon/ledger/pm-agenda-reminders.ts).
+- Skeleton for the web delivery row (D-A2 option 1): `graphDeliveryOf` in [`src/web/work-status.ts`](../src/web/work-status.ts).
 - The exhaustive system-event table in [`src/daemon/ledger/vendor-switch-context.ts`](../src/daemon/ledger/vendor-switch-context.ts), which turns a missed event kind into a compile error.
 - Acceptance tests, listed in Section 7, with the failing baseline in Section 8.
 
@@ -27,16 +28,18 @@ This is the synthesis of two independent designs: design A (Worker #1342, branch
 
 ### Decisions needed
 
+The user reviewed draft PR #467 and chose every recommended option: 「定案：A 全按推荐」 (relayed by the PM on 2026-11-26). That confirms the decision chain below, D-A1 option 1, and D-A2 option 1. No user decision remains open.
+
 #### Settled by the user: one decision chain
 
-The user decided this on 11-26 (Q13, Q14). It changes what the user sees, so the PM shows the user this example before PR-3 starts:
+The user decided this on 11-26 (Q13, Q14) and confirmed it on draft PR #467 with this example of what changes:
 
 | Before | After |
 |---|---|
 | A step marked `"confirm": true` finishes. A card `请确认步骤「plan」的结果（通过 / 打回）` appears in Router "等你处理" at once, and the PM is not told. | The same step finishes. The PM conversation shows `【任务图 #150「…」】步骤「plan」做完了，等你审（检查点）` with the summary and files. The PM passes it (`hub graph done plan`), sends it back to the Worker, or, when it cannot decide, runs `hub ask --node plan`. Only then does the user see the `通过 / 打回` card, with the PM's question on top. |
 | The PM draws an extra brief-less "审方案" step so it can review the plan. | No extra step. The plan step carries `"confirm": true`, and the graph is drawn whole at the start: `plan → impl → review ‖ review-real`. |
 
-#### D-A1. Wake an idle PM about work it left open (Q16: "你不主动读就一直不知道")
+#### D-A1. Wake an idle PM about work it left open (Q16: "你不主动读就一直不知道"). Decided: option 1
 
 Every message that wakes the PM carries the latest list (settled below). The open case is a PM that is idle while nothing new arrives: a finished graph whose delivery note the PM already read stays open until the user writes (incident A). Anything that changes and needs the PM already sends a notice, so an idle PM only misses items it already saw and left. Costs are in Section 4.
 
@@ -47,7 +50,7 @@ Every message that wakes the PM carries the latest list (settled below). The ope
 | 3. One reminder at 30 minutes | Same row as option 1, once per item. |
 | 4. Option 1, then hand to the user | After the 120-minute reminder, one Router item `项目经理有 1 件事 2 小时没处理：图 #141 全部做完，等验收交付` appears in "等你处理". Adds a user-facing card kind; not recommended until option 1 shows misses. |
 
-#### D-A2. Show delivery as the last row of a graph
+#### D-A2. Show delivery as the last row of a graph. Decided: option 1
 
 | Option | What the user sees |
 |---|---|
@@ -75,10 +78,10 @@ The PM can overturn any of these without asking the user.
 |---|---|---|---|
 | **PR-3 (revised) One decision chain** | `confirm: true` pauses for the PM; escalation through `hub ask --node`; authored step questions removed from create and patch; friction PR-3's `doneSteps` and text-limit table unchanged; Task Graph manual and `docs/plan-standard.md` sequencing note rewritten | None. The friction plan's `checkpoint` column and migration are dropped | None |
 | **PR-4 PM notice entry** (friction plan) | Unchanged | None | Rebase after PR-3 |
-| **PR-6 Status list** | `pmAgendaOf` and its text; `hub status`; agenda sections in both preamble builders; the footer on every PM wake (snapshot plus changes, per-session cursor) with the busy line; the handover notice; the exhaustive vendor-switch event table; the delivery note on PR-4's entry; the delivery row in `hub graph show` and, after D-A2, in the web | `migrations/**` (`0057`) needs a stamp | PR-4, PR-1 (#463) |
+| **PR-6 Status list** | `pmAgendaOf` and its text; `hub status`; agenda sections in both preamble builders; the footer on every PM wake (snapshot plus changes, per-session cursor) with the busy line; the handover notice; the exhaustive vendor-switch event table; the delivery note on PR-4's entry; the delivery row in `hub graph show` and in the web (D-A2 option 1) | `migrations/**` (`0057`) needs a stamp | PR-4, PR-1 (#463) |
 | **PR-7 Step slots** | `slot` on steps, admission at one boundary, release by invariant, queue position in text and web, Task Graph manual | `migrations/**` (`0058`) needs a stamp | PR-6 for the status lines |
 | **PR-8 Watches** | `hub watch add`, `list`, and `close`; the sandboxed runner; settle notices; restart recovery; retention | `migrations/**` (`0059`); `src/daemon/platform/**` or `write-scope.ts` if the runner needs a new entry point. Windows workflow runs | PR-6 |
-| **PR-9 Reminders** | Idle reminders as decided in D-A1 | None | PR-6, PR-8, D-A1 |
+| **PR-9 Reminders** | Idle reminders, D-A1 option 1 | None | PR-6, PR-8 |
 
 Each PR rechecks its migration number against `main` and open PRs before it merges (`node scripts/wait-checks.ts` does this). PR #459 still claims `0055`, which `main` already uses; the PM resolves that when the friction PRs are cut.
 
@@ -384,7 +387,7 @@ The body is what the PM will do once the wait settles. The receipt is `已开始
 
 - `hub graph show` and `formatGraphText` add a last line, `[等你验收交付] 交付：图里画的步骤都做完了（已等 25 分钟）`, or `[在等] 交付：在等 #3「检查通过后交付」` when a watch is linked. `graphStatusLabel` drops `active · 待交付`.
 - The delivery note moves onto PR-4's entry with subject `{ kind: "graph.ready_to_finish", graphId, since }`. Its header becomes `【任务图 #141「取消残留」图里画的步骤都做完了，等你验收交付】`, plus `图里只有上面这些步骤；项目规矩或用户要求、但没画进图的步骤（比如审查），后台看不出来，缺了用 hub graph patch 补。` and `要等外部条件（比如检查通过）再交付，用 hub watch add 让后台盯着，结果出来叫醒你。`
-- The web (D-A2 option 1) shows the delivery row and `2/2 steps · awaiting delivery` in `WorkPanel` and `TaskGraphDialog`.
+- The web (D-A2 option 1, decided) shows the delivery row and `2/2 steps · awaiting delivery` in `WorkPanel` and `TaskGraphDialog`, both computed by `graphDeliveryOf`.
 - Q6: a brief-less step already waits for the PM and wakes it when its upstream finishes (`progress.ts:266-267`). The delivery row makes a drawn merge step optional, and the manual says so.
 
 #### B6. Step slots
@@ -599,7 +602,7 @@ PR-6, status list:
 - `src/daemon/ledger/vendor-switch-context.ts`: the exhaustive `SYSTEM_EVENT_IN_SWITCH_LOG` table with today's values.
 - `src/shared/limits.ts`: the status list, slot, watch, and reminder constants.
 - Callers filled in by PR-6: `hub-commands.ts`, `handover.ts`, `ledger.ts`, `task-graphs/delivery.ts`, `text.ts`, `overview.ts`, `src/web/work-status.ts`, `WorkPanel.tsx`, `TaskGraphDialog.tsx`, `src/shared/task-graph-skill.ts`.
-- `src/daemon/ledger/pm-agenda.test.ts` (S1, S2, S3, S8.4, S13) and `src/daemon/ledger/vendor-switch-agenda.test.ts` (S4). The web delivery row and its wide and narrow screenshots are specified after D-A2 is decided, in `src/web/work-status.test.ts`.
+- `src/daemon/ledger/pm-agenda.test.ts` (S1, S2, S3, S8.4, S13) and `src/daemon/ledger/vendor-switch-agenda.test.ts` (S4). The web delivery row and header come from `graphDeliveryOf` in `src/web/work-status.ts`, tested in `src/web/work-status.test.ts` (S1.1, S1.2); PR-6 adds wide and narrow screenshots of `WorkPanel` and `TaskGraphDialog`. That skeleton is its own commit, written after D-A2 was decided, and PR-6 cherry-picks it too.
 - `src/shared/pm-watch.ts` ships in this commit too, because the agenda's outside block names watch ids and states.
 
 PR-7, slots:
@@ -789,10 +792,10 @@ pnpm exec vitest run \
   src/daemon/launch-fingerprint.test.ts src/prompt-portability.test.ts \
   src/daemon/ledger/task-graph-auto-dispatch.test.ts src/daemon/ledger/handover.test.ts \
   src/daemon/ledger/vendor-switch-context.test.ts src/daemon/resources/registry.test.ts \
-  src/daemon/store/store.test.ts
+  src/daemon/store/store.test.ts src/web/work-status.test.ts
 ```
 
-Before implementation, every test for new behavior fails and every regression test passes. The regression tests are the zero-wake clean handoff, a brief-less step waiting for the PM, a Worker's `有问题` braking to the PM, `hub ask --node` on a running step reaching the Worker without waking the PM, graphs without `slot` dispatching all ready steps, the vendor-switch log keeping today's events, and the fingerprint guard. Recorded on this branch before any implementation (`/tmp/pm-awareness/probe-synth/baseline.log`, per-case list in `baseline-acceptance.txt`): `pnpm typecheck` exits 0; the command above reports 13 files, 29 failed, 119 passed, 1 skipped.
+Before implementation, every test for new behavior fails and every regression test passes. The regression tests are the zero-wake clean handoff, a brief-less step waiting for the PM, a Worker's `有问题` braking to the PM, `hub ask --node` on a running step reaching the Worker without waking the PM, graphs without `slot` dispatching all ready steps, the vendor-switch log keeping today's events, and the fingerprint guard. Recorded on this branch before any implementation (`/tmp/pm-awareness/probe-synth/baseline.log`, per-case list in `baseline-acceptance.txt`): `pnpm typecheck` exits 0; the command above reports 14 files, 32 failed, 129 passed, 1 skipped.
 
 | File | Failed (new behavior) | Passed |
 |---|---|---|
@@ -802,6 +805,7 @@ Before implementation, every test for new behavior fails and every regression te
 | `task-graph-slots.test.ts` | S7.1 and S7.2, S7.3, S7.4, slot validation, `slotHolderOf` and `admitStep` | S7.6 (regression) |
 | `pm-watches.test.ts` | all four | none |
 | `pm-agenda-reminders.test.ts` | both | none |
+| `src/web/work-status.test.ts` | the three `graphDeliveryOf` cases (D-A2) | its ten existing cases |
 | Seven existing suites (fingerprint, portability, auto-dispatch, handover, vendor-switch context, resource registry, store) | none | all |
 
 New-behavior cases fail on assertions or on `Not implemented`, never on setup errors. Each implementation PR also runs `pnpm verify`.
