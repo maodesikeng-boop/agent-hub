@@ -22,6 +22,7 @@
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/relay/cloudflare/tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && tsc --noEmit -p test/ui-polish/tsconfig.in-page.json && vitest run --reporter=dot",
     "smoke": "node test/smoke/main.ts",
     "verify": "node scripts/verify-smoke.ts",
+    "tester": "node test/tester/cli.ts",
     "eval": "node test/eval/cli.ts",
     "ui:polish": "node test/ui-polish/cli.ts",
     "app:mac": "bash scripts/build-mac-app.sh"

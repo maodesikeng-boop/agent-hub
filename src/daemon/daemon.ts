@@ -23,7 +23,6 @@ import {
   MAX_VENDOR_SYNC_PROJECT_FOLDERS,
   MESH_DEFAULT_RELAY_URL,
   MESH_GITHUB_CLIENT_ID,
-  MESH_LISTEN_PORT,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
   AUTO_RENEW_TICK_MS,
@@ -113,6 +112,7 @@ import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
 import { AdminSocketInsecureError, startAdminSocket, type RunningAdminSocket } from "./admin/socket.ts";
 import { createMesh, type CenterLease, type Mesh, type MeshOptions } from "./mesh/index.ts";
+import { meshListenPort } from "./mesh/listen-port.ts";
 import { createPushService } from "./push/index.ts";
 import {
   createFeishuAccountBot,
@@ -716,7 +716,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       platform: process.platform,
       relayUrl: meshOptions.relayUrl ?? env[ENV_RELAY_URL] ?? MESH_DEFAULT_RELAY_URL,
       githubClientId: meshOptions.githubClientId ?? env[ENV_GITHUB_CLIENT_ID] ?? MESH_GITHUB_CLIENT_ID,
-      listenPort: meshOptions.listenPort ?? (port === 0 ? 0 : MESH_LISTEN_PORT),
+      listenPort: meshOptions.listenPort ?? meshListenPort(env, port),
       ...(meshOptions.listenHost !== undefined ? { listenHost: meshOptions.listenHost } : {}),
       ...(meshOptions.candidates ? { candidates: meshOptions.candidates } : {}),
       ...(meshOptions.allowLoopback ? { allowLoopback: true } : {}),

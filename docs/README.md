@@ -4,6 +4,8 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 
 ## Standards
 
+- [Testing, review, and merge policy](review-and-merge.md): Local verification, `pnpm test:related` selection, layered cloud CI, parallel logic and real-environment review, prompt-cache gates, `REVIEW.md` updates, merging, and PR body tag sync.
+- [Direct dependencies and repository skills](dependencies.md): Direct npm and Cargo dependencies enforced by `src/direct-dependencies.test.ts`, installed `src/web/ui/` primitives, and `pstack` skill update rules.
 - [UI standard](ui-standard.md): Spacing, border radius, type scale, slime accent palette, controls, focus states, responsive shells, Markdown, Task Graph tracks, Router workbench, and deliverables.
 - [UI polish baseline style brief](ui-polish/baseline/style-brief.md): Visual DNA and `S1`–`S6` baseline rules for `pnpm ui:polish` screenshot reviews.
 - [Plan and code-skeleton standard](plan-standard.md): Structure for design documents, architecture reviews, plain-language acceptance scenarios, typed code skeletons, runnable acceptance tests, implementation handoffs, and acceptance evidence.
@@ -35,6 +37,10 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Progress checklist in every multi-step turn](turn-checklist-rule-design.md): One trigger rule for when a turn must list its steps, the shared prompt section for every vendor, `hub checklist` for vendors without a checklist tool, and a one-time reminder that never starts a turn.
 - [Lost Worker briefs and stale notices](lost-brief-stale-notice-design.md): Daemon shutdown never cancels unread messages in any vendor driver, restart resends interrupted turns or tells the PM, failed first launches show their error, one pre-write currency check for delivery notes and timeout reminders, `graph done` ending the parked Worker, and per-model effort validation.
 - [Project Manager friction with `hub`](pm-friction-design.md): Plan reviews paused for the PM with `"confirm": "pm"`, `doneSteps` in `graph patch`, one text-limit table, `hub ask list/show`, `hub schedule show`, `hub worker wait`, the first typed PM notice entry, and help-only commands that keep the system prompt and every vendor cache unchanged.
+
+## Testing
+
+- [AI tester](ai-tester-design.md): The resident test bench (a Mac and a server on a test account, a test Feishu bot, all eight vendor CLIs), nightly script flows, the AI tester handbook in `.agents/skills/tester/`, vendor coverage reporting, and the `pnpm verify` round-trip and restart checks.
 
 ## Desktop and distribution
 

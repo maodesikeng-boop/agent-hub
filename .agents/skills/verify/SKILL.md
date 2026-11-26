@@ -5,7 +5,7 @@ description: "Run the local end-to-end smoke check for Bellwood: build the web a
 
 # Verify
 
-`pnpm verify` proves the app still starts and renders on this machine. One run takes about 4 seconds and has a 20-second budget.
+`pnpm verify` proves the app still starts and renders on this machine. Three local runs on macOS arm64 took 10 to 12 seconds each. The script flags runs over its 20-second target.
 
 ## Run it
 
@@ -43,12 +43,14 @@ The check writes `composer-layout.txt` and interaction screenshots under the sam
 5. Open the workbench in headless Chromium and wait for the composer. Any `console.error` or `pageerror` fails the run.
 6. Open Settings and press the wood beside the top-bar Router input (`scripts/verify-window-drag.ts`). The point must hit a `data-window-drag` region outside `data-no-drag`, a click and a double-click must reach a recorded `windowDrag` bridge as a drag and a zoom with Settings still open, and a click on the rail must then close Settings. With Settings open again, a click on the Router input must close Settings, leave the focus in the input, and never reach the bridge.
 7. At every interface scale, close the work panel and resize the window (`scripts/verify-shell-widths.ts`). At the `860px` desktop minimum the PM column must keep its `13.75rem` minimum beside a conversation of at least `20rem`. At `700px` that must hold too, or the single-column shell must show. At `400px` and `375px` with a mouse, the single-column shell must show, a project must open from the list, and its composer must take typing. Back at `1280px`, the columns must return with the typed draft. The page must never scroll sideways.
-8. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
-9. Delete the temporary directory and check that it is gone.
+8. Open the first Project Manager in the sidebar, send one message in the composer, wait for the fake Claude reply to render and the message to be stored as `replied`, then capture `workbench-smoke.png`.
+9. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
+10. Start a second daemon on the same `AGENT_HUB_HOME`, verify the conversation and both messages survived unchanged, and stop it cleanly.
+11. Delete the temporary directory and check that it is gone.
 
 ## When to use it
 
-- Before you push: run `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`. After you push, wait for the PR's CI checks with `node scripts/wait-checks.ts <PR>` (or `node scripts/wait-checks.ts` on the PR branch) instead of `gh pr checks --watch`, so pending `bellwood/review` does not hang and merge conflicts fail immediately (`AGENTS.md`, "Cloud checks before done").
+- Before you push: run `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`. After you push, Implementation Workers hand off right away so parallel review and cloud CI run together; wait for the PR's CI checks with `node scripts/wait-checks.ts <PR>` (or `node scripts/wait-checks.ts` on the PR branch) instead of `gh pr checks --watch` only when the PR touches platform code that this machine cannot test (Linux `bwrap`, Windows native, or desktop packaging) or has no immediately following review step, so pending `bellwood/review` does not hang and merge conflicts fail immediately (`docs/review-and-merge.md`, "Cloud checks and handoff").
 - In an independent review: run it on the commit under review.
 - Changes to the Linux `bwrap` sandbox, Windows native code, or packaging cannot be tested here. The matching cloud job on the PR is their only test.
 
