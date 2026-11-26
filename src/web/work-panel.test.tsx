@@ -244,9 +244,9 @@ describe("ActiveTab", () => {
       />,
     );
     const s1 = screen.getByRole("region", { name: "Redesign right panel" });
-    expect(within(s1).getByText("1/2")).toBeInTheDocument();
+    expect(within(s1).getByText("1/2 steps")).toBeInTheDocument();
     const s2 = screen.getByRole("region", { name: "Migrate relay" });
-    expect(within(s2).getByText("0/1")).toBeInTheDocument();
+    expect(within(s2).getByText("0/1 steps")).toBeInTheDocument();
     fireEvent.click(within(s1).getByRole("button", { name: "Expand Redesign right panel" }));
     expect(onExpand).toHaveBeenCalledWith(g1);
   });

@@ -66,10 +66,6 @@ jobs:
         if: matrix.shard == '1/4'
         run: pnpm lint
 
-      - name: Dead code check (knip)
-        if: matrix.shard == '1/4'
-        run: pnpm exec knip --treat-config-hints-as-errors
-
       - name: Install sandbox apt packages
         uses: ./.github/actions/apt-install
         timeout-minutes: 7

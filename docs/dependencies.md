@@ -63,7 +63,7 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 - `@axe-core/playwright`: Automated contrast and accessibility checks (`test/ui-polish/checks.ts`).
 - `yaml`: Parses GitHub workflow files in `scripts/ci-workflows.test.ts` and prunes `pnpm-lock.yaml` for the staged desktop daemon (`scripts/staged-lockfile.ts`).
 - `@tauri-apps/cli`: Exact-pinned Tauri CLI that builds the Windows NSIS installer from `node_modules/.bin` (`.github/workflows/windows-desktop.yml`); its version also pins the NSIS download it fetches.
-- `typescript` (`pnpm typecheck`), `oxlint` and `oxlint-tsgolint` (`pnpm lint`, `.oxlintrc.json`, `.oxlint-baseline.json`), `knip` (`pnpm exec knip --treat-config-hints-as-errors`), `@types/node`, `@types/react`, `@types/react-dom`, `@types/ws`, `@types/web-push`, `@types/write-file-atomic`, and `oxc-parser` (AST timer guard in `src/web/web-guard.test.ts`).
+- `typescript` (`pnpm typecheck`), `oxlint` and `oxlint-tsgolint` (`pnpm lint`, `.oxlintrc.json`, `.oxlint-baseline.json`), `knip` (run by `pnpm lint` as `knip --treat-config-hints-as-errors`), `@types/node`, `@types/react`, `@types/react-dom`, `@types/ws`, `@types/web-push`, `@types/write-file-atomic`, and `oxc-parser` (AST timer guard in `src/web/web-guard.test.ts`).
 - `wrangler` and `@cloudflare/workers-types`: Deployment and local Durable Object integration tests for the Cloudflare relay (`wrangler.toml`, `src/relay/cloudflare/`).
 
 ## Repository skills (`pstack`)

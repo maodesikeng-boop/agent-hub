@@ -1,7 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
-  isTaskGraphReadyToFinish,
   isTaskNodeUserBlocked,
   isTaskNodeAwaitingUserAction,
   isTaskNodeWaitingPm,
@@ -21,9 +20,10 @@ import { workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter, ZOOM_DIALOG } from "../ui/dialog.tsx";
 import { Loader2 } from "../ui/icons.ts";
-import { nodeWorkStatusOf } from "../work-status.ts";
+import { graphDeliveryOf, nodeWorkStatusOf } from "../work-status.ts";
 import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { GateDecisionCard, resolveBoundWorker } from "./GateDecisionCard.tsx";
+import { GraphDeliveryRow } from "./GraphDeliveryRow.tsx";
 import { GraphCanvas } from "./GraphCanvas.tsx";
 import { SandboxApprovalCard } from "./SandboxApprovalCard.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
@@ -173,15 +173,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
     );
   }
 
-  const doneCount = graph.nodes.filter((n) => n.status === "done").length;
-  const graphStateLabel =
-    graph.status === "completed"
-      ? "Completed"
-      : graph.status === "cancelled"
-        ? "Cancelled"
-        : isTaskGraphReadyToFinish(graph)
-          ? "Ready to finish"
-          : null;
+  const delivery = graphDeliveryOf(graph);
+  const graphStateLabel = graph.status === "completed" ? "Completed" : graph.status === "cancelled" ? "Cancelled" : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -195,7 +188,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       >
         <div className="flex min-h-8 shrink-0 items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 text-minor text-muted-foreground">
-            <span className="tabular-nums">{`${doneCount}/${graph.nodes.length}`}</span>
+            <span className="tabular-nums">{delivery.header}</span>
             {graphStateLabel !== null && <span>{graphStateLabel}</span>}
           </div>
           {graph.status === "active" && (
@@ -346,6 +339,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                 </div>
               );
             })}
+            {delivery.row !== null && <GraphDeliveryRow row={delivery.row} detail />}
           </div>
         </DialogBody>
       </DialogContent>

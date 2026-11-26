@@ -12,6 +12,7 @@ import { MID_TURN_CAPABILITIES, type detectArgsConflict } from "./protocol.ts";
 import type { ClaudeReadonlyGate } from "./readonly.ts";
 
 export interface Batch extends BaseBatch {
+  renderLine?: (text: (original: string) => string) => string;
   line: string;
   // claude reports command_lifecycle (queued, started, done, cancelled) for this uuid.
   uuid: string;

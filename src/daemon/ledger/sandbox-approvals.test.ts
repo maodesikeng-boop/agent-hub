@@ -240,8 +240,8 @@ describe("Worker sandbox approval", () => {
     expect(f.ledger.snapshot().activeTaskGraphs[0]?.nodes[0]).toMatchObject(pendingStep);
     expect(isTaskNodeWaitingDecision(step)).toBe(false);
     const status = f.ledger.hubCall(f.pm.sessionId, "status", {});
-    expect(status.text).toContain("等用户确认 Worker 沙箱：run");
-    expect(status.text).not.toContain("等用户拍板：run");
+    expect(status.text).toContain("run：等用户，确认 Worker 沙箱");
+    expect(status.text).not.toContain("run：等用户，拍板");
     expect(status.data).toMatchObject({ activeTaskGraphs: [{ id: graph.id, waitingUserCount: 1 }] });
     expect(() => f.ledger.hubCall(f.pm.sessionId, "graph.done", { graphId: graph.id, nodeKey: "run" })).toThrow(/等用户确认 Worker 沙箱/);
     expect(() => f.ledger.hubCall(f.pm.sessionId, "graph.finish", { graphId: graph.id, summary: "Done" })).toThrow(/run \[等用户确认 Worker 沙箱\]/);

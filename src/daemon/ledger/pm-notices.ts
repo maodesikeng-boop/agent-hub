@@ -3,6 +3,7 @@ import { HUB_COMMAND } from "../../shared/names.ts";
 import { pmNoticeDedupeRef, type PmNoticeSubject } from "../../shared/pm-notice.ts";
 import type { Db } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
+import { isPmAgendaItemOpen, isReadyAgendaNoticeCurrent } from "./pm-agenda.ts";
 import { enqueueSystemWakeupIn } from "./system-wakeups.ts";
 import { decisionOf, decisionWakeupClientIdOf } from "./task-graphs/rows.ts";
 import { getGraphRow, getStepRow } from "./task-graphs/store.ts";
@@ -72,12 +73,18 @@ export function wakePmForSettledLeafIn(
 }
 
 export function isPmNoticeCurrent(db: Db, subject: PmNoticeSubject, conversationId: ConversationId): boolean {
+  if (subject.kind === "pm.agenda") {
+    const pm = db.get<{ pm_id: number }>("SELECT pm_id FROM conversations WHERE id = ? AND kind = 'pm'", conversationId);
+    return pm !== undefined && subject.refs.some((ref) => isPmAgendaItemOpen(db, pm.pm_id, ref));
+  }
   const graph = getGraphRow(db, subject.graphId);
   if (graph?.conversation_id !== conversationId) return false;
   if (subject.kind === "graph.cancelled") return graph.status === "cancelled" && graph.completed_at === subject.cancelledAt;
   if (graph.status !== "active") return false;
 
   switch (subject.kind) {
+    case "graph.ready_to_finish":
+      return isReadyAgendaNoticeCurrent(db, graph.pm_id, graph.id, subject.since);
     case "graph.steps_waiting_pm":
       return db.get(
         `SELECT 1 FROM task_graph_steps WHERE graph_id = ? AND status = 'waiting' AND waiting_for = 'pm'

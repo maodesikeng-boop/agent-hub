@@ -51,7 +51,7 @@ The check writes `composer-layout.txt` and interaction screenshots under the sam
 
 ## When to use it
 
-- Before you push: run `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`. After you push, Implementation Workers hand off right away so parallel review and cloud CI run together; wait for the PR's CI checks with `node scripts/wait-checks.ts <PR>` (or `node scripts/wait-checks.ts` on the PR branch) instead of `gh pr checks --watch` only when the PR touches platform code that this machine cannot test (Linux `bwrap`, Windows native, or desktop packaging) or has no immediately following review step, so pending `bellwood/review` does not hang and merge conflicts fail immediately (`docs/review-and-merge.md`, "Cloud checks and handoff").
+- Before you push: run `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`. After you push, Implementation Workers hand off right away so parallel review and cloud CI run together; wait for the PR's CI checks with `node scripts/wait-checks.ts <PR>` (or `node scripts/wait-checks.ts` on the PR branch) instead of `gh pr checks --watch` only when the PR touches platform code that this machine cannot test (Linux `bwrap`, Windows native, or desktop packaging), when `pnpm test:related` lists test files that the sandbox made skip, or when the PR has no immediately following review step, so pending `bellwood/review` does not hang and merge conflicts fail immediately (`docs/review-and-merge.md`, "Cloud checks and handoff").
 - In an independent review: run it on the commit under review.
 - Changes to the Linux `bwrap` sandbox, Windows native code, or packaging cannot be tested here. The matching cloud job on the PR is their only test.
 

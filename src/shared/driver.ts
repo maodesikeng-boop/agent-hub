@@ -1,3 +1,4 @@
+import type { AgendaFooter } from "./pm-agenda.ts";
 import type { ComposerCommand } from "./api.ts";
 import type { ChecklistUpdate } from "./checklist.ts";
 import type { AgentSessionRow, AgentStep, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
@@ -85,9 +86,17 @@ export interface SessionStartedEvent extends DriverEventBase {
   tools: string[];
 }
 
+export type WrittenAgendaFooter = Extract<AgendaFooter, { kind: "snapshot" | "delta" }>;
+
+export interface DeliverySuffix {
+  text: string;
+  agenda?: WrittenAgendaFooter;
+}
+
 interface MessageDeliveredEvent extends DriverEventBase {
   type: "message.delivered";
   messageIds: MessageId[];
+  agenda?: { messageId: MessageId; footer: WrittenAgendaFooter };
   midTurn?: true;
 }
 
@@ -338,6 +347,8 @@ export interface DriverOptions {
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   personaNote?: (sessionId: SessionId, sinceRevision: number) => PersonaNote | null;
   sessionPreamble?: (sessionId: SessionId) => string | null;
+  /** `preamble` is the opening brief carried by the same input, if any. */
+  deliverySuffix?: (sessionId: SessionId, messageIds: readonly MessageId[], preamble?: string) => DeliverySuffix;
   canDeliverSystemMessage?: (sessionId: SessionId, messageId: MessageId) => boolean;
   /** Called when a session finishes an in-progress startup, delivery, or turn and becomes idle in the driver. */
   onSessionQuiescent?: (sessionId: SessionId) => void;

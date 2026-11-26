@@ -2,9 +2,9 @@ import type { MessageId, WorkerId } from "../../shared/domain.ts";
 import { isPmNoticeSubject } from "../../shared/pm-notice.ts";
 import type { Db } from "../store/index.ts";
 import { isPmNoticeCurrent } from "./pm-notices.ts";
-import { deliveryNoteKeyGlob } from "./task-graphs/delivery.ts";
+import { graphReadySince } from "./pm-agenda.ts";
+import { latestDeliveryNoteId } from "./task-graphs/delivery.ts";
 import { parseJsonOr } from "./task-graphs/rows.ts";
-import { isGraphAllSettled } from "./task-graphs/store.ts";
 
 interface NoticeRow {
   conversation_id: number;
@@ -31,26 +31,37 @@ export function isSystemMessageCurrent(
     messageId,
   );
   if (notice === undefined) return true;
-  if (notice.event === "task_graph.ready_to_finish") {
-    const graphId = notice.graph_id;
-    return graphId !== null &&
-      db.get("SELECT 1 FROM task_graphs WHERE id = ? AND conversation_id = ? AND status = 'active'", graphId, notice.conversation_id) !== undefined &&
-      isGraphAllSettled(db, graphId) &&
-      db.get("SELECT 1 FROM messages WHERE dedupe_key GLOB ? AND id > ? LIMIT 1", deliveryNoteKeyGlob(notice.conversation_id, graphId), messageId) === undefined;
+  const subject = subjectOfNotice(db, notice);
+  if (subject !== null) {
+    return (subject.kind !== "graph.ready_to_finish" ||
+      (latestDeliveryNoteId(db, notice.conversation_id, subject.graphId) ?? messageId) <= messageId) &&
+      isPmNoticeCurrent(db, subject, notice.conversation_id);
   }
+  if (notice.event === "task_graph.ready_to_finish") return false;
   if (notice.event === "pm.wakeup" && notice.source === "app_approval") {
     return db.get(`SELECT 1 FROM worker_app_approvals a JOIN workers w ON w.id = a.worker_id
       WHERE a.id = ? AND a.status = 'allowed' AND w.status = 'open' AND w.worker_conversation_id = ?`, notice.ref, notice.conversation_id) !== undefined;
   }
-  if (notice.event === "pm.wakeup" && notice.source === "task_graph" && notice.subject_json !== null) {
-    const subject = parseJsonOr<unknown>(notice.subject_json, null);
-    return isPmNoticeSubject(subject) && isPmNoticeCurrent(db, subject, notice.conversation_id);
-  }
+  if (notice.event === "pm.wakeup" && notice.source === "task_graph" && notice.subject_json !== null) return false;
   if (notice.event === "worker.max_time_exceeded") {
     return notice.worker_id !== null && isTimeoutCurrent(db, notice, now) && isInFlight(notice.worker_id);
   }
   if (notice.event === "worker.background_wait") return isBackgroundReminderCurrent(messageId);
   return notice.worker_id === null || isWorkerNoticeCurrent(db, messageId);
+}
+
+function subjectOfNotice(db: Db, notice: NoticeRow) {
+  if (notice.event === "pm.wakeup" && notice.source === "task_graph" && notice.subject_json !== null) {
+    const subject = parseJsonOr<unknown>(notice.subject_json, null);
+    return isPmNoticeSubject(subject) ? subject : null;
+  }
+  if (notice.event !== "task_graph.ready_to_finish" || notice.graph_id === null) return null;
+  const graphId = notice.graph_id;
+  const graph = db.get<{ pm_id: number }>("SELECT pm_id FROM task_graphs WHERE id = ? AND conversation_id = ?", graphId, notice.conversation_id);
+  if (graph === undefined) return null;
+  const since = graphReadySince(db, graph.pm_id, graphId);
+  if (since === null) return null;
+  return { kind: "graph.ready_to_finish" as const, graphId, since };
 }
 
 function isTimeoutCurrent(db: Db, notice: NoticeRow, now: number): boolean {

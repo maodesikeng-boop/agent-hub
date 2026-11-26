@@ -10,10 +10,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_DB_SHARED_ACCESS, HUB_COMMAND, REPORT_END, REPORT_START, RESEND_NOTE, RESTART_RECOVERY_NOTE, systemEventOf, workerEventOf } from "../../src/shared/index.ts";
 import { DESKTOP_CONTRACT } from "../../src/daemon/entry.ts";
-import { SANDBOX_EXEC, osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
+import { osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
 import { Client, makeEnv, messagesOf, sleep, waitUntil, type E2eEnv } from "./harness.ts";
+import { sandboxAllowsNestedSandbox } from "../sandbox-probes.ts";
 
 const RELOAD_MAIN = fileURLToPath(new URL("./self-reload-daemon.ts", import.meta.url));
 const DRAIN_MAX_MS = 4_000;
@@ -22,14 +23,7 @@ const SUPERVISED_ENV = { [DESKTOP_CONTRACT.supervisedEnv]: "test", E2E_SELF_RELO
 
 const canNestOsSandbox =
   process.platform === "darwin"
-    ? (() => {
-        try {
-          execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
-          return true;
-        } catch {
-          return false;
-        }
-      })()
+    ? sandboxAllowsNestedSandbox()
     : osSandboxAvailable();
 
 let env: E2eEnv;

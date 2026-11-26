@@ -155,7 +155,7 @@ describe("桌面右栏：App 接通工作面板任务图画布", () => {
 
     const graphSection = within(rail).getByRole("region", { name: "发布流水线" });
     expect(within(graphSection).getByText("发布流水线")).toBeInTheDocument();
-    expect(within(graphSection).getByText("0/2")).toBeInTheDocument();
+    expect(within(graphSection).getByText("0/2 steps")).toBeInTheDocument();
     expect(within(graphSection).getByRole("button", { name: /确认上线/ })).toBeInTheDocument();
     expect(within(graphSection).queryByTestId("peel-gate-card")).toBeNull();
     expect(within(rail).queryByRole("region", { name: /^Needs You$/ })).toBeNull();
@@ -808,12 +808,12 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
   });
 });
 
-describe("待交付状态展示（Ready to finish）", () => {
-  it("所有节点均已到达终态但图仍 active 时，右栏显示 2/2 进度，全览弹窗显示 Ready to finish", async () => {
+describe("Task Graph delivery row", () => {
+  it("shows delivery in the work panel and dialog until a new step is added", async () => {
     const user = userEvent.setup();
     const { ws } = await bootSingle(graphSnapshot());
     const rail = await waitFor(sidePanel);
-    expect(within(rail).getByText("0/2")).toBeInTheDocument();
+    expect(within(rail).getByText("0/2 steps")).toBeInTheDocument();
 
     act(() =>
       ws.push({
@@ -831,11 +831,26 @@ describe("待交付状态展示（Ready to finish）", () => {
       }),
     );
 
-    expect(await within(rail).findByText("2/2")).toBeInTheDocument();
+    expect(await within(rail).findByText("2/2 steps · awaiting delivery")).toBeInTheDocument();
 
     await user.click(within(rail).getByRole("button", { name: "Expand 发布流水线" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
-    expect(within(zoom).getByText("Ready to finish")).toBeInTheDocument();
+    expect(within(zoom).getByText("2/2 steps · awaiting delivery")).toBeInTheDocument();
+    expect(within(rail).getByText("Waiting for the PM")).toBeInTheDocument();
+    expect(within(zoom).getByText("Waiting for the PM")).toBeInTheDocument();
+    act(() => ws.push({
+      seq: 31,
+      type: "task_graph.updated",
+      data: { graph: { ...graph(), nodes: [
+        makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0 }),
+        makeNode({ key: "gate", title: "确认上线", status: "done", sortOrder: 1 }),
+        makeNode({ key: "review", title: "回归审查", status: "pending", sortOrder: 2 }),
+      ] } },
+    }));
+    expect(await within(zoom).findByText("2/3 steps")).toBeInTheDocument();
+    expect(within(rail).getByText("2/3 steps")).toBeInTheDocument();
+    expect(within(rail).queryByText("Waiting for the PM")).not.toBeInTheDocument();
+    expect(within(zoom).queryByText("Waiting for the PM")).not.toBeInTheDocument();
   });
 
   it("任务图门禁卡草稿跨开关弹窗与对话 AskCard 共享；远端定案离开 waiting:user 后在节点上保留只读可复制未发草稿", async () => {

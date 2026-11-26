@@ -79,9 +79,9 @@ Seen in: `bdb85632`, `c067de52`/`2a421897`, `717eeb06`
 
 Trigger: `src/daemon/agent-api/**`, `src/daemon/sent-files.ts`, `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/resources/**`, `src/daemon/daemon.ts`
 
-Check: After each `await` in a handler or background job, the code checks `signal.aborted` (or the closing flag) before it calls the ledger or the database. `close()` or `stop()` cancels in-flight work and returns a promise that `daemon.ts` awaits before the database closes; a `void` background run has a `.catch` that logs. A slot for an open file or upload counts from open until the handle closes.
+Check: After each `await` in a handler or background job, the code checks `signal.aborted` (or the closing flag) before it calls the ledger or the database. `close()` or `stop()` cancels in-flight work and returns a promise that `daemon.ts` awaits before the database closes; a `void` background run has a `.catch` that logs. A retry or backoff wait inside such work listens to the same abort signal (for example `setTimeout` from `node:timers/promises` with `{ signal }`), so shutdown cancels it at once instead of letting it wake up and retry. A slot for an open file or upload counts from open until the handle closes.
 
-Seen in: `c69b3b94`, `d23209c2`/`796273fe`, `e5b55fa6`, `2bdf6ff9`/`3ecff0d4`, `ba599181`/`12815bc8`, `3d3bac89`
+Seen in: `c69b3b94`, `d23209c2`/`796273fe`, `e5b55fa6`, `2bdf6ff9`/`3ecff0d4`, `ba599181`/`12815bc8`, `3d3bac89`, `d4e3c6b2`
 
 ### Restart recovery finishes what the last run left
 
@@ -165,11 +165,11 @@ Seen in: `f294936b`/`a4d5ca8d`, `5a2a2f03`
 
 ### Child processes are tracked and gone before cleanup
 
-Trigger: `src/daemon/driver/**`, `src/daemon/handover/**`, `src/daemon/setup/**`, `src/daemon/process-ledger.ts`, `test/e2e/harness.ts`, `test/spawn-guard.ts`, `test/smoke/**`
+Trigger: `src/daemon/driver/**`, `src/daemon/handover/**`, `src/daemon/setup/**`, `src/daemon/provider-manager/**`, `src/vendors/_common/setup/**`, `src/daemon/process-ledger.ts`, `test/e2e/harness.ts`, `test/spawn-guard.ts`, `test/smoke/**`
 
-Check: Each new child process the daemon starts goes through `trackChild`, so a crash leaves nothing behind after the next start. A test stops the daemon and waits for it and its children to exit before it deletes the temporary `AGENT_HUB_HOME`. Never use `rmSync` retries or `gh run rerun` to hide `ENOTEMPTY`.
+Check: Each new child process the daemon starts goes through `trackChild`, so a crash leaves nothing behind after the next start. A `close()` that aborts child processes, such as version probes, waits for each one to emit `close` before it resolves. A test stops the daemon and waits for it and its children to exit before it deletes the temporary `AGENT_HUB_HOME`. Never use `rmSync` retries or `gh run rerun` to hide `ENOTEMPTY`.
 
-Seen in: `6af05c80`, `4b557b03`
+Seen in: `6af05c80`, `4b557b03`, `601cb7cb`
 
 ### Tests wait for events, not for time
 

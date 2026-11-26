@@ -112,7 +112,7 @@ describe("upgrading ledgers written by released versions", { timeout: 30_000 }, 
     const pm = await client.createPm({ name: "Created after the upgrade", mode: "manage_only", persona: "" });
     await waitForStatus(client, await client.post(pm.conversationId, "hello after the upgrade"), "replied");
     expect(agentTexts(await client.state(), pm.conversationId)).toEqual(["after the upgrade"]);
-    expect((await daemon.terminate()).code).toBe(0);
+    expect(await daemon.terminate()).toEqual({ code: 0, signal: null });
 
     inspect(dbFile, (db) => {
       expect(userVersionOf(db)).toBe(LATEST);
@@ -141,7 +141,7 @@ describe("upgrading ledgers written by released versions", { timeout: 30_000 }, 
 
     for (let boot = 0; boot < 2; boot++) {
       const daemon = await env.start({ env: { [ENV_DB_SHARED_ACCESS]: "0" } });
-      expect((await daemon.terminate()).code).toBe(0);
+      expect(await daemon.terminate()).toEqual({ code: 0, signal: null });
       inspect(dbFile, (db) => {
         expect(db.prepare("SELECT 1 FROM sqlite_schema WHERE name IN ('worker_background_waits', 'worker_background_wait_details')").all()).toEqual([]);
         expect(db.prepare("SELECT * FROM turn_background_waits").all()).toEqual([]);

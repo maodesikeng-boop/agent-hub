@@ -1,3 +1,5 @@
+import { preambleAgendaSection } from "../../shared/pm-agenda.ts";
+import { dropAgendaCursorIn, enqueueHandoverAgendaNoticeIn, pmAgendaOf } from "./pm-agenda.ts";
 import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
 import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 // Handover runs in the background on a fork of the PM session and swaps sessions between two turns, so the user keeps chatting throughout.
@@ -57,7 +59,6 @@ export interface HandoverOptions {
   autoRenew?: { contextTokens?: number; idleMs?: number; timeoutMs?: number };
   log?: (line: string) => void;
   onHandoverClaimable?: () => void;
-  liveActiveGraphsSection?: (pmId: PmId) => string | null;
   onRenewedIn?: (p: Pending, conversationId: ConversationId) => void;
   isSessionBusy?: (sessionId: SessionId) => boolean;
   hasPendingDriverEvents?: (sessionId: SessionId) => boolean;
@@ -448,6 +449,7 @@ export function createLedgerHandover(
       p.changes.push({ type: "pm.updated", data: { pm: toPm(pmRow(old.pmId)!) } });
     }
     enqueue(p, { type: "session.end", params: { sessionId: old.id, generation: old.generation } });
+    dropAgendaCursorIn(db, old.id);
     if (!vendorSwitch) {
       insertSystemMessage(
         p,
@@ -492,6 +494,7 @@ export function createLedgerHandover(
       row.id,
     );
     p.after.push(() => queue.delete(conversationId));
+    if (old.pmId !== null) enqueueHandoverAgendaNoticeIn(ctx, p, { handoverId: row.id, pmId: old.pmId, conversationId, sessionId: next.id });
     if (!vendorSwitch) options.onRenewedIn?.(p, conversationId);
     return true;
   };
@@ -969,10 +972,11 @@ export function createLedgerHandover(
     }
     if (base === null) return null;
     const waiting = `${base}\n\n## 在等用户的提问卡（账本实时状态）\n\n${pendingAsksSection(session.pmId === null ? [] : pendingAsksOfPm(db, session.pmId), now())}`;
-    const liveGraphs = session.pmId === null ? null : (options.liveActiveGraphsSection?.(session.pmId) ?? null);
-    return liveGraphs === null || liveGraphs === ""
-      ? waiting
-      : `${waiting}\n\n## 未完结的任务图（账本实时状态）\n\n${liveGraphs}`;
+    if (session.pmId === null) return waiting;
+    const at = now();
+    const agenda = pmAgendaOf(db, session.pmId, at);
+    if (agenda.graphs.length === 0 && agenda.outside.length === 0 && agenda.userCards === 0) return waiting;
+    return `${waiting}\n\n${preambleAgendaSection(agenda, at)}`;
   };
 
   const waitsForHandover = (messageId: MessageId): boolean => {

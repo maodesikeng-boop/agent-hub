@@ -1,3 +1,4 @@
+import { isGraphReadyNotice } from "../../shared/pm-notice.ts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, askOf, systemEventOf, type TaskGraphId, type WorkerId } from "../../shared/domain.ts";
@@ -84,8 +85,8 @@ describe("S9: one decision chain from Worker to PM to user", () => {
 
     f.workerTurn(impl.activeWorkerId!, reportBlock({ status: "做完了", summary: "实现好了" }));
     await f.ledger.settleDriverEvents();
-    const delivery = f.pmSystemMessages().find((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish");
-    expect(delivery?.text).toContain("全部步骤做完，等你交付");
+    const delivery = f.pmSystemMessages().find(isGraphReadyNotice);
+    expect(delivery?.text).toContain("图里画的步骤都做完了，等你验收交付");
     expect(delivery?.text).not.toMatch(/定案[： ]打回/);
   });
 

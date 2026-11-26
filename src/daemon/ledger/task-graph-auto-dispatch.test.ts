@@ -430,7 +430,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     const pmSends = pmSendActions();
     expect(pmSends).toHaveLength(1);
     const deliveryMsg = ledger.getMessage(pmSends[0]!.params.messageId)!;
-    expect(deliveryMsg.text).toContain("全部步骤做完，等你交付");
+    expect(deliveryMsg.text).toContain("图里画的步骤都做完了，等你验收交付");
     expect(deliveryMsg.text).toContain("https://github.com/maodesikeng-boop/agent-hub/pull/315");
     expect(deliveryMsg.text).toContain("核查并通过 cursor.ts:1，补了同 id 断言。");
 

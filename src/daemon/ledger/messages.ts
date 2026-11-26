@@ -131,6 +131,16 @@ function findTurnReply(
   return { request, reply: reply?.conversationId === request.conversationId && reply.sender === "agent" && reply.kind === "text" ? reply : null };
 }
 
+function userMessageMetaOf(input: PostUserMessageInput, sentWhileBusy: boolean): UserMessageMeta | null {
+  const meta: UserMessageMeta = {
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    ...(input.workerPick !== undefined ? { workerPick: input.workerPick } : {}),
+    ...(input.origin !== undefined ? { origin: input.origin } : {}),
+    ...(sentWhileBusy ? { sentWhileBusy: true } : {}),
+  };
+  return Object.keys(meta).length === 0 ? null : meta;
+}
+
 export function createLedgerMessages(
   ctx: LedgerContext,
   sessions: LedgerSessions,
@@ -477,14 +487,8 @@ export function createLedgerMessages(
       const blocked = ctx.commandBlockReason(session, input.text);
       if (blocked !== null) throw fail("invalid", blocked);
       const t = now();
-      const meta: UserMessageMeta | null =
-        input.attachments?.length || input.workerPick !== undefined || input.origin !== undefined
-          ? {
-              ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-              ...(input.workerPick !== undefined ? { workerPick: input.workerPick } : {}),
-              ...(input.origin !== undefined ? { origin: input.origin } : {}),
-            }
-          : null;
+      const sentWhileBusy = session.role === "pm" && liveOf(session.id).activity === "working";
+      const meta = userMessageMetaOf(input, sentWhileBusy);
       const row = db.get<MessageDbRow>(
         `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
          VALUES (?, ?, ?, 'user', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
