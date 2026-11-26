@@ -13,7 +13,7 @@ This is the synthesis of two independent designs: design A (Worker #1342, branch
 - This design document: root causes, the status list, the decision chain, waits, slots, how they join the friction plan, cache impact, acceptance scenarios, and the PR split.
 - Token measurements behind the cost section: `/tmp/pm-awareness/probe-synth/` (today's `hub` read sizes on a 7-graph fixture, code-host outputs for PR #461, and the proposed list and footers).
 - Section 7 lists the planned files for the status list (PR-6), slots (PR-7), waits (PR-8), and reminders (PR-9). Those files land with their respective PRs.
-- Skeleton for the web delivery row (D-A2 option 1): `graphDeliveryOf` in [`src/web/work-status.ts`](../src/web/work-status.ts).
+- PR-6 adds `graphDeliveryOf` in [`src/web/work-status.ts`](../src/web/work-status.ts) for the web delivery row (D-A2 option 1).
 - The exhaustive system-event table in [`src/daemon/ledger/vendor-switch-context.ts`](../src/daemon/ledger/vendor-switch-context.ts), which turns a missed event kind into a compile error.
 - Acceptance tests, listed in Section 7, with the failing baseline in Section 8.
 

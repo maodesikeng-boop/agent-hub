@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
-import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, askOf, systemEventOf, type WorkerId } from "../../shared/domain.ts";
+import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, askOf, systemEventOf, type TaskGraphId, type WorkerId } from "../../shared/domain.ts";
+import { isSystemMessageCurrent } from "./notice-currency.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./pm-friction-fixture.ts";
 
 describe("S9: one decision chain from Worker to PM to user", () => {
@@ -33,6 +34,61 @@ describe("S9: one decision chain from Worker to PM to user", () => {
     await f.ledger.settleDriverEvents();
     return wid;
   }
+
+  async function rejectAfterWorkerEnded(graphId: TaskGraphId) {
+    const workerId = await finishPlan(graphId);
+    const { messageId: askMessageId } = f.ledger.hubCall(f.lin.sessionId, "ask", {
+      graphId, node: "plan", text: "方案可以通过吗？",
+    }).data;
+    f.ledger.hubCall(f.lin.sessionId, "worker.end", { workerId });
+    const input = { clientId: "reject-ended", askMessageId, choice: CONFIRM_REJECT_OPTION, note: "需要补测试" };
+    const { messageId } = f.ledger.decideTaskNode(graphId, "plan", input);
+    expect(messageId).not.toBeNull();
+    expect(f.ledger.getMessage(messageId!)?.text).toContain("需要补测试");
+    expect(f.ledger.decideTaskNode(graphId, "plan", input).messageId).toBe(messageId);
+    expect(askOf(f.ledger.getMessage(askMessageId)!)?.chosenOption).toBe(CONFIRM_REJECT_OPTION);
+    expect(f.showGraph(graphId).nodes[0]).toMatchObject({ status: "waiting", waitingFor: "pm", activeWorkerId: null, decision: null });
+    return { workerId, messageId: messageId! };
+  }
+
+  it("retires a rejection notice when a replacement Worker reports at the same checkpoint", async () => {
+    const { id: graphId } = planThenImpl("换人重做后再审");
+    const { workerId, messageId } = await rejectAfterWorkerEnded(graphId);
+    const current = () => isSystemMessageCurrent(f.db, messageId, f.clock.now, () => false);
+    expect(current()).toBe(true);
+
+    const next = f.ledger.hubCall(f.lin.sessionId, "worker.start", { graphId, node: "plan", task: "补完测试再交方案" }).data.worker;
+    expect(next.id).not.toBe(workerId);
+    await f.startWorktree(next.id);
+    f.workerTurn(next.id, reportBlock({ status: "做完了", summary: "测试已补齐" }));
+    await f.ledger.settleDriverEvents();
+
+    expect(f.showGraph(graphId).nodes[0]).toMatchObject({ status: "waiting", waitingFor: "pm", activeWorkerId: next.id });
+    expect(current()).toBe(false);
+  });
+
+  it.each(["graph done", "graph patch doneSteps"])("omits the old rejection after %s releases the checkpoint", async (command) => {
+    const { id: graphId } = planThenImpl("打回后由项目经理放行");
+    await rejectAfterWorkerEnded(graphId);
+
+    if (command === "graph done") {
+      f.ledger.hubCall(f.lin.sessionId, "graph.done", { graphId, nodeKey: "plan" });
+    } else {
+      f.patchGraph({ doneSteps: ["plan"] }, graphId);
+    }
+    const impl = f.showGraph(graphId).nodes[1]!;
+    expect(impl.status).toBe("running");
+    await f.startWorktree(impl.activeWorkerId!);
+    const first = f.pmMessages(f.workerSessionOf(impl.activeWorkerId!).conversation_id).find((m) => m.sender === "pm");
+    expect(first?.text).toContain("要点：先减后加");
+    expect.soft(first?.text).not.toMatch(/定案[： ]打回/);
+
+    f.workerTurn(impl.activeWorkerId!, reportBlock({ status: "做完了", summary: "实现好了" }));
+    await f.ledger.settleDriverEvents();
+    const delivery = f.pmSystemMessages().find((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish");
+    expect(delivery?.text).toContain("全部步骤做完，等你交付");
+    expect(delivery?.text).not.toMatch(/定案[： ]打回/);
+  });
 
   it("U1: a clean report on a confirm step waits for the PM, keeps its Worker, sends the PM one notice, and opens no user card", async () => {
     const graph = planThenImpl("检查点先到项目经理");
@@ -118,6 +174,26 @@ describe("S9: one decision chain from Worker to PM to user", () => {
     const artifact: unknown = JSON.parse(stored?.artifact_json ?? "null");
     expect(artifact).toMatchObject({ summary: "方案写好了" });
     expect(artifact).not.toHaveProperty("checkpointPending");
+  });
+
+  it("keeps the checkpoint marker when the PM marks the step done while its user card is pending", async () => {
+    const graph = planThenImpl("项目经理放行但用户卡仍可作答");
+    await finishPlan(graph.id);
+    const asked = f.ledger.hubCall(f.lin.sessionId, "ask", { node: "plan", graphId: graph.id, text: "方案可以通过吗？" });
+    const artifact = (): unknown => {
+      const row = f.db.get<{ artifact_json: string }>(
+        "SELECT artifact_json FROM task_graph_steps WHERE graph_id = ? AND node_key = 'plan'", graph.id,
+      );
+      return JSON.parse(row?.artifact_json ?? "null");
+    };
+
+    f.ledger.hubCall(f.lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "plan" });
+    expect(artifact()).toMatchObject({ checkpointPending: true });
+    expect(askOf(f.ledger.getMessage(asked.data.messageId)!)).toMatchObject({ gateRef: { checkpoint: true } });
+
+    f.ledger.decideTaskNode(graph.id, "plan", { clientId: "late-pass", choice: CONFIRM_PASS_OPTION, askMessageId: asked.data.messageId });
+    expect(askOf(f.ledger.getMessage(asked.data.messageId)!)?.chosenOption).toBe(CONFIRM_PASS_OPTION);
+    expect(artifact()).not.toHaveProperty("checkpointPending");
   });
 
   it("U6 (regression): a clean report on a step without confirm hands off to the next step and wakes nobody", async () => {

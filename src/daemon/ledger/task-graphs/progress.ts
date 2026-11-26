@@ -3,10 +3,12 @@ import { DEFAULT_AGENT_VENDOR, type AgentVendor } from "../../../shared/vendors.
 import type { AgentSessionRow, MessageId, TaskNodeKey } from "../../../shared/domain.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
+import type { PmNoticeSubject } from "../../../shared/pm-notice.ts";
 import { UserBlockedError } from "../../../shared/user-blockers.ts";
 import { readWorkerCapabilities } from "../capability-rows.ts";
 import type { Pending } from "../context.ts";
 import type { LedgerPersona } from "../persona.ts";
+import { wakeGraphPmIn } from "../pm-notices.ts";
 import {
   buildStepFirstMessage,
   formatStepUserBlockedMessage,
@@ -166,12 +168,9 @@ function onDispatchErrorIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: 
     const note = userBlockedPmNote(blocker);
     run.result.userBlocked.push({ key: node.node_key, note });
     if (run.callerSession == null) {
-      g.messages.enqueueWakeupIn(p, {
-        conversationId: graphRow.conversation_id,
-        source: "task_graph",
-        ref: `graph-user-blocked:${graphRow.id}:${node.node_key}:${blocker.id}`,
-        text: formatStepUserBlockedMessage({ graph, step, note }),
-      });
+      wakeGraphPmIn(g, p, graphRow, {
+        kind: "graph.step_user_blocked", graphId: graph.id, nodeKey: node.node_key, blockerId: blocker.id,
+      }, formatStepUserBlockedMessage({ graph, step, note }));
     }
     return;
   }
@@ -179,12 +178,9 @@ function onDispatchErrorIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: 
   setStepState(g, run, node, "waiting", "pm");
   run.result.dispatchFailed.push({ key: node.node_key, title: node.title, index: pos.index, total: pos.total, reason });
   if (run.callerSession == null) {
-    g.messages.enqueueWakeupIn(p, {
-      conversationId: graphRow.conversation_id,
-      source: "task_graph",
-      ref: `graph-autodispatch-failed:${graphRow.id}:${node.node_key}:${t}`,
-      text: formatStepWaitingPmMessage({ graph, step, workerId: null, reasonLabel: "自动开工未成功", detailBody: reason }),
-    });
+    wakeGraphPmIn(g, p, graphRow, {
+      kind: "graph.steps_waiting_pm", graphId: graph.id, stepKeys: [node.node_key], reason: `autodispatch-failed:${node.node_key}:${t}`,
+    }, formatStepWaitingPmMessage({ graph, step, workerId: null, reasonLabel: "自动开工未成功", detailBody: reason }));
   }
 }
 
@@ -288,17 +284,14 @@ export function wakePmForTurnedIn(
   turned: readonly TurnedStep[],
   lead: string,
   dedupeRef: string,
+  decision?: Extract<PmNoticeSubject, { kind: "graph.steps_waiting_pm" }>["decision"],
 ): MessageId | null {
   const forPm = turned.filter((u) => u.waitingFor === "pm");
   if (forPm.length === 0) return null;
   const first: TaskNodeKey = forPm[0]!.key;
-  const wake = g.messages.enqueueWakeupIn(p, {
-    conversationId: graphRow.conversation_id,
-    source: "task_graph",
-    ref: `graph-turned:${graphRow.id}:${dedupeRef}`,
-    text:
-      `【任务图 #${graphRow.id}「${graphRow.title}」】${lead}轮到了：${forPm.map((u) => `${u.key}（${u.title}${u.question === undefined ? "" : `：${u.question}`}）`).join("、")}，等你处理。` +
-      `给它派 Worker 用 ${HUB_COMMAND} worker start --node ${first} --graph ${graphRow.id}，不需要了用 ${HUB_COMMAND} graph skip ${first} --graph ${graphRow.id}。`,
-  });
-  return wake.id;
+  const text = `【任务图 #${graphRow.id}「${graphRow.title}」】${lead}轮到了：${forPm.map((u) => `${u.key}（${u.title}${u.question === undefined ? "" : `：${u.question}`}）`).join("、")}，等你处理。` +
+    `给它派 Worker 用 ${HUB_COMMAND} worker start --node ${first} --graph ${graphRow.id}，不需要了用 ${HUB_COMMAND} graph skip ${first} --graph ${graphRow.id}。`;
+  return wakeGraphPmIn(g, p, graphRow, {
+    kind: "graph.steps_waiting_pm", graphId: graphRow.id, stepKeys: forPm.map((u) => u.key), reason: dedupeRef, decision,
+  }, text);
 }

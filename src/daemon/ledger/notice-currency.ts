@@ -1,6 +1,9 @@
 import type { MessageId, WorkerId } from "../../shared/domain.ts";
+import { isPmNoticeSubject } from "../../shared/pm-notice.ts";
 import type { Db } from "../store/index.ts";
+import { isPmNoticeCurrent } from "./pm-notices.ts";
 import { deliveryNoteKeyGlob } from "./task-graphs/delivery.ts";
+import { parseJsonOr } from "./task-graphs/rows.ts";
 import { isGraphAllSettled } from "./task-graphs/store.ts";
 
 interface NoticeRow {
@@ -12,6 +15,7 @@ interface NoticeRow {
   created_at: number;
   source: string | null;
   ref: string | null;
+  subject_json: string | null;
 }
 
 export function isSystemMessageCurrent(
@@ -21,7 +25,8 @@ export function isSystemMessageCurrent(
   const notice = db.get<NoticeRow>(
     `SELECT conversation_id, worker_id, created_at, json_extract(meta, '$.event') AS event,
             json_extract(meta, '$.graphId') AS graph_id, json_extract(meta, '$.deadlineAt') AS deadline_at,
-            json_extract(meta, '$.source') AS source, json_extract(meta, '$.ref') AS ref
+            json_extract(meta, '$.source') AS source, json_extract(meta, '$.ref') AS ref,
+            meta -> '$.subject' AS subject_json
        FROM messages WHERE id = ? AND sender = 'system'`,
     messageId,
   );
@@ -36,6 +41,10 @@ export function isSystemMessageCurrent(
   if (notice.event === "pm.wakeup" && notice.source === "app_approval") {
     return db.get(`SELECT 1 FROM worker_app_approvals a JOIN workers w ON w.id = a.worker_id
       WHERE a.id = ? AND a.status = 'allowed' AND w.status = 'open' AND w.worker_conversation_id = ?`, notice.ref, notice.conversation_id) !== undefined;
+  }
+  if (notice.event === "pm.wakeup" && notice.source === "task_graph" && notice.subject_json !== null) {
+    const subject = parseJsonOr<unknown>(notice.subject_json, null);
+    return isPmNoticeSubject(subject) && isPmNoticeCurrent(db, subject, notice.conversation_id);
   }
   if (notice.event === "worker.max_time_exceeded") {
     return notice.worker_id !== null && isTimeoutCurrent(db, notice, now) && isInFlight(notice.worker_id);

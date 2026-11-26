@@ -42,6 +42,43 @@ function readyGraph() {
 
 const patch = (graphId: number) => f.hub("graph.patch", { graphId, specJson: '{"addSteps":[{"key":"b","title":"B"}]}' });
 
+function graphWithTwoLeaves() {
+  return f.hub("graph.create", {
+    specJson: JSON.stringify({ title: "Example", steps: [{ key: "a", title: "A", deps: [] }, { key: "b", title: "B", deps: [] }] }),
+  }).data.graph.id;
+}
+
+it("retires a leaf notice at delivery when the graph gains a successor", async () => {
+  const graphId = graphWithTwoLeaves();
+  f.ledger.skipTaskNode(graphId, "a", { reason: "No longer needed" });
+  const id = notice("pm.wakeup");
+  expect(eligible(id)).toBe(true);
+  f.hub("graph.patch", { graphId, specJson: '{"addSteps":[{"key":"next","title":"Next","deps":["a"]}]}' });
+  expect(await deliver(id)).toBe(0);
+  expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+});
+
+it("returns the same leaf decision notice when the answer is retried", async () => {
+  const graphId = graphWithTwoLeaves();
+  const { data: { messageId: askMessageId } } = f.hub("ask", { graphId, node: "a", text: "How should we continue?" });
+  const decide = () => f.ledger.decideTaskNode(graphId, "a", { askMessageId, clientId: "same-answer", note: "Continue" });
+  const { messageId } = decide();
+  const id = notice("pm.wakeup");
+  expect(messageId).toBe(id);
+  expect(decide().messageId).toBe(id);
+  expect(notice("pm.wakeup")).toBe(id);
+  expect(await deliver(id)).toBe(1);
+});
+
+it("drops a queued Task Graph notice with an invalid subject", async () => {
+  const graphId = graphWithTwoLeaves();
+  f.ledger.skipTaskNode(graphId, "a", {});
+  const id = notice("pm.wakeup");
+  f.db.run("UPDATE messages SET meta = json_set(meta, '$.subject', json('null')) WHERE id = ?", id);
+  expect(await deliver(id)).toBe(0);
+  expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+});
+
 it.each(["patch", "finish"])("drops a delivery note requeued after graph %s", async (op) => {
   const { graphId, id } = readyGraph();
   expect(await deliver(id)).toBe(1);

@@ -13,12 +13,14 @@ import type {
 } from "../../../shared/domain.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
+import { graphDecisionNoticeRef } from "../../../shared/pm-notice.ts";
 import { fail, type Pending } from "../context.ts";
+import { wakeGraphPmIn, wakePmForSettledLeafIn } from "../pm-notices.ts";
 import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { formatStepWaitingPmMessage } from "../task-graph-handoff.ts";
 import { stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
-import { artifactWithoutCheckpoint, hasText, isStoredCheckpoint, workerIdsOf } from "./rows.ts";
+import { artifactWithoutCheckpoint, hasText, isStoredCheckpoint, readStoredArtifact, serializeArtifact, workerIdsOf } from "./rows.ts";
 import { buildGraphMaps, hasPendingStepAsk, isGraphAllSettled, loadGraph, publishGraphIn, stepPosition, touchGraph } from "./store.ts";
 import { formatCheckpointRejectionMessage, formatWorkerDecisionMessage, turnedListText } from "./text.ts";
 import { emptyProgress, type ProgressResult, type TaskGraphCtx, type TaskGraphDbRow, type TaskNodeDbRow } from "./types.ts";
@@ -27,10 +29,7 @@ export const workerDecisionDedupeKey = (workerId: WorkerId, graphId: TaskGraphId
   `pm:worker:${workerId}:gate-decide:${graphId}:${nodeKey}:${dedupeId}`;
 
 export const gateDecideWakeupKey = (conversationId: ConversationId, graphId: TaskGraphId, nodeKey: TaskNodeKey, clientId: string): string =>
-  systemWakeupKey(conversationId, "task_graph", gateDecideWakeupRef(graphId, nodeKey, clientId));
-
-const gateDecideWakeupRef = (graphId: TaskGraphId, nodeKey: TaskNodeKey, clientId: string): string =>
-  `gate-decide:${graphId}:${nodeKey}:${clientId}`;
+  systemWakeupKey(conversationId, "task_graph", graphDecisionNoticeRef(graphId, nodeKey, clientId));
 
 interface DecisionInput {
   choice: string | null;
@@ -78,19 +77,32 @@ function settleAnsweredIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, chosenO
 function wakePmWaitingIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, reasonLabel: string, detailBody: string): MessageId | null {
   const { graphRow, node } = run;
   if (run.input.decidedBy !== "user") return null;
-  const wake = g.messages.enqueueWakeupIn(p, {
-    conversationId: graphRow.conversation_id,
-    source: "task_graph",
-    ref: gateDecideWakeupRef(graphRow.id, node.node_key, run.dedupeId),
-    text: formatStepWaitingPmMessage({
-      graph: { id: graphRow.id, title: graphRow.title },
-      step: { key: node.node_key, title: node.title, ...stepPosition(g.db, graphRow.id, node.node_key) },
-      workerId: null,
-      reasonLabel,
-      detailBody,
-    }),
+  const text = formatStepWaitingPmMessage({
+    graph: { id: graphRow.id, title: graphRow.title },
+    step: { key: node.node_key, title: node.title, ...stepPosition(g.db, graphRow.id, node.node_key) },
+    workerId: null,
+    reasonLabel,
+    detailBody,
   });
-  return wake.id;
+  return wakeGraphPmIn(g, p, graphRow, {
+    kind: "graph.decision_waiting_pm", graphId: graphRow.id, nodeKey: node.node_key, dedupeId: run.dedupeId,
+  }, text);
+}
+
+function wakePmAfterCheckpointPassIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, progress: ProgressResult): MessageId | null {
+  const { graphRow, node, input, t } = run;
+  if (input.decidedBy !== "user") return null;
+  const nodeKey = node.node_key;
+  return wakePmForTurnedIn(
+    g, p, graphRow, progress.turned,
+    `步骤「${nodeKey}（${node.title}）」用户检查点已通过，`,
+    `checkpoint-pass:${nodeKey}:${run.dedupeId}`,
+    { nodeKey, clientId: run.dedupeId },
+  ) ?? wakePmForSettledLeafIn(g, p, graphRow, {
+    subject: { kind: "graph.leaf_settled", graphId: graphRow.id, nodeKey, by: "checkpoint_pass", decidedAt: t, clientId: run.dedupeId },
+    lead: `你通过了「${nodeKey}」`,
+    details: input.note === null ? [] : [`补充说明：${input.note}`],
+  });
 }
 
 function passCheckpointIn(g: TaskGraphCtx, p: Pending, run: DecisionRun): DecisionResult {
@@ -112,17 +124,7 @@ function passCheckpointIn(g: TaskGraphCtx, p: Pending, run: DecisionRun): Decisi
   if (endedWid !== null) g.options.workers?.()?.stopWorkersIn(p, [endedWid]);
   const progress = recomputeGraphProgressIn(g, p, graphRow, input.callerSession, input.context, { retractBlockedWaiting: false });
   syncDeliveryNoteAfterProgressIn(g, p, graphRow, wasAllSettled);
-  let messageId: MessageId | null = null;
-  if (input.decidedBy === "user" && progress.turned.some((u) => u.waitingFor === "pm")) {
-    messageId = wakePmForTurnedIn(
-      g,
-      p,
-      graphRow,
-      progress.turned,
-      `步骤「${node.node_key}（${node.title}）」用户检查点已通过，`,
-      `checkpoint-pass:${node.node_key}:${run.dedupeId}`,
-    );
-  }
+  const messageId = wakePmAfterCheckpointPassIn(g, p, run, progress);
   const graph = publishGraphIn(g, p, graphRow.id);
   return { graph, messageId, outcome: "checkpoint_passed", workerId: endedWid, progress };
 }
@@ -131,7 +133,6 @@ function rejectCheckpointIn(g: TaskGraphCtx, p: Pending, run: DecisionRun): Deci
   const { graphRow, node, input, t } = run;
   const targetWid = node.active_worker_id;
   settleAnsweredIn(g, p, run, input.choice ?? CONFIRM_REJECT_OPTION);
-  const cleanedArtifactJson = artifactWithoutCheckpoint(node);
   const bridge = g.options.workers?.();
   const delivered =
     targetWid !== null && bridge !== undefined
@@ -143,15 +144,17 @@ function rejectCheckpointIn(g: TaskGraphCtx, p: Pending, run: DecisionRun): Deci
         })
       : null;
   const resumed = delivered !== null && targetWid !== null;
+  const checkpointRejectionClientId = resumed ? undefined : input.clientId;
+  const { artifact } = readStoredArtifact(node.artifact_json);
   g.db.run(
     `UPDATE task_graph_steps
         SET status = ?, waiting_for = ?, ${resumed ? "" : "active_worker_id = NULL,"} artifact_json = ?,
             gate_question = NULL, gate_options_json = NULL, gate_summary_md = NULL, gate_recommended = NULL,
-            gate_ask_message_id = NULL, ${resumed ? "decision_json = NULL," : ""} updated_at = ?
+            gate_ask_message_id = NULL, decision_json = NULL, updated_at = ?
       WHERE id = ?`,
     resumed ? "running" : "waiting",
     resumed ? null : "pm",
-    cleanedArtifactJson,
+    serializeArtifact(artifact, false, checkpointRejectionClientId),
     t,
     node.id,
   );
@@ -212,20 +215,28 @@ function handBackToPmIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, questionT
 }
 
 function wakePmAfterSettleIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, graph: TaskGraph, progress: ProgressResult): MessageId | null {
-  const { graphRow, node, input } = run;
-  if (input.decidedBy !== "user" || !progress.turned.some((u) => u.waitingFor === "pm")) return null;
-  const wakeLines = [`【任务图 #${graph.id}「${graph.title}」用户拍板】步骤「${node.node_key}（${node.title}）」`];
-  if (input.choice !== null) wakeLines.push(`定案：${input.choice}`);
-  if (input.note !== null) wakeLines.push(`补充说明：${input.note}`);
+  const { graphRow, node, input, t } = run;
+  if (input.decidedBy !== "user") return null;
+  const nodeKey = node.node_key;
+  const details = [];
+  if (input.choice !== null) details.push(`定案：${input.choice}`);
+  if (input.note !== null) details.push(`补充说明：${input.note}`);
+  const forPm = progress.turned.filter((u) => u.waitingFor === "pm");
+  const first = forPm[0];
+  if (first === undefined) {
+    return wakePmForSettledLeafIn(g, p, graphRow, {
+      subject: { kind: "graph.leaf_settled", graphId: graph.id, nodeKey, by: "decision", decidedAt: t, clientId: run.dedupeId },
+      lead: `你已拍板「${nodeKey}」`,
+      details,
+    });
+  }
+  const wakeLines = [`【任务图 #${graph.id}「${graph.title}」用户拍板】步骤「${nodeKey}（${node.title}）」`, ...details];
   wakeLines.push(`轮到了：${turnedListText(progress.turned)}`);
-  const forPm = progress.turned.find((u) => u.waitingFor === "pm");
-  if (forPm !== undefined) wakeLines.push(`给它派 Worker 用 ${HUB_COMMAND} worker start --node ${forPm.key} --graph ${graph.id}`);
-  return g.messages.enqueueWakeupIn(p, {
-    conversationId: graph.conversationId,
-    source: "task_graph",
-    ref: gateDecideWakeupRef(graphRow.id, node.node_key, run.dedupeId),
-    text: wakeLines.join("\n"),
-  }).id;
+  wakeLines.push(`给它派 Worker 用 ${HUB_COMMAND} worker start --node ${first.key} --graph ${graph.id}`);
+  return wakeGraphPmIn(g, p, graphRow, {
+    kind: "graph.steps_waiting_pm", graphId: graph.id, stepKeys: forPm.map((u) => u.key), reason: "decision",
+    decision: { nodeKey, clientId: run.dedupeId },
+  }, wakeLines.join("\n"));
 }
 
 function settleStepIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, upsDone: boolean): DecisionResult {
