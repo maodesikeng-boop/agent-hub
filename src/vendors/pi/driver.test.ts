@@ -216,6 +216,21 @@ function makePiHarness(
 }
 
 describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
+  it("keeps reused call IDs distinct across RPC prompts", async () => {
+    const tool = { id: "reused", name: "read", arguments: { path: "README.md" } };
+    const h = makePiHarness({ script: { turns: [{ tools: [tool] }, { tools: [tool] }] } });
+    const s = h.addSession();
+    await h.driver.send(s.id, { messageIds: [1], source: "user", text: "First" });
+    await h.waitFor("turn.ended");
+    await h.driver.send(s.id, { messageIds: [2], source: "user", text: "Second" });
+    await h.waitFor("turn.ended", undefined, 2);
+
+    const ids = h.of("agent.tool").map((tool) => tool.toolUseId);
+    expect(new Set(ids).size).toBe(2);
+    expect(h.of("agent.tool_running").map((tool) => tool.toolUseId)).toEqual(ids);
+    expect(h.of("agent.tool_result").map((result) => result.toolUseIds)).toEqual(ids.map((id) => [id]));
+  });
+
   it("simple：单轮握手、显式 --skill（无 --approve）、流式思考/工具/含 U+2028 文本与扩展弹窗自动取消", async () => {
     const h = makePiHarness({
       script: {
@@ -268,9 +283,9 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(h.of("agent.thinking")).toHaveLength(1);
     expect(h.of("agent.tool")).toHaveLength(1);
     expect(h.of("agent.tool")[0]?.name).toBe("read");
-    expect(h.of("agent.tool_result")[0]?.toolUseIds).toEqual(["call-read-1"]);
+    expect(h.of("agent.tool_result")[0]?.toolUseIds).toEqual([h.of("agent.tool")[0]!.toolUseId]);
     // 返回原文：tool_execution_end.result 的 content（spec 的 outputField）
-    expect(h.of("agent.tool_result")[0]?.outputs).toEqual({ "call-read-1": "hello" });
+    expect(h.of("agent.tool_result")[0]?.outputs).toEqual({ [h.of("agent.tool")[0]!.toolUseId]: "hello" });
     expect(h.of("agent.text_delta").map((e) => ({ delta: e.delta, reset: e.reset }))).toEqual([
       { delta: "第一行\u2028段落内分隔符不断行", reset: true },
       { delta: "，完成。", reset: undefined },
@@ -399,7 +414,7 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
 
       // 第 1 轮：工具挂起期间发 steer，验证 midTurn: true 且在同一轮结算
       await h.driver.send(row.id, { messageIds: [10], source: "user", text: "先跑任务" });
-      await h.waitFor("agent.tool", (e) => e.toolUseId === "call-bash-1");
+      await h.waitFor("agent.tool", (e) => e.toolUseId.endsWith(":call-bash-1"));
 
       const steerRes = await h.driver.send(row.id, {
         messageIds: [11],
@@ -418,7 +433,7 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
 
       // 第 2 轮：dropSteers 模拟轮末刚好结束未消费 steer → 发出 message.requeued 并忘掉已写标记，供账本重发成第 3 轮
       await h.driver.send(row.id, { messageIds: [20], source: "user", text: "第二轮任务" });
-      await h.waitFor("agent.tool", (e) => e.toolUseId === "call-bash-2");
+      await h.waitFor("agent.tool", (e) => e.toolUseId.endsWith(":call-bash-2"));
       const lateSteer = await h.driver.send(row.id, {
         messageIds: [21],
         source: "user",
@@ -469,7 +484,7 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
 
     // 1. 正常优雅打断：clear_queue 必须在 abort 之前发出
     await h.driver.send(row.id, { messageIds: [30], source: "user", text: "跑个长命令" });
-    await h.waitFor("agent.tool", (e) => e.toolUseId === "call-long");
+    await h.waitFor("agent.tool", (e) => e.toolUseId.endsWith(":call-long"));
 
     await h.driver.interrupt(row.id);
     const interruptedTurn = await h.waitFor("turn.ended", () => true, 1);
@@ -484,7 +499,7 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
 
     // 2. 忽略 abort 时升级到 SIGINT 杀进程组
     await h.driver.send(row.id, { messageIds: [31], source: "user", text: "跑个卡死命令" });
-    await h.waitFor("agent.tool", (e) => e.toolUseId === "call-stuck");
+    await h.waitFor("agent.tool", (e) => e.toolUseId.endsWith(":call-stuck"));
     await h.driver.interrupt(row.id);
     const exited = await h.waitFor("session.exited");
     expect(exited.reason).toBe("interrupt");
@@ -635,12 +650,12 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     await h.waitFor("turn.ended");
 
     expect(h.of("agent.tool_preview").map((e) => ({ toolUseId: e.toolUseId, name: e.name, input: e.input }))).toEqual([
-      { toolUseId: "call-edit-1", name: "edit", input: {} },
-      { toolUseId: "call-edit-1", name: "edit", input: { path: "/repo/src/app.ts" } },
+      { toolUseId: expect.stringMatching(/:call-edit-1$/u), name: "edit", input: {} },
+      { toolUseId: expect.stringMatching(/:call-edit-1$/u), name: "edit", input: { path: "/repo/src/app.ts" } },
     ]);
     expect(h.of("agent.tool")).toHaveLength(1);
     expect(h.of("agent.tool")[0]).toMatchObject({
-      toolUseId: "call-edit-1",
+      toolUseId: expect.stringMatching(/:call-edit-1$/u),
       name: "edit",
       input: { path: "/repo/src/app.ts", oldText: "a", newText: "b" },
     });

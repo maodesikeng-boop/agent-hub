@@ -44,16 +44,21 @@ export function flushBufferedTexts(host: PiDriverHost, st: SessionState, at: num
   }
 }
 
+function scopedToolId(st: SessionState, id: string): string {
+  return `pi:${st.toolScope}:t${st.turnSeq}:${id}`;
+}
+
 function emitToolOnce(host: PiDriverHost, st: SessionState, toolId: string, name: string, input: unknown, at: number, pending = true): void {
+  const toolUseId = scopedToolId(st, toolId);
   if (st.emittedToolIds.has(toolId)) {
-    if (!pending) host.emit(st.id, { type: "agent.tool_running", toolUseId: toolId, at });
+    if (!pending) host.emit(st.id, { type: "agent.tool_running", toolUseId, at });
     return;
   }
   st.emittedToolIds.add(toolId);
   host.emit(st.id, {
     type: "agent.tool",
-    uuid: scopedUuid(st, `tool-${toolId}`),
-    toolUseId: toolId,
+    uuid: toolUseId,
+    toolUseId,
     name,
     input,
     ...(pending ? { pending: true } : {}),
@@ -170,7 +175,8 @@ function onToolcallStart(
 ): void {
   flushBufferedTexts(host, st, at);
   const block = extractPiPartialToolBlock(ev, contentIdx);
-  const toolUseId = nonEmptyString(ev.id) ?? nonEmptyString(block?.id);
+  const rawId = nonEmptyString(ev.id) ?? nonEmptyString(block?.id);
+  const toolUseId = rawId ? scopedToolId(st, rawId) : undefined;
   const name = nonEmptyString(ev.toolName) ?? nonEmptyString(ev.name) ?? nonEmptyString(block?.name) ?? "";
   const preview = st.toolPreviews.start(blockKey, {
     toolUseId,
@@ -191,10 +197,11 @@ function onToolcallDelta(
 ): void {
   const block = extractPiPartialToolBlock(ev, contentIdx);
   if (block) {
+    const rawId = nonEmptyString(block.id);
     const objPreview = st.toolPreviews.updateObject(
       blockKey,
       {
-        toolUseId: nonEmptyString(block.id),
+        toolUseId: rawId ? scopedToolId(st, rawId) : undefined,
         name: nonEmptyString(block.name),
         input: block.arguments,
       },
@@ -266,9 +273,10 @@ export function onToolExecutionStart(host: PiDriverHost, st: SessionState, obj: 
 
 export function onToolExecutionEnd(host: PiDriverHost, st: SessionState, obj: Record<string, unknown>, at: number): void {
   const toolId = typeof obj.toolCallId === "string" && obj.toolCallId !== "" ? obj.toolCallId : null;
-  if (!toolId || st.completedToolIds.has(toolId)) return;
+  if (!toolId || !st.emittedToolIds.has(toolId) || st.completedToolIds.has(toolId)) return;
   st.completedToolIds.add(toolId);
-  host.emit(st.id, { type: "agent.tool_result", toolUseIds: [toolId], ...toolResultOutputs(host.vendor, [[toolId, obj]]), at });
+  const toolUseId = scopedToolId(st, toolId);
+  host.emit(st.id, { type: "agent.tool_result", toolUseIds: [toolUseId], ...toolResultOutputs(host.vendor, [[toolUseId, obj]]), at });
 }
 
 export function onCompactionEnd(

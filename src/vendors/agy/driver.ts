@@ -1,4 +1,5 @@
 import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import {
@@ -420,6 +421,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     const { baseProc, resolveExited } = this.createBaseProc<AgyStartupOutcome>(child, resume, row, files);
     const proc: Proc = {
       ...baseProc,
+      toolScope: randomUUID(),
       readonly: readonlyPolicy === undefined || catalog === null ? null : { policy: readonlyPolicy, catalog },
       tmpDir,
       fallbackScope: readonlyPolicy === undefined && !launch.osSandboxed ? (files.writeScope ?? null) : null,

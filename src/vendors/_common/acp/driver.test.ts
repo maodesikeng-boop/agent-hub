@@ -368,6 +368,24 @@ describe("ACP 驱动底座：产品提示词的通道（spec 的 capabilities.sy
     ]);
   });
 
+  it("keeps a reused raw tool ID distinct after replacing the ACP session", async () => {
+    const tool = { toolCallId: "reused", title: "Read" };
+    const h = track(makeAcpHarness({
+      driverOptions: { idleCloseMs: 120 },
+      script: { closeCapability: true, loadNotFound: true, turns: [{ toolCalls: [tool] }, { toolCalls: [tool] }] },
+    }));
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [1], source: "user", text: "First" });
+    await h.waitFor("turn.ended");
+    await h.waitFor("session.exited");
+    await h.driver.send(row.id, { messageIds: [2], source: "user", text: "Second" });
+    await h.waitFor("turn.ended", undefined, 2);
+
+    const ids = h.of("agent.tool").map((tool) => tool.toolUseId);
+    expect(new Set(ids).size).toBe(2);
+    expect(h.of("agent.tool_result").map((result) => result.toolUseIds)).toEqual(ids.map((id) => [id]));
+  });
+
   it("压缩完进程闲置关了：下一条起新进程恢复会话（恢复不拼首轮提示词），照样在最前面补上", async () => {
     const h = track(
       makeAcpHarness({
@@ -484,12 +502,12 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     const tools = h.of("agent.tool");
     expect(tools).toHaveLength(1);
     expect(tools[0]!).toMatchObject({
-      toolUseId: "tc-read-1",
+      toolUseId: expect.stringMatching(/:tool:tc-read-1$/u),
       name: "read_file",
       input: { path: "/repo/src/demo.ts" },
     });
     expect(h.of("agent.tool_result")).toHaveLength(1);
-    expect(h.of("agent.tool_result")[0]!.toolUseIds).toEqual(["tc-read-1"]);
+    expect(h.of("agent.tool_result")[0]!.toolUseIds).toEqual([tools[0]!.toolUseId]);
 
     // 增量文本实时发出 agent.text_delta，合并后仍为单条 agent.text
     expect(h.of("agent.text_delta").map((e) => e.delta)).toEqual(["你好，", "世界！"]);
@@ -548,7 +566,7 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
       const row = h.addSession({ vendor });
       await h.driver.send(row.id, { messageIds: [1 as never], source: "user", text: "读技能" });
       await h.waitFor("turn.ended");
-      expect(h.of("agent.tool_result").map((e) => e.outputs)).toEqual([{ "tc-1": output }, undefined]);
+      expect(h.of("agent.tool_result").map((e) => e.outputs)).toEqual([{ [h.of("agent.tool")[0]!.toolUseId]: output }, undefined]);
     }
   });
 
@@ -1437,7 +1455,11 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
     await h.waitFor("turn.ended", () => true, 2);
     expect(h.of("agent.tool")).toHaveLength(count + 1);
     expect(h.of("agent.tool_result")).toHaveLength(count + 1);
-    expect(new Set(h.of("agent.tool").map((e) => e.uuid)).size).toBe(count + 1);
+    const tools = h.of("agent.tool");
+    const ids = tools.map((tool) => tool.toolUseId);
+    expect(new Set(tools.map((tool) => tool.uuid)).size).toBe(count + 1);
+    expect(new Set(ids).size).toBe(count + 1);
+    expect(h.of("agent.tool_result").map((result) => result.toolUseIds)).toEqual(ids.map((id) => [id]));
   });
 
   it("分组式 SessionConfigSelectGroup 选项与取消态权限裁决", async () => {
@@ -1545,13 +1567,13 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
 
     expect(h.of("agent.tool")).toHaveLength(1);
     expect(h.of("agent.tool")[0]).toMatchObject({
-      toolUseId: "tc-stream-1",
+      toolUseId: expect.stringMatching(/:tool:tc-stream-1$/u),
       name: "read_file",
       input: {},
     });
     expect(h.of("agent.tool_preview")).toHaveLength(1);
     expect(h.of("agent.tool_preview")[0]).toMatchObject({
-      toolUseId: "tc-stream-1",
+      toolUseId: expect.stringMatching(/:tool:tc-stream-1$/u),
       name: "read_file",
       input: { path: "/repo/src/late-path.ts" },
     });

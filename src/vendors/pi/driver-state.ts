@@ -58,6 +58,7 @@ export interface Proc extends BaseProc<PiStartupOutcome> {
 export interface SessionState extends BaseSessionState<Proc, Batch> {
   interruptSent: boolean;
   turnSeq: number;
+  toolScope: string;
   assistantMsgSeq: number;
   eventSeq: number;
   textBuffers: Map<string, string>;

@@ -65,7 +65,8 @@ interface StepContext {
 export function onStepUpdate(host: AgyDriverHost, st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
   const su = asObject(obj.step_update) ?? obj;
   const rawStepId = su.step_index ?? su.step_id ?? obj.step_index ?? obj.step_id;
-  const stepId = typeof rawStepId === "number" || typeof rawStepId === "string" ? String(rawStepId) : "0";
+  const identifiedStep = typeof rawStepId === "number" || (typeof rawStepId === "string" && rawStepId !== "");
+  const stepId = identifiedStep ? String(rawStepId) : "0";
   const stepType = su.step_type;
   const ctx: StepContext = { su, stepId, turnNo: st.resultSeq + 1, inFlight: st.inFlight[0] ?? null, at };
 
@@ -98,7 +99,7 @@ export function onStepUpdate(host: AgyDriverHost, st: SessionState, proc: Proc, 
       }
       return;
     case "tool":
-      onToolStep(host, st, proc, ctx);
+      onToolStep(host, st, proc, ctx, identifiedStep);
       return;
   }
 }
@@ -150,13 +151,17 @@ function toolNameOf(su: Record<string, unknown>, toolInfo: Record<string, unknow
   return "";
 }
 
-function onToolStep(host: AgyDriverHost, st: SessionState, proc: Proc, ctx: StepContext): void {
+function onToolStep(host: AgyDriverHost, st: SessionState, proc: Proc, ctx: StepContext, identifiedStep: boolean): void {
   const { su, stepId, turnNo, at } = ctx;
   if (ctx.inFlight) host.markProcessing(st, ctx.inFlight, at);
 
   const toolInfo = asObject(su.tool_info) ?? undefined;
   const toolName = toolNameOf(su, toolInfo);
   const parameters = toolInfo?.parameters ?? su.parameters ?? null;
+  if (!identifiedStep) {
+    stopOnToolViolation(host, st, proc, toolName, parameters);
+    return;
+  }
   if (toolName === AGY_CHECKLIST_TOOL) {
     if (su.state !== "ACTIVE" && su.state !== "DONE" && su.state !== undefined) return;
     if (st.completedToolSteps.has(stepId)) return;
@@ -176,11 +181,11 @@ function onToolStep(host: AgyDriverHost, st: SessionState, proc: Proc, ctx: Step
   flushStepTexts(host, st, at);
   st.hasTextSinceLastTool = false;
 
-  const toolUseId = `tool-${turnNo}-${stepId}`;
+  const toolUseId = `agy:${proc.toolScope}:${stepId}`;
   const isTerminal = typeof su.state === "string" && AGY_TERMINAL_TOOL_STATES.has(su.state);
   const isFormalState = su.state === "ACTIVE" || isTerminal || su.state === undefined;
 
-  if (!st.seenToolSteps.has(stepId) && isFormalState) {
+  if (!st.activeToolSteps.has(stepId) && !st.seenToolSteps.has(stepId) && isFormalState) {
     st.seenToolSteps.add(stepId);
     setBoundedPreviewSig(st, stepId, toolStepSignature(toolName, parameters));
     host.emit(st.id, {
