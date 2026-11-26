@@ -1,4 +1,5 @@
 import type { DriverEvent } from "./driver.ts";
+import { isHubChecklistCommand } from "./hub-checklist.ts";
 import { TURN_CHECKLIST_COMMANDS_TRIGGER, TURN_CHECKLIST_EDITS_TRIGGER } from "./limits.ts";
 import { toolAction } from "./step-labels.ts";
 
@@ -30,6 +31,9 @@ export function turnWatchStep(
     case "agent.tool": {
       if (event.parentToolUseId !== undefined) break;
       const action = toolAction(event.name);
+      if (action === "todo" || (action === "command" && isHubChecklistCommand(event.input))) {
+        return { watch: { ...(watch ?? newTurnWatch()), listed: true }, remind: false };
+      }
       if (action !== "edit" && action !== "write" && action !== "command") break;
       const next = { ...(watch ?? newTurnWatch()) };
       if (action === "command") next.commands++;

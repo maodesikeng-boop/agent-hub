@@ -126,7 +126,7 @@ function callingText(server: string | undefined, tool: string | undefined): stri
   return "Calling tool";
 }
 
-const ACTION_TEXT: Readonly<Record<Exclude<ToolAction, "todo">, (input: AgentStepInput) => string>> = {
+const ACTION_TEXT: Readonly<Record<Exclude<ToolAction, "todo" | "todo_read">, (input: AgentStepInput) => string>> = {
   command: () => "Running command",
   read: (input) => {
     const skill = skillNameOfFile(filePathOf(input) ?? "");
@@ -168,6 +168,7 @@ const ACTION_CATEGORY: Readonly<Record<ToolAction, ToolCategory>> = {
   skill: "other",
   subagent: "other",
   todo: "other",
+  todo_read: "other",
   tool_search: "other",
   connector: "other",
   connector_resource: "other",
@@ -199,7 +200,7 @@ function usingText(name: string): string {
 function describeTool(name: string, input: AgentStepInput): string {
   if (name === "") return STEP_TEXT.working;
   const action = toolAction(name);
-  if (action === "todo") return STEP_TEXT.working;
+  if (action === "todo" || action === "todo_read") return STEP_TEXT.working;
   if (action !== undefined) return ACTION_TEXT[action](input);
   if (name.startsWith(MCP_PREFIX)) return describeMcpTool(name);
   if (name.startsWith(MCP_FLAT_PREFIX) && name.length > MCP_FLAT_PREFIX.length) return callingText(undefined, name.slice(MCP_FLAT_PREFIX.length));

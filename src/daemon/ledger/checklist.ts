@@ -72,5 +72,6 @@ export function createLedgerChecklist({ db, now }: LedgerContext, insert: Insert
 }
 
 export function isChecklistToolCall(name: string): boolean {
-  return toolAction(name) === "todo";
+  const action = toolAction(name);
+  return action === "todo" || action === "todo_read";
 }

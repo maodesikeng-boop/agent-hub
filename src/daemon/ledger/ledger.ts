@@ -311,9 +311,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const closing = new AbortController();
   const branches = createLedgerBranchSync(ctx, taskGraphs.publishBranchChange, closing.signal, options.worktreeBranchProbe);
   const applyDriverEventNow = (sessionId: SessionId, event: Exclude<DriverEvent, TurnEndedEvent>, textMeta: AgentTextMeta | null) => {
-    if ((event.type === "agent.tool_preview" || event.type === "agent.tool") && isChecklistToolCall(event.name)) return;
     if (event.type === "agent.text_delta" || event.type === "agent.tool_preview") {
       if (event.parentToolUseId !== undefined) return;
+      if (event.type === "agent.tool_preview" && isChecklistToolCall(event.name)) return;
       const session = getAgentSession(db, sessionId);
       if (session === null) return;
       if (event.type === "agent.tool_preview") sessions.applyToolPreview(session, event);
@@ -325,6 +325,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     write((p) => {
       const scoped = scopeDriverEvent(session.id, event, messages.getMessage);
       if (scoped === null) return;
+      if (scoped.type === "agent.tool" && isChecklistToolCall(scoped.name)) {
+        reminders.observe(p, session, scoped);
+        return;
+      }
       const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
       takenInputs.beforeDriverEvent(session, scoped);
       const result = messages.applyEvent(p, session, scoped, textMeta);

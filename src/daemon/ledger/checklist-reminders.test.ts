@@ -13,8 +13,8 @@ beforeEach(() => { f = workerOpsFixture(); });
 afterEach(async () => { await f.close(); });
 
 const emit = (event: DriverEvent, sessionId: SessionId = f.pm.sessionId) => f.ledger.applyDriverEvent(sessionId, event);
-const tool = (name: string, id: string, sessionId?: SessionId) => emit({
-  type: "agent.tool", name, uuid: id, toolUseId: id, input: {}, at: f.now(),
+const tool = (name: string, id: string, sessionId?: SessionId, input: unknown = {}) => emit({
+  type: "agent.tool", name, uuid: id, toolUseId: id, input, at: f.now(),
 }, sessionId);
 const reminders = () => f.db.all<{ id: number }>(`SELECT id FROM messages WHERE ${CHECKLIST_REMINDER_SQL} ORDER BY id`);
 const endTurn = () => emit({ type: "turn.ended", messageIds: [], at: f.now(), ok: true, interrupted: false, durationMs: 1 });
@@ -69,6 +69,53 @@ it("counts hub checklist updates in a Worker turn independently of the PM", () =
   expect(reminders()).toEqual([]);
   tool("Edit", "pm-missed");
   expect(reminders().map(({ id }) => f.ledger.getMessage(id)?.sessionId)).toEqual([f.pm.sessionId]);
+});
+
+it.each(["sequential", "parallel"])("does not remind after a Pi checklist command with %s work", (order) => {
+  const { worker } = f.hub("worker.start", {
+    title: "Edit a file", task: "Make the edit.", vendor: "pi", noWorktree: true,
+  }).data;
+  const sessionId = f.sessionOf(worker.id);
+  emit({ type: "turn.started", at: f.now() }, sessionId);
+  tool("bash", "first-command", sessionId, { command: "pwd" });
+  tool("bash", "checklist-call", sessionId, { command: 'hub checklist set "Edit the file"' });
+  expect(reminders()).toEqual([]);
+
+  const confirm = () => f.ledger.hubCall(sessionId, "checklist", { kind: "set", titles: ["Edit the file"] });
+  if (order === "sequential") confirm();
+  tool("edit", "file-edit", sessionId);
+  tool("bash", "second-command", sessionId, { command: "git diff" });
+  expect(reminders()).toEqual([]);
+  if (order === "parallel") confirm();
+});
+
+it.each([
+  { vendor: "claude", todo: "TaskCreate", work: "Edit" },
+  { vendor: "opencode", todo: "todowrite", work: "shell" },
+  { vendor: "kimi", todo: "SetTodoList", work: "Bash" },
+] as const)("credits $todo before its checklist snapshot arrives", ({ vendor, todo, work }) => {
+  const { worker } = f.hub("worker.start", {
+    title: "Edit a file", task: "Make the edit.", vendor, noWorktree: true,
+  }).data;
+  const sessionId = f.sessionOf(worker.id);
+  emit({ type: "turn.started", at: f.now() }, sessionId);
+  emit({ type: "agent.tool", name: todo, toolUseId: "todo", uuid: "todo", input: {}, pending: true, at: f.now() }, sessionId);
+  tool(work, "first-work", sessionId);
+  tool(work, "second-work", sessionId);
+  expect(reminders()).toEqual([]);
+  expect(f.ledger.messagesBefore(f.project.conversationId, Number.MAX_SAFE_INTEGER).messages)
+    .not.toContainEqual(expect.objectContaining({ kind: "tool", meta: expect.objectContaining({ name: todo }) }));
+});
+
+it("does not treat read-only task calls or subagent writes as the turn's checklist", () => {
+  tool("TaskList", "list");
+  tool("TaskGet", "get");
+  emit({
+    type: "agent.tool", name: "TaskCreate", toolUseId: "child-todo", uuid: "child-todo",
+    parentToolUseId: "subagent", input: {}, at: f.now(),
+  });
+  tool("Edit", "file-edit");
+  expect(reminders()).toHaveLength(1);
 });
 
 it("does not keep a Worker in flight after a turn ends with a queued reminder", () => {

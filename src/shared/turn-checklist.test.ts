@@ -60,6 +60,18 @@ describe("turn watch trigger", () => {
     expect(run([processing(), tool(READ), tool(COMMAND), ended]).reminders).toEqual([]);
   });
 
+  it("credits a hub checklist call without counting it as a shell command", () => {
+    const checklist = { ...tool(COMMAND), input: { command: 'hub checklist set "Inspect"' } };
+    const { reminders, watch } = run([processing(), tool(COMMAND), checklist]);
+    expect(reminders).toEqual([]);
+    expect(watch).toMatchObject({ commands: 1, listed: true });
+  });
+
+  it("counts a shell command that only mentions hub checklist", () => {
+    const mention = { ...tool(COMMAND), input: { command: 'echo "hub checklist set Inspect"' } };
+    expect(run([processing(), tool(COMMAND), mention]).reminders).toEqual([2]);
+  });
+
   it("reminds at the second command of an unlisted turn", () => {
     expect(run([processing(), tool(COMMAND), tool(READ), tool(COMMAND), tool(COMMAND), ended]).reminders).toEqual([3]);
   });

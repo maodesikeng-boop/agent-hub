@@ -26,6 +26,13 @@ export const HUB_CHECKLIST_USAGE = [
   `  ${HUB_CHECKLIST_COMMAND} cancel <编号>                            取消指定步骤`,
 ].join("\n");
 
+export function isHubChecklistCommand(input: unknown): boolean {
+  if (input === null || typeof input !== "object" || !("command" in input) || typeof input.command !== "string") return false;
+  const [executable, command, action] = input.command.trimStart().split(/\s+/u, 3);
+  return (executable === HUB_COMMAND || executable === `${HUB_COMMAND}.exe`) &&
+    command === "checklist" && (action === "set" || positionKinds.safeParse(action).success);
+}
+
 function invalid(reason: string): ChecklistError {
   return { ok: false, reason, error: `${reason}\n用法：\n${HUB_CHECKLIST_USAGE}` };
 }

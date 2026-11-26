@@ -27,6 +27,7 @@ export type ToolAction =
   | "skill"
   | "subagent"
   | "todo"
+  | "todo_read"
   | "tool_search"
   | "connector"
   | "connector_resource";
