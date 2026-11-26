@@ -222,7 +222,7 @@ export class Smoke {
     const vendorIds = this.vendorSessionIds();
     if (this.daemon.child.exitCode === null && this.daemon.child.signalCode === null) {
       const exit = await this.terminate();
-      if (exit.code !== 0) problems.push(`关机退出码 ${exit.code}`);
+      if (exit.code !== 0 || exit.signal !== null) problems.push(`关机退出码 ${exit.code}（信号 ${exit.signal}）`);
     }
     const left = vendorIds.flatMap((id) => this.processesOf(id));
     if (left.length > 0) problems.push(`关机后还有 ${left.length} 个 claude 进程没退出：${left.join(" | ")}`);

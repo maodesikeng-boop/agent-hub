@@ -30,7 +30,7 @@ export async function runM1(outcomes: Outcome[], smoke: Smoke): Promise<void> {
     expect(s1, "S1 没过，跳过");
     const { vendorSessionId } = smoke.sessionRow();
     const exit = await smoke.terminate();
-    expect(exit.code === 0, `关机退出码 ${exit.code}`);
+    expect(exit.code === 0 && exit.signal === null, `关机退出码 ${exit.code}（信号 ${exit.signal}）`);
     expect(smoke.processesOf(vendorSessionId).length === 0, "关机后还有 claude 进程");
     await smoke.start();
     const before = (await smoke.client.state()).conversations[0]!.messages.length;

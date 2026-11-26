@@ -269,7 +269,7 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
       // 等它在跑 sleep 时关机
       await waitUntil("Worker 开始 sleep", () => (smoke.bashCommands(sessionId).some((c) => c.includes("sleep")) ? true : undefined), TURN_MS);
       const exit = await smoke.terminate();
-      expect(exit.code === 0, `关机退出码 ${exit.code}`);
+      expect(exit.code === 0 && exit.signal === null, `关机退出码 ${exit.code}（信号 ${exit.signal}）`);
       const task = smoke.query<{ id: number; text: string; status: string }>("SELECT id, text, status FROM messages WHERE conversation_id = ? AND sender = 'pm'", worker!.worker_conversation_id)[0]!;
       expect(task.status === "processing" || task.status === "delivered", `关机后任务说明是 ${task.status}，应该还是处理中`);
       const before = smoke.writtenTexts(sessionId).length;
