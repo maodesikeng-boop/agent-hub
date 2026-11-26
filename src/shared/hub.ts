@@ -255,6 +255,7 @@ export interface CreateTaskGraphNodeInput {
   confirm?: boolean;
   review?: boolean;
   base?: string;
+  slot?: string;
   deps?: TaskNodeKey[];
   question?: string;
   options?: string[];
@@ -293,6 +294,7 @@ export interface PatchTaskGraphNodeInput {
   confirm?: boolean;
   review?: boolean;
   base?: string | null;
+  slot?: string | null;
   deps?: TaskNodeKey[];
   question?: string;
   options?: string[];
