@@ -728,7 +728,7 @@ export interface HealthEntry {
 export const TASK_GRAPH_STATUSES = ["active", "completed", "cancelled"] as const;
 export type TaskGraphStatus = (typeof TASK_GRAPH_STATUSES)[number];
 
-export const TASK_NODE_STATUSES = ["pending", "running", "waiting", "done"] as const;
+export const TASK_NODE_STATUSES = ["pending", "running", "waiting", "done", "cancelled"] as const;
 export type TaskNodeStatus = (typeof TASK_NODE_STATUSES)[number];
 
 export const TASK_NODE_WAITING_FOR = ["user", "pm"] as const;
@@ -773,6 +773,8 @@ export function taskNodeStatusText(
       return viewer === "user" ? "等项目经理" : "等你处理";
     case "done":
       return node.skipped ? "跳过" : "完了";
+    case "cancelled":
+      return "已取消";
   }
 }
 

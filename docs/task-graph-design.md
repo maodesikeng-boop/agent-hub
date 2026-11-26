@@ -2,11 +2,11 @@
 
 > Snapshot: 2026-11-23 (commit `e71aaac8`)
 
-Bellwood models multi-step project work as a persistent directed acyclic Task Graph (`task_graphs`, `task_graph_nodes`, and `task_graph_edges` in SQLite). Once a Project Manager creates a graph via `hub graph create --stdin`, the daemon advances steps automatically in the background without waking the PM between clean steps.
+Bellwood models multi-step project work as a persistent directed acyclic Task Graph (`task_graphs`, `task_graph_steps`, and `task_graph_edges` in SQLite). Once a Project Manager creates a graph via `hub graph create --stdin`, the daemon advances steps automatically in the background without waking the PM between clean steps.
 
-## Node model and four-state machine
+## Step states
 
-Every node (`TaskGraphNode` in `src/shared/domain.ts`) uses one node shape and transitions across four states:
+Every step (`TaskNode` in `src/shared/domain.ts`) has one of these states:
 
 1. **`pending`**: Waiting for upstream dependencies (`task_graph_edges`) to reach `done`.
 2. **`running`**: Dispatched to an active Worker in an isolated `git worktree` (or the main folder when `--no-worktree` is set).
@@ -14,8 +14,9 @@ Every node (`TaskGraphNode` in `src/shared/domain.ts`) uses one node shape and t
    - `waitingFor: "user"`: A `confirm: true` user checkpoint, a `hub graph ask` decision card, or a system-generated `UserBlocker` card (for example when the target vendor CLI is signed out or uninstalled on that computer).
    - `waitingFor: "pm"`: A Worker reported `状态: 有问题` or `放弃了`, reported a non-empty `偏离` (scope deviation), failed its review check, or hit an unexpected process error.
 4. **`done`**: Completed (`skipped: false`) or explicitly skipped (`skipped: true`), unlocking downstream dependents whose remaining upstream edges are all `done`.
+5. **`cancelled`**: Unfinished when the graph was cancelled. The ledger clears the active Worker and any wait. It keeps the Worker history and existing results. A reply to an existing decision card settles the card without advancing the graph.
 
-Read-path compatibility in `src/shared/task-graph-compat.ts` maps legacy rows into this four-state shape while preserving reference stability via a `WeakMap` cache.
+Read-path compatibility in `src/shared/task-graph-compat.ts` maps legacy payloads into the current shape while preserving reference stability via a `WeakMap` cache.
 
 ## Automatic progression and handoffs
 

@@ -43,10 +43,10 @@ export default defineVendor({
     readonlySecrets: [".cursor/auth.json", ".config/cursor/auth.json"],
     catalogWatchPaths: [
       ".cursor/cli-config.json",
-      ".cursor/agent-cli-state.json",
       ".cursor/auth.json",
       ".config/cursor/auth.json",
     ],
+    catalogProbeStatePaths: [".cursor/agent-cli-state.json"],
   },
   models: {
     bundled: [

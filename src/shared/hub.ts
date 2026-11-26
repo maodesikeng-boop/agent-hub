@@ -153,7 +153,7 @@ export interface HubArgsMap {
     task?: string;
     vendor?: AgentVendor;
     model?: string;
-    effort?: string;
+    effort?: string | null;
     maxTimeMs?: number;
     readonly?: boolean;
     caps?: WorkerCapabilityMode;

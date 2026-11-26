@@ -38,6 +38,7 @@ export type Options = {
   refresh?: boolean;
   model?: string;
   effort?: string;
+  "clear-effort"?: boolean;
   "max-time"?: string;
   readonly?: boolean;
   caps?: string;
@@ -103,6 +104,7 @@ export const HUB_ARG_OPTIONS = {
   refresh: { type: "boolean" },
   model: { type: "string" },
   effort: { type: "string" },
+  "clear-effort": { type: "boolean" },
   "max-time": { type: "string" },
   readonly: { type: "boolean" },
   caps: { type: "string" },

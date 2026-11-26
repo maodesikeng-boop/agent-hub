@@ -1911,11 +1911,9 @@ exports[`迁移前快照：声明表 > VENDOR_HOME_PATHS 1`] = `
 {
   "agy": {
     "catalogWatchPaths": [
-      ".gemini/antigravity-cli",
-      ".gemini/antigravity",
-      ".gemini/config/mcp_config.json",
+      ".gemini/antigravity-cli/settings.json",
+      ".gemini/antigravity-cli/antigravity-oauth-token",
       ".gemini/oauth_creds.json",
-      ".gemini/mcp-oauth-tokens.json",
     ],
     "dirs": [
       ".gemini",
@@ -1926,8 +1924,10 @@ exports[`迁移前快照：声明表 > VENDOR_HOME_PATHS 1`] = `
     ],
   },
   "claude": {
-    "catalogWatchPaths": [
+    "catalogProbeStatePaths": [
       ".claude.json",
+    ],
+    "catalogWatchPaths": [
       ".claude/.credentials.json",
       ".claude/settings.json",
     ],
@@ -1941,12 +1941,14 @@ exports[`迁移前快照：声明表 > VENDOR_HOME_PATHS 1`] = `
     ],
   },
   "codex": {
-    "catalogWatchPaths": [
+    "catalogProbeStatePaths": [
       ".codex/models_cache.json",
+      ".codex/version.json",
+    ],
+    "catalogWatchPaths": [
       ".codex/auth.json",
       ".codex/.credentials.json",
       ".codex/config.toml",
-      ".codex/version.json",
     ],
     "dirs": [
       ".codex",
@@ -1957,9 +1959,11 @@ exports[`迁移前快照：声明表 > VENDOR_HOME_PATHS 1`] = `
     ],
   },
   "cursor": {
+    "catalogProbeStatePaths": [
+      ".cursor/agent-cli-state.json",
+    ],
     "catalogWatchPaths": [
       ".cursor/cli-config.json",
-      ".cursor/agent-cli-state.json",
       ".cursor/auth.json",
       ".config/cursor/auth.json",
     ],
@@ -2023,11 +2027,13 @@ exports[`迁移前快照：声明表 > VENDOR_HOME_PATHS 1`] = `
     ],
   },
   "pi": {
-    "catalogWatchPaths": [
+    "catalogProbeStatePaths": [
       ".pi/agent/auth.json",
+      ".pi/agent/models-store.json",
+    ],
+    "catalogWatchPaths": [
       ".pi/agent/models.json",
       ".pi/agent/settings.json",
-      ".pi/agent/models-store.json",
     ],
     "dirs": [
       ".pi/agent",

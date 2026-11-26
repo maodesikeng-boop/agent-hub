@@ -181,6 +181,12 @@ describe("agent api over inject", () => {
       expect(ledger.calls).toHaveLength(3);
     });
 
+    it("preserves an explicit null effort on worker.start", async () => {
+      const args = { ...VALID_ARGS["worker.start"], effort: null };
+      expect((await call("worker.start", args)).statusCode).toBe(200);
+      expect(ledger.calls).toEqual([{ sessionId: 11, command: "worker.start", args }]);
+    });
+
     it("accepts a field exactly at its byte limit", async () => {
       const text = "a".repeat(MAX_PERSONA_BYTES);
       expect((await call("persona.edit", { text })).statusCode).toBe(200);
