@@ -17,6 +17,7 @@ export interface PendingEntry {
   text: string;
   prefixes: string[];
   resend: boolean;
+  rider?: true;
 }
 
 export interface BatchNotes {
@@ -111,7 +112,12 @@ export function flatEntryText(entry: PendingEntry): string {
   return entry.resend ? `${RESEND_NOTE}\n\n${text}` : text;
 }
 
-/** Queued user messages merge into one batch, but never across a command so ordering is preserved. */
+/**
+ * Queued user messages merge into one batch, but never across a command so ordering is preserved.
+ * Riders never form a batch alone: with only riders pending this returns null. Otherwise every pending rider joins the
+ * taken batch that is not a command, its message ids first and its text as a prefix ahead of the batch's own prefixes,
+ * and leaves `remaining`. A command batch leaves riders queued for the batch after it.
+ */
 export function takePendingBatch(
   pending: PendingEntry[],
   isCommand: (text: string) => boolean,

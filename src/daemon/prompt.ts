@@ -268,6 +268,27 @@ export function checklistRuleNote(vendor: string): string | null {
   return tool === undefined ? null : `- **进度清单**：一轮要做 3 步或更多时，用 ${tool} 列出步骤，每完成一项就标记为完成。`;
 }
 
+/**
+ * Postcondition: a checklist rule section titled in Chinese (project-agnostic, no dates or session data) that every vendor's PM and
+ * Worker prompt carries. It names the tool from `checklistPromptTool` (with `hub checklist` usage for vendors without
+ * their own tool), states the trigger from `turnWatchStep` (editing any file, or a second command in one turn), says to
+ * list the whole turn before the first edit or command, to mark each step in progress and done as it goes, to finish or
+ * cancel every item before the turn ends, that pure questions and read-only lookups need no list, and that the rule is
+ * not optional because the user follows progress through it. Returns the same string for the same vendor every call.
+ */
+export function checklistRuleSection(vendor: string): string {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Postcondition: the one-line system note (starting with the system tag) the daemon sends when a turn hits the trigger
+ * without a checklist update. It names the same tool as `checklistRuleSection` and reads correctly whether it arrives
+ * inside the turn that missed the list or ahead of the session's next message.
+ */
+export function checklistReminderNote(vendor: string): string {
+  throw new Error("Not implemented");
+}
+
 export const WORKER_READONLY_NOTE = "- 这次只读：只看、只查，不改文件，也不跑会改东西的命令；要批准的操作会被系统直接拒绝。结论写进汇报。";
 
 function workerRoleSection(ctx: LaunchContext): string {

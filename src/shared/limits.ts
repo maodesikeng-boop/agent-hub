@@ -39,6 +39,8 @@ export const MAX_STEP_ARG_CHARS = 300;
 export const CHECKLIST_MAX_ITEMS = 50;
 export const CHECKLIST_TITLE_MAX_CHARS = 200;
 export const CHECKLIST_PENDING_CALLS_MAX = 64;
+export const TURN_CHECKLIST_EDITS_TRIGGER = 1;
+export const TURN_CHECKLIST_COMMANDS_TRIGGER = 2;
 export const CHANGE_BUFFER_SIZE = 1000;
 
 export const MAX_NAME_CHARS = 40;

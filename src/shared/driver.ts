@@ -21,6 +21,11 @@ export interface DriverSendInput {
   prefixes?: string[];
   resend?: boolean;
   recovery?: boolean;
+  /**
+   * A rider never starts a turn on its own: the driver writes it into the running turn when it can steer now,
+   * otherwise keeps it queued until the next batch the session sends, which then carries it ahead of its own text.
+   */
+  rider?: true;
 }
 
 export type DriverSendResult = { kind: "written"; midTurn?: true } | { kind: "queued" } | { kind: "cancelled" } | { kind: "rejected" };

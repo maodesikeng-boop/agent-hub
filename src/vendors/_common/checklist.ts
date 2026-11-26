@@ -76,3 +76,12 @@ export function withChecklistEnv(spec: VendorSpec, env: Record<string, string>, 
   }
   return next;
 }
+
+/**
+ * Postcondition: names the tool the prompt tells this vendor's agents to keep their list in. A vendor with at least one
+ * checklist source gets its own `promptTool` and `hub: false`; a vendor with none gets the `hub checklist` command
+ * and `hub: true`. The result depends only on the spec, so it is identical for every session of the vendor.
+ */
+export function checklistPromptTool(spec: VendorSpec): { tool: string; hub: boolean } {
+  throw new Error("Not implemented");
+}
