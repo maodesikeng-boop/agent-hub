@@ -76,10 +76,16 @@ function fakePage(onSend: () => void, replyVisible: () => boolean): FakeUi {
     },
   });
   const page = {
-    getByRole: (role: string, options: { name: string }) => {
+    getByRole: (role: string, options: { name: string; exact?: boolean }) => {
       if (role === "navigation" && options.name === "Workspace") return { locator: () => ({ first: () => clickable("computer") }) };
       if (role === "region" && options.name === "Project managers") return { getByRole: (_role: string, button: { name: string }) => clickable(`pm ${button.name}`) };
-      if (role === "textbox") return { fill: async (text: string) => void actions.push(`fill ${text}`) };
+      if (role === "textbox") {
+        const names = ["Message Router", "Message"].filter((name) => options.exact ? name === options.name : name.includes(options.name));
+        return { fill: async (text: string) => {
+          if (names.length !== 1 || names[0] !== "Message") throw new Error(`expected the conversation composer, matched ${names.join(", ")}`);
+          actions.push(`fill ${text}`);
+        } };
+      }
       return clickable(options.name, onSend);
     },
     locator: (selector: string) => ({

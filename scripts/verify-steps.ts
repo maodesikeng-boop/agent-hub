@@ -76,7 +76,7 @@ export async function sendAndAwaitReply(page: Page, input: { origin: string; coo
     await page.getByRole("region", { name: "Project managers" }).getByRole("button", { name: pm.name, exact: true }).click({ timeout: remaining(clock, "open the project manager") });
   });
   const sentAt = await withStep("send the message", clock, async (timeout) => {
-    await page.getByRole("textbox", { name: "Message" }).fill(input.text, { timeout });
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill(input.text, { timeout });
     const started = performance.now();
     await page.getByRole("button", { name: "Send", exact: true }).click({ timeout: remaining(clock, "send the message") });
     return started;
