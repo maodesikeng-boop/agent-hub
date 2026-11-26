@@ -172,10 +172,14 @@ async function execute(bench: Bench, config: BenchConfig, options: RunOptions, e
     if (verdict === null) {
       const mode = modeOf(entry.spec);
       if (bench.local().mode !== mode) {
-        await bench.local().restart(mode);
-        relayNeedsReconnect = true;
+        try {
+          await bench.local().restart(mode);
+          relayNeedsReconnect = true;
+        } catch (error) {
+          outcome = new ExternalServiceError("bench", `local daemon could not switch to ${mode} mode: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
-      if (relayNeedsReconnect && (entry.spec.boundaries.network === "relay" || entry.instance === "remote")) {
+      if (outcome === null && relayNeedsReconnect && (entry.spec.boundaries.network === "relay" || entry.instance === "remote")) {
         try {
           await waitForRelay(bench);
           relayNeedsReconnect = false;

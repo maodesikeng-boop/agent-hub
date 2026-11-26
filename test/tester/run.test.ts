@@ -247,3 +247,35 @@ it("waits for the restarted local daemon to reconnect before a relay flow runs",
   });
   expect(order).toEqual(["connecting", "connected", "flow"]);
 });
+
+it("keeps earlier results and writes reports when the local mode switch fails", async () => {
+  const root = scratch();
+  const configPath = writeConfig(root);
+  const fake = flow("mesh.fake", "fake");
+  const real = flow("mesh.real", "real");
+  const blocked = vi.fn(okRunner);
+  const { record, summary } = await runTester({
+    cadence: "nightly",
+    benchConfigPath: configPath,
+    codeDir: root,
+    catalog: [fake, real],
+    runners: { [fake.id]: okRunner, [real.id]: blocked },
+    open: async (cfg) => {
+      const { bench } = fakeBench(cfg);
+      bench.local().restart = async () => {
+        await bench.local().stop();
+        throw new Error("daemon did not start");
+      };
+      return bench;
+    },
+  });
+  expect(blocked).not.toHaveBeenCalled();
+  expect(record.results).toMatchObject([
+    { id: fake.id, verdict: "pass" },
+    { id: real.id, verdict: "env_unavailable", reason: expect.stringContaining("daemon did not start") },
+  ]);
+  expect(readRuns(join(root, "runs", HISTORY_FILE), 1).runs).toEqual([record]);
+  const latest = readFileSync(join(root, "runs", LATEST_DIR, "summary.md"), "utf8");
+  expect(latest).toEqual(readFileSync(join(summary.evidenceDir, "summary.md"), "utf8"));
+  expect(latest).toContain("daemon did not start");
+});

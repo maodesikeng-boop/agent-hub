@@ -6,7 +6,7 @@
 // Invariant: Feishu rotates the refresh token on every refresh and voids the old one, so the new token is written to disk
 // before the new access token is used, and only one process refreshes at a time.
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import writeFileAtomic from "write-file-atomic";
@@ -153,7 +153,10 @@ async function withRefreshLock<T>(lockFile: string, now: () => number, fn: () =>
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (existsSync(lockFile) && now() - statSync(lockFile).mtimeMs > TESTER_FEISHU_LOCK_STALE_MS) rmSync(lockFile, { force: true });
+      const at = now();
+      const lock = statSync(lockFile, { throwIfNoEntry: false });
+      if (lock === undefined) continue;
+      if (at - lock.mtimeMs > TESTER_FEISHU_LOCK_STALE_MS) rmSync(lockFile, { force: true });
       else await delay(200);
     }
   }

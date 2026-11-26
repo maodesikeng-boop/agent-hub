@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFeishuDriver, FEISHU_REFRESH_EXPIRED, FeishuApiError, FeishuGuardError, isRecalled, visibleText, writeDriverSecrets, type DriverSecrets } from "./feishu-driver.ts";
 import { TESTER_FEISHU_TOKEN_SKEW_MS } from "./limits.ts";
 
@@ -99,6 +99,21 @@ describe("createFeishuDriver", () => {
     await createFeishuDriver(stale.options);
     const refresh = stale.feishu.calls.find((c) => c.path === "/open-apis/authen/v2/oauth/token")!;
     expect(refresh.body).toEqual({ grant_type: "refresh_token", client_id: "cli_driver", client_secret: "driver-secret", refresh_token: "r-old" });
+  });
+
+  it("retries the refresh lock when its owner releases it before the age check", async () => {
+    const s = setup({ accessExpiresAt: NOW });
+    const lock = `${s.driverSecretsFile}.lock`;
+    writeFileSync(lock, "");
+    const now = vi.fn(s.options.now)
+      .mockImplementationOnce(s.options.now)
+      .mockImplementationOnce(s.options.now)
+      .mockImplementationOnce(() => {
+        rmSync(lock);
+        return NOW;
+      });
+    await expect(createFeishuDriver({ ...s.options, now })).resolves.toBeDefined();
+    expect(s.feishu.calls.filter((c) => c.path === "/open-apis/authen/v2/oauth/token")).toHaveLength(1);
   });
 
   it("writes the rotated refresh token to disk before using the new access token", async () => {

@@ -5,7 +5,7 @@ description: "Run the local end-to-end smoke check for Bellwood: build the web a
 
 # Verify
 
-`pnpm verify` proves the app still starts and renders on this machine. One run takes about 7 seconds and has a 20-second budget.
+`pnpm verify` proves the app still starts and renders on this machine. Three local runs on macOS arm64 took 10 to 12 seconds each. The script flags runs over its 20-second target.
 
 ## Run it
 
