@@ -53,3 +53,24 @@ export function graphProgressOf(graph: Pick<TaskGraph, "nodes">): GraphProgress 
   }
   return { done, total: graph.nodes.length };
 }
+
+export type GraphDeliveryWait = { kind: "pm" } | { kind: "watch"; watchId: number; body: string };
+
+export interface GraphDelivery {
+  /** Step-count header for the panel and dialog, for example `2/2 steps · awaiting delivery`. */
+  header: string;
+  /** The last row under the steps while the graph waits for delivery; null otherwise. The leaf renders its age from `since`. */
+  row: { wait: GraphDeliveryWait; since: number } | null;
+}
+
+/**
+ * Postcondition: for an active graph whose every step is done, `header` is `<done>/<total> steps · awaiting delivery`
+ * and `row` waits for the PM, or for `watch` when one is linked; `since` is the latest `updatedAt` among its steps.
+ * Otherwise `header` is `<done>/<total> steps` and `row` is null.
+ */
+export function graphDeliveryOf(
+  _graph: Pick<TaskGraph, "status" | "nodes">,
+  _watch: { watchId: number; body: string } | null = null,
+): GraphDelivery {
+  throw new Error("Not implemented");
+}
