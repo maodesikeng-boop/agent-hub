@@ -22,7 +22,7 @@ export function nodeWorkStatusOf(
   node: Pick<TaskNode, "status" | "waitingFor"> & { gateAskPending?: boolean },
   graphStatus: TaskGraph["status"] = "active",
 ): WorkStatus {
-  if (graphStatus === "cancelled") return node.status === "done" ? "done" : "cancelled";
+  if (node.status === "cancelled" || graphStatus === "cancelled") return node.status === "done" ? "done" : "cancelled";
   if (node.gateAskPending === true) return "waiting";
   switch (node.status) {
     case "done":

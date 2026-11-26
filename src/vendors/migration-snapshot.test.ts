@@ -61,7 +61,7 @@ function flatSpec(spec: VendorSpec) {
 const VENDOR_SPECS = Object.fromEntries(VENDOR_LIST.map((spec) => [spec.id, flatSpec(spec)])) as Record<AgentVendor, ReturnType<typeof flatSpec>>;
 /** 迁移前的 VENDOR_HOME_PATHS：spec 的 home 去掉 configHome。 */
 const VENDOR_HOME_PATHS = Object.fromEntries(
-  VENDOR_LIST.map(({ id, home }) => [id, { dirs: home.dirs, readonlySecrets: home.readonlySecrets, catalogWatchPaths: home.catalogWatchPaths }]),
+  VENDOR_LIST.map(({ id, home }) => [id, { dirs: home.dirs, readonlySecrets: home.readonlySecrets, catalogWatchPaths: home.catalogWatchPaths, ...("catalogProbeStatePaths" in home ? { catalogProbeStatePaths: home.catalogProbeStatePaths } : {}) }]),
 );
 
 /** 每家的模型取值：默认、空串、打包的、名单外的完整模型名，思考程度写在 ID 里的（agy）再加一个带档位的。 */

@@ -143,7 +143,7 @@ export interface VendorRuntimeResolver {
   resolveExecutablePath(vendor: AgentVendor): string;
   resolveVendorEnv(vendor: AgentVendor): Record<string, string | undefined>;
   resolveManagedDriverEnv(vendor: AgentVendor): Record<string, string>;
-  catalogFingerprint(vendor: AgentVendor): string;
+  catalogFingerprint(vendor: AgentVendor): ReturnType<typeof vendorCatalogFingerprint>;
   gitInstalled(): boolean;
   invalidate(vendor?: AgentVendor): void;
   /** Windows does not refresh PATH for running processes, so the registry Path is reread after installs. */
@@ -250,8 +250,8 @@ export function createVendorRuntimeResolver(
     catalogFingerprint(vendor) {
       const exe = locateBinary(vendor) ?? paths.vendorPaths[vendor];
       const env = resolveVendorEnv(vendor);
-      const baseFp = vendorCatalogFingerprint(vendor, exe, env, userHome, platform);
-      return `${baseFp}|secrets:${secrets.fingerprint(vendor)}`;
+      const { inputs, probeState } = vendorCatalogFingerprint(vendor, exe, env, userHome, platform);
+      return { inputs: `${inputs}|secrets:${secrets.fingerprint(vendor)}`, probeState };
     },
     gitInstalled() {
       return (

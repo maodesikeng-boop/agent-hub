@@ -753,7 +753,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
       sources: {
         codex: {
           parse: parseCodexModels,
-          fingerprint: () => fp,
+          fingerprint: () => ({ inputs: fp, probeState: "" }),
           query: async () => {
             calls++;
             return answers.shift();
@@ -813,7 +813,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
           parse: parseCodexModels,
           fingerprint: () => {
             fingerprintCalls++;
-            return fp;
+            return { inputs: fp, probeState: "" };
           },
           query: async () => {
             calls++;
@@ -826,8 +826,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
 
     await catalogs.list();
     expect(calls).toBe(1);
-    // 问完记一次指纹
-    expect(fingerprintCalls).toBe(1);
+    expect(fingerprintCalls).toBe(2);
 
     // 冷却期内：高频调用全部命中缓存，指纹一次都不算；文件变了也要等冷却期过了才看到
     fp = "v2";
@@ -836,25 +835,24 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
       expect(await catalogs.ensureUsable("codex")).toBe("available");
       now += Math.floor((MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS - 1) / 50);
     }
-    expect(fingerprintCalls).toBe(1);
+    expect(fingerprintCalls).toBe(2);
     expect(calls).toBe(1);
 
-    // 过了冷却期：算一次，发现变了就重问（重问完再记一次）
     now = 4_000_000 + MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
     await catalogs.list();
     expect(calls).toBe(2);
-    expect(fingerprintCalls).toBe(3);
+    expect(fingerprintCalls).toBe(5);
 
     // 刚重问完又进冷却期：接着调不再算
     await catalogs.list();
     await catalogs.ensureUsable("codex");
-    expect(fingerprintCalls).toBe(3);
+    expect(fingerprintCalls).toBe(5);
 
     // 冷却期过了、指纹没变：只算一次、不重问
     now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
     await catalogs.list();
     await catalogs.list();
-    expect(fingerprintCalls).toBe(4);
+    expect(fingerprintCalls).toBe(6);
     expect(calls).toBe(2);
   });
 
@@ -968,7 +966,7 @@ describe("createModelCatalogs：厂商在这台设备上的状态（跟名单一
     expect(of(await setup({ answers: [new Error("超时")] }).catalogs.list(), "codex").availability).toBe("unknown");
   });
 
-  it("名单问到了、回应里说没登录：名单照用厂商的，状态 signed_out；5 分钟内不再问，之后有人要时在后台再问", async () => {
+  it("keeps the vendor catalog when signed out and probes again after the retry window", async () => {
     const t = setup({ answers: [signedOut, signedIn], availabilityOf: codexAvailability });
     const first = of(await t.catalogs.list(), "codex");
     expect(first.source).toBe("vendor");

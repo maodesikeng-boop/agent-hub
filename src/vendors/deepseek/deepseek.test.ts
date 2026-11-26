@@ -378,12 +378,12 @@ describe("deepseek 声明（spec.ts）与路径/凭据边界（paths.ts）", () 
     expect(SENSITIVE_HOME_PATHS).toContain(DEEPSEEK_HOME_REL);
     expect(READONLY_SECRET_HOME_PATHS).toContain(".dsh/.credentials.yaml");
     expect(READONLY_SECRET_HOME_PATHS).toContain(".dsh/.env");
-    expect(vendorCatalogWatchFiles("deepseek", "/Users/u", {})).toEqual([
+    expect(vendorCatalogWatchFiles("deepseek", "/Users/u", {}).inputs).toEqual([
       "/Users/u/.dsh/.credentials.yaml",
       "/Users/u/.dsh/.env",
       "/Users/u/.dsh/cordis.patch.yml",
     ]);
-    expect(vendorCatalogWatchFiles("deepseek", "/Users/u", { DSH_HOME: "/custom/dsh" })).toEqual([
+    expect(vendorCatalogWatchFiles("deepseek", "/Users/u", { DSH_HOME: "/custom/dsh" }).inputs).toEqual([
       "/custom/dsh/.credentials.yaml",
       "/custom/dsh/.env",
       "/custom/dsh/cordis.patch.yml",
