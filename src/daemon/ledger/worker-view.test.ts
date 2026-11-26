@@ -585,6 +585,52 @@ const runNamed = (workerId: WorkerId, tool: { name: string; input: unknown }, wa
 };
 const stats = (workerId: WorkerId) => ledger.hubCall(lin.sessionId, "worker.log", { workerId, stats: true }, {});
 
+describe("hub worker log --stats tool wait time", () => {
+  function startTool(workerId: WorkerId, id: string) {
+    emit(workerId, { type: "agent.tool", uuid: id, toolUseId: id, name: "Read", input: { file_path: id }, ...at() });
+  }
+
+  function finishTools(workerId: WorkerId, ...ids: string[]) {
+    emit(workerId, { type: "agent.tool_result", toolUseIds: ids, ...at() });
+  }
+
+  it("counts 37 minutes of concurrent waits once instead of summing 106 minutes", () => {
+    const w = startWorker("claude");
+    const minute = 60_000;
+    startTurn(w);
+    startTool(w, "first");
+    advance(minute);
+    startTool(w, "second");
+    advance(minute);
+    startTool(w, "third");
+    advance(33 * minute);
+    finishTools(w, "third");
+    advance(2 * minute);
+    finishTools(w, "first", "second");
+    endTurn(w);
+
+    expect(stats(w).text).toContain("等工具结果 37m（3 次调用）");
+  });
+
+  it("joins partial overlaps, skips gaps and excludes calls without results", () => {
+    const w = startWorker("claude");
+    startTurn(w);
+    startTool(w, "unfinished");
+    startTool(w, "first");
+    advance(3_000);
+    startTool(w, "second");
+    advance(2_000);
+    finishTools(w, "first");
+    advance(2_000);
+    finishTools(w, "second");
+    advance(10_000);
+    runNamed(w, { name: "Read", input: { file_path: "last" } }, 2_000);
+    endTurn(w);
+
+    expect(stats(w).text).toContain("等工具结果 9s（3 次调用）");
+  });
+});
+
 describe.each(Object.keys(OTHER_TOOLS) as AgentVendor[])("%s 的 hub worker log --stats", (vendor) => {
   it("各类别计数、读得最多的文件、重复最多的命令、思考和等工具的用时、轮的结局", () => {
     const w = startWorker(vendor);
