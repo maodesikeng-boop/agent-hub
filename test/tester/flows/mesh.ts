@@ -1,10 +1,11 @@
 // Runners for mesh flows. They reach the remote computer only through the local instance's /d/<deviceId>/ proxy.
 import WebSocket from "ws";
 import { API_PATHS, WS_HEARTBEAT_TEXT, type AccountStatusView } from "../../../src/shared/index.ts";
+import { ReplyTimeoutError, TurnFailedError } from "../instance-client.ts";
 import type { RemoteInstanceConfig } from "../bench.ts";
 import type { FlowContext, FlowRunner } from "../types.ts";
 import { ExternalServiceError } from "../verdict.ts";
-import { ensureBenchPm, runner, runTag, sleep, vendorPm, waitFor } from "./common.ts";
+import { ensureBenchPm, externalOf, observeVendorFailure, runner, runTag, sleep, vendorPm, waitFor } from "./common.ts";
 
 const COLD_DIALS = 10;
 const COLD_DIAL_TIMEOUT_MS = 15_000;
@@ -14,6 +15,15 @@ const ONLINE_WITHIN_MS = 15_000;
 const IDLE_WATCH_MS = 120_000;
 const IDLE_POLL_MS = 5_000;
 const CHAT_REPLY_MS = 120_000;
+
+export async function remoteIsReachable(health: () => Promise<{ ok: boolean }>): Promise<true | undefined> {
+  try {
+    return (await health()).ok ? true : undefined;
+  } catch (error) {
+    if (externalOf(error)?.service === "relay") return undefined;
+    throw error;
+  }
+}
 
 function remoteDeviceId(ctx: FlowContext): string {
   return ctx.bench.config.instances.find((i): i is RemoteInstanceConfig => i.role === "remote")!.deviceId;
@@ -85,7 +95,7 @@ const routerSeesOnline = runner(async (ctx, obs) => {
   const watchEnd = Date.now() + IDLE_WATCH_MS;
   while (online !== null && Date.now() < watchEnd) {
     await sleep(IDLE_POLL_MS, ctx.signal);
-    const seen = await remoteSeesLocalOnline(ctx, localId).catch((error: unknown) => `error ${String(error)}`);
+    const seen = await remoteSeesLocalOnline(ctx, localId);
     lines.push(`${new Date().toISOString()} ${String(seen)}`);
     if (seen !== true) flaps.push(`${new Date().toISOString()} ${String(seen)}`);
   }
@@ -129,14 +139,18 @@ async function watchStream(ctx: FlowContext): Promise<StreamWatch> {
 
 const crossDeviceChat = runner(async (ctx, obs) => {
   const remote = ctx.bench.remote();
-  const reachable = await waitFor(async () => (await remote.health()).ok ? true : undefined, COLD_DIAL_TIMEOUT_MS, ctx.signal, 250);
+  const reachable = await waitFor(async () => remoteIsReachable(() => remote.health()), COLD_DIAL_TIMEOUT_MS, ctx.signal, 250);
   if (reachable === null) throw new ExternalServiceError("relay", "the remote test daemon was not reachable before opening the chat");
   const pm = await ensureBenchPm(remote, vendorPm("claude", "remote"));
   const stream = await watchStream(ctx);
   try {
     const t0 = Date.now();
     const sent = await remote.send(pm.conversationId, `Bench cross-device ${runTag()}: reply with the word pong.`);
-    const reply = await remote.waitForReply(pm.conversationId, sent, CHAT_REPLY_MS).catch(() => null);
+    const reply = await remote.waitForReply(pm.conversationId, sent, CHAT_REPLY_MS, ctx.signal).catch((error: unknown) => {
+      if (error instanceof ReplyTimeoutError) return null;
+      if (error instanceof TurnFailedError && observeVendorFailure(obs, error.message, "claude")) return null;
+      throw error;
+    });
     obs.metrics.replyMs = reply === null ? -1 : Date.now() - t0;
     obs.check("reply-arrives", reply !== null, reply === null ? `no reply within ${CHAT_REPLY_MS / 1000} s` : `reply after ${obs.metrics.replyMs} ms`);
     const live = reply !== null && (await waitFor(async () => (stream.sawMessage(reply.id) ? true : undefined), 5_000, ctx.signal, 200)) !== null;

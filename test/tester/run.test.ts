@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { VENDOR_LIST } from "../../src/shared/index.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { API_PATHS, VENDOR_LIST } from "../../src/shared/index.ts";
 import { ProductionGuardError, type BenchConfig } from "./bench.ts";
 import { fakeBench, fakeComputer, providersAll } from "./fake-bench.ts";
 import { HISTORY_FILE, LATEST_DIR, readRuns } from "./history.ts";
@@ -216,4 +216,34 @@ describe("runTester", () => {
     expect(await runWith("rc")).toContain(`remote deploy ${"c".repeat(40)}`);
     expect(await runWith("nightly")).not.toContain(`remote deploy ${"c".repeat(40)}`);
   });
+});
+
+it("waits for the restarted local daemon to reconnect before a relay flow runs", async () => {
+  const root = scratch();
+  const configPath = writeConfig(root);
+  const spec = flow("feishu.group-check", "fake", { boundaries: { feishu: "real", network: "relay", model: "fake", devices: 2 } });
+  const order: string[] = [];
+  await runTester({
+    cadence: "nightly",
+    benchConfigPath: configPath,
+    codeDir: root,
+    catalog: [spec],
+    runners: { [spec.id]: async (ctx) => { order.push("flow"); return okRunner(ctx); } },
+    open: async (cfg) => {
+      const { bench } = fakeBench(cfg);
+      const local = bench.local();
+      await local.start("real");
+      const originalJson = local.api.json;
+      local.api.json = vi.fn().mockImplementation((method, path, ...args) => {
+        if (path === API_PATHS.account) {
+          const relay = order.includes("connecting") ? "connected" : "connecting";
+          order.push(relay);
+          return Promise.resolve({ state: "signed_in", relay });
+        }
+        return originalJson(method, path, ...args);
+      });
+      return bench;
+    },
+  });
+  expect(order).toEqual(["connecting", "connected", "flow"]);
 });

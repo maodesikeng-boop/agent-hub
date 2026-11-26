@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FeishuApiError, FeishuReplyTimeout } from "../feishu-driver.ts";
 import { fakeBench } from "../fake-bench.ts";
 import { BENCH_ECHO_REPLY } from "../fake-script.ts";
 import type { FeishuDriver, FeishuMessage } from "../feishu-driver.ts";
@@ -21,18 +22,27 @@ function message(messageId: string, text: string, status?: string): FeishuMessag
   };
 }
 
-async function run(id: string, cards: FeishuMessage[]) {
+async function run(id: string, cards: FeishuMessage[], options: {
+  pollError?: Error;
+  sendError?: Error;
+  stop?: () => Promise<void>;
+  start?: (mode: "real" | "fake") => Promise<void>;
+} = {}) {
   vi.useFakeTimers();
   const root = mkdtempSync(join(tmpdir(), "tester-feishu-flow-"));
   dirs.push(root);
   const sent: FeishuMessage = { ...message("om_sent", "Bench check"), senderType: "user", senderId: "owner" };
   const driver: FeishuDriver = {
     testChats: async () => [{ chatId: sent.chatId, kind: "router" }, { chatId: "oc_group", kind: "project", deviceId: "dev_mac", pmId: 1 }],
-    sendAsUser: async () => sent.messageId,
+    sendAsUser: async () => {
+      if (options.sendError) throw options.sendError;
+      return sent.messageId;
+    },
     listMessages: async () => [sent, ...cards],
     waitForBotMessage: async (_chat, _since, done) => {
+      if (options.pollError) throw options.pollError;
       const found = cards.find(done);
-      if (found === undefined) throw new Error("no reply");
+      if (found === undefined) throw new FeishuReplyTimeout("no reply", []);
       return found;
     },
     ensureUserToken: async () => 0,
@@ -41,21 +51,21 @@ async function run(id: string, cards: FeishuMessage[]) {
     version: 1, root, sandboxProject: root, testAccount: { githubLogin: "bench-bot" },
     guards: { dataDirs: [], uiPorts: [], meshPorts: [], feishuAppIds: [], githubLogins: [] },
     feishu: { botAppId: "cli_test", driverAppId: "cli_driver" },
-    instances: [{ name: "mac", role: "local", dataDir: root, userHome: root, uiPort: 4417, meshPort: 4421, env: {} }],
+    instances: [{ name: "mac", role: "local", dataDir: root, userHome: root, uiPort: 4417, meshPort: 4421, env: {} }, { name: "tokyo", role: "remote", deviceId: "dev_tokyo" }],
   });
   const execution = feishuRunners[id]!({
     bench: {
       ...bench,
       local: () => {
         const local = bench.local();
-        return { ...local, state: vi.fn().mockResolvedValue({ pms: [], conversations: [] }), api: { ...local.api, json: vi.fn().mockResolvedValue({ pmId: 1, conversationId: 1 }) } };
+        return { ...local, state: vi.fn().mockResolvedValue({ pms: [], conversations: [] }), api: { ...local.api, json: vi.fn().mockResolvedValue({ pmId: 1, conversationId: 1, state: "signed_in", feishuHolder: "dev_mac" }) } };
       },
-      remote: () => ({ ...bench.remote(), stop: async () => {}, start: async () => {} }),
+      remote: () => ({ ...bench.remote(), stop: options.stop ?? (async () => {}), start: options.start ?? (async () => {}) }),
     },
     feishu: driver, evidenceDir: root, instance: "local", signal: new AbortController().signal, log: () => {},
   });
-  await vi.runAllTimersAsync();
-  return execution;
+  const [result] = await Promise.all([execution, vi.runAllTimersAsync()]);
+  return result;
 }
 
 describe("Feishu Router flows", () => {
@@ -99,4 +109,31 @@ describe("Feishu project group flows", () => {
     expect(result.checks).toContainEqual(expect.objectContaining({ check: "reason-shown", ok: true }));
     expect(result.checks.filter(({ ok }) => !ok)).toEqual([]);
   });
+});
+
+it("retains a Feishu outage reported while polling for a response", async () => {
+  const result = await run("feishu.dm-router", [], { pollError: new FeishuApiError("upstream 503", 503, 0) });
+  expect(result.externalErrors).toEqual([{ service: "feishu", detail: "upstream 503" }]);
+});
+
+it.each(["没办成：Claude 额度用完了", "没办成：Claude 未登录或鉴权失败", "没办成：You've hit your limit · resets midnight (Asia/Shanghai)"])(
+  "reports a vendor refusal in a Feishu error card: %s",
+  async (text) => {
+    const result = await run("feishu.dm-router", [message("om_error", text)]);
+    expect(result.vendorTrouble).toMatchObject({ kind: text.includes("鉴权") ? "auth" : "quota" });
+  },
+);
+
+it("reports an upstream model outage shown on a Feishu card", async () => {
+  const result = await run("feishu.dm-router", [message("om_error", "没办成：Claude 服务繁忙，稍后重试")]);
+  expect(result.externalErrors).toEqual([expect.objectContaining({ service: "vendor" })]);
+});
+
+it("restores the remote test daemon even if the failover message cannot be sent", async () => {
+  const stop = vi.fn(async () => {});
+  const start = vi.fn(async () => {});
+  const result = await run("feishu.hub-failover", [], { stop, start, sendError: new FeishuApiError("upstream 503", 503, 0) });
+  expect(stop).toHaveBeenCalledOnce();
+  expect(start).toHaveBeenCalledExactlyOnceWith("real");
+  expect(result.externalErrors).toEqual([{ service: "feishu", detail: "upstream 503" }]);
 });

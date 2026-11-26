@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -212,5 +212,65 @@ describe("openBench", () => {
     const fake = localDaemonEnv({ config: c, instance: local(c), codeDir: "/code", mode: "fake", platform: "darwin", baseEnv: {} });
     expect(fake[claude]).toBe("/code/test/fake-claude/fake-claude.ts");
     expect(fake.FAKE_CLAUDE_SCRIPT!.startsWith(root)).toBe(true);
+  });
+});
+
+describe("bench configuration at command boundaries", () => {
+  it.each([["vendors", "install"], ["authorize-feishu"]] as const)(
+    "refuses guarded config before running %s %s",
+    async (...argv) => {
+      const root = scratch();
+      const c = config(root);
+      local(c).uiPort = 4317;
+      const bin = join(local(c).userHome, ".local", "bin");
+      mkdirSync(bin, { recursive: true });
+      for (const { cli } of VENDOR_LIST) writeFileSync(join(bin, cli.command), "");
+      const file = join(root, "custom.json");
+      writeFileSync(file, JSON.stringify(c));
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const out = vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.stubEnv(TESTER_HOME_ENV, scratch());
+      try {
+        expect(await main([...argv, "--config", file])).toBe(2);
+        expect(err).toHaveBeenCalledWith(expect.stringContaining("refused (production guard)"));
+        expect(out).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it("looks for authorization secrets under the selected config root", async () => {
+    const root = scratch();
+    const file = join(root, "custom.json");
+    writeFileSync(file, JSON.stringify(config(root)));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv(TESTER_HOME_ENV, scratch());
+    try {
+      expect(await main(["authorize-feishu", "--config", file])).toBe(2);
+      expect(err).toHaveBeenCalledWith(expect.stringContaining(join(root, "secrets", "feishu-driver.json")));
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("does not let instance env change isolation settings or CLI pins", () => {
+    const c = config(scratch());
+    const instance = local(c);
+    const cli = VENDOR_LIST[0]!.cli.envVar;
+    instance.env = { HOME: "/operator", USERPROFILE: "/operator", PATH: "/operator/bin", [ENV_HOME]: "/operator/data", [ENV_PORT]: "4317", [ENV_MESH_PORT]: "4320", [cli]: "/operator/bin/cli" };
+    const env = localDaemonEnv({ config: c, instance, codeDir: "/code", mode: "real", platform: "darwin", baseEnv: {} });
+    expect(env).toMatchObject({ HOME: instance.userHome, USERPROFILE: instance.userHome, [ENV_HOME]: instance.dataDir, [ENV_PORT]: "4417", [ENV_MESH_PORT]: "4421" });
+    expect(env.PATH).not.toContain("/operator");
+    expect(env[cli]).not.toContain("/operator");
+  });
+
+  it("rejects a vendor config home outside the bench before launch", () => {
+    const c = config(scratch());
+    local(c).env = { CODEX_HOME: scratch() };
+    expect(() => assertNotProduction(c)).toThrow(/CODEX_HOME.*outside/);
+    expect(existsSync(local(c).dataDir)).toBe(false);
   });
 });

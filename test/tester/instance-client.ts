@@ -1,5 +1,6 @@
 // HTTP access to one test computer: the local test daemon directly, the remote one through the local daemon's
 // /d/<deviceId>/ mesh proxy with the same session cookie, exactly as the workbench in a browser reaches it.
+import { setTimeout as delay } from "node:timers/promises";
 import { API_PATHS, type AccountStatusView, type DeviceRouterDigest, type Message, type MessagesPage, type StateSnapshot } from "../../src/shared/index.ts";
 import { TESTER_POLL_MS } from "./limits.ts";
 import type { InstanceClient } from "./bench.ts";
@@ -55,13 +56,14 @@ export async function loginCookie(origin: string, uiToken: string, signal?: Abor
   return cookie;
 }
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+export class ReplyTimeoutError extends Error {}
+export class TurnFailedError extends Error {}
 
 const NEWEST = Number.MAX_SAFE_INTEGER;
 
 /** Postcondition: the messages of `conversationId` after `afterMessageId` within the newest page, oldest first. */
-export async function messagesAfter(api: ApiClient, conversationId: number, afterMessageId: number): Promise<Message[]> {
-  const page = await api.json<MessagesPage>("GET", `${API_PATHS.messages(conversationId)}?before=${NEWEST}`);
+export async function messagesAfter(api: ApiClient, conversationId: number, afterMessageId: number, signal?: AbortSignal): Promise<Message[]> {
+  const page = await api.json<MessagesPage>("GET", `${API_PATHS.messages(conversationId)}?before=${NEWEST}`, undefined, signal);
   return page.messages.filter((m) => m.id > afterMessageId);
 }
 
@@ -86,13 +88,17 @@ export function createInstanceClient(name: string, api: ApiClient): InstanceClie
       const res = await api.json<{ messageId: number }>("POST", API_PATHS.messages(conversationId), { clientId: crypto.randomUUID(), text });
       return res.messageId;
     },
-    async waitForReply(conversationId, afterMessageId, timeoutMs) {
+    async waitForReply(conversationId, afterMessageId, timeoutMs, signal) {
       const deadline = Date.now() + timeoutMs;
       for (;;) {
-        const reply = (await messagesAfter(api, conversationId, afterMessageId)).find((m) => m.sender === "agent" && m.kind === "text" && m.text.trim() !== "");
+        signal?.throwIfAborted();
+        const messages = await messagesAfter(api, conversationId, afterMessageId - 1, signal);
+        const failed = messages.find((m) => m.id === afterMessageId && m.status === "failed");
+        if (failed !== undefined) throw new TurnFailedError(failed.failureReason ?? "the PM turn failed");
+        const reply = messages.find((m) => m.id > afterMessageId && m.sender === "agent" && m.kind === "text" && m.text.trim() !== "");
         if (reply !== undefined) return reply;
-        if (Date.now() >= deadline) throw new Error(`no reply in conversation ${conversationId} after message ${afterMessageId} within ${timeoutMs / 1000} s`);
-        await sleep(TESTER_POLL_MS);
+        if (Date.now() >= deadline) throw new ReplyTimeoutError(`no reply in conversation ${conversationId} after message ${afterMessageId} within ${timeoutMs / 1000} s`);
+        await delay(Math.min(TESTER_POLL_MS, Math.max(0, deadline - Date.now())), undefined, { signal });
       }
     },
     async account() {

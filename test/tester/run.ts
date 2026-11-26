@@ -1,18 +1,19 @@
 // Orchestrates one tester run: guards, preflight, flows grouped by local CLI mode, verdicts, history, summary.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { API_PATHS, ENV_HOME, VENDOR_LIST, type FeishuStatusView } from "../../src/shared/index.ts";
+import { API_PATHS, ENV_HOME, VENDOR_LIST, type AccountStatusView, type FeishuStatusView } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
 import { assertNotProduction, BenchConfigError, openBench, parseBenchConfig, type Bench, type BenchConfig } from "./bench.ts";
 import { createFeishuDriver, type FeishuDriver } from "./feishu-driver.ts";
+import { externalOf, waitFor } from "./flows/common.ts";
 import { FLOWS, RUNNERS, selectFlows } from "./flows.ts";
 import { appendRun, HISTORY_FILE, LATEST_DIR, newRunId, pruneEvidence, readRuns } from "./history.ts";
-import { TESTER_EVIDENCE_KEEP_RUNS, TESTER_HISTORY_MAX_RUNS, TESTER_NIGHTLY_BUDGET_MS, TESTER_POLL_MS } from "./limits.ts";
+import { TESTER_EVIDENCE_KEEP_RUNS, TESTER_HISTORY_MAX_RUNS, TESTER_NIGHTLY_BUDGET_MS, TESTER_POLL_MS, TESTER_RELAY_READY_MS } from "./limits.ts";
 import { benchLayout } from "./local-instance.ts";
 import { configuredCapabilities, driverSecretsFile, preflight } from "./preflight.ts";
 import { renderSummary, summarize, type RunSummary } from "./report.ts";
 import type { BenchCapability, Cadence, ExternalError, FlowObservation, FlowResult, FlowRunner, FlowSpec, InstanceRole, PreflightResult, RunRecord } from "./types.ts";
-import { alertsFor, classifyFlow, gateFlow } from "./verdict.ts";
+import { alertsFor, classifyFlow, ExternalServiceError, gateFlow } from "./verdict.ts";
 import { probeVendor } from "./vendors.ts";
 
 export interface RunOptions {
@@ -111,6 +112,20 @@ async function runOne(bench: Bench, driver: FeishuDriver | null, entry: Entry, r
   }
 }
 
+async function waitForRelay(bench: Bench): Promise<void> {
+  const signal = AbortSignal.timeout(TESTER_RELAY_READY_MS);
+  try {
+    const ready = await waitFor(async () => {
+      const account = await bench.local().api.json<AccountStatusView>("GET", API_PATHS.account, undefined, signal);
+      return account.state === "signed_in" && account.relay === "connected" ? true : undefined;
+    }, TESTER_RELAY_READY_MS, signal);
+    if (ready !== null) return;
+  } catch (error) {
+    if (!signal.aborted) throw externalOf(error) ?? error;
+  }
+  throw new ExternalServiceError("relay", `the local test daemon did not reconnect within ${TESTER_RELAY_READY_MS / 1000} s of the mode switch`);
+}
+
 async function commitsOf(bench: Bench): Promise<Record<string, string>> {
   const local = bench.local();
   const commits: Record<string, string> = { [local.name]: local.commit() };
@@ -145,6 +160,7 @@ async function execute(bench: Bench, config: BenchConfig, options: RunOptions, e
   const runners = options.runners ?? RUNNERS;
   const budgetEnd = Date.now() + TESTER_NIGHTLY_BUDGET_MS;
   const results: FlowResult[] = [];
+  let relayNeedsReconnect = false;
   for (const entry of entries) {
     const startedAt = new Date().toISOString();
     const started = Date.now();
@@ -155,9 +171,22 @@ async function execute(bench: Bench, config: BenchConfig, options: RunOptions, e
     if (verdict === null && Date.now() >= budgetEnd) verdict = { verdict: "env_unavailable", reason: `the run budget of ${TESTER_NIGHTLY_BUDGET_MS / 60_000} min ran out before this flow` };
     if (verdict === null) {
       const mode = modeOf(entry.spec);
-      if (bench.local().mode !== mode) await bench.local().restart(mode);
-      mkdirSync(dir, { recursive: true });
-      outcome = await runOne(bench, driver, entry, runners, dir);
+      if (bench.local().mode !== mode) {
+        await bench.local().restart(mode);
+        relayNeedsReconnect = true;
+      }
+      if (relayNeedsReconnect && (entry.spec.boundaries.network === "relay" || entry.instance === "remote")) {
+        try {
+          await waitForRelay(bench);
+          relayNeedsReconnect = false;
+        } catch (error) {
+          outcome = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+      if (outcome === null) {
+        mkdirSync(dir, { recursive: true });
+        outcome = await runOne(bench, driver, entry, runners, dir);
+      }
       verdict = classifyFlow(entry.spec, entry.instance, outcome, pre, configured);
     }
     const observation = outcome !== null && !(outcome instanceof Error) ? outcome : null;

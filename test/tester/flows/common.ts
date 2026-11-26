@@ -1,9 +1,10 @@
 // Helpers every runner shares: the bench PMs, bounded evidence files, waiting, and turning errors into observations.
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { API_PATHS, type AgentVendor, type CreatePmRequest, type CreatePmResponse, type StateSnapshot } from "../../../src/shared/index.ts";
+import { API_PATHS, VENDOR_LIST, type AgentVendor, type CreatePmRequest, type CreatePmResponse, type StateSnapshot } from "../../../src/shared/index.ts";
+import { describeFailure } from "../../../src/shared/errors.ts";
 import type { InstanceClient } from "../bench.ts";
-import { FeishuApiError, type FeishuMessage, isRecalled } from "../feishu-driver.ts";
+import { FeishuApiError, FeishuGuardError, type FeishuMessage, isRecalled } from "../feishu-driver.ts";
 import { ApiError } from "../instance-client.ts";
 import { scenarioMarker, type BenchScenario } from "../fake-script.ts";
 import { TESTER_EVIDENCE_MAX_BYTES_PER_FLOW, TESTER_POLL_MS } from "../limits.ts";
@@ -51,18 +52,27 @@ export async function ensureBenchPm(client: InstanceClient, spec: BenchPmSpec): 
   return { pmId: created.pmId, conversationId: created.conversationId };
 }
 
-export const sleep = (ms: number, signal?: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason as Error);
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => (clearTimeout(timer), reject(signal.reason as Error)), { once: true });
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
   });
+}
 
-/** Postcondition: the first non-undefined value of `probe` within `timeoutMs`, or null at the deadline. Errors of `probe` count as not yet. */
+/** Postcondition: the first non-undefined value of `probe` within `timeoutMs`, or null at the deadline. Errors of `probe` propagate. */
 export async function waitFor<T>(probe: () => Promise<T | undefined>, timeoutMs: number, signal: AbortSignal, everyMs = TESTER_POLL_MS): Promise<T | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const value = await probe().catch(() => undefined);
+    signal.throwIfAborted();
+    const value = await probe();
     if (value !== undefined) return value;
     if (Date.now() >= deadline) return null;
     await sleep(Math.min(everyMs, Math.max(0, deadline - Date.now())), signal);
@@ -114,7 +124,8 @@ export class Observation {
 /** Maps a failure at a boundary to the service that failed; anything else stays a product error. */
 export function externalOf(error: unknown): ExternalServiceError | null {
   if (error instanceof ExternalServiceError) return error;
-  if (error instanceof FeishuApiError && (error.status >= 500 || error.status === 429 || error.code === -1)) return new ExternalServiceError("feishu", error.message);
+  if (error instanceof FeishuApiError) return new ExternalServiceError("feishu", error.message);
+  if (error instanceof FeishuGuardError) return new ExternalServiceError("bench", error.message);
   if (error instanceof ApiError && error.status === 502 && /device_offline/.test(error.message)) return new ExternalServiceError("relay", error.message);
   if (error instanceof TypeError && /fetch failed/.test(error.message)) return new ExternalServiceError("bench", error.message);
   return null;
@@ -137,6 +148,23 @@ export function runner(body: (ctx: FlowContext, obs: Observation) => Promise<voi
 
 /** A short tag that makes each run's messages unique, so a flow never matches a reply from an earlier run. */
 export const runTag = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+export function observeVendorFailure(obs: Observation, detail: string, vendor?: AgentVendor): boolean {
+  const identified = vendor ?? VENDOR_LIST.find(({ failure }) => detail.trimStart().startsWith(failure.serviceName + " "))?.id;
+  const kind = /额度用完了|(?:you(?:'|’)ve|you have) hit your limit/i.test(detail) ? "quota"
+    : /未登录或鉴权失败/.test(detail) ? "auth"
+    : /服务繁忙，稍后重试/.test(detail) ? "busy"
+    : /网络断了，稍后重试/.test(detail) ? "network"
+    : describeFailure(detail, identified ? { vendor: identified } : {}).kind;
+  if (kind === "quota" || kind === "auth") {
+    obs.vendorTrouble ??= { ...(identified ? { vendor: identified } : {}), kind, detail };
+    return true;
+  } else if (kind === "busy" || kind === "network") {
+    obs.external("vendor", detail);
+    return true;
+  }
+  return false;
+}
 
 export function recallCheck(obs: Observation, messages: readonly FeishuMessage[], botAppId: string): void {
   const recalled = messages.filter((m) => m.senderType === "app" && m.senderId === botAppId && isRecalled(m));

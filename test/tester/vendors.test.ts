@@ -140,14 +140,27 @@ describe("probeVendor", () => {
   it("reports ready only when the CLI resolves, the daemon reports available, and the account is signed in", () => {
     const root = scratch();
     mkdirSync(join(root, "home", ".codex"), { recursive: true });
-    writeFileSync(join(root, "home", ".codex", "auth.json"), "{}");
+    writeFileSync(join(root, "home", ".codex", "auth.json"), JSON.stringify({ tokens: { access_token: "test-token" } }));
     expect(probeVendor("codex", { instance: "local", provider: provider("available"), local: local(root, "/b/codex"), platform: "darwin" })).toMatchObject({ status: "ready", version: "2.0", detail: "owner@example" });
     expect(probeVendor("codex", { instance: "remote", provider: provider("available"), platform: "linux" }).status).toBe("ready");
     expect(probeVendor("agy", { instance: "local", provider: provider("available"), local: local(root, "/b/agy"), platform: "darwin" }).status).toBe("login_blocked");
     mkdirSync(join(root, "home", ".gemini", "antigravity-cli"), { recursive: true });
-    writeFileSync(join(root, "home", ".gemini", "antigravity-cli", "antigravity-oauth-token"), "");
+    writeFileSync(join(root, "home", ".gemini", "antigravity-cli", "antigravity-oauth-token"), JSON.stringify({ token: { refresh_token: "test-token" } }));
     expect(probeVendor("agy", { instance: "local", provider: provider("available"), local: local(root, "/b/agy"), platform: "darwin" }).status).toBe("ready");
     expect(probeVendor("codex", { instance: "local", provider: provider("unknown"), local: local(root, "/b/codex"), platform: "darwin" }).status).toBe("unknown");
+  });
+
+  it.each([
+    ["claude", ".claude.json", { oauthAccount: { emailAddress: "account@example.test" } }],
+    ["codex", ".codex/auth.json", { tokens: { access_token: "" } }],
+    ["agy", ".gemini/mcp-oauth-tokens.json", { access_token: "an MCP credential" }],
+  ] as const)("blocks %s when only non-login data is in the bench HOME", (vendor, file, contents) => {
+    const root = scratch();
+    const target = local(root, "/bench/cli");
+    const path = join(target.userHome, file);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, JSON.stringify(contents));
+    expect(probeVendor(vendor, { instance: "local", provider: provider("available"), local: target, platform: "darwin" }).status).toBe("login_blocked");
   });
 
   it("names the fix command for every non-ready status", () => {

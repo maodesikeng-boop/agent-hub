@@ -2,12 +2,13 @@
 // Invariant: no client is handed out until assertNotProduction passed for the loaded config and every instance answered
 // with the test account and the test bot. The local computer reaches the remote one only through the mesh proxy
 // (/d/<deviceId>/api/...), the same path a user's browser takes.
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
-import { API_PATHS, type AccountStatusView, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { API_PATHS, ENV_HOME, type AccountStatusView, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { resolveHubPaths } from "../../src/shared/paths.ts";
+import { canonicalPath, isInsideBench, isWithin } from "./bench-paths.ts";
 import { createInstanceClient, type ApiClient } from "./instance-client.ts";
-import { connectResident, createLocalInstance } from "./local-instance.ts";
+import { benchBinDirs, benchLayout, connectResident, createLocalInstance, VENDOR_HOME_ENV } from "./local-instance.ts";
 import { createRemoteControl, type RemoteControl } from "./remote.ts";
 import { TESTER_REMOTE_COMMAND_TIMEOUT_MS } from "./limits.ts";
 
@@ -25,7 +26,7 @@ export interface LocalInstanceConfig {
   userHome: string;
   uiPort: number;
   meshPort: number;
-  /** Env entries passed to the daemon, such as CODEX_HOME. A value `@secrets/<name>` is read from <root>/secrets/<name>. */
+  /** Bench vendor credentials and config homes, such as CODEX_HOME. A value `@secrets/<name>` is read from <root>/secrets/<name>. */
   env: Record<string, string>;
 }
 
@@ -101,23 +102,6 @@ export function parseBenchConfig(raw: unknown): BenchConfig {
   throw new BenchConfigError(`bench.json ${path}: ${issue.message}`);
 }
 
-/** The real path of the longest existing prefix plus the rest, lowercased, so symlinks and case cannot hide a match. */
-function canonicalPath(path: string): string {
-  let existing = resolve(path);
-  const rest: string[] = [];
-  while (!existsSync(existing) && dirname(existing) !== existing) {
-    rest.unshift(existing.slice(dirname(existing).length).replace(/^[\\/]/, ""));
-    existing = dirname(existing);
-  }
-  const real = existsSync(existing) ? realpathSync.native(existing) : existing;
-  return join(real, ...rest).toLowerCase();
-}
-
-function isWithin(child: string, parent: string): boolean {
-  const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(sep) && !/^[a-z]:/i.test(rel));
-}
-
 function overlaps(a: string, b: string): boolean {
   return isWithin(a, b) || isWithin(b, a);
 }
@@ -130,6 +114,8 @@ function overlaps(a: string, b: string): boolean {
 export function assertNotProduction(config: BenchConfig): void {
   const guarded = config.guards.dataDirs.map(canonicalPath);
   const root = canonicalPath(config.root);
+  const rootHit = guarded.find((g) => isWithin(root, g));
+  if (rootHit !== undefined) throw new ProductionGuardError(`bench root ${config.root} overlaps the guarded data directory ${rootHit}`);
   const ports = new Set([...config.guards.uiPorts, ...config.guards.meshPorts]);
   for (const instance of config.instances) {
     if (instance.role !== "local") continue;
@@ -137,11 +123,27 @@ export function assertNotProduction(config: BenchConfig): void {
       const path = canonicalPath(value);
       const hit = guarded.find((g) => overlaps(path, g));
       if (hit !== undefined) throw new ProductionGuardError(`${instance.name}.${field} ${value} overlaps the guarded data directory ${hit}`);
+      if (!isWithin(path, root)) throw new ProductionGuardError(`${instance.name}.${field} ${value} is outside the bench root ${config.root}`);
     }
-    if (!isWithin(canonicalPath(instance.dataDir), root)) throw new ProductionGuardError(`${instance.name}.dataDir ${instance.dataDir} is outside the bench root ${config.root}`);
+    const paths = resolveHubPaths({ [ENV_HOME]: instance.dataDir }, instance.userHome);
+    for (const path of [paths.stateDir, paths.uiTokenFile, paths.feishuSecretsFile, paths.providerSecretsFile, ...benchBinDirs(instance, process.platform)]) {
+      if (!isInsideBench(path, config.root)) throw new ProductionGuardError(`bench path ${path} is outside the bench root ${config.root}`);
+    }
+    for (const key of VENDOR_HOME_ENV) {
+      const value = instance.env[key]?.trim();
+      if (value && (!isAbsolute(value) || !isInsideBench(value, instance.userHome))) {
+        throw new ProductionGuardError(`${instance.name}.env.${key} is outside the bench HOME`);
+      }
+    }
     for (const [field, value] of [["uiPort", instance.uiPort], ["meshPort", instance.meshPort]] as const) {
       if (ports.has(value)) throw new ProductionGuardError(`${instance.name}.${field} ${value} is a guarded production port`);
     }
+  }
+  const { localDir, runsDir, secretsDir } = benchLayout(config.root);
+  for (const dir of [localDir, runsDir, secretsDir, join(secretsDir, "feishu-driver.json"), config.sandboxProject]) {
+    const path = canonicalPath(dir);
+    if (!isWithin(path, root)) throw new ProductionGuardError(`bench path ${dir} is outside the bench root ${config.root}`);
+    if (guarded.some((g) => overlaps(path, g))) throw new ProductionGuardError(`bench path ${dir} overlaps a guarded data directory`);
   }
   const appIds = new Set(config.guards.feishuAppIds);
   for (const id of [config.feishu?.botAppId, config.feishu?.driverAppId]) {
@@ -160,7 +162,7 @@ export interface InstanceClient {
   /** Postcondition: the id of the user message the daemon stored. */
   send(conversationId: number, text: string): Promise<number>;
   /** Postcondition: the first agent message after `afterMessageId`, or a rejection naming the timeout. */
-  waitForReply(conversationId: number, afterMessageId: number, timeoutMs: number): Promise<Message>;
+  waitForReply(conversationId: number, afterMessageId: number, timeoutMs: number, signal?: AbortSignal): Promise<Message>;
   /** Postcondition: the GitHub login (null while signed out) and device id the instance reports for its mesh account. */
   account(): Promise<{ githubLogin: string | null; deviceId: string | null }>;
 }

@@ -153,3 +153,10 @@ describe("countsTowardRate", () => {
     expect((["pass", "product_fail", "env_unavailable", "quota", "not_ready"] as const).map((verdict) => countsTowardRate({ verdict }))).toEqual([true, true, false, false, false]);
   });
 });
+
+it.each(["quota", "not_ready", "env_unavailable"] as const)("does not reissue a stale product alert after %s", (verdict) => {
+  const consecutive = series("model.turn.claude@local", ["product_fail", "product_fail", verdict]);
+  const rate = series("mesh.cold-dial", [...Array<Verdict>(7).fill("product_fail"), verdict]);
+  expect(alertsFor(consecutive, FLOWS, "nightly")).toEqual([]);
+  expect(alertsFor(rate, FLOWS, "nightly")).toEqual([]);
+});

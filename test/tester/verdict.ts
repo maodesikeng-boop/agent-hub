@@ -76,7 +76,7 @@ export function classifyFlow(
   }
   const external = outcome.externalErrors[0];
   if (external !== undefined) return { verdict: "env_unavailable", reason: `${external.service}: ${external.detail}` };
-  if (outcome.vendorTrouble) return { verdict: "quota", reason: `${outcome.vendorTrouble.vendor} ${outcome.vendorTrouble.kind}: ${outcome.vendorTrouble.detail}` };
+  if (outcome.vendorTrouble) return { verdict: "quota", reason: `${outcome.vendorTrouble.vendor ?? "vendor"} ${outcome.vendorTrouble.kind}: ${outcome.vendorTrouble.detail}` };
   const failed = outcome.checks.find((c) => !c.ok);
   const missing = spec.pass.find((p) => !outcome.checks.some((c) => c.check === p.check));
   if (failed === undefined && missing === undefined) return { verdict: "pass", reason: "" };
@@ -107,6 +107,8 @@ function nightlyAlert(spec: FlowSpec, resultId: string, history: readonly RunRec
     envStreak.push(runId);
   }
   if (envStreak.length >= TESTER_BENCH_ALERT_RUNS) return { flowId: resultId, kind: "bench", reason: `env_unavailable in ${envStreak.length} runs in a row: ${series.at(-1)!.result.reason}`, runIds: envStreak.reverse() };
+  const latest = series.at(-1);
+  if (latest === undefined || !countsTowardRate(latest.result)) return null;
   const counted = series.filter(({ result }) => countsTowardRate(result));
   if (spec.tolerance.kind === "consecutive") {
     const streak: string[] = [];
@@ -131,7 +133,7 @@ function nightlyAlert(spec: FlowSpec, resultId: string, history: readonly RunRec
  * - `nightly` runs alert per the flow's tolerance: `consecutive` counts trailing `product_fail` verdicts,
  *   `rate` counts passes among the last `window` runs that produced pass or product_fail.
  * - `env_unavailable` for TESTER_BENCH_ALERT_RUNS runs in a row gives a `bench` alert instead of a product one.
- * - `quota` and `not_ready` never count as product failures and do not break or extend a streak.
+ * - A run without a product result can neither issue a product alert nor change its streak or rate.
  * - Every coverage entry from `openGaps` gives a `coverage` alert on every run, named by vendor and computer.
  * Flows missing from `catalog` are ignored.
  */

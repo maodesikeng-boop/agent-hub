@@ -7,7 +7,9 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { API_PATHS, ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST, type AgentVendor } from "../../src/shared/index.ts";
 import { DESKTOP_PRODUCT } from "../../src/daemon/ui-server/types.ts";
 import { VENDOR_FALLBACK_PATHS, resolveHubPaths } from "../../src/shared/paths.ts";
+import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
+import { isInsideBench } from "./bench-paths.ts";
 import type { BenchConfig, LocalBenchInstance, LocalInstanceConfig } from "./bench.ts";
 import { benchFakeScript } from "./fake-script.ts";
 import { createApiClient, createInstanceClient, loginCookie, type ApiClient } from "./instance-client.ts";
@@ -59,7 +61,7 @@ export function benchCliPath(vendor: AgentVendor, instance: Pick<LocalInstanceCo
     ...benchBinDirs(instance, platform).flatMap((dir) => names.map((n) => join(dir, n))),
     ...VENDOR_FALLBACK_PATHS[vendor](instance.userHome, platform, tools.toolsNpmBinDir),
   ];
-  return candidates.find((p) => isUnder(p, roots) && existsSync(p) && statSync(p).isFile()) ?? null;
+  return candidates.find((p) => isUnder(p, roots) && existsSync(p) && roots.some((root) => isInsideBench(p, root)) && statSync(p).isFile()) ?? null;
 }
 
 /**
@@ -90,8 +92,24 @@ export function benchPath(instance: Pick<LocalInstanceConfig, "userHome" | "data
 export function resolveEnvValue(root: string, value: string): string {
   if (!value.startsWith(SECRET_PREFIX)) return value;
   const name = value.slice(SECRET_PREFIX.length);
-  if (!/^[\w.-]+$/.test(name)) throw new Error(`bench env secret name is not a plain file name: ${name}`);
-  return readFileSync(join(root, "secrets", name), "utf8").trim();
+  if (!/^[\w.-]+$/.test(name) || name === "." || name === "..") throw new Error(`bench env secret name is not a plain file name: ${name}`);
+  const file = join(root, "secrets", name);
+  if (!isInsideBench(file, join(root, "secrets"))) throw new Error(`bench env secret ${name} is outside the bench root`);
+  return readFileSync(file, "utf8").trim();
+}
+
+export const VENDOR_HOME_ENV = ["CLAUDE_CONFIG_DIR", ...VENDOR_LIST.flatMap(({ home }) => home.configHome ? [home.configHome.env] : [])];
+
+const VENDOR_ENV_NAMES = new Set([
+  ...VENDOR_HOME_ENV,
+  ...VENDOR_LIST.flatMap(({ id }) => VENDOR_PATHS[id].credentialEnv?.names ?? []),
+  "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+]);
+
+export function benchVendorEnv(config: BenchConfig, instance: LocalInstanceConfig): Record<string, string> {
+  return Object.fromEntries(Object.entries(instance.env)
+    .filter(([key]) => VENDOR_ENV_NAMES.has(key))
+    .map(([key, value]) => [key, resolveEnvValue(config.root, value)]));
 }
 
 export interface DaemonEnvInput {
@@ -119,8 +137,8 @@ export function localDaemonEnv(input: DaemonEnvInput): Record<string, string> {
     fake[claude.cli.envVar] = wrapScriptAsPlatformCli(join(input.codeDir, "test", "fake-claude", "fake-claude.ts"), layout.fakeDir, "fake-claude", platform);
     Object.assign(fake, { FAKE_CLAUDE_SCRIPT: scriptFile, FAKE_CLAUDE_LOG: join(layout.fakeDir, "fake-claude.log"), FAKE_CLAUDE_STATE: layout.fakeDir });
   }
-  const own = Object.fromEntries(Object.entries(instance.env).map(([k, v]) => [k, resolveEnvValue(config.root, v)]));
   return {
+    ...benchVendorEnv(config, instance),
     ...Object.fromEntries(passthrough),
     LANG: baseEnv.LANG ?? "en_US.UTF-8",
     PATH: benchPath(instance, nodeBin, platform, baseEnv.PATH ?? baseEnv.Path),
@@ -130,7 +148,6 @@ export function localDaemonEnv(input: DaemonEnvInput): Record<string, string> {
     [ENV_PORT]: String(instance.uiPort),
     [ENV_MESH_PORT]: String(instance.meshPort),
     ...pins,
-    ...own,
     ...fake,
   };
 }

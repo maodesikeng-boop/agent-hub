@@ -2,12 +2,12 @@
 import { z } from "zod";
 import { API_PATHS, type AccountStatusView, type Message } from "../../../src/shared/index.ts";
 import { BENCH_ASK_OPTIONS, BENCH_ASK_QUESTION, BENCH_ECHO_REPLY } from "../fake-script.ts";
-import { isRecalled, visibleText, type FeishuDriver, type FeishuMessage, type TestChat } from "../feishu-driver.ts";
+import { FeishuReplyTimeout, isRecalled, visibleText, type FeishuDriver, type FeishuMessage, type TestChat } from "../feishu-driver.ts";
 import { messagesAfter } from "../instance-client.ts";
 import type { RemoteInstanceConfig } from "../bench.ts";
 import type { FlowContext, FlowRunner } from "../types.ts";
 import { ExternalServiceError } from "../verdict.ts";
-import { ensureBenchPm, recallCheck, runner, runTag, scenarioPm, waitFor, type Observation } from "./common.ts";
+import { ensureBenchPm, observeVendorFailure, recallCheck, runner, runTag, scenarioPm, sleep, waitFor, type Observation } from "./common.ts";
 
 const OFFLINE_NOTICE = /现在离线|这会儿没接上/;
 const TURN_FAILURE = /^[ \t]*没回成[：:]/m;
@@ -74,8 +74,13 @@ async function saveLogs(ctx: FlowContext, obs: Observation, local: boolean, remo
 }
 
 /** Waits for a bot message after `sent` matching `done`; null at the deadline. */
-async function botReply(driver: FeishuDriver, chatId: string, sent: string, botAppId: string, done: (m: FeishuMessage) => boolean, timeoutMs: number): Promise<FeishuMessage | null> {
-  return driver.waitForBotMessage(chatId, sent, (m) => fromBot(botAppId)(m) && done(m), timeoutMs).catch(() => null);
+async function botReply(driver: FeishuDriver, chatId: string, sent: string, done: (m: FeishuMessage) => boolean, timeoutMs: number, signal: AbortSignal): Promise<FeishuMessage | null> {
+  try {
+    return await driver.waitForBotMessage(chatId, sent, done, timeoutMs, signal);
+  } catch (error) {
+    if (error instanceof FeishuReplyTimeout) return null;
+    throw error;
+  }
 }
 
 interface MessageWindow {
@@ -92,6 +97,10 @@ async function finishFeishu(ctx: FlowContext, obs: Observation, chatId: string, 
   recallCheck(obs, messages, botAppId);
   if (!window.expectFailure) {
     const failed = messages.filter((m) => fromBot(botAppId)(m) && replyOutcome(m) === "failure");
+    for (const message of failed) {
+      const text = visibleText(message);
+      observeVendorFailure(obs, text.replace(REPLY_FAILURE, "").trim());
+    }
     obs.check("no-error-card", failed.length === 0, failed.length === 0 ? "no error card" : `${failed.length} error card(s): ${replySummary(failed[0]!)}`);
   }
   obs.save("timings.txt", `${timings.join("\n")}\n`);
@@ -103,7 +112,7 @@ const dmRouter = runner(async (ctx, obs) => {
   const chatId = await routerChat(driver);
   const t0 = Date.now();
   const sent = await driver.sendAsUser(chatId, `Bench check ${runTag()}: answer with one short line.`);
-  const reply = await botReply(driver, chatId, sent, botAppId, terminalReply, 90_000);
+  const reply = await botReply(driver, chatId, sent, terminalReply, 90_000, ctx.signal);
   obs.metrics.replyMs = reply === null ? -1 : Date.now() - t0;
   obs.check("reply-arrives", reply !== null, reply === null ? "no test bot message within 90 s" : `first reply after ${obs.metrics.replyMs} ms`);
   obs.check("reply-final", reply !== null && answer(reply), reply === null ? "no final reply with text" : `final: ${replySummary(reply)}`);
@@ -117,7 +126,7 @@ const groupRoundTrip = runner(async (ctx, obs) => {
   const chatId = await pmGroup(ctx, driver, pm.pmId);
   const t0 = Date.now();
   const sent = await driver.sendAsUser(chatId, `bench round trip ${runTag()}`);
-  const reply = await botReply(driver, chatId, sent, botAppId, echoOrFailure, 60_000);
+  const reply = await botReply(driver, chatId, sent, echoOrFailure, 60_000, ctx.signal);
   obs.metrics.replyMs = reply === null ? -1 : Date.now() - t0;
   const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent ${new Date(t0).toISOString()}`, `reply ${obs.metrics.replyMs} ms`], { afterId: sent });
   const offline = messages.filter((m) => fromBot(botAppId)(m) && OFFLINE_NOTICE.test(visibleText(m)));
@@ -133,7 +142,7 @@ const failedTurnCard = runner(async (ctx, obs) => {
   const chatId = await pmGroup(ctx, driver, pm.pmId);
   const t0 = Date.now();
   const sent = await driver.sendAsUser(chatId, `bench failing turn ${runTag()}`);
-  const shown = await botReply(driver, chatId, sent, botAppId, (m) => replyOutcome(m) === "failure" && TURN_FAILURE.test(visibleText(m)), 60_000);
+  const shown = await botReply(driver, chatId, sent, (m) => replyOutcome(m) === "failure" && TURN_FAILURE.test(visibleText(m)), 60_000, ctx.signal);
   obs.metrics.reasonMs = shown === null ? -1 : Date.now() - t0;
   obs.check("reason-shown", shown !== null && obs.metrics.reasonMs <= 30_000, shown === null ? "no failed turn note within 60 s" : `shown after ${obs.metrics.reasonMs} ms: ${replySummary(shown)}`);
   await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent ${new Date(t0).toISOString()}`, `reason ${obs.metrics.reasonMs} ms`], { afterId: sent, expectFailure: true });
@@ -151,16 +160,16 @@ const offlineInboxReplay = runner(async (ctx, obs) => {
   let sent: string;
   try {
     sent = await driver.sendAsUser(chatId, `bench offline ${runTag()}`);
-    const notice = await botReply(driver, chatId, sent, botAppId, (m) => OFFLINE_NOTICE.test(visibleText(m)), 30_000);
+    const notice = await botReply(driver, chatId, sent, (m) => OFFLINE_NOTICE.test(visibleText(m)), 30_000, ctx.signal);
     obs.check("offline-notice", notice !== null, notice === null ? "no offline notice within 30 s" : `notice after ${Date.now() - t0} ms`);
   } finally {
     await local.start(mode);
   }
   const back = Date.now();
-  const reply = await botReply(driver, chatId, sent, botAppId, echoOrFailure, 90_000);
+  const reply = await botReply(driver, chatId, sent, echoOrFailure, 90_000, ctx.signal);
   obs.metrics.replayMs = reply === null ? -1 : Date.now() - back;
   obs.check("replayed", reply !== null && answer(reply) && obs.metrics.replayMs <= 60_000, reply === null ? "no reply within 90 s of the restart" : `reply after ${obs.metrics.replayMs} ms: ${replySummary(reply)}`);
-  await new Promise((resolve) => setTimeout(resolve, 10_000));
+  await sleep(10_000, ctx.signal);
   const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`stopped and sent ${new Date(t0).toISOString()}`, `restarted ${new Date(back).toISOString()}`, `replay ${obs.metrics.replayMs} ms`], { afterId: sent });
   const replies = messages.filter((m) => fromBot(botAppId)(m) && answer(m) && visibleText(m).includes(BENCH_ECHO_REPLY));
   obs.check("single-reply", replies.length === 1, `${replies.length} replies`);
@@ -181,9 +190,9 @@ const reconnectCatchUp = runner(async (ctx, obs) => {
     await remote.start("real").catch((error: unknown) => { throw new ExternalServiceError("bench", `could not confirm the remote test daemon restarted: ${String(error)}`); });
   }
   const restarted = Date.now();
-  const reply = await botReply(driver, chatId, sent, botAppId, terminalReply, 120_000);
+  const reply = await botReply(driver, chatId, sent, terminalReply, 120_000, ctx.signal);
   const elapsed = Date.now() - restarted;
-  await new Promise((resolve) => setTimeout(resolve, 15_000));
+  await sleep(15_000, ctx.signal);
   const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent during restart ${new Date(t0).toISOString()}`, `restarted ${new Date(restarted).toISOString()}`], { afterId: sent });
   const finals = messages.filter((m) => fromBot(botAppId)(m) && terminalReply(m));
   const ok = reply !== null && answer(reply) && finals.length === 1;
@@ -203,17 +212,22 @@ const hubFailover = runner(async (ctx, obs) => {
   const localId = (await ctx.bench.local().account()).deviceId;
   const remoteId = ctx.bench.config.instances.find((i): i is RemoteInstanceConfig => i.role === "remote")!.deviceId;
   const leases: string[] = [`before: ${await holder(ctx)}`];
-  await remote.stop();
-  const stopped = Date.now();
-  const moved = await waitFor(async () => ((await holder(ctx)) === localId ? true : undefined), LEASE_WAIT_MS, ctx.signal);
-  leases.push(`after remote stop: ${await holder(ctx)} (${Date.now() - stopped} ms)`);
-  obs.check("lease-moved", moved !== null, moved === null ? `the local computer did not take the lease within ${LEASE_WAIT_MS / 1000} s` : "the local computer holds the lease");
   const chatId = await routerChat(driver);
-  const t0 = Date.now();
-  const sent = await driver.sendAsUser(chatId, `Bench failover ${runTag()}: answer with one short line.`);
-  const reply = await botReply(driver, chatId, sent, botAppId, terminalReply, 120_000);
-  obs.check("dm-answered", reply !== null && answer(reply), reply === null ? "no answer while the local computer held the lease" : `response after ${Date.now() - t0} ms: ${replySummary(reply)}`);
-  await remote.start("real");
+  let sent: string;
+  let t0: number;
+  try {
+    await remote.stop().catch((error: unknown) => { throw new ExternalServiceError("bench", `could not stop the remote test daemon: ${String(error)}`); });
+    const stopped = Date.now();
+    const moved = await waitFor(async () => (localId !== null && (await holder(ctx)) === localId ? true : undefined), LEASE_WAIT_MS, ctx.signal);
+    leases.push(`after remote stop: ${await holder(ctx)} (${Date.now() - stopped} ms)`);
+    obs.check("lease-moved", moved !== null, moved === null ? `the local computer did not take the lease within ${LEASE_WAIT_MS / 1000} s` : "the local computer holds the lease");
+    t0 = Date.now();
+    sent = await driver.sendAsUser(chatId, `Bench failover ${runTag()}: answer with one short line.`);
+    const reply = await botReply(driver, chatId, sent, terminalReply, 120_000, ctx.signal);
+    obs.check("dm-answered", reply !== null && answer(reply), reply === null ? "no answer while the local computer held the lease" : `response after ${Date.now() - t0} ms: ${replySummary(reply)}`);
+  } finally {
+    await remote.start("real").catch((error: unknown) => { throw new ExternalServiceError("bench", `could not restore the remote test daemon: ${String(error)}`); });
+  }
   const started = Date.now();
   const returned = await waitFor(async () => ((await holder(ctx)) === remoteId ? true : undefined), LEASE_WAIT_MS, ctx.signal);
   leases.push(`after remote start: ${await holder(ctx)} (${Date.now() - started} ms)`);

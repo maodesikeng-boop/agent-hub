@@ -83,7 +83,7 @@ export interface FlowObservation {
   checks: CheckResult[];
   externalErrors: ExternalError[];
   /** Set when a vendor reported quota or login trouble instead of an answer. */
-  vendorTrouble?: { vendor: AgentVendor; kind: "quota" | "auth"; detail: string };
+  vendorTrouble?: { vendor?: AgentVendor; kind: "quota" | "auth"; detail: string };
   metrics: Record<string, number>;
   evidence: string[];
 }

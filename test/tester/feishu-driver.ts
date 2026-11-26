@@ -8,8 +8,9 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import writeFileAtomic from "write-file-atomic";
-import { TESTER_FEISHU_LOCK_STALE_MS, TESTER_FEISHU_PAGE_SIZE, TESTER_FEISHU_TOKEN_SKEW_MS, TESTER_POLL_MS } from "./limits.ts";
+import { TESTER_FEISHU_LOCK_STALE_MS, TESTER_FEISHU_PAGE_SIZE, TESTER_FEISHU_REQUEST_MS, TESTER_FEISHU_TOKEN_SKEW_MS, TESTER_POLL_MS } from "./limits.ts";
 
 export interface DriverTokens {
   accessToken: string;
@@ -61,6 +62,13 @@ export interface TestChat {
 }
 
 export class FeishuGuardError extends Error {}
+export class FeishuReplyTimeout extends Error {
+  readonly seen: FeishuMessage[];
+  constructor(message: string, seen: FeishuMessage[]) {
+    super(message);
+    this.seen = seen;
+  }
+}
 export class FeishuApiError extends Error {
   readonly status: number;
   readonly code: number;
@@ -74,6 +82,7 @@ export class FeishuApiError extends Error {
 /** Feishu's code for an expired or revoked refresh token. */
 export const FEISHU_REFRESH_EXPIRED = 20037;
 const RECALLED_PLACEHOLDERS = new Set(["This message was recalled", "该消息已撤回", "此消息已撤回"]);
+const CHAT_NOT_JOINED = 232011;
 const MARKER = /fusa:([^:\s]+):pm:(\d+)/;
 const MEDIA_TYPES = new Set(["image", "file", "audio", "media", "sticker"]);
 const DRIVER_SCOPES = ["im:message", "im:message.send_as_user", "offline_access"];
@@ -86,7 +95,7 @@ export interface FeishuDriver {
   /** Postcondition: messages created at or after `sinceMs`, oldest first, including deleted ones with deleted=true. */
   listMessages(chatId: string, sinceMs: number): Promise<FeishuMessage[]>;
   /** Postcondition: the first message from the test bot after `afterMessageId` that satisfies `done`; rejects on timeout with the messages seen so far. */
-  waitForBotMessage(chatId: string, afterMessageId: string, done: (m: FeishuMessage) => boolean, timeoutMs: number): Promise<FeishuMessage>;
+  waitForBotMessage(chatId: string, afterMessageId: string, done: (m: FeishuMessage) => boolean, timeoutMs: number, signal?: AbortSignal): Promise<FeishuMessage>;
   /** Ensures access and returns the saved refresh token's expiration time in milliseconds. */
   ensureUserToken(): Promise<number>;
 }
@@ -103,11 +112,20 @@ interface FeishuEnvelope<T> {
   data?: T;
 }
 
-async function call<T>(doFetch: typeof fetch, url: string, init: { method: string; token?: string; body?: unknown }): Promise<T> {
+async function call<T>(doFetch: typeof fetch, url: string, init: { method: string; token?: string; body?: unknown; signal?: AbortSignal }): Promise<T> {
   const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8" };
   if (init.token) headers.authorization = `Bearer ${init.token}`;
-  const res = await doFetch(url, { method: init.method, headers, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) });
-  const text = await res.text();
+  const timeout = AbortSignal.timeout(TESTER_FEISHU_REQUEST_MS);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  let res: Response;
+  let text: string;
+  try {
+    res = await doFetch(url, { method: init.method, headers, signal, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) });
+    text = await res.text();
+  } catch (error) {
+    init.signal?.throwIfAborted();
+    throw new FeishuApiError(`Feishu ${init.method} ${new URL(url).pathname}: ${String(error)}`, 0, -1);
+  }
   let body: FeishuEnvelope<T> & Record<string, unknown>;
   try {
     body = JSON.parse(text) as FeishuEnvelope<T> & Record<string, unknown>;
@@ -136,7 +154,7 @@ async function withRefreshLock<T>(lockFile: string, now: () => number, fn: () =>
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (existsSync(lockFile) && now() - statSync(lockFile).mtimeMs > TESTER_FEISHU_LOCK_STALE_MS) rmSync(lockFile, { force: true });
-      else await new Promise((resolve) => setTimeout(resolve, 200));
+      else await delay(200);
     }
   }
   try {
@@ -258,15 +276,19 @@ export async function createFeishuDriver(options: FeishuDriverOptions): Promise<
     const token = await tenantToken();
     const found: TestChat[] = [];
     for (const chatId of ids) {
-      const info = await call<{ chat_mode?: string }>(doFetch, `${base}/open-apis/im/v1/chats/${encodeURIComponent(chatId)}`, { method: "GET", token }).catch(() => null);
-      if (info !== null) found.push({ chatId, kind: "router" });
+      try {
+        await call(doFetch, `${base}/open-apis/im/v1/chats/${encodeURIComponent(chatId)}`, { method: "GET", token });
+        found.push({ chatId, kind: "router" });
+      } catch (error) {
+        if (!(error instanceof FeishuApiError) || (error.status !== 404 && error.code !== CHAT_NOT_JOINED)) throw error;
+      }
     }
     return found;
   };
 
   const testChats = async () => [...(await routerChats()), ...(await groupChats())];
 
-  const listMessages = async (chatId: string, sinceMs: number): Promise<FeishuMessage[]> => {
+  const listMessages = async (chatId: string, sinceMs: number, signal?: AbortSignal): Promise<FeishuMessage[]> => {
     const out: FeishuMessage[] = [];
     let pageToken = "";
     do {
@@ -279,7 +301,7 @@ export async function createFeishuDriver(options: FeishuDriverOptions): Promise<
         card_msg_content_type: "user_card_content",
       });
       if (pageToken) query.set("page_token", pageToken);
-      const res = await call<{ items?: RawMessage[]; page_token?: string; has_more?: boolean }>(doFetch, `${base}/open-apis/im/v1/messages?${query}`, { method: "GET", token: await tenantToken() });
+      const res = await call<{ items?: RawMessage[]; page_token?: string; has_more?: boolean }>(doFetch, `${base}/open-apis/im/v1/messages?${query}`, { method: "GET", token: await tenantToken(), ...(signal ? { signal } : {}) });
       out.push(...(res.items ?? []).map(toMessage).filter((m) => m.createTime >= sinceMs));
       pageToken = res.has_more ? (res.page_token ?? "") : "";
     } while (pageToken !== "");
@@ -298,18 +320,19 @@ export async function createFeishuDriver(options: FeishuDriverOptions): Promise<
       return res.message_id;
     },
     listMessages,
-    async waitForBotMessage(chatId, afterMessageId, done, timeoutMs) {
+    async waitForBotMessage(chatId, afterMessageId, done, timeoutMs, signal) {
       const deadline = now() + timeoutMs;
-      const anchor = await call<{ items?: RawMessage[] }>(doFetch, `${base}/open-apis/im/v1/messages/${encodeURIComponent(afterMessageId)}`, { method: "GET", token: await tenantToken() });
+      const anchor = await call<{ items?: RawMessage[] }>(doFetch, `${base}/open-apis/im/v1/messages/${encodeURIComponent(afterMessageId)}`, { method: "GET", token: await tenantToken(), ...(signal ? { signal } : {}) });
       const since = Number(anchor.items?.[0]?.create_time ?? now() - timeoutMs);
       let seen: FeishuMessage[] = [];
       for (;;) {
-        seen = await listMessages(chatId, since);
+        signal?.throwIfAborted();
+        seen = await listMessages(chatId, since, signal);
         const after = seen.slice(seen.findIndex((m) => m.messageId === afterMessageId) + 1);
         const hit = after.find((m) => m.senderType === "app" && m.senderId === options.testBotAppId && done(m));
         if (hit !== undefined) return hit;
-        if (now() >= deadline) throw Object.assign(new Error(`no matching test bot message in ${chatId} within ${timeoutMs / 1000} s`), { seen });
-        await new Promise((resolve) => setTimeout(resolve, TESTER_POLL_MS));
+        if (now() >= deadline) throw new FeishuReplyTimeout(`no matching test bot message in ${chatId} within ${timeoutMs / 1000} s`, seen);
+        await delay(Math.min(TESTER_POLL_MS, Math.max(0, deadline - now())), undefined, { signal });
       }
     },
     async ensureUserToken() {

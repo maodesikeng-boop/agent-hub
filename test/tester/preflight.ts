@@ -1,11 +1,12 @@
 // Checks each bench boundary before any flow runs, so an outage outside Bellwood never reads as a product failure.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { API_PATHS, VENDOR_LIST, type ProvidersStatusResponse } from "../../src/shared/index.ts";
-import type { Bench, BenchConfig, InstanceClient, LocalInstanceConfig } from "./bench.ts";
+import { API_PATHS, ENV_HOME, VENDOR_LIST, type ProvidersStatusResponse } from "../../src/shared/index.ts";
+import { resolveHubPaths } from "../../src/shared/paths.ts";
+import type { Bench, BenchConfig, InstanceClient } from "./bench.ts";
 import type { FeishuDriver } from "./feishu-driver.ts";
 import { TESTER_FEISHU_REAUTHORIZE_WINDOW_MS } from "./limits.ts";
-import { benchCliPath, benchLayout, resolveEnvValue } from "./local-instance.ts";
+import { benchCliPath, benchLayout, benchVendorEnv } from "./local-instance.ts";
 import type { BenchCapability, ExternalError, ExternalService, InstanceRole, PreflightResult } from "./types.ts";
 import { probeVendor, VENDOR_BENCH, type VendorReadiness } from "./vendors.ts";
 
@@ -32,10 +33,6 @@ async function twice<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-function localEnv(config: BenchConfig, instance: LocalInstanceConfig): Record<string, string> {
-  return Object.fromEntries(Object.entries(instance.env).map(([k, v]) => [k, resolveEnvValue(config.root, v)]));
-}
-
 async function coverageOf(bench: Bench, client: InstanceClient, role: InstanceRole, reachable: boolean, unreachable: string): Promise<VendorReadiness[]> {
   let providers: ProvidersStatusResponse | null = null;
   let why = unreachable;
@@ -48,13 +45,19 @@ async function coverageOf(bench: Bench, client: InstanceClient, role: InstanceRo
   }
   const platform = (providers?.platform ?? process.platform) as NodeJS.Platform;
   const instance = role === "local" ? bench.local().config : null;
+  const local = instance === null ? null : {
+    userHome: instance.userHome,
+    env: benchVendorEnv(bench.config, instance),
+    managedSecrets: { file: resolveHubPaths({ [ENV_HOME]: instance.dataDir }, instance.userHome).providerSecretsFile, root: instance.dataDir },
+    installDir: join(benchLayout(bench.config.root).localDir, "install"),
+  };
   return VENDOR_LIST.map(({ id }) => {
     const provider = providers?.providers.find((p) => p.vendor === id) ?? null;
     return probeVendor(id, {
       instance: role,
       provider,
       ...(provider === null ? { unreachable: providers === null ? why : `the daemon does not list ${id}` } : {}),
-      ...(instance ? { local: { cliPath: benchCliPath(id, instance, platform), userHome: instance.userHome, env: localEnv(bench.config, instance), installDir: join(benchLayout(bench.config.root).localDir, "install") } } : {}),
+      ...(instance !== null && local !== null ? { local: { ...local, cliPath: benchCliPath(id, instance, platform) } } : {}),
       platform,
     });
   });

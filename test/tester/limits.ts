@@ -21,6 +21,8 @@ export const TESTER_BENCH_ALERT_RUNS = 3;
 
 /** Feishu messages one flow reads per chat while waiting for a reply. */
 export const TESTER_FEISHU_PAGE_SIZE = 50;
+export const TESTER_FEISHU_REQUEST_MS = 15_000;
+export const TESTER_RELAY_READY_MS = 30_000;
 
 /** Refresh the Feishu driver's user token this long before it expires. */
 export const TESTER_FEISHU_TOKEN_SKEW_MS = 5 * 60_000;

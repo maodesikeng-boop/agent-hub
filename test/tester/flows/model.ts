@@ -1,11 +1,11 @@
 // Runners for real vendor CLI flows. A vendor's quota or login failure is reported as vendorTrouble, never as a failed check.
 import { spawnSync } from "node:child_process";
-import { API_PATHS, VENDOR_LIST, vendorFailureOf, workerEventOf, type AgentVendor, type Message, type ProvidersStatusResponse, type ResourcesSnapshot } from "../../../src/shared/index.ts";
+import { API_PATHS, VENDOR_LIST, workerEventOf, type AgentVendor, type Message, type ProvidersStatusResponse, type ResourcesSnapshot } from "../../../src/shared/index.ts";
 import type { InstanceClient } from "../bench.ts";
 import { messagesAfter } from "../instance-client.ts";
 import { benchCliPath } from "../local-instance.ts";
 import type { FlowContext, FlowRunner } from "../types.ts";
-import { ensureBenchPm, runner, runTag, vendorPm, waitFor, workerPm, type Observation } from "./common.ts";
+import { ensureBenchPm, observeVendorFailure, runner, runTag, vendorPm, waitFor, workerPm, type Observation } from "./common.ts";
 
 const TURN_REPLY_MS = 120_000;
 const TURN_WAIT_MS = 170_000;
@@ -51,8 +51,7 @@ function vendorTurn(vendor: AgentVendor): FlowRunner {
     obs.json("state.json", after);
     const reply = after.find((m: Message) => m.id > sent && m.sender === "agent" && m.kind === "text" && m.text.trim() !== "");
     obs.metrics.replyMs = settled?.status === "replied" ? (reply?.createdAt ?? Date.now()) - t0 : -1;
-    const failure = settled?.status === "failed" ? vendorFailureOf(settled.failureReason ?? "", vendor) : null;
-    if (failure?.kind === "quota" || failure?.kind === "auth") obs.vendorTrouble = { vendor, kind: failure.kind, detail: settled!.failureReason ?? "" };
+    if (settled?.status === "failed") observeVendorFailure(obs, settled.failureReason ?? "", vendor);
     const ok = settled?.status === "replied" && reply !== undefined && obs.metrics.replyMs <= TURN_REPLY_MS;
     obs.check("reply-arrives", ok, settled === null ? `message ${sent} still ${after.find((m) => m.id === sent)?.status} after ${TURN_WAIT_MS / 1000} s` : `message ${settled.status}${settled.failureReason ? `: ${settled.failureReason}` : ""}; reply after ${obs.metrics.replyMs} ms`);
     const leftover = await noLeftover(client, pm.conversationId, ctx.signal);
@@ -103,9 +102,23 @@ const workerRoundTrip = runner(async (ctx, obs) => {
   const pm = await ensureBenchPm(local, workerPm(sandbox));
   const tag = runTag();
   const sent = await local.send(pm.conversationId, `Bench worker check ${tag}: start one Worker on the cheapest model to append the line "bench ${tag}" to BENCH.md and commit only that file. Report back when it is done.`);
-  const report = await waitFor(async () => (await messagesAfter(local.api, pm.conversationId, sent)).find((m) => workerEventOf(m)?.event === "report"), WORKER_REPORT_MS, ctx.signal, 5_000);
-  obs.json("state.json", await messagesAfter(local.api, pm.conversationId, sent - 1));
-  const meta = report === null ? null : workerEventOf(report);
+  const outcome = await waitFor(async () => {
+    const messages = await messagesAfter(local.api, pm.conversationId, sent - 1, ctx.signal);
+    const user = messages.find((m) => m.id === sent && m.status === "failed");
+    if (user !== undefined) return { kind: "pm-failure" as const, reason: user.failureReason ?? "the PM turn failed" };
+    for (const message of messages) {
+      const event = workerEventOf(message);
+      if (event?.event === "report") return { kind: "report" as const, event };
+      if (event?.event === "turn_failed" && event.summary && observeVendorFailure(obs, event.summary, "claude")) return { kind: "vendor-failure" as const };
+    }
+  }, WORKER_REPORT_MS, ctx.signal, 5_000);
+  obs.json("state.json", await messagesAfter(local.api, pm.conversationId, sent - 1, ctx.signal));
+  if (outcome?.kind === "vendor-failure") return;
+  if (outcome?.kind === "pm-failure") {
+    if (!observeVendorFailure(obs, outcome.reason, "claude")) obs.check("worker-reported", false, outcome.reason);
+    return;
+  }
+  const meta = outcome?.event ?? null;
   obs.check("worker-reported", meta !== null, meta === null ? `no Worker report within ${WORKER_REPORT_MS / 60_000} min` : `Worker ${meta.workerId} reported: ${meta.summary ?? meta.status}`);
   const branch = meta === null ? "" : git(sandbox, ["for-each-ref", "--format=%(refname:short)", `refs/heads/hub/${meta.workerId}-*`]).split("\n")[0] ?? "";
   if (branch === "") {

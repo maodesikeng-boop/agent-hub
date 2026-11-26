@@ -20,12 +20,12 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ENV_HOME, VENDOR_LIST } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
-import { BENCH_CONFIG_FILE, benchRoot, openBench, ProductionGuardError, type BenchConfig } from "./bench.ts";
+import { assertNotProduction, BENCH_CONFIG_FILE, benchRoot, openBench, ProductionGuardError, type BenchConfig } from "./bench.ts";
 import { authorizeDriver } from "./feishu-driver.ts";
 import { benchFakeScript } from "./fake-script.ts";
 import { FLOWS } from "./flows.ts";
 import { LATEST_DIR } from "./history.ts";
-import { benchBinDirs, benchCliPath, benchLayout, benchPath, ensureNodeBin, resolveEnvValue } from "./local-instance.ts";
+import { benchBinDirs, benchCliPath, benchLayout, benchPath, ensureNodeBin, benchVendorEnv } from "./local-instance.ts";
 import { configuredCapabilities, driverSecretsFile, preflight } from "./preflight.ts";
 import { safeText } from "./report.ts";
 import { defaultDriver, loadBenchConfig, runTester } from "./run.ts";
@@ -88,7 +88,7 @@ async function installMissing(config: BenchConfig, out: Out): Promise<number> {
   const local = config.instances.find((i) => i.role === "local")!;
   if (local.role !== "local") return 2;
   const layout = benchLayout(config.root);
-  const env = Object.fromEntries(Object.entries(local.env).map(([k, v]) => [k, resolveEnvValue(config.root, v)]));
+  const env = benchVendorEnv(config, local);
   const path = benchPath(local, ensureNodeBin(layout, process.platform), process.platform, process.env.PATH);
   const npmPrefix = resolveHubPaths({ [ENV_HOME]: local.dataDir }, local.userHome).toolsNpmDir;
   let failed = 0;
@@ -141,12 +141,16 @@ async function command(argv: readonly string[], out: Out): Promise<number> {
   if (verb === "fake-script") return out(JSON.stringify(benchFakeScript(), null, 2)), 0;
   const root = benchRoot(process.env, homedir());
   if (verb === "status") {
-    const file = join(benchLayout(root).runsDir, LATEST_DIR, "summary.md");
+    const selected = values.config === undefined ? null : loadBenchConfig(values.config);
+    if (selected !== null) assertNotProduction(selected);
+    const file = join(benchLayout(selected?.root ?? root).runsDir, LATEST_DIR, "summary.md");
     if (!existsSync(file)) throw new UsageError(`no run yet: ${file} is missing`);
     out(readFileSync(file, "utf8"));
     return 0;
   }
-  const config = loadBenchConfig(values.config ?? join(root, BENCH_CONFIG_FILE));
+  const configFile = values.config ?? join(root, BENCH_CONFIG_FILE);
+  const config = loadBenchConfig(configFile);
+  assertNotProduction(config);
   const codeDir = values["code-dir"] ?? CODE_DIR;
   if (verb === "preflight") return runPreflight(config, codeDir, out, false);
   if (verb === "vendors" && sub === "status") return runPreflight(config, codeDir, out, true);
@@ -154,14 +158,14 @@ async function command(argv: readonly string[], out: Out): Promise<number> {
   if (verb === "bench" && sub === "up") return benchUp(config, codeDir, values.mode === "real" ? "real" : "fake", out);
   if (verb === "authorize-feishu") {
     if (config.feishu === undefined) throw new UsageError("bench.json has no feishu section");
-    await authorizeDriver({ driverAppId: config.feishu.driverAppId, driverSecretsFile: driverSecretsFile(root), redirectPort: FEISHU_REDIRECT_PORT, openUrl: (url) => openInBrowser(url, out) });
-    out(`authorized; tokens saved in ${driverSecretsFile(root)}`);
+    await authorizeDriver({ driverAppId: config.feishu.driverAppId, driverSecretsFile: driverSecretsFile(config.root), redirectPort: FEISHU_REDIRECT_PORT, openUrl: (url) => openInBrowser(url, out) });
+    out(`authorized; tokens saved in ${driverSecretsFile(config.root)}`);
     return 0;
   }
   if (verb === "run") {
     const cadence = (values.cadence ?? (values.flow ? "rc" : undefined)) as Cadence | undefined;
     if (cadence === undefined || !CADENCES.includes(cadence)) throw new UsageError(`run needs --cadence ${CADENCES.join("|")} or --flow <id>`);
-    const { summary } = await runTester({ cadence, benchConfigPath: values.config ?? join(root, BENCH_CONFIG_FILE), codeDir, ...(values.flow ? { flowIds: values.flow } : {}), ...(values.changed ? { changedPaths: values.changed } : {}) });
+    const { summary } = await runTester({ cadence, benchConfigPath: configFile, codeDir, ...(values.flow ? { flowIds: values.flow } : {}), ...(values.changed ? { changedPaths: values.changed } : {}) });
     out(readFileSync(join(summary.evidenceDir, "summary.md"), "utf8"));
     return summary.status === "alert" ? 1 : summary.status === "bench" ? 2 : 0;
   }

@@ -4,14 +4,17 @@
 // Invariant: coverage always has one entry per vendor per computer; a vendor that cannot be installed or signed in
 // appears with its status, reason, and fix, and is never left out. An accepted gap stops only the alert, never the listing.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
+import { PROVIDER_SECRETS_FILE_MAX_BYTES } from "../../src/shared/limits.ts";
 import type { ProviderStatusItem } from "../../src/shared/providers.ts";
 import { vendorSpec, type AgentVendor } from "../../src/shared/vendors.ts";
 import { vendorConfigHome } from "../../src/shared/paths.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
 import { AGY_CLI_HOME_REL } from "../../src/vendors/agy/spec.ts";
 import { TESTER_INSTALL_TIMEOUT_MS, TESTER_STDERR_TAIL_LINES } from "./limits.ts";
+import { isInsideBench } from "./bench-paths.ts";
 import type { InstanceRole } from "./types.ts";
 
 export type ReadinessStatus =
@@ -199,17 +202,50 @@ export function withRecipe(entry: VendorReadiness): VendorReadiness {
   return { ...entry, acceptedGap: `${recipe.reason} (decided ${recipe.decided}; offline: ${recipe.fallbackTests.join(", ")})` };
 }
 
-/** True when a credential for the vendor lives in the bench HOME or the bench env, rather than somewhere shared such as a keychain. */
-export function benchHoldsCredential(vendor: AgentVendor, userHome: string, env: Readonly<Record<string, string>>): boolean {
-  const spec = vendorSpec(vendor);
-  const configHome = spec.home.configHome;
-  const base = configHome ? vendorConfigHome(vendor, userHome, env) : null;
-  const files = spec.home.readonlySecrets.map((rel) => (configHome && base && rel.startsWith(`${configHome.rel}/`) ? join(base, rel.slice(configHome.rel.length + 1)) : join(userHome, rel)));
-  const credentialEnv = VENDOR_PATHS[vendor].credentialEnv;
-  const envHit = Object.keys(env).some(
-    (k) => credentialEnv?.names?.includes(k) === true || credentialEnv?.prefixes?.some((p) => k.startsWith(p)) === true || credentialEnv?.pattern?.test(k) === true,
-  );
-  return envHit || files.some((f) => existsSync(f)) || (vendor === "agy" && existsSync(join(userHome, AGY_CLI_HOME_REL, "antigravity-oauth-token")));
+const nonBlank = z.string().trim().min(1);
+const oauthTokens = z.union([z.object({ access_token: nonBlank }), z.object({ refresh_token: nonBlank })]);
+
+function readCredentialFile(file: string, root: string): unknown {
+  try {
+    if (!isInsideBench(file, root)) return null;
+    const stat = statSync(file);
+    if (!stat.isFile() || stat.size > PROVIDER_SECRETS_FILE_MAX_BYTES) return null;
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function hasCredentialEnv(vendor: AgentVendor, env: Readonly<Record<string, string>>): boolean {
+  const names = vendor === "claude" ? ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] : VENDOR_PATHS[vendor].credentialEnv?.names ?? [];
+  return names.some((key) => Boolean(env[key]?.trim()));
+}
+
+function benchHoldsCredential(vendor: AgentVendor, target: NonNullable<ProbeTarget["local"]>): boolean {
+  const { userHome, env, managedSecrets } = target;
+  if (hasCredentialEnv(vendor, env)) return true;
+  if (managedSecrets) {
+    const file = readCredentialFile(managedSecrets.file, managedSecrets.root);
+    const store = z.object({ vendors: z.record(z.string(), z.record(z.string(), z.string())) }).safeParse(file);
+    if (store.success && hasCredentialEnv(vendor, store.data.vendors[vendor] ?? {})) return true;
+  }
+  const read = (file: string) => readCredentialFile(file, userHome);
+  switch (vendor) {
+    case "claude": {
+      const home = env.CLAUDE_CONFIG_DIR?.trim() || join(userHome, ".claude");
+      const tokens = z.union([z.object({ accessToken: nonBlank }), z.object({ refreshToken: nonBlank })]);
+      return z.object({ claudeAiOauth: tokens }).safeParse(read(join(home, ".credentials.json"))).success;
+    }
+    case "codex": {
+      const home = vendorConfigHome(vendor, userHome, env) ?? join(userHome, ".codex");
+      const auth = z.union([z.object({ OPENAI_API_KEY: nonBlank }), z.object({ tokens: oauthTokens })]);
+      return auth.safeParse(read(join(home, "auth.json"))).success;
+    }
+    case "agy":
+      return z.object({ token: oauthTokens }).safeParse(read(join(userHome, AGY_CLI_HOME_REL, "antigravity-oauth-token"))).success;
+    default:
+      return false;
+  }
 }
 
 export interface ProbeTarget {
@@ -219,7 +255,7 @@ export interface ProbeTarget {
   /** Why the computer did not answer, when provider is null. */
   unreachable?: string;
   /** Local computer only: the CLI resolved inside the bench HOME (null when missing), the bench HOME, and its env. */
-  local?: { cliPath: string | null; userHome: string; env: Readonly<Record<string, string>>; installDir: string };
+  local?: { cliPath: string | null; userHome: string; env: Readonly<Record<string, string>>; installDir: string; managedSecrets?: { file: string; root: string } };
   platform: NodeJS.Platform;
 }
 
@@ -243,7 +279,7 @@ export function probeVendor(vendor: AgentVendor, target: ProbeTarget): VendorRea
   const availability = target.provider.availability;
   if (availability === "signed_out") return withRecipe({ ...base, status: "signed_out", detail: "installed, not signed in", fix: loginFix(vendor, target.instance, home) });
   if (availability !== "available") return withRecipe({ ...base, status: "unknown", detail: `the daemon reports ${availability}`, fix: "Open Settings, Providers on that computer and read the vendor's error." });
-  if (target.local && target.platform === "darwin" && !benchHoldsCredential(vendor, target.local.userHome, target.local.env)) {
+  if (target.local && target.platform === "darwin" && !benchHoldsCredential(vendor, target.local)) {
     return withRecipe({ ...base, status: "login_blocked", detail: "signed in, but no credential lives in the bench HOME or bench env; the login comes from somewhere shared such as the keychain", fix: loginFix(vendor, target.instance, home) });
   }
   return withRecipe({ ...base, status: "ready", detail: target.provider.accountSummary ?? "signed in", fix: "" });
