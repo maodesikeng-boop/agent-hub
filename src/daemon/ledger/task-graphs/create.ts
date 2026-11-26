@@ -2,10 +2,9 @@ import { assertStepSandboxRequest } from "./sandbox.ts";
 import type { TaskEdge, TaskNodeKey } from "../../../shared/domain.ts";
 import type { CreateTaskGraphNodeInput, CreateTaskGraphSpecInput, HubArgs, HubResult } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
-import { MAX_ACTIVE_GRAPHS_PER_PROJECT, MAX_GRAPH_SPEC_BYTES } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
-import { fail, type Pending } from "../context.ts";
+import { assertHubLimitAmount, fail, type Pending } from "../context.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
 import {
   assertReviewStepsHaveTarget,
@@ -26,7 +25,7 @@ import { sameVendorReviewHint } from "./workspace.ts";
 
 function parseCreateSpec(raw: unknown): { spec: CreateTaskGraphSpecInput; list: CreateTaskGraphNodeInput[]; sequential: boolean } {
   const spec = parseSpecJson<CreateTaskGraphSpecInput>(raw, createSpecSchema, {
-    empty: `任务图规格 JSON 不能为空，且不超过 ${MAX_GRAPH_SPEC_BYTES} 字节`,
+    empty: "任务图规格 JSON 不能为空",
     badJson: "任务图规格不是合法的 JSON",
     badShape: "任务图规格字段格式不正确",
   });
@@ -41,12 +40,7 @@ function assertActiveGraphQuota(g: TaskGraphCtx, projectId: number): void {
     "SELECT count(*) AS n FROM task_graphs WHERE project_id = ? AND status = 'active'",
     projectId,
   )!.n;
-  if (activeCount >= MAX_ACTIVE_GRAPHS_PER_PROJECT) {
-    throw fail(
-      "conflict",
-      `当前项目已有 ${MAX_ACTIVE_GRAPHS_PER_PROJECT} 张活跃任务图，请先完结或用 ${HUB_COMMAND} graph cancel 取消不再需要的图`,
-    );
-  }
+  assertHubLimitAmount("graph.activeCount", activeCount + 1, "conflict");
 }
 
 function edgesOf(steps: readonly NewStep[], extra: CreateTaskGraphSpecInput["edges"]): TaskEdge[] {

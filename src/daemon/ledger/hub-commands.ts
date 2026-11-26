@@ -7,7 +7,7 @@ import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, hubCommandAllowed } from "../../sha
 import { HUB_CHECKLIST_COMMAND, HUB_CHECKLIST_USAGE, hubChecklistRequestSchema } from "../../shared/hub-checklist.ts";
 import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { HUB_CALL_RESULT_MAX_BYTES, HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
+import { HUB_CALL_RESULT_MAX_BYTES } from "../../shared/limits.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
 import type { SentFile } from "../../shared/sent-files.ts";
 import { deliverablesOfFileArgs, fileArgsProblem } from "../deliverables.ts";
@@ -16,7 +16,7 @@ import type { HubCallContext } from "../../shared/ledger.ts";
 import { AGENT_VENDORS, bundledModelCatalog, effortLabel, effortsFor, isAgentVendor } from "../../shared/vendors.ts";
 import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession } from "../store/index.ts";
-import { fail } from "./context.ts";
+import { assertHubLimit, fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
@@ -182,7 +182,10 @@ export function createLedgerHubCommands(
     if (!parsed.success) throw fail("invalid", "--file 要写成 [标签=]路径");
     const args = parsed.data ?? [];
     if (args.length === 0) return undefined;
-    if (args.length > HUB_FILE_ARGS_MAX) throw fail("invalid", `--file 最多 ${HUB_FILE_ARGS_MAX} 个`);
+    assertHubLimit("files", args);
+    for (const arg of args) {
+      if (arg.label !== null) assertHubLimit("fileLabel", arg.label.trim());
+    }
     const files = context.sharedFiles;
     if (files === undefined || files.length !== args.length || files.some((f, i) => f.href !== args[i]!.path)) {
       throw new Error("--file 的副本要在进事务之前存好（agent 接口先调 shareHubFiles，结果放进 HubCallContext.sharedFiles）");

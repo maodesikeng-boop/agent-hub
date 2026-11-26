@@ -1,8 +1,9 @@
-import { normalizeWorkerTitle, utf8Bytes } from "../../../shared/domain.ts";
+import { normalizeName, normalizeWorkerTitle } from "../../../shared/domain.ts";
+import { HUB_LIMITS } from "../../../shared/hub-limits.ts";
 import type { AgentSessionRow, WorkerId } from "../../../shared/domain.ts";
 import type { HubArgs, HubResult, ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
-import { MAX_TASK_BYTES, TAKEOVER_PREDECESSORS_MAX } from "../../../shared/limits.ts";
+import { TAKEOVER_PREDECESSORS_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { reviewTakeoverWorkspaceNote } from "../../../shared/review.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
@@ -15,7 +16,7 @@ import {
   type CapabilityPolicy,
   type WorkerCapabilities,
 } from "../../../shared/pm-capabilities.ts";
-import { fail } from "../context.ts";
+import { assertHubLimit, fail } from "../context.ts";
 import type { Pending } from "../context.ts";
 import { readPmCapabilityPolicy } from "../pm-capabilities.ts";
 import { toWorkerRecord } from "../rows.ts";
@@ -94,24 +95,21 @@ const pmNoteOf = (args: StartArgs): string | null =>
 function resolveStartTask(args: StartArgs, bindTarget: WorkerBindTarget | undefined, takeover: Takeover | null): StartTask {
   const latest = takeover?.predecessors[0] ?? null;
   const stepHasBrief = bindTarget !== undefined && bindTarget.brief !== null && bindTarget.brief.trim() !== "";
-  const rawTitle =
-    typeof args.title === "string" && args.title.trim() !== "" ? args.title : (latest?.title ?? bindTarget?.nodeTitle ?? args.title);
-  const title = typeof rawTitle === "string" ? normalizeWorkerTitle(rawTitle) : null;
+  const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
+  assertHubLimit("worker.title", explicitTitle);
+  const title = explicitTitle !== "" ? normalizeName(explicitTitle, HUB_LIMITS["worker.title"].max)
+    : normalizeWorkerTitle(latest?.title ?? bindTarget?.nodeTitle ?? "");
   if (title === null) throw fail("invalid", "Worker 的标题不能是空的，也不能带换行等控制字符");
   if (takeover !== null && takeover.originalTask !== null) {
     const pmNote = pmNoteOf(args);
     const task = pmNote === null ? takeover.originalTask : `${takeover.originalTask.trimEnd()}\n\n## 项目经理的补充（换人接手时）\n\n${pmNote.trim()}`;
-    if (utf8Bytes(task) > MAX_TASK_BYTES) {
-      throw fail("invalid", `原始任务说明加上补充超过 ${MAX_TASK_BYTES} 字节：补充写短一点，长材料存成文件给路径`);
-    }
+    assertHubLimit("worker.task", task);
     return { title, task, pmNote, stepHasBrief };
   }
   if (stepHasBrief && bindTarget !== undefined) {
     const pmNote = pmNoteOf(args);
     const task = graphStepTask(bindTarget, bindTarget.brief!, pmNote);
-    if (utf8Bytes(task) > MAX_TASK_BYTES) {
-      throw fail("invalid", `步骤任务说明加上补充超过 ${MAX_TASK_BYTES} 字节`);
-    }
+    assertHubLimit("worker.task", task);
     return { title, task, pmNote, stepHasBrief };
   }
   return { title, task: validTask(args.task, "任务说明"), pmNote: null, stepHasBrief };
@@ -129,6 +127,7 @@ function resolveStartAgent(w: WorkersCtx, caller: PmCaller, args: StartArgs, bin
   }
   const reuseStepModel = bindTarget !== undefined && args.vendor === undefined && bindTarget.vendor === vendor;
   const givenModel = typeof args.model === "string" ? args.model.trim() || null : reuseStepModel ? bindTarget.model : null;
+  if (givenModel !== null) assertHubLimit("worker.model", givenModel);
   const givenEffort = args.effort === undefined && reuseStepModel ? bindTarget.effort ?? undefined : args.effort;
   const setting = resolveWorkerModelEffort(w, {
     vendor,

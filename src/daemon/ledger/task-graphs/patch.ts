@@ -10,8 +10,7 @@ import type {
   PatchTaskGraphSpecInput,
 } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
-import { MAX_GRAPH_SPEC_BYTES } from "../../../shared/limits.ts";
-import { checkTextLimit, formatTextLimitViolations, type TextLimitViolation } from "../../../shared/text-limits.ts";
+import { checkHubLimit, formatHubLimitViolations, type HubLimitViolation } from "../../../shared/hub-limits.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
 import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import { readWorkerCapabilities, writeWorkerCapabilities } from "../capability-rows.ts";
@@ -70,7 +69,7 @@ const statusOf = (n: TaskNodeDbRow): string => taskNodeStatusText(toTaskNode(n),
 
 function parsePatchSpec(raw: unknown): { patch: PatchTaskGraphSpecInput; lists: PatchLists } {
   const patch = parseSpecJson<PatchTaskGraphSpecInput>(raw, patchSpecSchema, {
-    empty: `patch JSON 不能为空，且不超过 ${MAX_GRAPH_SPEC_BYTES} 字节`,
+    empty: "patch JSON 不能为空",
     badJson: "patch 内容不是合法的 JSON",
     badShape: "patch 字段格式不正确",
   });
@@ -91,17 +90,17 @@ function parsePatchSpec(raw: unknown): { patch: PatchTaskGraphSpecInput; lists: 
 
 function validatePatchText(patch: PatchTaskGraphSpecInput, lists: PatchLists): void {
   const checks = [
-    checkTextLimit("graph.title", patch.title?.trim() ?? ""),
-    checkTextLimit("graph.goal", patch.goal?.trim() ?? ""),
+    checkHubLimit("graph.title", patch.title?.trim() ?? ""),
+    checkHubLimit("graph.goal", patch.goal?.trim() ?? ""),
     ...[...lists.add, ...lists.update].flatMap(({ key, title, brief, base }) => [
-      checkTextLimit("step.key", key.trim(), key),
-      checkTextLimit("step.title", title?.trim() ?? "", key),
-      checkTextLimit("step.brief", brief?.trim() ?? "", key),
-      checkTextLimit("step.base", base?.trim() ?? "", key),
+      checkHubLimit("step.key", key.trim(), key),
+      checkHubLimit("step.title", title?.trim() ?? "", key),
+      checkHubLimit("step.brief", brief?.trim() ?? "", key),
+      checkHubLimit("step.base", base?.trim() ?? "", key),
     ]),
   ];
-  const violations = checks.filter((check): check is TextLimitViolation => check !== null);
-  if (violations.length > 0) throw fail("invalid", formatTextLimitViolations(violations, { noEffect: true }));
+  const violations = checks.filter((check): check is HubLimitViolation => check !== null);
+  if (violations.length > 0) throw fail("invalid", formatHubLimitViolations(violations, { noEffect: "这次改图没有生效" }));
 }
 
 function collectDoneSteps(

@@ -1,5 +1,4 @@
 import { TASK_GRAPH_STATUSES, validateAskOptions } from "../shared/domain.ts";
-import { MAX_GATE_OPTIONS } from "../shared/limits.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { UsageError, type Parsed, type GroupArgs, allowOnly, expectPositionals, idOf, requireStdin } from "./args.ts";
 
@@ -45,11 +44,8 @@ export function parseGraphAuthorCommand({ group, action, rest, values }: GroupAr
     if (values.graph !== undefined) body.graphId = idOf(values.graph, "graph ask", "任务图");
     let options: string[] | undefined;
     if (values.option !== undefined) {
-      const checked = validateAskOptions(values.option);
+      const checked = validateAskOptions(values.option, "ask.stepOptions");
       if (!checked.ok) throw new UsageError(checked.error);
-      if (checked.options.length > MAX_GATE_OPTIONS) {
-        throw new UsageError(`步骤拍板卡的选项最多 ${MAX_GATE_OPTIONS} 个`);
-      }
       options = checked.options;
       body.options = checked.options;
     }

@@ -1,5 +1,6 @@
 import { deliverableOfSentFile, type Deliverable, type HubFileArg } from "../shared/deliverables.ts";
 import type { Message, MessageId } from "../shared/domain.ts";
+import { checkHubLimitAmount, formatHubLimitViolations } from "../shared/hub-limits.ts";
 import { DELIVERABLES_PER_STEP_MAX } from "../shared/limits.ts";
 import { SENT_FILE_REASONS, sentFilesOf, type SentFile } from "../shared/sent-files.ts";
 import type { WorkerReport } from "../shared/worker.ts";
@@ -30,6 +31,15 @@ export function deliverablesOfFileArgs(args: readonly HubFileArg[], files: reado
 }
 
 export function fileArgsProblem(files: readonly SentFile[]): string | null {
-  const bad = files.find((f) => f.status !== "saved");
-  return bad === undefined || bad.status === "saved" ? null : `--file ${bad.path}：${SENT_FILE_REASONS[bad.status]}`;
+  let total = 0;
+  for (const file of files) {
+    total += file.size ?? 0;
+    if (file.status === "saved") continue;
+    if (file.status === "too_large" && file.size !== null) {
+      const violation = checkHubLimitAmount("fileSize", file.size) ?? checkHubLimitAmount("fileTotalSize", total);
+      if (violation !== null) return `--file ${file.path}：${formatHubLimitViolations([violation])}`;
+    }
+    return `--file ${file.path}：${SENT_FILE_REASONS[file.status]}`;
+  }
+  return null;
 }

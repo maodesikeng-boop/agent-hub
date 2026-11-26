@@ -1,5 +1,6 @@
 import { isOneOf, type PmId } from "./domain.ts";
-import { WORKER_CAPABILITY_ALLOW_MAX } from "./limits.ts";
+import { checkHubLimit, checkHubLimitAmount, formatHubLimitViolations } from "./hub-limits.ts";
+import { CAPABILITY_KEY_MAX_CODE_UNITS } from "./limits.ts";
 import type { AgentVendor } from "../vendors/registry.ts";
 
 export const CAPABILITY_KINDS = ["skill", "mcp", "connector"] as const;
@@ -136,7 +137,7 @@ function kindOfCapabilityKey(key: CapabilityKey): CapabilityKind {
 }
 
 export function isValidCapabilityKey(key: string): boolean {
-  if (key.length === 0 || key.length > 512 || /[\u0000-\u001f]/.test(key)) return false;
+  if (key.length === 0 || key.length > CAPABILITY_KEY_MAX_CODE_UNITS || /[\u0000-\u001f]/.test(key)) return false;
   try {
     kindOfCapabilityKey(key);
     return true;
@@ -306,8 +307,13 @@ export function workerCapabilitiesOf(mode: unknown, allow: unknown): WorkerCapab
     return { error: `caps custom 至少点名一项（${CAPABILITY_KEY_HINT}）；什么都不带用 caps none` };
   }
   const keys = [...new Set(allow)];
-  if (keys.length > WORKER_CAPABILITY_ALLOW_MAX) return { error: `allow 最多点名 ${WORKER_CAPABILITY_ALLOW_MAX} 项` };
+  const count = checkHubLimit("worker.allow", keys);
+  if (count !== null) return { error: formatHubLimitViolations([count]) };
   for (const key of keys) {
+    if (typeof key === "string") {
+      const violation = checkHubLimitAmount("worker.allowKey", key.length);
+      if (violation !== null) return { error: formatHubLimitViolations([violation]) };
+    }
     if (typeof key !== "string" || !isValidCapabilityKey(key)) return { error: `不认识的能力 ${String(key)}：${CAPABILITY_KEY_HINT}` };
   }
   return { mode: "custom", allow: (keys as string[]).sort(cmpStr) };

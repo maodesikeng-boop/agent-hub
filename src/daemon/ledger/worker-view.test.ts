@@ -8,7 +8,7 @@ import type { ConversationId, PmId, SessionId, WorkerId } from "../../shared/dom
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubCallContext, LedgerErrorCode, WorkspaceProbe } from "../../shared/ledger.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { WORKER_LOG_MAX_STEPS, WORKER_SEARCH_CONTEXT_CHARS, WORKER_SEARCH_DEFAULT_LIMIT, WORKER_SEARCH_MAX_LIMIT, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { WORKER_LOG_MAX_STEPS, WORKER_SEARCH_CONTEXT_CHARS, WORKER_SEARCH_DEFAULT_LIMIT, WORKER_SEARCH_MAX_KEYWORD_CHARS, WORKER_SEARCH_MAX_KEYWORDS, WORKER_SEARCH_MAX_LIMIT, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
 import { AGENT_VENDORS, bundledModelCatalog, vendorSpec } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -297,8 +297,8 @@ describe.each(AGENT_VENDORS)("%s 的 Worker", (vendor) => {
     ]);
     expect(log(w).data.steps).toHaveLength(20);
     expect(log(w, WORKER_LOG_MAX_STEPS).data.steps).toHaveLength(25);
-    expectLedgerError(() => log(w, 0), "invalid", /1 到 200/);
-    expectLedgerError(() => log(w, WORKER_LOG_MAX_STEPS + 1), "invalid");
+    expectLedgerError(() => log(w, 0), "invalid", /--last 要写正整数/);
+    expectLedgerError(() => log(w, WORKER_LOG_MAX_STEPS + 1), "invalid", new RegExp(`上限 ${WORKER_LOG_MAX_STEPS} 个`));
     expectLedgerError(() => log(w, 1.5), "invalid");
   });
 
@@ -821,8 +821,16 @@ describe("hub worker search", () => {
     expect(r.text).toBe("没有搜到同时包含 “不存在” “foo” 的 Worker 标题、任务说明或汇报。");
     expectLedgerError(() => search([]), "invalid", /关键词/);
     expectLedgerError(() => search(["  "]), "invalid", /关键词/);
-    expectLedgerError(() => search(Array.from({ length: 11 }, (_, i) => `k${i}`)), "invalid", /最多/);
-    expectLedgerError(() => search(["x".repeat(101)]), "invalid", /最多/);
+    expectLedgerError(
+      () => search(Array.from({ length: WORKER_SEARCH_MAX_KEYWORDS + 1 }, (_, i) => `k${i}`)),
+      "invalid",
+      new RegExp(`上限 ${WORKER_SEARCH_MAX_KEYWORDS} 个`),
+    );
+    expectLedgerError(
+      () => search(["x".repeat(WORKER_SEARCH_MAX_KEYWORD_CHARS + 1)]),
+      "invalid",
+      new RegExp(`上限 ${WORKER_SEARCH_MAX_KEYWORD_CHARS} 字`),
+    );
   });
 
   it("项目经理之外不能用：Worker 调是 forbidden", () => {

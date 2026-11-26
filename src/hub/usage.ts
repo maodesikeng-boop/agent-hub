@@ -10,20 +10,17 @@ import {
   type HubCommand,
 } from "../shared/hub.ts";
 import {
-  HUB_FILE_ARGS_MAX,
+  ASK_MIN_OPTIONS,
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
   MIN_SCHEDULE_EVERY_MINUTES,
-  ROUTER_CONTEXT_MAX_CHARS,
   SELF_RELOAD_DRAIN_MAX_MS,
   SETUP_TIMEOUT_MS,
   WORKER_LOG_DEFAULT_STEPS,
-  WORKER_LOG_MAX_STEPS,
   WORKER_SEARCH_DEFAULT_LIMIT,
-  WORKER_SEARCH_MAX_LIMIT,
 } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
-import { formatGraphLimitsHelp } from "../shared/text-limits.ts";
+import { hubLimitMaximum, hubLimitsHelpLine } from "../shared/hub-limits.ts";
 import { AGENT_VENDORS, ALL_EFFORTS } from "../shared/vendors.ts";
 
 const hub = HUB_COMMAND;
@@ -161,14 +158,14 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "search",
     cli: "worker search",
     usage: `  ${hub} worker search <关键词…> [--limit N]                   在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜：关键词都要包含，
-                                                          中文按子串、英文不分大小写；一处一行，最新的在前（默认 ${WORKER_SEARCH_DEFAULT_LIMIT} 条，最多 ${WORKER_SEARCH_MAX_LIMIT}）`,
+                                                          中文按子串、英文不分大小写；一处一行，最新的在前（默认 ${WORKER_SEARCH_DEFAULT_LIMIT} 条）`,
   },
   {
     command: "worker.log",
     group: "worker",
     action: "log",
     cli: "worker log",
-    usage: `  ${hub} worker log <编号> [--last N | --stats]                它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}，最多 ${WORKER_LOG_MAX_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束；
+    usage: `  ${hub} worker log <编号> [--last N | --stats]                它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束；
                                                           --stats 不列步骤，只出一张汇总：步数、各类动作次数、读得最多的文件、重复最多的命令、思考和等工具的用时；
                                                           并发调用的重叠时间只算一次，未返回结果的调用不计时`,
   },
@@ -178,9 +175,9 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     cli: "ask",
     usage: `  ${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin
                                                           向用户挂一张提问/拍板卡，问题从标准输入读；${ASK_CARD_WHERE}；
-                                                          要用户看的文件（方案、验收结论、截图、录屏）用 --file 挂在卡片下面（最多 ${HUB_FILE_ARGS_MAX} 个），不写进问题里；
+                                                          要用户看的文件（方案、验收结论、截图、录屏）用 --file 挂在卡片下面，不写进问题里；
                                                           ${FILE_ARG_PATH_HINT}；
-                                                          有明确选项时用 --option（至少 2 个），用 --recommended 标推荐项（选项原文或 1..N 序号）；
+                                                          有明确选项时用 --option（至少 ${ASK_MIN_OPTIONS} 个），用 --recommended 标推荐项（选项原文或 1..N 序号）；
                                                           加 --node 挂在任务图步骤上，用户拍板后定案直接交给该步 Worker 接着干（不叫醒项目经理）`,
   },
   {
@@ -257,8 +254,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "report",
     cli: "router report",
     usage: `  ${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file [标签=]路径...] [--link <标签=网址>...]
-                                                          向全局总助投递里程碑汇报卡（不打断对话流）；摘要最多 ${ROUTER_CONTEXT_MAX_CHARS} 字；
-                                                          本机文件用 --file（最多 ${HUB_FILE_ARGS_MAX} 个），--link 只放网址；${FILE_ARG_PATH_HINT}`,
+                                                          向全局总助投递里程碑汇报卡（不打断对话流）；
+                                                          本机文件用 --file，--link 只放网址；${FILE_ARG_PATH_HINT}`,
   },
   {
     command: "graph.create",
@@ -266,7 +263,6 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "create",
     cli: "graph create",
     usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（steps 不写 deps 默认串接，带 brief 自动开工；confirm: true 完成后等项目经理审）
-                                                          ${formatGraphLimitsHelp()}
                                                           JSON：${TASK_GRAPH_CREATE_JSON_HINT}`,
   },
   {
@@ -336,12 +332,17 @@ const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                       
                                                           全库空闲后自动重启；最多等 ${SELF_RELOAD_DRAIN_MAX_MS / 60_000} 分钟，之后不再等 Worker 轮次和系统消息（重启后自动重发），
                                                           只等你、总助正在回用户的那一轮回完就重启（回执和 hub status 写明最晚几点）；--build 先在后台构建网页，失败就取消、不重启`;
 
+function renderUsage(spec: (typeof HUB_COMMAND_SPECS)[number]): string {
+  const limits = hubLimitsHelpLine(spec.command);
+  return limits === null ? spec.usage : `${spec.usage}\n${limits}`;
+}
+
 export const HUB_USAGE = `用法：
-${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
+${HUB_COMMAND_SPECS.map(renderUsage).join("\n")}
 ${SELF_RELOAD_USAGE}
   ${hub} help graph                                        打印任务图手册：建图、改图、换人、审查的做法和全部 graph 命令
 
-长文本用 --stdin 从标准输入原样读。下面的例子照抄时保持顶格，结束标记前不能有空格。
+长文本用 --stdin 从标准输入原样读，标准输入最多 ${hubLimitMaximum("stdin")}。下面的例子照抄时保持顶格，结束标记前不能有空格。
 bash、zsh 用 heredoc（引号不能省），例如：
 ${hub} persona edit --stdin <<'EOF'
 新的完整性格设定
@@ -378,5 +379,5 @@ export function commandUsageFor(argv: readonly string[]): string {
   const action = argv[1];
   const actionSpecs = action !== undefined ? groupSpecs.filter((s) => s.action === action) : [];
   const matched = actionSpecs.length > 0 ? actionSpecs : groupSpecs;
-  return `用法：\n${matched.map((s) => s.usage).join("\n")}\n（完整用法运行 ${hub} help）\n`;
+  return `用法：\n${matched.map(renderUsage).join("\n")}\n（完整用法运行 ${hub} help）\n`;
 }
