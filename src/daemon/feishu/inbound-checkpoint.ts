@@ -129,6 +129,8 @@ export interface FeishuInboundSyncOptions {
 }
 
 export interface FeishuInboundSync {
+  readonly dispatchSignal: AbortSignal;
+  interruptDispatch(): void;
   snapshot(): FeishuInboundStateSnapshot | null;
   exportForWire(): FeishuInboundStateSnapshot | null;
   cursorOf(chatId: FeishuChatId): FeishuInboundCursorEntry | null;
@@ -391,6 +393,7 @@ class StateBudget {
 }
 
 class InboundSync implements FeishuInboundSync {
+  private dispatch = new AbortController();
   private state: FeishuInboundStateSnapshot | null;
   private budget: StateBudget;
   private active = new WeakSet<FeishuInboundReceipt>();
@@ -420,6 +423,13 @@ class InboundSync implements FeishuInboundSync {
       this.replaceState(pruneFeishuInboundState({ ...this.state, cursors, seq: Number(Object.keys(cursors).length > 0) }, this.now()));
       this.persist();
     }
+  }
+
+  get dispatchSignal() { return this.dispatch.signal; }
+
+  interruptDispatch() {
+    this.dispatch.abort();
+    this.dispatch = new AbortController();
   }
 
   snapshot() { return this.state; }
@@ -710,6 +720,7 @@ class InboundSync implements FeishuInboundSync {
 
   resetForApp(appId: FeishuAppId | null) {
     if (this.closed || appId === (this.state?.appId ?? null)) return;
+    this.interruptDispatch();
     this.cancelScheduledFlush();
     this.active = new WeakSet();
     this.lifetime.abort();
@@ -728,6 +739,7 @@ class InboundSync implements FeishuInboundSync {
   }
 
   async close() {
+    this.dispatch.abort();
     this.cancelScheduledFlush();
     this.persistBestEffort();
     this.closed = true;

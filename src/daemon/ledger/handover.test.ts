@@ -1654,13 +1654,14 @@ describe("给已有项目经理换厂商", () => {
         specJson: JSON.stringify({
           nodes: [
             { key: "n1", title: "调研" },
-            { key: "g1", title: "方案拍板", kind: "gate", deps: ["n1"], question: "定哪个方案？", options: ["方案甲", "方案乙"] },
+            { key: "g1", title: "方案拍板", deps: ["n1"] },
           ],
         }),
       });
       const { g2 } = renewNow("交接摘要：正在跑多阶段改造");
       // 换代后、新会话首条消息读取开场前，n1 刚完成推进到 g1 等用户拍板：sessionPreamble 拿到实时状态而非过时快照
       ledger.hubCall(g2, "graph.done", { graphId: created.data.graph.id, nodeKey: "n1", summary: "调研完毕" });
+      ledger.hubCall(g2, "ask", { graphId: created.data.graph.id, node: "g1", text: "定哪个方案？", options: ["方案甲", "方案乙"] });
       const preamble = ledger.sessionPreamble(g2)!;
       expect(preamble).toContain("## 未完结的任务图（账本实时状态）");
       expect(preamble).toContain("多阶段改造");

@@ -244,7 +244,11 @@ async function raiseMacGate(devices: Devices, pm: { sessionId: SessionId }) {
   }).data.graph;
   finishWorkerTurn(devices.mac, graph.nodes[0]!.activeWorkerId!);
   await devices.settle();
-  return devices.mac.ledger.hubCall(pm.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes[0]!.gateAskMessageId!;
+  const { messageId } = devices.mac.ledger.hubCall(pm.sessionId, "ask", {
+    graphId: graph.id, node: "design", text: "方案可以通过吗？",
+  }).data;
+  await devices.settle();
+  return messageId;
 }
 
 function click(devices: Devices, messageId: string, value: unknown) {

@@ -233,7 +233,7 @@ describe("S7: read a card (hub ask list, ask show, delivery note)", () => {
       options: ["方案 A", "方案 B"],
     }).data;
 
-    // Create a Task Graph with a user checkpoint step that completes and opens a step card.
+    // Escalate a completed checkpoint to the user.
     const graph = f.createGraph({
       title: "方案评审图",
       steps: [{ key: "plan", title: "写方案", brief: "输出方案", confirm: true }],
@@ -241,6 +241,8 @@ describe("S7: read a card (hub ask list, ask show, delivery note)", () => {
     const wid = f.showGraph(graph.id).nodes[0]!.activeWorkerId!;
     await f.startWorktree(wid);
     f.workerTurn(wid, reportBlock({ status: "做完了", summary: "方案初稿完成" }));
+    await f.ledger.settleDriverEvents();
+    f.ledger.hubCall(f.lin.sessionId, "ask", { graphId: graph.id, node: "plan", text: "方案可以通过吗？" });
 
     // Another PM's card must never leak into Lin's ask list.
     const zhou = f.createPm("周经理");
@@ -287,6 +289,8 @@ describe("S7: read a card (hub ask list, ask show, delivery note)", () => {
     const wid = f.showGraph(graph.id).nodes[0]!.activeWorkerId!;
     await f.startWorktree(wid);
     f.workerTurn(wid, reportBlock({ status: "做完了", summary: "完成" }));
+    await f.ledger.settleDriverEvents();
+    f.ledger.hubCall(f.lin.sessionId, "ask", { graphId: graph.id, node: "plan", text: "方案可以通过吗？" });
     f.clock.now += 3 * DAY;
 
     const { messageId } = f.ledger.postUserMessage({

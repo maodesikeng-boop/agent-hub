@@ -154,6 +154,7 @@ describe("linked worktree branch reconciliation", () => {
         : null;
       git(impl.worktreePath!, "branch", "-m", "feature/renamed-before-review");
       if (trigger === "user decision") {
+        f.hub("ask", { graphId, node: "impl", text: "Approve the implementation?" });
         f.ledger.decideTaskNode(graphId, "impl", { choice: CONFIRM_PASS_OPTION, clientId: "approve" });
       } else if (trigger === "user skip") {
         f.ledger.skipTaskNode(graphId, "optional", { reason: "Skip optional work" });

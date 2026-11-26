@@ -280,14 +280,19 @@ describe("readFacts：0025 task_graph_steps 新表读取", () => {
     migrate(db);
     const ledger = createLedger(db, { pmHomeRoot: join(dir, "pm-home"), dataHome: join(dir, "data") });
     const pm = ledger.createPm({ name: "PM", mode: "manage_only", persona: "", folder: projDir });
-    ledger.hubCall(pm.sessionId, "graph.create", {
+    const { graph } = ledger.hubCall(pm.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "测试事实读取",
         nodes: [
           { key: "impl", title: "实现" },
-          { key: "ok-plan", title: "确认方案", deps: ["impl"], question: "确认吗？", options: ["确认", "重来"] },
+          { key: "ok-plan", title: "确认方案" },
         ],
       }),
+    }).data;
+    ledger.hubCall(pm.sessionId, "ask", { graphId: graph.id, node: "ok-plan", text: "确认吗？", options: ["确认", "重来"] });
+    ledger.hubCall(pm.sessionId, "graph.patch", {
+      graphId: graph.id,
+      specJson: JSON.stringify({ addEdges: [{ from: "impl", to: "ok-plan" }] }),
     });
     ledger.close();
     db.close();

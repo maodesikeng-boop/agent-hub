@@ -74,7 +74,7 @@ export function formatGraphBrief(graph: TaskGraph): string {
 }
 
 export const turnedListText = (turned: readonly TurnedStep[]): string =>
-  turned.map((u) => `${u.key} [${taskNodeStatusText({ status: "waiting", waitingFor: u.waitingFor, skipped: false }, "pm")}]`).join("、");
+  turned.map((u) => `${u.key} [${taskNodeStatusText({ status: "waiting", waitingFor: u.waitingFor, skipped: false }, "pm")}]${u.question === undefined ? "" : `：${u.question}`}`).join("、");
 
 export function unlockedNoteOf(progress: ProgressResult, graph: TaskGraph): string {
   const parts: string[] = [];

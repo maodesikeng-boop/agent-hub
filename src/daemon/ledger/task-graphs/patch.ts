@@ -11,22 +11,22 @@ import type {
 } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { MAX_GRAPH_SPEC_BYTES } from "../../../shared/limits.ts";
+import { checkTextLimit, formatTextLimitViolations, type TextLimitViolation } from "../../../shared/text-limits.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
 import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import { readWorkerCapabilities, writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import { syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
+import { markStepDoneIn } from "./lifecycle.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
-import { artifactWithoutCheckpoint, hasText, parseJsonOr, toTaskNode, workerIdsOf } from "./rows.ts";
+import { hasText, toTaskNode, workerIdsOf } from "./rows.ts";
 import {
   assertReviewStepsHaveTarget,
   edgeSig,
-  gateOptionsJsonOf,
   normalizeNewStep,
   parseSpecJson,
   patchSpecSchema,
   validateDagAndOrder,
-  validateGateFields,
   validateGraphGoal,
   validateGraphTitle,
   validateNodeKey,
@@ -36,10 +36,9 @@ import {
   validateStepBrief,
   validateStepCapabilities,
   validateStepMaxTime,
-  type GateFields,
   type NewStep,
 } from "./spec.ts";
-import { getGraphRow, insertEdgeRow, insertStepRow, isUserBlocked, listStepRows, publishGraphIn, resolveGraphForPm } from "./store.ts";
+import { getGraphRow, insertEdgeRow, insertStepRow, listStepRows, publishGraphIn, resolveGraphForPm } from "./store.ts";
 import { formatGraphText, unlockedNoteOf } from "./text.ts";
 import type { PmCaller, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 import { sameVendorReviewHint } from "./workspace.ts";
@@ -64,7 +63,6 @@ interface PreparedUpdate {
   nextCapabilities: WorkerCapabilities | null;
   nextConfirm: number;
   nextReview: number;
-  gate: GateFields | null;
 }
 
 const isLocked = (n: TaskNodeDbRow): boolean => n.status === "running" || n.status === "done" || n.active_worker_id !== null;
@@ -89,6 +87,50 @@ function parsePatchSpec(raw: unknown): { patch: PatchTaskGraphSpecInput; lists: 
       skip: patch.skipSteps ?? patch.skipNodes ?? [],
     },
   };
+}
+
+function validatePatchText(patch: PatchTaskGraphSpecInput, lists: PatchLists): void {
+  const checks = [
+    checkTextLimit("graph.title", patch.title?.trim() ?? ""),
+    checkTextLimit("graph.goal", patch.goal?.trim() ?? ""),
+    ...[...lists.add, ...lists.update].flatMap(({ key, title, brief, base }) => [
+      checkTextLimit("step.key", key.trim(), key),
+      checkTextLimit("step.title", title?.trim() ?? "", key),
+      checkTextLimit("step.brief", brief?.trim() ?? "", key),
+      checkTextLimit("step.base", base?.trim() ?? "", key),
+    ]),
+  ];
+  const violations = checks.filter((check): check is TextLimitViolation => check !== null);
+  if (violations.length > 0) throw fail("invalid", formatTextLimitViolations(violations, { noEffect: true }));
+}
+
+function collectDoneSteps(
+  rawKeys: readonly TaskNodeKey[],
+  lists: PatchLists,
+  nodes: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
+): TaskNodeDbRow[] {
+  const removed = new Set(lists.remove.map((key) => key.trim()));
+  const skipped = new Set(lists.skip.map((key) => key.trim()));
+  const seen = new Set<TaskNodeKey>();
+  const errors = new Set<string>();
+  const steps: TaskNodeDbRow[] = [];
+  for (const raw of rawKeys) {
+    const key = raw.trim();
+    const node = nodes.get(key);
+    if (seen.has(key)) errors.add(`doneSteps 中重复出现了「${key}」`);
+    if (node === undefined) errors.add(`doneSteps 中的步骤「${key}」不存在`);
+    else if (!seen.has(key)) steps.push(node);
+    if (removed.has(key)) errors.add(`步骤「${key}」不能同时出现在 doneSteps 和 removeSteps`);
+    if (skipped.has(key)) errors.add(`步骤「${key}」不能同时出现在 doneSteps 和 skipSteps`);
+    seen.add(key);
+  }
+  if (errors.size > 0) throw fail("invalid", `${[...errors].join("\n")}\n这次改图没有生效`);
+  for (const step of steps) {
+    if (step.status !== "done" && (step.status !== "waiting" || step.waiting_for !== "pm")) {
+      throw fail("conflict", `步骤「${step.node_key}」${statusOf(step)}，doneSteps 只能放行等项目经理处理的步骤。这次改图没有生效`);
+    }
+  }
+  return steps;
 }
 
 function takeRemovals(nodesByKey: Map<TaskNodeKey, TaskNodeDbRow>, rawRemove: readonly TaskNodeKey[]): Set<TaskNodeKey> {
@@ -160,7 +202,7 @@ function patchedEdges(
 
 function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNodeDbRow, vendor: AgentVendor, pmId: number): PreparedUpdate {
   const nextTitle = u.title !== undefined ? validateNodeTitle(u.title) : cur.title;
-  const nextBrief = u.brief !== undefined ? validateStepBrief(u.brief) : cur.brief;
+  const nextBrief = u.brief !== undefined ? validateStepBrief(u.brief, cur.node_key) : cur.brief;
   const vendorChanged = u.vendor !== undefined && (u.vendor?.trim() || null) !== cur.vendor;
   const agent = validateStepAgentSetting(
     {
@@ -178,40 +220,23 @@ function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNod
   const nextConfirm = u.confirm !== undefined ? (u.confirm ? 1 : 0) : cur.confirm;
   const nextReview = u.review !== undefined ? (u.review ? 1 : 0) : cur.review;
   const nextBase = validateStepBase(u.base !== undefined ? u.base : cur.base, nextReview === 1);
-  const gateTouched = u.question !== undefined || u.options !== undefined || u.summaryMd !== undefined || u.recommended !== undefined;
-  const gate = gateTouched
-    ? validateGateFields({
-        question: u.question ?? cur.gate_question ?? undefined,
-        options: u.options ?? parseJsonOr<string[] | undefined>(cur.gate_options_json, undefined),
-        summaryMd: u.summaryMd ?? cur.gate_summary_md ?? undefined,
-        recommended: u.recommended ?? cur.gate_recommended ?? undefined,
-      })
-    : null;
   assertStepSandboxRequest(g, pmId, vendor, {
     noOuterSandbox: nextNoOuterSandbox, vendor: agent.vendor, readonly: nextReadonly, review: nextReview,
     capabilities: nextCapabilities ?? readWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: cur.id }),
   });
-  return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextNoOuterSandbox, nextCapabilities, nextConfirm, nextReview, gate };
+  return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextNoOuterSandbox, nextCapabilities, nextConfirm, nextReview };
 }
 
-function writeUpdateIn(g: TaskGraphCtx, p: Pending, u: PreparedUpdate, t: number): void {
-  const { cur, gate } = u;
-  const hasGateQuestion = hasText(gate?.question);
-  const reevaluate =
-    cur.status === "waiting" &&
-    cur.active_worker_id === null &&
-    (hasGateQuestion || (workerIdsOf(cur).length === 0 && (gate !== null || hasText(u.nextBrief))));
-  const clearsAskWait = gate !== null && cur.waiting_for === "user" && !isUserBlocked(g.db, cur.id);
-  if (gate !== null && cur.gate_ask_message_id !== null) g.messages.settleAskIn(p, cur.gate_ask_message_id, { by: "close" });
-  const gateSql = gate === null ? "" : `gate_question = ?, gate_options_json = ?, gate_summary_md = ?,
-    gate_recommended = ?, gate_ask_message_id = NULL, artifact_json = ?, ${hasGateQuestion ? "decision_json = NULL," : ""}`;
-  const gateParams = gate !== null ? [gate.question, gateOptionsJsonOf(gate), gate.summaryMd, gate.recommended, artifactWithoutCheckpoint(cur)] : [];
+function writeUpdateIn(g: TaskGraphCtx, u: PreparedUpdate, t: number): void {
+  const { cur } = u;
+  const reevaluate = cur.status === "waiting" && cur.waiting_for === "pm" && cur.active_worker_id === null &&
+    workerIdsOf(cur).length === 0 && cur.gate_ask_message_id === null && !hasText(cur.gate_question) && hasText(u.nextBrief);
   g.db.run(
     `UPDATE task_graph_steps
         SET title = ?, brief = ?, vendor = ?, model = ?, effort = ?, readonly = ?, max_time_ms = ?,
-            confirm = ?, review = ?, base = ?, ${gateSql}
+            confirm = ?, review = ?, base = ?,
             status = CASE WHEN ? THEN 'pending' ELSE status END,
-            waiting_for = CASE WHEN ? THEN NULL WHEN ? AND waiting_for = 'user' THEN 'pm' ELSE waiting_for END,
+            waiting_for = CASE WHEN ? THEN NULL ELSE waiting_for END,
             updated_at = ?
       WHERE id = ?`,
     u.nextTitle,
@@ -224,10 +249,8 @@ function writeUpdateIn(g: TaskGraphCtx, p: Pending, u: PreparedUpdate, t: number
     u.nextConfirm,
     u.nextReview,
     u.nextBase,
-    ...gateParams,
     Number(reevaluate),
     Number(reevaluate),
-    Number(clearsAskWait),
     t,
     cur.id,
   );
@@ -254,6 +277,7 @@ interface PatchPlan {
   removeKeySet: Set<TaskNodeKey>;
   added: NewStep[];
   updates: PreparedUpdate[];
+  doneSteps: TaskNodeDbRow[];
   finalEdges: TaskEdge[];
   rankOf: Map<TaskNodeKey, number>;
   nextGoal: string | null | undefined;
@@ -261,10 +285,12 @@ interface PatchPlan {
 
 function planPatch(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.patch">): PatchPlan {
   const { patch, lists } = parsePatchSpec(args.specJson);
+  validatePatchText(patch, lists);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: true });
   const existingNodes = listStepRows(g.db, graphRow.id);
   const existingEdges = g.db.all<TaskEdgeDbRow>("SELECT * FROM task_graph_edges WHERE graph_id = ?", graphRow.id);
   const nodesByKey = new Map<TaskNodeKey, TaskNodeDbRow>(existingNodes.map((n) => [n.node_key, n]));
+  const doneSteps = collectDoneSteps(patch.doneSteps ?? [], lists, nodesByKey);
   const removeKeySet = takeRemovals(nodesByKey, lists.remove);
   const vendor = caller.vendor as AgentVendor;
   const added = normalizeAdded(g, lists, nodesByKey, vendor);
@@ -275,17 +301,18 @@ function planPatch(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.patch
   const nextGoal = patch.goal !== undefined ? validateGraphGoal(patch.goal) : undefined;
   const updates = lists.update.map((u) => prepareUpdate(g, u, nodesByKey.get(validateNodeKey(u.key))!, vendor, caller.pmId));
   const updatedByKey = new Map(updates.map((u) => [u.cur.node_key, u]));
+  const doneKeys = new Set(doneSteps.map((step) => step.node_key));
   assertReviewStepsHaveTarget(
     [
       ...[...nodesByKey.values()].map((n) => {
         const u = updatedByKey.get(n.node_key);
-        return { key: n.node_key, review: u?.nextReview ?? n.review, base: u !== undefined ? u.nextBase : n.base, status: n.status };
+        return { key: n.node_key, review: u?.nextReview ?? n.review, base: u !== undefined ? u.nextBase : n.base, status: doneKeys.has(n.node_key) ? "done" : n.status };
       }),
       ...added.map((a) => ({ ...a, status: "pending" })),
     ],
     finalEdges,
   );
-  return { graphRow, patch, lists, existingNodes, nodesByKey, removeKeySet, added, updates, finalEdges, rankOf, nextGoal };
+  return { graphRow, patch, lists, existingNodes, nodesByKey, removeKeySet, added, updates, doneSteps, finalEdges, rankOf, nextGoal };
 }
 
 function applyPatchIn(g: TaskGraphCtx, p: Pending, plan: PatchPlan): void {
@@ -299,13 +326,16 @@ function applyPatchIn(g: TaskGraphCtx, p: Pending, plan: PatchPlan): void {
     g.db.run("DELETE FROM task_graph_steps WHERE graph_id = ? AND node_key = ?", graphRow.id, rmKey);
   }
   for (const a of plan.added) insertStepRow(g.db, graphRow.id, a, plan.rankOf.get(a.key) ?? 0, t);
-  for (const u of plan.updates) writeUpdateIn(g, p, u, t);
+  for (const u of plan.updates) writeUpdateIn(g, u, t);
   applySkips(g, plan.lists.skip, plan.nodesByKey, t);
   for (const [k, idx] of plan.rankOf) {
     g.db.run("UPDATE task_graph_steps SET sort_order = ? WHERE graph_id = ? AND node_key = ?", idx, graphRow.id, k);
   }
   g.db.run("DELETE FROM task_graph_edges WHERE graph_id = ?", graphRow.id);
   for (const e of plan.finalEdges) insertEdgeRow(g.db, graphRow.id, e);
+  for (const node of plan.doneSteps) {
+    if (node.status !== "done") markStepDoneIn(g, p, node, { nodeKey: node.node_key });
+  }
 }
 
 export function patchIn(
@@ -326,8 +356,9 @@ export function patchIn(
   const graph = publishGraphIn(g, p, graphRow.id);
   const progressNote = unlockedNoteOf(progress, graph).replace(/^；/u, "");
   const reviewHint = sameVendorReviewHint(g.db, graphRow.id, caller.vendor);
+  const doneNotes = plan.doneSteps.map((node) => `\n步骤「${node.node_key}」${node.status === "done" ? "已经完成" : "已放行"}。`).join("");
   return {
-    text: `已更新${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
+    text: `已更新${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}${doneNotes}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
     data: { graph },
   };
 }

@@ -11,8 +11,8 @@ Every step (`TaskNode` in `src/shared/domain.ts`) has one of these states:
 1. **`pending`**: Waiting for upstream dependencies (`task_graph_edges`) to reach `done`.
 2. **`running`**: Dispatched to an active Worker in an isolated `git worktree` (or the main folder when `--no-worktree` is set).
 3. **`waiting`**: Paused on a human or PM gate (`waitingFor: "user"` or `waitingFor: "pm"`):
-   - `waitingFor: "user"`: A `confirm: true` user checkpoint, a `hub graph ask` decision card, or a system-generated `UserBlocker` card (for example when the target vendor CLI is signed out or uninstalled on that computer).
-   - `waitingFor: "pm"`: A Worker reported `状态: 有问题` or `放弃了`, reported a non-empty `偏离` (scope deviation), failed its review check, or hit an unexpected process error.
+   - `waitingFor: "user"`: A decision card opened by the PM with `hub ask --node` or a system-generated `UserBlocker` card (for example when the target vendor CLI is signed out or uninstalled on that computer).
+   - `waitingFor: "pm"`: A Worker finished a `confirm: true` checkpoint or reported `状态: 有问题` or `放弃了`, reported a non-empty `偏离` (scope deviation), failed its review check, or hit an unexpected process error.
 4. **`done`**: Completed (`skipped: false`) or explicitly skipped (`skipped: true`), unlocking downstream dependents whose remaining upstream edges are all `done`.
 5. **`cancelled`**: Unfinished when the graph was cancelled. The ledger clears the active Worker and any wait. It keeps the Worker history and existing results. A reply to an existing decision card settles the card without advancing the graph.
 
@@ -20,7 +20,7 @@ Read-path compatibility in `src/shared/task-graph-compat.ts` maps legacy payload
 
 ## Automatic progression and handoffs
 
-- **Zero-PM-hop handoff**: When a Worker finishes a normal step with `状态: 做完了` and `偏离: 无`, the ledger records its `交棒` (handoff summary), commit SHA, PR URL, and deliverable files, marks the node `done` (unless `confirm: true` pauses it on `waitingFor: "user"` first), and immediately dispatches unlocked downstream nodes.
+- **Zero-PM-hop handoff**: When a Worker finishes a normal step with `状态: 做完了` and `偏离: 无`, the ledger records its `交棒` (handoff summary), commit SHA, PR URL, and deliverable files, marks the node `done` (unless `confirm: true` pauses it on `waitingFor: "pm"` first), and immediately dispatches unlocked downstream nodes.
 - **Branch and worktree continuity**:
   - A single-upstream code step inherits its predecessor's branch so sequential steps build on one commit chain.
   - Parallel branches each receive their own `git worktree` off `main` (or the declared `base` ref); fan-in nodes receive every upstream branch, commit, and handoff block.
@@ -36,7 +36,7 @@ To keep the base PM system prompt short (`src/daemon/prompt.ts`) and avoid over-
 
 ## Decisions, user blockers, and deliverables
 
-- **Unified decision source**: The ask message records whether a decision card is pending. Worker and step state changes leave the card open. The user can answer to settle the card and send the decision to the step's active Worker. The project manager can record a reply from chat with `hub graph decide`, replace the card with a new one, or close it with `hub ask close --message <messageId>`. Use `hub graph show` to find the message ID of a pending step card.
+- **Unified decision source**: The ask message records whether a decision card is pending. Worker and step state changes leave the card open. The user can answer to settle the card and send the decision to the step's active Worker. The project manager can record a reply from chat with `hub graph decide`, replace the card with a new one, or close it with `hub ask close --message <messageId>`. For a checkpoint waiting for the project manager without a user card, use `hub graph done` to pass it or `hub worker send` to request changes. Use `hub graph show` to find the message ID of a pending step card.
 - **System `UserBlocker` cards (`src/shared/user-blockers.ts`)**: When automatic dispatch hits an unauthenticated or missing vendor CLI, the daemon posts a `UserBlockerCard` directly instead of stalling on `Waiting on PM`. Clicking `Done` (`POST /api/user-blockers/:id/recheck`) re-probes `ModelCatalogs` outside the SQLite transaction and dispatches every unblocked step and Worker automatically.
 - **Deliverables (`src/shared/deliverables.ts`)**: Files listed in a Worker's `文件:` report field (or `--file label=path` on `hub ask` / `hub router report`) are copied asynchronously outside SQLite transactions into `sent-files/` (`src/daemon/sent-files.ts`, bounded by `SENT_FILES_*` limits and `DataDirReadScope`) and rendered inline via `<CardBody>` (`docs/ui-standard.md` section 22).
 
