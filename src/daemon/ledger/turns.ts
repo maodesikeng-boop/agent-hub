@@ -9,7 +9,7 @@ import type { AgentSessionRow, ConversationId, Message, MessageId, MessageStatus
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { StopSource, TurnCause, TurnId, TurnInputRole, TurnOutcome, TurnStatus, TurnSummary } from "../../shared/turn.ts";
 import type { LedgerContext, Pending } from "./context.ts";
-import type { TurnEndedEvent } from "./turn-completions.ts";
+import type { LegacyTurnReplyFacts, TurnEndedEvent } from "./turn-completions.ts";
 
 export interface TurnRecord {
   readonly id: TurnId;
@@ -75,7 +75,7 @@ export interface LedgerTurns {
    * receipt that reports interruption settles them as stopped, with the recorded stop source.
    * Postcondition: returns null for a duplicate receipt or a session with no running turn; never reopens an ended turn.
    */
-  settle(p: Pending, session: AgentSessionRow, event: TurnEndedEvent, previousRun: boolean): SettledTurn | null;
+  settle(p: Pending, session: AgentSessionRow, event: TurnEndedEvent, previousRun: boolean, storedFacts?: LegacyTurnReplyFacts): SettledTurn | null;
   /** Ends the running turn when the process exits without a receipt; `startup_failed` before any turn opens a failed turn. */
   settleExit(p: Pending, session: AgentSessionRow, event: Extract<DriverEvent, { type: "session.exited" | "driver.error" }>): SettledTurn | null;
   /** Records the stop source. Inputs in a running turn stay unsettled until the terminal event. */
@@ -157,6 +157,22 @@ function turnOwnsInput(db: LedgerContext["db"], id: MessageId): boolean {
   ) !== undefined;
 }
 
+function legacyInputsOf(db: LedgerContext["db"], sessionId: SessionId, ids: readonly MessageId[]): MessageId[] {
+  return db.all<{ id: MessageId }>(
+    `SELECT m.id FROM messages m WHERE m.session_id = ? AND m.id IN (SELECT value FROM json_each(?))
+     AND m.status IN ('delivered', 'processing')
+     AND NOT EXISTS (SELECT 1 FROM turn_inputs i WHERE i.message_id = m.id)`,
+    sessionId, JSON.stringify(ids),
+  ).map((row) => row.id);
+}
+
+function validateLegacyReply(db: LedgerContext["db"], sessionId: SessionId, facts?: LegacyTurnReplyFacts): LegacyTurnReplyFacts | undefined {
+  if (facts?.reply == null || db.get(
+    "SELECT 1 FROM messages WHERE id = ? AND session_id = ? AND kind = 'text' AND sender = 'agent'", facts.reply.messageId, sessionId,
+  )) return facts;
+  return { ...facts, reply: null };
+}
+
 export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTurns {
   const { db, now } = ctx;
   const recoveryBootId = randomUUID();
@@ -231,11 +247,11 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
     );
   }
 
-  function finish(p: Pending, session: AgentSessionRow, turn: TurnRecord, end: End): SettledTurn {
+  function finish(p: Pending, session: AgentSessionRow, turn: TurnRecord, end: End, legacy?: LegacyTurnReplyFacts): SettledTurn {
     const endedAt = Math.max(end.at, turn.startedAt);
     const stopSource = ("source" in end ? end.source : undefined) ?? turn.stopSource;
     const reason = end.outcome === "failed" ? end.reason : null;
-    const reply = end.outcome === "interrupted" ? null : turn.replyMessageId;
+    const reply = end.outcome === "interrupted" ? null : turn.replyMessageId ?? legacy?.reply?.messageId ?? null;
     db.run(
       `UPDATE turns SET status = 'ended', outcome = ?, stop_source = ?, failure_reason = ?, ended_at = ?,
          duration_ms = ?, reply_message_id = ?, updated_at = ? WHERE id = ?`,
@@ -250,30 +266,28 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       const after = row.afterMessageId ?? 0;
       const resend = end.outcome === "interrupted" && end.stopRequested !== true && isRecoveryStop(stopSource) &&
         (stopSource === "crash" || session.role === "worker" || row.sender === "system");
+      const hasReply = end.outcome === "failed" && row.sender === "user" &&
+        ((end.finishedWithText ?? 0) > after || legacy?.finishedWithText?.includes(row.messageId) === true);
       const outcome: InputOutcome = end.outcome === "interrupted" ? (resend ? "interrupted" : "stopped") :
-        end.outcome === "failed" && (row.sender !== "user" || (end.finishedWithText ?? 0) <= after) ? "failed" : "replied";
+        end.outcome === "failed" && !hasReply ? "failed" : "replied";
       const source = end.outcome === "interrupted" ? stopSource : null;
       db.run("UPDATE turn_inputs SET outcome = ?, stop_source = ? WHERE turn_id = ? AND message_id = ?", outcome, source, turn.id, row.messageId);
       if (row.ownerId !== session.id) continue;
       inputs.push({ ...row, outcome, stopSource: source });
       if (outcome === "interrupted") continue;
       const replyId = outcome === "replied" && session.role === "pm" && (row.sender === "user" || row.scheduleRun === 1)
-        && reply !== null && reply > after ? reply : undefined;
+        && reply !== null && (legacy === undefined ? reply > after : legacy.reply?.requestIds.includes(row.messageId) === true) ? reply : undefined;
       deps.projectInputStatus(p, row.messageId, outcome, reason, replyId);
     }
     return { turn: { ...turn, status: "ended", endedAt, durationMs: endedAt - turn.startedAt, outcome: end.outcome,
       stopSource, failureReason: reason, replyMessageId: reply }, inputs, empty: turn.firstOutputId === null };
   }
 
-  function settle(p: Pending, session: AgentSessionRow, event: TurnEndedEvent, previousRun: boolean): SettledTurn | null {
+  function settle(p: Pending, session: AgentSessionRow, event: TurnEndedEvent, previousRun: boolean, storedFacts?: LegacyTurnReplyFacts): SettledTurn | null {
+    let legacy: LegacyTurnReplyFacts | undefined;
     if (previousRun && runningTurnOf(session.id) === null) {
-      const legacy = db.all<{ id: MessageId }>(
-        `SELECT m.id FROM messages m WHERE m.session_id = ? AND m.id IN (SELECT value FROM json_each(?))
-         AND m.status IN ('delivered', 'processing')
-         AND NOT EXISTS (SELECT 1 FROM turn_inputs i WHERE i.message_id = m.id)`,
-        session.id, JSON.stringify(event.messageIds),
-      );
-      take(p, session, legacy.map((row) => row.id), event.at);
+      take(p, session, legacyInputsOf(db, session.id, event.messageIds), event.at);
+      legacy = validateLegacyReply(db, session.id, storedFacts);
     }
     const turn = runningTurnOf(session.id);
     if (turn === null || event.at < turn.startedAt) return null;
@@ -290,9 +304,9 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
     if (!event.ok) {
       const text = turn.lastOutputId !== null && db.get("SELECT 1 FROM messages WHERE id = ? AND kind = 'text'", turn.lastOutputId);
       return finish(p, session, turn, { outcome: "failed", at: event.at,
-        reason: event.error ? turnFailureReason(event.error) : "turn_failed", ...(text ? { finishedWithText: turn.lastOutputId } : {}) });
+        reason: event.error ? turnFailureReason(event.error) : "turn_failed", ...(text ? { finishedWithText: turn.lastOutputId } : {}) }, legacy);
     }
-    return finish(p, session, turn, { outcome: turn.cause === "recovery" && turn.firstOutputId === null ? "empty_recovery" : "ok", at: event.at });
+    return finish(p, session, turn, { outcome: turn.cause === "recovery" && turn.firstOutputId === null ? "empty_recovery" : "ok", at: event.at }, legacy);
   }
 
   function recordFailedStartIn(p: Pending, session: AgentSessionRow, messageId: MessageId, reason: string, at = now()): void {

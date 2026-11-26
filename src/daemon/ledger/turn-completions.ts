@@ -17,7 +17,12 @@ export interface TurnCompletionReceipt {
   readonly event: TurnEndedEvent;
 }
 
-export interface TurnCompletionFacts {
+export interface LegacyTurnReplyFacts {
+  readonly reply?: { readonly messageId: MessageId; readonly requestIds: readonly MessageId[] } | null;
+  readonly finishedWithText?: readonly MessageId[];
+}
+
+export interface TurnCompletionFacts extends LegacyTurnReplyFacts {
   readonly worker: {
     readonly turnStart: MessageId;
     readonly waitingForBackground: boolean;

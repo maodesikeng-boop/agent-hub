@@ -27,7 +27,7 @@ export function createTurnReceiptSettlement(db: Db, deps: SettlementDeps): TurnC
   return (p, receipt, facts, previousRun) => {
     const session = getAgentSession(db, receipt.sessionId);
     if (session === null || session.role === "assistant" || session.conversationId === null) return;
-    const settled = turns.settle(p, session, receipt.event, previousRun);
+    const settled = turns.settle(p, session, receipt.event, previousRun, facts);
     if (settled === null) {
       if (receipt.event.messageIds.length === 0 && turns.runningTurnOf(session.id) === null) {
         messages.settleTurn(p, session);

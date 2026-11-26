@@ -445,10 +445,15 @@ describe("turn completion receipts", () => {
   it("settles a pre-upgrade receipt before deciding whether to resend its input", () => {
     const id = post("Old daemon input");
     db.run("UPDATE messages SET status = 'processing' WHERE id = ?", id);
-    const receipt = { type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: null, at: now };
-    db.run("INSERT INTO turn_completions (session_id, event, next_attempt_at) VALUES (?, ?, 0)", sessionId, JSON.stringify(receipt));
+    say("old-reply", "Reply persisted before the upgrade");
+    const replyId = agentReply();
+    const receipt = { type: "turn.ended", ok: false, interrupted: false, messageIds: [id], durationMs: null, at: now };
+    const facts = { reply: { messageId: replyId, requestIds: [id] }, finishedWithText: [id], worker: null };
+    db.run("INSERT INTO turn_completions (session_id, event, facts, next_attempt_at) VALUES (?, ?, ?, 0)",
+      sessionId, JSON.stringify(receipt), JSON.stringify(facts));
     restart();
     expect(statusOf(id)).toBe("replied");
+    expect(replyIdOf(ledger.getMessage(id)!)).toBe(replyId);
     expect(sendsFor(id)).toHaveLength(1);
     expect(sendsFor(id)[0]!.params).not.toHaveProperty("resend");
   });
