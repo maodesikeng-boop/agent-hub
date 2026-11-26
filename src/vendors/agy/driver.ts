@@ -228,19 +228,21 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       delivered: false,
       processing: false,
       source: taken.source,
+      includeDeliverySuffix: true,
       riders: taken.riders,
       entries: taken.entries,
     };
   }
 
-  #buildLineForProc(batch: Batch): string {
+  #buildLineForProc(st: SessionState, batch: Batch): string {
     if (batch.rawLine !== undefined) return batch.rawLine;
-    return buildAgyUserLine(batch.text, batch.prefixes, this.composer.buildUserContent);
+    const text = batch.includeDeliverySuffix !== true ? batch.text : this.withDeliverySuffix(st, batch, batch.text);
+    return buildAgyUserLine(text, batch.prefixes, this.composer.buildUserContent);
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
-    const line = this.#buildLineForProc(batch);
+    const line = this.#buildLineForProc(st, batch);
     const problem = checkAgyUserLine(line);
     if (problem) {
       this.invalidInput(st, problem, batch.messageIds);
@@ -289,7 +291,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
           if (this.discardStaleSystemBatch(st, proc, batch)) return;
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
-          const line = this.#buildLineForProc(batch);
+          const line = this.#buildLineForProc(st, batch);
           proc.child.stdin.write(line + "\n");
           this.armStartTimer(st, proc);
           const outcome = await proc.ready;

@@ -1,10 +1,8 @@
-import { systemMessageDedupeKey, truncateChars } from "../../../shared/domain.ts";
+import { truncateChars } from "../../../shared/domain.ts";
 import type {
   AgentSessionRow,
   ConversationId,
   MessageId,
-  SessionId,
-  SystemMessageMeta,
   TaskGraph,
   TaskGraphId,
   TaskNode,
@@ -14,13 +12,17 @@ import type {
 import type { WorkerPr } from "../../../shared/hub.ts";
 import type { GraphPrTarget } from "../../../shared/ledger.ts";
 import { DELIVERY_FILES_MAX, DELIVERY_NOTE_MAX_CHARS } from "../../../shared/limits.ts";
+import { graphDeliveryWakeupRef, readyNoticeSubjectOf } from "../../../shared/pm-notice.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { parseWorkerReport } from "../../../shared/worker.ts";
 import type { Db } from "../../store/index.ts";
 import type { Pending } from "../context.ts";
+import { graphReadySince, isReadyAgendaNoticeCurrent } from "../pm-agenda.ts";
+import { enqueuePmNoticeIn } from "../pm-notices.ts";
+import { systemWakeupKey } from "../system-wakeups.ts";
 import { toMessage, type MessageDbRow } from "../rows.ts";
-import { parseJsonOr, readStoredArtifact, workerIdsOf } from "./rows.ts";
-import { activeGraphRowsOfPm, getGraphRow, isGraphAllSettled, lastReportText, loadGraph, mainFolderOf } from "./store.ts";
+import { readStoredArtifact, workerIdsOf } from "./rows.ts";
+import { activeGraphRowsOfPm, getGraphRow, lastReportText, loadGraph, mainFolderOf } from "./store.ts";
 import { collapseOneLine, prStateLabelZh } from "./text.ts";
 import type { TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
@@ -152,96 +154,63 @@ function changedFileLines(files: DeliveryExtra["files"]): string[] {
 
 function formatDeliveryNote(db: Db, graph: TaskGraph, extra?: DeliveryExtra): string {
   const lines: string[] = [
-    `【任务图 #${graph.id}「${graph.title}」全部步骤做完，等你交付】`,
+    `【任务图 #${graph.id}「${graph.title}」图里画的步骤都做完了，等你验收交付】`,
     ...graph.nodes.map((n, i) => deliveryNodeLine(db, graph, n, i, extra)),
     ...decisionLines(graph),
     ...lastHandoffLine(db, graph),
     ...changedFileLines(extra?.files),
   ];
-  const footer = `\n\n验收看上面的证据，按项目约定交付后用 ${HUB_COMMAND} graph finish 结束这张图。`;
+  const footer = [
+    "",
+    "",
+    `图里只有上面这些步骤；项目规矩或用户要求、但没画进图的步骤（比如审查），后台看不出来，缺了用 ${HUB_COMMAND} graph patch 补。`,
+    `验收看上面的证据，按项目约定交付后用 ${HUB_COMMAND} graph finish 结束这张图。`,
+  ].join("\n");
   const bodyBudget = Math.max(200, DELIVERY_NOTE_MAX_CHARS - [...footer].length);
   return `${truncateChars(lines.join("\n"), bodyBudget)}${footer}`;
 }
 
-/** GLOB on the BINARY-collated unique dedupe_key uses its index; LIKE is case-insensitive and would scan every message. */
-export const deliveryNoteKeyGlob = (conversationId: ConversationId, graphId: TaskGraphId): string =>
-  `system:${conversationId}:task_graph.ready_to_finish:${graphId}:*`;
+export function deliveryNoteKeys(conversationId: ConversationId, graphId: TaskGraphId) {
+  return {
+    legacy: `system:${conversationId}:task_graph.ready_to_finish:${graphId}:*`,
+    current: systemWakeupKey(conversationId, "task_graph", graphDeliveryWakeupRef(graphId, "*")),
+  };
+}
+
+export function latestDeliveryNoteId(db: Db, conversationId: ConversationId, graphId: TaskGraphId): MessageId | undefined {
+  const { legacy, current } = deliveryNoteKeys(conversationId, graphId);
+  return db.get<{ id: MessageId }>(
+    "SELECT max(id) AS id FROM messages WHERE dedupe_key GLOB ? OR dedupe_key GLOB ?",
+    legacy, current,
+  )?.id ?? undefined;
+}
 
 export function stopQueuedDeliveryNotesIn(g: TaskGraphCtx, p: Pending, conversationId: ConversationId, graphId: TaskGraphId): void {
+  const { legacy, current } = deliveryNoteKeys(conversationId, graphId);
   const queuedRows = g.db.all<{ id: number }>(
-    "SELECT id FROM messages WHERE dedupe_key GLOB ? AND status = 'queued'",
-    deliveryNoteKeyGlob(conversationId, graphId),
+    "SELECT id FROM messages WHERE (dedupe_key GLOB ? OR dedupe_key GLOB ?) AND status = 'queued'",
+    legacy, current,
   );
   for (const r of queuedRows) g.messages.transition(p, r.id, "stopped");
 }
 
-const readyMeta = (graphId: TaskGraphId, seq: number, diffProbed: boolean): SystemMessageMeta => ({
-  event: "task_graph.ready_to_finish",
-  graphId,
-  seq,
-  diffProbed,
-});
-
-function refreshQueuedNoteIn(g: TaskGraphCtx, p: Pending, existing: MessageDbRow, graphId: TaskGraphId, sessionId: SessionId, text: string): void {
-  const prevMeta = parseJsonOr<Record<string, unknown>>(existing.meta, {});
-  const nextMeta = readyMeta(graphId, typeof prevMeta.seq === "number" ? prevMeta.seq : 1, false);
-  g.db.run(
-    "UPDATE messages SET session_id = ?, text = ?, meta = ?, updated_at = ? WHERE id = ?",
-    sessionId,
-    text,
-    JSON.stringify(nextMeta),
-    g.now(),
-    existing.id,
-  );
-  const message = toMessage(g.db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", existing.id)!);
-  p.changes.push({ type: "message.updated", data: { message } });
-  g.enqueue(p, { type: "session.send", params: { sessionId, messageId: existing.id, source: "system" } });
-}
-
-function insertNoteIn(g: TaskGraphCtx, p: Pending, graphRow: TaskGraphDbRow, sessionId: SessionId, text: string): void {
-  const keyGlob = deliveryNoteKeyGlob(graphRow.conversation_id, graphRow.id);
-  const prevCount = g.db.get<{ cnt: number }>("SELECT count(*) AS cnt FROM messages WHERE dedupe_key GLOB ?", keyGlob)?.cnt ?? 0;
-  const meta = readyMeta(graphRow.id, prevCount + 1, false);
-  const t = g.now();
-  const row = g.db.get<MessageDbRow>(
-    `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
-     VALUES (?, ?, 'system', 'text', ?, ?, ?, 'queued', ?, ?)
-     ON CONFLICT (dedupe_key) DO NOTHING RETURNING *`,
-    graphRow.conversation_id,
-    sessionId,
-    text,
-    JSON.stringify(meta),
-    systemMessageDedupeKey(graphRow.conversation_id, meta),
-    t,
-    t,
-  );
-  if (row === undefined) return;
-  p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
-  g.enqueue(p, { type: "session.send", params: { sessionId, messageId: row.id, source: "system" } });
-}
-
 export function syncDeliveryNoteAfterProgressIn(g: TaskGraphCtx, p: Pending, graphRow: TaskGraphDbRow, wasAllSettled: boolean): void {
-  const freshRow = getGraphRow(g.db, graphRow.id);
-  if (freshRow === undefined || freshRow.status !== "active") {
+  const since = graphReadySince(g.db, graphRow.pm_id, graphRow.id);
+  if (since === null) {
     stopQueuedDeliveryNotesIn(g, p, graphRow.conversation_id, graphRow.id);
     return;
   }
-  if (!isGraphAllSettled(g.db, freshRow.id)) {
-    stopQueuedDeliveryNotesIn(g, p, freshRow.conversation_id, freshRow.id);
-    return;
-  }
   if (wasAllSettled) return;
-  const pmSession = g.sessions.currentSession(freshRow.conversation_id);
+  const pmSession = g.sessions.currentSession(graphRow.conversation_id);
   if (pmSession === null) return;
-  const graph = loadGraph(g, freshRow.id);
+  const graph = loadGraph(g, graphRow.id);
   if (graph === null) return;
-  const text = formatDeliveryNote(g.db, graph);
-  const existingQueued = g.db.get<MessageDbRow>(
-    "SELECT * FROM messages WHERE dedupe_key GLOB ? AND status = 'queued' ORDER BY id DESC LIMIT 1",
-    deliveryNoteKeyGlob(freshRow.conversation_id, freshRow.id),
-  );
-  if (existingQueued !== undefined) refreshQueuedNoteIn(g, p, existingQueued, freshRow.id, pmSession.id, text);
-  else insertNoteIn(g, p, freshRow, pmSession.id, text);
+  const previousNoticeId = latestDeliveryNoteId(g.db, graphRow.conversation_id, graphRow.id);
+  enqueuePmNoticeIn(g, p, pmSession, {
+    conversationId: graphRow.conversation_id,
+    text: formatDeliveryNote(g.db, graph),
+    subject: { kind: "graph.ready_to_finish", graphId: graph.id, since, ...(previousNoticeId === undefined ? {} : { previousNoticeId }) },
+  });
 }
 
 export function graphPrTargets(db: Db, caller: AgentSessionRow | null, graphId?: TaskGraphId): GraphPrTarget[] {
@@ -262,19 +231,25 @@ export function graphPrTargets(db: Db, caller: AgentSessionRow | null, graphId?:
   ];
 }
 
-function queuedReadyMeta(db: Db, messageId: MessageId): (Record<string, unknown> & { graphId: number }) | null {
-  const msg = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", messageId);
-  if (msg === undefined || msg.sender !== "system" || msg.status !== "queued") return null;
-  const meta = parseJsonOr<Record<string, unknown> | null>(msg.meta, null);
-  if (meta?.event !== "task_graph.ready_to_finish" || meta.diffProbed === true || typeof meta.graphId !== "number") return null;
-  return meta as Record<string, unknown> & { graphId: number };
+function queuedReadyNote(db: Db, messageId: MessageId): { message: MessageDbRow; graphId: TaskGraphId } | null {
+  const row = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ? AND sender = 'system' AND status = 'queued'", messageId);
+  if (row === undefined) return null;
+  const message = toMessage(row);
+  if (message.meta?.diffProbed === true) return null;
+  const subject = readyNoticeSubjectOf(message);
+  if (subject === null) return null;
+  const graph = getGraphRow(db, subject.graphId);
+  return graph?.conversation_id === message.conversationId &&
+    latestDeliveryNoteId(db, message.conversationId, graph.id) === message.id &&
+    isReadyAgendaNoticeCurrent(db, graph.pm_id, graph.id, subject.since)
+    ? { message: row, graphId: graph.id } : null;
 }
 
 export function graphDeliveryProbeTarget(
   db: Db,
   messageId: MessageId,
 ): { graphId: TaskGraphId; repoFolder: string | null; branches: Array<{ branch: string; cwd: string; baseCommit: string | null }> } | null {
-  const meta = queuedReadyMeta(db, messageId);
+  const meta = queuedReadyNote(db, messageId);
   if (meta === null) return null;
   const graphRow = getGraphRow(db, meta.graphId);
   if (graphRow === undefined || graphRow.status !== "active") return null;
@@ -286,13 +261,12 @@ export function graphDeliveryProbeTarget(
 export function enrichDeliveryNoteMessage(g: TaskGraphCtx, messageId: MessageId, input: DeliveryExtra): void {
   g.write((p) => {
     // The probe ran outside the transaction; skip notes that were stopped meanwhile.
-    const meta = queuedReadyMeta(g.db, messageId);
+    const meta = queuedReadyNote(g.db, messageId);
     if (meta === null) return;
     const graph = loadGraph(g, meta.graphId);
     if (graph === null) return;
     const nextText = formatDeliveryNote(g.db, graph, input);
-    const nextMeta = readyMeta(meta.graphId, typeof meta.seq === "number" ? meta.seq : 1, true);
-    g.db.run("UPDATE messages SET text = ?, meta = ?, updated_at = ? WHERE id = ?", nextText, JSON.stringify(nextMeta), g.now(), messageId);
+    g.db.run("UPDATE messages SET text = ?, meta = json_set(meta, '$.diffProbed', json('true')), updated_at = ? WHERE id = ?", nextText, g.now(), meta.message.id);
     p.changes.push({
       type: "message.updated",
       data: { message: toMessage(g.db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", messageId)!) },

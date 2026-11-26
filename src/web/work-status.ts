@@ -53,3 +53,33 @@ export function graphProgressOf(graph: Pick<TaskGraph, "nodes">): GraphProgress 
   }
   return { done, total: graph.nodes.length };
 }
+
+export type GraphDeliveryWait = { kind: "pm" } | { kind: "watch"; watchId: number; body: string };
+
+export interface GraphDelivery {
+  /** Step-count header for the panel and dialog, for example `2/2 steps · awaiting delivery`. */
+  header: string;
+  /** The last row under the steps while the graph waits for delivery; null otherwise. The leaf renders its age from `since`. */
+  row: { wait: GraphDeliveryWait; since: number } | null;
+}
+
+type DeliveryGraph = Pick<TaskGraph, "status" | "nodes">;
+type DeliveryWatch = { watchId: number; body: string };
+const deliveryByGraph = new WeakMap<DeliveryGraph, { watch: DeliveryWatch | null; delivery: GraphDelivery }>();
+
+export function graphDeliveryOf(graph: DeliveryGraph, watch: DeliveryWatch | null = null): GraphDelivery {
+  const cached = deliveryByGraph.get(graph);
+  if (cached !== undefined && cached.watch?.watchId === watch?.watchId && cached.watch?.body === watch?.body) return cached.delivery;
+  const { done, total } = graphProgressOf(graph);
+  const ready = graph.status === "active" && total > 0 && done === total;
+  const header = `${done}/${total} steps${ready ? " · awaiting delivery" : ""}`;
+  const delivery: GraphDelivery = {
+    header,
+    row: ready ? {
+      wait: watch === null ? { kind: "pm" } : { kind: "watch", watchId: watch.watchId, body: watch.body },
+      since: graph.nodes.reduce((latest, node) => Math.max(latest, node.updatedAt), 0),
+    } : null,
+  };
+  deliveryByGraph.set(graph, { watch, delivery });
+  return delivery;
+}

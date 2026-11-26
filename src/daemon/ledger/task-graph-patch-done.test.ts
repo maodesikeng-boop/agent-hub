@@ -1,6 +1,6 @@
+import { isGraphReadyNotice } from "../../shared/pm-notice.ts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HUB_USAGE } from "../../hub/usage.ts";
-import { systemEventOf } from "../../shared/domain.ts";
 import { TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { MAX_GRAPH_GOAL_CHARS, MAX_STEP_BRIEF_CHARS, ROUTER_REPORT_SUMMARY_MAX_CHARS } from "../../shared/limits.ts";
@@ -60,7 +60,7 @@ describe("S5: atomic graph.patch with doneSteps and unified text limits", () => 
     // Atomic rollback: review-plan still waits for PM and no delivery note was queued.
     expect(f.showGraph(graph.id).nodes).toHaveLength(1);
     expect(f.showGraph(graph.id).nodes[0]).toMatchObject({ key: "review-plan", status: "waiting", waitingFor: "pm" });
-    expect(f.pmSystemMessages().filter((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish")).toEqual([]);
+    expect(f.pmSystemMessages().filter(isGraphReadyNotice)).toEqual([]);
 
     // S5.3: shortening the brief makes the exact same patch succeed atomically.
     f.patchGraph(
@@ -194,7 +194,7 @@ describe("S5: atomic graph.patch with doneSteps and unified text limits", () => 
       status: "done",
       artifact: { prUrl: "https://example.com/pr/1", commit: "abc1234", summary: "手工验收通过" },
     });
-    expect(f.pmSystemMessages().some((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish")).toBe(true);
+    expect(f.pmSystemMessages().some(isGraphReadyNotice)).toBe(true);
   });
 
   it("passes a Worker checkpoint and starts the added successor in the same patch", async () => {
@@ -217,6 +217,6 @@ describe("S5: atomic graph.patch with doneSteps and unified text limits", () => 
       { key: "impl", status: "running" },
     ]);
     expect(f.db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", workerId)?.status).toBe("ended");
-    expect(f.pmSystemMessages().filter((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish")).toEqual([]);
+    expect(f.pmSystemMessages().filter(isGraphReadyNotice)).toEqual([]);
   });
 });

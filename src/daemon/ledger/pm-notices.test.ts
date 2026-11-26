@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CONFIRM_PASS_OPTION, systemEventOf } from "../../shared/domain.ts";
-import { isPmNoticeSubject, pmNoticeDedupeRef, type PmNoticeSubject } from "../../shared/pm-notice.ts";
+import { isGraphReadyNotice, isPmNoticeSubject, pmNoticeDedupeRef, type PmNoticeSubject } from "../../shared/pm-notice.ts";
 import { enqueuePmNoticeIn, isPmNoticeCurrent } from "./pm-notices.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./pm-friction-fixture.ts";
 
@@ -49,7 +49,7 @@ describe("S2 & N1: typed PM notices and leaf user-decision handoff", () => {
     expect(wake.text).toContain("还有 1 条线在跑");
     expect(wake.text).toContain("hub graph patch");
     expect(wake.text).toContain("按选项一开干");
-    expect(f.pmSystemMessages().filter((m) => systemEventOf(m)?.event === "task_graph.ready_to_finish")).toEqual([]);
+    expect(f.pmSystemMessages().filter(isGraphReadyNotice)).toEqual([]);
 
     const meta = systemEventOf(wake);
     expect(meta?.event).toBe("pm.wakeup");

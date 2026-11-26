@@ -70,6 +70,27 @@ describe("claude：换代后的开场说明", () => {
     expect(t.of("message.processing").at(-1)).toMatchObject({ messageIds: [1], preamble: true });
   });
 
+  it("写尾注时把同一条里带的开场说明交给账本，后面几条不给（账本据此不重复清单）", async () => {
+    const ledger = fakePreambleLedger();
+    const seen: Array<[number, string | undefined]> = [];
+    h = makeHarness({
+      driver: {
+        sessionPreamble: ledger.sessionPreamble,
+        deliverySuffix: (_sessionId, messageIds, preamble) => {
+          seen.push([messageIds.at(-1)!, preamble]);
+          return { text: "" };
+        },
+      },
+    });
+    ledger.watch(h.driver);
+    const s = h.addSession();
+    await h.driver.send(s.id, user(1, "接着说"));
+    await h.waitFor("turn.ended");
+    await h.driver.send(s.id, system(2, "汇报"));
+    await h.waitFor("turn.ended", undefined, 2);
+    expect(seen).toEqual([[1, PREAMBLE], [2, undefined]]);
+  });
+
   it("不是新会话（账本给 null）：什么也不加", async () => {
     h = makeHarness({ driver: { sessionPreamble: () => null } });
     const s = h.addSession();

@@ -1,3 +1,4 @@
+import { graphReadySince } from "../pm-agenda.ts";
 import type {
   CancelTaskGraphRequest,
   CancelTaskGraphResponse,
@@ -34,7 +35,8 @@ import { emptyProgress, type PmCaller, type ProgressResult, type TaskGraphCtx, t
 export function show(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.show">): HubResult<"graph.show"> {
   const row = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: false });
   const graph = loadGraph(g, row.id)!;
-  return { text: formatGraphText(graph, true, { ...g, pmVendor: caller.vendor }), data: { graph } };
+  const since = graphReadySince(g.db, caller.pmId, graph.id);
+  return { text: formatGraphText(graph, true, { ...g, pmVendor: caller.vendor }, since === null ? undefined : { since, now: g.now() }), data: { graph } };
 }
 
 export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.list">): HubResult<"graph.list"> {

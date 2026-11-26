@@ -121,6 +121,10 @@ function waitLines(client: Client, pmConversationId: number, event: WorkerMessag
   );
 }
 
+const clockOf = (at: number) => {
+  const d = new Date(at);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
 const argValue = (argv: string[], flag: string) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined);
 
 
@@ -456,16 +460,20 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     // 关机打断的这一轮：系统交给它的汇报还是处理中，不标已停止
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", reportId)).toEqual([{ status: "processing" }]);
 
+    const restartedAt = Date.now();
     const daemon = await env.start();
     const client = first.client.withPort(daemon.port);
     await waitForStatus(client, reportId, "replied", 20_000);
+    const repliedAt = Date.now();
     const procs = env.procsOf(pmSessionId);
     const last = procs.at(-1)!;
     expect(argValue(last.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
-    // 汇报原文前面是恢复说明和重发说明，同一行
-    const reportText = query<{ text: string }>("SELECT text FROM messages WHERE id = ?", reportId)[0]!.text;
+    // 汇报原文前面是恢复说明和重发说明，同一行；续上的会话已收过清单 v1，末尾只带“没变”尾注
+    const [{ text: reportText, created_at: reportAt }] = query<{ text: string; created_at: number }>("SELECT text, created_at FROM messages WHERE id = ?", reportId) as [{ text: string; created_at: number }];
     expect(reportText.startsWith("【Worker #1 · 快活 的汇报】")).toBe(true);
-    expect(env.stdinTextsOf(last.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${reportText}`]);
+    const resent = (at: string) =>
+      `${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${reportText}\n\n【清单 v1 没变 · ${at}】要你处理 1（最早 ${clockOf(reportAt)} 起） · 在跑 0 · 等用户 0 张卡`;
+    expect([...new Set([clockOf(restartedAt), clockOf(repliedAt)])].map((at) => [resent(at)])).toContainEqual(env.stdinTextsOf(last.pid));
     const s = await client.state();
     expect(messagesOf(s, pm.conversationId).filter((m) => m.sender === "agent" && m.kind === "text").map((m) => m.text)).toContain("汇报收到，验收通过");
     // 只有一行汇报，没有多出 turn_failed

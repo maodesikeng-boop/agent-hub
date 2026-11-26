@@ -1,22 +1,9 @@
-import {
-  isTaskGraphReadyToFinish,
-  isTaskNodeAwaitingUserAction,
-  isTaskNodeUserBlocked,
-  isTaskNodeWaitingDecision,
-  isTaskNodeWaitingPm,
-} from "../../../shared/domain.ts";
-import type { AgentSessionRow, PmId, TaskGraph } from "../../../shared/domain.ts";
-import type { HubCommand, PmActiveGraphSummary } from "../../../shared/hub.ts";
-import { COMPLETED_GRAPHS_MAX_ROWS, COMPLETED_GRAPH_RETENTION_MS, HANDOVER_GRAPHS_MAX_CHARS } from "../../../shared/limits.ts";
+import type { AgentSessionRow, TaskGraph } from "../../../shared/domain.ts";
+import type { HubCommand } from "../../../shared/hub.ts";
+import { COMPLETED_GRAPHS_MAX_ROWS, COMPLETED_GRAPH_RETENTION_MS } from "../../../shared/limits.ts";
 import { isAgentVendor, type AgentVendor } from "../../../shared/vendors.ts";
-import type { Db } from "../../store/index.ts";
-import { charLen } from "./spec.ts";
 import { hydrateGraphs } from "./store.ts";
-import { formatGraphBrief, formatGraphText } from "./text.ts";
 import type { TaskGraphCtx, TaskGraphDbRow } from "./types.ts";
-
-const activeGraphRowsByRecent = (db: Db, pmId: PmId): TaskGraphDbRow[] =>
-  db.all<TaskGraphDbRow>("SELECT * FROM task_graphs WHERE pm_id = ? AND status = 'active' ORDER BY updated_at DESC, id DESC", pmId);
 
 export function activeSnapshotGraphs(g: TaskGraphCtx): TaskGraph[] {
   const rows = g.db.all<TaskGraphDbRow>(
@@ -26,68 +13,6 @@ export function activeSnapshotGraphs(g: TaskGraphCtx): TaskGraph[] {
       ORDER BY g.updated_at DESC, g.id DESC`,
   );
   return hydrateGraphs(g, rows);
-}
-
-function graphSummary(graph: TaskGraph): PmActiveGraphSummary {
-  return {
-    id: graph.id,
-    title: graph.title,
-    totalNodes: graph.nodes.length,
-    doneCount: graph.nodes.filter((n) => n.status === "done").length,
-    runningCount: graph.nodes.filter((n) => n.status === "running").length,
-    waitingPmCount: graph.nodes.filter(isTaskNodeWaitingPm).length,
-    waitingUserCount: graph.nodes.filter(isTaskNodeAwaitingUserAction).length,
-    readyToFinish: isTaskGraphReadyToFinish(graph),
-  };
-}
-
-function graphStatusLine(graph: TaskGraph): string {
-  const keys = (pred: (n: TaskGraph["nodes"][number]) => boolean) => graph.nodes.filter(pred).map((n) => n.key);
-  const runningKeys = keys((n) => n.status === "running");
-  const waitingPmKeys = keys(isTaskNodeWaitingPm);
-  const waitingDecisionKeys = keys(isTaskNodeWaitingDecision);
-  const sandboxApprovalKeys = keys((n) => n.sandboxApproval !== undefined);
-  const userBlockedKeys = keys(isTaskNodeUserBlocked);
-  const doneCount = graph.nodes.filter((n) => n.status === "done").length;
-  const tags: string[] = [`进度 ${doneCount}/${graph.nodes.length}`];
-  if (isTaskGraphReadyToFinish(graph)) tags.push("待交付");
-  if (runningKeys.length > 0) tags.push(`在干：${runningKeys.join("、")}`);
-  if (waitingPmKeys.length > 0) tags.push(`等你处理：${waitingPmKeys.join("、")}`);
-  if (waitingDecisionKeys.length > 0) tags.push(`等用户拍板：${waitingDecisionKeys.join("、")}`);
-  if (sandboxApprovalKeys.length > 0) tags.push(`等用户确认 Worker 沙箱：${sandboxApprovalKeys.join("、")}`);
-  if (userBlockedKeys.length > 0) tags.push(`等用户动手（已挂卡，处理完自动接着派）：${userBlockedKeys.join("、")}`);
-  return `- #${graph.id}「${graph.title}」（${tags.join("；")}）`;
-}
-
-export function pmStatusGraphs(g: TaskGraphCtx, pmId: PmId): { summaries: PmActiveGraphSummary[]; textBlock: string } {
-  const rows = activeGraphRowsByRecent(g.db, pmId);
-  if (rows.length === 0) return { summaries: [], textBlock: "" };
-  const graphs = hydrateGraphs(g, rows);
-  return {
-    summaries: graphs.map(graphSummary),
-    textBlock: `\n活跃任务图：\n${graphs.map(graphStatusLine).join("\n")}`,
-  };
-}
-
-export function liveHandoverSection(g: TaskGraphCtx, pmId: PmId): string | null {
-  const rows = g.db.all<TaskGraphDbRow>("SELECT * FROM task_graphs WHERE pm_id = ? AND status = 'active' ORDER BY id ASC", pmId);
-  if (rows.length === 0) return null;
-  const graphs = hydrateGraphs(g, rows);
-  const byRecent = [...graphs].sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id);
-  const texts = new Map(graphs.map((graph) => [graph.id, formatGraphBrief(graph)]));
-  let used = [...texts.values()].reduce((sum, text) => sum + charLen(text), 0) + (graphs.length - 1) * 2;
-  for (const graph of byRecent) {
-    const brief = texts.get(graph.id)!;
-    for (const candidate of [formatGraphText(graph), formatGraphText(graph, false)]) {
-      const extra = charLen(candidate) - charLen(brief);
-      if (used + extra <= HANDOVER_GRAPHS_MAX_CHARS) {
-        texts.set(graph.id, candidate);
-        used += extra;
-        break;
-      }
-    }
-  }
-  return graphs.map((graph) => texts.get(graph.id)!).join("\n\n");
 }
 
 export function purgeExpiredBatch(g: TaskGraphCtx, nowMs: number, maxRows: number): number {

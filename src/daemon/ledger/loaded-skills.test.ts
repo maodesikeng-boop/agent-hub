@@ -1,3 +1,4 @@
+import { PM_AGENDA_PREAMBLE_HEADING } from "../../shared/pm-agenda.ts";
 // 换代时带上加载过的技能（loaded-skills.ts，docs/skill-carryover-design.md）：加载那一刻记进 loaded_skills；换代（普通、手动、切换厂商）
 // 时从磁盘读正文放进新会话的开场说明，按最近加载排，单个截断、合计放不下的只列名字；带过去的算新一代加载过，一代代往下传；
 // 文件没了跳过并注明；删项目经理时清掉。模型读技能按工具的返回原文认（agent.tool_result 的 outputs）。
@@ -441,9 +442,10 @@ describe("和提问卡交付物、提醒卡交汇（#333、#336）", () => {
     expect(sectionOf(preamble)).toContain("提醒卡旁边的技能");
     expect(cards()).toEqual(before);
     expect(db.get<{ status: string }>("SELECT status FROM user_blockers")!.status).toBe("open");
-    const graphs = preamble.indexOf("## 未完结的任务图");
+    const graphs = preamble.indexOf(PM_AGENDA_PREAMBLE_HEADING);
     expect(graphs).toBeGreaterThan(preamble.indexOf(SECTION));
     expect(preamble.slice(graphs)).toContain(graph.title);
+    expect(preamble.slice(graphs)).toContain("verify：等用户，动手");
   });
 });
 
