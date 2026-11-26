@@ -107,7 +107,8 @@ export function splitEffortSuffix(id: string, efforts: readonly string[]): { bas
   return efforts.includes(effort) ? { base: id.slice(0, dash), effort } : null;
 }
 
-function modelEffortsOf(vendor: AgentVendor, model: string, catalog?: ModelCatalog | null): readonly string[] | null {
+export function modelEffortsOf(vendor: AgentVendor, model: string | null, catalog?: ModelCatalog | null): readonly string[] | null {
+  if (model === null) return catalog?.defaultEfforts ?? null;
   const listed = catalog?.models.find((entry) => entry.id === model);
   if (listed !== undefined) return listed.efforts;
   return SPECS[vendor].models.bundled.find((entry) => entry.id === model)?.efforts ?? null;

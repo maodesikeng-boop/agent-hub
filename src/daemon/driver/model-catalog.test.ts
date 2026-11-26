@@ -753,7 +753,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
       sources: {
         codex: {
           parse: parseCodexModels,
-          fingerprint: () => fp,
+          fingerprint: () => ({ inputs: fp, probeState: "" }),
           query: async () => {
             calls++;
             return answers.shift();
@@ -813,7 +813,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
           parse: parseCodexModels,
           fingerprint: () => {
             fingerprintCalls++;
-            return fp;
+            return { inputs: fp, probeState: "" };
           },
           query: async () => {
             calls++;
@@ -838,22 +838,21 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(fingerprintCalls).toBe(2);
     expect(calls).toBe(1);
 
-    // 过了冷却期：算一次，发现变了就重问（重问完再记一次）
     now = 4_000_000 + MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
     await catalogs.list();
     expect(calls).toBe(2);
-    expect(fingerprintCalls).toBe(4);
+    expect(fingerprintCalls).toBe(5);
 
     // 刚重问完又进冷却期：接着调不再算
     await catalogs.list();
     await catalogs.ensureUsable("codex");
-    expect(fingerprintCalls).toBe(4);
+    expect(fingerprintCalls).toBe(5);
 
     // 冷却期过了、指纹没变：只算一次、不重问
     now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
     await catalogs.list();
     await catalogs.list();
-    expect(fingerprintCalls).toBe(5);
+    expect(fingerprintCalls).toBe(6);
     expect(calls).toBe(2);
   });
 

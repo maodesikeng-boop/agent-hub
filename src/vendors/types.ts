@@ -95,6 +95,7 @@ export interface VendorSpec<Id extends string = string> {
     dirs: readonly string[];
     readonlySecrets: readonly string[];
     catalogWatchPaths: readonly string[];
+    catalogProbeStatePaths?: readonly string[];
     configHome?: { rel: string; env: string };
   };
   models: VendorModelsSpec;

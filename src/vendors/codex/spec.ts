@@ -20,7 +20,8 @@ export default defineVendor({
   home: {
     dirs: [".codex"],
     readonlySecrets: [".codex/auth.json", ".codex/.credentials.json"],
-    catalogWatchPaths: [".codex/models_cache.json", ".codex/auth.json", ".codex/.credentials.json", ".codex/config.toml", ".codex/version.json"],
+    catalogWatchPaths: [".codex/auth.json", ".codex/.credentials.json", ".codex/config.toml"],
+    catalogProbeStatePaths: [".codex/models_cache.json", ".codex/version.json"],
     configHome: { rel: ".codex", env: "CODEX_HOME" },
   },
   models: {

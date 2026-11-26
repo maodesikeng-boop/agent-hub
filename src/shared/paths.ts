@@ -7,6 +7,7 @@ import { ENV_HOME, PM_MEMORY_INDEX_FILE, WIN_EXEC_RESOLVE_CACHE_MAX } from "./li
 import { DATA_DIR_NAME } from "./names.ts";
 import { VENDOR_PATHS } from "../vendors/paths-registry.ts";
 import { VENDOR_LIST } from "../vendors/registry.ts";
+import type { VendorSpec } from "../vendors/types.ts";
 import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "./vendors.ts";
 
 export interface ResolvePathsInput {
@@ -360,12 +361,13 @@ export function resolveVendorExecutables(
   ) as Record<AgentVendor, VendorExecutable>;
 }
 
-export function vendorCatalogWatchFiles(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env): string[] {
-  const { configHome: override, catalogWatchPaths } = vendorSpec(vendor).home;
+export function vendorCatalogWatchFiles(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env) {
+  const home: VendorSpec["home"] = vendorSpec(vendor).home;
+  const { configHome: override, catalogWatchPaths, catalogProbeStatePaths = [] } = home;
   const base = vendorConfigHome(vendor, userHome, env);
-  return catalogWatchPaths.map((rel) =>
-    override && base && rel.startsWith(`${override.rel}/`) ? joinForBase(base, rel.slice(override.rel.length + 1)) : joinForBase(userHome, rel),
-  );
+  const resolveFile = (rel: string) =>
+    override && base && rel.startsWith(`${override.rel}/`) ? joinForBase(base, rel.slice(override.rel.length + 1)) : joinForBase(userHome, rel);
+  return { inputs: catalogWatchPaths.map(resolveFile), probeState: catalogProbeStatePaths.map(resolveFile) };
 }
 
 export function vendorConfigHome(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env): string | null {
@@ -428,18 +430,21 @@ function executableSignature(
   return sig;
 }
 
+export type CatalogFingerprint = { inputs: string; probeState: string };
+
 export function vendorCatalogFingerprint(
   vendor: AgentVendor,
   cmd: string,
   env: Record<string, string | undefined>,
   userHome: string,
   platform: string = process.platform,
-): string {
+): CatalogFingerprint {
   const envPath = platform === "win32" ? envValueCaseInsensitive(env, "PATH") : env.PATH;
   const pathExt = platform === "win32" ? envValueCaseInsensitive(env, "PATHEXT") : undefined;
   const exe = executableSignature(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform), platform, pathExt);
-  const files = vendorCatalogWatchFiles(vendor, userHome, env).map((file) => statSignature(file) ?? `${file}:missing`);
-  return [exe, ...files].join("|");
+  const { inputs, probeState } = vendorCatalogWatchFiles(vendor, userHome, env);
+  const stamp = (file: string) => statSignature(file) ?? `${file}:missing`;
+  return { inputs: [exe, ...inputs.map(stamp)].join("|"), probeState: probeState.map(stamp).join("|") };
 }
 
 export function personaFilePath(personasDir: string, pmId: number): string {

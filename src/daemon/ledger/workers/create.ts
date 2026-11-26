@@ -5,7 +5,7 @@ import type { ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { workerWorktreePath } from "../../../shared/paths.ts";
 import { UserBlockedError, userBlockerKindOf } from "../../../shared/user-blockers.ts";
-import { AGENT_VENDORS, bundledModelCatalog, checkEffort, checkModel, checkModelEffort, effortsFor, isAgentVendor, normalizeEffortInput, splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, modelEffortsOf, normalizeEffortInput, splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
 import { workerBranchName } from "../../../shared/worker.ts";
 import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail } from "../context.ts";
@@ -80,7 +80,7 @@ export function resolveWorkerModelEffort(w: WorkersCtx, input: {
   const overrides = splitModelEffort(vendor, model, normalizedEffort, catalog);
   const inherited = splitModelEffort(vendor, defaults?.model ?? null, defaults?.effort ?? null, catalog);
   const effectiveModel = overrides.model ?? inherited.model;
-  const canInheritEffort = effort === undefined && effortsFor(catalog ?? bundledModelCatalog(vendor), effectiveModel).length !== 0;
+  const canInheritEffort = effort === undefined && modelEffortsOf(vendor, effectiveModel, catalog)?.length !== 0;
   const effective = { model: effectiveModel, effort: overrides.effort ?? (canInheritEffort ? inherited.effort : null) };
   const problem = checkModelEffort(vendor, effective.model, effective.effort, catalog);
   if (problem !== null) throw fail("invalid", problem);
