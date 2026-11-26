@@ -32,6 +32,8 @@ import {
   SELF_RELOAD_UNSUPPORTED_MESSAGE,
   TASK_GRAPH_STATUSES,
   WORKER_CAPABILITY_MODES,
+  WORKER_WAIT_CHUNK_MS,
+  WORKER_WAIT_IDS_MAX,
   hubCommandAllowed,
   hubPath,
   type HubCommand,
@@ -208,6 +210,15 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["workerId"],
     properties: { workerId: workerIdField, last: { type: "integer" }, stats: { type: "boolean" } },
+  },
+  "worker.wait": {
+    type: "object",
+    additionalProperties: false,
+    required: ["workerIds"],
+    properties: {
+      workerIds: { type: "array", minItems: 1, maxItems: WORKER_WAIT_IDS_MAX, items: workerIdField },
+      waitMs: { type: "integer", minimum: 0, maximum: WORKER_WAIT_CHUNK_MS },
+    },
   },
   models: {
     type: "object",

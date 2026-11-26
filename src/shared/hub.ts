@@ -23,6 +23,7 @@ import type { RouterItem, RouterReportLink } from "./router.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { AskDetail, PendingAsk } from "./pending-asks.ts";
 import type { ScheduleId, ScheduleRecord, ScheduleRunSummary } from "./schedule.ts";
+import type { WorkerWaitResult } from "./worker-wait.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
 import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
@@ -54,6 +55,7 @@ export const HUB_COMMANDS = [
   "worker.show",
   "worker.log",
   "worker.search",
+  "worker.wait",
   "models",
   "ask",
   "ask.close",
@@ -94,6 +96,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "worker.show": ["pm"],
   "worker.log": ["pm"],
   "worker.search": ["pm"],
+  "worker.wait": ["pm"],
   models: ["pm"],
   ask: ["pm"],
   "ask.close": ["pm"],
@@ -125,6 +128,7 @@ export const HUB_HELP_ONLY_COMMANDS = {
   "ask.list": `看全部在等用户的卡：${HUB_COMMAND} ask list`,
   "ask.show": `看全文：${HUB_COMMAND} ask show <编号>`,
   "schedule.show": `看全文和最近几次结果：${HUB_COMMAND} schedule show <编号>`,
+  "worker.wait": `要等它开工用 ${HUB_COMMAND} worker wait <编号>`,
 } as const satisfies Partial<Record<HubCommand, string>>;
 
 export type HubHelpOnlyCommand = keyof typeof HUB_HELP_ONLY_COMMANDS;
@@ -170,6 +174,7 @@ export interface HubArgsMap {
   "worker.show": { workerId: WorkerId; task?: boolean; report?: number | "latest" };
   "worker.search": { keywords: string[]; limit?: number };
   "worker.log": { workerId: WorkerId; last?: number; stats?: boolean };
+  "worker.wait": { workerIds: WorkerId[]; waitMs?: number };
   models: { vendor?: AgentVendor; refresh?: boolean };
   ask: {
     text: string;
@@ -465,6 +470,7 @@ interface HubDataMap {
   "worker.show": { worker: WorkerRecord };
   "worker.log": { worker: WorkerRecord; steps: WorkerLogStep[] };
   "worker.search": { hits: WorkerSearchHit[] };
+  "worker.wait": WorkerWaitResult;
   models: { vendors: HubVendorModels[] };
   ask: { messageId: MessageId; graph?: TaskGraph; item?: RouterItem };
   "ask.close": { item: RouterItem } | { messageId: MessageId };

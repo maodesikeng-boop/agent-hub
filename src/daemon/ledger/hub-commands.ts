@@ -249,6 +249,8 @@ export function createLedgerHubCommands(
         return workerView.log(caller, args as HubArgs<"worker.log">);
       case "worker.search":
         return workerView.search(caller, args as HubArgs<"worker.search">);
+      case "worker.wait":
+        return workers.waitSnapshot(caller, args as HubArgs<"worker.wait">);
       case "models": {
         const parsed = modelsArgsSchema.safeParse(args);
         if (!parsed.success) {

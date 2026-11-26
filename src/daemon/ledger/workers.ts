@@ -24,6 +24,7 @@ import { recoverBackgroundWaits } from "./workers/reports.ts";
 import { startIn } from "./workers/start.ts";
 import { clearAllMaxTime, clearMaxTime, recoverTurnTimeouts, turnMaxTimeOf } from "./workers/timers.ts";
 import type { LedgerWorkersOptions, WorkersCtx } from "./workers/types.ts";
+import { waitSnapshot } from "./workers/wait.ts";
 import {
   actionFailedIn,
   getReviewVerifyTask,
@@ -71,6 +72,7 @@ export function createLedgerWorkers(
     resumeUserBlockedWorkerIn: bind(resumeUserBlockedWorkerIn),
     endOpenWorkersIn: bind(endOpenWorkersIn),
     list: bind(list),
+    waitSnapshot: bind(waitSnapshot),
     status: bind(status),
     afterDriverEvent: bind(afterDriverEvent),
     settleTurn: bind(settleTurn),

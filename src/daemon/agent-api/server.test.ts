@@ -59,6 +59,7 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "worker.show": { workerId: 3 },
   "worker.log": { workerId: 3, last: 10 },
   "worker.search": { keywords: ["登录", "bug"], limit: 5 },
+  "worker.wait": { workerIds: [12], waitMs: 5_000 },
   ask: { text: "用 A 还是 B？" },
   "ask.close": { itemId: 52 },
   "ask.list": {},
