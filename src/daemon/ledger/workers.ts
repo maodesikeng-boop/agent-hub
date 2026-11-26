@@ -56,6 +56,27 @@ export function createLedgerWorkers(
       fn(w, ...args);
   return {
     ...w.sandboxApprovals,
+    appApprovals: w.appApprovals.broker,
+    decideAppApproval: w.appApprovals.store.decide,
+    approvalSnapshot() {
+      const pendingSandboxApprovals = w.sandboxApprovals.listPendingSummaries();
+      const pendingAppApprovals = w.appApprovals.store.listPendingSummaries();
+      return {
+        ...(pendingSandboxApprovals.length > 0 ? { pendingSandboxApprovals } : {}),
+        ...(pendingAppApprovals.length > 0 ? { pendingAppApprovals } : {}),
+      };
+    },
+    recoverLifecycles() {
+      w.appApprovals.store.endAllAtStartup();
+      recoverWorktrees(w);
+      recoverBackgroundWaits(w);
+      recoverTurnTimeouts(w);
+    },
+    closeLifecycles() {
+      w.appApprovals.broker.close();
+      clearAllMaxTime(w);
+      sessions.clearAllStreaming();
+    },
     startIn: bind(startIn),
     dispatchStepWorkerIn: bind(dispatchStepWorkerIn),
     sendIn: bind(sendIn),
@@ -82,9 +103,7 @@ export function createLedgerWorkers(
     recordReviewSnapshot: bind(recordReviewSnapshot),
     getReviewVerifyTask: bind(getReviewVerifyTask),
     onReviewVerified: bind(onReviewVerified),
-    recoverWorktrees: bind(recoverWorktrees),
     noticeUnresentShutdownTurnsIn: bind(noticeUnresentShutdownTurnsIn),
-    recoverBackgroundWaits: bind(recoverBackgroundWaits),
     actionFailedIn: bind(actionFailedIn),
     workerStartFolder: bind(workerStartFolder),
     workerPrTarget: bind(workerPrTarget),
@@ -93,9 +112,7 @@ export function createLedgerWorkers(
     workerSession: bind(workerSession),
     launchContextFor: bind(launchContextFor),
     clearMaxTime: bind(clearMaxTime),
-    clearAllMaxTime: bind(clearAllMaxTime),
     turnMaxTimeOf: bind(turnMaxTimeOf),
-    recoverTurnTimeouts: bind(recoverTurnTimeouts),
     maxTimeTimers: w.maxTimeTimers,
     isWorktreeCleaned: bind(isWorktreeCleaned),
     listEndedWorktreeWorkers: bind(listEndedWorktreeWorkers),

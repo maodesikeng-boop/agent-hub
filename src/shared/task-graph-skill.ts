@@ -37,7 +37,7 @@ export function taskGraphSkillBody(): string {
   - 要用户拍板的事：用 \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\` 把拍板卡挂在该步骤上（${ASK_CARD_WHERE}）；用户点完后定案与意见直接发给该步未收工的 Worker 接着干（步骤切回 \`running\`），全程不叫醒你，定案记在步骤上。用户若在聊天里口头答复，用 \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\` 记下，效果相同；
   - 认可偏离或你已手动完成：\`${HUB} graph done <步骤> [--stdin]\` 放行（正文作为补充转交给下一步）；
   - **换人接手**（出错、额度用完、对话太长、厂商不可用或该换一家）：直接 \`${HUB} worker start --node <步骤> [--vendor …] [--model …] [--effort …] [--stdin]\`。还挂着的旧 Worker 自动收工且步骤不标完成；新 Worker 自动继承职责、审查清单、上游交棒、前任的工作目录与分支，以及最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径，并把新的厂商/模型写回步骤。
-- 若步骤明确需要 Computer Use，且厂商和系统支持，可在步骤设置 \`noOuterSandbox: true\`，同时用 \`caps: "custom"\` 和 \`allow\` 明确挂载该能力。Worker 等用户在工作台确认后才开工。
+- 若步骤明确需要 Computer Use，且厂商和系统支持，可在步骤设置 \`noOuterSandbox: true\`，同时用 \`caps: "custom"\` 和 \`allow\` 明确挂载该能力。Worker 等用户在工作台确认后才开工。Computer Use 控制每个应用前都要等用户在工作台确认；用户拒绝时，换个办法或汇报。
 - **计划变了**：随时 \`${HUB} graph patch\`（用 \`addSteps\`、\`updateSteps\`、\`removeSteps\`、\`skipSteps\` 或更新 \`goal\`；在干或已完成的步骤不能直接 \`updateSteps\`）。原本没建图、做着发现要分段或加审查的，随时补建一张图。
 - **全部步骤完成后待交付**：最后一步完成时图不会自动结束，你会收到交付单（各步结果、改动文件名单与最后一步交棒）。若缺审查或证据不够，仍可 \`${HUB} graph patch\` 补步骤或打回重做；核对证据、按项目约定和用户要求做完交付（比如合并 PR；没要求合并的不合并）后，用 \`${HUB} graph finish\` 收尾（交付摘要自动同步给总助）。
 

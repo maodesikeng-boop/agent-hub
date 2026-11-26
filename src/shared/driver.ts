@@ -4,6 +4,7 @@ import type { AgentSessionRow, AgentStep, ApiRetryInfo, MessageId, RateLimitInfo
 import type { SessionCapabilities } from "./pm-capabilities.ts";
 import type { ReadonlyPolicy } from "./readonly-policy.ts";
 import type { WorkerOuterSandboxMode } from "./sandbox-approval.ts";
+import type { AppApprovalGate } from "./app-approval.ts";
 import type { SessionStore } from "./store.ts";
 import type { WriteScope } from "./write-scope.ts";
 import { HUB_COMMAND } from "./names.ts";
@@ -334,6 +335,8 @@ export interface DriverOptions {
   canDeliverSystemMessage?: (sessionId: SessionId, messageId: MessageId) => boolean;
   /** Called when a session finishes an in-progress startup, delivery, or turn and becomes idle in the driver. */
   onSessionQuiescent?: (sessionId: SessionId) => void;
+  /** Receives vendor app-permission requests from processes launched with outerSandbox "vendor_only"; absent means decline. */
+  appApprovals?: AppApprovalGate;
   env?: Record<string, string> | (() => Record<string, string>);
   pmMemoryDir?: string;
   log?: (line: string) => void;

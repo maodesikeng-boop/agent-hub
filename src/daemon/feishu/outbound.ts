@@ -59,7 +59,7 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
       const { message } = change.data;
       if (isFailedUserTurn(message)) return ctx.chatOfConversation(message.conversationId) === null ? [] : [{ kind: "turn_failed", conversationId: message.conversationId, message }];
       const ask = askOf(message);
-      if (ask === null || (ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null)) return [];
+      if (ask === null || ask.appApprovalRef !== undefined || (ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null)) return [];
       if (ask.answered === true || ask.closed === true) {
         return [{ kind: "ask_settled", conversationId: message.conversationId, message }];
       }
@@ -101,6 +101,7 @@ function messageIntents(message: Message): FeishuOutboundIntent[] {
   if (message.sender === "agent") {
     if (isHandoverTraffic(message)) return [];
     const ask = askOf(message);
+    if (ask?.appApprovalRef !== undefined && (ask.answered === true || ask.closed === true)) return [];
     if (ask !== null) return [{ kind: "ask_card", conversationId, message, deliverables: ask.deliverables ?? [] }];
     if (message.text.trim() === "" && sentFilesOf(message).length === 0) return [];
     return [{ kind: "agent_text", conversationId, message, files: sentFilesOf(message) }];

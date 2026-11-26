@@ -1,3 +1,4 @@
+import type { createWorkerAppApprovals } from "./app-approvals.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, WorkerId } from "../../../shared/domain.ts";
 import type { WorkerHubStatus } from "../../../shared/hub.ts";
 import type { ReviewTarget, ReviewVerifyResult } from "../../../shared/review.ts";
@@ -78,6 +79,7 @@ export interface WorkersCtx {
   projects: LedgerProjects;
   options: LedgerWorkersOptions;
   sandboxApprovals: SandboxApprovalStore;
+  appApprovals: ReturnType<typeof createWorkerAppApprovals>;
   /** Max message id at turn start, in memory only, so a PM message sent mid-turn cannot make the last reply look older than the previous turn's text. */
   turnStarts: Map<SessionId, MessageId>;
   /** Turns interrupted by endIn are not reported back because the PM stopped them itself. */

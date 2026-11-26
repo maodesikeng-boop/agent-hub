@@ -1,3 +1,4 @@
+import { createCodexAppApprovalState } from "./app-approval.ts";
 import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { checklistLaunchArgs } from "../_common/checklist.ts";
 import codexSpec from "./spec.ts";
@@ -394,7 +395,12 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       files.env,
     );
     const { baseProc, resolveExited } = this.createBaseProc<StartupOutcome>(child, resume, row, files);
+    const gate = this.opts.appApprovals;
+    const computerUseServers = row.role === "worker" && !launchConfig.readonly && files.outerSandbox === "vendor_only" && gate !== undefined
+      ? (files.capabilities?.allow.mcp ?? []).filter((name) => codexSpec.capabilities.builtInSandbox?.computerUseCapabilities.includes(`mcp:${name}`))
+      : [];
     const proc: Proc = {
+      appApprovals: gate !== undefined && computerUseServers.length > 0 ? { gate, computerUseServers, state: createCodexAppApprovalState() } : null,
       ...baseProc,
       launchConfig,
       defaultModel,
@@ -518,6 +524,11 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
   ): void {
     try {
       const at = this.beginProcessClose(st, proc);
+      if (proc.appApprovals !== null) {
+        const { gate, state } = proc.appApprovals;
+        for (const wait of state.waits.values()) wait.abort();
+        gate.processEnded(st.id, state.processKey);
+      }
       st.turnUsageStepSeq = 0;
       st.lastTurnResultUsage = null;
       st.lastTurnContext = null;
