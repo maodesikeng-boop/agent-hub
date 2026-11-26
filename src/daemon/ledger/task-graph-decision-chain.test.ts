@@ -102,6 +102,24 @@ describe("S9: one decision chain from Worker to PM to user", () => {
     ).toThrow(/ask --node/);
   });
 
+  it("requires graph done to release a checkpoint without a user card and clears the pending flag", async () => {
+    const graph = planThenImpl("还没升级的检查点");
+    const wid = await finishPlan(graph.id);
+
+    expect(() => f.ledger.hubCall(f.lin.sessionId, "graph.decide", {
+      graphId: graph.id, nodeKey: "plan", choice: CONFIRM_PASS_OPTION,
+    })).toThrow(/graph done plan/);
+    expect(f.showGraph(graph.id).nodes[0]).toMatchObject({ status: "waiting", waitingFor: "pm", activeWorkerId: wid });
+
+    f.ledger.hubCall(f.lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "plan" });
+    const stored = f.db.get<{ artifact_json: string }>(
+      "SELECT artifact_json FROM task_graph_steps WHERE graph_id = ? AND node_key = 'plan'", graph.id,
+    );
+    const artifact: unknown = JSON.parse(stored?.artifact_json ?? "null");
+    expect(artifact).toMatchObject({ summary: "方案写好了" });
+    expect(artifact).not.toHaveProperty("checkpointPending");
+  });
+
   it("U6 (regression): a clean report on a step without confirm hands off to the next step and wakes nobody", async () => {
     const graph = f.createGraph({
       title: "顺利交棒",

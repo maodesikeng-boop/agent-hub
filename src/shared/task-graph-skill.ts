@@ -52,7 +52,7 @@ export function taskGraphSkillBody(): string {
 - \`${HUB} graph skip <步骤> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一步（不连带跳过下游，下游追溯最近未跳过上游的交棒与目录）/ 取消整张图（自动停掉图里所有在跑的 Worker）
 - \`${HUB} graph finish [<图编号>] [--unmerged-ok] --stdin\`：所有步骤完成后结束这张图，正文是交付摘要（自动同步给总助）；分支上有未合并的 PR 时默认拦下提醒，确认不合并加 \`--unmerged-ok\`
 - \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：在任意未完步骤上挂拍板卡（${ASK_CARD_WHERE}），正文是问题与背景摘要，要用户看的文件用 \`--file\` 挂在卡片下面并记进该步的交付物；普通步骤的定案直接交给挂着的 Worker；没有活跃 Worker 时标完并推进下游。检查点按上面的通过和打回规则处理
-- \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时记下定案；该步挂着未收工 Worker 时同样直接发给它接着干，否则推进下游
+- \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\`：记下用户在聊天里的口头答复。已有用户拍板卡的检查点按通过或打回处理；还在等你审的检查点用 \`${HUB} graph done\` 放行或 \`${HUB} worker send\` 打回。普通步骤有未收工 Worker 时，定案直接发给它
 - 步骤拍板卡会一直等用户答复，给 Worker 续发消息、收汇报或改步骤状态都不会关掉它。要撤回过时的卡，用 \`${HUB} ask close --message <消息编号>\`，编号见 \`${HUB} graph show\`；再次在同一步挂卡会替换旧卡。
 - \`${HUB} worker start --node <步骤> …\`：给等你处理的步骤换人或手动派人（\`--title\` 和正文都可省略，正文作为补充说明）
 - \`${HUB} worker end <编号>\`：只停掉这个 Worker，不会把步骤标完成；未完成的步骤会停在 \`waiting\` 等你处理（顺利完成的步骤由后台自动收工）

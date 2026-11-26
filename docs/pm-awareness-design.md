@@ -11,11 +11,8 @@ This is the synthesis of two independent designs: design A (Worker #1342, branch
 ### Files to review
 
 - This design document: root causes, the status list, the decision chain, waits, slots, how they join the friction plan, cache impact, acceptance scenarios, and the PR split.
-- Skeleton for the status list: [`src/shared/pm-agenda.ts`](../src/shared/pm-agenda.ts) (types and the Chinese text the PM reads) and [`src/daemon/ledger/pm-agenda.ts`](../src/daemon/ledger/pm-agenda.ts) (the ledger projection, the footer on every PM wake, and the one notice after a handover), with [`migrations/0057_pm_agenda.sql`](../migrations/0057_pm_agenda.sql).
 - Token measurements behind the cost section: `/tmp/pm-awareness/probe-synth/` (today's `hub` read sizes on a 7-graph fixture, code-host outputs for PR #461, and the proposed list and footers).
-- Skeleton for slots: [`src/daemon/ledger/task-graphs/slots.ts`](../src/daemon/ledger/task-graphs/slots.ts) and [`migrations/0058_step_slots.sql`](../migrations/0058_step_slots.sql).
-- Skeleton for waits: [`src/shared/pm-watch.ts`](../src/shared/pm-watch.ts), [`src/daemon/ledger/pm-watches.ts`](../src/daemon/ledger/pm-watches.ts), and [`migrations/0059_pm_watches.sql`](../migrations/0059_pm_watches.sql).
-- Skeleton for reminders: [`src/daemon/ledger/pm-agenda-reminders.ts`](../src/daemon/ledger/pm-agenda-reminders.ts).
+- Section 7 lists the planned files for the status list (PR-6), slots (PR-7), waits (PR-8), and reminders (PR-9). Those files land with their respective PRs.
 - Skeleton for the web delivery row (D-A2 option 1): `graphDeliveryOf` in [`src/web/work-status.ts`](../src/web/work-status.ts).
 - The exhaustive system-event table in [`src/daemon/ledger/vendor-switch-context.ts`](../src/daemon/ledger/vendor-switch-context.ts), which turns a missed event kind into a compile error.
 - Acceptance tests, listed in Section 7, with the failing baseline in Section 8.

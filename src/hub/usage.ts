@@ -300,7 +300,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "decide",
     cli: "graph decide",
     usage: `  ${hub} graph decide <节点> --choice <选项> [--note <说明>] [--graph <图编号>]
-                                                          记录用户在对话中的口头拍板（挂着未收工 Worker 时直接发给该 Worker 接着干，否则步骤完了推进下游）`,
+                                                          记录用户在对话中的口头拍板。检查点须已有用户拍板卡；还在等项目经理审的检查点用 graph done 放行`,
   },
   {
     command: "graph.skip",

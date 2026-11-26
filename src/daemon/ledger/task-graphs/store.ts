@@ -32,9 +32,14 @@ function pendingAsk(ask: AskMeta | null): boolean {
   return ask?.gateRef !== undefined && ask.answered !== true && ask.closed !== true;
 }
 
-export function hasPendingStepAsk(g: TaskGraphCtx, node: TaskNodeDbRow): boolean {
+export function pendingStepAskOf(g: TaskGraphCtx, node: TaskNodeDbRow): AskMeta | null {
   const message = node.gate_ask_message_id === null ? null : g.messages.getMessage(node.gate_ask_message_id);
-  return message !== null && pendingAsk(askOf(message));
+  const ask = message === null ? null : askOf(message);
+  return pendingAsk(ask) ? ask : null;
+}
+
+export function hasPendingStepAsk(g: TaskGraphCtx, node: TaskNodeDbRow): boolean {
+  return pendingStepAskOf(g, node) !== null;
 }
 
 function pendingStepAskIds(db: Db, rows: readonly Pick<TaskNodeDbRow, "gate_ask_message_id">[]): ReadonlySet<MessageId> {

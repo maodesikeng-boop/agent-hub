@@ -973,6 +973,9 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
 
     const show = () => ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id });
     expect(show().text).toContain(`[拍板卡] #${askMessageId}`);
+    expect(() => ledger.hubCall(lin.sessionId, "graph.decide", {
+      graphId: graph.id, nodeKey: "impl", choice: "Later",
+    })).toThrow(/--choice/);
     if (status === "done") {
       ledger.decideTaskNode(graph.id, "impl", { clientId: "late-answer", askMessageId, choice: CONFIRM_PASS_OPTION });
     } else {

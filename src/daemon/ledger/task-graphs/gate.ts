@@ -24,6 +24,7 @@ import {
   isUserBlocked,
   lastReportText,
   loadGraph,
+  pendingStepAskOf,
   publishGraphIn,
   pushSlimGraphIn,
   requireStepRow,
@@ -231,18 +232,22 @@ export function decideIn(
   if (note !== null && charLen(note) > MAX_DECISION_NOTE_CHARS) throw fail("invalid", `补充说明最多 ${MAX_DECISION_NOTE_CHARS} 字`);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: false });
   const node = requireStepRow(g.db, graphRow.id, nodeKey);
-  const pendingAsk = hasPendingStepAsk(g, node);
-  if (pendingAsk && isStoredCheckpoint(node) && choice !== CONFIRM_PASS_OPTION && choice !== CONFIRM_REJECT_OPTION) {
+  const pendingAsk = pendingStepAskOf(g, node);
+  const checkpoint = isStoredCheckpoint(node);
+  if (pendingAsk !== null && (checkpoint || pendingAsk.gateRef?.checkpoint === true) && choice !== CONFIRM_PASS_OPTION && choice !== CONFIRM_REJECT_OPTION) {
     throw fail("invalid", `步骤「${nodeKey}」当前是检查点拍板卡，--choice 请传「${CONFIRM_PASS_OPTION}」或「${CONFIRM_REJECT_OPTION}」`);
   }
   if (node.status === "done" || graphRow.status !== "active") {
     const messageId = node.gate_ask_message_id;
-    if (messageId !== null && pendingAsk) {
+    if (messageId !== null && pendingAsk !== null) {
       const { graph } = settleInactiveCardIn(g, p, graphRow.id, node, messageId, choice, note);
       return { text: `步骤「${nodeKey}」已记录定案「${choice}」。`, data: { graph } };
     }
     if (graphRow.status !== "active") throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
     return { text: `步骤「${nodeKey}」此前已经完了。`, data: { graph: loadGraph(g, graphRow.id)! } };
+  }
+  if (pendingAsk === null && checkpoint && node.status === "waiting" && node.waiting_for === "pm") {
+    throw fail("conflict", `步骤「${nodeKey}」的检查点在等你审，目前没有用户拍板卡。通过用 ${HUB_COMMAND} graph done ${nodeKey} --graph ${graphRow.id}，打回用 ${HUB_COMMAND} worker send <编号>`);
   }
   const res = executeStepDecisionIn(g, p, graphRow, node, { choice, note, decidedBy: "pm", callerSession: caller, context });
   return { text: decideReplyText(nodeKey, choice, graphRow.id, res), data: { graph: res.graph } };

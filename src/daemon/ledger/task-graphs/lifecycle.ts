@@ -113,7 +113,7 @@ export function markStepDoneIn(g: TaskGraphCtx, p: Pending, node: TaskNodeDbRow,
             pm_note = ?,
             updated_at = ?
       WHERE id = ?`,
-    serializeArtifact(artifact, isStoredCheckpoint(node)),
+    serializeArtifact(artifact, false),
     nextPmNote,
     t,
     node.id,
