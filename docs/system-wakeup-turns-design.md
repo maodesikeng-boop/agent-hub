@@ -34,8 +34,8 @@ The ledger tests exercise persisted inputs and checklist messages. The browser c
 | S4 | Same as S3, on a vendor that injects messages into a running turn (Claude, Codex, Pi). | The vendor reads the wakeup inside the running turn. | The row shows inside the running card; the card does not close. | same |
 | S5 | The PM is idle. | A Task Graph step finishes, or the user answers a Router decision. | A collapsed `Task graph` or `Router` row on the left, which opens to the full text; then the PM's new card. Stored wakeups from before the upgrade render the same way. | `message-flow.test.tsx`, `asks.test.ts` |
 | S6 | The PM is running. | A Worker report arrives (Decision 2, Option A). | Same as S3: the card stays live and the report card waits below it. | `message-flow.test.tsx` |
-| S7 | A PM or Worker on Agy or Pi runs a turn with several steps. | The turn ends. | While running, only the action line with its timer; after the turn, `Worked for`. No empty list. The prompt carries no checklist rule. | `message-flow.test.tsx`, `prompt.test.ts`, `progress-pipeline.test.ts` |
-| S8 | A PM or Worker on any other vendor gets a turn with three or more steps. | It starts work. | Its prompt asks it to list the steps with its own checklist tool and tick each off; the card shows the list. | `prompt.test.ts`, `vendor-registry.test.ts` |
+| S7 | Any turn has no checklist updates. | The turn ends. | While running, only the action line with its timer. After the turn, `Worked for`. No empty list. | `message-flow.test.tsx`, `progress-pipeline.test.ts` |
+| S8 | A PM or Worker on any vendor will edit a file or run two or more commands. | It starts work. | The prompt requires a checklist and identifies the native tool or `hub checklist`. The card shows each update. See [Progress checklist in every multi-step turn](turn-checklist-rule-design.md). | `prompt-checklist.test.ts`, `vendor-registry.test.ts` |
 | S9 | The PM is running. | The user types a new message. | Unchanged: a right-aligned bubble that starts a new card. | `message-flow.test.tsx` |
 
 ### 2. Current state
@@ -49,7 +49,7 @@ All line references are at `f6ab7798`.
 - [Measured] No prompt asks for a checklist. `grep -n "清单" src/daemon/prompt.ts` finds no rule for listing steps. Repro on this commit for a plain tool turn: `{"steps":null,"ordinaryTools":1}`.
 - [Inferred] The user stop rule drops untaken source-`user` messages (`src/daemon/driver/base-driver.ts:676`, `src/daemon/driver/stop-untaken.ts:28`), so today a user pressing stop also cancels a queued graph wakeup. With source `system`, it is requeued instead.
 
-Checklist events per vendor (`src/vendors/*/spec.ts`, `checklist.sources`), with the samples in `test/fixtures/progress/`:
+Checklist events per vendor when this design was written, with the samples in `test/fixtures/progress/`. See [Progress checklist in every multi-step turn](turn-checklist-rule-design.md) for the later Antigravity and Pi paths.
 
 | Vendor | Checklist source | Update shape | Sample | Two-turn evidence |
 |---|---|---|---|---|
@@ -84,7 +84,7 @@ Recommendation: the second design. The stamp reuses a conversation message ID an
 
 Recommendation: the first design. At turn end the full snapshot becomes the next baseline. The ledger removes an item from the baseline when it first becomes visible in the new turn. A repeated title stays visible when its status returns to completed.
 
-**Prompt rule.** One rule line built from each vendor's `checklist.promptTool`, added to both the PM and Worker prompts only when the vendor reports checklist events. A single generic sentence for every vendor would tell Agy and Pi agents to use a tool they do not have.
+**Prompt rule.** Both PM and Worker prompts now use the [turn checklist rule](turn-checklist-rule-design.md). It names the vendor's own tool or gives the `hub checklist` syntax.
 
 ### 4. Performance and bounds
 
@@ -122,7 +122,7 @@ None of the four cache rules gains a new in-memory collection.
 - `src/web/turn-boundaries.ts`: `systemInputPlacement` and `placeSystemInputs`, applied by `groupMessages` before grouping. `TurnView` renders in-turn Worker lines with the same component they use outside a turn.
 - `src/web/components/Messages.tsx`: `pm.wakeup` renders through the existing `CollapsibleEvent`, like `ScheduleRun` (Decision 1, Option A).
 - `src/vendors/types.ts` and the six checklist vendors' `spec.ts`: `checklist.promptTool`. The implementation confirms each name against a recording.
-- `src/daemon/prompt.ts`: `checklistRuleNote`, added to `buildLaunchPrompt` and `workerRulesSection`.
+- `src/daemon/prompt.ts`: `checklistRuleSection` in both launch prompts. It replaces the original one-line rule.
 - Tests: `src/shared/taken-input.test.ts`, `src/shared/checklist.test.ts`, `src/daemon/ledger/checklist.test.ts`, `src/daemon/ledger/system-wakeups.test.ts`, `src/daemon/ledger/taken-inputs.test.ts`, `src/web/turn-boundaries.test.ts`, `src/web/message-flow.test.tsx`, `src/daemon/prompt.test.ts`, `src/daemon/progress-pipeline.test.ts`, `src/vendors/vendor-registry.test.ts`.
 
 ### 8. Verification

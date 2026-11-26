@@ -17,6 +17,7 @@ export interface PendingEntry {
   text: string;
   prefixes: string[];
   resend: boolean;
+  rider?: true;
 }
 
 export interface BatchNotes {
@@ -67,6 +68,8 @@ export interface BaseBatch {
   processing: boolean;
   midTurn?: boolean;
   source: MessageSource;
+  riders?: PendingEntry[];
+  entries?: PendingEntry[];
   stopped?: boolean;
   released?: "cancelled" | "requeued" | null;
 }
@@ -90,11 +93,9 @@ export interface BaseProc<TOutcome = StartupOutcome> {
   exited: Promise<void>;
 }
 
-export interface PendingBatchParts {
+export interface PendingBatchParts extends Pick<BaseBatch, "messageIds" | "source" | "riders" | "entries"> {
   body: { prefixes: string[]; text: string };
-  messageIds: MessageId[];
   command: boolean;
-  source: MessageSource;
 }
 
 export interface DriverHealthSnapshot {
@@ -103,45 +104,56 @@ export interface DriverHealthSnapshot {
 }
 
 export function entryParts(entry: PendingEntry): { prefixes: string[]; text: string } {
-  return { prefixes: entry.resend ? [RESEND_NOTE, ...entry.prefixes] : entry.prefixes, text: entry.text };
+  return { prefixes: entry.resend && !entry.rider ? [RESEND_NOTE, ...entry.prefixes] : entry.prefixes, text: entry.text };
 }
 
 export function flatEntryText(entry: PendingEntry): string {
   const text = [...entry.prefixes, entry.text].join("\n");
-  return entry.resend ? `${RESEND_NOTE}\n\n${text}` : text;
+  return entry.resend && !entry.rider ? `${RESEND_NOTE}\n\n${text}` : text;
 }
 
-/** Queued user messages merge into one batch, but never across a command so ordering is preserved. */
+/**
+ * Queued user messages merge into one batch, but never across a command so ordering is preserved.
+ * Riders never form a batch alone: with only riders pending this returns null. Otherwise every pending rider joins the
+ * taken batch that is not a command, its message ids first and its text as a prefix ahead of the batch's own prefixes,
+ * and leaves `remaining`. A command batch leaves riders queued for the batch after it.
+ */
 export function takePendingBatch(
   pending: PendingEntry[],
   isCommand: (text: string) => boolean,
 ): { remaining: PendingEntry[]; taken: PendingBatchParts } | null {
-  let body: { prefixes: string[]; text: string } | null = null;
-  let messageIds: MessageId[] = [];
+  let body: { prefixes: string[]; text: string };
+  let main: PendingEntry[];
   let command = false;
-  let remaining = pending;
-  const users = pending.filter((e) => e.source === "user");
+  let remaining: PendingEntry[];
+  const users = pending.filter((e) => e.source === "user" && !e.rider);
   if (users.length > 0) {
     const firstCommand = users.findIndex((e) => isCommand(e.text));
     command = firstCommand === 0;
-    const take = command ? users.slice(0, 1) : firstCommand === -1 ? users : users.slice(0, firstCommand);
-    remaining = pending.filter((e) => !take.includes(e));
-    body = take.length === 1 ? entryParts(take[0]!) : mergeUserTexts(take.map(flatEntryText));
-    messageIds = take.flatMap((e) => e.messageIds);
-  } else if (pending.length > 0) {
-    const [entry, ...rest] = pending;
-    remaining = rest;
-    body = entryParts(entry!);
-    messageIds = entry!.messageIds;
+    main = command ? users.slice(0, 1) : firstCommand === -1 ? users : users.slice(0, firstCommand);
+    remaining = pending.filter((e) => !main.includes(e));
+    body = main.length === 1 ? entryParts(main[0]!) : mergeUserTexts(main.map(flatEntryText));
+  } else {
+    const entry = pending.find((e) => !e.rider);
+    if (entry === undefined) return null;
+    main = [entry];
+    remaining = pending.filter((e) => e !== entry);
+    body = entryParts(entry);
   }
-  if (body === null) return null;
+  const riders = command ? [] : remaining.filter((e) => e.rider);
+  if (riders.length > 0) {
+    remaining = remaining.filter((e) => !e.rider);
+    body = { ...body, prefixes: [...riders.map(flatEntryText), ...body.prefixes] };
+  }
+  const entries = [...riders, ...main];
   return {
     remaining,
     taken: {
       body,
-      messageIds,
+      messageIds: entries.flatMap((e) => e.messageIds),
       command,
       source: users.length > 0 ? "user" : "system",
+      ...(riders.length > 0 ? { riders, entries } : {}),
     },
   };
 }

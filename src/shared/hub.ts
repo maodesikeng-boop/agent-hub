@@ -18,6 +18,7 @@ import type {
   WorkerId,
 } from "./domain.ts";
 import type { HubFileArg } from "./deliverables.ts";
+import type { HubChecklistRequest } from "./hub-checklist.ts";
 import type { WorkerCapabilityMode } from "./pm-capabilities.ts";
 import type { RouterItem, RouterReportLink } from "./router.ts";
 import { TEXT_LIMITS } from "./text-limits.ts";
@@ -41,6 +42,7 @@ export const STDIN_SHELL_NOTE = `bash、zsh 用 \`--stdin <<'EOF'\`（引号不�
 
 export const HUB_COMMANDS = [
   "status",
+  "checklist",
   "project.create",
   "project.attach",
   "project.detach",
@@ -81,6 +83,7 @@ export type HubCommand = (typeof HUB_COMMANDS)[number];
 
 export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]>> = {
   status: ["pm", "worker"],
+  checklist: ["pm", "worker"],
   "project.create": ["pm"],
   "project.attach": ["pm"],
   "project.detach": ["pm"],
@@ -143,6 +146,7 @@ export function hubPath(command: HubCommand): string {
 
 export interface HubArgsMap {
   status: Record<string, never>;
+  checklist: HubChecklistRequest;
   "project.create": { folder: string; name?: string; description?: string };
   "project.attach": { folder: string };
   "project.detach": { folder: string };
@@ -446,6 +450,7 @@ export interface HubVendorModels {
 
 interface HubDataMap {
   status: PmHubStatus | WorkerHubStatus;
+  checklist: null;
   "project.create": { project: Project; mainFolder: ProjectFolder };
   "project.attach": { project: Project; folder: ProjectFolder };
   "project.detach": { project: Project; folder: ProjectFolder };

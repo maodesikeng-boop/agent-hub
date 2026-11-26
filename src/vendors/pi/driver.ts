@@ -137,6 +137,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       text: input.text,
       prefixes: input.prefixes ?? [],
       resend: input.resend ?? false,
+      ...(input.rider ? { rider: true } : {}),
     };
     const parts = entryParts(entry);
     const problem = checkPiTurnText(combinePiTurnText(parts.text, parts.prefixes, this.composer.buildUserContent));
@@ -289,7 +290,10 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
   protected takeBatch(st: SessionState): Batch | null {
     const taken = this.takePendingEntryBatch(st);
     if (!taken) return null;
-    return this.#batchOf(st, taken.body, taken.messageIds, taken.command, taken.source);
+    const batch = this.#batchOf(st, taken.body, taken.messageIds, taken.command, taken.source);
+    batch.riders = taken.riders;
+    batch.entries = taken.entries;
+    return batch;
   }
 
   #batchOf(

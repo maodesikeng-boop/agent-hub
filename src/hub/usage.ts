@@ -1,4 +1,5 @@
 import { PM_MODES } from "../shared/domain.ts";
+import { HUB_CHECKLIST_USAGE } from "../shared/hub-checklist.ts";
 import {
   ASK_CARD_WHERE,
   ENV_HUB_SOCK,
@@ -43,6 +44,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     cli: "status",
     usage: `  ${hub} status                                              我是谁、我的项目、文件夹、worktree 准备命令和活跃的任务图`,
   },
+  { command: "checklist", group: "checklist", cli: "checklist", usage: HUB_CHECKLIST_USAGE },
   {
     command: "project.create",
     group: "project",

@@ -2,16 +2,18 @@ import { APP_APPROVAL_SETTLED_LABELS } from "../../shared/app-approval.ts";
 import { isVisibleSystemInput } from "../../shared/taken-input.ts";
 import { enqueueSystemWakeupIn, type SystemWakeupInput } from "./system-wakeups.ts";
 import { createLedgerChecklist } from "./checklist.ts";
+import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 import type { TurnCompletionFacts, TurnEndedEvent } from "./turn-completions.ts";
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { mergeDeliverables, type Deliverable, type HubFileArg } from "../../shared/deliverables.ts";
-import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
+import { agentMessageDedupeKey, canTransitionMessage, isChecklistReminder, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
-import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
+import type { AgentChecklistEvent, DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
+import type { HubChecklistRequest } from "../../shared/hub-checklist.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
 import type { ComposerTarget, PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
 import { DELIVERABLES_PER_CARD_MAX, MESSAGE_PAGE_SIZE, REWIND_SCAN_LIMIT } from "../../shared/limits.ts";
@@ -57,6 +59,7 @@ export interface LedgerMessagesOptions {
   assertUserCanPost?: (conversationId: ConversationId) => void;
   afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
   onIndependentAskCreated?: (p: Pending, session: AgentSessionRow, message: Message, options?: string[]) => void;
+  onHubChecklist?: (p: Pending, session: AgentSessionRow, event: AgentChecklistEvent) => void;
 }
 
 function insertAgentMessage(
@@ -137,7 +140,7 @@ export function createLedgerMessages(
       id,
     );
     const updated = getMessage(id)!;
-    p.changes.push({ type: "message.updated", data: { message: updated } });
+    if (!isChecklistReminder(updated)) p.changes.push({ type: "message.updated", data: { message: updated } });
     return updated;
   };
 
@@ -242,6 +245,17 @@ export function createLedgerMessages(
   };
 
   const checklist = createLedgerChecklist(ctx, (p, session, fields) => insertAgentMessage(ctx, p, session, fields));
+  const checklistFromHub = (p: Pending, session: AgentSessionRow, request: HubChecklistRequest) => {
+    const event = checklist.fromHub(p, session, request);
+    options.onHubChecklist?.(p, session, event);
+  };
+
+  const stopChecklistReminderIn = (p: Pending, id: SessionId): void => {
+    const rows = db.all<{ id: MessageId }>(
+      `SELECT id FROM messages WHERE session_id = ? AND status IN ('queued', 'delivered', 'processing') AND ${CHECKLIST_REMINDER_SQL}`, id,
+    );
+    for (const row of rows) transition(p, row.id, "stopped");
+  };
 
   const keptAfterShutdown = (session: AgentSessionRow, id: MessageId) => {
     const row = db.get<Pick<MessageDbRow, "sender">>("SELECT sender FROM messages WHERE id = ?", id);
@@ -273,7 +287,10 @@ export function createLedgerMessages(
           const message = getMessage(id);
           if (message?.status !== "delivered" || message.sessionId !== sessionId) continue;
           transition(p, id, "queued", null, sessionId);
-          enqueue(p, { type: "session.send", params: { sessionId, messageId: id, source: message.sender === "system" ? "system" : "user" } });
+          enqueue(p, {
+            type: "session.send",
+            params: { sessionId, messageId: id, source: message.sender === "system" ? "system" : "user", ...(isChecklistReminder(message) ? { rider: true } : {}) },
+          });
         }
         return;
       case "message.delivered":
@@ -282,7 +299,7 @@ export function createLedgerMessages(
         let onlyWaitingInputs = event.type === "message.delivered" && event.messageIds.length > 0;
         for (const id of event.messageIds) {
           const updated = transition(p, id, to, null, sessionId);
-          onlyWaitingInputs &&= updated !== undefined && isVisibleSystemInput(updated);
+          onlyWaitingInputs &&= updated !== undefined && (isVisibleSystemInput(updated) || isChecklistReminder(updated));
         }
         dropCarriedRateLimit(p, sessionId);
         if (!onlyWaitingInputs) updateLive(p, sessionId, working(event.at, liveOf(sessionId).currentTool));
@@ -337,8 +354,8 @@ export function createLedgerMessages(
         });
         return;
       }
-      case "agent.tool":
-        insertAgentMessage(ctx, p, session, {
+      case "agent.tool": {
+        const inserted = insertAgentMessage(ctx, p, session, {
           kind: "tool",
           text: summarizeToolCall(event.name, event.input),
           meta: { toolUseId: event.toolUseId, name: event.name },
@@ -352,7 +369,8 @@ export function createLedgerMessages(
             working(event.at, event.name)(l);
           }
         });
-        return;
+        return inserted ? undefined : "duplicate_tool";
+      }
       case "background.changed":
         updateLive(p, sessionId, (l) => {
           l.backgroundTasks = event.count;
@@ -541,7 +559,7 @@ export function createLedgerMessages(
       const session = currentSession(conversationId);
       const stopping = session !== null && liveOf(session.id).activity === "stopping";
       const rows = db.all<MessageDbRow>(
-        "SELECT * FROM messages WHERE conversation_id = ? AND sender != 'agent' ORDER BY id DESC LIMIT ?",
+        `SELECT * FROM messages WHERE conversation_id = ? AND sender != 'agent' AND NOT ${CHECKLIST_REMINDER_SQL} ORDER BY id DESC LIMIT ?`,
         conversationId,
         REWIND_SCAN_LIMIT,
       );
@@ -560,7 +578,10 @@ export function createLedgerMessages(
   const messagesAfter = (conversationId: ConversationId, after: MessageId, limit: number): Message[] => {
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     return db
-      .all<MessageDbRow>(`SELECT ${WEB_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?`, conversationId, after, Math.max(0, limit))
+      .all<MessageDbRow>(
+        `SELECT ${WEB_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND id > ? AND NOT ${CHECKLIST_REMINDER_SQL} ORDER BY id LIMIT ?`,
+        conversationId, after, Math.max(0, limit),
+      )
       .map(toMessage);
   };
 
@@ -568,7 +589,7 @@ export function createLedgerMessages(
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     return page(
       db.all<MessageDbRow>(
-        `SELECT ${WEB_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?`,
+        `SELECT ${WEB_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND id < ? AND NOT ${CHECKLIST_REMINDER_SQL} ORDER BY id DESC LIMIT ?`,
         conversationId,
         before,
         MESSAGE_PAGE_SIZE + 1,
@@ -621,6 +642,8 @@ export function createLedgerMessages(
     page,
     transition,
     applyEvent,
+    checklistFromHub,
+    stopChecklistReminderIn,
     settleTurn,
     insertSystemMessage,
     insertAskMessage,

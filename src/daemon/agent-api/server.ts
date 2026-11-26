@@ -127,6 +127,7 @@ const scheduleIdOnly = { type: "object", additionalProperties: false, required: 
 
 const BODY_SCHEMAS: Record<HubCommand, object> = {
   status: noArgs,
+  checklist: { type: "object" },
   "project.create": {
     type: "object",
     additionalProperties: false,
