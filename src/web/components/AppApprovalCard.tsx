@@ -128,6 +128,6 @@ export function AppApprovalCard(props: AppApprovalCardProps): ReactElement {
 
   return <AppApprovalCardView {...{
     workerId, workerTitle, appId, appName, riskLevel, warning, status, busy, disabled, error, deviceName, className,
-    remainingMs: remaining, onDecide: submit,
+    remainingMs: remaining, onDecide: (choice: AppApprovalDecision) => { void submit(choice); },
   }} />;
 }

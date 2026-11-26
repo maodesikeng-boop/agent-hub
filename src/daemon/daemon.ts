@@ -482,7 +482,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       store: sessions,
       drivers: createVendorDrivers(
         Object.fromEntries(
-          AGENT_VENDORS.map((vendor) => [
+          AGENT_VENDORS.map((vendor): [AgentVendor, VendorDriverDeps] => [
             vendor,
             {
               executablePath: () => vendorRuntime.resolveExecutablePath(vendor),

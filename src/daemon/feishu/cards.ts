@@ -271,7 +271,7 @@ function askCard(
   const app = ask.appApprovalRef;
   if (app !== undefined) {
     const text = formatAppApprovalCardText({ ...app, workerTitle: app.workerTitle ?? "", warning: null }, "zh")
-      .replace(/[\\`*_{}\[\]()<>|~]/g, "\\$&");
+      .replace(/[\\`*_{}[\]()<>|~]/g, "\\$&");
     return renderTextCard({ title: "确认 Computer Use 应用", template: "orange", text: `${text}\n请在 Bellwood 工作台确认或拒绝。` });
   }
   const base = askTitle(ask);
