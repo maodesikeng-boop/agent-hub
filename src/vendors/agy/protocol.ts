@@ -155,24 +155,12 @@ export function finishAgyUsage(
   rawResultUsage: unknown,
   lastLiveUsage: TokenUsage | null,
 ): TokenUsage {
-  const mapped = toClaudeUsageShape(rawResultUsage);
-  const hasTokens =
-    mapped !== null &&
-    (mapped.input_tokens! > 0 ||
-      mapped.output_tokens! > 0 ||
-      mapped.cache_read_input_tokens! > 0 ||
-      mapped.cache_creation_input_tokens! > 0);
-  if (hasTokens) {
-    if (lastLiveUsage === null) {
-      turnUsage.observe({ message: { id: "result", usage: mapped } }, current);
-    }
-    return turnUsage.finish(current, mapped);
-  }
-  if (lastLiveUsage !== null) {
-    turnUsage.reset();
-    return lastLiveUsage;
-  }
-  return turnUsage.finish(current, {});
+  turnUsage.reset();
+  const live = lastLiveUsage ?? current;
+  const totals = parseAgyUsage(rawResultUsage);
+  if (totals.input === 0 && totals.cacheRead === 0 && totals.cacheWrite === 0 && totals.output === 0) return live;
+  // Result counters span the conversation, while context comes from the latest request.
+  return { ...totals, context: live.context };
 }
 
 export function buildAgySessionStartedEvent(

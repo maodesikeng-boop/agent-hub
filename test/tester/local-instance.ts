@@ -274,7 +274,7 @@ export function createLocalInstance(config: BenchConfig, codeDir: string, attach
     if (attachedApi !== undefined) throw new Error(`${instance.name} is managed by another process`);
     if (running !== null) throw new Error(`${instance.name} is already running`);
     if (!sandboxAllowsNestedSandbox()) {
-      throw new Error("macOS denied sandbox-exec for the local test daemon. Run the tester from a terminal outside the Bellwood Worker sandbox.");
+      throw new Error("macOS denied sandbox-exec for the local test daemon. Run the tester from a host terminal outside any agent sandbox.");
     }
     for (const dir of [instance.dataDir, instance.userHome, layout.localDir]) mkdirSync(dir, { recursive: true });
     appendFileSync(layout.daemonLog, `\n--- start ${next} ${new Date().toISOString()} ${commit()}\n`);
