@@ -248,9 +248,9 @@ describe("groupMessages：一轮一轮", () => {
   it("Worker 的汇报、到点的定时任务把轮切开；新一轮从上一轮最后一条和这句话里晚的那个算起", () => {
     const items = groupMessages([
       makeMessage({ id: 1 }),
-      makeWorkerLine({ id: 2, line: { event: "report", status: "done", summary: "好了" } }),
+      makeWorkerLine({ id: 2, status: "replied", line: { event: "report", status: "done", summary: "好了" } }),
       makeMessage({ id: 3 }),
-      makeSystemMessage({ id: 4, event: { event: "schedule.run", scheduleId: 1, name: "日报", scheduledAt: 0, catchUp: false } }),
+      makeSystemMessage({ id: 4, status: "replied", event: { event: "schedule.run", scheduleId: 1, name: "日报", scheduledAt: 0, catchUp: false } }),
       makeToolMessage({ id: 5 }),
     ]).items;
     expect(items.map((i) => i.kind)).toEqual(["turn", "message", "turn", "message", "turn"]);
@@ -591,7 +591,7 @@ describe("selectors", () => {
 
     const afterWakeup = applyChange(
       base,
-      messageChange(11, "message.created", makeUserMessage({ id: 7, conversationId: 1, sessionId: 2, status: "queued", meta: { wakeup: true } })),
+      messageChange(11, "message.created", makeSystemMessage({ id: 7, conversationId: 1, sessionId: 2, status: "queued", event: { event: "pm.wakeup", source: "task_graph", ref: "test" } })),
     );
     expect(sessionOf(afterWakeup, 1)?.rateLimit).toEqual(rejected);
 

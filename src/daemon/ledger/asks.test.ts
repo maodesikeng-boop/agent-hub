@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
-import { isLedgerWakeup } from "../../shared/attachments.ts";
 import { askOf } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
@@ -253,17 +252,24 @@ describe("持久化", () => {
     expect([answered(dismissed), answered(replied), answered(open1), answered(other)]).toEqual([true, true, false, false]);
   });
 
-  it("老数据：拍板唤醒补标 wakeup，人打的字和坏 meta 的行不动（迁移 0036）", () => {
+  it("老数据：拍板唤醒补标后转成系统唤醒通知，人打的字和坏 meta 的行不动（迁移 0036、0054）", () => {
     const card = ask("要不要上线？");
     const typed = post(lin.conversationId, "我先说一句");
     const wake = ledger.answerAsk(card, { clientId: "old-click", note: "上" }).messageId!;
     const broken = post(lin.conversationId, "坏数据");
-    db.run("UPDATE messages SET meta = NULL WHERE id = ?", wake);
+    db.run("UPDATE messages SET sender = 'user', meta = NULL, dedupe_key = ? WHERE id = ?",
+      `client:${lin.conversationId}:router-resolve:1:old-click`, wake);
+    db.run("UPDATE actions SET params = json_set(params, '$.source', 'user') WHERE type = 'session.send' AND json_extract(params, '$.messageId') = ?", wake);
     db.run("UPDATE messages SET meta = '{not json' WHERE id = ?", broken);
     db.exec("PRAGMA user_version = 35");
     db.close();
     open();
-    expect([wake, typed].map((id) => isLedgerWakeup(ledger.getMessage(id)!))).toEqual([true, false]);
+    expect([wake, typed].map((id) => { const m = ledger.getMessage(id)!; return [m.sender, m.meta?.event ?? null]; })).toEqual([["system", "pm.wakeup"], ["user", null]]);
+    expect(ledger.getMessage(wake)).toMatchObject({
+      sender: "system", meta: { event: "pm.wakeup", source: "router", ref: "router-resolve:1:old-click" },
+      dedupeKey: `system:${lin.conversationId}:pm.wakeup:router-resolve:1:old-click`,
+    });
+    expect(db.get("SELECT json_extract(params, '$.source') AS source FROM actions WHERE type = 'session.send' AND json_extract(params, '$.messageId') = ?", wake)).toEqual({ source: "system" });
     expect(db.get<{ meta: string }>("SELECT meta FROM messages WHERE id = ?", broken)!.meta).toBe("{not json");
   });
 

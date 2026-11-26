@@ -15,6 +15,7 @@ afterEach(async () => {
 
 const CAPS = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"];
 const user = (id: number, text: string) => ({ messageIds: [id], source: "user" as const, text });
+const system = (id: number, text: string) => ({ messageIds: [id], source: "system" as const, text });
 
 function harness(turns: FakeTurn[], extra: Partial<FakeScript> = {}, driver: Record<string, number> = {}): Harness {
   h = makeHarness({ script: { capabilities: CAPS, turns, ...extra }, driver });
@@ -64,6 +65,7 @@ describe("中途写入：当前工具跑完就被同一轮取走", () => {
     const ended = await t.waitFor("turn.ended");
     expect(ended).toMatchObject({ ok: true, messageIds: [1, 2] });
     expect(t.of("message.processing").map((e) => e.messageIds)).toEqual([[1], [2]]);
+    expect(t.of("message.processing").at(-1)?.midTurn).toBe(true);
     await realSleep(100);
     expect(t.of("turn.ended")).toHaveLength(1);
     expect(t.of("turn.started")).toEqual([]);
@@ -96,7 +98,7 @@ describe("中途写入：当前工具跑完就被同一轮取走", () => {
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "讲个故事"));
     await t.waitFor("message.processing");
-    await expect(t.driver.send(s.id, user(2, "最后加一行 ACK"))).resolves.toEqual({ kind: "written", midTurn: true });
+    await expect(t.driver.send(s.id, system(2, "最后加一行 ACK"))).resolves.toEqual({ kind: "written", midTurn: true });
     await release(t, "go");
     const first = await t.waitFor("turn.ended");
     expect(first.messageIds).toEqual([1]);
@@ -108,6 +110,8 @@ describe("中途写入：当前工具跑完就被同一轮取走", () => {
     // 第二条的处理中在它那一轮结束之前
     const kinds = t.events.map((e) => e.event).filter((e) => e.type === "message.processing" || e.type === "turn.ended").map((e) => `${e.type}:${e.messageIds.join()}`);
     expect(kinds).toEqual(["message.processing:1", "turn.ended:1", "message.processing:2", "turn.ended:2"]);
+    expect(t.of("message.delivered").at(-1)?.midTurn).toBe(true);
+    expect(t.of("message.processing").at(-1)).not.toHaveProperty("midTurn");
     // 都结束了才开始算空闲
     expect(await t.waitFor("session.exited")).toMatchObject({ reason: "idle", messageIds: [] });
   });
@@ -215,8 +219,6 @@ describe("停止：写进去了还没被取走的标已取消，不重发", () =
 });
 
 describe("停止：agent 还没看到的用户消息都取消（包括驱动层自己队列里的），系统消息不取消", () => {
-  const system = (id: number, text: string) => ({ messageIds: [id], source: "system" as const, text });
-
   it("老 claude（只能排队）：停止时队列里排着的用户消息标已取消、不再写；系统消息停止后照常写", async () => {
     h = makeHarness({ script: { turns: [{ steps: [{ sleepMs: 5000 }, { text: "不会说完" }] }], defaultTurn: { steps: [{ text: "好" }] } } });
     const s = h.addSession();

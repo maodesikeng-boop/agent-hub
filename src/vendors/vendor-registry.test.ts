@@ -59,3 +59,9 @@ describe("VENDOR_LIST routerDefault 快模型预设契约守卫", () => {
     expect(validateRouterDefaultSpec({ ...base, routerDefault: { model: "custom-fast", effort: "ultra" } })).toMatch(/不在厂商通用 efforts/);
   });
 });
+
+describe("checklist prompt tool", () => {
+  it.each(VENDOR_LIST)("$id has a prompt tool exactly when it has checklist sources", ({ checklist }) => {
+    expect(Boolean(checklist.promptTool?.trim())).toBe(checklist.sources.length !== 0);
+  });
+});

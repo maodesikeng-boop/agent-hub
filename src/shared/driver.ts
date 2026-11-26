@@ -88,6 +88,7 @@ interface MessageDeliveredEvent extends DriverEventBase {
 interface MessageProcessingEvent extends DriverEventBase {
   type: "message.processing";
   messageIds: MessageId[];
+  midTurn?: true;
   preamble?: true;
 }
 

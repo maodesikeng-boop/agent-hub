@@ -138,7 +138,7 @@ describe("projectFeishuChange", () => {
       meta: { origin: { kind: "feishu", openId: "ou_a", name: "张三", role: "owner", mode: "solo", guestTier: "chat_only", context: [] } },
     });
     expect(project(change("message.created", { message: fromFeishu }))).toEqual([]);
-    const wakeup = message({ sender: "user", dedupeKey: `client:${PM_CONV}:router-resolve:1:c`, meta: { wakeup: true } });
+    const wakeup = message({ sender: "system", dedupeKey: `system:${PM_CONV}:pm.wakeup:router-resolve:1:c`, meta: { event: "pm.wakeup", source: "router", ref: "router-resolve:1:c" } });
     expect(project(change("message.created", { message: wakeup }))).toEqual([]);
   });
 

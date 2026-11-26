@@ -152,10 +152,15 @@ describe("MessageList：状态在这一轮上面（Worked for 位置）", () => 
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("最后一条是 Worker 的汇报、你对 Worker 说的话：状态在底部新的一轮", () => {
-    const { container } = list([makeMessage({ id: 1, text: "旧回复" }), makeWorkerLine({ id: 2, conversationId: 1, line: { event: "report", status: "done", summary: "好了" } })]);
+  it("a Worker report read as a new turn starts a fresh status card", () => {
+    const { container } = list([makeMessage({ id: 1, text: "旧回复" }), makeWorkerLine({ id: 2, conversationId: 1, status: "replied", line: { event: "report", status: "done", summary: "好了" } })]);
     expect(statusLine().closest("[data-turn]")).not.toHaveTextContent("旧回复");
     expect(heads(container).at(-1)).toHaveTextContent(/^项目经理$/);
+  });
+
+  it("keeps the status separate after the user messages a Worker directly", () => {
+    list([makeMessage({ id: 1, text: "旧回复" }), makeWorkerLine({ id: 2, line: { event: "user_message", summary: "Check this too" } })]);
+    expect(statusLine().closest("[data-turn]")).not.toHaveTextContent("旧回复");
   });
 
   it("状态文字是 13.5px 次要色", () => {
