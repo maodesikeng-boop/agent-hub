@@ -145,12 +145,16 @@ describe("matchStampPaths", () => {
     expect(implSection).toMatch(/Later step of a multi-step implementation plan/iu);
     expect(implSection).toMatch(/tests satisfied by earlier implementation steps on this branch are expected to pass already/iu);
     expect(implSection).toMatch(/every test for the unimplemented behavior assigned to this step still fails/iu);
+    expect(planStandard).toMatch(/cacheRead/u);
+    expect(planStandard).toMatch(/append to the end only/iu);
 
     const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
     expect(planRule).toMatch(/split across multiple implementation steps on the same branch/iu);
     expect(planRule).toMatch(/do not fail a later step because tests satisfied by an earlier implementation step already pass/iu);
     expect(planRule).toMatch(/before the first implementation commit/iu);
     expect(planRule).toMatch(/screen recording \(video\) or a complete start-to-finish sequence of screenshots/iu);
+    expect(planRule).toMatch(/cacheRead/u);
+    expect(planRule).toMatch(/prompt caching/iu);
 
     for (const [label, doc] of [
       ["docs/plan-standard.md", planStandard],
