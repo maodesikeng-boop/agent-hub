@@ -178,7 +178,7 @@ jobs:
         uses: ./.github/actions/apt-install
         timeout-minutes: 7
         with:
-          cache-id: playwright-chromium-webkit-${{ hashFiles('pnpm-lock.yaml') }}
+          cache-id: playwright-drill1-cold-${{ hashFiles('pnpm-lock.yaml') }}
           probe: pnpm exec playwright install-deps --dry-run chromium webkit
           install: pnpm exec playwright install-deps chromium webkit
 
