@@ -145,6 +145,7 @@ function RailUsage({ meter, quota, quotaFetchable, quotaReady }: Pick<AppRailPro
   const current = useServerInfo().currentQuota === true;
   const { rows, loading } = useFetchedQuota(useHubQueryClient(), useClient(), {
     enabled: open && quotaFetchable && quotaReady === true,
+    preload: current && quotaReady === true,
     current,
   });
   const triggerMeter = useMemo(() => current ? quotaMeterOf(rows) : meter, [current, rows, meter]);

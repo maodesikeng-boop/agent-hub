@@ -19,20 +19,28 @@ export const settingsBodies = {
   providers: <SurfaceOutlet id="settings:providers" />,
 } satisfies SettingsBodies;
 
-function MobileWorkbenchSettings({ quotaReady, ...props }: MobileSettingsProps & { quotaReady: boolean }) {
+type SettingsProps = Omit<MobileSettingsProps, "bodies" | "vendor"> & { defaultProviderDevice: DeviceKey };
+
+function MobileWorkbenchSettings({ open, quotaReady, ...props }: SettingsProps & { open: boolean; quotaReady: boolean }) {
   const current = useServerInfo().currentQuota === true;
   const { rows } = useFetchedQuota(useHubQueryClient(), useClient(), {
-    enabled: current && quotaReady && props.section === undefined,
+    enabled: current && quotaReady && open && props.section === undefined,
     current,
   });
-  return <MobileSettings {...props} quota={current ? rows : props.quota} />;
+  return open ? <WorkbenchSettingsSurfaces {...props} mobile quota={current ? rows : props.quota} /> : null;
 }
 
-export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, defaultProviderDevice, quotaReady = false, ...props }: Omit<MobileSettingsProps, "bodies" | "vendor"> & {
+export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, open = true, quotaReady = false, ...props }: SettingsProps & {
   mobile: boolean;
-  defaultProviderDevice: DeviceKey;
+  open?: boolean;
   quotaReady?: boolean;
 }) {
+  return mobile
+    ? <MobileWorkbenchSettings {...props} open={open} quotaReady={quotaReady} />
+    : <WorkbenchSettingsSurfaces {...props} mobile={false} />;
+});
+
+function WorkbenchSettingsSurfaces({ mobile, defaultProviderDevice, ...props }: SettingsProps & { mobile: boolean }) {
   const currentDevice = useClient().device ?? LOCAL_DEVICE;
   const vendorSyncPage = props.section === "vendor-sync";
   const showProviders = props.section === "providers" || (!mobile && vendorSyncPage);
@@ -54,9 +62,9 @@ export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, defau
       )}
       {mobile && (
         <Surface id="settings:mobile">
-          <MobileWorkbenchSettings {...props} bodies={settingsBodies} vendor={vendor} quotaReady={quotaReady} />
+          <MobileSettings {...props} bodies={settingsBodies} vendor={vendor} />
         </Surface>
       )}
     </>
   );
-});
+}

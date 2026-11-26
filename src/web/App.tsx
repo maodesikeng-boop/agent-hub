@@ -284,10 +284,11 @@ function Workbench({
       {mobile
         ? <MobileWorkbench model={model} content={c} panel={panel} />
         : <DesktopWorkbench model={model} content={c} quota={quota} panel={panel} rename={rename} setShellElement={setShellElement} chatMinRem={chatMinRem} stackPanel={stackPanel} />}
-      {settings !== null && (
+      {(mobile || settings !== null) && (
         <WorkbenchSettings
           mobile={mobile}
-          section={settings.section}
+          open={settings !== null}
+          section={settings?.section}
           notify={c.reminders.notify}
           devices={c.deviceSettings}
           quota={quota}

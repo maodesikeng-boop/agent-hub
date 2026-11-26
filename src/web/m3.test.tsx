@@ -685,22 +685,23 @@ describe("最左栏的额度", () => {
         ],
       } });
     });
-    await user.click(await within(railNav()).findByRole("button", { name: "Usage" }));
+    await user.click(await within(railNav()).findByRole("button", { name: /usage/i }));
     const claude = await screen.findByRole("region", { name: "Claude" });
     expect(within(claude).queryByRole("progressbar", { name: "5h usage" })).not.toBeInTheDocument();
     expect(within(claude).getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "5");
     expect(within(screen.getByRole("group", { name: "Gemini" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
   });
 
-  it("requests current quota while Usage is open and stops after it closes", async () => {
+  it("preloads the desktop meter once, polls while Usage is open, and stops after it closes", async () => {
     currentQuotaTimers();
     const user = userEvent.setup();
     const readQuota = vi.fn(() => ({ status: 200, body: {
       groups: [{ vendor: "codex", id: "codex", windows: { five_hour: win(0.25) } }],
     } }));
     await boot(withWorker({ server: currentQuotaServer, sessions: [] }), (fake) => { fake.quota = readQuota; });
-    await within(railNav()).findByRole("button", { name: /usage/i });
-    expect.soft(readQuota).not.toHaveBeenCalled();
+    await within(railNav()).findByRole("button", { name: /5h usage 25%/ });
+    await act(() => vi.advanceTimersByTimeAsync(FETCHED_QUOTA_FRESH_MS / 2));
+    expect(readQuota).toHaveBeenCalledTimes(1);
 
     await user.click(badge());
     expect(await screen.findByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
@@ -714,7 +715,7 @@ describe("最左栏的额度", () => {
     expect(readQuota).toHaveBeenCalledTimes(2);
   });
 
-  it("reopens Usage with the last reading while the next reading is pending", async () => {
+  it("reopens Usage after two minutes with the last reading while the next reading is pending", async () => {
     currentQuotaTimers();
     const user = userEvent.setup();
     const quotaReply = (utilization: number) => ({ status: 200, body: {
@@ -730,10 +731,11 @@ describe("最左栏的额度", () => {
     expect(await screen.findByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
     expect(screen.getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "20");
     await user.keyboard("{Escape}");
-    await act(() => vi.advanceTimersByTimeAsync(FETCHED_QUOTA_FRESH_MS + 1_000));
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
     const requestsBeforeReopening = readQuota.mock.calls.length;
 
     await user.click(badge());
+    expect.soft(screen.queryByText("No usage reported yet")).not.toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
     expect(screen.queryByRole("progressbar", { name: "7d usage" })).not.toBeInTheDocument();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
@@ -741,6 +743,55 @@ describe("最左栏的额度", () => {
     expect(readQuota).toHaveBeenCalledTimes(2);
     refresh.resolve(quotaReply(0.5));
     await waitFor(() => expect(screen.getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "50"));
+  });
+
+  it("shows Loading on reopen while replacing the only window after it resets", async () => {
+    currentQuotaTimers();
+    const user = userEvent.setup();
+    const quotaReply = (utilization: number, window = win(utilization)) => ({ status: 200, body: {
+      groups: [{ vendor: "codex", id: "codex", windows: { five_hour: window } }],
+    } });
+    const refresh = deferred<ReturnType<typeof quotaReply>>();
+    const readQuota = vi.fn<FakeApi["quota"]>(() => refresh.promise)
+      .mockReturnValueOnce(quotaReply(0.25, win(0.25, { resetsAt: (T_BEFORE_RESET + 30_000) / 1000 })));
+    await boot(withWorker({ server: currentQuotaServer, sessions: [] }), (fake) => { fake.quota = readQuota; });
+    await user.click(badge());
+    await screen.findByRole("progressbar", { name: "5h usage" });
+    await user.keyboard("{Escape}");
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+
+    await user.click(badge());
+    expect(readQuota).toHaveBeenCalledTimes(2);
+    expect.soft(screen.queryByText("No usage reported yet")).not.toBeInTheDocument();
+    expect(screen.getByText("Loading…")).toBeVisible();
+    refresh.resolve(quotaReply(0.5));
+    expect(await screen.findByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "50");
+  });
+
+  it("reopens mobile Settings after ten minutes with the cached reading and no closed polling", async () => {
+    currentQuotaTimers();
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("coarse"), addEventListener() {}, removeEventListener() {} }));
+    const user = userEvent.setup();
+    const quotaReply = (utilization: number) => ({ status: 200, body: {
+      groups: [{ vendor: "codex", id: "codex", windows: { five_hour: win(utilization) } }],
+    } });
+    const refresh = deferred<ReturnType<typeof quotaReply>>();
+    const readQuota = vi.fn<FakeApi["quota"]>(() => refresh.promise).mockReturnValueOnce(quotaReply(0.25));
+    await boot(withWorker({ server: currentQuotaServer, sessions: [] }), (fake) => { fake.quota = readQuota; });
+    expect(readQuota).not.toHaveBeenCalled();
+    act(() => { window.location.hash = "#/settings"; });
+    const bar = { name: "Codex 5h usage" };
+    expect(await screen.findByRole("progressbar", bar)).toHaveAttribute("aria-valuenow", "25");
+    await user.click(screen.getByRole("button", { name: "Projects" }));
+    expect(screen.queryByRole("progressbar", bar)).not.toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(600_000));
+    expect(readQuota).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: /^Settings/ }));
+    expect(screen.getByRole("progressbar", bar)).toHaveAttribute("aria-valuenow", "25");
+    expect(readQuota).toHaveBeenCalledTimes(2);
+    refresh.resolve(quotaReply(0.5));
+    await waitFor(() => expect(screen.getByRole("progressbar", bar)).toHaveAttribute("aria-valuenow", "50"));
   });
 
   it.each([200, 503])("keeps the empty state during a retry after HTTP %i while Usage is open", async (status) => {
@@ -785,6 +836,27 @@ describe("最左栏的额度", () => {
       ],
     };
     const ask = () => api.calls.filter((c) => c.path === "/api/quota").length;
+
+    it("reopens Usage after ten minutes with the last legacy reading", async () => {
+      currentQuotaTimers();
+      const user = userEvent.setup();
+      const refresh = deferred<{ status: number; body: unknown }>();
+      const readQuota = vi.fn<FakeApi["quota"]>(() => refresh.promise).mockReturnValueOnce({ status: 200, body: reply });
+      await boot(agyWorker(), (fake) => { fake.quota = readQuota; });
+      await user.click(badge());
+      await screen.findByRole("group", { name: "Gemini" });
+      await user.keyboard("{Escape}");
+      await act(() => vi.advanceTimersByTimeAsync(600_000));
+      expect(readQuota).toHaveBeenCalledTimes(1);
+
+      await user.click(badge());
+      expect.soft(screen.queryByText("No usage reported yet")).not.toBeInTheDocument();
+      const geminiBar = () => within(screen.getByRole("group", { name: "Gemini" })).getByRole("progressbar", { name: "5h usage" });
+      expect(geminiBar()).toHaveAttribute("aria-valuenow", "25");
+      expect(readQuota).toHaveBeenCalledTimes(2);
+      refresh.resolve({ status: 200, body: { groups: [{ vendor: "agy", id: "gemini", windows: { five_hour: win(0.5) } }] } });
+      await waitFor(() => expect(geminiBar()).toHaveAttribute("aria-valuenow", "50"));
+    });
 
     it("fetches each Antigravity group on open and keeps the legacy rail meter", async () => {
       const user = userEvent.setup();
