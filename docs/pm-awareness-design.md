@@ -383,7 +383,7 @@ The body is what the PM will do once the wait settles. The receipt is `已开始
 #### B5. Delivery is the last row
 
 - `hub graph show` and `formatGraphText` add a last line, `[等你验收交付] 交付：图里画的步骤都做完了（已等 25 分钟）`, or `[在等] 交付：在等 #3「检查通过后交付」` when a watch is linked. `graphStatusLabel` drops `active · 待交付`.
-- The delivery note moves onto PR-4's entry with subject `{ kind: "graph.ready_to_finish", graphId, since }`. Its header becomes `【任务图 #141「取消残留」图里画的步骤都做完了，等你验收交付】`, plus `图里只有上面这些步骤；项目规矩或用户要求、但没画进图的步骤（比如审查），后台看不出来，缺了用 hub graph patch 补。` and `要等外部条件（比如检查通过）再交付，用 hub watch add 让后台盯着，结果出来叫醒你。`
+- The delivery note moves onto PR-4's entry with subject `{ kind: "graph.ready_to_finish", graphId, since }`. Its header becomes `【任务图 #141「取消残留」图里画的步骤都做完了，等你验收交付】`, plus `图里只有上面这些步骤；项目规矩或用户要求、但没画进图的步骤（比如审查），后台看不出来，缺了用 hub graph patch 补。` PR-8 adds `要等外部条件（比如检查通过）再交付，用 hub watch add 让后台盯着，结果出来叫醒你。` together with the command, so the note never names a command the daemon does not have.
 - The web (D-A2 option 1, decided) shows the delivery row and `2/2 steps · awaiting delivery` in `WorkPanel` and `TaskGraphDialog`, both computed by `graphDeliveryOf`.
 - Q6: a brief-less step already waits for the PM and wakes it when its upstream finishes (`progress.ts:266-267`). The delivery row makes a drawn merge step optional, and the manual says so.
 
@@ -493,7 +493,7 @@ New constants in `src/shared/limits.ts`:
 | `WATCH_OUTPUT_TAIL_BYTES` | 2,048 | Stored and sent output. |
 | `WATCHES_RETAIN_MS` / `WATCHES_RETAIN_PER_PM` | 7 days / 500 | Dual retention for settled and closed rows, registered in `RESOURCE_REGISTRY`. A PM adding 15 watches a day keeps about 105 rows. |
 
-One month of use (300 finished Workers, 30,000 messages, 50,000 step logs): the list reads active graphs and their steps (at most 20 × 32), open Workers (ended Workers are excluded by `status`), the newest report per open Worker through `messages(worker_id, id)`, and open watches. It never scans the message table. It runs on `hub status`, preamble build, each message written to a PM session, and the reminder tick once a minute per PM with open items. `pm_agenda_cursors` holds one row per PM session, at most `PM_AGENDA_GRAPHS_MAX × PM_AGENDA_STEP_LINES_MAX` line states plus the outside block, and is deleted with its session. Slot admission reads steps with the same slot through the index on `task_graph_step_slots(slot)`. No in-memory cache is added. Implementation PRs record returned bytes, rows visited, and timings for the month fixture plus 7 active graphs and 6 open Workers, per the benchmark checklist.
+One month of use (300 finished Workers, 30,000 messages, 50,000 step logs): the list reads active graphs and their steps (at most 20 × 32), open Workers (ended Workers are excluded by `status`), the newest report per open Worker through `messages(worker_id, id)`, and open watches. It never scans the message table. It runs on `hub status`, preamble build, each message written to a PM session, and the reminder tick once a minute per PM with open items. `pm_agenda_cursors` holds one row for each PM's current session, at most `PM_AGENDA_GRAPHS_MAX × PM_AGENDA_STEP_LINES_MAX` line states plus the outside block. A handover deletes the old session's row, and deleting the PM deletes the rest. Slot admission reads steps with the same slot through the index on `task_graph_step_slots(slot)`. No in-memory cache is added. Implementation PRs record returned bytes, rows visited, and timings for the month fixture plus 7 active graphs and 6 open Workers, per the benchmark checklist.
 
 ### Token cost of delivering the list (Q17, Q18)
 
@@ -601,7 +601,7 @@ PR-6, status list:
 - `src/shared/limits.ts`: the status list, slot, watch, and reminder constants.
 - Callers filled in by PR-6: `hub-commands.ts`, `handover.ts`, `ledger.ts`, `task-graphs/delivery.ts`, `text.ts`, `overview.ts`, `src/web/work-status.ts`, `WorkPanel.tsx`, `TaskGraphDialog.tsx`, `src/shared/task-graph-skill.ts`.
 - `src/daemon/ledger/pm-agenda.test.ts` (S1, S2, S3, S8.4, S13) and `src/daemon/ledger/vendor-switch-agenda.test.ts` (S4). The web delivery row and header come from `graphDeliveryOf` in `src/web/work-status.ts`, tested in `src/web/work-status.test.ts` (S1.1, S1.2); PR-6 adds wide and narrow screenshots of `WorkPanel` and `TaskGraphDialog`. That skeleton is its own commit, written after D-A2 was decided, and PR-6 cherry-picks it too.
-- `src/shared/pm-watch.ts` ships in this commit too, because the agenda's outside block names watch ids and states.
+- `src/shared/pm-watch.ts` ships in this commit with only `PmWatchId` and `PmWatchStatus`, because the agenda's outside block names watch ids and states. PR-8 adds the watch record, input, and notice text with their callers.
 
 PR-7, slots:
 
@@ -630,7 +630,7 @@ Categories: ① two turns in a row, ② restart in the middle, ③ state changes
 
 **S1. A finished graph says it waits for delivery** (Q1, Q5, Q6; incident B; D-A2) ① ③ ④ ⑨
 
-1. A graph has `impl` and `review`; both finish. The right panel reads `2/2 steps · awaiting delivery` with `Delivery · waiting for the PM · 3m`. `hub graph show` ends with `[等你验收交付] 交付：图里画的步骤都做完了（已等 3 分钟）`. The delivery note says the graph knows only its drawn steps and names `hub graph patch` and `hub watch add`.
+1. A graph has `impl` and `review`; both finish. The right panel reads `2/2 steps · awaiting delivery` with `Delivery · waiting for the PM · 3m`. `hub graph show` ends with `[等你验收交付] 交付：图里画的步骤都做完了（已等 3 分钟）`. The delivery note says the graph knows only its drawn steps and names `hub graph patch` (and `hub watch add` once PR-8 ships it).
 2. Before the note is delivered, the PM adds `review-real` with `graph patch`. The note is not delivered, the row disappears, the new step starts, and the header reads `2/3`. ③
 3. The PM draws a brief-less `merge` step after the reviews. It waits for the PM and wakes it, as today. ④
 4. The same rows render in a narrow window. ⑨
@@ -762,7 +762,7 @@ Checked with `git show origin/main:REVIEW.md` at `f7230639`.
 | Detached child processes and temp dirs stay inside the session boundary | Each watch process carries an owner tag from the persisted watch id and the data directory. |
 | Tests wait for events, not for time | Watch, reminder, and slot tests use fake clocks and ledger events. |
 | Hub error codes change on both sides | No new code; refusals use `invalid` and `conflict`. |
-| Persisted fields have a reader and dual retention bounds | `task_graph_step_states` is read by the list and slot order and `task_graph_step_slots` by admission, both deleted with their step under graph retention; `meta.sentWhileBusy` by the footer; `pm_watches` is registered with age and count caps; `pm_agenda_cursors` rows are deleted with their session. |
+| Persisted fields have a reader and dual retention bounds | `task_graph_step_states` is read by the list and slot order and `task_graph_step_slots` by admission, both deleted with their step under graph retention; `meta.sentWhileBusy` by the footer; `pm_watches` is registered with age and count caps; `pm_agenda_cursors` keeps one row per PM: a handover deletes the old session's row and a late write to a superseded session does not recreate it. |
 | Text shipped to agents holds in any project | S11. |
 | Planned acceptance scenarios cover every requirement and pass real tests | This section and the acceptance tests in Section 7. |
 | A result is matched to its request by an id both carry | A watch settles by watch id and run number; the handover notice by handover id; the footer cursor by message id and version after the driver's written result; slot release by step id. |

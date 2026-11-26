@@ -58,7 +58,7 @@ const INCLUDED_WORKER_EVENTS: ReadonlySet<WorkerEvent> = new Set([
   "user_message",
 ]);
 
-const SYSTEM_EVENT_IN_SWITCH_LOG: Readonly<Record<SystemMessageMeta["event"], boolean>> = {
+export const SYSTEM_EVENT_IN_SWITCH_LOG: Readonly<Record<SystemMessageMeta["event"], boolean>> = {
   "checklist.reminder": false,
   "driver.warning": false,
   "project.created": true,

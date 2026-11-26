@@ -39,11 +39,7 @@ function nodeWorkerNote(node: TaskNode): string {
   return ` · 经手${node.workerIds.length > recent.length ? "（最近的）" : ""} Worker ${recent.map((id) => `#${id}`).join("、")}`;
 }
 
-function graphStatusLabel(graph: Pick<TaskGraph, "status" | "nodes">): string {
-  return isTaskGraphReadyToFinish(graph) ? "active · 待交付" : graph.status;
-}
-
-export function formatGraphText(graph: TaskGraph, results = true, agentContext?: StepAgentFormatContext): string {
+export function formatGraphText(graph: TaskGraph, results = true, agentContext?: StepAgentFormatContext, wait?: { since: number; now: number }): string {
   const depMap = new Map<string, string[]>();
   for (const e of graph.edges) {
     let list = depMap.get(e.toKey);
@@ -53,7 +49,7 @@ export function formatGraphText(graph: TaskGraph, results = true, agentContext?:
     }
     list.push(e.fromKey);
   }
-  const lines = [`任务图 #${graph.id}「${graph.title}」（状态：${graphStatusLabel(graph)}）`];
+  const lines = [`任务图 #${graph.id}「${graph.title}」（状态：${graph.status}）`];
   for (const n of graph.nodes) {
     const deps = depMap.get(n.key);
     const depNote = deps && deps.length > 0 ? ` ← [${deps.join(", ")}]` : "";
@@ -65,12 +61,12 @@ export function formatGraphText(graph: TaskGraph, results = true, agentContext?:
       ...(results ? nodeResultLines(n) : []),
     );
   }
+  if (isTaskGraphReadyToFinish(graph)) {
+    const minutes = wait === undefined ? null : Math.max(0, Math.floor((wait.now - wait.since) / 60_000));
+    const age = minutes === null ? "" : `（已等 ${minutes} 分钟）`;
+    lines.push(`  - [等你验收交付] 交付：图里画的步骤都做完了${age}`);
+  }
   return lines.join("\n");
-}
-
-export function formatGraphBrief(graph: TaskGraph): string {
-  const settled = graph.nodes.filter((n) => n.status === "done").length;
-  return `任务图 #${graph.id}「${graph.title}」（状态：${graphStatusLabel(graph)}，进度 ${settled}/${graph.nodes.length}；详情用 ${HUB_COMMAND} graph show ${graph.id} 看）`;
 }
 
 export const turnedListText = (turned: readonly TurnedStep[]): string =>
@@ -94,10 +90,10 @@ export function unlockedNoteOf(progress: ProgressResult, graph: TaskGraph): stri
     const dispatch = pmKeys.length > 0 ? `（给它派 Worker：${HUB_COMMAND} worker start --node ${pmKeys[0]} --graph ${graph.id}）` : "";
     parts.push(`轮到了：${turnedListText(progress.turned)}${dispatch}`);
   }
-  if (parts.length > 0) return `；${parts.join("；")}`;
   if (isTaskGraphReadyToFinish(graph)) {
-    return `；全部节点已完成（待交付），验收交付后用 ${HUB_COMMAND} graph finish 结束任务图`;
+    parts.push(`图里画的步骤都做完了，验收交付后用 ${HUB_COMMAND} graph finish 结束任务图`);
   }
+  if (parts.length > 0) return `；${parts.join("；")}`;
   return graph.status === "completed" ? "；整张任务图已全部完结！" : "";
 }
 

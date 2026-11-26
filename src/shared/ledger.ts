@@ -20,7 +20,7 @@ import type {
 } from "./api.ts";
 import type { Attachment } from "./attachments.ts";
 import type { FeishuMessageOrigin } from "./feishu.ts";
-import type { DriverEvent } from "./driver.ts";
+import type { DeliverySuffix, DriverEvent } from "./driver.ts";
 import type { AnyActionRow, ReviewVerifyParams } from "./actions.ts";
 import type {
   AgentRole,
@@ -365,6 +365,7 @@ export interface Ledger extends LedgerHandoverWork {
    */
   decideAppApproval?(id: AppApprovalId, input: DecideAppApprovalRequest): DecideAppApprovalResponse;
   deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string };
+  deliverySuffix?(sessionId: SessionId, messageIds: readonly MessageId[], preamble?: string): DeliverySuffix;
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
   listRouterCommands?(beforeCursor?: string, limit?: number): import("./api.ts").RouterCommandsPage;

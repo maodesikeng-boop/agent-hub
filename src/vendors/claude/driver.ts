@@ -165,11 +165,15 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     );
   }
 
+  #lineForWrite(st: SessionState, batch: Batch): string {
+    return batch.renderLine?.((text) => this.withDeliverySuffix(st, batch, text)) ?? batch.line;
+  }
+
   async #writeMidTurn(st: SessionState, proc: Proc, batch: Batch): Promise<MidTurnWrite> {
     st.inFlight.push(batch);
     this.clearTimer(st, "idleTimer");
     return new Promise<MidTurnWrite>((resolve) => {
-      proc.child.stdin.write(batch.line + "\n", (err) => {
+      proc.child.stdin.write(this.#lineForWrite(st, batch) + "\n", (err) => {
         if (batch.released !== null) return resolve(batch.released === "cancelled" ? "cancelled" : "retry");
         if (!err) {
           this.markDelivered(st, batch);
@@ -272,18 +276,15 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       return newBatch(messageIds, buildUserLine(body.text, body.prefixes, this.composer.buildUserContent, uuid), uuid, NO_NOTES, source);
     }
     const { notes, prefixes } = this.takeNotesPrefixes(st);
-    return newBatch(
-      messageIds,
-      buildUserLine(body.text, [...prefixes, ...body.prefixes], this.composer.buildUserContent, uuid),
-      uuid,
-      notes,
-      source,
-    );
+    const buildLine = (transform: (original: string) => string) =>
+      buildUserLine(transform(body.text), [...prefixes, ...body.prefixes], this.composer.buildUserContent, uuid);
+    return { ...newBatch(messageIds, buildLine((text) => text), uuid, notes, source), renderLine: buildLine };
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
-    const problem = checkUserLine(batch.line);
+    const line = this.#lineForWrite(st, batch);
+    const problem = checkUserLine(line);
     if (problem) {
       this.invalidInput(st, problem, batch.messageIds);
       this.afterTurn(st, proc);
@@ -294,7 +295,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.turnInterrupted = false;
     st.stopRequested = false;
     await new Promise<void>((resolve) => {
-      proc.child.stdin.write(batch.line + "\n", (err) => {
+      proc.child.stdin.write(line + "\n", (err) => {
         if (!err) this.markDelivered(st, batch);
         resolve();
       });
@@ -323,7 +324,15 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           if (this.discardStaleSystemBatch(st, proc, batch)) return;
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
-          proc.child.stdin.write(batch.line + "\n");
+          const line = this.#lineForWrite(st, batch);
+          const problem = checkUserLine(line);
+          if (problem) {
+            this.dropBatch(st, batch);
+            this.invalidInput(st, problem, batch.messageIds);
+            this.afterTurn(st, proc);
+            return;
+          }
+          proc.child.stdin.write(line + "\n");
           this.armStartTimer(st, proc);
           const outcome = await proc.ready;
           if (outcome.kind === "ok") return;

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { systemMessageDedupeKey, type SystemMessageMeta } from "../../shared/domain.ts";
 import { MIN_WORKER_MAX_TIME_MS } from "../../shared/limits.ts";
 import { listActions, setActionStatus } from "../actions/index.ts";
 import { canDeliverSystemMessage, createSessionSendHandler } from "../handlers.ts";
@@ -9,9 +10,10 @@ let f: ReturnType<typeof workerOpsFixture>;
 beforeEach(() => { f = workerOpsFixture(); });
 afterEach(async () => { vi.useRealTimers(); await f.close(); });
 
-const notice = (event: string) => f.db.get<{ id: number }>(
-  "SELECT id FROM messages WHERE session_id = ? AND json_extract(meta, '$.event') = ? ORDER BY id DESC LIMIT 1",
-  f.pm.sessionId, event,
+const notice = (event: string, subject?: string) => f.db.get<{ id: number }>(
+  `SELECT id FROM messages WHERE session_id = ? AND meta ->> '$.event' = ?
+    ${subject === undefined ? "" : "AND meta ->> '$.subject.kind' = ?"} ORDER BY id DESC LIMIT 1`,
+  f.pm.sessionId, event, ...(subject === undefined ? [] : [subject]),
 )!.id;
 
 const pmEvent = (type: "message.delivered" | "message.requeued" | "message.processing", id: number) =>
@@ -37,10 +39,47 @@ const eligible = (id: number) => canDeliverSystemMessage(f.ledger, f.pm.sessionI
 function readyGraph() {
   const { id: graphId } = f.hub("graph.create", { specJson: '{"title":"Example","nodes":[{"key":"a","title":"A"}]}' }).data.graph;
   f.hub("graph.skip", { graphId, nodeKey: "a", reason: "No longer needed" });
-  return { graphId, id: notice("task_graph.ready_to_finish") };
+  return { graphId, id: notice("pm.wakeup", "graph.ready_to_finish") };
 }
 
 const patch = (graphId: number) => f.hub("graph.patch", { graphId, specJson: '{"addSteps":[{"key":"b","title":"B"}]}' });
+
+function putLegacyEnvelope(graphId: number, id: number): void {
+  const meta = { event: "task_graph.ready_to_finish", graphId, seq: 1 } satisfies SystemMessageMeta;
+  f.db.run("UPDATE messages SET meta = ?, dedupe_key = ? WHERE id = ?", JSON.stringify(meta), systemMessageDedupeKey(f.pm.conversation.id, meta), id);
+}
+
+it("S8.1: a queued delivery note from before the upgrade still reaches the PM", async () => {
+  const { graphId, id } = readyGraph();
+  putLegacyEnvelope(graphId, id);
+  expect(eligible(id)).toBe(true);
+  expect(await deliver(id)).toBe(1);
+  expect(f.ledger.getMessage(id)?.status).toBe("delivered");
+});
+
+it("S8.1: a requeued delivery note from before the upgrade stops if the graph has new work", async () => {
+  const { graphId, id } = readyGraph();
+  putLegacyEnvelope(graphId, id);
+  expect(await deliver(id)).toBe(1);
+  patch(graphId);
+  pmEvent("message.requeued", id);
+  expect(await deliver(id)).toBe(0);
+  expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+});
+
+it("S8.1: an older queue entry cannot claim a new ready period", async () => {
+  const { graphId, id } = readyGraph();
+  putLegacyEnvelope(graphId, id);
+  expect(await deliver(id)).toBe(1);
+  patch(graphId);
+  f.hub("graph.skip", { graphId, nodeKey: "b" });
+  const fresh = notice("pm.wakeup", "graph.ready_to_finish");
+  expect(fresh).not.toBe(id);
+  pmEvent("message.requeued", id);
+  expect(await deliver(id)).toBe(0);
+  expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+  expect(await deliver(fresh)).toBe(1);
+});
 
 function graphWithTwoLeaves() {
   return f.hub("graph.create", {
@@ -95,7 +134,7 @@ it("drops an old delivery note even after the newly added step settles", async (
   expect(await deliver(id)).toBe(1);
   patch(graphId);
   f.hub("graph.skip", { graphId, nodeKey: "b", reason: "No longer needed" });
-  const latest = notice("task_graph.ready_to_finish");
+  const latest = notice("pm.wakeup", "graph.ready_to_finish");
   expect(latest).not.toBe(id);
   pmEvent("message.requeued", id);
   expect(await deliver(id)).toBe(0);

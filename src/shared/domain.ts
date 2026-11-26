@@ -1,3 +1,4 @@
+import { isGraphReadyNotice } from "./pm-notice.ts";
 import {
   ASK_MAX_OPTION_CHARS,
   ASK_MAX_OPTIONS,
@@ -519,7 +520,7 @@ export function isChecklistReminder(message: Pick<Message, "sender" | "meta">): 
 
 export function isSilentTriggerMessage(message: Pick<Message, "sender" | "meta">): boolean {
   const ev = systemEventOf(message)?.event;
-  return ev === "worker.max_time_exceeded" || ev === "task_graph.ready_to_finish";
+  return ev === "worker.max_time_exceeded" || ev === "task_graph.ready_to_finish" || isGraphReadyNotice(message);
 }
 
 export function stripSystemPrefix(text: string): string {
