@@ -2,6 +2,8 @@
 
 Follow this standard whenever a task asks for a design plan. The workflow runs in one line: design plan (or two independent designs and a synthesis step for complex work), Project Manager plan review, implementation, parallel logic and real-environment review, fix and re-review (up to 3 rounds), Project Manager merge, and delivery of the acceptance evidence to the user.
 
+Build the Task Graph with planning, implementation, and review from the start. Set `"confirm": true` on the planning step so the Project Manager can review its result before implementation starts. Escalate user decisions from that step with `hub ask --node`.
+
 A planning step commits a design document in `docs/<topic>-design.md`, a compiling TypeScript code skeleton in the target files, and runnable acceptance tests. Before implementation starts, confirm and record that every test for new or changed behavior fails and that every regression test confirming an unchanged existing rule passes. Later implementation steps fill in the function bodies until every acceptance test passes.
 
 ## Design document
@@ -26,7 +28,6 @@ Keep the opening section focused on what the Project Manager checks before imple
   - Fixing the root cause requires rebuilding the foundation and multiplies the work several times over.
   - Irreversible or external-facing operations.
   For every rule sent to the user for approval, attach a concrete example or a screenshot showing what the user will see under that rule. Write `None` when no user decision is needed.
-- **Task Graph sequencing note.** Task Graph checkpoints currently pause only for the user, not for Project Manager review. Until Task Graph supports a Project Manager review pause, run planning as a standalone step and append the implementation and review steps only after the Project Manager approves the plan.
 
 ### For Workers and reviewers
 

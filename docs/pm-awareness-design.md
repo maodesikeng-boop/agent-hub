@@ -76,9 +76,9 @@ The PM can overturn any of these without asking the user.
 
 | PR | Contents | Migration or stamp | Depends on |
 |---|---|---|---|
-| **PR-3 (revised) One decision chain** | `confirm: true` pauses for the PM; escalation through `hub ask --node`; authored step questions removed from create and patch; friction PR-3's `doneSteps` and text-limit table unchanged; Task Graph manual and `docs/plan-standard.md` sequencing note rewritten | None. The friction plan's `checkpoint` column and migration are dropped | None |
+| **PR-3 (revised) One decision chain** | `confirm: true` pauses for the PM; escalation through `hub ask --node`; authored step questions removed from create and patch; friction PR-3's `doneSteps` and text-limit table unchanged; Task Graph manual and plan sequencing updated; vendor switches retain `pm.wakeup` | None. The friction plan's `checkpoint` column and migration are dropped | None |
 | **PR-4 PM notice entry** (friction plan) | Unchanged | None | Rebase after PR-3 |
-| **PR-6 Status list** | `pmAgendaOf` and its text; `hub status`; agenda sections in both preamble builders; the footer on every PM wake (snapshot plus changes, per-session cursor) with the busy line; the handover notice; the exhaustive vendor-switch event table; the delivery note on PR-4's entry; the delivery row in `hub graph show` and in the web (D-A2 option 1) | `migrations/**` (`0057`) needs a stamp | PR-4, PR-1 (#463) |
+| **PR-6 Status list** | `pmAgendaOf` and its text; `hub status`; agenda sections in both preamble builders; the footer on every PM wake (snapshot plus changes, per-session cursor) with the busy line; the handover notice; the delivery note on PR-4's entry; the delivery row in `hub graph show` and in the web (D-A2 option 1) | `migrations/**` (`0057`) needs a stamp | PR-4, PR-1 (#463) |
 | **PR-7 Step slots** | `slot` on steps, admission at one boundary, release by invariant, queue position in text and web, Task Graph manual | `migrations/**` (`0058`) needs a stamp | PR-6 for the status lines |
 | **PR-8 Watches** | `hub watch add`, `list`, and `close`; the sandboxed runner; settle notices; restart recovery; retention | `migrations/**` (`0059`); `src/daemon/platform/**` or `write-scope.ts` if the runner needs a new entry point. Windows workflow runs | PR-6 |
 | **PR-9 Reminders** | Idle reminders, D-A1 option 1 | None | PR-6, PR-8 |
@@ -403,7 +403,7 @@ The body is what the PM will do once the wait settles. The receipt is `已开始
 #### B7. Handover changes
 
 - Both preamble builders get their live section from the status list (B2).
-- `INCLUDED_SYSTEM_EVENTS` becomes `SYSTEM_EVENT_IN_SWITCH_LOG`, an exhaustive `Record` over every system event, so a new event kind cannot be left out without a compile error. `pm.wakeup` is included. The skeleton already makes the table exhaustive with today's values.
+- `INCLUDED_SYSTEM_EVENTS` becomes `SYSTEM_EVENT_IN_SWITCH_LOG`, an exhaustive `Record` over every system event, so a new event kind cannot be left out without a compile error. `pm.wakeup` is included. PR-3 ships the table and the wakeup fix.
 - Watches replace vendor background waits for PMs, so a switch no longer waits on them or loses their result.
 
 ### How this joins the friction plan
@@ -415,7 +415,7 @@ The body is what the PM will do once the wait settles. The receipt is `已开始
 | PR-3 PM checkpoint and atomic patch | Revised (B3): one `confirm` meaning, no `checkpoint` column, no `"user"` value; `doneSteps` and the text-limit table unchanged. Its acceptance case S1.6 ("`confirm: true` still opens a user card") is replaced by U1 here. |
 | PR-4 `PmNoticeSubject` and `enqueuePmNoticeIn` | Gains `graph.ready_to_finish`, `watch.settled`, and `pm.agenda`. Their currency rules call `isPmAgendaItemOpen`. |
 | D1 card age and daily digest | Unchanged. D-A1 reminds the PM about its own items, never about user cards. |
-| D2 passing a leaf checkpoint wakes the PM | Unchanged. It now applies to checkpoints the PM escalated. |
+| D2 passing a leaf checkpoint wakes the PM | Applies to checkpoints the PM escalated. PR-3 keeps the existing delivery note when the last step finishes. PR-4 adds the wake when another line is still open. |
 | D3 dropping the end-of-reply card list | Unchanged. |
 | Help-only commands and the fingerprint guard | `watch.*` joins `HUB_HELP_ONLY_COMMANDS`; `HUB_USAGE_PROMPT` and the skill catalog entry stay byte-identical. |
 
@@ -591,15 +591,16 @@ The branch carries one skeleton commit per PR, like the friction plan. Each impl
 
 PR-3 (revised), one decision chain:
 
-- No new module. Behavior changes in `task-graphs/turn-report.ts`, `gate.ts`, `progress.ts`, and `spec.ts`.
+- No schema change. The decision path changes in `task-graphs/turn-report.ts`, `gate.ts`, `progress.ts`, and `spec.ts`. Patch validation and command help share `src/shared/text-limits.ts`.
 - `src/daemon/ledger/task-graph-decision-chain.test.ts`: acceptance tests U1 to U7 (S9).
+- `src/daemon/ledger/task-graph-patch-done.test.ts`: the friction plan's atomic patch acceptance tests.
+- `src/daemon/ledger/vendor-switch-context.ts` and its test: an exhaustive event table that keeps delivered `pm.wakeup` messages (S4.3 and S4.6).
 
 PR-6, status list:
 
 - `migrations/0057_pm_agenda.sql` and `migrations/manifest.sha256`: the `task_graph_step_states` side table, its triggers and backfill, and `pm_agenda_cursors`, with both tables registered in `src/shared/resource-registry.ts`.
 - `src/shared/pm-agenda.ts`: item, block, and list types and the Chinese text for `hub status`, the preamble, the three footer shapes, the busy line, and the handover notice; `diffAgendaLines`, the pure diff between a cursor and the current list.
 - `src/daemon/ledger/pm-agenda.ts`: `pmAgendaOf`, `isPmAgendaItemOpen`, `pmAgendaFooterFor`, `recordAgendaDeliveredIn`, and `enqueueHandoverAgendaNoticeIn`.
-- `src/daemon/ledger/vendor-switch-context.ts`: the exhaustive `SYSTEM_EVENT_IN_SWITCH_LOG` table with today's values.
 - `src/shared/limits.ts`: the status list, slot, watch, and reminder constants.
 - Callers filled in by PR-6: `hub-commands.ts`, `handover.ts`, `ledger.ts`, `task-graphs/delivery.ts`, `text.ts`, `overview.ts`, `src/web/work-status.ts`, `WorkPanel.tsx`, `TaskGraphDialog.tsx`, `src/shared/task-graph-skill.ts`.
 - `src/daemon/ledger/pm-agenda.test.ts` (S1, S2, S3, S8.4, S13) and `src/daemon/ledger/vendor-switch-agenda.test.ts` (S4). The web delivery row and header come from `graphDeliveryOf` in `src/web/work-status.ts`, tested in `src/web/work-status.test.ts` (S1.1, S1.2); PR-6 adds wide and narrow screenshots of `WorkPanel` and `TaskGraphDialog`. That skeleton is its own commit, written after D-A2 was decided, and PR-6 cherry-picks it too.
@@ -707,7 +708,7 @@ Categories: ① two turns in a row, ② restart in the middle, ③ state changes
 2. The PM sends it back with `hub worker send`; the step runs again in the same session; the next clean report brakes again. ①
 3. The PM passes it with `hub graph done plan`. `plan` is done, its Worker ends, and `impl` starts with the handoff.
 4. In a second graph the PM cannot decide and runs `hub ask --node plan`. The user sees a `通过 / 打回` card with the PM's question on top. `通过` finishes `plan` and starts `impl` without waking the PM; `打回` sends the note to the Worker. ⑨
-5. The PM escalates a checkpoint with no successor; the user passes it; the PM is woken within one minute with the note (D2). ③
+5. The PM escalates a checkpoint with no successor. The user passes it, and the PM is woken within one minute with the user's note (D2). PR-3 covers the delivery note when this completes the graph. PR-4 covers a leaf checkpoint with another line still open. ③
 6. `graph create` with a step that carries `question` is refused with a pointer to `hub ask --node`. ④
 7. A non-checkpoint clean report still hands off without waking the PM; a Worker's `有问题` still brakes to the PM; sandbox approvals and user blockers still go to the user. ④
 8. The flow passes with Claude, Codex, Agy, and Pi Workers on fake CLIs, then on real CLIs where installed. ⑦

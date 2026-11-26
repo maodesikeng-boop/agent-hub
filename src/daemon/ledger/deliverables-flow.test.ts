@@ -110,6 +110,9 @@ describe("交付物", () => {
       specJson: JSON.stringify({ title: "交付物", goal: "方案和验收证据做成能点开的文件", steps: steps.map((s) => ({ brief: "照目标做", ...s })) }),
     }).data.graph;
 
+  const escalate = (graphId: number, node: string) =>
+    ledger.hubCall(lin.sessionId, "ask", { graphId, node, text: "这一步可以通过吗？" }).data.messageId;
+
   const graphShow = (graphId: number): TaskGraph => ledger.hubCall(lin.sessionId, "graph.show", { graphId }).data.graph;
   const snapshotGraph = (graphId: number): TaskGraph => ledger.snapshot().activeTaskGraphs.find((g) => g.id === graphId)!;
   const messageById = (id: MessageId) => ledger.getMessage(id);
@@ -139,11 +142,12 @@ describe("交付物", () => {
       const w = graph.nodes[0]!.activeWorkerId!;
       await runWorkerTurn(w, reportText(planFiles()));
       // 打回让它改，再交一次只带方案和验收结论
-      const askId = graphShow(graph.id).nodes[0]!.gateAskMessageId!;
+      const askId = escalate(graph.id, "plan");
       expect(askId).not.toBeNull();
       ledger.decideTaskNode(graph.id, "plan", { clientId: "reject-1", choice: CONFIRM_REJECT_OPTION, note: "再改改" });
       await runWorkerTurn(w, reportText(`[方案](${path("docs/plan.md")}) [验收结论](${path("verdict.md")})`));
       expect(labels(graphShow(graph.id).nodes[0]!.artifact?.deliverables)).toEqual(["方案", "验收结论"]);
+      escalate(graph.id, "plan");
       ledger.decideTaskNode(graph.id, "plan", { clientId: "reject-2", choice: CONFIRM_REJECT_OPTION, note: "还要改" });
       await runWorkerTurn(w, reportText("无"));
       expect(labels(graphShow(graph.id).nodes[0]!.artifact?.deliverables)).toEqual(["方案", "验收结论"]);
@@ -154,8 +158,7 @@ describe("交付物", () => {
       const w = graph.nodes[0]!.activeWorkerId!;
       await runWorkerTurn(w, reportText(planFiles()));
       const copies = sentCopies();
-      const node = graphShow(graph.id).nodes[0]!;
-      const ask = askOf(messageById(node.gateAskMessageId!)!);
+      const ask = askOf(messageById(escalate(graph.id, "plan"))!);
       expect(labels(ask?.deliverables)).toEqual(["方案", "桌面截图", "录屏"]);
       expect(sentCopies()).toBe(copies);
       // 总助拍板卡：门禁步骤取该步交付物
@@ -168,6 +171,7 @@ describe("交付物", () => {
       const graph = createGraph([{ key: "plan", title: "方案", confirm: true }]);
       const w = graph.nodes[0]!.activeWorkerId!;
       await runWorkerTurn(w, reportText(planFiles(), "方案好了。\n\n截图在文件里").replace("交棒: 无", "交棒: 改了卡片顺序"));
+      escalate(graph.id, "plan");
       const summary = graphShow(graph.id).nodes[0]!.gateSummaryMd!;
       const [lead, ...rest] = summary.split("\n\n");
       const details = rest.join("\n\n");
@@ -322,6 +326,7 @@ describe("交付物", () => {
       await runWorkerTurn(graph.nodes.find((n) => n.key === "plan")!.activeWorkerId!, reportText(`[方案](${path("docs/plan.md")})`));
       const verify = graphShow(graph.id).nodes.find((n) => n.key === "verify")!;
       await runWorkerTurn(verify.activeWorkerId!, reportText(`[验收结论](${path("verdict.md")})`));
+      escalate(graph.id, "verify");
       const slim = snapshotGraph(graph.id);
       expect(slim.nodes.find((n) => n.key === "plan")!.artifact?.deliverables).toBeUndefined();
       expect(slim.nodes.find((n) => n.key === "plan")!.artifact?.summary).toBe("做好了");

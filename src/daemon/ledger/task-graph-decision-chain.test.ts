@@ -30,6 +30,7 @@ describe("S9: one decision chain from Worker to PM to user", () => {
     const wid = f.showGraph(graphId).nodes.find((n) => n.key === "plan")!.activeWorkerId!;
     await f.startWorktree(wid);
     f.workerTurn(wid, reportBlock({ status: "做完了", summary: "方案写好了", handoff: "要点：先减后加", files: "[方案](/tmp/plan.md)" }));
+    await f.ledger.settleDriverEvents();
     return wid;
   }
 

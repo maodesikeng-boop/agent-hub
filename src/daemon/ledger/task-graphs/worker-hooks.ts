@@ -15,12 +15,13 @@ import {
 import { userBlockedPmNote } from "../user-blockers.ts";
 import { stopQueuedDeliveryNotesIn } from "./delivery.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
-import { decisionOf, toTaskNode, workerIdsOf } from "./rows.ts";
+import { artifactWithoutCheckpoint, decisionOf, toTaskNode, workerIdsOf } from "./rows.ts";
 import { validateNodeKey } from "./spec.ts";
 import {
   buildGraphMaps,
   getGraphRow,
   getStepRow,
+  hasPendingStepAsk,
   isUserBlocked,
   leaveStepIn,
   pushSlimGraphIn,
@@ -140,6 +141,7 @@ export function bindWorkerStartedIn(
             skipped = 0,
             active_worker_id = ?,
             worker_ids_json = ?,
+            artifact_json = ?,
             vendor = COALESCE(?, vendor),
             model = CASE WHEN ? = 1 THEN ? ELSE model END,
             effort = CASE WHEN ? = 1 THEN ? ELSE effort END,
@@ -149,6 +151,7 @@ export function bindWorkerStartedIn(
     sandboxPending ? "user" : null,
     workerId,
     JSON.stringify(nextIds),
+    hasPendingStepAsk(g, node) ? node.artifact_json : artifactWithoutCheckpoint(node),
     agent?.vendor ?? null,
     setAgent,
     agent?.model ?? null,
@@ -283,7 +286,11 @@ export function onWorkerResumedIn(g: TaskGraphCtx, p: Pending, workerId: WorkerI
   const graphRow = getGraphRow(g.db, attnNode.graph_id);
   if (graphRow === undefined || graphRow.status !== "active") return;
   const t = g.now();
-  leaveStepIn(g.db, attnNode, { status: "running", waitingFor: null }, t);
+  leaveStepIn(g.db, attnNode, {
+    status: "running",
+    waitingFor: null,
+    artifactJson: hasPendingStepAsk(g, attnNode) ? attnNode.artifact_json : artifactWithoutCheckpoint(attnNode),
+  }, t);
   touchGraph(g.db, graphRow.id, t);
   pushSlimGraphIn(g, p, graphRow.id);
 }

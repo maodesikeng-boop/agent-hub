@@ -20,6 +20,7 @@ import {
 } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { RouterReportLink } from "../../../shared/router.ts";
+import { checkTextLimit, formatTextLimitViolations } from "../../../shared/text-limits.ts";
 import type { Db } from "../../store/index.ts";
 import { fail, type Pending } from "../context.ts";
 import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
@@ -63,9 +64,8 @@ export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.lis
 
 function doneArtifact(args: HubArgs<"graph.done">, node: TaskNodeDbRow): { artifact: TaskArtifact; note: string | undefined } {
   const summary = args.summary?.trim();
-  if (summary !== undefined && charLen(summary) > MAX_NODE_ARTIFACT_SUMMARY_CHARS) {
-    throw fail("invalid", `节点产物摘要最多 ${MAX_NODE_ARTIFACT_SUMMARY_CHARS} 字`);
-  }
+  const violation = checkTextLimit("step.artifactSummary", summary ?? "", node.node_key);
+  if (violation !== null) throw fail("invalid", formatTextLimitViolations([violation]));
   const note = args.note?.trim();
   if (note !== undefined && utf8Bytes(note) > MAX_TASK_BYTES) throw fail("invalid", `放行说明不能超过 ${MAX_TASK_BYTES} 字节`);
   const existing = readStoredArtifact(node.artifact_json).artifact ?? {};
@@ -90,28 +90,19 @@ function assertNotRunning(node: TaskNodeDbRow, nodeKey: TaskNodeKey, graphId: Ta
   );
 }
 
-export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubArgs<"graph.done">, context?: HubCallContext): HubResult<"graph.done"> {
-  g.persona.assertPmNotArchived(caller.pmId);
-  const nodeKey = validateNodeKey(args.nodeKey);
-  const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: false });
-  const node = requireStepRow(g.db, graphRow.id, nodeKey);
-  if (graphRow.status !== "active" && !(graphRow.status === "completed" && node.status === "done")) {
-    throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
-  }
-  assertNotRunning(node, nodeKey, graphRow.id);
+export function markStepDoneIn(g: TaskGraphCtx, p: Pending, node: TaskNodeDbRow, args: HubArgs<"graph.done">): void {
+  assertNotRunning(node, node.node_key, node.graph_id);
   if (sandboxApprovalPendingForStep(g.db, node.id)) {
-    throw fail("conflict", `步骤「${nodeKey}」在等用户确认 Worker 沙箱。请等用户确认，或先收工这个 Worker`);
+    throw fail("conflict", `步骤「${node.node_key}」在等用户确认 Worker 沙箱。请等用户确认，或先收工这个 Worker`);
   }
   const latest = lastWorkerIdOf(node);
   const workers = g.options.workers?.();
   const openWorker = latest !== null && g.db.get("SELECT 1 FROM workers WHERE id = ? AND status = 'open'", latest) !== undefined ? latest : null;
   if (openWorker !== null && workers?.isWorkerInFlight(openWorker)) {
-    assertNotRunning({ ...node, status: "running", active_worker_id: openWorker }, nodeKey, graphRow.id);
+    assertNotRunning({ ...node, status: "running", active_worker_id: openWorker }, node.node_key, node.graph_id);
   }
   const { artifact, note } = doneArtifact(args, node);
   const nextPmNote = note && note !== "" ? note : node.pm_note;
-  const active = graphRow.status === "active";
-  const wasAllSettled = active && isGraphAllSettled(g.db, graphRow.id);
   const t = g.now();
   g.db.run(
     `UPDATE task_graph_steps
@@ -128,6 +119,19 @@ export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
     node.id,
   );
   if (openWorker !== null) workers?.stopWorkersIn(p, [openWorker]);
+}
+
+export function doneIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubArgs<"graph.done">, context?: HubCallContext): HubResult<"graph.done"> {
+  g.persona.assertPmNotArchived(caller.pmId);
+  const nodeKey = validateNodeKey(args.nodeKey);
+  const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: false });
+  const node = requireStepRow(g.db, graphRow.id, nodeKey);
+  if (graphRow.status !== "active" && !(graphRow.status === "completed" && node.status === "done")) {
+    throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
+  }
+  const active = graphRow.status === "active";
+  const wasAllSettled = active && isGraphAllSettled(g.db, graphRow.id);
+  markStepDoneIn(g, p, node, args);
   const progress: ProgressResult = active
     ? recomputeGraphProgressIn(g, p, graphRow, caller, context, { retractBlockedWaiting: false })
     : emptyProgress();
@@ -321,6 +325,8 @@ export function finishIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: Hu
   g.persona.assertPmNotArchived(caller.pmId);
   const summary = typeof args.summary === "string" ? args.summary.trim() : "";
   if (summary === "") throw fail("invalid", "交付摘要不能是空的（用 --stdin 传入交付摘要）");
+  const violation = checkTextLimit("graph.finishSummary", summary);
+  if (violation !== null) throw fail("invalid", formatTextLimitViolations([violation]));
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: true });
   const nodeRows = listStepRows(g.db, graphRow.id);
   assertAllSettled(g, graphRow, nodeRows);

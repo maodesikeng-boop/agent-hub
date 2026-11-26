@@ -68,7 +68,7 @@ const row = (cwd: string): AgentSessionRow => ({
 });
 
 describe("任务图技能正文", () => {
-  it("建图规矩匹配第 5 步自动开工与交棒终稿：goal + steps、一图一事、按步骤拆、默认一条线共用 worktree、多路合流落盘 upstream/、用户检查点、四条红线加 review 步骤", () => {
+  it("建图规矩匹配第 5 步自动开工与交棒终稿：goal + steps、一图一事、按步骤拆、默认一条线共用 worktree、多路合流落盘 upstream/、项目经理检查点、四条红线加 review 步骤", () => {
     const body = taskGraphSkillBody();
     // 编排简化第 4 步：节点类型只剩一种、状态只剩四个，手册里不再出现 gate 节点、kind 和旧状态
     expect(taskGraphSkillMarkdown()).not.toMatch(/\bgate\b|\bkind\b|\bready\b|attention|waiting_user|门禁/u);
@@ -87,10 +87,9 @@ describe("任务图技能正文", () => {
       "`caps: null` 恢复默认",
       "`confirm: true`、`review: true`、`base`（普通步骤只能写 `\"main\"`，从主干重开；审查步骤写被审分支）",
       "给审查步骤写 `\"base\": \"<被审分支>\"`",
-      "**用户明说要先看的步骤**（比如“先给我看方案”“改完先让我看效果”）：给这一步标 `\"confirm\": true`（照常写 `brief` 自动开工）。",
-      "「通过 / 打回」检查点拍板卡",
+      "**下一步开始前要审的结果**",
+      `确实需要用户决定时，再用 \`${hub} ask --node <步骤>\`，卡片默认提供「通过 / 打回」`,
       "步骤只有四个状态：没轮到（`pending`）、在干（`running`）、等人（`waiting`，等你处理或等用户拍板）、完了（`done`，跳过也算完了）。",
-      `别的拍板不要预先建空步骤，等干活的 Worker 撞上了再用 \`${hub} ask --node <步骤>\` 挂卡。`,
       "**需要独立审查时，在实现后面加一个审查步骤**（设 `\"review\": true`，需要跨模型审查的指定另一家 `vendor`",
       "项目不是 git 仓库的，改加一个只读（`\"readonly\": true`）的普通步骤",
       "结论只有 PASS 和 FAIL，并写明验证提交号。",
@@ -100,7 +99,7 @@ describe("任务图技能正文", () => {
     }
   });
 
-  it("图里怎么跟进：顺利完成自动收工交棒不叫醒 PM、报偏离或异常停在 waiting、换人一条 --node 命令、计划变了 patch（addSteps/updateSteps/removeSteps/skipSteps）、待交付发交付单并用 finish 结束", () => {
+  it("图里怎么跟进：顺利完成自动收工交棒不叫醒 PM、报偏离或异常停在 waiting、换人一条 --node 命令、计划变了 patch（addSteps/updateSteps/removeSteps/skipSteps/doneSteps）、待交付发交付单并用 finish 结束", () => {
     const body = taskGraphSkillBody();
     for (const word of [
       `进度以 \`${hub} graph show\` 为准。`,
@@ -112,7 +111,7 @@ describe("任务图技能正文", () => {
       "还挂着的旧 Worker 自动收工且步骤不标完成",
       "前任的工作目录与分支",
       `最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径`,
-      "**计划变了**：随时 `" + `${hub} graph patch` + "`（用 `addSteps`、`updateSteps`、`removeSteps`、`skipSteps` 或更新 `goal`",
+      "**计划变了**：随时 `" + `${hub} graph patch` + "`（用 `addSteps`、`updateSteps`、`removeSteps`、`skipSteps`、`doneSteps` 或更新 `goal`",
       "原本没建图、做着发现要分段或加审查的，随时补建一张图。",
       "**全部步骤完成后待交付**：最后一步完成时图不会自动结束，你会收到交付单",
       `用 \`${hub} graph finish\` 收尾（交付摘要自动同步给总助）。`,

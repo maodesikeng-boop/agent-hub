@@ -2647,6 +2647,12 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     ss.update(ws.id, { status: "ended", pid: null });
   }
 
+  async function escalateCheckpoint(graphId: number) {
+    const { messageId } = ledger.hubCall(lin.sessionId, "ask", { graphId, node: "design", text: "方案可以通过吗？" }).data;
+    await settle();
+    return messageId;
+  }
+
   async function raiseCheckpointWithDeliverables() {
     const repo = prepareRepo();
     writeFileSync(join(repo, "plan.md"), "# 方案详情\n");
@@ -2663,8 +2669,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     const w1 = graph.nodes.find((n) => n.key === "design")!.activeWorkerId!;
     finishWorkerTurn(w1, `\n- [方案文档](${join(repo, "plan.md")})\n- [界面预览](${join(repo, "preview.png")})`);
     await settle();
-    const refreshed = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
-    const askMsgId = refreshed.nodes.find((n) => n.key === "design")!.gateAskMessageId!;
+    const askMsgId = await escalateCheckpoint(graph.id);
     return { graphId: graph.id, askMsgId, pmChatId: chatOf(lin.pmId), rChatId: routerChat() };
   }
 
@@ -2722,7 +2727,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     const w1 = ledger.hubCall(lin.sessionId, "graph.show", { graphId: first.graphId }).data.graph.nodes.find((n) => n.key === "design")!.activeWorkerId!;
     finishWorkerTurn(w1, "无", "已补充边界说明");
     await settle();
-    const secondAskId = ledger.hubCall(lin.sessionId, "graph.show", { graphId: first.graphId }).data.graph.nodes.find((n) => n.key === "design")!.gateAskMessageId!;
+    const secondAskId = await escalateCheckpoint(first.graphId);
     expect(secondAskId).not.toBe(first.askMsgId);
     expect(store().postOf({ kind: "router_ask", messageId: secondAskId })?.state).toBe("card_pending");
 
@@ -2735,7 +2740,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
 
     finishWorkerTurn(w1, "无", "第三版就绪");
     await settle();
-    const thirdAskId = ledger.hubCall(lin.sessionId, "graph.show", { graphId: first.graphId }).data.graph.nodes.find((n) => n.key === "design")!.gateAskMessageId!;
+    const thirdAskId = await escalateCheckpoint(first.graphId);
     expect(store().postOf({ kind: "router_ask", messageId: thirdAskId })?.state).toBe("card_pending");
 
     ledger.cancelTaskGraph(first.graphId, { reason: "直接取消" });

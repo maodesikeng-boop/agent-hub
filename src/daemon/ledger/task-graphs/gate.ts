@@ -1,6 +1,6 @@
 import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import type { DecideTaskNodeRequest, DecideTaskNodeResponse } from "../../../shared/api.ts";
-import { CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, askOf, taskNodeStatusText } from "../../../shared/domain.ts";
+import { CONFIRM_CHECKPOINT_OPTIONS, CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION, askOf, taskNodeStatusText, truncateChars } from "../../../shared/domain.ts";
 import type { MessageId, PmId, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
 import { mergeDeliverables, type HubFileArg } from "../../../shared/deliverables.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, type HubArgs, type HubResult } from "../../../shared/hub.ts";
@@ -8,7 +8,9 @@ import type { HubCallContext } from "../../../shared/ledger.ts";
 import { DELIVERABLES_PER_STEP_MAX, MAX_DECISION_CHOICE_CHARS, MAX_DECISION_NOTE_CHARS } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { SentFile } from "../../../shared/sent-files.ts";
+import { TEXT_LIMITS } from "../../../shared/text-limits.ts";
 import { userBlockerText } from "../../../shared/user-blockers.ts";
+import { isReportFieldNone, parseWorkerReport } from "../../../shared/worker.ts";
 import { fail, type Pending } from "../context.ts";
 import { executeStepDecisionIn, gateDecideWakeupKey, workerDecisionDedupeKey, type DecisionResult } from "./decision.ts";
 import { stopQueuedDeliveryNotesIn } from "./delivery.ts";
@@ -20,6 +22,7 @@ import {
   getStepRow,
   hasPendingStepAsk,
   isUserBlocked,
+  lastReportText,
   loadGraph,
   publishGraphIn,
   pushSlimGraphIn,
@@ -35,12 +38,36 @@ type AskOnStepArgs = Omit<HubArgs<"ask">, "files"> & {
   fileArgs?: { args: readonly HubFileArg[]; files: readonly SentFile[] };
 };
 
-function askGateOf(args: AskOnStepArgs): GateFields {
+function checkpointContext(g: TaskGraphCtx, node: TaskNodeDbRow, conversationId: TaskGraphDbRow["conversation_id"]): string[] {
+  const workerId = workerIdsOf(node).at(-1);
+  const text = workerId === undefined ? undefined : lastReportText(g.db, conversationId, workerId);
+  const parsed = text === undefined ? null : parseWorkerReport(text);
+  if (parsed?.kind !== "ok") return [];
+  const { summary, handoff, commit, pr } = parsed.report;
+  return [
+    `**摘要**：${summary.trim().replace(/\n\s*\n/gu, "\n")}`,
+    ...(!isReportFieldNone(handoff) ? [`**交棒要点**：\n${handoff}`] : []),
+    ...[commit ? `提交 \`${commit}\`` : "", pr ? `PR ${pr}` : ""].filter(Boolean),
+  ];
+}
+
+function askGateOf(g: TaskGraphCtx, graph: TaskGraphDbRow, node: TaskNodeDbRow, args: AskOnStepArgs, checkpoint: boolean): GateFields {
   const { question, summaryMd } = splitAskTextForGate(args.text);
-  const gate = validateGateFields({ question, options: args.options, recommended: args.recommended, summaryMd: summaryMd ?? undefined });
+  const gate = validateGateFields({
+    question,
+    options: args.options ?? (checkpoint ? [...CONFIRM_CHECKPOINT_OPTIONS] : undefined),
+    recommended: args.recommended ?? (checkpoint ? CONFIRM_PASS_OPTION : undefined),
+    summaryMd: summaryMd ?? undefined,
+  });
   if (gate.question === null) throw fail("invalid", "拍板卡的问题不能为空");
+  if (checkpoint && (gate.options.length !== CONFIRM_CHECKPOINT_OPTIONS.length ||
+      !CONFIRM_CHECKPOINT_OPTIONS.every((option) => gate.options.includes(option)))) {
+    throw fail("invalid", `检查点拍板卡的选项是「${CONFIRM_PASS_OPTION} / ${CONFIRM_REJECT_OPTION}」。可以省略 --option。`);
+  }
   if (gate.recommended !== null && gate.options.length === 0) throw fail("invalid", "--recommended 要配合 --option <选项>... 一起用");
-  return gate;
+  if (!checkpoint) return gate;
+  const context = [gate.summaryMd, ...checkpointContext(g, node, graph.conversation_id)].filter(Boolean).join("\n\n");
+  return { ...gate, summaryMd: context === "" ? null : truncateChars(context, TEXT_LIMITS["gate.summary"].maxChars) };
 }
 
 function askTargetStep(g: TaskGraphCtx, graphRow: TaskGraphDbRow, nodeKey: TaskNodeKey): TaskNodeDbRow {
@@ -64,7 +91,8 @@ export function askOnStepIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args:
   const nodeKey = validateNodeKey(args.node);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: true });
   const node = askTargetStep(g, graphRow, nodeKey);
-  const gate = askGateOf(args);
+  const checkpoint = isStoredCheckpoint(node) && (node.status === "waiting" || hasPendingStepAsk(g, node));
+  const gate = askGateOf(g, graphRow, node, args, checkpoint);
   const t = g.now();
   if (node.gate_ask_message_id !== null) g.messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
   const gateOptionsJson = gateOptionsJsonOf(gate);
@@ -82,9 +110,10 @@ export function askOnStepIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args:
     chatText,
     gate.options.length >= 2 ? gate.options : undefined,
     {
-      gateRef: { graphId: graphRow.id, nodeKey },
+      gateRef: { graphId: graphRow.id, nodeKey, ...(checkpoint ? { checkpoint: true } : {}) },
       ...(gate.recommended !== null ? { recommended: gate.recommended } : {}),
-      ...(args.fileArgs !== undefined ? { fileArgs: args.fileArgs, deliverables: prevArtifact?.deliverables ?? [] } : {}),
+      ...(args.fileArgs !== undefined ? { fileArgs: args.fileArgs } : {}),
+      ...(checkpoint || args.fileArgs !== undefined ? { deliverables: prevArtifact?.deliverables ?? [] } : {}),
     },
   );
   const stepDeliverables =
@@ -101,15 +130,16 @@ export function askOnStepIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args:
     gate.summaryMd,
     gate.recommended,
     askMsg.id,
-    serializeArtifact(stepDeliverables === null ? prevArtifact : { ...prevArtifact, deliverables: stepDeliverables }, false),
+    serializeArtifact(stepDeliverables === null ? prevArtifact : { ...prevArtifact, deliverables: stepDeliverables }, checkpoint),
     t,
     node.id,
   );
   touchGraph(g.db, graphRow.id, t);
   stopQueuedDeliveryNotesIn(g, p, graphRow.conversation_id, graphRow.id);
   const graph = publishGraphIn(g, p, graphRow.id);
-  const workerHint =
-    node.active_worker_id !== null
+  const workerHint = checkpoint
+    ? "通过后放行，打回意见交给原 Worker；若整张图因此做完，你会收到交付单。"
+    : node.active_worker_id !== null
       ? `用户拍板后定案会直接发给该步的 Worker #${node.active_worker_id} 接着推进，不会叫醒你。`
       : "等用户拍板后再往下推进。";
   return {
@@ -129,7 +159,7 @@ export function closeStepAskIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, me
   const { graphId, nodeKey } = ask.gateRef;
   const node = getStepRow(g.db, graphId, nodeKey);
   if (node?.gate_ask_message_id === messageId) {
-    clearStepAskWaitIn(g, node);
+    clearStepAskWaitIn(g, node, node.status === "waiting" && node.waiting_for === "user");
     pushSlimGraphIn(g, p, graphId);
   }
   return { text: `已关掉步骤拍板卡 #${messageId}。`, data: { messageId } };
@@ -156,12 +186,12 @@ function decideReplyText(nodeKey: TaskNodeKey, choice: string, graphId: TaskGrap
   }
 }
 
-function clearStepAskWaitIn(g: TaskGraphCtx, node: TaskNodeDbRow): void {
+function clearStepAskWaitIn(g: TaskGraphCtx, node: TaskNodeDbRow, preserveCheckpoint = false): void {
   const waitingFor = node.waiting_for === "user" && !isUserBlocked(g.db, node.id) &&
     !sandboxApprovalPendingForStep(g.db, node.id) ? "pm" : node.waiting_for;
   const t = g.now();
   g.db.run("UPDATE task_graph_steps SET waiting_for = ?, artifact_json = ?, updated_at = ? WHERE id = ?",
-    waitingFor, artifactWithoutCheckpoint(node), t, node.id);
+    waitingFor, preserveCheckpoint ? node.artifact_json : artifactWithoutCheckpoint(node), t, node.id);
   touchGraph(g.db, node.graph_id, t);
 }
 
@@ -291,9 +321,7 @@ export function decideNode(
     if (node === undefined) throw fail("not_found", `任务图 #${graphId} 中没有节点「${nodeKey}」`);
     if (node.status === "done") throw fail("conflict", `步骤「${nodeKey}」已经完了`);
     if (sandboxApprovalPendingForStep(g.db, node.id)) throw fail("conflict", "只能由用户在工作台确认 Worker 沙箱");
-    const canDecideWithoutCard = node.gate_ask_message_id === null && node.status === "waiting" &&
-      !isUserBlocked(g.db, node.id) && (node.waiting_for === "user" || node.active_worker_id === null);
-    if (!canDecideWithoutCard && !hasPendingStepAsk(g, node)) {
+    if (!hasPendingStepAsk(g, node)) {
       throw fail("conflict", `步骤「${nodeKey}」${taskNodeStatusText(toTaskNode(node), "user")}，现在不能拍板`);
     }
     const { choice, note } = userDecisionOf(input, gateOptionsOf(node));

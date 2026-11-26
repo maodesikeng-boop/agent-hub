@@ -20,6 +20,7 @@ import type {
 import type { HubFileArg } from "./deliverables.ts";
 import type { WorkerCapabilityMode } from "./pm-capabilities.ts";
 import type { RouterItem, RouterReportLink } from "./router.ts";
+import { TEXT_LIMITS } from "./text-limits.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { AskDetail, PendingAsk } from "./pending-asks.ts";
 import type { ScheduleId, ScheduleRecord, ScheduleRunSummary } from "./schedule.ts";
@@ -256,10 +257,6 @@ export interface CreateTaskGraphNodeInput {
   review?: boolean;
   base?: string;
   deps?: TaskNodeKey[];
-  question?: string;
-  options?: string[];
-  summaryMd?: string;
-  recommended?: string;
 }
 
 export type CreateTaskGraphStepInput = CreateTaskGraphNodeInput;
@@ -294,10 +291,6 @@ export interface PatchTaskGraphNodeInput {
   review?: boolean;
   base?: string | null;
   deps?: TaskNodeKey[];
-  question?: string;
-  options?: string[];
-  summaryMd?: string;
-  recommended?: string;
 }
 
 export type PatchTaskGraphStepInput = PatchTaskGraphNodeInput;
@@ -309,6 +302,7 @@ export interface PatchTaskGraphSpecInput {
   updateSteps?: PatchTaskGraphStepInput[];
   removeSteps?: TaskNodeKey[];
   skipSteps?: TaskNodeKey[];
+  doneSteps?: TaskNodeKey[];
   addNodes?: CreateTaskGraphNodeInput[];
   updateNodes?: PatchTaskGraphNodeInput[];
   removeNodes?: TaskNodeKey[];
@@ -321,11 +315,12 @@ export const ASK_CARD_WHERE = "卡片显示在对话里，用户直接在卡上�
 export const ASK_CARD_TELL_USER = "跟用户说“卡在上面，直接点选”，别让用户去右栏找";
 
 const EXAMPLE_REVIEW_VENDOR = AGENT_VENDORS.find((vendor) => vendor !== DEFAULT_AGENT_VENDOR) ?? DEFAULT_AGENT_VENDOR;
+const EXAMPLE_BRIEF = `…（最多 ${TEXT_LIMITS["step.brief"].maxChars} 字）`;
 export const TASK_GRAPH_CREATE_JSON_HINT =
-  `{"title":"…","goal":"…","steps":[{"key":"impl","title":"…","brief":"…"},{"key":"review","title":"…","brief":"…","review":true,"vendor":"${EXAMPLE_REVIEW_VENDOR}"}]}`;
+  `{"title":"…","goal":"…","steps":[{"key":"impl","title":"…","brief":"${EXAMPLE_BRIEF}"},{"key":"review","title":"…","brief":"${EXAMPLE_BRIEF}","review":true,"vendor":"${EXAMPLE_REVIEW_VENDOR}"}]}`;
 
 export const TASK_GRAPH_PATCH_JSON_HINT =
-  '{"goal":"…","addSteps":[{"key":"qa","title":"…","brief":"…","deps":["review"]}],"updateSteps":[{"key":"review","brief":"…"}],"removeSteps":["old"],"skipSteps":["polish"]}';
+  `{"goal":"…","addSteps":[{"key":"qa","title":"…","brief":"${EXAMPLE_BRIEF}","deps":["review"]}],"updateSteps":[{"key":"review","brief":"${EXAMPLE_BRIEF}"}],"removeSteps":["old"],"skipSteps":["polish"],"doneSteps":[]}`;
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
 

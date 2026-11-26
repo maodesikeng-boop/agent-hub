@@ -1,7 +1,7 @@
 // 编排简化第 6 步（收官步）全链路测试：
 // 1) 统一 hub ask [--node <步骤>] [--graph <图编号>] [--option ...] [--recommended ...]：三处可见（对话、右栏快照、总助待拍板流）；
 // 2) 用户点选拍板卡（或 PM 调 hub graph decide 记口头答复）：挂着未收工 Worker 时定案直送该 Worker 会话接着干，步骤切回 running，全程不叫醒 PM，闲聊不误冲卡片；
-// 3) confirm: true 用户检查点：汇报“做完了”且无偏离时自动挂出「通过 / 打回」检查点卡（不标 done、不收工、不叫醒 PM）-> 点「打回」带意见直送原 Worker 接着改 -> 再做完再出卡 -> 点「通过」自动收工并带意见交棒下游（末步则发交付单唤醒 PM）；
+// 3) confirm: true 检查点：做完先交 PM，PM 用 ask --node 升级后用户才看到「通过 / 打回」；打回意见直送原 Worker，改完再次交 PM -> 点「通过」自动收工并带意见交棒下游（末步则发交付单唤醒 PM）；
 // 4) 非 confirm 步骤“做完了但留了话”：自动收工推进下游照走，同时把汇报抄送叫醒 PM，PM 将卡挂在下游步骤上后答案直送下游 Worker。
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -457,7 +457,11 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     expect(deliveryText).toContain("拍板：「超过 5 万行时导出怎么走？」定案 同步流式下载（加上 30s 超时与断流清理）");
   });
 
-  it("confirm: true 用户检查点闭环：做完自动出卡（不收工、不叫醒 PM）-> 打回原 Worker 接着改 -> 再做完点通过自动收工并带意见交棒下游", async () => {
+  function escalateCheckpoint(graphId: number, node: string) {
+    return ledger.hubCall(lin.sessionId, "ask", { graphId, node, text: "这一步可以通过吗？" }).data.messageId;
+  }
+
+  it("confirm: true 检查点由 PM 升级给用户；打回原 Worker，改完再通过则收工并带意见交棒下游", async () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "先看方案再实现",
@@ -485,7 +489,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     const designWtPath = db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", wDesign)!.worktree_path;
     enqueued.length = 0;
 
-    // 1. design 第一次汇报“做完了”且无偏离：不标 done、不收工 Worker，自动出「通过 / 打回」检查点卡，全程不叫醒 PM！
+    // 1. design 第一次汇报“做完了”且无偏离：不收工，先通知 PM，用户没有卡。
     runWorkerReportTurn(
       wDesign,
       buildReportBlock({
@@ -495,9 +499,12 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
         handoff: "方案写在 docs/plan.md，采用内存 Map 缓存 1000 条。",
       }),
     );
-    expect(pmSendActions()).toEqual([]);
+    expect(pmSendActions()).toHaveLength(1);
     expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wDesign)?.status).toBe("open");
     expect(enqueued.filter((a) => a.type === "session.end")).toEqual([]);
+    expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!)).toBe("waiting:pm");
+    expect(pendingDecisionsOf(ledger.snapshot(), "local")).toEqual([]);
+    escalateCheckpoint(graph.id, "design");
 
     const snap1 = ledger.snapshot();
     const designWait1 = snap1.activeTaskGraphs[0]!.nodes.find((n) => n.key === "design")!;
@@ -562,7 +569,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     ).toBeNull();
     expect(enqueued).toEqual([]);
 
-    // 3. 原 Worker #wDesign 在原会话改完再次汇报“做完了”：再次自动出检查点卡，仍不叫醒 PM！
+    // 3. 原 Worker #wDesign 在原会话改完再次汇报“做完了”：再次通知 PM，由 PM 决定是否升级。
     enqueued.length = 0;
     runWorkerReportTurn(
       wDesign,
@@ -573,7 +580,8 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
         handoff: "终版方案见 docs/plan.md 第 3 节（lru-cache max=200）。",
       }),
     );
-    expect(pmSendActions()).toEqual([]);
+    expect(pmSendActions()).toHaveLength(1);
+    escalateCheckpoint(graph.id, "design");
     const snap2 = ledger.snapshot();
     const designWait2 = snap2.activeTaskGraphs[0]!.nodes.find((n) => n.key === "design")!;
     expect(stateOf(designWait2)).toBe("waiting:user");
@@ -629,17 +637,20 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
       wPreview,
       buildReportBlock({ status: "做完了", summary: "预览图已出", commit: "4444444", handoff: "/tmp/preview.png" }),
     );
-    expect(pmSendActions()).toEqual([]);
+    expect(pmSendActions()).toHaveLength(1);
+    escalateCheckpoint(graph.id, "preview");
 
     enqueued.length = 0;
     const finalPass = ledger.decideTaskNode(graph.id, "preview", {
       clientId: "chk-pass-final",
       choice: CONFIRM_PASS_OPTION,
+      note: "按这个预览交付",
     });
     expect(isTaskGraphReadyToFinish(finalPass.graph)).toBe(true);
     expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wPreview)?.status).toBe("ended");
     expect(pmSendActions()).toHaveLength(1);
     expect(ledger.getMessage(pmSendActions()[0]!.params.messageId)!.text).toContain("全部步骤做完，等你交付");
+    expect(ledger.getMessage(pmSendActions()[0]!.params.messageId)!.text).toContain("按这个预览交付");
   });
 
   it("confirm 步骤中途报“有问题”挂普通 hub ask --node 卡时，点选后恢复原 Worker 继续干，不误当检查点收工；PM 口头 hub graph decide 同样支持直送 Worker", async () => {
@@ -676,10 +687,11 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wUi)?.status).toBe("open");
     expect(latestWorkerInputOf(wUi).text).toBe("【用户拍板】次级按钮圆角是否一起统一？\n定案：一起改\n补充说明：全部按 rounded-full 统一");
 
-    // 随后 wUi 真正做完汇报“做完了”：这时才挂出「通过 / 打回」检查点卡！
+    // 随后 wUi 真正做完：先交给 PM，PM 升级后才显示检查点选项。
     enqueued.length = 0;
     runWorkerReportTurn(wUi, buildReportBlock({ status: "做完了", summary: "主次按钮均已统一圆角", handoff: "见 button.tsx" }));
-    expect(pmSendActions()).toEqual([]);
+    expect(pmSendActions()).toHaveLength(1);
+    escalateCheckpoint(graph.id, "ui");
     const chkNode = ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!;
     expect(chkNode.gateCheckpoint).toBe(true);
     expect(chkNode.gateOptions).toEqual([CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION]);
@@ -769,7 +781,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     await runWorktreeCreate(wDesign);
     runWorkerReportTurn(wDesign, buildReportBlock({ status: "做完了", summary: "初稿完成", handoff: "见 docs/plan.md" }));
 
-    const cardMsgId = ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!.gateAskMessageId!;
+    const cardMsgId = escalateCheckpoint(graph.id, "design");
 
     // 1. 若调用方直接把自由文本塞进 choice（而非「通过」/「打回」），UI 接口与 CLI 接口均直接拦截，绝不误当「通过」！
     expect(() =>
@@ -951,7 +963,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     const workerId = graph.nodes[0]!.activeWorkerId!;
     await runWorktreeCreate(workerId);
     runWorkerReportTurn(workerId, buildReportBlock({ status: "做完了", summary: "Draft ready", commit: "c1", handoff: "Ready" }));
-    const askMessageId = ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!.gateAskMessageId!;
+    const askMessageId = escalateCheckpoint(graph.id, "impl");
     if (status === "done") {
       ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "impl" });
     } else {
@@ -995,22 +1007,19 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     const decided = ledger.decideTaskNode(graph.id, "impl", { clientId: "first-answer", askMessageId: messageId, note: "Yes" });
     expect(decided.graph.nodes[0]).toMatchObject({ waitingFor: "pm", decision: { note: "Yes" } });
 
-    const patchGate = (question: string) => ledger.hubCall(lin.sessionId, "graph.patch", {
-      graphId: graph.id,
-      specJson: JSON.stringify({ updateSteps: [{ key: "impl", question }] }),
-    }).data.graph.nodes[0]!;
-    const next = patchGate("Use the second plan?");
-    expect(next).toMatchObject({
+    const nextAsk = ledger.hubCall(lin.sessionId, "ask", { graphId: graph.id, node: "impl", text: "Use the second plan?" }).data;
+    const show = () => ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes[0]!;
+    expect(show()).toMatchObject({
       status: "waiting", waitingFor: "user", activeWorkerId: null, workerIds: [workerId], gateAskPending: true, decision: null,
     });
-    expect(next.gateAskMessageId).not.toBe(messageId);
-    expect(ledger.getMessage(next.gateAskMessageId!)?.text).toContain("Use the second plan?");
+    expect(nextAsk.messageId).not.toBe(messageId);
+    expect(ledger.getMessage(nextAsk.messageId)?.text).toContain("Use the second plan?");
 
-    const removed = patchGate("");
-    expect(removed).toMatchObject({
-      status: "waiting", waitingFor: "pm", activeWorkerId: null, workerIds: [workerId], gateAskMessageId: null,
+    ledger.hubCall(lin.sessionId, "ask.close", { messageId: nextAsk.messageId });
+    expect(show()).toMatchObject({
+      status: "waiting", waitingFor: "pm", activeWorkerId: null, workerIds: [workerId], gateAskPending: false,
     });
-    expect(askOf(ledger.getMessage(next.gateAskMessageId!)!)?.closed).toBe(true);
+    expect(askOf(ledger.getMessage(nextAsk.messageId)!)?.closed).toBe(true);
   });
 
   it("keeps checkpoint cards open across restart, Worker end, skip, and graph cancellation", async () => {
@@ -1028,7 +1037,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     const w1 = graph.nodes[0]!.activeWorkerId!;
     await runWorktreeCreate(w1);
     runWorkerReportTurn(w1, buildReportBlock({ status: "做完了", summary: "s1 初稿", commit: "c1", handoff: "s1 交棒" }));
-    const chkMsg1 = ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!.gateAskMessageId!;
+    const chkMsg1 = escalateCheckpoint(graph.id, "s1");
 
     // 1. 守护进程重启（recoverAfterRestart）：不误唤醒 PM/Worker，检查点卡与 open Worker 完整保持
     enqueued.length = 0;
@@ -1063,7 +1072,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     const w2 = afterSkip.nodes[1]!.activeWorkerId!;
     await runWorktreeCreate(w2);
     runWorkerReportTurn(w2, buildReportBlock({ status: "做完了", summary: "s2 完成", commit: "c2", handoff: "s2 交棒" }));
-    const chkMsg2 = ledger.snapshot().activeTaskGraphs[0]!.nodes[1]!.gateAskMessageId!;
+    const chkMsg2 = escalateCheckpoint(graph.id, "s2");
 
     ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: graph.id, reason: "需求取消" });
     expect(askOf(ledger.getMessage(chkMsg2)!)?.answered).toBeUndefined();

@@ -14,10 +14,9 @@ import {
   renderGraphStepTask,
 } from "../task-graph-handoff.ts";
 import { userBlockedPmNote } from "../user-blockers.ts";
-import { decisionOf, gateOptionsOf, hasText, workerIdsOf } from "./rows.ts";
+import { decisionOf, hasText, workerIdsOf } from "./rows.ts";
 import { validateDagAndOrder } from "./spec.ts";
 import { buildGraphMaps, hasPendingStepAsk, touchGraph } from "./store.ts";
-import { gateChatMessageText } from "./text.ts";
 import { collectDirectUpstreams } from "./upstream.ts";
 import { resolveWorkspacePlan } from "./workspace.ts";
 import {
@@ -216,40 +215,15 @@ function autoDispatchIn(
   }
 }
 
-function openGateCardIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: TaskNodeDbRow): void {
-  const { graphRow, pmSession } = run;
-  let askMsgId = node.gate_ask_message_id;
-  if (askMsgId === null && pmSession !== null) {
-    const cardOpts = gateOptionsOf(node);
-    const msg = g.messages.insertAskMessage(
-      p,
-      { ...pmSession, conversationId: graphRow.conversation_id },
-      gateChatMessageText(node),
-      cardOpts.length >= 2 ? cardOpts : undefined,
-      {
-        gateRef: { graphId: graphRow.id, nodeKey: node.node_key },
-        ...(node.gate_recommended !== null && node.gate_recommended !== "" ? { recommended: node.gate_recommended } : {}),
-      },
-    );
-    askMsgId = msg.id;
-  }
-  node.status = "waiting";
-  node.waiting_for = "user";
-  node.gate_ask_message_id = askMsgId;
-  g.db.run(
-    "UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'user', gate_ask_message_id = ?, updated_at = ? WHERE id = ?",
-    askMsgId,
-    run.t,
-    node.id,
-  );
-  run.result.turned.push({ key: node.node_key, title: node.title, waitingFor: "user" });
-}
-
 function advanceReadyStepIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node: TaskNodeDbRow, orderIdx: number): void {
-  if (hasText(node.gate_question) && node.decision_json === null &&
-      (node.gate_ask_message_id === null || hasPendingStepAsk(g, node))) {
-    openGateCardIn(g, p, run, node);
-    return;
+  if (hasText(node.gate_question) && node.decision_json === null) {
+    const pendingAsk = hasPendingStepAsk(g, node);
+    if (pendingAsk || node.gate_ask_message_id === null) {
+      const waitingFor = pendingAsk ? "user" : "pm";
+      setStepState(g, run, node, "waiting", waitingFor);
+      run.result.turned.push({ key: node.node_key, title: node.title, waitingFor, question: node.gate_question });
+      return;
+    }
   }
   const hasBrief = hasText(node.brief);
   const { bridge, pm } = run;
@@ -323,7 +297,7 @@ export function wakePmForTurnedIn(
     source: "task_graph",
     ref: `graph-turned:${graphRow.id}:${dedupeRef}`,
     text:
-      `【任务图 #${graphRow.id}「${graphRow.title}」】${lead}轮到了：${forPm.map((u) => `${u.key}（${u.title}）`).join("、")}，等你处理。` +
+      `【任务图 #${graphRow.id}「${graphRow.title}」】${lead}轮到了：${forPm.map((u) => `${u.key}（${u.title}${u.question === undefined ? "" : `：${u.question}`}）`).join("、")}，等你处理。` +
       `给它派 Worker 用 ${HUB_COMMAND} worker start --node ${first} --graph ${graphRow.id}，不需要了用 ${HUB_COMMAND} graph skip ${first} --graph ${graphRow.id}。`,
   });
   return wake.id;

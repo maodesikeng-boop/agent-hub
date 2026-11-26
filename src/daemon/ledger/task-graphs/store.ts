@@ -7,7 +7,7 @@ import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import type { MessageDbRow } from "../rows.ts";
 import { parseJsonOr, toTaskNode } from "./rows.ts";
-import { gateOptionsJsonOf, type NewStep } from "./spec.ts";
+import type { NewStep } from "./spec.ts";
 import type { GraphMaps, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
 export const getGraphRow = (db: Db, id: TaskGraphId): TaskGraphDbRow | undefined =>
@@ -219,7 +219,7 @@ export function insertStepRow(db: Db, graphId: TaskGraphId, n: NewStep, sortOrde
        active_worker_id, worker_ids_json, artifact_json,
        gate_question, gate_options_json, gate_summary_md, gate_recommended, gate_ask_message_id, decision_json,
        created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, 0, ?, NULL, '[]', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, 0, ?, NULL, '[]', NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
     graphId,
     n.key,
     n.title,
@@ -233,10 +233,6 @@ export function insertStepRow(db: Db, graphId: TaskGraphId, n: NewStep, sortOrde
     n.review,
     n.base,
     sortOrder,
-    n.gate.question,
-    gateOptionsJsonOf(n.gate),
-    n.gate.summaryMd,
-    n.gate.recommended,
     t,
     t,
   ).lastInsertRowid;

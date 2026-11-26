@@ -91,6 +91,7 @@ export interface TurnedStep {
   key: TaskNodeKey;
   title: string;
   waitingFor: TaskNodeWaitingFor;
+  question?: string;
 }
 
 export interface ProgressResult {
