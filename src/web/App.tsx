@@ -90,7 +90,7 @@ function DesktopWorkbench({
   const tab = dialogTabOf(settings?.section, c.deviceSettings !== null);
   return (
     <div ref={setShellElement} data-shell="desktop" className="wood relative flex h-full w-full min-w-0 flex-col overflow-hidden">
-      <div aria-hidden="true" data-window-drag className="shell-topbar shrink-0" />
+      <SurfaceOutlet id="topbar" />
       <div className="flex min-h-0 min-w-0 flex-1">
         <AppRail
           router={c.routerSummary}

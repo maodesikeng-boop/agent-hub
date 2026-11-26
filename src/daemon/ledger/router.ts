@@ -5,6 +5,7 @@ import type {
   ArchiveAllReportsResponse,
   ResolveRouterItemRequest,
   ResolveRouterItemResponse,
+  RetryRouterCommandRequest,
   RouterCommandsPage,
   RouterItemsKind,
   RouterItemsPage,
@@ -50,6 +51,14 @@ import {
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
 import { purgeRouterExpiredIn } from "./db-table-retention.ts";
+import {
+  claimRouterCommandRetryRow,
+  mergeRouterPlanPreservingRetries,
+  parseStoredRouterPlan,
+  serializeNewRouterPlan,
+  toPublicRouterPlan,
+  type RouterCommandDbRow,
+} from "./router-command-retries.ts";
 import { fitRouterDigest } from "./router-digest-fit.ts";
 import { parseLocalHref } from "../../shared/sent-files.ts";
 import type { ProjectCatalogCard } from "../../shared/project-catalog.ts";
@@ -96,22 +105,6 @@ interface RouterItemDbRow {
   links_json: string | null;
   resolution_json: string | null;
   ask_message_id: number | null;
-  created_at: number;
-  updated_at: number;
-}
-
-interface RouterCommandDbRow {
-  id: number;
-  client_id: string;
-  input_text: string;
-  vendor: string;
-  model: string | null;
-  effort: string | null;
-  status: string;
-  plan_json: string | null;
-  dispatched_json: string | null;
-  error: string | null;
-  duration_ms: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -236,7 +229,7 @@ function toRouterCommand(row: RouterCommandDbRow): RouterCommandRecord {
     model: row.model,
     effort: row.effort,
     status: row.status as RouterCommandStatus,
-    plan: parseJsonOr<RouterAgentPlan | null>(row.plan_json, null),
+    plan: toPublicRouterPlan(parseStoredRouterPlan(row.plan_json)),
     dispatched: parseJsonOr<RouterCommandDispatchedTarget[] | null>(row.dispatched_json, null),
     error: row.error,
     durationMs: row.duration_ms,
@@ -919,7 +912,7 @@ export function createLedgerRouter(
         input.model ?? null,
         input.effort ?? null,
         input.status,
-        input.plan == null ? null : JSON.stringify(input.plan),
+        serializeNewRouterPlan(input.plan),
         input.dispatched == null ? null : JSON.stringify(input.dispatched),
         input.error ?? null,
         input.durationMs ?? null,
@@ -970,7 +963,7 @@ export function createLedgerRouter(
         patch.model !== undefined ? patch.model : existing.model,
         patch.effort !== undefined ? patch.effort : existing.effort,
         patch.status ?? existing.status,
-        patch.plan !== undefined ? (patch.plan === null ? null : JSON.stringify(patch.plan)) : existing.plan_json,
+        patch.plan !== undefined ? mergeRouterPlanPreservingRetries(existing.plan_json, patch.plan) : existing.plan_json,
         patch.dispatched !== undefined
           ? patch.dispatched === null
             ? null
@@ -986,6 +979,13 @@ export function createLedgerRouter(
       if (patch.auditAction !== undefined) {
         appendAuditIn(patch.auditActor ?? "router_agent", patch.auditAction, null, row.id, patch.auditDetail);
       }
+      return command;
+    });
+
+  const claimCommandRetry = (id: RouterCommandId, retry: RetryRouterCommandRequest): RouterCommandRecord =>
+    write((p) => {
+      const command = toRouterCommand(claimRouterCommandRetryRow(db, now(), id, retry));
+      p.changes.push({ type: "router.command.updated", data: { command } });
       return command;
     });
 
@@ -1296,6 +1296,7 @@ export function createLedgerRouter(
     listItems,
     createCommand,
     updateCommand,
+    claimCommandRetry,
     getCommand,
     listCommands,
     createAssistantSession,

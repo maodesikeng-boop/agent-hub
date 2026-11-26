@@ -139,6 +139,13 @@ html[data-ui-scale="xl"] {
   --rings-top: #774511;
   --rings-bottom: #6f3d05;
   --topbar-height: 40px;
+  /* Keeps the centered Router input clear of the window edges; native macOS widens it past the traffic lights. */
+  --topbar-safe-inline: clamp(12px, 8vw, 88px);
+  --topbar-field: rgb(255 244 228 / 0.12);
+  --topbar-field-hover: rgb(255 244 228 / 0.15);
+  --topbar-field-line: rgb(255 244 228 / 0.16);
+  --topbar-field-line-hover: rgb(255 244 228 / 0.24);
+  --topbar-focus-ring: rgb(255 244 228 / 0.35);
   --frame-inset: 6px;
   --shell-gap: 4px;
   --inlay-shadow: 0 0 12px rgb(10 5 2 / 0.376);
@@ -257,6 +264,10 @@ code {
 }
 /* A desktop conversation reads at the size of a Worker thread; the phone keeps the 15px body. */
 [data-shell="desktop"] .chat-text {
+  --text-body: var(--text-minor);
+}
+/* The top-bar Router popover portals out of the desktop shell, so it opts in to the same size by itself. */
+[data-router-quick] {
   --text-body: var(--text-minor);
 }
 .messages {
@@ -640,7 +651,8 @@ input[type="search"]::-webkit-search-cancel-button {
   .btn-raised,
   .btn-honey,
   .btn-solid,
-  .send-button {
+  .send-button,
+  .topbar-router {
     transition: none;
   }
 }
@@ -1321,6 +1333,57 @@ input[type="search"]::-webkit-search-cancel-button {
   .shell-topbar {
     height: var(--topbar-height);
     pointer-events: auto;
+    display: grid;
+    grid-template-columns: minmax(var(--topbar-safe-inline), 1fr) minmax(0, var(--topbar-input-max)) minmax(var(--topbar-safe-inline), 1fr);
+    align-items: center;
+  }
+  html[data-macos-app="true"] .shell-topbar {
+    --topbar-safe-inline: 88px;
+  }
+  /* The top-bar Router input sits translucent on the frame wood and turns into a solid field while it has focus. */
+  .topbar-router {
+    grid-column: 2;
+    display: flex;
+    min-width: 0;
+    height: min(1.75rem, calc(var(--topbar-height) - 8px));
+    align-items: center;
+    gap: 0.5rem;
+    padding-inline: 0.5rem 0.1875rem;
+    border: 1px solid var(--topbar-field-line);
+    border-radius: var(--radius-sm);
+    background-color: var(--topbar-field);
+    color: var(--rail-ink);
+    cursor: text;
+    transition:
+      background-color var(--motion-press) ease-out,
+      border-color var(--motion-press) ease-out,
+      box-shadow var(--motion-press) ease-out;
+  }
+  .topbar-router:hover {
+    border-color: var(--topbar-field-line-hover);
+    background-color: var(--topbar-field-hover);
+  }
+  .topbar-router:focus-within {
+    border-color: var(--border-strong);
+    background-color: var(--background);
+    color: var(--foreground);
+    box-shadow: 0 0 0 2px var(--topbar-focus-ring);
+  }
+  .topbar-router input::placeholder {
+    color: var(--list-ink-soft);
+    opacity: 1;
+  }
+  .topbar-router:focus-within input::placeholder {
+    color: var(--muted-foreground);
+  }
+  .topbar-router:has(input[aria-invalid="true"]) {
+    border-color: var(--rail-danger);
+  }
+  .topbar-router:focus-within:has(input[aria-invalid="true"]) {
+    border-color: var(--danger);
+  }
+  .topbar-router:not(:focus-within) [data-topbar-send] {
+    display: none;
   }
   /* Panels sit one inset in from the frame's top, right, and bottom, so the list and the sheets share both edges. */
   .shell-frame {
