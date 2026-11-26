@@ -61,8 +61,11 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "worker.search": { keywords: ["登录", "bug"], limit: 5 },
   ask: { text: "用 A 还是 B？" },
   "ask.close": { itemId: 52 },
+  "ask.list": {},
+  "ask.show": { itemId: 52 },
   "schedule.add": { name: "每日汇报", prompt: "汇报昨天的进展", daily: "09:00" },
   "schedule.list": {},
+  "schedule.show": { scheduleId: 3 },
   "schedule.pause": { scheduleId: 3 },
   "schedule.resume": { scheduleId: 3 },
   "schedule.remove": { scheduleId: 3 },
@@ -176,6 +179,12 @@ describe("agent api over inject", () => {
       expect((await call("persona.edit", { mode: "manage_only" })).statusCode).toBe(200);
       expect((await call("persona.edit", { text: "只改正文" })).statusCode).toBe(200);
       expect(ledger.calls).toHaveLength(3);
+    });
+
+    it("preserves an explicit null effort on worker.start", async () => {
+      const args = { ...VALID_ARGS["worker.start"], effort: null };
+      expect((await call("worker.start", args)).statusCode).toBe(200);
+      expect(ledger.calls).toEqual([{ sessionId: 11, command: "worker.start", args }]);
     });
 
     it("accepts a field exactly at its byte limit", async () => {

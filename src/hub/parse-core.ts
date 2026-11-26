@@ -109,7 +109,7 @@ export function parseScheduleCommand({ group, action, rest, values }: GroupArgs)
     expectPositionals(rest, 0, "schedule list");
     return { command: "schedule.list", body: {}, textSource: null };
   }
-  if (group === "schedule" && (action === "pause" || action === "resume" || action === "remove")) {
+  if (group === "schedule" && (action === "show" || action === "pause" || action === "resume" || action === "remove")) {
     allowOnly(values, [], `schedule ${action}`);
     expectPositionals(rest, 1, `schedule ${action}`);
     return { command: `schedule.${action}`, body: { scheduleId: idOf(rest[0], `schedule ${action}`, "定时任务") }, textSource: null };

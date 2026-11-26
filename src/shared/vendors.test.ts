@@ -138,7 +138,7 @@ describe("spec 的 home：厂商的凭据和配置目录", () => {
     expect(vendorSpec("claude").home.dirs).toEqual(expect.arrayContaining([".claude", ".claude.json"]));
     expect(vendorSpec("claude").home.readonlySecrets).toContain(".claude.json");
     expect(vendorSpec("codex").home.readonlySecrets).toContain(".codex/.credentials.json");
-    expect(vendorSpec("codex").home.catalogWatchPaths).toContain(".codex/models_cache.json");
+    expect(vendorSpec("codex").home.catalogProbeStatePaths).toContain(".codex/models_cache.json");
     expect(vendorSpec("agy").home.readonlySecrets).toContain(".gemini/mcp-oauth-tokens.json");
     expect(vendorSpec("codex").home.dirs).toContain(".codex");
     expect(vendorSpec("agy").home.dirs).toContain(".gemini");

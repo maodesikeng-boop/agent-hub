@@ -101,14 +101,15 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "start",
     cli: "worker start",
-    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-outer-sandbox] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
+    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--clear-effort] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-outer-sandbox] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
                                                           派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m，超了叫醒项目经理、不打断 Worker；
                                                           --caps 外接能力：inherit 照项目能力设置挂（默认），none 一个不带，custom 只挂 --allow 点名的
                                                           skill:<名>、mcp:<名>、connector:<厂商>:<编号>（项目里关掉的点名了也挂不上）；读写文件、终端和 hub 永远都在；
                                                           --node 绑到任务图里的节点上，不带就是不绑图的临时 Worker）；
                                                           独立审查请建单步审查图（审查步骤，写被审分支），不要派普通 Worker 审
+  --clear-effort：不继承思考程度，不能与 --effort 同时用。
   --no-outer-sandbox：仅明确挂载 Computer Use 时可申请，Worker 等用户在工作台确认后才开工。Computer Use 控制每个应用前都要等用户在工作台确认；用户拒绝时，换个办法或汇报。
-  ${hub} worker start --node <节点> [--graph <图编号>] [--vendor …] [--model …] [--stdin]
+  ${hub} worker start --node <节点> [--graph <图编号>] [--vendor …] [--model …] [--clear-effort] [--stdin]
                                                           换人接手：节点上已经有经手过的 Worker 时，--title 和正文都可以不给（正文给了是补充说明）；
                                                           节点上还挂着没收工的旧 Worker 会先按“没做完”收工，新 Worker 接着用前任的 worktree 和分支，
                                                           第一条消息自动带最近几个前任的汇报、最后的文字、最后几步操作和原始记录路径`,
@@ -184,6 +185,21 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           普通卡编号见用户消息前面的说明；步骤拍板卡用 ${hub} ask close --message <消息编号>，编号见 ${hub} graph show`,
   },
   {
+    command: "ask.list",
+    group: "ask",
+    action: "list",
+    cli: "ask list",
+    usage: `  ${hub} ask list                                            列出自己名下正在等用户回答的卡，含步骤拍板卡和已等时长`,
+  },
+  {
+    command: "ask.show",
+    group: "ask",
+    action: "show",
+    cli: "ask show",
+    usage: `  ${hub} ask show <卡编号>                                   查看自己名下一张卡的全文、选项、文件和状态；
+                                                          步骤拍板卡用 ${hub} ask show --message <消息编号>，编号见 ${hub} ask list`,
+  },
+  {
     command: "schedule.add",
     group: "schedule",
     action: "add",
@@ -199,6 +215,13 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "list",
     cli: "schedule list",
     usage: `  ${hub} schedule list                                       我的定时任务：频率、下次运行、上次结果`,
+  },
+  {
+    command: "schedule.show",
+    group: "schedule",
+    action: "show",
+    cli: "schedule show",
+    usage: `  ${hub} schedule show <编号>                                 查看定时任务全文、上次结果和最近几次运行的回复摘要`,
   },
   {
     command: "schedule.pause",

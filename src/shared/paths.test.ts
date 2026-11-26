@@ -249,12 +249,12 @@ describe("vendorCatalogFingerprint：模型目录缓存的 stat 指纹", () => {
     expect(vendorConfigHome("codex", "/home/u", { CODEX_HOME: "  " })).toBe("/home/u/.codex");
     expect(vendorConfigHome("codex", "/home/u", {})).toBe("/home/u/.codex");
     expect(vendorConfigHome("claude", "/home/u", { CODEX_HOME: "/x/codex-home" })).toBeNull();
-    const files = vendorCatalogWatchFiles("codex", "/home/u", { CODEX_HOME: "/x/codex-home" });
-    expect(files).toContain("/x/codex-home/auth.json");
-    expect(files).toContain("/x/codex-home/models_cache.json");
-    expect(files.some((f) => f.startsWith("/home/u/.codex"))).toBe(false);
-    expect(vendorCatalogWatchFiles("codex", "/home/u", {})).toContain("/home/u/.codex/auth.json");
-    expect(vendorCatalogWatchFiles("claude", "/home/u", { CODEX_HOME: "/x/codex-home" })).toContain("/home/u/.claude.json");
+    const { inputs, probeState } = vendorCatalogWatchFiles("codex", "/home/u", { CODEX_HOME: "/x/codex-home" });
+    expect(inputs).toContain("/x/codex-home/auth.json");
+    expect(probeState).toContain("/x/codex-home/models_cache.json");
+    expect([...inputs, ...probeState].some((f) => f.startsWith("/home/u/.codex"))).toBe(false);
+    expect(vendorCatalogWatchFiles("codex", "/home/u", {}).inputs).toContain("/home/u/.codex/auth.json");
+    expect(vendorCatalogWatchFiles("claude", "/home/u", { CODEX_HOME: "/x/codex-home" }).probeState).toContain("/home/u/.claude.json");
   });
 
   it("自定义 CODEX_HOME 下的 auth.json / models_cache.json 变了：指纹跟着变；~/.codex 下的变化不影响", () => {
@@ -269,19 +269,20 @@ describe("vendorCatalogFingerprint：模型目录缓存的 stat 指纹", () => {
       const fp = () => vendorCatalogFingerprint("codex", bin, env, home, "linux");
 
       const before = fp();
-      expect(before).toContain(join(codexHome, "auth.json"));
+      expect(before.inputs).toContain(join(codexHome, "auth.json"));
       writeFileSync(join(home, ".codex", "auth.json"), "{\"default-home\":true}");
-      expect(fp()).toBe(before);
+      expect(fp()).toEqual(before);
 
       writeFileSync(join(codexHome, "auth.json"), "{\"token\":\"a\"}");
       const loggedIn = fp();
-      expect(loggedIn).not.toBe(before);
+      expect(loggedIn.inputs).not.toBe(before.inputs);
 
       writeFileSync(join(codexHome, "models_cache.json"), "{\"models\":[]}");
       const cached = fp();
-      expect(cached).not.toBe(loggedIn);
+      expect(cached.inputs).toBe(loggedIn.inputs);
+      expect(cached.probeState).not.toBe(loggedIn.probeState);
       writeFileSync(join(codexHome, "models_cache.json"), "{\"models\":[{\"slug\":\"gpt-6.1-sol\"}]}");
-      expect(fp()).not.toBe(cached);
+      expect(fp().probeState).not.toBe(cached.probeState);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -297,24 +298,25 @@ describe("vendorCatalogFingerprint：模型目录缓存的 stat 指纹", () => {
       const env = { PATH: pathDirs.join(delimiter) };
       const fp = () => vendorCatalogFingerprint("claude", "claude", env, home, "darwin");
 
-      expect(fp()).toContain(late);
+      expect(fp().inputs).toContain(late);
       const exists = vi.mocked(existsSync);
       const stat = vi.mocked(statSync);
       exists.mockClear();
       stat.mockClear();
       const again = fp();
-      expect(again).toContain(late);
+      expect(again.inputs).toContain(late);
       expect(exists).not.toHaveBeenCalled();
       // 只 stat 可执行文件那一个 + 盯防文件各一次
-      expect(stat).toHaveBeenCalledTimes(1 + vendorCatalogWatchFiles("claude", home, env).length);
+      const { inputs, probeState } = vendorCatalogWatchFiles("claude", home, env);
+      expect(stat).toHaveBeenCalledTimes(1 + inputs.length + probeState.length);
 
       // PATH 前面又装了一份：记住的那份还在，就还用它（不重扫）
       const early = exe(pathDirs[0]!, "claude");
-      expect(fp()).toContain(late);
+      expect(fp().inputs).toContain(late);
       // 记住的那份没了：重新找，换成新的
       rmSync(late);
-      expect(fp()).toContain(early);
-      expect(fp()).not.toContain(late);
+      expect(fp().inputs).toContain(early);
+      expect(fp().inputs).not.toContain(late);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -329,10 +331,10 @@ describe("vendorCatalogFingerprint：模型目录缓存的 stat 指纹", () => {
       const env = { PATH: bin };
       const fp = () => vendorCatalogFingerprint("agy", "agy", env, home, "darwin");
       const missing = fp();
-      expect(missing.startsWith("-|")).toBe(true);
+      expect(missing.inputs.startsWith("-|")).toBe(true);
       const installed = exe(bin, "agy");
-      expect(fp()).toContain(installed);
-      expect(fp()).not.toBe(missing);
+      expect(fp().inputs).toContain(installed);
+      expect(fp().inputs).not.toBe(missing.inputs);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
