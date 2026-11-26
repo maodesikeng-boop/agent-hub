@@ -1,14 +1,14 @@
-// A macOS Worker sandbox refuses to exec the setuid /bin/ps and to apply a nested sandbox-exec profile, so tests that need
-// either skip there. Only a permission refusal counts: on CI any other failure keeps the test running so it fails loudly.
 import { execFileSync } from "node:child_process";
 import { SANDBOX_EXEC } from "../src/daemon/driver/write-scope.ts";
 
 const PERMISSION_DENIED_CODES = new Set(["EPERM", "EACCES"]);
 const PERMISSION_DENIED_TEXT = /operation not permitted|permission denied/i;
 
-export function isPermissionRefusal(error: unknown): boolean {
-  const failure = error as { code?: unknown; stderr?: unknown };
-  return (typeof failure.code === "string" && PERMISSION_DENIED_CODES.has(failure.code)) || PERMISSION_DENIED_TEXT.test(String(failure.stderr ?? ""));
+function isPermissionRefusal(command: string, error: unknown): boolean {
+  const failure = error as { code?: unknown; status?: unknown; stderr?: unknown } | null;
+  const stderr = String(failure?.stderr ?? "");
+  if (command === SANDBOX_EXEC) return failure?.status === 71 && /operation not permitted/i.test(stderr);
+  return (typeof failure?.code === "string" && PERMISSION_DENIED_CODES.has(failure.code)) || PERMISSION_DENIED_TEXT.test(stderr);
 }
 
 export function sandboxAllows(command: string, args: readonly string[], env: NodeJS.ProcessEnv = process.env): boolean {
@@ -16,7 +16,9 @@ export function sandboxAllows(command: string, args: readonly string[], env: Nod
     execFileSync(command, args, { stdio: ["ignore", "ignore", "pipe"] });
     return true;
   } catch (error) {
-    return !isPermissionRefusal(error) && Boolean(env.CI);
+    if (isPermissionRefusal(command, error)) return false;
+    if (env.CI) return true;
+    throw error;
   }
 }
 
