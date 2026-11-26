@@ -16,7 +16,7 @@ import {
   renderGraphStepTask,
 } from "../task-graph-handoff.ts";
 import { userBlockedPmNote } from "../user-blockers.ts";
-import { decisionOf, hasText, workerIdsOf } from "./rows.ts";
+import { decisionOf, hasText, readyOutcomeOf, workerIdsOf } from "./rows.ts";
 import { admitStep, queueStep, unqueueSteps } from "./slots.ts";
 import { validateDagAndOrder } from "./spec.ts";
 import { buildGraphMaps, hasPendingStepAsk, touchGraph } from "./store.ts";
@@ -222,23 +222,24 @@ function advanceReadyStepIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node:
       return;
     }
   }
+  const outcome = readyOutcomeOf(node);
+  // Settling starts nothing, so it does not wait for a slot.
+  if (outcome === "settle") {
+    setStepState(g, run, node, "done", null);
+    return;
+  }
   const admission = admitStep(g.db, node.graph_id, node.node_key);
   if (admission.kind === "queued") {
     queueStep(g.db, node.id, run.t);
     const { slot, position, holder } = admission;
-    run.result.queued.push({ key: node.node_key, slot, position, holder, then: hasText(node.brief) ? "start" : "pm" });
+    run.result.queued.push({ key: node.node_key, slot, position, holder, then: outcome });
     return;
   }
-  const hasBrief = hasText(node.brief);
   const { bridge, pm } = run;
-  if (hasBrief && bridge !== undefined && pm !== null) {
+  if (outcome === "start" && bridge !== undefined && pm !== null) {
     const { nodeRows } = run.maps;
     const pos = { index: nodeRows.findIndex((r) => r.node_key === node.node_key) + 1 || orderIdx + 1, total: nodeRows.length };
     autoDispatchIn(g, p, run, node, pos, bridge, pm);
-    return;
-  }
-  if (!hasBrief && node.decision_json !== null) {
-    setStepState(g, run, node, "done", null);
     return;
   }
   setStepState(g, run, node, "waiting", "pm");

@@ -34,6 +34,15 @@ export const gateOptionsOf = (row: Pick<TaskNodeDbRow, "gate_options_json">): st
 
 export const hasText = (s: string | null | undefined): s is string => s !== null && s !== undefined && s.trim() !== "";
 
+/**
+ * What a ready step does once admitted: run its brief, settle a decided brief-less step nobody worked on, or ask the PM.
+ * A step waiting in a slot queue is promised the same outcome it gets when it leaves the queue.
+ */
+export function readyOutcomeOf(row: Pick<TaskNodeDbRow, "brief" | "decision_json" | "worker_ids_json">): "start" | "settle" | "pm" {
+  if (hasText(row.brief)) return "start";
+  return row.decision_json !== null && workerIdsOf(row).length === 0 ? "settle" : "pm";
+}
+
 type StoredTaskArtifact = TaskArtifact & { checkpointPending?: boolean; checkpointRejectionClientId?: string; reviewStamp?: unknown };
 
 export function readStoredArtifact(raw: string | null): {
