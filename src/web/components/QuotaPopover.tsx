@@ -1,14 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { FETCHED_QUOTA_FRESH_MS } from "../../shared/index.ts";
 import { Hourglass } from "../ui/icons.ts";
-import { memo, useState } from "react";
-import { useClient } from "../device-scope.tsx";
+import { memo } from "react";
 import { formatQuotaReset } from "../format.ts";
-import { fetchedQuotaUsage, type QuotaVendor, type QuotaWindowUsage } from "../selectors.ts";
+import type { QuotaVendor, QuotaWindowUsage } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
-import { useHubQueryClient } from "../query-client.ts";
-import { quotaQueryOptions } from "../quota.ts";
-import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 
@@ -54,44 +48,31 @@ function groupByVendor(blocks: readonly QuotaVendor[]): { name: string; blocks: 
 
 export const QuotaPopover = memo(function QuotaPopover({
   quota,
-  fetchable = false,
+  loading = false,
+  open,
+  onOpenChange,
   placement = "sidebar",
   side,
   align,
   trigger,
 }: {
   quota: readonly QuotaVendor[];
-  fetchable?: boolean;
+  loading?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   placement?: "sidebar" | "header";
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
   trigger?: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  const client = useClient();
-  const qc = useHubQueryClient();
-  const current = useServerInfo().currentQuota === true;
-  const reading = open && fetchable;
-  const { data, isFetching: loading } = useQuery(
-    {
-      ...quotaQueryOptions(client, current),
-      enabled: reading,
-      refetchOnWindowFocus: current && reading,
-      refetchInterval: reading ? FETCHED_QUOTA_FRESH_MS : false,
-    },
-    qc,
-  );
   const inHeader = placement === "header";
   const head = quota[0];
   const window = head?.windows[0];
-  const fetched = !current && data ? fetchedQuotaUsage(data) : [];
-  if (!window && !fetchable && trigger === undefined) return null;
-  const blocks = [...quota, ...fetched];
-  const exhausted =
-    quota.some((vendor) => vendor.exhausted) || fetched.some((vendor) => vendor.exhausted || vendor.windows.some((w) => w.percent >= 100));
+  if (!window && !loading && trigger === undefined) return null;
+  const exhausted = quota.some((vendor) => vendor.exhausted);
   const label = exhausted ? "Usage limit reached" : window ? `${window.short} usage ${window.percent}%` : "Usage";
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         {trigger ?? (
           <Button
@@ -111,7 +92,7 @@ export const QuotaPopover = memo(function QuotaPopover({
           <h2 className="text-body font-semibold text-foreground">Usage</h2>
         </div>
         <div className="divide-y divide-border">
-          {groupByVendor(blocks).map((section) => (
+          {groupByVendor(quota).map((section) => (
             <section key={section.name} className="grid gap-3 px-4 py-3" aria-label={section.name}>
               <h3 className="text-minor font-semibold text-foreground">{section.name}</h3>
               <div className="grid gap-3">
@@ -126,8 +107,8 @@ export const QuotaPopover = memo(function QuotaPopover({
               </div>
             </section>
           ))}
-          {loading && (current ? quota.length === 0 : fetched.length === 0) && <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>}
-          {!loading && blocks.length === 0 && <p className="px-4 py-3 text-minor text-muted-foreground">No usage reported yet</p>}
+          {loading && <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>}
+          {!loading && quota.length === 0 && <p className="px-4 py-3 text-minor text-muted-foreground">No usage reported yet</p>}
         </div>
       </PopoverContent>
     </Popover>
