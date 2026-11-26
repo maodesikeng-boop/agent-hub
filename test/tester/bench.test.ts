@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { API_PATHS, ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST } from "../../src/shared/index.ts";
+import * as sandboxProbes from "../sandbox-probes.ts";
 import { assertNotProduction, assertTestAccount, benchRoot, BenchConfigError, openBench, parseBenchConfig, ProductionGuardError, TESTER_HOME_ENV, type BenchConfig, type InstanceClient } from "./bench.ts";
 import { localDaemonEnv } from "./local-instance.ts";
 import { main } from "./cli.ts";
@@ -166,6 +167,7 @@ describe("openBench", () => {
     }).listen(0, "127.0.0.1");
     const out = vi.spyOn(console, "log").mockImplementation(() => {});
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const probe = vi.spyOn(sandboxProbes, "sandboxAllowsNestedSandbox").mockReturnValue(false);
     try {
       await once(server, "listening");
       const address = server.address();
@@ -176,12 +178,14 @@ describe("openBench", () => {
       writeFileSync(file, JSON.stringify({ ...withoutFeishu, instances: [instance, remote] }));
       await main(["preflight", "--config", file, "--code-dir", scratch()]);
       expect(out).toHaveBeenCalledWith("available: local_instance, remote_instance");
+      expect(probe).not.toHaveBeenCalled();
       expect(remotePaths).toEqual([`/d/${remote.deviceId}${API_PATHS.routerDigest}`, `/d/${remote.deviceId}${API_PATHS.providers}?refresh=1`]);
       const health = await fetch(`http://127.0.0.1:${instance.uiPort}${API_PATHS.health}`, { headers: { cookie: "bench=session" } });
       expect(await health.json()).toEqual({ ok: true });
     } finally {
       out.mockRestore();
       err.mockRestore();
+      probe.mockRestore();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
@@ -194,7 +198,30 @@ describe("openBench", () => {
 
   it("reports an unreachable instance as a bench config error, not a product failure", async () => {
     const root = scratch();
-    await expect(openBench(config(root), { codeDir: scratch(), mode: "fake" })).rejects.toThrow(BenchConfigError);
+    const probe = vi.spyOn(sandboxProbes, "sandboxAllowsNestedSandbox").mockReturnValue(true);
+    try {
+      await expect(openBench(config(root), { codeDir: scratch(), mode: "fake" })).rejects.toThrow(BenchConfigError);
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("reports a denied macOS sandbox before starting the local test daemon and exits run with code 2", async () => {
+    const c = config(scratch());
+    const file = join(c.root, "bench.json");
+    writeFileSync(file, JSON.stringify(c));
+    const probe = vi.spyOn(sandboxProbes, "sandboxAllowsNestedSandbox").mockReturnValue(false);
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const message = "macOS denied sandbox-exec for the local test daemon. Run the tester from a host terminal outside any agent sandbox.";
+      await expect(openBench(c, { codeDir: scratch(), mode: "real" })).rejects.toThrow(message);
+      await expect(main(["run", "--flow", "feishu.desktop-answer-syncs-card", "--config", file])).resolves.toBe(2);
+      expect(out).toHaveBeenCalledWith(expect.stringContaining(message));
+      expect(existsSync(local(c).dataDir)).toBe(false);
+    } finally {
+      out.mockRestore();
+      probe.mockRestore();
+    }
   });
 
   it("starts the local instance from codeDir in the requested CLI mode with its own HOME", () => {
@@ -213,12 +240,28 @@ describe("openBench", () => {
     expect(fake[claude]).toBe("/code/test/fake-claude/fake-claude.ts");
     expect(fake.FAKE_CLAUDE_SCRIPT!.startsWith(root)).toBe(true);
   });
+
+  it("uses the Claude token file only when the local instance explicitly maps it", () => {
+    const root = scratch();
+    const c = config(root);
+    const secrets = join(root, "secrets");
+    mkdirSync(secrets);
+    writeFileSync(join(secrets, "claude-oauth-token"), "bench-only-token\n");
+    const input = { config: c, instance: local(c), codeDir: "/code", mode: "real" as const, platform: process.platform, baseEnv: { CLAUDE_CODE_OAUTH_TOKEN: "outside-token" } };
+
+    expect(localDaemonEnv(input).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    local(c).env.CLAUDE_CODE_OAUTH_TOKEN = "@secrets/claude-oauth-token";
+    expect(localDaemonEnv(input).CLAUDE_CODE_OAUTH_TOKEN).toBe("bench-only-token");
+  });
 });
 
 describe("bench configuration at command boundaries", () => {
-  it.each([["vendors", "install"], ["authorize-feishu"]] as const)(
-    "refuses guarded config before running %s %s",
-    async (...argv) => {
+  it.each([
+    { command: "vendors install", argv: ["vendors", "install"] },
+    { command: "authorize-feishu", argv: ["authorize-feishu"] },
+  ])(
+    "refuses guarded config before running $command",
+    async ({ argv }) => {
       const root = scratch();
       const c = config(root);
       local(c).uiPort = 4317;

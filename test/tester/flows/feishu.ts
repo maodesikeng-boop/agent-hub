@@ -1,10 +1,11 @@
 // Runners for Feishu flows. Each sends as the owner through the driver and judges only what Feishu itself returns.
 import { z } from "zod";
-import { API_PATHS, type AccountStatusView, type Message } from "../../../src/shared/index.ts";
-import { BENCH_ASK_OPTIONS, BENCH_ASK_QUESTION, BENCH_ECHO_REPLY } from "../fake-script.ts";
+import { API_PATHS, askOf, type AccountStatusView } from "../../../src/shared/index.ts";
+import { BENCH_ASK_OPTIONS, BENCH_ASK_QUESTION, BENCH_ASK_TRIGGER, BENCH_ECHO_REPLY } from "../fake-script.ts";
 import { FeishuReplyTimeout, isRecalled, visibleText, type FeishuDriver, type FeishuMessage, type TestChat } from "../feishu-driver.ts";
 import { messagesAfter } from "../instance-client.ts";
 import type { RemoteInstanceConfig } from "../bench.ts";
+import { TESTER_ASK_CLEANUP_MS } from "../limits.ts";
 import type { FlowContext, FlowRunner } from "../types.ts";
 import { ExternalServiceError } from "../verdict.ts";
 import { ensureBenchPm, observeVendorFailure, recallCheck, runner, runTag, scenarioPm, sleep, waitFor, type Observation } from "./common.ts";
@@ -244,21 +245,41 @@ const desktopAnswerSyncsCard = runner(async (ctx, obs) => {
   const chatId = await pmGroup(ctx, driver, pm.pmId);
   const t0 = Date.now();
   const existingIds = new Set((await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).map((m) => m.messageId));
-  const userMessageId = await local.send(pm.conversationId, `bench ask ${runTag()}`);
-  const ask = await waitFor(async () => (await messagesAfter(local.api, pm.conversationId, userMessageId)).find((m: Message) => m.meta?.needsUser === true), 60_000, ctx.signal);
-  const card = await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => !existingIds.has(m.messageId) && fromBot(botAppId)(m) && answer(m) && visibleText(m).includes(BENCH_ASK_QUESTION)), 60_000, ctx.signal);
-  const cardMs = Date.now() - t0;
-  obs.check("card-posted", card !== null && cardMs <= 30_000, card === null ? "no decision card in the PM group within 60 s" : `card after ${cardMs} ms`);
-  if (card !== null) obs.save("card-before.json", `${card.content}\n`);
-  if (ask === null || card === null) {
-    obs.check("card-settled", false, ask === null ? "the PM never asked" : "no card to settle");
-  } else {
-    const answered = Date.now();
-    await local.api.json("POST", API_PATHS.askAnswer(ask.id), { clientId: crypto.randomUUID(), optionIndex: 0, choice: BENCH_ASK_OPTIONS[0] });
-    const after = await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => m.messageId === card.messageId && m.updateTime > card.updateTime && answer(m) && visibleText(m).includes(BENCH_ASK_OPTIONS[0])), 30_000, ctx.signal);
-    if (after !== null) obs.save("card-after.json", `${after.content}\n`);
-    const ms = after === null ? -1 : Date.now() - answered;
-    obs.check("card-settled", after !== null && ms <= 15_000, after === null ? "the card was not updated in place with the chosen option within 30 s" : `updated ${ms} ms after the desktop answer`);
+  const userMessageId = await local.send(pm.conversationId, `${BENCH_ASK_TRIGGER}${runTag()}`);
+  const pendingAsk = async (signal: AbortSignal) => (await messagesAfter(local.api, pm.conversationId, userMessageId, signal)).find((m) => {
+    const ask = askOf(m);
+    return m.text === BENCH_ASK_QUESTION && ask !== null && !ask.answered && !ask.closed;
+  });
+  const decision = { clientId: crypto.randomUUID(), optionIndex: 0, choice: BENCH_ASK_OPTIONS[0] };
+  const settle = (id: number, signal: AbortSignal) => local.api.json("POST", API_PATHS.askAnswer(id), decision, signal);
+  let settled = false;
+  try {
+    const ask = await waitFor(() => pendingAsk(ctx.signal), 60_000, ctx.signal);
+    const card = await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => !existingIds.has(m.messageId) && fromBot(botAppId)(m) && answer(m) && visibleText(m).includes(BENCH_ASK_QUESTION)), 60_000, ctx.signal);
+    const cardMs = Date.now() - t0;
+    obs.check("card-posted", card !== null && cardMs <= 30_000, card === null ? "no decision card in the PM group within 60 s" : `card after ${cardMs} ms`);
+    if (card !== null) obs.save("card-before.json", `${card.content}\n`);
+    if (ask === null || card === null) {
+      obs.check("card-settled", false, ask === null ? "the PM never asked" : "no card to settle");
+    } else {
+      const answered = Date.now();
+      await settle(ask.id, ctx.signal);
+      settled = true;
+      const after = await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => m.messageId === card.messageId && m.updateTime > card.updateTime && answer(m) && visibleText(m).includes(BENCH_ASK_OPTIONS[0])), 30_000, ctx.signal);
+      if (after !== null) obs.save("card-after.json", `${after.content}\n`);
+      const ms = after === null ? -1 : Date.now() - answered;
+      obs.check("card-settled", after !== null && ms <= 15_000, after === null ? "the card was not updated in place with the chosen option within 30 s" : `updated ${ms} ms after the desktop answer`);
+    }
+  } finally {
+    if (!settled) {
+      try {
+        const signal = AbortSignal.timeout(TESTER_ASK_CLEANUP_MS);
+        const ask = await pendingAsk(signal);
+        if (ask !== undefined) await settle(ask.id, signal);
+      } catch (error) {
+        obs.check("card-cleanup", false, `could not settle the bench decision card: ${String(error)}`);
+      }
+    }
   }
   await finishFeishu(ctx, obs, chatId, t0, botAppId, [], { excludeIds: existingIds });
 });

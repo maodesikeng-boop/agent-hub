@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { VENDOR_LIST, vendorSpec, type AgentVendor } from "../../src/shared/index.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
+import { coverageLines } from "./cli.ts";
 import { installCommandFor, installVendor, loginCommandFor, openGaps, probeVendor, VENDOR_BENCH, type CommandRunner, type ProbeTarget, type VendorReadiness } from "./vendors.ts";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
@@ -117,6 +118,14 @@ describe("installVendor", () => {
 describe("probeVendor", () => {
   const provider = (availability: "available" | "signed_out" | "not_installed" | "unknown", installed = availability !== "not_installed") => ({ installed, version: installed ? "2.0" : null, availability, accountSummary: availability === "available" ? "owner@example" : null });
   const local = (root: string, cliPath: string | null) => ({ cliPath, userHome: join(root, "home"), env: {}, installDir: join(root, "install") });
+
+  it("prints the local Claude token path and explicit bench.json mapping", () => {
+    const entry = probeVendor("claude", { instance: "local", provider: provider("signed_out"), local: local(scratch(), "/bench/claude"), platform: "darwin" });
+    const [line] = coverageLines([entry]);
+    expect(line).toContain("secrets/claude-oauth-token");
+    expect(line).toContain("bench.json");
+    expect(line).toContain('"CLAUDE_CODE_OAUTH_TOKEN": "@secrets/claude-oauth-token"');
+  });
 
   it("reports not_installed when the CLI does not resolve from the bench HOME and PATH, ignoring the developer's own tool directories", () => {
     const root = scratch();
