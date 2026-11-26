@@ -18,7 +18,8 @@ export default defineVendor({
   home: {
     dirs: [".claude", ".claude.json"],
     readonlySecrets: [".claude.json", ".claude/.credentials.json"],
-    catalogWatchPaths: [".claude.json", ".claude/.credentials.json", ".claude/settings.json"],
+    catalogWatchPaths: [".claude/.credentials.json", ".claude/settings.json"],
+    catalogProbeStatePaths: [".claude.json"],
   },
   models: {
     bundled: [

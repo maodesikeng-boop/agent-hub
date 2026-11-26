@@ -1,4 +1,5 @@
 import type { AgentVendor, ComposerCommand, ModelCatalog, VendorAvailability } from "../../shared/index.ts";
+import type { CatalogFingerprint } from "../../shared/paths.ts";
 
 export interface CommandsTarget {
   cwd: string;
@@ -30,6 +31,6 @@ export interface VendorCatalogSourceOptions {
   path: string | (() => string);
   cwd: string;
   installed: () => boolean;
-  fingerprint?: () => string;
+  fingerprint?: () => CatalogFingerprint;
   env?: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv);
 }

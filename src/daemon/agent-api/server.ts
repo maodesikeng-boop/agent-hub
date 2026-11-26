@@ -161,7 +161,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       task: taskField,
       vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
       model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
-      effort: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
+      effort: { type: ["string", "null"], minLength: 1, maxLength: MAX_MODEL_CHARS },
       maxTimeMs: { type: "integer" },
       readonly: { type: "boolean" },
       caps: { type: "string", enum: [...WORKER_CAPABILITY_MODES] },
