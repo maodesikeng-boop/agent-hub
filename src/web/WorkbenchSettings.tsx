@@ -21,23 +21,17 @@ export const settingsBodies = {
 
 type SettingsProps = Omit<MobileSettingsProps, "bodies" | "vendor"> & { defaultProviderDevice: DeviceKey };
 
-function MobileWorkbenchSettings({ open, quotaReady, ...props }: SettingsProps & { open: boolean; quotaReady: boolean }) {
-  const current = useServerInfo().currentQuota === true;
-  const { rows } = useFetchedQuota(useHubQueryClient(), useClient(), {
-    enabled: current && quotaReady && open && props.section === undefined,
-    current,
-  });
-  return open ? <WorkbenchSettingsSurfaces {...props} mobile quota={current ? rows : props.quota} /> : null;
-}
-
 export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, open = true, quotaReady = false, ...props }: SettingsProps & {
   mobile: boolean;
   open?: boolean;
   quotaReady?: boolean;
 }) {
-  return mobile
-    ? <MobileWorkbenchSettings {...props} open={open} quotaReady={quotaReady} />
-    : <WorkbenchSettingsSurfaces {...props} mobile={false} />;
+  const current = useServerInfo().currentQuota === true;
+  const { rows } = useFetchedQuota(useHubQueryClient(), useClient(), {
+    enabled: mobile && current && quotaReady && open && props.section === undefined,
+    current,
+  });
+  return open ? <WorkbenchSettingsSurfaces {...props} mobile={mobile} quota={mobile && current ? rows : props.quota} /> : null;
 });
 
 function WorkbenchSettingsSurfaces({ mobile, defaultProviderDevice, ...props }: SettingsProps & { mobile: boolean }) {
