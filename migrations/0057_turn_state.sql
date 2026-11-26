@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS turn_tools (
   name        TEXT    NOT NULL,
   summary     TEXT,
   status      TEXT    NOT NULL CHECK (status IN ('pending', 'running', 'done', 'unconfirmed')),
+  recorded_at INTEGER NOT NULL,
   started_at  INTEGER,
   ended_at    INTEGER,
   PRIMARY KEY (turn_id, tool_use_id)

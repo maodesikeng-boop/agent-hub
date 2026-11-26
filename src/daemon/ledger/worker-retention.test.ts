@@ -137,6 +137,7 @@ describe("已收工 Worker 的对话保留期", () => {
     enqueueAction(db, { type: "worktree.create", params: { workerId: w } }, now);
     expect(count("messages", "conversation_id = ?", conv)).toBeGreaterThan(0);
     expect(count("session_steps", "session_id = ?", sid)).toBeGreaterThan(0);
+    expect(count("turn_tools", "turn_id IN (SELECT id FROM turns WHERE session_id = ?)", sid)).toBe(1);
     const endedAt = endWorker(w);
     changes = [];
 
@@ -147,6 +148,7 @@ describe("已收工 Worker 的对话保留期", () => {
 
     expect(count("messages", "conversation_id = ?", conv)).toBe(0);
     expect(count("session_steps", "session_id = ?", sid)).toBe(0);
+    expect(count("turn_tools", "turn_id IN (SELECT id FROM turns WHERE session_id = ?)", sid)).toBe(0);
     expect(count("hub_calls", "session_id = ?", sid)).toBe(0);
     expect(count("handovers", "conversation_id = ?", conv)).toBe(0);
     expect(count("worker_background_waits", "session_id = ?", sid)).toBe(0);

@@ -18,7 +18,7 @@ import { createResolveFolder } from "./files.ts";
 import { createLedger } from "./index.ts";
 import type { SqliteLedger } from "./index.ts";
 import { snippetOf } from "./worker-search.ts";
-import { clipText, formatClock } from "./worker-view.ts";
+import { clipText, formatClock } from "./worker-activity.ts";
 
 let db: Db;
 let root: string;
@@ -338,7 +338,8 @@ describe.each(AGENT_VENDORS)("%s 的 Worker", (vendor) => {
     runTool(vendor, w, 'curl -H "Authorization: Bearer abcdef1234567890" https://x.test?token=hunter2hunter2', { finish: false });
     runTool(vendor, w, "GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789 gh pr list", { finish: false });
     emit(w, { type: "agent.text", uuid: "x1", text: "key is sk-abcdefghijklmnopqrstuvwxyz123456", ...at() });
-    const all = `${show(w).text}\n${log(w).text}\n${JSON.stringify(db.all("SELECT summary FROM session_steps"))}`;
+    const stored = db.all("SELECT summary FROM session_steps UNION ALL SELECT summary FROM turn_tools");
+    const all = `${show(w).text}\n${log(w).text}\n${JSON.stringify(stored)}`;
     for (const secret of ["abcdef1234567890", "hunter2hunter2", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "sk-abcdefghijklmnopqrstuvwxyz123456"]) {
       expect(all).not.toContain(secret);
     }
@@ -629,6 +630,28 @@ describe("hub worker log --stats tool wait time", () => {
 
     expect(stats(w).text).toContain("等工具结果 9s（3 次调用）");
   });
+});
+
+it("keeps a replayed completion on the turn that recorded the tool before its id was reused", () => {
+  const w = startWorker("claude");
+  startTurn(w);
+  emit(w, { type: "agent.tool", uuid: "first", toolUseId: "reused", name: "Bash", input: { command: "printf first" }, ...at() });
+  endTurn(w);
+  advance(1_000);
+  const result: DriverEvent = { type: "agent.tool_result", toolUseIds: ["reused"], ...at() };
+  advance(1_000);
+  emit(w, { type: "turn.started", ...at() });
+  emit(w, { type: "agent.tool", uuid: "second", toolUseId: "reused", name: "Bash", input: { command: "printf second" }, ...at(), pending: true });
+  emit(w, result);
+  emit(w, result);
+  expect(show(w).text).toContain("现在：Running command: printf second，等待开始");
+
+  advance(10_000);
+  emit(w, { type: "agent.tool_running", toolUseId: "reused", ...at() });
+  advance(2_000);
+  expect(show(w).text).toContain("现在：Running command: printf second，已跑 2s");
+  emit(w, { ...result, ...at() });
+  expect(log(w).data.steps.at(-1)?.text).toBe("Running command: printf second（用了 2s）");
 });
 
 describe.each(Object.keys(OTHER_TOOLS) as AgentVendor[])("%s 的 hub worker log --stats", (vendor) => {

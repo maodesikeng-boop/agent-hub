@@ -3,8 +3,7 @@ import { isRecoveryStop } from "../../../shared/turn.ts";
 import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 import type { Pending } from "../context.ts";
 import type { WorkerDbRow } from "../rows.ts";
-import { SHUTDOWN_INTERRUPTED_REASON } from "../steps.ts";
-import type { LedgerTurns } from "../turns.ts";
+import { SHUTDOWN_INTERRUPTED_REASON, type LedgerTurns } from "../turns.ts";
 import { workerSession } from "./ctx.ts";
 import { insertTurnFailed } from "./reports.ts";
 import type { WorkersCtx } from "./types.ts";
@@ -37,6 +36,5 @@ export function noticeUnresentShutdownTurnsIn(w: WorkersCtx, p: Pending, turns: 
       ))?.id ?? null;
     if (w.db.get("SELECT 1 FROM messages WHERE dedupe_key = ?", workerMessageDedupeKey(worker.id, "turn_failed", messageId))) continue;
     insertTurnFailed(w, p, worker, messageId, [], SHUTDOWN_TURN_NOT_RESENT);
-    if (legacy) w.db.run("UPDATE session_steps SET summary = ? WHERE id = ?", SHUTDOWN_TURN_NOT_RESENT, legacy.id);
   }
 }

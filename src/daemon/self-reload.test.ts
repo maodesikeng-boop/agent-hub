@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LedgerRequestError, SELF_RELOAD_DRAIN_MAX_MS, SELF_RELOAD_QUIET_MS, SELF_RELOAD_RECHECK_MS } from "../shared/index.ts";
-import { formatClock } from "./ledger/worker-view.ts";
+import { formatClock } from "./ledger/worker-activity.ts";
 import { createBusySessions, createSelfReload, createStagedWebBuild, describeSelfReload, type BuildOutcome, type SelfReloadOptions } from "./self-reload.ts";
 
 /** 可控的“全库忙不忙”和账本变化。 */

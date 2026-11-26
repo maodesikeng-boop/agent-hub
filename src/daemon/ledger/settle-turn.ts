@@ -6,7 +6,6 @@ import type { createLedgerHandover } from "./handover.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerProjectCatalog } from "./project-catalog.ts";
 import type { createLedgerSchedules } from "./schedules.ts";
-import type { LedgerSteps } from "./steps.ts";
 import type { TurnCompletionEffects } from "./turn-completions.ts";
 import type { LedgerTurns } from "./turns.ts";
 import type { LedgerWorkers } from "./workers.ts";
@@ -14,7 +13,6 @@ import type { LedgerWorkers } from "./workers.ts";
 interface SettlementDeps {
   turns: LedgerTurns;
   messages: LedgerMessages;
-  steps: LedgerSteps;
   reminders: ReturnType<typeof createChecklistReminders>;
   workers: LedgerWorkers;
   handover: ReturnType<typeof createLedgerHandover>;
@@ -23,7 +21,7 @@ interface SettlementDeps {
 }
 
 export function createTurnReceiptSettlement(db: Db, deps: SettlementDeps): TurnCompletionEffects["apply"] {
-  const { turns, messages, steps, reminders, workers, handover, schedules, projectCatalog } = deps;
+  const { turns, messages, reminders, workers, handover, schedules, projectCatalog } = deps;
   return (p, receipt, facts, previousRun) => {
     const session = getAgentSession(db, receipt.sessionId);
     if (session === null || session.role === "assistant" || session.conversationId === null) return;
@@ -43,7 +41,6 @@ export function createTurnReceiptSettlement(db: Db, deps: SettlementDeps): TurnC
       return message?.sender === "pm" && prior.endedAt !== null && message.createdAt <= prior.endedAt;
     });
     messages.settleTurn(p, session);
-    steps.afterDriverEvent(session, { ...event, durationMs: settled.turn.durationMs });
     reminders.observe(p, session, event);
     workers.settleTurn(p, session, event, facts.worker, previousRun, settled, followsEmptyRecovery);
     handover.afterDriverEvent(p, session, event);
@@ -52,14 +49,11 @@ export function createTurnReceiptSettlement(db: Db, deps: SettlementDeps): TurnC
   };
 }
 
-export function failSessionSendIn(db: Db, p: Pending, action: AnyActionRow, error: string, deps: Pick<SettlementDeps, "turns" | "messages" | "steps">): void {
+export function failSessionSendIn(db: Db, p: Pending, action: AnyActionRow, error: string, deps: Pick<SettlementDeps, "turns" | "messages">): void {
   if (action.type !== "session.send") return;
   const { messageId, sessionId, resend } = action.params;
   const message = resend ? deps.messages.getMessage(messageId) : null;
   const turn = message?.status === "processing" && message.sessionId === sessionId ? deps.turns.turnTakingInput(messageId) : null;
   const session = turn?.outcome === "interrupted" ? getAgentSession(db, sessionId) : deps.messages.actionFailedIn(p, action, error);
-  if (session !== null) {
-    deps.turns.recordFailedStartIn(p, session, messageId, error);
-    deps.steps.recordFailedStart(session, error);
-  }
+  if (session !== null) deps.turns.recordFailedStartIn(p, session, messageId, error);
 }

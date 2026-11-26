@@ -30,6 +30,8 @@ import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerLoadedSkills } from "./loaded-skills.ts";
 import { createLedgerMessages } from "./messages.ts";
 import { createLedgerTurns } from "./turns.ts";
+import { createLedgerTurnTools } from "./turn-tools.ts";
+import { createWorkerActivity } from "./worker-activity.ts";
 import { createTurnReceiptSettlement, failSessionSendIn } from "./settle-turn.ts";
 import { createDriverEventDrain } from "./driver-events.ts";
 import { createTurnCompletionLedger, type TurnEndedEvent } from "./turn-completions.ts";
@@ -246,7 +248,16 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       reminders.observe(p, session, event);
     },
   });
+  const steps = createLedgerSteps(ctx);
+  const tools = createLedgerTurnTools(ctx);
   const turns = createLedgerTurns(ctx, {
+    closeTurnActivity(session, turnId, endedAt) {
+      if (tools.count(turnId) > 0) {
+        tools.closeOpen(turnId, endedAt);
+        tools.trimSession(session.id);
+      }
+      if (session.role === "worker") steps.trim(session.id);
+    },
     projectInputStatus: messages.projectInputStatus,
     failureReasonOfTurn: (session, event) => handover.failureReasonOfTurn(session, event),
   });
@@ -274,13 +285,13 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     userBlockers,
     onGraphFinishedIn: (p, projectId) => projectCatalog.markForcedIn(p, projectId, "graph_finished"),
   });
-  const steps = createLedgerSteps(ctx);
+  const activityOf = createWorkerActivity(steps, turns, tools);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
     worktreesDir: files.worktreesDir, platform: options.workerPlatform,
     ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     taskGraphs,
     userBlockers,
-    takeover: createLedgerTakeover(ctx, steps, { findTranscript: options.findTranscript }),
+    takeover: createLedgerTakeover(ctx, activityOf, { findTranscript: options.findTranscript }),
   });
   const loadedSkills = createLedgerLoadedSkills(ctx, options.skillFiles ?? createSkillFiles({ launchDir: files.launchDir, userHome }));
   const handover = createLedgerHandover(ctx, sessions, messages, persona, loadedSkills, {
@@ -305,7 +316,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerSession: workers.workerSession,
     notStarted,
     liveOf: sessions.liveOf,
-    runningTurnOf: turns.runningTurnOf,
+    turns, tools, activityOf,
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
@@ -343,12 +354,15 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         reminders.observe(p, session, scoped);
         return;
       }
-      const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
       if (scoped.type === "message.processing" || scoped.type === "turn.started" || scoped.type === "session.started") turns.afterDriverEvent(p, session, scoped);
       if (scoped.type === "session.exited" || scoped.type === "driver.error") turns.settleExit(p, session, scoped);
       const result = messages.applyEvent(p, session, scoped, textMeta);
       turns.recordOutputIn(p, session, scoped);
-      steps.afterDriverEvent(session, scoped, openTools);
+      if (scoped.type === "agent.thinking" || scoped.type === "agent.text") steps.afterDriverEvent(session, scoped);
+      if (scoped.type === "agent.tool_result" || scoped.type === "agent.tool_running" || (scoped.type === "agent.tool" && result !== "duplicate_tool")) {
+        const turnId = scoped.type === "agent.tool_result" ? null : turns.runningTurnOf(session.id)?.id ?? null;
+        tools.afterDriverEvent(session, turnId, scoped);
+      }
       if (result !== "duplicate_tool") reminders.observe(p, session, scoped);
       loadedSkills.afterDriverEvent(session, scoped);
       workers.afterDriverEvent(p, session, scoped);
@@ -372,7 +386,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     }
   };
   const completions = createTurnCompletionLedger(ctx, {
-    apply: createTurnReceiptSettlement(db, { turns, messages, steps, reminders, workers, handover, schedules, projectCatalog }),
+    apply: createTurnReceiptSettlement(db, { turns, messages, reminders, workers, handover, schedules, projectCatalog }),
     onSettled: (receipt) => driverEvents.onSettled(receipt),
     onOverflow,
   });
@@ -495,7 +509,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     onActionFailed(action, error) {
       write((p) => {
-        failSessionSendIn(db, p, action, error, { turns, messages, steps });
+        failSessionSendIn(db, p, action, error, { turns, messages });
         workers.actionFailedIn(p, action, error);
         handover.actionFailedIn(p, action);
         schedules.actionFailedIn(p, action);

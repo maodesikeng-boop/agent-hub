@@ -130,6 +130,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
       },
       { table: "messages", where: "conversation_id = ?", params: [c.conv] },
       { table: "session_steps", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
+      { table: "turn_tools", where: "turn_id IN (SELECT id FROM turns WHERE conversation_id = ?)", params: [c.conv] },
       { table: "hub_calls", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
       {
         table: "handovers",

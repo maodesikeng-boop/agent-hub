@@ -294,7 +294,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("turn_completion_watermarks", "retained_metadata", "src/daemon/ledger/turn-completions.ts", "src/daemon/ledger/persona.ts, src/daemon/ledger/router.ts", "on_archive_or_delete"),
   table("turns", "growing", "src/daemon/ledger/turns.ts", "src/daemon/ledger/db-table-retention.ts, src/daemon/ledger/worker-retention.ts", "automatic", TURN_HISTORY_LIMITS),
   table("turn_inputs", "growing", "src/daemon/ledger/turns.ts", "src/daemon/ledger/db-table-retention.ts, src/daemon/ledger/worker-retention.ts", "automatic", TURN_HISTORY_LIMITS),
-  table("turn_tools", "growing", "src/daemon/ledger/turn-tools.ts", "src/daemon/ledger/db-table-retention.ts, src/daemon/ledger/worker-retention.ts", "automatic", [
+  table("turn_tools", "growing", "src/daemon/ledger/turn-tools.ts", "src/daemon/ledger/turn-tools.ts, src/daemon/ledger/db-table-retention.ts, src/daemon/ledger/worker-retention.ts", "automatic", [
     ...TURN_HISTORY_LIMITS,
     limit("TURN_TOOLS_MAX_PER_SESSION", TURN_TOOLS_MAX_PER_SESSION, "rows"),
   ]),

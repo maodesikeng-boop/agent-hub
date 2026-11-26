@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { turnFailureReason } from "../../shared/driver.ts";
-import { TURN_RECOVERY_MAX_ATTEMPTS, TURN_SUMMARIES_PER_PAGE_MAX } from "../../shared/limits.ts";
+import { TURN_HISTORY_MAX_PER_CONV, TURN_RECOVERY_MAX_ATTEMPTS, TURN_SUMMARIES_PER_PAGE_MAX } from "../../shared/limits.ts";
 import { isRecoveryStop } from "../../shared/turn.ts";
 import { getAgentSession } from "../store/index.ts";
 import { exitFailureReason } from "./messages.ts";
@@ -10,6 +10,8 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { StopSource, TurnCause, TurnId, TurnInputRole, TurnOutcome, TurnStatus, TurnSummary } from "../../shared/turn.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { LegacyTurnReplyFacts, TurnEndedEvent } from "./turn-completions.ts";
+
+export const SHUTDOWN_INTERRUPTED_REASON = "守护进程关闭打断了这一轮，重启后会重发";
 
 export interface TurnRecord {
   readonly id: TurnId;
@@ -58,6 +60,7 @@ export interface RecoveryResend {
 
 export interface TurnsDeps {
   failureReasonOfTurn?(session: AgentSessionRow, event: TurnEndedEvent): string | null;
+  closeTurnActivity(session: AgentSessionRow, turnId: TurnId, endedAt: number): void;
   /** Writes the `messages.status` projection for one input; supplied by the messages module, which owns the column. */
   projectInputStatus(p: Pending, messageId: MessageId, status: MessageStatus, reason: string | null, replyId?: MessageId): void;
 }
@@ -86,6 +89,7 @@ export interface LedgerTurns {
   stopInputIn(p: Pending, messageId: MessageId, source: StopSource | null): boolean;
   runningTurnOf(sessionId: SessionId): TurnRecord | null;
   lastEndedTurnOf(sessionId: SessionId, before?: TurnId): TurnRecord | null;
+  sessionTurns(sessionId: SessionId): TurnRecord[];
   turnOf(id: TurnId): TurnRecord | null;
   /** The newest turn that took this input, or null when no turn has taken it yet. */
   turnTakingInput(messageId: MessageId): TurnRecord | null;
@@ -275,6 +279,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
          duration_ms = ?, reply_message_id = ?, updated_at = ? WHERE id = ?`,
       end.outcome, stopSource, reason, endedAt, endedAt - turn.startedAt, reply, endedAt, turn.id,
     );
+    deps.closeTurnActivity(session, turn.id, endedAt);
     const rows = db.all<TurnInputRecord & { ownerId: SessionId | null; sender: Message["sender"]; scheduleRun: number }>(
       `SELECT ${INPUT_COLUMNS}, m.session_id AS ownerId, m.sender, (CASE WHEN json_valid(m.meta) THEN json_extract(m.meta, '$.event') IS 'schedule.run' ELSE 0 END) AS scheduleRun
        FROM turn_inputs i JOIN messages m ON m.id = i.message_id WHERE i.turn_id = ? ORDER BY i.message_id`, turn.id,
@@ -428,6 +433,9 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       } else recordOutputIn(p, session, event);
     },
     settle, settleExit, recordOutputIn, recordFailedStartIn, runningTurnOf, lastEndedTurnOf, turnOf, turnTakingInput, summariesFor: (id, messages) => summariesFor(db, id, messages), recoverAfterRestartIn,
+    sessionTurns: (id) => db.all<TurnRecord>(
+      `SELECT ${TURN_COLUMNS} FROM turns t WHERE t.session_id = ? ORDER BY t.id DESC LIMIT ?`, id, TURN_HISTORY_MAX_PER_CONV,
+    ).reverse(),
     requestStopIn(p, id, source) {
       const running = db.run("UPDATE turns SET stop_source = coalesce(stop_source, ?) WHERE session_id = ? AND status = 'running'", source, id);
       if (running.changes > 0) return;

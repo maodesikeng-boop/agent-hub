@@ -87,7 +87,7 @@ function tick(ms = TURN_COMPLETION_RETRY_MAX_MS): void {
 const statusOf = (id: MessageId) => ledger.getMessage(id)?.status;
 const receipts = (sid = sessionId) => db.get<{ n: number }>("SELECT count(*) AS n FROM turn_completions WHERE session_id = ?", sid)!.n;
 const turnEnds = (sid = sessionId) =>
-  db.all<{ outcome: string }>("SELECT outcome FROM session_steps WHERE session_id = ? AND kind = 'turn_ended' ORDER BY id", sid).map((r) => r.outcome);
+  db.all<{ outcome: string }>("SELECT outcome FROM turns WHERE session_id = ? AND status = 'ended' ORDER BY id", sid).map((r) => r.outcome);
 const storeError = () => db.get<{ last_error: string | null }>("SELECT last_error FROM health WHERE module = 'store'")?.last_error ?? null;
 const sendsFor = (id: MessageId) =>
   listActions(db).filter((a): a is Extract<AnyActionRow, { type: "session.send" }> => a.type === "session.send" && a.params.messageId === id);
@@ -378,12 +378,12 @@ describe("turn completion receipts", () => {
     expect(receipts()).toBe(0);
   });
 
-  it("writes turn_ended steps for Worker sessions inside the settlement transaction and none for PM sessions", () => {
+  it("ends PM and Worker turns in the settlement transaction", () => {
     const pmTurn = post("问题");
     startTurn(pmTurn);
     end([pmTurn]);
     expect(statusOf(pmTurn)).toBe("replied");
-    expect(turnEnds()).toEqual([]);
+    expect(turnEnds()).toEqual(["ok"]);
 
     const folder = realpathSync.native(mkdtempSync(join(home, "project-")));
     ledger.hubCall(sessionId, "project.create", { folder });
@@ -391,14 +391,18 @@ describe("turn completion receipts", () => {
     const wsid = db.get<{ id: SessionId }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!.id;
     const task = db.get<{ id: MessageId }>("SELECT id FROM messages WHERE session_id = ? ORDER BY id LIMIT 1", wsid)!.id;
     startTurn(task, wsid);
+    ev({ type: "agent.tool", uuid: "tool-start", toolUseId: "tool-start", name: "Bash", input: { command: "echo ready" }, at: now }, wsid);
+    const tool = () => db.get("SELECT status FROM turn_tools WHERE tool_use_id = 'tool-start'");
     say("w1", "做完了", wsid);
     failOn("fail_watermark", "BEFORE INSERT ON turn_completion_watermarks");
     end([task], {}, wsid);
     expect(turnEnds(wsid)).toEqual([]);
+    expect(tool()).toEqual({ status: "running" });
 
     drop("fail_watermark");
     tick();
     expect(turnEnds(wsid)).toEqual(["ok"]);
+    expect(tool()).toEqual({ status: "unconfirmed" });
     ev({ type: "turn.started", at: now }, wsid);
     end([], FAILED, wsid);
     expect(turnEnds(wsid)).toEqual(["ok", "failed"]);
