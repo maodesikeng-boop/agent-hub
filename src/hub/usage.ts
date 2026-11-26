@@ -79,7 +79,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "persona",
     action: "show",
     cli: "persona show",
-    usage: `  ${hub} persona show                                        查看现在的性格设定和模式`,
+    usage: `  ${hub} persona show                                        输出性格设定正文，可增删后用 persona edit --stdin 写回；
+                                                          查看当前模式用 ${hub} status`,
   },
   {
     command: "persona.edit",

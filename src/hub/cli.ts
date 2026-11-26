@@ -38,6 +38,12 @@ function line(text: string): string {
   return text.endsWith("\n") ? text : `${text}\n`;
 }
 
+function personaStdout(text: string): string {
+  if (text === "") return "";
+  // edit --stdin consumes one line ending; a final CR may belong to the body.
+  return text + (text.endsWith("\r") ? "\r\n" : "\n");
+}
+
 export async function runHub(io: HubIo): Promise<number> {
   const usage = (reason: string, full = false) => {
     io.stderr.write(line(`${hub}：${reason}`));
@@ -112,7 +118,7 @@ export async function runHub(io: HubIo): Promise<number> {
   }
   const r = response as { ok?: unknown; text?: unknown; message?: unknown } | null;
   if (r !== null && typeof r === "object" && r.ok === true && typeof r.text === "string") {
-    io.stdout.write(line(r.text));
+    io.stdout.write(parsed.command === "persona.show" ? personaStdout(r.text) : line(r.text));
     return HUB_EXIT.ok;
   }
   if (r !== null && typeof r === "object" && r.ok === false && typeof r.message === "string") {
