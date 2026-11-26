@@ -66,7 +66,7 @@ export interface MessageActions {
 
 export const BUBBLE = "w-fit max-w-full px-4 py-2.5 text-body leading-relaxed";
 export const SECONDARY = "text-minor text-muted-foreground";
-export const TEXT_BUTTON = "touch-target cursor-pointer transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
+export const TEXT_BUTTON = "touch-target cursor-pointer transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 
 export function AgentHead({
   identity,
@@ -324,9 +324,9 @@ type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
 const EVENT_ROW = "flex w-full items-start gap-3 px-3.5 py-2.5 text-left text-minor leading-5";
 const EVENT_TEXT = "min-w-0 flex-1 text-muted-foreground [overflow-wrap:anywhere]";
 const EVENT_TRIGGER =
-  "cursor-pointer rounded-none transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent pointer-coarse:min-h-11";
+  "cursor-pointer rounded-none transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent pointer-coarse:min-h-11";
 const EVENT_ACTION =
-  "touch-target inline-flex h-7 shrink-0 cursor-pointer items-center rounded-sm px-2 text-minor font-medium text-brand-ink transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60";
+  "touch-target inline-flex h-7 shrink-0 cursor-pointer items-center rounded-sm px-2 text-minor font-medium text-brand-ink transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60";
 
 function RevertButton({
   changeId,
@@ -776,7 +776,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
       {failed && delivered && (
         <button
           type="button"
-          className="touch-target text-minor text-muted-foreground outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:opacity-60"
+          className="touch-target text-minor text-muted-foreground focus-visible:outline-2 focus-visible:outline-border-focus disabled:opacity-60"
           title={[failure?.text, failure?.raw].filter(Boolean).join("\n")}
           disabled={phase === "retrying"}
           onClick={() => actions.onRetryMessage(message.id)}
@@ -840,7 +840,7 @@ export function UnsentMark({
       aria-busy={retrying || undefined}
       disabled={retrying}
       data-unsent
-      className="touch-target flex shrink-0 cursor-pointer outline-none hover:brightness-90 focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
+      className="touch-target flex shrink-0 cursor-pointer hover:brightness-90 focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
       onClick={onRetry}
     >
       {mark}

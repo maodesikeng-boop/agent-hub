@@ -169,7 +169,7 @@ export function WorkerDetailHeader({
                       setOpen(false);
                       onStop();
                     }}
-                    className="flex min-h-8 pointer-coarse:min-h-11 w-full cursor-pointer items-center rounded-xs px-2.5 py-1.5 text-left text-minor font-medium text-foreground transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+                    className="flex min-h-8 pointer-coarse:min-h-11 w-full cursor-pointer items-center rounded-xs px-2.5 py-1.5 text-left text-minor font-medium text-foreground transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
                   >
                     Stop
                   </button>
@@ -181,7 +181,7 @@ export function WorkerDetailHeader({
                       setOpen(false);
                       onEnd();
                     }}
-                    className="flex min-h-8 pointer-coarse:min-h-11 w-full cursor-pointer items-center rounded-xs px-2.5 py-1.5 text-left text-minor font-medium text-danger transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+                    className="flex min-h-8 pointer-coarse:min-h-11 w-full cursor-pointer items-center rounded-xs px-2.5 py-1.5 text-left text-minor font-medium text-danger transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus"
                   >
                     End
                   </button>

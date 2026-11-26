@@ -4,7 +4,7 @@ import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
 export const buttonVariants = cva(
-  "touch-target inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-sm whitespace-nowrap font-medium transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-pixel",
+  "touch-target inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-sm whitespace-nowrap font-medium transition-colors focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-pixel",
   {
     variants: {
       variant: {

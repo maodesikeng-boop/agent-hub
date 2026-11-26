@@ -111,7 +111,7 @@ function ComposerChips({
 }
 
 const CHIP_CLOSE_CLASS =
-  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:opacity-50";
+  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:opacity-50";
 
 const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 
@@ -123,7 +123,7 @@ function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick
         type="button"
         aria-label={`Worker model: ${labels.join(" ")}`}
         disabled={disabled}
-        className="touch-target flex min-w-0 cursor-pointer items-center gap-2 outline-none focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default"
+        className="touch-target flex min-w-0 cursor-pointer items-center gap-2 focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default"
         onPointerDown={keepFocus}
         onMouseDown={keepFocus}
         onClick={onEdit}

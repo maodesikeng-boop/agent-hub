@@ -12,7 +12,7 @@ import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 export const INLINE_LINK_CLASS =
-  "touch-target inline-flex cursor-pointer items-center gap-1 text-link underline decoration-link/40 transition-colors outline-none hover:decoration-link focus-visible:outline-2 focus-visible:outline-border-focus";
+  "touch-target inline-flex cursor-pointer items-center gap-1 text-link underline decoration-link/40 transition-colors hover:decoration-link focus-visible:outline-2 focus-visible:outline-border-focus";
 
 function usePreview(item: Deliverable): PreviewFile {
   const client = useClient();
@@ -52,7 +52,7 @@ function MediaThumb({ item }: { item: Deliverable }) {
         aria-label={item.label}
         onClick={() => setOpen(true)}
         className={cn(
-          "relative box-content h-(--deliverable-media-height) shrink-0 overflow-hidden rounded-sm border border-border bg-panel outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
+          "relative box-content h-(--deliverable-media-height) shrink-0 overflow-hidden rounded-sm border border-border bg-panel focus-visible:outline-2 focus-visible:outline-border-focus",
           video ? "cursor-pointer" : "cursor-zoom-in",
         )}
       >

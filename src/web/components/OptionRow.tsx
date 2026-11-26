@@ -21,7 +21,7 @@ export function OptionRow({
       type="button"
       data-chosen={chosen || undefined}
       className={cn(
-        "flex min-h-11 w-full cursor-pointer items-baseline gap-3 rounded-none px-4 py-2.5 text-left text-body leading-6 transition-colors duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default motion-reduce:transition-none",
+        "flex min-h-11 w-full cursor-pointer items-baseline gap-3 rounded-none px-4 py-2.5 text-left text-body leading-6 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default motion-reduce:transition-none",
         chosen ? "bg-open" : "hover:bg-hover active:bg-hover disabled:opacity-60 disabled:hover:bg-transparent",
         className,
       )}

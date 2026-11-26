@@ -111,7 +111,7 @@ export function DialogContent({
             {children}
             <DialogPrimitive.Close
               aria-label="Close"
-              className="touch-target absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+              className="touch-target absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
             >
               <X className="size-pixel" aria-hidden="true" />
             </DialogPrimitive.Close>

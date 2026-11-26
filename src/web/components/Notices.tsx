@@ -6,7 +6,7 @@ import { cn } from "../lib/utils.ts";
 
 const PILL = "flex w-fit max-w-full items-center gap-2 rounded-sm border border-border bg-panel px-4 py-2 text-minor text-foreground";
 const ICON = "size-4 shrink-0";
-const PILL_ACTION = "touch-target shrink-0 cursor-pointer font-medium text-brand-ink underline decoration-brand-ink/40 underline-offset-3 outline-none hover:decoration-brand-ink focus-visible:outline-2 focus-visible:outline-border-focus";
+const PILL_ACTION = "touch-target shrink-0 cursor-pointer font-medium text-brand-ink underline decoration-brand-ink/40 underline-offset-3 hover:decoration-brand-ink focus-visible:outline-2 focus-visible:outline-border-focus";
 
 export const Notices = memo(function Notices({
   health,

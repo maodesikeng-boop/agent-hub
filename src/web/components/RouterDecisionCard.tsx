@@ -49,7 +49,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
           type="button"
-          className="touch-target inline-flex cursor-pointer items-center gap-2 text-left font-semibold text-foreground outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus"
+          className="touch-target inline-flex cursor-pointer items-center gap-2 text-left font-semibold text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-border-focus"
           onClick={() => onOpenConversation(entry.deviceKey, decision.conversationId)}
         >
           <Avatar look={entry.look} size={24} />

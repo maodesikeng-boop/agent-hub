@@ -54,7 +54,7 @@ import { RouterStream } from "./RouterStream.tsx";
 const ROUTER_TRAY_VISIBLE_ROWS = 3;
 
 const CHIP_REMOVE_CLASS =
-  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
+  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 
 const NO_APPROVAL_CARDS: readonly ReactNode[] = [];
 const DEFAULT_ROUTER_SETTINGS = defaultRouterSettings();
@@ -132,7 +132,7 @@ const ClosedRouterDraftCard = memo(function ClosedRouterDraftCard({
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
           type="button"
-          className="touch-target inline-flex cursor-pointer items-center gap-2 text-left font-semibold text-foreground outline-none hover:underline focus-visible:outline-2 focus-visible:outline-border-focus"
+          className="touch-target inline-flex cursor-pointer items-center gap-2 text-left font-semibold text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-border-focus"
           onClick={() => onOpenConversation(closed.deviceKey, closed.conversationId)}
         >
           <Avatar look={closed.look} size={24} />
@@ -215,7 +215,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
         <div className="border-b border-border pt-2.5">
           <CollapsibleTrigger
             type="button"
-            className="touch-target flex h-8 w-full cursor-pointer items-center gap-2 text-left text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
+            className="touch-target flex h-8 w-full cursor-pointer items-center gap-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
           >
             <span className="inline-flex min-w-0 items-center gap-1.5">
               <ChevronRight
@@ -267,7 +267,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                       type="button"
                       aria-expanded={false}
                       className={cn(
-                        "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 border border-transparent px-2.5 py-2 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
+                        "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 border border-transparent px-2.5 py-2 text-left transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
                         !entry.online && "[&_[data-slot=avatar]]:opacity-50",
                       )}
                       onClick={() => onSelectKey(entry.decision.key)}
@@ -304,7 +304,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
               <button
                 type="button"
                 aria-expanded={rowsExpanded}
-                className="touch-target inline-flex cursor-pointer items-center gap-1 px-1 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
+                className="touch-target inline-flex cursor-pointer items-center gap-1 px-1 py-1 text-minor text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
                 onClick={() => setRowsExpanded((v) => !v)}
               >
                 {rowsExpanded ? "Show less" : "Show more"}
