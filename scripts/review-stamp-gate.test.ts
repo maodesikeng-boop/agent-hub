@@ -145,7 +145,7 @@ describe("matchStampPaths", () => {
     expect(implSection).toMatch(/Later step of a multi-step implementation plan/iu);
     expect(implSection).toMatch(/tests satisfied by earlier implementation steps on this branch are expected to pass already/iu);
     expect(implSection).toMatch(/every test for the unimplemented behavior assigned to this step still fails/iu);
-    expect(planStandard).toMatch(/cacheRead/u);
+    expect(planStandard).toMatch(/TokenUsage\.cacheRead/u);
     expect(planStandard).toMatch(/append to the end only/iu);
 
     const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
@@ -153,7 +153,7 @@ describe("matchStampPaths", () => {
     expect(planRule).toMatch(/do not fail a later step because tests satisfied by an earlier implementation step already pass/iu);
     expect(planRule).toMatch(/before the first implementation commit/iu);
     expect(planRule).toMatch(/screen recording \(video\) or a complete start-to-finish sequence of screenshots/iu);
-    expect(planRule).toMatch(/cacheRead/u);
+    expect(planRule).toMatch(/TokenUsage\.cacheRead/u);
     expect(planRule).toMatch(/prompt caching/iu);
 
     for (const [label, doc] of [
@@ -162,6 +162,84 @@ describe("matchStampPaths", () => {
       ["AGENTS.md", agentsMd],
     ] as const) {
       expect(doc, `${label} must not keep the superseded user checkpoint-card gate`).not.toMatch(/approves the plan(?:'s)? checkpoint card/u);
+    }
+  });
+
+  it("unifies real-environment evidence and listed not-verified exceptions without a conflicting missing-video FAIL", () => {
+    const planStandard = readFileSync(join(REPO_ROOT, "docs/plan-standard.md"), "utf8");
+    const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
+    const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
+
+    for (const [label, doc] of [
+      ["docs/plan-standard.md", planStandard],
+      ["REVIEW.md", planRule],
+      ["AGENTS.md", agentsMd],
+    ] as const) {
+      expect(doc, `${label} must state not verified does not count as verified or passing`).toMatch(/not verified.*(?:does not count|never counts) as verified or passing/iu);
+      expect(doc, `${label} must fail only when neither evidence nor a listed not-verified record exists`).toMatch(/neither complete.*nor a (?:listed|valid) `not verified` record|scenario with neither fails review/iu);
+    }
+    expect(planRule).not.toMatch(/lacks a video or start-to-finish screenshot sequence for any acceptance scenario/iu);
+  });
+
+  it("enforces prompt-cache comparison as a hard gate across affected vendors with accurate protocol parser paths", () => {
+    const planStandard = readFileSync(join(REPO_ROOT, "docs/plan-standard.md"), "utf8");
+    const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
+    const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
+
+    for (const [label, doc] of [
+      ["docs/plan-standard.md", planStandard],
+      ["REVIEW.md", planRule],
+      ["AGENTS.md", agentsMd],
+    ] as const) {
+      expect(doc, `${label} must state comparable conditions for prompt-cache checks`).toMatch(/same vendor, (?:the )?same model, (?:and )?(?:a )?comparable session and warm-up/iu);
+      expect(doc, `${label} must route unavailable local prompt-cache checks to the testbed`).toMatch(/on the testbed/iu);
+      expect(doc, `${label} must block merge and escalate via a Project Manager decision card when an affected vendor cannot run anywhere`).toMatch(/Project Manager (?:must )?escalates? to the user with a decision card/iu);
+    }
+    for (const [label, doc] of [
+      ["docs/plan-standard.md", planStandard],
+      ["REVIEW.md", planRule],
+    ] as const) {
+      expect(doc, `${label} must name shared driver protocol parser`).toContain("src/daemon/driver/protocol.ts");
+      expect(doc, `${label} must name shared ACP protocol parser`).toContain("src/vendors/_common/acp/protocol.ts");
+      expect(doc, `${label} must name vendor protocol parsers`).toContain("src/vendors/*/protocol.ts");
+    }
+    expect(planRule).not.toMatch(/or states why real-session verification is unavailable locally/iu);
+    expect(planRule).not.toMatch(/without a local-environment reason/iu);
+  });
+
+  it("requires real-environment real-CLI runs to prove vendor behavior while keeping fake CLIs for regression tests only", () => {
+    const planStandard = readFileSync(join(REPO_ROOT, "docs/plan-standard.md"), "utf8");
+    const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
+    const planRule = reviewMd.slice(reviewMd.indexOf("### Planned acceptance scenarios cover every requirement and pass real tests"));
+
+    for (const [label, doc] of [
+      ["docs/plan-standard.md", planStandard],
+      ["REVIEW.md", planRule],
+      ["AGENTS.md", agentsMd],
+    ] as const) {
+      expect(doc, `${label} must state hand-written fake events and fake CLIs cannot prove vendor behavior`).toMatch(/hand-written fake events and fake CLIs serve only as automated regression tests/iu);
+      expect(doc, `${label} must not require recording or replaying CLI samples`).not.toMatch(/record(?:ed|ing)? (?:real[- ]CLI )?samples?|replay recorded/iu);
+    }
+  });
+
+  it("requires a regression test or structural guard on every Important fix and PM decision-card escalation after 3 rounds", () => {
+    const reviewMd = readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8");
+    const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
+    const claudeMd = readFileSync(join(REPO_ROOT, "CLAUDE.md"), "utf8");
+    expect(claudeMd).toBe(agentsMd);
+
+    for (const [label, doc] of [
+      ["REVIEW.md", reviewMd],
+      ["AGENTS.md", agentsMd],
+    ] as const) {
+      expect(doc, `${label} must require a regression test or structural guard on every Important fix from either track`).toMatch(/fixing any `\[Important\]` finding from either logic review or real-environment review, add a reproducing regression test or structural guard in the same PR/iu);
+      expect(doc, `${label} must separate the nightly review pass from per-PR Important regression fixes`).toMatch(/Nightly review pass \(00:00\)/u);
+      expect(doc, `${label} must separate second-occurrence REVIEW.md rules from per-PR Important regression fixes`).toMatch(/Second occurrence \(`REVIEW\.md` rule\)/u);
+      expect(doc, `${label} must specify PM decision-card escalation after 3 rounds`).toMatch(/After 3 rounds with an open `\[Important\]` finding, stop and have the Project Manager escalate to the user with a decision card\./u);
+      expect(doc, `${label} must not use vague human or person wording for 3-round escalation`).not.toMatch(/human escalation after 3 rounds|hand the decision to a person/iu);
     }
   });
 });
