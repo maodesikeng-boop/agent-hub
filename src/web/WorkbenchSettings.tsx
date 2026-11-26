@@ -28,10 +28,10 @@ function MobileWorkbenchSettings({ quotaReady, ...props }: MobileSettingsProps &
   return <MobileSettings {...props} quota={current ? rows : props.quota} />;
 }
 
-export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, defaultProviderDevice, quotaReady, ...props }: Omit<MobileSettingsProps, "bodies" | "vendor"> & {
+export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, defaultProviderDevice, quotaReady = false, ...props }: Omit<MobileSettingsProps, "bodies" | "vendor"> & {
   mobile: boolean;
   defaultProviderDevice: DeviceKey;
-  quotaReady: boolean;
+  quotaReady?: boolean;
 }) {
   const currentDevice = useClient().device ?? LOCAL_DEVICE;
   const vendorSyncPage = props.section === "vendor-sync";
