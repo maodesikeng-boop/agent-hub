@@ -6,7 +6,6 @@ const graphId = z.int().positive();
 const nodeKey = z.string().min(1).max(MAX_NODE_KEY_CHARS);
 const clientId = z.string().min(1);
 const leafDecisionKind = z.enum(["checkpoint_pass", "decision", "skip"]);
-export type LeafDecisionKind = z.infer<typeof leafDecisionKind>;
 
 const pmNoticeSubject = z.discriminatedUnion("kind", [
   z.object({

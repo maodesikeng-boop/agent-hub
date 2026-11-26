@@ -4,7 +4,7 @@ import { pmNoticeDedupeRef, type PmNoticeSubject } from "../../shared/pm-notice.
 import type { Db } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { enqueueSystemWakeupIn } from "./system-wakeups.ts";
-import { decisionOf } from "./task-graphs/rows.ts";
+import { decisionOf, decisionWakeupClientIdOf } from "./task-graphs/rows.ts";
 import { getGraphRow, getStepRow } from "./task-graphs/store.ts";
 import type { TaskGraphCtx, TaskGraphDbRow } from "./task-graphs/types.ts";
 
@@ -95,7 +95,7 @@ export function isPmNoticeCurrent(db: Db, subject: PmNoticeSubject, conversation
       ) !== undefined;
     case "graph.decision_waiting_pm": {
       const step = getStepRow(db, graph.id, subject.nodeKey);
-      return step?.status === "waiting" && step.waiting_for === "pm" && decisionOf(step)?.clientId === subject.dedupeId;
+      return step?.status === "waiting" && step.waiting_for === "pm" && decisionWakeupClientIdOf(step) === subject.dedupeId;
     }
     case "graph.leaf_settled":
       return unsettledWorkOfLeaf(db, subject) !== null;

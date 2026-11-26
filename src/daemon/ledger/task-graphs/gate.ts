@@ -14,7 +14,7 @@ import { isReportFieldNone, parseWorkerReport } from "../../../shared/worker.ts"
 import { fail, type Pending } from "../context.ts";
 import { executeStepDecisionIn, gateDecideWakeupKey, workerDecisionDedupeKey, type DecisionResult } from "./decision.ts";
 import { stopQueuedDeliveryNotesIn } from "./delivery.ts";
-import { artifactWithoutCheckpoint, decisionOf, gateOptionsOf, isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
+import { artifactWithoutCheckpoint, decisionWakeupClientIdOf, gateOptionsOf, isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
 import { charLen, gateOptionsJsonOf, splitAskTextForGate, validateGateFields, validateNodeKey, type GateFields } from "./spec.ts";
 import {
   blockersOf,
@@ -260,7 +260,7 @@ function alreadyDecided(g: TaskGraphCtx, graphRow: TaskGraphDbRow, node: TaskNod
   const deliveredToWorker = [...candidateWids].some(
     (wid) => g.db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", workerDecisionDedupeKey(wid, graphRow.id, nodeKey, clientId)) !== undefined,
   );
-  if (decisionOf(node)?.clientId !== clientId && !deliveredToWorker) return null;
+  if (decisionWakeupClientIdOf(node) !== clientId && !deliveredToWorker) return null;
   const dedupeKey = gateDecideWakeupKey(graphRow.conversation_id, graphRow.id, nodeKey, clientId);
   const existingMsg = g.db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
   return { graph: loadGraph(g, graphRow.id)!, messageId: existingMsg?.id ?? null };

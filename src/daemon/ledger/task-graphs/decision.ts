@@ -20,7 +20,7 @@ import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { formatStepWaitingPmMessage } from "../task-graph-handoff.ts";
 import { stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
-import { artifactWithoutCheckpoint, hasText, isStoredCheckpoint, workerIdsOf } from "./rows.ts";
+import { artifactWithoutCheckpoint, hasText, isStoredCheckpoint, readStoredArtifact, serializeArtifact, workerIdsOf } from "./rows.ts";
 import { buildGraphMaps, hasPendingStepAsk, isGraphAllSettled, loadGraph, publishGraphIn, stepPosition, touchGraph } from "./store.ts";
 import { formatCheckpointRejectionMessage, formatWorkerDecisionMessage, turnedListText } from "./text.ts";
 import { emptyProgress, type ProgressResult, type TaskGraphCtx, type TaskGraphDbRow, type TaskNodeDbRow } from "./types.ts";
@@ -133,7 +133,6 @@ function rejectCheckpointIn(g: TaskGraphCtx, p: Pending, run: DecisionRun): Deci
   const { graphRow, node, input, t } = run;
   const targetWid = node.active_worker_id;
   settleAnsweredIn(g, p, run, input.choice ?? CONFIRM_REJECT_OPTION);
-  const cleanedArtifactJson = artifactWithoutCheckpoint(node);
   const bridge = g.options.workers?.();
   const delivered =
     targetWid !== null && bridge !== undefined
@@ -145,16 +144,17 @@ function rejectCheckpointIn(g: TaskGraphCtx, p: Pending, run: DecisionRun): Deci
         })
       : null;
   const resumed = delivered !== null && targetWid !== null;
+  const checkpointRejectionClientId = resumed ? undefined : input.clientId;
+  const { artifact } = readStoredArtifact(node.artifact_json);
   g.db.run(
     `UPDATE task_graph_steps
         SET status = ?, waiting_for = ?, ${resumed ? "" : "active_worker_id = NULL,"} artifact_json = ?,
             gate_question = NULL, gate_options_json = NULL, gate_summary_md = NULL, gate_recommended = NULL,
-            gate_ask_message_id = NULL, decision_json = ?, updated_at = ?
+            gate_ask_message_id = NULL, decision_json = NULL, updated_at = ?
       WHERE id = ?`,
     resumed ? "running" : "waiting",
     resumed ? null : "pm",
-    cleanedArtifactJson,
-    resumed ? null : JSON.stringify(decisionFor(run, CONFIRM_REJECT_OPTION)),
+    serializeArtifact(artifact, false, checkpointRejectionClientId),
     t,
     node.id,
   );
