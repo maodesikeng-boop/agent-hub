@@ -106,15 +106,17 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
     if (!db.get("SELECT 1 FROM messages WHERE id = ? AND session_id = ? AND sender = 'agent' AND kind = 'text'", reply, session.id)) return;
     for (const id of fact.requestIds) {
       if (!ids.includes(id)) continue;
-      const row = db.get<Pick<MessageDbRow, "id">>(
-        `SELECT id FROM messages WHERE id = ? AND status = 'replied' AND session_id = ? AND conversation_id = ?
+      const row = db.get<{ reply_id: number | null }>(
+        `SELECT CASE WHEN json_valid(meta) THEN
+             CASE WHEN json_type(meta, '$.replyId') IN ('integer', 'real') THEN json_extract(meta, '$.replyId') END
+           END AS reply_id
+           FROM messages WHERE id = ? AND status = 'replied' AND session_id = ? AND conversation_id = ?
           AND (sender = 'user' OR (${SCHEDULE_RUN_SQL}))
-          AND CASE WHEN json_valid(meta) THEN
-            NOT (json_type(meta, '$.replyId') IS 'integer' AND json_extract(meta, '$.replyId') > 0)
-          ELSE meta IS NULL END`,
+          AND (meta IS NULL OR json_valid(meta))`,
         id, session.id, session.conversationId,
       );
       if (row === undefined) continue;
+      if (row.reply_id !== null && Number.isInteger(row.reply_id) && row.reply_id > 0) continue;
       db.run("UPDATE messages SET meta = json_set(COALESCE(meta, '{}'), '$.replyId', ?), updated_at = ? WHERE id = ?", reply, now(), id);
       const updated = toMessage(db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id)!);
       // The status change already pushed a message.updated in this transaction; replace it instead of pushing two.

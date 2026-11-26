@@ -39,6 +39,7 @@ export function recentScheduleRuns(db: Db, conversationId: ConversationId, sched
             json_extract(r.run_meta, '$.event') IS 'schedule.run' AS has_run_meta, r.status,
             substr(reply.text, 1, ?) AS reply_preview
        FROM runs r LEFT JOIN messages reply ON reply.id = json_extract(r.run_meta, '$.replyId')
+        AND json_type(r.run_meta, '$.replyId') IN ('integer', 'real')
         AND reply.conversation_id = ? AND reply.session_id = r.session_id AND reply.sender = 'agent' AND reply.kind = 'text'
       ORDER BY scheduled_at DESC`,
     prefix, `${prefix.slice(0, -1)};`, conversationId, Math.max(0, Math.min(limit, SCHEDULE_SHOW_RUNS_MAX)),
