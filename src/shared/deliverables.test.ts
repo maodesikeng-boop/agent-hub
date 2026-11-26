@@ -167,6 +167,20 @@ describe("parseHubFileArg", () => {
     expect(parseHubFileArg("截图=/tmp/a=b.png")).toEqual({ label: "截图", path: "/tmp/a=b.png" });
   });
 
+  it.each(["/tmp/a=b.png", "dir/a=b.png", "dir/a=b/c.png", "./a=b.png", "../a=b.png", "~/a=b.png", "C:\\a=b.png", "C:a=b.png", "\\\\host\\share\\a=b.png", "/tmp/a=/b.png"])(
+    "preserves the entire unlabeled path %s",
+    (path) => {
+      expect(parseHubFileArg(path)).toEqual({ label: null, path });
+    },
+  );
+
+  it.each(["/tmp/a=b.png", "./a=b.png", "../a=b.png", "~/a=b.png", "C:\\a=b.png", "\\\\host\\share\\a=b.png"])(
+    "keeps a slash in the label before %s",
+    (path) => {
+      expect(parseHubFileArg(` 0/1 = ${path} `)).toEqual({ label: "0/1", path });
+    },
+  );
+
   it("空串或只有标签时抛 RangeError", () => {
     expect(() => parseHubFileArg("  ")).toThrow(RangeError);
     expect(() => parseHubFileArg("方案=")).toThrow(RangeError);
