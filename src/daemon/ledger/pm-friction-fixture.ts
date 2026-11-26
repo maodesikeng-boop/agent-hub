@@ -168,7 +168,10 @@ export function createPmFrictionFixture(): PmFrictionFixture {
   const pmReplyTo = (messageId: MessageId, replyText: string, pm: PmHandle = lin): void => {
     const store = createSessionStore(db);
     store.update(pm.sessionId, { status: "running", pid: 40_000 + pm.pmId });
-    ledger.applyDriverEvent(pm.sessionId, { type: "message.delivered", messageIds: [messageId], at: ++clock.now });
+    const footer = ledger.deliverySuffix?.(pm.sessionId, [messageId]).agenda;
+    ledger.applyDriverEvent(pm.sessionId, { type: "message.delivered", messageIds: [messageId], at: ++clock.now,
+      ...(footer === undefined ? {} : { agenda: { messageId, footer } }),
+    });
     ledger.applyDriverEvent(pm.sessionId, { type: "message.processing", messageIds: [messageId], at: ++clock.now });
     ledger.applyDriverEvent(pm.sessionId, { type: "agent.text", uuid: `pm-${pm.pmId}-${++clock.now}`, text: replyText, at: clock.now });
     ledger.applyDriverEvent(pm.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [messageId], durationMs: 20, at: ++clock.now });

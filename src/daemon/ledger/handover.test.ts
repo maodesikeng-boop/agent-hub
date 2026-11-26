@@ -1,3 +1,4 @@
+import { PM_AGENDA_PREAMBLE_HEADING } from "../../shared/pm-agenda.ts";
 // 换新会话的账本这一半（handover.ts，docs/background-handover-design.md 第 9 节）：跑腿的换成直接调 claimHandover / handoverForked /
 // handoverWritten / handoverFailed。到门槛进队列 → 旧会话空闲时开始复制（记切点）→ 写好了在旧会话两轮之间换代，开场说明定稿；
 // 没成按退避再来；复制不了退回本会话写交接（用户一发消息就打断）；重启、手动、清理；开场说明里的原话。
@@ -1610,7 +1611,7 @@ describe("给已有项目经理换厂商", () => {
       expect(preamble).not.toContain("早期对话");
     });
 
-    it("开场说明末尾列出账本里还在等用户的提问卡；用户回答过的不列；用户发普通消息不关卡", () => {
+    it("开场说明列出账本里还在等用户的提问卡；用户回答过的不列；用户发普通消息不关卡", () => {
       const merged = ledger.hubCall(firstSession, "ask", { text: "PR #305 要不要合？\n\n两张里先合哪张" }).data.messageId;
       ledger.answerAsk(merged, { clientId: "c-merge", note: "合" });
       post("先说别的事");
@@ -1621,7 +1622,7 @@ describe("给已有项目经理换厂商", () => {
       const preamble = ledger.sessionPreamble(g2)!;
       const heading = `${WAITING_ASKS_HEADING}`;
       expect(preamble).toContain(heading);
-      expect(preamble.slice(preamble.indexOf(heading) + heading.length)).toBe(
+      expect(preamble.slice(preamble.indexOf(heading) + heading.length).split(`\n\n${PM_AGENDA_PREAMBLE_HEADING}`)[0]).toBe(
         [
           "账本里现在还在等用户回答的卡有 2 张：",
           `- #${pstack}「pstack 要不要升级？」 · 已等 不到 1 分钟`,
@@ -1663,10 +1664,10 @@ describe("给已有项目经理换厂商", () => {
       ledger.hubCall(g2, "graph.done", { graphId: created.data.graph.id, nodeKey: "n1", summary: "调研完毕" });
       ledger.hubCall(g2, "ask", { graphId: created.data.graph.id, node: "g1", text: "定哪个方案？", options: ["方案甲", "方案乙"] });
       const preamble = ledger.sessionPreamble(g2)!;
-      expect(preamble).toContain("## 未完结的任务图（账本实时状态）");
-      expect(preamble).toContain("多阶段改造");
-      expect(preamble).toContain("n1");
-      expect(preamble).toContain("g1");
+      const agenda = preamble.split(PM_AGENDA_PREAMBLE_HEADING)[1];
+      expect(agenda).toContain("多阶段改造");
+      expect(agenda).toContain("完了 1 个");
+      expect(agenda).toContain("g1：等用户");
     });
   });
 });

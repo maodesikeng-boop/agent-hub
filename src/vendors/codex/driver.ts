@@ -166,7 +166,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       proc.steers.set(reqId, steer);
       proc.pendingRpcs.set(reqId, "turn_steer");
       proc.child.stdin.write(
-        buildTurnSteerRequest(reqId, proc.threadId!, st.activeTurnId!, batch.combinedText) + "\n",
+        buildTurnSteerRequest(reqId, proc.threadId!, st.activeTurnId!, this.withDeliverySuffix(st, batch, batch.combinedText)) + "\n",
         (err) => {
           if (!err || !proc.steers.has(reqId)) return;
           proc.steers.delete(reqId);
@@ -245,12 +245,13 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
   ): Batch {
     if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES, source);
     const { notes, prefixes } = this.takeNotesPrefixes(st);
-    return newBatch(messageIds, combineCodexTurnText(body.text, [...prefixes, ...body.prefixes]), notes, source);
+    return { ...newBatch(messageIds, combineCodexTurnText(body.text, [...prefixes, ...body.prefixes]), notes, source), includeDeliverySuffix: true };
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
-    const problem = checkCodexTurnText(batch.combinedText);
+    const combinedText = batch.includeDeliverySuffix !== true ? batch.combinedText : this.withDeliverySuffix(st, batch, batch.combinedText);
+    const problem = checkCodexTurnText(combinedText);
     if (problem) {
       st.inFlight = st.inFlight.filter((b) => b !== batch);
       this.invalidInput(st, problem, batch.messageIds);
@@ -283,7 +284,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     proc.pendingRpcs.set(reqId, "turn_start");
     const line = buildTurnStartRequest(reqId, {
       threadId,
-      combinedText: batch.combinedText,
+      combinedText,
       session: {
         cwd: row?.cwd ?? proc.launched.cwd,
         addDirs: row?.addDirs ?? proc.launched.addDirs,

@@ -1,3 +1,4 @@
+import { graphDeliveryOf } from "./work-status.ts";
 // 网页 selector 的缓存守卫：按“跑了一个月”的规模（300 个 Worker、3 万条消息）算，重算要快，输入没变要返回同一个引用，
 // 相关数据变了要跟着变。规矩见 AGENTS.md“缓存和状态快照”那一条。
 import { describe, expect, it } from "vitest";
@@ -734,6 +735,14 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
         { fromKey: "gate-scope", toKey: "impl" },
       ],
     });
+    const ready = makeGraph({ id: 12, title: "Delivery", nodes: [makeNode({ key: "impl", title: "Implement", status: "done" })] });
+    const delivery = graphDeliveryOf(ready);
+    expect(graphDeliveryOf(ready)).toBe(delivery);
+    expect(delivery.row).not.toBeNull();
+    const patched = { ...ready, nodes: [...ready.nodes, makeNode({ key: "check", title: "Check", status: "pending" })] };
+    expect(graphDeliveryOf(patched).row).toBeNull();
+    expect(graphDeliveryOf(ready)).toBe(delivery);
+
     const g2 = makeGraph({
       id: 11,
       title: "后台流水线",

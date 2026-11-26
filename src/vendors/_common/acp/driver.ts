@@ -329,6 +329,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       delivered: false,
       processing: false,
       source: taken.source,
+      includeDeliverySuffix: true,
       riders: taken.riders,
       entries: taken.entries,
     };
@@ -390,7 +391,9 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
 
   protected async writeBatch(st: AcpSessionState, proc: AcpProc, batch: AcpBatch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
-    const problem = checkAcpUserBlocks(batch.userBlocks);
+    const suffix = batch.includeDeliverySuffix !== true ? "" : this.takeDeliverySuffix(st, batch);
+    const userBlocks = suffix === "" ? batch.userBlocks : [...batch.userBlocks, { type: "text" as const, text: suffix }];
+    const problem = checkAcpUserBlocks(userBlocks);
     if (problem) {
       this.dropBatch(st, batch);
       this.invalidInput(st, problem, batch.messageIds);
@@ -412,7 +415,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     const systemBlock = proc.pendingSystemPromptBlock ?? this.#takeReinjectBlock(st, proc);
     proc.pendingSystemPromptBlock = null;
     st.reinjectPending = false;
-    const promptBlocks = buildAcpPromptBlocks(batch.userBlocks, systemBlock);
+    const promptBlocks = buildAcpPromptBlocks(userBlocks, systemBlock);
 
     const startedAt = Date.now();
     this.update(st, { status: "running", lastEventAt: startedAt });

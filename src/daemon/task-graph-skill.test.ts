@@ -113,8 +113,9 @@ describe("任务图技能正文", () => {
       `最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径`,
       "**计划变了**：随时 `" + `${hub} graph patch` + "`（用 `addSteps`、`updateSteps`、`removeSteps`、`skipSteps`、`doneSteps` 或更新 `goal`",
       "原本没建图、做着发现要分段或加审查的，随时补建一张图。",
-      "**全部步骤完成后待交付**：最后一步完成时图不会自动结束，你会收到交付单",
+      "**交付在图的最后一行**：图里画的步骤都做完时，你会收到交付单",
       `用 \`${hub} graph finish\` 收尾（交付摘要自动同步给总助）。`,
+      `顺利交棒后的进展在 \`${hub} status\` 看。`,
     ]) {
       expect(body, word).toContain(word);
     }

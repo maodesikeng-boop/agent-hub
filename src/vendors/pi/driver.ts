@@ -185,7 +185,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       const steer: Steer = { entry, batch, resolve };
       proc.steers.set(reqId, steer);
       proc.pendingRpcs.set(reqId, { kind: "steer" });
-      proc.child.stdin.write(`${buildPromptLine(reqId, batch.combinedText, true)}\n`, (err) => {
+      proc.child.stdin.write(`${buildPromptLine(reqId, this.withDeliverySuffix(st, batch, batch.combinedText), true)}\n`, (err) => {
         if (!err || !proc.steers.has(reqId)) return;
         proc.steers.delete(reqId);
         proc.pendingRpcs.delete(reqId);
@@ -309,12 +309,13 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     }
     const { notes, prefixes } = this.takeNotesPrefixes(st);
     const combined = combinePiTurnText(body.text, [...prefixes, ...body.prefixes], this.composer.buildUserContent);
-    return newBatch(messageIds, body.text, combined, notes, source, false);
+    return { ...newBatch(messageIds, body.text, combined, notes, source, false), includeDeliverySuffix: true };
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
-    const problem = checkPiTurnText(batch.combinedText);
+    const combinedText = batch.includeDeliverySuffix !== true ? batch.combinedText : this.withDeliverySuffix(st, batch, batch.combinedText);
+    const problem = checkPiTurnText(combinedText);
     if (problem) {
       st.inFlight = st.inFlight.filter((b) => b !== batch);
       this.invalidInput(st, problem, batch.messageIds);
@@ -338,7 +339,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       line = buildCompactLine(reqId, compact.customInstructions);
     } else {
       proc.pendingRpcs.set(reqId, { kind: "prompt_open" });
-      line = buildPromptLine(reqId, batch.combinedText, false);
+      line = buildPromptLine(reqId, combinedText, false);
     }
 
     await new Promise<void>((resolve) => {
