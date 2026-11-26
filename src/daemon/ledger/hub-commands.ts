@@ -315,7 +315,7 @@ export function createLedgerHubCommands(
         });
         const item = router.bridgeAskIn(p, caller, message, normalizedOptions, { replaceItemId });
         return {
-          text: `已向用户提问：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。等用户回复再继续，别替用户拿主意。`,
+          text: `已向用户提问${item === null ? "" : `，卡 #${item.id}`}：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。等用户回复再继续，别替用户拿主意。`,
           data: { messageId: message.id, ...(item !== null ? { item } : {}) },
         };
       }

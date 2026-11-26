@@ -184,6 +184,21 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           普通卡编号见用户消息前面的说明；步骤拍板卡用 ${hub} ask close --message <消息编号>，编号见 ${hub} graph show`,
   },
   {
+    command: "ask.list",
+    group: "ask",
+    action: "list",
+    cli: "ask list",
+    usage: `  ${hub} ask list                                            列出自己名下正在等用户回答的卡，含步骤拍板卡和已等时长`,
+  },
+  {
+    command: "ask.show",
+    group: "ask",
+    action: "show",
+    cli: "ask show",
+    usage: `  ${hub} ask show <卡编号>                                   查看自己名下一张卡的全文、选项、文件和状态；
+                                                          步骤拍板卡用 ${hub} ask show --message <消息编号>，编号见 ${hub} ask list`,
+  },
+  {
     command: "schedule.add",
     group: "schedule",
     action: "add",
@@ -199,6 +214,13 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "list",
     cli: "schedule list",
     usage: `  ${hub} schedule list                                       我的定时任务：频率、下次运行、上次结果`,
+  },
+  {
+    command: "schedule.show",
+    group: "schedule",
+    action: "show",
+    cli: "schedule show",
+    usage: `  ${hub} schedule show <编号>                                 查看定时任务全文、上次结果和最近几次运行的回复摘要`,
   },
   {
     command: "schedule.pause",

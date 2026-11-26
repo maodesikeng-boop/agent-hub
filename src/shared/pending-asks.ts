@@ -1,7 +1,8 @@
 import type { Deliverable } from "./deliverables.ts";
-import type { MessageId, RouterItemId, TaskGraphId, TaskNodeKey } from "./domain.ts";
-
-// Invariant: every PM-facing list built here shows the same cards as the user's pending decisions for that PM.
+import { truncateChars, type MessageId, type RouterItemId, type TaskGraphId, type TaskNodeKey } from "./domain.ts";
+import { HUB_HELP_ONLY_COMMANDS } from "./hub.ts";
+import { ASK_LIST_MAX, WAITING_ASK_QUESTION_CHARS, WAITING_ASKS_LISTED_MAX } from "./limits.ts";
+import { HUB_COMMAND } from "./names.ts";
 
 export type PendingAskSource =
   | { kind: "ask"; itemId: RouterItemId }
@@ -10,9 +11,7 @@ export type PendingAskSource =
 export interface PendingAsk {
   source: PendingAskSource;
   messageId: MessageId | null;
-  /** First line of the question on one line. */
   question: string;
-  /** When the card appeared to the user, not when its step was created. */
   askedAt: number;
 }
 
@@ -24,7 +23,7 @@ export type AskStatus =
 export interface AskDetail {
   source: PendingAskSource;
   messageId: MessageId | null;
-  /** The original card text, untruncated; null when the message was removed by retention. */
+  /** Null when retention removed the original message. */
   text: string | null;
   options: string[];
   recommended: string | null;
@@ -33,33 +32,72 @@ export interface AskDetail {
   status: AskStatus;
 }
 
-/**
- * Postcondition: one line per card, oldest first, each with its relative wait age;
- * step cards name their graph and step and the message number that `hub ask show --message` takes.
- * Lists at most ASK_LIST_MAX cards, then a remaining-count trailer when more exist. Returns a fixed sentence when empty.
- */
-export function formatPendingAskList(_asks: readonly PendingAsk[], _now: number): string {
-  throw new Error("Not implemented");
+function askAge(askedAt: number, now: number): string {
+  const minutes = Math.floor(Math.max(0, now - askedAt) / 60_000);
+  if (minutes >= 24 * 60) return `${Math.floor(minutes / (24 * 60))} 天`;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)} 小时`;
+  return minutes > 0 ? `${minutes} 分钟` : "不到 1 分钟";
 }
 
-/**
- * Postcondition: includes the full text, every option with the recommended one marked, every deliverable, relative age,
- * and status; answered cards show the choice and note, and a removed message states that the original record was cleaned.
- */
-export function formatAskDetail(_detail: AskDetail, _now: number): string {
-  throw new Error("Not implemented");
+function askLabel({ source, messageId }: Pick<PendingAsk, "source" | "messageId">): string {
+  if (source.kind === "ask") return `#${source.itemId}`;
+  const step = `任务图 #${source.graphId}「${source.graphTitle}」步骤 ${source.nodeKey}${source.checkpoint ? "（检查点）" : ""}`;
+  return messageId === null ? step : `${step}（消息 #${messageId}，用 ${HUB_COMMAND} ask show --message ${messageId}）`;
 }
 
-/**
- * The note placed in front of a user message delivered to the PM.
- * Postcondition: null when no card waits; otherwise lists independent and step cards with their age, at most
- * WAITING_ASKS_LISTED_MAX of them, and ends with the `ask.show` and `ask.list` hints from HUB_HELP_ONLY_COMMANDS.
- */
-export function pendingAsksNote(_asks: readonly PendingAsk[], _now: number): string | null {
-  throw new Error("Not implemented");
+function askLines(asks: readonly PendingAsk[], now: number, cap: number): string[] {
+  const lines = asks.slice(0, cap).map((ask) => {
+    const question = truncateChars(ask.question.replace(/\s+/g, " ").trim(), WAITING_ASK_QUESTION_CHARS);
+    return `- ${askLabel(ask)}「${question}」 · 已等 ${askAge(ask.askedAt, now)}`;
+  });
+  if (asks.length > cap) lines.push(`- 另有 ${asks.length - cap} 张没列出`);
+  return lines;
 }
 
-/** Postcondition: the same cards as pendingAsksNote, worded for a handover summary; never null. */
-export function pendingAsksSection(_asks: readonly PendingAsk[], _now: number): string {
-  throw new Error("Not implemented");
+export function formatPendingAskList(asks: readonly PendingAsk[], now: number): string {
+  if (asks.length === 0) return "你没有在等用户回答的卡。";
+  return [`还有 ${asks.length} 张卡在等用户回答：`, ...askLines(asks, now, ASK_LIST_MAX), HUB_HELP_ONLY_COMMANDS["ask.show"]].join("\n");
+}
+
+function statusText(status: AskStatus): string {
+  if (status.state === "waiting") return "在等用户回答";
+  if (status.state === "closed") return "已关闭";
+  return [
+    status.choice === null ? "已回答" : `已回答：选了「${status.choice}」`,
+    ...(status.note ? [`补充说明：${status.note}`] : []),
+  ].join("\n");
+}
+
+export function formatAskDetail(detail: AskDetail, now: number): string {
+  return [
+    `${askLabel(detail)} · ${askAge(detail.askedAt, now)}前挂出 · ${statusText(detail.status)}`,
+    "",
+    detail.text ?? "原始提问记录已清理。",
+    ...(detail.options.length === 0 ? [] : [
+      "",
+      "选项：",
+      ...detail.options.map((option) => `- ${option}${option === detail.recommended ? "（推荐）" : ""}`),
+    ]),
+    ...(detail.deliverables.length === 0 ? [] : [
+      "",
+      "文件：",
+      ...detail.deliverables.map((file) => `- ${file.label}：${file.href}`),
+    ]),
+  ].join("\n");
+}
+
+export function pendingAsksNote(asks: readonly PendingAsk[], now: number): string | null {
+  if (asks.length === 0) return null;
+  return [
+    `【系统：账本里现在还在等用户回答的卡有 ${asks.length} 张。这条消息不一定在回答它们；用户在对话里回答了哪张，用 \`${HUB_COMMAND} ask close <编号>\`（步骤卡用 \`${HUB_COMMAND} ask close --message <消息编号>\`）关掉那张，没回答的留着：`,
+    ...askLines(asks, now, WAITING_ASKS_LISTED_MAX),
+    HUB_HELP_ONLY_COMMANDS["ask.list"],
+    HUB_HELP_ONLY_COMMANDS["ask.show"],
+    "】",
+  ].join("\n");
+}
+
+export function pendingAsksSection(asks: readonly PendingAsk[], now: number): string {
+  if (asks.length === 0) return "无：账本里没有在等用户回答的卡。";
+  return [`账本里现在还在等用户回答的卡有 ${asks.length} 张：`, ...askLines(asks, now, WAITING_ASKS_LISTED_MAX)].join("\n");
 }

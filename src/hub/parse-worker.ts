@@ -136,14 +136,21 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
 }
 
 export function parseAskCommand({ group, action, rest, positionals, values, env, cwd }: GroupArgs): Parsed | undefined {
-  if (group === "ask" && action === "close") {
-    allowOnly(values, ["message"], "ask close");
+  if (group === "ask" && action === "list") {
+    allowOnly(values, [], "ask list");
+    expectPositionals(rest, 0, "ask list");
+    return { command: "ask.list", body: {}, textSource: null };
+  }
+  if (group === "ask" && (action === "close" || action === "show")) {
+    const what = `ask ${action}`;
+    const command = `ask.${action}` as const;
+    allowOnly(values, ["message"], what);
     if (values.message !== undefined) {
-      expectPositionals(rest, 0, "ask close");
-      return { command: "ask.close", body: { messageId: idOf(values.message, "ask close", "消息") }, textSource: null };
+      expectPositionals(rest, 0, what);
+      return { command, body: { messageId: idOf(values.message, what, "消息") }, textSource: null };
     }
-    expectPositionals(rest, 1, "ask close");
-    return { command: "ask.close", body: { itemId: idOf(rest[0], "ask close", "卡") }, textSource: null };
+    expectPositionals(rest, 1, what);
+    return { command, body: { itemId: idOf(rest[0], what, "卡") }, textSource: null };
   }
   if (group === "ask") {
     allowOnly(values, ["node", "graph", "option", "recommended", "replace", "file", "stdin"], "ask");
