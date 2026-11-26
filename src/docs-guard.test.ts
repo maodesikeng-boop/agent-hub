@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const DOCS_DIR = join(REPO_ROOT, "docs");
 
-const LIVING_NON_DESIGN_DOCS = new Set(["README.md", "plan-standard.md", "ui-standard.md", "linux.md"]);
+const LIVING_NON_DESIGN_DOCS = new Set(["README.md", "dependencies.md", "review-and-merge.md", "plan-standard.md", "ui-standard.md", "linux.md"]);
 const SNAPSHOT_LINE = /^> Snapshot: (\d{4}-\d{2}-\d{2}) \(commit `([0-9a-f]{7,40})`\)$/;
 
 function listMarkdownFiles(dir: string, root: string = dir): string[] {

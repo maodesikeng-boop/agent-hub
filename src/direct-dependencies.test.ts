@@ -25,12 +25,12 @@ interface CargoTomlShape {
   target?: Record<string, { dependencies?: Record<string, unknown>; "dev-dependencies"?: Record<string, unknown> }>;
 }
 
-function extractDirectDependenciesSection(agentsMd: string): string {
-  const start = agentsMd.indexOf("\n## Direct dependencies");
-  const headerStart = start !== -1 ? start + 1 : agentsMd.startsWith("## Direct dependencies") ? 0 : -1;
-  if (headerStart === -1) throw new Error("AGENTS.md is missing the `## Direct dependencies` section");
-  const nextSection = agentsMd.indexOf("\n## ", headerStart + 1);
-  return nextSection === -1 ? agentsMd.slice(headerStart) : agentsMd.slice(headerStart, nextSection);
+function extractDirectDependenciesSection(depsDoc: string): string {
+  const start = depsDoc.indexOf("\n## Direct dependencies");
+  const headerStart = start !== -1 ? start + 1 : depsDoc.startsWith("## Direct dependencies") ? 0 : -1;
+  if (headerStart === -1) throw new Error("docs/dependencies.md is missing the `## Direct dependencies` section");
+  const nextSection = depsDoc.indexOf("\n## ", headerStart + 1);
+  return nextSection === -1 ? depsDoc.slice(headerStart) : depsDoc.slice(headerStart, nextSection);
 }
 
 function collectNpmDeps(pkg: PackageManifest): string[] {
@@ -68,18 +68,18 @@ function collectCargoDeps(rootToml: string, crateTomls: readonly string[]): { de
 }
 
 export function checkDirectDependenciesSync(input: {
-  agentsMd: string;
+  depsDoc: string;
   packageJson: PackageManifest;
   rootCargoToml: string;
   crateCargoTomls?: readonly string[];
   uiPrimitiveNames: readonly string[];
 }): string[] {
-  const section = extractDirectDependenciesSection(input.agentsMd);
+  const section = extractDirectDependenciesSection(input.depsDoc);
   const problems: string[] = [];
 
   const wildcard = WILDCARD_PACKAGE.exec(section);
   if (wildcard) {
-    problems.push(`AGENTS.md Direct dependencies uses wildcard \`${wildcard[1]}\`; list every direct dependency explicitly.`);
+    problems.push(`docs/dependencies.md Direct dependencies uses wildcard \`${wildcard[1]}\`; list every direct dependency explicitly.`);
   }
 
   const npmDeps = collectNpmDeps(input.packageJson);
@@ -89,12 +89,12 @@ export function checkDirectDependenciesSync(input: {
 
   for (const dep of npmDeps) {
     if (!backtickSet.has(dep)) {
-      problems.push(`package.json dependency \`${dep}\` is missing from AGENTS.md Direct dependencies.`);
+      problems.push(`package.json dependency \`${dep}\` is missing from docs/dependencies.md Direct dependencies.`);
     }
   }
   for (const dep of cargoDeps) {
     if (!backtickSet.has(dep)) {
-      problems.push(`apps/windows/Cargo.toml dependency \`${dep}\` is missing from AGENTS.md Direct dependencies.`);
+      problems.push(`apps/windows/Cargo.toml dependency \`${dep}\` is missing from docs/dependencies.md Direct dependencies.`);
     }
   }
 
@@ -102,7 +102,7 @@ export function checkDirectDependenciesSync(input: {
   const allowedNonPackages = new Set([...NON_PACKAGE_BACKTICKS, ...members, ...input.uiPrimitiveNames]);
   for (const token of backticks) {
     if (PACKAGE_TOKEN.test(token) && !declared.has(token) && !allowedNonPackages.has(token)) {
-      problems.push(`AGENTS.md Direct dependencies lists \`${token}\`, which is not in package.json or apps/windows/Cargo.toml.`);
+      problems.push(`docs/dependencies.md Direct dependencies lists \`${token}\`, which is not in package.json or apps/windows/Cargo.toml.`);
     }
   }
 
@@ -123,13 +123,15 @@ function readRepoCargoInputs(): { rootCargoToml: string; crateCargoTomls: string
   return { rootCargoToml, crateCargoTomls };
 }
 
-describe("AGENTS.md Direct dependencies guard", () => {
-  it("matches package.json and apps/windows/Cargo.toml direct dependencies exactly", () => {
+describe("docs/dependencies.md Direct dependencies guard", () => {
+  it("matches package.json and apps/windows/Cargo.toml direct dependencies exactly and is linked from AGENTS.md", () => {
     const agentsMd = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
+    expect(agentsMd).toContain("docs/dependencies.md");
+    const depsDoc = readFileSync(join(REPO_ROOT, "docs/dependencies.md"), "utf8");
     const packageJson = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as PackageManifest;
     const { rootCargoToml, crateCargoTomls } = readRepoCargoInputs();
     const problems = checkDirectDependenciesSync({
-      agentsMd,
+      depsDoc,
       packageJson,
       rootCargoToml,
       crateCargoTomls,
@@ -138,8 +140,8 @@ describe("AGENTS.md Direct dependencies guard", () => {
     expect(problems).toEqual([]);
   });
 
-  it("fails when a package.json or Cargo.toml dependency is missing, stale, or wildcarded in AGENTS.md", () => {
-    const baseAgents = [
+  it("fails when a package.json or Cargo.toml dependency is missing, stale, or wildcarded in docs/dependencies.md", () => {
+    const baseDepsDoc = [
       "## Direct dependencies",
       "",
       "- `fastify` and `vitest` and `@types/node`.",
@@ -156,7 +158,7 @@ describe("AGENTS.md Direct dependencies guard", () => {
 
     expect(
       checkDirectDependenciesSync({
-        agentsMd: baseAgents,
+        depsDoc: baseDepsDoc,
         packageJson: basePkg,
         rootCargoToml: baseCargo,
         uiPrimitiveNames: [],
@@ -165,34 +167,34 @@ describe("AGENTS.md Direct dependencies guard", () => {
 
     expect(
       checkDirectDependenciesSync({
-        agentsMd: baseAgents,
+        depsDoc: baseDepsDoc,
         packageJson: { ...basePkg, dependencies: { ...basePkg.dependencies, zod: "^4.0.0" } },
         rootCargoToml: baseCargo,
         uiPrimitiveNames: [],
       }),
-    ).toEqual(["package.json dependency `zod` is missing from AGENTS.md Direct dependencies."]);
+    ).toEqual(["package.json dependency `zod` is missing from docs/dependencies.md Direct dependencies."]);
 
     expect(
       checkDirectDependenciesSync({
-        agentsMd: baseAgents,
+        depsDoc: baseDepsDoc,
         packageJson: basePkg,
         rootCargoToml: `${baseCargo}\nureq = "3.5"\n`,
         uiPrimitiveNames: [],
       }),
-    ).toEqual(["apps/windows/Cargo.toml dependency `ureq` is missing from AGENTS.md Direct dependencies."]);
+    ).toEqual(["apps/windows/Cargo.toml dependency `ureq` is missing from docs/dependencies.md Direct dependencies."]);
 
     expect(
       checkDirectDependenciesSync({
-        agentsMd: baseAgents,
+        depsDoc: baseDepsDoc,
         packageJson: { dependencies: {}, devDependencies: basePkg.devDependencies },
         rootCargoToml: baseCargo,
         uiPrimitiveNames: [],
       }),
-    ).toEqual(["AGENTS.md Direct dependencies lists `fastify`, which is not in package.json or apps/windows/Cargo.toml."]);
+    ).toEqual(["docs/dependencies.md Direct dependencies lists `fastify`, which is not in package.json or apps/windows/Cargo.toml."]);
 
     expect(
       checkDirectDependenciesSync({
-        agentsMd: `${baseAgents}\n- \`@types/*\`.\n`,
+        depsDoc: `${baseDepsDoc}\n- \`@types/*\`.\n`,
         packageJson: basePkg,
         rootCargoToml: baseCargo,
         uiPrimitiveNames: [],
