@@ -21,9 +21,11 @@ Check the three criteria in `docs/plan-standard.md`: every quoted user sentence 
 
 ### Decisions needed
 
-**D1. What `hub ask` does with text longer than the card can show (user-visible).** Today a PM can send up to 100 KB. The Router tray and `router_items` keep the first line cut to 160 characters and the rest cut to 400 with `…`. A step card (`--node`) keeps 300 and 2,000 and loses the rest everywhere, including the PM conversation. The user saw this on card #222, where a Feishu link was cut in half.
+**D1. What `hub ask` does with text longer than the card can show (user-visible). Settled: Option 1.** The user approved rejecting text over the limit with a tip to attach long material with `--file` (draft PR #481). Options 2 and 3 are kept below for the record.
 
-| | Option 1: Reject over the limit (recommended) | Option 2: Keep the original and show a marked preview | Option 3: Move the overflow into an attached file |
+Background: Today a PM can send up to 100 KB. The Router tray and `router_items` keep the first line cut to 160 characters and the rest cut to 400 with `…`. A step card (`--node`) keeps 300 and 2,000 and loses the rest everywhere, including the PM conversation. The user saw this on card #222, where a Feishu link was cut in half.
+
+| | Option 1: Reject over the limit (chosen) | Option 2: Keep the original and show a marked preview | Option 3: Move the overflow into an attached file |
 |---|---|---|---|
 | What the PM sees | `hub ask` fails before anything is posted: `提问背景有 523 字，上限 400 字；长材料存成文件，用 --file 挂在卡上`. Limits are listed in `hub ask` help. | `hub ask` succeeds. The receipt says the Router tray shows the first 400 characters. | `hub ask` succeeds. The receipt names the file the daemon wrote. |
 | What the user sees | The same complete text in the PM conversation, Feishu, the Router tray, and `hub ask show`. | Full text in the conversation and Feishu. The Router tray shows 400 characters cut at a word boundary, then `Show full question`, which opens the conversation. | The first 400 characters, then a file such as `提问全文.md` under the card on every surface. |
@@ -46,7 +48,7 @@ and gets on stderr, exit code 1:
 
 Nothing is posted. The PM moves the background into `plan.md`, reruns with `--file 方案=plan.md`, and the card shows the full 180-character background plus the file. With `--node`, the same rule applies with the step-card limits (question 300, background 2,000).
 
-Recommendation: Option 1. It is the rule every other `hub` field already follows (`router report`, `graph create` briefs, `graph decide` notes), it fixes the problem where the bad state starts, and it needs no migration, snapshot growth, or UI change. Option 2 is the fallback if the user prefers long asks to keep working.
+Why Option 1: it is the rule every other `hub` field already follows (`router report`, `graph create` briefs, `graph decide` notes), it fixes the problem where the bad state starts, and it needs no migration, snapshot growth, or UI change. 
 
 **D2. Sequencing with PR #471 (Project Manager).** PR #471 is open and adds `src/shared/text-limits.ts` with 13 character limits for Task Graph fields. This plan generalizes that table to bytes and counts for every `hub` command. Two tables must not coexist. Recommended: merge #471 first, rebase this branch, then the first implementation step folds `TEXT_LIMITS` into `HUB_LIMITS` (same ids, same message wording) and deletes `text-limits.ts`.
 
@@ -62,7 +64,7 @@ The Project Manager can overturn these without asking the user, because none of 
 
 ### Task Graph sequencing note
 
-This graph already runs planning as a standalone first step. The Project Manager appends implementation and review steps after approving this plan and resolving D1.
+This graph already runs planning as a standalone first step. The Project Manager approved this plan and the user settled D1; implementation and review steps follow on draft PR #481.
 
 ## 1. User goal
 
