@@ -136,7 +136,7 @@ function pmStatusIn(deps: PmStatusDeps, caller: AgentSessionRow & { pmId: PmId }
   const setupCommand = row?.setup_command ?? null;
   const { summaries, textBlock } = deps.taskGraphs.pmStatusGraphs(pm.id);
   const manual = summaries.length > 0 ? deps.taskGraphManual(caller.id) : "";
-  const selfReload = context.selfReload !== undefined && context.selfReload.state !== "idle" ? context.selfReload : undefined;
+  const selfReload = context.selfReload !== undefined && describeSelfReload(context.selfReload) !== "" ? context.selfReload : undefined;
   const reloadNote = selfReload === undefined ? "" : `\n${describeSelfReload(selfReload)}`;
   return {
     text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}${manual === "" ? "" : `\n${manual}`}${reloadNote}`,

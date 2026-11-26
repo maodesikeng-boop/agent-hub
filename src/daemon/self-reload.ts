@@ -1,5 +1,5 @@
 // Waits for the whole daemon to go idle, then restarts via the supervisor's reload exit code. After SELF_RELOAD_DRAIN_MAX_MS it only waits for turns that would not be replayed after restart.
-import { existsSync, lstatSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   LedgerRequestError,
@@ -25,6 +25,7 @@ export interface SelfReloadOptions {
   subscribe(listener: () => void): () => void;
   build?: (signal: AbortSignal) => Promise<BuildOutcome>;
   applyBuild?: () => void;
+  initialFailure?: string | null;
   restart(): void;
   log?: (line: string) => void;
   quietMs?: number;
@@ -55,7 +56,7 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
   let wantBuild = false;
   let built = false;
   let requestedAt: number | null = null;
-  let lastFailure: string | null = null;
+  let lastFailure = options.initialFailure == null ? null : truncateChars(options.initialFailure, SELF_RELOAD_FAILURE_MAX_CHARS);
   let closed = false;
   let building: AbortController | null = null;
   let quietTimer: ReturnType<typeof setTimeout> | null = null;
@@ -205,9 +206,20 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
     },
     status,
     close() {
+      if (closed) return;
       closed = true;
-      if (state !== "restarting") reset();
-      else stopWatching();
+      if (state === "restarting") {
+        stopWatching();
+        return;
+      }
+      if (state === "building") {
+        fail("守护进程在网页构建完成前被关停，新网页没换上");
+        return;
+      }
+      if (state === "draining") {
+        log(`${LOG_PREFIX} 热重启：等全库空闲时守护进程被关停，${built ? "已构建通过的网页下次启动时换上" : "下次启动即运行新代码"}。`);
+      }
+      reset();
     },
   };
 }
@@ -217,7 +229,8 @@ function formatMinutes(ms: number): string {
 }
 
 export function describeSelfReload(status: SelfReloadStatus): string {
-  if (status.state === "idle" || status.requestedAt === null || status.deadlineAt === null) return "";
+  if (status.state === "idle") return status.lastFailure === null ? "" : `热重启：上次没成功——${status.lastFailure}`;
+  if (status.requestedAt === null || status.deadlineAt === null) return "";
   if (status.state === "restarting") return "热重启：正在关机重启。";
   const start = formatClock(status.requestedAt);
   const deadline = formatClock(status.deadlineAt);
@@ -259,11 +272,13 @@ export interface StagedWebBuildOptions {
   timeoutMs?: number;
   command?: string;
   baseEnv?: Record<string, string | undefined>;
+  log?: (line: string) => void;
 }
 
 export interface StagedWebBuild {
   build(signal: AbortSignal): Promise<BuildOutcome>;
   apply(): void;
+  recover(): string | null;
 }
 
 function hasPackageBuildScript(pkgPath: string): boolean {
@@ -281,11 +296,58 @@ export function createStagedWebBuild(options: StagedWebBuildOptions): StagedWebB
   if (options.command === undefined && !hasPackageBuildScript(pkgPath)) return null;
   const parent = dirname(options.staticDir);
   const staging = join(parent, `.${basename(options.staticDir)}-reload-next`);
+  const ready = join(parent, `.${basename(options.staticDir)}-reload-ready`);
   const previous = join(parent, `.${basename(options.staticDir)}-reload-prev`);
   const command = `${options.command ?? "pnpm build"} --outDir ${shellQuote(staging)} --emptyOutDir`;
+  const log = options.log ?? ((line) => console.error(line));
+  const entryExists = (path: string) => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+  const removeDir = (path: string) => rmSync(path, { recursive: true, force: true });
+  const apply = () => {
+    if (!existsSync(join(ready, "index.html"))) throw new Error(`暂存目录没有构建产物：${ready}`);
+    const hadCurrent = entryExists(options.staticDir);
+    if (hadCurrent) {
+      removeDir(previous);
+      renameSync(options.staticDir, previous);
+    }
+    try {
+      renameSync(ready, options.staticDir);
+    } catch (error) {
+      if (hadCurrent) renameSync(previous, options.staticDir);
+      throw error;
+    }
+    removeDir(previous);
+  };
+  const readyIsStale = () => {
+    const live = statSync(join(options.staticDir, "index.html"), { throwIfNoEntry: false });
+    const staged = statSync(join(ready, "index.html"), { throwIfNoEntry: false });
+    return live !== undefined && staged !== undefined && live.mtimeMs > staged.mtimeMs;
+  };
+  const recoverFailure = (reason: string) => {
+    log(`${LOG_PREFIX} 热重启：${reason}`);
+    return reason;
+  };
+  const recoverAtStartup = (): string | null => {
+    // A crash between the two renames in apply() leaves the live build only under `previous`.
+    if (!entryExists(options.staticDir) && entryExists(previous)) renameSync(previous, options.staticDir);
+    if (entryExists(ready)) {
+      if (readyIsStale()) {
+        removeDir(ready);
+        log(`${LOG_PREFIX} 热重启：上次构建通过的网页比正在用的网页旧，已丢弃。`);
+      } else {
+        apply();
+        log(`${LOG_PREFIX} 热重启：启动时换上了上次构建通过、还没来得及换上的网页。`);
+      }
+    }
+    if (!entryExists(staging)) return null;
+    removeDir(staging);
+    return recoverFailure("上次带构建的热重启在网页构建完成前被打断，新网页没换上；需要的话重新登记带构建的热重启。");
+  };
   return {
     async build(signal) {
-      rmSync(staging, { recursive: true, force: true });
+      removeDir(ready);
+      removeDir(staging);
+      // The staging directory doubles as the marker that a build was cut off by shutdown, so it exists before the build starts.
+      mkdirSync(staging, { recursive: true });
       const outcome = await runSetupCommand({
         command,
         cwd: options.repoDir,
@@ -295,12 +357,16 @@ export function createStagedWebBuild(options: StagedWebBuildOptions): StagedWebB
         signal,
         ...(options.baseEnv ? { baseEnv: options.baseEnv } : {}),
       });
-      if (outcome.kind === "ok" && existsSync(join(staging, "index.html"))) return { ok: true };
-      rmSync(staging, { recursive: true, force: true });
+      const aborted = outcome.kind === "stopped" || signal.aborted;
+      if (outcome.kind === "ok" && !aborted && existsSync(join(staging, "index.html"))) {
+        renameSync(staging, ready);
+        return { ok: true };
+      }
+      if (!aborted) removeDir(staging);
       const how =
         outcome.kind === "timeout"
           ? `超过 ${Math.round(outcome.timeoutMs / 1000)} 秒`
-          : outcome.kind === "stopped"
+          : aborted
             ? "被取消"
             : outcome.kind === "ok"
               ? "没产出 index.html"
@@ -308,18 +374,15 @@ export function createStagedWebBuild(options: StagedWebBuildOptions): StagedWebB
       const tail = outcome.tail.trim();
       return { ok: false, reason: `${how}，日志 ${options.logPath}${tail === "" ? "" : `；最后几行：\n${tail}`}` };
     },
-    apply() {
-      if (!existsSync(join(staging, "index.html"))) throw new Error(`暂存目录没有构建产物：${staging}`);
-      rmSync(previous, { recursive: true, force: true });
-      const hadCurrent = lstatSync(options.staticDir, { throwIfNoEntry: false }) !== undefined;
-      if (hadCurrent) renameSync(options.staticDir, previous);
+    apply,
+    recover() {
       try {
-        renameSync(staging, options.staticDir);
+        return recoverAtStartup();
       } catch (error) {
-        if (hadCurrent) renameSync(previous, options.staticDir);
-        throw error;
+        removeDir(ready);
+        removeDir(staging);
+        return recoverFailure(`启动时换上暂存网页失败（${error instanceof Error ? error.message : String(error)}），继续用原来的网页；需要的话重新登记带构建的热重启。`);
       }
-      rmSync(previous, { recursive: true, force: true });
     },
   };
 }

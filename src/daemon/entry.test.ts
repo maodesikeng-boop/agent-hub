@@ -12,6 +12,7 @@ import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
 import { resolveHubPaths } from "../shared/paths.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
 import { DESKTOP_CONTRACT, reportFatalError, reportStartupFailure, runDaemonProcess } from "./entry.ts";
+import { createStagedWebBuild } from "./self-reload.ts";
 
 
 describe("守护进程启动失败：终端上的输出", () => {
@@ -65,6 +66,37 @@ describe("守护进程启动失败：终端上的输出", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ groups: [] });
     expect(existsSync(marker) ? readFileSync(marker, "utf8") : "").toBe("");
+  });
+
+  it("serves the successful staged build after an external restart", async () => {
+    const env = envOf("reload-build", "0");
+    const staticDir = join(dir, "web");
+    const index = join(staticDir, "index.html");
+    mkdirSync(staticDir);
+    writeFileSync(index, "old web");
+    writeFileSync(join(dir, "package.json"), "{}");
+    writeFileSync(join(dir, "build.mjs"), `
+      import { mkdirSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const out = process.argv[process.argv.indexOf("--outDir") + 1];
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, "index.html"), "new web");
+    `);
+    const options = { userHome, env, staticDir, onSelfReload: () => {}, log: () => {} };
+    const first = await startDaemon(options);
+    running.push(first);
+    const build = createStagedWebBuild({
+      repoDir: dir, staticDir, logPath: join(dir, "build.log"), command: `${JSON.stringify(process.execPath)} build.mjs`,
+    });
+    expect(await build?.build(new AbortController().signal)).toEqual({ ok: true });
+    expect(readFileSync(index, "utf8")).toBe("old web");
+    await first.stop();
+
+    const second = await startDaemon(options);
+    running.push(second);
+    expect(readFileSync(index, "utf8")).toBe("new web");
+    const page = await fetch(new URL("/", second.url));
+    expect(await page.text()).toBe("new web");
   });
 
   it("同一个端口起两个守护进程：终端上只有一句话加 hint，没有堆栈、没有英文异常", async () => {
