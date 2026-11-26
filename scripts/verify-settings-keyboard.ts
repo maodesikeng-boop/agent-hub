@@ -168,16 +168,19 @@ export function assertRings(stops: readonly FocusStop[], label: string): void {
   assert.deepEqual(missing, [], `${label}: keyboard focus shows no 2px outline on ${missing.map((s) => `${s.role} "${s.name}"`).join(", ")}`);
 }
 
-/** Controls the expanded New PM form must reach by keyboard, in this order. */
-export const NEW_PM_STOPS = ["Change look", "Name", "Main folder", "Mode", "More settings", "Provider", "Model", "Effort", "Persona", "Create"] as const;
-
-export function assertReaches(stops: readonly FocusStop[], expected: readonly string[], label: string): void {
+function assertReaches(stops: readonly FocusStop[], expected: readonly string[], label: string): void {
   const names = stops.map((s) => s.name);
   const order = expected.map((name) => names.findIndex((n) => n === name || n.startsWith(`${name} `)));
   const missing = expected.filter((_, i) => order[i] === -1);
   assert.deepEqual(missing, [], `${label}: Tab never reached ${missing.join(", ")} (stops: ${names.join(", ")})`);
   const rotated = order.map((i) => (i - order[0]! + names.length) % names.length);
   assert.ok(rotated.every((v, i) => i === 0 || v > rotated[i - 1]!), `${label}: Tab order ${names.join(", ")} breaks ${expected.join(", ")}`);
+}
+
+export function assertNewPmStops(stops: readonly FocusStop[], folderPicker: boolean): void {
+  const expected = ["Change look", "Name", "Main folder", ...(folderPicker ? ["Choose…"] : []), "Mode", "More settings", "Provider", "Model", "Effort", "Persona", "Create"];
+  assertReaches(stops, expected, "New PM");
+  assertRings(stops, "New PM");
 }
 
 async function noSidewaysScroll(page: Page, label: string): Promise<void> {
@@ -242,7 +245,7 @@ async function openSettings(page: Page): Promise<void> {
  * Postcondition: General settings, New PM, and their phone and scale variants keep every control keyboard-visible and in bounds,
  * and every Settings category holds its layout at Compact and XL at 860px and 700px.
  */
-export async function verifySettingsKeyboard(browser: Browser, loginUrl: string, origin: string, shotDir?: string): Promise<void> {
+export async function verifySettingsKeyboard(browser: Browser, loginUrl: string, origin: string, folderPicker: boolean, shotDir?: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: WIDE_PX, height: HEIGHT_PX } });
   try {
     const page = await context.newPage();
@@ -269,7 +272,7 @@ export async function verifySettingsKeyboard(browser: Browser, loginUrl: string,
     assertRings(await walkFocus(page, "settings-general", shotDir), "Settings General");
     await page.keyboard.press("Escape");
     await page.getByRole("dialog", { name: "Settings" }).waitFor({ state: "detached", timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-    await page.locator('nav[aria-label="Workspace"] button:has([data-testid^="rail-device-dot-"])').first().click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await page.locator('nav[aria-label="Workspace"] button:has([data-testid="rail-device-dot-local"])').click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
     await page.getByRole("button", { name: "New project manager" }).first().click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
     const dialog = page.getByRole("dialog", { name: "New project manager" });
     await dialog.getByRole("textbox", { name: "Name" }).fill("Keyboard check", { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
@@ -277,9 +280,7 @@ export async function verifySettingsKeyboard(browser: Browser, loginUrl: string,
     await dialog.getByRole("textbox", { name: "Persona" }).waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
     assert.ok(await dialog.getByRole("button", { name: "Create" }).isEnabled(), "New PM: Create stays disabled with a valid name");
     await dialog.getByRole("textbox", { name: "Name" }).focus();
-    const stops = await walkFocus(page, "new-pm", shotDir);
-    assertRings(stops, "New PM");
-    assertReaches(stops, NEW_PM_STOPS, "New PM");
+    assertNewPmStops(await walkFocus(page, "new-pm", shotDir), folderPicker);
     assert.deepEqual(errors, [], `Settings keyboard check hit page errors: ${errors.join("; ")}`);
   } finally {
     await context.close();
