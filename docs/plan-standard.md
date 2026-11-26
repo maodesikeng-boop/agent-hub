@@ -1,6 +1,6 @@
 # Plan and code-skeleton standard
 
-Follow this standard whenever a task asks for a design plan. A planning step commits a design document in `docs/<topic>-design.md`, a compiling TypeScript code skeleton in the target files, and runnable acceptance tests that fail before implementation. Later implementation steps fill in the function bodies until those tests pass.
+Follow this standard whenever a task asks for a design plan. A planning step commits a design document in `docs/<topic>-design.md`, a compiling TypeScript code skeleton in the target files, and runnable acceptance tests. Before implementation, tests for new or changed behavior must fail, and regression tests confirming unchanged existing rules must pass. Later implementation steps fill in the function bodies until every acceptance test passes.
 
 ## Design document
 
@@ -34,7 +34,7 @@ Include all eight sections below in order for downstream Workers and reviewers:
    - **Real CLI verification.** For any scenario that depends on vendor CLI behavior, run it locally against the real vendor CLI before merge and save the output as evidence. A scenario that passes only against a fake CLI counts as not verified against the real CLI, not as passing. Keep fake CLIs for fast cloud checks. If the real CLI disagrees with a fake CLI, update the fake CLI and add a test in the same PR. If a vendor CLI is not installed or not logged in locally, mark the scenario as not verified against the real CLI and state why.
    - **Commands and visual checks.** Name the exact acceptance test files, `pnpm verify`, real-browser screenshots for UI changes, and command outputs to capture during implementation.
 
-## Code skeleton and failing acceptance tests
+## Code skeleton and acceptance tests
 
 Write the skeleton and acceptance tests directly in the target production and test files rather than a scratch directory:
 
@@ -45,9 +45,9 @@ Write the skeleton and acceptance tests directly in the target production and te
 - **Acceptance tests.** Write real runnable tests with assertions in the matching `*.test.ts` and `*.test.tsx` files so every acceptance scenario in Section 8 and every contract clause maps to at least one executable test. Do not use `it.todo` placeholders for acceptance scenarios. Automated tests may run against fake CLIs for fast cloud checks, while vendor CLI scenarios still require a local run against the real CLI before merge.
 - **Existing callers.** When changing an existing signature, update call sites so `pnpm typecheck` passes without altering runtime behavior yet.
 
-Before you commit the plan, run `pnpm typecheck` and confirm it exits 0. Then run the new acceptance test files (`pnpm exec vitest run <test-files>`) and confirm that tests for new or changed behavior fail against the skeleton or current code, with no syntax or type errors. Record the command and failing output in your Worker report so downstream Workers and reviewers can verify the pre-implementation failures.
+Before you commit the plan, run `pnpm typecheck` and confirm it exits 0. Then run the new acceptance test files (`pnpm exec vitest run <test-files>`) with no syntax or type errors. Confirm that every test for new or changed behavior fails against the skeleton or current code, and that every regression test confirming an unchanged existing rule passes. Record the command and test output in your Worker report so downstream Workers and reviewers can verify both the pre-implementation failures and the passing regression baseline.
 
-Example skeleton and failing tests:
+Example skeleton and acceptance tests:
 
 ```ts
 // src/shared/coupon.ts
@@ -86,8 +86,8 @@ describe("applyCoupon", () => {
 Implementation starts only after the user approves the plan's checkpoint card and any open decisions. Build directly on the committed skeleton and acceptance tests:
 
 1. Read the design document, the code skeleton, and the committed acceptance tests. Treat them as the specification.
-2. Run the committed acceptance tests before editing production code to confirm they still fail on the current branch.
-3. Fill in the function bodies until every acceptance test passes. Do not modify, delete, skip, or weaken the acceptance tests written in the planning step. You may add extra unit tests for internal edge cases in separate test blocks or files.
+2. Run the committed acceptance tests before editing production code. Confirm that tests for new or changed behavior still fail on the current branch and that regression tests confirming unchanged existing rules already pass.
+3. Fill in the function bodies until every acceptance test passes, including both the tests for new or changed behavior and the regression tests for unchanged existing rules. Do not modify, delete, skip, or weaken the acceptance tests written in the planning step. You may add extra unit tests for internal edge cases in separate test blocks or files.
 4. If implementation shows that a signature, type, contract, or acceptance test must change, stop instead of rewriting the test. Report the conflict and your recommendation in the `偏离` and `问题` fields of your Worker report so the Project Manager can decide whether to revise the plan.
 5. Do not create parallel modules or duplicate function names alongside the skeleton.
 
@@ -96,6 +96,6 @@ Implementation starts only after the user approves the plan's checkpoint card an
 Before you report done, confirm all four checks:
 
 - The finished code matches the skeleton's public types and contracts.
-- Every acceptance scenario in Section 8 has a passing test, and every test for new or changed behavior failed before implementation.
+- Every acceptance scenario in Section 8 has a passing test. Tests for new or changed behavior failed before implementation, and regression tests confirming unchanged existing rules passed both before and after implementation.
 - Implementation commits did not delete, skip, or weaken any acceptance test from the planning step.
 - You saved every command output, local real-CLI run output, and real-browser screenshot listed in Section 8, and updated any fake CLI that disagreed with the real CLI.
