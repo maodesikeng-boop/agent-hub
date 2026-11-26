@@ -59,6 +59,7 @@ import { assertWorkerOpenForUser, createLedgerWorkers, notStarted } from "./work
 import type { EndedWorktreeCandidate } from "./workers.ts";
 
 export interface SqliteLedger extends Ledger {
+  readonly appApprovals: ReturnType<typeof createLedgerWorkers>["appApprovals"];
   archivePm(pmId: PmId): Pm;
   unarchivePm(pmId: PmId): Pm;
   purgeExpiredArchivedPms(nowMs?: number): PmId[];
@@ -396,7 +397,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       messages.composerTarget(conversationId, files.worktreesDir, files.extraWorktreeRoots?.()),
 
     snapshot(): LedgerSnapshot {
-      const pendingSandboxApprovals = workers.listPendingSummaries();
       const activeTaskGraphs = taskGraphs.activeSnapshotGraphs();
       const { conversations, sessions } = snapshotQueries.snapshotConversations(activeTaskGraphs);
       return {
@@ -415,7 +415,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         schedules: schedules.all(),
         router: router.snapshotSlice(),
         activeTaskGraphs,
-        ...(pendingSandboxApprovals.length > 0 ? { pendingSandboxApprovals } : {}),
+        ...workers.approvalSnapshot(),
       };
     },
 
@@ -446,9 +446,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     recoverAfterRestart() {
       completions.recover();
       const recovered = sessions.recoverAfterRestart(workers.noticeUnresentShutdownTurnsIn);
-      workers.recoverWorktrees();
-      workers.recoverBackgroundWaits();
-      workers.recoverTurnTimeouts();
+      workers.recoverLifecycles();
       handover.recoverAfterRestart();
       router.recoverAfterRestart();
       return recovered;
@@ -564,7 +562,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     resolveRouterItem: router.resolveItem,
     answerAsk: router.answerAsk,
     recheckUserBlocker: userBlockers.recheck, decideSandboxApproval: workers.decide, getSandboxApproval: workers.getById,
-    userBlockerVendor: userBlockers.vendorOf,
+    appApprovals: workers.appApprovals, decideAppApproval: workers.decideAppApproval, userBlockerVendor: userBlockers.vendorOf,
     deliveryOf: (message) => {
       const parts = deliveryParts(message);
       const waiting = message.sender === "user" && message.workerId === null ? waitingAsksNote(router.waitingAsksOf(message.conversationId)) : null;
@@ -599,8 +597,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       closing.abort();
       driverEvents.close();
       completions.close();
-      workers.clearAllMaxTime();
-      sessions.clearAllStreaming();
+      workers.closeLifecycles();
     },
   };
 }

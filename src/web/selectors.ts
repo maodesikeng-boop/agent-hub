@@ -934,6 +934,7 @@ interface FleetDeviceFingerprint {
   phase: HubState["phase"];
   decisions: readonly PendingDecision[];
   items: HubState["router"]["items"];
+  pendingAppCards: HubState["pendingAppCards"];
   pendingSandboxCards: HubState["pendingSandboxCards"];
   pms: readonly Pm[];
   projects: readonly Project[];
@@ -955,6 +956,7 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
       phase: d.state.phase,
       decisions: view.decisions,
       items: d.state.router.items,
+      pendingAppCards: d.state.pendingAppCards,
       pendingSandboxCards: d.state.pendingSandboxCards,
       pms: d.state.pms,
       projects: d.state.projects,
@@ -976,6 +978,7 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
         prev.phase === cur.phase &&
         prev.decisions === cur.decisions &&
         prev.items === cur.items &&
+        prev.pendingAppCards === cur.pendingAppCards &&
         prev.pendingSandboxCards === cur.pendingSandboxCards &&
         prev.pms === cur.pms &&
         prev.projects === cur.projects &&

@@ -7,36 +7,19 @@
 ### Files to review
 
 - Design document: `docs/computer-use-app-approval-design.md` (this file).
-- Card prototype screenshot: `/tmp/nosandbox/app-card/app-approval-card.png`. It shows two pending cards (a low-risk and a high-risk app) and the `Allowed for this run` and `Expired` states, rendered from `AppApprovalCardView` with the workbench stylesheet.
-- Database migration: `migrations/0054_worker_app_approvals.sql` and its line in `migrations/manifest.sha256`.
+- Card prototype screenshot: `/tmp/nosandbox/app-card/app-approval-card.png`. It shows two pending cards (a low-risk and a high-risk app) and the `Allowed for this run` and `Expired` states. The implementation is also checked in the PM conversation and Router at desktop and phone widths.
+- Database migration: `migrations/0055_worker_app_approvals.sql` and its line in `migrations/manifest.sha256`.
 - Shared contract: `src/shared/app-approval.ts` (request, gate, record, and card types), plus small additions to `src/shared/driver.ts`, `src/shared/domain.ts`, `src/shared/api.ts`, `src/shared/ledger.ts`, `src/shared/limits.ts`, and `src/shared/resource-registry.ts`.
 - Codex adapter: `src/vendors/codex/app-approval.ts`, which turns Codex's native app request into the shared request and writes the answer back.
 - Daemon: `src/daemon/ledger/app-approvals.ts` (rows and cards), `src/daemon/app-approvals/broker.ts` (waits between the driver and the user's click), and `src/daemon/ui-server/routes-app-approvals.ts` (the only decision endpoint).
 - Web card: `src/web/components/AppApprovalCard.tsx`.
-- Planned tests (`it.todo`): `src/shared/app-approval.test.ts`, `src/vendors/codex/app-approval.test.ts`, `src/daemon/ledger/app-approvals.test.ts`, `src/daemon/app-approvals/broker.test.ts`, `src/daemon/ui-server/routes-app-approvals.test.ts`, and `src/web/components/AppApprovalCard.test.tsx`.
+- Acceptance tests: `src/shared/app-approval.test.ts`, `src/vendors/codex/app-approval.test.ts`, `src/daemon/ledger/app-approvals.test.ts`, `src/daemon/app-approvals/broker.test.ts`, `src/daemon/ui-server/routes-app-approvals.test.ts`, and `src/web/components/AppApprovalCard.test.tsx`.
 
-### Decisions needed
+### Decisions
 
-#### 1. How long an app approval lasts
-
-- **Option A (Recommended): until the Worker ends.** One click per app per Worker. The approval survives a restart of the vendor process inside the same Worker (idle close after 10 minutes, a capability relaunch, or crash recovery). A card that is still waiting closes when the process that asked for it exits. A takeover Worker or any other Worker must ask again.
-- **Option B: until the vendor process exits.** Stricter, but Bellwood closes idle processes after `IDLE_CLOSE_MS` (10 minutes), so a Worker that pauses and gets a follow-up message asks for the same app again.
-- Per-request approval is not offered. The plugin asks again before every action, so a single task would need dozens of clicks.
-
-#### 2. What Deny does
-
-- **Option A (Recommended): Deny holds for the rest of the Worker run.** Later requests for that app are declined without a new card, so a looping model cannot flood the chat. To change your mind, end the Worker and start a new one.
-- **Option B: Deny answers this card only.** The next request for the app opens a new card, up to `APP_APPROVAL_CARDS_PER_WORKER_MAX` (20) cards per Worker.
-
-#### 3. Feishu
-
-- **Option A (Recommended): a read-only notice in the project group naming the Worker and the app, telling you to confirm on the computer.** This matches the outer-sandbox card. Computer Use drives the local screen, so you are expected to be at the Mac.
-- **Option B: no Feishu message for app cards.**
-- **Option C: let the project owner confirm on Feishu** (the same owner-only check as `src/daemon/feishu/mesh-approvals.ts`). This adds Feishu as a second place to click, next to the workbench.
-
-### Decided
-
-- **Who can confirm: the user's click in a signed-in workbench session (browser cookie or a paired device over mutual TLS), the same rule as the outer-sandbox card.** The project manager, Workers, `hub`, and the Task Graph cannot confirm. There is no Touch ID or other OS-level check that the user is present. The user decided this earlier: 「我觉得只要用户同意就行，点击了就行」. See "Who can click the card" below.
+- **Allow or deny for this Worker run.** One decision per app. It survives a vendor process relaunch. An undecided card ends with the process that raised it. A new Worker must ask again.
+- **Feishu sends a read-only notice.** It names the Worker and the app and points to the workbench for the decision.
+- **A signed-in workbench session can decide.** A browser session cookie or a paired device over mutual TLS is enough. The user confirmed: 「我觉得只要用户同意就行，点击了就行」. There is no Touch ID or system password check. See "Who can click the card" below.
 
 Linux and Windows need no decision. No-outer-sandbox mode is macOS-only (`NO_OUTER_SANDBOX_SUPPORTED_PLATFORMS`), so app cards can only occur on macOS. The shared parts do not depend on the platform.
 
@@ -54,9 +37,9 @@ Outcome: a Codex Worker that the user already approved to run without Bellwood's
 
 - **The driver declines the request.** `[Measured]` From the #1251 run, `~/.codex/logs_2.sqlite` rows 2763870 and 2763873 record `McpServerElicitationRequestResponse { action: Decline }` for the Calculator request, and the rollout returned `Computer Use was not approved to use Calculator` (full trail in `/tmp/nosandbox/cua-diag.md`, section 1). In code, `src/vendors/codex/driver.ts:425` sends every server request to `answerServerRequest`. `src/vendors/codex/server-requests.ts:41-47` answers `mcpServer/elicitation/request` with `decideMcpElicitation`, which returns `decline` for every non-read-only Worker (`src/vendors/codex/protocol.ts:163-165`).
 - **What the plugin sends.** `[Measured, read the installed plugin]` `/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/cua/dist/project/cua/sky_js/src/targets/mac/computer-use-policy.js` checks the app policy, then calls `nodeRepl.createElicitation` with message `Allow Computer Use to use "<displayName>"?` and `_meta` holding `codex_approval_kind: "mcp_tool_call"`, `connector_id: "computer-use"`, `connector_name: "Computer Use"`, `persist: ["session"]` or `["session", "always"]`, `riskLevel`, an optional `subtitle` warning, `tool_name`, `tool_params: { app: <bundle id> }`, and `tool_params_display` with the display name. Anything other than `accept` throws. The same file asks separately for audio recording (`tool_name: "start_audio_recording"`). It wraps every app tool in this policy, so each action asks again unless something answers for it.
-- **What Codex forwards.** `[Measured, read app-server types generated from Codex 0.169.0 in /tmp/codex-cu-fix/app-server-types]` `McpServerElicitationRequestParams` carries `threadId`, `turnId`, `serverName`, `mode` (`form`, `url`, and others), `message`, `requestedSchema`, and `_meta`. The response is `{ action: "accept" | "decline" | "cancel", content, _meta }`. The server sends a `serverRequest/resolved` notification with `{ threadId, requestId }` when a pending request is cleared without the client's answer. `[Inferred]` Codex passes the plugin's `_meta` through unchanged. No full outbound request was captured; the first implementation step records one.
+- **Codex wire protocol.** `codex --version` returned `codex-cli 0.169.0`. The matching open source tag, `rust-v0.169.0`, declares both wire methods in [`protocol/common.rs`](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server-protocol/src/protocol/common.rs#L1918). [`protocol/v2/mcp.rs`](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server-protocol/src/protocol/v2/mcp.rs#L426) defines `McpServerElicitationRequestParams`, its form variant and `McpServerElicitationRequestResponse`. [`protocol/v2/notification.rs`](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server-protocol/src/protocol/v2/notification.rs#L74) defines `ServerRequestResolvedNotification` as a thread ID and a numeric or string request ID. The fixture is written from these definitions and the installed plugin's metadata shape. It is not a recording.
 - **Where approvals can persist.** `[Measured, read the node_repl binary strings]` `node_repl` reads persistent approvals from the Computer Use state file (`approvedBundleIdentifiers`) and auto-answers matching requests before they reach Codex. A response with `_meta.persist = "always"` is how a client adds to that file. Bellwood must never send `persist`, or one Worker's click would turn into a standing approval for every Codex session of this macOS user.
-- **Timeouts.** `[Inferred]` The `node_repl` `js` tool defaults to a 30-second `timeout_ms`, and the plugin treats a `TimeoutError` during the wait as a failure. The native request may therefore end well before the user clicks. The design below keeps the card open after that, and verification measures the real limit.
+- **Timeouts.** The plugin treats a `TimeoutError` as a failure. `ns-smoke2` checks the real Calculator request, which plugin metadata arrives, the timeout duration, and whether Codex emits `serverRequest/resolved` on timeout. The implementation leaves a card open if the native request resolves before a click.
 - **Outer-sandbox approval.** `[Measured, read code]` Merged in #443: `src/shared/sandbox-approval.ts` (`resolveOuterSandboxLaunchMode`), `src/daemon/ledger/sandbox-approvals.ts`, `src/daemon/ui-server/routes-sandbox-approvals.ts:18-36`, and `src/web/components/SandboxApprovalCard.tsx`. A Codex process launched with `files.outerSandbox === "vendor_only"` runs without `sandbox-exec` (`src/vendors/codex/driver.ts:381`). The confirmation route exists only on `ui-server`.
 - **Process lifetime.** `[Measured, read code]` Idle vendor processes close after `IDLE_CLOSE_MS` (10 minutes, `src/shared/limits.ts:145`, `src/daemon/driver/base-driver.ts:757`) and relaunch on the next message, so one Worker run can span several processes.
 
@@ -87,7 +70,7 @@ A follows the merged pattern of `user_blockers` and `worker_sandbox_approvals`: 
 4. **Broker.** Answers `allowed` with `accept` and `denied` or `ineligible` with `decline`. For `pending` it waits until the ledger reports a decision, the row expires (one timer at `expires_at`), or the driver aborts (`cancel`). Several waits on one row settle together.
 5. **Click.** `POST /api/app-approvals/:id/decide` calls `ledger.decideAppApproval`. Allow sets `allowed`, deny sets `denied`, both with `decided_by = 'user'` and the client id, and settle the card. If no native request is still waiting when the user allows, the ledger queues a system note to the Worker so it can retry: `【系统】用户已允许 Computer Use 控制 <应用名>（<应用 ID>），本次运行内有效，可以重试。`
 6. **End.**
-   - Process exit: the driver calls `gate.processEnded`, and `endProcess` expires the pending rows raised by that process and closes their cards. Under Decision 1 Option B it also revokes decided rows for that process.
+   - Process exit: the driver calls `gate.processEnded`, and `endProcess` expires the pending rows raised by that process and closes their cards.
    - Worker end (end, archive, failed worktree setup, the outer-sandbox approval being revoked): `revokeForWorkerIn` runs next to `sandboxApprovals.revokeForWorkerIn` in the same transactions.
    - Timeout: `expireDue` expires the row.
    - Daemon start: `endAllAtStartup` ends every live row, because no vendor process survives a restart.
@@ -105,12 +88,12 @@ A follows the merged pattern of `user_blockers` and `worker_sandbox_approvals`: 
 | --- | --- |
 | `worker_id` and `sandbox_approval_id` | The grant belongs to one Worker run that the user already approved to run without the outer sandbox. A takeover or new Worker has a new id and asks again. |
 | `app_id` | Exact bundle id from `tool_params.app`; no prefix or name matching. |
-| `process_key` | Random per spawned vendor process. A pending card dies with the process that raised it (and, under Decision 1 Option B, so does the grant). |
+| `process_key` | Random per spawned vendor process. A pending card dies with the process that raised it. |
 | Native request id | Only in driver memory (`CodexAppApprovalState.waits`). It never reaches the ledger or the UI, so a click can only answer requests that are still live in that process. |
 
 #### Who can click the card
 
-Decided by the user (「我觉得只要用户同意就行，点击了就行」): a signed-in workbench session only (browser cookie, or a paired device's mutual TLS session through `ui-server`). There is no route on `agent-api`, no `hub` command, and no Task Graph decision that changes these rows. Feishu shows a notice only, unless the Feishu decision above picks Option C.
+Decided by the user (「我觉得只要用户同意就行，点击了就行」): a signed-in workbench session only (browser cookie, or a paired device's mutual TLS session through `ui-server`). There is no route on `agent-api`, no `hub` command, and no Task Graph decision that changes these rows. Feishu posts a read-only notice in the project group.
 
 Reasons:
 
@@ -125,6 +108,7 @@ Reasons:
 | --- | --- | --- |
 | `APP_APPROVAL_WAIT_MAX_MS` | 15 minutes | Long enough to walk to the Mac; ends cards nobody answers. |
 | `APP_APPROVAL_PENDING_PER_WORKER_MAX` | 3 | Waiting cards per Worker; one per app the model is trying. |
+| `APP_APPROVAL_NATIVE_WAITS_PER_WORKER_MAX` | 12 | Room for four concurrent requests per pending app across the three pending cards. Even if all 300 Workers in a month waited at once, the limit holds at 3,600 live requests. Slots are returned after each wait. |
 | `APP_APPROVAL_CARDS_PER_WORKER_MAX` | 20 | Rows per Worker run. 300 Workers a month x 20 = 6,000 rows at most. |
 | `APP_APPROVAL_APP_ID_MAX_CHARS`, `APP_APPROVAL_APP_NAME_MAX_CHARS`, `APP_APPROVAL_WARNING_MAX_CHARS` | 255, 80, 240 | Caps on stored and displayed request text. |
 | `APP_APPROVALS_RETENTION_DAYS` | 30 | Terminal rows older than this are pruned. |
@@ -132,8 +116,8 @@ Reasons:
 | `PENDING_APP_APPROVALS_SNAPSHOT_MAX` | 50 | Caps `StateSnapshot.pendingAppApprovals`. |
 
 - **Invalidation.** Grants end on Worker end, on revocation of the outer-sandbox approval, and at daemon start; pending cards also end on process exit and timeout. Denied rows are decisions, not cached failures.
-- **Upper bounds.** The table above. The broker keeps one wait per live native request and one timer per pending row, and both are bounded by the per-Worker caps.
-- **Stable references.** `withAppCard` returns the same state object when nothing changed, like `withSandboxCard`. The card reads one row by id with a memoized selector.
+- **Upper bounds.** The table above. A repeated request for the same app attaches to the same card, so card caps alone do not limit native waits. The broker reserves a per-Worker slot before it opens or attaches a card. At capacity it declines without allocating a wait or increasing `request_count`. The slot is returned on decision, abort, expiry, or process exit. The Codex adapter checks the same limit before allocating a controller. There is one timer per pending card.
+- **Stable references.** `withAppCard` returns the same state object when nothing changed. Router keeps the same card elements while the source card arrays stay the same.
 - **Hot path.** Ordinary Workers never call the gate, because `computerUseServers` is empty for them. A Computer Use Worker does one indexed lookup (`idx_worker_app_approvals_worker_app`) per action.
 
 ### 5. Cross-vendor and cross-platform unification
@@ -166,7 +150,7 @@ Nothing is superseded in code: the decline path stays for every request the adap
 
 | File | Responsibility |
 | --- | --- |
-| `migrations/0054_worker_app_approvals.sql`, `migrations/manifest.sha256` | Table `worker_app_approvals` with indexes for status and age, (Worker, app id), and (session, process key). |
+| `migrations/0055_worker_app_approvals.sql`, `migrations/manifest.sha256` | Table `worker_app_approvals` with indexes for status and age, (Worker, app id), and (session, process key). |
 | `src/shared/app-approval.ts` | Request, answer, gate, ref, record, summary, and decision types; app id and name normalization; the always-denied list; card text. |
 | `src/shared/limits.ts`, `src/shared/resource-registry.ts` | Constants from section 4; registry entry for the new table. |
 | `src/shared/driver.ts` | `DriverOptions.appApprovals`. |
@@ -178,11 +162,11 @@ Nothing is superseded in code: the decline path stays for every request the adap
 | `src/daemon/ui-server/routes-app-approvals.ts` | `POST /api/app-approvals/:id/decide`, mounted with the other authenticated routes. |
 | `src/web/components/AppApprovalCard.tsx` | `AppApprovalCardView` (already rendered for the prototype) and the `AppApprovalCard` container that posts the decision. |
 
-Wiring left to implementation: `server-requests.ts`, `notifications.ts`, and `onProcessClose` in the Codex driver; `Proc` gains `appApprovals: CodexAppApprovalState`; `revokeForWorkerIn` calls next to the sandbox ones; startup and pruning hooks; `Messages.tsx`, `state.ts`, and the Router tray; a read-only Feishu notice next to the sandbox card's in `src/daemon/feishu/cards.ts`. `src/daemon/daemon.ts` and `createLedger` are ratcheted in `src/code-hygiene.baseline.json`, so broker construction goes in a helper module rather than adding lines there.
+Integration points: `server-requests.ts`, `notifications.ts`, and `onProcessClose` in the Codex driver; `Proc` gains `appApprovals: CodexAppApprovalState`; `revokeForWorkerIn` calls next to the sandbox ones; startup and pruning hooks; `Messages.tsx`, `state.ts`, and the Router tray; a read-only Feishu notice in `src/daemon/feishu/cards.ts`. `src/daemon/daemon.ts` and `createLedger` are ratcheted in `src/code-hygiene.baseline.json`, so broker construction goes in a helper module rather than adding lines there.
 
 ### 8. Verification plan
 
-1. **Capture first.** Before writing driver logic, record one real `mcpServer/elicitation/request` line for Calculator from a Bellwood Codex Worker (a temporary log in a scratch build, not committed). Commit it as a fixture under `src/vendors/codex/fixtures/` and make `parseCodexAppApprovalRequest` tests read it. Also record whether `serverRequest/resolved` arrives when the plugin times out, and after how long.
+1. **Protocol fixture.** Use `src/vendors/codex/fixtures/app-elicitation-0.169.0.json` for the request and resolved notification. The fixture uses the released protocol definitions in section 2. Real CLI verification is pending in `ns-smoke2`.
 2. **Unit and integration tests.** Fill every `it.todo` in the six test files listed above. Required cases:
    - A Worker without an approved outer-sandbox record gets `decline` and no card.
    - A Worker without the Computer Use capability gets `decline` and no card.
@@ -192,6 +176,7 @@ Wiring left to implementation: `server-requests.ts`, `notifications.ts`, and `on
    - An ordinary Worker on the same project keeps the decline path and the outer sandbox.
    - `agent-api` and `hub` have no way to decide.
    - The response never contains `persist`.
+   - The native wait cap declines before card lookup and releases slots when a request settles, aborts, expires, or its process exits.
 3. **Guards.** `src/shared/write-scope.test.ts`, `test/migration.test.ts`, `src/daemon/resources/registry.test.ts`, `src/code-hygiene.test.ts`, `src/docs-guard.test.ts`, and `src/prompt-portability.test.ts`.
 4. **Local gate before the final push.** `pnpm lint`, `pnpm typecheck`, `pnpm test:related`, and `pnpm verify`, plus browser screenshots of the card in the PM conversation and in Router.
 5. **Real Mac run.** Start a Codex Worker with `--no-outer-sandbox --caps custom --allow mcp:cua_repl`, approve the outer-sandbox card, and ask it to open Calculator, press 7, and read the display.
