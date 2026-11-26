@@ -48,7 +48,7 @@ and gets on stderr, exit code 1:
 
 Nothing is posted. The PM moves the background into `plan.md`, reruns with `--file 方案=plan.md`, and the card shows the full 180-character background plus the file. With `--node`, the same rule applies with the step-card limits (question 300, background 2,000).
 
-Why Option 1: it is the rule every other `hub` field already follows (`router report`, `graph create` briefs, `graph decide` notes), it fixes the problem where the bad state starts, and it needs no migration, snapshot growth, or UI change. 
+Why Option 1: it is the rule every other `hub` field already follows (`router report`, `graph create` briefs, `graph decide` notes), it fixes the problem where the bad state starts, and it needs no migration, snapshot growth, or UI change.
 
 **D2. Sequencing with PR #471 (Project Manager).** PR #471 merged before implementation. This branch merged the updated main branch, moved the Task Graph rules into `HUB_LIMITS`, and deleted `text-limits.ts`. The Task Graph manual renders the same text.
 
