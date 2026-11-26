@@ -193,6 +193,20 @@ describe("formatGenerationMessage 真值表", () => {
       formatGenerationMessage(makeMsg({ id: 33, sender: "system", kind: "text", text: "旧交接", status: null, meta: renewed }), TARGET_SESSION),
     ).toBeNull();
   });
+
+  it("excludes hidden checklist reminders from the vendor switch log", () => {
+    const meta: SystemMessageMeta = { event: "checklist.reminder", sessionId: 1, uuid: "turn-1", toolUseId: "edit-1" };
+    const reminder = makeMsg({
+      id: 34,
+      sender: "system",
+      sessionId: meta.sessionId,
+      text: "Update the progress checklist.",
+      collapsed: true,
+      status: "replied",
+      meta,
+    });
+    expect(formatGenerationMessage(reminder, TARGET_SESSION)).toBeNull();
+  });
 });
 
 describe("collectGenerationContext 与 buildVendorSwitchPreamble", () => {
