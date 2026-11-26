@@ -1084,7 +1084,7 @@ describe("shell-model deviceSettings 引用稳定", () => {
     );
     installFakeWebSocket();
 
-    const { result } = renderHook(() => useShellModel({ autoSelect: true }));
+    const { result } = renderHook(() => useShellModel({ mobile: false }));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.instances[0]!.open());
     await waitFor(() => expect(result.current.content?.deviceSettings).not.toBeNull());
@@ -1121,7 +1121,7 @@ describe("shell-model 手机路由回退", () => {
     );
     api.install();
     installFakeWebSocket();
-    const rendered = renderHook(() => useShellModel({ autoSelect: false }));
+    const rendered = renderHook(() => useShellModel({ mobile: true }));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.instances[0]!.open());
     return { api, ...rendered };

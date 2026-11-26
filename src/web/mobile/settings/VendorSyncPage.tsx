@@ -2,12 +2,10 @@ import { Loader2 } from "../../ui/icons.ts";
 import type { VendorSyncVendorBadge } from "../../../shared/index.ts";
 import { HostBoundNote } from "../../components/HostBoundNote.tsx";
 import { ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "../../components/SettingsList.tsx";
-import { VENDOR_STATUS_LABELS, visibleMcpVendorBadges, type useVendorSyncSetting } from "../../settings-model.ts";
+import { VENDOR_STATUS_LABELS, visibleMcpVendorBadges, type VendorSyncModel } from "../../settings-model.ts";
 import { Button } from "../../ui/button.tsx";
 import { DRAWER_BUTTON } from "./SettingsDrawer.tsx";
 import { SwitchRow } from "./SettingsNavRow.tsx";
-
-export type VendorSync = ReturnType<typeof useVendorSyncSetting>;
 
 const CHIP = "rounded-xs bg-panel px-2 py-0.5 text-xs text-muted-foreground";
 
@@ -27,7 +25,7 @@ function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) 
 
 const Removed = () => <span className="text-xs text-danger">Unchecked — will be removed</span>;
 
-export function VendorSyncPage({ vendor }: { vendor: VendorSync }) {
+export function VendorSyncPage({ vendor }: { vendor: VendorSyncModel }) {
   const { preview, checkedMcp, checkedSkills, summary, scanning, applying, scanError, isEmptyPreview, previewVendorSync, toggleMcp, toggleSkill } = vendor;
   return (
     <>
@@ -130,7 +128,7 @@ export function VendorSyncPage({ vendor }: { vendor: VendorSync }) {
   );
 }
 
-export function VendorSyncFooter({ vendor }: { vendor: VendorSync }) {
+export function VendorSyncFooter({ vendor }: { vendor: VendorSyncModel }) {
   if (vendor.preview === null) return null;
   return (
     <>

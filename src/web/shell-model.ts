@@ -33,8 +33,8 @@ import { totalRunningWorkers } from "../shared/reminders.ts";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
 import { mobileBack } from "./mobile/back.ts";
-import { routeHash, useRoute, type InfoPage } from "./route.ts";
-import { dialogTargetOf, useSettingsNav } from "./settings-nav.ts";
+import type { InfoPage, SettingsSection } from "./route.ts";
+import { useWorkbenchNav } from "./workbench-nav.ts";
 import {
   accountSettingsTarget,
   newPmDevicesOf,
@@ -130,12 +130,16 @@ function reuseEntryList(prev: ConversationEntry[], next: ConversationEntry[]): C
 
 const EMPTY_NEW_PM_DEVICES: never[] = [];
 
-export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
+export function useShellModel({ mobile }: { mobile: boolean }) {
   const qc = useHubQueryClient();
   const fleet = useDevices();
-  const { route, navigate, replace } = useRoute();
+  const navigation = useWorkbenchNav();
+  const { nav, openPage: navigate, replacePage: replace, repairPage, openSettings: showSettings, showSettingsSection } = navigation;
+  const route = nav.page;
+  const [startedInColumns] = useState(!mobile);
   const [pendingCreated, setPendingCreated] = useState<ConversationRef | null>(null);
   const [pickedDevice, setPickedDevice] = useState<DeviceKey | null>(null);
+  const activatePickedDevice = useRef(false);
   const lastByDeviceRef = useRef(new Map<DeviceKey, ConversationId>());
   const prevEntriesRef = useRef<ConversationEntry[]>(EMPTY_ENTRIES);
   const devicesRef = useRef(fleet.devices);
@@ -144,7 +148,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   routeRef.current = route;
   const effectivePickedDevice = route === null ? pickedDevice : null;
   const local = fleet.devices[0]!;
-  const routedDevice = route !== null && route.view !== "router" && route.view !== "settings"
+  const routedDevice = route !== null && route.view !== "router"
     ? fleet.devices.find((d) => d.key === deviceKeyOf(route.device, fleet.selfId))
     : undefined;
   const pickedView = effectivePickedDevice === null ? undefined : fleet.devices.find((d) => d.key === effectivePickedDevice);
@@ -157,7 +161,15 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const drafts = useDraftStore<string>();
   const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
-  const nav = useSettingsNav({ autoSelect, managed: fleet.managed, currentKey: current.key, route, navigate, replace, setCreating });
+  const openSettings = useCallback(() => showSettings({ providerDevice: current.key }), [showSettings, current.key]);
+  const openSettingsSection = useCallback((section: SettingsSection) => {
+    if (nav.settings === null) showSettings({ section, providerDevice: current.key });
+    else showSettingsSection(section);
+  }, [nav.settings, showSettings, showSettingsSection, current.key]);
+  const openManageProviders = useCallback((target: DeviceKey = current.key) => {
+    setCreating(false);
+    showSettings({ section: "providers", providerDevice: target });
+  }, [showSettings, current.key]);
   const [providersGuided, setProvidersGuided] = useState(loadProvidersGuided);
   const [railClosed, setRailClosed] = useState(loadRailClosed);
   const [railPeek, setRailPeek] = useState<PmId | null>(null);
@@ -167,7 +179,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     saveWorkTab(tab);
   }, []);
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
-  const [listQuery, setListQuery] = useState("");
 
   const clearFocus = useCallback(() => setFocus(null), []);
 
@@ -181,9 +192,9 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const routedWorker = route?.view === "worker" && state.conversations[route.id]?.conversation.kind !== "pm" ? route.id : null;
   const openWorker = routedWorker;
   const workerView = openWorker === null ? undefined : state.conversations[openWorker];
-  const routerActive = effectivePickedDevice === null && (route?.view === "router" || (autoSelect && (route === null || route.view === "settings")));
+  const routerActive = route?.view === "router" || (route === null && pickedDevice === null);
   const routedEntry =
-    route === null || route.view === "router" || route.view === "settings"
+    route === null || route.view === "router"
       ? undefined
       : route.view === "conversation"
         ? entries.find((e) => e.id === route.id)
@@ -191,22 +202,25 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
           ? entries.find((e) => e.pm !== null && e.pm.id === workerView?.conversation.pmId)
           : entries.find((e) => e.pm?.id === route.pmId);
   const firstUnarchived = entries.find((e) => e.pm?.archivedAt == null) ?? entries[0];
-  const active = routerActive ? null : (routedEntry ?? (autoSelect ? firstUnarchived : null) ?? null);
+  const active = routerActive ? null : (routedEntry ?? (route === null || startedInColumns ? firstUnarchived : null) ?? null);
   if (active !== null) lastByDeviceRef.current.set(current.key, active.id);
   const select = useCallback(
     (ref: ConversationRef) => {
-      setPickedDevice(autoSelect ? null : ref.device);
-      navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) }, !autoSelect && route !== null);
+      activatePickedDevice.current = false;
+      setPickedDevice(mobile ? ref.device : null);
+      navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) }, mobile && route !== null);
     },
-    [navigate, autoSelect, route],
+    [navigate, mobile, route],
   );
   const selectRouter = useCallback(() => {
-    if (autoSelect) setPickedDevice(null);
-    navigate({ view: "router" }, !autoSelect && route !== null);
-  }, [navigate, autoSelect, route]);
+    activatePickedDevice.current = false;
+    if (!mobile) setPickedDevice(null);
+    navigate({ view: "router" }, mobile && route !== null);
+  }, [navigate, mobile, route]);
   const selectComputer = useCallback(
     (key: DeviceKey) => {
-      if (!autoSelect) {
+      activatePickedDevice.current = false;
+      if (mobile) {
         setPickedDevice(key);
         return;
       }
@@ -222,12 +236,19 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
         navigate({ view: "conversation", id: chosen.id, ...routeDeviceOf(key) }, false);
         return;
       }
+      activatePickedDevice.current = true;
       setPickedDevice(key);
       if (routeRef.current !== null) replace(null);
     },
-    [autoSelect, navigate, replace],
+    [mobile, navigate, replace],
   );
   const activeId = active?.id ?? null;
+  useEffect(() => {
+    if (route !== null || !activatePickedDevice.current || activeId === null) return;
+    activatePickedDevice.current = false;
+    setPickedDevice(null);
+    repairPage({ view: "conversation", id: activeId, ...routeDeviceOf(current.key) });
+  }, [route, activeId, current.key, repairPage]);
   const reminderDevices = useMemo(() => fleet.devices.map((d) => ({ key: d.key, name: d.info.name, state: d.state })), [fleet.devices]);
   const reminders = useDeviceReminders(reminderDevices, activeId === null ? null : { device: current.key, id: activeId }, select);
   const runningWorkers = useMemo(
@@ -247,39 +268,19 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
 
   const localClientRef = fleet.hub(LOCAL_DEVICE).client;
   const shouldCheckFirstRunProviders =
-    autoSelect && shellReady && local.state.pms.length === 0 && !providersGuided;
+    startedInColumns && shellReady && local.state.pms.length === 0 && !providersGuided;
   const markProvidersGuided = useCallback(
     (openProviders: boolean) => {
       setProvidersGuided(true);
       saveProvidersGuided();
-      if (openProviders) nav.setDesktop({ open: true, section: "providers", providerDevice: LOCAL_DEVICE });
+      if (openProviders) openManageProviders(LOCAL_DEVICE);
     },
-    [nav.setDesktop],
+    [openManageProviders],
   );
 
   useEffect(() => {
-    if (!autoSelect || !shellReady) return;
-    if (route === null) {
-      if (pickedDevice === null) {
-        replace({ view: "router" });
-      } else if (active !== null) {
-        setPickedDevice(null);
-        replace({ view: "conversation", id: active.id, ...routeDeviceOf(current.key) });
-      }
-      return;
-    }
-    if (route.view === "settings") {
-      nav.setDesktop(dialogTargetOf(route, fleet.managed));
-      replace({ view: "router" });
-    }
-  }, [autoSelect, shellReady, route, pickedDevice, active, current.key, fleet.managed, replace, nav.setDesktop]);
-  useEffect(() => {
-    if (autoSelect || route?.view !== "settings") return;
-    const unmanagedSection = fleet.listed && !fleet.managed && route.section === "computers";
-    if (unmanagedSection || window.location.hash !== routeHash(route)) {
-      replace({ view: "settings" });
-    }
-  }, [autoSelect, fleet.listed, fleet.managed, route, replace]);
+    if (fleet.listed && !fleet.managed && nav.settings?.section === "computers") openSettings();
+  }, [fleet.listed, fleet.managed, nav.settings?.section, openSettings]);
   const unknownDevice = fleet.listed && route?.device !== undefined && routedDevice === undefined;
   const localEntries = useMemo(
     () => (local.state.phase === "ready" ? (local.key === current.key ? entries : listConversations(local.state)) : []),
@@ -288,11 +289,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const localFirst = (localEntries.find((e) => e.pm?.archivedAt == null) ?? localEntries[0])?.id ?? null;
   useEffect(() => {
     if (unknownDevice) {
-      if (!autoSelect) replace(null);
-      else if (localFirst !== null) replace({ view: "conversation", id: localFirst });
-      else replace({ view: "router" });
+      if (localFirst !== null) repairPage({ view: "conversation", id: localFirst });
+      else repairPage({ view: "router" });
     }
-  }, [unknownDevice, localFirst, replace, autoSelect]);
+  }, [unknownDevice, localFirst, repairPage]);
   const awaitingCreated = pendingCreated !== null && route?.view === "conversation" &&
     route.id === pendingCreated.id && deviceKeyOf(route.device, fleet.selfId) === pendingCreated.device &&
     routedEntry === undefined;
@@ -305,24 +305,24 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   useEffect(() => {
     if (missingWorker !== null && workerLookup === undefined) hub.ensureConversation(missingWorker);
   }, [hub, missingWorker, workerLookup]);
-  const invalidMobileRoute = !autoSelect && shellReady && routedDevice !== undefined && state.phase === "ready" && !awaitingCreated && route !== null &&
-    route.view !== "router" && route.view !== "settings" &&
+  const invalidRoute = !startedInColumns && shellReady && (route?.device === undefined || routedDevice !== undefined) && state.phase === "ready" && !awaitingCreated && route !== null &&
+    route.view !== "router" &&
     (route.view === "profile"
       ? profile === null
       : route.view === "worker"
         ? workerView === undefined ? state.conversations[route.id] !== undefined || workerLookup === "missing" : routedEntry === undefined
         : routedEntry === undefined);
   useEffect(() => {
-    if (invalidMobileRoute || (!autoSelect && route === null && window.location.hash !== "")) replace(null);
-  }, [invalidMobileRoute, autoSelect, route, replace]);
+    if (invalidRoute) repairPage(null);
+  }, [invalidRoute, repairPage]);
 
   const here = useMemo(() => routeDeviceOf(current.key), [current.key]);
   const keyOf = useCallback((id: ConversationId) => conversationKey(current.key, id), [current.key]);
   const openWorkerConversation = useCallback(
     (id: ConversationId) => {
-      navigate({ view: "worker", id, ...here }, !autoSelect && route?.view === "worker");
+      navigate({ view: "worker", id, ...here }, mobile && route?.view === "worker");
     },
-    [navigate, here, autoSelect, route?.view],
+    [navigate, here, mobile, route?.view],
   );
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -418,12 +418,12 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     (messageId: MessageId) => {
       if (active && openWorker !== null) {
         const parent = { view: "conversation", id: active.id, ...here } as const;
-        if (autoSelect) navigate(parent);
+        if (!mobile) navigate(parent);
         else mobileBack(parent, replace);
       }
       setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }));
     },
-    [active, openWorker, here, autoSelect, navigate, replace],
+    [active, openWorker, here, mobile, navigate, replace],
   );
   const sidebarActive = profileEntry?.id ?? activeId;
   const sidebarActiveRef = useMemo(
@@ -465,10 +465,11 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const openDeviceWorker = useCallback(
     (deviceKey: string, id: ConversationId) => {
-      setPickedDevice(autoSelect ? null : deviceKey);
+      activatePickedDevice.current = false;
+      setPickedDevice(mobile ? deviceKey : null);
       navigate({ view: "worker", id, ...routeDeviceOf(deviceKey) });
     },
-    [autoSelect, navigate],
+    [mobile, navigate],
   );
   const openDeviceConversation = useCallback(
     (deviceKey: string, id: ConversationId) => {
@@ -485,7 +486,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const togglePin = useCallback((pmId: PmId, pinned: boolean) => togglePmPin(hub.client, pmId, pinned), [hub.client]);
   const accountTarget = accountSettingsTarget(fleet.devices, fleet.managed);
 
-  const shared = { navigate, replace, qc, fleet, route, local, routedDevice, current, hub, state };
+  const shared = { navigate, replace, navigation, qc, fleet, route, local, routedDevice, current, hub, state };
   if (!shellReady) return { ...shared, content: null };
 
   const view = active ? state.conversations[active.id] : undefined;
@@ -509,9 +510,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       storeForDevice,
       created,
       creating,
-      defaultProviderDevice: nav.defaultProviderDevice,
-      desktopSettingsOpen: nav.dialog.open,
-      desktopSettingsSection: nav.dialog.section,
+      defaultProviderDevice: nav.settings?.providerDevice ?? current.key,
       deviceSettings,
       drafts,
       focus,
@@ -520,20 +519,16 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       keyOf,
       link,
       listEntries,
-      listQuery,
-      setListQuery,
       newPmDevices,
       offline,
-      onSettingsOpenChange: nav.onSettingsOpenChange,
-      onSettingsSectionChange: nav.onSettingsSectionChange,
       openAsk,
       openDeviceConversation,
       openDeviceWorker,
-      openManageProviders: nav.openManageProviders,
+      openManageProviders,
       openNewPm,
       openProfile,
-      openSettings: nav.openSettings,
-      openSettingsSection: nav.openSettingsSection,
+      openSettings,
+      openSettingsSection,
       openWorker,
       openWorkerConversation,
       profile,
@@ -557,8 +552,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       selectComputer,
       send,
       setCreating,
-      settingsBack: nav.settingsBack,
-      settingsPage: nav.page,
       sidebarActive,
       sidebarActiveRef,
       staging,

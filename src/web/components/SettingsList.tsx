@@ -13,8 +13,8 @@ const GROUP_FLAT = "divide-y divide-border [contain:layout_style]";
 // A page lays its sections flat on the sheet; panels, dialogs, and phone pages keep each group in one hairline box.
 const FlatGroups = createContext(false);
 
-export function FlatSettingsGroups({ children }: { children: ReactNode }) {
-  return <FlatGroups.Provider value>{children}</FlatGroups.Provider>;
+export function FlatSettingsGroups({ children, flat = true }: { children: ReactNode; flat?: boolean }) {
+  return <FlatGroups.Provider value={flat}>{children}</FlatGroups.Provider>;
 }
 
 const GROUP_TITLE = "text-minor font-medium text-muted-foreground";

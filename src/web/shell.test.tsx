@@ -76,12 +76,12 @@ describe("URL", () => {
     for (const bad of ["", "#", "#/c/", "#/c/0", "#/c/-1", "#/c/1.5", "#/x/1", "#/c/1/2", "#/c/99999999999999999999"]) expect(parseRoute(bad)).toBeNull();
   });
 
-  it("第一次打开（没写网址）：电脑外壳默认落到 #/router，不多记一条历史", async () => {
+  it("第一次打开（没写网址）：电脑外壳展示 Router，网址和历史不变", async () => {
     window.history.replaceState(null, "", "/");
     const length = window.history.length;
     await boot(three(), { keepEmptyHash: true });
     expect(title()).toBe("Router");
-    await waitFor(() => expect(window.location.hash).toBe("#/router"));
+    expect(window.location.hash).toBe("");
     expect(window.history.length).toBe(length);
   });
 

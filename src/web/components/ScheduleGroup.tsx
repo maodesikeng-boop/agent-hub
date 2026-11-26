@@ -12,7 +12,6 @@ import {
 } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorText, formatSchedule, nameError, type ErrorLike } from "../format.ts";
-import { useShellCarry } from "../shell-carry.tsx";
 import { Button } from "../ui/button.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
@@ -81,12 +80,12 @@ type Unit = "minutes" | "hours";
 
 function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void }) {
   const client = useClient();
-  const [name, setName] = useShellCarry(`pm:${pmId}:schedule-name`, "");
-  const [kind, setKind] = useShellCarry<"daily" | "interval">(`pm:${pmId}:schedule-kind`, "daily");
-  const [time, setTime] = useShellCarry(`pm:${pmId}:schedule-time`, "09:00");
-  const [every, setEvery] = useShellCarry(`pm:${pmId}:schedule-every`, "1");
-  const [unit, setUnit] = useShellCarry<Unit>(`pm:${pmId}:schedule-unit`, "hours");
-  const [prompt, setPrompt] = useShellCarry(`pm:${pmId}:schedule-prompt`, "");
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState<"daily" | "interval">("daily");
+  const [time, setTime] = useState("09:00");
+  const [every, setEvery] = useState("1");
+  const [unit, setUnit] = useState<Unit>("hours");
+  const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorLike | null>(null);
 
@@ -186,7 +185,7 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
 }
 
 export function ScheduleGroup({ pmId, schedules, disabled = false }: { pmId: number; schedules: ScheduleRecord[]; disabled?: boolean }) {
-  const [adding, setAdding] = useShellCarry(`pm:${pmId}:schedule-adding`, false);
+  const [adding, setAdding] = useState(false);
   const full = schedules.length >= MAX_SCHEDULES_PER_PM;
   return (
     <SettingsGroup label="Schedules">

@@ -270,6 +270,7 @@ describe("设置面板里的通知开关", () => {
     expect(notifySwitch()).toHaveAttribute("aria-checked", "false");
     expect(notifySwitch()).toBeDisabled();
     fireEvent.keyDown(notifySwitch(), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull());
     vi.useFakeTimers();
     laoMaFinishes(ws, 11);
     wait(WAITING_SETTLE_MS);
@@ -284,6 +285,7 @@ describe("设置面板里的通知开关", () => {
     expect(notifySwitch()).toHaveAttribute("aria-checked", "false");
     expect(localStorage.getItem(NOTIFY_ENABLED_KEY)).toBe("0");
     fireEvent.keyDown(notifySwitch(), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull());
     vi.useFakeTimers();
     laoMaFinishes(ws, 11);
     wait(WAITING_SETTLE_MS);

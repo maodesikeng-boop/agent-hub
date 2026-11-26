@@ -9,6 +9,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Plan and code-skeleton standard](plan-standard.md): Structure for design documents, typed code skeletons, `it.todo` specs, and implementation handoffs.
 - [Work panel design](work-panel-design.md): The wide right panel with `Active`, `Completed`, and `Info` tabs and Worker detail, the paged Completed feed, per-graph switch to a vertical list, and what replaces the old side panel and PM settings panel.
 - [Workbench shell design](workbench-shell-design.md): Rail, Project Manager column with pins, resizable columns, work panel integration, narrow-window tiers, phone tab bar, and a visual language that keeps pixel art for characters while controls use smooth lines.
+- [Layout switch without a rebuild](layout-switch-design.md): Surfaces rendered once above the layout and moved between outlets, one navigation state for the page, settings, and the page behind settings, and the acceptance scenarios for crossing the one-column width.
 
 ## Architecture and security
 

@@ -1,7 +1,6 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { useState, createContext, useContext, type ReactNode } from "react";
 import type { CapabilityScope, Pm, PmId } from "../../shared/index.ts";
 import { capabilityProjectOptions, capabilityScopeKey, useCustomizedCapabilityPms } from "../capabilities-model.ts";
-import { useShellCarry } from "../shell-carry.tsx";
 import { CapabilitiesPanel } from "./CapabilitiesPanel.tsx";
 import { CapabilityScopeSwitch, type CapabilityScopeChoice } from "./CapabilityScopeSwitch.tsx";
 
@@ -14,8 +13,8 @@ export function CapabilityProjects({ pms, children }: { pms: readonly Pm[]; chil
 export function CapabilitiesSettings() {
   const projects = capabilityProjectOptions(useContext(CapabilityProjectsContext));
   const customized = useCustomizedCapabilityPms();
-  const [choice, setChoice] = useShellCarry<CapabilityScopeChoice>("settings:capabilities-scope", "default");
-  const [pmId, setPmId] = useShellCarry<PmId | null>("settings:capabilities-pm", null);
+  const [choice, setChoice] = useState<CapabilityScopeChoice>("default");
+  const [pmId, setPmId] = useState<PmId | null>(null);
   const project = projects.find((p) => p.pmId === pmId) ?? projects[0] ?? null;
   const scope: CapabilityScope = choice === "pm" && project !== null ? { kind: "pm", pmId: project.pmId } : { kind: choice === "router" ? "router" : "default" };
   return (
