@@ -175,6 +175,7 @@ function clearQueuesAndCaches(ctx: FeishuContext) {
 
 // Order matters: stop new work, drain outbound while still connected, then mark closed and tear down the transport.
 async function shutdown(ctx: FeishuContext) {
+  ctx.inboundSync.interruptDispatch();
   unsubscribeAll(ctx);
   await drainBeforeClose(ctx);
   ctx.life.closed = true;
