@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { ProvidersSettings } from "./components/ProvidersSettings.tsx";
 import type { SettingsBodies } from "./components/SettingsDialog.tsx";
 import { FlatSettingsGroups } from "./components/SettingsList.tsx";
@@ -15,7 +16,7 @@ export const settingsBodies = {
   providers: <SurfaceOutlet id="settings:providers" />,
 } satisfies SettingsBodies;
 
-export function WorkbenchSettings({ mobile, defaultProviderDevice, ...props }: Omit<MobileSettingsProps, "bodies" | "vendor"> & {
+export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, defaultProviderDevice, ...props }: Omit<MobileSettingsProps, "bodies" | "vendor"> & {
   mobile: boolean;
   defaultProviderDevice: DeviceKey;
 }) {
@@ -45,4 +46,4 @@ export function WorkbenchSettings({ mobile, defaultProviderDevice, ...props }: O
       )}
     </>
   );
-}
+});
