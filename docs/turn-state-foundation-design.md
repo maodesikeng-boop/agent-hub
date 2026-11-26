@@ -180,14 +180,17 @@ The first page still returns 100 messages and adds 50 turn summaries. The query 
 
 ## 5. Cross-vendor and cross-platform unification
 
-`turns.ts` consumes only normalized driver events (`message.processing`, `turn.started`, `agent.*`, `background.changed`, `turn.ended`, `session.exited`) and `capabilities.backgroundWake`. The clock is the daemon's, so Codex and Pi need no change.
+`turns.ts` consumes only normalized driver events (`message.processing`, `turn.started`, `agent.*`, `background.changed`, `turn.ended`, `session.exited`) and `capabilities.backgroundWake`. The ledger records the daemon's timestamps for display and duration. They do not identify a turn or tool invocation.
+
+Drivers emit a session-unique `toolUseId` for each invocation and use it on previews, starts, and results. The ledger matches by session and ID. A second copy of a result leaves the original completion time intact, even when the clock has gone backward.
 
 | Vendor | Turn edges | Tool completion | Background |
 |---|---|---|---|
-| Claude | `message.processing` / `turn.started` to `turn.ended` | `agent.tool_result` | `backgroundWake: true`: enters a wait |
-| Codex, Pi | Same | `item/completed`, `tool_execution_end` | Never waits |
-| Agy | Same | Step completion | Never waits; promoted active tools become the "still running" note |
-| Cursor, DeepSeek, Kimi, OpenCode (shared ACP) | Same | ACP tool result | Never waits |
+| Claude | `message.processing` / `turn.started` to `turn.ended` | Native tool block ID, matched by `tool_use_id` | `backgroundWake: true`: enters a wait |
+| Codex | Same | Thread, turn, and item from `item/started` and `item/completed` | Never waits |
+| Pi | Same | Driver scope, RPC turn, and tool call ID from the assistant or execution event | Never waits |
+| Agy | Same | Process scope and the conversation step index, which stays the same after a turn ends | Never waits; promoted active tools become the "still running" note |
+| Cursor, DeepSeek, Kimi, OpenCode (shared ACP) | Same | Process and prompt scope with the ACP tool call ID | Never waits |
 
 A future vendor implements `src/vendors/<vendor>/driver.ts` (or the shared ACP driver) and declares `backgroundWake` in its `spec.ts`. The ledger code is the same SQL on macOS, Windows, and Linux; process handling stays in `src/daemon/platform/index.ts`.
 

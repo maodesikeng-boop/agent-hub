@@ -61,3 +61,26 @@ it("ignores a repeated result and a result for an unknown tool", () => {
   expect(toolsOf()).toEqual(first);
   expect(first).toEqual([{ tool_use_id: "cmd-4", status: "done", ended_at: expect.any(Number) }]);
 });
+
+it("records a tool emitted after the wall clock moves backward past the turn start", () => {
+  f.begin(workerId);
+  f.advance(-5);
+  tool("rollback-call", "printf live");
+  expect(toolsOf()).toEqual([{ tool_use_id: "rollback-call", status: "running", ended_at: null }]);
+});
+
+it("records a tool start emitted after the wall clock moves backward past the call", () => {
+  f.begin(workerId);
+  f.emit(workerId, { type: "agent.tool", uuid: "pending", toolUseId: "rollback-start", name: "Bash", input: {}, pending: true, at: f.now() });
+  f.advance(-5);
+  f.emit(workerId, { type: "agent.tool_running", toolUseId: "rollback-start", at: f.now() });
+  expect(toolsOf()).toEqual([{ tool_use_id: "rollback-start", status: "running", ended_at: null }]);
+});
+
+it("completes a tool after the wall clock moves backward past the call", () => {
+  f.begin(workerId);
+  tool("rollback-result", "printf finished");
+  f.advance(-5);
+  result("rollback-result");
+  expect(toolsOf()).toEqual([{ tool_use_id: "rollback-result", status: "done", ended_at: f.now() }]);
+});

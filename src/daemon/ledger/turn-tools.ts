@@ -62,33 +62,33 @@ export function createLedgerTurnTools({ db }: LedgerContext): LedgerTurnTools {
         if (event.toolUseIds.length === 0) return;
         db.run(
           `UPDATE turn_tools SET status = 'done', ended_at = ?
-           WHERE status <> 'done' AND (tool_use_id, turn_id) IN (
-             SELECT ids.value, (
-               SELECT tt.turn_id FROM turn_tools tt JOIN turns t ON t.id = tt.turn_id
-               WHERE tt.tool_use_id = ids.value AND t.session_id = ? AND tt.recorded_at <= ?
-               ORDER BY tt.turn_id DESC LIMIT 1
-             ) FROM json_each(?) ids
-           )`,
-          event.at, session.id, event.at, JSON.stringify(event.toolUseIds),
+           WHERE status <> 'done'
+             AND EXISTS (SELECT 1 FROM turns WHERE id = turn_tools.turn_id AND session_id = ?)
+             AND tool_use_id IN (SELECT value FROM json_each(?))`,
+          event.at, session.id, JSON.stringify(event.toolUseIds),
+        );
+        return;
+      }
+      if (event.type === "agent.tool_running") {
+        db.run(
+          `UPDATE turn_tools SET status = 'running', started_at = ?
+           WHERE EXISTS (SELECT 1 FROM turns WHERE id = turn_tools.turn_id AND session_id = ?)
+             AND tool_use_id = ? AND status = 'pending'`,
+          event.startedAt ?? event.at, session.id, event.toolUseId,
         );
         return;
       }
       if (runningTurnId === null) return;
-      if (event.type === "agent.tool_running") {
-        db.run(
-          `UPDATE turn_tools SET status = 'running', started_at = ?
-           WHERE turn_id = ? AND tool_use_id = ? AND status = 'pending' AND recorded_at <= ?`,
-          event.startedAt ?? event.at, runningTurnId, event.toolUseId, event.at,
-        );
-        return;
-      }
       db.run(
         `INSERT INTO turn_tools (turn_id, tool_use_id, name, summary, status, recorded_at, started_at)
-         SELECT ?, ?, ?, ?, ?, ?, ? FROM turns WHERE id = ? AND started_at <= ?
-         ON CONFLICT (turn_id, tool_use_id) DO NOTHING`,
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM turn_tools tt JOIN turns t ON t.id = tt.turn_id
+           WHERE t.session_id = ? AND tt.tool_use_id = ?
+         )`,
         runningTurnId, event.toolUseId, event.name, storedStepSummary(toolLine(event.name, event.input)),
         event.pending ? "pending" : "running", event.at, event.pending ? null : event.startedAt ?? event.at,
-        runningTurnId, event.at,
+        session.id, event.toolUseId,
       );
     },
     closeOpen(turnId, at) {

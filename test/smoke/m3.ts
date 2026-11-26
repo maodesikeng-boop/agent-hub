@@ -6,8 +6,8 @@
 // S13 整条路：项目经理派一个 haiku Worker 改一行、提交；汇报回来；用户在会话里说清楚“合并到 main，删掉 worktree，然后让 Worker 收工”，项目经理照做。
 // S14 Worker 干到一半关机再启动（验收第 11 条，PR #35 审查第 1、2 条）：不发“这一轮没做完”；重启后恢复说明、重发说明和
 //     任务原文写在同一行，Worker 接着做完，汇报回到项目经理。
-// S21 Worker 跑后台命令（sleep 90）：先回一句结束这一轮，这时还有后台命令，不算汇报、会话显示在等后台命令；跑完 claude 自己开一轮再回一句，
-//     项目经理只收到这一次汇报（ledger/workers.ts 的 awaitingBackground）。
+// S21 A Worker replies while a background command runs. After the command finishes,
+//     Claude starts a new turn and the project manager receives a single report.
 // S21b 等后台命令时项目经理收工：后台的 sleep 跟着停，不发汇报。
 // S19 用户直接问 Worker：Worker 收到带标签的原文，普通回复留在 Worker 对话。
 import { execFileSync } from "node:child_process";

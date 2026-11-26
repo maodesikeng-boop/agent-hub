@@ -36,14 +36,9 @@ export function createTurnReceiptSettlement(db: Db, deps: SettlementDeps): TurnC
       return;
     }
     const event = { ...receipt.event, messageIds: settled.inputs.map((input) => input.messageId) };
-    const prior = session.role === "worker" && settled.turn.cause === "input" ? turns.lastEndedTurnOf(session.id, settled.turn.id) : null;
-    const followsEmptyRecovery = prior?.outcome === "empty_recovery" && settled.inputs.some(({ messageId }) => {
-      const message = messages.getMessage(messageId);
-      return message?.sender === "pm" && prior.endedAt !== null && message.createdAt <= prior.endedAt;
-    });
     messages.settleTurn(p, session);
     reminders.observe(p, session, event);
-    workers.settleTurn(p, session, event, facts.worker, previousRun, settled, followsEmptyRecovery);
+    workers.settleTurn(p, session, event, facts.worker, previousRun, settled);
     if (previousRun) workers.backgroundWaits.recoverSessionIn(p, session.id);
     handover.afterDriverEvent(p, session, event);
     schedules.afterDriverEvent(p, session, event);

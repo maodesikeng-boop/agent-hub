@@ -25,7 +25,7 @@ export interface BackgroundWaitRecord {
 }
 
 export type WaitRelease =
-  | { readonly kind: "continued"; readonly continuationTurnId: TurnId }
+  | { readonly kind: "continued" }
   | { readonly kind: "drained" }
   | { readonly kind: "process_exited"; readonly reason: "interrupt" | "crash" | "startup_failed"; readonly failureReason: string }
   | { readonly kind: "process_exited"; readonly reason: "idle" }
@@ -68,7 +68,7 @@ export interface LedgerTurnBackgroundWaits {
   waitOf(sessionId: SessionId): BackgroundWaitRecord | null;
   settleReplyIn(p: Pending, reply: WorkerReply): { kind: "held" | "released" } | { kind: "deliver"; infoNote?: string };
   /**
-   * Enqueues each due reminder as one `worker.background_wait` PM notice and releases waits whose wake grace has passed.
+   * Enqueues at most one due reminder per wait and releases drained waits after the wake grace when no turn is running.
    * Postcondition: at most WORKER_BACKGROUND_REMIND_AT_MS.length reminders per wait; returns how many notices were enqueued.
    */
   runDue(nowMs: number): number;
@@ -142,7 +142,7 @@ export function createLedgerTurnBackgroundWaits(ctx: LedgerContext, deps: TurnBa
   function onBackgroundChangedIn(p: Pending, sessionId: SessionId, event: BackgroundChangedEvent): void {
     const wait = waitOf(sessionId);
     if (wait === null) return;
-    const at = now();
+    const at = event.at;
     const drainedAt = event.count === 0 ? wait.drainedAt ?? at : null;
     const tasks = event.count === 0 ? [] : (event.tasks ?? []).slice(0, MAX_BACKGROUND_TASKS_TRACKED);
     db.run(
@@ -172,7 +172,7 @@ export function createLedgerTurnBackgroundWaits(ctx: LedgerContext, deps: TurnBa
       releaseIn(p, turn.sessionId, { kind: reply.previousRun ? "restart" : "drained" });
       return { kind: "released" };
     }
-    if (wait !== null) releaseIn(p, turn.sessionId, { kind: "continued", continuationTurnId: turn.id });
+    if (wait !== null) releaseIn(p, turn.sessionId, { kind: "continued" });
     if (disposition.kind === "hold") {
       enterIn(p, turn, { draftMessageId, directChat, activeCount, tasks });
       return { kind: "held" };
@@ -206,17 +206,15 @@ export function createLedgerTurnBackgroundWaits(ctx: LedgerContext, deps: TurnBa
   }
 
   function remindIn(p: Pending, wait: BackgroundWaitRecord, at: number): number {
-    let count = 0;
     let { remindersSent, nextRemindAt } = wait;
     while (nextRemindAt !== null && nextRemindAt <= at) {
       remindersSent++;
-      if (enqueueReminderIn(p, wait, remindersSent, at)) count++;
       nextRemindAt = reminderAt(wait.waitingSince, remindersSent);
     }
     db.run("UPDATE turn_background_waits SET reminders_sent = ?, next_remind_at = ?, updated_at = ? WHERE turn_id = ?",
       remindersSent, nextRemindAt, at, wait.turnId);
     deps.publishTurnIn(p, wait.turnId);
-    return count;
+    return enqueueReminderIn(p, wait, remindersSent, at) ? 1 : 0;
   }
 
   function runDue(at: number): number {
@@ -224,7 +222,7 @@ export function createLedgerTurnBackgroundWaits(ctx: LedgerContext, deps: TurnBa
       `SELECT ${WAIT_COLUMNS} FROM turn_background_waits b
        WHERE ((b.active_count > 0 AND b.next_remind_at <= ?)
            OR (b.drained_at <= ? AND NOT EXISTS (
-             SELECT 1 FROM turns t WHERE t.session_id = b.session_id AND t.status = 'running' AND t.cause = 'self'
+             SELECT 1 FROM turns t WHERE t.session_id = b.session_id AND t.status = 'running'
            ))) AND ${NO_PENDING_RECEIPT}
        ORDER BY coalesce(b.next_remind_at, b.drained_at), b.turn_id LIMIT ?`,
       at, at - WORKER_BACKGROUND_WAKE_GRACE_MS, WORKER_PURGE_BATCH_ROWS,

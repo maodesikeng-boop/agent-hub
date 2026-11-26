@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WorkerId } from "../../shared/domain.ts";
+import { workerMessageDedupeKey, type WorkerId } from "../../shared/domain.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { canDeliverSystemMessage } from "../handlers.ts";
@@ -22,8 +22,8 @@ const remindersOf = (workerId: WorkerId) => f.db.all<{ id: number; text: string;
   f.project.conversationId, workerId,
 );
 
-function workerWithBackground(vendor: AgentVendor, text = report("做完了", "Waiting for CI")): WorkerId {
-  const { id: workerId } = f.hub("worker.start", { title: "Worker", task: "Push and wait for CI", noWorktree: true, vendor }).data.worker;
+function workerWithBackground(vendor: AgentVendor, text = report("做完了", "Waiting for CI"), graphId?: number): WorkerId {
+  const { id: workerId } = f.hub("worker.start", { title: "Worker", task: "Push and wait for CI", noWorktree: true, vendor, ...(graphId === undefined ? {} : { graphId, node: "a" }) }).data.worker;
   const brief = f.begin(workerId);
   f.emit(workerId, { type: "background.changed", count: 1, tasks: [{ id: "bg-1", label: "watch the CI run", startedAt: f.now() }], at: f.now() });
   f.emit(workerId, { type: "agent.text", uuid: "draft", text, at: f.now() });
@@ -82,6 +82,62 @@ describe("a self-waking vendor whose model replied while background commands run
     f.advance(10 * MINUTE);
     expect(f.ledger.runDueBackgroundWaits(f.now())).toBe(0);
     expect(reportsOf(workerId)).toHaveLength(1);
+  });
+
+  it("sends one failure to the PM when a follow-up crashes while a draft is held", () => {
+    const workerId = workerWithBackground("claude");
+    const { messageId } = f.hub("worker.send", { workerId, text: "Check the failure" }).data;
+    f.begin(workerId);
+    f.emit(workerId, { type: "session.exited", reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [messageId], at: f.now() });
+
+    const failures = f.ledger.messagesBefore(f.project.conversationId, Number.MAX_SAFE_INTEGER).messages
+      .filter((message) => message.workerId === workerId && message.meta?.event === "turn_failed");
+    expect(failures).toEqual([expect.objectContaining({ dedupeKey: workerMessageDedupeKey(workerId, "turn_failed", messageId) })]);
+    expect(reportsOf(workerId)).toEqual([]);
+  });
+
+  it.each(["PM follow-up", "user direct chat"])("keeps the draft held while a %s turn runs past the wake grace", (source) => {
+    const graphId = f.hub("graph.create", { specJson: '{"title":"Example","nodes":[{"key":"a","title":"A"}]}' }).data.graph.id;
+    const workerId = workerWithBackground("claude", report("做完了", "CI passed"), graphId);
+    const sessionId = f.sessionOf(workerId);
+    const conversationId = f.ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.conversationId;
+    if (conversationId == null) throw new Error("Missing worker conversation");
+    f.emit(workerId, { type: "background.changed", count: 0, tasks: [], at: f.now() });
+    const directChat = source === "user direct chat";
+    const { messageId } = directChat
+      ? f.ledger.postUserMessage({ conversationId, clientId: "direct", text: "What did CI check?" })
+      : f.hub("worker.send", { workerId, text: "Also check the logs" }).data;
+    f.emit(workerId, { type: "message.delivered", messageIds: [messageId], at: f.now() });
+    f.emit(workerId, { type: "message.processing", messageIds: [messageId], at: f.now() });
+    f.advance(MINUTE + 1);
+    f.ledger.runDueBackgroundWaits(f.now());
+    expect(reportsOf(workerId)).toEqual([]);
+    expect(f.ledger.getMessage(messageId)?.status).toBe("processing");
+
+    f.emit(workerId, { type: "agent.text", uuid: "followup", text: directChat ? "It checked the build." : report("做完了", "Logs checked"), at: f.now() });
+    f.end(workerId, { messageIds: [messageId] });
+    f.ledger.runDueBackgroundWaits(f.now());
+    expect(reportsOf(workerId).map((r) => r.summary)).toEqual([directChat ? "CI passed" : "Logs checked"]);
+  });
+
+  it("coalesces all reminders missed while asleep and keeps the next future deadline", () => {
+    const workerId = workerWithBackground("claude");
+    f.advance(31 * MINUTE);
+    expect(f.ledger.runDueBackgroundWaits(f.now())).toBe(1);
+    expect(f.ledger.runDueBackgroundWaits(f.now())).toBe(0);
+    expect(remindersOf(workerId).map((r) => r.reminder)).toEqual([2]);
+    f.advance(39 * MINUTE);
+    expect(f.ledger.runDueBackgroundWaits(f.now())).toBe(1);
+    expect(remindersOf(workerId).map((r) => r.reminder)).toEqual([2, 3]);
+  });
+
+  it("starts the wake grace at the recorded drain event time", () => {
+    const workerId = workerWithBackground("claude");
+    const at = f.now();
+    f.advance(MINUTE + 1);
+    f.emit(workerId, { type: "background.changed", count: 0, tasks: [], at });
+    f.ledger.runDueBackgroundWaits(f.now());
+    expect(reportsOf(workerId).map((r) => r.summary)).toEqual(["Waiting for CI"]);
   });
 
   it("delivers the held draft with a restart note and sends no reminder after a daemon restart", () => {

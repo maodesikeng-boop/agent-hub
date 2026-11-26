@@ -88,7 +88,7 @@ export interface LedgerTurns {
   ownsInput(messageId: MessageId): boolean;
   stopInputIn(p: Pending, messageId: MessageId, source: StopSource | null): boolean;
   runningTurnOf(sessionId: SessionId): TurnRecord | null;
-  lastEndedTurnOf(sessionId: SessionId, before?: TurnId): TurnRecord | null;
+  lastEndedTurnOf(sessionId: SessionId): TurnRecord | null;
   sessionTurns(sessionId: SessionId): TurnRecord[];
   turnOf(id: TurnId): TurnRecord | null;
   /** The newest turn that took this input, or null when no turn has taken it yet. */
@@ -254,8 +254,8 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
   const runningTurnOf = (id: SessionId) => db.get<TurnRecord>(
     `SELECT ${TURN_COLUMNS} FROM turns t WHERE t.session_id = ? AND t.status = 'running'`, id,
   ) ?? null;
-  const lastEndedTurnOf = (id: SessionId, before: TurnId = Number.MAX_SAFE_INTEGER) => db.get<TurnRecord>(
-    `SELECT ${TURN_COLUMNS} FROM turns t WHERE t.session_id = ? AND t.status = 'ended' AND t.id < ? ORDER BY t.id DESC LIMIT 1`, id, before,
+  const lastEndedTurnOf = (id: SessionId) => db.get<TurnRecord>(
+    `SELECT ${TURN_COLUMNS} FROM turns t WHERE t.session_id = ? AND t.status = 'ended' ORDER BY t.id DESC LIMIT 1`, id,
   ) ?? null;
   const turnOf = (id: TurnId) => turnById(db, id);
   const turnTakingInput = (id: MessageId) => db.get<TurnRecord>(
@@ -306,7 +306,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
 
   function finish(p: Pending, session: AgentSessionRow, turn: TurnRecord, end: End, legacy?: LegacyTurnReplyFacts): SettledTurn {
     const endedAt = Math.max(end.at, turn.startedAt);
-    const stopSource = ("source" in end ? end.source : undefined) ?? turn.stopSource;
+    const stopSource = turn.stopSource ?? ("source" in end ? end.source : undefined) ?? null;
     const reason = end.outcome === "failed" ? end.reason : null;
     const reply = end.outcome === "interrupted" ? null : turn.replyMessageId ?? legacy?.reply?.messageId ?? null;
     db.run(
@@ -349,7 +349,6 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       legacy = validateLegacyReply(db, session.id, storedFacts);
     }
     const running = runningTurnOf(session.id);
-    if (running !== null && event.at < running.startedAt) return null;
     const turn = attachFailedDeliveries(db, session, running, event);
     if (turn === null) return null;
     if (event.messageIds.length > 0 && !db.get(
@@ -358,7 +357,7 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
     )) return null;
     if (event.interrupted || event.shutdown) {
       return finish(p, session, turn, { outcome: "interrupted", at: event.at,
-        source: event.shutdown ? "shutdown" : turn.stopSource ?? "session_ended", stopRequested: turn.stopSource !== null });
+        source: event.shutdown ? "shutdown" : "session_ended", stopRequested: turn.stopSource !== null });
     }
     const failure = deps.failureReasonOfTurn?.(session, event) ?? null;
     if (failure !== null) return finish(p, session, turn, { outcome: "failed", at: event.at, reason: failure });
@@ -394,10 +393,10 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       return finish(p, session, turn, { outcome: "failed", at: event.at, reason: event.message });
     }
     if (event.reason === "crash" || event.reason === "startup_failed") {
-      return finish(p, session, turn, { outcome: "failed", at: event.at, reason: exitFailureReason(event), source: turn.stopSource ?? "crash" });
+      return finish(p, session, turn, { outcome: "failed", at: event.at, reason: exitFailureReason(event), source: "crash" });
     }
     return finish(p, session, turn, { outcome: "interrupted", at: event.at,
-      source: event.reason === "shutdown" ? "shutdown" : turn.stopSource ?? "session_ended", stopRequested: turn.stopSource !== null });
+      source: event.reason === "shutdown" ? "shutdown" : "session_ended", stopRequested: turn.stopSource !== null });
   }
 
   function recoverAfterRestartIn(p: Pending): RecoveryResend[] {

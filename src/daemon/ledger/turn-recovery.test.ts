@@ -46,8 +46,8 @@ it.each(["recoverable", "unrecoverable"])("accounts for a %s brief after shutdow
   const graphId = graph();
   const { id: workerId } = f.hub("worker.start", { ...task(graphId), noWorktree: true }).data.worker;
   const id = f.begin(workerId);
+  f.end(workerId, { messageIds: [id], ok: false, interrupted: true, shutdown: true });
   if (kind === "unrecoverable") f.ledger.stopMessage(id, f.sessionOf(workerId));
-  f.end(workerId, { messageIds: kind === "recoverable" ? [id] : [], ok: false, interrupted: true, shutdown: true });
 
   const recovered = f.ledger.recoverAfterRestart();
   if (kind === "recoverable") {
@@ -69,6 +69,22 @@ it("keeps a user stop stopped across restart", async () => {
   expect(f.ledger.recoverAfterRestart().resentMessageIds).toEqual([]);
   await receiveFailure(workerId, "用户亲手停了");
   expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+});
+
+it.each(["shutdown receipt", "shutdown exit", "restart after crash"])("keeps the user stop source through %s", (terminal) => {
+  const { id: workerId, workerConversationId } = f.hub("worker.start", { title: "Worker", task: "Inspect", noWorktree: true }).data.worker;
+  const id = f.begin(workerId);
+  f.ledger.requestStop(workerConversationId);
+  if (terminal === "shutdown receipt") {
+    f.end(workerId, { ok: false, interrupted: true, shutdown: true });
+  } else if (terminal === "shutdown exit") {
+    f.emit(workerId, { type: "session.exited", reason: "shutdown", exitCode: 0, signal: null, hadResult: false, messageIds: [id], at: f.now() });
+  }
+
+  expect(f.ledger.recoverAfterRestart().resentMessageIds).toEqual([]);
+  expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+  expect(f.db.get("SELECT status, stop_source FROM turns WHERE session_id = ?", f.sessionOf(workerId))).toEqual({ status: "ended", stop_source: "user" });
+  expect(failures(workerId).some(({ text }) => text.includes("没能自动重发"))).toBe(false);
 });
 
 it("shows the final launch failure after successful setup as the last turn", async () => {

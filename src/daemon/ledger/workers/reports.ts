@@ -85,7 +85,7 @@ export function insertReport(
   turnMessageId: MessageId,
   reportMessage: ReportMessage | null,
   note: string | null = null,
-  opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult; followsEmptyRecovery?: boolean; infoNote?: string },
+  opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult; infoNote?: string },
 ): void {
   const text = reportMessage?.text ?? "";
   const parsed = parseWorkerReport(text);
@@ -114,7 +114,7 @@ export function insertReport(
   }
   if (graphHandling.outcome === "completed") {
     const id = insertLine(w, p, worker, { ...report, deliver: body, wakePm: graphHandling.wakePmWithReport, completedStep: true });
-    endWorkerIn(w, p, worker, { notifyGraph: false, recordEndedLine: opts?.followsEmptyRecovery !== true, ...(id === undefined ? {} : { excludeMessageIds: new Set([id]) }) });
+    endWorkerIn(w, p, worker, { notifyGraph: false, ...(id === undefined ? {} : { excludeMessageIds: new Set([id]) }) });
     graphHandling.completeStep();
     return;
   }

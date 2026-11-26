@@ -88,6 +88,21 @@ describe("one turn per model execution", () => {
     expect(summaries[1]!.id).not.toBe(summaries[0]!.id);
   });
 
+  it("settles a reply received after the wall clock moves backward", async () => {
+    const { messageId } = f.ledger.postUserMessage({ conversationId: f.project.conversationId, clientId: "rollback", text: "Start" });
+    pmEmit("message.delivered", { messageIds: [messageId] });
+    pmEmit("message.processing", { messageIds: [messageId] });
+    const startedAt = f.now();
+    f.advance(-5);
+    pmEmit("agent.text", { uuid: "rollback-reply", text: "Answer" });
+    pmEmit("turn.ended", { messageIds: [messageId], durationMs: null, interrupted: false, ok: true });
+    await f.ledger.settleDriverEvents();
+
+    expect(pageTurns()).toEqual([expect.objectContaining({ status: "ended", outcome: "ok", startedAt, endedAt: startedAt, durationMs: 0 })]);
+    expect(f.ledger.getMessage(messageId)?.status).toBe("replied");
+    expect(activeTurnOf(f.pm.sessionId)).toBeNull();
+  });
+
   it("settles an input as replied when the success receipt arrives after a provisional stop", async () => {
     const { messageId } = f.ledger.postUserMessage({ conversationId: f.project.conversationId, clientId: "race", text: "Question" });
     pmEmit("message.delivered", { messageIds: [messageId] });
@@ -183,7 +198,11 @@ describe("restart recovery", () => {
     takeIn(workerId, followup);
     f.emit(workerId, { type: "agent.text", uuid: "report", text: report("做完了", "Tests pass"), at: f.now() });
     f.end(workerId, { messageIds: [followup], ok: true, interrupted: false });
-    expect(workerLinesOf(workerId).filter((l) => l.event !== "started").map((l) => [l.event, l.status])).toEqual([["report", "done"]]);
+    expect(workerLinesOf(workerId).filter((l) => l.event !== "started" && l.event !== "ended").map((l) => [l.event, l.status])).toEqual([["report", "done"]]);
+    const snapshot = f.ledger.snapshot();
+    const conversationId = snapshot.sessions.find((s) => s.sessionId === sessionId)?.conversationId;
+    const workerConversation = snapshot.conversations.find((c) => c.conversation.id === conversationId);
+    expect(workerConversation?.workerLine).toMatchObject({ line: { event: "ended" }, endedAt: f.now() });
   });
 
   it("tells the PM once that an empty recovery turn produced nothing, without calling it unformatted", () => {

@@ -632,26 +632,31 @@ describe("hub worker log --stats tool wait time", () => {
   });
 });
 
-it("keeps a replayed completion on the turn that recorded the tool before its id was reused", () => {
+it("ignores a repeated old result and accepts the new tool result after clock rollback", () => {
   const w = startWorker("claude");
   startTurn(w);
-  emit(w, { type: "agent.tool", uuid: "first", toolUseId: "reused", name: "Bash", input: { command: "printf first" }, ...at() });
+  emit(w, { type: "agent.tool", uuid: "first", toolUseId: "first", name: "Bash", input: { command: "printf first" }, ...at() });
+  advance(1_000);
+  const result: DriverEvent = { type: "agent.tool_result", toolUseIds: ["first"], ...at() };
+  emit(w, result);
   endTurn(w);
   advance(1_000);
-  const result: DriverEvent = { type: "agent.tool_result", toolUseIds: ["reused"], ...at() };
-  advance(1_000);
   emit(w, { type: "turn.started", ...at() });
-  emit(w, { type: "agent.tool", uuid: "second", toolUseId: "reused", name: "Bash", input: { command: "printf second" }, ...at(), pending: true });
-  emit(w, result);
-  emit(w, result);
-  expect(show(w).text).toContain("现在：Running command: printf second，等待开始");
-
-  advance(10_000);
-  emit(w, { type: "agent.tool_running", toolUseId: "reused", ...at() });
-  advance(2_000);
-  expect(show(w).text).toContain("现在：Running command: printf second，已跑 2s");
+  emit(w, { type: "agent.tool", uuid: "second", toolUseId: "second", name: "Bash", input: { command: "printf second" }, ...at(), pending: true });
   emit(w, { ...result, ...at() });
-  expect(log(w).data.steps.at(-1)?.text).toBe("Running command: printf second（用了 2s）");
+  emit(w, { ...result, ...at() });
+  expect(show(w).text).toContain("现在：Running command: printf second，等待开始");
+  expect(log(w).data.steps.filter((step) => step.text.includes("printf first")).map((step) => step.text))
+    .toEqual(["Running command: printf first（用了 1s）"]);
+
+  emit(w, { type: "agent.tool_running", toolUseId: "second", ...at() });
+  const completed: DriverEvent = { type: "agent.tool_result", toolUseIds: ["second"], at: now - 5 };
+  emit(w, completed);
+  advance(2_000);
+  emit(w, { ...completed, ...at() });
+  expect(show(w).text).not.toContain("现在：Running command: printf second");
+  expect(log(w).data.steps.at(-1)?.text).toBe("Running command: printf second");
+  expect(db.get<{ ended_at: number }>("SELECT ended_at FROM turn_tools WHERE tool_use_id = 'second'")?.ended_at).toBe(completed.at);
 });
 
 describe.each(Object.keys(OTHER_TOOLS) as AgentVendor[])("%s 的 hub worker log --stats", (vendor) => {

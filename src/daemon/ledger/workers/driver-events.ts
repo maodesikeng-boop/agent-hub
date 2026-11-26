@@ -3,7 +3,7 @@ import type { DriverEvent } from "../../../shared/driver.ts";
 import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 import type { Pending } from "../context.ts";
 import { exitFailureReason } from "../messages.ts";
-import type { BackgroundAtReply } from "../turn-background-waits.ts";
+import type { BackgroundAtReply, WaitRelease } from "../turn-background-waits.ts";
 import type { SettledTurn } from "../turns.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { TurnCompletionFacts, TurnEndedEvent } from "../turn-completions.ts";
@@ -64,7 +64,7 @@ function markBackground(w: WorkersCtx, p: Pending, sessionId: SessionId): void {
 function onTurnOutcome(
   w: WorkersCtx, p: Pending, session: AgentSessionRow, workerId: WorkerId,
   event: Extract<DriverEvent, { type: "turn.ended" | "session.exited" | "driver.error" }>, outcome: TurnOutcome,
-  facts: TurnCompletionFacts["worker"], settlement?: { settled: SettledTurn; previousRun: boolean; followsEmptyRecovery: boolean },
+  facts: TurnCompletionFacts["worker"], settlement?: { settled: SettledTurn; previousRun: boolean },
 ): void {
   const worker = workerRow(w, workerId);
   if (worker === null) return;
@@ -101,7 +101,7 @@ function onTurnOutcome(
       return;
     }
     if (waiting !== null && turn !== undefined) {
-      w.backgroundWaits.releaseIn(p, session.id, { kind: "continued", continuationTurnId: turn.id });
+      w.backgroundWaits.releaseIn(p, session.id, { kind: "continued" });
     }
     if (!quiet && turnMessageId !== null) insertTurnFailed(w, p, worker, turnMessageId, outcome.messageIds, outcome.reason);
     return;
@@ -119,7 +119,7 @@ function onTurnOutcome(
   if (completedUpToId === null && (reply?.text ?? "").trim() === "") return;
   const note = settlement.previousRun && background.activeCount > 0 ? backgroundKilledNote("restart") : null;
   insertReport(w, p, worker, turnMessageId, reply, note, {
-    hasPendingFollowup, followsEmptyRecovery: settlement.followsEmptyRecovery,
+    hasPendingFollowup,
     ...(disposition.infoNote === undefined ? {} : { infoNote: disposition.infoNote }),
   });
 }
@@ -139,14 +139,14 @@ function reportEmptyRecovery(w: WorkersCtx, p: Pending, session: AgentSessionRow
 }
 
 export function settleTurn(
-  w: WorkersCtx, p: Pending, session: AgentSessionRow, input: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean, settled: SettledTurn, followsEmptyRecovery: boolean,
+  w: WorkersCtx, p: Pending, session: AgentSessionRow, input: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean, settled: SettledTurn,
 ): void {
   if (session.role !== "worker" || session.workerId === null || session.conversationId === null) return;
   if (settled.turn.outcome === "empty_recovery") return reportEmptyRecovery(w, p, session, session.workerId, settled);
   const event = withoutChecklistInputs(w, input);
   const outcome = turnOutcome(event);
   if (outcome === null) return;
-  onTurnOutcome(w, p, session, session.workerId, event, outcome, facts, { settled, previousRun, followsEmptyRecovery });
+  onTurnOutcome(w, p, session, session.workerId, event, outcome, facts, { settled, previousRun });
 }
 
 export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessionRow, input: Exclude<DriverEvent, TurnEndedEvent>): void {
@@ -157,18 +157,6 @@ export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessio
   if (event.type === "background.changed") {
     w.backgroundWaits.onBackgroundChangedIn(p, session.id, event);
     return;
-  }
-  if (event.type === "session.exited" && event.reason !== "shutdown") {
-    const { reason } = event;
-    const release = reason === "idle"
-      ? w.backgroundWaits.releaseIn(p, session.id, { kind: "process_exited", reason })
-      : w.backgroundWaits.releaseIn(p, session.id, {
-        kind: "process_exited", reason, failureReason: reason === "interrupt" ? TURN_STOPPED : exitFailureReason(event),
-      });
-    if (release !== null && event.messageIds.length === 0) {
-      p.after.push(() => { w.turnStarts.delete(session.id); });
-      return;
-    }
   }
   if (event.type === "message.delivered") {
     // Messages delivered mid-turn do not start a new turn, because earlier text in this turn still belongs to the report.
@@ -191,6 +179,18 @@ export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessio
   }
   if (event.type !== "session.exited" && event.type !== "driver.error") return;
   const outcome = turnOutcome(event);
+  if (event.type === "session.exited" && event.reason !== "shutdown") {
+    const { reason } = event;
+    const followupNotifiesPm = outcome?.event === "turn_failed" && !isDirectChat(w, conversationId, event.messageIds);
+    const release: WaitRelease = followupNotifiesPm ? { kind: "continued" }
+      : reason === "idle" ? { kind: "process_exited", reason }
+      : { kind: "process_exited", reason, failureReason: reason === "interrupt" ? TURN_STOPPED : exitFailureReason(event) };
+    const wait = w.backgroundWaits.releaseIn(p, session.id, release);
+    if (wait !== null && event.messageIds.length === 0) {
+      p.after.push(() => { w.turnStarts.delete(session.id); });
+      return;
+    }
+  }
   if (outcome === null) {
     if (event.type === "session.exited" && event.reason !== "shutdown") {
       w.turnStarts.delete(session.id);
