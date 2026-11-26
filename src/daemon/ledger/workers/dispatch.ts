@@ -1,5 +1,5 @@
 import { normalizeWorkerTitle, type WorkerRecord } from "../../../shared/domain.ts";
-import { splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
+import type { AgentVendor } from "../../../shared/vendors.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../../driver/write-scope.ts";
 import { fail } from "../context.ts";
 import type { Pending } from "../context.ts";
@@ -8,7 +8,7 @@ import type { TaskGraphWorkersBridge } from "../task-graphs.ts";
 import {
   assertAgentVendor,
   checkTargetVendorUsable,
-  checkedModelEffort,
+  resolveWorkerModelEffort,
   insertWorkerRowsIn,
   insertWorkerSessionIn,
   kickOffWorkerIn,
@@ -35,9 +35,12 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
   const vendor: AgentVendor = input.vendor ?? input.pmVendor;
   assertAgentVendor(vendor);
   checkTargetVendorUsable(w, vendor);
-  const inherited =
-    vendor === input.pmVendor ? splitModelEffort(vendor, input.pmModel, input.pmEffort, w.ctx.modelCatalog(vendor)) : { model: null, effort: null };
-  const { model, effort } = checkedModelEffort(w, vendor, input.model, input.effort, inherited);
+  const { overrides, effective } = resolveWorkerModelEffort(w, {
+    vendor,
+    model: input.model,
+    effort: input.effort ?? undefined,
+    defaults: vendor === input.pmVendor ? { model: input.pmModel, effort: input.pmEffort } : null,
+  });
 
   if (input.sandboxStepId === undefined && !w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
   const capabilities = input.sandboxStepId === undefined ? null : requireSandboxRequest(w, input.pmId, {
@@ -59,8 +62,7 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
     project,
     title,
     task,
-    model,
-    effort,
+    ...overrides,
     readonly: input.readonly,
     capabilities: input.capabilities,
     workspace,
@@ -68,7 +70,7 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
     review: plan.kind === "review",
     reviewJson: newReviewJson(plan),
   });
-  const session = insertWorkerSessionIn(w, p, worker, card, { vendor, model, effort }, inherited);
+  const session = insertWorkerSessionIn(w, p, worker, card, { vendor, ...effective });
 
   const workerRecord = toWorkerRecord(worker);
   const firstMessageText = input.buildFirstMessage(session.id, inheritedPlan?.fromWorkerId ?? null, workerRecord, card);

@@ -5,7 +5,7 @@ import type { HubCallContext } from "../../../shared/ledger.ts";
 import { MAX_TASK_BYTES, TAKEOVER_PREDECESSORS_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { reviewTakeoverWorkspaceNote } from "../../../shared/review.ts";
-import { splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
+import type { AgentVendor } from "../../../shared/vendors.ts";
 import { SETUP_RECEIPT_NOTE, WORKER_READONLY_NOTE, buildWorkerFirstMessage } from "../../prompt.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../../driver/write-scope.ts";
 import {
@@ -28,7 +28,7 @@ import { workerRow, workerSession } from "./ctx.ts";
 import {
   assertAgentVendor,
   checkTargetVendorUsable,
-  checkedModelEffort,
+  resolveWorkerModelEffort,
   insertWorkerRowsIn,
   insertWorkerSessionIn,
   kickOffWorkerIn,
@@ -49,7 +49,7 @@ type Takeover = ReturnType<typeof planTakeover>;
 type ReviewPlan = Extract<StepWorkspacePlan, { kind: "review" }>;
 type UpstreamInherit = Extract<StepWorkspacePlan, { kind: "inherit" }>;
 type StartTask = { title: string; task: string; pmNote: string | null; stepHasBrief: boolean };
-type StartAgent = { vendor: AgentVendor; model: string | null; effort: string | null; inherited: { model: string | null; effort: string | null }; readonly: boolean; capabilities: WorkerCapabilities };
+type StartAgent = { vendor: AgentVendor; setting: ReturnType<typeof resolveWorkerModelEffort>; readonly: boolean; capabilities: WorkerCapabilities };
 type StartWorkspace = {
   reviewPlan: ReviewPlan | null;
   inherit: WorkerDbRow | null;
@@ -129,12 +129,15 @@ function resolveStartAgent(w: WorkersCtx, caller: PmCaller, args: StartArgs, bin
   }
   const reuseStepModel = bindTarget !== undefined && args.vendor === undefined && bindTarget.vendor === vendor;
   const givenModel = typeof args.model === "string" ? args.model.trim() || null : reuseStepModel ? bindTarget.model : null;
-  const givenEffort = typeof args.effort === "string" ? args.effort.trim() || null : reuseStepModel ? bindTarget.effort : null;
-  const inherited =
-    vendor === caller.vendor ? splitModelEffort(vendor, caller.model, caller.effort, w.ctx.modelCatalog(vendor)) : { model: null, effort: null };
-  const { model, effort } = checkedModelEffort(w, vendor, givenModel, givenEffort, inherited);
+  const givenEffort = args.effort === undefined && reuseStepModel ? bindTarget.effort ?? undefined : args.effort;
+  const setting = resolveWorkerModelEffort(w, {
+    vendor,
+    model: givenModel,
+    effort: typeof givenEffort === "string" ? givenEffort.trim() || undefined : givenEffort,
+    defaults: vendor === caller.vendor ? { model: caller.model, effort: caller.effort } : null,
+  });
   const readonly = args.readonly !== undefined ? args.readonly === true : (bindTarget?.readonly ?? false);
-  return { vendor, model, effort, inherited, readonly, capabilities: resolveStartCapabilities(args, bindTarget) };
+  return { vendor, setting, readonly, capabilities: resolveStartCapabilities(args, bindTarget) };
 }
 
 function resolveStartCapabilities(args: StartArgs, bindTarget: WorkerBindTarget | undefined): WorkerCapabilities {
@@ -355,8 +358,7 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
     project,
     title: brief.title,
     task: brief.task,
-    model: agent.model,
-    effort: agent.effort,
+    ...agent.setting.overrides,
     readonly: agent.readonly,
     capabilities: agent.capabilities,
     workspace: space.workspace,
@@ -364,7 +366,7 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
     review: space.reviewPlan !== null,
     reviewJson: space.reviewPlan === null ? null : newReviewJson(space.reviewPlan),
   });
-  const session = insertWorkerSessionIn(w, p, worker, card, agent, agent.inherited);
+  const session = insertWorkerSessionIn(w, p, worker, card, { vendor: agent.vendor, ...agent.setting.effective });
   const start = { worker, session, card, args, agent, brief, space };
   const firstMessageText = firstMessageOf(w, start, bindTarget, takeover, predecessors);
   kickOffWorkerIn(w, p, {
