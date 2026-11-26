@@ -1,8 +1,10 @@
-import { CHECKLIST_MESSAGE_KIND, applyChecklistUpdate, checklistOf, sameChecklist, turnChecklist, type ChecklistMessageMeta } from "../../shared/checklist.ts";
+import { randomUUID } from "node:crypto";
+import { CHECKLIST_MESSAGE_KIND, applyChecklistUpdate, checklistOf, sameChecklist, turnChecklist, type ChecklistItem, type ChecklistMessageMeta } from "../../shared/checklist.ts";
 import type { AgentSessionRow, SessionId } from "../../shared/domain.ts";
 import type { AgentChecklistEvent } from "../../shared/driver.ts";
+import { hubChecklistUpdate, type HubChecklistRequest } from "../../shared/hub-checklist.ts";
 import { toolAction } from "../../shared/step-labels.ts";
-import type { LedgerContext, Pending } from "./context.ts";
+import { fail, type LedgerContext, type Pending } from "./context.ts";
 import { parseMessageMeta } from "./rows.ts";
 
 export const PROCESS_MESSAGE_KINDS_SQL = `('tool', '${CHECKLIST_MESSAGE_KIND}')`;
@@ -16,12 +18,14 @@ interface ChecklistMessageFields {
 
 type InsertChecklist = (p: Pending, session: AgentSessionRow, fields: ChecklistMessageFields) => boolean;
 
-export function createLedgerChecklist({ db }: LedgerContext, insert: InsertChecklist) {
+export function createLedgerChecklist({ db, now }: LedgerContext, insert: InsertChecklist) {
   const itemsOf = (raw: string | null) => checklistOf({ kind: CHECKLIST_MESSAGE_KIND, meta: parseMessageMeta(CHECKLIST_MESSAGE_KIND, raw) }) ?? [];
+  const current = (sessionId: SessionId) =>
+    itemsOf(db.get<{ snapshot: string }>("SELECT snapshot FROM session_checklists WHERE session_id = ?", sessionId)?.snapshot ?? null);
 
-  const apply = (p: Pending, session: AgentSessionRow, event: AgentChecklistEvent) => {
+  const apply = (p: Pending, session: AgentSessionRow, event: AgentChecklistEvent, existing?: readonly ChecklistItem[]) => {
     if (session.conversationId === null || session.status === "ended" || event.parentToolUseId !== undefined) return;
-    const prev = itemsOf(db.get<{ snapshot: string }>("SELECT snapshot FROM session_checklists WHERE session_id = ?", session.id)?.snapshot ?? null);
+    const prev = existing ?? current(session.id);
     const checklist = applyChecklistUpdate(prev, event.update);
     if (sameChecklist(prev, checklist)) return;
     const baseline = itemsOf(db.get<{ baseline: string }>("SELECT baseline FROM session_checklist_turns WHERE session_id = ?", session.id)?.baseline ?? null);
@@ -45,6 +49,16 @@ export function createLedgerChecklist({ db }: LedgerContext, insert: InsertCheck
     }
   };
 
+  const fromHub = (p: Pending, session: AgentSessionRow, request: HubChecklistRequest): AgentChecklistEvent => {
+    if (session.conversationId === null || session.status === "ended") throw fail("conflict", "会话已关闭，不能更新进度清单");
+    const prev = current(session.id);
+    const result = hubChecklistUpdate(request, prev);
+    if (!result.ok) throw fail("invalid", result.error);
+    const event: AgentChecklistEvent = { type: "agent.checklist", uuid: randomUUID(), update: result.update, at: now() };
+    apply(p, session, event, prev);
+    return event;
+  };
+
   const endTurn = (sessionId: SessionId): void => {
     db.run(
       `INSERT INTO session_checklist_turns (session_id, baseline)
@@ -54,9 +68,10 @@ export function createLedgerChecklist({ db }: LedgerContext, insert: InsertCheck
     );
   };
 
-  return { apply, endTurn };
+  return { apply, fromHub, endTurn };
 }
 
 export function isChecklistToolCall(name: string): boolean {
-  return toolAction(name) === "todo";
+  const action = toolAction(name);
+  return action === "todo" || action === "todo_read";
 }

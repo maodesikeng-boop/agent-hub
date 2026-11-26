@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util";
+import { parseHubChecklistArgs } from "../shared/hub-checklist.ts";
 import {
   UsageError,
   describeParseError,
@@ -28,6 +29,12 @@ const GROUP_PARSERS: readonly ((args: GroupArgs) => Parsed | undefined)[] = [
 ];
 
 export function parseCommand(argv: string[], env: HubEnv, cwd: string): Parsed | "help" | "help-graph" {
+  if (argv[0] === "checklist") {
+    if (argv.length === 2 && argv[1] === "--help") return "help";
+    const checklist = parseHubChecklistArgs(argv.slice(1));
+    if (!checklist.ok) throw new UsageError(checklist.reason);
+    return { command: "checklist", body: checklist.request, textSource: null };
+  }
   const mangled = findGitBashMangledArg(argv, env);
   if (mangled !== null) {
     throw new UsageError(

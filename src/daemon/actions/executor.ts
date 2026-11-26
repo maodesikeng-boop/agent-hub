@@ -30,8 +30,9 @@ SELECT * FROM actions
 WHERE status = 'pending' AND next_attempt_at <= ?
 ORDER BY CASE
   WHEN type = 'session.start' THEN 0
-  WHEN type = 'session.send' AND (CASE WHEN json_valid(params) THEN json_extract(params, '$.recovery') END) = 1 THEN 1
-  ELSE 2
+  WHEN type = 'session.send' AND (CASE WHEN json_valid(params) THEN json_extract(params, '$.rider') END) = 1 THEN 1
+  WHEN type = 'session.send' AND (CASE WHEN json_valid(params) THEN json_extract(params, '$.recovery') END) = 1 THEN 2
+  ELSE 3
 END, next_attempt_at, id`;
 
 function errorMessage(error: unknown): string {

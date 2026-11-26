@@ -44,6 +44,21 @@ function sendAction(messageId = 1, sessionId = 1) {
 }
 
 describe("执行器", () => {
+  it("queues a due rider before resending an older user turn after a restart", async () => {
+    const resend = enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 1, source: "user", recovery: true } }, Date.now()).row;
+    const reminder = enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 2, source: "system", rider: true } }, Date.now()).row;
+    const order: number[] = [];
+    const executor = createActionExecutor(db, deps);
+    executor.register("session.send", (row) => {
+      order.push(row.id);
+      return { kind: "done" };
+    });
+    executor.start();
+    await vi.advanceTimersByTimeAsync(1);
+    await executor.stop();
+    expect(order).toEqual([reminder.id, resend.id]);
+  });
+
   it("取到点的动作执行，做完标完成", async () => {
     const action = sendAction();
     const handler = vi.fn((_a: AnyActionRow): ActionResult => ({ kind: "done" }));

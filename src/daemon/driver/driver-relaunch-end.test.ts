@@ -1,6 +1,7 @@
 // 驱动层 M2：m2-plan 第 4 节“W3 驱动层 + 提示词 + 假 claude”测试表里驱动层的那几条，外加第 6 节第 4 条的进程组。
 // 提示词那几条在 src/daemon/prompt.test.ts，假 claude 自己的在 test/fake-claude/fake-claude.test.ts。
 import { ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -12,7 +13,14 @@ import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, type Harness } from "./t
 let h: Harness | undefined;
 /** 测试里起的、要在最后确保结束的进程号。 */
 const leftovers: number[] = [];
+const strayChildren: ChildProcess[] = [];
 afterEach(async () => {
+  for (const child of strayChildren.splice(0)) {
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+    const exited = once(child, "exit");
+    child.kill("SIGKILL");
+    await exited;
+  }
   await h?.cleanup();
   h = undefined;
   for (const pid of leftovers.splice(0)) signal(pid, "SIGKILL");
@@ -857,7 +865,7 @@ describe.skipIf(process.platform === "win32")("进程组", () => {
         stdio: ["pipe", "ignore", "ignore"],
         detached,
       });
-      if (child.pid) leftovers.push(child.pid);
+      if (child.pid) strayChildren.push(child);
       return child;
     };
     const line = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n";

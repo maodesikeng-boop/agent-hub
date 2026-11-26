@@ -985,6 +985,28 @@ describe("1. 首次启动与完整流式回合", () => {
 });
 
 describe("2. 长连接复用与会话恢复（--conversation）", () => {
+  it("keeps a rider through stop and model relaunch without starting or holding a turn", async () => {
+    const t = makeAgyHarness({
+      script: { assignedConversationId: "agy-rider", defaultTurn: { steps: [{ type: "text", deltas: ["Done"] }] } },
+      driver: { idleCloseMs: 60 },
+    });
+    const s = t.addSession();
+    const reminder = "List the steps before editing";
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("turn.ended");
+    await expect(t.driver.send(s.id, { messageIds: [2], source: "system", rider: true, text: reminder })).resolves.toEqual({ kind: "queued" });
+    await t.driver.interrupt(s.id);
+    await t.waitFor("session.exited");
+    expect(t.stdinBlocks()).toEqual([["Start"]]);
+    expect(t.of("turn.ended")).toHaveLength(1);
+
+    t.store.set(s.id, { model: "gemini-3-pro-low" });
+    await t.driver.send(s.id, user(3, "Continue"));
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ messageIds: [2, 3] });
+    expect(t.argvs()).toHaveLength(2);
+    expect(t.stdinBlocks()[1]).toEqual([reminder, "Continue"]);
+  });
+
   it("进程重启恢复后第二轮同样 step_index 的消息与工具不会与第一轮 UUID / toolUseId 冲突", async () => {
     const t = makeAgyHarness({
       script: {
@@ -2059,6 +2081,33 @@ describe("7. 后台任务跟踪与 background.changed 事件", () => {
     await t.driver.send(s.id, user(3, "z"));
     await t.waitFor("turn.ended", undefined, 3);
     expect(t.stdinBlocks().at(-1)).toContain(backgroundTasksKilledNote("hold_max", ["sleep 30"]));
+  });
+});
+
+describe("headless checklist stream", () => {
+  it("applies each recorded update_steps call once and emits no ordinary tool events", async () => {
+    const frames = readFileSync(new URL("../../../test/fixtures/progress/agy-update-steps.live.jsonl", import.meta.url), "utf8")
+      .trimEnd().split("\n").map((line) => {
+        const { conversation_id: _ignored, ...stepUpdate } = (JSON.parse(line) as { step_update: Record<string, unknown> }).step_update;
+        return { type: "rawStepUpdate" as const, stepUpdate };
+      });
+    const t = makeAgyHarness({ script: { turns: [{ steps: frames }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Update the checklist"));
+    await t.waitFor("turn.ended");
+    expect(t.of("agent.checklist").map((event) => event.update)).toEqual([
+      { kind: "replace", items: [
+        { id: null, title: "Check readiness", status: "in_progress" },
+        { id: null, title: "Close probe", status: "pending" },
+      ] },
+      { kind: "replace", items: [
+        { id: null, title: "Check readiness", status: "completed" },
+        { id: null, title: "Close probe", status: "cancelled" },
+      ] },
+    ]);
+    expect(t.of("agent.tool")).toEqual([]);
+    expect(t.of("agent.tool_preview")).toEqual([]);
+    expect(t.of("agent.tool_result")).toEqual([]);
   });
 });
 

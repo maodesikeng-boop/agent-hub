@@ -2,6 +2,7 @@
 // 遍历 VENDOR_LIST 校验每家均声明合法的 models.routerDefault，且档位严格落在该模型允许的 efforts 内。
 import { describe, expect, it } from "vitest";
 import { bundledModelCatalog, checkAgentSetting, effortsFor } from "../shared/vendors.ts";
+import { checklistPromptTool } from "./_common/checklist.ts";
 import { VENDOR_LIST } from "./registry.ts";
 import type { VendorModelsSpec } from "./types.ts";
 
@@ -61,7 +62,11 @@ describe("VENDOR_LIST routerDefault 快模型预设契约守卫", () => {
 });
 
 describe("checklist prompt tool", () => {
-  it.each(VENDOR_LIST)("$id has a prompt tool exactly when it has checklist sources", ({ checklist }) => {
-    expect(Boolean(checklist.promptTool?.trim())).toBe(checklist.sources.length !== 0);
+  it.each(VENDOR_LIST)("$id names a native tool if it has a checklist source, or the hub fallback", (spec) => {
+    const prompt = checklistPromptTool(spec);
+    expect(prompt.tool.trim()).not.toBe("");
+    expect(prompt.hub).toBe(spec.checklist.sources.length === 0);
+    if (prompt.hub) expect(spec.checklist.promptTool).toBeUndefined();
+    else expect(prompt.tool).toBe(spec.checklist.promptTool);
   });
 });
