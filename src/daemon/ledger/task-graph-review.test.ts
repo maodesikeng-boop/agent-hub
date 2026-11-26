@@ -413,10 +413,11 @@ describe("审查步骤只查不修", () => {
     expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("running");
     await runVerify();
     const node = graphNow(graph.id).nodes[1]!;
-    expect(stateOf(node)).toBe("waiting:user");
+    expect(stateOf(node)).toBe("waiting:pm");
     expect(node.artifact).toMatchObject({ reviewVerdict: "PASS", verifiedCommit: sha });
     expect(node.artifact?.deliverables?.map((d) => [d.label, d.mime])).toEqual([["审查结论", "text/markdown"]]);
-    expect(askOf(ledger.getMessage(node.gateAskMessageId!)!)?.deliverables?.map((d) => d.label)).toEqual(["审查结论"]);
+    const { messageId } = ledger.hubCall(lin.sessionId, "ask", { graphId: graph.id, node: node.key, text: "采纳审查结论吗？" }).data;
+    expect(askOf(ledger.getMessage(messageId)!)?.deliverables?.map((d) => d.label)).toEqual(["审查结论"]);
     expect(pendingDecisionsOf(ledger.snapshot())[0]!.deliverables?.map((d) => d.label)).toEqual(["审查结论"]);
   });
 

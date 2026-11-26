@@ -10,7 +10,6 @@ const heredoc = (cmd: string, body: string) => `${cmd} --stdin <<'EOF'\n${body}\
 const startTray = (task = "用户已拍板：手机上 Needs You 托盘降到约三分之一屏，超出部分托盘内滚动；桌面不变。提 PR，汇报里给截图路径和改动文件名单。", title = "手机 Needs You 托盘降到约三分之一屏") =>
   heredoc(`${hub} worker start --title "${title}"`, task);
 const readShot = (ctx: ScenarioContext): FakeTurn["steps"] => [{ tool: { name: "Read", input: { file_path: `${ctx.shotsDir}/mobile-router-390x844.png` }, result: "[image]" } }];
-/** 反例：把一件事拆成 n 个节点的图（K1 当时那样：带门禁），不先加载手册（T1、L1 必须不过）。 */
 const bigGraph = (title: string, keys: string[]) =>
   heredoc(
     `${hub} graph create --title "${title}"`,
@@ -18,7 +17,6 @@ const bigGraph = (title: string, keys: string[]) =>
       nodes: keys.map((key, i) => ({
         key,
         title: key,
-        ...(key.startsWith("ok") ? { question: `${key}？`, options: ["确认", "暂缓"] } : {}),
         ...(i > 0 ? { deps: [keys[i - 1]] } : {}),
       })),
     }),
@@ -116,7 +114,6 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
       ],
       defaultTurn: say("好的。"),
     }),
-    // 反例：当时那样建 5 个节点、3 道门禁的图，派 2 个 Worker，没加载手册（T1、T2、L1）
     negative: () => ({
       turns: [
         {

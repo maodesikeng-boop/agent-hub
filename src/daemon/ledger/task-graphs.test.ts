@@ -151,7 +151,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       specJson: JSON.stringify({
         nodes: [
           { key: "research", title: "调研数据规模" },
-          { key: "gate-api", title: "拍板接口契约", deps: ["research"], question: "接口用 REST 还是 RPC？", options: ["REST", "RPC"] },
+          { key: "gate-api", title: "拍板接口契约", deps: ["research"] },
           { key: "impl-api", title: "实现后端接口", deps: ["gate-api"] },
           { key: "impl-ui", title: "实现前端按钮", deps: ["gate-api"] },
         ],
@@ -605,6 +605,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
         { key: "g", title: "拍板" }, { key: "a", title: "实现", deps: ["g"] },
       ] }),
     }).data.graph;
+    ledger.hubCall(lin.sessionId, "ask", { graphId: graph.id, node: "g", text: "同意继续吗？" });
     ledger.decideTaskNode(graph.id, "g", { clientId: "old", note: "同意" });
     ledger.cancelTaskGraph(graph.id, {});
     changes = [];
@@ -1188,13 +1189,10 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     }).data.graph;
     expect(stateOf(graph, "approve")).toBe("waiting:pm");
 
-    // 1) 给已轮到的 waiting:pm 步骤通过 patch 补上问题与选项 -> 立即变 waiting:user 并补发 AskMeta 卡片
-    const withCard = ledger.hubCall(lin.sessionId, "graph.patch", {
-      graphId: graph.id,
-      specJson: JSON.stringify({
-        updateNodes: [{ key: "approve", question: "用哪个存储？", options: ["SQLite", "JSON"], recommended: "SQLite" }],
-      }),
-    }).data.graph;
+    ledger.hubCall(lin.sessionId, "ask", {
+      graphId: graph.id, node: "approve", text: "用哪个存储？", options: ["SQLite", "JSON"], recommended: "SQLite",
+    });
+    const withCard = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(stateOf(withCard, "approve")).toBe("waiting:user");
     const firstMsgId = withCard.nodes[0]!.gateAskMessageId!;
     expect(firstMsgId).toBeTypeOf("number");

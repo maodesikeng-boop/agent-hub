@@ -13,6 +13,7 @@ import type {
 } from "../../shared/api.ts";
 import { deliverablesOf, type Deliverable } from "../../shared/deliverables.ts";
 import { askOf, extractAskCard } from "../../shared/domain.ts";
+import { checkTextLimit, formatTextLimitViolations } from "../../shared/text-limits.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -435,9 +436,8 @@ export function createLedgerRouter(
 
     const summary = parsed.data.summary.trim();
     if (summary === "") throw fail("invalid", "汇报摘要不能是空的");
-    if (charLen(summary) > ROUTER_CONTEXT_MAX_CHARS) {
-      throw fail("invalid", `汇报摘要最多 ${ROUTER_CONTEXT_MAX_CHARS} 字（当前 ${charLen(summary)} 字）`);
-    }
+    const violation = checkTextLimit("router.reportSummary", summary);
+    if (violation !== null) throw fail("invalid", formatTextLimitViolations([violation]));
 
     const rawLinks = parsed.data.links ?? [];
     if (rawLinks.length > ROUTER_REPORT_LINKS_MAX) {

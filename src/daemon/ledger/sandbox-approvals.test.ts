@@ -260,9 +260,10 @@ describe("Worker sandbox approval", () => {
     createSandboxGraph();
     const count = () => f.ledger.getRouterDigest().pms.find((pm) => pm.pmId === f.pm.pm.id)?.pendingDecisionCount;
     expect(count()).toBe(0);
-    f.ledger.hubCall(f.pm.sessionId, "graph.create", { specJson: JSON.stringify({
-      title: "Review", steps: [{ key: "check", title: "Check the plan", question: "Use the current plan?" }],
-    }) });
+    const { graph } = f.ledger.hubCall(f.pm.sessionId, "graph.create", { specJson: JSON.stringify({
+      title: "Review", steps: [{ key: "check", title: "Check the plan" }],
+    }) }).data;
+    f.ledger.hubCall(f.pm.sessionId, "ask", { graphId: graph.id, node: "check", text: "Use the current plan?" });
     expect(count()).toBe(1);
   });
 
