@@ -56,7 +56,6 @@ function clearBackgroundTasks(live: LiveSession): void {
 }
 
 export interface LedgerMessagesOptions {
-  isSessionBusy?: ((id: SessionId) => boolean) | undefined;
   assertUserCanPost?: (conversationId: ConversationId) => void;
   afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
   onIndependentAskCreated?: (p: Pending, session: AgentSessionRow, message: Message, options?: string[]) => void;
@@ -472,10 +471,7 @@ export function createLedgerMessages(
       const blocked = ctx.commandBlockReason(session, input.text);
       if (blocked !== null) throw fail("invalid", blocked);
       const t = now();
-      const sentWhileBusy = session.role === "pm" && (
-        liveOf(session.id).activity !== "idle" ||
-        (session.status === "running" && (options.isSessionBusy?.(session.id) ?? true))
-      );
+      const sentWhileBusy = session.role === "pm" && liveOf(session.id).activity === "working";
       const meta = userMessageMetaOf(input, sentWhileBusy);
       const row = db.get<MessageDbRow>(
         `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)

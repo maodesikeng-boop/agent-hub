@@ -172,7 +172,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     if (stopStaleNotice(deps.ledger, message)) return { kind: "done" };
     let result;
     const rider = isChecklistReminder(message);
-    const { prefixes, text } = deps.ledger.deliveryOf(message, { deferSuffix: true });
+    const { prefixes, text } = deps.ledger.deliveryOf(message);
     try {
       result = await deps.driver.send(sessionId, {
         messageIds: [messageId],

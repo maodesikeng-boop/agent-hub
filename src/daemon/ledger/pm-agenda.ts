@@ -3,7 +3,7 @@ import { systemMessageDedupeKey, type ConversationId, type Message, type Message
 import type { HandoverId } from "../../shared/handover.ts";
 import { PM_AGENDA_GRAPHS_MAX, PM_AGENDA_OUTSIDE_WORKERS_MAX } from "../../shared/limits.ts";
 import {
-  agendaLinesOf, handoverAgendaNoticeText, nextAgendaFooter, readyAgendaRef,
+  agendaLinesOf, handoverAgendaNoticeText, nextAgendaFooter, preambleAgendaSection, readyAgendaRef,
   type AgendaFooter, type AgendaGraphBlock, type AgendaOutsideItem, type AgendaStepLine, type PmAgenda,
 } from "../../shared/pm-agenda.ts";
 import type { Db } from "../store/index.ts";
@@ -185,7 +185,8 @@ interface CursorRow {
   delivered_at: number;
 }
 
-export function pmAgendaFooterFor(db: Db, sessionId: SessionId, now: number): AgendaFooter {
+/** `preamble` is the opening brief written in the same input; when it already shows the whole list, the first snapshot is recorded without repeating it. */
+export function pmAgendaFooterFor(db: Db, sessionId: SessionId, now: number, preamble?: string): AgendaFooter {
   const session = db.get<{ pm_id: PmId; conversation_id: ConversationId }>("SELECT pm_id, conversation_id FROM agent_sessions WHERE id = ? AND role = 'pm' AND pm_id IS NOT NULL AND conversation_id IS NOT NULL", sessionId);
   if (session === undefined) return { kind: "none" };
   const row = db.get<CursorRow>("SELECT * FROM pm_agenda_cursors WHERE session_id = ?", sessionId);
@@ -195,10 +196,12 @@ export function pmAgendaFooterFor(db: Db, sessionId: SessionId, now: number): Ag
   };
   const compactionKey = systemMessageDedupeKey(session.conversation_id, { event: "context.compacted", sessionId, uuid: "*", trigger: null });
   const compactionId = db.get<{ id: MessageId | null }>("SELECT max(id) AS id FROM messages WHERE dedupe_key GLOB ?", compactionKey)?.id ?? 0;
-  const footer = nextAgendaFooter(cursor, pmAgendaOf(db, session.pm_id, now), {
+  const agenda = pmAgendaOf(db, session.pm_id, now);
+  const footer = nextAgendaFooter(cursor, agenda, {
     now,
     compactedSinceCursor: row !== undefined && (compactionId > row.compaction_id || row.last_message_id === null),
   });
+  if (footer.kind === "snapshot" && preamble?.includes(preambleAgendaSection(agenda, now)) === true) return { ...footer, text: "", compactionId };
   return footer.kind === "snapshot" || footer.kind === "delta" ? { ...footer, compactionId } : footer;
 }
 
@@ -215,15 +218,23 @@ export function invalidateReclaimedAgendaIn(db: Db, sessionId: SessionId, messag
 
 export function recordAgendaDeliveredIn(db: Db, sessionId: SessionId, messageId: MessageId, footer: AgendaFooter, now: number): void {
   if (footer.kind !== "snapshot" && footer.kind !== "delta") return;
+  // A late write to a superseded session must not recreate the row the switch deleted.
   db.run(
     `INSERT INTO pm_agenda_cursors (session_id, version, lines_json, deltas_since_snapshot, last_message_id, delivered_at, compaction_id)
-     VALUES (?, ?, ?, 0, ?, ?, ?)
+     SELECT ?, ?, ?, 0, ?, ?, ? WHERE NOT EXISTS (
+       SELECT 1 FROM agent_sessions s JOIN agent_sessions n ON n.conversation_id = s.conversation_id AND n.generation > s.generation
+        WHERE s.id = ?
+     )
      ON CONFLICT (session_id) DO UPDATE SET version = excluded.version, lines_json = excluded.lines_json,
        deltas_since_snapshot = CASE WHEN ? THEN pm_agenda_cursors.deltas_since_snapshot + 1 ELSE 0 END,
        last_message_id = excluded.last_message_id, delivered_at = excluded.delivered_at, compaction_id = excluded.compaction_id
      WHERE pm_agenda_cursors.version < excluded.version`,
-    sessionId, footer.version, JSON.stringify(footer.lines), messageId, now, footer.compactionId ?? 0, footer.kind === "delta" ? 1 : 0,
+    sessionId, footer.version, JSON.stringify(footer.lines), messageId, now, footer.compactionId ?? 0, sessionId, footer.kind === "delta" ? 1 : 0,
   );
+}
+
+export function dropAgendaCursorIn(db: Db, sessionId: SessionId): void {
+  db.run("DELETE FROM pm_agenda_cursors WHERE session_id = ?", sessionId);
 }
 
 export interface HandoverAgendaNoticeInput {

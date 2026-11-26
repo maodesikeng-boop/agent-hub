@@ -225,7 +225,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
   });
   const messages = createLedgerMessages(ctx, sessions, {
-    isSessionBusy: options.isSessionBusy,
     assertUserCanPost: (id) => {
       persona.assertConversationNotArchived(id);
       assertWorkerOpenForUser(db, id);

@@ -81,6 +81,45 @@ describe("S4: the graph is done, accept it, meets a handover", () => {
       expect(queued[0]!.text).toContain("【交接后还有事等你】");
     });
 
+    it("S4.2 (regression): the first input of the new session shows the list once; the preamble's list becomes the session's v1", async () => {
+      await readGraphAndWait();
+      f.ledger.editPersona(f.lin.pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
+      const next = pmSessions()[1]!;
+      const preamble = f.ledger.sessionPreamble(next)!;
+      const notice = f.pmMessages().find((m) => m.sessionId === next && m.status === "queued")!;
+
+      const first = f.ledger.deliverySuffix!(next, [notice.id], preamble);
+      expect(first.text).not.toContain("【清单");
+      expect(first.agenda).toMatchObject({ kind: "snapshot", version: 1 });
+      f.ledger.applyDriverEvent(next, { type: "message.delivered", messageIds: [notice.id], agenda: { messageId: notice.id, footer: first.agenda! }, at: ++f.clock.now });
+
+      const later = f.ledger.postUserMessage({ conversationId: f.lin.conversationId, clientId: "after-switch", text: "接着说" }).messageId;
+      expect(f.ledger.deliverySuffix!(next, [later]).text).toMatch(/^【清单 v1 没变/u);
+    });
+
+    it("S4.2: without the preamble in the same input, the first input still carries the snapshot", async () => {
+      await readGraphAndWait();
+      f.ledger.editPersona(f.lin.pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
+      const next = pmSessions()[1]!;
+      const notice = f.pmMessages().find((m) => m.sessionId === next && m.status === "queued")!;
+      expect(f.ledger.deliverySuffix!(next, [notice.id]).text).toMatch(/^【清单 v1 · /u);
+    });
+
+    it("a handover deletes the old session's list cursor, and a late write to that session does not bring it back", async () => {
+      await readGraphAndWait();
+      const old = pmSessions()[0]!;
+      const cursorRows = (sessionId: number) => f.db.all("SELECT session_id FROM pm_agenda_cursors WHERE session_id = ?", sessionId).length;
+      expect(cursorRows(old)).toBe(1);
+      const written = f.pmSystemMessages().find(isGraphReadyNotice)!.id;
+
+      f.ledger.editPersona(f.lin.pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
+      expect(pmSessions()).toHaveLength(2);
+      expect(cursorRows(old)).toBe(0);
+      const footer = { kind: "snapshot" as const, version: 2, lines: [], text: "【清单 v2】" };
+      f.ledger.applyDriverEvent(old, { type: "message.delivered", messageIds: [written], agenda: { messageId: written, footer }, at: ++f.clock.now });
+      expect(cursorRows(old)).toBe(0);
+    });
+
     it("S4.4: a restart after the switch sends no second handover notice", async () => {
       await readGraphAndWait();
       f.ledger.editPersona(f.lin.pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });

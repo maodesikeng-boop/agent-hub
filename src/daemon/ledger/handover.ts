@@ -1,5 +1,5 @@
-import { formatPmAgenda, PM_AGENDA_PREAMBLE_HEADING } from "../../shared/pm-agenda.ts";
-import { enqueueHandoverAgendaNoticeIn, pmAgendaOf } from "./pm-agenda.ts";
+import { preambleAgendaSection } from "../../shared/pm-agenda.ts";
+import { dropAgendaCursorIn, enqueueHandoverAgendaNoticeIn, pmAgendaOf } from "./pm-agenda.ts";
 import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
 import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 // Handover runs in the background on a fork of the PM session and swaps sessions between two turns, so the user keeps chatting throughout.
@@ -449,6 +449,7 @@ export function createLedgerHandover(
       p.changes.push({ type: "pm.updated", data: { pm: toPm(pmRow(old.pmId)!) } });
     }
     enqueue(p, { type: "session.end", params: { sessionId: old.id, generation: old.generation } });
+    dropAgendaCursorIn(db, old.id);
     if (!vendorSwitch) {
       insertSystemMessage(
         p,
@@ -961,7 +962,7 @@ export function createLedgerHandover(
     const at = now();
     const agenda = pmAgendaOf(db, session.pmId, at);
     if (agenda.graphs.length === 0 && agenda.outside.length === 0 && agenda.userCards === 0) return waiting;
-    return `${waiting}\n\n${PM_AGENDA_PREAMBLE_HEADING}\n\n${formatPmAgenda(agenda, at)}`;
+    return `${waiting}\n\n${preambleAgendaSection(agenda, at)}`;
   };
 
   const waitsForHandover = (messageId: MessageId): boolean => {

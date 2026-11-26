@@ -280,7 +280,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("worker_turn_timeouts", "growing", "src/daemon/ledger/workers.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_persona_seen", "growing", "src/daemon/ledger/persona.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/router.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_preamble_seen", "growing", "src/daemon/ledger/handover.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
-  table("pm_agenda_cursors", "growing", "src/daemon/ledger/pm-agenda.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
+  table("pm_agenda_cursors", "retained_metadata", "src/daemon/ledger/pm-agenda.ts", "src/daemon/ledger/handover.ts, src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("turn_completions", "growing", "src/daemon/ledger/turn-completions.ts", "src/daemon/ledger/turn-completions.ts", "automatic", [
     limit("TURN_COMPLETION_UNPERSISTED_MAX", TURN_COMPLETION_UNPERSISTED_MAX, "rows"),
   ]),

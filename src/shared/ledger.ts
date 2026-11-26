@@ -364,8 +364,8 @@ export interface Ledger extends LedgerHandoverWork {
    * deny records a denial for the same scope. Throws conflict when the card already ended or the Worker is no longer open.
    */
   decideAppApproval?(id: AppApprovalId, input: DecideAppApprovalRequest): DecideAppApprovalResponse;
-  deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta"> & Partial<Pick<Message, "id" | "sessionId">>, opts?: { deferSuffix: true }): { prefixes: string[]; text: string };
-  deliverySuffix?(sessionId: SessionId, messageIds: readonly MessageId[]): DeliverySuffix;
+  deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string };
+  deliverySuffix?(sessionId: SessionId, messageIds: readonly MessageId[], preamble?: string): DeliverySuffix;
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
   listRouterCommands?(beforeCursor?: string, limit?: number): import("./api.ts").RouterCommandsPage;

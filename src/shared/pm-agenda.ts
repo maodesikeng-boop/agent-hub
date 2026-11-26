@@ -308,6 +308,9 @@ export function formatPmAgenda(agenda: PmAgenda, _now: number): string {
   return lines.join("\n");
 }
 
+export const preambleAgendaSection = (agenda: PmAgenda, now: number): string =>
+  `${PM_AGENDA_PREAMBLE_HEADING}\n\n${formatPmAgenda(agenda, now)}`;
+
 export function handoverAgendaNoticeText(agenda: PmAgenda): string {
   return ["【交接后还有事等你】", ...agendaLinesOf(agenda).filter((line) => line.needsPm).map((line) => `- ${line.text}`)].join("\n");
 }

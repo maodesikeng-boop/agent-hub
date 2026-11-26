@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { systemEventOf, type Message, type MessageId } from "../../shared/domain.ts";
 import {
   PM_AGENDA_BUSY_LINE,
+  appendDeliverySuffix,
   diffAgendaLines,
   formatPmAgenda,
   nextAgendaFooter,
@@ -23,8 +24,10 @@ import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./
 const MINUTE = 60_000;
 
 function delivered(f: PmFrictionFixture, messageId: MessageId): string {
-  const { prefixes, text } = f.ledger.deliveryOf(f.ledger.getMessage(messageId)!);
-  return [...prefixes, text].join("\n");
+  const message = f.ledger.getMessage(messageId)!;
+  const { prefixes, text } = f.ledger.deliveryOf(message);
+  const suffix = message.sessionId === null ? "" : f.ledger.deliverySuffix!(message.sessionId, [messageId]).text;
+  return [...prefixes, appendDeliverySuffix(text, suffix)].join("\n");
 }
 
 function postUser(f: PmFrictionFixture, text: string): MessageId {
@@ -102,7 +105,7 @@ describe("S1 and S2: the per-graph list and the delivery row", () => {
     const note = f.pmSystemMessages().find(isGraphReadyNotice)!;
     expect(note.text).toContain("图里画的步骤都做完了，等你验收交付");
     expect(note.text).toContain("hub graph patch");
-    expect(note.text).toContain("hub watch add");
+    expect(note.text).not.toContain("watch add");
   });
 
   it("S1.3 (regression): a brief-less step after a finished step waits for the PM and wakes it once", async () => {
@@ -161,13 +164,24 @@ describe("S3: every wake carries the latest state as a snapshot plus changes", (
     expect(noticeText).not.toContain("「等交付」");
   });
 
-  it("S3.7: a user message sent while the PM session is running carries the busy line; one sent while idle does not", () => {
+  it("S3.7: a user message sent while the PM is mid-turn carries the busy line; one sent between turns does not", () => {
     const idle = postUser(f, "空闲时问的");
     expect(delivered(f, idle)).not.toContain(PM_AGENDA_BUSY_LINE);
     f.pmReplyTo(idle, "好");
     createSessionStore(f.db).update(f.lin.sessionId, { status: "running", pid: 40_001 });
+    const between = postUser(f, "进程还在、这一轮已结束时问的");
+    expect(delivered(f, between)).not.toContain(PM_AGENDA_BUSY_LINE);
+    f.ledger.applyDriverEvent(f.lin.sessionId, { type: "message.processing", messageIds: [between], at: ++f.clock.now });
     const busy = postUser(f, "忙时问的");
     expect(delivered(f, busy)).toContain(PM_AGENDA_BUSY_LINE);
+  });
+
+  it("S3.7 (regression): a user message sent while the PM is stopping its turn carries no busy line", () => {
+    const first = postUser(f, "先做这个");
+    f.ledger.applyDriverEvent(f.lin.sessionId, { type: "message.processing", messageIds: [first], at: ++f.clock.now });
+    f.ledger.requestStop(f.lin.conversationId);
+    const after = postUser(f, "停下后问的");
+    expect(delivered(f, after)).not.toContain(PM_AGENDA_BUSY_LINE);
   });
 
   it("S3.8 (regression): messages to Worker sessions never carry a footer", async () => {

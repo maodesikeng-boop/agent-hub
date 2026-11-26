@@ -346,7 +346,8 @@ export interface DriverOptions {
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   personaNote?: (sessionId: SessionId, sinceRevision: number) => PersonaNote | null;
   sessionPreamble?: (sessionId: SessionId) => string | null;
-  deliverySuffix?: (sessionId: SessionId, messageIds: readonly MessageId[]) => DeliverySuffix;
+  /** `preamble` is the opening brief carried by the same input, if any. */
+  deliverySuffix?: (sessionId: SessionId, messageIds: readonly MessageId[], preamble?: string) => DeliverySuffix;
   canDeliverSystemMessage?: (sessionId: SessionId, messageId: MessageId) => boolean;
   /** Called when a session finishes an in-progress startup, delivery, or turn and becomes idle in the driver. */
   onSessionQuiescent?: (sessionId: SessionId) => void;

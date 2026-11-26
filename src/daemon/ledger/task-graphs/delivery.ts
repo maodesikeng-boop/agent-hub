@@ -164,7 +164,6 @@ function formatDeliveryNote(db: Db, graph: TaskGraph, extra?: DeliveryExtra): st
     "",
     "",
     `图里只有上面这些步骤；项目规矩或用户要求、但没画进图的步骤（比如审查），后台看不出来，缺了用 ${HUB_COMMAND} graph patch 补。`,
-    `如果 ${HUB_COMMAND} help 列出了 ${HUB_COMMAND} watch add，要等外部条件（比如检查通过）再交付，可以让后台盯着，结果出来叫醒你。`,
     `验收看上面的证据，按项目约定交付后用 ${HUB_COMMAND} graph finish 结束这张图。`,
   ].join("\n");
   const bodyBudget = Math.max(200, DELIVERY_NOTE_MAX_CHARS - [...footer].length);
