@@ -58,15 +58,24 @@ const INCLUDED_WORKER_EVENTS: ReadonlySet<WorkerEvent> = new Set([
   "user_message",
 ]);
 
-const INCLUDED_SYSTEM_EVENTS: ReadonlySet<SystemMessageMeta["event"]> = new Set([
-  "schedule.run",
-  "worker.max_time_exceeded",
-  "task_graph.ready_to_finish",
-  "project.created",
-  "folder.attached",
-  "folder.detached",
-  "schedule.failed",
-]);
+const SYSTEM_EVENT_IN_SWITCH_LOG: Readonly<Record<SystemMessageMeta["event"], boolean>> = {
+  "driver.warning": false,
+  "project.created": true,
+  "folder.attached": true,
+  "folder.detached": true,
+  "persona.changed": false,
+  "handover.requested": false,
+  "session.renewed": false,
+  "handover.failed": false,
+  "schedule.created": false,
+  "schedule.removed": false,
+  "schedule.run": true,
+  "schedule.failed": true,
+  "context.compacted": false,
+  "worker.max_time_exceeded": true,
+  "task_graph.ready_to_finish": true,
+  "pm.wakeup": true,
+};
 
 export function sliceTailUtf16Safe(text: string, maxUnits: number): string {
   if (maxUnits <= 0) return "";
@@ -112,7 +121,7 @@ export function formatGenerationMessage(message: Message, targetSessionId: Sessi
   }
   if (message.sender === "system" && message.kind === "text") {
     const ev = systemEventOf(message);
-    if (ev === null || !INCLUDED_SYSTEM_EVENTS.has(ev.event)) return null;
+    if (ev === null || !SYSTEM_EVENT_IN_SWITCH_LOG[ev.event]) return null;
     const stripped = stripSystemPrefix(message.text).trim();
     if (stripped === "") return null;
     return stripped.startsWith("【") ? stripped : `【系统通知】${stripped}`;

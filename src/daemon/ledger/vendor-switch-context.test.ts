@@ -196,6 +196,21 @@ describe("formatGenerationMessage 真值表", () => {
 });
 
 describe("collectGenerationContext 与 buildVendorSwitchPreamble", () => {
+  it("keeps a delivered PM wakeup in the vendor switch log and leaves queued wakeups for delivery", () => {
+    const meta: SystemMessageMeta = { event: "pm.wakeup", source: "task_graph", ref: "checkpoint-result" };
+    const text = "【任务图 #6】用户已打回方案，等你处理";
+    const context = collectGenerationContext([
+      makeMsg({ id: 2, sender: "system", status: "queued", text: "另一条尚未发送的通知", meta: { ...meta, ref: "queued" } }),
+      makeMsg({ id: 1, sender: "system", status: "replied", text, meta }),
+    ], { targetSessionId: 10, maxChars: 10_000 });
+    const preamble = buildVendorSwitchPreamble({
+      fromVendor: "claude", toVendor: "codex", context, skills: null, transcriptSummary: "",
+      anchor: { summaryText: null, cutMessageId: 0, startSessionId: 1 },
+    });
+    expect(preamble).toContain(text);
+    expect(preamble).not.toContain("另一条尚未发送的通知");
+  });
+
   it("超出字符上限时只保留最新尾部并保证 UTF-16 合法，未超限时完整无损且不标省略提示", () => {
     const newestFirst = [
       makeMsg({ id: 3, sender: "agent", text: "最新回复🎯完成", status: null }),
