@@ -377,8 +377,11 @@ let statusBar = StatusBarController(
     onQuitApp: {}
 )
 var crashedPids: [Int32] = []
+// currentState is committed off the main thread before onStateChange reaches the menu bar, so waits key on what the menu bar received.
+var menuBarState: DaemonSupervisorState = .running
 supervisor.onStateChange = { state, lastCrash in
     statusBar.updateDaemonState(state, lastCrash: lastCrash)
+    menuBarState = state
     switch state {
     case .restarting(_, _, _, let crash), .failed(_, _, let crash):
         if !crashedPids.contains(crash.pid) {
@@ -403,7 +406,7 @@ assert(!statusBar.isLastCrashVisible)
 // 1. 手动 kill -9 自己起的后台 -> 自动拉起
 kill(pid1, SIGKILL)
 guard waitUntil(timeout: 3.0, condition: {
-    if case .restarting(let attempt, _, _, _) = supervisor.currentState {
+    if case .restarting(let attempt, _, _, _) = menuBarState {
         return attempt == 1
     }
     return false
@@ -416,7 +419,7 @@ let restartingSummaryAfterKill9 = statusBar.currentSummaryTitle
 let crashTitleAfterKill9 = statusBar.currentLastCrashTitle
 
 guard waitUntil(timeout: 15.0, condition: {
-    supervisor.currentState == .running && supervisor.currentPid != nil && supervisor.currentPid != pid1
+    menuBarState == .running && supervisor.currentPid != nil && supervisor.currentPid != pid1
 }), let pid2 = supervisor.currentPid else {
     fputs("FAIL: did not auto-restart after SIGKILL\\n", stderr)
     supervisor.stopIfOwned()
@@ -444,12 +447,12 @@ setenv("AGENT_HUB_DAEMON_ENTRY", CommandLine.arguments[1], 1)
 kill(pid3, SIGKILL)
 
 guard waitUntil(timeout: 30.0, condition: {
-    if case .failed(let count, _, _) = supervisor.currentState {
+    if case .failed(let count, _, _) = menuBarState {
         return count == SupervisorConfig.maxCrashCountInWindow
     }
     return false
 }) else {
-    fputs("FAIL: did not enter failed state after consecutive crashes, state=\\(supervisor.currentState)\\n", stderr)
+    fputs("FAIL: did not enter failed state after consecutive crashes, state=\\(supervisor.currentState) menuBar=\\(menuBarState)\\n", stderr)
     supervisor.stopIfOwned()
     exit(1)
 }
