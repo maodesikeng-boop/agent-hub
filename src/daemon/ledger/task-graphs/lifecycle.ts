@@ -201,9 +201,14 @@ function graphWorkerIds(nodes: ReadonlyArray<Pick<TaskNodeDbRow, "active_worker_
   return ids;
 }
 
-function releaseGraphRowsIn(g: TaskGraphCtx, graphId: TaskGraphId, status: "cancelled" | "completed", t: number): void {
+function closeGraphIn(g: TaskGraphCtx, graphId: TaskGraphId, status: "cancelled" | "completed", t: number): void {
   g.db.run(
-    "UPDATE task_graph_steps SET active_worker_id = NULL, updated_at = ? WHERE graph_id = ? AND active_worker_id IS NOT NULL",
+    status === "cancelled"
+      ? `UPDATE task_graph_steps
+            SET status = CASE WHEN status = 'done' THEN status ELSE 'cancelled' END,
+                waiting_for = NULL, active_worker_id = NULL, updated_at = ?
+          WHERE graph_id = ? AND (status <> 'done' OR active_worker_id IS NOT NULL)`
+      : "UPDATE task_graph_steps SET active_worker_id = NULL, updated_at = ? WHERE graph_id = ? AND active_worker_id IS NOT NULL",
     t,
     graphId,
   );
@@ -226,7 +231,7 @@ function cancelGraphInternalIn(
       graphRow.id,
     ),
   );
-  releaseGraphRowsIn(g, graphRow.id, "cancelled", t);
+  closeGraphIn(g, graphRow.id, "cancelled", t);
   const stoppedWorkerIds = candidates.size > 0 ? (g.options.workers?.()?.stopWorkersIn(p, [...candidates]) ?? []) : [];
   stopQueuedDeliveryNotesIn(g, p, graphRow.conversation_id, graphRow.id);
   const graph = publishGraphIn(g, p, graphRow.id);
@@ -331,7 +336,7 @@ export function finishIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: Hu
   );
   const t = g.now();
   const candidates = graphWorkerIds(nodeRows);
-  releaseGraphRowsIn(g, graphRow.id, "completed", t);
+  closeGraphIn(g, graphRow.id, "completed", t);
   g.options.onGraphFinishedIn?.(p, graphRow.project_id);
   if (candidates.size > 0) g.options.workers?.()?.stopWorkersIn(p, [...candidates]);
   stopQueuedDeliveryNotesIn(g, p, graphRow.conversation_id, graphRow.id);
