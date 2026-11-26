@@ -52,7 +52,7 @@ it("records the turn, its tool, and one linked recovery turn across a real daemo
       "SELECT id, worker_id, session_id FROM messages WHERE sender = 'pm' AND status = 'processing'",
     );
     if (row === undefined) return undefined;
-    const done = db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE session_id = ? AND kind = 'tool'", row.session_id)?.n ?? 0;
+    const done = db.get<{ n: number }>("SELECT count(*) AS n FROM turn_tools tt JOIN turns t ON t.id = tt.turn_id WHERE t.session_id = ? AND tt.name = 'Bash' AND tt.status = 'done'", row.session_id)?.n ?? 0;
     return done > 0 ? row : undefined;
   }));
   const tools = withDb(e, (db) => db.all<{ name: string; status: string }>(
