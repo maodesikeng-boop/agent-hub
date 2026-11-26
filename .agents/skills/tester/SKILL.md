@@ -24,6 +24,8 @@ Design and rationale: [docs/ai-tester-design.md](../../../docs/ai-tester-design.
 - Accounts: a GitHub machine account for the mesh, a test Feishu bot, a driver app that posts as the owner, and vendor logins inside the bench `HOME`s.
 - Config: `~/.bellwood-tester/bench.json`. Results: `~/.bellwood-tester/runs/` (`latest/summary.md`, `history.jsonl`, one evidence directory per run).
 
+On macOS, run the tester from a host terminal outside any agent sandbox. The `run` command always restarts the local daemon, so it exits with code 2 inside an agent sandbox.
+
 Commands (run from a checkout of this repository):
 
 ```sh
