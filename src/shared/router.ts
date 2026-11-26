@@ -113,6 +113,10 @@ export interface RouterAgentPlan {
   retryOps?: Array<{ deviceId: string; op: unknown }>;
   attachments?: RouterCommandAttachment[];
   target?: PostRouterCommandTarget;
+  /** Kept so a retry also skips the leading-`@` direct forward. */
+  routerOnly?: true;
+  /** Id of the retry that started this run, absent on the first run; each id starts at most one run. */
+  retryId?: string;
   replyTruncated?: true;
   errorRaw?: string;
 }

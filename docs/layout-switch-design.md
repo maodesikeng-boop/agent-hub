@@ -8,7 +8,7 @@ The approved scope includes open provider sign-in forms and computer renames. De
 
 ## Component ownership
 
-[WorkbenchSurfaces](../src/web/WorkbenchSurfaces.tsx) renders ProjectList, Router, the PM conversation and panel, the Worker page, and shared settings content beside the layout components. [Each surface](../src/web/shell-surfaces.tsx) renders into one persistent DOM node. The layout places that node through an outlet. A surface without an outlet keeps its state in a hidden React Activity, which pauses its effects until it becomes visible. The host and the layout share a fixed set of outlet IDs; only one outlet can show an ID at a time.
+[WorkbenchSurfaces](../src/web/WorkbenchSurfaces.tsx) renders the top-bar Router input, ProjectList, Router, the PM conversation and panel, the Worker page, and shared settings content beside the layout components. [Each surface](../src/web/shell-surfaces.tsx) renders into one persistent DOM node. The layout places that node through an outlet. A surface without an outlet keeps its state in a hidden React Activity, which pauses its effects until it becomes visible. The host and the layout share a fixed set of outlet IDs; only one outlet can show an ID at a time.
 
 Conversation, panel, and Worker identities come from the selected page and device. A layout switch does not change their keys. For example, the PM panel stays mounted while narrow Settings covers it, so closing Settings reveals the same Persona editor. Search and the other editor state now live in their own components. Composer drafts, attachments, and the Router `@` target use their existing conversation slots. The automatic reload still saves and restores composer text, model picks, and the Router target.
 
@@ -54,6 +54,7 @@ At Default scale, start at 900px. Narrow to 675px, widen to 900px, then repeat. 
 | --- | --- |
 | Router target | In Router, type `@agent`, choose `agent-hub`, and type a draft. After both trips, press Enter. The captured command has the draft and the selected PM and project IDs. Repeat with Enter in one column. |
 | Persona behind Settings | Edit a PM's Persona without saving. Open Settings → Capabilities and select Router. After both trips, the Capabilities selection is still Router. Close Settings to see the original Persona text and enabled Save button. In one column, use the Settings header button, then browser Back. |
+| Top-bar Router | In a PM conversation, send a message from the top bar, then type an unsent top-bar draft and an unsent follow-up in the reply popover. One column has no top bar. After both trips, the same input shows the draft, and the popover shows the turn and the follow-up. |
 | Router tray | Open the second decision and type a reply. For the closed-card case, type a reply, then close the decision from another client. The selected article and the closed card's unsent reply remain visible. |
 | Project search | Enter a search in the PM list. After resizing, the search is still present both in the column and when the one-column project list is visible. |
 | PM settings | Change Model provider, model, and effort; edit Persona; enter daily and interval schedules; edit or add a memory file; type a Worktree setup command and a Capabilities search. Each unsaved change stays in its page. |

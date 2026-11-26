@@ -1,5 +1,6 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "./icons.ts";
+import { useRef } from "react";
 import type * as React from "react";
 import { AccentScope, useAccentColor } from "../lib/accent-scope.tsx";
 import { cn } from "../lib/utils.ts";
@@ -12,11 +13,18 @@ export const DialogClose = DialogPrimitive.Close;
 
 type PointerDownOutside = NonNullable<React.ComponentProps<typeof DialogPrimitive.Content>["onPointerDownOutside"]>;
 
-// A press on window chrome drags or zooms the native window, so it never dismisses a page.
+// A press on blank window chrome drags or zooms the native window, so it never dismisses a page; a control in the chrome
+// (such as the top-bar Router input) still does, and keeps the focus the press gave it.
 const keepWindowChrome: PointerDownOutside = (event) => {
   const target = event.detail.originalEvent.target;
-  if (target instanceof Element && target.closest("[data-window-drag]")) event.preventDefault();
+  if (target instanceof Element && target.closest("[data-window-drag]") && !target.closest("[data-no-drag]")) event.preventDefault();
 };
+
+function chromeControlOf(target: EventTarget | null): HTMLElement | null {
+  const control = target instanceof Element ? target.closest<HTMLElement>("[data-window-drag] [data-no-drag]") : null;
+  if (control === null || control.matches("input, textarea, button")) return control;
+  return control.querySelector<HTMLElement>("input, textarea, button");
+}
 
 export function DialogContent({
   className,
@@ -26,6 +34,7 @@ export function DialogContent({
   fullScreen = false,
   page = false,
   onPointerDownOutside,
+  onCloseAutoFocus,
   ...props
 }: Omit<React.ComponentProps<typeof DialogPrimitive.Content>, "title"> & {
   title: string;
@@ -36,6 +45,7 @@ export function DialogContent({
   page?: boolean;
 }) {
   const accent = useAccentColor();
+  const pressedChrome = useRef<HTMLElement | null>(null);
   const content = (
     <>
       <DialogPrimitive.Overlay
@@ -52,8 +62,21 @@ export function DialogContent({
             ? (event) => {
                 onPointerDownOutside?.(event);
                 keepWindowChrome(event);
+                pressedChrome.current = event.defaultPrevented ? null : chromeControlOf(event.detail.originalEvent.target);
               }
             : onPointerDownOutside
+        }
+        onCloseAutoFocus={
+          page
+            ? (event) => {
+                onCloseAutoFocus?.(event);
+                const control = pressedChrome.current;
+                pressedChrome.current = null;
+                if (control === null || event.defaultPrevented) return;
+                event.preventDefault();
+                control.focus();
+              }
+            : onCloseAutoFocus
         }
         className={cn(
           fullScreen

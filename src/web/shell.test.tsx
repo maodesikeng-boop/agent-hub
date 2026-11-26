@@ -320,8 +320,8 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     await boot();
 
     const shell = document.querySelector<HTMLElement>("[data-shell='desktop']")!;
-    const topBar = shell.firstElementChild!;
-    expect(topBar).toHaveClass("shell-topbar");
+    const topBar = shell.querySelector<HTMLElement>(".shell-topbar")!;
+    expect(shell.firstElementChild!.contains(topBar)).toBe(true);
     expect(topBar).toHaveAttribute("data-window-drag");
     const rail = screen.getByRole("navigation", { name: "Workspace" });
     expect(rail.className).not.toMatch(/traffic-lights/);

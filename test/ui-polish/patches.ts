@@ -5,6 +5,7 @@ import type { Page, Request, Route } from "playwright";
 import {
   API_PATHS,
   AGENT_VENDORS,
+  DEFAULT_AGENT_VENDOR,
   DEVICE_OFFLINE_REASON,
   DEVICE_OFFLINE_WS_CLOSE_CODE,
   vendorSpec,
@@ -17,6 +18,8 @@ import {
   type ModelsResponse,
   type PmMemoryFileDetail,
   type PmMemoryFilesList,
+  type PostRouterCommandRequest,
+  type PostRouterCommandResponse,
   type QuotaResponse,
   type RateLimitInfo,
   type ResourcesSnapshot,
@@ -49,6 +52,8 @@ export const PATCH_NAMES = [
   "router-working",
   "router-failed",
   "router-vendor-agy",
+  "router-quick-working",
+  "router-quick-reply",
   "send-rejected",
   "device-reconnecting",
   "device-offline",
@@ -115,6 +120,35 @@ function working(state: StateSnapshot, sessionIds: Set<number>, extra: (index: n
     ...state,
     sessions: state.sessions.map((s) => (sessionIds.has(s.sessionId) ? { ...s, status: "running", activity: "working", lastEventAt: NOW - 20_000, ...extra(index++) } : s)),
   };
+}
+
+const QUICK_REPLY = "小林在等你定失败结果缓存多久；小周卡在 Antigravity 没登录；其余项目经理都空闲。\n\n- 证书续期已交给柚子\n- 博客图片压缩已完成";
+
+/** The top-bar Router input's POST answers at once with this command: still planning, or answered with a short Markdown reply. */
+async function quickRouterAnswer(page: Page, status: "planning" | "answered"): Promise<void> {
+  await page.route(localOnly(API_PATHS.routerCommands), (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const body = route.request().postDataJSON() as PostRouterCommandRequest;
+    const answered = status === "answered";
+    const response: PostRouterCommandResponse = {
+      command: {
+        id: 9_001,
+        clientId: body.clientId,
+        inputText: body.text,
+        vendor: DEFAULT_AGENT_VENDOR,
+        model: null,
+        effort: null,
+        status,
+        plan: answered ? { intent: "answer", reply: QUICK_REPLY, actions: [] } : null,
+        dispatched: null,
+        error: null,
+        durationMs: answered ? 4_200 : null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    };
+    return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(response) });
+  });
 }
 
 const firstPmConversation = (state: StateSnapshot) => state.conversations.find((c) => c.conversation.kind === "pm")?.conversation.id;
@@ -526,6 +560,8 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
       editState(page, (state) => ({ ...state, router: { ...state.router, settings: { ...state.router.settings, vendor: "agy", model: null, effort: "high" } } })),
       editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({ catalogs: m.catalogs.map(mixedCatalog) })),
     ]),
+  "router-quick-working": (page) => quickRouterAnswer(page, "planning"),
+  "router-quick-reply": (page) => quickRouterAnswer(page, "answered"),
   "send-rejected": (page) =>
     page.route(/\/api\/conversations\/\d+\/messages$/, (route) =>
       route.request().method() !== "POST"

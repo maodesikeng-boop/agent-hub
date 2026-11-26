@@ -27,7 +27,9 @@ import { revertedChangeIds } from "./components/Messages.tsx";
 import { LOCAL_DEVICE } from "./devices.ts";
 import { filterProjectList, projectListOf } from "./project-list.ts";
 import { quotaMeterOf, railComputersOf, type RailComputerInput } from "./rail-model.ts";
-import { fleetRouterStream, mergeRouterStream, routerStreamOf, type RouterStreamDeviceInput } from "./router-stream.ts";
+import { buildPendingRouterTurns } from "./router-commands.ts";
+import { fleetRouterStream, mergeRouterStream, routerStreamOf, routerTurnsOf, type RouterStreamDeviceInput } from "./router-stream.ts";
+import { selectQuickRouterTurns } from "./router-topbar-model.ts";
 import {
   activeGraphsOf,
   deviceRouterView,
@@ -1266,5 +1268,55 @@ describe("shell list and rail selectors", () => {
     expect(completedDaysOf(pages, now)).toBe(days0);
     expect(days0.reduce((sum, d) => sum + d.items.length, 0)).toBe(400);
     expect(medianMs(21, () => void completedDaysOf([...pages], now))).toBeLessThan(15);
+  });
+});
+
+describe("top-bar Router quick chat", () => {
+  it("routerTurnsOf, selectQuickRouterTurns, and buildPendingRouterTurns keep their references through streaming and unrelated commands, and follow a session command at once", () => {
+    const command = (id: number, over: Partial<RouterCommandRecord> = {}): RouterCommandRecord => ({
+      id,
+      clientId: `c-${id}`,
+      inputText: `指令 ${id}`,
+      vendor: DEFAULT_AGENT_VENDOR,
+      model: null,
+      effort: null,
+      status: "answered",
+      plan: { intent: "answer", reply: `回复 ${id}`, actions: [] },
+      dispatched: null,
+      error: null,
+      durationMs: 300,
+      createdAt: 50_000 + id,
+      updatedAt: 50_000 + id,
+      ...over,
+    });
+    const base = monthState();
+    const local: HubState = { ...base, router: { ...base.router, commands: Array.from({ length: 200 }, (_, i) => command(200 - i)) } };
+    const session = ["c-198", "c-199", "c-200"];
+    const turns = routerTurnsOf(local, undefined);
+    const pending = buildPendingRouterTurns([], turns, undefined, []);
+    const quick = selectQuickRouterTurns(session, turns, pending);
+    expect(quick.map((t) => t.clientId)).toEqual(session);
+
+    const pmSession = makeSession({ sessionId: 88_890, conversationId: PM_CONVERSATION, pmId: 1, status: "running", activity: "working", step: { type: "text" }, streamingText: "片段" });
+    let ticking = applyChange(local, sessionChange(local.seq + 1, pmSession));
+    let seq = ticking.seq;
+    for (let i = 0; i < 100; i++) {
+      ticking = applyChange(ticking, sessionChange(++seq, { ...pmSession, streamingText: `片段 ${seq}` }));
+      const live = routerTurnsOf(ticking, undefined);
+      const got = selectQuickRouterTurns(session, live, buildPendingRouterTurns([], live, undefined, pending));
+      expect(live).toBe(turns);
+      expect(got).toBe(quick);
+    }
+
+    const other = applyChange(ticking, changeOf(++seq, "router.command.updated", { command: command(10, { status: "failed" }) }));
+    const otherLive = routerTurnsOf(other, undefined);
+    expect(otherLive).not.toBe(turns);
+    expect(selectQuickRouterTurns(session, otherLive, pending)).toBe(quick);
+
+    const mine = applyChange(other, changeOf(++seq, "router.command.updated", { command: command(200, { status: "planning", plan: null, updatedAt: 99_999 }) }));
+    const mineQuick = selectQuickRouterTurns(session, routerTurnsOf(mine, undefined), pending);
+    expect(mineQuick).not.toBe(quick);
+    expect(mineQuick.at(-1)!.status).toBe("planning");
+    expect(mineQuick[0]).toBe(quick[0]);
   });
 });

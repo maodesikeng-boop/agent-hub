@@ -20,6 +20,7 @@ import {
   type ModelCatalog,
   type PmDigestEntry,
   type PostRouterCommandRequest,
+  type RetryRouterCommandRequest,
   type RouterAgentDispatchInput,
   type RouterAgentPlan,
   type RouterCommandAttachment,
@@ -42,6 +43,7 @@ import {
   type PromptReceiptAction,
   type PromptRecentReceipt,
 } from "./prompt.ts";
+import { planBaseOf, planBaseOfRequest, type PlanBase } from "./plan-base.ts";
 import type { RouterSandboxGuard } from "./sandbox.ts";
 import type { RouterTurnResult, RouterTurnRunner } from "./single-turn.ts";
 import {
@@ -89,7 +91,7 @@ export interface RouterCommandRunOptions {
 
 export interface RouterDispatcher {
   submitCommand(input: PostRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
-  retryCommand(commandId: RouterCommandId, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
+  retryCommand(commandId: RouterCommandId, retry: RetryRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
   handleAgentDispatch(
     sessionId: SessionId,
     commandId: RouterCommandId,
@@ -463,16 +465,6 @@ function cleanReply(chunks: readonly string[]): Pick<RouterAgentPlan, "reply" | 
   const chars = [...joined];
   if (chars.length <= ROUTER_REPLY_MAX_CHARS) return { reply: joined };
   return { reply: chars.slice(0, ROUTER_REPLY_MAX_CHARS).join(""), replyTruncated: true };
-}
-
-type PlanBase = Pick<RouterAgentPlan, "attachmentIds" | "attachments" | "target">;
-
-function planBaseOf(plan: RouterAgentPlan | null): PlanBase {
-  return {
-    ...(plan?.attachmentIds !== undefined && plan.attachmentIds.length > 0 ? { attachmentIds: plan.attachmentIds } : {}),
-    ...(plan?.attachments !== undefined && plan.attachments.length > 0 ? { attachments: plan.attachments } : {}),
-    ...(plan?.target !== undefined ? { target: plan.target } : {}),
-  };
 }
 
 function agentTimeoutMessage(timeoutMs: number): string {
@@ -977,7 +969,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     }
 
     let preloadedFleet: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }> | undefined;
-    if (/^\s*@/.test(params.text)) {
+    if (params.planBase.routerOnly !== true && /^\s*@/.test(params.text)) {
       preloadedFleet = await targetRegistry.listAllDigests();
       const atRes = resolveAtMention(params.text, preloadedFleet);
       if (atRes.kind === "matched") {
@@ -1056,20 +1048,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       const attachments = attachmentIds
         .map((id) => resolveAttachment(id))
         .filter((a): a is RouterCommandAttachment => a !== null);
-      const target = input.target;
-      const planBase: PlanBase = {
-        ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
-        ...(attachments.length > 0 ? { attachments } : {}),
-        ...(target !== undefined
-          ? {
-              target: {
-                ...(target.deviceId !== undefined ? { deviceId: target.deviceId } : {}),
-                ...(target.pmId !== undefined ? { pmId: target.pmId } : {}),
-                ...(target.projectId !== undefined ? { projectId: target.projectId } : {}),
-              },
-            }
-          : {}),
-      };
+      const planBase = planBaseOfRequest(input, attachmentIds, attachments);
 
       const initialVendor = ledger.getRouterSettings().vendor ?? DEFAULT_AGENT_VENDOR;
       const { command, deduplicated } = ledger.createRouterCommand({
@@ -1096,26 +1075,19 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       return options?.background === true ? detach(command, settled) : settled;
     },
 
-    async retryCommand(commandId: RouterCommandId, options?: RouterCommandRunOptions): Promise<RouterCommandRecord> {
-      const existing = ledger.getRouterCommand(commandId);
-      if (existing === null) {
-        throw new LedgerRequestError("not_found", `没有编号 ${commandId} 的总助指令`);
-      }
-      if (existing.status !== "failed") {
-        throw new LedgerRequestError("conflict", "只有失败状态的总助指令才能重试");
-      }
-
-      const attachmentIds = existing.plan?.attachmentIds ?? [];
-      const planBase = planBaseOf(existing.plan);
-      const retryOps = existing.plan?.retryOps ?? [];
+    async retryCommand(commandId: RouterCommandId, retry: RetryRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord> {
+      // Atomically claim retryId inside SQLite before starting any work so reused, stale, or concurrent retries never run twice.
+      const planning = ledger.claimRouterCommandRetry(commandId, retry);
+      const attachmentIds = planning.plan?.attachmentIds ?? [];
+      const planBase: PlanBase = { ...planBaseOf(planning.plan), retryId: retry.retryId };
+      const retryOps = planning.plan?.retryOps ?? [];
 
       // Retry only the failed target ops so successful deliveries are never repeated.
       if (retryOps.length > 0) {
         const startedAt = Date.now();
-        const planning = ledger.updateRouterCommand(commandId, { status: "planning", error: null });
         const settled = track(
           (async (): Promise<RouterCommandRecord> => {
-            const succeeded: RouterCommandDispatchedTarget[] = [...(existing.dispatched ?? [])];
+            const succeeded: RouterCommandDispatchedTarget[] = [...(planning.dispatched ?? [])];
             const stillFailed: Array<{ deviceId: string; op: RouterTargetOp } & CommandFailure> = [];
 
             for (const item of retryOps) {
@@ -1139,10 +1111,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
                 durationMs,
                 plan: {
                   intent: "dispatch",
-                  reply: existing.plan?.reply ?? "",
-                  ...(existing.plan?.replyTruncated ? { replyTruncated: true } : {}),
+                  reply: planning.plan?.reply ?? "",
+                  ...(planning.plan?.replyTruncated ? { replyTruncated: true } : {}),
                   actions: [],
-                  track: existing.plan?.track ?? "B",
+                  track: planning.plan?.track ?? "B",
                   ...planBase,
                 },
                 auditAction: "router.command.retry_succeeded",
@@ -1159,10 +1131,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
               durationMs,
               plan: {
                 intent: "dispatch",
-                reply: existing.plan?.reply ?? "",
-                ...(existing.plan?.replyTruncated ? { replyTruncated: true } : {}),
+                reply: planning.plan?.reply ?? "",
+                ...(planning.plan?.replyTruncated ? { replyTruncated: true } : {}),
                 actions: [],
-                track: existing.plan?.track ?? "B",
+                track: planning.plan?.track ?? "B",
                 ...planBase,
                 ...(raws.length > 0 ? { errorRaw: raws.join("\n") } : {}),
                 retryOps: stillFailed.map((f) => ({ deviceId: f.deviceId, op: f.op })),
@@ -1175,19 +1147,11 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         return options?.background === true ? detach(planning, settled) : settled;
       }
 
-      if ((existing.dispatched ?? []).some((d) => d.ok)) {
-        throw new LedgerRequestError(
-          "conflict",
-          "这条指令已有目标投递成功，整条重跑会重复投递；还有没交代到的请重新发一条",
-        );
-      }
-
-      const planning = ledger.updateRouterCommand(commandId, { status: "planning", error: null });
       // Keep the explicit target so a direct retry stays on track A instead of going through the model.
       const settled = track(runCommandPipeline({
         commandId,
-        clientId: existing.clientId,
-        text: existing.inputText,
+        clientId: planning.clientId,
+        text: planning.inputText,
         attachmentIds,
         planBase,
       }));
