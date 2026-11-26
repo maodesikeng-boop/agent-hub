@@ -269,7 +269,7 @@ describe("交付物", () => {
 
     it("超过 HUB_FILE_ARGS_MAX 个时拒绝", () => {
       const files = Array.from({ length: HUB_FILE_ARGS_MAX + 1 }, () => ({ label: null, path: path("verdict.md") }));
-      expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "看看", files })).toThrow(`最多 ${HUB_FILE_ARGS_MAX} 个`);
+      expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "看看", files })).toThrow(`上限 ${HUB_FILE_ARGS_MAX} 个`);
     });
   });
 
