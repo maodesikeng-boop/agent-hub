@@ -71,7 +71,7 @@ export function SlimePicker({
                   tabIndex={checked ? 0 : -1}
                   onClick={() => onChange(candidate)}
                   className={cn(
-                    "flex size-12 cursor-pointer items-center justify-center rounded-sm transition-[background-color,box-shadow] duration-150 outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none",
+                    "flex size-12 cursor-pointer items-center justify-center rounded-sm transition-[background-color,box-shadow] duration-150 focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none",
                     checked ? "tile-open" : "hover:bg-hover",
                   )}
                 >
@@ -100,7 +100,7 @@ export function SlimePicker({
                   tabIndex={checked ? 0 : -1}
                   onClick={() => onChange(slimeLookOf(look.fruit, id))}
                   className={cn(
-                    "flex size-8 cursor-pointer items-center justify-center rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
+                    "flex size-8 cursor-pointer items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]",
                     checked ? "tile-open" : "hover:bg-hover",
                   )}
                 >

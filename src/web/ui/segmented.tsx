@@ -29,7 +29,7 @@ export function Segmented<T extends string>({
         <RadioGroup.Item
           key={o.value}
           value={o.value}
-          className="touch-target h-full cursor-pointer rounded-xs px-3 text-minor font-medium text-muted-foreground transition-[color,background-color,box-shadow] duration-150 outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none data-[state=checked]:tile-selected data-[state=checked]:text-foreground"
+          className="touch-target h-full cursor-pointer rounded-xs px-3 text-minor font-medium text-muted-foreground transition-[color,background-color,box-shadow] duration-150 hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none data-[state=checked]:tile-selected data-[state=checked]:text-foreground"
         >
           {o.label}
         </RadioGroup.Item>

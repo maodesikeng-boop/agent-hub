@@ -49,7 +49,7 @@ function DestinationRow({
     <button
       type="button"
       data-destination
-      className="flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-3 px-2.5 py-2 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
+      className="flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-3 px-2.5 py-2 text-left transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]"
       onClick={() =>
         dest.worker ? onOpenWorker(dest.deviceKey, dest.conversationId) : onOpenConversation(dest.deviceKey, dest.conversationId)
       }

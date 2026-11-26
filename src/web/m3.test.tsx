@@ -1337,16 +1337,20 @@ describe("右栏工作面板（Active、Completed、Info 与 Worker 详情，推
     const resizeShell = installShellSize();
     const user = userEvent.setup();
     await boot(crowd());
+    const mainBefore = screen.getByRole("main");
+    await user.type(within(mainBefore).getByRole("textbox", { name: "Message" }), "kept in stack");
     resizeShell(720);
     expect(rail()).toHaveAttribute("data-layout", "stack");
-    expect(document.querySelector("main")!.closest("[hidden], .hidden")).not.toBeNull();
+    expect(screen.queryByRole("main")).toBeNull();
     await user.click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
     expect(screen.getByRole("complementary", { name: "修 X" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back to 小林" }));
     expect(rail()).toBeInTheDocument();
     expect(localStorage.getItem("agent-hub.rightRail")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Close work panel" }));
+    expect(screen.getByRole("main")).toBe(mainBefore);
     expect(screen.getByRole("main")).toBeVisible();
+    expect(within(mainBefore).getByRole("textbox", { name: "Message" })).toHaveValue("kept in stack");
   });
 });
 

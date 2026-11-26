@@ -101,7 +101,7 @@ export const GateDecisionCard = memo(function GateDecisionCard({
                 type="button"
                 disabled={decideMutation.isPending}
                 onClick={() => submit(opt, getDecisionDraft(draftKey))}
-                className="flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-baseline justify-between gap-2 rounded-none px-3.5 py-2 text-left text-minor font-medium transition-colors duration-150 outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:opacity-60 motion-reduce:transition-none"
+                className="flex min-h-9 pointer-coarse:min-h-11 w-full cursor-pointer items-baseline justify-between gap-2 rounded-none px-3.5 py-2 text-left text-minor font-medium transition-colors duration-150 hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:pointer-events-none disabled:opacity-60 motion-reduce:transition-none"
               >
                 <span className="min-w-0 flex-1 wrap-anywhere">{opt}</span>
                 {isRec && <span className="tool-badge shrink-0 px-1.5 text-xs leading-5 font-medium">Recommended</span>}
