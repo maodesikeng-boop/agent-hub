@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execGh, type GhRunResult } from "../src/daemon/git/gh.ts";
+import type { MigrationClaimConflict } from "./migration-claims.ts";
 import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 
 export const DEFAULT_POLL_INTERVAL_SECONDS = 15;
@@ -115,7 +116,15 @@ export type WaitVerdict =
   | {
       kind: "fail";
       pr: PullRequestSummary;
-      reason: "closed" | "conflict" | "checks-failed" | "missing-required-checks" | "head-mismatch" | "merged-stale-head";
+      reason:
+        | "closed"
+        | "conflict"
+        | "behind"
+        | "migration-claim"
+        | "checks-failed"
+        | "missing-required-checks"
+        | "head-mismatch"
+        | "merged-stale-head";
       failed: ClassifiedCheck[];
       waiting: ClassifiedCheck[];
       passed: ClassifiedCheck[];
@@ -287,9 +296,19 @@ function hasMergeConflict(pr: PullRequestSnapshot): boolean {
   return pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY" || pr.mergeStateStatus === "CONFLICTING";
 }
 
+/**
+ * An open PR fails with `behind` when GitHub reports mergeStateStatus BEHIND, and with `migration-claim` when
+ * ctx.migrationConflicts, fetched fresh for this poll, is non-empty; both apply even when every check is green.
+ */
 export function evaluatePullRequest(
   snapshot: PullRequestSnapshot,
-  ctx: { elapsedMs: number; startupGraceMs: number; explicitPrArg: boolean; localHead: string | null },
+  ctx: {
+    elapsedMs: number;
+    startupGraceMs: number;
+    explicitPrArg: boolean;
+    localHead: string | null;
+    migrationConflicts?: readonly MigrationClaimConflict[];
+  },
 ): WaitVerdict {
   const pr = summarizePr(snapshot);
   const state = snapshot.state.toUpperCase();

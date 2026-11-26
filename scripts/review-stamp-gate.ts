@@ -66,6 +66,7 @@ export function matchStampPaths(files: readonly string[], globs: readonly string
 /**
  * Decides what the gate posts on the PR head commit, given the latest REVIEW_STATUS_CONTEXT status there.
  * - A status posted by anyone other than this gate is a review verdict: keep it, whatever the paths.
+ * - A success this gate posted with a CARRIED_STAMP_PREFIX description is a carried verdict: keep it.
  * - No listed path and the file list is complete: post success ("no high-risk paths").
  * - A listed path, or a truncated file list: post pending naming the first matched path.
  * Postcondition: descriptions are at most 140 characters.
@@ -80,6 +81,38 @@ export function decideGateStatus(input: { matched: readonly string[]; filesTrunc
   }
   const why = matched[0] ?? `more than ${PR_FILES_API_MAX} files changed`;
   return { kind: "post", state: "pending", description: clip(`Needs an independent review PASS on this commit: ${why}`) };
+}
+
+/** Description prefix of a success the gate carried from a stamped head across an update that only merged the base branch. */
+export const CARRIED_STAMP_PREFIX = "Review stamp carried from ";
+
+/** One file of a PR diff as the compare API returns it; patch is null when GitHub omitted it for size. */
+export interface PrDiffFile {
+  filename: string;
+  status: string;
+  previousFilename: string | null;
+  patch: string | null;
+}
+
+export type CarryDecision = { kind: "carry"; description: string } | { kind: "no-carry"; reason: string };
+
+/**
+ * Decides whether the stamp on the previous PR head carries to the new head after a push.
+ * Carries only when all of these hold:
+ * - previousStamp is a success posted by a reviewer, or a success this gate carried earlier;
+ * - neither diff is truncated and every file has a patch;
+ * - both diffs list the same files with the same status and previous name, and each file's added and removed lines are
+ *   identical in order, ignoring hunk headers and context lines.
+ * Postcondition: a carry description starts with CARRIED_STAMP_PREFIX, names the previous head's short SHA, and is at most 140 characters.
+ */
+export function decideStampCarry(_input: {
+  previousSha: string;
+  previousStamp: CommitStatus | null;
+  previousDiff: readonly PrDiffFile[];
+  currentDiff: readonly PrDiffFile[];
+  diffTruncated: boolean;
+}): CarryDecision {
+  throw new Error("Not implemented");
 }
 
 export interface GateDeps {
