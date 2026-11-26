@@ -3,9 +3,9 @@ import { HUB_USAGE } from "../../hub/usage.ts";
 import { systemEventOf } from "../../shared/domain.ts";
 import { TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { MAX_GRAPH_GOAL_CHARS, MAX_STEP_BRIEF_CHARS, ROUTER_CONTEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { MAX_GRAPH_GOAL_CHARS, MAX_STEP_BRIEF_CHARS, ROUTER_REPORT_SUMMARY_MAX_CHARS } from "../../shared/limits.ts";
 import { taskGraphSkillBody } from "../../shared/task-graph-skill.ts";
-import { checkTextLimit, formatGraphLimitsHelp, formatTextLimitViolations, TEXT_LIMITS } from "../../shared/text-limits.ts";
+import { checkHubLimit, formatGraphLimitsHelp, formatHubLimitViolations, HUB_LIMITS } from "../../shared/hub-limits.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./pm-friction-fixture.ts";
 
 describe("S5: atomic graph.patch with doneSteps and unified text limits", () => {
@@ -94,25 +94,25 @@ describe("S5: atomic graph.patch with doneSteps and unified text limits", () => 
   });
 
   it("S5.4: help, manual, JSON hints, and text-limits helpers expose the single limit table; 520-char finish summary rejected", () => {
-    expect(TEXT_LIMITS["step.brief"].maxChars).toBe(MAX_STEP_BRIEF_CHARS);
-    expect(TEXT_LIMITS["graph.finishSummary"].maxChars).toBe(ROUTER_CONTEXT_MAX_CHARS);
+    expect(HUB_LIMITS["step.brief"].max).toBe(MAX_STEP_BRIEF_CHARS);
+    expect(HUB_LIMITS["graph.finishSummary"].max).toBe(ROUTER_REPORT_SUMMARY_MAX_CHARS);
 
-    const violation = checkTextLimit("step.brief", "a".repeat(1734), "impl");
-    expect(violation).toEqual({ id: "step.brief", target: "impl", actualChars: 1734, maxChars: MAX_STEP_BRIEF_CHARS });
-    const formatted = formatTextLimitViolations([violation!], { noEffect: true });
+    const violation = checkHubLimit("step.brief", "a".repeat(1734), "impl");
+    expect(violation).toEqual({ id: "step.brief", target: "impl", actual: 1734, max: MAX_STEP_BRIEF_CHARS });
+    const formatted = formatHubLimitViolations([violation!], { noEffect: "这次改图没有生效" });
     expect(formatted).toContain("1734");
     expect(formatted).toContain(String(MAX_STEP_BRIEF_CHARS));
     expect(formatted).toContain("这次改图没有生效");
 
     const helpLine = formatGraphLimitsHelp();
     expect(helpLine).toContain(String(MAX_STEP_BRIEF_CHARS));
-    expect(helpLine).toContain(String(ROUTER_CONTEXT_MAX_CHARS));
+    expect(helpLine).toContain(String(ROUTER_REPORT_SUMMARY_MAX_CHARS));
 
     const manual = taskGraphSkillBody();
     expect(manual).toContain(String(MAX_STEP_BRIEF_CHARS));
-    expect(manual).toContain(String(ROUTER_CONTEXT_MAX_CHARS));
+    expect(manual).toContain(String(ROUTER_REPORT_SUMMARY_MAX_CHARS));
     expect(HUB_USAGE).toContain(String(MAX_STEP_BRIEF_CHARS));
-    expect(HUB_USAGE).toContain(String(ROUTER_CONTEXT_MAX_CHARS));
+    expect(HUB_USAGE).toContain(String(ROUTER_REPORT_SUMMARY_MAX_CHARS));
     expect(TASK_GRAPH_CREATE_JSON_HINT).toContain("1500");
     expect(TASK_GRAPH_PATCH_JSON_HINT).toContain("doneSteps");
 
@@ -124,7 +124,7 @@ describe("S5: atomic graph.patch with doneSteps and unified text limits", () => 
     );
     expect(err.code).toBe("invalid");
     expect(err.message).toContain("520");
-    expect(err.message).toContain(String(ROUTER_CONTEXT_MAX_CHARS));
+    expect(err.message).toContain(String(ROUTER_REPORT_SUMMARY_MAX_CHARS));
     expect(f.showGraph(graph.id).status).toBe("active");
   });
 

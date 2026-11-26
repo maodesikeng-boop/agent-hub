@@ -1,13 +1,13 @@
 import { sandboxApprovalPending } from "../sandbox-approvals.ts";
 import { randomUUID } from "node:crypto";
-import { utf8Bytes, type ConversationId, type MessageId, type WorkerId } from "../../../shared/domain.ts";
+import type { ConversationId, MessageId, WorkerId } from "../../../shared/domain.ts";
 import { turnFailureReason, type DriverEvent } from "../../../shared/driver.ts";
-import { DEFAULT_WORKER_MAX_TIME_MS, GIT_REASON_MAX_CHARS, MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../../shared/limits.ts";
+import { DEFAULT_WORKER_MAX_TIME_MS, GIT_REASON_MAX_CHARS, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { parseReviewTarget, type ReviewTarget } from "../../../shared/review.ts";
 import { checkWorkerMaxTimeMs } from "../../../shared/schedule.ts";
 import type { Db } from "../../store/index.ts";
-import { fail } from "../context.ts";
+import { assertHubLimit, fail } from "../context.ts";
 import { exitFailureReason } from "../messages.ts";
 import type { WorkerDbRow } from "../rows.ts";
 import type { StepWorkspacePlan } from "../task-graphs.ts";
@@ -103,7 +103,7 @@ export const toReportMessage = (row: ReportMessageRow | undefined): ReportMessag
 
 export function validTask(raw: unknown, what: string): string {
   if (typeof raw !== "string" || raw.trim() === "") throw fail("invalid", `${what}不能是空的`);
-  if (utf8Bytes(raw) > MAX_TASK_BYTES) throw fail("invalid", `${what}不能超过 ${MAX_TASK_BYTES} 字节`);
+  assertHubLimit("worker.task", raw);
   return raw;
 }
 

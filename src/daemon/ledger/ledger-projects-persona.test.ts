@@ -260,9 +260,13 @@ describe("建项目（在项目经理的会话里一句话）", () => {
     expect(li.project!.name).toBe("名".repeat(MAX_NAME_CHARS));
   });
 
-  it("只有自己给的名字不对才报“项目名字不对”", () => {
+  it("reports the name limit and rejects blank project names", () => {
     const before = tableCounts();
-    expectLedgerError(() => hub(lin.sessionId, "project.create", { folder: folder("ok"), name: "名".repeat(MAX_NAME_CHARS + 1) }), "invalid", /项目名字不对/);
+    expectLedgerError(
+      () => hub(lin.sessionId, "project.create", { folder: folder("ok"), name: "名".repeat(MAX_NAME_CHARS + 1) }),
+      "invalid",
+      new RegExp(`项目名有 ${MAX_NAME_CHARS + 1} 字，上限 ${MAX_NAME_CHARS} 字`),
+    );
     expectLedgerError(() => hub(lin.sessionId, "project.create", { folder: folder("ok"), name: "  " }), "invalid", /项目名字不对/);
     expect(tableCounts()).toEqual(before);
   });

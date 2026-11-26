@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import type { AnyActionRow, NewAction } from "../../shared/actions.ts";
 import type { Change, ChangeType, ComposerCommand } from "../../shared/api.ts";
 import type { AgentSessionRow, ConversationId, HealthModule, SessionId } from "../../shared/domain.ts";
+import { checkHubLimit, checkHubLimitAmount, formatHubLimitViolations, type HubLimitId } from "../../shared/hub-limits.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode, ResolveFolder } from "../../shared/ledger.ts";
 import { CHANGE_BUFFER_SIZE } from "../../shared/limits.ts";
@@ -226,4 +227,14 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     deviceName: options.deviceName ?? (() => hostname()),
     writeGeneration: () => generation,
   };
+}
+
+export function assertHubLimit(id: HubLimitId, value: string | readonly unknown[], target?: string): void {
+  const violation = checkHubLimit(id, value, target);
+  if (violation !== null) throw fail("invalid", formatHubLimitViolations([violation]));
+}
+
+export function assertHubLimitAmount(id: HubLimitId, amount: number, code: "invalid" | "conflict" = "invalid"): void {
+  const violation = checkHubLimitAmount(id, amount);
+  if (violation !== null) throw fail(code, formatHubLimitViolations([violation]));
 }

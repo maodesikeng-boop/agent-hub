@@ -23,6 +23,7 @@ import {
   type WorkerId,
 } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
+import { MAX_GATE_SUMMARY_CHARS } from "../../shared/limits.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
@@ -460,6 +461,25 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
   function escalateCheckpoint(graphId: number, node: string) {
     return ledger.hubCall(lin.sessionId, "ask", { graphId, node, text: "这一步可以通过吗？" }).data.messageId;
   }
+
+  it("keeps the PM's full checkpoint background when a Worker report is available", async () => {
+    const { graph } = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "Checkpoint",
+        steps: [{ key: "design", title: "Design", brief: "Write the plan", confirm: true }],
+      }),
+    }).data;
+    const workerId = graph.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(workerId);
+    runWorkerReportTurn(workerId, buildReportBlock({ status: "做完了", summary: "Worker summary" }));
+    const link = "https://example.com/plan";
+    const body = `${"背".repeat(MAX_GATE_SUMMARY_CHARS - link.length)}${link}`;
+    const { messageId } = ledger.hubCall(lin.sessionId, "ask", {
+      graphId: graph.id, node: "design", text: `通过吗？\n\n${body}`,
+    }).data;
+    expect(ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!.gateSummaryMd).toBe(body);
+    expect(ledger.hubCall(lin.sessionId, "ask.show", { messageId }).text).toContain(body);
+  });
 
   it("confirm: true 检查点由 PM 升级给用户；打回原 Worker，改完再通过则收工并带意见交棒下游", async () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {

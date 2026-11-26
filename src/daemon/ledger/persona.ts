@@ -28,7 +28,6 @@ import type {
 import {
   MAX_NAME_CHARS,
   MAX_PERSONA_BYTES,
-  MAX_REASON_CHARS,
   PERSONA_CHANGES_LIMIT,
   PM_ARCHIVE_RETENTION_MS,
   PM_MEMORY_HASH_CACHE_MAX,
@@ -61,7 +60,7 @@ import {
   writePmMemoryIndex,
 } from "../pm-memory.ts";
 import { getAgentSession } from "../store/index.ts";
-import { fail } from "./context.ts";
+import { assertHubLimit, fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 import { contentHash } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
@@ -221,9 +220,8 @@ export function createLedgerPersona(
   };
 
   const validPersonaText = (text: string) => {
-    if (typeof text !== "string" || utf8Bytes(text) > MAX_PERSONA_BYTES) {
-      throw fail("invalid", `性格设定太长，最多 ${MAX_PERSONA_BYTES / 1024} KB`);
-    }
+    if (typeof text !== "string") throw fail("invalid", "性格设定必须是文字");
+    assertHubLimit("persona.text", text);
   };
 
   const validMode = (mode: unknown): PmMode => {
@@ -452,7 +450,7 @@ export function createLedgerPersona(
     const current = effectiveAgent(pm);
     const agent = touchesAgent ? nextAgent(current, input, ctx.modelCatalog) : current;
     const reason = input.reason?.trim() || null;
-    if (reason !== null && [...reason].length > MAX_REASON_CHARS) throw fail("invalid", `理由最多 ${MAX_REASON_CHARS} 个字`);
+    if (reason !== null) assertHubLimit("persona.reason", reason);
     return editPersonaIn(p, pm, { text: input.text ?? pm.persona ?? "", mode, agent, reason }, editor);
   };
 

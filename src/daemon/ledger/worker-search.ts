@@ -2,12 +2,10 @@ import type { HubArgs, HubResult, WorkerSearchHit } from "../../shared/hub.ts";
 import {
   WORKER_SEARCH_CONTEXT_CHARS,
   WORKER_SEARCH_DEFAULT_LIMIT,
-  WORKER_SEARCH_MAX_KEYWORDS,
-  WORKER_SEARCH_MAX_KEYWORD_CHARS,
-  WORKER_SEARCH_MAX_LIMIT,
 } from "../../shared/limits.ts";
 import { unwrapWorkerReportText } from "../../shared/worker.ts";
-import { fail } from "./context.ts";
+import { hubLimitMaximum } from "../../shared/hub-limits.ts";
+import { assertHubLimit, assertHubLimitAmount, fail } from "./context.ts";
 import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
 
@@ -60,13 +58,10 @@ export function createLedgerWorkerSearch(ctx: LedgerContext) {
     if (!Array.isArray(keywords) || keywords.length === 0 || keywords.some((k) => typeof k !== "string" || k.trim() === "")) {
       throw fail("invalid", "要至少一个关键词，且不能是空的");
     }
-    if (keywords.length > WORKER_SEARCH_MAX_KEYWORDS) throw fail("invalid", `关键词最多 ${WORKER_SEARCH_MAX_KEYWORDS} 个`);
-    if (keywords.some((k) => [...k].length > WORKER_SEARCH_MAX_KEYWORD_CHARS)) {
-      throw fail("invalid", `每个关键词最多 ${WORKER_SEARCH_MAX_KEYWORD_CHARS} 个字符`);
-    }
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > WORKER_SEARCH_MAX_LIMIT) {
-      throw fail("invalid", `--limit 要写 1 到 ${WORKER_SEARCH_MAX_LIMIT} 之间的整数`);
-    }
+    assertHubLimit("worker.searchKeywords", keywords);
+    for (const keyword of keywords) assertHubLimit("worker.searchKeyword", keyword);
+    if (!Number.isSafeInteger(limit) || limit < 1) throw fail("invalid", "--limit 要写正整数");
+    assertHubLimitAmount("worker.searchLimit", limit);
     const words = keywords.map((k) => k.trim().toLowerCase());
     const matches = (text: string) => {
       const lower = text.toLowerCase();
@@ -110,7 +105,7 @@ export function createLedgerWorkerSearch(ctx: LedgerContext) {
       const where = h.where === "title" ? "标题" : h.where === "task" ? "任务" : `汇报 #${h.report}`;
       return `#${h.workerId}“${h.title}” · ${h.status} · ${where}：${h.snippet}`;
     });
-    const more = found.length > hits.length ? `（还有 ${found.length - hits.length} 处没列，用 --limit 调大，最多 ${WORKER_SEARCH_MAX_LIMIT}）` : "";
+    const more = found.length > hits.length ? `（还有 ${found.length - hits.length} 处没列，用 --limit 调大，上限 ${hubLimitMaximum("worker.searchLimit")}）` : "";
     return { text: `搜到 ${found.length} 处包含 ${label}，最新的在前${more}：\n${lines.join("\n")}`, data: { hits } };
   };
 

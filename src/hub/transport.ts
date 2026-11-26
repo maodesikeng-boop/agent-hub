@@ -1,6 +1,6 @@
 import { request, type ClientRequest } from "node:http";
 import type { Readable } from "node:stream";
-import { HUB_MAX_BODY_BYTES } from "../shared/limits.ts";
+import { checkHubLimitAmount, formatHubLimitViolations } from "../shared/hub-limits.ts";
 import { UsageError } from "./args.ts";
 
 export const TIMEOUT_REASON = "超时";
@@ -30,7 +30,8 @@ export function readAllStdin(stream: Readable, idleMs: number): Promise<string> 
     const onData = (chunk: Buffer | string) => {
       const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
       size += buf.length;
-      if (size > HUB_MAX_BODY_BYTES) return finish(new UsageError(`标准输入太长，不能超过 ${HUB_MAX_BODY_BYTES} 字节`));
+      const violation = checkHubLimitAmount("stdin", size);
+      if (violation !== null) return finish(new UsageError(formatHubLimitViolations([violation])));
       chunks.push(buf);
       arm();
     };

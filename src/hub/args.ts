@@ -1,7 +1,7 @@
 import { posix, resolve } from "node:path";
 import type { ParseArgsConfig } from "node:util";
 import type { HubCommand } from "../shared/hub.ts";
-import { HUB_FILE_ARGS_MAX } from "../shared/limits.ts";
+import { checkHubLimit, formatHubLimitViolations } from "../shared/hub-limits.ts";
 import { parseHubFileArg, type HubFileArg } from "../shared/deliverables.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { parseWorkerMaxTime } from "../shared/schedule.ts";
@@ -176,7 +176,8 @@ export function expandPath(raw: string, env: HubEnv, cwd: string): string {
 
 export function fileArgsOf(raw: string[] | undefined, env: HubEnv, cwd: string): HubFileArg[] | undefined {
   if (raw === undefined || raw.length === 0) return undefined;
-  if (raw.length > HUB_FILE_ARGS_MAX) throw new UsageError(`--file 最多 ${HUB_FILE_ARGS_MAX} 个`);
+  const violation = checkHubLimit("files", raw);
+  if (violation !== null) throw new UsageError(formatHubLimitViolations([violation]));
   return raw.map((item) => {
     let arg: HubFileArg;
     try {

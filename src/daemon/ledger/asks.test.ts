@@ -8,7 +8,7 @@ import type { Change } from "../../shared/api.ts";
 import { askOf } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
-import { ASK_MAX_OPTION_CHARS } from "../../shared/limits.ts";
+import { ASK_MAX_OPTION_CHARS, ROUTER_QUESTION_MAX_CHARS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
@@ -159,7 +159,7 @@ describe("项目经理收到用户消息时带着账本里当前还在等的卡"
   });
 
   it("问题很长只留前一段；卡很多只列前几张，其余写个数", () => {
-    for (let i = 1; i <= 12; i++) ask(`第${i}问${"长".repeat(200)}`);
+    for (let i = 1; i <= 12; i++) ask(`第${i}问`.padEnd(ROUTER_QUESTION_MAX_CHARS, "长"));
     const note = receivedBy(post(lin.conversationId, "回")).prefixes[0]!;
     expect(note).toContain("有 12 张");
     expect(note).toContain("「第1问");

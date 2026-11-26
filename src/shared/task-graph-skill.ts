@@ -1,8 +1,8 @@
 import { ASK_CARD_WHERE, TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./hub.ts";
-import { TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
+import { HANDOFF_NOTE_MAX_CHARS, HANDOFF_TOTAL_MAX_CHARS, TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
 import { HUB_COMMAND as HUB } from "./names.ts";
 import { skillNameOf } from "./skill-names.ts";
-import { formatGraphLimitsHelp } from "./text-limits.ts";
+import { formatGraphLimitsHelp } from "./hub-limits.ts";
 
 export const TASK_GRAPH_SKILL_NAME = "fusa-task-graph";
 
@@ -23,7 +23,7 @@ export function taskGraphSkillBody(): string {
 - **总目标（\`goal\`）要写全**：所有步骤共用同一份 \`goal\`，写清用户原话、背景、不做什么、怎么算做完（写成能核对的证据：按项目自己的验证方式写清要核对的测试、截图、实测输出或云端检查；要用户看的方案、验收结论、截图、录屏写进汇报的“文件”栏，会跟着步骤挂到检查点卡和总助上）；长材料存成文件给路径。
 - **一张图只装一件事**：互不相干的几件事各建一张图。
 - **按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。写测试、改代码、截图（项目要提 PR 的连同提 PR）是同一步，一个 Worker 一口气做完。只在三种时候另起一步：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。
-- **默认一条线，同线共用工作目录和分支**：\`steps\` 里不写 \`deps\` 默认按书写顺序串成一条线；单线上下游默认接手同一个 git worktree 和同一条分支（不用重跑准备命令，未提交改动也在；要提 PR 的整条线共用一个）。互不依赖的活才并行（写 \`deps: []\` 或前置步骤的 \`key\`）：分叉步骤默认基于上游分支新开 worktree（要从主干重开传 \`"base": "main"\`）；多路合流时后台自动拼接各路交棒（总上限 12,000 字均分、单路最多 4,000 字，超长完整汇报自动落盘到启动目录 \`upstream/<stepKey>.md\` 并附路径）。
+- **默认一条线，同线共用工作目录和分支**：\`steps\` 里不写 \`deps\` 默认按书写顺序串成一条线；单线上下游默认接手同一个 git worktree 和同一条分支（不用重跑准备命令，未提交改动也在；要提 PR 的整条线共用一个）。互不依赖的活才并行（写 \`deps: []\` 或前置步骤的 \`key\`）：分叉步骤默认基于上游分支新开 worktree（要从主干重开传 \`"base": "main"\`）；多路合流时后台自动拼接各路交棒（总上限 ${HANDOFF_TOTAL_MAX_CHARS.toLocaleString("en-US")} 字均分、单路最多 ${HANDOFF_NOTE_MAX_CHARS.toLocaleString("en-US")} 字，超长完整汇报自动落盘到启动目录 \`upstream/<stepKey>.md\` 并附路径）。
 - **每步自带职责与模型配置**：每步写 \`key\`、\`title\`、\`brief\`（一两句本步职责；上一步的交棒后台会自动原样转交，不用你手抄），按需配 \`vendor\`、\`model\`、\`effort\`、\`readonly\`、\`caps\`（外接能力：\`"inherit"\` 默认照项目设置，\`"none"\` 一个不带，\`"custom"\` 配 \`allow: ["mcp:<名>", "skill:<名>"]\` 只挂点名的；patch 时 \`caps: null\` 恢复默认）、\`maxTime\`（单轮上限，如 \`"45m"\`，默认 \`30m\`）、\`confirm: true\`、\`review: true\`、\`base\`（普通步骤只能写 \`"main"\`，从主干重开；审查步骤写被审分支）。
 - **下一步开始前要审的结果**（比如方案或用户要求先看的效果）：给产出它的步骤标 \`"confirm": true\`，把之后的步骤也一并建好。Worker 汇报“做完了”且无偏离时，系统把汇报和文件交给你，Worker 原会话保留。通过用 \`${HUB} graph done <步骤>\`，打回用 \`${HUB} worker send <编号> --stdin\`。确实需要用户决定时，再用 \`${HUB} ask --node <步骤>\`，卡片默认提供「通过 / 打回」，并带上本步的交付物。用户通过后自动收工并推进下游；没有下游时通知你。打回意见直接发给原 Worker，改完再次交你审。
 - **需要独立审查时，在实现后面加一个审查步骤**（设 \`"review": true\`，需要跨模型审查的指定另一家 \`vendor\`；后台自动前置独立审查说明，\`brief\` 里写明重点关注的区域或复审要点）：

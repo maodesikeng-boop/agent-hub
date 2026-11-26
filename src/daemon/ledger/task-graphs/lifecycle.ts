@@ -4,7 +4,7 @@ import type {
   SkipTaskNodeRequest,
   SkipTaskNodeResponse,
 } from "../../../shared/api.ts";
-import { taskNodeStatusText, truncateChars, utf8Bytes } from "../../../shared/domain.ts";
+import { taskNodeStatusText, truncateChars } from "../../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, TaskArtifact, TaskGraph, TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
 import { graphDeliverables } from "../../../shared/deliverables.ts";
 import type { HubArgs, HubResult, WorkerPr } from "../../../shared/hub.ts";
@@ -13,16 +13,14 @@ import {
   HUB_GRAPH_LIST_LIMIT,
   MAX_ACTIVE_GRAPHS_PER_PROJECT,
   MAX_NODE_ARTIFACT_SUMMARY_CHARS,
-  MAX_TASK_BYTES,
   ROUTER_REPORT_LINKS_MAX,
   ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
   ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
 } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { RouterReportLink } from "../../../shared/router.ts";
-import { checkTextLimit, formatTextLimitViolations } from "../../../shared/text-limits.ts";
 import type { Db } from "../../store/index.ts";
-import { fail, type Pending } from "../context.ts";
+import { assertHubLimit, fail, type Pending } from "../context.ts";
 import { sandboxApprovalPendingForStep } from "../sandbox-approvals.ts";
 import { collectGraphBranches, collectGraphPrUrls, stopQueuedDeliveryNotesIn, syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn, wakePmForTurnedIn } from "./progress.ts";
@@ -64,10 +62,9 @@ export function list(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.lis
 
 function doneArtifact(args: HubArgs<"graph.done">, node: TaskNodeDbRow): { artifact: TaskArtifact; note: string | undefined } {
   const summary = args.summary?.trim();
-  const violation = checkTextLimit("step.artifactSummary", summary ?? "", node.node_key);
-  if (violation !== null) throw fail("invalid", formatTextLimitViolations([violation]));
+  assertHubLimit("step.artifactSummary", summary ?? "");
   const note = args.note?.trim();
-  if (note !== undefined && utf8Bytes(note) > MAX_TASK_BYTES) throw fail("invalid", `放行说明不能超过 ${MAX_TASK_BYTES} 字节`);
+  if (note !== undefined) assertHubLimit("step.doneNote", note);
   const existing = readStoredArtifact(node.artifact_json).artifact ?? {};
   const derivedSummary = summary || existing.summary || (note ? collapseOneLine(note, MAX_NODE_ARTIFACT_SUMMARY_CHARS) : undefined);
   const artifact: TaskArtifact = {
@@ -181,6 +178,7 @@ export function skipIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubA
   g.persona.assertPmNotArchived(caller.pmId);
   const nodeKey = validateNodeKey(args.nodeKey);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: true });
+  assertHubLimit("graph.reason", args.reason?.trim() ?? "");
   const { graph, progress } = skipNodeInternalIn(g, p, graphRow, nodeKey, args.reason, false, caller, context);
   return { text: `已跳过节点「${nodeKey}」${unlockedNoteOf(progress, graph)}\n${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}`, data: { graph } };
 }
@@ -256,6 +254,7 @@ function cancelGraphInternalIn(
 export function cancelIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: HubArgs<"graph.cancel">): HubResult<"graph.cancel"> {
   g.persona.assertPmNotArchived(caller.pmId);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: true });
+  assertHubLimit("graph.reason", args.reason?.trim() ?? "");
   const { graph, stoppedWorkerIds } = cancelGraphInternalIn(g, p, graphRow, args.reason, false);
   const stoppedNote = stoppedWorkerIds.length > 0 ? `（已自动停掉在跑的 Worker ${workerIdList(stoppedWorkerIds)}）` : "";
   return { text: `已取消任务图 #${graph.id}「${graph.title}」${stoppedNote}。`, data: { graph } };
@@ -325,8 +324,6 @@ export function finishIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: Hu
   g.persona.assertPmNotArchived(caller.pmId);
   const summary = typeof args.summary === "string" ? args.summary.trim() : "";
   if (summary === "") throw fail("invalid", "交付摘要不能是空的（用 --stdin 传入交付摘要）");
-  const violation = checkTextLimit("graph.finishSummary", summary);
-  if (violation !== null) throw fail("invalid", formatTextLimitViolations([violation]));
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: true });
   const nodeRows = listStepRows(g.db, graphRow.id);
   assertAllSettled(g, graphRow, nodeRows);
@@ -339,6 +336,7 @@ export function finishIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: Hu
     caller,
     { summary, ...(links.length > 0 ? { links } : {}) },
     graphDeliverables(nodeRows.filter((n) => n.status === "done").map((n) => toTaskNode(n, true))),
+    "graph.finishSummary",
   );
   const t = g.now();
   const candidates = graphWorkerIds(nodeRows);
