@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -16,6 +16,7 @@ import {
   HUB_EXIT,
   HUB_FILE_ARGS_MAX,
   LedgerRequestError,
+  ROUTER_CONTEXT_MAX_CHARS,
   TASK_GRAPH_CREATE_JSON_HINT,
   TASK_GRAPH_PATCH_JSON_HINT,
   type SessionTokens,
@@ -147,6 +148,12 @@ describe("hub cli", () => {
       expect(r.stdout).toContain(`${cmd} project create --folder`);
       expect(r.stdout).not.toContain("assign");
       expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("shows the router report summary limit in hub help", async () => {
+      const r = await hub(["help"]);
+      expect(r.code).toBe(HUB_EXIT.ok);
+      expect(r.stdout).toMatch(new RegExp(`${cmd} router report [^\\n]*\\n[^\\n]*摘要最多 ${ROUTER_CONTEXT_MAX_CHARS} 字`));
     });
   });
 
@@ -1621,6 +1628,15 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
   });
 
   describe("--file（交付物，docs/deliverables-design.md）", () => {
+    it.each([
+      { argv: ["ask", "--stdin"], file: "同页名单仍显示0/1待提交=./a=b.png", path: () => join(cwd, "a=b.png") },
+      { argv: ["router", "report", "--summary", "做完了"], file: "同页名单仍显示0/1待提交=/tmp/a=b.png", path: () => resolve(cwd, "/tmp/a=b.png") },
+    ])("preserves slash labels and equals signs in paths for $argv", async ({ argv, file, path }) => {
+      const r = await hub([...argv, "--file", file], { stdin: stdinOf("看看\n") });
+      expect(r.code).toBe(HUB_EXIT.ok);
+      expect(ledger.calls[0]?.args).toMatchObject({ files: [{ label: "同页名单仍显示0/1待提交", path: path() }] });
+    });
+
     it("hub ask 和 hub router report 的 --file 可以写多个，按 `标签=路径` 解析成 files", async () => {
       expect(
         (await hub(["ask", "--file", "方案=/tmp/plan.md", "--file", "/tmp/shot.png", "--stdin"], { stdin: stdinOf("方案好了，请验收\n") })).code,

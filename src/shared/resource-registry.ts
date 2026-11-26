@@ -10,6 +10,10 @@ import {
   DAEMON_LOG_MAX_BYTES,
   ENDED_WORKER_STEPS_KEEP,
   FEISHU_DECISIONS_MAX_ROWS,
+  FEISHU_INBOUND_CURSORS_MAX,
+  FEISHU_INBOUND_RECEIPTS_MAX,
+  FEISHU_INBOUND_RECEIPTS_TTL_MS,
+  FEISHU_INBOUND_STATE_MAX_BYTES,
   FEISHU_OFFLINE_INBOX_MAX_PER_DEVICE,
   FEISHU_OFFLINE_INBOX_TTL_MS,
   FEISHU_POSTS_MAX_ROWS,
@@ -309,7 +313,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("router_capability_overrides", "bounded_config", "src/daemon/ledger/pm-capabilities.ts", "src/daemon/ledger/pm-capabilities.ts", "overwrite"),
   table("feishu_app", "bounded_config", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "overwrite"),
   table("feishu_chats", "bounded_config", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "on_archive_or_delete"),
-  table("feishu_inbound_cursors", "bounded_config", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "on_archive_or_delete"),
+  table("feishu_inbound_cursors", "bounded_config", "migrations/0041_feishu_router_asks_and_inbound_cursor.sql", "src/daemon/feishu/store.ts", "on_archive_or_delete"),
   table("feishu_avatars", "bounded_config", "src/daemon/feishu/store.ts", "src/daemon/feishu/store.ts", "overwrite"),
 ];
 
@@ -331,6 +335,12 @@ const HUB_PATH_ENTRIES: readonly ResourceRegistryEntry[] = [
     limit("PROVIDER_SECRETS_FILE_MAX_BYTES", PROVIDER_SECRETS_FILE_MAX_BYTES, "bytes"),
   ]),
   pathEntry("feishuSecretsFile", "data_dir", "bounded_config", "src/daemon/feishu/secrets.ts", "src/daemon/feishu/secrets.ts", "overwrite"),
+  pathEntry("feishuInboundFile", "data_dir", "growing", "src/daemon/feishu/inbound-checkpoint.ts", "src/daemon/feishu/inbound-checkpoint.ts", "automatic", [
+    limit("FEISHU_INBOUND_RECEIPTS_TTL_MS", FEISHU_INBOUND_RECEIPTS_TTL_MS, "ms"),
+    limit("FEISHU_INBOUND_RECEIPTS_MAX", FEISHU_INBOUND_RECEIPTS_MAX, "entries"),
+    limit("FEISHU_INBOUND_CURSORS_MAX", FEISHU_INBOUND_CURSORS_MAX, "entries"),
+    limit("FEISHU_INBOUND_STATE_MAX_BYTES", FEISHU_INBOUND_STATE_MAX_BYTES, "bytes"),
+  ]),
   pathEntry("deviceFile", "data_dir", "bounded_config", "src/daemon/device.ts", "src/daemon/device.ts", "overwrite"),
   pathEntry("pushVapidFile", "data_dir", "bounded_config", "src/daemon/push/vapid.ts", "src/daemon/push/vapid.ts", "overwrite"),
   pathEntry("pushSubscriptionsFile", "data_dir", "bounded_config", "src/daemon/push/subscriptions.ts", "src/daemon/push/subscriptions.ts", "overwrite", [

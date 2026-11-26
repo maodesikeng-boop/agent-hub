@@ -118,14 +118,18 @@ export function deliverableOriginOfFile(file: SentFile): DeliverableOrigin | nul
   return originOfFile.get(file);
 }
 
+const EXPLICIT_PATH_PREFIX = /^(?:[/\\]|[A-Za-z]:|(?:\.{1,2}|~)[/\\])/;
+
 export function parseHubFileArg(raw: string): HubFileArg {
   const text = raw.trim();
   if (text === "") throw new RangeError("--file 不能是空的");
   const eq = text.indexOf("=");
-  const head = eq === -1 ? "" : text.slice(0, eq);
-  if (eq === -1 || /[/\\]/.test(head)) return { label: null, path: text };
+  if (eq === -1) return { label: null, path: text };
+  const label = text.slice(0, eq).trim();
   const path = text.slice(eq + 1).trim();
+  if (EXPLICIT_PATH_PREFIX.test(label) || (/[/\\]/.test(label) && !EXPLICIT_PATH_PREFIX.test(path))) {
+    return { label: null, path: text };
+  }
   if (path === "") throw new RangeError(`--file ${text} 只写了标签，没写路径（要写成 标签=路径）`);
-  const label = head.trim();
   return { label: label === "" ? null : label, path };
 }

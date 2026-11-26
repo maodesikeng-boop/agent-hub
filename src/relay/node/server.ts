@@ -4,6 +4,7 @@ import { LRUCache } from "lru-cache";
 import { DatabaseSync } from "node:sqlite";
 import type { RawData, WebSocket } from "ws";
 import {
+  RELAY_CHECKPOINT_PER_IP_PER_MINUTE,
   RELAY_CHANNEL_HIGH_WATER_BYTES,
   RELAY_CONCURRENT_SOCKETS_PER_IP,
   RELAY_IP_BLOCKED_MAX,
@@ -21,6 +22,7 @@ import { parseAccountId, type AccountId } from "../../shared/mesh.ts";
 import { accountIdOf, verifyGithubToken } from "../auth.ts";
 import { createRelayAccountRoom, type RelayAccountRecord, type RelayAccountRoom, type RelayAccountStorage, type RelaySocket } from "../core.ts";
 import { clientKeyOf, createIpRateLimiter } from "../guards.ts";
+import { handleLeaseCheckpoint, parseLeaseCheckpointRoute, RELAY_CHECKPOINT_BODY_LIMIT } from "../lease-checkpoint.ts";
 import { isRelayToken, parseRelayRegisterRequest, RELAY_PATHS, RELAY_PROTOCOL_VERSION, type RelayErrorCode, type RelayHealthResponse } from "../protocol.ts";
 
 export interface NodeRelayOptions {
@@ -101,6 +103,7 @@ interface RelayContext {
   roomFor(accountId: AccountId): RoomEntry;
   track(accountId: AccountId, socket: WebSocket): RelayAccountRoom;
   allowRegister(ip: string): boolean;
+  allowCheckpoint(ip: string): boolean;
   allowUpgrade(ip: string): boolean;
   trackIpSocket(ip: string, socket: WebSocket): void;
 }
@@ -112,6 +115,7 @@ function createRelayContext(options: NodeRelayOptions, db: DatabaseSync, isOpen:
   const limiterOptions = { windowMs: RELAY_RATE_WINDOW_MS, max: RELAY_IP_LIMITER_MAX, blockedMax: RELAY_IP_BLOCKED_MAX, pruneIntervalMs: RELAY_IP_LIMITER_PRUNE_MS };
   const registerLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_REGISTER_PER_IP_PER_MINUTE });
   const upgradeLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_UPGRADES_PER_IP_PER_MINUTE });
+  const checkpointLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_CHECKPOINT_PER_IP_PER_MINUTE });
   const activeSocketsByIp = new LRUCache<string, number>({ max: RELAY_IP_LIMITER_MAX });
 
   const roomFor = (accountId: AccountId) => {
@@ -135,6 +139,7 @@ function createRelayContext(options: NodeRelayOptions, db: DatabaseSync, isOpen:
       return entry.room;
     },
     allowRegister: (ip) => registerLimiter.allow(clientKeyOf(ip), now()),
+    allowCheckpoint: (ip) => checkpointLimiter.allow(clientKeyOf(ip), now()),
     allowUpgrade(ip) {
       if ((activeSocketsByIp.get(ip) ?? 0) >= RELAY_CONCURRENT_SOCKETS_PER_IP) return false;
       return upgradeLimiter.allow(clientKeyOf(ip), now());
@@ -151,6 +156,25 @@ function createRelayContext(options: NodeRelayOptions, db: DatabaseSync, isOpen:
 }
 
 const accountParam = (req: FastifyRequest) => parseAccountId((req.params as { account?: unknown }).account);
+
+function registerCheckpointRoute(app: FastifyInstance, ctx: RelayContext): void {
+  app.route({
+    method: ["GET", "PUT"],
+    url: "/v1/accounts/:account/leases/:name/checkpoint",
+    bodyLimit: RELAY_CHECKPOINT_BODY_LIMIT,
+    onRequest: async (req, reply) => {
+      if (!ctx.allowCheckpoint(req.ip)) return reply.code(429).send({ error: "rate_limited" });
+    },
+    handler: async (req, reply) => {
+      const url = new URL(req.url, "http://relay.local");
+      const route = parseLeaseCheckpointRoute(url.pathname);
+      if (route === null) return reply.code(404).send({ error: "not_found" });
+      const room = ctx.rooms.get(route.accountId)?.room;
+      if (room === undefined) return reply.code(401).send({ error: "unauthorized" });
+      return reply.send(await handleLeaseCheckpoint(room, route.leaseName, url, req.method, async () => req.body));
+    },
+  });
+}
 
 function registerRegisterRoute(app: FastifyInstance, ctx: RelayContext): void {
   const { options, log } = ctx;
@@ -300,6 +324,7 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
   registerRegisterRoute(app, ctx);
   registerControlRoute(app, ctx);
   registerChannelRoute(app, ctx);
+  registerCheckpointRoute(app, ctx);
 
   const sweeper = setInterval(() => {
     for (const [accountId, entry] of rooms) {
