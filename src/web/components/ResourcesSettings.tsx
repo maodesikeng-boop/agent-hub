@@ -22,7 +22,6 @@ export interface ResourcesSettingsProps {
   readonly active?: boolean;
   readonly devices?: DeviceSettings | null;
   readonly defaultDeviceKey?: DeviceKey;
-  readonly titled?: boolean;
 }
 
 const REASON_LABELS: Readonly<Record<HeldResourceReason, string>> = {
@@ -398,10 +397,6 @@ function DiscardConfirmDialog({
   );
 }
 
-/**
- * Precondition: rendered inside SettingsDialog (desktop) or ResourcesPage (mobile).
- * Postcondition: renders Needs review items (Keep / Delete or Stop), Summary totals, Storage breakdown, and collapsed Kept rows.
- */
 export function ResourcesSettings({
   active = true,
   devices = null,

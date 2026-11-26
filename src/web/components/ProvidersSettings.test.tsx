@@ -19,7 +19,7 @@ import type { DeviceSettings } from "../settings-model.ts";
 import { PROVIDERS_GUIDED_KEY } from "../shell-model.ts";
 import { initialState } from "../state.ts";
 import { FakeApi, installFakeWebSocket, makeSnapshot } from "../test-utils.ts";
-import { SettingsDialog } from "./SettingsDialog.tsx";
+import { SettingsDialogFixture } from "./settings-dialog-fixture.tsx";
 
 const notify: NotifySettings = { permission: "granted", enabled: false, setEnabled: vi.fn(async () => {}) };
 
@@ -209,7 +209,7 @@ describe("桌面端 Settings → Providers", () => {
     api.providersStatus = () => ({ status: 200, body: mixed });
     api.install();
 
-    render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const panel = await screen.findByRole("tabpanel", { name: "Providers" });
     await within(panel).findByText("alice@example.com");
 
@@ -262,7 +262,7 @@ describe("桌面端 Settings → Providers", () => {
     };
     api.install();
 
-    render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const row = await screen.findByTestId(`provider-row-${targetVendor}`);
 
     // 初始静止态不轮询
@@ -376,7 +376,7 @@ describe("桌面端 Settings → Providers", () => {
     };
 
     render(
-      <SettingsDialog
+      <SettingsDialogFixture
         open
         section="providers"
         defaultProviderDevice={TOKYO_ID}
@@ -456,7 +456,7 @@ describe("桌面端 Settings → Providers", () => {
     api.providersStatus = () => ({ status: 200, body: winMissingGit });
     api.install();
 
-    render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const panel = await screen.findByRole("tabpanel", { name: "Providers" });
     const envRegion = await within(panel).findByRole("region", { name: "Environment" });
     expect(within(envRegion).getByText("Git")).toBeVisible();
@@ -466,9 +466,9 @@ describe("桌面端 Settings → Providers", () => {
     // 重新渲染测试 Account… 登出
     api.providersStatus = () => ({ status: 200, body: makeMixedProviders() });
     resetQueryClient();
-    const { unmount } = render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    const { unmount } = render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     unmount();
-    render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const panel2 = await screen.findByRole("tabpanel", { name: "Providers" });
     const v0 = AGENT_VENDORS[0]!;
     await user.click(within(within(panel2).getByTestId(`provider-row-${v0}`)).getByRole("button", { name: /Account/ }));
@@ -538,7 +538,7 @@ describe("桌面端 Settings → Providers", () => {
     api.providersStatus = () => ({ status: 200, body });
     api.install();
 
-    render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     const panel = await screen.findByRole("tabpanel", { name: "Providers" });
     const row = await within(panel).findByTestId(`provider-row-${v0}`);
     expect(row.querySelector("[data-tone='caution']")).not.toBeNull();

@@ -1,12 +1,11 @@
 import { Loader2 } from "../ui/icons.ts";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   isSelectable,
   type AgentVendor,
   type ProviderJobSnapshot,
   type ProviderStatusItem,
 } from "../../shared/index.ts";
-import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import { errorText, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import {
@@ -20,9 +19,7 @@ import {
   extractProviderAuthTargets,
   isProviderAuthFlowActive,
   useCopyFeedback,
-  useProvidersSetting,
   visibleAuthMethodsForTarget,
-  type DeviceSettings,
   type ProvidersSettingModel,
 } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
@@ -34,7 +31,6 @@ import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { StatusShimmer } from "./StatusShimmer.tsx";
 import { useProviderSheet } from "../settings-drafts.ts";
 import { ProviderSheetChrome } from "./ProviderSheetChrome.tsx";
-import { VendorSyncSettings } from "./VendorSyncSettings.tsx";
 
 function openExternalBrowserPage(url: string): void {
   try {
@@ -1089,13 +1085,11 @@ export function ProvidersListSection({
   );
 }
 
-export function ProvidersSettings({ active = true, mobile = false, devices = null, defaultDeviceKey = LOCAL_DEVICE }: {
-  active?: boolean;
-  mobile?: boolean;
-  devices?: DeviceSettings | null;
-  defaultDeviceKey?: DeviceKey;
+export function ProvidersSettings({ mobile, model, vendorSync }: {
+  mobile: boolean;
+  model: ProvidersSettingModel;
+  vendorSync: ReactNode;
 }) {
-  const model = useProvidersSetting({ enabled: active, devices: devices?.devices ?? null, defaultDeviceKey });
   const { sheet, open, close, setMode } = useProviderSheet();
   const item = sheet !== null && sheet.deviceKey === model.deviceKey
     ? model.status?.providers.find((provider) => provider.vendor === sheet.vendor) : undefined;
@@ -1113,7 +1107,7 @@ export function ProvidersSettings({ active = true, mobile = false, devices = nul
         onOpenSignIn={(vendor) => open({ mode: "signin", vendor, deviceKey: model.deviceKey })}
         onOpenAccount={(vendor) => open({ mode: "account", vendor, deviceKey: model.deviceKey })}
       />
-      {!mobile && <VendorSyncSettings client={model.targetClient} />}
+      {vendorSync}
       {sheet !== null && item !== undefined && (
         <ProviderSheetChrome mobile={mobile} title={sheet.mode === "signin" ? `Sign in to ${item.label}` : item.label} onClose={closeByUser}>
           {sheet.mode === "signin" ? (

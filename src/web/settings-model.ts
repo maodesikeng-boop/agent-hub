@@ -701,6 +701,8 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
   };
 }
 
+export type VendorSyncModel = ReturnType<typeof useVendorSyncSetting>;
+
 export const PROVIDERS_QUERY_KEY = (deviceKey: string) => ["providers", deviceKey] as const;
 
 export interface ProvidersSummary {
@@ -857,9 +859,10 @@ export interface UseProvidersSettingOptions {
   enabled?: boolean;
   devices?: readonly DeviceView[] | null;
   defaultDeviceKey?: DeviceKey;
+  selectionPage?: "providers" | "vendor-sync";
 }
 
-function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceKey: DeviceKey) {
+function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceKey: DeviceKey, selectionPage: UseProvidersSettingOptions["selectionPage"]) {
   const contextClient = useClient();
   const selectableComputers = useMemo(() => resolveSelectableProviderComputers(devices), [devices]);
 
@@ -872,9 +875,9 @@ function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceK
   );
 
   const [selectedDeviceKey, setSelectedDeviceKey] = useState<DeviceKey>(() => pickValidDeviceKey(defaultDeviceKey));
-  const prevDefaultRef = useRef(defaultDeviceKey);
-  if (prevDefaultRef.current !== defaultDeviceKey) {
-    prevDefaultRef.current = defaultDeviceKey;
+  const [selectionDefault, setSelectionDefault] = useState({ defaultDeviceKey, selectionPage });
+  if (selectionDefault.defaultDeviceKey !== defaultDeviceKey || selectionDefault.selectionPage !== selectionPage) {
+    setSelectionDefault({ defaultDeviceKey, selectionPage });
     const nextKey = pickValidDeviceKey(defaultDeviceKey);
     if (nextKey !== selectedDeviceKey) setSelectedDeviceKey(nextKey);
   }
@@ -1039,12 +1042,11 @@ export function useProvidersSetting({
   enabled = true,
   devices = null,
   defaultDeviceKey = LOCAL_DEVICE,
+  selectionPage,
 }: UseProvidersSettingOptions = {}) {
   const qc = useHubQueryClient();
-  const { selectableComputers, effectiveDeviceKey, setSelectedDeviceKey, targetClient, isRemoteTarget } = useProviderTarget(
-    devices,
-    defaultDeviceKey,
-  );
+  const { selectableComputers, effectiveDeviceKey, setSelectedDeviceKey, targetClient, isRemoteTarget } =
+    useProviderTarget(devices, defaultDeviceKey, selectionPage);
   const pageVisible = useSyncExternalStore(subscribePageVisibility, getPageVisibilitySnapshot, () => true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const queryKey = useMemo(() => PROVIDERS_QUERY_KEY(effectiveDeviceKey), [effectiveDeviceKey]);

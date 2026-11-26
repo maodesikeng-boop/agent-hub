@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bundledModelCatalog, emptyRouterSlice, type DeviceInfo, type ProviderStatusItem, type ProvidersStatusResponse, type RouterDecisionItem, type StateSnapshot } from "../shared/index.ts";
+import { bundledModelCatalog, emptyRouterSlice, type DeviceInfo, type ProviderStatusItem, type ProvidersStatusResponse, type RouterDecisionItem, type StateSnapshot, type VendorSyncPreviewResponse } from "../shared/index.ts";
 import { createAutoReloader, DRAFTS_STORAGE_KEY, resetAutoReloadForTests } from "./auto-reload.ts";
 import { App } from "./App.tsx";
 import { changeOf, FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makePm, makeProject, makeSnapshot, makeWorkerConversation, makeWorkerLine } from "./test-utils.ts";
@@ -468,6 +468,54 @@ describe("layout switch acceptance", () => {
     expect(cancels()).toHaveLength(0);
     await user.click(within(screen.getByRole("dialog", { name: "Sign in to Claude Code" })).getByRole("button", { name: "Close" }));
     if (method === "Browser") await waitFor(() => expect(cancels()).toHaveLength(1));
+  });
+
+  it.each(["providers", "vendor-sync"])("keeps the Vendor sync scan and selection from %s until apply", async (section) => {
+    const hash = `#/settings/${section}`;
+    const fromMobile = section === "vendor-sync";
+    const endpoint = fromMobile ? "/api/vendor-sync" : `/d/${REMOTE.id}/api/vendor-sync`;
+    const preview: VendorSyncPreviewResponse = {
+      scannedAt: 1,
+      truncated: false,
+      mcpServers: [],
+      skills: ["review-helper", "release-notes"].map((name) => ({ key: `global:${name}`, name, scope: "global", sourcePath: `/skills/${name}`, vendors: [] })),
+      nonSyncable: [],
+    };
+    let finishScan = () => {};
+    const scan = new Promise<{ status: number; body: VendorSyncPreviewResponse }>((resolve) => {
+      finishScan = () => resolve({ status: 200, body: preview });
+    });
+    const { api, resize } = boot(hash, {}, (backend) => {
+      backend.vendorSyncPreview = () => scan;
+      if (!fromMobile) withComputers(backend);
+    });
+    const user = userEvent.setup();
+    if (fromMobile) resize(ONE_COLUMN_PX);
+    else {
+      await user.click(await screen.findByRole("combobox", { name: "Computer" }));
+      await user.click(await screen.findByRole("option", { name: REMOTE.name }));
+    }
+    await user.click(await screen.findByRole("button", { name: "Scan…" }));
+    resize(fromMobile ? DESKTOP_PX : ONE_COLUMN_PX);
+    finishScan();
+    await user.click(await screen.findByRole("switch", { name: "release-notes" }));
+    resize(DESKTOP_PX);
+
+    for (const width of ROUND_TRIPS) {
+      resize(width);
+      expect(location.hash).toBe(hash);
+      expect(await screen.findByRole("switch", { name: "release-notes" })).not.toBeChecked();
+      expect(screen.getByRole("switch", { name: "review-helper" })).toBeChecked();
+    }
+    if (!fromMobile) resize(ONE_COLUMN_PX);
+    await user.click(screen.getByRole("button", { name: /^Sync$/ }));
+    const apply = api.callsTo("POST", /\/api\/vendor-sync\/apply$/);
+    expect(apply).toHaveLength(1);
+    expect(apply[0]).toMatchObject({ path: `${endpoint}/apply`, body: {
+      selectedMcpKeys: [], removeMcpKeys: [], selectedSkillKeys: ["global:review-helper"], removeSkillKeys: ["global:release-notes"],
+    } });
+    expect(api.callsTo("GET", /\/api\/vendor-sync\/preview$/)).toMatchObject([{ path: `${endpoint}/preview` }]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Sync$/ })).toBeNull());
   });
 
   it("keeps the pending computer rename in both editors", async () => {

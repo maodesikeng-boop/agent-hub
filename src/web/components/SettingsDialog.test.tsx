@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionInfo } from "../../shared/index.ts";
 import type { NotifySettings } from "../notify.ts";
 import { FakeApi, makeSnapshot } from "../test-utils.ts";
-import { SettingsDialog } from "./SettingsDialog.tsx";
+import { SettingsDialogFixture } from "./settings-dialog-fixture.tsx";
 
 const ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36";
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36";
@@ -33,7 +33,7 @@ beforeEach(() => {
 
 function TestSettingsDialog() {
   const [section, setSection] = useState<SettingsDialogSection>("computers");
-  return <SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} section={section} onSectionChange={setSection} />;
+  return <SettingsDialogFixture open onOpenChange={() => {}} notify={notify} devices={devices} section={section} onSectionChange={setSection} />;
 }
 
 async function openSecurity() {
@@ -65,7 +65,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
   });
 
   it("设置是工作台里的一页：盖住最左栏右边，没有遮罩、外框和阴影；内容是白纸面，关闭在表头里，分组不画框", () => {
-    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} section="general" />);
+    render(<SettingsDialogFixture open onOpenChange={() => {}} notify={notify} devices={devices} section="general" />);
     const page = screen.getByRole("dialog", { name: "Settings" });
     expect(page).toHaveAttribute("data-page");
     expect(page).toHaveClass("shell-frame", "left-18");
@@ -112,7 +112,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
   });
 
   it("从别处点进能力页：defaultSection 直接落在 Capabilities", async () => {
-    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} section="capabilities" />);
+    render(<SettingsDialogFixture open onOpenChange={() => {}} notify={notify} devices={devices} section="capabilities" />);
     expect(screen.getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("radio", { name: "Project defaults" })).toBeChecked();
     expect(await screen.findByRole("region", { name: "Shared" })).toBeInTheDocument();

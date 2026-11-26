@@ -1,12 +1,9 @@
 import { Activity, memo, type ReactNode } from "react";
 import { ArrowLeftRight, Bell, Blocks, Cable, Download, Loader2, Monitor, QrCode, Server, Smartphone, Type } from "../../ui/icons.ts";
-import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx";
-import { ProvidersSettings } from "../../components/ProvidersSettings.tsx";
 import type { SettingsBodies } from "../../components/SettingsDialog.tsx";
 import type { ComputerRenameApi } from "../../settings-drafts.ts";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { UpdateSettings } from "../../components/UpdateSettings.tsx";
-import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
 import { formatQuotaReset } from "../../format.ts";
 import { cn } from "../../lib/utils.ts";
 import type { NotifySettings } from "../../notify.ts";
@@ -19,28 +16,27 @@ import {
   useCachedBrowserSessionsSummary,
   useCachedProvidersSummary,
   useUiScaleSetting,
-  useVendorSyncSetting,
   type DeviceSettings,
+  type VendorSyncModel,
 } from "../../settings-model.ts";
 import { updateReminderOf, useCachedUpdateStatus, useDismissedUpdate } from "../../update-model.ts";
 import { BrowsersPage } from "./BrowsersPage.tsx";
 import { ComputersPage } from "./ComputersPage.tsx";
 import { NotificationsPage } from "./NotificationsPage.tsx";
-import { ResourcesPage } from "./ResourcesPage.tsx";
 import { ScalePage } from "./ScalePage.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
 import { SettingsPage } from "./SettingsPage.tsx";
 import { SignInPage } from "./SignInPage.tsx";
-import { VendorSyncFooter, VendorSyncPage, type VendorSync } from "./VendorSyncPage.tsx";
+import { VendorSyncFooter, VendorSyncPage } from "./VendorSyncPage.tsx";
 
 export interface MobileSettingsProps {
   section: SettingsSection | undefined;
   notify: NotifySettings;
   devices: DeviceSettings | null;
   quota?: readonly QuotaVendor[];
-  bodies?: SettingsBodies;
-  rename?: ComputerRenameApi;
-  defaultProviderDevice?: DeviceKey;
+  bodies: SettingsBodies;
+  rename: ComputerRenameApi;
+  vendor: VendorSyncModel;
   onOpen: (section: SettingsSection) => void;
   onBack: () => void;
   onSignedOut?: () => void;
@@ -49,10 +45,9 @@ export interface MobileSettingsProps {
 interface SubpageContext {
   notify: NotifySettings;
   devices: DeviceSettings | null;
-  defaultProviderDevice: DeviceKey;
-  vendor: VendorSync;
-  bodies?: SettingsBodies;
-  rename?: ComputerRenameApi;
+  vendor: VendorSyncModel;
+  bodies: SettingsBodies;
+  rename: ComputerRenameApi;
   onSignedOut?: () => void;
 }
 
@@ -77,19 +72,19 @@ const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
   updates: { title: "Updates", render: () => <UpdateSettings titled={false} /> },
   providers: {
     title: "Providers",
-    render: (ctx) => ctx.bodies?.providers ?? <ProvidersSettings mobile devices={ctx.devices} defaultDeviceKey={ctx.defaultProviderDevice} />,
+    render: (ctx) => ctx.bodies.providers,
   },
   "vendor-sync": {
     title: "Vendor sync",
     render: (ctx) => <VendorSyncPage vendor={ctx.vendor} />,
     footer: (ctx) => (ctx.vendor.preview === null ? null : <VendorSyncFooter vendor={ctx.vendor} />),
   },
-  capabilities: { title: "Capabilities", render: (ctx) => ctx.bodies?.capabilities ?? <CapabilitiesSettings /> },
+  capabilities: { title: "Capabilities", render: (ctx) => ctx.bodies.capabilities },
   resources: {
     title: "Resources",
-    render: (ctx) => ctx.bodies?.resources ?? <ResourcesPage devices={ctx.devices} defaultDeviceKey={ctx.defaultProviderDevice} />,
+    render: (ctx) => ctx.bodies.resources,
   },
-  computers: { title: "Computers", render: (ctx) => withDevices(ctx, (devices) => <ComputersPage devices={devices} account={ctx.bodies?.account} {...(ctx.rename === undefined ? {} : { rename: ctx.rename })} />) },
+  computers: { title: "Computers", render: (ctx) => withDevices(ctx, (devices) => <ComputersPage devices={devices} account={ctx.bodies.account} rename={ctx.rename} />) },
   "sign-in": { title: "Sign in on another device", render: () => <SignInPage /> },
   browsers: { title: "Signed-in browsers", render: (ctx) => <BrowsersPage {...(ctx.onSignedOut !== undefined ? { onSignedOut: ctx.onSignedOut } : {})} /> },
 };
@@ -225,22 +220,20 @@ export const MobileSettings = memo(function MobileSettings({
   notify,
   devices,
   quota = NO_QUOTA,
-  defaultProviderDevice = LOCAL_DEVICE,
   onOpen,
   onBack,
   onSignedOut,
   bodies,
   rename,
+  vendor,
 }: MobileSettingsProps) {
-  const vendor = useVendorSyncSetting();
   const spec = section === undefined ? null : SUBPAGES[section];
   const ctx: SubpageContext = {
     notify,
     devices,
-    defaultProviderDevice,
     vendor,
-    ...(bodies === undefined ? {} : { bodies }),
-    ...(rename === undefined ? {} : { rename }),
+    bodies,
+    rename,
     ...(onSignedOut !== undefined ? { onSignedOut } : {}),
   };
   return (

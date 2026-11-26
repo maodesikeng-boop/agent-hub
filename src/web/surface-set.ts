@@ -21,7 +21,6 @@ interface SurfaceSetInput {
 const SETTINGS_BODIES: Partial<Record<NonNullable<ReturnType<typeof dialogTabOf>>, readonly SettingsSurface[]>> = {
   capabilities: ["capabilities"],
   resources: ["resources"],
-  providers: ["providers"],
   computers: ["account"],
 };
 

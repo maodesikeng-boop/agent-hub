@@ -1,9 +1,8 @@
 import { Loader2 } from "../../ui/icons.ts";
 import { useState, type ReactNode } from "react";
-import { AccountSettings } from "../../components/AccountSettings.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "../../components/DeviceBadges.tsx";
 import { RowError, SettingsGroup } from "../../components/SettingsList.tsx";
-import { useComputerRename, type ComputerRenameApi } from "../../settings-drafts.ts";
+import type { ComputerRenameApi } from "../../settings-drafts.ts";
 import { LINK_LABELS, platformLabel, type DeviceView } from "../../devices.ts";
 import { useDeviceRemove, useDeviceRename, type DeviceSettings } from "../../settings-model.ts";
 import { Button } from "../../ui/button.tsx";
@@ -109,17 +108,15 @@ function ManageView({ device, onChanged, close, onRename }: { device: DeviceView
   );
 }
 
-export function ComputersPage({ devices: settings, account, rename: sharedRename }: { devices: DeviceSettings; account?: ReactNode; rename?: ComputerRenameApi }) {
+export function ComputersPage({ devices: settings, account, rename }: { devices: DeviceSettings; account: ReactNode; rename: ComputerRenameApi }) {
   const { devices, onChanged } = settings;
-  const localRename = useComputerRename();
-  const rename = sharedRename ?? localRename;
   const target = rename.rename === null ? undefined : devices.find((device) => device.key === rename.rename?.deviceKey);
   const manage = useDrawerTarget<DeviceView>();
   const mine = devices.filter((d) => d.info.self);
   const others = devices.filter((d) => !d.info.self);
   return (
     <>
-      {account ?? <AccountSettings />}
+      {account}
       <SettingsGroup title="This computer">
         {mine.map((device) => (
           <DeviceNavRow key={device.key} device={device} onClick={() => rename.start(device.key, device.info.name)} />

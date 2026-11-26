@@ -2,7 +2,6 @@ import { Blocks, Cable, Monitor, Server, Settings, Shield, X, type Icon } from "
 import type { ReactNode } from "react";
 import type { SettingsDialogSection } from "../workbench-nav.ts";
 import type { ComputerRenameApi } from "../settings-drafts.ts";
-import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import type { NotifySettings } from "../notify.ts";
 import { useCachedResourcesSummary } from "../resources-model.ts";
 import { NOTIFY_BLOCKED, isNotifyBlocked, useUiScaleSetting, type DeviceSettings } from "../settings-model.ts";
@@ -12,10 +11,7 @@ import { Segmented } from "../ui/segmented.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
-import { CapabilitiesSettings } from "./CapabilitiesSettings.tsx";
 import { ComputersSection } from "./DeviceSettings.tsx";
-import { ProvidersSettings } from "./ProvidersSettings.tsx";
-import { ResourcesSettings } from "./ResourcesSettings.tsx";
 import { FlatSettingsGroups, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { UpdateSettings } from "./UpdateSettings.tsx";
 
@@ -30,7 +26,7 @@ function UiScaleRow() {
   );
 }
 
-export type SettingsBodies = Partial<Record<"capabilities" | "resources" | "account" | "providers", ReactNode>>;
+export type SettingsBodies = Record<"capabilities" | "resources" | "account" | "providers", ReactNode>;
 
 const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: Icon }[] = [
   { id: "general", label: "General", icon: Settings },
@@ -50,7 +46,6 @@ export function SettingsDialog({
   section,
   bodies,
   rename,
-  defaultProviderDevice = LOCAL_DEVICE,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -58,9 +53,8 @@ export function SettingsDialog({
   notify: NotifySettings;
   devices?: DeviceSettings | null;
   section?: SettingsDialogSection;
-  bodies?: SettingsBodies;
-  rename?: ComputerRenameApi;
-  defaultProviderDevice?: DeviceKey;
+  bodies: SettingsBodies;
+  rename: ComputerRenameApi;
 }) {
   const sections = SECTIONS.filter((s) => s.id !== "computers" || devices !== null);
   const effectiveSection = section ?? (devices === null ? "general" : "computers");
@@ -86,22 +80,10 @@ export function SettingsDialog({
         <UpdateSettings />
       </>
     ),
-    providers: bodies?.providers ?? (
-      <ProvidersSettings
-        active={open && effectiveSection === "providers"}
-        devices={devices}
-        defaultDeviceKey={defaultProviderDevice}
-      />
-    ),
-    capabilities: bodies?.capabilities ?? <CapabilitiesSettings />,
-    resources: bodies?.resources ?? (
-      <ResourcesSettings
-        active={open && effectiveSection === "resources"}
-        devices={devices}
-        defaultDeviceKey={defaultProviderDevice}
-      />
-    ),
-    computers: devices && <ComputersSection {...devices} account={bodies?.account} {...(rename === undefined ? {} : { rename })} />,
+    providers: bodies.providers,
+    capabilities: bodies.capabilities,
+    resources: bodies.resources,
+    computers: devices && <ComputersSection {...devices} account={bodies.account} rename={rename} />,
     security: <BrowserSessionsSettings />,
   };
 

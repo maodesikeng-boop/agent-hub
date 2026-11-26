@@ -11,6 +11,7 @@ import { WorkPanelToggle } from "./components/WorkPanel.tsx";
 import type { ShellContent, ShellModel } from "./components/WorkPanelShell.tsx";
 import { useComputerRename, type ComputerRenameApi } from "./settings-drafts.ts";
 import { SurfaceOutlet, SurfaceScope } from "./shell-surfaces.tsx";
+import { settingsBodies, WorkbenchSettings } from "./WorkbenchSettings.tsx";
 import { FullPage, WorkbenchSurfaces } from "./WorkbenchSurfaces.tsx";
 import { dialogTabOf, sectionForDialogTab } from "./workbench-nav.ts";
 import { DeviceScope } from "./device-scope.tsx";
@@ -20,7 +21,6 @@ import { SHELL_LIST_REM, SHELL_PANEL_REM } from "./limits.ts";
 import { mobileBack } from "./mobile/back.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
 import { TabBar, mobileTabOf, type MobileTab } from "./mobile/TabBar.tsx";
-import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
 import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
 import { usePaneWidths } from "./pane-widths.ts";
 import { useCurrentQuota } from "./quota.ts";
@@ -65,13 +65,6 @@ function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boo
   }
   return null;
 }
-
-const settingsBodies = {
-  capabilities: <SurfaceOutlet id="settings:capabilities" />,
-  resources: <SurfaceOutlet id="settings:resources" />,
-  account: <SurfaceOutlet id="settings:account" />,
-  providers: <SurfaceOutlet id="settings:providers" />,
-};
 
 interface LayoutProps {
   model: ShellModel;
@@ -168,7 +161,6 @@ function DesktopWorkbench({
         onOpenChange={(open) => { if (!open) navigation.closeSettings(); }}
         onSectionChange={(next) => navigation.showSettingsSection(sectionForDialogTab(next, settings?.section, c.deviceSettings !== null))}
         {...(tab === undefined ? {} : { section: tab })}
-        defaultProviderDevice={c.defaultProviderDevice}
         notify={c.reminders.notify}
         devices={c.deviceSettings}
         rename={rename}
@@ -178,7 +170,7 @@ function DesktopWorkbench({
   );
 }
 
-function MobileWorkbench({ model, content: c, quota, panel, rename }: LayoutProps) {
+function MobileWorkbench({ model, content: c, panel }: Omit<LayoutProps, "quota" | "rename">) {
   const { route, navigation, replace } = model;
   const settings = navigation.nav.settings;
   const tab = settings === null ? mobileTabOf(route) : settings.section === undefined ? "settings" : null;
@@ -193,19 +185,7 @@ function MobileWorkbench({ model, content: c, quota, panel, rename }: LayoutProp
 
   let body: React.ReactNode;
   if (settings !== null) {
-    body = (
-      <MobileSettings
-        section={settings.section}
-        notify={c.reminders.notify}
-        devices={c.deviceSettings}
-        quota={quota}
-        defaultProviderDevice={c.defaultProviderDevice}
-        onOpen={c.openSettingsSection}
-        onBack={navigation.settingsBack}
-        rename={rename}
-        bodies={settingsBodies}
-      />
-    );
+    body = <SurfaceOutlet id="settings:mobile" />;
   } else if (panel !== null) {
     body = <SurfaceOutlet id={panel} />;
   } else if (route?.view === "router") {
@@ -299,8 +279,21 @@ function Workbench({
   return (
     <SurfaceScope>
       {mobile
-        ? <MobileWorkbench model={model} content={c} quota={quota} panel={panel} rename={rename} />
+        ? <MobileWorkbench model={model} content={c} panel={panel} />
         : <DesktopWorkbench model={model} content={c} quota={quota} panel={panel} rename={rename} setShellElement={setShellElement} chatMinRem={chatMinRem} stackPanel={stackPanel} />}
+      {settings !== null && (
+        <WorkbenchSettings
+          mobile={mobile}
+          section={settings.section}
+          notify={c.reminders.notify}
+          devices={c.deviceSettings}
+          quota={quota}
+          defaultProviderDevice={c.defaultProviderDevice}
+          onOpen={c.openSettingsSection}
+          onBack={model.navigation.settingsBack}
+          rename={rename}
+        />
+      )}
       <WorkbenchSurfaces
         model={model}
         content={c}

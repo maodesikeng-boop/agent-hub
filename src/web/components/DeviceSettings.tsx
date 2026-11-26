@@ -4,8 +4,7 @@ import { LINK_LABELS, platformLabel, type DeviceView } from "../devices.ts";
 import { useDeviceRemove, useDeviceRename, type DeviceSettings } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
-import { useComputerRename, type ComputerRenameApi } from "../settings-drafts.ts";
-import { AccountSettings } from "./AccountSettings.tsx";
+import type { ComputerRenameApi } from "../settings-drafts.ts";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
@@ -125,14 +124,12 @@ function DeviceRow({ device, onChanged, rename }: { device: DeviceView; onChange
   );
 }
 
-export function ComputersSection({ devices, onChanged, account, rename: sharedRename }: DeviceSettings & { account?: ReactNode; rename?: ComputerRenameApi }) {
-  const localRename = useComputerRename();
-  const rename = sharedRename ?? localRename;
+export function ComputersSection({ devices, onChanged, account, rename }: DeviceSettings & { account: ReactNode; rename: ComputerRenameApi }) {
   const mine = devices.filter((d) => d.info.self);
   const others = devices.filter((d) => !d.info.self);
   return (
     <>
-      {account ?? <AccountSettings />}
+      {account}
       <SettingsGroup title="This computer">
         {mine.map((device) => (
           <DeviceRow key={device.key} device={device} onChanged={onChanged} rename={rename} />

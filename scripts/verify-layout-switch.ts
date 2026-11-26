@@ -133,6 +133,59 @@ async function installDevices(page: Page) {
   await page.route("**/api/account", (route) => route.fulfill({ json: { state: "signed_out", lastError: null } }));
 }
 
+async function vendorSync({ page, open, rounds, requests, screenshot }: CaseContext, startNarrow = false) {
+  const hash = startNarrow ? "#/settings/vendor-sync" : "#/settings/providers";
+  const endpoint = startNarrow ? "/api/vendor-sync" : `/d/${REMOTE.id}/api/vendor-sync`;
+  const scans: string[] = [];
+  await page.route(/\/api\/providers(?:\?|$)/, (route) => route.fulfill({ json: {
+    platform: "darwin", gitInstalled: true, canInstallGit: false, gitJob: null, providers: [],
+  } satisfies ProvidersStatusResponse }));
+  await applyPatch(page, "vendor-sync-preview");
+  await page.route(/\/api\/vendor-sync\/preview$/, async (route) => {
+    scans.push(new URL(route.request().url()).pathname);
+    await route.fallback();
+  });
+  await page.route(`**${endpoint}/apply`, (route) => route.fulfill({ json: {
+    backupId: "layout-switch", syncedMcpCount: 2, removedMcpCount: 0, linkedSkillCount: 1,
+    unlinkedSkillCount: 1, preservedPrivateSkillCount: 0, updatedFiles: 1,
+  } }));
+  if (startNarrow) await page.setViewportSize({ width: 675, height: 800 });
+  else await installDevices(page);
+  await open(hash);
+  if (!startNarrow) {
+    await page.getByRole("combobox", { name: "Computer" }).click();
+    await page.getByRole("option", { name: "Tokyo" }).click();
+  }
+  await page.getByRole("button", { name: "Scan…" }).click();
+  const excluded = page.getByRole("switch", { name: "frontend-rules" });
+  const included = page.getByRole("switch", { name: "poteto-mode" });
+  await excluded.click();
+  if (startNarrow) {
+    await screenshot("narrow-start");
+    await page.setViewportSize({ width: 900, height: 800 });
+  }
+  await rounds(async () => {
+    await excluded.waitFor();
+    assert.equal(await excluded.getAttribute("aria-checked"), "false");
+    assert.equal(await included.getAttribute("aria-checked"), "true");
+    assert.equal(new URL(page.url()).hash, hash);
+  });
+  if (!startNarrow) await page.setViewportSize({ width: 675, height: 800 });
+  await page.getByRole("button", { name: "Sync", exact: true }).click();
+  await excluded.waitFor({ state: "hidden" });
+  await screenshot("applied");
+  assert.deepEqual(scans, [`${endpoint}/preview`]);
+  const applies = requests.filter(({ path }) => path.endsWith("/vendor-sync/apply"));
+  assert.equal(applies.length, 1);
+  assert.equal(applies[0]?.path, `${endpoint}/apply`);
+  assert.deepEqual(applies[0]?.body, {
+    selectedMcpKeys: ["github", "linear"], removeMcpKeys: [],
+    selectedSkillKeys: ["project:/tmp/fusa-ui-shots/projects/agent-hub:poteto-mode"],
+    removeSkillKeys: ["global:frontend-rules"],
+    confirmedHostBoundMcpKeys: [],
+  });
+}
+
 const DEMO_AUTH = {
   flowId: "layout-switch-flow",
   methodId: "browser",
@@ -460,6 +513,8 @@ const cases: Record<string, (context: CaseContext) => Promise<void>> = {
   navigation,
   "provider-api-key": (ctx) => providerSignIn(ctx, "API key"),
   "provider-browser-code": (ctx) => providerSignIn(ctx, "Browser"),
+  "vendor-sync-desktop": vendorSync,
+  "vendor-sync-mobile": (ctx) => vendorSync(ctx, true),
   "computer-rename": computerRename,
 };
 
@@ -487,7 +542,7 @@ export async function verifyLayoutSwitch(options: LayoutSwitchOptions) {
         page.on("pageerror", (err) => errors.push(err.message));
         page.on("request", (request) => {
           const path = new URL(request.url()).pathname;
-          if (request.method() === "POST" && /\/api\/(router\/commands|providers\/[^/]+\/auth\/)/.test(path)) requests.push({ path, body: request.postDataJSON() });
+          if (request.method() === "POST" && /\/api\/(router\/commands|providers\/[^/]+\/auth\/|vendor-sync\/apply$)/.test(path)) requests.push({ path, body: request.postDataJSON() });
         });
         const screenshot = async (step: string) => {
           const path = join(options.outDir, `${options.label}-${engine}-${scenario}-${step}.png`);

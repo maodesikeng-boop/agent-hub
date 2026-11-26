@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VendorSyncPreviewResponse } from "../../shared/index.ts";
 import type { NotifySettings } from "../notify.ts";
 import { FakeApi, makeSnapshot } from "../test-utils.ts";
-import { SettingsDialog } from "./SettingsDialog.tsx";
+import { SettingsDialogFixture } from "./settings-dialog-fixture.tsx";
 
 const notify: NotifySettings = { permission: "granted", enabled: false, setEnabled: vi.fn(async () => {}) };
 
@@ -65,7 +65,7 @@ const samplePreview: VendorSyncPreviewResponse = {
 
 function TestSettingsDialog() {
   const [section, setSection] = useState<SettingsDialogSection>("general");
-  return <SettingsDialog open onOpenChange={() => {}} notify={notify} section={section} onSectionChange={setSection} />;
+  return <SettingsDialogFixture open onOpenChange={() => {}} notify={notify} section={section} onSectionChange={setSection} />;
 }
 
 describe("设置弹窗：Vendor sync 扫描预览、取消勾选移除与执行同步", () => {
@@ -124,7 +124,7 @@ describe("设置弹窗：Vendor sync 扫描预览、取消勾选移除与执行�
       status: 200,
       body: { scannedAt: 1_700_000_000_000, mcpServers: [], skills: [], nonSyncable: [], truncated: false },
     });
-    const { unmount } = render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    const { unmount } = render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
 
     await user.click(screen.getByRole("button", { name: "Scan…" }));
     const emptyDialog = await screen.findByRole("dialog", { name: "Sync preview" });
@@ -134,7 +134,7 @@ describe("设置弹窗：Vendor sync 扫描预览、取消勾选移除与执行�
 
     api.vendorSyncPreview = () => ({ status: 200, body: samplePreview });
     api.vendorSyncApply = () => ({ status: 500, body: { error: "磁盘空间不足，回滚完成", code: "internal" } });
-    render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
 
     await user.click(screen.getByRole("button", { name: "Scan…" }));
     const dialog = await screen.findByRole("dialog", { name: "Sync preview" });
@@ -179,7 +179,7 @@ describe("设置弹窗：Vendor sync 扫描预览、取消勾选移除与执行�
       },
     });
 
-    render(<SettingsDialog open section="providers" onOpenChange={() => {}} notify={notify} />);
+    render(<SettingsDialogFixture open section="providers" onOpenChange={() => {}} notify={notify} />);
     await user.click(screen.getByRole("button", { name: "Scan…" }));
     const dialog = await screen.findByRole("dialog", { name: "Sync preview" });
 

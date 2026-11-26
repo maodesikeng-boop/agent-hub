@@ -17,7 +17,7 @@ it("keeps the Router available for its route and for the default page", () => {
 });
 
 it("selects a single settings body for both layouts' presentations", () => {
-  for (const [section, surface] of [["capabilities", "capabilities"], ["resources", "resources"], ["computers", "account"], ["providers", "providers"], ["vendor-sync", "providers"]] as const) {
+  for (const [section, surface] of [["capabilities", "capabilities"], ["resources", "resources"], ["computers", "account"]] as const) {
     expect(surfaceSetOf({ nav: { page: null, settings: { section } }, ...keys }).settings).toEqual([surface]);
   }
   expect(surfaceSetOf({ nav: { page: null, settings: { section: "computers" } }, ...keys, managed: false }).settings).toEqual([]);
