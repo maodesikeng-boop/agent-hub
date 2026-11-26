@@ -1,25 +1,16 @@
 // pnpm eval compare 整条路的自测（不花钱）：剧本项目经理代替真 claude，其余照真跑——导出两个版本的源码、用 vitest.eval.config.ts 跑试跑、
 // 打印并写出对照表。能派 Worker 时用正例（每条检查两个版本都是“过”），不能时（Worker 沙箱里）用什么都不做的。
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { SANDBOX_EXEC, osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
+import { osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { shortTmp } from "../e2e/harness.ts";
+import { sandboxAllowsNestedSandbox } from "../sandbox-probes.ts";
 import type { Summary } from "./report.ts";
 import { scenarioById } from "./scenarios.ts";
 
-const canSpawnWorkers =
-  process.platform === "darwin"
-    ? (() => {
-        try {
-          execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
-          return true;
-        } catch {
-          return false;
-        }
-      })()
-    : osSandboxAvailable();
+const canSpawnWorkers = process.platform === "darwin" ? sandboxAllowsNestedSandbox() : osSandboxAvailable();
 
 const CLI = new URL("./cli.ts", import.meta.url).pathname;
 const root = mkdtempSync(join(shortTmp(), "ah-evalcli-"));

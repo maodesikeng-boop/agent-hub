@@ -1,8 +1,9 @@
 // 驱动层 + 假 claude：m1-plan 第 4 节“W2 驱动层 + 假 claude”测试表，每条一个 describe。
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
 import {
   CRASH_RECOVERY_NOTE,
   DriverError,
@@ -1111,14 +1112,7 @@ describe("其他输入输出", () => {
 });
 
 describe("清理残留进程", () => {
-  const canRunPs = (() => {
-    try {
-      execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
+  const canRunPs = process.platform !== "win32" && sandboxAllowsPs();
 
   // 用例失败（cleanupStale 没清掉它）时假 claude 不能留在机器上
   const strays: ChildProcess[] = [];
