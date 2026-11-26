@@ -1,5 +1,6 @@
 import type {
   AgentRole,
+  CheckpointReviewer,
   ConversationId,
   MessageId,
   PersonaChange,
@@ -257,7 +258,7 @@ export interface CreateTaskGraphNodeInput {
   noOuterSandbox?: boolean;
   caps?: WorkerCapabilityMode;
   allow?: string[];
-  confirm?: boolean;
+  confirm?: boolean | CheckpointReviewer;
   review?: boolean;
   base?: string;
   deps?: TaskNodeKey[];
@@ -295,7 +296,7 @@ export interface PatchTaskGraphNodeInput {
   noOuterSandbox?: boolean;
   caps?: WorkerCapabilityMode | null;
   allow?: string[];
-  confirm?: boolean;
+  confirm?: boolean | CheckpointReviewer;
   review?: boolean;
   base?: string | null;
   deps?: TaskNodeKey[];
@@ -307,6 +308,15 @@ export interface PatchTaskGraphNodeInput {
 
 export type PatchTaskGraphStepInput = PatchTaskGraphNodeInput;
 
+export interface PatchDoneStepInput {
+  key: TaskNodeKey;
+  prUrl?: string;
+  commit?: string;
+  branch?: string;
+  summary?: string;
+  note?: string;
+}
+
 export interface PatchTaskGraphSpecInput {
   title?: string;
   goal?: string | null;
@@ -314,6 +324,7 @@ export interface PatchTaskGraphSpecInput {
   updateSteps?: PatchTaskGraphStepInput[];
   removeSteps?: TaskNodeKey[];
   skipSteps?: TaskNodeKey[];
+  doneSteps?: Array<TaskNodeKey | PatchDoneStepInput>;
   addNodes?: CreateTaskGraphNodeInput[];
   updateNodes?: PatchTaskGraphNodeInput[];
   removeNodes?: TaskNodeKey[];

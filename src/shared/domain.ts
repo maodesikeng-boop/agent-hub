@@ -716,6 +716,9 @@ export type TaskNodeStatus = (typeof TASK_NODE_STATUSES)[number];
 export const TASK_NODE_WAITING_FOR = ["user", "pm"] as const;
 export type TaskNodeWaitingFor = (typeof TASK_NODE_WAITING_FOR)[number];
 
+export const CHECKPOINT_REVIEWERS = ["user", "pm"] as const;
+export type CheckpointReviewer = (typeof CHECKPOINT_REVIEWERS)[number];
+
 export interface TaskNodeState {
   status: TaskNodeStatus;
   waitingFor: TaskNodeWaitingFor | null;
@@ -811,6 +814,7 @@ export interface TaskNode {
   readonly?: boolean;
   maxTimeMs?: number | null;
   confirm?: boolean;
+  checkpoint?: CheckpointReviewer | null;
   review?: boolean;
   base?: string | null;
   status: TaskNodeStatus;
