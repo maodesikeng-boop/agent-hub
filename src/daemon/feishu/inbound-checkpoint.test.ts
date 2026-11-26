@@ -69,6 +69,12 @@ afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()!();
 });
 
+function barrier() {
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => { release = resolve; });
+  return { reached, release };
+}
+
 function tempDir(prefix: string): string {
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
@@ -681,6 +687,15 @@ describe("FeishuInboundSync coordinator degradation, shutdown, and isolation", (
 });
 
 describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () => {
+  async function moveLeaseToMac(relay: SharedRelayStub, tokyo: HubNode, mac: HubNode) {
+    relay.holder = MAC;
+    relay.epoch = 2;
+    tokyo.setLease(false, MAC, 1);
+    mac.setLease(true, MAC, 2);
+    await mac.service.syncLeaseConnection();
+    await mac.service.idle();
+  }
+
   async function bootstrapPair(clockRef: { now: number }, relay: SharedRelayStub) {
     const cluster = createHubCluster(clockRef, relay);
     const tokyo = await cluster.makeNode(TOKYO, "Tokyo", true, 1);
@@ -713,18 +728,12 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
     // 2. Tokyo stops; Mac takes epoch 2; user sends M2 during handoff.
     clockRef.now += 14_000;
     tokyo.online = false;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
 
     clockRef.now += 3_000;
     const m2 = userMessage("om_incident_m2", "Now run on Mac", clockRef.now);
     cluster.fakeFeishu.recordMessage(m2);
 
-    relay.holder = MAC;
-    relay.epoch = 2;
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
+    await moveLeaseToMac(relay, tokyo, mac);
 
     // Mac must NOT replay M1, and must execute M2 exactly once.
     expect(mac.submitted.map((c) => c.clientId)).toEqual(["feishu:om_incident_m2"]);
@@ -753,15 +762,8 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
     await cluster.deliverLive(tokyo, userMessage("om_turn_1", "First turn", clockRef.now));
     expect(tokyo.submitted).toHaveLength(1);
 
-    // Clean yield from Tokyo to Mac.
     clockRef.now += 2_000;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
-    relay.holder = MAC;
-    relay.epoch = 2;
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
+    await moveLeaseToMac(relay, tokyo, mac);
 
     clockRef.now += 2_000;
     await cluster.deliverLive(mac, userMessage("om_turn_2", "Second turn", clockRef.now));
@@ -781,57 +783,66 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
       return { ...port, putCheckpoint: (...args) => writeGate.then(() => port.putCheckpoint(...args)) };
     };
     const { tokyo, mac } = await bootstrapPair(clockRef, relay);
-    let releaseWrite!: () => void;
-    writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const checkpointWrite = barrier();
+    const claimMirrored = barrier();
+    writeGate = checkpointWrite.reached;
+    const apply = mac.service.applyInboundState!;
+    const spy = vi.spyOn(mac.service, "applyInboundState").mockImplementation((state) => {
+      apply(state);
+      if (state.receipts.om_lease_flip?.phase === "claimed") claimMirrored.release();
+    });
     clockRef.now += 2_000;
     try {
       tokyo.fake.event(userMessage("om_lease_flip", "Message during hub handoff", clockRef.now));
-      await vi.waitFor(() => expect(mac.service.exportInboundState?.()?.receipts.om_lease_flip?.phase).toBe("claimed"));
+      await claimMirrored.reached;
       expect(tokyo.submitted).toEqual([]);
-      relay.holder = MAC;
-      relay.epoch = 2;
-      tokyo.setLease(false, MAC, 1);
-      mac.setLease(true, MAC, 2);
-      await mac.service.syncLeaseConnection();
-      await mac.service.idle();
+      const takeover = moveLeaseToMac(relay, tokyo, mac);
+      checkpointWrite.release();
+      await takeover;
     } finally {
-      releaseWrite();
+      checkpointWrite.release();
+      spy.mockRestore();
     }
     await tokyo.service.syncLeaseConnection();
     await tokyo.service.idle();
     expect([...tokyo.submitted, ...mac.submitted].map((c) => c.clientId)).toEqual(["feishu:om_lease_flip"]);
   });
 
-  it("prevents duplicate execution on mid-turn failover while still catching up subsequent messages (S3)", async () => {
+  it.each(["succeeds", "fails"] as const)("handles a claimed Router DM when the old hub %s after takeover (S3)", async (outcome) => {
     const clockRef = { now: 1_764_136_500_000 };
     const relay = createSharedRelayStub(() => clockRef.now);
     const { cluster, tokyo, mac } = await bootstrapPair(clockRef, relay);
 
-    let finishTokyoTurn!: () => void;
-    tokyo.submitDelay = () => new Promise<void>((resolve) => (finishTokyoTurn = resolve));
+    const started = barrier();
+    const finish = barrier();
+    const submit = vi.fn(async () => {}).mockImplementationOnce(async () => {
+      started.release();
+      await finish.reached;
+      if (outcome === "fails") throw new Error("injected Router submission failure");
+    });
+    tokyo.submitDelay = submit;
 
     clockRef.now += 2_000;
     tokyo.fake.event(userMessage("om_inflight_m1", "Long Router turn", clockRef.now));
-    // Wait until Tokyo's router.submitCommand has started and claimed M1.
-    await vi.waitFor(() => expect(finishTokyoTurn).toBeTypeOf("function"));
-
-    // While M1 is still running on Tokyo, M2 arrives in Feishu and lease flips to Mac.
-    clockRef.now += 2_000;
-    cluster.fakeFeishu.recordMessage(userMessage("om_after_inflight_m2", "Follow-up during failover", clockRef.now));
-
-    relay.holder = MAC;
-    relay.epoch = 2;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
-
-    finishTokyoTurn();
-    await tokyo.service.idle();
+    try {
+      await started.reached;
+      clockRef.now += 2_000;
+      cluster.fakeFeishu.recordMessage(userMessage("om_after_inflight_m2", "Follow-up during failover", clockRef.now));
+      await moveLeaseToMac(relay, tokyo, mac);
+      expect(mac.service.exportInboundState?.()?.receipts.om_inflight_m1?.phase).toBe("claimed");
+      expect(mac.submitted.map((c) => c.clientId)).toEqual(["feishu:om_after_inflight_m2"]);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      finish.release();
+      await vi.runAllTimersAsync();
+      await tokyo.service.idle();
+    } finally {
+      finish.release();
+      vi.useRealTimers();
+    }
 
     expect(tokyo.submitted.map((c) => c.clientId)).toEqual(["feishu:om_inflight_m1"]);
-    expect(mac.submitted.map((c) => c.clientId)).toEqual(["feishu:om_after_inflight_m2"]);
+    expect(submit).toHaveBeenCalledTimes(outcome === "fails" ? 2 : 1);
+    expect(mac.service.exportInboundState?.()?.receipts.om_inflight_m1?.phase).toBe("handled");
   });
 
   it("deduplicates non-deliver routes and suppresses false 15-minute gap reminders on takeover (S5)", async () => {
@@ -852,13 +863,7 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
     // Standby Mac had a 20-minute-old local cursor; takeover must not replay recent /settings or post a false gap reminder.
     clockRef.now += 5_000;
     const sentBeforeTakeover = cluster.fakeFeishu.sent.length;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
-    relay.holder = MAC;
-    relay.epoch = 2;
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
+    await moveLeaseToMac(relay, tokyo, mac);
 
     const newPosts = cluster.fakeFeishu.sent.slice(sentBeforeTakeover);
     expect(newPosts.some((p) => p.content.includes("离线超过"))).toBe(false);
@@ -987,13 +992,7 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
 
     // Hand off to Mac: none of the 8 vendor turns may replay.
     clockRef.now += 2_000;
-    tokyo.setLease(false, MAC, 1);
-    await tokyo.service.syncLeaseConnection();
-    relay.holder = MAC;
-    relay.epoch = 2;
-    mac.setLease(true, MAC, 2);
-    await mac.service.syncLeaseConnection();
-    await mac.service.idle();
+    await moveLeaseToMac(relay, tokyo, mac);
     expect(mac.submitted).toEqual([]);
   });
 });
