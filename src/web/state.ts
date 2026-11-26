@@ -28,6 +28,8 @@ import {
   type PmId,
   type Project,
   type ProjectFolder,
+  type RouterCommandId,
+  type RouterCommandRecord,
   type RouterItem,
   type RouterSlice,
   type ScheduleRecord,
@@ -74,6 +76,12 @@ interface PendingSandboxCard {
   text: string;
 }
 
+export interface RouterCommandVersions {
+  /** The last version handed out; it only grows while the page is open. */
+  last: number;
+  byId: Readonly<Record<RouterCommandId, number>>;
+}
+
 export interface HubState {
   phase: Phase;
   loadError?: ErrorInfo;
@@ -89,6 +97,8 @@ export interface HubState {
   health: HealthEntry[];
   schedules: ScheduleRecord[];
   router: RouterSlice;
+  /** Every router.command change or snapshot applied gives the commands it writes the next version, so two writes never share one: updatedAt can repeat, and the change seq starts over when the daemon restarts. */
+  routerCommandVersions: RouterCommandVersions;
   pendingSandboxCards?: readonly PendingSandboxCard[];
   activeTaskGraphs: TaskGraph[];
   lookups: Record<ConversationId, "loading" | "missing" | undefined>;
@@ -116,6 +126,7 @@ export const initialState: HubState = {
   health: [],
   schedules: [],
   router: emptyRouterSlice(),
+  routerCommandVersions: { last: 0, byId: {} },
   activeTaskGraphs: [],
   lookups: {},
   server: serverInfoFor("darwin"),
@@ -445,7 +456,11 @@ export function applyChange(state: HubState, change: Change): HubState {
       const { command } = change.data;
       const existingIndex = state.router.commands.findIndex((c) => c.id === command.id);
       if (existingIndex !== -1) {
-        return { ...next, router: { ...state.router, commands: state.router.commands.with(existingIndex, command) } };
+        return {
+          ...next,
+          router: { ...state.router, commands: state.router.commands.with(existingIndex, command) },
+          routerCommandVersions: bumpCommandVersion(state.routerCommandVersions, command.id),
+        };
       }
       const combined = [command, ...state.router.commands];
       const trimmed = combined.length > ROUTER_STREAM_LIVE_MAX;
@@ -457,13 +472,18 @@ export function applyChange(state: HubState, change: Change): HubState {
           commands,
           commandsHasMore: state.router.commandsHasMore || trimmed,
         },
+        routerCommandVersions: bumpCommandVersion(state.routerCommandVersions, command.id, trimmed ? combined.slice(ROUTER_STREAM_LIVE_MAX) : []),
       };
     }
     case "router.command.updated": {
       const { command } = change.data;
       const existingIndex = state.router.commands.findIndex((c) => c.id === command.id);
       if (existingIndex === -1) return next;
-      return { ...next, router: { ...state.router, commands: state.router.commands.with(existingIndex, command) } };
+      return {
+        ...next,
+        router: { ...state.router, commands: state.router.commands.with(existingIndex, command) },
+        routerCommandVersions: bumpCommandVersion(state.routerCommandVersions, command.id),
+      };
     }
     case "task_graph.created":
     case "task_graph.updated": {
@@ -538,6 +558,20 @@ function endedBefore(state: HubState, conversationId: ConversationId): boolean {
   return sessions.length > 0 && sessions.every((s) => s.status === "ended");
 }
 
+function bumpCommandVersion(versions: RouterCommandVersions, id: RouterCommandId, dropped: readonly RouterCommandRecord[] = []): RouterCommandVersions {
+  const last = versions.last + 1;
+  const byId: Record<RouterCommandId, number> = { ...versions.byId, [id]: last };
+  for (const c of dropped) delete byId[c.id];
+  return { last, byId };
+}
+
+function commandVersionsAtSnapshot(versions: RouterCommandVersions, commands: readonly RouterCommandRecord[]): RouterCommandVersions {
+  const last = versions.last + 1;
+  const byId: Record<RouterCommandId, number> = {};
+  for (const c of commands) byId[c.id] = last;
+  return { last, byId };
+}
+
 // Older remote daemons omit commandsHasMore/briefingsHasMore; assume more pages when the window is non-empty.
 function normalizeRouterSlice(router: RouterSlice): RouterSlice {
   const raw = router as Partial<Pick<RouterSlice, "commandsHasMore" | "briefingsHasMore">> & RouterSlice;
@@ -578,6 +612,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     health: snapshot.health,
     schedules: snapshot.schedules,
     router: normalizeRouterSlice(snapshot.router),
+    routerCommandVersions: commandVersionsAtSnapshot(state.routerCommandVersions, snapshot.router.commands),
     pendingSandboxCards: snapshot.pendingSandboxApprovals?.map((approval) => ({
       id: approval.id, conversationId: approval.conversationId, text: formatSandboxApprovalCardText(approval),
     })),

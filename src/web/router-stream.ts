@@ -40,6 +40,8 @@ export interface RouterTurnEntry {
   status: RouterCommandStatus | "sending" | "send_failed";
   unsentError?: unknown;
   command: RouterCommandRecord | null;
+  /** HubState.routerCommandVersions of `command` for live turns read from state; absent on optimistic and history turns. */
+  version?: number;
   destinations: readonly RouterTurnDestination[];
   live: boolean;
 }
@@ -183,7 +185,7 @@ export function canRetryCommand(command: RouterCommandRecord): boolean {
 const turnEntryLiveCache = new WeakMap<RouterCommandRecord, Map<string, RouterTurnEntry>>();
 const turnEntryHistoryCache = new WeakMap<RouterCommandRecord, Map<string, RouterTurnEntry>>();
 
-export function turnEntryOfCommand(command: RouterCommandRecord, selfId: string | undefined, live: boolean): RouterTurnEntry {
+export function turnEntryOfCommand(command: RouterCommandRecord, selfId: string | undefined, live: boolean, version?: number): RouterTurnEntry {
   const cache = live ? turnEntryLiveCache : turnEntryHistoryCache;
   const selfKey = selfId ?? "";
   let bySelf = cache.get(command);
@@ -192,7 +194,7 @@ export function turnEntryOfCommand(command: RouterCommandRecord, selfId: string 
     cache.set(command, bySelf);
   }
   const hit = bySelf.get(selfKey);
-  if (hit !== undefined) return hit;
+  if (hit !== undefined && hit.version === version) return hit;
 
   const clientKey = command.clientId || `id-${command.id}`;
   const entry: RouterTurnEntry = {
@@ -204,6 +206,7 @@ export function turnEntryOfCommand(command: RouterCommandRecord, selfId: string 
     attachments: attachmentsFromPlan(command.plan),
     status: command.status,
     command,
+    ...(version !== undefined ? { version } : {}),
     destinations: buildDestinations(command, selfId),
     live,
   };
@@ -394,26 +397,28 @@ export function routerStreamOf(state: HubState): DeviceRouterStreamSlice {
   return slice;
 }
 
-const turnsByCommandsCache = new WeakMap<readonly RouterCommandRecord[], Map<string, readonly RouterTurnEntry[]>>();
+type CommandVersions = HubState["routerCommandVersions"]["byId"];
 
-function liveTurnsOf(commands: readonly RouterCommandRecord[], selfId: string | undefined): readonly RouterTurnEntry[] {
+const turnsByCommandsCache = new WeakMap<readonly RouterCommandRecord[], { versions: CommandVersions; bySelf: Map<string, readonly RouterTurnEntry[]> }>();
+
+function liveTurnsOf(commands: readonly RouterCommandRecord[], selfId: string | undefined, versions: CommandVersions): readonly RouterTurnEntry[] {
   if (commands.length === 0) return NO_TURNS;
   const selfKey = selfId ?? "";
-  let bySelf = turnsByCommandsCache.get(commands);
-  if (bySelf === undefined) {
-    bySelf = new Map();
-    turnsByCommandsCache.set(commands, bySelf);
+  let cached = turnsByCommandsCache.get(commands);
+  if (cached === undefined || cached.versions !== versions) {
+    cached = { versions, bySelf: new Map() };
+    turnsByCommandsCache.set(commands, cached);
   }
-  const hit = bySelf.get(selfKey);
+  const hit = cached.bySelf.get(selfKey);
   if (hit !== undefined) return hit;
-  const turns = commands.map((cmd) => turnEntryOfCommand(cmd, selfId, true));
-  bySelf.set(selfKey, turns);
+  const turns = commands.map((cmd) => turnEntryOfCommand(cmd, selfId, true, versions[cmd.id]));
+  cached.bySelf.set(selfKey, turns);
   return turns;
 }
 
 /** The local Router's live command turns, cached per commands array so unrelated state changes return the same array. */
 export function routerTurnsOf(state: HubState, selfId: string | undefined): readonly RouterTurnEntry[] {
-  return state.phase === "ready" ? liveTurnsOf(commandsSliceOf(state.router).commands, selfId) : NO_TURNS;
+  return state.phase === "ready" ? liveTurnsOf(commandsSliceOf(state.router).commands, selfId, state.routerCommandVersions.byId) : NO_TURNS;
 }
 
 const briefingsByReportsCache = new WeakMap<readonly RouterReportItem[], Map<string, readonly RouterBriefingEntry[]>>();
@@ -462,6 +467,7 @@ let lastFleetStreamMemo: {
   selfKey: string;
   multiDevice: boolean;
   localCommands: readonly RouterCommandRecord[] | null;
+  localVersions: CommandVersions | null;
   oldestCommandCursor: string | null;
   oldestCommand: RouterCommandRecord | null;
   commandsHasMore: boolean;
@@ -477,6 +483,7 @@ export function fleetRouterStream(
   const selfKey = selfId ?? "";
   const multiDevice = devices.length > 1;
   let localCommands: readonly RouterCommandRecord[] | null = null;
+  let localVersions: CommandVersions | null = null;
   let oldestCommandCursor: string | null = null;
   let oldestCommand: RouterCommandRecord | null = null;
   let commandsHasMore = false;
@@ -488,6 +495,7 @@ export function fleetRouterStream(
     const slice = routerStreamOf(d.state);
     if (d.self) {
       localCommands = slice.commands;
+      localVersions = d.state.routerCommandVersions.byId;
       oldestCommandCursor = slice.oldestCommandCursor;
       oldestCommand = slice.oldestCommand;
       commandsHasMore = slice.commandsHasMore;
@@ -506,6 +514,7 @@ export function fleetRouterStream(
     lastFleetStreamMemo.selfKey === selfKey &&
     lastFleetStreamMemo.multiDevice === multiDevice &&
     lastFleetStreamMemo.localCommands === localCommands &&
+    lastFleetStreamMemo.localVersions === localVersions &&
     lastFleetStreamMemo.oldestCommandCursor === oldestCommandCursor &&
     lastFleetStreamMemo.oldestCommand === oldestCommand &&
     lastFleetStreamMemo.commandsHasMore === commandsHasMore &&
@@ -524,7 +533,7 @@ export function fleetRouterStream(
     return lastFleetStreamMemo.value;
   }
 
-  const turns = localCommands ? liveTurnsOf(localCommands, selfId) : NO_TURNS;
+  const turns = localCommands && localVersions ? liveTurnsOf(localCommands, selfId, localVersions) : NO_TURNS;
   const prevMap = lastFleetStreamMemo?.deviceByKey;
   const deviceByKey = new Map<string, RouterDeviceBriefings>();
   const deviceStreams: RouterDeviceBriefings[] = [];
@@ -584,6 +593,7 @@ export function fleetRouterStream(
     selfKey,
     multiDevice,
     localCommands,
+    localVersions,
     oldestCommandCursor,
     oldestCommand,
     commandsHasMore,

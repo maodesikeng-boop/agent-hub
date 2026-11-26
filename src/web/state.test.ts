@@ -933,4 +933,45 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
     expect(legacyLoaded.router.briefingsHasMore).toBe(true);
     expect(legacyLoaded.router.commandsHasMore).toBe(false);
   });
+
+  it("每写一次指令就换新版本号：同一 updatedAt 的两次失败分得开，守护进程重启后 seq 从头数也撞不上旧版本，裁掉的指令一并移除", () => {
+    const command = (id: number, over: Partial<RouterCommandRecord> = {}): RouterCommandRecord => ({
+      id,
+      clientId: `c-${id}`,
+      inputText: `指令 ${id}`,
+      vendor: DEFAULT_AGENT_VENDOR,
+      model: null,
+      effort: null,
+      status: "failed",
+      plan: null,
+      dispatched: null,
+      error: "没有可用的 Agent",
+      durationMs: null,
+      createdAt: 2_000 + id,
+      updatedAt: 9_000,
+      ...over,
+    });
+    const snapshotOf = (seq: number) => makeSnapshot({ seq, router: { ...makeSnapshot().router, commands: [command(2), command(1)] } });
+    let s = reducer(initialState, { type: "loaded", snapshot: snapshotOf(30) });
+    const loadedAt = s.routerCommandVersions.last;
+    expect(s.routerCommandVersions.byId).toEqual({ 1: loadedAt, 2: loadedAt });
+
+    s = applyChange(s, changeOf(31, "router.command.updated", { command: command(1, { status: "planning", error: null }) }));
+    s = applyChange(s, changeOf(32, "router.command.updated", { command: command(1) }));
+    expect(s.router.commands.find((c) => c.id === 1)).toMatchObject({ status: "failed", updatedAt: 9_000 });
+    expect(s.routerCommandVersions.byId).toEqual({ 1: loadedAt + 2, 2: loadedAt });
+    const before = s.routerCommandVersions;
+    s = applyChange(s, changeOf(33, "router.command.updated", { command: command(99) }));
+    expect(s.routerCommandVersions).toBe(before);
+
+    const restarted = reducer(s, { type: "loaded", snapshot: snapshotOf(2) });
+    expect(restarted.routerCommandVersions.byId).toEqual({ 1: loadedAt + 3, 2: loadedAt + 3 });
+
+    let seq = 33;
+    for (let id = 3; id <= ROUTER_STREAM_LIVE_MAX + 2; id++) s = applyChange(s, changeOf(++seq, "router.command.created", { command: command(id) }));
+    const ids = (xs: Iterable<number>) => [...xs].sort((a, b) => a - b);
+    expect(ids(Object.keys(s.routerCommandVersions.byId).map(Number))).toEqual(ids(s.router.commands.map((c) => c.id)));
+    expect(s.routerCommandVersions.byId[1]).toBeUndefined();
+    expect(s.routerCommandVersions.byId[ROUTER_STREAM_LIVE_MAX + 2]).toBe(s.routerCommandVersions.last);
+  });
 });

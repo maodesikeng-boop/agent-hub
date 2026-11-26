@@ -138,19 +138,27 @@ describe("buildPendingRouterTurns", () => {
 });
 
 describe("buildRouterRetryState", () => {
-  const retry = (commandId: number, status: RawRouterRetry["status"], updatedAt = commandId * 10, error: unknown = null): RawRouterRetry => ({
+  const retry = (commandId: number, status: RawRouterRetry["status"], version = commandId * 10, error: unknown = null): RawRouterRetry => ({
     commandId,
-    updatedAt,
+    version,
     status,
     error,
   });
 
-  it("keeps each command's latest retry: running for pending or succeeded, the error for failed", () => {
-    const state = buildRouterRetryState([retry(1, "error", 10, new Error("x")), retry(1, "pending", 11), retry(2, "success"), retry(3, "error", 30, new Error("down")), null], {
-      retryingMap: {},
-      retryErrors: {},
-    });
-    expect(state.retryingMap).toEqual({ 1: 11, 2: 20 });
+  it("keeps each command's latest retry: posting while in flight, the retried version once accepted, the error once failed", () => {
+    const state = buildRouterRetryState(
+      [
+        retry(1, "error", 10, new Error("x")),
+        retry(1, "pending", 11),
+        retry(2, "success"),
+        retry(3, "error", 30, new Error("down")),
+        retry(4, "idle"),
+        { commandId: 5, version: undefined, status: "success", error: null },
+        null,
+      ],
+      { retryingMap: {}, retryErrors: {} },
+    );
+    expect(state.retryingMap).toEqual({ 1: "posting", 2: 20, 4: "posting" });
     expect(Object.keys(state.retryErrors)).toEqual(["3"]);
   });
 
@@ -158,16 +166,18 @@ describe("buildRouterRetryState", () => {
     const error = new Error("down");
     const first = buildRouterRetryState([retry(1, "pending"), retry(2, "error", 20, error)], { retryingMap: {}, retryErrors: {} });
     expect(buildRouterRetryState([retry(1, "pending"), retry(2, "error", 20, error)], first)).toBe(first);
-    const settled = buildRouterRetryState([retry(1, "success"), retry(2, "error", 20, error)], first);
-    expect(settled).toBe(first);
-    const cleared = buildRouterRetryState([retry(2, "error", 20, error)], first);
+    const accepted = buildRouterRetryState([retry(1, "success"), retry(2, "error", 20, error)], first);
+    expect(accepted.retryingMap).toEqual({ 1: 10 });
+    expect(accepted.retryErrors).toBe(first.retryErrors);
+    expect(buildRouterRetryState([retry(1, "success"), retry(2, "error", 20, error)], accepted)).toBe(accepted);
+    const cleared = buildRouterRetryState([retry(2, "error", 20, error)], accepted);
     expect(cleared.retryingMap).toEqual({});
     expect(cleared.retryErrors).toBe(first.retryErrors);
   });
 });
 
 describe("pruneRouterRetryMutations", () => {
-  function seedRetry(qc: QueryClient, commandId: number, updatedAt: number, status: MutationState["status"]) {
+  function seedRetry(qc: QueryClient, commandId: number, version: number, status: MutationState["status"]) {
     const state: MutationState<PostRouterCommandResponse, unknown, RouterRetryVariables, unknown> = {
       context: undefined,
       data: undefined,
@@ -176,34 +186,37 @@ describe("pruneRouterRetryMutations", () => {
       failureReason: null,
       isPaused: false,
       status,
-      variables: { commandId, updatedAt },
+      variables: { commandId, version },
       submittedAt: 1,
     };
     return qc.getMutationCache().build(qc, { mutationKey: ROUTER_RETRY_MUTATION_KEY }, state);
   }
-  const failedTurn = (id: number, updatedAt: number) => turnEntryOfCommand(command({ id, clientId: `c${id}`, status: "failed", updatedAt }), undefined, true);
+  const failedTurn = (id: number, version: number) => turnEntryOfCommand(command({ id, clientId: `c${id}`, status: "failed", updatedAt: 1_000 }), undefined, true, version);
 
-  it("keeps in-flight retries, accepted retries the server has not moved yet, and errors of still-failing commands", () => {
+  it("keeps in-flight retries, accepted retries whose failed version is still live, and errors of still-failing commands, even when every updatedAt matches", () => {
     const qc = new QueryClient();
     seedRetry(qc, 1, 10, "pending");
     seedRetry(qc, 2, 20, "success");
     seedRetry(qc, 3, 30, "success");
     seedRetry(qc, 4, 40, "error");
     seedRetry(qc, 5, 50, "error");
-    pruneRouterRetryMutations(qc, [failedTurn(2, 20), failedTurn(3, 31), failedTurn(4, 41)]);
+    pruneRouterRetryMutations(qc, [failedTurn(2, 20), failedTurn(3, 32), failedTurn(4, 42)]);
     const left = qc.getMutationCache().getAll().map((m) => (m.state.variables as RouterRetryVariables).commandId);
     expect(left).toEqual([1, 2, 4]);
   });
 });
 
 describe("retryStateOf", () => {
-  it("marks a failed command as retrying only while the retry targets its current updatedAt", () => {
-    const failed = turnEntryOfCommand(command({ id: 5, status: "failed", updatedAt: 50 }), undefined, true);
-    expect(retryStateOf(failed, { 5: 50 }, {})).toEqual({ retryPending: true, retryError: undefined });
-    expect(retryStateOf(failed, { 5: 49 }, {})).toEqual({ retryPending: false, retryError: undefined });
+  it("marks a failed command as retrying while its retry is posting, or accepted from the version the turn still shows", () => {
+    const failed = turnEntryOfCommand(command({ id: 5, status: "failed", updatedAt: 50 }), undefined, true, 7);
+    expect(retryStateOf(failed, { 5: "posting" }, {})).toEqual({ retryPending: true, retryError: undefined });
+    expect(retryStateOf(failed, { 5: 7 }, {})).toEqual({ retryPending: true, retryError: undefined });
+    expect(retryStateOf(failed, { 5: 6 }, {})).toEqual({ retryPending: false, retryError: undefined });
     expect(retryStateOf(failed, {}, { 5: "Router is offline" })).toEqual({ retryPending: false, retryError: "Router is offline" });
+    const unversioned = turnEntryOfCommand(command({ id: 5, status: "failed", updatedAt: 50 }), undefined, true);
+    expect(retryStateOf(unversioned, { 5: 7 }, {})).toEqual({ retryPending: false, retryError: undefined });
     const pending: RouterTurnEntry = { ...failed, command: null };
-    expect(retryStateOf(pending, { 5: 50 }, { 5: "x" })).toEqual({ retryPending: false, retryError: undefined });
+    expect(retryStateOf(pending, { 5: "posting" }, { 5: "x" })).toEqual({ retryPending: false, retryError: undefined });
   });
 });
 
@@ -257,29 +270,60 @@ describe("useRouterCommands", () => {
     ]);
   });
 
-  it("retries a failed server command via POST /api/router/commands/:id/retry and clears retry state once updatedAt advances", async () => {
-    const failed = turnEntryOfCommand(command({ id: 7, clientId: "f", status: "failed", updatedAt: 70 }), undefined, true);
+  const turnAt = (id: number, version: number, over: Partial<RouterCommandRecord> = {}) =>
+    turnEntryOfCommand(command({ id, clientId: `c${id}`, status: "failed", error: "down", updatedAt: 70_000, ...over }), undefined, true, version);
+
+  it("retries a failed server command via POST /api/router/commands/:id/retry and clears retry state once a newer version arrives with the same updatedAt", async () => {
+    const failed = turnAt(7, 3);
     const { result, rerender } = renderHook(({ live }) => useRouterCommands(live, undefined), { wrapper, initialProps: { live: [failed] } });
-    act(() => result.current.retryCommand(7, 70));
-    await waitFor(() => expect(result.current.retryingMap).toEqual({ 7: 70 }));
+    act(() => result.current.retryCommand(7, 3));
+    await waitFor(() => expect(result.current.retryingMap).toEqual({ 7: 3 }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/router\/commands\/7\/retry$/)).toHaveLength(1));
-    expect(result.current.retryingMap).toEqual({ 7: 70 });
-    const running = turnEntryOfCommand(command({ id: 7, clientId: "f", status: "planning", plan: null, updatedAt: 71 }), undefined, true);
-    rerender({ live: [running] });
+    expect(retryStateOf(failed, result.current.retryingMap, result.current.retryErrors).retryPending).toBe(true);
+    rerender({ live: [turnAt(7, 4, { status: "planning", error: null })] });
     await waitFor(() => expect(result.current.retryingMap).toEqual({}));
   });
 
   it("keeps the retry error until the command stops failing", async () => {
     api.retryRouterCommand = () => ({ status: 409, body: { error: "busy" } });
-    const failed = turnEntryOfCommand(command({ id: 8, clientId: "g", status: "failed", updatedAt: 80 }), undefined, true);
+    const failed = turnAt(8, 3);
     const { result, rerender } = renderHook(({ live }) => useRouterCommands(live, undefined), { wrapper, initialProps: { live: [failed] } });
-    act(() => result.current.retryCommand(8, 80));
+    act(() => result.current.retryCommand(8, 3));
     await waitFor(() => expect(result.current.retryErrors[8]).toMatchObject({ raw: "busy" }));
     expect(result.current.retryingMap).toEqual({});
     const other = renderHook(() => useRouterCommands([failed], undefined), { wrapper });
     expect(other.result.current.retryErrors[8]).toMatchObject({ raw: "busy" });
-    rerender({ live: [turnEntryOfCommand(command({ id: 8, clientId: "g", status: "planning", plan: null, updatedAt: 81 }), undefined, true)] });
+    rerender({ live: [turnAt(8, 4, { status: "planning", error: null })] });
     await waitFor(() => expect(result.current.retryErrors).toEqual({}));
+  });
+
+  it("reopens Retry when the retry fails again before its HTTP reply lands, though both failures share an updatedAt", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ok = api.retryRouterCommand;
+    api.retryRouterCommand = async (id) => {
+      await gate;
+      return ok(id);
+    };
+    const retryCalls = () => api.callsTo("POST", /^\/api\/router\/commands\/10\/retry$/);
+    const { result, rerender } = renderHook(({ live }) => useRouterCommands(live, undefined), { wrapper, initialProps: { live: [turnAt(10, 5)] } });
+    act(() => result.current.retryCommand(10, 5));
+    await waitFor(() => expect(retryCalls()).toHaveLength(1));
+
+    rerender({ live: [turnAt(10, 6, { status: "planning", error: null })] });
+    const failedAgain = turnAt(10, 7);
+    rerender({ live: [failedAgain] });
+    expect(retryStateOf(failedAgain, result.current.retryingMap, result.current.retryErrors).retryPending).toBe(true);
+    act(() => result.current.retryCommand(10, 7));
+    expect(retryCalls()).toHaveLength(1);
+
+    await act(async () => release());
+    await waitFor(() => expect(result.current.retryingMap).toEqual({}));
+    expect(retryStateOf(failedAgain, result.current.retryingMap, result.current.retryErrors).retryPending).toBe(false);
+    act(() => result.current.retryCommand(10, 7));
+    await waitFor(() => expect(retryCalls()).toHaveLength(2));
   });
 
   it("shares one in-flight retry across surfaces, so a surface mounted mid-retry shows it running and cannot post it again", async () => {
@@ -293,22 +337,22 @@ describe("useRouterCommands", () => {
       return ok(id);
     };
     const retryCalls = () => api.callsTo("POST", /^\/api\/router\/commands\/9\/retry$/);
-    const failed = turnEntryOfCommand(command({ id: 9, clientId: "h", status: "failed", updatedAt: 90 }), undefined, true);
+    const failed = turnAt(9, 3);
     const quick = renderHook(({ live }) => useRouterCommands(live, undefined), { wrapper, initialProps: { live: [failed] } });
-    act(() => quick.result.current.retryCommand(9, 90));
-    act(() => quick.result.current.retryCommand(9, 90));
+    act(() => quick.result.current.retryCommand(9, 3));
+    act(() => quick.result.current.retryCommand(9, 3));
     await waitFor(() => expect(retryCalls()).toHaveLength(1));
     quick.unmount();
 
     const page = renderHook(({ live }) => useRouterCommands(live, undefined), { wrapper, initialProps: { live: [failed] } });
     expect(retryStateOf(failed, page.result.current.retryingMap, page.result.current.retryErrors)).toEqual({ retryPending: true, retryError: undefined });
-    act(() => page.result.current.retryCommand(9, 90));
+    act(() => page.result.current.retryCommand(9, 3));
     await act(async () => release());
-    expect(page.result.current.retryingMap).toEqual({ 9: 90 });
-    act(() => page.result.current.retryCommand(9, 90));
+    expect(page.result.current.retryingMap).toEqual({ 9: 3 });
+    act(() => page.result.current.retryCommand(9, 3));
     expect(retryCalls()).toHaveLength(1);
 
-    page.rerender({ live: [turnEntryOfCommand(command({ id: 9, clientId: "h", status: "planning", plan: null, updatedAt: 91 }), undefined, true)] });
+    page.rerender({ live: [turnAt(9, 4, { status: "planning", error: null })] });
     await waitFor(() => expect(page.result.current.retryingMap).toEqual({}));
     expect(qc.getMutationCache().getAll()).toHaveLength(0);
   });

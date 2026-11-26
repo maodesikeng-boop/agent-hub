@@ -22,7 +22,7 @@ import { localClient, type HubClient } from "../client.ts";
 import { formatTime, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
-import { retryStateOf } from "../router-commands.ts";
+import { retryStateOf, type RouterRetryMark } from "../router-commands.ts";
 import {
   briefingEntryOfReport,
   mergeRouterStream,
@@ -385,9 +385,9 @@ export const RouterStream = memo(function RouterStream({
   hasDecisions: boolean;
   clientForDevice: (deviceKey: string) => HubClient;
   storeForDevice: DeviceStoreLookup;
-  retryingMap: Readonly<Record<RouterCommandId, number>>;
+  retryingMap: Readonly<Record<RouterCommandId, RouterRetryMark>>;
   retryErrors: Readonly<Record<RouterCommandId, ErrorLike>>;
-  onRetryCommand: (commandId: RouterCommandId, updatedAt: number) => void;
+  onRetryCommand: (commandId: RouterCommandId, version: number | undefined) => void;
   onRetryUnsent: (clientId: string) => void;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;

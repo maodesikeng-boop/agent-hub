@@ -6,7 +6,7 @@ import { FleetDeviceScopes, FleetLooks, type DeviceScopeLookup, type FleetLookOf
 import type { ErrorLike } from "../format.ts";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { TOPBAR_ROUTER_POPOVER_MAX_HEIGHT_REM } from "../limits.ts";
-import { retryStateOf } from "../router-commands.ts";
+import { retryStateOf, type RouterRetryMark } from "../router-commands.ts";
 import type { RouterTurnEntry } from "../router-stream.ts";
 import { shouldDismissOnTopBarOutsidePress, tabbablesIn } from "../router-topbar-model.ts";
 import { Button } from "../ui/button.tsx";
@@ -29,14 +29,14 @@ export interface RouterTopBarPopoverProps {
   replyDraft: string;
   replyInvalid: string | undefined;
   onReplyDraftChange: (value: string) => void;
-  retryingMap: Readonly<Record<RouterCommandId, number>>;
+  retryingMap: Readonly<Record<RouterCommandId, RouterRetryMark>>;
   retryErrors: Readonly<Record<RouterCommandId, ErrorLike>>;
   deviceScopeLookup: DeviceScopeLookup;
   lookOf: FleetLookOf;
   clientForDevice: (deviceKey: string) => HubClient;
   storeForDevice: DeviceStoreLookup;
   onSendFollowUp: (text: string) => void;
-  onRetryCommand: (commandId: RouterCommandId, updatedAt: number) => void;
+  onRetryCommand: (commandId: RouterCommandId, version: number | undefined) => void;
   onRetryUnsent: (clientId: string) => void;
   onExpand: () => void;
   onClose: () => void;

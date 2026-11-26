@@ -25,7 +25,7 @@ export interface RouterTurnRowProps {
   storeForDevice: DeviceStoreLookup;
   retryPending: boolean;
   retryError: ErrorLike | undefined;
-  onRetryCommand: (commandId: RouterCommandId, updatedAt: number) => void;
+  onRetryCommand: (commandId: RouterCommandId, version: number | undefined) => void;
   onRetryUnsent: (clientId: string) => void;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
@@ -168,7 +168,7 @@ export const RouterTurnRow = memo(function RouterTurnRow({
                       <button
                         type="button"
                         className={cn(TEXT_BUTTON, "px-1 text-minor font-medium text-muted-foreground")}
-                        onClick={() => onRetryCommand(command.id, command.updatedAt)}
+                        onClick={() => onRetryCommand(command.id, entry.version)}
                       >
                         Retry
                       </button>
