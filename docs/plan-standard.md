@@ -1,17 +1,18 @@
 # Plan and code-skeleton standard
 
-Follow this standard whenever a task asks for a design plan. A planning step delivers two artifacts on the same branch: a design document in `docs/<topic>-design.md` and a compiling TypeScript code skeleton in the real target files. Subsequent implementation steps fill in function bodies on that exact skeleton.
+Follow this standard whenever a task asks for a design plan. A planning step commits a design document in `docs/<topic>-design.md`, a compiling TypeScript code skeleton in the target files, and runnable acceptance tests that fail before implementation. Later implementation steps fill in the function bodies until those tests pass.
 
 ## Design document
 
-Write `docs/<topic>-design.md` in plain English following `.agents/skills/technical-writing/SKILL.md` and `.agents/skills/unslop/SKILL.md`. Directly under `# <Title>`, record the snapshot date and git commit (`> Snapshot: YYYY-MM-DD (commit \`<sha>\`)`) so readers can see at a glance which codebase state the document describes (`src/docs-guard.test.ts` enforces this line and `docs/README.md` indexing). Keep every section below in order; write `None` when a section does not apply.
+Write `docs/<topic>-design.md` in plain English following `.agents/skills/technical-writing/SKILL.md` and `.agents/skills/unslop/SKILL.md`. Directly under `# <Title>`, record the snapshot date and git commit (`> Snapshot: YYYY-MM-DD (commit \`<sha>\`)`) so readers can see which codebase state the document describes (`src/docs-guard.test.ts` enforces this line and `docs/README.md` indexing). Keep every section below in order. Write `None` when a section does not apply.
 
 ### For the user
 
-Keep the opening section focused on two items only:
+Keep the opening section focused on what the user reviews and approves before implementation starts:
 
-- **Files to review.** Link each deliverable file with a one-sentence description of what it covers.
-- **Decisions needed.** List each open product or scope trade-off with concrete options and your recommendation, or write `None`.
+- **Files to review.** Link each deliverable file with one sentence on what it covers.
+- **Decisions needed.** List each open product or scope trade-off with concrete options and your recommendation. For every rule that asks for user approval, attach a concrete example or a screenshot that shows what the user will see under that rule. Write `None` when no decision is open.
+- **Checkpoint card.** Copy the plain-language acceptance scenario list from Section 8 into the plan's checkpoint card. Implementation starts only after the user approves that card and any open decisions.
 
 ### For Workers and reviewers
 
@@ -23,23 +24,30 @@ Include all eight sections below in order for downstream Workers and reviewers:
 4. **Performance and bounds.** When touching caches, snapshots, or collections that grow over time, address all four rules in `AGENTS.md` ("Caches and state bounds"). List new `src/shared/limits.ts` constants in a table with values and one-month sizing math, or write `None` and explain why.
 5. **Cross-vendor and cross-platform unification.** Show how one shared definition covers every registered vendor in `src/shared/vendors.ts` and all three platforms (`macOS`, `Windows`, and `Linux` via `src/daemon/platform/index.ts`), and name the single file a future vendor must implement.
 6. **Deletions.** List superseded code paths, docs, and prompt text to delete in the same PR so old and new logic never coexist.
-7. **Skeleton files.** List each created or modified file with one sentence on its responsibility. Do not paste function signatures that already live in the code skeleton.
-8. **Verification plan.** Specify how implementation will prove the change works on real artifacts: exact test files, `pnpm verify`, screenshots, or command outputs. "Tests pass" alone is not enough.
+7. **Skeleton files.** List each created or modified file with one sentence on its responsibility, including the acceptance test files. Do not paste function signatures that already live in the code skeleton.
+8. **Verification plan.** Prove the change works on real artifacts. "Tests pass" alone is not enough. Include all three items below:
+   - **Acceptance scenarios.** Write plain-language scenarios from the user's quoted sentences in Section 1 and from every settled rule. Write each scenario in three concrete parts: what happens first, what happens next, and what the user should see. Map every quoted sentence and every settled rule to at least one scenario. Include at least one scenario for each of the four categories below whenever the change can reach it. If a category cannot apply, write one sentence that explains why:
+     - Two consecutive turns in the same conversation.
+     - A restart in the middle of the operation.
+     - A state or configuration change while work or a notice waits in a queue.
+     - Existing rules or boundaries that the change touches or uncovers.
+   - **Real CLI recordings.** For any scenario that depends on vendor CLI output or protocol behavior, replay a recording from the real CLI (such as `test/fixtures/progress/*.live.jsonl`). If no recording exists, capture one with the local CLI. If local capture is blocked, mark the scenario `not verified against live CLI` and state why.
+   - **Commands and visual checks.** Name the exact acceptance test files, `pnpm verify`, real-browser screenshots for UI changes, and command outputs to capture during implementation.
 
-## Code skeleton
+## Code skeleton and failing acceptance tests
 
-Write the skeleton directly in the target production and test files rather than a scratch directory:
+Write the skeleton and acceptance tests directly in the target production and test files rather than a scratch directory:
 
 - **Data shapes and migrations.** Define TypeScript interfaces and discriminated unions. For schema changes, add the next numbered SQL file in `migrations/` and its line in `migrations/manifest.sha256` ([Ledger database](ledger-database.md)).
-- **Module boundaries.** Create target modules and export their public surface. Skip unexported private helpers.
+- **Module boundaries.** Create target modules and export their public functions and types. Skip unexported private helpers.
 - **Function signatures.** Write full parameter and return types without `any`. Use a single-line body: `throw new Error("Not implemented");`.
 - **Contracts.** Document caller-observable preconditions and postconditions on exported functions with concise `/** */` doc comments. State module-wide invariants once at the top of the file. Do not prescribe internal data structures or step-by-step control flow. Public API contract comments remain after implementation per `.agents/skills/no-comments/references/comment-sicko.md`.
-- **Test skeleton.** Add `it.todo("<observable behavior>")` cases in the matching `*.test.ts` file so every contract clause maps to at least one test.
+- **Acceptance tests.** Write real runnable tests with assertions in the matching `*.test.ts` and `*.test.tsx` files so every acceptance scenario in Section 8 and every contract clause maps to at least one executable test. Do not use `it.todo` placeholders for acceptance scenarios. Use real CLI recordings for vendor protocol scenarios, or note why live capture was blocked.
 - **Existing callers.** When changing an existing signature, update call sites so `pnpm typecheck` passes without altering runtime behavior yet.
 
-Run `pnpm typecheck` before committing the skeleton; it must exit 0.
+Before you commit the plan, run `pnpm typecheck` and confirm it exits 0. Then run the new acceptance test files (`pnpm exec vitest run <test-files>`) and confirm that tests for new or changed behavior fail against the skeleton or current code, with no syntax or type errors. Record the command and failing output in your Worker report so downstream Workers and reviewers can verify the pre-implementation failures.
 
-Example skeleton:
+Example skeleton and failing tests:
 
 ```ts
 // src/shared/coupon.ts
@@ -55,25 +63,39 @@ export function applyCoupon(price: number, percent: number): number {
 }
 
 // src/shared/coupon.test.ts
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { applyCoupon } from "./coupon.ts";
 
 describe("applyCoupon", () => {
-	it.todo("returns the original price when percent is 0");
-	it.todo("floors fractional cent discounts");
-	it.todo("throws RangeError when percent is outside 0..100");
+	it("returns the original price when percent is 0", () => {
+		expect(applyCoupon(1000, 0)).toBe(1000);
+	});
+
+	it("floors fractional cent discounts", () => {
+		expect(applyCoupon(999, 10)).toBe(899);
+	});
+
+	it("throws RangeError when percent is outside 0..100", () => {
+		expect(() => applyCoupon(1000, 101)).toThrow(RangeError);
+	});
 });
 ```
 
 ## Implementation
 
-Implementation steps build directly on the committed skeleton:
+Implementation starts only after the user approves the plan's checkpoint card and any open decisions. Build directly on the committed skeleton and acceptance tests:
 
-1. Read the design document and skeleton files; treat the skeleton as the specification.
-2. Convert `it.todo` entries into real assertions and confirm they fail before writing production logic.
-3. Fill in function bodies until the tests pass without weakening assertions or bypassing contracts.
-4. If implementation reveals that a signature, type, or contract must change, update it and explain what changed and why in the `偏离` field of your Worker report.
+1. Read the design document, the code skeleton, and the committed acceptance tests. Treat them as the specification.
+2. Run the committed acceptance tests before editing production code to confirm they still fail on the current branch.
+3. Fill in the function bodies until every acceptance test passes. Do not modify, delete, skip, or weaken the acceptance tests written in the planning step. You may add extra unit tests for internal edge cases in separate test blocks or files.
+4. If implementation shows that a signature, type, contract, or acceptance test must change, stop instead of rewriting the test. Report the conflict and your recommendation in the `偏离` and `问题` fields of your Worker report so the Project Manager can decide whether to revise the plan.
 5. Do not create parallel modules or duplicate function names alongside the skeleton.
 
 ## Verification
 
-Confirm that the finished code matches the skeleton's public types and contracts, every contract clause has a passing test, and all evidence listed under "Verification plan" is captured.
+Before you report done, confirm all four checks:
+
+- The finished code matches the skeleton's public types and contracts.
+- Every acceptance scenario in Section 8 has a passing test, and every test for new or changed behavior failed before implementation.
+- None of the planning step's acceptance tests were deleted, skipped, or weakened during implementation.
+- Every command output, real CLI recording, and real-browser screenshot listed in Section 8 is captured.
