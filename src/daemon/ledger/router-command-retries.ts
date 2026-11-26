@@ -21,9 +21,20 @@ export interface RouterCommandDbRow {
   updated_at: number;
 }
 
+export type RouterDelivery = {
+  id: string;
+  deviceId: string;
+  op: unknown;
+  verbatim?: boolean;
+  receipt?: RouterCommandDispatchedTarget;
+};
+
 type StoredRouterAgentPlan = RouterAgentPlan & {
   usedRetryIds?: string[];
+  deliveries?: RouterDelivery[];
 };
+
+export const emptyRouterPlan: RouterAgentPlan = { intent: "dispatch", reply: "", actions: [] };
 
 function parseJsonObject<T>(raw: string | null): T | null {
   if (raw === null) return null;
@@ -35,7 +46,7 @@ function parseJsonObject<T>(raw: string | null): T | null {
   }
 }
 
-function parseDispatched(raw: string | null): RouterCommandDispatchedTarget[] | null {
+export function parseDispatched(raw: string | null): RouterCommandDispatchedTarget[] | null {
   if (raw === null) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -52,8 +63,8 @@ export function parseStoredRouterPlan(raw: string | null): StoredRouterAgentPlan
 /** Strips internal retry-claim history before returning or broadcasting a Router command. */
 export function toPublicRouterPlan(raw: StoredRouterAgentPlan | null): RouterAgentPlan | null {
   if (raw === null) return null;
-  if (!("usedRetryIds" in raw)) return raw;
-  const { usedRetryIds: _usedRetryIds, ...rest } = raw;
+  const { usedRetryIds: _usedRetryIds, deliveries, ...rest } = raw;
+  if (deliveries?.length) rest.retryOps = deliveries.map(({ deviceId, op }) => ({ deviceId, op }));
   return rest;
 }
 
@@ -75,22 +86,24 @@ function usedRetryIdsOf(plan: StoredRouterAgentPlan | null): string[] {
 }
 
 export function serializeNewRouterPlan(plan: RouterAgentPlan | null | undefined): string | null {
-  if (plan == null) return null;
-  return JSON.stringify(toPublicRouterPlan(plan as StoredRouterAgentPlan));
+  return plan == null ? null : JSON.stringify(plan);
 }
 
 /** Preserves every claimed retryId across run updates so later writes never reopen earlier ids. */
 export function mergeRouterPlanPreservingRetries(existingJson: string | null, nextPlan: RouterAgentPlan | null): string | null {
-  const existingIds = usedRetryIdsOf(parseStoredRouterPlan(existingJson));
-  if (nextPlan === null) {
-    return existingIds.length > 0 ? JSON.stringify({ intent: "dispatch", reply: "", actions: [], usedRetryIds: existingIds }) : null;
-  }
-  const clean = toPublicRouterPlan(nextPlan as StoredRouterAgentPlan)!;
-  const merged = [...existingIds];
+  const existing = parseStoredRouterPlan(existingJson);
+  const merged = usedRetryIdsOf(existing);
+  const deliveries = existing?.deliveries;
+  if (nextPlan === null && merged.length === 0 && !deliveries?.length) return null;
+  const clean = nextPlan ?? emptyRouterPlan;
   if (typeof clean.retryId === "string" && clean.retryId.trim() !== "" && !merged.includes(clean.retryId)) {
     merged.push(clean.retryId);
   }
-  const stored: StoredRouterAgentPlan = merged.length > 0 ? { ...clean, usedRetryIds: merged } : clean;
+  const stored: StoredRouterAgentPlan = {
+    ...clean,
+    ...(merged.length > 0 ? { usedRetryIds: merged } : {}),
+    ...(deliveries?.length ? { deliveries } : {}),
+  };
   return JSON.stringify(stored);
 }
 
@@ -127,9 +140,14 @@ export function claimRouterCommandRetryRow(
     throw fail("conflict", "这一轮已经重试过了，等最新结果出来再重试");
   }
 
-  const retryOps = storedPlan?.retryOps ?? [];
+  const { retryOps, ...basePlan } = storedPlan ?? emptyRouterPlan;
+  const deliveries = storedPlan?.deliveries ?? retryOps?.map((item, i) => ({
+    ...item,
+    id: `legacy-${i}`,
+    ...(storedPlan?.track === "A" ? { verbatim: true } : {}),
+  }));
   const dispatched = parseDispatched(existing.dispatched_json);
-  if (retryOps.length === 0 && (dispatched ?? []).some((d) => d.ok)) {
+  if (!deliveries?.length && (dispatched ?? []).some((d) => d.ok)) {
     throw fail(
       "conflict",
       "这条指令已有目标投递成功，整条重跑会重复投递；还有没交代到的请重新发一条",
@@ -140,9 +158,9 @@ export function claimRouterCommandRetryRow(
     throw fail("conflict", `这条指令已达到重试上限（${ROUTER_COMMAND_MAX_RETRIES} 次），请重新发一条指令`);
   }
 
-  const basePlan = toPublicRouterPlan(storedPlan) ?? { intent: "dispatch", reply: "", actions: [] };
   const nextPlan: StoredRouterAgentPlan = {
     ...basePlan,
+    ...(deliveries?.length ? { deliveries } : {}),
     retryId: retry.retryId,
     usedRetryIds: [...usedRetryIds, retry.retryId],
   };
