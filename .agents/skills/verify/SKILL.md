@@ -29,7 +29,7 @@ The check types into the real composer and uses the WebKit timeline to count lay
 It covers stable single-line typing and edits in the middle of a multiline draft.
 It also checks that single-line edits lay out only the textarea. These checks do not depend on machine speed. jsdom cannot measure browser layout.
 Chromium and WebKit also check that typing across the wrap boundary, deleting back to one row, pasting text, and composing text preserve the draft. The composition test uses browser events and does not start an OS input method.
-WebKit checks the wrap boundary again with a coarse pointer at the Compact and Default scales, where the textarea's 16px font floor applies.
+WebKit checks the wrap boundary again with a coarse pointer at the Compact scale, the one scale where the textarea's 16px font floor applies.
 The check writes `composer-layout.txt` and interaction screenshots under the same output directory.
 
 ## What one run checks
@@ -42,8 +42,9 @@ The check writes `composer-layout.txt` and interaction screenshots under the sam
 4. Call `GET /api/health` and `GET /api/state` with that cookie.
 5. Open the workbench in headless Chromium and wait for the composer. Any `console.error` or `pageerror` fails the run.
 6. Open Settings and press the middle of the top bar (`scripts/verify-window-drag.ts`). The point must hit a `data-window-drag` region, a click and a double-click must reach a recorded `windowDrag` bridge as a drag and a zoom with Settings still open, and a click on the rail must then close Settings.
-7. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
-8. Delete the temporary directory and check that it is gone.
+7. At every interface scale, close the work panel and resize the window (`scripts/verify-shell-widths.ts`). At the `860px` desktop minimum the PM column must keep its `13.75rem` minimum beside a conversation of at least `20rem`. At `700px` that must hold too, or the single-column shell must show. At `400px` and `375px` with a mouse, the single-column shell must show, a project must open from the list, and its composer must take typing. Back at `1280px`, the columns must return with the typed draft. The page must never scroll sideways.
+8. Stop the daemon the way the desktop shell does: `SIGTERM` on macOS and Linux, `POST /admin/shutdown` on Windows. The daemon must exit with code 0, and no child process it recorded in `state/child-processes.json` may still be alive.
+9. Delete the temporary directory and check that it is gone.
 
 ## When to use it
 

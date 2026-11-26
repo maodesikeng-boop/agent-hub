@@ -6,8 +6,8 @@ import { App } from "./App.tsx";
 import { changeOf, FakeApi, FakeWebSocket, installFakeWebSocket, makeSnapshot, makeMessage, makePm, makeConvSnapshot, makeWorkerLine, makeWorkerConversation } from "./test-utils.ts";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-function boot(media?: { mobile: boolean; listeners: Set<() => void> }) {
-  vi.stubGlobal("matchMedia", (query: string) => ({ get matches() { return query.includes("coarse") && (media?.mobile ?? true); }, addEventListener(_: string, cb: () => void) { media?.listeners.add(cb); }, removeEventListener(_: string, cb: () => void) { media?.listeners.delete(cb); } }));
+function boot(media?: { mobile: boolean; listeners: Set<() => void> }, stub?: (query: string) => object) {
+  vi.stubGlobal("matchMedia", stub ?? ((query: string) => ({ get matches() { return query.includes("coarse") && (media?.mobile ?? true); }, addEventListener(_: string, cb: () => void) { media?.listeners.add(cb); }, removeEventListener(_: string, cb: () => void) { media?.listeners.delete(cb); } })));
   const api = new FakeApi(makeSnapshot({ pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "空经理" })], conversations: [makeConvSnapshot([], { conversation: { id: 2, pmId: 2, title: "空经理" } }), makeConvSnapshot([makeMessage({ id: 99, conversationId: 1, text: "确认发布", meta: { needsUser: true }, dedupeKey: "ask:1:99" }), makeWorkerLine({ id: 10 }), makeWorkerLine({ id: 11, line: { workerConversationId: 31, title: "修 Y", workerId: 4 } })], { conversation: { id: 1, pmId: 1, title: "小林" } }), makeConvSnapshot([], { conversation: makeWorkerConversation() }), makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, title: "修 Y" }) })] }));
   api.install();
   installFakeWebSocket();
@@ -123,6 +123,35 @@ it("手机断点切换保留当前会话与输入框草稿", async () => {
   expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("跨断点草稿");
   act(() => { media.mobile = true; media.listeners.forEach((cb) => cb()); });
   expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("跨断点草稿");
+});
+
+it("a mouse window too narrow for the PM column and a usable conversation uses the single column, and widening restores the columns", async () => {
+  const view = { width: 400, listeners: new Set<() => void>() };
+  const mouseWindow = (query: string) => ({
+    get matches() {
+      const max = /^\(max-width: (\d+)px\)$/.exec(query);
+      return max !== null && view.width <= Number(max[1]);
+    },
+    addEventListener: (_: string, cb: () => void) => view.listeners.add(cb),
+    removeEventListener: (_: string, cb: () => void) => view.listeners.delete(cb),
+  });
+  const { container } = boot(undefined, mouseWindow);
+  const resize = (width: number) => act(() => { view.width = width; view.listeners.forEach((cb) => cb()); });
+  fireEvent.click(within(await screen.findByRole("region", { name: "Project managers" })).getByRole("button", { name: /^小林/ }));
+  const box = await screen.findByRole("textbox", { name: "Message" });
+  expect(container.querySelector("[data-shell]")).toHaveAttribute("data-shell", "mobile");
+  expect(location.hash).toBe("#/c/1");
+  fireEvent.change(box, { target: { value: "窄窗口草稿" } });
+
+  resize(1280);
+  expect(container.querySelector("[data-shell]")).toHaveAttribute("data-shell", "desktop");
+  expect(screen.getByRole("region", { name: "Project managers" })).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("窄窗口草稿");
+  resize(676);
+  expect(container.querySelector("[data-shell]")).toHaveAttribute("data-shell", "desktop");
+  resize(675);
+  expect(container.querySelector("[data-shell]")).toHaveAttribute("data-shell", "mobile");
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("窄窗口草稿");
 });
 
 it("跨 PM 跳转关闭手机工作面板，空 PM 仍可打开面板看到空态，返回列表不循环", async () => {

@@ -27,6 +27,22 @@ describe("ThreadCard", () => {
     expect(container.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
   });
 
+  it("is a ProjectList-sized row: h-6.5, the note sprite at the avatar tile's 1.3125rem, an 8px dot, and a hairline when joined", () => {
+    const line = { workerId: 3, workerConversationId: 30, title: "Build", readonly: false, event: "report", status: "done", summary: "ok" } as const;
+    const { container, rerender } = render(<ThreadCard line={line} look={look} open={false} onOpen={vi.fn()} />);
+    const article = container.querySelector("article[data-worker-report]");
+    expect(article).toHaveClass("mt-4");
+    expect(article).not.toHaveClass("border-t");
+    expect(screen.getByRole("button")).toHaveClass("h-6.5", "text-minor");
+    expect(container.querySelector("[data-slot='avatar']")?.getAttribute("style")).toContain("width: 1.3125rem");
+    expect(container.querySelector("[data-dot]")).toHaveClass("size-2");
+
+    rerender(<ThreadCard line={line} look={look} open={false} joined onOpen={vi.fn()} />);
+    expect(article).toHaveClass("border-t", "border-border");
+    expect(article).not.toHaveClass("mt-4");
+    expect(article).toHaveAttribute("data-joined");
+  });
+
   it("truncates a long title on one line and keeps the full title in title", () => {
     const title = "A very long Piece title that does not fit beside the time in a narrow conversation";
     render(

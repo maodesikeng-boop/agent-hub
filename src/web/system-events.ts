@@ -36,6 +36,12 @@ export type DisplayRow =
 
 const WORKER_CARD_EVENTS = new Set(["report", "turn_failed", "worktree_failed"]);
 
+/** A Worker report or failure, which renders as its own report row rather than inside an event strip. */
+export function isWorkerCard(message: Message): boolean {
+  const worker = workerEventOf(message);
+  return worker !== null && WORKER_CARD_EVENTS.has(worker.event);
+}
+
 export function eventGroupFamily(message: Message): EventFamily | null {
   const worker = workerEventOf(message);
   if (worker !== null) {

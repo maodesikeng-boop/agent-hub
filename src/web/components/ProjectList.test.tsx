@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { type Pm } from "../../shared/index.ts";
 import { defaultLookOf } from "../../shared/slimes.ts";
@@ -40,8 +41,15 @@ function entry(
   };
 }
 
-function renderList(overrides: Partial<ProjectListProps> = {}) {
-  const props: ProjectListProps = {
+type ListProps = Omit<ProjectListProps, "query" | "onQueryChange">;
+
+function SearchableList(props: ListProps) {
+  const [query, setQuery] = useState("");
+  return <ProjectList {...props} query={query} onQueryChange={setQuery} />;
+}
+
+function renderList(overrides: Partial<ListProps> = {}) {
+  const props: ListProps = {
     layout: "column",
     computer: { key: LOCAL_DEVICE, name: "MacBook Pro", status: "online" },
     switchable: false,
@@ -56,7 +64,7 @@ function renderList(overrides: Partial<ProjectListProps> = {}) {
     onOpenComputers: vi.fn(),
     ...overrides,
   };
-  return { ...render(<ProjectList {...props} />), props };
+  return { ...render(<SearchableList {...props} />), props };
 }
 
 describe("ProjectList", () => {
@@ -66,7 +74,7 @@ describe("ProjectList", () => {
     expect(screen.getByRole("region", { name: "Project managers" })).toBeInTheDocument();
 
     rerender(
-      <ProjectList
+      <SearchableList
         layout="column"
         computer={{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "online" }}
         switchable={false}
@@ -123,7 +131,7 @@ describe("ProjectList", () => {
     expect(screen.queryByRole("button", { name: /^Old Work(?:\s+Deletes|\s*$)/ })).toBeNull();
 
     rerender(
-      <ProjectList
+      <SearchableList
         layout="column"
         computer={{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "online" }}
         switchable={false}
@@ -169,7 +177,7 @@ describe("ProjectList", () => {
     expect(onTogglePin).toHaveBeenCalledWith(5, true);
 
     rerender(
-      <ProjectList
+      <SearchableList
         layout="column"
         computer={{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "offline" }}
         switchable={false}
@@ -213,7 +221,7 @@ describe("ProjectList", () => {
     expect(screen.getByRole("heading", { name: "MacBook Pro" })).toBeInTheDocument();
 
     rerender(
-      <ProjectList
+      <SearchableList
         layout="column"
         computer={{ key: LOCAL_DEVICE, name: "MacBook Pro", status: "online" }}
         switchable={true}
@@ -277,28 +285,6 @@ describe("ProjectList", () => {
     expect(heading).toHaveAttribute("title", longName);
     expect(within(header).getByRole("button", { name: "New project manager" })).toHaveClass("shrink-0");
     unmount();
-  });
-
-  it("renders the strip with New PM on top and pinned avatars above the divider", async () => {
-    const user = userEvent.setup();
-    const onNewPm = vi.fn();
-    renderList({
-      layout: "strip",
-      entries: [entry(1, { name: "Pinned", pinnedAt: 10 }), entry(2, { name: "Unpinned" })],
-      onNewPm,
-    });
-    expect(screen.queryByRole("searchbox")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "New project manager" }));
-    expect(onNewPm).toHaveBeenCalledTimes(1);
-
-    const divider = screen.getByTestId("strip-pin-divider");
-    const buttons = screen.getAllByRole("button");
-    const labels = buttons.map((b) => b.getAttribute("aria-label"));
-    expect(labels[0]).toBe("New project manager");
-    expect(labels[1]).toBe("Pinned");
-    expect(labels[2]).toBe("Unpinned");
-    expect(Boolean(buttons[1]!.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
-    expect(Boolean(divider.compareDocumentPosition(buttons[2]!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
   it("filters by PM or project name and shows No matching conversations when nothing matches", async () => {

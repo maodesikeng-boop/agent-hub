@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 // Lines split on \n only, so U+2028/U+2029 in JSONL never truncate a frame.
 import { randomUUID } from "node:crypto";
 import {
@@ -700,7 +701,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         st.crashNote = true;
         this.forgetWritten(st, taken);
       }
-      const stopped = reason === "interrupt" || st.stopRequested;
+      const cause = untakenReleaseCause(reason, st.stopRequested);
       st.stopRequested = false;
       st.turnInterrupted = false;
       this.emit(st.id, {
@@ -712,7 +713,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.releaseUntaken(st, untaken, stopped, at);
+      this.releaseUntaken(st, untaken, cause, at);
     } finally {
       this.resolveInterrupt(st);
       resolveExited();

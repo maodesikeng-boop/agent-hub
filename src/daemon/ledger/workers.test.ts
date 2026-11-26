@@ -2575,6 +2575,7 @@ describe("Worker 最大时间（--max-time）超时静默唤醒项目经理", ()
       workerId: worker.id,
       workerConversationId: worker.workerConversationId,
       maxTimeMs: 20 * 60_000,
+      deadlineAt: now,
     });
     expect(wake.text).toContain(`【Worker #${worker.id} · 修 X 已超过最大时间（20m）】`);
     expect(wake.text).toContain(`hub worker show ${worker.id}`);

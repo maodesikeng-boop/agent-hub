@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { preservePositiveContext } from "../../daemon/driver/usage.ts";
 import { EMPTY_TOKEN_USAGE, type AgentSessionPatch, type DriverEvent, type TokenUsage } from "../../shared/index.ts";
 import { clearTurnBuffers, type PiDriverHost, type Proc, type SessionState } from "./driver-state.ts";
@@ -57,10 +58,11 @@ export function finalizeTurn(
   for (const batch of settled) host.markProcessing(st, batch, at);
 
   const interrupted = st.turnInterrupted || st.stopRequested;
+  const cause = untakenReleaseCause(proc.closing, interrupted);
   const ok = !interrupted && st.turnErrorMessage === null;
   for (const b of unacked) {
     b.turnDone = true;
-    if (interrupted) b.stopped = true;
+    if (cause === "user_stop") b.stopped = true;
   }
 
   const event: DriverEvent = {
@@ -92,7 +94,7 @@ export function finalizeTurn(
 
   host.clearTimer(st, "interruptTimer");
   host.emit(st.id, event);
-  host.releaseUntaken(st, missed, interrupted, at);
+  host.releaseUntaken(st, missed, cause, at);
   if (!host.busy(st)) {
     host.resolveInterrupt(st);
     host.afterTurn(st, proc);

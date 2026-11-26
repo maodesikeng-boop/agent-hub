@@ -4,7 +4,8 @@ import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { isWorkerCleanable, isWorktreeCleaned, listEndedWorktreeWorkers } from "./workers/cleanup.ts";
-import { createWorkersCtx, ownWorker, workerSession } from "./workers/ctx.ts";
+import { createWorkersCtx, ownWorker, workerRow, workerSession } from "./workers/ctx.ts";
+import { isWorkerInFlight } from "./workers/lines.ts";
 import { dispatchStepWorkerIn } from "./workers/dispatch.ts";
 import { afterDriverEvent, settleTurn, turnFactsOf } from "./workers/driver-events.ts";
 import {
@@ -18,6 +19,7 @@ import {
   stopWorkersIn,
 } from "./workers/lifecycle.ts";
 import { launchContextFor, list, status, workerPrTarget, workerStartFolder, workerTranscriptTarget } from "./workers/queries.ts";
+import { noticeUnresentShutdownTurnsIn } from "./workers/restart-recovery.ts";
 import { recoverBackgroundWaits } from "./workers/reports.ts";
 import { startIn } from "./workers/start.ts";
 import { clearAllMaxTime, clearMaxTime, recoverTurnTimeouts, turnMaxTimeOf } from "./workers/timers.ts";
@@ -61,6 +63,10 @@ export function createLedgerWorkers(
     endIn: bind(endIn),
     endWorkerConversationIn: bind(endWorkerConversationIn),
     stopWorkersIn: bind(stopWorkersIn),
+    isWorkerInFlight: (workerId: number) => {
+      const worker = workerRow(w, workerId);
+      return worker !== null && isWorkerInFlight(w, worker);
+    },
     deliverToWorkerIn: bind(deliverToWorkerIn),
     resumeUserBlockedWorkerIn: bind(resumeUserBlockedWorkerIn),
     endOpenWorkersIn: bind(endOpenWorkersIn),
@@ -77,6 +83,7 @@ export function createLedgerWorkers(
     getReviewVerifyTask: bind(getReviewVerifyTask),
     onReviewVerified: bind(onReviewVerified),
     recoverWorktrees: bind(recoverWorktrees),
+    noticeUnresentShutdownTurnsIn: bind(noticeUnresentShutdownTurnsIn),
     recoverBackgroundWaits: bind(recoverBackgroundWaits),
     actionFailedIn: bind(actionFailedIn),
     workerStartFolder: bind(workerStartFolder),

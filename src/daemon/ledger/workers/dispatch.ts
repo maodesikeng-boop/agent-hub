@@ -35,7 +35,9 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
   const vendor: AgentVendor = input.vendor ?? input.pmVendor;
   assertAgentVendor(vendor);
   checkTargetVendorUsable(w, vendor);
-  const { model, effort } = checkedModelEffort(w, vendor, input.model, input.effort);
+  const inherited =
+    vendor === input.pmVendor ? splitModelEffort(vendor, input.pmModel, input.pmEffort, w.ctx.modelCatalog(vendor)) : { model: null, effort: null };
+  const { model, effort } = checkedModelEffort(w, vendor, input.model, input.effort, inherited);
 
   if (input.sandboxStepId === undefined && !w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
   const capabilities = input.sandboxStepId === undefined ? null : requireSandboxRequest(w, input.pmId, {
@@ -66,9 +68,7 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
     review: plan.kind === "review",
     reviewJson: newReviewJson(plan),
   });
-  const inheritedSetting =
-    vendor === input.pmVendor ? splitModelEffort(vendor, input.pmModel, input.pmEffort, w.ctx.modelCatalog(vendor)) : { model: null, effort: null };
-  const session = insertWorkerSessionIn(w, p, worker, card, { vendor, model, effort }, inheritedSetting);
+  const session = insertWorkerSessionIn(w, p, worker, card, { vendor, model, effort }, inherited);
 
   const workerRecord = toWorkerRecord(worker);
   const firstMessageText = input.buildFirstMessage(session.id, inheritedPlan?.fromWorkerId ?? null, workerRecord, card);

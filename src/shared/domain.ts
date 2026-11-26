@@ -273,7 +273,7 @@ export type SystemMessageMeta =
   | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }
   | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
-  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number }
+  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number; deadlineAt?: number }
   | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean };
 
 export interface GateRef {

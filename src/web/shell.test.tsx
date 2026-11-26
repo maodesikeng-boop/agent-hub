@@ -497,7 +497,7 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
     expect(profileScroller).toHaveClass("overflow-x-hidden", "overscroll-y-contain");
   });
 
-  it("窄窗口 strip 档下项目列表收紧为 72px 垂直头像窄条，隐藏搜索框，居中列出项目经理头像", async () => {
+  it("窄窗口下项目列表不收成头像条：保留搜索框、头像和名字", async () => {
     const observers: Array<{ obs: ResizeObserver; cb: ResizeObserverCallback; targets: Element[] }> = [];
     vi.stubGlobal(
       "ResizeObserver",
@@ -527,11 +527,9 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
       }
     });
     const listRegion = screen.getByRole("region", { name: "This computer" });
-    expect(listRegion).toHaveClass("w-18", "shrink-0", "wood-rings");
-    expect(within(listRegion).queryByRole("searchbox", { name: "Search conversations" })).toBeNull();
-    const btn = within(listRegion).getByRole("button", { name: /小林/ });
-    expect(btn).toHaveClass("size-13");
-    expect(btn.className).not.toMatch(/border-2|rounded-(?!sm\b)/);
+    expect(listRegion).not.toHaveClass("w-18");
+    expect(within(listRegion).getByRole("searchbox", { name: "Search conversations" })).toBeInTheDocument();
+    expect(within(listRegion).getByTitle("小林")).toHaveTextContent("小林");
     expect(within(listRegion).getByRole("button", { name: "New project manager" })).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });

@@ -17,7 +17,7 @@ import { NO_REPLY_TEXT, TURN_STOPPED, backgroundKilledNote, toReportMessage } fr
 import { clearMaxTime } from "./timers.ts";
 import type { BackgroundWait, ReportMessage, ReportMessageRow, WorkersCtx } from "./types.ts";
 
-export function insertTurnFailed(w: WorkersCtx, p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, messageIds: MessageId[], reason: string): void {
+export function insertTurnFailed(w: WorkersCtx, p: Pending, worker: WorkerDbRow, turnMessageId: MessageId | null, messageIds: MessageId[], reason: string): void {
   const detailBody =
     reason === TURN_STOPPED
       ? `用户亲手停了这一轮，它现在是停着的。用户没有明确说继续之前，不要用 ${HUB_COMMAND} worker send 叫醒它；先告诉用户它停了、现在是什么状态，由用户决定继续还是 ${HUB_COMMAND} worker end。`

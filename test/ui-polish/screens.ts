@@ -120,19 +120,19 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("sidebar.search-empty", "左栏：搜索没结果", D, "empty", "standard", "搜索框输入“zzz”"),
   s("sidebar.archived", "左栏：已归档分组展开", D, "normal", "standard", "点开 Archived 组，行右边是 Deletes in 7d"),
   s("sidebar.long", "左栏：超长名字、超长预览、20 多个要滚动", DM, "long", "stress", "#/c/1，列表滚到中间，看上下渐隐"),
-  s("sidebar.strip", "左栏：72px 头像窄条（置顶在上），带右侧面板", ["narrow"], "normal", "standard", "#/c/1，narrow 视口下收成 72px 头像条", "头像窄条"),
+  s("sidebar.narrow", "左栏：窗口最窄时保留头像和名字，右侧面板盖住对话", ["narrow"], "normal", "standard", "#/c/1，narrow 视口（桌面窗口最小宽度）", "左栏整列"),
   s("sidebar.devices", "左栏：多台电脑最左栏与离线状态", D, "normal", "two-devices", "#/c/1；最左栏展示多台电脑及状态"),
   s("sidebar.row-hover", "左栏：行悬停显示置顶快捷键", D, "normal", "standard", "鼠标悬停在老马一行上", "悬停行"),
   s("sidebar.switcher", "左栏：切换电脑浮层（电脑）与抽屉（手机）", DM, "normal", "two-devices", "点左栏顶部 Studio Mac 切换器", "切换浮层"),
   s("sidebar.list-mobile", "手机列表页", M, "normal", "standard", "首页（网址为空）"),
-  s("chat.normal", "对话：四栏主界面（含最左栏与置顶）", DNM, "normal", "standard", "#/c/1；手机从列表点进去"),
+  s("chat.normal", "对话：四栏主界面（含最左栏与置顶）", DM, "normal", "standard", "#/c/1；手机从列表点进去"),
   s("chat.empty", "对话：空对话", DM, "empty", "fresh", "#/c/1"),
   s("chat.busy", "对话：在忙，状态词流光和停止键", DM, "busy", "standard", "#/c/1，补丁 session-working"),
   s("chat.streaming", "对话：文字流式生成中", D, "busy", "standard", "#/c/1，补丁 session-streaming"),
   s("chat.worked-open", "对话：Worked for 展开操作明细", D, "normal", "standard", "#/c/1，点 Worked for"),
-  s("chat.progress-running", "对话：实时进度清单运行中与动作计时", DNM, "busy", "standard", "#/c/1，补丁 progress-running"),
+  s("chat.progress-running", "对话：实时进度清单运行中与动作计时", DM, "busy", "standard", "#/c/1，补丁 progress-running"),
   s("chat.progress-done", "对话：带清单的回合完成后收起为 Worked for", D, "normal", "standard", "#/c/1，补丁 progress-done"),
-  s("chat.progress-open", "对话：完成后展开清单在 Worked for 下方", DNM, "normal", "standard", "#/c/1，补丁 progress-done，点 Worked for"),
+  s("chat.progress-open", "对话：完成后展开清单在 Worked for 下方", DM, "normal", "standard", "#/c/1，补丁 progress-done，点 Worked for"),
   s("chat.progress-step-open", "对话：展开单步进度查看该步过程", DM, "normal", "standard", "#/c/1，补丁 progress-done，点 Worked for 再点第 2 步"),
   s("chat.progress-hover", "对话：清单步骤行悬停与聚焦态", D, "normal", "standard", "#/c/1，补丁 progress-done，点 Worked for，聚焦第 1 步并悬停第 2 步"),
   s("chat.markdown", "对话：Markdown 全套（标题、列表、表格、引用、代码块、链接）", DM, "long", "stress", "#/c/2，滚到那条长回复"),
@@ -151,7 +151,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("chat.device-offline", "对话：别的设备离线，输入框不可用", D, "error", "two-devices", "点最左栏 Tokyo Mini，补丁 device-offline"),
   s("chat.archived", "对话：已归档，底部是归档状态条", D, "normal", "standard", "打开已归档的那个项目经理"),
   s("chat.scale-compact", "对话：界面大小 Compact", D, "normal", "standard", "#/c/1，localStorage 预置 agent-hub.uiScale"),
-  s("chat.scale-xl", "对话：界面大小 XL", D, "normal", "standard", "#/c/1，localStorage 预置 agent-hub.uiScale"),
+  s("chat.scale-xl", "对话：界面大小 XL", D, "normal", "standard", "#/c/1，localStorage 预置 agent-hub.uiScale，右侧面板关闭"),
   s("composer.focus", "输入框：聚焦框", D, "normal", "standard", "#/c/1，点进输入框", "输入框"),
   s("composer.multiline", "输入框：多行、待发文件、Worker 模型标签", DM, "normal", "standard", "输入三行字，加一个文件，选好 /hub:worker", "输入框"),
   s("composer.menu-commands", "输入框：“/” 命令列表", DM, "normal", "standard", "输入 /", "弹出列表"),
@@ -258,8 +258,10 @@ const ensureList: ScreenStep[] = [
   { waitFor: LIST },
 ];
 const pmRow = (name: string) => `section[aria-label="Studio Mac"] :is(button:has([title="${name}"]), button[title="${name}"])`;
+/** 打开后看得见的那一块：对话，或窗口窄于三栏时盖住对话的右侧面板（stack 档）。 */
+const OPENED = '[role="log"][aria-label="Messages"]:visible, [data-layout="stack"]:visible';
 /** 从左栏点进一个项目经理的对话（桌面先点最左栏本机进入列表，手机直接从列表点）。 */
-const openPm = (name: string): ScreenStep[] => [...ensureList, { click: pmRow(name) }, { waitFor: LOG }];
+const openPm = (name: string): ScreenStep[] => [...ensureList, { click: pmRow(name) }, { waitFor: OPENED }];
 const waitCharts: ScreenStep[] = [{ waitFor: ".vega-embed canvas, .vega-embed svg" }, { waitFor: 'svg[id^="chart-mermaid-"]' }];
 const stickBottom: ScreenStep = { scroll: { target: LOG, to: "bottom" } };
 const openRouter: ScreenStep[] = [{ waitFor: 'role=button[name=/^Router/]' }, { click: 'role=button[name=/^Router/]' }, { waitFor: ROUTER_LOG }];
@@ -292,7 +294,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "sidebar.search-empty": [...ensureList, { type: { into: 'role=searchbox[name="Search conversations"]', text: "zzz" } }],
   "sidebar.archived": [...ensureList, { click: `${LIST} >> role=button[name=/^Archived/]` }, { waitFor: `${LIST} >> text=旧博客` }],
   "sidebar.long": [...ensureList, { scroll: { target: `${LIST} >> .page-fade`, to: 600 } }],
-  "sidebar.strip": [...openPm("小林"), { crop: LIST }],
+  "sidebar.narrow": [...openPm("小林"), { crop: LIST }],
   "sidebar.devices": [...openPm("小林"), { waitFor: `${APP_RAIL} >> role=button[name=/^Tokyo Mini/]` }],
   "sidebar.row-hover": [...openPm("小林"), { hover: `${LIST} >> .project-row:has([title="老马"])` }, { crop: `${LIST} >> .project-row:has([title="老马"])` }],
   "sidebar.switcher": [
@@ -354,7 +356,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   ],
   "chat.archived": [...ensureList, { click: `${LIST} >> role=button[name=/^Archived/]` }, { click: pmRow("旧博客") }, { waitFor: LOG }],
   "chat.scale-compact": [storage({ "agent-hub.uiScale": "sm" }), ...openPm("小林")],
-  "chat.scale-xl": [storage({ "agent-hub.uiScale": "xl" }), ...openPm("小林")],
+  "chat.scale-xl": [storage({ "agent-hub.uiScale": "xl", "agent-hub.rightRail": "closed" }), ...openPm("小林")],
   "composer.focus": [...openPm("小林"), { focus: COMPOSER }, stickBottom, { crop: "[data-multiline]" }],
   "composer.multiline": [
     ...openPm("小林"),

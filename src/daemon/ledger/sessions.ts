@@ -514,28 +514,27 @@ export function createLedgerSessions(ctx: LedgerContext) {
     write((p) => updateLive(p, sessionId, idle));
   };
 
-  const recoverAfterRestart = () => {
-    return write((p) => {
-      const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(RECOVER_MESSAGES_SQL);
-      const resentMessageIds: MessageId[] = [];
-      const requeuedMessageIds: MessageId[] = [];
-      // Resume the oldest interrupted message first.
-      const recoveredSessionIds: SessionId[] = [];
-      for (const row of rows) {
-        const resend = row.status !== "queued";
-        (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
-        const recovery = resend && !recoveredSessionIds.includes(row.session_id);
-        if (recovery) recoveredSessionIds.push(row.session_id);
-        const source = row.sender === "system" ? "system" : "user";
-        if (resend) deleteLegacyPendingSessionSend(db, row.session_id, row.id);
-        enqueue(p, {
-          type: "session.send",
-          params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },
-        });
-      }
-      return { resentMessageIds, requeuedMessageIds, recoveredSessionIds };
-    });
-  };
+  const recoverAfterRestart = (afterResends: (p: Pending) => void) => write((p) => {
+    const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(RECOVER_MESSAGES_SQL);
+    const resentMessageIds: MessageId[] = [];
+    const requeuedMessageIds: MessageId[] = [];
+    // Resume the oldest interrupted message first.
+    const recoveredSessionIds: SessionId[] = [];
+    for (const row of rows) {
+      const resend = row.status !== "queued";
+      (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
+      const recovery = resend && !recoveredSessionIds.includes(row.session_id);
+      if (recovery) recoveredSessionIds.push(row.session_id);
+      const source = row.sender === "system" ? "system" : "user";
+      if (resend) deleteLegacyPendingSessionSend(db, row.session_id, row.id);
+      enqueue(p, {
+        type: "session.send",
+        params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },
+      });
+    }
+    afterResends(p);
+    return { resentMessageIds, requeuedMessageIds, recoveredSessionIds };
+  });
 
   return {
     currentSession,

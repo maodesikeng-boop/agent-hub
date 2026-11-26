@@ -259,6 +259,11 @@ export interface DraftSlot {
   getPick: () => WorkerPick | null;
   setPick: (pick: WorkerPick | null) => void;
   clearPickIfMatch: (sent: WorkerPick | null) => void;
+  /** Key of the project Router's draft is addressed to, picked with @. */
+  target: StoreApi<string | null>;
+  getTarget: () => string | null;
+  setTarget: (key: string | null) => void;
+  clearTargetIfMatch: (sent: string | null) => void;
   focusRev: StoreApi<number>;
   restore: (text: string, workerPick: WorkerPick | null) => void;
 }
@@ -275,10 +280,11 @@ export function useDraftStore<K extends string | number>() {
     const restored = takeRestoredDraft(String(key));
     const store = createStore<string>(() => restored?.text ?? "");
     const pick = createStore<WorkerPick | null>(() => restored?.pick ?? null);
+    const target = createStore<string | null>(() => restored?.target ?? null);
     const focusRev = createStore<number>(() => 0);
     let subs = 0;
     const gc = () => {
-      if (subs === 0 && store.getState() === "" && pick.getState() === null) {
+      if (subs === 0 && store.getState() === "" && pick.getState() === null && target.getState() === null) {
         slotsRef.current.delete(key);
       }
     };
@@ -295,16 +301,23 @@ export function useDraftStore<K extends string | number>() {
       };
     store.subscribe = trackSub(store.subscribe);
     pick.subscribe = trackSub(pick.subscribe);
+    target.subscribe = trackSub(target.subscribe);
     focusRev.subscribe = trackSub(focusRev.subscribe);
+    const keepIf = (held: boolean) => {
+      if (held) slotsRef.current.set(key, entry);
+      else gc();
+    };
     const set = (value: string) => {
       if (store.getState() !== value) store.setState(value, true);
-      if (value !== "") slotsRef.current.set(key, entry);
-      else gc();
+      keepIf(value !== "");
     };
     const setPick = (next: WorkerPick | null) => {
       if (pick.getState() !== next) pick.setState(next, true);
-      if (next !== null) slotsRef.current.set(key, entry);
-      else gc();
+      keepIf(next !== null);
+    };
+    const setTarget = (next: string | null) => {
+      if (target.getState() !== next) target.setState(next, true);
+      keepIf(next !== null);
     };
     const slot: DraftSlot = {
       store,
@@ -319,6 +332,12 @@ export function useDraftStore<K extends string | number>() {
       setPick,
       clearPickIfMatch: (sent) => {
         if (sent !== null && pick.getState() === sent) setPick(null);
+      },
+      target,
+      getTarget: () => target.getState(),
+      setTarget,
+      clearTargetIfMatch: (sent) => {
+        if (sent !== null && target.getState() === sent) setTarget(null);
       },
       focusRev,
       restore: (text, workerPick) => {
@@ -338,7 +357,9 @@ export function useDraftStore<K extends string | number>() {
   useEffect(
     () =>
       registerDraftSource(() =>
-        [...slotsRef.current].map(([key, { slot }]) => [String(key), { text: slot.get(), pick: slot.getPick() }] as const),
+        [...slotsRef.current].map(
+          ([key, { slot }]) => [String(key), { text: slot.get(), pick: slot.getPick(), target: slot.getTarget() }] as const,
+        ),
       ),
     [],
   );

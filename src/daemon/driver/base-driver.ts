@@ -58,7 +58,7 @@ import { buildChildEnv } from "./protocol.ts";
 import { spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
-import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
+import { dropUserEntries, untakenReleaseEvents, type UntakenReleaseCause } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
 import {
   clearKillTimer,
@@ -529,7 +529,7 @@ export abstract class BaseSessionDriver<
     send: () => Promise<T>,
   ): Promise<T | null> {
     const check = proc.capabilityCheck;
-    if (!check) return send();
+    if (!check) return this.systemBatchCurrent(st, entry) ? send() : null;
     st.pending.push(entry);
     try {
       if (await check.currentFingerprint() !== check.fingerprint) return null;
@@ -671,31 +671,18 @@ export abstract class BaseSessionDriver<
     }
   }
 
-  protected releaseOnStop(st: TState, batches: TBatch[], at: number): void {
-    if (batches.length === 0) return;
-    for (const b of batches) {
-      b.released = b.source === "user" ? "cancelled" : "requeued";
-      b.notes.persona?.restore();
-      b.notes.preamble?.restore();
+  protected releaseUntaken(st: TState, batches: TBatch[], cause: UntakenReleaseCause, at: number): void {
+    for (const batch of batches) {
+      const cancelled = cause === "user_stop" && batch.source === "user";
+      batch.released = cancelled ? "cancelled" : "requeued";
+      if (cancelled) {
+        batch.notes.persona?.restore();
+        batch.notes.preamble?.restore();
+      } else {
+        this.forgetWritten(st, [batch]);
+      }
     }
-    this.forgetWritten(
-      st,
-      batches.filter((b) => b.source === "system"),
-    );
-    for (const event of untakenOnStopEvents(batches, at)) this.emit(st.id, event);
-  }
-
-  /** Untaken batches after a user stop are cancelled; otherwise (crash, shutdown, normal end) user messages are re-queued. */
-  protected releaseUntaken(st: TState, batches: TBatch[], stopped: boolean, at: number): void {
-    const messageIds = batches.flatMap((b) => b.messageIds);
-    if (messageIds.length === 0) return;
-    if (stopped) {
-      this.releaseOnStop(st, batches, at);
-      return;
-    }
-    for (const b of batches) b.released = "requeued";
-    this.forgetWritten(st, batches);
-    this.emit(st.id, { type: "message.requeued", messageIds, at });
+    for (const event of untakenReleaseEvents(batches, cause, at)) this.emit(st.id, event);
   }
 
   protected afterTurn(st: TState, proc: TProc): void {

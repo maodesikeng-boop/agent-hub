@@ -1,3 +1,4 @@
+import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
 import { preservePositiveContext } from "../../daemon/driver/usage.ts";
 import {
   EMPTY_TOKEN_USAGE,
@@ -75,9 +76,10 @@ export function onTurnCompleted(
   const status = typeof turn.status === "string" ? turn.status : "completed";
   const ok = status === "completed";
   const interrupted = status === "interrupted" || st.turnInterrupted || st.stopRequested;
+  const cause = untakenReleaseCause(proc.closing, interrupted);
   for (const b of unacked) {
     b.turnDone = true;
-    if (interrupted) b.stopped = true;
+    if (cause === "user_stop") b.stopped = true;
   }
 
   const event: DriverEvent = {
@@ -111,7 +113,7 @@ export function onTurnCompleted(
 
   host.clearTimer(st, "interruptTimer");
   host.emit(st.id, event);
-  host.releaseUntaken(st, missed, interrupted, at);
+  host.releaseUntaken(st, missed, cause, at);
   host.resolveInterrupt(st);
   host.afterTurn(st, proc);
   host.settled(st);

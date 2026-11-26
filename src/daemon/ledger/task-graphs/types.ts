@@ -171,6 +171,7 @@ export interface TaskGraphWorkersBridge {
     },
   ): WorkerRecord;
   stopWorkersIn(p: Pending, workerIds: readonly WorkerId[]): WorkerId[];
+  isWorkerInFlight(workerId: WorkerId): boolean;
   deliverToWorkerIn(
     p: Pending,
     input: { workerId: WorkerId; text: string; dedupeKey: string; maxTimeMs?: number | null },

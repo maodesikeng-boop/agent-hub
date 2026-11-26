@@ -6,7 +6,7 @@ import { createClient } from "../client.ts";
 import { NewPmDialog, type NewPmDevice } from "../components/NewPmDialog.tsx";
 import { LOCAL_DEVICE } from "../devices.ts";
 import { FakeApi, makeSnapshot } from "../test-utils.ts";
-import { MOBILE_SHELL_QUERY, useIsMobile } from "../useMediaQuery.ts";
+import { MOBILE_SHELL_QUERY } from "../useMediaQuery.ts";
 
 function installViewport(mobile: boolean) {
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -44,20 +44,6 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-  });
-
-  it("exposes useIsMobile matching MOBILE_SHELL_QUERY", () => {
-    function Probe() {
-      return <output>{String(useIsMobile())}</output>;
-    }
-    installViewport(true);
-    const { unmount } = render(<Probe />);
-    expect(screen.getByRole("status")).toHaveTextContent("true");
-    unmount();
-
-    installViewport(false);
-    render(<Probe />);
-    expect(screen.getByRole("status")).toHaveTextContent("false");
   });
 
   it("renders full-screen safe-area & keyboard-aware layout on mobile with ghost 44px close button and scrollable body", async () => {
