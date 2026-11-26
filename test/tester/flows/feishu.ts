@@ -11,7 +11,7 @@ import { ensureBenchPm, recallCheck, runner, runTag, scenarioPm, waitFor, type O
 
 const OFFLINE_NOTICE = /现在离线|这会儿没接上/;
 const TURN_FAILURE = /^[ \t]*没回成[：:]/m;
-const REPLY_FAILURE = /^[ \t]*(?:没办成|没回成)[：:]|（没送到[：:]/m;
+const REPLY_FAILURE = /^[ \t]*(?:(?:没办成|没回成|没送到|总助没开)[：:]|这段回复飞书显示不了[（(])|（没送到[：:]/m;
 const CARD_RESULT = z.object({ status: z.string().optional(), config: z.object({ streaming_mode: z.boolean().optional() }).optional() });
 const FAILED_STATUS = new Set(["error", "failed", "failure"]);
 const GROUP_WAIT_MS = 60_000;

@@ -71,6 +71,11 @@ describe("Feishu Router flows", () => {
     expect(result.checks.some(({ ok }) => !ok)).toBe(true);
   });
 
+  it("fails a DM when Feishu reports a delivery error as a plain message", async () => {
+    const result = await run("feishu.dm-router", [{ ...message("om_error", ""), msgType: "text", content: JSON.stringify({ text: "没送到：没有可用厂商" }) }]);
+    expect(result.checks).toContainEqual(expect.objectContaining({ check: "reply-final", ok: false }));
+  });
+
   it("fails reconnect catch-up when two different answers follow one DM", async () => {
     const result = await run("feishu.reconnect-catch-up", [message("om_first", "First answer"), message("om_second", "Second answer")]);
     expect(result.checks).toContainEqual(expect.objectContaining({ check: "answered-once", ok: false }));
