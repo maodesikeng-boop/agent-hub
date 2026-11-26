@@ -160,6 +160,24 @@ Dropped from B: the separate `session_inputs` and `turn_attempts` tables and per
 3. **Stable references.** `groupMessages(messages, turns)` caches on both array references; `applyTurnUpdate` returns the same state for an identical summary and keeps other conversations' objects. `turn-duration.test.tsx` checks both.
 4. **Measured verification.** Before review, the implementation records, on a seeded one-month ledger: snapshot and first-page bytes, `messagesBefore` and `worker show` query time and plans, retention batch time, and change count per turn, before and after, following `.agents/skills/benchmark-checklist/SKILL.md`.
 
+### One month benchmark
+
+The fixture uses 300 ended Workers, 30,000 transcript messages, 50,000 step rows, and 15,000 turns after the change. It keeps 3,000 turns in one PM conversation. Measurements use a temporary SQLite file with the daemon's settings. Times are medians and ranges across five alternating runs per version.
+
+| Operation | Before | After |
+|---|---:|---:|
+| Authenticated snapshot | 1.55 ms (1.49–1.59) | 1.80 ms (1.70–1.87) |
+| Authenticated first page | 0.69 ms (0.53–0.85) | 1.22 ms (1.08–1.43) |
+| `messagesBefore`, first page | 0.22 ms (0.22–0.22) | 0.58 ms (0.55–0.71) |
+| `messagesBefore`, 4,000 messages back | 0.23 ms (0.22–0.23) | 0.64 ms (0.62–0.68) |
+| `worker show` | 0.26 ms (0.25–0.27) | 0.10 ms (0.10–0.10) |
+| One retention batch | 11.19 ms (10.38–11.40), 1 row | 54.11 ms (48.23–66.04), 301 rows |
+| Snapshot JSON / gzip | 17,793 / 1,651 bytes | 21,512 / 2,023 bytes |
+| First page JSON / gzip | 33,629 / 2,193 bytes | 50,039 / 3,487 bytes |
+| Changes for one turn with one output | 7 | 10 |
+
+The first page still returns 100 messages and adds 50 turn summaries. The query uses the running turn, output range, and input message indexes. `worker show` now reads the latest turn through the session index in place of reconstructing it from step rows. Retention deletes 300 expired turns in addition to the one expired message, keeps the running turn and held report, and uses the parent turn index during cascading deletes. The three added changes mark the start, output boundary, and end.
+
 ## 5. Cross-vendor and cross-platform unification
 
 `turns.ts` consumes only normalized driver events (`message.processing`, `turn.started`, `agent.*`, `background.changed`, `turn.ended`, `session.exited`) and `capabilities.backgroundWake`. The clock is the daemon's, so Codex and Pi need no change.

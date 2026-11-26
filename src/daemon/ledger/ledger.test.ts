@@ -223,10 +223,13 @@ describe("applyDriverEvent", () => {
       "session.status", // started → running
       "message.updated",
       "session.status", // working
+      "turn.updated",
       "message.updated",
       "session.status", // active turn
+      "turn.updated",
       "message.created",
       "session.status", // 在写回复
+      "turn.updated",
       "message.updated",
       "session.status", // idle
     ]);

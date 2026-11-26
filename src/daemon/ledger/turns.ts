@@ -169,6 +169,34 @@ function summarizeTurns(db: LedgerContext["db"], turns: TurnRecord[]): TurnSumma
   }));
 }
 
+function turnById(db: LedgerContext["db"], id: TurnId): TurnRecord | null {
+  return db.get<TurnRecord>(`SELECT ${TURN_COLUMNS} FROM turns t WHERE t.id = ?`, id) ?? null;
+}
+
+function publishTurnSummary(db: LedgerContext["db"], p: Pending, turnId: TurnId): void {
+  const turn = turnById(db, turnId);
+  const summary = turn === null ? undefined : summarizeTurns(db, [turn])[0];
+  if (summary === undefined) return;
+  const index = p.changes.findIndex((change) => change.type === "turn.updated" && change.data.turn.id === turnId);
+  const change = { type: "turn.updated", data: { turn: summary } } satisfies Pending["changes"][number];
+  if (index === -1) p.changes.push(change);
+  else p.changes[index] = change;
+}
+
+function recordTurnOutput(db: LedgerContext["db"], p: Pending, session: AgentSessionRow, event: DriverEvent): void {
+  if (event.type !== "agent.text" && event.type !== "agent.tool" && event.type !== "agent.checklist") return;
+  const change = p.changes.findLast((c) => c.type === "message.created" && c.data.message.sessionId === session.id && c.data.message.sender === "agent");
+  if (change?.type !== "message.created") return;
+  const msg = change.data.message;
+  const reply = event.type === "agent.text" && event.parentToolUseId === undefined && msg.meta?.["handover"] !== true ? msg.id : null;
+  const updated = db.get<{ id: TurnId }>(
+    `UPDATE turns SET first_output_id = coalesce(first_output_id, ?), last_output_id = ?,
+       reply_message_id = coalesce(?, reply_message_id), updated_at = ?
+     WHERE session_id = ? AND status = 'running' RETURNING id`, msg.id, msg.id, reply, event.at, session.id,
+  );
+  if (updated !== undefined) publishTurnSummary(db, p, updated.id);
+}
+
 function turnOwnsInput(db: LedgerContext["db"], id: MessageId): boolean {
   return db.get(
     `SELECT 1 FROM turn_inputs i JOIN turns t ON t.id = i.turn_id JOIN messages m ON m.id = i.message_id
@@ -229,22 +257,14 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
   const lastEndedTurnOf = (id: SessionId, before: TurnId = Number.MAX_SAFE_INTEGER) => db.get<TurnRecord>(
     `SELECT ${TURN_COLUMNS} FROM turns t WHERE t.session_id = ? AND t.status = 'ended' AND t.id < ? ORDER BY t.id DESC LIMIT 1`, id, before,
   ) ?? null;
-  const turnOf = (id: TurnId) => db.get<TurnRecord>(`SELECT ${TURN_COLUMNS} FROM turns t WHERE t.id = ?`, id) ?? null;
+  const turnOf = (id: TurnId) => turnById(db, id);
   const turnTakingInput = (id: MessageId) => db.get<TurnRecord>(
     `SELECT ${TURN_COLUMNS} FROM turn_inputs i JOIN turns t ON t.id = i.turn_id
       WHERE i.message_id = ? ORDER BY i.turn_id DESC LIMIT 1`, id,
   ) ?? null;
 
-  function publishTurnIn(p: Pending, turnId: TurnId): void {
-    const turn = turnOf(turnId);
-    const summary = turn === null ? undefined : summarizeTurns(db, [turn])[0];
-    if (summary === undefined) return;
-    const index = p.changes.findIndex((change) => change.type === "turn.updated" && change.data.turn.id === turnId);
-    const change = { type: "turn.updated", data: { turn: summary } } satisfies Pending["changes"][number];
-    if (index === -1) p.changes.push(change);
-    else p.changes[index] = change;
-  }
-
+  const publishTurnIn = (p: Pending, turnId: TurnId) => publishTurnSummary(db, p, turnId);
+  const recordOutputIn = (p: Pending, session: AgentSessionRow, event: DriverEvent) => recordTurnOutput(db, p, session, event);
   const open = (session: AgentSessionRow, cause: TurnCause, at: number, parent: TurnId | null) => openTurn(db, session, cause, at, parent);
 
   function takeableInputs(sessionId: SessionId, ids: readonly MessageId[]): TakeableInput[] {
@@ -282,20 +302,6 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       deps.projectInputStatus(p, input.id, "processing", null);
     }
     publishTurnIn(p, turnId);
-  }
-
-  function recordOutputIn(p: Pending, session: AgentSessionRow, event: DriverEvent) {
-    if (event.type !== "agent.text" && event.type !== "agent.tool" && event.type !== "agent.checklist") return;
-    const change = p.changes.findLast((c) => c.type === "message.created" && c.data.message.sessionId === session.id && c.data.message.sender === "agent");
-    if (change?.type !== "message.created") return;
-    const msg = change.data.message;
-    const reply = event.type === "agent.text" && event.parentToolUseId === undefined && msg.meta?.["handover"] !== true ? msg.id : null;
-    const updated = db.get<{ id: TurnId }>(
-      `UPDATE turns SET first_output_id = coalesce(first_output_id, ?), last_output_id = ?,
-         reply_message_id = coalesce(?, reply_message_id), updated_at = ?
-       WHERE session_id = ? AND status = 'running' RETURNING id`, msg.id, msg.id, reply, event.at, session.id,
-    );
-    if (updated !== undefined) publishTurnIn(p, updated.id);
   }
 
   function finish(p: Pending, session: AgentSessionRow, turn: TurnRecord, end: End, legacy?: LegacyTurnReplyFacts): SettledTurn {
