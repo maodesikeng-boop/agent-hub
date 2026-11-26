@@ -12,7 +12,8 @@
     "test/eval/{cli,run.eval}.ts",
     "test/eval/fakes/{gh,record}.ts",
     "vitest.eval.config.ts",
-    "test/fake-devices/main.ts"
+    "test/fake-devices/main.ts",
+    "test/fake-claude/late-wakeup.ts"
   ],
   "ignore": [
     ".agents/**",

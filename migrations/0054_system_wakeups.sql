@@ -1,0 +1,37 @@
+-- 0054_system_wakeups: A PM wakeup the system queues (Task Graph progress, Router decisions) is a system notice, not
+-- user text, and each turn's checklist is measured against the session's checklist when that turn started.
+-- A side table instead of ADD COLUMN keeps this migration re-runnable.
+CREATE TABLE IF NOT EXISTS session_checklist_turns (
+  session_id INTEGER PRIMARY KEY REFERENCES agent_sessions (id) ON DELETE CASCADE,
+  baseline   TEXT NOT NULL CHECK (json_valid(baseline))
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS clear_ended_session_checklist_turn
+AFTER UPDATE OF status ON agent_sessions
+WHEN NEW.status = 'ended' AND OLD.status != 'ended'
+BEGIN
+  DELETE FROM session_checklist_turns WHERE session_id = NEW.id;
+END;
+
+INSERT OR IGNORE INTO session_checklist_turns (session_id, baseline)
+SELECT session_id, snapshot FROM session_checklists;
+
+UPDATE actions
+   SET params = json_set(params, '$.source', 'system')
+ WHERE type = 'session.send' AND status IN ('pending', 'running') AND json_valid(params)
+   AND json_extract(params, '$.messageId') IN (
+     SELECT id FROM messages WHERE sender = 'user' AND json_valid(meta) AND json_extract(meta, '$.wakeup') = 1
+   );
+
+UPDATE messages
+   SET sender = 'system',
+       meta = json_remove(json_set(meta,
+         '$.event', 'pm.wakeup',
+         '$.source', CASE WHEN text LIKE '【Router%' THEN 'router' ELSE 'task_graph' END,
+         '$.ref', CASE WHEN dedupe_key LIKE 'client:' || conversation_id || ':%'
+                       THEN substr(dedupe_key, length('client:' || conversation_id || ':') + 1) ELSE dedupe_key END
+       ), '$.wakeup', '$.replyId'),
+       dedupe_key = 'system:' || conversation_id || ':pm.wakeup:' ||
+         CASE WHEN dedupe_key LIKE 'client:' || conversation_id || ':%'
+              THEN substr(dedupe_key, length('client:' || conversation_id || ':') + 1) ELSE dedupe_key END
+ WHERE sender = 'user' AND json_valid(meta) AND json_extract(meta, '$.wakeup') = 1;

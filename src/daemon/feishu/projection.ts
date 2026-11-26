@@ -1,5 +1,4 @@
 import { isDeviceId, type DeviceId } from "../../shared/api.ts";
-import { isLedgerWakeup } from "../../shared/attachments.ts";
 import type { ConversationId, MessageId, PmId } from "../../shared/domain.ts";
 import type { FeishuChatTarget } from "../../shared/feishu.ts";
 import { isCenter, type FeishuContext } from "./context.ts";
@@ -54,12 +53,11 @@ export const devicePostUuid = (ctx: FeishuContext, kind: string, key: number | s
 
 function awaitingUser(ctx: FeishuContext, conversationId: ConversationId): boolean {
   // `sender != 'agent'` lets SQLite use the messages_conversation_non_agent partial index.
-  const row = ctx.db.get<{ meta: string | null; status: string | null }>(
-    "SELECT meta, status FROM messages WHERE conversation_id = ? AND sender != 'agent' AND sender = 'user' ORDER BY id DESC LIMIT 1",
+  const row = ctx.db.get<{ status: string | null }>(
+    "SELECT status FROM messages WHERE conversation_id = ? AND sender != 'agent' AND sender = 'user' ORDER BY id DESC LIMIT 1",
     conversationId,
   );
-  if (row === undefined || !AWAITING_REPLY.has(row.status ?? "")) return false;
-  return !isLedgerWakeup({ sender: "user", meta: row.meta === null ? null : (JSON.parse(row.meta) as Record<string, unknown>) });
+  return row !== undefined && AWAITING_REPLY.has(row.status ?? "");
 }
 
 export const projectionOf = (ctx: FeishuContext): FeishuProjectionContext => ({

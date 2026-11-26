@@ -202,7 +202,7 @@ describe("session.send 处理函数", () => {
     await expect(createSessionSendHandler(d)(sendAction())).rejects.toBeInstanceOf(DriverError);
   });
 
-  it("真人主动发消息（!isLedgerWakeup）与项目经理 worker.send（sender pm）：即使旧 resetsAt 未到期也直接调 driver.send，不压着", async () => {
+  it("真人主动发消息与项目经理 worker.send（sender pm）：即使旧 resetsAt 未到期也直接调 driver.send，不压着", async () => {
     const rateLimit = { status: "rejected", resetsAt: NOW / 1000 + 3600, windows: {} };
     for (const m of [
       message({ sender: "user", meta: null, text: "继续" }),
@@ -216,12 +216,12 @@ describe("session.send 处理函数", () => {
     }
   });
 
-  it("系统消息、账本代发唤醒（isLedgerWakeup）、重启恢复与退避重试：额度用完时 later 到恢复之后，不调 driver", async () => {
+  it("系统消息、账本代发唤醒、重启恢复与退避重试：额度用完时 later 到恢复之后，不调 driver", async () => {
     const resetsAt = NOW / 1000 + 60;
     const rateLimit = { status: "rejected", resetsAt, windows: {} };
     for (const [m, act] of [
       [message({ sender: "system", meta: { event: "schedule.run", scheduleId: 1, name: "早报" } }), action("session.send", { sessionId: 1, messageId: 7, source: "system" })],
-      [message({ sender: "user", meta: { wakeup: true } }), sendAction()],
+      [message({ sender: "system", meta: { event: "pm.wakeup", source: "task_graph", ref: "test" } }), sendAction()],
       [message({ status: "processing" }), sendAction({ resend: true })],
       [message({ status: "processing" }), action("session.send", { sessionId: 1, messageId: 7, source: "user", resend: true, recovery: true })],
       [message(), { ...sendAction(), attempts: 1 }],
@@ -234,7 +234,7 @@ describe("session.send 处理函数", () => {
 
   it("自动唤醒在额度很久以后才恢复时：最多推迟 5 分钟再看", async () => {
     const { d } = deps({
-      message: message({ sender: "user", meta: { wakeup: true } }),
+      message: message({ sender: "system", meta: { event: "pm.wakeup", source: "task_graph", ref: "test" } }),
       rateLimit: { status: "rejected", resetsAt: NOW / 1000 + 3600, windows: {} },
     });
     expect(await createSessionSendHandler(d)(sendAction())).toMatchObject({ kind: "later", delayMs: 300_000, reason: "rate_limited" });

@@ -401,6 +401,7 @@ describe("M2：系统消息", () => {
       "driver.warning",
       "worker.max_time_exceeded",
       "task_graph.ready_to_finish",
+      "pm.wakeup",
     ]);
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();
   });

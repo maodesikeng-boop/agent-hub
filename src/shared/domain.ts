@@ -235,6 +235,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return `${meta.workerId}:${meta.maxTimeMs}`;
       case "task_graph.ready_to_finish":
         return `${meta.graphId}:${meta.seq}`;
+      case "pm.wakeup":
+        return meta.ref;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -256,6 +258,7 @@ export const SYSTEM_EVENTS = [
   "driver.warning",
   "worker.max_time_exceeded",
   "task_graph.ready_to_finish",
+  "pm.wakeup",
 ] as const;
 
 export type SystemMessageMeta =
@@ -273,7 +276,11 @@ export type SystemMessageMeta =
   | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
   | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number; deadlineAt?: number }
-  | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean };
+  | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean }
+  | { event: "pm.wakeup"; source: PmWakeupSource; ref: string };
+
+export const PM_WAKEUP_SOURCES = ["task_graph", "router"] as const;
+export type PmWakeupSource = (typeof PM_WAKEUP_SOURCES)[number];
 
 export interface GateRef {
   graphId: TaskGraphId;

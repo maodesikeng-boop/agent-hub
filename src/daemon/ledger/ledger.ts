@@ -1,3 +1,4 @@
+import { createLedgerTakenInputs } from "./taken-inputs.ts";
 import { isChecklistToolCall } from "./checklist.ts";
 import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
 import { createLedgerBranchSync } from "./workers/branch-sync.ts";
@@ -206,6 +207,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
   });
   const turnReplies = createLedgerTurnReplies(ctx);
+  const takenInputs = createLedgerTakenInputs(ctx);
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
     switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
     clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),
@@ -296,6 +298,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       const scoped = scopeDriverEvent(session.id, event, messages.getMessage);
       if (scoped === null) return;
       const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
+      takenInputs.beforeDriverEvent(session, scoped);
       messages.applyEvent(p, session, scoped, textMeta);
       turnReplies.afterDriverEvent(p, session, scoped);
       steps.afterDriverEvent(session, scoped, openTools);

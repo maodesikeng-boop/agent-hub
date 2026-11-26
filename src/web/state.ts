@@ -8,7 +8,6 @@ import {
   formatSandboxApprovalCardText,
   clearRateLimitRejection,
   emptyRouterSlice,
-  isLedgerWakeup,
   isQuotaExhausted,
   isRewoundMessage,
   isWorkerEndLine,
@@ -279,7 +278,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       const sessions =
         change.type === "message.created" &&
         message.status === "queued" &&
-        ((message.sender === "user" && !isLedgerWakeup(message)) || message.sender === "pm")
+        (message.sender === "user" || message.sender === "pm")
           ? dropSessionQuotaRejection(afterStreaming, message.conversationId, message.sessionId)
           : afterStreaming;
       const view = state.conversations[message.conversationId];
@@ -654,7 +653,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
       for (const view of Object.values(state.conversations)) {
         const m = view.messages.find((x) => x.id === action.messageId);
         if (m) {
-          if (m.sender === "user" && !isLedgerWakeup(m)) retryConvId = m.conversationId;
+          if (m.sender === "user") retryConvId = m.conversationId;
           break;
         }
       }

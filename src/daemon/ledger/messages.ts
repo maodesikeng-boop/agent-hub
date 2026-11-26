@@ -1,9 +1,11 @@
+import { isVisibleSystemInput } from "../../shared/taken-input.ts";
+import { enqueueSystemWakeupIn, type SystemWakeupInput } from "./system-wakeups.ts";
 import { createLedgerChecklist } from "./checklist.ts";
 import type { TurnCompletionFacts, TurnEndedEvent } from "./turn-completions.ts";
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
-import { isLedgerWakeup, type UserMessageMeta } from "../../shared/attachments.ts";
+import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { mergeDeliverables, type Deliverable, type HubFileArg } from "../../shared/deliverables.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
@@ -209,34 +211,13 @@ export function createLedgerMessages(
     p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
   };
 
-  const enqueueWakeupUserMessageIn = (
-    p: Pending,
-    input: { conversationId: ConversationId; dedupeKey: string; text: string },
-  ): Message => {
-    const existing = db.get<MessageDbRow>("SELECT * FROM messages WHERE dedupe_key = ?", input.dedupeKey);
-    if (existing !== undefined) return toMessage(existing);
-    if (!conversationExists(input.conversationId)) throw new ConversationNotFoundError(input.conversationId);
-    assertUserCanPost(input.conversationId);
-    const session = currentSession(input.conversationId);
-    if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
-    const t = now();
-    const row = db.get<MessageDbRow>(
-      `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'user', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
-      input.conversationId,
-      session.id,
-      session.workerId,
-      input.text,
-      JSON.stringify({ wakeup: true } satisfies UserMessageMeta),
-      input.dedupeKey,
-      t,
-      t,
-    )!;
-    const message = toMessage(row);
-    enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
-    p.changes.push({ type: "message.created", data: { message } });
-    afterUserPost(p, input.conversationId);
-    return message;
+  const enqueueWakeupIn = (p: Pending, input: SystemWakeupInput): Message => {
+    const { conversationId } = input;
+    if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
+    assertUserCanPost(conversationId);
+    const session = currentSession(conversationId);
+    if (session === null) throw new Error(`conversation ${conversationId} has no agent session`);
+    return enqueueSystemWakeupIn(ctx, p, session, input);
   };
 
   const insertSystemMessage = (p: Pending, conversationId: ConversationId, meta: SystemMessageMeta, text: string): Message => {
@@ -294,9 +275,13 @@ export function createLedgerMessages(
       case "message.delivered":
       case "message.processing": {
         const to = event.type === "message.delivered" ? "delivered" : "processing";
-        for (const id of event.messageIds) transition(p, id, to, null, sessionId);
+        let onlyWaitingInputs = event.type === "message.delivered" && event.messageIds.length > 0;
+        for (const id of event.messageIds) {
+          const updated = transition(p, id, to, null, sessionId);
+          onlyWaitingInputs &&= updated !== undefined && isVisibleSystemInput(updated);
+        }
         dropCarriedRateLimit(p, sessionId);
-        updateLive(p, sessionId, working(event.at, liveOf(sessionId).currentTool));
+        if (!onlyWaitingInputs) updateLive(p, sessionId, working(event.at, liveOf(sessionId).currentTool));
         return;
       }
       case "turn.started":
@@ -430,6 +415,7 @@ export function createLedgerMessages(
       else if (event.ok || facts.finishedWithText.includes(id)) transition(p, id, "replied", null, session.id);
       else transition(p, id, "failed", reason, session.id);
     }
+    checklist.endTurn(session.id);
     updateLive(p, session.id, (l) => {
       idle(l);
       l.rateLimitReported = false;
@@ -616,7 +602,7 @@ export function createLedgerMessages(
         now(),
         messageId,
       );
-      if (!isLedgerWakeup(message)) dropRateLimitRejection(p, session.id);
+      dropRateLimitRejection(p, session.id);
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId, source: "user" } });
       p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
       return { messageId };
@@ -632,7 +618,7 @@ export function createLedgerMessages(
     insertSystemMessage,
     insertAskMessage,
     settleAskIn,
-    enqueueWakeupUserMessageIn,
+    enqueueWakeupIn,
     postUserMessage,
     composerTarget,
     requestStop,

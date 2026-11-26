@@ -254,7 +254,18 @@ export const WORKER_BLOCKING_WAIT_NOTE =
 
 function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
   const spec = specOf(vendor);
-  return `${WORKER_RULES_COMMON}\n${spec.capabilities.backgroundWake ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE}`;
+  return [WORKER_RULES_COMMON, checklistRuleNote(vendor), spec.capabilities.backgroundWake
+    ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE].filter(Boolean).join("\n");
+}
+
+/**
+ * Postcondition: for a vendor whose spec reports checklist events, returns one rule line (Chinese, project-agnostic)
+ * telling the agent to list a turn of three or more steps with `checklist.promptTool` and tick each step off as it
+ * finishes. Returns null for vendors with no checklist source. Both the PM and Worker prompts include it.
+ */
+export function checklistRuleNote(vendor: string): string | null {
+  const tool = specOf(vendor).checklist.promptTool;
+  return tool === undefined ? null : `- **进度清单**：一轮要做 3 步或更多时，用 ${tool} 列出步骤，每完成一项就标记为完成。`;
 }
 
 export const WORKER_READONLY_NOTE = "- 这次只读：只看、只查，不改文件，也不跑会改东西的命令；要批准的操作会被系统直接拒绝。结论写进汇报。";
@@ -377,7 +388,7 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string, options: PmPr
   const parts = [
     roleSection(ctx),
     projectSection(ctx.project),
-    `${buildPmModePrompt(ctx.pm.mode, vendor, options.taskGraphSkillFile)}\n${PM_COMMON_RULES}`,
+    [buildPmModePrompt(ctx.pm.mode, vendor, options.taskGraphSkillFile), PM_COMMON_RULES, checklistRuleNote(vendor)].filter(Boolean).join("\n"),
     PM_MEMORY_PROMPT,
     HUB_USAGE_PROMPT,
   ];
