@@ -28,6 +28,7 @@ const binding = (pmId: number | null, patch: Partial<FeishuChatBinding> = {}): F
   triggerMode: "auto",
   guestTier: "chat_only",
   archivedAt: null,
+  createdAt: 1,
   lastMessageId: null,
   lastRouterEventId: null,
   ...patch,

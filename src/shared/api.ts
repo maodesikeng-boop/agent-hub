@@ -121,6 +121,7 @@ export const API_PATHS = {
   peerTrust: "/api/peer/trust",
   peerLease: "/api/peer/lease",
   peerFeishuInbound: "/api/peer/feishu/inbound",
+  peerFeishuInboundState: "/api/peer/feishu/inbound-state",
   peerFeishuChats: "/api/peer/feishu/chats",
   peerFeishuApp: "/api/peer/feishu/app",
 
