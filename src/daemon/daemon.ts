@@ -620,15 +620,21 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.executor = executor;
     executor.start();
     // Missed schedules (daemon stopped or machine asleep) run once at startup, not once per missed slot.
-    const runSchedules = () => {
+    const runSchedulerTick = () => {
+      const now = Date.now();
       try {
-        ledger.runDueSchedules(Date.now());
+        ledger.runDueSchedules(now);
       } catch (error) {
         log(`${LOG_PREFIX} 定时任务调度出错：${error instanceof Error ? error.message : String(error)}`);
       }
+      try {
+        ledger.runDueBackgroundWaits(now);
+      } catch (error) {
+        log(`${LOG_PREFIX} Background wait check failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     };
-    runSchedules();
-    parts.scheduler = setInterval(runSchedules, SCHEDULER_TICK_MS);
+    runSchedulerTick();
+    parts.scheduler = setInterval(runSchedulerTick, SCHEDULER_TICK_MS);
     const purgeArchivedPms = () => {
       try {
         const purged = ledger.purgeExpiredArchivedPms(Date.now());

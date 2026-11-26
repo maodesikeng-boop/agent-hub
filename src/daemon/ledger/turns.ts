@@ -98,6 +98,7 @@ export interface LedgerTurns {
    * turn, ordered by id and capped at TURN_SUMMARIES_PER_PAGE_MAX.
    */
   summariesFor(conversationId: ConversationId, messages: readonly Message[]): TurnSummary[];
+  publishTurnIn(p: Pending, turnId: TurnId): void;
   /**
    * Runs once at startup after every pending receipt settles and before any send. Ends each turn still running (the
    * previous process died without a receipt) as interrupted by `crash`. Returns one resend per input that a turn interrupted by `shutdown` or `crash` took and that no later turn has taken, skipping inputs
@@ -135,20 +136,30 @@ function summariesFor(db: LedgerContext["db"], conversationId: ConversationId, m
      ) ORDER BY (t.status = 'running') DESC, t.id DESC LIMIT ?`,
     conversationId, last, first, JSON.stringify(messages.map((message) => message.id)), TURN_SUMMARIES_PER_PAGE_MAX,
   );
+  return summarizeTurns(db, turns);
+}
+
+function summarizeTurns(db: LedgerContext["db"], turns: TurnRecord[]): TurnSummary[] {
   if (turns.length === 0) return [];
+  const ids = JSON.stringify(turns.map((turn) => turn.id));
   const inputs = new Map<TurnId, TurnSummary["inputs"][number][]>();
   for (const row of db.all<TurnInputRecord>(
     `SELECT ${INPUT_COLUMNS} FROM turn_inputs i JOIN messages m ON m.id = i.message_id
      WHERE i.turn_id IN (SELECT value FROM json_each(?)) AND i.taken_at IS NOT NULL AND NOT ${CHECKLIST_REMINDER_SQL}
-     ORDER BY i.taken_at, i.message_id`, JSON.stringify(turns.map((turn) => turn.id)),
+     ORDER BY i.taken_at, i.message_id`, ids,
   )) {
     const input = { messageId: row.messageId, role: row.role, afterMessageId: row.afterMessageId };
     const list = inputs.get(row.turnId);
     if (list === undefined) inputs.set(row.turnId, [input]);
     else list.push(input);
   }
+  const waits = db.all<{ turnId: TurnId } & NonNullable<TurnSummary["background"]>>(
+    `SELECT turn_id AS turnId, active_count AS activeCount, waiting_since AS waitingSince, reminders_sent AS remindersSent
+       FROM turn_background_waits WHERE turn_id IN (SELECT value FROM json_each(?))`, ids,
+  );
+  const background = new Map(waits.map(({ turnId, ...wait }) => [turnId, wait]));
   return turns.sort((a, b) => a.id - b.id).map(({ replyMessageId: _reply, failureReason: _reason, ...turn }) => ({
-    ...turn, inputs: inputs.get(turn.id) ?? [], background: null,
+    ...turn, inputs: inputs.get(turn.id) ?? [], background: background.get(turn.id) ?? null,
   }));
 }
 
@@ -433,6 +444,11 @@ export function createLedgerTurns(ctx: LedgerContext, deps: TurnsDeps): LedgerTu
       } else recordOutputIn(p, session, event);
     },
     settle, settleExit, recordOutputIn, recordFailedStartIn, runningTurnOf, lastEndedTurnOf, turnOf, turnTakingInput, summariesFor: (id, messages) => summariesFor(db, id, messages), recoverAfterRestartIn,
+    publishTurnIn(p, turnId) {
+      const turn = turnOf(turnId);
+      const summary = turn === null ? undefined : summarizeTurns(db, [turn])[0];
+      if (summary !== undefined) p.changes.push({ type: "turn.updated", data: { turn: summary } });
+    },
     sessionTurns: (id) => db.all<TurnRecord>(
       `SELECT ${TURN_COLUMNS} FROM turns t WHERE t.session_id = ? ORDER BY t.id DESC LIMIT ?`, id, TURN_HISTORY_MAX_PER_CONV,
     ).reverse(),

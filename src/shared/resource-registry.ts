@@ -283,8 +283,6 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("resource_decisions", "growing", "src/daemon/resources/decisions.ts", "src/daemon/resources/decisions.ts", "automatic", [
     limit("RESOURCE_DECISIONS_MAX_ROWS", RESOURCE_DECISIONS_MAX_ROWS, "rows"),
   ]),
-  table("worker_background_waits", "growing", "src/daemon/ledger/workers.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
-  table("worker_background_wait_details", "growing", "src/daemon/ledger/workers/ctx.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("worker_turn_timeouts", "growing", "src/daemon/ledger/workers.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_persona_seen", "growing", "src/daemon/ledger/persona.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/router.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_preamble_seen", "growing", "src/daemon/ledger/handover.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),

@@ -8,6 +8,7 @@ import {
 } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { LedgerContext, Pending } from "./context.ts";
+import type { BackgroundAtReply } from "./turn-background-waits.ts";
 
 export type TurnEndedEvent = Extract<DriverEvent, { type: "turn.ended" }>;
 
@@ -26,6 +27,7 @@ export interface TurnCompletionFacts extends LegacyTurnReplyFacts {
   readonly worker: {
     readonly turnStart: MessageId;
     readonly waitingForBackground: boolean;
+    readonly background?: BackgroundAtReply;
   } | null;
 }
 

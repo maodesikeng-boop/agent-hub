@@ -12,6 +12,8 @@ import type { SandboxApprovalStore } from "../sandbox-approvals.ts";
 import type { LedgerSessions } from "../sessions.ts";
 import type { StepWorkspacePlan, WorkerBindTarget } from "../task-graphs.ts";
 import type { LedgerTakeover } from "../takeover.ts";
+import type { LedgerTurnBackgroundWaits } from "../turn-background-waits.ts";
+import type { LedgerTurns } from "../turns.ts";
 import type { LedgerUserBlockers } from "../user-blockers.ts";
 
 export interface LedgerWorkersTaskGraphHooks {
@@ -54,15 +56,7 @@ export interface LedgerWorkersOptions {
   taskGraphs?: LedgerWorkersTaskGraphHooks;
   userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "attachWorkerIn">;
   takeover?: LedgerTakeover;
-}
-
-export type BackgroundWait = { turnStart: MessageId; turnEnd: MessageId | null; directChat: boolean; background: boolean };
-
-export interface AwaitingBackground {
-  get: (sessionId: SessionId) => BackgroundWait | undefined;
-  set: (sessionId: SessionId, turn: Omit<BackgroundWait, "background">) => void;
-  setBackground: (sessionId: SessionId, background: boolean) => void;
-  take: (sessionId: SessionId) => BackgroundWait | undefined;
+  turns: Pick<LedgerTurns, "turnOf" | "publishTurnIn">;
 }
 
 export type MaxTimeTimer = { timer: ReturnType<typeof setTimeout>; maxTimeMs: number; startedAt: number };
@@ -85,8 +79,7 @@ export interface WorkersCtx {
   /** Turns interrupted by endIn are not reported back because the PM stopped them itself. */
   /** Only the timers live in memory; duration, deadline and reminder state persist in worker_turn_timeouts for restart recovery. */
   maxTimeTimers: Map<ConversationId, MaxTimeTimer>;
-  /** A turn that ends with background commands still running is not reported yet, otherwise the PM would get a premature "done". */
-  awaitingBackground: AwaitingBackground;
+  backgroundWaits: LedgerTurnBackgroundWaits;
 }
 
 export type EndedWorktreeCandidate = {

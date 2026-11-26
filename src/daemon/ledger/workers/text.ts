@@ -18,13 +18,12 @@ export const TURN_STOPPED = "被停止了";
 const TURN_FAILED = "这一轮出错了";
 export const NO_REPLY_TEXT = "（这一轮没有文字回复）";
 
-export function backgroundKilledNote(reason: "idle" | "shutdown" | "restart"): string {
+export function backgroundKilledNote(reason: "idle" | "restart"): string {
   const resend = `要它重跑或接着做用 ${HUB_COMMAND} worker send。`;
   if (reason === "restart") {
     return `【系统】这个 Worker 在等放到后台的命令时守护进程重启了，命令随旧进程中断（跑没跑完、结果它都没看到）；下面是它中断前最后一轮的回复。${resend}`;
   }
-  const why = reason === "idle" ? `超过 ${WORKER_BACKGROUND_HOLD_MAX_MS / 60_000} 分钟还没结束（可能卡住了）` : "还没结束，守护进程就关了";
-  return `【系统】这个 Worker 放到后台的命令${why}，已经连同它的进程一起停掉；下面是它停之前最后一轮的回复。${resend}`;
+  return `【系统】这个 Worker 放到后台的命令超过 ${WORKER_BACKGROUND_HOLD_MAX_MS / 60_000} 分钟还没结束（可能卡住了），已经连同它的进程一起停掉；下面是它停之前最后一轮的回复。${resend}`;
 }
 
 export const taskDedupeKey = (workerId: WorkerId) => `pm:worker:${workerId}:task`;

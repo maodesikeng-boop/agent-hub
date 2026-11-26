@@ -535,11 +535,11 @@ describe("单轮超时计时落盘：守护进程重启后照常提醒", () => {
     expect(wakes()).toHaveLength(1);
     expect(timeoutRow(w.id)?.notified).toBe(1);
 
-    // 随后进入等后台命令（awaitingBackground），期间守护进程重启：recoverBackgroundWaits 结算本轮且清空计时死行
+    // Ending the model turn clears its deadline before the background wait starts.
     ledger.applyDriverEvent(sid, { type: "background.changed", count: 1, at: now });
     ledger.applyDriverEvent(sid, { type: "agent.text", uuid: "bg-1", text: "放后台了", at: now });
     ledger.applyDriverEvent(sid, { type: "turn.ended", ok: true, interrupted: false, messageIds: [firstId], durationMs: 10, at: now });
-    expect(timeoutRow(w.id)?.notified).toBe(1);
+    expect(timeoutRow(w.id)).toBeUndefined();
     restart();
     expect(timeoutRow(w.id)).toBeUndefined();
 

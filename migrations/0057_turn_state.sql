@@ -1,6 +1,6 @@
 -- 0057_turn_state: one row per model turn, the inputs it took, the tools it ran, and the background wait it left behind.
 -- These tables become the only record of turn boundaries, input settlement, tool completion, and background waits;
--- messages keeps the transcript and a read projection of each input's status. New tables only, so the file re-runs.
+-- messages keeps the transcript and a read projection of each input's status.
 CREATE TABLE IF NOT EXISTS turns (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id       INTEGER NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
@@ -72,3 +72,47 @@ CREATE TABLE IF NOT EXISTS turn_background_waits (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_turn_background_waits_due ON turn_background_waits(next_remind_at) WHERE next_remind_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_turn_background_waits_drained ON turn_background_waits(drained_at) WHERE drained_at IS NOT NULL;
+
+-- Empty source tables let this migration rerun after the originals have been dropped.
+CREATE TABLE IF NOT EXISTS worker_background_waits (
+  session_id INTEGER PRIMARY KEY REFERENCES agent_sessions(id),
+  turn_start INTEGER NOT NULL,
+  background INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS worker_background_wait_details (
+  session_id INTEGER PRIMARY KEY REFERENCES worker_background_waits(session_id) ON DELETE CASCADE,
+  turn_end INTEGER NOT NULL,
+  direct_chat INTEGER NOT NULL
+) STRICT;
+
+-- The old wait records the reply time only. Leave the first output unset so historical cards keep their duration estimate.
+CREATE TEMP TABLE legacy_turn_waits AS
+SELECT b.session_id, s.conversation_id, b.background, b.created_at, coalesce(d.direct_chat, 0) AS direct_chat,
+       (SELECT m.id FROM messages m
+         WHERE m.session_id = b.session_id AND m.sender = 'agent'
+           AND m.id > b.turn_start AND (d.turn_end IS NULL OR m.id <= d.turn_end)
+         ORDER BY m.id DESC LIMIT 1) AS last_output_id,
+       (SELECT m.id FROM messages m
+         WHERE m.session_id = b.session_id AND m.sender = 'agent' AND m.kind = 'text'
+           AND m.id > b.turn_start AND (d.turn_end IS NULL OR m.id <= d.turn_end)
+         ORDER BY m.id DESC LIMIT 1) AS draft_message_id
+FROM worker_background_waits b
+JOIN agent_sessions s ON s.id = b.session_id
+JOIN workers w ON w.id = s.worker_id AND w.status = 'open'
+LEFT JOIN worker_background_wait_details d ON d.session_id = b.session_id
+WHERE NOT EXISTS (SELECT 1 FROM turn_background_waits n WHERE n.session_id = b.session_id);
+
+INSERT INTO turns (session_id, conversation_id, cause, status, outcome, started_at, ended_at, duration_ms, last_output_id, reply_message_id, updated_at)
+SELECT session_id, conversation_id, 'self', 'ended', 'ok', created_at, created_at, 0, last_output_id, draft_message_id, created_at
+FROM legacy_turn_waits ORDER BY session_id;
+
+INSERT INTO turn_background_waits (turn_id, session_id, draft_message_id, direct_chat, active_count, waiting_since, drained_at, updated_at)
+SELECT (SELECT max(t.id) FROM turns t WHERE t.session_id = b.session_id), b.session_id, b.draft_message_id, b.direct_chat,
+       b.background, b.created_at, CASE WHEN b.background = 0 THEN b.created_at END, b.created_at
+FROM legacy_turn_waits b;
+
+DROP TABLE legacy_turn_waits;
+DROP TABLE worker_background_wait_details;
+DROP TABLE worker_background_waits;

@@ -23,6 +23,8 @@ import {
   ROUTER_COMMANDS_RETENTION_MS,
   ROUTER_ITEMS_TERMINAL_MAX_ROWS,
   ROUTER_ITEM_RETENTION_MS,
+  TURN_HISTORY_MAX_PER_CONV,
+  TURN_HISTORY_RETENTION_DAYS,
 } from "../../shared/limits.ts";
 import type { Db } from "../store/index.ts";
 import type { LedgerContext } from "./context.ts";
@@ -411,6 +413,26 @@ function trimOversizedEndedWorkerStepsIn(db: Db, budget: number): TableRetention
   return { rows: deleted, more: hasMore || sessions.length >= 20 };
 }
 
+function purgeTurnHistoryIn(db: Db, now: number, budget: number): TableRetentionBatch {
+  const rows = db.all<{ id: number }>(
+    `WITH ranked AS (
+       SELECT id, session_id, ended_at, row_number() OVER (PARTITION BY conversation_id ORDER BY id DESC) AS recency
+       FROM turns WHERE status = 'ended'
+     )
+     SELECT t.id FROM ranked t
+     WHERE (t.ended_at < ? OR t.recency > ?)
+       AND NOT EXISTS (SELECT 1 FROM turn_background_waits b WHERE b.turn_id = t.id)
+       AND NOT EXISTS (SELECT 1 FROM turn_completions c WHERE c.session_id = t.session_id)
+       AND NOT EXISTS (
+         SELECT 1 FROM turn_inputs i JOIN messages m ON m.id = i.message_id
+         WHERE i.turn_id = t.id AND i.outcome = 'interrupted' AND m.session_id = t.session_id AND m.status = 'processing'
+       )
+     ORDER BY t.ended_at, t.id LIMIT ?`,
+    now - TURN_HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1_000, TURN_HISTORY_MAX_PER_CONV, budget + 1,
+  );
+  return { rows: deleteByIds(db, "turns", rows.slice(0, budget).map((row) => row.id)), more: rows.length > budget };
+}
+
 /**
  * Precondition: ctx holds an open migrated database.
  * Postcondition: returns a DbTableRetention controller enforcing dual time and count caps across growing ledger tables.
@@ -448,6 +470,7 @@ export function createDbTableRetention(ctx: LedgerContext): DbTableRetention {
       }),
       (rem) => prunePersonaChangesBatch(rem),
       (rem) => write(() => trimOversizedEndedWorkerStepsIn(db, rem)),
+      (rem) => write(() => purgeTurnHistoryIn(db, nowMs, rem)),
     ];
     let total = 0;
     for (const run of steps) {

@@ -25,7 +25,7 @@ export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts
   clearMaxTimeIn(w, p, worker.worker_conversation_id);
   const session = workerSession(w, worker);
   const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id }, "session_ended");
-  w.awaitingBackground.take(session.id);
+  w.backgroundWaits.releaseIn(p, session.id, { kind: "worker_ended" });
   p.after.push(() => { w.turnStarts.delete(session.id); });
   const t = w.now();
   w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
@@ -202,7 +202,7 @@ export function endOpenWorkersIn(w: WorkersCtx, p: Pending, pmId: PmId): void {
     if (!interrupted && !notStarted(worker) && (queued.length > 0 || session.status === "running")) {
       p.stops.push({ conversationId: worker.worker_conversation_id, sessionId: session.id });
     }
-    w.awaitingBackground.take(session.id);
+    w.backgroundWaits.releaseIn(p, session.id, { kind: "worker_ended" });
     p.after.push(() => { w.turnStarts.delete(session.id); });
     w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
     recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);

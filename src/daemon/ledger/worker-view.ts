@@ -66,7 +66,10 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     if (live.activity === "preparing") return "在跑项目的准备命令，跑完才开工";
     if (notStarted(worker)) return "worktree 还没建好，没开工";
     if (live.activity === "stopping") return "正在停下来";
-    if (live.activity === "background") return `这一轮做完了，在等放到后台的 ${live.backgroundTasks ?? 0} 个命令跑完，跑完它接着做、做完再汇报`;
+    if (live.activity === "background") {
+      const count = live.backgroundTasks ?? 0;
+      return count === 0 ? "后台命令已结束，正在等模型继续" : `模型已回复，正在等 ${count} 个后台命令跑完再汇报`;
+    }
     if (current === null && live.activity === "idle") {
       if (lastEnded === null) return "没在干活，等项目经理（或用户）发话";
       if (lastEnded.outcome === "ok") return "没在干活，等项目经理验收或发下一条";

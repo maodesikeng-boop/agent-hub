@@ -137,7 +137,6 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
         where: `conversation_id = ? OR from_session_id IN ${placeholders(sessionIds)} OR to_session_id IN ${placeholders(sessionIds)}`,
         params: [c.conv, ...sessionIds, ...sessionIds],
       },
-      { table: "worker_background_waits", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
       { table: "worker_turn_timeouts", where: "worker_id = ?", params: [c.id] },
       { table: "session_persona_seen", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
       { table: "session_preamble_seen", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },

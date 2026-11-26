@@ -9,6 +9,7 @@ import { RELEASE_DB_DIR, RELEASE_SAMPLE, captureSampleLedger, headerUserVersion 
 import { loadMigrations, openStore } from "../../src/daemon/store/index.ts";
 import { API_PATHS, ENV_DB_SHARED_ACCESS } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
+import { REPORT_END, REPORT_START } from "../../src/shared/worker.ts";
 import * as harness from "./harness.ts";
 import { Client, agentTexts, makeEnv, waitForStatus, type E2eEnv } from "./harness.ts";
 
@@ -51,6 +52,32 @@ function freshSchema(): unknown[] {
   const paths = resolveHubPaths({ AGENT_HUB_HOME: home }, "/nonexistent");
   openStore(paths).db.close();
   return inspect(paths.dbFile, schemaOf);
+}
+
+function seedHeldReport(file: string): number {
+  const db = new DatabaseSync(file);
+  try {
+    const project = db.prepare("SELECT id, pm_id, conversation_id FROM projects ORDER BY id LIMIT 1").get()!;
+    const now = Date.now();
+    const conversation = db.prepare(
+      "INSERT INTO conversations (kind, pm_id, project_id, title, created_at) VALUES ('worker', ?, ?, 'Upgrade Worker', ?) RETURNING id",
+    ).get(project.pm_id!, project.id!, now)!;
+    const worker = db.prepare(
+      `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'Upgrade Worker', 'Wait for a command', 'main', ?, ?) RETURNING id`,
+    ).get(project.id!, project.pm_id!, project.conversation_id!, conversation.id!, now, now)!;
+    const session = db.prepare(
+      `INSERT INTO agent_sessions (role, conversation_id, worker_id, vendor_session_id, cwd, created_at, updated_at)
+       VALUES ('worker', ?, ?, 'upgrade-worker', '.', ?, ?) RETURNING id`,
+    ).get(conversation.id!, worker.id!, now, now)!;
+    const text = `${REPORT_START}\n状态: 做完了\n摘要: Held report before upgrade\n${REPORT_END}`;
+    db.prepare(`INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, dedupe_key, created_at, updated_at)
+      VALUES (?, ?, ?, 'agent', 'text', ?, 'upgrade-worker:draft', ?, ?)`).run(conversation.id!, session.id!, worker.id!, text, now, now);
+    db.prepare("INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 0, 1, ?)").run(session.id!, now);
+    return Number(worker.id);
+  } finally {
+    db.close();
+  }
 }
 
 describe("upgrading ledgers written by released versions", { timeout: 30_000 }, () => {
@@ -99,6 +126,28 @@ describe("upgrading ledgers written by released versions", { timeout: 30_000 }, 
       inspect(join(stateDir, backup), (db) => {
         expect(userVersionOf(db)).toBe(from);
         expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      });
+    }
+  });
+
+  it("delivers a released ledger's held Worker report once after upgrade", async () => {
+    env = makeEnv();
+    const stateDir = join(env.home, "state");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const dbFile = join(stateDir, "hub.sqlite");
+    writeFileSync(dbFile, releasedLedger("v0.3.0"));
+    const workerId = seedHeldReport(dbFile);
+    env.setScript({ defaultTurn: { steps: [{ text: "Upgrade report received" }] } });
+
+    for (let boot = 0; boot < 2; boot++) {
+      const daemon = await env.start({ env: { [ENV_DB_SHARED_ACCESS]: "0" } });
+      expect((await daemon.terminate()).code).toBe(0);
+      inspect(dbFile, (db) => {
+        expect(db.prepare("SELECT 1 FROM sqlite_schema WHERE name IN ('worker_background_waits', 'worker_background_wait_details')").all()).toEqual([]);
+        expect(db.prepare("SELECT * FROM turn_background_waits").all()).toEqual([]);
+        const reports = db.prepare(`SELECT text FROM messages WHERE worker_id = ? AND kind = 'worker' AND json_extract(meta, '$.event') = 'report'`).all(workerId);
+        expect(reports).toEqual([{ text: expect.stringMatching(/重启[\s\S]*Held report before upgrade/) }]);
+        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       });
     }
   });

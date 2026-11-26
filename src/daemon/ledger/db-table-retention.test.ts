@@ -13,6 +13,8 @@ import {
   PERSONA_CHANGES_LIMIT,
   PM_TOOL_MESSAGES_MAX_PER_CONV,
   PM_TOOL_MESSAGE_RETENTION_MS,
+  TURN_HISTORY_MAX_PER_CONV,
+  TURN_HISTORY_RETENTION_DAYS,
 } from "../../shared/limits.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -68,6 +70,33 @@ const count = (table: string, where = "1 = 1", ...params: (string | number)[]): 
   db.get<{ n: number }>(`SELECT count(*) AS n FROM ${table} WHERE ${where}`, ...params)!.n;
 
 describe("createDbTableRetention", () => {
+  it("prunes old and excess ended turns in batches without deleting running turns or held reports", () => {
+    const old = T0 - TURN_HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1_000 - 1;
+    const endedTurn = (sessionId: number, conversationId: number, at: number) => Number(db.run(
+      `INSERT INTO turns (session_id, conversation_id, cause, status, outcome, started_at, ended_at, duration_ms, updated_at)
+       VALUES (?, ?, 'self', 'ended', 'ok', ?, ?, 0, ?)`, sessionId, conversationId, at, at, at,
+    ).lastInsertRowid);
+    const held = endedTurn(workerSessionId, workerConvId, old);
+    db.run("INSERT INTO turn_background_waits (turn_id, session_id, active_count, waiting_since, updated_at) VALUES (?, ?, 1, ?, ?)",
+      held, workerSessionId, old, old);
+    const expired = endedTurn(workerSessionId, workerConvId, old);
+    db.run("INSERT INTO turn_tools (turn_id, tool_use_id, name, status, recorded_at) VALUES (?, 'tool-1', 'Bash', 'done', ?)", expired, old);
+    db.run("INSERT INTO turns (session_id, conversation_id, cause, status, started_at, updated_at) VALUES (?, ?, 'self', 'running', ?, ?)",
+      pmSessionId, pmConvId, old, old);
+    const excess = endedTurn(pmSessionId, pmConvId, T0 - 1);
+    db.transaction(() => {
+      for (let i = 0; i < TURN_HISTORY_MAX_PER_CONV; i++) endedTurn(pmSessionId, pmConvId, T0);
+    });
+
+    expect(retention.purgeAllBatch(T0, 1)).toMatchObject({ rows: 1, more: true });
+    expect(count("turn_tools", "turn_id = ?", expired)).toBe(0);
+    expect(count("turns", "id = ?", excess)).toBe(1);
+    expect(retention.purgeAllBatch(T0, 10)).toEqual({ rows: 1, more: false });
+    expect(count("turns", "id = ?", excess)).toBe(0);
+    expect(count("turns", "status = 'running'")).toBe(1);
+    expect(count("turn_background_waits", "turn_id = ?", held)).toBe(1);
+  });
+
   it("purges PM conversation process messages past PM_TOOL_MESSAGE_RETENTION_MS or above PM_TOOL_MESSAGES_MAX_PER_CONV without deleting text, ask, worker, or system messages", () => {
     const oldAt = T0 - PM_TOOL_MESSAGE_RETENTION_MS - 1_000;
     const freshAt = T0 - 1_000;

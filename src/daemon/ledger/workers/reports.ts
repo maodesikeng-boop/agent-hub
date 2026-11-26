@@ -1,12 +1,13 @@
 import type { AgentSessionRow, MessageId, SessionId, WorkerLineStatus } from "../../../shared/domain.ts";
-import type { DriverEvent } from "../../../shared/driver.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { parseReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
 import { userBlockerKindOfFailure } from "../../../shared/user-blockers.ts";
 import { isAgentVendor } from "../../../shared/vendors.ts";
 import { extractReportPrUrl, parseWorkerReport } from "../../../shared/worker.ts";
 import type { Pending } from "../context.ts";
-import { exitFailureReason } from "../messages.ts";
+import { getAgentSession } from "../../store/index.ts";
+import { idle } from "../sessions.ts";
+import type { BackgroundWaitRecord, WaitRelease } from "../turn-background-waits.ts";
 import type { WorkerDbRow } from "../rows.ts";
 import { userBlockedPmNote } from "../user-blockers.ts";
 import { workerRow, workerSession } from "./ctx.ts";
@@ -14,8 +15,8 @@ import { shouldDeliverDirectChatReport } from "./direct-chat.ts";
 import { endWorkerIn } from "./lifecycle.ts";
 import { insertLine } from "./lines.ts";
 import { NO_REPLY_TEXT, TURN_STOPPED, backgroundKilledNote, toReportMessage } from "./text.ts";
-import { clearMaxTime } from "./timers.ts";
-import type { BackgroundWait, ReportMessage, ReportMessageRow, WorkersCtx } from "./types.ts";
+import { clearMaxTimeIn } from "./timers.ts";
+import type { ReportMessage, ReportMessageRow, WorkersCtx } from "./types.ts";
 
 export function insertTurnFailed(w: WorkersCtx, p: Pending, worker: WorkerDbRow, turnMessageId: MessageId | null, messageIds: MessageId[], reason: string, detail?: string): void {
   const detailBody = detail ?? (
@@ -62,19 +63,18 @@ export const onlyManualCompact = (w: WorkersCtx, session: AgentSessionRow, turnS
 
 export const maxMessageId = (w: WorkersCtx) => w.db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0;
 
-export const lastAgentMessageId = (w: WorkersCtx, sessionId: SessionId, turnStart: number, turnEnd: number | null = null): MessageId | null =>
+export const lastAgentMessageId = (w: WorkersCtx, sessionId: SessionId, turnStart: number): MessageId | null =>
   w.db.get<{ id: number | null }>(
-    `SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ? AND id <= ?`,
-    sessionId, turnStart, turnEnd ?? Number.MAX_SAFE_INTEGER,
+    `SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ?`,
+    sessionId, turnStart,
   )!.id;
 
-export const lastAgentTextMessage = (w: WorkersCtx, sessionId: SessionId, turnStart: number, turnEnd: number | null = null): ReportMessage | null =>
+export const lastAgentTextMessage = (w: WorkersCtx, sessionId: SessionId, turnStart: number): ReportMessage | null =>
   toReportMessage(
     w.db.get<ReportMessageRow>(
-      `SELECT id, text, meta FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? AND id <= ? ORDER BY id DESC LIMIT 1`,
+      `SELECT id, text, meta FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id DESC LIMIT 1`,
       sessionId,
       turnStart,
-      turnEnd ?? Number.MAX_SAFE_INTEGER,
     ),
   );
 
@@ -85,11 +85,12 @@ export function insertReport(
   turnMessageId: MessageId,
   reportMessage: ReportMessage | null,
   note: string | null = null,
-  opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult; followsEmptyRecovery?: boolean },
+  opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult; followsEmptyRecovery?: boolean; infoNote?: string },
 ): void {
   const text = reportMessage?.text ?? "";
   const parsed = parseWorkerReport(text);
-  const body = text.trim() === "" ? NO_REPLY_TEXT : text;
+  const reply = text.trim() === "" ? NO_REPLY_TEXT : text;
+  const body = opts?.infoNote === undefined ? reply : `${opts.infoNote}\n\n${reply}`;
   const status: WorkerLineStatus = parsed.kind === "ok" ? parsed.report.status : "unformatted";
   const summary = parsed.kind === "ok" ? parsed.report.summary : parsed.summary;
   const prUrl = parsed.kind === "ok" ? extractReportPrUrl(parsed.report.pr) : null;
@@ -124,41 +125,37 @@ export function insertReport(
   insertLine(w, p, worker, { ...report, deliver: graphHandling.pmDeliverBody, wakePm: true });
 }
 
-export function flushAwaiting(w: WorkersCtx, p: Pending, session: AgentSessionRow, event: Extract<DriverEvent, { type: "session.exited" }>, awaiting: BackgroundWait): void {
-  const worker = workerRow(w, session.workerId!);
-  if (worker === null) return;
-  clearMaxTime(w, worker.worker_conversation_id);
-  if (worker.status === "ended") return;
-  const turnMessageId = lastAgentMessageId(w, session.id, awaiting.turnStart, awaiting.turnEnd);
-  if (turnMessageId === null) return;
-  if (event.reason === "interrupt" || event.reason === "crash" || event.reason === "startup_failed") {
-    if (!awaiting.directChat) insertTurnFailed(w, p, worker, turnMessageId, [], event.reason === "interrupt" ? TURN_STOPPED : exitFailureReason(event));
+export const reportMessageOf = (w: WorkersCtx, id: MessageId | null): ReportMessage | null =>
+  id === null ? null : toReportMessage(w.db.get<ReportMessageRow>("SELECT id, text, meta FROM messages WHERE id = ?", id));
+
+export function deliverHeldReportIn(w: WorkersCtx, p: Pending, wait: BackgroundWaitRecord, release: WaitRelease): void {
+  const session = getAgentSession(w.db, wait.sessionId);
+  if (session?.workerId == null) return;
+  const worker = workerRow(w, session.workerId);
+  if (worker === null || worker.status === "ended") return;
+  w.sessions.updateLive(p, wait.sessionId, (live) => {
+    if (live.activity === "background") idle(live);
+  });
+  const turn = w.options.turns.turnOf(wait.turnId);
+  const turnMessageId = wait.draftMessageId ?? turn?.lastOutputId ??
+    w.db.get<{ id: MessageId }>("SELECT message_id AS id FROM turn_inputs WHERE turn_id = ? ORDER BY message_id DESC LIMIT 1", wait.turnId)?.id;
+  if (turnMessageId === undefined) return;
+  const pendingFollowup = w.db.get(
+    `SELECT 1 FROM messages WHERE conversation_id = ? AND sender = 'pm'
+      AND status IN ('queued', 'delivered', 'processing') LIMIT 1`, worker.worker_conversation_id,
+  ) !== undefined;
+  if (release.kind !== "drained" && !pendingFollowup) clearMaxTimeIn(w, p, worker.worker_conversation_id);
+  if (release.kind === "process_exited" && (release.reason === "interrupt" || release.reason === "crash" || release.reason === "startup_failed")) {
+    if (!wait.directChat) insertTurnFailed(w, p, worker, turnMessageId, [], release.failureReason);
     return;
   }
-  const reply = lastAgentTextMessage(w, session.id, awaiting.turnStart, awaiting.turnEnd);
-  if (!awaiting.directChat || shouldDeliverDirectChatReport(reply?.text ?? "")) {
-    insertReport(w, p, worker, turnMessageId, reply, awaiting.background ? backgroundKilledNote(event.reason) : null);
-  }
-}
-
-/** Background commands died with the old process, so recovery reports the last turn instead of resuming the session. */
-export const recoverBackgroundWaits = (w: WorkersCtx) =>
-  w.write((p) => {
-    const waits = w.db.all<{ session_id: number; turn_start: number; turn_end: number | null; direct_chat: number | null; worker_id: number | null }>(
-      `SELECT b.session_id, b.turn_start, d.turn_end, d.direct_chat, s.worker_id FROM worker_background_waits b
-       JOIN agent_sessions s ON s.id = b.session_id
-       LEFT JOIN worker_background_wait_details d ON b.session_id = d.session_id ORDER BY b.session_id`,
-    );
-    w.db.run("DELETE FROM worker_background_waits");
-    for (const wait of waits) {
-      const worker = wait.worker_id === null ? null : workerRow(w, wait.worker_id);
-      if (worker !== null) clearMaxTime(w, worker.worker_conversation_id);
-      if (worker === null || worker.status === "ended") continue;
-      const turnMessageId = lastAgentMessageId(w, wait.session_id, wait.turn_start, wait.turn_end);
-      if (turnMessageId === null) continue;
-      const reply = lastAgentTextMessage(w, wait.session_id, wait.turn_start, wait.turn_end);
-      if (wait.direct_chat !== 1 || shouldDeliverDirectChatReport(reply?.text ?? "")) {
-        insertReport(w, p, worker, turnMessageId, reply, backgroundKilledNote("restart"));
-      }
-    }
+  const reply = reportMessageOf(w, wait.draftMessageId);
+  if (wait.directChat && !shouldDeliverDirectChatReport(reply?.text ?? "")) return;
+  const note = release.kind === "restart" && wait.activeCount > 0 ? backgroundKilledNote("restart")
+    : release.kind === "process_exited" && wait.activeCount > 0 ? backgroundKilledNote("idle") : null;
+  const infoNote = release.kind === "restart" && wait.activeCount === 0
+    ? "【系统】后台命令已结束，守护进程在模型继续前重启了；下面是模型重启前的回复。" : undefined;
+  insertReport(w, p, worker, turnMessageId, reply, note, {
+    hasPendingFollowup: pendingFollowup, ...(infoNote === undefined ? {} : { infoNote }),
   });
+}
