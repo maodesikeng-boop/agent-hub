@@ -402,6 +402,7 @@ describe("M2：系统消息", () => {
       "worker.max_time_exceeded",
       "task_graph.ready_to_finish",
       "pm.wakeup",
+      "checklist.reminder",
     ]);
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();
   });
@@ -503,6 +504,7 @@ describe("M2：agent 接口", () => {
   it("命令、路径、环境变量", () => {
     expect(HUB_COMMANDS).toEqual([
       "status",
+      "checklist",
       "project.create",
       "project.attach",
       "project.detach",
@@ -794,9 +796,10 @@ describe("M3：动作", () => {
 });
 
 describe("M3：hub 命令按角色放行", () => {
-  it("Worker 只能用 status；其他全是项目经理的", () => {
+  it("allows Workers to read status and update their checklist", () => {
     expect(HUB_COMMAND_ROLES).toEqual({
       status: ["pm", "worker"],
+      checklist: ["pm", "worker"],
       "project.create": ["pm"],
       "project.attach": ["pm"],
       "project.detach": ["pm"],

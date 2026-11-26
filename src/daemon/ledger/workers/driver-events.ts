@@ -1,5 +1,6 @@
 import type { AgentSessionRow, SessionId, WorkerId } from "../../../shared/domain.ts";
 import type { DriverEvent } from "../../../shared/driver.ts";
+import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 import type { Pending } from "../context.ts";
 import type { TurnCompletionFacts, TurnEndedEvent } from "../turn-completions.ts";
 import { workerRow } from "./ctx.ts";
@@ -28,8 +29,17 @@ function markTurnStart(w: WorkersCtx, session: AgentSessionRow, workerId: Worker
   if (!directChat) ensureTurnMaxTime(w, workerId);
 }
 
-export function turnFactsOf(w: WorkersCtx, session: AgentSessionRow, event: TurnEndedEvent): TurnCompletionFacts["worker"] {
+function withoutChecklistInputs<E extends DriverEvent>(w: WorkersCtx, event: E): E {
+  if (!("messageIds" in event) || !event.messageIds?.length) return event;
+  const messageIds = event.messageIds.filter((id) => !w.db.get(
+    `SELECT 1 FROM messages WHERE id = ? AND ${CHECKLIST_REMINDER_SQL}`, id,
+  ));
+  return messageIds.length === event.messageIds.length ? event : { ...event, messageIds };
+}
+
+export function turnFactsOf(w: WorkersCtx, session: AgentSessionRow, input: TurnEndedEvent): TurnCompletionFacts["worker"] {
   if (session.role !== "worker") return null;
+  const event = withoutChecklistInputs(w, input);
   const waiting = event.messageIds.length === 0 ? w.awaitingBackground.get(session.id) : undefined;
   const turnStart = w.turnStarts.get(session.id) ?? waiting?.turnEnd ?? waiting?.turnStart;
   if (turnStart === undefined && event.messageIds.length === 0) return null;
@@ -113,9 +123,10 @@ function onTurnOutcome(
 }
 
 export function settleTurn(
-  w: WorkersCtx, p: Pending, session: AgentSessionRow, event: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean,
+  w: WorkersCtx, p: Pending, session: AgentSessionRow, input: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean,
 ): void {
   if (session.role !== "worker" || session.workerId === null || session.conversationId === null) return;
+  const event = withoutChecklistInputs(w, input);
   const outcome = turnOutcome(event);
   if (outcome === null) return;
   // No background.changed or session.exited will arrive for a process that died before this daemon started, so waiting would strand the report.
@@ -126,10 +137,11 @@ export function settleTurn(
   onTurnOutcome(w, p, session, session.workerId, event, outcome, facts);
 }
 
-export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessionRow, event: Exclude<DriverEvent, TurnEndedEvent>): void {
+export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessionRow, input: Exclude<DriverEvent, TurnEndedEvent>): void {
   if (session.role !== "worker" || session.workerId === null || session.conversationId === null) return;
   const workerId = session.workerId;
   const conversationId = session.conversationId;
+  const event = withoutChecklistInputs(w, input);
   if (event.type === "background.changed") {
     w.awaitingBackground.setBackground(session.id, event.count > 0);
     return;
@@ -144,7 +156,9 @@ export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessio
     return;
   }
   if (event.type === "message.processing") {
-    if (!w.turnStarts.has(session.id)) markTurnStart(w, session, workerId, isDirectChat(w, conversationId, event.messageIds));
+    if ((event === input || event.messageIds.length > 0) && !w.turnStarts.has(session.id)) {
+      markTurnStart(w, session, workerId, isDirectChat(w, conversationId, event.messageIds));
+    }
     return;
   }
   if (event.type === "message.cancelled" || event.type === "message.requeued") {

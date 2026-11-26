@@ -4,6 +4,7 @@ import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import { feishuGuestTurnBlockReason, feishuOriginOf } from "../../shared/feishu.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, hubCommandAllowed } from "../../shared/hub.ts";
+import { HUB_CHECKLIST_COMMAND, HUB_CHECKLIST_USAGE, hubChecklistRequestSchema } from "../../shared/hub-checklist.ts";
 import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { HUB_CALL_RESULT_MAX_BYTES, HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
@@ -196,7 +197,7 @@ export function createLedgerHubCommands(
   const runHub = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
-    command: HubCommand,
+    command: Exclude<HubCommand, "checklist">,
     args: unknown,
     context: HubCallContext,
   ): HubResult<HubCommand> => {
@@ -388,10 +389,18 @@ export function createLedgerHubCommands(
       throw fail("forbidden", "这个会话不是项目经理或 Worker 的会话，不能用 hub");
     }
     if (!hubCommandAllowed(session.role, command)) {
-      throw fail("forbidden", `Worker 只能用 ${commandLine("status")}，不能用 ${commandLine(command)}：要做的事写进汇报，交给项目经理`);
+      throw fail("forbidden", `Worker 只能用 ${commandLine("status")} 和 ${HUB_CHECKLIST_COMMAND}，不能用 ${commandLine(command)}：要做的事写进汇报，交给项目经理`);
+    }
+    if (session.role === "worker" && session.workerId === null) {
+      throw fail("forbidden", "这个 Worker 会话没有对应的 Worker，不能用 hub");
+    }
+    if (command === "checklist") {
+      const request = hubChecklistRequestSchema.safeParse(args);
+      if (!request.success) throw fail("invalid", `进度清单参数不对。\n用法：\n${HUB_CHECKLIST_USAGE}`);
+      messages.checklistFromHub(p, session, request.data);
+      return { text: "已更新进度清单", data: null };
     }
     if (session.role === "worker") {
-      if (session.workerId === null) throw fail("forbidden", "这个 Worker 会话没有对应的 Worker，不能用 hub");
       return workers.status(session);
     }
     const caller = pmSession(session.id);

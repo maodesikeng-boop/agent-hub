@@ -3,6 +3,7 @@ import type { AgentSessionRow, ConversationId, MessageKind, PmId, SessionState, 
 import { CONVERSATION_LOOKUP_MAX_IDS, MESSAGE_PAGE_SIZE, SNAPSHOT_ENDED_WORKERS_PER_PM } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
 import { toAgentSessionRow } from "../store/index.ts";
+import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
 import { MESSAGE_SHAPE_COLUMNS, WEB_MESSAGE_COLUMNS, parseMessageMeta, toConversation, toMessage } from "./rows.ts";
 import type { ConversationDbRow, MessageDbRow } from "./rows.ts";
@@ -61,7 +62,7 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
         ? []
         : db
             .all<{ id: number }>(
-              `SELECT c.id FROM conversations c WHERE c.id ${IN_IDS} AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)`,
+              `SELECT c.id FROM conversations c WHERE c.id ${IN_IDS} AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND NOT ${CHECKLIST_REMINDER_SQL})`,
               idList(ended),
             )
             .map((r) => r.id),
@@ -78,14 +79,17 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
         return { conversation, messages: [], hasMore: row.purged_at == null && endedWithMessages.has(row.id), ...summary };
       }
       const shape = db
-        .all<MessageDbRow>(`SELECT ${MESSAGE_SHAPE_COLUMNS} FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?`, row.id, MESSAGE_PAGE_SIZE + 1);
+        .all<MessageDbRow>(
+          `SELECT ${MESSAGE_SHAPE_COLUMNS} FROM messages WHERE conversation_id = ? AND NOT ${CHECKLIST_REMINDER_SQL} ORDER BY id DESC LIMIT ?`,
+          row.id, MESSAGE_PAGE_SIZE + 1,
+        );
       const pageHasMore = shape.length > MESSAGE_PAGE_SIZE;
       const recent = shape.slice(0, MESSAGE_PAGE_SIZE).reverse().map(toMessage);
       if (recent.length === 0) return { conversation, messages: [], hasMore: false, ...summary };
       const start = snapshotWindowStart(recent);
       const messages = db
         .all<MessageDbRow>(
-          `SELECT ${WEB_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND id >= ? AND id <= ? ORDER BY id`,
+          `SELECT ${WEB_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND id >= ? AND id <= ? AND NOT ${CHECKLIST_REMINDER_SQL} ORDER BY id`,
           row.id,
           recent[start]!.id,
           recent.at(-1)!.id,

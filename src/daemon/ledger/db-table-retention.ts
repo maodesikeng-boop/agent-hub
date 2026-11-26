@@ -1,11 +1,14 @@
 import { pruneAppApprovalsIn } from "./app-approvals.ts";
 import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
+import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 import { pruneSandboxApprovalsIn } from "./sandbox-approvals.ts";
 // Invariant: every table retention batch deletes at most maxRows rows in a single synchronous SQLite transaction and never deletes active-session state or user/PM text history.
 import type { SessionId } from "../../shared/domain.ts";
 import {
   ACTIONS_TERMINAL_MAX_ROWS,
   ACTIONS_TERMINAL_RETENTION_MS,
+  CHECKLIST_REMINDER_RETENTION_MS,
+  CHECKLIST_REMINDERS_MAX_ROWS,
   ENDED_WORKER_STEPS_KEEP,
   HANDOVERS_MAX_PER_CONV,
   HANDOVERS_RETENTION_MS,
@@ -238,6 +241,19 @@ function purgeTerminalActionsIn(db: Db, nowMs: number, budget: number): TableRet
   return { rows: deleteByIds(db, "actions", rows.slice(0, budget).map((r) => r.id)), more: rows.length > budget };
 }
 
+function purgeChecklistRemindersIn(db: Db, nowMs: number, budget: number): TableRetentionBatch {
+  const eligible = `${CHECKLIST_REMINDER_SQL} AND status IN ('replied', 'failed', 'stopped', 'cancelled')`;
+  const rows = db.all<{ id: number }>(
+    `SELECT id FROM messages WHERE ${eligible} AND (
+       updated_at <= ? OR id <= COALESCE((SELECT id FROM messages WHERE ${eligible} ORDER BY id DESC LIMIT 1 OFFSET ?), 0)
+     ) ORDER BY id LIMIT ?`,
+    nowMs - CHECKLIST_REMINDER_RETENTION_MS,
+    CHECKLIST_REMINDERS_MAX_ROWS,
+    budget + 1,
+  );
+  return { rows: deleteByIds(db, "messages", rows.slice(0, budget).map((row) => row.id)), more: rows.length > budget };
+}
+
 function purgeHubCallsIn(db: Db, nowMs: number, budget: number): TableRetentionBatch {
   const cutoff = nowMs - HUB_CALLS_RETENTION_MS;
   const threshold = db.get<{ id: number }>(
@@ -418,6 +434,7 @@ export function createDbTableRetention(ctx: LedgerContext): DbTableRetention {
     const budget = normalizeBudget(maxRows);
     const steps: Array<(rem: number) => TableRetentionBatch> = [
       (rem) => purgePmToolMessagesBatch(nowMs, rem),
+      (rem) => write(() => purgeChecklistRemindersIn(db, nowMs, rem)),
       (rem) => purgeTerminalActionsBatch(nowMs, rem),
       (rem) => purgeHubCallsBatch(nowMs, rem),
       (rem) => purgeHandoversBatch(nowMs, rem),

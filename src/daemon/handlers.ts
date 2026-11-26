@@ -6,6 +6,7 @@ import {
   SessionTokenRevokedError,
   WORKER_FIRST_TURN_RECHECK_MS,
   diffReviewSnapshot,
+  isChecklistReminder,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
@@ -170,6 +171,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     }
     if (stopStaleNotice(deps.ledger, message)) return { kind: "done" };
     let result;
+    const rider = isChecklistReminder(message);
     const { prefixes, text } = deps.ledger.deliveryOf(message);
     try {
       result = await deps.driver.send(sessionId, {
@@ -179,6 +181,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
         ...(prefixes.length > 0 ? { prefixes } : {}),
         ...(resend ? { resend: true } : {}),
         ...(recovery ? { recovery: true } : {}),
+        ...(rider ? { rider: true } : {}),
       });
     } catch (error) {
       if (!isSessionEnded(error)) throw error;
@@ -188,7 +191,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       else deps.ledger.stopMessage(messageId, sessionId);
       return { kind: "done" };
     }
-    if (result.kind === "queued") return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_busy" };
+    if (result.kind === "queued") return rider ? { kind: "done" } : { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_busy" };
     // The message was reclaimed while send was in flight, so its result is ignored.
     if (result.kind === "written") {
       const after = deps.ledger.getMessage(messageId);

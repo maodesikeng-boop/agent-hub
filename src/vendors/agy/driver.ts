@@ -131,6 +131,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       text: input.text,
       prefixes: input.prefixes ?? [],
       resend: input.resend ?? false,
+      ...(input.rider ? { rider: true } : {}),
     };
     const parts = entryParts(entry);
     const problem = checkAgyUserLine(buildAgyUserLine(parts.text, parts.prefixes, this.composer.buildUserContent));
@@ -227,6 +228,8 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       delivered: false,
       processing: false,
       source: taken.source,
+      riders: taken.riders,
+      entries: taken.entries,
     };
   }
 
@@ -590,7 +593,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       this.resolveInterrupt(st);
       resolveExited();
       this.settled(st);
-      if (st.pending.length > 0 && !this.shuttingDown && !st.ended) {
+      if (this.hasPendingTurn(st) && !this.shuttingDown && !st.ended) {
         void this.pump(st).catch(() => {});
       }
     }
