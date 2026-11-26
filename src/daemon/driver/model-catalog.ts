@@ -5,6 +5,7 @@ import {
   KILL_WAIT_MS,
   MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
   MODEL_CATALOG_FRESH_MS,
+  MODEL_CATALOG_MAX_PROBE_ATTEMPTS,
   MODEL_CATALOG_RETRY_MS,
   VENDOR_RECHECK_BUDGET_MS,
   bundledModelCatalog,
@@ -15,6 +16,7 @@ import {
   vendorFailureOf,
 } from "../../shared/index.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
+import type { CatalogFingerprint } from "../../shared/paths.ts";
 import { forceKill, killFreshGroup } from "./process.ts";
 
 export const STDERR_TAIL_CHARS = 500;
@@ -64,7 +66,7 @@ export interface VendorCatalogSource {
   availabilityOfError?: (error: unknown) => VendorAvailability;
   confirm?: (signal: AbortSignal) => Promise<VendorAvailability>;
   installed?: () => boolean;
-  fingerprint?: () => string;
+  fingerprint?: () => CatalogFingerprint;
 }
 
 export function defaultAvailabilityOfError(vendor: AgentVendor, error: unknown): VendorAvailability {
@@ -95,11 +97,44 @@ interface VendorCatalogSlot {
   cached: ModelCatalog | null;
   cachedAt: number;
   availability: VendorAvailability | null;
+  availabilityAt: number;
   failedAt: number | null;
-  fingerprint: string | null;
-  fingerprintSeen: string | null;
+  fingerprint: CatalogFingerprint | null;
+  fingerprintSeen: CatalogFingerprint | null;
   fingerprintCheckedAt: number;
   inflight: Promise<void> | null;
+}
+
+function fingerprintChanged(previous: CatalogFingerprint | null, current: CatalogFingerprint | null): boolean {
+  return previous !== null && (previous.inputs !== current?.inputs || previous.probeState !== current?.probeState);
+}
+
+function resetCatalog(slot: VendorCatalogSlot, fingerprint: CatalogFingerprint | null): void {
+  slot.cached = null;
+  slot.cachedAt = 0;
+  slot.availability = null;
+  slot.availabilityAt = 0;
+  slot.failedAt = null;
+  slot.fingerprint = fingerprint;
+}
+
+async function probeCatalog(source: VendorCatalogSource, vendor: AgentVendor, signal: AbortSignal) {
+  let availability: VendorAvailability;
+  let catalog: ModelCatalog | null = null;
+  let reason: string | null = null;
+  try {
+    const raw = await source.query(signal);
+    availability = source.availabilityOf?.(raw) ?? "available";
+    catalog = source.parse(raw);
+    if (catalog === null) reason = "回的名单是空的或者认不出";
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error);
+    availability = source.availabilityOfError?.(error) ?? defaultAvailabilityOfError(vendor, error);
+  }
+  if (availability === "unknown" && source.confirm && !signal.aborted) {
+    availability = await source.confirm(signal).catch((): VendorAvailability => "unknown");
+  }
+  return { catalog, availability, reason };
 }
 
 export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalogs {
@@ -117,6 +152,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       cached: null,
       cachedAt: 0,
       availability: null,
+      availabilityAt: 0,
       failedAt: null,
       fingerprint: null,
       fingerprintSeen: null,
@@ -127,8 +163,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
   const slotOf = (vendor: AgentVendor): VendorCatalogSlot => slots.get(vendor)!;
 
   const installed = (slot: VendorCatalogSlot) => slot.source?.installed?.() ?? true;
-  /** Recompute the stat fingerprint only on force or after the cooldown. */
-  const fingerprintOf = (slot: VendorCatalogSlot, force: boolean): string | null => {
+  const fingerprintOf = (slot: VendorCatalogSlot, force: boolean): CatalogFingerprint | null => {
     const compute = slot.source?.fingerprint;
     if (!compute) return null;
     if (force || slot.fingerprintSeen === null || now() - slot.fingerprintCheckedAt >= MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS) {
@@ -137,48 +172,43 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     }
     return slot.fingerprintSeen;
   };
-  const fingerprintChanged = (slot: VendorCatalogSlot): boolean => {
+  const invalidateOnChange = (slot: VendorCatalogSlot): boolean => {
     if (slot.fingerprint === null) return false;
-    const current = fingerprintOf(slot, false);
-    return current !== null && current !== slot.fingerprint;
-  };
-  const settle = (slot: VendorCatalogSlot, availability: VendorAvailability) => {
-    slot.availability = availability;
-    if (!isSelectable(availability)) slot.failedAt = now();
+    const fingerprint = fingerprintOf(slot, false);
+    if (!fingerprintChanged(slot.fingerprint, fingerprint)) return false;
+    resetCatalog(slot, fingerprint);
+    return true;
   };
 
   const ask = (slot: VendorCatalogSlot): Promise<void> => {
     const source = slot.source;
     if (!source) return Promise.resolve();
     slot.inflight ??= (async () => {
-      if (!installed(slot)) {
-        slot.fingerprint = fingerprintOf(slot, true);
-        return;
-      }
-      let availability: VendorAvailability;
-      let reason: string | null = null;
-      try {
-        const raw = await source.query(controller.signal);
-        availability = source.availabilityOf?.(raw) ?? "available";
-        const catalog = source.parse(raw);
+      for (let attempt = 0; attempt < MODEL_CATALOG_MAX_PROBE_ATTEMPTS; attempt++) {
+        if (closed || !installed(slot)) return;
+        const before = fingerprintOf(slot, true);
+        if (fingerprintChanged(slot.fingerprint, before)) resetCatalog(slot, before);
+        const { catalog, availability, reason } = await probeCatalog(source, slot.vendor, controller.signal);
+        if (closed) return;
+        const after = fingerprintOf(slot, true);
+        // Some CLIs rewrite catalog or account state during discovery itself.
+        if (before?.inputs !== after?.inputs) {
+          resetCatalog(slot, after);
+          continue;
+        }
+        const at = now();
         if (catalog !== null) {
           slot.cached = catalog;
-          slot.cachedAt = now();
-          slot.failedAt = null;
-        } else {
-          reason = "回的名单是空的或者认不出";
+          slot.cachedAt = at;
         }
-      } catch (error) {
-        reason = error instanceof Error ? error.message : String(error);
-        availability = source.availabilityOfError?.(error) ?? defaultAvailabilityOfError(slot.vendor, error);
+        slot.failedAt = catalog === null ? at : null;
+        slot.fingerprint = after;
+        slot.availability = availability;
+        slot.availabilityAt = at;
+        if (reason !== null) log(`${LOG_PREFIX} 没问到 ${slot.vendor} 的模型名单（${reason}）`);
+        return;
       }
-      if (availability === "unknown" && source.confirm && !closed) availability = await source.confirm(controller.signal);
-      if (reason !== null) {
-        slot.failedAt = now();
-        if (!closed) log(`${LOG_PREFIX} 没问到 ${slot.vendor} 的模型名单（${reason}），先用打包的`);
-      }
-      slot.fingerprint = fingerprintOf(slot, true);
-      settle(slot, availability);
+      slot.failedAt = now();
     })().finally(() => {
       slot.inflight = null;
     });
@@ -194,15 +224,20 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
   const result = (slot: VendorCatalogSlot): ModelCatalog => ({ ...(slot.cached ?? bundledModelCatalog(slot.vendor)), availability: availabilityOf(slot) });
 
   const catalogOf = async (slot: VendorCatalogSlot, refresh: boolean | "unusable"): Promise<ModelCatalog> => {
-    if (!slot.source || closed || !installed(slot)) return result(slot);
-    const changed = fingerprintChanged(slot);
-    if (changed) slot.failedAt = null;
+    if (!slot.source || closed) return result(slot);
+    if (!installed(slot)) {
+      resetCatalog(slot, null);
+      return result(slot);
+    }
+    const changed = refresh !== true && invalidateOnChange(slot);
     const usable = slot.availability === null || isSelectable(slot.availability);
-    if (refresh === true || (refresh === "unusable" && !usable) || changed) await ask(slot);
+    if (refresh === true || changed || (refresh === "unusable" && !usable)) await ask(slot);
     else if (slot.cached === null) {
-      if (slot.inflight || slot.availability === null || retryDue(slot)) await ask(slot);
-    } else if (!slot.inflight && (now() - slot.cachedAt >= MODEL_CATALOG_FRESH_MS || !usable) && retryDue(slot)) {
-      void ask(slot);
+      if (slot.inflight || retryDue(slot)) await ask(slot);
+    } else if (!slot.inflight && retryDue(slot) && (
+      slot.failedAt !== null || now() - slot.cachedAt >= MODEL_CATALOG_FRESH_MS || (!usable && now() - slot.availabilityAt >= MODEL_CATALOG_RETRY_MS)
+    )) {
+      void ask(slot).catch((error: unknown) => log(`${LOG_PREFIX} ${slot.vendor}: ${String(error)}`));
     }
     return result(slot);
   };
@@ -223,14 +258,18 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     async ensureUsable(vendor) {
       const slot = slotOf(vendor);
       const unasked = slot.availability === null;
-      if (slot.source && !closed && installed(slot) && (unasked || !isSelectable(availabilityOf(slot)) || fingerprintChanged(slot))) {
+      if (slot.source && !closed && installed(slot) && (
+        invalidateOnChange(slot) || unasked || !isSelectable(availabilityOf(slot))
+      )) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const timedOut = new Promise<void>((resolve) => {
           timer = setTimeout(resolve, ensureUsableBudgetMs);
         });
-        // ask never rejects; if the wait times out it keeps running and the next call reuses the inflight request.
-        await Promise.race([ask(slot), timedOut]);
-        clearTimeout(timer);
+        try {
+          await Promise.race([ask(slot), timedOut]);
+        } finally {
+          clearTimeout(timer);
+        }
       }
       return availabilityOf(slot);
     },
@@ -238,7 +277,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       const slot = slotOf(vendor);
       if (slot.availability === availability) return;
       slot.availability = availability;
-      slot.failedAt = isSelectable(availability) ? null : now();
+      slot.availabilityAt = now();
     },
     async close() {
       closed = true;

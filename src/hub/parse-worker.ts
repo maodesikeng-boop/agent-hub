@@ -23,7 +23,7 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
   if (group === "worker" && action === "start") {
     allowOnly(
       values,
-      ["title", "vendor", "model", "effort", "max-time", "readonly", "caps", "allow", "no-outer-sandbox", "no-worktree", "node", "graph", "stdin"],
+      ["title", "vendor", "model", "effort", "clear-effort", "max-time", "readonly", "caps", "allow", "no-outer-sandbox", "no-worktree", "node", "graph", "stdin"],
       "worker start",
     );
     expectPositionals(rest, 0, "worker start");
@@ -32,7 +32,8 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
     if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
       throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
     }
-    const normalizedEffort = effortOf(values.vendor, values.effort);
+    if (values["clear-effort"] && values.effort !== undefined) throw new UsageError("--effort 和 --clear-effort 不能同时用");
+    const normalizedEffort = values["clear-effort"] ? null : effortOf(values.vendor, values.effort);
     if (values.graph !== undefined && values.node === undefined) {
       throw new UsageError(`${hub} worker start 传 --graph 时要同时传 --node <节点>`);
     }
