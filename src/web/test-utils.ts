@@ -65,6 +65,7 @@ import type {
   ResourceDecisionResponse,
   ResourcesSnapshot,
   ResolveRouterItemRequest,
+  RetryRouterCommandRequest,
   RouterItemsPage,
   SessionState,
   StateSnapshot,
@@ -680,8 +681,8 @@ export class FakeApi {
       },
     },
   });
-  /** POST /api/router/commands/:id/retry。 */
-  retryRouterCommand: (id: number) => Reply | Promise<Reply> = (id) => ({
+  /** POST /api/router/commands/:id/retry：跟守护进程一样，新的一轮带上这次重试的编号。 */
+  retryRouterCommand: (id: number, body: RetryRouterCommandRequest) => Reply | Promise<Reply> = (id, body) => ({
     status: 200,
     body: {
       command: {
@@ -692,7 +693,7 @@ export class FakeApi {
         model: null,
         effort: null,
         status: "planning",
-        plan: null,
+        plan: { intent: "dispatch", reply: "", actions: [], retryId: body.retryId },
         dispatched: null,
         error: null,
         durationMs: null,
@@ -1169,7 +1170,7 @@ export class FakeApi {
     const answerAsk = /^\/api\/asks\/(\d+)\/answer$/.exec(url.pathname);
     if (answerAsk && method === "POST") return jsonResponse(await this.answerAsk(Number(answerAsk[1]), body));
     const retryCmd = /^\/api\/router\/commands\/(\d+)\/retry$/.exec(url.pathname);
-    if (retryCmd && method === "POST") return jsonResponse(await this.retryRouterCommand(Number(retryCmd[1])));
+    if (retryCmd && method === "POST") return jsonResponse(await this.retryRouterCommand(Number(retryCmd[1]), body));
     const cancelGraph = /^\/api\/task-graphs\/(\d+)\/cancel$/.exec(url.pathname);
     if (cancelGraph && method === "POST") return jsonResponse(await this.cancelTaskGraph(Number(cancelGraph[1]), body));
     const decideNode = /^\/api\/task-graphs\/(\d+)\/nodes\/([^/]+)\/decide$/.exec(url.pathname);

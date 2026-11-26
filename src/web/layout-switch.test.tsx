@@ -100,6 +100,35 @@ it.each(["desktop", "mobile"])("keeps the Router target through two round trips 
   expect(screen.queryByRole("button", { name: /Remove target/ })).toBeNull();
 });
 
+it("keeps the top-bar Router draft and its open reply popover, with an unsent follow-up, through two round trips", async () => {
+  const { api, resize, shell } = boot("#/c/1");
+  const user = userEvent.setup();
+  const input = await screen.findByRole("textbox", { name: "Message Router" });
+  await user.type(input, "Where is the cache review?{Enter}");
+  const popover = await screen.findByRole("dialog", { name: "Router" });
+  await user.type(input, "Unsent top-bar draft");
+  const reply = within(popover).getByRole("textbox", { name: "Reply to Router" });
+  await user.type(reply, "Unsent follow-up");
+
+  for (const width of ROUND_TRIPS) {
+    resize(width);
+    expect(shell()).toBe(width === ONE_COLUMN_PX ? "mobile" : "desktop");
+    if (width === ONE_COLUMN_PX) {
+      expect(screen.queryByRole("textbox", { name: "Message Router" })).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Router" })).toBeNull();
+      continue;
+    }
+    expect(screen.getByRole("textbox", { name: "Message Router" })).toBe(input);
+    expect(input).toHaveValue("Unsent top-bar draft");
+    const shown = await screen.findByRole("dialog", { name: "Router" });
+    expect(within(shown).getByText("Where is the cache review?")).toBeInTheDocument();
+    expect(within(shown).getByRole("textbox", { name: "Reply to Router" })).toHaveValue("Unsent follow-up");
+  }
+  expect(api.callsTo("POST", /^\/api\/router\/commands$/).map((call) => call.body)).toEqual([
+    { clientId: expect.any(String), text: "Where is the cache review?", routerOnly: true },
+  ]);
+});
+
 it("keeps the decision card picked in Router's tray, with its note, across the switch", async () => {
   const { resize } = boot("#/router", {
     router: { ...emptyRouterSlice(), items: [decision(1, "Ship the cache today?"), decision(2, "Keep the old flag?")] },
