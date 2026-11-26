@@ -35,7 +35,7 @@ function showUserCard(node: TaskNode, status: TaskGraph["status"]): boolean {
 }
 
 function statusLabelOf(node: TaskNode, graphStatus: TaskGraph["status"]): string {
-  if (graphStatus === "cancelled" && node.status !== "done") return "Cancelled";
+  if (node.status === "cancelled" || (graphStatus === "cancelled" && node.status !== "done")) return "Cancelled";
   switch (node.status) {
     case "done":
       return node.skipped ? "Skipped" : "Done";
