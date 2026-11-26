@@ -204,7 +204,7 @@ export interface ConversationsLookup {
 export interface MessagesPage {
   messages: Message[];
   hasMore: boolean;
-  /** One summary per turn that produced or took a message on this page; absent from daemons older than the turn ledger. */
+  /** Turns that produced or took a message on this page, plus running turns; older daemons omit this field. */
   turns?: readonly TurnSummary[];
 }
 

@@ -143,7 +143,7 @@ Dropped from B: the separate `session_inputs` and `turn_attempts` tables and per
 
 ## 4. Performance and bounds
 
-1. **Invalidation.** No new in-memory cache. `turns.ts` reads SQLite in the writing transaction. A `turn.updated` change is published after commit for every start, mid-turn take, background entry or release, and end. The web merges summaries by id.
+1. **Invalidation.** The daemon reads SQLite in the writing transaction. After commit it publishes `turn.updated` for every start, output boundary change, mid-turn take, background change, and end. The web merges summaries by id.
 2. **Upper bounds.** New constants in `src/shared/limits.ts`:
 
 | Constant | Value | One-month sizing |
