@@ -5,7 +5,7 @@ import type { ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { workerWorktreePath } from "../../../shared/paths.ts";
 import { UserBlockedError, userBlockerKindOf } from "../../../shared/user-blockers.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, normalizeEffortInput, splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, modelEffortsOf, normalizeEffortInput, splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
 import { workerBranchName } from "../../../shared/worker.ts";
 import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail } from "../context.ts";
@@ -66,15 +66,25 @@ export const assertAgentVendor = (vendor: string): void => {
 };
 
 type ModelEffort = { model: string | null; effort: string | null };
-export function checkedModelEffort(w: WorkersCtx, vendor: AgentVendor, model: string | null, effort: string | null, inherited: ModelEffort) {
+export function resolveWorkerModelEffort(w: WorkersCtx, input: {
+  vendor: AgentVendor;
+  model: string | null;
+  effort: string | null | undefined;
+  defaults: ModelEffort | null;
+}) {
+  const { vendor, model, effort, defaults } = input;
   const catalog = w.ctx.modelCatalog(vendor);
-  const normalizedEffort = normalizeEffortInput(vendor, effort, catalog);
+  const normalizedEffort = normalizeEffortInput(vendor, effort ?? null, catalog);
   const badSetting = checkModel(vendor, model) ?? checkEffort(vendor, normalizedEffort, catalog) ?? checkModelEffort(vendor, model, normalizedEffort, catalog);
   if (badSetting !== null) throw fail("invalid", badSetting);
-  const setting = splitModelEffort(vendor, model, normalizedEffort, catalog);
-  const problem = checkModelEffort(vendor, setting.model ?? inherited.model, setting.effort ?? inherited.effort, catalog);
+  const overrides = splitModelEffort(vendor, model, normalizedEffort, catalog);
+  const inherited = splitModelEffort(vendor, defaults?.model ?? null, defaults?.effort ?? null, catalog);
+  const effectiveModel = overrides.model ?? inherited.model;
+  const canInheritEffort = effort === undefined && modelEffortsOf(vendor, effectiveModel, catalog)?.length !== 0;
+  const effective = { model: effectiveModel, effort: overrides.effort ?? (canInheritEffort ? inherited.effort : null) };
+  const problem = checkModelEffort(vendor, effective.model, effective.effort, catalog);
   if (problem !== null) throw fail("invalid", problem);
-  return setting;
+  return { overrides, effective };
 }
 
 export type NewWorkerRows = {
@@ -143,8 +153,7 @@ export function insertWorkerSessionIn(
   p: Pending,
   worker: WorkerDbRow,
   card: ProjectCard,
-  agent: { vendor: AgentVendor; model: string | null; effort: string | null },
-  inherited: { model: string | null; effort: string | null },
+  agent: ModelEffort & { vendor: AgentVendor },
 ): AgentSessionRow {
   return w.sessions.insertSession(p, {
     role: "worker",
@@ -155,8 +164,8 @@ export function insertWorkerSessionIn(
     addDirs: worker.workspace === "worktree" ? [] : card.otherFolders,
     generation: 1,
     vendor: agent.vendor,
-    model: agent.model ?? inherited.model,
-    effort: agent.effort ?? inherited.effort,
+    model: agent.model,
+    effort: agent.effort,
   });
 }
 

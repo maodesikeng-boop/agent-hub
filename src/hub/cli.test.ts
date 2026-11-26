@@ -194,6 +194,16 @@ describe("hub cli", () => {
       );
     });
 
+    it("worker start --clear-effort sends null and cannot be used with --effort", async () => {
+      const start = ["worker", "start", "--title", "Inspect", "--stdin"];
+      expect((await hub([...start, "--clear-effort"], { stdin: stdinOf("task") })).code).toBe(0);
+      expect(ledger.calls.map((c) => c.args)).toEqual([{ title: "Inspect", task: "task", effort: null }]);
+      const conflict = await hub([...start, "--clear-effort", "--effort", "high"], { stdin: stdinOf("task") });
+      expect(conflict.code).toBe(HUB_EXIT.usage);
+      expect(conflict.stderr).toMatch(/--effort.*--clear-effort/);
+      expect(ledger.calls).toHaveLength(1);
+    });
+
     it("worker start --effort accepts vendor display labels and normalizes them to canonical keys", async () => {
       expect((await hub(["worker", "start", "--title", "修 X", "--vendor", "agy", "--effort", "Extra", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       expect((await hub(["worker", "start", "--title", "修 Y", "--vendor", "codex", "--effort", "Extra High", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);

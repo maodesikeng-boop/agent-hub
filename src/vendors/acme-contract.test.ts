@@ -103,7 +103,7 @@ describe("名单加一项 acme，公共代码就认得它", () => {
     expect(vendorLabel("acme")).toBe("Acme Rocket");
     expect(modelShortLabel(acme, "acme-x")).toBe("acme-x");
     expect(VENDOR_FALLBACK_PATHS[acme]("/home/u", "linux")[0]).toBe("/home/u/.local/bin/acme");
-    expect(vendorCatalogWatchFiles(acme, "/home/u", {})).toEqual(["/home/u/.acme/token.json", "/home/u/.acme/config.json"]);
+    expect(vendorCatalogWatchFiles(acme, "/home/u", {}).inputs).toEqual(["/home/u/.acme/token.json", "/home/u/.acme/config.json"]);
   });
 });
 

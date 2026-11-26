@@ -60,12 +60,8 @@ export default defineVendor({
   home: {
     dirs: [".pi/agent"],
     readonlySecrets: [".pi/agent/auth.json", ".pi/agent/models.json"],
-    catalogWatchPaths: [
-      ".pi/agent/auth.json",
-      ".pi/agent/models.json",
-      ".pi/agent/settings.json",
-      ".pi/agent/models-store.json",
-    ],
+    catalogWatchPaths: [".pi/agent/models.json", ".pi/agent/settings.json"],
+    catalogProbeStatePaths: [".pi/agent/auth.json", ".pi/agent/models-store.json"],
     configHome: { rel: ".pi/agent", env: "PI_CODING_AGENT_DIR" },
   },
   models: {
