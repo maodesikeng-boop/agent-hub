@@ -29,6 +29,7 @@ export function backgroundKilledNote(reason: "idle" | "shutdown" | "restart"): s
 
 export const taskDedupeKey = (workerId: WorkerId) => `pm:worker:${workerId}:task`;
 export const sendDedupeKey = (workerId: WorkerId) => `pm:worker:${workerId}:${randomUUID()}`;
+export const routerSendDedupeKey = (workerId: WorkerId, deliveryId: string) => `pm:worker:${workerId}:router:${deliveryId}`;
 
 export type TurnOutcome =
   | { event: "report"; turnMessageId: MessageId | null }

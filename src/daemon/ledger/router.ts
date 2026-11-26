@@ -50,9 +50,11 @@ import {
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
 import { purgeRouterExpiredIn } from "./db-table-retention.ts";
+import { createRouterCommandDeliveries } from "./router-command-deliveries.ts";
 import {
   claimRouterCommandRetryRow,
   mergeRouterPlanPreservingRetries,
+  parseDispatched,
   parseStoredRouterPlan,
   serializeNewRouterPlan,
   toPublicRouterPlan,
@@ -953,7 +955,7 @@ export function createLedgerRouter(
            effort = ?,
            status = ?,
            plan_json = ?,
-           dispatched_json = ?,
+           ${patch.dispatched === undefined ? "" : "dispatched_json = ?,"}
            error = ?,
            duration_ms = ?,
            updated_at = ?
@@ -963,11 +965,7 @@ export function createLedgerRouter(
         patch.effort !== undefined ? patch.effort : existing.effort,
         patch.status ?? existing.status,
         patch.plan !== undefined ? mergeRouterPlanPreservingRetries(existing.plan_json, patch.plan) : existing.plan_json,
-        patch.dispatched !== undefined
-          ? patch.dispatched === null
-            ? null
-            : JSON.stringify(patch.dispatched)
-          : existing.dispatched_json,
+        ...(patch.dispatched === undefined ? [] : [patch.dispatched === null ? null : JSON.stringify(patch.dispatched)]),
         patch.error !== undefined ? patch.error : existing.error,
         patch.durationMs !== undefined ? patch.durationMs : existing.duration_ms,
         t,
@@ -987,6 +985,11 @@ export function createLedgerRouter(
       p.changes.push({ type: "router.command.updated", data: { command } });
       return command;
     });
+
+  const commandDeliveries = createRouterCommandDeliveries(ctx, (p, row, receipt) => {
+    p.changes.push({ type: "router.command.updated", data: { command: toRouterCommand(row) } });
+    appendAuditIn("router_agent", `router.dispatch.${receipt.op}`, null, row.id, { deviceId: receipt.deviceId });
+  });
 
   const getCommand = (id: RouterCommandId): RouterCommandRecord | null => {
     const row = db.get<RouterCommandDbRow>("SELECT * FROM router_commands WHERE id = ?", id);
@@ -1260,19 +1263,16 @@ export function createLedgerRouter(
       );
       pruneEndedAssistantSessions();
       const stuck = db.all<RouterCommandDbRow>("SELECT * FROM router_commands WHERE status = 'planning'");
-      if (stuck.length > 0) {
-        const t = now();
-        db.run(
-          "UPDATE router_commands SET status = 'failed', error = ?, updated_at = ? WHERE status = 'planning'",
-          "守护进程重启，规划中断，可点击重试",
-          t,
-        );
-        for (const old of stuck) {
-          const updated = db.get<RouterCommandDbRow>("SELECT * FROM router_commands WHERE id = ?", old.id);
-          if (updated !== undefined) {
-            p.changes.push({ type: "router.command.updated", data: { command: toRouterCommand(updated) } });
-          }
-        }
+      for (const row of stuck) {
+        const plan = toPublicRouterPlan(parseStoredRouterPlan(row.plan_json));
+        const allReceiptsWritten = !plan?.retryOps?.length && (parseDispatched(row.dispatched_json) ?? []).some((entry) => entry.ok);
+        const updated = db.get<RouterCommandDbRow>(
+          "UPDATE router_commands SET status = ?, error = ?, updated_at = ? WHERE id = ? RETURNING *",
+          allReceiptsWritten ? "dispatched" : "failed",
+          allReceiptsWritten ? null : "守护进程重启，规划中断，可点击重试",
+          now(), row.id,
+        )!;
+        p.changes.push({ type: "router.command.updated", data: { command: toRouterCommand(updated) } });
       }
     });
   };
@@ -1292,6 +1292,7 @@ export function createLedgerRouter(
     createCommand,
     updateCommand,
     claimCommandRetry,
+    commandDeliveries,
     getCommand,
     listCommands,
     createAssistantSession,

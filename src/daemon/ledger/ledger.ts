@@ -74,6 +74,8 @@ export interface SqliteLedger extends Ledger {
   createRouterCommand: LedgerRouter["createCommand"];
   updateRouterCommand: LedgerRouter["updateCommand"];
   claimRouterCommandRetry: LedgerRouter["claimCommandRetry"];
+  routerCommandDeliveries: LedgerRouter["commandDeliveries"];
+  postedUserMessageId: ReturnType<typeof createLedgerMessages>["postedUserMessageId"];
   getRouterCommand: LedgerRouter["getCommand"];
   getRouterItem: LedgerRouter["getItem"];
   resolveRouterItem: LedgerRouter["resolveItem"];
@@ -382,6 +384,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   });
   return {
     postUserMessage: messages.postUserMessage,
+    postedUserMessageId: messages.postedUserMessageId,
     requestStop(conversationId) {
       workers.clearMaxTime(conversationId);
       messages.requestStop(conversationId);
@@ -577,6 +580,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     createRouterCommand: router.createCommand,
     updateRouterCommand: router.updateCommand,
     claimRouterCommandRetry: router.claimCommandRetry,
+    routerCommandDeliveries: router.commandDeliveries,
     getRouterCommand: router.getCommand,
     getRouterItem: router.getItem,
     listRouterCommands: router.listCommands,
