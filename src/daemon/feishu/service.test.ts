@@ -3028,7 +3028,7 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
       }
       fake.handlers!.onConnected();
       await settle();
-      cursors.push(store().inboundCursor(chat)!.lastInboundAt!);
+      cursors.push(svc.exportInboundState!()!.cursors[chat]!.lastInboundAt);
       expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(batches.slice(0, round).map((b) => b.task));
     }
     expect(cursors[1]).toBeGreaterThan(cursors[0]!);
@@ -3207,6 +3207,71 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     fake.handlers!.onConnected();
     await settle();
     expect(routerCalls.map((c) => c.text)).toEqual(["r1", "r2", "r3"]);
+  });
+
+  it.each([false, true])("retries a transient submit failure at the next catch-up (later message: %s)", async (later) => {
+    let clockNow = 1_730_020_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    let fail = false;
+    svc = makeService({
+      now: () => clockNow,
+      router: {
+        submitCommand: async (input) => {
+          routerCalls.push({ clientId: input.clientId, text: input.text });
+          if (fail) { fail = false; throw new Error("transient"); }
+          const { command } = ledger.createRouterCommand({ clientId: input.clientId, inputText: input.text, vendor: "claude", status: "planning" });
+          return ledger.updateRouterCommand(command.id, { status: "answered", plan: { intent: "answer", reply: "ok", actions: [] } }) as RouterCommandRecord;
+        },
+      },
+    });
+    await connect();
+    const rChat = routerChat();
+    routerCalls = [];
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(rChat, "r1", { p2p: true, createTime: clockNow + 1_000 });
+    const laterAt = clockNow + 2_000;
+    if (later) offlineUserMessage(rChat, "r2", { p2p: true, createTime: laterAt });
+    clockNow += 20_000;
+    fail = true;
+    fake.handlers!.onConnected();
+    await settle();
+    expect(routerCalls.map((c) => c.text)).toEqual(later ? ["r1", "r2"] : ["r1"]);
+    if (later) expect(svc.exportInboundState!()?.cursors[rChat]?.lastInboundAt).toBe(laterAt);
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 2");
+    clockNow += 5_000;
+    fake.handlers!.onConnected();
+    await settle();
+    expect(routerCalls.map((c) => c.text)).toEqual(later ? ["r1", "r2", "r1"] : ["r1", "r1"]);
+    expect(routerCalls.at(-1)?.clientId).toBe(routerCalls[0]?.clientId);
+  });
+
+  it("retries a failed reply on reconnect and sends just one after recovery", async () => {
+    let clockNow = 1_730_021_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const chat = routerChat();
+    const reject = () => fake.sent.filter((item) => item.chatId === chat && item.content.includes("主人"));
+    const message = offlineUserMessage(chat, "hello", { p2p: true, sender: GUEST, createTime: clockNow + 1_000 });
+    clockNow += 2_000;
+    fake.failNext["message.create"] = new Error("transient reply failure");
+    fake.event(message);
+    await settle();
+    expect(reject()).toHaveLength(0);
+
+    fake.handlers!.onDisconnected("reconnect after failed reply");
+    fake.handlers!.onConnected();
+    await settle();
+    expect(reject()).toHaveLength(1);
+    fake.event(message);
+    await settle();
+    expect(reject()).toHaveLength(1);
   });
 
   it("R3 停机时补拉在途：排空或重启后漏收消息不丢失且不重复", async () => {

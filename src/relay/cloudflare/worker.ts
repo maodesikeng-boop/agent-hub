@@ -1,6 +1,7 @@
 // No timers or outbound connections in the Durable Object so it can hibernate; expiry runs via room.sweep() after each message.
 import { isDeviceId } from "../../shared/api.ts";
 import {
+  RELAY_CHECKPOINT_PER_IP_PER_MINUTE,
   RELAY_CONCURRENT_SOCKETS_PER_IP,
   RELAY_IP_BLOCKED_MAX,
   RELAY_IP_LIMITER_MAX,
@@ -26,6 +27,7 @@ import {
   type RelaySocket,
 } from "../core.ts";
 import { clientKeyOf, createIpRateLimiter, createVerifiedTokenCache, tokenDigest } from "../guards.ts";
+import { handleLeaseCheckpoint, parseLeaseCheckpointRoute, readBoundedJson, RELAY_CHECKPOINT_BODY_LIMIT } from "../lease-checkpoint.ts";
 import { isRelayToken, parseRelayRegisterRequest, RELAY_PATHS, RELAY_PROTOCOL_VERSION, type RelayErrorCode, type RelayHealthResponse, type RelayRegisterRequest } from "../protocol.ts";
 
 export interface RelayWorkerEnv {
@@ -55,6 +57,7 @@ const REGISTER_ERROR_STATUS: Record<RelayErrorCode, number> = {
 const limiterOptions = { windowMs: RELAY_RATE_WINDOW_MS, max: RELAY_IP_LIMITER_MAX, blockedMax: RELAY_IP_BLOCKED_MAX, pruneIntervalMs: RELAY_IP_LIMITER_PRUNE_MS };
 const registerLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_REGISTER_PER_IP_PER_MINUTE });
 const upgradeLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_UPGRADES_PER_IP_PER_MINUTE });
+const checkpointLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_CHECKPOINT_PER_IP_PER_MINUTE });
 const verifiedTokens = createVerifiedTokenCache({ max: RELAY_TOKEN_CACHE_MAX, ttlMs: RELAY_TOKEN_CACHE_TTL_MS });
 
 function clientIpOf(request: Request): string {
@@ -214,6 +217,15 @@ export async function handleRelayRequest(request: Request, env: RelayWorkerEnv):
     );
   }
 
+  const checkpoint = parseLeaseCheckpointRoute(url.pathname);
+  if (checkpoint !== null && (request.method === "GET" || request.method === "PUT")) {
+    if (!checkpointLimiter.allow(clientKeyOf(clientIpOf(request)), Date.now())) {
+      return jsonResponse(429, { error: "rate_limited" });
+    }
+    const stub = env.ACCOUNTS.get(env.ACCOUNTS.idFromName(checkpoint.accountId));
+    return stub.fetch(request);
+  }
+
   const route = parseAccountRoute(url.pathname);
   if (route !== null) {
     if (request.method !== "GET" || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
@@ -304,6 +316,11 @@ export class RelayAccountObject {
       return jsonResponse(200, result);
     }
 
+    const checkpoint = parseLeaseCheckpointRoute(url.pathname);
+    if (checkpoint !== null && (request.method === "GET" || request.method === "PUT")) {
+      const room = this.ensureRoom(checkpoint.accountId, publicOriginOf(request, this.env));
+      return handleLeaseCheckpoint(room, checkpoint.leaseName, url, request.method, () => readBoundedJson(request, RELAY_CHECKPOINT_BODY_LIMIT));
+    }
     const route = parseAccountRoute(url.pathname);
     if (route === null || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse(426, { error: "upgrade_required" }, { upgrade: "websocket" });

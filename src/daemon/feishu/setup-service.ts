@@ -180,7 +180,7 @@ async function disconnectLocal(ctx: FeishuContext, dissolveChats: boolean) {
   ctx.app.ownerName = null;
   ctx.app.syncedRouterChatId = null;
   ctx.catchUp.hadLiveSession = false;
-  ctx.catchUp.seen.clear();
+  ctx.inboundSync.resetForApp(null);
   ctx.catchUp.cursorHold.clear();
   ctx.options.lease?.refresh();
   await syncTransport(ctx);
@@ -268,6 +268,7 @@ export async function applyPeerApp(ctx: FeishuContext, sync: FeishuPeerAppSync) 
   const stamp = Math.max(ctx.now(), sync.updatedAt);
   ctx.store.saveApp({ appId: sync.appId, brand: sync.brand, botOpenId: sync.botOpenId, botName: sync.botName, ownerOpenId: sync.ownerOpenId }, stamp);
   ctx.store.setEnabled(true, stamp);
+  ctx.inboundSync.resetForApp(sync.appId);
   adoptSyncedRouterChat(ctx, sync);
   ctx.link.lastError = null;
   ctx.link.authFailed = false;
