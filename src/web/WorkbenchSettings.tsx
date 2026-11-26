@@ -5,6 +5,9 @@ import { VendorSyncSettings } from "./components/VendorSyncSettings.tsx";
 import { useClient } from "./device-scope.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "./devices.ts";
 import { MobileSettings, type MobileSettingsProps } from "./mobile/settings/MobileSettings.tsx";
+import { useHubQueryClient } from "./query-client.ts";
+import { useFetchedQuota } from "./quota.ts";
+import { useServerInfo } from "./server-info.tsx";
 import { useProvidersSetting, useVendorSyncSetting } from "./settings-model.ts";
 import { Surface, SurfaceOutlet } from "./shell-surfaces.tsx";
 
@@ -15,10 +18,22 @@ export const settingsBodies = {
   providers: <SurfaceOutlet id="settings:providers" />,
 } satisfies SettingsBodies;
 
-export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, defaultProviderDevice, ...props }: Omit<MobileSettingsProps, "bodies" | "vendor"> & {
+type SettingsProps = Omit<MobileSettingsProps, "bodies" | "vendor"> & { defaultProviderDevice: DeviceKey };
+
+export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, open = true, quotaReady = false, ...props }: SettingsProps & {
   mobile: boolean;
-  defaultProviderDevice: DeviceKey;
+  open?: boolean;
+  quotaReady?: boolean;
 }) {
+  const current = useServerInfo().currentQuota === true;
+  const { rows } = useFetchedQuota(useHubQueryClient(), useClient(), {
+    enabled: mobile && current && quotaReady && open && props.section === undefined,
+    current,
+  });
+  return open ? <WorkbenchSettingsSurfaces {...props} mobile={mobile} quota={mobile && current ? rows : props.quota} /> : null;
+});
+
+function WorkbenchSettingsSurfaces({ mobile, defaultProviderDevice, ...props }: SettingsProps & { mobile: boolean }) {
   const currentDevice = useClient().device ?? LOCAL_DEVICE;
   const vendorSyncPage = props.section === "vendor-sync";
   const showProviders = props.section === "providers" || (!mobile && vendorSyncPage);
@@ -43,4 +58,4 @@ export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, defau
       )}
     </>
   );
-});
+}
