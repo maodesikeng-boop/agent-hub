@@ -36,8 +36,16 @@ describe("M6 端到端：定时任务", { timeout: 60_000 }, () => {
       turns: [
         {
           steps: [
+            { tool: { name: "TodoWrite", input: { todos: [
+              { content: "Create the schedule", status: "in_progress" },
+              { content: "Confirm the schedule", status: "pending" },
+            ] } } },
             { bash: `${hub} schedule add --name "每日汇报" --every 15m --stdin <<'EOF'\n汇报昨天的进展\nEOF` },
             { bash: `${hub} schedule list` },
+            { tool: { name: "TodoWrite", input: { todos: [
+              { content: "Create the schedule", status: "completed" },
+              { content: "Confirm the schedule", status: "completed" },
+            ] } } },
             { text: "建好了" },
           ],
         },
