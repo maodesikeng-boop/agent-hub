@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { dialogTabOf, navHash, parseNav, sectionForDialogTab, useWorkbenchNav } from "./workbench-nav.ts";
 
@@ -74,4 +75,17 @@ it("returns from a direct settings link without adding a history entry", () => {
   act(() => result.current.settingsBack());
   expect(location.hash).toBe("");
   expect(history.length).toBe(length);
+});
+
+it("reads a page change that happens before the navigation listeners attach", () => {
+  history.replaceState(null, "", "/#/settings/capabilities");
+  const { result } = renderHook(() => {
+    const navigation = useWorkbenchNav();
+    useLayoutEffect(() => {
+      history.replaceState(null, "", "/#/w/30");
+    }, []);
+    return navigation;
+  });
+  expect(location.hash).toBe("#/w/30");
+  expect(result.current.nav).toEqual({ page: { view: "worker", id: 30 }, settings: null });
 });

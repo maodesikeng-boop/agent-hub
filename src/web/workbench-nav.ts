@@ -100,18 +100,17 @@ export function useWorkbenchNav(): WorkbenchNavApi {
   const [nav, setNav] = useState(readNav);
   const sync = useCallback(() => {
     const next = readNav();
+    if (next.settings !== null && navHash(next) !== window.location.hash) {
+      writeHistory(navHash(next), window.history.state, true);
+    }
     setNav((prev) => navHash(prev) === navHash(next) &&
       navHash({ page: prev.page, settings: null }) === navHash({ page: next.page, settings: null }) &&
       prev.settings?.providerDevice === next.settings?.providerDevice ? prev : next);
   }, []);
   useEffect(() => {
-    if (nav.settings !== null && navHash(nav) !== window.location.hash) {
-      writeHistory(navHash(nav), window.history.state, true);
-    }
-  }, [nav]);
-  useEffect(() => {
     window.addEventListener("popstate", sync);
     window.addEventListener("hashchange", sync);
+    sync();
     return () => {
       window.removeEventListener("popstate", sync);
       window.removeEventListener("hashchange", sync);
