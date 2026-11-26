@@ -39,7 +39,34 @@ export const RELAY_PATHS = {
   register: "/v1/register",
   control: (accountId: AccountId) => `/v1/accounts/${accountId}/control`,
   channel: (accountId: AccountId, channel: string) => `/v1/accounts/${accountId}/channels/${channel}`,
+  leaseCheckpoint: (accountId: AccountId, name: MeshLeaseName) => `/v1/accounts/${accountId}/leases/${name}/checkpoint`,
 } as const;
+
+export interface RelayLeaseCheckpointRecord {
+  epoch: number;
+  seq: number;
+  updatedAt: number;
+  writer: DeviceId;
+  ciphertext: string;
+}
+
+export interface RelayLeaseCheckpointPutRequest {
+  epoch: number;
+  seq: number;
+  ciphertext: string;
+}
+
+export interface RelayLeaseCheckpointGetResponse {
+  checkpoint: RelayLeaseCheckpointRecord | null;
+}
+
+export interface RelayLeaseCheckpointPutResponse {
+  checkpoint: RelayLeaseCheckpointRecord;
+}
+
+export type RelayLeaseCheckpointConflictError =
+  | { error: "stale_epoch"; currentEpoch: number }
+  | { error: "stale_seq"; currentSeq: number };
 
 export interface RelayRegisterRequest {
   provider: AccountProvider;
@@ -308,6 +335,24 @@ export function parseRelayServerFrame(text: string): RelayServerFrame | null {
 export function parseRelayRegisterRequest(value: unknown): RelayRegisterRequest | null {
   const parsed = registerRequestSchema.safeParse(value);
   return parsed.success ? (parsed.data as RelayRegisterRequest) : null;
+}
+
+/**
+ * Precondition: value is an untrusted JSON body from PUT /v1/accounts/:account/leases/:name/checkpoint.
+ * Postcondition: returns a validated request whose ciphertext is opaque base64url envelope ASCII within RELAY_LEASE_CHECKPOINT_MAX_BYTES, or null when malformed or oversized.
+ */
+export function parseRelayLeaseCheckpointPut(value: unknown): RelayLeaseCheckpointPutRequest | null {
+  void value;
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: value is an untrusted JSON body from GET or PUT /v1/accounts/:account/leases/:name/checkpoint.
+ * Postcondition: returns a validated response carrying a nullable checkpoint record, or null when malformed.
+ */
+export function parseRelayLeaseCheckpointResponse(value: unknown): RelayLeaseCheckpointGetResponse | null {
+  void value;
+  throw new Error("Not implemented");
 }
 
 function isServerFrame(frame: RelayClientFrame | RelayServerFrame): frame is RelayServerFrame {

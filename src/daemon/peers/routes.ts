@@ -13,6 +13,7 @@ import {
   type FeishuForwardedEvent,
   type FeishuPeerAppSync,
 } from "../feishu/account-bot.ts";
+import type { FeishuInboundStateSnapshot } from "../feishu/inbound-checkpoint.ts";
 import type { FeishuCardActionResponse } from "../feishu/transport.ts";
 import type { Mesh } from "../mesh/index.ts";
 import { proxyHttp, proxyWebSocket, splitProxyUrl, type ProxyContext, type ProxyTarget } from "./proxy.ts";
@@ -23,6 +24,8 @@ export interface FeishuPeerRoutesPort {
   learnChats(from: DeviceId, chats: { chatId: FeishuChatId; pmId: PmId }[]): void;
   exportApp(): FeishuPeerAppSync | null;
   applyApp(sync: FeishuPeerAppSync): Promise<void>;
+  exportInboundState?(): FeishuInboundStateSnapshot | null;
+  applyInboundState?(state: FeishuInboundStateSnapshot): void;
 }
 
 export interface PeerRoutesOptions {

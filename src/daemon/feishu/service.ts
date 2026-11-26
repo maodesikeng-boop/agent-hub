@@ -13,6 +13,7 @@ import { feishuChatMarker } from "./chats.ts";
 import { exportPeerApp, localPmChats, syncTransport } from "./connection.ts";
 import { createFeishuContext, type FeishuContext } from "./context.ts";
 import { releaseAllInboundGates } from "./inbound-catchup.ts";
+import type { FeishuInboundPeerPort, FeishuInboundRelayPort, FeishuInboundStateSnapshot } from "./inbound-checkpoint.ts";
 import { onRawEvent } from "./inbound-dispatch.ts";
 import { settleIdle, whenIdle } from "./lanes.ts";
 import { scheduleApprovalCardsSync } from "./mesh-approvals.ts";
@@ -51,6 +52,9 @@ export interface FeishuServiceOptions {
   router: Pick<RouterDispatcher, "submitCommand"> | null;
   models?: Pick<ModelCatalogs, "list"> & Partial<Pick<ModelCatalogs, "current" | "availability">>;
   secretsFile: string;
+  inboundStateFile?: string;
+  inboundRelay?: FeishuInboundRelayPort;
+  inboundPeers?: FeishuInboundPeerPort;
   uploadsDir: string;
   sentFilesDir: string;
   device: { id: string; name: string };
@@ -80,6 +84,8 @@ export interface FeishuService extends FeishuLocalInbound {
   syncLeaseConnection(): Promise<void>;
   exportPeerApp(): FeishuPeerAppSync | null;
   applyPeerApp(sync: FeishuPeerAppSync): Promise<void>;
+  exportInboundState?(): FeishuInboundStateSnapshot | null;
+  applyInboundState?(state: FeishuInboundStateSnapshot): void;
   localPmChats(): { chatId: FeishuChatId; pmId: PmId }[];
   start(): Promise<void>;
   idle(): Promise<void>;

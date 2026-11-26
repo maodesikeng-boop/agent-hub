@@ -117,6 +117,7 @@ export interface CenterLeaseOptions {
 export interface CenterLease {
   holding(): boolean;
   holder(): DeviceId | null;
+  epoch?(): number | null;
   refresh(): void;
   onChange(listener: (holder: DeviceId | null) => void): () => void;
   close(): Promise<void>;

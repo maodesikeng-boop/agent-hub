@@ -40,12 +40,19 @@ import {
   type RelayClientFrame,
   type RelayDeviceView,
   type RelayErrorCode,
+  type RelayLeaseCheckpointRecord,
   type RelayPresenceView,
   type RelayRegisterRequest,
   type RelayRegisterResponse,
   type RelayRevocationEnvelope,
   type RelayServerFrame,
 } from "./protocol.ts";
+import type {
+  RelayLeaseCheckpointAuth,
+  RelayLeaseCheckpointPutInput,
+  RelayLeaseCheckpointReadResult,
+  RelayLeaseCheckpointWriteResult,
+} from "./lease-checkpoint.ts";
 
 export interface RelayDeviceRecord {
   id: DeviceId;
@@ -66,6 +73,7 @@ export interface RelayAccountRecord {
   removed: DeviceId[];
   revocations?: RelayRevocationEnvelope[];
   leaseEpochs: Partial<Record<MeshLeaseName, number>>;
+  leaseCheckpoints?: Partial<Record<MeshLeaseName, RelayLeaseCheckpointRecord>>;
   usage: { day: string; bytes: number };
 }
 
@@ -112,6 +120,8 @@ export interface RelayAccountRoom {
   register(login: AccountLogin, request: RelayRegisterRequest): Promise<RelayRegisterResponse | { error: RelayErrorCode }>;
   openControl(socket: RelaySocket, restored?: RelayControlAttachment): RelayControlHandle;
   openChannel(query: { channel: string; device: DeviceId; session: string }, socket: RelaySocket): RelayChannelHandle | { error: RelayErrorCode };
+  getLeaseCheckpoint(auth: RelayLeaseCheckpointAuth): Promise<RelayLeaseCheckpointReadResult>;
+  putLeaseCheckpoint(input: RelayLeaseCheckpointPutInput): Promise<RelayLeaseCheckpointWriteResult>;
   sweep(): Promise<void>;
 }
 
@@ -271,6 +281,16 @@ class AccountRoom implements RelayAccountRoom {
         if (this.usageDirty) void this.save();
       },
     };
+  }
+
+  async getLeaseCheckpoint(auth: RelayLeaseCheckpointAuth): Promise<RelayLeaseCheckpointReadResult> {
+    void auth;
+    throw new Error("Not implemented");
+  }
+
+  async putLeaseCheckpoint(input: RelayLeaseCheckpointPutInput): Promise<RelayLeaseCheckpointWriteResult> {
+    void input;
+    throw new Error("Not implemented");
   }
 
   async sweep(): Promise<void> {
