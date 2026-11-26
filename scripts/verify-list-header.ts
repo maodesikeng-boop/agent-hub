@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Browser, Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { API_PATHS, type DevicesResponse } from "../src/shared/index.ts";
 import { VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 
@@ -148,6 +148,14 @@ function trackPageErrors(page: Page): string[] {
   return errors;
 }
 
+async function closeMockedContext(context: BrowserContext): Promise<void> {
+  try {
+    await Promise.all(context.pages().map((page) => page.unrouteAll({ behavior: "ignoreErrors" })));
+  } finally {
+    await context.close();
+  }
+}
+
 /**
  * Postcondition: a long computer name truncates with ellipsis and keeps ChevronDown fully inside the header trigger with
  * positive clearance before the shrink-0 New PM button at default desktop width, narrow minimum desktop width (both
@@ -186,7 +194,7 @@ export async function verifyProjectListHeader(browser: Browser, loginUrl: string
     assertHeaderGeometry("desktop single-device narrow", await measureListHeader(page, DESKTOP_LONG_NAME, false), false);
     assert.deepEqual(errors, [], `Desktop header check hit page errors: ${errors.join("; ")}`);
   } finally {
-    await desktop.close();
+    await closeMockedContext(desktop);
   }
 
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
@@ -200,6 +208,6 @@ export async function verifyProjectListHeader(browser: Browser, loginUrl: string
     assertHeaderGeometry("mobile switchable", await measureListHeader(page, MOBILE_LONG_NAME, true), true);
     assert.deepEqual(errors, [], `Mobile header check hit page errors: ${errors.join("; ")}`);
   } finally {
-    await mobile.close();
+    await closeMockedContext(mobile);
   }
 }
