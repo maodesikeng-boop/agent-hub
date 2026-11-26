@@ -654,7 +654,7 @@ export function createLedgerPersona(
         }
         const session = sessions.currentSession(conv.id);
         if (session !== null) {
-          const stopped = messages.stopIn(p, { ...session, conversationId: conv.id });
+          const stopped = messages.stopIn(p, { ...session, conversationId: conv.id }, "session_ended");
           if (!stopped && (queued.length > 0 || session.status === "running")) {
             p.stops.push({ conversationId: conv.id, sessionId: session.id });
           }

@@ -1,4 +1,3 @@
-// Invariant: a turn is one model execution boundary in one agent session; its clock is the daemon's, never a vendor-reported duration.
 import type { ConversationId, MessageId, SessionId } from "./domain.ts";
 
 export type TurnId = number;
@@ -15,6 +14,10 @@ export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
 
 export const STOP_SOURCES = ["user", "shutdown", "handover", "session_ended", "crash"] as const;
 export type StopSource = (typeof STOP_SOURCES)[number];
+
+export function isRecoveryStop(source: StopSource | null): boolean {
+  return source === "shutdown" || source === "crash";
+}
 
 export const TURN_INPUT_ROLES = ["opening", "mid_turn"] as const;
 export type TurnInputRole = (typeof TURN_INPUT_ROLES)[number];

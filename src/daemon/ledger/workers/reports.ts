@@ -17,11 +17,11 @@ import { NO_REPLY_TEXT, TURN_STOPPED, backgroundKilledNote, toReportMessage } fr
 import { clearMaxTime } from "./timers.ts";
 import type { BackgroundWait, ReportMessage, ReportMessageRow, WorkersCtx } from "./types.ts";
 
-export function insertTurnFailed(w: WorkersCtx, p: Pending, worker: WorkerDbRow, turnMessageId: MessageId | null, messageIds: MessageId[], reason: string): void {
-  const detailBody =
+export function insertTurnFailed(w: WorkersCtx, p: Pending, worker: WorkerDbRow, turnMessageId: MessageId | null, messageIds: MessageId[], reason: string, detail?: string): void {
+  const detailBody = detail ?? (
     reason === TURN_STOPPED
       ? `用户亲手停了这一轮，它现在是停着的。用户没有明确说继续之前，不要用 ${HUB_COMMAND} worker send 叫醒它；先告诉用户它停了、现在是什么状态，由用户决定继续还是 ${HUB_COMMAND} worker end。`
-      : `这一轮没做完：${reason}。要它接着做用 ${HUB_COMMAND} worker send ${worker.id} --stdin，不要了用 ${HUB_COMMAND} worker end ${worker.id}。`;
+      : `这一轮没做完：${reason}。要它接着做用 ${HUB_COMMAND} worker send ${worker.id} --stdin，不要了用 ${HUB_COMMAND} worker end ${worker.id}。`);
   const vendor = workerSession(w, worker).vendor;
   const blockedKind = reason === TURN_STOPPED || !isAgentVendor(vendor) ? null : userBlockerKindOfFailure(reason, vendor);
   const { taskGraphs, userBlockers } = w.options;
@@ -85,7 +85,7 @@ export function insertReport(
   turnMessageId: MessageId,
   reportMessage: ReportMessage | null,
   note: string | null = null,
-  opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult },
+  opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult; followsEmptyRecovery?: boolean },
 ): void {
   const text = reportMessage?.text ?? "";
   const parsed = parseWorkerReport(text);
@@ -113,7 +113,7 @@ export function insertReport(
   }
   if (graphHandling.outcome === "completed") {
     const id = insertLine(w, p, worker, { ...report, deliver: body, wakePm: graphHandling.wakePmWithReport, completedStep: true });
-    endWorkerIn(w, p, worker, { notifyGraph: false, ...(id === undefined ? {} : { excludeMessageIds: new Set([id]) }) });
+    endWorkerIn(w, p, worker, { notifyGraph: false, recordEndedLine: opts?.followsEmptyRecovery !== true, ...(id === undefined ? {} : { excludeMessageIds: new Set([id]) }) });
     graphHandling.completeStep();
     return;
   }

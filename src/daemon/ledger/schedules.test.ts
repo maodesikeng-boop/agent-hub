@@ -371,6 +371,7 @@ describe("T6 暂停不跑，恢复后从现在算", () => {
 describe("T7 失败记失败，对话里有说明", () => {
   const failTurn = (messageId: MessageId, error?: { subtype: string; message: string }) => {
     ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [messageId], at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.processing", messageIds: [messageId], at: now });
     ledger.applyDriverEvent(lin.sessionId, {
       type: "turn.ended",
       ok: false,
@@ -453,6 +454,8 @@ describe("T7 失败记失败，对话里有说明", () => {
     ledger.runDueSchedules(now);
     const run = runsIn()[0]!;
     ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [run.id], at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.processing", messageIds: [run.id], at: now });
+    ledger.requestStop(lin.conversationId);
     ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: true, messageIds: [run.id], durationMs: 1, at: now });
     expect(ledger.getMessage(run.id)!.status).toBe("stopped");
     expect(row(schedule.id).lastStatus).toBe("sent");

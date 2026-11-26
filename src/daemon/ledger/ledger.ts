@@ -1,4 +1,3 @@
-import { createLedgerTakenInputs } from "./taken-inputs.ts";
 import { isChecklistToolCall } from "./checklist.ts";
 import { createChecklistReminders } from "./checklist-reminders.ts";
 import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
@@ -30,7 +29,8 @@ import { createLedgerHubCommands } from "./hub-commands.ts";
 import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerLoadedSkills } from "./loaded-skills.ts";
 import { createLedgerMessages } from "./messages.ts";
-import { createLedgerTurnReplies } from "./turn-replies.ts";
+import { createLedgerTurns } from "./turns.ts";
+import { createTurnReceiptSettlement, failSessionSendIn } from "./settle-turn.ts";
 import { createDriverEventDrain } from "./driver-events.ts";
 import { createTurnCompletionLedger, type TurnEndedEvent } from "./turn-completions.ts";
 import { createLedgerPersona } from "./persona.ts";
@@ -219,7 +219,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const files = buildLedgerFiles(options, userHome, dataHome);
   const taskGraphManual = (sessionId: SessionId) => taskGraphManualNote(files.launchDir, sessionId);
   const reminders = createChecklistReminders(ctx);
-  const sessions = createLedgerSessions(ctx, reminders.forget);
+  const sessions = createLedgerSessions(ctx, reminders.forget, (id) => turns.runningTurnOf(id)?.id ?? null);
   const { sessionState } = sessions;
   const snapshotQueries = createLedgerSnapshotQueries(db, { sessionState });
   const sentFiles = createLedgerSentFiles(db, {
@@ -238,10 +238,18 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
-    onHubChecklist: reminders.observe,
+    ownsInput: (id) => turns.ownsInput(id),
+    requestTurnStop: (p, id, source) => turns.requestStopIn(p, id, source),
+    stopTakenInput: (p, id, source) => turns.stopInputIn(p, id, source),
+    onHubChecklist: (p, session, event) => {
+      turns.recordOutputIn(p, session, event);
+      reminders.observe(p, session, event);
+    },
   });
-  const turnReplies = createLedgerTurnReplies(ctx);
-  const takenInputs = createLedgerTakenInputs(ctx);
+  const turns = createLedgerTurns(ctx, {
+    projectInputStatus: messages.projectInputStatus,
+    failureReasonOfTurn: (session, event) => handover.failureReasonOfTurn(session, event),
+  });
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
     switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
     clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),
@@ -297,6 +305,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerSession: workers.workerSession,
     notStarted,
     liveOf: sessions.liveOf,
+    runningTurnOf: turns.runningTurnOf,
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
@@ -335,9 +344,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         return;
       }
       const openTools = scoped.type === "agent.tool_result" ? sessions.liveOf(session.id).openTools : undefined;
-      takenInputs.beforeDriverEvent(session, scoped);
+      if (scoped.type === "message.processing" || scoped.type === "turn.started" || scoped.type === "session.started") turns.afterDriverEvent(p, session, scoped);
+      if (scoped.type === "session.exited" || scoped.type === "driver.error") turns.settleExit(p, session, scoped);
       const result = messages.applyEvent(p, session, scoped, textMeta);
-      turnReplies.afterDriverEvent(p, session, scoped);
+      turns.recordOutputIn(p, session, scoped);
       steps.afterDriverEvent(session, scoped, openTools);
       if (result !== "duplicate_tool") reminders.observe(p, session, scoped);
       loadedSkills.afterDriverEvent(session, scoped);
@@ -362,25 +372,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     }
   };
   const completions = createTurnCompletionLedger(ctx, {
-    apply(p, receipt, facts, previousRun) {
-      const session = getAgentSession(db, receipt.sessionId);
-      if (session === null || session.role === "assistant" || session.conversationId === null) return;
-      const event = {
-        ...receipt.event,
-        messageIds: [...new Set(receipt.event.messageIds)].filter((id) => {
-          const msg = messages.getMessage(id);
-          return msg?.sessionId === session.id && (msg.status === "delivered" || msg.status === "processing");
-        }),
-      };
-      messages.settleTurn(p, session, event, facts);
-      turnReplies.settle(p, session, receipt.event.messageIds, facts.reply);
-      steps.afterDriverEvent(session, event);
-      reminders.observe(p, session, event);
-      if (receipt.event.messageIds.length === 0 || event.messageIds.length > 0) workers.settleTurn(p, session, event, facts.worker, previousRun);
-      handover.afterDriverEvent(p, session, event);
-      schedules.afterDriverEvent(p, session, event);
-      projectCatalog.afterDriverEvent(p, session, event);
-    },
+    apply: createTurnReceiptSettlement(db, { turns, messages, steps, reminders, workers, handover, schedules, projectCatalog }),
     onSettled: (receipt) => driverEvents.onSettled(receipt),
     onOverflow,
   });
@@ -389,7 +381,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     beforeTurn: (id, signal) => reconcileTurnWorktree(db, id, options.worktreeBranchProbe, branches, signal),
     factsFor(sessionId, event) {
       const session = getAgentSession(db, sessionId)!;
-      return { ...turnReplies.factsOf(session, event.messageIds), worker: workers.turnFactsOf(session, event) };
+      return { worker: workers.turnFactsOf(session, event) };
     },
     apply: applyDriverEventNow,
     localLinks: sentFiles.localLinks,
@@ -440,7 +432,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       };
     },
 
-    messagesBefore: messages.messagesBefore,
+    messagesBefore(conversationId, before) {
+      const page = messages.messagesBefore(conversationId, before);
+      return { ...page, turns: turns.summariesFor(conversationId, page.messages) };
+    },
     messagesAfter: messages.messagesAfter,
     lookupConversations: snapshotQueries.lookupConversations,
     completedWork: (pmId, cursor, limit) => completedWorkPage(db, pmId, cursor, limit),
@@ -472,7 +467,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     }),
     recoverAfterRestart() {
       completions.recover();
-      const recovered = sessions.recoverAfterRestart(workers.noticeUnresentShutdownTurnsIn);
+      const recovered = sessions.recoverAfterRestart(turns.recoverAfterRestartIn, (p) => workers.noticeUnresentShutdownTurnsIn(p, turns));
       workers.recoverLifecycles();
       handover.recoverAfterRestart();
       router.recoverAfterRestart();
@@ -493,15 +488,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
 
     getMessage: messages.getMessage,
-    turnReplyOf: turnReplies.turnReplyOf,
+    turnReplyOf: messages.turnReplyOf,
     sentFileAllows(sessionId, realPath) {
       const session = getAgentSession(db, sessionId);
       return session !== null && sentFiles.allows(session, realPath);
     },
     onActionFailed(action, error) {
       write((p) => {
-        const failedSession = messages.actionFailedIn(p, action, error);
-        if (failedSession !== null) steps.recordFailedStart(failedSession, error);
+        failSessionSendIn(db, p, action, error, { turns, messages, steps });
         workers.actionFailedIn(p, action, error);
         handover.actionFailedIn(p, action);
         schedules.actionFailedIn(p, action);

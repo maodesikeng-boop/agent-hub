@@ -480,6 +480,8 @@ describe("单轮超时计时落盘：守护进程重启后照常提醒", () => {
     expect(wakes()).toHaveLength(1);
     // 这一轮结束：计时清掉
     const sid = sessionIdOf(w.id);
+    ledger.applyDriverEvent(sid, { type: "message.delivered", messageIds: [firstMessage(w).id], at: now });
+    ledger.applyDriverEvent(sid, { type: "message.processing", messageIds: [firstMessage(w).id], at: now });
     ledger.applyDriverEvent(sid, { type: "agent.text", uuid: "done", text: report("做完了", "好了"), at: now });
     ledger.applyDriverEvent(sid, { type: "turn.ended", ok: true, interrupted: false, messageIds: [firstMessage(w).id], durationMs: 1, at: now });
     expect(timeoutRow(w.id)).toBeUndefined();

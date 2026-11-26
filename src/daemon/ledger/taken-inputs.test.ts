@@ -39,24 +39,28 @@ describe("system wakeup delivery", () => {
     expect(f.ledger.isSystemMessageCurrent?.(wake.id)).toBe(true);
   });
 
-  it.each([false, true])("S3/S4: stamps when the agent takes in the wakeup (mid-turn: %s)", (midTurn) => {
+  it.each([false, true])("S3/S4: records when the agent takes a wakeup (mid-turn: %s)", (midTurn) => {
     const userId = post("Start");
     const wake = graphWakeup();
+    emit({ type: "message.delivered", messageIds: [userId], at: f.now() });
+    if (midTurn) emit({ type: "message.processing", messageIds: [userId], at: f.now() });
     emit({ type: "message.delivered", messageIds: [wake.id], at: f.now(), ...(midTurn ? { midTurn: true } : {}) });
-    expect(f.ledger.getMessage(wake.id)?.meta?.taken).toBeUndefined();
+    const inputs = () => f.ledger.messagesBefore(f.project.conversationId, Number.MAX_SAFE_INTEGER).turns?.[0]?.inputs ?? [];
+    expect(inputs().some((input) => input.messageId === wake.id)).toBe(false);
     f.advance(27_000);
     progress("progress");
     const at = f.now();
     const afterId = history().at(-1)?.id;
     const changes: Change[] = [];
     f.ledger.onChange((change) => changes.push(change));
-    emit({ type: "message.processing", messageIds: [wake.id, userId], at, ...(midTurn ? { midTurn: true } : {}) });
-    expect(f.ledger.getMessage(wake.id)?.meta?.taken).toEqual({ afterId, at, midTurn });
-    expect(f.ledger.getMessage(userId)?.meta?.taken).toBeUndefined();
+    emit({ type: "message.processing", messageIds: midTurn ? [wake.id] : [wake.id, userId], at, ...(midTurn ? { midTurn: true } : {}) });
+    const taken = { messageId: wake.id, afterMessageId: afterId, role: midTurn ? "mid_turn" : "opening" };
+    expect(inputs()).toContainEqual(taken);
+    expect(f.ledger.getMessage(wake.id)?.meta?.taken).toBeUndefined();
     expect(changes.filter((change) => change.type === "message.updated" && change.data.message.id === wake.id)).toHaveLength(1);
     f.advance(1_000);
     emit({ type: "message.processing", messageIds: [wake.id], at: f.now() });
-    expect(f.ledger.getMessage(wake.id)?.meta?.taken).toEqual({ afterId, at, midTurn });
+    expect(inputs().filter((input) => input.messageId === wake.id)).toEqual([taken]);
   });
 
   it("stamps both a queued Worker report and a scheduled run when the PM reads them", () => {
@@ -74,7 +78,8 @@ describe("system wakeup delivery", () => {
     const messageIds = [worker!.id, run!.id];
     emit({ type: "message.delivered", messageIds, at: f.now() });
     emit({ type: "message.processing", messageIds, at: f.now() });
-    const stamp = { afterId: run!.id, at: f.now(), midTurn: false };
-    expect(messageIds.map((id) => f.ledger.getMessage(id)?.meta?.taken)).toEqual([stamp, stamp]);
+    const turns = f.ledger.messagesBefore(f.project.conversationId, Number.MAX_SAFE_INTEGER).turns;
+    expect(turns?.[0]?.inputs).toEqual(messageIds.map((messageId) => ({ messageId, afterMessageId: run!.id, role: "opening" })));
+    expect(messageIds.map((id) => f.ledger.getMessage(id)?.meta?.taken)).toEqual([undefined, undefined]);
   });
 });

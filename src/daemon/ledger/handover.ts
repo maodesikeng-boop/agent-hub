@@ -645,6 +645,7 @@ export function createLedgerHandover(
             transition(p, request.id, "stopped");
           } else if (request.status === "delivered" || request.status === "processing") {
             endWriting(request);
+            messages.requestTurnStop?.(p, session.id, "handover");
             p.stops.push({ conversationId, sessionId: session.id });
           }
         }
@@ -791,11 +792,18 @@ export function createLedgerHandover(
   const abandonIn = (p: Pending, session: AgentSessionRow, request: MessageDbRow, meta: HandoverMeta) => {
     if (request.status === "queued" || meta.abandoned === true) {
       setMeta(request.id, { ...meta, abandoned: true });
-      transition(p, request.id, "stopped");
-      settleInSession(p, session.conversationId!);
+      if (request.status !== "processing") {
+        transition(p, request.id, "stopped");
+        settleInSession(p, session.conversationId!);
+      } else {
+        endWriting(request);
+        const row = inSessionOf(session.conversationId!);
+        if (row !== undefined) failRow(p, row, HANDOVER_REASONS.timeout);
+      }
       return;
     }
     setMeta(request.id, { ...meta, abandoned: true, startedAt: now() });
+    messages.requestTurnStop?.(p, session.id, "handover");
     p.stops.push({ conversationId: session.conversationId!, sessionId: session.id });
   };
 
@@ -813,6 +821,7 @@ export function createLedgerHandover(
       settleInSession(p, conversationId);
       return;
     }
+    messages.requestTurnStop?.(p, session.id, "handover");
     p.stops.push({ conversationId, sessionId: session.id });
   };
 
@@ -821,16 +830,21 @@ export function createLedgerHandover(
     if (meta.writing === true) setMeta(request.id, { ...meta, writing: false });
   };
 
+  const failureReasonOfTurn = (session: AgentSessionRow, event: Extract<DriverEvent, { type: "turn.ended" }>): string | null => {
+    if (session.role !== "pm" || !event.ok || session.conversationId === null) return null;
+    const row = inSessionOf(session.conversationId);
+    if (row?.from_session_id !== session.id) return null;
+    const request = requestOf(session);
+    return request !== undefined && event.messageIds.includes(request.id) && handoverTextOf(session, request).trim() === ""
+      ? HANDOVER_EMPTY_REASON
+      : null;
+  };
+
   const inSessionWritten = (p: Pending, session: AgentSessionRow, request: MessageDbRow) => {
     const row = inSessionOf(session.conversationId!);
     if (row === undefined || row.from_session_id !== session.id || !stillCurrent(session)) return;
     const handover = handoverTextOf(session, request);
-    if (handover.trim() === "") {
-      db.run("UPDATE messages SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?", HANDOVER_EMPTY_REASON, now(), request.id);
-      p.changes.push({ type: "message.updated", data: { message: getMessage(request.id)! } });
-      failRow(p, row, HANDOVER_REASONS.empty);
-      return;
-    }
+    if (handover.trim() === "") return;
     const t = now();
     db.run("UPDATE handovers SET status = 'ready', text = ?, ready_at = ?, updated_at = ? WHERE id = ?", handover, t, t, row.id);
     switchIn(p, { ...row, status: "ready", text: handover }, session, handover, metaOf(request).turnStartId);
@@ -1051,6 +1065,7 @@ export function createLedgerHandover(
     waitsForHandover,
     onSessionQuiescent,
     afterDriverEvent,
+    failureReasonOfTurn,
     actionFailedIn,
     userPostedIn,
     sessionPreamble,

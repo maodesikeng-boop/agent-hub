@@ -387,6 +387,7 @@ describe("turn completion receipts", () => {
     drop("fail_watermark");
     tick();
     expect(turnEnds(wsid)).toEqual(["ok"]);
+    ev({ type: "turn.started", at: now }, wsid);
     end([], FAILED, wsid);
     expect(turnEnds(wsid)).toEqual(["ok", "failed"]);
   });
@@ -424,9 +425,12 @@ describe("turn completion receipts", () => {
   });
 
   it("recovers a receipt without attachment facts without linking a different turn's reply", () => {
+    const previous = post("上一轮的问题");
+    startTurn(previous);
+    say("r1", "上一轮的答复");
+    end([previous]);
     const id = post("问题");
     startTurn(id);
-    say("r1", "上一轮的答复");
     ledger.close();
     const event = JSON.stringify({ type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 1, at: now });
     db.run("INSERT INTO turn_completions (session_id, event, facts, next_attempt_at) VALUES (?, ?, NULL, 0)", sessionId, event);
@@ -436,6 +440,17 @@ describe("turn completion receipts", () => {
     expect(replyIdOf(ledger.getMessage(id)!)).toBeNull();
     expect(receipts()).toBe(0);
     expect(sendsFor(id)).toHaveLength(1);
+  });
+
+  it("settles a pre-upgrade receipt before deciding whether to resend its input", () => {
+    const id = post("Old daemon input");
+    db.run("UPDATE messages SET status = 'processing' WHERE id = ?", id);
+    const receipt = { type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: null, at: now };
+    db.run("INSERT INTO turn_completions (session_id, event, next_attempt_at) VALUES (?, ?, 0)", sessionId, JSON.stringify(receipt));
+    restart();
+    expect(statusOf(id)).toBe("replied");
+    expect(sendsFor(id)).toHaveLength(1);
+    expect(sendsFor(id)[0]!.params).not.toHaveProperty("resend");
   });
 
   it("settles receipts from more sessions than one retry batch during a single startup recovery", () => {

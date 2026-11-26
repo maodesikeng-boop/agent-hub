@@ -3,7 +3,7 @@ import { isVisibleSystemInput } from "../../shared/taken-input.ts";
 import { enqueueSystemWakeupIn, type SystemWakeupInput } from "./system-wakeups.ts";
 import { createLedgerChecklist } from "./checklist.ts";
 import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
-import type { TurnCompletionFacts, TurnEndedEvent } from "./turn-completions.ts";
+import type { TurnEndedEvent } from "./turn-completions.ts";
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
@@ -11,7 +11,6 @@ import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { mergeDeliverables, type Deliverable, type HubFileArg } from "../../shared/deliverables.ts";
 import { agentMessageDedupeKey, canTransitionMessage, isChecklistReminder, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
-import { turnFailureReason } from "../../shared/driver.ts";
 import type { AgentChecklistEvent, DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import type { HubChecklistRequest } from "../../shared/hub-checklist.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -28,6 +27,8 @@ import { clearStreaming, idle, toolRunning, toolStarted, working } from "./sessi
 import { isPathInsideOrEqual } from "../platform/index.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { LedgerSessions, LiveSession } from "./sessions.ts";
+import { replyIdOf, type TurnReplyView } from "../../shared/turn-reply.ts";
+import type { StopSource } from "../../shared/turn.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
 export type AskSettlement = { by: "answer"; chosenOption?: string; note?: string } | { by: "close" };
@@ -59,6 +60,9 @@ export interface LedgerMessagesOptions {
   assertUserCanPost?: (conversationId: ConversationId) => void;
   afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
   onIndependentAskCreated?: (p: Pending, session: AgentSessionRow, message: Message, options?: string[]) => void;
+  stopTakenInput?: (p: Pending, id: MessageId, source: StopSource | null) => boolean;
+  ownsInput?: (id: MessageId) => boolean;
+  requestTurnStop?: (p: Pending, id: SessionId, source: StopSource) => void;
   onHubChecklist?: (p: Pending, session: AgentSessionRow, event: AgentChecklistEvent) => void;
 }
 
@@ -98,6 +102,35 @@ function insertAgentMessage(
   return true;
 }
 
+function setInputStatus({ db, now }: LedgerContext, p: Pending, id: MessageId, status: MessageStatus, reason: string | null, replyId?: MessageId) {
+  const row = db.get<MessageDbRow>(
+    `UPDATE messages SET status = ?, failure_reason = ?, updated_at = ?,
+       meta = CASE WHEN ? IS NOT NULL AND (meta IS NULL OR json_valid(meta)) THEN
+                   CASE WHEN json_type(meta, '$.replyId') IN ('integer', 'real')
+                             AND json_extract(meta, '$.replyId') > 0
+                             AND CAST(json_extract(meta, '$.replyId') AS INTEGER) = json_extract(meta, '$.replyId') THEN meta
+                        ELSE json_set(COALESCE(meta, '{}'), '$.replyId', CAST(? AS INTEGER)) END
+                   WHEN ? IN ('delivered', 'processing') AND (meta IS NULL OR json_valid(meta)) THEN json_set(COALESCE(meta, '{}'), '$.deliveryConfirmed', json('true'))
+                   WHEN ? = 'queued' AND json_valid(meta) THEN json_remove(meta, '$.deliveryConfirmed') ELSE meta END
+     WHERE id = ? AND (status IS NOT ? OR ? IS NOT NULL) RETURNING *`,
+    status, status === "failed" ? reason : null, now(), replyId ?? null, replyId ?? null, status, status, id, status, replyId ?? null,
+  );
+  if (row === undefined) return;
+  const updated = toMessage(row);
+  if (!isChecklistReminder(updated)) p.changes.push({ type: "message.updated", data: { message: updated } });
+  return updated;
+}
+
+function findTurnReply(
+  id: MessageId, getMessage: (id: MessageId) => Message | null, isPmConversation: (id: ConversationId) => boolean,
+): TurnReplyView | null {
+  const request = getMessage(id);
+  if (request?.sender !== "user" || !isPmConversation(request.conversationId)) return null;
+  const replyId = replyIdOf(request);
+  const reply = replyId === null ? null : getMessage(replyId);
+  return { request, reply: reply?.conversationId === request.conversationId && reply.sender === "agent" && reply.kind === "text" ? reply : null };
+}
+
 export function createLedgerMessages(
   ctx: LedgerContext,
   sessions: LedgerSessions,
@@ -123,25 +156,14 @@ export function createLedgerMessages(
     return { messages: rows.slice(0, MESSAGE_PAGE_SIZE).reverse().map(toMessage), hasMore };
   };
 
-  /** Invalid transitions, including same-state ones, are ignored. */
+  const projectInputStatus = (p: Pending, id: MessageId, status: MessageStatus, reason: string | null, replyId?: MessageId) =>
+    setInputStatus(ctx, p, id, status, reason, replyId);
+
   const transition = (p: Pending, id: MessageId, to: MessageStatus, reason: string | null = null, ownerSessionId?: SessionId) => {
     const message = getMessage(id);
-    if (message === null || message.status === null || !canTransitionMessage(message.status, to)) return;
+    if (message?.status == null || !canTransitionMessage(message.status, to) || options.ownsInput?.(id)) return;
     if (ownerSessionId !== undefined && message.sessionId !== ownerSessionId) return;
-    db.run(
-      `UPDATE messages SET status = ?, failure_reason = ?, updated_at = ?,
-         meta = CASE WHEN ? IN ('delivered', 'processing') THEN json_set(COALESCE(meta, '{}'), '$.deliveryConfirmed', json('true'))
-                     WHEN ? = 'queued' THEN json_remove(meta, '$.deliveryConfirmed') ELSE meta END WHERE id = ?`,
-      to,
-      to === "failed" ? reason : null,
-      now(),
-      to,
-      to,
-      id,
-    );
-    const updated = getMessage(id)!;
-    if (!isChecklistReminder(updated)) p.changes.push({ type: "message.updated", data: { message: updated } });
-    return updated;
+    return projectInputStatus(p, id, to, reason);
   };
 
   const insertAskMessage = (
@@ -295,11 +317,12 @@ export function createLedgerMessages(
         return;
       case "message.delivered":
       case "message.processing": {
-        const to = event.type === "message.delivered" ? "delivered" : "processing";
         let onlyWaitingInputs = event.type === "message.delivered" && event.messageIds.length > 0;
-        for (const id of event.messageIds) {
-          const updated = transition(p, id, to, null, sessionId);
-          onlyWaitingInputs &&= updated !== undefined && (isVisibleSystemInput(updated) || isChecklistReminder(updated));
+        if (event.type === "message.delivered") {
+          for (const id of event.messageIds) {
+            const updated = transition(p, id, "delivered", null, sessionId);
+            onlyWaitingInputs &&= updated !== undefined && (isVisibleSystemInput(updated) || isChecklistReminder(updated));
+          }
         }
         dropCarriedRateLimit(p, sessionId);
         if (!onlyWaitingInputs) updateLive(p, sessionId, working(event.at, liveOf(sessionId).currentTool));
@@ -429,14 +452,7 @@ export function createLedgerMessages(
     }
   };
 
-  const settleTurn = (p: Pending, session: AgentSessionRow, event: TurnEndedEvent, facts: TurnCompletionFacts) => {
-    const reason = event.error === undefined ? "turn_failed" : turnFailureReason(event.error);
-    for (const id of event.messageIds) {
-      if (event.shutdown === true && keptAfterShutdown(session, id)) continue;
-      if (event.interrupted) transition(p, id, "stopped", null, session.id);
-      else if (event.ok || facts.finishedWithText.includes(id)) transition(p, id, "replied", null, session.id);
-      else transition(p, id, "failed", reason, session.id);
-    }
+  const settleTurn = (p: Pending, session: AgentSessionRow) => {
     checklist.endTurn(session.id);
     updateLive(p, session.id, (l) => {
       idle(l);
@@ -520,7 +536,7 @@ export function createLedgerMessages(
       return inFlight.some((message) => !resumesAfterShutdown(session, message)) ? [{ sessionId, role: session.role }] : [];
     });
 
-  const stopIn = (p: Pending, session: AgentSessionRow & { conversationId: ConversationId }): boolean => {
+  const stopIn = (p: Pending, session: AgentSessionRow & { conversationId: ConversationId }, source: StopSource = "user"): boolean => {
     const working = liveOf(session.id).activity !== "idle";
     const leftover =
       !working &&
@@ -539,6 +555,7 @@ export function createLedgerMessages(
     } else {
       p.after.push(() => sessions.cancelStreamTimer(session.id));
     }
+    options.requestTurnStop?.(p, session.id, source);
     p.stops.push({ conversationId: session.conversationId, sessionId: session.id });
     return true;
   };
@@ -606,13 +623,21 @@ export function createLedgerMessages(
 
   const stopMessage = (messageId: MessageId, sessionId?: SessionId) => {
     write((p) => {
-      const status = getMessage(messageId)?.status;
-      if (status === "delivered" || status === "processing") transition(p, messageId, "stopped", null, sessionId);
+      const message = getMessage(messageId);
+      if (message?.sessionId == null || (sessionId !== undefined && message.sessionId !== sessionId)) return;
+      if (message.status === "delivered" || message.status === "processing") {
+        if (options.stopTakenInput?.(p, messageId, "session_ended")) return;
+        transition(p, messageId, "stopped", null, sessionId);
+      }
     });
   };
 
   const retireStaleSystemMessage = (id: MessageId): void => {
-    if (getMessage(id)?.sender === "system") write((p) => transition(p, id, "stopped"));
+    const message = getMessage(id);
+    if (message?.sender === "system") write((p) => {
+      if (message.status === "processing" && options.stopTakenInput?.(p, id, null)) return;
+      transition(p, id, "stopped");
+    });
   };
 
   const retryMessage = (messageId: MessageId): { messageId: MessageId } => {
@@ -640,6 +665,9 @@ export function createLedgerMessages(
   return {
     getMessage,
     page,
+    projectInputStatus,
+    requestTurnStop: options.requestTurnStop,
+    turnReplyOf: (id: MessageId) => findTurnReply(id, getMessage, isPmConversation),
     transition,
     applyEvent,
     checklistFromHub,

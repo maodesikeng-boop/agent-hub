@@ -19,6 +19,7 @@ import { workerStatsLines } from "./worker-stats.ts";
 import { createLedgerWorkerSearch } from "./worker-search.ts";
 import type { LiveSession } from "./sessions.ts";
 import type { LedgerSteps, StepRow } from "./steps.ts";
+import type { LedgerTurns } from "./turns.ts";
 
 const NO_DATA = "—";
 
@@ -91,6 +92,7 @@ export interface WorkerViewDeps {
   workerSession: (worker: number | WorkerDbRow) => AgentSessionRow;
   notStarted: (worker: WorkerDbRow) => boolean;
   liveOf: (id: SessionId) => LiveSession;
+  runningTurnOf: LedgerTurns["runningTurnOf"];
   turnMaxTimeOf?: (workerConversationId: ConversationId) => { maxTimeMs: number; startedAt: number } | null;
   isWorktreeCleaned?: (worker: WorkerDbRow) => boolean;
 }
@@ -189,11 +191,13 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
         : t - maxTime.startedAt < maxTime.maxTimeMs
           ? `最大时间 ${formatDurationShort(maxTime.maxTimeMs)}，剩余 ${formatDuration(maxTime.maxTimeMs - (t - maxTime.startedAt))}`
           : `最大时间 ${formatDurationShort(maxTime.maxTimeMs)}，已超时`;
-    if (current !== null && worker.status !== "ended") {
-      const ran = current.startedAt === null ? "" : `跑了 ${formatDuration(t - current.startedAt)}，`;
-      lines.push(`这一轮${ran}走了 ${toolCount(current)} 步${maxTimeSummary ? `（${maxTimeSummary}）` : ""}`);
-    } else if (maxTimeSummary && worker.status !== "ended" && !notStarted(worker)) {
-      lines.push(`这一轮：${maxTimeSummary}`);
+    const running = deps.runningTurnOf(session.id);
+    if (worker.status !== "ended" && running !== null) {
+      const resumed = running.cause === "recovery" ? "（守护进程重启后重发）" : "";
+      lines.push(`这一轮跑了 ${formatDuration(t - running.startedAt)}，走了 ${current === null ? 0 : toolCount(current)} 步${resumed}`);
+    }
+    if (maxTimeSummary && worker.status !== "ended" && !notStarted(worker)) {
+      lines.push(`时间预算：${maxTimeSummary}（从派活时起算，重启不重置）`);
     }
     if (lastEnded?.end) {
       const seconds = turnSeconds(lastEnded);

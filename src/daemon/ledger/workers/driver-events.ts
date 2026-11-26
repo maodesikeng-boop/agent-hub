@@ -2,6 +2,8 @@ import type { AgentSessionRow, SessionId, WorkerId } from "../../../shared/domai
 import type { DriverEvent } from "../../../shared/driver.ts";
 import { CHECKLIST_REMINDER_SQL } from "../checklist-reminders.ts";
 import type { Pending } from "../context.ts";
+import type { SettledTurn } from "../turns.ts";
+import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { TurnCompletionFacts, TurnEndedEvent } from "../turn-completions.ts";
 import { workerRow } from "./ctx.ts";
 import { isDirectChat, shouldDeliverDirectChatReport } from "./direct-chat.ts";
@@ -58,7 +60,7 @@ function markBackground(w: WorkersCtx, p: Pending, sessionId: SessionId): void {
 function onTurnOutcome(
   w: WorkersCtx, p: Pending, session: AgentSessionRow, workerId: WorkerId,
   event: Extract<DriverEvent, { type: "turn.ended" | "session.exited" | "driver.error" }>, outcome: TurnOutcome,
-  facts: TurnCompletionFacts["worker"], note: string | null = null,
+  facts: TurnCompletionFacts["worker"], note: string | null = null, followsEmptyRecovery = false,
 ): void {
   const worker = workerRow(w, workerId);
   if (worker === null || (outcome.turnMessageId === null && facts === null)) return;
@@ -119,22 +121,37 @@ function onTurnOutcome(
   }
   if (outcome.turnMessageId === null && (reply?.text ?? "").trim() === "") return;
   if (facts !== null && onlyManualCompact(w, session, facts.turnStart)) return;
-  insertReport(w, p, worker, turnMessageId, reply, note, { hasPendingFollowup });
+  insertReport(w, p, worker, turnMessageId, reply, note, { hasPendingFollowup, followsEmptyRecovery });
+}
+
+function reportEmptyRecovery(w: WorkersCtx, p: Pending, session: AgentSessionRow, workerId: WorkerId, settled: SettledTurn) {
+  const worker = workerRow(w, workerId);
+  if (worker === null || worker.status !== "open") return;
+  const lastInputId = settled.inputs.at(-1)?.messageId ?? 0;
+  p.after.push(() => { w.turnStarts.delete(session.id); });
+  if (w.db.get(
+    `SELECT 1 FROM messages WHERE conversation_id = ? AND id > ? AND sender = 'pm'
+       AND status IN ('queued', 'delivered', 'processing') LIMIT 1`, worker.worker_conversation_id, lastInputId,
+  )) return;
+  clearMaxTimeIn(w, p, worker.worker_conversation_id);
+  insertTurnFailed(w, p, worker, lastInputId || null, [], "重启后重发的这一轮没有产出",
+    `守护进程重启后重发了上一轮的任务，但这一轮没有调用工具也没有文字产出（不是汇报格式错误）。请用 ${HUB_COMMAND} worker show ${workerId} 看现场，再用 ${HUB_COMMAND} worker send ${workerId} 说明下一步。`);
 }
 
 export function settleTurn(
-  w: WorkersCtx, p: Pending, session: AgentSessionRow, input: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean,
+  w: WorkersCtx, p: Pending, session: AgentSessionRow, input: TurnEndedEvent, facts: TurnCompletionFacts["worker"], previousRun: boolean, settled: SettledTurn, followsEmptyRecovery: boolean,
 ): void {
   if (session.role !== "worker" || session.workerId === null || session.conversationId === null) return;
+  if (settled.turn.outcome === "empty_recovery") return reportEmptyRecovery(w, p, session, session.workerId, settled);
   const event = withoutChecklistInputs(w, input);
   const outcome = turnOutcome(event);
   if (outcome === null) return;
   // No background.changed or session.exited will arrive for a process that died before this daemon started, so waiting would strand the report.
   if (previousRun && facts?.waitingForBackground === true) {
-    onTurnOutcome(w, p, session, session.workerId, event, outcome, { ...facts, waitingForBackground: false }, backgroundKilledNote("restart"));
+    onTurnOutcome(w, p, session, session.workerId, event, outcome, { ...facts, waitingForBackground: false }, backgroundKilledNote("restart"), followsEmptyRecovery);
     return;
   }
-  onTurnOutcome(w, p, session, session.workerId, event, outcome, facts);
+  onTurnOutcome(w, p, session, session.workerId, event, outcome, facts, null, followsEmptyRecovery);
 }
 
 export function afterDriverEvent(w: WorkersCtx, p: Pending, session: AgentSessionRow, input: Exclude<DriverEvent, TurnEndedEvent>): void {

@@ -1411,6 +1411,7 @@ describe("审查后补的（PR #34）", () => {
     const sessionId = workerSessionId(worker.id);
     const first = taskMessage(worker).id;
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [first], at: now });
     ledger.applyDriverEvent(sessionId, { type: "context.compacted", uuid: "cb-auto3", trigger: "auto", preTokens: 100, postTokens: 10, at: now });
     ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [first], durationMs: 10, at: now });
     expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "report" });
@@ -2301,6 +2302,7 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
   it("这一轮出错（有后台命令也一样）：马上一行 turn_failed，不等", () => {
     const id = taskMessage(worker).id;
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
     background(1);
     ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: false, messageIds: [id], durationMs: 5, at: now, error: { subtype: "error_during_execution", message: "炸了" } });
     expect(workerEventOf(reports().at(-1)!)).toMatchObject({ event: "turn_failed" });

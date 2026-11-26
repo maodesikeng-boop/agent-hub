@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS turn_inputs (
   taken_at         INTEGER,
   outcome          TEXT    CHECK (outcome IN ('replied', 'stopped', 'failed', 'interrupted')),
   stop_source      TEXT    CHECK (stop_source IN ('user', 'shutdown', 'handover', 'session_ended', 'crash')),
+  recovery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (recovery_attempts >= 0),
+  recovery_boot_id TEXT,
   PRIMARY KEY (turn_id, message_id)
 ) STRICT;
 

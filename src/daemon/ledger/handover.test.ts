@@ -805,7 +805,7 @@ describe("兜底：复制不了，本会话写交接", () => {
     expect(rows()[0]).toMatchObject({ status: "failed", failure_reason: HANDOVER_EMPTY_REASON });
   });
 
-  it("写交接超时：请驱动层停掉那一轮，停下来后记失败（timeout），压着的消息照常发给旧会话；停不下来再过一个超时直接标已停止", () => {
+  it("写交接超时：请驱动层停掉那一轮，停下来后记失败（timeout），压着的消息照常发给旧会话；再过一个超时先解除交接", () => {
     unsupported();
     now += AUTO_RENEW_IDLE_MS;
     ledger.runAutoRenew();
@@ -821,10 +821,12 @@ describe("兜底：复制不了，本会话写交接", () => {
     expect(stops).toEqual([{ conversationId, sessionId: firstSession }]);
     now += HANDOVER_TIMEOUT_MS;
     ledger.runAutoRenew();
-    expect(ledger.getMessage(request)!.status).toBe("stopped");
+    expect(ledger.getMessage(request)!.status).toBe("processing");
     expect(rows()[0]).toMatchObject({ status: "failed", failure_reason: "timeout" });
     expect(ledger.waitsForHandover(workerLine)).toBe(false);
     expect(ledger.getMessage(workerLine)!.sessionId).toBe(firstSession);
+    turnEnd(firstSession, [request], [], "interrupted");
+    expect(ledger.getMessage(request)!.status).toBe("stopped");
   });
 });
 

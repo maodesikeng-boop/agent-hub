@@ -18,15 +18,13 @@ export interface TurnCompletionReceipt {
 }
 
 export interface TurnCompletionFacts {
-  readonly reply: { readonly messageId: MessageId; readonly requestIds: readonly MessageId[] } | null;
-  readonly finishedWithText: readonly MessageId[];
   readonly worker: {
     readonly turnStart: MessageId;
     readonly waitingForBackground: boolean;
   } | null;
 }
 
-export const NO_TURN_FACTS: TurnCompletionFacts = { reply: null, finishedWithText: [], worker: null };
+export const NO_TURN_FACTS: TurnCompletionFacts = { worker: null };
 
 export type TurnCompletionResult =
   | { readonly kind: "settled" }

@@ -72,7 +72,13 @@ it.each(["message.delivered", "message.processing"] as const)("retires a stale d
   if (status === "message.processing") pmEvent(status, id);
   patch(graphId);
   expect(eligible(id)).toBe(false);
-  expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+  if (status === "message.processing") {
+    expect(f.ledger.getMessage(id)?.status).toBe("processing");
+    f.ledger.applyDriverEvent(f.pm.sessionId, { type: "turn.ended", messageIds: [id], ok: true, interrupted: false, durationMs: null, at: f.now() });
+    expect(f.ledger.getMessage(id)?.status).toBe("replied");
+  } else {
+    expect(f.ledger.getMessage(id)?.status).toBe("stopped");
+  }
 });
 
 function timeoutNotice() {

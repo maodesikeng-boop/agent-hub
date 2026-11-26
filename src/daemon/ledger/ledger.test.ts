@@ -170,7 +170,8 @@ describe("postUserMessage", () => {
   it("事务回滚：前面已经攒了变化、后一步才失败，一条也不推，回合结果留在收据里", () => {
     const a = post("a");
     const b = post("b");
-    for (const id of [a, b]) setStatus(id, "processing");
+    ev({ type: "message.delivered", at: 0, messageIds: [a, b] });
+    ev({ type: "message.processing", at: 0, messageIds: [a, b] });
     changes = [];
     db.exec(`CREATE TRIGGER fail_b BEFORE UPDATE ON messages WHEN NEW.id = ${b} BEGIN SELECT RAISE(ABORT, 'boom'); END`);
     expect(() => ev({ type: "turn.ended", at: 1, ok: true, interrupted: false, messageIds: [a, b], durationMs: null })).not.toThrow();
@@ -223,6 +224,7 @@ describe("applyDriverEvent", () => {
       "message.updated",
       "session.status", // working
       "message.updated",
+      "session.status", // active turn
       "message.created",
       "session.status", // 在写回复
       "message.updated",
@@ -307,8 +309,11 @@ describe("applyDriverEvent", () => {
   it("turn.ended：被打断 → 已停止；失败 → 失败并记原因", () => {
     const a = post("a");
     const b = post("b");
-    for (const id of [a, b]) setStatus(id, "processing");
+    ev({ type: "message.delivered", at: 0, messageIds: [a] });
+    ev({ type: "message.processing", at: 0, messageIds: [a] });
     ev({ type: "turn.ended", at: 1, ok: false, interrupted: true, messageIds: [a], durationMs: null });
+    ev({ type: "message.delivered", at: 1, messageIds: [b] });
+    ev({ type: "message.processing", at: 1, messageIds: [b] });
     ev({ type: "turn.ended", at: 2, ok: false, interrupted: false, messageIds: [b], durationMs: null, error: { subtype: "error_during_execution", message: "API 出错" } });
     expect(ledger.getMessage(a)).toMatchObject({ status: "stopped", failureReason: null });
     expect(ledger.getMessage(b)).toMatchObject({ status: "failed", failureReason: "error_during_execution: API 出错" });
@@ -495,6 +500,7 @@ describe("applyDriverEvent", () => {
       const first = post("c1", "开始做");
       const rejected = { status: "rejected", resetsAt: 10_800, windows: {} };
       ev({ type: "message.delivered", at: 1, messageIds: [first] });
+      ev({ type: "message.processing", at: 1, messageIds: [first] });
       setSession({ rateLimit: rejected });
       ev({ type: "rate_limit", at: 2, info: rejected });
       ev({ type: "turn.ended", at: 3, ok: false, interrupted: false, messageIds: [first], durationMs: null, error: { subtype: "failed", message: "rate_limit" } });
@@ -558,6 +564,7 @@ describe("applyDriverEvent", () => {
     it("工具结果回来：满最短驻留后切回在思考；一轮结束清掉", () => {
       const id = post();
       setSession({ status: "running" });
+      ev({ type: "message.delivered", at: 1, messageIds: [id] });
       ev({ type: "message.processing", at: 1, messageIds: [id] });
       ev(tool("a", "Read", { file_path: "/x/y.ts" }));
       expect(last().step).toEqual({ type: "tool_use", name: "Read", input: { file_path: "/x/y.ts" } });
@@ -615,13 +622,16 @@ describe("applyDriverEvent", () => {
     it("进程退出、一轮出错：清掉；正在停止时照常记着，停完清掉", () => {
       const id = post();
       setSession({ status: "running" });
+      ev({ type: "message.delivered", at: 1, messageIds: [id] });
       ev({ type: "message.processing", at: 1, messageIds: [id] });
       ev(tool("a", "Bash"));
       ev({ type: "session.exited", at: 2, reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [id] });
       expect(last()).toMatchObject({ activity: "idle", step: null });
-      ev({ type: "message.processing", at: 3, messageIds: [id] });
+      const next = post("c2", "Try again");
+      ev({ type: "message.delivered", at: 3, messageIds: [next] });
+      ev({ type: "message.processing", at: 3, messageIds: [next] });
       ev(tool("b", "Bash"));
-      ev({ type: "turn.ended", at: 4, ok: false, interrupted: false, messageIds: [id], durationMs: 1, error: { subtype: "error_during_execution", message: "x" } });
+      ev({ type: "turn.ended", at: 4, ok: false, interrupted: false, messageIds: [next], durationMs: 1, error: { subtype: "error_during_execution", message: "x" } });
       expect(last()).toMatchObject({ activity: "idle", step: null });
     });
 
@@ -695,7 +705,8 @@ describe("applyDriverEvent", () => {
 
     it("重试用完、这一轮以出错结束：消息标失败带原因，重试信息清掉，回到空闲", () => {
       const id = post();
-      setStatus(id, "processing");
+      ev({ type: "message.delivered", at: 1, messageIds: [id] });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
       ev(retry(10));
       ev({
         type: "turn.ended",
@@ -1026,7 +1037,7 @@ describe("snapshot 和翻页", () => {
     expect(conv.messages[99]?.text).toBe("m104");
     expect(conv.hasMore).toBe(true);
     expect(snap.sessions).toEqual([
-      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, apiRetry: null, step: null, stepStartedAt: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 }, vendor: "claude", model: null, effort: null, lastEventAt: null },
+      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", activeTurnId: null, currentTool: null, rateLimit: null, apiRetry: null, step: null, stepStartedAt: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 }, vendor: "claude", model: null, effort: null, lastEventAt: null },
     ]);
 
     const page = ledger.messagesBefore(conversationId, conv.messages[0]!.id);

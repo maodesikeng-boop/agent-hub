@@ -21,10 +21,10 @@ import type { PmCaller, WorkersCtx } from "./types.ts";
 
 export type EndedWorker = { ended: WorkerDbRow; interrupted: boolean; nodeNote: string | null };
 
-export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts: { notifyGraph?: boolean; deliver?: string } & CancelWorkerPmNoticesOptions = {}): EndedWorker {
+export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts: { notifyGraph?: boolean; deliver?: string; recordEndedLine?: boolean } & CancelWorkerPmNoticesOptions = {}): EndedWorker {
   clearMaxTimeIn(w, p, worker.worker_conversation_id);
   const session = workerSession(w, worker);
-  const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
+  const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id }, "session_ended");
   w.awaitingBackground.take(session.id);
   p.after.push(() => { w.turnStarts.delete(session.id); });
   const t = w.now();
@@ -36,7 +36,7 @@ export function endWorkerIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, opts
   w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
   stopQueued(w, p, ended);
   cancelQueuedWorkerPmNoticesIn(w, p, ended, opts);
-  insertLine(w, p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: opts.deliver ?? null });
+  if (opts.recordEndedLine !== false) insertLine(w, p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: opts.deliver ?? null });
   const nodeNote = opts.notifyGraph === false ? null : (w.options.taskGraphs?.onWorkerEndedIn(p, ended.id) ?? null);
   return { ended, interrupted, nodeNote };
 }
@@ -198,7 +198,7 @@ export function endOpenWorkersIn(w: WorkersCtx, p: Pending, pmId: PmId): void {
     const session = workerSession(w, worker);
     const queued = w.db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued' ORDER BY id", worker.worker_conversation_id);
     for (const { id } of queued) w.messages.transition(p, id, "stopped");
-    const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
+    const interrupted = !notStarted(worker) && w.messages.stopIn(p, { ...session, conversationId: worker.worker_conversation_id }, "session_ended");
     if (!interrupted && !notStarted(worker) && (queued.length > 0 || session.status === "running")) {
       p.stops.push({ conversationId: worker.worker_conversation_id, sessionId: session.id });
     }
