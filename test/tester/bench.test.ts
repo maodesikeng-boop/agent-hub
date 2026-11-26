@@ -213,6 +213,19 @@ describe("openBench", () => {
     expect(fake[claude]).toBe("/code/test/fake-claude/fake-claude.ts");
     expect(fake.FAKE_CLAUDE_SCRIPT!.startsWith(root)).toBe(true);
   });
+
+  it("uses the Claude token file only when the local instance explicitly maps it", () => {
+    const root = scratch();
+    const c = config(root);
+    const secrets = join(root, "secrets");
+    mkdirSync(secrets);
+    writeFileSync(join(secrets, "claude-oauth-token"), "bench-only-token\n");
+    const input = { config: c, instance: local(c), codeDir: "/code", mode: "real" as const, platform: process.platform, baseEnv: { CLAUDE_CODE_OAUTH_TOKEN: "outside-token" } };
+
+    expect(localDaemonEnv(input).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    local(c).env.CLAUDE_CODE_OAUTH_TOKEN = "@secrets/claude-oauth-token";
+    expect(localDaemonEnv(input).CLAUDE_CODE_OAUTH_TOKEN).toBe("bench-only-token");
+  });
 });
 
 describe("bench configuration at command boundaries", () => {

@@ -49,9 +49,22 @@ Use the bench `HOME` for each sign-in. On the Mac, prefix the command with `HOME
 
 | Vendor | Sign in | Time |
 | --- | --- | --- |
-| Claude Code | **[Owner]** `claude setup-token` once; **[PM]** saves the token in `secrets/claude-oauth-token`, and both computers use it as `CLAUDE_CODE_OAUTH_TOKEN` | 2 min |
+| Claude Code | **[Owner]** Run `claude setup-token`. **[PM]** Connect the bench token as described below. | 2 min |
 | Codex | **[Owner]** `codex login --device-auth` on the Mac only | 1.5 min |
 | Antigravity | **[Owner]** run `agy` and paste the code on the Mac only | 1.5 min |
+
+To connect the Claude Code token on the Mac:
+
+1. Save the bench token to `secrets/claude-oauth-token` under the bench root with mode 0600.
+2. In `bench.json`, add this entry to the local instance's `env`:
+
+   ```json
+   "CLAUDE_CODE_OAUTH_TOKEN": "@secrets/claude-oauth-token"
+   ```
+
+3. If the local bench daemon is running, restart it so it reads the new environment.
+
+On the server, set `CLAUDE_CODE_OAUTH_TOKEN` in the test daemon's service environment and restart that daemon.
 
 The remaining vendor and computer pairs require no sign-in. Install every CLI as described in sections 2 and 3. The summary lists the skipped turns as accepted gaps.
 
