@@ -1,4 +1,5 @@
 // Runners for Feishu flows. Each sends as the owner through the driver and judges only what Feishu itself returns.
+import { z } from "zod";
 import { API_PATHS, type AccountStatusView, type Message } from "../../../src/shared/index.ts";
 import { BENCH_ASK_OPTIONS, BENCH_ASK_QUESTION, BENCH_ECHO_REPLY } from "../fake-script.ts";
 import { isRecalled, visibleText, type FeishuDriver, type FeishuMessage, type TestChat } from "../feishu-driver.ts";
@@ -8,10 +9,11 @@ import type { FlowContext, FlowRunner } from "../types.ts";
 import { ExternalServiceError } from "../verdict.ts";
 import { ensureBenchPm, recallCheck, runner, runTag, scenarioPm, waitFor, type Observation } from "./common.ts";
 
-/** Texts the hub posts when the computer owning a group is offline or not connected. */
 const OFFLINE_NOTICE = /现在离线|这会儿没接上/;
-/** Prefix of the note a reply card carries when the turn failed. */
-const FAILED_TURN_NOTE = "没回成";
+const TURN_FAILURE = /^[ \t]*没回成[：:]/m;
+const REPLY_FAILURE = /^[ \t]*(?:没办成|没回成)[：:]|（没送到[：:]/m;
+const CARD_RESULT = z.object({ status: z.string().optional(), config: z.object({ streaming_mode: z.boolean().optional() }).optional() });
+const FAILED_STATUS = new Set(["error", "failed", "failure"]);
 const GROUP_WAIT_MS = 60_000;
 const LEASE_WAIT_MS = 60_000;
 const CLOCK_SKEW_MS = 5_000;
@@ -24,15 +26,32 @@ function feishuOf(ctx: FlowContext): { driver: FeishuDriver; botAppId: string } 
 
 const fromBot = (botAppId: string) => (m: FeishuMessage) => m.senderType === "app" && m.senderId === botAppId;
 
-/** True unless the message is a card still in streaming mode. */
-export function isFinal(message: Pick<FeishuMessage, "msgType" | "content">): boolean {
-  if (message.msgType !== "interactive") return true;
+function cardResult(message: FeishuMessage): z.infer<typeof CARD_RESULT> | null {
+  if (message.msgType !== "interactive") return null;
   try {
-    return (JSON.parse(message.content) as { config?: { streaming_mode?: boolean } }).config?.streaming_mode !== true;
+    const result = CARD_RESULT.safeParse(JSON.parse(message.content));
+    return result.success ? result.data : null;
   } catch {
-    return true;
+    return null;
   }
 }
+
+function replyOutcome(message: FeishuMessage): "other" | "answer" | "failure" {
+  if (isRecalled(message)) return "other";
+  const card = cardResult(message);
+  if (message.msgType === "interactive" && (card === null || card.config?.streaming_mode === true)) return "other";
+  const text = visibleText(message);
+  if ((card?.status !== undefined && FAILED_STATUS.has(card.status)) || REPLY_FAILURE.test(text)) return "failure";
+  return text === "" || OFFLINE_NOTICE.test(text) ? "other" : "answer";
+}
+
+const terminalReply = (message: FeishuMessage) => replyOutcome(message) !== "other";
+const answer = (message: FeishuMessage) => replyOutcome(message) === "answer";
+function echoOrFailure(message: FeishuMessage): boolean {
+  const outcome = replyOutcome(message);
+  return outcome === "failure" || (outcome === "answer" && visibleText(message).includes(BENCH_ECHO_REPLY));
+}
+const replySummary = (message: FeishuMessage) => visibleText(message).slice(0, 120) || "card has a failed status";
 
 async function routerChat(driver: FeishuDriver): Promise<string> {
   const chat = (await driver.testChats()).find((c) => c.kind === "router");
@@ -59,12 +78,22 @@ async function botReply(driver: FeishuDriver, chatId: string, sent: string, botA
   return driver.waitForBotMessage(chatId, sent, (m) => fromBot(botAppId)(m) && done(m), timeoutMs).catch(() => null);
 }
 
-async function finishFeishu(ctx: FlowContext, obs: Observation, chatId: string, since: number, botAppId: string, timings: string[], afterMessageId?: string): Promise<FeishuMessage[]> {
+interface MessageWindow {
+  afterId?: string;
+  excludeIds?: ReadonlySet<string>;
+  expectFailure?: true;
+}
+
+async function finishFeishu(ctx: FlowContext, obs: Observation, chatId: string, since: number, botAppId: string, timings: string[], window: MessageWindow): Promise<FeishuMessage[]> {
   const raw = await ctx.feishu!.listMessages(chatId, Math.max(0, since - CLOCK_SKEW_MS));
-  const anchor = afterMessageId === undefined ? -1 : raw.findIndex((m) => m.messageId === afterMessageId);
-  const messages = anchor >= 0 ? raw.slice(anchor + 1) : raw;
+  const anchor = window.afterId === undefined ? -1 : raw.findIndex((m) => m.messageId === window.afterId);
+  const messages = raw.slice(anchor + 1).filter((m) => !window.excludeIds?.has(m.messageId));
   obs.json("messages.json", raw);
   recallCheck(obs, messages, botAppId);
+  if (!window.expectFailure) {
+    const failed = messages.filter((m) => fromBot(botAppId)(m) && replyOutcome(m) === "failure");
+    obs.check("no-error-card", failed.length === 0, failed.length === 0 ? "no error card" : `${failed.length} error card(s): ${replySummary(failed[0]!)}`);
+  }
   obs.save("timings.txt", `${timings.join("\n")}\n`);
   return messages;
 }
@@ -74,12 +103,12 @@ const dmRouter = runner(async (ctx, obs) => {
   const chatId = await routerChat(driver);
   const t0 = Date.now();
   const sent = await driver.sendAsUser(chatId, `Bench check ${runTag()}: answer with one short line.`);
-  const reply = await botReply(driver, chatId, sent, botAppId, (m) => !isRecalled(m), 90_000);
+  const reply = await botReply(driver, chatId, sent, botAppId, terminalReply, 90_000);
   obs.metrics.replyMs = reply === null ? -1 : Date.now() - t0;
   obs.check("reply-arrives", reply !== null, reply === null ? "no test bot message within 90 s" : `first reply after ${obs.metrics.replyMs} ms`);
-  const final = reply && (await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => m.messageId === reply.messageId && isFinal(m) && visibleText(m) !== ""), 60_000, ctx.signal));
-  obs.check("reply-final", final !== null, final === null ? "the reply card never left streaming mode with text" : `final: ${visibleText(final).slice(0, 80)}`);
-  await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent ${new Date(t0).toISOString()}`, `reply ${obs.metrics.replyMs} ms`], sent);
+  obs.check("reply-final", reply !== null && answer(reply), reply === null ? "no final reply with text" : `final: ${replySummary(reply)}`);
+  await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent ${new Date(t0).toISOString()}`, `reply ${obs.metrics.replyMs} ms`], { afterId: sent });
+  await saveLogs(ctx, obs, true, true);
 });
 
 const groupRoundTrip = runner(async (ctx, obs) => {
@@ -88,13 +117,13 @@ const groupRoundTrip = runner(async (ctx, obs) => {
   const chatId = await pmGroup(ctx, driver, pm.pmId);
   const t0 = Date.now();
   const sent = await driver.sendAsUser(chatId, `bench round trip ${runTag()}`);
-  const reply = await botReply(driver, chatId, sent, botAppId, (m) => isFinal(m) && visibleText(m).includes(BENCH_ECHO_REPLY), 60_000);
+  const reply = await botReply(driver, chatId, sent, botAppId, echoOrFailure, 60_000);
   obs.metrics.replyMs = reply === null ? -1 : Date.now() - t0;
-  const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent ${new Date(t0).toISOString()}`, `reply ${obs.metrics.replyMs} ms`], sent);
+  const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent ${new Date(t0).toISOString()}`, `reply ${obs.metrics.replyMs} ms`], { afterId: sent });
   const offline = messages.filter((m) => fromBot(botAppId)(m) && OFFLINE_NOTICE.test(visibleText(m)));
   obs.check("not-offline", offline.length === 0, offline.length === 0 ? "no offline notice" : `offline notice: ${visibleText(offline[0]!)}`);
   obs.check("reply-arrives", reply !== null && obs.metrics.replyMs <= 30_000, reply === null ? "no final reply within 60 s" : `reply card after ${obs.metrics.replyMs} ms`);
-  obs.check("reply-text", reply !== null && visibleText(reply).includes(BENCH_ECHO_REPLY), reply === null ? "no reply" : `card text: ${visibleText(reply).slice(0, 120)}`);
+  obs.check("reply-text", reply !== null && answer(reply) && visibleText(reply).includes(BENCH_ECHO_REPLY), reply === null ? "no reply" : `card text: ${replySummary(reply)}`);
   await saveLogs(ctx, obs, true, true);
 });
 
@@ -104,10 +133,10 @@ const failedTurnCard = runner(async (ctx, obs) => {
   const chatId = await pmGroup(ctx, driver, pm.pmId);
   const t0 = Date.now();
   const sent = await driver.sendAsUser(chatId, `bench failing turn ${runTag()}`);
-  const shown = await botReply(driver, chatId, sent, botAppId, (m) => !isRecalled(m) && visibleText(m).includes(FAILED_TURN_NOTE), 60_000);
+  const shown = await botReply(driver, chatId, sent, botAppId, (m) => replyOutcome(m) === "failure" && TURN_FAILURE.test(visibleText(m)), 60_000);
   obs.metrics.reasonMs = shown === null ? -1 : Date.now() - t0;
-  obs.check("reason-shown", shown !== null && obs.metrics.reasonMs <= 30_000, shown === null ? `no test bot message containing ${FAILED_TURN_NOTE} within 60 s` : `shown after ${obs.metrics.reasonMs} ms: ${visibleText(shown).slice(0, 120)}`);
-  await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent ${new Date(t0).toISOString()}`, `reason ${obs.metrics.reasonMs} ms`], sent);
+  obs.check("reason-shown", shown !== null && obs.metrics.reasonMs <= 30_000, shown === null ? "no failed turn note within 60 s" : `shown after ${obs.metrics.reasonMs} ms: ${replySummary(shown)}`);
+  await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent ${new Date(t0).toISOString()}`, `reason ${obs.metrics.reasonMs} ms`], { afterId: sent, expectFailure: true });
   await saveLogs(ctx, obs, true, false);
 });
 
@@ -128,12 +157,12 @@ const offlineInboxReplay = runner(async (ctx, obs) => {
     await local.start(mode);
   }
   const back = Date.now();
-  const reply = await botReply(driver, chatId, sent, botAppId, (m) => isFinal(m) && visibleText(m).includes(BENCH_ECHO_REPLY), 90_000);
+  const reply = await botReply(driver, chatId, sent, botAppId, echoOrFailure, 90_000);
   obs.metrics.replayMs = reply === null ? -1 : Date.now() - back;
-  obs.check("replayed", reply !== null && obs.metrics.replayMs <= 60_000, reply === null ? "no reply within 90 s of the restart" : `reply ${obs.metrics.replayMs} ms after the restart`);
+  obs.check("replayed", reply !== null && answer(reply) && obs.metrics.replayMs <= 60_000, reply === null ? "no reply within 90 s of the restart" : `reply after ${obs.metrics.replayMs} ms: ${replySummary(reply)}`);
   await new Promise((resolve) => setTimeout(resolve, 10_000));
-  const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`stopped and sent ${new Date(t0).toISOString()}`, `restarted ${new Date(back).toISOString()}`, `replay ${obs.metrics.replayMs} ms`], sent);
-  const replies = messages.filter((m) => fromBot(botAppId)(m) && visibleText(m).includes(BENCH_ECHO_REPLY));
+  const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`stopped and sent ${new Date(t0).toISOString()}`, `restarted ${new Date(back).toISOString()}`, `replay ${obs.metrics.replayMs} ms`], { afterId: sent });
+  const replies = messages.filter((m) => fromBot(botAppId)(m) && answer(m) && visibleText(m).includes(BENCH_ECHO_REPLY));
   obs.check("single-reply", replies.length === 1, `${replies.length} replies`);
   await saveLogs(ctx, obs, true, true);
 });
@@ -152,13 +181,14 @@ const reconnectCatchUp = runner(async (ctx, obs) => {
     await remote.start("real").catch((error: unknown) => { throw new ExternalServiceError("bench", `could not confirm the remote test daemon restarted: ${String(error)}`); });
   }
   const restarted = Date.now();
-  const reply = await botReply(driver, chatId, sent, botAppId, (m) => isFinal(m) && visibleText(m) !== "" && !OFFLINE_NOTICE.test(visibleText(m)), 120_000);
+  const reply = await botReply(driver, chatId, sent, botAppId, terminalReply, 120_000);
+  const elapsed = Date.now() - restarted;
   await new Promise((resolve) => setTimeout(resolve, 15_000));
-  const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent during restart ${new Date(t0).toISOString()}`, `restarted ${new Date(restarted).toISOString()}`], sent);
-  const texts = messages.filter((m) => fromBot(botAppId)(m) && visibleText(m) !== "").map(visibleText);
-  const duplicated = texts.find((t, i) => texts.indexOf(t) !== i);
-  obs.check("answered-once", reply !== null && duplicated === undefined, reply === null ? "no answer within 120 s of the restart" : duplicated ? `answered twice: ${duplicated.slice(0, 80)}` : `answered after ${Date.now() - restarted} ms`);
-  await saveLogs(ctx, obs, false, true);
+  const messages = await finishFeishu(ctx, obs, chatId, t0, botAppId, [`sent during restart ${new Date(t0).toISOString()}`, `restarted ${new Date(restarted).toISOString()}`], { afterId: sent });
+  const finals = messages.filter((m) => fromBot(botAppId)(m) && terminalReply(m));
+  const ok = reply !== null && answer(reply) && finals.length === 1;
+  obs.check("answered-once", ok, reply === null ? "no answer within 120 s of the restart" : `${finals.length} final response(s); first after ${elapsed} ms: ${replySummary(reply)}`);
+  await saveLogs(ctx, obs, true, true);
 });
 
 async function holder(ctx: FlowContext): Promise<string | null> {
@@ -181,15 +211,15 @@ const hubFailover = runner(async (ctx, obs) => {
   const chatId = await routerChat(driver);
   const t0 = Date.now();
   const sent = await driver.sendAsUser(chatId, `Bench failover ${runTag()}: answer with one short line.`);
-  const reply = await botReply(driver, chatId, sent, botAppId, (m) => isFinal(m) && visibleText(m) !== "", 120_000);
-  obs.check("dm-answered", reply !== null, reply === null ? "no answer while the local computer held the lease" : `answered after ${Date.now() - t0} ms`);
+  const reply = await botReply(driver, chatId, sent, botAppId, terminalReply, 120_000);
+  obs.check("dm-answered", reply !== null && answer(reply), reply === null ? "no answer while the local computer held the lease" : `response after ${Date.now() - t0} ms: ${replySummary(reply)}`);
   await remote.start("real");
   const started = Date.now();
   const returned = await waitFor(async () => ((await holder(ctx)) === remoteId ? true : undefined), LEASE_WAIT_MS, ctx.signal);
   leases.push(`after remote start: ${await holder(ctx)} (${Date.now() - started} ms)`);
   obs.check("lease-returned", returned !== null, returned === null ? `the lease did not return within ${LEASE_WAIT_MS / 1000} s` : "the remote computer holds the lease again");
   obs.save("leases.txt", `${leases.join("\n")}\n`);
-  await finishFeishu(ctx, obs, chatId, t0, botAppId, [], sent);
+  await finishFeishu(ctx, obs, chatId, t0, botAppId, [], { afterId: sent });
   await saveLogs(ctx, obs, true, true);
 });
 
@@ -202,7 +232,7 @@ const desktopAnswerSyncsCard = runner(async (ctx, obs) => {
   const existingIds = new Set((await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).map((m) => m.messageId));
   const userMessageId = await local.send(pm.conversationId, `bench ask ${runTag()}`);
   const ask = await waitFor(async () => (await messagesAfter(local.api, pm.conversationId, userMessageId)).find((m: Message) => m.meta?.needsUser === true), 60_000, ctx.signal);
-  const card = await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => !existingIds.has(m.messageId) && fromBot(botAppId)(m) && visibleText(m).includes(BENCH_ASK_QUESTION)), 60_000, ctx.signal);
+  const card = await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => !existingIds.has(m.messageId) && fromBot(botAppId)(m) && answer(m) && visibleText(m).includes(BENCH_ASK_QUESTION)), 60_000, ctx.signal);
   const cardMs = Date.now() - t0;
   obs.check("card-posted", card !== null && cardMs <= 30_000, card === null ? "no decision card in the PM group within 60 s" : `card after ${cardMs} ms`);
   if (card !== null) obs.save("card-before.json", `${card.content}\n`);
@@ -211,12 +241,12 @@ const desktopAnswerSyncsCard = runner(async (ctx, obs) => {
   } else {
     const answered = Date.now();
     await local.api.json("POST", API_PATHS.askAnswer(ask.id), { clientId: crypto.randomUUID(), optionIndex: 0, choice: BENCH_ASK_OPTIONS[0] });
-    const after = await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => m.messageId === card.messageId && m.updateTime > card.updateTime && visibleText(m).includes(BENCH_ASK_OPTIONS[0])), 30_000, ctx.signal);
+    const after = await waitFor(async () => (await driver.listMessages(chatId, Math.max(0, t0 - CLOCK_SKEW_MS))).find((m) => m.messageId === card.messageId && m.updateTime > card.updateTime && answer(m) && visibleText(m).includes(BENCH_ASK_OPTIONS[0])), 30_000, ctx.signal);
     if (after !== null) obs.save("card-after.json", `${after.content}\n`);
     const ms = after === null ? -1 : Date.now() - answered;
     obs.check("card-settled", after !== null && ms <= 15_000, after === null ? "the card was not updated in place with the chosen option within 30 s" : `updated ${ms} ms after the desktop answer`);
   }
-  await finishFeishu(ctx, obs, chatId, t0, botAppId, []);
+  await finishFeishu(ctx, obs, chatId, t0, botAppId, [], { excludeIds: existingIds });
 });
 
 export const feishuRunners: Readonly<Record<string, FlowRunner>> = {

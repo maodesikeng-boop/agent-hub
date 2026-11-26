@@ -16,6 +16,7 @@ const LEDGER_PATHS = ["migrations/**", "src/daemon/store/**", "src/daemon/daemon
 const consecutive = { kind: "consecutive", failures: TESTER_DEFAULT_CONSECUTIVE_FAILURES } as const;
 const rate = { kind: "rate", window: TESTER_RATE_WINDOW, minPasses: TESTER_RATE_MIN_PASSES } as const;
 const noRecall = { check: "no-recall", rule: "No message the test bot sent during the flow is deleted or shows as recalled." } as const;
+const noErrorCard = { check: "no-error-card", rule: "The test bot posts no error card in response to the scenario." } as const;
 const oneDevice = { feishu: "real", network: "relay", model: "real", devices: 1 } as const;
 const twoDevicesFake = { feishu: "real", network: "relay", model: "fake", devices: 2 } as const;
 const feishuNeeds = ["remote_instance", "feishu_bot", "feishu_driver"] as const;
@@ -57,11 +58,12 @@ export const FLOWS: readonly FlowSpec[] = [
     cadences: ["nightly", "rc", "pr"],
     triggers: FEISHU_PATHS,
     pass: [
-      { check: "reply-arrives", rule: "A test bot message follows the owner's message within 90 s." },
-      { check: "reply-final", rule: "The reply card is no longer streaming and has non-empty text." },
+      { check: "reply-arrives", rule: "A final test bot response follows the owner's message within 90 s." },
+      { check: "reply-final", rule: "The final response contains a successful answer." },
+      noErrorCard,
       noRecall,
     ],
-    evidence: ["messages.json", "timings.txt"],
+    evidence: ["messages.json", "timings.txt", "local-daemon.log", "remote-daemon.log"],
     tolerance: consecutive,
     timeoutMs: 120_000,
     escapes: [],
@@ -79,6 +81,7 @@ export const FLOWS: readonly FlowSpec[] = [
       { check: "not-offline", rule: "The hub forwards the message; no offline notice appears in the group." },
       { check: "reply-arrives", rule: "The PM's card appears within 30 s of the owner's message." },
       { check: "reply-text", rule: "The final card text equals the scripted reply." },
+      noErrorCard,
       noRecall,
     ],
     evidence: ["messages.json", "timings.txt", "local-daemon.log", "remote-daemon.log"],
@@ -117,6 +120,7 @@ export const FLOWS: readonly FlowSpec[] = [
       { check: "offline-notice", rule: "The hub posts one offline notice in the group within 30 s." },
       { check: "replayed", rule: "The PM replies within 60 s after the local computer is back online." },
       { check: "single-reply", rule: "The message is answered exactly once." },
+      noErrorCard,
       noRecall,
     ],
     evidence: ["messages.json", "timings.txt", "local-daemon.log", "remote-daemon.log"],
@@ -135,9 +139,10 @@ export const FLOWS: readonly FlowSpec[] = [
     triggers: FEISHU_PATHS,
     pass: [
       { check: "answered-once", rule: "Router answers the message sent during the restart exactly once within 120 s of the restart." },
+      noErrorCard,
       noRecall,
     ],
-    evidence: ["messages.json", "remote-daemon.log"],
+    evidence: ["messages.json", "timings.txt", "local-daemon.log", "remote-daemon.log"],
     tolerance: consecutive,
     timeoutMs: 240_000,
     escapes: [],
@@ -155,6 +160,8 @@ export const FLOWS: readonly FlowSpec[] = [
       { check: "lease-moved", rule: "The local computer holds the Feishu lease within 60 s of the remote stopping." },
       { check: "dm-answered", rule: "A direct message sent after the move is answered." },
       { check: "lease-returned", rule: "The lease returns to the remote within 60 s of its restart." },
+      noErrorCard,
+      noRecall,
     ],
     evidence: ["leases.txt", "messages.json", "local-daemon.log", "remote-daemon.log"],
     tolerance: consecutive,
@@ -173,6 +180,7 @@ export const FLOWS: readonly FlowSpec[] = [
     pass: [
       { check: "card-posted", rule: "A decision card appears in the PM's group within 30 s." },
       { check: "card-settled", rule: "Within 15 s of the desktop answer the same message is updated and shows the chosen option." },
+      noErrorCard,
       noRecall,
     ],
     evidence: ["messages.json", "card-before.json", "card-after.json"],
