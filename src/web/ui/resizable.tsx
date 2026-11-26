@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useRef } from "react";
-import { Group, Panel, Separator, usePanelRef, type Layout, type LayoutChangedMeta } from "react-resizable-panels";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef } from "react";
+import { Group, Panel, Separator, useGroupRef, usePanelRef, type Layout, type LayoutChangedMeta } from "react-resizable-panels";
 import { SHELL_GAP_PX } from "../limits.ts";
 import { cn } from "../lib/utils.ts";
 import { readRootRemPx } from "../shell-layout.ts";
@@ -40,8 +40,20 @@ export interface PaneHandleProps {
 
 type CommitListener = (layout: Layout, availablePx: number) => void;
 
-const PaneCommitContext = createContext<{
-  register: (id: string, onCommit: CommitListener) => () => void;
+interface PaneSpec {
+  id: string;
+  defaultRem?: number;
+  minRem?: number;
+  maxRem?: number;
+}
+
+export interface PreservedPaneInput extends PaneSpec {
+  continuingPx?: number;
+}
+
+const PaneGroupContext = createContext<{
+  registerCommit: (id: string, onCommit: CommitListener) => () => void;
+  registerSpec: (spec: PaneSpec) => () => void;
 } | null>(null);
 
 function measureAvailableAxisPx(groupEl: HTMLElement | null): number {
@@ -55,22 +67,162 @@ function measureAvailableAxisPx(groupEl: HTMLElement | null): number {
   return Math.max(0, totalWidth - seams);
 }
 
-/** Postcondition: lays its panes out side by side; panes with limits keep their pixel width when the window resizes. */
+function samePaneSet(prev: readonly string[], next: readonly string[]): boolean {
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    if (prev[i] !== next[i]) return false;
+  }
+  return true;
+}
+
+function layoutsClose(a: Layout, b: Layout): boolean {
+  const keys = Object.keys(b);
+  if (Object.keys(a).length !== keys.length) return false;
+  for (const k of keys) {
+    if (Math.abs((a[k] ?? 0) - (b[k] ?? 0)) > 1e-4) return false;
+  }
+  return true;
+}
+
+/**
+ * Computes percentage sizes after panes mount or unmount while keeping every continuing fixed pane at its previous pixel width.
+ * Newly fixed panes absorb overflow before continuing fixed panes, and flexible panes take any remaining space.
+ */
+export function computePreservedLayout(panes: readonly PreservedPaneInput[], availablePx: number, remPx: number): Layout | null {
+  if (!(availablePx > 0) || !(remPx > 0) || panes.length === 0) return null;
+  const mins = panes.map((p) => (p.minRem !== undefined ? Math.max(0, p.minRem * remPx) : 0));
+  const maxs = panes.map((p, i) => (p.maxRem !== undefined ? Math.max(mins[i]!, p.maxRem * remPx) : availablePx));
+  const isFixed = panes.map((p) => p.maxRem !== undefined);
+  const isContinuing = panes.map((p, i) => isFixed[i]! && p.continuingPx !== undefined);
+
+  const px = panes.map((p, i) => {
+    const raw = isContinuing[i] ? p.continuingPx! : p.defaultRem !== undefined ? p.defaultRem * remPx : mins[i]!;
+    return Math.min(maxs[i]!, Math.max(mins[i]!, raw));
+  });
+
+  const newlyFixedIdx = panes.map((_, i) => i).filter((i) => isFixed[i] && !isContinuing[i]);
+  const continuingIdx = panes.map((_, i) => i).filter((i) => isContinuing[i]);
+  const flexIdx = panes.map((_, i) => i).filter((i) => !isFixed[i]);
+
+  let diff = availablePx - px.reduce((sum, v) => sum + v, 0);
+  if (diff < 0) {
+    let excess = -diff;
+    for (const group of [newlyFixedIdx, continuingIdx, flexIdx]) {
+      for (const i of group) {
+        if (excess <= 0) break;
+        const room = px[i]! - mins[i]!;
+        if (room <= 0) continue;
+        const take = Math.min(room, excess);
+        px[i] = px[i]! - take;
+        excess -= take;
+      }
+    }
+    diff = availablePx - px.reduce((sum, v) => sum + v, 0);
+  }
+
+  if (diff > 0) {
+    let surplus = diff;
+    for (const group of [flexIdx, newlyFixedIdx, continuingIdx]) {
+      let open = group.filter((i) => maxs[i]! - px[i]! > 0);
+      while (surplus > 1e-6 && open.length > 0) {
+        const share = surplus / open.length;
+        let given = 0;
+        const next: number[] = [];
+        for (const i of open) {
+          const room = maxs[i]! - px[i]!;
+          const add = Math.min(room, share);
+          px[i] = px[i]! + add;
+          given += add;
+          if (maxs[i]! - px[i]! > 1e-6) next.push(i);
+        }
+        if (given <= 1e-9) break;
+        surplus -= given;
+        open = next;
+      }
+    }
+  }
+
+  const total = px.reduce((sum, v) => sum + v, 0);
+  if (!(total > 0)) return null;
+  const out: Layout = {};
+  for (let i = 0; i < panes.length; i++) {
+    out[panes[i]!.id] = (px[i]! / total) * 100;
+  }
+  return out;
+}
+
+/** Postcondition: lays its panes out side by side; panes with limits keep their pixel width when the window resizes or sibling panes mount and unmount. */
 export function PaneGroup({ id, className, children }: PaneGroupProps): React.ReactElement {
   const groupElRef = useRef<HTMLDivElement>(null);
+  const groupRef = useGroupRef();
   const listenersRef = useRef(new Map<string, CommitListener>());
+  const specsRef = useRef(new Map<string, PaneSpec>());
   const settledLayoutRef = useRef<Layout | null>(null);
+  const prevPaneIdsRef = useRef<string[] | null>(null);
+  const prevFixedIdsRef = useRef(new Set<string>());
+  const liveFixedPxRef = useRef(new Map<string, number>());
 
-  const register = useCallback((paneId: string, listener: CommitListener) => {
+  const registerCommit = useCallback((paneId: string, listener: CommitListener) => {
     listenersRef.current.set(paneId, listener);
     return () => {
       listenersRef.current.delete(paneId);
     };
   }, []);
 
-  const handleLayoutChange = useCallback((layout: Layout) => {
-    settledLayoutRef.current ??= layout;
+  const registerSpec = useCallback((spec: PaneSpec) => {
+    specsRef.current.set(spec.id, spec);
+    return () => {
+      if (specsRef.current.get(spec.id) === spec) {
+        specsRef.current.delete(spec.id);
+      }
+    };
   }, []);
+
+  const recordLiveState = useCallback((layout: Layout, paneIds: string[], availablePx: number) => {
+    prevPaneIdsRef.current = paneIds;
+    const nextFixed = new Set<string>();
+    const nextPx = new Map<string, number>();
+    for (const paneId of paneIds) {
+      const spec = specsRef.current.get(paneId);
+      if (spec?.maxRem === undefined) continue;
+      nextFixed.add(paneId);
+      const pct = layout[paneId];
+      if (pct !== undefined && availablePx > 0) {
+        nextPx.set(paneId, (pct / 100) * availablePx);
+      }
+    }
+    prevFixedIdsRef.current = nextFixed;
+    liveFixedPxRef.current = nextPx;
+  }, []);
+
+  const handleLayoutChange = useCallback(
+    (layout: Layout) => {
+      settledLayoutRef.current ??= layout;
+      const paneIds = Object.keys(layout);
+      const availablePx = measureAvailableAxisPx(groupElRef.current);
+      const prevIds = prevPaneIdsRef.current;
+
+      // react-resizable-panels restores cached or default layouts per panel-id set; override immediately before paint so continuing fixed panes never jump.
+      if (prevIds !== null && !samePaneSet(prevIds, paneIds) && availablePx > 0) {
+        const inputs: PreservedPaneInput[] = paneIds.map((paneId) => {
+          const spec = specsRef.current.get(paneId) ?? { id: paneId };
+          const continuingPx =
+            spec.maxRem !== undefined && prevFixedIdsRef.current.has(paneId) ? liveFixedPxRef.current.get(paneId) : undefined;
+          return { ...spec, continuingPx };
+        });
+        const preserved = computePreservedLayout(inputs, availablePx, readRootRemPx());
+        if (preserved !== null && !layoutsClose(layout, preserved)) {
+          recordLiveState(preserved, paneIds, availablePx);
+          const applied = groupRef.current?.setLayout(preserved) ?? preserved;
+          settledLayoutRef.current = applied;
+          return;
+        }
+      }
+
+      recordLiveState(layout, paneIds, availablePx);
+    },
+    [groupRef, recordLiveState],
+  );
 
   const handleLayoutChanged = useCallback((layout: Layout, meta: LayoutChangedMeta) => {
     const prev = settledLayoutRef.current;
@@ -87,10 +239,11 @@ export function PaneGroup({ id, className, children }: PaneGroupProps): React.Re
   }, []);
 
   return (
-    <PaneCommitContext.Provider value={{ register }}>
+    <PaneGroupContext.Provider value={{ registerCommit, registerSpec }}>
       <Group
         id={id}
         elementRef={groupElRef}
+        groupRef={groupRef}
         orientation="horizontal"
         className={cn("min-h-0 min-w-0 flex-1", className)}
         onLayoutChange={handleLayoutChange}
@@ -98,21 +251,26 @@ export function PaneGroup({ id, className, children }: PaneGroupProps): React.Re
       >
         {children}
       </Group>
-    </PaneCommitContext.Provider>
+    </PaneGroupContext.Provider>
   );
 }
 
 /** Postcondition: renders a resizable pane that never leaves [minRem, maxRem]. */
 export function Pane({ id, defaultRem, minRem, maxRem, onCommit, className, children }: PaneProps): React.ReactElement {
-  const ctx = useContext(PaneCommitContext);
+  const ctx = useContext(PaneGroupContext);
   const panelRef = usePanelRef();
   const committedRemRef = useRef<number | null>(null);
   const prevDefaultRemRef = useRef<number | undefined>(defaultRem);
   const latestPxRef = useRef<number>(0);
 
+  useLayoutEffect(() => {
+    if (!ctx) return;
+    return ctx.registerSpec({ id, defaultRem, minRem, maxRem });
+  }, [ctx, id, defaultRem, minRem, maxRem]);
+
   useEffect(() => {
     if (!ctx || !onCommit) return;
-    return ctx.register(id, (layout, availablePx) => {
+    return ctx.registerCommit(id, (layout, availablePx) => {
       const pct = layout[id];
       if (pct === undefined) return;
       const remPx = readRootRemPx();
@@ -131,10 +289,11 @@ export function Pane({ id, defaultRem, minRem, maxRem, onCommit, className, chil
       prevDefaultRemRef.current = undefined;
       return;
     }
-    if (prevDefaultRemRef.current !== defaultRem) {
+    const prev = prevDefaultRemRef.current;
+    if (prev !== defaultRem) {
       const wasCommitted = committedRemRef.current === defaultRem;
       prevDefaultRemRef.current = defaultRem;
-      if (!wasCommitted) {
+      if (prev !== undefined && !wasCommitted) {
         panelRef.current?.resize(`${defaultRem}rem`);
       }
     }

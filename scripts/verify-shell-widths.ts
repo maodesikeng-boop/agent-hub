@@ -27,12 +27,16 @@ interface ShellWidths {
 
 interface BrowserGlobal {
   document: {
+    activeElement: {
+      matches(selector: string): boolean;
+      getAttribute(name: string): string | null;
+    } | null;
     documentElement: { scrollWidth: number };
     querySelector(selector: string): { getAttribute(name: string): string | null; getBoundingClientRect(): { width: number } } | null;
     elementFromPoint(x: number, y: number): unknown;
   };
-  getComputedStyle(el: unknown): { fontSize: string };
-  localStorage: { setItem(key: string, value: string): void };
+  getComputedStyle(el: unknown): { fontSize: string; outlineStyle: string; outlineWidth: string };
+  localStorage: { setItem(key: string, value: string): void; removeItem(key: string): void };
   requestAnimationFrame(cb: () => void): void;
 }
 
@@ -138,6 +142,43 @@ export async function verifyShellWidths(browser: Browser, loginUrl: string, orig
       const draft = page.locator("#chat .composer-frame textarea");
       assert.equal(await draft.inputValue(), DRAFT, `${scale} back at ${WIDE_PX}px: the draft typed in one column is gone`);
       await draft.fill("");
+
+      if (scale === "md") {
+        // With the work panel open, narrowing across the wide -> stack threshold keeps the PM column width continuous.
+        await page.locator('#chat header button[aria-label^="Show work panel"]').click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+        await page.locator('[data-panel][id="panel"]').waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+        await page.setViewportSize({ width: 1249, height: HEIGHT_PX });
+        const widePanel = await settledWidths(page);
+        await page.setViewportSize({ width: 1248, height: HEIGHT_PX });
+        const stackPanel = await settledWidths(page);
+        assert.ok(
+          widePanel.listPx !== null && stackPanel.listPx !== null && Math.abs(stackPanel.listPx - widePanel.listPx) <= 2,
+          `1249px -> 1248px with work panel open jumped PM column from ${widePanel.listPx}px to ${stackPanel.listPx}px`,
+        );
+
+        // Keyboard Tab focus onto a standard Button renders a visible 2px solid focus outline.
+        await page.setViewportSize({ width: WIDE_PX, height: HEIGHT_PX });
+        const search = page.locator('#list input[type="search"]');
+        await search.waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+        await search.focus();
+        await page.keyboard.press("Shift+Tab");
+        const ring = await page.evaluate(() => {
+          const g = globalThis as unknown as BrowserGlobal;
+          const el = g.document.activeElement;
+          if (!el) return null;
+          const cs = g.getComputedStyle(el);
+          return {
+            label: el.getAttribute("aria-label"),
+            focusVisible: el.matches(":focus-visible"),
+            outlineStyle: cs.outlineStyle,
+            outlineWidth: cs.outlineWidth,
+          };
+        });
+        assert.ok(
+          ring !== null && ring.label === "New project manager" && ring.focusVisible && ring.outlineStyle === "solid" && Number.parseFloat(ring.outlineWidth) >= 2,
+          `Keyboard focus ring is hidden on ${ring?.label ?? "unknown"}: ${JSON.stringify(ring)}`,
+        );
+      }
     }
     assert.deepEqual(errors, [], `Shell width check hit page errors: ${errors.join("; ")}`);
   } finally {

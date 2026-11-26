@@ -124,22 +124,23 @@ function DesktopWorkbench({
                   <SurfaceOutlet id="list" />
                 </Pane>
                 <PaneHandle seam="joint" label="Resize project list" onReset={() => reset("list")} />
-                <Pane
-                  key="chat"
-                  id="chat"
-                  {...(stackPanel
-                    ? { defaultRem: 0, minRem: 0, maxRem: 0, className: "hidden" }
-                    : { minRem: chatMinRem, className: "shell-sheet shell-sheet-joined" })}
-                >
-                  <SurfaceOutlet id="conversation" />
-                </Pane>
+                {!stackPanel && (
+                  <Pane
+                    key="chat"
+                    id="chat"
+                    minRem={chatMinRem}
+                    className="shell-sheet shell-sheet-joined"
+                  >
+                    <SurfaceOutlet id="conversation" />
+                  </Pane>
+                )}
                 {panel !== null && !stackPanel && <PaneHandle seam="gap" label="Resize side panel" onReset={() => reset("panel")} />}
                 {panel !== null && (
                   <Pane
                     key="panel"
                     id="panel"
                     {...(stackPanel
-                      ? { className: "shell-sheet shell-sheet-joined min-w-0 flex-1" }
+                      ? { className: "shell-sheet shell-sheet-joined" }
                       : {
                           className: "shell-sheet",
                           defaultRem: widths.panel,
