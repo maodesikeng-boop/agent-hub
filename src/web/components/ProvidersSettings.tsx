@@ -215,16 +215,18 @@ function ProviderItemRow({
           </span>
         </div>
       )}
-      {opens !== null && jobFailed && job?.kind === "update" && (
+      {opens !== null && jobFailed && (hasLog || job?.kind === "update") && (
         <div className="info-actions pb-1">
           {hasLog && (
             <InfoAction aria-label={`${logOpen ? "Hide log" : "Show log"} for ${item.label}`} aria-expanded={logOpen} onClick={() => setLogOpen((v) => !v)}>
               {logOpen ? "Hide log" : "Show log"}
             </InfoAction>
           )}
-          <InfoAction aria-label={`Retry ${item.label}`} disabled={busyKey === `update:${item.vendor}`} onClick={onUpdate}>
-            Retry
-          </InfoAction>
+          {job?.kind === "update" && (
+            <InfoAction aria-label={`Retry ${item.label}`} disabled={busyKey === `update:${item.vendor}`} onClick={onUpdate}>
+              Retry
+            </InfoAction>
+          )}
         </div>
       )}
       {combinedError !== null && <RowError error={combinedError} />}
@@ -418,6 +420,48 @@ export function ProviderSignInBody({
     onStart: () => void handleStartInteractive(),
   };
 
+  const variants = selectedMethod?.kind === "browser_oauth" && (selectedMethod.variants?.length ?? 0) > 1 ? selectedMethod.variants! : null;
+  const oauthPanel = (
+    <BrowserOAuthPanel
+      {...panel}
+      remote={model.isRemoteTarget}
+      linkCopy={linkCopy}
+      manualFormId={manualFormId}
+      manualInput={manualInput}
+      onManualInputChange={setManualInput}
+      onSubmitManual={(e) => void handleSubmitManual(e)}
+    />
+  );
+  const methodBody =
+    selectedMethod?.kind === "api_key" ? (
+      <ApiKeyForm
+        {...panel}
+        label={selectedMethod.label}
+        placeholder={selectedMethod.placeholder}
+        value={apiKey}
+        onChange={setApiKey}
+        onSubmit={(e) => void handleSaveApiKey(e)}
+      />
+    ) : selectedMethod?.kind === "browser_oauth" ? (
+      variants !== null && variantId !== undefined ? (
+        <InfoTabs
+          label="Account type"
+          value={variantId}
+          options={variants.map((v) => ({ value: v.id, label: v.label }))}
+          onChange={(next) => {
+            if (activeFlow === null) selection.setVariantId(next);
+          }}
+          className="gap-4"
+        >
+          {oauthPanel}
+        </InfoTabs>
+      ) : (
+        oauthPanel
+      )
+    ) : selectedMethod?.kind === "device_code" ? (
+      <DeviceCodePanel {...panel} codeCopy={codeCopy} />
+    ) : null;
+
   return (
     <div className="grid grid-cols-1 gap-4">
       {targets !== null && (
@@ -430,53 +474,19 @@ export function ProviderSignInBody({
         />
       )}
 
-      {selection.visibleMethods.length > 1 && selectedMethod && (
+      {selection.visibleMethods.length > 1 && selectedMethod ? (
         <InfoTabs
           label="Sign-in method"
           value={selectedMethod.id}
           options={selection.visibleMethods.map((m) => ({ value: m.id, label: m.label }))}
           onChange={handleMethodChange}
-        />
+          className="gap-4"
+        >
+          {methodBody}
+        </InfoTabs>
+      ) : (
+        methodBody
       )}
-
-      {selectedMethod?.kind === "browser_oauth" &&
-        selectedMethod.variants &&
-        selectedMethod.variants.length > 1 &&
-        variantId !== undefined && (
-          <InfoTabs
-            label="Account type"
-            value={variantId}
-            options={selectedMethod.variants.map((v) => ({ value: v.id, label: v.label }))}
-            onChange={(next) => {
-              if (activeFlow === null) selection.setVariantId(next);
-            }}
-          />
-        )}
-
-      {selectedMethod?.kind === "api_key" && (
-        <ApiKeyForm
-          {...panel}
-          label={selectedMethod.label}
-          placeholder={selectedMethod.placeholder}
-          value={apiKey}
-          onChange={setApiKey}
-          onSubmit={(e) => void handleSaveApiKey(e)}
-        />
-      )}
-
-      {selectedMethod?.kind === "browser_oauth" && (
-        <BrowserOAuthPanel
-          {...panel}
-          remote={model.isRemoteTarget}
-          linkCopy={linkCopy}
-          manualFormId={manualFormId}
-          manualInput={manualInput}
-          onManualInputChange={setManualInput}
-          onSubmitManual={(e) => void handleSubmitManual(e)}
-        />
-      )}
-
-      {selectedMethod?.kind === "device_code" && <DeviceCodePanel {...panel} codeCopy={codeCopy} />}
     </div>
   );
 }

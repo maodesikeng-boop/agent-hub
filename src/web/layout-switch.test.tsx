@@ -480,7 +480,7 @@ describe("layout switch acceptance", () => {
     const value = "draft entered for test";
     if (method === "API key") {
       await user.click(await screen.findByRole("tab", { name: "API key" }));
-      input = await screen.findByLabelText("API key");
+      input = await screen.findByLabelText("API key", { selector: "input" });
     } else {
       await user.click(await screen.findByRole("button", { name: "Continue in browser" }));
       input = await screen.findByPlaceholderText("Paste code or redirect URL…");

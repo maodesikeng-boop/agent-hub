@@ -18,9 +18,8 @@ export function CapabilitiesSettings() {
   const project = projects.find((p) => p.pmId === pmId) ?? projects[0] ?? null;
   const scope: CapabilityScope = choice === "pm" && project !== null ? { kind: "pm", pmId: project.pmId } : { kind: choice === "router" ? "router" : "default" };
   return (
-    <>
-      <CapabilityScopeSwitch choice={scope.kind} project={project} projects={projects} customized={customized} onChoice={setChoice} onProject={setPmId} />
+    <CapabilityScopeSwitch choice={scope.kind} project={project} projects={projects} customized={customized} onChoice={setChoice} onProject={setPmId}>
       <CapabilitiesPanel key={capabilityScopeKey(scope)} scope={scope} lead={scope.kind === "pm" ? (project?.vendor ?? null) : null} onEditDefaults={() => setChoice("default")} />
-    </>
+    </CapabilityScopeSwitch>
   );
 }

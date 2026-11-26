@@ -144,7 +144,7 @@ export function SettingsDialog({
             </TabsList>
           </div>
           {sections.map(({ id, label }) => (
-            <TabsContent key={id} value={id} className="shell-sheet shell-sheet-joined flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none max-[719px]:rounded-none">
+            <TabsContent key={id} value={id} tabIndex={-1} className="shell-sheet shell-sheet-joined flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none max-[719px]:rounded-none">
               <header data-window-drag className="flex h-11 shrink-0 items-center gap-2 border-b border-border pr-3 pl-5">
                 <h2 className="min-w-0 flex-1 truncate text-title font-semibold">{label}</h2>
                 <DialogClose asChild>

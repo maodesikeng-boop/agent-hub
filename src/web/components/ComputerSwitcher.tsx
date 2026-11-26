@@ -71,8 +71,8 @@ function SwitcherList({
               <PlatformIcon platform={c.platform} size="inherit" className="size-4 shrink-0 text-muted-foreground" />
               <span className={cn("min-w-0 truncate", offline ? "text-muted-foreground" : "text-foreground")}>{c.name}</span>
               <StatusDot status={c.status} />
-              <span className="sr-only">{CONNECTION_TEXT[c.status]}</span>
               <span className="flex-1" />
+              <span className="info-val shrink-0 text-minor">{CONNECTION_TEXT[c.status]}</span>
               {c.badge > 0 && (
                 <span className="shrink-0 rounded-xs bg-brand-ink px-1.5 py-0.5 text-xs leading-none font-semibold text-primary-foreground tabular-nums">
                   {c.badge}

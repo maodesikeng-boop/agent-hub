@@ -6,7 +6,10 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serverInfoFor, type BrowserSessionInfo, type HeldResourceItem, type ResourcesSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
+import { capabilityProjectOptions } from "./capabilities-model.ts";
 import { createClient } from "./client.ts";
+import { CapabilityScopeSwitch } from "./components/CapabilityScopeSwitch.tsx";
+import { InfoTabs } from "./components/InfoTabs.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { ResourcesSettings } from "./components/ResourcesSettings.tsx";
 import { SettingsDialogFixture } from "./components/settings-dialog-fixture.tsx";
@@ -17,6 +20,7 @@ import { SettingsNavRow } from "./mobile/settings/SettingsNavRow.tsx";
 import type { NotifySettings } from "./notify.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makePm, makeSnapshot } from "./test-utils.ts";
 import { Dialog, DialogContent } from "./ui/dialog.tsx";
+import { Select, SelectTrigger, SelectValue } from "./ui/select.tsx";
 
 const notify: NotifySettings = { permission: "granted", enabled: false, setEnabled: vi.fn(async () => {}) };
 const MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36";
@@ -255,6 +259,84 @@ describe("T9 phone settings rows", () => {
     const row = screen.getByRole("button", { name: /Notifications/ });
     expect(row).toHaveClass("info-row", "pointer-coarse:min-h-11");
     expect(row).not.toHaveClass("min-h-12", "py-3");
+  });
+
+  it("shows the row band while a row is pressed, not only on hover", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/button\.info-row:active:not\(:disabled\),[^{]*\{\s*background: #f5f1eb;/);
+  });
+});
+
+describe("view switch tabs control a real panel", () => {
+  function expectWiredToPanel(tab: HTMLElement) {
+    const id = tab.getAttribute("aria-controls");
+    expect(id).not.toBeNull();
+    const panel = document.getElementById(id!);
+    expect(panel).not.toBeNull();
+    expect(panel).toHaveAttribute("role", "tabpanel");
+    expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+    return panel!;
+  }
+
+  it("renders the selected option's content inside the panel its tab points at", () => {
+    render(
+      <InfoTabs label="View" value="a" options={[{ value: "a", label: "First" }, { value: "b", label: "Second" }]} onChange={() => {}}>
+        <p>First content</p>
+      </InfoTabs>,
+    );
+    const panel = expectWiredToPanel(screen.getByRole("tab", { name: "First", selected: true }));
+    expect(panel).toContainElement(screen.getByText("First content"));
+    expectWiredToPanel(screen.getByRole("tab", { name: "Second" }));
+  });
+
+  it("wires every Capabilities scope tab to the panel that shows its capabilities", async () => {
+    render(<SettingsDialogFixture open onOpenChange={() => {}} notify={notify} devices={null} section="capabilities" />);
+    const scope = await screen.findByRole("tablist", { name: "Scope" });
+    const panel = expectWiredToPanel(within(scope).getByRole("tab", { selected: true }));
+    expect(panel).toContainElement(await screen.findByRole("searchbox", { name: "Search capabilities" }));
+    for (const tab of within(scope).getAllByRole("tab")) expectWiredToPanel(tab);
+  });
+});
+
+describe("Capabilities project picker on a narrow screen", () => {
+  const project = capabilityProjectOptions([makePm({ id: 1, name: "A project manager with a very long name that needs most of a phone row" })])[0]!;
+
+  it("lets the scope tabs keep their width and moves the picker to its own line instead of squeezing the name", () => {
+    render(
+      <CapabilityScopeSwitch choice="pm" project={project} projects={[project]} customized={[]} onChoice={() => {}} onProject={() => {}}>
+        <p>Project capabilities</p>
+      </CapabilityScopeSwitch>,
+    );
+    const tabs = screen.getByRole("tablist", { name: "Scope" });
+    const picker = screen.getByRole("button", { name: `Project: ${project.label}` });
+    const row = tabs.parentElement!;
+    expect(row).toContainElement(picker);
+    expect(row).toHaveClass("flex-wrap");
+    expect(tabs).not.toHaveClass("flex-1");
+    expect(tabs).toHaveClass("flex-auto");
+    expect(picker).toHaveClass("max-w-full");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("Project capabilities");
+  });
+});
+
+describe("keyboard focus on row controls", () => {
+  it("leaves the row-value menu free to draw its focus outline", () => {
+    render(
+      <Select value="md">
+        <SelectTrigger aria-label="Interface scale" variant="plain">
+          <SelectValue />
+        </SelectTrigger>
+      </Select>,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Interface scale" });
+    expect(trigger).toHaveClass("info-select");
+    // A utility outline-none outranks the .info-select:focus-visible outline in the components layer.
+    expect(trigger).not.toHaveClass("outline-none");
+  });
+
+  it("keeps the Settings category panel out of the Tab order", () => {
+    render(<SettingsDialogFixture open onOpenChange={() => {}} notify={notify} devices={null} section="general" />);
+    expect(screen.getByRole("tabpanel", { name: "General" })).toHaveAttribute("tabindex", "-1");
   });
 });
 

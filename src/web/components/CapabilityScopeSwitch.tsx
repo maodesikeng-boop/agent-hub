@@ -1,5 +1,5 @@
 import * as RadioGroup from "@radix-ui/react-radio-group";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { PmId } from "../../shared/index.ts";
 import type { CapabilityProjectOption } from "../capabilities-model.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
@@ -76,6 +76,7 @@ export function CapabilityScopeSwitch({
   customized,
   onChoice,
   onProject,
+  children,
 }: {
   choice: CapabilityScopeChoice;
   project: CapabilityProjectOption | null;
@@ -83,11 +84,18 @@ export function CapabilityScopeSwitch({
   customized: readonly PmId[] | undefined;
   onChoice: (choice: CapabilityScopeChoice) => void;
   onProject: (pmId: PmId) => void;
+  /** The selected scope's capabilities, shown in the panel the selected tab controls. */
+  children: ReactNode;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-4">
-      <InfoTabs label="Scope" value={choice} options={project === null ? CHOICES.slice(0, 2) : CHOICES} onChange={onChoice} className="min-w-0 flex-1" />
-      {choice === "pm" && project !== null && <ProjectPicker projects={projects} value={project} customized={customized} onChange={onProject} />}
-    </div>
+    <InfoTabs
+      label="Scope"
+      value={choice}
+      options={project === null ? CHOICES.slice(0, 2) : CHOICES}
+      onChange={onChoice}
+      aside={choice === "pm" && project !== null && <ProjectPicker projects={projects} value={project} customized={customized} onChange={onProject} />}
+    >
+      {children}
+    </InfoTabs>
   );
 }

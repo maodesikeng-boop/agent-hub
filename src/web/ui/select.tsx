@@ -40,10 +40,10 @@ export function SelectTrigger({
       data-slot="select-trigger"
       data-variant={variant}
       className={cn(
-        "touch-target inline-flex h-9 min-w-0 cursor-pointer items-center justify-between gap-2 text-body text-foreground transition-colors outline-none disabled:cursor-default disabled:opacity-50 pointer-coarse:h-11 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "touch-target inline-flex h-9 min-w-0 cursor-pointer items-center justify-between gap-2 text-body text-foreground transition-colors disabled:cursor-default disabled:opacity-50 pointer-coarse:h-11 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate [&_svg]:pointer-events-none [&_svg]:shrink-0",
         variant === "plain"
           ? "info-select -mr-2 h-7.5 w-auto max-w-56 gap-1 border-0 bg-transparent px-2 text-minor tabular-nums"
-          : "w-full border border-border-strong bg-background px-3 hover:border-[rgb(110_74_0_/_0.36)] focus-visible:field-focus data-[state=open]:field-focus aria-invalid:border-danger",
+          : "w-full border border-border-strong bg-background px-3 outline-none hover:border-[rgb(110_74_0_/_0.36)] focus-visible:field-focus data-[state=open]:field-focus aria-invalid:border-danger",
         className,
       )}
       {...props}
