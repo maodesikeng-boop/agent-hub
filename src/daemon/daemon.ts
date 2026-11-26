@@ -684,6 +684,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 
     const token = loadOrCreateUiToken(paths.uiTokenFile);
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
+    const webBuild = options.onSelfReload
+      ? createStagedWebBuild({ repoDir: REPO_DIR, staticDir, logPath: join(paths.logsDir, SELF_RELOAD_BUILD_LOG), log })
+      : null;
+    const initialReloadFailure = webBuild?.recover() ?? null;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
     const composer = createComposerService({ ledger, commands, files: createWorkspaceFiles() });
     const vendorSync = createVendorSyncService({
@@ -932,7 +936,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     checkPeerTransitions();
     if (options.onSelfReload) {
       const onSelfReload = options.onSelfReload;
-      const webBuild = createStagedWebBuild({ repoDir: REPO_DIR, staticDir, logPath: join(paths.logsDir, SELF_RELOAD_BUILD_LOG) });
       parts.selfReload = createSelfReload({
         busyReasons: () => {
           const reasons: string[] = [];
@@ -953,6 +956,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           return reasons;
         },
         subscribe: (listener) => ledger.onChange(listener),
+        initialFailure: initialReloadFailure,
         ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply() } : {}),
         restart: onSelfReload,
         ...(options.selfReloadDrainMaxMs !== undefined ? { drainMaxMs: options.selfReloadDrainMaxMs } : {}),
