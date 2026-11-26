@@ -17,7 +17,6 @@ import { useClient } from "../device-scope.tsx";
 import { errorText, formatTime, type ErrorLike } from "../format.ts";
 import { personaQueryKey } from "../pm-persona.ts";
 import { useHubQueryClient } from "../query-client.ts";
-import { useShellCarry } from "../shell-carry.tsx";
 import { Button } from "../ui/button.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
@@ -78,7 +77,7 @@ function EditMemoryFileRow({
     },
     qc,
   );
-  const [draft, setDraft] = useShellCarry<string | null>(`pm:${pmId}:memory-file:${file.name}`, null);
+  const [draft, setDraft] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<ErrorLike | null>(null);
 
   const text = draft ?? detail?.content ?? "";
@@ -278,8 +277,8 @@ function NewMemoryFileForm({
 }) {
   const client = useClient();
   const qc = useHubQueryClient();
-  const [name, setName] = useShellCarry(`pm:${pmId}:memory-new-name`, "");
-  const [content, setContent] = useShellCarry(`pm:${pmId}:memory-new-content`, "");
+  const [name, setName] = useState("");
+  const [content, setContent] = useState("");
   const [error, setError] = useState<ErrorLike | null>(null);
 
   const nameProblem = name === "" ? null : checkPmMemoryFileName(name);
@@ -376,9 +375,9 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
     },
     qc,
   );
-  const [editingName, setEditingName] = useShellCarry<string | null>(`pm:${pmId}:memory-editing`, null);
+  const [editingName, setEditingName] = useState<string | null>(null);
   const [confirmingName, setConfirmingName] = useState<string | null>(null);
-  const [adding, setAdding] = useShellCarry(`pm:${pmId}:memory-adding`, false);
+  const [adding, setAdding] = useState(false);
 
   if (data === undefined) {
     if (error && !isFetching) {

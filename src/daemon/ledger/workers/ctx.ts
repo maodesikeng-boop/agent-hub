@@ -1,3 +1,4 @@
+import { createWorkerAppApprovals } from "./app-approvals.ts";
 import type { AgentSessionRow, PmId, SessionId, WorkerId } from "../../../shared/domain.ts";
 import type { LedgerContext } from "../context.ts";
 import { fail } from "../context.ts";
@@ -60,6 +61,7 @@ export function createWorkersCtx(
     persona,
     projects,
     options,
+    appApprovals: createWorkerAppApprovals(() => w, ctx),
     sandboxApprovals: createWorkerSandboxApprovals(() => w, ctx),
     turnStarts: new Map(),
     maxTimeTimers: new Map(),

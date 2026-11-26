@@ -234,7 +234,7 @@ Required evidence to mark Phase 1 done:
 
 #### Phase 2: Squash-merge branch cleanup, resource inspector API, Resources UI panel, and `REVIEW.md`
 
-Scope: Implement `isBranchSquashMergedToMain`, `listLocalBranches`, and `deleteLocalBranch` in `src/daemon/git/git.ts`, update `worktree-cleanup.ts`, implement `branch-cleanup.ts`, `decisions.ts`, `inspector.ts`, `routes-resources.ts`, wire `daemon.ts` and `ui-server/server.ts`, update `docs/ui-standard.md` (section 25), implement `resources-model.ts`, `ResourcesSettings.tsx`, `ResourcesPage.tsx`, `SettingsDialog.tsx`, `MobileSettings.tsx`, `route.ts`, `settings-nav.ts`, and `client.ts`, add selector cache tests in `src/web/selectors-cache.test.ts`, and append the two path-triggered rules to `REVIEW.md`.
+Scope: Implement `isBranchSquashMergedToMain`, `listLocalBranches`, and `deleteLocalBranch` in `src/daemon/git/git.ts`, update `worktree-cleanup.ts`, implement `branch-cleanup.ts`, `decisions.ts`, `inspector.ts`, `routes-resources.ts`, wire `daemon.ts` and `ui-server/server.ts`, update `docs/ui-standard.md` (section 25), implement `resources-model.ts`, `ResourcesSettings.tsx`, `ResourcesPage.tsx`, `SettingsDialog.tsx`, `MobileSettings.tsx`, `route.ts`, workbench navigation, and `client.ts`, add selector cache tests in `src/web/selectors-cache.test.ts`, and append the two path-triggered rules to `REVIEW.md`.
 
 Required evidence to mark Phase 2 done:
 

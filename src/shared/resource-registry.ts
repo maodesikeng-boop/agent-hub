@@ -44,6 +44,8 @@ import {
   ROUTER_ITEMS_TERMINAL_MAX_ROWS,
   ROUTER_ITEM_RETENTION_DAYS,
   SANDBOX_APPROVALS_RETENTION_DAYS,
+  APP_APPROVALS_RETENTION_DAYS,
+  APP_APPROVALS_TERMINAL_MAX_ROWS,
   SANDBOX_APPROVALS_TERMINAL_MAX_ROWS,
   SENT_FILES_DISK_MAX_BYTES,
   SENT_FILES_RETENTION_DAYS,
@@ -181,6 +183,11 @@ const SANDBOX_APPROVAL_LIMITS: readonly ResourceLimitRef[] = [
   limit("SANDBOX_APPROVALS_TERMINAL_MAX_ROWS", SANDBOX_APPROVALS_TERMINAL_MAX_ROWS, "rows"),
 ];
 
+const APP_APPROVAL_LIMITS: readonly ResourceLimitRef[] = [
+  limit("APP_APPROVALS_RETENTION_DAYS", APP_APPROVALS_RETENTION_DAYS, "days"),
+  limit("APP_APPROVALS_TERMINAL_MAX_ROWS", APP_APPROVALS_TERMINAL_MAX_ROWS, "rows"),
+];
+
 const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("messages", "growing", "src/daemon/ledger/messages.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/db-table-retention.ts", "automatic", [
     ...WORKER_RETENTION_LIMITS,
@@ -248,6 +255,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("user_blocker_steps", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
   table("user_blocker_workers", "growing", "src/daemon/ledger/user-blockers.ts", "src/daemon/ledger/user-blockers.ts", "automatic", USER_BLOCKER_LIMITS),
   table("worker_sandbox_approvals", "growing", "src/daemon/ledger/sandbox-approvals.ts", "src/daemon/ledger/sandbox-approvals.ts, src/daemon/ledger/db-table-retention.ts", "automatic", SANDBOX_APPROVAL_LIMITS),
+  table("worker_app_approvals", "growing", "src/daemon/ledger/app-approvals.ts", "src/daemon/ledger/app-approvals.ts", "automatic", APP_APPROVAL_LIMITS),
   table("loaded_skills", "growing", "src/daemon/ledger/loaded-skills.ts", "src/daemon/ledger/loaded-skills.ts", "automatic", [
     limit("SKILL_CARRYOVER_RECORDS_MAX", SKILL_CARRYOVER_RECORDS_MAX, "rows"),
   ]),
@@ -274,6 +282,9 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("conversation_purges", "retained_metadata", "src/daemon/ledger/worker-retention.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("agent_sessions", "retained_metadata", "src/daemon/ledger/sessions.ts", "src/daemon/ledger/persona.ts, src/daemon/ledger/router.ts", "on_archive_or_delete"),
   table("session_checklists", "retained_metadata", "src/daemon/ledger/checklist.ts", "migrations/0052_session_checklists.sql", "automatic", [
+    limit("CHECKLIST_MAX_ITEMS", CHECKLIST_MAX_ITEMS, "entries"),
+  ]),
+  table("session_checklist_turns", "retained_metadata", "src/daemon/ledger/checklist.ts", "migrations/0054_system_wakeups.sql", "automatic", [
     limit("CHECKLIST_MAX_ITEMS", CHECKLIST_MAX_ITEMS, "entries"),
   ]),
   table("workers", "retained_metadata", "src/daemon/ledger/workers.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),

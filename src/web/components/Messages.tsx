@@ -1,4 +1,4 @@
-import { CalendarClock, Check, ChevronRight, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
+import { Bell, CalendarClock, Check, ChevronRight, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, MessageSquare, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
@@ -17,6 +17,7 @@ import {
   type ConversationId,
   type Deliverable,
   type Message,
+  type PmWakeupSource,
   type MessageId,
   type PersonaChangeId,
   type WorkerMessageMeta,
@@ -41,6 +42,7 @@ import { TurnProgress } from "./TurnProgress.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { AppApprovalCard } from "./AppApprovalCard.tsx";
 import { SandboxApprovalCard } from "./SandboxApprovalCard.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { WorkerReportText } from "./WorkerReportText.tsx";
@@ -143,7 +145,16 @@ export const AgentText = memo(function AgentText({
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
     >
-      {blocker?.sandboxApprovalRef !== undefined ? (
+      {blocker?.appApprovalRef !== undefined ? (
+        <AppApprovalCard
+          {...blocker.appApprovalRef}
+          text={message.text}
+          answered={blocker.answered === true}
+          chosenOption={blocker.chosenOption}
+          closed={blocker.closed === true}
+          className="w-full max-w-[min(100%,36rem)]"
+        />
+      ) : blocker?.sandboxApprovalRef !== undefined ? (
         <SandboxApprovalCard
           approvalId={blocker.sandboxApprovalRef.approvalId}
           text={message.text}
@@ -270,7 +281,7 @@ export const TurnView = memo(
             m.sender === "agent" ? (
               <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} leanReports={leanReports} />
             ) : (
-              <SystemNotice key={m.id} message={m} actions={actions} revertedChanges={reverted} inTurn />
+              <TurnNotice key={m.id} message={m} identity={identity} actions={actions} revertedChanges={reverted} />
             ),
           )}
           {liveText !== "" && (
@@ -440,6 +451,7 @@ function CollapsibleEvent({
   event,
   className,
   notice = false,
+  singleLine = false,
   children,
 }: {
   icon: Icon;
@@ -448,6 +460,7 @@ function CollapsibleEvent({
   event: string;
   className: string;
   notice?: boolean;
+  singleLine?: boolean;
   children: React.ReactNode | null;
 }) {
   const [open, setOpen] = useState(false);
@@ -455,7 +468,7 @@ function CollapsibleEvent({
     <Collapsible open={open} onOpenChange={setOpen} className={cn("overflow-hidden rounded-sm bg-panel", className)} data-side="left" data-notice={notice || undefined} data-event={event}>
       <CollapsibleTrigger aria-label={text} className={cn(EVENT_ROW, "group", EVENT_TRIGGER)} disabled={children === null}>
         <EventIcon icon={icon} />
-        <span className={EVENT_TEXT}>
+        <span className={cn(EVENT_TEXT, singleLine && !open && "truncate")} title={singleLine && !open ? text : undefined}>
           <EventLabel label={tag} />
           {text}
         </span>
@@ -472,6 +485,17 @@ function ScheduleRun({ text }: { text: string }) {
   const body = (match?.[2] ?? text).trim();
   return (
     <CollapsibleEvent icon={Clock} tag="Scheduled" text={title} event="schedule.run" className="mt-6">
+      {body === "" ? null : <p className={cn("leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]", SECONDARY)}>{body}</p>}
+    </CollapsibleEvent>
+  );
+}
+
+function WakeupNotice({ text, source, inTurn }: { text: string; source: PmWakeupSource; inTurn: boolean }) {
+  const match = /^【([^】]*)】\s*([\s\S]*)$/.exec(text);
+  const title = match?.[1] ?? text;
+  const body = (match?.[2] ?? "").trim();
+  return (
+    <CollapsibleEvent icon={Bell} tag={source === "router" ? "Router" : "Task graph"} text={title} event="pm.wakeup" singleLine className={inTurn ? "" : "mt-6"}>
       {body === "" ? null : <p className={cn("leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]", SECONDARY)}>{body}</p>}
     </CollapsibleEvent>
   );
@@ -549,6 +573,7 @@ function SystemNotice({
   const event = systemEventOf(message);
   const text = systemNoticeText(message);
   if (event?.event === "schedule.run") return <ScheduleRun text={text} />;
+  if (event?.event === "pm.wakeup") return <WakeupNotice text={text} source={event.source} inTurn={inTurn} />;
   if (event?.event === "session.renewed") return <SessionRenewed text={text} handover={message.text} />;
   const danger = event?.event === "schedule.failed" || event?.event === "handover.failed";
   return (
@@ -619,6 +644,18 @@ function WorkerItem({
       <WorkerNoticeRow line={line} onOpen={onOpen} />
     </EventStripShell>
   );
+}
+
+function TurnNotice({ message, identity, actions, revertedChanges }: {
+  message: Message;
+  identity: AgentIdentity;
+  actions: MessageActions;
+  revertedChanges: ReadonlySet<PersonaChangeId>;
+}) {
+  const line = workerEventOf(message);
+  return line === null
+    ? <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} inTurn />
+    : <WorkerItem line={line} look={identity.look} createdAt={message.createdAt} head={false} actions={actions} />;
 }
 
 export const MessageBubble = memo(

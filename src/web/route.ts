@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useState } from "react";
 import { isDeviceId, type ConversationId, type DeviceId, type PmId } from "../shared/index.ts";
 import { INFO_PAGES, isInfoPage, type InfoPage } from "./info-rows.ts";
 
@@ -61,32 +60,4 @@ export function parseRoute(hash: string): Route | null {
   }
   if (rawPage !== undefined) return null;
   return match[2] === "c" ? { view: "conversation", id: n, ...on } : { view: "worker", id: n, ...on };
-}
-
-const sameRoute = (a: Route | null, b: Route | null) => (a === null || b === null ? a === b : routeHash(a) === routeHash(b));
-
-export function useRoute() {
-  const [route, setRoute] = useState<Route | null>(() => parseRoute(window.location.hash));
-  useEffect(() => {
-    const sync = () => setRoute((prev) => {
-      const next = parseRoute(window.location.hash);
-      return sameRoute(prev, next) ? prev : next;
-    });
-    window.addEventListener("popstate", sync);
-    window.addEventListener("hashchange", sync);
-    return () => {
-      window.removeEventListener("popstate", sync);
-      window.removeEventListener("hashchange", sync);
-    };
-  }, []);
-  const go = useCallback((next: Route | null, replace: boolean, sibling = false) => {
-    setRoute((prev) => (sameRoute(prev, next) ? prev : next));
-    if (window.location.hash === (next === null ? "" : routeHash(next))) return;
-    const url = `${window.location.pathname}${window.location.search}${next === null ? "" : routeHash(next)}`;
-    if (replace) window.history.replaceState(sibling ? window.history.state : null, "", url);
-    else window.history.pushState({ hub: true, previous: window.location.hash }, "", url);
-  }, []);
-  const navigate = useCallback((next: Route, sibling = false) => go(next, sibling, sibling), [go]);
-  const replace = useCallback((next: Route | null) => go(next, true), [go]);
-  return { route, navigate, replace };
 }

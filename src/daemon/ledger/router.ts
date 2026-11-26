@@ -1,3 +1,4 @@
+import { systemWakeupKey } from "./system-wakeups.ts";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -10,7 +11,7 @@ import type {
   UpdateRouterSettingsRequest,
 } from "../../shared/api.ts";
 import { deliverablesOf, type Deliverable } from "../../shared/deliverables.ts";
-import { askOf, extractAskCard, userMessageDedupeKey } from "../../shared/domain.ts";
+import { askOf, extractAskCard } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -307,8 +308,8 @@ export function createLedgerRouter(
       pmId,
     )!.n;
 
-  const resolveWakeupDedupeKey = (conversationId: ConversationId, itemId: RouterItemId, clientId: string): string =>
-    userMessageDedupeKey(conversationId, `router-resolve:${itemId}:${clientId}`);
+  const resolveWakeupRef = (itemId: RouterItemId, clientId: string): string =>
+    `router-resolve:${itemId}:${clientId}`;
 
   const prepareIndependentAskIn = (
     p: Pending,
@@ -517,7 +518,7 @@ export function createLedgerRouter(
       if (row.status === "resolved") {
         const existingRes = parseJsonOr<RouterResolution | null>(row.resolution_json, null);
         if (existingRes?.clientId === clientId) {
-          const dedupeKey = resolveWakeupDedupeKey(row.conversation_id, row.id, clientId);
+          const dedupeKey = systemWakeupKey(row.conversation_id, "router", resolveWakeupRef(row.id, clientId));
           const existingMsg = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
           return {
             item: toRouterItem(row),
@@ -581,9 +582,10 @@ export function createLedgerRouter(
       const wakeLines = [`【Router 拍板】关于「${row.question ?? ""}」`];
       if (chosenOption !== null) wakeLines.push(`定案：${chosenOption}`);
       if (note !== "") wakeLines.push(`补充说明：${note}`);
-      const wakeMsg = messages.enqueueWakeupUserMessageIn(p, {
+      const wakeMsg = messages.enqueueWakeupIn(p, {
         conversationId: row.conversation_id,
-        dedupeKey: resolveWakeupDedupeKey(row.conversation_id, row.id, clientId),
+        source: "router",
+        ref: resolveWakeupRef(row.id, clientId),
         text: wakeLines.join("\n"),
       });
 

@@ -10,11 +10,13 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Work panel design](work-panel-design.md): The wide right panel with `Active`, `Completed`, and `Info` tabs and Worker detail, the paged Completed feed, per-graph switch to a vertical list, and what replaces the old side panel and PM settings panel.
 - [Top-bar Router input and reply popover](router-topbar-design.md): Centered translucent-to-solid quick Router input in the `40px` desktop wood top bar, non-modal reply popover with follow-up chat and `Expand` handoff, shared Router command dispatch and turn rendering, and cross-platform window-drag boundaries.
 - [Workbench shell design](workbench-shell-design.md): Rail, Project Manager column with pins, resizable columns, work panel integration, narrow-window tiers, phone tab bar, and a visual language that keeps pixel art for characters while controls use smooth lines.
+- [Layout switch without a rebuild](layout-switch-design.md): Surfaces rendered once above the layout and moved between outlets, one navigation state for the page, settings, and the page behind settings, and the acceptance scenarios for crossing the one-column width.
 
 ## Architecture and security
 
 - [Worker write and read scope](write-scope.md): Write boundaries across protected roots and least-privilege data-directory read and socket isolation across macOS, Linux, and Windows.
 - [User-confirmed Worker mode without outer sandbox](worker-no-outer-sandbox-design.md): Computer Use eligibility checks, human-only single-run confirmation cards, vendor built-in sandbox declarations, and launch-time fail-closed enforcement.
+- [Computer Use app approval cards](computer-use-app-approval-design.md): Per-app workbench confirmation for Computer Use Workers, the vendor-neutral approval gate, Worker-run grants, and how cards end.
 - [External capabilities](pm-capabilities-design.md): Router, PM, and Worker policies for skills, MCP servers, and connectors, Worker `inherit`, `none`, and `custom` modes, vendor isolation levels, and the project setup command API.
 - [Read-only Worker design](readonly-worker-design.md): Vendor-neutral `ReadonlyPolicy`, OS-level read-only sandboxes, MCP `readOnlyHint` filtering, and credential deny lists.
 - [Linux sandbox design](linux-sandbox-design.md): Outer `bubblewrap` (`bwrap`) isolation, PID and mount namespaces, secret-glob scanning, signal routing, and Ubuntu 24.04+ AppArmor setup.
@@ -29,6 +31,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Reliable turn completion](turn-completion-design.md): SQLite turn-outcome receipts, ordered per-session settlement, bounded retries after write failures, send holds, and receipt-aware restart recovery.
 - [In-chat progress checklist](progress-checklist-design.md): Normalized vendor checklists, launch switches for hidden todo tools, append-only checklist messages, per-step process grouping, and live action timing in the `Worked for` slot.
 - [Worker state accuracy and operations](worker-ops-fix-design.md): Worktree branch reconciliation, shared Worker list/show states, cross-vendor context-token preservation, stale Worker PM notice suppression, Task Graph step agent display, live `hub models` quota tracking, and background command inspection.
+- [System wakeups and per-turn checklists](system-wakeup-turns-design.md): PM wakeups stored as system notices, placing system inputs where the agent read them, per-turn checklist slices, and the vendor checklist prompt rule.
 - [Lost Worker briefs and stale notices](lost-brief-stale-notice-design.md): Daemon shutdown never cancels unread messages in any vendor driver, restart resends interrupted turns or tells the PM, failed first launches show their error, one pre-write currency check for delivery notes and timeout reminders, `graph done` ending the parked Worker, and per-model effort validation.
 
 ## Desktop and distribution

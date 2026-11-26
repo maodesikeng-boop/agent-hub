@@ -34,6 +34,7 @@ import type {
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { PmCapabilitiesStart } from "./pm-capabilities.ts";
 import type { SandboxApprovalId, SandboxApprovalSummary } from "./sandbox-approval.ts";
+import type { AppApprovalId, AppApprovalSummary } from "./app-approval.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { PmLookSetting } from "./slimes.ts";
 import type { WorkerLineSummary } from "./snapshot.ts";
@@ -74,6 +75,7 @@ export const API_PATHS = {
   messageTurnReply: (messageId: MessageId) => `/api/messages/${messageId}/turn-reply`,
   recheckUserBlocker: (id: UserBlockerId) => `/api/user-blockers/${id}/recheck`,
   decideSandboxApproval: (id: SandboxApprovalId) => `/api/sandbox-approvals/${id}/decide`,
+  decideAppApproval: (id: AppApprovalId) => `/api/app-approvals/${id}/decide`,
   uploads: "/api/uploads",
   upload: (id: string, name: string) => `/api/uploads/${id}/${encodeURIComponent(name)}`,
   sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
@@ -183,6 +185,7 @@ export interface StateSnapshot {
   router: RouterSlice;
   activeTaskGraphs: TaskGraph[];
   pendingSandboxApprovals?: SandboxApprovalSummary[];
+  pendingAppApprovals?: AppApprovalSummary[];
   server: ServerInfo;
   bootId?: string;
 }

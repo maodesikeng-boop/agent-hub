@@ -47,7 +47,7 @@ type QuickRouterProps = Omit<RouterTopBarProps, "hidden">;
 type Field = "top" | "reply";
 
 /**
- * Precondition: rendered as the first child of DesktopWorkbench inside QueryClientProvider.
+ * Precondition: rendered once as the "topbar" workbench surface inside QueryClientProvider; DesktopWorkbench places it above the rail and columns.
  * Postcondition: renders the 40px wood .shell-topbar[data-window-drag]; when hidden is false, centers the translucent-to-solid Message Router input and manages its non-modal reply popover without triggering sibling pane re-renders.
  */
 export const RouterTopBar = memo(function RouterTopBar({ hidden, ...quick }: RouterTopBarProps) {

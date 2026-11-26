@@ -10,6 +10,7 @@ import {
 import { deliverablesOf, type Deliverable } from "./deliverables.ts";
 import type { ReviewTarget, StoredReviewVerdict } from "./review.ts";
 import type { SandboxApprovalId, SandboxApprovalRef } from "./sandbox-approval.ts";
+import { APP_APPROVAL_RISK_LEVELS, type AppApprovalRef } from "./app-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
@@ -235,6 +236,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return `${meta.workerId}:${meta.maxTimeMs}`;
       case "task_graph.ready_to_finish":
         return `${meta.graphId}:${meta.seq}`;
+      case "pm.wakeup":
+        return meta.ref;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -256,6 +259,7 @@ export const SYSTEM_EVENTS = [
   "driver.warning",
   "worker.max_time_exceeded",
   "task_graph.ready_to_finish",
+  "pm.wakeup",
 ] as const;
 
 export type SystemMessageMeta =
@@ -273,7 +277,11 @@ export type SystemMessageMeta =
   | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
   | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number; deadlineAt?: number }
-  | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean };
+  | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean }
+  | { event: "pm.wakeup"; source: PmWakeupSource; ref: string };
+
+export const PM_WAKEUP_SOURCES = ["task_graph", "router", "app_approval"] as const;
+export type PmWakeupSource = (typeof PM_WAKEUP_SOURCES)[number];
 
 export interface GateRef {
   graphId: TaskGraphId;
@@ -293,6 +301,7 @@ export type AskMeta = {
   gateRef?: GateRef;
   blockerRef?: BlockerRef;
   sandboxApprovalRef?: SandboxApprovalRef;
+  appApprovalRef?: AppApprovalRef;
   chosenOption?: string;
   answerNote?: string;
   closed?: true;
@@ -337,6 +346,21 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     "approvalId" in sandbox && typeof sandbox.approvalId === "number" && "workerId" in sandbox && typeof sandbox.workerId === "number"
     ? { approvalId: sandbox.approvalId, workerId: sandbox.workerId }
     : undefined;
+  const rawApp = message.meta.appApprovalRef;
+  const appApprovalRef: AppApprovalRef | undefined =
+    rawApp !== null && typeof rawApp === "object" &&
+    "approvalId" in rawApp && typeof rawApp.approvalId === "number" &&
+    "workerId" in rawApp && typeof rawApp.workerId === "number" &&
+    "appId" in rawApp && typeof rawApp.appId === "string" &&
+    "appName" in rawApp && typeof rawApp.appName === "string"
+      ? {
+          approvalId: rawApp.approvalId, workerId: rawApp.workerId, appId: rawApp.appId, appName: rawApp.appName,
+          riskLevel: APP_APPROVAL_RISK_LEVELS.find((risk) => "riskLevel" in rawApp && risk === rawApp.riskLevel) ?? null,
+          ...("workerTitle" in rawApp && typeof rawApp.workerTitle === "string" ? { workerTitle: rawApp.workerTitle } : {}),
+          ...("warning" in rawApp && typeof rawApp.warning === "string" ? { warning: rawApp.warning } : {}),
+          ...("expiresAt" in rawApp && typeof rawApp.expiresAt === "number" ? { expiresAt: rawApp.expiresAt } : {}),
+        }
+      : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
   const answerNote = typeof message.meta.answerNote === "string" && message.meta.answerNote !== "" ? message.meta.answerNote : undefined;
   const deliverables = deliverablesOf(message.meta.deliverables);
@@ -348,6 +372,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(blockerRef !== undefined ? { blockerRef } : {}),
     ...(sandboxApprovalRef !== undefined ? { sandboxApprovalRef } : {}),
+    ...(appApprovalRef !== undefined ? { appApprovalRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
     ...(answerNote !== undefined ? { answerNote } : {}),
     ...(message.meta.closed === true ? { closed: true } : {}),
@@ -435,7 +460,7 @@ export function extractAskCard(
   message: Pick<Message, "sender" | "meta" | "text">,
 ): ExtractedAskCard | null {
   const ask = askOf(message);
-  if (ask === null || ask.blockerRef !== undefined || ask.sandboxApprovalRef !== undefined) return null;
+  if (ask === null || ask.blockerRef !== undefined || ask.sandboxApprovalRef !== undefined || ask.appApprovalRef !== undefined) return null;
   const answered = ask.answered === true;
   const extras = {
     ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),

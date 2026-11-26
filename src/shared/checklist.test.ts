@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { activeChecklistItemId, applyChecklistUpdate, checklistOf, normalizeChecklistStatus, sameChecklist } from "./checklist.ts";
+import { activeChecklistItemId, applyChecklistUpdate, checklistOf, normalizeChecklistStatus, sameChecklist, turnChecklist, type ChecklistItemInput } from "./checklist.ts";
 import { CHECKLIST_MAX_ITEMS, CHECKLIST_TITLE_MAX_CHARS } from "./limits.ts";
 
 const input = (title: string, id: string | null = null) => ({ id, title, status: "pending" as const });
-const replace = (...items: ReturnType<typeof input>[]) => applyChecklistUpdate([], { kind: "replace", items });
+const replace = (...items: ChecklistItemInput[]) => applyChecklistUpdate([], { kind: "replace", items });
 
 describe("checklist snapshots", () => {
   it.each([
@@ -53,5 +53,34 @@ describe("checklist snapshots", () => {
     for (const checklist of [[a, a], [{ ...a, title: "  " }], [{ ...a, status: "typo" }]]) {
       expect(checklistOf({ kind: "checklist", meta: { checklist } })).toBeNull();
     }
+  });
+});
+
+describe(turnChecklist.name, () => {
+  it("keeps new, changed and unfinished items in the current list's order", () => {
+    const previous = replace(
+      { ...input("Completed", "a"), status: "completed" },
+      { ...input("Cancelled", "b"), status: "cancelled" },
+      { ...input("Continuing", "c"), status: "in_progress" },
+      input("Finishing", "d"),
+      input("Still pending", "e"),
+    );
+    const current = applyChecklistUpdate(previous, { kind: "merge", items: [
+      { id: "d", status: "completed" },
+      { id: "f", title: "New", status: "completed" },
+    ] });
+    expect(turnChecklist([], current).visible).toBe(current);
+    expect(turnChecklist(previous, current).visible).toEqual(current.slice(2));
+    const renamed = current.map((item) => item.id === "a" ? { ...item, title: "Renamed" } : item);
+    expect(turnChecklist(previous, renamed).visible.map((item) => item.id)).toEqual(["a", "c", "d", "e", "f"]);
+  });
+
+  it("keeps a changed item visible if it later matches the baseline again", () => {
+    const done = { ...input("Run tests"), status: "completed" as const };
+    const baseline = replace(done, { ...done, title: "Read logs" });
+    const started = turnChecklist(baseline, replace(input("Run tests"), { ...done, title: "Read logs" }));
+    expect(started.visible.map(({ title }) => title)).toEqual(["Run tests"]);
+    expect(turnChecklist(started.unchanged, baseline).visible.map(({ title, status }) => [title, status]))
+      .toEqual([["Run tests", "completed"]]);
   });
 });

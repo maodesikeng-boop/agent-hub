@@ -83,8 +83,8 @@ describe("史莱姆与总助", () => {
             waiting={new Set()}
             asking={new Set()}
             readOnly={false}
-            query=""
-            onQueryChange={vi.fn()}
+
+
             onSelect={vi.fn()}
             onNewPm={vi.fn()}
             onTogglePin={vi.fn()}

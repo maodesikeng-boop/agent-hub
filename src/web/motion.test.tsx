@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../shared/index.ts";
 import { MessageList } from "./components/MessageList.tsx";
 import type { MessageActions } from "./components/Messages.tsx";
-import { useRoute } from "./route.ts";
+import { useWorkbenchNav } from "./workbench-nav.ts";
 import type { PendingMessage } from "./state.ts";
 import { makeMessage, makeUserMessage } from "./test-utils.ts";
 
@@ -108,13 +108,13 @@ describe("切换对话：零过渡动效", () => {
     const start = vi.fn((cb: () => void) => cb());
     Object.defineProperty(document, "startViewTransition", { configurable: true, value: start });
     try {
-      const { result } = renderHook(() => useRoute());
-      act(() => result.current.replace({ view: "conversation", id: 1 }));
-      act(() => result.current.navigate({ view: "conversation", id: 2 }));
-      act(() => result.current.navigate({ view: "worker", id: 3 }));
-      act(() => result.current.navigate({ view: "profile", pmId: 1 }));
+      const { result } = renderHook(() => useWorkbenchNav());
+      act(() => result.current.replacePage({ view: "conversation", id: 1 }));
+      act(() => result.current.openPage({ view: "conversation", id: 2 }));
+      act(() => result.current.openPage({ view: "worker", id: 3 }));
+      act(() => result.current.openPage({ view: "profile", pmId: 1 }));
       expect(start).not.toHaveBeenCalled();
-      expect(result.current.route).toEqual({ view: "profile", pmId: 1 });
+      expect(result.current.nav.page).toEqual({ view: "profile", pmId: 1 });
     } finally {
       delete (document as { startViewTransition?: unknown }).startViewTransition;
     }

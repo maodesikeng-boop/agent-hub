@@ -3,7 +3,6 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import type { Change } from "../../shared/api.ts";
 import { askOf, isHandoverTraffic, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
-import { isLedgerWakeup } from "../../shared/attachments.ts";
 import type { Deliverable } from "../../shared/deliverables.ts";
 import { feishuOriginOf } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MARKDOWN_JSON_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_CATCHUP_MAX_MESSAGES, FEISHU_FENCE_INFO_MAX_CHARS, FEISHU_FENCE_MARKER_MAX_CHARS } from "../../shared/limits.ts";
@@ -60,7 +59,7 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
       const { message } = change.data;
       if (isFailedUserTurn(message)) return ctx.chatOfConversation(message.conversationId) === null ? [] : [{ kind: "turn_failed", conversationId: message.conversationId, message }];
       const ask = askOf(message);
-      if (ask === null || (ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null)) return [];
+      if (ask === null || ask.appApprovalRef !== undefined || (ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null)) return [];
       if (ask.answered === true || ask.closed === true) {
         return [{ kind: "ask_settled", conversationId: message.conversationId, message }];
       }
@@ -79,7 +78,7 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
 }
 
 function isFailedUserTurn(message: Message): boolean {
-  return message.status === "failed" && message.sender === "user" && message.workerId === null && message.kind === "text" && !isLedgerWakeup(message);
+  return message.status === "failed" && message.sender === "user" && message.workerId === null && message.kind === "text";
 }
 
 const ROUTER_COMMAND_DONE: ReadonlySet<RouterCommandRecord["status"]> = new Set(["answered", "dispatched", "failed"]);
@@ -102,11 +101,12 @@ function messageIntents(message: Message): FeishuOutboundIntent[] {
   if (message.sender === "agent") {
     if (isHandoverTraffic(message)) return [];
     const ask = askOf(message);
+    if (ask?.appApprovalRef !== undefined && (ask.answered === true || ask.closed === true)) return [];
     if (ask !== null) return [{ kind: "ask_card", conversationId, message, deliverables: ask.deliverables ?? [] }];
     if (message.text.trim() === "" && sentFilesOf(message).length === 0) return [];
     return [{ kind: "agent_text", conversationId, message, files: sentFilesOf(message) }];
   }
-  if (message.sender === "user" && !isLedgerWakeup(message) && feishuOriginOf(message) === null) {
+  if (message.sender === "user" && feishuOriginOf(message) === null) {
     return [{ kind: "mirror_user", conversationId, message }];
   }
   return [];

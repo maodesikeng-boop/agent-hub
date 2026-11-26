@@ -36,7 +36,6 @@ import type {
   FleetRouterView,
   RouterTargetCandidate,
 } from "../selectors.ts";
-import { useShellCarry } from "../shell-carry.tsx";
 import { useMobileShell } from "../shell-layout.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { uploadFiles, type DraftSlot, type StagedFiles } from "../upload.ts";
@@ -45,6 +44,7 @@ import { DraftComposer } from "./Composer.tsx";
 import { UnsentDraftBanner } from "./Deliverables.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { RouterAvatar } from "./RouterAvatar.tsx";
+import { AppApprovalCard } from "./AppApprovalCard.tsx";
 import { SandboxApprovalCard } from "./SandboxApprovalCard.tsx";
 import { RouterDecisionCard } from "./RouterDecisionCard.tsx";
 import { RouterModelPicker } from "./RouterModelPicker.tsx";
@@ -56,15 +56,17 @@ const ROUTER_TRAY_VISIBLE_ROWS = 3;
 const CHIP_REMOVE_CLASS =
   "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 
-const NO_SANDBOX_CARDS: readonly ReactNode[] = [];
+const NO_APPROVAL_CARDS: readonly ReactNode[] = [];
 const DEFAULT_ROUTER_SETTINGS = defaultRouterSettings();
 
-function useFleetSandboxCards(devices: readonly DeviceView[], multiDevice: boolean): readonly ReactNode[] {
+function useFleetApprovalCards(devices: readonly DeviceView[], multiDevice: boolean): readonly ReactNode[] {
   const inputs = devices.flatMap((device) => {
-    const cards = device.state.pendingSandboxCards;
-    return cards === undefined || cards.length === 0 ? [] : [{
+    const sandbox = device.state.pendingSandboxCards;
+    const apps = device.state.pendingAppCards;
+    return !sandbox?.length && !apps?.length ? [] : [{
       key: device.key,
-      cards,
+      sandbox,
+      apps,
       disabled: isReadOnly(device.status),
       name: multiDevice || device.key !== LOCAL_DEVICE ? device.info.name : undefined,
     }];
@@ -73,14 +75,21 @@ function useFleetSandboxCards(devices: readonly DeviceView[], multiDevice: boole
   const prev = cache.current;
   if (prev !== null && inputs.length === prev.inputs.length && inputs.every((input, i) => {
     const old = prev.inputs[i];
-    return old?.key === input.key && old.cards === input.cards && old.disabled === input.disabled && old.name === input.name;
+    return old?.key === input.key && old.sandbox === input.sandbox && old.apps === input.apps && old.disabled === input.disabled && old.name === input.name;
   })) return prev.cards;
 
-  const cards = inputs.length === 0 ? NO_SANDBOX_CARDS : inputs.flatMap(({ key, cards, disabled, name }) => cards.map((card) => (
-    <DeviceScopeOf key={`${key}:${card.id}`} deviceKey={key}>
-      <SandboxApprovalCard approvalId={card.id} text={card.text} disabled={disabled} deviceName={name} />
-    </DeviceScopeOf>
-  )));
+  const cards = inputs.length === 0 ? NO_APPROVAL_CARDS : inputs.flatMap(({ key, sandbox, apps, disabled, name }) => [
+    ...(sandbox ?? []).map((card) => (
+      <DeviceScopeOf key={`${key}:sandbox:${card.id}`} deviceKey={key}>
+        <SandboxApprovalCard approvalId={card.id} text={card.text} disabled={disabled} deviceName={name} />
+      </DeviceScopeOf>
+    )),
+    ...(apps ?? []).map((card) => (
+      <DeviceScopeOf key={`${key}:app:${card.approvalId}`} deviceKey={key}>
+        <AppApprovalCard {...card} disabled={disabled} deviceName={name} />
+      </DeviceScopeOf>
+    )),
+  ]);
   cache.current = { inputs, cards };
   return cards;
 }
@@ -341,8 +350,8 @@ function useRouterDecisions(
 ) {
   const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
   const [decisionErrors, setDecisionErrors] = useState<Readonly<Record<string, ErrorLike>>>({});
-  const [selectedDecisionKey, setSelectedDecisionKey] = useShellCarry<string | null>("router:decision", null);
-  const [closedDraft, setClosedDraft] = useShellCarry<ClosedRouterDraft | null>("router:closed-draft", null);
+  const [selectedDecisionKey, setSelectedDecisionKey] = useState<string | null>(null);
+  const [closedDraft, setClosedDraft] = useState<ClosedRouterDraft | null>(null);
   const [trackedExpanded, setTrackedExpanded] = useState<FleetDecisionEntry | null>(null);
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
@@ -554,7 +563,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
     handleDecisionSubmit,
   } = useRouterDecisions(view.decisions, clientForDevice);
 
-  const sandboxCards = useFleetSandboxCards(devices, view.multiDevice);
+  const sandboxCards = useFleetApprovalCards(devices, view.multiDevice);
 
   const selectedTargetKey = useStore(draft.target);
 

@@ -28,6 +28,7 @@ import {
 } from "../../src/shared/index.ts";
 import type { ProviderStatusItem, ProvidersStatusResponse } from "../../src/shared/providers.ts";
 import type { VendorSyncPreviewResponse } from "../../src/shared/vendor-sync.ts";
+import { progressScenarioMessages } from "./progress-scenarios.ts";
 import { BROWSER_NOW_ISO } from "./limits.ts";
 
 export const PATCH_NAMES = [
@@ -38,6 +39,10 @@ export const PATCH_NAMES = [
   "session-working",
   "session-streaming",
   "progress-running",
+  "progress-two-turns",
+  "progress-unfinished",
+  "progress-wakeup-waiting",
+  "progress-wakeup-idle",
   "progress-done",
   "workers-busy",
   "blocker-checking",
@@ -300,7 +305,31 @@ const SYNC_PREVIEW: VendorSyncPreviewResponse = {
   nonSyncable: [{ key: "drive", name: "Google Drive", vendor: "claude", vendorLabel: "Claude Code", kind: "cloud_connector", reason: "Cloud connectors stay with the provider that owns them" }],
 };
 
+function progressScenario(page: Page, scenario: Parameters<typeof progressScenarioMessages>[0]["scenario"]) {
+  return editState(page, (state) => {
+    const conversationId = firstPmConversation(state);
+    if (conversationId === undefined) return state;
+    const target = latestSessions(state, (session) => session.conversationId === conversationId);
+    const sessionId = [...target][0];
+    if (sessionId === undefined) return state;
+    const next = scenario === "waiting" ? working(state, target, () => ({
+      step: { type: "tool_use", name: "Read", input: {} }, currentTool: "Read", stepStartedAt: NOW - 35_000,
+    })) : state;
+    return {
+      ...next,
+      conversations: next.conversations.map((conv) => conv.conversation.id !== conversationId ? conv : {
+        ...conv,
+        messages: progressScenarioMessages({ scenario, baseId: (conv.messages.at(-1)?.id ?? 100) + 10, conversationId, sessionId, now: NOW }),
+      }),
+    };
+  });
+}
+
 const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
+  "progress-two-turns": (page) => progressScenario(page, "two-turns"),
+  "progress-unfinished": (page) => progressScenario(page, "unfinished"),
+  "progress-wakeup-waiting": (page) => progressScenario(page, "waiting"),
+  "progress-wakeup-idle": (page) => progressScenario(page, "idle"),
   "state-pending": (page) => hang(page, localOnly(API_PATHS.state)),
   "state-500": (page) => fixedJson(page, localOnly(API_PATHS.state), { error: "数据库打不开：database is locked", } satisfies ApiErrorBody, { status: 500 }),
   "ws-reconnecting": (page) => page.routeWebSocket(localOnly(API_PATHS.ws), (ws) => ws.close({ code: 1006, reason: "" }).catch(() => {})),

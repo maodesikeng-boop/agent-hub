@@ -10,7 +10,6 @@ import { LOCAL_DEVICE, type DeviceKey, type DeviceView } from "../devices.ts";
 import { shortPath } from "../format.ts";
 import { useResourcesModel } from "../resources-model.ts";
 import type { DeviceSettings } from "../settings-model.ts";
-import { useShellCarry } from "../shell-carry.tsx";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Loader2, RefreshCw } from "../ui/icons.ts";
@@ -23,7 +22,6 @@ export interface ResourcesSettingsProps {
   readonly active?: boolean;
   readonly devices?: DeviceSettings | null;
   readonly defaultDeviceKey?: DeviceKey;
-  readonly titled?: boolean;
 }
 
 const REASON_LABELS: Readonly<Record<HeldResourceReason, string>> = {
@@ -399,17 +397,13 @@ function DiscardConfirmDialog({
   );
 }
 
-/**
- * Precondition: rendered inside SettingsDialog (desktop) or ResourcesPage (mobile).
- * Postcondition: renders Needs review items (Keep / Delete or Stop), Summary totals, Storage breakdown, and collapsed Kept rows.
- */
 export function ResourcesSettings({
   active = true,
   devices = null,
   defaultDeviceKey = LOCAL_DEVICE,
 }: ResourcesSettingsProps): ReactNode {
   const computers = useMemo(() => selectableOnlineComputers(devices?.devices ?? null), [devices]);
-  const [selectedDeviceKey, setSelectedDeviceKey] = useShellCarry<DeviceKey>("settings:resources-computer", defaultDeviceKey);
+  const [selectedDeviceKey, setSelectedDeviceKey] = useState<DeviceKey>(defaultDeviceKey);
   const effectiveDeviceKey =
     computers.length > 0
       ? computers.some((c) => c.key === selectedDeviceKey)

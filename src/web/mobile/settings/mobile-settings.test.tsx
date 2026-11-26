@@ -14,16 +14,20 @@ import {
   type VendorSyncPreviewResponse,
 } from "../../../shared/index.ts";
 import { App } from "../../App.tsx";
-import type { DeviceView } from "../../devices.ts";
+import { AccountSettings } from "../../components/AccountSettings.tsx";
+import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx";
+import { ResourcesSettings } from "../../components/ResourcesSettings.tsx";
+import { LOCAL_DEVICE, type DeviceView } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
-import { useRoute } from "../../route.ts";
+import { useWorkbenchNav } from "../../workbench-nav.ts";
 import { SESSIONS_POLL_MS, type DeviceSettings } from "../../settings-model.ts";
 import { initialState } from "../../state.ts";
+import { useComputerRename } from "../../settings-drafts.ts";
+import { Surface, SurfaceOutlet, SurfaceScope } from "../../shell-surfaces.tsx";
 import { queryClient } from "../../query-client.ts";
 import { FakeApi, installFakeWebSocket, makeConvSnapshot, makePm, makeSnapshot } from "../../test-utils.ts";
 import { UPDATE_DISMISSED_KEY, UPDATE_QUERY_KEY } from "../../update-model.ts";
-import { mobileBack, settingsParent } from "../back.ts";
-import { MobileSettings } from "./MobileSettings.tsx";
+import { WorkbenchSettings } from "../../WorkbenchSettings.tsx";
 
 const MAC_ID = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
 const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
@@ -56,19 +60,29 @@ afterEach(() => {
   delete document.documentElement.dataset.uiScale;
 });
 
-/** 只渲染设置页：网址用真的 useRoute，返回走 mobileBack（和 App 里一样）。 */
+/** 只渲染设置页：网址用真的 useWorkbenchNav（和 App 里一样）。 */
 function Harness({ notify, devices, onSignedOut }: { notify: NotifySettings; devices: DeviceSettings | null; onSignedOut?: () => void }) {
-  const { route, navigate, replace } = useRoute();
-  if (route?.view !== "settings") return <p>List page</p>;
+  const { nav: { settings }, showSettingsSection, settingsBack } = useWorkbenchNav();
+  const rename = useComputerRename();
+  if (settings === null) return <p>List page</p>;
   return (
-    <MobileSettings
-      section={route.section}
-      notify={notify}
-      devices={devices}
-      onOpen={(section) => navigate({ view: "settings", section })}
-      onBack={() => mobileBack(settingsParent(route), replace)}
-      {...(onSignedOut !== undefined ? { onSignedOut } : {})}
-    />
+    <SurfaceScope>
+      <SurfaceOutlet id="settings:mobile" />
+      <WorkbenchSettings
+        mobile
+        section={settings.section}
+        notify={notify}
+        devices={devices}
+        defaultProviderDevice={LOCAL_DEVICE}
+        rename={rename}
+        onOpen={showSettingsSection}
+        onBack={settingsBack}
+        {...(onSignedOut !== undefined ? { onSignedOut } : {})}
+      />
+      {settings.section === "computers" && <Surface id="settings:account"><AccountSettings /></Surface>}
+      {settings.section === "capabilities" && <Surface id="settings:capabilities"><CapabilitiesSettings /></Surface>}
+      {settings.section === "resources" && <Surface id="settings:resources"><ResourcesSettings devices={devices} /></Surface>}
+    </SurfaceScope>
   );
 }
 
@@ -189,7 +203,7 @@ describe("App 路由接入（手机外壳）", () => {
     await waitFor(() => expect(location.hash).toBe("#/settings"));
   });
 
-  it("跨断点：在 #/settings* 把窗口切回桌面外壳，网址回首页并打开桌面双栏 SettingsDialog 对应分类", async () => {
+  it("keeps the settings URL while showing its corresponding desktop tab", async () => {
     history.replaceState(null, "", "/#/settings/vendor-sync");
     const { media } = bootMobile();
     expect(await screen.findByRole("heading", { level: 1, name: "Vendor sync" })).toBeInTheDocument();
@@ -199,7 +213,7 @@ describe("App 路由接入（手机外壳）", () => {
     });
     const tablist = await screen.findByRole("tablist", { name: "Settings categories" });
     expect(within(tablist).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
-    await waitFor(() => expect(location.hash).toBe("#/router"));
+    expect(location.hash).toBe("#/settings/vendor-sync");
   });
 });
 

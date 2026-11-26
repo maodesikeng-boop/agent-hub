@@ -1,12 +1,11 @@
 import { Loader2 } from "../ui/icons.ts";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   isSelectable,
   type AgentVendor,
   type ProviderJobSnapshot,
   type ProviderStatusItem,
 } from "../../shared/index.ts";
-import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import { errorText, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import {
@@ -20,19 +19,18 @@ import {
   extractProviderAuthTargets,
   isProviderAuthFlowActive,
   useCopyFeedback,
-  useProvidersSetting,
   visibleAuthMethodsForTarget,
-  type DeviceSettings,
   type ProvidersSettingModel,
 } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
-import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
+import { DialogFooter } from "../ui/dialog.tsx";
 import { Input } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Segmented } from "../ui/segmented.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { StatusShimmer } from "./StatusShimmer.tsx";
-import { VendorSyncSettings } from "./VendorSyncSettings.tsx";
+import { useProviderSheet } from "../settings-drafts.ts";
+import { ProviderSheetChrome } from "./ProviderSheetChrome.tsx";
 
 function openExternalBrowserPage(url: string): void {
   try {
@@ -1087,84 +1085,38 @@ export function ProvidersListSection({
   );
 }
 
-type ModalState =
-  | { mode: "signin"; vendor: AgentVendor }
-  | { mode: "account"; vendor: AgentVendor }
-  | null;
-
-export function ProvidersSettings({
-  active = true,
-  devices = null,
-  defaultDeviceKey = LOCAL_DEVICE,
-}: {
-  active?: boolean;
-  devices?: DeviceSettings | null;
-  defaultDeviceKey?: DeviceKey;
+export function ProvidersSettings({ mobile, model, vendorSync }: {
+  mobile: boolean;
+  model: ProvidersSettingModel;
+  vendorSync: ReactNode;
 }) {
-  const model = useProvidersSetting({
-    enabled: active,
-    devices: devices?.devices ?? null,
-    defaultDeviceKey,
-  });
-  const [modal, setModal] = useState<ModalState>(null);
-
-  const modalItem = useMemo(
-    () => (modal === null ? null : (model.status?.providers.find((p) => p.vendor === modal.vendor) ?? null)),
-    [modal, model.status],
-  );
-
-  const handleDialogOpenChange = useCallback(
-    (open: boolean) => {
-      if (open) return;
-      if (
-        modal?.mode === "signin" &&
-        modalItem?.authFlow &&
-        isProviderAuthFlowActive(modalItem.authFlow.phase) &&
-        !modalItem.authFlow.ownedByOtherClient
-      ) {
-        void model.cancelAuth(modalItem.vendor, { flowId: modalItem.authFlow.flowId });
-      }
-      setModal(null);
-    },
-    [modal, modalItem, model],
-  );
-
+  const { sheet, open, close, setMode } = useProviderSheet();
+  const item = sheet !== null && sheet.deviceKey === model.deviceKey
+    ? model.status?.providers.find((provider) => provider.vendor === sheet.vendor) : undefined;
+  const closeByUser = () => {
+    const flow = item?.authFlow;
+    if (sheet?.mode === "signin" && item && flow && isProviderAuthFlowActive(flow.phase) && !flow.ownedByOtherClient) {
+      void model.cancelAuth(item.vendor, { flowId: flow.flowId }).catch(() => null);
+    }
+    close();
+  };
   return (
     <>
       <ProvidersListSection
         model={model}
-        onOpenSignIn={(vendor) => setModal({ mode: "signin", vendor })}
-        onOpenAccount={(vendor) => setModal({ mode: "account", vendor })}
+        onOpenSignIn={(vendor) => open({ mode: "signin", vendor, deviceKey: model.deviceKey })}
+        onOpenAccount={(vendor) => open({ mode: "account", vendor, deviceKey: model.deviceKey })}
       />
-
-      <VendorSyncSettings client={model.targetClient} />
-
-      <Dialog open={modal !== null && modalItem !== null} onOpenChange={handleDialogOpenChange}>
-        {modal !== null && modalItem !== null && (
-          <DialogContent
-            title={modal.mode === "signin" ? `Sign in to ${modalItem.label}` : modalItem.label}
-            className="max-w-110"
-          >
-            {modal.mode === "signin" ? (
-              <ProviderSignInBody
-                key={`${modalItem.vendor}:${model.deviceKey}`}
-                item={modalItem}
-                model={model}
-                onDone={() => setModal(null)}
-                onCancel={() => setModal(null)}
-              />
-            ) : (
-              <ProviderAccountBody
-                key={`account:${modalItem.vendor}:${model.deviceKey}`}
-                item={modalItem}
-                model={model}
-                onSwitchAccount={() => setModal({ mode: "signin", vendor: modalItem.vendor })}
-                onClose={() => setModal(null)}
-              />
-            )}
-          </DialogContent>
-        )}
-      </Dialog>
+      {vendorSync}
+      {sheet !== null && item !== undefined && (
+        <ProviderSheetChrome mobile={mobile} title={sheet.mode === "signin" ? `Sign in to ${item.label}` : item.label} onClose={closeByUser}>
+          {sheet.mode === "signin" ? (
+            <ProviderSignInBody key={`${item.vendor}:${model.deviceKey}`} item={item} model={model} mobile={mobile} onDone={close} onCancel={close} />
+          ) : (
+            <ProviderAccountBody key={`${item.vendor}:${model.deviceKey}`} item={item} model={model} mobile={mobile} onSwitchAccount={() => setMode("signin")} onClose={close} />
+          )}
+        </ProviderSheetChrome>
+      )}
     </>
   );
 }

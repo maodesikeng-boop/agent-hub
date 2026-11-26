@@ -163,8 +163,8 @@ describe("RouterTopBar", () => {
   it("renders the centered translucent Message Router input with RouterAvatar in the 40px top bar on desktop conversation views", async () => {
     const input = await boot();
     const shell = document.querySelector<HTMLElement>("[data-shell='desktop']")!;
-    const bar = shell.firstElementChild as HTMLElement;
-    expect(bar).toHaveClass("shell-topbar");
+    const bar = shell.querySelector<HTMLElement>(".shell-topbar")!;
+    expect(shell.firstElementChild!.contains(bar)).toBe(true);
     expect(bar).toHaveAttribute("data-window-drag");
     expect(bar).not.toHaveAttribute("aria-hidden");
     expect(bar.style.getPropertyValue("--topbar-input-max")).toBe("35rem");

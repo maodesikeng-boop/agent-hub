@@ -4,11 +4,13 @@ import {
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_STREAM_LIVE_MAX,
   PENDING_SANDBOX_APPROVALS_SNAPSHOT_MAX,
+  PENDING_APP_APPROVALS_SNAPSHOT_MAX,
+  formatAppApprovalCardText,
+  type AppApprovalRef,
   askOf,
   formatSandboxApprovalCardText,
   clearRateLimitRejection,
   emptyRouterSlice,
-  isLedgerWakeup,
   isQuotaExhausted,
   isRewoundMessage,
   isWorkerEndLine,
@@ -74,6 +76,8 @@ interface PendingSandboxCard {
   text: string;
 }
 
+type PendingAppCard = AppApprovalRef & { conversationId: ConversationId; text: string };
+
 export interface HubState {
   phase: Phase;
   loadError?: ErrorInfo;
@@ -89,6 +93,7 @@ export interface HubState {
   health: HealthEntry[];
   schedules: ScheduleRecord[];
   router: RouterSlice;
+  pendingAppCards?: readonly PendingAppCard[];
   pendingSandboxCards?: readonly PendingSandboxCard[];
   activeTaskGraphs: TaskGraph[];
   lookups: Record<ConversationId, "loading" | "missing" | undefined>;
@@ -254,6 +259,24 @@ function withSandboxCard(state: HubState, message: Message): HubState {
   return { ...state, pendingSandboxCards: [card, ...remaining].slice(0, PENDING_SANDBOX_APPROVALS_SNAPSHOT_MAX) };
 }
 
+function withAppCard(state: HubState, message: Message): HubState {
+  if (message.meta?.appApprovalRef === undefined) return state;
+  const ask = askOf(message);
+  const ref = ask?.appApprovalRef;
+  if (ask === null || ref === undefined) return state;
+  const cards = state.pendingAppCards ?? [];
+  const index = cards.findIndex((card) => card.approvalId === ref.approvalId);
+  if (ask.answered === true || ask.closed === true) {
+    return index < 0 ? state : { ...state, pendingAppCards: cards.filter((_, i) => i !== index) };
+  }
+  const old = cards[index];
+  if (old !== undefined && old.text === message.text && old.workerTitle === ref.workerTitle &&
+      (old.warning ?? null) === (ref.warning ?? null) && old.expiresAt === ref.expiresAt &&
+      old.appName === ref.appName && old.appId === ref.appId && old.riskLevel === ref.riskLevel) return state;
+  const card: PendingAppCard = { ...ref, conversationId: message.conversationId, text: message.text };
+  return { ...state, pendingAppCards: [card, ...cards.filter((_, i) => i !== index)].slice(0, PENDING_APP_APPROVALS_SNAPSHOT_MAX) };
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
@@ -263,7 +286,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       const raw = change.data.message;
       const wasRewoundPending = state.rewoundKeys?.includes(raw.dedupeKey) === true;
       const message = wasRewoundPending ? withRewoundMeta(raw) : raw;
-      const prepared = withSandboxCard(next, message);
+      const prepared = withAppCard(withSandboxCard(next, message), message);
       const nextBase = wasRewoundPending ? { ...prepared, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) } : prepared;
       const afterStreaming =
         change.type === "message.created" &&
@@ -279,7 +302,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       const sessions =
         change.type === "message.created" &&
         message.status === "queued" &&
-        ((message.sender === "user" && !isLedgerWakeup(message)) || message.sender === "pm")
+        (message.sender === "user" || message.sender === "pm")
           ? dropSessionQuotaRejection(afterStreaming, message.conversationId, message.sessionId)
           : afterStreaming;
       const view = state.conversations[message.conversationId];
@@ -578,6 +601,9 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     health: snapshot.health,
     schedules: snapshot.schedules,
     router: normalizeRouterSlice(snapshot.router),
+    pendingAppCards: snapshot.pendingAppApprovals?.map((approval) => ({
+      ...approval, approvalId: approval.id, text: formatAppApprovalCardText(approval),
+    })),
     pendingSandboxCards: snapshot.pendingSandboxApprovals?.map((approval) => ({
       id: approval.id, conversationId: approval.conversationId, text: formatSandboxApprovalCardText(approval),
     })),
@@ -654,7 +680,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
       for (const view of Object.values(state.conversations)) {
         const m = view.messages.find((x) => x.id === action.messageId);
         if (m) {
-          if (m.sender === "user" && !isLedgerWakeup(m)) retryConvId = m.conversationId;
+          if (m.sender === "user") retryConvId = m.conversationId;
           break;
         }
       }

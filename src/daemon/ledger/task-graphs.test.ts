@@ -757,7 +757,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const afterSkip = skipped.graph;
     expect(skipped.messageId).toBeTypeOf("number");
     const skipWake = ledger.getMessage(skipped.messageId!)!;
-    expect(skipWake).toMatchObject({ sender: "user", status: "queued" });
+    expect(skipWake).toMatchObject({ sender: "system", status: "queued", meta: { event: "pm.wakeup", source: "task_graph" } });
     expect(skipWake.text).toContain("用户在网页上跳过了步骤「opt-branch（可选实验分支）」（说明：中间步骤跳过，直接进入下游）");
     expect(skipWake.text).toContain("轮到了：join-release（汇总发版）、opt-leaf（后续子任务），等你处理");
     expect(afterSkip.nodes.find((n) => n.key === "opt-branch")).toMatchObject({ status: "done", skipped: true, waitingFor: null });

@@ -109,6 +109,19 @@ export function sameChecklist(a: readonly ChecklistItem[], b: readonly Checklist
   });
 }
 
+export function turnChecklist(baseline: readonly ChecklistItem[], current: ChecklistItem[]) {
+  if (baseline.length === 0) return { visible: current, unchanged: baseline };
+  const unchanged = new Map(baseline.map((item) => [item.id, item]));
+  const visible = current.filter((item) => {
+    const old = unchanged.get(item.id);
+    if (item.status !== "pending" && item.status !== "in_progress" &&
+      old?.status === item.status && old.title === item.title && old.activeTitle === item.activeTitle) return false;
+    unchanged.delete(item.id);
+    return true;
+  });
+  return { visible, unchanged: unchanged.size === baseline.length ? baseline : [...unchanged.values()] };
+}
+
 export function activeChecklistItemId(items: readonly ChecklistItem[]): string | null {
   return items.find((item) => item.status === "in_progress")?.id ?? null;
 }

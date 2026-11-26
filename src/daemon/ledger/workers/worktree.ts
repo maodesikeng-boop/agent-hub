@@ -187,6 +187,7 @@ function worktreeCreateFailedIn(w: WorkersCtx, p: Pending, workerId: WorkerId, e
   w.db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, worker.id);
   recordWorkerEnded(w.db, { id: worker.id, pmId: worker.pm_id }, t);
   w.sandboxApprovals.revokeForWorkerIn(p, worker.id);
+  w.appApprovals.store.revokeForWorkerIn(p, worker.id);
   const session = workerSession(w, worker.id);
   w.enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
   cancelQueuedWorkerPmNoticesIn(w, p, worker);
