@@ -2,7 +2,7 @@ import type { Attachment } from "../../shared/attachments.ts";
 import { userMessageDedupeKey, type PmId } from "../../shared/domain.ts";
 import { feishuDisplayName, type FeishuChatId, type FeishuChatMode, type FeishuChatTarget, type FeishuOpenId } from "../../shared/feishu.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../../shared/ledger.ts";
-import { MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
+import { FEISHU_CONTROL_RETRY_MS, FEISHU_INBOUND_HANDOFF_RETRIES, MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
 import { sendText } from "./api.ts";
 import { applyChatGone, bindRouterChat } from "./chat-sync.ts";
 import { broadcastPeerApp } from "./connection.ts";
@@ -14,10 +14,11 @@ import { GUEST_NO_FILES, routeFeishuMessage, type FeishuMessageRoute } from "./r
 import { offerPolicyCard, postPolicyCard, postRouterSettingsCard, refreshCatalogsInBackground } from "./settings-cards.ts";
 import type { FeishuChatBinding } from "./store.ts";
 import { FEISHU_CLIENT_PREFIX } from "./text-cards.ts";
-import type { FeishuRawEvent } from "./transport.ts";
+import { FeishuAuthError, isFeishuRejection, type FeishuRawEvent } from "./transport.ts";
 
 type InboundMessage = Extract<FeishuInbound, { kind: "message" }>;
 type DeliverRoute = Extract<FeishuMessageRoute, { kind: "deliver" }>;
+type ActionRoute = Exclude<FeishuMessageRoute, { kind: "ignore" | "context" }>;
 
 interface MessageScene {
   message: InboundMessage;
@@ -175,9 +176,24 @@ async function dispatchClaimedMessage(
     await ctx.inboundSync.waitForClaimSync();
     // A new hub skips messages claimed by this device.
     if (!canExecute()) return;
-    await applyMessageRoute(ctx, scene, route, canExecute);
+    await runClaimedRoute(ctx, scene, route, canExecute);
   }
   if (canExecute()) recordHandled(ctx, message);
+}
+
+async function runClaimedRoute(ctx: FeishuContext, scene: MessageScene, route: ActionRoute, canExecute: () => boolean) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await applyMessageRoute(ctx, scene, route, canExecute);
+      return;
+    } catch (error) {
+      // The successor cannot retry a foreign claim, and only the original device has its Router ledger.
+      if (scene.message.chatType !== "p2p" || isCenter(ctx) || !canExecute() || !isReady(ctx) ||
+        error instanceof FeishuAuthError || isFeishuRejection(error) || attempt >= FEISHU_INBOUND_HANDOFF_RETRIES) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, FEISHU_CONTROL_RETRY_MS * 2 ** attempt));
+      if (!canExecute() || !isReady(ctx)) throw error;
+    }
+  }
 }
 
 async function bindOwner(ctx: FeishuContext, message: InboundMessage, openId: FeishuOpenId, t: number) {
@@ -192,7 +208,7 @@ async function bindOwner(ctx: FeishuContext, message: InboundMessage, openId: Fe
 async function applyMessageRoute(
   ctx: FeishuContext,
   scene: MessageScene,
-  route: Exclude<FeishuMessageRoute, { kind: "ignore" | "context" }>,
+  route: ActionRoute,
   canExecute: () => boolean,
 ) {
   const { message, chat, target } = scene;
