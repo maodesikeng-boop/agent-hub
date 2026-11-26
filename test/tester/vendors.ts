@@ -65,7 +65,10 @@ function onBoth(recipe: VendorBenchRecipe): Record<InstanceRole, VendorBenchReci
 }
 
 export const VENDOR_BENCH: Readonly<Record<AgentVendor, Readonly<Record<InstanceRole, VendorBenchRecipe>>>> = {
-  claude: onBoth({ coverage: "turn", model: "haiku", signIn: "Sign in to Claude Code in each bench HOME, or share a bench-only `claude setup-token` token." }),
+  claude: {
+    local: { coverage: "turn", model: "haiku", signIn: 'Save a bench-only token from `claude setup-token` to `secrets/claude-oauth-token`. Set local `env` in `bench.json`: `"CLAUDE_CODE_OAUTH_TOKEN": "@secrets/claude-oauth-token"`. Restart the bench.' },
+    remote: { coverage: "turn", model: "haiku", signIn: "Or set a bench-only token from `claude setup-token` as `CLAUDE_CODE_OAUTH_TOKEN` in the test daemon's service environment and restart it." },
+  },
   agy: {
     local: { coverage: "turn", model: "gemini-3.8-flash", signIn: "Run `agy` and paste the code with the owner's Google account." },
     remote: acceptedGap("agy", TOKYO_CLAUDE_ONLY, "2026-11-26"),
@@ -191,6 +194,7 @@ function installFix(vendor: AgentVendor, platform: NodeJS.Platform): string {
 function loginFix(vendor: AgentVendor, role: InstanceRole, userHome: string | null): string {
   const recipe = VENDOR_BENCH[vendor][role];
   if (recipe.coverage === "accepted_gap") return `No sign-in needed: ${recipe.reason}`;
+  if (vendor === "claude" && role === "local") return recipe.signIn;
   const how = recipe.signIn;
   return userHome === null ? `${loginCommandFor(vendor)} as the bench user; ${how}` : `HOME=${userHome} ${loginCommandFor(vendor)}; ${how}`;
 }
