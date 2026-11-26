@@ -38,6 +38,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Progress checklist in every multi-step turn](turn-checklist-rule-design.md): One trigger rule for when a turn must list its steps, the shared prompt section for every vendor, `hub checklist` for vendors without a checklist tool, and a one-time reminder that never starts a turn.
 - [Lost Worker briefs and stale notices](lost-brief-stale-notice-design.md): Daemon shutdown never cancels unread messages in any vendor driver, restart resends interrupted turns or tells the PM, failed first launches show their error, one pre-write currency check for delivery notes and timeout reminders, `graph done` ending the parked Worker, and per-model effort validation.
 - [Project Manager friction with `hub`](pm-friction-design.md): Plan reviews paused for the PM with `"confirm": "pm"`, `doneSteps` in `graph patch`, one text-limit table, `hub ask list/show`, `hub schedule show`, `hub worker wait`, the first typed PM notice entry, and help-only commands that keep the system prompt and every vendor cache unchanged.
+- [Hub limits visible before they bite](hub-limits-visibility-design.md): One table of every length, size, and count limit an agent can hit through `hub`, rendered into `hub help`, per-command usage, and one rejection message, and `hub ask` rejecting over-limit text instead of cutting it.
 
 ## Testing
 
