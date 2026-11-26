@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { removeTreeWithRetry } from "../../../daemon/platform/index.ts";
+import { PROVIDER_VERSION_PROBE_RETRY_MS } from "../../../shared/index.ts";
 import { runShortSubcommand } from "./file-helpers.ts";
 import { createVendorVersionCache } from "./version-probe.ts";
 
@@ -17,7 +18,11 @@ beforeEach(() => {
   run.mockReset();
 });
 
-afterEach(() => removeTreeWithRetry(cwd));
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  return removeTreeWithRetry(cwd);
+});
 
 it("shares a probe for the same binary and discards its result if the binary changes", async () => {
   const bin = join(cwd, "agent");
@@ -54,6 +59,25 @@ it("backs off after a failed probe and lets explicit refresh retry immediately",
   expect(run).toHaveBeenCalledTimes(1);
 
   cache.invalidate("cursor");
+  await expect(cache.probe("cursor", bin, { cwd })).resolves.toBe("1.2.3");
+  expect(run).toHaveBeenCalledTimes(2);
+});
+
+it("retries a failed probe after the backoff expires", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.spyOn(performance, "now").mockImplementation(Date.now);
+  const bin = join(cwd, "agent");
+  writeFileSync(bin, "binary");
+  run.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "" });
+  run.mockResolvedValueOnce(output("1.2.3"));
+  const cache = createVendorVersionCache();
+
+  await expect(cache.probe("cursor", bin, { cwd })).resolves.toBeNull();
+  await vi.advanceTimersByTimeAsync(PROVIDER_VERSION_PROBE_RETRY_MS - 1);
+  await expect(cache.probe("cursor", bin, { cwd })).resolves.toBeNull();
+  expect(run).toHaveBeenCalledTimes(1);
+
+  await vi.advanceTimersByTimeAsync(2);
   await expect(cache.probe("cursor", bin, { cwd })).resolves.toBe("1.2.3");
   expect(run).toHaveBeenCalledTimes(2);
 });

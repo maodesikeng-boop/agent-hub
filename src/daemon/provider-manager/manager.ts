@@ -224,6 +224,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
   const log = options.log ?? (() => {});
 
   let closed = false;
+  let closing: Promise<void> | undefined;
   let gitJob: ActiveJobSlot | null = null;
 
   const slots = new Map<AgentVendor, VendorSlot>(
@@ -776,10 +777,10 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
     },
 
     async close() {
-      if (closed) return;
+      if (closed) return closing;
       closed = true;
       statusController.abort();
-      const pending: Promise<unknown>[] = [];
+      const pending: Promise<unknown>[] = [versionCache.waitForIdle()];
       if (gitJob?.phase === "running") {
         gitJob.cancelledByUser = true;
         gitJob.controller.abort();
@@ -797,7 +798,8 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
           pending.push(slot.authFlow.promise.catch(() => undefined));
         }
       }
-      await Promise.allSettled(pending);
+      closing = Promise.allSettled(pending).then(() => undefined);
+      return closing;
     },
   };
 }

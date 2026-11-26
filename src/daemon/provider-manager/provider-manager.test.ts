@@ -30,6 +30,7 @@ import {
 } from "../../vendors/deepseek/setup.ts";
 import { readPiAuthMap, resolvePiAuthJsonPath } from "../../vendors/pi/setup.ts";
 import { createModelCatalogs } from "../driver/model-catalog.ts";
+import { isAlive } from "../driver/process.ts";
 import { approveNode, loginNode, startTestRelay } from "../mesh/test-helpers.ts";
 import { startTestDevice } from "../peers/test-helpers.ts";
 import * as win32Platform from "../platform/win32/process-tree.ts";
@@ -461,6 +462,39 @@ describe("provider-manager and ui-server: install, sign-in, cancellation, and cl
     vi.restoreAllMocks();
     while (tempDirs.length > 0) {
       rmSync(tempDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for a hanging version CLI to exit before close returns", async () => {
+    const home = makeTempDir("bellwood-provider-close-");
+    tempDirs.push(home);
+    const pidFile = join(home, "version.pid");
+    const binary = writeExecutableNodeScript(join(home, "cursor"), [
+      'const { writeFileSync } = require("node:fs");',
+      'if (process.argv[2] !== "--version") process.exit(1);',
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n"), { cjs: true });
+    const baseEnv = { ...isolatedVendorPaths(home), [vendorSpec("cursor").cli.envVar]: binary, HOME: home, USERPROFILE: home };
+    const paths = resolveHubPaths(baseEnv, home);
+    const secrets = createManagedProviderSecrets(paths.providerSecretsFile);
+    const runtime = createVendorRuntimeResolver({ paths, userHome: home, baseEnv, secrets });
+    const models = createModelCatalogs({ sources: {} });
+    const manager = createProviderManager({ runtime, models });
+    const status = manager.getStatus({ ownerKey: "session:1" });
+
+    try {
+      const pid = await vi.waitFor(() => {
+        const value = Number(readFileSync(pidFile, "utf8"));
+        expect(value).toBeGreaterThan(1);
+        return value;
+      }, { timeout: 4_000 });
+      expect(isAlive(pid)).toBe(true);
+      await manager.close();
+      expect(isAlive(pid)).toBe(false);
+    } finally {
+      await manager.close();
+      await Promise.allSettled([status, models.close()]);
     }
   });
 

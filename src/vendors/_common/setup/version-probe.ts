@@ -57,6 +57,7 @@ export interface VendorVersionCache {
     },
   ): Promise<string | null>;
   invalidate(vendor?: AgentVendor): void;
+  waitForIdle(): Promise<void>;
 }
 
 export function createVendorVersionCache(): VendorVersionCache {
@@ -99,6 +100,9 @@ export function createVendorVersionCache(): VendorVersionCache {
 
   return {
     probe,
+    async waitForIdle() {
+      await Promise.allSettled([...inflight.values()].map(({ task }) => task));
+    },
     peek(vendor, binaryPath) {
       if (!binaryPath) return null;
       const entry = cache.get(vendor);
