@@ -913,6 +913,28 @@ describe("1. 首次启动与完整流式回合", () => {
 });
 
 describe("2. 长连接复用与会话恢复（--conversation）", () => {
+  it("keeps a rider through stop and model relaunch without starting or holding a turn", async () => {
+    const t = makeAgyHarness({
+      script: { assignedConversationId: "agy-rider", defaultTurn: { steps: [{ type: "text", deltas: ["Done"] }] } },
+      driver: { idleCloseMs: 60 },
+    });
+    const s = t.addSession();
+    const reminder = "List the steps before editing";
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("turn.ended");
+    await expect(t.driver.send(s.id, { messageIds: [2], source: "system", rider: true, text: reminder })).resolves.toEqual({ kind: "queued" });
+    await t.driver.interrupt(s.id);
+    await t.waitFor("session.exited");
+    expect(t.stdinBlocks()).toEqual([["Start"]]);
+    expect(t.of("turn.ended")).toHaveLength(1);
+
+    t.store.set(s.id, { model: "gemini-3-pro-low" });
+    await t.driver.send(s.id, user(3, "Continue"));
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ messageIds: [2, 3] });
+    expect(t.argvs()).toHaveLength(2);
+    expect(t.stdinBlocks()[1]).toEqual([reminder, "Continue"]);
+  });
+
   it("进程重启恢复后第二轮同样 step_index 的消息与工具不会与第一轮 UUID / toolUseId 冲突", async () => {
     const t = makeAgyHarness({
       script: {

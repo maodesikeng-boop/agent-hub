@@ -433,6 +433,10 @@ export abstract class BaseSessionDriver<
     return res.taken;
   }
 
+  protected hasPendingTurn(st: TState): boolean {
+    return st.pending.some((entry) => !entry.rider);
+  }
+
   private systemBatchCurrent(st: TState, batch: Pick<BaseBatch, "source" | "messageIds">): boolean {
     const validate = this.opts.canDeliverSystemMessage;
     return batch.source !== "system" || validate === undefined || batch.messageIds.every((id) => validate(st.id, id));
@@ -441,6 +445,7 @@ export abstract class BaseSessionDriver<
   protected discardStaleSystemBatch(st: TState, proc: TProc, batch: TBatch): boolean {
     if (this.systemBatchCurrent(st, batch)) return false;
     this.dropBatch(st, batch);
+    if (batch.riders !== undefined) st.pending.unshift(...batch.riders.filter((entry) => this.systemBatchCurrent(st, entry)));
     this.afterTurn(st, proc);
     return true;
   }
@@ -558,7 +563,7 @@ export abstract class BaseSessionDriver<
           continue;
         }
         if (proc && this.busy(st)) return;
-        if (st.pending.length === 0) return;
+        if (!this.hasPendingTurn(st)) return;
         if (proc) {
           await this.deliverNext(st, proc);
           continue;
@@ -677,6 +682,9 @@ export abstract class BaseSessionDriver<
       const cancelled = cause === "user_stop" && batch.source === "user";
       batch.released = cancelled ? "cancelled" : "requeued";
       if (cancelled) {
+        for (const rider of batch.riders ?? []) {
+          for (const id of rider.messageIds) st.written.delete(id);
+        }
         batch.notes.persona?.restore();
         batch.notes.preamble?.restore();
       } else {
@@ -688,7 +696,7 @@ export abstract class BaseSessionDriver<
 
   protected afterTurn(st: TState, proc: TProc): void {
     if (st.proc !== proc || proc.closing || this.shuttingDown || st.ended || this.busy(st)) return;
-    if (st.pending.length > 0) void this.deliverNext(st, proc).catch(() => {});
+    if (this.hasPendingTurn(st)) void this.deliverNext(st, proc).catch(() => {});
     else this.armIdle(st, proc);
   }
 
@@ -733,7 +741,7 @@ export abstract class BaseSessionDriver<
     this.clearTimer(st, "idleTimer");
     st.idleTimer = setTimeout(() => {
       st.idleTimer = null;
-      if (st.proc !== proc || proc.closing || this.busy(st) || st.pending.length > 0 || st.starting || st.ended) return;
+      if (st.proc !== proc || proc.closing || this.busy(st) || this.hasPendingTurn(st) || st.starting || st.ended) return;
       if (st.background.active) {
         this.logSession(
           st.id,

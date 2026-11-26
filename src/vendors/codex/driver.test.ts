@@ -1639,6 +1639,23 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
   }
   const methods = (t: CodexTestHarness) => t.rpcIn().map((r) => r.method);
 
+  it("writes a checklist rider into the active turn and acknowledges its own message ID", async () => {
+    const t = steerHarness((dir) => [holdTurn(dir)]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "Start"));
+    await t.waitFor("agent.tool");
+    const reminder = "List the remaining steps";
+    await expect(t.driver.send(s.id, { messageIds: [2], source: "system", rider: true, text: reminder }))
+      .resolves.toEqual({ kind: "written", midTurn: true });
+    expect(t.rpcIn().find((r) => r.method === "turn/steer")).toMatchObject({
+      params: { expectedTurnId: "turn-1", input: [{ type: "text", text: reminder }] },
+    });
+    release(t.dir);
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1, 2] });
+    expect(t.of("message.processing").find((event) => event.messageIds.includes(2))).toMatchObject({ midTurn: true });
+    expect(methods(t).filter((method) => method === "turn/start")).toHaveLength(1);
+  });
+
   it("忙时发 turn/steer（expectedTurnId 是这一轮），回执成功算已送达（midTurn）；命令跑完出它的 userMessage → 处理中；同一轮一个 turn.ended 带两条", async () => {
     const t = steerHarness((dir) => [holdTurn(dir)]);
     const s = t.addSession();

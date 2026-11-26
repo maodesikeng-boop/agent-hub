@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MessageId } from "../../shared/domain.ts";
 import { takePendingBatch, type PendingEntry } from "./driver-helpers.ts";
-import { dropUserEntries } from "./stop-untaken.ts";
+import { dropUserEntries, untakenReleaseEvents } from "./stop-untaken.ts";
 
 const isCommand = (text: string) => text.startsWith("/");
 const entry = (id: number, source: PendingEntry["source"], text: string, rider = false): PendingEntry => ({
@@ -48,6 +48,15 @@ describe("rider inputs", () => {
     const { kept, dropped } = dropUserEntries([entry(1, "system", REMINDER, true), entry(2, "user", "跑一下")]);
     expect(dropped).toEqual([2]);
     expect(kept.map((e) => e.rider)).toEqual([true]);
+  });
+
+  it("requeues a rider if a mixed batch is written but stopped before it is read", () => {
+    const batch = takePendingBatch([entry(1, "system", REMINDER, true), entry(2, "user", "继续")], isCommand);
+    if (batch === null) throw new Error("Missing batch");
+    expect(untakenReleaseEvents([batch.taken], "user_stop", 10)).toEqual([
+      { type: "message.cancelled", messageIds: [2], reason: "stop", at: 10 },
+      { type: "message.requeued", messageIds: [1], at: 10 },
+    ]);
   });
 
   it("leave batches without riders unchanged", () => {

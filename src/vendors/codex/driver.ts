@@ -115,6 +115,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       text: input.text,
       prefixes: input.prefixes ?? [],
       resend: input.resend ?? false,
+      ...(input.rider ? { rider: true } : {}),
     };
     const parts = entryParts(entry);
     const problem = checkCodexTurnText(combineCodexTurnText(parts.text, parts.prefixes));
@@ -229,7 +230,9 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
   protected takeBatch(st: SessionState): Batch | null {
     const taken = this.takePendingEntryBatch(st);
     if (!taken) return null;
-    return this.#batchOf(st, taken.body, taken.messageIds, taken.command, taken.source);
+    const batch = this.#batchOf(st, taken.body, taken.messageIds, taken.command, taken.source);
+    batch.riders = taken.riders;
+    return batch;
   }
 
   #batchOf(

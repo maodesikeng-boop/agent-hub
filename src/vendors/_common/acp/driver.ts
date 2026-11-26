@@ -175,6 +175,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       text: input.text,
       prefixes: [...(input.prefixes ?? [])],
       resend: input.resend ?? false,
+      ...(input.rider ? { rider: true } : {}),
     };
     const parts = entryParts(entry);
     const previewBlocks = normalizeAcpUserBlocks(this.composer.buildUserContent(parts.prefixes, parts.text));
@@ -328,6 +329,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       delivered: false,
       processing: false,
       source: taken.source,
+      riders: taken.riders,
     };
   }
 

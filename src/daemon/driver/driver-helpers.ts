@@ -68,6 +68,7 @@ export interface BaseBatch {
   processing: boolean;
   midTurn?: boolean;
   source: MessageSource;
+  riders?: PendingEntry[];
   stopped?: boolean;
   released?: "cancelled" | "requeued" | null;
 }
@@ -96,6 +97,7 @@ export interface PendingBatchParts {
   messageIds: MessageId[];
   command: boolean;
   source: MessageSource;
+  riders?: PendingEntry[];
 }
 
 export interface DriverHealthSnapshot {
@@ -126,7 +128,7 @@ export function takePendingBatch(
   let messageIds: MessageId[] = [];
   let command = false;
   let remaining = pending;
-  const users = pending.filter((e) => e.source === "user");
+  const users = pending.filter((e) => e.source === "user" && !e.rider);
   if (users.length > 0) {
     const firstCommand = users.findIndex((e) => isCommand(e.text));
     command = firstCommand === 0;
@@ -134,13 +136,21 @@ export function takePendingBatch(
     remaining = pending.filter((e) => !take.includes(e));
     body = take.length === 1 ? entryParts(take[0]!) : mergeUserTexts(take.map(flatEntryText));
     messageIds = take.flatMap((e) => e.messageIds);
-  } else if (pending.length > 0) {
-    const [entry, ...rest] = pending;
-    remaining = rest;
-    body = entryParts(entry!);
-    messageIds = entry!.messageIds;
+  } else {
+    const entry = pending.find((e) => !e.rider);
+    if (entry !== undefined) {
+      remaining = pending.filter((e) => e !== entry);
+      body = entryParts(entry);
+      messageIds = entry.messageIds;
+    }
   }
   if (body === null) return null;
+  const riders = command ? [] : remaining.filter((e) => e.rider);
+  if (riders.length > 0) {
+    remaining = remaining.filter((e) => !e.rider);
+    body = { ...body, prefixes: [...riders.map(flatEntryText), ...body.prefixes] };
+    messageIds = [...riders.flatMap((e) => e.messageIds), ...messageIds];
+  }
   return {
     remaining,
     taken: {
@@ -148,6 +158,7 @@ export function takePendingBatch(
       messageIds,
       command,
       source: users.length > 0 ? "user" : "system",
+      ...(riders.length > 0 ? { riders } : {}),
     },
   };
 }
