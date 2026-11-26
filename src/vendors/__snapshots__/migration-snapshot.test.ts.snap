@@ -1912,6 +1912,7 @@ exports[`迁移前快照：声明表 > VENDOR_HOME_PATHS 1`] = `
   "agy": {
     "catalogWatchPaths": [
       ".gemini/antigravity-cli",
+      ".gemini/antigravity-cli/settings.json",
       ".gemini/antigravity",
       ".gemini/config/mcp_config.json",
       ".gemini/oauth_creds.json",

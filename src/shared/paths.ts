@@ -392,8 +392,8 @@ export function invalidateLocatedExecutables(cmd?: string): void {
 
 function statSignature(file: string): string | null {
   try {
-    const st = statSync(file);
-    return `${file}:${Math.trunc(st.mtimeMs)}:${st.size}`;
+    const st = statSync(file, { bigint: true });
+    return `${file}:${st.dev}:${st.ino}:${st.mtimeNs}:${st.ctimeNs}:${st.size}`;
   } catch {
     return null;
   }
