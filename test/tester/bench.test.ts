@@ -216,9 +216,12 @@ describe("openBench", () => {
 });
 
 describe("bench configuration at command boundaries", () => {
-  it.each([["vendors", "install"], ["authorize-feishu"]] as const)(
-    "refuses guarded config before running %s %s",
-    async (...argv) => {
+  it.each([
+    { command: "vendors install", argv: ["vendors", "install"] },
+    { command: "authorize-feishu", argv: ["authorize-feishu"] },
+  ])(
+    "refuses guarded config before running $command",
+    async ({ argv }) => {
       const root = scratch();
       const c = config(root);
       local(c).uiPort = 4317;

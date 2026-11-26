@@ -8,8 +8,10 @@ export function canonicalPath(path: string): string {
   for (;;) {
     const stat = lstatSync(existing, { throwIfNoEntry: false });
     if (stat !== undefined) return join(realpathSync.native(existing), ...rest).toLowerCase();
-    rest.unshift(existing.slice(dirname(existing).length).replace(/^[\\/]/, ""));
-    existing = dirname(existing);
+    const parent = dirname(existing);
+    if (parent === existing) return join(existing, ...rest).toLowerCase();
+    rest.unshift(existing.slice(parent.length).replace(/^[\\/]/, ""));
+    existing = parent;
   }
 }
 
