@@ -11,7 +11,8 @@ import type { Message, MessageId, Pm, PmId, SessionId, WorkerId } from "../../sh
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { deliveryParts } from "../../shared/worker.ts";
-import { waitingAsksNote } from "../../shared/waiting-asks.ts";
+import { pendingAsksNote } from "../../shared/pending-asks.ts";
+import { pendingAsksOfPm } from "./pending-asks.ts";
 import { WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { AgentTextMeta } from "../../shared/sent-files.ts";
@@ -251,7 +252,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     isSessionBusy: options.isSessionBusy,
     hasPendingDriverEvents: (sessionId) => driverEvents.hasPending(sessionId),
     hasPendingTurnCompletions: (sessionId) => completions.blocksSend(sessionId),
-    waitingAsks: router.waitingAsksOf,
     liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
     onRenewedIn: (p, conversationId) => {
       const project = db.get<{ id: number }>("SELECT id FROM projects WHERE conversation_id = ? AND status = 'active'", conversationId);
@@ -566,8 +566,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     appApprovals: workers.appApprovals, decideAppApproval: workers.decideAppApproval, userBlockerVendor: userBlockers.vendorOf,
     deliveryOf: (message) => {
       const parts = deliveryParts(message);
-      const waiting = message.sender === "user" && message.workerId === null ? waitingAsksNote(router.waitingAsksOf(message.conversationId)) : null;
-      return waiting === null ? parts : { ...parts, prefixes: [...parts.prefixes, waiting] };
+      if (message.sender !== "user" || message.workerId !== null) return parts;
+      const pmId = db.get<{ pm_id: PmId | null }>("SELECT pm_id FROM conversations WHERE id = ? AND kind = 'pm'", message.conversationId)?.pm_id;
+      if (pmId == null) return parts;
+      const note = pendingAsksNote(pendingAsksOfPm(db, pmId), ctx.now());
+      return note === null ? parts : { ...parts, prefixes: [...parts.prefixes, note] };
     },
     archiveAllRouterReports: router.archiveAllReports,
     updateRouterSettings: router.updateSettings,

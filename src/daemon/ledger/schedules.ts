@@ -3,7 +3,7 @@ import { describeFailure } from "../../shared/errors.ts";
 import { normalizeName, systemMessageDedupeKey, utf8Bytes } from "../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, PmId, SystemMessageMeta } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
-import type { HubArgs, HubResult } from "../../shared/hub.ts";
+import { HUB_HELP_ONLY_COMMANDS, type HubArgs, type HubResult } from "../../shared/hub.ts";
 import { MAX_SCHEDULE_NAME_CHARS, MAX_SCHEDULES_PER_PM, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { checkEveryMinutes, nextRunAfter, parseDailyTime, reanchorDailyRun, scheduleLabel, scheduledTimeText, scheduleRunTitle } from "../../shared/schedule.ts";
@@ -15,6 +15,7 @@ import type { LedgerPersona } from "./persona.ts";
 import { toMessage, toSchedule } from "./rows.ts";
 import type { MessageDbRow, ScheduleDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import { lastScheduleRunText } from "./schedule-runs.ts";
 
 const IN_FLIGHT = new Set(["queued", "delivered", "processing"]);
 const NO_REASON = "没跑成";
@@ -112,19 +113,14 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
   };
 
   const list = (caller: { pmId: PmId }): HubResult<"schedule.list"> => {
-    const rows = db.all<ScheduleDbRow>("SELECT * FROM schedules WHERE pm_id = ? ORDER BY id", caller.pmId);
-    if (rows.length === 0) return { text: "你还没有定时任务。", data: { schedules: [] } };
+    const schedules = db.all<ScheduleDbRow>("SELECT * FROM schedules WHERE pm_id = ? ORDER BY id", caller.pmId).map(toSchedule);
+    if (schedules.length === 0) return { text: "你还没有定时任务。", data: { schedules } };
     const t = now();
-    const lines = rows.map((r) => {
-      const s = toSchedule(r);
+    const lines = schedules.map((s) => {
       const next = s.enabled ? `下次 ${scheduledTimeText(s.nextRunAt, t)}` : "已暂停";
-      const last =
-        s.lastStatus === null
-          ? "还没跑过"
-          : `上次${{ sent: "已发出", skipped: "跳过（上一条还没处理完）", failed: `没跑成（${s.lastError ?? NO_REASON}）` }[s.lastStatus]}`;
-      return `#${s.id} ${s.name} · ${scheduleLabel(s)} · ${next} · ${last}`;
+      return `#${s.id} ${s.name} · ${scheduleLabel(s)} · ${next} · ${lastScheduleRunText(s, t)}`;
     });
-    return { text: `你的定时任务：\n${lines.join("\n")}`, data: { schedules: rows.map(toSchedule) } };
+    return { text: ["你的定时任务：", ...lines, HUB_HELP_ONLY_COMMANDS["schedule.show"]].join("\n"), data: { schedules } };
   };
 
   const pauseIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.pause">): HubResult<"schedule.pause"> => {

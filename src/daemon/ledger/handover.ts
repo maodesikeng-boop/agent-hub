@@ -1,8 +1,8 @@
 import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
 // Handover runs in the background on a fork of the PM session and swaps sessions between two turns, so the user keeps chatting throughout.
 import { agentTextOf } from "../../shared/attachments.ts";
-import { waitingAsksSection } from "../../shared/waiting-asks.ts";
-import type { WaitingAsk } from "../../shared/waiting-asks.ts";
+import { pendingAsksSection } from "../../shared/pending-asks.ts";
+import { pendingAsksOfPm } from "./pending-asks.ts";
 import { describeFailure } from "../../shared/errors.ts";
 import { systemEventOf, systemMessageDedupeKey, workerEventOf } from "../../shared/domain.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, TokenUsage } from "../../shared/domain.ts";
@@ -58,7 +58,6 @@ export interface HandoverOptions {
   onHandoverClaimable?: () => void;
   liveActiveGraphsSection?: (pmId: PmId) => string | null;
   onRenewedIn?: (p: Pending, conversationId: ConversationId) => void;
-  waitingAsks?: (conversationId: ConversationId) => WaitingAsk[];
   isSessionBusy?: (sessionId: SessionId) => boolean;
   hasPendingDriverEvents?: (sessionId: SessionId) => boolean;
   hasPendingTurnCompletions?: (sessionId: SessionId) => boolean;
@@ -953,7 +952,7 @@ export function createLedgerHandover(
       }
     }
     if (base === null) return null;
-    const waiting = `${base}\n\n## 在等用户的提问卡（账本实时状态）\n\n${waitingAsksSection(options.waitingAsks?.(session.conversationId) ?? [])}`;
+    const waiting = `${base}\n\n## 在等用户的提问卡（账本实时状态）\n\n${pendingAsksSection(session.pmId === null ? [] : pendingAsksOfPm(db, session.pmId), now())}`;
     const liveGraphs = session.pmId === null ? null : (options.liveActiveGraphsSection?.(session.pmId) ?? null);
     return liveGraphs === null || liveGraphs === ""
       ? waiting
