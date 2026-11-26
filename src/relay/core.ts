@@ -40,12 +40,22 @@ import {
   type RelayClientFrame,
   type RelayDeviceView,
   type RelayErrorCode,
+  type RelayLeaseCheckpointRecord,
   type RelayPresenceView,
   type RelayRegisterRequest,
   type RelayRegisterResponse,
   type RelayRevocationEnvelope,
   type RelayServerFrame,
 } from "./protocol.ts";
+import {
+  readLeaseCheckpoint,
+  writeLeaseCheckpoint,
+  type RelayLeaseCheckpointAuth,
+  type RelayLeaseCheckpointContext,
+  type RelayLeaseCheckpointPutInput,
+  type RelayLeaseCheckpointReadResult,
+  type RelayLeaseCheckpointWriteResult,
+} from "./lease-checkpoint.ts";
 
 export interface RelayDeviceRecord {
   id: DeviceId;
@@ -66,6 +76,7 @@ export interface RelayAccountRecord {
   removed: DeviceId[];
   revocations?: RelayRevocationEnvelope[];
   leaseEpochs: Partial<Record<MeshLeaseName, number>>;
+  leaseCheckpoints?: Partial<Record<MeshLeaseName, RelayLeaseCheckpointRecord>>;
   usage: { day: string; bytes: number };
 }
 
@@ -112,6 +123,8 @@ export interface RelayAccountRoom {
   register(login: AccountLogin, request: RelayRegisterRequest): Promise<RelayRegisterResponse | { error: RelayErrorCode }>;
   openControl(socket: RelaySocket, restored?: RelayControlAttachment): RelayControlHandle;
   openChannel(query: { channel: string; device: DeviceId; session: string }, socket: RelaySocket): RelayChannelHandle | { error: RelayErrorCode };
+  getLeaseCheckpoint(auth: RelayLeaseCheckpointAuth): Promise<RelayLeaseCheckpointReadResult>;
+  putLeaseCheckpoint(input: RelayLeaseCheckpointPutInput): Promise<RelayLeaseCheckpointWriteResult>;
   sweep(): Promise<void>;
 }
 
@@ -270,6 +283,35 @@ class AccountRoom implements RelayAccountRoom {
         if (this.dials.get(query.channel) === dial) this.closeDial(query.channel);
         if (this.usageDirty) void this.save();
       },
+    };
+  }
+
+  async getLeaseCheckpoint(auth: RelayLeaseCheckpointAuth): Promise<RelayLeaseCheckpointReadResult> {
+    await this.ensureLoaded();
+    return readLeaseCheckpoint(this.checkpointContext(), auth);
+  }
+
+  async putLeaseCheckpoint(input: RelayLeaseCheckpointPutInput): Promise<RelayLeaseCheckpointWriteResult> {
+    await this.ensureLoaded();
+    return writeLeaseCheckpoint(this.checkpointContext(), input);
+  }
+
+  private checkpointContext(): RelayLeaseCheckpointContext {
+    return {
+      sessionOf: (id) => this.controls.get(id)?.session ?? null,
+      isActive: (id) => this.isActive(id),
+      currentHolder: (name) => {
+        const lease = this.leases.get(name);
+        return lease?.holder != null && this.now() - lease.renewedAt <= MESH_LEASE_TTL_MS ? { holder: lease.holder, epoch: lease.epoch } : null;
+      },
+      latestEpoch: (name) => this.record?.leaseEpochs[name] ?? 0,
+      storedCheckpoint: (name) => this.record?.leaseCheckpoints?.[name] ?? null,
+      storeCheckpoint: async (name, value) => {
+        if (this.record === null) throw new Error("Missing relay account");
+        (this.record.leaseCheckpoints ??= {})[name] = value;
+        await this.save();
+      },
+      now: this.now,
     };
   }
 
