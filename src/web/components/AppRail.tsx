@@ -1,9 +1,14 @@
 import type * as React from "react";
+import { useMemo, useState } from "react";
+import { useClient } from "../device-scope.tsx";
 import type { DeviceKey } from "../devices.ts";
 import { cn } from "../lib/utils.ts";
-import type { QuotaMeter, RailComputer } from "../rail-model.ts";
+import { useHubQueryClient } from "../query-client.ts";
+import { useFetchedQuota } from "../quota.ts";
+import { quotaMeterOf, type QuotaMeter, type RailComputer } from "../rail-model.ts";
 import { useResourcesAttention } from "../resources-model.ts";
 import type { QuotaVendor } from "../selectors.ts";
+import { useServerInfo } from "../server-info.tsx";
 import { Download, Hourglass, Settings, User } from "../ui/icons.ts";
 import { useUpdateReminder } from "../update-model.ts";
 import { PlatformIcon } from "./DeviceBadges.tsx";
@@ -27,7 +32,7 @@ export interface AppRailProps {
   meter: QuotaMeter | null;
   quota: readonly QuotaVendor[];
   quotaFetchable: boolean;
-  quotaLoading?: boolean;
+  quotaReady?: boolean;
   onSelectComputer: (key: DeviceKey) => void;
   onOpenSettings: () => void;
   /** Settings is open as a page; its tile keeps the selected fill like a tile whose popover is open. */
@@ -135,6 +140,18 @@ function UsageTrigger({ meter, ...rest }: { meter: QuotaMeter | null } & React.C
   );
 }
 
+function RailUsage({ meter, quota, quotaFetchable, quotaReady }: Pick<AppRailProps, "meter" | "quota" | "quotaFetchable" | "quotaReady">) {
+  const [open, setOpen] = useState(false);
+  const current = useServerInfo().currentQuota === true;
+  const { rows, loading } = useFetchedQuota(useHubQueryClient(), useClient(), {
+    enabled: open && quotaFetchable && quotaReady === true,
+    current,
+  });
+  const triggerMeter = useMemo(() => current ? quotaMeterOf(rows) : meter, [current, rows, meter]);
+  const blocks = useMemo(() => current ? rows : rows.length ? [...quota, ...rows] : quota, [current, quota, rows]);
+  return <QuotaPopover quota={blocks} loading={loading} open={open} onOpenChange={setOpen} side="right" align="end" trigger={<UsageTrigger meter={triggerMeter} />} />;
+}
+
 /**
  * Postcondition: renders the 4.5rem rail on the frame wood with the Router cell and its waiting count, computer cells with
  * no count, the Update cell while an update waits, the sand hourglass that opens the usage popover, the Settings gear with
@@ -148,7 +165,7 @@ export function AppRail({
   meter,
   quota,
   quotaFetchable,
-  quotaLoading = false,
+  quotaReady,
   onSelectComputer,
   onOpenSettings,
   settingsOpen = false,
@@ -202,7 +219,7 @@ export function AppRail({
         )}
 
         {(meter !== null || quotaFetchable) && (
-          <QuotaPopover quota={quota} loading={quotaLoading} side="right" align="end" trigger={<UsageTrigger meter={meter} />} />
+          <RailUsage meter={meter} quota={quota} quotaFetchable={quotaFetchable} quotaReady={quotaReady} />
         )}
 
         <FooterButton

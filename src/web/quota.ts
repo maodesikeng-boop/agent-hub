@@ -24,25 +24,24 @@ export function useFetchedQuota(
   client: HubClient,
   { enabled, current }: { enabled: boolean; current: boolean },
 ) {
-  const { data, dataUpdatedAt, isFetching } = useQuery({
+  const { data, dataUpdatedAt, isLoading } = useQuery({
     queryKey: [...quotaKey(client), current],
     queryFn: ({ signal }) => client.fetchQuota(signal).catch(() => EMPTY),
     enabled,
-    staleTime: ({ state }) => refreshAfter(state.data),
-    refetchOnWindowFocus: true,
+    staleTime: 0,
+    refetchOnWindowFocus: ({ state }) => Date.now() - state.dataUpdatedAt >= refreshAfter(state.data),
     refetchInterval: ({ state }) => refreshAfter(state.data),
   }, qc);
   const expires = dataUpdatedAt + FETCHED_QUOTA_FRESH_MS + SLOW_API_REQUEST_TIMEOUT_MS;
   const resets = useMemo(() => current ? data?.groups.flatMap((g) => Object.values(g.windows).map((w) => w.resetsAt * 1000)) ?? [] : [], [current, data]);
-  const times = useMemo(() => enabled && data?.groups.length ? [expires, ...resets] : [], [enabled, data, resets, expires]);
+  const times = useMemo(() => data?.groups.length ? [expires, ...resets] : [], [data, resets, expires]);
   useRerenderAt(times);
   const now = Date.now();
   const expired = now >= expires;
   const asOf = resets.reduce((last, t) => t <= now ? Math.max(last, t) : last, 0);
   const rows = useMemo(() => {
-    if (!enabled || !data?.groups.length || expired) return NO_QUOTA;
+    if (!data?.groups.length || expired) return NO_QUOTA;
     return fetchedQuotaUsage(data, asOf, current);
-  }, [data, asOf, current, enabled, expired]);
-  const loading = isFetching && rows.length === 0;
-  return useMemo(() => ({ rows, loading }), [rows, loading]);
+  }, [data, asOf, current, expired]);
+  return useMemo(() => ({ rows, loading: isLoading }), [rows, isLoading]);
 }

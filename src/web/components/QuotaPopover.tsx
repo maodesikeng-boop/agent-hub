@@ -49,6 +49,8 @@ function groupByVendor(blocks: readonly QuotaVendor[]): { name: string; blocks: 
 export const QuotaPopover = memo(function QuotaPopover({
   quota,
   loading = false,
+  open,
+  onOpenChange,
   placement = "sidebar",
   side,
   align,
@@ -56,6 +58,8 @@ export const QuotaPopover = memo(function QuotaPopover({
 }: {
   quota: readonly QuotaVendor[];
   loading?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   placement?: "sidebar" | "header";
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
@@ -68,7 +72,7 @@ export const QuotaPopover = memo(function QuotaPopover({
   const exhausted = quota.some((vendor) => vendor.exhausted);
   const label = exhausted ? "Usage limit reached" : window ? `${window.short} usage ${window.percent}%` : "Usage";
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         {trigger ?? (
           <Button

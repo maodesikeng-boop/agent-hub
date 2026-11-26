@@ -118,15 +118,18 @@ describe("createFetchedQuota（缓存）", () => {
     expect(await createFetchedQuota({ query: undefined }).get()).toEqual({ groups: [] });
   });
 
-  it("retries a blank response after a short backoff even if the login fingerprint stays the same", async () => {
+  it("does not probe again after a provider confirms it has no quota until the login changes", async () => {
     let now = 1_000;
-    const query = vi.fn<() => Promise<QuotaResponse | null>>().mockResolvedValueOnce(null).mockResolvedValue(sample);
-    const quota = createFetchedQuota({ query, now: () => now });
+    let account = "api-key";
+    const query = vi.fn(async () => account === "api-key" ? null : sample);
+    const quota = createFetchedQuota({ query, now: () => now, fingerprint: () => account });
     expect(await quota.get()).toEqual({ groups: [] });
-    now += FETCHED_QUOTA_RETRY_MS - 1;
-    expect(await quota.get()).toEqual({ groups: [] });
+    for (let i = 0; i < 10; i++) {
+      now += FETCHED_QUOTA_FRESH_MS;
+      expect(await quota.get()).toEqual({ groups: [] });
+    }
     expect(query).toHaveBeenCalledTimes(1);
-    now++;
+    account = "subscription";
     expect(await quota.get()).toEqual(sample);
     expect(query).toHaveBeenCalledTimes(2);
   });

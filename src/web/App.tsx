@@ -23,7 +23,6 @@ import { MobileShell } from "./mobile/MobileShell.tsx";
 import { TabBar, mobileTabOf, type MobileTab } from "./mobile/TabBar.tsx";
 import { ModelCatalogProvider, useServerModelCatalogs } from "./models.tsx";
 import { usePaneWidths } from "./pane-widths.ts";
-import { useFetchedQuota } from "./quota.ts";
 import { quotaMeterOf } from "./rail-model.ts";
 import { useResourcesAttention } from "./resources-model.ts";
 import { quotaUsage } from "./selectors.ts";
@@ -38,6 +37,7 @@ import { useAutoHideScrollbars } from "./useAutoHideScrollbars.ts";
 
 const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
 const SIGN_IN_ON_PHONE = "On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer";
+const NO_SESSION_QUOTA: ReturnType<typeof quotaUsage> = [];
 
 function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boolean): React.ReactNode {
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
@@ -70,7 +70,6 @@ interface LayoutProps {
   model: ShellModel;
   content: ShellContent;
   quota: ReturnType<typeof quotaUsage>;
-  fetchedQuota: ReturnType<typeof useFetchedQuota>;
   panel: "panel" | "worker" | null;
   rename: ComputerRenameApi;
 }
@@ -79,7 +78,6 @@ function DesktopWorkbench({
   model: { current, state, navigation },
   content: c,
   quota,
-  fetchedQuota,
   panel,
   rename,
   setShellElement,
@@ -88,8 +86,6 @@ function DesktopWorkbench({
 }: LayoutProps & { setShellElement: (element: HTMLElement | null) => void; chatMinRem: number; stackPanel: boolean }) {
   const { widths, commit, reset } = usePaneWidths((s) => s);
   const meter = useMemo(() => quotaMeterOf(quota), [quota]);
-  const hasCurrentQuota = state.server.currentQuota === true;
-  const quotaRows = useMemo(() => hasCurrentQuota || fetchedQuota.rows.length === 0 ? quota : [...quota, ...fetchedQuota.rows], [hasCurrentQuota, quota, fetchedQuota.rows]);
   const settings = navigation.nav.settings;
   const tab = dialogTabOf(settings?.section, c.deviceSettings !== null);
   return (
@@ -101,9 +97,9 @@ function DesktopWorkbench({
           computers={c.railComputers}
           selectedComputer={c.routerActive ? null : current.key}
           meter={meter}
-          quota={quotaRows}
-          quotaFetchable={hasCurrentQuota || c.quotaFetchable}
-          quotaLoading={fetchedQuota.loading}
+          quota={quota}
+          quotaFetchable={state.server.currentQuota === true || c.quotaFetchable}
+          quotaReady={state.phase === "ready"}
           onSelectComputer={c.selectComputer}
           onOpenSettings={() => c.openSettingsSection("scale")}
           settingsOpen={settings !== null}
@@ -177,7 +173,7 @@ function DesktopWorkbench({
   );
 }
 
-function MobileWorkbench({ model, content: c, panel }: Omit<LayoutProps, "quota" | "fetchedQuota" | "rename">) {
+function MobileWorkbench({ model, content: c, panel }: Omit<LayoutProps, "quota" | "rename">) {
   const { route, navigation, replace } = model;
   const settings = navigation.nav.settings;
   const tab = settings === null ? mobileTabOf(route) : settings.section === undefined ? "settings" : null;
@@ -220,7 +216,6 @@ function Workbench({
   content: c,
   mobile,
   quota,
-  fetchedQuota,
   notices,
   openLocalProviders,
   openCurrentProviders,
@@ -288,7 +283,7 @@ function Workbench({
     <SurfaceScope>
       {mobile
         ? <MobileWorkbench model={model} content={c} panel={panel} />
-        : <DesktopWorkbench model={model} content={c} quota={quota} fetchedQuota={fetchedQuota} panel={panel} rename={rename} setShellElement={setShellElement} chatMinRem={chatMinRem} stackPanel={stackPanel} />}
+        : <DesktopWorkbench model={model} content={c} quota={quota} panel={panel} rename={rename} setShellElement={setShellElement} chatMinRem={chatMinRem} stackPanel={stackPanel} />}
       {settings !== null && (
         <WorkbenchSettings
           mobile={mobile}
@@ -296,6 +291,7 @@ function Workbench({
           notify={c.reminders.notify}
           devices={c.deviceSettings}
           quota={quota}
+          quotaReady={state.phase === "ready"}
           defaultProviderDevice={c.defaultProviderDevice}
           onOpen={c.openSettingsSection}
           onBack={model.navigation.settingsBack}
@@ -341,13 +337,6 @@ export function App() {
   const mobile = useMobileShell();
   const model = useShellModel({ mobile });
   const { qc, fleet, current, hub, state, content } = model;
-  const settings = model.navigation.nav.settings;
-  const mobileUsageVisible = mobile && settings !== null && settings.section === undefined;
-  const hasCurrentQuota = state.server.currentQuota === true;
-  const fetchedQuota = useFetchedQuota(qc, hub.client, {
-    enabled: state.phase === "ready" && (mobile ? hasCurrentQuota && mobileUsageVisible : hasCurrentQuota || content?.quotaFetchable === true),
-    current: hasCurrentQuota,
-  });
   const hasContent = content !== null;
   const openManageProvidersRef = content?.openManageProviders;
   const openCurrentProviders = useCallback(() => openManageProvidersRef?.(current.key), [openManageProvidersRef, current.key]);
@@ -366,7 +355,7 @@ export function App() {
   if (gate !== null) return gate;
   if (content === null) return null;
 
-  const quota = hasCurrentQuota ? fetchedQuota.rows : quotaUsage(state);
+  const quota = state.server.currentQuota === true ? NO_SESSION_QUOTA : quotaUsage(state);
 
   return (
     <QueryClientProvider client={qc}>
@@ -380,7 +369,6 @@ export function App() {
                 mobile={mobile}
                 notices={notices}
                 quota={quota}
-                fetchedQuota={fetchedQuota}
                 openLocalProviders={openLocalProviders}
                 openCurrentProviders={openCurrentProviders}
               />

@@ -98,7 +98,7 @@ export function createFetchedQuota(options: {
           if (inflight?.abort !== abort) return EMPTY;
           inflight = undefined;
           if (key !== fingerprint()) return EMPTY;
-          cached = currentWindows(value ?? EMPTY, now());
+          cached = value === null ? { value: EMPTY, until: Infinity } : currentWindows(value, now());
           return cached.value;
         });
       inflight = { abort, result };
