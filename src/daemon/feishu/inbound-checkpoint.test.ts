@@ -781,8 +781,8 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
       return { ...port, putCheckpoint: (...args) => writeGate.then(() => port.putCheckpoint(...args)) };
     };
     const { tokyo, mac } = await bootstrapPair(clockRef, relay);
-    const write = Promise.withResolvers<void>();
-    writeGate = write.promise;
+    let releaseWrite!: () => void;
+    writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
     clockRef.now += 2_000;
     try {
       tokyo.fake.event(userMessage("om_lease_flip", "Message during hub handoff", clockRef.now));
@@ -795,7 +795,7 @@ describe("Cross-hub Feishu end-to-end deduplication acceptance scenarios", () =>
       await mac.service.syncLeaseConnection();
       await mac.service.idle();
     } finally {
-      write.resolve();
+      releaseWrite();
     }
     await tokyo.service.syncLeaseConnection();
     await tokyo.service.idle();
