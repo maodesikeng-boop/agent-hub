@@ -44,6 +44,7 @@ import type { FileAction } from "./preview.ts";
 import type { ServerInfo } from "./server-info.ts";
 import type { DeviceFingerprint, MeshLinkKind } from "./mesh.ts";
 import type { WorkerPick } from "./worker.ts";
+import type { TurnSummary } from "./turn.ts";
 
 export const API_PATHS = {
   auth: "/auth",
@@ -170,6 +171,8 @@ export interface ConversationSnapshot {
   conversation: Conversation;
   messages: Message[];
   hasMore: boolean;
+  /** Same contract as `MessagesPage.turns`, for the snapshot's message window plus the session's running turn. */
+  turns?: readonly TurnSummary[];
   workerLine?: WorkerLineSummary;
   workerBranch?: string | null;
 }
@@ -201,6 +204,8 @@ export interface ConversationsLookup {
 export interface MessagesPage {
   messages: Message[];
   hasMore: boolean;
+  /** One summary per turn that produced or took a message on this page; absent from daemons older than the turn ledger. */
+  turns?: readonly TurnSummary[];
 }
 
 export interface PostMessageRequest {
@@ -383,6 +388,7 @@ export const CHANGE_TYPES = [
   "router.command.updated",
   "task_graph.created",
   "task_graph.updated",
+  "turn.updated",
 ] as const;
 export type ChangeType = (typeof CHANGE_TYPES)[number];
 
@@ -410,6 +416,7 @@ export interface ChangeDataMap {
   "router.command.updated": { command: RouterCommandRecord };
   "task_graph.created": { graph: TaskGraph };
   "task_graph.updated": { graph: TaskGraph };
+  "turn.updated": { turn: TurnSummary };
 }
 
 export type Change = {

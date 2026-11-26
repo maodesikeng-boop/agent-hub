@@ -90,6 +90,11 @@ export interface SqliteLedger extends Ledger {
   projectCatalog: Omit<LedgerProjectCatalog, "afterDriverEvent" | "markForcedIn">;
   resolveRouterLocalWorker: LedgerRouter["resolveLocalWorker"];
   listRouterLocalWorkers: LedgerRouter["listLocalWorkers"];
+  /**
+   * Sends each due background-wait reminder to the owning PM and delivers held reports whose wake grace passed; the daemon
+   * calls it on its scheduler tick. Returns how many reminders were enqueued.
+   */
+  runDueBackgroundWaits(nowMs?: number): number;
   /** Call before closing the database. Pending driver events are flushed in order without attachments, and later events are dropped. */
   close(): void;
 }
@@ -560,6 +565,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     enrichDeliveryNoteMessage: taskGraphs.enrichDeliveryNoteMessage,
 
     runDueSchedules: schedules.runDueSchedules,
+    runDueBackgroundWaits(): number {
+      throw new Error("Not implemented");
+    },
     addSchedule: schedules.addForUser,
     setScheduleEnabled: schedules.setEnabledForUser,
     removeSchedule: schedules.removeForUser,

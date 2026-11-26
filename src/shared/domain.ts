@@ -12,6 +12,7 @@ import type { ReviewTarget, StoredReviewVerdict } from "./review.ts";
 import type { SandboxApprovalId, SandboxApprovalRef } from "./sandbox-approval.ts";
 import { APP_APPROVAL_RISK_LEVELS, type AppApprovalRef } from "./app-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
+import type { TurnId } from "./turn.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
 import type { JellyColorId } from "./slimes.ts";
@@ -238,6 +239,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return `${meta.sessionId}:${meta.uuid}:${meta.toolUseId}`;
       case "worker.max_time_exceeded":
         return `${meta.workerId}:${meta.maxTimeMs}`;
+      case "worker.background_wait":
+        return `${meta.workerId}:${meta.turnId}:${meta.reminder}`;
       case "task_graph.ready_to_finish":
         return `${meta.graphId}:${meta.seq}`;
       case "pm.wakeup":
@@ -262,6 +265,7 @@ export const SYSTEM_EVENTS = [
   "context.compacted",
   "driver.warning",
   "worker.max_time_exceeded",
+  "worker.background_wait",
   "task_graph.ready_to_finish",
   "pm.wakeup",
   CHECKLIST_REMINDER_EVENT,
@@ -282,6 +286,7 @@ export type SystemMessageMeta =
   | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
   | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number; deadlineAt?: number }
+  | { event: "worker.background_wait"; workerId: WorkerId; workerConversationId: ConversationId; turnId: TurnId; reminder: number }
   | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean }
   | { event: "pm.wakeup"; source: PmWakeupSource; ref: string }
   | { event: typeof CHECKLIST_REMINDER_EVENT; sessionId: SessionId; uuid: string; toolUseId: string };
@@ -723,6 +728,8 @@ export interface SessionState {
   stepStartedAt?: number | null;
   streamingText?: string | null;
   lastEventAt: number | null;
+  /** The session's running turn; null when idle, absent from daemons older than the turn ledger. */
+  activeTurnId?: TurnId | null;
 }
 
 export const HEALTH_MODULES = ["store", "actions", "driver", "ui-server", "agent-api"] as const;

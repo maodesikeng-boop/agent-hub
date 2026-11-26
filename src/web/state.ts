@@ -1,3 +1,4 @@
+import type { TurnSummary } from "../shared/turn.ts";
 import {
   MAX_CONVERSATION_LOOKUP_STATES,
   MAX_REWOUND_PENDING_KEYS,
@@ -66,6 +67,8 @@ export interface ConversationView {
   workerLine?: ConversationSnapshot["workerLine"];
   workerBranch?: string | null;
   outsideRev?: number;
+  /** Summaries of the turns behind the loaded messages, merged by turn id; absent when the daemon predates the turn ledger. */
+  turns?: readonly TurnSummary[];
 }
 
 type Phase = "loading" | "ready" | "error" | "unauthorized";
@@ -275,6 +278,15 @@ function withAppCard(state: HubState, message: Message): HubState {
       old.appName === ref.appName && old.appId === ref.appId && old.riskLevel === ref.riskLevel) return state;
   const card: PendingAppCard = { ...ref, conversationId: message.conversationId, text: message.text };
   return { ...state, pendingAppCards: [card, ...cards.filter((_, i) => i !== index)].slice(0, PENDING_APP_APPROVALS_SNAPSHOT_MAX) };
+}
+
+/**
+ * Replaces or inserts one turn summary in its conversation view.
+ * Postcondition: returns `state` unchanged when the conversation is not loaded, the summary is identical, or it would replace
+ * an ended summary with a running one for the same turn; other conversations keep their object references.
+ */
+export function applyTurnUpdate(_state: HubState, _turn: TurnSummary): HubState {
+  throw new Error("Not implemented");
 }
 
 export function applyChange(state: HubState, change: Change): HubState {
@@ -488,6 +500,8 @@ export function applyChange(state: HubState, change: Change): HubState {
       if (existingIndex === -1) return next;
       return { ...next, router: { ...state.router, commands: state.router.commands.with(existingIndex, command) } };
     }
+    case "turn.updated":
+      return applyTurnUpdate(next, change.data.turn);
     case "task_graph.created":
     case "task_graph.updated": {
       const graph = normalizeTaskGraph(change.data.graph);

@@ -1,5 +1,6 @@
 import { placeSystemInputs, systemInputPlacement } from "./turn-boundaries.ts";
 import { takenInputOf } from "../shared/taken-input.ts";
+import type { TurnId, TurnSummary } from "../shared/turn.ts";
 export { listConversations, previewText, type ConversationEntry } from "./conversation-list.ts";
 export {
   allPendingAsks,
@@ -727,7 +728,20 @@ export function failingHealth(state: HubState): HealthEntry[] {
 
 export type RenderItem =
   | { kind: "message"; message: Message }
-  | { kind: "turn"; key: string; work: Message[]; checklists: Message[]; parts: Message[]; startedAt: number; endedAt: number };
+  | {
+      kind: "turn";
+      key: string;
+      work: Message[];
+      checklists: Message[];
+      parts: Message[];
+      startedAt: number;
+      endedAt: number;
+      /** The daemon turn this card shows; null for history written before the turn ledger. */
+      turnId: TurnId | null;
+      durationMs: number | null;
+    };
+
+export type TurnItem = Extract<RenderItem, { kind: "turn" }>;
 
 type FlowRole =
   | "waiting"
@@ -776,14 +790,20 @@ function placeHandovers(all: readonly Message[]): Message[] {
   return rest;
 }
 
-interface GroupedMessages {
+export interface GroupedMessages {
   items: RenderItem[];
   tailTurnKey: string | null;
 }
 
 const groupMessagesCache = new WeakMap<readonly Message[], GroupedMessages>();
+const NO_TURNS: readonly TurnSummary[] = [];
 
-export function groupMessages(all: Message[]): GroupedMessages {
+/**
+ * Groups a conversation's loaded messages into render items. A turn card takes its identity, boundaries, and duration from
+ * the matching summary in `turns`; a mid-turn input listed in a summary stays inside that card.
+ * Postcondition: the same `all` and `turns` references return the same object.
+ */
+export function groupMessages(all: Message[], _turns: readonly TurnSummary[] = NO_TURNS): GroupedMessages {
   const hit = groupMessagesCache.get(all);
   if (hit !== undefined) return hit;
   const messages = placeHandovers(placeSystemInputs(all));
@@ -826,7 +846,7 @@ export function groupMessages(all: Message[]): GroupedMessages {
     }
     if (role === "agent" && turn === null) {
       const starts = [lastInputAt, lastAgentAt].filter((t): t is number => t !== null);
-      turn = { kind: "turn", key: `turn-${message.id}`, work: [], checklists: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt };
+      turn = { kind: "turn", key: `turn-${message.id}`, work: [], checklists: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt, turnId: null, durationMs: null };
       items.push(turn);
     }
     if (turn === null) {
@@ -847,6 +867,19 @@ export function groupMessages(all: Message[]): GroupedMessages {
   close();
   groupMessagesCache.set(all, grouped);
   return grouped;
+}
+
+/**
+ * Postcondition: the daemon duration of an ended turn, null while that turn runs, and endedAt - startedAt for a card written
+ * before the turn ledger (turnId null).
+ */
+export function workedForMsOf(_turn: Pick<TurnItem, "turnId" | "durationMs" | "startedAt" | "endedAt">): number | null {
+  throw new Error("Not implemented");
+}
+
+/** Postcondition: the key of the card showing the running turn, or null when the session has no running turn on this page. */
+export function liveTurnKeyOf(_grouped: GroupedMessages, _activeTurnId: TurnId | null | undefined): string | null {
+  throw new Error("Not implemented");
 }
 
 export interface DeviceRouterView {

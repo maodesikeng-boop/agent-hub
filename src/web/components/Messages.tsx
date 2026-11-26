@@ -248,7 +248,7 @@ export const TurnView = memo(
     revertedChanges,
     leanReports = false,
   }: {
-    turn: Pick<Turn, "work" | "checklists" | "parts" | "startedAt" | "endedAt">;
+    turn: Pick<Turn, "work" | "checklists" | "parts" | "startedAt" | "endedAt"> & Partial<Pick<Turn, "turnId" | "durationMs">>;
     identity: AgentIdentity;
     status?: React.ReactNode;
     stepStartedAt?: number | null;

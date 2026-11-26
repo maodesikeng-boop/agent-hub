@@ -150,6 +150,16 @@ export const START_TIMEOUT_MS = 60_000;
 export const IDLE_CLOSE_MS = 10 * 60_000;
 export const BACKGROUND_TASKS_HOLD_MAX_MS = 4 * 60 * 60_000;
 export const WORKER_BACKGROUND_HOLD_MAX_MS = 150 * 60_000;
+// Measured from the moment the model replied with tracked background commands still running; one reminder per entry.
+export const WORKER_BACKGROUND_REMIND_AT_MS: readonly number[] = [10 * 60_000, 30 * 60_000, 70 * 60_000];
+// A self-waking vendor normally starts its continuation within seconds of its last background command ending.
+export const WORKER_BACKGROUND_WAKE_GRACE_MS = 60_000;
+export const TURN_RECOVERY_MAX_ATTEMPTS = 3;
+export const TURN_HISTORY_RETENTION_DAYS = 30;
+// About 15,000 turns a month across all conversations; a single busy PM conversation stays well under this.
+export const TURN_HISTORY_MAX_PER_CONV = 5_000;
+export const TURN_TOOLS_MAX_PER_SESSION = 2_000;
+export const TURN_SUMMARIES_PER_PAGE_MAX = MESSAGE_PAGE_SIZE;
 export const SHUTDOWN_GRACE_MS = 10_000;
 
 export const LAST_EVENT_WRITE_MS = 1_000;
