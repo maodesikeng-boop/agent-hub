@@ -1,5 +1,5 @@
 import { validateAskOptions } from "../shared/domain.ts";
-import { MAX_GATE_OPTIONS, WORKER_LOG_MAX_STEPS, WORKER_SEARCH_MAX_LIMIT } from "../shared/limits.ts";
+import { checkHubLimitAmount, formatHubLimitViolations } from "../shared/hub-limits.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { workerCapabilitiesOf } from "../shared/pm-capabilities.ts";
 import { AGENT_VENDORS, isAgentVendor } from "../shared/vendors.ts";
@@ -109,9 +109,9 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
     if (rest.length === 0) throw new UsageError(`${hub} worker search 要至少一个关键词`);
     const body: Record<string, unknown> = { keywords: rest };
     if (values.limit !== undefined) {
-      if (!/^[1-9][0-9]*$/.test(values.limit) || Number(values.limit) > WORKER_SEARCH_MAX_LIMIT) {
-        throw new UsageError(`--limit 要写 1 到 ${WORKER_SEARCH_MAX_LIMIT} 之间的整数`);
-      }
+      if (!/^[1-9][0-9]*$/.test(values.limit)) throw new UsageError("--limit 要写正整数");
+      const violation = checkHubLimitAmount("worker.searchLimit", Number(values.limit));
+      if (violation !== null) throw new UsageError(formatHubLimitViolations([violation]));
       body.limit = Number(values.limit);
     }
     return { command: "worker.search", body, textSource: null };
@@ -126,9 +126,9 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
       return { command: "worker.log", body, textSource: null };
     }
     if (values.last !== undefined) {
-      if (!/^[1-9][0-9]*$/.test(values.last) || Number(values.last) > WORKER_LOG_MAX_STEPS) {
-        throw new UsageError(`--last 要写 1 到 ${WORKER_LOG_MAX_STEPS} 之间的整数`);
-      }
+      if (!/^[1-9][0-9]*$/.test(values.last)) throw new UsageError("--last 要写正整数");
+      const violation = checkHubLimitAmount("worker.logSteps", Number(values.last));
+      if (violation !== null) throw new UsageError(formatHubLimitViolations([violation]));
       body.last = Number(values.last);
     }
     return { command: "worker.log", body, textSource: null };
@@ -173,11 +173,8 @@ export function parseAskCommand({ group, action, rest, positionals, values, env,
     }
     let options: string[] | undefined;
     if (values.option !== undefined) {
-      const checked = validateAskOptions(values.option);
+      const checked = validateAskOptions(values.option, body.node === undefined ? "ask.options" : "ask.stepOptions");
       if (!checked.ok) throw new UsageError(checked.error);
-      if (body.node !== undefined && checked.options.length > MAX_GATE_OPTIONS) {
-        throw new UsageError(`步骤拍板卡的选项最多 ${MAX_GATE_OPTIONS} 个`);
-      }
       options = checked.options;
       body.options = checked.options;
     }

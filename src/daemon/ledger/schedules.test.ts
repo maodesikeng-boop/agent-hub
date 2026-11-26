@@ -11,7 +11,7 @@ import type { ConversationId, Message, MessageId, PmId, SessionId } from "../../
 import type { HubArgs, HubCommand } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode } from "../../shared/ledger.ts";
-import { MAX_SCHEDULES_PER_PM, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
+import { MAX_SCHEDULE_NAME_CHARS, MAX_SCHEDULES_PER_PM, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
 import { listActions } from "../actions/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -544,11 +544,11 @@ describe("T8 只能管自己的、非法参数被拒", () => {
       expectLedgerError(() => hub(lin.sessionId, "schedule.add", { name: "x", prompt: "p", daily: "09:00", ...args }), "invalid", message);
     bad({ name: "  " }, /名字/);
     bad({ name: "a\nb" }, /名字/);
-    bad({ name: "长".repeat(41) }, /名字/);
+    bad({ name: "长".repeat(MAX_SCHEDULE_NAME_CHARS + 1) }, new RegExp(`定时任务名称有 .*上限 ${MAX_SCHEDULE_NAME_CHARS} 字`));
     bad({ name: "【日报】" }, /【/);
     bad({ name: "日报】" }, /【/);
     bad({ prompt: " \n" }, /任务说明不能是空的/);
-    bad({ prompt: "x".repeat(MAX_TASK_BYTES + 1) }, /任务说明不能超过/);
+    bad({ prompt: "x".repeat(MAX_TASK_BYTES + 1) }, new RegExp(`任务说明有 .*上限 ${MAX_TASK_BYTES / 1024} KB`));
     bad({ everyMinutes: 60 }, /二选一/);
     bad({ daily: undefined }, /二选一/);
     bad({ daily: "9:00" }, /HH:MM/);
@@ -564,7 +564,7 @@ describe("T8 只能管自己的、非法参数被拒", () => {
 
   it("每个项目经理最多 20 个（含暂停的），超了报能看懂的错；别人的不占名额；删掉一个又能建", () => {
     for (let i = 0; i < MAX_SCHEDULES_PER_PM; i++) add({ name: `任务${i}` });
-    expectLedgerError(() => add({ name: "多的一个" }), "conflict", /最多 20 个.*schedule remove/);
+    expectLedgerError(() => add({ name: "多的一个" }), "conflict", new RegExp(`上限 ${MAX_SCHEDULES_PER_PM} 个.*schedule remove`));
     expect(add({ name: "阿周的" }, zhou.sessionId).pmId).toBe(zhou.pmId);
     hub(lin.sessionId, "schedule.remove", { scheduleId: 1 });
     expect(add({ name: "补上" }).name).toBe("补上");
@@ -592,7 +592,11 @@ describe("界面的定时任务接口（和 hub 命令同一套校验和写库�
     expectLedgerError(() => ledger.addSchedule(lin.pmId, { name: "a", prompt: "x", everyMinutes: 5 }), "invalid", /最短 15 分钟/);
     expectLedgerError(() => ledger.addSchedule(9_999, { name: "a", prompt: "x", daily: "09:00" }), "not_found");
     for (let i = 1; i < MAX_SCHEDULES_PER_PM; i++) ledger.addSchedule(lin.pmId, { name: `t${i}`, prompt: "x", daily: "09:00" });
-    expectLedgerError(() => ledger.addSchedule(lin.pmId, { name: "多的", prompt: "x", daily: "09:00" }), "conflict", /最多 20/);
+    expectLedgerError(
+      () => ledger.addSchedule(lin.pmId, { name: "多的", prompt: "x", daily: "09:00" }),
+      "conflict",
+      new RegExp(`上限 ${MAX_SCHEDULES_PER_PM} 个`),
+    );
   });
 
   it("setScheduleEnabled：暂停、恢复；removeSchedule：删掉并留“已删除”；不存在 not_found", () => {

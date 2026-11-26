@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
-import { normalizeName, utf8Bytes } from "../../shared/domain.ts";
+import { normalizeName } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, Project, ProjectFolder, ProjectId } from "../../shared/domain.ts";
 import type { HubArgs, HubResult, ProjectCard } from "../../shared/hub.ts";
-import { MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_SETUP_COMMAND_BYTES } from "../../shared/limits.ts";
+import { MAX_NAME_CHARS } from "../../shared/limits.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
-import { fail } from "./context.ts";
+import { assertHubLimit, fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 import { realpathOrLiteral } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
@@ -39,7 +39,7 @@ function validSetupCommand(command: unknown): string | null {
     throw fail("invalid", `准备命令不能是空的；要清除用 ${HUB_COMMAND} project setup --clear`);
   }
   if (command.includes("\0")) throw fail("invalid", "准备命令里不能有 NUL 字符");
-  if (utf8Bytes(command) > MAX_SETUP_COMMAND_BYTES) throw fail("invalid", `准备命令不能超过 ${MAX_SETUP_COMMAND_BYTES} 字节`);
+  assertHubLimit("project.setup", command);
   return command;
 }
 
@@ -146,10 +146,9 @@ export function createLedgerProjects(
     const conversation = privateConversation(pm.id);
     if (conversation === null) throw new Error(`pm ${pm.id} has no conversation`);
     const description = typeof input.description === "string" ? input.description.trim() || null : null;
-    if (description !== null && [...description].length > MAX_DESCRIPTION_CHARS) {
-      throw fail("invalid", `项目说明最多 ${MAX_DESCRIPTION_CHARS} 个字`);
-    }
+    if (description !== null) assertHubLimit("project.description", description);
     const path = resolveFolder(input.folder);
+    if (typeof input.name === "string") assertHubLimit("project.name", input.name.trim());
     const name = input.name === undefined ? defaultProjectName(path) : validName(input.name, "项目");
     const t = now();
     const row = db.get<ProjectDbRow>(

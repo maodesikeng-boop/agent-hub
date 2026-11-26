@@ -913,7 +913,7 @@ describe("hub ask 选项卡片（askOf、validateAskOptions、extractAskCard）"
     expect(validateAskOptions(["只有一个"])).toEqual({ ok: false, error: `选项至少要给 ${ASK_MIN_OPTIONS} 个` });
     expect(validateAskOptions(Array.from({ length: ASK_MAX_OPTIONS + 1 }, (_, i) => `选项 ${i}`))).toEqual({
       ok: false,
-      error: `选项最多 ${ASK_MAX_OPTIONS} 个`,
+      error: `选项有 ${ASK_MAX_OPTIONS + 1} 个，上限 ${ASK_MAX_OPTIONS} 个`,
     });
     expect(validateAskOptions(["  甲  ", "乙"])).toEqual({ ok: true, options: ["甲", "乙"] });
     expect(validateAskOptions(["甲", "   "])).toEqual({ ok: false, error: expect.stringContaining("不能为空") });

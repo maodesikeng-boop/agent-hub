@@ -10,13 +10,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AGENT_VENDORS,
   ALL_EFFORTS,
+  ASK_BODY_MAX_CHARS,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   HUB_COMMAND,
   HUB_EXIT,
   HUB_FILE_ARGS_MAX,
   LedgerRequestError,
-  ROUTER_CONTEXT_MAX_CHARS,
+  MAX_GATE_OPTIONS,
+  ROUTER_REPORT_SUMMARY_MAX_CHARS,
   TASK_GRAPH_CREATE_JSON_HINT,
   TASK_GRAPH_PATCH_JSON_HINT,
   type SessionTokens,
@@ -165,7 +167,8 @@ describe("hub cli", () => {
     it("shows the router report summary limit in hub help", async () => {
       const r = await hub(["help"]);
       expect(r.code).toBe(HUB_EXIT.ok);
-      expect(r.stdout).toMatch(new RegExp(`${cmd} router report [^\\n]*\\n[^\\n]*摘要最多 ${ROUTER_CONTEXT_MAX_CHARS} 字`));
+      const report = r.stdout.split(/\n(?=  hub )/u).find((section) => section.startsWith(`  ${cmd} router report `));
+      expect(report).toContain(`汇报摘要 ${ROUTER_REPORT_SUMMARY_MAX_CHARS} 字`);
     });
   });
 
@@ -314,6 +317,14 @@ describe("hub cli", () => {
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask", args: { text: "用 A 还是 B？" } }]);
     });
 
+    it("rejects an overlong ask background through the real agent API", async () => {
+      const actual = ASK_BODY_MAX_CHARS + 1;
+      const result = await hub(["ask", "--stdin"], { stdin: stdinOf(`继续吗？\n\n${"背".repeat(actual)}`) });
+      expect(result.code).toBe(HUB_EXIT.rejected);
+      expect(result.stderr).toContain(`提问背景有 ${actual} 字，上限 ${ASK_BODY_MAX_CHARS} 字；长材料存成文件，用 --file 挂在卡上`);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
     it("ask --option collects multiple options and validates count and content", async () => {
       const r = await hub(["ask", "--option", " 审一个 PR / 分支 ", "--option", "审本地代码路径", "--stdin"], {
         stdin: stdinOf("你想审什么？\n"),
@@ -337,7 +348,13 @@ describe("hub cli", () => {
         { stdin: stdinOf("问") },
       );
       expect(elevenOpts.code).toBe(HUB_EXIT.usage);
-      expect(elevenOpts.stderr).toContain("选项最多 10 个");
+      expect(elevenOpts.stderr).toContain("选项有 11 个，上限 10 个");
+      const stepAsk = await hub(
+        ["ask", "--node", "impl", ...Array.from({ length: 11 }, (_, i) => ["--option", `选项${i}`]).flat(), "--stdin"],
+        { stdin: stdinOf("问") },
+      );
+      expect(stepAsk.code).toBe(HUB_EXIT.usage);
+      expect(stepAsk.stderr).toContain(`步骤拍板卡选项有 11 个，上限 ${MAX_GATE_OPTIONS} 个`);
 
       for (const bad of ["   ", "带\n换行", "x".repeat(201)]) {
         const res = await hub(["ask", "--option", "好选项", "--option", bad, "--stdin"], { stdin: stdinOf("问") });
@@ -1690,7 +1707,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       const many = Array.from({ length: HUB_FILE_ARGS_MAX + 1 }, (_, i) => ["--file", `/tmp/${i}.png`]).flat();
       const r = await hub(["router", "report", "--summary", "好", ...many]);
       expect(r.code).toBe(HUB_EXIT.usage);
-      expect(r.stderr).toContain(`最多 ${HUB_FILE_ARGS_MAX} 个`);
+      expect(r.stderr).toContain(`--file有 ${HUB_FILE_ARGS_MAX + 1} 个，上限 ${HUB_FILE_ARGS_MAX} 个`);
       const empty = await hub(["router", "report", "--summary", "好", "--file", "方案="]);
       expect(empty.code).toBe(HUB_EXIT.usage);
       expect(ledger.calls).toHaveLength(0);

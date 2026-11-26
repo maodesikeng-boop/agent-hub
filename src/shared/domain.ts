@@ -13,7 +13,7 @@ import type { PmNoticeSubject } from "./pm-notice.ts";
 import type { SandboxApprovalId, SandboxApprovalRef } from "./sandbox-approval.ts";
 import { APP_APPROVAL_RISK_LEVELS, type AppApprovalRef } from "./app-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
-import { TEXT_LIMITS } from "./text-limits.ts";
+import { HUB_LIMITS, checkHubLimit, formatHubLimitViolations } from "./hub-limits.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { PmFruit } from "./fruits.ts";
 import type { JellyColorId } from "./slimes.ts";
@@ -390,21 +390,24 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
 
 export type AskOptionsValidation = { ok: true; options: string[] } | { ok: false; error: string };
 
-export function validateAskOptions(raw: readonly string[]): AskOptionsValidation {
+export function validateAskOptions(
+  raw: readonly string[],
+  countLimit: "ask.options" | "ask.stepOptions" | "ask.legacyRouterOptions" = "ask.options",
+): AskOptionsValidation {
   if (raw.length < ASK_MIN_OPTIONS) {
     return { ok: false, error: `选项至少要给 ${ASK_MIN_OPTIONS} 个` };
   }
-  if (raw.length > ASK_MAX_OPTIONS) {
-    return { ok: false, error: `选项最多 ${ASK_MAX_OPTIONS} 个` };
-  }
+  const count = checkHubLimit(countLimit, raw);
+  if (count !== null) return { ok: false, error: formatHubLimitViolations([count]) };
   const options: string[] = [];
-  const { maxChars } = TEXT_LIMITS["ask.option"];
   for (const item of raw) {
-    const normalized = normalizeName(item, maxChars);
+    const violation = checkHubLimit("ask.option", item.trim());
+    if (violation !== null) return { ok: false, error: formatHubLimitViolations([violation]) };
+    const normalized = normalizeName(item, HUB_LIMITS["ask.option"].max);
     if (normalized === null) {
       return {
         ok: false,
-        error: `选项不能为空、不能含换行或控制字符，且不超过 ${maxChars} 个字符`,
+        error: "选项不能为空、不能含换行或控制字符",
       };
     }
     options.push(normalized);

@@ -5,17 +5,17 @@ import type { MessageId, PmId, TaskGraphId, TaskNodeKey, WorkerId } from "../../
 import { mergeDeliverables, type HubFileArg } from "../../../shared/deliverables.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, type HubArgs, type HubResult } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
-import { DELIVERABLES_PER_STEP_MAX, MAX_DECISION_CHOICE_CHARS, MAX_DECISION_NOTE_CHARS } from "../../../shared/limits.ts";
+import { DELIVERABLES_PER_STEP_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { SentFile } from "../../../shared/sent-files.ts";
-import { TEXT_LIMITS } from "../../../shared/text-limits.ts";
+import { HUB_LIMITS, formatHubLimitViolations, splitAskCardText } from "../../../shared/hub-limits.ts";
 import { userBlockerText } from "../../../shared/user-blockers.ts";
 import { isReportFieldNone, parseWorkerReport } from "../../../shared/worker.ts";
-import { fail, type Pending } from "../context.ts";
+import { assertHubLimit, fail, type Pending } from "../context.ts";
 import { executeStepDecisionIn, gateDecideWakeupKey, workerDecisionDedupeKey, type DecisionResult } from "./decision.ts";
 import { stopQueuedDeliveryNotesIn } from "./delivery.ts";
 import { artifactWithoutCheckpoint, decisionWakeupClientIdOf, gateOptionsOf, isStoredCheckpoint, readStoredArtifact, serializeArtifact, toTaskNode, workerIdsOf } from "./rows.ts";
-import { charLen, gateOptionsJsonOf, splitAskTextForGate, validateGateFields, validateNodeKey, type GateFields } from "./spec.ts";
+import { charLen, gateOptionsJsonOf, validateGateFields, validateNodeKey, type GateFields } from "./spec.ts";
 import {
   blockersOf,
   getGraphRow,
@@ -53,12 +53,15 @@ function checkpointContext(g: TaskGraphCtx, node: TaskNodeDbRow, conversationId:
 }
 
 function askGateOf(g: TaskGraphCtx, graph: TaskGraphDbRow, node: TaskNodeDbRow, args: AskOnStepArgs, checkpoint: boolean): GateFields {
-  const { question, summaryMd } = splitAskTextForGate(args.text);
+  if (args.text.trim() === "") throw fail("invalid", "要问用户的话不能是空的");
+  const split = splitAskCardText(args.text, true);
+  if (!split.ok) throw fail("invalid", formatHubLimitViolations(split.violations));
+  const { question, body } = split.card;
   const gate = validateGateFields({
     question,
     options: args.options ?? (checkpoint ? [...CONFIRM_CHECKPOINT_OPTIONS] : undefined),
     recommended: args.recommended ?? (checkpoint ? CONFIRM_PASS_OPTION : undefined),
-    summaryMd: summaryMd ?? undefined,
+    summaryMd: body ?? undefined,
   });
   if (gate.question === null) throw fail("invalid", "拍板卡的问题不能为空");
   if (checkpoint && (gate.options.length !== CONFIRM_CHECKPOINT_OPTIONS.length ||
@@ -67,8 +70,11 @@ function askGateOf(g: TaskGraphCtx, graph: TaskGraphDbRow, node: TaskNodeDbRow, 
   }
   if (gate.recommended !== null && gate.options.length === 0) throw fail("invalid", "--recommended 要配合 --option <选项>... 一起用");
   if (!checkpoint) return gate;
-  const context = [gate.summaryMd, ...checkpointContext(g, node, graph.conversation_id)].filter(Boolean).join("\n\n");
-  return { ...gate, summaryMd: context === "" ? null : truncateChars(context, TEXT_LIMITS["gate.summary"].maxChars) };
+  const context = checkpointContext(g, node, graph.conversation_id).join("\n\n");
+  const separator = gate.summaryMd === null ? "" : "\n\n";
+  const remaining = HUB_LIMITS["ask.stepBody"].max - charLen(gate.summaryMd ?? "") - separator.length;
+  if (context === "" || remaining <= 0) return gate;
+  return { ...gate, summaryMd: `${gate.summaryMd ?? ""}${separator}${truncateChars(context, remaining)}` };
 }
 
 function askTargetStep(g: TaskGraphCtx, graphRow: TaskGraphDbRow, nodeKey: TaskNodeKey): TaskNodeDbRow {
@@ -225,11 +231,10 @@ export function decideIn(
   g.persona.assertPmNotArchived(caller.pmId);
   const nodeKey = validateNodeKey(args.nodeKey);
   const choice = args.choice.trim();
-  if (choice === "" || charLen(choice) > MAX_DECISION_CHOICE_CHARS) {
-    throw fail("invalid", `定案选项不能为空，且最多 ${MAX_DECISION_CHOICE_CHARS} 字`);
-  }
+  if (choice === "") throw fail("invalid", "定案选项不能为空");
+  assertHubLimit("decide.choice", choice);
   const note = args.note?.trim() || null;
-  if (note !== null && charLen(note) > MAX_DECISION_NOTE_CHARS) throw fail("invalid", `补充说明最多 ${MAX_DECISION_NOTE_CHARS} 字`);
+  if (note !== null) assertHubLimit("decide.note", note);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, nodeKey, requireActive: false });
   const node = requireStepRow(g.db, graphRow.id, nodeKey);
   const pendingAsk = pendingStepAskOf(g, node);
@@ -272,8 +277,8 @@ function userDecisionOf(input: DecideTaskNodeRequest, gateOptions: readonly stri
   const choice = trimmedOrNull(input.choice);
   const note = trimmedOrNull(input.note);
   if (choice === null && note === null) throw fail("invalid", "请至少选择一个方案或填写拍板意见");
-  if (choice !== null && charLen(choice) > MAX_DECISION_CHOICE_CHARS) throw fail("invalid", `所选方案最多 ${MAX_DECISION_CHOICE_CHARS} 字`);
-  if (note !== null && charLen(note) > MAX_DECISION_NOTE_CHARS) throw fail("invalid", `补充说明最多 ${MAX_DECISION_NOTE_CHARS} 字`);
+  if (choice !== null) assertHubLimit("decide.choice", choice);
+  if (note !== null) assertHubLimit("decide.note", note);
   if (choice !== null && gateOptions.length > 0 && !gateOptions.includes(choice)) {
     throw fail("invalid", `所选方案「${choice}」不在拍板卡的选项中`);
   }

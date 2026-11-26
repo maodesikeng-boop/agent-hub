@@ -2,14 +2,14 @@ import type { AgentSessionRow, ConversationId, SessionId, WorkerRecord } from ".
 import { formatCount } from "../../shared/count-format.ts";
 import type { HubArgs, HubResult, WorkerLogStep, WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
-import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_RETENTION_DAYS, WORKER_RETENTION_MAX_ENDED, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { WORKER_LOG_DEFAULT_STEPS, WORKER_RETENTION_DAYS, WORKER_RETENTION_MAX_ENDED, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { parseReviewTarget } from "../../shared/review.ts";
 import { formatDurationShort } from "../../shared/schedule.ts";
 import { formatDuration } from "../../shared/step-labels.ts";
 import { agentEffortOf, effortLabel, vendorLabel } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
-import { fail } from "./context.ts";
+import { assertHubLimitAmount, fail } from "./context.ts";
 import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
 import { toWorkerRecord } from "./rows.ts";
@@ -242,9 +242,8 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     const worker = ownWorker(caller.pmId, args.workerId);
     if (args.stats === true) return stats(worker, args);
     const last = args.last ?? WORKER_LOG_DEFAULT_STEPS;
-    if (!Number.isSafeInteger(last) || last < 1 || last > WORKER_LOG_MAX_STEPS) {
-      throw fail("invalid", `--last 要写 1 到 ${WORKER_LOG_MAX_STEPS} 之间的整数`);
-    }
+    if (!Number.isSafeInteger(last) || last < 1) throw fail("invalid", "--last 要写正整数");
+    assertHubLimitAmount("worker.logSteps", last);
     const purged = purgedNote(worker);
     if (purged !== null) return { text: `Worker #${worker.id}“${worker.title}”：${purged}。`, data: { worker: toWorkerRecord(worker), steps: [] } };
     const session = workerSession(worker);

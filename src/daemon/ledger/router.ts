@@ -13,7 +13,7 @@ import type {
 } from "../../shared/api.ts";
 import { deliverablesOf, type Deliverable } from "../../shared/deliverables.ts";
 import { askOf, extractAskCard } from "../../shared/domain.ts";
-import { checkTextLimit, formatTextLimitViolations } from "../../shared/text-limits.ts";
+import { formatHubLimitViolations, splitAskCardText } from "../../shared/hub-limits.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -30,21 +30,15 @@ import type {
 import { getAgentSession } from "../store/index.ts";
 import type { HubArgs, HubResult } from "../../shared/hub.ts";
 import {
-  MAX_DECISION_NOTE_CHARS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_AUDIT_LOG_MAX_ROWS,
   ROUTER_STREAM_PAGE_SIZE,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
-  ROUTER_CONTEXT_MAX_CHARS,
   ROUTER_PENDING_DECISIONS_PER_PM_MAX,
   ROUTER_PM_ACTIVE_WORKERS_MAX,
   ROUTER_PM_BRIEF_MAX_CHARS,
-  ROUTER_QUESTION_MAX_CHARS,
   ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
-  ROUTER_REPORT_LINKS_MAX,
-  ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
-  ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
   ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
   ROUTER_STREAM_PAGE_MAX_BYTES,
   ROUTER_WORKER_LIST_MAX,
@@ -83,7 +77,7 @@ import type {
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, checkEffort, checkModel, isAgentVendor, normalizeEffortInput } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import type { Db } from "../store/index.ts";
-import { fail } from "./context.ts";
+import { assertHubLimit, assertHubLimitAmount, fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
@@ -120,7 +114,6 @@ interface RouterSettingsDbRow {
   updated_at: number;
 }
 
-const charLen = (s: string): number => [...s].length;
 const sliceChars = (s: string, max: number): string => {
   const chars = [...s];
   return chars.length <= max ? s : `${chars.slice(0, Math.max(0, max - 1)).join("")}…`;
@@ -338,13 +331,7 @@ export function createLedgerRouter(
         p.changes.push({ type: "router.item.updated", data: { item: toRouterItem(getItemRow(target.id)!) } });
       }
     }
-    const currentPending = pendingDecisionCountOf(pmId);
-    if (currentPending >= ROUTER_PENDING_DECISIONS_PER_PM_MAX) {
-      throw fail(
-        "conflict",
-        `你当前已有 ${ROUTER_PENDING_DECISIONS_PER_PM_MAX} 张未决拍板卡，请等用户拍板，或用 --replace <旧卡编号> 替换旧卡`,
-      );
-    }
+    assertHubLimitAmount("ask.pending", pendingDecisionCountOf(pmId) + 1, "conflict");
   };
 
   const bridgeAskIn = (
@@ -359,22 +346,9 @@ export function createLedgerRouter(
     const raw = message.text.trim();
     if (raw === "") return null;
     const effectiveOptions = askOptions ?? extractAskCard(message)?.options;
-    const splitMatch = /^([^\r\n]+?)(?:\r?\n\s*\r?\n|\r?\n)([\s\S]+)$/u.exec(raw);
-    let question: string;
-    let context: string;
-    if (splitMatch !== null) {
-      const firstLine = splitMatch[1]!.trim();
-      question =
-        charLen(firstLine) <= ROUTER_QUESTION_MAX_CHARS ? firstLine : sliceChars(firstLine, ROUTER_QUESTION_MAX_CHARS);
-      context = sliceChars(splitMatch[2]!.trim(), ROUTER_CONTEXT_MAX_CHARS);
-    } else {
-      const rawChars = [...raw];
-      question = rawChars.length <= ROUTER_QUESTION_MAX_CHARS ? raw : sliceChars(raw, ROUTER_QUESTION_MAX_CHARS);
-      context =
-        rawChars.length <= ROUTER_QUESTION_MAX_CHARS
-          ? ""
-          : sliceChars(rawChars.slice(ROUTER_QUESTION_MAX_CHARS - 1).join("").trim(), ROUTER_CONTEXT_MAX_CHARS);
-    }
+    const split = splitAskCardText(raw, false);
+    if (!split.ok) throw fail("invalid", formatHubLimitViolations(split.violations));
+    const { question, body: context } = split.card;
     const project = activeProjectOf(session.pmId);
     const t = now();
     const row = db.get<RouterItemDbRow>(
@@ -387,7 +361,7 @@ export function createLedgerRouter(
       session.conversationId,
       session.id,
       question,
-      context,
+      context ?? "",
       JSON.stringify(effectiveOptions ?? []),
       message.id,
       t,
@@ -429,6 +403,7 @@ export function createLedgerRouter(
     caller: AgentSessionRow & { pmId: PmId },
     rawArgs: Omit<HubArgs<"router.report">, "files">,
     deliverables: readonly Deliverable[] = [],
+    summaryLimit: "router.reportSummary" | "graph.finishSummary" = "router.reportSummary",
   ): HubResult<"router.report"> => {
     assertPmNotArchived(caller.pmId);
     const parsed = routerReportSchema.safeParse(rawArgs);
@@ -436,23 +411,16 @@ export function createLedgerRouter(
 
     const summary = parsed.data.summary.trim();
     if (summary === "") throw fail("invalid", "汇报摘要不能是空的");
-    const violation = checkTextLimit("router.reportSummary", summary);
-    if (violation !== null) throw fail("invalid", formatTextLimitViolations([violation]));
+    assertHubLimit(summaryLimit, summary);
 
     const rawLinks = parsed.data.links ?? [];
-    if (rawLinks.length > ROUTER_REPORT_LINKS_MAX) {
-      throw fail("invalid", `汇报最多附带 ${ROUTER_REPORT_LINKS_MAX} 个链接`);
-    }
+    assertHubLimit("router.links", rawLinks);
     const links: RouterReportLink[] = rawLinks.map((lnk) => {
       const label = lnk.label.trim();
       const target = lnk.target.trim();
       if (label === "" || target === "") throw fail("invalid", "链接的标题和地址都不能是空的");
-      if (charLen(label) > ROUTER_REPORT_LINK_LABEL_MAX_CHARS) {
-        throw fail("invalid", `链接标题最多 ${ROUTER_REPORT_LINK_LABEL_MAX_CHARS} 字`);
-      }
-      if (charLen(target) > ROUTER_REPORT_LINK_TARGET_MAX_CHARS) {
-        throw fail("invalid", `链接地址最多 ${ROUTER_REPORT_LINK_TARGET_MAX_CHARS} 字`);
-      }
+      assertHubLimit("router.linkLabel", label);
+      assertHubLimit("router.linkTarget", target);
       if (parseLocalHref(target) !== null) {
         throw fail("invalid", `--link ${label}=${target} 是本机文件，总助里点不开：改用 --file ${label}=${target}`);
       }
@@ -546,9 +514,7 @@ export function createLedgerRouter(
       }
 
       const note = (input.note ?? "").trim();
-      if (charLen(note) > MAX_DECISION_NOTE_CHARS) {
-        throw fail("invalid", `补充说明最多 ${MAX_DECISION_NOTE_CHARS} 字`);
-      }
+      assertHubLimit("decide.note", note);
       if (chosenOption === null && note === "") {
         throw fail("invalid", "请至少选择一个选项或填写补充说明");
       }

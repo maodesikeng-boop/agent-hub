@@ -1,16 +1,9 @@
 import { z } from "zod";
-import { truncateChars, validateAskOptions } from "../../../shared/domain.ts";
+import { validateAskOptions } from "../../../shared/domain.ts";
 import type { TaskEdge, TaskNodeKey } from "../../../shared/domain.ts";
 import type { CreateTaskGraphNodeInput } from "../../../shared/hub.ts";
-import {
-  MAX_GATE_OPTIONS,
-  MAX_GRAPH_EDGES,
-  MAX_GRAPH_NODES,
-  MAX_GRAPH_SPEC_BYTES,
-} from "../../../shared/limits.ts";
 import { workerCapabilitiesOf, type WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../../shared/schedule.ts";
-import { checkTextLimit, formatTextLimitViolations, TEXT_LIMITS, type TextLimitId } from "../../../shared/text-limits.ts";
 import {
   AGENT_VENDORS,
   checkEffort,
@@ -23,7 +16,7 @@ import {
   type ModelCatalog,
 } from "../../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
-import { fail } from "../context.ts";
+import { assertHubLimit, fail } from "../context.ts";
 
 const NODE_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 /** Mirrors `git check-ref-format`. */
@@ -33,14 +26,9 @@ export const charLen = (s: string): number => [...s].length;
 
 export const edgeSig = (fromKey: TaskNodeKey, toKey: TaskNodeKey): string => `${fromKey}\0${toKey}`;
 
-function assertTextLimit(id: TextLimitId, text: string, target?: string): void {
-  const violation = checkTextLimit(id, text, target);
-  if (violation !== null) throw fail("invalid", formatTextLimitViolations([violation]));
-}
-
 export function validateNodeKey(raw: string): TaskNodeKey {
   const key = raw.trim();
-  assertTextLimit("step.key", key);
+  assertHubLimit("step.key", key);
   if (!NODE_KEY_RE.test(key)) {
     throw fail("invalid", `节点标识「${raw}」不合法：需由字母、数字、_、-、. 组成，以字母或数字开头`);
   }
@@ -50,7 +38,7 @@ export function validateNodeKey(raw: string): TaskNodeKey {
 function validateSingleLine(raw: string, id: "step.title" | "graph.title", message: string): string {
   const title = raw.trim();
   if (title === "" || /[\r\n]/.test(title)) throw fail("invalid", message);
-  assertTextLimit(id, title);
+  assertHubLimit(id, title);
   return title;
 }
 
@@ -63,7 +51,7 @@ export const validateGraphTitle = (raw: string): string =>
 function validateOptionalText(raw: string | null | undefined, id: "graph.goal" | "step.brief", target?: string): string | null {
   const text = raw?.trim() ?? "";
   if (text === "") return null;
-  assertTextLimit(id, text, target);
+  assertHubLimit(id, text, target);
   return text;
 }
 
@@ -80,7 +68,7 @@ export function validateStepBase(raw: string | null | undefined, review: boolean
     if (base !== "main") throw fail("invalid", '普通步骤的 base 只能是 "main"（审查步骤的 base 才写被审分支）');
     return "main";
   }
-  assertTextLimit("step.base", base);
+  assertHubLimit("step.base", base);
   if (base === "main" || !BRANCH_NAME_RE.test(base)) {
     throw fail("invalid", `审查步骤的 base 写被审分支的名字（不能是 main），现在是 ${JSON.stringify(base)}`);
   }
@@ -124,10 +112,7 @@ export interface GateFields {
 
 function validateGateOptions(raw: string[] | undefined): string[] {
   if (raw === undefined || raw.length === 0) return [];
-  if (raw.length < 2 || raw.length > MAX_GATE_OPTIONS) {
-    throw fail("invalid", `拍板卡的选项数量需在 2 到 ${MAX_GATE_OPTIONS} 个之间`);
-  }
-  const checked = validateAskOptions(raw);
+  const checked = validateAskOptions(raw, "ask.stepOptions");
   if (!checked.ok) throw fail("invalid", checked.error);
   return checked.options;
 }
@@ -151,10 +136,10 @@ export function validateGateFields(input: {
   recommended?: string;
 }): GateFields {
   const question = input.question !== undefined ? input.question.trim() : "";
-  assertTextLimit("gate.question", question);
+  assertHubLimit("ask.stepQuestion", question);
   const options = validateGateOptions(input.options);
   const summaryMd = input.summaryMd !== undefined && input.summaryMd.trim() !== "" ? input.summaryMd.trim() : null;
-  if (summaryMd !== null) assertTextLimit("gate.summary", summaryMd);
+  if (summaryMd !== null) assertHubLimit("ask.stepBody", summaryMd);
   return {
     question: question === "" ? null : question,
     options,
@@ -168,12 +153,8 @@ export const gateOptionsJsonOf = (gate: Pick<GateFields, "options">): string | n
 
 function checkGraphSize(nodeKeys: readonly TaskNodeKey[], edges: readonly TaskEdge[]): void {
   if (nodeKeys.length === 0) throw fail("invalid", "任务图至少需要 1 个节点");
-  if (nodeKeys.length > MAX_GRAPH_NODES) {
-    throw fail("invalid", `单张任务图最多 ${MAX_GRAPH_NODES} 个节点（当前 ${nodeKeys.length} 个）`);
-  }
-  if (edges.length > MAX_GRAPH_EDGES) {
-    throw fail("invalid", `单张任务图最多 ${MAX_GRAPH_EDGES} 条依赖边（当前 ${edges.length} 条）`);
-  }
+  assertHubLimit("graph.steps", nodeKeys);
+  assertHubLimit("graph.edges", edges);
 }
 
 function buildAdjacency(nodeKeys: readonly TaskNodeKey[], edges: readonly TaskEdge[]) {
@@ -252,6 +233,7 @@ export function validateStepAgentSetting(
   }
   const targetVendor = resolvedVendor ?? fallbackVendor;
   const givenModel = typeof input.model === "string" ? input.model.trim() || null : null;
+  if (givenModel !== null) assertHubLimit("worker.model", givenModel);
   const catalog = catalogOf(targetVendor);
   const givenEffort = normalizeEffortInput(targetVendor, typeof input.effort === "string" ? input.effort.trim() || null : null, catalog);
   const bad =
@@ -319,32 +301,13 @@ export function normalizeNewStep(
   };
 }
 
-export function splitAskTextForGate(rawText: string): { question: string; summaryMd: string | null } {
-  const trimmed = rawText.trim();
-  if (trimmed === "") throw fail("invalid", "要问用户的话不能是空的");
-  const questionMax = TEXT_LIMITS["gate.question"].maxChars;
-  const summaryMax = TEXT_LIMITS["gate.summary"].maxChars;
-  const splitMatch = /^([^\r\n]+?)(?:\r?\n\s*\r?\n|\r?\n)([\s\S]+)$/u.exec(trimmed);
-  if (splitMatch !== null) {
-    const rest = splitMatch[2]!.trim();
-    return {
-      question: truncateChars(splitMatch[1]!.trim(), questionMax),
-      summaryMd: rest === "" ? null : truncateChars(rest, summaryMax),
-    };
-  }
-  if (charLen(trimmed) <= questionMax) return { question: trimmed, summaryMd: null };
-  return {
-    question: truncateChars(trimmed, questionMax),
-    summaryMd: truncateChars(trimmed, summaryMax),
-  };
-}
-
 export function parseSpecJson<T>(
   raw: unknown,
   schema: z.ZodType,
   messages: { empty: string; badJson: string; badShape: string },
 ): T {
-  if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > MAX_GRAPH_SPEC_BYTES) throw fail("invalid", messages.empty);
+  if (typeof raw !== "string" || raw.trim() === "") throw fail("invalid", messages.empty);
+  assertHubLimit("graph.spec", raw);
   let obj: unknown;
   try {
     obj = JSON.parse(raw);

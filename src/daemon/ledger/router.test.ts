@@ -15,7 +15,7 @@ import {
   ROUTER_COMMAND_MAX_RETRIES,
   ROUTER_COMMAND_RETRY_ID_MAX_CHARS,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
-  ROUTER_CONTEXT_MAX_CHARS,
+  ROUTER_REPORT_SUMMARY_MAX_CHARS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_PENDING_DECISIONS_PER_PM_MAX,
   ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
@@ -571,7 +571,7 @@ describe("临时 assistant 会话收尾：agent_sessions.id 只增不退、不�
 /** 满长的一条简报：400 字正文 + 4 个标题、地址都写满的链接。 */
 function fullReport(pm: { sessionId: SessionId }, i: number) {
   return ledger.hubCall(pm.sessionId, "router.report", {
-    summary: `${i}`.padEnd(ROUTER_CONTEXT_MAX_CHARS, "报"),
+    summary: `${i}`.padEnd(ROUTER_REPORT_SUMMARY_MAX_CHARS, "报"),
     links: Array.from({ length: ROUTER_REPORT_LINKS_MAX }, (_, k) => ({
       label: `${i}-${k}`.padEnd(ROUTER_REPORT_LINK_LABEL_MAX_CHARS, "链"),
       target: `https://example.com/${i}/${k}/`.padEnd(ROUTER_REPORT_LINK_TARGET_MAX_CHARS, "a"),
