@@ -6,12 +6,14 @@ import {
   type Attachment,
   type PostRouterCommandResponse,
   type PostRouterCommandTarget,
+  type RetryRouterCommandRequest,
   type RouterCommandId,
+  type RouterCommandRecord,
 } from "../shared/index.ts";
 import { localClient } from "./client.ts";
 import { errorText, newClientId, type ErrorLike } from "./format.ts";
 import { useHubQueryClient } from "./query-client.ts";
-import { turnEntryOfCommand, type RouterTurnEntry } from "./router-stream.ts";
+import { runRetryIdOf, turnEntryOfCommand, type RouterTurnEntry } from "./router-stream.ts";
 
 export const ROUTER_COMMAND_MUTATION_KEY = ["router-command"] as const;
 export const ROUTER_RETRY_MUTATION_KEY = ["router-command-retry"] as const;
@@ -26,26 +28,24 @@ export interface RouterCommandVariables {
   createdAt: number;
 }
 
-export interface RouterRetryVariables {
+export interface RouterRetryVariables extends RetryRouterCommandRequest {
   commandId: RouterCommandId;
-  /** RouterTurnEntry.version of the failed command this retry starts from, undefined when that turn has none. */
-  version: number | undefined;
 }
 
 export interface RawRouterRetry {
   commandId: RouterCommandId;
-  version: number | undefined;
+  fromRetryId: string | null;
   status: "idle" | "pending" | "success" | "error";
   error: unknown;
 }
 
-/** A retry still posting, or the failed version an accepted retry started from. */
-export type RouterRetryMark = "posting" | number;
-
-export interface RouterRetryState {
-  retryingMap: Readonly<Record<RouterCommandId, RouterRetryMark>>;
-  retryErrors: Readonly<Record<RouterCommandId, ErrorLike>>;
+/** A command's latest retry: the failed run it retried, and the error its request got if it failed. */
+export interface RouterRetryMark {
+  fromRetryId: string | null;
+  error?: ErrorLike;
 }
+
+export type RouterRetries = Readonly<Record<RouterCommandId, RouterRetryMark>>;
 
 export interface RawRouterMutation {
   clientId: string;
@@ -63,16 +63,18 @@ export interface SendRouterCommandInput {
   routerOnly?: boolean;
 }
 
-export interface RouterCommandsState extends RouterRetryState {
+export interface RouterCommandsState {
   send: (input: SendRouterCommandInput) => string;
   pendingTurns: readonly RouterTurnEntry[];
   retryUnsent: (clientId: string) => void;
-  retryCommand: (commandId: RouterCommandId, version: number | undefined) => void;
+  retries: RouterRetries;
+  retryCommand: (commandId: RouterCommandId, fromRetryId: string | null) => void;
 }
 
 const NO_PENDING_TURNS: readonly RouterTurnEntry[] = [];
 const NO_ATTACHMENTS: Attachment[] = [];
-const NO_RETRY_STATE: RouterRetryState = { retryingMap: {}, retryErrors: {} };
+const NO_RETRIES: RouterRetries = {};
+const NOT_RETRYING = { retryPending: false, retryError: undefined } as const;
 
 /**
  * Precondition: confirmedClientIds contains the clientIds already present in live server turns.
@@ -142,23 +144,15 @@ export function buildPendingRouterTurns(
   return unchanged ? prev : built;
 }
 
-/** An accepted retry is still waiting on the server while the live failed version is the one it started from. */
-const awaitingServer = (retryVersion: number | undefined, liveVersion: number | undefined): boolean =>
-  retryVersion !== undefined && retryVersion === liveVersion;
+/** A retry speaks only for the run it retried: once the command shows another run, that run's own status and Retry apply. */
+const speaksFor = (fromRetryId: string | null, command: RouterCommandRecord): boolean => fromRetryId === runRetryIdOf(command);
 
 /** Whether a failed turn is mid-retry (shown as running) and the error of its last retry, for one turn row. */
-export function retryStateOf(
-  entry: RouterTurnEntry,
-  retryingMap: Readonly<Record<RouterCommandId, RouterRetryMark>>,
-  retryErrors: Readonly<Record<RouterCommandId, ErrorLike>>,
-): { retryPending: boolean; retryError: ErrorLike | undefined } {
+export function retryStateOf(entry: RouterTurnEntry, retries: RouterRetries): { retryPending: boolean; retryError: ErrorLike | undefined } {
   const command = entry.command;
-  if (command === null) return { retryPending: false, retryError: undefined };
-  const mark = retryingMap[command.id];
-  return {
-    retryPending: command.status === "failed" && (mark === "posting" || (typeof mark === "number" && awaitingServer(mark, entry.version))),
-    retryError: retryErrors[command.id],
-  };
+  const mark = command === null ? undefined : retries[command.id];
+  if (command === null || mark === undefined || !speaksFor(mark.fromRetryId, command)) return NOT_RETRYING;
+  return mark.error === undefined ? { retryPending: command.status === "failed", retryError: undefined } : { retryPending: false, retryError: mark.error };
 }
 
 function selectRouterMutation(m: Mutation<unknown, unknown, unknown, unknown>): RawRouterMutation | null {
@@ -178,7 +172,7 @@ const retryVarsOf = (m: { state: { variables: unknown } }) => m.state.variables 
 function selectRouterRetry(m: Mutation<unknown, unknown, unknown, unknown>): RawRouterRetry | null {
   const vars = retryVarsOf(m);
   if (vars === undefined || typeof vars.commandId !== "number") return null;
-  return { commandId: vars.commandId, version: vars.version, status: m.state.status, error: m.state.error };
+  return { commandId: vars.commandId, fromRetryId: vars.fromRetryId, status: m.state.status, error: m.state.error };
 }
 
 const retryErrorCache = new WeakMap<object, ErrorLike>();
@@ -200,39 +194,42 @@ function sameEntries<V>(a: Readonly<Record<RouterCommandId, V>>, b: Readonly<Rec
 
 /**
  * Precondition: rawRetries are ordered oldest-first from React Query's mutation cache.
- * Postcondition: maps each command's latest retry, still posting to "posting", succeeded to the version it retried (none without one), and failed to its error, returning prev or prev's records when their entries are unchanged.
+ * Postcondition: maps each command's latest retry to the run it retried and, when its request failed, the error, returning prev or prev's marks when they are unchanged.
  */
-export function buildRouterRetryState(rawRetries: readonly (RawRouterRetry | null)[], prev: RouterRetryState): RouterRetryState {
+export function buildRouterRetries(rawRetries: readonly (RawRouterRetry | null)[], prev: RouterRetries): RouterRetries {
   const latest = new Map<RouterCommandId, RawRouterRetry>();
   for (const r of rawRetries) if (r !== null) latest.set(r.commandId, r);
-  const retryingMap: Record<RouterCommandId, RouterRetryMark> = {};
-  const retryErrors: Record<RouterCommandId, ErrorLike> = {};
+  const next: Record<RouterCommandId, RouterRetryMark> = {};
   for (const [id, r] of latest) {
-    if (r.status === "error") retryErrors[id] = retryErrorOf(r.error);
-    else if (r.status !== "success") retryingMap[id] = "posting";
-    else if (r.version !== undefined) retryingMap[id] = r.version;
+    const error = r.status === "error" ? retryErrorOf(r.error) : undefined;
+    const old = prev[id];
+    next[id] =
+      old !== undefined && old.fromRetryId === r.fromRetryId && old.error === error
+        ? old
+        : { fromRetryId: r.fromRetryId, ...(error !== undefined ? { error } : {}) };
   }
-  const next: RouterRetryState = {
-    retryingMap: sameEntries(prev.retryingMap, retryingMap) ? prev.retryingMap : retryingMap,
-    retryErrors: sameEntries(prev.retryErrors, retryErrors) ? prev.retryErrors : retryErrors,
-  };
-  return next.retryingMap === prev.retryingMap && next.retryErrors === prev.retryErrors ? prev : next;
+  return sameEntries(prev, next) ? prev : next;
 }
 
 /**
- * Precondition: liveTurns are confirmed server turns carrying RouterTurnEntry.version.
- * Postcondition: removes settled retries the server has moved past: a succeeded retry once its command no longer fails at the retried version, and a failed retry once its command no longer fails.
+ * Precondition: liveTurns are confirmed server turns.
+ * Postcondition: keeps in-flight retries and removes each settled one that no longer speaks for its failed command: replaced by a newer retry, or its command gone, no longer failing, or showing another run.
  */
 export function pruneRouterRetryMutations(qc: QueryClient, liveTurns: readonly RouterTurnEntry[]): void {
-  const failed = new Map<RouterCommandId, RouterTurnEntry>();
-  for (const t of liveTurns) if (t.command?.status === "failed") failed.set(t.command.id, t);
+  const failed = new Map<RouterCommandId, RouterCommandRecord>();
+  for (const t of liveTurns) if (t.command?.status === "failed") failed.set(t.command.id, t.command);
   const cache = qc.getMutationCache();
-  for (const m of cache.findAll({ mutationKey: ROUTER_RETRY_MUTATION_KEY })) {
-    const { status } = m.state;
-    if (status === "pending" || status === "idle") continue;
+  const all = cache.findAll({ mutationKey: ROUTER_RETRY_MUTATION_KEY });
+  const latest = new Map<RouterCommandId, (typeof all)[number]>();
+  for (const m of all) {
     const vars = retryVarsOf(m);
-    const live = vars === undefined ? undefined : failed.get(vars.commandId);
-    if (live === undefined || (status === "success" && !awaitingServer(vars?.version, live.version))) cache.remove(m);
+    if (vars !== undefined) latest.set(vars.commandId, m);
+  }
+  for (const m of all) {
+    if (m.state.status === "pending" || m.state.status === "idle") continue;
+    const vars = retryVarsOf(m);
+    const command = vars === undefined ? undefined : failed.get(vars.commandId);
+    if (vars === undefined || command === undefined || latest.get(vars.commandId) !== m || !speaksFor(vars.fromRetryId, command)) cache.remove(m);
   }
 }
 
@@ -241,16 +238,16 @@ function useCommandRetries(liveTurns: readonly RouterTurnEntry[], qc: QueryClien
     {
       mutationKey: ROUTER_RETRY_MUTATION_KEY,
       gcTime: Infinity,
-      mutationFn: (vars) => localClient.postRetryRouterCommand(vars.commandId),
+      mutationFn: ({ commandId, retryId, fromRetryId }) => localClient.postRetryRouterCommand(commandId, { retryId, fromRetryId }),
     },
     qc,
   );
   const rawRetries = useMutationState({ filters: { mutationKey: ROUTER_RETRY_MUTATION_KEY }, select: selectRouterRetry }, qc);
 
-  const prevStateRef = useRef(NO_RETRY_STATE);
-  const state = useMemo(() => {
-    const next = buildRouterRetryState(rawRetries, prevStateRef.current);
-    prevStateRef.current = next;
+  const prevRetriesRef = useRef(NO_RETRIES);
+  const retries = useMemo(() => {
+    const next = buildRouterRetries(rawRetries, prevRetriesRef.current);
+    prevRetriesRef.current = next;
     return next;
   }, [rawRetries]);
 
@@ -259,21 +256,18 @@ function useCommandRetries(liveTurns: readonly RouterTurnEntry[], qc: QueryClien
   }, [rawRetries, liveTurns, qc]);
 
   const retryCommand = useCallback(
-    (commandId: RouterCommandId, version: number | undefined) => {
+    (commandId: RouterCommandId, fromRetryId: string | null) => {
       const cache = qc.getMutationCache();
       const earlier = cache.findAll({ mutationKey: ROUTER_RETRY_MUTATION_KEY, predicate: (m) => retryVarsOf(m)?.commandId === commandId });
-      // The cache is shared by every surface, so a retry in flight or already accepted from this failed version blocks a second POST anywhere.
-      const covered = earlier.some(
-        (m) => m.state.status === "pending" || m.state.status === "idle" || (m.state.status === "success" && awaitingServer(retryVarsOf(m)?.version, version)),
-      );
-      if (covered) return;
-      for (const m of earlier) cache.remove(m);
-      mutate({ commandId, version });
+      // The cache is shared by every surface, so a retry of this run that is posting or accepted blocks a second POST anywhere.
+      if (earlier.some((m) => m.state.status !== "error" && retryVarsOf(m)?.fromRetryId === fromRetryId)) return;
+      for (const m of earlier) if (m.state.status === "success" || m.state.status === "error") cache.remove(m);
+      mutate({ commandId, retryId: newClientId(), fromRetryId });
     },
     [qc, mutate],
   );
 
-  return { ...state, retryCommand };
+  return { retries, retryCommand };
 }
 
 /**
@@ -345,10 +339,10 @@ export function useRouterCommands(liveTurns: readonly RouterTurnEntry[], selfId:
     [qc, mutate],
   );
 
-  const { retryingMap, retryErrors, retryCommand } = useCommandRetries(liveTurns, qc);
+  const { retries, retryCommand } = useCommandRetries(liveTurns, qc);
 
   return useMemo(
-    () => ({ send, pendingTurns, retryUnsent, retryCommand, retryingMap, retryErrors }),
-    [send, pendingTurns, retryUnsent, retryCommand, retryingMap, retryErrors],
+    () => ({ send, pendingTurns, retryUnsent, retries, retryCommand }),
+    [send, pendingTurns, retryUnsent, retries, retryCommand],
   );
 }

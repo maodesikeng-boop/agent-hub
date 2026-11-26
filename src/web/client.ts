@@ -56,6 +56,7 @@ import {
   type PostMessageRequest,
   type PostRouterCommandRequest,
   type PostRouterCommandResponse,
+  type RetryRouterCommandRequest,
   type PersonaChangeId,
   type PersonaResponse,
   type PmId,
@@ -348,8 +349,8 @@ export function createClient(device: DeviceId | null) {
       putJson<UpdateRouterSettingsResponse>(at(API_PATHS.routerSettings), body),
     postRouterCommand: (body: PostRouterCommandRequest) =>
       postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommands), body),
-    postRetryRouterCommand: (id: RouterCommandId) =>
-      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), {}),
+    postRetryRouterCommand: (id: RouterCommandId, body: RetryRouterCommandRequest) =>
+      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), body),
     postTaskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: DecideTaskNodeRequest) =>
       postJson<DecideTaskNodeResponse>(at(API_PATHS.taskGraphDecide(graphId, nodeKey)), body),
     postTaskGraphSkip: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: SkipTaskNodeRequest = {}) =>

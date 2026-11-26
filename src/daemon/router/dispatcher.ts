@@ -20,6 +20,7 @@ import {
   type ModelCatalog,
   type PmDigestEntry,
   type PostRouterCommandRequest,
+  type RetryRouterCommandRequest,
   type RouterAgentDispatchInput,
   type RouterAgentPlan,
   type RouterCommandAttachment,
@@ -90,7 +91,7 @@ export interface RouterCommandRunOptions {
 
 export interface RouterDispatcher {
   submitCommand(input: PostRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
-  retryCommand(commandId: RouterCommandId, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
+  retryCommand(commandId: RouterCommandId, retry: RetryRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
   handleAgentDispatch(
     sessionId: SessionId,
     commandId: RouterCommandId,
@@ -1074,7 +1075,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       return options?.background === true ? detach(command, settled) : settled;
     },
 
-    async retryCommand(commandId: RouterCommandId, options?: RouterCommandRunOptions): Promise<RouterCommandRecord> {
+    async retryCommand(commandId: RouterCommandId, retry: RetryRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord> {
       const existing = ledger.getRouterCommand(commandId);
       if (existing === null) {
         throw new LedgerRequestError("not_found", `没有编号 ${commandId} 的总助指令`);
@@ -1082,15 +1083,26 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       if (existing.status !== "failed") {
         throw new LedgerRequestError("conflict", "只有失败状态的总助指令才能重试");
       }
+      // A retry names the failed run it saw. Nothing awaits between this check and the planning write, so a repeated or stale request never starts another run.
+      const runRetryId = existing.plan?.retryId ?? null;
+      if (runRetryId !== retry.fromRetryId || runRetryId === retry.retryId) {
+        throw new LedgerRequestError("conflict", "这一轮已经重试过了，等最新结果出来再重试");
+      }
 
       const attachmentIds = existing.plan?.attachmentIds ?? [];
-      const planBase = planBaseOf(existing.plan);
+      const planBase: PlanBase = { ...planBaseOf(existing.plan), retryId: retry.retryId };
       const retryOps = existing.plan?.retryOps ?? [];
+      const startRun = () =>
+        ledger.updateRouterCommand(commandId, {
+          status: "planning",
+          error: null,
+          plan: { ...(existing.plan ?? { intent: "dispatch", reply: "", actions: [] }), retryId: retry.retryId },
+        });
 
       // Retry only the failed target ops so successful deliveries are never repeated.
       if (retryOps.length > 0) {
         const startedAt = Date.now();
-        const planning = ledger.updateRouterCommand(commandId, { status: "planning", error: null });
+        const planning = startRun();
         const settled = track(
           (async (): Promise<RouterCommandRecord> => {
             const succeeded: RouterCommandDispatchedTarget[] = [...(existing.dispatched ?? [])];
@@ -1160,7 +1172,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         );
       }
 
-      const planning = ledger.updateRouterCommand(commandId, { status: "planning", error: null });
+      const planning = startRun();
       // Keep the explicit target so a direct retry stays on track A instead of going through the model.
       const settled = track(runCommandPipeline({
         commandId,

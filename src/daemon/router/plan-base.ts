@@ -5,8 +5,8 @@ import {
   type RouterCommandAttachment,
 } from "../../shared/index.ts";
 
-/** Request fields that every plan write and every retry of a command carries forward. */
-export type PlanBase = Pick<RouterAgentPlan, "attachmentIds" | "attachments" | "target" | "routerOnly">;
+/** Fields every plan write of one run carries: the request's own, kept through retries, and the id of the retry that started the run. */
+export type PlanBase = Pick<RouterAgentPlan, "attachmentIds" | "attachments" | "target" | "routerOnly" | "retryId">;
 
 export function planBaseOf(plan: RouterAgentPlan | null): PlanBase {
   return {

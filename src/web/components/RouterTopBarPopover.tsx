@@ -3,10 +3,9 @@ import { memo, useRef, type RefObject } from "react";
 import type { ConversationId, RouterCommandId } from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
 import { FleetDeviceScopes, FleetLooks, type DeviceScopeLookup, type FleetLookOf } from "../device-scope.tsx";
-import type { ErrorLike } from "../format.ts";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { TOPBAR_ROUTER_POPOVER_MAX_HEIGHT_REM } from "../limits.ts";
-import { retryStateOf, type RouterRetryMark } from "../router-commands.ts";
+import { retryStateOf, type RouterRetries } from "../router-commands.ts";
 import type { RouterTurnEntry } from "../router-stream.ts";
 import { shouldDismissOnTopBarOutsidePress, tabbablesIn } from "../router-topbar-model.ts";
 import { Button } from "../ui/button.tsx";
@@ -29,14 +28,13 @@ export interface RouterTopBarPopoverProps {
   replyDraft: string;
   replyInvalid: string | undefined;
   onReplyDraftChange: (value: string) => void;
-  retryingMap: Readonly<Record<RouterCommandId, RouterRetryMark>>;
-  retryErrors: Readonly<Record<RouterCommandId, ErrorLike>>;
+  retries: RouterRetries;
   deviceScopeLookup: DeviceScopeLookup;
   lookOf: FleetLookOf;
   clientForDevice: (deviceKey: string) => HubClient;
   storeForDevice: DeviceStoreLookup;
   onSendFollowUp: (text: string) => void;
-  onRetryCommand: (commandId: RouterCommandId, version: number | undefined) => void;
+  onRetryCommand: (commandId: RouterCommandId, fromRetryId: string | null) => void;
   onRetryUnsent: (clientId: string) => void;
   onExpand: () => void;
   onClose: () => void;
@@ -48,8 +46,7 @@ type TimelineProps = Pick<
   RouterTopBarPopoverProps,
   | "turns"
   | "multiDevice"
-  | "retryingMap"
-  | "retryErrors"
+  | "retries"
   | "clientForDevice"
   | "storeForDevice"
   | "onRetryCommand"
@@ -58,7 +55,7 @@ type TimelineProps = Pick<
   | "onOpenWorker"
 >;
 
-const QuickTimeline = memo(function QuickTimeline({ turns, multiDevice, retryingMap, retryErrors, ...handlers }: TimelineProps) {
+const QuickTimeline = memo(function QuickTimeline({ turns, multiDevice, retries, ...handlers }: TimelineProps) {
   const last = turns.at(-1);
   const lastKey = last === undefined ? "empty" : `${last.key}:${last.status}:${last.command?.updatedAt ?? 0}`;
   const { ref, contentRef, onScroll } = useStickToBottom({ lastKey, ownCount: turns.length, canLoadOlder: false, onLoadOlder: noop });
@@ -72,7 +69,7 @@ const QuickTimeline = memo(function QuickTimeline({ turns, multiDevice, retrying
     >
       <div ref={contentRef} className="flex flex-col px-4 pt-2 pb-5">
         {turns.map((entry) => (
-          <RouterTurnRow key={entry.key} entry={entry} multiDevice={multiDevice} {...retryStateOf(entry, retryingMap, retryErrors)} {...handlers} />
+          <RouterTurnRow key={entry.key} entry={entry} multiDevice={multiDevice} {...retryStateOf(entry, retries)} {...handlers} />
         ))}
       </div>
     </div>

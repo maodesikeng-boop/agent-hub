@@ -200,8 +200,7 @@ function QuickRouter({
           setReplyDraft(value);
           if (invalid === "reply") setInvalid(null);
         }}
-        retryingMap={commands.retryingMap}
-        retryErrors={commands.retryErrors}
+        retries={commands.retries}
         deviceScopeLookup={deviceScopeLookup}
         lookOf={lookOf}
         clientForDevice={clientForDevice}

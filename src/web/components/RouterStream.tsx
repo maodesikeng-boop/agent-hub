@@ -19,10 +19,10 @@ import {
   type RouterReportLink,
 } from "../../shared/index.ts";
 import { localClient, type HubClient } from "../client.ts";
-import { formatTime, type ErrorLike } from "../format.ts";
+import { formatTime } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
-import { retryStateOf, type RouterRetryMark } from "../router-commands.ts";
+import { retryStateOf, type RouterRetries } from "../router-commands.ts";
 import {
   briefingEntryOfReport,
   mergeRouterStream,
@@ -372,8 +372,7 @@ export const RouterStream = memo(function RouterStream({
   hasDecisions,
   clientForDevice,
   storeForDevice,
-  retryingMap,
-  retryErrors,
+  retries,
   onRetryCommand,
   onRetryUnsent,
   onOpenConversation,
@@ -385,9 +384,8 @@ export const RouterStream = memo(function RouterStream({
   hasDecisions: boolean;
   clientForDevice: (deviceKey: string) => HubClient;
   storeForDevice: DeviceStoreLookup;
-  retryingMap: Readonly<Record<RouterCommandId, RouterRetryMark>>;
-  retryErrors: Readonly<Record<RouterCommandId, ErrorLike>>;
-  onRetryCommand: (commandId: RouterCommandId, version: number | undefined) => void;
+  retries: RouterRetries;
+  onRetryCommand: (commandId: RouterCommandId, fromRetryId: string | null) => void;
   onRetryUnsent: (clientId: string) => void;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
@@ -687,7 +685,7 @@ export const RouterStream = memo(function RouterStream({
 
           {entries.map((entry, index) => {
             if (entry.kind === "turn") {
-              const { retryPending, retryError } = retryStateOf(entry, retryingMap, retryErrors);
+              const { retryPending, retryError } = retryStateOf(entry, retries);
               return (
                 <RouterTurnRow
                   key={entry.key}

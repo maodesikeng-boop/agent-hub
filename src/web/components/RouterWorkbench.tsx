@@ -708,8 +708,7 @@ export const RouterWorkbench = memo(function RouterWorkbench({
           hasDecisions={visibleDecisions.length > 0 || sandboxCards.length > 0 || closedDraft !== null}
           clientForDevice={clientForDevice}
           storeForDevice={storeForDevice}
-          retryingMap={commands.retryingMap}
-          retryErrors={commands.retryErrors}
+          retries={commands.retries}
           onRetryCommand={commands.retryCommand}
           onRetryUnsent={commands.retryUnsent}
           onOpenConversation={onOpenConversation}

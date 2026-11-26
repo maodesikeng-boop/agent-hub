@@ -36,7 +36,9 @@ import {
   type Change,
   type LedgerErrorCode,
   type CapabilitiesView,
+  type PostRouterCommandResponse,
   type QuotaResponse,
+  type RetryRouterCommandRequest,
   vendorSpec,
   type WsServerMessage,
 } from "../../shared/index.ts";
@@ -2517,7 +2519,7 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
 
   it("Router 第 2 波接口：/api/router/commands（发令、游标分页、重试，禁远端令牌）、/items/:id/decide 与 archive、/target-ops", async () => {
     const submitted: unknown[] = [];
-    const retried: number[] = [];
+    const retried: Array<{ id: number; retry: RetryRouterCommandRequest }> = [];
     const targetOps: unknown[] = [];
     const peerId = "11111111-2222-3333-4444-555555555555";
 
@@ -2552,9 +2554,9 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
           submitted.push(input);
           return fakeCommand;
         },
-        retryCommand: async (id) => {
-          retried.push(id);
-          return { ...fakeCommand, id };
+        retryCommand: async (id, retry) => {
+          retried.push({ id, retry });
+          return { ...fakeCommand, id, status: "planning", plan: { intent: "dispatch", reply: "", actions: [], retryId: retry.retryId } };
         },
         handleAgentDispatch: async () => ({ text: "ok", data: {} }),
         close: async () => {},
@@ -2624,20 +2626,26 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       expect(getCmdsRes.statusCode).toBe(200);
       expect(ledger.routerCalls).toContainEqual({ call: "listCommands", args: ["200:10", 15] });
 
-      // 3. Browser POST /api/router/commands/42/retry -> 200
+      // 3. Browser POST /api/router/commands/42/retry: a body without this retry's id and the run it retries never reaches the dispatcher
+      for (const payload of [{}, { retryId: "r-42" }, { retryId: "", fromRetryId: null }, { retryId: "r-42", fromRetryId: null, extra: true }]) {
+        const rejected = await customApp.inject({ method: "POST", url: "/api/router/commands/42/retry", headers: browserHeaders, payload });
+        expect(rejected.statusCode).toBe(400);
+      }
+      expect(retried).toEqual([]);
       const retryRes = await customApp.inject({
         method: "POST",
         url: "/api/router/commands/42/retry",
         headers: browserHeaders,
-        payload: {},
+        payload: { retryId: "r-42", fromRetryId: "r-41" },
       });
       expect(retryRes.statusCode).toBe(200);
-      expect(retried).toEqual([42]);
+      expect(retried).toEqual([{ id: 42, retry: { retryId: "r-42", fromRetryId: "r-41" } }]);
+      expect((retryRes.json() as PostRouterCommandResponse).command.plan?.retryId).toBe("r-42");
 
       for (const reqSpec of [
         { method: "GET" as const, url: "/api/router/commands" },
         { method: "POST" as const, url: "/api/router/commands", payload: { clientId: "p1", text: "hi" } },
-        { method: "POST" as const, url: "/api/router/commands/42/retry", payload: {} },
+        { method: "POST" as const, url: "/api/router/commands/42/retry", payload: { retryId: "p-42", fromRetryId: null } },
       ]) {
         const pRes = await fetch(`${meshBridge.origin}${reqSpec.url}`, {
           method: reqSpec.method,
@@ -2700,7 +2708,7 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       busy: () => false,
       submitCommand: (_input: unknown, options?: { background?: boolean }) =>
         options?.background === true ? Promise.resolve(planning) : new Promise<never>(() => {}),
-      retryCommand: (_id: number, options?: { background?: boolean }) =>
+      retryCommand: (_id: number, _retry: RetryRouterCommandRequest, options?: { background?: boolean }) =>
         options?.background === true ? Promise.resolve(planning) : new Promise<never>(() => {}),
       handleAgentDispatch: async () => ({ text: "ok", data: {} }),
       close: async () => {},
@@ -2730,7 +2738,7 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       expect(post.statusCode).toBe(200);
       expect(post.json()).toEqual({ command: planning });
       const retry = await promptly(
-        slowApp.inject({ method: "POST", url: "/api/router/commands/77/retry", headers, payload: {} }),
+        slowApp.inject({ method: "POST", url: "/api/router/commands/77/retry", headers, payload: { retryId: "r-slow", fromRetryId: null } }),
       );
       expect(retry.statusCode).toBe(200);
       expect(retry.json()).toEqual({ command: planning });

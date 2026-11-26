@@ -193,6 +193,13 @@ export const decideRouterItemBodySchema = z
   })
   .strict();
 
+export const retryRouterCommandBodySchema = z
+  .object({
+    retryId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
+    fromRetryId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH).nullable(),
+  })
+  .strict();
+
 export const postRouterCommandBodySchema = z
   .object({
     clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),

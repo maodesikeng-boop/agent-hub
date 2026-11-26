@@ -6,7 +6,7 @@ import { useFleetLookOf } from "../device-scope.tsx";
 import { errorLine, errorText, errorTitle, formatTime, type ErrorLike } from "../format.ts";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { cn } from "../lib/utils.ts";
-import { canRetryCommand, type RouterTurnDestination, type RouterTurnEntry } from "../router-stream.ts";
+import { canRetryCommand, runRetryIdOf, type RouterTurnDestination, type RouterTurnEntry } from "../router-stream.ts";
 import { ChevronRight, CircleAlert } from "../ui/icons.ts";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -25,7 +25,7 @@ export interface RouterTurnRowProps {
   storeForDevice: DeviceStoreLookup;
   retryPending: boolean;
   retryError: ErrorLike | undefined;
-  onRetryCommand: (commandId: RouterCommandId, version: number | undefined) => void;
+  onRetryCommand: (commandId: RouterCommandId, fromRetryId: string | null) => void;
   onRetryUnsent: (clientId: string) => void;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
@@ -168,7 +168,7 @@ export const RouterTurnRow = memo(function RouterTurnRow({
                       <button
                         type="button"
                         className={cn(TEXT_BUTTON, "px-1 text-minor font-medium text-muted-foreground")}
-                        onClick={() => onRetryCommand(command.id, entry.version)}
+                        onClick={() => onRetryCommand(command.id, runRetryIdOf(command))}
                       >
                         Retry
                       </button>

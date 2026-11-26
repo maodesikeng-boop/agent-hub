@@ -617,7 +617,6 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(fleetRouterStream(devices(changed), SELF_ID)).toBe(after);
     const changedTurns = after.turns.filter((t, i) => t !== first.turns[i]);
     expect(changedTurns.map((t) => t.command?.id)).toEqual([100]);
-    expect(changedTurns[0]!.version).toBe(changed.routerCommandVersions.last);
     expect(after.devices[0]!.briefings).toBe(first.devices[0]!.briefings);
     expect(after.devices[1]).toBe(first.devices[1]);
     // 只变指令：设备数组本身也沿用（下游“标已读”、简报分页按它做依赖，不该跟着重跑）
@@ -1318,7 +1317,6 @@ describe("top-bar Router quick chat", () => {
     const mineQuick = selectQuickRouterTurns(session, routerTurnsOf(mine, undefined), pending);
     expect(mineQuick).not.toBe(quick);
     expect(mineQuick.at(-1)!.status).toBe("planning");
-    expect(mineQuick.at(-1)!.version).toBe(mine.routerCommandVersions.last);
     expect(mineQuick[0]).toBe(quick[0]);
   });
 });

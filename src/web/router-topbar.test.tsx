@@ -1,9 +1,17 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_AGENT_VENDOR, type PostRouterCommandRequest, type RouterCommandRecord, type StateSnapshot } from "../shared/index.ts";
+import {
+  DEFAULT_AGENT_VENDOR,
+  type PostRouterCommandRequest,
+  type RetryRouterCommandRequest,
+  type RouterAgentPlan,
+  type RouterCommandRecord,
+  type StateSnapshot,
+} from "../shared/index.ts";
 import { App } from "./App.tsx";
-import { resetQueryClient } from "./query-client.ts";
+import { queryClient, resetQueryClient } from "./query-client.ts";
+import { ROUTER_RETRY_MUTATION_KEY } from "./router-commands.ts";
 import {
   FakeApi,
   FakeWebSocket,
@@ -97,6 +105,45 @@ async function sendFromTopBar(text: string) {
   await screen.findByRole("dialog", { name: "Router" });
   await waitFor(() => expect(sentBodies().at(-1)?.text).toBe(text));
   return user;
+}
+
+const retryCalls = () => api.callsTo("POST", /^\/api\/router\/commands\/500\/retry$/);
+const retryBodies = () => retryCalls().map((c) => c.body as RetryRouterCommandRequest);
+const runOf = (retryId: string): RouterAgentPlan => ({ intent: "dispatch", reply: "", actions: [], retryId });
+const retriesIn = (status: "pending" | "success") => queryClient.getMutationCache().findAll({ mutationKey: ROUTER_RETRY_MUTATION_KEY, status });
+
+/** Holds every retry POST until the returned release runs. */
+function holdRetries(): () => void {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const ok = api.retryRouterCommand;
+  api.retryRouterCommand = async (id, body) => {
+    await gate;
+    return ok(id, body);
+  };
+  return () => release();
+}
+
+function failedTurnIn(container: HTMLElement): Promise<HTMLElement> {
+  return waitFor(() => {
+    const el = container.querySelector<HTMLElement>("[data-router-turn][data-status='failed']");
+    expect(el).not.toBeNull();
+    return el!;
+  });
+}
+
+/** Clicks Expand in the popover and returns the full Router page's row for `text`. */
+async function expandToRow(user: ReturnType<typeof userEvent.setup>, text: string): Promise<HTMLElement> {
+  await user.click(within(popover()).getByRole("button", { name: "Expand" }));
+  await waitFor(() => expect(window.location.hash).toBe("#/router"));
+  const timeline = await screen.findByRole("log", { name: "Router timeline" });
+  return waitFor(() => {
+    const el = [...timeline.querySelectorAll<HTMLElement>("[data-router-turn]")].find((r) => r.textContent?.includes(text));
+    expect(el).toBeDefined();
+    return el!;
+  });
 }
 
 beforeEach(() => {
@@ -245,13 +292,8 @@ describe("RouterTopBar", () => {
     expect(sentBodies()[1]).toEqual(sentBodies()[0]);
 
     push(record(sentBodies()[0]!, { status: "failed", error: "Router 没有回应", updatedAt: 42_000 }));
-    const failed = await waitFor(() => {
-      const el = popover().querySelector<HTMLElement>("[data-router-turn][data-status='failed']");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    await user.click(within(failed).getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(api.callsTo("POST", /^\/api\/router\/commands\/500\/retry$/)).toHaveLength(1));
+    await user.click(within(await failedTurnIn(popover())).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retryBodies()).toEqual([{ retryId: expect.any(String), fromRetryId: null }]));
   });
 
   it("hands a typed or pasted @name to Router itself instead of forwarding it straight to that PM", async () => {
@@ -269,88 +311,99 @@ describe("RouterTopBar", () => {
 
   it("keeps one shared retry running across Expand, so the full Router page shows it in progress and cannot send it twice", async () => {
     await boot();
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const ok = api.retryRouterCommand;
-    api.retryRouterCommand = async (id) => {
-      await gate;
-      return ok(id);
-    };
-    const retryCalls = () => api.callsTo("POST", /^\/api\/router\/commands\/500\/retry$/);
+    const release = holdRetries();
     const user = await sendFromTopBar("重试不重复");
     const sent = sentBodies()[0]!;
     push(record(sent, { status: "failed", error: "Router 没有回应", updatedAt: 42_000 }));
-    const failed = await waitFor(() => {
-      const el = popover().querySelector<HTMLElement>("[data-router-turn][data-status='failed']");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    await user.click(within(failed).getByRole("button", { name: "Retry" }));
+    await user.click(within(await failedTurnIn(popover())).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(retryCalls()).toHaveLength(1));
     expect(within(popover()).getByText("Working…")).toBeInTheDocument();
 
-    await user.click(within(popover()).getByRole("button", { name: "Expand" }));
-    await waitFor(() => expect(window.location.hash).toBe("#/router"));
-    const timeline = await screen.findByRole("log", { name: "Router timeline" });
-    const row = await waitFor(() => {
-      const el = [...timeline.querySelectorAll<HTMLElement>("[data-router-turn]")].find((r) => r.textContent?.includes("重试不重复"));
-      expect(el).toBeDefined();
-      return el!;
-    });
+    const row = await expandToRow(user, "重试不重复");
     expect(row).toHaveAttribute("data-status", "planning");
     expect(within(row).getByText("Working…")).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
 
     await act(async () => release());
-    push(record(sent, { status: "planning", updatedAt: 43_000 }));
+    push(record(sent, { status: "planning", plan: runOf(retryBodies()[0]!.retryId), updatedAt: 43_000 }));
     expect(row).toHaveAttribute("data-status", "planning");
     expect(retryCalls()).toHaveLength(1);
   });
 
-  it("brings Retry back when the retry fails again before its HTTP reply lands and both failures share an updatedAt", async () => {
+  it("keeps a retry running through a resync that returns the unchanged failure, and brings Retry back only with that retry's own result", async () => {
     await boot();
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const retryCalls = () => api.callsTo("POST", /^\/api\/router\/commands\/500\/retry$/);
+    const release = holdRetries();
+    const user = await sendFromTopBar("重连后别提前重试");
+    const sent = sentBodies()[0]!;
+    const failure = record(sent, { status: "failed", error: "Router 没有回应", updatedAt: 42_000 });
+    push(failure);
+    await user.click(within(await failedTurnIn(popover())).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retryCalls()).toHaveLength(1));
+    const row = await expandToRow(user, "重连后别提前重试");
+    expect(within(row).getByText("Working…")).toBeInTheDocument();
+
+    const base = snapshot();
+    const older = record(sent, { id: 499, clientId: "older", inputText: "更早的一条", status: "answered", createdAt: 30_000, updatedAt: 30_000 });
+    api.state = () => ({ status: 200, body: { ...base, seq, router: { ...base.router, commands: [failure, older] } } });
+    act(() => FakeWebSocket.last.push({ type: "resync" }));
+    await screen.findByText("更早的一条");
+    await act(async () => release());
+    await waitFor(() => expect(retriesIn("pending")).toHaveLength(0));
+    expect(row).toHaveAttribute("data-status", "planning");
+    expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
+
+    const { retryId } = retryBodies()[0]!;
+    push(record(sent, { status: "planning", plan: runOf(retryId), updatedAt: 43_000 }));
+    push(record(sent, { status: "failed", error: "还是没有回应", plan: runOf(retryId), updatedAt: 44_000 }));
+    await user.click(await within(row).findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retryCalls()).toHaveLength(2));
+    expect(retryBodies()[1]).toEqual({ retryId: expect.any(String), fromRetryId: retryId });
+    expect(retryBodies()[1]!.retryId).not.toBe(retryId);
+  });
+
+  it("brings Retry back once the retry's own failure arrives, before its HTTP reply, and keeps it after the reply even when both failures share an updatedAt", async () => {
+    await boot();
+    const release = holdRetries();
     const user = await sendFromTopBar("同一时刻又失败");
     const sent = sentBodies()[0]!;
     const failedAt42 = { status: "failed", error: "Router 没有回应", updatedAt: 42_000 } as const;
-    api.retryRouterCommand = async () => {
-      await gate;
-      return { status: 200, body: { command: record(sent, { status: "planning", updatedAt: 42_000 }) } };
-    };
     push(record(sent, failedAt42));
-    const failed = await waitFor(() => {
-      const el = popover().querySelector<HTMLElement>("[data-router-turn][data-status='failed']");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    await user.click(within(failed).getByRole("button", { name: "Retry" }));
+    await user.click(within(await failedTurnIn(popover())).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(retryCalls()).toHaveLength(1));
-    await user.click(within(popover()).getByRole("button", { name: "Expand" }));
-    await waitFor(() => expect(window.location.hash).toBe("#/router"));
-    const timeline = await screen.findByRole("log", { name: "Router timeline" });
-    const row = await waitFor(() => {
-      const el = [...timeline.querySelectorAll<HTMLElement>("[data-router-turn]")].find((r) => r.textContent?.includes("同一时刻又失败"));
-      expect(el).toBeDefined();
-      return el!;
-    });
+    const row = await expandToRow(user, "同一时刻又失败");
 
-    push(record(sent, { status: "planning", updatedAt: 42_000 }));
-    push(record(sent, failedAt42));
+    const { retryId } = retryBodies()[0]!;
+    push(record(sent, { status: "planning", plan: runOf(retryId), updatedAt: 42_000 }));
     expect(within(row).getByText("Working…")).toBeInTheDocument();
-    expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
+    push(record(sent, { ...failedAt42, plan: runOf(retryId) }));
+    await within(row).findByRole("button", { name: "Retry" });
+    expect(row).toHaveAttribute("data-status", "failed");
+    expect(retriesIn("pending")).toHaveLength(1);
 
     await act(async () => release());
-    const retry = await within(row).findByRole("button", { name: "Retry" });
-    expect(row).toHaveAttribute("data-status", "failed");
-    expect(retryCalls()).toHaveLength(1);
-    await user.click(retry);
+    await waitFor(() => expect(retriesIn("pending")).toHaveLength(0));
+    await user.click(within(row).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(retryCalls()).toHaveLength(2));
+    expect(retryBodies()[1]).toEqual({ retryId: expect.any(String), fromRetryId: retryId });
+  });
+
+  it("keeps a retry running after its HTTP reply until the retry's own failure arrives, then brings Retry back", async () => {
+    await boot();
+    const user = await sendFromTopBar("回复先到");
+    const sent = sentBodies()[0]!;
+    push(record(sent, { status: "failed", error: "Router 没有回应", updatedAt: 42_000 }));
+    const turn = await failedTurnIn(popover());
+    await user.click(within(turn).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retriesIn("success")).toHaveLength(1));
+    expect(turn).toHaveAttribute("data-status", "planning");
+    expect(within(turn).queryByRole("button", { name: "Retry" })).toBeNull();
+
+    const { retryId } = retryBodies()[0]!;
+    push(record(sent, { status: "planning", plan: runOf(retryId), updatedAt: 43_000 }));
+    expect(within(turn).queryByRole("button", { name: "Retry" })).toBeNull();
+    push(record(sent, { status: "failed", error: "还是没有回应", plan: runOf(retryId), updatedAt: 44_000 }));
+    await within(turn).findByRole("button", { name: "Retry" });
+    expect(retryCalls()).toHaveLength(1);
   });
 
   it("navigates to #/router, hands off any unsent follow-up draft, and closes the popover when Expand is clicked", async () => {
