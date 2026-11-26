@@ -176,7 +176,7 @@ export const MessageList = memo(function MessageList({
           {hasMore && (
             <button
               type="button"
-              className="touch-target mb-2 cursor-pointer self-center px-3 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
+              className="touch-target mb-2 cursor-pointer self-center px-3 py-1 text-minor text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60"
               disabled={older === "loading"}
               onClick={loadOlder}
             >

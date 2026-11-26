@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   DEFAULT_AGENT_VENDOR,
   LedgerRequestError,
@@ -7,9 +8,7 @@ import {
   ROUTER_COMMAND_MAX_CHARS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_MAX_CONCURRENT_TRACK_B,
-  ROUTER_MAX_DISPATCH_TARGETS,
   ROUTER_PEER_DISPATCH_TIMEOUT_MS,
-  ROUTER_PROJECT_SHOW_MAX_BYTES,
   ROUTER_PROJECT_SHOW_PER_TURN_MAX,
   ROUTER_REPLY_MAX_CHARS,
   ROUTER_SESSION_CLEANUP_GRACE_MS,
@@ -24,21 +23,21 @@ import {
   type RouterAgentDispatchInput,
   type RouterAgentPlan,
   type RouterCommandAttachment,
-  type RouterCommandDispatchedTarget,
   type RouterCommandId,
   type RouterCommandRecord,
   type SessionId,
   type SessionTokens,
 } from "../../shared/index.ts";
 import { describeFailure } from "../../shared/errors.ts";
-import { renderCatalogDetail } from "../../shared/project-catalog.ts";
 import { within } from "../driver/base-driver.ts";
 import type { SqliteLedger } from "../ledger/index.ts";
+import type { RouterDelivery } from "../ledger/router-command-retries.ts";
+import type { RouterCommandRun } from "../ledger/router-command-deliveries.ts";
+import { formatOpReceiptText, toDispatchedTarget } from "./delivery-receipt.ts";
 import { resolveRouterModel, type ResolvedRouterModel } from "./model-resolver.ts";
 import {
   ROUTER_RECENT_RECEIPTS_CONTEXT,
   formatFleetDigestForPrompt,
-  sliceUtf8Safe,
   type PromptDeviceDigest,
   type PromptReceiptAction,
   type PromptRecentReceipt,
@@ -48,26 +47,21 @@ import type { RouterSandboxGuard } from "./sandbox.ts";
 import type { RouterTurnResult, RouterTurnRunner } from "./single-turn.ts";
 import {
   RouterTargetError,
+  routerTargetOpSchema,
   type DigestFetchResult,
   type RouterTargetOp,
-  type RouterTargetOpResult,
   type RouterTargetPort,
   type RouterTargetRegistry,
 } from "./target-port.ts";
 
 interface ActiveTrackBState {
-  readonly commandId: RouterCommandId;
+  readonly run: RouterCommandRun;
   sessionId: SessionId | null;
-  readonly clientId: string;
   readonly rawText: string;
   readonly attachmentIds: string[];
-  readonly dispatched: RouterCommandDispatchedTarget[];
-  readonly failedOps: Array<{ deviceId: string; op: RouterTargetOp; error: string }>;
+  deliveryFailure?: CommandFailure;
   readonly inflight: Set<Promise<unknown>>;
-  /** In-flight writes plus successes stay within ROUTER_MAX_DISPATCH_TARGETS, which also bounds concurrent model calls. */
-  pendingMutations: number;
   projectShows: number;
-  seq: number;
   abort(reason: string): void;
 }
 
@@ -266,129 +260,6 @@ function resolveAtMention(
   return { kind: "fallthrough" };
 }
 
-function toDispatchedTarget(
-  port: RouterTargetPort,
-  result: RouterTargetOpResult,
-  verbatim?: boolean,
-): RouterCommandDispatchedTarget | null {
-  switch (result.kind) {
-    case "pm.forward":
-      return {
-        deviceId: port.deviceId,
-        deviceName: port.deviceName,
-        pmId: result.pmId,
-        pmName: result.pmName,
-        projectId: result.projectId,
-        projectName: result.projectName,
-        conversationId: result.conversationId,
-        messageId: result.messageId,
-        ok: true,
-        op: "pm.forward",
-        ...(verbatim !== undefined ? { verbatim } : {}),
-      };
-    case "worker.start":
-      return {
-        deviceId: port.deviceId,
-        deviceName: port.deviceName,
-        pmId: result.pmId,
-        pmName: result.pmName,
-        projectId: result.projectId,
-        projectName: result.projectName,
-        workerId: result.workerId,
-        workerConversationId: result.workerConversationId,
-        title: result.title,
-        readonly: result.readonly,
-        messageId: result.pmMessageId,
-        ok: true,
-        op: "worker.start",
-        ...(verbatim !== undefined ? { verbatim } : {}),
-      };
-    case "worker.send":
-      return {
-        deviceId: port.deviceId,
-        deviceName: port.deviceName,
-        pmId: result.pmId,
-        workerId: result.workerId,
-        workerConversationId: result.workerConversationId,
-        title: result.title,
-        messageId: result.messageId,
-        ok: true,
-        op: "worker.send",
-        ...(verbatim !== undefined ? { verbatim } : {}),
-      };
-    case "worker.stop":
-      return {
-        deviceId: port.deviceId,
-        deviceName: port.deviceName,
-        pmId: result.pmId,
-        workerId: result.workerId,
-        workerConversationId: result.workerConversationId,
-        title: result.title,
-        messageId: 0,
-        ok: true,
-        op: "worker.stop",
-      };
-    case "worker.end":
-      return {
-        deviceId: port.deviceId,
-        deviceName: port.deviceName,
-        pmId: result.pmId,
-        workerId: result.workerId,
-        workerConversationId: result.workerConversationId,
-        title: result.title,
-        messageId: 0,
-        ok: true,
-        op: "worker.end",
-      };
-    case "project.create":
-      return {
-        deviceId: port.deviceId,
-        deviceName: port.deviceName,
-        pmId: result.pmId,
-        pmName: result.pmName,
-        projectId: result.projectId,
-        projectName: result.projectName,
-        conversationId: result.conversationId,
-        messageId: 0,
-        ok: true,
-        op: "project.create",
-      };
-    case "worker.list":
-    case "project.show":
-      return null;
-  }
-}
-
-function formatOpReceiptText(port: RouterTargetPort, result: RouterTargetOpResult): string {
-  const devLabel = port.isLocal ? `本机（${port.deviceName}）` : `设备「${port.deviceName}」`;
-  switch (result.kind) {
-    case "pm.forward":
-      return `已投递给${devLabel} PM #${result.pmId}「${result.pmName}」${result.projectName ? `（项目：${result.projectName}）` : ""}`;
-    case "worker.start":
-      return `已在${devLabel}项目「${result.projectName}」启动${result.readonly ? "只读 " : ""}Piece #${result.workerId}「${result.title}」`;
-    case "worker.send":
-      return `已向${devLabel} Piece #${result.workerId}「${result.title}」追发消息`;
-    case "worker.stop":
-      return `已请求暂停${devLabel} Piece #${result.workerId}「${result.title}」`;
-    case "worker.end":
-      return `已结束收工${devLabel} Piece #${result.workerId}「${result.title}」`;
-    case "project.create":
-      return `已在${devLabel}创建项目 #${result.projectId}「${result.projectName}」（PM #${result.pmId}「${result.pmName}」）`;
-    case "project.show":
-      return result.detail === null
-        ? `${devLabel}的项目 #${result.projectId} 还没有档案（未建档、不存在或已归档）。名片看不出来的细节转给它的项目经理`
-        : sliceUtf8Safe(`${devLabel}的项目档案：\n\n${renderCatalogDetail(result.detail, Date.now())}`, ROUTER_PROJECT_SHOW_MAX_BYTES);
-    case "worker.list": {
-      if (result.workers.length === 0) return `${devLabel}当前没有 Piece 记录`;
-      const lines = result.workers.map(
-        (w) =>
-          `- #${w.id}「${w.title}」[project=#${w.projectId}, status=${w.status}, activity=${w.activity}${w.readonly ? ", readonly" : ""}]`,
-      );
-      return `${devLabel} Piece 列表：\n${lines.join("\n")}`;
-    }
-  }
-}
-
 function buildRecentReceipts(records: readonly RouterCommandRecord[]): PromptRecentReceipt[] {
   const out: PromptRecentReceipt[] = [];
   for (const rec of records) {
@@ -493,7 +364,6 @@ function errorRawOf(failure: CommandFailure): Pick<RouterAgentPlan, "errorRaw"> 
 
 type TrackBParams = {
   commandId: RouterCommandId;
-  clientId: string;
   rawText: string;
   attachmentIds: string[];
   planBase: PlanBase;
@@ -573,12 +443,15 @@ function recordTrackBOutcome(
   const durationMs = Math.max(0, Date.now() - params.startedAt);
   const replyPart = cleanReply([result.ok ? result.text : result.partialText]);
 
-  if (state.failedOps.length > 0) {
-    const errText = state.failedOps.map((f) => f.error).join("；");
+  const pending = ledger.routerCommandDeliveries.list(params.commandId);
+  const dispatchedCount = ledger.getRouterCommand(params.commandId)?.dispatched?.length ?? 0;
+  if (pending.length > 0 || dispatchedCount > 0) {
+    const failure = pending.length > 0
+      ? state.deliveryFailure ?? { error: "总助投递尚未完成，可点击重试" }
+      : null;
     return ledger.updateRouterCommand(params.commandId, {
-      status: "failed",
-      dispatched: state.dispatched.length > 0 ? state.dispatched : null,
-      error: errText,
+      status: failure === null ? "dispatched" : "failed",
+      error: failure?.error ?? null,
       durationMs,
       plan: {
         intent: "dispatch",
@@ -586,38 +459,11 @@ function recordTrackBOutcome(
         actions: [],
         track: "B",
         ...params.planBase,
-        retryOps: state.failedOps.map((f) => ({ deviceId: f.deviceId, op: f.op })),
+        ...(failure === null ? {} : errorRawOf(failure)),
       },
-      auditAction: "router.command.partial_failed",
+      auditAction: failure === null ? "router.command.dispatched" : "router.command.partial_failed",
       auditActor: "router_agent",
-      auditDetail: {
-        dispatchedCount: state.dispatched.length,
-        failedCount: state.failedOps.length,
-      },
-    });
-  }
-
-  if (state.dispatched.length > 0) {
-    return ledger.updateRouterCommand(params.commandId, {
-      status: "dispatched",
-      dispatched: state.dispatched,
-      error: null,
-      durationMs,
-      plan: {
-        intent: "dispatch",
-        ...replyPart,
-        actions: [],
-        track: "B",
-        ...params.planBase,
-      },
-      auditAction: "router.command.dispatched",
-      auditActor: "router_agent",
-      auditDetail: {
-        vendor: resolved.vendor,
-        model: resolved.model,
-        dispatchedCount: state.dispatched.length,
-        durationMs,
-      },
+      auditDetail: { vendor: resolved.vendor, model: resolved.model, dispatchedCount, failedCount: pending.length, durationMs },
     });
   }
 
@@ -728,9 +574,29 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     throw err;
   };
 
+  const deliveries = ledger.routerCommandDeliveries;
+
+  async function executeDelivery(run: RouterCommandRun, delivery: RouterDelivery, port: RouterTargetPort, discardOnRejection = false) {
+    const op = routerTargetOpSchema.parse(delivery.op);
+    let result;
+    try {
+      result = await port.executeOp(op);
+    } catch (error) {
+      if (discardOnRejection && error instanceof RouterTargetError &&
+          error.code !== "device_offline" && error.code !== "device_timeout") {
+        deliveries.change(run, { kind: "discard", id: delivery.id });
+      }
+      throw error;
+    }
+    const receipt = toDispatchedTarget(port, result, delivery.verbatim);
+    if (receipt === null || result.kind !== op.kind) throw new Error("Router target returned an unexpected delivery result");
+    deliveries.change(run, { kind: "checkpoint", id: delivery.id, receipt });
+    deliveries.change(run, { kind: "publish", id: delivery.id });
+    return result;
+  }
+
   const executeTrackAForward = async (params: {
     commandId: RouterCommandId;
-    clientId: string;
     port: RouterTargetPort;
     pmId?: number;
     projectId?: number;
@@ -739,62 +605,42 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     planBase: PlanBase;
     startedAt: number;
   }): Promise<RouterCommandRecord> => {
+    const run = { commandId: params.commandId, retryId: params.planBase.retryId };
+    const id = randomUUID();
     const op: RouterTargetOp = {
       kind: "pm.forward",
-      clientId: `${params.clientId}:a0`,
+      clientId: id,
       ...(params.pmId !== undefined ? { pmId: params.pmId } : {}),
       ...(params.projectId !== undefined ? { projectId: params.projectId } : {}),
       text: params.bodyText,
       ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
     };
-
+    const delivery = { id, deviceId: params.port.deviceId, op, verbatim: true };
+    let failure: CommandFailure | null = null;
     try {
-      const res = await params.port.executeOp(op);
-      const dispatchedItem = toDispatchedTarget(params.port, res, true)!;
-      return ledger.updateRouterCommand(params.commandId, {
-        model: null,
-        effort: null,
-        status: "dispatched",
-        dispatched: [dispatchedItem],
-        error: null,
-        durationMs: Math.max(0, Date.now() - params.startedAt),
-        plan: {
-          intent: "dispatch",
-          reply: "",
-          actions: [],
-          track: "A",
-          ...params.planBase,
-        },
-        auditAction: "router.command.track_a",
-        auditActor: "user",
-        auditDetail: {
-          deviceId: params.port.deviceId,
-          pmId: dispatchedItem.pmId,
-          messageId: dispatchedItem.messageId,
-        },
-      });
-    } catch (err) {
-      const failure = failureOf(err);
-      return ledger.updateRouterCommand(params.commandId, {
-        model: null,
-        effort: null,
-        status: "failed",
-        error: failure.error,
-        durationMs: Math.max(0, Date.now() - params.startedAt),
-        plan: {
-          intent: "dispatch",
-          reply: "",
-          actions: [],
-          track: "A",
-          ...params.planBase,
-          ...errorRawOf(failure),
-          retryOps: [{ deviceId: params.port.deviceId, op }],
-        },
-        auditAction: "router.command.track_a_failed",
-        auditActor: "user",
-        auditDetail: { deviceId: params.port.deviceId, error: failure.errorRaw ?? failure.error },
-      });
+      deliveries.change(run, { kind: "prepare", delivery, track: "A" });
+      await executeDelivery(run, delivery, params.port);
+    } catch (error) {
+      failure = failureOf(error);
     }
+    return ledger.updateRouterCommand(params.commandId, {
+      model: null,
+      effort: null,
+      status: failure === null ? "dispatched" : "failed",
+      error: failure?.error ?? null,
+      durationMs: Math.max(0, Date.now() - params.startedAt),
+      plan: {
+        intent: "dispatch",
+        reply: "",
+        actions: [],
+        track: "A",
+        ...params.planBase,
+        ...(failure === null ? {} : errorRawOf(failure)),
+      },
+      auditAction: failure === null ? "router.command.track_a" : "router.command.track_a_failed",
+      auditActor: "user",
+      auditDetail: { deviceId: params.port.deviceId },
+    });
   };
 
   const runTrackBTurn = async (
@@ -805,17 +651,12 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     const controller = new AbortController();
     let abortReason = "";
     const state: ActiveTrackBState = {
-      commandId: params.commandId,
+      run: { commandId: params.commandId, retryId: params.planBase.retryId },
       sessionId: null,
-      clientId: params.clientId,
       rawText: params.rawText,
       attachmentIds: params.attachmentIds,
-      dispatched: [],
-      failedOps: [],
       inflight: new Set(),
-      pendingMutations: 0,
       projectShows: 0,
-      seq: 0,
       abort: (reason) => {
         abortReason = reason;
         controller.abort();
@@ -925,7 +766,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
   const runCommandPipeline = async (params: {
     commandId: RouterCommandId;
-    clientId: string;
     text: string;
     attachmentIds: string[];
     planBase: PlanBase;
@@ -957,7 +797,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       }
       return executeTrackAForward({
         commandId: params.commandId,
-        clientId: params.clientId,
         port,
         pmId: explicitTarget.pmId,
         projectId: explicitTarget.projectId,
@@ -975,7 +814,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       if (atRes.kind === "matched") {
         return executeTrackAForward({
           commandId: params.commandId,
-          clientId: params.clientId,
           port: atRes.port,
           pmId: atRes.pm.pmId,
           bodyText: atRes.bodyText,
@@ -1007,7 +845,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
     return executeTrackB({
       commandId: params.commandId,
-      clientId: params.clientId,
       rawText: params.text,
       attachmentIds: params.attachmentIds,
       planBase: params.planBase,
@@ -1019,8 +856,13 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
   const detach = (command: RouterCommandRecord, settled: Promise<RouterCommandRecord>): RouterCommandRecord => {
     settled.catch((err: unknown) => {
       try {
-        if (ledger.getRouterCommand(command.id)?.status !== "planning") return;
-        ledger.updateRouterCommand(command.id, { status: "failed", error: failureOf(err).error });
+        const current = ledger.getRouterCommand(command.id);
+        if (current?.status !== "planning" || current.plan?.retryId !== command.plan?.retryId) return;
+        const hasPublishedDeliveries = !current.plan?.retryOps?.length && current.dispatched?.some((entry) => entry.ok);
+        ledger.updateRouterCommand(command.id, {
+          status: hasPublishedDeliveries ? "dispatched" : "failed",
+          error: hasPublishedDeliveries ? null : failureOf(err).error,
+        });
       } catch {
         // The database may already be closed during shutdown.
       }
@@ -1067,7 +909,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
       const settled = track(runCommandPipeline({
         commandId: command.id,
-        clientId,
         text: rawText,
         attachmentIds,
         planBase,
@@ -1080,77 +921,15 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       const planning = ledger.claimRouterCommandRetry(commandId, retry);
       const attachmentIds = planning.plan?.attachmentIds ?? [];
       const planBase: PlanBase = { ...planBaseOf(planning.plan), retryId: retry.retryId };
-      const retryOps = planning.plan?.retryOps ?? [];
-
-      // Retry only the failed target ops so successful deliveries are never repeated.
-      if (retryOps.length > 0) {
-        const startedAt = Date.now();
-        const settled = track(
-          (async (): Promise<RouterCommandRecord> => {
-            const succeeded: RouterCommandDispatchedTarget[] = [...(planning.dispatched ?? [])];
-            const stillFailed: Array<{ deviceId: string; op: RouterTargetOp } & CommandFailure> = [];
-
-            for (const item of retryOps) {
-              const op = item.op as RouterTargetOp;
-              try {
-                const port = resolvePortByDeviceSpec(item.deviceId);
-                const res = await port.executeOp(op);
-                const target = toDispatchedTarget(port, res);
-                if (target !== null) succeeded.push(target);
-              } catch (err) {
-                stillFailed.push({ deviceId: item.deviceId, op, ...failureOf(err) });
-              }
-            }
-
-            const durationMs = Math.max(0, Date.now() - startedAt);
-            if (stillFailed.length === 0) {
-              return ledger.updateRouterCommand(commandId, {
-                status: "dispatched",
-                dispatched: succeeded,
-                error: null,
-                durationMs,
-                plan: {
-                  intent: "dispatch",
-                  reply: planning.plan?.reply ?? "",
-                  ...(planning.plan?.replyTruncated ? { replyTruncated: true } : {}),
-                  actions: [],
-                  track: planning.plan?.track ?? "B",
-                  ...planBase,
-                },
-                auditAction: "router.command.retry_succeeded",
-                auditActor: "user",
-              });
-            }
-
-            const errMsg = stillFailed.map((f) => f.error).join("；");
-            const raws = stillFailed.flatMap((f) => (f.errorRaw !== undefined ? [f.errorRaw] : []));
-            return ledger.updateRouterCommand(commandId, {
-              status: "failed",
-              dispatched: succeeded.length > 0 ? succeeded : null,
-              error: errMsg,
-              durationMs,
-              plan: {
-                intent: "dispatch",
-                reply: planning.plan?.reply ?? "",
-                ...(planning.plan?.replyTruncated ? { replyTruncated: true } : {}),
-                actions: [],
-                track: planning.plan?.track ?? "B",
-                ...planBase,
-                ...(raws.length > 0 ? { errorRaw: raws.join("\n") } : {}),
-                retryOps: stillFailed.map((f) => ({ deviceId: f.deviceId, op: f.op })),
-              },
-              auditAction: "router.command.retry_failed",
-              auditActor: "user",
-            });
-          })(),
-        );
+      const pending = deliveries.list(commandId);
+      if (pending.length > 0) {
+        const settled = track(resumeDeliveries(planning, planBase, pending));
         return options?.background === true ? detach(planning, settled) : settled;
       }
 
       // Keep the explicit target so a direct retry stays on track A instead of going through the model.
       const settled = track(runCommandPipeline({
         commandId,
-        clientId: planning.clientId,
         text: planning.inputText,
         attachmentIds,
         planBase,
@@ -1172,13 +951,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       if (payload.op === "project-show" && ++state.projectShows > ROUTER_PROJECT_SHOW_PER_TURN_MAX) {
         throw new LedgerRequestError("conflict", `一轮最多查 ${ROUTER_PROJECT_SHOW_PER_TURN_MAX} 个项目档案，拿不准的转给项目经理`);
       }
-      if (isMutating && state.dispatched.length + state.pendingMutations >= ROUTER_MAX_DISPATCH_TARGETS) {
-        throw new LedgerRequestError(
-          "conflict",
-          `单条指令最多分派 ${ROUTER_MAX_DISPATCH_TARGETS} 个目标`,
-        );
-      }
-
       let port: RouterTargetPort;
       try {
         port = resolvePortByDeviceSpec(payload.device);
@@ -1186,8 +958,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         return mapTargetErrorToLedger(err);
       }
 
-      const opSeq = ++state.seq;
-      const opClientId = `${state.clientId}:b${opSeq}`;
+      const opClientId = randomUUID();
       let targetOp: RouterTargetOp;
       let usedVerbatim: boolean | undefined;
 
@@ -1264,14 +1035,12 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           break;
       }
 
-      if (isMutating) state.pendingMutations++;
-      const run = executeAgentOp(state, commandId, port, targetOp, usedVerbatim, isMutating);
-      state.inflight.add(run);
+      const task = executeAgentOp(state, port, targetOp, opClientId, usedVerbatim, isMutating);
+      state.inflight.add(task);
       try {
-        return await run;
+        return await task;
       } finally {
-        state.inflight.delete(run);
-        if (isMutating) state.pendingMutations--;
+        state.inflight.delete(task);
       }
     },
 
@@ -1294,45 +1063,69 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
   async function executeAgentOp(
     state: ActiveTrackBState,
-    commandId: RouterCommandId,
     port: RouterTargetPort,
-    targetOp: RouterTargetOp,
-    usedVerbatim: boolean | undefined,
+    op: RouterTargetOp,
+    id: string,
+    verbatim: boolean | undefined,
     isMutating: boolean,
   ): Promise<{ text: string; data: unknown }> {
     try {
-      const res = await port.executeOp(targetOp);
-      const targetRecord = toDispatchedTarget(port, res, usedVerbatim);
-      if (targetRecord !== null) {
-        state.dispatched.push(targetRecord);
-        ledger.updateRouterCommand(commandId, {
-          dispatched: [...state.dispatched],
-          auditAction: `router.dispatch.${targetOp.kind}`,
-          auditActor: "router_agent",
-          auditDetail: {
-            deviceId: port.deviceId,
-            op: targetOp.kind,
-            verbatim: usedVerbatim ?? false,
-          },
-        });
+      let result;
+      if (isMutating) {
+        const delivery = { id, deviceId: port.deviceId, op, verbatim };
+        deliveries.change(state.run, { kind: "prepare", delivery, track: "B" });
+        try {
+          result = await executeDelivery(state.run, delivery, port, true);
+        } catch (error) {
+          state.deliveryFailure = failureOf(error);
+          throw error;
+        }
+      } else {
+        result = await port.executeOp(op);
       }
-      return {
-        text: formatOpReceiptText(port, res),
-        data: res,
-      };
-    } catch (err) {
-      if (
-        isMutating &&
-        err instanceof RouterTargetError &&
-        (err.code === "device_offline" || err.code === "device_timeout")
-      ) {
-        state.failedOps.push({
-          deviceId: port.deviceId,
-          op: targetOp,
-          error: err.message,
-        });
-      }
-      return mapTargetErrorToLedger(err);
+      return { text: formatOpReceiptText(port, result), data: result };
+    } catch (error) {
+      return mapTargetErrorToLedger(error);
     }
+  }
+
+  async function resumeDeliveries(
+    command: RouterCommandRecord, planBase: PlanBase, pending: readonly RouterDelivery[],
+  ): Promise<RouterCommandRecord> {
+    const startedAt = Date.now();
+    const run = { commandId: command.id, retryId: planBase.retryId };
+    const failures: CommandFailure[] = [];
+    for (const delivery of pending) {
+      try {
+        if (delivery.receipt !== undefined) {
+          deliveries.change(run, { kind: "publish", id: delivery.id });
+        } else {
+          const port = targetRegistry.getPort(delivery.deviceId);
+          if (port === null) throw new RouterTargetError("device_not_found", `找不到目标设备「${delivery.deviceId}」`);
+          await executeDelivery(run, delivery, port);
+        }
+      } catch (error) {
+        failures.push(failureOf(error));
+      }
+    }
+
+    const status = failures.length === 0 ? "dispatched" : "failed";
+    const rawErrors = failures.flatMap((failure) => failure.errorRaw ?? []);
+    return ledger.updateRouterCommand(command.id, {
+      status,
+      error: failures.length === 0 ? null : failures.map((failure) => failure.error).join("；"),
+      durationMs: Math.max(0, Date.now() - startedAt),
+      plan: {
+        intent: "dispatch",
+        reply: command.plan?.reply ?? "",
+        ...(command.plan?.replyTruncated ? { replyTruncated: true } : {}),
+        actions: [],
+        track: command.plan?.track ?? "B",
+        ...planBase,
+        ...(rawErrors.length > 0 ? { errorRaw: rawErrors.join("\n") } : {}),
+      },
+      auditAction: status === "dispatched" ? "router.command.retry_succeeded" : "router.command.retry_failed",
+      auditActor: "user",
+    });
   }
 }

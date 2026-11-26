@@ -77,7 +77,7 @@ export function FileCard({
         type="button"
         data-file-card
         onClick={() => setOpen(true)}
-        className={cn(CARD, "cursor-pointer transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus", className)}
+        className={cn(CARD, "cursor-pointer transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus", className)}
       >
         {body}
       </button>

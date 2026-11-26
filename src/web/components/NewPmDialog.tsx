@@ -150,7 +150,7 @@ function NewPmForm({
                   id={id}
                   type="button"
                   aria-label="Change look"
-                  className="touch-target flex cursor-pointer items-center gap-2 px-1.5 py-1 text-minor text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
+                  className="touch-target flex cursor-pointer items-center gap-2 px-1.5 py-1 text-minor text-muted-foreground transition-colors hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus"
                 >
                   <Avatar look={look} size={34} />
                   <ChevronRight className="size-pixel-sm" aria-hidden="true" />
@@ -186,7 +186,7 @@ function NewPmForm({
           <ModeRows label="Mode" value={mode} onChange={setMode} disabled={busy} />
         </SettingsGroup>
         <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
-          <CollapsibleTrigger className="touch-target group flex cursor-pointer items-center gap-1 px-4 text-minor font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus">
+          <CollapsibleTrigger className="touch-target group flex cursor-pointer items-center gap-1 px-4 text-minor font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus">
             <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             More settings
           </CollapsibleTrigger>

@@ -225,6 +225,7 @@ export type WorkspaceProbe =
   | { kind: "failed"; error: string };
 
 export interface HubCallContext {
+  routerDeliveryId?: string;
   capabilityInventory?: import("./pm-capabilities.ts").CapabilityInventory;
   workspace?: WorkspaceProbe;
   pr?: WorkerPrProbeResult;

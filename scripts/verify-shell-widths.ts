@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Browser, Page } from "playwright";
 import { VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
-import { SHELL_CHAT_USABLE_REM, SHELL_LIST_REM } from "../src/web/limits.ts";
+import { SHELL_CHAT_USABLE_REM, SHELL_LIST_REM, SHELL_PANEL_REM } from "../src/web/limits.ts";
 
 // Copies of UI_SCALES and UI_SCALE_KEY: src/web/ui-scale.ts needs the DOM lib, which scripts/ compile without.
 const SCALES = ["sm", "md", "lg", "xl"] as const;
@@ -22,17 +22,22 @@ interface ShellWidths {
   rootPx: number;
   listPx: number | null;
   chatPx: number | null;
+  panelPx: number | null;
   scrollPx: number;
 }
 
 interface BrowserGlobal {
   document: {
+    activeElement: {
+      matches(selector: string): boolean;
+      getAttribute(name: string): string | null;
+    } | null;
     documentElement: { scrollWidth: number };
     querySelector(selector: string): { getAttribute(name: string): string | null; getBoundingClientRect(): { width: number } } | null;
     elementFromPoint(x: number, y: number): unknown;
   };
-  getComputedStyle(el: unknown): { fontSize: string };
-  localStorage: { setItem(key: string, value: string): void };
+  getComputedStyle(el: unknown): { fontSize: string; outlineStyle: string; outlineWidth: string };
+  localStorage: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void };
   requestAnimationFrame(cb: () => void): void;
 }
 
@@ -54,6 +59,7 @@ async function settledWidths(page: Page): Promise<ShellWidths> {
         rootPx: Number.parseFloat(g.getComputedStyle(g.document.documentElement).fontSize),
         listPx: width('[data-panel][id="list"]'),
         chatPx: width('[data-panel][id="chat"]'),
+        panelPx: width('[data-panel][id="panel"]'),
         scrollPx: g.document.documentElement.scrollWidth,
       };
       return JSON.stringify(m);
@@ -92,6 +98,44 @@ async function openProjectAndType(page: Page, label: string): Promise<void> {
   await draft.fill("");
   await page.keyboard.type(DRAFT);
   assert.equal(await draft.inputValue(), DRAFT, `${label}: typing did not reach the composer`);
+}
+
+async function verifyWorkPanelRoundTrip(page: Page): Promise<void> {
+  const atWidth = async (width: number) => {
+    await page.setViewportSize({ width, height: HEIGHT_PX });
+    const widths = await settledWidths(page);
+    assert.ok(widths.scrollPx <= width, `Work panel at ${width}px: page scrolls sideways (${widths.scrollPx}px)`);
+    return widths;
+  };
+  const readSaved = () => page.evaluate(() => (globalThis as unknown as BrowserGlobal).localStorage.getItem("agent-hub.paneWidths"));
+
+  await page.setViewportSize({ width: 1800, height: HEIGHT_PX });
+  await page.locator('#chat header button[aria-label^="Show work panel"]').click({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+  const grip = page.getByRole("separator", { name: "Resize side panel" });
+  await grip.focus({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+  for (let i = 0; i < 6; i++) await grip.press("ArrowLeft");
+  const initial = await settledWidths(page);
+  const saved = await readSaved();
+  assert.ok(initial.panelPx !== null && initial.panelPx > SHELL_PANEL_REM.default * initial.rootPx, "Keyboard resize did not widen the work panel");
+  assert.ok(saved !== null, "Keyboard resize did not save a width");
+
+  const narrow = await atWidth(1249);
+  const stacked = await atWidth(1248);
+  const unstacked = await atWidth(1249);
+  const restored = await atWidth(1800);
+  assert.ok(narrow.chatPx !== null && stacked.chatPx === null && unstacked.chatPx !== null, "Expected three columns before and after the stack tier");
+  for (const widths of [narrow, unstacked]) {
+    assert.ok(
+      widths.listPx !== null && stacked.listPx !== null && Math.abs(widths.listPx - stacked.listPx) <= 0.1,
+      `PM column jumped between 1249px (${widths.listPx}px) and 1248px (${stacked.listPx}px)`,
+    );
+  }
+  assert.ok(
+    restored.listPx !== null && initial.listPx !== null && Math.abs(restored.listPx - initial.listPx) <= 0.25 &&
+      restored.panelPx !== null && Math.abs(restored.panelPx - initial.panelPx) <= 0.25,
+    `1800px round trip did not restore the panes: list ${initial.listPx}px → ${restored.listPx}px, work panel ${initial.panelPx}px → ${restored.panelPx}px`,
+  );
+  assert.equal(await readSaved(), saved, "Resizing the window changed the saved pane widths");
 }
 
 /**
@@ -138,6 +182,33 @@ export async function verifyShellWidths(browser: Browser, loginUrl: string, orig
       const draft = page.locator("#chat .composer-frame textarea");
       assert.equal(await draft.inputValue(), DRAFT, `${scale} back at ${WIDE_PX}px: the draft typed in one column is gone`);
       await draft.fill("");
+
+      if (scale === "md") {
+        await verifyWorkPanelRoundTrip(page);
+
+        // Keyboard Tab focus onto a standard Button renders a visible 2px solid focus outline.
+        await page.setViewportSize({ width: WIDE_PX, height: HEIGHT_PX });
+        const search = page.locator('#list input[type="search"]');
+        await search.waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+        await search.focus();
+        await page.keyboard.press("Shift+Tab");
+        const ring = await page.evaluate(() => {
+          const g = globalThis as unknown as BrowserGlobal;
+          const el = g.document.activeElement;
+          if (!el) return null;
+          const cs = g.getComputedStyle(el);
+          return {
+            label: el.getAttribute("aria-label"),
+            focusVisible: el.matches(":focus-visible"),
+            outlineStyle: cs.outlineStyle,
+            outlineWidth: cs.outlineWidth,
+          };
+        });
+        assert.ok(
+          ring !== null && ring.label === "New project manager" && ring.focusVisible && ring.outlineStyle === "solid" && Number.parseFloat(ring.outlineWidth) >= 2,
+          `Keyboard focus ring is hidden on ${ring?.label ?? "unknown"}: ${JSON.stringify(ring)}`,
+        );
+      }
     }
     assert.deepEqual(errors, [], `Shell width check hit page errors: ${errors.join("; ")}`);
   } finally {
