@@ -28,7 +28,6 @@ import type {
 } from "../../shared/domain.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { HubArgs, HubResult } from "../../shared/hub.ts";
-import type { WaitingAsk } from "../../shared/waiting-asks.ts";
 import {
   MAX_DECISION_NOTE_CHARS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
@@ -80,6 +79,7 @@ import type {
 } from "../../shared/router.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, checkEffort, checkModel, isAgentVendor, normalizeEffortInput } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
+import type { Db } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { LedgerMessages } from "./messages.ts";
@@ -171,6 +171,15 @@ const routerReportSchema = z.object({
 
 const ITEM_SELECT = `SELECT router_items.*, router_item_deliverables.deliverables_json FROM router_items
   LEFT JOIN router_item_deliverables ON router_item_deliverables.item_id = router_items.id`;
+
+function routerItemRow(db: Db, id: RouterItemId): RouterItemDbRow | undefined {
+  return db.get<RouterItemDbRow>(`${ITEM_SELECT} WHERE router_items.id = ?`, id);
+}
+
+export function readRouterItem(db: Db, id: RouterItemId): RouterItem | null {
+  const row = routerItemRow(db, id);
+  return row === undefined ? null : toRouterItem(row);
+}
 
 function deliverablesField(row: RouterItemDbRow): { deliverables?: Deliverable[] } {
   const list = deliverablesOf(parseJsonOr<unknown>(row.deliverables_json ?? null, null));
@@ -281,8 +290,7 @@ export function createLedgerRouter(
     );
   };
 
-  const getItemRow = (id: RouterItemId): RouterItemDbRow | undefined =>
-    db.get<RouterItemDbRow>(`${ITEM_SELECT} WHERE router_items.id = ?`, id);
+  const getItemRow = (id: RouterItemId) => routerItemRow(db, id);
 
   const withDeliverablesIn = (itemId: RouterItemId, list: readonly Deliverable[]): RouterItem => {
     if (list.length > 0) {
@@ -390,15 +398,6 @@ export function createLedgerRouter(
     });
     return item;
   };
-
-  const waitingAsksOf = (conversationId: ConversationId): WaitingAsk[] =>
-    db
-      .all<{ id: number; question: string | null }>(
-        `SELECT id, question FROM router_items
-          WHERE pm_id = (SELECT pm_id FROM conversations WHERE id = ?) AND kind = 'decision' AND status = 'pending' ORDER BY id`,
-        conversationId,
-      )
-      .map((row) => ({ id: row.id, question: row.question ?? "" }));
 
   const answerAsk = (askMessageId: MessageId, input: ResolveRouterItemRequest, onDecisionWritten?: () => void): ResolveRouterItemResponse => {
     const row = db.get<{ id: number }>(
@@ -1281,15 +1280,11 @@ export function createLedgerRouter(
   return {
     prepareIndependentAskIn,
     bridgeAskIn,
-    waitingAsksOf,
     answerAsk,
     closeAskIn,
     reportIn,
     resolveItem,
-    getItem: (id: RouterItemId) => {
-      const row = getItemRow(id);
-      return row === undefined ? null : toRouterItem(row);
-    },
+    getItem: (id: RouterItemId) => readRouterItem(db, id),
     archiveAllReports,
     updateSettings,
     getSettings,

@@ -21,7 +21,8 @@ import type { HubFileArg } from "./deliverables.ts";
 import type { WorkerCapabilityMode } from "./pm-capabilities.ts";
 import type { RouterItem, RouterReportLink } from "./router.ts";
 import type { SelfReloadStatus } from "./api.ts";
-import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
+import type { AskDetail, PendingAsk } from "./pending-asks.ts";
+import type { ScheduleId, ScheduleRecord, ScheduleRunSummary } from "./schedule.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
 import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
@@ -56,8 +57,11 @@ export const HUB_COMMANDS = [
   "models",
   "ask",
   "ask.close",
+  "ask.list",
+  "ask.show",
   "schedule.add",
   "schedule.list",
+  "schedule.show",
   "schedule.pause",
   "schedule.resume",
   "schedule.remove",
@@ -93,8 +97,11 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   models: ["pm"],
   ask: ["pm"],
   "ask.close": ["pm"],
+  "ask.list": ["pm"],
+  "ask.show": ["pm"],
   "schedule.add": ["pm"],
   "schedule.list": ["pm"],
+  "schedule.show": ["pm"],
   "schedule.pause": ["pm"],
   "schedule.resume": ["pm"],
   "schedule.remove": ["pm"],
@@ -109,6 +116,18 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "graph.cancel": ["pm"],
   "graph.finish": ["pm"],
 };
+
+/**
+ * Commands documented in `hub help` but not in the system prompt, so adding them never changes a live session's cached prefix.
+ * Each value is the hint printed in the output where the PM needs that command; the producer of that output must print it verbatim.
+ */
+export const HUB_HELP_ONLY_COMMANDS = {
+  "ask.list": `看全部在等用户的卡：${HUB_COMMAND} ask list`,
+  "ask.show": `看全文：${HUB_COMMAND} ask show <编号>`,
+  "schedule.show": `看全文和最近几次结果：${HUB_COMMAND} schedule show <编号>`,
+} as const satisfies Partial<Record<HubCommand, string>>;
+
+export type HubHelpOnlyCommand = keyof typeof HUB_HELP_ONLY_COMMANDS;
 
 export function hubCommandAllowed(role: AgentRole, command: HubCommand): boolean {
   return HUB_COMMAND_ROLES[command].includes(role);
@@ -162,8 +181,11 @@ export interface HubArgsMap {
     files?: HubFileArg[];
   };
   "ask.close": { itemId: RouterItemId } | { messageId: MessageId };
+  "ask.list": Record<string, never>;
+  "ask.show": { itemId: RouterItemId } | { messageId: MessageId };
   "schedule.add": { name: string; prompt: string; daily?: string; everyMinutes?: number };
   "schedule.list": Record<string, never>;
+  "schedule.show": { scheduleId: ScheduleId };
   "schedule.pause": { scheduleId: ScheduleId };
   "schedule.resume": { scheduleId: ScheduleId };
   "schedule.remove": { scheduleId: ScheduleId };
@@ -446,8 +468,11 @@ interface HubDataMap {
   models: { vendors: HubVendorModels[] };
   ask: { messageId: MessageId; graph?: TaskGraph; item?: RouterItem };
   "ask.close": { item: RouterItem } | { messageId: MessageId };
+  "ask.list": { asks: PendingAsk[] };
+  "ask.show": { ask: AskDetail };
   "schedule.add": { schedule: ScheduleRecord };
   "schedule.list": { schedules: ScheduleRecord[] };
+  "schedule.show": { schedule: ScheduleRecord; runs: ScheduleRunSummary[] };
   "schedule.pause": { schedule: ScheduleRecord };
   "schedule.resume": { schedule: ScheduleRecord };
   "schedule.remove": { schedule: ScheduleRecord };
