@@ -127,7 +127,7 @@ describe("界面标准：共用组件", () => {
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-frame\s*\{\s*transition: none/);
   });
 
-  it("下拉 plain（分组行里改了马上存的）：行里的值样式，透明底无框，悬停和打开时 info-select 的浅底，高 30px，不用主色", () => {
+  it("plain Select (saves on change inside a group row): row value style, no fill or border, the info-select tint on hover and open, 30px tall, no primary color", () => {
     render(
       <Select value="a" onValueChange={() => {}}>
         <SelectTrigger aria-label="行里的下拉" variant="plain">
@@ -143,7 +143,7 @@ describe("界面标准：共用组件", () => {
     expect(cls.join(" ")).not.toMatch(/rounded-|primary/);
   });
 
-  it("按钮：默认 36px、sm 32px，图标按钮同两档；主按钮是发送键同款淡色（btn-pastel），键盘焦点是中性深棕描边", () => {
+  it("Button: 36px default and 32px sm, icon buttons at the same sizes; primary uses the send button pastel (btn-pastel) and keyboard focus draws the neutral brown outline", () => {
     render(
       <>
         <Button>默认</Button>

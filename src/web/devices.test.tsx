@@ -424,7 +424,7 @@ describe("设置 → 设备", () => {
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
     const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
-    // 设置是一页：Info 行的小标题，组之间一条细线，行之间不画线，组不画白框、不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
+    // Info headings, one line between groups and none between rows, no boxed or shaded groups; this computer and linked computers are separate groups
     const mine = within(devices).getByRole("region", { name: "This computer" });
     const others = within(devices).getByRole("region", { name: "Your computers" });
     for (const group of [mine, others]) {

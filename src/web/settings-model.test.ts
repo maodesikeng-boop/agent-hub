@@ -1016,7 +1016,7 @@ describe("useVendorSyncSetting：别家应用自带的 MCP", () => {
 });
 
 describe("ChoiceRows、ModeRows 与 Button destructive", () => {
-  it("ChoiceRows 支持无说明纯单行（30px Info 行）与带说明行（py-1.5 两行），ModeRows 包装完全兼容，Button destructive 具备标准危险主按钮样式", () => {
+  it("ChoiceRows renders single-line 30px Info rows and two-line rows with a consequence, ModeRows wraps it, and the destructive Button keeps the danger style", () => {
     const onPick = vi.fn();
     const { unmount } = render(
       createElement(ChoiceRows, {

@@ -47,7 +47,7 @@ async function openSecurity() {
 }
 
 const rowOf = (el: HTMLElement) => el.closest("[data-slot='settings-row']") as HTMLElement;
-/** 行里放值和控件（文字操作、输入框）的那一块：SettingsRow 的第二个子块。 */
+/** The value and control part of a SettingsRow (text actions, inputs): its second child. */
 const controlsOf = (row: HTMLElement) => row.children[1] as HTMLElement;
 
 describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", () => {
@@ -56,7 +56,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     expect(classOf(panel)).toContain("min-w-0");
     const scroller = panel.lastElementChild as HTMLElement;
     expect(classOf(scroller)).toContain("overflow-y-auto");
-    // 内容列限宽（max-w-160）居中并且 grid-cols-1，长内容撑不开
+    // The content column is capped at max-w-160, centered, and grid-cols-1 so long content cannot stretch it
     expect(classOf(scroller.firstElementChild as HTMLElement)).toEqual(expect.arrayContaining(["grid-cols-1", "max-w-160", "mx-auto"]));
     for (const group of within(panel).getAllByRole("region")) {
       // 自己是 grid 的分组（带标题的）列宽也不跟内容走
@@ -85,7 +85,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     const controls = controlsOf(row);
     expect(within(controls).getByRole("button", { name: /^Sign out/ })).toBeVisible();
     expect(classOf(controls)).toEqual(expect.arrayContaining(["ml-auto", "shrink-0", "max-w-full"]));
-    expect(classOf(row)).toContain("flex-wrap"); // 放不下时值和操作换到下一行，不出界
+    expect(classOf(row)).toContain("flex-wrap"); // Values and actions wrap to the next line instead of overflowing
     const left = row.firstElementChild as HTMLElement;
     expect(classOf(left)).toEqual(expect.arrayContaining(["min-w-28", "flex-1"]));
     const label = within(row).getByText("Android Chrome");

@@ -1748,7 +1748,7 @@ describe("表单校验：新建项目经理", () => {
     const { name, create } = await open(user);
     await user.click(name);
     await user.paste("名".repeat(41));
-    // 名字框在头像旁边，原因就写在名字框正下方
+    // The name field sits beside the avatar and its error line sits right under it
     const alert = within(name.parentElement!).getByRole("alert");
     expect(alert).toHaveTextContent("Name can be at most 40 characters");
     expect(alert).not.toHaveTextContent("空");
