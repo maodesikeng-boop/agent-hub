@@ -59,7 +59,7 @@ function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boo
         title={error?.text ?? "Can't reach the daemon"}
         titleTip={error ? errorTitle(error) : undefined}
         lines={error?.hint ? [error.hint] : []}
-        action={<Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>Retry</Button>}
+        action={<Button size="sm" onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>Retry</Button>}
       />
     );
   }
@@ -356,7 +356,13 @@ export function App() {
     [hasContent, health, reconnecting, offline, fleet.listFailed, openCurrentProviders],
   );
   const gate = gatePage(model, mobile);
-  if (gate !== null) return gate;
+  if (gate !== null) {
+    return (
+      <div data-window-drag className="wood flex h-full w-full p-[var(--frame-inset)] pt-[var(--topbar-height)]">
+        <main className="shell-sheet flex min-h-0 min-w-0 flex-1 flex-col">{gate}</main>
+      </div>
+    );
+  }
   if (content === null) return null;
 
   const quota = state.server.currentQuota ? currentQuota : quotaUsage(state);

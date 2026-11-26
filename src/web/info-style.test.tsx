@@ -43,7 +43,7 @@ afterEach(() => {
 function expectNoBoxInside(root: HTMLElement) {
   for (const el of [root, ...root.querySelectorAll<HTMLElement>("*")]) {
     if (el.matches("input, textarea, button, [role='switch'], [role='combobox'], [data-slot='switch'] *")) continue;
-    expect(el.className.toString(), el.outerHTML.slice(0, 160)).not.toMatch(BOX);
+    expect(el.getAttribute("class") ?? "", el.outerHTML.slice(0, 160)).not.toMatch(BOX);
   }
 }
 
@@ -183,7 +183,7 @@ describe("T6 Capabilities scope", () => {
     await user.click(within(dialog).getByRole("tab", { name: "Capabilities" }));
     const panel = within(dialog).getByRole("tabpanel", { name: "Capabilities" });
     const scope = await within(panel).findByRole("tablist", { name: "Scope" });
-    expect(within(scope).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Project defaults", "Router"]);
+    expect(within(scope).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Project defaults", "Router", "Project"]);
     expect(within(panel).queryByRole("radiogroup", { name: "Scope" })).toBeNull();
   });
 });

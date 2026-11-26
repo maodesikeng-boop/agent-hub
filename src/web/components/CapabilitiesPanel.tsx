@@ -16,12 +16,11 @@ import {
 import { errorText } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { SettingsNavRow } from "../mobile/settings/SettingsNavRow.tsx";
-import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { ChevronRight, Loader2 } from "../ui/icons.ts";
 import { Switch } from "../ui/switch.tsx";
 import { SearchField } from "./SearchField.tsx";
-import { CollapsibleGroup, RowError, SettingsGroup } from "./SettingsList.tsx";
+import { CollapsibleGroup, INFO_ROW, InfoAction, RowError, SettingsGroup } from "./SettingsList.tsx";
 
 type ApplyPatches = (patches: readonly CapabilitiesPatch[]) => void;
 
@@ -41,7 +40,7 @@ function Audience({ vendors }: { vendors: readonly AgentVendor[] | null }) {
   if (vendors === null) return null;
   const text = audienceLabel(vendors);
   return (
-    <span title={text} className="max-w-full min-w-0 truncate text-minor text-muted-foreground">
+    <span title={text} className="max-w-full min-w-0 truncate text-xs text-muted-foreground">
       {text}
     </span>
   );
@@ -49,15 +48,15 @@ function Audience({ vendors }: { vendors: readonly AgentVendor[] | null }) {
 
 // Tags wrap under the name on narrow rows so the name itself never truncates early.
 function Labels({ children }: { children: ReactNode }) {
-  return <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">{children}</span>;
+  return <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">{children}</span>;
 }
 
 function ItemRow({ row, nested, disabled, onApply }: { row: CapabilityRow; nested: boolean; disabled: boolean; onApply: ApplyPatches }) {
   const id = useId();
   return (
-    <div className={cn("flex items-center gap-3 py-2 pr-4 pl-10", nested ? "min-h-11" : "min-h-12")}>
+    <div className={cn(INFO_ROW, "py-0.5", nested && "pl-6")}>
       <Labels>
-        <label htmlFor={id} title={row.description ?? row.key} className={cn("max-w-full min-w-0 truncate text-body", disabled ? "cursor-default" : "cursor-pointer")}>
+        <label htmlFor={id} title={row.description ?? row.key} className={cn("max-w-full min-w-0 truncate text-minor text-foreground", disabled ? "cursor-default" : "cursor-pointer")}>
           {row.name}
         </label>
         <KindTag kind={row.kind} />
@@ -74,21 +73,21 @@ function UnitRow({ unit, expanded, disabled, onApply }: { unit: CapabilityUnit; 
   if (unit.single) return <ItemRow row={{ ...unit.rows[0]!, audience: unit.audience }} nested={false} disabled={disabled} onApply={onApply} />;
   return (
     <Collapsible open={open || expanded} onOpenChange={setOpen}>
-      <div className="flex min-h-12 items-center gap-3 pr-4 transition-colors hover:bg-hover">
-        <CollapsibleTrigger className="group flex min-w-0 flex-1 cursor-pointer items-center gap-3 self-stretch py-2 pl-4 text-left focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px]">
-          <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
+      <div className="flex min-h-7.5 items-center gap-2 pointer-coarse:min-h-11">
+        <CollapsibleTrigger className={cn("group", INFO_ROW, "w-auto min-w-0 flex-1 self-stretch py-0.5 mr-0")}>
+          <ChevronRight className="info-chevron size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
           <Labels>
-            <span title={unit.label} className="max-w-full min-w-0 truncate text-body">
+            <span title={unit.label} className="max-w-full min-w-0 truncate text-minor text-foreground">
               {unit.label}
             </span>
             <Audience vendors={unit.audience} />
             {unit.pinned > 0 && <CustomBadge />}
           </Labels>
-          <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{countLabel(unit.enabled, unit.rows.length)}</span>
+          <span className="info-val shrink-0 text-minor tabular-nums">{countLabel(unit.enabled, unit.rows.length)}</span>
         </CollapsibleTrigger>
         <Switch aria-label={unit.label} checked={unit.enabled === unit.rows.length} disabled={disabled} onCheckedChange={(on) => onApply(rowsPatches(unit.rows, on))} />
       </div>
-      <CollapsibleContent className="divide-y divide-border border-t border-border">
+      <CollapsibleContent>
         {unit.rows.map((row) => (
           <ItemRow key={row.key} row={row} nested disabled={disabled} onApply={onApply} />
         ))}
@@ -108,7 +107,7 @@ function SectionGroup({ section, searching, disabled, onApply }: { section: Capa
     );
   }
   // A lone unit row already shows the same count.
-  const action = section.units.length > 1 ? <span className="text-minor text-muted-foreground tabular-nums">{count}</span> : undefined;
+  const action = section.units.length > 1 ? <span className="tabular-nums">{count}</span> : undefined;
   return (
     <SettingsGroup title={section.label} action={action}>
       {units}
@@ -141,18 +140,16 @@ function InheritanceGroup({
 function PanelStatus({ pending, error, onRetry }: { pending: boolean; error: unknown; onRetry: () => void }) {
   if (pending) {
     return (
-      <div className="flex min-h-14 items-center justify-center gap-2 text-minor text-muted-foreground">
-        <Loader2 className="size-pixel" aria-hidden="true" />
+      <div className="flex items-center justify-center gap-2 py-6 text-minor text-muted-foreground">
+        <Loader2 className="size-3.5" aria-hidden="true" />
         Loading…
       </div>
     );
   }
   return (
-    <div className="flex items-center gap-3 px-4">
+    <div className="flex items-center justify-center gap-4.5 py-6">
       <RowError error={errorText(error)} />
-      <Button variant="outline" size="sm" onClick={onRetry}>
-        Retry
-      </Button>
+      <InfoAction onClick={onRetry}>Retry</InfoAction>
     </div>
   );
 }
@@ -186,20 +183,15 @@ export function CapabilitiesPanel({
           onReset={editor.reset}
         />
       )}
-      <div className="flex items-center gap-2">
-        {/* The icon starts on the 16px edge where the rows below start their text. */}
-        <SearchField label="Search capabilities" value={query} onChange={setQuery} className="pl-4" />
-        <Button variant="outline" disabled={disabled || editor.refreshing} onClick={() => void editor.refresh()}>
-          {editor.refreshing && <Loader2 aria-hidden="true" />}
+      <div className="flex items-center gap-4.5 py-2">
+        <SearchField label="Search capabilities" value={query} onChange={setQuery} className="h-8" />
+        <InfoAction disabled={disabled || editor.refreshing} onClick={() => void editor.refresh()}>
+          {editor.refreshing && <Loader2 className="size-3.5" aria-hidden="true" />}
           Refresh
-        </Button>
+        </InfoAction>
       </div>
-      {editor.error && (
-        <div className="px-4">
-          <RowError error={editor.error} />
-        </div>
-      )}
-      {sections.length === 0 && <p className="px-4 text-body text-muted-foreground">{searching ? "No matches" : "No capabilities found"}</p>}
+      {editor.error && <RowError error={editor.error} />}
+      {sections.length === 0 && <p className="py-6 text-center text-minor text-muted-foreground">{searching ? "No matches" : "No capabilities found"}</p>}
       {sections.map((section) => (
         <SectionGroup key={section.id} section={section} searching={searching} disabled={disabled} onApply={editor.apply} />
       ))}

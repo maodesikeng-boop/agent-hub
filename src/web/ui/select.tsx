@@ -42,7 +42,7 @@ export function SelectTrigger({
       className={cn(
         "touch-target inline-flex h-9 min-w-0 cursor-pointer items-center justify-between gap-2 text-body text-foreground transition-colors outline-none disabled:cursor-default disabled:opacity-50 pointer-coarse:h-11 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate [&_svg]:pointer-events-none [&_svg]:shrink-0",
         variant === "plain"
-          ? "-mr-3 w-auto max-w-65 border border-transparent bg-transparent pr-2.5 pl-3 hover:bg-hover focus-visible:field-focus focus-visible:bg-hover data-[state=open]:bg-hover"
+          ? "info-select -mr-2 h-7.5 w-auto max-w-56 gap-1 border-0 bg-transparent px-2 text-minor tabular-nums"
           : "w-full border border-border-strong bg-background px-3 hover:border-[rgb(110_74_0_/_0.36)] focus-visible:field-focus data-[state=open]:field-focus aria-invalid:border-danger",
         className,
       )}
@@ -50,7 +50,7 @@ export function SelectTrigger({
     >
       {children}
       <SelectPrimitive.Icon asChild>
-        <ChevronDown className={cn("text-muted-foreground", variant === "plain" ? "size-3.5" : "size-4")} aria-hidden="true" />
+        <ChevronDown className={variant === "plain" ? "info-chevron size-3.5" : "size-4 text-muted-foreground"} aria-hidden="true" />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
@@ -119,13 +119,13 @@ export function SelectSeparator({ className, ...props }: React.ComponentProps<ty
   );
 }
 
-export function SelectItem({ className, children, value, ...props }: React.ComponentProps<typeof SelectPrimitive.Item>) {
+export function SelectItem({ className, children, value, detail, ...props }: React.ComponentProps<typeof SelectPrimitive.Item> & { detail?: React.ReactNode }) {
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
       value={encodeValue(value) ?? ""}
       className={cn(
-        "relative flex min-h-8 w-full cursor-pointer items-center gap-2 rounded-xs py-1.5 pr-8 pl-2.5 text-body outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-hover data-[state=checked]:bg-open pointer-coarse:min-h-11",
+        "relative flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-xs py-1 pr-8 pl-2.5 text-minor outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-hover data-[state=checked]:bg-open pointer-coarse:min-h-11",
         className,
       )}
       {...props}
@@ -135,7 +135,14 @@ export function SelectItem({ className, children, value, ...props }: React.Compo
           <Check className="size-3.5 text-brand-ink" aria-hidden="true" />
         </SelectPrimitive.ItemIndicator>
       </span>
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      {detail === undefined ? (
+        <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      ) : (
+        <span className="flex min-w-0 flex-col">
+          <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+          <span className="text-xs leading-snug text-muted-foreground">{detail}</span>
+        </span>
+      )}
     </SelectPrimitive.Item>
   );
 }

@@ -119,10 +119,10 @@ function LookAvatarButton({ pm, disabled }: { pm: Pm; disabled: boolean }) {
         disabled={disabled}
         aria-label="Change look"
         title="Change look"
-        className="work-info-avatar touch-target shrink-0"
+        className="info-avatar touch-target shrink-0"
       >
         <Avatar look={look} size={44} />
-        <span aria-hidden="true" data-testid="info-avatar-pencil" className="work-info-avatar-pen">
+        <span aria-hidden="true" data-testid="info-avatar-pencil" className="info-avatar-pen">
           <Pencil className="size-2.5" aria-hidden="true" />
         </span>
       </button>
@@ -216,7 +216,7 @@ function InfoFooterActions({
           type="button"
           disabled={readOnly || renewBusy || switchingVendor}
           onClick={() => setConfirmRenew(true)}
-          className="work-info-action touch-target inline-flex items-center gap-1.5 text-minor font-medium"
+          className="info-action touch-target"
         >
           {renewBusy && <Loader2 className="size-3.5" aria-hidden="true" />}
           {renewBusy ? "Handing off…" : "New session"}
@@ -225,7 +225,7 @@ function InfoFooterActions({
           type="button"
           disabled={readOnly || archiving}
           onClick={() => setConfirmArchive(true)}
-          className="work-info-action-danger touch-target inline-flex items-center gap-1.5 text-minor font-medium text-danger"
+          className="info-action info-action-danger touch-target"
         >
           {archiving && <Loader2 className="size-3.5" aria-hidden="true" />}
           Archive
@@ -301,21 +301,21 @@ function InfoSummaryRows({
   return (
     <nav aria-label="Project manager settings pages">
       {groups.map((rows, groupIndex) => (
-        <div key={groupIndex} data-info-group={groupIndex} className="work-info-sec">
+        <div key={groupIndex} data-info-group={groupIndex} className="info-sec">
           {rows.map((row) => (
             <button
               key={row.page}
               type="button"
               aria-label={row.value !== null && row.value !== "" ? `${row.label}, ${row.value}` : row.label}
               onClick={() => onNavigate(row.page)}
-              className="work-info-row h-7.5 pointer-coarse:min-h-11"
+              className="info-row h-7.5 pointer-coarse:min-h-11"
             >
               <span className="min-w-0 truncate text-minor text-foreground" title={row.label}>
                 {row.label}
               </span>
               <span className="ml-auto flex min-w-0 shrink items-center gap-1.5">
                 {row.value !== null && (
-                  <span title={row.value} className="work-info-val max-w-44 truncate text-minor tabular-nums">
+                  <span title={row.value} className="info-val max-w-44 truncate text-minor tabular-nums">
                     {row.value}
                   </span>
                 )}
@@ -638,7 +638,7 @@ export function InfoTab({
 
   return (
     <div className="right-rail-scroll work-panel-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain [contain:layout_style]">
-      <div className="work-info-id">
+      <div className="info-id">
         <LookAvatarButton pm={pm} disabled={readOnly || archived} />
         <div className="min-w-0 flex-1">
           <h1 title={pm.name} className="truncate text-title leading-snug font-semibold text-foreground">

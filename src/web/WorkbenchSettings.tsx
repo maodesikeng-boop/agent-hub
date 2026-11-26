@@ -1,7 +1,6 @@
 import { memo } from "react";
 import { ProvidersSettings } from "./components/ProvidersSettings.tsx";
 import type { SettingsBodies } from "./components/SettingsDialog.tsx";
-import { FlatSettingsGroups } from "./components/SettingsList.tsx";
 import { VendorSyncSettings } from "./components/VendorSyncSettings.tsx";
 import { useClient } from "./device-scope.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "./devices.ts";
@@ -34,9 +33,7 @@ export const WorkbenchSettings = memo(function WorkbenchSettings({ mobile, defau
     <>
       {showProviders && (
         <Surface id="settings:providers">
-          <FlatSettingsGroups flat={!mobile}>
-            <ProvidersSettings mobile={mobile} model={providers} vendorSync={<VendorSyncSettings vendor={vendor} showScan={!mobile} />} />
-          </FlatSettingsGroups>
+          <ProvidersSettings mobile={mobile} model={providers} vendorSync={<VendorSyncSettings vendor={vendor} showScan={!mobile} />} />
         </Surface>
       )}
       {mobile && (

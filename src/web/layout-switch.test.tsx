@@ -184,9 +184,9 @@ it("turns the open Settings dialog into the phone page for its tab, and back, ke
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Settings" }));
   await user.click(within(await screen.findByRole("dialog", { name: "Settings" })).getByRole("tab", { name: "Capabilities" }));
-  await user.click(await screen.findByRole("radio", { name: "Router" }));
+  await user.click(await screen.findByRole("tab", { name: "Router" }));
 
-  const selected = screen.getByRole("radio", { name: "Router" });
+  const selected = screen.getByRole("tab", { name: "Router" });
   for (const width of ROUND_TRIPS) {
     resize(width);
     expect(location.hash).toBe("#/settings/capabilities");
@@ -197,8 +197,8 @@ it("turns the open Settings dialog into the phone page for its tab, and back, ke
       const dialog = await screen.findByRole("dialog", { name: "Settings" });
       expect(within(dialog).getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
     }
-    expect(screen.getByRole("radio", { name: "Router" })).toBe(selected);
-    expect(selected).toBeChecked();
+    expect(screen.getByRole("tab", { name: "Router" })).toBe(selected);
+    expect(selected).toHaveAttribute("aria-selected", "true");
   }
 });
 
@@ -329,14 +329,14 @@ describe("layout switch acceptance", () => {
   it("keeps the selected project in the Capabilities scope", async () => {
     const { resize } = boot("#/settings/capabilities", { pms: [makePm({ id: 1, name: "First" }), makePm({ id: 2, name: "Second" })] });
     const user = userEvent.setup();
-    expect(await screen.findByRole("radio", { name: "Project defaults" })).toBeChecked();
-    await user.click(screen.getByRole("radio", { name: "Project" }));
+    expect(await screen.findByRole("tab", { name: "Project defaults" })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("tab", { name: "Project" }));
     const picker = await screen.findByRole("button", { name: /^Project:/ });
     await user.click(picker);
     await user.click(within(await screen.findByRole("radiogroup", { name: "Project" })).getByRole("radio", { name: "Second" }));
     for (const width of ROUND_TRIPS) {
       resize(width);
-      expect(screen.getByRole("radio", { name: "Project" })).toBeChecked();
+      expect(screen.getByRole("tab", { name: "Project" })).toHaveAttribute("aria-selected", "true");
       expect(screen.getByRole("button", { name: "Project: Second" })).toBe(picker);
     }
   });
@@ -479,7 +479,7 @@ describe("layout switch acceptance", () => {
     let input: HTMLElement;
     const value = "draft entered for test";
     if (method === "API key") {
-      await user.click(await screen.findByRole("radio", { name: "API key" }));
+      await user.click(await screen.findByRole("tab", { name: "API key" }));
       input = await screen.findByLabelText("API key");
     } else {
       await user.click(await screen.findByRole("button", { name: "Continue in browser" }));
@@ -489,7 +489,7 @@ describe("layout switch acceptance", () => {
     for (const width of ROUND_TRIPS) {
       resize(width);
       const sheet = await screen.findByRole("dialog", { name: "Sign in to Claude Code" });
-      expect(within(sheet).getByRole("radio", { name: method })).toBeChecked();
+      expect(within(sheet).getByRole("tab", { name: method })).toHaveAttribute("aria-selected", "true");
       expect(sheet).toContainElement(input);
       expect(input).toHaveValue(value);
     }

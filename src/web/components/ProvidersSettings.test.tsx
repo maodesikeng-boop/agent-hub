@@ -396,8 +396,8 @@ describe("桌面端 Settings → Providers", () => {
     const v2 = AGENT_VENDORS[2]!;
     await user.click(within(within(panel).getByTestId(`provider-row-${v2}`)).getByRole("button", { name: /Sign in/ }));
     let dialog = await screen.findByRole("dialog", { name: `Sign in to ${vendorLabel(v2)}` });
-    const methodGroup = within(dialog).getByRole("radiogroup", { name: "Sign-in method" });
-    expect(within(methodGroup).getByRole("radio", { name: "Device code" })).toHaveAttribute("aria-checked", "true");
+    const methodGroup = within(dialog).getByRole("tablist", { name: "Sign-in method" });
+    expect(within(methodGroup).getByRole("tab", { name: "Device code" })).toHaveAttribute("aria-selected", "true");
 
     await user.click(within(dialog).getByRole("button", { name: "Continue in browser" }));
     expect(await within(dialog).findByTestId("device-user-code")).toHaveTextContent("WXYZ-5678");
@@ -408,7 +408,7 @@ describe("桌面端 Settings → Providers", () => {
     });
 
     // 2. 切到 Browser 方式 → 远端常驻粘贴回环回调 URL 输入框，粘贴提交后自动完成收起弹窗
-    await user.click(within(methodGroup).getByRole("radio", { name: "Browser" }));
+    await user.click(within(methodGroup).getByRole("tab", { name: "Browser" }));
     await user.click(within(dialog).getByRole("button", { name: "Open sign-in page" }));
     const pasteInput = await within(dialog).findByPlaceholderText("Paste code or redirect URL…");
     await user.type(pasteInput, "http://127.0.0.1:54321/auth/callback?code=ok_code&state=st1");

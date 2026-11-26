@@ -1,4 +1,4 @@
-import { Loader2 } from "../ui/icons.ts";
+import { ChevronRight, Loader2 } from "../ui/icons.ts";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   isSelectable,
@@ -26,8 +26,8 @@ import { Button } from "../ui/button.tsx";
 import { DialogFooter } from "../ui/dialog.tsx";
 import { Input } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
-import { Segmented } from "../ui/segmented.tsx";
-import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { InfoTabs } from "./InfoTabs.tsx";
+import { INFO_ROW, InfoAction, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { StatusShimmer } from "./StatusShimmer.tsx";
 import { useProviderSheet } from "../settings-drafts.ts";
 import { ProviderSheetChrome } from "./ProviderSheetChrome.tsx";
@@ -86,56 +86,30 @@ function GitEnvironmentGroup({ model }: { model: ProvidersSettingModel }) {
 
   return (
     <SettingsGroup title="Environment">
-      <div data-slot="settings-row" className="px-4 py-3">
-        <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="flex min-w-32 flex-1 items-start gap-3">
-            <span
-              aria-hidden="true"
-              className={cn(
-                "mt-2 size-2 shrink-0 rounded-full",
-                running ? "bg-caution" : "bg-muted-foreground/40",
-              )}
-            />
-            <div className="min-w-0 flex-1 break-words">
-              <div className="line-clamp-2 text-body">Git</div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-minor leading-snug text-muted-foreground">
-                {running ? (
-                  <StatusShimmer text={gitJob.progressLine ?? "Installing…"} />
-                ) : (
-                  <span>Not installed</span>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="ml-auto flex max-w-full shrink-0 items-center gap-2">
+      <div data-slot="settings-row">
+        <div className={cn(INFO_ROW, "h-7.5")}>
+          <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", running ? "bg-caution" : "bg-muted-foreground/40")} />
+          <span className="min-w-0 flex-1 truncate text-minor text-foreground">Git</span>
+          {running ? (
+            <span className="flex min-w-0 shrink items-center gap-1.5 text-minor text-muted-foreground">
+              <Loader2 className="size-3.5 shrink-0" aria-hidden="true" />
+              <StatusShimmer text={gitJob.progressLine ?? "Installing…"} />
+            </span>
+          ) : (
+            <span className="info-val shrink-0 text-minor">Not installed</span>
+          )}
+          <span className="info-actions shrink-0">
             {hasLog && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-expanded={logOpen}
-                onClick={() => setLogOpen((v) => !v)}
-              >
+              <InfoAction aria-expanded={logOpen} onClick={() => setLogOpen((v) => !v)}>
                 {logOpen ? "Hide log" : "Show log"}
-              </Button>
+              </InfoAction>
             )}
-            {running ? (
-              <Button type="button" variant="outline" size="sm" disabled>
-                <Loader2 aria-hidden="true" />
-                Installing…
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={!status.canInstallGit || model.busyKey === "git"}
-                onClick={() => void model.installGit()}
-              >
+            {!running && (
+              <InfoAction disabled={!status.canInstallGit || model.busyKey === "git"} onClick={() => void model.installGit()}>
                 {failed ? "Retry" : "Install"}
-              </Button>
+              </InfoAction>
             )}
-          </div>
+          </span>
         </div>
         {combinedError !== null && <RowError error={combinedError} />}
         <JobLogDisclosure job={gitJob} open={logOpen} />
@@ -174,122 +148,85 @@ function ProviderItemRow({
   const combinedError: ErrorLike | null =
     rowError ?? (jobFailed && job?.error ? { text: job.kind === "update" ? "Update failed" : "Install failed", raw: job.error } : null);
 
+  const opens = item.installed && !jobRunning ? (ready ? "account" : "signin") : null;
+  const value = jobRunning ? null : !item.installed ? "Not installed" : authenticated ? (item.accountSummary ?? "Signed in") : "Not signed in";
+  const lead = (
+    <>
+      <span aria-hidden="true" data-tone={tone} className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[tone])} />
+      <span title={item.label} className="min-w-0 truncate text-minor text-foreground">
+        {item.label}
+      </span>
+      {item.version && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{item.version}</span>}
+      <span className="min-w-0 flex-1" />
+    </>
+  );
+  const valueText = value !== null && (
+    <span title={value} className="info-val max-w-44 shrink truncate text-minor tabular-nums">
+      {value}
+    </span>
+  );
+
   return (
-    <div
-      data-slot="settings-row"
-      data-testid={`provider-row-${item.vendor}`}
-      className="min-h-12 px-4 py-3"
-    >
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <div className="flex min-w-32 flex-1 items-start gap-3">
-          <span
-            aria-hidden="true"
-            data-tone={tone}
-            className={cn("mt-2 size-2 shrink-0 rounded-full", DOT_CLASS[tone])}
-          />
-          <div className="min-w-0 flex-1 break-words">
-            <div title={item.label} className="line-clamp-2 text-body">
-              {item.label}
-            </div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-minor leading-snug text-muted-foreground">
-              {jobRunning ? (
-                <StatusShimmer text={job.progressLine ?? (job.kind === "update" ? "Updating…" : "Installing…")} />
-              ) : !item.installed ? (
-                <span>Not installed</span>
-              ) : authenticated ? (
-                <>
-                  <span>{item.accountSummary ?? "Signed in"}</span>
-                  {item.version && <span className="tabular-nums">{item.version}</span>}
-                </>
-              ) : (
-                <>
-                  <span>Not signed in</span>
-                  {item.version && <span className="tabular-nums">{item.version}</span>}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="ml-auto flex max-w-full shrink-0 items-center gap-2">
-          {hasLog && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label={`${logOpen ? "Hide log" : "Show log"} for ${item.label}`}
-              aria-expanded={logOpen}
-              onClick={() => setLogOpen((v) => !v)}
-            >
-              {logOpen ? "Hide log" : "Show log"}
-            </Button>
-          )}
-
+    <div data-slot="settings-row" data-testid={`provider-row-${item.vendor}`}>
+      {opens !== null ? (
+        <button
+          type="button"
+          aria-label={opens === "account" ? `Account for ${item.label}` : `Sign in to ${item.label}`}
+          className={cn(INFO_ROW, "h-7.5")}
+          onClick={opens === "account" ? onOpenAccount : onOpenSignIn}
+        >
+          {lead}
+          {valueText}
+          <ChevronRight className="info-chevron size-3.5 shrink-0" aria-hidden="true" />
+        </button>
+      ) : (
+        <div className={cn(INFO_ROW, "h-7.5")}>
+          {lead}
           {jobRunning ? (
-            <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={`Cancel ${item.label}`}
-                disabled={busyKey === `cancel-job:${item.vendor}`}
-                onClick={() => onCancelJob(job.jobId)}
-              >
-                Cancel
-              </Button>
-            </>
-          ) : !item.installed ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="min-w-24"
-              aria-label={`${jobFailed ? "Retry" : "Install"} ${item.label}`}
-              disabled={!item.canInstall || busyKey === `install:${item.vendor}`}
-              onClick={onInstall}
-            >
-              {busyKey === `install:${item.vendor}` && <Loader2 aria-hidden="true" />}
-              {jobFailed ? "Retry" : "Install"}
-            </Button>
-          ) : ready ? (
-            <>
-              {jobFailed && job?.kind === "update" && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  aria-label={`Retry ${item.label}`}
-                  disabled={busyKey === `update:${item.vendor}`}
-                  onClick={onUpdate}
-                >
-                  Retry
-                </Button>
-              )}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="min-w-24"
-                aria-label={`Account for ${item.label}`}
-                onClick={onOpenAccount}
-              >
-                Account…
-              </Button>
-            </>
+            <span className="flex min-w-0 shrink items-center gap-1.5 text-minor text-muted-foreground">
+              <Loader2 className="size-3.5 shrink-0" aria-hidden="true" />
+              <StatusShimmer text={job.progressLine ?? (job.kind === "update" ? "Updating…" : "Installing…")} />
+            </span>
           ) : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="min-w-24"
-              aria-label={`Sign in to ${item.label}`}
-              onClick={onOpenSignIn}
-            >
-              Sign in…
-            </Button>
+            valueText
           )}
+          <span className="info-actions shrink-0">
+            {hasLog && (
+              <InfoAction aria-label={`${logOpen ? "Hide log" : "Show log"} for ${item.label}`} aria-expanded={logOpen} onClick={() => setLogOpen((v) => !v)}>
+                {logOpen ? "Hide log" : "Show log"}
+              </InfoAction>
+            )}
+            {jobRunning ? (
+              <InfoAction aria-label={`Cancel ${item.label}`} disabled={busyKey === `cancel-job:${item.vendor}`} onClick={() => onCancelJob(job.jobId)}>
+                Cancel
+              </InfoAction>
+            ) : (
+              !item.installed && (
+                <InfoAction
+                  aria-label={`${jobFailed ? "Retry" : "Install"} ${item.label}`}
+                  disabled={!item.canInstall || busyKey === `install:${item.vendor}`}
+                  onClick={onInstall}
+                >
+                  {busyKey === `install:${item.vendor}` && <Loader2 className="size-3.5" aria-hidden="true" />}
+                  {jobFailed ? "Retry" : "Install"}
+                </InfoAction>
+              )
+            )}
+          </span>
         </div>
-      </div>
+      )}
+      {opens !== null && jobFailed && job?.kind === "update" && (
+        <div className="info-actions pb-1">
+          {hasLog && (
+            <InfoAction aria-label={`${logOpen ? "Hide log" : "Show log"} for ${item.label}`} aria-expanded={logOpen} onClick={() => setLogOpen((v) => !v)}>
+              {logOpen ? "Hide log" : "Show log"}
+            </InfoAction>
+          )}
+          <InfoAction aria-label={`Retry ${item.label}`} disabled={busyKey === `update:${item.vendor}`} onClick={onUpdate}>
+            Retry
+          </InfoAction>
+        </div>
+      )}
       {combinedError !== null && <RowError error={combinedError} />}
       <JobLogDisclosure job={job} open={logOpen} />
     </div>
@@ -494,12 +431,11 @@ export function ProviderSignInBody({
       )}
 
       {selection.visibleMethods.length > 1 && selectedMethod && (
-        <Segmented
+        <InfoTabs
           label="Sign-in method"
           value={selectedMethod.id}
           options={selection.visibleMethods.map((m) => ({ value: m.id, label: m.label }))}
           onChange={handleMethodChange}
-          className="flex w-full [&>*]:flex-auto [&>*]:justify-center [&>*]:truncate"
         />
       )}
 
@@ -507,14 +443,13 @@ export function ProviderSignInBody({
         selectedMethod.variants &&
         selectedMethod.variants.length > 1 &&
         variantId !== undefined && (
-          <Segmented
+          <InfoTabs
             label="Account type"
             value={variantId}
             options={selectedMethod.variants.map((v) => ({ value: v.id, label: v.label }))}
             onChange={(next) => {
               if (activeFlow === null) selection.setVariantId(next);
             }}
-            className="flex w-full [&>*]:flex-auto [&>*]:justify-center [&>*]:truncate"
           />
         )}
 
@@ -608,7 +543,7 @@ function SubmitLabel({ submitting, children }: { submitting: boolean; children: 
 
 function CancelButton({ mobile, disabled, onClick }: { mobile: boolean; disabled?: boolean; onClick: () => void }) {
   return (
-    <Button type="button" variant="outline" className={mobile ? DRAWER_BUTTON : undefined} disabled={disabled} onClick={onClick}>
+    <Button type="button" variant={mobile ? "outline" : "ghost"} size={mobile ? "default" : "sm"} className={mobile ? DRAWER_BUTTON : undefined} disabled={disabled} onClick={onClick}>
       Cancel
     </Button>
   );
@@ -637,7 +572,7 @@ function StartActions({ mobile, submitting, onStart, onCancelFlow, label }: Sign
     <SignInActions
       mobile={mobile}
       primary={
-        <Button type="button" className={mobile ? DRAWER_BUTTON : undefined} disabled={submitting} onClick={onStart}>
+        <Button type="button" size={mobile ? "default" : "sm"} className={mobile ? DRAWER_BUTTON : undefined} disabled={submitting} onClick={onStart}>
           <SubmitLabel submitting={submitting}>{label}</SubmitLabel>
         </Button>
       }
@@ -658,7 +593,7 @@ function OtherWindowNotice({ mobile, onCancel }: { mobile: boolean; onCancel: ()
 function WaitingForBrowser() {
   return (
     <div className="flex items-center gap-2 text-minor text-muted-foreground">
-      <Loader2 className="size-pixel shrink-0" aria-hidden="true" />
+      <Loader2 className="size-3.5 shrink-0" aria-hidden="true" />
       <StatusShimmer text="Waiting for browser…" />
     </div>
   );
@@ -691,14 +626,14 @@ function ApiKeyForm({
         autoFocus={!mobile}
         disabled={submitting}
         {...NO_AUTOCORRECT}
-        className={mobile ? TOUCH_INPUT : "w-full"}
+        className={mobile ? TOUCH_INPUT : "h-7.5 w-full text-minor"}
         onChange={(e) => onChange(e.target.value)}
       />
       {error !== null && <RowError error={error} />}
       <SignInActions
         mobile={mobile}
         primary={
-          <Button type="submit" className={mobile ? DRAWER_BUTTON : undefined} disabled={!value.trim() || submitting}>
+          <Button type="submit" size={mobile ? "default" : "sm"} className={mobile ? DRAWER_BUTTON : undefined} disabled={!value.trim() || submitting}>
             <SubmitLabel submitting={submitting}>Save</SubmitLabel>
           </Button>
         }
@@ -738,7 +673,7 @@ function BrowserOAuthPanel(
   const authorizeUrl = activeFlow.authorizeUrl;
   const hasManualInput = activeFlow.manualInput !== "none";
   const manualSubmit = (
-    <Button type="submit" form={manualFormId} className={mobile ? DRAWER_BUTTON : undefined} disabled={!manualInput.trim() || submitting}>
+    <Button type="submit" form={manualFormId} size={mobile ? "default" : "sm"} className={mobile ? DRAWER_BUTTON : undefined} disabled={!manualInput.trim() || submitting}>
       <SubmitLabel submitting={submitting}>Submit</SubmitLabel>
     </Button>
   );
@@ -746,19 +681,21 @@ function BrowserOAuthPanel(
     <div className="grid grid-cols-1 gap-4">
       <WaitingForBrowser />
       {authorizeUrl && (
-        <div className={cn("gap-2", mobile ? "grid grid-cols-1" : "flex flex-wrap items-center")}>
-          <Button
-            type="button"
-            variant={remote ? "default" : "outline"}
-            className={mobile ? DRAWER_BUTTON : undefined}
-            onClick={() => openExternalBrowserPage(authorizeUrl)}
-          >
-            Open sign-in page
-          </Button>
-          <Button type="button" variant="outline" className={mobile ? DRAWER_BUTTON : undefined} onClick={() => linkCopy.copy(authorizeUrl)}>
-            {linkCopy.copied ? "Copied" : "Copy link"}
-          </Button>
-        </div>
+        mobile ? (
+          <div className="grid grid-cols-1 gap-2">
+            <Button type="button" variant={remote ? "default" : "outline"} className={DRAWER_BUTTON} onClick={() => openExternalBrowserPage(authorizeUrl)}>
+              Open sign-in page
+            </Button>
+            <Button type="button" variant="outline" className={DRAWER_BUTTON} onClick={() => linkCopy.copy(authorizeUrl)}>
+              {linkCopy.copied ? "Copied" : "Copy link"}
+            </Button>
+          </div>
+        ) : (
+          <div className="info-actions">
+            <InfoAction onClick={() => openExternalBrowserPage(authorizeUrl)}>Open sign-in page</InfoAction>
+            <InfoAction onClick={() => linkCopy.copy(authorizeUrl)}>{linkCopy.copied ? "Copied" : "Copy link"}</InfoAction>
+          </div>
+        )
       )}
       {hasManualInput && (
         <form id={manualFormId} className="grid grid-cols-1 gap-2" onSubmit={props.onSubmitManual}>
@@ -768,7 +705,7 @@ function BrowserOAuthPanel(
             value={manualInput}
             disabled={submitting}
             {...NO_AUTOCORRECT}
-            className={mobile ? TOUCH_INPUT : undefined}
+            className={mobile ? TOUCH_INPUT : "h-7.5 text-minor"}
             onChange={(e) => props.onManualInputChange(e.target.value)}
           />
           {mobile && manualSubmit}
@@ -805,19 +742,17 @@ function DeviceCodePanel(props: SignInPanelProps & { codeCopy: CopyFeedback }) {
   return (
     <div className="grid grid-cols-1 gap-4">
       {userCode ? (
-        <div className="flex items-center justify-between gap-3 rounded-sm bg-panel px-4 py-3">
+        <div className="flex items-center justify-between gap-3 py-1">
           <code data-testid="device-user-code" className="font-mono text-title font-semibold tracking-wider select-all">
             {userCode}
           </code>
-          <Button type="button" variant="outline" size="sm" onClick={() => codeCopy.copy(userCode)}>
-            {codeCopy.copied ? "Copied" : "Copy code"}
-          </Button>
+          <InfoAction onClick={() => codeCopy.copy(userCode)}>{codeCopy.copied ? "Copied" : "Copy code"}</InfoAction>
         </div>
       ) : (
         <WaitingForBrowser />
       )}
       {verificationUrl && (
-        <Button type="button" className={mobile ? DRAWER_BUTTON : undefined} onClick={() => openExternalBrowserPage(verificationUrl)}>
+        <Button type="button" size={mobile ? "default" : "sm"} className={mobile ? DRAWER_BUTTON : "justify-self-start"} onClick={() => openExternalBrowserPage(verificationUrl)}>
           Open verification page
         </Button>
       )}
@@ -892,32 +827,17 @@ export function ProviderAccountBody({
   return (
     <div className="grid grid-cols-1 gap-4">
       <SettingsGroup label={item.label}>
-        <div data-slot="settings-row" className="px-4 py-3">
-          <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <div className="flex min-w-32 flex-1 items-start gap-3">
-              <span aria-hidden="true" className="mt-2 size-2 rounded-full shrink-0 bg-success" />
-              <div className="min-w-0 flex-1 break-words">
-                <div className="text-body">{item.accountSummary ?? "Signed in"}</div>
-                {item.version && (
-                  <div className="mt-0.5 text-minor text-muted-foreground tabular-nums">{item.version}</div>
-                )}
-              </div>
-            </div>
-            {item.canUpdate && (
-              <div className="ml-auto shrink-0">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={busyAction !== null}
-                  onClick={() => void handleUpdate()}
-                >
-                  {busyAction === "update" && <Loader2 aria-hidden="true" />}
-                  Update
-                </Button>
-              </div>
-            )}
-          </div>
+        <div data-slot="settings-row" className={cn(INFO_ROW, "h-7.5")}>
+          <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-success" />
+          <span className="min-w-0 truncate text-minor text-foreground">{item.accountSummary ?? "Signed in"}</span>
+          {item.version && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{item.version}</span>}
+          <span className="min-w-0 flex-1" />
+          {item.canUpdate && (
+            <InfoAction disabled={busyAction !== null} onClick={() => void handleUpdate()}>
+              {busyAction === "update" && <Loader2 className="size-3.5" aria-hidden="true" />}
+              Update
+            </InfoAction>
+          )}
         </div>
       </SettingsGroup>
 
@@ -926,16 +846,10 @@ export function ProviderAccountBody({
           {configuredTargets.map((t) => (
             <SettingsRow key={t.id} label={t.label}>
               {() => (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={busyAction !== null}
-                  onClick={() => void handleRemoveTarget(t.id)}
-                >
-                  {busyAction === `remove:${t.id}` && <Loader2 aria-hidden="true" />}
+                <InfoAction danger disabled={busyAction !== null} onClick={() => void handleRemoveTarget(t.id)}>
+                  {busyAction === `remove:${t.id}` && <Loader2 className="size-3.5" aria-hidden="true" />}
                   Remove
-                </Button>
+                </InfoAction>
               )}
             </SettingsRow>
           ))}
@@ -979,6 +893,7 @@ export function ProviderAccountBody({
             <Button
               type="button"
               variant="destructive"
+              size="sm"
               disabled={busyAction !== null}
               onClick={() => void handleSignOutAll()}
             >
@@ -989,14 +904,14 @@ export function ProviderAccountBody({
             <span />
           )}
           <div className="flex items-center gap-2">
+            <Button type="button" variant="ghost" size="sm" disabled={busyAction !== null} onClick={onClose}>
+              Cancel
+            </Button>
             {item.authMethods.length > 0 && (
-              <Button type="button" variant="outline" disabled={busyAction !== null} onClick={onSwitchAccount}>
+              <Button type="button" variant="outline" size="sm" disabled={busyAction !== null} onClick={onSwitchAccount}>
                 Sign in with another account…
               </Button>
             )}
-            <Button type="button" variant="outline" disabled={busyAction !== null} onClick={onClose}>
-              Cancel
-            </Button>
           </div>
         </div>
       )}
@@ -1013,14 +928,6 @@ export function ProvidersListSection({
   onOpenSignIn: (vendor: AgentVendor) => void;
   onOpenAccount: (vendor: AgentVendor) => void;
 }) {
-  const status = model.status;
-  const hasGitGroup =
-    status !== null &&
-    ((!status.gitInstalled && status.canInstallGit) ||
-      status.gitJob?.phase === "running" ||
-      (status.gitJob?.phase === "failed" && !status.gitInstalled));
-  const hasExtraTopGroup = model.selectableComputers.length >= 2 || hasGitGroup;
-
   const readyCount = model.status ? model.status.providers.filter((p) => p.availability === "available").length : null;
   return (
     <>
@@ -1048,23 +955,24 @@ export function ProvidersListSection({
       <GitEnvironmentGroup model={model} />
 
       <SettingsGroup
-        {...(hasExtraTopGroup ? { title: "Providers" } : readyCount === null ? { label: "Providers" } : { title: `${readyCount} ready`, label: "Providers" })}
+        title="Providers"
         action={
-          <Button type="button" variant="outline" size="sm" className="min-w-24" disabled={model.loading || model.refreshing} onClick={() => void model.refresh()}>
-            {model.refreshing && <Loader2 aria-hidden="true" />}
-            Refresh
-          </Button>
+          <span className="info-actions">
+            {readyCount !== null && <span className="tabular-nums">{`${readyCount} ready`}</span>}
+            <InfoAction disabled={model.loading || model.refreshing} onClick={() => void model.refresh()}>
+              {model.refreshing && <Loader2 className="size-3.5" aria-hidden="true" />}
+              Refresh
+            </InfoAction>
+          </span>
         }
       >
         {model.loading && !model.status ? (
-          <div className="flex min-h-14 items-center justify-center gap-2 px-4 py-3 text-minor text-muted-foreground">
-            <Loader2 className="size-pixel" aria-hidden="true" />
+          <div className="flex items-center justify-center gap-2 py-6 text-minor text-muted-foreground">
+            <Loader2 className="size-3.5" aria-hidden="true" />
             Loading…
           </div>
         ) : model.loadError ? (
-          <div className="px-4 py-3">
-            <RowError error={model.loadError} />
-          </div>
+          <RowError error={model.loadError} />
         ) : (
           model.status?.providers.map((item) => (
             <ProviderItemRow

@@ -3,11 +3,11 @@ import { useState } from "react";
 import type { PmId } from "../../shared/index.ts";
 import type { CapabilityProjectOption } from "../capabilities-model.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
-import { Segmented } from "../ui/segmented.tsx";
 import { ChevronDown } from "../ui/icons.ts";
 import { Avatar } from "./Avatar.tsx";
 import { CustomBadge } from "./CapabilitiesPanel.tsx";
 import { RadioMark } from "./ChoiceRows.tsx";
+import { InfoTabs } from "./InfoTabs.tsx";
 
 export type CapabilityScopeChoice = "default" | "router" | "pm";
 
@@ -34,11 +34,11 @@ function ProjectPicker({
       <PopoverTrigger
         aria-label={`Project: ${value.label}`}
         title={value.label}
-        className="touch-target flex h-9 max-w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm border border-border-strong bg-background pr-3 pl-2 text-minor font-medium transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus data-[state=open]:border-select-line data-[state=open]:bg-open"
+        className="info-select touch-target flex h-7.5 max-w-full min-w-0 cursor-pointer items-center gap-1.5 px-2 text-minor"
       >
-        <Avatar look={value.look} size={20} />
+        <Avatar look={value.look} size={18} />
         <span className="min-w-0 truncate">{value.label}</span>
-        <ChevronDown className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
+        <ChevronDown className="info-chevron size-3.5 shrink-0" aria-hidden="true" />
       </PopoverTrigger>
       <PopoverContent aria-label="Projects" align="start" className="p-1.5">
         <RadioGroup.Root
@@ -55,10 +55,10 @@ function ProjectPicker({
               key={project.pmId}
               value={String(project.pmId)}
               title={project.label}
-              className="flex min-h-9 w-full min-w-0 cursor-pointer items-center gap-3 rounded-xs px-2.5 py-1.5 text-left transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] pointer-coarse:min-h-11"
+              className="flex min-h-7.5 w-full min-w-0 cursor-pointer items-center gap-2 rounded-xs px-2 py-1 text-left transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] pointer-coarse:min-h-11"
             >
               <Avatar look={project.look} size={20} />
-              <span className="min-w-0 flex-1 truncate text-body">{project.label}</span>
+              <span className="min-w-0 flex-1 truncate text-minor">{project.label}</span>
               {customized?.includes(project.pmId) === true && <CustomBadge />}
               <RadioMark checked={project.pmId === value.pmId} />
             </RadioGroup.Item>
@@ -85,8 +85,8 @@ export function CapabilityScopeSwitch({
   onProject: (pmId: PmId) => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
-      <Segmented label="Scope" value={choice} options={project === null ? CHOICES.slice(0, 2) : CHOICES} onChange={onChoice} />
+    <div className="flex min-w-0 items-center gap-4">
+      <InfoTabs label="Scope" value={choice} options={project === null ? CHOICES.slice(0, 2) : CHOICES} onChange={onChoice} className="min-w-0 flex-1" />
       {choice === "pm" && project !== null && <ProjectPicker projects={projects} value={project} customized={customized} onChange={onProject} />}
     </div>
   );

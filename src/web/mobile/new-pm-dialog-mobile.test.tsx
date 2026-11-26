@@ -145,7 +145,8 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
 
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "  Mobile PM  ");
     await user.type(within(dialog).getByRole("textbox", { name: "Main folder" }), "/Users/dev/project");
-    await user.click(within(dialog).getByRole("radio", { name: "Hands-on" }));
+    await user.click(within(dialog).getByRole("combobox", { name: "Mode" }));
+    await user.click(await screen.findByRole("option", { name: /Hands-on/ }));
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
     await user.type(within(dialog).getByRole("textbox", { name: "Persona" }), "Ship cleanly.");
 
@@ -163,7 +164,7 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
     expect(onCreated).toHaveBeenCalledWith(LOCAL_DEVICE, expect.any(Number));
   });
 
-  it("preserves 100% desktop modal styling, w-60 inputs, autoFocus, and submission when !mobile", async () => {
+  it("keeps the desktop modal styling, the name beside the look avatar, autoFocus, and submission when !mobile", async () => {
     installViewport(false);
     const user = userEvent.setup();
     const onCreated = vi.fn();
@@ -179,18 +180,20 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
     );
 
     const dialog = screen.getByRole("dialog", { name: "New project manager" });
-    expect(dialog).toHaveClass("max-w-130", "rounded-sm", "border", "border-border", "p-6", "shadow-[var(--shadow-dialog)]");
+    expect(dialog).toHaveClass("max-w-130", "rounded-sm", "border", "border-border", "p-5", "shadow-[var(--shadow-dialog)]");
     expect(dialog.className).not.toContain("border-2");
     expect(dialog.className).not.toContain("inset-0");
 
     const nameInput = within(dialog).getByRole("textbox", { name: "Name" });
     await waitFor(() => expect(nameInput).toHaveFocus());
-    expect(nameInput).toHaveClass("w-72");
+    // 名字框在 44px 头像旁边，占满这一行
+    expect(nameInput).toHaveClass("h-8", "w-full");
+    expect(within(dialog).getByRole("button", { name: "Change look" }).parentElement).toContainElement(nameInput);
 
     const folderInput = within(dialog).getByRole("textbox", { name: "Main folder" });
-    // 主文件夹的输入框和 Choose… 一起占 w-72，和上面名字那一行同宽、不折行
-    expect(folderInput).toHaveClass("flex-1", "min-w-0");
-    expect(folderInput.parentElement).toHaveClass("w-72");
+    // 主文件夹的输入框和 Choose… 一起占 w-64，不折行
+    expect(folderInput).toHaveClass("flex-1", "min-w-0", "h-7.5");
+    expect(folderInput.parentElement).toHaveClass("w-64");
     expect(folderInput).toHaveAttribute("autocapitalize", "none");
     expect(folderInput).toHaveAttribute("autocorrect", "off");
     expect(folderInput).toHaveAttribute("spellcheck", "false");

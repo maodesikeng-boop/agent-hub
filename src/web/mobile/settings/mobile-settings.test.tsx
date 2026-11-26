@@ -236,7 +236,7 @@ describe("一级设置主页", () => {
     const main = screen.getByRole("main");
     expect(main.textContent).not.toMatch(/[·|]/);
     for (const row of within(main).getAllByRole("button").filter((b) => b.dataset.slot === "settings-nav-row")) {
-      expect(row.className).toContain("min-h-12");
+      expect(row.className).toContain("pointer-coarse:min-h-11");
       expect(row.querySelector(":scope > svg[data-icon='line']:last-child")).toBeInTheDocument();
     }
   });
@@ -254,12 +254,12 @@ describe("子页", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Capabilities/ }));
     expect(location.hash).toBe("#/settings/capabilities");
     expect(await screen.findByRole("heading", { level: 1, name: "Capabilities" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Project defaults" })).toBeChecked();
-    expect(screen.queryByRole("radio", { name: "Project" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Project defaults" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Project" })).not.toBeInTheDocument();
     const shared = await screen.findByRole("region", { name: "Shared" });
     expect(shared).toHaveTextContent("5 of 5");
     expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/)).toHaveLength(1);
-    fireEvent.click(screen.getByRole("radio", { name: "Router" }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Router" }));
     await waitFor(() => expect(screen.getByRole("region", { name: "Shared" })).toHaveTextContent("0 of 5"));
   });
 
@@ -575,7 +575,7 @@ describe("子页", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Providers/ }));
     expect(location.hash).toBe("#/settings/providers");
     const row0 = await screen.findByTestId(`provider-row-${v0}`);
-    expect(row0.className).toContain("min-h-12");
+    expect(row0.firstElementChild!.className).toContain("pointer-coarse:min-h-11");
 
     // 此时 0 家就绪：退回一级主页可见琥珀点与 Attention
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));

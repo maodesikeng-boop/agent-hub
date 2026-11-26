@@ -1016,7 +1016,7 @@ describe("useVendorSyncSetting：别家应用自带的 MCP", () => {
 });
 
 describe("ChoiceRows、ModeRows 与 Button destructive", () => {
-  it("ChoiceRows 支持无说明纯单行（min-h-12 py-2.5）与带说明行（py-3），ModeRows 包装完全兼容，Button destructive 具备标准危险主按钮样式", () => {
+  it("ChoiceRows 支持无说明纯单行（30px Info 行）与带说明行（py-1.5 两行），ModeRows 包装完全兼容，Button destructive 具备标准危险主按钮样式", () => {
     const onPick = vi.fn();
     const { unmount } = render(
       createElement(ChoiceRows, {
@@ -1032,7 +1032,7 @@ describe("ChoiceRows、ModeRows 与 Button destructive", () => {
 
     const radios = screen.getAllByRole("radio");
     expect(radios).toHaveLength(2);
-    expect(radios[0]!.className.split(/\s+/)).toEqual(expect.arrayContaining(["min-h-12", "px-4", "py-2.5"]));
+    expect(radios[0]!.className.split(/\s+/)).toEqual(expect.arrayContaining(["info-row", "h-7.5", "pointer-coarse:min-h-11"]));
     expect(radios[0]).not.toHaveAttribute("aria-describedby");
     expect(radios[1]).toHaveAttribute("aria-checked", "true");
     fireEvent.click(radios[0]!);
@@ -1048,7 +1048,7 @@ describe("ChoiceRows、ModeRows 与 Button destructive", () => {
       }),
     );
     const modeRadios = screen.getAllByRole("radio");
-    expect(modeRadios[0]!.className.split(/\s+/)).toContain("py-3");
+    expect(modeRadios[0]!.className.split(/\s+/)).toContain("py-1.5");
     expect(modeRadios[0]).toHaveAttribute("aria-describedby");
     fireEvent.click(modeRadios[1]!);
     expect(onMode).toHaveBeenCalled();

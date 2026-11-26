@@ -424,13 +424,13 @@ describe("设置 → 设备", () => {
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     await userEvent.click(within(dialog).getByRole("tab", { name: "Computers" }));
     const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
-    // 设置是一页：小灰字组标题 + 细线分开的行，组不画白框、不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
+    // 设置是一页：Info 行的小标题，组之间一条细线，行之间不画线，组不画白框、不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
     const mine = within(devices).getByRole("region", { name: "This computer" });
     const others = within(devices).getByRole("region", { name: "Your computers" });
     for (const group of [mine, others]) {
-      expect(within(group).getByRole("heading")).toHaveClass("text-minor", "text-muted-foreground");
-      expect(group.lastElementChild).toHaveClass("divide-y", "divide-border");
-      expect(group.lastElementChild?.className).not.toMatch(/(^|\s)(border|rounded-\S+|bg-\S+)(\s|$)/);
+      expect(within(group).getByRole("heading").parentElement).toHaveClass("info-heading");
+      expect(group).toHaveClass("info-sec");
+      expect(group.className).not.toMatch(/(^|\s)(divide-y|border|rounded-\S+|bg-\S+)(\s|$)/);
     }
     expect(within(mine).getByTestId("device-row")).toHaveTextContent("Mac");
     expect(within(others).getByTestId("device-row")).toHaveTextContent("东京");
