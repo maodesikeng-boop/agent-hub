@@ -2,10 +2,10 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
-import { systemEventOf, systemMessageDedupeKey } from "../../shared/domain.ts";
+import { systemEventOf, systemMessageDedupeKey, truncateChars } from "../../shared/domain.ts";
 import { HUB_HELP_ONLY_COMMANDS } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { ASK_LIST_MAX, SCHEDULE_RUN_REPLY_PREVIEW_CHARS, SCHEDULE_SHOW_RUNS_MAX } from "../../shared/limits.ts";
+import { ASK_BODY_MAX_CHARS, ASK_LIST_MAX, SCHEDULE_RUN_REPLY_PREVIEW_CHARS, SCHEDULE_SHOW_RUNS_MAX } from "../../shared/limits.ts";
 import { formatAskDetail, formatPendingAskList, pendingAsksNote, pendingAsksSection, type PendingAsk } from "../../shared/pending-asks.ts";
 import { askDetailOf, pendingAsksOfPm } from "./pending-asks.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./pm-friction-fixture.ts";
@@ -191,17 +191,17 @@ describe("S7: read a card (hub ask list, ask show, delivery note)", () => {
     f.close();
   });
 
-  it("S7.1: ask show prints full untruncated text beyond 400 chars, options, recommended, files, relative age, and status", async () => {
+  it("S7.1: ask show prints the full legacy question, options, recommendation, files, age, and status", async () => {
     const filePath = join(f.root, "plan.md");
     writeFileSync(filePath, "# plan\n");
     const sharedFiles = await f.ledger.shareHubFiles(f.lin.sessionId, [{ label: "方案", path: filePath }]);
     const longContext = "背景细节：".repeat(120) + "尾部关键句-UNTRUNCATED-MARKER";
-    const fullText = `测试台要不要用独立数据目录？\n\n${longContext}`;
+    const question = "测试台要不要用独立数据目录？";
     const asked = f.ledger.hubCall(
       f.lin.sessionId,
       "ask",
       {
-        text: fullText,
+        text: question,
         options: ["独立数据目录", "复用现有目录"],
         recommended: "独立数据目录",
         files: [{ label: "方案", path: filePath }],
@@ -209,6 +209,8 @@ describe("S7: read a card (hub ask list, ask show, delivery note)", () => {
       { sharedFiles },
     ).data;
     const itemId = asked.item!.id;
+    f.db.run("UPDATE messages SET text = ? WHERE id = ?", `${question}\n\n${longContext}`, asked.messageId);
+    f.db.run("UPDATE router_items SET context = ? WHERE id = ?", truncateChars(longContext, ASK_BODY_MAX_CHARS), itemId);
     f.clock.now += 3 * DAY;
 
     const detail = askDetailOf(f.db, f.lin.pmId, { itemId });
