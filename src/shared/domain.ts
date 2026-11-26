@@ -9,6 +9,7 @@ import {
 } from "./limits.ts";
 import { deliverablesOf, type Deliverable } from "./deliverables.ts";
 import type { ReviewTarget, StoredReviewVerdict } from "./review.ts";
+import type { PmNoticeSubject } from "./pm-notice.ts";
 import type { SandboxApprovalId, SandboxApprovalRef } from "./sandbox-approval.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
@@ -277,7 +278,7 @@ export type SystemMessageMeta =
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
   | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number; deadlineAt?: number }
   | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean }
-  | { event: "pm.wakeup"; source: PmWakeupSource; ref: string };
+  | { event: "pm.wakeup"; source: PmWakeupSource; ref: string; subject?: PmNoticeSubject };
 
 export const PM_WAKEUP_SOURCES = ["task_graph", "router"] as const;
 export type PmWakeupSource = (typeof PM_WAKEUP_SOURCES)[number];
