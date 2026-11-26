@@ -1,10 +1,11 @@
 // OpenAI Codex App-Server 驱动层测试：覆盖握手、流式事件、恢复回退、打断与 Worker 记忆保护审批。
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readJsonLog } from "../../../test/append-log.ts";
+import { sandboxAllowsNestedSandbox } from "../../../test/sandbox-probes.ts";
 import {
   EMPTY_TOKEN_USAGE,
   buildReadonlyPolicy,
@@ -1406,11 +1407,7 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
     ]);
   });
 
-  it.runIf(
-    process.platform === "darwin" &&
-      spawnSync("/usr/bin/sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], { stdio: "ignore" })
-        .status === 0,
-  )("macOS：Worker 的进程包进 sandbox-exec（数据目录写不了），turn 用 externalSandbox；项目经理、只读 Worker 不包", async () => {
+  it.runIf(process.platform === "darwin" && sandboxAllowsNestedSandbox())("macOS：Worker 的进程包进 sandbox-exec（数据目录写不了），turn 用 externalSandbox；项目经理、只读 Worker 不包", async () => {
     const t = makeCodexHarness({ dataDirName: "home", probeInDataDir: "probe.txt", driver: { platform: "darwin", writeScopeSpawn: undefined } });
     const probe = join(t.dir, "home", "probe.txt");
     const worker = t.addSession({ role: "worker", workerId: 7 });

@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { relative } from "node:path";
+import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SANDBOX_EXEC } from "../src/daemon/driver/write-scope.ts";
 
 /** `pnpm test:related` sets this to a file that collects the test files a sandbox refusal made skip. */
 export const SANDBOX_SKIP_LOG_ENV = "BELLWOOD_SANDBOX_SKIP_LOG";
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const TEST_FRAME = /(?:file:\/\/)?((?:[A-Za-z]:)?[^\s()]+\.test\.tsx?):\d+:\d+/;
+const TEST_FRAME = /^\s*at (?:.*? \()?(.+?\.test\.tsx?):\d+:\d+\)?\s*$/;
+const WINDOWS_PATH = /^(?:file:\/\/\/)?[A-Za-z]:[\\/]/;
 
 const PERMISSION_DENIED_CODES = new Set(["EPERM", "EACCES"]);
 const PERMISSION_DENIED_TEXT = /operation not permitted|permission denied/i;
@@ -20,9 +21,12 @@ function isPermissionRefusal(command: string, error: unknown): boolean {
 }
 
 /** The test file that called a probe, read from the stack so callers need no extra argument. */
-export function callingTestFile(stack: string | undefined): string | undefined {
-  const path = stack?.split("\n").map((line) => TEST_FRAME.exec(line)?.[1]).find((file) => file !== undefined);
-  return path === undefined ? undefined : relative(REPO_ROOT, path).split("\\").join("/");
+export function callingTestFile(stack: string | undefined, repoRoot = REPO_ROOT): string | undefined {
+  const location = stack?.split("\n").map((line) => TEST_FRAME.exec(line)?.[1]).find((file) => file !== undefined);
+  if (location === undefined) return undefined;
+  const windows = WINDOWS_PATH.test(location);
+  const path = location.startsWith("file://") ? fileURLToPath(location, { windows }) : location;
+  return (windows ? win32 : posix).relative(repoRoot, path).split("\\").join("/");
 }
 
 function recordRefusal(env: NodeJS.ProcessEnv): void {

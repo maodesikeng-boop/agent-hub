@@ -33,7 +33,7 @@ import { stepOfTool } from "../../daemon/ledger/tool-summary.ts";
 import type { AgyConnectorCatalog } from "./readonly.ts";
 import { makePersonaFixture, type PersonaFixture } from "../../daemon/driver/persona-fixture.ts";
 import { fakePreambleLedger, PREAMBLE } from "../../daemon/driver/preamble-fixture.ts";
-import { SANDBOX_EXEC, type SpawnCommand } from "../../daemon/driver/write-scope.ts";
+import type { SpawnCommand } from "../../daemon/driver/write-scope.ts";
 import {
   buildAgyArgs,
   buildAgyUserLine,
@@ -47,10 +47,7 @@ import {
 const realSetTimeout = globalThis.setTimeout;
 const realSleep = (ms: number) => new Promise<void>((resolve) => realSetTimeout(resolve, ms));
 
-const canRunSandboxExec =
-  process.platform === "darwin" &&
-  existsSync(SANDBOX_EXEC) &&
-  sandboxAllowsNestedSandbox();
+const canRunSandboxExec = process.platform === "darwin" && sandboxAllowsNestedSandbox();
 
 const canRunPs = process.platform !== "win32" && sandboxAllowsPs();
 
