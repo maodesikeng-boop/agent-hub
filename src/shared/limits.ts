@@ -744,3 +744,9 @@ export const RESOURCES_SAMPLE_PATHS_MAX = 5;
 export const CN_CLASS_CACHE_MAX = 2_048;
 export const WS_BURST_FRAME_LIMIT = 8;
 export const WS_FRAME_BUDGET_MS = 16;
+
+export const PM_AGENDA_GRAPHS_MAX = 20;
+export const PM_AGENDA_STEP_LINES_MAX = 8;
+export const PM_AGENDA_DELTA_LINES_MAX = 8;
+// A model rebuilding state from a long chain of changes drifts, so a snapshot replaces the chain this often.
+export const PM_AGENDA_DELTAS_PER_SNAPSHOT = 20;
