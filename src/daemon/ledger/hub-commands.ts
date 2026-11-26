@@ -221,9 +221,8 @@ export function createLedgerHubCommands(
       case "project.setup":
         return setupIn(p, caller, args as HubArgs<"project.setup">);
       case "persona.show": {
-        const view = getPersona(caller.pmId, p);
-        const body = view.text.trim() === "" ? "（还没有性格设定）" : view.text;
-        return { text: `模式：${PM_MODE_LABELS[view.mode]}\n\n${body}`, data: { text: view.text, mode: view.mode } };
+        const { text, mode } = getPersona(caller.pmId, p);
+        return { text, data: { text, mode } };
       }
       case "persona.edit": {
         const change = editPersonaChecked(p, caller.pmId, args as HubArgs<"persona.edit">, { actor: "pm", session: caller });
