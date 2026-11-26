@@ -28,6 +28,19 @@ function top(counts: Map<string, number>, minCount: number): string[] {
 }
 const bump = (counts: Map<string, number>, key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
 
+type WaitInterval = { start: number; end: number };
+
+function toolWaitWallTime(waits: WaitInterval[]): number {
+  waits.sort((a, b) => a.start - b.start);
+  let coveredUntil = -Infinity;
+  let total = 0;
+  for (const { start, end } of waits) {
+    total += Math.max(0, end - Math.max(start, coveredUntil));
+    coveredUntil = Math.max(coveredUntil, end);
+  }
+  return total;
+}
+
 export function workerStatsLines(sessions: StepRow[][]): string[] {
   let steps = 0;
   const outcomes = { ok: 0, interrupted: 0, failed: 0 };
@@ -38,8 +51,7 @@ export function workerStatsLines(sessions: StepRow[][]): string[] {
   const commands = new Map<string, number>();
   let thinkingMs = 0;
   let thinkingTimed = 0;
-  let waitMs = 0;
-  let waitTimed = 0;
+  const waits: WaitInterval[] = [];
 
   for (const rows of sessions) {
     const resultsByUseId = new Map<string | null, Array<{ row: StepRow; index: number }>>();
@@ -86,10 +98,7 @@ export function workerStatsLines(sessions: StepRow[][]): string[] {
           if (category === "read" && summary.startsWith(READ_PREFIX) && fileOf(summary) !== NO_FILE_NAME) bump(files, fileOf(summary));
           if (category === "command" && summary.startsWith(COMMAND_PREFIX)) bump(commands, summary.slice(COMMAND_PREFIX.length));
           const back = resultsByUseId.get(row.tool_use_id)?.find((m) => m.index > i)?.row;
-          if (back !== undefined) {
-            waitMs += back.at - row.at;
-            waitTimed++;
-          }
+          if (back !== undefined && back.at >= row.at) waits.push({ start: row.at, end: back.at });
           break;
         }
         default:
@@ -98,7 +107,8 @@ export function workerStatsLines(sessions: StepRow[][]): string[] {
     }
     if (open) running++;
   }
-  return renderStats({ steps, outcomes, running, byCategory, unknown, files, commands, thinkingMs, thinkingTimed, waitMs, waitTimed });
+  const waitMs = toolWaitWallTime(waits);
+  return renderStats({ steps, outcomes, running, byCategory, unknown, files, commands, thinkingMs, thinkingTimed, waitMs, waitTimed: waits.length });
 }
 
 interface Totals {
@@ -127,7 +137,7 @@ function renderStats(t: Totals): string[] {
   const commands = top(t.commands, 2);
   lines.push(`读得最多的文件：${files.length === 0 ? "—" : files.join("，")}`);
   lines.push(`重复最多的命令：${commands.length === 0 ? "—" : commands.join("，")}`);
-  const timed = (ms: number, n: number) => (n === 0 ? "—" : `${formatDuration(ms)}（${n} 次）`);
-  lines.push(`思考 ${timed(t.thinkingMs, t.thinkingTimed)}，等工具结果 ${timed(t.waitMs, t.waitTimed)}`);
+  const timed = (ms: number, n: number, unit: string) => (n === 0 ? "—" : `${formatDuration(ms)}（${n} ${unit}）`);
+  lines.push(`思考 ${timed(t.thinkingMs, t.thinkingTimed, "次")}，等工具结果 ${timed(t.waitMs, t.waitTimed, "次调用")}`);
   return lines;
 }

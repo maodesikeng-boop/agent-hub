@@ -63,7 +63,6 @@ export function broadcastPeerApp(ctx: FeishuContext) {
 export function forgetPreviousApp(ctx: FeishuContext) {
   ctx.directory.clear();
   ctx.contexts.clearAll();
-  ctx.catchUp.seen.clear();
   ctx.catchUp.cursorHold.clear();
   ctx.catchUp.hadLiveSession = false;
   ctx.app.syncedRouterChatId = null;
@@ -98,7 +97,10 @@ async function teardownTransport(ctx: FeishuContext) {
   stopInboundSession(ctx);
   clearRetry(ctx);
   for (const [id, slot] of ctx.streams) dropStream(ctx, id, slot);
-  if (old !== null && wasWs) await old.stop().catch((error: unknown) => ctx.log(`飞书：断开时出错：${errorText(error)}`));
+  if (old !== null && wasWs) {
+    await old.stop().catch((error: unknown) => ctx.log(`飞书：断开时出错：${errorText(error)}`));
+    await ctx.inboundSync.flush();
+  }
 }
 
 export async function checkScopes(ctx: FeishuContext) {
@@ -163,6 +165,7 @@ async function startWs(ctx: FeishuContext, transport: FeishuTransport) {
   try {
     await transport.start({
       onEvent: (raw) => {
+        if (ctx.life.closed || !ctx.link.wsStarted || !isCenter(ctx)) return;
         if (ctx.app.accountBot !== null) ctx.app.accountBot.onEvent(raw);
         else onRawEvent(ctx, raw, null);
       },
@@ -186,6 +189,7 @@ async function stopWs(ctx: FeishuContext, transport: FeishuTransport) {
   ctx.approvalCards.clear();
   stopInboundSession(ctx);
   await transport.stop().catch((error: unknown) => ctx.log(`飞书：断开时出错：${errorText(error)}`));
+  await ctx.inboundSync.flush();
 }
 
 // Router events raised while this device was an unready center sit in feishu_router_events; entering HTTP mode replays them.
@@ -219,7 +223,10 @@ async function doSyncTransport(ctx: FeishuContext) {
     await ensureHttpTransport(ctx, secrets);
     if (isCenter(ctx)) {
       ctx.link.httpServing = false;
-      if (!ctx.link.wsStarted) await startWs(ctx, ctx.link.transport!);
+      if (!ctx.link.wsStarted) {
+        await ctx.inboundSync.hydrate();
+        if (!ctx.life.closed && isCenter(ctx) && ctx.link.secrets === secrets) await startWs(ctx, ctx.link.transport!);
+      }
       return;
     }
     if (ctx.link.wsStarted) await stopWs(ctx, ctx.link.transport!);
@@ -264,6 +271,7 @@ export async function connectWith(ctx: FeishuContext, s: FeishuSecrets, ownerOpe
     if (before !== null && before.appId !== appId) forgetPreviousApp(ctx);
     ctx.store.saveApp({ appId, brand: s.brand, botOpenId: bot.botOpenId, botName: bot.botName, ownerOpenId }, ctx.now());
     ctx.store.setEnabled(true, ctx.now());
+    ctx.inboundSync.resetForApp(appId);
     ctx.link.lastError = null;
     ctx.link.authFailed = false;
     ctx.options.lease?.refresh();

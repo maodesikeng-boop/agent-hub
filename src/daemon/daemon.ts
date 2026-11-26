@@ -111,7 +111,7 @@ import type { FolderPicker } from "./pick-folder.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
 import { AdminSocketInsecureError, startAdminSocket, type RunningAdminSocket } from "./admin/socket.ts";
-import { createMesh, type CenterLease, type Mesh, type MeshOptions } from "./mesh/index.ts";
+import { createMesh, type Mesh, type MeshOptions } from "./mesh/index.ts";
 import { meshListenPort } from "./mesh/listen-port.ts";
 import { createPushService } from "./push/index.ts";
 import {
@@ -121,6 +121,7 @@ import {
   type FeishuAccountBot,
   type FeishuPeerAppSync,
 } from "./feishu/account-bot.ts";
+import { createFeishuLease, createFeishuPeerCheckpointPort } from "./feishu/mesh.ts";
 import { createFeishuService, type FeishuService, type FeishuServiceOptions } from "./feishu/service.ts";
 import { createFeishuStore } from "./feishu/store.ts";
 import {
@@ -795,42 +796,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       },
     });
     parts.routerDispatcher = routerDispatcher;
-    const inAccountMode = () => {
-      const st = mesh.status().state;
-      return st === "signed_in" || st === "awaiting_approval";
-    };
-    const leaseListeners = new Set<(holder: string | null) => void>();
-    const meshFeishuLease = mesh.lease("feishu", {
-      eligible: () => parts.feishu?.eligibleForLease() ?? false,
-      connect: () => {
-        void parts.feishu?.syncLeaseConnection();
-      },
-      disconnect: async () => {
-        if (!inAccountMode()) return;
-        await parts.feishu?.syncLeaseConnection();
-      },
-    });
-    let lastEffectiveHolding = !inAccountMode() || meshFeishuLease.holding();
-    const notifyFeishuLease = () => {
-      const holding = !inAccountMode() || meshFeishuLease.holding();
-      if (holding === lastEffectiveHolding) return;
-      lastEffectiveHolding = holding;
-      for (const fn of leaseListeners) fn(holding ? device.id : meshFeishuLease.holder());
-    };
-    const feishuLease: CenterLease = {
-      holding: () => !inAccountMode() || meshFeishuLease.holding(),
-      holder: () => (!inAccountMode() ? device.id : meshFeishuLease.holder()),
-      refresh: () => {
-        meshFeishuLease.refresh();
-        notifyFeishuLease();
-      },
-      onChange: (fn) => {
-        leaseListeners.add(fn);
-        return () => leaseListeners.delete(fn);
-      },
-      close: () => meshFeishuLease.close(),
-    };
-
+    const { lease: feishuLease, unsubscribe: unsubscribeFeishuLease } = createFeishuLease(mesh, device.id, () => parts.feishu);
     const pushFeishuToPeer = (peerId: string, payload: { app?: FeishuPeerAppSync | null; chats?: { chatId: string; pmId: number }[] }, attempt = 0) => {
       if (mesh.status().state !== "signed_in" || !mesh.isOnline(peerId) || mesh.trust.get(peerId) === undefined) return;
       void (async () => {
@@ -883,12 +849,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
 
     parts.unsubscribe.push(
-      meshFeishuLease.onChange(() => notifyFeishuLease()),
-      mesh.onChange(() => {
-        meshFeishuLease.refresh();
-        notifyFeishuLease();
-        checkPeerTransitions();
-      }),
+      unsubscribeFeishuLease,
+      mesh.onChange(checkPeerTransitions),
       mesh.trust.onChange(() => {
         checkPeerTransitions();
       }),
@@ -900,6 +862,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       router: routerDispatcher,
       models,
       secretsFile: paths.feishuSecretsFile,
+      inboundStateFile: paths.feishuInboundFile,
+      inboundRelay: mesh.relayCheckpoints,
+      inboundPeers: createFeishuPeerCheckpointPort(mesh),
       uploadsDir,
       sentFilesDir,
       device,
@@ -1012,6 +977,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         learnChats: (from, chats) => feishuAccountBot.learnChats(from, chats),
         exportApp: () => feishu.exportPeerApp(),
         applyApp: (sync) => feishu.applyPeerApp(sync),
+        exportInboundState: () => feishu.exportInboundState?.() ?? null,
+        applyInboundState: (state) => feishu.applyInboundState?.(state),
       },
       routerDispatcher,
       routerLocalPort,
