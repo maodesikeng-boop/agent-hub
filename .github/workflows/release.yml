@@ -77,6 +77,9 @@ jobs:
   check:
     needs: plan
     if: needs.plan.outputs.mode == 'build'
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/check.yml
 
   windows:
@@ -103,7 +106,22 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile --prefer-offline
-      - run: pnpm exec playwright install --with-deps chromium
+      - name: Cache Playwright browsers
+        id: cache-playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-chromium-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright apt packages
+        uses: ./.github/actions/apt-install
+        timeout-minutes: 7
+        with:
+          cache-id: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+          probe: pnpm exec playwright install-deps --dry-run chromium
+          install: pnpm exec playwright install-deps chromium
+      - name: Install Playwright Chromium
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium
       - run: pnpm verify --out "$RUNNER_TEMP/verify-smoke"
       - uses: actions/upload-artifact@v4
         if: always()

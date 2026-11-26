@@ -9,11 +9,11 @@ This plan covers four problems in how this repository is built and merged. It ch
 ### Files to review
 
 - [This design document](dev-ci-friction-design.md): root cause, history, options with outside references, recommendation, and cost for each of the four problems, plus the cloud acceptance drills.
-- [`scripts/migration-claims.ts`](../scripts/migration-claims.ts) and [`scripts/migration-claims.test.ts`](../scripts/migration-claims.test.ts): skeleton and failing tests for the guard that catches two open PRs taking the same migration number.
-- [`scripts/pr-body-sync.ts`](../scripts/pr-body-sync.ts) and [`scripts/pr-body-sync.test.ts`](../scripts/pr-body-sync.test.ts): skeleton and failing tests for syncing a PR description from a pushed tag, so a Worker never needs an owner token.
-- [`scripts/review-stamp-gate.ts`](../scripts/review-stamp-gate.ts) and [`scripts/review-stamp-carry.test.ts`](../scripts/review-stamp-carry.test.ts): skeleton and failing tests for carrying a review stamp across an update that only merges `main`.
-- [`scripts/wait-checks.ts`](../scripts/wait-checks.ts) and [`scripts/wait-checks-fresh.test.ts`](../scripts/wait-checks-fresh.test.ts): failing tests for reporting a PR whose checks ran on an older `main`.
-- [`scripts/ci-friction.test.ts`](../scripts/ci-friction.test.ts): failing workflow guards for the shared apt installer, the PR-description workflow, and the migration-claims job.
+- [`scripts/migration-claims.ts`](../scripts/migration-claims.ts) and [`scripts/migration-claims.test.ts`](../scripts/migration-claims.test.ts): implementation and tests for the guard that catches two open PRs taking the same migration number.
+- [`scripts/pr-body-sync.ts`](../scripts/pr-body-sync.ts) and [`scripts/pr-body-sync.test.ts`](../scripts/pr-body-sync.test.ts): implementation and tests for syncing a PR description from a pushed tag, so a Worker never needs an owner token.
+- [`scripts/review-stamp-gate.ts`](../scripts/review-stamp-gate.ts) and [`scripts/review-stamp-carry.test.ts`](../scripts/review-stamp-carry.test.ts): implementation and tests for carrying a review stamp across an update that only merges `main`.
+- [`scripts/wait-checks.ts`](../scripts/wait-checks.ts) and [`scripts/wait-checks-fresh.test.ts`](../scripts/wait-checks-fresh.test.ts): tests for reporting a PR whose checks ran on an older `main`.
+- [`scripts/ci-friction.test.ts`](../scripts/ci-friction.test.ts): workflow guards for the shared apt installer, the PR-description workflow, and the migration-claims job.
 
 ### Decisions needed
 
@@ -73,7 +73,7 @@ None of these changes touch vendor sessions, system prompts, tool lists, or mess
 #### Problem 4: parallel PRs take the same migration number
 
 - [Measured] `src/daemon/store/migrate.ts:61-63` requires manifest line N to be version N, so migration numbers form one contiguous sequence. A PR takes "latest on `main` plus one" when it starts. Two PRs started from the same `main` take the same number.
-- [Measured] Collisions on record: #441, #443, and #445 all used `0051`; #451 still carries `migrations/0054_worker_app_approvals.sql` while `main` has `0054_system_wakeups.sql` from #453 (`gh pr view 451 --json files`).
+- [Measured] Collisions on record: #441, #443, and #445 all used `0051`. #451 initially claimed `0054`, which #453 used for `0054_system_wakeups.sql`. #451 renumbered its migration to `0055_worker_app_approvals.sql` in `eb8d7e97` and merged with that number.
 - [Measured] `docs/ledger-database.md:31` relies on Git: both PRs append to the end of `migrations/manifest.sha256`, so the second to merge conflicts. That conflict appears only after the first PR merges. By then the second PR is usually reviewed and stamped, and `migrations/**` is a stamp path, so renumbering costs a fix, a new CI run, and a new review.
 - [Inferred] Problem 2 widens this gap. A guard that runs only inside the PR's own checks evaluates once per push. If the other PR adds its migration later, this PR's green result is never re-evaluated. A guard must also run at merge time.
 
@@ -101,7 +101,7 @@ Each problem lists one design that keeps the current structure and one designed 
 
 **Recommendation: A.** It gets the merge-queue guarantee (every merge was tested on the `main` it lands on) with settings this repository has today. Without carry-forward, strict mode would turn every merge into a new review for every other open PR, which is worse than the current problem. B stays open for when the repository moves to an organization; A's carry-forward rule is the same rule B's gate would need.
 
-Carry-forward rule: compare, file by file, the ordered list of added and removed lines in the PR diff before and after the update, ignoring hunk headers and context lines. Carry the stamp only if the file list, each file's change type, and those lines are identical, the GitHub API returned a patch for every file, and the previous head's latest `bellwood/review` status is a `success` posted by someone other than the gate. A merge that needed conflict resolution changes the PR's own lines, so it gets a new review.
+Carry-forward rule: verify that the new head has the previous head and the base commit as its parents. Fetch the commit objects and recompute the merge with [`git merge-tree`](https://git-scm.com/docs/git-merge-tree), which does not check out the PR. A conflict or a difference in the result needs a new review. Compare the ordered list of added and removed lines for each file in the PR patch before and after the update. Carry the stamp only if both file lists are complete, GitHub returns a patch for every file, each file has the same change type and changed lines, and the previous head has an independent review success or a stamp carried from one.
 
 #### Problem 3
 
@@ -164,7 +164,7 @@ Tags: one `pr-body/<PR>` tag at a time per PR, deleted after each sync, so at mo
 - `scripts/review-stamp-gate.ts`: adds `CARRIED_STAMP_PREFIX`, `PrDiffFile`, and `decideStampCarry`, and documents that `decideGateStatus` keeps a carried stamp.
 - `scripts/review-stamp-carry.test.ts`: failing tests for carry-forward and for keeping a carried stamp on a re-run.
 - `scripts/wait-checks-fresh.test.ts`: failing tests for the `behind` and `migration-claim` verdicts.
-- `scripts/ci-friction.test.ts`: failing workflow guards (no `--with-deps`, shared apt action, step timeout, `pr-body.yml` triggers and permissions, no other workflow fires on `pr-body/*` tags, `migration-claims` job, `review-stamp.yml` passes the previous head).
+- `scripts/ci-friction.test.ts`: workflow guards (no `--with-deps`, shared apt action, step timeout, `pr-body.yml` triggers and permissions, no other workflow fires on `pr-body/*` tags, `migration-claims` job, `review-stamp.yml` passes the previous head).
 
 Implementation also adds `.github/actions/apt-install/action.yml` and `.github/workflows/pr-body.yml`, edits `check.yml`, `release.yml`, `review-stamp.yml`, `wait-checks.ts` (`REQUIRED_MAIN_CHECKS` and the two verdicts), `AGENTS.md`, `REVIEW.md`, and `docs/ledger-database.md`.
 
@@ -185,7 +185,7 @@ Each scenario: what happens first, what happens next, what the Project Manager s
 
 Required categories:
 
-- **Two consecutive turns:** two pushes in a row to one PR. Scenario 4 chains (a carried stamp carries again), and scenario 6 force-updates the same tag twice; the second sync wins.
+- **Two consecutive turns:** two pushes in a row to one PR. Scenario 4 chains (a carried stamp carries again), and scenario 6 force-updates the same tag twice; the second sync wins. The job reads the current remote tag and deletes it with a [Git lease](https://git-scm.com/docs/git-push#Documentation/git-push.txt---force-with-leaseltrefnamegtltexpectgt), so an older job cannot delete its replacement.
 - **Restart mid-operation:** a cancelled or re-run job. A re-run of the smoke job uses the `.deb` cache when the first attempt saved it and repeats the fallback otherwise. `pr-body.yml` is idempotent: re-running it sets the same body, and a missing tag is a no-op.
 - **State change while queued:** `main` moves while checks run (scenario 3), the other PR closes while a claim conflict is open (gap case, section 3), and the PR closes before the tag sync runs (sync skips; test in `pr-body-sync.test.ts`).
 - **Existing rules:** `REVIEW.md` rules on `main` that match the changed paths: "Paths that require a review stamp" (`.github/**`, `scripts/review-stamp-gate.ts`), so the implementation PR needs a stamp; "Tests wait for events, not for time" (`**/*.test.ts`): the new tests are pure functions with no timers; "Detached child processes and temp dirs stay inside the session boundary" (`scripts/**`): the new scripts start only `gh` through `execGh` and write no temp files; and, once #454 merges, "Planned acceptance scenarios cover every requirement", which this section answers. `src/code-hygiene.test.ts` limits and `scripts/ci-workflows.test.ts` invariants (no cancelled `main` runs, `setup-node` cache rule, review-stamp permissions) still hold.

@@ -38,13 +38,13 @@ A follow-up review (round 2 or later) checks the open `[Important]` findings fro
 
 ## Paths that require a review stamp
 
-A PR that changes any path below merges into `main` only after an independent review step judges `PASS` on its head commit. After that review passes, the Project Manager posts the `bellwood/review` `success` commit status on the head commit with `node scripts/post-review-stamp.ts <PR> --sha <HEAD_SHA> [--account <login>]`, and branch protection requires that status. `.github/workflows/review-stamp.yml` reads this list from `main` and posts `bellwood/review` as `success` itself when a PR touches none of these paths. A new push changes the head commit, so it needs a new review. Patterns match like `Trigger:` patterns.
+A PR that changes any path below merges into `main` only after an independent review step judges `PASS` on its head commit. After that review passes, the Project Manager posts the `bellwood/review` `success` commit status on the head commit with `node scripts/post-review-stamp.ts <PR> --sha <HEAD_SHA> [--account <login>]`, and branch protection requires that status. `.github/workflows/review-stamp.yml` reads this list from `main` and posts `bellwood/review` as `success` itself when a PR touches none of these paths. A new head needs a new review for these paths unless the gate carries a prior review success. The gate carries the stamp only when the head is the clean merge of the previous stamped head and `main` and the PR patch has the same changes. Patterns match like `Trigger:` patterns.
 
 - Sandboxes and write scopes: `src/daemon/driver/write-scope.ts`, `src/shared/write-scope.ts`, `src/shared/readonly-policy.ts`, `src/daemon/platform/**`, `apps/windows/crates/fusa-win-helper/**`, `scripts/linux-sandbox-setup.sh`
 - Vendor launch arguments: `src/vendors/*/protocol.ts`, `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/*/capabilities.ts`, `src/vendors/_common/acp/**`
 - Ledger storage and schema: `src/daemon/store/**`, `migrations/**`
 - Device trust, relay, and Feishu: `src/daemon/mesh/**`, `src/relay/**`, `src/daemon/feishu/**`
-- Review mechanism and its gate: `src/shared/review.ts`, `REVIEW.md`, `.github/**`, `scripts/review-stamp-gate.ts`, `scripts/post-review-stamp.ts`
+- Review mechanism and its gate: `src/shared/review.ts`, `REVIEW.md`, `.github/**`, `scripts/review-stamp-gate.ts`, `scripts/post-review-stamp.ts`, `scripts/pr-body-sync.ts`, `scripts/migration-claims.ts`, `scripts/wait-checks.ts`
 - Release and packaging: `scripts/stage-*.ts`, `scripts/build-*.sh`, `scripts/release*.ts`
 
 ## Rules
