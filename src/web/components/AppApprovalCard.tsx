@@ -53,8 +53,8 @@ export function AppApprovalCardView({
               <Clock className="size-3.5" aria-hidden />{formatRemaining(remainingMs)}
             </span>
           )}
-          <Button size="sm" variant="outline" className="focus-visible:outline-solid" disabled={busy || disabled} onClick={() => onDecide?.("deny")}>Deny</Button>
-          <Button size="sm" className="focus-visible:outline-solid" disabled={busy || disabled} onClick={() => onDecide?.("allow")}>Allow for this run</Button>
+          <Button size="sm" variant="outline" disabled={busy || disabled} onClick={() => onDecide?.("deny")}>Deny</Button>
+          <Button size="sm" disabled={busy || disabled} onClick={() => onDecide?.("allow")}>Allow for this run</Button>
         </div>
       ) : (
         <p className="mt-2 text-minor font-medium" role="status">{APP_APPROVAL_SETTLED_LABELS[status]}</p>

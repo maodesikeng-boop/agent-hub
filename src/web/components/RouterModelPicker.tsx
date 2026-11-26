@@ -35,7 +35,7 @@ import { RowError } from "./SettingsList.tsx";
 const AUTO_VALUE = "auto";
 
 const ROW_INTERACTIVE_CLASS =
-  "-mx-2.5 flex min-h-9 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-3 px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-hover active:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] pointer-coarse:min-h-11";
+  "-mx-2.5 flex min-h-9 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-3 px-2.5 py-1.5 text-left transition-colors hover:bg-hover active:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] pointer-coarse:min-h-11";
 
 interface RouterModelEffortFieldsProps {
   modelSelectId: string;

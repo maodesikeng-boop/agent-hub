@@ -14,7 +14,7 @@ import type { MessageActions } from "./Messages.tsx";
 // Invariant: a turn shows exactly one progress block, in the slot above its reply text, and only one elapsed time.
 
 const SECONDARY = "text-minor text-muted-foreground";
-const TEXT_BUTTON = "touch-target cursor-pointer transition-colors outline-none hover:text-foreground focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-border-focus";
+const TEXT_BUTTON = "touch-target cursor-pointer transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus";
 const CHEVRON_CLS = "size-pixel-sm shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-90 motion-reduce:transition-none";
 const STATUS_LABEL: Readonly<Record<ChecklistStatus, string>> = {
   pending: "Pending",
@@ -124,7 +124,7 @@ function ChecklistRow({ step, running, onOpenWorker }: { step: ChecklistStepView
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger
           className={cn(
-            "group/step turn-progress-row turn-progress-step-trigger w-fit max-w-full min-w-11 cursor-pointer rounded-sm text-left transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-border-focus",
+            "group/step turn-progress-row turn-progress-step-trigger w-fit max-w-full min-w-11 cursor-pointer rounded-sm text-left transition-colors hover:bg-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus",
             tone,
           )}
         >

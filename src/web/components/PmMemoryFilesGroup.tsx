@@ -458,7 +458,7 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
           <button
             type="button"
             disabled={full}
-            className="flex min-h-13 w-full cursor-pointer items-center gap-2 rounded-none px-4 py-2 text-left text-body transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
+            className="flex min-h-13 w-full cursor-pointer items-center gap-2 rounded-none px-4 py-2 text-left text-body transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent"
             onClick={() => {
               setEditingName(null);
               setConfirmingName(null);

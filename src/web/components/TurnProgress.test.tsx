@@ -260,12 +260,14 @@ describe("TurnProgress", () => {
       <TurnProgress progress={turnProgress(work, checklists)} status={null} stepStartedAt={null} workedForMs={30_000} onOpenWorker={() => {}} />,
     );
     const worked = screen.getByRole("button", { name: /Worked for 30s/ });
-    expect(worked).toHaveClass("focus-visible:outline-solid", "focus-visible:outline-2", "focus-visible:outline-border-focus");
+    expect(worked).toHaveClass("focus-visible:outline-2", "focus-visible:outline-border-focus");
+    expect(worked).not.toHaveClass("outline-none");
     await user.tab();
     expect(worked).toHaveFocus();
     await user.keyboard("{Enter}");
     const step1 = within(container.querySelector('[data-checklist-item="s1"]') as HTMLElement).getByRole("button");
-    expect(step1).toHaveClass("focus-visible:outline-solid", "focus-visible:outline-2", "focus-visible:outline-border-focus");
+    expect(step1).toHaveClass("focus-visible:outline-2", "focus-visible:outline-border-focus");
+    expect(step1).not.toHaveClass("outline-none");
     await user.tab();
     expect(step1).toHaveFocus();
     await user.keyboard(" ");

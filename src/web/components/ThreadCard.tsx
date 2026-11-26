@@ -59,7 +59,7 @@ export function ThreadCard({ line, look, open, createdAt, vendor, joined = false
         data-bubble
         aria-label={ariaLabel}
         className={cn(
-          "group touch-target flex h-6.5 w-full cursor-pointer items-center gap-2 rounded-sm pr-3.5 text-left text-minor transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 motion-reduce:transition-none pointer-coarse:h-11",
+          "group touch-target flex h-6.5 w-full cursor-pointer items-center gap-2 rounded-sm pr-3.5 text-left text-minor transition-colors focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 motion-reduce:transition-none pointer-coarse:h-11",
           open ? "bg-open" : "hover:bg-hover",
         )}
         onClick={() => onOpen(line.workerConversationId)}

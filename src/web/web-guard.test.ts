@@ -550,6 +550,89 @@ function checkInfiniteAnimations(
   return { infiniteRefs: allRefs, violations };
 }
 
+function findOutlineFocusConflicts(file: string, source: string): { line: number; reason: string }[] {
+  const { program, errors } = parseSync(file, source);
+  if (errors.length > 0) throw new Error(`${file} parse failed: ${errors[0]!.message}`);
+  const hits: { line: number; reason: string }[] = [];
+  const reported = new Set<number>();
+  const OUTLINE_SUPPRESS_RE = /(?:^|\s)(?:(?:focus|focus-visible):)?outline-(?:none|hidden)(?=$|\s)/;
+  const FOCUS_VISIBLE_WIDTH_RE = /(?:^|\s)focus-visible:outline-(?:[1-9]\d*|\[[^\]]+\])(?=$|\s)/;
+  const FOCUS_VISIBLE_SOLID_RE = /(?:^|\s)focus-visible:outline-solid(?=$|\s)/;
+
+  const collectStrings = (node: unknown, out: string[]): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) collectStrings(item, out);
+      return;
+    }
+    if (!isAstNode(node)) return;
+    if (node.type === "Literal" && typeof node.value === "string") {
+      out.push(node.value);
+      return;
+    }
+    if (node.type === "TemplateElement") {
+      out.push((node.value as { cooked?: string; raw: string }).cooked ?? (node.value as { raw: string }).raw);
+      return;
+    }
+    if (node.type === "TemplateLiteral") {
+      for (const q of node.quasis as AstNode[]) collectStrings(q, out);
+      for (const expr of node.expressions as AstNode[]) collectStrings(expr, out);
+      return;
+    }
+    if (node.type === "CallExpression") {
+      for (const arg of node.arguments as AstNode[]) collectStrings(arg, out);
+      return;
+    }
+    if (node.type === "ConditionalExpression") {
+      collectStrings(node.consequent, out);
+      collectStrings(node.alternate, out);
+      return;
+    }
+    if (node.type === "LogicalExpression") {
+      collectStrings(node.right, out);
+    }
+  };
+
+  const checkText = (start: number, text: string): void => {
+    const line = lineNumberAt(source, start);
+    if (reported.has(line)) return;
+    if (FOCUS_VISIBLE_SOLID_RE.test(text)) {
+      reported.add(line);
+      hits.push({ line, reason: "redundant focus-visible:outline-solid workaround; remove outline-none instead" });
+      return;
+    }
+    if (OUTLINE_SUPPRESS_RE.test(text) && FOCUS_VISIBLE_WIDTH_RE.test(text)) {
+      reported.add(line);
+      hits.push({ line, reason: "outline-none/outline-hidden sets --tw-outline-style: none and hides focus-visible:outline-<width>" });
+    }
+  };
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!isAstNode(node)) return;
+    if (node.type === "JSXAttribute" && isAstNode(node.name) && node.name.name === "className") {
+      const parts: string[] = [];
+      const value = node.value as AstNode | null;
+      if (value !== null) collectStrings(value.type === "JSXExpressionContainer" ? value.expression : value, parts);
+      if (parts.length > 0) checkText(node.start, parts.join(" "));
+      return;
+    }
+    if (node.type === "Literal" && typeof node.value === "string") {
+      checkText(node.start, node.value);
+      return;
+    }
+    if (node.type === "TemplateLiteral") {
+      const parts: string[] = [];
+      collectStrings(node, parts);
+      checkText(node.start, parts.join(" "));
+      return;
+    }
+    for (const value of Object.values(node)) visit(value);
+  };
+
+  visit(program);
+  return hits;
+}
+
 describe("web-guard：src/web 代码守卫", () => {
   const files = collectSourceFiles(WEB_DIR);
   const cssFiles = collectCssFiles(WEB_DIR);
@@ -752,5 +835,35 @@ describe("web-guard：src/web 代码守卫", () => {
       });
     }
     expect(hits).toEqual([]);
+  });
+
+  it("never pairs outline-none or outline-hidden with focus-visible:outline-<width> in Tailwind 4, and leaves no focus-visible:outline-solid patch", () => {
+    const hits: string[] = [];
+    for (const file of files) {
+      const rel = relative(WEB_DIR, file).replaceAll("\\", "/");
+      for (const hit of findOutlineFocusConflicts(file, readFileSync(file, "utf8"))) {
+        hits.push(`${rel}:${hit.line}: ${hit.reason}`);
+      }
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it("focus-ring outline guard catches conflicting outline-none pairs and focus-visible:outline-solid patches while allowing clean focus-visible outlines and input outline-none", () => {
+    const ok = `
+      const btn = "inline-flex focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1";
+      const input = "w-full outline-none focus:field-focus";
+      const rail = <button className="group outline-none"><span className="group-focus-visible:outline-2 group-focus-visible:outline-border-focus" /></button>;
+      export const View = () => <button className={cn(btn, "h-9")} />;
+    `;
+    expect(findOutlineFocusConflicts("ok.tsx", ok)).toEqual([]);
+
+    const bad = `
+      const a = "outline-none focus-visible:outline-2 focus-visible:outline-border-focus";
+      const b = "outline-hidden focus-visible:outline-2";
+      const c = "focus:outline-none focus-visible:outline-[2px]";
+      const d = <button className={cn("outline-none", "focus-visible:outline-2")} />;
+      const e = <button className="focus-visible:outline-solid focus-visible:outline-2" />;
+    `;
+    expect(findOutlineFocusConflicts("bad.tsx", bad).map((h) => h.line)).toEqual([2, 3, 4, 5, 6]);
   });
 });

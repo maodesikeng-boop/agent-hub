@@ -362,7 +362,7 @@ function ChangeRow({
       </div>
       {textChanged && (
         <Collapsible open={open} onOpenChange={setOpen}>
-          <CollapsibleTrigger className="group mt-1.5 flex cursor-pointer items-center gap-1 text-minor text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus">
+          <CollapsibleTrigger className="group mt-1.5 flex cursor-pointer items-center gap-1 text-minor text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-border-focus">
             <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
             View changes
           </CollapsibleTrigger>

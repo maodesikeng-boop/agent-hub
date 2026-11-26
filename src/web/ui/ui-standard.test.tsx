@@ -153,8 +153,9 @@ describe("界面标准：共用组件", () => {
       </>,
     );
     expect(classOf(screen.getByRole("button", { name: "默认" }))).toEqual(
-      expect.arrayContaining(["h-9", "rounded-sm", "btn-solid", "focus-visible:outline-border-focus", "disabled:bg-send-disabled"]),
+      expect.arrayContaining(["h-9", "rounded-sm", "btn-solid", "focus-visible:outline-2", "focus-visible:outline-border-focus", "disabled:bg-send-disabled"]),
     );
+    expect(classOf(screen.getByRole("button", { name: "默认" }))).not.toContain("outline-none");
     expect(screen.getByRole("button", { name: "默认" }).className).not.toContain("border-2");
     expect(classOf(screen.getByRole("button", { name: "小" }))).toContain("h-8");
     expect(classOf(screen.getByRole("button", { name: "图标" }))).toContain("size-9");
@@ -164,7 +165,8 @@ describe("界面标准：共用组件", () => {
   it("开关：4px 圆角 1px 控件线（h-5.5 w-10），2px 圆角滑块 size-4，带 touch-target 与 focus-visible:outline-border-focus", () => {
     render(<Switch aria-label="Notifications" checked={false} onCheckedChange={() => {}} />);
     const sw = screen.getByRole("switch", { name: "Notifications" });
-    expect(classOf(sw)).toEqual(expect.arrayContaining(["h-5.5", "w-10", "rounded-sm", "border", "border-border-strong", "touch-target", "focus-visible:outline-border-focus"]));
+    expect(classOf(sw)).toEqual(expect.arrayContaining(["h-5.5", "w-10", "rounded-sm", "border", "border-border-strong", "touch-target", "focus-visible:outline-2", "focus-visible:outline-border-focus"]));
+    expect(classOf(sw)).not.toContain("outline-none");
     expect(sw.className).not.toContain("border-2");
     expect(sw.firstElementChild).toHaveClass("size-4", "rounded-xs");
   });

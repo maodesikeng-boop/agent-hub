@@ -89,7 +89,7 @@ const ProjectRow = memo(function ProjectRow({
         type="button"
         aria-current={active ? "page" : undefined}
         onClick={() => onSelect({ device: deviceKey, id: entry.id })}
-        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch text-left outline-none focus-visible:outline-2 focus-visible:outline-border-focus"
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch text-left focus-visible:outline-2 focus-visible:outline-border-focus"
       >
         <AvatarTile look={entry.look} className={readOnly ? "opacity-60" : undefined} />
         <span
@@ -113,7 +113,7 @@ const ProjectRow = memo(function ProjectRow({
             disabled={readOnly || archivedAt !== null}
             onClick={() => onTogglePin(pm.id, !pinned)}
             className={cn(
-              "grid cursor-pointer place-items-center text-list-ink-soft transition-colors outline-none hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-40",
+              "grid cursor-pointer place-items-center text-list-ink-soft transition-colors hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-not-allowed disabled:opacity-40",
               pageLayout ? "size-11 rounded-sm" : "size-7",
             )}
           >
@@ -162,7 +162,7 @@ export const ProjectList = memo(function ProjectList({
       type="button"
       aria-label={`Switch computer (${computer.name})`}
       onClick={computers === undefined ? onOpenComputers : undefined}
-      className="touch-target flex h-7 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 text-left text-title font-semibold text-list-ink transition-colors outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus"
+      className="touch-target flex h-7 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 text-left text-title font-semibold text-list-ink transition-colors hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus"
     >
       <span title={computer.name} className="min-w-0 truncate">
         {computer.name}
@@ -281,7 +281,7 @@ export const ProjectList = memo(function ProjectList({
                   type="button"
                   aria-expanded={showArchived}
                   onClick={() => setArchivedOpen((open) => !open)}
-                  className={cn(GROUP_HEADING, "pointer-coarse:min-h-11 w-full cursor-pointer rounded-sm text-left outline-none hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus")}
+                  className={cn(GROUP_HEADING, "pointer-coarse:min-h-11 w-full cursor-pointer rounded-sm text-left hover:bg-list-hover focus-visible:outline-2 focus-visible:outline-border-focus")}
                 >
                   <ChevronRight className={cn(GROUP_ICON, "transition-transform", showArchived && "rotate-90")} aria-hidden="true" />
                   <span className="trim-cap">Archived</span>

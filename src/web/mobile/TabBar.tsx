@@ -42,7 +42,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
         aria-current={active === "router" ? "page" : undefined}
         onClick={() => onSelect("router")}
         className={cn(
-          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
+          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-border-focus",
           active === "router" ? "bg-rail-selected-strong font-semibold text-rail-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
         )}
       >
@@ -67,7 +67,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
         aria-current={active === "projects" ? "page" : undefined}
         onClick={() => onSelect("projects")}
         className={cn(
-          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
+          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-border-focus",
           active === "projects" ? "bg-rail-selected-strong font-semibold text-rail-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
         )}
       >
@@ -81,7 +81,7 @@ export function TabBar({ active, routerBadge, settingsAttention, onSelect }: Tab
         aria-current={active === "settings" ? "page" : undefined}
         onClick={() => onSelect("settings")}
         className={cn(
-          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus",
+          "touch-target relative flex min-h-11 min-w-11 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-border-focus",
           active === "settings" ? "bg-rail-selected-strong font-semibold text-rail-ink" : "font-medium text-rail-ink-soft hover:bg-rail-hover",
         )}
       >

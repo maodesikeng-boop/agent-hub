@@ -118,7 +118,7 @@ export function SettingsDialog({
                 <TabsTrigger
                   key={id}
                   value={id}
-                  className="flex h-9 shrink-0 cursor-pointer items-center gap-3 rounded-sm px-2 text-body whitespace-nowrap text-list-ink-soft transition-[background-color,box-shadow,color] duration-150 outline-none hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none data-[state=active]:row-selected data-[state=active]:text-list-ink"
+                  className="flex h-9 shrink-0 cursor-pointer items-center gap-3 rounded-sm px-2 text-body whitespace-nowrap text-list-ink-soft transition-[background-color,box-shadow,color] duration-150 hover:bg-list-hover hover:text-list-ink focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] motion-reduce:transition-none data-[state=active]:row-selected data-[state=active]:text-list-ink"
                 >
                   <Icon className="size-pixel shrink-0 max-[719px]:hidden" aria-hidden="true" />
                   <span className="trim-cap">{label}</span>

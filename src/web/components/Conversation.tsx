@@ -151,7 +151,7 @@ export const Conversation = memo(function Conversation({
               type="button"
               aria-label={`View ${entry.pm.name}'s profile`}
               className={cn(
-                "-ml-1.5 flex min-w-0 max-w-full cursor-pointer items-center pr-2 pl-1.5 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus",
+                "-ml-1.5 flex min-w-0 max-w-full cursor-pointer items-center pr-2 pl-1.5 text-left transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus",
                 mobile ? "h-11 gap-2.5" : "h-8 gap-2",
               )}
               onClick={() => entry.pm && onOpenProfile(entry.pm.id)}

@@ -14,7 +14,7 @@ export function Switch({
       aria-checked={checked}
       data-slot="switch"
       className={cn(
-        "touch-target relative inline-flex h-5.5 w-10 shrink-0 cursor-pointer items-center rounded-sm border px-0.5 transition-colors outline-none focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 disabled:cursor-not-allowed disabled:opacity-50",
+        "touch-target relative inline-flex h-5.5 w-10 shrink-0 cursor-pointer items-center rounded-sm border px-0.5 transition-colors focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-1 disabled:cursor-not-allowed disabled:opacity-50",
         checked ? "border-black/20 bg-primary" : "border-border-strong bg-hover",
         className,
       )}
