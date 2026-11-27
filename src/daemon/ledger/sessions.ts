@@ -518,6 +518,8 @@ export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: Session
   };
 
   const recoverAfterRestart = (recoverTurns: (p: Pending) => RecoveryResend[], afterResends: (p: Pending) => void) => write((p) => {
+    // Background commands died with the previous daemon, so no session still holds a step slot through them.
+    db.run("DELETE FROM session_background_tasks");
     type Recoverable = { id: MessageId; session_id: SessionId; sender: string; status: string; rider: number };
     const taken = recoverTurns(p).flatMap(({ messageId }) => {
       const row = db.get<Recoverable>(

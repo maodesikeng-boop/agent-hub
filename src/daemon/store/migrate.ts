@@ -33,6 +33,9 @@ interface ManifestEntry {
   sha256: string;
 }
 
+/** Triggers named with this prefix are built from code each time the ledger opens, so migrations drop them before running. */
+export const CODE_TRIGGER_PREFIX = "code_";
+
 const MAX_REPORTED_FK_ROWS = 10;
 const AUTO_VACUUM_INCREMENTAL = 2;
 const MANIFEST_LINE = /^([0-9a-f]{64}) {2}((\d+)_[^/\\\s]+\.sql)$/;
@@ -165,6 +168,11 @@ function checkForeignKeys(db: Db): void {
   throw new Error(`foreign key check failed: ${dangling.length} row(s): ${rows}${more}`);
 }
 
+function dropCodeTriggers(db: Db): void {
+  const triggers = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'trigger' AND substr(name, 1, ?) = ?", CODE_TRIGGER_PREFIX.length, CODE_TRIGGER_PREFIX);
+  for (const { name } of triggers) db.exec(`DROP TRIGGER "${name}"`);
+}
+
 export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: MigrateOptions = {}): MigrationResult {
   if (db.inTransaction) {
     throw new Error(
@@ -185,6 +193,8 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
       ? freelistCount(db)
       : undefined;
   const applied: number[] = [];
+  // A code-built trigger may read tables an older migration rebuilds, and SQLite refuses that rename while the trigger exists.
+  if (pending.length > 0) dropCodeTriggers(db);
   for (const { version, file, sql } of pending) {
     const foreignKeys = db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys === 1;
     if (foreignKeys) db.exec("PRAGMA foreign_keys = OFF");

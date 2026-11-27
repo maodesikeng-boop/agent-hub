@@ -13,6 +13,7 @@ import type {
   TaskGraph,
   TaskGraphId,
   TaskGraphStatus,
+  TaskNode,
   TaskNodeKey,
   WorkerRecord,
   WorkerId,
@@ -260,6 +261,7 @@ export interface CreateTaskGraphNodeInput {
   confirm?: boolean;
   review?: boolean;
   base?: string;
+  slot?: string;
   deps?: TaskNodeKey[];
 }
 
@@ -294,6 +296,7 @@ export interface PatchTaskGraphNodeInput {
   confirm?: boolean;
   review?: boolean;
   base?: string | null;
+  slot?: string | null;
   deps?: TaskNodeKey[];
 }
 
@@ -490,9 +493,25 @@ interface HubDataMap {
 
 export type HubData<C extends HubCommand> = HubDataMap[C];
 
+/** A step that `worker start --node` put in line for its slot instead of starting a Worker. */
+export interface StepSlotQueueReceipt extends NonNullable<TaskNode["slotQueue"]> {
+  graphId: TaskGraphId;
+  nodeKey: TaskNodeKey;
+  slot: string;
+}
+
 export interface HubResult<C extends HubCommand> {
   text: string;
   data: HubData<C>;
+}
+
+/**
+ * `worker start --node` on a step whose slot is held puts the step in line instead of starting a Worker.
+ * Callers that read `data.worker` from a `--node` start must check for null.
+ */
+export interface WorkerStartQueuedResult {
+  text: string;
+  data: { worker: null; slotQueue: StepSlotQueueReceipt };
 }
 
 export type HubErrorCode = LedgerErrorCode | "unauthorized" | "internal" | "shutting_down";
