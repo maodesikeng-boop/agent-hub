@@ -1,9 +1,12 @@
 // Invariant: isolated Bellwood instances never share ~/.agent-hub, developer CLI configs, or default ports, and leave zero live children after stop.
 import type { AppVendorMode } from "./types.ts";
 
+export type FolderPickerMode = "bridge_sample_project" | "disabled";
+
 export interface IsolatedAppOptions {
   readonly tempRoot: string;
   readonly appVendorMode: AppVendorMode;
+  readonly folderPickerMode?: FolderPickerMode;
   readonly repoRoot?: string;
   readonly buildWeb?: boolean;
   readonly platform?: NodeJS.Platform;
@@ -18,6 +21,7 @@ export interface IsolatedBellwoodHandle {
   readonly origin: string;
   readonly loginUrl: string;
   readonly uiToken: string;
+  readonly folderBridgeActive: boolean;
   readonly pid: number;
   isRunning(): boolean;
   readStderrTail(): string;

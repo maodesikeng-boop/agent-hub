@@ -58,17 +58,28 @@ describe("isolated-app (S4, S8)", () => {
     expect(() => assertCleanTeardown(isolatedHome)).toThrow(/surviving|alive|pid/i);
   });
 
-  it("S4: starts a real isolated Bellwood instance and stops it cleanly with zero leftover files", async () => {
+  it("S4: starts a real isolated Bellwood instance with loopback folder-picker bridge and stops it cleanly with zero leftover files", async () => {
     const tempRoot = makeTempDir("blind-daemon-");
     const handle = await launchIsolatedBellwood({
       tempRoot,
       appVendorMode: { kind: "fake" },
+      folderPickerMode: "bridge_sample_project",
       buildWeb: false,
     });
     try {
       expect(handle.origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       expect(handle.isRunning()).toBe(true);
+      expect(handle.folderBridgeActive).toBe(true);
       expect(existsSync(handle.sampleProjectDir)).toBe(true);
+      const auth = await fetch(handle.loginUrl, { redirect: "manual" });
+      const cookie = (auth.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
+      const pick = await fetch(`${handle.origin}/api/pick-folder`, {
+        method: "POST",
+        headers: { cookie, origin: handle.origin, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(pick.status).toBe(200);
+      expect((await pick.json()) as { path: string | null }).toEqual({ path: handle.sampleProjectDir });
     } finally {
       await stopIsolatedBellwood(handle, true);
     }

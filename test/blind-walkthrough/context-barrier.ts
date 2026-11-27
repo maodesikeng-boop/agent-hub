@@ -63,13 +63,15 @@ export function sanitizeAccessibilitySnapshot(_root: RawA11yNode | null): { read
 }
 
 /**
- * Precondition: blindHomeDir and blindCwd are isolated empty directories outside the repository and production data directory.
- * Postcondition: returns a scrubbed environment containing no HUB_TOKEN, HUB_SOCK, AGENT_HUB_*, GitHub tokens, or SSH agent sockets.
+ * Precondition: blindHomeDir is an isolated empty directory outside the repository and production data directory.
+ * Postcondition: returns a scrubbed environment containing no HUB_TOKEN, HUB_SOCK, AGENT_HUB_*, GitHub tokens, or SSH agent sockets,
+ * while forwarding only explicit caller-approved credential keys from allowEnvKeys when provided.
  */
 export function buildBlindAgentEnv(
   _baseEnv: Readonly<Record<string, string | undefined>>,
   _blindHomeDir: string,
   _platform?: NodeJS.Platform,
+  _allowEnvKeys?: readonly string[],
 ): Record<string, string> {
   throw new Error("Not implemented");
 }
