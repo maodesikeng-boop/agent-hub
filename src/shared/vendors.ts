@@ -313,6 +313,35 @@ export function isSelectable(availability: VendorAvailability): boolean {
   return availability === "available" || availability === "unknown";
 }
 
+export type AvailabilityOf = (vendor: AgentVendor) => VendorAvailability;
+
+/**
+ * The one rule for which vendor the system picks when nobody named one, walking VENDOR_LIST in order.
+ * Postcondition: returns the first "available" vendor; when none is available and `probedOnly` is not true,
+ * the first "unknown" (installed but not yet probed) vendor; otherwise null.
+ * Never returns a "not_installed" or "signed_out" vendor.
+ */
+export function firstUsableVendor(availabilityOf: AvailabilityOf, options?: { probedOnly?: boolean }): AgentVendor | null {
+  void [availabilityOf, options];
+  throw new Error("Not implemented");
+}
+
+/**
+ * Vendor for a new project manager whose creator named none (web dialog, HTTP API, Router, first start).
+ * Postcondition: firstUsableVendor(availabilityOf), or DEFAULT_AGENT_VENDOR when no vendor is usable,
+ * which keeps today's zero-provider behavior.
+ */
+export function defaultPmVendor(availabilityOf: AvailabilityOf): AgentVendor {
+  void availabilityOf;
+  throw new Error("Not implemented");
+}
+
+/** Availability lookup over a catalog list; a vendor missing from the list reads as "unknown". */
+export function availabilityOfCatalogs(catalogs: readonly ModelCatalog[]): AvailabilityOf {
+  void catalogs;
+  throw new Error("Not implemented");
+}
+
 const pickableCatalogsCache = new WeakMap<readonly ModelCatalog[], Map<string, readonly ModelCatalog[]>>();
 
 export function pickableVendorCatalogs(
