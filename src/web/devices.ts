@@ -88,12 +88,20 @@ export function sameDeviceInfo(a: DeviceInfo, b: DeviceInfo): boolean {
   );
 }
 
-export function deviceNotices(device: Pick<DeviceView, "key" | "info" | "status" | "lastOnlineAt">, now: number = Date.now()) {
+export interface OfflineNotice {
+  name: string;
+  lastOnlineAt: number | null;
+}
+
+export function offlineNoticeText({ name, lastOnlineAt }: OfflineNotice, now: number): string {
+  const ago = formatAgo(lastOnlineAt ?? now, now);
+  return ago === JUST_NOW ? `${name} is offline. Showing content from when it disconnected` : `${name} is offline. Showing content from ${ago}`;
+}
+
+export function deviceNotices(device: Pick<DeviceView, "key" | "info" | "status" | "lastOnlineAt">) {
   if (device.key === LOCAL_DEVICE) return { offline: null, link: null };
   const { name } = device.info;
-  const ago = formatAgo(device.lastOnlineAt ?? now, now);
-  const offline =
-    device.status !== "offline" ? null : ago === JUST_NOW ? `${name} is offline. Showing content from when it disconnected` : `${name} is offline. Showing content from ${ago}`;
+  const offline: OfflineNotice | null = device.status !== "offline" ? null : { name, lastOnlineAt: device.lastOnlineAt };
   const link = { readOnly: isReadOnly(device.status) ? `${name} is offline. Can't send messages right now` : null, waiting: !canSend(device.status) };
   return { offline, link };
 }

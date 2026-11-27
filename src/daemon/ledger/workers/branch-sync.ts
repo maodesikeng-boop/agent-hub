@@ -23,7 +23,8 @@ export interface BranchSyncResult {
 }
 
 const MEMBERSHIP = "EXISTS (SELECT 1 FROM json_each(s.worker_ids_json) WHERE value = w.id)";
-const TRACKED = "w.workspace = 'worktree' AND w.review_json IS NULL AND w.base_commit IS NOT NULL AND w.worktree_path <> ''";
+const ON_WORKTREE = "w.workspace = 'worktree' AND w.review_json IS NULL AND w.worktree_path <> ''";
+const TRACKED = `${ON_WORKTREE} AND w.base_commit IS NOT NULL`;
 
 export function listWorktreeBranchTargets(db: Db, { pmId, workerId, graphId }: WorktreeBranchScope = {}): WorktreeBranchTarget[] {
   if (workerId === undefined && graphId === undefined) return listRecentWorktreeBranchTargets(db, pmId);
@@ -78,7 +79,8 @@ export function syncWorktreeBranchIn(
     actualBranch, t, worktreePath, actualBranch,
   );
   const rows = db.all<{ id: WorkerId }>(
-    `UPDATE workers AS w SET branch = ? WHERE ${TRACKED} AND worktree_path = ? AND branch IS NOT ? RETURNING id`,
+    // A Worker that inherited the worktree but has not synced yet still follows the rename.
+    `UPDATE workers AS w SET branch = ? WHERE ${ON_WORKTREE} AND worktree_path = ? AND branch IS NOT ? RETURNING id`,
     actualBranch, worktreePath, actualBranch,
   );
   const updatedGraphIds = [...new Set(steps.map(({ graph_id }) => graph_id))];

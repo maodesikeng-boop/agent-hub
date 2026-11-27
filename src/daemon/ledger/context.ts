@@ -17,6 +17,7 @@ import { toHealth } from "./rows.ts";
 import type { HealthDbRow } from "./rows.ts";
 import { composerBaseOf } from "../vendors/index.ts";
 import type { ModelCatalogs } from "../driver/model-catalog.ts";
+import { kernelReadonlySandboxAvailable } from "../driver/kernel-readonly.ts";
 import { osSandboxAvailable } from "../driver/write-scope.ts";
 
 export type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
@@ -83,6 +84,8 @@ export interface LedgerContext {
   modelShortLabel(vendor: AgentVendor, model: string | null): string;
   commandBlockReason(session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string): string | null;
   osSandboxed(): boolean;
+  /** Whether a read-only sandbox with no vendor tool layer behind it can be built (false on Windows without MXC). */
+  readonlyKernelSandboxed(): boolean;
   deviceName(): string;
   /** Monotonic write-transaction generation used to invalidate derived snapshots such as DeviceRouterDigest. */
   writeGeneration(): number;
@@ -109,10 +112,12 @@ export interface LedgerContextOptions {
   initialSeq?: number;
   changeBufferSize?: number;
   osSandboxed?: () => boolean;
+  readonlyKernelSandboxed?: () => boolean;
   deviceName?: () => string;
 }
 
 export function createLedgerContext(db: Db, options: LedgerContextOptions): LedgerContext {
+  const osSandboxed = options.osSandboxed ?? (() => osSandboxAvailable());
   const now = options.now ?? Date.now;
   const log = createChangeLog(options.initialSeq ?? 0, options.changeBufferSize ?? CHANGE_BUFFER_SIZE);
   const changeListeners = new Set<(change: Change) => void>();
@@ -228,7 +233,8 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     modelLabel: label,
     modelShortLabel: shortLabel,
     commandBlockReason,
-    osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()),
+    osSandboxed,
+    readonlyKernelSandboxed: options.readonlyKernelSandboxed ?? (() => osSandboxed() && kernelReadonlySandboxAvailable(process.platform, { available: true })),
     deviceName: options.deviceName ?? (() => hostname()),
     writeGeneration: () => generation,
   };

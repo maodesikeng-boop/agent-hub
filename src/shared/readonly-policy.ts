@@ -24,12 +24,19 @@ export const READONLY_SECRET_HOME_PATHS: readonly string[] = [
   ...VENDOR_LIST.flatMap((spec) => spec.home.readonlySecrets),
 ];
 
+/** Code host CLI logins (and the keychain `gh` keeps its token in) that a watch command may read to ask about checks. */
+export const WATCH_READABLE_HOME_PATHS: readonly string[] = [".config/gh", ".config/hub", ".git-credentials", "Library/Keychains"];
+
+export const WATCH_SECRET_HOME_PATHS: readonly string[] = READONLY_SECRET_HOME_PATHS.filter((p) => !WATCH_READABLE_HOME_PATHS.includes(p));
+
 export const READONLY_SECRET_GLOBS: readonly string[] = ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", "**/id_ed25519*"];
 
 const READONLY_CONNECTORS: Readonly<ReadonlyPolicy["connectors"]> = { extraAllow: [], deny: [] };
 
 export interface ReadonlyPolicyInput {
   homeDir: string;
+  /** Defaults to READONLY_SECRET_HOME_PATHS. */
+  homeSecrets?: readonly string[];
   stateDir: string;
   protectedRoots?: readonly string[];
   connectors?: Partial<ReadonlyPolicy["connectors"]>;
@@ -44,21 +51,22 @@ function joinPath(base: string, rel: string): string {
 }
 
 // A vendor home override (CODEX_HOME, KIMI_CODE_HOME, ...) moves that vendor's secrets out of the default home.
-function overriddenHomeSecretPaths(env: Readonly<Record<string, string | undefined>>): string[] {
+function overriddenHomeSecretPaths(env: Readonly<Record<string, string | undefined>>, homeSecrets: readonly string[]): string[] {
   return VENDOR_LIST.flatMap(({ home }) => {
     const base = home.configHome && env[home.configHome.env]?.trim();
     if (!home.configHome || !base) return [];
     const prefix = `${home.configHome.rel}/`;
-    return home.readonlySecrets.filter((rel) => rel.startsWith(prefix)).map((rel) => joinPath(base, rel.slice(prefix.length)));
+    return home.readonlySecrets.filter((rel) => rel.startsWith(prefix) && homeSecrets.includes(rel)).map((rel) => joinPath(base, rel.slice(prefix.length)));
   });
 }
 
 export function buildReadonlyPolicy(input: ReadonlyPolicyInput): ReadonlyPolicy {
+  const homeSecrets = input.homeSecrets ?? READONLY_SECRET_HOME_PATHS;
   return {
     secretPaths: [
       ...new Set([
-        ...READONLY_SECRET_HOME_PATHS.map((p) => joinPath(input.homeDir, p)),
-        ...overriddenHomeSecretPaths(input.env ?? process.env),
+        ...homeSecrets.map((p) => joinPath(input.homeDir, p)),
+        ...overriddenHomeSecretPaths(input.env ?? process.env, homeSecrets),
       ]),
     ],
     secretGlobs: [...READONLY_SECRET_GLOBS],

@@ -15,13 +15,15 @@ import {
   type Ledger,
   type Message,
   type ReviewObservation,
+  type ReviewSnapshot,
   type SessionStore,
   type SessionTokens,
   type WorkerId,
   type WorkerPr,
   type WorkerPrProbeResult,
+  type WorktreeTask,
 } from "../shared/index.ts";
-import type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat } from "./git/index.ts";
+import type { AddWorktreeOptions, AddWorktreeResult, BranchTip, DiffFileStat, ResolveBranchTip, WorktreeSyncResult } from "./git/index.ts";
 import type { SqliteLedger } from "./ledger/index.ts";
 import type { SessionTmpStore } from "./session-tmp.ts";
 import type { SetupRunner } from "./setup/index.ts";
@@ -226,26 +228,28 @@ export function createSessionEndHandler(
   };
 }
 
-export type ObserveReview = (repo: string, branch: string) => Promise<ReviewObservation>;
+export type ObserveReview = (repo: string, branch: string, before: ReviewSnapshot) => Promise<ReviewObservation>;
 
+/** Only the remote recorded at review start is probed; a review that started without a reachable remote is checked locally, so going offline cannot fail it. */
 export function createReviewObserver(deps: {
   resolveCommit: (folder: string, ref: string) => Promise<string | null>;
-  remoteBranchHead: (repo: string, branch: string) => Promise<string | null | undefined>;
+  remoteBranchHead: (repo: string, branch: string, remote?: string) => Promise<{ name: string; sha: string | null } | undefined>;
   probePr: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
 }): ObserveReview {
-  return async (repo, branch) => {
+  return async (repo, branch, before) => {
     const [sha, remote, pr] = await Promise.all([
       deps.resolveCommit(repo, `refs/heads/${branch}`),
-      deps.remoteBranchHead(repo, branch),
-      deps.probePr(repo, branch),
+      before.remote === null ? null : deps.remoteBranchHead(repo, branch, before.remote.name),
+      before.pr === null ? null : deps.probePr(repo, branch),
     ]);
-    return { sha, remote: remote === undefined ? null : { sha: remote }, pr };
+    return { sha, remote: remote ?? null, pr };
   };
 }
 
 export interface WorktreeHandlerDeps {
-  ledger: Pick<Ledger, "reconcileWorkerGraph" | "getWorktreeTask" | "onSetupStarted" | "onWorktreeCreated" | "recordReviewSnapshot">;
-  observeReview: ObserveReview;
+  ledger: Pick<Ledger, "reconcileWorkerGraph" | "getWorktreeTask" | "onSetupStarted" | "onWorktreeCreated" | "recordReviewSnapshot" | "noteWorkspaceCheckout">;
+  resolveTip: ResolveBranchTip;
+  probePr: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
   addWorktree: (options: AddWorktreeOptions) => Promise<AddWorktreeResult>;
   setup: Pick<SetupRunner, "start">;
   setupLogPath: (workerId: WorkerId) => string;
@@ -260,6 +264,19 @@ export interface WorktreeHandlerDeps {
     worktreePath: string;
     prepareDir?: (worktreePath: string) => Promise<void> | void;
   }>;
+}
+
+/** Review and fork checkouts start from the branch's delivered tip (local or remote, cross-checked with the upstream report), never a stale local ref. */
+async function startingTip(deps: WorktreeHandlerDeps, repo: string, checkout: WorktreeTask["checkout"]): Promise<{ branch: string; tip: BranchTip } | null> {
+  const branch = checkout.kind === "review" ? checkout.branch : checkout.base;
+  if (branch === undefined) return null;
+  return { branch, tip: await deps.resolveTip(repo, branch, checkout.expected ?? null) };
+}
+
+async function recordReviewStart(deps: WorktreeHandlerDeps, workerId: WorkerId, repo: string, branch: string, sha: string, tip: BranchTip): Promise<void> {
+  const seen = await deps.probePr(repo, branch);
+  const pr = seen !== null && !("unavailable" in seen) ? seen : null;
+  deps.ledger.recordReviewSnapshot(workerId, { sha, local: tip.local, remote: tip.remote, pr });
 }
 
 export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHandler<"worktree.create"> {
@@ -278,18 +295,17 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
       : { worktreePath: task.worktreePath };
     const effectiveWorktreePath = placement.worktreePath;
     const { checkout } = task;
+    const start = await startingTip(deps, task.repo, checkout);
     const { baseCommit } = await deps.addWorktree({
       repoFolder: task.repo,
       worktreePath: effectiveWorktreePath,
-      ...(checkout.kind === "review"
-        ? { branch: null, base: `refs/heads/${checkout.branch}` }
-        : { branch: checkout.branch, ...(checkout.base ? { base: checkout.base } : {}) }),
+      branch: checkout.kind === "review" ? null : checkout.branch,
+      ...(start === null ? {} : { base: start.tip.commit }),
       ...(placement.prepareDir ? { prepareDir: placement.prepareDir } : {}),
     });
-    if (checkout.kind === "review") {
-      const seen = await deps.observeReview(task.repo, checkout.branch);
-      const pr = seen.pr !== null && !("unavailable" in seen.pr) ? seen.pr : null;
-      deps.ledger.recordReviewSnapshot(workerId, { sha: baseCommit, remote: seen.remote, pr });
+    if (start !== null) {
+      if (checkout.kind === "review") await recordReviewStart(deps, workerId, task.repo, start.branch, baseCommit, start.tip);
+      deps.ledger.noteWorkspaceCheckout(workerId, { branch: start.branch, commit: baseCommit, findings: start.tip.findings });
     }
     if (task.setupCommand === null) {
       deps.ledger.onWorktreeCreated(workerId, baseCommit);
@@ -314,6 +330,32 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
   };
 }
 
+export interface WorktreeSyncHandlerDeps {
+  ledger: Pick<Ledger, "reconcileWorkerGraph" | "getWorktreeSyncTask" | "onWorktreeSynced">;
+  syncWorktree: (repo: string, worktreePath: string, branch: string, expected: string | null) => Promise<WorktreeSyncResult>;
+}
+
+export function createWorktreeSyncHandler(deps: WorktreeSyncHandlerDeps): ActionHandler<"worktree.sync"> {
+  return async (action) => {
+    const { workerId } = action.params;
+    await deps.ledger.reconcileWorkerGraph?.(workerId);
+    const task = deps.ledger.getWorktreeSyncTask(workerId);
+    if (task?.kind === "wait") return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worktree_busy" };
+    if (task === null) {
+      deps.ledger.onWorktreeSynced(workerId, null);
+      return { kind: "done" };
+    }
+    const { tip, outcome } = await deps.syncWorktree(task.repo, task.worktreePath, task.branch, task.expected);
+    if (tip === null || outcome.kind === "not_on_branch") {
+      deps.ledger.onWorktreeSynced(workerId, null);
+      return { kind: "done" };
+    }
+    const commit = outcome.kind === "fast_forwarded" ? outcome.to : (tip.local ?? tip.commit);
+    deps.ledger.onWorktreeSynced(workerId, { branch: task.branch, commit, findings: tip.findings, sync: outcome });
+    return { kind: "done" };
+  };
+}
+
 export interface ReviewVerifyHandlerDeps {
   ledger: Pick<Ledger, "getReviewVerifyTask" | "onReviewVerified">;
   observeReview: ObserveReview;
@@ -323,7 +365,7 @@ export function createReviewVerifyHandler(deps: ReviewVerifyHandlerDeps): Action
   return async (action) => {
     const task = deps.ledger.getReviewVerifyTask(action.params.workerId);
     if (task === null) return { kind: "done" };
-    const now = await deps.observeReview(task.repo, task.branch);
+    const now = await deps.observeReview(task.repo, task.branch, task.snapshot);
     deps.ledger.onReviewVerified(action.params, { problems: diffReviewSnapshot(task.branch, task.snapshot, now) });
     return { kind: "done" };
   };

@@ -40,7 +40,7 @@ const GraphSection = memo(function GraphSection({
   onExpandGraph: (graph: TaskGraph, decisionKey?: TaskNodeKey) => void;
 }) {
   const flow = useMemo(() => graphFlowOf(graph), [graph]);
-  const delivery = graphDeliveryOf(graph);
+  const delivery = graphDeliveryOf(graph, graph.deliveryWatch ?? null);
   const slotQueue = graphSlotQueueOf(graph);
   const targetByKey = useMemo(() => {
     const map = new Map<TaskNodeKey, ReturnType<typeof stepTargetOf>>();

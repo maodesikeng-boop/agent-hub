@@ -849,6 +849,7 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
       createdAt: 100,
       updatedAt: 100,
       completedAt: null,
+      readySince: null,
     };
     s = applyChange(s, changeOf(18, "task_graph.created", { graph: baseGraph }));
     expect(s.activeTaskGraphs.map((g) => g.id)).toEqual([9]);
