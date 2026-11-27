@@ -411,14 +411,28 @@ async function executeWalkthrough(
   try {
     const firstViewport = config.viewports[0]!;
     browser = await chromium.launch(resolveChromiumLaunchOptions());
-    context = await browser.newContext({
+    const baseContextOptions = {
       viewport: { width: firstViewport.width, height: firstViewport.height },
+    };
+    context = await browser.newContext({
+      ...baseContextOptions,
       recordVideo: {
         dir: rawVideoDir,
         size: { width: firstViewport.width, height: firstViewport.height },
       },
     });
-    page = await context.newPage();
+    try {
+      page = await context.newPage();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/Video rendering requires ffmpeg|ms-playwright\/ffmpeg/i.test(message)) {
+        throw error;
+      }
+      // Fall back to screenshot-only capture when Playwright's managed ffmpeg cache is absent (e.g., unit-test CI shards).
+      await context.close().catch(() => {});
+      context = await browser.newContext(baseContextOptions);
+      page = await context.newPage();
+    }
 
     let stepConsoleErrors: string[] = [];
     let stepPageErrors: string[] = [];
