@@ -18,6 +18,7 @@ export const ALWAYS_RUN_TESTS = [
   "src/direct-dependencies.test.ts",
   "src/docs-guard.test.ts",
   "src/hub-limits-guard.test.ts",
+  "src/hub/registry.test.ts",
   "src/prompt-portability.test.ts",
   "src/shared/errors-guard.test.ts",
   "src/shared/vendor-guard.test.ts",

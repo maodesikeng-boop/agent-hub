@@ -58,7 +58,7 @@ function insertMaxTimeNoticeIn(w: WorkersCtx, p: Pending, worker: WorkerDbRow, m
   const label = formatDurationShort(maxTimeMs);
   const text =
     `【Worker #${worker.id} · ${worker.title} 已超过最大时间（${label}）】` +
-    `该 Worker 当前一轮已运行 ${label} 仍未结束（仍在运行中，未被停止）。` +
+    `该 Worker 已超过时间预算 ${label}（从派活时起算，重启不重置）仍未结束（仍在运行中，未被停止）。` +
     `请用 ${HUB_COMMAND} worker show ${worker.id} 和 ${HUB_COMMAND} worker log ${worker.id} --last 15 检查它是否在正常推进，并视情况告知用户、继续等待或停止换人。`;
   const meta: SystemMessageMeta = {
     event: "worker.max_time_exceeded",

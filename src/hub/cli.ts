@@ -6,6 +6,7 @@ import { ROUTER_DISPATCH_AGENT_PATH } from "../shared/router.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
 import { taskGraphSkillBody } from "../shared/task-graph-skill.ts";
 import { UsageError, type Parsed } from "./args.ts";
+import { renderHelpIndex, renderScopedHelp, resolveHelpTarget } from "./registry.ts";
 import { HUB_USAGE, commandUsageFor } from "./usage.ts";
 import { TIMEOUT_REASON, readAllStdin, parseHubEndpoint, post } from "./transport.ts";
 import { parseCommand } from "./parse.ts";
@@ -45,24 +46,38 @@ function personaStdout(text: string): string {
 }
 
 export async function runHub(io: HubIo): Promise<number> {
-  const usage = (reason: string, full = false) => {
+  const usage = (reason: string, includeHelp = true) => {
     io.stderr.write(line(`${hub}：${reason}`));
-    io.stderr.write(full ? HUB_USAGE : commandUsageFor(io.argv));
+    if (includeHelp) io.stderr.write(commandUsageFor(io.argv));
     return HUB_EXIT.usage;
   };
 
+  const helpTarget = resolveHelpTarget(io.argv);
+  if (helpTarget !== null) {
+    switch (helpTarget.kind) {
+      case "index":
+        io.stdout.write(renderHelpIndex());
+        return HUB_EXIT.ok;
+      case "all":
+        io.stdout.write(HUB_USAGE);
+        return HUB_EXIT.ok;
+      case "graph-manual":
+        io.stdout.write(taskGraphSkillBody());
+        return HUB_EXIT.ok;
+      case "entries":
+        io.stdout.write(renderScopedHelp(helpTarget.entries));
+        return HUB_EXIT.ok;
+      case "unknown": {
+        const hint = helpTarget.suggestions.length > 0 ? `（你是不是想查 ${helpTarget.suggestions.join("、")}？）` : "";
+        io.stderr.write(line(`${hub}：没有找到「${helpTarget.query}」的帮助${hint}。看命令索引运行 ${hub} help，看全部展开运行 ${hub} help --all`));
+        return HUB_EXIT.usage;
+      }
+    }
+  }
+
   let parsed: Parsed;
   try {
-    const result = parseCommand(io.argv, io.env, io.cwd);
-    if (result === "help") {
-      io.stdout.write(HUB_USAGE);
-      return HUB_EXIT.ok;
-    }
-    if (result === "help-graph") {
-      io.stdout.write(taskGraphSkillBody());
-      return HUB_EXIT.ok;
-    }
-    parsed = result;
+    parsed = parseCommand(io.argv, io.env, io.cwd);
   } catch (err) {
     if (err instanceof UsageError) return usage(err.message);
     throw err;
@@ -70,12 +85,12 @@ export async function runHub(io: HubIo): Promise<number> {
 
   const token = io.env[ENV_HUB_TOKEN];
   const socketPath = io.env[ENV_HUB_SOCK];
-  if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：${hub} 只能在 ${PRODUCT_ID} 启动的会话里用`, true);
-  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 ${PRODUCT_ID} 发的令牌`, true);
-  if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：${hub} 只能在 ${PRODUCT_ID} 启动的会话里用`, true);
+  if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：${hub} 只能在 ${PRODUCT_ID} 启动的会话里用`, false);
+  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 ${PRODUCT_ID} 发的令牌`, false);
+  if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：${hub} 只能在 ${PRODUCT_ID} 启动的会话里用`, false);
   const endpointTarget = parseHubEndpoint(socketPath);
   if (endpointTarget === null) {
-    return usage(`${ENV_HUB_SOCK} 不是合法的本机守护进程地址（只允许本机 socket / 命名管道或 tcp://127.0.0.1:<端口>）`, true);
+    return usage(`${ENV_HUB_SOCK} 不是合法的本机守护进程地址（只允许本机 socket / 命名管道或 tcp://127.0.0.1:<端口>）`, false);
   }
 
   const body: Record<string, unknown> = { ...parsed.body };
@@ -100,7 +115,7 @@ export async function runHub(io: HubIo): Promise<number> {
         ? SELF_RELOAD_AGENT_PATH
         : hubPath(parsed.command);
   const outcome = await post(endpointTarget, routePath, token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
-  if (outcome.kind === "not-sent") return usage("请求没发出去：令牌或参数里有不能放进请求的字符");
+  if (outcome.kind === "not-sent") return usage("请求没发出去：令牌或参数里有不能放进请求的字符", false);
   if (outcome.kind === "unreachable") {
     io.stderr.write(`${UNREACHABLE_MESSAGE}\n`);
     return HUB_EXIT.unreachable;

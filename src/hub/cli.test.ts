@@ -159,13 +159,13 @@ describe("hub cli", () => {
     it("prints help with exit 0 and does not call the daemon", async () => {
       const r = await hub(["--help"]);
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain(`${cmd} project create --folder`);
+      expect(r.stdout).toContain("project create");
       expect(r.stdout).not.toContain("assign");
       expect(ledger.calls).toHaveLength(0);
     });
 
-    it("shows the router report summary limit in hub help", async () => {
-      const r = await hub(["help"]);
+    it("shows the router report summary limit in hub help --all", async () => {
+      const r = await hub(["help", "--all"]);
       expect(r.code).toBe(HUB_EXIT.ok);
       const report = r.stdout.split(/\n(?=  hub )/u).find((section) => section.startsWith(`  ${cmd} router report `));
       expect(report).toContain(`汇报摘要 ${ROUTER_REPORT_SUMMARY_MAX_CHARS} 字`);
@@ -449,7 +449,7 @@ describe("hub cli", () => {
     });
 
     it("the usage text lists the worker commands", async () => {
-      const r = await hub(["--help"]);
+      const r = await hub(["help", "--all"]);
       const vendorUnion = AGENT_VENDORS.join("|");
       const effortUnion = ALL_EFFORTS.join("|");
       for (const usage of [`${cmd} models [--vendor ${vendorUnion}] [--refresh]`, `${cmd} worker start --title`, `--vendor ${vendorUnion}`, `--effort ${effortUnion}`, "--max-time <时长>", "--readonly", "--caps inherit|none|custom [--allow <能力>...]", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`]) {
@@ -634,7 +634,7 @@ describe("hub cli", () => {
     });
 
     it("graph create / patch 的 usage 直接附一行 JSON 字段示例", async () => {
-      const r = await hub(["--help"]);
+      const r = await hub(["help", "--all"]);
       expect(r.stdout).toContain(`JSON：${TASK_GRAPH_CREATE_JSON_HINT}`);
       expect(r.stdout).toContain(`JSON：${TASK_GRAPH_PATCH_JSON_HINT}`);
       for (const field of ["title", "goal", "steps", "brief", "review"]) {
@@ -794,6 +794,30 @@ describe("hub cli", () => {
     });
   });
 
+  describe("hub caps", () => {
+    it.each([
+      [["caps"], {}],
+      [["caps", "--kind", "mcp"], { kind: "mcp" }],
+      [["caps", "--vendor", "claude"], { vendor: "claude" }],
+      [["caps", "--kind", "skill", "--vendor", "codex"], { kind: "skill", vendor: "codex" }],
+    ] as const)("hub %j → caps %j", async (argv, args) => {
+      const r = await hub([...argv]);
+      expect(r.code).toBe(HUB_EXIT.ok);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "caps", args }]);
+    });
+
+    it.each([
+      [["caps", "--kind", "bogus"]],
+      [["caps", "--vendor", "bogus"]],
+      [["caps", "extra"]],
+      [["caps", "--stdin"]],
+    ])("usage error: hub %j", async (argv) => {
+      const r = await hub([...argv]);
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(0);
+    });
+  });
+
   describe("hub schedule（M6）", () => {
     it("add --daily HH:MM --stdin 把任务说明（多行、带 $）原样放进 prompt", async () => {
       const prompt = "汇报昨天的进展\n用 $HOME 别展开\n";
@@ -864,7 +888,7 @@ describe("hub cli", () => {
     });
 
     it("the usage text lists the schedule commands", async () => {
-      const r = await hub(["--help"]);
+      const r = await hub(["help", "--all"]);
       for (const usage of [
         `${cmd} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin`,
         `${cmd} schedule list`,
@@ -904,14 +928,14 @@ describe("hub cli", () => {
     });
 
     it("用法里有这条命令", async () => {
-      const r = await hub(["--help"]);
+      const r = await hub(["help", "--all"]);
       expect(r.stdout).toContain(`${cmd} project setup --stdin | --clear`);
     });
   });
 
   describe("hub worker start 用法", () => {
     it("写明独立审查用单步审查图（审查步骤），不要派普通 Worker 审", async () => {
-      const r = await hub(["--help"]);
+      const r = await hub(["help", "--all"]);
       expect(r.stdout).toContain("独立审查请建单步审查图（审查步骤，写被审分支），不要派普通 Worker 审");
     });
   });
@@ -1133,12 +1157,12 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       expect(r.stderr).toContain(ENV_HUB_SOCK);
     });
 
-    it("已知命令参数错只打印对应命令（或命令组）用法 + hub help 提示，不打印无关命令；未知顶层命令或环境变量缺失打印完整 HUB_USAGE", async () => {
+    it("已知命令参数错只打印对应命令（或命令组）用法 + help 提示，不打印无关命令；未知顶层命令打印精简索引，环境变量缺失只打印一行错误", async () => {
       const workerStartErr = await hub(["worker", "start", "--stdin"], { stdin: stdinOf("任务") });
       expect(workerStartErr.code).toBe(HUB_EXIT.usage);
       expect(workerStartErr.stderr).toContain(`${cmd}：${cmd} worker start 要 --title <标题>`);
       expect(workerStartErr.stderr).toContain(`${cmd} worker start --title`);
-      expect(workerStartErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
+      expect(workerStartErr.stderr).toContain(`完整用法运行 ${cmd} help --all`);
       expect(workerStartErr.stderr).not.toContain(`${cmd} schedule add`);
       expect(workerStartErr.stderr).not.toContain(`${cmd} worker log`);
 
@@ -1146,7 +1170,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       expect(workerGroupErr.code).toBe(HUB_EXIT.usage);
       expect(workerGroupErr.stderr).toContain(`${cmd} worker start --title`);
       expect(workerGroupErr.stderr).toContain(`${cmd} worker log <编号>`);
-      expect(workerGroupErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
+      expect(workerGroupErr.stderr).toContain(`完整用法运行 ${cmd} help --all`);
       expect(workerGroupErr.stderr).not.toContain(`${cmd} schedule add`);
       expect(workerGroupErr.stderr).not.toContain(`${cmd} project create`);
 
@@ -1155,24 +1179,29 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       expect(askErr.stderr).toContain(
         `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`,
       );
-      expect(askErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
+      expect(askErr.stderr).toContain(`完整用法运行 ${cmd} help --all`);
       expect(askErr.stderr).not.toContain(`${cmd} worker start`);
 
       const helpOut = await hub(["help"]);
       expect(helpOut.code).toBe(HUB_EXIT.ok);
-      expect(helpOut.stdout).toBe(HUB_USAGE);
+      expect(Buffer.byteLength(helpOut.stdout, "utf8")).toBeLessThan(4_096);
+      const helpAll = await hub(["help", "--all"]);
+      expect(helpAll.code).toBe(HUB_EXIT.ok);
+      expect(helpAll.stdout).toBe(HUB_USAGE);
 
       const unknownTop = await hub(["frobnicate"]);
       expect(unknownTop.code).toBe(HUB_EXIT.usage);
-      expect(unknownTop.stderr).toContain(HUB_USAGE);
+      expect(unknownTop.stderr).toContain(`${cmd} help --all`);
+      expect(Buffer.byteLength(unknownTop.stderr, "utf8")).toBeLessThan(4_096);
 
       const emptyArgv = await hub([]);
       expect(emptyArgv.code).toBe(HUB_EXIT.usage);
-      expect(emptyArgv.stderr).toContain(HUB_USAGE);
+      expect(emptyArgv.stderr).toContain(`${cmd} help --all`);
 
       const missingToken = await hub(["worker", "list"], { env: { ...env, [ENV_HUB_TOKEN]: "" } });
       expect(missingToken.code).toBe(HUB_EXIT.usage);
-      expect(missingToken.stderr).toContain(HUB_USAGE);
+      expect(missingToken.stderr).toContain(ENV_HUB_TOKEN);
+      expect(Buffer.byteLength(missingToken.stderr, "utf8")).toBeLessThan(1_024);
     });
   });
 
@@ -1393,8 +1422,21 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
 
         const usage = await hub(["self-reload", "now"], { env: pmEnv });
         expect(usage.code).toBe(HUB_EXIT.usage);
-        expect(usage.stderr).toContain("self-reload [--build]");
-        expect(HUB_USAGE).toContain("self-reload [--build]");
+        expect(usage.stderr).toContain("self-reload [--build | --cancel | --status]");
+        expect(HUB_USAGE).toContain("self-reload [--build | --cancel | --status]");
+
+        const r3 = await hub(["self-reload", "--cancel"], { env: pmEnv });
+        expect(r3.code).toBe(HUB_EXIT.ok);
+        const r4 = await hub(["self-reload", "--status"], { env: pmEnv });
+        expect(r4.code).toBe(HUB_EXIT.ok);
+        expect(calls).toEqual([
+          { sessionId: 951, build: false },
+          { sessionId: 951, build: true },
+          { sessionId: 951, build: false, cancel: true },
+          { sessionId: 951, build: false, status: true },
+        ]);
+        expect((await hub(["self-reload", "--build", "--cancel"], { env: pmEnv })).code).toBe(HUB_EXIT.usage);
+        expect((await hub(["self-reload", "--cancel", "--status"], { env: pmEnv })).code).toBe(HUB_EXIT.usage);
       } finally {
         await api2.close();
       }

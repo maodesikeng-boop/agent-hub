@@ -24,10 +24,9 @@ import type { PmCaller, TaskGraphCtx, TaskGraphDbRow } from "./types.ts";
 import { sameVendorReviewHint } from "./workspace.ts";
 
 function parseCreateSpec(raw: unknown): { spec: CreateTaskGraphSpecInput; list: CreateTaskGraphNodeInput[]; sequential: boolean } {
-  const spec = parseSpecJson<CreateTaskGraphSpecInput>(raw, createSpecSchema, {
+  const spec = parseSpecJson<CreateTaskGraphSpecInput>(raw, createSpecSchema, "create", {
     empty: "任务图规格 JSON 不能为空",
     badJson: "任务图规格不是合法的 JSON",
-    badShape: "任务图规格字段格式不正确",
   });
   if (spec.steps !== undefined && spec.nodes !== undefined) throw fail("invalid", "任务图规格中 steps 和 nodes 只能传其中一个");
   const list = spec.steps ?? spec.nodes;
@@ -98,7 +97,7 @@ export function createIn(
   const goal = validateGraphGoal(spec.goal);
   assertActiveGraphQuota(g, project.id);
   const steps = list.map((n, index) => normalizeNewStep(n, index, list, sequential, caller.vendor as AgentVendor, g.modelCatalog));
-  for (const step of steps) assertStepSandboxRequest(g, caller.pmId, caller.vendor as AgentVendor, step);
+  for (const step of steps) assertStepSandboxRequest(g, caller.pmId, caller.vendor as AgentVendor, step, context?.capabilityInventory);
   const edges = edgesOf(steps, spec.edges);
   const topoOrder = validateDagAndOrder(
     steps.map((n) => n.key),

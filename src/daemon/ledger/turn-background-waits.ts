@@ -110,7 +110,7 @@ function reminderText(wait: BackgroundWaitRecord, worker: { id: number; title: s
   return `【Worker #${worker.id} · ${worker.title} 已回复，但还有 ${wait.activeCount} 个后台命令在跑（已等 ${elapsed}）】\n` +
     `模型 ${clock.format(wait.waitingSince)} 已写完回复，汇报等后台命令结束后再交。` +
     (tasks.length === 0 ? "\n" : `\n${tasks.join("\n")}\n`) +
-    `用 ${HUB_COMMAND} worker show ${worker.id} 看现场，需要时用 ${HUB_COMMAND} worker send ${worker.id} 或 ${HUB_COMMAND} worker stop ${worker.id} 处理。`;
+    `用 ${HUB_COMMAND} worker show ${worker.id} 看现场，需要时用 ${HUB_COMMAND} worker send ${worker.id} 或 ${HUB_COMMAND} worker end ${worker.id} 处理。`;
 }
 
 export function createLedgerTurnBackgroundWaits(ctx: LedgerContext, deps: TurnBackgroundWaitsDeps): LedgerTurnBackgroundWaits {
