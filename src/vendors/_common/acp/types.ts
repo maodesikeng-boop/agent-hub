@@ -191,6 +191,7 @@ export interface AcpTrackedToolCall {
   kind?: ToolKind | null;
   resultEmitted: boolean;
   pending?: boolean;
+  lastChecklistJson?: string;
 }
 
 export interface AcpDriverConfig {

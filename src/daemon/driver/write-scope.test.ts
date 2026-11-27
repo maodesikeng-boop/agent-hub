@@ -119,7 +119,7 @@ describe("WRITE_SCOPE_ENFORCERS", () => {
       expect(WRITE_SCOPE_ENFORCERS[vendor].spawnCommand(base, scope, "linux", { available: false }), vendor).toEqual({ ...base, osSandboxed: false });
     }
     // 包进去的进程不能再开自带的沙箱：agy 在命令行上关（claude 在设置文件、codex 在 sandboxPolicy 里关）
-    expect(WRITE_SCOPE_ENFORCERS.agy.ownSandboxOffArgs).toEqual(["--settings", '{"enableTerminalSandbox":false}']);
+    expect(WRITE_SCOPE_ENFORCERS.agy.ownSandboxOffArgs).toEqual(["--sandbox=false"]);
     expect(WRITE_SCOPE_ENFORCERS.claude.ownSandboxOffArgs).toEqual([]);
     expect(WRITE_SCOPE_ENFORCERS.codex.ownSandboxOffArgs).toEqual([]);
   });

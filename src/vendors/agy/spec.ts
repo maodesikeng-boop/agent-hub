@@ -135,6 +135,6 @@ export default defineVendor({
     skills: "native",
     isolation: { skill: "shared", mcp: "tool_deny", connector: "shared" },
     // agy's terminal sandbox cannot nest inside the OS sandbox.
-    ownSandboxOffArgs: ["--settings", JSON.stringify({ enableTerminalSandbox: false })],
+    ownSandboxOffArgs: ["--sandbox=false"],
   },
 });

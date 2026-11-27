@@ -130,8 +130,21 @@ function handleToolUpdate(
   const extractor = host.config.extractToolUse ?? defaultExtractAcpToolUse;
   const { name, input } = extractor(toolCall, existing);
 
-  const checklist = acpChecklistFromToolUpdate(host.vendor, name, toolCall, input);
-  if (checklist) emitAcpChecklist(host, st, proc, checklist, at);
+  const checklist = acpChecklistFromToolUpdate(
+    host.vendor,
+    name,
+    toolCall,
+    input,
+    host.config.checklist?.fromToolCall,
+  );
+  let nextChecklistJson = existing?.lastChecklistJson;
+  if (checklist) {
+    const checklistJson = JSON.stringify(checklist);
+    if (checklistJson !== nextChecklistJson) {
+      nextChecklistJson = checklistJson;
+      emitAcpChecklist(host, st, proc, checklist, at);
+    }
+  }
 
   let tracked = existing;
   if (!tracked) {
@@ -142,6 +155,7 @@ function handleToolUpdate(
       kind: toolCall.kind ?? null,
       resultEmitted: false,
       pending: toolCall.status === "pending",
+      ...(nextChecklistJson !== undefined ? { lastChecklistJson: nextChecklistJson } : {}),
     };
     trackToolBounded(proc, tracked);
     host.emit(st.id, {
@@ -157,6 +171,7 @@ function handleToolUpdate(
     const prevSig = toolStepSignature(tracked.name, tracked.input);
     tracked.name = name;
     tracked.input = input;
+    if (nextChecklistJson !== undefined) tracked.lastChecklistJson = nextChecklistJson;
     if (toolCall.kind !== undefined) tracked.kind = toolCall.kind;
     const isTerminal = toolCall.status === "completed" || toolCall.status === "failed";
     if (!tracked.resultEmitted && !isTerminal && toolStepSignature(name, input) !== prevSig) {
