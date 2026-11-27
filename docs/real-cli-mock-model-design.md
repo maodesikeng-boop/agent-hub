@@ -48,6 +48,75 @@ Build a deterministic, isolated, zero-credential test harness that runs real ven
 
 ## 2. Current state and history
 
+### Subsystem architecture walkthrough
+
+The architectural walkthrough below follows the `how` multi-angle exploration across four slices of Bellwood: (1) daemon boot, vendor runtime resolution, `ModelCatalogs`, and `prepareLaunch`, (2) OS sandboxes, write scopes, and process-ledger lifecycles, (3) vendor driver startup, resume, persona updates, and token-usage accounting, and (4) existing test harnesses (`test/e2e/harness.ts`, `test/spawn-guard.ts`, `scripts/verify-smoke.ts`, `test/tester/local-instance.ts`).
+
+#### Overview
+
+When Bellwood runs a Project Manager (PM) or Worker turn, the daemon (`src/daemon/daemon.ts`) never talks to LLM HTTP APIs directly. Instead, it resolves a vendor CLI executable and environment via `createVendorRuntimeResolver`, materializes per-session prompt/settings/skill files via `createLaunchPreparer`, and delegates stdio JSON/RPC/ACP framing to a vendor driver under `src/vendors/<vendor>/driver.ts` (all sharing `BaseSessionDriver` in `src/daemon/driver/base-driver.ts`). Each spawned CLI child process then makes outbound HTTPS calls to its vendor's model API. A mock-model test environment therefore sits **outside** Bellwood's production drivers—at the loopback HTTP/SSE boundary behind each real CLI—while strictly isolating the daemon's `HOME`, `AGENT_HUB_HOME`, vendor config homes, ports, and child process trees.
+
+#### Key concepts
+
+- **`VENDOR_LIST` and `VENDOR_PATHS`** (`src/vendors/registry.ts:11`, `src/vendors/paths-registry.ts`): Single registry of all 8 vendors (`claude`, `agy`, `codex`, `pi`, `deepseek`, `cursor`, `opencode`, `kimi`), their CLI binary names, `AGENT_HUB_<VENDOR>` env overrides, config-home env vars (`CODEX_HOME`, `PI_CODING_AGENT_DIR`, `DSH_HOME`, `KIMI_CODE_HOME`), fallback binary paths, and `credentialEnv` secret lists.
+- **`VendorRuntimeResolver`** (`src/daemon/provider-manager/runtime-resolver.ts:153-255`): Locates each vendor binary from `env[cli.envVar]` → `PATH` → `VENDOR_FALLBACK_PATHS`, and merges managed provider secrets (`provider-secrets.json`) into `resolveVendorEnv` (probes/catalogs) and `resolveManagedDriverEnv` (driver launches).
+- **`createLaunchPreparer`** (`src/daemon/launch.ts:178-325`): Writes `state/launch/<sessionId>/prompt.md`, optional `settings.json`, skills, and review hooks; computes `launchFingerprint` (deliberately excluding persona edits so persona updates append a note instead of restarting the process); constructs `WriteScope` / `ReadonlyPolicy` for Workers (returning `writeScope = null` for PMs).
+- **`BaseSessionDriver` & `spawnDetachedChild`** (`src/daemon/driver/base-driver.ts:850-891`): Merges `buildChildEnv(process.env, { ...resolvedDriverEnv, ...extraEnv })` (stripping `PARENT_SESSION_ENV` in `src/daemon/driver/protocol.ts:46-80`), applies `withChecklistEnv`, spawns via `spawnOwnedProcess` (detached process group on POSIX, Job Object on Windows), and registers every PID in `state/child-processes.json` via `trackChild`.
+- **`ModelCatalogs` & `ProjectCatalogRunner`** (`src/daemon/driver/model-catalog.ts`, `src/daemon/project-catalog/runner.ts`): Background subsystems in `daemon.ts` that probe vendor CLIs for model lists/availability and automatically dispatch background Router turns (`purpose: "catalog"`) to summarize newly created project folders.
+- **`spawn-guard` & `clean-env`** (`vitest.config.ts:15`, `test/clean-env.ts`, `test/spawn-guard.ts`): Vitest `node`-project setup hooks that strip inherited agent-session env vars before tests start and fail the entire test file in `afterAll` if any spawned child or detached process group outlives `TEST_CHILD_EXIT_WAIT_MS` (5 s).
+
+#### How it works
+
+```mermaid
+sequenceDiagram
+  participant Test as Test / Harness
+  participant Daemon as Real Bellwood Daemon (src/daemon/main.ts)
+  participant Driver as Vendor Driver (BaseSessionDriver)
+  participant CLI as Real Vendor CLI (isolated HOME)
+  participant Mock as Local Mock LLM Server (127.0.0.1:0)
+
+  Test->>Mock: createMockLlmServer(script)
+  Test->>Test: createIsolatedHome() + provision(vendor, mock.url)
+  Test->>Daemon: spawn main.ts (HOME=iso, AGENT_HUB_HOME=dataDir, AGENT_HUB_<V>=realBin, others=no-<v>)
+  Test->>Daemon: POST /api/pms + POST /api/conversations/:id/messages
+  Daemon->>Driver: ActionExecutor -> session.send -> driver.send()
+  Driver->>Driver: prepareLaunch() -> prompt.md, settings, env, writeScope
+  Driver->>CLI: spawnOwnedProcess() + trackChild()
+  CLI->>Mock: HTTP POST (/v1/messages | /v1/responses | /v1/chat/completions | :streamGenerateContent)
+  Mock-->>CLI: Scripted SSE chunks + usage
+  CLI-->>Driver: Real NDJSON / JSON-RPC / ACP stream on stdout
+  Driver-->>Daemon: DriverEvent -> SqliteLedger -> HTTP/WS state
+  Test->>Mock: expectPrefixStable(requests) + normalizeModelContext()
+  Test->>Daemon: SIGTERM / /admin/shutdown -> await exited -> check child-processes.json empty
+```
+
+1. **Daemon boot (`src/daemon/main.ts:4` → `src/daemon/daemon.ts:192-760`):** `main.ts` passes `userHome: homedir()` (which reads `HOME` on POSIX and `USERPROFILE` on Windows) into `startDaemon`. `startDaemon` resolves all paths under `AGENT_HUB_HOME`, opens SQLite, starts `AgentApi` (`run/hub.sock` or Windows named pipe), binds UI on `AGENT_HUB_PORT=0` and mesh LAN on `meshListenPort(env, port)` (`src/daemon/mesh/listen-port.ts:11-16`, returning `0` when UI port is `0` or `FUSA_MESH_PORT=0`), wires all 8 drivers via `createVendorDrivers` + `createMultiVendorDriver`, and starts `ActionExecutor`, `HandoverRunner`, and `ProjectCatalogRunner`.
+2. **Message dispatch (`src/daemon/handlers.ts:105-202` → `src/daemon/driver/base-driver.ts`):** `POST /api/conversations/:id/messages` enqueues a `session.send` action. `createSessionSendHandler` calls `driver.send(sessionId, ...)`, which lazily calls `prepareLaunch(row)`, wraps Worker commands in OS sandboxes (`spawnInWriteScope` / `wrapInReadonlyOsSandbox` in `src/daemon/driver/write-scope.ts`), spawns the real vendor CLI via `spawnOwnedProcess`, and parses real vendor stdout into `DriverEvent`s.
+3. **Outbound LLM request & streaming reply:** The real CLI reads its isolated config (`CLAUDE_CONFIG_DIR`, `CODEX_HOME/config.toml`, `PI_CODING_AGENT_DIR/models.json`, `DSH_HOME/cordis.patch.yml`, `$HOME/.gemini/antigravity-cli/settings.json`, `$XDG_CONFIG_HOME/opencode/opencode.json`, or `KIMI_CODE_HOME` + `KIMI_MODEL_BASE_URL`), connects to `http://127.0.0.1:<mockPort>` (allowed by macOS Seatbelt, Linux `bwrap`, and Windows `fusa-run.exe`), and streams the mock SSE reply back through its own real CLI stdout protocol to Bellwood's driver.
+4. **Persona updates & restart recovery (`src/daemon/driver/persona-note.ts`, `src/daemon/launch.ts:297-304`):** Updating PM persona (`PUT /api/pms/:id/persona`) increments `personaRevision` without changing `launchFingerprint`, so running drivers append a persona note on the next user turn instead of restarting. On daemon restart, `ledger.recoverAfterRestart()` restores sessions and drivers resume using the persisted `vendorSessionId`.
+
+#### Where things live
+
+- `src/daemon/main.ts`, `src/daemon/daemon.ts`: Process entry, startup/shutdown ordering, driver/catalog/mesh wiring.
+- `src/daemon/provider-manager/runtime-resolver.ts`: Executable resolution (`AGENT_HUB_<VENDOR>` → `PATH` → fallbacks) and env assembly.
+- `src/daemon/launch.ts`, `src/daemon/driver/base-driver.ts`, `src/daemon/driver/protocol.ts`: Launch file generation, fingerprint, `buildChildEnv`, process spawning, and `trackChild`.
+- `src/daemon/driver/write-scope.ts`, `src/daemon/platform/index.ts`: macOS Seatbelt (`sandbox-exec`), Linux `bwrap`, and Windows `fusa-run.exe` / MXC sandboxes.
+- `src/daemon/driver/persona-note.ts`, `src/daemon/driver/usage.ts`: Persona-change note injection (`CODEX_RESUME_REBAKES`) and `TokenUsage.cacheRead` aggregation.
+- `src/daemon/project-catalog/runner.ts`: Background project-folder summarization via Router turns.
+- `src/vendors/<vendor>/{spec,paths,driver,protocol,catalog,setup}.ts`: Per-vendor launch flags, wire parsers, catalog probes, and credential declarations.
+- `test/clean-env.ts`, `test/spawn-guard.ts`, `test/sandbox-probes.ts`, `test/e2e/harness.ts`, `scripts/verify-smoke.ts`, `test/tester/local-instance.ts`: Existing test isolation, leak guards, sandbox probes, and daemon harnesses.
+
+#### Gotchas
+
+1. **Background `ProjectCatalogRunner` steals turns on the mock server:** `daemon.ts:673-683` starts `catalogRunner` and runs `scanAtStartup`. Creating a PM with a project `folder` triggers a background Router turn (`purpose: "catalog"`, `src/daemon/project-catalog/runner.ts:75-88`) on the available vendor CLI, which hits the mock LLM server with a different system prompt and `prompt_cache_key`. The mock harness must either filter/isolate `catalog` turns (e.g., via a built-in matcher or per-session request filtering in `harness.ts`) so background catalog traffic never steals PM script turns or causes false `expectPrefixStable` failures.
+2. **macOS 104-byte Unix domain socket path cap:** `run/hub.sock` and `run/admin.sock` under `AGENT_HUB_HOME` fail `listen()` if the path exceeds 104 bytes (`test/e2e/harness.ts:482-486`, `scripts/verify-smoke.ts:41-45`). `createIsolatedHome` must anchor its default root under `shortTmp()` (`tmpdir().length <= 40 || !existsSync("/tmp") ? tmpdir() : "/tmp"`), never deep inside macOS's ~50-char `/var/folders/.../T/`.
+3. **Unpinned non-target vendors can spawn host CLIs:** Because `ModelCatalogs`, `CommandCatalogs`, and `ProjectCatalogRunner` iterate `AGENT_VENDORS`, `startRealCliDaemon` must pin every vendor *other than* the vendor under test to a nonexistent path (`join(isolated.rootDir, "no-<vendor>")`), matching `test/tester/local-instance.ts:131`.
+4. **Nested macOS Seatbelt (`sandbox-exec`) blocks Worker sandboxes inside an agent sandbox:** PM sessions have `writeScope = null` and run fine inside a macOS Worker sandbox, but Worker sessions wrap vendor CLIs in `sandbox-exec`, which macOS refuses to nest (exit 71). Any Worker real-CLI test must gate on `sandboxAllowsNestedSandbox()` from `test/sandbox-probes.ts` so `pnpm test:related` reports sandbox skips rather than silently passing or crashing.
+5. **Daemon shutdown and `spawn-guard` leak checks:** `test/spawn-guard.ts` fails the whole Vitest file if any detached child process group survives `TEST_CHILD_EXIT_WAIT_MS`. `RealCliSessionHandle.close()` must stop the daemon cleanly (`SIGTERM` on POSIX, `/admin/shutdown` named pipe on Windows), await `daemon.exited`, verify `readLedgerFile(paths.childProcessesFile)` has zero live PIDs (`scripts/verify-smoke.ts:148-149`), close the mock server, and only then delete the temp directory.
+6. **Mesh port and relay isolation:** Daemon tests must set `AGENT_HUB_PORT=0`, `FUSA_MESH_PORT=0`, and `FUSA_RELAY_URL=http://127.0.0.1:1` so a test daemon never takes port `4317`/`4320` from a developer's live Bellwood instance and never dials the production Cloudflare relay (`src/daemon/daemon.ts:728-730`).
+7. **Vendor-specific persona-on-resume divergence:** Live-session persona edits append a note on all vendors (`src/daemon/launch.ts:297`), preserving `system`. Across a daemon restart, `claude` and `codex` (`CODEX_RESUME_REBAKES = false` in `src/daemon/driver/persona-note.ts:4`) keep the original system prompt and append a note, whereas `deepseek` (`rebakesPersonaOnResume: true` in `src/vendors/deepseek/driver.ts:367`) re-bakes `personaSuffix` into `system` on resume.
+8. **Codex `explicitDefaultModel` and OpenCode `OPENCODE_CONFIG_CONTENT` overwrite:** `codex` triggers a second `codex app-server` catalog probe when `defaultModel` is `null` (`src/daemon/daemon.ts:492-496`), so `startRealCliDaemon` always passes the provisioned `model` explicitly. `src/vendors/opencode/driver.ts:76-79` overwrites `OPENCODE_CONFIG_CONTENT` on every launch, so OpenCode's mock provider must live in `$XDG_CONFIG_HOME/opencode/opencode.json`.
+
 ### Design history
 
 Bellwood's testing evolved in three separate layers (`docs/ai-tester-design.md:37-44`, `test/fake-claude/fake-claude.ts:1-31`, `.github/workflows/windows.yml:138-160`):

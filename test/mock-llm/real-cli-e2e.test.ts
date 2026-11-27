@@ -46,7 +46,7 @@ describe("real vendor CLI + local mock LLM through real Bellwood daemon", () => 
       expect(t1.replies.join("\n")).toContain(`mock-turn-1-${vendor}`);
       expect(t2.replies.join("\n")).toContain(`mock-turn-2-${vendor}`);
 
-      const reqs = handle.mock.requests();
+      const reqs = handle.pmRequests();
       expect(reqs.length).toBeGreaterThanOrEqual(2);
       expectPrefixStable(reqs);
 
@@ -78,7 +78,7 @@ describe("real vendor CLI + local mock LLM through real Bellwood daemon", () => 
       const r2 = await handle.sendAndWait("second message", { timeoutMs: MOCK_LLM_CLI_TURN_TIMEOUT_MS });
       expect(r2.replies.join("\n")).toContain("after-restart");
 
-      expectPrefixStable(handle.mock.requests(), { requireCacheKeyStable: candidate === "codex" });
+      expectPrefixStable(handle.pmRequests(), { requireCacheKeyStable: candidate === "codex" });
     },
     MOCK_LLM_CLI_TURN_TIMEOUT_MS * 2,
   );
@@ -107,7 +107,7 @@ describe("real vendor CLI + local mock LLM through real Bellwood daemon", () => 
 
       const r2 = await handle.sendAndWait("turn 2", { timeoutMs: MOCK_LLM_CLI_TURN_TIMEOUT_MS });
       expect(r2.replies.join("\n")).toContain("reply-after-persona");
-      expectPrefixStable(handle.mock.requests());
+      expectPrefixStable(handle.pmRequests());
     },
     MOCK_LLM_CLI_TURN_TIMEOUT_MS * 2,
   );

@@ -170,6 +170,8 @@ export interface RealCliSessionHandle {
   readonly client: Client;
   readonly pmId: number;
   readonly conversationId: number;
+  /** Recorded mock requests belonging to this PM session, excluding background Router catalog turns. */
+  pmRequests(): readonly RecordedLlmRequest[];
   sendAndWait(text: string, options?: { timeoutMs?: number }): Promise<{ messageId: number; replies: readonly string[] }>;
   restartDaemon(): Promise<void>;
   close(): Promise<void>;

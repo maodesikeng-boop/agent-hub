@@ -24,7 +24,7 @@ export function buildIsolatedEnv(_input: {
 
 /**
  * Precondition: optional root does not overlap realHome.
- * Postcondition: creates a fresh temporary root with isolated homeDir, dataDir, and workDir and returns an IsolatedHomeConfig whose cleanup() removes the temp tree.
+ * Postcondition: creates a fresh temporary root (using a short base on POSIX so Unix socket paths stay under 104 bytes) with isolated homeDir, dataDir, and workDir, and returns an IsolatedHomeConfig whose cleanup() removes the temp tree.
  */
 export function createIsolatedHome(_options?: {
   prefix?: string;

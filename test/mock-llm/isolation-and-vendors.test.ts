@@ -42,13 +42,16 @@ describe("HOME isolation and egress safety", () => {
     expect(() => assertIsolatedHome(join(real, ".agent-hub"), real)).toThrow(/real home|isolated/i);
   });
 
-  it("creates an isolated home outside real HOME and removes it on cleanup", () => {
+  it("creates an isolated home outside real HOME with POSIX socket paths under 104 bytes and removes it on cleanup", () => {
     const iso = createIsolatedHome({ prefix: "bw-iso-test-" });
     createdHomes.push(iso);
     expect(() => assertIsolatedHome(iso.homeDir)).not.toThrow();
     expect(existsSync(iso.homeDir)).toBe(true);
     expect(existsSync(iso.dataDir)).toBe(true);
     expect(existsSync(iso.workDir)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(Buffer.byteLength(join(iso.dataDir, "run", "admin.sock"))).toBeLessThan(104);
+    }
 
     const root = iso.rootDir;
     iso.cleanup();
