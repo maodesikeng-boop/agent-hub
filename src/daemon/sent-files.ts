@@ -45,6 +45,8 @@ export interface ShareScope {
   roots: string[];
   dataHome: string;
   dataExceptions: string[];
+  /** Session-private directories inside dataHome (such as a PM's own memory dir) that bypass DATA_DIR_READABLE_ENTRIES; never populated for Workers. */
+  privateDataExceptions?: string[];
   io?: { slots: SentFileIoSlots; owner: SessionId };
 }
 

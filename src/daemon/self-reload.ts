@@ -41,6 +41,11 @@ export interface SelfReloadRequest {
 
 export interface SelfReloadController {
   request(input: SelfReloadRequest): { text: string; status: SelfReloadStatus };
+  /**
+   * Postcondition: aborts any pending web build and drain timers and transitions to idle, returning idempotently when already idle.
+   * Throws LedgerRequestError("conflict") when state is already restarting or the controller is closed.
+   */
+  cancel(input: { by: string }): { text: string; status: SelfReloadStatus };
   status(): SelfReloadStatus;
   close(): void;
 }
@@ -203,6 +208,9 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
         text: `${head}${buildNote}。所有会话这一轮收尾、总助没有在途分派后再静默 ${quietMs / 1000} 秒就重启。\n${describeSelfReload(current)}`,
         status: current,
       };
+    },
+    cancel(_input) {
+      throw new Error("Not implemented");
     },
     status,
     close() {

@@ -853,6 +853,10 @@ export interface TaskNode {
   model?: string | null;
   effort?: string | null;
   readonly?: boolean;
+  /** External capability mode configured on this step; populated only on detail views, never in slim snapshots. */
+  capabilities?: import("./pm-capabilities.ts").WorkerCapabilities;
+  /** Whether this step requests outer-sandbox bypass for Computer Use; populated only on detail views. */
+  noOuterSandbox?: boolean;
   maxTimeMs?: number | null;
   confirm?: boolean;
   review?: boolean;
