@@ -34,11 +34,11 @@ import {
 } from "../../shared/limits.ts";
 import {
   AGENT_VENDORS,
-  DEFAULT_AGENT_VENDOR,
   checkAgentSetting,
   checkEffort,
   checkModel,
   checkModelEffort,
+  defaultPmVendor,
   effortLabel,
   isAgentVendor,
   normalizeEffortInput,
@@ -548,7 +548,7 @@ export function createLedgerPersona(
     if (input.look !== undefined) validLook(input.look);
     const mode = validMode(input.mode);
     validPersonaText(input.persona);
-    const agent = validAgent({ vendor: input.vendor ?? DEFAULT_AGENT_VENDOR, model: input.defaultModel, effort: input.effort }, ctx.modelCatalog);
+    const agent = validAgent({ vendor: input.vendor ?? defaultPmVendor(ctx.vendorAvailability), model: input.defaultModel, effort: input.effort }, ctx.modelCatalog);
     const dup = db.get<{ id: number; archived_at: number | null }>(
       "SELECT p.id, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id WHERE p.name = ?",
       name,
