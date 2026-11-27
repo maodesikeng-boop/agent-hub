@@ -1,9 +1,9 @@
-// 回放包的守卫（设计第 7 节、任务说明的隐私要求）：总共不超过 5MB、单个文件不超过 500KB；不含本机用户名路径、邮箱（GitHub 公开的
-// noreply 地址除外：补丁里的提交人就是它，去掉提交号就对不上了）、令牌。
+// Guards replay fixture size caps and privacy hygiene (no local user paths, emails, or tokens).
 import { execFileSync as run } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { EVAL_REPLAY_MAX_FILE_BYTES, EVAL_REPLAY_MAX_TOTAL_BYTES } from "./limits.ts";
 import { REPLAY_DIR, scenarioById } from "./scenarios.ts";
@@ -40,7 +40,7 @@ describe("回放包", () => {
 // 托盘 Worker 回放时在基准提交上打补丁，提交号要和汇报里写的一样（da36ed7），项目经理去查才对得上。
 // 要仓库历史里有基准提交（CI 的浅克隆没有，跳过；本机全量克隆里跑）。
 
-const repoRoot = new URL("../../", import.meta.url).pathname;
+const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const tray = scenarioById("s3a-tray");
 const hasBase = (() => {
   try {

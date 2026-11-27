@@ -1,4 +1,4 @@
-// 评测自己的自测（设计 4.5，不花模型的钱）：剧本项目经理照着期望行为（正例）、故意做错（反例）、什么都不做三种敲 hub 和 gh。
+// Zero-cost scripted PM fixtures (positive, negative, nothing) exercising the full trial pipeline.
 // 正例全部检查必须过，反例对应的检查必须不过，什么都不做时“要求有”的检查必须不过。用的是和真模型同一条试跑路径（trial.ts）。
 import { HUB_COMMAND } from "../../src/shared/index.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
@@ -102,7 +102,7 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
     }),
     nothing: () => ({ defaultTurn: say("好的。") }),
   },
-  // ---- 防过度建图（docs/orchestration-skill-design.md 第 8 节）----
+  // Proportionate task-graph scenarios (K1-K5).
   "k1-install": {
     // 正例：一个 Worker 从安装做到冒烟测试；它交回“等你授权”的汇报，转给用户，用户授权后转回给它
     positive: () => ({

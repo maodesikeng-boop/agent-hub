@@ -18,7 +18,8 @@ const real = plan.pm.mode === "real";
 
 describe.concurrent(real ? "编排验证（真 claude 项目经理）" : "编排验证（剧本项目经理）", () => {
   for (const t of plan.trials) {
-    it(`${t.scenario} @ ${t.version.label}`, async () => {
+    const suffix = t.trialIndex === undefined ? "" : ` #${t.trialIndex}`;
+    it(`${t.scenario} @ ${t.version.label}${suffix}`, async () => {
       const r = await runTrial({
         scenario: scenarioById(t.scenario),
         version: t.version,

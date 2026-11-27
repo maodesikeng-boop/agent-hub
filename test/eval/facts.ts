@@ -1,5 +1,5 @@
-// 从一次试跑的账本（只读打开）、gh 替身记录、只记录替身的记录里取事实（设计 4.1）。检查只看这里出来的 Facts。
-// 图的形状经这一个函数读：以后第 4 步改表结构，只改这里。
+// Extracts immutable evaluation facts from a trial ledger, gh shim log, and recorded tool calls.
+// Graph structure is read in one place so schema updates stay localized here.
 import { DatabaseSync } from "node:sqlite";
 import { readJsonLog } from "../append-log.ts";
 import type { Facts, FactGraph, FactMessage, FactWorker, GhCall, RecordedCall, TrialMetrics } from "./types.ts";
@@ -138,22 +138,33 @@ export function readFacts(input: FactsInput): Facts {
   }
 }
 
-/** 每次试跑都记、不设过不过的数（设计 4.2 末尾）：出场轮数、工具调用、hub 命令、提问、用量、用时。 */
+function hasTable(db: DatabaseSync, name: string): boolean {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+}
+
+function countTurnsForSessions(db: DatabaseSync, inList: string, pmConversationId: number): number {
+  if (hasTable(db, "turns")) {
+    const turnRow = db.prepare(`SELECT count(*) AS n FROM turns WHERE session_id IN (${inList})`).get() as { n: number };
+    if (Number(turnRow.n) > 0) return Number(turnRow.n);
+  }
+  if (hasTable(db, "session_steps")) {
+    const stepTurns = db
+      .prepare(`SELECT count(*) AS n FROM session_steps WHERE kind = 'turn_started' AND session_id IN (${inList})`)
+      .get() as { n: number };
+    if (Number(stepTurns.n) > 0) return Number(stepTurns.n);
+  }
+  const fallback = db
+    .prepare("SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND sender IN ('user', 'system') AND status IN ('processing', 'replied', 'stopped')")
+    .get(pmConversationId) as { n: number };
+  return Number(fallback.n);
+}
+
+/** Metrics recorded for every trial without gating: turns, tool calls, hub calls, asks, token usage, duration. */
 export function readMetrics(dbFile: string, facts: Facts): TrialMetrics {
   const db = openTrialDb(dbFile);
   try {
     const inList = facts.pmSessionIds.length > 0 ? facts.pmSessionIds.join(",") : "-1";
-    const stepTurns = db.prepare(`SELECT count(*) AS n FROM session_steps WHERE kind = 'turn_started' AND session_id IN (${inList})`).get() as { n: number };
-    const turns =
-      Number(stepTurns.n) > 0
-        ? Number(stepTurns.n)
-        : Number(
-            (
-              db
-                .prepare("SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND sender IN ('user', 'system') AND status IN ('processing', 'replied', 'stopped')")
-                .get(facts.pmConversationId) as { n: number }
-            ).n,
-          );
+    const turns = countTurnsForSessions(db, inList, facts.pmConversationId);
     const usages = db.prepare(`SELECT token_usage FROM agent_sessions WHERE id IN (${inList})`).all() as Array<{ token_usage: string | null }>;
     const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     for (const { token_usage } of usages) {
@@ -177,18 +188,15 @@ export function readMetrics(dbFile: string, facts: Facts): TrialMetrics {
   }
 }
 
-/** PM 的轮数（事件循环里查上限用）。 */
+/** PM turn count for loop-cap enforcement, reading the 0058 turns table first with pre-0058 fallback. */
 export function countPmTurns(dbFile: string, pmConversationId: number): number {
   const db = openTrialDb(dbFile);
   try {
-    const row = db
-      .prepare("SELECT count(*) AS n FROM session_steps WHERE kind = 'turn_started' AND session_id IN (SELECT id FROM agent_sessions WHERE role = 'pm' AND conversation_id = ?)")
-      .get(pmConversationId) as { n: number };
-    if (Number(row.n) > 0) return Number(row.n);
-    const fallback = db
-      .prepare("SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND sender IN ('user', 'system') AND status IN ('processing', 'replied', 'stopped')")
-      .get(pmConversationId) as { n: number };
-    return Number(fallback.n);
+    const pmSessions = db
+      .prepare("SELECT id FROM agent_sessions WHERE role = 'pm' AND conversation_id = ?")
+      .all(pmConversationId) as Array<{ id: number }>;
+    const inList = pmSessions.length > 0 ? pmSessions.map((r) => num(r.id)).join(",") : "-1";
+    return countTurnsForSessions(db, inList, pmConversationId);
   } finally {
     db.close();
   }

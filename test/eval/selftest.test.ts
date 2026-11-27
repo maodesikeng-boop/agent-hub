@@ -1,4 +1,4 @@
-// 编排验证的自测（docs/orchestration-eval-design.md 4.5）：剧本项目经理走和真模型同一条试跑路径（起真守护进程、假 Worker 回放、
+// Self-test running scripted PMs through the full trial pipeline (real daemon, Worker replay, gh shim, ledger facts).
 // gh 替身、查账本），不花模型的钱，进 CI。
 // - 正例：全部检查必须过（不适用也不行）；只在前提成立时判的（kind: guard，如 L1）可以不适用、不能不过，只记录的（kind: record，如 L2）不看；
 // - 反例：对应的检查必须不过；

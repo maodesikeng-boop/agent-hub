@@ -1,20 +1,8 @@
-// 第一版的 3 个场景（docs/orchestration-eval-design.md 第 2 节；用户 11-12 拍板：3 个真实场景、只跑 Claude、只用确定性检查）：
-// - S3a 托盘：真实案例 Worker #453（11-11 21:28～22:36，消息 #49295、#49299、#49435，提交 da36ed7，PR 288）；
-// - S5a CI 镜像故障：同一个托盘 PR 的 4 路检查在装 bubblewrap、socat 时解析不了 Ubuntu 软件源（11-11 22:42～23:15，
-//   消息 #49679、#49726、#49842；run 43040062881 两次的真实失败日志）；
-// - H2 验收不读代码：11-11 23:17 真实的那次习惯改动（性格设定改动记录 #118 新加的那一条）。
-// 防过度建图的 5 个场景（docs/orchestration-skill-design.md 第 8 节：简单活不建图、一段活只派一个 Worker、复杂活会加载任务图手册）：
-// - K1 装命令行工具并接上（复现真实案例：装 CLI 与插件、等浏览器授权、接 Pi 冒烟测试；已脱敏为开源示例工具 pi-bridge）；
-// - K2 改本机配置（复现同一个对话里过滤暴露给 Pi 的模型并刷新 hub 列表；PM 自己做完）；
-// - K3 合 PR（11-10 17:33:14，消息 #34762，PR 238）；
-// - K4 升级本机的命令行工具（11-11 09:46，消息 #40114，Worker 388）；
-// - K5 修一个界面 bug（11-12 09:59，消息 #50200，Worker 463，PR 295）。
-// 现有三个场景挂上 L1（建了图就要先加载手册），S3a 再挂 T1（不建图）。装软件、改本机配置不能真做：pi-bridge、curl、pi、npm……
-// 用命令替身回放输出（replay/*/stubs.json；真实案例中的私有桥接细节与一次性授权参数均已脱敏为公开开源示例）。
-// 被测项目经理的性格设定一律是中性的空设定（NEUTRAL_PERSONA）：用户 11-12 说“肯定不能你来跑，你有我们的上下文”，
-// 现任项目经理的性格设定里已经写着考点，不能拿来用；用户的习惯只由场景在考的时候注入（H2 用资料页的接口改性格设定）。
+// Orchestration replay scenarios (S3a, S5a, H2, K1-K5) wrapped into the unified five-dimension catalog.
+// The evaluated PM uses a neutral empty persona so only scenario-injected user habits apply.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   askBeforeScope,
   checkedThenMerged,
@@ -44,7 +32,7 @@ import {
 } from "./checks.ts";
 import type { AskSeen, CommandStubs, GhAttempt, GhPr, GhReplay, Scenario, ScenarioContext, WorkerReplay } from "./types.ts";
 
-export const REPLAY_DIR = new URL("./replay/", import.meta.url).pathname;
+export const REPLAY_DIR = fileURLToPath(new URL("./replay/", import.meta.url));
 const read = (rel: string) => readFileSync(join(REPLAY_DIR, rel), "utf8");
 
 /** 被测项目经理的性格设定：空的，不带任何用户习惯（见文件开头）。 */
@@ -139,7 +127,7 @@ function trayDemand(ctx: ScenarioContext): string {
   return `${read("tray/prelude.md").replaceAll("{PRELUDE_SHOTS}", ctx.preludeShotsDir)}降到约三分之一屏（推荐）`;
 }
 
-/** 剧本里没有的提问：用户统一按推荐答（设计 3.3），记一次“多问了”。 */
+/** Unscripted asks fall back to the recommended option and are counted as extra asks. */
 function answerByRecommendation(ask: AskSeen): { text: string; scripted: boolean } {
   const recommended = ask.options.find((o) => o.includes("推荐")) ?? ask.options[0];
   return { text: recommended ?? "按你的推荐来", scripted: false };
@@ -153,7 +141,6 @@ const TRAY_CHECKS = [
   quotesKept(TRAY_SPEC),
   noDiffRead(TRAY_SPEC),
   lookedAtEvidence(TRAY_SPEC),
-  // 一段活：不建图（docs/orchestration-skill-design.md 第 8.2 节）；建了的话建图前要加载手册
   noGraph(),
   loadedBeforeGraph(),
 ];
@@ -378,7 +365,7 @@ export const SCENARIOS: readonly Scenario[] = [
     gh: ghReplay([PR_286, trayPr([{ status: "pass" }])]),
     shots: { dir: "tray/report-shots", preludeDir: "tray/prelude-shots" },
     answer: answerByRecommendation,
-    // 托盘 Worker 开工后、汇报之前（设计 3.5 的 T3），经资料页的接口在性格设定里加上 11-11 23:17 真实加的那一条
+    // Append the habit rule via the persona API after the Worker starts and before its report is released.
     injectOnWorkerStart: { worker: "托盘", personaAppend: read("habit/persona-line.md") },
     checks: [dispatched(TRAY_SPEC), personaReachedPm(), noDiffRead(TRAY_SPEC), lookedAtEvidence(TRAY_SPEC), loadedBeforeGraph()],
   },

@@ -1,4 +1,4 @@
-// 编排验证的隔离（docs/orchestration-eval-design.md 3.7）：评测里的项目经理是真模型、能在本机跑任意命令，挡住这几样——
+// Real-model PM sandbox isolation and command shims for replay trials.
 // 1. 真账本、真守护进程：每次试跑独立的数据目录（AGENT_HUB_HOME）、端口 0；继承来的 HUB_TOKEN、HUB_SOCK、AGENT_HUB_* 先清掉；
 //    真模型项目经理的 macOS 沙箱里，真数据目录（~/.agent-hub）整个禁读禁写，连不上真守护进程的 hub.sock 和默认端口。
 // 2. 真仓库、真 PR：主文件夹是基准提交的一份克隆，远端是本地裸仓库（gitconfig 的 insteadOf 把 GitHub 地址改写到它）；
