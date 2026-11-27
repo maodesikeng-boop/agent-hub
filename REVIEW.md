@@ -13,6 +13,13 @@ git show origin/main:REVIEW.md    # without an origin remote: git show main:REVI
 
 A PR that edits `REVIEW.md` cannot change the rules it is reviewed against. If `main` has no `REVIEW.md`, skip this layer.
 
+## Before you review
+
+Run both checks before grading any diff or issuing a verdict:
+
+1. **Match the PR head and confirm a clean working tree.** Compare `git rev-parse HEAD` against the PR head commit and check `git status`. If `HEAD` does not match the PR head, or the working tree has unrelated edits or untracked artifacts, stop right away. Report a problem (status "有问题") and state that the branch is `not reviewable` or `unable to review`, naming the commit mismatch or dirty paths so the Project Manager can fix the checkout. Never issue `PASS` or `FAIL` on a mismatched or dirty checkout.
+2. **Wait for cloud CI when a PR exists.** If the branch has a PR, run `node scripts/wait-checks.ts <PR>` (never `gh pr checks --watch`, and do not rely on `gh pr checks` alone) before issuing a verdict. If no PR exists yet, run `pnpm test:related` locally instead.
+
 ## Match rules by path
 
 1. List the changed files with `git diff --name-only origin/main...HEAD`.
@@ -27,6 +34,8 @@ Start each finding in the report's "问题" field with one tag:
 - `[Important]`: a real crash, a security or sandbox escape, data loss or corruption, or a broken contract between two components. Only an `[Important]` finding can make the verdict `FAIL`.
 - `[Nit]`: naming, style, or a small detail. Note it in the report's "问题" field and judge `PASS`, never `FAIL`.
 - `[Pre-existing]`: the problem is already on `main` and this PR did not add it. Note it in the report's "问题" field and judge `PASS`, never `FAIL`.
+
+If a pre-review check in "Before you review" fails because the checkout does not match the PR head or the working tree is dirty, do not emit `FAIL`. Stop, report a problem, and mark the review as `not reviewable` or `unable to review`.
 
 Each review round runs logic review and real-environment review in parallel, except PRs that change only documentation and repository rules (which run logic review only). Wait for both tracks to finish before summarizing so all findings go into one fix pass. One round counts as one run of each track. A follow-up review (round 2 or later) checks the open `[Important]` findings from the last round and the diff since the last reviewed commit. It does not review untouched files again. After 3 rounds with an open `[Important]` finding, stop and have the Project Manager escalate to the user with a decision card.
 
