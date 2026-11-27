@@ -61,16 +61,16 @@ export const listEndedWorktreeWorkers = (w: WorkersCtx): EndedWorktreeCandidate[
 
 const activeGraphStillUsesWorktree = (w: WorkersCtx, workerIds: readonly WorkerId[]): boolean => {
   if (workerIds.length === 0) return false;
-  const steps = w.db.all<{ graph_id: TaskGraphId; node_key: TaskNodeKey }>(
-    `SELECT DISTINCT n.graph_id, n.node_key FROM task_graphs g JOIN task_graph_steps n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
+  const steps = w.db.all<{ graph_id: TaskGraphId; project_id: number; node_key: TaskNodeKey }>(
+    `SELECT DISTINCT n.graph_id, g.project_id, n.node_key FROM task_graphs g JOIN task_graph_steps n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
       WHERE g.status = 'active' AND j.value IN (${workerIds.map(() => "?").join(", ")})`,
     ...workerIds,
   );
   const graphs = new Map<TaskGraphId, GraphMaps>();
-  return steps.some(({ graph_id, node_key }) => {
+  return steps.some(({ graph_id, project_id, node_key }) => {
     const maps = graphs.get(graph_id) ?? buildGraphMaps(w.db, graph_id);
     graphs.set(graph_id, maps);
-    return graphStillUsesStepWorktree(maps, node_key);
+    return graphStillUsesStepWorktree(w.db, project_id, maps, node_key);
   });
 };
 

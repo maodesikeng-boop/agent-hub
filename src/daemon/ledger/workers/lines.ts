@@ -7,7 +7,6 @@ import { toMessage } from "../rows.ts";
 import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
 import { workerSession } from "./ctx.ts";
 import { directChatSummary } from "./direct-chat.ts";
-import { taskDedupeKey } from "./text.ts";
 import type { WorkersCtx } from "./types.ts";
 
 export type WorkerLine = {
@@ -90,12 +89,7 @@ export function stopQueued(w: WorkersCtx, p: Pending, worker: WorkerDbRow): void
   }
 }
 
-export function enqueueWorkerTask(w: WorkersCtx, p: Pending, worker: WorkerDbRow): void {
-  const session = workerSession(w, worker);
-  const first = w.db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id))!;
-  w.enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: first.id, source: "user" } });
-}
-
+/** Every start path sends all PM messages held before the first turn (brief, decisions, rejections) in id order. */
 export function enqueueFirstTurn(w: WorkersCtx, p: Pending, worker: WorkerDbRow): void {
   const session = workerSession(w, worker);
   const queued = w.db.all<{ id: number }>(

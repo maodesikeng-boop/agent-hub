@@ -7,8 +7,8 @@ import { systemEventOf, type ConversationId, type Message, type MessageId, type 
 import type { HubResult } from "../../shared/hub.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
-import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
-import { createReviewObserver, createWorktreeCreateHandler } from "../handlers.ts";
+import { addWorktree, resolveBranchTip } from "../git/index.ts";
+import { createWorktreeCreateHandler } from "../handlers.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
@@ -122,16 +122,11 @@ export function createPmFrictionFixture(options: { osSandboxed?: boolean; readon
   const lin = createPm("林经理");
   enqueued.length = 0;
 
-  const observeReview = createReviewObserver({
-    resolveCommit: (f, r) => resolveCommit(f, r),
-    remoteBranchHead: (r, b) => remoteBranchHead(r, b),
-    probePr: async () => null,
-  });
-
   const startWorktree = async (workerId: WorkerId): Promise<void> => {
     const handler = createWorktreeCreateHandler({
       ledger,
-      observeReview,
+      resolveTip: resolveBranchTip,
+      probePr: async () => null,
       addWorktree,
       setup: {
         start: (req) => {

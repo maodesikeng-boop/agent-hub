@@ -48,6 +48,7 @@ export interface LedgerWorkersTaskGraphHooks {
   isWorkerSlotHeldElsewhere: (workerId: WorkerId) => boolean;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
   workerGraphWorkspacePlan: (workerId: WorkerId) => StepWorkspacePlan | undefined;
+  workerGraphUpstreamCommit: (workerId: WorkerId) => string | null;
   workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;
 }
 

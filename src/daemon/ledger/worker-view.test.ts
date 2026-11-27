@@ -240,7 +240,7 @@ describe.each(AGENT_VENDORS)("%s 的 Worker", (vendor) => {
     const w = startWorker(vendor, { noWorktree: false });
     const text = show(w).text;
     expect(text).toContain("：准备中");
-    expect(text).toContain("现在：worktree 还没建好，没开工");
+    expect(text).toContain("现在：worktree 还没建好或还在同步，没开工");
     expect(text).toContain("分支 hub/");
   });
 

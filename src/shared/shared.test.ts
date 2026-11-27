@@ -152,7 +152,7 @@ describe("动作", () => {
         expectTypeOf(row.params).toEqualTypeOf<SessionEndParams>();
         return -row.params.generation;
       }
-      if (row.type === "worktree.create") {
+      if (row.type === "worktree.create" || row.type === "worktree.sync") {
         expectTypeOf(row.params).toEqualTypeOf<WorktreeCreateParams>();
         return row.params.workerId * 100;
       }
@@ -787,7 +787,7 @@ describe("M3：动作", () => {
       sessionId: number;
       repo: string;
       worktreePath: string;
-      checkout: { kind: "branch"; branch: string; base?: string } | { kind: "review"; branch: string };
+      checkout: { kind: "branch"; branch: string; base?: string; expected?: string } | { kind: "review"; branch: string; expected?: string };
       status: "open" | "ended";
       setupCommand: string | null;
     }>();
