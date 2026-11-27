@@ -20,13 +20,23 @@ Check that each quoted user sentence in Section 1 maps to a scenario in Section 
 
 ### Decisions needed
 
-Goal 1 (the New PM dialog defaults to the first usable vendor, and shows where to install or sign in when none is usable) is already approved. Three fixes change what the user sees beyond that dialog. Each one applies the same rule, and each is recommended.
+None open. Goal 1 (the New PM dialog defaults to the first usable vendor, and shows where to install or sign in when none is usable) was approved with the task. The user settled D1–D3 on decision card #448, choosing option A for all three:
 
-**D1. The PM a fresh install creates follows the same rule.** Today the daemon creates `项目经理` on Claude on its first start, whatever is installed. On a Codex-only computer the user's first message to it shows `找不到 Claude  Manage providers…` (`/tmp/default-vendor/before/codex/1440-06-default-pm-send.png`). Under D1 that PM is created on Codex and answers. The first start waits at most `VENDOR_RECHECK_BUDGET_MS` (4 s) for vendor probes so that a signed-out Claude does not win over a signed-in Codex. This wait happens once per data directory. Options: (A) follow the rule and wait for probes (recommended); (B) follow the rule using only the install check, with no wait, so an installed but signed-out vendor can still win; (C) keep Claude.
+> 定案：A 三条都按推荐 A（D1 首次启动自动建的默认 PM 选第一个能用的厂商、最多等 4 秒探测一次；D2 不指定厂商建 PM 的所有入口都按这条规则，指定厂商的照旧；D3 一家都不能用时首次打开自动弹 Settings → Providers）。
 
-**D2. A PM created without a vendor follows the same rule.** This covers `POST /api/pms` without `vendor`, the Router's `hub dispatch project-create` without `--vendor`, and project creation that starts from Feishu through the Router. Today all of these create a Claude PM (measured: `/tmp/default-vendor/before/codex/api-create-pm-no-vendor.txt`). Under D2 they create a Codex PM on a Codex-only computer. A vendor the caller names is still used as given. Options: (A) follow the rule (recommended); (B) keep Claude.
+| Decision | Settled rule | Acceptance tests |
+|---|---|---|
+| D1 | The PM created on first start uses `defaultPmVendor`, after waiting at most `VENDOR_RECHECK_BUDGET_MS` (4 s) for one round of probes. | `first-run-pm.test.ts`: all 7 tests |
+| D2 | Every entry point that creates a PM without naming a vendor uses `defaultPmVendor`. A named vendor is used as given. | `pm-default-vendor.test.ts`: createPm, `POST /api/pms` body, and Router `project-create` (the Feishu path) without a vendor, plus a named vendor kept as given |
+| D3 | When no provider is usable, the first launch opens Settings → Providers once per browser, even with the daemon's PM present. | `first-run-providers.test.tsx`: both tests |
 
-**D3. Settings → Providers opens on first launch when nothing is usable.** This behavior is supposed to exist already, but it never fires, because its trigger requires zero PMs and the daemon always creates one on first start. Measured in both isolated environments: no dialog opened on first load (`/tmp/default-vendor/before/none/notes.txt`). Under D3 the first launch on a computer with no usable provider opens Providers once per browser, as `src/web/components/ProvidersSettings.test.tsx` already describes. Options: (A) drop the zero-PM condition (recommended); (B) leave it unchanged.
+The options considered for each decision follow.
+
+**D1. The PM a fresh install creates follows the same rule.** Today the daemon creates `项目经理` on Claude on its first start, whatever is installed. On a Codex-only computer the user's first message to it shows `找不到 Claude  Manage providers…` (`/tmp/default-vendor/before/codex/1440-06-default-pm-send.png`). Under D1 that PM is created on Codex and answers. The first start waits at most `VENDOR_RECHECK_BUDGET_MS` (4 s) for vendor probes so that a signed-out Claude does not win over a signed-in Codex. This wait happens once per data directory. Options: (A, chosen) follow the rule and wait for probes; (B) follow the rule using only the install check, with no wait, so an installed but signed-out vendor can still win; (C) keep Claude.
+
+**D2. A PM created without a vendor follows the same rule.** This covers `POST /api/pms` without `vendor`, the Router's `hub dispatch project-create` without `--vendor`, and project creation that starts from Feishu through the Router. Today all of these create a Claude PM (measured: `/tmp/default-vendor/before/codex/api-create-pm-no-vendor.txt`). Under D2 they create a Codex PM on a Codex-only computer. A vendor the caller names is still used as given. Options: (A, chosen) follow the rule; (B) keep Claude.
+
+**D3. Settings → Providers opens on first launch when nothing is usable.** This behavior is supposed to exist already, but it never fires, because its trigger requires zero PMs and the daemon always creates one on first start. Measured in both isolated environments: no dialog opened on first load (`/tmp/default-vendor/before/none/notes.txt`). Under D3 the first launch on a computer with no usable provider opens Providers once per browser, as `src/web/components/ProvidersSettings.test.tsx` already describes. Options: (A, chosen) drop the zero-PM condition; (B) leave it unchanged.
 
 ## 1. User goal
 
@@ -62,7 +72,7 @@ The isolated environments ran a real daemon from this commit with `AGENT_HUB_HOM
 |---|---|---|---|---|
 | 1 | Web New PM dialog | `src/web/components/NewPmDialog.tsx:66` uses `DEFAULT_AGENT_SETTING` | [Measured] Codex only: the Provider row reads `Claude Code (Not installed)`, Create stays disabled with a valid name, and the reason sits inside the collapsed `More settings` (`before/codex/1440-03-…`, `390-03-…`, `1440-04-…`). Nothing installed: same, with no pointer to Providers (`before/none/1440-04-…`). | Default from `newPmDefaultVendor`, following catalog refreshes until the user touches Provider. When the picked provider cannot run, show a line above Create with `Manage providers…` and expand `More settings`. |
 | 2 | First start of the daemon | `src/daemon/daemon.ts:545-552` calls `createPm` without a vendor | [Measured] Both environments: `pm 1 项目经理 claude` while Codex was `available` (`before/codex-state-initial.json`). Sending to it shows `找不到 Claude  Manage providers…` (`before/codex/1440-06-default-pm-send.png`). | D1: `ensureFirstRunPm` waits for probes within the budget, picks with `defaultPmVendor`, and checks `AGENT_HUB_DEFAULT_MODEL` against that vendor instead of always Claude. |
-| 3 | HTTP API, Router `project-create`, Feishu through the Router | `src/daemon/ledger/persona.ts:551`, reached from `src/daemon/ui-server/routes-pms.ts:39` and `src/daemon/router/target-port.ts:466` | [Measured] `POST /api/pms` without `vendor` on Codex only gave `api-no-vendor claude`. [Inferred] Router and Feishu project creation take the same path when the Router omits `--vendor`. | D2: `createPmIn` uses `input.vendor ?? defaultPmVendor(ctx.vendorAvailability)`. A named vendor is kept. |
+| 3 | HTTP API, Router `project-create`, Feishu through the Router | `src/daemon/ledger/persona.ts:551`, reached from `src/daemon/ui-server/routes-pms.ts:39` and `src/daemon/router/target-port.ts:466` | [Measured] `POST /api/pms` without `vendor` on Codex only gave `api-no-vendor claude`. [Measured in a test] Router `project-create` without `--vendor`, which Feishu project creation also goes through, gave a Claude PM on a Codex-only ledger (`pm-default-vendor.test.ts`). | D2: `createPmIn` uses `input.vendor ?? defaultPmVendor(ctx.vendorAvailability)`. A named vendor is kept. |
 | 4 | Web first-launch Providers guide | `src/web/shell-model.ts:270` requires `pms.length === 0` | [Measured] Neither environment opened a dialog on first load (`before/*/notes.txt`, `before/none/1440-01-first-open.png`). | D3: drop the zero-PM condition. The guide still opens only when no provider is usable, and only once per browser. |
 | 5 | Router `Auto` | `src/shared/router-model.ts:232` | [Measured] Codex only: the top bar shows `Auto GPT-6-Luna` and the command ran on Codex (`before/codex/1440-01-first-open.png`). The Codex launch then failed with `sandbox-exec: sandbox_apply: Operation not permitted`, because this Worker runs inside a macOS sandbox. That failure is an artifact of the test machine. | Already correct. Its loop moves onto `firstUsableVendor(…, { probedOnly: true })` so that one rule serves both. |
 | 6 | Router with nothing installed | `src/shared/router-model.ts:253` | [Measured] The reply reads `本机尚未安装任何已接入的 Agent CLI，无法执行自由指令分派` with only `Retry` (`before/none/1440-07-router-command.png`). | Not fixed. Once D3 lands, Providers opens on first launch, and the Router text already says the reason. Adding a Providers link to Router failures is a separate interface change. |
@@ -114,8 +124,8 @@ None. The picker walks the eight registered vendors without caching. `ensureFirs
 - `src/web/components/new-pm-provider.ts`: `newPmDefaultVendor` and `newPmProviderNotice` for the dialog.
 - Implementation-only changes, which need no new exports: `src/daemon/ledger/persona.ts` (D2), `src/daemon/daemon.ts` (calls `ensureFirstRunPm`), `src/shared/router-model.ts` (uses `firstUsableVendor`), `src/web/components/NewPmDialog.tsx` (default, notice row, `More settings` open while the provider cannot run), and `src/web/shell-model.ts` (D3).
 - `src/shared/vendor-default.test.ts`: tests the rule and checks that Router `Auto` and the PM default agree.
-- `src/daemon/ledger/pm-default-vendor.test.ts`: tests `createPm` with and without a named vendor.
-- `src/daemon/first-run-pm.test.ts`: tests the first-start PM, the probe budget, the default-model check, and that later starts do nothing.
+- `src/daemon/ledger/pm-default-vendor.test.ts`: tests `createPm` with and without a named vendor, and the entry points that omit one (`POST /api/pms` and Router `project-create`).
+- `src/daemon/first-run-pm.test.ts`: tests the first-start PM, the probe budget and its 4 s default, the default-model check, and that later starts do nothing.
 - `src/web/components/new-pm-provider.test.tsx`: tests the dialog for Codex only, a user pick that survives a refresh, and nothing installed on desktop and mobile.
 - `src/web/first-run-providers.test.tsx`: tests that the first-launch guide fires with the daemon-created PM present.
 
@@ -130,7 +140,7 @@ None. The picker walks the eight registered vendors without caching. `ensureFirs
 5. **Sweep (quote 3).** Every row in the Section 2 table is either fixed with a test (rows 1–5) or recorded with its reason (rows 6–13).
 6. **Two consecutive turns.** The user picks Kimi in the dialog, and the catalog refreshes while the dialog stays open. The pick stays Kimi, and the default no longer overrides it. Test: `new-pm-provider.test.tsx` "keeps the provider the user picked".
 7. **Restart mid-operation.** The daemon stops after the first start and starts again. No second PM is created and no probe wait happens. Test: `first-run-pm.test.ts` "does nothing on later starts".
-8. **State change while queued.** Probes finish while the first start waits. The result that arrives within the budget wins (signed-out Claude loses to Codex), and a slow probe does not hold startup past the budget. Tests: `first-run-pm.test.ts` "within the budget" and "past the budget".
+8. **State change while queued.** Probes finish while the first start waits. The result that arrives within the budget wins (signed-out Claude loses to Codex), and a slow probe does not hold startup past the budget. Tests: `first-run-pm.test.ts` "within the budget", "past the budget", and "waits up to VENDOR_RECHECK_BUDGET_MS".
 9. **Existing rules this touches.** A named vendor is kept (`pm-default-vendor.test.ts` "keeps the vendor the caller named"), and with nothing usable the default stays Claude (`pm-default-vendor.test.ts`, `vendor-default.test.ts`). `REVIEW.md` rules matching the changed files:
    - *Async work stops touching the ledger after shutdown starts* (`daemon.ts`, `ledger/**`): `ensureFirstRunPm` runs before the servers start and before shutdown handlers can close the ledger. Its only await is the bounded probe race, and it calls `createPm` once afterward.
    - *Restart recovery finishes what the last run left* (`daemon.ts`): the first-start PM is derived from the ledger (`hasAnyPm`), so nothing is minted per start.
@@ -149,7 +159,7 @@ None. The picker walks the eight registered vendors without caching. `ensureFirs
 12. **Malformed or dirty data.** An older ledger already holds Claude PMs, which stay as they are because only creation changes. A catalog list missing a vendor reads it as `unknown` (`vendor-default.test.ts` "availabilityOfCatalogs"). An invalid `AGENT_HUB_DEFAULT_MODEL` is dropped with a log line (`first-run-pm.test.ts`).
 13. **Cross-vendor.** The rule walks every registered vendor (`vendor-default.test.ts` uses all `AGENT_VENDORS`). Prompt cache: no system prompt, tool list, or sent message changes, so the `TokenUsage.cacheRead` gate does not apply.
 14. **Cross-platform.** The rule is pure TypeScript with no platform branch. Availability already comes from each platform's catalog sources. CI runs the tests on macOS, Linux, and Windows.
-15. **Cross-entry and layout.** Web at 1440 and 390 (scenarios 1, 2, 4). Feishu and the Router through `project-create` (D2, `pm-default-vendor.test.ts`). The `hub` CLI is unchanged for named vendors. Remote computers use per-device catalogs (row 8).
+15. **Cross-entry and layout.** Web at 1440 and 390 (scenarios 1, 2, 4). The HTTP API, and Feishu and the Router through `project-create` (D2, `pm-default-vendor.test.ts` "entry points"). The `hub` CLI is unchanged for named vendors. Remote computers use per-device catalogs (row 8).
 
 ### Real-environment and real-CLI verification
 
@@ -166,8 +176,8 @@ None. The picker walks the eight registered vendors without caching. `ensureFirs
 
 ### Pre-implementation baseline
 
-Recorded on the planning commit:
+Recorded on the final planning commit, after decision card #448:
 
-- New behavior, failing (26): every test in `vendor-default.test.ts` (11), `first-run-pm.test.ts` (6), `new-pm-provider.test.tsx` (6), and `first-run-providers.test.tsx` (2), plus `pm-default-vendor.test.ts` "uses the first usable vendor" (1).
+- New behavior, failing (29): every test in `vendor-default.test.ts` (11), `first-run-pm.test.ts` (7), `new-pm-provider.test.tsx` (6), and `first-run-providers.test.tsx` (2), plus 3 in `pm-default-vendor.test.ts` ("uses the first usable vendor", "POST /api/pms without vendor…", and "Router project-create without --vendor…"). Each `pm-default-vendor.test.ts` failure reads `expected 'claude' to be 'codex'`, matching the measured behavior.
 - Unchanged rules, passing (2): `pm-default-vendor.test.ts` "keeps the registry default when nothing is usable" and "keeps the vendor the caller named".
 - `first-run-pm.test.ts` also covers unchanged rules ("does nothing on later starts", "keeps the registry default"). Those tests fail only because the new module is a stub. The same rules pass today through `src/daemon/daemon.ts`.

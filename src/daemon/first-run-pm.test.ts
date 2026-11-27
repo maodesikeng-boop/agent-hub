@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { VENDOR_RECHECK_BUDGET_MS } from "../shared/limits.ts";
 import type { CreatePmInput, CreatePmResult } from "../shared/ledger.ts";
 import { bundledModelCatalog, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../shared/vendors.ts";
 import { ensureFirstRunPm, type FirstRunPmOptions } from "./first-run-pm.ts";
@@ -66,9 +67,25 @@ describe("ensureFirstRunPm", () => {
     try {
       const h = harness({ before: (v) => (v === "claude" || v === "codex" ? "unknown" : "not_installed"), probeMs: 60_000 });
       const done = ensureFirstRunPm(h.options);
-      await vi.advanceTimersByTimeAsync(h.options.probeBudgetMs);
+      await vi.advanceTimersByTimeAsync(h.options.probeBudgetMs!);
       await done;
       expect(h.created[0]!.vendor).toBe("claude");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits up to VENDOR_RECHECK_BUDGET_MS (4 s) when no budget is passed", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ before: (v) => (v === "codex" ? "unknown" : "not_installed"), probeMs: 60_000 });
+      const { probeBudgetMs: _omit, ...options } = h.options;
+      const done = ensureFirstRunPm(options);
+      await vi.advanceTimersByTimeAsync(VENDOR_RECHECK_BUDGET_MS - 1);
+      expect(h.created).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(h.created[0]!.vendor).toBe("codex");
     } finally {
       vi.useRealTimers();
     }

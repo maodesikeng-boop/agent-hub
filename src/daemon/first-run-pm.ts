@@ -7,7 +7,8 @@ export interface FirstRunPmOptions {
   models: Pick<ModelCatalogs, "list" | "availability">;
   hasAnyPm: () => boolean;
   defaultModel: string | undefined;
-  probeBudgetMs: number;
+  /** Defaults to VENDOR_RECHECK_BUDGET_MS. */
+  probeBudgetMs?: number;
   log: (line: string) => void;
 }
 
