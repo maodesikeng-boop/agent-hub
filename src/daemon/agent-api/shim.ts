@@ -1,11 +1,12 @@
 // Absolute Node and hub paths are baked in so agents work without node on PATH.
-import { chmodSync, copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import {
   renameSyncWithWindowsRetry,
   requireWinHelperBinary,
+  writeExecutableFileAtomicSync,
   writeFileAtomicSyncWithRetry,
 } from "../platform/index.ts";
 
@@ -59,9 +60,6 @@ export function installHubShim(opts: HubShimOptions): string {
   }
 
   const target = join(opts.binDir, HUB_COMMAND);
-  const tmp = `${target}.${process.pid}.tmp`;
-  writeFileSync(tmp, hubShimContent(nodePath, mainScript), { mode: SHIM_MODE });
-  chmodSync(tmp, SHIM_MODE);
-  renameSync(tmp, target);
+  writeExecutableFileAtomicSync(target, hubShimContent(nodePath, mainScript), { mode: SHIM_MODE });
   return target;
 }

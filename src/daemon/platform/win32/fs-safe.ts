@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   constants as fsConstants,
   cpSync,
@@ -17,6 +18,7 @@ import {
   symlinkSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
   type RmOptions,
 } from "node:fs";
 import {
@@ -249,11 +251,61 @@ export interface WriteExecutableFileOptions {
  * Postcondition: `targetPath` is a regular file containing `content` with exact `mode` on POSIX, published via a closed same-directory temp file and atomic rename (with Windows retry) so concurrent Linux `execve` callers never observe `ETXTBSY` or partial content. Returns `false` without rewriting when `targetPath` is already a regular file with matching content and mode, and `true` when written or replaced. Never follows an existing symlink at `targetPath`, and leaves no temp file on failure.
  */
 export function writeExecutableFileAtomicSync(
-  _targetPath: string,
-  _content: string,
-  _options?: WriteExecutableFileOptions,
+  targetPath: string,
+  content: string,
+  options?: WriteExecutableFileOptions,
 ): boolean {
-  throw new Error("Not implemented");
+  const mode = (options?.mode ?? 0o755) & 0o777;
+  const platform = options?.platform ?? process.platform;
+  const expectedBytes = Buffer.from(content, "utf8");
+
+  try {
+    const existing = lstatSync(targetPath);
+    if (
+      existing.isFile() &&
+      existing.size === expectedBytes.byteLength &&
+      (platform === "win32" || (existing.mode & 0o777) === mode)
+    ) {
+      const readFd = openRegularFileNoFollowSync(targetPath, { platform });
+      try {
+        if (readFileSync(readFd).equals(expectedBytes)) return false;
+      } finally {
+        closeSync(readFd);
+      }
+    }
+  } catch {
+  }
+
+  const tmpPath = join(
+    dirname(targetPath),
+    `.${basename(targetPath)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`,
+  );
+  const fd = openSync(tmpPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, mode);
+  try {
+    try {
+      let offset = 0;
+      while (offset < expectedBytes.byteLength) {
+        offset += writeSync(fd, expectedBytes, offset, expectedBytes.byteLength - offset);
+      }
+    } finally {
+      closeSync(fd);
+    }
+    if (platform !== "win32") {
+      chmodSync(tmpPath, mode);
+    }
+    renameSyncWithWindowsRetry(tmpPath, targetPath, {
+      platform,
+      ...(options?.delaysMs !== undefined ? { delaysMs: options.delaysMs } : {}),
+      ...(options?.renameImpl !== undefined ? { renameImpl: options.renameImpl } : {}),
+    });
+    return true;
+  } catch (err) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+    }
+    throw err;
+  }
 }
 
 export function writeFileAtomicSyncWithRetry(

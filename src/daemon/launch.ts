@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import {
@@ -46,7 +46,7 @@ import { truncatePmMemoryForPrompt } from "./pm-memory.ts";
 import { projectWorktreesDir, sessionLaunchDir } from "../shared/paths.ts";
 import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./prompt.ts";
 import { removeProductSkills, taskGraphSkillFile, writeProductSkills } from "./task-graph-skill.ts";
-import { makeSessionOwnerTag } from "./platform/index.ts";
+import { makeSessionOwnerTag, writeExecutableFileAtomicSync } from "./platform/index.ts";
 import type { SessionTmpStore } from "./session-tmp.ts";
 import { prepareRouterSandboxLaunch } from "./router/sandbox.ts";
 import type { RouterTurnPurpose } from "./router/single-turn.ts";
@@ -264,8 +264,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       const hooksDir = join(dir, REVIEW_HOOKS_DIR);
       mkdirSync(hooksDir, { recursive: true, mode: 0o700 });
       const hook = join(hooksDir, "pre-push");
-      writeFileSync(hook, REVIEW_PRE_PUSH_HOOK, { mode: 0o755 });
-      chmodSync(hook, 0o755);
+      writeExecutableFileAtomicSync(hook, REVIEW_PRE_PUSH_HOOK, { mode: 0o755 });
       reviewEnv = reviewPushGuardEnv(hooksDir, process.env);
     }
     const tmpDir = role === "worker" ? options.sessionTmp.allocate(session.id) : undefined;

@@ -1,6 +1,6 @@
 // Runs allowlisted install recipes only and never accepts shell strings from the browser.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve, win32 } from "node:path";
 import { PROVIDER_INSTALL_TIMEOUT_MS } from "../../shared/index.ts";
@@ -13,7 +13,7 @@ import type {
 import { killThenSettle } from "../driver/model-catalog.ts";
 import { termGroupAfterExit } from "../driver/process.ts";
 import { buildChildEnv } from "../driver/protocol.ts";
-import { spawnOwnedProcess } from "../platform/index.ts";
+import { spawnOwnedProcess, writeExecutableFileAtomicSync } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
 import type { BoundedJobLogBuffer } from "./redact.ts";
 
@@ -273,7 +273,7 @@ export async function executeInstallRecipe(
       const tmpDir = mkdtempSync(join(tmpdir(), "fusa-installer-"));
       chmodSync(tmpDir, 0o700);
       const scriptFile = join(tmpDir, "install.sh");
-      writeFileSync(scriptFile, scriptBody, { mode: 0o700 });
+      writeExecutableFileAtomicSync(scriptFile, scriptBody, { mode: 0o700 });
       try {
         ctx.logBuffer.setStageProgress("Running installer…");
         const baseChildEnv = prependNodeToPath(ctx.env, ctx.execPath, ctx.toolsNpmBinDir, ctx.platform);

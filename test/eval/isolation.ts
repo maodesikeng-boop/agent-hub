@@ -9,11 +9,12 @@
 //    ~/.agent-hub（性格设定、记忆目录、pm-notes）、claude 给真仓库和真 worktree 存的会话记录与自动记忆。
 // 每次运行开头 preflight 在真沙箱里逐条试一遍，有一条没挡住就不跑。
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, delimiter, join, resolve } from "node:path";
 import { claudeProjectDirName } from "../../src/vendors/claude/transcript.ts";
 import { DEFAULT_UI_PORT, ENV_HOME, ENV_HUB_SOCK, ENV_HUB_TOKEN, ENV_PORT } from "../../src/shared/index.ts";
+import { writeExecutableFileAtomicSync } from "../../src/daemon/platform/index.ts";
 import { killGroup, onExit, boundedText } from "./lifecycle.ts";
 import type { RouterConfig } from "./fakes/claude-router.ts";
 
@@ -129,9 +130,7 @@ export function writeShims(paths: ShimPaths, opts: { node: string; realGit: stri
   copyFileSync(join(FAKES_DIR, "gh.ts"), join(lib, "gh.mts"));
   copyFileSync(join(FAKES_DIR, "record.ts"), join(lib, "record.mts"));
   const write = (name: string, body: string) => {
-    const file = join(paths.binDir, name);
-    writeFileSync(file, `#!/bin/sh\n${body}\n`);
-    chmodSync(file, 0o755);
+    writeExecutableFileAtomicSync(join(paths.binDir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   };
   write("gh", `if [ "$1" = --version ]; then echo eval-gh-shim; exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} gh-probe; fi\nexec ${sq(opts.node)} ${sq(join(lib, "gh.mts"))} "$@"`);
   for (const tool of RECORD_ONLY_TOOLS) write(tool, `exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} ${tool} "$@"`);
