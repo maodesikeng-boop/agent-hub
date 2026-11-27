@@ -30,6 +30,7 @@ function makeGraph(id: number, nodes: TaskNode[], updatedAt = 1000): TaskGraph {
     createdAt: updatedAt,
     updatedAt,
     completedAt: null,
+    readySince: null,
   };
 }
 

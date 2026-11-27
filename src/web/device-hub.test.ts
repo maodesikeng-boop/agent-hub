@@ -391,7 +391,7 @@ describe("DevicesStore（zustand store 驱动）", () => {
         data: {
           graph: {
             id: 7, projectId: 1, pmId: 1, conversationId: 1, title: "Release", status: "completed",
-            nodes: [], edges: [], originMsgId: null, createdAt: 1, updatedAt: 3, completedAt: 2,
+            nodes: [], edges: [], originMsgId: null, createdAt: 1, updatedAt: 3, completedAt: 2, readySince: null,
           },
         },
       });
