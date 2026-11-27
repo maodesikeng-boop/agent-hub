@@ -498,7 +498,9 @@ function ScheduleRun({ text }: { text: string }) {
 
 function wakeupTag(source: PmWakeupSource, subject: PmNoticeSubject | undefined): string {
   if (source === "router") return "Router";
-  return subject?.kind === "watch.settled" ? "Watch" : "Task graph";
+  if (subject?.kind === "watch.settled") return "Watch";
+  if (subject?.kind === "pm.agenda" && subject.trigger === "overdue") return "Reminder";
+  return "Task graph";
 }
 
 function WakeupNotice({ text, tag, inTurn }: { text: string; tag: string; inTurn: boolean }) {
