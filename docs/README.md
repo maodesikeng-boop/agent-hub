@@ -46,6 +46,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 ## Testing
 
 - [AI tester](ai-tester-design.md): The resident test bench (a Mac and a server on a test account, a test Feishu bot, all eight vendor CLIs), nightly script flows, the AI tester handbook in `.agents/skills/tester/`, vendor coverage reporting, and the `pnpm verify` round-trip and restart checks.
+- [Blind new-user walkthrough](blind-new-user-walkthrough-design.md): Zero-context new-user exploration on an isolated real Bellwood instance, Track 1 unattended Playwright vision and accessibility runs with H.264 MP4 recording, Track 2 prepared native macOS Computer Use handoffs, noise filtering, and severity-ranked pain-point reports.
 
 ## Desktop and distribution
 
