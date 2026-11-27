@@ -4,6 +4,7 @@ import { checklistFromTodoList, isChecklistTool } from "../checklist.ts";
 
 export interface AcpChecklistConfig {
   fromExtension?: (method: string, params: unknown) => ChecklistUpdate | null;
+  fromToolCall?: (name: string, input: unknown) => ChecklistUpdate | null;
 }
 
 export function acpChecklistFromSessionUpdate(vendor: AgentVendor, update: SessionNotification["update"]): ChecklistUpdate | null {

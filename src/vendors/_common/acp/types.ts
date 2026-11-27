@@ -73,6 +73,8 @@ export interface AcpSessionSetupConfig {
   formatSystemPrompt?: (promptText: string) => string;
   defaultModeId?: string | ((context: AcpSessionSetupContext) => string | null);
   mcpServers?: readonly McpServer[] | ((context: AcpLaunchContext) => readonly McpServer[]);
+  extraAdditionalDirectories?: (context: AcpLaunchContext) => readonly string[];
+  sessionMeta?: (context: AcpLaunchContext) => Record<string, unknown> | undefined;
 }
 
 export interface AcpConfigOptionsConfig {
