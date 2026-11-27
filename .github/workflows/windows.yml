@@ -22,6 +22,7 @@ on:
       - "src/vendors/**"
       - "apps/windows/**"
       - "test/windows/**"
+      - "test/mock-llm/**"
       - ".github/workflows/windows.yml"
   push:
     branches: [main]
@@ -41,6 +42,7 @@ on:
       - "src/vendors/**"
       - "apps/windows/**"
       - "test/windows/**"
+      - "test/mock-llm/**"
       - ".github/workflows/windows.yml"
 
 # Pull requests cancel superseded runs; every main commit gets its own group so a later merge never cancels or replaces it.
@@ -159,6 +161,32 @@ jobs:
           test/migration.test.ts
           --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-windows-core.xml
 
+      - name: Cache real CLI tools for mock-LLM tests
+        id: cache-mock-cli-tools
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mock-cli-tools
+          key: mock-cli-tools-v1-${{ runner.os }}-codex-0.169.0-pi-1.5.2
+
+      - name: Install real Codex and Pi CLIs into isolated temp prefix
+        if: steps.cache-mock-cli-tools.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $toolsDir = Join-Path $env:RUNNER_TEMP "mock-cli-tools"
+          New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
+          npm install --prefix $toolsDir --no-audit --no-fund @openai/codex@0.169.0 @earendil-works/pi-coding-agent@1.5.2
+
+      - name: Run mock-LLM unit and real-CLI tests on Windows
+        shell: pwsh
+        env:
+          BELLWOOD_REQUIRE_REAL_CLI: codex,pi
+        run: |
+          $ErrorActionPreference = "Stop"
+          $binDir = Join-Path $env:RUNNER_TEMP "mock-cli-tools\node_modules\.bin"
+          $env:PATH = "$binDir;$env:PATH"
+          pnpm exec vitest run --project=node test/mock-llm/server.test.ts test/mock-llm/isolation-and-vendors.test.ts test/mock-llm/prefix-cache.test.ts test/mock-llm/protocol-snapshot.test.ts test/mock-llm/real-cli-e2e.test.ts --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-windows-mock-llm.xml
+
       - name: Upload Windows integration diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -167,5 +195,6 @@ jobs:
           path: |
             vitest-windows-integration.xml
             vitest-windows-core.xml
+            vitest-windows-mock-llm.xml
             ${{ runner.temp }}/fusa-win-diag/**
           if-no-files-found: ignore
