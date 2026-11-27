@@ -1,4 +1,5 @@
 import { appendDeliverySuffix } from "../../shared/pm-agenda.ts";
+import { MACOS_NESTED_SANDBOX_MESSAGE, isNestedMacOsSandboxError } from "../../shared/errors.ts";
 import { withChecklistEnv } from "../../vendors/_common/checklist.ts";
 import { vendorSpec } from "../../shared/vendors.ts";
 // Shared session state machine for vendor drivers in src/vendors/<vendor>/driver.ts.
@@ -1165,7 +1166,7 @@ export interface StartupExitDetailInput {
   vendorLabel: string;
   phase: string;
   exitCode: number | null;
-  signal: NodeJS.Signals | null;
+  signal: string | null;
   stderr: string;
   errorMessage?: string;
 }
@@ -1175,6 +1176,13 @@ export interface StartupExitDetailInput {
  * Postcondition: returns MACOS_NESTED_SANDBOX_MESSAGE when exitCode and stderr indicate a macOS nested
  * sandbox-exec failure; otherwise returns a concise diagnostic including phase, exit status, and stderr/error detail.
  */
-export function formatStartupExitDetail(_input: StartupExitDetailInput): string {
-  throw new Error("Not implemented");
+export function formatStartupExitDetail(input: StartupExitDetailInput): string {
+  const stderr = input.stderr.trim();
+  const errMsg = input.errorMessage?.trim() ?? "";
+  if (isNestedMacOsSandboxError(stderr, input.exitCode) || isNestedMacOsSandboxError(errMsg, input.exitCode)) {
+    return MACOS_NESTED_SANDBOX_MESSAGE;
+  }
+  const detail = errMsg || stderr;
+  const how = input.signal ? `signal ${input.signal}` : `exit code ${input.exitCode}`;
+  return `${input.vendorLabel} exited before ${input.phase} (${how})${detail ? `: ${detail}` : ""}`;
 }
