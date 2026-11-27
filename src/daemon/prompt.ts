@@ -446,6 +446,8 @@ function branchTipFindingText(f: BranchTipFinding): string {
       return `本地分支停在 ${shortSha(f.local)}，落后于远端 ${f.remote}，用的是远端上的最新提交。`;
     case "local_ahead":
       return `本地分支比远端 ${f.remote} 上的 ${shortSha(f.remoteSha)} 多了没推送的提交，用的是本地分支。`;
+    case "remote_rewound":
+      return `上一步交的是远端 ${f.remote} 上的 ${shortSha(f.remoteSha)}，本地分支 ${shortSha(f.local)} 上有远端没有的提交（远端可能被强推过），以远端为准。`;
     case "diverged":
       return `本地分支（${shortSha(f.local)}）和远端 ${f.remote} 上的（${shortSha(f.remoteSha)}）分叉了，开工前先核对该用哪个。`;
     case "fetch_failed":

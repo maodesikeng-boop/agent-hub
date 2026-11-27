@@ -383,16 +383,19 @@ describe("Worker sandbox approval", () => {
     const oldSession = sessionIdOf(initial.workerId);
     f.db.run("UPDATE agent_sessions SET pid = 4242 WHERE id = ?", oldSession);
     const takeover = f.dispatch({ node: "run", graphId: graph.id, noWorktree: false, noOuterSandbox: undefined, caps: undefined, allow: undefined });
-    expect(takeover).toMatchObject({ workspace: "worktree", worktreePath: path, baseCommit: "base" });
+    expect(takeover).toMatchObject({ workspace: "worktree", worktreePath: path, baseCommit: null });
     expect(actionsOf(takeover.id)).toEqual([]);
     f.ledger.decideSandboxApproval!(approvalOf(takeover.id)!.id, APPROVE);
     expect(actionsOf(takeover.id)).toEqual(["worktree.sync"]);
-    f.ledger.onWorktreeSynced(takeover.id, null);
-    expect(actionsOf(takeover.id)).toEqual(["worktree.sync", "session.send"]);
     const newSession = sessionIdOf(takeover.id);
     const first = f.db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued'", takeover.workerConversationId)!.id;
     expect(f.ledger.waitsForFirstTurn(newSession, first)).toBe(true);
+    expect(f.ledger.getWorktreeSyncTask(takeover.id)).toEqual({ kind: "wait" });
     f.db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE id = ?", oldSession);
+    expect(f.ledger.getWorktreeSyncTask(takeover.id)).toMatchObject({ kind: "sync", worktreePath: path });
+    f.ledger.onWorktreeSynced(takeover.id, null);
+    expect(actionsOf(takeover.id)).toEqual(["worktree.sync", "session.send"]);
+    expect(f.db.get<{ base_commit: string }>("SELECT base_commit FROM workers WHERE id = ?", takeover.id)!.base_commit).toBe("base");
     expect(f.ledger.waitsForFirstTurn(newSession, first)).toBe(false);
   });
 

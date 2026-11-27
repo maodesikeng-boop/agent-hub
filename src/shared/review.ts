@@ -77,6 +77,7 @@ export function diffReviewSnapshot(branch: string, before: ReviewSnapshot, now: 
   if (before.remote !== null) {
     const remoteName = before.remote.name ?? now.remote?.name ?? "远端";
     if (now.remote === null) problems.push(`仓库的远端 ${remoteName} 不见了，没法核对远端分支 ${branch}`);
+    else if (before.remote.name !== undefined && now.remote.name !== before.remote.name) problems.push(`核对的远端从 ${before.remote.name} 变成了 ${now.remote.name}`);
     else if (now.remote.sha !== before.remote.sha) problems.push(`${now.remote.name} 上的分支 ${branch} 从 ${short(before.remote.sha)} 变成了 ${short(now.remote.sha)}`);
   }
   if (before.pr !== null) {

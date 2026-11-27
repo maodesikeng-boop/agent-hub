@@ -15,6 +15,7 @@ import {
   type Ledger,
   type Message,
   type ReviewObservation,
+  type ReviewSnapshot,
   type SessionStore,
   type SessionTokens,
   type WorkerId,
@@ -227,17 +228,18 @@ export function createSessionEndHandler(
   };
 }
 
-export type ObserveReview = (repo: string, branch: string) => Promise<ReviewObservation>;
+export type ObserveReview = (repo: string, branch: string, before: ReviewSnapshot) => Promise<ReviewObservation>;
 
+/** Only the remote recorded at review start is probed; a review that started without a reachable remote is checked locally, so going offline cannot fail it. */
 export function createReviewObserver(deps: {
   resolveCommit: (folder: string, ref: string) => Promise<string | null>;
-  remoteBranchHead: (repo: string, branch: string) => Promise<{ name: string; sha: string | null } | undefined>;
+  remoteBranchHead: (repo: string, branch: string, remote?: string) => Promise<{ name: string; sha: string | null } | undefined>;
   probePr: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
 }): ObserveReview {
-  return async (repo, branch) => {
+  return async (repo, branch, before) => {
     const [sha, remote, pr] = await Promise.all([
       deps.resolveCommit(repo, `refs/heads/${branch}`),
-      deps.remoteBranchHead(repo, branch),
+      before.remote === null ? null : deps.remoteBranchHead(repo, branch, before.remote.name),
       deps.probePr(repo, branch),
     ]);
     return { sha, remote: remote ?? null, pr };
@@ -329,14 +331,16 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
 }
 
 export interface WorktreeSyncHandlerDeps {
-  ledger: Pick<Ledger, "getWorktreeSyncTask" | "onWorktreeSynced">;
+  ledger: Pick<Ledger, "reconcileWorkerGraph" | "getWorktreeSyncTask" | "onWorktreeSynced">;
   syncWorktree: (repo: string, worktreePath: string, branch: string, expected: string | null) => Promise<WorktreeSyncResult>;
 }
 
 export function createWorktreeSyncHandler(deps: WorktreeSyncHandlerDeps): ActionHandler<"worktree.sync"> {
   return async (action) => {
     const { workerId } = action.params;
+    await deps.ledger.reconcileWorkerGraph?.(workerId);
     const task = deps.ledger.getWorktreeSyncTask(workerId);
+    if (task?.kind === "wait") return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worktree_busy" };
     if (task === null) {
       deps.ledger.onWorktreeSynced(workerId, null);
       return { kind: "done" };
@@ -361,7 +365,7 @@ export function createReviewVerifyHandler(deps: ReviewVerifyHandlerDeps): Action
   return async (action) => {
     const task = deps.ledger.getReviewVerifyTask(action.params.workerId);
     if (task === null) return { kind: "done" };
-    const now = await deps.observeReview(task.repo, task.branch);
+    const now = await deps.observeReview(task.repo, task.branch, task.snapshot);
     deps.ledger.onReviewVerified(action.params, { problems: diffReviewSnapshot(task.branch, task.snapshot, now) });
     return { kind: "done" };
   };

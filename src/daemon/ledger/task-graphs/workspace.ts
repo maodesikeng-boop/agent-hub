@@ -73,7 +73,7 @@ function* upstreamChain(input: PlanInput): Generator<TaskNodeDbRow> {
   }
 }
 
-/** A step after a review with an explicit base continues the reviewed branch, not the trunk. */
+/** A step after a review with an explicit base continues the reviewed branch, not the trunk or an earlier step's own branch. */
 function reviewedBaseUpstream(input: PlanInput): string | null {
   for (const u of upstreamChain(input)) {
     if (u.skipped === 1) continue;
@@ -126,8 +126,8 @@ export function resolveWorkspacePlan(db: Db, input: PlanInput): StepWorkspacePla
   if (step.review === 1) return resolveReviewPlan(db, input);
   if (step.base === "main") return { kind: "fresh" };
   const up = findUpstreamWorktree(db, input);
-  if (up === null) {
-    const reviewed = reviewedBaseUpstream(input);
+  const reviewed = reviewedBaseUpstream(input);
+  if (up === null || (reviewed !== null && up.worker.branch !== reviewed)) {
     return reviewed === null ? { kind: "fresh" } : { kind: "fork", baseBranch: reviewed };
   }
   const w = up.worker;

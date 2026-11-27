@@ -353,10 +353,13 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(scope.writableDirs).toEqual([w1Row.worktree_path]);
     expect(scopeAllowsWrite(scope, join(w1Row.worktree_path, "cursor.ts"))).toBe(true);
 
-    // 在上游会话彻底退出前，waitsForFirstTurn 挡住下游首轮避免双写；上游退出后立即放行
+    // 在上游会话彻底退出前，worktree.sync 不动目录、下游首轮也不发，避免双写；上游退出并同步完才放行
     const w2FirstMsg = firstWorkerMessageOf(w2Id);
     expect(ledger.waitsForFirstTurn(w2Sess.id, w2FirstMsg.id)).toBe(true);
+    expect(ledger.getWorktreeSyncTask(w2Id)).toEqual({ kind: "wait" });
     createSessionStore(db).update(workerSessionOf(w1Id).id, { status: "ended", pid: null });
+    expect(ledger.waitsForFirstTurn(w2Sess.id, w2FirstMsg.id)).toBe(true);
+    ledger.onWorktreeSynced(w2Id, null);
     expect(ledger.waitsForFirstTurn(w2Sess.id, w2FirstMsg.id)).toBe(false);
 
     // 上游提交与未提交文件都在同一个目录里
@@ -629,6 +632,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(stateOf(cur.nodes[0]!)).toBe("done");
     expect(stateOf(cur.nodes[1]!)).toBe("running");
     const wMid = cur.nodes[1]!.activeWorkerId!;
+    ledger.onWorktreeSynced(wMid, null);
     expect(firstWorkerMessageOf(wMid).text).toContain("映射逻辑在 compat.ts");
     expect(firstWorkerMessageOf(wMid).text).toContain("认可保留兼容视图，核对步骤请额外查一下视图查询计划。");
 

@@ -64,7 +64,7 @@ describe("resolveBranchTip", () => {
   it("not a git repository: throws instead of guessing", async () => {
     const plain = join(root, "plain");
     mkdirSync(plain);
-    await expect(resolveBranchTip(plain, B, null)).rejects.toThrow();
+    await expect(resolveBranchTip(plain, B, null)).rejects.toThrow(/不是 git 仓库/);
   });
 
   it("the only remote under any name is used, and a remote that moved ahead wins over the stale local branch", async () => {
@@ -93,6 +93,16 @@ describe("resolveBranchTip", () => {
     expect(await remoteBranchHead(repo, B)).toEqual({ name: "b", sha: ahead });
   });
 
+  it("a remote whose name contains a slash is found as the only remote tracking the branch", async () => {
+    const bare = addRemote("team/fork");
+    addRemote("other");
+    git(repo, "push", "-q", "team/fork", B);
+    git(repo, "fetch", "-q", "team/fork");
+    expect(await branchRemote(repo, B)).toEqual({ kind: "remote", name: "team/fork" });
+    const moved = pushElsewhere(bare, B, "moved");
+    expect(await remoteBranchHead(repo, B, "team/fork")).toEqual({ name: "team/fork", sha: moved });
+  });
+
   it("branch not pushed yet: the local branch, no finding", async () => {
     addRemote("origin");
     const local = git(repo, "rev-parse", B);
@@ -111,6 +121,18 @@ describe("resolveBranchTip", () => {
     expect(diverged.findings).toEqual([{ kind: "diverged", remote: "origin", local: localOnly, remoteSha: remoteOnly }]);
     expect((await resolveBranchTip(repo, B, null)).commit).toBe(remoteOnly);
     expect((await resolveBranchTip(repo, B, "0123456789")).findings).toContainEqual({ kind: "expected_missing", expected: "0123456789" });
+  });
+
+  it("remote force-pushed back to the commit the upstream reported: the remote wins over the stale local descendant", async () => {
+    addRemote("origin");
+    git(repo, "checkout", "-q", B);
+    const a = commit(repo, "a");
+    git(repo, "push", "-q", "origin", B);
+    const dropped = commit(repo, "dropped");
+    expect((await resolveBranchTip(repo, B, null)).commit).toBe(dropped);
+    const tip = await resolveBranchTip(repo, B, a);
+    expect(tip.commit).toBe(a);
+    expect(tip.findings).toEqual([{ kind: "remote_rewound", remote: "origin", local: dropped, remoteSha: a }]);
   });
 
   it("syncWorktreeBranch fast-forwards a clean checkout, leaves a dirty one, and ignores a worktree on another branch", async () => {

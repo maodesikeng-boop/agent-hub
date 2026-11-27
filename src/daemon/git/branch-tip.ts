@@ -20,6 +20,8 @@ type RemotePick = { kind: "remote"; name: string } | { kind: "none"; finding: Br
 
 const LC = { LC_ALL: "C" };
 
+const lines = (stdout: string): string[] => stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+
 async function configValue(repo: string, key: string): Promise<string | null> {
   const run = await runGit(repo, ["config", "--get", key], GIT_PROBE_TIMEOUT_MS, LC);
   return run.code === 0 && run.stdout.trim() !== "" ? run.stdout.trim() : null;
@@ -34,27 +36,37 @@ async function isValidBranchName(repo: string, branch: string): Promise<boolean>
 export async function branchRemote(repo: string, branch: string): Promise<RemotePick> {
   const listed = await runGit(repo, ["remote"], GIT_PROBE_TIMEOUT_MS, LC);
   if (listed.code !== 0) throw failedGit("git remote", listed);
-  const names = listed.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  const names = lines(listed.stdout);
   if (names.length === 0) return { kind: "none", finding: { kind: "no_remote" } };
   for (const key of [`branch.${branch}.pushRemote`, "remote.pushDefault", `branch.${branch}.remote`]) {
     const value = await configValue(repo, key);
     if (value !== null && names.includes(value)) return { kind: "remote", name: value };
   }
   if (names.length === 1) return { kind: "remote", name: names[0]! };
-  const tracking = await runGit(repo, ["for-each-ref", "--format=%(refname)", `refs/remotes/*/${branch}`], GIT_PROBE_TIMEOUT_MS, LC);
-  const holders = tracking.code !== 0 ? [] : names.filter((n) => tracking.stdout.split("\n").includes(`refs/remotes/${n}/${branch}`));
+  const refs = names.map((n) => `refs/remotes/${n}/${branch}`);
+  const tracking = await runGit(repo, ["for-each-ref", "--format=%(refname)", ...refs], GIT_PROBE_TIMEOUT_MS, LC);
+  const found = tracking.code !== 0 ? [] : lines(tracking.stdout);
+  const holders = names.filter((n) => found.includes(`refs/remotes/${n}/${branch}`));
   if (holders.length === 1) return { kind: "remote", name: holders[0]! };
   return { kind: "none", finding: { kind: "ambiguous_remote", remotes: names } };
 }
 
-/** Read-only probe used by the post-review check; throws when the remote cannot be reached. */
-export async function remoteBranchHead(repo: string, branch: string): Promise<RemoteBranchHead | undefined> {
-  const pick = await branchRemote(repo, branch);
-  if (pick.kind === "none") return undefined;
-  const run = await runGit(repo, ["ls-remote", pick.name, `refs/heads/${branch}`], GIT_TIMEOUT_MS, LC);
+/** Read-only probe of the branch on `remote` (or the branch's own remote when omitted) for the post-review check; undefined when that remote is gone, throws when it cannot be reached. */
+export async function remoteBranchHead(repo: string, branch: string, remote?: string): Promise<RemoteBranchHead | undefined> {
+  let name = remote;
+  if (name === undefined) {
+    const pick = await branchRemote(repo, branch);
+    if (pick.kind === "none") return undefined;
+    name = pick.name;
+  } else {
+    const listed = await runGit(repo, ["remote"], GIT_PROBE_TIMEOUT_MS, LC);
+    if (listed.code !== 0) throw failedGit("git remote", listed);
+    if (!lines(listed.stdout).includes(name)) return undefined;
+  }
+  const run = await runGit(repo, ["ls-remote", name, `refs/heads/${branch}`], GIT_TIMEOUT_MS, LC);
   if (run.code !== 0) throw failedGit("git ls-remote", run);
-  const line = run.stdout.split("\n").find((l) => l.endsWith(`\trefs/heads/${branch}`));
-  return { name: pick.name, sha: line === undefined ? null : line.split("\t")[0]! };
+  const line = lines(run.stdout).find((l) => l.endsWith(`\trefs/heads/${branch}`));
+  return { name, sha: line === undefined ? null : line.split("\t")[0]! };
 }
 
 async function fetchBranch(repo: string, remote: string, branch: string): Promise<{ sha: string | null } | { error: string }> {
@@ -113,6 +125,12 @@ async function remoteHead(repo: string, branch: string, findings: BranchTipFindi
   return { name: pick.name, sha: fetched.sha };
 }
 
+async function missingBranchError(repo: string, branch: string): Promise<GitError> {
+  const probe = await runGit(repo, ["rev-parse", "--git-dir"], GIT_PROBE_TIMEOUT_MS, LC);
+  if (probe.code !== 0) return new GitError("git_failed", `${repo} 不是 git 仓库，没法检出分支 ${branch}。`);
+  return new GitError("git_failed", `${repo} 里找不到分支 ${branch}（本地和远端都没有）。`);
+}
+
 /**
  * The commit a downstream step should start from: the newest of the local branch and the same branch on its remote,
  * cross-checked against the commit the upstream step reported. Falls back to the local branch when there is no remote or it cannot be reached.
@@ -125,13 +143,16 @@ export async function resolveBranchTip(repo: string, branch: string, expected: s
   const wanted = await resolveExpected(repo, expected);
   let commit: string;
   if (remoteSha === null || remoteSha === local) {
-    if (local === null) throw new GitError("git_failed", `${repo} 里找不到分支 ${branch}（本地和远端都没有）。`);
+    if (local === null) throw await missingBranchError(repo, branch);
     commit = local;
   } else if (local === null) {
     commit = remoteSha;
   } else if (await isAncestor(repo, local, remoteSha)) {
     commit = remoteSha;
     findings.push({ kind: "remote_ahead", remote: remote!.name, local });
+  } else if (wanted === remoteSha) {
+    commit = remoteSha;
+    findings.push({ kind: "remote_rewound", remote: remote!.name, local, remoteSha });
   } else if (await isAncestor(repo, remoteSha, local)) {
     commit = local;
     findings.push({ kind: "local_ahead", remote: remote!.name, remoteSha });

@@ -190,13 +190,15 @@ describe("换人接手同一步：重放 441", () => {
     expect(w2).toMatchObject({ title: "实测压缩", task: "原始任务：实测三家压缩后提示词还在不在" });
 
     // ③ 工作目录和分支就是前任那个，前任没提交的文件还在；不建 worktree、不跑准备命令
-    expect(w2).toMatchObject({ workspace: "worktree", worktreePath: dir, branch: w1.branch, baseCommit: "base-1" });
+    expect(w2).toMatchObject({ workspace: "worktree", worktreePath: dir, branch: w1.branch, baseCommit: null });
     expect(readFileSync(join(dir, "experiment.md"), "utf8")).toBe("48 分钟的实测记录");
     expect(enqueued.filter((a) => a.type === "worktree.create")).toEqual([]);
     expect(enqueued.filter((a) => a.type === "session.start")).toEqual([]);
     const w2Session = sessionIdOf(w2.id);
     expect(enqueued).toContainEqual(expect.objectContaining({ type: "worktree.sync", params: { workerId: w2.id } }));
+    expect(ledger.getWorktreeSyncTask(w2.id)).toEqual({ kind: "wait" });
     ledger.onWorktreeSynced(w2.id, null);
+    expect(db.get<{ base_commit: string }>("SELECT base_commit FROM workers WHERE id = ?", w2.id)!.base_commit).toBe("base-1");
     expect(enqueued).toContainEqual(
       expect.objectContaining({ type: "session.send", params: { sessionId: w2Session, messageId: firstMessage(w2).id, source: "user" } }),
     );
@@ -246,6 +248,8 @@ describe("换人接手同一步：重放 441", () => {
     const w3 = hub("worker.start", { node: "s1" }, { workspace: repoProbe }).data.worker;
     expect(w3.worktreePath).toBe(wNext.worktreePath);
     db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE id = ?", sessionIdOf(wNext.id));
+    expect(ledger.waitsForFirstTurn(sessionIdOf(w3.id), firstMessage(w3).id)).toBe(true);
+    ledger.onWorktreeSynced(w3.id, null);
     expect(ledger.waitsForFirstTurn(sessionIdOf(w3.id), firstMessage(w3).id)).toBe(false);
   });
 
@@ -302,6 +306,7 @@ describe("换人接手同一步：重放 441", () => {
       ids.push(w.id);
       if (i === 0) worktreeReady(w);
       db.run("UPDATE agent_sessions SET status = 'ended' WHERE worker_id != ? AND role = 'worker'", w.id);
+      if (i > 0) ledger.onWorktreeSynced(w.id, null);
       const tools = Array.from({ length: TAKEOVER_STEPS_MAX + 5 }, (_, k) => `step-${i}-${k}`);
       turn(w, firstMessage(w).id, tools, report("有问题", `第 ${i} 个`, long), "ok");
       const more = hub("worker.send", { workerId: w.id, text: "接着做" }).data.messageId;

@@ -31,7 +31,7 @@ describe("审查目录与禁推（真 git）", () => {
   let snapshot: ReviewSnapshot;
   const observe = createReviewObserver({
     resolveCommit: (folder, ref) => resolveCommit(folder, ref),
-    remoteBranchHead: (r, b) => remoteBranchHead(r, b),
+    remoteBranchHead: (r, b, name) => remoteBranchHead(r, b, name),
     probePr: async () => null,
   });
 
@@ -83,8 +83,7 @@ describe("审查目录与禁推（真 git）", () => {
     git(implDir, "push", "origin", IMPL);
 
     const { baseCommit } = await addWorktree({ repoFolder: repo, worktreePath: reviewDir, branch: null, base: `refs/heads/${IMPL}` });
-    const seen = await observe(repo, IMPL);
-    snapshot = { sha: baseCommit, remote: seen.remote, pr: null };
+    snapshot = { sha: baseCommit, remote: (await remoteBranchHead(repo, IMPL)) ?? null, pr: null };
   });
 
   afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -105,7 +104,7 @@ describe("审查目录与禁推（真 git）", () => {
     const checkout = spawnSync("git", ["checkout", IMPL], { cwd: reviewDir, encoding: "utf8", env: { ...gitEnv, LC_ALL: "C" } });
     expect(checkout.status).not.toBe(0);
     expect(checkout.stderr).toMatch(/already (checked out|used by worktree)/);
-    expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL))).toEqual([]);
+    expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL, snapshot))).toEqual([]);
   });
 
   it("带审查 Worker 的启动环境推送：pre-push 拒绝，远端不变", async () => {
@@ -122,7 +121,7 @@ describe("审查目录与禁推（真 git）", () => {
     }
     expect(await remoteBranchHead(repo, IMPL)).toEqual({ name: "origin", sha: snapshot.sha });
     expect(await remoteBranchHead(repo, "review-fix")).toEqual({ name: "origin", sha: null });
-    expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL))).toEqual([]);
+    expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL, snapshot))).toEqual([]);
   });
 
   it("绕过钩子推上去、update-ref 改本地分支：收尾核对都报变了", async () => {
@@ -131,11 +130,11 @@ describe("审查目录与禁推（真 git）", () => {
     git(reviewDir, "commit", "-am", "reviewer fix");
     const sneaky = git(reviewDir, "rev-parse", "HEAD");
     expect(pushAs(env, "--no-verify", "origin", `HEAD:refs/heads/${IMPL}`).status).toBe(0);
-    expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL))).toEqual([
+    expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL, snapshot))).toEqual([
       `origin 上的分支 ${IMPL} 从 ${snapshot.sha.slice(0, 12)} 变成了 ${sneaky.slice(0, 12)}`,
     ]);
     git(repo, "update-ref", `refs/heads/${IMPL}`, sneaky);
-    expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL))).toEqual([
+    expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL, snapshot))).toEqual([
       `本地分支 ${IMPL} 从 ${snapshot.sha.slice(0, 12)} 变成了 ${sneaky.slice(0, 12)}`,
       `origin 上的分支 ${IMPL} 从 ${snapshot.sha.slice(0, 12)} 变成了 ${sneaky.slice(0, 12)}`,
     ]);

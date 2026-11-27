@@ -62,7 +62,7 @@ describe("审查步骤只查不修", () => {
   let lin: { pmId: PmId; conversationId: ConversationId; sessionId: SessionId };
   const observeReview = createReviewObserver({
     resolveCommit: (f, r) => resolveCommit(f, r),
-    remoteBranchHead: (r, b) => remoteBranchHead(r, b),
+    remoteBranchHead: (r, b, name) => remoteBranchHead(r, b, name),
     probePr: async () => null,
   });
 

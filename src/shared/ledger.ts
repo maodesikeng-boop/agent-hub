@@ -210,6 +210,7 @@ export interface WorktreeTask {
 export type BranchTipFinding =
   | { kind: "remote_ahead"; remote: string; local: string }
   | { kind: "local_ahead"; remote: string; remoteSha: string }
+  | { kind: "remote_rewound"; remote: string; local: string; remoteSha: string }
   | { kind: "diverged"; remote: string; local: string; remoteSha: string }
   | { kind: "fetch_failed"; remote: string; error: string }
   | { kind: "no_remote" }
@@ -230,12 +231,10 @@ export interface WorkspaceCheckoutNote {
   sync?: FastForwardOutcome;
 }
 
-export interface WorktreeSyncTask {
-  repo: string;
-  worktreePath: string;
-  branch: string;
-  expected: string | null;
-}
+/** `wait` while another Worker on the same worktree has not fully exited. */
+export type WorktreeSyncTask =
+  | { kind: "wait" }
+  | { kind: "sync"; repo: string; worktreePath: string; branch: string; expected: string | null };
 
 export interface SetupOutcome {
   kind: "ok" | "failed" | "timeout" | "stopped";

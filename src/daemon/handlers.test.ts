@@ -11,6 +11,7 @@ import {
   type Message,
   type RateLimitInfo,
   type SetupOutcome,
+  type WorktreeSyncTask,
   type WorktreeTask,
 } from "../shared/index.ts";
 import {
@@ -621,10 +622,10 @@ describe("session.send 处理函数：任务图交付单发送前异步补齐 di
 });
 
 describe("worktree.sync handler", () => {
-  const syncTask = { repo: "/code/foo", worktreePath: "/data/worktrees/1/2", branch: "hub/2-impl", expected: "beef01" };
+  const syncTask: WorktreeSyncTask = { kind: "sync", repo: "/code/foo", worktreePath: "/data/worktrees/1/2", branch: "hub/2-impl", expected: "beef01" };
   const tip: BranchTip = { commit: "beef01", local: "dead02", remote: { name: "up", sha: "beef01" }, findings: [{ kind: "remote_ahead", remote: "up", local: "dead02" }] };
 
-  function syncDeps(result: WorktreeSyncResult, found: typeof syncTask | null = syncTask) {
+  function syncDeps(result: WorktreeSyncResult, found: WorktreeSyncTask | null = syncTask) {
     const onWorktreeSynced = vi.fn();
     const syncWorktree = vi.fn(async () => result);
     return { onWorktreeSynced, syncWorktree, handler: createWorktreeSyncHandler({ ledger: { getWorktreeSyncTask: () => found, onWorktreeSynced }, syncWorktree }) };
@@ -653,5 +654,12 @@ describe("worktree.sync handler", () => {
     await gone.handler(action("worktree.sync", { workerId: 2 }));
     expect(gone.syncWorktree).not.toHaveBeenCalled();
     expect(gone.onWorktreeSynced).toHaveBeenCalledWith(2, null);
+  });
+
+  it("waits without touching git while another Worker on the worktree is still exiting", async () => {
+    const t = syncDeps({ tip, outcome: { kind: "up_to_date" } }, { kind: "wait" });
+    expect(await t.handler(action("worktree.sync", { workerId: 2 }))).toMatchObject({ kind: "later", reason: "worktree_busy" });
+    expect(t.syncWorktree).not.toHaveBeenCalled();
+    expect(t.onWorktreeSynced).not.toHaveBeenCalled();
   });
 });

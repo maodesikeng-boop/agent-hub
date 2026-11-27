@@ -70,6 +70,12 @@ describe("收尾核对", () => {
       "origin 上的分支 b 从 （没有） 变成了 ffffffff",
     ]);
   });
+
+  it("an observation of a different remote than the one recorded at review start is a problem, not a match", () => {
+    expect(diffReviewSnapshot("b", { sha: SHA, remote: { name: "upstream", sha: SHA }, pr: null }, { sha: SHA, remote: { name: "origin", sha: SHA }, pr: null })).toEqual([
+      "核对的远端从 upstream 变成了 origin",
+    ]);
+  });
 });
 
 describe("禁推环境变量", () => {

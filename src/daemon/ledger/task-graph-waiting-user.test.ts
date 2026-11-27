@@ -142,7 +142,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     rmSync(root, { recursive: true, force: true });
   });
 
-  const observeReview = createReviewObserver({ resolveCommit: (f, r) => resolveCommit(f, r), remoteBranchHead: (r, b) => remoteBranchHead(r, b), probePr: async () => null });
+  const observeReview = createReviewObserver({ resolveCommit: (f, r) => resolveCommit(f, r), remoteBranchHead: (r, b, name) => remoteBranchHead(r, b, name), probePr: async () => null });
   /** 跑审查 PASS 后登记的收尾核对。 */
   const runReviewVerify = async () => {
     const verify = enqueued.find((a): a is ActionRow<"review.verify"> => a.type === "review.verify")!;

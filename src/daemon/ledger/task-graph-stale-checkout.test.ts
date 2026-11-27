@@ -59,7 +59,7 @@ describe("review and fix steps start from the delivered commit", () => {
   let lin: { pmId: PmId; conversationId: ConversationId; sessionId: SessionId };
   const observeReview = createReviewObserver({
     resolveCommit: (f, r) => resolveCommit(f, r),
-    remoteBranchHead: (r, b) => remoteBranchHead(r, b),
+    remoteBranchHead: (r, b, name) => remoteBranchHead(r, b, name),
     probePr: async () => null,
   });
 
@@ -255,5 +255,227 @@ describe("review and fix steps start from the delivered commit", () => {
     expect(git(repoDir, "rev-parse", impl.branch!)).toBe(updated);
     expect(enqueued.some((a) => a.type === "session.send" && a.params.sessionId === sessionOf(wFix).id)).toBe(true);
     expect(taskText(wFix)).toContain(`已从 ${implSha.slice(0, 12)} 快进到 ${updated.slice(0, 12)}`);
+  });
+
+  it("fix1 -> review(base = PR branch) -> fix2: fix2 starts from the reviewed branch's head, not fix1's own stale branch", async () => {
+    seedPrBranch();
+    const graph = createGraph([
+      { key: "fix1", title: "修复 1", brief: "修好并推到 PR 分支" },
+      { key: "review", title: "复审", brief: "复审", review: true, base: PR_BRANCH },
+      { key: "fix2", title: "修复 2", brief: "按复审意见修" },
+    ]);
+    const wFix1 = graph.nodes[0]!.activeWorkerId!;
+    await prepareWorkspace(wFix1);
+    const fix1Dir = workerRow(wFix1).worktree_path;
+    git(fix1Dir, "fetch", "--quiet", "origin", PR_BRANCH);
+    git(fix1Dir, "reset", "--hard", "--quiet", "FETCH_HEAD");
+    writeFileSync(join(fix1Dir, "a.ts"), "export const a = 2;\n");
+    git(fix1Dir, "commit", "-am", "fix1");
+    git(fix1Dir, "push", "--quiet", "origin", `HEAD:refs/heads/${PR_BRANCH}`);
+    const c1 = git(fix1Dir, "rev-parse", "HEAD");
+    await reportTurn(wFix1, report({ summary: "修好了", commit: c1 }));
+    const c2 = pushFromElsewhere(PR_BRANCH, "export const a = 6;\n");
+
+    const wReview = graphNow(graph.id).nodes[1]!.activeWorkerId!;
+    await prepareWorkspace(wReview);
+    expect(git(workerRow(wReview).worktree_path, "rev-parse", "HEAD")).toBe(c2);
+    await reportTurn(wReview, report({ status: "有问题", summary: "有缺陷", verdict: "FAIL", sha: c2 }));
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview });
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "review" });
+
+    const wFix2 = graphNow(graph.id).nodes[2]!.activeWorkerId!;
+    await prepareWorkspace(wFix2);
+    const fix2Dir = workerRow(wFix2).worktree_path;
+    expect(fix2Dir).not.toBe(fix1Dir);
+    expect(git(fix2Dir, "rev-parse", "HEAD")).toBe(c2);
+  });
+
+  /** A lone review step on the PR branch, reported PASS on the commit it checked out; returns the graph state after review.verify. */
+  const reviewAndVerify = async (): Promise<{ states: string[]; problems: string; sha: string }> => {
+    const graph = createGraph([{ key: "review", title: "审查", brief: "审查", review: true, base: PR_BRANCH }]);
+    const wReview = graph.nodes[0]!.activeWorkerId!;
+    await prepareWorkspace(wReview);
+    const sha = parseReviewTarget(workerRow(wReview).review_json)!.snapshot!.sha;
+    enqueued.length = 0;
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
+    const verify = enqueued.find((a): a is ActionRow<"review.verify"> => a.type === "review.verify")!;
+    await createReviewVerifyHandler({ ledger, observeReview })(verify);
+    const problems = db.all<{ text: string }>("SELECT text FROM messages WHERE text LIKE '%收尾核对%'").map((m) => m.text).join("\n");
+    return { states: graphNow(graph.id).nodes.map(stateOf), problems, sha };
+  };
+
+  it("a review that started offline on the local branch passes review.verify without probing the unreachable remote", async () => {
+    const local = seedPrBranch();
+    git(repoDir, "remote", "set-url", "origin", join(root, "gone.git"));
+    const { states, problems, sha } = await reviewAndVerify();
+    expect(sha).toBe(local);
+    expect(problems).toBe("");
+    expect(states).toEqual(["done"]);
+  });
+
+  it("review.verify checks the remote recorded at review start even when the branch's push remote changed meanwhile", async () => {
+    const start = seedPrBranch();
+    const upstreamDir = join(root, "upstream.git");
+    git(root, "clone", "--quiet", "--bare", originDir, upstreamDir);
+    git(repoDir, "remote", "add", "upstream", upstreamDir);
+    git(repoDir, "config", `branch.${PR_BRANCH}.pushRemote`, "upstream");
+    const graph = createGraph([{ key: "review", title: "审查", brief: "审查", review: true, base: PR_BRANCH }]);
+    const wReview = graph.nodes[0]!.activeWorkerId!;
+    await prepareWorkspace(wReview);
+    expect(parseReviewTarget(workerRow(wReview).review_json)!.snapshot!.remote).toEqual({ name: "upstream", sha: start });
+    const other = join(root, "upstream-clone");
+    git(root, "clone", "--quiet", "--branch", PR_BRANCH, upstreamDir, other);
+    writeFileSync(join(other, "a.ts"), "export const a = 9;\n");
+    git(other, "commit", "-am", "moved during review");
+    git(other, "push", "--quiet", "origin", PR_BRANCH);
+    git(repoDir, "config", `branch.${PR_BRANCH}.pushRemote`, "origin");
+    enqueued.length = 0;
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha: start }));
+    const verify = enqueued.find((a): a is ActionRow<"review.verify"> => a.type === "review.verify")!;
+    await createReviewVerifyHandler({ ledger, observeReview })(verify);
+    expect(graphNow(graph.id).nodes.map(stateOf)).not.toEqual(["done"]);
+    expect(db.all<{ text: string }>("SELECT text FROM messages WHERE text LIKE '%收尾核对%'").map((m) => m.text).join("\n")).toContain("upstream 上的分支");
+  });
+});
+
+describe("an inherited worktree starts only after worktree.sync", () => {
+  let db: Db;
+  let root: string;
+  let repoDir: string;
+  let now: number;
+  let ledger: SqliteLedger;
+  let enqueued: AnyActionRow[];
+  let lin: { pmId: PmId; conversationId: ConversationId; sessionId: SessionId };
+
+  beforeEach(() => {
+    now = 1_720_000_000_000;
+    enqueued = [];
+    root = realpathSync(mkdtempSync(join(tmpdir(), "agent-hub-sync-gate-")));
+    const dataHome = join(root, "data");
+    repoDir = join(root, "repo");
+    const originDir = join(root, "origin.git");
+    for (const d of ["pm-home", "worktrees", "state/launch", "state/logs/setup"]) mkdirSync(join(dataHome, d), { recursive: true });
+    mkdirSync(repoDir);
+    git(root, "init", "--bare", "-b", "main", originDir);
+    git(repoDir, "init", "-b", "main");
+    writeFileSync(join(repoDir, "a.ts"), "export const a = 1;\n");
+    git(repoDir, "add", "a.ts");
+    git(repoDir, "commit", "-m", "init");
+    git(repoDir, "remote", "add", "origin", originDir);
+    git(repoDir, "push", "--quiet", "origin", "main");
+    db = openTestDb();
+    migrate(db);
+    ledger = createLedger(db, {
+      now: () => now,
+      pmHomeRoot: join(dataHome, "pm-home"),
+      dataHome,
+      worktreesDir: join(dataHome, "worktrees"),
+      launchDir: join(dataHome, "state", "launch"),
+      setupLogsDir: join(dataHome, "state", "logs", "setup"),
+      userHome: root,
+      osSandboxed: () => true,
+      models: { current: () => null, availability: () => "available" },
+      resolveFolder: createResolveFolder({ dataHome, userHome: root }),
+    });
+    ledger.onActionEnqueued((a) => enqueued.push(a));
+    const created = ledger.createPm({ name: "林经理", mode: "manage_only", persona: "严谨", folder: repoDir });
+    lin = { pmId: created.pm.id, conversationId: created.conversation.id, sessionId: created.sessionId };
+  });
+
+  afterEach(() => {
+    ledger.close();
+    db.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const actionOf = <T extends AnyActionRow["type"]>(type: T, params: ActionRow<T>["params"]): ActionRow<T> =>
+    ({ id: ++now, type, dedupeKey: "x", params, status: "running", attempts: 1, nextAttemptAt: now, lastError: null, createdAt: now, updatedAt: now }) as ActionRow<T>;
+  const sync = (workerId: WorkerId) => createWorktreeSyncHandler({ ledger, syncWorktree: syncWorktreeBranch })(actionOf("worktree.sync", { workerId }));
+  const sessionOf = (workerId: WorkerId) =>
+    db.get<{ id: SessionId; conversation_id: number }>("SELECT id, conversation_id FROM agent_sessions WHERE worker_id = ? ORDER BY generation DESC LIMIT 1", workerId)!;
+  const sendsTo = (workerId: WorkerId) => enqueued.filter((a) => a.type === "session.send" && a.params.sessionId === sessionOf(workerId).id).length;
+  const taskOf = (workerId: WorkerId) =>
+    db.get<{ id: number; text: string }>("SELECT id, text FROM messages WHERE conversation_id = ? ORDER BY id LIMIT 1", sessionOf(workerId).conversation_id)!;
+
+  /** impl delivers a commit, then the fix step inherits its worktree and waits on worktree.sync. */
+  const inheritedFix = async (): Promise<{ wImpl: WorkerId; wFix: WorkerId; implDir: string }> => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "PR 8", goal: "修好 PR 8", steps: [{ key: "impl", title: "实现", brief: "实现" }, { key: "fix", title: "修复", brief: "修" }] }),
+    }).data.graph;
+    const wImpl = graph.nodes[0]!.activeWorkerId!;
+    await createWorktreeCreateHandler({
+      ledger, resolveTip: resolveBranchTip, probePr: async () => null, addWorktree,
+      setup: { start: () => true }, setupLogPath: (id) => workerSetupLogPath(join(root, "logs"), id),
+    })(actionOf("worktree.create", { workerId: wImpl }));
+    const implDir = db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", wImpl)!.worktree_path;
+    writeFileSync(join(implDir, "a.ts"), "export const a = 2;\n");
+    git(implDir, "commit", "-am", "impl");
+    const s = sessionOf(wImpl);
+    const input = db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND sender = 'pm' ORDER BY id DESC LIMIT 1", s.conversation_id)!;
+    createSessionStore(db).update(s.id, { status: "running", pid: 41_000 });
+    ledger.applyDriverEvent(s.id, { type: "message.delivered", messageIds: [input.id], at: ++now });
+    ledger.applyDriverEvent(s.id, { type: "message.processing", messageIds: [input.id], at: ++now });
+    ledger.applyDriverEvent(s.id, { type: "agent.text", uuid: `impl-${++now}`, text: report({ summary: "实现了", commit: git(implDir, "rev-parse", "HEAD") }), at: now });
+    ledger.applyDriverEvent(s.id, { type: "turn.ended", ok: true, interrupted: false, messageIds: [input.id], durationMs: 5, at: ++now });
+    await ledger.settleDriverEvents();
+    const wFix = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes[1]!.activeWorkerId!;
+    expect(db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", wFix)!.worktree_path).toBe(implDir);
+    expect(enqueued.some((a) => a.type === "worktree.sync" && a.params.workerId === wFix)).toBe(true);
+    return { wImpl, wFix, implDir };
+  };
+
+  it("restart recovery before worktree.sync ran does not send the task; the first turn waits for the sync", async () => {
+    const { wImpl, wFix } = await inheritedFix();
+    createSessionStore(db).update(sessionOf(wImpl).id, { status: "ended", pid: null });
+    ledger.recoverAfterRestart();
+    expect(sendsTo(wFix)).toBe(0);
+    expect(ledger.waitsForFirstTurn(sessionOf(wFix).id, taskOf(wFix).id as never)).toBe(true);
+    expect(() => ledger.hubCall(lin.sessionId, "worker.send", { workerId: wFix, text: "补充" })).toThrow(/还在准备/);
+    await sync(wFix);
+    expect(sendsTo(wFix)).toBe(1);
+    expect(ledger.waitsForFirstTurn(sessionOf(wFix).id, taskOf(wFix).id as never)).toBe(false);
+  });
+
+  it("running worktree.sync again after it already started the Worker changes nothing", async () => {
+    const { wImpl, wFix } = await inheritedFix();
+    createSessionStore(db).update(sessionOf(wImpl).id, { status: "ended", pid: null });
+    await sync(wFix);
+    const text = taskOf(wFix).text;
+    db.run("UPDATE actions SET status = 'done' WHERE type IN ('session.send', 'worktree.sync')");
+    ledger.applyDriverEvent(sessionOf(wFix).id, { type: "message.delivered", messageIds: [taskOf(wFix).id as never], at: ++now });
+    expect(await sync(wFix)).toEqual({ kind: "done" });
+    expect(sendsTo(wFix)).toBe(1);
+    expect(taskOf(wFix).text).toBe(text);
+  });
+
+  it("worktree.sync follows a branch the previous Worker renamed in the worktree without telling the daemon", async () => {
+    const { wImpl, wFix, implDir } = await inheritedFix();
+    createSessionStore(db).update(sessionOf(wImpl).id, { status: "ended", pid: null });
+    git(implDir, "branch", "-m", "feature/renamed");
+    await sync(wFix);
+    expect(db.get<{ branch: string }>("SELECT branch FROM workers WHERE id = ?", wFix)!.branch).toBe("feature/renamed");
+  });
+
+  it("the checkout note is prepended once even when worktree.create runs again after a restart", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "PR 9", goal: "修好 PR 9", steps: [{ key: "impl", title: "实现", brief: "实现" }] }),
+    }).data.graph;
+    const w = graph.nodes[0]!.activeWorkerId!;
+    const note = { branch: "main", commit: "0123456789abcdef", findings: [{ kind: "no_remote" as const }] };
+    ledger.noteWorkspaceCheckout(w, note);
+    ledger.noteWorkspaceCheckout(w, note);
+    expect(taskOf(w).text.match(/开工前核对了分支/g)).toHaveLength(1);
+  });
+
+  it("worktree.sync waits while the previous Worker on the same worktree is still exiting", async () => {
+    const { wImpl, wFix, implDir } = await inheritedFix();
+    const head = git(implDir, "rev-parse", "HEAD");
+    const result = await sync(wFix);
+    expect(result.kind).toBe("later");
+    expect(sendsTo(wFix)).toBe(0);
+    expect(git(implDir, "rev-parse", "HEAD")).toBe(head);
+    createSessionStore(db).update(sessionOf(wImpl).id, { status: "ended", pid: null });
+    expect(await sync(wFix)).toEqual({ kind: "done" });
+    expect(sendsTo(wFix)).toBe(1);
   });
 });

@@ -16,6 +16,7 @@ import { hasGitCommitSync } from "../task-graph-handoff.ts";
 import { workerRow } from "./ctx.ts";
 import { enqueueFirstTurn, insertLine, insertPmMessage } from "./lines.ts";
 import { holdWorkerForSandboxIn } from "./sandbox.ts";
+import { enqueueWorkspacePrepIn } from "./worktree.ts";
 import { gitFailed, taskDedupeKey } from "./text.ts";
 import { startMaxTime } from "./timers.ts";
 import type { WorkersCtx } from "./types.ts";
@@ -131,7 +132,7 @@ export function insertWorkerRowsIn(w: WorkersCtx, p: Pending, n: NewWorkerRows):
     n.workspace,
     n.inherit !== null ? n.inherit.branch : n.workspace === "worktree" ? "" : null,
     n.inherit !== null ? n.inherit.worktreePath : n.workspace === "worktree" ? "" : null,
-    n.inherit !== null ? n.inherit.baseCommit : null,
+    null,
     n.reviewJson,
     t,
     t,
@@ -175,9 +176,7 @@ export function kickOffWorkerIn(
   launch: {
     worker: WorkerDbRow;
     session: AgentSessionRow;
-    project: ProjectDbRow;
     firstMessageText: string;
-    inherited: boolean;
     maxTimeMs: number;
     sandbox?: { capabilities: readonly CapabilityKey[]; stepId: number | null };
     afterStartedLine?: () => void;
@@ -192,11 +191,8 @@ export function kickOffWorkerIn(
   }
   insertLine(w, p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
   launch.afterStartedLine?.();
-  if (launch.inherited) {
-    w.enqueue(p, { type: "worktree.sync", params: { workerId: worker.id } });
-  } else if (worker.workspace === "worktree") {
-    w.enqueue(p, { type: "worktree.create", params: { workerId: worker.id } });
-    w.projects.syncSessionFolders(launch.project);
+  if (worker.workspace === "worktree") {
+    enqueueWorkspacePrepIn(w, p, worker);
   } else {
     enqueueFirstTurn(w, p, worker);
   }

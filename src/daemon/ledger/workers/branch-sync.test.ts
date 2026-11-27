@@ -77,6 +77,7 @@ describe("linked worktree branch reconciliation", () => {
     git(cwd, "branch", "-m", "feature/renamed");
     const second = await start("impl");
     expect(second).toMatchObject({ branch: "feature/renamed", worktreePath: cwd });
+    f.ledger.onWorktreeSynced(second.id, null);
     expect(f.ledger.listWorktreeBranchTargets?.({ pmId: f.pm.pm.id })).toEqual([{ worktreePath: cwd, branch: "feature/renamed" }]);
     expect(f.ledger.listWorktreeBranchTargets?.({ workerId: first.id })).toEqual([{ worktreePath: cwd, branch: "feature/renamed" }]);
     expect(f.ledger.listWorktreeBranchTargets?.({ graphId })).toEqual([{ worktreePath: cwd, branch: "feature/renamed" }]);

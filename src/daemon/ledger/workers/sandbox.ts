@@ -8,11 +8,11 @@ import { fail, type Pending } from "../context.ts";
 import { readPmCapabilityPolicy } from "../pm-capabilities.ts";
 import type { WorkerDbRow } from "../rows.ts";
 import { createSandboxApprovalStore } from "../sandbox-approvals.ts";
-import { projectRow, workerRow } from "./ctx.ts";
+import { workerRow } from "./ctx.ts";
 import { enqueueFirstTurn, insertLine } from "./lines.ts";
 import { endWorkerIn } from "./lifecycle.ts";
-import { notStarted } from "./text.ts";
 import { startMaxTime } from "./timers.ts";
+import { enqueueWorkspacePrepIn } from "./worktree.ts";
 import type { WorkersCtx } from "./types.ts";
 
 export function checkSandboxRequest(w: WorkersCtx, pmId: PmId, input: {
@@ -79,11 +79,8 @@ export function createWorkerSandboxApprovals(getWorkers: () => WorkersCtx, ctx: 
       const worker = workerRow(w, approval.workerId)!;
       insertLine(w, p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
       w.options.taskGraphs?.onWorkerResumedIn(p, worker.id);
-      if (notStarted(worker)) {
-        w.enqueue(p, { type: "worktree.create", params: { workerId: worker.id } });
-        w.projects.syncSessionFolders(projectRow(w, worker.project_id));
-      } else if (worker.workspace === "worktree") {
-        w.enqueue(p, { type: "worktree.sync", params: { workerId: worker.id } });
+      if (worker.workspace === "worktree") {
+        enqueueWorkspacePrepIn(w, p, worker);
       } else {
         enqueueFirstTurn(w, p, worker);
       }
