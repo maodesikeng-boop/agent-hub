@@ -23,6 +23,7 @@
     "smoke": "node test/smoke/main.ts",
     "verify": "node scripts/verify-smoke.ts",
     "tester": "node test/tester/cli.ts",
+    "blind-walkthrough": "node test/blind-walkthrough/cli.ts",
     "eval": "node test/eval/cli.ts",
     "ui:polish": "node test/ui-polish/cli.ts",
     "app:mac": "bash scripts/build-mac-app.sh"
