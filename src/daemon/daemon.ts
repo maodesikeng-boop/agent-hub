@@ -245,8 +245,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   };
   const shutdown = async () => {
     const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, mesh, admin, agentApi, db, lock } = parts;
-    parts.selfReload?.close();
-    parts.quota?.close();
+    void parts.selfReload?.close();
+    void parts.quota?.close();
     if (scheduler) clearInterval(scheduler);
     parts.agendaReminders?.stop();
     if (autoRenew) clearInterval(autoRenew);

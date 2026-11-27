@@ -272,3 +272,31 @@ export async function waitForExit(pid: number, ms: number): Promise<boolean> {
   return true;
 }
 
+export interface ChildSettleOptions {
+  readonly signal?: AbortSignal;
+  readonly graceMs?: number;
+  readonly killWaitMs?: number;
+}
+
+/**
+ * Precondition: child was spawned by this daemon; failed spawns with undefined pid are allowed.
+ * Postcondition: force-kills child and its process tree when still live, waits for exit and bounded stdio close, and resolves with no live process or leaked stdio handles.
+ */
+export function killChildAndWait(
+  _child: ChildProcess,
+  _options?: Pick<ChildSettleOptions, "killWaitMs">,
+): Promise<void> {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: child has already delivered its response and should exit after stdin closes.
+ * Postcondition: ends stdin, waits up to graceMs for exit (escalating immediately if signal aborts), force-kills on timeout or abort, and resolves only after child has exited and stdio closed.
+ */
+export function closeAndWaitChild(
+  _child: ChildProcess,
+  _options?: ChildSettleOptions,
+): Promise<void> {
+  throw new Error("Not implemented");
+}
+

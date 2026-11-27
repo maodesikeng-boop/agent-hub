@@ -48,7 +48,10 @@ export interface SelfReloadController {
    */
   cancel(input: { by: string }): { text: string; status: SelfReloadStatus };
   status(): SelfReloadStatus;
-  close(): void;
+  /**
+   * Postcondition: stops drain timers, aborts any in-flight staged web build, and resolves only after the build subprocess has exited.
+   */
+  close(): Promise<void>;
 }
 
 export function createSelfReload(options: SelfReloadOptions): SelfReloadController {
@@ -258,7 +261,7 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
       return { text: "已取消待执行的热重启。", status: status() };
     },
     status,
-    close() {
+    async close() {
       if (closed) return;
       closed = true;
       if (state === "restarting") {

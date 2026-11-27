@@ -305,7 +305,7 @@ describe("S7 regression: createSelfReload + createStagedWebBuild cancel cleanup,
       log: () => {},
     });
     shutdownReload.request({ build: true, by: "pm 1" });
-    shutdownReload.close();
+    await shutdownReload.close();
     await vi.waitFor(() => expect(existsSync(stagingDir)).toBe(true));
     expect(nextStartup.recover()).toContain("在网页构建完成前被打断");
     expect(existsSync(stagingDir)).toBe(false);

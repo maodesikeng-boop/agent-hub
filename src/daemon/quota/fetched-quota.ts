@@ -42,9 +42,13 @@ export interface FetchedQuota {
   get(): Promise<QuotaResponse>;
 }
 
-interface CachedQuota extends FetchedQuota {
+export interface CachedQuota extends FetchedQuota {
   invalidate(): void;
   isCurrent(value: QuotaResponse): boolean;
+  /**
+   * Postcondition: marks this source closed, aborts every active and previously invalidated in-flight probe, and resolves only after all of them have settled within timeoutMs.
+   */
+  close(options?: { readonly timeoutMs?: number }): Promise<void>;
 }
 
 function currentWindows(value: QuotaResponse, at: number): { value: QuotaResponse; until: number } {
@@ -103,6 +107,9 @@ export function createFetchedQuota(options: {
         });
       inflight = { abort, result };
       return result;
+    },
+    close(_options?: { readonly timeoutMs?: number }): Promise<void> {
+      throw new Error("Not implemented");
     },
   };
 }

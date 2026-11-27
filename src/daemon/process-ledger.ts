@@ -31,11 +31,19 @@ export interface TrackOptions {
   detached?: boolean;
 }
 
+export interface ProcessLedgerShutdownOptions {
+  readonly timeoutMs?: number;
+}
+
 export interface ProcessLedger {
   track(child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">, purpose: string, options?: TrackOptions): void;
   reapStale(): Promise<ReapedEntry[]>;
   readonly size: number;
   settled(): Promise<void>;
+  /**
+   * Postcondition: marks the ledger closing so late startTimeOf lookups never write stale entries and late track() calls are killed immediately, force-kills every remaining live tracked child within timeoutMs, persists the clean file, and returns reaped entries.
+   */
+  shutdown(options?: ProcessLedgerShutdownOptions): Promise<ReapedEntry[]>;
 }
 
 async function defaultStartTimeOf(pid: number): Promise<string | null> {
@@ -147,6 +155,9 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
     },
     async settled() {
       while (pending.size > 0) await Promise.all([...pending]);
+    },
+    shutdown(_options?: ProcessLedgerShutdownOptions): Promise<ReapedEntry[]> {
+      throw new Error("Not implemented");
     },
   };
 
