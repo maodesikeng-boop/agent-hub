@@ -17,6 +17,7 @@ import { verifyComposerLayout } from "./verify-composer-layout.ts";
 import { verifyProjectListHeader } from "./verify-list-header.ts";
 import { verifyShellWidths } from "./verify-shell-widths.ts";
 import { verifySettingsKeyboard } from "./verify-settings-keyboard.ts";
+import { verifyTabFocus } from "./verify-tab-focus.ts";
 import { verifyTopBarUnderSettings } from "./verify-window-drag.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -245,6 +246,10 @@ async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir
     await page.screenshot({ path: join(outDir, SCREENSHOT) });
     if (pageErrors.length > 0) throw new Error(`发消息时页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
     phase("发消息等假 claude 回复、截图");
+
+    await verifyTabFocus(page);
+    if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
+    phase("Work panel tabs: no focus mark on press, outline by keyboard");
     return trip;
   } finally {
     await browser.close();
