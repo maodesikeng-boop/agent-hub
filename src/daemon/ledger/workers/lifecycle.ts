@@ -15,7 +15,7 @@ import { ownWorker, workerRow, workerSession } from "./ctx.ts";
 import { directChatSummary } from "./direct-chat.ts";
 import { insertLine, insertPmMessage, isWorkerInFlight, stopQueued } from "./lines.ts";
 import { cancelQueuedWorkerPmNoticesIn, type CancelWorkerPmNoticesOptions } from "./stale-notices.ts";
-import { notStarted, routerSendDedupeKey, sendDedupeKey, validMaxTimeMs, validTask, worktreeLabel } from "./text.ts";
+import { notStarted, notStartedConflict, routerSendDedupeKey, sendDedupeKey, validMaxTimeMs, validTask, worktreeLabel } from "./text.ts";
 import { clearMaxTime, clearMaxTimeIn, startMaxTime } from "./timers.ts";
 import type { PmCaller, WorkersCtx } from "./types.ts";
 
@@ -120,7 +120,7 @@ export function sendIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: HubArg
   if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，要接着做请重新派一个`);
   if (w.sandboxApprovals.isPendingForWorker(worker.id)) throw fail("conflict", "Worker 还在等用户确认沙箱，不能发消息");
   // Before work starts the first turn must be the task brief; sending now would start the session early.
-  if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
+  if (notStarted(worker)) throw fail("conflict", notStartedConflict(worker.id));
   const text = validTask(args.text, "要发给 Worker 的话");
   const session = workerSession(w, worker);
   // Hidden commands like /clear would swap the session id and later resumes would reattach the old conversation.

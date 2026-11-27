@@ -627,6 +627,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     waitsForFirstTurn: workers.waitsForFirstTurn,
     onWorktreeCreated: workers.onWorktreeCreated,
     recordReviewSnapshot: workers.recordReviewSnapshot,
+    noteWorkspaceCheckout: workers.noteWorkspaceCheckout,
+    getWorktreeSyncTask: workers.getWorktreeSyncTask,
+    onWorktreeSynced: workers.onWorktreeSynced,
     getReviewVerifyTask: workers.getReviewVerifyTask,
     onReviewVerified: workers.onReviewVerified,
 
