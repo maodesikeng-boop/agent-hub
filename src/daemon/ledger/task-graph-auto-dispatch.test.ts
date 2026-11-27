@@ -24,8 +24,8 @@ import type { AgentVendor, VendorAvailability } from "../../shared/vendors.ts";
 import { REVIEW_CHECKLIST } from "../../shared/review.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { scopeAllowsWrite, workerWriteScope } from "../../shared/write-scope.ts";
-import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
-import { createReviewObserver, createWorktreeCreateHandler } from "../handlers.ts";
+import { addWorktree, resolveBranchTip } from "../git/index.ts";
+import { createWorktreeCreateHandler } from "../handlers.ts";
 import { buildLaunchPrompt } from "../prompt.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -150,7 +150,8 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
   const runWorktreeCreate = async (workerId: WorkerId) => {
     const handler = createWorktreeCreateHandler({
       ledger,
-      observeReview: createReviewObserver({ resolveCommit: (f, r) => resolveCommit(f, r), remoteBranchHead: (r, b) => remoteBranchHead(r, b), probePr: async () => null }),
+      resolveTip: resolveBranchTip,
+      probePr: async () => null,
       addWorktree,
       setup: {
         start: (req) => {

@@ -46,6 +46,7 @@ export interface LedgerWorkersTaskGraphHooks {
   onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
   workerGraphWorkspacePlan: (workerId: WorkerId) => StepWorkspacePlan | undefined;
+  workerGraphUpstreamCommit: (workerId: WorkerId) => string | null;
   workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;
 }
 

@@ -8,9 +8,11 @@ export type StoredReviewVerdict = ReviewVerdict | "PASS+NOTES";
 export const REVIEW_VERDICT_FIELD = "结论";
 export const REVIEW_SHA_FIELD = "验证提交";
 
+/** `sha` is the commit checked out for review; `local` is the local branch at that moment, which can lag behind it. Rows written before `local` existed omit it. */
 export interface ReviewSnapshot {
   sha: string;
-  remote: { sha: string | null } | null;
+  local?: string | null;
+  remote: { name?: string; sha: string | null } | null;
   pr: WorkerPr | null;
 }
 
@@ -21,7 +23,7 @@ export interface ReviewTarget {
 
 export interface ReviewObservation {
   sha: string | null;
-  remote: { sha: string | null } | null;
+  remote: { name: string; sha: string | null } | null;
   pr: WorkerPrProbeResult;
 }
 
@@ -70,11 +72,12 @@ const short = (sha: string | null): string => (sha === null ? "（没有）" : s
 
 export function diffReviewSnapshot(branch: string, before: ReviewSnapshot, now: ReviewObservation): string[] {
   const problems: string[] = [];
-  if (now.sha !== before.sha) problems.push(`本地分支 ${branch} 从 ${short(before.sha)} 变成了 ${short(now.sha)}`);
+  const localBefore = before.local === undefined ? before.sha : before.local;
+  if (now.sha !== localBefore) problems.push(`本地分支 ${branch} 从 ${short(localBefore)} 变成了 ${short(now.sha)}`);
   if (before.remote !== null) {
-    const nowRemote = now.remote?.sha ?? null;
-    if (now.remote === null) problems.push(`仓库的 origin 不见了，没法核对远端分支 ${branch}`);
-    else if (nowRemote !== before.remote.sha) problems.push(`origin 上的分支 ${branch} 从 ${short(before.remote.sha)} 变成了 ${short(nowRemote)}`);
+    const remoteName = before.remote.name ?? now.remote?.name ?? "远端";
+    if (now.remote === null) problems.push(`仓库的远端 ${remoteName} 不见了，没法核对远端分支 ${branch}`);
+    else if (now.remote.sha !== before.remote.sha) problems.push(`${now.remote.name} 上的分支 ${branch} 从 ${short(before.remote.sha)} 变成了 ${short(now.remote.sha)}`);
   }
   if (before.pr !== null) {
     if (now.pr === null) problems.push(`PR ${before.pr.url} 查不到了`);

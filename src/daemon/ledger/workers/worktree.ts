@@ -1,9 +1,9 @@
 import type { AnyActionRow, ReviewVerifyParams } from "../../../shared/actions.ts";
 import type { MessageId, SessionId, WorkerId } from "../../../shared/domain.ts";
-import type { SetupOutcome, WorktreeTask } from "../../../shared/ledger.ts";
+import type { SetupOutcome, WorkspaceCheckoutNote, WorktreeSyncTask, WorktreeTask } from "../../../shared/ledger.ts";
 import { DEFAULT_WORKER_MAX_TIME_MS } from "../../../shared/limits.ts";
 import { parseReviewTarget, reviewTakeoverWorkspaceNote, reviewVerifyErrorProblem, reviewWorkspaceLines, type ReviewSnapshot, type ReviewTarget, type ReviewVerifyResult } from "../../../shared/review.ts";
-import { setupNote } from "../../prompt.ts";
+import { setupNote, workspaceCheckoutNote, workspaceSyncFailedNote } from "../../prompt.ts";
 import type { Pending } from "../context.ts";
 import { recordWorkerEnded } from "../completed-work.ts";
 import { toMessage } from "../rows.ts";
@@ -11,7 +11,7 @@ import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
 import { idle } from "../sessions.ts";
 import { refreshHandoffBranch } from "../task-graph-handoff.ts";
 import { mainFolderOf, projectRow, workerRow, workerSession } from "./ctx.ts";
-import { enqueueFirstTurn, insertLine } from "./lines.ts";
+import { enqueueFirstTurn, enqueueWorkerTask, insertLine } from "./lines.ts";
 import { insertReport, insertTurnFailed } from "./reports.ts";
 import { cancelQueuedWorkerPmNoticesIn } from "./stale-notices.ts";
 import { notStarted, taskDedupeKey, toReportMessage } from "./text.ts";
@@ -50,6 +50,8 @@ export function getWorktreeTask(w: WorkersCtx, workerId: WorkerId): WorktreeTask
     ? w.options.taskGraphs?.workerGraphWorkspacePlan(workerId)
     : undefined;
   const worktreePath = worker.worktree_path!;
+  const expected = plan === undefined ? null : (w.options.taskGraphs?.workerGraphUpstreamCommit(workerId) ?? null);
+  const expectedField = expected === null ? {} : { expected };
   let reviewBranch = review?.branch;
   if (review?.snapshot === null && plan?.kind === "review" && review.branch !== plan.branch) {
     refreshPendingReviewBranch(w, workerId, worktreePath, review.branch, plan.branch);
@@ -61,12 +63,52 @@ export function getWorktreeTask(w: WorkersCtx, workerId: WorkerId): WorktreeTask
     repo: mainFolderOf(w, worker.project_id),
     worktreePath,
     checkout: reviewBranch !== undefined
-      ? { kind: "review", branch: reviewBranch }
-      : { kind: "branch", branch: worker.branch!, ...(plan?.kind === "fork" ? { base: plan.baseBranch } : {}) },
+      ? { kind: "review", branch: reviewBranch, ...expectedField }
+      : { kind: "branch", branch: worker.branch!, ...(plan?.kind === "fork" ? { base: plan.baseBranch, ...expectedField } : {}) },
     status: worker.status as WorktreeTask["status"],
     setupCommand: projectRow(w, worker.project_id).setup_command,
   };
 }
+
+function prependTaskNoteIn(w: WorkersCtx, p: Pending, workerId: WorkerId, note: string): void {
+  const task = w.db.get<MessageDbRow>("SELECT * FROM messages WHERE dedupe_key = ? AND status = 'queued'", taskDedupeKey(workerId));
+  if (task === undefined) return;
+  const row = w.db.get<MessageDbRow>("UPDATE messages SET text = ?, updated_at = ? WHERE id = ? RETURNING *", `${note}\n\n${task.text}`, w.now(), task.id)!;
+  p.changes.push({ type: "message.updated", data: { message: toMessage(row) } });
+}
+
+export const noteWorkspaceCheckout = (w: WorkersCtx, workerId: WorkerId, note: WorkspaceCheckoutNote): void =>
+  w.write((p) => {
+    const worker = workerRow(w, workerId);
+    const text = workspaceCheckoutNote(note);
+    if (worker === null || worker.status === "ended" || worker.base_commit !== null || text === null) return;
+    prependTaskNoteIn(w, p, workerId, text);
+  });
+
+export function getWorktreeSyncTask(w: WorkersCtx, workerId: WorkerId): WorktreeSyncTask | null {
+  const worker = workerRow(w, workerId);
+  if (worker === null || worker.status === "ended" || worker.workspace !== "worktree" || !worker.branch || !worker.worktree_path) return null;
+  return {
+    repo: mainFolderOf(w, worker.project_id),
+    worktreePath: worker.worktree_path,
+    branch: worker.branch,
+    expected: w.options.taskGraphs?.workerGraphUpstreamCommit(workerId) ?? null,
+  };
+}
+
+type SyncNote = WorkspaceCheckoutNote | { branch: string; error: string } | null;
+
+function worktreeSyncedIn(w: WorkersCtx, p: Pending, workerId: WorkerId, note: SyncNote): void {
+  const worker = workerRow(w, workerId);
+  if (worker === null || worker.status === "ended") return;
+  const text = note === null ? null : "error" in note ? workspaceSyncFailedNote(note.branch, note.error) : workspaceCheckoutNote(note);
+  if (text !== null) prependTaskNoteIn(w, p, workerId, text);
+  enqueueWorkerTask(w, p, worker);
+}
+
+/** Inherited worktrees start their first turn only after the branch was checked against its remote. */
+export const onWorktreeSynced = (w: WorkersCtx, workerId: WorkerId, note: SyncNote): void =>
+  w.write((p) => worktreeSyncedIn(w, p, workerId, note));
 
 export const onSetupStarted = (w: WorkersCtx, workerId: WorkerId): boolean =>
   w.write((p) => {
@@ -216,6 +258,11 @@ export function actionFailedIn(w: WorkersCtx, p: Pending, action: AnyActionRow, 
   }
   if (action.type === "worktree.create") {
     worktreeCreateFailedIn(w, p, action.params.workerId, error);
+    return;
+  }
+  if (action.type === "worktree.sync") {
+    const worker = workerRow(w, action.params.workerId);
+    worktreeSyncedIn(w, p, action.params.workerId, worker?.branch ? { branch: worker.branch, error } : null);
     return;
   }
   if (action.type !== "session.send") return;

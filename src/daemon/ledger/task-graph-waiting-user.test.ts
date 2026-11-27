@@ -26,7 +26,7 @@ import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import { MAX_GATE_SUMMARY_CHARS } from "../../shared/limits.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
-import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
+import { addWorktree, remoteBranchHead, resolveBranchTip, resolveCommit } from "../git/index.ts";
 import { createReviewObserver, createReviewVerifyHandler, createWorktreeCreateHandler } from "../handlers.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -154,7 +154,8 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
   const runWorktreeCreate = async (workerId: WorkerId) => {
     const handler = createWorktreeCreateHandler({
       ledger,
-      observeReview,
+      resolveTip: resolveBranchTip,
+      probePr: async () => null,
       addWorktree,
       setup: {
         start: (req) => {
@@ -633,9 +634,9 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     expect(stateOf(implRunning)).toBe("running");
     const wImpl = implRunning.activeWorkerId!;
 
-    // session.end(wDesign) 排在 session.send(wImpl) 之前，且同线复用同一个 worktree
+    // session.end(wDesign) 排在 wImpl 开工前的 worktree.sync 之前，且同线复用同一个 worktree
     const endIdx = enqueued.findIndex((a) => a.type === "session.end" && a.params.sessionId === workerSessionOf(wDesign).id);
-    const sendIdx = enqueued.findIndex((a) => a.type === "session.send" && a.params.sessionId === workerSessionOf(wImpl).id);
+    const sendIdx = enqueued.findIndex((a) => a.type === "worktree.sync" && a.params.workerId === wImpl);
     expect(endIdx).toBeGreaterThanOrEqual(0);
     expect(sendIdx).toBeGreaterThan(endIdx);
     expect(db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", wImpl)?.worktree_path).toBe(

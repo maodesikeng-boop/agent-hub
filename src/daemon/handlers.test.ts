@@ -18,9 +18,11 @@ import {
   createSessionSendHandler,
   createSessionStartHandler,
   createWorktreeCreateHandler,
+  createWorktreeSyncHandler,
   endedOnRevokedTokens,
   type HandlerDeps,
 } from "./handlers.ts";
+import type { BranchTip, WorktreeSyncResult } from "./git/index.ts";
 import type { SetupJob } from "./setup/index.ts";
 
 const NOW = 1_800_000_000_000;
@@ -45,7 +47,7 @@ function message(patch: Partial<Message> = {}): Message {
   };
 }
 
-function action<T extends "session.start" | "session.send" | "session.end" | "worktree.create">(type: T, params: ActionRow<T>["params"]): ActionRow<T> {
+function action<T extends "session.start" | "session.send" | "session.end" | "worktree.create" | "worktree.sync">(type: T, params: ActionRow<T>["params"]): ActionRow<T> {
   return { id: 1, type, dedupeKey: "k", params, status: "running", attempts: 0, nextAttemptAt: 0, lastError: null, createdAt: 0, updatedAt: 0 };
 }
 
@@ -424,15 +426,21 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
       return true;
     });
     const recordReviewSnapshot = vi.fn(() => void calls.push("recordReviewSnapshot"));
-    const observeReview = vi.fn(async () => ({ sha: "c0ffee", remote: { sha: "c0ffee" }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } }));
+    const noteWorkspaceCheckout = vi.fn(() => void calls.push("noteWorkspaceCheckout"));
+    const resolveTip = vi.fn(async (): Promise<BranchTip> => {
+      calls.push("resolveTip");
+      return { commit: "beef01", local: "dead02", remote: { name: "up", sha: "beef01" }, findings: [{ kind: "remote_ahead", remote: "up", local: "dead02" }] };
+    });
+    const probePr = vi.fn(async () => ({ number: 7, state: "OPEN" as const, url: "https://x/pull/7" }));
     const deps = {
-      ledger: { getWorktreeTask, onSetupStarted, onWorktreeCreated, recordReviewSnapshot },
-      observeReview,
+      ledger: { getWorktreeTask, onSetupStarted, onWorktreeCreated, recordReviewSnapshot, noteWorkspaceCheckout },
+      resolveTip,
+      probePr,
       addWorktree,
       setup: { start },
       setupLogPath: (id: number) => `/data/state/logs/setup/worker-${id}.log`,
     };
-    return { deps, getWorktreeTask, onSetupStarted, onWorktreeCreated, recordReviewSnapshot, observeReview, addWorktree, start, jobs, calls };
+    return { deps, getWorktreeTask, onSetupStarted, onWorktreeCreated, recordReviewSnapshot, noteWorkspaceCheckout, resolveTip, probePr, addWorktree, start, jobs, calls };
   }
 
   it("先取任务，再在主文件夹里建 worktree，最后把起点提交交给账本", async () => {
@@ -441,6 +449,7 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
     expect(result).toEqual({ kind: "done" });
     expect(t.getWorktreeTask).toHaveBeenCalledWith(3);
     expect(t.addWorktree).toHaveBeenCalledWith({ repoFolder: "/code/foo", worktreePath: "/data/worktrees/1/3", branch: "hub/3-fix-x" });
+    expect(t.resolveTip).not.toHaveBeenCalled();
     expect(t.recordReviewSnapshot).not.toHaveBeenCalled();
     expect(t.onWorktreeCreated).toHaveBeenCalledWith(3, "c0ffee");
     expect(t.calls).toEqual(["addWorktree", "onWorktreeCreated"]);
@@ -489,13 +498,26 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
     }
   });
 
-  it("审查 Worker：detached 检出被审分支，开工前记下被审分支在本地、origin 和 PR 上的样子", async () => {
-    const t = worktreeDeps({ task: { ...task, checkout: { kind: "review", branch: "hub/2-impl" } } });
+  it("review Worker: detached checkout of the branch's delivered tip; the snapshot records the checkout, the local branch, the remote, and the PR", async () => {
+    const t = worktreeDeps({ task: { ...task, checkout: { kind: "review", branch: "hub/2-impl", expected: "beef01" } } });
     expect(await createWorktreeCreateHandler(t.deps)(action("worktree.create", { workerId: 3 }))).toEqual({ kind: "done" });
-    expect(t.addWorktree).toHaveBeenCalledWith({ repoFolder: "/code/foo", worktreePath: "/data/worktrees/1/3", branch: null, base: "refs/heads/hub/2-impl" });
-    expect(t.observeReview).toHaveBeenCalledWith("/code/foo", "hub/2-impl");
-    expect(t.recordReviewSnapshot).toHaveBeenCalledWith(3, { sha: "c0ffee", remote: { sha: "c0ffee" }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } });
-    expect(t.calls).toEqual(["addWorktree", "recordReviewSnapshot", "onWorktreeCreated"]);
+    expect(t.resolveTip).toHaveBeenCalledWith("/code/foo", "hub/2-impl", "beef01");
+    expect(t.addWorktree).toHaveBeenCalledWith({ repoFolder: "/code/foo", worktreePath: "/data/worktrees/1/3", branch: null, base: "beef01" });
+    expect(t.probePr).toHaveBeenCalledWith("/code/foo", "hub/2-impl");
+    expect(t.recordReviewSnapshot).toHaveBeenCalledWith(3, {
+      sha: "c0ffee", local: "dead02", remote: { name: "up", sha: "beef01" }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" },
+    });
+    expect(t.noteWorkspaceCheckout).toHaveBeenCalledWith(3, { branch: "hub/2-impl", commit: "c0ffee", findings: [{ kind: "remote_ahead", remote: "up", local: "dead02" }] });
+    expect(t.calls).toEqual(["resolveTip", "addWorktree", "recordReviewSnapshot", "noteWorkspaceCheckout", "onWorktreeCreated"]);
+  });
+
+  it("fork Worker: the new branch starts from the base branch's delivered tip, not the local ref", async () => {
+    const t = worktreeDeps({ task: { ...task, checkout: { kind: "branch", branch: "hub/3-fix-x", base: "hub/2-impl" } } });
+    await createWorktreeCreateHandler(t.deps)(action("worktree.create", { workerId: 3 }));
+    expect(t.resolveTip).toHaveBeenCalledWith("/code/foo", "hub/2-impl", null);
+    expect(t.addWorktree).toHaveBeenCalledWith({ repoFolder: "/code/foo", worktreePath: "/data/worktrees/1/3", branch: "hub/3-fix-x", base: "beef01" });
+    expect(t.recordReviewSnapshot).not.toHaveBeenCalled();
+    expect(t.calls).toEqual(["resolveTip", "addWorktree", "noteWorkspaceCheckout", "onWorktreeCreated"]);
   });
 
   it("git 出错：原样抛给执行器重试（次数用完由执行器调 onActionFailed），不告诉账本建好了", async () => {
@@ -595,5 +617,41 @@ describe("session.send 处理函数：任务图交付单发送前异步补齐 di
       source: "system",
       text: "【任务图 #3 · 改造 待交付】\n原始正文\n文件数=1 PR=42",
     });
+  });
+});
+
+describe("worktree.sync handler", () => {
+  const syncTask = { repo: "/code/foo", worktreePath: "/data/worktrees/1/2", branch: "hub/2-impl", expected: "beef01" };
+  const tip: BranchTip = { commit: "beef01", local: "dead02", remote: { name: "up", sha: "beef01" }, findings: [{ kind: "remote_ahead", remote: "up", local: "dead02" }] };
+
+  function syncDeps(result: WorktreeSyncResult, found: typeof syncTask | null = syncTask) {
+    const onWorktreeSynced = vi.fn();
+    const syncWorktree = vi.fn(async () => result);
+    return { onWorktreeSynced, syncWorktree, handler: createWorktreeSyncHandler({ ledger: { getWorktreeSyncTask: () => found, onWorktreeSynced }, syncWorktree }) };
+  }
+
+  it("fast-forwards the inherited branch and tells the ledger what happened", async () => {
+    const t = syncDeps({ tip, outcome: { kind: "fast_forwarded", from: "dead02", to: "beef01" } });
+    expect(await t.handler(action("worktree.sync", { workerId: 2 }))).toEqual({ kind: "done" });
+    expect(t.syncWorktree).toHaveBeenCalledWith("/code/foo", "/data/worktrees/1/2", "hub/2-impl", "beef01");
+    expect(t.onWorktreeSynced).toHaveBeenCalledWith(2, {
+      branch: "hub/2-impl", commit: "beef01", findings: tip.findings, sync: { kind: "fast_forwarded", from: "dead02", to: "beef01" },
+    });
+  });
+
+  it("a dirty worktree stays on the local commit", async () => {
+    const t = syncDeps({ tip, outcome: { kind: "dirty", to: "beef01" } });
+    await t.handler(action("worktree.sync", { workerId: 2 }));
+    expect(t.onWorktreeSynced).toHaveBeenCalledWith(2, expect.objectContaining({ commit: "dead02", sync: { kind: "dirty", to: "beef01" } }));
+  });
+
+  it("starts the Worker without a note when the worktree is not on its branch or the Worker has no worktree", async () => {
+    const off = syncDeps({ tip: null, outcome: { kind: "not_on_branch" } });
+    await off.handler(action("worktree.sync", { workerId: 2 }));
+    expect(off.onWorktreeSynced).toHaveBeenCalledWith(2, null);
+    const gone = syncDeps({ tip: null, outcome: { kind: "not_on_branch" } }, null);
+    await gone.handler(action("worktree.sync", { workerId: 2 }));
+    expect(gone.syncWorktree).not.toHaveBeenCalled();
+    expect(gone.onWorktreeSynced).toHaveBeenCalledWith(2, null);
   });
 });

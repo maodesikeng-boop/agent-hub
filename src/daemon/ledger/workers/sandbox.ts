@@ -9,7 +9,7 @@ import { readPmCapabilityPolicy } from "../pm-capabilities.ts";
 import type { WorkerDbRow } from "../rows.ts";
 import { createSandboxApprovalStore } from "../sandbox-approvals.ts";
 import { projectRow, workerRow } from "./ctx.ts";
-import { enqueueFirstTurn, enqueueWorkerTask, insertLine } from "./lines.ts";
+import { enqueueFirstTurn, insertLine } from "./lines.ts";
 import { endWorkerIn } from "./lifecycle.ts";
 import { notStarted } from "./text.ts";
 import { startMaxTime } from "./timers.ts";
@@ -83,7 +83,7 @@ export function createWorkerSandboxApprovals(getWorkers: () => WorkersCtx, ctx: 
         w.enqueue(p, { type: "worktree.create", params: { workerId: worker.id } });
         w.projects.syncSessionFolders(projectRow(w, worker.project_id));
       } else if (worker.workspace === "worktree") {
-        enqueueWorkerTask(w, p, worker);
+        w.enqueue(p, { type: "worktree.sync", params: { workerId: worker.id } });
       } else {
         enqueueFirstTurn(w, p, worker);
       }

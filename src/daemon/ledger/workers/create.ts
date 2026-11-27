@@ -14,7 +14,7 @@ import { toConversation } from "../rows.ts";
 import type { ConversationDbRow, ProjectDbRow, WorkerDbRow } from "../rows.ts";
 import { hasGitCommitSync } from "../task-graph-handoff.ts";
 import { workerRow } from "./ctx.ts";
-import { enqueueFirstTurn, enqueueWorkerTask, insertLine, insertPmMessage } from "./lines.ts";
+import { enqueueFirstTurn, insertLine, insertPmMessage } from "./lines.ts";
 import { holdWorkerForSandboxIn } from "./sandbox.ts";
 import { gitFailed, taskDedupeKey } from "./text.ts";
 import { startMaxTime } from "./timers.ts";
@@ -193,7 +193,7 @@ export function kickOffWorkerIn(
   insertLine(w, p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
   launch.afterStartedLine?.();
   if (launch.inherited) {
-    enqueueWorkerTask(w, p, worker);
+    w.enqueue(p, { type: "worktree.sync", params: { workerId: worker.id } });
   } else if (worker.workspace === "worktree") {
     w.enqueue(p, { type: "worktree.create", params: { workerId: worker.id } });
     w.projects.syncSessionFolders(launch.project);

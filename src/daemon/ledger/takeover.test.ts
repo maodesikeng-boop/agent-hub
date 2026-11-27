@@ -195,6 +195,8 @@ describe("换人接手同一步：重放 441", () => {
     expect(enqueued.filter((a) => a.type === "worktree.create")).toEqual([]);
     expect(enqueued.filter((a) => a.type === "session.start")).toEqual([]);
     const w2Session = sessionIdOf(w2.id);
+    expect(enqueued).toContainEqual(expect.objectContaining({ type: "worktree.sync", params: { workerId: w2.id } }));
+    ledger.onWorktreeSynced(w2.id, null);
     expect(enqueued).toContainEqual(
       expect.objectContaining({ type: "session.send", params: { sessionId: w2Session, messageId: firstMessage(w2).id, source: "user" } }),
     );

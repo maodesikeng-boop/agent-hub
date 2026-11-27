@@ -3,13 +3,13 @@ import type { TaskGraphId, TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { Db } from "../../store/index.ts";
 import { fail } from "../context.ts";
-import { workerIdsOf } from "./rows.ts";
+import { readStoredArtifact, workerIdsOf } from "./rows.ts";
 import { buildGraphMaps } from "./store.ts";
 import type { KeyAdjacency, StepWorkspacePlan, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
 type UpstreamWorker = { id: number; worktree_path: string | null; branch: string; base_commit: string };
 
-interface PlanInput {
+export interface PlanInput {
   graphRow: TaskGraphDbRow;
   step: TaskNodeDbRow;
   byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>;
@@ -57,6 +57,43 @@ function findUpstreamWorktree(db: Db, input: PlanInput): { worker: UpstreamWorke
   }
 }
 
+/** Walks the single-parent chain above a step, passing through skipped and review steps. */
+function* upstreamChain(input: PlanInput): Generator<TaskNodeDbRow> {
+  const { step, byKey, incoming } = input;
+  let cur = step.node_key;
+  const seen = new Set<TaskNodeKey>();
+  while (true) {
+    const ups = incoming.get(cur) ?? [];
+    if (ups.length !== 1 || seen.has(ups[0]!)) return;
+    cur = ups[0]!;
+    seen.add(cur);
+    const u = byKey.get(cur);
+    if (u === undefined) return;
+    yield u;
+  }
+}
+
+/** A step after a review with an explicit base continues the reviewed branch, not the trunk. */
+function reviewedBaseUpstream(input: PlanInput): string | null {
+  for (const u of upstreamChain(input)) {
+    if (u.skipped === 1) continue;
+    return u.review === 1 ? u.base : null;
+  }
+  return null;
+}
+
+const REPORTED_COMMIT = /\b[0-9a-f]{7,40}\b/i;
+
+/** The commit the nearest finished non-review upstream step reported delivering. */
+export function upstreamDeliveredCommit(input: PlanInput): string | null {
+  for (const u of upstreamChain(input)) {
+    if (u.skipped === 1 || u.review === 1) continue;
+    const reported = readStoredArtifact(u.artifact_json).artifact?.commit ?? "";
+    return REPORTED_COMMIT.exec(reported)?.[0]?.toLowerCase() ?? null;
+  }
+  return null;
+}
+
 function resolveReviewPlan(db: Db, input: PlanInput): Extract<StepWorkspacePlan, { kind: "review" }> {
   const { step } = input;
   if (step.base !== null) return { kind: "review", branch: step.base, implWorktreePath: null };
@@ -89,7 +126,10 @@ export function resolveWorkspacePlan(db: Db, input: PlanInput): StepWorkspacePla
   if (step.review === 1) return resolveReviewPlan(db, input);
   if (step.base === "main") return { kind: "fresh" };
   const up = findUpstreamWorktree(db, input);
-  if (up === null) return { kind: "fresh" };
+  if (up === null) {
+    const reviewed = reviewedBaseUpstream(input);
+    return reviewed === null ? { kind: "fresh" } : { kind: "fork", baseBranch: reviewed };
+  }
   const w = up.worker;
   if (!up.forked && w.worktree_path && existsSync(w.worktree_path)) {
     const chainIds = chainWorkerIds(step, byKey, incoming);

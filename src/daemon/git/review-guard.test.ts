@@ -91,7 +91,7 @@ describe("审查目录与禁推（真 git）", () => {
 
   it("审查目录 detached 在被审分支的提交上；重复建算成功", async () => {
     expect(snapshot.sha).toBe(git(repo, "rev-parse", IMPL));
-    expect(snapshot.remote).toEqual({ sha: snapshot.sha });
+    expect(snapshot.remote).toEqual({ name: "origin", sha: snapshot.sha });
     expect(git(reviewDir, "rev-parse", "HEAD")).toBe(snapshot.sha);
     expect(spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: reviewDir }).status).not.toBe(0);
     const again = await addWorktree({ repoFolder: repo, worktreePath: reviewDir, branch: null, base: `refs/heads/${IMPL}` });
@@ -120,8 +120,8 @@ describe("审查目录与禁推（真 git）", () => {
       expect(pushed.status).not.toBe(0);
       expect(pushed.stderr).toContain("审查步骤只查不修");
     }
-    expect(await remoteBranchHead(repo, IMPL)).toBe(snapshot.sha);
-    expect(await remoteBranchHead(repo, "review-fix")).toBeNull();
+    expect(await remoteBranchHead(repo, IMPL)).toEqual({ name: "origin", sha: snapshot.sha });
+    expect(await remoteBranchHead(repo, "review-fix")).toEqual({ name: "origin", sha: null });
     expect(diffReviewSnapshot(IMPL, snapshot, await observe(repo, IMPL))).toEqual([]);
   });
 

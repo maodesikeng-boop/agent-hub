@@ -37,7 +37,8 @@ describe("linked worktree branch reconciliation", () => {
     };
     const handle = createWorktreeCreateHandler({
       addWorktree, ledger: f.ledger,
-      observeReview: async (cwd, branch) => ({ sha: git(cwd, "rev-parse", branch), remote: null, pr: null }),
+      resolveTip: async (cwd, branch) => ({ commit: git(cwd, "rev-parse", branch), local: git(cwd, "rev-parse", branch), remote: null, findings: [] }),
+      probePr: async () => null,
       setup: { start: vi.fn() },
       setupLogPath: () => join(f.root, "setup.log"),
     });
