@@ -39,7 +39,7 @@ export type CleanWaitResult =
   | { ok: true; mergeStateStatus: string; state: string; waitedMs: number }
   | {
       ok: false;
-      reason: "moved_head" | "closed" | "dirty" | "behind" | "timeout" | "query_error";
+      reason: "moved_head" | "closed" | "dirty" | "behind" | "unstable" | "timeout" | "query_error";
       mergeStateStatus?: string;
       message: string;
       waitedMs: number;
@@ -47,8 +47,8 @@ export type CleanWaitResult =
 
 /**
  * Polls `gh pr view` after posting a `bellwood/review` success stamp until GitHub reports mergeStateStatus CLEAN.
- * Postcondition: returns ok:true on CLEAN, DRAFT, or MERGED; fails fast on moved head, CLOSED, DIRTY, or BEHIND;
- * retries transient gh errors up to MAX_TRANSIENT_CLEAN_POLL_ERRORS; returns timeout once timeoutMs elapses.
+ * Postcondition: returns ok:true on CLEAN, HAS_HOOKS, DRAFT, or MERGED; fails fast on moved head, CLOSED, DIRTY,
+ * BEHIND, or UNSTABLE; retries transient gh errors up to MAX_TRANSIENT_CLEAN_POLL_ERRORS; returns timeout once timeoutMs elapses.
  */
 export async function waitForPrCleanState(
   _input: {

@@ -9,10 +9,10 @@
 - [docs/friction-and-stability-fixes-design.md](friction-and-stability-fixes-design.md): Verified root-cause analysis, approach comparisons, cross-vendor/cross-platform unification, bounds, and acceptance scenarios for all six items.
 - [src/vendors/agy/limits.ts](../src/vendors/agy/limits.ts) and [src/vendors/agy/rules.ts](../src/vendors/agy/rules.ts): Bounded rule-budget inspection (`inspectAgyRuleBudget`) and actionable warning formatting listing offending filenames and byte sizes.
 - [src/shared/errors.ts](../src/shared/errors.ts), [src/daemon/driver/base-driver.ts](../src/daemon/driver/base-driver.ts), [src/daemon/router/single-turn.ts](../src/daemon/router/single-turn.ts), [src/vendors/agy/driver-state.ts](../src/vendors/agy/driver-state.ts), [src/vendors/claude/driver-state.ts](../src/vendors/claude/driver-state.ts), [src/vendors/codex/driver-state.ts](../src/vendors/codex/driver-state.ts), [src/vendors/pi/driver-state.ts](../src/vendors/pi/driver-state.ts), and [src/vendors/_common/acp/driver.ts](../src/vendors/_common/acp/driver.ts): Unified macOS nested `sandbox-exec` exit code 71 detection and actionable failure messaging across all eight vendors and Router single-turn runs.
-- [src/vendors/daemon-types.ts](../src/vendors/daemon-types.ts), [src/vendors/agy/paths.ts](../src/vendors/agy/paths.ts), [src/daemon/provider-manager/runtime-resolver.ts](../src/daemon/provider-manager/runtime-resolver.ts), [test/tester/local-instance.ts](../test/tester/local-instance.ts), [test/tester/vendors.ts](../test/tester/vendors.ts), and [scripts/verify-smoke.ts](../scripts/verify-smoke.ts): Safe macOS isolated-`HOME` protection via `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` that never touches the user's real Keychain.
-- [scripts/gh-transient.ts](../scripts/gh-transient.ts), [scripts/wait-checks.ts](../scripts/wait-checks.ts), and [scripts/post-review-stamp.ts](../scripts/post-review-stamp.ts): Shared transient GitHub CLI error classifier (including GraphQL `EOF`) and post-stamp `CLEAN` merge-state polling.
+- [src/vendors/daemon-types.ts](../src/vendors/daemon-types.ts), [src/vendors/agy/paths.ts](../src/vendors/agy/paths.ts), [src/vendors/agy/handover.ts](../src/vendors/agy/handover.ts), [src/daemon/provider-manager/runtime-resolver.ts](../src/daemon/provider-manager/runtime-resolver.ts), [test/tester/local-instance.ts](../test/tester/local-instance.ts), [test/tester/vendors.ts](../test/tester/vendors.ts), and [scripts/verify-smoke.ts](../scripts/verify-smoke.ts): Safe macOS isolated-`HOME` protection via `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` across driver sessions, model/command/quota/setup probes, copy-fork handovers, and test harnesses without touching the user's real Keychain.
+- [scripts/gh-transient.ts](../scripts/gh-transient.ts), [scripts/wait-checks.ts](../scripts/wait-checks.ts), and [scripts/post-review-stamp.ts](../scripts/post-review-stamp.ts): Shared transient GitHub CLI error classifier (covering both `gh pr view` and `migration-claims` GraphQL `EOF`) and post-stamp `CLEAN` merge-state polling across all GitHub `MergeStateStatus` values.
 - [test/append-log.ts](../test/append-log.ts), [src/vendors/pi/handover.ts](../src/vendors/pi/handover.ts), [src/vendors/pi/fork-turn.ts](../src/vendors/pi/fork-turn.ts), [src/vendors/_common/acp/driver.test.ts](../src/vendors/_common/acp/driver.test.ts), [src/daemon/router/target-port.test.ts](../src/daemon/router/target-port.test.ts), and [src/vendors/pi/composer-transcript-handover.test.ts](../src/vendors/pi/composer-transcript-handover.test.ts): Event-driven log watching, fake-timer timeout control, and deterministic process-exit synchronization for the three load-sensitive tests.
-- Acceptance and regression test files: [src/vendors/agy/rules.test.ts](../src/vendors/agy/rules.test.ts), [src/shared/describe-failure.test.ts](../src/shared/describe-failure.test.ts), [src/daemon/driver/base-driver.test.ts](../src/daemon/driver/base-driver.test.ts), [src/daemon/router/single-turn.test.ts](../src/daemon/router/single-turn.test.ts), [src/vendors/agy/paths.test.ts](../src/vendors/agy/paths.test.ts), [src/daemon/provider-manager/runtime-resolver.test.ts](../src/daemon/provider-manager/runtime-resolver.test.ts), [test/tester/bench.test.ts](../test/tester/bench.test.ts), [test/tester/vendors.test.ts](../test/tester/vendors.test.ts), [scripts/wait-checks.test.ts](../scripts/wait-checks.test.ts), [scripts/post-review-stamp.test.ts](../scripts/post-review-stamp.test.ts), [test/append-log.test.ts](../test/append-log.test.ts), and the three stabilized test suites above.
+- Acceptance and regression test files: [src/vendors/agy/rules.test.ts](../src/vendors/agy/rules.test.ts), [src/shared/describe-failure.test.ts](../src/shared/describe-failure.test.ts), [src/daemon/driver/base-driver.test.ts](../src/daemon/driver/base-driver.test.ts), [src/daemon/router/single-turn.test.ts](../src/daemon/router/single-turn.test.ts), [src/vendors/agy/paths.test.ts](../src/vendors/agy/paths.test.ts), [src/vendors/agy/handover.test.ts](../src/vendors/agy/handover.test.ts), [src/daemon/provider-manager/runtime-resolver.test.ts](../src/daemon/provider-manager/runtime-resolver.test.ts), [test/tester/bench.test.ts](../test/tester/bench.test.ts), [test/tester/vendors.test.ts](../test/tester/vendors.test.ts), [scripts/wait-checks.test.ts](../scripts/wait-checks.test.ts), [scripts/post-review-stamp.test.ts](../scripts/post-review-stamp.test.ts), [test/append-log.test.ts](../test/append-log.test.ts), and the three stabilized test suites above.
 
 ### Project Manager plan review
 
@@ -57,14 +57,75 @@ All six issues were verified directly against `main` (`59358e6e`) on 2026-11-28.
    - `src/daemon/router/target-port.test.ts:395-396`: Configures real-timer `peerDigestTimeoutMs: 60` and `peerDispatchTimeoutMs: 80` on real loopback HTTP calls in the first test block, whereas the later `cold mesh link` block in the same file (`lines 485-563`) already switched to `vi.useFakeTimers` plus an event gate (`digestRequested`).
    - `src/vendors/pi/composer-transcript-handover.test.ts:54, 241`: Overrides `createPiComposer` timeout down from `COMMANDS_QUERY_TIMEOUT_MS` (15,000 ms) to `3_000` ms, polls `alive(failedPid)` with `vi.waitFor(..., { timeout: 3_000 })` instead of awaiting child exit, and waits a real `KILL_WAIT_MS` (2,000 ms) inside a default-5s Vitest test.
 
+### Subsystem architecture (via `how`)
+
+Before finalizing the design, each affected subsystem was traced end-to-end from entry points through data flow, ownership boundaries, and failure paths.
+
+#### Overview
+
+The six items sit across four distinct subsystem boundaries in Bellwood:
+1. **Vendor runtime environment and `agy` launch pipeline**: Controls how `agy` discovers rules, builds child process environments, and stores OAuth tokens across session drivers, model/command/quota/setup probes, copy-fork handovers, and isolated test harnesses.
+2. **Driver startup, Seatbelt sandboxing, and failure propagation**: Controls how OS sandboxes wrap vendor processes, how startup exits become `DriverError` or `session.exited` events, and how both the action executor (`handlers.ts` -> `executor.ts` -> `describeFailure`) and Router (`single-turn.ts`) surface errors to users.
+3. **GitHub PR check and review-stamp CLI gates**: Controls how `scripts/wait-checks.ts`, `scripts/migration-claims.ts`, and `scripts/post-review-stamp.ts` wrap `execGh`, classify transient vs. permanent errors, and confirm mergeability before squash-merge.
+4. **Test synchronization harnesses**: Controls how ACP driver tests, Router peer-timeout tests, and Pi transcript-handover tests synchronize with child processes, JSONL append logs, and timers.
+
+#### Key concepts
+
+- **Dual vendor env resolution (`resolveVendorEnv` vs. `resolveManagedDriverEnv`)**: `src/daemon/provider-manager/runtime-resolver.ts` exposes two separate env builders. `resolveVendorEnv(vendor)` returns the full process env (merged `PATH` + managed secrets) for short-lived probes (`models`, `commands`, `provider-manager`, `provider-quota`). `resolveManagedDriverEnv(vendor)` returns the overlay passed to `driver.options.env` in `src/daemon/daemon.ts:490`, which `BaseSessionDriver` merges into `buildChildEnv(process.env, launch.env, driverEnv)`.
+- **Independent copy-fork spawner**: `src/vendors/agy/handover.ts` (`createAgyCopyForker`) spawns `agy` directly with `buildChildEnv(process.env, src.launch.env)`, bypassing `runtime-resolver.ts` because `src.launch.env` comes from `prepareLaunch` rather than `driver.options.env`.
+- **Two failure paths on startup exit**: When a sandboxed child dies before emitting `init`, the driver emits `session.exited` (`reason: "startup_failed", exitCode`) and rejects `driver.start()` / `driver.send()` with `DriverError("spawn_failed", detail)`. Normal conversations retry `DriverError` through `actions/executor.ts` and format the final message with `describeFailure()`; Router's `single-turn.ts` subscribes to `session.exited` and settles before `driver.start()` rejects unless it inspects `startup_failed` exit context.
+- **Two GraphQL call sites in `wait-checks.ts`**: `waitForChecks` queries PR status via `deps.queryPr` AND (once checks pass on open PRs targeting `main`) calls `deps.checkMigrationClaims` (`scripts/migration-claims.ts`), which catches `execGh` errors and returns `{ kind: "incomplete", reason }`.
+- **GitHub `MergeStateStatus` enum**: GitHub GraphQL returns `CLEAN`, `HAS_HOOKS`, `DRAFT`, `BLOCKED`, `UNKNOWN`, `DIRTY`, `BEHIND`, or `UNSTABLE`. Only `BLOCKED` and `UNKNOWN` indicate waiting for status/mergeability recomputation; `CLEAN` and `HAS_HOOKS` are mergeable; `DIRTY`, `BEHIND`, and `UNSTABLE` are terminal non-mergeable states.
+
+#### How it works
+
+```mermaid
+flowchart LR
+  P["src/vendors/agy/paths.ts (runtimeEnv)"] --> R["runtime-resolver.ts"]
+  R -->|"resolveVendorEnv(agy)"| Probes["models / commands / quota / provider-manager"]
+  R -->|"resolveManagedDriverEnv(agy)"| Driver["daemon.ts:490 -> BaseSessionDriver -> buildChildEnv"]
+  P -->|"agyIsolatedHomeEnv()"| Handover["src/vendors/agy/handover.ts (createAgyCopyForker)"]
+  Bench["local-instance.ts / vendors.ts / verify-smoke.ts"] -->|"explicit env"| Agy["real agy CLI"]
+  Probes --> Agy
+  Driver --> Agy
+  Handover --> Agy
+```
+
+```mermaid
+flowchart TD
+  Spawn["sandbox-exec exits 71 (sandbox_apply: Operation not permitted)"] --> Format["formatStartupExitDetail() in 5 driver paths"]
+  Format --> Err["DriverError(spawn_failed, detail)"]
+  Format --> Exited["session.exited (startup_failed, exitCode: 71)"]
+  Err -->|"handlers.ts -> executor.ts -> onActionFailed"| Desc["describeFailure() -> Web UI / Feishu / hub CLI"]
+  Err -->|"single-turn.ts catch"| Router["Router single-turn error reply"]
+  Exited -->|"single-turn.ts listener"| Router
+```
+
+#### Where things live
+
+- `agy` rules & warning: `src/vendors/agy/rules.ts` (`agyRuleBudgetWarning`), called by `src/vendors/agy/driver.ts` -> emitted as `driver.warning` (excluded from model prompt history by `src/daemon/ledger/vendor-switch-context.ts:63`).
+- `agy` env & keychain safety: `src/vendors/agy/paths.ts` (registered via `src/vendors/paths-registry.ts`, which forbids importing `node:fs`), `src/daemon/provider-manager/runtime-resolver.ts`, `src/daemon/daemon.ts`, `src/vendors/agy/handover.ts`, `test/tester/local-instance.ts`, `test/tester/vendors.ts`, `scripts/verify-smoke.ts`.
+- Nested macOS sandbox exit 71: `src/shared/errors.ts` (`describeFailure`), `src/daemon/driver/base-driver.ts` (`formatStartupExitDetail`), `src/vendors/{agy,claude,codex,pi}/driver-state.ts`, `src/vendors/_common/acp/driver.ts`, `src/daemon/router/single-turn.ts`.
+- GitHub CLI gates: `scripts/gh-transient.ts`, `scripts/wait-checks.ts`, `scripts/migration-claims.ts`, `scripts/post-review-stamp.ts`, `src/daemon/git/gh.ts`.
+- Flaky test harnesses: `test/append-log.ts`, `src/vendors/_common/acp/driver.test.ts`, `src/daemon/router/target-port.test.ts`, `src/vendors/pi/handover.ts`, `src/vendors/pi/fork-turn.ts`, `src/vendors/pi/composer-transcript-handover.test.ts`.
+
+#### Gotchas
+
+1. **Missing `resolveManagedDriverEnv` silently breaks driver sessions**: Wiring `VendorPathsModule.runtimeEnv` only into `resolveVendorEnv` protects `models`/`commands`/`quota` probes while leaving actual `agy` driver sessions (`daemon.ts:490`) unprotected against macOS Keychain popups. Both `resolveVendorEnv` AND `resolveManagedDriverEnv` must apply `runtimeEnv`, and `createAgyCopyForker` (`src/vendors/agy/handover.ts:201`) must merge `agyIsolatedHomeEnv` because it does not go through `runtime-resolver.ts`.
+2. **`paths-registry.ts` cannot import `node:fs`**: Test `setupFiles` load `src/vendors/paths-registry.ts` before Vitest mocks `node:fs`. Therefore `src/vendors/agy/paths.ts` must accept an `exists` callback via `VendorRuntimeEnvInput` rather than importing `node:fs`.
+3. **`wait-checks.ts` `transientErrors = 0` reset trap**: Line 627 resets `transientErrors = 0` right after `deps.queryPr` succeeds. If `deps.checkMigrationClaims` subsequently returns `{ kind: "incomplete", reason: "... EOF" }`, retrying without keeping `transientErrors` intact across the `checkMigrationClaims` failure would create an infinite loop; `transientErrors` must only reset after both `queryPr` and `checkMigrationClaims` pass without a transient error.
+4. **Full GitHub `MergeStateStatus` handling**: `HAS_HOOKS` is a valid mergeable state (required checks passed, repo has pre-receive hooks) and must return `ok: true`; `UNSTABLE` means a non-required check failed or branch protection marked the PR unstable and must fail fast (`reason: "unstable"`) rather than waiting out the 30s timeout.
+5. **Preserving `driver.test.ts:2472` warning substring**: Existing tests assert `driver.warning` includes `"1 个文件超过"`. The improved filename-aware warning must keep that summary phrase while appending the sorted filenames and UTF-8 byte counts.
+6. **Action retries on `DriverError("spawn_failed")`**: `src/daemon/handlers.ts:187` rethrows `DriverError("spawn_failed")` to `src/daemon/actions/executor.ts:171`, which retries up to `retry[row.type].maxAttempts` before invoking `onActionFailed` -> `describeFailure()`. Keeping `DriverError("spawn_failed")` retry semantics unchanged avoids unexpected regressions in transient spawn-error recovery while ensuring the surfaced failure message is always `MACOS_NESTED_SANDBOX_MESSAGE`.
+
 ### Core concepts
 
 | State / Concept | Write authority | Duplicated facts | Missing concept |
 | --- | --- | --- | --- |
 | `agy` rule budget | `src/vendors/agy/rules.ts` | None | Structured per-file budget report (`AgyRuleBudgetReport`) listing oversized and top contributing files |
 | macOS nested `sandbox-exec` failure | Driver close/startup + `src/shared/errors.ts` | Each of 5 driver startup formatters and `single-turn.ts` format exit failures separately | Shared nested-sandbox exit detector & actionable message (`formatStartupExitDetail` + `isNestedMacOsSandboxError`) |
-| `agy` macOS token storage in isolated `HOME` | `src/vendors/agy/paths.ts` (`runtimeEnv`) + `runtime-resolver.ts` + bench env | `test/tester/vendors.ts` checked file-store path while `local-instance.ts` and `runtime-resolver.ts` omitted `AGY_CLI_FORCE_FILE_TOKEN_STORAGE` | Vendor-declared `runtimeEnv` hook in `VendorPathsModule` |
-| Transient `gh` network errors | `scripts/gh-transient.ts` | `wait-checks.ts` owned its own regex; `post-review-stamp.ts` had no retry | Shared `isTransientGhError` classifier covering Go `net/http` `EOF` / HTTP/2 resets |
+| `agy` macOS token storage in isolated `HOME` | `src/vendors/agy/paths.ts` (`runtimeEnv`) + `runtime-resolver.ts` (`resolveVendorEnv` & `resolveManagedDriverEnv`) + `src/vendors/agy/handover.ts` + bench env | `test/tester/vendors.ts` checked file-store path while `local-instance.ts`, `runtime-resolver.ts`, and `handover.ts` omitted `AGY_CLI_FORCE_FILE_TOKEN_STORAGE` | Vendor-declared `runtimeEnv` hook in `VendorPathsModule` applied to both probe and driver env paths |
+| Transient `gh` network errors | `scripts/gh-transient.ts` | `wait-checks.ts` owned its own regex and did not retry transient `migration-claims` errors; `post-review-stamp.ts` had no retry | Shared `isTransientGhError` classifier covering Go `net/http` `EOF` / HTTP/2 resets across `queryPr`, `checkMigrationClaims`, and `waitForPrCleanState` |
 | Post-stamp mergeability readiness | `scripts/post-review-stamp.ts` | None | Bounded `waitForPrCleanState` poll after posting `success` stamp |
 | Test synchronization on logs/timeouts/exits | `test/append-log.ts` + individual tests | Inline `realSleep` loops and hard-coded millisecond timeouts | Event-driven `waitForJsonLogEvent` + injectable `killWaitMs` + fake-timer timeout tests |
 
@@ -102,7 +163,7 @@ All six issues were verified directly against `main` (`59358e6e`) on 2026-11-28.
 
 | Dimension | Candidate 1: Temporary macOS Keychain DB via `security create-keychain` | Candidate 2: Harness-only env injection (`test/tester` & `verify-smoke` only) | Candidate 3 (Recommended — Day-one design): Vendor `runtimeEnv` boundary + explicit bench env |
 | --- | --- | --- | --- |
-| Structure | Run `security create-keychain` / `unlock-keychain` in temp `HOME/Library/Keychains/login.keychain-db` | Hard-code `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` only in `local-instance.ts`, `vendors.ts`, `verify-smoke.ts` | Add `VendorPathsModule.runtimeEnv` in `src/vendors/agy/paths.ts` (sets `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` on `darwin` when `HOME` lacks `Library/Keychains/login.keychain-db`), wired into `runtime-resolver.ts`, plus explicit env in test bench & `loginFix` |
+| Structure | Run `security create-keychain` / `unlock-keychain` in temp `HOME/Library/Keychains/login.keychain-db` | Hard-code `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` only in `local-instance.ts`, `vendors.ts`, `verify-smoke.ts` | Add `VendorPathsModule.runtimeEnv` in `src/vendors/agy/paths.ts` (sets `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` on `darwin` when `HOME` lacks `Library/Keychains/login.keychain-db`), wired into both `resolveVendorEnv` and `resolveManagedDriverEnv` in `runtime-resolver.ts` plus `createAgyCopyForker` (`src/vendors/agy/handover.ts`) and explicit env in test bench & `loginFix` |
 | Touches real Keychain / `securityd`? | Risky: `security`/`cfprefsd` are per-UID daemons and can pollute user keychain search list | Never | Never |
 | Protects ad-hoc isolated-`HOME` review daemons? | Only if every reviewer script runs keychain setup | No — every new script re-hits the popup | Yes — daemon protects every `agy` invocation automatically |
 | Real user `HOME` impact | N/A | None | Zero — real `HOME` has `Library/Keychains/login.keychain-db`, so normal Keychain login is untouched |
@@ -163,7 +224,7 @@ All four rules in `AGENTS.md` ("Caches and state bounds") are satisfied:
 
 - **All eight registered vendors (`claude`, `codex`, `agy`, `pi`, `cursor`, `deepseek`, `opencode`, `kimi`)**:
   - **Exit 71 nested-sandbox diagnostics**: Unified in `src/shared/errors.ts` (`isNestedMacOsSandboxError`, `describeFailure`) and `src/daemon/driver/base-driver.ts` (`formatStartupExitDetail`), called by all five driver startup paths (`claude`, `codex`, `agy`, `pi`, and `_common/acp` serving `cursor`, `deepseek`, `opencode`, `kimi`) plus `src/daemon/router/single-turn.ts`. Any future vendor using `BaseSessionDriver` or `createAcpDriver` gets nested-sandbox diagnostics automatically with zero vendor-specific code.
-  - **Isolated-`HOME` runtime environment**: Unified via optional `VendorPathsModule.runtimeEnv` in `src/vendors/daemon-types.ts`, invoked by `createVendorRuntimeResolver` (`src/daemon/provider-manager/runtime-resolver.ts`). A future vendor that needs platform-specific isolated-`HOME` env vars implements only its single `src/vendors/<vendor>/paths.ts` file.
+  - **Isolated-`HOME` runtime environment**: Unified via optional `VendorPathsModule.runtimeEnv` in `src/vendors/daemon-types.ts`, invoked by `createVendorRuntimeResolver` (`src/daemon/provider-manager/runtime-resolver.ts`) in both `resolveVendorEnv` (probes/catalog/commands/quota) and `resolveManagedDriverEnv` (session drivers), with `createAgyCopyForker` (`src/vendors/agy/handover.ts`) invoking `agyIsolatedHomeEnv` directly. A future vendor that needs platform-specific isolated-`HOME` env vars implements only its single `src/vendors/<vendor>/paths.ts` file.
   - **`agy` rule budget warning**: Specific to `agy` (the only vendor injecting prompts through `.agents/rules/*.md` with 24 KB/60 KB limits); kept in `src/vendors/agy/rules.ts` so both the current stream-json driver and any future `agy acp` driver call the same `agyRuleBudgetWarning` / `inspectAgyRuleBudget` functions.
 - **All three platforms (`darwin`, `win32`, `linux`)**:
   - `agyIsolatedHomeEnv` activates exclusively on `platform === "darwin"` and returns `{}` on `linux` and `win32`.
@@ -194,11 +255,12 @@ In the implementation step (same PR):
 - `src/daemon/driver/base-driver.ts`: Exports skeleton `formatStartupExitDetail` for unified driver startup exit diagnostics.
 - `src/vendors/daemon-types.ts`: Adds optional `runtimeEnv` hook to `VendorPathsModule`.
 - `src/vendors/agy/paths.ts`: Exports `AGY_FORCE_FILE_TOKEN_STORAGE_ENV`, `AGY_MACOS_LOGIN_KEYCHAIN_REL`, skeleton `agyIsolatedHomeEnv`, and `runtimeEnv`.
+- `src/vendors/agy/handover.ts`: Adds optional `platform?: string` to `AgyCopyOptions` so copy-fork `write()` can merge `agyIsolatedHomeEnv` deterministically across platforms.
 - `scripts/gh-transient.ts`: Exports skeleton `isTransientGhError` shared by `wait-checks.ts` and `post-review-stamp.ts`.
-- `scripts/post-review-stamp.ts`: Exports `CleanWaitResult`, `DEFAULT_CLEAN_WAIT_SECONDS`, `DEFAULT_CLEAN_POLL_INTERVAL_MS`, `MAX_TRANSIENT_CLEAN_POLL_ERRORS`, extends `PostStampArgs`/`PostStampDeps`, and exports skeleton `waitForPrCleanState`.
+- `scripts/post-review-stamp.ts`: Exports `CleanWaitResult` (covering `CLEAN`, `HAS_HOOKS`, `DRAFT`, `MERGED`, `BLOCKED`, `UNKNOWN`, `DIRTY`, `BEHIND`, `UNSTABLE`, `CLOSED`, `moved_head`), `DEFAULT_CLEAN_WAIT_SECONDS`, `DEFAULT_CLEAN_POLL_INTERVAL_MS`, `MAX_TRANSIENT_CLEAN_POLL_ERRORS`, extends `PostStampArgs`/`PostStampDeps`, and exports skeleton `waitForPrCleanState`.
 - `test/append-log.ts`: Exports `WaitForJsonLogOptions` and skeleton `waitForJsonLogEvent`.
 - `src/vendors/pi/handover.ts` and `src/vendors/pi/fork-turn.ts`: Adds optional `killWaitMs?: number` to `PiForkerOptions` and `runPiForkTurn`.
-- Acceptance & regression test files: `src/vendors/agy/rules.test.ts`, `src/shared/describe-failure.test.ts`, `src/daemon/driver/base-driver.test.ts`, `src/daemon/router/single-turn.test.ts`, `src/vendors/agy/paths.test.ts`, `src/daemon/provider-manager/runtime-resolver.test.ts`, `test/tester/bench.test.ts`, `test/tester/vendors.test.ts`, `scripts/wait-checks.test.ts`, `scripts/post-review-stamp.test.ts`, `test/append-log.test.ts`, `src/vendors/_common/acp/driver.test.ts`, `src/daemon/router/target-port.test.ts`, `src/vendors/pi/composer-transcript-handover.test.ts`.
+- Acceptance & regression test files: `src/vendors/agy/rules.test.ts`, `src/shared/describe-failure.test.ts`, `src/daemon/driver/base-driver.test.ts`, `src/daemon/router/single-turn.test.ts`, `src/vendors/agy/paths.test.ts`, `src/vendors/agy/handover.test.ts`, `src/daemon/provider-manager/runtime-resolver.test.ts`, `test/tester/bench.test.ts`, `test/tester/vendors.test.ts`, `scripts/wait-checks.test.ts`, `scripts/post-review-stamp.test.ts`, `test/append-log.test.ts`, `src/vendors/_common/acp/driver.test.ts`, `src/daemon/router/target-port.test.ts`, `src/vendors/pi/composer-transcript-handover.test.ts`.
 
 ---
 
@@ -222,17 +284,17 @@ Every quoted user sentence maps to scenarios below:
   - *Next*: The driver closes before init and emits `session.exited` (`reason: "startup_failed", exitCode: 71`) while `driver.start()`/`send()` rejects with `DriverError("spawn_failed", ...)`.
   - *User sees*: Both the Worker/conversation failure message (`describeFailure`) and Router single-turn result report the actionable macOS nested-sandbox explanation (`MACOS_NESTED_SANDBOX_MESSAGE`), never bare `"进程提前退出（startup_failed）"` or generic `"<Vendor> 没能启动"`.
 - **S3 (macOS isolated `HOME` runs real `agy` without Keychain popup — Item 3)**:
-  - *First*: A Bellwood daemon or test bench starts on macOS with an isolated temporary `HOME` that contains no `Library/Keychains/login.keychain-db`.
-  - *Next*: `vendorRuntime.resolveVendorEnv("agy")` (or `localDaemonEnv` / `verify-smoke` / `loginFix`) prepares the environment and runs real `agy --output-format json models`, `agy acp`, or `agy -p`.
-  - *User sees*: `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` is injected automatically; `agy` uses file-based token storage in `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`, completes without triggering any macOS Keychain GUI popup, and never touches the user's real Keychain. On a normal macOS `HOME` that has `Library/Keychains/login.keychain-db`, `resolveVendorEnv("agy")` leaves the variable unset so existing Keychain logins continue working unchanged.
+  - *First*: A Bellwood daemon, copy-fork handover, or test bench starts on macOS with an isolated temporary `HOME` that contains no `Library/Keychains/login.keychain-db`.
+  - *Next*: `vendorRuntime.resolveVendorEnv("agy")`, `vendorRuntime.resolveManagedDriverEnv("agy")`, `createAgyCopyForker().write()`, `localDaemonEnv`, `verify-smoke`, or `loginFix` prepares the environment and runs real `agy --output-format json models`, `agy acp`, or `agy -p`.
+  - *User sees*: `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` is injected automatically across every path; `agy` uses file-based token storage in `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`, completes without triggering any macOS Keychain GUI popup, and never touches the user's real Keychain. On a normal macOS `HOME` that has `Library/Keychains/login.keychain-db`, `resolveVendorEnv("agy")`, `resolveManagedDriverEnv("agy")`, and `createAgyCopyForker` leave the variable unset so existing Keychain logins continue working unchanged.
 - **S4 (`scripts/wait-checks.ts` retries GraphQL `EOF` — Item 4)**:
-  - *First*: `node scripts/wait-checks.ts <PR>` polls a PR while CI checks are running.
-  - *Next*: `gh pr view` returns exit 1 with stderr `Post "https://api.github.com/graphql": EOF` (or `unexpected EOF`, `http2: client connection lost`, `broken pipe`, `i/o timeout`) twice before succeeding.
-  - *User sees*: `wait-checks.ts` logs transient retry notices and retries up to `MAX_TRANSIENT_QUERY_ERRORS` (5), exiting `0` once checks finish green, while still failing immediately with exit `1` on permanent 401/403/404/GraphQL-schema errors.
+  - *First*: `node scripts/wait-checks.ts <PR>` polls a PR while CI checks are running or while verifying migration claims.
+  - *Next*: Either `gh pr view` returns exit 1 with stderr `Post "https://api.github.com/graphql": EOF` (or `unexpected EOF`, `http2: client connection lost`, `broken pipe`, `i/o timeout`) twice before succeeding, OR `checkMigrationClaims` returns `{ kind: "incomplete", reason: 'gh api failed: Post "https://api.github.com/graphql": EOF' }` before succeeding.
+  - *User sees*: `wait-checks.ts` logs transient retry notices and retries up to `MAX_TRANSIENT_QUERY_ERRORS` (5) across both `queryPr` and `checkMigrationClaims` (exiting `1` once consecutive transient errors reach the cap, never looping forever), exiting `0` once checks finish green, while still failing immediately with exit `1` on permanent 401/403/404/GraphQL-schema errors.
 - **S5 (`scripts/post-review-stamp.ts` waits for `CLEAN` — Item 5)**:
   - *First*: Independent review passes on PR head `<SHA>` and `node scripts/post-review-stamp.ts <PR> --sha <SHA>` posts `bellwood/review` `success`.
-  - *Next*: GitHub initially reports `mergeStateStatus: "BLOCKED"` (and optionally a transient GraphQL `EOF` on one poll) before recomputing `mergeStateStatus: "CLEAN"`.
-  - *User sees*: `post-review-stamp.ts` waits until `mergeStateStatus` becomes `"CLEAN"` and then exits `0` with `{ posted: true, mergeStateStatus: "CLEAN", ... }`. If the PR is `DIRTY`, `BEHIND`, `CLOSED`, or its head moved, it fails fast with exit `1`; if `DRAFT` or `MERGED`, it exits `0` without hanging; `--no-wait` and `--state failure` skip the `CLEAN` wait; timeout exits `1` while clearly reporting `posted: true`.
+  - *Next*: GitHub initially reports `mergeStateStatus: "BLOCKED"` (and optionally a transient GraphQL `EOF` on one poll) before recomputing `mergeStateStatus: "CLEAN"` (or `"HAS_HOOKS"`).
+  - *User sees*: `post-review-stamp.ts` waits until `mergeStateStatus` becomes `"CLEAN"` (or `"HAS_HOOKS"`) and then exits `0` with `{ posted: true, mergeStateStatus: "CLEAN", ... }`. If the PR is `DIRTY`, `BEHIND`, `UNSTABLE`, `CLOSED`, or its head moved, it fails fast with exit `1`; if `DRAFT` or `MERGED`, it exits `0` without hanging; `--no-wait` and `--state failure` skip the `CLEAN` wait; timeout exits `1` while clearly reporting `posted: true`.
 - **S6 (Three load-sensitive tests wait on events — Item 6)**:
   - *First*: Under CPU contention, Vitest runs `src/vendors/_common/acp/driver.test.ts`, `src/daemon/router/target-port.test.ts`, and `src/vendors/pi/composer-transcript-handover.test.ts`.
   - *Next*: Each test synchronizes via `waitForJsonLogEvent` (event-driven `fs.watch` + early-exit abort), fake timers + request-received gate, or child `"exit"` event + short `killWaitMs`.
@@ -289,6 +351,7 @@ Every quoted user sentence maps to scenarios below:
     src/daemon/driver/base-driver.test.ts \
     src/daemon/router/single-turn.test.ts \
     src/vendors/agy/paths.test.ts \
+    src/vendors/agy/handover.test.ts \
     src/daemon/provider-manager/runtime-resolver.test.ts \
     test/tester/bench.test.ts \
     test/tester/vendors.test.ts \

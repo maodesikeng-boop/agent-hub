@@ -147,10 +147,11 @@ describe("post-review-stamp main", () => {
     expect(res).toEqual({ ok: true, mergeStateStatus: "CLEAN", state: "OPEN", waitedMs: 4_000 });
     expect(sleeps).toEqual([2_000, 2_000]);
 
-    // Fails fast on BEHIND / DIRTY / moved head / CLOSED without spinning until timeout.
+    // Fails fast on BEHIND / DIRTY / UNSTABLE / moved head / CLOSED without spinning until timeout.
     for (const [payload, expectedReason] of [
       [{ headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus: "BEHIND" }, "behind"],
       [{ headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus: "DIRTY" }, "dirty"],
+      [{ headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus: "UNSTABLE" }, "unstable"],
       [{ headRefOid: OTHER_SHA, state: "OPEN", isDraft: false, mergeStateStatus: "CLEAN" }, "moved_head"],
       [{ headRefOid: SHA, state: "CLOSED", isDraft: false, mergeStateStatus: "UNKNOWN" }, "closed"],
     ] as const) {
@@ -170,8 +171,9 @@ describe("post-review-stamp main", () => {
       expect(fastSleeps).toEqual([]);
     }
 
-    // Draft and MERGED PRs settle ok without waiting out the timeout.
+    // HAS_HOOKS, Draft, and MERGED PRs settle ok without waiting out the timeout.
     for (const payload of [
+      { headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus: "HAS_HOOKS" },
       { headRefOid: SHA, state: "OPEN", isDraft: true, mergeStateStatus: "DRAFT" },
       { headRefOid: SHA, state: "MERGED", isDraft: false, mergeStateStatus: "UNKNOWN" },
     ]) {

@@ -36,14 +36,20 @@ function makeResolver(platform: string, withLoginKeychain: boolean) {
 }
 
 describe("createVendorRuntimeResolver runtimeEnv (acceptance S3/S12/S13)", () => {
-  it("injects AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 for agy on macOS isolated HOME without login.keychain-db", () => {
+  it("injects AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 for agy in both resolveVendorEnv and resolveManagedDriverEnv on macOS isolated HOME", () => {
     const resolver = makeResolver("darwin", false);
     expect(resolver.resolveVendorEnv("agy")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBe("1");
+    expect(resolver.resolveManagedDriverEnv("agy")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBe("1");
     expect(resolver.resolveVendorEnv("claude")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
+    expect(resolver.resolveManagedDriverEnv("claude")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
   });
 
   it("does not inject AGY_CLI_FORCE_FILE_TOKEN_STORAGE when login.keychain-db exists or on Linux", () => {
-    expect(makeResolver("darwin", true).resolveVendorEnv("agy")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
-    expect(makeResolver("linux", false).resolveVendorEnv("agy")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
+    const darwinReal = makeResolver("darwin", true);
+    expect(darwinReal.resolveVendorEnv("agy")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
+    expect(darwinReal.resolveManagedDriverEnv("agy")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
+    const linux = makeResolver("linux", false);
+    expect(linux.resolveVendorEnv("agy")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
+    expect(linux.resolveManagedDriverEnv("agy")[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
   });
 });

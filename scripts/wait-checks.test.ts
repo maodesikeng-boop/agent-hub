@@ -415,5 +415,34 @@ describe("waitForChecks", () => {
     const h = fakeHarness([eof, eof, { kind: "ok", pr: makePr() }]);
     expect(await waitForChecks(defaultOpts({ intervalSeconds: 5 }), h.deps)).toBe(0);
     expect(h.sleeps).toEqual([5_000, 5_000]);
+
+    // Retries transient GraphQL EOF returned by checkMigrationClaims and caps retries at MAX_TRANSIENT_QUERY_ERRORS.
+    let claimCalls = 0;
+    const claimRetry = fakeHarness([{ kind: "ok", pr: makePr() }]);
+    const claimCode = await waitForChecks(defaultOpts({ intervalSeconds: 5 }), {
+      ...claimRetry.deps,
+      checkMigrationClaims: async () => {
+        claimCalls += 1;
+        if (claimCalls <= 2) {
+          return { kind: "incomplete", reason: 'gh api failed: Post "https://api.github.com/graphql": EOF' };
+        }
+        return { kind: "ok", claims: [] };
+      },
+    });
+    expect(claimCode).toBe(0);
+    expect(claimCalls).toBe(3);
+    expect(claimRetry.sleeps).toEqual([5_000, 5_000]);
+
+    let exhaustedClaimCalls = 0;
+    const claimExhausted = fakeHarness([{ kind: "ok", pr: makePr() }]);
+    const exhaustedCode = await waitForChecks(defaultOpts({ intervalSeconds: 5 }), {
+      ...claimExhausted.deps,
+      checkMigrationClaims: async () => {
+        exhaustedClaimCalls += 1;
+        return { kind: "incomplete", reason: 'gh api failed: Post "https://api.github.com/graphql": EOF' };
+      },
+    });
+    expect(exhaustedCode).toBe(1);
+    expect(exhaustedClaimCalls).toBe(MAX_TRANSIENT_QUERY_ERRORS);
   });
 });

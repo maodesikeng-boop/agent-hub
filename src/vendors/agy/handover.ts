@@ -32,6 +32,7 @@ const SQLITE_NOTADB = 26;
 
 export interface AgyCopyOptions {
   root?: string;
+  platform?: string;
 }
 
 const isUuid = (id: string): boolean => UUID_PATTERN.test(id);
