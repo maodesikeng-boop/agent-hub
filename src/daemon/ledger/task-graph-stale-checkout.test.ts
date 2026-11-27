@@ -291,6 +291,56 @@ describe("review and fix steps start from the delivered commit", () => {
     expect(git(fix2Dir, "rev-parse", "HEAD")).toBe(c2);
   });
 
+  it("worktree cleanup matches review(base): releases a finished upstream on another branch and holds one already on the reviewed branch", async () => {
+    seedPrBranch();
+    const forkGraph = createGraph([
+      { key: "fix1", title: "修复 1", brief: "修好并推到 PR 分支" },
+      { key: "review", title: "复审", brief: "复审", review: true, base: PR_BRANCH },
+      { key: "fix2", title: "修复 2", brief: "按复审意见修" },
+    ]);
+    const wFix1 = forkGraph.nodes[0]!.activeWorkerId!;
+    await prepareWorkspace(wFix1);
+    const fix1Dir = workerRow(wFix1).worktree_path;
+    writeFileSync(join(fix1Dir, "a.ts"), "export const a = 11;\n");
+    git(fix1Dir, "commit", "-am", "fix1");
+    git(fix1Dir, "push", "--quiet", "origin", `HEAD:refs/heads/${PR_BRANCH}`);
+    await reportTurn(wFix1, report({ summary: "修好了", commit: git(fix1Dir, "rev-parse", "HEAD") }));
+    // fix2 will fork from PR_BRANCH rather than inherit fix1's worktree, so the active graph does not hold fix1's directory.
+    expect(ledger.isWorkerCleanable(wFix1)).toBe(true);
+    ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: forkGraph.id });
+
+    const sameBranch = "hub/8-pr";
+    const inheritGraph = createGraph([
+      { key: "impl", title: "实现", brief: "在 PR 分支实现" },
+      { key: "review", title: "复审", brief: "复审", review: true, base: sameBranch },
+      { key: "fix2", title: "修复 2", brief: "按复审意见修" },
+    ]);
+    const wImpl = inheritGraph.nodes[0]!.activeWorkerId!;
+    await prepareWorkspace(wImpl);
+    const implDir = workerRow(wImpl).worktree_path;
+    git(implDir, "branch", "-m", sameBranch);
+    writeFileSync(join(implDir, "a.ts"), "export const a = 12;\n");
+    git(implDir, "commit", "-am", "impl on pr branch");
+    git(implDir, "push", "--quiet", "origin", sameBranch);
+    db.run("UPDATE workers SET branch = ? WHERE id = ?", sameBranch, wImpl);
+    const implSha = git(implDir, "rev-parse", "HEAD");
+    await reportTurn(wImpl, report({ summary: "实现了", commit: implSha }));
+    // impl is already on the reviewed branch, so fix2 will inherit its worktree and the graph holds it until fix2 finishes.
+    expect(ledger.isWorkerCleanable(wImpl)).toBe(false);
+
+    const wReview = graphNow(inheritGraph.id).nodes[1]!.activeWorkerId!;
+    await prepareWorkspace(wReview);
+    await reportTurn(wReview, report({ status: "有问题", summary: "有缺陷", verdict: "FAIL", sha: implSha }));
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview });
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: inheritGraph.id, nodeKey: "review" });
+
+    const wFix2 = graphNow(inheritGraph.id).nodes[2]!.activeWorkerId!;
+    expect(workerRow(wFix2).worktree_path).toBe(implDir);
+    await prepareWorkspace(wFix2);
+    await reportTurn(wFix2, report({ summary: "修好了", commit: implSha }));
+    expect(ledger.isWorkerCleanable(wImpl)).toBe(true);
+  });
+
   /** A lone review step on the PR branch, reported PASS on the commit it checked out; returns the graph state after review.verify. */
   const reviewAndVerify = async (): Promise<{ states: string[]; problems: string; sha: string }> => {
     const graph = createGraph([{ key: "review", title: "审查", brief: "审查", review: true, base: PR_BRANCH }]);
