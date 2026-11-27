@@ -46,6 +46,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 ## Testing
 
 - [AI tester](ai-tester-design.md): The resident test bench (a Mac and a server on a test account, a test Feishu bot, all eight vendor CLIs), nightly script flows, the AI tester handbook in `.agents/skills/tester/`, vendor coverage reporting, and the `pnpm verify` round-trip and restart checks.
+- [Real CLI with mock model test environment](real-cli-mock-model-design.md): Empirical 8-vendor endpoint audit, loopback multi-dialect mock LLM HTTP/SSE server, isolated temporary HOME provisioning, deterministic prompt-cache prefix stability assertions, normalized protocol snapshots, and cross-platform real-CLI CI strategy.
 
 ## Desktop and distribution
 
