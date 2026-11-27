@@ -1,5 +1,14 @@
 import { truncateChars } from "./domain.ts";
-import { PM_AGENDA_DELTA_LINES_MAX, PM_AGENDA_DELTAS_PER_SNAPSHOT, PM_AGENDA_GRAPHS_MAX, PM_AGENDA_LABEL_MAX_CHARS, PM_AGENDA_STEP_LINES_MAX } from "./limits.ts";
+import {
+  PM_AGENDA_DELTA_LINES_MAX,
+  PM_AGENDA_DELTAS_PER_SNAPSHOT,
+  PM_AGENDA_GRAPHS_MAX,
+  PM_AGENDA_LABEL_MAX_CHARS,
+  PM_AGENDA_QUIET_END_HOUR,
+  PM_AGENDA_QUIET_START_HOUR,
+  PM_AGENDA_REMIND_AFTER_MS,
+  PM_AGENDA_STEP_LINES_MAX,
+} from "./limits.ts";
 import { HUB_COMMAND } from "./names.ts";
 import type { PmId, TaskGraphId, TaskNodeKey, WorkerId } from "./domain.ts";
 import type { PmWatchId, PmWatchStatus } from "./pm-watch.ts";
@@ -322,6 +331,39 @@ export const preambleAgendaSection = (agenda: PmAgenda, now: number): string =>
 
 export function handoverAgendaNoticeText(agenda: PmAgenda): string {
   return ["【交接后还有事等你】", ...agendaLinesOf(agenda).filter((line) => line.needsPm).map((line) => `- ${line.text}`)].join("\n");
+}
+
+export function isAgendaQuietHours(now: number): boolean {
+  const hour = new Date(now).getHours();
+  return PM_AGENDA_QUIET_START_HOUR > PM_AGENDA_QUIET_END_HOUR
+    ? hour >= PM_AGENDA_QUIET_START_HOUR || hour < PM_AGENDA_QUIET_END_HOUR
+    : hour >= PM_AGENDA_QUIET_START_HOUR && hour < PM_AGENDA_QUIET_END_HOUR;
+}
+
+export function agendaRefSince(ref: string): number | null {
+  const match = /@(\d+)$/u.exec(ref);
+  return match === null ? null : Number(match[1]);
+}
+
+function waitedAgeText(ms: number): string {
+  const minutes = Math.max(1, Math.floor(ms / 60_000));
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rem = minutes % 60;
+  return rem === 0 ? `${hours} 小时` : `${hours} 小时 ${rem} 分钟`;
+}
+
+export function overdueAgendaNoticeText(agenda: PmAgenda, refs: readonly string[], now: number): string {
+  const wanted = new Set(refs);
+  const waitMinutes = Math.floor(PM_AGENDA_REMIND_AFTER_MS / 60_000);
+  const lines = agendaLinesOf(agenda)
+    .filter((line) => line.needsPm && wanted.has(line.ref))
+    .map((line) => {
+      const since = agendaRefSince(line.ref);
+      const age = since === null ? "" : ` · 已等 ${waitedAgeText(now - since)}`;
+      return `- ${line.text}${age}`;
+    });
+  return [`【这些事等你处理超过 ${waitMinutes} 分钟了】`, ...lines].join("\n");
 }
 
 export const appendDeliverySuffix = (text: string, suffix: string): string =>

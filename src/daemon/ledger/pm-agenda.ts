@@ -196,12 +196,15 @@ export function isPmAgendaItemOpen(db: Db, pmId: PmId, ref: string): boolean {
     return graphReadySince(db, pmId, graphId) === Number(ready[2]) && !graphWatchesOf(db, [graphId]).has(graphId);
   }
   const step = /^graph:(\d+):step:(.+):waiting_pm@(\d+)$/u.exec(ref);
-  if (step !== null) return db.get(
-    `SELECT 1 FROM task_graphs g JOIN task_graph_steps s ON s.graph_id = g.id
-      JOIN task_graph_step_states st ON st.step_id = s.id
-      WHERE g.id = ? AND g.pm_id = ? AND g.status = 'active' AND s.node_key = ? AND s.waiting_for = 'pm' AND st.state_since = ?`,
-    Number(step[1]), pmId, step[2]!, Number(step[3]),
-  ) !== undefined;
+  if (step !== null) {
+    const graphId = Number(step[1]);
+    return !graphWatchesOf(db, [graphId]).has(graphId) && db.get(
+      `SELECT 1 FROM task_graphs g JOIN task_graph_steps s ON s.graph_id = g.id
+        JOIN task_graph_step_states st ON st.step_id = s.id
+        WHERE g.id = ? AND g.pm_id = ? AND g.status = 'active' AND s.node_key = ? AND s.waiting_for = 'pm' AND st.state_since = ?`,
+      graphId, pmId, step[2]!, Number(step[3]),
+    ) !== undefined;
+  }
   const worker = /^worker:(\d+)@(\d+)$/u.exec(ref);
   return worker !== null && openWorkerItems(db, pmId, Number(worker[1])).some((item) => item.since === Number(worker[2]) && item.watchId === undefined);
 }
