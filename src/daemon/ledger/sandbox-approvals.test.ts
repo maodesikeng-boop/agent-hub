@@ -397,7 +397,7 @@ describe("Worker sandbox approval", () => {
     expect(f.ledger.getSandboxApproval!(initial.id)?.status).toBe("revoked");
   });
 
-  it("queues only the inherited worktree task and holds it until the predecessor process exits", () => {
+  it("starts the inherited worktree's first turn only after the predecessor process exits", () => {
     const graph = createSandboxGraph(true);
     const initial = approvalOf(graph.nodes[0]!.activeWorkerId!)!;
     f.ledger.decideSandboxApproval!(initial.id, APPROVE);
@@ -418,7 +418,7 @@ describe("Worker sandbox approval", () => {
     f.db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE id = ?", oldSession);
     expect(f.ledger.getWorktreeSyncTask(takeover.id)).toMatchObject({ kind: "sync", worktreePath: path });
     f.ledger.onWorktreeSynced(takeover.id, null);
-    expect(actionsOf(takeover.id)).toEqual(["worktree.sync", "session.send"]);
+    expect(actionsOf(takeover.id)).toEqual(["worktree.sync", "session.start", "session.send"]);
     expect(f.db.get<{ base_commit: string }>("SELECT base_commit FROM workers WHERE id = ?", takeover.id)!.base_commit).toBe("base");
     expect(f.ledger.waitsForFirstTurn(newSession, first)).toBe(false);
   });

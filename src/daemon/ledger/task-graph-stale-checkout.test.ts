@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ActionRow, AnyActionRow } from "../../shared/actions.ts";
+import { CONFIRM_REJECT_OPTION } from "../../shared/domain.ts";
 import type { ConversationId, PmId, SessionId, TaskNode, WorkerId } from "../../shared/domain.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { parseReviewTarget } from "../../shared/review.ts";
@@ -477,5 +478,26 @@ describe("an inherited worktree starts only after worktree.sync", () => {
     createSessionStore(db).update(sessionOf(wImpl).id, { status: "ended", pid: null });
     expect(await sync(wFix)).toEqual({ kind: "done" });
     expect(sendsTo(wFix)).toBe(1);
+  });
+
+  it("a user decision and a checkpoint rejection delivered while worktree.sync waits are all sent, in order, once it finishes", async () => {
+    const { wImpl, wFix } = await inheritedFix();
+    const graphId = db.get<{ graph_id: number }>("SELECT graph_id FROM task_graph_steps WHERE node_key = 'fix'")!.graph_id;
+    const decided = ledger.hubCall(lin.sessionId, "ask", { graphId, node: "fix", text: "用 A 还是 B？" });
+    const fixNode = () => ledger.hubCall(lin.sessionId, "graph.show", { graphId }).data.graph.nodes.find((n: TaskNode) => n.key === "fix");
+    ledger.decideTaskNode(graphId as never, "fix", { askMessageId: decided.data.messageId, choice: "A", clientId: "decide-1" });
+    expect(fixNode()).toMatchObject({ status: "running", activeWorkerId: wFix });
+    db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE node_key = 'fix'", JSON.stringify({ checkpointPending: true }));
+    const rejected = ledger.hubCall(lin.sessionId, "ask", { graphId, node: "fix", text: "检查点：通过还是打回？" });
+    ledger.decideTaskNode(graphId as never, "fix", { askMessageId: rejected.data.messageId, choice: CONFIRM_REJECT_OPTION, note: "再改改", clientId: "reject-1" });
+    expect(fixNode()).toMatchObject({ status: "running", activeWorkerId: wFix });
+    expect(sendsTo(wFix)).toBe(0);
+
+    createSessionStore(db).update(sessionOf(wImpl).id, { status: "ended", pid: null });
+    await sync(wFix);
+    const queued = db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND sender = 'pm' ORDER BY id", sessionOf(wFix).conversation_id).map((r) => r.id);
+    expect(queued).toHaveLength(3);
+    const sent = enqueued.filter((a) => a.type === "session.send" && a.params.sessionId === sessionOf(wFix).id).map((a) => (a.params as { messageId: number }).messageId);
+    expect(sent).toEqual(queued);
   });
 });

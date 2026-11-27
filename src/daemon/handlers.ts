@@ -240,7 +240,7 @@ export function createReviewObserver(deps: {
     const [sha, remote, pr] = await Promise.all([
       deps.resolveCommit(repo, `refs/heads/${branch}`),
       before.remote === null ? null : deps.remoteBranchHead(repo, branch, before.remote.name),
-      deps.probePr(repo, branch),
+      before.pr === null ? null : deps.probePr(repo, branch),
     ]);
     return { sha, remote: remote ?? null, pr };
   };

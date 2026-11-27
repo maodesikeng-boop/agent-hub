@@ -17,6 +17,7 @@ import {
 import {
   createSessionEndHandler,
   createSessionSendHandler,
+  createReviewObserver,
   createSessionStartHandler,
   createWorktreeCreateHandler,
   createWorktreeSyncHandler,
@@ -661,5 +662,16 @@ describe("worktree.sync handler", () => {
     expect(await t.handler(action("worktree.sync", { workerId: 2 }))).toMatchObject({ kind: "later", reason: "worktree_busy" });
     expect(t.syncWorktree).not.toHaveBeenCalled();
     expect(t.onWorktreeSynced).not.toHaveBeenCalled();
+  });
+});
+
+describe("review observer", () => {
+  it("a review that started with no remote and no PR probes neither", async () => {
+    const remoteBranchHead = vi.fn(async () => undefined);
+    const probePr = vi.fn(async () => null);
+    const observe = createReviewObserver({ resolveCommit: async () => "abc", remoteBranchHead, probePr });
+    expect(await observe("/repo", "feature", { sha: "abc", remote: null, pr: null })).toEqual({ sha: "abc", remote: null, pr: null });
+    expect(remoteBranchHead).not.toHaveBeenCalled();
+    expect(probePr).not.toHaveBeenCalled();
   });
 });

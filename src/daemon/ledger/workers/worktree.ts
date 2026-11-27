@@ -11,7 +11,7 @@ import type { MessageDbRow, WorkerDbRow } from "../rows.ts";
 import { idle } from "../sessions.ts";
 import { refreshHandoffBranch } from "../task-graph-handoff.ts";
 import { mainFolderOf, projectRow, workerRow, workerSession } from "./ctx.ts";
-import { enqueueFirstTurn, enqueueWorkerTask, insertLine } from "./lines.ts";
+import { enqueueFirstTurn, insertLine } from "./lines.ts";
 import { insertReport, insertTurnFailed } from "./reports.ts";
 import { cancelQueuedWorkerPmNoticesIn } from "./stale-notices.ts";
 import { notStarted, taskDedupeKey, toReportMessage } from "./text.ts";
@@ -133,7 +133,7 @@ function worktreeSyncedIn(w: WorkersCtx, p: Pending, workerId: WorkerId, note: S
   w.db.run("UPDATE workers SET base_commit = ?, updated_at = ? WHERE id = ?", baseCommit, w.now(), workerId);
   const text = note === null ? null : "error" in note ? workspaceSyncFailedNote(note.branch, note.error) : workspaceCheckoutNote(note);
   if (text !== null) prependTaskNoteIn(w, p, workerId, text);
-  enqueueWorkerTask(w, p, worker);
+  enqueueFirstTurn(w, p, worker);
 }
 
 /** Inherited worktrees start their first turn only after the branch was checked against its remote and the previous Worker exited. */
