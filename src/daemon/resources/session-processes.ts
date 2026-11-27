@@ -48,8 +48,6 @@ export interface SessionProcessReaperOptions {
   readonly platform?: ListTaggedProcessesOptions & ReapTaggedProcessesOptions;
 }
 
-export const watchOwnerToken = (watchId: number, nonce: string): string => `watch${watchId}:${nonce}`;
-
 function parseIdFromTag(tag: string, pattern: RegExp): number | null {
   const match = pattern.exec(tag);
   if (match === null) return null;

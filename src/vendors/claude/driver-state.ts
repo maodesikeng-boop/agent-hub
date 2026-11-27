@@ -1,10 +1,11 @@
 import type { ClaudeChecklistState } from "./checklist.ts";
-import type {
-  BaseBatch,
-  BaseProc,
-  BaseSessionState,
-  BatchNotes,
-  StartupOutcome,
+import {
+  formatStartupExitDetail,
+  type BaseBatch,
+  type BaseProc,
+  type BaseSessionState,
+  type BatchNotes,
+  type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import type { StreamingToolPreviewTracker } from "../../daemon/driver/protocol.ts";
 import { DriverError, type ComposerCommand, type MessageId, type MessageSource } from "../../shared/index.ts";
@@ -58,7 +59,16 @@ export function startupError(
       `${retried ? "after switching --session-id/--resume: " : ""}${stderr || how}`,
     );
   }
-  return new DriverError("spawn_failed", `claude exited before system/init (${how})${stderr ? `: ${stderr}` : ""}`);
+  return new DriverError(
+    "spawn_failed",
+    formatStartupExitDetail({
+      vendorLabel: "claude",
+      phase: "system/init",
+      exitCode: outcome.exitCode,
+      signal: outcome.signal,
+      stderr: outcome.stderr,
+    }),
+  );
 }
 
 export function newBatch(

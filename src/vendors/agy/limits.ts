@@ -5,3 +5,4 @@ export const AGY_RULE_FILES_MAX = 3;
 
 export const AGY_RULE_TOTAL_BUDGET_BYTES = 60_000;
 export const AGY_RULE_SINGLE_BUDGET_BYTES = 24_000;
+export const AGY_RULE_WARNING_MAX_FILES = 10;
