@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execGh, type GhRunResult } from "../src/daemon/git/gh.ts";
+import { isTransientGhError } from "./gh-transient.ts";
 import { formatClaimConflict, formatClaimReport, verifyMigrationClaims, type ClaimCheckResult, type MigrationClaimConflict } from "./migration-claims.ts";
 import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 
@@ -543,7 +544,7 @@ export function classifyGhQueryError(failure: Extract<GhRunResult, { kind: "fail
       nextStep: "Authenticate `gh` with read access to this repository (or report the permission gap to the PM if running in a restricted account).",
     };
   }
-  if (failure.timedOut || /network|connect|timed? out|dns|resolve|enotfound|econnrefused|econnreset|tls|ssl|HTTP 5\d\d/iu.test(stderr)) {
+  if (isTransientGhError(stderr, failure.timedOut)) {
     return {
       retryable: true,
       message: failure.timedOut ? "gh pr view timed out" : stderr || "transient gh error",
@@ -624,7 +625,6 @@ export async function waitForChecks(options: WaitChecksOptions, deps: WaitChecks
       continue;
     }
 
-    transientErrors = 0;
     let snapshot: PullRequestSnapshot;
     try {
       snapshot = parsePullRequestSnapshot(query.stdout);
@@ -639,8 +639,20 @@ export async function waitForChecks(options: WaitChecksOptions, deps: WaitChecks
     let verdict = evaluatePullRequest(snapshot, ctx);
     if (verdict.kind === "pass" && snapshot.state === "OPEN" && snapshot.baseRefName === "main" && deps.checkMigrationClaims) {
       const migrationClaimResult = await deps.checkMigrationClaims(snapshot);
-      if (migrationClaimResult.kind !== "ok") verdict = evaluatePullRequest(snapshot, { ...ctx, migrationClaimResult });
+      if (migrationClaimResult.kind === "incomplete" && isTransientGhError(migrationClaimResult.reason)) {
+        transientErrors += 1;
+        if (options.once || transientErrors >= MAX_TRANSIENT_QUERY_ERRORS) {
+          verdict = evaluatePullRequest(snapshot, { ...ctx, migrationClaimResult });
+        } else {
+          deps.log(`[wait-checks] transient migration-claims error (${transientErrors}/${MAX_TRANSIENT_QUERY_ERRORS}): ${migrationClaimResult.reason}; retrying in ${options.intervalSeconds}s`);
+          await deps.sleep(intervalMs);
+          continue;
+        }
+      } else if (migrationClaimResult.kind !== "ok") {
+        verdict = evaluatePullRequest(snapshot, { ...ctx, migrationClaimResult });
+      }
     }
+    transientErrors = 0;
     if (verdict.kind === "pass") {
       for (const line of formatPassReport(verdict)) deps.log(line);
       return 0;

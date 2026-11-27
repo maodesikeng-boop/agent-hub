@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execGh, type GhRunOptions, type GhRunResult } from "../src/daemon/git/gh.ts";
+import { isTransientGhError } from "./gh-transient.ts";
 import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 
 const GITHUB_DESCRIPTION_MAX = 140;
@@ -51,16 +52,111 @@ export type CleanWaitResult =
  * BEHIND, or UNSTABLE; retries transient gh errors up to MAX_TRANSIENT_CLEAN_POLL_ERRORS; returns timeout once timeoutMs elapses.
  */
 export async function waitForPrCleanState(
-  _input: {
+  input: {
     pr: number;
     sha: string;
     env: Readonly<Record<string, string>>;
     timeoutMs: number;
     pollIntervalMs: number;
   },
-  _deps: PostStampDeps,
+  deps: PostStampDeps,
 ): Promise<CleanWaitResult> {
-  throw new Error("Not implemented");
+  const now = deps.now ?? (() => Date.now());
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  const startedAt = now();
+  const waited = () => Math.max(0, now() - startedAt);
+  const expectedSha = input.sha.toLowerCase();
+  let transientErrors = 0;
+
+  while (true) {
+    const res = await deps.execGh(
+      deps.cwd,
+      ["pr", "view", String(input.pr), "--json", "headRefOid,state,isDraft,mergeStateStatus"],
+      { timeoutMs: GH_TIMEOUT_MS, env: input.env },
+    );
+
+    if (res.kind === "failed") {
+      const transient = !res.missing && isTransientGhError(res.stderr, res.timedOut);
+      transientErrors += 1;
+      if (!transient || transientErrors >= MAX_TRANSIENT_CLEAN_POLL_ERRORS) {
+        return {
+          ok: false,
+          reason: "query_error",
+          message: `failed to poll PR #${input.pr} mergeStateStatus: ${failText(res)}`,
+          waitedMs: waited(),
+        };
+      }
+      const remaining = input.timeoutMs - waited();
+      if (remaining <= 0) {
+        return {
+          ok: false,
+          reason: "timeout",
+          message: `timed out after ${Math.round(input.timeoutMs / 1000)}s waiting for PR #${input.pr} mergeStateStatus CLEAN`,
+          waitedMs: waited(),
+        };
+      }
+      await sleep(Math.min(input.pollIntervalMs, remaining));
+      continue;
+    }
+
+    transientErrors = 0;
+    let data: { headRefOid?: string; state?: string; isDraft?: boolean; mergeStateStatus?: string };
+    try {
+      data = JSON.parse(res.stdout) as { headRefOid?: string; state?: string; isDraft?: boolean; mergeStateStatus?: string };
+    } catch {
+      return {
+        ok: false,
+        reason: "query_error",
+        message: "invalid JSON from gh pr view while waiting for CLEAN",
+        waitedMs: waited(),
+      };
+    }
+
+    const headSha = data.headRefOid?.toLowerCase() ?? "";
+    if (headSha !== "" && headSha !== expectedSha) {
+      return {
+        ok: false,
+        reason: "moved_head",
+        ...(data.mergeStateStatus !== undefined ? { mergeStateStatus: data.mergeStateStatus } : {}),
+        message: `PR #${input.pr} head moved to ${headSha} (expected ${expectedSha})`,
+        waitedMs: waited(),
+      };
+    }
+
+    const state = (data.state ?? "").toUpperCase();
+    const mergeState = (data.mergeStateStatus ?? "UNKNOWN").toUpperCase();
+    if (state === "MERGED") return { ok: true, mergeStateStatus: mergeState, state, waitedMs: waited() };
+    if (state === "CLOSED") {
+      return { ok: false, reason: "closed", mergeStateStatus: mergeState, message: `PR #${input.pr} is CLOSED`, waitedMs: waited() };
+    }
+    if (data.isDraft === true || mergeState === "DRAFT") {
+      return { ok: true, mergeStateStatus: mergeState, state: state || "OPEN", waitedMs: waited() };
+    }
+    if (mergeState === "CLEAN" || mergeState === "HAS_HOOKS") {
+      return { ok: true, mergeStateStatus: mergeState, state: state || "OPEN", waitedMs: waited() };
+    }
+    if (mergeState === "DIRTY") {
+      return { ok: false, reason: "dirty", mergeStateStatus: mergeState, message: `PR #${input.pr} has merge conflicts (mergeStateStatus=DIRTY)`, waitedMs: waited() };
+    }
+    if (mergeState === "BEHIND") {
+      return { ok: false, reason: "behind", mergeStateStatus: mergeState, message: `PR #${input.pr} is behind base branch (mergeStateStatus=BEHIND)`, waitedMs: waited() };
+    }
+    if (mergeState === "UNSTABLE") {
+      return { ok: false, reason: "unstable", mergeStateStatus: mergeState, message: `PR #${input.pr} is unstable (mergeStateStatus=UNSTABLE)`, waitedMs: waited() };
+    }
+
+    const remaining = input.timeoutMs - waited();
+    if (remaining <= 0) {
+      return {
+        ok: false,
+        reason: "timeout",
+        mergeStateStatus: mergeState,
+        message: `timed out after ${Math.round(input.timeoutMs / 1000)}s waiting for PR #${input.pr} mergeStateStatus CLEAN (last: ${mergeState})`,
+        waitedMs: waited(),
+      };
+    }
+    await sleep(Math.min(input.pollIntervalMs, remaining));
+  }
 }
 
 const clip = (text: string): string =>
@@ -78,11 +174,30 @@ export function parsePostStampArgs(argv: readonly string[]): PostStampArgs | str
   let account: string | null = null;
   let description: string | null = null;
   let dryRun = false;
+  let noWait = false;
+  let waitTimeoutSeconds: number | undefined;
+
+  const parseTimeout = (raw: string | undefined): number | string => {
+    if (!raw) return "--wait-timeout requires a positive integer number of seconds";
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed <= 0) return `--wait-timeout must be a positive integer, got ${raw}`;
+    return parsed;
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--dry-run") {
       dryRun = true;
+    } else if (arg === "--no-wait") {
+      noWait = true;
+    } else if (arg === "--wait-timeout") {
+      const t = parseTimeout(argv[++i]?.trim());
+      if (typeof t === "string") return t;
+      waitTimeoutSeconds = t;
+    } else if (arg.startsWith("--wait-timeout=")) {
+      const t = parseTimeout(arg.slice("--wait-timeout=".length).trim());
+      if (typeof t === "string") return t;
+      waitTimeoutSeconds = t;
     } else if (arg === "--sha" || arg === "--state" || arg === "--account" || arg === "--description") {
       const value = argv[++i]?.trim();
       if (!value) return `${arg} requires a value`;
@@ -106,7 +221,7 @@ export function parsePostStampArgs(argv: readonly string[]): PostStampArgs | str
   }
 
   if (prRaw === null || !/^[1-9][0-9]*$/u.test(prRaw)) {
-    return "usage: node scripts/post-review-stamp.ts <PR> --sha <40-char-sha> [--state success|failure] [--account <login>] [--description <text>] [--dry-run]";
+    return "usage: node scripts/post-review-stamp.ts <PR> --sha <40-char-sha> [--state success|failure] [--account <login>] [--description <text>] [--dry-run] [--no-wait] [--wait-timeout <seconds>]";
   }
   if (sha === null || !FULL_SHA.test(sha)) return "--sha must be a full 40-character commit SHA";
   return {
@@ -116,6 +231,8 @@ export function parsePostStampArgs(argv: readonly string[]): PostStampArgs | str
     account,
     description: clip(description ?? defaultDescription(state)),
     dryRun,
+    ...(noWait ? { noWait: true } : {}),
+    ...(waitTimeoutSeconds !== undefined ? { waitTimeoutSeconds } : {}),
   };
 }
 
@@ -166,7 +283,7 @@ export async function main(argv: readonly string[], deps: PostStampDeps = defaul
     return 1;
   }
 
-  const prRes = await deps.execGh(deps.cwd, ["pr", "view", String(parsed.pr), "--json", "number,url,headRefOid"], {
+  const prRes = await deps.execGh(deps.cwd, ["pr", "view", String(parsed.pr), "--json", "number,url,headRefOid,state,isDraft,mergeStateStatus"], {
     timeoutMs: GH_TIMEOUT_MS,
     env: auth.env,
   });
@@ -175,9 +292,9 @@ export async function main(argv: readonly string[], deps: PostStampDeps = defaul
     return 1;
   }
 
-  let prData: { number?: number; url?: string; headRefOid?: string };
+  let prData: { number?: number; url?: string; headRefOid?: string; state?: string; isDraft?: boolean; mergeStateStatus?: string };
   try {
-    prData = JSON.parse(prRes.stdout) as { number?: number; url?: string; headRefOid?: string };
+    prData = JSON.parse(prRes.stdout) as { number?: number; url?: string; headRefOid?: string; state?: string; isDraft?: boolean; mergeStateStatus?: string };
   } catch {
     deps.log(`post-review-stamp: invalid JSON from gh pr view`);
     return 1;
@@ -241,6 +358,34 @@ export async function main(argv: readonly string[], deps: PostStampDeps = defaul
   if (postRes.kind === "failed") {
     deps.log(`post-review-stamp: failed to post ${REVIEW_STATUS_CONTEXT}: ${failText(postRes)}`);
     return 1;
+  }
+
+  if (parsed.state === "success" && !parsed.noWait && typeof prData.mergeStateStatus === "string") {
+    const clean = await waitForPrCleanState(
+      {
+        pr: parsed.pr,
+        sha: parsed.sha,
+        env: auth.env,
+        timeoutMs: (parsed.waitTimeoutSeconds ?? DEFAULT_CLEAN_WAIT_SECONDS) * 1000,
+        pollIntervalMs: deps.pollIntervalMs ?? DEFAULT_CLEAN_POLL_INTERVAL_MS,
+      },
+      deps,
+    );
+    if (!clean.ok) {
+      deps.log(
+        JSON.stringify({
+          ...summary,
+          posted: true,
+          ...(clean.mergeStateStatus !== undefined ? { mergeStateStatus: clean.mergeStateStatus } : {}),
+          waitedMs: clean.waitedMs,
+          waitReason: clean.reason,
+          waitError: clean.message,
+        }),
+      );
+      return 1;
+    }
+    deps.log(JSON.stringify({ ...summary, posted: true, mergeStateStatus: clean.mergeStateStatus, waitedMs: clean.waitedMs }));
+    return 0;
   }
 
   deps.log(JSON.stringify({ ...summary, posted: true }));
