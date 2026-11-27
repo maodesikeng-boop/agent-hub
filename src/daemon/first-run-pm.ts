@@ -2,13 +2,13 @@ import { DEFAULT_PM_MODE, type Pm } from "../shared/domain.ts";
 import type { Ledger } from "../shared/ledger.ts";
 import { ENV_DEFAULT_MODEL, VENDOR_RECHECK_BUDGET_MS } from "../shared/limits.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
-import { AGENT_VENDORS, checkModel, defaultPmVendor } from "../shared/vendors.ts";
+import { AGENT_VENDORS, checkAgentSetting, defaultPmVendor } from "../shared/vendors.ts";
 import type { ModelCatalogs } from "./driver/model-catalog.ts";
 import { DEFAULT_PM_NAME } from "./prompt.ts";
 
 export interface FirstRunPmOptions {
   ledger: Pick<Ledger, "createPm">;
-  models: Pick<ModelCatalogs, "list" | "availability">;
+  models: Pick<ModelCatalogs, "list" | "availability"> & Partial<Pick<ModelCatalogs, "current">>;
   hasAnyPm: () => boolean;
   defaultModel: string | undefined;
   /** Defaults to VENDOR_RECHECK_BUDGET_MS. */
@@ -31,7 +31,8 @@ export async function ensureFirstRunPm(options: FirstRunPmOptions): Promise<Pm |
   }
   const vendor = defaultPmVendor((v) => models.availability(v));
   let defaultModel = options.defaultModel?.trim() || undefined;
-  const badModel = defaultModel === undefined ? null : checkModel(vendor, defaultModel);
+  const catalog = models.current?.(vendor) ?? null;
+  const badModel = defaultModel === undefined ? null : checkAgentSetting({ vendor, model: defaultModel, effort: null }, catalog);
   if (badModel !== null) {
     options.log(`${LOG_PREFIX} ${ENV_DEFAULT_MODEL}=${JSON.stringify(defaultModel)} 不能用（${badModel}），项目经理按默认模型建`);
     defaultModel = undefined;
