@@ -91,7 +91,8 @@ export type CommandStubs = Readonly<Record<string, readonly StubReply[]>>;
 
 // ---- 场景 ----
 
-export type ScenarioId = "s3a-tray" | "s5a-ci-mirror" | "h2-no-diff" | "k1-install" | "k2-local-config" | "k3-merge" | "k4-upgrade" | "k5-ui-bug";
+export type BuiltinScenarioId = "s3a-tray" | "s5a-ci-mirror" | "h2-no-diff" | "k1-install" | "k2-local-config" | "k3-merge" | "k4-upgrade" | "k5-ui-bug";
+export type ScenarioId = BuiltinScenarioId | (string & {});
 
 /** 场景里一类 Worker 怎么回放：按提示词里的关键词认（任务说明在 Worker 的系统提示词里）。 */
 export interface WorkerReplay {
@@ -126,8 +127,8 @@ export interface ScenarioContext {
   preludeShotsDir: string;
 }
 
-export interface Scenario {
-  id: ScenarioId;
+export interface Scenario<TId extends ScenarioId = ScenarioId> {
+  id: TId;
   title: string;
   /** 对应用户原话、设计文档章节，打印对照表时用。 */
   source: string;

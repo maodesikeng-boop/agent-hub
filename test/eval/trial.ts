@@ -4,7 +4,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isQuotaExhausted, askOf, extractAskCard, type Message, type RateLimitInfo } from "../../src/shared/domain.ts";
 import { API_PATHS, type PersonaView } from "../../src/shared/index.ts";
 import { readCompleteLogLines, readJsonLog } from "../append-log.ts";
@@ -49,6 +50,8 @@ export interface TrialPlan {
   timings: TrialTimings;
   /** 通过了也留现场（调试用）。 */
   keepWork?: boolean;
+  /** External holdout directory denied inside the real-model OS sandbox. */
+  holdoutDir?: string;
 }
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=eval", "-c", "user.email=eval@example.invalid", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -333,10 +336,19 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
     let sandbox = plan.pm.mode === "real" ? plan.pm.sandbox : null;
     if (plan.pm.mode === "real") {
       if (!sandbox) throw new Error("真模型必须使用通过 preflight 的沙箱");
-      const input = { ...(sandbox.input ?? pmSandboxInput(new URL("../../", import.meta.url).pathname, process.env)) };
+      const sourceRoot = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
+      const input = { ...(sandbox.input ?? pmSandboxInput(sourceRoot, process.env)) };
       input.writableDirs = [workDir];
       input.projectDirs = [workDir, repo];
-      input.readDenied = [...(input.readDenied ?? []), dirname(dirname(plan.resultDir)), plan.workRoot, join(plan.version.daemonMain, "../../../test/eval/replay")];
+      input.readDenied = [
+        ...new Set([
+          ...(input.readDenied ?? []),
+          dirname(dirname(plan.resultDir)),
+          plan.workRoot,
+          join(plan.version.daemonMain, "../../../test/eval/replay"),
+          ...(plan.holdoutDir ? [resolve(plan.holdoutDir)] : []),
+        ]),
+      ];
       const profile = join(workDir, "pm-sandbox.sb");
       writeFileSync(profile, pmSandboxProfile(input));
       const check = preflight(profile, input, { probeDir: workDir, evalPid: process.pid, realClaude: plan.pm.realClaude });

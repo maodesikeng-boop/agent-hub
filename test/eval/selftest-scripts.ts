@@ -2,7 +2,8 @@
 // 正例全部检查必须过，反例对应的检查必须不过，什么都不做时“要求有”的检查必须不过。用的是和真模型同一条试跑路径（trial.ts）。
 import { HUB_COMMAND } from "../../src/shared/index.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
-import type { ScenarioContext, ScenarioId } from "./types.ts";
+import type { EvalScenarioSpec } from "./product/types.ts";
+import type { BuiltinScenarioId, ScenarioContext } from "./types.ts";
 
 const hub = HUB_COMMAND;
 const say = (text: string): FakeTurn => ({ steps: [{ text }] });
@@ -25,7 +26,7 @@ const bigGraph = (title: string, keys: string[]) =>
 export type SelfTestKind = "positive" | "negative" | "nothing";
 
 /** 每个场景三份剧本：按这次试跑的路径拼（截图目录每次不同）。 */
-export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: ScenarioContext) => FakeScript>> = {
+export const SELF_TEST_SCRIPTS: Record<BuiltinScenarioId, Record<SelfTestKind, (ctx: ScenarioContext) => FakeScript>> = {
   "s3a-tray": {
     positive: (ctx) => ({
       turns: [
@@ -213,7 +214,7 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
 };
 
 /** 反例必须不过的检查。 */
-export const NEGATIVE_MUST_FAIL: Record<ScenarioId, string[]> = {
+export const NEGATIVE_MUST_FAIL: Record<BuiltinScenarioId, string[]> = {
   "s3a-tray": ["G5", "G6", "A3", "A1", "A2"],
   "s5a-ci-mirror": ["R4", "R6", "R7", "R9", "R10"],
   "h2-no-diff": ["A1", "A2"],
@@ -223,3 +224,26 @@ export const NEGATIVE_MUST_FAIL: Record<ScenarioId, string[]> = {
   "k4-upgrade": ["T1", "T2", "L1"],
   "k5-ui-bug": ["T1", "T2", "G5", "A1", "A2", "L1"],
 };
+
+export function resolveSelfTestScript(
+  scenarioId: string,
+  kind: SelfTestKind,
+  holdoutSpecs: readonly EvalScenarioSpec[] = [],
+): (ctx: ScenarioContext) => FakeScript {
+  const builtin = (SELF_TEST_SCRIPTS as Record<string, Record<SelfTestKind, (ctx: ScenarioContext) => FakeScript> | undefined>)[scenarioId];
+  if (builtin) return builtin[kind];
+
+  const holdout = holdoutSpecs.find((s) => s.id === scenarioId);
+  if (holdout?.legacyScenarioId) {
+    const mapped = (SELF_TEST_SCRIPTS as Record<string, Record<SelfTestKind, (ctx: ScenarioContext) => FakeScript> | undefined>)[holdout.legacyScenarioId];
+    if (mapped) return mapped[kind];
+  }
+
+  if (kind === "positive") {
+    return () => ({
+      turns: [{ steps: [{ bash: `${hub} status` }, { text: "已完成留出场景核查。" }] }],
+      defaultTurn: say("好的。"),
+    });
+  }
+  return () => ({ defaultTurn: say("好的。") });
+}

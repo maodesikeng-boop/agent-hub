@@ -30,7 +30,8 @@ import {
   smallGraph,
   type TraySpec,
 } from "./checks.ts";
-import type { AskSeen, CommandStubs, GhAttempt, GhPr, GhReplay, Scenario, ScenarioContext, WorkerReplay } from "./types.ts";
+import type { EvalScenarioSpec } from "./product/types.ts";
+import type { AskSeen, BuiltinScenarioId, CheckDef, CommandStubs, GhAttempt, GhPr, GhReplay, Scenario, ScenarioContext, WorkerReplay } from "./types.ts";
 
 export const REPLAY_DIR = fileURLToPath(new URL("./replay/", import.meta.url));
 const read = (rel: string) => readFileSync(join(REPLAY_DIR, rel), "utf8");
@@ -216,7 +217,7 @@ function answerInstall(ask: AskSeen): { text: string; scripted: boolean } {
   return answerByRecommendation(ask);
 }
 
-const K_SCENARIOS: Scenario[] = [
+const K_SCENARIOS: Scenario<BuiltinScenarioId>[] = [
   {
     id: "k1-install",
     title: "K1 装软件并接上（简单活不建图）",
@@ -305,7 +306,7 @@ const K_SCENARIOS: Scenario[] = [
   },
 ];
 
-export const SCENARIOS: readonly Scenario[] = [
+export const SCENARIOS: readonly Scenario<BuiltinScenarioId>[] = [
   {
     id: "s3a-tray",
     title: "S3a 托盘降高（拆法、验收）",
@@ -376,6 +377,66 @@ export function scenarioById(id: string): Scenario {
   const s = SCENARIOS.find((x) => x.id === id);
   if (!s) throw new Error(`没有场景 ${id}（有：${SCENARIOS.map((x) => x.id).join("、")}）`);
   return s;
+}
+
+function buildHoldoutCheck(spec: EvalScenarioSpec, checkId: string): CheckDef {
+  return {
+    id: checkId,
+    title: `${spec.title} (${checkId})`,
+    requiresAction: true,
+    run(facts) {
+      const acted = facts.hubCalls.length > 0 || facts.workers.length > 0 || facts.tools.length > 0;
+      return acted
+        ? {
+            status: "pass",
+            reason: `Holdout check ${checkId} observed ${facts.hubCalls.length} hub calls, ${facts.workers.length} workers, ${facts.tools.length} tool calls`,
+            evidence: [],
+          }
+        : {
+            status: "fail",
+            reason: `Holdout check ${checkId} observed no PM action`,
+            evidence: [],
+          };
+    },
+  };
+}
+
+export function resolveExecutableScenario(
+  id: string,
+  holdoutSpecs: readonly EvalScenarioSpec[] = [],
+): Scenario {
+  const builtin = SCENARIOS.find((x) => x.id === id);
+  if (builtin) return builtin;
+
+  const holdout = holdoutSpecs.find((x) => x.id === id);
+  if (holdout) {
+    if (holdout.legacyScenarioId) {
+      const base = SCENARIOS.find((x) => x.id === holdout.legacyScenarioId);
+      if (base) {
+        return {
+          ...base,
+          id: holdout.id,
+          title: holdout.title,
+          source: `holdout:${holdout.id}`,
+        };
+      }
+    }
+    return {
+      id: holdout.id,
+      title: holdout.title,
+      source: `holdout:${holdout.id}`,
+      baseCommit: TRAY_BASE,
+      demand: () => holdout.title,
+      workers: [],
+      fallbackReport: GENERIC_REPORT,
+      gh: { repo: REPO, prs: [], nextPr: 1 },
+      answer: answerByRecommendation,
+      checks: holdout.checkIds.map((checkId) => buildHoldoutCheck(holdout, checkId)),
+    };
+  }
+
+  const available = [...SCENARIOS.map((x) => x.id), ...holdoutSpecs.map((x) => x.id)].join("、");
+  throw new Error(`没有场景 ${id}（有：${available}）`);
 }
 
 export { TRAY_SPEC, UI_BUG_SPEC };

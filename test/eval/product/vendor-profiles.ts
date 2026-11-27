@@ -1,10 +1,15 @@
 // Exhaustive cross-vendor evaluation profile registry and isolated mock-server launch contracts.
 // Invariant: every registered AgentVendor has an explicit profile and coverage row with zero silent skips.
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "../../../src/shared/vendors.ts";
 import type { VendorCoverageRow, VendorEvalProfile, VendorMockLaunchConfig } from "./types.ts";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+// Preserve the caller's path separator style so POSIX and Windows scratch roots stay consistent across hosts.
+function joinIsolatedPath(root: string, ...segments: readonly string[]): string {
+  return root.includes("\\") ? win32.join(root, ...segments) : posix.join(root, ...segments);
+}
 
 function buildProfile<V extends AgentVendor>(
   vendor: V,
@@ -140,14 +145,14 @@ export function resolveVendorMockEnv(
   const baseEnv: Record<string, string> = {
     HOME: scratchHome,
     USERPROFILE: scratchHome,
-    XDG_CONFIG_HOME: join(scratchHome, ".config"),
-    XDG_DATA_HOME: join(scratchHome, ".local", "share"),
-    XDG_STATE_HOME: join(scratchHome, ".local", "state"),
+    XDG_CONFIG_HOME: joinIsolatedPath(scratchHome, ".config"),
+    XDG_DATA_HOME: joinIsolatedPath(scratchHome, ".local", "share"),
+    XDG_STATE_HOME: joinIsolatedPath(scratchHome, ".local", "state"),
   };
 
   const configHome = vendorSpec(vendor).home.configHome;
   if (configHome) {
-    baseEnv[configHome.env] = join(scratchHome, configHome.rel);
+    baseEnv[configHome.env] = joinIsolatedPath(scratchHome, configHome.rel);
   }
 
   if (strategy.kind === "codex_config_toml") {

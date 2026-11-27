@@ -12,14 +12,15 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, delimiter, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { claudeProjectDirName } from "../../src/vendors/claude/transcript.ts";
 import { DEFAULT_UI_PORT, ENV_HOME, ENV_HUB_SOCK, ENV_HUB_TOKEN, ENV_PORT } from "../../src/shared/index.ts";
 import { killGroup, onExit, boundedText } from "./lifecycle.ts";
 import type { RouterConfig } from "./fakes/claude-router.ts";
 
-const FAKES_DIR = new URL("./fakes/", import.meta.url).pathname;
+const FAKES_DIR = fileURLToPath(new URL("./fakes/", import.meta.url));
 export const ROUTER = join(FAKES_DIR, "claude-router.ts");
-export const FAKE_CLAUDE = new URL("../fake-claude/fake-claude.ts", import.meta.url).pathname;
+export const FAKE_CLAUDE = fileURLToPath(new URL("../fake-claude/fake-claude.ts", import.meta.url));
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 
 /** 换成“只记录、不执行”的替身的命令。 */
@@ -367,6 +368,17 @@ export function pmSandboxInput(realRepo: string, originalEnv: NodeJS.ProcessEnv,
     denyExec: [...denyExec],
     daemonPorts: [...ports],
   };
+}
+
+export function buildCompareSandboxInput(
+  realRepo: string,
+  originalEnv: NodeJS.ProcessEnv,
+  opts: { runsDir: string; holdoutDir?: string },
+): PmSandboxInput {
+  const input = pmSandboxInput(realRepo, originalEnv);
+  const extraDenied = [opts.runsDir, ...(opts.holdoutDir ? [resolve(opts.holdoutDir)] : [])];
+  input.readDenied = [...new Set([...(input.readDenied ?? []), ...extraDenied])];
+  return input;
 }
 
 export interface PreflightResult {

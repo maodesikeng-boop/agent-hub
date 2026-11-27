@@ -4,12 +4,12 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   type PmSandboxInput,
-  pmSandboxInput,
+  buildCompareSandboxInput,
   pmSandboxProfile,
   preflight,
   probeClaudeShimPath,
@@ -26,9 +26,9 @@ import { PRODUCT_EVAL_MIN_REGRESSION_TRIALS } from "./product/limits.ts";
 import { computeGraderFingerprint, evaluateComparison } from "./product/scoring.ts";
 import type { CapabilityScorecard, EvalScenarioSpec, TrialOutcome } from "./product/types.ts";
 import { pruneFailedWork, pruneRuns, runIdOf, type Summary, type VersionInfo } from "./report.ts";
-import { SCENARIOS, scenarioById } from "./scenarios.ts";
+import { resolveExecutableScenario, SCENARIOS } from "./scenarios.ts";
 import type { SelfTestKind } from "./selftest-scripts.ts";
-import type { ScenarioId, TrialResult } from "./types.ts";
+import type { Scenario, ScenarioId, TrialResult } from "./types.ts";
 import { prepareVersion, pruneVersions } from "./versions.ts";
 
 export interface PlanFile {
@@ -36,6 +36,8 @@ export interface PlanFile {
   workRoot: string;
   sourceRepo: string;
   keepWork: boolean;
+  holdoutDir?: string;
+  holdoutSpecs?: EvalScenarioSpec[];
   pm:
     | {
         mode: "real";
@@ -59,23 +61,62 @@ const HELP = `Usage:
   pnpm eval harness [--out <report.md>] [--json <result.json>] [--ledger <baseline.jsonl>] [--no-real-cli]
   pnpm eval compare --base <git-ref> --head <git-ref> [options]
   pnpm eval scorecard --ledger <baseline.jsonl> | --file <scorecard.json> [--format markdown|terminal]
-  pnpm eval preflight
+  pnpm eval preflight [--holdout-dir <dir>]
 
 Compare options:
-  --scenario <id>      Run only selected scenario IDs (repeatable; default: ${SCENARIOS.map((s) => s.id).join(", ")})
+  --scenario <id>      Run only selected scenario IDs (repeatable; default: ${SCENARIOS.map((s) => s.id).join(", ")} + holdout)
   --trials <k>         Trials per scenario per version (default: ${PRODUCT_EVAL_MIN_REGRESSION_TRIALS} for real, 1 for scripted)
-  --holdout-dir <dir>  External holdout scenario directory outside the repository
+  --holdout-dir <dir>  External holdout scenario directory outside the repository (denied inside real PM sandbox)
   --parallel <n>       Concurrent trials (default ${EVAL_DEFAULT_PARALLEL}, max ${EVAL_MAX_PARALLEL})
   --model <name>       Target model override
   --effort <level>     Target effort override (default xhigh)
   --root <dir>         Evaluation workspace root (default ~/.agent-hub-eval)
   --ledger <file>      Append resulting CapabilityScorecard to a JSONL baseline ledger
+  --require-gate       Exit non-zero if CapabilityScorecard.releaseGatePass is false (or chain pnpm eval scorecard --file <runDir>/scorecard.json)
   --keep-work          Keep trial workspace directories even when checks pass
   --scripted <kind>    Run scripted PM self-test (positive | negative | nothing) at zero API cost`;
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n`);
   process.exit(1);
+}
+
+export function resolveCompareSelection(opts: {
+  readonly requestedIds?: readonly string[];
+  readonly holdoutDir?: string;
+}): {
+  readonly holdoutSpecs: EvalScenarioSpec[];
+  readonly catalog: EvalScenarioSpec[];
+  readonly scenarios: Scenario[];
+  readonly evalSpecs: EvalScenarioSpec[];
+} {
+  const holdoutSpecs = opts.holdoutDir ? loadHoldoutScenarios(opts.holdoutDir) : [];
+  const catalog = [...listProductEvalScenarios(), ...holdoutSpecs];
+  const selectedIds =
+    opts.requestedIds && opts.requestedIds.length > 0
+      ? [...opts.requestedIds]
+      : [...SCENARIOS.map((s) => s.id), ...holdoutSpecs.map((s) => s.id)];
+  const scenarios = selectedIds.map((id) => resolveExecutableScenario(id, holdoutSpecs));
+  const evalSpecs = selectEvalScenarios({ ids: scenarios.map((s) => s.id) }, catalog);
+  return { holdoutSpecs, catalog, scenarios, evalSpecs };
+}
+
+export function buildInterleavedTrials(input: {
+  readonly scenarios: readonly Pick<Scenario, "id">[];
+  readonly versions: readonly { readonly label: string; readonly commit: string; readonly daemonMain: string }[];
+  readonly trialCount: number;
+  readonly runDir: string;
+}): PlanFile["trials"] {
+  return input.scenarios.flatMap((s) =>
+    Array.from({ length: input.trialCount }, (_, trialIndex) =>
+      input.versions.map((v) => ({
+        scenario: s.id,
+        trialIndex,
+        version: { label: v.label, commit: v.commit, daemonMain: v.daemonMain },
+        resultDir: join(input.runDir, `${s.id}-${v.label}-t${trialIndex}`),
+      })),
+    ).flat(),
+  );
 }
 
 function toTrialOutcome(
@@ -164,7 +205,12 @@ function runScorecardCommand(values: Record<string, string | boolean | string[] 
 
 async function main(): Promise<void> {
   const originalEnv = { ...process.env };
-  const [command, ...rest] = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
+    process.stdout.write(`${HELP}\n`);
+    process.exit(0);
+  }
+  const [command, ...rest] = rawArgs;
   const { values } = parseArgs({
     args: rest,
     options: {
@@ -183,6 +229,7 @@ async function main(): Promise<void> {
       file: { type: "string" },
       format: { type: "string" },
       "no-real-cli": { type: "boolean" },
+      "require-gate": { type: "boolean" },
       "keep-work": { type: "boolean" },
       scripted: { type: "string" },
       help: { type: "boolean", short: "h" },
@@ -212,6 +259,7 @@ async function main(): Promise<void> {
     fail("Real-model replay compare requires macOS sandbox-exec; use --scripted or `pnpm eval harness` on other platforms.");
   }
 
+  const holdoutDir = typeof values["holdout-dir"] === "string" ? resolve(values["holdout-dir"]) : undefined;
   const root = values.root ?? join(homedir(), ".agent-hub-eval");
   const workRoot = join(root, "w");
   const versionsDir = join(root, "v");
@@ -232,8 +280,10 @@ async function main(): Promise<void> {
   } else {
     const realClaude = originalEnv.AGENT_HUB_CLAUDE || whichFirst("claude", originalEnv.PATH);
     if (!realClaude) fail("claude binary not found; install and sign in before running real-model compare.");
-    const input = pmSandboxInput(SOURCE_REPO, originalEnv);
-    input.readDenied = [...(input.readDenied ?? []), runsDir];
+    const input = buildCompareSandboxInput(SOURCE_REPO, originalEnv, {
+      runsDir,
+      ...(holdoutDir ? { holdoutDir } : {}),
+    });
     const probeDir = join(runDir, "probe");
     mkdirSync(probeDir, { recursive: true });
     input.writableDirs = [probeDir];
@@ -271,13 +321,10 @@ async function main(): Promise<void> {
     1,
     Number(values.trials ?? (scripted !== undefined ? 1 : PRODUCT_EVAL_MIN_REGRESSION_TRIALS)) || 1,
   );
-  const scenarios = (values.scenario ?? SCENARIOS.map((s) => s.id)).map((id) => scenarioById(id));
-
-  const catalog = [
-    ...listProductEvalScenarios(),
-    ...(values["holdout-dir"] ? loadHoldoutScenarios(values["holdout-dir"]) : []),
-  ];
-  const evalSpecs = selectEvalScenarios({ ids: scenarios.map((s) => s.id) }, catalog);
+  const { holdoutSpecs, scenarios, evalSpecs } = resolveCompareSelection({
+    ...(values.scenario ? { requestedIds: values.scenario } : {}),
+    ...(holdoutDir ? { holdoutDir } : {}),
+  });
   const specById = new Map(evalSpecs.map((s) => [s.id, s]));
   const graderSha = computeGraderFingerprint(evalSpecs);
 
@@ -293,17 +340,10 @@ async function main(): Promise<void> {
     workRoot,
     sourceRepo: SOURCE_REPO,
     keepWork: values["keep-work"] === true,
+    ...(holdoutDir ? { holdoutDir } : {}),
+    ...(holdoutSpecs.length > 0 ? { holdoutSpecs } : {}),
     pm,
-    trials: versions.flatMap((v) =>
-      scenarios.flatMap((s) =>
-        Array.from({ length: trialCount }, (_, trialIndex) => ({
-          scenario: s.id,
-          trialIndex,
-          version: { label: v.label, commit: v.commit, daemonMain: v.daemonMain },
-          resultDir: join(runDir, `${s.id}-${v.label}-t${trialIndex}`),
-        })),
-      ),
-    ),
+    trials: buildInterleavedTrials({ scenarios, versions, trialCount, runDir }),
   };
   const planFile = join(runDir, "plan.json");
   writeFileSync(planFile, JSON.stringify(plan, null, 2));
@@ -319,9 +359,9 @@ async function main(): Promise<void> {
   const unregisterVitest = onExit(() => {
     if (vitest.pid) killGroup(vitest.pid, "SIGTERM");
   });
-  const vitestStatus = await new Promise<number | null>((resolve, reject) => {
+  const vitestStatus = await new Promise<number | null>((resolveExit, reject) => {
     vitest.once("error", reject);
-    vitest.once("exit", resolve);
+    vitest.once("exit", resolveExit);
   });
   unregisterVitest();
   if (vitest.pid) killGroup(vitest.pid);
@@ -382,7 +422,11 @@ async function main(): Promise<void> {
   if (trials.length < plan.trials.length) {
     log(`${plan.trials.length - trials.length} trial(s) produced no result (vitest exit ${String(vitestStatus)}).`);
   }
-  process.exitCode = trials.length === plan.trials.length && trials.every((t) => t.envError === null) ? 0 : 1;
+  const allCompleted = trials.length === plan.trials.length && trials.every((t) => t.envError === null);
+  const gateOk = values["require-gate"] === true ? scorecard.releaseGatePass : true;
+  process.exitCode = allCompleted && gateOk ? 0 : 1;
 }
 
-await main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

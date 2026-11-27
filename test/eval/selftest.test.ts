@@ -6,6 +6,7 @@
 // 派 Worker 要系统沙箱，macOS 沙箱不能嵌套：在 Worker 里跑时，要派 Worker 的几条跳过（CI 的 Ubuntu 上全跑）。
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { createSpecSchema } from "../../src/daemon/ledger/task-graphs/spec.ts";
@@ -15,15 +16,15 @@ import { EVAL_SCRIPTED_POLL_MS, EVAL_SCRIPTED_QUIET_MS, EVAL_SCRIPTED_TRIAL_TIME
 import { SCENARIOS } from "./scenarios.ts";
 import { NEGATIVE_MUST_FAIL, SELF_TEST_SCRIPTS, type SelfTestKind } from "./selftest-scripts.ts";
 import { runTrial } from "./trial.ts";
-import type { Scenario, TrialResult } from "./types.ts";
+import type { BuiltinScenarioId, Scenario, TrialResult } from "./types.ts";
 
 const canSpawnWorkers = process.platform === "darwin" ? sandboxAllowsNestedSandbox() : osSandboxAvailable();
 
-const DAEMON_MAIN = new URL("../../src/daemon/main.ts", import.meta.url).pathname;
+const DAEMON_MAIN = fileURLToPath(new URL("../../src/daemon/main.ts", import.meta.url));
 const root = mkdtempSync(join(shortTmp(), "ah-evalself-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-async function selfTrial(scenario: Scenario, kind: SelfTestKind): Promise<TrialResult> {
+async function selfTrial(scenario: Scenario<BuiltinScenarioId>, kind: SelfTestKind): Promise<TrialResult> {
   return runTrial({
     scenario,
     version: { label: "selftest", commit: "HEAD", daemonMain: DAEMON_MAIN },

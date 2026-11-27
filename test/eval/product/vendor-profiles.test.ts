@@ -73,4 +73,21 @@ describe("cross-vendor evaluation profiles", () => {
     // Non-loopback URLs must be rejected so mock tests can never leak credentials to external hosts.
     expect(() => resolveVendorMockEnv("claude", "https://api.example.com", scratchHome)).toThrow(RangeError);
   });
+
+  it("preserves scratchHome path separator style for both POSIX and Windows roots", () => {
+    const loopbackUrl = "http://127.0.0.1:43999";
+
+    const posixHome = "/tmp/bellwood-eval-isolated-home";
+    const posixCodex = resolveVendorMockEnv("codex", loopbackUrl, posixHome);
+    expect(posixCodex.env.CODEX_HOME).toBe("/tmp/bellwood-eval-isolated-home/.codex");
+    expect(posixCodex.env.XDG_CONFIG_HOME).toBe("/tmp/bellwood-eval-isolated-home/.config");
+
+    const winHome = "C:\\Users\\runner\\AppData\\Local\\Temp\\bellwood-eval-isolated-home";
+    const winCodex = resolveVendorMockEnv("codex", loopbackUrl, winHome);
+    expect(winCodex.env.HOME).toBe(winHome);
+    expect(winCodex.env.USERPROFILE).toBe(winHome);
+    expect(winCodex.env.CODEX_HOME).toBe(`${winHome}\\.codex`);
+    expect(winCodex.env.CODEX_HOME).toContain(winHome);
+    expect(winCodex.env.XDG_CONFIG_HOME).toBe(`${winHome}\\.config`);
+  });
 });
