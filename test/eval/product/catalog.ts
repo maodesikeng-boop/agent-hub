@@ -36,7 +36,8 @@ export function loadHoldoutScenarios(_holdoutDir: string): EvalScenarioSpec[] {
 
 /**
  * Precondition: input.dbFile points to a Bellwood SQLite database; maxRows defaults to PRODUCT_EVAL_LEDGER_SCAN_MAX_ROWS.
- * Postcondition: reads bounded worker, message, and step-log facts for one-month ledger volumes, tolerates corrupt JSON meta columns
+ * Postcondition: reads bounded worker, message, step-log, turns (including interrupted count), and router_commands facts
+ * for one-month ledger volumes, degrades cleanly when legacy ledgers lack newer tables, tolerates corrupt JSON meta columns
  * by incrementing malformedMetaCount, and sets truncated: true if row counts exceed maxRows.
  */
 export function extractScaleSafeFacts(_input: ScaleSafeFactsInput): EvalDimensionFacts {

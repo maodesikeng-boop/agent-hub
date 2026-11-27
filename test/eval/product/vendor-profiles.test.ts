@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_VENDORS, type AgentVendor } from "../../../src/shared/vendors.ts";
+import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "../../../src/shared/vendors.ts";
 import {
   buildVendorCoverageMatrix,
   getVendorEvalProfile,
@@ -11,6 +11,7 @@ import type {
   MockModelProtocol,
   PromptCacheCheckKind,
   ReplaySupportKind,
+  SystemPromptChannel,
   Tier1CoverageKind,
   VendorCoverageRow,
   VendorEvalProfile,
@@ -39,6 +40,8 @@ describe("cross-vendor evaluation profiles", () => {
     for (const vendor of AGENT_VENDORS) {
       const profile = getVendorEvalProfile(vendor);
       expect(profile.vendor).toBe(vendor);
+      const expectedChannel: SystemPromptChannel = vendorSpec(vendor).capabilities.systemPrompt;
+      expect(profile.systemPromptChannel).toBe(expectedChannel);
       expect(validProtocols).toContain(profile.mockServerProtocol);
       expect(validTier1).toContain(profile.tier1Coverage);
       expect(validCache).toContain(profile.promptCacheCheck);

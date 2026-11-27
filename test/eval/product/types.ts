@@ -51,8 +51,11 @@ export type BaseUrlStrategy =
   | { readonly kind: "codex_config_toml"; readonly providerId: string; readonly apiKeyEnvVar: string }
   | { readonly kind: "none"; readonly reason: string };
 
+export type SystemPromptChannel = "resident" | "first_message";
+
 export interface VendorEvalProfile {
   readonly vendor: AgentVendor;
+  readonly systemPromptChannel: SystemPromptChannel;
   readonly mockServerProtocol: MockModelProtocol;
   readonly baseUrlStrategy: BaseUrlStrategy;
   readonly tier1Coverage: Tier1CoverageKind;
@@ -266,6 +269,9 @@ export interface EvalDimensionFacts {
   readonly workerCount: number;
   readonly messageCount: number;
   readonly stepLogCount: number;
+  readonly turnCount: number;
+  readonly interruptedTurnCount: number;
+  readonly routerCommandCount: number;
   readonly malformedMetaCount: number;
   readonly truncated: boolean;
 }

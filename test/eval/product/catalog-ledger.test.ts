@@ -130,7 +130,7 @@ describe("unified five-dimension scenario catalog and holdout loader", () => {
 });
 
 describe("scale-safe one-month fact extraction", () => {
-  it("extracts bounded facts for 300 workers, 30,000 messages, and 50,000 step logs while tolerating malformed meta", () => {
+  it("extracts bounded facts for 300 workers, 30,000 messages, 50,000 step logs, turns, and router_commands while tolerating malformed meta and legacy ledgers", () => {
     const dbFile = join(tempRoot, "one-month.sqlite");
     const db = new DatabaseSync(dbFile);
     try {
@@ -138,6 +138,8 @@ describe("scale-safe one-month fact extraction", () => {
         CREATE TABLE workers (id INTEGER PRIMARY KEY, status TEXT);
         CREATE TABLE messages (id INTEGER PRIMARY KEY, meta TEXT);
         CREATE TABLE session_steps (id INTEGER PRIMARY KEY, kind TEXT);
+        CREATE TABLE turns (id INTEGER PRIMARY KEY, outcome TEXT);
+        CREATE TABLE router_commands (id INTEGER PRIMARY KEY, status TEXT);
       `);
       db.exec("BEGIN");
       const insWorker = db.prepare("INSERT INTO workers (status) VALUES (?)");
@@ -148,6 +150,11 @@ describe("scale-safe one-month fact extraction", () => {
       insMsg.run("not-json");
       const insStep = db.prepare("INSERT INTO session_steps (kind) VALUES (?)");
       for (let i = 0; i < 50_000; i += 1) insStep.run("turn_started");
+      const insTurn = db.prepare("INSERT INTO turns (outcome) VALUES (?)");
+      for (let i = 0; i < 395; i += 1) insTurn.run("ok");
+      for (let i = 0; i < 5; i += 1) insTurn.run("interrupted");
+      const insRouter = db.prepare("INSERT INTO router_commands (status) VALUES (?)");
+      for (let i = 0; i < 150; i += 1) insRouter.run("done");
       db.exec("COMMIT");
     } finally {
       db.close();
@@ -158,8 +165,31 @@ describe("scale-safe one-month fact extraction", () => {
     expect(facts.workerCount).toBe(300);
     expect(facts.messageCount).toBe(30_000);
     expect(facts.stepLogCount).toBe(50_000);
+    expect(facts.turnCount).toBe(400);
+    expect(facts.interruptedTurnCount).toBe(5);
+    expect(facts.routerCommandCount).toBe(150);
     expect(facts.malformedMetaCount).toBe(2);
     expect(facts.truncated).toBe(false);
+
+    // Pre-0058 legacy ledger without turns or router_commands degrades cleanly.
+    const legacyDbFile = join(tempRoot, "legacy-pre-0058.sqlite");
+    const legacyDb = new DatabaseSync(legacyDbFile);
+    try {
+      legacyDb.exec(`
+        CREATE TABLE workers (id INTEGER PRIMARY KEY, status TEXT);
+        CREATE TABLE messages (id INTEGER PRIMARY KEY, meta TEXT);
+        CREATE TABLE session_steps (id INTEGER PRIMARY KEY, kind TEXT);
+      `);
+      legacyDb.exec("INSERT INTO workers (status) VALUES ('done')");
+      legacyDb.exec("INSERT INTO messages (meta) VALUES ('{}')");
+      legacyDb.exec("INSERT INTO session_steps (kind) VALUES ('turn_started')");
+    } finally {
+      legacyDb.close();
+    }
+    const legacyFacts = extractScaleSafeFacts({ dbFile: legacyDbFile });
+    expect(legacyFacts.workerCount).toBe(1);
+    expect(legacyFacts.turnCount).toBe(0);
+    expect(legacyFacts.routerCommandCount).toBe(0);
   });
 });
 

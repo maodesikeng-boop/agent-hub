@@ -237,6 +237,45 @@ describe("prompt-cache prefix stability checker", () => {
       ]),
     );
   });
+
+  it("verifies first_message prompt-channel stability when agenda or persona suffixes append on Turn 2 vs mutate Turn 1", () => {
+    const turn1 = makeRecordedRequest({
+      turnIndex: 0,
+      protocol: "anthropic_messages",
+      systemText: "",
+      promptCacheKey: null,
+      inputMessages: [{ role: "user", content: "[SYSTEM PROMPT]\nInitial user demand" }],
+    });
+    const turn2Appended = makeRecordedRequest({
+      turnIndex: 1,
+      protocol: "anthropic_messages",
+      systemText: "",
+      promptCacheKey: null,
+      inputMessages: [
+        { role: "user", content: "[SYSTEM PROMPT]\nInitial user demand" },
+        { role: "assistant", content: "Dispatched Worker #1." },
+        { role: "user", content: "Next turn\n[PM Agenda Delta]\n[Persona Update]" },
+      ],
+    });
+    const turn2MutatedFirst = makeRecordedRequest({
+      turnIndex: 1,
+      protocol: "anthropic_messages",
+      systemText: "",
+      promptCacheKey: null,
+      inputMessages: [
+        { role: "user", content: "[MUTATED SYSTEM PROMPT]\nInitial user demand" },
+        { role: "assistant", content: "Dispatched Worker #1." },
+        { role: "user", content: "Next turn" },
+      ],
+    });
+
+    expect(checkPromptPrefixStability([turn1, turn2Appended]).stable).toBe(true);
+    const broken = checkPromptPrefixStability([turn1, turn2MutatedFirst]);
+    expect(broken.stable).toBe(false);
+    expect(broken.inputPrefixStable).toBe(false);
+    expect(broken.firstDivergenceTurn).toBe(1);
+    expect(broken.violations.map((v) => v.kind)).toContain("input_prefix_mutated");
+  });
 });
 
 describe("model-visible context snapshot normalization", () => {
