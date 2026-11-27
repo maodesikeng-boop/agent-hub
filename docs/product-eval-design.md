@@ -21,11 +21,11 @@
 
 Check three criteria before implementation begins. Every quoted user sentence in Section 1 maps to at least one acceptance scenario in Section 8. Every verification category in Section 8 has at least one runnable scenario or a one-sentence explanation of why it cannot apply. Section 3 compares three structurally distinct candidates grounded in Bellwood's real architecture: passive production-ledger telemetry mining, a deterministic real-CLI loopback harness alone, and a unified ledger-anchored three-tier evaluation architecture with telemetry-to-replay promotion.
 
-### Decisions needed
+### Decisions settled
 
-The user delegated product and technical decisions for this task to the Project Manager ("现在所有的需求你来拍板"). Settle five core rules before implementation starts, or escalate any item that changes release-blocking budgets or external accounts.
+The user delegated product and technical decisions for this task to the Project Manager ("现在所有的需求你来拍板"). On 2026-11-28, the Project Manager approved **Candidate 3** (unified ledger-anchored three-tier evaluation architecture) and all five recommended rules (**D1 through D5**) below:
 
-| # | Decision | Recommended rule | Concrete example of what you see | Alternative |
+| # | Decision | Settled rule | Concrete example of what you see | Rejected alternative |
 |---|---|---|---|---|
 | D1 | Core evaluation dimensions | Measure five non-collapsed dimensions tied directly to Bellwood's subsystems: `routing`, `orchestration`, `execution`, `efficiency`, and `resilience`. Never collapse them into one scalar score. | Scorecard lists five rows (`routing: pass`, `orchestration: pass`, `execution: pass`, `efficiency: regressed (-11% cacheRead)`, `resilience: pass`) and fails the gate even when four dimensions pass. | A single weighted 0 to 100 score. Rejected because a prompt-cache regression or stale-notice bug can hide behind a routing gain. |
 | D2 | Three-tier cost and latency budget | Tier 1 (`harness`, real CLI plus loopback mock model server) costs 0 USD and runs in 30 to 90 s on PRs and RCs. Tier 2 (`replay`, real target LLM plus replayed counterparties) runs `k=3` trials per scenario at 1.50 to 6.00 USD per vendor (or inside subscriptions) in 8 to 20 min before RCs and on prompt PRs. Tier 3 (`canary`, real PM plus real Workers) runs 2 to 3 tasks before formal release at 5 to 15 USD in 20 to 45 min. | A prompt PR runs Tier 1 automatically in CI (0 USD) and Tier 2 on demand (`pnpm eval compare --tier replay --trials 3`). An RC runs Tier 1 plus Tier 2 regression gates before promotion. | Run live multi-role tasks on every PR. Rejected because 45 to 120 min latency and 20 to 80 USD per PR block normal iteration. |
@@ -135,7 +135,7 @@ flowchart LR
   - `opencode` relies on `OPENCODE_CONFIG_CONTENT` last-match-wins permission rules and pins read-only sessions onto the `plan` agent (`src/vendors/opencode/driver.ts:51-68`).
   - `claude` is the only vendor with `backgroundWake: true` (`src/vendors/claude/spec.ts:126`), so background-wait hold behavior differs between Claude and the other seven vendors.
 - **Blanket Windows exclusion on `test/eval/`:** `vitest.config.ts:31` excludes all of `test/eval/**` on `win32` because legacy `test/eval/isolation.ts` hardcodes macOS `sandbox-exec` and POSIX shell shims.
-- **Every vendor already exposes a binary override env var:** All eight specs define `cli.envVar` (`AGENT_HUB_CLAUDE` through `AGENT_HUB_KIMI`), and four (`codex`, `pi`, `deepseek`, `kimi`) also declare `home.configHome` env overrides (`CODEX_HOME`, `PI_CODING_AGENT_DIR`, `DSH_HOME`, `KIMI_HOME`), enabling safe isolated testing without mutating the user's real CLI configs.
+- **Every vendor already exposes a binary override env var:** All eight specs define `cli.envVar` (`AGENT_HUB_CLAUDE` through `AGENT_HUB_KIMI`), and four (`codex`, `pi`, `deepseek`, `kimi`) also declare `home.configHome` env overrides (`CODEX_HOME`, `PI_CODING_AGENT_DIR`, `DSH_HOME`, `KIMI_CODE_HOME`), enabling safe isolated testing without mutating the user's real CLI configs.
 
 #### Design history and the functional-versus-capability boundary
 

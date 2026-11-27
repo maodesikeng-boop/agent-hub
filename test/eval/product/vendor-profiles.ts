@@ -1,43 +1,207 @@
 // Exhaustive cross-vendor evaluation profile registry and isolated mock-server launch contracts.
 // Invariant: every registered AgentVendor has an explicit profile and coverage row with zero silent skips.
-import type { AgentVendor } from "../../../src/shared/vendors.ts";
+import { join } from "node:path";
+import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "../../../src/shared/vendors.ts";
 import type { VendorCoverageRow, VendorEvalProfile, VendorMockLaunchConfig } from "./types.ts";
 
-/**
- * Postcondition: returns an exhaustive map covering every registered AgentVendor in VENDOR_LIST.
- * Each profile declares its Tier 1 mock-server protocol, prompt-cache check capability, and Tier 2 replay support.
- */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+function buildProfile<V extends AgentVendor>(
+  vendor: V,
+  rest: Omit<VendorEvalProfile, "vendor" | "systemPromptChannel">,
+): VendorEvalProfile {
+  return {
+    vendor,
+    systemPromptChannel: vendorSpec(vendor).capabilities.systemPrompt,
+    ...rest,
+  };
+}
+
+const VENDOR_EVAL_PROFILES: Readonly<Record<AgentVendor, VendorEvalProfile>> = {
+  claude: buildProfile("claude", {
+    mockServerProtocol: "anthropic_messages",
+    baseUrlStrategy: { kind: "env", envVar: "ANTHROPIC_BASE_URL", apiKeyEnvVar: "ANTHROPIC_API_KEY" },
+    tier1Coverage: "real_cli_mock_server",
+    promptCacheCheck: "prefix_only",
+    replaySupport: "full",
+    gapReason: null,
+  }),
+  agy: buildProfile("agy", {
+    mockServerProtocol: "unsupported",
+    baseUrlStrategy: {
+      kind: "none",
+      reason: "CLI does not expose a documented loopback model base URL override.",
+    },
+    tier1Coverage: "fake_driver_contract",
+    promptCacheCheck: "live_cache_read_only",
+    replaySupport: "driver_contract_only",
+    gapReason: "No documented custom model base URL override; covered by driver contract tests and live cacheRead probes.",
+  }),
+  codex: buildProfile("codex", {
+    mockServerProtocol: "openai_responses",
+    baseUrlStrategy: { kind: "codex_config_toml", providerId: "mock", apiKeyEnvVar: "MOCK_KEY" },
+    tier1Coverage: "real_cli_mock_server",
+    promptCacheCheck: "prefix_and_key",
+    replaySupport: "full",
+    gapReason: null,
+  }),
+  pi: buildProfile("pi", {
+    mockServerProtocol: "openai_responses",
+    baseUrlStrategy: { kind: "env", envVar: "OPENAI_BASE_URL", apiKeyEnvVar: "OPENAI_API_KEY" },
+    tier1Coverage: "real_cli_mock_server",
+    promptCacheCheck: "prefix_only",
+    replaySupport: "driver_contract_only",
+    gapReason: null,
+  }),
+  deepseek: buildProfile("deepseek", {
+    mockServerProtocol: "acp_fake",
+    baseUrlStrategy: {
+      kind: "none",
+      reason: "ACP runtime rewrites its profile config on startup without a documented loopback base URL override.",
+    },
+    tier1Coverage: "fake_driver_contract",
+    promptCacheCheck: "live_cache_read_only",
+    replaySupport: "driver_contract_only",
+    gapReason: "Covered by fake ACP driver contract tests and live bench probes because startup rewrites ACP profile config.",
+  }),
+  cursor: buildProfile("cursor", {
+    mockServerProtocol: "acp_fake",
+    baseUrlStrategy: {
+      kind: "none",
+      reason: "ACP runtime does not expose a custom loopback model base URL override.",
+    },
+    tier1Coverage: "fake_driver_contract",
+    promptCacheCheck: "live_cache_read_only",
+    replaySupport: "driver_contract_only",
+    gapReason: "ACP runtime routes through hosted endpoints without a loopback base URL override; covered by fake ACP contract tests.",
+  }),
+  opencode: buildProfile("opencode", {
+    mockServerProtocol: "openai_responses",
+    baseUrlStrategy: { kind: "env", envVar: "OPENAI_BASE_URL", apiKeyEnvVar: "OPENAI_API_KEY" },
+    tier1Coverage: "real_cli_mock_server",
+    promptCacheCheck: "prefix_only",
+    replaySupport: "driver_contract_only",
+    gapReason: null,
+  }),
+  kimi: buildProfile("kimi", {
+    mockServerProtocol: "openai_responses",
+    baseUrlStrategy: { kind: "env", envVar: "KIMI_MODEL_BASE_URL", apiKeyEnvVar: "KIMI_API_KEY" },
+    tier1Coverage: "real_cli_mock_server",
+    promptCacheCheck: "prefix_only",
+    replaySupport: "driver_contract_only",
+    gapReason: null,
+  }),
+};
+
+function parseLoopbackUrl(serverUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(serverUrl);
+  } catch {
+    throw new RangeError(`Mock server URL must be a valid loopback HTTP URL: ${serverUrl}`);
+  }
+  if (parsed.protocol !== "http:" || !LOOPBACK_HOSTS.has(parsed.hostname)) {
+    throw new RangeError(`Mock server URL must use http:// on a loopback address (got ${serverUrl})`);
+  }
+  const cleanPath = parsed.pathname.replace(/\/+$/, "");
+  return `${parsed.protocol}//${parsed.host}${cleanPath}`;
+}
+
 export function getVendorEvalProfiles(): Readonly<Record<AgentVendor, VendorEvalProfile>> {
-  throw new Error("Not implemented");
+  return VENDOR_EVAL_PROFILES;
 }
 
-/**
- * Precondition: vendor is a registered AgentVendor.
- * Postcondition: returns the matching VendorEvalProfile without mutating global state.
- */
-export function getVendorEvalProfile(_vendor: AgentVendor): VendorEvalProfile {
-  throw new Error("Not implemented");
+export function getVendorEvalProfile(vendor: AgentVendor): VendorEvalProfile {
+  return VENDOR_EVAL_PROFILES[vendor];
 }
 
-/**
- * Precondition: serverUrl is a loopback http://127.0.0.1:<port> URL and scratchHome is an isolated directory outside user home.
- * Postcondition: returns isolated env vars and relative config files pointing the vendor CLI at serverUrl without touching real user config,
- * or supported: false with a non-empty unsupportedReason when the vendor uses fake_driver_contract for Tier 1.
- * Throws RangeError if serverUrl is not a loopback address.
- */
 export function resolveVendorMockEnv(
-  _vendor: AgentVendor,
-  _serverUrl: string,
-  _scratchHome: string,
+  vendor: AgentVendor,
+  serverUrl: string,
+  scratchHome: string,
 ): VendorMockLaunchConfig {
-  throw new Error("Not implemented");
+  const normalizedUrl = parseLoopbackUrl(serverUrl);
+  if (scratchHome.trim() === "") {
+    throw new RangeError("scratchHome must be a non-empty isolated directory path");
+  }
+
+  const profile = VENDOR_EVAL_PROFILES[vendor];
+  const strategy = profile.baseUrlStrategy;
+  if (strategy.kind === "none") {
+    return {
+      vendor,
+      supported: false,
+      env: {},
+      configFiles: [],
+      unsupportedReason: strategy.reason,
+    };
+  }
+
+  const baseEnv: Record<string, string> = {
+    HOME: scratchHome,
+    USERPROFILE: scratchHome,
+    XDG_CONFIG_HOME: join(scratchHome, ".config"),
+    XDG_DATA_HOME: join(scratchHome, ".local", "share"),
+    XDG_STATE_HOME: join(scratchHome, ".local", "state"),
+  };
+
+  const configHome = vendorSpec(vendor).home.configHome;
+  if (configHome) {
+    baseEnv[configHome.env] = join(scratchHome, configHome.rel);
+  }
+
+  if (strategy.kind === "codex_config_toml") {
+    const providerId = strategy.providerId;
+    const toml = [
+      'model = "gpt-5"',
+      `model_provider = "${providerId}"`,
+      "",
+      `[model_providers.${providerId}]`,
+      `name = "${providerId}"`,
+      `base_url = "${normalizedUrl}/v1"`,
+      'wire_api = "responses"',
+      `env_key = "${strategy.apiKeyEnvVar}"`,
+      "request_max_retries = 0",
+      "stream_max_retries = 0",
+      "",
+    ].join("\n");
+    const relPath = configHome ? `${configHome.rel}/config.toml` : ".codex/config.toml";
+    return {
+      vendor,
+      supported: true,
+      env: {
+        ...baseEnv,
+        [strategy.apiKeyEnvVar]: "bellwood-mock-key",
+      },
+      configFiles: [{ relativePath: relPath, content: toml }],
+      unsupportedReason: null,
+    };
+  }
+
+  return {
+    vendor,
+    supported: true,
+    env: {
+      ...baseEnv,
+      [strategy.envVar]: normalizedUrl,
+      [strategy.apiKeyEnvVar]: "bellwood-mock-key",
+    },
+    configFiles: [],
+    unsupportedReason: null,
+  };
 }
 
-/**
- * Postcondition: returns one coverage row per registered AgentVendor in VENDOR_LIST order so coverage gaps are always visible.
- */
 export function buildVendorCoverageMatrix(
-  _profiles?: Readonly<Record<AgentVendor, VendorEvalProfile>>,
+  profiles: Readonly<Record<AgentVendor, VendorEvalProfile>> = VENDOR_EVAL_PROFILES,
 ): VendorCoverageRow[] {
-  throw new Error("Not implemented");
+  return AGENT_VENDORS.map((vendor) => {
+    const profile = profiles[vendor];
+    return {
+      vendor,
+      tier1Coverage: profile.tier1Coverage,
+      promptCacheCheck: profile.promptCacheCheck,
+      replaySupport: profile.replaySupport,
+      gapReason: profile.gapReason,
+    };
+  });
 }
