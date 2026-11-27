@@ -7,7 +7,7 @@ import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/doma
 import { feishuGuestTurnBlockReason, feishuOriginOf } from "../../shared/feishu.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, hubCommandAllowed } from "../../shared/hub.ts";
 import { HUB_CHECKLIST_COMMAND, HUB_CHECKLIST_USAGE, hubChecklistRequestSchema } from "../../shared/hub-checklist.ts";
-import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard } from "../../shared/hub.ts";
+import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard, WorkerStartQueuedResult } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { HUB_CALL_RESULT_MAX_BYTES } from "../../shared/limits.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
@@ -213,7 +213,7 @@ export function createLedgerHubCommands(
     command: Exclude<HubCommand, "checklist">,
     args: unknown,
     context: HubCallContext,
-  ): HubResult<HubCommand> => {
+  ): HubResult<HubCommand> | WorkerStartQueuedResult => {
     switch (command) {
       case "status":
         return pmStatusIn({ persona, projects, db, now: now(), taskGraphManual }, caller, context);
@@ -397,7 +397,7 @@ export function createLedgerHubCommands(
     command: HubCommand,
     args: unknown,
     context: HubCallContext,
-  ): HubResult<HubCommand> => {
+  ): HubResult<HubCommand> | WorkerStartQueuedResult => {
     if (session === null || (session.role !== "pm" && session.role !== "worker")) {
       throw fail("forbidden", "这个会话不是项目经理或 Worker 的会话，不能用 hub");
     }

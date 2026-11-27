@@ -79,6 +79,8 @@ export function deliverToWorkerIn(w: WorkersCtx, p: Pending, input: DeliverInput
 export function resumeUserBlockedWorkerIn(w: WorkersCtx, p: Pending, workerId: WorkerId, messageIds: readonly MessageId[], blocker: UserBlocker): void {
   const worker = workerRow(w, workerId);
   if (worker === null || worker.status === "ended") return;
+  // Its step went to the PM because another step holds the slot; the PM resumes it once the slot frees.
+  if (w.options.taskGraphs?.isWorkerSlotHeldElsewhere(workerId) === true) return;
   const session = workerSession(w, worker);
   const failed = messageIds.filter((id) => w.db.get<{ status: string | null }>("SELECT status FROM messages WHERE id = ?", id)?.status === "failed");
   if (failed.length === 0) {

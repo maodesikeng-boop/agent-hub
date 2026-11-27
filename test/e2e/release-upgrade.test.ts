@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { RELEASE_DB_DIR, RELEASE_SAMPLE, captureSampleLedger, headerUserVersion } from "../../scripts/release-db-fixture.ts";
+import { installSlotAdmission } from "../../src/daemon/ledger/task-graphs/slots.ts";
 import { loadMigrations, openStore } from "../../src/daemon/store/index.ts";
 import { API_PATHS, ENV_DB_SHARED_ACCESS } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
@@ -50,7 +51,10 @@ function freshSchema(): unknown[] {
   const home = mkdtempSync(join(tmpdir(), "agent-hub-fresh-"));
   scratch.push(home);
   const paths = resolveHubPaths({ AGENT_HUB_HOME: home }, "/nonexistent");
-  openStore(paths).db.close();
+  const { db } = openStore(paths);
+  // The daemon's ledger adds its code-built triggers after migrating, so the fresh schema has them too.
+  installSlotAdmission(db);
+  db.close();
   return inspect(paths.dbFile, schemaOf);
 }
 

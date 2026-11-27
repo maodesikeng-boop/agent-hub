@@ -50,6 +50,7 @@ import { completedWorkPage } from "./completed-work.ts";
 import { createLedgerSnapshotQueries } from "./snapshot.ts";
 import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
+import { installSlotAdmission } from "./task-graphs/slots.ts";
 import { createLedgerTakeover } from "./takeover.ts";
 import { createSkillFiles, type SkillFiles } from "../skill-files.ts";
 import { createLedgerUserBlockers } from "./user-blockers.ts";
@@ -253,6 +254,7 @@ function createSessionStateRefresh(
 }
 
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
+  installSlotAdmission(db);
   const ctx = createLedgerContext(db, options);
   const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
   const userHome = options.userHome ?? homedir();
@@ -324,6 +326,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     userBlockers,
     onGraphFinishedIn: (p, projectId) => projectCatalog.markForcedIn(p, projectId, "graph_finished"),
   });
+  subscribe(ctx.commitListeners, taskGraphs.drainSlotsAfterCommit);
   const activityOf = createWorkerActivity(steps, turns, tools);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
     turns,
@@ -507,6 +510,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       workers.recoverLifecycles();
       handover.recoverAfterRestart();
       router.recoverAfterRestart();
+      taskGraphs.drainSlotsAfterCommit();
       return recovered;
     },
 
