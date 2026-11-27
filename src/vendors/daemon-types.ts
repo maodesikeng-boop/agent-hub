@@ -226,10 +226,18 @@ interface FallbackPathsInput {
   join: (...parts: string[]) => string;
 }
 
+export interface VendorRuntimeEnvInput {
+  userHome: string;
+  platform: string;
+  env: Readonly<Record<string, string | undefined>>;
+  exists: (path: string) => boolean;
+}
+
 export interface VendorPathsModule {
   fallbackPaths?: (input: FallbackPathsInput) => string[];
   parentSessionEnv?: readonly string[];
   credentialEnv?: { names?: readonly string[]; prefixes?: readonly string[]; pattern?: RegExp };
+  runtimeEnv?: (input: VendorRuntimeEnvInput) => Readonly<Record<string, string>>;
   installCommand?: string;
   windowsInstallCommand?: string;
   headlessLoginCommand?: string;
