@@ -6,6 +6,8 @@
 
 ### Files to review
 
+The plan, implementation, and review land on draft PR [#494](https://github.com/maodesikeng-boop/agent-hub/pull/494).
+
 - [`docs/vendor-default-design.md`](vendor-default-design.md): the sweep of every place the system picks a vendor for the user, with evidence, the fix or the reason to leave it, and the verification plan.
 - [`src/shared/vendors.ts`](../src/shared/vendors.ts): skeleton of the one shared rule, `firstUsableVendor`, `defaultPmVendor`, and `availabilityOfCatalogs`.
 - [`src/daemon/first-run-pm.ts`](../src/daemon/first-run-pm.ts): skeleton of `ensureFirstRunPm`, which takes the first-start PM out of `daemon.ts`.
