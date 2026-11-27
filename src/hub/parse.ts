@@ -15,6 +15,7 @@ import { parseWorkerCommand, parseAskCommand } from "./parse-worker.ts";
 import { parseRouterCommand } from "./parse-router.ts";
 import { parseGraphAuthorCommand, parseGraphStepCommand } from "./parse-graph.ts";
 import { parseDispatchPmCommand, parseDispatchWorkerCommand } from "./parse-dispatch.ts";
+import { parseDiagCommand } from "./parse-diag.ts";
 
 const GROUP_PARSERS: readonly ((args: GroupArgs) => Parsed | undefined)[] = [
   parseCoreCommand,
@@ -59,6 +60,7 @@ export function parseCommand(argv: string[], env: HubEnv, cwd: string): Parsed |
   if (group === undefined) throw new UsageError("缺子命令");
 
   const args: GroupArgs = { group, action, rest, positionals: parsed.positionals, values, env, cwd };
+  if (group === "diag") return parseDiagCommand(args);
   for (const parse of GROUP_PARSERS) {
     const result = parse(args);
     if (result !== undefined) return result;

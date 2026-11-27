@@ -79,11 +79,18 @@ export type Options = {
   verbatim?: boolean;
   "pm-name"?: string;
   build?: boolean;
+  since?: string;
+  "dry-run"?: boolean;
+  "run-key"?: string;
+  ack?: string;
+  mute?: string;
+  fix?: string;
+  json?: boolean;
   help?: boolean;
 };
 
 export interface Parsed {
-  command: HubCommand | "router.dispatch" | "self.reload";
+  command: HubCommand | "router.dispatch" | "self.reload" | "diag.bug-hunt";
   body: Record<string, unknown>;
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
   textField?: "text" | "task" | "command" | "prompt" | "context" | "summary" | "note" | "specJson" | "summaryMd" | "question";
@@ -145,6 +152,13 @@ export const HUB_ARG_OPTIONS = {
   verbatim: { type: "boolean" },
   "pm-name": { type: "string" },
   build: { type: "boolean" },
+  since: { type: "string" },
+  "dry-run": { type: "boolean" },
+  "run-key": { type: "string" },
+  ack: { type: "string" },
+  mute: { type: "string" },
+  fix: { type: "string" },
+  json: { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } as const satisfies NonNullable<ParseArgsConfig["options"]>;
 

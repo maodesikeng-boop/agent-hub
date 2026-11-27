@@ -763,3 +763,25 @@ export const PM_AGENDA_DELTA_LINES_MAX = 8;
 // A model rebuilding state from a long chain of changes drifts, so a snapshot replaces the chain this often.
 export const PM_AGENDA_DELTAS_PER_SNAPSHOT = 20;
 export const STEP_SLOT_NAME_MAX_CHARS = 32;
+
+export const RAW_TELEMETRY_DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const RAW_TELEMETRY_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+export const RAW_TELEMETRY_SQL_MAX_ROWS_PER_TABLE = 500;
+export const RAW_TELEMETRY_LOG_FILE_MAX_BYTES = 256 * 1024;
+export const RAW_TELEMETRY_SETUP_LOGS_MAX_FILES = 30;
+export const RAW_TELEMETRY_SETUP_LOG_TAIL_BYTES = 16 * 1024;
+export const RAW_TELEMETRY_STATE_FILE_MAX_BYTES = 256 * 1024;
+export const RAW_TELEMETRY_TRANSCRIPTS_MAX_FILES = 40;
+export const RAW_TELEMETRY_TRANSCRIPT_MAX_BYTES = 128 * 1024;
+export const RAW_TELEMETRY_EXCERPT_MAX_CHARS = 400;
+
+export const BUG_HUNT_FINDINGS_RETENTION_DAYS = 90;
+export const BUG_HUNT_FINDINGS_MAX_ENTRIES = 1_000;
+export const BUG_HUNT_RUNS_MAX_ENTRIES = 90;
+export const BUG_HUNT_STATE_MAX_BYTES = 512 * 1024;
+export const BUG_HUNT_MAX_FINDINGS_PER_RUN = 20;
+export const BUG_HUNT_REPORT_MAX_BYTES = 64 * 1024;
+export const BUG_HUNT_UNCONFIRMED_TOOL_THRESHOLD = 3;
+export const BUG_HUNT_HUB_ERROR_SPIKE_THRESHOLD = 5;
+export const BUG_HUNT_REGRESSION_SPIKE_MULTIPLIER = 3;
+export const BUG_HUNT_STUCK_MESSAGE_MS = 15 * 60 * 1000;

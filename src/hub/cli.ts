@@ -1,6 +1,7 @@
 import type { Readable } from "node:stream";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, SELF_RELOAD_AGENT_PATH, hubPath } from "../shared/hub.ts";
+import { DIAG_BUG_HUNT_AGENT_PATH } from "../shared/bug-hunt.ts";
 import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS } from "../shared/limits.ts";
 import { ROUTER_DISPATCH_AGENT_PATH } from "../shared/router.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
@@ -98,7 +99,9 @@ export async function runHub(io: HubIo): Promise<number> {
       ? ROUTER_DISPATCH_AGENT_PATH
       : parsed.command === "self.reload"
         ? SELF_RELOAD_AGENT_PATH
-        : hubPath(parsed.command);
+        : parsed.command === "diag.bug-hunt"
+          ? DIAG_BUG_HUNT_AGENT_PATH
+          : hubPath(parsed.command);
   const outcome = await post(endpointTarget, routePath, token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
   if (outcome.kind === "not-sent") return usage("请求没发出去：令牌或参数里有不能放进请求的字符");
   if (outcome.kind === "unreachable") {

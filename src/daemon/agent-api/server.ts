@@ -45,6 +45,8 @@ import { mergeVendorQuota, type ObservedQuotaStore } from "../quota/observed-quo
 import { AGENT_VENDORS, isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
+import { DIAG_BUG_HUNT_AGENT_PATH } from "../../shared/bug-hunt.ts";
+import { handleDiagBugHuntRoute, type BugHuntRouteHandler } from "../diagnostics/agent-api-route.ts";
 import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
 
 export interface AgentApiOptions {
@@ -78,6 +80,7 @@ export interface AgentApiOptions {
   ) => Promise<{ text: string; data: unknown }>;
   selfReload?: (input: { sessionId: SessionId; build: boolean }) => { text: string; data: unknown };
   selfReloadStatus?: () => SelfReloadStatus | undefined;
+  bugHunt?: BugHuntRouteHandler;
   tokens: SessionTokens;
   logger?: boolean;
   log?: (line: string) => void;
@@ -753,6 +756,21 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     if (ledger.sessionRole(auth.sessionId) !== "pm") throw new LedgerRequestError("forbidden", "只有项目经理可以调用 hub self-reload");
     if (!opts.selfReload) throw new LedgerRequestError("conflict", SELF_RELOAD_UNSUPPORTED_MESSAGE);
     const result = opts.selfReload({ sessionId: auth.sessionId, build: (req.body as { build?: boolean }).build === true });
+    reportHealth(null);
+    return reply.code(200).send({ ok: true, text: result.text, data: result.data });
+  }));
+
+  app.post(DIAG_BUG_HUNT_AGENT_PATH, tracked(async (req, reply) => {
+    const auth = authOf.get(req);
+    if (auth === undefined) throw new Error("agent-api: request reached diag.bug-hunt without a session");
+    const result = await handleDiagBugHuntRoute({
+      sessionId: auth.sessionId,
+      role: ledger.sessionRole(auth.sessionId),
+      body: req.body,
+      handler: opts.bugHunt,
+      signal: closing.signal,
+    });
+    if (closing.signal.aborted) return shuttingDown(reply);
     reportHealth(null);
     return reply.code(200).send({ ok: true, text: result.text, data: result.data });
   }));

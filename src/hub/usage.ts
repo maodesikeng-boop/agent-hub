@@ -332,6 +332,11 @@ const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                       
                                                           全库空闲后自动重启；最多等 ${SELF_RELOAD_DRAIN_MAX_MS / 60_000} 分钟，之后不再等 Worker 轮次和系统消息（重启后自动重发），
                                                           只等你、总助正在回用户的那一轮回完就重启（回执和 hub status 写明最晚几点）；--build 先在后台构建网页，失败就取消、不重启`;
 
+const DIAG_BUG_HUNT_USAGE = `  ${hub} diag bug-hunt [--since 24h|7d] [--dry-run] [--run-key <键>] [--json]
+                                                          只读静态扫描运行原始数据（账本、守护进程与准备日志、厂商原始会话记录）并输出脱敏、去重后的异常候选
+  ${hub} diag bug-hunt (--ack <指纹> | --mute <指纹> [--reason <原因>] | --fix <指纹> [--commit <提交号>])
+                                                          更新已抓到异常指纹的状态（确认已知、静音、或标记已修以监测后续回归）`;
+
 function renderUsage(spec: (typeof HUB_COMMAND_SPECS)[number]): string {
   const limits = hubLimitsHelpLine(spec.command);
   return limits === null ? spec.usage : `${spec.usage}\n${limits}`;
@@ -340,6 +345,7 @@ function renderUsage(spec: (typeof HUB_COMMAND_SPECS)[number]): string {
 export const HUB_USAGE = `用法：
 ${HUB_COMMAND_SPECS.map(renderUsage).join("\n")}
 ${SELF_RELOAD_USAGE}
+${DIAG_BUG_HUNT_USAGE}
   ${hub} help graph                                        打印任务图手册：建图、改图、换人、审查的做法和全部 graph 命令
 
 长文本用 --stdin 从标准输入原样读，标准输入最多 ${hubLimitMaximum("stdin")}。下面的例子照抄时保持顶格，结束标记前不能有空格。
@@ -374,6 +380,7 @@ export function commandUsageFor(argv: readonly string[]): string {
   if (group === undefined) return HUB_USAGE;
   if (group === "dispatch") return `用法：\n${DISPATCH_USAGE}\n`;
   if (group === "self-reload") return `用法：\n${SELF_RELOAD_USAGE}\n`;
+  if (group === "diag") return `用法：\n${DIAG_BUG_HUNT_USAGE}\n`;
   const groupSpecs = HUB_COMMAND_SPECS.filter((s) => s.group === group);
   if (groupSpecs.length === 0) return HUB_USAGE;
   const action = argv[1];

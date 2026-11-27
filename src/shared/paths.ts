@@ -29,6 +29,7 @@ export interface HubPaths {
   providerSecretsFile: string;
   feishuSecretsFile: string;
   feishuInboundFile: string;
+  bugHuntStateFile: string;
   deviceFile: string;
   pushVapidFile: string;
   pushSubscriptionsFile: string;
@@ -107,6 +108,7 @@ export function resolveHubPaths(
     providerSecretsFile: joinForBase(stateDir, "provider-secrets.json"),
     feishuSecretsFile: joinForBase(stateDir, "feishu-secrets.json"),
     feishuInboundFile: joinForBase(stateDir, "feishu-inbound.json"),
+    bugHuntStateFile: joinForBase(stateDir, "bug-hunt-state.json"),
     deviceFile: joinForBase(stateDir, "device.json"),
     pushVapidFile: joinForBase(stateDir, "push-vapid.json"),
     pushSubscriptionsFile: joinForBase(stateDir, "push-subscriptions.json"),
