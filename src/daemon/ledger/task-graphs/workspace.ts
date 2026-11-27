@@ -7,6 +7,8 @@ import { workerIdsOf } from "./rows.ts";
 import { buildGraphMaps } from "./store.ts";
 import type { KeyAdjacency, StepWorkspacePlan, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
+type StepMaps = { byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>; incoming: KeyAdjacency; outgoing: KeyAdjacency };
+
 type UpstreamWorker = { id: number; worktree_path: string | null; branch: string; base_commit: string };
 
 interface PlanInput {
@@ -34,9 +36,13 @@ function latestWorktreeWorker(db: Db, projectId: number, step: TaskNodeDbRow): U
   return null;
 }
 
-function findUpstreamWorktree(db: Db, input: PlanInput): { worker: UpstreamWorker; forked: boolean } | null {
-  const { graphRow, step, byKey, incoming, outgoing } = input;
-  let cur = step.node_key;
+/** Walks up single-parent edges past skipped and review steps to the step whose worktree a new step would reuse. */
+function upstreamWorktreeStep(
+  startKey: TaskNodeKey,
+  maps: StepMaps,
+): { step: TaskNodeDbRow; forked: boolean } | null {
+  const { byKey, incoming, outgoing } = maps;
+  let cur = startKey;
   let forked = false;
   const seen = new Set<TaskNodeKey>();
   while (true) {
@@ -52,9 +58,37 @@ function findUpstreamWorktree(db: Db, input: PlanInput): { worker: UpstreamWorke
       cur = uKey;
       continue;
     }
-    const worker = latestWorktreeWorker(db, graphRow.project_id, u);
-    return worker === null ? null : { worker, forked };
+    return { step: u, forked };
   }
+}
+
+function findUpstreamWorktree(db: Db, input: PlanInput): { worker: UpstreamWorker; forked: boolean } | null {
+  const up = upstreamWorktreeStep(input.step.node_key, input);
+  if (up === null) return null;
+  const worker = latestWorktreeWorker(db, input.graphRow.project_id, up.step);
+  return worker === null ? null : { worker, forked: up.forked };
+}
+
+const isStepFinished = (step: TaskNodeDbRow): boolean => step.status === "done" || step.status === "cancelled";
+
+/** Whether an active graph may still work in stepKey's worktree: the step is unfinished, or an unfinished downstream step would reuse that worktree. */
+export function graphStillUsesStepWorktree(maps: StepMaps, stepKey: TaskNodeKey): boolean {
+  const step = maps.byKey.get(stepKey);
+  if (step === undefined) return false;
+  if (!isStepFinished(step)) return true;
+  const queue = [...(maps.outgoing.get(stepKey) ?? [])];
+  const visited = new Set<TaskNodeKey>();
+  while (queue.length > 0) {
+    const key = queue.shift()!;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    const n = maps.byKey.get(key);
+    if (n === undefined) continue;
+    const reusesWorktree = n.review !== 1 && n.base !== "main";
+    if (!isStepFinished(n) && reusesWorktree && upstreamWorktreeStep(key, maps)?.step.node_key === stepKey) return true;
+    queue.push(...(maps.outgoing.get(key) ?? []));
+  }
+  return false;
 }
 
 function resolveReviewPlan(db: Db, input: PlanInput): Extract<StepWorkspacePlan, { kind: "review" }> {
