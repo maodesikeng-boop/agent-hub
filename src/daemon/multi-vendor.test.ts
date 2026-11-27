@@ -66,6 +66,10 @@ const { execFileSync } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 
 const argv = process.argv.slice(2);
+if (argv[0] === "auth" && argv[1] === "status") {
+  process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }) + "\\n");
+  process.exit(0);
+}
 const sessionIdx = argv.indexOf("--session-id") !== -1 ? argv.indexOf("--session-id") : argv.indexOf("--resume");
 const sessionId = sessionIdx !== -1 ? argv[sessionIdx + 1] : randomUUID();
 
