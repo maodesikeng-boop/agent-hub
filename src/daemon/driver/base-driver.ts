@@ -500,7 +500,7 @@ export abstract class BaseSessionDriver<
       persona,
       preamble,
     };
-    const prefixes = preamble === null ? otherPrefixes : [preamble.note, ...otherPrefixes];
+    const prefixes = preamble === null || preamble.note === null ? otherPrefixes : [preamble.note, ...otherPrefixes];
     st.recoveryNote = false;
     st.crashNote = false;
     st.relaunchNote = null;
@@ -675,7 +675,7 @@ export abstract class BaseSessionDriver<
   protected takeDeliverySuffix(st: TState, batch: TBatch): string {
     const messageId = batch.messageIds.at(-1);
     if (messageId === undefined) return "";
-    const suffix = this.opts.deliverySuffix?.(st.id, batch.messageIds, batch.notes.preamble?.note);
+    const suffix = this.opts.deliverySuffix?.(st.id, batch.messageIds, batch.notes.preamble?.note ?? undefined);
     if (suffix?.agenda === undefined) delete batch.agenda;
     else batch.agenda = { messageId, footer: suffix.agenda };
     return suffix?.text ?? "";

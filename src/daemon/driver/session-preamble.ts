@@ -5,7 +5,7 @@ export interface PreambleHolder {
 }
 
 export interface PreambleTaken {
-  note: string;
+  note: string | null;
   restore: () => void;
 }
 
@@ -24,7 +24,7 @@ export function takeSessionPreamble(
     onError(error);
     return null;
   }
-  if (note === null) return null;
+  // Claim the Turn 1 opening window even when budget forced note === null so Turn 2 never injects a preamble mid-session.
   holder.preambleTaken = true;
   return {
     note,

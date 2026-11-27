@@ -16,7 +16,8 @@ import {
   HANDOVER_RECENT_CHARS,
   HANDOVER_TIMEOUT_MS,
 } from "../../shared/limits.ts";
-import { handoverTokenThresholdOf, vendorLabel, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
+import { handoverTokenThresholdOf, vendorLabel, vendorSpec, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
+import { commandNameOf } from "../../vendors/types.ts";
 import { deletePendingSessionSend, hasRunningSessionAction } from "../actions/index.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -698,15 +699,30 @@ export function createLedgerHandover(
     switchIn(p, { ...row, status: "ready", text: handover }, session, handover, metaOf(request).turnStartId);
   };
 
+  const markPreambleSeenIn = (session: AgentSessionRow) => {
+    db.run("INSERT OR IGNORE INTO session_preamble_seen (session_id, seen_at) VALUES (?, ?)", session.id, now());
+    clearConsumedHandoverBlobsIn(db, session.id);
+    const renewed = renewedOf(session);
+    if (renewed !== undefined && metaOf(renewed).seen !== true) setMeta(renewed.id, { ...metaOf(renewed), seen: true });
+  };
+
+  const hasNonCommandTurnMessage = (session: AgentSessionRow, messageIds: readonly MessageId[]): boolean => {
+    if (messageIds.length === 0) return false;
+    const rows = db.all<{ sender: string; text: string }>(
+      `SELECT sender, text FROM messages WHERE id IN (${messageIds.map(() => "?").join(", ")}) AND session_id = ?`,
+      ...messageIds,
+      session.id,
+    );
+    const prefix = vendorSpec(session.vendor).composer.commandPrefix;
+    return rows.some((r) => r.sender !== "user" || commandNameOf(r.text, prefix) === null);
+  };
+
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "pm" || session.conversationId === null) return;
     const conversationId = session.conversationId;
     if (event.type === "message.processing") {
-      if (event.preamble === true && session.generation > 1) {
-        db.run("INSERT OR IGNORE INTO session_preamble_seen (session_id, seen_at) VALUES (?, ?)", session.id, now());
-        clearConsumedHandoverBlobsIn(db, session.id);
-        const renewed = renewedOf(session);
-        if (renewed !== undefined && metaOf(renewed).seen !== true) setMeta(renewed.id, { ...metaOf(renewed), seen: true });
+      if (session.generation > 1 && (event.preamble === true || hasNonCommandTurnMessage(session, event.messageIds))) {
+        markPreambleSeenIn(session);
       }
       if (inSessionOf(conversationId) === undefined) return;
       const request = requestOf(session);
@@ -734,6 +750,15 @@ export function createLedgerHandover(
       return;
     }
     if (event.type !== "turn.ended" && event.type !== "session.exited" && event.type !== "driver.error") return;
+    if (
+      event.type === "turn.ended" &&
+      event.ok &&
+      !event.interrupted &&
+      session.generation > 1 &&
+      hasNonCommandTurnMessage(session, event.messageIds)
+    ) {
+      markPreambleSeenIn(session);
+    }
     if (!queue.has(conversationId) && activeOf(conversationId) === undefined &&
         (event.type !== "turn.ended" || session.usage.context < thresholdOf(session.vendor))) return;
     const request = inSessionOf(conversationId) === undefined ? undefined : requestOf(session);

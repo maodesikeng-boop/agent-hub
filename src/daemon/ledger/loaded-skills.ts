@@ -43,10 +43,15 @@ export function createLedgerLoadedSkills(ctx: LedgerContext, skillFiles: SkillFi
 
   const record = (session: AgentSessionRow, skill: KnownSkill | null, source: SkillSource) => {
     if (skill === null) return;
+    // Keep 'user' sticky within a conversation so subsequent model reads of SKILL.md never downgrade user-invoked skills.
     db.run(
       `INSERT INTO loaded_skills (conversation_id, skill_key, name, path, source, generation, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (conversation_id, skill_key) DO UPDATE SET
-         name = excluded.name, path = excluded.path, source = excluded.source, generation = excluded.generation, loaded_at = excluded.loaded_at`,
+         name = excluded.name,
+         path = excluded.path,
+         source = CASE WHEN loaded_skills.source = 'user' THEN 'user' ELSE excluded.source END,
+         generation = excluded.generation,
+         loaded_at = excluded.loaded_at`,
       session.conversationId,
       skill.key,
       skill.name,

@@ -424,6 +424,37 @@ describe("BaseSessionDriver 公共状态机", () => {
     );
   });
 
+  it("首轮 sessionPreamble 因预算不足返回 null 时仍占住首轮开场窗口并在 dropBatch 时可回退", () => {
+    let calls = 0;
+    const { store } = makeMemoryStore({ personaRevision: 1 });
+    const driver = new DummyDriver({
+      store,
+      prepareLaunch: dummyLaunchFiles,
+      sessionPreamble: () => {
+        calls += 1;
+        return calls === 1 ? null : "【不该在第 2 轮中途补发】";
+      },
+    });
+
+    const st = driver.exposeState(1);
+    st.pending.push({ messageIds: [21], source: "user", text: "超长首轮消息", prefixes: [], resend: false });
+    const batch1 = driver.exposeTakeBatch(1)!;
+    expect(batch1.prefixes).toEqual([]);
+    expect(batch1.notes.preamble).not.toBeNull();
+    expect(batch1.notes.preamble?.note).toBeNull();
+    expect(st.preambleTaken).toBe(true);
+
+    // A pipelined Turn 2 must not re-fetch sessionPreamble while Turn 1 holds the opening window.
+    st.pending.push({ messageIds: [22], source: "user", text: "短二轮", prefixes: [], resend: false });
+    const batch2 = driver.exposeTakeBatch(1)!;
+    expect(batch2.prefixes).toEqual([]);
+    expect(calls).toBe(1);
+
+    // Dropping Turn 1 (e.g. startup crash) restores preambleTaken so a retry can request it again.
+    driver.exposeDropBatch(1, batch1);
+    expect(st.preambleTaken).toBe(false);
+  });
+
   it("停止与未取走批次结算：用户消息标 message.cancelled，系统消息标 message.requeued 并从 written 移除", () => {
     const { store } = makeMemoryStore();
     const events: DriverEvent[] = [];

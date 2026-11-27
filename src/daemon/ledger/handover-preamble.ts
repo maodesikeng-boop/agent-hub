@@ -60,18 +60,36 @@ export interface RenewedMessageMeta {
 const NOT_HANDOVER_TURN = "COALESCE(json_extract(CASE WHEN json_valid(m.meta) THEN m.meta END, '$.handover'), 0) != 1";
 const RECENT_PAGE = 100;
 
-export function* recentRowsOf(db: Db, conversationId: ConversationId, upTo = Number.MAX_SAFE_INTEGER - 1): Generator<RecentMessage> {
+export function* recentRowsOf(
+  db: Db,
+  conversationId: ConversationId,
+  upTo = Number.MAX_SAFE_INTEGER - 1,
+  excludeSessionId?: SessionId,
+): Generator<RecentMessage> {
   let before = upTo + 1;
   for (;;) {
-    const rows = db.all<MessageDbRow & { generation: number | null }>(
-      `SELECT m.*, s.generation AS generation FROM messages m LEFT JOIN agent_sessions s ON s.id = m.session_id
-       WHERE m.conversation_id = ? AND m.id < ? AND m.kind = 'text'
-         AND ((m.sender = 'agent' AND ${NOT_HANDOVER_TURN}) OR (m.sender = 'user' AND m.status IN ('replied', 'failed', 'stopped')))
-       ORDER BY m.id DESC LIMIT ?`,
-      conversationId,
-      before,
-      RECENT_PAGE,
-    );
+    const rows =
+      excludeSessionId === undefined
+        ? db.all<MessageDbRow & { generation: number | null }>(
+            `SELECT m.*, s.generation AS generation FROM messages m LEFT JOIN agent_sessions s ON s.id = m.session_id
+             WHERE m.conversation_id = ? AND m.id < ? AND m.kind = 'text'
+               AND ((m.sender = 'agent' AND ${NOT_HANDOVER_TURN}) OR (m.sender = 'user' AND m.status IN ('replied', 'failed', 'stopped')))
+             ORDER BY m.id DESC LIMIT ?`,
+            conversationId,
+            before,
+            RECENT_PAGE,
+          )
+        : db.all<MessageDbRow & { generation: number | null }>(
+            `SELECT m.*, s.generation AS generation FROM messages m LEFT JOIN agent_sessions s ON s.id = m.session_id
+             WHERE m.conversation_id = ? AND m.id < ? AND m.kind = 'text'
+               AND (m.session_id IS NULL OR m.session_id != ?)
+               AND ((m.sender = 'agent' AND ${NOT_HANDOVER_TURN}) OR (m.sender = 'user' AND m.status IN ('replied', 'failed', 'stopped')))
+             ORDER BY m.id DESC LIMIT ?`,
+            conversationId,
+            before,
+            excludeSessionId,
+            RECENT_PAGE,
+          );
     for (const row of rows) yield { id: row.id, sender: row.sender === "user" ? "user" : "agent", text: agentTextOf(toMessage(row)), generation: row.generation ?? 1 };
     if (rows.length < RECENT_PAGE) return;
     before = rows.at(-1)!.id;
@@ -117,17 +135,24 @@ function generationAnchorOfDb(db: Db, conversationId: ConversationId): Generatio
   return { summaryText: null, cutMessageId: 0, startSessionId: 0 };
 }
 
-function* generationMessagesNewestFirstOf(db: Db, conversationId: ConversationId, cutMessageId: MessageId): Generator<Message> {
+function* generationMessagesNewestFirstOf(
+  db: Db,
+  conversationId: ConversationId,
+  cutMessageId: MessageId,
+  targetSessionId: SessionId,
+): Generator<Message> {
   let before = Number.MAX_SAFE_INTEGER;
   for (;;) {
     const page = db.all<MessageDbRow>(
       `SELECT * FROM messages
         WHERE conversation_id = ? AND id > ? AND id < ? AND kind NOT IN ${PROCESS_MESSAGE_KINDS_SQL}
+          AND NOT (session_id = ? AND sender IN ('user', 'agent'))
         ORDER BY id DESC
         LIMIT ?`,
       conversationId,
       cutMessageId,
       before,
+      targetSessionId,
       RECENT_PAGE,
     );
     for (const row of page) yield toMessage(row);
@@ -214,7 +239,7 @@ export function buildBudgetedSessionPreamble(input: {
     const anchor = generationAnchorOfDb(db, session.conversationId);
     const maxHistoryBytes = Math.min(VENDOR_SWITCH_CONTEXT_MAX_BYTES, computePreambleByteBudget(session.vendor, options?.reservedBytes));
     const collected = collectGenerationEntriesNewestFirst(
-      generationMessagesNewestFirstOf(db, session.conversationId, anchor.cutMessageId),
+      generationMessagesNewestFirstOf(db, session.conversationId, anchor.cutMessageId, session.id),
       { targetSessionId: session.id, maxBytes: Math.max(maxHistoryBytes, 0) },
     );
     const priorSessions = priorGenerationSessionsOfDb(db, session.conversationId, anchor.startSessionId, session.id);
@@ -256,7 +281,7 @@ export function buildBudgetedSessionPreamble(input: {
         : getAgentSession(db, renewedMeta.fromSessionId);
   const cut = handoverRow !== undefined ? (handoverRow.cut_message_id ?? 0) : (renewedMeta?.turnStartId ?? renewedRow.id);
   const upTo = handoverRow !== undefined ? Number.MAX_SAFE_INTEGER - 1 : cut;
-  const { picked } = pickRecent(recentRowsOf(db, session.conversationId, upTo), cut, HANDOVER_RECENT_CHARS);
+  const { picked } = pickRecent(recentRowsOf(db, session.conversationId, upTo, session.id), cut, HANDOVER_RECENT_CHARS);
   const handoverText = handoverRow?.text ?? renewedRow.text;
   const skills = handoverRow?.skills_section ?? null;
   const transcriptPath =

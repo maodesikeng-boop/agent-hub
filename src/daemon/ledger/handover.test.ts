@@ -606,6 +606,30 @@ describe("开场说明：只给到新会话读到为止", () => {
     const preamble = ledger.sessionPreamble(g2)!;
     expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n老交接`);
   });
+
+  it("首轮因 reservedBytes 超预算省略开场说明后，非命令首轮一旦处理或结束即消费开场状态，第 2 轮不再中途补发或重复抄送第 1 轮", () => {
+    const firstTurnMsg = post("前期对话");
+    turn(firstSession, [firstTurnMsg], ["好的"]);
+    ledger.editPersona(pmId, { vendor: "agy" }, { kind: "user" });
+    const agySid = sessions().at(-1)!.id;
+    db.run("UPDATE handovers SET skills_section = ? WHERE to_session_id = ?", "## 技能索引", agySid);
+
+    const hugeText = `TURN1_UNIQUE_120KB_PAYLOAD_${"长".repeat(40_000)}`;
+    const turn1Id = post(hugeText);
+    const pTurn1 = ledger.sessionPreamble(agySid, { reservedBytes: 120 * 1024 });
+    expect(pTurn1).toBeNull();
+
+    // Even if message.processing arrives without preamble: true (because Turn 1 omitted preamble),
+    // processing a non-command message consumes the opening window and clears handover blobs.
+    ledger.applyDriverEvent(agySid, { type: "message.delivered", at: now, messageIds: [turn1Id] });
+    ledger.applyDriverEvent(agySid, { type: "message.processing", at: now, messageIds: [turn1Id] });
+    ledger.applyDriverEvent(agySid, { type: "agent.text", at: now, uuid: "turn1-reply", text: "TURN1_AGENT_REPLY" });
+    ledger.applyDriverEvent(agySid, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [turn1Id], durationMs: 1 });
+
+    expect(ledger.sessionPreamble(agySid, { reservedBytes: 2_100 })).toBeNull();
+    expect(db.get("SELECT 1 AS x FROM session_preamble_seen WHERE session_id = ?", agySid)).toBeDefined();
+    expect(db.get<{ skills_section: string | null }>("SELECT skills_section FROM handovers WHERE to_session_id = ?", agySid)!.skills_section).toBeNull();
+  });
 });
 
 describe("没成：失败、超时、空文字、退避", () => {

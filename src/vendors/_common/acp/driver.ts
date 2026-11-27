@@ -328,11 +328,13 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       systemPrompt: activeProc?.pendingSystemPromptBlock ?? null,
       ...(needsColdSystemPromptReserve ? { extraReserveBytes: ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES } : {}),
     });
+    const hasPreambleBlock = notes.preamble?.note != null && notes.preamble.note.trim() !== "";
     return {
       messageIds: taken.messageIds,
       userBlocks: normalizeAcpUserBlocks(
         this.composer.buildUserContent([...prefixes, ...taken.body.prefixes], taken.body.text),
       ),
+      ...(hasPreambleBlock ? { hasPreambleBlock: true as const } : {}),
       notes,
       delivered: false,
       processing: false,
@@ -399,9 +401,43 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
 
   protected async writeBatch(st: AcpSessionState, proc: AcpProc, batch: AcpBatch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
-    const suffix = batch.includeDeliverySuffix !== true ? "" : this.takeDeliverySuffix(st, batch);
-    const userBlocks = suffix === "" ? batch.userBlocks : [...batch.userBlocks, { type: "text" as const, text: suffix }];
-    const problem = checkAcpUserBlocks(userBlocks, handoverMaxSingleMessageBytesOf(this.vendor));
+    const vendorCap = handoverMaxSingleMessageBytesOf(this.vendor);
+    const systemBlock = proc.pendingSystemPromptBlock ?? this.#takeReinjectBlock(st, proc);
+    const systemBytes = systemBlock !== null && systemBlock.trim() !== "" ? Buffer.byteLength(systemBlock, "utf8") : 0;
+    let suffix = batch.includeDeliverySuffix !== true ? "" : this.takeDeliverySuffix(st, batch);
+    let baseBlocks = batch.userBlocks;
+    const blocksBytes = (blocks: ReadonlyArray<{ type: "text"; text: string }>, tail: string): number =>
+      blocks.reduce((sum, b) => sum + Buffer.byteLength(b.text, "utf8"), 0) +
+      (tail === "" ? 0 : Buffer.byteLength(tail, "utf8"));
+
+    if (batch.hasPreambleBlock && blocksBytes(baseBlocks, suffix) + systemBytes > vendorCap) {
+      const withoutPreamble = baseBlocks.slice(1);
+      const restBytes = blocksBytes(withoutPreamble, suffix);
+      const exactReserved = restBytes + systemBytes + (suffix === "" ? 0 : 2) + (systemBytes === 0 ? 0 : 2);
+      let refit: string | null = null;
+      if (this.opts.sessionPreamble) {
+        try {
+          refit = this.opts.sessionPreamble(st.id, { reservedBytes: exactReserved });
+        } catch (error) {
+          this.internalError(st.id, `sessionPreamble refit failed, writing without it: ${errorMessage(error)}`);
+        }
+      }
+      if (refit !== null && refit.trim() !== "" && Buffer.byteLength(refit, "utf8") + restBytes + systemBytes <= vendorCap) {
+        baseBlocks = [{ type: "text", text: refit }, ...withoutPreamble];
+        if (batch.notes.preamble) batch.notes.preamble = { ...batch.notes.preamble, note: refit };
+      } else {
+        baseBlocks = withoutPreamble;
+        if (batch.notes.preamble) batch.notes.preamble = { ...batch.notes.preamble, note: null };
+      }
+    }
+
+    if (suffix !== "" && blocksBytes(baseBlocks, suffix) + systemBytes > vendorCap && blocksBytes(baseBlocks, "") <= vendorCap) {
+      suffix = "";
+      delete batch.agenda;
+    }
+
+    const userBlocks = suffix === "" ? baseBlocks : [...baseBlocks, { type: "text" as const, text: suffix }];
+    const problem = checkAcpUserBlocks(userBlocks, vendorCap);
     if (problem) {
       this.dropBatch(st, batch);
       this.invalidInput(st, problem, batch.messageIds);
@@ -420,7 +456,6 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     resetTurnBuffers(st, proc);
 
-    const systemBlock = proc.pendingSystemPromptBlock ?? this.#takeReinjectBlock(st, proc);
     proc.pendingSystemPromptBlock = null;
     st.reinjectPending = false;
     const promptBlocks = buildAcpPromptBlocks(userBlocks, systemBlock);

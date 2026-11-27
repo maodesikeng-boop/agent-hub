@@ -357,6 +357,34 @@ describe("传下去", () => {
     expect(section.indexOf("`x`")).toBeLessThan(section.indexOf("`y`"));
     expect(rows().find((r) => r.name === "x")).toMatchObject({ source: "user", generation: 3 });
   });
+
+  it("用户调用的技能在同轮或跨代被模型读取 SKILL.md 时保持 user 来源粘性，不降级且跨 4 代不丢失", () => {
+    const userSkillPath = skill("carry-user", "用户技能正文");
+    userTurn(firstSession, "/carry-user 开始");
+    // Same-turn model read (e.g. read_file vendors or model opening SKILL.md) must not downgrade source to model.
+    read(firstSession, userSkillPath);
+    for (let i = 0; i < SKILL_CARRYOVER_LIST_MAX + 5; i++) {
+      read(firstSession, skill(`noise-${i}`, `噪声 ${i}`));
+    }
+    expect(rows().find((r) => r.name === "carry-user")).toMatchObject({ source: "user", generation: 1 });
+
+    const g2 = renew();
+    expect(sectionOf(g2.preamble)).toContain("`carry-user`（用户调用");
+    // Cross-generation on-demand read following the index must also keep source='user'.
+    read(g2.next, userSkillPath);
+    userTurn(g2.next, "按索引读完继续");
+    expect(rows().find((r) => r.name === "carry-user")).toMatchObject({ source: "user", generation: 2 });
+
+    const g3 = renew();
+    expect(sectionOf(g3.preamble)).toContain("`carry-user`（用户调用");
+    userTurn(g3.next, "好");
+
+    // Generation 4 after deleting the file still reports missing carry-user (matches test/smoke/skill-carryover.ts).
+    rmSync(userSkillPath);
+    const g4 = renew();
+    expect(sectionOf(g4.preamble)).toContain("读不到了（文件没了或不在技能目录里）");
+    expect(sectionOf(g4.preamble)).toContain("carry-user");
+  });
 });
 
 describe("三条换代的路都带", () => {
