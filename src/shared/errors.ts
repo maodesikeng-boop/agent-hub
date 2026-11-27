@@ -120,7 +120,27 @@ const TEXT: Readonly<Record<FailureKind, (serviceName: string) => string>> = {
 
 const UNKNOWN_TEXT = "出错了";
 
+export const MACOS_NESTED_SANDBOX_MESSAGE =
+  "macOS 不支持嵌套沙箱（sandbox-exec 退出码 71：sandbox_apply: Operation not permitted）。当前进程已在 macOS 沙箱内，请在宿主终端（沙箱外）运行，或关闭内层程序自带沙箱。";
+
+const SANDBOX_APPLY_EPERM = /sandbox_apply:\s*operation not permitted/i;
+const SANDBOX_EXEC_NAME = /sandbox-exec/i;
+const EXIT_CODE_71 = /(?:exit code\s*71\b|\bcode=71\b|退出码\s*71\b)/i;
+
+/**
+ * Precondition: raw is an error or stderr string; exitCode is the process exit code when known.
+ * Postcondition: returns true only when raw (and optional exitCode) indicates a macOS nested
+ * sandbox-exec failure (sandbox_apply: Operation not permitted or sandbox-exec exit 71), and false
+ * for unrelated exit 71 failures or non-sandbox errors.
+ */
+export function isNestedMacOsSandboxError(raw: string, exitCode?: number | null): boolean {
+  if (SANDBOX_APPLY_EPERM.test(raw)) return true;
+  const hasExit71 = exitCode === 71 || EXIT_CODE_71.test(raw);
+  return hasExit71 && SANDBOX_EXEC_NAME.test(raw);
+}
+
 export function describeFailure(raw: string, options: { unknown?: "generic" | "raw"; vendor?: AgentVendor } = {}): Failure {
+  if (isNestedMacOsSandboxError(raw)) return { kind: "start", text: MACOS_NESTED_SANDBOX_MESSAGE, raw };
   const vendor = vendorFailureOf(raw, options.vendor);
   if (NETWORK.test(raw) && vendor?.kind !== "start" && vendor?.kind !== "missing") return { kind: "network", text: TEXT.network(""), raw };
   if (vendor) return { kind: vendor.kind, text: TEXT[vendor.kind](vendor.serviceName), raw };

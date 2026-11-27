@@ -1,12 +1,13 @@
 import type { AppApprovalGate } from "../../shared/app-approval.ts";
 import type { CodexAppApprovalState } from "./app-approval.ts";
-import type {
-  BaseBatch,
-  BaseProc,
-  BaseSessionState,
-  BatchNotes,
-  PendingEntry,
-  StartupOutcome,
+import {
+  formatStartupExitDetail,
+  type BaseBatch,
+  type BaseProc,
+  type BaseSessionState,
+  type BatchNotes,
+  type PendingEntry,
+  type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import {
   DriverError,
@@ -103,9 +104,17 @@ export function newBatch(
 
 export function startupError(outcome: Extract<StartupOutcome, { kind: "failed" }>, startTimeoutMs: number): DriverError {
   if (outcome.timedOut) return new DriverError("start_timeout", `no codex thread ready within ${startTimeoutMs} ms`);
-  const how = outcome.signal ? `signal ${outcome.signal}` : `exit code ${outcome.exitCode}`;
-  const detail = outcome.errorMessage ?? outcome.stderr.trim();
-  return new DriverError("spawn_failed", `codex exited before thread ready (${how})${detail ? `: ${detail}` : ""}`);
+  return new DriverError(
+    "spawn_failed",
+    formatStartupExitDetail({
+      vendorLabel: "codex",
+      phase: "thread ready",
+      exitCode: outcome.exitCode,
+      signal: outcome.signal,
+      stderr: outcome.stderr,
+      errorMessage: outcome.errorMessage,
+    }),
+  );
 }
 
 export function rememberPreviewPath(proc: Proc, itemId: string, path: string): void {
