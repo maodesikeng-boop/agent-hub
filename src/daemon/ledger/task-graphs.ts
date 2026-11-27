@@ -30,6 +30,7 @@ import {
   releaseUserBlockedStepsIn,
   isWorkerSlotHeldElsewhere,
   workerGraphStatus,
+  workerGraphUpstreamCommit,
   workerGraphWorkspacePlan,
 } from "./task-graphs/worker-hooks.ts";
 
@@ -128,6 +129,7 @@ export function createLedgerTaskGraphs(
     onWorkerResumedIn: bind(onWorkerResumedIn),
     onWorkerEndedIn: bind(onWorkerEndedIn),
     workerGraphWorkspacePlan: bind(workerGraphWorkspacePlan),
+    workerGraphUpstreamCommit: bind(workerGraphUpstreamCommit),
     workerGraphStatus: bind(workerGraphStatus),
     activeSnapshotGraphs: bind(activeSnapshotGraphs),
     purgeExpiredBatch: bind(purgeExpiredBatch),

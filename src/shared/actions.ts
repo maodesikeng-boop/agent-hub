@@ -1,6 +1,6 @@
 import type { ActionId, MessageId, SessionId, WorkerId } from "./domain.ts";
 
-export const ACTION_TYPES = ["session.start", "session.send", "session.end", "worktree.create", "review.verify"] as const;
+export const ACTION_TYPES = ["session.start", "session.send", "session.end", "worktree.create", "worktree.sync", "review.verify"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 export const ACTION_STATUSES = ["pending", "running", "done", "failed", "abandoned"] as const;
@@ -40,6 +40,7 @@ interface ActionParamsMap {
   "session.send": SessionSendParams;
   "session.end": SessionEndParams;
   "worktree.create": WorktreeCreateParams;
+  "worktree.sync": WorktreeCreateParams;
   "review.verify": ReviewVerifyParams;
 }
 
@@ -71,6 +72,7 @@ export function actionDedupeKey(action: NewAction): string {
     case "session.end":
       return `${action.params.sessionId}:${action.params.generation}`;
     case "worktree.create":
+    case "worktree.sync":
       return String(action.params.workerId);
     case "review.verify":
       return `${action.params.workerId}:${action.params.reportMessageId}`;
@@ -92,6 +94,7 @@ export const ACTION_RETRY: Record<ActionType, RetryPolicy> = {
   "session.send": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
   "session.end": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
   "worktree.create": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
+  "worktree.sync": { baseMs: 5_000, maxMs: 60_000, maxAttempts: 2 },
   "review.verify": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
 };
 

@@ -11,7 +11,7 @@ import {
 import { taskGraphSkillBody } from "./task-graph-skill.ts";
 
 const SHA = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
-const before: ReviewSnapshot = { sha: SHA, remote: { sha: SHA }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } };
+const before: ReviewSnapshot = { sha: SHA, remote: { name: "origin", sha: SHA }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } };
 
 describe("审查结论", () => {
   it("只认 PASS 和 FAIL，大小写与首尾标点不计较；PASS+NOTES 和别的写法是 null", () => {
@@ -41,23 +41,39 @@ describe("审查结论", () => {
 
 describe("收尾核对", () => {
   it("本地、origin、PR 都没变：没有问题", () => {
-    expect(diffReviewSnapshot("b", before, { sha: SHA, remote: { sha: SHA }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } })).toEqual([]);
+    expect(diffReviewSnapshot("b", before, { sha: SHA, remote: { name: "origin", sha: SHA }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } })).toEqual([]);
   });
 
   it("PR 被合并、查不了、查不到都算问题；开审时没有 PR、没有 origin 的不核对那一项", () => {
-    expect(diffReviewSnapshot("b", before, { sha: SHA, remote: { sha: SHA }, pr: { number: 7, state: "MERGED", url: "https://x/pull/7" } })).toEqual([
+    expect(diffReviewSnapshot("b", before, { sha: SHA, remote: { name: "origin", sha: SHA }, pr: { number: 7, state: "MERGED", url: "https://x/pull/7" } })).toEqual([
       "PR https://x/pull/7 从 OPEN 变成了 MERGED",
     ]);
-    expect(diffReviewSnapshot("b", before, { sha: SHA, remote: { sha: SHA }, pr: { unavailable: "gh 网络错误" } })).toEqual([
+    expect(diffReviewSnapshot("b", before, { sha: SHA, remote: { name: "origin", sha: SHA }, pr: { unavailable: "gh 网络错误" } })).toEqual([
       "查不了 PR https://x/pull/7 的状态（gh 网络错误）",
     ]);
-    expect(diffReviewSnapshot("b", before, { sha: SHA, remote: { sha: SHA }, pr: null })).toEqual(["PR https://x/pull/7 查不到了"]);
-    expect(diffReviewSnapshot("b", { sha: SHA, remote: null, pr: null }, { sha: SHA, remote: { sha: "ffff" }, pr: { unavailable: "gh 没装" } })).toEqual([]);
+    expect(diffReviewSnapshot("b", before, { sha: SHA, remote: { name: "origin", sha: SHA }, pr: null })).toEqual(["PR https://x/pull/7 查不到了"]);
+    expect(diffReviewSnapshot("b", { sha: SHA, remote: null, pr: null }, { sha: SHA, remote: { name: "origin", sha: "ffff" }, pr: { unavailable: "gh 没装" } })).toEqual([]);
+  });
+
+  it("checked out a remote commit the local branch lagged behind: compares the local branch with its own start, not with the checkout", () => {
+    const remoteTip = "ffffffffffffffffffffffffffffffffffffffff";
+    const start: ReviewSnapshot = { sha: remoteTip, local: SHA, remote: { name: "up", sha: remoteTip }, pr: null };
+    expect(diffReviewSnapshot("b", start, { sha: SHA, remote: { name: "up", sha: remoteTip }, pr: null })).toEqual([]);
+    expect(diffReviewSnapshot("b", start, { sha: remoteTip, remote: { name: "up", sha: "eeeeeeee" }, pr: null })).toEqual([
+      `本地分支 b 从 ${SHA.slice(0, 12)} 变成了 ${remoteTip.slice(0, 12)}`,
+      `up 上的分支 b 从 ${remoteTip.slice(0, 12)} 变成了 eeeeeeee`,
+    ]);
   });
 
   it("开审时 origin 上还没有这个分支，审查期间被推上去：算变了", () => {
-    expect(diffReviewSnapshot("b", { sha: SHA, remote: { sha: null }, pr: null }, { sha: SHA, remote: { sha: "ffffffff" }, pr: null })).toEqual([
+    expect(diffReviewSnapshot("b", { sha: SHA, remote: { name: "origin", sha: null }, pr: null }, { sha: SHA, remote: { name: "origin", sha: "ffffffff" }, pr: null })).toEqual([
       "origin 上的分支 b 从 （没有） 变成了 ffffffff",
+    ]);
+  });
+
+  it("an observation of a different remote than the one recorded at review start is a problem, not a match", () => {
+    expect(diffReviewSnapshot("b", { sha: SHA, remote: { name: "upstream", sha: SHA }, pr: null }, { sha: SHA, remote: { name: "origin", sha: SHA }, pr: null })).toEqual([
+      "核对的远端从 upstream 变成了 origin",
     ]);
   });
 });
