@@ -26,6 +26,7 @@ import type { AcpLaunchContext } from "./types.ts";
 interface AcpSessionParams {
   mcpServers: McpServer[];
   additionalDirectories: string[] | undefined;
+  sessionMeta: Record<string, unknown> | undefined;
   injection: AcpSystemPromptInjection;
   supportsNativeSystemPrompt: boolean;
   nativeSystemPrompt: SystemPrompt | undefined;
@@ -121,11 +122,21 @@ function buildSessionParams(
       : mcpServersCfg
         ? [...mcpServersCfg]
         : [];
+  const extraDirs = host.config.session?.extraAdditionalDirectories?.(launchCtx) ?? [];
+  const mergedDirs: string[] = [];
+  const seenDirs = new Set<string>();
+  for (const dir of [...row.addDirs, ...extraDirs]) {
+    const trimmed = dir.trim();
+    if (trimmed === "" || trimmed === row.cwd || seenDirs.has(trimmed)) continue;
+    seenDirs.add(trimmed);
+    mergedDirs.push(trimmed);
+  }
   // Only sent when the agent advertises sessionCapabilities.additionalDirectories; others reply -32602.
   const additionalDirectories =
-    row.addDirs.length > 0 && init.agentCapabilities?.sessionCapabilities?.additionalDirectories
-      ? [...row.addDirs]
+    mergedDirs.length > 0 && init.agentCapabilities?.sessionCapabilities?.additionalDirectories
+      ? mergedDirs
       : undefined;
+  const sessionMeta = host.config.session?.sessionMeta?.(launchCtx);
 
   const injection = host.systemPromptInjection();
   const supportsNativeSystemPrompt = Boolean(
@@ -139,16 +150,18 @@ function buildSessionParams(
       nativeSystemPrompt = { mode: "append", content: [{ type: "text", text: rawText }] };
     }
   }
-  return { mcpServers, additionalDirectories, injection, supportsNativeSystemPrompt, nativeSystemPrompt };
+  return { mcpServers, additionalDirectories, sessionMeta, injection, supportsNativeSystemPrompt, nativeSystemPrompt };
 }
 
 function sessionExtras(params: AcpSessionParams): {
   additionalDirectories?: string[];
   systemPrompt?: SystemPrompt;
+  _meta?: Record<string, unknown>;
 } {
   return {
     ...(params.additionalDirectories ? { additionalDirectories: params.additionalDirectories } : {}),
     ...(params.nativeSystemPrompt ? { systemPrompt: params.nativeSystemPrompt } : {}),
+    ...(params.sessionMeta && Object.keys(params.sessionMeta).length > 0 ? { _meta: params.sessionMeta } : {}),
   };
 }
 
