@@ -631,6 +631,17 @@ describe("system inputs and progress across turns", () => {
     expect(screen.getByText("Dispatch the next step.")).toBeInTheDocument();
   });
 
+  it("S5: a settled watch notice is labelled as a watch, not as a task graph", () => {
+    const notice = makeSystemMessage({
+      id: 1, status: "replied", text: "【在盯的 #1 满足了】\n明早再看",
+      meta: { event: "pm.wakeup", source: "task_graph", ref: "watch-settled:1:0", subject: { kind: "watch.settled", watchId: 1, run: 0 } },
+    });
+    list([notice, makeMessage({ id: 2, text: "Started" })]);
+    const trigger = screen.getByRole("button", { name: "在盯的 #1 满足了" });
+    expect(trigger).toHaveTextContent("Watch");
+    expect(trigger).not.toHaveTextContent("Task graph");
+  });
+
   it("S7: without checklist frames, only action timing and Worked for appear", () => {
     const messages = [makeUserMessage({ id: 1 }), makeToolMessage({ id: 2 })];
     const view = list(messages, { status: running(), stepStartedAt: 10_000 });
