@@ -38,8 +38,6 @@ export interface AgentSetting {
   effort: string | null;
 }
 
-export const DEFAULT_AGENT_SETTING: AgentSetting = { vendor: DEFAULT_AGENT_VENDOR, model: null, effort: null };
-
 const MODEL_NAME = /^[A-Za-z0-9._:/@[\]][A-Za-z0-9._:/@[\]-]*$/;
 export const MODEL_NAME_RULE = "模型名只能用字母、数字和 . _ - : / @ [ ]，不能以 - 开头";
 
@@ -322,8 +320,13 @@ export type AvailabilityOf = (vendor: AgentVendor) => VendorAvailability;
  * Never returns a "not_installed" or "signed_out" vendor.
  */
 export function firstUsableVendor(availabilityOf: AvailabilityOf, options?: { probedOnly?: boolean }): AgentVendor | null {
-  void [availabilityOf, options];
-  throw new Error("Not implemented");
+  let unprobed: AgentVendor | null = null;
+  for (const vendor of AGENT_VENDORS) {
+    const availability = availabilityOf(vendor);
+    if (availability === "available") return vendor;
+    if (availability === "unknown" && unprobed === null) unprobed = vendor;
+  }
+  return options?.probedOnly === true ? null : unprobed;
 }
 
 /**
@@ -332,14 +335,12 @@ export function firstUsableVendor(availabilityOf: AvailabilityOf, options?: { pr
  * which keeps today's zero-provider behavior.
  */
 export function defaultPmVendor(availabilityOf: AvailabilityOf): AgentVendor {
-  void availabilityOf;
-  throw new Error("Not implemented");
+  return firstUsableVendor(availabilityOf) ?? DEFAULT_AGENT_VENDOR;
 }
 
 /** Availability lookup over a catalog list; a vendor missing from the list reads as "unknown". */
 export function availabilityOfCatalogs(catalogs: readonly ModelCatalog[]): AvailabilityOf {
-  void catalogs;
-  throw new Error("Not implemented");
+  return (vendor) => catalogs.find((c) => c.vendor === vendor)?.availability ?? "unknown";
 }
 
 const pickableCatalogsCache = new WeakMap<readonly ModelCatalog[], Map<string, readonly ModelCatalog[]>>();

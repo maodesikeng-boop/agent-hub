@@ -8,9 +8,7 @@ import {
   AGENT_API_CLOSE_MS,
   LEDGER_SETTLE_ON_SHUTDOWN_MS,
   API_PATHS,
-  DEFAULT_PM_MODE,
   DEFAULT_UI_PORT,
-  DEFAULT_AGENT_VENDOR,
   ENV_DB_SHARED_ACCESS,
   ENV_DEFAULT_MODEL,
   ENV_GITHUB_CLIENT_ID,
@@ -26,7 +24,6 @@ import {
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
   AUTO_RENEW_TICK_MS,
-  checkModel,
   type ActionExecutor,
   type Driver,
   type Unsubscribe,
@@ -99,7 +96,7 @@ import { createProjectCatalogRunner, type ProjectCatalogRunner } from "./project
 import { resolveRouterModel } from "./router/model-resolver.ts";
 import { createRouterTurnPurposes, createRouterTurnRunner } from "./router/single-turn.ts";
 import { createLedger, type SqliteLedger } from "./ledger/index.ts";
-import { DEFAULT_PM_NAME } from "./prompt.ts";
+import { ensureFirstRunPm } from "./first-run-pm.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { resolveUpload } from "./uploads.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
@@ -542,16 +539,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
     const synced = ledger.syncPersonaFiles();
     if (synced.recordedPmIds.length > 0) log(`${LOG_PREFIX} 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
-    if (db.get("SELECT 1 AS x FROM pms LIMIT 1") === undefined) {
-      let defaultModel = env[ENV_DEFAULT_MODEL]?.trim() || undefined;
-      const badModel = defaultModel === undefined ? null : checkModel(DEFAULT_AGENT_VENDOR, defaultModel);
-      if (badModel !== null) {
-        log(`${LOG_PREFIX} ${ENV_DEFAULT_MODEL}=${JSON.stringify(defaultModel)} 不能用（${badModel}），项目经理按默认模型建`);
-        defaultModel = undefined;
-      }
-      const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, mode: DEFAULT_PM_MODE, persona: "", ...(defaultModel ? { defaultModel } : {}) });
-      log(`${LOG_PREFIX} 第一次启动，建了项目经理“${pm.name}”`);
-    }
+    await ensureFirstRunPm({
+      ledger,
+      models,
+      hasAnyPm: () => db.get("SELECT 1 AS x FROM pms LIMIT 1") !== undefined,
+      defaultModel: env[ENV_DEFAULT_MODEL],
+      log,
+    });
 
     const executor = createActionExecutor(db, ledger);
     const setup = createSetupRunner({ log });
