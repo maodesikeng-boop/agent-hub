@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { isTransientGhError } from "./gh-transient.ts";
 import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 import {
@@ -392,5 +393,27 @@ describe("waitForChecks", () => {
     expect(code).toBe(1);
     expect(h.sleeps).toEqual([10_000, 10_000]);
     expect(h.errors.join("\n")).toContain("FAIL (timeout)");
+  });
+
+  it("acceptance S4/S8/S11: retries GitHub GraphQL EOF and HTTP/2 transport drops while failing immediately on permanent errors", async () => {
+    const transientStderrs = [
+      'Post "https://api.github.com/graphql": EOF',
+      'Get "https://api.github.com/repos/a/b": unexpected EOF',
+      "http2: client connection lost",
+      "write tcp 127.0.0.1: broken pipe",
+      "read tcp 10.0.0.1:443: i/o timeout",
+    ];
+    for (const stderr of transientStderrs) {
+      expect(isTransientGhError(stderr), stderr).toBe(true);
+      expect(classifyGhQueryError({ kind: "failed", code: 1, stderr, timedOut: false, missing: false }).retryable, stderr).toBe(true);
+    }
+    for (const permanent of ["HTTP 401 Unauthorized", "HTTP 404 Not Found", "GraphQL: Field 'bogus' doesn't exist"]) {
+      expect(isTransientGhError(permanent), permanent).toBe(false);
+    }
+
+    const eof = { kind: "failed" as const, code: 1, stderr: 'Post "https://api.github.com/graphql": EOF', timedOut: false, missing: false };
+    const h = fakeHarness([eof, eof, { kind: "ok", pr: makePr() }]);
+    expect(await waitForChecks(defaultOpts({ intervalSeconds: 5 }), h.deps)).toBe(0);
+    expect(h.sleeps).toEqual([5_000, 5_000]);
   });
 });

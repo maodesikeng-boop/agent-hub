@@ -244,12 +244,17 @@ class PiForkTurn {
   }
 }
 
+export interface PiForkTurnOptions {
+  killWaitMs?: number;
+}
+
 export function runPiForkTurn(
   child: ChildProcess,
   src: ForkSource,
   fork: ForkHandle,
   prompt: string,
   signal: AbortSignal,
+  _options?: PiForkTurnOptions,
 ): Promise<ForkWriteResult> {
   return new Promise<ForkWriteResult>((resolve, reject) => {
     new PiForkTurn(child, src, fork, signal, resolve, reject).start(prompt);

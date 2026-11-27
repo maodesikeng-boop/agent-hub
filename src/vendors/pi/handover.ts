@@ -23,6 +23,8 @@ export interface PiForkerOptions {
   ) => ChildProcess;
   homeDir?: string;
   env?: Record<string, string | undefined>;
+  /** Override for post-turn exit wait before force-killing an unresponsive pi child process. */
+  killWaitMs?: number;
 }
 
 function buildPiForkArgs(src: ForkSource, forkId: string, forkTarget: string): string[] {

@@ -97,6 +97,27 @@ export function existingAgyPromptRules(promptFile: string): string | null {
   return readdirSync(rulesDir).some((name) => RULE_FILE_RE.test(name)) ? workspace : null;
 }
 
+export interface AgyRuleFileInfo {
+  path: string;
+  bytes: number;
+}
+
+export interface AgyRuleBudgetReport {
+  totalBytes: number;
+  files: AgyRuleFileInfo[];
+  oversizedFiles: AgyRuleFileInfo[];
+}
+
+/**
+ * Inspects deduplicated global and workspace rule files loaded by agy and measures UTF-8 byte sizes.
+ * Postcondition: returns totalBytes, all active rule files sorted by bytes descending, and oversizedFiles
+ * whose UTF-8 size exceeds AGY_RULE_SINGLE_BUDGET_BYTES sorted by bytes descending. Broken symlinks and
+ * non-always_on workspace rules are skipped without throwing.
+ */
+export function inspectAgyRuleBudget(_home: string, _workspaces: readonly string[]): AgyRuleBudgetReport {
+  throw new Error("Not implemented");
+}
+
 export function agyRuleBudgetWarning(home: string, workspaces: readonly string[]): string | null {
   const seen = new Set<string>();
   let total = 0;

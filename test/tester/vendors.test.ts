@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { VENDOR_LIST, vendorSpec, type AgentVendor } from "../../src/shared/index.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
+import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../../src/vendors/agy/paths.ts";
 import { coverageLines } from "./cli.ts";
 import { installCommandFor, installVendor, loginCommandFor, openGaps, probeVendor, VENDOR_BENCH, type CommandRunner, type ProbeTarget, type VendorReadiness } from "./vendors.ts";
 
@@ -191,6 +192,11 @@ describe("probeVendor", () => {
   it("starts no model turn", () => {
     const entry = probeVendor("claude", { instance: "remote", provider: provider("available"), platform: "linux" });
     expect(entry).not.toBeInstanceOf(Promise);
+  });
+
+  it("acceptance S3: includes AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 in macOS agy loginFix so bench sign-in writes file token instead of popping Keychain", () => {
+    const entry = probeVendor("agy", { instance: "local", provider: provider("signed_out"), local: local(scratch(), "/bench/agy"), platform: "darwin" });
+    expect(entry.fix).toContain(`${AGY_FORCE_FILE_TOKEN_STORAGE_ENV}=1`);
   });
 });
 

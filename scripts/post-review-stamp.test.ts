@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { GhRunOptions, GhRunResult } from "../src/daemon/git/gh.ts";
-import { main, parsePostStampArgs, type PostStampDeps } from "./post-review-stamp.ts";
+import {
+  DEFAULT_CLEAN_POLL_INTERVAL_MS,
+  DEFAULT_CLEAN_WAIT_SECONDS,
+  MAX_TRANSIENT_CLEAN_POLL_ERRORS,
+  main,
+  parsePostStampArgs,
+  waitForPrCleanState,
+  type PostStampDeps,
+} from "./post-review-stamp.ts";
 import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 
 const SHA = "a".repeat(40);
@@ -106,5 +114,103 @@ describe("post-review-stamp main", () => {
     expect(await main(["420", "--sha", SHA, "--state", "failure", "--dry-run"], deps)).toBe(0);
     expect(calls).toHaveLength(1);
     expect(JSON.parse(logs[0]!)).toMatchObject({ dryRun: true, state: "failure", description: "Independent Bellwood review: FAIL on this commit" });
+  });
+
+  it("acceptance S5/S8/S9/S11: waits for mergeStateStatus CLEAN after success stamp, retries GraphQL EOF, fails fast on DIRTY/BEHIND/moved head, and supports --no-wait and --wait-timeout", async () => {
+    expect(parsePostStampArgs(["420", "--sha", SHA, "--no-wait", "--wait-timeout", "12"])).toMatchObject({
+      noWait: true,
+      waitTimeoutSeconds: 12,
+    });
+    expect(DEFAULT_CLEAN_WAIT_SECONDS).toBe(30);
+    expect(DEFAULT_CLEAN_POLL_INTERVAL_MS).toBe(2_000);
+    expect(MAX_TRANSIENT_CLEAN_POLL_ERRORS).toBe(5);
+
+    let nowMs = 0;
+    const sleeps: number[] = [];
+    const responses: GhRunResult[] = [
+      { kind: "ok", stdout: JSON.stringify({ headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus: "BLOCKED" }) },
+      { kind: "failed", code: 1, stderr: 'Post "https://api.github.com/graphql": EOF', timedOut: false, missing: false },
+      { kind: "ok", stdout: JSON.stringify({ headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus: "CLEAN" }) },
+    ];
+    let pollIdx = 0;
+    const cleanDeps: PostStampDeps = {
+      cwd: "/repo",
+      log: () => {},
+      now: () => nowMs,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        nowMs += ms;
+      },
+      execGh: async () => responses[Math.min(pollIdx++, responses.length - 1)]!,
+    };
+    const res = await waitForPrCleanState({ pr: 420, sha: SHA, env: {}, timeoutMs: 30_000, pollIntervalMs: 2_000 }, cleanDeps);
+    expect(res).toEqual({ ok: true, mergeStateStatus: "CLEAN", state: "OPEN", waitedMs: 4_000 });
+    expect(sleeps).toEqual([2_000, 2_000]);
+
+    // Fails fast on BEHIND / DIRTY / moved head / CLOSED without spinning until timeout.
+    for (const [payload, expectedReason] of [
+      [{ headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus: "BEHIND" }, "behind"],
+      [{ headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus: "DIRTY" }, "dirty"],
+      [{ headRefOid: OTHER_SHA, state: "OPEN", isDraft: false, mergeStateStatus: "CLEAN" }, "moved_head"],
+      [{ headRefOid: SHA, state: "CLOSED", isDraft: false, mergeStateStatus: "UNKNOWN" }, "closed"],
+    ] as const) {
+      const fastSleeps: number[] = [];
+      const fast = await waitForPrCleanState(
+        { pr: 420, sha: SHA, env: {}, timeoutMs: 30_000, pollIntervalMs: 2_000 },
+        {
+          cwd: "/repo",
+          log: () => {},
+          now: () => 0,
+          sleep: async (ms) => void fastSleeps.push(ms),
+          execGh: async () => ({ kind: "ok", stdout: JSON.stringify(payload) }),
+        },
+      );
+      expect(fast.ok, expectedReason).toBe(false);
+      if (!fast.ok) expect(fast.reason).toBe(expectedReason);
+      expect(fastSleeps).toEqual([]);
+    }
+
+    // Draft and MERGED PRs settle ok without waiting out the timeout.
+    for (const payload of [
+      { headRefOid: SHA, state: "OPEN", isDraft: true, mergeStateStatus: "DRAFT" },
+      { headRefOid: SHA, state: "MERGED", isDraft: false, mergeStateStatus: "UNKNOWN" },
+    ]) {
+      const settled = await waitForPrCleanState(
+        { pr: 420, sha: SHA, env: {}, timeoutMs: 30_000, pollIntervalMs: 2_000 },
+        {
+          cwd: "/repo",
+          log: () => {},
+          now: () => 0,
+          sleep: async () => {},
+          execGh: async () => ({ kind: "ok", stdout: JSON.stringify(payload) }),
+        },
+      );
+      expect(settled.ok).toBe(true);
+    }
+
+    // End-to-end main: waits BLOCKED -> CLEAN and includes mergeStateStatus in output.
+    let prViews = 0;
+    let mainNow = 0;
+    const mainLogs: string[] = [];
+    const mainDeps: PostStampDeps = {
+      cwd: "/repo",
+      log: (line) => mainLogs.push(line),
+      now: () => mainNow,
+      sleep: async (ms) => {
+        mainNow += ms;
+      },
+      pollIntervalMs: 1_000,
+      execGh: async (_cwd, args) => {
+        if (args[0] === "pr") {
+          prViews += 1;
+          const mergeStateStatus = prViews <= 2 ? "BLOCKED" : "CLEAN";
+          return { kind: "ok", stdout: JSON.stringify({ number: 420, url: PR_URL, headRefOid: SHA, state: "OPEN", isDraft: false, mergeStateStatus }) };
+        }
+        return { kind: "ok", stdout: "" };
+      },
+    };
+    expect(await main(["420", "--sha", SHA], mainDeps)).toBe(0);
+    expect(prViews).toBe(3);
+    expect(JSON.parse(mainLogs.at(-1)!)).toMatchObject({ posted: true, mergeStateStatus: "CLEAN" });
   });
 });

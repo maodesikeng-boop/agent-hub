@@ -5,6 +5,9 @@ import { REVIEW_STATUS_CONTEXT } from "./review-stamp-gate.ts";
 
 const GITHUB_DESCRIPTION_MAX = 140;
 const GH_TIMEOUT_MS = 15_000;
+export const DEFAULT_CLEAN_WAIT_SECONDS = 30;
+export const DEFAULT_CLEAN_POLL_INTERVAL_MS = 2_000;
+export const MAX_TRANSIENT_CLEAN_POLL_ERRORS = 5;
 const FULL_SHA = /^[0-9a-f]{40}$/u;
 const PR_URL = /^https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\/pull\/\d+(?:[/?#]\S*)?$/iu;
 const TOKEN_PREFIX = /^(?:gh[pousr]_|github_pat_)/u;
@@ -19,12 +22,45 @@ export interface PostStampArgs {
   account: string | null;
   description: string;
   dryRun: boolean;
+  noWait?: boolean;
+  waitTimeoutSeconds?: number;
 }
 
 export interface PostStampDeps {
   execGh: (cwd: string, args: readonly string[], options: GhRunOptions) => Promise<GhRunResult>;
   cwd: string;
   log: (line: string) => void;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  pollIntervalMs?: number;
+}
+
+export type CleanWaitResult =
+  | { ok: true; mergeStateStatus: string; state: string; waitedMs: number }
+  | {
+      ok: false;
+      reason: "moved_head" | "closed" | "dirty" | "behind" | "timeout" | "query_error";
+      mergeStateStatus?: string;
+      message: string;
+      waitedMs: number;
+    };
+
+/**
+ * Polls `gh pr view` after posting a `bellwood/review` success stamp until GitHub reports mergeStateStatus CLEAN.
+ * Postcondition: returns ok:true on CLEAN, DRAFT, or MERGED; fails fast on moved head, CLOSED, DIRTY, or BEHIND;
+ * retries transient gh errors up to MAX_TRANSIENT_CLEAN_POLL_ERRORS; returns timeout once timeoutMs elapses.
+ */
+export async function waitForPrCleanState(
+  _input: {
+    pr: number;
+    sha: string;
+    env: Readonly<Record<string, string>>;
+    timeoutMs: number;
+    pollIntervalMs: number;
+  },
+  _deps: PostStampDeps,
+): Promise<CleanWaitResult> {
+  throw new Error("Not implemented");
 }
 
 const clip = (text: string): string =>

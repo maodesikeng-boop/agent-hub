@@ -1,3 +1,6 @@
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -293,5 +296,52 @@ describe("Pi 复制会话写交接（handover.ts）", () => {
     await expect(forker.write(src, handle, "写交接", new AbortController().signal)).rejects.toBeInstanceOf(
       ForkUnsupportedError,
     );
+  });
+
+  it("acceptance S6: respects custom killWaitMs under fake timers without waiting 2s wall-clock", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const dir = makeTempDir();
+      const child = Object.assign(new EventEmitter(), {
+        pid: undefined,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: vi.fn(() => {
+          child.signalCode = "SIGKILL";
+          child.emit("exit", null, "SIGKILL");
+          return true;
+        }),
+      });
+      const forker = createPiForker({
+        homeDir: dir,
+        killWaitMs: 50,
+        spawnProcess: () => child as unknown as ChildProcess,
+      });
+      const src: ForkSource = {
+        sessionId: 9,
+        vendor: "pi",
+        vendorSessionId: "sess-kill-wait",
+        cwd: dir,
+        addDirs: [],
+        model: null,
+        effort: null,
+        executablePath: "/bin/pi",
+        launch: { promptFile: "", env: {}, fingerprint: "fp-kw" },
+      };
+      const handle = await forker.fork(src, new AbortController().signal);
+      const writing = forker.write(src, handle, "写交接", new AbortController().signal);
+      child.stdout.write(`${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input: 1, output: 1 } } })}\n`);
+      child.stdout.write(`${JSON.stringify({ type: "agent_settled", aborted: false })}\n`);
+      child.stdout.write(`${JSON.stringify({ id: "3", type: "response", command: "get_session_stats", success: true, data: {} })}\n`);
+      await Promise.resolve();
+      vi.advanceTimersByTime(50);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect((await writing).text).toBe("ok");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

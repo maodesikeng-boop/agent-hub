@@ -1160,3 +1160,21 @@ export abstract class BaseSessionDriver<
     }
   }
 }
+
+export interface StartupExitDetailInput {
+  vendorLabel: string;
+  phase: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+  errorMessage?: string;
+}
+
+/**
+ * Formats a child process startup exit detail across all drivers.
+ * Postcondition: returns MACOS_NESTED_SANDBOX_MESSAGE when exitCode and stderr indicate a macOS nested
+ * sandbox-exec failure; otherwise returns a concise diagnostic including phase, exit status, and stderr/error detail.
+ */
+export function formatStartupExitDetail(_input: StartupExitDetailInput): string {
+  throw new Error("Not implemented");
+}
