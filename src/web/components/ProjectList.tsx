@@ -2,7 +2,7 @@ import { memo, useMemo, useState } from "react";
 import type * as React from "react";
 import type { PmId } from "../../shared/index.ts";
 import { conversationKey, type DeviceKey, type DeviceStatus } from "../devices.ts";
-import { formatArchiveRemaining, NEEDS_YOU, YOUR_TURN } from "../format.ts";
+import { NEEDS_YOU, YOUR_TURN } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { ConversationRef } from "../notify.ts";
 import { filterProjectList, isPinned, projectListOf } from "../project-list.ts";
@@ -13,6 +13,7 @@ import { ChevronDown, ChevronRight, MessageSquare, Pin, PinFilled, Plus } from "
 import { AvatarTile } from "./Avatar.tsx";
 import { ComputerSwitcher } from "./ComputerSwitcher.tsx";
 import { SearchField } from "./SearchField.tsx";
+import { ArchiveRemaining } from "./TimeAgo.tsx";
 
 /** column: the resizable desktop column; page: the phone's Projects tab. */
 export type ProjectListLayout = "column" | "page";
@@ -100,7 +101,7 @@ const ProjectRow = memo(function ProjectRow({
         </span>{" "}
         {waitsOnYou !== null && <span className="sr-only">{waitsOnYou}</span>}
         {archivedAt !== null && (
-          <span className="project-row-meta shrink-0 text-xs text-list-ink-soft tabular-nums">{formatArchiveRemaining(archivedAt)}</span>
+          <span className="project-row-meta shrink-0 text-xs text-list-ink-soft tabular-nums"><ArchiveRemaining archivedAt={archivedAt} /></span>
         )}
       </button>
 

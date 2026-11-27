@@ -129,7 +129,7 @@ Never use `13px` or `14px` in React components (`src/web/ui-scale.test.tsx`). Ma
 - Keep row descriptions to one short sentence stating the consequence, with no trailing period and no editorial nudges (`recommended`, `best for...`).
 - Do not repeat the row title on its action button: `New session` pairs with `Start...` (trailing `...` indicates a confirmation step).
 - Put `Optional` in the input placeholder rather than appending `(optional)` to the row label.
-- Format relative times as `3m ago` or `just now`, archive countdowns as `Deletes in 7d`, and counts as bare numerals (`tabular-nums`).
+- Format relative times as `3m ago` or `just now`, archive countdowns as `Deletes in 7d`, and counts as bare numerals (`tabular-nums`). Read the clock for any relative time, countdown, or duration through `useNow` (`src/web/useNow.ts`) in the smallest component that prints it, never `Date.now()` during render, so the value stays current and is fresh again the moment a hidden panel or tab is shown.
 
 ## 4. Colors and avatars
 

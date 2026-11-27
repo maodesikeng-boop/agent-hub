@@ -51,14 +51,6 @@ export function userAgentDevice(userAgent: string): DeviceKind {
   return "computer";
 }
 
-export function formatAgo(ms: number, now: number = Date.now()): string {
-  const seconds = Math.max(0, Math.floor((now - ms) / 1000));
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86_400)}d ago`;
-}
-
 export function formatCountdown(leftMs: number): string {
   const seconds = Math.max(0, Math.ceil(leftMs / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;

@@ -28,13 +28,21 @@ function normalizeNode(node: TaskNode): TaskNode {
   return { ...rest, ...state };
 }
 
+const isCurrentGraph = (graph: TaskGraph): boolean => graph.readySince !== undefined && graph.nodes.every(isCurrentNode);
+
+// Peers older than readySince only send step times; their latest step time is the closest stand-in.
+function legacyReadySince(nodes: readonly TaskNode[]): number | null {
+  return nodes.length > 0 && nodes.every((n) => n.status === "done") ? Math.max(...nodes.map((n) => n.updatedAt)) : null;
+}
+
 const graphCache = new WeakMap<TaskGraph, TaskGraph>();
 
 export function normalizeTaskGraph(graph: TaskGraph): TaskGraph {
-  if (graph.nodes.every(isCurrentNode)) return graph;
+  if (isCurrentGraph(graph)) return graph;
   const cached = graphCache.get(graph);
   if (cached !== undefined) return cached;
-  const next: TaskGraph = { ...graph, nodes: graph.nodes.map(normalizeNode) };
+  const nodes = graph.nodes.map(normalizeNode);
+  const next: TaskGraph = { ...graph, nodes, readySince: graph.readySince ?? legacyReadySince(nodes) };
   graphCache.set(graph, next);
   return next;
 }
@@ -42,7 +50,7 @@ export function normalizeTaskGraph(graph: TaskGraph): TaskGraph {
 const listCache = new WeakMap<readonly TaskGraph[], TaskGraph[]>();
 
 export function normalizeTaskGraphs<T extends readonly TaskGraph[]>(graphs: T): T {
-  if (graphs.every((g) => g.nodes.every(isCurrentNode))) return graphs;
+  if (graphs.every(isCurrentGraph)) return graphs;
   const cached = listCache.get(graphs);
   if (cached !== undefined) return cached as unknown as T;
   const next = graphs.map(normalizeTaskGraph);
