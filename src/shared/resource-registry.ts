@@ -463,7 +463,7 @@ const RUNTIME_RESOURCE_ENTRIES: readonly ResourceRegistryEntry[] = [
     target: "scratch_dirs",
     growth: "transient",
     owner:
-      "src/daemon/git/git.ts, src/daemon/provider-manager/recipes.ts, src/daemon/worktree-cleanup.ts, src/vendors/agy/connectors.ts, src/vendors/_common/setup/browser-capture.ts",
+      "src/daemon/git/branches.ts, src/daemon/git/git.ts, src/daemon/provider-manager/recipes.ts, src/daemon/worktree-cleanup.ts, src/vendors/agy/connectors.ts, src/vendors/_common/setup/browser-capture.ts",
     cleaner: "the creating call removes its directory in a finally block before it returns",
     cleanupMode: "removed_by_creator",
     limits: [],
