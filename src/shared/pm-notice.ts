@@ -19,6 +19,7 @@ const pmNoticeSubject = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("graph.ready_to_finish"), graphId, since: z.int().nonnegative(), previousNoticeId: z.int().positive().optional() }),
   z.object({ kind: z.literal("pm.agenda"), trigger: z.literal("handover"), handoverId: z.int().positive(),
     refs: z.array(z.string()).min(1).max(PM_AGENDA_GRAPHS_MAX * PM_AGENDA_STEP_LINES_MAX + PM_AGENDA_OUTSIDE_WORKERS_MAX) }),
+  z.object({ kind: z.literal("watch.settled"), watchId: z.int().positive(), run: z.int().nonnegative() }),
 ]);
 
 export type PmNoticeSubject = z.infer<typeof pmNoticeSubject>;
@@ -45,6 +46,7 @@ export const graphDecisionNoticeRef = (graphId: TaskGraphId, nodeKey: TaskNodeKe
 
 export function pmNoticeDedupeRef(subject: PmNoticeSubject): string {
   if (subject.kind === "pm.agenda") return `agenda:handover:${subject.handoverId}`;
+  if (subject.kind === "watch.settled") return `watch-settled:${subject.watchId}:${subject.run}`;
   const { graphId } = subject;
   switch (subject.kind) {
     case "graph.steps_waiting_pm":

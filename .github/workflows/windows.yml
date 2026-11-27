@@ -13,6 +13,7 @@ on:
       - "src/daemon/git/**"
       - "src/daemon/ledger/**"
       - "src/daemon/vendor-sync/**"
+      - "src/daemon/watches/**"
       - "src/daemon/run-socket.ts"
       - "src/daemon/worktree-cleanup.ts"
       - "src/hub/**"
@@ -32,6 +33,7 @@ on:
       - "src/daemon/git/**"
       - "src/daemon/ledger/**"
       - "src/daemon/vendor-sync/**"
+      - "src/daemon/watches/**"
       - "src/daemon/run-socket.ts"
       - "src/daemon/worktree-cleanup.ts"
       - "src/hub/**"
@@ -152,6 +154,7 @@ jobs:
           src/daemon/worktree-cleanup.test.ts
           src/daemon/sent-files.test.ts
           src/daemon/router/sandbox.test.ts
+          src/daemon/watches/launch.test.ts
           src/daemon/vendor-sync/vendor-sync.test.ts
           src/daemon/ui-server/file-actions.test.ts
           src/daemon/git/pr.test.ts

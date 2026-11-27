@@ -63,6 +63,9 @@ export function turnOutcome(event: DriverEvent): TurnOutcome | null {
 
 export const notStarted = (worker: Pick<WorkerDbRow, "workspace" | "base_commit">) => worker.workspace === "worktree" && worker.base_commit === null;
 
+export const notStartedConflict = (workerId: number): string =>
+  `Worker 还在准备，等它开工后再发（Worker #${workerId} 在建或同步 worktree，或在跑项目的准备命令）`;
+
 export function assertWorkerOpenForUser(db: Db, conversationId: ConversationId): void {
   const worker = db.get<Pick<WorkerDbRow, "id" | "status" | "workspace" | "base_commit">>(
     "SELECT id, status, workspace, base_commit FROM workers WHERE worker_conversation_id = ?",
@@ -71,7 +74,7 @@ export function assertWorkerOpenForUser(db: Db, conversationId: ConversationId):
   if (worker === undefined) return;
   if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，不能再给它发消息`);
   if (sandboxApprovalPending(db, worker.id)) throw fail("conflict", "Worker 还在等用户确认沙箱，不能发消息");
-  if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
+  if (notStarted(worker)) throw fail("conflict", notStartedConflict(worker.id));
 }
 
 function gitReasonLine(output: string): string {

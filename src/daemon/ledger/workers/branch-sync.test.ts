@@ -37,7 +37,8 @@ describe("linked worktree branch reconciliation", () => {
     };
     const handle = createWorktreeCreateHandler({
       addWorktree, ledger: f.ledger,
-      observeReview: async (cwd, branch) => ({ sha: git(cwd, "rev-parse", branch), remote: null, pr: null }),
+      resolveTip: async (cwd, branch) => ({ commit: git(cwd, "rev-parse", branch), local: git(cwd, "rev-parse", branch), remote: null, findings: [] }),
+      probePr: async () => null,
       setup: { start: vi.fn() },
       setupLogPath: () => join(f.root, "setup.log"),
     });
@@ -76,6 +77,7 @@ describe("linked worktree branch reconciliation", () => {
     git(cwd, "branch", "-m", "feature/renamed");
     const second = await start("impl");
     expect(second).toMatchObject({ branch: "feature/renamed", worktreePath: cwd });
+    f.ledger.onWorktreeSynced(second.id, null);
     expect(f.ledger.listWorktreeBranchTargets?.({ pmId: f.pm.pm.id })).toEqual([{ worktreePath: cwd, branch: "feature/renamed" }]);
     expect(f.ledger.listWorktreeBranchTargets?.({ workerId: first.id })).toEqual([{ worktreePath: cwd, branch: "feature/renamed" }]);
     expect(f.ledger.listWorktreeBranchTargets?.({ graphId })).toEqual([{ worktreePath: cwd, branch: "feature/renamed" }]);

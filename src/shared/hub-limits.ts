@@ -51,6 +51,9 @@ import {
   WORKER_SEARCH_MAX_KEYWORD_CHARS,
   WORKER_SEARCH_MAX_KEYWORDS,
   WORKER_SEARCH_MAX_LIMIT,
+  WATCH_BODY_MAX_CHARS,
+  WATCH_COMMAND_MAX_CHARS,
+  WATCHES_OPEN_PER_PM_MAX,
 } from "./limits.ts";
 
 // Invariant: every length, size, or count limit an agent can hit through a hub command is one rule here,
@@ -107,6 +110,9 @@ export const HUB_LIMITS = {
   "schedule.name": { label: "定时任务名称", unit: "chars", max: MAX_SCHEDULE_NAME_CHARS, commands: ["schedule.add"] },
   "schedule.prompt": { label: "任务说明", unit: "bytes", max: MAX_TASK_BYTES, commands: ["schedule.add"], tip: LONG_TEXT_TIP },
   "schedule.count": { label: "定时任务", unit: "items", max: MAX_SCHEDULES_PER_PM, commands: ["schedule.add"], tip: `用 ${HUB_COMMAND} schedule remove <编号> 删掉不要的定时任务` },
+  "watch.command": { label: "--until 命令", unit: "chars", max: WATCH_COMMAND_MAX_CHARS, commands: ["watch.add"], tip: "长命令写成项目里的脚本，这里只调脚本" },
+  "watch.body": { label: "盯完要做的事", unit: "chars", max: WATCH_BODY_MAX_CHARS, commands: ["watch.add"] },
+  "watch.count": { label: "在盯的条件", unit: "items", max: WATCHES_OPEN_PER_PM_MAX, commands: ["watch.add"], tip: `用 ${HUB_COMMAND} watch close <编号> 关掉不再需要的` },
   "router.reportSummary": { label: "汇报摘要", unit: "chars", max: ROUTER_REPORT_SUMMARY_MAX_CHARS, commands: ["router.report"], tip: "细节放进 --file 或 --link" },
   "router.links": { label: "--link", unit: "items", max: ROUTER_REPORT_LINKS_MAX, commands: ["router.report"] },
   "router.linkLabel": { label: "链接标题", unit: "chars", max: ROUTER_REPORT_LINK_LABEL_MAX_CHARS, commands: ["router.report"] },

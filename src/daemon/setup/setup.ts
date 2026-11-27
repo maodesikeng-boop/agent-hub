@@ -127,14 +127,20 @@ export function resolveSetupShell(
   return { program: comSpec, args: ["/d", "/s", "/c", command], label: `cmd (${comSpec})` };
 }
 
-export function buildSetupEnv(
-  base: Record<string, string | undefined>,
-  paths: { rootPath: string; worktreePath: string; tmpDir?: string; sessionTagEnv?: string },
-): Record<string, string> {
+/** The parent environment without hub tokens or model credentials, for commands the daemon runs on an agent's behalf. */
+export function credentialFreeEnv(base: Record<string, string | undefined>): Record<string, string> {
   const env = buildChildEnv(base, undefined);
   for (const key of Object.keys(env)) {
     if (deniedSetupEnv(key)) delete env[key];
   }
+  return env;
+}
+
+export function buildSetupEnv(
+  base: Record<string, string | undefined>,
+  paths: { rootPath: string; worktreePath: string; tmpDir?: string; sessionTagEnv?: string },
+): Record<string, string> {
+  const env = credentialFreeEnv(base);
   return {
     ...env,
     [ENV_SETUP_ROOT_PATH]: paths.rootPath,
