@@ -787,4 +787,5 @@ export const PM_AGENDA_REMINDERS_MAX = 4;
 export const PM_AGENDA_REMINDER_TICK_MS = 60_000;
 export const PM_AGENDA_QUIET_START_HOUR = 23;
 export const PM_AGENDA_QUIET_END_HOUR = 8;
-export const PM_AGENDA_REMINDER_HISTORY_MAX_ROWS = 200;
+// Covers a full month of 15-minute reminder slots (31d * 24h * 4 = 2,976) so capped items stay silent.
+export const PM_AGENDA_REMINDER_HISTORY_MAX_ROWS = 3_000;

@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemEventOf, type Message } from "../../shared/domain.ts";
-import { PM_AGENDA_REMINDER_TICK_MS, PM_AGENDA_REMINDERS_MAX } from "../../shared/limits.ts";
-import { isGraphReadyNotice, isPmNoticeSubject, pmNoticeDedupeRef } from "../../shared/pm-notice.ts";
+import { PM_AGENDA_REMINDER_HISTORY_MAX_ROWS, PM_AGENDA_REMINDER_TICK_MS, PM_AGENDA_REMINDERS_MAX } from "../../shared/limits.ts";
+import { agendaCountsOf, agendaLinesOf } from "../../shared/pm-agenda.ts";
+import { isGraphReadyNotice, isPmNoticeSubject, OVERDUE_AGENDA_REF_PREFIX, pmNoticeDedupeRef } from "../../shared/pm-notice.ts";
 import { canDeliverSystemMessage } from "../handlers.ts";
 import { createLedger } from "./index.ts";
+import { isPmAgendaItemOpen, pmAgendaOf } from "./pm-agenda.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./pm-friction-fixture.ts";
 import { dueAgendaRemindersOf, startAgendaReminderLoop } from "./pm-agenda-reminders.ts";
+import { systemWakeupKey } from "./system-wakeups.ts";
 
 const MINUTE = 60_000;
 
@@ -203,14 +206,11 @@ describe("S6: an idle PM is reminded about work it left open (D-A1 option 1)", (
 
   it("S6.6: suppresses items covered by a watching watch and excludes archived PMs", async () => {
     const ready = await readyGraph();
-    const braked = f.createGraph({ title: "带盯条件的停下步骤", steps: [{ key: "merge", title: "合并" }] }).data.graph;
-    for (const msg of f.pmMessages().filter((m) => m.status === "queued")) f.pmReplyTo(msg.id, "先盯着");
     const solo = f.ledger.hubCall(f.lin.sessionId, "worker.start", { title: "等发布", task: "等发布", noWorktree: true }).data.worker;
     f.workerTurn(solo.id, reportBlock({ status: "做完了", summary: "好了" }));
     for (const msg of f.pmMessages().filter((m) => m.status === "queued")) f.pmReplyTo(msg.id, "好的");
 
     const wGraph = f.ledger.hubCall(f.lin.sessionId, "watch.add", { afterMs: 30 * MINUTE, graphId: ready, body: "到点交付" }).data.watch;
-    f.ledger.hubCall(f.lin.sessionId, "watch.add", { afterMs: 30 * MINUTE, graphId: braked.id, body: "等检查" });
     f.ledger.hubCall(f.lin.sessionId, "watch.add", { afterMs: 30 * MINUTE, workerId: solo.id, body: "等发版" });
     expect(dueAgendaRemindersOf(f.db, f.clock.now + 20 * MINUTE)).toEqual([]);
 
@@ -274,5 +274,116 @@ describe("S6: an idle PM is reminded about work it left open (D-A1 option 1)", (
 
     f.ledger.close();
     expect(f.ledger.runDueAgendaReminders(f.clock.now + 30 * MINUTE)).toBe(0);
+  });
+
+  it("regression (B4 contract): a watched graph's waiting_pm step stays open across agenda, handover notice, and overdue reminders", async () => {
+    const ready = await readyGraph();
+    const braked = f.createGraph({ title: "带盯条件的停下步骤", steps: [{ key: "merge", title: "合并" }] }).data.graph;
+    for (const msg of f.pmMessages().filter((m) => m.status === "queued")) f.pmReplyTo(msg.id, "先盯着");
+    const solo = f.ledger.hubCall(f.lin.sessionId, "worker.start", { title: "等发布", task: "等发布", noWorktree: true }).data.worker;
+    f.workerTurn(solo.id, reportBlock({ status: "做完了", summary: "好了" }));
+    for (const msg of f.pmMessages().filter((m) => m.status === "queued")) f.pmReplyTo(msg.id, "好的");
+
+    f.ledger.hubCall(f.lin.sessionId, "watch.add", { afterMs: 30 * MINUTE, graphId: ready, body: "到点交付" });
+    f.ledger.hubCall(f.lin.sessionId, "watch.add", { afterMs: 30 * MINUTE, graphId: braked.id, body: "等检查" });
+    f.ledger.hubCall(f.lin.sessionId, "watch.add", { afterMs: 30 * MINUTE, workerId: solo.id, body: "等发版" });
+
+    const agenda = pmAgendaOf(f.db, f.lin.pmId, f.clock.now);
+    const lines = agendaLinesOf(agenda);
+    const counts = agendaCountsOf(agenda);
+    expect(counts.needsPm).toBe(1);
+    expect(lines.filter((line) => line.needsPm).map((line) => line.ref)).toEqual([
+      expect.stringMatching(new RegExp(`^graph:${braked.id}:step:merge:waiting_pm@`, "u")),
+    ]);
+    for (const line of lines) {
+      expect(isPmAgendaItemOpen(f.db, f.lin.pmId, line.ref)).toBe(line.needsPm);
+    }
+
+    // Vendor switch enqueues a handover notice that remains deliverable instead of being retired immediately.
+    f.ledger.editPersona(f.lin.pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
+    const nextSessionId = f.db
+      .all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", f.lin.conversationId)
+      .at(-1)!.id;
+    const handover = f.pmMessages().find((m) => m.sessionId === nextSessionId && m.text.includes("【交接后还有事等你】"));
+    expect(handover).toBeDefined();
+    expect(canDeliverSystemMessage(f.ledger, nextSessionId, handover!.id)).toBe(true);
+    expect(f.ledger.getMessage(handover!.id)?.status).toBe("queued");
+
+    // Once the handover notice is handled, the waiting_pm step is due at 15 minutes while watched ready/worker stay suppressed.
+    f.ledger.applyDriverEvent(nextSessionId, { type: "message.delivered", messageIds: [handover!.id], at: ++f.clock.now });
+    f.ledger.applyDriverEvent(nextSessionId, { type: "message.processing", messageIds: [handover!.id], at: ++f.clock.now });
+    f.ledger.applyDriverEvent(nextSessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [handover!.id], durationMs: 10, at: ++f.clock.now });
+    const due = dueAgendaRemindersOf(f.db, f.clock.now + 15 * MINUTE);
+    expect(due).toHaveLength(1);
+    expect(due[0]!.refs).toEqual([expect.stringMatching(new RegExp(`^graph:${braked.id}:step:merge:waiting_pm@`, "u"))]);
+  });
+
+  it("regression (Stop interruption): a delivered reminder stopped by the user still counts toward backoff and the 4-round cap", async () => {
+    await readyGraph();
+    const t0 = f.clock.now;
+    const milestones = [15, 30, 60, 120];
+    for (const [index, mins] of milestones.entries()) {
+      const at = t0 + mins * MINUTE;
+      f.clock.now = at;
+      expect(f.ledger.runDueAgendaReminders(at)).toBe(1);
+      const sent = overdueNotices();
+      expect(sent).toHaveLength(index + 1);
+      const reminder = sent.at(-1)!;
+      f.ledger.applyDriverEvent(f.lin.sessionId, { type: "message.delivered", messageIds: [reminder.id], at: at + 1 });
+      f.ledger.applyDriverEvent(f.lin.sessionId, { type: "message.processing", messageIds: [reminder.id], at: at + 2 });
+      f.ledger.requestStop(f.lin.conversationId);
+      f.ledger.applyDriverEvent(f.lin.sessionId, {
+        type: "turn.ended",
+        ok: false,
+        interrupted: true,
+        messageIds: [reminder.id],
+        durationMs: 100,
+        at: at + 102,
+      });
+      expect(f.ledger.getMessage(reminder.id)).toMatchObject({ status: "stopped", meta: { deliveryConfirmed: true } });
+
+      // Next 60-second tick must not re-fire immediately after user Stop.
+      expect(dueAgendaRemindersOf(f.db, at + MINUTE)).toEqual([]);
+      expect(f.ledger.runDueAgendaReminders(at + MINUTE)).toBe(0);
+    }
+    expect(dueAgendaRemindersOf(f.db, t0 + 240 * MINUTE)).toEqual([]);
+    expect(f.ledger.runDueAgendaReminders(t0 + 240 * MINUTE)).toBe(0);
+    expect(overdueNotices()).toHaveLength(PM_AGENDA_REMINDERS_MAX);
+  });
+
+  it("regression (month-scale history): a 4-times-capped item stays silent past 200 later reminders and retired stopped rows", async () => {
+    await readyGraph();
+    const t0 = f.clock.now;
+    for (const mins of [15, 30, 60, 120]) {
+      f.clock.now = t0 + mins * MINUTE;
+      expect(f.ledger.runDueAgendaReminders(f.clock.now)).toBe(1);
+      f.pmReplyTo(overdueNotices().at(-1)!.id, "知道了");
+    }
+    expect(dueAgendaRemindersOf(f.db, t0 + 240 * MINUTE)).toEqual([]);
+
+    // Simulate >200 later delivered reminders on other refs plus >200 pre-delivery retired stopped rows.
+    const insertSql = `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, collapsed, dedupe_key, status, created_at, updated_at)
+       VALUES (?, ?, 'system', 'text', '【这些事等你处理超过 15 分钟了】', ?, 1, ?, ?, ?, ?)`;
+    const baseAt = t0 + 130 * MINUTE;
+    f.db.transaction(() => {
+      for (let i = 0; i < 250; i++) {
+        const ref = `graph:${9_000 + i}:ready@${baseAt + i}`;
+        const subject = { kind: "pm.agenda", trigger: "overdue", refs: [ref], round: 1 };
+        const meta = JSON.stringify({ event: "pm.wakeup", source: "task_graph", ref: `${OVERDUE_AGENDA_REF_PREFIX}1:other-${i}`, subject, deliveryConfirmed: true });
+        const key = systemWakeupKey(f.lin.conversationId, "task_graph", `${OVERDUE_AGENDA_REF_PREFIX}1:other-${i}`);
+        f.db.run(insertSql, f.lin.conversationId, f.lin.sessionId, meta, key, "replied", baseAt + i, baseAt + i);
+      }
+      for (let i = 0; i < PM_AGENDA_REMINDER_HISTORY_MAX_ROWS + 10; i++) {
+        const ref = `graph:${19_000 + i}:ready@${baseAt + 1_000 + i}`;
+        const subject = { kind: "pm.agenda", trigger: "overdue", refs: [ref], round: 1 };
+        const meta = JSON.stringify({ event: "pm.wakeup", source: "task_graph", ref: `${OVERDUE_AGENDA_REF_PREFIX}1:retired-${i}`, subject });
+        const key = systemWakeupKey(f.lin.conversationId, "task_graph", `${OVERDUE_AGENDA_REF_PREFIX}1:retired-${i}`);
+        f.db.run(insertSql, f.lin.conversationId, f.lin.sessionId, meta, key, "stopped", baseAt + 1_000 + i, baseAt + 1_000 + i);
+      }
+    });
+
+    const checkAt = baseAt + 30 * MINUTE;
+    expect(dueAgendaRemindersOf(f.db, checkAt)).toEqual([]);
+    expect(f.ledger.runDueAgendaReminders(checkAt)).toBe(0);
   });
 });

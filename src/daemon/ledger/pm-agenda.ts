@@ -3,7 +3,8 @@ import { systemMessageDedupeKey, type ConversationId, type Message, type Message
 import type { HandoverId } from "../../shared/handover.ts";
 import { PM_AGENDA_GRAPHS_MAX, PM_AGENDA_OUTSIDE_WORKERS_MAX } from "../../shared/limits.ts";
 import {
-  agendaLinesOf, handoverAgendaNoticeText, nextAgendaFooter, preambleAgendaSection, readyAgendaRef,
+  handoverAgendaNoticeText, isGraphBlockNeedsPm, isGraphReadyNeedsPm, isOutsideWorkerNeedsPm,
+  needsPmAgendaLinesOf, nextAgendaFooter, preambleAgendaSection, readyAgendaRef,
   type AgendaFooter, type AgendaGraphBlock, type AgendaOutsideItem, type AgendaStepLine, type PmAgenda,
 } from "../../shared/pm-agenda.ts";
 import type { Db } from "../store/index.ts";
@@ -117,7 +118,7 @@ function graphBlockOf(db: Db, row: GraphSummaryRow, watchId: PmWatchId | null): 
   return {
     graphId: row.id, title: row.title, stepCount: row.steps, doneCount: row.done, pendingCount: row.pending,
     readyToFinish: ready, steps, doneKeys: parseJsonOr<string[]>(row.done_keys, []), watchId,
-    needsPm: ready ? (row.latest_step !== null && watchId === null) : row.oldest_wait !== null, oldestNeedsPmSince,
+    needsPm: isGraphBlockNeedsPm({ readyToFinish: ready, watchId, oldestNeedsPmSince, steps }), oldestNeedsPmSince,
   };
 }
 
@@ -193,20 +194,24 @@ export function isPmAgendaItemOpen(db: Db, pmId: PmId, ref: string): boolean {
   const ready = /^graph:(\d+):ready@(\d+)$/u.exec(ref);
   if (ready !== null) {
     const graphId = Number(ready[1]);
-    return graphReadySince(db, pmId, graphId) === Number(ready[2]) && !graphWatchesOf(db, [graphId]).has(graphId);
+    const since = graphReadySince(db, pmId, graphId);
+    const watchId = graphWatchesOf(db, [graphId]).get(graphId)?.watchId ?? null;
+    return since === Number(ready[2]) && isGraphReadyNeedsPm({ readyToFinish: since !== null, watchId, oldestNeedsPmSince: since });
   }
   const step = /^graph:(\d+):step:(.+):waiting_pm@(\d+)$/u.exec(ref);
   if (step !== null) {
-    const graphId = Number(step[1]);
-    return !graphWatchesOf(db, [graphId]).has(graphId) && db.get(
+    return db.get(
       `SELECT 1 FROM task_graphs g JOIN task_graph_steps s ON s.graph_id = g.id
-        JOIN task_graph_step_states st ON st.step_id = s.id
-        WHERE g.id = ? AND g.pm_id = ? AND g.status = 'active' AND s.node_key = ? AND s.waiting_for = 'pm' AND st.state_since = ?`,
-      graphId, pmId, step[2]!, Number(step[3]),
+        LEFT JOIN task_graph_step_states st ON st.step_id = s.id
+        WHERE g.id = ? AND g.pm_id = ? AND g.status = 'active' AND s.node_key = ? AND s.status = 'waiting' AND s.waiting_for = 'pm'
+          AND coalesce(st.state_since, s.updated_at) = ?`,
+      Number(step[1]), pmId, step[2]!, Number(step[3]),
     ) !== undefined;
   }
   const worker = /^worker:(\d+)@(\d+)$/u.exec(ref);
-  return worker !== null && openWorkerItems(db, pmId, Number(worker[1])).some((item) => item.since === Number(worker[2]) && item.watchId === undefined);
+  return worker !== null && openWorkerItems(db, pmId, Number(worker[1])).some(
+    (item) => item.kind === "worker_report" && item.since === Number(worker[2]) && isOutsideWorkerNeedsPm(item),
+  );
 }
 
 const cursorLines = z.array(z.object({ ref: z.string(), needsPm: z.boolean(), text: z.string() }));
@@ -284,7 +289,7 @@ export function enqueueHandoverAgendaNoticeIn(
 ): Message | null {
   if (ctx.db.get("SELECT 1 FROM messages WHERE session_id = ? AND status = 'queued' LIMIT 1", input.sessionId) !== undefined) return null;
   const agenda = pmAgendaOf(ctx.db, input.pmId, ctx.now());
-  const refs = agendaLinesOf(agenda).filter((line) => line.needsPm).map((line) => line.ref);
+  const refs = needsPmAgendaLinesOf(agenda).map((line) => line.ref);
   if (refs.length === 0) return null;
   return enqueuePmNoticeIn(ctx, p, { id: input.sessionId }, {
     conversationId: input.conversationId,

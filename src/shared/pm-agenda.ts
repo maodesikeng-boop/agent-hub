@@ -109,6 +109,18 @@ export const agendaLabel = (text: string): string =>
 
 export const readyAgendaRef = (id: TaskGraphId, since: number): string => `graph:${id}:ready@${since}`;
 
+export const isGraphReadyNeedsPm = (graph: Pick<AgendaGraphBlock, "readyToFinish" | "watchId" | "oldestNeedsPmSince">): boolean =>
+  graph.readyToFinish && graph.watchId === null && graph.oldestNeedsPmSince !== null;
+
+export const isStepNeedsPm = (step: Pick<AgendaStepLine, "state">): boolean =>
+  step.state.kind === "waiting_pm";
+
+export const isOutsideWorkerNeedsPm = (item: Extract<AgendaOutsideItem, { kind: "worker_report" }>): boolean =>
+  item.watchId === undefined;
+
+export const isGraphBlockNeedsPm = (graph: Pick<AgendaGraphBlock, "readyToFinish" | "watchId" | "oldestNeedsPmSince" | "steps">): boolean =>
+  isGraphReadyNeedsPm(graph) || graph.steps.some(isStepNeedsPm);
+
 const atSince = (since: number | null): string => since === null ? "" : `（${timeOf(since)} 起）`;
 
 function stepText(step: AgendaStepLine): string {
@@ -152,7 +164,7 @@ function outsideLine(item: AgendaOutsideItem): AgendaLine {
   }[item.outcome];
   const watched = item.watchId === undefined ? "" : `，在盯 #${item.watchId}`;
   return {
-    ref: `worker:${item.workerId}@${item.since}`, needsPm: item.watchId === undefined,
+    ref: `worker:${item.workerId}@${item.since}`, needsPm: isOutsideWorkerNeedsPm(item),
     text: `Worker #${item.workerId}「${agendaLabel(item.title)}」${outcome}${watched}${atSince(item.since)}`,
   };
 }
@@ -163,13 +175,13 @@ export function agendaLinesOf(agenda: PmAgenda): AgendaLine[] {
     const prefix = `graph:${graph.graphId}`;
     lines.push({
       ref: graph.readyToFinish ? readyAgendaRef(graph.graphId, graph.oldestNeedsPmSince ?? 0) : prefix,
-      needsPm: graph.readyToFinish && graph.needsPm,
+      needsPm: isGraphReadyNeedsPm(graph),
       text: graphHeading(graph),
     });
     for (const step of graph.steps.slice(0, PM_AGENDA_STEP_LINES_MAX)) {
       lines.push({
         ref: `${prefix}:step:${step.key}:${step.state.kind}@${step.since}`,
-        needsPm: step.state.kind === "waiting_pm",
+        needsPm: isStepNeedsPm(step),
         text: `图 #${graph.graphId}「${agendaLabel(graph.title)}」${step.key}：${stepText(step)}`,
       });
     }
@@ -183,6 +195,9 @@ export function agendaLinesOf(agenda: PmAgenda): AgendaLine[] {
   return lines;
 }
 
+export const needsPmAgendaLinesOf = (agenda: PmAgenda): AgendaLine[] =>
+  agendaLinesOf(agenda).filter((line) => line.needsPm);
+
 export function agendaCountsOf(agenda: PmAgenda): AgendaCounts {
   const counts: AgendaCounts = { needsPm: 0, running: 0, queued: 0, watching: 0, userCards: agenda.userCards, oldestNeedsPmSince: null };
   const wait = (since: number | null) => {
@@ -190,18 +205,16 @@ export function agendaCountsOf(agenda: PmAgenda): AgendaCounts {
     if (since !== null) counts.oldestNeedsPmSince = Math.min(counts.oldestNeedsPmSince ?? since, since);
   };
   for (const graph of agenda.graphs) {
-    if (graph.readyToFinish && graph.needsPm) wait(graph.oldestNeedsPmSince);
+    if (isGraphReadyNeedsPm(graph)) wait(graph.oldestNeedsPmSince);
     for (const step of graph.steps) {
-      switch (step.state.kind) {
-        case "waiting_pm": wait(step.since); break;
-        case "running": counts.running++; break;
-        case "queued_slot": counts.queued++; break;
-      }
+      if (isStepNeedsPm(step)) wait(step.since);
+      else if (step.state.kind === "running") counts.running++;
+      else if (step.state.kind === "queued_slot") counts.queued++;
     }
   }
   for (const item of agenda.outside) {
     if (item.kind === "watch") counts.watching++;
-    else if (item.watchId === undefined) wait(item.since);
+    else if (isOutsideWorkerNeedsPm(item)) wait(item.since);
   }
   return counts;
 }
@@ -330,7 +343,7 @@ export const preambleAgendaSection = (agenda: PmAgenda, now: number): string =>
   `${PM_AGENDA_PREAMBLE_HEADING}\n\n${formatPmAgenda(agenda, now)}`;
 
 export function handoverAgendaNoticeText(agenda: PmAgenda): string {
-  return ["【交接后还有事等你】", ...agendaLinesOf(agenda).filter((line) => line.needsPm).map((line) => `- ${line.text}`)].join("\n");
+  return ["【交接后还有事等你】", ...needsPmAgendaLinesOf(agenda).map((line) => `- ${line.text}`)].join("\n");
 }
 
 export function isAgendaQuietHours(now: number): boolean {
@@ -356,8 +369,8 @@ function waitedAgeText(ms: number): string {
 export function overdueAgendaNoticeText(agenda: PmAgenda, refs: readonly string[], now: number): string {
   const wanted = new Set(refs);
   const waitMinutes = Math.floor(PM_AGENDA_REMIND_AFTER_MS / 60_000);
-  const lines = agendaLinesOf(agenda)
-    .filter((line) => line.needsPm && wanted.has(line.ref))
+  const lines = needsPmAgendaLinesOf(agenda)
+    .filter((line) => wanted.has(line.ref))
     .map((line) => {
       const since = agendaRefSince(line.ref);
       const age = since === null ? "" : ` · 已等 ${waitedAgeText(now - since)}`;

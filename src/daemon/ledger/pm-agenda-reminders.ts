@@ -7,9 +7,9 @@ import {
 } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import {
-  agendaLinesOf,
   agendaRefSince,
   isAgendaQuietHours,
+  needsPmAgendaLinesOf,
   overdueAgendaNoticeText,
   type PmAgenda,
 } from "../../shared/pm-agenda.ts";
@@ -80,23 +80,19 @@ const IDLE_PMS_SQL = `SELECT p.id AS pmId, c.id AS conversationId, s.id AS sessi
  ORDER BY p.id`;
 
 function refLink(ref: string): { graphId: TaskGraphId | null; workerId: WorkerId | null } {
-  const graph = /^graph:(\d+):/u.exec(ref);
-  if (graph !== null) return { graphId: Number(graph[1]), workerId: null };
-  const worker = /^worker:(\d+)@/u.exec(ref);
+  const ready = /^graph:(\d+):ready@\d+$/u.exec(ref);
+  if (ready !== null) return { graphId: Number(ready[1]), workerId: null };
+  const worker = /^worker:(\d+)@\d+$/u.exec(ref);
   if (worker !== null) return { graphId: null, workerId: Number(worker[1]) };
   return { graphId: null, workerId: null };
 }
 
 function candidatesOf(agenda: PmAgenda): ReminderCandidate[] {
-  const watchedGraphs = new Set(agenda.graphs.filter((g) => g.watchId !== null).map((g) => g.graphId));
   const out: ReminderCandidate[] = [];
-  for (const line of agendaLinesOf(agenda)) {
-    if (!line.needsPm) continue;
+  for (const line of needsPmAgendaLinesOf(agenda)) {
     const since = agendaRefSince(line.ref);
     if (since === null) continue;
-    const link = refLink(line.ref);
-    if (link.graphId !== null && watchedGraphs.has(link.graphId)) continue;
-    out.push({ ref: line.ref, since, ...link });
+    out.push({ ref: line.ref, since, ...refLink(line.ref) });
   }
   return out;
 }
@@ -105,22 +101,37 @@ function overdueHistoryOf(db: Db, conversationId: ConversationId): ReminderHisto
   const prefix = systemWakeupKey(conversationId, "task_graph", OVERDUE_AGENDA_REF_PREFIX);
   // Bounded range over dedupe_key uses its unique B-tree index without scanning unrelated messages.
   const upper = `${prefix.slice(0, -1)}${String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1)}`;
-  const rows = db.all<{ id: MessageId; created_at: number; status: string | null; subject_json: string | null }>(
-    `SELECT id, created_at, status, meta -> '$.subject' AS subject_json
+  const latest = db.get<{ id: MessageId | null }>(
+    `SELECT max(id) AS id
        FROM messages
       WHERE dedupe_key >= ? AND dedupe_key < ?
-        AND sender = 'system'
-      ORDER BY id DESC
+        AND sender = 'system'`,
+    prefix,
+    upper,
+  );
+  const previousNoticeId = latest?.id ?? undefined;
+  // Filter out pre-delivery retired/cancelled rows in SQL so they never crowd out the month-scale history window,
+  // while counting delivered reminders that were later stopped by user Stop or exhausted crash recovery.
+  const rows = db.all<{ id: MessageId; created_at: number; subject_json: string | null }>(
+    `SELECT m.id, m.created_at, m.meta -> '$.subject' AS subject_json
+       FROM messages m
+      WHERE m.dedupe_key >= ? AND m.dedupe_key < ?
+        AND m.sender = 'system'
+        AND coalesce(m.status, '') <> 'cancelled'
+        AND (
+          coalesce(m.status, '') <> 'stopped'
+          OR (json_valid(m.meta) AND json_extract(m.meta, '$.deliveryConfirmed') = 1)
+          OR EXISTS (SELECT 1 FROM turn_inputs i WHERE i.message_id = m.id AND i.taken_at IS NOT NULL)
+        )
+      ORDER BY m.id DESC
       LIMIT ?`,
     prefix,
     upper,
     PM_AGENDA_REMINDER_HISTORY_MAX_ROWS,
   );
-  const previousNoticeId = rows[0]?.id;
   let lastPmReminderAt: number | null = null;
   const byRef = new Map<string, { count: number; lastAt: number }>();
   for (const row of rows) {
-    if (row.status === "stopped" || row.status === "cancelled") continue;
     if (lastPmReminderAt === null || row.created_at > lastPmReminderAt) lastPmReminderAt = row.created_at;
     const subject = parseJsonOr<unknown>(row.subject_json, null);
     if (!isPmNoticeSubject(subject) || subject.kind !== "pm.agenda" || subject.trigger !== "overdue") continue;
