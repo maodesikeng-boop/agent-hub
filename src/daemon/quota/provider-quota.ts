@@ -44,7 +44,7 @@ export function createProviderQuota(runtime: VendorRuntimeResolver): ProviderQuo
     },
     async close() {
       closed = true;
-      for (const source of sources.values()) source.invalidate();
+      await Promise.allSettled([...sources.values()].map((source) => source.close()));
     },
   };
 }

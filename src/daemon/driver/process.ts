@@ -1,8 +1,8 @@
-import { execFile, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { ChildProcess, execFile } from "node:child_process";
 import { readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import { PS_TIMEOUT_MS, STALE_POLL_MS } from "../../shared/index.ts";
+import { KILL_WAIT_MS, PROBE_EXIT_GRACE_MS, PS_TIMEOUT_MS, STALE_POLL_MS, STDIO_DRAIN_MS } from "../../shared/index.ts";
 import { killWin32ProcessTree, sendWin32Interrupt } from "../platform/index.ts";
 
 /** ps can hang, so it is killed on timeout; LC_ALL=C keeps lstart= stable across terminal, launchd and systemd locales. */
@@ -28,10 +28,10 @@ export function streamClosed(stream: Readable): Promise<void> {
 }
 
 /** Reuse an in-flight kill when shutdown, idle close and start timeout overlap. */
-const killing = new WeakMap<ChildProcessWithoutNullStreams, Promise<void>>();
+const killing = new WeakMap<ChildProcess, Promise<void>>();
 
 /** Already exited processes are left alone because their pid may be reused. */
-export function forceKill(child: ChildProcessWithoutNullStreams): Promise<void> {
+export function forceKill(child: ChildProcess): Promise<void> {
   const running = killing.get(child);
   if (running) return running;
   // A failed spawn has no PID. Signaling its native handle can target the caller's process group.
@@ -42,7 +42,7 @@ export function forceKill(child: ChildProcessWithoutNullStreams): Promise<void> 
 }
 
 /** A just-spawned claude has no descendants yet, so a synchronous group kill is enough. */
-export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
+export function killFreshGroup(child: ChildProcess): void {
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined || child.pid <= 1) return;
   if (process.platform === "win32") {
     child.kill("SIGKILL");
@@ -278,15 +278,107 @@ export interface ChildSettleOptions {
   readonly killWaitMs?: number;
 }
 
+function hasExited(child: Pick<ChildProcess, "exitCode" | "signalCode">): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function drainChildStdio(child: ChildProcess): Promise<void> {
+  if (child.stdin && !child.stdin.destroyed) {
+    child.stdin.destroy();
+  }
+  const streams = [child.stdout, child.stderr].filter((s): s is Readable => s !== null && !s.closed);
+  if (streams.length === 0) return;
+  if (!(child instanceof ChildProcess)) {
+    for (const s of streams) {
+      if (!s.closed && !s.destroyed) s.destroy();
+    }
+    return;
+  }
+  for (const s of streams) {
+    if (!s.readableEnded && !s.destroyed) s.resume();
+  }
+  const closed = Promise.all(streams.map((s) => streamClosed(s)));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = await Promise.race([
+    closed.then(() => false),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(true), STDIO_DRAIN_MS);
+      timer.unref();
+    }),
+  ]);
+  clearTimeout(timer);
+  if (!timedOut) return;
+  for (const s of streams) {
+    if (!s.closed && !s.destroyed) s.destroy();
+  }
+  let destroyTimer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    closed,
+    new Promise<void>((resolve) => {
+      destroyTimer = setTimeout(resolve, STDIO_DRAIN_MS);
+      destroyTimer.unref();
+    }),
+  ]);
+  clearTimeout(destroyTimer);
+}
+
 /**
  * Precondition: child was spawned by this daemon; failed spawns with undefined pid are allowed.
  * Postcondition: force-kills child and its process tree when still live, waits for exit and bounded stdio close, and resolves with no live process or leaked stdio handles.
  */
-export function killChildAndWait(
-  _child: ChildProcess,
-  _options?: Pick<ChildSettleOptions, "killWaitMs">,
+export async function killChildAndWait(
+  child: ChildProcess,
+  options?: Pick<ChildSettleOptions, "killWaitMs">,
 ): Promise<void> {
-  throw new Error("Not implemented");
+  if (hasExited(child) || (child instanceof ChildProcess && child.pid === undefined)) {
+    await drainChildStdio(child);
+    return;
+  }
+  if (child.pid === undefined) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+    }
+    await drainChildStdio(child);
+    return;
+  }
+  const killWaitMs = options?.killWaitMs ?? KILL_WAIT_MS;
+  let done = false;
+  let resolveExit!: () => void;
+  const exited = new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
+  const finishExit = () => {
+    if (done) return;
+    done = true;
+    child.off("exit", onExit);
+    child.off("error", finishExit);
+    resolveExit();
+  };
+  const onExit = () => {
+    termGroupAfterExit(child);
+    finishExit();
+  };
+  child.once("exit", onExit);
+  child.once("error", finishExit);
+  try {
+    await forceKill(child).catch(() => killFreshGroup(child));
+    if (!done && !hasExited(child)) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        exited,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, killWaitMs);
+          timer.unref();
+        }),
+      ]);
+      clearTimeout(timer);
+    }
+    await drainChildStdio(child);
+  } finally {
+    child.off("exit", onExit);
+    child.off("error", finishExit);
+  }
 }
 
 /**
@@ -294,9 +386,53 @@ export function killChildAndWait(
  * Postcondition: ends stdin, waits up to graceMs for exit (escalating immediately if signal aborts), force-kills on timeout or abort, and resolves only after child has exited and stdio closed.
  */
 export function closeAndWaitChild(
-  _child: ChildProcess,
-  _options?: ChildSettleOptions,
+  child: ChildProcess,
+  options?: ChildSettleOptions,
 ): Promise<void> {
-  throw new Error("Not implemented");
+  if (child.stdin && !child.stdin.destroyed && !child.stdin.writableEnded) {
+    child.stdin.end();
+  }
+  if (hasExited(child) || (child instanceof ChildProcess && child.pid === undefined)) {
+    return drainChildStdio(child);
+  }
+  const graceMs = options?.graceMs ?? PROBE_EXIT_GRACE_MS;
+  const signal = options?.signal;
+  if (signal?.aborted || graceMs <= 0) {
+    return killChildAndWait(child, options);
+  }
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("exit", onExit);
+      child.off("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onExit = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      termGroupAfterExit(child);
+      void drainChildStdio(child).finally(resolve);
+    };
+    const onError = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void drainChildStdio(child).finally(resolve);
+    };
+    const escalate = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void killChildAndWait(child, options).finally(resolve);
+    };
+    const onAbort = () => escalate();
+    child.once("exit", onExit);
+    child.once("error", onError);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(escalate, graceMs);
+  });
 }
 

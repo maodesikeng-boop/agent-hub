@@ -2,7 +2,12 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import { KILL_WAIT_MS, PROCESS_LEDGER_MAX_ENTRIES, PROCESS_LEDGER_PURPOSE_MAX_CHARS } from "../shared/limits.ts";
+import {
+  KILL_WAIT_MS,
+  PROCESS_LEDGER_MAX_ENTRIES,
+  PROCESS_LEDGER_PURPOSE_MAX_CHARS,
+  PROCESS_LEDGER_SHUTDOWN_WAIT_MS,
+} from "../shared/limits.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { forceKillTree, signalPid, waitForExit } from "./driver/process.ts";
 import { queryProcessStartTime } from "./platform/index.ts";
@@ -88,11 +93,19 @@ async function defaultKill(pid: number, ownsGroup: boolean): Promise<void> {
 
 type TrackedChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">;
 
+interface LiveTracked {
+  child: TrackedChild;
+  purpose: string;
+  ownsGroup: boolean;
+}
+
 export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedger {
   const { file, log = () => {}, startTimeOf = defaultStartTimeOf, kill = defaultKill } = options;
   const entries = new Map<number, { child: TrackedChild; entry: LedgerEntry }>();
-  const liveChildren = new Map<number, TrackedChild>();
+  const liveChildren = new Map<number, LiveTracked>();
   const pending = new Set<Promise<void>>();
+  let closing = false;
+  let shutdownPromise: Promise<ReapedEntry[]> | null = null;
 
   const persist = () => {
     const tmp = `${file}.${process.pid}.tmp`;
@@ -108,6 +121,46 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
 
   const exited = (child: Pick<ChildProcess, "exitCode" | "signalCode">) => child.exitCode !== null || child.signalCode !== null;
 
+  const reapLiveChild = async (pid: number, live: LiveTracked, timeoutMs: number): Promise<ReapedEntry | null> => {
+    if (exited(live.child)) {
+      if (liveChildren.get(pid)?.child === live.child) liveChildren.delete(pid);
+      if (entries.get(pid)?.child === live.child) entries.delete(pid);
+      return null;
+    }
+    const recorded = entries.get(pid)?.entry;
+    const entry: LedgerEntry = recorded ?? { pid, startTime: "", purpose: live.purpose, ownsGroup: live.ownsGroup };
+    let onExit: (() => void) | undefined;
+    const exitEvent = new Promise<void>((resolve) => {
+      onExit = resolve;
+      live.child.once("exit", resolve);
+    });
+    const killAndAwait = async () => {
+      await kill(pid, live.ownsGroup).catch(() => {});
+      if (!exited(live.child) && canSignal(pid)) {
+        await exitEvent;
+      }
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      killAndAwait(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref();
+      }),
+    ]);
+    clearTimeout(timer);
+    if (onExit !== undefined && "off" in live.child && typeof (live.child as ChildProcess).off === "function") {
+      (live.child as ChildProcess).off("exit", onExit);
+    }
+    if (exited(live.child) || !canSignal(pid)) {
+      if (liveChildren.get(pid)?.child === live.child) liveChildren.delete(pid);
+      if (entries.get(pid)?.child === live.child) entries.delete(pid);
+      log(`${LOG_PREFIX} 关机回收仍在运行的子进程 ${entry.pid}（${entry.purpose}）`);
+      return { ...entry, reason: "same_process" };
+    }
+    return null;
+  };
+
   return {
     get size() {
       return entries.size;
@@ -116,21 +169,27 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
       const pid = child.pid;
       if (pid === undefined || pid <= 1 || exited(child)) return;
       const ownsGroup = trackOptions.detached === true;
-      liveChildren.set(pid, child);
+      const boundedPurpose = purpose.slice(0, PROCESS_LEDGER_PURPOSE_MAX_CHARS);
+      if (closing) {
+        log(`${LOG_PREFIX} 关机期间拒绝新子进程 ${pid}（${boundedPurpose}），立即终止`);
+        void kill(pid, ownsGroup).catch(() => {});
+        return;
+      }
+      liveChildren.set(pid, { child, purpose: boundedPurpose, ownsGroup });
       child.once("exit", () => {
-        if (liveChildren.get(pid) === child) liveChildren.delete(pid);
+        if (liveChildren.get(pid)?.child === child) liveChildren.delete(pid);
         if (entries.get(pid)?.child === child) {
           entries.delete(pid);
-          persist();
+          if (!closing) persist();
         }
       });
       const lookup = startTimeOf(pid)
         .then((startTime) => {
-          if (startTime === null || exited(child) || liveChildren.get(pid) !== child) return;
+          if (closing || startTime === null || exited(child) || liveChildren.get(pid)?.child !== child) return;
           entries.delete(pid);
           entries.set(pid, {
             child,
-            entry: { pid, startTime, purpose: purpose.slice(0, PROCESS_LEDGER_PURPOSE_MAX_CHARS), ownsGroup },
+            entry: { pid, startTime, purpose: boundedPurpose, ownsGroup },
           });
           while (entries.size > PROCESS_LEDGER_MAX_ENTRIES) entries.delete(entries.keys().next().value as number);
           persist();
@@ -156,8 +215,29 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
     async settled() {
       while (pending.size > 0) await Promise.all([...pending]);
     },
-    shutdown(_options?: ProcessLedgerShutdownOptions): Promise<ReapedEntry[]> {
-      throw new Error("Not implemented");
+    shutdown(shutdownOptions?: ProcessLedgerShutdownOptions): Promise<ReapedEntry[]> {
+      if (shutdownPromise !== null) return shutdownPromise;
+      closing = true;
+      const timeoutMs = shutdownOptions?.timeoutMs ?? PROCESS_LEDGER_SHUTDOWN_WAIT_MS;
+      shutdownPromise = (async () => {
+        const snapshot = [...liveChildren.entries()];
+        const results = await Promise.all(snapshot.map(([pid, live]) => reapLiveChild(pid, live, timeoutMs)));
+        const reaped = results.filter((item): item is ReapedEntry => item !== null);
+        if (pending.size > 0) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([
+            Promise.allSettled([...pending]),
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, timeoutMs);
+              timer.unref();
+            }),
+          ]);
+          clearTimeout(timer);
+        }
+        persist();
+        return reaped;
+      })();
+      return shutdownPromise;
     },
   };
 

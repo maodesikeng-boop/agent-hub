@@ -23,6 +23,8 @@ import {
   MESH_GITHUB_CLIENT_ID,
   PM_AGENDA_REMINDER_TICK_MS,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
+  PROBE_SHUTDOWN_DRAIN_MS,
+  PROCESS_LEDGER_SHUTDOWN_WAIT_MS,
   SCHEDULER_TICK_MS,
   AUTO_RENEW_TICK_MS,
   type ActionExecutor,
@@ -51,7 +53,7 @@ import {
   workerWorktreePath,
 } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
-import { createProcessLedger, installProcessLedger } from "./process-ledger.ts";
+import { createProcessLedger, installProcessLedger, type ProcessLedger } from "./process-ledger.ts";
 import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
 import { createComposerService } from "./composer.ts";
 import {
@@ -228,6 +230,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     ledger?: SqliteLedger;
     db?: Db;
     lock?: DirLock;
+    processLedger?: ProcessLedger;
     uninstallProcessLedger?: () => void;
     stopFileCleanup?: () => void;
     stopWorkerRetention?: () => void;
@@ -245,8 +248,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   };
   const shutdown = async () => {
     const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, mesh, admin, agentApi, db, lock } = parts;
-    void parts.selfReload?.close();
-    void parts.quota?.close();
+    const closingReload = parts.selfReload ? step("热重启", () => within(parts.selfReload!.close(), PROBE_SHUTDOWN_DRAIN_MS)) : null;
+    const closingQuota = parts.quota ? step("额度探测", () => within(parts.quota!.close(), PROBE_SHUTDOWN_DRAIN_MS)) : null;
     if (scheduler) clearInterval(scheduler);
     parts.agendaReminders?.stop();
     if (autoRenew) clearInterval(autoRenew);
@@ -310,6 +313,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     for (const off of parts.unsubscribe.splice(0)) off();
+    if (closingReload) await closingReload;
+    if (closingQuota) await closingQuota;
+    if (parts.processLedger) await step("子进程记录", () => parts.processLedger!.shutdown({ timeoutMs: PROCESS_LEDGER_SHUTDOWN_WAIT_MS }));
     if (db) await step("数据库", () => db.close());
     parts.uninstallProcessLedger?.();
     if (lock) await step("目录锁", () => lock.release());
@@ -319,6 +325,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.lock = acquireLock(paths.lockFile);
     // Reclaim children left by a crash, killing only recorded pids whose start time still matches.
     const processLedger = createProcessLedger({ file: paths.childProcessesFile, log });
+    parts.processLedger = processLedger;
     try {
       await processLedger.reapStale();
     } catch (error) {
