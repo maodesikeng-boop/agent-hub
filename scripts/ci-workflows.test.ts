@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { MESH_DEFAULT_RELAY_URL } from "../src/shared/limits.ts";
@@ -40,6 +41,111 @@ interface Workflow {
 }
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
+const SANDBOX_RUNTIME_SYMBOLS = new Set([
+  "wrapInOsSandbox",
+  "wrapInReadonlyOsSandbox",
+  "prepareOsSandboxForLaunch",
+  "spawnInWriteScope",
+  "workerWriteScope",
+  "dataDirReadScope",
+  "buildReadonlyPolicy",
+  "dataDirDenyList",
+  "win32WorkerSandboxArgs",
+  "win32ReadonlyFallbackSandboxArgs",
+  "wrapReadonlyWithWin32Mxc",
+  "win32MxcReadonlyAvailable",
+  "WRITE_SCOPE_ENFORCERS",
+  "OS_SANDBOX_BACKENDS",
+]);
+const SANDBOX_SYMBOL_PREFILTER = new RegExp(`\\b(?:${[...SANDBOX_RUNTIME_SYMBOLS].join("|")})\\b`, "u");
+const RUNTIME_TS_WRAPPERS = new Set(["TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSTypeAssertion"]);
+
+type AstNode = { type: string; [key: string]: unknown };
+const isAstNode = (v: unknown): v is AstNode => typeof v === "object" && v !== null && typeof (v as AstNode).type === "string";
+
+function referencesSandboxRuntimeSymbol(file: string, source: string): boolean {
+  if (!SANDBOX_SYMBOL_PREFILTER.test(source)) return false;
+  const { program, errors } = parseSync(file, source);
+  if (errors.length > 0) throw new Error(`${file} does not parse: ${errors[0]!.message}`);
+  let found = false;
+
+  const visit = (node: unknown): void => {
+    if (found) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (!isAstNode(node)) return;
+    if (node.type === "ImportDeclaration") {
+      if (node.importKind === "type") return;
+      for (const spec of (node.specifiers as AstNode[] | undefined) ?? []) {
+        if (spec.type !== "ImportSpecifier" || spec.importKind === "type" || !isAstNode(spec.imported)) continue;
+        const name = (spec.imported.name ?? spec.imported.value) as string | undefined;
+        if (name && SANDBOX_RUNTIME_SYMBOLS.has(name)) {
+          found = true;
+          return;
+        }
+      }
+      return;
+    }
+    if (node.type === "ExportNamedDeclaration") {
+      if (node.exportKind === "type") return;
+      for (const spec of (node.specifiers as AstNode[] | undefined) ?? []) {
+        if (spec.exportKind === "type") continue;
+        const local = isAstNode(spec.local) ? ((spec.local.name ?? spec.local.value) as string | undefined) : undefined;
+        const exported = isAstNode(spec.exported) ? ((spec.exported.name ?? spec.exported.value) as string | undefined) : undefined;
+        if ((local && SANDBOX_RUNTIME_SYMBOLS.has(local)) || (exported && SANDBOX_RUNTIME_SYMBOLS.has(exported))) {
+          found = true;
+          return;
+        }
+      }
+      visit(node.declaration);
+      return;
+    }
+    if (node.type === "ExportAllDeclaration") return;
+    if (RUNTIME_TS_WRAPPERS.has(node.type)) {
+      visit(node.expression);
+      return;
+    }
+    if (node.type.startsWith("TS")) return;
+    if (node.type === "Identifier" && SANDBOX_RUNTIME_SYMBOLS.has(node.name as string)) {
+      found = true;
+      return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "type" || key === "start" || key === "end" || key === "typeAnnotation" || key === "typeParameters" || key === "returnType") continue;
+      visit(value);
+    }
+  };
+
+  visit(program);
+  return found;
+}
+
+function productionSrcFiles(): Map<string, string> {
+  const srcRoot = join(REPO_ROOT, "src");
+  const files = (readdirSync(srcRoot, { recursive: true }) as string[])
+    .filter((file) => /\.tsx?$/u.test(file) && !/\.test\.tsx?$/u.test(file) && !/(^|[\\/])(test-helpers|test-utils)\.tsx?$/u.test(file) && !file.includes("fixture"))
+    .map((file) => relative(REPO_ROOT, join(srcRoot, file)).split("\\").join("/"))
+    .sort();
+  return new Map(files.map((file) => [file, readFileSync(join(REPO_ROOT, file), "utf8")]));
+}
+
+function findUncoveredSandboxCallers(
+  sources: ReadonlyMap<string, string>,
+  windowsPrPaths: readonly string[],
+  windowsPushPaths: readonly string[],
+  stampGlobs: readonly string[],
+): string[] {
+  const problems: string[] = [];
+  for (const [file, source] of sources) {
+    if (!referencesSandboxRuntimeSymbol(file, source)) continue;
+    if (matchStampPaths([file], windowsPrPaths).length === 0) problems.push(`windows.yml pull_request.paths missing ${file}`);
+    if (matchStampPaths([file], windowsPushPaths).length === 0) problems.push(`windows.yml push.paths missing ${file}`);
+    if (matchStampPaths([file], stampGlobs).length === 0) problems.push(`REVIEW.md stamp paths missing ${file}`);
+  }
+  return problems;
+}
 
 /** Repo-relative paths of `entries` and every relative module they import at runtime; type-only imports are erased before node runs. */
 function runtimeImportClosure(entries: readonly string[]): string[] {
@@ -297,6 +403,58 @@ describe(".github/workflows", () => {
     const gateFiles = [".github/workflows/review-stamp.yml", "REVIEW.md", ...runtimeImportClosure(scripts)];
     const globs = parseStampPaths(readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8"));
     expect(gateFiles.filter((file) => matchStampPaths([file], globs).length === 0)).toEqual([]);
+  });
+
+  it("cover every OS-sandbox launch module in windows.yml path filters and REVIEW.md stamp paths", () => {
+    const win = workflow("windows.yml");
+    const prPaths = win.on.pull_request?.paths ?? [];
+    const pushPaths = win.on.push?.paths ?? [];
+    const stampGlobs = parseStampPaths(readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8"));
+    expect(findUncoveredSandboxCallers(productionSrcFiles(), prPaths, pushPaths, stampGlobs)).toEqual([]);
+  });
+
+  it("flag uncovered sandbox scope builders, parenthesis-less callback forwarding, and aliased imports while ignoring type-only imports", () => {
+    const win = workflow("windows.yml");
+    const prPaths = win.on.pull_request?.paths ?? [];
+    const pushPaths = win.on.push?.paths ?? [];
+    const stampGlobs = parseStampPaths(readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8"));
+    const synthetic = new Map<string, string>([
+      ["src/daemon/driver/write-scope.ts", "export function wrapInReadonlyOsSandbox() {}"],
+      [
+        "src/daemon/jobs/type-only.ts",
+        'import type { wrapInReadonlyOsSandbox } from "../driver/write-scope.ts"; import { type dataDirDenyList } from "../driver/write-scope.ts"; export type Wrap = typeof wrapInReadonlyOsSandbox; export type Deny = typeof dataDirDenyList;',
+      ],
+      [
+        "src/daemon/jobs/launch.ts",
+        "await prepareOsSandboxForLaunch(prep, platform); wrapInReadonlyOsSandbox(base, input, platform);",
+      ],
+      [
+        "src/daemon/jobs/scope.ts",
+        'import { workerWriteScope } from "../../shared/index.ts"; export const build = () => workerWriteScope;',
+      ],
+      [
+        "src/daemon/jobs/forward.ts",
+        'import { wrapInReadonlyOsSandbox } from "../driver/write-scope.ts"; export const wrap = (deps: { fn?: typeof wrapInReadonlyOsSandbox }) => deps.fn ?? wrapInReadonlyOsSandbox;',
+      ],
+      [
+        "src/daemon/jobs/alias.ts",
+        'import { wrapInReadonlyOsSandbox as wrap } from "../driver/write-scope.ts"; export const run = () => wrap;',
+      ],
+    ]);
+    expect(findUncoveredSandboxCallers(synthetic, prPaths, pushPaths, stampGlobs)).toEqual([
+      "windows.yml pull_request.paths missing src/daemon/jobs/launch.ts",
+      "windows.yml push.paths missing src/daemon/jobs/launch.ts",
+      "REVIEW.md stamp paths missing src/daemon/jobs/launch.ts",
+      "windows.yml pull_request.paths missing src/daemon/jobs/scope.ts",
+      "windows.yml push.paths missing src/daemon/jobs/scope.ts",
+      "REVIEW.md stamp paths missing src/daemon/jobs/scope.ts",
+      "windows.yml pull_request.paths missing src/daemon/jobs/forward.ts",
+      "windows.yml push.paths missing src/daemon/jobs/forward.ts",
+      "REVIEW.md stamp paths missing src/daemon/jobs/forward.ts",
+      "windows.yml pull_request.paths missing src/daemon/jobs/alias.ts",
+      "windows.yml push.paths missing src/daemon/jobs/alias.ts",
+      "REVIEW.md stamp paths missing src/daemon/jobs/alias.ts",
+    ]);
   });
 
   it("never let actions/setup-node cache a package manager that no earlier step in the job installed", () => {

@@ -74,7 +74,7 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
 
   const workerRecord = toWorkerRecord(worker);
   const firstMessageText = input.buildFirstMessage(session.id, inheritedPlan?.fromWorkerId ?? null, workerRecord, card);
-  kickOffWorkerIn(w, p, { worker, session, project, firstMessageText, inherited: inheritedPlan !== null, maxTimeMs,
+  kickOffWorkerIn(w, p, { worker, session, firstMessageText, maxTimeMs,
     sandbox: capabilities === null ? undefined : { capabilities, stepId: input.sandboxStepId ?? null },
   });
   return workerRecord;

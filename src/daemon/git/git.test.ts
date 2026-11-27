@@ -656,7 +656,7 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     // The squash check runs on every Resources scan, so it must not leave dangling objects in the user's repository.
     expect(git(repo, "count-objects", "-v")).toBe(objectsBefore);
 
-    // A squash commit that also changed another file is a different patch and does not count as merged.
+    // A squash commit that also changed another file still holds all of the branch's content.
     git(repo, "checkout", "-q", "-b", "hub/13-partial", base);
     writeFileSync(join(repo, "partial.txt"), "a\n");
     git(repo, "add", "partial.txt");
@@ -666,7 +666,7 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     writeFileSync(join(repo, "extra.txt"), "b\n");
     git(repo, "add", "partial.txt", "extra.txt");
     git(repo, "commit", "-q", "-m", "partial plus extra");
-    expect(await isBranchSquashMergedToMain(repo, "hub/13-partial", base)).toBe(false);
+    expect(await isBranchSquashMergedToMain(repo, "hub/13-partial", base)).toBe(true);
 
     git(repo, "checkout", "-b", "hub/11-unmerged");
     writeFileSync(join(repo, "wip.txt"), "wip\n");

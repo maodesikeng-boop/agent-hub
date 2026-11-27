@@ -9,7 +9,7 @@ import type {
   TaskNodeKey,
   WorkerId,
 } from "../../../shared/domain.ts";
-import type { WorkerPr } from "../../../shared/hub.ts";
+import { HUB_HELP_ONLY_COMMANDS, type WorkerPr } from "../../../shared/hub.ts";
 import type { GraphPrTarget } from "../../../shared/ledger.ts";
 import { DELIVERY_FILES_MAX, DELIVERY_NOTE_MAX_CHARS } from "../../../shared/limits.ts";
 import { graphDeliveryWakeupRef, readyNoticeSubjectOf } from "../../../shared/pm-notice.ts";
@@ -164,6 +164,7 @@ function formatDeliveryNote(db: Db, graph: TaskGraph, extra?: DeliveryExtra): st
     "",
     "",
     `图里只有上面这些步骤；项目规矩或用户要求、但没画进图的步骤（比如审查），后台看不出来，缺了用 ${HUB_COMMAND} graph patch 补。`,
+    HUB_HELP_ONLY_COMMANDS["watch.add"],
     `验收看上面的证据，按项目约定交付后用 ${HUB_COMMAND} graph finish 结束这张图。`,
   ].join("\n");
   const bodyBudget = Math.max(200, DELIVERY_NOTE_MAX_CHARS - [...footer].length);

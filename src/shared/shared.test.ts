@@ -152,7 +152,7 @@ describe("动作", () => {
         expectTypeOf(row.params).toEqualTypeOf<SessionEndParams>();
         return -row.params.generation;
       }
-      if (row.type === "worktree.create") {
+      if (row.type === "worktree.create" || row.type === "worktree.sync") {
         expectTypeOf(row.params).toEqualTypeOf<WorktreeCreateParams>();
         return row.params.workerId * 100;
       }
@@ -532,6 +532,9 @@ describe("M2：agent 接口", () => {
       "schedule.pause",
       "schedule.resume",
       "schedule.remove",
+      "watch.add",
+      "watch.list",
+      "watch.close",
       "router.report",
       "graph.create",
       "graph.show",
@@ -784,7 +787,7 @@ describe("M3：动作", () => {
       sessionId: number;
       repo: string;
       worktreePath: string;
-      checkout: { kind: "branch"; branch: string; base?: string } | { kind: "review"; branch: string };
+      checkout: { kind: "branch"; branch: string; base?: string; expected?: string } | { kind: "review"; branch: string; expected?: string };
       status: "open" | "ended";
       setupCommand: string | null;
     }>();
@@ -827,6 +830,9 @@ describe("M3：hub 命令按角色放行", () => {
       "schedule.pause": ["pm"],
       "schedule.resume": ["pm"],
       "schedule.remove": ["pm"],
+      "watch.add": ["pm"],
+      "watch.list": ["pm"],
+      "watch.close": ["pm"],
       "router.report": ["pm"],
       "graph.create": ["pm"],
       "graph.show": ["pm"],
@@ -1093,6 +1099,7 @@ describe("Router 与任务图同源待决模型（decisions.ts & limits.ts）", 
           createdAt: 100,
           updatedAt: 100,
           completedAt: null,
+          readySince: null,
           nodes: [
             {
               key: "gate-api",

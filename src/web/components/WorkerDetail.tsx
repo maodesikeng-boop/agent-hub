@@ -1,11 +1,13 @@
 import { useState } from "react";
 import type * as React from "react";
 import { isAgentVendor, type ModelCatalog, type SessionState } from "../../shared/index.ts";
+import { MINUTE_TICK_MS } from "../limits.ts";
 import { cn } from "../lib/utils.ts";
 import type { WorkerEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { MoreHorizontal } from "../ui/icons.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
+import { useNow } from "../useNow.ts";
 import { WORK_STATUS_LABEL, type WorkStatus } from "../work-status.ts";
 import { formatModelSummary } from "./InfoTab.tsx";
 import { WorkPanelDetailHeader } from "./WorkPanel.tsx";
@@ -14,8 +16,8 @@ import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 export interface WorkerMenuFacts {
   /** `Opus 5.5 Max`, or null when unknown. */
   model: string | null;
-  /** `12m`, or null before the Worker starts. */
-  duration: string | null;
+  /** Null before the Worker starts; `endedAt` is null while it still runs. */
+  duration: { startedAt: number; endedAt: number | null } | null;
   branch: string | null;
   readonly?: boolean;
 }
@@ -35,13 +37,17 @@ export interface WorkerDetailHeaderProps {
 }
 
 export function formatWorkerDuration(ms: number): string | null {
-  if (!Number.isFinite(ms) || ms < 0) return null;
-  const totalMinutes = Math.floor(ms / 60_000);
+  if (!Number.isFinite(ms)) return null;
+  const totalMinutes = Math.floor(Math.max(0, ms) / 60_000);
   if (totalMinutes < 1) return "<1m";
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   if (hours === 0) return `${totalMinutes}m`;
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+function LiveWorkerDuration({ startedAt }: { startedAt: number }) {
+  return formatWorkerDuration(useNow(MINUTE_TICK_MS) - startedAt);
 }
 
 export function workerMenuFactsOf({
@@ -52,7 +58,6 @@ export function workerMenuFactsOf({
   branch,
   readonly,
   catalog,
-  now,
 }: {
   worker: WorkerEntry | undefined;
   session: SessionState | null;
@@ -61,7 +66,6 @@ export function workerMenuFactsOf({
   branch: string | null;
   readonly?: boolean;
   catalog: ModelCatalog | null;
-  now: number;
 }): WorkerMenuFacts {
   const vendor = worker?.vendor ?? session?.vendor;
   const rawModel = worker?.model ?? session?.model ?? null;
@@ -70,8 +74,8 @@ export function workerMenuFactsOf({
     isAgentVendor(vendor) && catalog !== null && (rawModel !== null || rawEffort !== null || catalog.defaultModel !== null)
       ? formatModelSummary({ vendor, model: rawModel, effort: rawEffort }, catalog)
       : null;
-  const endRef = worker?.ended ? (endedAt ?? session?.lastEventAt ?? null) : now;
-  const duration = createdAt !== null && endRef !== null ? formatWorkerDuration(endRef - createdAt) : null;
+  const endRef = worker?.ended ? (endedAt ?? session?.lastEventAt ?? null) : null;
+  const duration = createdAt === null || (worker?.ended && endRef === null) ? null : { startedAt: createdAt, endedAt: endRef };
   const isReadonly = readonly === true;
   return {
     model,
@@ -141,7 +145,11 @@ export function WorkerDetailHeader({
                 {facts.duration !== null && (
                   <div className="flex items-baseline justify-between gap-3">
                     <dt className="shrink-0 text-muted-foreground">Duration</dt>
-                    <dd className="shrink-0 text-foreground tabular-nums">{facts.duration}</dd>
+                    <dd className="shrink-0 text-foreground tabular-nums">
+                      {facts.duration.endedAt === null
+                        ? <LiveWorkerDuration startedAt={facts.duration.startedAt} />
+                        : formatWorkerDuration(facts.duration.endedAt - facts.duration.startedAt)}
+                    </dd>
                   </div>
                 )}
                 {facts.branch !== null && (
