@@ -40,6 +40,8 @@ function makeBundle(messageCount: number, excerptText: string): DailyTelemetryBu
         status: "replied",
         failureReason: null,
         event: null,
+        rewound: false,
+        sentWhileBusy: false,
         vendor: "claude",
         excerpt: excerptText,
         createdAt: NOW_MS - (messageCount - idx) * 1_000,
@@ -80,6 +82,11 @@ describe("daily telemetry shared contracts", () => {
       windowMs: DAILY_TELEMETRY_MAX_WINDOW_MS * 3,
     });
     expect(clamped.untilMs - clamped.sinceMs).toBe(DAILY_TELEMETRY_MAX_WINDOW_MS);
+    const clampedSince = resolveTelemetryWindow({
+      nowMs: NOW_MS,
+      sinceMs: NOW_MS - DAILY_TELEMETRY_MAX_WINDOW_MS * 2,
+    });
+    expect(clampedSince.untilMs - clampedSince.sinceMs).toBe(DAILY_TELEMETRY_MAX_WINDOW_MS);
     expect(() => resolveTelemetryWindow({ nowMs: NOW_MS, sinceMs: NOW_MS, untilMs: NOW_MS - 1 })).toThrow(RangeError);
     expect(() => resolveTelemetryWindow({ nowMs: Number.NaN })).toThrow(RangeError);
   });

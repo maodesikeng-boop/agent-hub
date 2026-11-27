@@ -55,6 +55,8 @@ export interface TelemetryMessageRecord {
   readonly status: string | null;
   readonly failureReason: string | null;
   readonly event: string | null;
+  readonly rewound: boolean;
+  readonly sentWhileBusy: boolean;
   readonly vendor: string | null;
   readonly excerpt: string;
   readonly createdAt: number;

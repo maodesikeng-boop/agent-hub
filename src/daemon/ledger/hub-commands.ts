@@ -204,8 +204,9 @@ function runTelemetryCommand(
     return { text, data: { bundle } };
   }
   const a = args as HubArgs<"telemetry.mine">;
+  const fallbackSinceMs = a.windowMs === undefined ? (context.miningPriorState?.lastWindowEndMs ?? undefined) : undefined;
   const { sinceMs, untilMs } = resolveTelemetryWindow({
-    sinceMs: a.sinceMs,
+    sinceMs: a.sinceMs ?? fallbackSinceMs,
     untilMs: a.untilMs,
     windowMs: a.windowMs,
     nowMs,

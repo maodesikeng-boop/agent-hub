@@ -94,11 +94,21 @@ describe("daemon daily telemetry collector", () => {
 
     db.run(
       `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
-       VALUES (?, ?, 'user', 'text', '每次都要手动点同意，能不能加个批量通过？Bearer secret-token-123', NULL, 'u1', 'replied', ?, ?)`,
+       VALUES (?, ?, 'user', 'text', '每次都要手动点同意，能不能加个批量通过？Bearer secret-token-123', ?, 'u1', 'replied', ?, ?)`,
       convId,
       sessionId,
+      JSON.stringify({ rewound: true, sentWhileBusy: true }),
       NOW_MS - 3_600_000,
       NOW_MS - 3_600_000,
+    );
+    db.run(
+      `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+       VALUES (?, ?, 'system', 'text', 'checklist reminder', ?, 'chk-rem', 'replied', ?, ?)`,
+      convId,
+      sessionId,
+      JSON.stringify({ event: "checklist.reminder", sessionId, uuid: "u", toolUseId: "t1" }),
+      NOW_MS - 2_000_000,
+      NOW_MS - 2_000_000,
     );
     db.run(
       `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
@@ -154,6 +164,8 @@ describe("daemon daily telemetry collector", () => {
 
     expect(afterTotalChanges).toBe(beforeTotalChanges);
     expect(bundle.sections.messages.length).toBe(1);
+    expect(bundle.sections.messages[0]!.rewound).toBe(true);
+    expect(bundle.sections.messages[0]!.sentWhileBusy).toBe(true);
     expect(bundle.sections.messages[0]!.excerpt).not.toContain("secret-token-123");
     expect(bundle.sections.messages[0]!.excerpt).toContain("[REDACTED]");
     expect(bundle.sections.hubCalls.map((c) => c.command)).toEqual(["graph.patch"]);
