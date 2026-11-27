@@ -268,7 +268,7 @@ export function useShellModel({ mobile }: { mobile: boolean }) {
 
   const localClientRef = fleet.hub(LOCAL_DEVICE).client;
   const shouldCheckFirstRunProviders =
-    startedInColumns && shellReady && local.state.pms.length === 0 && !providersGuided;
+    startedInColumns && shellReady && !providersGuided;
   const markProvidersGuided = useCallback(
     (openProviders: boolean) => {
       setProvidersGuided(true);
