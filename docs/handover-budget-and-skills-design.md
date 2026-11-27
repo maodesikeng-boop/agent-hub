@@ -25,7 +25,10 @@ Check three items before implementation starts:
 
 ### Decisions needed
 
-The Project Manager can approve the routine choices below or escalate Option 1 to the user if changing hidden PM handover skill carryover from full bodies to a verified index warrants explicit confirmation.
+**Approved by Project Manager (2026-11-28, PR #505):** Candidate C is approved in full:
+
+- **Decision 1 — Approved (Option C):** Replace inline full skill bodies in handover preambles with a verified skill index (`<= 4 KiB`, verified disk path + source + single-line description). `user`-invoked skills persist across generations; `model`-loaded skills carry for one hop on normal handovers and persist across same-generation vendor switches. Exclude built-in `fusa-task-graph` from false missing-file alarms when `switchIn` runs before `next`'s `prepareLaunch`.
+- **Decision 2 — Approved:** Per-vendor single-message UTF-8 byte caps set to `120 KiB` for `agy` and `160 KiB` default for all other vendors. In `AcpSessionDriver`, `send()` keeps `MAX_MESSAGE_BYTES` for raw user messages while `writeBatch()` validates combined Turn 1 blocks against `handoverMaxSingleMessageBytesOf(this.vendor)`. Both `AcpSessionDriver` and `AgyDriver` wire through `BaseDriver.takeNotesPrefixes` cleanly and independently so concurrent work migrating `agy` to ACP (PR #501) stays decoupled without merge conflicts.
 
 **Decision 1: Replace inline full skill bodies in handover preambles with a verified skill index.**
 Recommended: Option C (index only, maximum 4 KiB, `user`-invoked skills persist across generations while `model`-loaded skills carry for one hop and full generation on vendor switch).
@@ -222,7 +225,7 @@ New `src/shared/limits.ts` constants:
 | `HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES` | `2 * 1024` (2,048 B) | Headroom reserved for late-attached `deliverySuffix` (`PM_AGENDA_BUSY_LINE` or agenda snapshot fallback when agenda was omitted). |
 | `ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES` | `24 * 1024` (24,576 B) | Conservative reserve for `first_message` ACP vendors (`cursor`, `opencode`, `kimi`) on cold-start Turn 1 when `proc.pendingSystemPromptBlock` is not yet loaded; prespawned turns measure the exact block bytes. |
 | `HANDOVER_SUMMARY_MAX_BYTES` | `24 * 1024` (24,576 B) | Caps summary or generation anchor (~8,000 CJK chars) so a long summary cannot crowd out live asks, live agenda, or recent turns. |
-| `HANDOVER_LIVE_STATE_MAX_BYTES` | `12 * 1024` (12,288 B) | Bounds live pending asks plus PM agenda (up to 20 active graphs and 30 pending decisions) without starving Turn 1 on extreme backlog. |
+| `HANDOVER_LIVE_STATE_MAX_BYTES` | `24 * 1024` (24,576 B) | Bounds live pending asks plus PM agenda (fits worst-case 20 active graphs × 8 step lines with 4-byte UTF-8 titles plus 30 pending decisions verbatim so `pmAgendaFooterFor` suppresses duplicate footers). |
 | `HANDOVER_REPORTS_MAX_BYTES` | `8 * 1024` (8,192 B) | Fits ~80 one-line post-cut Worker report pointers while capping bursty 300-Worker histories. |
 | `HANDOVER_RECENT_MAX_BYTES` | `96 * 1024` (98,304 B) | Byte cap for recent chat on normal handover (~32K CJK chars), further bounded by remaining turn bytes. |
 | `VENDOR_SWITCH_CONTEXT_MAX_BYTES` | `128 * 1024` (131,072 B) | Replaces char-based `VENDOR_SWITCH_CONTEXT_MAX_CHARS = 240_000` (which inflated to 720 KiB in CJK); actual budget is `min(128 KiB, remainingBytes)`. |

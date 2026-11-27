@@ -2,10 +2,8 @@ import { LRUCache } from "lru-cache";
 import type { AgentSessionRow, ConversationId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import {
+  SKILL_CARRYOVER_LIST_MAX,
   SKILL_CARRYOVER_RECORDS_MAX,
-  SKILL_CARRYOVER_SKILL_MAX_CHARS,
-  SKILL_CARRYOVER_SKIPPED_LIST_MAX,
-  SKILL_CARRYOVER_TOTAL_MAX_CHARS,
   SKILL_LOAD_PENDING_TOOLS_MAX,
 } from "../../shared/limits.ts";
 import {
@@ -16,8 +14,14 @@ import {
   type KnownSkill,
   type ToolCall,
 } from "../../shared/skill-loads.ts";
+import { TASK_GRAPH_SKILL_NAME } from "../../shared/task-graph-skill.ts";
 import type { SkillFiles } from "../skill-files.ts";
 import type { LedgerContext } from "./context.ts";
+import {
+  renderLoadedSkillsIndex,
+  type MissingSkillEntry,
+  type SkillIndexEntry,
+} from "./handover-budget.ts";
 
 type SkillSource = "user" | "model";
 
@@ -27,44 +31,6 @@ interface LoadedSkillRow {
   path: string;
   source: SkillSource;
   loaded_at: number;
-}
-
-export const LOADED_SKILLS_HEADING = "## 上一个会话加载过的技能";
-
-const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u;
-
-const bodyOf = (text: string): string => text.replace(/^﻿/u, "").replace(FRONTMATTER_RE, "").trim();
-
-function clip(body: string, path: string): string {
-  if (body.length <= SKILL_CARRYOVER_SKILL_MAX_CHARS) return body;
-  let cut = SKILL_CARRYOVER_SKILL_MAX_CHARS;
-  const last = body.charCodeAt(cut - 1);
-  if (last >= 0xd800 && last <= 0xdbff) cut--;
-  return `${body.slice(0, cut)}\n\n（后面省略 ${body.length - cut} 字，全文在 ${path}）`;
-}
-
-const attr = (value: string) => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
-
-const listed = (rows: readonly LoadedSkillRow[]): string => {
-  const shown = rows.slice(0, SKILL_CARRYOVER_SKIPPED_LIST_MAX).map((r) => `${r.name}（${r.path}）`);
-  const more = rows.length - shown.length;
-  return `${shown.join("、")}${more > 0 ? `，另有 ${more} 个` : ""}`;
-};
-
-function renderSection(carried: readonly { row: LoadedSkillRow; body: string }[], skipped: readonly LoadedSkillRow[], missing: readonly LoadedSkillRow[]): string | null {
-  if (carried.length === 0 && skipped.length === 0 && missing.length === 0) return null;
-  const parts = [LOADED_SKILLS_HEADING];
-  if (carried.length > 0) {
-    parts.push(
-      "下面是上一个会话里加载过的技能正文，按最近加载排在前面，是换会话时从磁盘读的最新版本。它们算你已经加载过，照上一个会话里一样用，不用再读一遍。",
-      ...carried.map(({ row, body }) => `<skill name="${attr(row.name)}" path="${attr(row.path)}" loaded-by="${row.source}">\n${body}\n</skill>`),
-    );
-  }
-  const notes: string[] = [];
-  if (skipped.length > 0) notes.push(`没带正文（篇幅超了，要用时自己加载）：${listed(skipped)}`);
-  if (missing.length > 0) notes.push(`读不到了（文件没了或不在技能目录里）：${listed(missing)}`);
-  if (notes.length > 0) parts.push(notes.join("\n"));
-  return parts.join("\n\n");
 }
 
 export type LedgerLoadedSkills = ReturnType<typeof createLedgerLoadedSkills>;
@@ -143,48 +109,54 @@ export function createLedgerLoadedSkills(ctx: LedgerContext, skillFiles: SkillFi
     }
   };
 
-  const carryIn = (conversationId: ConversationId, fromGeneration: number, next: AgentSessionRow): string | null => {
+  const carryIn = (
+    conversationId: ConversationId,
+    fromGeneration: number,
+    next: AgentSessionRow,
+    options?: { vendorSwitch?: boolean },
+  ): string | null => {
+    const vendorSwitch = options?.vendorSwitch === true;
+    // Order user-invoked skills first so explicit user instructions are never crowded out by model reads.
     const rows = db.all<LoadedSkillRow>(
-      "SELECT skill_key, name, path, source, loaded_at FROM loaded_skills WHERE conversation_id = ? AND generation = ? ORDER BY loaded_at DESC",
+      `SELECT skill_key, name, path, source, loaded_at FROM loaded_skills
+        WHERE conversation_id = ? AND generation = ?
+        ORDER BY CASE WHEN source = 'user' THEN 0 ELSE 1 END, loaded_at DESC`,
       conversationId,
       fromGeneration,
     );
-    const carried: { row: LoadedSkillRow; body: string }[] = [];
-    const skipped: LoadedSkillRow[] = [];
-    const missing: LoadedSkillRow[] = [];
+    const available: SkillIndexEntry[] = [];
+    const missing: MissingSkillEntry[] = [];
     const carriedKeys = new Set<string>();
     const catalog = rows.length === 0 ? null : skillFiles.catalog(next, { fresh: true });
-    let total = 0;
+
     for (const row of rows) {
-      if (skipped.length > 0) {
-        skipped.push(row);
-        continue;
-      }
+      // Built-in fusa-task-graph is written asynchronously on next's session.start and already linked in prompt.ts.
+      if (row.name === TASK_GRAPH_SKILL_NAME) continue;
       const skill = catalog?.byKey(row.skill_key) ?? catalog?.named(row.name) ?? null;
-      const text = skill === null ? null : skillFiles.read(skill);
-      if (skill === null || text === null) {
-        missing.push(row);
+      if (skill === null) {
+        missing.push({ name: row.name, path: row.path });
         continue;
       }
       if (carriedKeys.has(skill.key)) continue;
-      const body = clip(bodyOf(text), skill.path);
-      if (total + body.length > SKILL_CARRYOVER_TOTAL_MAX_CHARS) {
-        skipped.push(row);
-        continue;
-      }
-      total += body.length;
       carriedKeys.add(skill.key);
-      carried.push({ row: { ...row, path: skill.path }, body });
-      db.run(
-        "UPDATE OR REPLACE loaded_skills SET skill_key = ?, path = ?, generation = ? WHERE conversation_id = ? AND skill_key = ?",
-        skill.key,
-        skill.path,
-        next.generation,
-        conversationId,
-        row.skill_key,
-      );
+      available.push({
+        name: row.name,
+        path: skill.path,
+        source: row.source,
+        description: skill.description ?? null,
+      });
+      if ((row.source === "user" || vendorSwitch) && available.length <= SKILL_CARRYOVER_LIST_MAX) {
+        db.run(
+          "UPDATE OR REPLACE loaded_skills SET skill_key = ?, path = ?, generation = ? WHERE conversation_id = ? AND skill_key = ?",
+          skill.key,
+          skill.path,
+          next.generation,
+          conversationId,
+          row.skill_key,
+        );
+      }
     }
-    return renderSection(carried, skipped, missing);
+    return renderLoadedSkillsIndex({ available, missing });
   };
 
   return { afterDriverEvent, carryIn };

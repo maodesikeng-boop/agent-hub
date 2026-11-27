@@ -11,6 +11,7 @@ export interface KnownSkill {
   // dev:inode identity so symlinks and hard links match (agy hard-links the task graph manual).
   readonly fileId: string;
   readonly heads: readonly string[];
+  readonly description?: string | null;
 }
 
 export interface SkillCatalog {

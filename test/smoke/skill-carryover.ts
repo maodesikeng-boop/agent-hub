@@ -1,16 +1,15 @@
-// 换代带上加载过的技能的真机冒烟（手动跑：node test/smoke/skill-carryover.ts [厂商…]，不进默认 vitest；docs/skill-carryover-design.md 的验收方法）。
+// 换代带上加载过的技能索引的真机冒烟（手动跑：node test/smoke/skill-carryover.ts [厂商…]，不进默认 vitest；docs/handover-budget-and-skills-design.md 的验收方法）。
 // 照 auto-renew.ts：临时数据目录，门槛调到 1 token（只从 startDaemon 的 autoRenew 传，默认值不改），每家一个项目经理：
 // 1. 它的工作目录里放两个测试技能，正文里各写一个暗号：carry-user（用户手打 /carry-user）、carry-model（让模型自己读 SKILL.md）；
-// 2. 空闲后自动换到第 2 代：开场说明里“上一个会话加载过的技能”那一节带着两个暗号，问新会话答得出来；
-// 3. 第 2 代没再加载，再换到第 3 代：两个技能还在（传下去）；
-// 4. 删掉 carry-model 再换到第 4 代：那一节写着“读不到了（文件没了或不在技能目录里）”。
+// 2. 空闲后自动换到第 2 代：skills_section 里只带路径与单行简介（不贴正文），问新会话按索引读文件答得出暗号；
+// 3. 第 2 代没再加载，再换到第 3 代：carry-user 仍在索引里，未再读的 carry-model 衰减退出；
+// 4. 删掉 carry-user 再换到第 4 代：那一节写着“读不到了（文件没了或不在技能目录里）”。
 // 每一代开场里那一节打印出来，贴进 PR。跑完删掉临时目录和这次在各家用户目录里留下的会话记录。
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { startDaemon } from "../../src/daemon/daemon.ts";
-import { LOADED_SKILLS_HEADING } from "../../src/daemon/ledger/loaded-skills.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { AGENT_VENDORS, API_PATHS, isHandoverTraffic, type AgentVendor } from "../../src/shared/index.ts";
 import { Client, messagesOf, waitForStatus, waitUntil } from "../e2e/harness.ts";
@@ -68,17 +67,9 @@ function writeSkill(cwd: string, name: string, secret: string) {
   );
 }
 
-const sectionOf = (preamble: string | null): string => {
-  if (preamble === null) return "";
-  const at = preamble.indexOf(LOADED_SKILLS_HEADING);
-  if (at === -1) return "";
-  const end = preamble.indexOf("\n## ", at + LOADED_SKILLS_HEADING.length);
-  return end === -1 ? preamble.slice(at) : preamble.slice(at, end);
-};
-
 try {
   for (const vendor of vendors) {
-    const ok = await scenario(outcomes, `SC ${vendor}：换代把加载过的技能正文带进新会话，隔代还在，文件没了注明`, async () => {
+    const ok = await scenario(outcomes, `SC ${vendor}：换代把加载过的技能索引带进新会话，用户技能跨代保留、模型技能衰减，文件没了注明`, async () => {
       const userSecret = `PLUM-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
       const modelSecret = `FIG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
       const { model, effort } = await modelFor(vendor);
@@ -103,7 +94,7 @@ try {
           TURN_MS + AUTO_IDLE_MS + 60_000,
         );
       const sectionFor = (sessionId: number) =>
-        sectionOf(query<{ preamble: string | null }>("SELECT preamble FROM handovers WHERE to_session_id = ? AND status = 'switched'", sessionId)[0]?.preamble ?? null);
+        query<{ skills_section: string | null }>("SELECT skills_section FROM handovers WHERE to_session_id = ? AND status = 'switched'", sessionId)[0]?.skills_section ?? "";
 
       await ask("/carry-user 加载这个技能就行，只回复“好”。");
       await ask("用读文件的工具（或 cat）读一下 .agents/skills/carry-model/SKILL.md 这个技能，读完只回复“好”。");
@@ -112,28 +103,28 @@ try {
 
       const g2 = await sessionOf(2);
       const s2 = sectionFor(g2.sessionId);
-      console.log(`\n----- ${vendor} 第 2 代开场里的技能一节 -----\n${s2}\n-----`);
-      expect(s2.includes(userSecret) && s2.includes(modelSecret), "第 2 代开场里没带上两个技能的正文");
+      console.log(`\n----- ${vendor} 第 2 代开场里的技能索引 -----\n${s2}\n-----`);
+      expect(s2.includes("carry-user") && s2.includes("carry-model") && !s2.includes(userSecret) && !s2.includes(modelSecret), "第 2 代开场里应只带索引不带正文");
 
-      const q = await ask("carry-user 和 carry-model 这两个技能里的暗号各是什么？只回复两个暗号，用空格隔开。");
+      const q = await ask("按索引读取 carry-user 和 carry-model 这两个技能里的暗号各是什么？只回复两个暗号，用空格隔开。");
       const replies = messagesOf(await client.state(), chat)
         .filter((m) => m.id > q && m.sender === "agent" && m.kind === "text" && !isHandoverTraffic(m))
         .map((m) => m.text)
         .join("\n");
-      expect(replies.includes(userSecret) && replies.includes(modelSecret), `新会话答不出暗号：${replies}`);
+      expect(replies.includes(userSecret) && replies.includes(modelSecret), `新会话按索引读取后答不出暗号：${replies}`);
 
       const g3 = await sessionOf(3);
       const s3 = sectionFor(g3.sessionId);
-      console.log(`\n----- ${vendor} 第 3 代开场里的技能一节（第 2 代没再加载）-----\n${s3.slice(0, 600)}\n-----`);
-      expect(s3.includes(userSecret) && s3.includes(modelSecret), "第 3 代开场里技能丢了");
+      console.log(`\n----- ${vendor} 第 3 代开场里的技能索引 -----\n${s3.slice(0, 600)}\n-----`);
+      expect(s3.includes("carry-user"), "第 3 代开场里用户技能丢了");
 
-      rmSync(join(cwd, ".agents", "skills", "carry-model"), { recursive: true, force: true });
+      rmSync(join(cwd, ".agents", "skills", "carry-user"), { recursive: true, force: true });
       await ask("只回复“好”。");
       const g4 = await sessionOf(4);
       const s4 = sectionFor(g4.sessionId);
-      console.log(`\n----- ${vendor} 第 4 代开场里的技能一节（删了 carry-model）-----\n${s4.slice(0, 600)}\n-----`);
-      expect(s4.includes(userSecret) && !s4.includes(modelSecret) && /读不到了（文件没了或不在技能目录里）：carry-model/.test(s4), "第 4 代没注明 carry-model 文件没了");
-      return `${model}：第 1 代记下 ${loaded.map((r) => `${r.name}(${r.source})`).join("、")}；第 2、3 代都带上，第 4 代注明文件没了；新会话答出“${replies.trim()}”`;
+      console.log(`\n----- ${vendor} 第 4 代开场里的技能索引（删了 carry-user）-----\n${s4.slice(0, 600)}\n-----`);
+      expect(/读不到了（文件没了或不在技能目录里）：carry-user/.test(s4), "第 4 代没注明 carry-user 文件没了");
+      return `${model}：第 1 代记下 ${loaded.map((r) => `${r.name}(${r.source})`).join("、")}；第 2、3 代带索引，第 4 代注明文件没了；新会话答出“${replies.trim()}”`;
     });
     if (!ok) keepDir = true;
   }

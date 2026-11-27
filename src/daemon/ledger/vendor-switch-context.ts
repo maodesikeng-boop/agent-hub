@@ -13,13 +13,14 @@ import {
   type WorkerEvent,
 } from "../../shared/domain.ts";
 import {
-  VENDOR_SWITCH_CONTEXT_MAX_CHARS,
+  VENDOR_SWITCH_CONTEXT_MAX_BYTES,
   VENDOR_SWITCH_MESSAGE_SCAN_LIMIT,
   VENDOR_SWITCH_TRANSCRIPTS_MAX,
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { isRewoundMessage } from "../../shared/rewind.ts";
 import { isAgentVendor, vendorLabel, vendorSpec } from "../../shared/vendors.ts";
+import { sliceUtf8TailSafe } from "./handover-budget.ts";
 import { OMITTED_MARK } from "./handover-recent.ts";
 
 export interface GenerationAnchor {
@@ -131,18 +132,18 @@ export function formatGenerationMessage(message: Message, targetSessionId: Sessi
   return null;
 }
 
-export function collectGenerationContext(
+export function collectGenerationEntriesNewestFirst(
   messagesNewestFirst: Iterable<Message>,
   options: {
     targetSessionId: SessionId;
-    maxChars?: number;
+    maxBytes?: number;
     maxScanRows?: number;
   },
-): CollectedGenerationContext {
-  const maxChars = options.maxChars ?? VENDOR_SWITCH_CONTEXT_MAX_CHARS;
+): { entries: string[]; truncated: boolean; scannedRows: number } {
+  const maxBytes = options.maxBytes ?? VENDOR_SWITCH_CONTEXT_MAX_BYTES;
   const maxScanRows = options.maxScanRows ?? VENDOR_SWITCH_MESSAGE_SCAN_LIMIT;
-  const blocks: string[] = [];
-  let used = 0;
+  const entries: string[] = [];
+  let collectedBytes = 0;
   let scannedRows = 0;
   let truncated = false;
 
@@ -154,22 +155,58 @@ export function collectGenerationContext(
     scannedRows += 1;
     const formatted = formatGenerationMessage(message, options.targetSessionId);
     if (formatted === null) continue;
+    entries.push(formatted);
+    collectedBytes += (entries.length > 1 ? 2 : 0) + Buffer.byteLength(formatted, "utf8");
+    // Keep one entry past maxBytes so assembleBudgetedPreamble observes truncation and can tail-slice it.
+    if (collectedBytes > maxBytes) {
+      truncated = true;
+      break;
+    }
+  }
+  return { entries, truncated, scannedRows };
+}
+
+export function collectGenerationContext(
+  messagesNewestFirst: Iterable<Message>,
+  options: {
+    targetSessionId: SessionId;
+    maxBytes?: number;
+    maxScanRows?: number;
+  },
+): CollectedGenerationContext {
+  const maxBytes = options.maxBytes ?? VENDOR_SWITCH_CONTEXT_MAX_BYTES;
+  const maxScanRows = options.maxScanRows ?? VENDOR_SWITCH_MESSAGE_SCAN_LIMIT;
+  const blocks: string[] = [];
+  let used = 0;
+  let scannedRows = 0;
+  let truncated = false;
+  const omitBytes = Buffer.byteLength(OMITTED_MARK, "utf8");
+
+  for (const message of messagesNewestFirst) {
+    if (scannedRows >= maxScanRows) {
+      truncated = true;
+      break;
+    }
+    scannedRows += 1;
+    const formatted = formatGenerationMessage(message, options.targetSessionId);
+    if (formatted === null) continue;
     const sep = blocks.length > 0 ? 2 : 0;
-    const remaining = maxChars - used - sep;
+    const remaining = maxBytes - used - sep;
     if (remaining <= 0) {
       truncated = true;
       break;
     }
-    if (formatted.length <= remaining) {
+    const bytes = Buffer.byteLength(formatted, "utf8");
+    if (bytes <= remaining) {
       blocks.push(formatted);
-      used += sep + formatted.length;
+      used += sep + bytes;
       continue;
     }
-    if (remaining > OMITTED_MARK.length) {
-      const tail = sliceTailUtf16Safe(formatted, remaining - OMITTED_MARK.length);
+    if (remaining > omitBytes) {
+      const tail = sliceUtf8TailSafe(formatted, remaining - omitBytes);
       if (tail !== "") blocks.push(`${OMITTED_MARK}${tail}`);
-    } else if (blocks.length === 0 && maxChars > 0) {
-      const tail = sliceTailUtf16Safe(formatted, maxChars);
+    } else if (blocks.length === 0 && maxBytes > 0) {
+      const tail = sliceUtf8TailSafe(formatted, maxBytes);
       if (tail !== "") blocks.push(tail);
     }
     truncated = true;
@@ -214,6 +251,20 @@ export function describeGenerationTranscripts(
   return "本代前序会话的原始记录：未找到本机记录文件，请直接依据下方本代完整记录与账本命令处理";
 }
 
+export function vendorSwitchPreambleHeader(input: {
+  fromVendor: string;
+  toVendor: string;
+  hasSkills: boolean;
+  transcriptSummary: string;
+}): string {
+  const searchCmds = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
+  return [
+    `【系统】你还是同一个项目经理，用户刚把你的运行厂商从 ${vendorLabel(input.fromVendor)}（${input.fromVendor}）切换到了 ${vendorLabel(input.toVendor)}（${input.toVendor}）。`,
+    `下面${input.hasSkills ? "先附上上一个会话加载过的技能索引，再" : ""}按时间顺序完整附上了当前这一代会话迄今的全部上下文（用户那边仍是同一个连续对话，不要向用户提及切换了会话或回复“已接手”，读完直接回应本段末尾的最新消息；历史中提到的他厂专属工具名按你当前可用的工具理解）。`,
+    `做过的历史任务细节可用 ${searchCmds} 查账本；${input.transcriptSummary}。`,
+  ].join("\n");
+}
+
 export function buildVendorSwitchPreamble(input: {
   fromVendor: string;
   toVendor: string;
@@ -222,12 +273,12 @@ export function buildVendorSwitchPreamble(input: {
   skills: string | null;
   transcriptSummary: string;
 }): string {
-  const searchCmds = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
-  const header = [
-    `【系统】你还是同一个项目经理，用户刚把你的运行厂商从 ${vendorLabel(input.fromVendor)}（${input.fromVendor}）切换到了 ${vendorLabel(input.toVendor)}（${input.toVendor}）。`,
-    `下面${input.skills === null ? "" : "先附上上一个会话加载过的技能正文，再"}按时间顺序完整附上了当前这一代会话迄今的全部上下文（用户那边仍是同一个连续对话，不要向用户提及切换了会话或回复“已接手”，读完直接回应本段末尾的最新消息；历史中提到的他厂专属工具名按你当前可用的工具理解）。`,
-    `做过的历史任务细节可用 ${searchCmds} 查账本；${input.transcriptSummary}。`,
-  ].join("\n");
+  const header = vendorSwitchPreambleHeader({
+    fromVendor: input.fromVendor,
+    toVendor: input.toVendor,
+    hasSkills: input.skills !== null,
+    transcriptSummary: input.transcriptSummary,
+  });
 
   const sections = [header];
   if (input.skills !== null) sections.push(input.skills);

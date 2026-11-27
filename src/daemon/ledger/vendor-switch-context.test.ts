@@ -216,7 +216,7 @@ describe("collectGenerationContext 与 buildVendorSwitchPreamble", () => {
     const context = collectGenerationContext([
       makeMsg({ id: 2, sender: "system", status: "queued", text: "另一条尚未发送的通知", meta: { ...meta, ref: "queued" } }),
       makeMsg({ id: 1, sender: "system", status: "replied", text, meta }),
-    ], { targetSessionId: 10, maxChars: 10_000 });
+    ], { targetSessionId: 10, maxBytes: 10_000 });
     const preamble = buildVendorSwitchPreamble({
       fromVendor: "claude", toVendor: "codex", context, skills: null, transcriptSummary: "",
       anchor: { summaryText: null, cutMessageId: 0, startSessionId: 1 },
@@ -225,19 +225,19 @@ describe("collectGenerationContext 与 buildVendorSwitchPreamble", () => {
     expect(preamble).not.toContain("另一条尚未发送的通知");
   });
 
-  it("超出字符上限时只保留最新尾部并保证 UTF-16 合法，未超限时完整无损且不标省略提示", () => {
+  it("超出字节上限时只保留最新尾部并保证 UTF-16 合法，未超限时完整无损且不标省略提示", () => {
     const newestFirst = [
       makeMsg({ id: 3, sender: "agent", text: "最新回复🎯完成", status: null }),
       makeMsg({ id: 2, sender: "user", text: `中间长消息${"🔥".repeat(30)}结尾`, status: "replied" }),
       makeMsg({ id: 1, sender: "user", text: "最早的一句旧话", status: "replied" }),
     ];
-    const full = collectGenerationContext(newestFirst, { targetSessionId: 99, maxChars: 10_000 });
+    const full = collectGenerationContext(newestFirst, { targetSessionId: 99, maxBytes: 10_000 });
     expect(full.truncated).toBe(false);
     expect(full.body).toBe(`用户：最早的一句旧话\n\n用户：中间长消息${"🔥".repeat(30)}结尾\n\n你：最新回复🎯完成`);
 
-    const capped = collectGenerationContext(newestFirst, { targetSessionId: 99, maxChars: 45 });
+    const capped = collectGenerationContext(newestFirst, { targetSessionId: 99, maxBytes: 110 });
     expect(capped.truncated).toBe(true);
-    expect(capped.body.length).toBeLessThanOrEqual(45);
+    expect(Buffer.byteLength(capped.body, "utf8")).toBeLessThanOrEqual(110);
     expect(hasNoLoneSurrogates(capped.body)).toBe(true);
     expect(capped.body).toContain("你：最新回复🎯完成");
     expect(capped.body).not.toContain("最早的一句旧话");

@@ -30,7 +30,7 @@ export function handoverRequestText(options: {
 
 这份交接会替换掉你现在的全部上下文。新会话手里只有：
 - 最新的系统提示词和性格设定；
-- 你这个会话加载过的技能正文（系统自动带上，交接里不用写）；
+- 你这个会话加载过的技能索引（系统自动带上路径和简介，新会话按需读取，交接里不用写）；
 - 这份交接；
 - 交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话（写交接期间又聊的也会全部带上）；
 - 能搜的账本：${SEARCH_COMMANDS}（派过的活、Worker 的汇报都在里面）；
@@ -53,12 +53,9 @@ ${only}`;
 export const HANDOVER_STALE_HINT =
   "下面的交接是此前保存的摘要，可能稍有滞后；如与后面的最新对话冲突，以最新对话为准，任务进度请核对 Worker 实际状态。";
 
-export function sessionPreambleText(options: {
+export function sessionPreambleHeader(options: {
   auto: boolean;
-  skills: string | null;
-  handover: string;
-  recent: string;
-  reports: string[];
+  hasSkills: boolean;
   transcriptPath: string | null;
   fromVendor?: string;
   toVendor?: string;
@@ -72,20 +69,9 @@ export function sessionPreambleText(options: {
     switchedVendor && isAgentVendor(options.fromVendor!) && vendorSpec(options.fromVendor!).handover?.transcriptPortable === false
       ? `上一个会话的原始记录：格式是 ${options.fromVendor} 的，读不了，只看交接和原话`
       : transcriptLine(options.transcriptPath);
-  const handoverText =
-    options.handover.trim() === ""
-      ? "（上一个会话没有写交接）"
-      : `${HANDOVER_STALE_HINT}\n\n${options.handover}`;
-  const parts = [
-    `【系统】这是新会话：你还是同一个项目经理，接着上一个会话干。${reasonLine}
-下面${options.skills === null ? "" : "先是上一个会话加载过的技能正文，再"}是上一个会话写的交接，和交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话。交接写于切点，之后的事看下面的原话和 Worker 汇报目录。还在跑的 Worker 照常会把汇报发给你。做过的细节用 ${SEARCH_COMMANDS} 搜；${transcript}。
-不用回复“已接上”：读完直接处理这段说明后面的那条消息。`,
-    ...(options.skills === null ? [] : [options.skills]),
-    `## 交接\n\n${handoverText}`,
-    `## 最近的原话\n\n${options.recent === "" ? "（没有）" : options.recent}`,
-  ];
-  if (options.reports.length > 0) parts.push(`## 交接之后到的 Worker 汇报（交接里没有，只列目录）\n\n${options.reports.join("\n")}`);
-  return parts.join("\n\n");
+  return `【系统】这是新会话：你还是同一个项目经理，接着上一个会话干。${reasonLine}
+下面${options.hasSkills ? "先是上一个会话加载过的技能索引，再" : ""}是上一个会话写的交接，和交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话。交接写于切点，之后的事看下面的原话和 Worker 汇报目录。还在跑的 Worker 照常会把汇报发给你。做过的细节用 ${SEARCH_COMMANDS} 搜；${transcript}。
+不用回复“已接上”：读完直接处理这段说明后面的那条消息。`;
 }
 
 export const HANDOVER_EMPTY_REASON = "handover_empty";
