@@ -3,7 +3,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { DriverEvent } from "../../src/shared/index.ts";
 import { MOCK_LLM_SNAPSHOT_MAX_BYTES } from "./limits.ts";
-import type { JsonSchemaTreeDiff, NormalizedDriverEvent, NormalizedModelContext, RecordedLlmRequest } from "./types.ts";
+import type {
+  JsonSchemaTreeDiff,
+  NormalizedDriverEvent,
+  NormalizedModelContext,
+  RecordedLlmRequest,
+  SchemaDriftEvaluation,
+} from "./types.ts";
 
 const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu;
 const ISO_TS_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b/gu;
@@ -275,5 +281,18 @@ export function diffJsonSchemaTrees(baselineDir: string, currentDir: string): Js
     added: added.sort(),
     removed: removed.sort(),
     changed: changed.sort(),
+  };
+}
+
+export function evaluateJsonSchemaDrift(diff: JsonSchemaTreeDiff): SchemaDriftEvaluation {
+  const breaking = diff.removed.length > 0 || diff.changed.length > 0;
+  const summary = breaking
+    ? `Breaking JSON Schema drift detected: ${diff.removed.length} removed, ${diff.changed.length} changed, ${diff.added.length} added`
+    : `No breaking JSON Schema drift (${diff.added.length} added, 0 removed, 0 changed)`;
+  return {
+    breaking,
+    exitCode: breaking ? 1 : 0,
+    summary,
+    diff,
   };
 }

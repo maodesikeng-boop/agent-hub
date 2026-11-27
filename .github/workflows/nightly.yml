@@ -51,6 +51,17 @@ jobs:
             @earendil-works/pi-coding-agent@latest \
             @deepseek-ai/dsh@0.2.2-rc.1
 
+      - name: Install sandbox apt packages
+        uses: ./.github/actions/apt-install
+        timeout-minutes: 7
+        with:
+          cache-id: sandbox
+          probe: command -v bwrap && command -v socat
+          install: timeout 115 apt-get update && timeout 115 apt-get install -y bubblewrap socat
+
+      - name: Setup Linux bubblewrap sandbox
+        run: sudo bash scripts/linux-sandbox-setup.sh
+
       - name: Run real-CLI + mock-LLM suite on Ubuntu
         env:
           BELLWOOD_REQUIRE_REAL_CLI: claude,codex,pi,deepseek
@@ -66,12 +77,17 @@ jobs:
           "$PINNED_DIR/node_modules/.bin/codex" app-server generate-json-schema --out "$RUNNER_TEMP/codex-schema-pinned"
           "$RUNNER_TEMP/mock-cli-tools/node_modules/.bin/codex" app-server generate-json-schema --out "$RUNNER_TEMP/codex-schema-latest"
           node --input-type=module -e '
-            import { diffJsonSchemaTrees } from "./test/mock-llm/protocol-snapshot.ts";
+            import { diffJsonSchemaTrees, evaluateJsonSchemaDrift } from "./test/mock-llm/protocol-snapshot.ts";
             const diff = diffJsonSchemaTrees(
               `${process.env.RUNNER_TEMP}/codex-schema-pinned`,
               `${process.env.RUNNER_TEMP}/codex-schema-latest`,
             );
-            console.log("Codex JSON Schema diff (0.169.0 -> latest):", JSON.stringify(diff, null, 2));
+            const evaluation = evaluateJsonSchemaDrift(diff);
+            console.log("Codex JSON Schema diff (0.169.0 -> latest):", JSON.stringify(evaluation, null, 2));
+            if (evaluation.exitCode !== 0) {
+              console.error(evaluation.summary);
+              process.exit(evaluation.exitCode);
+            }
           '
 
       - uses: actions/upload-artifact@v4

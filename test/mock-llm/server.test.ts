@@ -1,3 +1,4 @@
+import { request as httpRequest } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   MOCK_LLM_DEFAULT_WAIT_TIMEOUT_MS,
@@ -198,5 +199,62 @@ describe("createMockLlmServer", () => {
     } as RequestInit);
     expect(bigRes.status).toBe(413);
     expect(server.requests().at(-1)?.truncated).toBe(true);
+  });
+
+  it("immediately rejects an unclosed oversized chunked stream with 413 and does not leak concurrency slots", async () => {
+    const bodyCap = 256;
+    const server = await bootServer(
+      { defaultTurn: { text: "after-oversized" } },
+      { maxRequestBodyBytes: bodyCap },
+    );
+
+    const sendUnclosedOversizedChunked = (): Promise<{ status: number; connection: string | undefined }> =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          req.destroy();
+          reject(new Error("Mock server hung past maxRequestBodyBytes without returning 413"));
+        }, 2_000);
+        timer.unref?.();
+        const req = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port: server.port,
+            method: "POST",
+            path: "/v1/chat/completions",
+            headers: {
+              "content-type": "application/json",
+              "transfer-encoding": "chunked",
+            },
+          },
+          (res) => {
+            res.resume();
+            res.once("end", () => {
+              clearTimeout(timer);
+              resolve({ status: res.statusCode ?? 0, connection: res.headers.connection });
+            });
+          },
+        );
+        req.on("error", () => {
+          // Server destroys the socket after flushing 413; ignore client write-side reset after response.
+        });
+        // Intentionally never call req.end() to verify the server aborts reading as soon as the cap is exceeded.
+        req.write("x".repeat(bodyCap * 4));
+      });
+
+    for (let i = 0; i < MOCK_LLM_MAX_CONCURRENT_REQUESTS + 2; i++) {
+      const res = await sendUnclosedOversizedChunked();
+      expect(res.status).toBe(413);
+      expect(res.connection).toBe("close");
+    }
+
+    expect(server.requests().at(-1)?.truncated).toBe(true);
+
+    const followUp = await fetch(`${server.url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "m", stream: false, messages: [{ role: "user", content: "still-healthy" }] }),
+    });
+    expect(followUp.status).toBe(200);
+    expect(await followUp.text()).toContain("after-oversized");
   });
 });

@@ -10,6 +10,7 @@ import {
   ENV_MESH_PORT,
   ENV_PORT,
   ENV_RELAY_URL,
+  ENV_WIN_HELPERS,
   TEST_CHILD_EXIT_WAIT_MS,
   TEST_DAEMON_STOP_WAIT_MS,
   VENDOR_LIST,
@@ -228,7 +229,10 @@ export async function startRealCliDaemon(options: RealCliDaemonOptions): Promise
       homeDir: isolated.homeDir,
       vendorEnv: {
         ...(process.platform === "win32"
-          ? { PATH: `${dirname(process.execPath)};${process.env.PATH ?? process.env.Path ?? ""}` }
+          ? {
+              PATH: `${dirname(process.execPath)};${process.env.PATH ?? process.env.Path ?? ""}`,
+              ...(process.env[ENV_WIN_HELPERS] ? { [ENV_WIN_HELPERS]: process.env[ENV_WIN_HELPERS] } : {}),
+            }
           : {}),
         [ENV_HOME]: isolated.dataDir,
         [ENV_PORT]: "0",
@@ -257,6 +261,16 @@ export async function startRealCliDaemon(options: RealCliDaemonOptions): Promise
       const all = adapter.dialect ? mock.requests({ dialect: adapter.dialect }) : mock.requests();
       return all.filter((req) => !isBackgroundCatalogRequest(req));
     };
+
+    const waitForPmRequests = (
+      count: number,
+      waitOptions?: { timeoutMs?: number },
+    ): Promise<readonly RecordedLlmRequest[]> =>
+      mock.waitForRequests(count, {
+        timeoutMs: waitOptions?.timeoutMs ?? MOCK_LLM_CLI_TURN_TIMEOUT_MS,
+        ...(adapter.dialect ? { dialect: adapter.dialect } : {}),
+        predicate: (req) => !isBackgroundCatalogRequest(req),
+      });
 
     const sendAndWait = async (
       text: string,
@@ -341,6 +355,7 @@ export async function startRealCliDaemon(options: RealCliDaemonOptions): Promise
       pmId: created.pmId,
       conversationId: created.conversationId,
       pmRequests,
+      waitForPmRequests,
       sendAndWait,
       restartDaemon,
       close,

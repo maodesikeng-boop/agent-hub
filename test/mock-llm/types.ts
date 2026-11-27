@@ -42,6 +42,7 @@ export interface MockLlmScript {
   defaultTurn?: MockLlmTurn;
   matchers?: readonly {
     whenLastUserContains: string;
+    once?: boolean;
     turn: MockLlmTurn;
   }[];
 }
@@ -73,7 +74,11 @@ export interface MockLlmServer {
   clearRequests(): void;
   waitForRequests(
     count: number,
-    options?: { timeoutMs?: number; dialect?: MockLlmDialect },
+    options?: {
+      timeoutMs?: number;
+      dialect?: MockLlmDialect;
+      predicate?: (req: RecordedLlmRequest) => boolean;
+    },
   ): Promise<readonly RecordedLlmRequest[]>;
   close(): Promise<void>;
 }
@@ -153,6 +158,13 @@ export interface JsonSchemaTreeDiff {
   changed: readonly string[];
 }
 
+export interface SchemaDriftEvaluation {
+  breaking: boolean;
+  exitCode: 0 | 1;
+  summary: string;
+  diff: JsonSchemaTreeDiff;
+}
+
 export interface RealCliDaemonOptions {
   vendor: AgentVendor;
   script?: MockLlmScript;
@@ -172,6 +184,7 @@ export interface RealCliSessionHandle {
   readonly conversationId: number;
   /** Recorded mock requests belonging to this PM session, excluding background Router catalog turns. */
   pmRequests(): readonly RecordedLlmRequest[];
+  waitForPmRequests(count: number, options?: { timeoutMs?: number }): Promise<readonly RecordedLlmRequest[]>;
   sendAndWait(text: string, options?: { timeoutMs?: number }): Promise<{ messageId: number; replies: readonly string[] }>;
   restartDaemon(): Promise<void>;
   close(): Promise<void>;

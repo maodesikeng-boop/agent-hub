@@ -206,6 +206,15 @@ describe(".github/workflows", () => {
     const reused = Object.values(nightly.jobs).flatMap((job) => (job.uses ? [job.uses] : []));
     expect(reused.sort()).toEqual(["./.github/workflows/check.yml", "./.github/workflows/macos.yml", "./.github/workflows/windows.yml"]);
     for (const path of reused) expect(workflow(path.split("/").at(-1)!).on).toHaveProperty("workflow_call");
+
+    const realCliJob = nightly.jobs["real-cli-mock-llm"];
+    expect(realCliJob).toBeDefined();
+    const realCliSteps = realCliJob!.steps ?? [];
+    expect(realCliSteps.some((step) => step.uses === "./.github/actions/apt-install" && step.with?.install?.includes("bubblewrap") && step.with?.install?.includes("socat"))).toBe(true);
+    expect(realCliSteps.some((step) => step.run === "sudo bash scripts/linux-sandbox-setup.sh")).toBe(true);
+    const schemaDriftStep = realCliSteps.find((step) => step.run?.includes("diffJsonSchemaTrees"));
+    expect(schemaDriftStep?.run).toContain("evaluateJsonSchemaDrift");
+    expect(schemaDriftStep?.run).toContain("process.exit(");
   });
 
   it("run check on every pull request so its required status checks always report", () => {

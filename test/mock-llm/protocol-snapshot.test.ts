@@ -6,6 +6,7 @@ import type { DriverEvent } from "../../src/shared/index.ts";
 import { MOCK_LLM_SNAPSHOT_MAX_BYTES } from "./limits.ts";
 import {
   diffJsonSchemaTrees,
+  evaluateJsonSchemaDrift,
   normalizeDriverEvents,
   normalizeModelContext,
   normalizeVolatileText,
@@ -105,5 +106,24 @@ describe("protocol normalization and schema drift detection", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("evaluates breaking JSON Schema drift with non-zero exitCode when schemas are removed or changed", () => {
+    expect(evaluateJsonSchemaDrift({ added: [], removed: [], changed: [] })).toMatchObject({
+      breaking: false,
+      exitCode: 0,
+    });
+    expect(evaluateJsonSchemaDrift({ added: ["NewEvent.json"], removed: [], changed: [] })).toMatchObject({
+      breaking: false,
+      exitCode: 0,
+    });
+    expect(evaluateJsonSchemaDrift({ added: [], removed: ["OldEvent.json"], changed: [] })).toMatchObject({
+      breaking: true,
+      exitCode: 1,
+    });
+    expect(evaluateJsonSchemaDrift({ added: ["NewEvent.json"], removed: [], changed: ["ServerNotification.json"] })).toMatchObject({
+      breaking: true,
+      exitCode: 1,
+    });
   });
 });

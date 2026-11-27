@@ -503,21 +503,56 @@ function readBoundedBody(
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let rawBytes = 0;
-    let truncated = false;
-    req.on("data", (chunk: Buffer) => {
+    let settled = false;
+
+    const cleanup = () => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+      req.off("aborted", onAborted);
+    };
+
+    const onData = (chunk: Buffer) => {
+      if (settled) return;
       rawBytes += chunk.length;
-      if (truncated) return;
       if (rawBytes > maxBytes) {
-        truncated = true;
+        settled = true;
         chunks.length = 0;
+        cleanup();
+        // Stop pulling from the socket immediately; absorb follow-up errors while 413 flushes and closes the socket.
+        req.pause();
+        req.on("error", () => {});
+        resolve({ rawBytes, truncated: true, text: "" });
         return;
       }
       chunks.push(chunk);
-    });
-    req.on("end", () => {
-      resolve({ rawBytes, truncated, text: truncated ? "" : Buffer.concat(chunks).toString("utf8") });
-    });
-    req.on("error", reject);
+    };
+
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ rawBytes, truncated: false, text: Buffer.concat(chunks).toString("utf8") });
+    };
+
+    const onError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const onAborted = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("Request stream aborted before completing"));
+    };
+
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
+    req.on("aborted", onAborted);
   });
 }
 
@@ -608,6 +643,7 @@ export async function createMockLlmServer(options: MockLlmServerOptions = {}): P
   let seq = 0;
   let inFlight = 0;
   let closed = false;
+  const consumedMatchers = new Set<number>();
   const recorded: RecordedLlmRequest[] = [];
   const openedGates = new Set<string>();
   const gateWaiters = new Map<string, Set<() => void>>();
@@ -638,8 +674,13 @@ export async function createMockLlmServer(options: MockLlmServerOptions = {}): P
   const selectTurn = (dialect: MockLlmDialect, body: unknown): MockLlmTurn => {
     if (script.matchers && script.matchers.length > 0) {
       const lastUser = extractLastUserText(dialect, body);
-      for (const matcher of script.matchers) {
-        if (lastUser.includes(matcher.whenLastUserContains)) return matcher.turn;
+      for (let i = 0; i < script.matchers.length; i++) {
+        if (consumedMatchers.has(i)) continue;
+        const matcher = script.matchers[i]!;
+        if (lastUser.includes(matcher.whenLastUserContains)) {
+          if (matcher.once) consumedMatchers.add(i);
+          return matcher.turn;
+        }
       }
     }
     if (script.turns && turnCursor < script.turns.length) {
@@ -683,8 +724,16 @@ export async function createMockLlmServer(options: MockLlmServerOptions = {}): P
       recordRequest(entry);
 
       if (truncated) {
-        res.writeHead(413, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: `request body exceeded ${maxBodyBytes} bytes` } }));
+        res.writeHead(413, {
+          "content-type": "application/json",
+          connection: "close",
+        });
+        res.end(
+          JSON.stringify({ error: { message: `request body exceeded ${maxBodyBytes} bytes` } }),
+          () => {
+            req.socket.destroy();
+          },
+        );
         return;
       }
 
@@ -735,9 +784,14 @@ export async function createMockLlmServer(options: MockLlmServerOptions = {}): P
   const port = address.port;
   const url = `http://127.0.0.1:${port}`;
 
-  const filteredRequests = (filter?: { dialect?: MockLlmDialect }): readonly RecordedLlmRequest[] => {
-    if (!filter?.dialect) return [...recorded];
-    return recorded.filter((r) => r.dialect === filter.dialect);
+  const filteredRequests = (filter?: {
+    dialect?: MockLlmDialect;
+    predicate?: (req: RecordedLlmRequest) => boolean;
+  }): readonly RecordedLlmRequest[] => {
+    let out: readonly RecordedLlmRequest[] = recorded;
+    if (filter?.dialect) out = out.filter((r) => r.dialect === filter.dialect);
+    if (filter?.predicate) out = out.filter(filter.predicate);
+    return [...out];
   };
 
   return {
@@ -746,6 +800,7 @@ export async function createMockLlmServer(options: MockLlmServerOptions = {}): P
     setScript(nextScript: MockLlmScript) {
       script = nextScript;
       turnCursor = 0;
+      consumedMatchers.clear();
     },
     openGate(name: string) {
       openedGates.add(name);
@@ -759,14 +814,22 @@ export async function createMockLlmServer(options: MockLlmServerOptions = {}): P
     clearRequests() {
       recorded.length = 0;
     },
-    waitForRequests(count: number, waitOptions?: { timeoutMs?: number; dialect?: MockLlmDialect }) {
-      const current = filteredRequests({ dialect: waitOptions?.dialect });
+    waitForRequests(
+      count: number,
+      waitOptions?: {
+        timeoutMs?: number;
+        dialect?: MockLlmDialect;
+        predicate?: (req: RecordedLlmRequest) => boolean;
+      },
+    ) {
+      const filter = { dialect: waitOptions?.dialect, predicate: waitOptions?.predicate };
+      const current = filteredRequests(filter);
       if (current.length >= count) return Promise.resolve(current);
       const timeoutMs = waitOptions?.timeoutMs ?? MOCK_LLM_DEFAULT_WAIT_TIMEOUT_MS;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           requestWaiters.delete(onUpdate);
-          const got = filteredRequests({ dialect: waitOptions?.dialect }).length;
+          const got = filteredRequests(filter).length;
           reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${count} mock LLM request(s); got ${got}`));
         }, timeoutMs);
         timer.unref?.();
@@ -777,7 +840,7 @@ export async function createMockLlmServer(options: MockLlmServerOptions = {}): P
             reject(new Error("Mock LLM server closed while waiting for requests"));
             return;
           }
-          const latest = filteredRequests({ dialect: waitOptions?.dialect });
+          const latest = filteredRequests(filter);
           if (latest.length >= count) {
             clearTimeout(timer);
             requestWaiters.delete(onUpdate);

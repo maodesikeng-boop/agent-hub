@@ -1,7 +1,7 @@
 // Invariant: isolated homes never overlap the user's real HOME, never inherit real vendor credentials, and blackhole non-loopback proxies.
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, posix, relative, resolve, win32 } from "node:path";
+import { join, posix, win32, type PlatformPath } from "node:path";
 import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import { WORKER_ENV } from "../../src/vendors/claude/settings.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
@@ -26,6 +26,17 @@ const DENY_NAMES = new Set<string>([
   "ANTHROPIC_BASE_URL",
   "OPENAI_BASE_URL",
   "CURSOR_API_ENDPOINT",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_PROFILE",
+  "GOOGLE_API_KEY",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
 ]);
 const DENY_PREFIXES: readonly string[] = [
   "HUB_",
@@ -36,20 +47,38 @@ const DENY_PREFIXES: readonly string[] = [
 ];
 const DENY_PATTERNS: readonly RegExp[] = CREDENTIAL_SPECS.flatMap((c) => (c.pattern ? [c.pattern] : []));
 
-function canonicalizeForOverlapCheck(pathStr: string): string {
-  const abs = resolve(pathStr);
-  let resolved = abs;
-  try {
-    if (existsSync(abs)) resolved = realpathSync(abs);
-  } catch {
-    resolved = abs;
+function resolveWithExistingAncestor(absPath: string, pathApi: PlatformPath): string {
+  const trailing: string[] = [];
+  let cursor = absPath;
+  while (!existsSync(cursor)) {
+    const parent = pathApi.dirname(cursor);
+    if (parent === cursor) return absPath;
+    trailing.push(pathApi.basename(cursor));
+    cursor = parent;
   }
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  let canonicalBase = cursor;
+  try {
+    canonicalBase = realpathSync(cursor);
+  } catch {
+    canonicalBase = cursor;
+  }
+  return trailing.length === 0 ? canonicalBase : pathApi.join(canonicalBase, ...trailing.reverse());
 }
 
-function isSameOrInside(parent: string, child: string): boolean {
-  const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+// Walk to the nearest existing ancestor for realpath, then NFC + case-fold because APFS and NTFS are case-insensitive by default.
+function canonicalizeForOverlapCheck(pathStr: string, platform: NodeJS.Platform): string {
+  const pathApi = platform === "win32" ? win32 : posix;
+  const abs = pathApi.resolve(pathStr);
+  const resolved = platform === process.platform ? resolveWithExistingAncestor(abs, pathApi) : abs;
+  const normalized = resolved.normalize("NFC");
+  return platform === "win32" || platform === "darwin" ? normalized.toLowerCase() : normalized;
+}
+
+function isSameOrInside(parent: string, child: string, platform: NodeJS.Platform): boolean {
+  const pathApi = platform === "win32" ? win32 : posix;
+  const rel = pathApi.relative(parent, child);
+  if (rel === "") return true;
+  return rel !== ".." && !rel.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(rel);
 }
 
 function isDeniedBaseEnv(key: string): boolean {
@@ -75,13 +104,17 @@ function setEnvValue(env: Record<string, string>, key: string, value: string, pl
   env[key] = value;
 }
 
-export function assertIsolatedHome(candidateHome: string, realHome = homedir()): void {
+export function assertIsolatedHome(
+  candidateHome: string,
+  realHome = homedir(),
+  platform: NodeJS.Platform = process.platform,
+): void {
   if (!candidateHome || candidateHome.trim() === "") {
     throw new Error("Isolated home path must be a non-empty path");
   }
-  const candidate = canonicalizeForOverlapCheck(candidateHome);
-  const real = canonicalizeForOverlapCheck(realHome);
-  if (isSameOrInside(real, candidate) || isSameOrInside(candidate, real)) {
+  const candidate = canonicalizeForOverlapCheck(candidateHome, platform);
+  const real = canonicalizeForOverlapCheck(realHome, platform);
+  if (isSameOrInside(real, candidate, platform) || isSameOrInside(candidate, real, platform)) {
     throw new Error(`Isolated home "${candidateHome}" overlaps real home "${realHome}"`);
   }
 }
@@ -91,9 +124,10 @@ export function buildIsolatedEnv(input: {
   baseEnv?: Readonly<Record<string, string | undefined>>;
   vendorEnv?: Readonly<Record<string, string>>;
   platform?: NodeJS.Platform;
+  realHome?: string;
 }): Record<string, string> {
   const platform = input.platform ?? process.platform;
-  assertIsolatedHome(input.homeDir);
+  assertIsolatedHome(input.homeDir, input.realHome, platform);
 
   const base = input.baseEnv ?? process.env;
   const env: Record<string, string> = {};
@@ -116,11 +150,13 @@ export function buildIsolatedEnv(input: {
     TMP: tmpDir,
     HTTP_PROXY: MOCK_LLM_PROXY_BLACKHOLE_URL,
     HTTPS_PROXY: MOCK_LLM_PROXY_BLACKHOLE_URL,
+    ALL_PROXY: MOCK_LLM_PROXY_BLACKHOLE_URL,
     NO_PROXY: "127.0.0.1,localhost,::1",
     ...(platform !== "win32"
       ? {
           http_proxy: MOCK_LLM_PROXY_BLACKHOLE_URL,
           https_proxy: MOCK_LLM_PROXY_BLACKHOLE_URL,
+          all_proxy: MOCK_LLM_PROXY_BLACKHOLE_URL,
           no_proxy: "127.0.0.1,localhost,::1",
         }
       : {}),
@@ -167,7 +203,7 @@ export function createIsolatedHome(options?: {
     mkdirSync(dir, { recursive: true });
   }
 
-  const env = buildIsolatedEnv({ homeDir });
+  const env = buildIsolatedEnv({ homeDir, realHome: options?.realHome });
   return {
     rootDir,
     homeDir,
