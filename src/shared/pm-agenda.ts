@@ -34,7 +34,11 @@ export interface AgendaGraphBlock {
 }
 
 export type AgendaOutsideItem =
-  | { kind: "worker_report"; workerId: WorkerId; title: string; outcome: "done" | "problem" | "gave_up" | "unparsed" | "turn_failed"; since: number }
+  | {
+    kind: "worker_report"; workerId: WorkerId; title: string; outcome: "done" | "problem" | "gave_up" | "unparsed" | "turn_failed"; since: number;
+    /** A watch linked to this Worker: the report waits on it, not on the PM. */
+    watchId?: PmWatchId;
+  }
   | { kind: "watch"; watchId: PmWatchId; body: string; status: PmWatchStatus; since: number; graphId: TaskGraphId | null; workerId: WorkerId | null };
 
 export interface PmAgenda {
@@ -130,13 +134,18 @@ function graphHeading(graph: AgendaGraphBlock): string {
 
 function outsideLine(item: AgendaOutsideItem): AgendaLine {
   if (item.kind === "watch") {
-    return { ref: `watch:${item.watchId}@${item.since}`, needsPm: false, text: `在盯 #${item.watchId}「${agendaLabel(item.body)}」${atSince(item.since)}` };
+    const link = item.graphId !== null ? ` · 图 #${item.graphId}` : item.workerId !== null ? ` · Worker #${item.workerId}` : "";
+    return { ref: `watch:${item.watchId}@${item.since}`, needsPm: false, text: `在盯 #${item.watchId}「${agendaLabel(item.body)}」${link}${atSince(item.since)}` };
   }
   const outcome = {
     done: "汇报做完了，等你验收", problem: "汇报有问题，等你处理", gave_up: "汇报放弃了，等你处理",
     unparsed: "汇报没按格式，等你处理", turn_failed: "本轮失败，等你处理",
   }[item.outcome];
-  return { ref: `worker:${item.workerId}@${item.since}`, needsPm: true, text: `Worker #${item.workerId}「${agendaLabel(item.title)}」${outcome}${atSince(item.since)}` };
+  const watched = item.watchId === undefined ? "" : `，在盯 #${item.watchId}`;
+  return {
+    ref: `worker:${item.workerId}@${item.since}`, needsPm: item.watchId === undefined,
+    text: `Worker #${item.workerId}「${agendaLabel(item.title)}」${outcome}${watched}${atSince(item.since)}`,
+  };
 }
 
 export function agendaLinesOf(agenda: PmAgenda): AgendaLine[] {
@@ -183,7 +192,7 @@ export function agendaCountsOf(agenda: PmAgenda): AgendaCounts {
   }
   for (const item of agenda.outside) {
     if (item.kind === "watch") counts.watching++;
-    else wait(item.since);
+    else if (item.watchId === undefined) wait(item.since);
   }
   return counts;
 }

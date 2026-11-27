@@ -29,6 +29,7 @@ export interface DaemonResourcesOptions {
   readonly worktrees: WorktreeCleanup;
   readonly sessionScope: DaemonSessionScope;
   readonly sessionProcesses: SessionProcessReaper;
+  readonly runningWatchIds: () => ReadonlySet<number>;
   readonly processLedger: ProcessLedger;
   readonly feishuPosts: Pick<FeishuStore, "prunePosts">;
   readonly feishuOfflineInbox: Pick<FeishuOfflineInbox, "expire">;
@@ -118,7 +119,7 @@ export function startDaemonResources(options: DaemonResourcesOptions): DaemonRes
     get trackedCount() {
       return processLedger.size;
     },
-    listLeakedTaggedProcesses: () => sessionProcesses.listEnded(activeSessionIds()),
+    listLeakedTaggedProcesses: () => sessionProcesses.listEnded(activeSessionIds(), options.runningWatchIds()),
     reapTaggedProcess: (pid, tag) => sessionProcesses.reapOne(pid, tag),
   };
 

@@ -13,6 +13,8 @@ import { enqueuePmNoticeIn } from "./pm-notices.ts";
 import { WORKER_REPORT_STATUS_LABELS, parseWorkerReport } from "../../shared/worker.ts";
 import { lastWorkerIdOf, parseJsonOr, readStoredArtifact } from "./task-graphs/rows.ts";
 import { slotViewsOf, type StepSlotView } from "./task-graphs/slots.ts";
+import { GRAPH_WATCHED_SQL, graphWatchesOf, watchingPmWatchesOf, workerWatchesOf } from "./pm-watches.ts";
+import type { PmWatchId } from "../../shared/pm-watch.ts";
 
 const graphSteps = `SELECT s.id, s.node_key, s.title, s.status, s.waiting_for, s.active_worker_id, s.worker_ids_json, s.artifact_json, s.gate_question,
          sl.slot, coalesce(st.state_since, s.updated_at) AS since,
@@ -102,7 +104,7 @@ function stepLineOf(db: Db, row: AgendaStepRow, slots: ReadonlyMap<number, StepS
   return { ...base, state: { kind: "waiting_user", reason } };
 }
 
-function graphBlockOf(db: Db, row: GraphSummaryRow): AgendaGraphBlock {
+function graphBlockOf(db: Db, row: GraphSummaryRow, watchId: PmWatchId | null): AgendaGraphBlock {
   const ready = graphReady(row);
   const oldestNeedsPmSince = ready ? row.latest_step : row.oldest_wait;
   const rows = ready ? [] : db.all<AgendaStepRow>(
@@ -114,7 +116,8 @@ function graphBlockOf(db: Db, row: GraphSummaryRow): AgendaGraphBlock {
   const steps = rows.flatMap((step) => stepLineOf(db, step, slots) ?? []);
   return {
     graphId: row.id, title: row.title, stepCount: row.steps, doneCount: row.done, pendingCount: row.pending,
-    readyToFinish: ready, steps, doneKeys: parseJsonOr<string[]>(row.done_keys, []), watchId: null, needsPm: oldestNeedsPmSince !== null, oldestNeedsPmSince,
+    readyToFinish: ready, steps, doneKeys: parseJsonOr<string[]>(row.done_keys, []), watchId,
+    needsPm: ready ? (row.latest_step !== null && watchId === null) : row.oldest_wait !== null, oldestNeedsPmSince,
   };
 }
 
@@ -131,6 +134,7 @@ function workerOutcome(event: string | null, status: string | null): WorkerOutco
 }
 
 function openWorkerItems(db: Db, pmId: PmId, workerId: number | null = null): AgendaOutsideItem[] {
+  const watched = workerWatchesOf(db, pmId);
   return db.all<{ id: number; title: string; created_at: number; event: string | null; status: string | null }>(
     `SELECT w.id, w.title, latest.created_at, latest.meta ->> '$.event' AS event, latest.meta ->> '$.status' AS status
        FROM workers w JOIN messages latest ON latest.id = (
@@ -145,7 +149,19 @@ function openWorkerItems(db: Db, pmId: PmId, workerId: number | null = null): Ag
         AND NOT EXISTS (SELECT 1 FROM task_graph_steps s WHERE s.active_worker_id = w.id)
       ORDER BY latest.created_at, w.id LIMIT ?`,
     pmId, ...(workerId === null ? [] : [workerId]), PM_AGENDA_OUTSIDE_WORKERS_MAX,
-  ).map((row) => ({ kind: "worker_report", workerId: row.id, title: row.title, outcome: workerOutcome(row.event, row.status), since: row.created_at }));
+  ).map((row) => {
+    const watchId = watched.get(row.id);
+    return {
+      kind: "worker_report", workerId: row.id, title: row.title, outcome: workerOutcome(row.event, row.status), since: row.created_at,
+      ...(watchId === undefined ? {} : { watchId }),
+    };
+  });
+}
+
+function watchItems(db: Db, pmId: PmId): AgendaOutsideItem[] {
+  return watchingPmWatchesOf(db, pmId).map((watch) => ({
+    kind: "watch", watchId: watch.id, body: watch.body, status: watch.status, since: watch.createdAt, graphId: watch.graphId, workerId: watch.workerId,
+  }));
 }
 
 export function pmAgendaOf(db: Db, pmId: PmId, now: number): PmAgenda {
@@ -154,15 +170,16 @@ export function pmAgendaOf(db: Db, pmId: PmId, now: number): PmAgenda {
             json_group_array(s.node_key) FILTER (WHERE s.status = 'done') AS done_keys
        ${activeGraphSummaries}
       GROUP BY g.id
-      ORDER BY coalesce(oldest_wait, CASE WHEN steps > 0 AND steps = done THEN latest_step END) IS NULL,
-               coalesce(oldest_wait, CASE WHEN steps > 0 AND steps = done THEN latest_step END),
+      ORDER BY coalesce(oldest_wait, CASE WHEN steps > 0 AND steps = done AND NOT ${GRAPH_WATCHED_SQL} THEN latest_step END) IS NULL,
+               coalesce(oldest_wait, CASE WHEN steps > 0 AND steps = done AND NOT ${GRAPH_WATCHED_SQL} THEN latest_step END),
                g.updated_at DESC, g.id DESC
       LIMIT ?`,
     pmId, PM_AGENDA_GRAPHS_MAX,
   );
+  const watches = graphWatchesOf(db, rows.map((row) => row.id));
   return {
-    pmId, at: now, graphs: rows.map((row) => graphBlockOf(db, row)),
-    omittedGraphs: (rows[0]?.graph_count ?? 0) - rows.length, outside: openWorkerItems(db, pmId),
+    pmId, at: now, graphs: rows.map((row) => graphBlockOf(db, row, watches.get(row.id)?.watchId ?? null)),
+    omittedGraphs: (rows[0]?.graph_count ?? 0) - rows.length, outside: [...openWorkerItems(db, pmId), ...watchItems(db, pmId)],
     userCards: pendingAsksOfPm(db, pmId).length,
   };
 }
@@ -174,7 +191,10 @@ export function graphReadySince(db: Db, pmId: PmId, graphId: TaskGraphId): numbe
 
 export function isPmAgendaItemOpen(db: Db, pmId: PmId, ref: string): boolean {
   const ready = /^graph:(\d+):ready@(\d+)$/u.exec(ref);
-  if (ready !== null) return graphReadySince(db, pmId, Number(ready[1])) === Number(ready[2]);
+  if (ready !== null) {
+    const graphId = Number(ready[1]);
+    return graphReadySince(db, pmId, graphId) === Number(ready[2]) && !graphWatchesOf(db, [graphId]).has(graphId);
+  }
   const step = /^graph:(\d+):step:(.+):waiting_pm@(\d+)$/u.exec(ref);
   if (step !== null) return db.get(
     `SELECT 1 FROM task_graphs g JOIN task_graph_steps s ON s.graph_id = g.id
@@ -183,7 +203,7 @@ export function isPmAgendaItemOpen(db: Db, pmId: PmId, ref: string): boolean {
     Number(step[1]), pmId, step[2]!, Number(step[3]),
   ) !== undefined;
   const worker = /^worker:(\d+)@(\d+)$/u.exec(ref);
-  return worker !== null && openWorkerItems(db, pmId, Number(worker[1])).some((item) => item.since === Number(worker[2]));
+  return worker !== null && openWorkerItems(db, pmId, Number(worker[1])).some((item) => item.since === Number(worker[2]) && item.watchId === undefined);
 }
 
 const cursorLines = z.array(z.object({ ref: z.string(), needsPm: z.boolean(), text: z.string() }));

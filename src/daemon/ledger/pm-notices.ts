@@ -4,6 +4,7 @@ import { pmNoticeDedupeRef, type PmNoticeSubject } from "../../shared/pm-notice.
 import type { Db } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { isPmAgendaItemOpen, isReadyAgendaNoticeCurrent } from "./pm-agenda.ts";
+import { isWatchNoticeCurrent } from "./pm-watches.ts";
 import { enqueueSystemWakeupIn } from "./system-wakeups.ts";
 import { decisionOf, decisionWakeupClientIdOf } from "./task-graphs/rows.ts";
 import { getGraphRow, getStepRow } from "./task-graphs/store.ts";
@@ -73,6 +74,7 @@ export function wakePmForSettledLeafIn(
 }
 
 export function isPmNoticeCurrent(db: Db, subject: PmNoticeSubject, conversationId: ConversationId): boolean {
+  if (subject.kind === "watch.settled") return isWatchNoticeCurrent(db, subject, conversationId);
   if (subject.kind === "pm.agenda") {
     const pm = db.get<{ pm_id: number }>("SELECT pm_id FROM conversations WHERE id = ? AND kind = 'pm'", conversationId);
     return pm !== undefined && subject.refs.some((ref) => isPmAgendaItemOpen(db, pm.pm_id, ref));

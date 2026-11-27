@@ -173,7 +173,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
     );
   }
 
-  const delivery = graphDeliveryOf(graph);
+  const delivery = graphDeliveryOf(graph, graph.deliveryWatch ?? null);
   const graphStateLabel = graph.status === "completed" ? "Completed" : graph.status === "cancelled" ? "Cancelled" : null;
 
   return (
