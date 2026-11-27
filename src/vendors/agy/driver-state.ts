@@ -1,5 +1,5 @@
 import type { BackgroundTaskInfo } from "../../shared/driver.ts";
-import type { BaseBatch, BaseProc, BaseSessionState, StartupOutcome } from "../../daemon/driver/base-driver.ts";
+import { formatStartupExitDetail, type BaseBatch, type BaseProc, type BaseSessionState, type StartupOutcome } from "../../daemon/driver/base-driver.ts";
 import { DriverError, type ReadonlyPolicy, type TokenUsage, type WriteScope } from "../../shared/index.ts";
 import type { SessionDriverHost } from "../_common/session-driver.ts";
 import type { detectAgyArgsConflict } from "./protocol.ts";
@@ -124,5 +124,14 @@ export function startupError(
       `${retried ? "after retrying without --conversation: " : ""}${stderr || how}`,
     );
   }
-  return new DriverError("spawn_failed", `agy exited before init (${how})${stderr ? `: ${stderr}` : ""}`);
+  return new DriverError(
+    "spawn_failed",
+    formatStartupExitDetail({
+      vendorLabel: "agy",
+      phase: "init",
+      exitCode: outcome.exitCode,
+      signal: outcome.signal,
+      stderr: outcome.stderr,
+    }),
+  );
 }

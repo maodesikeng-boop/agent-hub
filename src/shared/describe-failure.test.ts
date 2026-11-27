@@ -1,6 +1,7 @@
 // 出错的说法：按通用类型分，厂商的错误特征在 shared/vendors.ts。
 import { describe, expect, it } from "vitest";
-import { describeFailure } from "./errors.ts";
+import { describeFailure, isNestedMacOsSandboxError, MACOS_NESTED_SANDBOX_MESSAGE } from "./errors.ts";
+import { AGENT_VENDORS } from "./vendors.ts";
 
 describe("describeFailure：错误分类", () => {
   it("服务繁忙：529 / overloaded / 5xx", () => {
@@ -46,5 +47,22 @@ describe("describeFailure：错误分类", () => {
       raw: '  {"error":"weird"}',
     });
     expect(describeFailure("")).toMatchObject({ kind: "unknown", text: "出错了" });
+  });
+
+  it("acceptance S2/S11/S12: classifies macOS nested sandbox-exec exit 71 with actionable message across all vendors without false positives", () => {
+    expect(isNestedMacOsSandboxError("sandbox-exec: sandbox_apply: Operation not permitted", 71)).toBe(true);
+    expect(isNestedMacOsSandboxError("spawn_failed: claude exited before system/init (exit code 71): sandbox-exec: sandbox_apply: Operation not permitted")).toBe(true);
+    expect(isNestedMacOsSandboxError("ACP process exited before initialization (code=71, signal=null): sandbox_apply: Operation not permitted")).toBe(true);
+    expect(isNestedMacOsSandboxError("process exited with exit code 71: unrelated os error", 71)).toBe(false);
+    expect(isNestedMacOsSandboxError("bwrap: setting up uid map: Permission denied", 1)).toBe(false);
+
+    for (const vendor of AGENT_VENDORS) {
+      const raw = `spawn_failed: ${vendor} exited before init (exit code 71): sandbox-exec: sandbox_apply: Operation not permitted`;
+      expect(describeFailure(raw, { vendor }), vendor).toEqual({
+        kind: "start",
+        text: MACOS_NESTED_SANDBOX_MESSAGE,
+        raw,
+      });
+    }
   });
 });

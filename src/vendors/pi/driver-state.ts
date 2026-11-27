@@ -4,13 +4,15 @@ import {
   type MessageId,
   type MessageSource,
 } from "../../shared/index.ts";
-import type {
-  BaseBatch,
-  BaseProc,
-  BaseSessionState,
-  BatchNotes,
-  PendingEntry,
-  StartupOutcome,
+import { isNestedMacOsSandboxError } from "../../shared/errors.ts";
+import {
+  formatStartupExitDetail,
+  type BaseBatch,
+  type BaseProc,
+  type BaseSessionState,
+  type BatchNotes,
+  type PendingEntry,
+  type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import type { StreamingToolPreviewTracker } from "../../daemon/driver/protocol.ts";
 import type { SessionDriverHost } from "../_common/session-driver.ts";
@@ -101,10 +103,24 @@ export function clearTurnBuffers(st: SessionState): void {
 
 export function startupError(outcome: Extract<PiStartupOutcome, { kind: "failed" }>, startTimeoutMs: number): DriverError {
   if (outcome.timedOut) return new DriverError("start_timeout", `no get_state response within ${startTimeoutMs} ms`);
-  if (outcome.errorMessage) return new DriverError("spawn_failed", `pi get_state failed: ${outcome.errorMessage}`);
-  const how = outcome.signal ? `signal ${outcome.signal}` : `exit code ${outcome.exitCode}`;
-  const stderr = outcome.stderr.trim();
-  return new DriverError("spawn_failed", `pi exited before get_state (${how})${stderr ? `: ${stderr}` : ""}`);
+  if (
+    outcome.errorMessage &&
+    !isNestedMacOsSandboxError(outcome.stderr, outcome.exitCode) &&
+    !isNestedMacOsSandboxError(outcome.errorMessage, outcome.exitCode)
+  ) {
+    return new DriverError("spawn_failed", `pi get_state failed: ${outcome.errorMessage}`);
+  }
+  return new DriverError(
+    "spawn_failed",
+    formatStartupExitDetail({
+      vendorLabel: "pi",
+      phase: "get_state",
+      exitCode: outcome.exitCode,
+      signal: outcome.signal,
+      stderr: outcome.stderr,
+      errorMessage: outcome.errorMessage,
+    }),
+  );
 }
 
 export function newBatch(
