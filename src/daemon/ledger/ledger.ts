@@ -1,4 +1,5 @@
 import { createPmDelivery } from "./pm-delivery.ts";
+import { enqueueDueAgendaReminders } from "./pm-agenda-reminders.ts";
 import { isChecklistToolCall } from "./checklist.ts";
 import { createChecklistReminders } from "./checklist-reminders.ts";
 import type { WorktreeBranchProbe } from "../git/worktree-branch.ts";
@@ -100,6 +101,8 @@ export interface SqliteLedger extends Ledger {
    */
   runDueBackgroundWaits(nowMs?: number): number;
   busySessionSnapshots(): BusySessionSnapshot[];
+  /** Enqueues one overdue-agenda reminder per idle PM with due items; returns how many reminders were enqueued. */
+  runDueAgendaReminders(nowMs?: number): number;
   /** What the watch runner reads and settles; watches belong to the PM, not to a session. */
   readonly watches: PmWatchRunnerLedger;
   /** Call before closing the database. Pending driver events are flushed in order without attachments, and later events are dropped. */
@@ -651,6 +654,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     runDueSchedules: schedules.runDueSchedules,
     runDueBackgroundWaits: (nowMs = ctx.now()) => workers.backgroundWaits.runDue(nowMs),
     busySessionSnapshots: () => busySessionSnapshotsOf(db, sessions, workers),
+    runDueAgendaReminders: (nowMs = ctx.now()) =>
+      closing.signal.aborted
+        ? 0
+        : enqueueDueAgendaReminders(ctx, nowMs, (id) => sessions.liveOf(id).activity !== "idle" || (options.isSessionBusy?.(id) ?? false)),
     watches: watches.runner,
     addSchedule: schedules.addForUser,
     setScheduleEnabled: schedules.setEnabledForUser,

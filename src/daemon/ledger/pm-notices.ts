@@ -76,7 +76,12 @@ export function wakePmForSettledLeafIn(
 export function isPmNoticeCurrent(db: Db, subject: PmNoticeSubject, conversationId: ConversationId): boolean {
   if (subject.kind === "watch.settled") return isWatchNoticeCurrent(db, subject, conversationId);
   if (subject.kind === "pm.agenda") {
-    const pm = db.get<{ pm_id: number }>("SELECT pm_id FROM conversations WHERE id = ? AND kind = 'pm'", conversationId);
+    const pm = db.get<{ pm_id: number }>(
+      `SELECT c.pm_id FROM conversations c
+        WHERE c.id = ? AND c.kind = 'pm'
+          AND NOT EXISTS (SELECT 1 FROM pm_archives a WHERE a.pm_id = c.pm_id)`,
+      conversationId,
+    );
     return pm !== undefined && subject.refs.some((ref) => isPmAgendaItemOpen(db, pm.pm_id, ref));
   }
   const graph = getGraphRow(db, subject.graphId);
