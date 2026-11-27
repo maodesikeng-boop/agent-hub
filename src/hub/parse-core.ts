@@ -1,5 +1,6 @@
 import { PM_MODES, type PmMode } from "../shared/domain.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
+import { CAPABILITY_KINDS, type CapabilityKind } from "../shared/pm-capabilities.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery } from "../shared/schedule.ts";
 import { AGENT_VENDORS, isAgentVendor } from "../shared/vendors.ts";
 import {
@@ -22,11 +23,6 @@ export function parseCoreCommand({ group, action, rest, positionals, values, env
     expectPositionals(positionals.slice(1), 0, "status");
     return { command: "status", body: {}, textSource: null };
   }
-  if (group === "self-reload") {
-    allowOnly(values, ["build"], "self-reload");
-    expectPositionals(positionals.slice(1), 0, "self-reload");
-    return { command: "self.reload", body: values.build === true ? { build: true } : {}, textSource: null };
-  }
   if (group === "models") {
     allowOnly(values, ["vendor", "refresh"], "models");
     expectPositionals(positionals.slice(1), 0, "models");
@@ -37,6 +33,20 @@ export function parseCoreCommand({ group, action, rest, positionals, values, env
     if (values.vendor !== undefined) body.vendor = values.vendor;
     if (values.refresh === true) body.refresh = true;
     return { command: "models", body, textSource: null };
+  }
+  if (group === "caps") {
+    allowOnly(values, ["kind", "vendor"], "caps");
+    expectPositionals(positionals.slice(1), 0, "caps");
+    if (values.kind !== undefined && !(CAPABILITY_KINDS as readonly string[]).includes(values.kind)) {
+      throw new UsageError(`--kind 只能是 ${CAPABILITY_KINDS.join("、")}`);
+    }
+    if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
+      throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
+    }
+    const body: Record<string, unknown> = {};
+    if (values.kind !== undefined) body.kind = values.kind as CapabilityKind;
+    if (values.vendor !== undefined) body.vendor = values.vendor;
+    return { command: "caps", body, textSource: null };
   }
   if (group === "project" && action === "create") {
     allowOnly(values, ["name", "folder", "description"], "project create");

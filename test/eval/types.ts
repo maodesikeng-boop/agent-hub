@@ -65,7 +65,7 @@ export interface RecordedCall {
   stub?: number;
 }
 
-// ---- 命令替身（K1、K2、K4：装软件、改本机配置、升级命令行工具，docs/orchestration-skill-design.md 第 8.1 节）----
+// Command stubs for host-side install, local-config, and upgrade scenarios (K1, K2, K4).
 
 /** 替身的一次输出：当时真实命令的输出（取自账本和会话原始记录，出处写在场景里）。 */
 export interface StubOutput {
@@ -91,7 +91,8 @@ export type CommandStubs = Readonly<Record<string, readonly StubReply[]>>;
 
 // ---- 场景 ----
 
-export type ScenarioId = "s3a-tray" | "s5a-ci-mirror" | "h2-no-diff" | "k1-install" | "k2-local-config" | "k3-merge" | "k4-upgrade" | "k5-ui-bug";
+export type BuiltinScenarioId = "s3a-tray" | "s5a-ci-mirror" | "h2-no-diff" | "k1-install" | "k2-local-config" | "k3-merge" | "k4-upgrade" | "k5-ui-bug";
+export type ScenarioId = BuiltinScenarioId | (string & {});
 
 /** 场景里一类 Worker 怎么回放：按提示词里的关键词认（任务说明在 Worker 的系统提示词里）。 */
 export interface WorkerReplay {
@@ -126,8 +127,8 @@ export interface ScenarioContext {
   preludeShotsDir: string;
 }
 
-export interface Scenario {
-  id: ScenarioId;
+export interface Scenario<TId extends ScenarioId = ScenarioId> {
+  id: TId;
   title: string;
   /** 对应用户原话、设计文档章节，打印对照表时用。 */
   source: string;
@@ -242,7 +243,7 @@ export interface CheckResult {
 export interface CheckDef {
   id: string;
   title: string;
-  /** “要求有”的检查：什么都不做的项目经理必须不过（设计 4.5）。 */
+  /** Checks requiring concrete action must fail when the PM does nothing. */
   requiresAction: boolean;
   /**
    * 不写：正例必须过。
@@ -258,7 +259,7 @@ export interface TrialMetrics {
   toolCalls: number;
   hubCalls: number;
   asks: number;
-  /** 剧本里没有、按推荐答的提问次数（设计 3.3 的“多问了”）。 */
+  /** Count of unscripted ask cards answered by fallback recommendation. */
   unscriptedAnswers: number;
   durationMs: number;
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -269,7 +270,7 @@ export interface TrialResult {
   /** 被测版本的标签（base / head）和解析出的提交号。 */
   version: string;
   commit: string;
-  /** 环境出错（起不来、超时、真 gh 被调到……）：不计分，单独列（设计 4.4）。 */
+  /** Environment error quarantined from product capability scores. */
   envError: string | null;
   checks: CheckResult[];
   metrics: TrialMetrics;

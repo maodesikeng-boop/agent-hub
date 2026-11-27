@@ -480,9 +480,9 @@ describe("桌面端 Settings → Providers", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: vendorLabel(v0) })).toBeNull());
   });
 
-  it("桌面首次打开 0 家可用且无已有 PM 时自动弹出 Settings → Providers，并支持从 NewPmDialog 点 Manage providers… 跳转", async () => {
+  it("桌面首次打开 0 家可用时（守护进程已建好默认 PM）自动弹出 Settings → Providers，并支持从 NewPmDialog 点 Add provider… 跳转", async () => {
     const user = userEvent.setup();
-    const api = new FakeApi(makeSnapshot({ pms: [], conversations: [] }));
+    const api = new FakeApi(makeSnapshot());
     api.models = () => ({
       status: 200,
       body: {

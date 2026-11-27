@@ -52,6 +52,7 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "persona.show": {},
   "persona.edit": { text: "新的性格设定", mode: "hands_on", reason: "用户要求" },
   models: { vendor: "claude", refresh: true },
+  caps: { kind: "mcp", vendor: "claude" },
   "worker.start": { title: "修 X", task: "把 X 修好，测试要过", model: "claude-haiku-5-5", readonly: true, noWorktree: true, maxTimeMs: 1_800_000 },
   "worker.send": { workerId: 3, text: "再改一下", maxTimeMs: 900_000 },
   "worker.max-time": { workerId: 3, maxTimeMs: 2_700_000 },

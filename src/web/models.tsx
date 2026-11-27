@@ -32,13 +32,8 @@ function parseCatalogs(res: ModelsResponse): ModelCatalog[] {
   return Array.isArray(res?.catalogs) ? res.catalogs.map(complete) : [];
 }
 
-async function fetchCatalogs(qc: QueryClient, client: HubClient): Promise<ModelCatalog[]> {
-  const key = catalogKey(client);
-  try {
-    return parseCatalogs(await client.fetchModels());
-  } catch {
-    return qc.getQueryData<ModelCatalog[]>(modelsQueryKey(key)) ?? [];
-  }
+async function fetchCatalogs(client: HubClient): Promise<ModelCatalog[]> {
+  return parseCatalogs(await client.fetchModels());
 }
 
 function revalidateCatalogs(qc: QueryClient, client: HubClient): void {
@@ -46,7 +41,7 @@ function revalidateCatalogs(qc: QueryClient, client: HubClient): void {
   if (qc.isFetching({ queryKey: modelsQueryKey(key) }) > 0) return;
   void qc.prefetchQuery({
     queryKey: modelsQueryKey(key),
-    queryFn: () => fetchCatalogs(qc, client),
+    queryFn: () => fetchCatalogs(client),
     staleTime: MODEL_CATALOG_REVALIDATE_MS,
   });
 }
@@ -99,7 +94,7 @@ export function useServerModelCatalogs({
   const { data } = useQuery(
     {
       queryKey: modelsQueryKey(key),
-      queryFn: () => fetchCatalogs(qc, client),
+      queryFn: () => fetchCatalogs(client),
       staleTime: MODEL_CATALOG_REVALIDATE_MS,
       enabled,
     },
@@ -116,7 +111,7 @@ export function useModelCatalogs(active = true): readonly ModelCatalog[] {
   const { data: catalogs } = useQuery(
     {
       queryKey: modelsQueryKey(key),
-      queryFn: () => fetchCatalogs(qc, client),
+      queryFn: () => fetchCatalogs(client),
       staleTime: MODEL_CATALOG_REVALIDATE_MS,
       enabled,
     },

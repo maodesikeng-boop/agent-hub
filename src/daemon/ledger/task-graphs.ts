@@ -12,6 +12,7 @@ import { cancelGraph, cancelIn, doneIn, finishIn, list, show, skipIn, skipNode }
 import {
   activeSnapshotGraphs,
   graphAutoDispatchVendors,
+  graphNeedsCapabilityInventory,
   purgeExpiredBatch,
 } from "./task-graphs/overview.ts";
 import { patchIn } from "./task-graphs/patch.ts";
@@ -110,6 +111,7 @@ export function createLedgerTaskGraphs(
     cancelIn: bind(cancelIn),
     finishIn: bind(finishIn),
     graphPrTargets: bindDb(graphPrTargets),
+    graphNeedsCapabilityInventory: bind(graphNeedsCapabilityInventory),
     graphAutoDispatchVendors: bind(graphAutoDispatchVendors),
     graphDeliveryProbeTarget: bindDb(graphDeliveryProbeTarget),
     enrichDeliveryNoteMessage: bind(enrichDeliveryNoteMessage),

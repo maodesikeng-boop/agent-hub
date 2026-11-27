@@ -779,7 +779,7 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} schedule remove <编号>`,
       `${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`,
       `${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file [标签=]路径...] [--link <标签=网址>...]`,
-      `${hub} self-reload [--build]`,
+      `${hub} self-reload [--build | --cancel | --status]`,
       "等所有会话这一轮收尾",
       `最多等 ${SELF_RELOAD_DRAIN_MAX_MS / 60_000} 分钟，之后不再等 Worker 轮次和系统消息`,
       "只等你、总助正在回用户的那一轮回完就重启",
