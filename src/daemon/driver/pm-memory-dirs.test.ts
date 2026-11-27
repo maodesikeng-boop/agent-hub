@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AGENT_VENDORS, type AgentSessionRow, type AgentVendor, type LaunchFiles, type SessionStore } from "../../shared/index.ts";
 import { pmMemoryDirPath } from "../../shared/paths.ts";
-import { buildAgyArgs } from "../../vendors/agy/protocol.ts";
+import { buildAgyAcpAdditionalDirs } from "../../vendors/agy/acp-config.ts";
 import { buildClaudeArgs } from "../../vendors/claude/protocol.ts";
 import { buildSessionSettings } from "../../vendors/claude/settings.ts";
 import claudeDaemon from "../../vendors/claude/daemon.ts";
@@ -124,7 +124,9 @@ describe("8 家厂商统一挂载 PM 专属 pm-memory addDirs 与 Worker 隔离"
     const session = makeSessionRow({ cwd, addDirs: [pmDir] });
     const dummyFiles: LaunchFiles = { promptFile: "/p.md", env: {}, fingerprint: "f" };
     expect(buildClaudeArgs(session, dummyFiles, false)).toContain(pmDir);
-    expect(buildAgyArgs(session, dummyFiles, false)).toContain(pmDir);
+    expect(
+      buildAgyAcpAdditionalDirs({ row: session, files: dummyFiles, resume: false, executablePath: "agy" }, "/launch/agy-rules"),
+    ).toContain(pmDir);
     const codexSandbox = buildSandboxPolicy(session, false, null, false);
     expect(codexSandbox).toMatchObject({ type: "workspaceWrite", writableRoots: [cwd, pmDir] });
     const piSkillDir = join(pmDir, ".agents", "skills");

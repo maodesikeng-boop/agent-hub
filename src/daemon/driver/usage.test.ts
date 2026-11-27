@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import { applyAcpUsageUpdate, mergeAcpPromptUsage } from "../../vendors/_common/acp/protocol.ts";
-import { finishAgyUsage, observeAgyUsage } from "../../vendors/agy/protocol.ts";
 import { TurnUsage, positiveContextTokens, preservePositiveContext } from "./usage.ts";
 
 const usage = (input: number, cacheRead: number, cacheWrite: number, output: number) => ({
@@ -89,14 +88,6 @@ describe("historical context across empty and compacted turns", () => {
     expect(live.context).toBe(302);
     expect(turn.observe(assistant("error", usage(0, 0, 0, 0)), live)).toBeNull();
     expect(turn.finish(previous, usage(2, 300, 0, 1)).context).toBe(302);
-  });
-
-  it("keeps Agy historical context when both step and result usage carry zeros", () => {
-    const turn = new TurnUsage();
-    const empty = { input_tokens: 0, output_tokens: 0 };
-    const live = observeAgyUsage(turn, "failed", empty, previous);
-    expect(live).toBeNull();
-    expect(finishAgyUsage(turn, previous, empty, live)).toEqual(previous);
   });
 
   it("keeps ACP historical context through zero live and prompt measurements", () => {
