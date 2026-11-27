@@ -47,6 +47,23 @@ function productionSourceFiles(): string[] {
     .map((file) => relative(REPO_ROOT, join(srcRoot, file)).split(sep).join("/"));
 }
 
+const OWNER_TAG_BUILDER = /\bmake[A-Z]\w*OwnerTag\s*\(/u;
+const RAW_NON_SESSION_NONCE_TAG = /`(?!s\$\{[^}]+\}:)[^`]*:\$\{[^}]*tagNonce[^}]*\}[^`]*`/u;
+const INLINE_COLON_OWNER_TAG = /\[ENV_SESSION_OWNER_TAG\]\s*:\s*`[^`]*:[^`]*`/u;
+
+function findRawOwnerTagBuilders(sources: ReadonlyMap<string, string>): string[] {
+  const offenders: string[] = [];
+  for (const [file, source] of sources) {
+    if (file === "src/daemon/platform/process-tag.ts") continue;
+    if (!/\bENV_SESSION_OWNER_TAG\b/u.test(source)) continue;
+    const touchesNonceWithoutBuilder = /\btagNonce\b/u.test(source) && !OWNER_TAG_BUILDER.test(source);
+    if (touchesNonceWithoutBuilder || RAW_NON_SESSION_NONCE_TAG.test(source) || INLINE_COLON_OWNER_TAG.test(source)) {
+      offenders.push(file);
+    }
+  }
+  return offenders.sort();
+}
+
 describe("RESOURCE_REGISTRY structural guard", () => {
   it("registers every module that creates a temp directory, so each one names who removes it", () => {
     const owners = new Set(
@@ -55,6 +72,19 @@ describe("RESOURCE_REGISTRY structural guard", () => {
     const creators = productionSourceFiles().filter((file) => /\bmkdtemp(Sync)?\(/.test(readFileSync(join(REPO_ROOT, file), "utf8")));
     expect(creators.length).toBeGreaterThan(0);
     expect(creators.filter((file) => !owners.has(file))).toEqual([]);
+  });
+
+  it("constructs every ENV_SESSION_OWNER_TAG token through process-tag.ts so active processes are not misreported as leaked", () => {
+    const sources = new Map(productionSourceFiles().map((file) => [file, readFileSync(join(REPO_ROOT, file), "utf8")]));
+    expect(findRawOwnerTagBuilders(sources)).toEqual([]);
+
+    const sample = new Map<string, string>([
+      ["src/daemon/launch.ts", "const ownerEnv = makeSessionOwnerTag(session.id, tagNonce); const env = { [ENV_SESSION_OWNER_TAG]: ownerEnv };"],
+      ["src/daemon/setup/setup.ts", "const env = { [ENV_SESSION_OWNER_TAG]: paths.sessionTagEnv };"],
+      ["src/daemon/watches/launch.ts", "const ownTag = `watch${job.watchId}:${options.tagNonce}`; const env = { [ENV_SESSION_OWNER_TAG]: ownTag };"],
+      ["src/daemon/inline-tag.ts", "const env = { [ENV_SESSION_OWNER_TAG]: `job${id}:${nonce}` };"],
+    ]);
+    expect(findRawOwnerTagBuilders(sample)).toEqual(["src/daemon/inline-tag.ts", "src/daemon/watches/launch.ts"]);
   });
 
   it("covers every non-internal SQLite table created by migrations/*.sql", () => {
