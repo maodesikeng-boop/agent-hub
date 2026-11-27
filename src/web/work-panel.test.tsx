@@ -75,6 +75,7 @@ function makeGraph(id: number, title: string, nodes: TaskNode[], edges: TaskGrap
     createdAt: 1000,
     updatedAt: 1000 + id,
     completedAt: null,
+    readySince: null,
   };
 }
 

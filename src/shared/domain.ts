@@ -892,6 +892,8 @@ export interface TaskGraph {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+  /** When the last step became done while every step is done; null otherwise. Later writes to a done step do not move it. */
+  readySince: number | null;
 }
 
 export function isTaskGraphReadyToFinish(graph: Pick<TaskGraph, "status" | "nodes">): boolean {

@@ -676,6 +676,7 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
       createdAt: 1_000,
       updatedAt: 1_000,
       completedAt: null,
+      readySince: null,
       ...over,
     });
 
@@ -735,11 +736,11 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
         { fromKey: "gate-scope", toKey: "impl" },
       ],
     });
-    const ready = makeGraph({ id: 12, title: "Delivery", nodes: [makeNode({ key: "impl", title: "Implement", status: "done" })] });
+    const ready = makeGraph({ id: 12, title: "Delivery", readySince: 1_000, nodes: [makeNode({ key: "impl", title: "Implement", status: "done" })] });
     const delivery = graphDeliveryOf(ready);
     expect(graphDeliveryOf(ready)).toBe(delivery);
     expect(delivery.row).not.toBeNull();
-    const patched = { ...ready, nodes: [...ready.nodes, makeNode({ key: "check", title: "Check", status: "pending" })] };
+    const patched = { ...ready, readySince: null, nodes: [...ready.nodes, makeNode({ key: "check", title: "Check", status: "pending" })] };
     expect(graphDeliveryOf(patched).row).toBeNull();
     expect(graphDeliveryOf(ready)).toBe(delivery);
 
@@ -1245,6 +1246,7 @@ describe("shell list and rail selectors", () => {
       createdAt: 1000,
       updatedAt: 1000 + i,
       completedAt: null,
+      readySince: null,
     }));
 
     const work0 = activeWorkOf(graphs, workers);
