@@ -21,9 +21,11 @@ import {
   type SpawnCommand,
 } from "../../../daemon/driver/write-scope.ts";
 import {
+  ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES,
   DriverError,
   MAX_MESSAGE_BYTES,
   SESSION_STEPS_KEEP,
+  handoverMaxSingleMessageBytesOf,
   vendorSpec,
   type AgentSessionRow,
   type ComposerCommand,
@@ -316,9 +318,15 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       (injection === "every_process_first_turn" ||
         !this.resumeFor(st) ||
         Boolean(this.#config.continuation?.rebakesPersonaOnResume));
+    const needsColdSystemPromptReserve =
+      activeProc === null &&
+      (injection === "every_process_first_turn" || (injection === "first_turn_new_session" && !this.resumeFor(st)));
     const { notes, prefixes } = this.takeNotesPrefixes(st, {
       takePersona: !willRebakeOnSpawn,
       fromRowOnFirstPersonaCheck: !willRebakeOnSpawn,
+      turnBody: taken.body,
+      systemPrompt: activeProc?.pendingSystemPromptBlock ?? null,
+      ...(needsColdSystemPromptReserve ? { extraReserveBytes: ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES } : {}),
     });
     return {
       messageIds: taken.messageIds,
@@ -393,7 +401,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
     const suffix = batch.includeDeliverySuffix !== true ? "" : this.takeDeliverySuffix(st, batch);
     const userBlocks = suffix === "" ? batch.userBlocks : [...batch.userBlocks, { type: "text" as const, text: suffix }];
-    const problem = checkAcpUserBlocks(userBlocks);
+    const problem = checkAcpUserBlocks(userBlocks, handoverMaxSingleMessageBytesOf(this.vendor));
     if (problem) {
       this.dropBatch(st, batch);
       this.invalidInput(st, problem, batch.messageIds);

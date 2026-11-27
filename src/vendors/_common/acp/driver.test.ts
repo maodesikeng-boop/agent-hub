@@ -1611,3 +1611,28 @@ it.each(["deepseek", "cursor", "kimi", "opencode"] as const)("keeps the in-fligh
   expect([...h.of("turn.ended").filter((e) => e.shutdown), ...h.of("session.exited").filter((e) => e.reason === "shutdown")]
     .flatMap((e) => e.messageIds)).toContain(1);
 });
+
+it("ACP writeBatch allows a 70 KiB user message plus 50 KiB handover preamble and reserves systemPrompt bytes on cold-start first_message", async () => {
+  let seenReserved: number | undefined;
+  const userText = "u".repeat(70 * 1024);
+  const preambleText = "p".repeat(50 * 1024);
+  const h = track(
+    makeAcpHarness({
+      config: { vendor: "cursor" },
+      driverOptions: {
+        sessionPreamble: (_id, opts) => {
+          seenReserved = opts?.reservedBytes;
+          return preambleText;
+        },
+      },
+      script: { turns: [{ textChunks: ["ok"] }] },
+    }),
+  );
+  const row = h.addSession({ vendor: "cursor" });
+  const result = await h.driver.send(row.id, { messageIds: [501 as never], source: "user", text: userText });
+  expect(result.kind).toBe("written");
+  await h.waitFor("turn.ended");
+  expect(h.of("driver.error")).toEqual([]);
+  // Cold-start cursor reserves both the 70 KiB user text and ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES (24 KiB).
+  expect(seenReserved).toBeGreaterThanOrEqual(70 * 1024 + 24 * 1024);
+});

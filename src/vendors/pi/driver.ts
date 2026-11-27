@@ -308,7 +308,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
       const combined = combinePiTurnText(body.text, body.prefixes, this.composer.buildUserContent);
       return newBatch(messageIds, body.text, combined, NO_NOTES, source, parsePiCompactInput(body.text) !== null);
     }
-    const { notes, prefixes } = this.takeNotesPrefixes(st);
+    const { notes, prefixes } = this.takeNotesPrefixes(st, { turnBody: body });
     const combined = combinePiTurnText(body.text, [...prefixes, ...body.prefixes], this.composer.buildUserContent);
     return { ...newBatch(messageIds, body.text, combined, notes, source, false), includeDeliverySuffix: true };
   }

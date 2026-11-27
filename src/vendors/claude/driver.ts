@@ -275,7 +275,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     if (command) {
       return newBatch(messageIds, buildUserLine(body.text, body.prefixes, this.composer.buildUserContent, uuid), uuid, NO_NOTES, source);
     }
-    const { notes, prefixes } = this.takeNotesPrefixes(st);
+    const { notes, prefixes } = this.takeNotesPrefixes(st, { turnBody: body });
     const buildLine = (transform: (original: string) => string) =>
       buildUserLine(transform(body.text), [...prefixes, ...body.prefixes], this.composer.buildUserContent, uuid);
     return { ...newBatch(messageIds, buildLine((text) => text), uuid, notes, source), renderLine: buildLine };

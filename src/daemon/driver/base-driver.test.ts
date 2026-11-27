@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CRASH_RECOVERY_NOTE,
   EMPTY_TOKEN_USAGE,
+  HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
   RELAUNCH_NOTE,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
@@ -16,6 +17,7 @@ import {
   type DriverSendResult,
   type LaunchFiles,
   type SessionId,
+  type SessionPreambleOptions,
 } from "../../shared/index.ts";
 import {
   BaseSessionDriver,
@@ -88,7 +90,7 @@ class DummyDriver extends BaseSessionDriver<DummyProc, DummyBatch, DummyState> {
         source: taken.source,
       };
     }
-    const { notes, prefixes } = this.takeNotesPrefixes(st);
+    const { notes, prefixes } = this.takeNotesPrefixes(st, { turnBody: taken.body });
     return {
       messageIds: taken.messageIds,
       text: taken.body.text,
@@ -392,6 +394,34 @@ describe("BaseSessionDriver 公共状态机", () => {
     expect(personaRestored).toBe(true);
     expect(st.preambleTaken).toBe(false);
     expect(st.personaSeen).toBe(1);
+  });
+
+  it("takeNotesPrefixes 将本轮合并后的用户正文、其他前缀与投递后缀预留字节传给 sessionPreamble", () => {
+    const received: Array<SessionPreambleOptions | undefined> = [];
+    const { store } = makeMemoryStore({ personaRevision: 1 });
+    const driver = new DummyDriver({
+      store,
+      prepareLaunch: dummyLaunchFiles,
+      sessionPreamble: (_id, opts) => {
+        received.push(opts);
+        return "【预算内开场】";
+      },
+      personaNote: () => ({ revision: 2, note: "【性格更新】" }),
+    });
+
+    const st = driver.exposeState(1);
+    const bodyText = "最".repeat(4_000);
+    st.pending.push({ messageIds: [11], source: "user", text: bodyText, prefixes: ["【用户前缀】"], resend: false });
+
+    const batch = driver.exposeTakeBatch(1)!;
+    expect(batch.prefixes[0]).toBe("【预算内开场】");
+    expect(received).toHaveLength(1);
+    expect(received[0]?.reservedBytes).toBeGreaterThanOrEqual(
+      Buffer.byteLength(bodyText, "utf8") +
+        Buffer.byteLength("【性格更新】", "utf8") +
+        Buffer.byteLength("【用户前缀】", "utf8") +
+        HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
+    );
   });
 
   it("停止与未取走批次结算：用户消息标 message.cancelled，系统消息标 message.requeued 并从 written 移除", () => {

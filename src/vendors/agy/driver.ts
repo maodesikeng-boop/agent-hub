@@ -220,6 +220,7 @@ export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     const { notes, prefixes } = this.takeNotesPrefixes(st, {
       takePersona: proc !== null,
       fromRowOnFirstPersonaCheck: false,
+      turnBody: taken.body,
     });
     return {
       messageIds: taken.messageIds,
