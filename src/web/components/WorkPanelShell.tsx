@@ -104,7 +104,6 @@ export function WorkerHeaderSlot({
     branch,
     readonly: workerReadonly,
     catalog: knownVendor ? catalog : null,
-    now: Date.now(),
   });
   return (
     <WorkerDetailHeader

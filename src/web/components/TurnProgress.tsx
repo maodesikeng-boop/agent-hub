@@ -1,14 +1,15 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useState } from "react";
 import { systemNoticeText, workerEventOf, type ChecklistStatus, type Message, type WorkerMessageMeta } from "../../shared/index.ts";
 import { workerLineParts } from "../format.ts";
 import type { WorkStatus } from "../work-status.ts";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 import { cn } from "../lib/utils.ts";
-import { ACTION_ELAPSED_TICK_MS } from "../limits.ts";
+import { SECOND_TICK_MS } from "../limits.ts";
 import { formatDuration, workedFor } from "../step-labels.ts";
 import type { ChecklistStepView, TurnProgressModel } from "../turn-progress.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { ChevronRight } from "../ui/icons.ts";
+import { useNow } from "../useNow.ts";
 import type { MessageActions } from "./Messages.tsx";
 
 // Invariant: a turn shows exactly one progress block, in the slot above its reply text, and only one elapsed time.
@@ -84,14 +85,8 @@ export function ChecklistStatusIcon({ status }: { status: ChecklistStatus }) {
   return <WorkStatusIcon status={CHECKLIST_WORK_STATUS[status]} className="turn-progress-icon rounded-full" />;
 }
 
-/** Ticks every ACTION_ELAPSED_TICK_MS and formats now - startedAt with formatDuration; stops ticking on unmount. */
 export function ActionElapsed({ startedAt }: { startedAt: number }): React.ReactNode {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), ACTION_ELAPSED_TICK_MS);
-    return () => clearInterval(timer);
-  }, [startedAt]);
+  const now = useNow(SECOND_TICK_MS);
   return (
     <span className="shrink-0 tabular-nums" data-action-elapsed>
       {formatDuration(now - startedAt)}
