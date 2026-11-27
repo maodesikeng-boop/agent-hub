@@ -9,6 +9,7 @@ import {
   buildCompareSandboxInput,
   pmSandboxProfile,
   readDenyProbes,
+  sbString,
 } from "../isolation.ts";
 import { extractScaleSafeFacts } from "./catalog.ts";
 import { runTier1Harness } from "./harness.ts";
@@ -87,6 +88,20 @@ describe("Tier 1 harness real src/ paths, scale window ordering, and sandbox hol
     expect(probes.some((p) => p.path === holdoutDir && !p.skip)).toBe(true);
 
     const profile = pmSandboxProfile(input);
-    expect(profile).toContain(holdoutDir);
+    expect(profile).toContain(sbString(holdoutDir));
+
+    const backslashHoldoutDir = join(tempRoot, "win\\secret-holdout");
+    const backslashProfile = pmSandboxProfile({
+      ...input,
+      readDenied: [...(input.readDenied ?? []), backslashHoldoutDir],
+    });
+    expect(backslashProfile).toContain(sbString(backslashHoldoutDir));
+    expect(backslashProfile).not.toContain(backslashHoldoutDir);
+
+    const winDriveHoldoutDir = "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\secret-holdout";
+    expect(sbString(winDriveHoldoutDir)).toBe(
+      '"C:\\\\Users\\\\runneradmin\\\\AppData\\\\Local\\\\Temp\\\\secret-holdout"',
+    );
+    expect(sbString(winDriveHoldoutDir)).not.toContain(winDriveHoldoutDir);
   });
 });
